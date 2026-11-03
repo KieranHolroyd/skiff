@@ -235,10 +235,10 @@
 
 	/* Definition lists for "key: value" detail panels. */
 	.kv {
-		@apply grid grid-cols-[minmax(6.5rem,auto)_1fr] gap-x-4 text-sm;
+		@apply grid grid-cols-[minmax(6.5rem,auto)_1fr] text-sm;
 	}
 	.kv > dt {
-		@apply border-b border-dashed py-2 text-muted-foreground;
+		@apply border-b border-dashed py-2 pr-4 text-muted-foreground;
 	}
 	.kv > dd {
 		@apply min-w-0 border-b border-dashed py-2 text-right;

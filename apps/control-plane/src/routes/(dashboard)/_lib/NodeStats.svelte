@@ -26,8 +26,8 @@
 </script>
 
 {#if hasAny}
-	<div class="space-y-3">
-		<div class="grid gap-3 sm:grid-cols-3">
+	<div class="@container space-y-3">
+		<div class="grid gap-3 @md:grid-cols-3">
 			{#if cpu !== null}
 				<Meter label="CPU" value={cpu} detail="{cpu.toFixed(0)}%" />
 			{/if}

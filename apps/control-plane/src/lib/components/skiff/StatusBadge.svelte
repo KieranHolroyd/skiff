@@ -10,6 +10,7 @@
 
 	const resolved = $derived(tone ?? statusTone(status));
 	const live = $derived(isLive(status));
+	const sentence = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
 	const styles: Record<Tone, { pill: string; dot: string }> = {
 		success: { pill: 'bg-success-soft text-success-soft-foreground', dot: 'bg-success' },
@@ -22,7 +23,7 @@
 </script>
 
 <span
-	class="inline-flex h-5 shrink-0 items-center gap-1.5 rounded-full px-2 text-[11.5px] font-medium whitespace-nowrap capitalize {styles[
+	class="inline-flex h-5 shrink-0 items-center gap-1.5 rounded-full px-2 text-[11.5px] font-medium whitespace-nowrap {styles[
 		resolved
 	].pill} {className}"
 >
@@ -35,5 +36,5 @@
 		{/if}
 		<span class="relative size-1.5 rounded-full {styles[resolved].dot}"></span>
 	</span>
-	{label ?? status}
+	{sentence(label ?? status)}
 </span>

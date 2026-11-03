@@ -168,8 +168,10 @@
 	>
 		<div class="absolute inset-y-0 left-0 w-1 bg-brand" aria-hidden="true"></div>
 		<div class="flex flex-wrap items-center gap-x-6 gap-y-4 p-5 pl-6">
-			<ProjectMark slug={data.project.slug} name={data.project.name} size="lg" />
-			<div class="min-w-0 flex-1 space-y-1">
+			<span class="hidden sm:block"
+				><ProjectMark slug={data.project.slug} name={data.project.name} size="lg" /></span
+			>
+			<div class="min-w-0 flex-1 basis-64 space-y-1">
 				<p
 					id="production-heading"
 					class="eyebrow flex items-center gap-1.5 text-brand-soft-foreground"

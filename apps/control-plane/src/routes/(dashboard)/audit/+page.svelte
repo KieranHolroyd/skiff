@@ -66,7 +66,7 @@
 			aria-label="Filter audit entries"
 		>
 			<div class="space-y-1">
-				<label for="audit-action" class="eyebrow">Action</label>
+				<label for="audit-action" class="eyebrow block">Action</label>
 				<div class="relative">
 					<SearchIcon
 						class="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
@@ -82,7 +82,7 @@
 				</div>
 			</div>
 			<div class="space-y-1">
-				<label for="audit-resource" class="eyebrow">Resource</label>
+				<label for="audit-resource" class="eyebrow block">Resource</label>
 				<Input
 					id="audit-resource"
 					name="resource"
@@ -92,7 +92,7 @@
 				/>
 			</div>
 			<div class="space-y-1">
-				<label for="audit-limit" class="eyebrow">Show</label>
+				<label for="audit-limit" class="eyebrow block">Show</label>
 				<select id="audit-limit" name="limit" class="select-native w-24">
 					{#each data.limits as limit (limit)}
 						<option value={limit} selected={data.limit === limit}>{limit}</option>

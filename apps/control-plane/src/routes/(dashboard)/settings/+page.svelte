@@ -193,11 +193,14 @@
 							</select>
 						</div>
 
-						<details class="group rounded-lg border bg-muted/25" open>
+						<details class="group rounded-lg border bg-muted/25">
 							<summary
 								class="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-[13px] font-medium [&::-webkit-details-marker]:hidden"
 							>
-								Scopes
+								<span
+									>Scopes <span class="font-normal text-muted-foreground">· all you hold</span
+									></span
+								>
 								<ChevronRightIcon
 									class="size-3.5 text-muted-foreground transition-transform group-open:rotate-90"
 									aria-hidden="true"
