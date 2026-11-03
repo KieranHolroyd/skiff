@@ -793,7 +793,18 @@ function requestMagicLink(env: Map<string, string>): void {
 	console.log(link);
 }
 
-function rollback(previous: string | null, snapshot: string | null): void {
+/** Atomically point `link` at `target` (or remove it when `target` is null). */
+function relink(link: string, target: string | null): void {
+	if (!target) {
+		rmSync(link, { force: true });
+		return;
+	}
+	rmSync(`${link}.new`, { force: true });
+	Bun.spawnSync({ cmd: ['ln', '-s', target, `${link}.new`], stdout: 'ignore', stderr: 'ignore' });
+	renameSync(`${link}.new`, link);
+}
+
+function rollback(previous: string | null, snapshot: string | null, previousLink: string | null): void {
 	console.error(color.red('\nInstall failed. Rolling back…'));
 	for (const service of ['skiff-agent', 'skiff-control-plane']) {
 		Bun.spawnSync({ cmd: ['systemctl', 'stop', `${service}.service`], stdout: 'ignore', stderr: 'ignore' });
@@ -806,9 +817,9 @@ function rollback(previous: string | null, snapshot: string | null): void {
 		console.error(color.yellow(`restored database snapshot ${snapshot}`));
 	}
 	if (previous) {
-		const link = join(OPT_DIR, 'current');
-		rmSync(link, { force: true });
-		Bun.spawnSync({ cmd: ['ln', '-s', previous, link], stdout: 'ignore', stderr: 'ignore' });
+		relink(join(OPT_DIR, 'current'), previous);
+		// switchCurrent() moved `previous` to the outgoing release; put back the real fallback.
+		relink(join(OPT_DIR, 'previous'), previousLink && previousLink !== previous ? previousLink : null);
 		console.error(color.yellow(`restored ${previous}`));
 	}
 	Bun.spawnSync({ cmd: ['systemctl', 'start', 'skiff-control-plane.service'], stdout: 'ignore', stderr: 'ignore' });
@@ -832,6 +843,9 @@ async function install(): Promise<void> {
 	const env = writeSecrets();
 	const previousRelease = existsSync(join(OPT_DIR, 'current'))
 		? capture('readlink', ['-f', join(OPT_DIR, 'current')])
+		: null;
+	const previousLink = existsSync(join(OPT_DIR, 'previous'))
+		? capture('readlink', ['-f', join(OPT_DIR, 'previous')])
 		: null;
 	let snapshot: string | null = null;
 	let release: string | null = null;
@@ -858,7 +872,7 @@ async function install(): Promise<void> {
 		console.log(`Logs: ${color.dim('journalctl -u skiff-control-plane -f')}  ${color.dim('journalctl -u skiff-agent -f')}`);
 	} catch (error) {
 		console.error(color.red(`\nError: ${(error as Error).message}`));
-		if (!options.dryRun) rollback(previousRelease, snapshot);
+		if (!options.dryRun) rollback(previousRelease, snapshot, previousLink);
 		process.exit(1);
 	}
 }

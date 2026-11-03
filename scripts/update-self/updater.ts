@@ -325,7 +325,10 @@ export class Updater {
 		rmSync(scratch, { recursive: true, force: true });
 		mkdirSync(join(scratch, 'data'), { recursive: true });
 		try {
-			if (existsSync(layout.dbPath)) snapshotDb(layout.dbPath, join(scratch, 'data', 'skiff.db'));
+			if (existsSync(layout.dbPath)) {
+				snapshotDb(layout.dbPath, join(scratch, 'data', 'skiff.db'));
+				fixSidecarOwnership(layout.dbPath, host);
+			}
 			host.chownToSkiff(scratch);
 			host.log('booting canary against a copy of the database');
 			await host.canary(release, scratch);

@@ -58,3 +58,20 @@ function toDate(value: string | number | Date | null | undefined): Date | null {
 	const date = value instanceof Date ? value : new Date(value);
 	return Number.isNaN(date.getTime()) ? null : date;
 }
+
+/** Compact duration such as `3d 4h` or `12m`, for uptimes. */
+export function formatDuration(totalSeconds: number): string {
+	if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return '—';
+	const days = Math.floor(totalSeconds / 86_400);
+	const hours = Math.floor((totalSeconds % 86_400) / 3_600);
+	const minutes = Math.floor((totalSeconds % 3_600) / 60);
+	if (days > 0) return `${days}d ${hours}h`;
+	if (hours > 0) return `${hours}h ${minutes}m`;
+	if (minutes > 0) return `${minutes}m`;
+	return `${Math.floor(totalSeconds)}s`;
+}
+
+/** Strip the scheme so hostnames read cleanly in tables. */
+export function displayUrl(url: string): string {
+	return url.replace(/^https?:\/\//, '').replace(/\/$/, '');
+}

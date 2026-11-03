@@ -2,46 +2,80 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import LayoutDashboardIcon from '@lucide/svelte/icons/layout-dashboard';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
+	import GlobeIcon from '@lucide/svelte/icons/globe';
+	import LayoutDashboardIcon from '@lucide/svelte/icons/layout-dashboard';
+	import LogOutIcon from '@lucide/svelte/icons/log-out';
 	import RocketIcon from '@lucide/svelte/icons/rocket';
 	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
 	import ServerIcon from '@lucide/svelte/icons/server';
 	import SettingsIcon from '@lucide/svelte/icons/settings';
-	import LogOutIcon from '@lucide/svelte/icons/log-out';
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
 	import { authClient } from '#lib/auth-client.js';
-	import { Badge } from '#lib/components/ui/badge/index.js';
-	import { Button } from '#lib/components/ui/button/index.js';
+	import Logo from '#lib/components/skiff/Logo.svelte';
+	import ThemeToggle from '#lib/components/skiff/ThemeToggle.svelte';
 	import type { LayoutProps } from './$types';
 
 	let { data, children }: LayoutProps = $props();
 
-	const nav = [
+	type NavItem = {
+		label: string;
+		href:
+			| '/(dashboard)/overview'
+			| '/(dashboard)/projects'
+			| '/(dashboard)/deployments'
+			| '/(dashboard)/nodes'
+			| '/(dashboard)/audit'
+			| '/(dashboard)/settings';
+		path: string;
+		icon: typeof LayoutDashboardIcon;
+	};
+
+	const groups: Array<{ label: string; items: NavItem[] }> = [
 		{
-			label: 'Overview',
-			href: '/(dashboard)/overview',
-			path: '/overview',
-			icon: LayoutDashboardIcon
+			label: 'Operate',
+			items: [
+				{ label: 'Overview', href: '/(dashboard)/overview', path: '/overview', icon: LayoutDashboardIcon },
+				{ label: 'Projects', href: '/(dashboard)/projects', path: '/projects', icon: FolderKanbanIcon },
+				{ label: 'Deployments', href: '/(dashboard)/deployments', path: '/deployments', icon: RocketIcon }
+			]
 		},
-		{ label: 'Projects', href: '/(dashboard)/projects', path: '/projects', icon: FolderKanbanIcon },
 		{
-			label: 'Deployments',
-			href: '/(dashboard)/deployments',
-			path: '/deployments',
-			icon: RocketIcon
-		},
-		{ label: 'Audit', href: '/(dashboard)/audit', path: '/audit', icon: ScrollTextIcon },
-		{ label: 'Nodes', href: '/(dashboard)/nodes', path: '/nodes', icon: ServerIcon },
-		{ label: 'Settings', href: '/(dashboard)/settings', path: '/settings', icon: SettingsIcon }
-	] as const;
+			label: 'Platform',
+			items: [
+				{ label: 'Nodes', href: '/(dashboard)/nodes', path: '/nodes', icon: ServerIcon },
+				{ label: 'Audit log', href: '/(dashboard)/audit', path: '/audit', icon: ScrollTextIcon },
+				{ label: 'Settings', href: '/(dashboard)/settings', path: '/settings', icon: SettingsIcon }
+			]
+		}
+	];
+	const nav: NavItem[] = groups.flatMap((group) => group.items);
 
 	let signingOut = $state(false);
 
-	function isActive(href: string): boolean {
-		const path = page.url.pathname;
-		return path === href || path.startsWith(`${href}/`);
+	function isActive(path: string): boolean {
+		const current = page.url.pathname;
+		return current === path || current.startsWith(`${path}/`);
 	}
+
+	/** Breadcrumbs from the URL: `/projects/foo` → Projects › foo. */
+	const crumbs = $derived.by(() => {
+		const segments = page.url.pathname.split('/').filter(Boolean);
+		const top = nav.find((item) => item.path === `/${segments[0] ?? ''}`);
+		const out: { label: string; href?: string; mono?: boolean }[] = [];
+		if (top) out.push({ label: top.label, href: segments.length > 1 ? resolve(top.href) : undefined });
+		// Project slugs read best verbatim in mono; other sub-pages are title-cased words.
+		const isProject = top?.path === '/projects';
+		for (const raw of segments.slice(1)) {
+			const segment = decodeURIComponent(raw);
+			out.push({
+				label: isProject ? segment : segment.charAt(0).toUpperCase() + segment.slice(1),
+				mono: isProject
+			});
+		}
+		return out;
+	});
 
 	const initials = $derived(
 		data.user.name
@@ -71,156 +105,175 @@
 </svelte:head>
 
 <div class="min-h-svh bg-background">
-	<!-- Desktop sidebar -->
-	<aside class="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r bg-sidebar md:flex">
-		<div class="flex h-14 items-center border-b px-4">
+	<!-- Desktop sidebar: the "hull" -->
+	<aside
+		class="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col bg-sidebar text-sidebar-foreground md:flex"
+	>
+		<div class="flex h-14 items-center px-4">
 			<a
 				href={resolve('/(dashboard)/overview')}
-				class="flex items-center gap-2.5 rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
+				class="rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
 			>
-				<span
-					class="grid size-7 place-items-center rounded-[7px] bg-primary text-primary-foreground shadow-xs"
-				>
-					<svg
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="1.9"
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						class="size-4"
-						aria-hidden="true"
-					>
-						<path d="M12 3.5v8.5" />
-						<path d="M12 4.5 6.5 12H12" />
-						<path d="M3.5 15.5h17l-2.5 4h-12l-2.5-4Z" />
-					</svg>
-				</span>
-				<span class="text-[15px] font-semibold tracking-[-0.02em]">Skiff</span>
-				<span
-					class="ml-auto rounded-full border px-1.5 py-0.5 text-[10px] font-medium tracking-wide text-muted-foreground uppercase"
-					>Ops</span
-				>
+				<Logo />
 			</a>
 		</div>
 
-		<nav class="flex-1 space-y-0.5 overflow-y-auto p-3" aria-label="Primary">
-			<p
-				class="px-2.5 pt-1 pb-2 text-[10px] font-medium tracking-widest text-muted-foreground uppercase"
+		<div class="px-3 pb-2">
+			<div
+				class="flex items-center gap-2.5 rounded-lg border border-sidebar-border bg-white/[0.03] px-2.5 py-2"
 			>
-				Operate
-			</p>
-			{#each nav as item (item.href)}
-				{@const Icon = item.icon}
-				<a
-					href={resolve(item.href)}
-					aria-current={isActive(item.path) ? 'page' : undefined}
-					class="flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-sm font-medium transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/40 {isActive(
-						item.path
-					)
-						? 'bg-sidebar-accent text-sidebar-accent-foreground'
-						: 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground'}"
+				<span
+					class="grid size-6 shrink-0 place-items-center rounded-md bg-sidebar-accent font-mono text-[10px] font-semibold text-sidebar-accent-foreground uppercase"
 				>
-					<Icon class="size-4 shrink-0" aria-hidden="true" />
-					{item.label}
-				</a>
+					{data.org.name.slice(0, 2)}
+				</span>
+				<div class="min-w-0 flex-1 leading-tight">
+					<p class="truncate text-[13px] font-medium">{data.org.name}</p>
+					<p class="truncate text-[11px] text-sidebar-muted capitalize">{data.role}</p>
+				</div>
+			</div>
+		</div>
+
+		<nav class="flex-1 space-y-5 overflow-y-auto px-3 py-3" aria-label="Primary">
+			{#each groups as group (group.label)}
+				<div class="space-y-0.5">
+					<p class="px-2.5 pb-1.5 font-mono text-[10px] tracking-[0.12em] text-sidebar-muted/80 uppercase">
+						{group.label}
+					</p>
+					{#each group.items as item (item.href)}
+						{@const Icon = item.icon}
+						{@const active = isActive(item.path)}
+						<a
+							href={resolve(item.href)}
+							aria-current={active ? 'page' : undefined}
+							class="group relative flex h-8 items-center gap-2.5 rounded-md px-2.5 text-[13.5px] font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring {active
+								? 'bg-sidebar-accent text-sidebar-accent-foreground'
+								: 'text-sidebar-muted hover:bg-sidebar-accent/50 hover:text-sidebar-foreground'}"
+						>
+							{#if active}
+								<span
+									class="absolute top-1.5 bottom-1.5 -left-3 w-[3px] rounded-r-full bg-sidebar-primary"
+									aria-hidden="true"
+								></span>
+							{/if}
+							<Icon
+								class="size-4 shrink-0 {active ? 'text-sidebar-primary' : ''}"
+								aria-hidden="true"
+							/>
+							{item.label}
+						</a>
+					{/each}
+				</div>
 			{/each}
 		</nav>
 
-		<div class="border-t p-3">
-			<div class="mb-3 flex items-center gap-2.5 rounded-lg px-1 py-1">
+		<div class="space-y-3 border-t border-sidebar-border p-3">
+			<div class="flex items-center gap-2.5 px-1">
 				<span
-					class="grid size-8 shrink-0 place-items-center rounded-full bg-muted text-[11px] font-semibold text-muted-foreground"
+					class="grid size-8 shrink-0 place-items-center rounded-full bg-gradient-to-br from-brand to-[oklch(0.55_0.17_25)] text-[11px] font-semibold text-brand-foreground"
 				>
 					{initials}
 				</span>
-				<div class="min-w-0 flex-1">
-					<p class="truncate text-sm font-medium">{data.org.name}</p>
-					<p class="truncate text-xs text-muted-foreground">{data.user.email ?? data.user.name}</p>
+				<div class="min-w-0 flex-1 leading-tight">
+					<p class="truncate text-[13px] font-medium">{data.user.name}</p>
+					<p class="truncate text-[11px] text-sidebar-muted">{data.user.email ?? data.org.name}</p>
 				</div>
-				<Badge variant="outline" class="capitalize">{data.role}</Badge>
-			</div>
-			<div
-				class="flex items-center justify-between gap-2 rounded-lg border bg-background/60 px-2.5 py-2"
-			>
-				<span class="text-xs text-muted-foreground">{data.platform.hostname}</span>
-				<Button
-					variant="ghost"
-					size="xs"
+				<button
+					type="button"
+					class="grid size-7 shrink-0 place-items-center rounded-md text-sidebar-muted transition-colors outline-none hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring disabled:opacity-50"
 					disabled={signingOut}
 					onclick={signOut}
 					aria-label="Sign out"
+					title="Sign out"
 				>
 					<LogOutIcon class="size-3.5" aria-hidden="true" />
-					{signingOut ? 'Signing out…' : 'Sign out'}
-				</Button>
+				</button>
+			</div>
+			<div class="flex items-center justify-between gap-2 px-1">
+				<span class="truncate font-mono text-[10.5px] text-sidebar-muted" title={data.platform.origin}
+					>{data.platform.hostname}</span
+				>
+				<ThemeToggle />
 			</div>
 		</div>
 	</aside>
 
-	<div class="flex min-h-svh flex-col md:pl-64">
+	<div class="flex min-h-svh flex-col md:pl-60">
 		<!-- Mobile top bar -->
-		<header class="sticky top-0 z-20 border-b bg-background/90 backdrop-blur md:hidden">
+		<header class="sticky top-0 z-20 bg-sidebar text-sidebar-foreground md:hidden">
 			<div class="flex h-14 items-center justify-between gap-3 px-4">
-				<a href={resolve('/(dashboard)/overview')} class="flex items-center gap-2">
-					<span
-						class="grid size-7 place-items-center rounded-[7px] bg-primary text-primary-foreground"
-					>
-						<svg
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="1.9"
-							stroke-linecap="round"
-							stroke-linejoin="round"
-							class="size-4"
-							aria-hidden="true"
-						>
-							<path d="M12 3.5v8.5" />
-							<path d="M12 4.5 6.5 12H12" />
-							<path d="M3.5 15.5h17l-2.5 4h-12l-2.5-4Z" />
-						</svg>
-					</span>
-					<span class="text-[15px] font-semibold tracking-[-0.02em]">Skiff</span>
-				</a>
+				<a href={resolve('/(dashboard)/overview')}><Logo /></a>
 				<div class="flex items-center gap-2">
-					<Badge variant="outline" class="capitalize">{data.role}</Badge>
-					<Button
-						variant="ghost"
-						size="icon-sm"
+					<ThemeToggle />
+					<button
+						type="button"
+						class="grid size-8 place-items-center rounded-md text-sidebar-muted hover:bg-sidebar-accent hover:text-sidebar-foreground disabled:opacity-50"
 						disabled={signingOut}
 						onclick={signOut}
 						aria-label="Sign out"
 					>
 						<LogOutIcon class="size-4" aria-hidden="true" />
-					</Button>
+					</button>
 				</div>
 			</div>
 			<nav
-				class="flex [scrollbar-width:none] gap-1 overflow-x-auto px-2 pb-2 [&::-webkit-scrollbar]:hidden"
+				class="flex [scrollbar-width:none] gap-1 overflow-x-auto px-3 pb-2.5 [&::-webkit-scrollbar]:hidden"
 				aria-label="Primary"
 			>
 				{#each nav as item (item.href)}
 					{@const Icon = item.icon}
+					{@const active = isActive(item.path)}
 					<a
 						href={resolve(item.href)}
-						aria-current={isActive(item.path) ? 'page' : undefined}
-						class="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium whitespace-nowrap {isActive(
-							item.path
-						)
-							? 'bg-muted text-foreground'
-							: 'text-muted-foreground hover:text-foreground'}"
+						aria-current={active ? 'page' : undefined}
+						class="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium whitespace-nowrap {active
+							? 'bg-sidebar-accent text-sidebar-accent-foreground'
+							: 'text-sidebar-muted hover:text-sidebar-foreground'}"
 					>
-						<Icon class="size-3.5" aria-hidden="true" />
+						<Icon class="size-3.5 {active ? 'text-sidebar-primary' : ''}" aria-hidden="true" />
 						{item.label}
 					</a>
 				{/each}
 			</nav>
 		</header>
 
+		<!-- Desktop context bar -->
+		<div
+			class="sticky top-0 z-20 hidden h-12 items-center justify-between gap-4 border-b bg-background/85 px-8 backdrop-blur-md md:flex"
+		>
+			<nav aria-label="Breadcrumb">
+				<ol class="flex items-center gap-1.5 text-[13px]">
+					<li class="text-muted-foreground">{data.org.name}</li>
+					{#each crumbs as crumb, i (i)}
+						<li aria-hidden="true"><ChevronRightIcon class="size-3.5 text-muted-foreground/60" /></li>
+						<li>
+							{#if crumb.href}
+								<a
+									href={crumb.href}
+									class="text-muted-foreground transition-colors hover:text-foreground">{crumb.label}</a
+								>
+							{:else}
+								<span
+									class="font-medium {crumb.mono ? 'font-mono text-[12.5px]' : ''}"
+									aria-current="page">{crumb.label}</span
+								>
+							{/if}
+						</li>
+					{/each}
+				</ol>
+			</nav>
+			<span
+				class="flex items-center gap-1.5 rounded-full border bg-card px-2.5 py-1 font-mono text-[11px] text-muted-foreground"
+				title="Content domain for deployed sites"
+			>
+				<GlobeIcon class="size-3" aria-hidden="true" />
+				*.{data.contentDomain}
+			</span>
+		</div>
+
 		{#if data.sharedDomain}
 			<div
-				class="flex items-start gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-amber-950 md:px-8 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200"
+				class="flex items-start gap-3 border-b border-warning/40 bg-warning-soft px-4 py-2.5 text-warning-soft-foreground md:px-8"
 				role="status"
 			>
 				<ShieldAlertIcon class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
@@ -233,13 +286,13 @@
 			</div>
 		{/if}
 
-		<main class="mx-auto w-full max-w-[1400px] flex-1 px-4 py-6 md:px-8 md:py-8">
+		<main class="mx-auto w-full max-w-[1320px] flex-1 px-4 py-6 md:px-8 md:py-8">
 			{@render children()}
 		</main>
 
-		<footer class="border-t px-4 py-4 text-[11px] text-muted-foreground md:px-8">
-			<div class="mx-auto flex max-w-[1400px] flex-wrap items-center justify-between gap-2">
-				<span>Skiff control plane · {data.org.name}</span>
+		<footer class="px-4 py-5 text-[11px] text-muted-foreground md:px-8">
+			<div class="mx-auto flex max-w-[1320px] flex-wrap items-center justify-between gap-2">
+				<span>Skiff control plane</span>
 				<span class="font-mono">{data.platform.origin}</span>
 			</div>
 		</footer>
