@@ -24,12 +24,15 @@
  *   --object-store local|r2   storage backend (default local)
  *   --r2-account-id/--r2-bucket/--r2-access-key-id/--r2-secret-access-key
  *   --no-agent                install the control plane only
- *   --version <label>         release label (default 0.1.0)
+ *   --version <label>         release label (default: the repository VERSION file)
  */
 import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { randomBytes } from 'node:crypto';
+import { SELF_UPDATE_DEFAULTS } from '../../packages/contracts/src/self-update.ts';
+import { parseSemver } from '../../packages/contracts/src/semver.ts';
+import { TRIGGER_PATH_UNIT, triggerUnits } from '../update-self/units.ts';
 
 const SOURCE = process.env.SKIFF_SOURCE_DIR ? resolve(process.env.SKIFF_SOURCE_DIR) : resolve(import.meta.dir, '../..');
 const OPT_DIR = process.env.SKIFF_OPT_DIR ?? '/opt/skiff';
@@ -42,6 +45,19 @@ const ENV_FILE = join(ETC_DIR, 'skiff.env');
 const AGENT_ENV_FILE = join(ETC_DIR, 'agent.env');
 const MASTER_KEY_FILE = join(ETC_DIR, 'master.key');
 const SETUP_TOKEN_FILE = join(ETC_DIR, 'setup-token');
+
+/** The platform version is the repository-root VERSION file (semver); skiff-update-self compares it. */
+function sourceVersion(): string {
+	try {
+		const raw = readFileSync(join(SOURCE, 'VERSION'), 'utf8');
+		const parsed = parseSemver(raw);
+		if (parsed) return parsed.version;
+		console.warn(`warning: ${join(SOURCE, 'VERSION')} is not semver ("${raw.trim()}"); using 0.0.0`);
+	} catch {
+		console.warn(`warning: no VERSION file in ${SOURCE}; using 0.0.0`);
+	}
+	return '0.0.0';
+}
 
 const color = {
 	red: (s: string) => `\x1b[31m${s}\x1b[0m`,
@@ -99,7 +115,7 @@ const options: Options = {
 	githubClientSecret: value('--github-client-secret', process.env.GITHUB_CLIENT_SECRET ?? '') || undefined,
 	objectStore: (value('--object-store', process.env.SKIFF_OBJECT_STORE ?? 'local') as 'local' | 'r2') || 'local',
 	noAgent: has('--no-agent'),
-	version: value('--version', process.env.SKIFF_VERSION ?? '0.1.0'),
+	version: value('--version', process.env.SKIFF_VERSION ?? sourceVersion()),
 };
 
 if (process.env.SKIFF_SMTP_HOST || args.includes('--smtp-host')) {
@@ -313,6 +329,10 @@ function ensureUsersAndDirs(): void {
 	ensureDir(ETC_DIR, '0750', 'root:skiff');
 	ensureDir(VAR_DIR, '0751', 'skiff:skiff');
 	for (const sub of ['data', 'data/objects', 'agent', 'backups']) ensureDir(join(VAR_DIR, sub), '0750', 'skiff:skiff');
+	// Dashboard-requested updates: the control plane drops a request in a directory it owns; the
+	// root updater reports progress from a directory the control plane can read but not write.
+	ensureDir(dirname(SELF_UPDATE_DEFAULTS.requestFile), '0750', 'skiff:skiff');
+	ensureDir(dirname(SELF_UPDATE_DEFAULTS.statusFile), '0750', 'root:skiff');
 	ensureDir(RUN_DIR, '2770', 'root:caddy');
 	if (!options.dryRun) {
 		writeFileSync('/etc/tmpfiles.d/skiff.conf', '# Skiff runtime directory (setgid so Caddy and the agent share sockets)\nd /run/skiff 2770 root caddy -\n');
@@ -542,6 +562,7 @@ WantedBy=multi-user.target
 	}
 	writeFileSync(join(SYSTEMD_DIR, 'skiff-control-plane.service'), control);
 	writeFileSync(join(SYSTEMD_DIR, 'skiff-agent.service'), agent);
+	for (const [name, body] of Object.entries(triggerUnits())) writeFileSync(join(SYSTEMD_DIR, name), body);
 	run('systemctl', ['daemon-reload']);
 }
 
@@ -642,6 +663,7 @@ function startServices(): void {
 		return;
 	}
 	run('systemctl', ['enable', 'skiff-control-plane.service']);
+	run('systemctl', ['enable', '--now', TRIGGER_PATH_UNIT], { allowFailure: true });
 	run('systemctl', ['restart', 'skiff-control-plane.service']);
 	waitFor('control plane socket', () => existsSync(join(RUN_DIR, 'control.sock')), 90_000);
 	patchCaddyfilePlatform();
@@ -869,7 +891,7 @@ async function install(): Promise<void> {
 		requestMagicLink(env);
 		step('Installed');
 		console.log(`${color.green('Skiff is installed.')} Platform: ${env.get('SKIFF_PLATFORM_ORIGIN')}`);
-		console.log(`Logs: ${color.dim('journalctl -u skiff-control-plane -f')}  ${color.dim('journalctl -u skiff-agent -f')}`);
+		console.log(`Logs: ${color.dim('journalctl -u skiff-control-plane -u skiff-agent -f')}`);
 	} catch (error) {
 		console.error(color.red(`\nError: ${(error as Error).message}`));
 		if (!options.dryRun) rollback(previousRelease, snapshot, previousLink);

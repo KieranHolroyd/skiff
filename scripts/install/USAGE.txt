@@ -27,7 +27,7 @@ Options:
   --r2-access-key-id <id>     R2 access key.
   --r2-secret-access-key <s>  R2 secret.
   --no-agent                  Install the control plane only.
-  --version <label>           Release label (default 0.1.0).
+  --version <label>           Release label (default: the repository VERSION file).
 
 Bootstrap environment:
   SKIFF_REPO, SKIFF_REF, SKIFF_GITHUB_TOKEN, SKIFF_BUN_VERSION, SKIFF_SOURCE_DIR.

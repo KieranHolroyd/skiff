@@ -8,7 +8,7 @@ import type { LayoutServerLoad } from './$types';
  * The dashboard auth guard. Every page below this layout can assume a principal exists;
  * unauthenticated visitors are sent back here after signing in.
  */
-export const load: LayoutServerLoad = ({ locals, url }) => {
+export const load: LayoutServerLoad = ({ locals, url, cookies }) => {
 	const principal = locals.principal;
 	if (!principal) {
 		const redirectTo = `${url.pathname}${url.search}`;
@@ -59,6 +59,8 @@ export const load: LayoutServerLoad = ({ locals, url }) => {
 			hostname: platformHostname
 		},
 		contentDomain,
+		/** shadcn sidebar persists its collapsed state in this cookie. */
+		sidebarOpen: cookies.get('sidebar_state') !== 'false',
 		/** Shared-domain mode is warned about persistently (DESIGN §5, D19). */
 		sharedDomain: contentDomain === platformHostname
 	};

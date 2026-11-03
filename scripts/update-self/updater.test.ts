@@ -39,11 +39,11 @@ function writeRepo(repoDir: string, migrations: string[]): void {
 		writeFileSync(join(repoDir, 'packages', 'db', 'migrations', id), `CREATE TABLE IF NOT EXISTS t_${id.split('_')[0]} (x);`);
 }
 
-function makeRelease(name: string, commit: string, migrations = ['0001_init.sql']): string {
+function makeRelease(name: string, commit: string, migrations = ['0001_init.sql'], version = '0.1.0'): string {
 	const release = join(layout.releasesDir, name);
 	writeRepo(join(release, 'repo'), migrations);
 	assembleRelease(release, layout.bunBin);
-	writeFileSync(join(release, 'meta.json'), JSON.stringify({ commit, ref: 'main', repo: 'owner/skiff' }));
+	writeFileSync(join(release, 'meta.json'), JSON.stringify({ commit, version, ref: 'main', repo: 'owner/skiff' }));
 	return release;
 }
 
@@ -88,6 +88,9 @@ class FakeHost implements Host {
 		[LITESTREAM, true],
 	]);
 	commit = NEW;
+	/** Contents of VERSION at the resolved commit. */
+	version = '0.2.0\n';
+	phases: string[] = [];
 	/** Migrations shipped by the next fetched source. */
 	migrations = ['0001_init.sql'];
 	buildFails = false;
@@ -106,6 +109,8 @@ class FakeHost implements Host {
 	now = () => new Date((this.clock += 1000));
 	sleep = async () => {};
 	resolveCommit = async () => this.commit;
+	readVersionFile = async () => this.version;
+	phase = (phase: string) => void this.phases.push(phase);
 	fetchSource = async (_repo: string, _commit: string, dest: string) => writeRepo(dest, this.migrations);
 	build = async () => {
 		this.calls.push('build');
@@ -166,7 +171,7 @@ beforeEach(() => {
 		`[Service]\nWorkingDirectory=${layout.optDir}/current/repo/apps/control-plane\nExecStart=${layout.optDir}/current/runtime/bun ${layout.optDir}/current/repo/apps/control-plane/build/index.js\n`,
 	);
 	host = new FakeHost();
-	older = makeRelease('20260101000000-older', '9'.repeat(40));
+	older = makeRelease('20260101000000-older', '9'.repeat(40), ['0001_init.sql'], '0.0.9');
 	original = makeRelease('v0.1.0-20261001000000', OLD);
 	setLink(layout.previousLink, older);
 	setLink(layout.currentLink, original);
@@ -181,10 +186,60 @@ beforeEach(() => {
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 describe('update', () => {
-	test('does nothing when the current release is already at the latest commit', async () => {
-		host.commit = OLD;
+	test('does nothing when VERSION on GitHub is not newer, even at a different commit', async () => {
+		host.version = '0.1.0\n';
 		const result = await new Updater(layout, host).update();
-		expect(result.status).toBe('up-to-date');
+		expect(result).toMatchObject({ status: 'up-to-date', version: '0.1.0', fromVersion: '0.1.0' });
+		expect(host.calls).toEqual([]);
+	});
+
+	test('never downgrades unless forced', async () => {
+		host.version = '0.0.5';
+		const updater = new Updater(layout, host);
+		expect((await updater.update()).status).toBe('up-to-date');
+		expect(host.calls).toEqual([]);
+		const forced = await updater.update({ force: true });
+		expect(forced).toMatchObject({ status: 'updated', version: '0.0.5', fromVersion: '0.1.0' });
+	});
+
+	test('compares by semver precedence, not string order', async () => {
+		host.version = '0.10.0';
+		writeFileSync(join(original, 'meta.json'), JSON.stringify({ commit: OLD, version: '0.9.0' }));
+		expect((await new Updater(layout, host).update()).status).toBe('updated');
+	});
+
+	test('a prerelease of the running version is older; its release is newer', async () => {
+		writeFileSync(join(original, 'meta.json'), JSON.stringify({ commit: OLD, version: '1.0.0-rc.2' }));
+		host.version = '1.0.0-rc.1';
+		expect((await new Updater(layout, host).update()).status).toBe('up-to-date');
+		host.version = '1.0.0';
+		expect((await new Updater(layout, host).update()).status).toBe('updated');
+	});
+
+	test('refuses a VERSION that is not semver', async () => {
+		host.version = 'latest';
+		await expect(new Updater(layout, host).update()).rejects.toThrow(/not a semantic version/);
+		expect(host.calls).toEqual([]);
+	});
+
+	test('an unversioned current release is always updated', async () => {
+		writeFileSync(join(original, 'meta.json'), JSON.stringify({ commit: OLD }));
+		const result = await new Updater(layout, host).update();
+		expect(result).toMatchObject({ status: 'updated', fromVersion: null, version: '0.2.0' });
+	});
+
+	test('check reports what update would do without touching anything', async () => {
+		const updater = new Updater(layout, host);
+		expect(await updater.check()).toMatchObject({
+			repo: 'owner/skiff',
+			ref: 'main',
+			commit: NEW,
+			version: '0.2.0',
+			fromVersion: '0.1.0',
+			available: true,
+		});
+		host.version = '0.1.0';
+		expect((await updater.check()).available).toBe(false);
 		expect(host.calls).toEqual([]);
 	});
 
@@ -197,7 +252,13 @@ describe('update', () => {
 		expect(readdirSync(layout.releasesDir).sort()).toEqual([basename(current), basename(original)].sort());
 		expect(host.canaryDbSeen).toBe(true);
 		expect(host.running).toBe(basename(current));
-		expect(JSON.parse(readFileSync(join(current, 'meta.json'), 'utf8'))).toMatchObject({ commit: NEW, status: 'active' });
+		expect(JSON.parse(readFileSync(join(current, 'meta.json'), 'utf8'))).toMatchObject({
+			commit: NEW,
+			version: '0.2.0',
+			status: 'active',
+		});
+		expect(result).toMatchObject({ version: '0.2.0', fromVersion: '0.1.0' });
+		expect(host.phases).toEqual(['checking', 'checking', 'building', 'canary', 'swapping', 'verifying']);
 		const last = state().lastSwitch!;
 		expect(last).toMatchObject({ kind: 'update', from: original, to: current });
 		expect(existsSync(last.snapshot!)).toBe(true);
@@ -210,6 +271,7 @@ describe('update', () => {
 		const first = readLink(layout.currentLink)!;
 		const firstSnapshot = state().lastSwitch!.snapshot!;
 		host.commit = NEWER;
+		host.version = '0.3.0';
 		await updater.update();
 		expect(readLink(layout.previousLink)).toBe(first);
 		expect(existsSync(original)).toBe(false);
@@ -249,6 +311,7 @@ describe('update', () => {
 		host.unhealthy.add('20261103120001-aaaaaaaaaaaa');
 		const result = await new Updater(layout, host).update();
 		expect(result).toMatchObject({ status: 'rolled-back', recovered: true });
+		expect(host.phases).toContain('rolling-back');
 		expect(readLink(layout.currentLink)).toBe(original);
 		expect(readLink(layout.previousLink)).toBe(older);
 		expect(host.running).toBe(basename(original));
@@ -340,7 +403,7 @@ describe('rollback', () => {
 
 describe('interrupted switches', () => {
 	function interruptAfterSwap(): string {
-		const release = makeRelease('20261103000000-cccccccccccc', NEW, ['0001_init.sql', '0003_new.sql']);
+		const release = makeRelease('20261103000000-cccccccccccc', NEW, ['0001_init.sql', '0003_new.sql'], '0.2.0');
 		mkdirSync(layout.backupsDir, { recursive: true });
 		const snapshot = join(layout.backupsDir, 'pre-update-x.db');
 		writeFileSync(snapshot, readFileSync(layout.dbPath));

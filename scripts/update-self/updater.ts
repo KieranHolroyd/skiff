@@ -36,6 +36,7 @@ import {
 	writeSync,
 } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
+import { compareSemver, parseSemver } from '../../packages/contracts/src/semver.ts';
 
 export const CONTROL_PLANE = 'skiff-control-plane.service';
 export const AGENT = 'skiff-agent.service';
@@ -76,6 +77,8 @@ export function layoutFromEnv(env: Record<string, string | undefined> = process.
 	};
 }
 
+export type UpdatePhase = 'checking' | 'building' | 'canary' | 'swapping' | 'verifying' | 'rolling-back';
+
 /** Machine side effects. The real implementation lives in main.ts. */
 export interface Host {
 	log(message: string): void;
@@ -84,6 +87,10 @@ export interface Host {
 	sleep(ms: number): Promise<void>;
 	/** Resolve a branch/tag/sha to a full commit sha. */
 	resolveCommit(repo: string, ref: string): Promise<string>;
+	/** Contents of the repository-root `VERSION` file at `commit`. */
+	readVersionFile(repo: string, commit: string): Promise<string>;
+	/** Progress for the dashboard (main.ts writes it to the status file). */
+	phase(phase: UpdatePhase, detail: string, versions?: Partial<Versions>): void;
 	/** Download and extract the source tree of `commit` into `dest` (created empty). */
 	fetchSource(repo: string, commit: string, dest: string): Promise<void>;
 	/** Install dependencies and build the control plane and agent inside `repoDir`. */
@@ -170,14 +177,32 @@ export interface RollbackOptions {
 	stabilizeMs?: number;
 }
 
-export type UpdateResult =
+/** `version`: the semver at the resolved commit; `fromVersion`: the running release's, if known. */
+export interface Versions {
+	version: string;
+	fromVersion: string | null;
+}
+
+export type UpdateResult = Versions &
+	(
 	| { status: 'up-to-date'; commit: string }
 	| { status: 'skipped'; commit: string; reason: string }
 	| { status: 'dry-run'; commit: string; plan: string[] }
 	| { status: 'build-failed'; commit: string; reason: string }
 	| { status: 'canary-failed'; commit: string; reason: string }
 	| { status: 'updated'; commit: string; release: string; previous: string }
-	| { status: 'rolled-back'; commit: string; reason: string; recovered: boolean };
+	| { status: 'rolled-back'; commit: string; reason: string; recovered: boolean }
+	);
+
+export interface CheckResult extends Versions {
+	repo: string;
+	ref: string;
+	commit: string;
+	/** `version` is newer than the running release (or the running version is unknown). */
+	available: boolean;
+	/** Set when this commit already failed to install; the updater skips it until --force. */
+	failed?: string;
+}
 
 export type RollbackResult =
 	| { status: 'dry-run'; plan: string[] }
@@ -211,31 +236,42 @@ export class Updater {
 			const currentMeta = readMeta(current);
 			const repo = options.repo ?? currentMeta.repo ?? DEFAULT_REPO;
 			const ref = options.ref ?? currentMeta.ref ?? DEFAULT_REF;
-			if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new UpdateError(`Invalid repository "${repo}" (expected owner/name).`);
-			if (!/^[\w./-]+$/.test(ref) || ref.includes('..')) throw new UpdateError(`Invalid ref "${ref}".`);
 
-			host.log(`current release ${basename(current)} (${short(currentMeta.commit) || 'unknown commit'})`);
-			host.log(`checking ${repo}@${ref}`);
-			const commit = await host.resolveCommit(repo, ref);
-			if (!/^[0-9a-f]{40}$/.test(commit)) throw new UpdateError(`GitHub returned an invalid commit "${commit}".`);
+			host.log(`current release ${basename(current)} (${currentMeta.version ?? 'unknown version'}, ${short(currentMeta.commit) || 'unknown commit'})`);
+			host.phase('checking', `Checking ${repo}@${ref}`);
+			const { commit, version, fromVersion } = await this.resolve(repo, ref, currentMeta);
+			const v: Versions = { version, fromVersion };
+			host.phase('checking', `Latest is ${version}; running ${fromVersion ?? 'an unversioned release'}`, v);
 
-			if (!options.force && currentMeta.commit === commit) {
-				host.log(`already running ${short(commit)}`);
-				return { status: 'up-to-date', commit };
+			if (!options.force && fromVersion) {
+				const order = compareSemver(version, fromVersion);
+				if (order <= 0) {
+					host.log(
+						order === 0
+							? `already on ${version}`
+							: `${repo}@${ref} is at ${version}, older than the running ${fromVersion}; not downgrading (use rollback, or --force)`,
+					);
+					return { status: 'up-to-date', commit, ...v };
+				}
 			}
+			if (!fromVersion) host.warn(`the current release has no semantic version; installing ${version}`);
+			else if (options.force && compareSemver(version, fromVersion) < 0)
+				host.warn(`downgrading ${fromVersion} -> ${version} (--force); forward-only migrations may not undo cleanly`);
+			host.log(`${fromVersion ?? 'unknown'} -> ${version} (${short(commit)})`);
+
 			const state = this.readState();
 			const failed = state.failedCommits[commit];
 			if (!options.force && failed) {
-				const reason = `${short(commit)} failed on ${failed.at} (${failed.reason}); pass --force to retry`;
+				const reason = `${version} (${short(commit)}) failed on ${failed.at} (${failed.reason}); pass --force to retry`;
 				host.warn(reason);
-				return { status: 'skipped', commit, reason };
+				return { status: 'skipped', commit, reason, ...v };
 			}
 
 			const name = releaseName(host.now(), commit);
 			const release = join(layout.releasesDir, name);
 			if (options.dryRun) {
 				const plan = [
-					`build ${repo}@${short(commit)} into ${release}`,
+					`build ${repo}@${short(commit)} (${version}) into ${release}`,
 					options.canary === false ? 'skip the canary' : 'boot a canary against a copy of the database',
 					`stop ${CONTROL_PLANE}, snapshot ${layout.dbPath}`,
 					`${layout.previousLink} -> ${current}`,
@@ -244,7 +280,7 @@ export class Updater {
 					'prune releases other than current and previous',
 				];
 				for (const line of plan) host.log(`would ${line}`);
-				return { status: 'dry-run', commit, plan };
+				return { status: 'dry-run', commit, plan, ...v };
 			}
 
 			const free = host.freeBytes(layout.optDir);
@@ -254,11 +290,11 @@ export class Updater {
 
 			// 1. Build next to the running release. Nothing serving is touched until this succeeds.
 			try {
-				await this.stage(release, { repo, ref, commit });
+				await this.stage(release, { repo, ref, commit, version });
 			} catch (error) {
 				const reason = message(error);
 				host.warn(`build failed; ${basename(current)} is still serving untouched: ${reason}`);
-				return { status: 'build-failed', commit, reason };
+				return { status: 'build-failed', commit, reason, ...v };
 			}
 
 			// 2. Boot it in isolation against a copy of the live database.
@@ -270,7 +306,7 @@ export class Updater {
 					host.warn(`canary failed; ${basename(current)} is still serving untouched`);
 					rmSync(release, { recursive: true, force: true });
 					this.recordFailure(commit, name, `canary: ${firstLine(reason)}`);
-					return { status: 'canary-failed', commit, reason };
+					return { status: 'canary-failed', commit, reason, ...v };
 				}
 			}
 
@@ -280,11 +316,47 @@ export class Updater {
 				publicCheck === 'require' || (publicCheck === 'auto' && (await host.publicHealthy(10_000)));
 			if (publicCheck === 'auto')
 				host.log(requirePublic ? 'public URL is healthy; it must stay healthy after the swap' : 'public URL is not reachable now; it will not gate the swap');
-			return this.activate({ current, release, commit, requirePublic, options });
+			const result = await this.activate({ current, release, commit, requirePublic, options });
+			return { ...result, ...v };
 		});
 	}
 
-	private async stage(release: string, source: { repo: string; ref: string; commit: string }): Promise<void> {
+	/** Read-only: what would `update` install? Does not take the lock or touch the machine. */
+	async check(options: Pick<UpdateOptions, 'repo' | 'ref'> = {}): Promise<CheckResult> {
+		const current = readLink(this.layout.currentLink);
+		const currentMeta = current ? readMeta(current) : {};
+		const repo = options.repo ?? currentMeta.repo ?? DEFAULT_REPO;
+		const ref = options.ref ?? currentMeta.ref ?? DEFAULT_REF;
+		const resolved = await this.resolve(repo, ref, currentMeta);
+		const failed = this.readState().failedCommits[resolved.commit];
+		return {
+			repo,
+			ref,
+			...resolved,
+			available: !resolved.fromVersion || compareSemver(resolved.version, resolved.fromVersion) > 0,
+			...(failed ? { failed: `${failed.at}: ${failed.reason}` } : {}),
+		};
+	}
+
+	private async resolve(repo: string, ref: string, currentMeta: ReleaseMeta): Promise<{ commit: string } & Versions> {
+		if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new UpdateError(`Invalid repository "${repo}" (expected owner/name).`);
+		if (!/^[\w./-]+$/.test(ref) || ref.includes('..')) throw new UpdateError(`Invalid ref "${ref}".`);
+		const commit = await this.host.resolveCommit(repo, ref);
+		if (!/^[0-9a-f]{40}$/.test(commit)) throw new UpdateError(`GitHub returned an invalid commit "${commit}".`);
+		// Read VERSION at the exact commit we would build, so the version and the code always agree.
+		const raw = await this.host.readVersionFile(repo, commit);
+		const parsed = parseSemver(raw);
+		if (!parsed)
+			throw new UpdateError(
+				`VERSION at ${repo}@${short(commit)} is not a semantic version: "${raw.trim().slice(0, 40)}"`,
+			);
+		return { commit, version: parsed.version, fromVersion: parseSemver(currentMeta.version)?.version ?? null };
+	}
+
+	private async stage(
+		release: string,
+		source: { repo: string; ref: string; commit: string; version: string },
+	): Promise<void> {
 		const { host, layout } = this;
 		mkdirSync(layout.releasesDir, { recursive: true });
 		// Leftovers from an interrupted build are safe to remove: we hold the lock.
@@ -295,6 +367,7 @@ export class Updater {
 		try {
 			const repoDir = join(staging, 'repo');
 			mkdirSync(repoDir);
+			host.phase('building', `Downloading and building ${source.version}`);
 			host.log(`downloading ${source.repo}@${short(source.commit)}`);
 			await host.fetchSource(source.repo, source.commit, repoDir);
 			host.log('building');
@@ -303,7 +376,7 @@ export class Updater {
 			const missing = verifyRelease(staging, layout);
 			if (missing.length) throw new UpdateError(`the new release is missing ${missing.join(', ')}`);
 			writeMeta(staging, {
-				version: readVersion(repoDir),
+				version: source.version,
 				builtAt: host.now().toISOString(),
 				source: source.ref,
 				repo: source.repo,
@@ -330,6 +403,7 @@ export class Updater {
 				fixSidecarOwnership(layout.dbPath, host);
 			}
 			host.chownToSkiff(scratch);
+			host.phase('canary', 'Test-booting the new release against a copy of the database');
 			host.log('booting canary against a copy of the database');
 			await host.canary(release, scratch);
 			host.log('canary is healthy');
@@ -344,7 +418,10 @@ export class Updater {
 		commit: string;
 		requirePublic: boolean;
 		options: UpdateOptions;
-	}): Promise<UpdateResult> {
+	}): Promise<
+		| { status: 'updated'; commit: string; release: string; previous: string }
+		| { status: 'rolled-back'; commit: string; reason: string; recovered: boolean }
+	> {
 		const { host, layout } = this;
 		const { current, release, commit, options } = input;
 		const withAgent = Boolean(options.withAgent);
@@ -361,6 +438,7 @@ export class Updater {
 
 		host.enterCritical();
 		try {
+			host.phase('swapping', 'Restarting the control plane on the new release');
 			host.log(`stopping ${CONTROL_PLANE}`);
 			await host.stop(CONTROL_PLANE);
 			sw.snapshot = this.takeSnapshot(`pre-update-${basename(release)}`);
@@ -374,6 +452,7 @@ export class Updater {
 			await host.start(CONTROL_PLANE);
 			if (withAgent && host.agentEnrolled()) await host.restart(AGENT);
 
+			host.phase('verifying', 'Waiting for the new release to prove it is healthy');
 			const problem = await this.verifyLive({
 				requirePublic: input.requirePublic,
 				withAgent,
@@ -389,6 +468,7 @@ export class Updater {
 			}
 
 			host.warn(`${basename(release)} is unhealthy (${problem}); rolling back`);
+			host.phase('rolling-back', `Rolling back: ${problem}`);
 			const recovered = await this.revert(sw);
 			this.recordFailure(commit, basename(release), problem);
 			if (recovered) rmSync(release, { recursive: true, force: true });
@@ -770,15 +850,6 @@ export function readMeta(release: string): ReleaseMeta {
 function writeMeta(release: string, meta: ReleaseMeta): void {
 	writeAtomic(join(release, 'meta.json'), `${JSON.stringify(meta, null, 2)}\n`);
 	chmodSync(join(release, 'meta.json'), 0o644);
-}
-
-function readVersion(repoDir: string): string | undefined {
-	try {
-		const pkg = JSON.parse(readFileSync(join(repoDir, 'apps', 'control-plane', 'package.json'), 'utf8'));
-		return typeof pkg.version === 'string' ? pkg.version : undefined;
-	} catch {
-		return undefined;
-	}
 }
 
 /** Same layout the installer produces: repo/, runtime/{bun,bunx,bin/…} -> shared Bun, agent/. */

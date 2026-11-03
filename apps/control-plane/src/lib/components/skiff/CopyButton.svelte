@@ -1,13 +1,15 @@
 <script lang="ts">
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import CopyIcon from '@lucide/svelte/icons/copy';
+	import { toast } from 'svelte-sonner';
 	import { Button, type ButtonSize, type ButtonVariant } from '#lib/components/ui/button/index.js';
+	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
 
 	let {
 		value,
 		label = 'Copy',
 		variant = 'outline',
-		size = 'xs',
+		size = 'sm',
 		iconOnly = false,
 		class: className = ''
 	}: {
@@ -20,35 +22,41 @@
 	} = $props();
 
 	let copied = $state(false);
-	let resetTimer: ReturnType<typeof setTimeout> | undefined;
+	let timer: ReturnType<typeof setTimeout> | undefined;
 
 	async function copy() {
 		try {
 			await navigator.clipboard.writeText(value);
 			copied = true;
-			if (resetTimer) clearTimeout(resetTimer);
-			resetTimer = setTimeout(() => (copied = false), 1600);
+			clearTimeout(timer);
+			timer = setTimeout(() => (copied = false), 1600);
 		} catch {
-			copied = false;
+			toast.error('Could not copy to the clipboard.');
 		}
 	}
 </script>
 
-<Button
-	type="button"
-	{size}
-	{variant}
-	class={className}
-	onclick={copy}
-	aria-label={iconOnly ? label : undefined}
-	title={iconOnly ? label : undefined}
->
-	{#if copied}
-		<CheckIcon class="size-3.5 text-success" aria-hidden="true" />
-		{#if !iconOnly}Copied{/if}
-	{:else}
-		<CopyIcon class="size-3.5" aria-hidden="true" />
-		{#if !iconOnly}{label}{/if}
-	{/if}
-	<span class="sr-only" aria-live="polite">{copied ? 'Copied to clipboard' : ''}</span>
-</Button>
+{#if iconOnly}
+	<Tooltip.Root>
+		<Tooltip.Trigger>
+			{#snippet child({ props })}
+				<Button
+					{...props}
+					type="button"
+					variant={variant === 'outline' ? 'ghost' : variant}
+					size="icon-xs"
+					class={className}
+					onclick={copy}
+					aria-label={label}
+				>
+					{#if copied}<CheckIcon class="text-success" />{:else}<CopyIcon />{/if}
+				</Button>
+			{/snippet}
+		</Tooltip.Trigger>
+		<Tooltip.Content>{copied ? 'Copied' : label}</Tooltip.Content>
+	</Tooltip.Root>
+{:else}
+	<Button type="button" {size} {variant} class={className} onclick={copy}>
+		{#if copied}<CheckIcon />Copied{:else}<CopyIcon />{label}{/if}
+	</Button>
+{/if}

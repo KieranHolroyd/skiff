@@ -26,6 +26,7 @@ import {
 	webhookUrl,
 } from './config';
 import { db, sqlite } from './db';
+import { platformVersion } from './version';
 
 const objectStore =
 	objectStoreKind === 'r2' && r2
@@ -41,7 +42,7 @@ if (webhookUrl) notifiers.push(new WebhookNotifier(webhookUrl));
 export const core = createCore({
 	db,
 	sqlite,
-	version: '0.1.0',
+	version: platformVersion,
 	config: {
 		dataDir,
 		platformOrigin,

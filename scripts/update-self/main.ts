@@ -8,12 +8,19 @@
  * rollback.
  */
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, chownSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import {
+	SELF_UPDATE_DEFAULTS,
+	type SelfUpdateOutcome,
+	type SelfUpdateStatus,
+} from '../../packages/contracts/src/self-update.ts';
+import { TRIGGER_PATH_UNIT, triggerUnits } from './units.ts';
 import {
 	AGENT,
 	CONTROL_PLANE,
 	type Host,
+	type CheckResult,
 	type RollbackResult,
 	type UpdateResult,
 	RecoveryError,
@@ -25,14 +32,16 @@ import {
 const USAGE = `skiff-update-self — update the Skiff control plane from GitHub, reversibly
 
 Usage:
-  skiff-update-self [update] [options]   build the latest commit and swap it in
+  skiff-update-self [update] [options]   install the latest version if VERSION on GitHub is newer (semver)
+  skiff-update-self check [--json]       show the running and latest versions; change nothing
   skiff-update-self rollback [options]   switch back to the previous release (repeat to undo)
   skiff-update-self status [--json]      show current/previous releases and the last switch
 
 update options:
   --ref <ref>          branch, tag or sha (default: the ref the current release was built from, else main)
   --repo <owner/name>  GitHub repository (default: from the current release, else KieranHolroyd/skiff)
-  --force              rebuild even if up to date, or retry a commit that failed before
+  --force              install even if not newer (rebuild/downgrade), or retry a commit that failed
+  --trigger <who>      cli (default) or dashboard; recorded in the status the dashboard shows
   --with-agent         also restart skiff-agent on the new release (and back on rollback)
   --no-canary          skip the isolated pre-swap boot against a copy of the database
   --require-public     the public URL must answer after the swap (default: only if it did before)
@@ -60,6 +69,9 @@ const ENV_FILE = join(ETC_DIR, 'skiff.env');
 const AGENT_ENV_FILE = join(ETC_DIR, 'agent.env');
 const MASTER_KEY_FILE = join(ETC_DIR, 'master.key');
 const CONTROL_SOCKET = join(RUN_DIR, 'control.sock');
+const STATUS_FILE = process.env.SKIFF_UPDATE_STATUS_FILE ?? SELF_UPDATE_DEFAULTS.statusFile;
+const REQUEST_FILE = process.env.SKIFF_UPDATE_REQUEST_FILE ?? SELF_UPDATE_DEFAULTS.requestFile;
+const SYSTEMD_DIR = process.env.SKIFF_SYSTEMD_DIR ?? '/etc/systemd/system';
 
 const tty = process.stdout.isTTY;
 const paint = (code: number) => (s: string) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
@@ -84,10 +96,11 @@ const known = new Set([
 	'--restore-db',
 	'--keep-db',
 	'--json',
+	'--trigger',
 	'--help',
 	'-h',
 ]);
-const withValue = new Set(['--ref', '--repo']);
+const withValue = new Set(['--ref', '--repo', '--trigger']);
 for (let i = 0; i < argv.length; i++) {
 	if (!known.has(argv[i]!)) usageError(`unknown option ${argv[i]}`);
 	if (withValue.has(argv[i]!)) {
@@ -202,6 +215,97 @@ async function poll(check: () => Promise<boolean>, timeoutMs: number, everyMs = 
 const unitState = (unit: string) =>
 	run(['systemctl', 'is-active', unit], { quiet: true, allowFailure: true }).stdout;
 
+// ------------------------------------------------------------- dashboard status
+
+let skiffGid: number | null | undefined;
+function skiffGroupId(): number | null {
+	if (skiffGid === undefined) {
+		const entry = run(['getent', 'group', 'skiff'], { quiet: true, allowFailure: true }).stdout;
+		const gid = Number(entry.split(':')[2]);
+		skiffGid = Number.isInteger(gid) ? gid : null;
+	}
+	return skiffGid;
+}
+
+/** root:skiff 0750 directory, root:skiff 0640 file: the control plane can read it, never write it. */
+function writeStatusFile(status: SelfUpdateStatus): void {
+	try {
+		const dir = dirname(STATUS_FILE);
+		mkdirSync(dir, { recursive: true, mode: 0o750 });
+		const gid = skiffGroupId();
+		if (gid !== null) chownSync(dir, 0, gid);
+		chmodSync(dir, 0o750);
+		const tmp = `${STATUS_FILE}.tmp-${process.pid}`;
+		writeFileSync(tmp, `${JSON.stringify(status, null, 2)}\n`, { mode: 0o640 });
+		if (gid !== null) chownSync(tmp, 0, gid);
+		renameSync(tmp, STATUS_FILE);
+	} catch (error) {
+		// Progress reporting must never break an update.
+		console.error(dim(`  (could not write ${STATUS_FILE}: ${(error as Error).message})`));
+	}
+}
+
+let status: SelfUpdateStatus | null = null;
+function reportStatus(patch: Partial<SelfUpdateStatus>): void {
+	if (!status) return;
+	status = { ...status, ...patch, updatedAt: new Date().toISOString() };
+	writeStatusFile(status);
+}
+
+function outcomeMessage(result: UpdateResult): { outcome: SelfUpdateOutcome; message: string } {
+	const from = result.fromVersion ?? 'the current release';
+	const first = (text: string) => text.split('\n')[0] ?? text;
+	switch (result.status) {
+		case 'updated':
+			return { outcome: 'updated', message: `Updated ${from} → ${result.version}.` };
+		case 'up-to-date':
+			return {
+				outcome: 'up-to-date',
+				message:
+					result.fromVersion === result.version
+						? `Already on the latest version (${result.version}).`
+						: `The latest version (${result.version}) is not newer than ${from}.`,
+			};
+		case 'skipped':
+			return { outcome: 'skipped', message: `Skipped: ${result.reason}` };
+		case 'build-failed':
+			return { outcome: 'build-failed', message: `Building ${result.version} failed; ${from} is still running. ${first(result.reason)}` };
+		case 'canary-failed':
+			return {
+				outcome: 'canary-failed',
+				message: `${result.version} failed its test boot; ${from} is still running. ${first(result.reason.replace(/^the new release did not become healthy in isolation\n?/, ''))}`.trim(),
+			};
+		case 'rolled-back':
+			return result.recovered
+				? { outcome: 'rolled-back', message: `${result.version} was unhealthy (${result.reason}); rolled back to ${from}.` }
+				: { outcome: 'error', message: `${result.version} was unhealthy and the rollback did not recover (${result.reason}). Check journalctl -u ${CONTROL_PLANE}.` };
+		case 'dry-run':
+			return { outcome: 'up-to-date', message: 'Dry run.' };
+	}
+}
+
+/**
+ * Make sure the dashboard trigger exists (path + oneshot service). Idempotent; only reloads
+ * systemd when a unit changed. Existing hosts get the dashboard button after one CLI run.
+ */
+function ensureTriggerUnits(): void {
+	let changed = false;
+	for (const [name, body] of Object.entries(triggerUnits({ requestFile: REQUEST_FILE, command: '/usr/local/sbin/skiff-update-self' }))) {
+		const path = join(SYSTEMD_DIR, name);
+		if (existsSync(path) && readFileSync(path, 'utf8') === body) continue;
+		writeFileSync(path, body, { mode: 0o644 });
+		changed = true;
+	}
+	// The control plane writes requests here; it must be the skiff user's, not root's.
+	mkdirSync(dirname(REQUEST_FILE), { recursive: true, mode: 0o750 });
+	run(['chown', 'skiff:skiff', dirname(REQUEST_FILE)], { quiet: true, allowFailure: true });
+	if (changed) {
+		run(['systemctl', 'daemon-reload'], { quiet: true });
+		run(['systemctl', 'enable', '--now', TRIGGER_PATH_UNIT], { quiet: true, allowFailure: true });
+		host.log(`dashboard updates enabled (${TRIGGER_PATH_UNIT})`);
+	}
+}
+
 const SHIELDED = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 // Root has no @types/node, so Bun's `process.on` typing only knows `memoryPressure`.
 const signals = process as unknown as { on(e: string, l: () => void): void; off(e: string, l: () => void): void };
@@ -223,6 +327,27 @@ const host: Host = {
 				`GitHub ${response.status} resolving ${repo}@${ref}${response.status === 404 ? ' (private repo? set SKIFF_GITHUB_TOKEN)' : ''}`,
 			);
 		return (await response.text()).trim();
+	},
+
+	async readVersionFile(repo, commit) {
+		const response = await fetch(`https://api.github.com/repos/${repo}/contents/VERSION?ref=${commit}`, {
+			headers: githubHeaders('application/vnd.github.raw+json'),
+			signal: AbortSignal.timeout(20_000),
+		});
+		if (response.status === 404) throw new UpdateError(`${repo}@${commit.slice(0, 12)} has no VERSION file at the repository root`);
+		if (!response.ok) throw new UpdateError(`GitHub ${response.status} reading VERSION at ${repo}@${commit.slice(0, 12)}`);
+		const text = await response.text();
+		if (text.length > 1024) throw new UpdateError('VERSION file is unexpectedly large');
+		return text;
+	},
+
+	phase(phase, detail, versions) {
+		host.log(detail);
+		reportStatus({
+			phase,
+			message: detail,
+			...(versions ? { fromVersion: versions.fromVersion ?? null, toVersion: versions.version ?? null } : {}),
+		});
 	},
 
 	async fetchSource(repo, commit, dest) {
@@ -436,19 +561,73 @@ async function main(): Promise<number> {
 	}
 
 	preflight();
+	try {
+		ensureTriggerUnits();
+	} catch (error) {
+		host.warn(`could not install the dashboard trigger units: ${(error as Error).message}`);
+	}
+
+	if (command === 'check') {
+		const result: CheckResult = await updater.check({
+			repo: option('--repo') ?? process.env.SKIFF_REPO,
+			ref: option('--ref') ?? process.env.SKIFF_REF,
+		});
+		if (flag('--json')) console.log(JSON.stringify(result, null, 2));
+		else {
+			console.log(`${bold('running')} ${result.fromVersion ?? dim('unknown')}`);
+			console.log(`${bold('latest ')} ${result.version} ${dim(`(${result.repo}@${result.ref}, ${result.commit.slice(0, 12)})`)}`);
+			console.log(
+				result.failed
+					? yellow(`${result.version} failed to install before (${result.failed}); \`update --force\` retries it`)
+					: result.available
+						? `update available — run ${bold('sudo skiff-update-self')}`
+						: 'up to date',
+			);
+		}
+		return 0;
+	}
 
 	if (command === 'update') {
 		console.log(bold('Skiff self-update'));
+		const trigger = option('--trigger') === 'dashboard' ? 'dashboard' : 'cli';
+		const dryRun = flag('--dry-run');
+		if (!dryRun) {
+			const now = new Date().toISOString();
+			status = {
+				running: true,
+				trigger,
+				phase: 'checking',
+				message: 'Checking for a newer version',
+				fromVersion: null,
+				toVersion: null,
+				startedAt: now,
+				updatedAt: now,
+			};
+			writeStatusFile(status);
+		}
+		const finish = (outcome: SelfUpdateOutcome, message: string, versions: Partial<SelfUpdateStatus> = {}) =>
+			reportStatus({ running: false, phase: 'done', outcome, message, finishedAt: new Date().toISOString(), ...versions });
+		signals.on('exit', () => {
+			if (status?.running) finish('error', `The updater exited unexpectedly. Check journalctl -u skiff-update-self.`);
+		});
 		const publicCheck = flag('--no-public-check') ? 'skip' : flag('--require-public') ? 'require' : 'auto';
-		const result = await updater.update({
+		let result: UpdateResult;
+		try {
+			result = await updater.update({
 			repo: option('--repo') ?? process.env.SKIFF_REPO,
 			ref: option('--ref') ?? process.env.SKIFF_REF,
 			force: flag('--force'),
 			withAgent: flag('--with-agent'),
 			canary: !flag('--no-canary'),
-			dryRun: flag('--dry-run'),
+			dryRun,
 			publicCheck,
 		});
+		} catch (error) {
+			finish('error', (error as Error).message);
+			throw error;
+		}
+		const done = outcomeMessage(result);
+		finish(done.outcome, done.message, { fromVersion: result.fromVersion, toVersion: result.version });
 		if (result.status === 'build-failed' || result.status === 'canary-failed') console.error(red(result.reason));
 		if (result.status === 'rolled-back')
 			console.error(

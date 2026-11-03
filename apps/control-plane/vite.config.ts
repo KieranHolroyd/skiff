@@ -1,9 +1,21 @@
 import tailwindcss from '@tailwindcss/vite';
 import adapter from '@sveltejs/adapter-bun';
 import { sveltekit } from '@sveltejs/kit/vite';
+import { readFileSync } from 'node:fs';
 import { defineConfig } from 'vite';
 
+// The platform version is the repository-root VERSION file (semver); it is baked into the build
+// so a running process always reports the code it is actually running.
+const platformVersion = (() => {
+	try {
+		return readFileSync(new URL('../../VERSION', import.meta.url), 'utf8').trim();
+	} catch {
+		return '0.0.0-unknown';
+	}
+})();
+
 export default defineConfig({
+	define: { __SKIFF_VERSION__: JSON.stringify(platformVersion) },
 	plugins: [
 		tailwindcss(),
 		sveltekit({

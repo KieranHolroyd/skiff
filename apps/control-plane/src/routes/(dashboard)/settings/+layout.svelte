@@ -2,12 +2,13 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import Building2Icon from '@lucide/svelte/icons/building-2';
+	import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
 	import UserRoundIcon from '@lucide/svelte/icons/user-round';
 	import PageHeader from '../_lib/PageHeader.svelte';
 
-	let { children } = $props();
+	let { data, children } = $props();
 
-	const tabs = [
+	const allTabs = [
 		{
 			label: 'Organisation',
 			href: '/(dashboard)/settings',
@@ -19,8 +20,18 @@
 			href: '/(dashboard)/settings/account',
 			path: '/settings/account',
 			icon: UserRoundIcon
+		},
+		{
+			label: 'Updates',
+			href: '/(dashboard)/settings/updates',
+			path: '/settings/updates',
+			icon: CircleArrowUpIcon,
+			platformAdmin: true
 		}
 	] as const;
+
+	// Updating restarts the whole platform, so only platform admins see the tab.
+	const tabs = $derived(allTabs.filter((tab) => !('platformAdmin' in tab) || data.can.manageNodes));
 
 	function isActive(path: string): boolean {
 		return page.url.pathname === path;
