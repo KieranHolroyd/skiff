@@ -36,9 +36,9 @@
 	}
 
 	function actorIcon(type: string) {
-		if (type === 'apiKey' || type === 'api_key') return KeyRoundIcon;
-		if (type === 'node' || type === 'agent') return ServerIcon;
-		if (type === 'mcp' || type === 'oauth' || type === 'system') return BotIcon;
+		if (type === 'apiKey') return KeyRoundIcon;
+		if (type === 'agent') return ServerIcon;
+		if (type === 'mcp' || type === 'system') return BotIcon;
 		return UserRoundIcon;
 	}
 </script>

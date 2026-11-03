@@ -28,31 +28,30 @@
 </script>
 
 <div class="space-y-6">
-	<PageHeader
-		title="Settings"
-		description="Your account, the organisation you are signed in to, and the keys that act on your behalf."
-	/>
-
-	<nav
-		class="inline-flex flex-wrap items-center gap-1 rounded-lg border bg-muted/30 p-1"
-		aria-label="Settings sections"
-	>
-		{#each tabs as tab (tab.href)}
-			{@const Icon = tab.icon}
-			<a
-				href={resolve(tab.href)}
-				aria-current={isActive(tab.path) ? 'page' : undefined}
-				class="flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/40 {isActive(
-					tab.path
-				)
-					? 'bg-background text-foreground shadow-xs'
-					: 'text-muted-foreground hover:text-foreground'}"
-			>
-				<Icon class="size-4" aria-hidden="true" />
-				{tab.label}
-			</a>
-		{/each}
-	</nav>
+	<div>
+		<PageHeader
+			eyebrow="Platform"
+			title="Settings"
+			description="Your account, the organisation you are signed in to, and the keys that act on your behalf."
+			bordered={false}
+		/>
+		<nav class="flex gap-5 border-b" aria-label="Settings sections">
+			{#each tabs as tab (tab.href)}
+				{@const Icon = tab.icon}
+				{@const active = isActive(tab.path)}
+				<a
+					href={resolve(tab.href)}
+					aria-current={active ? 'page' : undefined}
+					class="-mb-px flex items-center gap-2 border-b-2 py-3 text-sm font-medium transition-colors outline-none focus-visible:text-foreground {active
+						? 'border-brand text-foreground'
+						: 'border-transparent text-muted-foreground hover:border-border hover:text-foreground'}"
+				>
+					<Icon class="size-4" aria-hidden="true" />
+					{tab.label}
+				</a>
+			{/each}
+		</nav>
+	</div>
 
 	{@render children()}
 </div>
