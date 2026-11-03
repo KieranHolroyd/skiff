@@ -1,0 +1,12 @@
+{
+  "name": "skif",
+  "version": "0.0.0",
+  "description": "CLI for Skiff, a lightweight self-hosted deploy platform",
+  "type": "module",
+  "bin": {
+    "skif": "./src/main.ts",
+    "skiff": "./src/main.ts"
+  },
+  "scripts": { "check": "tsc -p . --noEmit" },
+  "engines": { "bun": ">=1.4" }
+}

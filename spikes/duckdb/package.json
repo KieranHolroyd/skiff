@@ -1,0 +1,7 @@
+{
+  "name": "@skiff-spike/duckdb",
+  "private": true,
+  "type": "module",
+  "scripts": { "spike": "bun run spike.ts" },
+  "dependencies": { "@duckdb/node-api": "2.0.0-r.1" }
+}

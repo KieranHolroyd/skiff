@@ -1,0 +1,7 @@
+{
+  "name": "@skiff/contracts",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "check": "tsc -p . --noEmit" }
+}

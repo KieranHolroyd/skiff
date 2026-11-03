@@ -1,0 +1,17 @@
+node_modules/
+.svelte-kit/
+build/
+dist/
+*.db
+*.db-*
+*.duckdb
+*.duckdb.wal
+.env
+.env.*
+!.env.example
+spikes/**/bin/
+spikes/**/tmp/
+.DS_Store
+
+# local data
+.data*/
