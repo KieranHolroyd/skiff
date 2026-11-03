@@ -21,24 +21,24 @@ D24 (the VPS is an accepted single point of failure), D25 (R2 is canonical), D28
 | `/etc/skiff/master.key` | `root:root 0400` | Master key, delivered via `LoadCredential=`, never sourced by shell. |
 | `/etc/skiff/setup-token` | `root:skiff 0640` | Single-use setup URL token. |
 | `/etc/skiff/litestream.yml` | `root:skiff 0640` | R2 replication config. |
-| `/etc/caddy/skiff.Caddyfile` | `root:skiff-caddy 0640` | Caddy bootstrap/wizard-managed config. |
-| `/etc/caddy/cloudflare.token` | `root:skiff-caddy 0640` | DNS-01 token, read with `{file./etc/caddy/cloudflare.token}`. |
+| `/etc/caddy/Caddyfile` | `root:caddy 0640` | Caddy bootstrap/wizard-managed config. |
+| `/etc/caddy/cloudflare.token` | `root:caddy 0640` | DNS-01 token, read with `{file./etc/caddy/cloudflare.token}`. |
 | `/var/lib/skiff` | `skiff:skiff 0751` | Data root; other-traverse lets Caddy reach its own subdirectory without listing Skiff data. |
 | `/var/lib/skiff/data/skiff.db` | `skiff:skiff 0640` | SQLite (platform state). |
 | `/var/lib/skiff/backups` | `skiff:skiff 0750` | Pre-upgrade / pre-restore snapshots. |
 | `/var/lib/skiff/drill` | `skiff:skiff 0750` | Restore-drill scratch dirs + `status.json`. |
-| `/var/lib/skiff/caddy` | `caddy:skiff-caddy 0700` | Caddy data/config/certificates; not readable by the control plane. |
+| `/var/lib/caddy` | `caddy:caddy 0700` | Caddy data/config/certificates; not readable by the control plane. |
 | `/srv/skiff/releases` | `skiff:skiff 0755` | Static release cache served by Caddy. |
-| `/run/skiff` | `root:skiff-caddy 2770` (setgid) | Unix sockets only. |
+| `/run/skiff` | `root:caddy 2770` (setgid) | Unix sockets only. |
 | `/run/skiff/control.sock` | `0660` | Control plane (Caddy reverse-proxies to it). |
 | `/run/skiff/agent.sock` | `0660` | Agent (`forward_auth` target for protected sites). |
-| `/run/skiff/caddy-admin.sock` | `0660` | Caddy admin API; no TCP `:2019`. |
+| `/var/lib/caddy/admin.sock` | `0660` | Caddy admin API; no TCP `:2019`. |
 
 Why the runtime directory is setgid: files created in a setgid directory inherit the
 directory's group. That lets the `skiff` processes create sockets owned by
-`skiff-caddy`, so Caddy can connect without joining the `skiff` group (and without being
+`caddy`, so Caddy can connect without joining the `skiff` group (and without being
 able to read the database or `/etc/skiff`). The agent gets the same group through
-`SupplementaryGroups=skiff-caddy` in its unit.
+`SupplementaryGroups=caddy` in its unit.
 
 The repository copies of the units live in [`scripts/systemd/`](../scripts/systemd). The
 installer extracts the versions from the release bundle, so units and binaries are
@@ -63,7 +63,7 @@ root:skiff`.
 | `SKIFF_SETUP_MODE` | `1` until the wizard completes | no | Serves only the setup flow on `:80`. |
 | `SKIFF_SETUP_TOKEN_FILE` | `/etc/skiff/setup-token` | no | File containing the one-time setup token. |
 | `SKIFF_AGENT_SOCKET` | `/run/skiff/agent.sock` | no | Agent unix socket (`forward_auth` and local control-plane calls). |
-| `SKIFF_CADDY_ADMIN_SOCKET` | `/run/skiff/caddy-admin.sock` | no | Caddy admin unix socket. |
+| `SKIFF_CADDY_ADMIN_SOCKET` | `/var/lib/caddy/admin.sock` | no | Caddy admin unix socket. |
 | `SKIFF_AGENT_VERSION` | empty | no | Optional desired agent version; normally set by the control plane. |
 | `SKIFF_EDGE_NODE_ID` | empty | no | Node identity for single-node mode. |
 | `SKIFF_CONTROL_URL` | — | no | Agent only (`/etc/skiff/agent.env`): control-plane origin, `http(s)://…`. |
@@ -241,7 +241,7 @@ Rollback manually if needed:
 ```sh
 readlink -f /opt/skiff/current
 sudo ln -sfn /opt/skiff/releases/<previous-version> /opt/skiff/current
-sudo systemctl restart skiff-caddy skiff-control-plane skiff-agent
+sudo systemctl restart caddy skiff-control-plane skiff-agent
 ```
 
 The installer prunes release directories, keeping the active one and the previous target.
@@ -258,7 +258,7 @@ sudo skiff-uninstall                 # remove binaries/units; keep data + config
 sudo skiff-uninstall --purge --yes   # remove local state too (R2 is never touched)
 ```
 
-The default keeps `/var/lib/skiff`, `/etc/skiff` and `/etc/caddy/skiff.Caddyfile` so a
+The default keeps `/var/lib/skiff`, `/etc/skiff` and `/etc/caddy/Caddyfile` so a
 reinstall can reuse the database and master key. `--purge` also removes the system users.
 Backups and releases in R2 survive both modes by design.
 
@@ -340,7 +340,7 @@ curl -sS --unix-socket /run/skiff/control.sock http://localhost/ -o /dev/null -w
 | Telemetry | Daily Parquet partitions in R2 (`SKIFF_R2_PARQUET_PREFIX`) | 48 h 1-minute + 90 d 1-hour in DuckDB; Parquet long-lived | 24 h |
 | Master key | Recovery kit: `age`-encrypted with a passphrase, shown once at install | Offline; re-export on rotation | n/a |
 | Config/secrets | Offline encrypted copy of `/etc/skiff/skiff.env` + recovery kit | On change | n/a |
-| Caddy config/token | `/etc/caddy/skiff.Caddyfile`, Cloudflare token | On change | n/a |
+| Caddy config/token | `/etc/caddy/Caddyfile`, Cloudflare token | On change | n/a |
 
 Notes:
 
@@ -381,7 +381,7 @@ the env file). Store it offline. Re-export after every master-key rotation.
 ### 7.1 Signals
 
 - Control plane and agent expose Prometheus `/metrics`; OTLP export is optional.
-- `journalctl -u skiff-control-plane|skiff-agent|skiff-caddy|skiff-litestream`.
+- `journalctl -u skiff-control-plane|skiff-agent|caddy|skiff-litestream`.
 - The drill writes `/var/lib/skiff/drill/status.json` (`ok`, timestamp, reason).
 - `systemd-analyze security <unit>` for sandbox drift.
 - Litestream: check R2 object age for `SKIFF_R2_SQLITE_PREFIX` (the newest WAL segment
@@ -509,10 +509,10 @@ minutes, not hours. Cloudflare Tunnel backup ingress and DNS failover are future
 | Setgid `/run/skiff` | The alternative to a root socket helper: socket ownership is controlled by directory group inheritance, and no service joins another's primary group. |
 
 Caddy's admin API is never on TCP `:2019` (D7). It is reachable only at
-`/run/skiff/caddy-admin.sock` with group `skiff-caddy`; the agent is the only consumer.
+`/var/lib/caddy/admin.sock` with group `caddy`; the agent is the only consumer.
 The external edge as configured in [EDGE.md](./EDGE.md) uses
 `/var/lib/caddy/admin.sock`; if you adopt these units on that host, point
-`SKIFF_CADDY_ADMIN_SOCKET` and the unit at that path and grant `skiff-caddy` access
+`SKIFF_CADDY_ADMIN_SOCKET` and the unit at that path and grant `caddy` access
 instead of running Caddy as `caddy`.
 
 Review drift with:
@@ -520,7 +520,7 @@ Review drift with:
 ```sh
 systemd-analyze security skiff-control-plane.service
 systemd-analyze security skiff-agent.service
-systemd-analyze security skiff-caddy.service
+systemd-analyze security caddy.service
 ```
 
 ---
@@ -591,8 +591,8 @@ the control plane.
 | Installer: "signature … but minisign is not installed" | `command -v minisign` | Install `minisign` (or `cosign` for a sigstore bundle); do not disable verification on a production host. |
 | Installer: checksum mismatch | Mirror/proxy, partial download | Retry; verify `SKIFF_RELEASE_URL`; never bypass. |
 | Control plane won't start | `journalctl -u skiff-control-plane -n 100` | Usually missing `SKIFF_PLATFORM_ORIGIN`/`BETTER_AUTH_SECRET` in the env file, or `/etc/skiff/master.key` missing. |
-| Caddy can't reach the control plane | `ls -l /run/skiff`, `namei -l /run/skiff/control.sock` | `/run/skiff` must be `2770 root:skiff-caddy`; control plane needs `SupplementaryGroups=skiff-caddy`. |
-| Agent can't use Caddy admin | `ls -l /run/skiff/caddy-admin.sock` | Socket must be `0660` and group `skiff-caddy`; agent needs that supplementary group. Never expose `:2019` as a workaround. |
+| Caddy can't reach the control plane | `ls -l /run/skiff`, `namei -l /run/skiff/control.sock` | `/run/skiff` must be `2770 root:caddy`; control plane needs `SupplementaryGroups=caddy`. |
+| Agent can't use Caddy admin | `ls -l /var/lib/caddy/admin.sock` | Socket must be `0660` and group `caddy`; agent needs that supplementary group. Never expose `:2019` as a workaround. |
 | Litestream exits immediately | `journalctl -u skiff-litestream` | Missing/incorrect `SKIFF_R2_*`; endpoint must be the R2 S3 URL, region `auto`. |
 | Restore says "no snapshots" | R2 prefix/lifecycle, credentials | Check `SKIFF_R2_SQLITE_PREFIX`; confirm objects exist; run a drill. |
 | Restore fails health check | Journal + `status` | The pre-restore snapshot was restored automatically; inspect the release/migrations. |

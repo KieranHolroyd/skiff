@@ -11,9 +11,11 @@ Reference for the public edge as configured on 2026-11-03.
 | DNS | Cloudflare, zones `kieran.dev` and `kierancloud.dev` |
 | Domains | Platform `kieran.dev` · content `kierancloud.dev` |
 
-Cloudflare records are **grey cloud (DNS-only)**, so TLS terminates directly at Caddy and
-the zone SSL/TLS mode is not in the request path. If a record is proxied later, set the zone
-to **Full (strict)** first, otherwise Caddy's HTTP→HTTPS redirect loops against a Flexible zone.
+Cloudflare records are **proxied (orange cloud)**. TLS still terminates at Caddy; the zones
+must be **Full (strict)** for origin validation. `kierancloud.dev` is zone-wide Full (strict);
+`kieran.dev` stays Flexible for unrelated services and uses a Configuration Rule that sets
+`control.kieran.dev` to Full (strict). Visitors reach Caddy through Cloudflare, so the real
+client IP is in `CF-Connecting-IP`.
 
 ## Caddy
 
@@ -40,7 +42,7 @@ ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force --a
 
 ```caddyfile
 {
-	admin unix//var/lib/caddy/admin.sock
+	admin unix//var/lib/caddy/admin.sock|0660
 }
 
 (tls_cloudflare) {
@@ -62,20 +64,21 @@ kierancloud.dev, *.kierancloud.dev {
 control.kieran.dev {
 	import tls_cloudflare
 	encode zstd gzip
-	reverse_proxy 127.0.0.1:3000
+	reverse_proxy unix//run/skiff/control.sock
 }
 ```
 
-The agent will replace the content placeholder routes with per-host routes via the admin API;
-the Caddyfile is only the bootstrap/catch-all config.
+The agent replaces this bootstrap config with the full platform + content route table via the
+admin API. The Caddyfile is only the bootstrap/catch-all config. The installer also gives Caddy
+the `skiff` supplementary group (to read release artifacts) and sets the admin socket to `0660`.
 
 ## Records
 
 | Name | Type | Value | Proxy |
 |---|---|---|---|
-| `kierancloud.dev` | A | `178.104.255.136` | DNS only |
-| `*.kierancloud.dev` | A | `178.104.255.136` | DNS only |
-| `control.kieran.dev` | A | `178.104.255.136` | DNS only |
+| `kierancloud.dev` | A | `178.104.255.136` | Proxied |
+| `*.kierancloud.dev` | A | `178.104.255.136` | Proxied |
+| `control.kieran.dev` | A | `178.104.255.136` | Proxied |
 
 Certificates are issued by Let's Encrypt over **ACME DNS-01** and renewed by Caddy.
 `kierancloud.dev`, `*.kierancloud.dev`, and `control.kieran.dev` are separate certificates;
@@ -83,8 +86,9 @@ the wildcard covers exactly one label.
 
 ## Upstreams
 
-- `control.kieran.dev` → `127.0.0.1:3000` (the SvelteKit `adapter-bun` default `PORT`).
-  Returns `502` while the control plane is not running.
+- `control.kieran.dev` → `unix//run/skiff/control.sock` (adapter-bun on the control-plane socket).
+  The installer rewrites the bootstrap Caddyfile to this upstream; the agent then owns the full
+  config via the admin API.
 - Content apex → placeholder `200`; any `<slug>.kierancloud.dev` → `404` until the agent
   adds a route.
 

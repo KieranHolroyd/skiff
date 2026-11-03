@@ -407,7 +407,18 @@ function buildRelease(env: Map<string, string>): string {
 	chmodSync(join(release, 'agent', 'skiff-agent'), 0o755);
 	writeFileSync(
 		join(release, 'meta.json'),
-		`${JSON.stringify({ version: options.version, builtAt: new Date().toISOString(), source: process.env.SKIFF_SOURCE_REF ?? 'local' }, null, 2)}\n`,
+		`${JSON.stringify(
+			{
+				version: options.version,
+				builtAt: new Date().toISOString(),
+				source: process.env.SKIFF_SOURCE_REF ?? 'local',
+				// Read by skiff-update-self to know where to pull updates from.
+				...(process.env.SKIFF_REPO ? { repo: process.env.SKIFF_REPO } : {}),
+				...(process.env.SKIFF_SOURCE_REF ? { ref: process.env.SKIFF_SOURCE_REF } : {}),
+			},
+			null,
+			2,
+		)}\n`,
 	);
 	return release;
 }
@@ -573,10 +584,46 @@ function switchCurrent(release: string): void {
 		log(`would point ${link} -> ${release}`);
 		return;
 	}
+	// Keep the outgoing release as `previous` so `skiff-update-self rollback` can return to it.
+	const outgoing = existsSync(link) ? capture('readlink', ['-f', link]) : null;
+	if (outgoing && outgoing !== release) {
+		const previous = join(OPT_DIR, 'previous');
+		rmSync(`${previous}.new`, { force: true });
+		run('ln', ['-s', outgoing, `${previous}.new`]);
+		renameSync(`${previous}.new`, previous);
+	}
 	rmSync(tmp, { force: true });
 	run('ln', ['-s', release, tmp]);
 	renameSync(tmp, link);
 	log(`${link} -> ${release}`);
+}
+
+/**
+ * `skiff-update-self` runs the updater from the active release (falling back to the previous one,
+ * e.g. after rolling back to a release that predates the updater), never from the release it is
+ * about to install.
+ */
+function installUpdateCommand(): void {
+	const path = '/usr/local/sbin/skiff-update-self';
+	if (options.dryRun) {
+		log(`would install ${path}`);
+		return;
+	}
+	const script = `#!/bin/sh
+# Installed by the Skiff installer. See docs/OPS.md §4.2.
+set -eu
+for release in ${OPT_DIR}/current ${OPT_DIR}/previous; do
+	if [ -f "$release/repo/scripts/update-self/main.ts" ]; then
+		exec ${BUN_BIN} "$release/repo/scripts/update-self/main.ts" "$@"
+	fi
+done
+echo "skiff-update-self: no release under ${OPT_DIR} ships the updater; re-run the installer" >&2
+exit 1
+`;
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(`${path}.tmp`, script, { mode: 0o755 });
+	renameSync(`${path}.tmp`, path);
+	log(`installed ${path}`);
 }
 
 function waitFor(label: string, check: () => boolean, timeoutMs = 60_000): void {
@@ -797,6 +844,7 @@ async function install(): Promise<void> {
 		}
 		release = buildRelease(env);
 		switchCurrent(release);
+		installUpdateCommand();
 		writeUnits();
 		startServices();
 		bootstrapNode(env, release);

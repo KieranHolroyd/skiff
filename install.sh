@@ -97,6 +97,7 @@ fi
 
 # --- hand over ------------------------------------------------------------
 export SKIFF_SOURCE_DIR="$SRC"
+export SKIFF_REPO="$REPO"
 export SKIFF_SOURCE_REF="$REF"
 say "starting the Bun installer"
 if [ -t 0 ] || [ -t 1 ]; then
