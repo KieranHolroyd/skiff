@@ -49,8 +49,12 @@ export class DeployService {
 		const view = input.files
 			? await this.ctx.uploads.deployInline(principal, project, input.files, {
 					promote: input.promote,
+					environment: input.environment,
 				})
-			: await this.ctx.uploads.finalize(principal, project, input.uploadId!, { promote: input.promote });
+			: await this.ctx.uploads.finalize(principal, project, input.uploadId!, {
+					promote: input.promote,
+					environment: input.environment,
+				});
 		return { ...view, projectCreated, hint: input.spa === false ? undefined : this.spaHint(view.id) };
 	}
 
@@ -68,6 +72,7 @@ export class DeployService {
 		return this.ctx.uploads.deployInline(principal, project, input.files, {
 			promote: input.promote,
 			message: input.message,
+			environment: input.environment,
 		});
 	}
 }

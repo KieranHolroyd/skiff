@@ -150,11 +150,14 @@ describe('skif config', () => {
 			});
 
 			const stored = JSON.parse(await Bun.file(join(dir, 'config.json')).text()) as {
-				url?: string;
-				token?: string;
-				contentDomain?: string;
+				activeProfile?: string;
+				profiles?: Record<
+					string,
+					{ url?: string; token?: string; contentDomain?: string }
+				>;
 			};
-			expect(stored).toMatchObject({
+			expect(stored.activeProfile).toBe('default');
+			expect(stored.profiles?.default).toMatchObject({
 				url: base,
 				token: 'sk_test_123456789',
 				contentDomain: 'sites.example.com',
@@ -162,13 +165,14 @@ describe('skif config', () => {
 
 			expect(run('logout').code).toBe(0);
 			const afterLogout = JSON.parse(await Bun.file(join(dir, 'config.json')).text()) as {
-				url?: string;
-				contentDomain?: string;
-				token?: string;
+				profiles?: Record<
+					string,
+					{ url?: string; contentDomain?: string; token?: string }
+				>;
 			};
-			expect(afterLogout.url).toBe(base);
-			expect(afterLogout.contentDomain).toBe('sites.example.com');
-			expect(afterLogout.token).toBeUndefined();
+			expect(afterLogout.profiles?.default?.url).toBe(base);
+			expect(afterLogout.profiles?.default?.contentDomain).toBe('sites.example.com');
+			expect(afterLogout.profiles?.default?.token).toBeUndefined();
 		} finally {
 			server.stop(true);
 		}

@@ -7,7 +7,7 @@ import {
 	unsetStoredConfigValue,
 } from '../config.ts';
 import { UsageError } from '../errors.ts';
-import { printJson, renderTable } from '../output.ts';
+import { maskSecret, printJson, renderTable } from '../output.ts';
 
 const flags: FlagSpec = {
 	json: { type: 'boolean' },
@@ -17,8 +17,9 @@ const flags: FlagSpec = {
 const usage = `Usage: skif config <list|get|set|unset|path> [options]
 
 Persistent settings live in ~/.config/skiff/config.json (mode 0600) and survive
-\`skif logout\`, which removes only the API key. SKIFF_CONFIG_DIR and
-XDG_CONFIG_HOME change the location.
+\`skif logout\`, which removes only the API key. Settings belong to the selected
+profile; use \`skif profile list\` to see them and \`--profile <name>\` to choose
+one. SKIFF_CONFIG_DIR and XDG_CONFIG_HOME change the file location.
 
 Settings:
   url            Control-plane URL, e.g. https://control.kieran.dev  (SKIFF_URL)
@@ -78,7 +79,14 @@ async function listSettings(json: boolean): Promise<void> {
 	}));
 
 	if (json) {
-		printJson({ path: report.path, stored: report.stored, settings: entries });
+		printJson({
+			path: report.path,
+			stored: report.stored,
+			profile: report.profile ?? null,
+			activeProfile: report.activeProfile ?? null,
+			profiles: report.profiles,
+			settings: entries,
+		});
 		return;
 	}
 
@@ -88,7 +96,8 @@ async function listSettings(json: boolean): Promise<void> {
 		entry.source === 'env' ? `env (${entry.env})` : entry.source,
 	]);
 	console.log(renderTable(['SETTING', 'VALUE', 'SOURCE'], rows));
-	console.log(`\nConfig  ${report.path}`);
+	console.log(`\nProfile ${report.profile ?? 'none'}`);
+	console.log(`Config  ${report.path}`);
 	if (!report.stored) console.log('No settings saved yet. Run `skif config set url <control-url>`.');
 }
 
@@ -132,6 +141,7 @@ async function setSetting(args: ParsedArgs): Promise<void> {
 		return;
 	}
 	console.log(`Saved ${key} = ${change.value}`);
+	if (change.profile) console.log(`Profile ${change.profile}`);
 	console.log(`Config  ${change.path}`);
 }
 
@@ -150,6 +160,7 @@ async function unsetSetting(args: ParsedArgs): Promise<void> {
 		return;
 	}
 	console.log(`Removed ${key}.`);
+	if (change.profile) console.log(`Profile ${change.profile}`);
 	if (key === 'token') console.log('Settings such as url and contentDomain were kept.');
 }
 
@@ -157,13 +168,8 @@ async function printPath(args: ParsedArgs): Promise<void> {
 	if (args.positionals.length > 0) throw new UsageError('Usage: skif config path');
 	const report = await describeConfig();
 	if (args.boolean('json')) {
-		printJson({ path: report.path, exists: report.stored });
+		printJson({ path: report.path, exists: report.stored, profile: report.profile ?? null });
 		return;
 	}
 	console.log(report.path);
-}
-
-function maskSecret(value: string): string {
-	if (value.length <= 8) return '********';
-	return `${value.slice(0, 4)}…${value.slice(-4)}`;
 }

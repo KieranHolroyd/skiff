@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { and, asc, desc, eq } from 'drizzle-orm';
-import { builds, gitSources, nodes, projects, releases } from '@skiff/db';
+import { and, asc, desc, eq, lt } from 'drizzle-orm';
+import { builds, deployments, gitSources, nodes, projects, releases } from '@skiff/db';
 import {
 	buildCreateSchema,
 	gitSourceSchema,
@@ -25,6 +25,10 @@ export type GitSourceRow = typeof gitSources.$inferSelect;
 export type BuildRow = typeof builds.$inferSelect;
 
 const ACTIVE: BuildStatus[] = ['queued', 'building'];
+/** A Builder that dies mid-build leaves a claim behind; after this it is safe to retry. */
+export const CLAIM_TTL_MS = 15 * 60 * 1000;
+const LOG_LIMIT = 2_000_000;
+const LOG_TAIL = 8_000;
 
 /**
  * Git builds (D2, D3). The control plane never executes a build command: it queues a job and a
@@ -84,6 +88,14 @@ export class BuildService {
 	removeGitSource(principal: Principal, project: ProjectRow): void {
 		requirePermission(principal, 'build:create');
 		this.ctx.db.delete(gitSources).where(eq(gitSources.projectId, project.id)).run();
+		this.ctx.audit.record({
+			principal,
+			action: 'build.git_source_remove',
+			resource: 'build',
+			resourceId: project.id,
+			args: { project: project.slug },
+			result: 'ok',
+		});
 	}
 
 	enqueue(principal: Principal, project: ProjectRow, input: BuildCreate): BuildView {
@@ -100,7 +112,7 @@ export class BuildService {
 			status: 'queued',
 			ref: parsed.ref ?? source.branch,
 			commitSha: null,
-			commitMessage: null,
+			commitMessage: parsed.message?.slice(0, 2000) ?? null,
 			releaseId: null,
 			deploymentId: null,
 			nodeId: null,
@@ -126,26 +138,91 @@ export class BuildService {
 		return this.view(project, row);
 	}
 
-	/** Claim the oldest queued job. Only a node marked `can_build` may call this. */
+	/**
+	 * Return abandoned claims to the queue. A Builder crash (or a host reboot) would otherwise
+	 * leave a build `building` forever. The log keeps a breadcrumb so the retry is explainable.
+	 */
+	recoverStaleClaims(now = this.ctx.now()): number {
+		const stale = this.ctx.db
+			.select()
+			.from(builds)
+			.where(and(eq(builds.status, 'building'), lt(builds.claimedAt, now - CLAIM_TTL_MS)))
+			.all();
+		for (const row of stale) {
+			const log = this.appendText(row, `[builder] claim expired after ${Math.round(CLAIM_TTL_MS / 60_000)}m; requeued\n`);
+			this.ctx.db
+				.update(builds)
+				.set({
+					status: 'queued',
+					nodeId: null,
+					claimedAt: null,
+					startedAt: null,
+					finishedAt: null,
+					...log,
+				})
+				.where(and(eq(builds.id, row.id), eq(builds.status, 'building')))
+				.run();
+		}
+		return stale.length;
+	}
+
+	/**
+	 * Claim the oldest queued job. Only a node marked `can_build` may call this, and a node runs at
+	 * most one build at a time: a second poll while a claim is live returns null. The select and
+	 * conditional update happen in one synchronous transaction, so two pollers cannot claim the
+	 * same row.
+	 */
 	async claim(nodeId: string): Promise<BuildJob | null> {
 		const node = this.ctx.db.select().from(nodes).where(eq(nodes.id, nodeId)).get();
 		if (!node || !node.canBuild) throw new CoreError('forbidden', 'This node is not a Builder.', 403);
-		const row = this.ctx.db
-			.select()
-			.from(builds)
-			.where(eq(builds.status, 'queued'))
-			.orderBy(asc(builds.createdAt))
-			.get();
-		if (!row) return null;
+		this.recoverStaleClaims();
 		const now = this.ctx.now();
-		this.ctx.db
-			.update(builds)
-			.set({ status: 'building', nodeId, claimedAt: now, startedAt: now })
-			.where(eq(builds.id, row.id))
-			.run();
+		const row = this.ctx.db.transaction((tx) => {
+			const busy = tx
+				.select({ id: builds.id })
+				.from(builds)
+				.where(and(eq(builds.nodeId, nodeId), eq(builds.status, 'building')))
+				.get();
+			if (busy) return null;
+			const candidate = tx
+				.select()
+				.from(builds)
+				.where(eq(builds.status, 'queued'))
+				.orderBy(asc(builds.createdAt), asc(builds.id))
+				.get();
+			if (!candidate) return null;
+			// Raw run so the conditional update can prove it won the row (Drizzle's bun-sqlite
+			// `update().run()` does not surface `changes`).
+			const updated = this.ctx.sqlite.run(
+				"UPDATE builds SET status = 'building', node_id = ?, claimed_at = ?, started_at = ?, finished_at = NULL WHERE id = ? AND status = 'queued'",
+				[nodeId, now, now, candidate.id],
+			);
+			return updated.changes === 1 ? candidate : null;
+		});
+		if (!row) return null;
+
 		const source = this.ctx.db.select().from(gitSources).where(eq(gitSources.id, row.gitSourceId)).get();
-		if (!source) throw new NotFoundError('Git source');
-		const uploadUrl = await this.ctx.objectStore.presignPut(`builds/${row.id}.zip`, 60 * 60);
+		if (!source) {
+			this.ctx.db
+				.update(builds)
+				.set({ status: 'failed', error: 'Git source was removed before the build started.', finishedAt: now })
+				.where(eq(builds.id, row.id))
+				.run();
+			return null;
+		}
+		const objectKey = `builds/${row.id}.zip`;
+		let uploadUrl: string;
+		try {
+			uploadUrl = await this.ctx.objectStore.presignPut(objectKey, 60 * 60);
+		} catch (error) {
+			// Never leave the row claimed when no Builder received a job.
+			this.ctx.db
+				.update(builds)
+				.set({ status: 'queued', nodeId: null, claimedAt: null, startedAt: null })
+				.where(eq(builds.id, row.id))
+				.run();
+			throw error;
+		}
 		return {
 			buildId: row.id,
 			repoUrl: source.repoUrl,
@@ -164,11 +241,18 @@ export class BuildService {
 		const row = this.ctx.db.select().from(builds).where(eq(builds.id, buildId)).get();
 		if (!row) throw new NotFoundError('Build');
 		if (row.nodeId !== nodeId) throw new CoreError('forbidden', 'This build was claimed by another node.', 403);
-		if (!ACTIVE.includes(row.status as BuildStatus))
-			throw new ConflictError(`Build is already ${row.status}.`);
+		if (row.status !== 'building') throw new ConflictError(`Build is already ${row.status}.`);
+		if (input.status === 'queued') throw new ValidationError('A Builder cannot return a build to the queue.');
 		const project = this.ctx.db.select().from(projects).where(eq(projects.id, row.projectId)).get();
 		if (!project) throw new NotFoundError('Project');
 		const now = this.ctx.now();
+		const system = buildPrincipal({
+			kind: 'system',
+			userId: row.createdBy,
+			orgId: row.orgId,
+			role: 'owner',
+		});
+		const objectKey = `builds/${row.id}.zip`;
 		const patch: Partial<BuildRow> = {
 			status: input.status,
 			commitSha: input.commitSha ?? row.commitSha,
@@ -176,36 +260,79 @@ export class BuildService {
 			error: input.error ?? null,
 			finishedAt: input.status === 'building' ? null : now,
 		};
+
 		if (input.status === 'succeeded') {
-			const objectKey = `builds/${row.id}.zip`;
-			const zip = await this.ctx.objectStore.get(objectKey);
-			const entries = entriesFromZip(zip);
-			const system = buildPrincipal({
-				kind: 'system',
-				userId: row.createdBy,
-				orgId: row.orgId,
-				role: 'owner',
+			try {
+				const zip = await this.ctx.objectStore.get(objectKey);
+				const entries = entriesFromZip(zip);
+				const deployment = await this.ctx.deployments.deployEntries(system, project, entries, {
+					promote: row.promote,
+					precompress: true,
+					message: row.commitMessage ?? `Git build ${row.ref}`,
+				});
+				// `deployment.releaseId` points at the release row; keep both ids on the build.
+				const deploymentRow = this.ctx.db.select().from(deployments).where(eq(deployments.id, deployment.id)).get();
+				if (!deploymentRow) throw new CoreError('error', 'Deployment disappeared during finalize.', 500);
+				patch.releaseId = deploymentRow.releaseId;
+				patch.deploymentId = deploymentRow.id;
+				patch.error = null;
+				this.ctx.audit.record({
+					principal: system,
+					action: 'build.succeeded',
+					resource: 'build',
+					resourceId: row.id,
+					args: {
+						project: project.slug,
+						ref: row.ref,
+						deploymentId: deploymentRow.id,
+						releaseSha256: deployment.release.sha256,
+					},
+					result: 'ok',
+				});
+			} catch (error) {
+				// A malformed archive or a rejected release is a failed build, not a server error:
+				// record it on the row so the dashboard can explain what happened.
+				patch.status = 'failed';
+				patch.error = this.errorText(error);
+				patch.finishedAt = now;
+				this.ctx.audit.record({
+					principal: system,
+					action: 'build.failed',
+					resource: 'build',
+					resourceId: row.id,
+					args: { project: project.slug, ref: row.ref },
+					result: 'error',
+					error: patch.error,
+				});
+			}
+			await this.cleanupObject(objectKey);
+		} else if (input.status === 'failed' || input.status === 'cancelled') {
+			if (!patch.error && input.status === 'cancelled') patch.error = 'Build was cancelled.';
+			this.ctx.audit.record({
+				principal: system,
+				action: `build.${input.status}`,
+				resource: 'build',
+				resourceId: row.id,
+				args: { project: project.slug, ref: row.ref, nodeId },
+				result: input.status === 'failed' ? 'error' : 'ok',
+				error: patch.error ?? undefined,
 			});
-			const deployment = await this.ctx.deployments.deployEntries(system, project, entries, {
-				promote: row.promote,
-				precompress: true,
-				message: row.commitMessage ?? `Git build ${row.ref}`,
-			});
-			await this.ctx.objectStore.delete(objectKey);
-			patch.releaseId = deployment.id;
-			patch.deploymentId = deployment.id;
+			await this.cleanupObject(objectKey);
 		}
+
 		this.ctx.db.update(builds).set(patch).where(eq(builds.id, buildId)).run();
 		this.ctx.projects.bump(row.orgId);
 		return this.view(project, { ...row, ...patch } as BuildRow);
 	}
 
-	/** Compressed build logs; `tail` is enough for the list view. */
-	appendLog(nodeId: string, buildId: string, text: string): void {
+	/** Append a chunk of Builder output; `tail` is enough for the list view. */
+	appendLog(nodeId: string, buildId: string, text: string): boolean {
 		const row = this.ctx.db.select().from(builds).where(eq(builds.id, buildId)).get();
-		if (!row || row.nodeId !== nodeId) return;
-		const log = `${row.log ?? ''}${text}`.slice(-2_000_000);
-		this.ctx.db.update(builds).set({ log, logTail: log.slice(-8_000) }).where(eq(builds.id, buildId)).run();
+		if (!row || row.nodeId !== nodeId) return false;
+		if (row.status !== 'building') return false;
+		const log = this.appendText(row, text);
+		this.ctx.db.update(builds).set(log).where(eq(builds.id, buildId)).run();
+		return true;
 	}
 
 	cancel(principal: Principal, project: ProjectRow, buildId: string): BuildView {
@@ -213,12 +340,24 @@ export class BuildService {
 		const row = this.ctx.db.select().from(builds).where(and(eq(builds.id, buildId), eq(builds.projectId, project.id))).get();
 		if (!row) throw new NotFoundError('Build');
 		if (!ACTIVE.includes(row.status as BuildStatus)) throw new ConflictError(`Build is already ${row.status}.`);
+		const now = this.ctx.now();
+		const status = 'cancelled' as const;
 		this.ctx.db
 			.update(builds)
-			.set({ status: 'cancelled', finishedAt: this.ctx.now() })
-			.where(eq(builds.id, buildId))
+			.set({ status, error: 'Build was cancelled.', finishedAt: now })
+			.where(and(eq(builds.id, buildId), eq(builds.status, row.status)))
 			.run();
-		return this.view(project, { ...row, status: 'cancelled', finishedAt: this.ctx.now() });
+		void this.cleanupObject(`builds/${row.id}.zip`);
+		this.ctx.audit.record({
+			principal,
+			action: 'build.cancel',
+			resource: 'build',
+			resourceId: buildId,
+			args: { project: project.slug, ref: row.ref },
+			result: 'ok',
+		});
+		this.ctx.projects.bump(row.orgId);
+		return this.view(project, { ...row, status, error: 'Build was cancelled.', finishedAt: now });
 	}
 
 	list(principal: Principal, project: ProjectRow, options: { limit?: number; full?: boolean } = {}): BuildView[] {
@@ -254,11 +393,12 @@ export class BuildService {
 		const source = this.ctx.db.select().from(gitSources).where(eq(gitSources.projectId, project.id)).get();
 		if (!source || !source.enabled) return null;
 		this.verifySignature(source, rawBody, signature);
-		const payload = JSON.parse(rawBody) as {
-			ref?: string;
-			after?: string;
-			head_commit?: { message?: string };
-		};
+		let payload: { ref?: string; after?: string; head_commit?: { message?: string } };
+		try {
+			payload = JSON.parse(rawBody) as typeof payload;
+		} catch {
+			throw new ValidationError('GitHub payload is not valid JSON.');
+		}
 		const branch = payload.ref?.replace('refs/heads/', '');
 		if (!branch || branch !== source.branch) return null;
 		const now = this.ctx.now();
@@ -289,6 +429,7 @@ export class BuildService {
 			action: 'build.webhook',
 			resource: 'build',
 			resourceId: row.id,
+			orgId: project.orgId,
 			args: { project: project.slug, ref: branch, commit: payload.after },
 			result: 'ok',
 		});
@@ -296,7 +437,13 @@ export class BuildService {
 	}
 
 	private verifySignature(source: GitSourceRow, rawBody: string, signature: string | null): void {
-		if (!source.webhookSecret) return;
+		// An unsigned public webhook would let anyone trigger builds (and spend build minutes).
+		if (!source.webhookSecret)
+			throw new CoreError(
+				'unauthorized',
+				'This project has no webhook secret. Set one before using GitHub webhooks.',
+				401,
+			);
 		if (!signature) throw new CoreError('unauthorized', 'Missing X-Hub-Signature-256.', 401);
 		const [nonce, ciphertext] = source.webhookSecret.split(':');
 		if (!nonce || !ciphertext) throw new CoreError('error', 'Stored webhook secret is corrupt.', 500);
@@ -311,6 +458,23 @@ export class BuildService {
 		const row = this.ctx.db.select().from(gitSources).where(eq(gitSources.projectId, project.id)).get();
 		if (!row) throw new NotFoundError('Git source');
 		return row;
+	}
+
+	private appendText(row: BuildRow, text: string): { log: string; logTail: string } {
+		const log = `${row.log ?? ''}${text}`.slice(-LOG_LIMIT);
+		return { log, logTail: log.slice(-LOG_TAIL) };
+	}
+
+	private async cleanupObject(key: string): Promise<void> {
+		try {
+			await this.ctx.objectStore.delete(key);
+		} catch {
+			/* best effort: a stale upload is harmless and the presigned URL expires */
+		}
+	}
+
+	private errorText(error: unknown): string {
+		return (error instanceof Error ? error.message : String(error)).slice(0, 4000);
 	}
 
 	private releaseSha(releaseId: string | null): string | null {

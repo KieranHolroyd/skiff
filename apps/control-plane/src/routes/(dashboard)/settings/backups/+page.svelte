@@ -33,7 +33,10 @@
 	let configureOpen = $state(false);
 	let refreshing = $state(false);
 
-	const ready = $derived(data.availability === 'ready' && !data.inFlight);
+	/** Installed host (root helper) or a dev server (local settings file). */
+	const canEdit = $derived(data.availability === 'ready' || data.availability === 'local');
+	const local = $derived(data.availability === 'local');
+	const ready = $derived(canEdit && !data.inFlight);
 	const health = $derived(data.health);
 	const configured = $derived(data.r2.configured);
 	const savedSecret = $derived(data.r2.secretsSet.includes('R2_SECRET_ACCESS_KEY'));
@@ -45,6 +48,13 @@
 				label: 'Not set up',
 				tone: 'warning',
 				detail: 'The platform database is not backed up off this server.'
+			};
+		if (local)
+			return {
+				label: 'Saved locally',
+				tone: 'neutral',
+				detail:
+					'R2 credentials are saved for this dev server. Continuous backups run on an installed server.'
 			};
 		if (!health.enabled)
 			return {
@@ -143,6 +153,7 @@
 		pending={data.pending}
 		inFlight={data.inFlight}
 		availability={data.availability}
+		restartPending={data.restartPending}
 		sections={['backups', 'restore-drill']}
 	/>
 
@@ -166,7 +177,7 @@
 				title="Back up to Cloudflare R2"
 				description="Litestream copies every change to the platform database to an R2 bucket within about a second, and a monthly drill proves the backup restores. R2 has no egress fees; the free tier covers most installs."
 			>
-				{#if data.availability === 'ready'}
+				{#if canEdit}
 					<Button variant="brand" onclick={() => (configureOpen = true)} disabled={!ready}>
 						<CloudIcon />Set up R2 backups
 					</Button>
@@ -241,9 +252,14 @@
 		{/if}
 
 		{#snippet footer()}
-			{#if configured && data.availability === 'ready'}
+			{#if configured && canEdit}
 				<div class="flex w-full flex-wrap items-center gap-2">
-					{#if health.enabled}
+					{#if local}
+						<span class="text-muted-foreground">
+							Credentials saved locally. Litestream and the restore drill run only on an installed
+							server.
+						</span>
+					{:else if health.enabled}
 						<Button
 							variant="outline"
 							size="sm"
@@ -271,7 +287,7 @@
 						<SettingsIcon />Edit R2 settings
 					</Button>
 					<span class="flex-1"></span>
-					{#if health.enabled}
+					{#if health.enabled && !local}
 						<Button variant="ghost-danger" size="sm" onclick={turnOff} disabled={!ready}
 							>Turn off</Button
 						>
@@ -317,7 +333,12 @@
 				<li>
 					<code>/etc/skiff/skiff.env</code> — it holds the R2 keys the restore needs to reach the backup.
 				</li>
-				<li>Keep both offline (a password manager), apart from each other.</li>
+				<li>
+					Export both as one passphrase-encrypted recovery kit with
+					<code>sudo skiff-recovery-kit export --include-env</code>, copy it off the server, and
+					keep the passphrase apart from the file.
+					<code>skiff-recovery-kit verify &lt;file&gt;</code> checks a kit matches this server.
+				</li>
 			</ul>
 			<Collapsible.Root class="mt-3">
 				<Collapsible.Trigger
@@ -328,7 +349,8 @@
 				<Collapsible.Content>
 					<pre
 						class="mt-2 overflow-x-auto rounded-md border bg-muted/40 p-3 font-mono text-xs">sudo skiff-restore --yes        # this server, latest backup
-sudo skiff-restore-drill        # prove a restore, change nothing</pre>
+sudo skiff-restore-drill        # prove a restore, change nothing
+sudo skiff-restore --yes --recovery-kit kit.age   # fresh server: key + env from the kit first</pre>
 				</Collapsible.Content>
 			</Collapsible.Root>
 		</Panel>

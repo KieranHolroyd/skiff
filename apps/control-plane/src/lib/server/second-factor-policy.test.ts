@@ -56,7 +56,7 @@ describe('authPathAllowedBeforeSecondFactor', () => {
 	});
 
 	test('everything that grants access or changes factors waits', () => {
-		for (const path of ['/api-key/create', '/organization/invite-member', '/mcp/authorize', '/oauth2/consent', '/passkey/delete-passkey', '/two-factor/disable', '/two-factor/generate-backup-codes'])
+		for (const path of ['/api-key/create', '/organization/invite-member', '/oauth2/authorize', '/oauth2/continue', '/oauth2/consent', '/passkey/delete-passkey', '/two-factor/disable', '/two-factor/generate-backup-codes'])
 			expect(authPathAllowedBeforeSecondFactor(path, false)).toBe(false);
 	});
 });
@@ -76,6 +76,7 @@ describe('continueTo', () => {
 	test('keeps same-origin dashboard paths', () => {
 		expect(continueTo('/projects/blog?tab=deployments', origin)).toBe('/projects/blog?tab=deployments');
 		expect(continueTo('/consent?client_id=x', origin)).toBe('/consent?client_id=x');
+		expect(continueTo('/api/auth/oauth2/authorize?client_id=x', origin)).toBe('/api/auth/oauth2/authorize?client_id=x');
 	});
 
 	test('refuses off-origin, empty and loop-back targets', () => {

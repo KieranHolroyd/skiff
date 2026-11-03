@@ -10,4 +10,5 @@ export * from './workload.ts';
 export * from './build.ts';
 export * from './domain.ts';
 export * from './environment.ts';
+export * from './url.ts';
 export * from './agent.ts';

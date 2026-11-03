@@ -1,6 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import { desiredStateSchema, type DesiredState } from '@skiff/contracts';
-import { buildCaddyConfig, isProductionRoute, tlsSubjects, toSiteCompileInput } from './caddy-config.ts';
+import {
+	buildCaddyConfig,
+	domainsAskUrl,
+	isProductionRoute,
+	productionRouteFor,
+	tlsSubjects,
+	toSiteCompileInput,
+} from './caddy-config.ts';
 
 type Json = Record<string, unknown>;
 
@@ -239,6 +246,134 @@ describe('per-deployment roots, worker routes and logging', () => {
 		const errorRoutes = (server(config()).errors as Json).routes as Json[];
 		const notFound = errorRoutes.find((route) => route['@id'] === 'error:secret.example.com')!;
 		expect(JSON.stringify(notFound.match)).toContain('{http.error.status_code} in [404]');
+	});
+
+	test('custom domains clone the production route with the custom host', () => {
+		const value = state();
+		value.platformOrigin = 'https://cloud.example.com';
+		value.domains = [
+			{ host: 'app.customer.test', projectId: 'prj_public', kind: 'custom', redirectTo: null },
+			{ host: 'secure.customer.test', projectId: 'prj_secret', kind: 'custom', redirectTo: null },
+			{ host: 'missing.customer.test', projectId: 'prj_missing', kind: 'custom', redirectTo: null },
+		];
+		const compiled = config(value);
+
+		const publicRoute = routes(compiled).find((route) =>
+			JSON.stringify(route.match).includes('"app.customer.test"'),
+		)!;
+		expect(publicRoute).toBeDefined();
+		expect(publicRoute['@id']).toBe('site:prj_public:dep_1:app.customer.test');
+		const publicHandlers = collectHandlers(publicRoute);
+		expect(publicHandlers.find((handler) => handler.handler === 'file_server')?.root).toBe('/data/sites/prj_public');
+		expect(publicHandlers.some((handler) => handler.handler === 'reverse_proxy')).toBe(false);
+
+		// A protected production route keeps its forward_auth and per-project release root.
+		const secureRoute = routes(compiled).find((route) =>
+			JSON.stringify(route.match).includes('"secure.customer.test"'),
+		)!;
+		const secureHandlers = collectHandlers(secureRoute);
+		expect((secureHandlers.find((handler) => handler.handler === 'reverse_proxy')?.upstreams as Json[])[0]!.dial).toBe(
+			'unix//run/skiff-agent/agent.sock',
+		);
+		expect(secureHandlers.some((handler) => handler.handler === 'file_server' && handler.root === '/data/sites/prj_secret')).toBe(
+			true,
+		);
+
+		// No production deployment means no route; the custom host must not be served blindly.
+		expect(
+			routes(compiled).some((route) => JSON.stringify(route.match ?? null).includes('"missing.customer.test"')),
+		).toBe(false);
+		expect(routes(compiled).at(-1)!['@id']).toBe('catch-all');
+	});
+
+	test('a www sibling 301s to the apex and never serves the site', () => {
+		const value = state();
+		value.domains = [
+			{ host: 'customer.test', projectId: 'prj_public', kind: 'apex', redirectTo: null },
+			{ host: 'www.customer.test', projectId: 'prj_public', kind: 'apex', redirectTo: 'customer.test' },
+		];
+		const compiled = config(value);
+		const redirect = routes(compiled).find((route) => route['@id'] === 'redirect:www.customer.test')!;
+		expect(redirect).toBeDefined();
+		expect(redirect.handle).toEqual([
+			{
+				handler: 'static_response',
+				headers: { Location: ['https://customer.test{http.request.uri}'] },
+				status_code: 301,
+			},
+		]);
+		expect(
+			routes(compiled).some(
+				(route) =>
+					route['@id'] !== 'redirect:www.customer.test' &&
+					JSON.stringify(route.match ?? null).includes('"www.customer.test"'),
+			),
+		).toBe(false);
+
+		const apex = routes(compiled).find((route) => route['@id'] === 'site:prj_public:dep_1:customer.test')!;
+		expect(apex).toBeDefined();
+	});
+
+	test('only nodes serving custom domains configure on-demand TLS with the ask endpoint', () => {
+		const tls = {
+			email: 'ops@example.com',
+			cloudflareApiToken: 'cf-token',
+			subjects: ['*.example.com', 'example.com'],
+		};
+
+		const noDomains = buildCaddyConfig({
+			state: state(),
+			listen: [':443'],
+			dataDir: '/data',
+			agentSocket: '/run/skiff-agent/agent.sock',
+			caddyAdminSocket: '/var/lib/caddy/admin.sock',
+			tls,
+		});
+		const noDomainsTls = (noDomains.apps as Json).tls as Json;
+		expect((noDomainsTls.automation as Json).on_demand).toBeUndefined();
+
+		const value = state();
+		value.platformOrigin = 'https://cloud.example.com';
+		value.domains = [{ host: 'app.customer.test', projectId: 'prj_public', kind: 'custom', redirectTo: null }];
+		const compiled = buildCaddyConfig({
+			state: value,
+			listen: [':443'],
+			dataDir: '/data',
+			agentSocket: '/run/skiff-agent/agent.sock',
+			caddyAdminSocket: '/var/lib/caddy/admin.sock',
+			tls,
+		});
+		const automation = ((compiled.apps as Json).tls as Json).automation as Json;
+		expect(automation.on_demand).toEqual({
+			ask: 'https://cloud.example.com/api/domains/ask',
+			rate_limit: { interval: '10s', burst: 20 },
+		});
+		// The managed wildcard policy is untouched; a separate on-demand policy covers custom hosts.
+		const policies = automation.policies as Json[];
+		expect(policies[0]!.subjects).toEqual(['*.example.com', 'example.com']);
+		expect(policies[0]!.on_demand).toBeUndefined();
+		expect(policies[1]).toMatchObject({
+			subjects: ['app.customer.test'],
+			on_demand: true,
+		});
+		expect((policies[1]!.issuers as Json[])[0]).toMatchObject({
+			module: 'acme',
+			email: 'ops@example.com',
+		});
+		// Custom certs use HTTP-01 (no Cloudflare DNS challenge) so domains outside the zone work.
+		expect(JSON.stringify(policies[1]!.issuers)).not.toContain('cloudflare');
+	});
+
+	test('domain helpers tolerate missing origins and production routes', () => {
+		expect(domainsAskUrl({ domains: [], platformOrigin: 'https://cloud.example.com' })).toBeNull();
+		expect(domainsAskUrl({ domains: [{ host: 'a.test', projectId: 'p', kind: 'custom', redirectTo: null }], platformOrigin: 'not a url' })).toBeNull();
+		expect(
+			domainsAskUrl({
+				domains: [{ host: 'a.test', projectId: 'p', kind: 'custom', redirectTo: null }],
+				platformOrigin: 'https://cloud.example.com/',
+			}),
+		).toBe('https://cloud.example.com/api/domains/ask');
+		expect(productionRouteFor(state(), 'prj_missing')).toBeNull();
 	});
 
 	test('writes a JSON access log for telemetry, skipping the platform host', () => {

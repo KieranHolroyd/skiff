@@ -30,8 +30,8 @@ export class UsageError extends CliError {
 }
 
 export class ConfigError extends CliError {
-	constructor(message: string, options: { cause?: unknown } = {}) {
-		super(message, { code: 'config', cause: options.cause });
+	constructor(message: string, options: { cause?: unknown; suggestions?: string[] } = {}) {
+		super(message, { code: 'config', cause: options.cause, suggestions: options.suggestions });
 		this.name = 'ConfigError';
 	}
 }

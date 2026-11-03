@@ -2,9 +2,12 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { building } from '$app/env';
 import { isSharedDomain } from './domains';
+import { loadLocalSettings } from './local-settings';
 
 // Runtime config comes from the process environment (systemd EnvironmentFile / credentials in production).
 const env = process.env;
+// Dev servers only: settings saved from Settings → Backups / Notifications (.data/platform-settings.json).
+loadLocalSettings(env);
 
 function required(name: string, devDefault?: string): string {
 	// SvelteKit evaluates server modules while analysing the build; real values are only needed at runtime.
@@ -17,7 +20,7 @@ function required(name: string, devDefault?: string): string {
 /** Public origin of the platform domain (dashboard, API, MCP, auth). */
 export const platformOrigin = required('SKIFF_PLATFORM_ORIGIN', 'http://localhost:5173').replace(
 	/\/$/,
-	'',
+	''
 );
 
 /** Domain deployed sites are served from (D34: `kierancloud.dev`). */
@@ -42,7 +45,7 @@ export const dataDir = required('SKIFF_DATA_DIR', '.data');
 
 export const authSecret = required(
 	'BETTER_AUTH_SECRET',
-	'dev-only-insecure-secret-change-me-0123456789',
+	'dev-only-insecure-secret-change-me-0123456789'
 );
 
 /**
@@ -69,7 +72,7 @@ export const smtp = env.SKIFF_SMTP_HOST
 			user: env.SKIFF_SMTP_USER ?? '',
 			password: env.SKIFF_SMTP_PASSWORD ?? '',
 			from: env.SKIFF_SMTP_FROM ?? `Skiff <noreply@${contentDomain}>`,
-			secure: env.SKIFF_SMTP_SECURE === '1',
+			secure: env.SKIFF_SMTP_SECURE === '1'
 		}
 	: undefined;
 
@@ -103,6 +106,6 @@ export const r2 =
 				bucket: required('R2_BUCKET'),
 				accessKeyId: required('R2_ACCESS_KEY_ID'),
 				secretAccessKey: required('R2_SECRET_ACCESS_KEY'),
-				endpoint: env.R2_ENDPOINT,
+				endpoint: env.R2_ENDPOINT
 			}
 		: undefined;

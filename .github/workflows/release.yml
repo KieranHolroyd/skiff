@@ -102,7 +102,7 @@ jobs:
           cp -a packages/db/migrations staging/migrations
           cp -a scripts/systemd staging/systemd
           cp scripts/litestream.yml staging/litestream.yml
-          cp scripts/skiff-migrate.ts scripts/skiff-db-fingerprint.ts staging/tools/
+          cp scripts/skiff-migrate.ts scripts/skiff-db-fingerprint.ts scripts/recovery-kit.ts staging/tools/
           cp scripts/*.sh staging/scripts/
           cp "bun-runtime/bun-linux-${{ matrix.bun_arch }}/bun" staging/runtime/bun
           chmod 0755 staging/runtime/bun staging/scripts/*.sh

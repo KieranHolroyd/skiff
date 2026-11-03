@@ -1,6 +1,7 @@
 import { fail } from '@sveltejs/kit';
 import { getAuthenticatorName } from '@better-auth/passkey';
 import { auth } from '#lib/server/auth.js';
+import { enforceOwnerSecondFactor, userHasTotp } from '#lib/server/second-factor.js';
 import {
 	authErrorMessage,
 	providerLabel,
@@ -87,7 +88,15 @@ export const load: PageServerLoad = async ({ locals, request }) => {
 		accounts,
 		accountsError,
 		passkeys,
-		passkeysError
+		passkeysError,
+		twoFactor: {
+			totpEnabled: userHasTotp(user.id),
+			/** How this session proved a second factor, if it did. */
+			sessionFactor:
+				(locals.session as { secondFactor?: string | null } | undefined)?.secondFactor ?? null,
+			/** Owners must use a passkey or authenticator app (D10). */
+			requiredForRole: enforceOwnerSecondFactor && locals.principal!.role === 'owner'
+		}
 	};
 };
 
@@ -146,6 +155,17 @@ export const actions: Actions = {
 		}
 
 		return { success: 'All other sessions have been signed out.' };
+	},
+
+	disableTotp: async ({ request, locals }) => {
+		const user = locals.user!;
+		if (!userHasTotp(user.id)) return fail(400, { message: 'No authenticator app is set up.' });
+		try {
+			await auth.api.disableTwoFactor({ body: {}, headers: request.headers });
+		} catch (error) {
+			return fail(400, { message: authErrorMessage(error) });
+		}
+		return { success: 'Authenticator app removed.' };
 	},
 
 	deletePasskey: async ({ request }) => {

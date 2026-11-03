@@ -1,11 +1,13 @@
 import { ApiClient } from '../api.ts';
 import {
 	CONTENT_DOMAIN_ENV,
+	PROFILE_ENV,
 	TOKEN_ENV,
 	URL_ENV,
 	normalizePlatformUrl,
 	platformOrigin,
-	readStoredConfig,
+	profileForWrite,
+	readProfile,
 	saveConfig,
 } from '../config.ts';
 import { parseArgs, type FlagSpec } from '../args.ts';
@@ -38,7 +40,8 @@ Or store an API key created in the Skiff dashboard:
   skif login --url https://control.example.com --token <key>
 
 Options:
-  -u, --url <platform>   Control-plane URL (default: the stored URL)
+  -u, --url <platform>   Control-plane URL (default: the profile's saved URL)
+      --profile <name>   Log in to a profile (creates it if needed)
       --web              Explicitly use browser sign-in (the default)
       --no-browser       Print the browser URL instead of opening it
   -t, --token <key>      Store an API key directly, skipping the browser
@@ -46,17 +49,20 @@ Options:
   -h, --help             Show this help
 
 Browser sign-in approves the CLI in the dashboard and stores a new API key.
-Login keeps the URL and content domain already saved by \`skif config\`, and
-records the platform and content domain the server reports. Credentials are
+Login keeps the URL and content domain already saved for the selected profile,
+and records the platform and content domain the server reports. Credentials are
 saved to ~/.config/skiff/config.json with mode 0600.
 
 Environment: ${URL_ENV} and ${TOKEN_ENV} override the stored config. When ${TOKEN_ENV}
 is set, \`skif login\` stores that key instead of opening the browser (use --web or
---no-browser to force browser sign-in).`);
+--no-browser to force browser sign-in). ${PROFILE_ENV} selects the profile when
+--profile is not given.`);
 		return;
 	}
 	if (args.positionals.length > 0)
-		throw new UsageError('Usage: skif login [--url <platform>] [--no-browser] [--token <api-key>]');
+		throw new UsageError(
+			'Usage: skif login [--profile <name>] [--url <platform>] [--no-browser] [--token <api-key>]',
+		);
 
 	const tokenFlag = args.string('token');
 	const explicitWeb = args.boolean('web');
@@ -70,7 +76,10 @@ is set, \`skif login\` stores that key instead of opening the browser (use --web
 	const envToken = wantsWeb ? undefined : process.env[TOKEN_ENV]?.trim() || undefined;
 	const tokenInput = tokenFlag ?? envToken;
 
-	const stored = await readStoredConfig();
+	// `--profile` is stripped by main.ts; this resolves flag > env > active > sole
+	// profile > `default` (creating the profile when the write happens).
+	const profileName = await profileForWrite();
+	const stored = await readProfile(profileName);
 	const urlInput =
 		args.string('url') ??
 		process.env[URL_ENV] ??
@@ -80,7 +89,7 @@ is set, \`skif login\` stores that key instead of opening the browser (use --web
 	const url = normalizePlatformUrl(urlInput);
 
 	if (!tokenInput) {
-		await loginWithBrowser(url, noBrowser, args.boolean('json'));
+		await loginWithBrowser(url, noBrowser, args.boolean('json'), profileName);
 		return;
 	}
 
@@ -96,15 +105,20 @@ is set, \`skif login\` stores that key instead of opening the browser (use --web
 	const identity = await client.whoami();
 	// Trust the server's canonical origin (e.g. after logging in through an IP).
 	const savedUrl = normalizePlatformUrl(identity.platform ?? url);
-	const path = await saveConfig({
-		url: savedUrl,
-		token: token.trim(),
-		contentDomain: identity.contentDomain,
-	});
+	const path = await saveConfig(
+		{
+			url: savedUrl,
+			token: token.trim(),
+			contentDomain: identity.contentDomain,
+		},
+		process.env,
+		profileName,
+	);
 
 	printLogin({
 		url: savedUrl,
 		path,
+		profile: profileName,
 		identity,
 		contentDomain: identity.contentDomain,
 		json: args.boolean('json'),
@@ -112,7 +126,12 @@ is set, \`skif login\` stores that key instead of opening the browser (use --web
 	});
 }
 
-async function loginWithBrowser(url: string, noBrowser: boolean, json: boolean): Promise<void> {
+async function loginWithBrowser(
+	url: string,
+	noBrowser: boolean,
+	json: boolean,
+	profile: string,
+): Promise<void> {
 	const result = await webLogin(url, {
 		openBrowser: !noBrowser,
 		onReady: ({ url: loginUrl, opened }) => {
@@ -126,11 +145,15 @@ async function loginWithBrowser(url: string, noBrowser: boolean, json: boolean):
 	});
 
 	const savedUrl = normalizePlatformUrl(result.platform || url);
-	const path = await saveConfig({
-		url: savedUrl,
-		token: result.token,
-		contentDomain: result.contentDomain,
-	});
+	const path = await saveConfig(
+		{
+			url: savedUrl,
+			token: result.token,
+			contentDomain: result.contentDomain,
+		},
+		process.env,
+		profile,
+	);
 	const identity = await new ApiClient({
 		baseUrl: savedUrl,
 		token: result.token,
@@ -141,6 +164,7 @@ async function loginWithBrowser(url: string, noBrowser: boolean, json: boolean):
 	printLogin({
 		url: savedUrl,
 		path,
+		profile,
 		identity,
 		contentDomain: result.contentDomain ?? identity.contentDomain,
 		json,
@@ -151,16 +175,18 @@ async function loginWithBrowser(url: string, noBrowser: boolean, json: boolean):
 function printLogin(input: {
 	url: string;
 	path: string;
+	profile: string;
 	identity: Identity;
 	contentDomain?: string;
 	json: boolean;
 	method: 'token' | 'web';
 }): void {
-	const { url, path, identity, contentDomain, json, method } = input;
+	const { url, path, profile, identity, contentDomain, json, method } = input;
 	if (json) {
 		printJson({
 			url,
 			platform: identity.platform,
+			profile,
 			contentDomain: contentDomain ?? null,
 			user: identity.user,
 			org: identity.org,
@@ -186,6 +212,7 @@ function printLogin(input: {
 		: '-';
 
 	console.log(`Logged in to ${url}`);
+	console.log(`Profile ${profile}`);
 	console.log(`User   ${userLabel}`);
 	console.log(`Org    ${orgLabel}`);
 	if (contentDomain) console.log(`Sites  ${contentDomain}`);

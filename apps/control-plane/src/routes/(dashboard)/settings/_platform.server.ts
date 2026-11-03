@@ -12,7 +12,9 @@ import {
 	configAvailability,
 	configInFlight,
 	configPending,
+	localRestartPending,
 	readConfigStatus,
+	saveConfigLocally,
 	submitConfigRequest
 } from '#lib/server/platform-config.js';
 
@@ -29,7 +31,9 @@ export function configState() {
 		availability: configAvailability(),
 		status,
 		pending: configPending(),
-		inFlight: configInFlight(status)
+		inFlight: configInFlight(status),
+		/** Dev server: saved settings apply after a restart. */
+		restartPending: localRestartPending()
 	};
 }
 
@@ -44,6 +48,26 @@ export function queueConfig(locals: App.Locals, body: Body, success: string) {
 	if (!principal || !canConfigurePlatform(principal))
 		return fail(403, { message: OWNER_ONLY_MESSAGE });
 	const availability = configAvailability();
+	if (availability === 'local') {
+		// Dev server: no root helper; save to .data/platform-settings.json (see local-settings.ts).
+		try {
+			const changed = saveConfigLocally(principal, body);
+			core.ctx.audit.record({
+				principal,
+				action: 'platform.config',
+				resource: 'platform',
+				args: { local: true, changed },
+				result: 'ok'
+			});
+			return {
+				success: changed.length
+					? 'Saved to .data/platform-settings.json. Restart the dev server to use the new settings.'
+					: 'Nothing changed; the settings already match.'
+			};
+		} catch (cause) {
+			return fail(400, { message: (cause as Error).message });
+		}
+	}
 	if (availability === 'unmanaged')
 		return fail(409, {
 			message:

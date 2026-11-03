@@ -187,6 +187,8 @@ create_upload → presigned PUT ─┼─► Upload session ─► finalize ─�
   - Each admin call reloads Caddy's full config, so the agent **applies all routes in a single PUT per reconcile**.
   - Promote and rollback of an existing route only swap the symlink. No Caddy call is needed.
 - **Promote/rollback:** move the production pointer. Instant. Rollback restores code *and* config.
+  Each deployment records when it was promoted; rollback goes to the most recently promoted deployment that went
+  live before the current one (never to a preview that was never in production).
 - **Retention:** last 10 deployments per project plus pinned ones. GC removes the rest from R2 and node caches.
 - `promote` defaults to `true`.
 
@@ -231,7 +233,10 @@ create_upload → presigned PUT ─┼─► Upload session ─► finalize ─�
 ### 6.1 Auth (Better Auth)
 - Plugins: `organization` (with access control), `admin`, `passkey`, `twoFactor`, `apiKey`,
   MCP/OAuth provider, `magicLink` (invites/recovery).
-- Sign-in: passkeys + GitHub OAuth. No passwords. Invite only. 2FA required for owners.
+- Sign-in: passkeys + GitHub OAuth. No passwords. Invite only. 2FA required for owners: an owner's session
+  must prove a second factor (passkey sign-in, or a TOTP/backup code verified in that session) before it can use
+  the dashboard or API. GitHub and magic-link sign-ins count as single-factor. An unverified session can't enrol a
+  new factor when one already exists, so a hijacked GitHub account or mailbox can't add its own.
 
 ### 6.2 RBAC
 - **Platform level** (`admin` plugin): `platform:admin` manages nodes, global settings, domains, Caddy.
@@ -306,21 +311,31 @@ SvelteKit's built-in CSRF check is disabled because it would block the OAuth tok
 
 ### 6.3.2 CLI configuration
 `skif` keeps persistent settings in `~/.config/skiff/config.json` (`$SKIFF_CONFIG_DIR`, else
-`$XDG_CONFIG_HOME/skiff`, else `~/.config/skiff`), mode 0600:
-- `url` — control-plane origin, e.g. `https://control.kieran.dev`.
-- `contentDomain` — domain deployed sites use, e.g. `kierancloud.dev`; used to build preview
-  URLs when the API does not return one.
-- `token` — API key.
+`$XDG_CONFIG_HOME/skiff`, else `~/.config/skiff`), mode 0600. Settings are grouped into named
+**profiles**, one per deployment, so a single machine can talk to production, staging and a
+local dev server without environment-variable juggling:
+- `profiles.<name>.url` — control-plane origin, e.g. `https://control.kieran.dev`.
+- `profiles.<name>.contentDomain` — domain deployed sites use, e.g. `kierancloud.dev`; used to
+  build preview URLs when the API does not return one.
+- `profiles.<name>.token` — API key.
+- `activeProfile` — the profile used when none is selected explicitly.
 
-`skif config list|get|set|unset|path` manages them and shows whether each effective value comes
-from the file or the environment. `skif login` is browser-first: it opens the dashboard approval
-page, which redirects a one-time PKCE-bound code to the CLI's loopback listener; the CLI exchanges
-that code for a new API key (`--no-browser` prints the URL, `--token` stores a key created in the
-dashboard). The code is stored hashed in `cli_login_codes`, expires after five minutes, and can be
-redeemed once. Login records the canonical platform and content domain the server reports.
-`skif logout` removes only the token, so the next login remembers the URL and domains;
-`skif logout --all` removes the file. `SKIFF_URL`, `SKIFF_TOKEN` and `SKIFF_CONTENT_DOMAIN`
-override the file for CI and agent use.
+A profile is selected by, in order: `--profile <name>`, `$SKIFF_PROFILE`, the active profile, or
+the only profile when exactly one exists. When several profiles exist and none is active, commands
+refuse to guess and list the choices. A profile named `default` is what a legacy single-profile
+file becomes on read; the file is rewritten in the version 2 shape on the next write.
+`skif profile list|add|use|remove|show|current` manages the profiles, and
+`skif config list|get|set|unset|path` manages the selected profile's settings and shows whether
+each effective value comes from the file or the environment.
+
+`skif login` is browser-first: it opens the dashboard approval page, which redirects a one-time
+PKCE-bound code to the CLI's loopback listener; the CLI exchanges that code for a new API key
+(`--no-browser` prints the URL, `--token` stores a key created in the dashboard). The code is
+stored hashed in `cli_login_codes`, expires after five minutes, and can be redeemed once. Login
+records the canonical platform and content domain the server reports in the selected profile.
+`skif logout` removes only the selected profile's token, so the next login remembers the URL and
+domains; `skif logout --all` removes the file and every profile. `SKIFF_URL`, `SKIFF_TOKEN` and
+`SKIFF_CONTENT_DOMAIN` override the profile for CI and agent use.
 
 ### 6.4 Protected sites
 - Access modes per project, set separately for production and previews: `public | password | platform`.
@@ -408,8 +423,9 @@ override the file for CI and agent use.
 | Master key | **Recovery kit**: `age`-encrypted with a passphrase, shown once at install |
 | Certs | Re-issued on restore |
 
-- `skif restore --from r2://<bucket> --recovery-kit <file>` rebuilds SQLite, reinstalls the agent and Caddy,
-  re-keys WireGuard (the homelab reconnects), and nodes reconcile.
+- On the host, after the installer: `skiff-restore --recovery-kit <file> [--from <replica>]` installs the master key
+  (and env) from the kit, then rebuilds SQLite from R2; WireGuard is re-keyed (the homelab reconnects) and nodes
+  reconcile. The recovery kit is produced by `skiff-recovery-kit export` (offered at install).
 - **Monthly automated restore drill** into a scratch directory, with an alert on failure.
 - `ObjectStore` interface: R2 only in v1. Local fs, Garage/MinIO and multi-target replication in v2.
 

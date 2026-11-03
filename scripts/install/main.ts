@@ -723,6 +723,7 @@ const RELEASE_COMMANDS: Array<{ path: string; script: string; runner: 'sh' | 'bu
 	{ path: '/usr/local/sbin/skiff-restore', script: 'repo/scripts/restore.sh', runner: 'sh' },
 	{ path: '/usr/local/sbin/skiff-restore-drill', script: 'repo/scripts/skiff-restore-drill.sh', runner: 'sh' },
 	{ path: '/usr/local/sbin/skiff-alert', script: 'repo/scripts/skiff-alert.ts', runner: 'bun' },
+	{ path: '/usr/local/sbin/skiff-recovery-kit', script: 'repo/scripts/recovery-kit.ts', runner: 'bun' },
 ];
 const BACKUP_UNITS = ['skiff-litestream.service', 'skiff-restore-drill.service', 'skiff-restore-drill.timer', 'skiff-alert@.service'];
 const LITESTREAM_CONFIG = join(ETC_DIR, 'litestream.yml');
@@ -1052,11 +1053,38 @@ async function install(): Promise<void> {
 		step('Installed');
 		console.log(`${color.green('Skiff is installed.')} Platform: ${env.get('SKIFF_PLATFORM_ORIGIN')}`);
 		console.log(`Logs: ${color.dim('journalctl -u skiff-control-plane -u skiff-agent -f')}`);
+		await offerRecoveryKit();
 	} catch (error) {
 		console.error(color.red(`\nError: ${(error as Error).message}`));
 		if (!options.dryRun) rollback(previousRelease, snapshot, previousLink);
 		process.exit(1);
 	}
+}
+
+/**
+ * Recovery kit (DESIGN §10): offered once, at the end of a fresh interactive install. The master
+ * key encrypts every secret, so a restore without it cannot decrypt them. Never fails the install.
+ */
+async function offerRecoveryKit(): Promise<void> {
+	const later = 'sudo skiff-recovery-kit export --include-env';
+	if (options.dryRun || options.upgrade) return;
+	if (!interactive) {
+		log(`Export a recovery kit and store it offline: ${later}`);
+		return;
+	}
+	step('Recovery kit');
+	log('The master key encrypts every secret; without it a restore cannot decrypt them.');
+	if (!/^y/i.test(await ask('Export a passphrase-encrypted recovery kit now? (y/n)', 'y'))) {
+		log(`Skipped. Later: ${later}`);
+		return;
+	}
+	rl?.pause(); // the kit reads its passphrase from the terminal itself
+	const result = Bun.spawnSync({
+		cmd: ['/usr/local/sbin/skiff-recovery-kit', 'export', '--include-env'],
+		stdio: ['inherit', 'inherit', 'inherit'],
+	});
+	rl?.resume();
+	if (result.exitCode !== 0) log(color.yellow(`Export failed; run: ${later}`));
 }
 
 function uninstall(): void {

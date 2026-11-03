@@ -1,11 +1,13 @@
 import { building } from '$app/env';
 import { svelteKitHandler } from 'better-auth/svelte-kit';
 import { getMigrations } from 'better-auth/db/migration';
+import type { RequestEvent } from '@sveltejs/kit';
 import type { Handle, ServerInit } from '@sveltejs/kit/hooks';
 import { auth, backfillApiKeyRateLimits, ensurePlatformAdmin } from '#lib/server/auth.js';
 import { platformOrigin } from '#lib/server/config.js';
 import { checkCsrf } from '#lib/server/csrf.js';
 import { core } from '#lib/server/core.js';
+import { isDevContentHost, serveDevContent } from '#lib/server/dev-content.js';
 import { principalFromRequest, principalFromSession } from '#lib/server/principal.js';
 import { enforceOwnerSecondFactor, userHasSecondFactor } from '#lib/server/second-factor.js';
 import { isExemptBeforeSecondFactor, secondFactorState } from '#lib/server/second-factor-policy.js';
@@ -35,6 +37,10 @@ export const init: ServerInit = async () => {
 };
 
 export const handle: Handle = async ({ event, resolve }) => {
+	// Dev server only: serve `<slug>.localhost` content hosts straight from the local object store
+	// instead of requiring the agent + Caddy. Production never reaches this branch.
+	if (isDevContentHost(event.url.hostname)) return serveDevContent(event);
+
 	const csrf = checkCsrf(event.request, event.url, platformOrigin);
 	if (!csrf.ok) return new Response(`Forbidden: ${csrf.reason}`, { status: 403 });
 
@@ -49,6 +55,11 @@ export const handle: Handle = async ({ event, resolve }) => {
 		event.locals.principal = await principalFromRequest(event.request);
 	}
 
+	// The REST API is bearer/session authenticated throughout; answer 401 here, as JSON, so no handler
+	// can turn a missing principal into a 500 (a `Response` thrown outside `route()` would).
+	if (!event.locals.principal && isAuthenticatedApi(event.url.pathname))
+		return withFrameProtection(Response.json({ error: 'unauthorized', message: 'Sign in or send a valid API key.' }, { status: 401 }));
+
 	// Owner second factor (D10, second-factor-policy.ts): an owner's session must have proved a
 	// passkey or authenticator code before it can reach anything beyond the challenge page.
 	if (session && event.locals.principal && !isExemptBeforeSecondFactor(event.url.pathname)) {
@@ -59,21 +70,28 @@ export const handle: Handle = async ({ event, resolve }) => {
 			sessionFactor: (session.session as { secondFactor?: string | null }).secondFactor,
 			hasFactor: event.locals.principal.role === 'owner' && userHasSecondFactor(session.user.id),
 		});
-		if (state !== 'satisfied') return withFrameProtection(secondFactorRequired(event.request, event.url));
+		if (state !== 'satisfied') return withFrameProtection(secondFactorRequired(event));
 	}
 
 	const response = await svelteKitHandler({ event, resolve, auth, building });
 	return withFrameProtection(response);
 };
 
+/** `/api/v1/**` except the endpoints that authenticate themselves (CLI code exchange). */
+function isAuthenticatedApi(pathname: string): boolean {
+	if (pathname === '/api/v1') return true;
+	return pathname.startsWith('/api/v1/') && pathname !== '/api/v1/cli/token';
+}
+
 /** Pages redirect to the challenge (and back afterwards); API calls get a JSON 403. */
-function secondFactorRequired(request: Request, url: URL): Response {
+function secondFactorRequired(event: RequestEvent): Response {
+	const { request, url } = event;
 	const isRead = request.method === 'GET' || request.method === 'HEAD';
-	const dataRequest = url.pathname.endsWith('/__data.json');
-	const page = dataRequest ? url.pathname.slice(0, -'/__data.json'.length) || '/' : url.pathname;
-	const location = `/two-factor?redirect=${encodeURIComponent(`${page}${dataRequest ? '' : url.search}`)}`;
-	// Client-side navigation fetches `__data.json`; SvelteKit follows a redirect given in its own format.
-	if (isRead && dataRequest) return Response.json({ type: 'redirect', location }, { headers: { 'cache-control': 'no-store' } });
+	// SvelteKit has already stripped `/__data.json` from `url` for client-side navigation requests.
+	const location = `/two-factor?redirect=${encodeURIComponent(`${url.pathname}${event.isDataRequest ? '' : url.search}`)}`;
+	// Client-side navigation follows a redirect given in SvelteKit's own data format.
+	if (isRead && event.isDataRequest)
+		return Response.json({ type: 'redirect', location }, { headers: { 'cache-control': 'no-store' } });
 	if (isRead && (request.headers.get('accept') ?? '').includes('text/html'))
 		return new Response(null, { status: 303, headers: { location, 'cache-control': 'no-store' } });
 	return Response.json(

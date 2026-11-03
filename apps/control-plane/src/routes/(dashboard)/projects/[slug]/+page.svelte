@@ -5,9 +5,14 @@
 	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
 	import CopyIcon from '@lucide/svelte/icons/copy';
+	import CpuIcon from '@lucide/svelte/icons/cpu';
 	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
+	import GitBranchIcon from '@lucide/svelte/icons/git-branch';
+	import GlobeIcon from '@lucide/svelte/icons/globe';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
+	import LayersIcon from '@lucide/svelte/icons/layers';
 	import LinkIcon from '@lucide/svelte/icons/link-2';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PinIcon from '@lucide/svelte/icons/pin';
 	import PinOffIcon from '@lucide/svelte/icons/pin-off';
 	import PlusIcon from '@lucide/svelte/icons/plus';
@@ -15,6 +20,7 @@
 	import RocketIcon from '@lucide/svelte/icons/rocket';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import TrashIcon from '@lucide/svelte/icons/trash';
+	import UploadIcon from '@lucide/svelte/icons/upload';
 	import { toast } from 'svelte-sonner';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
@@ -25,6 +31,7 @@
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
+	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
@@ -38,12 +45,17 @@
 	import PageHeader from '../../_lib/PageHeader.svelte';
 	import ProjectMark from '../../_lib/ProjectMark.svelte';
 	import RowMenu from '../../_lib/RowMenu.svelte';
+	import BuildsPanel from './_components/BuildsPanel.svelte';
+	import DomainsPanel from './_components/DomainsPanel.svelte';
+	import EnvironmentsPanel from './_components/EnvironmentsPanel.svelte';
+	import RuntimePanel from './_components/RuntimePanel.svelte';
 	import { displayUrl, formatBytes, formatDateTime, shortId, shortSha } from '../../_lib/format.js';
 	import type { PageProps } from './$types';
 
 	interface ProjectFormResult {
 		message?: string;
 		success?: string;
+		suggestions?: string[];
 		fieldErrors?: Record<string, string>;
 		shareUrl?: string;
 		shareHost?: string;
@@ -55,6 +67,11 @@
 	type Deployment = (typeof data.deployments)[number];
 
 	let tab = $state(page.url.searchParams.get('tab') ?? 'deployments');
+
+	// Deploy dialog
+	let deployOpen = $state(false);
+	let deployEnvironment = $state('production');
+	let deployPromote = $state(true);
 
 	// Share-link dialog
 	let shareOpen = $state(false);
@@ -69,6 +86,25 @@
 	let accessOpen = $state(false);
 	let accessScope = $state<'production' | 'previews'>('production');
 	let accessMode = $state('public');
+
+	// Project details dialog
+	let projectOpen = $state(false);
+	let projectName = $state('');
+	let projectSlug = $state('');
+	let placement = $state('edge');
+
+	const placementOptions = $derived([
+		{ value: 'edge', label: 'Edge node' },
+		{ value: 'auto', label: 'Auto — most free slice budget' },
+		...data.capacity
+			.filter((item) => item.mode !== 'edge')
+			.map((item) => ({ value: item.nodeId, label: `${item.name} (${item.mode})` }))
+	]);
+	const placementChoices = $derived(
+		placementOptions.some((option) => option.value === data.project.placement)
+			? placementOptions
+			: [...placementOptions, { value: data.project.placement, label: data.project.placement }]
+	);
 
 	$effect(() => {
 		if (result?.shareUrl) shareSecretOpen = true;
@@ -97,6 +133,12 @@
 		toast.success('Copied to the clipboard.');
 	}
 
+	function openDeploy() {
+		deployEnvironment = 'production';
+		deployPromote = true;
+		deployOpen = true;
+	}
+
 	function openShare(deploymentId = '') {
 		shareDeploymentId = deploymentId;
 		expiresAtIso = '';
@@ -108,6 +150,13 @@
 		accessMode =
 			scope === 'production' ? data.project.productionAccess : data.project.previewAccess;
 		accessOpen = true;
+	}
+
+	function openProject() {
+		projectName = data.project.name;
+		projectSlug = data.project.slug;
+		placement = data.project.placement;
+		projectOpen = true;
 	}
 
 	function promote(deployment: Deployment) {
@@ -188,8 +237,18 @@
 				</a>
 				<AccessChip scope="Prod" mode={data.project.productionAccess} />
 				<AccessChip scope="Preview" mode={data.project.previewAccess} />
+				<Badge variant="outline" class="font-mono text-[10px] uppercase"
+					>{data.project.runtime}</Badge
+				>
+				<Badge variant="outline" class="font-mono text-[10px]">{data.project.placement}</Badge>
 			</div>
 		{/snippet}
+		{#if data.can.createDeployment}
+			<Button onclick={openDeploy}>
+				<UploadIcon />
+				Deploy
+			</Button>
+		{/if}
 		<Button href={data.project.productionUrl} target="_blank" rel="external noreferrer">
 			<ArrowUpRightIcon />
 			Visit site
@@ -269,13 +328,32 @@
 	</Card.Root>
 
 	<Tabs.Root bind:value={tab} class="gap-5">
-		<Tabs.List variant="line" class="w-full justify-start border-b">
+		<Tabs.List variant="line" class="w-full justify-start overflow-x-auto border-b">
 			<Tabs.Trigger value="deployments" class="flex-none">
 				<RocketIcon />Deployments
 				<Badge variant="neutral" class="h-4 px-1.5 font-mono text-[10px]"
 					>{data.deployments.length}</Badge
 				>
 			</Tabs.Trigger>
+			<Tabs.Trigger value="environments" class="flex-none">
+				<LayersIcon />Environments
+				<Badge variant="neutral" class="h-4 px-1.5 font-mono text-[10px]"
+					>{data.environments.length}</Badge
+				>
+			</Tabs.Trigger>
+			<Tabs.Trigger value="builds" class="flex-none">
+				<GitBranchIcon />Builds
+				<Badge variant="neutral" class="h-4 px-1.5 font-mono text-[10px]"
+					>{data.builds.length}</Badge
+				>
+			</Tabs.Trigger>
+			<Tabs.Trigger value="domains" class="flex-none">
+				<GlobeIcon />Domains
+				<Badge variant="neutral" class="h-4 px-1.5 font-mono text-[10px]"
+					>{data.domains.length}</Badge
+				>
+			</Tabs.Trigger>
+			<Tabs.Trigger value="runtime" class="flex-none"><CpuIcon />Runtime</Tabs.Trigger>
 			<Tabs.Trigger value="shares" class="flex-none">
 				<LinkIcon />Share links
 				<Badge variant="neutral" class="h-4 px-1.5 font-mono text-[10px]"
@@ -285,12 +363,64 @@
 			<Tabs.Trigger value="settings" class="flex-none"><KeyRoundIcon />Settings</Tabs.Trigger>
 		</Tabs.List>
 
+		<Tabs.Content value="environments">
+			<EnvironmentsPanel
+				environments={data.environments}
+				deployments={data.deployments}
+				platformOrigin={data.platform.origin}
+				previewAccess={data.project.previewAccess}
+				productionAccess={data.project.productionAccess}
+				runtime={data.project.runtime}
+				can={{
+					manageEnvironments: data.can.manageEnvironments,
+					promoteEnvironment: data.can.promoteEnvironment,
+					rollbackEnvironment: data.can.rollbackEnvironment
+				}}
+			/>
+		</Tabs.Content>
+
+		<Tabs.Content value="builds">
+			<BuildsPanel
+				project={data.project}
+				gitSource={data.gitSource}
+				builds={data.builds}
+				platformOrigin={data.platform.origin}
+				can={{ createBuild: data.can.createBuild, cancelBuild: data.can.cancelBuild }}
+			/>
+		</Tabs.Content>
+
+		<Tabs.Content value="domains">
+			<DomainsPanel
+				project={data.project}
+				domains={data.domains}
+				contentDomain={data.contentDomain}
+				platformOrigin={data.platform.origin}
+				can={{ createDomain: data.can.createDomain, deleteDomain: data.can.deleteDomain }}
+			/>
+		</Tabs.Content>
+
+		<Tabs.Content value="runtime">
+			<RuntimePanel
+				project={data.project}
+				spec={data.workloadSpec}
+				workload={data.workload}
+				secrets={data.secrets}
+				capacity={data.capacity}
+				can={{
+					manageWorkload: data.can.manageWorkload,
+					createSecret: data.can.createSecret,
+					deleteSecret: data.can.deleteSecret,
+					viewCapacity: data.can.viewCapacity
+				}}
+			/>
+		</Tabs.Content>
+
 		<Tabs.Content value="deployments">
 			{#if data.deployments.length === 0}
 				<EmptyState
 					icon={RocketIcon}
 					title="No deployments yet"
-					description="Deployments come from the CLI, MCP clients or the REST API. Every deploy gets an immutable preview URL."
+					description="Deploy a built .zip from this page, or use the CLI, MCP clients or the REST API. Every deploy gets an immutable preview URL."
 				>
 					<code class="rounded-md border bg-card px-2.5 py-1.5 font-mono text-xs"
 						><span class="text-muted-foreground select-none">$ </span>skif deploy ./dist --project {data
@@ -318,6 +448,11 @@
 											<span class="font-mono text-[13px] font-medium">{deployment.shortId}</span>
 											<StatusBadge status={deployment.status} />
 											{#if deployment.isProduction}<Badge variant="brand">production</Badge>{/if}
+											{#if !deployment.isProduction}
+												<Badge variant="outline" class="font-mono text-[10px]"
+													>{deployment.environmentSlug}</Badge
+												>
+											{/if}
 											{#if deployment.pinned}<Badge variant="outline"><PinIcon />pinned</Badge>{/if}
 										</div>
 										<a
@@ -488,6 +623,36 @@
 		</Tabs.Content>
 
 		<Tabs.Content value="settings" class="grid items-start gap-5 lg:grid-cols-2">
+			<Card.Root class="lg:col-span-2">
+				<Card.Header>
+					<Card.Title>Project</Card.Title>
+					<Card.Description>Name, address and where the project is placed.</Card.Description>
+					{#if data.can.update}
+						<Card.Action class="self-center">
+							<Button variant="outline" size="sm" onclick={openProject}
+								><PencilIcon />Edit project</Button
+							>
+						</Card.Action>
+					{/if}
+				</Card.Header>
+				<Card.Content>
+					<dl class="kv">
+						<dt>Name</dt>
+						<dd class="text-[13px]">{data.project.name}</dd>
+						<dt>Address</dt>
+						<dd class="font-mono text-[12px]">{data.project.slug}.{data.contentDomain}</dd>
+						<dt>Runtime</dt>
+						<dd class="capitalize">{data.project.runtime}</dd>
+						<dt>Placement</dt>
+						<dd class="font-mono text-[13px]">{data.project.placement}</dd>
+						<dt>Environments</dt>
+						<dd class="font-mono text-[13px]">{data.environments.length}</dd>
+						<dt>Custom domains</dt>
+						<dd class="font-mono text-[13px]">{data.domains.length}</dd>
+					</dl>
+				</Card.Content>
+			</Card.Root>
+
 			<Card.Root>
 				<Card.Header>
 					<Card.Title>Access</Card.Title>
@@ -534,6 +699,17 @@
 						<dd class="capitalize">{data.project.runtime}</dd>
 						<dt>Placement</dt>
 						<dd class="font-mono text-[13px]">{data.project.placement}</dd>
+						<dt>Workload</dt>
+						<dd class="text-[13px]">
+							{#if data.workload}
+								<span class="capitalize">{data.workload.status}</span>
+								<span class="text-muted-foreground">
+									· {data.workload.memoryMb} MB · {data.workload.cpus} vCPU</span
+								>
+							{:else}
+								<span class="text-muted-foreground">not running</span>
+							{/if}
+						</dd>
 						<dt>Created</dt>
 						<dd class="text-[13px]">
 							<time datetime={data.project.createdAt}>{formatDateTime(data.project.createdAt)}</time
@@ -569,6 +745,81 @@
 		</Tabs.Content>
 	</Tabs.Root>
 </div>
+
+{#if data.can.createDeployment}
+	<FormDialog
+		bind:open={deployOpen}
+		icon={UploadIcon}
+		title="Deploy a zip"
+		description="Upload an already-built static site or app. Every deploy gets an immutable preview URL; promote moves production."
+		action="?/deploy"
+		submitLabel="Deploy"
+		onsuccess={() => (tab = 'deployments')}
+	>
+		<Field.Group>
+			<Field.Field data-invalid={result?.fieldErrors?.artifact ? true : undefined}>
+				<Field.Label for="deploy-artifact">Artifact (.zip)</Field.Label>
+				<Input
+					id="deploy-artifact"
+					name="artifact"
+					type="file"
+					accept=".zip,application/zip"
+					required
+				/>
+				<Field.Description>
+					Zip the <strong class="font-medium text-foreground">contents</strong> of your build output
+					directory, not the folder itself — for example
+					<code class="font-mono">cd dist &amp;&amp; zip -r ../site.zip .</code>. Limits: 500 MB
+					archive, 20,000 files, 25 MB per file. For a repository, a git build is the alternative.
+				</Field.Description>
+				{#if result?.fieldErrors?.artifact}<Field.Error>{result.fieldErrors.artifact}</Field.Error
+					>{/if}
+			</Field.Field>
+			<Field.Field>
+				<Field.Label for="deploy-environment">Environment</Field.Label>
+				<NativeSelect.Root
+					id="deploy-environment"
+					name="environment"
+					bind:value={deployEnvironment}
+					class="w-full"
+				>
+					{#if data.environments.length === 0}
+						<NativeSelect.Option value="production">Production</NativeSelect.Option>
+					{:else}
+						{#each data.environments as environment (environment.id)}
+							<NativeSelect.Option value={environment.slug}
+								>{environment.name} ({environment.slug})</NativeSelect.Option
+							>
+						{/each}
+					{/if}
+				</NativeSelect.Root>
+				<Field.Description>
+					Production moves the live site when promoted; other environments update only their own
+					host.
+				</Field.Description>
+			</Field.Field>
+			<Field.Field data-invalid={result?.fieldErrors?.message ? true : undefined}>
+				<Field.Label for="deploy-message"
+					>Message <span class="font-normal text-muted-foreground">optional</span></Field.Label
+				>
+				<Input
+					id="deploy-message"
+					name="message"
+					maxlength={500}
+					placeholder="Release notes or a commit summary"
+				/>
+				{#if result?.fieldErrors?.message}<Field.Error>{result.fieldErrors.message}</Field.Error
+					>{/if}
+			</Field.Field>
+			<Field.Field orientation="horizontal" class="gap-2">
+				<Checkbox id="deploy-promote" name="promote" value="true" bind:checked={deployPromote} />
+				<Field.Label for="deploy-promote" class="font-normal">
+					Promote to the selected environment when the upload succeeds
+				</Field.Label>
+			</Field.Field>
+		</Field.Group>
+	</FormDialog>
+{/if}
 
 {#if data.can.createShare}
 	<FormDialog
@@ -685,6 +936,74 @@
 						>{/if}
 				</Field.Field>
 			{/if}
+		</Field.Group>
+	</FormDialog>
+{/if}
+
+{#if data.can.update}
+	<FormDialog
+		bind:open={projectOpen}
+		icon={PencilIcon}
+		title="Edit project"
+		description="Renaming the slug keeps a 30-day redirect from the old address."
+		action="?/updateProject"
+		submitLabel="Save project"
+	>
+		<Field.Group>
+			<Field.Field data-invalid={result?.fieldErrors?.name ? true : undefined}>
+				<Field.Label for="edit-name">Name</Field.Label>
+				<Input id="edit-name" name="name" bind:value={projectName} maxlength={120} required />
+				{#if result?.fieldErrors?.name}<Field.Error>{result.fieldErrors.name}</Field.Error>{/if}
+			</Field.Field>
+			<Field.Field data-invalid={result?.fieldErrors?.slug ? true : undefined}>
+				<Field.Label for="edit-slug">Slug</Field.Label>
+				<Input
+					id="edit-slug"
+					name="slug"
+					bind:value={projectSlug}
+					maxlength={40}
+					autocapitalize="off"
+					spellcheck="false"
+					class="font-mono text-[13px]"
+				/>
+				<Field.Description>
+					Address: <span class="font-mono">{projectSlug || '…'}.{data.contentDomain}</span> — the old
+					address redirects for 30 days after a rename.
+				</Field.Description>
+				{#if result?.fieldErrors?.slug}<Field.Error>{result.fieldErrors.slug}</Field.Error>{/if}
+				{#if result?.suggestions?.length}
+					<div class="flex flex-wrap items-center gap-1.5">
+						<span class="text-xs text-muted-foreground">Try:</span>
+						{#each result.suggestions as suggestion (suggestion)}
+							<Button
+								type="button"
+								variant="outline"
+								size="xs"
+								class="font-mono"
+								onclick={() => (projectSlug = suggestion)}>{suggestion}</Button
+							>
+						{/each}
+					</div>
+				{/if}
+			</Field.Field>
+			<Field.Field>
+				<Field.Label for="edit-placement">Placement</Field.Label>
+				<NativeSelect.Root
+					id="edit-placement"
+					name="placement"
+					bind:value={placement}
+					class="w-full"
+				>
+					{#each placementChoices as option (option.value)}
+						<NativeSelect.Option value={option.value}>{option.label}</NativeSelect.Option>
+					{/each}
+				</NativeSelect.Root>
+				<Field.Description>
+					<code class="font-mono">auto</code> resolves once at deploy time and is recorded on the deployment,
+					so a running app never moves by itself. Changing placement here does not move an existing workload;
+					it applies to the next deployment.
+				</Field.Description>
+			</Field.Field>
 		</Field.Group>
 	</FormDialog>
 {/if}

@@ -1,5 +1,6 @@
 import { fail } from '@sveltejs/kit';
 import type { NodeView } from '@skiff/core';
+import type { NodeCapacityView } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
 import { failStatus, formBoolean, formString, toFormFailure } from '../_lib/errors.js';
 import type { Actions, PageServerLoad } from './$types';
@@ -8,14 +9,17 @@ export const load: PageServerLoad = ({ locals }) => {
 	const principal = locals.principal!;
 	let nodes: NodeView[] = [];
 	let denied = false;
+	let capacity: NodeCapacityView[] = [];
 	try {
 		nodes = core.nodes.list(principal);
+		capacity = core.workloads.capacity(principal);
 	} catch {
 		denied = true;
 	}
 
 	return {
 		nodes,
+		capacity,
 		denied,
 		platformOrigin: core.ctx.config.platformOrigin
 	};
@@ -55,6 +59,26 @@ export const actions: Actions = {
 			success: draining
 				? 'Node is draining. It stops receiving new placements.'
 				: 'Node resumed and available for placements.'
+		};
+	},
+
+	setBuilder: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const nodeId = formString(data, 'nodeId');
+		const builder = formBoolean(data, 'builder');
+		if (!nodeId) return fail(400, { message: 'Missing node id.' });
+
+		try {
+			core.nodes.setBuilder(principal, nodeId, builder);
+		} catch (error) {
+			return fail(failStatus(error), toFormFailure(error));
+		}
+
+		return {
+			success: builder
+				? 'Node is now a Builder. It claims git builds one at a time.'
+				: 'Builder role removed. Queued builds will wait for another Builder.'
 		};
 	},
 

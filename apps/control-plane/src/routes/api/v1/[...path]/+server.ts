@@ -29,9 +29,8 @@ const api: RequestHandler = async (event) => {
 	const { request } = event;
 	const method = request.method;
 	const segments = event.params.path.split('/').filter(Boolean);
-	const principal = requirePrincipal(event);
-
 	return route(async () => {
+		const principal = requirePrincipal(event);
 		// --- session / status -------------------------------------------------
 		if (segments.length === 0 || (segments.length === 1 && segments[0] === 'whoami')) {
 			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);

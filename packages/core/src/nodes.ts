@@ -1,6 +1,7 @@
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import {
 	deployments,
+	environments,
 	nodeJoinTokens,
 	nodes,
 	projects,
@@ -12,6 +13,7 @@ import {
 import {
 	canAdministerPlatform,
 	canViewPlatform,
+	contentUrl,
 	type DesiredState,
 	type Heartbeat,
 	type Principal,
@@ -46,6 +48,8 @@ export interface NodeView {
 	agentVersion: string | null;
 	lastHeartbeatAt: string | null;
 	stats: unknown;
+	/** True when this node polls for git-build jobs (D3). */
+	canBuild: boolean;
 	createdAt: string;
 }
 
@@ -64,6 +68,7 @@ export class NodeService {
 			agentVersion: row.agentVersion,
 			lastHeartbeatAt: row.lastHeartbeatAt ? new Date(row.lastHeartbeatAt).toISOString() : null,
 			stats: parseJson(row.statsJson, null),
+			canBuild: row.canBuild,
 			createdAt: new Date(row.createdAt).toISOString(),
 		};
 	}
@@ -252,6 +257,27 @@ export class NodeService {
 		return this.view({ ...node, status: draining ? 'draining' : 'online' });
 	}
 
+	/** Mark a node as a git Builder (D3). Only a platform admin may change fleet-wide roles. */
+	setBuilder(principal: Principal, nodeId: string, builder: boolean): NodeView {
+		this.assertPlatformAdmin(principal);
+		const node = this.ctx.db.select().from(nodes).where(eq(nodes.id, nodeId)).get();
+		if (!node) throw new NotFoundError('Node');
+		this.ctx.db
+			.update(nodes)
+			.set({ canBuild: builder, updatedAt: this.ctx.now() })
+			.where(eq(nodes.id, nodeId))
+			.run();
+		this.ctx.audit.record({
+			principal,
+			action: 'node.set_builder',
+			resource: 'node',
+			resourceId: nodeId,
+			args: { builder },
+			result: 'ok',
+		});
+		return this.view({ ...node, canBuild: builder });
+	}
+
 	rotateToken(principal: Principal, nodeId: string): { token: string } {
 		this.assertPlatformAdmin(principal);
 		const node = this.ctx.db.select().from(nodes).where(eq(nodes.id, nodeId)).get();
@@ -299,6 +325,8 @@ export class NodeService {
 
 		const routes: RouteSpec[] = [];
 		const releaseShas = new Set<string>();
+		/** Route body per deployment, reused for that deployment's preview and environment routes. */
+		const baseByDeployment = new Map<string, Omit<RouteSpec, 'host' | 'access' | 'accessMode'>>();
 		const workloadByProject = new Map(
 			this.ctx.db
 				.select()
@@ -329,7 +357,6 @@ export class NodeService {
 				const release = this.ctx.db.select().from(releases).where(eq(releases.id, deployment.releaseId)).get();
 				if (!release) continue;
 				if (local) releaseShas.add(release.sha256);
-				const isProduction = project.productionDeploymentId === deployment.id;
 				const config = this.configFor(deployment.configSnapshotId);
 				const base = {
 					projectId: project.id,
@@ -344,8 +371,9 @@ export class NodeService {
 					headers: config.headers,
 					upstream,
 				} satisfies Omit<RouteSpec, 'host' | 'access' | 'accessMode'>;
+				baseByDeployment.set(deployment.id, base);
 
-				// Every deployment always gets its immutable preview URL.
+				// Every deployment always gets its immutable preview URL, whatever its environment.
 				const previewAccessMode = project.previewAccess;
 				routes.push({
 					...base,
@@ -358,21 +386,67 @@ export class NodeService {
 						loginUrl: `${this.ctx.config.platformOrigin}/_skiff/site-login?project=${project.id}`,
 					},
 				});
+			}
+		}
 
-				if (isProduction) {
-					const productionAccessMode = project.productionAccess;
-					routes.push({
-						...base,
-						host: `${project.slug}.${this.ctx.config.contentDomain}`,
-						production: true,
-						accessMode: productionAccessMode,
-						access: {
-							mode: productionAccessMode,
-							siteKey: siteKeyFor(this.ctx.config.siteCookieSecret, project.id),
-							loginUrl: `${this.ctx.config.platformOrigin}/_skiff/site-login?project=${project.id}`,
-						},
-					});
-				}
+		// Every environment with a pointer gets its own production route at the environment host
+		// (`<slug>.<domain>` for production, `<slug>--<env>.<domain>` otherwise, D13/D14). The v1
+		// flow is the production-only case of this, so behaviour there is unchanged.
+		const environmentRows =
+			projectRows.length > 0
+				? this.ctx.db
+						.select()
+						.from(environments)
+						.where(inArray(environments.projectId, projectRows.map((project) => project.id)))
+						.all()
+				: [];
+		const environmentsByProject = new Map<string, typeof environmentRows>();
+		for (const row of environmentRows) {
+			const list = environmentsByProject.get(row.projectId) ?? [];
+			list.push(row);
+			environmentsByProject.set(row.projectId, list);
+		}
+		const productionProjectIds = new Set<string>();
+		for (const project of projectRows) {
+			const rows = environmentsByProject.get(project.id) ?? [];
+			const seen = new Set(rows.map((row) => row.slug));
+			const candidates = [...rows];
+			// A project predating the environments table (or one whose production row was never
+			// materialised) still serves from the project pointer.
+			if (!seen.has('production') && project.productionDeploymentId)
+				candidates.push({
+					id: `implicit_${project.id}`,
+					orgId: project.orgId,
+					projectId: project.id,
+					name: 'Production',
+					slug: 'production',
+					isProduction: true,
+					access: project.productionAccess,
+					deploymentId: project.productionDeploymentId,
+					createdAt: project.createdAt,
+					updatedAt: project.updatedAt,
+				});
+			for (const environment of candidates) {
+				const deploymentId =
+					environment.isProduction && !environment.deploymentId
+						? project.productionDeploymentId
+						: environment.deploymentId;
+				if (!deploymentId) continue;
+				const base = baseByDeployment.get(deploymentId);
+				if (!base) continue;
+				const accessMode = environment.isProduction ? project.productionAccess : environment.access;
+				routes.push({
+					...base,
+					host: this.ctx.environments.hostFor(project, environment),
+					production: true,
+					accessMode,
+					access: {
+						mode: accessMode,
+						siteKey: siteKeyFor(this.ctx.config.siteCookieSecret, project.id),
+						loginUrl: `${this.ctx.config.platformOrigin}/_skiff/site-login?project=${project.id}`,
+					},
+				});
+				if (environment.isProduction) productionProjectIds.add(project.id);
 			}
 		}
 
@@ -386,6 +460,8 @@ export class NodeService {
 				url: await this.ctx.objectStore.presignGet(release.objectKey, 3600),
 			})),
 		);
+		const productionUrl = (slug: string) =>
+			contentUrl(this.ctx.config.platformOrigin, `${slug}.${this.ctx.config.contentDomain}`);
 
 		const hostRedirects = this.ctx.db
 			.select({ fromSlug: slugRedirects.fromSlug, projectId: slugRedirects.projectId })
@@ -398,14 +474,16 @@ export class NodeService {
 					? [
 							{
 								host: `${row.fromSlug}.${this.ctx.config.contentDomain}`,
-								to: `https://${target.slug}.${this.ctx.config.contentDomain}`,
+								to: productionUrl(target.slug),
 							},
 						]
 					: [];
 			});
 
 		const workloadRows = this.ctx.workloads.desiredForNode(node.id);
-		const servedProjectIds = new Set(projectRows.map((project) => project.id));
+		// Custom domains always clone the production route (stream B), so only projects with a
+		// production pointer are candidates; staging-only projects must not serve them.
+		const servedProjectIds = productionProjectIds;
 
 		return {
 			version: this.stateVersion(),
@@ -413,6 +491,8 @@ export class NodeService {
 			agentVersion: this.ctx.config.desiredAgentVersion ?? '0.1.0',
 			generatedAt: new Date(now).toISOString(),
 			contentDomain: this.ctx.config.contentDomain,
+			platformOrigin: this.ctx.config.platformOrigin,
+			sliceMemoryMb: node.sliceMemoryMb,
 			releases: releaseSpecs,
 			routes,
 			// Kept until every session a revocation affects has expired (share sessions last up to

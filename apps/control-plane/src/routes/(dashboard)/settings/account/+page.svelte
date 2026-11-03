@@ -8,6 +8,7 @@
 	import MonitorSmartphoneIcon from '@lucide/svelte/icons/monitor-smartphone';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PlusIcon from '@lucide/svelte/icons/plus';
+	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import UserRoundIcon from '@lucide/svelte/icons/user-round';
 	import { toast } from 'svelte-sonner';
@@ -104,6 +105,24 @@
 			action: '?/revokeOtherSessions'
 		});
 	}
+
+	function disableTotp() {
+		askConfirm({
+			title: 'Remove the authenticator app?',
+			description: data.twoFactor.requiredForRole
+				? 'Codes from the app stop working. As an owner you will need a passkey (or to set up an app again) in your next session.'
+				: 'Codes from the app stop working, and the backup codes are discarded.',
+			confirmLabel: 'Remove app',
+			tone: 'danger',
+			action: '?/disableTotp'
+		});
+	}
+
+	const factorLabels: Record<string, string> = {
+		passkey: 'a passkey',
+		totp: 'an authenticator code',
+		'backup-code': 'a backup code'
+	};
 
 	function removePasskey(passkey: { id: string; name: string }) {
 		askConfirm({
@@ -248,6 +267,45 @@
 						{/each}
 					</Table.Body>
 				</Table.Root>
+			{/if}
+		</Card.Content>
+	</Card.Root>
+
+	<Card.Root>
+		<Card.Header>
+			<Card.Title class="flex items-center gap-2">
+				<ShieldCheckIcon class="size-4 text-muted-foreground" />Two-factor authentication
+				{#if data.twoFactor.requiredForRole}<Badge variant="info">required for owners</Badge>{/if}
+			</Card.Title>
+			<Card.Description>
+				A passkey counts as a second factor. An authenticator app adds one-time codes for when you
+				sign in with GitHub or an email link.
+			</Card.Description>
+			<Card.Action>
+				{#if data.twoFactor.totpEnabled}
+					<Button size="sm" variant="ghost-danger" onclick={disableTotp}>Remove app</Button>
+				{:else}
+					<Button
+						size="sm"
+						variant="outline"
+						href="/two-factor?setup=1&redirect=%2Fsettings%2Faccount"><PlusIcon />Set up app</Button
+					>
+				{/if}
+			</Card.Action>
+		</Card.Header>
+		<Card.Content class="flex flex-wrap gap-2 text-sm">
+			<Badge variant={data.twoFactor.totpEnabled ? 'success' : 'neutral'}>
+				Authenticator app {data.twoFactor.totpEnabled ? 'on' : 'off'}
+			</Badge>
+			<Badge variant={data.passkeys.length > 0 ? 'success' : 'neutral'}>
+				{data.passkeys.length}
+				{data.passkeys.length === 1 ? 'passkey' : 'passkeys'}
+			</Badge>
+			{#if data.twoFactor.sessionFactor}
+				<span class="self-center text-xs text-muted-foreground">
+					This session was verified with {factorLabels[data.twoFactor.sessionFactor] ??
+						'a second factor'}.
+				</span>
 			{/if}
 		</Card.Content>
 	</Card.Root>

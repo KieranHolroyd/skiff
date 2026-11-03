@@ -39,6 +39,12 @@ export function printJson(value: unknown): void {
 	console.log(JSON.stringify(value ?? null, null, 2));
 }
 
+/** Show enough of a secret to recognise it, never enough to use it. */
+export function maskSecret(value: string): string {
+	if (value.length <= 8) return '********';
+	return `${value.slice(0, 4)}…${value.slice(-4)}`;
+}
+
 export function formatBytes(bytes: number): string {
 	if (bytes < 1024) return `${bytes} B`;
 	const units = ['KiB', 'MiB', 'GiB'];

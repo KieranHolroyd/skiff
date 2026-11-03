@@ -234,6 +234,8 @@ export class WorkloadService {
 				runtime: workload.runtime,
 				status: workload.status,
 				release: release?.sha256 ?? null,
+				...(spec.command ? { command: spec.command } : {}),
+				...(spec.image ? { image: spec.image } : {}),
 				upstream: workload.upstream ?? upstreamFor(project.id, spec),
 				memoryMb: workload.memoryMb,
 				cpus: workload.cpus,

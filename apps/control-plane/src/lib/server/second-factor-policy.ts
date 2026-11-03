@@ -65,6 +65,16 @@ const AUTH_ALWAYS = new Set([
 	'/magic-link/verify',
 	'/ok',
 	'/error',
+	// Client-authenticated OAuth endpoints: they never act on the browser session.
+	'/oauth2/token',
+	'/oauth2/register',
+	'/oauth2/revoke',
+	'/oauth2/introspect',
+	'/oauth2/userinfo',
+	'/oauth2/end-session',
+	'/oauth2/public-client',
+	'/oauth2/public-client-prelogin',
+	'/jwks',
 ]);
 const AUTH_ALWAYS_PREFIXES = ['/sign-in/', '/callback/', '/oauth2/callback/'];
 /** Enrolment endpoints: only while the owner has no factor yet. */
@@ -84,6 +94,10 @@ export function authPathAllowedBeforeSecondFactor(path: string, hasFactor: boole
 	if (AUTH_ALWAYS.has(path) || AUTH_ALWAYS_PREFIXES.some((prefix) => path.startsWith(prefix))) return true;
 	return !hasFactor && AUTH_ENROL.has(path);
 }
+
+/** OAuth authorization (MCP clients) resumes here after the challenge instead of failing. */
+export const OAUTH_AUTHORIZE_PATH = '/oauth2/authorize';
+const RESUMABLE = ['/api/auth/oauth2/authorize'];
 
 /** The factor a successful Better Auth call proves, if any. */
 export function factorProvedBy(path: string): SecondFactor | undefined {
@@ -107,6 +121,8 @@ export const MAX_SECOND_FACTOR_FAILURES = 5;
 export function continueTo(raw: string | null | undefined, origin: string): string {
 	const path = safeRedirect(raw, origin, '/overview');
 	// Never bounce back into the challenge, sign-in or auth API.
-	if (path === '/' || isExemptBeforeSecondFactor(path.split(/[?#]/)[0]!)) return '/overview';
+	const pathname = path.split(/[?#]/)[0]!;
+	if (RESUMABLE.includes(pathname)) return path;
+	if (path === '/' || isExemptBeforeSecondFactor(pathname)) return '/overview';
 	return path;
 }

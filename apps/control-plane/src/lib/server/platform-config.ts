@@ -24,6 +24,7 @@ import {
 	type RestoreDrillStatus
 } from '@skiff/contracts';
 import { EmailNotifier, R2ObjectStore, SmtpEmailTransport, WebhookNotifier } from '@skiff/core';
+import { localRestartPending, localSettingsEnabled, saveLocalSettings } from './local-settings';
 import { canManagePlatform } from './self-update';
 
 /**
@@ -60,14 +61,16 @@ const paths = {
 };
 
 /**
- * - `unmanaged`: not an installed release (e.g. `vite dev`); settings come from the shell env
+ * - `local`: a dev server (`vite dev`); settings are saved to `.data/platform-settings.json` and
+ *   apply after a restart (lib/server/local-settings.ts)
+ * - `unmanaged`: a production build that is not an installed release; settings come from its env
  * - `not-enabled`: installed, but the root helper's units are missing
  * - `ready`: the dashboard can change settings
  */
-export type ConfigAvailability = 'unmanaged' | 'not-enabled' | 'ready';
+export type ConfigAvailability = 'local' | 'unmanaged' | 'not-enabled' | 'ready';
 
 export function configAvailability(): ConfigAvailability {
-	if (!existsSync(paths.releaseMeta)) return 'unmanaged';
+	if (!existsSync(paths.releaseMeta)) return localSettingsEnabled ? 'local' : 'unmanaged';
 	if (!existsSync(paths.pathUnit)) return 'not-enabled';
 	return 'ready';
 }
@@ -84,6 +87,22 @@ export function readConfigStatus(): ConfigStatusView | null {
 		return null;
 	}
 }
+
+/** Dev server: validate like the helper would, then save to the local settings file. Returns changed keys. */
+export function saveConfigLocally(principal: Principal, body: RequestBody): string[] {
+	const parsed = parsePlatformConfigRequest({
+		id: `local_${randomUUID().replace(/-/g, '').slice(0, 20)}`,
+		requestedAt: new Date().toISOString(),
+		by: principal.userId,
+		...body
+	});
+	if (!parsed.ok) throw new Error(parsed.error);
+	if (parsed.request.action !== 'configure')
+		throw new Error('Litestream backups and restore drills only run on an installed server.');
+	return saveLocalSettings(parsed.request);
+}
+
+export { localRestartPending };
 
 export function configPending(): boolean {
 	return existsSync(paths.requestFile);

@@ -1,7 +1,9 @@
 import { and, desc, eq, sql } from 'drizzle-orm';
-import { deployments, projects, shareLinks, shareRedemptions } from '@skiff/db';
+import { deployments, domains, environments, projects, shareLinks, shareRedemptions } from '@skiff/db';
 import {
+	contentUrl,
 	requirePermission,
+	type AccessMode,
 	type Principal,
 	type ShareLinkCreate,
 } from '@skiff/contracts';
@@ -56,6 +58,14 @@ export interface SiteVisit {
  * verifies that token and every later request statelessly with the per-project HMAC key. Platform
  * session cookies never reach the content domain.
  */
+export interface ContentRoute {
+	project: ProjectRow;
+	deploymentId: string;
+	production: boolean;
+	/** Access mode the agent applies to this exact host. */
+	access: AccessMode;
+}
+
 export class AccessService {
 	constructor(private readonly ctx: CoreContext) {}
 
@@ -128,7 +138,7 @@ export class AccessService {
 		});
 		// The clear-text token is returned once; the view embeds a non-reversible suffix.
 		const view = this.view(row);
-		view.url = `https://${view.host}/?_skiff_share=${token}`;
+		view.url = `${contentUrl(this.ctx.config.platformOrigin, view.host)}/?_skiff_share=${token}`;
 		return view;
 	}
 
@@ -179,8 +189,37 @@ export class AccessService {
 	}
 
 	/** Resolve a content hostname to the project + deployment it serves. */
-	resolveHost(host: string): { project: ProjectRow; deploymentId: string; production: boolean } | null {
+	resolveHost(host: string): ContentRoute | null {
+		return this.resolveContentHost(host);
+	}
+
+	/**
+	 * Resolve a content hostname to the project, the deployment it serves and the access mode the
+	 * agent applies. Covers verified custom domains, immutable preview hosts, environment hosts
+	 * (`<slug>--<env>.<contentDomain>`, D14) and bare project hosts (`<slug>.<contentDomain>`).
+	 */
+	resolveContentHost(host: string): ContentRoute | null {
 		const cleanHost = host.split(':')[0]!.toLowerCase();
+		// A verified custom domain serves the project's production pointer (the agent clones that
+		// route onto the custom host), so access checks use the same deployment as production.
+		const custom = this.ctx.db
+			.select()
+			.from(domains)
+			.where(and(eq(domains.hostname, cleanHost), sql`${domains.status} IN ('verified','active')`))
+			.get();
+		if (custom) {
+			const owner = this.ctx.db.select().from(projects).where(eq(projects.id, custom.projectId)).get() as
+				| ProjectRow
+				| undefined;
+			if (owner && !owner.deletedAt && owner.productionDeploymentId)
+				return {
+					project: owner,
+					deploymentId: owner.productionDeploymentId,
+					production: true,
+					access: owner.productionAccess,
+				};
+			return null;
+		}
 		const deployment = this.ctx.db
 			.select()
 			.from(deployments)
@@ -188,18 +227,74 @@ export class AccessService {
 			.get();
 		if (deployment) {
 			const project = this.ctx.db.select().from(projects).where(eq(projects.id, deployment.projectId)).get() as ProjectRow | undefined;
-			if (project && !project.deletedAt) return { project, deploymentId: deployment.id, production: false };
+			if (project && !project.deletedAt)
+				return {
+					project,
+					deploymentId: deployment.id,
+					production: false,
+					access: project.previewAccess,
+				};
 		}
 		const suffix = `.${this.ctx.config.contentDomain}`;
 		if (!cleanHost.endsWith(suffix)) return null;
-		const slug = cleanHost.slice(0, -suffix.length);
-		const project = this.ctx.db
-			.select()
-			.from(projects)
-			.where(and(eq(projects.slug, slug), sql`${projects.deletedAt} IS NULL`))
-			.get() as ProjectRow | undefined;
-		if (!project?.productionDeploymentId) return null;
-		return { project, deploymentId: project.productionDeploymentId, production: true };
+		const label = cleanHost.slice(0, -suffix.length);
+		const projectBySlug = (slug: string) =>
+			this.ctx.db
+				.select()
+				.from(projects)
+				.where(and(eq(projects.slug, slug), sql`${projects.deletedAt} IS NULL`))
+				.get() as ProjectRow | undefined;
+
+		// Bare `<slug>.<contentDomain>` always wins so a project whose slug contains `--` keeps
+		// serving; environment hosts are only considered when no project owns the label.
+		const bare = projectBySlug(label);
+		if (bare?.productionDeploymentId)
+			return {
+				project: bare,
+				deploymentId: bare.productionDeploymentId,
+				production: true,
+				access: bare.productionAccess,
+			};
+
+		const separator = label.lastIndexOf('--');
+		if (separator > 0) {
+			const project = projectBySlug(label.slice(0, separator));
+			const environmentSlug = label.slice(separator + 2);
+			if (project && environmentSlug) {
+				const environment = this.ctx.db
+					.select()
+					.from(environments)
+					.where(and(eq(environments.projectId, project.id), eq(environments.slug, environmentSlug)))
+					.get();
+				if (environment?.deploymentId)
+					return {
+						project,
+						deploymentId: environment.deploymentId,
+						production: true,
+						access: environment.isProduction ? project.productionAccess : environment.access,
+					};
+			}
+		}
+		return null;
+	}
+
+	/** The return-URL allowlist for protected-site login: content hosts, localhost, verified customs. */
+	isAllowedReturnHost(host: string): boolean {
+		const cleanHost = host.split(':')[0]!.toLowerCase();
+		if (
+			cleanHost === this.ctx.config.contentDomain ||
+			cleanHost.endsWith(`.${this.ctx.config.contentDomain}`) ||
+			cleanHost === 'localhost' ||
+			cleanHost.endsWith('.localhost')
+		)
+			return true;
+		return Boolean(
+			this.ctx.db
+				.select({ id: domains.id })
+				.from(domains)
+				.where(and(eq(domains.hostname, cleanHost), sql`${domains.status} IN ('verified','active')`))
+				.get(),
+		);
 	}
 
 	/** A logged-in platform user visiting a `platform`-mode site. */

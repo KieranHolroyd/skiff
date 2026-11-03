@@ -2,6 +2,7 @@ import { and, desc, eq, gt, isNull, isNotNull, lte } from 'drizzle-orm';
 import { projects, slugRedirects } from '@skiff/db';
 import {
 	checkSlug,
+	contentUrl,
 	requirePermission,
 	suggestSlugs,
 	type Principal,
@@ -76,6 +77,7 @@ export class ProjectService {
 	}
 
 	view(row: ProjectRow): ProjectView {
+		const productionHost = `${row.slug}.${this.contentDomain}`;
 		return {
 			id: row.id,
 			slug: row.slug,
@@ -83,8 +85,8 @@ export class ProjectService {
 			runtime: row.runtime,
 			placement: row.placement,
 			productionDeploymentId: row.productionDeploymentId,
-			productionUrl: `https://${row.slug}.${this.contentDomain}`,
-			previewPattern: `https://${row.slug}--<id>.${this.contentDomain}`,
+			productionUrl: contentUrl(this.ctx.config.platformOrigin, productionHost),
+			previewPattern: contentUrl(this.ctx.config.platformOrigin, `${row.slug}--<id>.${this.contentDomain}`),
 			productionAccess: row.productionAccess,
 			previewAccess: row.previewAccess,
 			createdAt: new Date(row.createdAt).toISOString(),
@@ -342,7 +344,7 @@ export class ProjectService {
 		const out: Array<{ from: string; to: string }> = [];
 		for (const row of rows) {
 			const project = this.ctx.db.select({ slug: projects.slug }).from(projects).where(eq(projects.id, row.projectId)).get();
-			if (project) out.push({ from: `${row.fromSlug}.${this.contentDomain}`, to: `https://${project.slug}.${this.contentDomain}{http.request.uri}` });
+			if (project) out.push({ from: `${row.fromSlug}.${this.contentDomain}`, to: `${contentUrl(this.ctx.config.platformOrigin, `${project.slug}.${this.contentDomain}`)}{http.request.uri}` });
 		}
 		return out;
 	}

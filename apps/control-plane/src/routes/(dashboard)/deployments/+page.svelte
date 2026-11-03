@@ -2,7 +2,10 @@
 	import { tick } from 'svelte';
 	import { resolve } from '$app/paths';
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
+	import BoxesIcon from '@lucide/svelte/icons/boxes';
+	import CpuIcon from '@lucide/svelte/icons/cpu';
 	import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
+	import LayersIcon from '@lucide/svelte/icons/layers';
 	import PinIcon from '@lucide/svelte/icons/pin';
 	import RocketIcon from '@lucide/svelte/icons/rocket';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
@@ -21,12 +24,40 @@
 	let { data }: PageProps = $props();
 
 	let status = $state('all');
+	let environment = $state('');
 
 	const projectLabel = $derived(
 		data.projects.find((project) => project.slug === data.filter)?.name ?? 'All projects'
 	);
+	// Only environments present in the current deployment set are offered, production first.
+	const environmentChoices = $derived.by(() => {
+		const seen: Record<string, { slug: string; name: string; isProduction: boolean }> = {};
+		for (const deployment of data.deployments) {
+			const existing = seen[deployment.environmentSlug];
+			if (existing) existing.isProduction ||= deployment.isProduction;
+			else
+				seen[deployment.environmentSlug] = {
+					slug: deployment.environmentSlug,
+					name: deployment.environmentName,
+					isProduction: deployment.isProduction
+				};
+		}
+		return Object.values(seen).sort((a, b) =>
+			a.isProduction === b.isProduction ? a.name.localeCompare(b.name) : a.isProduction ? -1 : 1
+		);
+	});
+	const environmentLabel = $derived(
+		environmentChoices.find((choice) => choice.slug === environment)?.name ?? 'All environments'
+	);
+	// A project change can remove the selected environment from the set; fall back to All.
+	$effect(() => {
+		if (environment && !environmentChoices.some((choice) => choice.slug === environment)) {
+			environment = '';
+		}
+	});
 	const visible = $derived(
 		data.deployments.filter((deployment) => {
+			if (environment && deployment.environmentSlug !== environment) return false;
 			if (status === 'production') return deployment.isProduction;
 			if (status === 'all') return true;
 			return deployment.status === status;
@@ -100,6 +131,26 @@
 				<ToggleGroup.Item value="active" class="px-3">Active</ToggleGroup.Item>
 				<ToggleGroup.Item value="failed" class="px-3">Failed</ToggleGroup.Item>
 			</ToggleGroup.Root>
+			<Select.Root
+				type="single"
+				value={environment}
+				onValueChange={(value) => (environment = value)}
+			>
+				<Select.Trigger class="w-48 bg-card" aria-label="Filter by environment">
+					<LayersIcon class="text-muted-foreground" />
+					{environmentLabel}
+				</Select.Trigger>
+				<Select.Content>
+					<Select.Item value="" label="All environments">All environments</Select.Item>
+					<Select.Separator />
+					{#each environmentChoices as choice (choice.slug)}
+						<Select.Item value={choice.slug} label={choice.name}>
+							{choice.name}
+							<span class="ml-auto font-mono text-[11px] text-muted-foreground">{choice.slug}</span>
+						</Select.Item>
+					{/each}
+				</Select.Content>
+			</Select.Root>
 		</div>
 		<p class="text-sm text-muted-foreground">
 			{visible.length} of {data.deployments.length} recent deployments
@@ -139,7 +190,29 @@
 										>{deployment.projectSlug}</a
 									>
 									<span class="font-mono text-xs text-muted-foreground">{deployment.shortId}</span>
-									{#if deployment.isProduction}<Badge variant="brand">production</Badge>{/if}
+									{#if deployment.isProduction}
+										<Badge variant="brand">production</Badge>
+									{:else}
+										<Badge
+											variant="outline"
+											class="text-[10px] font-medium"
+											title="Environment: {deployment.environmentSlug}"
+											>{deployment.environmentName}</Badge
+										>
+									{/if}
+									{#if deployment.runtime !== 'static'}
+										<span
+											class="inline-flex items-center gap-1 text-[10px] text-muted-foreground"
+											title="{deployment.runtime} runtime"
+										>
+											{#if deployment.runtime === 'container'}
+												<BoxesIcon class="size-3" />
+											{:else}
+												<CpuIcon class="size-3" />
+											{/if}
+											<span class="font-mono tracking-wide uppercase">{deployment.runtime}</span>
+										</span>
+									{/if}
 									{#if deployment.pinned}<Badge variant="outline"><PinIcon />pinned</Badge>{/if}
 								</div>
 								{#if deployment.message}

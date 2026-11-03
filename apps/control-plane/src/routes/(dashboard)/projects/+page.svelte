@@ -4,8 +4,11 @@
 	import { page } from '$app/state';
 	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
+	import BoxesIcon from '@lucide/svelte/icons/boxes';
 	import CopyIcon from '@lucide/svelte/icons/copy';
+	import CpuIcon from '@lucide/svelte/icons/cpu';
 	import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
+	import LayersIcon from '@lucide/svelte/icons/layers';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import TrashIcon from '@lucide/svelte/icons/trash';
@@ -17,6 +20,7 @@
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as InputGroup from '#lib/components/ui/input-group/index.js';
+	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
 	import * as Table from '#lib/components/ui/table/index.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import AccessChip from '../_lib/AccessChip.svelte';
@@ -40,8 +44,23 @@
 	let createOpen = $state(page.url.searchParams.get('new') === '1');
 	let query = $state('');
 	let slug = $state('');
+	let runtime = $state('static');
+	let placement = $state('edge');
 	let productionAccess = $state('public');
 	let previewAccess = $state('platform');
+
+	// Static releases are always served by the edge (`placement.ts` resolves them there).
+	$effect(() => {
+		if (runtime === 'static') placement = 'edge';
+	});
+
+	const placementChoices = $derived([
+		{ value: 'edge', label: 'Edge node' },
+		{ value: 'auto', label: 'Auto — most free slice budget' },
+		...data.capacity
+			.filter((item) => item.mode !== 'edge')
+			.map((item) => ({ value: item.nodeId, label: `${item.name} (${item.mode})` }))
+	]);
 
 	const filtered = $derived(
 		data.projects.filter((project) => {
@@ -49,6 +68,10 @@
 			return !q || project.name.toLowerCase().includes(q) || project.slug.includes(q);
 		})
 	);
+
+	function runtimeIcon(value: string) {
+		return value === 'container' ? BoxesIcon : value === 'process' ? CpuIcon : LayersIcon;
+	}
 
 	async function copy(text: string) {
 		await navigator.clipboard.writeText(text);
@@ -75,7 +98,7 @@
 	<PageHeader
 		eyebrow="Operate"
 		title="Projects"
-		description="A project owns one global slug, its deployments and its production pointer. Sites are static in v1."
+		description="A project owns one global slug, its deployments, environments and production pointer. Projects can serve static files, run a process app, or run a container."
 	>
 		{#if data.can.createProject}
 			<Button onclick={() => (createOpen = true)}>
@@ -121,6 +144,7 @@
 				<Table.Header class="bg-muted/45">
 					<Table.Row>
 						<Table.Head class="pl-4">Project</Table.Head>
+						<Table.Head class="hidden md:table-cell">Runtime</Table.Head>
 						<Table.Head class="hidden md:table-cell">Production</Table.Head>
 						<Table.Head class="hidden lg:table-cell">Access</Table.Head>
 						<Table.Head class="hidden sm:table-cell">Created</Table.Head>
@@ -143,6 +167,14 @@
 										</p>
 									</div>
 								</div>
+							</Table.Cell>
+							<Table.Cell class="hidden md:table-cell">
+								{@const Icon = runtimeIcon(project.runtime)}
+								<span class="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+									<Icon class="size-3.5" />
+									<span class="capitalize">{project.runtime}</span>
+								</span>
+								<p class="font-mono text-[10px] text-muted-foreground">{project.placement}</p>
 							</Table.Cell>
 							<Table.Cell class="hidden md:table-cell">
 								{#if project.productionDeploymentId}
@@ -187,7 +219,7 @@
 						</Table.Row>
 					{:else}
 						<Table.Row>
-							<Table.Cell colspan={5} class="py-10 text-center text-sm text-muted-foreground">
+							<Table.Cell colspan={6} class="py-10 text-center text-sm text-muted-foreground">
 								No projects match “{query}”.
 							</Table.Cell>
 						</Table.Row>
@@ -260,6 +292,54 @@
 					</div>
 				{/if}
 			</Field.Field>
+
+			<div class="grid gap-4 sm:grid-cols-2">
+				<Field.Field>
+					<Field.Label for="project-runtime">Runtime</Field.Label>
+					<NativeSelect.Root
+						id="project-runtime"
+						name="runtime"
+						bind:value={runtime}
+						class="w-full"
+					>
+						<NativeSelect.Option value="static">Static files</NativeSelect.Option>
+						<NativeSelect.Option value="process">Process app (Bun/Node)</NativeSelect.Option>
+						<NativeSelect.Option value="container">Container image</NativeSelect.Option>
+					</NativeSelect.Root>
+					<Field.Description>
+						{runtime === 'static'
+							? 'Served by Caddy from an immutable release.'
+							: runtime === 'process'
+								? 'Runs a command from the release in a sandboxed systemd unit.'
+								: 'Runs an OCI image in a rootless container.'}
+					</Field.Description>
+				</Field.Field>
+				<Field.Field>
+					<Field.Label for="project-placement">Placement</Field.Label>
+					<NativeSelect.Root
+						id="project-placement"
+						name="placement"
+						bind:value={placement}
+						class="w-full"
+						disabled={runtime === 'static'}
+					>
+						{#each placementChoices as option (option.value)}
+							<NativeSelect.Option value={option.value}>{option.label}</NativeSelect.Option>
+						{/each}
+					</NativeSelect.Root>
+					<Field.Description>
+						{runtime === 'static'
+							? 'Static projects are served by the edge.'
+							: 'Admission is checked against the workload slice at deploy time.'}
+					</Field.Description>
+				</Field.Field>
+			</div>
+			{#if runtime !== 'static'}
+				<Field.Description>
+					After creating the project, set the {runtime === 'process' ? 'command' : 'image'}, port
+					and memory budget on the project's Runtime tab before the first deploy.
+				</Field.Description>
+			{/if}
 
 			<div class="grid gap-4 sm:grid-cols-2">
 				<Field.Field>

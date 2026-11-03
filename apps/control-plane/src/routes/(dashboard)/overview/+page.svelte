@@ -2,8 +2,12 @@
 	import { resolve } from '$app/paths';
 	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
+	import CpuIcon from '@lucide/svelte/icons/cpu';
 	import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
+	import GlobeIcon from '@lucide/svelte/icons/globe';
+	import HammerIcon from '@lucide/svelte/icons/hammer';
 	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
+	import LayersIcon from '@lucide/svelte/icons/layers';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import RocketIcon from '@lucide/svelte/icons/rocket';
 	import ServerIcon from '@lucide/svelte/icons/server';
@@ -13,6 +17,7 @@
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
 	import * as Item from '#lib/components/ui/item/index.js';
+	import { Progress } from '#lib/components/ui/progress/index.js';
 	import * as Table from '#lib/components/ui/table/index.js';
 	import EmptyState from '../_lib/EmptyState.svelte';
 	import NodeStats from '../_lib/NodeStats.svelte';
@@ -30,6 +35,11 @@
 	const totalNodes = $derived(data.status?.nodes.total ?? data.nodes.length);
 	const activeDeployments = $derived(
 		data.status?.deployments.active ?? data.deployments.filter((d) => d.status === 'active').length
+	);
+	const slicePct = $derived(
+		data.v2.capacity && data.v2.capacity.sliceMemoryMb > 0
+			? (data.v2.capacity.reservedMemoryMb / data.v2.capacity.sliceMemoryMb) * 100
+			: 0
 	);
 
 	const stats = $derived([
@@ -114,6 +124,122 @@
 			</Card.Root>
 		{/each}
 	</section>
+
+	<Panel
+		title="Runtime & delivery"
+		description="Workload slice, custom domains and git builds across the fleet."
+		icon={LayersIcon}
+	>
+		{#snippet actions()}
+			{#if data.can.manageNodes}
+				<Button href={resolve('/(dashboard)/nodes')} variant="ghost" size="sm">
+					Nodes
+					<ArrowRightIcon />
+				</Button>
+			{/if}
+			<Button href={resolve('/(dashboard)/projects')} variant="ghost" size="sm">
+				Projects
+				<ArrowRightIcon />
+			</Button>
+		{/snippet}
+		<div class="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
+			<div class="space-y-2">
+				<p class="eyebrow flex items-center gap-1.5">
+					<CpuIcon class="size-3.5 text-muted-foreground" />
+					Workload slice
+				</p>
+				{#if data.v2.capacity}
+					<p class="text-2xl font-semibold tracking-[-0.03em] tabular-nums">
+						{data.v2.capacity.reservedMemoryMb}<span
+							class="text-sm font-normal text-muted-foreground"
+						>
+							/ {data.v2.capacity.sliceMemoryMb} MB</span
+						>
+					</p>
+					<Progress
+						value={Math.min(100, Math.max(0, slicePct))}
+						aria-label="Reserved workload slice memory"
+						class="h-1.5"
+					/>
+					<p class="text-xs text-muted-foreground">
+						{data.v2.capacity.freeMemoryMb} MB free · {data.v2.capacity.nodes}
+						{plural(data.v2.capacity.nodes, 'node')}
+					</p>
+				{:else}
+					<p class="text-2xl font-semibold text-muted-foreground tabular-nums">—</p>
+					<p class="text-xs text-muted-foreground">
+						{data.can.viewCapacity
+							? 'No workload slice reported yet.'
+							: 'Visible to platform admins.'}
+					</p>
+				{/if}
+			</div>
+
+			<div class="space-y-2">
+				<p class="eyebrow flex items-center gap-1.5">
+					<ServerIcon class="size-3.5 text-muted-foreground" />
+					Workloads placed
+				</p>
+				{#if data.v2.capacity}
+					<p class="text-2xl font-semibold tracking-[-0.03em] tabular-nums">
+						{data.v2.capacity.workloads}
+					</p>
+					<p class="text-xs text-muted-foreground">
+						{data.v2.capacity.workloads === 0
+							? 'No workloads placed.'
+							: `Scheduled on ${data.v2.capacity.nodes} ${plural(data.v2.capacity.nodes, 'node')}.`}
+					</p>
+				{:else}
+					<p class="text-2xl font-semibold text-muted-foreground tabular-nums">—</p>
+					<p class="text-xs text-muted-foreground">
+						{data.can.viewCapacity ? 'No workloads placed.' : 'Visible to platform admins.'}
+					</p>
+				{/if}
+			</div>
+
+			<div class="space-y-2">
+				<p class="eyebrow flex items-center gap-1.5">
+					<GlobeIcon class="size-3.5 text-muted-foreground" />
+					Custom domains
+				</p>
+				{#if data.v2.domains}
+					<p class="text-2xl font-semibold tracking-[-0.03em] tabular-nums">
+						{data.v2.domains.verified}<span class="text-sm font-normal text-muted-foreground">
+							/ {data.v2.domains.total}</span
+						>
+					</p>
+					<p class="text-xs text-muted-foreground">
+						{data.v2.domains.total === 0
+							? 'No custom domains attached.'
+							: 'Verified or active · org-wide'}
+					</p>
+				{:else}
+					<p class="text-2xl font-semibold text-muted-foreground tabular-nums">—</p>
+					<p class="text-xs text-muted-foreground">Visible with domain access.</p>
+				{/if}
+			</div>
+
+			<div class="space-y-2">
+				<p class="eyebrow flex items-center gap-1.5">
+					<HammerIcon class="size-3.5 text-muted-foreground" />
+					Active builds
+				</p>
+				{#if data.v2.builds.readable}
+					<p class="text-2xl font-semibold tracking-[-0.03em] tabular-nums">
+						{data.v2.builds.active}
+					</p>
+					<p class="text-xs text-muted-foreground">
+						{data.v2.builds.active === 0
+							? 'Nothing queued or building.'
+							: 'Queued or building across visible projects.'}
+					</p>
+				{:else}
+					<p class="text-2xl font-semibold text-muted-foreground tabular-nums">—</p>
+					<p class="text-xs text-muted-foreground">Visible with build access.</p>
+				{/if}
+			</div>
+		</div>
+	</Panel>
 
 	<div class="grid items-start gap-5 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
 		<Panel title="Recent deployments" description="Across every project in {data.org.name}." flush>

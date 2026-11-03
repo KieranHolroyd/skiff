@@ -91,6 +91,10 @@ export interface AccessTokenClaims {
 	kind: 'platform' | 'share' | 'password';
 	/** Session/redemption id, used for revocation. */
 	sid?: string;
+	/** Session expiry: the agent copies this into the host-only cookie (longer than `exp`). */
+	sexp?: number;
+	/** One-time callback id; the agent refuses a replay. */
+	jti?: string;
 }
 
 export function signAccessToken(secret: string, claims: AccessTokenClaims): string {

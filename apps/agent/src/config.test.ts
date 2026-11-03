@@ -39,6 +39,10 @@ describe('loadConfig', () => {
 		expect(config.acmeCa).toBeNull();
 		expect(config.cloudflareApiToken).toBeNull();
 		expect(config.contentDomain).toBeNull();
+		expect(config.helperSocket).toBe('/run/skiff-helper/helper.sock');
+		expect(config.workloadSliceMb).toBe(1024);
+		expect(config.workloadSocketDir).toBe('/run/skiff-workloads');
+		expect(config.workloadHealthTimeoutMs).toBe(30_000);
 	});
 
 	test('parses comma-separated listeners and optional access logs', () => {
@@ -137,5 +141,23 @@ describe('loadConfig', () => {
 		const dir = await tempDir();
 		await fs.writeFile(join(dir, 'node.json'), '{not json');
 		expect(() => loadConfig({ SKIFF_DATA_DIR: dir })).toThrow(/not valid JSON/);
+	});
+
+	test('reads the workload helper settings and rejects invalid paths', () => {
+		const config = loadConfig({
+			...base,
+			SKIFF_HELPER_SOCKET: '/run/custom/helper.sock',
+			SKIFF_WORKLOAD_SLICE_MB: '512',
+			SKIFF_WORKLOAD_SOCKET_DIR: '/run/custom-workloads',
+			SKIFF_WORKLOAD_HEALTH_TIMEOUT_MS: '45000',
+		});
+		expect(config.helperSocket).toBe('/run/custom/helper.sock');
+		expect(config.workloadSliceMb).toBe(512);
+		expect(config.workloadSocketDir).toBe('/run/custom-workloads');
+		expect(config.workloadHealthTimeoutMs).toBe(45_000);
+
+		expect(() => loadConfig({ ...base, SKIFF_HELPER_SOCKET: 'run/helper.sock' })).toThrow(/absolute/);
+		expect(() => loadConfig({ ...base, SKIFF_WORKLOAD_SLICE_MB: 'lots' })).toThrow(/integer/);
+		expect(() => loadConfig({ ...base, SKIFF_WORKLOAD_HEALTH_TIMEOUT_MS: '10' })).toThrow(/integer/);
 	});
 });

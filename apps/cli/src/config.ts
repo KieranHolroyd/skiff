@@ -2,11 +2,19 @@
  * Persistent CLI settings live in `~/.config/skiff/config.json` (or
  * `$SKIFF_CONFIG_DIR` / `$XDG_CONFIG_HOME/skiff/config.json`), mode 0600.
  *
- * The file holds both credentials (`token`) and non-secret settings (`url`,
- * `contentDomain`). Logging out removes only the token, so the control-plane
- * URL and the domain deployed sites use survive across logins. `SKIFF_URL`,
- * `SKIFF_TOKEN` and `SKIFF_CONTENT_DOMAIN` override stored values, which keeps
- * CI and agent use stateless.
+ * The file holds one or more **named profiles**, each with its own control-plane
+ * URL, API key and content domain. That lets one machine deploy to several Skiff
+ * installations (production, staging, a local dev server) without juggling env
+ * vars. A profile is chosen by, in order: `--profile`, `$SKIFF_PROFILE`, the
+ * active profile saved by `skif profile use`, or the only profile when exactly
+ * one exists.
+ *
+ * Files written by older CLI versions have the settings at the top level. They
+ * are read as a profile named `default` (and upgraded on the next write), so
+ * existing logins keep working.
+ *
+ * `SKIFF_URL`, `SKIFF_TOKEN` and `SKIFF_CONTENT_DOMAIN` still override the
+ * selected profile, which keeps CI and agent use stateless.
  */
 import { chmod, mkdir, readFile, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -17,6 +25,12 @@ export const CONFIG_ENV_DIR = 'SKIFF_CONFIG_DIR';
 export const URL_ENV = 'SKIFF_URL';
 export const TOKEN_ENV = 'SKIFF_TOKEN';
 export const CONTENT_DOMAIN_ENV = 'SKIFF_CONTENT_DOMAIN';
+export const PROFILE_ENV = 'SKIFF_PROFILE';
+
+/** Implicit profile name used for a legacy single-profile config file. */
+export const DEFAULT_PROFILE = 'default';
+
+const CONFIG_VERSION = 2;
 
 export type ConfigKey = 'url' | 'contentDomain' | 'token';
 
@@ -79,13 +93,20 @@ export function canonicalConfigKey(raw: string): ConfigKey {
 	return key;
 }
 
+/** One profile's settings. `savedAt` tracks token writes; `updatedAt` any write. */
 export interface StoredConfig {
-	version?: number;
 	url?: string;
 	token?: string;
 	contentDomain?: string;
 	savedAt?: string;
 	updatedAt?: string;
+}
+
+/** On-disk shape of the version 2 config file. */
+export interface StoredConfigFile {
+	version?: number;
+	activeProfile?: string;
+	profiles: Record<string, StoredConfig>;
 }
 
 /** What `login` writes: a URL plus a verified token, and any settings to keep. */
@@ -101,6 +122,8 @@ export interface ResolvedConfig {
 	origin: string;
 	/** Domain deployed sites use, when configured. */
 	contentDomain?: string;
+	/** Profile the settings came from, when one was selected. */
+	profile?: string;
 	source: {
 		url: 'flag' | 'env' | 'config';
 		token: 'flag' | 'env' | 'config';
@@ -119,9 +142,15 @@ export interface ConfigEntry {
 
 export interface ConfigReport {
 	path: string;
-	/** Whether a config file with at least one setting exists. */
+	/** Whether the selected profile exists in the config file. */
 	stored: boolean;
 	entries: ConfigEntry[];
+	/** Profile whose settings are reported. */
+	profile?: string;
+	/** Profile saved as active, if any. */
+	activeProfile?: string;
+	/** Every configured profile name, sorted. */
+	profiles: string[];
 }
 
 export interface SettingChange {
@@ -129,12 +158,63 @@ export interface SettingChange {
 	key: ConfigKey;
 	value?: string;
 	changed: boolean;
+	profile?: string;
 }
 
 export interface ClearCredentialsResult {
 	path: string;
 	removed: boolean;
 	settingsKept: boolean;
+	profile?: string;
+}
+
+export interface ProfileSummary extends StoredConfig {
+	name: string;
+	active: boolean;
+	current: boolean;
+}
+
+export interface ProfileReport {
+	path: string;
+	activeProfile?: string;
+	currentProfile?: string;
+	profiles: ProfileSummary[];
+}
+
+export interface ProfileChange {
+	path: string;
+	name: string;
+	previous?: string;
+	activeProfile?: string;
+	created?: boolean;
+	changed: boolean;
+}
+
+export interface ProfileInput {
+	url?: string;
+	token?: string;
+	contentDomain?: string;
+}
+
+/** `--profile` wins over `$SKIFF_PROFILE` for the current process. */
+let profileOverride: string | undefined;
+
+export function setProfileOverride(profile: string | undefined): void {
+	profileOverride = profile?.trim() ? normalizeProfileName(profile) : undefined;
+}
+
+export function getProfileOverride(): string | undefined {
+	return profileOverride;
+}
+
+export function normalizeProfileName(raw: string): string {
+	const value = raw.trim();
+	if (!value) throw new ConfigError('A profile name is required.');
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value))
+		throw new ConfigError(
+			`"${raw}" is not a valid profile name. Use 1-64 letters, digits, dots, dashes or underscores.`,
+		);
+	return value;
 }
 
 export function configDirectory(env: NodeJS.ProcessEnv = process.env): string {
@@ -204,75 +284,181 @@ export function normalizeContentDomain(raw: string): string {
 	return value;
 }
 
-export async function readStoredConfig(
+/** Every profile name in the config file, sorted. */
+export async function listProfileNames(env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
+	const state = await readConfigState(env);
+	return [...state.profiles.keys()].sort();
+}
+
+/** The profile a read should use, or undefined when nothing is configured. */
+export async function effectiveProfile(
+	profile?: string,
+	env: NodeJS.ProcessEnv = process.env,
+): Promise<string | undefined> {
+	const state = await readConfigState(env);
+	return resolveProfileForRead(state, profile, env);
+}
+
+/** The profile a write should use; falls back to `default` for a fresh config. */
+export async function profileForWrite(
+	profile?: string,
+	env: NodeJS.ProcessEnv = process.env,
+): Promise<string> {
+	const state = await readConfigState(env);
+	return resolveProfileForWrite(state, profile, env);
+}
+
+/** Return one profile's settings, or null when it does not exist. */
+export async function readProfile(
+	name: string,
 	env: NodeJS.ProcessEnv = process.env,
 ): Promise<StoredConfig | null> {
-	const path = configFile(env);
-	let text: string;
-	try {
-		text = await readFile(path, 'utf8');
-	} catch (error) {
-		if (isNotFound(error)) return null;
-		throw new ConfigError(`Could not read ${path}: ${errorMessage(error)}`, { cause: error });
-	}
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(text);
-	} catch {
-		throw new ConfigError(`${path} is not valid JSON. Run \`skif logout --all\` and log in again.`);
-	}
-	if (!isRecord(parsed))
-		throw new ConfigError(`${path} must contain a JSON object. Run \`skif logout --all\` and log in again.`);
+	const state = await readConfigState(env);
+	return state.profiles.get(normalizeProfileName(name)) ?? null;
+}
 
-	const url = optionalString(parsed.url, 'url', path);
-	const token = optionalString(parsed.token, 'token', path);
-	const contentDomain = optionalString(
-		parsed.contentDomain ?? parsed.content_domain,
-		'contentDomain',
-		path,
-	);
+export async function readStoredConfig(
+	env: NodeJS.ProcessEnv = process.env,
+	profile?: string,
+): Promise<StoredConfig | null> {
+	const state = await readConfigState(env);
+	const name = resolveProfileForRead(state, profile, env);
+	return name ? (state.profiles.get(name) ?? null) : null;
+}
 
-	if (!url && !token && !contentDomain) return null;
-	return {
-		version: typeof parsed.version === 'number' ? parsed.version : undefined,
-		url: url === undefined ? undefined : normalizePlatformUrl(url),
+/** Add or replace a profile. The first profile (or `use`) becomes active. */
+export async function addProfile(
+	name: string,
+	input: ProfileInput = {},
+	options: { use?: boolean; force?: boolean } = {},
+	env: NodeJS.ProcessEnv = process.env,
+): Promise<ProfileChange> {
+	const state = await readConfigState(env);
+	const profileName = normalizeProfileName(name);
+	const existed = state.profiles.has(profileName);
+	if (existed && !options.force)
+		throw new ConfigError(
+			`Profile "${profileName}" already exists. Remove it first or pass --force to replace it.`,
+		);
+
+	const token = input.token?.trim() || undefined;
+	const now = new Date().toISOString();
+	state.profiles.set(profileName, {
+		url: input.url === undefined ? undefined : normalizePlatformUrl(input.url),
 		token,
-		contentDomain: contentDomain === undefined ? undefined : normalizeContentDomain(contentDomain),
-		savedAt: typeof parsed.savedAt === 'string' ? parsed.savedAt : undefined,
-		updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : undefined,
+		contentDomain:
+			input.contentDomain === undefined ? undefined : normalizeContentDomain(input.contentDomain),
+		savedAt: token ? now : undefined,
+		updatedAt: now,
+	});
+	if (options.use || !state.activeProfile) state.activeProfile = profileName;
+	await writeConfigState(state, env);
+	return {
+		path: state.path,
+		name: profileName,
+		activeProfile: state.activeProfile,
+		created: !existed,
+		changed: true,
 	};
 }
 
-/** Write credentials/settings, preserving other stored settings. */
+/** Make `name` the profile commands use by default. */
+export async function useProfile(
+	name: string,
+	env: NodeJS.ProcessEnv = process.env,
+): Promise<ProfileChange> {
+	const state = await readConfigState(env);
+	const profileName = normalizeProfileName(name);
+	if (!state.profiles.has(profileName)) throw unknownProfile(state, profileName);
+	const previous = state.activeProfile;
+	state.activeProfile = profileName;
+	await writeConfigState(state, env);
+	return {
+		path: state.path,
+		name: profileName,
+		previous,
+		activeProfile: profileName,
+		changed: previous !== profileName,
+	};
+}
+
+/** Delete a profile. Removing the active one falls back to a sole remaining profile. */
+export async function removeProfile(
+	name: string,
+	env: NodeJS.ProcessEnv = process.env,
+): Promise<ProfileChange> {
+	const state = await readConfigState(env);
+	const profileName = normalizeProfileName(name);
+	if (!state.profiles.has(profileName)) throw unknownProfile(state, profileName);
+	state.profiles.delete(profileName);
+	if (state.activeProfile === profileName) state.activeProfile = fallbackActive(state);
+	await writeConfigState(state, env);
+	return {
+		path: state.path,
+		name: profileName,
+		activeProfile: state.activeProfile,
+		changed: true,
+	};
+}
+
+/** Profile summaries for `skif profile list`, sorted by name. */
+export async function describeProfiles(
+	env: NodeJS.ProcessEnv = process.env,
+): Promise<ProfileReport> {
+	const state = await readConfigState(env);
+	const current = optionalEffectiveProfile(state, undefined, env);
+	return {
+		path: state.path,
+		activeProfile: state.activeProfile,
+		currentProfile: current,
+		profiles: [...state.profiles.keys()].sort().map((name) => {
+			const profile = state.profiles.get(name)!;
+			return {
+				name,
+				...profile,
+				active: name === state.activeProfile,
+				current: name === current,
+			};
+		}),
+	};
+}
+
+/** Write credentials/settings to the selected profile, preserving other settings. */
 export async function saveConfig(
 	config: Credentials,
 	env: NodeJS.ProcessEnv = process.env,
+	profile?: string,
 ): Promise<string> {
-	const current = await readStoredConfig(env);
+	const state = await readConfigState(env);
+	const name = resolveProfileForWrite(state, profile, env);
 	const token = config.token.trim();
 	if (!token) throw new ConfigError('An API key is required.');
+	const current = state.profiles.get(name) ?? {};
 	const now = new Date().toISOString();
-	const stored: StoredConfig = {
-		version: 1,
+	state.profiles.set(name, {
 		url: normalizePlatformUrl(config.url),
 		token,
 		contentDomain:
 			config.contentDomain === undefined
-				? current?.contentDomain
+				? current.contentDomain
 				: normalizeContentDomain(config.contentDomain),
 		savedAt: now,
 		updatedAt: now,
-	};
-	return writeStoredConfig(stored, env);
+	});
+	if (!state.activeProfile) state.activeProfile = name;
+	return writeConfigState(state, env);
 }
 
-/** Remove the API key but keep the URL and domains, so the next login remembers them. */
+/** Remove the selected profile's API key but keep its URL and domains. */
 export async function clearCredentials(
 	env: NodeJS.ProcessEnv = process.env,
+	profile?: string,
 ): Promise<ClearCredentialsResult> {
-	const path = configFile(env);
-	const current = await readStoredConfig(env);
-	if (!current) return { path, removed: false, settingsKept: false };
+	const state = await readConfigState(env);
+	const path = state.path;
+	const name = resolveProfileForRead(state, profile, env);
+	const current = name ? state.profiles.get(name) : undefined;
+	if (!name || !current) return { path, removed: false, settingsKept: false };
 
 	const removed = current.token !== undefined;
 	delete current.token;
@@ -280,16 +466,18 @@ export async function clearCredentials(
 
 	const settingsKept = current.url !== undefined || current.contentDomain !== undefined;
 	if (!settingsKept) {
-		await deleteConfig(env);
-		return { path, removed, settingsKept };
+		state.profiles.delete(name);
+		if (state.activeProfile === name) state.activeProfile = fallbackActive(state);
+		if (state.profiles.size === 0) await deleteConfig(env);
+		else await writeConfigState(state, env);
+		return { path, removed, settingsKept, profile: name };
 	}
-	current.version = 1;
 	current.updatedAt = new Date().toISOString();
-	await writeStoredConfig(current, env);
-	return { path, removed, settingsKept };
+	await writeConfigState(state, env);
+	return { path, removed, settingsKept, profile: name };
 }
 
-/** Delete the whole config file, including non-secret settings. */
+/** Delete the whole config file, including every profile. */
 export async function deleteConfig(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
 	const path = configFile(env);
 	try {
@@ -315,8 +503,10 @@ export async function setStoredConfigValue(
 	value: string,
 	env: NodeJS.ProcessEnv = process.env,
 ): Promise<SettingChange> {
-	const path = configFile(env);
-	const current = (await readStoredConfig(env)) ?? {};
+	const state = await readConfigState(env);
+	const name = resolveProfileForWrite(state, undefined, env);
+	const path = state.path;
+	const current = state.profiles.get(name) ?? {};
 	const raw = value.trim();
 	if (!raw) throw new ConfigError(`A value is required for "${key}".`);
 
@@ -335,39 +525,48 @@ export async function setStoredConfigValue(
 	}
 
 	current[key] = storedValue;
-	current.version = 1;
 	current.updatedAt = new Date().toISOString();
-	await writeStoredConfig(current, env);
-	return { path, key, value: storedValue, changed: true };
+	state.profiles.set(name, current);
+	if (!state.activeProfile) state.activeProfile = name;
+	await writeConfigState(state, env);
+	return { path, key, value: storedValue, changed: true, profile: name };
 }
 
 export async function unsetStoredConfigValue(
 	key: ConfigKey,
 	env: NodeJS.ProcessEnv = process.env,
 ): Promise<SettingChange> {
-	const path = configFile(env);
-	const current = await readStoredConfig(env);
-	if (!current) return { path, key, changed: false };
+	const state = await readConfigState(env);
+	const path = state.path;
+	const name = resolveProfileForRead(state, undefined, env);
+	const current = name ? state.profiles.get(name) : undefined;
+	if (!name || !current) return { path, key, changed: false };
 
 	const existed = current[key] !== undefined;
+	if (!existed) return { path, key, changed: false, profile: name };
+
 	delete current[key];
 	if (key === 'token') delete current.savedAt;
 
 	if (!current.url && !current.token && !current.contentDomain) {
-		await deleteConfig(env);
-		return { path, key, changed: existed };
+		state.profiles.delete(name);
+		if (state.activeProfile === name) state.activeProfile = fallbackActive(state);
+		if (state.profiles.size === 0) await deleteConfig(env);
+		else await writeConfigState(state, env);
+		return { path, key, changed: existed, profile: name };
 	}
-	current.version = 1;
 	current.updatedAt = new Date().toISOString();
-	await writeStoredConfig(current, env);
-	return { path, key, changed: existed };
+	await writeConfigState(state, env);
+	return { path, key, changed: existed, profile: name };
 }
 
 /** Effective settings plus where each value came from. Used by `skif config list`. */
 export async function describeConfig(
 	env: NodeJS.ProcessEnv = process.env,
 ): Promise<ConfigReport> {
-	const stored = await readStoredConfig(env);
+	const state = await readConfigState(env);
+	const name = resolveProfileForRead(state, undefined, env);
+	const stored = name ? state.profiles.get(name) : undefined;
 	const entries: ConfigEntry[] = [];
 	for (const info of Object.values(CONFIG_KEYS)) {
 		const envValue = info.env ? trimmed(env[info.env]) : undefined;
@@ -380,18 +579,33 @@ export async function describeConfig(
 			env: info.env,
 		});
 	}
-	return { path: configFile(env), stored: stored !== null, entries };
+	return {
+		path: state.path,
+		stored: stored !== undefined,
+		entries,
+		profile: name,
+		activeProfile: state.activeProfile,
+		profiles: [...state.profiles.keys()].sort(),
+	};
 }
 
 export async function resolveConfig(
-	overrides: { url?: string; token?: string } = {},
+	overrides: { url?: string; token?: string; profile?: string } = {},
 	env: NodeJS.ProcessEnv = process.env,
 ): Promise<ResolvedConfig> {
-	const stored = overrides.url && overrides.token ? null : await readStoredConfig(env);
-
 	const envUrl = trimmed(env[URL_ENV]);
 	const envToken = trimmed(env[TOKEN_ENV]);
 	const envContentDomain = trimmed(env[CONTENT_DOMAIN_ENV]);
+	const state = await readConfigState(env);
+
+	// Env-only use (CI, agents) must not require a profile: only select one when
+	// the URL or token has to come from the config file.
+	const completeInEnv = Boolean((overrides.url ?? envUrl) && (overrides.token ?? envToken));
+	const profileName = completeInEnv
+		? optionalEffectiveProfile(state, overrides.profile, env)
+		: resolveProfileForRead(state, overrides.profile, env);
+	const stored = profileName ? state.profiles.get(profileName) : undefined;
+
 	const urlValue = overrides.url ?? envUrl ?? stored?.url;
 	const tokenValue = overrides.token ?? envToken ?? stored?.token;
 	const contentDomainValue = envContentDomain ?? stored?.contentDomain;
@@ -399,15 +613,22 @@ export async function resolveConfig(
 	const source = {
 		url: overrides.url ? ('flag' as const) : envUrl ? ('env' as const) : ('config' as const),
 		token: overrides.token ? ('flag' as const) : envToken ? ('env' as const) : ('config' as const),
-		contentDomain: envContentDomain ? ('env' as const) : stored?.contentDomain ? ('config' as const) : ('unset' as const),
+		contentDomain: envContentDomain
+			? ('env' as const)
+			: stored?.contentDomain
+				? ('config' as const)
+				: ('unset' as const),
 	};
 
 	if (!urlValue)
 		throw new ConfigError(
 			'Not logged in: no platform URL. Run `skif login`, or set SKIFF_URL and SKIFF_TOKEN.',
+			{ suggestions: profileHint(state) },
 		);
 	if (!tokenValue)
-		throw new ConfigError('Not logged in: no API key. Run `skif login`, or set SKIFF_TOKEN.');
+		throw new ConfigError('Not logged in: no API key. Run `skif login`, or set SKIFF_TOKEN.', {
+			suggestions: profileHint(state),
+		});
 
 	return {
 		url: normalizePlatformUrl(urlValue),
@@ -416,15 +637,119 @@ export async function resolveConfig(
 		contentDomain: contentDomainValue
 			? normalizeContentDomain(contentDomainValue)
 			: undefined,
+		profile: profileName,
 		source,
 		path: configFile(env),
 	};
 }
 
-async function writeStoredConfig(
-	stored: StoredConfig,
+interface ConfigState {
+	path: string;
+	activeProfile?: string;
+	profiles: Map<string, StoredConfig>;
+}
+
+async function readConfigState(env: NodeJS.ProcessEnv = process.env): Promise<ConfigState> {
+	const path = configFile(env);
+	let text: string;
+	try {
+		text = await readFile(path, 'utf8');
+	} catch (error) {
+		if (isNotFound(error)) return { path, profiles: new Map() };
+		throw new ConfigError(`Could not read ${path}: ${errorMessage(error)}`, { cause: error });
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text);
+	} catch {
+		throw new ConfigError(`${path} is not valid JSON. Run \`skif logout --all\` and log in again.`);
+	}
+	if (!isRecord(parsed))
+		throw new ConfigError(
+			`${path} must contain a JSON object. Run \`skif logout --all\` and log in again.`,
+		);
+
+	if (parsed.profiles !== undefined) {
+		if (!isRecord(parsed.profiles))
+			throw new ConfigError(
+				`${path} must contain a "profiles" object. Run \`skif logout --all\` and log in again.`,
+			);
+		const profiles = new Map<string, StoredConfig>();
+		for (const [rawName, value] of Object.entries(parsed.profiles)) {
+			const name = normalizeProfileName(rawName);
+			if (!isRecord(value))
+				throw new ConfigError(`${path} has a non-object profile "${name}".`);
+			profiles.set(name, parseProfile(value, `profiles.${name}`, path));
+		}
+		let activeProfile: string | undefined;
+		if (parsed.activeProfile !== undefined && parsed.activeProfile !== null) {
+			if (typeof parsed.activeProfile !== 'string')
+				throw new ConfigError(`${path} has a non-string "activeProfile".`);
+			activeProfile = normalizeProfileName(parsed.activeProfile);
+			// A stale activeProfile must not make `skif profile list/use` unusable.
+			if (!profiles.has(activeProfile)) activeProfile = undefined;
+		}
+		return { path, profiles, activeProfile };
+	}
+
+	// Version 1 (or an unversioned older file): settings at the top level.
+	const legacy: StoredConfig = {
+		url: optionalString(parsed.url, 'url', path),
+		token: optionalString(parsed.token, 'token', path),
+		contentDomain: optionalString(parsed.contentDomain ?? parsed.content_domain, 'contentDomain', path),
+		savedAt: typeof parsed.savedAt === 'string' ? parsed.savedAt : undefined,
+		updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : undefined,
+	};
+	if (legacy.url !== undefined) legacy.url = normalizePlatformUrl(legacy.url);
+	if (legacy.contentDomain !== undefined)
+		legacy.contentDomain = normalizeContentDomain(legacy.contentDomain);
+	if (legacy.url === undefined && legacy.token === undefined && legacy.contentDomain === undefined)
+		return { path, profiles: new Map() };
+	return {
+		path,
+		activeProfile: DEFAULT_PROFILE,
+		profiles: new Map([[DEFAULT_PROFILE, legacy]]),
+	};
+}
+
+function parseProfile(
+	record: Record<string, unknown>,
+	label: string,
+	path: string,
+): StoredConfig {
+	const url = optionalString(record.url, `${label}.url`, path);
+	const token = optionalString(record.token, `${label}.token`, path);
+	const contentDomain = optionalString(
+		record.contentDomain ?? record.content_domain,
+		`${label}.contentDomain`,
+		path,
+	);
+	return {
+		url: url === undefined ? undefined : normalizePlatformUrl(url),
+		token,
+		contentDomain:
+			contentDomain === undefined ? undefined : normalizeContentDomain(contentDomain),
+		savedAt: typeof record.savedAt === 'string' ? record.savedAt : undefined,
+		updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : undefined,
+	};
+}
+
+async function writeConfigState(
+	state: ConfigState,
 	env: NodeJS.ProcessEnv = process.env,
 ): Promise<string> {
+	if (state.profiles.size === 0) {
+		await deleteConfig(env);
+		return state.path;
+	}
+	const profiles: Record<string, StoredConfig> = {};
+	for (const name of [...state.profiles.keys()].sort()) {
+		const profile = state.profiles.get(name)!;
+		profiles[name] = compactProfile(profile);
+	}
+	const payload: StoredConfigFile = { version: CONFIG_VERSION, profiles };
+	if (state.activeProfile) payload.activeProfile = state.activeProfile;
+
 	const dir = configDirectory(env);
 	const path = configFile(env);
 	try {
@@ -432,7 +757,7 @@ async function writeStoredConfig(
 		// `chmod` also repairs a directory or file left with loose permissions.
 		await chmod(dir, 0o700).catch(() => undefined);
 		const temp = join(dir, `.config.${process.pid}.${Date.now()}.tmp`);
-		await writeFile(temp, `${JSON.stringify(stored, null, 2)}\n`, { mode: 0o600 });
+		await writeFile(temp, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
 		await chmod(temp, 0o600).catch(() => undefined);
 		await rename(temp, path);
 		await chmod(path, 0o600).catch(() => undefined);
@@ -440,6 +765,107 @@ async function writeStoredConfig(
 		throw new ConfigError(`Could not write ${path}: ${errorMessage(error)}`, { cause: error });
 	}
 	return path;
+}
+
+function compactProfile(profile: StoredConfig): StoredConfig {
+	return {
+		...(profile.url !== undefined ? { url: profile.url } : {}),
+		...(profile.token !== undefined ? { token: profile.token } : {}),
+		...(profile.contentDomain !== undefined ? { contentDomain: profile.contentDomain } : {}),
+		...(profile.savedAt !== undefined ? { savedAt: profile.savedAt } : {}),
+		...(profile.updatedAt !== undefined ? { updatedAt: profile.updatedAt } : {}),
+	};
+}
+
+/** Explicit flag > `--profile` override > `$SKIFF_PROFILE`. */
+function requestedProfile(
+	explicit: string | undefined,
+	env: NodeJS.ProcessEnv,
+): string | undefined {
+	return explicit?.trim() || profileOverride || trimmed(env[PROFILE_ENV]);
+}
+
+/** Resolve a profile for reading; an unset config is allowed. */
+function resolveProfileForRead(
+	state: ConfigState,
+	explicit: string | undefined,
+	env: NodeJS.ProcessEnv,
+): string | undefined {
+	const requested = requestedProfile(explicit, env);
+	if (requested) {
+		const name = normalizeProfileName(requested);
+		if (!state.profiles.has(name)) throw unknownProfile(state, name);
+		return name;
+	}
+	if (state.activeProfile && state.profiles.has(state.activeProfile)) return state.activeProfile;
+	const names = [...state.profiles.keys()];
+	if (names.length === 1) return names[0];
+	if (names.length === 0) return undefined;
+	throw ambiguousProfile(names);
+}
+
+/** Resolve a profile for writing; a fresh config gets `default`. */
+function resolveProfileForWrite(
+	state: ConfigState,
+	explicit: string | undefined,
+	env: NodeJS.ProcessEnv,
+): string {
+	const requested = requestedProfile(explicit, env);
+	if (requested) return normalizeProfileName(requested);
+	if (state.activeProfile) return state.activeProfile;
+	const names = [...state.profiles.keys()];
+	if (names.length === 1) return names[0]!;
+	if (names.length === 0) return DEFAULT_PROFILE;
+	throw ambiguousProfile(names);
+}
+
+/** Best-effort selection that never throws; used when env creds are complete. */
+function optionalEffectiveProfile(
+	state: ConfigState,
+	explicit: string | undefined,
+	env: NodeJS.ProcessEnv,
+): string | undefined {
+	const requested = requestedProfile(explicit, env);
+	if (requested) {
+		const name = normalizeProfileName(requested);
+		return state.profiles.has(name) ? name : undefined;
+	}
+	if (state.activeProfile && state.profiles.has(state.activeProfile)) return state.activeProfile;
+	const names = [...state.profiles.keys()];
+	return names.length === 1 ? names[0] : undefined;
+}
+
+function fallbackActive(state: ConfigState): string | undefined {
+	const names = [...state.profiles.keys()].sort();
+	return names.length === 1 ? names[0] : undefined;
+}
+
+function unknownProfile(state: ConfigState, name: string): ConfigError {
+	const names = [...state.profiles.keys()].sort();
+	const available = names.length
+		? `Available profiles: ${names.join(', ')}.`
+		: 'No profiles are configured.';
+	return new ConfigError(`Unknown profile "${name}". ${available}`, {
+		suggestions: [
+			'Run `skif profile list` to see saved profiles.',
+			`Run \`skif profile add ${name} --url <control-url>\` to create it.`,
+		],
+	});
+}
+
+function ambiguousProfile(names: string[]): ConfigError {
+	const sorted = [...names].sort();
+	return new ConfigError(
+		`Multiple profiles are configured (${sorted.join(', ')}), but none is active. Choose one with \`--profile <name>\`, set ${PROFILE_ENV}, or run \`skif profile use <name>\`.`,
+		{ suggestions: ['Run `skif profile list` to see the profiles.'] },
+	);
+}
+
+function profileHint(state: ConfigState): string[] {
+	const names = [...state.profiles.keys()].sort();
+	if (names.length === 0) return [];
+	if (names.length === 1) return [`The only saved profile "${names[0]}" has no credentials yet.`];
+	return [`Saved profiles: ${names.join(', ')}. Choose one with \`--profile <name>\`.`];
 }
 
 function optionalString(value: unknown, field: string, path: string): string | undefined {

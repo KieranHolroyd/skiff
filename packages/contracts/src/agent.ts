@@ -67,6 +67,10 @@ export const desiredStateSchema = z.object({
 	generatedAt: z.string(),
 	/** Content domain for hostname construction. */
 	contentDomain: z.string(),
+	/** Platform origin, for Caddy's on-demand TLS `ask` endpoint (custom domains). */
+	platformOrigin: z.string().url().optional(),
+	/** This node's `skiff-workloads.slice` budget; the agent applies it before starting units. */
+	sliceMemoryMb: z.number().int().positive().optional(),
 	/** Releases this node must have locally, keyed by sha256. */
 	releases: z.array(releaseSpecSchema),
 	/** Every route on this node, production and preview. */

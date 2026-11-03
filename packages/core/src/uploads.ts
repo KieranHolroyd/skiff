@@ -74,7 +74,7 @@ export class UploadService {
 		principal: Principal,
 		project: ProjectRow,
 		uploadId: string,
-		options: { promote?: boolean; message?: string } = {},
+		options: { promote?: boolean; message?: string; environment?: string } = {},
 	): Promise<DeploymentView> {
 		requirePermission(principal, 'deployment:create');
 		const session = this.ctx.db
@@ -146,7 +146,7 @@ export class UploadService {
 		principal: Principal,
 		project: ProjectRow,
 		files: InlineFile[],
-		options: { promote?: boolean; message?: string } = {},
+		options: { promote?: boolean; message?: string; environment?: string } = {},
 	): Promise<DeploymentView> {
 		const entries = UploadService.inlineEntries(files);
 		const view = await this.ctx.deployments.deployEntries(principal, project, entries, options);
@@ -155,7 +155,7 @@ export class UploadService {
 			action: 'upload.inline_deploy',
 			resource: 'deployment',
 			resourceId: view.id,
-			args: { project: project.slug, files: files.length },
+			args: { project: project.slug, files: files.length, environment: options.environment ?? 'production' },
 			result: 'ok',
 		});
 		return view;

@@ -29,7 +29,9 @@
 	let alertsOpen = $state(false);
 	let testing = $state<'email' | 'alert' | null>(null);
 
-	const ready = $derived(data.availability === 'ready' && !data.inFlight);
+	/** Installed host (root helper) or a dev server (local settings file). */
+	const canEdit = $derived(data.availability === 'ready' || data.availability === 'local');
+	const ready = $derived(canEdit && !data.inFlight);
 	const email = $derived(data.email.values);
 	const alerts = $derived(data.alerts.values);
 	const passwordSaved = $derived(data.email.secretsSet.includes('SKIFF_SMTP_PASSWORD'));
@@ -78,6 +80,7 @@
 		pending={data.pending}
 		inFlight={data.inFlight}
 		availability={data.availability}
+		restartPending={data.restartPending}
 		sections={['email', 'alerts']}
 	/>
 
@@ -116,7 +119,7 @@
 				title="Email is not set up"
 				description="Until it is, sign-in links and invitations are only written to the server log (journalctl -u skiff-control-plane)."
 			>
-				{#if data.availability === 'ready'}
+				{#if canEdit}
 					<Button variant="brand" onclick={() => (emailOpen = true)} disabled={!ready}
 						><MailIcon />Set up email</Button
 					>
@@ -135,7 +138,7 @@
 						{#if testing === 'email'}<Spinner />{:else}<SendIcon />{/if}
 						Send test{data.adminEmail ? ` to ${data.adminEmail}` : ''}
 					</Button>
-					{#if data.availability === 'ready'}
+					{#if canEdit}
 						<Button variant="outline" size="sm" onclick={() => (emailOpen = true)} disabled={!ready}
 							><SettingsIcon />Edit</Button
 						>
@@ -206,7 +209,7 @@
 						Send test alert
 					</Button>
 				{/if}
-				{#if data.availability === 'ready'}
+				{#if canEdit}
 					<Button
 						variant={data.alerts.configured ? 'outline' : 'brand'}
 						size="sm"

@@ -78,6 +78,12 @@ SKIFF_DATA_DIR=/tmp/skiff-agent bun apps/agent/src/main.ts
 Create an API key in the dashboard (Settings → API keys) or via `POST /api/auth/api-key/create`
 with a session cookie.
 
+Deployed sites are reachable in development without Caddy: the dev server answers
+`<slug>.localhost:<port>` (and `<slug>--<env>.localhost:<port>`) straight from the local object
+store, so the preview links in the dashboard open the real deployed files. Preview and production
+links are generated as `http://…:5173` while the content domain is a loopback host; production
+links stay HTTPS.
+
 ### Tests
 
 ```sh
@@ -97,6 +103,13 @@ SKIFF_BASE=http://localhost:5173 bun tests/mcp-oauth.e2e.ts
 node join + desired state + heartbeat, share links, password-protected site login and audit.
 `mcp-oauth.e2e.ts` covers CIMD/DCR discovery, PKCE, consent, scope step-up, elicitation and the
 legacy dashboard hand-off.
+
+### v2 stress example
+
+[`examples/v2-stress`](examples/v2-stress) is a deployable tier-2/3 app plus scripts that provision
+a project through REST and then stress the live workload: secrets, `/data`, env, health, resource
+limits, SSE, load, environments, git builds, domains and the agent's desired-state/activation
+protocol. See its [README](examples/v2-stress/README.md).
 
 ## Security model (short version)
 

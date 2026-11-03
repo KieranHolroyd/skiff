@@ -4,7 +4,7 @@
  * `skif` and `skiff` (D33), both pointing at this entrypoint.
  */
 import pkg from '../package.json' with { type: 'json' };
-import { ApiError, CliError } from './errors.ts';
+import { ApiError, CliError, UsageError } from './errors.ts';
 import { configCommand } from './commands/config.ts';
 import { deployCommand } from './commands/deploy.ts';
 import { deploymentsCommand } from './commands/deployments.ts';
@@ -12,10 +12,12 @@ import { loginCommand } from './commands/login.ts';
 import { logoutCommand } from './commands/logout.ts';
 import { logsCommand } from './commands/logs.ts';
 import { openCommand } from './commands/open.ts';
+import { profileCommand } from './commands/profile.ts';
 import { projectsCommand } from './commands/projects.ts';
 import { promoteCommand } from './commands/promote.ts';
 import { rollbackCommand } from './commands/rollback.ts';
 import { statusCommand } from './commands/status.ts';
+import { PROFILE_ENV, setProfileOverride } from './config.ts';
 
 const invokedAs = 'skif';
 
@@ -23,6 +25,7 @@ const commands: Record<string, (argv: string[]) => Promise<void>> = {
 	login: loginCommand,
 	logout: logoutCommand,
 	config: configCommand,
+	profile: profileCommand,
 	deploy: deployCommand,
 	status: statusCommand,
 	projects: projectsCommand,
@@ -41,6 +44,7 @@ Commands:
   login [--url <platform>] [--token <key>]  Sign in (browser by default)
   logout [--all]                             Forget the API key (settings are kept)
   config [list|get|set|unset|path]           Inspect or change persistent settings
+  profile [list|add|use|remove|show|current] Manage profiles for multiple deployments
   deploy [dir] [options]                     Zip and deploy a directory
   status [project]                           Fleet health, or one project's status
   projects                                   List projects
@@ -51,19 +55,33 @@ Commands:
   open <project>                             Open the site in a browser
 
 Global:
-  -h, --help      Show help (also works per command)
-  -v, --version   Print the version
+  --profile <name>  Use a saved profile (also ${PROFILE_ENV})
+  -h, --help        Show help (also works per command)
+  -v, --version     Print the version
 
 Environment:
   SKIFF_URL              Platform URL, e.g. https://control.example.com (overrides the config)
   SKIFF_TOKEN            API key (overrides the config)
   SKIFF_CONTENT_DOMAIN   Domain deployed sites use, e.g. sites.example.com (overrides the config)
+  SKIFF_PROFILE          Profile to use (overrides the active profile)
 
-Settings and credentials are stored at ~/.config/skiff/config.json with mode 0600.
-\`logout\` removes the API key but keeps the URL and domains; \`logout --all\` removes the file.`;
+Settings and credentials are stored per profile at ~/.config/skiff/config.json with
+mode 0600. With one profile commands use it automatically; with several, run
+\`skif profile use <name>\` or pass --profile. \`logout\` removes only the selected
+profile's API key; \`logout --all\` removes the file.`;
 
 async function run(): Promise<void> {
-	const argv = process.argv.slice(2);
+	let argv: string[];
+	try {
+		const extracted = extractProfileFlag(process.argv.slice(2));
+		argv = extracted.argv;
+		if (extracted.profile !== undefined) setProfileOverride(extracted.profile);
+	} catch (error) {
+		const cliError = toCliError(error);
+		console.error(`${invokedAs}: ${cliError.message}`);
+		process.exitCode = cliError.exitCode;
+		return;
+	}
 	const [command, ...rest] = argv;
 	const wantsJson = argv.some((arg) => arg === '--json' || arg.startsWith('--json='));
 
@@ -120,6 +138,44 @@ async function run(): Promise<void> {
 		if (process.env.SKIFF_DEBUG === '1') console.error(cliError);
 		process.exitCode = cliError.exitCode;
 	}
+}
+
+/**
+ * Pull the global `--profile` option out of argv before a command parses its own
+ * flags. `--profile` may appear before or after the command, but never after `--`.
+ */
+function extractProfileFlag(argv: string[]): { argv: string[]; profile?: string } {
+	const rest: string[] = [];
+	let profile: string | undefined;
+	let flagsDone = false;
+
+	for (let i = 0; i < argv.length; i++) {
+		const token = argv[i]!;
+		if (flagsDone) {
+			rest.push(token);
+			continue;
+		}
+		if (token === '--') {
+			flagsDone = true;
+			rest.push(token);
+			continue;
+		}
+		if (token === '--profile') {
+			const value = argv[i + 1];
+			if (value === undefined) throw new UsageError('Option --profile needs a value.');
+			profile = value;
+			i++;
+			continue;
+		}
+		if (token.startsWith('--profile=')) {
+			profile = token.slice('--profile='.length);
+			if (!profile) throw new UsageError('Option --profile needs a value.');
+			continue;
+		}
+		rest.push(token);
+	}
+
+	return { argv: rest, profile };
 }
 
 function toCliError(error: unknown): CliError {

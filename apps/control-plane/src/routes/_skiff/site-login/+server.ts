@@ -1,6 +1,6 @@
 import type { RequestHandler } from './$types';
 import { and, eq, isNull } from 'drizzle-orm';
-import { deployments, projects } from '@skiff/db';
+import { projects } from '@skiff/db';
 import { core } from '#lib/server/core.js';
 import { contentDomain } from '#lib/server/config.js';
 
@@ -29,7 +29,8 @@ function safeReturn(raw: string | null): URL | null {
 			url.hostname === contentDomain ||
 			url.hostname.endsWith(`.${contentDomain}`) ||
 			url.hostname === 'localhost' ||
-			url.hostname.endsWith('.localhost');
+			url.hostname.endsWith('.localhost') ||
+			core.access.isAllowedReturnHost(url.hostname);
 		return allowed ? url : null;
 	} catch {
 		return null;
@@ -71,16 +72,16 @@ const handler: RequestHandler = async (event) => {
 	const project = projectId ? await resolveProject(projectId) : undefined;
 	if (!project || project.deletedAt) return html('<h1>Unknown site</h1>', 404);
 
-	// Resolve the access mode for the exact host being visited.
+	// Resolve the access mode for the exact host being visited: preview hosts use the project's
+	// preview mode, production/environment hosts their own (D13).
+	const resolved = core.access.resolveContentHost(target.hostname);
+	if (!resolved || resolved.project.id !== project.id) return html('<h1>Unknown site</h1>', 404);
+	const mode = resolved.access;
 	const host = target.hostname;
-	const preview = await core.ctx.db
-		.select()
-		.from(deployments)
-		.where(and(eq(deployments.previewHost, host), eq(deployments.projectId, project.id)))
-		.get();
-	const mode = preview ? project.previewAccess : project.productionAccess;
 
-	const callback = new URL(`https://${host}/_skiff/callback`);
+	// Stay on the scheme/host/port the visitor actually used: `https://<host>` would be wrong on a
+	// dev server serving `*.localhost` over HTTP on the Vite port.
+	const callback = new URL('/_skiff/callback', target);
 	const finish = (token: string) => {
 		callback.searchParams.set('token', token);
 		return new Response(null, { status: 302, headers: { location: callback.toString(), 'cache-control': 'no-store' } });

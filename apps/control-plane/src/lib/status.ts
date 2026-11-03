@@ -9,7 +9,12 @@ const tones: Record<string, Tone> = {
 	online: 'success',
 	ok: 'success',
 	verified: 'success',
+	succeeded: 'success',
+	running: 'success',
 	pending: 'info',
+	queued: 'info',
+	starting: 'info',
+	building: 'warning',
 	draining: 'warning',
 	'used up': 'warning',
 	unverified: 'warning',
@@ -22,6 +27,8 @@ const tones: Record<string, Tone> = {
 	inactive: 'neutral',
 	disabled: 'neutral',
 	deleted: 'neutral',
+	cancelled: 'neutral',
+	stopped: 'neutral',
 	production: 'brand'
 };
 
@@ -31,5 +38,5 @@ export function statusTone(status: string | null | undefined): Tone {
 
 /** Statuses that represent something currently running get an animated dot. */
 export function isLive(status: string | null | undefined): boolean {
-	return status === 'online';
+	return status === 'online' || status === 'running' || status === 'building';
 }

@@ -29,6 +29,8 @@ export interface CompileAgentConfigOptions {
 
 const ACCESS_LOGGER = 'skiff_access';
 
+type DesiredDomain = DesiredState['domains'][number];
+
 interface HttpServerConfig {
 	routes: CaddyRoute[];
 	[key: string]: unknown;
@@ -96,6 +98,32 @@ export function tlsSubjects(contentDomain: string, extraHosts: string[] = []): s
 	return [...new Set([`*.${domain}`, domain, ...extraHosts.map((host) => host.trim().toLowerCase())])];
 }
 
+/** The route a custom domain clones: the project's `<slug>.<contentDomain>` production route. */
+export function productionRouteFor(state: DesiredState, projectId: string): RouteSpec | null {
+	return (
+		state.routes.find(
+			(route) => route.projectId === projectId && isProductionRoute(route, state.contentDomain),
+		) ?? null
+	);
+}
+
+/** Custom domains need on-demand certs; `ask` is only configured when a node actually serves one. */
+export function domainsAskUrl(state: Pick<DesiredState, 'platformOrigin' | 'domains'>): string | null {
+	if (state.domains.length === 0 || !state.platformOrigin) return null;
+	let origin: URL;
+	try {
+		origin = new URL(state.platformOrigin);
+	} catch {
+		return null;
+	}
+	if (origin.protocol !== 'https:' && origin.protocol !== 'http:') return null;
+	return `${origin.origin}/api/domains/ask`;
+}
+
+function withScheme(target: string): string {
+	return /^[a-z][a-z0-9+.-]*:\/\//i.test(target) ? target : `https://${target}`;
+}
+
 /**
  * Old slugs 301 to the renamed project's host. `to` is an origin from the control plane, so the
  * original path and query are appended explicitly rather than relying on Caddy's defaults.
@@ -153,26 +181,79 @@ function caddySocketAddress(socketPath: string): string {
  * applied with a single POST /load (SPIKES §4).
  */
 export function buildCaddyConfig(options: CompileAgentConfigOptions): Record<string, unknown> {
+	const sites = options.state.routes.map((route) =>
+		toSiteCompileInput(route, { ...options, contentDomain: options.state.contentDomain }),
+	);
+	const siteHosts = new Set(options.state.routes.map((route) => normalizeHost(route.host)));
+
+	// A verified custom host serves exactly the project's production route: same release, site
+	// config, access mode and worker upstream, with only the host replaced. `www` siblings are
+	// redirects, not clones, so they never serve the site twice.
+	for (const domain of options.state.domains) {
+		if (domain.redirectTo) continue;
+		const host = normalizeHost(domain.host);
+		if (siteHosts.has(host)) continue;
+		const production = productionRouteFor(options.state, domain.projectId);
+		if (!production) continue;
+		siteHosts.add(host);
+		sites.push(
+			toSiteCompileInput(
+				// The clone is by definition the production route: `production: true` keeps serving
+				// from the project symlink even though the custom host is not `<slug>.<contentDomain>`.
+				{ ...production, host: domain.host, production: true },
+				{ ...options, contentDomain: options.state.contentDomain },
+			),
+		);
+	}
+
 	const config = compileCaddyConfig({
 		listen: options.listen,
-		sites: options.state.routes.map((route) =>
-			toSiteCompileInput(route, { ...options, contentDomain: options.state.contentDomain }),
-		),
+		sites,
 		catchAllStatus: 404,
 		tls: options.tls,
 		platform: options.platform,
 		contentDomain: options.state.contentDomain,
 	});
 
-	const apps = config.apps as { http: { servers: Record<string, HttpServerConfig> } } | undefined;
+	const apps = config.apps as
+		| { http: { servers: Record<string, HttpServerConfig> }; tls?: Record<string, unknown> }
+		| undefined;
 	const server = apps?.http.servers.content;
 	if (!server) throw new Error('site-config compiler did not produce an HTTP server config');
 
-	const siteHosts = new Set(options.state.routes.map((route) => normalizeHost(route.host)));
 	const redirects = options.state.hostRedirects
 		.filter((redirect) => !siteHosts.has(normalizeHost(redirect.host)))
 		.map((redirect) => compileHostRedirect(redirect.host, redirect.to));
-	server.routes = [...redirects, ...server.routes];
+	const domainRedirects = options.state.domains
+		.filter((domain): domain is DesiredDomain & { redirectTo: string } => Boolean(domain.redirectTo))
+		.filter((domain) => !siteHosts.has(normalizeHost(domain.host)))
+		.map((domain) => compileHostRedirect(domain.host, withScheme(domain.redirectTo)));
+	server.routes = [...redirects, ...domainRedirects, ...server.routes];
+
+	// Only nodes that actually serve custom domains ask the control plane before issuing a cert.
+	// `automation.on_demand` only configures the ask endpoint; Caddy also needs an automation
+	// policy with `on_demand: true` for the custom hosts. The wildcard policy is left untouched,
+	// and the on-demand issuer uses HTTP-01 because a custom domain may live outside the
+	// Cloudflare zone that owns the wildcard certificate.
+	const ask = domainsAskUrl(options.state);
+	if (ask && apps && options.tls) {
+		const tls = (apps.tls ??= {});
+		const automation = (tls.automation ??= {}) as Record<string, unknown>;
+		automation.on_demand = { ask, rate_limit: { interval: '10s', burst: 20 } };
+		const policies = (automation.policies as Record<string, unknown>[] | undefined) ?? [];
+		policies.push({
+			subjects: [...new Set(options.state.domains.map((domain) => domain.host))],
+			on_demand: true,
+			issuers: [
+				{
+					module: 'acme',
+					email: options.tls.email,
+					...(options.tls.ca ? { ca: options.tls.ca } : {}),
+				},
+			],
+		});
+		automation.policies = policies;
+	}
 
 	if (options.accessLog) {
 		// Without a logging app Caddy writes no access log and agent telemetry stays empty (§8).

@@ -1,13 +1,22 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { accessModes } from '@skiff/contracts';
+import { accessModes, runtimes } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
 import { failStatus, formString, toFormFailure } from '../_lib/errors.js';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = ({ locals }) => {
 	const principal = locals.principal!;
+	let capacity: Awaited<ReturnType<typeof core.workloads.capacity>> = [];
+	if (principal.platformAdmin === true) {
+		try {
+			capacity = core.workloads.capacity(principal);
+		} catch {
+			// Platform capacity is a nicety for admins; project creation still works without it.
+		}
+	}
 	return {
-		projects: core.projects.list(principal)
+		projects: core.projects.list(principal),
+		capacity
 	};
 };
 
@@ -18,6 +27,8 @@ export const actions: Actions = {
 		const values = {
 			name: formString(data, 'name'),
 			slug: formString(data, 'slug'),
+			runtime: formString(data, 'runtime') || 'static',
+			placement: formString(data, 'placement') || 'edge',
 			productionAccess: formString(data, 'productionAccess') || 'public',
 			previewAccess: formString(data, 'previewAccess') || 'platform'
 		};
@@ -36,6 +47,10 @@ export const actions: Actions = {
 		if (!(accessModes as readonly string[]).includes(values.previewAccess)) {
 			fieldErrors.previewAccess = 'Choose a valid preview access mode.';
 		}
+		if (!(runtimes as readonly string[]).includes(values.runtime)) {
+			fieldErrors.runtime = 'Choose a valid runtime.';
+		}
+		if (!values.placement) fieldErrors.placement = 'Choose a placement.';
 
 		if (Object.keys(fieldErrors).length > 0) {
 			return fail(400, { message: 'Check the highlighted fields.', fieldErrors, values });
@@ -46,8 +61,8 @@ export const actions: Actions = {
 			project = await core.projects.create(principal, {
 				name: values.name,
 				slug: values.slug || undefined,
-				runtime: 'static',
-				placement: 'edge',
+				runtime: values.runtime as (typeof runtimes)[number],
+				placement: values.placement,
 				productionAccess: values.productionAccess as (typeof accessModes)[number],
 				previewAccess: values.previewAccess as (typeof accessModes)[number]
 			});

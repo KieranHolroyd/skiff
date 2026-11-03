@@ -26,14 +26,17 @@
 		pending,
 		inFlight,
 		sections,
-		availability
+		availability,
+		restartPending = false
 	}: {
 		status: StatusView | null;
 		pending: boolean;
 		inFlight: boolean;
 		/** Which results to show here: configure sections and/or `backups` / `restore-drill` actions. */
 		sections: string[];
-		availability: 'unmanaged' | 'not-enabled' | 'ready';
+		availability: 'local' | 'unmanaged' | 'not-enabled' | 'ready';
+		/** Dev server: settings were saved after it started. */
+		restartPending?: boolean;
 	} = $props();
 
 	let live = $state<Live | null>(null);
@@ -94,13 +97,32 @@
 	);
 </script>
 
-{#if availability === 'unmanaged'}
+{#if availability === 'local' && restartPending}
+	<Alert.Root variant="warning">
+		<TriangleAlertIcon />
+		<Alert.Title>Restart the dev server to apply</Alert.Title>
+		<Alert.Description>
+			The new settings are saved in <code>.data/platform-settings.json</code>, but this server still
+			uses the ones it started with. Stop <code>bun run dev</code> and start it again.
+		</Alert.Description>
+	</Alert.Root>
+{:else if availability === 'local'}
 	<Alert.Root variant="info">
 		<InfoIcon />
-		<Alert.Title>Development server</Alert.Title>
+		<Alert.Title>Local development server</Alert.Title>
 		<Alert.Description>
-			This control plane is not an installed release, so these settings come from its shell
-			environment and cannot be changed here. Hosts installed with <code>install.sh</code> can change
+			Settings saved here go to <code>.data/platform-settings.json</code> (gitignored) and override
+			your shell environment after a dev-server restart. On an installed server they are written to
+			<code>/etc/skiff/skiff.env</code> instead.
+		</Alert.Description>
+	</Alert.Root>
+{:else if availability === 'unmanaged'}
+	<Alert.Root variant="info">
+		<InfoIcon />
+		<Alert.Title>Not an installed release</Alert.Title>
+		<Alert.Description>
+			This production build is not running from an installed release, so these settings come from
+			its environment and cannot be changed here. Hosts installed with <code>install.sh</code> can change
 			them from this page.
 		</Alert.Description>
 	</Alert.Root>

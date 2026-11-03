@@ -34,6 +34,7 @@ skif deploy ./dist --project my-site --json
 | `login [--url <platform>] [--token <key>]` | Sign in (browser by default, `--no-browser` prints the URL) |
 | `logout [--all]` | Forget the API key; `--all` removes the whole config file |
 | `config [list\|get\|set\|unset\|path]` | Inspect or change persistent settings |
+| `profile [list\|add\|use\|remove\|show\|current]` | Manage profiles for multiple deployments |
 | `deploy [dir]` | Zip a directory and deploy it (`--project`, `--name`, `--no-promote`, `--message`, `--spa`, `--no-create`) |
 | `status [project]` | Fleet health, or one project's status |
 | `projects` | List projects |
@@ -46,13 +47,38 @@ skif deploy ./dist --project my-site --json
 Every command accepts `--help`, and most accept `--json` for scripting. Errors in `--json` mode
 are printed to stderr as `{ "error": { "code", "message", "suggestions" } }`.
 
+## Profiles
+
+A profile is one deployment: its control-plane URL, API key and content domain. Keep a profile
+per Skiff installation instead of juggling env vars.
+
+```sh
+skif login --profile prod --url https://control.example.com
+skif login --profile dev  --url http://localhost:5173
+
+skif profile list            # * marks the profile commands use
+skif profile use dev         # switch the default
+skif --profile prod status   # one command against another profile
+SKIFF_PROFILE=prod skif deploy ./dist
+```
+
+With a single profile, commands use it automatically — no `--profile` needed. With several,
+the active profile set by `skif profile use` is used. If several exist and none is active,
+commands stop and ask you to choose. `skif profile add <name> --url <url> [--token <key>]
+[--content-domain <domain>] [--use]` creates one without the browser, and
+`skif profile remove <name>` deletes it. `skif logout --all` removes every profile.
+
+Profiles written by older CLI versions (settings at the top level of the file) are read as a
+profile named `default` and upgraded on the next write.
+
 ## Configuration
 
-Settings and the API key are stored in `~/.config/skiff/config.json` (mode `0600`).
+Settings and credentials are stored per profile in `~/.config/skiff/config.json` (mode `0600`).
 `SKIFF_CONFIG_DIR` or `XDG_CONFIG_HOME` change the location.
 
 | Environment variable | Overrides |
 | --- | --- |
+| `SKIFF_PROFILE` | Profile to use (overrides the active profile) |
 | `SKIFF_URL` | Control-plane URL |
 | `SKIFF_TOKEN` | API key |
 | `SKIFF_CONTENT_DOMAIN` | Domain deployed sites are served from |

@@ -7,6 +7,7 @@
 	import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
 	import DatabaseBackupIcon from '@lucide/svelte/icons/database-backup';
 	import UserRoundIcon from '@lucide/svelte/icons/user-round';
+	import UsersIcon from '@lucide/svelte/icons/users';
 	import * as Tabs from '#lib/components/ui/tabs/index.js';
 	import PageHeader from '../_lib/PageHeader.svelte';
 
@@ -17,6 +18,7 @@
 		href:
 			| '/(dashboard)/settings'
 			| '/(dashboard)/settings/account'
+			| '/(dashboard)/settings/members'
 			| '/(dashboard)/settings/backups'
 			| '/(dashboard)/settings/notifications'
 			| '/(dashboard)/settings/updates';
@@ -39,6 +41,12 @@
 			href: '/(dashboard)/settings/account',
 			path: '/settings/account',
 			icon: UserRoundIcon
+		},
+		{
+			label: 'Members',
+			href: '/(dashboard)/settings/members',
+			path: '/settings/members',
+			icon: UsersIcon
 		},
 		{
 			label: 'Backups',

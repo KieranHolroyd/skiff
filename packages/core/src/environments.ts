@@ -1,6 +1,7 @@
 import { and, asc, eq, ne } from 'drizzle-orm';
 import { environments, deployments } from '@skiff/db';
 import {
+	environmentCreateSchema,
 	requirePermission,
 	type EnvironmentCreateInput,
 	type EnvironmentUpdateInput,
@@ -11,6 +12,7 @@ import type { CoreContext } from './context.ts';
 import { ConflictError, NotFoundError, ValidationError } from './errors.ts';
 import { newId } from './util.ts';
 import type { ProjectRow } from './projects.ts';
+import type { DeploymentView } from './deployments.ts';
 
 export type EnvironmentRow = typeof environments.$inferSelect;
 
@@ -102,8 +104,10 @@ export class EnvironmentService {
 	create(principal: Principal, project: ProjectRow, input: EnvironmentCreateInput): EnvironmentView {
 		requirePermission(principal, 'project:update');
 		this.ensureProduction(project);
-		const slug = input.slug ?? slugify(input.name);
+		const parsed = environmentCreateSchema.parse(input);
+		const slug = parsed.slug ?? slugify(parsed.name);
 		if (!slug) throw new ValidationError('Environment names need at least one letter or digit.');
+		if (slug === 'production') throw new ConflictError('The production environment is built in.');
 		const clash = this.rows(project.id).find((row) => row.slug === slug);
 		if (clash) throw new ConflictError(`An environment named "${slug}" already exists.`);
 		const now = this.ctx.now();
@@ -111,10 +115,10 @@ export class EnvironmentService {
 			id: newId('env_'),
 			orgId: project.orgId,
 			projectId: project.id,
-			name: input.name,
+			name: parsed.name,
 			slug,
 			isProduction: false,
-			access: input.access ?? project.previewAccess,
+			access: parsed.access ?? project.previewAccess,
 			deploymentId: null,
 			createdAt: now,
 			updatedAt: now,
@@ -125,7 +129,7 @@ export class EnvironmentService {
 			action: 'environment.create',
 			resource: 'environment',
 			resourceId: row.id,
-			args: { project: project.slug, slug, name: input.name },
+			args: { project: project.slug, slug, name: parsed.name },
 			result: 'ok',
 		});
 		this.ctx.projects.bump(project.orgId);
@@ -171,6 +175,28 @@ export class EnvironmentService {
 			result: 'ok',
 		});
 		this.ctx.projects.bump(project.orgId);
+	}
+
+	/**
+	 * Point this environment at a deployment. Delegates to the deployment service so permissions,
+	 * production history and retention stay in one place.
+	 */
+	promote(
+		principal: Principal,
+		project: ProjectRow,
+		slug: string,
+		deploymentId: string,
+	): Promise<DeploymentView> {
+		requirePermission(principal, 'deployment:promote');
+		this.requireRow(project, slug);
+		return this.ctx.deployments.promote(principal, project, deploymentId, slug);
+	}
+
+	/** Walk back this environment's pointer (production uses promotion history). */
+	rollback(principal: Principal, project: ProjectRow, slug: string): Promise<DeploymentView> {
+		requirePermission(principal, 'deployment:rollback');
+		this.requireRow(project, slug);
+		return this.ctx.deployments.rollback(principal, project, slug);
 	}
 
 	/** Move an environment's pointer; production mirrors `projects.productionDeploymentId`. */

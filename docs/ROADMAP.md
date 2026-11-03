@@ -29,8 +29,8 @@
 
 **Access**
 - [x] Better Auth: passkeys, GitHub, 2FA, orgs + access control, admin, API keys, OAuth provider
-- [ ] Enforce 2FA (or a passkey) for owners, including after GitHub / magic-link sign-in (D10)
-- [ ] Dashboard UI for inviting members and changing roles (the permission mapping works; no UI yet)
+- [x] Owners must prove a passkey or TOTP per session, including after GitHub / magic-link sign-in (D10)
+- [x] Settings → Members: invite, cancel, change role, remove (last owner protected)
 - [x] Protected sites (`public / password / platform`) via `forward_auth` → agent
 - [x] Share links with limits + revocation push
 - [x] Two-domain and shared-domain modes (with mandatory hardening)
@@ -44,9 +44,9 @@
 - [x] Dashboard: fleet, projects, deployments, traffic/errors, audit log (live logs arrive with v2 runtime)
 - [x] Prometheus `/metrics` on control plane and agents (optional OTLP exporter remains)
 - [x] Alerts: email (SES SMTP) + webhook; node offline > 2 min, disk > 85%, backup/drill failure (`OnFailure=` → `skiff-alert`)
-- [ ] Remaining default alerts: cert expiring < 14 d, 5xx spike after promote; drill results in the dashboard (`recordBackupRun`)
+- [x] Cert expiring < 14 d (agent TLS probe) and 5xx spike after promote; drill results in Settings → Backups
 - [x] Backups: Litestream → R2, restore script, monthly restore drill, installed and enabled by the installer when R2 + the `litestream` binary are present
-- [ ] Recovery kit (`age`-encrypted master key export, DESIGN §10)
+- [x] Recovery kit: `skiff-recovery-kit` (age passphrase format), offered at install, `skiff-restore --recovery-kit`
 
 **Release**
 - [x] CI: signed releases (control plane, agent, prebuilt Caddy)
@@ -65,6 +65,7 @@
 - [ ] `ObjectStore`: local fs, Garage/MinIO, multi-target replication
 - [ ] Optional `docker` runtime driver
 - [ ] Named environments (staging, …)
+- [x] Dashboard surfaces for environments, workloads, builds, domains and fleet capacity
 
 ## Later / maybe
 - Backup ingress (Cloudflare Tunnel from the homelab + DNS failover)

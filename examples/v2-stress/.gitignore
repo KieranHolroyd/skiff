@@ -1,0 +1,5 @@
+dist/
+.state.json
+.stress-report.json
+.stress-data/
+node_modules/

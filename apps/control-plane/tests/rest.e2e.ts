@@ -7,8 +7,11 @@
  */
 import { zipSync } from 'fflate';
 import { createHash, randomBytes } from 'node:crypto';
+import { contentUrl } from '@skiff/contracts';
 
 const BASE = process.env.SKIFF_BASE ?? 'http://localhost:5173';
+/** Where the dev server serves deployed content (HTTP + the Vite port for *.localhost). */
+const site = (host: string) => contentUrl(BASE, host);
 const results: Array<{ name: string; ok: boolean; detail?: string }> = [];
 const check = (name: string, ok: boolean, detail?: string) => {
 	results.push({ name, ok, detail });
@@ -51,7 +54,7 @@ const whoBody = await who.json();
 check('whoami resolves a personal org and owner role', who.status === 200 && whoBody.user.role === 'owner', JSON.stringify(whoBody.user));
 const create = await http('/api/v1/projects', json({ name: 'Rest Site', slug: 'restsite' }));
 const project = await create.json();
-check('create project', create.status === 201 && project.productionUrl === 'https://restsite.localhost', JSON.stringify(project));
+check('create project', create.status === 201 && project.productionUrl === site('restsite.localhost'), JSON.stringify(project));
 
 // 3. Inline deploy
 const deploy = await http(
@@ -68,8 +71,59 @@ const deploy = await http(
 const deployment = await deploy.json();
 check(
 	'inline deploy promotes and returns a preview URL',
-	deploy.status === 200 && deployment.isProduction === true && /^https:\/\/restsite--[a-z0-9]{10}\.localhost$/.test(deployment.previewUrl),
+	deploy.status === 200 && deployment.isProduction === true && deployment.previewUrl === site(`restsite--${deployment.shortId}.localhost`),
 	deployment.previewUrl,
+);
+
+// 3b. The dev server serves the deployed files on *.localhost without Caddy.
+const siteHome = await fetch(`${site('restsite.localhost')}/`, { redirect: 'manual' });
+const siteBody = await siteHome.text();
+check(
+	'dev server serves production content on <slug>.localhost',
+	siteHome.status === 200 && siteBody.includes('rest v1'),
+	`status ${siteHome.status} ${siteBody.slice(0, 40)}`,
+);
+const redirected = await fetch(`${site('restsite.localhost')}/old`, { redirect: 'manual' });
+check(
+	'_redirects apply to dev-served content',
+	redirected.status === 301 && redirected.headers.get('location') === '/new',
+	`status ${redirected.status} ${redirected.headers.get('location') ?? ''}`,
+);
+const previewHost = `restsite--${deployment.shortId}.localhost`;
+const protectedPreview = await fetch(`${site(previewHost)}/`, {
+	redirect: 'manual',
+});
+check(
+	'platform-protected previews redirect to the site-login bridge',
+	protectedPreview.status === 303 &&
+		(protectedPreview.headers.get('location') ?? '').includes('/_skiff/site-login?project='),
+	`status ${protectedPreview.status} ${protectedPreview.headers.get('location') ?? ''}`,
+);
+const bridge = await http(
+	`/_skiff/site-login?project=${project.id}&return=${encodeURIComponent(`${site(previewHost)}/`)}`,
+);
+const callbackUrl = bridge.headers.get('location') ?? '';
+check(
+	'site-login mints a host-bound callback for the dev preview',
+	bridge.status === 302 && callbackUrl.startsWith(`${site(previewHost)}/_skiff/callback?token=`),
+	callbackUrl.slice(0, 80),
+);
+const siteCallback = await fetch(callbackUrl, { redirect: 'manual' });
+const siteCookie = (siteCallback.headers.get('set-cookie') ?? '').split(';')[0] ?? '';
+check(
+	'dev callback sets the host-only site cookie',
+	siteCallback.status === 303 && siteCookie.startsWith('__skiff_dev_site='),
+	`status ${siteCallback.status} ${siteCookie.slice(0, 30)}`,
+);
+const unlocked = await fetch(`${site(previewHost)}/`, {
+	redirect: 'manual',
+	headers: { cookie: siteCookie },
+});
+const unlockedBody = await unlocked.text();
+check(
+	'dev server serves the protected preview once the cookie is set',
+	unlocked.status === 200 && unlockedBody.includes('rest v1'),
+	`status ${unlocked.status} ${unlockedBody.slice(0, 40)}`,
 );
 
 // 4. Project + deployment listing
@@ -155,14 +209,14 @@ const projectFresh = await (await http('/api/v1/projects/restsite')).json();
 const share = await (await http('/api/v1/projects/restsite/shares', json({ project: 'restsite', maxRedemptions: 1 }))).json();
 const shareUrl = new URL(share.url);
 const rawToken = shareUrl.searchParams.get('_skiff_share')!;
-const returnTo = `https://${shareUrl.host}/some/page?x=1`;
+const returnTo = `${shareUrl.origin}/some/page?x=1`;
 const shareLogin = await http(
 	`/_skiff/site-login?project=${projectFresh.id}&return=${encodeURIComponent(`${returnTo}&_skiff_share=${rawToken}`)}`,
 );
 const location = shareLogin.headers.get('location') ?? '';
 check(
 	'share link redeems and redirects with a host-bound callback token',
-	shareLogin.status === 302 && location.startsWith(`https://${shareUrl.host}/_skiff/callback?token=`),
+	shareLogin.status === 302 && location.startsWith(`${shareUrl.origin}/_skiff/callback?token=`),
 	location.slice(0, 80),
 );
 const secondRedeem = await http(
@@ -172,20 +226,20 @@ check('share link redemption cap enforced', secondRedeem.status === 410, `status
 
 // 10. Password-protected production: form then token
 await http('/api/v1/projects/restsite/access', json({ scope: 'production', mode: 'password', password: 'let me in' }));
-const loginPage = await http(`/_skiff/site-login?project=${projectFresh.id}&return=${encodeURIComponent('https://restsite.localhost/')}`);
+const loginPage = await http(`/_skiff/site-login?project=${projectFresh.id}&return=${encodeURIComponent(`${site('restsite.localhost')}/`)}`);
 const form = await loginPage.text();
 check('password mode serves a login form', loginPage.status === 200 && form.includes('password protected'));
 const formPost = await http('/_skiff/site-login', {
 	method: 'POST',
 	headers: { 'content-type': 'application/x-www-form-urlencoded' },
-	body: new URLSearchParams({ project: projectFresh.id, return: 'https://restsite.localhost/' }).toString(),
+	body: new URLSearchParams({ project: projectFresh.id, return: `${site('restsite.localhost')}/` }).toString(),
 	redirect: 'manual',
 });
 check('wrong password is rejected', formPost.status === 401, `status ${formPost.status}`);
 const good = await http('/_skiff/site-login', {
 	method: 'POST',
 	headers: { 'content-type': 'application/x-www-form-urlencoded' },
-	body: new URLSearchParams({ project: projectFresh.id, return: 'https://restsite.localhost/', password: 'let me in' }).toString(),
+	body: new URLSearchParams({ project: projectFresh.id, return: `${site('restsite.localhost')}/`, password: 'let me in' }).toString(),
 });
 check(
 	'correct password redirects with a token',

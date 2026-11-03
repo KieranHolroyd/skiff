@@ -23,7 +23,7 @@ import {
 	userHasSecondFactor,
 	userIsOwner,
 } from './second-factor';
-import { authPathAllowedBeforeSecondFactor, factorProvedBy } from './second-factor-policy';
+import { OAUTH_AUTHORIZE_PATH, authPathAllowedBeforeSecondFactor, factorProvedBy } from './second-factor-policy';
 import { sqlite } from './db';
 
 /**
@@ -118,10 +118,12 @@ export const auth = betterAuth({
 					if ((count?.count ?? 0) === 0) return { data: { ...user, role: 'admin' } };
 					if (openSignup) return;
 					const invited = sqlite
-						.query<{ id: string }, [string, number]>(
-							"SELECT id FROM invitation WHERE email = ? AND status = 'pending' AND expiresAt > ?",
+						.query<{ id: string }, [string, string]>(
+							"SELECT id FROM invitation WHERE lower(email) = ? AND status = 'pending' AND expiresAt > ?",
 						)
-						.get(user.email.toLowerCase(), Date.now());
+						// Better Auth stores dates as ISO-8601 text; comparing against a number would always
+						// pass in SQLite (text sorts after numbers), letting expired invitations sign up.
+						.get(user.email.toLowerCase(), new Date().toISOString());
 					if (!invited)
 						throw new APIError('FORBIDDEN', {
 							message: 'Skiff is invite-only. Ask an owner to invite your email address.',
@@ -147,6 +149,11 @@ export const auth = betterAuth({
 					throw new APIError('TOO_MANY_REQUESTS', {
 						message: 'Too many incorrect codes. Sign in again to retry.',
 					});
+				}
+				// An MCP client's authorization request resumes after the challenge rather than failing.
+				if (ctx.path === OAUTH_AUTHORIZE_PATH && ctx.request?.method === 'GET') {
+					const url = new URL(ctx.request.url);
+					throw ctx.redirect(`/two-factor?redirect=${encodeURIComponent(`${url.pathname}${url.search}`)}`);
 				}
 				if (!authPathAllowedBeforeSecondFactor(ctx.path, userHasSecondFactor(session.user.id)))
 					throw new APIError('FORBIDDEN', {

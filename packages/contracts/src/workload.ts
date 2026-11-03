@@ -115,6 +115,10 @@ export const workloadDesiredSchema = z.object({
 	status: z.enum(workloadStatuses),
 	/** Content-addressed release the unit runs from; null for a pure image container. */
 	release: z.string().length(64).nullable(),
+	/** Process workloads: fixed argv. Absent means the agent's default (`bun run start`). */
+	command: z.array(z.string().min(1).max(1024)).min(1).max(64).optional(),
+	/** Container workloads: the OCI image to run. */
+	image: z.string().min(1).max(512).optional(),
 	upstream: z.string(),
 	memoryMb: z.number().int().positive(),
 	cpus: z.number().positive(),

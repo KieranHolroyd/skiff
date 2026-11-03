@@ -1,4 +1,13 @@
 {
-  "extends": "../tsconfig.base.json",
-  "include": ["update-self/**/*.ts", "platform-config/**/*.ts", "version.ts", "version.test.ts"]
+	"extends": "../tsconfig.base.json",
+	"include": [
+		"update-self/**/*.ts",
+		"platform-config/**/*.ts",
+		"version.ts",
+		"version.test.ts",
+		"recovery-kit.ts",
+		"recovery-kit.test.ts",
+		"skiff-alert.ts",
+		"install/**/*.ts"
+	]
 }

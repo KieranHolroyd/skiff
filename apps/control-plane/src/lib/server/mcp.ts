@@ -13,12 +13,15 @@ import {
 	deployFilesSchema,
 	deploySiteSchema,
 	effectivePermissions,
+	environmentCreateSchema,
+	inlineFileSchema,
 	limits,
 	projectCreateSchema,
 	projectUpdateSchema,
 	requirePermission,
 	setAccessSchema,
 	shareLinkCreateSchema,
+	workloadSpecSchema,
 	type Permission,
 	type Principal,
 	type Role,
@@ -450,25 +453,146 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 		'promote_deployment',
 		{
 			title: 'Promote deployment',
-			description: 'Point production at an existing deployment. Instant; no rebuild.',
-			inputSchema: z.object({ project: z.string(), deployment: z.string() }),
+			description:
+				'Point an environment (production by default) at an existing deployment. Instant; no rebuild.',
+			inputSchema: z.object({
+				project: z.string(),
+				deployment: z.string(),
+				environment: z.string().optional().describe('Environment slug; defaults to production'),
+			}),
 			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
 			scopeChallenge: requires('deployment:promote'),
 		},
-		async ({ project, deployment }) =>
-			run(() => core.deployments.promote(principal, core.projects.requireRow(principal, project), deployment)),
+		async ({ project, deployment, environment }) =>
+			run(() =>
+				core.deployments.promote(
+					principal,
+					core.projects.requireRow(principal, project),
+					deployment,
+					environment,
+				),
+			),
 	);
 
 	tool(
 		'rollback',
 		{
-			title: 'Roll back production',
-			description: 'Point production at the previous deployment (code and config together).',
-			inputSchema: z.object({ project: z.string() }),
+			title: 'Roll back an environment',
+			description: 'Point an environment (production by default) at its previous deployment (code and config together).',
+			inputSchema: z.object({
+				project: z.string(),
+				environment: z.string().optional().describe('Environment slug; defaults to production'),
+			}),
 			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
 			scopeChallenge: requires('deployment:rollback'),
 		},
-		async ({ project }) => run(() => core.deployments.rollback(principal, core.projects.requireRow(principal, project))),
+		async ({ project, environment }) =>
+			run(() => core.deployments.rollback(principal, core.projects.requireRow(principal, project), environment)),
+	);
+
+	// --- environments -------------------------------------------------------
+	tool(
+		'list_environments',
+		{
+			title: 'List environments',
+			description:
+				'List a project\'s named environments (production is built in) with host, access mode and current deployment.',
+			inputSchema: z.object({ project: z.string() }),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('project:read'),
+		},
+		async ({ project }) =>
+			run(() => ({
+				environments: core.environments.list(principal, core.projects.requireRow(principal, project)),
+			})),
+	);
+
+	tool(
+		'create_environment',
+		{
+			title: 'Create environment',
+			description:
+				'Create a named environment. It serves at <project>--<env>.<contentDomain>; access defaults to the project preview mode.',
+			inputSchema: environmentCreateSchema.extend({ project: z.string() }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('project:update'),
+		},
+		async ({ project, ...input }) =>
+			run(() => core.environments.create(principal, core.projects.requireRow(principal, project), input)),
+	);
+
+	tool(
+		'deploy_to_environment',
+		{
+			title: 'Deploy to an environment',
+			description:
+				'Deploy inline files or a finalized upload into a named environment. Moves only that environment\'s pointer; production is untouched.',
+			inputSchema: z.object({
+				project: z.string(),
+				environment: z.string().describe('Environment slug (production is allowed explicitly)'),
+				files: z.array(inlineFileSchema).min(1).max(20000).optional(),
+				uploadId: z.string().optional(),
+				promote: z.boolean().default(true),
+				message: z.string().max(500).optional(),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('deployment:create', 'project:read'),
+		},
+		async ({ project, environment, files, uploadId, promote, message }) =>
+			run(async () => {
+				if (!files && !uploadId) throw new Error('Provide `files` or an `uploadId`.');
+				if (files && uploadId) throw new Error('Provide either `files` or `uploadId`, not both.');
+				const row = core.projects.requireRow(principal, project);
+				const view = files
+					? await core.uploads.deployInline(principal, row, files, { promote, message, environment })
+					: await core.uploads.finalize(principal, row, uploadId!, { promote, message, environment });
+				return {
+					...view,
+					nextSteps: [`Environment: ${view.productionUrl}`, `Preview: ${view.previewUrl}`],
+				};
+			}),
+	);
+
+	// --- workloads ----------------------------------------------------------
+	tool(
+		'get_workload',
+		{
+			title: 'Get workload',
+			description: 'Get the current tier 2/3 runtime spec and status for a project.',
+			inputSchema: z.object({ project: z.string() }),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('deployment:read'),
+		},
+		async ({ project }) =>
+			run(() => {
+				const row = core.projects.requireRow(principal, project);
+				return { workload: core.workloads.get(principal, row), spec: core.workloads.projectSpec(row) };
+			}),
+	);
+
+	tool(
+		'set_workload',
+		{
+			title: 'Set workload',
+			description:
+				'Set the runtime spec for a process/container project. Secrets are references only; values never leave the platform.',
+			inputSchema: workloadSpecSchema.extend({ project: z.string() }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('project:update'),
+		},
+		async ({ project, ...input }) =>
+			run(() => core.workloads.setSpec(principal, core.projects.requireRow(principal, project), input)),
+	);
+
+	tool(
+		'get_node_capacity',
+		{
+			title: 'Get node capacity',
+			description: 'Per-node workload-slice budget and reservation (platform admin view).',
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('project:read'),
+		},
+		async () => run(() => ({ capacity: core.workloads.capacity(principal) })),
 	);
 
 	// --- access -------------------------------------------------------------
@@ -643,7 +767,9 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 						'',
 						'For larger sites use `create_upload`, PUT the zip to the presigned URL, then `finalize_upload`.',
 						'',
-						'Every deployment gets an immutable preview URL `<slug>--<id>.<contentDomain>`. `promote_deployment` and `rollback` are instant because they only move the production pointer.',
+						'Every deployment gets an immutable preview URL `<slug>--<id>.<contentDomain>`. `promote_deployment` and `rollback` are instant because they only move a pointer.',
+						'',
+						'Named environments (`create_environment`, `list_environments`) serve at `<slug>--<env>.<contentDomain>`. Use `deploy_to_environment` to deploy into one; only its own pointer moves.',
 					].join('\n'),
 				},
 			],

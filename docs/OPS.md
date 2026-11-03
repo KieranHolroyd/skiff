@@ -78,9 +78,11 @@ root:skiff`.
 | `SKIFF_NODE_TOKEN` | — | **yes** | Agent only: bearer token from the single-use join token. |
 | `SKIFF_CADDY_LISTEN` | `:443,:80` | no | Agent only: listeners Caddy should bind. |
 | `SKIFF_CADDY_ACCESS_LOG` | installer: `/var/log/caddy/skiff-access.log` | no | Agent only: Caddy JSON access log (0640, read via the `caddy` group). The agent adds it to the Caddy config and aggregates it into 1-minute buckets. |
+| `SKIFF_CERT_PROBE_ADDR` | loopback on the TLS listen port (when TLS is on) | no | Agent only: where the agent handshakes to read served certificate expiry (every 6 h) for the cert-expiry alert; `off` disables it. |
 | `SKIFF_MCP_ALLOW_DCR` | `1` | no | Keep legacy Dynamic Client Registration alongside CIMD. |
 | `SKIFF_OPEN_SIGNUP` | unset | no | `1` allows open sign-up. Production is invite-only (D10); the first user is always allowed so setup can create the owner. |
 | `SKIFF_DEV_PASSWORD_LOGIN` | unset | no | Development only; refused in production. |
+| `SKIFF_OWNER_2FA` | `1` (`0` only in dev password mode) | no | Org owners must prove a passkey or authenticator code per session before using the dashboard/API (D10). GitHub and magic-link sign-ins are single-factor. |
 | `SKIFF_ACME_EMAIL` | empty | no | Agent only: ACME account email. Enables TLS/DNS-01 when set. |
 | `SKIFF_CLOUDFLARE_API_TOKEN` | empty | **yes** | Agent only: scoped DNS token for `caddy-dns/cloudflare` (Zone.DNS edit on the content zone). |
 | `SKIFF_ACME_CA` | Let's Encrypt | no | Agent only: ACME directory URL (use the staging URL while testing). |
@@ -423,7 +425,11 @@ sudo skiff-platform-config status
 journalctl -u skiff-platform-config
 ```
 
-On a development server (no installed release) the tabs are read-only and explain why.
+On a development server (`bun run dev`, no installed release) the same forms work, with the same
+owner gate and the same tests before saving, but there is no root helper. Values are saved to
+`<SKIFF_DATA_DIR>/platform-settings.json` (`.data/`, gitignored, `0600`). `config.ts` loads that file
+over the shell environment at startup, so restart the dev server to apply. Litestream and the
+restore drill only run on an installed server.
 
 ---
 
@@ -470,16 +476,15 @@ curl -sS --unix-socket /run/skiff/control.sock http://localhost/ -o /dev/null -w
 
 1. Provision Debian 13 at the same address or update DNS.
 2. Run the installer with the **same version** as the lost host.
-3. Restore `/etc/skiff/skiff.env` and `/etc/skiff/master.key` from your offline copy
-   (password manager + recovery kit). Do this **before** the control plane starts:
-   `systemctl stop skiff-control-plane`.
-   - `BETTER_AUTH_SECRET` may be regenerated, but every session and MCP token is
-     invalidated. The master key must be the original or existing secrets cannot decrypt.
-   - R2 credentials must be present or the restore cannot reach the backups. Keep an
-     encrypted copy of the env file with the recovery kit.
-4. Install Litestream (`/usr/local/bin/litestream`) and re-run the installer (or enable
-   `skiff-litestream.service`) once R2 is configured.
-5. Run `skiff-restore --yes`.
+3. Copy the recovery kit to the new host (skip the export prompt at the end of the install).
+   - The master key must be the original or existing secrets cannot decrypt.
+   - `BETTER_AUTH_SECRET` comes back with the env file if the kit included it; if it is
+     regenerated instead, every session and MCP token is invalidated.
+4. Install Litestream (`/usr/local/bin/litestream`).
+5. Run `skiff-restore --yes --recovery-kit <kit.age>`. It decrypts the kit (asking for the
+   passphrase), installs the original `master.key` and, if included, `skiff.env` with the R2
+   credentials, then restores the database. Without a kit, put both files in place by hand
+   first (`systemctl stop skiff-control-plane`) and run `skiff-restore --yes`.
 6. Re-issue certificates: Caddy obtains them automatically via DNS-01 on first start;
    confirm the Cloudflare token is in `/etc/caddy/cloudflare.token`.
 7. Re-key WireGuard (control plane + homelab); the homelab dials out and agents reconcile.
@@ -537,9 +542,23 @@ pinned Litestream release and enable everything when you save the R2 credentials
 
 ### 6.2 Recovery kit
 
-> **Not yet implemented.** The `age`-encrypted recovery kit (DESIGN §10) is not produced yet.
-> Until it is, keep an offline copy of `/etc/skiff/master.key` and `/etc/skiff/skiff.env` in a
-> password manager. Losing the master key means existing secrets cannot be decrypted.
+`skiff-recovery-kit` (`scripts/recovery-kit.ts`) writes a standard armored **age** file in
+passphrase mode, so stock `age -d` can also open it. The kit holds the master key, its
+fingerprint (first 16 hex of its sha256) and, with `--include-env`, `skiff.env`.
+
+```sh
+sudo skiff-recovery-kit export --include-env     # /root/skiff-recovery-kit-<host>-<date>.age, 0600
+sudo skiff-recovery-kit verify <file>            # decrypts in memory, compares the fingerprint
+sudo skiff-recovery-kit import <file> [--restore-env] [--force]
+```
+
+- The installer offers an export at the end of a fresh interactive install.
+- An empty passphrase generates one and prints it once; typed passphrases need 12+ characters.
+  `--passphrase-file` (or `SKIFF_RECOVERY_PASSPHRASE_FILE`) for automation.
+- Copy the kit off the server, then delete it there (`shred -u`). Keep the passphrase apart
+  from the file. Re-export after every master-key rotation (§11).
+- `import` refuses to replace a different master key without `--force` and keeps any replaced
+  file as `*.pre-recovery-<UTC>`.
 
 ---
 
@@ -560,8 +579,8 @@ pinned Litestream release and enable everything when you save the R2 credentials
 |---|---|---|
 | Node offline > 2 min | page | Check WireGuard, agent unit, control-plane connectivity. |
 | Disk > 85% | warn | Find release cache growth / logs; GC old deployments. |
-| Certificate expiring < 14 d (**not yet implemented**) | warn | Check Cloudflare token and DNS-01; `caddy reload`. |
-| 5xx spike after promote (**not yet implemented**) | page | Roll back the production pointer; inspect the release. |
+| Certificate expiring < 14 d (critical < 3 d) | warn | Check Cloudflare token and DNS-01; `caddy reload`. |
+| 5xx spike after promote (≥ 20 requests, ≥ 5% 5xx and ≥ 2× the pre-promote rate, within 30 min) | page | Roll back the production pointer; inspect the release. |
 | Failed backup or restore drill | page | Run §5.2 / §8.3; do not assume the backup is good. |
 | Litestream restart loop | warn | Check R2 credentials/endpoint and bucket permissions. |
 
@@ -569,7 +588,7 @@ Wire email (SES SMTP) and/or a webhook (ntfy, Discord, Home Assistant) through t
 `Notifier` interface. `skiff-restore-drill.service` and `skiff-litestream.service` ship with
 `OnFailure=skiff-alert@%n.service`, which sends the alert through `SKIFF_ALERT_WEBHOOK` and/or
 SMTP directly (it works with the control plane down) and includes the drill's
-`status.json` reason. Drill results are not yet recorded in the dashboard.
+`status.json` reason. Settings → Backups shows the latest drill result and unit states.
 
 Quick checks:
 

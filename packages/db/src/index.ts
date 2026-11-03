@@ -6,6 +6,7 @@ import * as schema from './schema.ts';
 import { migrations } from './migrations.ts';
 
 export * from './schema.ts';
+export { migrations } from './migrations.ts';
 
 export type SkiffDb = ReturnType<typeof createDb>['db'];
 
@@ -15,6 +16,16 @@ export interface OpenOptions {
 	/** Run pending SQL migrations on open. Default true. */
 	migrate?: boolean;
 }
+
+/**
+ * Migration ids that were published under an earlier name. An install that already applied the
+ * old id has the schema change, so the renamed migration is recorded as applied instead of rerun
+ * (SQLite's `ALTER TABLE` is not idempotent). Forward-only: aliases never remove history.
+ */
+export const migrationAliases: Readonly<Record<string, readonly string[]>> = {
+	// v2 shipped this as 0003 before the v2 backend migration took that number.
+	'0004_deployment_promoted_at.sql': ['0003_deployment_promoted_at.sql'],
+};
 
 /**
  * Open the platform database. Migrations are forward-only and tracked in `skiff_migrations`.
@@ -40,6 +51,13 @@ export function migrate(sqlite: Database): string[] {
 	const ran: string[] = [];
 	for (const migration of migrations) {
 		if (applied.has(migration.id)) continue;
+		const aliases = migrationAliases[migration.id] ?? [];
+		if (aliases.some((alias) => applied.has(alias))) {
+			sqlite.run('INSERT INTO skiff_migrations (id, applied_at) VALUES (?, ?)', [migration.id, Date.now()]);
+			applied.add(migration.id);
+			ran.push(`${migration.id} (already applied as ${aliases.find((alias) => applied.has(alias))})`);
+			continue;
+		}
 		sqlite.transaction(() => {
 			sqlite.run(migration.sql);
 			sqlite.run('INSERT INTO skiff_migrations (id, applied_at) VALUES (?, ?)', [

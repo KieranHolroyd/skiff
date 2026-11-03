@@ -4,6 +4,7 @@
 	import CirclePauseIcon from '@lucide/svelte/icons/circle-pause';
 	import CirclePlayIcon from '@lucide/svelte/icons/circle-play';
 	import CopyIcon from '@lucide/svelte/icons/copy';
+	import HammerIcon from '@lucide/svelte/icons/hammer';
 	import InfoIcon from '@lucide/svelte/icons/info';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
@@ -22,6 +23,7 @@
 	import * as Card from '#lib/components/ui/card/index.js';
 	import * as Collapsible from '#lib/components/ui/collapsible/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
+	import { Progress } from '#lib/components/ui/progress/index.js';
 	import EmptyState from '../_lib/EmptyState.svelte';
 	import NodeStats from '../_lib/NodeStats.svelte';
 	import PageHeader from '../_lib/PageHeader.svelte';
@@ -54,6 +56,7 @@
 	const rotatedNode = $derived(
 		data.denied ? undefined : data.nodes.find((node) => node.id === result?.nodeId)
 	);
+	const capacityByNode = $derived(new Map(data.capacity.map((item) => [item.nodeId, item])));
 
 	function rotate(node: { id: string; name: string }) {
 		askConfirm({
@@ -64,6 +67,21 @@
 			tone: 'danger',
 			action: '?/rotateToken',
 			fields: { nodeId: node.id }
+		});
+	}
+
+	function setBuilder(node: { id: string; name: string; canBuild: boolean }) {
+		askConfirm({
+			title: node.canBuild
+				? `Remove the Builder role from ${node.name}?`
+				: `Make ${node.name} a Builder?`,
+			description: node.canBuild
+				? 'Queued git builds wait for another Builder node. Existing deployments are unaffected.'
+				: 'This node will claim git builds one at a time. Builds run in a transient sandboxed unit with a 10-minute cap.',
+			confirmLabel: node.canBuild ? 'Remove Builder role' : 'Make Builder',
+			tone: node.canBuild ? 'danger' : 'default',
+			action: '?/setBuilder',
+			fields: { nodeId: node.id, builder: node.canBuild ? 'false' : 'true' }
 		});
 	}
 
@@ -81,7 +99,7 @@
 	<PageHeader
 		eyebrow="Platform"
 		title="Nodes"
-		description="Edge and worker machines running the Skiff agent. Agents pull desired state; the control plane never pushes."
+		description="Edge and worker machines running the Skiff agent. Agents pull desired state; the control plane never pushes. App workloads are admitted against each node's workload slice, and a Builder node runs git builds."
 	>
 		{#if !data.denied}
 			<Button onclick={() => (addOpen = true)}>
@@ -119,6 +137,7 @@
 		</p>
 		<div class="grid gap-4 lg:grid-cols-2">
 			{#each data.nodes as node (node.id)}
+				{@const capacity = capacityByNode.get(node.id)}
 				<Card.Root class="gap-4">
 					<Card.Header>
 						<div class="flex items-start gap-3">
@@ -134,6 +153,11 @@
 									<Badge variant="outline" class="font-mono text-[10px] uppercase"
 										>{node.mode}</Badge
 									>
+									{#if node.canBuild}
+										<Badge variant="brand" class="gap-1">
+											<HammerIcon class="size-3" />Builder
+										</Badge>
+									{/if}
 									<StatusBadge status={node.status} />
 								</Card.Title>
 								<Card.Description class="truncate font-mono text-[11px]" title={node.id}>
@@ -160,6 +184,11 @@
 									<CopyIcon />Copy node ID
 								</DropdownMenu.Item>
 								<DropdownMenu.Separator />
+								<DropdownMenu.Item onSelect={() => setBuilder(node)}>
+									<HammerIcon />
+									{node.canBuild ? 'Remove Builder role' : 'Make this a Builder'}
+								</DropdownMenu.Item>
+								<DropdownMenu.Separator />
 								<DropdownMenu.Item variant="destructive" onSelect={() => rotate(node)}>
 									<RefreshCwIcon />Rotate token
 								</DropdownMenu.Item>
@@ -168,6 +197,28 @@
 					</Card.Header>
 
 					<Card.Content class="space-y-4">
+						{#if capacity}
+							{@const used = capacity.sliceMemoryMb - capacity.freeMemoryMb}
+							{@const pct = capacity.sliceMemoryMb > 0 ? (used / capacity.sliceMemoryMb) * 100 : 0}
+							<div class="space-y-1.5">
+								<div class="flex flex-wrap items-baseline justify-between gap-2 text-xs">
+									<span class="text-muted-foreground">
+										Workload slice
+										<span class="ml-1 font-mono text-[11px] text-foreground"
+											>{capacity.reservedMemoryMb} / {capacity.sliceMemoryMb} MB</span
+										>
+									</span>
+									<span class="font-mono text-[11px] text-muted-foreground tabular-nums"
+										>{capacity.freeMemoryMb} MB free · {capacity.workloadCount} workloads</span
+									>
+								</div>
+								<Progress
+									value={Math.min(100, Math.max(0, pct))}
+									aria-label="Reserved workload slice memory on {node.name}"
+									class="h-1.5"
+								/>
+							</div>
+						{/if}
 						<NodeStats stats={node.stats} />
 						<dl class="kv border-t">
 							<dt>Agent</dt>
@@ -218,7 +269,9 @@
 			<InfoIcon />
 			<Alert.Description>
 				An agent is marked offline after 30 seconds without a heartbeat and alerts after 2 minutes.
-				Draining stops new placements but keeps existing sites serving.
+				Draining stops new placements but keeps existing sites and workloads serving. App workloads
+				run in <code class="font-mono">skiff-workloads.slice</code>; a Builder node claims one git
+				build at a time.
 			</Alert.Description>
 		</Alert.Root>
 	{/if}

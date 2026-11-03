@@ -29,11 +29,27 @@ export const inlineFileSchema = z.object({
 });
 export type InlineFile = z.infer<typeof inlineFileSchema>;
 
+/**
+ * Environment slug on a deploy. `production` is built in and is the default; every other value
+ * names an environment created through `/projects/:slug/environments`. Preview hosts keep their
+ * `<slug>--<shortid>` shape regardless (D13, D14).
+ */
+const deployEnvironment = z
+	.string()
+	.min(1)
+	.max(30)
+	.regex(/^[a-z0-9](?:[a-z0-9-]{0,28}[a-z0-9])?$/, 'Environment names are 1–30 lowercase letters, digits and hyphens')
+	.refine((value) => !value.includes('--'), 'Environment names cannot contain `--`')
+	.optional()
+	.describe('Environment slug; defaults to production');
+
 export const deployFilesSchema = z.object({
 	project: slug,
 	files: z.array(inlineFileSchema).min(1).max(20000),
 	promote: z.boolean().default(true),
 	message: z.string().max(500).optional(),
+	/** Named environment to deploy into; production keeps the project's production pointer. */
+	environment: deployEnvironment,
 });
 export type DeployFiles = z.infer<typeof deployFilesSchema>;
 
@@ -42,6 +58,8 @@ export const deploySiteSchema = z.object({
 	files: z.array(inlineFileSchema).min(1).max(20000).optional(),
 	uploadId: z.string().min(1).max(64).optional(),
 	promote: z.boolean().default(true),
+	/** Named environment to deploy into; production keeps the project's production pointer. */
+	environment: deployEnvironment,
 	spa: z
 		.boolean()
 		.optional()

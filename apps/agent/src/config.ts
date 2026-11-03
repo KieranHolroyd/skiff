@@ -50,6 +50,14 @@ export interface AgentConfig {
 	 * node doesn't terminate TLS. Defaults to loopback on the first non-:80 Caddy listen port.
 	 */
 	certProbe: { host: string; port: number } | null;
+	/** Root-only helper socket that renders systemd units (tier 2/3). */
+	helperSocket: string;
+	/** Node workload-slice memory budget applied to `skiff-workloads.slice`. */
+	workloadSliceMb: number;
+	/** Directory where socket-activated workloads expose `<projectId>.sock`. */
+	workloadSocketDir: string;
+	/** How long to wait for `healthPath` before reporting a workload as starting. */
+	workloadHealthTimeoutMs: number;
 }
 
 export class ConfigError extends Error {
@@ -145,6 +153,30 @@ function parseUrl(value: string): string {
 	if (url.protocol !== 'http:' && url.protocol !== 'https:')
 		throw new ConfigError('SKIFF_CONTROL_URL must be http or https');
 	return value.replace(/\/+$/, '');
+}
+
+function parseIntegerEnv(
+	env: Env,
+	name: string,
+	fallback: number,
+	min: number,
+	max: number,
+): number {
+	const raw = env[name]?.trim();
+	if (!raw) return fallback;
+	const value = Number(raw);
+	if (!Number.isInteger(value) || value < min || value > max)
+		throw new ConfigError(`${name} must be an integer between ${min} and ${max}`);
+	return value;
+}
+
+/** Absolute host path for a socket/directory; no whitespace or control characters. */
+function parseAbsolutePath(env: Env, name: string, fallback: string): string {
+	const value = optional(env, name, fallback);
+	if (!value.startsWith('/')) throw new ConfigError(`${name} must be an absolute path`);
+	if (!/^[A-Za-z0-9._/@+-]+$/.test(value))
+		throw new ConfigError(`${name} contains whitespace or unsupported characters`);
+	return value;
 }
 
 function parseContentDomain(value: string | undefined): string | null {
@@ -255,6 +287,20 @@ export function loadConfig(env: Env = process.env): AgentConfig {
 		platformHost: parseContentDomain(env.SKIFF_PLATFORM_HOST),
 		platformUpstream: optional(env, 'SKIFF_PLATFORM_UPSTREAM', 'unix//run/skiff/control.sock'),
 		certProbe: parseCertProbe(env.SKIFF_CERT_PROBE_ADDR, caddyListen, tls),
+		helperSocket: parseAbsolutePath(env, 'SKIFF_HELPER_SOCKET', '/run/skiff-helper/helper.sock'),
+		workloadSliceMb: parseIntegerEnv(env, 'SKIFF_WORKLOAD_SLICE_MB', 1024, 32, 1_048_576),
+		workloadSocketDir: parseAbsolutePath(
+			env,
+			'SKIFF_WORKLOAD_SOCKET_DIR',
+			'/run/skiff-workloads',
+		),
+		workloadHealthTimeoutMs: parseIntegerEnv(
+			env,
+			'SKIFF_WORKLOAD_HEALTH_TIMEOUT_MS',
+			30_000,
+			1_000,
+			600_000,
+		),
 	};
 }
 

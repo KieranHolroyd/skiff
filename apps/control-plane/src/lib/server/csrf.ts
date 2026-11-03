@@ -19,6 +19,7 @@ const COOKIELESS_ENDPOINTS = new Set([
 	'/api/auth/oauth2/revoke',
 	'/api/auth/oauth2/introspect',
 	'/api/v1/cli/token',
+	'/api/domains/ask',
 	'/mcp',
 	'/_skiff/site-login',
 ]);
@@ -28,7 +29,8 @@ const COOKIELESS_ENDPOINTS = new Set([
  * object URLs). A cross-site request gains nothing there. Prefixes end in `/` so they never match
  * a sibling path in the cookie-authenticated REST API.
  */
-const COOKIELESS_PREFIXES = ['/api/agent/', '/api/objects/'];
+// `/api/webhooks/` is authenticated by the provider's HMAC signature, never a cookie.
+const COOKIELESS_PREFIXES = ['/api/agent/', '/api/objects/', '/api/webhooks/'];
 
 export type CsrfDecision = { ok: true } | { ok: false; reason: string };
 

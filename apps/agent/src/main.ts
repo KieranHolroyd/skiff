@@ -1,19 +1,23 @@
 import { promises as fs } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
 	desiredStateSchema,
 	heartbeatSchema,
+	workloadActivationSchema,
 	type DesiredState,
 	type Heartbeat,
 	type NodeStatus,
+	type WorkloadActivation,
 } from '@skiff/contracts';
 import type { TlsOptions } from '@skiff/site-config';
 import { CaddyAdmin } from './caddy.ts';
 import { CertProbe, certProbeTargets, tlsCertReader } from './certs.ts';
 import { buildCaddyConfig, isProductionRoute, tlsSubjects } from './caddy-config.ts';
 import { loadConfig, type AgentConfig } from './config.ts';
+import { HelperClient } from './helper-client.ts';
 import { formatEnv, JOIN_USAGE, joinNode, nodeFilePath, parseJoinArgs } from './join.ts';
 import { ReleaseManager } from './releases.ts';
+import { WorkloadRuntime, workloadHeartbeat } from './runtime.ts';
 import { StatsCollector } from './stats.ts';
 import { DesiredStateStore, desiredStateEtag } from './state.ts';
 import { TelemetryClient } from './telemetry.ts';
@@ -58,6 +62,7 @@ class AgentRuntime {
 	private readonly caddy: CaddyAdmin;
 	private readonly stats: StatsCollector;
 	private readonly certs: CertProbe | null;
+	private readonly workloads: WorkloadRuntime;
 
 	private desired: DesiredState | null = null;
 	private desiredEtag: string | null = null;
@@ -102,6 +107,16 @@ class AgentRuntime {
 					tlsCertReader(config.certProbe),
 				)
 			: null;
+		this.workloads = new WorkloadRuntime({
+			helper: new HelperClient(config.helperSocket),
+			releases: this.releases,
+			fetchActivation: (id, signal) => this.fetchWorkloadActivation(id, signal),
+			sliceMemoryMb: config.workloadSliceMb,
+			socketDir: config.workloadSocketDir,
+			healthTimeoutMs: config.workloadHealthTimeoutMs,
+			statePath: join(config.dataDir, 'workloads-state.json'),
+			log,
+		});
 	}
 
 	async run(): Promise<void> {
@@ -197,12 +212,17 @@ class AgentRuntime {
 		const path = requestPath(request.url);
 		if (path === '/metrics') return new Response(this.metricsText(), { headers: metricsHeaders() });
 		if (path === '/healthz') {
+			const reports = this.workloads.currentReports();
 			return Response.json({
 				ok: true,
 				nodeId: this.config.nodeId,
 				caddyOk: this.caddyOk,
 				desiredStateVersion: this.desired?.version ?? 0,
 				actualStateVersion: this.actualStateVersion,
+				workloads: {
+					total: reports.length,
+					running: reports.filter((report) => report.status === 'running').length,
+				},
 				lastReconcileSuccessAt: this.lastReconcileSuccessAt,
 			});
 		}
@@ -220,7 +240,7 @@ class AgentRuntime {
 		while (this.running) {
 			if (
 				this.desired &&
-				this.convergedVersion !== this.desired.version &&
+				(this.convergedVersion !== this.desired.version || this.workloads.needsRetry()) &&
 				!this.pullBeforeConverge
 			) {
 				try {
@@ -313,6 +333,34 @@ class AgentRuntime {
 		return true;
 	}
 
+	/**
+	 * Secret values are fetched only when a workload is (re)applied, straight from the control
+	 * plane, and handed to the helper. They never touch desired-state.json (D18, D23).
+	 */
+	private async fetchWorkloadActivation(
+		id: string,
+		signal: AbortSignal,
+	): Promise<WorkloadActivation> {
+		const response = await fetch(
+			`${this.config.controlUrl}/api/agent/workloads/${encodeURIComponent(id)}/activation`,
+			{
+				headers: {
+					authorization: `Bearer ${this.config.nodeToken}`,
+					accept: 'application/json',
+				},
+				signal,
+			},
+		);
+		if (!response.ok) {
+			const text = await response.text().catch(() => '');
+			throw new Error(`workload activation -> ${response.status}${text ? `: ${text}` : ''}`);
+		}
+		const parsed = workloadActivationSchema.safeParse(await response.json());
+		if (!parsed.success)
+			throw new Error(`workload activation failed validation: ${parsed.error.message}`);
+		return parsed.data;
+	}
+
 	private async converge(state: DesiredState): Promise<void> {
 		const started = Date.now();
 		this.lastReconcileAttemptAt = started;
@@ -340,6 +388,15 @@ class AgentRuntime {
 			// per-project symlink, so promote/rollback is an atomic swap.
 			if (isProductionRoute(route, state.contentDomain))
 				await this.releases.activate(route.projectId, route.release);
+		}
+
+		// Tier 2/3 workloads converge before Caddy loads their upstreams. A helper outage or a
+		// broken workload must never take static serving down, so failures are logged inside the
+		// runtime and this call is defensive as well.
+		try {
+			await this.workloads.converge(state, this.shutdownController.signal);
+		} catch (error) {
+			log('error', `Workload converge failed: ${errorText(error)}`);
 		}
 
 		const tls = this.config.tls ? this.tlsOptions(state) : undefined;
@@ -440,6 +497,8 @@ class AgentRuntime {
 		// Cached; refreshed in the background at most every ~6 h (cert-expiry alert, DESIGN §8).
 		const certs = this.certs?.current() ?? [];
 		if (certs.length > 0) stats.certs = certs;
+		// Actual unit state, so restart loops and OOM kills show up in the fleet view.
+		const reports = await this.workloads.refreshReports();
 		const body: Heartbeat = {
 			nodeId: this.config.nodeId,
 			agentVersion: this.config.agentVersion,
@@ -448,6 +507,7 @@ class AgentRuntime {
 			caddyOk: this.caddyOk,
 			stats,
 			releases: this.releases.listReleases(),
+			...(reports.length > 0 ? { workloads: workloadHeartbeat(reports) } : {}),
 		};
 
 		const parsed = heartbeatSchema.safeParse(body);
@@ -542,10 +602,23 @@ class AgentRuntime {
 
 	private metricsText(): string {
 		const telemetry = this.telemetry?.stats;
+		const workloadReports = this.workloads.currentReports();
 		const measurements: Array<[string, string, 'counter' | 'gauge', number]> = [
 			['skiff_agent_caddy_up', 'Whether the Caddy admin API is reachable.', 'gauge', this.caddyOk ? 1 : 0],
 			['skiff_agent_routes', 'Routes in the current desired state.', 'gauge', this.desired?.routes.length ?? 0],
 			['skiff_agent_releases', 'Verified releases on disk.', 'gauge', this.releases.listReleases().length],
+			[
+				'skiff_agent_workloads_total',
+				'Workloads reported by this node.',
+				'gauge',
+				workloadReports.length,
+			],
+			[
+				'skiff_agent_workloads_running',
+				'Workloads currently running.',
+				'gauge',
+				workloadReports.filter((report) => report.status === 'running').length,
+			],
 			[
 				'skiff_agent_desired_state_version',
 				'Version of the last pulled desired state.',

@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNotNull, lte, ne } from 'drizzle-orm';
-import { configSnapshots, deployments, projects, releases } from '@skiff/db';
-import { requirePermission, type Principal } from '@skiff/contracts';
+import { configSnapshots, deployments, environments, projects, releases } from '@skiff/db';
+import { contentUrl, requirePermission, type Principal } from '@skiff/contracts';
 import type { FileEntry } from './artifact.ts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, NotFoundError } from './errors.ts';
@@ -8,6 +8,7 @@ import type { PreparedRelease } from './releases.ts';
 import { newId, parseJson, shortId } from './util.ts';
 import type { ParsedConfig } from '@skiff/site-config';
 import type { ProjectRow } from './projects.ts';
+import type { EnvironmentRow } from './environments.ts';
 
 export interface DeploymentView {
 	id: string;
@@ -17,7 +18,14 @@ export interface DeploymentView {
 	status: string;
 	runtime: string;
 	release: { sha256: string; sizeBytes: number; fileCount: number; precompressed: boolean };
+	/** Environment the deployment was created in (legacy v1 rows read as production). */
+	environmentId: string | null;
+	environmentSlug: string;
+	environmentName: string;
+	/** Canonical host for this deployment: production if it follows production, else its environment. */
+	host: string;
 	previewUrl: string;
+	/** URL this deployment serves at its environment's pointer (production URL for production). */
 	productionUrl: string;
 	isProduction: boolean;
 	pinned: boolean;
@@ -25,6 +33,9 @@ export interface DeploymentView {
 	createdAt: string;
 	activatedAt: string | null;
 }
+
+type DeploymentOptions = { promote?: boolean; message?: string; environment?: string };
+type EnvironmentLike = Pick<EnvironmentRow, 'slug' | 'isProduction' | 'name'>;
 
 /** Release + config snapshot; immutable, preview URL always, production pointer moved explicitly (D13, D17). */
 export class DeploymentService {
@@ -38,7 +49,7 @@ export class DeploymentService {
 		principal: Principal,
 		project: ProjectRow,
 		entries: FileEntry[],
-		options: { promote?: boolean; message?: string; precompress?: boolean } = {},
+		options: DeploymentOptions & { precompress?: boolean } = {},
 	): Promise<DeploymentView> {
 		requirePermission(principal, 'deployment:create');
 		let prepared = await this.ctx.releases.prepare(principal, entries, { precompress: options.precompress });
@@ -56,7 +67,7 @@ export class DeploymentService {
 		principal: Principal,
 		project: ProjectRow,
 		prepared: PreparedRelease,
-		options: { promote?: boolean; message?: string } = {},
+		options: DeploymentOptions = {},
 	): DeploymentView {
 		requirePermission(principal, 'deployment:create');
 		const now = this.ctx.now();
@@ -67,11 +78,14 @@ export class DeploymentService {
 			if (!clash) break;
 			idShort = shortId();
 		}
-		const environment = this.ctx.environments.ensureProduction(project);
+		const environment = this.resolveEnvironment(project, options.environment);
 		const workload =
 			project.runtime === 'static' ? null : this.ctx.workloads.plan(principal, project);
 		const nodeId = workload?.nodeId ?? this.nodeForPlacement(project.placement);
+		// `promote` moves the pointer for the deployment's own environment. Only production also
+		// moves the project-level pointer; non-production environments never touch it.
 		const promote = options.promote ?? true;
+		const promoteProduction = promote && environment.isProduction;
 		const row: typeof deployments.$inferInsert = {
 			id,
 			orgId: project.orgId,
@@ -90,7 +104,7 @@ export class DeploymentService {
 			createdBy: principal.userId,
 			createdAt: now,
 			activatedAt: now,
-			promotedAt: promote ? now : null,
+			promotedAt: promoteProduction ? now : null,
 		};
 		this.ctx.audit.wrap(
 			{
@@ -98,17 +112,23 @@ export class DeploymentService {
 				action: 'deployment.create',
 				resource: 'deployment',
 				resourceId: id,
-				args: { project: project.slug, sha256: prepared.release.sha256, promote },
+				args: {
+					project: project.slug,
+					sha256: prepared.release.sha256,
+					promote,
+					environment: environment.slug,
+				},
 			},
 			() => {
 				this.ctx.db.insert(deployments).values(row).run();
 				if (workload) this.ctx.workloads.record(project, id, workload);
 				if (promote) {
-					this.ctx.db
-						.update(projects)
-						.set({ productionDeploymentId: id, updatedAt: now })
-						.where(eq(projects.id, project.id))
-						.run();
+					if (promoteProduction)
+						this.ctx.db
+							.update(projects)
+							.set({ productionDeploymentId: id, updatedAt: now })
+							.where(eq(projects.id, project.id))
+							.run();
 					this.ctx.environments.setDeployment(environment, id);
 				}
 				this.ctx.db
@@ -120,7 +140,7 @@ export class DeploymentService {
 			},
 		);
 		this.retention(project);
-		return this.view(row as typeof deployments.$inferSelect, project, promote);
+		return this.view(row as typeof deployments.$inferSelect, project, promoteProduction);
 	}
 
 	private nodeForPlacement(placement: string): string | null {
@@ -137,6 +157,12 @@ export class DeploymentService {
 
 	view(row: typeof deployments.$inferSelect, project: ProjectRow, isProduction?: boolean): DeploymentView {
 		const release = this.ctx.db.select().from(releases).where(eq(releases.id, row.releaseId)).get();
+		const environment = this.environmentOf(row);
+		const production = isProduction ?? project.productionDeploymentId === row.id;
+		// A deployment that serves production uses the project host; otherwise the environment host.
+		const host = production
+			? `${project.slug}.${this.contentDomain()}`
+			: this.ctx.environments.hostFor(project, environment);
 		return {
 			id: row.id,
 			shortId: row.shortId,
@@ -150,14 +176,31 @@ export class DeploymentService {
 				fileCount: release?.fileCount ?? 0,
 				precompressed: release?.precompressed ?? false,
 			},
-			previewUrl: `https://${row.previewHost}`,
-			productionUrl: `https://${project.slug}.${this.contentDomain()}`,
-			isProduction: isProduction ?? project.productionDeploymentId === row.id,
+			environmentId: row.environmentId,
+			environmentSlug: environment.slug,
+			environmentName: environment.name,
+			host,
+			previewUrl: contentUrl(this.ctx.config.platformOrigin, row.previewHost),
+			productionUrl: contentUrl(this.ctx.config.platformOrigin, host),
+			isProduction: production,
 			pinned: row.pinned,
 			message: row.message,
 			createdAt: new Date(row.createdAt).toISOString(),
 			activatedAt: row.activatedAt ? new Date(row.activatedAt).toISOString() : null,
 		};
+	}
+
+	private environmentOf(row: Pick<typeof deployments.$inferSelect, 'environmentId'>): EnvironmentLike {
+		if (!row.environmentId) return { slug: 'production', isProduction: true, name: 'Production' };
+		const stored = this.ctx.db.select().from(environments).where(eq(environments.id, row.environmentId)).get();
+		return stored ?? { slug: 'production', isProduction: true, name: 'Production' };
+	}
+
+	/** `undefined`/`production` resolves to the built-in production environment. */
+	private resolveEnvironment(project: ProjectRow, slug?: string): EnvironmentRow {
+		const production = this.ctx.environments.ensureProduction(project);
+		if (!slug || slug === production.slug) return production;
+		return this.ctx.environments.requireRow(project, slug);
 	}
 
 	list(principal: Principal, project: ProjectRow, options: { limit?: number } = {}): DeploymentView[] {
@@ -188,20 +231,44 @@ export class DeploymentService {
 		return this.view(row, project);
 	}
 
-	async promote(principal: Principal, project: ProjectRow, idOrShort: string): Promise<DeploymentView> {
+	/**
+	 * Point an environment at an existing deployment. Production is byte-for-byte the v1 behaviour:
+	 * `promotedAt` records production history so rollback can walk it. Non-production environments
+	 * only move their own pointer and never touch the project's production pointer.
+	 */
+	async promote(
+		principal: Principal,
+		project: ProjectRow,
+		idOrShort: string,
+		environmentSlug?: string,
+	): Promise<DeploymentView> {
 		requirePermission(principal, 'deployment:promote');
 		const row = this.requireRow(project, idOrShort);
 		if (row.status !== 'active') throw new ConflictError('Only active deployments can be promoted.');
+		const environment = this.resolveEnvironment(project, environmentSlug);
 		const now = this.ctx.now();
 		await this.ctx.audit.wrap(
-			{ principal, action: 'deployment.promote', resource: 'deployment', resourceId: row.id, args: { project: project.slug } },
+			{
+				principal,
+				action: 'deployment.promote',
+				resource: 'deployment',
+				resourceId: row.id,
+				args: { project: project.slug, environment: environment.slug },
+			},
 			() => {
+				if (!environment.isProduction) {
+					this.ctx.environments.setDeployment(environment, row.id);
+					this.ctx.projects.bump(project.orgId);
+					return;
+				}
 				this.ctx.db.update(deployments).set({ promotedAt: now }).where(eq(deployments.id, row.id)).run();
 				this.setProduction(project, row.id, now);
 			},
 		);
 		this.retention(project);
-		return this.view({ ...row, promotedAt: now }, { ...project, productionDeploymentId: row.id });
+		return environment.isProduction
+			? this.view({ ...row, promotedAt: now }, { ...project, productionDeploymentId: row.id })
+			: this.view(row, project);
 	}
 
 	/**
@@ -209,8 +276,10 @@ export class DeploymentService {
 	 * history, never a preview that was never promoted). The target keeps its original
 	 * `promotedAt`, so repeated rollbacks keep walking back instead of toggling between two.
 	 */
-	async rollback(principal: Principal, project: ProjectRow): Promise<DeploymentView> {
+	async rollback(principal: Principal, project: ProjectRow, environmentSlug?: string): Promise<DeploymentView> {
 		requirePermission(principal, 'deployment:rollback');
+		const environment = this.resolveEnvironment(project, environmentSlug);
+		if (!environment.isProduction) return this.rollbackEnvironment(principal, project, environment);
 		const previous = this.previouslyPromoted(project);
 		if (!previous)
 			throw new ConflictError(
@@ -228,6 +297,59 @@ export class DeploymentService {
 		);
 		this.retention({ ...project, productionDeploymentId: previous.id });
 		return this.view(previous, { ...project, productionDeploymentId: previous.id });
+	}
+
+	/**
+	 * Non-production rollback: environments have no `promotedAt` history (that column is production
+	 * only, D13), so walk the deployments created in that environment instead.
+	 */
+	private async rollbackEnvironment(
+		principal: Principal,
+		project: ProjectRow,
+		environment: EnvironmentRow,
+	): Promise<DeploymentView> {
+		const previous = this.previousInEnvironment(project, environment);
+		if (!previous)
+			throw new ConflictError(
+				`No earlier deployment in the ${environment.name} environment to roll back to. Promote a specific deployment instead.`,
+			);
+		await this.ctx.audit.wrap(
+			{
+				principal,
+				action: 'deployment.rollback',
+				resource: 'deployment',
+				resourceId: previous.id,
+				args: { project: project.slug, environment: environment.slug, from: environment.deploymentId },
+			},
+			() => {
+				this.ctx.environments.setDeployment(environment, previous.id);
+				this.ctx.projects.bump(project.orgId);
+			},
+		);
+		this.retention(project);
+		return this.view(previous, project);
+	}
+
+	/** Most recent active deployment in `environment` older than its current pointer. */
+	private previousInEnvironment(project: ProjectRow, environment: EnvironmentRow) {
+		const current = environment.deploymentId
+			? this.ctx.db.select().from(deployments).where(eq(deployments.id, environment.deploymentId)).get()
+			: undefined;
+		const filters = [
+			eq(deployments.projectId, project.id),
+			eq(deployments.status, 'active'),
+			eq(deployments.environmentId, environment.id),
+		];
+		if (current) {
+			filters.push(ne(deployments.id, current.id));
+			filters.push(lte(deployments.createdAt, current.createdAt));
+		}
+		return this.ctx.db
+			.select()
+			.from(deployments)
+			.where(and(...filters))
+			.orderBy(desc(deployments.createdAt))
+			.get();
 	}
 
 	/**
@@ -311,6 +433,15 @@ export class DeploymentService {
 				} else {
 					this.ctx.projects.bump(project.orgId);
 				}
+				// Any environment pointing at the deleted deployment falls back, or stops serving,
+				// rather than routing to a deleted release. Production moved above.
+				for (const environment of this.ctx.environments.rows(project.id)) {
+					if (environment.isProduction || environment.deploymentId !== row.id) continue;
+					this.ctx.environments.setDeployment(
+						environment,
+						this.previousInEnvironment(project, environment)?.id ?? null,
+					);
+				}
 			},
 		);
 		this.retention(project);
@@ -334,11 +465,18 @@ export class DeploymentService {
 			.where(and(eq(deployments.projectId, project.id), eq(deployments.status, 'active')))
 			.orderBy(desc(deployments.createdAt))
 			.all();
+		// Every environment pointer protects its deployment from retention, not just production.
+		const environmentPointers = new Set(
+			this.ctx.environments
+				.rows(project.id)
+				.map((environment) => environment.deploymentId)
+				.filter((id): id is string => Boolean(id)),
+		);
 		let unpinned = 0;
 		const remove: string[] = [];
 		for (const row of rows) {
 			const isProduction = row.id === project.productionDeploymentId;
-			if (row.pinned || isProduction) continue;
+			if (row.pinned || isProduction || environmentPointers.has(row.id)) continue;
 			unpinned++;
 			if (unpinned > keep) remove.push(row.id);
 		}
