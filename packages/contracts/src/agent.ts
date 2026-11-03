@@ -1,5 +1,7 @@
 import * as z from 'zod';
 import { accessModes, deploymentStatuses, nodeStatuses, runtimes } from './model.ts';
+import { domainKinds } from './domain.ts';
+import { workloadDesiredSchema, workloadStatuses } from './workload.ts';
 
 /**
  * The agent protocol (DESIGN §3.3). The control plane stores desired state per node;
@@ -80,6 +82,16 @@ export const desiredStateSchema = z.object({
 		host: z.string(),
 		to: z.string(),
 	})).default([]),
+	/** Tier 2/3 workloads placed on this node (DESIGN §3.4.1). */
+	workloads: z.array(workloadDesiredSchema).default([]),
+	/** Custom domains this node serves; TLS is on-demand and authorized by the control plane. */
+	domains: z.array(z.object({
+		host: z.string(),
+		projectId: z.string(),
+		kind: z.enum(domainKinds),
+		/** When set, this host 301s to the sibling (apex↔www). */
+		redirectTo: z.string().nullable().default(null),
+	})).default([]),
 });
 export type DesiredState = z.infer<typeof desiredStateSchema>;
 
@@ -97,8 +109,20 @@ export const heartbeatSchema = z.object({
 		diskTotalBytes: z.number().int().nonnegative(),
 		uptimeSeconds: z.number().nonnegative(),
 		load1: z.number().nonnegative(),
+		/**
+		 * TLS certificates this node's Caddy serves, probed locally (DESIGN §8 "cert expiring < 14 d").
+		 * `host` is the SNI probed (`*.<contentDomain>` for the wildcard); `notAfter` is ISO 8601.
+		 */
+		certs: z.array(z.object({ host: z.string().max(253), notAfter: z.string().max(40) })).max(50),
 	}).partial().optional(),
 	releases: z.array(z.object({ sha256: z.string(), sizeBytes: z.number().int().nonnegative() })).default([]),
+	/** Actual workload state, so the fleet view reflects restart loops and OOM kills (DESIGN §9). */
+	workloads: z.array(z.object({
+		id: z.string(),
+		status: z.enum(workloadStatuses),
+		restarts: z.number().int().nonnegative().default(0),
+		memoryBytes: z.number().int().nonnegative().optional(),
+	})).optional(),
 });
 export type Heartbeat = z.infer<typeof heartbeatSchema>;
 

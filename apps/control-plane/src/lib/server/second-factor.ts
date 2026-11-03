@@ -1,0 +1,77 @@
+import { readMembership } from '@skiff/core';
+import { devPasswordLogin } from './config';
+import { sqlite } from './db';
+import { MAX_SECOND_FACTOR_FAILURES, type SecondFactor } from './second-factor-policy';
+
+/**
+ * Wiring for the owner second-factor policy (see `second-factor-policy.ts` for the rules).
+ *
+ * Enforcement is on by default. `SKIFF_OWNER_2FA=0` turns it off; when unset it is also off in
+ * dev password-login mode (never available in production), so local development and the e2e suites
+ * can sign in headlessly.
+ */
+export const enforceOwnerSecondFactor =
+	process.env.SKIFF_OWNER_2FA !== undefined ? process.env.SKIFF_OWNER_2FA === '1' : !devPasswordLogin;
+
+/** Whether the user has any second factor enrolled: a passkey or a verified authenticator app. */
+export function userHasSecondFactor(userId: string): boolean {
+	try {
+		const row = sqlite
+			.query<{ totp: number | null; passkeys: number }, [string, string]>(
+				`SELECT (SELECT twoFactorEnabled FROM user WHERE id = ?) AS totp,
+				        (SELECT count(*) FROM passkey WHERE userId = ?) AS passkeys`
+			)
+			.get(userId, userId);
+		return Boolean(row?.totp) || (row?.passkeys ?? 0) > 0;
+	} catch {
+		return false; // auth tables not migrated yet
+	}
+}
+
+export function userIsOwner(userId: string): boolean {
+	return readMembership(sqlite, userId)?.role === 'owner';
+}
+
+export function userHasTotp(userId: string): boolean {
+	try {
+		return Boolean(
+			sqlite.query<{ v: number | null }, [string]>('SELECT twoFactorEnabled AS v FROM user WHERE id = ?').get(userId)?.v
+		);
+	} catch {
+		return false;
+	}
+}
+
+export function userHasPasskey(userId: string): boolean {
+	try {
+		return Boolean(sqlite.query<{ id: string }, [string]>('SELECT id FROM passkey WHERE userId = ? LIMIT 1').get(userId));
+	} catch {
+		return false;
+	}
+}
+
+/** Record that this session proved `factor` (the `secondFactor` session field, see auth.ts). */
+export function markSessionSecondFactor(sessionId: string, factor: SecondFactor): void {
+	sqlite.run('UPDATE session SET secondFactor = ? WHERE id = ?', [factor, sessionId]);
+	failures.delete(sessionId);
+}
+
+/** Failed codes per unproven session; in memory is enough (a restart only resets the budget). */
+const failures = new Map<string, number>();
+
+/** Count a failed code. Returns true once the session has used up its attempts. */
+export function recordSecondFactorFailure(sessionId: string): boolean {
+	const count = (failures.get(sessionId) ?? 0) + 1;
+	failures.set(sessionId, count);
+	if (failures.size > 10_000) failures.delete(failures.keys().next().value!);
+	return count >= MAX_SECOND_FACTOR_FAILURES;
+}
+
+export function secondFactorAttemptsExhausted(sessionId: string): boolean {
+	return (failures.get(sessionId) ?? 0) >= MAX_SECOND_FACTOR_FAILURES;
+}
+
+export function revokeSession(sessionId: string): void {
+	sqlite.run('DELETE FROM session WHERE id = ?', [sessionId]);
+	failures.delete(sessionId);
+}

@@ -7,6 +7,8 @@ import { platformOrigin } from '#lib/server/config.js';
 import { checkCsrf } from '#lib/server/csrf.js';
 import { core } from '#lib/server/core.js';
 import { principalFromRequest, principalFromSession } from '#lib/server/principal.js';
+import { enforceOwnerSecondFactor, userHasSecondFactor } from '#lib/server/second-factor.js';
+import { isExemptBeforeSecondFactor, secondFactorState } from '#lib/server/second-factor-policy.js';
 
 /**
  * Apply Better Auth's schema on boot.
@@ -47,9 +49,41 @@ export const handle: Handle = async ({ event, resolve }) => {
 		event.locals.principal = await principalFromRequest(event.request);
 	}
 
+	// Owner second factor (D10, second-factor-policy.ts): an owner's session must have proved a
+	// passkey or authenticator code before it can reach anything beyond the challenge page.
+	if (session && event.locals.principal && !isExemptBeforeSecondFactor(event.url.pathname)) {
+		const state = secondFactorState({
+			enforce: enforceOwnerSecondFactor,
+			role: event.locals.principal.role,
+			kind: event.locals.principal.kind,
+			sessionFactor: (session.session as { secondFactor?: string | null }).secondFactor,
+			hasFactor: event.locals.principal.role === 'owner' && userHasSecondFactor(session.user.id),
+		});
+		if (state !== 'satisfied') return withFrameProtection(secondFactorRequired(event.request, event.url));
+	}
+
 	const response = await svelteKitHandler({ event, resolve, auth, building });
 	return withFrameProtection(response);
 };
+
+/** Pages redirect to the challenge (and back afterwards); API calls get a JSON 403. */
+function secondFactorRequired(request: Request, url: URL): Response {
+	const isRead = request.method === 'GET' || request.method === 'HEAD';
+	const dataRequest = url.pathname.endsWith('/__data.json');
+	const page = dataRequest ? url.pathname.slice(0, -'/__data.json'.length) || '/' : url.pathname;
+	const location = `/two-factor?redirect=${encodeURIComponent(`${page}${dataRequest ? '' : url.search}`)}`;
+	// Client-side navigation fetches `__data.json`; SvelteKit follows a redirect given in its own format.
+	if (isRead && dataRequest) return Response.json({ type: 'redirect', location }, { headers: { 'cache-control': 'no-store' } });
+	if (isRead && (request.headers.get('accept') ?? '').includes('text/html'))
+		return new Response(null, { status: 303, headers: { location, 'cache-control': 'no-store' } });
+	return Response.json(
+		{
+			error: 'second_factor_required',
+			message: 'Owners must verify a passkey or authenticator app first. Open /two-factor in the dashboard.',
+		},
+		{ status: 403 },
+	);
+}
 
 /**
  * Nothing on the platform origin is meant to be framed. This stops clickjacking of the consent and

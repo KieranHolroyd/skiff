@@ -52,6 +52,8 @@ if [ "$PURGE" = "1" ] && [ "$YES" != "1" ]; then
 fi
 
 UNITS="
+skiff-platform-config.path
+skiff-platform-config.service
 skiff-restore-drill.timer
 skiff-restore-drill.service
 skiff-litestream.service
@@ -76,7 +78,8 @@ systemctl reset-failed >/dev/null 2>&1 || true
 say "Removing binaries and operator commands"
 rm -rf "$OPT_DIR"
 rm -f /usr/local/bin/skiff-restore /usr/local/bin/skiff-restore-drill /usr/local/bin/skiff-uninstall
-rm -f /usr/local/bin/skif /usr/local/bin/skiff /usr/local/sbin/skiff-update-self
+rm -f /usr/local/bin/skif /usr/local/bin/skiff /usr/local/sbin/skiff-update-self /usr/local/sbin/skiff-platform-config
+rm -f /usr/local/sbin/skiff-restore /usr/local/sbin/skiff-restore-drill /usr/local/sbin/skiff-alert
 rm -rf /run/skiff
 
 if [ "$PURGE" != "1" ]; then

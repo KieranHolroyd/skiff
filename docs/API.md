@@ -1,6 +1,7 @@
 # Skiff REST API (v1)
 
-Base URL: `https://<platformOrigin>/api/v1`. Authentication is either the Better Auth session
+Base URL: `https://<platformOrigin>/api/v1`. "Platform admin" means the Better Auth admin-plugin
+user role (`user.role = admin`), never an org owner/admin. Authentication is either the Better Auth session
 cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mutation also sends
 `Origin: <platformOrigin>` (CSRF policy). Errors are JSON:
 
@@ -20,7 +21,7 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | DELETE | `/projects/:slug` | `project:delete` | soft delete, restorable 7 days |
 | POST | `/projects/:slug/restore` | `project:update` | |
 | POST | `/projects/:slug/access` | `project:update` | `{ scope: production\|previews, mode: public\|password\|platform, password? }` |
-| POST | `/projects/:slug/deploy` | `deployment:create` | inline files (`deploy_files`) |
+| POST | `/projects/:slug/deploy` | `deployment:create` | inline files (`deploy_files`); the URL slug is the target (`project` in the body is optional and must match) |
 | GET | `/projects/:slug/deployments` | `deployment:read` | |
 | GET | `/projects/:slug/deployments/:id` | `deployment:read` | id or short id |
 | DELETE | `/projects/:slug/deployments/:id` | `deployment:delete` | |
@@ -32,16 +33,16 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | DELETE | `/projects/:slug/shares/:id` | `shareLink:revoke` | pushes revocation to agents |
 | GET | `/projects/:slug/logs` | `logs:read` | static sites: empty + note |
 | POST | `/uploads` | `deployment:create` | `{ project, fileCount?, totalBytes? }` → presigned PUT |
-| POST | `/uploads/:id/finalize` | `deployment:create` | `{ uploadId, project, promote?, message? }` |
-| GET | `/nodes` | platform admin | |
-| POST | `/nodes/join-token` | platform admin | single-use, 1 h |
-| POST | `/nodes/:id/drain` \| `/resume` | platform admin | |
-| POST | `/nodes/:id/rotate-token` | platform admin | |
+| POST | `/uploads/:id/finalize` | `deployment:create` | `{ project, uploadId?, promote?, message? }`; `uploadId` must match `:id`, and the upload must belong to `project` |
+| GET | `/nodes` | platform admin | any surface (session, API key, MCP) of a platform-admin user |
+| POST | `/nodes/join-token` | platform admin **session** | single-use, 1 h; 403 for API keys / OAuth tokens |
+| POST | `/nodes/:id/drain` \| `/resume` | platform admin **session** | |
+| POST | `/nodes/:id/rotate-token` | platform admin **session** | |
 | GET | `/audit` | `project:read` | `?limit&action&resource` |
 | GET | `/secrets` | `secret:read-metadata` | values never returned |
 | POST | `/secrets` | `secret:create` | `{ name, value, projectId?, type? }` |
 | DELETE | `/secrets/:id` | `secret:delete` | |
-| POST | `/cli/token` | — | exchange a one-time CLI login code + PKCE verifier for an API key |
+| POST | `/cli/token` | `apiKey:create` | exchange a one-time CLI login code + PKCE verifier for an API key |
 
 ## CLI browser login (`/cli/login`, `/api/v1/cli/token`)
 

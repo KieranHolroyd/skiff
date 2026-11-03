@@ -6,4 +6,8 @@ export * from './self-update.ts';
 export * from './platform-config.ts';
 export * from './model.ts';
 export * from './api.ts';
+export * from './workload.ts';
+export * from './build.ts';
+export * from './domain.ts';
+export * from './environment.ts';
 export * from './agent.ts';

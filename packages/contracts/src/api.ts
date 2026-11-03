@@ -2,8 +2,6 @@ import * as z from 'zod';
 import { accessModes, runtimes } from './model.ts';
 
 const slug = z.string().min(3).max(40);
-const hostname = z.string().min(1).max(253);
-
 export const projectCreateSchema = z.object({
 	name: z.string().min(1).max(120).optional(),
 	slug: slug.optional(),
@@ -92,12 +90,6 @@ export const promoteSchema = z.object({
 	deploymentId: z.string().min(1).max(64),
 });
 export type Promote = z.infer<typeof promoteSchema>;
-
-export const domainCreateSchema = z.object({
-	project: slug,
-	hostname,
-});
-export type DomainCreate = z.infer<typeof domainCreateSchema>;
 
 export const paginationSchema = z.object({
 	limit: z.coerce.number().int().min(1).max(200).default(50),

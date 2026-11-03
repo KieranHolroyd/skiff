@@ -7,6 +7,16 @@ import type { CoreContext } from './context.ts';
 import { ALERT_AFTER_MS } from './nodes.ts';
 
 const DAY_MS = 86_400_000;
+const MINUTE_MS = 60_000;
+/** Certificates closer than this to expiry alert (DESIGN §8); closer than the second, critically. */
+export const CERT_WARN_MS = 14 * DAY_MS;
+export const CERT_CRITICAL_MS = 3 * DAY_MS;
+/** How long after a promote the 5xx comparison keeps running (DESIGN §8 "5xx spike after promote"). */
+export const PROMOTE_WATCH_MS = 30 * MINUTE_MS;
+/** Thresholds: enough traffic to judge, a real error rate, and clearly worse than before. */
+export const SPIKE_MIN_REQUESTS = 20;
+export const SPIKE_MIN_RATIO = 0.05;
+export const SPIKE_FACTOR = 2;
 const PARQUET_STATE_KEY = 'telemetry:parquet_exported_day';
 
 export interface MaintenanceReport {
@@ -65,14 +75,19 @@ export class MaintenanceService {
 		for (const nodeId of this.caddyDownSince.keys())
 			if (!caddyDown.has(nodeId)) this.caddyDownSince.delete(nodeId);
 
-		// Disk pressure and certificate alerts are evaluated by the agent/dashboard when stats exist.
+		// Disk pressure and certificate expiry come from the stats each agent reports in heartbeats.
 		const nodesWithStats = this.ctx.sqlite
-			.query<{ id: string; stats_json: string | null }, []>('SELECT id, stats_json FROM nodes')
+			.query<{ id: string; name: string; stats_json: string | null }, []>('SELECT id, name, stats_json FROM nodes')
 			.all();
 		for (const node of nodesWithStats) {
 			if (!node.stats_json) continue;
 			try {
-				const stats = JSON.parse(node.stats_json) as { diskUsedBytes?: number; diskTotalBytes?: number };
+				const stats = JSON.parse(node.stats_json) as {
+					diskUsedBytes?: number;
+					diskTotalBytes?: number;
+					certs?: Array<{ host?: unknown; notAfter?: unknown }>;
+				};
+				alertsFired.push(...(await this.certAlerts(node, stats.certs)));
 				if (stats.diskUsedBytes && stats.diskTotalBytes) {
 					const used = stats.diskUsedBytes / stats.diskTotalBytes;
 					if (used > 0.85) {
@@ -90,6 +105,8 @@ export class MaintenanceService {
 				/* ignore malformed stats */
 			}
 		}
+
+		alertsFired.push(...(await this.promoteSpikeAlerts()));
 
 		let telemetry: MaintenanceReport['telemetry'];
 		if (this.ctx.telemetry?.available) {
@@ -136,6 +153,92 @@ export class MaintenanceService {
 		return day;
 	}
 
+	/**
+	 * One alert per certificate (host + expiry) when it is under 14 days from expiry, and a second,
+	 * critical one under 3 days. Keying on `notAfter` means a renewed certificate alerts afresh
+	 * next cycle, while a stuck one doesn't page every 30 minutes.
+	 */
+	private async certAlerts(node: { id: string; name: string }, certs: unknown): Promise<string[]> {
+		if (!Array.isArray(certs)) return [];
+		const fired: string[] = [];
+		const now = this.ctx.now();
+		for (const cert of certs as Array<{ host?: unknown; notAfter?: unknown }>) {
+			if (typeof cert?.host !== 'string' || typeof cert.notAfter !== 'string') continue;
+			const notAfter = Date.parse(cert.notAfter);
+			if (!Number.isFinite(notAfter)) continue;
+			const remaining = notAfter - now;
+			if (remaining >= CERT_WARN_MS) continue;
+			const critical = remaining < CERT_CRITICAL_MS;
+			const key = `cert:${critical ? 'critical' : 'warning'}:${cert.host}:${cert.notAfter}`;
+			if (this.alertSeen(key)) continue;
+			const days = remaining / DAY_MS;
+			fired.push(key);
+			await this.notify({
+				key,
+				title: remaining <= 0 ? 'TLS certificate expired' : 'TLS certificate expiring',
+				detail:
+					remaining <= 0
+						? `The certificate for ${cert.host} on node ${node.name} expired at ${cert.notAfter}. Check the Cloudflare DNS-01 token and Caddy logs.`
+						: `The certificate for ${cert.host} on node ${node.name} expires in ${days.toFixed(1)} days (${cert.notAfter}). Caddy normally renews ~30 days ahead; check the Cloudflare DNS-01 token and Caddy logs.`,
+				severity: critical ? 'critical' : 'warning',
+			});
+		}
+		return fired;
+	}
+
+	/**
+	 * For deployments promoted in the last 30 minutes, compare the production host's 5xx ratio since
+	 * the promote with an equally long window before it. Fires once per deployment. Fail-open: no
+	 * telemetry, no alert.
+	 */
+	private async promoteSpikeAlerts(): Promise<string[]> {
+		const telemetry = this.ctx.telemetry;
+		if (!telemetry?.available) return [];
+		const now = this.ctx.now();
+		const fired: string[] = [];
+		for (const deployment of this.ctx.deployments.recentlyPromoted(now - PROMOTE_WATCH_MS)) {
+			const key = `promote_5xx:${deployment.id}`;
+			if (this.alertSeen(key)) continue;
+			const host = `${deployment.slug}.${this.ctx.config.contentDomain}`;
+			const promoteMinute = Math.floor(deployment.promoted_at / MINUTE_MS) * MINUTE_MS;
+			const windowMs = Math.max(MINUTE_MS, Math.floor(now / MINUTE_MS) * MINUTE_MS - promoteMinute + MINUTE_MS);
+			try {
+				const after = await this.windowTotals(host, promoteMinute, now);
+				const before = await this.windowTotals(host, promoteMinute - windowMs, promoteMinute - 1);
+				const spike = isPromoteSpike(before, after);
+				if (!spike) continue;
+				fired.push(key);
+				const pct = (value: number) => `${(value * 100).toFixed(1)}%`;
+				await this.notify({
+					key,
+					title: '5xx spike after promote',
+					detail:
+						`${deployment.slug}: ${pct(spike.afterRatio)} of ${after.requests} requests returned 5xx since deployment ` +
+						`${deployment.short_id} was promoted (before: ${before.requests ? pct(spike.beforeRatio) : 'no traffic'}). ` +
+						`Consider \`skif rollback ${deployment.slug}\` or the rollback tool.`,
+					severity: 'critical',
+				});
+			} catch (error) {
+				console.error('[maintenance] 5xx check failed:', error);
+			}
+		}
+		return fired;
+	}
+
+	private async windowTotals(host: string, from: number, to: number): Promise<{ requests: number; status5xx: number }> {
+		const points = await this.ctx.telemetry!.query({ host, from, to, interval: '1m' });
+		return points.reduce(
+			(sum, point) => ({ requests: sum.requests + point.requests, status5xx: sum.status5xx + point.status5xx }),
+			{ requests: 0, status5xx: 0 },
+		);
+	}
+
+	private alertSeen(key: string): boolean {
+		return Boolean(
+			this.ctx.sqlite.query<{ key: string }, [string]>('SELECT key FROM alert_state WHERE key = ?').get(key),
+		);
+	}
+
 	/** Record the monthly restore drill outcome; a failure must alert (DESIGN §10). */
 	recordBackupRun(kind: 'backup' | 'restore-drill', status: 'running' | 'ok' | 'failed', detail?: string): string {
 		const id = `bkr_${crypto.randomUUID().replace(/-/g, '')}`;
@@ -176,4 +279,20 @@ export class MaintenanceService {
 			}
 		}
 	}
+}
+
+/**
+ * The 5xx-after-promote rule: at least 20 requests since the promote, a 5xx ratio of 5% or more,
+ * and at least double the ratio before (or 5xx where there were none). Returns the ratios on a hit.
+ */
+export function isPromoteSpike(
+	before: { requests: number; status5xx: number },
+	after: { requests: number; status5xx: number },
+): { beforeRatio: number; afterRatio: number } | null {
+	if (after.requests < SPIKE_MIN_REQUESTS) return null;
+	const afterRatio = after.status5xx / after.requests;
+	if (afterRatio < SPIKE_MIN_RATIO) return null;
+	const beforeRatio = before.requests > 0 ? before.status5xx / before.requests : 0;
+	if (beforeRatio > 0 && afterRatio < beforeRatio * SPIKE_FACTOR) return null;
+	return { beforeRatio, afterRatio };
 }

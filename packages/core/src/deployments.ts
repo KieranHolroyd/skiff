@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, ne } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, lte, ne } from 'drizzle-orm';
 import { configSnapshots, deployments, projects, releases } from '@skiff/db';
 import { requirePermission, type Principal } from '@skiff/contracts';
 import type { FileEntry } from './artifact.ts';
@@ -67,7 +67,10 @@ export class DeploymentService {
 			if (!clash) break;
 			idShort = shortId();
 		}
-		const nodeId = this.nodeForPlacement(project.placement);
+		const environment = this.ctx.environments.ensureProduction(project);
+		const workload =
+			project.runtime === 'static' ? null : this.ctx.workloads.plan(principal, project);
+		const nodeId = workload?.nodeId ?? this.nodeForPlacement(project.placement);
 		const promote = options.promote ?? true;
 		const row: typeof deployments.$inferInsert = {
 			id,
@@ -76,7 +79,9 @@ export class DeploymentService {
 			releaseId: prepared.release.id,
 			configSnapshotId: prepared.snapshotId,
 			shortId: idShort,
+			environmentId: environment.id,
 			runtime: project.runtime,
+			workloadJson: workload ? JSON.stringify(workload.spec) : null,
 			status: 'active',
 			previewHost: `${project.slug}--${idShort}.${this.contentDomain()}`,
 			pinned: false,
@@ -85,6 +90,7 @@ export class DeploymentService {
 			createdBy: principal.userId,
 			createdAt: now,
 			activatedAt: now,
+			promotedAt: promote ? now : null,
 		};
 		this.ctx.audit.wrap(
 			{
@@ -96,12 +102,14 @@ export class DeploymentService {
 			},
 			() => {
 				this.ctx.db.insert(deployments).values(row).run();
+				if (workload) this.ctx.workloads.record(project, id, workload);
 				if (promote) {
 					this.ctx.db
 						.update(projects)
 						.set({ productionDeploymentId: id, updatedAt: now })
 						.where(eq(projects.id, project.id))
 						.run();
+					this.ctx.environments.setDeployment(environment, id);
 				}
 				this.ctx.db
 					.update(projects)
@@ -184,42 +192,95 @@ export class DeploymentService {
 		requirePermission(principal, 'deployment:promote');
 		const row = this.requireRow(project, idOrShort);
 		if (row.status !== 'active') throw new ConflictError('Only active deployments can be promoted.');
+		const now = this.ctx.now();
 		await this.ctx.audit.wrap(
 			{ principal, action: 'deployment.promote', resource: 'deployment', resourceId: row.id, args: { project: project.slug } },
 			() => {
-				this.ctx.db
-					.update(projects)
-					.set({ productionDeploymentId: row.id, updatedAt: this.ctx.now() })
-					.where(eq(projects.id, project.id))
-					.run();
-				this.ctx.projects.bump(project.orgId);
+				this.ctx.db.update(deployments).set({ promotedAt: now }).where(eq(deployments.id, row.id)).run();
+				this.setProduction(project, row.id, now);
 			},
 		);
 		this.retention(project);
-		return this.view(row, { ...project, productionDeploymentId: row.id });
+		return this.view({ ...row, promotedAt: now }, { ...project, productionDeploymentId: row.id });
 	}
 
+	/**
+	 * Move production back to the deployment that was live before the current one (promotion
+	 * history, never a preview that was never promoted). The target keeps its original
+	 * `promotedAt`, so repeated rollbacks keep walking back instead of toggling between two.
+	 */
 	async rollback(principal: Principal, project: ProjectRow): Promise<DeploymentView> {
 		requirePermission(principal, 'deployment:rollback');
-		const active = this.ctx.db
+		const previous = this.previouslyPromoted(project);
+		if (!previous)
+			throw new ConflictError(
+				'No earlier production deployment to roll back to. Promote a specific deployment instead.',
+			);
+		await this.ctx.audit.wrap(
+			{
+				principal,
+				action: 'deployment.rollback',
+				resource: 'deployment',
+				resourceId: previous.id,
+				args: { project: project.slug, from: project.productionDeploymentId },
+			},
+			() => this.setProduction(project, previous.id, this.ctx.now()),
+		);
+		this.retention({ ...project, productionDeploymentId: previous.id });
+		return this.view(previous, { ...project, productionDeploymentId: previous.id });
+	}
+
+	/**
+	 * The most recently promoted active deployment that went live before the current production one
+	 * (or, with no current production, the most recently promoted at all).
+	 */
+	private previouslyPromoted(project: ProjectRow, excludeId?: string) {
+		const currentId = excludeId ?? project.productionDeploymentId;
+		const current = currentId
+			? this.ctx.db.select().from(deployments).where(eq(deployments.id, currentId)).get()
+			: undefined;
+		const filters = [
+			eq(deployments.projectId, project.id),
+			eq(deployments.status, 'active'),
+			isNotNull(deployments.promotedAt),
+		];
+		if (currentId) filters.push(ne(deployments.id, currentId));
+		// `<=` so two promotions in the same millisecond still have an order (by createdAt below).
+		if (current?.promotedAt != null) filters.push(lte(deployments.promotedAt, current.promotedAt));
+		return this.ctx.db
 			.select()
 			.from(deployments)
-			.where(and(eq(deployments.projectId, project.id), eq(deployments.status, 'active')))
-			.orderBy(desc(deployments.createdAt), desc(deployments.id))
-			.all();
-		const currentIndex = active.findIndex((row) => row.id === project.productionDeploymentId);
-		const previous = currentIndex === -1 ? active[0] : active[currentIndex + 1];
-		if (!previous) throw new ConflictError('No earlier deployment to roll back to.');
-		const view = await this.promote(principal, project, previous.id);
-		this.ctx.audit.record({
-			principal,
-			action: 'deployment.rollback',
-			resource: 'deployment',
-			resourceId: view.id,
-			args: { project: project.slug },
-			result: 'ok',
-		});
-		return view;
+			.where(and(...filters))
+			.orderBy(desc(deployments.promotedAt), desc(deployments.createdAt))
+			.get();
+	}
+
+	private setProduction(project: ProjectRow, deploymentId: string | null, now: number): void {
+		this.ctx.db
+			.update(projects)
+			.set({ productionDeploymentId: deploymentId, updatedAt: now })
+			.where(eq(projects.id, project.id))
+			.run();
+		const environment = this.ctx.environments.ensureProduction(project);
+		this.ctx.environments.setDeployment(environment, deploymentId);
+		// Rollback restores the runtime spec and placement recorded on that deployment (D17).
+		if (deploymentId && project.runtime !== 'static') this.ctx.workloads.syncDeployment(project, deploymentId);
+		this.ctx.projects.bump(project.orgId);
+	}
+
+	/** Deployments that became production since `since` (used by the 5xx-after-promote alert). */
+	recentlyPromoted(since: number) {
+		return this.ctx.sqlite
+			.query<
+				{ id: string; short_id: string; project_id: string; slug: string; org_id: string; promoted_at: number },
+				[number]
+			>(
+				`SELECT d.id, d.short_id, d.project_id, p.slug, d.org_id, d.promoted_at
+				 FROM deployments d JOIN projects p ON p.id = d.project_id
+				 WHERE d.promoted_at >= ? AND d.status = 'active'
+				   AND p.production_deployment_id = d.id AND p.deleted_at IS NULL`,
+			)
+			.all(since);
 	}
 
 	async setPinned(principal: Principal, project: ProjectRow, idOrShort: string, pinned: boolean): Promise<DeploymentView> {
@@ -243,19 +304,13 @@ export class DeploymentService {
 					.where(eq(deployments.id, row.id))
 					.run();
 				if (project.productionDeploymentId === row.id) {
-					const previous = this.ctx.db
-						.select()
-						.from(deployments)
-						.where(and(eq(deployments.projectId, project.id), eq(deployments.status, 'active')))
-						.orderBy(desc(deployments.createdAt))
-						.get();
-					this.ctx.db
-						.update(projects)
-						.set({ productionDeploymentId: previous?.id ?? null, updatedAt: now })
-						.where(eq(projects.id, project.id))
-						.run();
+					// Fall back to what was live before (promotion history), or nothing: never a
+					// preview that was never promoted.
+					const previous = this.previouslyPromoted(project, row.id);
+					this.setProduction(project, previous?.id ?? null, now);
+				} else {
+					this.ctx.projects.bump(project.orgId);
 				}
-				this.ctx.projects.bump(project.orgId);
 			},
 		);
 		this.retention(project);

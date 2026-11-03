@@ -6,6 +6,7 @@ import {
 	projects,
 	releases,
 	slugRedirects,
+	workloads,
 	type nodes as nodesTable,
 } from '@skiff/db';
 import {
@@ -200,6 +201,7 @@ export class NodeService {
 			})
 			.where(eq(nodes.id, node.id))
 			.run();
+		if (input.workloads?.length) this.ctx.workloads.applyHeartbeat(node.id, input.workloads);
 		return { ok: true, desiredStateVersion: this.stateVersion() };
 	}
 
@@ -297,14 +299,27 @@ export class NodeService {
 
 		const routes: RouteSpec[] = [];
 		const releaseShas = new Set<string>();
+		const workloadByProject = new Map(
+			this.ctx.db
+				.select()
+				.from(workloads)
+				.where(eq(workloads.nodeId, node.id))
+				.all()
+				.map((row) => [row.projectId, row]),
+		);
 
 		for (const project of projectRows) {
 			const target =
 				project.placement === 'edge' || project.placement === 'auto' ? (edgeId ?? node.id) : project.placement;
 			const local = target === node.id;
-			const upstream = local
-				? null
-				: `http://${nodeById.get(target)?.publicAddress ?? '127.0.0.1:1'}`;
+			const workload = workloadByProject.get(project.id);
+			// Apps proxy to the workload on their node; the edge reaches a worker's Caddy over WireGuard.
+			const upstream =
+				project.runtime !== 'static' && local
+					? (workload?.upstream ?? null)
+					: local
+						? null
+						: `http://${nodeById.get(target)?.publicAddress ?? '127.0.0.1:1'}`;
 			const rows = this.ctx.db
 				.select()
 				.from(deployments)
@@ -389,6 +404,9 @@ export class NodeService {
 					: [];
 			});
 
+		const workloadRows = this.ctx.workloads.desiredForNode(node.id);
+		const servedProjectIds = new Set(projectRows.map((project) => project.id));
+
 		return {
 			version: this.stateVersion(),
 			nodeId: node.id,
@@ -401,6 +419,8 @@ export class NodeService {
 			// 30 days), not for a fixed window.
 			revocations: this.ctx.access.revocations(),
 			hostRedirects,
+			workloads: workloadRows,
+			domains: this.ctx.domains.desiredForProjects(servedProjectIds),
 		};
 	}
 

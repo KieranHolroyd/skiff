@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import { canAdministerPlatform, canViewPlatform } from '@skiff/contracts';
-import { buildPrincipal, isPlatformAdminUser, resolveMembership } from './orgs.ts';
+import { buildPrincipal, isPlatformAdminUser, memberChangeError, resolveMembership } from './orgs.ts';
 
 function authDb() {
 	const sqlite = new Database(':memory:');
@@ -63,5 +63,33 @@ describe('platform admin', () => {
 		}
 		const session = buildPrincipal({ kind: 'user', userId: 'u', orgId: 'o', role: 'viewer', platformAdmin: true });
 		expect(canAdministerPlatform(session)).toBe(true);
+	});
+});
+
+describe('memberChangeError', () => {
+	test('only owners invite owners', () => {
+		expect(memberChangeError('admin', { action: 'invite', role: 'owner' }, 1)).toBeDefined();
+		expect(memberChangeError('admin', { action: 'invite', role: 'deployer' }, 1)).toBeUndefined();
+		expect(memberChangeError('owner', { action: 'invite', role: 'owner' }, 1)).toBeUndefined();
+	});
+
+	test('only owners grant or change the owner role', () => {
+		expect(memberChangeError('admin', { action: 'update-role', targetRole: 'viewer', role: 'owner', self: false }, 1)).toBeDefined();
+		expect(memberChangeError('admin', { action: 'update-role', targetRole: 'owner', role: 'admin', self: false }, 2)).toBeDefined();
+		expect(memberChangeError('admin', { action: 'update-role', targetRole: 'viewer', role: 'deployer', self: false }, 1)).toBeUndefined();
+		expect(memberChangeError('owner', { action: 'update-role', targetRole: 'admin', role: 'owner', self: false }, 1)).toBeUndefined();
+	});
+
+	test('the last owner cannot be demoted or removed', () => {
+		expect(memberChangeError('owner', { action: 'update-role', targetRole: 'owner', role: 'admin', self: true }, 1)).toContain('at least one owner');
+		expect(memberChangeError('owner', { action: 'update-role', targetRole: 'owner', role: 'admin', self: true }, 2)).toBeUndefined();
+		expect(memberChangeError('owner', { action: 'remove', targetRole: 'owner', self: false }, 1)).toContain('at least one owner');
+		expect(memberChangeError('owner', { action: 'remove', targetRole: 'owner', self: false }, 2)).toBeUndefined();
+	});
+
+	test('no-op role changes and self-removal are refused', () => {
+		expect(memberChangeError('owner', { action: 'update-role', targetRole: 'viewer', role: 'viewer', self: false }, 1)).toBeDefined();
+		expect(memberChangeError('owner', { action: 'remove', targetRole: 'deployer', self: true }, 2)).toBeDefined();
+		expect(memberChangeError('admin', { action: 'remove', targetRole: 'owner', self: false }, 2)).toBeDefined();
 	});
 });

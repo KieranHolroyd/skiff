@@ -235,6 +235,12 @@ create_upload → presigned PUT ─┼─► Upload session ─► finalize ─�
 
 ### 6.2 RBAC
 - **Platform level** (`admin` plugin): `platform:admin` manages nodes, global settings, domains, Caddy.
+  It is the admin-plugin **user role** (`user.role = admin`), independent of org roles: an org owner is
+  not a platform admin. The first user is made platform admin at bootstrap. Read-only fleet views work
+  from any surface of a platform admin; fleet mutations (join tokens, drain, token rotation, self-update)
+  require the admin's own dashboard session, never an API key or OAuth token.
+- Personal orgs are created only for the bootstrap user (or under open signup); invitees join the
+  inviting org. Self-service org creation is off.
 - **Org level**, permissions as `resource:action`:
 
 | Resource | Actions |
@@ -269,7 +275,10 @@ create_upload → presigned PUT ─┼─► Upload session ─► finalize ─�
   MCP 2026-07-28). The confirmation is bound to the target (e.g. the slug), and if the user declines, the tool cancels.
   2025-era clients (stateless legacy path) can't receive input requests, so they get an error telling the
   agent to ask the user to act in the dashboard. Projects are soft-deleted (7-day trash).
-- Every tool call is written to the **audit log** (user, client, tool, args, result).
+- Every tool call is written to the **audit log** as `mcp.<tool>` (user, client, tool, args, result), including
+  scope denials and declined confirmations. File contents are recorded as count, size and paths only.
+- Delete confirmations carry a signed, 10-minute state token bound to the user, client, tool and target, so a
+  client can't pre-fill the answer to skip the prompt.
 - MCP resources: `skiff://guides/deploying`, `skiff://guides/limits`, `skiff://guides/site-config`.
 
 **v1 tools**
@@ -289,7 +298,11 @@ All tools carry `readOnlyHint` / `destructiveHint` / `idempotentHint`. Responses
 SvelteKit's built-in CSRF check is disabled because it would block the OAuth token endpoint. It's replaced by
 `src/lib/server/csrf.ts`:
 - Every non-GET/HEAD request must have `Origin` equal to the platform origin, or `Sec-Fetch-Site: same-origin`.
-- Exceptions are an exact allowlist of cookieless endpoints: `oauth2/token`, `register`, `revoke`, `introspect`, `/mcp`.
+- Exceptions are an exact allowlist of cookieless endpoints: `oauth2/token`, `register`, `revoke`, `introspect`, `/mcp`,
+  `/api/v1/cli/token` (PKCE-bound code) and `/_skiff/site-login`, plus the bearer/signature-only prefixes
+  `/api/agent/` and `/api/objects/` (prefixes end in `/` so they never match a sibling REST path).
+- The control plane sends `X-Frame-Options: DENY` and `frame-ancestors 'none'` so consent and CLI-approval pages
+  can't be framed.
 
 ### 6.3.2 CLI configuration
 `skif` keeps persistent settings in `~/.config/skiff/config.json` (`$SKIFF_CONFIG_DIR`, else
@@ -315,6 +328,8 @@ override the file for CI and agent use.
 - Flow: Caddy `forward_auth` goes to the **local node agent**, which verifies an **HMAC-signed, host-only
   cookie** statelessly (sub-ms, no DB). With no cookie, the visitor is redirected to the platform domain
   to log in or enter the password, then back to `/_skiff/callback?token=<one-time, 60s>`, where the agent sets a site-scoped cookie.
+  The token carries a one-time id (the agent remembers used ids until they expire) and a separate session expiry that
+  the cookie inherits.
   Platform session cookies never touch the content domain.
 - Protected responses get `X-Robots-Tag: noindex` and `Cache-Control: private`. Public sites skip `forward_auth` entirely.
 - **Share links:**

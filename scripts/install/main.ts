@@ -33,6 +33,7 @@ import { randomBytes } from 'node:crypto';
 import { SELF_UPDATE_DEFAULTS } from '../../packages/contracts/src/self-update.ts';
 import { parseSemver } from '../../packages/contracts/src/semver.ts';
 import { TRIGGER_PATH_UNIT, triggerUnits } from '../update-self/units.ts';
+import { CONFIG_COMMAND, CONFIG_PATH_UNIT, CONFIG_SERVICE_UNIT, ensurePlatformConfigUnits } from '../platform-config/units.ts';
 import { readEnvFile, writeEnvFile } from './env-file.ts';
 
 const SOURCE = process.env.SKIFF_SOURCE_DIR ? resolve(process.env.SKIFF_SOURCE_DIR) : resolve(import.meta.dir, '../..');
@@ -44,6 +45,7 @@ const SYSTEMD_DIR = process.env.SKIFF_SYSTEMD_DIR ?? '/etc/systemd/system';
 const BUN_BIN = process.env.SKIFF_BUN_BIN ?? join(OPT_DIR, 'runtime', 'bin', 'bun');
 const ENV_FILE = join(ETC_DIR, 'skiff.env');
 const AGENT_ENV_FILE = join(ETC_DIR, 'agent.env');
+const CADDY_ACCESS_LOG = '/var/log/caddy/skiff-access.log';
 const MASTER_KEY_FILE = join(ETC_DIR, 'master.key');
 const SETUP_TOKEN_FILE = join(ETC_DIR, 'setup-token');
 const CLI_COMMANDS = ['/usr/local/bin/skif', '/usr/local/bin/skiff'];
@@ -353,6 +355,8 @@ function ensureUsersAndDirs(): void {
 	ensureDir(dirname(SELF_UPDATE_DEFAULTS.requestFile), '0750', 'skiff:skiff');
 	ensureDir(dirname(SELF_UPDATE_DEFAULTS.statusFile), '0750', 'root:skiff');
 	ensureDir(RUN_DIR, '2770', 'root:caddy');
+	// Caddy writes its JSON access log here (0640); the agent reads it via the caddy group (DESIGN §8).
+	ensureDir(dirname(CADDY_ACCESS_LOG), '0750', 'caddy:caddy');
 	if (!options.dryRun) {
 		writeFileSync('/etc/tmpfiles.d/skiff.conf', '# Skiff runtime directory (setgid so Caddy and the agent share sockets)\nd /run/skiff 2770 root caddy -\n');
 		run('systemd-tmpfiles', ['--create', '/etc/tmpfiles.d/skiff.conf'], { allowFailure: true });
@@ -552,6 +556,7 @@ EnvironmentFile=${ENV_FILE}
 EnvironmentFile=-${AGENT_ENV_FILE}
 Environment=SKIFF_AGENT_SOCKET=${RUN_DIR}/agent.sock
 Environment=SKIFF_CADDY_ADMIN_SOCKET=${detectCaddyAdminSocket()}
+Environment=SKIFF_CADDY_ACCESS_LOG=${CADDY_ACCESS_LOG}
 ExecStart=${OPT_DIR}/current/agent/skiff-agent
 Restart=on-failure
 RestartSec=2
@@ -594,6 +599,14 @@ WantedBy=multi-user.target
 	writeFileSync(join(SYSTEMD_DIR, 'skiff-agent.service'), agent);
 	for (const [name, body] of Object.entries(triggerUnits())) writeFileSync(join(SYSTEMD_DIR, name), body);
 	run('systemctl', ['daemon-reload']);
+	// Settings → Backups / Notifications in the dashboard (docs/OPS.md §4.3).
+	ensurePlatformConfigUnits({
+		systemdDir: SYSTEMD_DIR,
+		optDir: OPT_DIR,
+		bunBin: BUN_BIN,
+		run: (cmd) => void run(cmd[0]!, cmd.slice(1), { allowFailure: true }),
+		log,
+	});
 }
 
 function detectCaddyAdminSocket(): string {
@@ -1060,6 +1073,11 @@ function uninstall(): void {
 		if (!unit.includes('@')) run('systemctl', ['disable', '--now', unit], { allowFailure: true });
 		rmSync(join(SYSTEMD_DIR, unit), { force: true });
 	}
+	for (const unit of [CONFIG_PATH_UNIT, CONFIG_SERVICE_UNIT]) {
+		run('systemctl', ['disable', '--now', unit], { allowFailure: true });
+		rmSync(join(SYSTEMD_DIR, unit), { force: true });
+	}
+	rmSync(CONFIG_COMMAND, { force: true });
 	run('systemctl', ['daemon-reload'], { allowFailure: true });
 	for (const path of CLI_COMMANDS) rmSync(path, { force: true });
 	for (const command of RELEASE_COMMANDS) rmSync(command.path, { force: true });

@@ -59,6 +59,13 @@ const handler: RequestHandler = async (event) => {
 			return core.nodes.heartbeat(token, input);
 		}
 
+		const activation = /^workloads\/([^/]+)\/activation$/.exec(action);
+		if (activation) {
+			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
+			const node = core.nodes.authenticate(token);
+			return core.workloads.activation(node.id, activation[1]!);
+		}
+
 		if (action === 'telemetry') {
 			if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
 			const batch = await readJson(request, telemetryBatchSchema);

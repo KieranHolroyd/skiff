@@ -11,6 +11,11 @@ import type { DeploymentService } from './deployments.ts';
 import type { UploadService } from './uploads.ts';
 import type { NodeService } from './nodes.ts';
 import type { AccessService } from './access.ts';
+import type { SecretService } from './secrets.ts';
+import type { WorkloadService } from './workloads.ts';
+import type { DomainService } from './domains.ts';
+import type { BuildService } from './builds.ts';
+import type { EnvironmentService } from './environments.ts';
 
 /**
  * Shared dependency object. Service instances are attached after construction (in `createCore`)
@@ -32,4 +37,9 @@ export interface CoreContext {
 	uploads: UploadService;
 	nodes: NodeService;
 	access: AccessService;
+	secrets: SecretService;
+	workloads: WorkloadService;
+	domains: DomainService;
+	builds: BuildService;
+	environments: EnvironmentService;
 }

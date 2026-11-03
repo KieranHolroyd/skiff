@@ -29,6 +29,12 @@ export const nodes = sqliteTable(
 		desiredStateVersion: integer('desired_state_version').notNull().default(1),
 		lastHeartbeatAt: integer('last_heartbeat_at'),
 		statsJson: text('stats_json'),
+		/** Memory budget for `skiff-workloads.slice` on this node (DESIGN §3.4.1). */
+		sliceMemoryMb: integer('slice_memory_mb').notNull().default(1024),
+		/** CPU weight for the workload slice; lower than skiff-cp/agent/caddy so apps yield first. */
+		sliceCpuWeight: integer('slice_cpu_weight').notNull().default(200),
+		/** This node is allowed to claim git build jobs (D3: the homelab Builder). */
+		canBuild: integer('can_build', { mode: 'boolean' }).notNull().default(false),
 		createdAt: integer('created_at').notNull().$defaultFn(now),
 		updatedAt: integer('updated_at').notNull().$defaultFn(now),
 	},
@@ -92,6 +98,8 @@ export const projects = sqliteTable(
 		accessSecretHash: text('access_secret_hash'),
 		/** Last parsed site config, used to compile routes before a deployment exists. */
 		siteConfigJson: text('site_config_json'),
+		/** Tier 2/3 runtime spec applied to new deployments (validated by @skiff/contracts). */
+		workloadJson: text('workload_json'),
 		createdBy: text('created_by').notNull(),
 		deletedAt: integer('deleted_at'),
 		purgeAt: integer('purge_at'),
@@ -187,9 +195,13 @@ export const deployments = sqliteTable(
 		configSnapshotId: text('config_snapshot_id').notNull(),
 		/** URL-safe 10-char id used in `<slug>--<shortId>`. */
 		shortId: text('short_id').notNull(),
+		/** Named environment this deployment belongs to (production is created per project). */
+		environmentId: text('environment_id'),
 		runtime: text('runtime', { enum: ['static', 'process', 'container'] })
 			.notNull()
 			.default('static'),
+		/** Runtime spec snapshot; rollback restores code and config (D17). */
+		workloadJson: text('workload_json'),
 		status: text('status', { enum: ['pending', 'active', 'inactive', 'failed', 'deleted'] })
 			.notNull()
 			.default('pending'),
@@ -200,12 +212,15 @@ export const deployments = sqliteTable(
 		createdBy: text('created_by').notNull(),
 		createdAt: integer('created_at').notNull().$defaultFn(now),
 		activatedAt: integer('activated_at'),
+		/** When this deployment last became production (promotion history; rollback target order). */
+		promotedAt: integer('promoted_at'),
 		deletedAt: integer('deleted_at'),
 	},
 	(t) => [
 		uniqueIndex('deployments_short_idx').on(t.shortId),
 		index('deployments_project_idx').on(t.projectId),
 		index('deployments_status_idx').on(t.status),
+		index('deployments_promoted_idx').on(t.projectId, t.promotedAt),
 	],
 );
 
@@ -253,14 +268,133 @@ export const domains = sqliteTable(
 		orgId: text('org_id').notNull(),
 		projectId: text('project_id').notNull(),
 		hostname: text('hostname').notNull(),
+		kind: text('kind', { enum: ['custom', 'apex'] }).notNull().default('custom'),
 		status: text('status', { enum: ['pending', 'verified', 'active', 'failed'] })
 			.notNull()
 			.default('pending'),
 		verificationToken: text('verification_token'),
 		verifiedAt: integer('verified_at'),
+		/** Reverse the `www` sibling to the apex (or vice versa); see DomainService. */
+		redirectWww: integer('redirect_www', { mode: 'boolean' }).notNull().default(false),
+		/** Cloudflare record id, when the connected account created it automatically. */
+		cloudflareRecordId: text('cloudflare_record_id'),
+		lastCheckedAt: integer('last_checked_at'),
+		lastError: text('last_error'),
 		createdAt: integer('created_at').notNull().$defaultFn(now),
 	},
 	(t) => [uniqueIndex('domains_host_idx').on(t.hostname), index('domains_project_idx').on(t.projectId)],
+);
+
+export const environments = sqliteTable(
+	'environments',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		projectId: text('project_id').notNull(),
+		name: text('name').notNull(),
+		slug: text('slug').notNull(),
+		isProduction: integer('is_production', { mode: 'boolean' }).notNull().default(false),
+		/** Access mode for this environment's host; mirrors the project preview default. */
+		access: text('access', { enum: ['public', 'password', 'platform'] })
+			.notNull()
+			.default('platform'),
+		/** Deployment served at `<slug>--<env>.<contentDomain>`; production uses the project pointer. */
+		deploymentId: text('deployment_id'),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [
+		uniqueIndex('environments_project_slug_idx').on(t.projectId, t.slug),
+		index('environments_project_idx').on(t.projectId),
+	],
+);
+
+/**
+ * The current runtime spec for an app project. One row per project; the spec is snapshotted onto
+ * each deployment so rollback restores the runtime config too (D17).
+ */
+export const workloads = sqliteTable(
+	'workloads',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		projectId: text('project_id').notNull(),
+		deploymentId: text('deployment_id').notNull(),
+		nodeId: text('node_id'),
+		runtime: text('runtime', { enum: ['process', 'container'] }).notNull(),
+		status: text('status', { enum: ['pending', 'starting', 'running', 'failed', 'stopped'] })
+			.notNull()
+			.default('pending'),
+		/** Validated WorkloadSpec (no secret values). */
+		specJson: text('spec_json').notNull(),
+		memoryMb: integer('memory_mb').notNull(),
+		cpus: integer('cpus').notNull().default(1),
+		upstream: text('upstream'),
+		message: text('message'),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [
+		uniqueIndex('workloads_project_idx').on(t.projectId),
+		index('workloads_node_idx').on(t.nodeId),
+		index('workloads_status_idx').on(t.status),
+	],
+);
+
+export const gitSources = sqliteTable(
+	'git_sources',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		projectId: text('project_id').notNull(),
+		repoUrl: text('repo_url').notNull(),
+		branch: text('branch').notNull().default('main'),
+		rootDir: text('root_dir').notNull().default('.'),
+		buildCommand: text('build_command').notNull(),
+		outputDir: text('output_dir').notNull().default('dist'),
+		/** Envelope-encrypted webhook secret; never returned by the API. */
+		webhookSecret: text('webhook_secret'),
+		enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [uniqueIndex('git_sources_project_idx').on(t.projectId)],
+);
+
+export const builds = sqliteTable(
+	'builds',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		projectId: text('project_id').notNull(),
+		gitSourceId: text('git_source_id').notNull(),
+		status: text('status', { enum: ['queued', 'building', 'succeeded', 'failed', 'cancelled'] })
+			.notNull()
+			.default('queued'),
+		ref: text('ref').notNull(),
+		commitSha: text('commit_sha'),
+		commitMessage: text('commit_message'),
+		releaseId: text('release_id'),
+		deploymentId: text('deployment_id'),
+		/** Node that claimed the job (the homelab Builder, D3). */
+		nodeId: text('node_id'),
+		promote: integer('promote', { mode: 'boolean' }).notNull().default(true),
+		/** Truncated tail for list views; the full log is kept in `log`. */
+		logTail: text('log_tail'),
+		log: text('log'),
+		error: text('error'),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		claimedAt: integer('claimed_at'),
+		startedAt: integer('started_at'),
+		finishedAt: integer('finished_at'),
+	},
+	(t) => [
+		index('builds_project_idx').on(t.projectId),
+		index('builds_status_idx').on(t.status),
+		index('builds_created_idx').on(t.createdAt),
+	],
 );
 
 export const auditLog = sqliteTable(
@@ -357,6 +491,10 @@ export const schema = {
 	shareLinks,
 	shareRedemptions,
 	domains,
+	environments,
+	workloads,
+	gitSources,
+	builds,
 	auditLog,
 	orgQuotas,
 	orgKeys,

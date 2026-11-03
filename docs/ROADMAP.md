@@ -29,6 +29,8 @@
 
 **Access**
 - [x] Better Auth: passkeys, GitHub, 2FA, orgs + access control, admin, API keys, OAuth provider
+- [ ] Enforce 2FA (or a passkey) for owners, including after GitHub / magic-link sign-in (D10)
+- [ ] Dashboard UI for inviting members and changing roles (the permission mapping works; no UI yet)
 - [x] Protected sites (`public / password / platform`) via `forward_auth` → agent
 - [x] Share links with limits + revocation push
 - [x] Two-domain and shared-domain modes (with mandatory hardening)
@@ -41,12 +43,15 @@
 - [x] Agent telemetry: pre-aggregated access buckets → DuckDB; rollups + Parquet to R2 (OTLP wire export remains)
 - [x] Dashboard: fleet, projects, deployments, traffic/errors, audit log (live logs arrive with v2 runtime)
 - [x] Prometheus `/metrics` on control plane and agents (optional OTLP exporter remains)
-- [x] Alerts: email (SES SMTP) + webhook
-- [x] Backups: Litestream config → R2, recovery kit, restore script, monthly restore drill (needs R2 credentials to run)
+- [x] Alerts: email (SES SMTP) + webhook; node offline > 2 min, disk > 85%, backup/drill failure (`OnFailure=` → `skiff-alert`)
+- [ ] Remaining default alerts: cert expiring < 14 d, 5xx spike after promote; drill results in the dashboard (`recordBackupRun`)
+- [x] Backups: Litestream → R2, restore script, monthly restore drill, installed and enabled by the installer when R2 + the `litestream` binary are present
+- [ ] Recovery kit (`age`-encrypted master key export, DESIGN §10)
 
 **Release**
 - [x] CI: signed releases (control plane, agent, prebuilt Caddy)
-- [x] `install.sh` + hosted release bundle
+- [x] `install.sh` (builds from the source tarball on the host; snapshots the DB and keeps existing settings on re-run)
+- [ ] Installer consumes and verifies the signed release bundle with a pinned key (today the signed artifacts are published but not used at install time)
 - [ ] Browser setup wizard (first-user sign-up and `/api/setup/status` are backend-complete)
 - [ ] Self-update with snapshot, migrations, health check, auto-rollback (installer upgrade path + rollback exist; in-process updater pending)
 

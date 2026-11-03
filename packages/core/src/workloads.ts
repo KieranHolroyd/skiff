@@ -1,0 +1,376 @@
+import { and, eq, isNull } from 'drizzle-orm';
+import { deployments, nodes, projects, releases, workloads } from '@skiff/db';
+import {
+	canViewPlatform,
+	requirePermission,
+	workloadSpecSchema,
+	type NodeCapacityView,
+	type Principal,
+	type WorkloadActivation,
+	type WorkloadDesired,
+	type WorkloadSpec,
+	type WorkloadStatus,
+	type WorkloadView,
+} from '@skiff/contracts';
+import type { CoreContext } from './context.ts';
+import { CoreError, NotFoundError, ValidationError } from './errors.ts';
+import { resolvePlacement, type PlacementCandidate } from './placement.ts';
+import { parseJson, newId, sha256Hex } from './util.ts';
+import type { ProjectRow } from './projects.ts';
+
+export type WorkloadRow = typeof workloads.$inferSelect;
+
+const ACTIVE_STATUSES: WorkloadStatus[] = ['pending', 'starting', 'running'];
+
+export interface ResolvedWorkload {
+	spec: WorkloadSpec;
+	nodeId: string;
+	upstream: string;
+	activationVersion: string;
+}
+
+/**
+ * Tier 2/3 runtime state (DESIGN §3.4). Placement is resolved once per deploy, admission is
+ * checked against the target node's `skiff-workloads.slice` budget, and the agent receives only
+ * public spec fields plus secret *references*. Values are fetched at activation time.
+ */
+export class WorkloadService {
+	constructor(private readonly ctx: CoreContext) {}
+
+	/** Load the project's configured spec; `runtime` projects must have one. */
+	projectSpec(project: ProjectRow): WorkloadSpec | null {
+		const raw = parseJson<unknown>(project.workloadJson, null);
+		if (raw) return workloadSpecSchema.parse(raw);
+		return null;
+	}
+
+	defaultSpec(project: ProjectRow): WorkloadSpec {
+		if (project.runtime === 'static') throw new ValidationError('Static projects have no workload spec.');
+		if (project.runtime === 'container')
+			throw new ValidationError(
+				`Project "${project.slug}" needs a workload spec with an image before it can deploy.`,
+			);
+		return workloadSpecSchema.parse({ runtime: project.runtime, command: ['bun', 'run', 'start'] });
+	}
+
+	private specOf(project: ProjectRow, row: WorkloadRow): WorkloadSpec {
+		const parsed = workloadSpecSchema.safeParse(parseJson<unknown>(row.specJson, null));
+		if (!parsed.success) throw new ValidationError(`Workload spec for "${project.slug}" is invalid.`);
+		return parsed.data;
+	}
+
+	plan(principal: Principal, project: ProjectRow, input?: Partial<WorkloadSpec>): ResolvedWorkload {
+		requirePermission(principal, 'deployment:create');
+		const spec = workloadSpecSchema.parse({
+			...(this.projectSpec(project) ?? this.defaultSpec(project)),
+			...input,
+			runtime: project.runtime === 'static' ? (input?.runtime ?? 'process') : project.runtime,
+		});
+		if (project.runtime === 'static')
+			throw new ValidationError(
+				`Project "${project.slug}" is static. Create it with runtime "process" or "container" to run a workload.`,
+			);
+		const decision = resolvePlacement({
+			runtime: project.runtime,
+			requested: project.placement,
+			memoryMb: spec.memoryMb,
+			edgeNodeId: this.edgeNodeId(),
+			candidates: this.candidates(),
+		});
+		if (!decision.ok) throw new ValidationError(decision.message, decision.freeByNode);
+		const upstream = upstreamFor(project.id, spec);
+		return {
+			spec,
+			nodeId: decision.nodeId,
+			upstream,
+			activationVersion: activationVersion(spec),
+		};
+	}
+
+	/** Persist the project-level spec (validated); placement is still resolved at deploy time. */
+	setSpec(principal: Principal, project: ProjectRow, input: WorkloadSpec): WorkloadView | null {
+		requirePermission(principal, 'project:update');
+		if (project.runtime === 'static')
+			throw new ValidationError(
+				`Project "${project.slug}" is static. Create it with runtime "process" or "container" to run a workload.`,
+			);
+		const spec = workloadSpecSchema.parse({ ...input, runtime: project.runtime });
+		this.ctx.db
+			.update(projects)
+			.set({ workloadJson: JSON.stringify(spec), updatedAt: this.ctx.now() })
+			.where(eq(projects.id, project.id))
+			.run();
+		const existing = this.ctx.db.select().from(workloads).where(eq(workloads.projectId, project.id)).get();
+		if (existing)
+			this.ctx.db
+				.update(workloads)
+				.set({
+					specJson: JSON.stringify(spec),
+					runtime: spec.runtime,
+					memoryMb: spec.memoryMb,
+					cpus: Math.round(spec.cpus),
+					upstream: upstreamFor(project.id, spec),
+					status: 'pending',
+					updatedAt: this.ctx.now(),
+				})
+				.where(eq(workloads.id, existing.id))
+				.run();
+		this.ctx.projects.bump(project.orgId);
+		return this.view(project);
+	}
+
+	/** Re-point the workload at an existing deployment (promote/rollback); placement is preserved. */
+	syncDeployment(project: ProjectRow, deploymentId: string): void {
+		const deployment = this.ctx.db.select().from(deployments).where(eq(deployments.id, deploymentId)).get();
+		if (!deployment || !deployment.workloadJson || !deployment.nodeId) return;
+		const parsed = workloadSpecSchema.safeParse(parseJson<unknown>(deployment.workloadJson, null));
+		if (!parsed.success) return;
+		this.record(project, deploymentId, {
+			spec: parsed.data,
+			nodeId: deployment.nodeId,
+			upstream: upstreamFor(project.id, parsed.data),
+			activationVersion: activationVersion(parsed.data),
+		});
+	}
+
+	/** Record the resolved workload for a new deployment (called from DeploymentService). */
+	record(project: ProjectRow, deploymentId: string, resolved: ResolvedWorkload): void {
+		const now = this.ctx.now();
+		const existing = this.ctx.db.select().from(workloads).where(eq(workloads.projectId, project.id)).get();
+		const values = {
+			orgId: project.orgId,
+			projectId: project.id,
+			deploymentId,
+			nodeId: resolved.nodeId,
+			runtime: resolved.spec.runtime,
+			status: 'pending' as const,
+			specJson: JSON.stringify(resolved.spec),
+			memoryMb: resolved.spec.memoryMb,
+			cpus: Math.round(resolved.spec.cpus),
+			upstream: resolved.upstream,
+			message: null,
+			updatedAt: now,
+		};
+		if (existing) this.ctx.db.update(workloads).set(values).where(eq(workloads.id, existing.id)).run();
+		else
+			this.ctx.db
+				.insert(workloads)
+				.values({ ...values, id: newId('wld_'), createdAt: now })
+				.run();
+	}
+
+	view(project: ProjectRow): WorkloadView | null {
+		const row = this.ctx.db.select().from(workloads).where(eq(workloads.projectId, project.id)).get();
+		return row ? this.toView(project, row) : null;
+	}
+
+	get(principal: Principal, project: ProjectRow): WorkloadView | null {
+		requirePermission(principal, 'deployment:read');
+		return this.view(project);
+	}
+
+	remove(principal: Principal, project: ProjectRow): void {
+		requirePermission(principal, 'project:update');
+		const row = this.ctx.db.select().from(workloads).where(eq(workloads.projectId, project.id)).get();
+		if (!row) throw new NotFoundError('Workload');
+		this.ctx.db.delete(workloads).where(eq(workloads.id, row.id)).run();
+		this.ctx.db.update(projects).set({ workloadJson: null, updatedAt: this.ctx.now() }).where(eq(projects.id, project.id)).run();
+		this.ctx.audit.record({
+			principal,
+			action: 'workload.remove',
+			resource: 'workload',
+			resourceId: row.id,
+			args: { project: project.slug },
+			result: 'ok',
+		});
+		this.ctx.projects.bump(project.orgId);
+	}
+
+	capacity(principal: Principal): NodeCapacityView[] {
+		if (!canViewPlatform(principal)) throw new CoreError('forbidden', 'Platform admin required.', 403);
+		return this.capacityInternal();
+	}
+
+	capacityInternal(): NodeCapacityView[] {
+		const reserved = this.reservedByNode();
+		return this.ctx.db
+			.select()
+			.from(nodes)
+			.all()
+			.map((node) => ({
+				nodeId: node.id,
+				name: node.name,
+				mode: node.mode,
+				status: node.status,
+				sliceMemoryMb: node.sliceMemoryMb,
+				reservedMemoryMb: reserved.get(node.id) ?? 0,
+				freeMemoryMb: node.sliceMemoryMb - (reserved.get(node.id) ?? 0),
+				workloadCount: this.countByNode().get(node.id) ?? 0,
+			}));
+	}
+
+	/** Desired state for one node, including only public spec fields and secret references. */
+	desiredForNode(nodeId: string): WorkloadDesired[] {
+		const rows = this.ctx.db
+			.select({ workload: workloads, project: projects, deployment: deployments })
+			.from(workloads)
+			.innerJoin(projects, eq(projects.id, workloads.projectId))
+			.innerJoin(deployments, eq(deployments.id, workloads.deploymentId))
+			.where(and(eq(workloads.nodeId, nodeId), isNull(projects.deletedAt), eq(deployments.status, 'active')))
+			.all();
+
+		return rows.map(({ workload, project, deployment }) => {
+			const spec = this.specOf(project, workload);
+			const release = this.ctx.db
+				.select({ sha256: releases.sha256 })
+				.from(releases)
+				.where(eq(releases.id, deployment.releaseId))
+				.get();
+			return {
+				id: workload.id,
+				projectId: project.id,
+				projectSlug: project.slug,
+				deploymentId: deployment.id,
+				runtime: workload.runtime,
+				status: workload.status,
+				release: release?.sha256 ?? null,
+				upstream: workload.upstream ?? upstreamFor(project.id, spec),
+				memoryMb: workload.memoryMb,
+				cpus: workload.cpus,
+				port: spec.port,
+				healthPath: spec.healthPath,
+				socketActivation: spec.socketActivation,
+				activationVersion: activationVersion(spec),
+				env: spec.env,
+				secrets: spec.secrets,
+				dataSizeMb: spec.data?.sizeMb ?? null,
+			};
+		});
+	}
+
+	/**
+	 * Decrypted values for one workload. The node token must own the workload's node; the payload
+	 * is never cached on disk by the agent.
+	 */
+	activation(nodeId: string, workloadId: string): WorkloadActivation {
+		const row = this.ctx.db.select().from(workloads).where(eq(workloads.id, workloadId)).get();
+		if (!row) throw new NotFoundError('Workload');
+		if (row.nodeId !== nodeId) throw new CoreError('forbidden', 'This workload is placed on another node.', 403);
+		const spec = this.specOf(this.requireProject(row.projectId), row);
+		const env: Record<string, string> = { ...spec.env };
+		const files: Record<string, string> = {};
+		for (const ref of spec.secrets) {
+			const value = this.ctx.secrets.getValue(row.orgId, ref.name, ref.version);
+			if (!value) continue;
+			if (ref.delivery === 'file') files[ref.name] = value.value;
+			else env[ref.name] = value.value;
+		}
+		return { workloadId: row.id, activationVersion: activationVersion(spec), env, files };
+	}
+
+	/** Apply the agent's actual-state report from a heartbeat. */
+	applyHeartbeat(nodeId: string, reports: Array<{ id: string; status: WorkloadStatus; restarts: number }>): void {
+		for (const report of reports) {
+			const row = this.ctx.db.select().from(workloads).where(eq(workloads.id, report.id)).get();
+			if (!row || row.nodeId !== nodeId) continue;
+			const status: WorkloadStatus =
+				report.status === 'running' && report.restarts >= 5 ? 'failed' : report.status;
+			if (status === row.status) continue;
+			this.ctx.db
+				.update(workloads)
+				.set({
+					status,
+					message: report.restarts >= 5 ? `Restart loop (${report.restarts} restarts)` : row.message,
+					updatedAt: this.ctx.now(),
+				})
+				.where(eq(workloads.id, row.id))
+				.run();
+		}
+	}
+
+	private requireProject(projectId: string): ProjectRow {
+		const row = this.ctx.db.select().from(projects).where(eq(projects.id, projectId)).get();
+		if (!row) throw new NotFoundError('Project');
+		return row as ProjectRow;
+	}
+
+	private toView(project: ProjectRow, row: WorkloadRow): WorkloadView {
+		return {
+			id: row.id,
+			projectId: project.id,
+			projectSlug: project.slug,
+			deploymentId: row.deploymentId,
+			nodeId: row.nodeId,
+			runtime: row.runtime,
+			status: row.status,
+			memoryMb: row.memoryMb,
+			cpus: row.cpus,
+			upstream: row.upstream,
+			message: row.message,
+			createdAt: new Date(row.createdAt).toISOString(),
+			updatedAt: new Date(row.updatedAt).toISOString(),
+		};
+	}
+
+	private edgeNodeId(): string | null {
+		if (this.ctx.config.edgeNodeId) return this.ctx.config.edgeNodeId;
+		return (
+			this.ctx.sqlite
+				.query<{ id: string }, []>("SELECT id FROM nodes WHERE mode = 'edge' ORDER BY created_at ASC LIMIT 1")
+				.get()?.id ?? null
+		);
+	}
+
+	private candidates(): PlacementCandidate[] {
+		const reserved = this.reservedByNode();
+		return this.ctx.db
+			.select()
+			.from(nodes)
+			.all()
+			.map((node) => ({
+				id: node.id,
+				name: node.name,
+				mode: node.mode,
+				status: node.status,
+				sliceMemoryMb: node.sliceMemoryMb,
+				reservedMemoryMb: reserved.get(node.id) ?? 0,
+			}));
+	}
+
+	private reservedByNode(): Map<string, number> {
+		const rows = this.ctx.sqlite
+			.query<{ nodeId: string; total: number | null }, [string, string, string]>(
+				'SELECT node_id AS nodeId, SUM(memory_mb) AS total FROM workloads WHERE node_id IS NOT NULL AND status IN (?, ?, ?) GROUP BY node_id',
+			)
+			.all('pending', 'starting', 'running');
+		return new Map(rows.map((row) => [row.nodeId, row.total ?? 0]));
+	}
+
+	private countByNode(): Map<string, number> {
+		const rows = this.ctx.sqlite
+			.query<{ nodeId: string; n: number }, []>(
+				'SELECT node_id AS nodeId, COUNT(*) AS n FROM workloads WHERE node_id IS NOT NULL GROUP BY node_id',
+			)
+			.all();
+		return new Map(rows.map((row) => [row.nodeId, row.n]));
+	}
+}
+
+/** The upstream Caddy proxies to on the workload's node. Socket activation is the default. */
+export function upstreamFor(projectId: string, spec: WorkloadSpec): string {
+	if (spec.runtime === 'process' && spec.socketActivation) return `unix//run/skiff-workloads/${projectId}.sock`;
+	return `127.0.0.1:${spec.port}`;
+}
+
+/** Stable hash of the parts that affect activation, so the agent knows when to re-fetch values. */
+export function activationVersion(spec: WorkloadSpec): string {
+	return sha256Hex(
+		JSON.stringify({
+			env: spec.env,
+			secrets: spec.secrets,
+			command: spec.command,
+			image: spec.image,
+			port: spec.port,
+		}),
+	);
+}

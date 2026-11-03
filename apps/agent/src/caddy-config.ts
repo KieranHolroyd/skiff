@@ -188,6 +188,8 @@ export function buildCaddyConfig(options: CompileAgentConfigOptions): Record<str
 					writer: {
 						output: 'file',
 						filename: options.accessLog,
+						// Readable by the agent through the caddy group; Caddy's default is 0600.
+						mode: '0640',
 						roll_size_mb: 50,
 						roll_gzip: true,
 						roll_keep_days: 7,

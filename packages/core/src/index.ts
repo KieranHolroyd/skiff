@@ -14,6 +14,10 @@ import { DeployService } from './deploy.ts';
 import { MaintenanceService } from './maintenance.ts';
 import { SecretService } from './secrets.ts';
 import { MetricsService } from './metrics.ts';
+import { WorkloadService } from './workloads.ts';
+import { DomainService } from './domains.ts';
+import { BuildService } from './builds.ts';
+import { EnvironmentService } from './environments.ts';
 
 export * from './config.ts';
 export * from './context.ts';
@@ -32,6 +36,11 @@ export * from './deploy.ts';
 export * from './maintenance.ts';
 export * from './secrets.ts';
 export * from './metrics.ts';
+export * from './placement.ts';
+export * from './workloads.ts';
+export * from './domains.ts';
+export * from './builds.ts';
+export * from './environments.ts';
 export * from './notify.ts';
 export * from './telemetry.ts';
 
@@ -54,6 +63,10 @@ export interface Core {
 	maintenance: MaintenanceService;
 	secrets: SecretService;
 	metrics: MetricsService;
+	workloads: WorkloadService;
+	domains: DomainService;
+	builds: BuildService;
+	environments: EnvironmentService;
 	audit: AuditService;
 }
 
@@ -79,10 +92,15 @@ export function createCore(options: CoreOptions): Core {
 	ctx.uploads = new UploadService(ctx);
 	ctx.nodes = new NodeService(ctx);
 	ctx.access = new AccessService(ctx);
+	ctx.environments = new EnvironmentService(ctx);
+	ctx.secrets = new SecretService(ctx);
+	ctx.workloads = new WorkloadService(ctx);
+	ctx.domains = new DomainService(ctx);
+	ctx.builds = new BuildService(ctx);
 
 	const deploy = new DeployService(ctx);
 	const maintenance = new MaintenanceService(ctx);
-	const secrets = new SecretService(ctx);
+	const secrets = ctx.secrets;
 	const metrics = new MetricsService(ctx, options.version);
 
 	return {
@@ -97,6 +115,10 @@ export function createCore(options: CoreOptions): Core {
 		maintenance,
 		secrets,
 		metrics,
+		workloads: ctx.workloads,
+		domains: ctx.domains,
+		builds: ctx.builds,
+		environments: ctx.environments,
 		audit: ctx.audit,
 	};
 }

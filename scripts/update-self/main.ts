@@ -17,6 +17,7 @@ import {
 } from '../../packages/contracts/src/self-update.ts';
 import { formatEnvFile, readEnvFile } from '../install/env-file.ts';
 import { TRIGGER_PATH_UNIT, triggerUnits } from './units.ts';
+import { ensurePlatformConfigUnits } from '../platform-config/units.ts';
 import {
 	AGENT,
 	CONTROL_PLANE,
@@ -293,6 +294,14 @@ function ensureTriggerUnits(): void {
 		run(['systemctl', 'enable', '--now', TRIGGER_PATH_UNIT], { quiet: true, allowFailure: true });
 		host.log(`dashboard updates enabled (${TRIGGER_PATH_UNIT})`);
 	}
+	// The same trick for Settings → Backups / Notifications (docs/OPS.md §4.3).
+	ensurePlatformConfigUnits({
+		systemdDir: SYSTEMD_DIR,
+		optDir: layout.optDir,
+		bunBin: layout.bunBin,
+		run: (cmd) => void run(cmd, { quiet: true, allowFailure: true }),
+		log: (message) => host.log(message),
+	});
 }
 
 const SHIELDED = ['SIGINT', 'SIGTERM', 'SIGHUP'];

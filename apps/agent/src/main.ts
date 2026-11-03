@@ -9,6 +9,7 @@ import {
 } from '@skiff/contracts';
 import type { TlsOptions } from '@skiff/site-config';
 import { CaddyAdmin } from './caddy.ts';
+import { CertProbe, certProbeTargets, tlsCertReader } from './certs.ts';
 import { buildCaddyConfig, isProductionRoute, tlsSubjects } from './caddy-config.ts';
 import { loadConfig, type AgentConfig } from './config.ts';
 import { formatEnv, JOIN_USAGE, joinNode, nodeFilePath, parseJoinArgs } from './join.ts';
@@ -56,6 +57,7 @@ class AgentRuntime {
 	private readonly releases: ReleaseManager;
 	private readonly caddy: CaddyAdmin;
 	private readonly stats: StatsCollector;
+	private readonly certs: CertProbe | null;
 
 	private desired: DesiredState | null = null;
 	private desiredEtag: string | null = null;
@@ -90,6 +92,16 @@ class AgentRuntime {
 		this.releases = new ReleaseManager(config.dataDir);
 		this.caddy = new CaddyAdmin(config.caddyAdminSocket);
 		this.stats = new StatsCollector(config.dataDir);
+		this.certs = config.certProbe
+			? new CertProbe(
+					() =>
+						certProbeTargets(
+							this.desired ? this.contentDomain(this.desired) : config.contentDomain,
+							config.platformHost,
+						),
+					tlsCertReader(config.certProbe),
+				)
+			: null;
 	}
 
 	async run(): Promise<void> {
@@ -370,6 +382,15 @@ class AgentRuntime {
 		}
 	}
 
+	/** Best-effort content domain for the cert probe; never throws. */
+	private contentDomain(state: DesiredState): string | null {
+		try {
+			return this.config.contentDomain ?? (state.contentDomain || deriveContentDomain(state));
+		} catch {
+			return null;
+		}
+	}
+
 	private tlsOptions(state: DesiredState): TlsOptions {
 		const domain =
 			this.config.contentDomain ?? (state.contentDomain || deriveContentDomain(state));
@@ -416,6 +437,9 @@ class AgentRuntime {
 	private async sendHeartbeat(requestedStatus: NodeStatus): Promise<boolean> {
 		await this.checkCaddy();
 		const stats = await this.stats.collect();
+		// Cached; refreshed in the background at most every ~6 h (cert-expiry alert, DESIGN §8).
+		const certs = this.certs?.current() ?? [];
+		if (certs.length > 0) stats.certs = certs;
 		const body: Heartbeat = {
 			nodeId: this.config.nodeId,
 			agentVersion: this.config.agentVersion,

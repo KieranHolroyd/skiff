@@ -14,6 +14,16 @@ import { readMembership } from '@skiff/core';
 import { getRequestEvent } from '$app/server';
 import { allowDcr, authSecret, contentDomain, devPasswordLogin, github, mcpResource, openSignup, platformOrigin } from './config';
 import { sendInviteEmail, sendMagicLinkEmail } from './email';
+import {
+	enforceOwnerSecondFactor,
+	markSessionSecondFactor,
+	recordSecondFactorFailure,
+	revokeSession,
+	secondFactorAttemptsExhausted,
+	userHasSecondFactor,
+	userIsOwner,
+} from './second-factor';
+import { authPathAllowedBeforeSecondFactor, factorProvedBy } from './second-factor-policy';
 import { sqlite } from './db';
 
 /**
@@ -90,6 +100,13 @@ export const auth = betterAuth({
 		? { github: { clientId: github.clientId, clientSecret: github.clientSecret } }
 		: {},
 	trustedOrigins: [platformOrigin],
+	session: {
+		additionalFields: {
+			// The second factor this session proved ('passkey' | 'totp' | 'backup-code'), set by the
+			// after-hook below. Owners need it before using the platform (second-factor-policy.ts).
+			secondFactor: { type: 'string', required: false, input: false },
+		},
+	},
 	databaseHooks: {
 		user: {
 			create: {
@@ -115,14 +132,51 @@ export const auth = betterAuth({
 	},
 	hooks: {
 		before: createAuthMiddleware(async (ctx) => {
-			const permission = apiKeyEndpointPermissions[ctx.path];
 			// Trusted in-process calls without request headers (e.g. the CLI token exchange) do their
-			// own checks; anything carrying a user session is held to that user's org role.
-			if (!permission || (!ctx.request && !ctx.headers)) return;
+			// own checks; anything carrying a user session is held to that user's role and factor.
+			if (!ctx.request && !ctx.headers) return;
 			const session = await getSessionFromCtx(ctx);
 			if (!session) return; // the endpoint itself rejects unauthenticated calls
-			if (!userHasOrgPermission(session.user.id, permission))
+
+			// Owner second factor (D10): an unproven owner session may only sign in, verify a factor,
+			// or (with no factor yet) enrol one. See second-factor-policy.ts.
+			const sessionFactor = (session.session as { secondFactor?: string | null }).secondFactor;
+			if (enforceOwnerSecondFactor && !sessionFactor && userIsOwner(session.user.id)) {
+				if (secondFactorAttemptsExhausted(session.session.id)) {
+					revokeSession(session.session.id);
+					throw new APIError('TOO_MANY_REQUESTS', {
+						message: 'Too many incorrect codes. Sign in again to retry.',
+					});
+				}
+				if (!authPathAllowedBeforeSecondFactor(ctx.path, userHasSecondFactor(session.user.id)))
+					throw new APIError('FORBIDDEN', {
+						message: 'Verify your second factor (passkey or authenticator app) first.',
+						code: 'SECOND_FACTOR_REQUIRED',
+					});
+			}
+
+			const permission = apiKeyEndpointPermissions[ctx.path];
+			if (permission && !userHasOrgPermission(session.user.id, permission))
 				throw new APIError('FORBIDDEN', { message: `Your role does not include ${permission}.` });
+		}),
+		after: createAuthMiddleware(async (ctx) => {
+			const factor = factorProvedBy(ctx.path);
+			if (!factor) return;
+			if (ctx.context.returned instanceof APIError) {
+				// Better Auth limits attempts during password sign-in, but not when a signed-in session
+				// verifies a code. Cap guesses from an unproven owner session; passkey failures prove
+				// nothing either way.
+				if (factor === 'passkey') return;
+				const session = await getSessionFromCtx(ctx).catch(() => null);
+				const proven = (session?.session as { secondFactor?: string | null } | undefined)?.secondFactor;
+				if (!session || proven || !userIsOwner(session.user.id)) return;
+				if (recordSecondFactorFailure(session.session.id)) revokeSession(session.session.id);
+				return;
+			}
+			// Sign-in and first-time TOTP verification create a new session; otherwise it's this one.
+			const sessionId =
+				ctx.context.newSession?.session.id ?? (await getSessionFromCtx(ctx).catch(() => null))?.session.id;
+			if (sessionId) markSessionSecondFactor(sessionId, factor);
 		}),
 	},
 	advanced: {
@@ -162,7 +216,8 @@ export const auth = betterAuth({
 		}),
 		admin(),
 		passkey({ rpID: platformHost, rpName: 'Skiff', origin: platformOrigin }),
-		twoFactor({ issuer: 'Skiff' }),
+		// Skiff accounts have no password (D10), so TOTP enrolment must not ask for one.
+		twoFactor({ issuer: 'Skiff', allowPasswordless: true }),
 		apiKey({
 			defaultPrefix: 'skif_',
 			enableMetadata: true,

@@ -128,3 +128,35 @@ export function buildPrincipal(input: {
 		platformAdmin: input.platformAdmin === true,
 	};
 }
+
+/** A membership change requested from the dashboard (DESIGN §6.2 `member:*`). */
+export type MemberChange =
+	| { action: 'invite'; role: Role }
+	| { action: 'update-role'; targetRole: Role; role: Role; self: boolean }
+	| { action: 'remove'; targetRole: Role; self: boolean };
+
+/**
+ * Why `actorRole` may not make `change`, or `undefined` when it's allowed. The RBAC permission
+ * itself (`member:invite` / `member:update-role` / `member:remove`) is checked separately; these
+ * are the ownership rules on top: only owners grant or touch `owner`, and an org always keeps one.
+ */
+export function memberChangeError(actorRole: Role, change: MemberChange, ownerCount: number): string | undefined {
+	const actorIsOwner = actorRole === 'owner';
+	switch (change.action) {
+		case 'invite':
+			return change.role === 'owner' && !actorIsOwner ? 'Only owners can invite another owner.' : undefined;
+		case 'update-role':
+			if (change.role === change.targetRole) return 'That member already has this role.';
+			if ((change.targetRole === 'owner' || change.role === 'owner') && !actorIsOwner)
+				return 'Only owners can grant or change the owner role.';
+			if (change.targetRole === 'owner' && ownerCount <= 1)
+				return 'An organisation needs at least one owner. Make someone else an owner first.';
+			return undefined;
+		case 'remove':
+			if (change.self) return 'You cannot remove yourself from the organisation here.';
+			if (change.targetRole === 'owner' && !actorIsOwner) return 'Only owners can remove an owner.';
+			if (change.targetRole === 'owner' && ownerCount <= 1)
+				return 'An organisation needs at least one owner. Make someone else an owner first.';
+			return undefined;
+	}
+}

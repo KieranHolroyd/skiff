@@ -4,8 +4,13 @@
 #
 #   sudo skiff-restore --yes
 #   sudo skiff-restore --yes --from offsite
+#   sudo skiff-restore --recovery-kit /root/skiff-recovery-kit-edge-2026-11-03.age
 #
 # What it does:
+#   0. With --recovery-kit: decrypts the kit (scripts/recovery-kit.ts) and installs its master key
+#      (and skiff.env, if the kit has one) before anything else, so a fresh VPS gets the R2
+#      credentials and the key the restored secrets are encrypted with. Replaced files are kept
+#      as *.pre-recovery-<UTC>. Non-interactive: SKIFF_RECOVERY_PASSPHRASE_FILE=<file>.
 #   1. Stops the control plane and Litestream (agents + Caddy keep serving cached state).
 #   2. Snapshots the current SQLite database to /var/lib/skiff/backups/pre-restore-*.db.
 #   3. Restores the latest Litestream snapshot + WAL frames from R2 to a temporary file.
@@ -29,6 +34,7 @@ CONTROL_SOCKET="${SKIFF_CONTROL_SOCKET:-/run/skiff/control.sock}"
 BACKUP_DIR="${SKIFF_BACKUP_DIR:-/var/lib/skiff/backups}"
 
 REPLICA=""
+RECOVERY_KIT=""
 ASSUME_YES="${SKIFF_RESTORE_YES:-0}"
 NO_START=0
 
@@ -78,10 +84,13 @@ find_bun() {
 
 usage() {
 	cat <<'EOF'
-Usage: skiff-restore [--yes] [--from <replica-name>] [--no-start]
+Usage: skiff-restore [--yes] [--from <replica-name>] [--recovery-kit <file>] [--no-start]
 
   --yes                 do not prompt (required for non-interactive use)
   --from <replica>      Litestream replica name from litestream.yml (default: the only one)
+  --recovery-kit <file> install the master key (and skiff.env, if included) from a recovery
+                        kit first; for a fresh VPS (passphrase: prompt, or
+                        SKIFF_RECOVERY_PASSPHRASE_FILE)
   --no-start            restore only; leave the control plane stopped
 EOF
 }
@@ -105,6 +114,15 @@ while [ "$#" -gt 0 ]; do
 			REPLICA="${1#*=}"
 			shift
 			;;
+		--recovery-kit)
+			[ "$#" -ge 2 ] || die "--recovery-kit needs a file"
+			RECOVERY_KIT="$2"
+			shift 2
+			;;
+		--recovery-kit=*)
+			RECOVERY_KIT="${1#*=}"
+			shift
+			;;
 		-h | --help)
 			usage
 			exit 0
@@ -114,6 +132,35 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ "$(id -u)" -eq 0 ] || die "run as root"
+
+# 0. Recovery kit first: on a fresh VPS it supplies skiff.env (R2 credentials) and the original
+#    master key. The control plane only reads the key on start, which happens after the restore.
+if [ -n "$RECOVERY_KIT" ]; then
+	[ -r "$RECOVERY_KIT" ] || die "cannot read recovery kit $RECOVERY_KIT"
+	KIT_SCRIPT=""
+	for _candidate in "$SELF_DIR/recovery-kit.ts" "$APP_DIR/tools/recovery-kit.ts"; do
+		if [ -f "$_candidate" ]; then
+			KIT_SCRIPT="$_candidate"
+			break
+		fi
+	done
+	[ -n "$KIT_SCRIPT" ] || die "recovery-kit.ts not found next to this script or in $APP_DIR/tools"
+	KIT_BUN=$(find_bun || true)
+	[ -n "$KIT_BUN" ] || die "no Bun runtime found for the recovery kit (set SKIFF_BUN)"
+	if [ "$ASSUME_YES" != "1" ]; then
+		printf 'Replace the master key (and skiff.env, if in the kit) from %s, then the database from R2? Type "restore" to continue: ' "$RECOVERY_KIT"
+		read -r _answer || die "aborted (no input)"
+		[ "$_answer" = "restore" ] || die "aborted"
+		ASSUME_YES=1
+	fi
+	say "Installing the master key from the recovery kit"
+	# --force: the restored database's secrets are encrypted with the kit's key, so it must win
+	# over whatever key a fresh install generated (the old one is kept as *.pre-recovery-*).
+	SKIFF_ENV_FILE="$ENV_FILE" BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 \
+		"$KIT_BUN" "$KIT_SCRIPT" import "$RECOVERY_KIT" --force --restore-env ||
+		die "recovery kit import failed; nothing else was changed"
+fi
+
 [ -r "$ENV_FILE" ] || die "missing $ENV_FILE (is Skiff installed?)"
 [ -r "$LITESTREAM_CONFIG" ] || die "missing $LITESTREAM_CONFIG (is Litestream configured?)"
 have litestream || die "litestream is not installed (see docs/OPS.md)"

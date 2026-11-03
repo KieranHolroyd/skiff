@@ -17,6 +17,9 @@ D24 (the VPS is an accepted single point of failure), D25 (R2 is canonical), D28
 | `/opt/skiff/previous` | symlink | Last known-good release, kept until the next successful update (`skiff-update-self rollback` target). |
 | `/var/lib/skiff/update/` | `skiff:skiff 0750` | Dashboard update requests (the control plane writes `request`). |
 | `/var/lib/skiff-update/status.json` | `root:skiff 0640` | Updater progress/outcome, read by the dashboard. |
+| `/var/lib/skiff/platform-config/` | `skiff:skiff 0750` | Dashboard settings requests (Settings → Backups / Notifications, §4.3). |
+| `/var/lib/skiff-config/status.json` | `root:skiff 0640` | `skiff-platform-config` progress/outcome, read by the dashboard. |
+| `/etc/skiff/skiff.env.previous` | `root:skiff 0640` | The env file before the last dashboard change (automatic revert). |
 | `/opt/skiff/update-state.json` | `root:root 0600` | Self-updater state: last switch + its DB snapshot, in-flight switch, commits that failed. |
 | `/opt/skiff/releases/<version>/control-plane` | `root:root 0755` | SvelteKit build, bundled Bun runtime, units, scripts, migrations. |
 | `/opt/skiff/releases/<version>/agent` | `root:root 0755` | `skiff-agent` compiled binary. |
@@ -74,7 +77,7 @@ root:skiff`.
 | `SKIFF_NODE_ID` | — | no | Agent only: node id from `skiff-agent join`. |
 | `SKIFF_NODE_TOKEN` | — | **yes** | Agent only: bearer token from the single-use join token. |
 | `SKIFF_CADDY_LISTEN` | `:443,:80` | no | Agent only: listeners Caddy should bind. |
-| `SKIFF_CADDY_ACCESS_LOG` | unset | no | Agent only: Caddy JSON access log to aggregate. |
+| `SKIFF_CADDY_ACCESS_LOG` | installer: `/var/log/caddy/skiff-access.log` | no | Agent only: Caddy JSON access log (0640, read via the `caddy` group). The agent adds it to the Caddy config and aggregates it into 1-minute buckets. |
 | `SKIFF_MCP_ALLOW_DCR` | `1` | no | Keep legacy Dynamic Client Registration alongside CIMD. |
 | `SKIFF_OPEN_SIGNUP` | unset | no | `1` allows open sign-up. Production is invite-only (D10); the first user is always allowed so setup can create the owner. |
 | `SKIFF_DEV_PASSWORD_LOGIN` | unset | no | Development only; refused in production. |
@@ -95,19 +98,21 @@ root:skiff`.
 | `SKIFF_SITE_COOKIE_SECRET` | installer (32 random bytes) | HMAC key for host-only protected-site cookies. |
 | `SKIFF_OBJECT_STORE_SECRET` | installer (32 random bytes) | Server-side encryption/derivation material for the object store layer. |
 | `/etc/skiff/master.key` | installer (32 random bytes, base64) | KEK for per-org data keys. Supplied to the control plane only as the `master-key` systemd credential (`SKIFF_MASTER_KEY_FILE=%d/master-key`). |
-| `SKIFF_R2_ACCESS_KEY_ID` | wizard | R2 access key. |
-| `SKIFF_R2_SECRET_ACCESS_KEY` | wizard | R2 secret key. |
+| `R2_ACCESS_KEY_ID` | installer flag / wizard | R2 access key. |
+| `R2_SECRET_ACCESS_KEY` | installer flag / wizard | R2 secret key. |
 
 ### 2.3 Cloudflare R2
 
 | Variable | Example | Meaning |
 |---|---|---|
-| `SKIFF_R2_ACCOUNT_ID` | `abc123…` | Cloudflare account ID (used by the wizard/API). |
-| `SKIFF_R2_BUCKET` | `skiff-prod` | Bucket for SQLite, artifacts and Parquet. |
-| `SKIFF_R2_ENDPOINT` | `https://<account>.r2.cloudflarestorage.com` | S3-compatible endpoint. Litestream requires the explicit URL. |
-| `SKIFF_R2_SQLITE_PREFIX` | `skiff/sqlite` | Litestream replica path (`skiff/litestream.yml`). |
-| `SKIFF_R2_ARTIFACT_PREFIX` | `skiff/artifacts` | Canonical release artifacts. |
-| `SKIFF_R2_PARQUET_PREFIX` | `skiff/telemetry` | Cold telemetry partitions. |
+| `R2_ACCOUNT_ID` | `abc123…` | Cloudflare account ID. |
+| `R2_BUCKET` | `skiff-prod` | Bucket for SQLite, artifacts and Parquet. |
+| `R2_ENDPOINT` | `https://<account>.r2.cloudflarestorage.com` | S3-compatible endpoint. Written by the installer from the account ID; Litestream requires the explicit URL. |
+
+Object key layout in the bucket is fixed: `skiff/sqlite` (Litestream replica, see
+`litestream.yml`), `releases/<sha256>.zip` (canonical release artifacts) and
+`telemetry/day=YYYY-MM-DD/…` (cold Parquet partitions). The installer still accepts the older
+`SKIFF_R2_*` names as input and writes the `R2_*` names above.
 
 R2 credentials need Object Read & Write on the bucket. Use a bucket-scoped token, not an
 account-wide key. Presigned uploads use the same credentials through the control plane.
@@ -126,13 +131,13 @@ account-wide key. Presigned uploads use the same credentials through the control
 | `SKIFF_APP_DIR` | `/opt/skiff/current/control-plane` | Bundled runtime/tools location. |
 | `SKIFF_BUN` | bundled Bun | Override runtime for the fingerprint/migration helpers. |
 | `SKIFF_VERSION` | latest GitHub release | Installer: pin a version. |
-| `SKIFF_RELEASE_URL` | GitHub release URL | Installer: mirror/custom release base. |
 | `SKIFF_REPO` | `kieranholroyd/private-cloud-deploys` | Installer: repo used for "latest" and cosign identity. |
 | `SKIFF_PUBLIC_HOST` | auto-detected | Installer: host printed in the setup URL. |
-| `SKIFF_MINISIGN_PUBKEY` | downloaded `minisign.pub` | Installer: pinned minisign public key (recommended). |
-| `SKIFF_COSIGN_IDENTITY` / `SKIFF_COSIGN_ISSUER` | release workflow / GitHub OIDC | Installer: cosign verification policy. |
-| `SKIFF_ALLOW_UNSIGNED` | `0` | Installer: explicitly allow unsigned releases. |
-| `SKIFF_OVERWRITE_CONFIG` | `0` | Installer: replace `litestream.yml` on upgrade. |
+| `SKIFF_ALERT_WEBHOOK` | unset | `skiff-alert` (backup/drill `OnFailure=`): webhook URL; SMTP settings are reused for email. |
+
+> **Not yet implemented:** the installer builds from the source tarball and does not consume the
+> signed release bundle, so there is no `SKIFF_RELEASE_URL` / minisign / cosign verification at
+> install time yet. `litestream.yml` is always rewritten by the installer.
 | `SKIFF_FORCE_OS` | `0` | Installer: override the Debian 13 check. |
 
 Units also set `SOCKET_PATH=/run/skiff/control.sock`, `PROTOCOL_HEADER=x-forwarded-proto`
@@ -235,11 +240,13 @@ curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/skiff/main/install.sh
 The installer is the updater. On an existing install it:
 
 1. Snapshots SQLite to `/var/lib/skiff/backups/pre-upgrade-<UTC>.db` with
-   `sqlite3 .backup`.
+   `sqlite3 .backup` whenever `skiff.db` exists (with or without `--upgrade`). Settings
+   not given as flags are kept from the existing `skiff.env`.
 2. Stops the control plane, agent and Caddy (sites are briefly unavailable on the edge;
    homelab-placed projects with cached state keep serving).
-3. Downloads, verifies and unpacks the new release, then atomically repoints
-   `/opt/skiff/current`.
+3. Downloads the source tarball, builds the release on the host, then atomically repoints
+   `/opt/skiff/current`. (Signature verification against the signed release bundle is not
+   wired into the installer yet.)
 4. Restarts Caddy, control plane and agent. Forward-only migrations run on control-plane
    start; the explicit migrator is available for restores.
 5. Health-checks the unix socket. On failure it stops the control plane, restores the
@@ -360,6 +367,64 @@ The default keeps `/var/lib/skiff`, `/etc/skiff` and `/etc/caddy/Caddyfile` so a
 reinstall can reuse the database and master key. `--purge` also removes the system users.
 Backups and releases in R2 survive both modes by design.
 
+### 4.3 Platform settings from the dashboard
+
+**Settings → Backups** (R2 credentials, turning Litestream and the monthly restore drill on and off,
+running a drill, downloading a database snapshot) and **Settings → Notifications** (SMTP for
+sign-in links, invites and email alerts, plus the alert webhook and alert email address) change
+`/etc/skiff/skiff.env` without SSH.
+
+Both tabs are **owner-only**: you must be a platform admin (§6.2 of DESIGN, the admin-plugin role)
+*and* the owner of the org you're signed in to, in your own dashboard session. Org admins, platform
+admins who are not owners, API keys and MCP tokens get 403. On a single-user install that is the
+bootstrap user.
+
+It works like the update button. The control plane can't write `/etc/skiff`, so:
+
+1. The dashboard validates the form and *tests it for real* before queueing anything: R2 credentials
+   must write, read and delete a probe object (`skiff/healthcheck/…`); SMTP must send a test email to
+   you; a new webhook must accept a test alert.
+2. It writes `/var/lib/skiff/platform-config/request.json` (`0600 skiff`). The audit log records the
+   request as `platform.config` / `platform.backups` / `platform.restoreDrill` with key names only,
+   never values.
+3. `skiff-platform-config.path` (root) starts `skiff-platform-config.service`, which runs
+   `skiff-platform-config apply-request`. The helper claims the request (no symlinks or FIFOs,
+   regular files only, at most 64 KiB, deleted once read) and validates it again with the same rules
+   (`packages/contracts/src/platform-config.ts`). Only these keys can ever be written:
+   `R2_ACCOUNT_ID R2_BUCKET R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_ENDPOINT`,
+   `SKIFF_SMTP_HOST/PORT/USER/PASSWORD/FROM/SECURE`, `SKIFF_ALERT_WEBHOOK SKIFF_ALERT_EMAIL`. Values
+   are pattern-checked (single line; nothing that could change the meaning of `litestream.yml`,
+   which expands `${VAR}` before parsing).
+4. It saves the old file as `skiff.env.previous`, writes the new one (`root:skiff 0640`), and
+   restarts the control plane. If the control plane is not healthy within 60 s, it restores
+   `skiff.env.previous`, restarts again and reports `reverted`.
+5. Saving R2 credentials also turns backups on. If `/usr/local/bin/litestream` is missing, the helper
+   installs Litestream v0.3.13 from GitHub, checked against a **pinned sha256** (amd64/arm64;
+   `scripts/platform-config/helper.ts`). It then writes `litestream.yml` (only when missing or
+   still on the old `SKIFF_R2_*` names; operator edits are kept, with a `.bak`), installs the backup
+   units, the `skiff-restore` / `skiff-restore-drill` / `skiff-alert` commands and `sqlite3`, enables
+   Litestream and the drill timer, and checks that Litestream stays running.
+   This works whether or not `SKIFF_OBJECT_STORE` is `r2`. When artifacts do live in R2, the
+   dashboard refuses to remove the credentials or change the bucket.
+
+Progress is in `/var/lib/skiff-config/status.json` (`root:skiff 0640`). The page polls it through the
+restart. The Backups page reads the replica state from `litestream generations` (so a running
+process with nothing in R2 shows as failing), the drill result from
+`/var/lib/skiff/drill/status.json`, and unit states over `systemctl show`.
+
+The installer creates the wrapper and units, and so does any `sudo skiff-update-self` run (e.g.
+`sudo skiff-update-self check`), which is how existing hosts get these tabs. The same operations
+work from the shell:
+
+```sh
+sudo skiff-platform-config backups on    # or off
+sudo skiff-platform-config drill
+sudo skiff-platform-config status
+journalctl -u skiff-platform-config
+```
+
+On a development server (no installed release) the tabs are read-only and explain why.
+
 ---
 
 ## 5. Restore
@@ -412,8 +477,8 @@ curl -sS --unix-socket /run/skiff/control.sock http://localhost/ -o /dev/null -w
      invalidated. The master key must be the original or existing secrets cannot decrypt.
    - R2 credentials must be present or the restore cannot reach the backups. Keep an
      encrypted copy of the env file with the recovery kit.
-4. Install Litestream (`/usr/local/bin/litestream`) and enable
-   `skiff-litestream.service` after R2 is configured.
+4. Install Litestream (`/usr/local/bin/litestream`) and re-run the installer (or enable
+   `skiff-litestream.service`) once R2 is configured.
 5. Run `skiff-restore --yes`.
 6. Re-issue certificates: Caddy obtains them automatically via DNS-01 on first start;
    confirm the Cloudflare token is in `/etc/caddy/cloudflare.token`.
@@ -463,14 +528,18 @@ sudo systemctl enable --now skiff-restore-drill.timer
 sudo journalctl -u skiff-litestream -n 50 --no-pager
 ```
 
-The installer enables both automatically when it detects the binary **and** R2 is
-configured. Without R2 credentials the unit stays disabled; it must not crash-loop at
-boot.
+With R2 configured, the installer always writes `/etc/skiff/litestream.yml`, the Litestream
+and restore-drill units, `skiff-alert@.service`, and the `skiff-restore` /
+`skiff-restore-drill` / `skiff-alert` commands. It enables the units only when `litestream`
+is on `PATH`; otherwise it warns and leaves them disabled, so nothing crash-loops at boot.
+Only the binary has to be installed by hand, or let **Settings → Backups** (§4.3) install the
+pinned Litestream release and enable everything when you save the R2 credentials.
 
 ### 6.2 Recovery kit
 
-The wizard exports `age`-encrypted material containing the master key (and, if you choose,
-the env file). Store it offline. Re-export after every master-key rotation.
+> **Not yet implemented.** The `age`-encrypted recovery kit (DESIGN §10) is not produced yet.
+> Until it is, keep an offline copy of `/etc/skiff/master.key` and `/etc/skiff/skiff.env` in a
+> password manager. Losing the master key means existing secrets cannot be decrypted.
 
 ---
 
@@ -482,7 +551,7 @@ the env file). Store it offline. Re-export after every master-key rotation.
 - `journalctl -u skiff-control-plane|skiff-agent|caddy|skiff-litestream`.
 - The drill writes `/var/lib/skiff/drill/status.json` (`ok`, timestamp, reason).
 - `systemd-analyze security <unit>` for sandbox drift.
-- Litestream: check R2 object age for `SKIFF_R2_SQLITE_PREFIX` (the newest WAL segment
+- Litestream: check R2 object age under `skiff/sqlite` (the newest WAL segment
   should be seconds old). A running process with no recent objects is a silent failure.
 
 ### 7.2 Default alerts (DESIGN §8)
@@ -491,15 +560,16 @@ the env file). Store it offline. Re-export after every master-key rotation.
 |---|---|---|
 | Node offline > 2 min | page | Check WireGuard, agent unit, control-plane connectivity. |
 | Disk > 85% | warn | Find release cache growth / logs; GC old deployments. |
-| Certificate expiring < 14 d | warn | Check Cloudflare token and DNS-01; `caddy reload`. |
-| 5xx spike after promote | page | Roll back the production pointer; inspect the release. |
+| Certificate expiring < 14 d (**not yet implemented**) | warn | Check Cloudflare token and DNS-01; `caddy reload`. |
+| 5xx spike after promote (**not yet implemented**) | page | Roll back the production pointer; inspect the release. |
 | Failed backup or restore drill | page | Run §5.2 / §8.3; do not assume the backup is good. |
 | Litestream restart loop | warn | Check R2 credentials/endpoint and bucket permissions. |
 
 Wire email (SES SMTP) and/or a webhook (ntfy, Discord, Home Assistant) through the
-`Notifier` interface. For the drill, either configure systemd `OnFailure=` on
-`skiff-restore-drill.service` or alert on `status.json.ok != true`; the unit exits non-zero
-on every failure path.
+`Notifier` interface. `skiff-restore-drill.service` and `skiff-litestream.service` ship with
+`OnFailure=skiff-alert@%n.service`, which sends the alert through `SKIFF_ALERT_WEBHOOK` and/or
+SMTP directly (it works with the control plane down) and includes the drill's
+`status.json` reason. Drill results are not yet recorded in the dashboard.
 
 Quick checks:
 
@@ -686,8 +756,6 @@ the control plane.
 
 | Symptom | Check | Fix |
 |---|---|---|
-| Installer: "signature … but minisign is not installed" | `command -v minisign` | Install `minisign` (or `cosign` for a sigstore bundle); do not disable verification on a production host. |
-| Installer: checksum mismatch | Mirror/proxy, partial download | Retry; verify `SKIFF_RELEASE_URL`; never bypass. |
 | Control plane won't start | `journalctl -u skiff-control-plane -n 100` | Usually missing `SKIFF_PLATFORM_ORIGIN`/`BETTER_AUTH_SECRET` in the env file, or `/etc/skiff/master.key` missing. |
 | Caddy can't reach the control plane | `ls -l /run/skiff`, `namei -l /run/skiff/control.sock` | `/run/skiff` must be `2770 root:caddy`; control plane needs `SupplementaryGroups=caddy`. |
 | Agent can't use Caddy admin | `ls -l /var/lib/caddy/admin.sock` | Socket must be `0660` and group `caddy`; agent needs that supplementary group. Never expose `:2019` as a workaround. |

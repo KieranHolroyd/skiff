@@ -45,6 +45,11 @@ export interface AgentConfig {
 	platformHost: string | null;
 	/** Control-plane upstream, usually a unix socket. */
 	platformUpstream: string;
+	/**
+	 * Where to read served TLS certificates for the expiry alert (DESIGN §8), or null when this
+	 * node doesn't terminate TLS. Defaults to loopback on the first non-:80 Caddy listen port.
+	 */
+	certProbe: { host: string; port: number } | null;
 }
 
 export class ConfigError extends Error {
@@ -102,6 +107,32 @@ function parseListen(value: string): string[] {
 			throw new ConfigError(`Invalid Caddy listen address "${address}"`);
 	}
 	return listen;
+}
+
+/** `SKIFF_CERT_PROBE_ADDR` (`host:port`, or `off`), else loopback on the TLS listen port. */
+export function parseCertProbe(
+	value: string | undefined,
+	listen: string[],
+	tls: boolean,
+): { host: string; port: number } | null {
+	const raw = value?.trim();
+	if (raw === 'off' || raw === '0' || raw === 'false') return null;
+	const parse = (address: string) => {
+		const index = address.lastIndexOf(':');
+		if (index === -1) return null;
+		const port = Number(address.slice(index + 1));
+		if (!Number.isInteger(port) || port <= 0 || port > 65535) return null;
+		const host = address.slice(0, index).replace(/^\[|\]$/g, '');
+		return { host: host === '' || host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host, port };
+	};
+	if (raw) {
+		const probe = parse(raw);
+		if (!probe) throw new ConfigError(`Invalid SKIFF_CERT_PROBE_ADDR "${raw}" (expected host:port or off)`);
+		return probe;
+	}
+	if (!tls) return null;
+	const address = listen.find((entry) => !entry.startsWith('unix/') && !entry.endsWith(':80'));
+	return address ? parse(address) : null;
 }
 
 function parseUrl(value: string): string {
@@ -197,6 +228,7 @@ export function loadConfig(env: Env = process.env): AgentConfig {
 		throw new ConfigError('SKIFF_ACME_EMAIL is required when SKIFF_TLS is enabled in production');
 
 	const caddyAccessLog = env.SKIFF_CADDY_ACCESS_LOG?.trim();
+	const caddyListen = parseListen(optional(env, 'SKIFF_CADDY_LISTEN', ':443,:80'));
 	const cookieName = optional(env, 'SKIFF_SITE_COOKIE_COOKIE_NAME', '__skiff_s');
 	if (!/^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$/.test(cookieName))
 		throw new ConfigError('SKIFF_SITE_COOKIE_COOKIE_NAME is not a valid cookie name');
@@ -208,7 +240,7 @@ export function loadConfig(env: Env = process.env): AgentConfig {
 		dataDir,
 		agentVersion: optional(env, 'SKIFF_AGENT_VERSION', '0.1.0'),
 		caddyAdminSocket: optional(env, 'SKIFF_CADDY_ADMIN_SOCKET', '/var/lib/caddy/admin.sock'),
-		caddyListen: parseListen(optional(env, 'SKIFF_CADDY_LISTEN', ':443,:80')),
+		caddyListen,
 		agentSocket: optional(env, 'SKIFF_AGENT_SOCKET', '/run/skiff-agent/agent.sock'),
 		caddyAccessLog: caddyAccessLog ? caddyAccessLog : null,
 		cookieName,
@@ -222,6 +254,7 @@ export function loadConfig(env: Env = process.env): AgentConfig {
 		contentDomain: parseContentDomain(env.SKIFF_CONTENT_DOMAIN),
 		platformHost: parseContentDomain(env.SKIFF_PLATFORM_HOST),
 		platformUpstream: optional(env, 'SKIFF_PLATFORM_UPSTREAM', 'unix//run/skiff/control.sock'),
+		certProbe: parseCertProbe(env.SKIFF_CERT_PROBE_ADDR, caddyListen, tls),
 	};
 }
 

@@ -24,6 +24,7 @@ export interface ProjectRow {
 	productionAccess: 'public' | 'password' | 'platform';
 	previewAccess: 'public' | 'password' | 'platform';
 	accessSecretHash: string | null;
+	workloadJson: string | null;
 	createdBy: string;
 	deletedAt: number | null;
 	purgeAt: number | null;
@@ -114,6 +115,7 @@ export class ProjectService {
 			productionAccess: input.productionAccess,
 			previewAccess: input.previewAccess,
 			accessSecretHash: null,
+			workloadJson: null,
 			createdBy: principal.userId,
 			deletedAt: null,
 			purgeAt: null,
@@ -124,6 +126,7 @@ export class ProjectService {
 			{ principal, action: 'project.create', resource: 'project', resourceId: row.id, args: { slug, name } },
 			() => {
 				this.ctx.db.insert(projects).values(row).run();
+				this.ctx.environments.ensureProduction(row);
 				this.bump(principal.orgId);
 			},
 		);
