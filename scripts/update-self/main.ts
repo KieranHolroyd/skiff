@@ -372,6 +372,7 @@ const host: Host = {
 		run([bun, 'install', '--frozen-lockfile'], { cwd: repoDir });
 		run([bun, 'run', '--cwd', 'apps/control-plane', 'build'], { cwd: repoDir });
 		run([bun, 'run', '--cwd', 'apps/agent', 'build'], { cwd: repoDir });
+		run([bun, 'run', '--cwd', 'apps/cli', 'build'], { cwd: repoDir });
 	},
 
 	/**

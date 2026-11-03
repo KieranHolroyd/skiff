@@ -295,6 +295,7 @@ export class NodeService {
 				routes.push({
 					...base,
 					host: deployment.previewHost,
+					production: false,
 					accessMode: previewAccessMode,
 					access: {
 						mode: previewAccessMode,

@@ -1,67 +1,47 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import Building2Icon from '@lucide/svelte/icons/building-2';
-	import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
 	import UserRoundIcon from '@lucide/svelte/icons/user-round';
+	import * as Tabs from '#lib/components/ui/tabs/index.js';
 	import PageHeader from '../_lib/PageHeader.svelte';
 
-	let { data, children } = $props();
+	let { children } = $props();
 
-	const allTabs = [
-		{
-			label: 'Organisation',
-			href: '/(dashboard)/settings',
-			path: '/settings',
-			icon: Building2Icon
-		},
+	const tabs = [
+		{ label: 'Organisation', href: '/(dashboard)/settings', path: '/settings', icon: Building2Icon },
 		{
 			label: 'Account',
 			href: '/(dashboard)/settings/account',
 			path: '/settings/account',
 			icon: UserRoundIcon
-		},
-		{
-			label: 'Updates',
-			href: '/(dashboard)/settings/updates',
-			path: '/settings/updates',
-			icon: CircleArrowUpIcon,
-			platformAdmin: true
 		}
 	] as const;
 
-	// Updating restarts the whole platform, so only platform admins see the tab.
-	const tabs = $derived(allTabs.filter((tab) => !('platformAdmin' in tab) || data.can.manageNodes));
-
-	function isActive(path: string): boolean {
-		return page.url.pathname === path;
-	}
+	const current = $derived(
+		tabs.find((tab) => tab.path === page.url.pathname)?.href ?? tabs[0].href
+	);
 </script>
 
 <div class="space-y-6">
-	<div>
+	<div class="space-y-4">
 		<PageHeader
 			eyebrow="Platform"
 			title="Settings"
 			description="Your account, the organisation you are signed in to, and the keys that act on your behalf."
 			bordered={false}
 		/>
-		<nav class="flex gap-5 border-b" aria-label="Settings sections">
-			{#each tabs as tab (tab.href)}
-				{@const Icon = tab.icon}
-				{@const active = isActive(tab.path)}
-				<a
-					href={resolve(tab.href)}
-					aria-current={active ? 'page' : undefined}
-					class="-mb-px flex items-center gap-2 border-b-2 py-3 text-sm font-medium transition-colors outline-none focus-visible:text-foreground {active
-						? 'border-brand text-foreground'
-						: 'border-transparent text-muted-foreground hover:border-border hover:text-foreground'}"
-				>
-					<Icon class="size-4" aria-hidden="true" />
-					{tab.label}
-				</a>
-			{/each}
-		</nav>
+		<Tabs.Root value={current} onValueChange={(value) => goto(resolve(value as (typeof tabs)[number]['href']))}>
+			<Tabs.List variant="line" class="w-full justify-start border-b" aria-label="Settings sections">
+				{#each tabs as tab (tab.href)}
+					<Tabs.Trigger value={tab.href} class="flex-none">
+						<tab.icon />
+						{tab.label}
+					</Tabs.Trigger>
+				{/each}
+			</Tabs.List>
+		</Tabs.Root>
 	</div>
 
 	{@render children()}

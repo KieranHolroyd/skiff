@@ -2,7 +2,7 @@ import { building } from '$app/env';
 import { svelteKitHandler } from 'better-auth/svelte-kit';
 import { getMigrations } from 'better-auth/db/migration';
 import type { Handle, ServerInit } from '@sveltejs/kit/hooks';
-import { auth } from '#lib/server/auth.js';
+import { auth, backfillApiKeyRateLimits } from '#lib/server/auth.js';
 import { platformOrigin } from '#lib/server/config.js';
 import { checkCsrf } from '#lib/server/csrf.js';
 import { core } from '#lib/server/core.js';
@@ -17,6 +17,8 @@ export const init: ServerInit = async () => {
 	if (building) return;
 	const { runMigrations } = await getMigrations(auth.options);
 	await runMigrations();
+	const lifted = backfillApiKeyRateLimits();
+	if (lifted > 0) console.info(`[auth] raised rate limit on ${lifted} API key(s)`);
 
 	// One maintenance loop per process (HMR can call init more than once).
 	const global = globalThis as typeof globalThis & { __skiffMaintenance?: ReturnType<typeof setInterval> };

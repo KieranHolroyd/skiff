@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray, lt } from 'drizzle-orm';
 import { uploadSessions } from '@skiff/db';
 import { limits, requirePermission, type InlineFile, type Principal } from '@skiff/contracts';
 import { entriesFromFiles, entriesFromZip, type FileEntry } from './artifact.ts';
@@ -83,6 +83,8 @@ export class UploadService {
 			.where(and(eq(uploadSessions.id, uploadId), eq(uploadSessions.orgId, principal.orgId)))
 			.get();
 		if (!session) throw new NotFoundError('Upload');
+		if (session.projectId && session.projectId !== project.id)
+			throw new ValidationError(`Upload ${uploadId} was created for a different project.`);
 		if (session.status === 'finalized' && session.sha256)
 			throw new ValidationError('This upload has already been deployed.');
 		if (session.status !== 'pending') throw new ValidationError(`Upload is ${session.status}.`);
@@ -90,7 +92,14 @@ export class UploadService {
 			this.ctx.db.update(uploadSessions).set({ status: 'expired' }).where(eq(uploadSessions.id, uploadId)).run();
 			throw new ValidationError('Upload expired before it was finalized.');
 		}
+		// Reject oversize uploads before buffering them (presigned PUTs carry no size cap). A finalize
+		// that arrives before the PUT leaves the session pending so the client can retry.
+		const storedBytes = await this.ctx.objectStore.size?.(session.objectKey);
+		if (storedBytes === null)
+			throw new ValidationError('Nothing has been uploaded for this session yet. PUT the zip to the upload URL first.');
 		try {
+			if (storedBytes !== undefined && storedBytes > limits.artifactBytes)
+				throw new ValidationError(`Archive is ${storedBytes} bytes; the limit is ${limits.artifactBytes}.`);
 			const zip = await this.ctx.objectStore.get(session.objectKey);
 			const entries = entriesFromZip(zip);
 			if (session.totalBytes && entries.reduce((sum, entry) => sum + entry.data.byteLength, 0) > session.totalBytes)
@@ -110,6 +119,8 @@ export class UploadService {
 				.set({ status: 'failed', error: (error as Error).message })
 				.where(eq(uploadSessions.id, uploadId))
 				.run();
+			// A failed session can't be retried, so its object is dead weight.
+			await this.ctx.objectStore.delete(session.objectKey).catch(() => undefined);
 			throw error;
 		}
 	}
@@ -159,18 +170,23 @@ export class UploadService {
 			.all();
 	}
 
-	/** Expire sessions that were never finalized; called by the maintenance sweep. */
+	/**
+	 * Expire presigned sessions past their TTL and delete their objects; called by the maintenance
+	 * sweep. Failed sessions are swept too, because a client can still PUT to the presigned URL
+	 * after finalize failed. The `error` column is kept for failed sessions.
+	 */
 	expireStale(): number {
-		const now = this.ctx.now();
 		const stale = this.ctx.db
 			.select({ id: uploadSessions.id, objectKey: uploadSessions.objectKey })
 			.from(uploadSessions)
-			.where(and(eq(uploadSessions.status, 'pending'), eq(uploadSessions.kind, 'presigned')))
-			.all()
-			.filter((row) => {
-				const session = this.ctx.db.select().from(uploadSessions).where(eq(uploadSessions.id, row.id)).get();
-				return session ? session.expiresAt < now : false;
-			});
+			.where(
+				and(
+					inArray(uploadSessions.status, ['pending', 'failed']),
+					eq(uploadSessions.kind, 'presigned'),
+					lt(uploadSessions.expiresAt, this.ctx.now()),
+				),
+			)
+			.all();
 		for (const row of stale) {
 			this.ctx.db.update(uploadSessions).set({ status: 'expired' }).where(eq(uploadSessions.id, row.id)).run();
 			void this.ctx.objectStore.delete(row.objectKey).catch(() => {});

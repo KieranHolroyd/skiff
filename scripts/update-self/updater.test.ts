@@ -446,6 +446,19 @@ describe('helpers', () => {
 		);
 	});
 
+	test('assembleRelease ships the CLI bundle when the build produced one', () => {
+		const release = join(root, 'cli-release');
+		mkdirSync(join(release, 'repo', 'apps', 'cli', 'dist'), { recursive: true });
+		writeFileSync(join(release, 'repo', 'apps', 'cli', 'dist', 'skif.js'), '// cli');
+		assembleRelease(release, layout.bunBin);
+		expect(readFileSync(join(release, 'cli', 'skif.js'), 'utf8')).toBe('// cli');
+
+		const bare = join(root, 'bare-release');
+		mkdirSync(join(bare, 'repo'), { recursive: true });
+		assembleRelease(bare, layout.bunBin);
+		expect(existsSync(join(bare, 'cli'))).toBe(false);
+	});
+
 	test('verifyRelease reports what the installed unit needs but the release lacks', () => {
 		const release = makeRelease('x', NEW);
 		rmSync(join(release, 'repo', 'apps', 'control-plane', 'build'), { recursive: true });

@@ -1,10 +1,10 @@
 import { and, eq, isNull } from 'drizzle-orm';
-import { projects } from '@skiff/db';
+import { deployments, projects, releases } from '@skiff/db';
+import { parseManifest } from './artifact.ts';
 import {
 	requirePermission,
 	type DeployFiles,
 	type DeploySite,
-	type InlineFile,
 	type Principal,
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
@@ -51,7 +51,16 @@ export class DeployService {
 					promote: input.promote,
 				})
 			: await this.ctx.uploads.finalize(principal, project, input.uploadId!, { promote: input.promote });
-		return { ...view, projectCreated, hint: hintFor(input.files, input.spa) };
+		return { ...view, projectCreated, hint: input.spa === false ? undefined : this.spaHint(view.id) };
+	}
+
+	private spaHint(deploymentId: string): string | undefined {
+		const row = this.ctx.db.select().from(deployments).where(eq(deployments.id, deploymentId)).get();
+		if (!row) return undefined;
+		if (this.ctx.deployments.configFor(row).config.spa) return undefined;
+		const release = this.ctx.db.select({ manifestJson: releases.manifestJson }).from(releases).where(eq(releases.id, row.releaseId)).get();
+		const paths = parseManifest(release?.manifestJson ?? '[]').map((file) => file.path);
+		return looksLikeSpa(paths) ? SPA_HINT : undefined;
 	}
 
 	async deployFiles(principal: Principal, input: DeployFiles): Promise<DeploymentView> {
@@ -63,15 +72,16 @@ export class DeployService {
 	}
 }
 
-/** Suggest SPA mode when the build looks like one, never enable it silently (DESIGN §4.1). */
-function hintFor(files: InlineFile[] | undefined, spa: boolean | undefined): string | undefined {
-	if (!files || spa) return undefined;
-	const paths = new Set(files.map((file) => file.path.replace(/^\.\//, '')));
-	if (!paths.has('index.html')) return undefined;
-	const htmlFiles = [...paths].filter((path) => path.endsWith('.html'));
-	if (htmlFiles.length === 1)
-		return 'This looks like a single-page app. Set `skiff.json` with { "spa": true } to route unknown paths to index.html.';
-	return undefined;
+/**
+ * Suggest SPA mode when the build looks like one, never enable it silently (DESIGN §4.1). Works
+ * for inline and uploaded deploys alike because it reads the stored release manifest.
+ */
+function looksLikeSpa(paths: string[]): boolean {
+	if (!paths.includes('index.html')) return false;
+	return paths.filter((path) => path.endsWith('.html')).length === 1;
 }
+
+const SPA_HINT =
+	'This looks like a single-page app. Set `skiff.json` with { "spa": true } to route unknown paths to index.html.';
 
 export const _notFound = NotFoundError;

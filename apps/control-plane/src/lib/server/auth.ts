@@ -36,6 +36,9 @@ const organizationRoles = {
 	viewer: ac.newRole(statementsFor('viewer')),
 };
 
+const API_KEY_RATE_WINDOW_MS = 24 * 60 * 60 * 1000;
+const API_KEY_RATE_MAX = 100_000;
+
 const secure = platformOrigin.startsWith('https://');
 const platformHost = new URL(platformOrigin).hostname;
 
@@ -107,7 +110,12 @@ export const auth = betterAuth({
 		admin(),
 		passkey({ rpID: platformHost, rpName: 'Skiff', origin: platformOrigin }),
 		twoFactor({ issuer: 'Skiff' }),
-		apiKey({ defaultPrefix: 'skif_', enableMetadata: true }),
+		apiKey({
+			defaultPrefix: 'skif_',
+			enableMetadata: true,
+			// The plugin default (10 per 24h) locks out the CLI after a handful of deploys.
+			rateLimit: { enabled: true, timeWindow: API_KEY_RATE_WINDOW_MS, maxRequests: API_KEY_RATE_MAX },
+		}),
 		magicLink({
 			sendMagicLink: async ({ email, url }) => {
 				await sendMagicLinkEmail(email, url);
@@ -116,6 +124,17 @@ export const auth = betterAuth({
 		sveltekitCookies(getRequestEvent),
 	],
 });
+
+/**
+ * Keys snapshot their rate limit into their own row at creation, so raising the plugin default
+ * doesn't reach existing keys. Lift any key still on the old plugin default (10 per 24h).
+ */
+export function backfillApiKeyRateLimits(): number {
+	const result = sqlite
+		.query('UPDATE apikey SET rateLimitMax = ?, rateLimitTimeWindow = ? WHERE rateLimitMax = 10 AND rateLimitTimeWindow = ?')
+		.run(API_KEY_RATE_MAX, API_KEY_RATE_WINDOW_MS, API_KEY_RATE_WINDOW_MS);
+	return result.changes;
+}
 
 export type Session = typeof auth.$Infer.Session;
 export { contentDomain };

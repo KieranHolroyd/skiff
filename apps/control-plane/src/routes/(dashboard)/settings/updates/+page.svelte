@@ -180,7 +180,7 @@
 					<a
 						href={githubUrl}
 						target="_blank"
-						rel="noreferrer"
+						rel="external noreferrer"
 						class="inline-flex items-center gap-1.5 font-mono text-[13px] underline-offset-4 hover:underline"
 					>
 						<GitBranchIcon class="size-3.5 text-muted-foreground" aria-hidden="true" />

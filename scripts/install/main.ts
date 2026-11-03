@@ -45,6 +45,7 @@ const ENV_FILE = join(ETC_DIR, 'skiff.env');
 const AGENT_ENV_FILE = join(ETC_DIR, 'agent.env');
 const MASTER_KEY_FILE = join(ETC_DIR, 'master.key');
 const SETUP_TOKEN_FILE = join(ETC_DIR, 'setup-token');
+const CLI_COMMANDS = ['/usr/local/bin/skif', '/usr/local/bin/skiff'];
 
 /** The platform version is the repository-root VERSION file (semver); skiff-update-self compares it. */
 function sourceVersion(): string {
@@ -423,8 +424,12 @@ function buildRelease(env: Map<string, string>): string {
 	run(BUN_BIN, ['install', '--frozen-lockfile'], { cwd: join(release, 'repo') });
 	run(BUN_BIN, ['run', '--cwd', 'apps/control-plane', 'build'], { cwd: join(release, 'repo') });
 	run(BUN_BIN, ['run', '--cwd', 'apps/agent', 'build'], { cwd: join(release, 'repo') });
+	run(BUN_BIN, ['run', '--cwd', 'apps/cli', 'build'], { cwd: join(release, 'repo') });
 	cpSync(join(release, 'repo', 'apps', 'agent', 'dist', 'skiff-agent'), join(release, 'agent', 'skiff-agent'));
 	chmodSync(join(release, 'agent', 'skiff-agent'), 0o755);
+	ensureDir(join(release, 'cli'), '0755', 'root:root');
+	cpSync(join(release, 'repo', 'apps', 'cli', 'dist', 'skif.js'), join(release, 'cli', 'skif.js'));
+	chmodSync(join(release, 'cli', 'skif.js'), 0o644);
 	writeFileSync(
 		join(release, 'meta.json'),
 		`${JSON.stringify(
@@ -645,6 +650,34 @@ exit 1
 	writeFileSync(`${path}.tmp`, script, { mode: 0o755 });
 	renameSync(`${path}.tmp`, path);
 	log(`installed ${path}`);
+}
+
+/**
+ * `skif` / `skiff` (D33) run the CLI bundled into the active release with the shared Bun, so the
+ * CLI is upgraded and rolled back together with the platform. No Node.js needed on the host.
+ */
+function installCliCommands(): void {
+	if (options.dryRun) {
+		log(`would install ${CLI_COMMANDS.join(', ')}`);
+		return;
+	}
+	const script = `#!/bin/sh
+# Installed by the Skiff installer: the skif CLI from the active Skiff release.
+for release in ${OPT_DIR}/current ${OPT_DIR}/previous; do
+	if [ -f "$release/cli/skif.js" ]; then
+		exec ${BUN_BIN} "$release/cli/skif.js" "$@"
+	fi
+done
+echo "skif: no release under ${OPT_DIR} ships the CLI; re-run the installer" >&2
+exit 1
+`;
+	for (const path of CLI_COMMANDS) {
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(`${path}.tmp`, script, { mode: 0o755 });
+		chmodSync(`${path}.tmp`, 0o755);
+		renameSync(`${path}.tmp`, path);
+		log(`installed ${path}`);
+	}
 }
 
 function waitFor(label: string, check: () => boolean, timeoutMs = 60_000): void {
@@ -881,6 +914,7 @@ async function install(): Promise<void> {
 		release = buildRelease(env);
 		switchCurrent(release);
 		installUpdateCommand();
+		installCliCommands();
 		writeUnits();
 		startServices();
 		bootstrapNode(env, release);
@@ -910,6 +944,7 @@ function uninstall(): void {
 		rmSync(join(SYSTEMD_DIR, `${service}.service`), { force: true });
 	}
 	run('systemctl', ['daemon-reload'], { allowFailure: true });
+	for (const path of CLI_COMMANDS) rmSync(path, { force: true });
 	if (options.purge) {
 		run('rm', ['-rf', OPT_DIR, VAR_DIR, ETC_DIR]);
 		log('removed data and configuration');

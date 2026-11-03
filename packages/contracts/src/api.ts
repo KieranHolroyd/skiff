@@ -44,7 +44,12 @@ export const deploySiteSchema = z.object({
 	files: z.array(inlineFileSchema).min(1).max(20000).optional(),
 	uploadId: z.string().min(1).max(64).optional(),
 	promote: z.boolean().default(true),
-	spa: z.boolean().optional(),
+	spa: z
+		.boolean()
+		.optional()
+		.describe(
+			'Does not enable SPA routing; that comes from `skiff.json` `{ "spa": true }` in the deployed files. Pass false to suppress the SPA suggestion in the response.',
+		),
 });
 export type DeploySite = z.infer<typeof deploySiteSchema>;
 

@@ -76,6 +76,7 @@ systemctl reset-failed >/dev/null 2>&1 || true
 say "Removing binaries and operator commands"
 rm -rf "$OPT_DIR"
 rm -f /usr/local/bin/skiff-restore /usr/local/bin/skiff-restore-drill /usr/local/bin/skiff-uninstall
+rm -f /usr/local/bin/skif /usr/local/bin/skiff /usr/local/sbin/skiff-update-self
 rm -rf /run/skiff
 
 if [ "$PURGE" != "1" ]; then

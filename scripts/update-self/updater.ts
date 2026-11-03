@@ -852,7 +852,7 @@ function writeMeta(release: string, meta: ReleaseMeta): void {
 	chmodSync(join(release, 'meta.json'), 0o644);
 }
 
-/** Same layout the installer produces: repo/, runtime/{bun,bunx,bin/…} -> shared Bun, agent/. */
+/** Same layout the installer produces: repo/, runtime/{bun,bunx,bin/…} -> shared Bun, agent/, cli/. */
 export function assembleRelease(release: string, bunBin: string): void {
 	mkdirSync(join(release, 'runtime', 'bin'), { recursive: true });
 	for (const dir of [join(release, 'runtime', 'bin'), join(release, 'runtime')]) {
@@ -866,6 +866,13 @@ export function assembleRelease(release: string, bunBin: string): void {
 	if (existsSync(agent)) {
 		copyFileSync(agent, join(release, 'agent', 'skiff-agent'));
 		chmodSync(join(release, 'agent', 'skiff-agent'), 0o755);
+	}
+	// Optional: `/usr/local/bin/skif` falls back to the previous release if this one lacks it.
+	const cli = join(release, 'repo', 'apps', 'cli', 'dist', 'skif.js');
+	if (existsSync(cli)) {
+		mkdirSync(join(release, 'cli'), { recursive: true });
+		copyFileSync(cli, join(release, 'cli', 'skif.js'));
+		chmodSync(join(release, 'cli', 'skif.js'), 0o644);
 	}
 }
 

@@ -48,6 +48,13 @@ export const routeSpecSchema = z.object({
 	})).default([]),
 	/** When set, the edge proxies to a worker node instead of serving from local disk. */
 	upstream: z.string().nullable().default(null),
+	/**
+	 * True for the `<slug>.<contentDomain>` route that follows the production pointer. Production
+	 * is served through a per-project symlink (promote = symlink swap); previews are rooted
+	 * directly at their immutable release. Older control planes omit it; agents then derive it
+	 * from the host.
+	 */
+	production: z.boolean().optional(),
 });
 export type RouteSpec = z.infer<typeof routeSpecSchema>;
 

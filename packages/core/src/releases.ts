@@ -31,7 +31,7 @@ export class ReleaseService {
 			if (error instanceof SiteConfigError) throw new ValidationError(error.message, error.issues);
 			throw error;
 		}
-		const artifact = buildArtifact(entries, { precompress: options.precompress });
+		const artifact = await buildArtifact(entries, { precompress: options.precompress });
 		this.ctx.quota.assertCanUpload(principal.orgId, artifact.sizeBytes);
 
 		const existing = this.ctx.db

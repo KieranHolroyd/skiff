@@ -14,6 +14,8 @@ export interface ObjectStore {
 	get(key: string): Promise<Uint8Array>;
 	delete(key: string): Promise<void>;
 	exists(key: string): Promise<boolean>;
+	/** Stored size in bytes, or null when the object is missing. Lets finalize reject oversize uploads before downloading them. */
+	size?(key: string): Promise<number | null>;
 	/** Browser/CLI PUT URL. */
 	presignPut(key: string, ttlSeconds: number, contentType?: string): Promise<string>;
 	/** Agent GET URL. */
@@ -53,6 +55,15 @@ export class LocalObjectStore implements ObjectStore {
 			return (await stat(this.path(key))).isFile();
 		} catch {
 			return false;
+		}
+	}
+
+	async size(key: string): Promise<number | null> {
+		try {
+			const info = await stat(this.path(key));
+			return info.isFile() ? info.size : null;
+		} catch {
+			return null;
 		}
 	}
 
@@ -132,6 +143,13 @@ export class R2ObjectStore implements ObjectStore {
 	async exists(key: string): Promise<boolean> {
 		const response = await this.client.fetch(this.url(key), { method: 'HEAD' });
 		return response.ok;
+	}
+
+	async size(key: string): Promise<number | null> {
+		const response = await this.client.fetch(this.url(key), { method: 'HEAD' });
+		if (!response.ok) return null;
+		const length = Number(response.headers.get('content-length'));
+		return Number.isFinite(length) ? length : null;
 	}
 
 	private async presign(method: 'GET' | 'PUT', key: string, ttlSeconds: number): Promise<string> {

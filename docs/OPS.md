@@ -15,6 +15,8 @@ D24 (the VPS is an accepted single point of failure), D25 (R2 is canonical), D28
 |---|---|---|
 | `/opt/skiff/current` | symlink | Active release. Atomic swap is the upgrade/rollback primitive. |
 | `/opt/skiff/previous` | symlink | Last known-good release, kept until the next successful update (`skiff-update-self rollback` target). |
+| `/var/lib/skiff/update/` | `skiff:skiff 0750` | Dashboard update requests (the control plane writes `request`). |
+| `/var/lib/skiff-update/status.json` | `root:skiff 0640` | Updater progress/outcome, read by the dashboard. |
 | `/opt/skiff/update-state.json` | `root:root 0600` | Self-updater state: last switch + its DB snapshot, in-flight switch, commits that failed. |
 | `/opt/skiff/releases/<version>/control-plane` | `root:root 0755` | SvelteKit build, bundled Bun runtime, units, scripts, migrations. |
 | `/opt/skiff/releases/<version>/agent` | `root:root 0755` | `skiff-agent` compiled binary. |
@@ -209,6 +211,11 @@ ls -l /run/skiff /var/lib/caddy/admin.sock   # sockets 0660, group caddy
 The first magic link creates the owner (the database hook only allows the first user; afterwards
 the platform is invite-only). Create an API key in **Settings → API keys** for `skif`.
 
+The installer also puts `skif` and `skiff` in `/usr/local/bin`. They run the CLI bundled with the
+active release (`/opt/skiff/current/cli/skif.js`) on Skiff's own Bun, so the host needs no Node.js
+and the CLI upgrades and rolls back with the platform. Sign in with `skif login --url
+https://control.example.com`. On other machines install it from npm (`npm i -g skif`).
+
 ## 4. Upgrade
 
 Re-run the bootstrap with `--upgrade` (or just re-run it; it reuses `/etc/skiff` and the data
@@ -256,14 +263,36 @@ Litestream is current.
 ### 4.1 Self-update from GitHub
 
 ```sh
-sudo skiff-update-self              # pull, build, canary, swap, verify (rolls back on failure)
+sudo skiff-update-self              # install the newer VERSION, if any (rolls back on failure)
+sudo skiff-update-self check        # running vs latest version; changes nothing
 sudo skiff-update-self --dry-run    # show the commit and the plan
 sudo skiff-update-self status       # current / previous / last switch / failed commits
 sudo skiff-update-self rollback     # back to previous; run again to undo the rollback
 ```
 
+Or use **Settings → Updates** in the dashboard (platform owners and admins only).
+
+**Versioning.** The platform version is the repository-root [`VERSION`](../VERSION) file, a
+[semantic version](https://semver.org) such as `1.4.0` or `1.5.0-rc.1`. To ship an update, bump
+it on `main`. The updater reads `VERSION` at the exact commit it would build, and installs it
+only when that version is **newer by semver precedence** than the running release (so
+`0.10.0 > 0.9.0` and `1.0.0-rc.2 < 1.0.0`). Commits that do not bump `VERSION` are never
+installed, and it never downgrades. Use `rollback` to go back, or `--force` to rebuild or
+deliberately downgrade. The build bakes `VERSION` in, so the dashboard always shows the version
+of the code that is actually running.
+
+**From the dashboard.** The control plane is unprivileged and sandboxed, so it cannot update or
+restart itself. The button drops `/var/lib/skiff/update/request`. A root path unit
+(`skiff-update-self.path`) notices it and starts `skiff-update-self.service`, which deletes the
+request and runs `skiff-update-self update --trigger dashboard`. The updater treats the request
+purely as a trigger: it re-checks GitHub itself and never reads the file. Progress goes to
+`/var/lib/skiff-update/status.json` (`root:skiff 0640`), which the page polls through the
+restart. Every request is recorded in the audit log as `platform.update`. The installer creates
+both units, and so does any `sudo skiff-update-self` run, which is how existing hosts get the
+button. Logs: `journalctl -u skiff-update-self`.
+
 `skiff-update-self` (source: [`scripts/update-self/`](../scripts/update-self)) pulls the
-ref the current release was built from (default `main`; `--ref` to pin a tag or sha), and keeps
+ref the current release was built from (default `main`; `--ref` to pin a tag), and keeps
 a known-good control plane serving at every step:
 
 1. **Build beside the running release.** The commit is downloaded and built into
