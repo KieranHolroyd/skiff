@@ -25,9 +25,10 @@ const COOKIELESS_ENDPOINTS = new Set([
 
 /**
  * Prefixes of endpoints authenticated exclusively by a bearer/signature (node tokens, presigned
- * object URLs, one-time site tokens). A cross-site request gains nothing there.
+ * object URLs). A cross-site request gains nothing there. Prefixes end in `/` so they never match
+ * a sibling path in the cookie-authenticated REST API.
  */
-const COOKIELESS_PREFIXES = ['/api/agent/', '/api/objects/', '/api/v1/site-access'];
+const COOKIELESS_PREFIXES = ['/api/agent/', '/api/objects/'];
 
 export type CsrfDecision = { ok: true } | { ok: false; reason: string };
 

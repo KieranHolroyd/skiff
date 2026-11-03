@@ -62,6 +62,8 @@ export interface TelemetryOptions {
 	path: string;
 	memoryLimitMb?: number;
 	threads?: number;
+	/** 1-minute retention in hours (default 48). Rollups only rewrite hours fully inside it. */
+	rawRetentionHours?: number;
 	objectStore?: ObjectStore;
 	/** Called for every swallowed telemetry failure. */
 	onError?: (error: Error) => void;
@@ -76,7 +78,6 @@ type DuckDbApi = typeof import('@duckdb/node-api');
 const MINUTE_MS = 60_000;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
-const SEVEN_DAYS_MS = 7 * DAY_MS;
 const TOP_N = 10;
 
 const defaultLoadDuckDb: () => Promise<DuckDbApi> = () => import('@duckdb/node-api');
@@ -277,6 +278,7 @@ export class TelemetryStore {
 	readonly #path: string;
 	readonly #memoryLimitMb: number;
 	readonly #threads: number;
+	readonly #rawRetentionHours: number;
 	readonly #objectStore: ObjectStore | undefined;
 	readonly #onError: ((error: Error) => void) | undefined;
 	readonly #now: () => number;
@@ -288,6 +290,11 @@ export class TelemetryStore {
 	#writeTail: Promise<void> = Promise.resolve();
 	#closed = false;
 
+	/** Whether daily Parquet partitions can be archived (an object store is configured). */
+	get archiveEnabled(): boolean {
+		return this.#objectStore !== undefined;
+	}
+
 	/** True once DuckDB opened and the schema was created. */
 	available = false;
 	/** The fatal open error, or the most recent swallowed operation error. */
@@ -297,6 +304,7 @@ export class TelemetryStore {
 		this.#path = options.path;
 		this.#memoryLimitMb = options.memoryLimitMb ?? 256;
 		this.#threads = options.threads ?? 2;
+		this.#rawRetentionHours = options.rawRetentionHours ?? 48;
 		this.#objectStore = options.objectStore;
 		this.#onError = options.onError;
 		this.#now = options.now ?? Date.now;
@@ -412,21 +420,55 @@ export class TelemetryStore {
 			const fromMs = toEpochMs(input.from);
 			const toMs = toEpochMs(input.to);
 			if (toMs < fromMs) return [];
-			const table =
-				input.interval === '1h' && toMs - fromMs > SEVEN_DAYS_MS ? 'metrics_1h' : 'metrics_1m';
 			const interval = input.interval === '1h' ? '1 hour' : '1 minute';
 
-			const params: string[] = [isoFromMs(fromMs), isoFromMs(toMs)];
 			const filters: string[] = [];
+			const filterParams: string[] = [];
 			if (input.host !== undefined) {
 				filters.push('host = ?');
-				params.push(input.host);
+				filterParams.push(input.host);
 			}
 			if (input.projectId !== undefined) {
 				filters.push('project_id = ?');
-				params.push(input.projectId);
+				filterParams.push(input.projectId);
 			}
 			const where = filters.length > 0 ? `AND ${filters.join(' AND ')}` : '';
+
+			// Hourly queries read metrics_1h wherever an hour has been rolled up (1-minute rows
+			// are pruned after 48 h) and fall back to 1-minute rows for hours not rolled yet,
+			// such as the current one. Minute queries only have 1-minute data to read.
+			let source: string;
+			let params: string[];
+			if (input.interval === '1h') {
+				source = `(
+					SELECT * FROM metrics_1h
+					WHERE bucket >= date_trunc('hour', CAST(? AS TIMESTAMPTZ)) AND bucket <= CAST(? AS TIMESTAMPTZ)
+						${where}
+					UNION ALL
+					SELECT * FROM metrics_1m m
+					WHERE bucket >= CAST(? AS TIMESTAMPTZ) AND bucket <= CAST(? AS TIMESTAMPTZ)
+						${where}
+						AND NOT EXISTS (
+							SELECT 1 FROM metrics_1h h
+							WHERE h.host = m.host AND h.bucket = date_trunc('hour', m.bucket)
+						)
+				)`;
+				params = [
+					isoFromMs(fromMs),
+					isoFromMs(toMs),
+					...filterParams,
+					isoFromMs(fromMs),
+					isoFromMs(toMs),
+					...filterParams,
+				];
+			} else {
+				source = `(
+					SELECT * FROM metrics_1m
+					WHERE bucket >= CAST(? AS TIMESTAMPTZ) AND bucket <= CAST(? AS TIMESTAMPTZ)
+						${where}
+				)`;
+				params = [isoFromMs(fromMs), isoFromMs(toMs), ...filterParams];
+			}
 
 			const sql = `
 				SELECT epoch_ms(time_bucket(INTERVAL '${interval}', bucket)) AS bucket_ms,
@@ -445,9 +487,7 @@ export class TelemetryStore {
 						sum(duration_p95_ms * CAST(requests AS DOUBLE)) / NULLIF(sum(CAST(requests AS DOUBLE)), 0),
 						0
 					) AS duration_p95_ms
-				FROM ${table}
-				WHERE bucket >= CAST(? AS TIMESTAMPTZ) AND bucket <= CAST(? AS TIMESTAMPTZ)
-					${where}
+				FROM ${source} AS src
 				GROUP BY time_bucket(INTERVAL '${interval}', bucket), host, project_id
 				ORDER BY bucket_ms ASC, host ASC, project_id ASC`;
 
@@ -458,9 +498,18 @@ export class TelemetryStore {
 		});
 	}
 
+	/**
+	 * Roll closed hours of 1-minute data into metrics_1h, replacing earlier rollups of the same
+	 * hours. By default only hours that are still *complete* in metrics_1m are recomputed: the
+	 * oldest hour is pruned minute by minute, and re-rolling it would overwrite a full hourly row
+	 * with a shrinking remainder. An explicit `from` overrides that (backfills, tests).
+	 */
 	async rollupHourly(from?: TimeInput, to?: TimeInput): Promise<number> {
 		return this.#guarded('rollupHourly', 0, async () => {
-			const fromMs = from === undefined ? 0 : toEpochMs(from);
+			const fromMs =
+				from === undefined
+					? Math.ceil((this.#now() - this.#rawRetentionHours * HOUR_MS) / HOUR_MS) * HOUR_MS
+					: toEpochMs(from);
 			const toMs = to === undefined ? this.#now() : toEpochMs(to);
 			if (toMs <= fromMs) return 0;
 
@@ -500,7 +549,7 @@ export class TelemetryStore {
 
 	async prune(options: PruneOptions = {}): Promise<{ raw: number; hourly: number }> {
 		return this.#guarded('prune', { raw: 0, hourly: 0 }, async () => {
-			const rawHours = options.rawHours ?? 48;
+			const rawHours = options.rawHours ?? this.#rawRetentionHours;
 			const hourlyDays = options.hourlyDays ?? 90;
 			if (!Number.isFinite(rawHours) || rawHours < 0)
 				throw new Error('rawHours must be a non-negative number');

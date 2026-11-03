@@ -91,9 +91,10 @@ function redirectRoute(redirect: Redirect): CaddyRoute {
 	return { match, handle: [{ handler: 'static_response', status_code: redirect.status, body: '' }] };
 }
 
-function headersRoute(rule: HeaderRule): CaddyRoute {
+function headersRoute(rule: HeaderRule, privateCache: boolean): CaddyRoute {
 	const set: Record<string, string[]> = {};
-	for (const [name, value] of Object.entries(rule.headers)) set[name] = [value];
+	for (const [name, value] of Object.entries(rule.headers))
+		set[name] = [privateCache && name.toLowerCase() === 'cache-control' ? privateCacheControl(value) : value];
 	const match = rule.path.includes('*')
 		? [{ path: [rule.path] }]
 		: [{ path: [rule.path] }];
@@ -111,40 +112,67 @@ function trailingSlashRoutes(site: SiteConfig): CaddyRoute[] {
 						not: [{ path_regexp: { pattern: '\\.[a-zA-Z0-9]{1,8}$' } }],
 					},
 				],
-				handle: [{ handler: 'redir', to: '{http.request.uri}/', status_code: 308 }],
+				// `uri.path` + `prefixed_query` keeps `/docs?x=1` → `/docs/?x=1` (not `/docs?x=1/`).
+				handle: [
+					{
+						handler: 'redir',
+						to: '{http.request.uri.path}/{http.request.uri.prefixed_query}',
+						status_code: 308,
+					},
+				],
 			},
 		];
 	}
 	return [
 		{
 			match: [{ path_regexp: { name: 'skiff_slash', pattern: '^(?P<path>.+)/$' } }],
-			handle: [{ handler: 'redir', to: '{http.regexp.path}', status_code: 308 }],
+			handle: [
+				{
+					handler: 'redir',
+					to: '{http.regexp.skiff_slash.path}{http.request.uri.prefixed_query}',
+					status_code: 308,
+				},
+			],
 		},
 	];
 }
 
-function cacheRoutes(immutablePaths: string[]): CaddyRoute[] {
-	const immutable = [
-		'/_app/immutable/*',
-		'/assets/*',
-		'/_astro/*',
-		...immutablePaths,
-		/\/[^/]+\.[a-f0-9]{8,}\.(?:js|mjs|css|woff2?|ttf|otf|png|jpe?g|gif|svg|webp|avif|ico|map)$/,
-	];
+const HASHED_EXTENSIONS = 'js|mjs|css|woff2?|ttf|otf|png|jpe?g|gif|svg|webp|avif|ico|map';
+
+/**
+ * Hashed build output, cached for a year (DESIGN §4.1). Only names that actually carry a content
+ * hash qualify: `name.<hex>.ext` (webpack-style) anywhere, and Vite/Rollup's `name-<8 chars>.ext`
+ * under `/assets/` and `/_astro/`. A plain `/assets/logo.png` must not be pinned for a year.
+ */
+const HASHED_PATTERNS = [
+	`\\.[a-f0-9]{8,}\\.(?:${HASHED_EXTENSIONS})$`,
+	`^/(?:assets|_astro)/(?:.*/)?[^/]+[-.][A-Za-z0-9_-]{8}\\.(?:${HASHED_EXTENSIONS})$`,
+];
+
+/**
+ * Cache policy. Protected sites keep `private` on every response (DESIGN §6.4) so a shared cache
+ * never stores content that sits behind forward_auth.
+ */
+function cacheRoutes(immutablePaths: string[], privateCache: boolean): CaddyRoute[] {
+	const scope = privateCache ? 'private' : 'public';
+	const immutable = headerHandler({ 'Cache-Control': [`${scope}, max-age=31536000, immutable`] });
 	return [
-		{
-			match: [{ path: immutable.filter((p): p is string => typeof p === 'string') }],
-			handle: [headerHandler({ 'Cache-Control': ['public, max-age=31536000, immutable'] })],
-		},
-		{
-			match: [{ path_regexp: { pattern: '\\.[a-f0-9]{8,}\\.(?:js|mjs|css|woff2?|ttf|otf|png|jpe?g|gif|svg|webp|avif|ico|map)$' } }],
-			handle: [headerHandler({ 'Cache-Control': ['public, max-age=31536000, immutable'] })],
-		},
+		{ match: [{ path: ['/_app/immutable/*', ...immutablePaths] }], handle: [immutable] },
+		...HASHED_PATTERNS.map((pattern) => ({ match: [{ path_regexp: { pattern } }], handle: [immutable] })),
 		{
 			match: [{ path: ['/', '*.html'] }],
-			handle: [headerHandler({ 'Cache-Control': ['no-cache'] })],
+			handle: [headerHandler({ 'Cache-Control': [privateCache ? 'private, no-cache' : 'no-cache'] })],
 		},
 	];
+}
+
+/** On protected sites a `_headers` Cache-Control may tune lifetime but never make content public. */
+function privateCacheControl(value: string): string {
+	const directives = value
+		.split(',')
+		.map((part) => part.trim())
+		.filter((part) => part && !/^(?:public|private)$/i.test(part) && !/^s-maxage=/i.test(part));
+	return ['private', ...directives].join(', ');
 }
 
 /** A single host's route: auth → security/custom headers → redirects → rewrites → files → 404. */
@@ -196,9 +224,9 @@ export function compileSiteRoute(input: SiteCompileInput): CaddyRoute {
 		});
 	}
 
-	routes.push(...cacheRoutes(input.immutablePaths ?? []));
+	routes.push(...cacheRoutes(input.immutablePaths ?? [], protectedSite));
 	// Site `_headers` come after the defaults so they can override cache policy for a path.
-	for (const rule of input.headers) routes.push(headersRoute(rule));
+	for (const rule of input.headers) routes.push(headersRoute(rule, protectedSite));
 
 	if (input.upstream) {
 		// Homelab/worker placement: the edge terminates TLS and proxies over WireGuard. If the
@@ -219,7 +247,7 @@ export function compileSiteRoute(input: SiteCompileInput): CaddyRoute {
 											handler: 'static_response',
 											status_code: 503,
 											headers: { 'Retry-After': ['30'] },
-											body: 'This site is temporarily unavailable. Please try again shortly.',
+											body: UNAVAILABLE_BODY,
 										},
 									],
 								},
@@ -259,7 +287,9 @@ export function compileErrorRoute(host: string, releasePath: string, notFound: s
 	const safe = notFound.replace(/^\/+/, '');
 	return {
 		'@id': `error:${host}`,
-		match: [{ host: [host] }],
+		// Only a genuine 404 gets the site's page. Any other error (e.g. the forward_auth agent is
+		// unreachable) must not fall back to serving files, so protected sites fail closed.
+		match: [{ host: [host], expression: '{http.error.status_code} in [404]' }],
 		handle: [
 			{ handler: 'rewrite', uri: `/${safe}` },
 			{
@@ -267,6 +297,32 @@ export function compileErrorRoute(host: string, releasePath: string, notFound: s
 				root: releasePath,
 				precompressed: { br: {}, gzip: {} },
 				precompressed_order: ['br', 'gzip'],
+			},
+		],
+	};
+}
+
+const UNAVAILABLE_BODY = 'This site is temporarily unavailable. Please try again shortly.';
+
+/**
+ * Worker-placed site whose upstream cannot be reached (homelab offline, DESIGN §9). A dial
+ * failure is a Caddy error, not an upstream response, so `handle_response` never sees it; the
+ * branded 503 has to come from the server's error routes.
+ */
+export function compileUnavailableRoute(host: string): CaddyRoute {
+	return {
+		'@id': `unavailable:${host}`,
+		match: [{ host: [host] }],
+		handle: [
+			{
+				handler: 'static_response',
+				status_code: 503,
+				headers: {
+					'Retry-After': ['30'],
+					'Content-Type': ['text/plain; charset=utf-8'],
+					'Cache-Control': ['no-store'],
+				},
+				body: UNAVAILABLE_BODY,
 			},
 		],
 	};
@@ -342,13 +398,14 @@ export function compileCaddyConfig(options: {
 		});
 	}
 	const errorRoutes = options.sites
-		.filter((site) => !site.upstream)
 		.map((site) =>
-			compileErrorRoute(
-				site.host,
-				site.releasePath,
-				site.site.notFound ? site.site.notFound : site.site.spa ? '/index.html' : null,
-			),
+			site.upstream
+				? compileUnavailableRoute(site.host)
+				: compileErrorRoute(
+						site.host,
+						site.releasePath,
+						site.site.notFound ? site.site.notFound : site.site.spa ? '/index.html' : null,
+					),
 		)
 		.filter((route): route is CaddyRoute => route !== null);
 

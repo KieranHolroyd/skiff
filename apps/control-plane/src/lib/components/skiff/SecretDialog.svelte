@@ -29,7 +29,9 @@
 <Dialog.Root bind:open>
 	<Dialog.Content class="sm:max-w-xl" interactOutsideBehavior="ignore">
 		<Dialog.Header class="flex-row items-start gap-3.5">
-			<span class="grid size-9 shrink-0 place-items-center rounded-lg bg-brand text-brand-foreground">
+			<span
+				class="grid size-9 shrink-0 place-items-center rounded-lg bg-brand text-brand-foreground"
+			>
 				<KeyRoundIcon class="size-4" />
 			</span>
 			<div class="space-y-1.5">
@@ -62,7 +64,9 @@
 
 		<Alert.Root variant="warning">
 			<TriangleAlertIcon />
-			<Alert.Description>This is the only time it is shown. Store it somewhere safe.</Alert.Description>
+			<Alert.Description
+				>This is the only time it is shown. Store it somewhere safe.</Alert.Description
+			>
 		</Alert.Root>
 
 		<Dialog.Footer>

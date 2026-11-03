@@ -57,7 +57,10 @@ key for the REST API. Codes expire after five minutes and are stored hashed.
 Machine-authenticated with a node bearer token; no cookies. `POST /api/agent/join` consumes a
 single-use join token and returns the node's long-lived token.
 
-- `GET /api/agent/desired-state` — desired-state JSON; ETag `"v<version>"`; `?wait=25` long-polls.
+- `GET /api/agent/desired-state` — desired-state JSON; ETag `"v<version>"`; `?wait=<seconds>` long-polls
+  (server cap 25). The agent sends `wait=8` to stay under Bun's default 10 s idle timeout
+  (`CONNECTION_IDLE_TIMEOUT`), and re-pulls without `If-None-Match` after a failed converge so
+  expired presigned release URLs are reissued. The token is checked before the wait.
 - `POST /api/agent/heartbeat` — stats + actual state version every ~10 s.
 - `POST /api/agent/telemetry` — pre-aggregated 1-minute access buckets (never raw requests).
 
@@ -71,3 +74,5 @@ verified with HMAC. With R2, URLs point directly at R2.
 `GET|POST /_skiff/site-login?project=<id>&return=<content url>` authenticates a visitor (platform
 session or password), redeems share links, and redirects to
 `https://<host>/_skiff/callback?token=<host-bound token>` where the agent sets the host-only cookie.
+The token is valid for 60 s and is redeemed once (the agent remembers its `jti`); the cookie
+carries the session expiry (`sexp`).

@@ -12,7 +12,7 @@ export const load: PageServerLoad = ({ locals, url }) => {
 			permission: isPermission(scope),
 			destructive: (destructivePermissions as readonly string[]).includes(scope),
 			// Pre-tick identity scopes and deployer-level permissions; destructive ones stay unticked.
-			checked: !isPermission(scope) || (defaultAgentScopes as readonly string[]).includes(scope),
-		})),
+			checked: !isPermission(scope) || (defaultAgentScopes as readonly string[]).includes(scope)
+		}))
 	};
 };

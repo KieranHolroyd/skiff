@@ -20,7 +20,11 @@ set -eu
 
 ENV_FILE="${SKIFF_ENV_FILE:-/etc/skiff/skiff.env}"
 LITESTREAM_CONFIG="${SKIFF_LITESTREAM_CONFIG:-/etc/skiff/litestream.yml}"
-APP_DIR="${SKIFF_APP_DIR:-/opt/skiff/current/control-plane}"
+# Installer layout: /opt/skiff/current/{runtime/bun,repo/scripts,repo/packages/db/migrations}.
+# Release-bundle layout: $SKIFF_APP_DIR/{runtime/bun,tools,migrations}. Both are supported.
+ROOT="${SKIFF_ROOT:-/opt/skiff/current}"
+APP_DIR="${SKIFF_APP_DIR:-$ROOT/control-plane}"
+SELF_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 CONTROL_SOCKET="${SKIFF_CONTROL_SOCKET:-/run/skiff/control.sock}"
 BACKUP_DIR="${SKIFF_BACKUP_DIR:-/var/lib/skiff/backups}"
 
@@ -32,6 +36,45 @@ say() { printf '%s\n' "$*"; }
 warn() { printf 'skiff-restore: warning: %s\n' "$*" >&2; }
 die() { printf 'skiff-restore: error: %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
+
+# Read only the named keys from the systemd EnvironmentFile and export them. The file is never
+# executed: values such as `Skiff <noreply@…>` or passwords containing `$`, `;` or spaces are not
+# shell syntax. Double-quoted values use systemd escapes (\" \\ \` \$).
+load_env() {
+	_file="$1"
+	shift
+	while IFS= read -r _line || [ -n "$_line" ]; do
+		case "$_line" in '' | '#'* | ';'*) continue ;; esac
+		_key=${_line%%=*}
+		[ "$_key" != "$_line" ] || continue
+		_val=${_line#*=}
+		for _want in "$@"; do
+			[ "$_key" = "$_want" ] || continue
+			case "$_val" in
+				\"*\")
+					_val=${_val#\"}
+					_val=${_val%\"}
+					_val=$(printf '%s' "$_val" | sed 's/\\\(["\\`$]\)/\1/g')
+					;;
+				\'*\')
+					_val=${_val#\'}
+					_val=${_val%\'}
+					;;
+			esac
+			export "$_key=$_val"
+		done
+	done <"$_file"
+}
+
+find_bun() {
+	for _candidate in "${SKIFF_BUN:-}" "$ROOT/runtime/bun" "$ROOT/runtime/bin/bun" "$APP_DIR/runtime/bun"; do
+		if [ -n "$_candidate" ] && [ -x "$_candidate" ]; then
+			printf '%s\n' "$_candidate"
+			return 0
+		fi
+	done
+	command -v bun 2>/dev/null
+}
 
 usage() {
 	cat <<'EOF'
@@ -76,11 +119,11 @@ done
 have litestream || die "litestream is not installed (see docs/OPS.md)"
 have sqlite3 || die "sqlite3 is not installed"
 
-# systemd EnvironmentFile syntax is shell-compatible for the values the installer writes.
-set -a
-# shellcheck disable=SC1090
-. "$ENV_FILE"
-set +a
+load_env "$ENV_FILE" SKIFF_DATA_DIR R2_ACCOUNT_ID R2_BUCKET R2_ENDPOINT R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY
+# litestream.yml needs the endpoint; installs from before it was written only have the account id.
+if [ -z "${R2_ENDPOINT:-}" ] && [ -n "${R2_ACCOUNT_ID:-}" ]; then
+	export R2_ENDPOINT="https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com"
+fi
 
 DB_PATH="${SKIFF_DATA_DIR:-/var/lib/skiff/data}/skiff.db"
 DB_DIR=$(dirname "$DB_PATH")
@@ -137,6 +180,30 @@ restart_services_after_restore() {
 	return 0
 }
 
+rollback_to_snapshot() {
+	if [ "$RESTORE_DONE" != "1" ] || [ -z "$SNAPSHOT" ] || [ ! -f "$SNAPSHOT" ]; then
+		warn "no pre-restore snapshot to roll back to"
+		return 1
+	fi
+	warn "rolling back to $SNAPSHOT"
+	systemctl stop skiff-control-plane.service >/dev/null 2>&1 || true
+	rm -f "$DB_PATH-wal" "$DB_PATH-shm"
+	cp "$SNAPSHOT" "$DB_PATH"
+	chown skiff:skiff "$DB_PATH"
+	chmod 0640 "$DB_PATH"
+	RESTORE_DONE=0
+	if [ "$NO_START" = "1" ]; then
+		SERVICES_STOPPED=0
+		warn "rolled back; services left stopped (--no-start)"
+		return 0
+	fi
+	if restart_services_after_restore; then
+		warn "rolled back; the original database is serving again"
+	else
+		warn "rollback also failed to become healthy"
+	fi
+}
+
 say "Checking service state"
 systemctl is-active --quiet skiff-litestream.service && LS_WAS_ACTIVE=1
 
@@ -189,20 +256,29 @@ rm -f "$DB_PATH-wal" "$DB_PATH-shm"
 mv "$TMP_DB" "$DB_PATH"
 RESTORE_DONE=1
 
-# 4. Forward-only migrations. packages/db applies them on open, but running the bundled
-#    migrator before start makes the restore deterministic and fails early.
-if [ -f "$APP_DIR/tools/skiff-migrate.ts" ] && [ -d "$APP_DIR/migrations" ] &&
-	[ -x "$APP_DIR/runtime/bun" ]; then
+# 4. Forward-only migrations. packages/db applies them on open, but running the migrator before
+#    start makes the restore deterministic and fails early. If they fail, put the pre-restore
+#    database back rather than starting the control plane on a half-migrated restore.
+MIGRATOR=""
+MIGRATIONS=""
+if [ -f "$SELF_DIR/skiff-migrate.ts" ] && [ -d "$SELF_DIR/../packages/db/migrations" ]; then
+	MIGRATOR="$SELF_DIR/skiff-migrate.ts"
+	MIGRATIONS="$SELF_DIR/../packages/db/migrations"
+elif [ -f "$APP_DIR/tools/skiff-migrate.ts" ] && [ -d "$APP_DIR/migrations" ]; then
+	MIGRATOR="$APP_DIR/tools/skiff-migrate.ts"
+	MIGRATIONS="$APP_DIR/migrations"
+fi
+BUN=$(find_bun || true)
+if [ -n "$MIGRATOR" ] && [ -n "$BUN" ] && have runuser; then
 	say "Applying migrations"
-	if have runuser; then
-		runuser -u skiff -- "$APP_DIR/runtime/bun" "$APP_DIR/tools/skiff-migrate.ts" \
-			"$DB_PATH" "$APP_DIR/migrations" ||
-			die "migrations failed"
-	else
-		warn "runuser not available; skipping explicit migrations (control plane applies them on start)"
+	if ! runuser -u skiff -- env BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 \
+		"$BUN" "$MIGRATOR" "$DB_PATH" "$MIGRATIONS"; then
+		warn "migrations failed on the restored database"
+		rollback_to_snapshot || true
+		die "restore aborted: migrations failed"
 	fi
 else
-	warn "bundled migrator not found; the control plane will apply migrations on start"
+	warn "migrator, Bun or runuser not found; the control plane will apply migrations on start"
 fi
 
 if [ "$NO_START" = "1" ]; then
@@ -223,17 +299,5 @@ warn "control plane did not become healthy after restore"
 systemctl status skiff-control-plane.service --no-pager >&2 || true
 journalctl -u skiff-control-plane.service -n 50 --no-pager >&2 || true
 
-if [ "$RESTORE_DONE" = "1" ] && [ -n "$SNAPSHOT" ] && [ -f "$SNAPSHOT" ]; then
-	warn "rolling back to $SNAPSHOT"
-	systemctl stop skiff-control-plane.service >/dev/null 2>&1 || true
-	rm -f "$DB_PATH-wal" "$DB_PATH-shm"
-	cp "$SNAPSHOT" "$DB_PATH"
-	chown skiff:skiff "$DB_PATH"
-	chmod 0640 "$DB_PATH"
-	if restart_services_after_restore; then
-		warn "rolled back; the original database is serving again"
-	else
-		warn "rollback also failed to become healthy"
-	fi
-fi
+rollback_to_snapshot || true
 exit 1

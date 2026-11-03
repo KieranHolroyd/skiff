@@ -5,7 +5,12 @@
   "workspaces": ["apps/*", "packages/*", "spikes/*"],
   "scripts": {
     "check": "bun run --filter '*' check",
-    "test": "bun test"
+    "test": "bun test",
+    "prepare": "git config core.hooksPath .githooks 2>/dev/null || true",
+    "version:show": "bun scripts/version.ts show",
+    "version:patch": "bun scripts/version.ts patch",
+    "version:minor": "bun scripts/version.ts minor",
+    "version:major": "bun scripts/version.ts major"
   },
   "devDependencies": {
     "@types/bun": "latest",

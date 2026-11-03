@@ -1,31 +1,37 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
 	import { onMount } from 'svelte';
+	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import FingerprintIcon from '@lucide/svelte/icons/fingerprint';
 	import LaptopIcon from '@lucide/svelte/icons/laptop';
 	import LinkIcon from '@lucide/svelte/icons/link';
 	import MonitorSmartphoneIcon from '@lucide/svelte/icons/monitor-smartphone';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PlusIcon from '@lucide/svelte/icons/plus';
-	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
+	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import UserRoundIcon from '@lucide/svelte/icons/user-round';
+	import { toast } from 'svelte-sonner';
 	import { authClient } from '#lib/auth-client.js';
+	import { askConfirm } from '#lib/confirm.svelte.js';
+	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
+	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
+	import GitHubMark from '#lib/components/skiff/GitHubMark.svelte';
+	import * as Alert from '#lib/components/ui/alert/index.js';
+	import * as Avatar from '#lib/components/ui/avatar/index.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
+	import * as Card from '#lib/components/ui/card/index.js';
+	import * as Dialog from '#lib/components/ui/dialog/index.js';
+	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
-	import { Label } from '#lib/components/ui/label/index.js';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
-	import FormFeedback from '#lib/components/skiff/FormFeedback.svelte';
-	import GitHubMark from '#lib/components/skiff/GitHubMark.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import * as Item from '#lib/components/ui/item/index.js';
+	import { Spinner } from '#lib/components/ui/spinner/index.js';
+	import * as Table from '#lib/components/ui/table/index.js';
 	import EmptyState from '../../_lib/EmptyState.svelte';
-	import Panel from '../../_lib/Panel.svelte';
 	import { formatDate, formatDateTime, shortId } from '../../_lib/format.js';
 	import type { PageProps } from './$types';
 
 	interface AccountFormResult {
-		message?: string;
-		success?: string;
 		fieldErrors?: Record<string, string>;
 	}
 
@@ -34,19 +40,20 @@
 
 	const otherSessions = $derived(data.sessions.filter((session) => !session.current));
 
+	let profileOpen = $state(false);
+	let passkeyOpen = $state(false);
 	let passkeyName = $state('');
 	let passkeyPending = $state(false);
 	let passkeyError = $state('');
 	let passkeySupported = $state<boolean | null>(null);
 
 	onMount(() => {
-		passkeySupported = typeof window !== 'undefined' && 'PublicKeyCredential' in window;
+		passkeySupported = 'PublicKeyCredential' in window;
 	});
 
 	async function addPasskey(event: SubmitEvent) {
 		event.preventDefault();
 		if (passkeySupported !== true || passkeyPending) return;
-
 		passkeyPending = true;
 		passkeyError = '';
 		try {
@@ -58,6 +65,8 @@
 				return;
 			}
 			passkeyName = '';
+			passkeyOpen = false;
+			toast.success('Passkey added.');
 			await invalidateAll();
 		} catch (error) {
 			passkeyError = error instanceof Error ? error.message : 'Could not add the passkey.';
@@ -74,6 +83,38 @@
 			.map((part) => part[0]?.toUpperCase() ?? '')
 			.join('') || '?'
 	);
+
+	function revokeSession(session: { id: string; device: string }) {
+		askConfirm({
+			title: `Sign out ${session.device}?`,
+			description: 'That device is signed out immediately.',
+			confirmLabel: 'Sign out device',
+			tone: 'danger',
+			action: '?/revokeSession',
+			fields: { sessionId: session.id }
+		});
+	}
+
+	function revokeOthers() {
+		askConfirm({
+			title: `Sign out ${otherSessions.length} other ${otherSessions.length === 1 ? 'session' : 'sessions'}?`,
+			description: 'Every browser and CLI session except this one is signed out immediately.',
+			confirmLabel: 'Sign out others',
+			tone: 'danger',
+			action: '?/revokeOtherSessions'
+		});
+	}
+
+	function removePasskey(passkey: { id: string; name: string }) {
+		askConfirm({
+			title: `Remove ${passkey.name}?`,
+			description: 'You will no longer be able to sign in with this passkey.',
+			confirmLabel: 'Remove passkey',
+			tone: 'danger',
+			action: '?/deletePasskey',
+			fields: { passkeyId: passkey.id }
+		});
+	}
 </script>
 
 <svelte:head>
@@ -81,186 +122,157 @@
 </svelte:head>
 
 <div class="space-y-5">
-	<FormFeedback {result} />
-
-	<div class="grid items-start gap-5 lg:grid-cols-2">
-		<Panel
-			title="Profile"
-			icon={UserRoundIcon}
-			description="How you appear to teammates across the dashboard."
-		>
-			<form method="POST" action="?/updateProfile" use:enhance class="space-y-4">
-				<div class="flex items-center gap-4">
-					<span
-						class="grid size-14 shrink-0 place-items-center rounded-full bg-gradient-to-br from-brand to-[oklch(0.55_0.17_25)] text-lg font-semibold text-brand-foreground shadow-card"
-						aria-hidden="true">{initials}</span
-					>
-					<div class="min-w-0 flex-1 space-y-1.5">
-						<Label for="profile-name">Display name</Label>
-						<Input
-							id="profile-name"
-							name="name"
-							value={data.user.name}
-							maxlength={80}
-							required
-							autocomplete="name"
-							aria-invalid={result?.fieldErrors?.name ? 'true' : undefined}
-						/>
-						{#if result?.fieldErrors?.name}
-							<p class="text-xs text-destructive">{result.fieldErrors.name}</p>
-						{/if}
-					</div>
-				</div>
-				<div class="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
-					<p class="text-xs text-muted-foreground">
-						Shown on members, invitations and the audit log.
-					</p>
-					<Button type="submit">Save profile</Button>
-				</div>
-			</form>
-		</Panel>
-
-		<Panel
-			title="Account"
-			icon={ShieldCheckIcon}
-			description="Identity and organisation membership."
-		>
-			<dl class="kv">
-				<dt>Email</dt>
-				<dd class="flex flex-wrap items-center justify-end gap-2">
+	<Card.Root>
+		<Card.Content class="flex flex-wrap items-center gap-4">
+			<Avatar.Root class="size-14">
+				<Avatar.Fallback
+					class="bg-gradient-to-br from-brand to-[oklch(0.55_0.17_25)] text-lg font-semibold text-brand-foreground"
+					>{initials}</Avatar.Fallback
+				>
+			</Avatar.Root>
+			<div class="min-w-0 flex-1 basis-56 space-y-1">
+				<p class="text-lg leading-tight font-semibold tracking-[-0.015em]">{data.user.name}</p>
+				<div class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
 					<span class="break-all">{data.user.email}</span>
 					{#if data.user.emailVerified}
 						<Badge variant="success">verified</Badge>
 					{:else}
 						<Badge variant="warning">unverified</Badge>
 					{/if}
-				</dd>
-				<dt>Role</dt>
-				<dd><Badge variant="outline" class="capitalize">{data.role}</Badge></dd>
-				<dt>Member since</dt>
-				<dd class="text-[13px]">{formatDate(data.user.createdAt)}</dd>
-				<dt>User ID</dt>
-				<dd class="flex items-center justify-end gap-1">
-					<span class="truncate font-mono text-[12px]" title={data.user.id}
-						>{shortId(data.user.id, 16)}</span
-					>
-					<CopyButton value={data.user.id} label="Copy user ID" variant="ghost" iconOnly />
-				</dd>
-			</dl>
-			<p class="mt-3 text-xs text-muted-foreground">
-				Your email and role are managed by an organisation owner. Contact them if either is wrong.
-			</p>
-		</Panel>
-	</div>
+					<Badge variant="outline" class="capitalize">{data.role}</Badge>
+				</div>
+			</div>
+			<Button variant="outline" onclick={() => (profileOpen = true)}
+				><PencilIcon />Edit profile</Button
+			>
+		</Card.Content>
+		<Card.Footer class="flex-wrap justify-between gap-2 text-xs text-muted-foreground">
+			<span
+				>Member since {formatDate(data.user.createdAt)} · email and role are managed by an owner</span
+			>
+			<span class="flex items-center gap-1 font-mono">
+				{shortId(data.user.id, 16)}
+				<CopyButton value={data.user.id} label="Copy user ID" iconOnly />
+			</span>
+		</Card.Footer>
+	</Card.Root>
 
-	<Panel
-		title="Active sessions"
-		icon={LaptopIcon}
-		count={data.sessionsError ? undefined : data.sessions.length}
-		description="Every browser or CLI session signed in as you. Revoke anything you do not recognise."
-		flush
-	>
-		{#snippet actions()}
+	<Card.Root class="gap-0 py-0">
+		<Card.Header class="border-b py-4">
+			<Card.Title class="flex items-center gap-2">
+				<LaptopIcon class="size-4 text-muted-foreground" />Active sessions
+				{#if !data.sessionsError}<Badge variant="neutral" class="font-mono"
+						>{data.sessions.length}</Badge
+					>{/if}
+			</Card.Title>
+			<Card.Description>
+				Every browser or CLI session signed in as you. Revoke anything you do not recognise.
+			</Card.Description>
 			{#if otherSessions.length > 0}
-				<form method="POST" action="?/revokeOtherSessions" use:enhance>
-					<Button
-						type="submit"
-						variant="outline"
-						size="sm"
-						onclick={(event) => {
-							if (
-								!confirm(
-									`Sign out ${otherSessions.length} other ${
-										otherSessions.length === 1 ? 'session' : 'sessions'
-									}?`
-								)
-							)
-								event.preventDefault();
-						}}
-					>
-						Sign out other sessions
-					</Button>
-				</form>
+				<Card.Action class="self-center">
+					<Button variant="outline" onclick={revokeOthers}>Sign out other sessions</Button>
+				</Card.Action>
 			{/if}
-		{/snippet}
-
-		{#if data.sessionsError}
-			<div class="p-4">
-				<Notice tone="warning">{data.sessionsError}</Notice>
-			</div>
-		{:else if data.sessions.length === 0}
-			<div class="p-4">
-				<EmptyState
-					icon={LaptopIcon}
-					compact
-					title="No active sessions"
-					description="Sessions appear here after you sign in on a browser or approve a CLI login."
-				/>
-			</div>
-		{:else}
-			<ul class="divide-y">
-				{#each data.sessions as session (session.id)}
-					<li
-						class="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 {session.current
-							? 'bg-success-soft/40'
-							: ''}"
-					>
-						<span
-							class="grid size-9 shrink-0 place-items-center rounded-lg border bg-card text-muted-foreground"
-						>
-							<MonitorSmartphoneIcon class="size-4" aria-hidden="true" />
-						</span>
-						<div class="min-w-0 flex-1">
-							<div class="flex flex-wrap items-center gap-2">
-								<p class="text-sm font-medium">{session.device}</p>
-								{#if session.current}
-									<Badge variant="success">this device</Badge>
-								{/if}
-							</div>
-							<p
-								class="max-w-xl truncate text-xs text-muted-foreground"
-								title={session.userAgent ?? 'No user agent reported'}
+		</Card.Header>
+		<Card.Content class="px-0">
+			{#if data.sessionsError}
+				<div class="p-4">
+					<Alert.Root variant="warning">
+						<TriangleAlertIcon />
+						<Alert.Description>{data.sessionsError}</Alert.Description>
+					</Alert.Root>
+				</div>
+			{:else if data.sessions.length === 0}
+				<div class="p-4">
+					<EmptyState
+						icon={LaptopIcon}
+						compact
+						title="No active sessions"
+						description="Sessions appear here after you sign in on a browser or approve a CLI login."
+					/>
+				</div>
+			{:else}
+				<Table.Root>
+					<Table.Header>
+						<Table.Row>
+							<Table.Head class="pl-4">Device</Table.Head>
+							<Table.Head class="hidden sm:table-cell">IP address</Table.Head>
+							<Table.Head class="hidden md:table-cell">Signed in</Table.Head>
+							<Table.Head class="hidden lg:table-cell">Last active</Table.Head>
+							<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
+						</Table.Row>
+					</Table.Header>
+					<Table.Body>
+						{#each data.sessions as session (session.id)}
+							<Table.Row
+								class={session.current ? 'bg-success-soft/40 hover:bg-success-soft/50' : ''}
 							>
-								<span class="font-mono">{session.ipAddress ?? 'unknown IP'}</span>
-								· signed in {formatDateTime(session.createdAt)}
-								<span class="hidden lg:inline"
-									>· last active {formatDateTime(session.lastActiveAt)}</span
-								>
-							</p>
-						</div>
-						{#if !session.current}
-							<form method="POST" action="?/revokeSession" use:enhance>
-								<input type="hidden" name="sessionId" value={session.id} />
-								<Button
-									type="submit"
-									variant="ghost-danger"
-									size="sm"
-									onclick={(event) => {
-										if (!confirm(`Sign out ${session.device}?`)) event.preventDefault();
-									}}
-								>
-									Revoke
-								</Button>
-							</form>
-						{/if}
-					</li>
-				{/each}
-			</ul>
-		{/if}
-		{#snippet footer()}
-			Session tokens stay on the server. Revoking a session signs that device out immediately.
-		{/snippet}
-	</Panel>
+								<Table.Cell class="pl-4">
+									<div class="flex items-center gap-3">
+										<span
+											class="grid size-8 shrink-0 place-items-center rounded-lg border bg-card text-muted-foreground"
+										>
+											<MonitorSmartphoneIcon class="size-4" />
+										</span>
+										<div class="min-w-0">
+											<p class="flex items-center gap-2 font-medium">
+												{session.device}
+												{#if session.current}<Badge variant="success">this device</Badge>{/if}
+											</p>
+											<p
+												class="max-w-xs truncate text-xs text-muted-foreground"
+												title={session.userAgent ?? 'No user agent reported'}
+											>
+												{session.userAgent ?? 'No user agent reported'}
+											</p>
+										</div>
+									</div>
+								</Table.Cell>
+								<Table.Cell class="hidden font-mono text-xs text-muted-foreground sm:table-cell">
+									{session.ipAddress ?? '—'}
+								</Table.Cell>
+								<Table.Cell class="hidden text-xs text-muted-foreground md:table-cell">
+									{formatDateTime(session.createdAt)}
+								</Table.Cell>
+								<Table.Cell class="hidden text-xs text-muted-foreground lg:table-cell">
+									{formatDateTime(session.lastActiveAt)}
+								</Table.Cell>
+								<Table.Cell class="pr-4">
+									{#if !session.current}
+										<Button variant="ghost-danger" size="sm" onclick={() => revokeSession(session)}>
+											Revoke
+										</Button>
+									{/if}
+								</Table.Cell>
+							</Table.Row>
+						{/each}
+					</Table.Body>
+				</Table.Root>
+			{/if}
+		</Card.Content>
+	</Card.Root>
 
 	<div class="grid items-start gap-5 lg:grid-cols-2">
-		<Panel
-			title="Passkeys"
-			icon={FingerprintIcon}
-			description="Phishing-resistant sign-in with your device, fingerprint or security key."
-		>
-			<div class="space-y-4">
+		<Card.Root>
+			<Card.Header>
+				<Card.Title class="flex items-center gap-2">
+					<FingerprintIcon class="size-4 text-muted-foreground" />Passkeys
+				</Card.Title>
+				<Card.Description
+					>Phishing-resistant sign-in with your device, fingerprint or security key.</Card.Description
+				>
+				<Card.Action>
+					<Button size="sm" variant="outline" onclick={() => (passkeyOpen = true)}>
+						<PlusIcon />Add
+					</Button>
+				</Card.Action>
+			</Card.Header>
+			<Card.Content>
 				{#if data.passkeysError}
-					<Notice tone="warning">{data.passkeysError}</Notice>
+					<Alert.Root variant="warning">
+						<TriangleAlertIcon />
+						<Alert.Description>{data.passkeysError}</Alert.Description>
+					</Alert.Root>
 				{:else if data.passkeys.length === 0}
 					<EmptyState
 						icon={FingerprintIcon}
@@ -269,121 +281,157 @@
 						description="Add one so you can sign in without an email link or GitHub."
 					/>
 				{:else}
-					<ul class="divide-y overflow-hidden rounded-lg border">
+					<Item.Group class="gap-2">
 						{#each data.passkeys as passkey (passkey.id)}
-							<li class="flex items-center gap-3 px-3 py-2.5">
-								<FingerprintIcon class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-								<div class="min-w-0 flex-1">
-									<div class="flex flex-wrap items-center gap-2">
-										<p class="truncate text-sm font-medium">{passkey.name}</p>
-										{#if passkey.backedUp}
-											<Badge variant="info">synced</Badge>
-										{/if}
-									</div>
-									<p class="text-xs text-muted-foreground">
+							<Item.Root variant="outline" size="sm">
+								<Item.Media variant="icon"><FingerprintIcon /></Item.Media>
+								<Item.Content>
+									<Item.Title>
+										{passkey.name}
+										{#if passkey.backedUp}<Badge variant="info">synced</Badge>{/if}
+									</Item.Title>
+									<Item.Description>
 										{passkey.authenticator ?? passkey.deviceType} · added {formatDate(
 											passkey.createdAt
 										)}
-									</p>
-								</div>
-								<form method="POST" action="?/deletePasskey" use:enhance>
-									<input type="hidden" name="passkeyId" value={passkey.id} />
-									<Button
-										type="submit"
-										variant="ghost-danger"
-										size="sm"
-										onclick={(event) => {
-											if (
-												!confirm(
-													`Remove ${passkey.name}? You will not be able to use it to sign in.`
-												)
-											)
-												event.preventDefault();
-										}}
+									</Item.Description>
+								</Item.Content>
+								<Item.Actions>
+									<Button variant="ghost-danger" size="sm" onclick={() => removePasskey(passkey)}
+										>Remove</Button
 									>
-										Remove
-									</Button>
-								</form>
-							</li>
+								</Item.Actions>
+							</Item.Root>
 						{/each}
-					</ul>
+					</Item.Group>
 				{/if}
+			</Card.Content>
+		</Card.Root>
 
-				<form class="space-y-2 rounded-lg border bg-muted/30 p-3" onsubmit={addPasskey}>
-					<Label for="passkey-name">Add a passkey</Label>
-					<div class="flex flex-wrap items-center gap-2">
-						<Input
-							id="passkey-name"
-							bind:value={passkeyName}
-							maxlength={64}
-							placeholder="Work laptop"
-							autocomplete="off"
-							class="min-w-0 flex-1 bg-card"
-						/>
-						<Button type="submit" disabled={passkeySupported !== true || passkeyPending}>
-							<PlusIcon aria-hidden="true" />
-							{passkeyPending ? 'Waiting for device…' : 'Add passkey'}
-						</Button>
-					</div>
-					{#if passkeyError}
-						<p class="text-xs text-destructive" role="alert">{passkeyError}</p>
-					{:else if passkeySupported === null}
-						<p class="text-xs text-muted-foreground">Checking browser support…</p>
-					{:else if passkeySupported}
-						<p class="text-xs text-muted-foreground">
-							Your browser will ask for your fingerprint, face or security key. The name is only a
-							label for this list.
-						</p>
-					{:else}
-						<p class="text-xs text-muted-foreground">
-							This browser does not support passkeys. Try a recent version of Chrome, Safari or
-							Firefox.
-						</p>
-					{/if}
-				</form>
-			</div>
-		</Panel>
-
-		<Panel
-			title="Linked sign-in methods"
-			icon={LinkIcon}
-			description="External accounts connected to your Skiff identity."
-		>
-			{#if data.accountsError}
-				<Notice tone="warning">{data.accountsError}</Notice>
-			{:else if data.accounts.length === 0}
-				<EmptyState
-					icon={LinkIcon}
-					compact
-					title="No linked accounts"
-					description="You signed in with a passkey or email link. An owner can connect GitHub if needed."
-				/>
-			{:else}
-				<ul class="divide-y overflow-hidden rounded-lg border">
-					{#each data.accounts as account (account.id)}
-						<li class="flex items-center gap-3 px-3 py-2.5">
-							{#if account.provider.toLowerCase() === 'github'}
-								<GitHubMark class="size-4 shrink-0" />
-							{:else}
-								<LinkIcon class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-							{/if}
-							<div class="min-w-0 flex-1">
-								<p class="text-sm font-medium capitalize">{account.provider}</p>
-								<p class="truncate font-mono text-[11px] text-muted-foreground">
-									{account.providerId}
-								</p>
-							</div>
-							<p class="text-xs whitespace-nowrap text-muted-foreground">
-								linked {formatDate(account.createdAt)}
-							</p>
-						</li>
-					{/each}
-				</ul>
-			{/if}
-			<p class="mt-3 text-xs text-muted-foreground">
-				Linking or unlinking providers is not available from the dashboard yet. Ask an owner if a
-				provider needs to change.
-			</p>
-		</Panel>
+		<Card.Root>
+			<Card.Header>
+				<Card.Title class="flex items-center gap-2">
+					<LinkIcon class="size-4 text-muted-foreground" />Linked sign-in methods
+				</Card.Title>
+				<Card.Description>External accounts connected to your Skiff identity.</Card.Description>
+			</Card.Header>
+			<Card.Content>
+				{#if data.accountsError}
+					<Alert.Root variant="warning">
+						<TriangleAlertIcon />
+						<Alert.Description>{data.accountsError}</Alert.Description>
+					</Alert.Root>
+				{:else if data.accounts.length === 0}
+					<EmptyState
+						icon={LinkIcon}
+						compact
+						title="No linked accounts"
+						description="You signed in with a passkey or email link. An owner can connect GitHub if needed."
+					/>
+				{:else}
+					<Item.Group class="gap-2">
+						{#each data.accounts as account (account.id)}
+							<Item.Root variant="outline" size="sm">
+								<Item.Media variant="icon">
+									{#if account.provider.toLowerCase() === 'github'}<GitHubMark />{:else}<LinkIcon
+										/>{/if}
+								</Item.Media>
+								<Item.Content class="min-w-0">
+									<Item.Title class="capitalize">{account.provider}</Item.Title>
+									<Item.Description class="truncate font-mono text-[11px]"
+										>{account.providerId}</Item.Description
+									>
+								</Item.Content>
+								<Item.Actions>
+									<span class="text-xs text-muted-foreground"
+										>linked {formatDate(account.createdAt)}</span
+									>
+								</Item.Actions>
+							</Item.Root>
+						{/each}
+					</Item.Group>
+				{/if}
+			</Card.Content>
+			<Card.Footer class="text-xs text-muted-foreground">
+				Linking or unlinking providers is not available from the dashboard yet.
+			</Card.Footer>
+		</Card.Root>
 	</div>
 </div>
+
+<FormDialog
+	bind:open={profileOpen}
+	icon={UserRoundIcon}
+	title="Edit profile"
+	description="Shown on members, invitations and the audit log."
+	action="?/updateProfile"
+	submitLabel="Save profile"
+	size="sm"
+>
+	<Field.Field data-invalid={result?.fieldErrors?.name ? true : undefined}>
+		<Field.Label for="profile-name">Display name</Field.Label>
+		<Input
+			id="profile-name"
+			name="name"
+			value={data.user.name}
+			maxlength={80}
+			required
+			autocomplete="name"
+			aria-invalid={result?.fieldErrors?.name ? 'true' : undefined}
+		/>
+		{#if result?.fieldErrors?.name}<Field.Error>{result.fieldErrors.name}</Field.Error>{/if}
+	</Field.Field>
+</FormDialog>
+
+<Dialog.Root bind:open={passkeyOpen}>
+	<Dialog.Content class="sm:max-w-sm">
+		<Dialog.Header class="flex-row items-start gap-3.5">
+			<span
+				class="grid size-9 shrink-0 place-items-center rounded-lg border bg-muted/50 text-muted-foreground"
+			>
+				<FingerprintIcon class="size-4" />
+			</span>
+			<div class="space-y-1.5">
+				<Dialog.Title>Add a passkey</Dialog.Title>
+				<Dialog.Description
+					>Your browser will ask for your fingerprint, face or security key.</Dialog.Description
+				>
+			</div>
+		</Dialog.Header>
+		<form class="grid gap-5" onsubmit={addPasskey}>
+			{#if passkeyError}
+				<Alert.Root variant="destructive">
+					<CircleAlertIcon />
+					<Alert.Description>{passkeyError}</Alert.Description>
+				</Alert.Root>
+			{:else if passkeySupported === false}
+				<Alert.Root variant="warning">
+					<TriangleAlertIcon />
+					<Alert.Description>
+						This browser does not support passkeys. Try a recent version of Chrome, Safari or
+						Firefox.
+					</Alert.Description>
+				</Alert.Root>
+			{/if}
+			<Field.Field>
+				<Field.Label for="passkey-name">Name</Field.Label>
+				<Input
+					id="passkey-name"
+					bind:value={passkeyName}
+					maxlength={64}
+					placeholder="Work laptop"
+					autocomplete="off"
+				/>
+				<Field.Description>Only a label for this list.</Field.Description>
+			</Field.Field>
+			<Dialog.Footer>
+				<Dialog.Close>
+					{#snippet child({ props })}<Button variant="outline" {...props}>Cancel</Button>{/snippet}
+				</Dialog.Close>
+				<Button type="submit" disabled={passkeySupported !== true || passkeyPending}>
+					{#if passkeyPending}<Spinner />Waiting for device…{:else}<FingerprintIcon />Add passkey{/if}
+				</Button>
+			</Dialog.Footer>
+		</form>
+	</Dialog.Content>
+</Dialog.Root>

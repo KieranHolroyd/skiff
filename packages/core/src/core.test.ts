@@ -31,7 +31,7 @@ const core: Core = createCore({
 	},
 });
 
-const principal = buildPrincipal({ kind: 'user', userId: 'user_1', orgId: 'org_1', role: 'owner' });
+const principal = buildPrincipal({ kind: 'user', userId: 'user_1', orgId: 'org_1', role: 'owner', platformAdmin: true });
 const file = (path: string, content: string) => ({ path, content, encoding: 'utf8' as const });
 
 afterAll(() => {
@@ -225,5 +225,108 @@ describe('audit', () => {
 		expect(entries.some((entry) => entry.action === 'project.create')).toBe(true);
 		expect(entries.some((entry) => entry.action === 'deployment.create')).toBe(true);
 		expect(entries.every((entry) => entry.result === 'ok' || entry.result === 'error')).toBe(true);
+	});
+});
+
+describe('site access tokens and share-link sessions', () => {
+	const decode = (token: string) =>
+		JSON.parse(Buffer.from(token.split('.')[0]!, 'base64url').toString()) as Record<string, unknown>;
+
+	test('callback tokens are one-time and live 60 s; the session expiry travels separately', async () => {
+		const project = core.projects.requireRow(principal, 'blog');
+		const link = await core.access.createShareLink(principal, project, { sessionTtlSeconds: 7200 });
+		const raw = new URL(link.url!).searchParams.get('_skiff_share')!;
+		const visit = core.access.shareAccess(raw, { ip: '9.9.9.9', userAgent: 'token-test' });
+		const claims = decode(visit.token);
+		const now = Math.floor(clock / 1000);
+		expect(claims.exp).toBe(now + 60);
+		expect(claims.sexp).toBe(now + 7200);
+		expect(typeof claims.jti).toBe('string');
+		expect(Date.parse(visit.expiresAt)).toBe((now + 7200) * 1000);
+		const again = core.access.shareAccess(raw, { ip: '9.9.9.9', userAgent: 'token-test' });
+		expect(decode(again.token).jti).not.toBe(claims.jti);
+	});
+
+	test('maxVisitors caps distinct visitors but lets a returning visitor back in', async () => {
+		const project = core.projects.requireRow(principal, 'blog');
+		const link = await core.access.createShareLink(principal, project, { maxVisitors: 1 });
+		const raw = new URL(link.url!).searchParams.get('_skiff_share')!;
+		core.access.shareAccess(raw, { ip: '5.5.5.5', userAgent: 'alice' });
+		expect(() => core.access.shareAccess(raw, { ip: '5.5.5.5', userAgent: 'alice' })).not.toThrow();
+		expect(() => core.access.shareAccess(raw, { ip: '6.6.6.6', userAgent: 'bob' })).toThrow(/visitor limit/);
+	});
+});
+
+describe('nodes and alerts', () => {
+	const heartbeat = (nodeId: string, status: 'online' | 'offline' = 'online') => ({
+		nodeId,
+		agentVersion: '0.1.0',
+		actualStateVersion: 0,
+		status,
+		caddyOk: status === 'online',
+		releases: [],
+	});
+
+	test('a heartbeat does not undo draining', () => {
+		const node = core.nodes.join({ token: core.nodes.createJoinToken(principal, 'drainee').token, name: 'drainee' });
+		core.nodes.setDraining(principal, node.nodeId, true);
+		core.nodes.heartbeat(node.token, heartbeat(node.nodeId));
+		expect(core.nodes.get(node.nodeId).status).toBe('draining');
+		core.nodes.setDraining(principal, node.nodeId, false);
+		core.nodes.heartbeat(node.token, heartbeat(node.nodeId));
+		expect(core.nodes.get(node.nodeId).status).toBe('online');
+	});
+
+	test('node offline alerts fire once a node has been silent for more than 2 minutes', async () => {
+		const node = core.nodes.join({ token: core.nodes.createJoinToken(principal, 'flaky').token, name: 'flaky' });
+		core.nodes.heartbeat(node.token, heartbeat(node.nodeId));
+		clock += 45_000;
+		// Flips offline here, but it is too early to page anyone.
+		expect((await core.maintenance.run()).alertsFired).not.toContain(`node_offline:${node.nodeId}`);
+		clock += 120_000;
+		expect((await core.maintenance.run()).alertsFired).toContain(`node_offline:${node.nodeId}`);
+	});
+
+	test('a node reporting Caddy down alerts after 2 minutes even while it heartbeats', async () => {
+		const node = core.nodes.join({ token: core.nodes.createJoinToken(principal, 'caddyless').token, name: 'caddyless' });
+		core.nodes.heartbeat(node.token, heartbeat(node.nodeId, 'offline'));
+		expect((await core.maintenance.run()).alertsFired).not.toContain(`node_offline:${node.nodeId}`);
+		clock += 130_000;
+		core.nodes.heartbeat(node.token, heartbeat(node.nodeId, 'offline'));
+		expect((await core.maintenance.run()).alertsFired).toContain(`node_offline:${node.nodeId}`);
+	});
+});
+
+describe('revocations', () => {
+	test('a revoked share session stays revoked for as long as the session could last', async () => {
+		const project = core.projects.requireRow(principal, 'blog');
+		const link = await core.access.createShareLink(principal, project, { sessionTtlSeconds: 30 * 86_400 });
+		const raw = new URL(link.url!).searchParams.get('_skiff_share')!;
+		const visit = core.access.shareAccess(raw, { ip: '7.7.7.7', userAgent: 'long-session' });
+		const sid = (JSON.parse(Buffer.from(visit.token.split('.')[0]!, 'base64url').toString()) as { sid: string }).sid;
+		await core.access.revokeShareLink(principal, project, link.id);
+		const edge = core.nodes.join({ token: core.nodes.createJoinToken(principal, 'rev-edge').token, name: 'rev-edge' });
+
+		clock += 8 * 86_400_000;
+		const ids = (await core.nodes.desiredState(edge.token)).revocations.map((revocation) => revocation.id);
+		expect(ids).toContain(sid);
+		expect(ids).toContain(link.id);
+
+		clock += 23 * 86_400_000;
+		const later = (await core.nodes.desiredState(edge.token)).revocations.map((revocation) => revocation.id);
+		expect(later).not.toContain(sid);
+		expect(later).not.toContain(link.id);
+	});
+
+	test('revokeSession only touches sessions from the given project', async () => {
+		const blog = core.projects.requireRow(principal, 'blog');
+		const other = core.projects.requireRow(principal, 'my-cool-site');
+		const link = await core.access.createShareLink(principal, blog, {});
+		const raw = new URL(link.url!).searchParams.get('_skiff_share')!;
+		const visit = core.access.shareAccess(raw, { ip: '8.8.8.8', userAgent: 'scoped' });
+		const sid = (JSON.parse(Buffer.from(visit.token.split('.')[0]!, 'base64url').toString()) as { sid: string }).sid;
+		await expect(core.access.revokeSession(principal, other, sid)).rejects.toThrow();
+		await core.access.revokeSession(principal, blog, sid);
+		expect(core.access.revocations().some((revocation) => revocation.id === sid)).toBe(true);
 	});
 });

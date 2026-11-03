@@ -9,19 +9,23 @@ import {
 } from '@skiff/contracts';
 import type { TlsOptions } from '@skiff/site-config';
 import { CaddyAdmin } from './caddy.ts';
-import { buildCaddyConfig, tlsSubjects } from './caddy-config.ts';
+import { buildCaddyConfig, isProductionRoute, tlsSubjects } from './caddy-config.ts';
 import { loadConfig, type AgentConfig } from './config.ts';
 import { formatEnv, JOIN_USAGE, joinNode, nodeFilePath, parseJoinArgs } from './join.ts';
 import { ReleaseManager } from './releases.ts';
 import { StatsCollector } from './stats.ts';
 import { DesiredStateStore, desiredStateEtag } from './state.ts';
 import { TelemetryClient } from './telemetry.ts';
-import { handleSiteRequest, normalizeHost } from './verify.ts';
+import { handleSiteRequest, normalizeHost, UsedTokenCache } from './verify.ts';
 
 const HEARTBEAT_INTERVAL_MS = 10_000;
+// Bun's default idle timeout on the control plane is 10 s (adapter-bun CONNECTION_IDLE_TIMEOUT),
+// so hold well under it. The server caps `wait` at 25 s for installs that raise the timeout.
 const LONG_POLL_SECONDS = 8;
 const LONG_POLL_TIMEOUT_MS = (LONG_POLL_SECONDS + 10) * 1_000;
 const TELEMETRY_INTERVAL_MS = 60_000;
+/** `@id` present in every config the agent loads (site-config's catch-all route). */
+const CONVERGED_SENTINEL_ID = 'catch-all';
 const TELEMETRY_POLL_MS = 1_000;
 
 class Backoff {
@@ -58,6 +62,7 @@ class AgentRuntime {
 	private convergedVersion: number | null = null;
 	private actualStateVersion = 0;
 	private projectByHost = new Map<string, string>();
+	private readonly usedTokens = new UsedTokenCache();
 
 	private caddyOk = false;
 	private running = true;
@@ -193,6 +198,7 @@ class AgentRuntime {
 			state: this.desired,
 			cookieName: this.config.cookieName,
 			insecureHttp: this.config.insecureHttp,
+			usedTokens: this.usedTokens,
 		});
 	}
 
@@ -221,12 +227,15 @@ class AgentRuntime {
 			}
 
 			try {
-				this.pullBeforeConverge = false;
+				// After a failed converge, pull unconditionally: the version may not have changed, but
+				// a fresh copy carries freshly presigned release URLs (the old ones expire after 1 h).
+				const force = this.pullBeforeConverge;
 				const started = Date.now();
-				const changed = await this.pullDesiredState();
+				const changed = await this.pullDesiredState(force);
+				this.pullBeforeConverge = false;
 				this.reconcileBackoff.reset();
 				if (!changed) {
-					// A control plane that supports long-poll holds for 25 s. If it answered instantly
+					// A control plane that supports long-poll holds the request. If it answered instantly
 					// (304 without holding), fall back to the documented 10 s poll interval.
 					const elapsed = Date.now() - started;
 					await sleep(elapsed < 2_000 ? 10_000 : 250, this.shutdownController.signal);
@@ -240,13 +249,13 @@ class AgentRuntime {
 		}
 	}
 
-	private async pullDesiredState(): Promise<boolean> {
+	private async pullDesiredState(force = false): Promise<boolean> {
 		const headers: Record<string, string> = {
 			authorization: `Bearer ${this.config.nodeToken}`,
 			accept: 'application/json',
 		};
 		const etag = this.desiredEtag ?? (this.desired ? desiredStateEtag(this.desired) : null);
-		if (etag) headers['if-none-match'] = etag;
+		if (etag && !force) headers['if-none-match'] = etag;
 
 		const timeout = AbortSignal.timeout(LONG_POLL_TIMEOUT_MS);
 		const signal = AbortSignal.any([this.shutdownController.signal, timeout]);
@@ -254,7 +263,7 @@ class AgentRuntime {
 		let response: Response;
 		try {
 			response = await fetch(
-				`${this.config.controlUrl}/api/agent/desired-state?wait=${LONG_POLL_SECONDS}`,
+				`${this.config.controlUrl}/api/agent/desired-state?wait=${force ? 0 : LONG_POLL_SECONDS}`,
 				{ headers, signal },
 			);
 		} catch (error) {
@@ -297,6 +306,8 @@ class AgentRuntime {
 		this.lastReconcileAttemptAt = started;
 
 		const specs = new Map(state.releases.map((release) => [release.sha256, release]));
+		// Worker-placed routes are proxied over WireGuard; their releases live on the worker.
+		const localRoutes = state.routes.filter((route) => !route.upstream);
 		for (const release of state.releases) {
 			try {
 				const downloaded = await this.releases.ensureRelease(release, this.shutdownController.signal);
@@ -306,14 +317,17 @@ class AgentRuntime {
 			}
 		}
 
-		for (const route of state.routes) {
+		for (const route of localRoutes) {
 			if (!(await this.releases.hasRelease(route.release))) {
 				const spec = specs.get(route.release);
 				if (!spec)
 					throw new Error(`route ${route.host} references unknown release ${route.release.slice(0, 12)}`);
 				await this.releases.ensureRelease(spec, this.shutdownController.signal);
 			}
-			await this.releases.activate(route.projectId, route.release);
+			// Previews are rooted at their own release; only production goes through the
+			// per-project symlink, so promote/rollback is an atomic swap.
+			if (isProductionRoute(route, state.contentDomain))
+				await this.releases.activate(route.projectId, route.release);
 		}
 
 		const tls = this.config.tls ? this.tlsOptions(state) : undefined;
@@ -324,6 +338,7 @@ class AgentRuntime {
 			dataDir: this.config.dataDir,
 			agentSocket: this.config.agentSocket,
 			caddyAdminSocket: this.config.caddyAdminSocket,
+			accessLog: this.config.caddyAccessLog,
 			...(tls ? { tls } : {}),
 			...(this.config.platformHost
 				? {
@@ -439,6 +454,18 @@ class AgentRuntime {
 			this.caddyOk = true;
 		} catch {
 			this.caddyOk = false;
+			return;
+		}
+		// A restarted Caddy comes back with the bootstrap Caddyfile and none of our routes. Our
+		// config always carries the `catch-all` id, so its absence means we must re-apply.
+		if (this.convergedVersion === null) return;
+		try {
+			if (!(await this.caddy.hasId(CONVERGED_SENTINEL_ID, this.shutdownController.signal))) {
+				log('warn', 'Caddy lost the Skiff config (restart?); re-applying routes');
+				this.convergedVersion = null;
+			}
+		} catch {
+			// A transient admin error is not proof of a restart; the next check will tell.
 		}
 	}
 

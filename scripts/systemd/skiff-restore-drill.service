@@ -3,6 +3,8 @@ Description=Skiff monthly restore drill (restore latest R2 snapshot into a scrat
 Documentation=https://github.com/kieranholroyd/private-cloud-deploys/blob/main/docs/OPS.md
 After=network-online.target skiff-litestream.service
 Wants=network-online.target
+# A failed drill must alert (DESIGN §10).
+OnFailure=skiff-alert@%n.service
 
 [Service]
 Type=oneshot
@@ -12,7 +14,8 @@ Group=root
 EnvironmentFile=/etc/skiff/skiff.env
 Environment=SKIFF_RESTORE_DRILL_DIR=/var/lib/skiff/drill
 
-ExecStart=/opt/skiff/current/control-plane/scripts/skiff-restore-drill.sh --quiet
+# Installed by the installer; runs the drill script from the active release.
+ExecStart=/usr/local/sbin/skiff-restore-drill --quiet
 
 TimeoutStartSec=45min
 Nice=10

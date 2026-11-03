@@ -280,7 +280,17 @@ it on `main`. The updater reads `VERSION` at the exact commit it would build, an
 only when that version is **newer by semver precedence** than the running release (so
 `0.10.0 > 0.9.0` and `1.0.0-rc.2 < 1.0.0`). Commits that do not bump `VERSION` are never
 installed, and it never downgrades. Use `rollback` to go back, or `--force` to rebuild or
-deliberately downgrade. The build bakes `VERSION` in, so the dashboard always shows the version
+deliberately downgrade.
+
+Bumping is mostly automatic. `bun install` sets `core.hooksPath` to `.githooks`, and its
+`pre-commit` hook (`scripts/version.ts auto`) patch-bumps `VERSION` in the first commit after a
+release that changes shipped code. Later commits in the same batch keep that version. Commits that
+touch only docs, tests, CI or the separately versioned CLI never bump. Minor and major bumps are
+always manual: run `bun run version:minor` or `bun run version:major` in the commit that adds
+the feature or breaking change, and the hook then leaves it alone. Use `bun run version:show`
+to see what is released and what is pending. To skip the hook, use `git commit --no-verify` or
+`SKIFF_NO_VERSION_BUMP=1`. The hook compares against your local `origin/main`, so `git fetch`
+before a batch. The build bakes `VERSION` in, so the dashboard always shows the version
 of the code that is actually running.
 
 **From the dashboard.** The control plane is unprivileged and sandboxed, so it cannot update or

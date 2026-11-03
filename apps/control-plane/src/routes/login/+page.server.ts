@@ -1,9 +1,10 @@
-import { devPasswordLogin } from '#lib/server/config.js';
+import { devPasswordLogin, platformOrigin } from '#lib/server/config.js';
+import { safeRedirect } from '#lib/redirect.js';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = ({ url }) => {
-	const raw = url.searchParams.get('redirect') ?? '/';
-	// Only same-site paths are accepted; never an absolute URL (open-redirect guard).
-	const redirect = raw.startsWith('/') && !raw.startsWith('//') ? raw : '/';
+	// Only destinations on the platform origin are accepted (open-redirect guard); the page uses
+	// this value for every sign-in method, so validating it here covers the client too.
+	const redirect = safeRedirect(url.searchParams.get('redirect'), platformOrigin);
 	return { devPasswordLogin, redirect };
 };

@@ -21,6 +21,26 @@ env:
   GO_VERSION: '1.24'
 
 jobs:
+  # Nothing is signed or published unless the tagged commit passes the same gates as CI.
+  test:
+    name: Test and type-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Test
+        run: bun test
+
+      - name: Type-check and lint
+        run: bun run check
+
   control-plane:
     name: Control plane (${{ matrix.arch }})
     runs-on: ubuntu-latest
@@ -176,7 +196,7 @@ jobs:
   publish:
     name: Sign and publish
     runs-on: ubuntu-latest
-    needs: [control-plane, agent, caddy]
+    needs: [test, control-plane, agent, caddy]
     env:
       # Secrets cannot be referenced directly in `if:`; surface the choice as an env bool.
       HAS_MINISIGN: ${{ secrets.MINISIGN_SECRET_KEY != '' }}

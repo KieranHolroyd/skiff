@@ -118,6 +118,9 @@ export const load: PageServerLoad = async ({ locals, request }) => {
 export const actions: Actions = {
 	createKey: async ({ request, locals }) => {
 		const principal = locals.principal!;
+		if (!principal.permissions.has('apiKey:create')) {
+			return fail(403, { message: 'Your role cannot create API keys.' });
+		}
 		const data = await request.formData();
 		const name = formString(data, 'name');
 		const expiresRaw = formString(data, 'expiresIn');

@@ -6,7 +6,9 @@
 	let { stats }: { stats: unknown } = $props();
 
 	const s = $derived(
-		stats && typeof stats === 'object' ? (stats as Record<string, unknown>) : ({} as Record<string, unknown>)
+		stats && typeof stats === 'object'
+			? (stats as Record<string, unknown>)
+			: ({} as Record<string, unknown>)
 	);
 	function num(key: string): number | null {
 		const value = s[key];

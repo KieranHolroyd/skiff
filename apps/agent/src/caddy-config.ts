@@ -23,7 +23,11 @@ export interface CompileAgentConfigOptions {
 	tls?: TlsOptions;
 	/** Platform route preserved across full-config reloads. */
 	platform?: { host: string; upstream: string };
+	/** Caddy JSON access log the agent tails for telemetry (DESIGN §8). */
+	accessLog?: string | null;
 }
+
+const ACCESS_LOGGER = 'skiff_access';
 
 interface HttpServerConfig {
 	routes: CaddyRoute[];
@@ -34,9 +38,33 @@ function isSafeProjectId(projectId: string): boolean {
 	return /^[A-Za-z0-9._-]+$/.test(projectId) && projectId !== '.' && projectId !== '..';
 }
 
+/**
+ * The production route follows the project's production pointer; every other route is an
+ * immutable preview. Older control planes do not send `production`, so fall back to the host.
+ */
+export function isProductionRoute(route: RouteSpec, contentDomain: string): boolean {
+	if (route.production !== undefined) return route.production;
+	return normalizeHost(route.host) === normalizeHost(`${route.slug}.${contentDomain}`);
+}
+
+/**
+ * Where Caddy serves a route from. Production goes through `sites/<projectId>`, a symlink swapped
+ * atomically on promote/rollback; previews are rooted at their own content-addressed release, so
+ * each preview URL keeps serving exactly the deployment it names (D13).
+ */
+export function routeRoot(route: RouteSpec, dataDir: string, contentDomain: string): string {
+	if (!isSafeProjectId(route.projectId))
+		throw new Error(`Invalid project id in desired state: ${route.projectId}`);
+	if (!/^[a-f0-9]{64}$/.test(route.release))
+		throw new Error(`Invalid release hash in desired state: ${route.release}`);
+	return isProductionRoute(route, contentDomain)
+		? join(dataDir, 'sites', route.projectId)
+		: join(dataDir, 'releases', route.release);
+}
+
 export function toSiteCompileInput(
 	route: RouteSpec,
-	options: Pick<CompileAgentConfigOptions, 'dataDir' | 'agentSocket'>,
+	options: Pick<CompileAgentConfigOptions, 'dataDir' | 'agentSocket'> & { contentDomain?: string },
 ): SiteCompileInput {
 	if (!isSafeProjectId(route.projectId))
 		throw new Error(`Invalid project id in desired state: ${route.projectId}`);
@@ -44,8 +72,7 @@ export function toSiteCompileInput(
 		host: route.host,
 		projectId: route.projectId,
 		deploymentId: route.deploymentId,
-		// This symlink is swapped atomically on promote/rollback; Caddy keeps serving the path.
-		releasePath: join(options.dataDir, 'sites', route.projectId),
+		releasePath: routeRoot(route, options.dataDir, options.contentDomain ?? ''),
 		agentSocket: route.accessMode === 'public' ? null : options.agentSocket,
 		accessMode: route.accessMode,
 		site: {
@@ -128,7 +155,9 @@ function caddySocketAddress(socketPath: string): string {
 export function buildCaddyConfig(options: CompileAgentConfigOptions): Record<string, unknown> {
 	const config = compileCaddyConfig({
 		listen: options.listen,
-		sites: options.state.routes.map((route) => toSiteCompileInput(route, options)),
+		sites: options.state.routes.map((route) =>
+			toSiteCompileInput(route, { ...options, contentDomain: options.state.contentDomain }),
+		),
 		catchAllStatus: 404,
 		tls: options.tls,
 		platform: options.platform,
@@ -144,6 +173,31 @@ export function buildCaddyConfig(options: CompileAgentConfigOptions): Record<str
 		.filter((redirect) => !siteHosts.has(normalizeHost(redirect.host)))
 		.map((redirect) => compileHostRedirect(redirect.host, redirect.to));
 	server.routes = [...redirects, ...server.routes];
+
+	if (options.accessLog) {
+		// Without a logging app Caddy writes no access log and agent telemetry stays empty (§8).
+		// Raw logs stay on the node for 7 days, compressed; only 1-minute aggregates leave it.
+		server.logs = {
+			default_logger_name: ACCESS_LOGGER,
+			...(options.platform ? { skip_hosts: [options.platform.host] } : {}),
+		};
+		config.logging = {
+			logs: {
+				default: { exclude: [`http.log.access.${ACCESS_LOGGER}`] },
+				[ACCESS_LOGGER]: {
+					writer: {
+						output: 'file',
+						filename: options.accessLog,
+						roll_size_mb: 50,
+						roll_gzip: true,
+						roll_keep_days: 7,
+					},
+					encoder: { format: 'json' },
+					include: [`http.log.access.${ACCESS_LOGGER}`],
+				},
+			},
+		};
+	}
 
 	// Preserve the unix-socket admin endpoint when replacing the config; a full /load without it
 	// would let Caddy fall back to its default TCP admin listener (D7).

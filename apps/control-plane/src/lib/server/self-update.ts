@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import {
 	SELF_UPDATE_DEFAULTS,
 	SELF_UPDATE_STALE_MS,
+	canAdministerPlatform,
 	compareSemver,
 	parseSemver,
 	semverBump,
@@ -31,7 +32,8 @@ const CACHE_MS = 5 * 60 * 1000;
 
 /** Updating restarts the whole platform: platform admins, signed in interactively (no API keys/MCP). */
 export function canManagePlatform(principal: Principal | undefined): boolean {
-	return principal?.kind === 'user' && (principal.role === 'owner' || principal.role === 'admin');
+	// Platform admin (admin-plugin user role), never merely an org owner/admin (DESIGN §6.2).
+	return principal !== undefined && principal.kind === 'user' && canAdministerPlatform(principal);
 }
 
 /**

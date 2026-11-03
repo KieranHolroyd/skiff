@@ -32,7 +32,9 @@
 	<Card.Header class="border-b py-4">
 		<Card.Title class="flex items-center gap-2">
 			{#if Icon}
-				<span class="grid size-6 shrink-0 place-items-center rounded-md border bg-muted/40 text-muted-foreground">
+				<span
+					class="grid size-6 shrink-0 place-items-center rounded-md border bg-muted/40 text-muted-foreground"
+				>
 					<Icon class="size-3.5" />
 				</span>
 			{/if}
@@ -45,7 +47,9 @@
 			{/if}
 		</Card.Title>
 		{#if description}<Card.Description>{description}</Card.Description>{/if}
-		{#if actions}<Card.Action class="flex items-center gap-2 self-center">{@render actions()}</Card.Action>{/if}
+		{#if actions}<Card.Action class="flex items-center gap-2 self-center"
+				>{@render actions()}</Card.Action
+			>{/if}
 	</Card.Header>
 	<Card.Content class={flush ? 'px-0' : 'py-4'}>
 		{@render children()}

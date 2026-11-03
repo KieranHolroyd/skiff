@@ -1,8 +1,9 @@
 <script lang="ts">
+	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import UsersIcon from '@lucide/svelte/icons/users';
 	import { authClient } from '#lib/auth-client.js';
 	import AuthShell from '#lib/components/skiff/AuthShell.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import type { PageProps } from './$types';
 
@@ -43,7 +44,9 @@
 		</div>
 	</div>
 
-	{#if error}<Notice tone="danger" class="mt-4">{error}</Notice>{/if}
+	{#if error}<Alert.Root variant="destructive" class="mt-4"
+			><CircleAlertIcon /><Alert.Description>{error}</Alert.Description></Alert.Root
+		>{/if}
 
 	<Button size="lg" class="mt-6 h-10 w-full" disabled={pending} onclick={accept}>
 		{pending ? 'Joining…' : 'Accept invitation'}

@@ -1,4 +1,6 @@
 import type { RequestHandler } from './$types';
+import * as z from 'zod';
+import { ValidationError } from '@skiff/core';
 import {
 	projectCreateSchema,
 	projectUpdateSchema,
@@ -13,6 +15,11 @@ import {
 import { core } from '#lib/server/core.js';
 import { json, readJson, route } from '#lib/server/api.js';
 import { requirePrincipal } from '#lib/server/principal.js';
+
+/** The URL names the project/upload; a body may repeat it but must not contradict it. */
+const projectDeploySchema = deployFilesSchema.partial({ project: true });
+const finalizeByIdSchema = finalizeUploadSchema.partial({ uploadId: true });
+const pinSchema = z.object({ pinned: z.boolean().default(true) });
 
 /**
  * Skiff REST API v1. Every endpoint calls the same service layer as the dashboard, MCP and CLI
@@ -81,8 +88,10 @@ const api: RequestHandler = async (event) => {
 				return core.projects.setAccess(principal, slug, input);
 			}
 			if (action === 'deploy' && method === 'POST') {
-				const input = await readJson(request, deployFilesSchema);
-				return core.deploy.deployFiles(principal, input);
+				const input = await readJson(request, projectDeploySchema);
+				if (input.project && input.project !== slug)
+					throw new ValidationError(`Body names project "${input.project}" but the URL names "${slug}".`);
+				return core.deploy.deployFiles(principal, { ...input, project: slug });
 			}
 			if (action === 'promote' && method === 'POST') {
 				const input = await readJson(request, promoteSchema);
@@ -116,8 +125,8 @@ const api: RequestHandler = async (event) => {
 					}
 				}
 				if (segments[4] === 'pin' && method === 'POST') {
-					const body = (await request.json().catch(() => ({}))) as { pinned?: boolean };
-					return core.deployments.setPinned(principal, project, deploymentId, body.pinned ?? true);
+					const { pinned } = pinSchema.parse(await request.json().catch(() => ({})));
+					return core.deployments.setPinned(principal, project, deploymentId, pinned);
 				}
 				return json({ error: 'not_found' }, 404);
 			}
@@ -144,9 +153,12 @@ const api: RequestHandler = async (event) => {
 				return json(await core.uploads.create(principal, project, input), 201);
 			}
 			if (segments.length === 3 && segments[2] === 'finalize' && method === 'POST') {
-				const input = await readJson(request, finalizeUploadSchema);
+				const uploadId = segments[1]!;
+				const input = await readJson(request, finalizeByIdSchema);
+				if (input.uploadId && input.uploadId !== uploadId)
+					throw new ValidationError(`Body names upload "${input.uploadId}" but the URL names "${uploadId}".`);
 				const project = core.projects.requireRow(principal, input.project);
-				return core.uploads.finalize(principal, project, input.uploadId, {
+				return core.uploads.finalize(principal, project, uploadId, {
 					promote: input.promote,
 					message: input.message,
 				});
@@ -174,10 +186,11 @@ const api: RequestHandler = async (event) => {
 		// --- audit ------------------------------------------------------------
 		if (segments[0] === 'audit' && segments.length === 1) {
 			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
-			const limit = Number(event.url.searchParams.get('limit') ?? 50);
+			const rawLimit = Number(event.url.searchParams.get('limit') ?? 50);
+			const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : 50;
 			return {
 				entries: core.audit.list({
-					orgId: principal.orgId,
+					principal,
 					limit,
 					action: event.url.searchParams.get('action') ?? undefined,
 					resource: event.url.searchParams.get('resource') ?? undefined,

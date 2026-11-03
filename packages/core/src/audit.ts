@@ -1,6 +1,6 @@
 import { auditLog } from '@skiff/db';
 import { desc, eq, and, gte, lte, type SQL } from 'drizzle-orm';
-import type { Principal } from '@skiff/contracts';
+import { requirePermission, type Principal } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import { newId } from './util.ts';
 
@@ -59,15 +59,25 @@ export class AuditService {
 		}
 	}
 
-	list(options: {
-		orgId: string;
-		limit?: number;
-		action?: string;
-		resource?: string;
-		from?: number;
-		to?: number;
-	}) {
-		const filters: SQL[] = [eq(auditLog.orgId, options.orgId)];
+	/**
+	 * Org audit entries. Pass `principal` from every user-facing surface: it requires `project:read`
+	 * (API.md) and scopes the query to the principal's org. A bare `orgId` is for internal callers.
+	 */
+	list(
+		options: {
+			limit?: number;
+			action?: string;
+			resource?: string;
+			from?: number;
+			to?: number;
+		} & ({ principal: Principal; orgId?: string } | { principal?: undefined; orgId: string }),
+	) {
+		let orgId = options.orgId!;
+		if (options.principal) {
+			requirePermission(options.principal, 'project:read');
+			orgId = options.principal.orgId;
+		}
+		const filters: SQL[] = [eq(auditLog.orgId, orgId)];
 		if (options.action) filters.push(eq(auditLog.action, options.action));
 		if (options.resource) filters.push(eq(auditLog.resource, options.resource));
 		if (options.from) filters.push(gte(auditLog.createdAt, options.from));

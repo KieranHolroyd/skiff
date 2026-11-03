@@ -47,11 +47,17 @@ export class ReleaseService {
 		return { release, config, snapshotId: snapshot, artifact };
 	}
 
-	private async store(principal: Principal, artifact: ReleaseArtifact) {
+	/**
+	 * Insert (or return) the org's release row for an artifact and upload its object. The row goes in
+	 * first so a concurrent GC in another org sees the shared content-addressed key as in use.
+	 */
+	async store(principal: Principal, artifact: ReleaseArtifact) {
 		const objectKey = objectKeyForRelease(artifact.sha256);
-		await this.ctx.objectStore.put(objectKey, artifact.zip, 'application/zip');
+		// Another org's GC may be deleting this key right now; wait for that before re-uploading.
+		await this.ctx.deployments.objectDeleteSettled(objectKey);
+		const id = newId('rel_');
 		const row: typeof releases.$inferInsert = {
-			id: newId('rel_'),
+			id,
 			orgId: principal.orgId,
 			sha256: artifact.sha256,
 			objectKey,
@@ -62,12 +68,19 @@ export class ReleaseService {
 			precompressed: artifact.precompressed,
 			createdBy: principal.userId,
 		};
-		this.ctx.db.insert(releases).values(row).run();
-		return this.ctx.db
+		this.ctx.db.insert(releases).values(row).onConflictDoNothing().run();
+		const stored = this.ctx.db
 			.select()
 			.from(releases)
 			.where(and(eq(releases.orgId, principal.orgId), eq(releases.sha256, artifact.sha256)))
 			.get()!;
+		try {
+			await this.ctx.objectStore.put(objectKey, artifact.zip, 'application/zip');
+		} catch (error) {
+			if (stored.id === id) this.ctx.db.delete(releases).where(eq(releases.id, id)).run();
+			throw error;
+		}
+		return stored;
 	}
 
 	private snapshot(orgId: string, config: ParsedConfig): string {

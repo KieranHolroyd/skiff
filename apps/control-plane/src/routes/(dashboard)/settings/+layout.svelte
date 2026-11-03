@@ -3,24 +3,47 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import Building2Icon from '@lucide/svelte/icons/building-2';
+	import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
 	import UserRoundIcon from '@lucide/svelte/icons/user-round';
 	import * as Tabs from '#lib/components/ui/tabs/index.js';
 	import PageHeader from '../_lib/PageHeader.svelte';
 
-	let { children } = $props();
+	let { data, children } = $props();
 
-	const tabs = [
-		{ label: 'Organisation', href: '/(dashboard)/settings', path: '/settings', icon: Building2Icon },
+	type Tab = {
+		label: string;
+		href:
+			'/(dashboard)/settings' | '/(dashboard)/settings/account' | '/(dashboard)/settings/updates';
+		path: string;
+		icon: typeof Building2Icon;
+		platformAdmin?: boolean;
+	};
+
+	const allTabs: Tab[] = [
+		{
+			label: 'Organisation',
+			href: '/(dashboard)/settings',
+			path: '/settings',
+			icon: Building2Icon
+		},
 		{
 			label: 'Account',
 			href: '/(dashboard)/settings/account',
 			path: '/settings/account',
 			icon: UserRoundIcon
+		},
+		{
+			label: 'Updates',
+			href: '/(dashboard)/settings/updates',
+			path: '/settings/updates',
+			icon: CircleArrowUpIcon,
+			platformAdmin: true
 		}
-	] as const;
+	];
 
+	const tabs = $derived(allTabs.filter((tab) => !tab.platformAdmin || data.can.manageNodes));
 	const current = $derived(
-		tabs.find((tab) => tab.path === page.url.pathname)?.href ?? tabs[0].href
+		tabs.find((tab) => tab.path === page.url.pathname)?.href ?? allTabs[0].href
 	);
 </script>
 
@@ -32,8 +55,12 @@
 			description="Your account, the organisation you are signed in to, and the keys that act on your behalf."
 			bordered={false}
 		/>
-		<Tabs.Root value={current} onValueChange={(value) => goto(resolve(value as (typeof tabs)[number]['href']))}>
-			<Tabs.List variant="line" class="w-full justify-start border-b" aria-label="Settings sections">
+		<Tabs.Root value={current} onValueChange={(value) => goto(resolve(value as Tab['href']))}>
+			<Tabs.List
+				variant="line"
+				class="w-full justify-start border-b"
+				aria-label="Settings sections"
+			>
 				{#each tabs as tab (tab.href)}
 					<Tabs.Trigger value={tab.href} class="flex-none">
 						<tab.icon />

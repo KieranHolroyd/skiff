@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { desiredStateSchema, type DesiredState } from '@skiff/contracts';
-import { buildCaddyConfig, tlsSubjects, toSiteCompileInput } from './caddy-config.ts';
+import { buildCaddyConfig, isProductionRoute, tlsSubjects, toSiteCompileInput } from './caddy-config.ts';
 
 type Json = Record<string, unknown>;
 
@@ -186,5 +186,82 @@ describe('buildCaddyConfig', () => {
 		expect(() =>
 			toSiteCompileInput({ ...route, projectId: '../escape' }, { dataDir: '/data', agentSocket: '/sock' }),
 		).toThrow(/Invalid project id/);
+	});
+});
+
+describe('per-deployment roots, worker routes and logging', () => {
+	const PREVIEW_SHA = 'c'.repeat(64);
+
+	function withPreview(): DesiredState {
+		const value = state();
+		const production = value.routes[0]!;
+		value.routes.push({
+			...production,
+			host: 'public--abc123.example.com',
+			deploymentId: 'dep_preview',
+			release: PREVIEW_SHA,
+			production: false,
+		});
+		return value;
+	}
+
+	function rootFor(configValue: Json, host: string): unknown {
+		const route = routes(configValue).find((item) => JSON.stringify(item.match).includes(`"${host}"`));
+		return collectHandlers(route).find((handler) => handler.handler === 'file_server')?.root;
+	}
+
+	test('previews serve their own release while production follows the project symlink', () => {
+		const compiled = config(withPreview());
+		expect(rootFor(compiled, 'public.example.com')).toBe('/data/sites/prj_public');
+		expect(rootFor(compiled, 'public--abc123.example.com')).toBe(`/data/releases/${PREVIEW_SHA}`);
+	});
+
+	test('derives production from the host when the control plane omits the flag', () => {
+		const [production] = state().routes;
+		expect(isProductionRoute(production!, 'example.com')).toBe(true);
+		expect(isProductionRoute({ ...production!, host: 'public--x1.example.com' }, 'example.com')).toBe(false);
+		expect(isProductionRoute({ ...production!, production: false }, 'example.com')).toBe(false);
+	});
+
+	test('worker-placed routes proxy and get a branded 503 when the worker is unreachable', () => {
+		const value = state();
+		value.routes[0] = { ...value.routes[0]!, upstream: 'http://10.8.0.2:8080' };
+		const compiled = config(value);
+		const errorRoutes = (server(compiled).errors as Json).routes as Json[];
+		const unavailable = errorRoutes.find((route) => route['@id'] === 'unavailable:public.example.com');
+		expect(unavailable).toBeDefined();
+		const response = collectHandlers(unavailable).find((handler) => handler.handler === 'static_response');
+		expect(response?.status_code).toBe(503);
+		expect((response?.headers as Json)['Retry-After']).toEqual(['30']);
+	});
+
+	test('error pages only answer real 404s so protected sites fail closed', () => {
+		const errorRoutes = (server(config()).errors as Json).routes as Json[];
+		const notFound = errorRoutes.find((route) => route['@id'] === 'error:secret.example.com')!;
+		expect(JSON.stringify(notFound.match)).toContain('{http.error.status_code} in [404]');
+	});
+
+	test('writes a JSON access log for telemetry, skipping the platform host', () => {
+		const compiled = buildCaddyConfig({
+			state: state(),
+			listen: [':8080'],
+			dataDir: '/data',
+			agentSocket: '/run/skiff-agent/agent.sock',
+			caddyAdminSocket: '/var/lib/caddy/admin.sock',
+			accessLog: '/var/lib/skiff/caddy/logs/access.log',
+			platform: { host: 'cloud.example.com', upstream: 'unix//run/skiff/control.sock' },
+		});
+		expect(server(compiled).logs).toEqual({
+			default_logger_name: 'skiff_access',
+			skip_hosts: ['cloud.example.com'],
+		});
+		const logging = compiled.logging as { logs: Record<string, Json> };
+		expect(logging.logs.skiff_access!.writer).toMatchObject({
+			output: 'file',
+			filename: '/var/lib/skiff/caddy/logs/access.log',
+			roll_keep_days: 7,
+		});
+		expect(logging.logs.skiff_access!.encoder).toEqual({ format: 'json' });
+		expect(config().logging).toBeUndefined();
 	});
 });

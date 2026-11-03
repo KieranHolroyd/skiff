@@ -12,7 +12,7 @@ export const load: PageServerLoad = ({ locals, url }) => {
 	const resource = (url.searchParams.get('resource') ?? '').trim();
 
 	const entries = core.audit.list({
-		orgId: principal.orgId,
+		principal,
 		limit,
 		action: action || undefined,
 		resource: resource || undefined

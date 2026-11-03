@@ -18,7 +18,10 @@ Environment=HOME=/var/lib/skiff/caddy
 Environment=XDG_DATA_HOME=/var/lib/skiff/caddy/data
 Environment=XDG_CONFIG_HOME=/var/lib/skiff/caddy/config
 
-ExecStart=/opt/skiff/current/caddy/caddy run --config /etc/caddy/skiff.Caddyfile --adapter caddyfile
+# --resume reloads the last config the agent applied (autosave.json under XDG_CONFIG_HOME), so a
+# restart keeps every site route; the Caddyfile is only used on the very first start. The agent
+# also re-applies its config if it ever finds Caddy running without it.
+ExecStart=/opt/skiff/current/caddy/caddy run --resume --config /etc/caddy/skiff.Caddyfile --adapter caddyfile
 ExecReload=/opt/skiff/current/caddy/caddy reload --config /etc/caddy/skiff.Caddyfile --adapter caddyfile --address unix//run/skiff/caddy-admin.sock
 
 Restart=on-failure

@@ -116,7 +116,9 @@
 				: 'Deploys, promotes, access changes and API-key actions appear here as soon as they happen.'}
 		>
 			{#if data.action || data.resource}
-				<Button href={resolve('/(dashboard)/audit')} variant="outline" size="sm">Clear filters</Button>
+				<Button href={resolve('/(dashboard)/audit')} variant="outline" size="sm"
+					>Clear filters</Button
+				>
 			{/if}
 		</EmptyState>
 	{:else}
@@ -172,7 +174,10 @@
 								{/if}
 							</Table.Cell>
 							<Table.Cell>
-								<StatusBadge status={entry.result} tone={entry.result === 'ok' ? 'success' : 'danger'} />
+								<StatusBadge
+									status={entry.result}
+									tone={entry.result === 'ok' ? 'success' : 'danger'}
+								/>
 							</Table.Cell>
 							<Table.Cell class="pr-4">
 								<Button
@@ -215,7 +220,10 @@
 							/>
 						</dd>
 						<dt>Actor</dt>
-						<dd>{actorLabel(selected)} <span class="text-muted-foreground">({selected.actorType})</span></dd>
+						<dd>
+							{actorLabel(selected)}
+							<span class="text-muted-foreground">({selected.actorType})</span>
+						</dd>
 						{#if selected.clientId}
 							<dt>Client</dt>
 							<dd class="font-mono text-[12px] break-all">{selected.clientId}</dd>

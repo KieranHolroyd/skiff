@@ -33,6 +33,7 @@ import { randomBytes } from 'node:crypto';
 import { SELF_UPDATE_DEFAULTS } from '../../packages/contracts/src/self-update.ts';
 import { parseSemver } from '../../packages/contracts/src/semver.ts';
 import { TRIGGER_PATH_UNIT, triggerUnits } from '../update-self/units.ts';
+import { readEnvFile, writeEnvFile } from './env-file.ts';
 
 const SOURCE = process.env.SKIFF_SOURCE_DIR ? resolve(process.env.SKIFF_SOURCE_DIR) : resolve(import.meta.dir, '../..');
 const OPT_DIR = process.env.SKIFF_OPT_DIR ?? '/opt/skiff';
@@ -101,39 +102,78 @@ function value(flag: string, fallback = ''): string {
 	return index >= 0 && args[index + 1] && !args[index + 1]!.startsWith('--') ? args[index + 1]! : fallback;
 }
 
+/**
+ * Re-running the installer (with or without --upgrade) must not reset an existing install: every
+ * setting defaults to flag → process env → the current /etc/skiff/skiff.env → built-in default.
+ */
+const existingEnv = (() => {
+	try {
+		return readEnvFile(ENV_FILE);
+	} catch {
+		return new Map<string, string>();
+	}
+})();
+function existingHost(key: string): string | undefined {
+	const raw = existingEnv.get(key);
+	if (!raw) return undefined;
+	try {
+		return new URL(raw).host;
+	} catch {
+		return undefined;
+	}
+}
+function setting(flag: string, envKeys: string[], fallback = ''): string {
+	for (const key of envKeys) {
+		const fromProcess = process.env[key];
+		if (fromProcess) return value(flag, fromProcess);
+	}
+	for (const key of envKeys) {
+		const fromFile = existingEnv.get(key);
+		if (fromFile) return value(flag, fromFile);
+	}
+	return value(flag, fallback);
+}
+
 const options: Options = {
 	yes: has('--yes') || process.env.SKIFF_YES === '1',
 	dryRun: has('--dry-run'),
 	upgrade: has('--upgrade'),
 	uninstall: has('--uninstall'),
 	purge: has('--purge'),
-	platformHost: value('--platform-host', process.env.SKIFF_PLATFORM_HOST ?? 'control.kieran.dev'),
-	contentDomain: value('--content-domain', process.env.SKIFF_CONTENT_DOMAIN ?? 'kierancloud.dev'),
-	acmeEmail: value('--acme-email', process.env.SKIFF_ACME_EMAIL ?? ''),
+	platformHost: value(
+		'--platform-host',
+		process.env.SKIFF_PLATFORM_HOST ?? existingHost('SKIFF_PLATFORM_ORIGIN') ?? 'control.kieran.dev',
+	),
+	contentDomain: setting('--content-domain', ['SKIFF_CONTENT_DOMAIN'], 'kierancloud.dev'),
+	acmeEmail: setting('--acme-email', ['SKIFF_ACME_EMAIL']),
 	adminEmail: value('--admin-email', process.env.SKIFF_ADMIN_EMAIL ?? ''),
-	cloudflareTokenFile: value('--cloudflare-token-file', process.env.SKIFF_CLOUDFLARE_TOKEN_FILE ?? '/etc/caddy/cloudflare.token'),
-	githubClientId: value('--github-client-id', process.env.GITHUB_CLIENT_ID ?? '') || undefined,
-	githubClientSecret: value('--github-client-secret', process.env.GITHUB_CLIENT_SECRET ?? '') || undefined,
-	objectStore: (value('--object-store', process.env.SKIFF_OBJECT_STORE ?? 'local') as 'local' | 'r2') || 'local',
+	cloudflareTokenFile: setting('--cloudflare-token-file', ['SKIFF_CLOUDFLARE_TOKEN_FILE'], '/etc/caddy/cloudflare.token'),
+	githubClientId: setting('--github-client-id', ['GITHUB_CLIENT_ID']) || undefined,
+	githubClientSecret: setting('--github-client-secret', ['GITHUB_CLIENT_SECRET']) || undefined,
+	objectStore: (setting('--object-store', ['SKIFF_OBJECT_STORE'], 'local') as 'local' | 'r2') || 'local',
 	noAgent: has('--no-agent'),
 	version: value('--version', process.env.SKIFF_VERSION ?? sourceVersion()),
 };
+if (options.objectStore !== 'local' && options.objectStore !== 'r2') {
+	console.error(`--object-store must be local or r2 (got "${options.objectStore}")`);
+	process.exit(64);
+}
 
-if (process.env.SKIFF_SMTP_HOST || args.includes('--smtp-host')) {
+if (process.env.SKIFF_SMTP_HOST || args.includes('--smtp-host') || existingEnv.get('SKIFF_SMTP_HOST')) {
 	options.smtp = {
-		host: value('--smtp-host', process.env.SKIFF_SMTP_HOST ?? ''),
-		port: Number(value('--smtp-port', process.env.SKIFF_SMTP_PORT ?? '587')),
-		user: value('--smtp-user', process.env.SKIFF_SMTP_USER ?? ''),
-		password: value('--smtp-password', process.env.SKIFF_SMTP_PASSWORD ?? ''),
-		from: value('--smtp-from', process.env.SKIFF_SMTP_FROM ?? `Skiff <noreply@${options.contentDomain}>`),
+		host: setting('--smtp-host', ['SKIFF_SMTP_HOST']),
+		port: Number(setting('--smtp-port', ['SKIFF_SMTP_PORT'], '587')),
+		user: setting('--smtp-user', ['SKIFF_SMTP_USER']),
+		password: setting('--smtp-password', ['SKIFF_SMTP_PASSWORD']),
+		from: setting('--smtp-from', ['SKIFF_SMTP_FROM'], `Skiff <noreply@${options.contentDomain}>`),
 	};
 }
 if (options.objectStore === 'r2') {
 	options.r2 = {
-		accountId: value('--r2-account-id', process.env.R2_ACCOUNT_ID ?? process.env.SKIFF_R2_ACCOUNT_ID ?? ''),
-		bucket: value('--r2-bucket', process.env.R2_BUCKET ?? process.env.SKIFF_R2_BUCKET ?? ''),
-		accessKeyId: value('--r2-access-key-id', process.env.R2_ACCESS_KEY_ID ?? process.env.SKIFF_R2_ACCESS_KEY_ID ?? ''),
-		secretAccessKey: value('--r2-secret-access-key', process.env.R2_SECRET_ACCESS_KEY ?? process.env.SKIFF_R2_SECRET_ACCESS_KEY ?? ''),
+		accountId: setting('--r2-account-id', ['R2_ACCOUNT_ID', 'SKIFF_R2_ACCOUNT_ID']),
+		bucket: setting('--r2-bucket', ['R2_BUCKET', 'SKIFF_R2_BUCKET']),
+		accessKeyId: setting('--r2-access-key-id', ['R2_ACCESS_KEY_ID', 'SKIFF_R2_ACCESS_KEY_ID']),
+		secretAccessKey: setting('--r2-secret-access-key', ['R2_SECRET_ACCESS_KEY', 'SKIFF_R2_SECRET_ACCESS_KEY']),
 	};
 }
 
@@ -193,28 +233,6 @@ function step(title: string): void {
 
 function fail(message: string): never {
 	throw new Error(message);
-}
-
-function readEnvFile(path: string): Map<string, string> {
-	const map = new Map<string, string>();
-	if (!existsSync(path)) return map;
-	for (const raw of readFileSync(path, 'utf8').split(/\r?\n/)) {
-		const line = raw.trim();
-		if (!line || line.startsWith('#')) continue;
-		const index = line.indexOf('=');
-		if (index < 0) continue;
-		map.set(line.slice(0, index), line.slice(index + 1));
-	}
-	return map;
-}
-
-function writeEnvFile(path: string, map: Map<string, string>, mode = 0o640): void {
-	const body = [...map.entries()]
-		.sort(([a], [b]) => a.localeCompare(b))
-		.map(([key, value]) => `${key}=${value}`)
-		.join('\n');
-	writeFileSync(`${path}.tmp`, `${body}\n`, { mode });
-	renameSync(`${path}.tmp`, path);
 }
 
 function ensureDir(path: string, mode: string, owner: string): void {
@@ -362,6 +380,9 @@ function writeSecrets(): Map<string, string> {
 	env.set('SKIFF_SITE_COOKIE_SECRET', existing.get('SKIFF_SITE_COOKIE_SECRET') ?? base64(32));
 	env.set('SKIFF_OBJECT_STORE_SECRET', existing.get('SKIFF_OBJECT_STORE_SECRET') ?? base64(32));
 	env.set('SKIFF_DAILY_BACKUPS', '1');
+	// Remembered so a later re-run/upgrade keeps them without repeating the flags.
+	if (options.acmeEmail) env.set('SKIFF_ACME_EMAIL', options.acmeEmail);
+	env.set('SKIFF_CLOUDFLARE_TOKEN_FILE', options.cloudflareTokenFile);
 	if (options.smtp) {
 		env.set('SKIFF_SMTP_HOST', options.smtp.host);
 		env.set('SKIFF_SMTP_PORT', String(options.smtp.port));
@@ -378,6 +399,9 @@ function writeSecrets(): Map<string, string> {
 		env.set('R2_BUCKET', options.r2.bucket);
 		env.set('R2_ACCESS_KEY_ID', options.r2.accessKeyId);
 		env.set('R2_SECRET_ACCESS_KEY', options.r2.secretAccessKey);
+		// Litestream (scripts/litestream.yml) cannot derive the endpoint from the account id, so
+		// write it explicitly. The control plane reads the same optional R2_ENDPOINT.
+		env.set('R2_ENDPOINT', existing.get('R2_ENDPOINT') || `https://${options.r2.accountId}.r2.cloudflarestorage.com`);
 	}
 	if (!options.dryRun) {
 		writeEnvFile(ENV_FILE, env);
@@ -681,6 +705,90 @@ exit 1
 	}
 }
 
+/** Host commands that always run a script from the active release (falling back to `previous`). */
+const RELEASE_COMMANDS: Array<{ path: string; script: string; runner: 'sh' | 'bun' }> = [
+	{ path: '/usr/local/sbin/skiff-restore', script: 'repo/scripts/restore.sh', runner: 'sh' },
+	{ path: '/usr/local/sbin/skiff-restore-drill', script: 'repo/scripts/skiff-restore-drill.sh', runner: 'sh' },
+	{ path: '/usr/local/sbin/skiff-alert', script: 'repo/scripts/skiff-alert.ts', runner: 'bun' },
+];
+const BACKUP_UNITS = ['skiff-litestream.service', 'skiff-restore-drill.service', 'skiff-restore-drill.timer', 'skiff-alert@.service'];
+const LITESTREAM_CONFIG = join(ETC_DIR, 'litestream.yml');
+
+function installReleaseCommands(): void {
+	if (options.dryRun) {
+		log(`would install ${RELEASE_COMMANDS.map((c) => c.path).join(', ')}`);
+		return;
+	}
+	for (const command of RELEASE_COMMANDS) {
+		const exec = command.runner === 'sh' ? `/bin/sh "$release/${command.script}"` : `${BUN_BIN} "$release/${command.script}"`;
+		const script = `#!/bin/sh
+# Installed by the Skiff installer: runs ${command.script} from the active Skiff release.
+for release in ${OPT_DIR}/current ${OPT_DIR}/previous; do
+	if [ -f "$release/${command.script}" ]; then
+		exec ${exec} "$@"
+	fi
+done
+echo "${basename(command.path)}: no release under ${OPT_DIR} ships ${command.script}; re-run the installer" >&2
+exit 1
+`;
+		mkdirSync(dirname(command.path), { recursive: true });
+		writeFileSync(`${command.path}.tmp`, script, { mode: 0o755 });
+		chmodSync(`${command.path}.tmp`, 0o755);
+		renameSync(`${command.path}.tmp`, command.path);
+		log(`installed ${command.path}`);
+	}
+}
+
+/**
+ * Backups (DESIGN §10): Litestream → R2 plus the monthly restore drill, both alerting through
+ * skiff-alert@.service on failure. Only with --object-store r2. The units are installed even when
+ * the litestream binary is missing, so installing it later only needs `systemctl enable --now`.
+ */
+function installBackups(env: Map<string, string>): void {
+	if (env.get('SKIFF_OBJECT_STORE') !== 'r2') {
+		log(color.yellow('backups: the object store is local, so Litestream → R2 and the restore drill are not installed'));
+		return;
+	}
+	step('Backups (Litestream → R2, monthly restore drill)');
+	if (options.dryRun) {
+		log(`would install ${LITESTREAM_CONFIG} and ${BACKUP_UNITS.join(', ')}`);
+		return;
+	}
+	if (!capture('sh', ['-c', 'command -v sqlite3']) && capture('sh', ['-c', 'command -v apt-get'])) {
+		run('apt-get', ['install', '-y', '--no-install-recommends', 'sqlite3'], {
+			allowFailure: true,
+			env: { DEBIAN_FRONTEND: 'noninteractive' },
+		});
+	}
+	const litestream = capture('sh', ['-c', 'command -v litestream']);
+	copyFileSync(join(SOURCE, 'scripts', 'litestream.yml'), `${LITESTREAM_CONFIG}.tmp`);
+	renameSync(`${LITESTREAM_CONFIG}.tmp`, LITESTREAM_CONFIG);
+	run('chown', ['root:skiff', LITESTREAM_CONFIG], { allowFailure: true });
+	run('chmod', ['0640', LITESTREAM_CONFIG], { allowFailure: true });
+	for (const name of BACKUP_UNITS) {
+		let body = readFileSync(join(SOURCE, 'scripts', 'systemd', name), 'utf8');
+		if (litestream) body = body.replaceAll('/usr/local/bin/litestream', litestream);
+		writeFileSync(join(SYSTEMD_DIR, name), body);
+	}
+	run('systemctl', ['daemon-reload']);
+	ensureDir(join(VAR_DIR, 'drill'), '0755', 'root:root');
+	if (!capture('sh', ['-c', 'command -v sqlite3']))
+		log(color.yellow('warning: sqlite3 is not installed; skiff-restore and the restore drill need it'));
+	if (!litestream) {
+		log(
+			color.yellow(
+				'warning: litestream is not installed, so SQLite is NOT being backed up. Install it ' +
+					'(https://litestream.io/install/) and run: systemctl enable --now skiff-litestream.service skiff-restore-drill.timer',
+			),
+		);
+		return;
+	}
+	run('systemctl', ['enable', 'skiff-litestream.service', 'skiff-restore-drill.timer']);
+	run('systemctl', ['restart', 'skiff-litestream.service'], { allowFailure: true });
+	run('systemctl', ['start', 'skiff-restore-drill.timer'], { allowFailure: true });
+	log(`Litestream replicating ${env.get('SKIFF_DATA_DIR')}/skiff.db to ${env.get('R2_BUCKET')}/skiff/sqlite`);
+}
+
 function waitFor(label: string, check: () => boolean, timeoutMs = 60_000): void {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
@@ -906,9 +1014,11 @@ async function install(): Promise<void> {
 	let snapshot: string | null = null;
 	let release: string | null = null;
 	try {
-		if (options.upgrade && existsSync(join(VAR_DIR, 'data', 'skiff.db'))) {
+		// Any re-run against an existing database (with or without --upgrade) may apply
+		// migrations, so always take a snapshot the rollback can restore.
+		if (existsSync(join(VAR_DIR, 'data', 'skiff.db'))) {
 			step('Snapshot SQLite');
-			snapshot = join(VAR_DIR, 'backups', `pre-upgrade-${Date.now()}.db`);
+			snapshot = join(VAR_DIR, 'backups', `pre-${options.upgrade ? 'upgrade' : 'install'}-${Date.now()}.db`);
 			if (!options.dryRun) snapshotDatabase(join(VAR_DIR, 'data', 'skiff.db'), snapshot);
 			log(snapshot);
 		}
@@ -916,8 +1026,10 @@ async function install(): Promise<void> {
 		switchCurrent(release);
 		installUpdateCommand();
 		installCliCommands();
+		installReleaseCommands();
 		writeUnits();
 		startServices();
+		installBackups(env);
 		bootstrapNode(env, release);
 		if (!options.noAgent) {
 			// Wait for the agent to reconcile and Caddy to serve the platform route.
@@ -944,8 +1056,13 @@ function uninstall(): void {
 		run('systemctl', ['disable', '--now', `${service}.service`], { allowFailure: true });
 		rmSync(join(SYSTEMD_DIR, `${service}.service`), { force: true });
 	}
+	for (const unit of BACKUP_UNITS) {
+		if (!unit.includes('@')) run('systemctl', ['disable', '--now', unit], { allowFailure: true });
+		rmSync(join(SYSTEMD_DIR, unit), { force: true });
+	}
 	run('systemctl', ['daemon-reload'], { allowFailure: true });
 	for (const path of CLI_COMMANDS) rmSync(path, { force: true });
+	for (const command of RELEASE_COMMANDS) rmSync(command.path, { force: true });
 	if (options.purge) {
 		run('rm', ['-rf', OPT_DIR, VAR_DIR, ETC_DIR]);
 		log('removed data and configuration');

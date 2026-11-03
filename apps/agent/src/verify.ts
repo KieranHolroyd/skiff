@@ -6,9 +6,44 @@ import type { DesiredState, RouteSpec } from '@skiff/contracts';
  *
  * The agent never touches the database or the control plane on the request path:
  * - the visitor cookie is `__skiff_s=<exp>.<hmac(host|exp)>` signed with the route's site key;
- * - the login callback carries a short-lived access token minted by the control plane, also
- *   signed with the site key, which the agent exchanges for the host-only cookie once.
+ * - the login callback carries a one-time, 60 s token minted by the control plane, also signed
+ *   with the site key, which the agent exchanges for the host-only cookie exactly once.
  */
+
+/** Longest callback-token lifetime the agent accepts (60 s plus clock skew). */
+export const MAX_CALLBACK_TOKEN_SECONDS = 120;
+
+/**
+ * Remembers redeemed callback-token ids until they expire, so a leaked
+ * `/_skiff/callback?token=…` URL cannot be replayed (DESIGN §6.4). Memory is bounded by the
+ * token lifetime: entries are dropped as soon as the token could no longer verify anyway.
+ */
+export class UsedTokenCache {
+	private readonly used = new Map<string, number>();
+	private readonly maxEntries: number;
+
+	constructor(maxEntries = 100_000) {
+		this.maxEntries = maxEntries;
+	}
+
+	/** Record `jti`; false when it was already redeemed (or the cache is saturated). */
+	claim(jti: string, exp: number, now: number): boolean {
+		this.prune(now);
+		if (this.used.has(jti)) return false;
+		// Fail closed under a flood rather than forgetting ids that are still valid.
+		if (this.used.size >= this.maxEntries) return false;
+		this.used.set(jti, exp);
+		return true;
+	}
+
+	get size(): number {
+		return this.used.size;
+	}
+
+	private prune(now: number): void {
+		for (const [jti, exp] of this.used) if (exp <= now) this.used.delete(jti);
+	}
+}
 
 export interface VerifyOptions {
 	state: DesiredState | null;
@@ -17,15 +52,24 @@ export interface VerifyOptions {
 	insecureHttp: boolean;
 	/** Injectable clock, seconds since epoch. */
 	nowSeconds?: () => number;
+	/** Redeemed callback tokens; one per agent process. */
+	usedTokens?: UsedTokenCache;
 }
 
 interface AccessTokenClaims {
 	host: string;
+	/** Callback-token expiry (≤ 60 s after minting). */
 	exp: number;
+	/** Session expiry copied into the visitor cookie. */
+	sexp: number;
+	/** One-time token id. */
+	jti: string;
 	sub: string;
 	kind: string;
 	sid?: string;
 }
+
+const defaultUsedTokens = new UsedTokenCache();
 
 export function hmacBase64url(secret: string, value: string): string {
 	return createHmac('sha256', secret).update(value).digest('base64url');
@@ -156,17 +200,24 @@ function handleCallback(
 		return textResponse(403, 'Invalid token');
 	if (claimedHost !== host) return textResponse(403, 'Token is for a different host');
 	if (claims.exp <= now) return textResponse(403, 'Token has expired');
+	// A long-lived token is not a callback token (or predates one-time tokens); refuse it.
+	if (claims.exp - now > MAX_CALLBACK_TOKEN_SECONDS) return textResponse(403, 'Invalid token');
+	if (claims.sexp <= now) return textResponse(403, 'Session has expired');
+	const revoked = new Set((options.state?.revocations ?? []).map((revocation) => revocation.id));
+	if (claims.sid && revoked.has(claims.sid)) return textResponse(403, 'Access has been revoked');
+	if (!(options.usedTokens ?? defaultUsedTokens).claim(claims.jti, claims.exp, now))
+		return textResponse(403, 'Token has already been used');
 
 	const cookieSignature = signVisitorCookie(
 		route.access.siteKey,
 		claimedHost,
-		claims.exp,
+		claims.sexp,
 		claims.sid ?? '-',
 	);
-	const maxAge = Math.max(0, claims.exp - now);
+	const maxAge = Math.max(0, claims.sexp - now);
 	const cookieValue = claims.sid
-		? `${claims.exp}.${claims.sid}.${cookieSignature}`
-		: `${claims.exp}.${cookieSignature}`;
+		? `${claims.sexp}.${claims.sid}.${cookieSignature}`
+		: `${claims.sexp}.${cookieSignature}`;
 	const cookieParts = [`${options.cookieName}=${cookieValue}`, 'Path=/', 'HttpOnly'];
 	if (!options.insecureHttp) cookieParts.push('Secure');
 	cookieParts.push('SameSite=Lax', `Max-Age=${maxAge}`);
@@ -244,11 +295,15 @@ function decodeClaims(payload: string): AccessTokenClaims | null {
 	const claims = value as Record<string, unknown>;
 	if (typeof claims.host !== 'string' || claims.host.length === 0) return null;
 	if (typeof claims.exp !== 'number' || !Number.isSafeInteger(claims.exp)) return null;
+	if (typeof claims.sexp !== 'number' || !Number.isSafeInteger(claims.sexp)) return null;
+	if (typeof claims.jti !== 'string' || claims.jti.length < 8 || claims.jti.length > 128) return null;
 	if (typeof claims.sub !== 'string' || typeof claims.kind !== 'string') return null;
 	if (claims.sid !== undefined && typeof claims.sid !== 'string') return null;
 	return {
 		host: claims.host,
 		exp: claims.exp,
+		sexp: claims.sexp,
+		jti: claims.jti,
 		sub: claims.sub,
 		kind: claims.kind,
 		...(typeof claims.sid === 'string' ? { sid: claims.sid } : {}),

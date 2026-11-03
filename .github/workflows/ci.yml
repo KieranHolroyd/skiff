@@ -97,4 +97,4 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends shellcheck
 
       - name: Check installer and ops scripts
-        run: shellcheck -s sh scripts/*.sh
+        run: shellcheck -s sh install.sh scripts/*.sh

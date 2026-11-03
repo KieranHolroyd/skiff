@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import { compareSemver, isSemver, parseSemver, semverBump } from './semver.ts';
+import { bumpSemver, compareSemver, isSemver, parseSemver, semverBump } from './semver.ts';
 
 describe('parseSemver', () => {
 	test('accepts release, prerelease, build and a leading v', () => {
@@ -61,6 +61,22 @@ test('semverBump names the change', () => {
 	expect(semverBump('1.2.3-rc.1', '1.2.3')).toBe('prerelease');
 	expect(semverBump('1.2.3', '1.2.3')).toBeNull();
 	expect(semverBump('1.2.3', '1.0.0')).toBeNull();
+});
+
+test('bumpSemver follows npm semver.inc', () => {
+	expect(bumpSemver('0.1.0', 'patch')).toBe('0.1.1');
+	expect(bumpSemver('0.1.9', 'minor')).toBe('0.2.0');
+	expect(bumpSemver('0.9.3', 'major')).toBe('1.0.0');
+	expect(bumpSemver('v1.2.3+build.7', 'patch')).toBe('1.2.4');
+	// A prerelease graduates to its own release when that is the bump asked for.
+	expect(bumpSemver('1.2.3-rc.1', 'patch')).toBe('1.2.3');
+	expect(bumpSemver('1.2.0-rc.1', 'minor')).toBe('1.2.0');
+	expect(bumpSemver('1.2.3-rc.1', 'minor')).toBe('1.3.0');
+	expect(bumpSemver('2.0.0-rc.1', 'major')).toBe('2.0.0');
+	expect(bumpSemver('2.1.0-rc.1', 'major')).toBe('3.0.0');
+	for (const kind of ['patch', 'minor', 'major'] as const)
+		expect(compareSemver(bumpSemver('1.4.2', kind), '1.4.2')).toBeGreaterThan(0);
+	expect(() => bumpSemver('nope', 'patch')).toThrow(/Invalid semantic version/);
 });
 
 test('the repository VERSION file is valid semver', () => {

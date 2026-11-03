@@ -1,4 +1,4 @@
 {
   "extends": "../tsconfig.base.json",
-  "include": ["update-self/**/*.ts"]
+  "include": ["update-self/**/*.ts", "platform-config/**/*.ts", "version.ts", "version.test.ts"]
 }

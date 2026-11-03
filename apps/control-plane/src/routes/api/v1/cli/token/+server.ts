@@ -1,5 +1,5 @@
 import * as z from 'zod';
-import { auth } from '#lib/server/auth.js';
+import { auth, userHasOrgPermission } from '#lib/server/auth.js';
 import { json, readJson, route } from '#lib/server/api.js';
 import { redeemCliLoginCode } from '#lib/server/cli-login.js';
 import { contentDomain, platformOrigin } from '#lib/server/config.js';
@@ -35,6 +35,17 @@ export const POST: RequestHandler = ({ request }) =>
 			);
 		}
 
+		// The CLI receives an API key, so the user's role must allow creating one (DESIGN §6.2).
+		if (!userHasOrgPermission(redeemed.userId, 'apiKey:create'))
+			return json(
+				{
+					error: 'forbidden',
+					message: 'Your role cannot create API keys, so the CLI cannot sign in. Ask an org owner or admin.',
+				},
+				403,
+				{ 'cache-control': 'no-store' },
+			);
+
 		const created = await auth.api.createApiKey({
 			body: {
 				userId: redeemed.userId,
@@ -50,7 +61,7 @@ export const POST: RequestHandler = ({ request }) =>
 
 		try {
 			const principal = principalFromSession(redeemed.userId, request, { kind: 'user' });
-			core.audit.record({
+			if (principal) core.audit.record({
 				principal,
 				action: 'cli.login',
 				resource: 'apiKey',

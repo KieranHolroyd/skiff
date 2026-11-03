@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { crc32, inflateRawSync } from 'node:zlib';
 import { limits, type DesiredState, type ReleaseSpec } from '@skiff/contracts';
+import { isProductionRoute } from './caddy-config.ts';
 
 /**
  * Release cache. Artifacts are zips in R2; the agent downloads each missing artifact once,
@@ -460,7 +461,7 @@ export class ReleaseManager {
 	/** Keep every release in desired state plus two older ones; delete stale site symlinks. */
 	async gc(desired: DesiredState): Promise<void> {
 		const keep = new Set<string>(desired.releases.map((release) => release.sha256));
-		for (const route of desired.routes) keep.add(route.release);
+		for (const route of desired.routes) if (!route.upstream) keep.add(route.release);
 
 		const candidates: Array<{ sha: string; mtimeMs: number }> = [];
 		for (const entry of await fs.readdir(this.releasesDir, { withFileTypes: true })) {
@@ -474,7 +475,12 @@ export class ReleaseManager {
 			this.sizes.delete(stale.sha);
 		}
 
-		const projects = new Set(desired.routes.map((route) => route.projectId));
+		// Only production routes go through `sites/<projectId>`; previews are rooted at releases.
+		const projects = new Set(
+			desired.routes
+				.filter((route) => !route.upstream && isProductionRoute(route, desired.contentDomain))
+				.map((route) => route.projectId),
+		);
 		for (const entry of await fs.readdir(this.sitesDir, { withFileTypes: true })) {
 			if (!entry.isSymbolicLink() || projects.has(entry.name)) continue;
 			await fs.rm(join(this.sitesDir, entry.name), { force: true }).catch(() => undefined);

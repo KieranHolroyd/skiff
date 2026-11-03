@@ -185,6 +185,40 @@ describe('TelemetryStore', () => {
 		expect(a.durationP50Ms).toBeCloseTo((5 * 10 + 7 * 10) / 12, 5);
 	});
 
+	test('the default rollup never rewrites an hour that pruning has started to eat', async () => {
+		let now = Date.parse('2026-11-05T12:00:00Z');
+		store = new TelemetryStore({ path: ':memory:', now: () => now });
+		await store.open();
+		// A full hour of traffic, 47 h ago: 60 minutes × 10 requests.
+		const hour = now - 47 * HOUR;
+		await store.ingest(Array.from({ length: 60 }, (_, i) => makeBucket('a.test', hour + i * MINUTE)));
+		expect(await store.rollupHourly()).toBe(1);
+
+		// 90 minutes later the first half of that hour has been pruned from metrics_1m.
+		now += 90 * MINUTE;
+		await store.prune();
+		await store.rollupHourly();
+		await store.prune();
+
+		const points = await store.query({ from: hour, to: hour + HOUR - 1, interval: '1h' });
+		expect(points).toHaveLength(1);
+		expect(points[0]!.requests).toBe(600);
+	});
+
+	test('hourly queries read rolled-up hours beyond 48 h and live minutes for the open hour', async () => {
+		store = new TelemetryStore({ path: ':memory:', now: () => NOW });
+		await store.open();
+		const old = NOW - 72 * HOUR;
+		await store.ingest([makeBucket('a.test', old, { requests: 5 })]);
+		await store.rollupHourly(old - HOUR, NOW);
+		await store.prune();
+		await store.ingest([makeBucket('a.test', NOW - MINUTE, { requests: 3 })]);
+
+		// A 4-day range is under 7 days but must still see the 72 h-old hour.
+		const points = await store.query({ from: NOW - 4 * DAY, to: NOW, interval: '1h' });
+		expect(points.map((point) => point.requests)).toEqual([5, 3]);
+	});
+
 	test('prune drops raw and hourly data past their retention windows', async () => {
 		store = new TelemetryStore({ path: ':memory:', now: () => NOW });
 		await store.open();

@@ -2,12 +2,14 @@
  * Create a Skiff user directly in the control-plane database, bypassing the invite-only gate (D10).
  * For bootstrapping the first owner and for local development.
  *
- *   bun run create-user <email> [name] [--password …] [--org slug --role admin]
+ *   bun run create-user <email> [name] [--password …] [--org slug --role admin] [--platform-admin]
  *
  * - The password is prompted for (hidden, confirmed) unless `--password` is given. When stdin is
  *   not a terminal, the first line of stdin is used. Password sign-in only works when the server
  *   runs with SKIFF_DEV_PASSWORD_LOGIN=1; otherwise sign in with a magic link, then add a passkey.
- * - Without `--org`, the user gets a personal org (as owner) on first sign-in, like every user.
+ * - The first user in the database is the bootstrap user: platform admin (admin plugin role, which
+ *   manages nodes) and owner of a personal org created on first sign-in. Later users need `--org`
+ *   (or an invitation) to join an org; `--platform-admin` also grants the platform role.
  * - Uses the same SKIFF_DATA_DIR as the server (default `.data`, relative to the cwd). Start the
  *   control plane once first so Better Auth's tables exist.
  *
@@ -21,7 +23,7 @@ import { createDb } from '@skiff/db';
 import { isRole } from '@skiff/core';
 
 const usage =
-	'Usage: bun run create-user <email> [name] [--password <password>] [--org <slug> --role <owner|admin|deployer|viewer>]';
+	'Usage: bun run create-user <email> [name] [--password <password>] [--org <slug> --role <owner|admin|deployer|viewer>] [--platform-admin]';
 
 function fail(message: string): never {
 	console.error(`create-user: ${message}`);
@@ -35,6 +37,7 @@ try {
 			password: { type: 'string' },
 			org: { type: 'string' },
 			role: { type: 'string' },
+			'platform-admin': { type: 'boolean' },
 			help: { type: 'boolean', short: 'h' }
 		},
 		allowPositionals: true,
@@ -76,6 +79,8 @@ if (!hasUserTable)
 
 if (sqlite.query('SELECT 1 FROM user WHERE email = ?').get(email))
 	fail(`a user with email ${email} already exists`);
+const isFirstUser = !sqlite.query('SELECT 1 FROM user LIMIT 1').get();
+const platformAdmin = isFirstUser || values['platform-admin'] === true;
 
 let organization: { id: string; name: string; slug: string } | undefined;
 if (values.org) {
@@ -108,6 +113,7 @@ await ctx.internalAdapter.linkAccount({
 	accountId: user.id,
 	password: await ctx.password.hash(password)
 });
+if (platformAdmin) sqlite.run("UPDATE user SET role = 'admin' WHERE id = ?", [user.id]);
 if (organization) {
 	sqlite.run(
 		'INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES (?, ?, ?, ?, ?)',
@@ -117,7 +123,9 @@ if (organization) {
 
 console.log(`Created user ${user.name} <${user.email}> (${user.id})`);
 if (organization) console.log(`  member of ${organization.name || organization.slug} as ${role}`);
-else console.log('  a personal org (owner) is created on first sign-in');
+else if (isFirstUser) console.log('  a personal org (owner) is created on first sign-in');
+else console.log('  not in any org yet: invite them from the dashboard or re-run with --org');
+if (platformAdmin) console.log('  platform admin (can manage nodes)');
 console.log('  password sign-in requires SKIFF_DEV_PASSWORD_LOGIN=1; magic links always work');
 sqlite.close();
 

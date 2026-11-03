@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { building } from '$app/env';
+import { isSharedDomain } from './domains';
 
 // Runtime config comes from the process environment (systemd EnvironmentFile / credentials in production).
 const env = process.env;
@@ -21,6 +22,18 @@ export const platformOrigin = required('SKIFF_PLATFORM_ORIGIN', 'http://localhos
 
 /** Domain deployed sites are served from (D34: `kierancloud.dev`). */
 export const contentDomain = required('SKIFF_CONTENT_DOMAIN', 'localhost');
+
+/**
+ * Shared-domain mode (DESIGN §5, D19): content is same-site with the dashboard, so the dashboard
+ * shows a persistent warning. One definition for the dashboard and the setup status endpoint.
+ */
+export const sharedDomain = (() => {
+	try {
+		return isSharedDomain(new URL(platformOrigin).hostname, contentDomain);
+	} catch {
+		return false; // build-time placeholders
+	}
+})();
 
 /** Canonical MCP protected-resource URL; tokens are audience-bound to it. */
 export const mcpResource = `${platformOrigin}/mcp`;

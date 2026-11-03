@@ -44,9 +44,24 @@
 		{
 			label: 'Operate',
 			items: [
-				{ label: 'Overview', href: '/(dashboard)/overview', path: '/overview', icon: LayoutDashboardIcon },
-				{ label: 'Projects', href: '/(dashboard)/projects', path: '/projects', icon: FolderKanbanIcon },
-				{ label: 'Deployments', href: '/(dashboard)/deployments', path: '/deployments', icon: RocketIcon }
+				{
+					label: 'Overview',
+					href: '/(dashboard)/overview',
+					path: '/overview',
+					icon: LayoutDashboardIcon
+				},
+				{
+					label: 'Projects',
+					href: '/(dashboard)/projects',
+					path: '/projects',
+					icon: FolderKanbanIcon
+				},
+				{
+					label: 'Deployments',
+					href: '/(dashboard)/deployments',
+					path: '/deployments',
+					icon: RocketIcon
+				}
 			]
 		},
 		{

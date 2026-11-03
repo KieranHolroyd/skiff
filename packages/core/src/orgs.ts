@@ -33,7 +33,7 @@ export function readMembership(sqlite: Database, userId: string): Membership | u
 	}
 }
 
-/** Create the user's personal org on first use; the first user is the owner. */
+/** Create a personal org with the user as owner (see `resolveMembership` for when). */
 export function ensurePersonalOrg(sqlite: Database, userId: string, name = 'Personal'): Membership {
 	const now = new Date();
 	const orgId = newId('org_');
@@ -53,8 +53,42 @@ export function ensurePersonalOrg(sqlite: Database, userId: string, name = 'Pers
 	return { orgId, role: 'owner' };
 }
 
-export function resolveMembership(sqlite: Database, userId: string, fallbackName?: string): Membership {
-	return readMembership(sqlite, userId) ?? ensurePersonalOrg(sqlite, userId, fallbackName);
+/**
+ * A user's membership, creating a personal org only when that's safe:
+ *  - bootstrap: no organization exists yet, so this is the first (owner) user, or
+ *  - `openSignup`: self-service installs where every user gets their own org.
+ *
+ * On an invite-only install (D10) a user without a membership gets `undefined`: an invitee must
+ * accept their invitation instead of silently landing in an auto-created org of their own.
+ */
+export function resolveMembership(
+	sqlite: Database,
+	userId: string,
+	options: { fallbackName?: string; openSignup?: boolean } = {},
+): Membership | undefined {
+	const existing = readMembership(sqlite, userId);
+	if (existing) return existing;
+	if (options.openSignup || !hasAnyOrganization(sqlite))
+		return ensurePersonalOrg(sqlite, userId, options.fallbackName);
+	return undefined;
+}
+
+function hasAnyOrganization(sqlite: Database): boolean {
+	try {
+		return Boolean(sqlite.query('SELECT 1 FROM organization LIMIT 1').get());
+	} catch {
+		return false;
+	}
+}
+
+/** Better Auth admin plugin: `user.role` is a comma-separated list; `admin` is the platform admin. */
+export function isPlatformAdminUser(sqlite: Database, userId: string): boolean {
+	try {
+		const row = sqlite.query<{ role: string | null }, [string]>('SELECT role FROM user WHERE id = ?').get(userId);
+		return (row?.role ?? '').split(',').some((role) => role.trim() === 'admin');
+	} catch {
+		return false;
+	}
 }
 
 export function assertRoleCan(role: Role, permission: Permission): void {
@@ -75,6 +109,7 @@ export function buildPrincipal(input: {
 	clientId?: string;
 	keyId?: string;
 	ipHash?: string;
+	platformAdmin?: boolean;
 }): Principal {
 	const rolePermissions = new Set<string>(roleDefinitions[input.role]);
 	const granted = input.granted ? new Set(input.granted) : rolePermissions;
@@ -90,5 +125,6 @@ export function buildPrincipal(input: {
 		clientId: input.clientId,
 		keyId: input.keyId,
 		ipHash: input.ipHash,
+		platformAdmin: input.platformAdmin === true,
 	};
 }

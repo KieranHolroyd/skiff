@@ -1,14 +1,16 @@
 import { betterAuth } from 'better-auth';
-import { APIError } from 'better-auth/api';
+import { APIError, createAuthMiddleware, getSessionFromCtx } from 'better-auth/api';
 import { admin, jwt, magicLink, organization, twoFactor } from 'better-auth/plugins';
 import { passkey } from '@better-auth/passkey';
 import { apiKey } from '@better-auth/api-key';
 import { createAccessControl } from 'better-auth/plugins/access';
+import { defaultStatements } from 'better-auth/plugins/organization/access';
 import { sveltekitCookies } from 'better-auth/svelte-kit';
 import { mcp } from '@better-auth/mcp';
 import { cimd } from '@better-auth/cimd';
 import { fetchClientMetadataResource } from '@better-auth/cimd/node';
 import { allPermissions, roles, statements, type Permission, type Role } from '@skiff/contracts';
+import { readMembership } from '@skiff/core';
 import { getRequestEvent } from '$app/server';
 import { allowDcr, authSecret, contentDomain, devPasswordLogin, github, mcpResource, openSignup, platformOrigin } from './config';
 import { sendInviteEmail, sendMagicLinkEmail } from './email';
@@ -18,14 +20,38 @@ import { sqlite } from './db';
  * Better Auth: passkeys + GitHub, invite-only, 2FA for owners (D10); organizations with the
  * same RBAC statements the API/MCP/CLI use (D9); API keys and MCP OAuth 2.1 (D11).
  */
-const ac = createAccessControl(statements);
+const ac = createAccessControl({
+	...defaultStatements,
+	...statements,
+	// Both define `member`: keep Better Auth's actions (used by its endpoints) next to Skiff's.
+	member: [...defaultStatements.member, ...statements.member],
+});
+
+/**
+ * Skiff permissions → the Better Auth organization actions its endpoints check, so the same RBAC
+ * table (DESIGN §6.2) governs invitations and membership changes. Better Auth itself stops
+ * non-owners from inviting or promoting anyone to `owner`.
+ */
+const betterAuthEquivalents: Partial<Record<Permission, Record<string, string[]>>> = {
+	'member:invite': { invitation: ['create', 'cancel'], member: ['create'] },
+	'member:update-role': { member: ['update'] },
+	'member:remove': { member: ['delete'] },
+};
 
 function statementsFor(role: Role): Record<string, string[]> {
-	const grouped: Record<string, string[]> = {};
+	const grouped: Record<string, string[]> = { ac: ['read'] };
+	const add = (resource: string, action: string) => {
+		const list = (grouped[resource] ??= []);
+		if (!list.includes(action)) list.push(action);
+	};
 	for (const permission of roles[role] as readonly Permission[]) {
 		const [resource, action] = permission.split(':') as [string, string];
-		(grouped[resource] ??= []).push(action);
+		add(resource, action);
+		for (const [extra, actions] of Object.entries(betterAuthEquivalents[permission] ?? {}))
+			for (const extraAction of actions) add(extra, extraAction);
 	}
+	if (role === 'owner') for (const action of ['update', 'delete']) add('organization', action);
+	if (role === 'admin') add('organization', 'update');
 	return grouped;
 }
 
@@ -35,6 +61,19 @@ const organizationRoles = {
 	deployer: ac.newRole(statementsFor('deployer')),
 	viewer: ac.newRole(statementsFor('viewer')),
 };
+
+/** Better Auth's API-key endpoints, gated by the same RBAC permissions as the dashboard (§6.2). */
+const apiKeyEndpointPermissions: Record<string, Permission> = {
+	'/api-key/create': 'apiKey:create',
+	'/api-key/update': 'apiKey:create',
+	'/api-key/delete': 'apiKey:revoke',
+};
+
+/** True when the user's org role grants `permission` (no membership → false). */
+export function userHasOrgPermission(userId: string, permission: Permission): boolean {
+	const membership = readMembership(sqlite, userId);
+	return membership ? (roles[membership.role] as readonly Permission[]).includes(permission) : false;
+}
 
 const API_KEY_RATE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const API_KEY_RATE_MAX = 100_000;
@@ -57,9 +96,10 @@ export const auth = betterAuth({
 				// Invite-only (D10), with the very first user allowed so the setup wizard can create
 				// the owner. Invitations are Better Auth organization invitations by email.
 				before: async (user) => {
-					if (openSignup) return;
 					const count = sqlite.query<{ count: number }, []>('SELECT count(*) AS count FROM user').get();
-					if ((count?.count ?? 0) === 0) return;
+					// The bootstrap user is the platform admin (admin plugin role, DESIGN §6.2).
+					if ((count?.count ?? 0) === 0) return { data: { ...user, role: 'admin' } };
+					if (openSignup) return;
 					const invited = sqlite
 						.query<{ id: string }, [string, number]>(
 							"SELECT id FROM invitation WHERE email = ? AND status = 'pending' AND expiresAt > ?",
@@ -72,6 +112,18 @@ export const auth = betterAuth({
 				},
 			},
 		},
+	},
+	hooks: {
+		before: createAuthMiddleware(async (ctx) => {
+			const permission = apiKeyEndpointPermissions[ctx.path];
+			// Trusted in-process calls without request headers (e.g. the CLI token exchange) do their
+			// own checks; anything carrying a user session is held to that user's org role.
+			if (!permission || (!ctx.request && !ctx.headers)) return;
+			const session = await getSessionFromCtx(ctx);
+			if (!session) return; // the endpoint itself rejects unauthenticated calls
+			if (!userHasOrgPermission(session.user.id, permission))
+				throw new APIError('FORBIDDEN', { message: `Your role does not include ${permission}.` });
+		}),
 	},
 	advanced: {
 		// `__Host-` cookies only (DESIGN §5, D19): no Domain attribute, Secure, Path=/.
@@ -96,7 +148,8 @@ export const auth = betterAuth({
 			ac,
 			roles: organizationRoles,
 			creatorRole: 'owner',
-			allowUserToCreateOrganization: true,
+			// Orgs come from bootstrap (or open signup) and invitations, never self-service (D10).
+			allowUserToCreateOrganization: false,
 			organizationLimit: 10,
 			membershipLimit: 100,
 			sendInvitationEmail: async ({ id, email, organization }) => {
@@ -134,6 +187,21 @@ export function backfillApiKeyRateLimits(): number {
 		.query('UPDATE apikey SET rateLimitMax = ?, rateLimitTimeWindow = ? WHERE rateLimitMax = 10 AND rateLimitTimeWindow = ?')
 		.run(API_KEY_RATE_MAX, API_KEY_RATE_WINDOW_MS, API_KEY_RATE_WINDOW_MS);
 	return result.changes;
+}
+
+/**
+ * Installs that predate the platform-admin role have no `admin` user. Promote the earliest user
+ * (the bootstrap owner) so fleet management keeps working after the upgrade.
+ */
+export function ensurePlatformAdmin(): string | undefined {
+	const hasAdmin = sqlite
+		.query<{ id: string }, []>("SELECT id FROM user WHERE ',' || replace(coalesce(role, ''), ' ', '') || ',' LIKE '%,admin,%' LIMIT 1")
+		.get();
+	if (hasAdmin) return undefined;
+	const first = sqlite.query<{ id: string }, []>('SELECT id FROM user ORDER BY createdAt ASC LIMIT 1').get();
+	if (!first) return undefined;
+	sqlite.run("UPDATE user SET role = 'admin' WHERE id = ?", [first.id]);
+	return first.id;
 }
 
 export type Session = typeof auth.$Infer.Session;

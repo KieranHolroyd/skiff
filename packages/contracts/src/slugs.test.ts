@@ -35,4 +35,21 @@ describe('slugs', () => {
 		expect(suggestion).toBeDefined();
 		expect(checkSlug(suggestion!).ok).toBe(true);
 	});
+
+	test('always returns three suggestions once the fixed suffixes run out', () => {
+		const taken = ['blog', 'blog-app', 'blog-site', 'blog-web', 'blog-hq', 'blog-io', 'blog-dev'];
+		const suggestions = suggestSlugs('blog', taken, 3);
+		expect(suggestions).toHaveLength(3);
+		expect(suggestions.every((slug) => !taken.includes(slug) && checkSlug(slug).ok)).toBe(true);
+	});
+
+	test('suggests for maximum-length slugs by truncating before the suffix', () => {
+		const long = 'a'.repeat(40);
+		const suggestions = suggestSlugs(long, [long], 3);
+		expect(suggestions).toHaveLength(3);
+		for (const slug of suggestions) {
+			expect(slug).not.toBe(long);
+			expect(checkSlug(slug).ok).toBe(true);
+		}
+	});
 });

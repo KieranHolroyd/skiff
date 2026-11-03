@@ -20,6 +20,9 @@ import {
 } from './util.ts';
 import type { ProjectRow } from './projects.ts';
 
+/** Lifetime of the one-time `/_skiff/callback?token=` token (DESIGN §6.4). */
+export const CALLBACK_TOKEN_TTL_SECONDS = 60;
+
 export interface ShareLinkView {
 	id: string;
 	projectId: string;
@@ -164,11 +167,14 @@ export class AccessService {
 
 	async revokeSession(principal: Principal, project: ProjectRow, sessionId: string): Promise<void> {
 		requirePermission(principal, 'shareLink:revoke');
-		this.ctx.db
-			.update(shareRedemptions)
-			.set({ revokedAt: this.ctx.now() })
-			.where(and(eq(shareRedemptions.id, sessionId)))
-			.run();
+		if (project.orgId !== principal.orgId) throw new NotFoundError('Session');
+		// Only sessions redeemed from this project's share links can be revoked through it.
+		const result = this.ctx.sqlite.run(
+			`UPDATE share_redemptions SET revoked_at = ?
+			 WHERE id = ? AND share_link_id IN (SELECT id FROM share_links WHERE project_id = ? AND org_id = ?)`,
+			[this.ctx.now(), sessionId, project.id, project.orgId],
+		);
+		if (result.changes === 0) throw new NotFoundError('Session');
 		this.ctx.projects.bump(project.orgId);
 	}
 
@@ -238,13 +244,23 @@ export class AccessService {
 				throw new CoreError('email_not_allowed', 'This share link is restricted to specific email addresses', 403);
 		}
 		const visitorHash = hashVisitor(this.ctx.config.siteCookieSecret, request.ip, request.userAgent);
-		const distinctVisitors = this.ctx.db
-			.select({ count: sql<number>`count(distinct ${shareRedemptions.visitorHash})` })
-			.from(shareRedemptions)
-			.where(eq(shareRedemptions.shareLinkId, link.id))
-			.get();
-		if (link.maxVisitors !== null && (distinctVisitors?.count ?? 0) >= link.maxVisitors)
-			throw new CoreError('visitor_limit', 'This share link has reached its visitor limit', 410);
+		if (link.maxVisitors !== null) {
+			// The cap limits *distinct* visitors; someone who already redeemed may come back.
+			const returning = this.ctx.db
+				.select({ id: shareRedemptions.id })
+				.from(shareRedemptions)
+				.where(and(eq(shareRedemptions.shareLinkId, link.id), eq(shareRedemptions.visitorHash, visitorHash)))
+				.get();
+			const distinctVisitors = returning
+				? undefined
+				: this.ctx.db
+						.select({ count: sql<number>`count(distinct ${shareRedemptions.visitorHash})` })
+						.from(shareRedemptions)
+						.where(eq(shareRedemptions.shareLinkId, link.id))
+						.get();
+			if (!returning && (distinctVisitors?.count ?? 0) >= link.maxVisitors)
+				throw new CoreError('visitor_limit', 'This share link has reached its visitor limit', 410);
+		}
 
 		const redemptionId = `red_${crypto.randomUUID().replace(/-/g, '')}`;
 		const expiresAt = now + link.sessionTtlSeconds * 1000;
@@ -279,7 +295,13 @@ export class AccessService {
 		);
 	}
 
-	/** Mint a host-bound token the agent can verify with the project's site key. */
+	/**
+	 * Mint a host-bound callback token the agent can verify with the project's site key.
+	 *
+	 * The token itself is one-time and lives 60 s (DESIGN §6.4): `exp` bounds the callback, `jti`
+	 * lets the agent refuse a replay, and `sexp` carries the session expiry the agent copies into
+	 * the host-only cookie. A leaked callback URL is therefore useless after one use or a minute.
+	 */
 	private mint(
 		project: ProjectRow,
 		host: string,
@@ -290,14 +312,24 @@ export class AccessService {
 		deploymentId?: string,
 	): SiteVisit {
 		const siteKey = siteKeyFor(this.ctx.config.siteCookieSecret, project.id);
-		const exp = Math.floor(this.ctx.now() / 1000) + ttlSeconds;
-		const token = signAccessToken(siteKey, { host, exp, sub: subject, kind, sid: sessionId });
+		const now = Math.floor(this.ctx.now() / 1000);
+		const sessionExp = now + ttlSeconds;
+		const claims = {
+			host,
+			exp: Math.min(now + CALLBACK_TOKEN_TTL_SECONDS, sessionExp),
+			sexp: sessionExp,
+			jti: randomToken(16),
+			sub: subject,
+			kind,
+			...(sessionId ? { sid: sessionId } : {}),
+		};
+		const token = signAccessToken(siteKey, claims);
 		return {
 			host,
 			project,
 			deploymentId: deploymentId ?? project.productionDeploymentId ?? '',
 			token,
-			expiresAt: new Date(exp * 1000).toISOString(),
+			expiresAt: new Date(sessionExp * 1000).toISOString(),
 		};
 	}
 
@@ -308,18 +340,29 @@ export class AccessService {
 		return verifyAccessToken(siteKeyFor(this.ctx.config.siteCookieSecret, project.id), token);
 	}
 
+	/**
+	 * Revocations agents must enforce. Each one is kept until every session it can affect has
+	 * expired on its own: a revoked redemption until its `expiresAt`, a revoked link until
+	 * `revokedAt + sessionTtl` (no session minted before revocation can outlive that).
+	 */
 	revocations(): Array<{ id: string; kind: 'shareLink' | 'session'; revokedAt: string }> {
 		const now = this.ctx.now();
-		const links = this.ctx.db.select().from(shareLinks).where(sql`${shareLinks.revokedAt} IS NOT NULL`).all();
-		const sessions = this.ctx.db.select().from(shareRedemptions).where(sql`${shareRedemptions.revokedAt} IS NOT NULL`).all();
+		const links = this.ctx.sqlite
+			.query<{ id: string; revokedAt: number }, [number]>(
+				`SELECT id, revoked_at AS revokedAt FROM share_links
+				 WHERE revoked_at IS NOT NULL AND revoked_at + session_ttl_seconds * 1000 > ?`,
+			)
+			.all(now);
+		const sessions = this.ctx.sqlite
+			.query<{ id: string; revokedAt: number }, [number]>(
+				`SELECT id, revoked_at AS revokedAt FROM share_redemptions
+				 WHERE revoked_at IS NOT NULL AND expires_at > ?`,
+			)
+			.all(now);
 		return [
-			...links.flatMap((row) =>
-				row.revokedAt ? [{ id: row.id, kind: 'shareLink' as const, revokedAt: new Date(row.revokedAt).toISOString() }] : [],
-			),
-			...sessions.flatMap((row) =>
-				row.revokedAt ? [{ id: row.id, kind: 'session' as const, revokedAt: new Date(row.revokedAt).toISOString() }] : [],
-			),
-		].filter((item) => Date.parse(item.revokedAt) > now - 7 * 86_400_000);
+			...links.map((row) => ({ id: row.id, kind: 'shareLink' as const, revokedAt: new Date(row.revokedAt).toISOString() })),
+			...sessions.map((row) => ({ id: row.id, kind: 'session' as const, revokedAt: new Date(row.revokedAt).toISOString() })),
+		];
 	}
 }
 

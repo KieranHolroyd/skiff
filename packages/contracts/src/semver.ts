@@ -87,3 +87,24 @@ export function semverBump(from: string, to: string): 'major' | 'minor' | 'patch
 	if (b.patch !== a.patch) return 'patch';
 	return 'prerelease';
 }
+
+export type SemverBump = 'major' | 'minor' | 'patch';
+
+/**
+ * The next version, with npm `semver.inc` semantics: build metadata is dropped, and a prerelease
+ * graduates to its release when that is the requested bump (`1.2.0-rc.1` minor → `1.2.0`,
+ * `1.2.3-rc.1` patch → `1.2.3`, `2.0.0-rc.1` major → `2.0.0`). Throws on invalid input.
+ */
+export function bumpSemver(version: string, kind: SemverBump): string {
+	const v = parseSemver(version);
+	if (!v) throw new TypeError(`Invalid semantic version: ${version}`);
+	const pre = v.prerelease.length > 0;
+	switch (kind) {
+		case 'major':
+			return pre && v.minor === 0 && v.patch === 0 ? `${v.major}.0.0` : `${v.major + 1}.0.0`;
+		case 'minor':
+			return pre && v.patch === 0 ? `${v.major}.${v.minor}.0` : `${v.major}.${v.minor + 1}.0`;
+		case 'patch':
+			return pre ? `${v.major}.${v.minor}.${v.patch}` : `${v.major}.${v.minor}.${v.patch + 1}`;
+	}
+}

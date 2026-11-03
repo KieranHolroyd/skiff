@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, lt, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne } from 'drizzle-orm';
 import { configSnapshots, deployments, projects, releases } from '@skiff/db';
 import { requirePermission, type Principal } from '@skiff/contracts';
 import type { FileEntry } from './artifact.ts';
@@ -41,8 +41,15 @@ export class DeploymentService {
 		options: { promote?: boolean; message?: string; precompress?: boolean } = {},
 	): Promise<DeploymentView> {
 		requirePermission(principal, 'deployment:create');
-		const prepared = await this.ctx.releases.prepare(principal, entries, { precompress: options.precompress });
-		return this.create(principal, project, prepared, options);
+		let prepared = await this.ctx.releases.prepare(principal, entries, { precompress: options.precompress });
+		// Release GC runs concurrently and may have removed a reused release row while we awaited.
+		// Re-check synchronously right before `create` (also synchronous) so nothing can slip between.
+		for (let attempt = 0; attempt < 3; attempt++) {
+			const stillThere = this.ctx.db.select({ id: releases.id }).from(releases).where(eq(releases.id, prepared.release.id)).get();
+			if (stillThere) return this.create(principal, project, prepared, options);
+			prepared = { ...prepared, release: await this.ctx.releases.store(principal, prepared.artifact) };
+		}
+		throw new ConflictError('The release was garbage-collected while deploying; please retry.');
 	}
 
 	create(
@@ -290,22 +297,58 @@ export class DeploymentService {
 		void this.gcReleases(project.orgId);
 	}
 
-	/** Delete release rows/objects no surviving deployment references. */
-	async gcReleases(orgId: string): Promise<void> {
-		const referenced = new Set(
-			this.ctx.db
-				.select({ sha: releases.sha256 })
+	private readonly gcQueue = new Map<string, Promise<void>>();
+	private readonly objectDeletes = new Map<string, Promise<void>>();
+
+	/**
+	 * Delete release rows no surviving deployment references, and their objects once no release in
+	 * *any* org uses them (keys are content-addressed and shared across orgs). Runs are serialised per
+	 * org; each row is re-checked and deleted in one statement, before its object is touched.
+	 */
+	gcReleases(orgId: string): Promise<void> {
+		const previous = this.gcQueue.get(orgId) ?? Promise.resolve();
+		const run = previous.catch(() => undefined).then(() => this.runGc(orgId));
+		this.gcQueue.set(orgId, run);
+		void run
+			.finally(() => {
+				if (this.gcQueue.get(orgId) === run) this.gcQueue.delete(orgId);
+			})
+			.catch(() => undefined);
+		return run;
+	}
+
+	/** Resolves once any in-flight GC delete of `objectKey` has finished, so a re-upload can't be clobbered. */
+	async objectDeleteSettled(objectKey: string): Promise<void> {
+		await this.objectDeletes.get(objectKey)?.catch(() => undefined);
+	}
+
+	private async runGc(orgId: string): Promise<void> {
+		const candidates = this.ctx.sqlite
+			.query<{ id: string; object_key: string }, [string]>(
+				`SELECT id, object_key FROM releases r WHERE org_id = ?
+				 AND NOT EXISTS (SELECT 1 FROM deployments d WHERE d.release_id = r.id AND d.status != 'deleted')`,
+			)
+			.all(orgId);
+		for (const candidate of candidates) {
+			const removed = this.ctx.sqlite.run(
+				`DELETE FROM releases WHERE id = ?
+				 AND NOT EXISTS (SELECT 1 FROM deployments d WHERE d.release_id = ? AND d.status != 'deleted')`,
+				[candidate.id, candidate.id],
+			);
+			if (removed.changes === 0) continue;
+			const shared = this.ctx.db
+				.select({ id: releases.id })
 				.from(releases)
-				.innerJoin(deployments, eq(deployments.releaseId, releases.id))
-				.where(and(eq(releases.orgId, orgId), ne(deployments.status, 'deleted')))
-				.all()
-				.map((row) => row.sha),
-		);
-		const all = this.ctx.db.select().from(releases).where(eq(releases.orgId, orgId)).all();
-		for (const release of all) {
-			if (referenced.has(release.sha256)) continue;
-			await this.ctx.objectStore.delete(release.objectKey);
-			this.ctx.db.delete(releases).where(eq(releases.id, release.id)).run();
+				.where(eq(releases.objectKey, candidate.object_key))
+				.get();
+			if (shared) continue;
+			const deletion = this.ctx.objectStore.delete(candidate.object_key);
+			this.objectDeletes.set(candidate.object_key, deletion);
+			try {
+				await deletion;
+			} finally {
+				if (this.objectDeletes.get(candidate.object_key) === deletion) this.objectDeletes.delete(candidate.object_key);
+			}
 		}
 	}
 

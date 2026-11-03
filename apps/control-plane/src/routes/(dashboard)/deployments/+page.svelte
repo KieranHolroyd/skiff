@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
+	import { tick } from 'svelte';
 	import { resolve } from '$app/paths';
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
 	import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
@@ -33,9 +33,13 @@
 		})
 	);
 
-	function chooseProject(slug: string) {
-		const base = resolve('/(dashboard)/deployments');
-		goto(slug ? `${base}?project=${encodeURIComponent(slug)}` : base, { reset: false });
+	let filterForm = $state<HTMLFormElement>();
+	let projectFilter = $derived(data.filter ?? '');
+
+	async function chooseProject(slug: string) {
+		projectFilter = slug;
+		await tick();
+		filterForm?.requestSubmit();
 	}
 </script>
 
@@ -62,7 +66,10 @@
 
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div class="flex flex-wrap items-center gap-2">
-			<Select.Root type="single" value={data.filter ?? ''} onValueChange={chooseProject}>
+			<form method="GET" bind:this={filterForm} class="contents">
+				<input type="hidden" name="project" value={projectFilter} />
+			</form>
+			<Select.Root type="single" value={projectFilter} onValueChange={chooseProject}>
 				<Select.Trigger class="w-56 bg-card" aria-label="Filter by project">
 					<FolderKanbanIcon class="text-muted-foreground" />
 					{projectLabel}
@@ -73,7 +80,8 @@
 					{#each data.projects as project (project.slug)}
 						<Select.Item value={project.slug} label={project.name}>
 							{project.name}
-							<span class="ml-auto font-mono text-[11px] text-muted-foreground">{project.slug}</span>
+							<span class="ml-auto font-mono text-[11px] text-muted-foreground">{project.slug}</span
+							>
 						</Select.Item>
 					{/each}
 				</Select.Content>
@@ -127,14 +135,18 @@
 								<div class="flex flex-wrap items-center gap-1.5">
 									<a
 										href={resolve('/(dashboard)/projects/[slug]', { slug: deployment.projectSlug })}
-										class="font-medium underline-offset-4 hover:underline">{deployment.projectSlug}</a
+										class="font-medium underline-offset-4 hover:underline"
+										>{deployment.projectSlug}</a
 									>
 									<span class="font-mono text-xs text-muted-foreground">{deployment.shortId}</span>
 									{#if deployment.isProduction}<Badge variant="brand">production</Badge>{/if}
 									{#if deployment.pinned}<Badge variant="outline"><PinIcon />pinned</Badge>{/if}
 								</div>
 								{#if deployment.message}
-									<p class="max-w-md truncate text-xs text-muted-foreground" title={deployment.message}>
+									<p
+										class="max-w-md truncate text-xs text-muted-foreground"
+										title={deployment.message}
+									>
 										{deployment.message}
 									</p>
 								{/if}
@@ -152,12 +164,16 @@
 							</Table.Cell>
 							<Table.Cell class="hidden font-mono text-xs text-muted-foreground lg:table-cell">
 								<span title={deployment.release.sha256}>{shortSha(deployment.release.sha256)}</span>
-								<span class="ml-1 text-[11px] opacity-75">{formatBytes(deployment.release.sizeBytes)}</span>
+								<span class="ml-1 text-[11px] opacity-75"
+									>{formatBytes(deployment.release.sizeBytes)}</span
+								>
 							</Table.Cell>
 							<Table.Cell class="hidden text-xs text-muted-foreground sm:table-cell">
 								<time datetime={deployment.createdAt}>{formatDateTime(deployment.createdAt)}</time>
 							</Table.Cell>
-							<Table.Cell class="pr-4 text-right"><StatusBadge status={deployment.status} /></Table.Cell>
+							<Table.Cell class="pr-4 text-right"
+								><StatusBadge status={deployment.status} /></Table.Cell
+							>
 						</Table.Row>
 					{:else}
 						<Table.Row>

@@ -1,0 +1,9 @@
+packages:
+  - apps/*
+  - packages/*
+  - spikes/*
+allowBuilds:
+  esbuild: set this to true or false
+minimumReleaseAgeExclude:
+  - '@lucide/svelte@1.67.0'
+  - shadcn-svelte@1.8.0

@@ -1,7 +1,8 @@
 <script lang="ts">
+	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import TerminalIcon from '@lucide/svelte/icons/terminal';
 	import AuthShell from '#lib/components/skiff/AuthShell.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import type { PageProps } from './$types';
 
@@ -26,9 +27,11 @@
 				>$ </span>skif login --web</pre>
 	</div>
 
-	<Notice tone="warning" class="mt-4">
-		Only continue if you just ran this command on this machine.
-	</Notice>
+	<Alert.Root variant="warning" class="mt-4"
+		><TriangleAlertIcon /><Alert.Description
+			>Only continue if you just ran this command on this machine.</Alert.Description
+		></Alert.Root
+	>
 
 	<p class="mt-4 text-sm leading-relaxed text-muted-foreground">
 		The key gets the same access as your account{data.role ? ` (${data.role})` : ''}. You can revoke

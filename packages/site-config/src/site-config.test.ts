@@ -126,6 +126,45 @@ describe('compileSiteRoute', () => {
 		expect(json).toContain('/index.html');
 		expect(json).toContain('try_files');
 	});
+
+	test('trailing-slash redirects keep the query string', () => {
+		const always = JSON.stringify(compileSiteRoute({ ...base, site: { ...base.site, trailingSlash: 'always' } }));
+		expect(always).toContain('{http.request.uri.path}/{http.request.uri.prefixed_query}');
+		expect(always).not.toContain('{http.request.uri}/');
+		const never = JSON.stringify(compileSiteRoute({ ...base, site: { ...base.site, trailingSlash: 'never' } }));
+		expect(never).toContain('{http.regexp.skiff_slash.path}{http.request.uri.prefixed_query}');
+	});
+
+	test('protected sites never emit public cache headers, even from _headers', () => {
+		const json = JSON.stringify(
+			compileSiteRoute({
+				...base,
+				accessMode: 'password',
+				headers: [{ path: '/assets/*', headers: { 'Cache-Control': 'public, max-age=600, s-maxage=600' } }],
+			}),
+		);
+		expect(json).not.toContain('public,');
+		expect(json).toContain('private, max-age=31536000, immutable');
+		expect(json).toContain('private, no-cache');
+		expect(json).toContain('"Cache-Control":["private, max-age=600"]');
+		// Public sites keep shared caching for hashed assets.
+		expect(JSON.stringify(compileSiteRoute(base))).toContain('public, max-age=31536000, immutable');
+	});
+
+	test('only hashed files under /assets are cached immutably', () => {
+		const route = compileSiteRoute(base);
+		const json = JSON.stringify(route);
+		expect(json).not.toContain('"/assets/*"');
+		const patterns = [...json.matchAll(/"pattern":"((?:[^"\\]|\\.)*)"/g)].map((match) =>
+			new RegExp(JSON.parse(`"${match[1]}"`)),
+		);
+		const immutable = (path: string) => patterns.some((pattern) => pattern.test(path));
+		expect(immutable('/assets/index-DiwrgTda.js')).toBe(true);
+		expect(immutable('/_astro/hoisted.B9xKz_1q.css')).toBe(true);
+		expect(immutable('/static/main.3f9a2b7c.js')).toBe(true);
+		expect(immutable('/assets/logo.png')).toBe(false);
+		expect(immutable('/assets/hero-image.jpg')).toBe(false);
+	});
 });
 
 describe('compileCaddyConfig', () => {

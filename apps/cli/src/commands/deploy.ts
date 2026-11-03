@@ -36,7 +36,7 @@ Options:
       --json             Print the finalize response as JSON
   -h, --help             Show this help
 
-Create an API key in the dashboard, then run \`skif login\`.`;
+Sign in first with \`skif login\` (opens the browser), or set SKIFF_URL and SKIFF_TOKEN in CI.`;
 
 export async function deployCommand(argv: string[]): Promise<void> {
 	const args = parseArgs(argv, flags);

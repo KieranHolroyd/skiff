@@ -97,8 +97,12 @@
 			title="Platform admin required"
 			description="Nodes, Caddy and global settings are platform-level resources. Your role can use projects and deployments, but cannot inspect or enrol machines."
 		>
-			<Button href={resolve('/(dashboard)/overview')} variant="outline" size="sm">Back to overview</Button>
-			<Button href={resolve('/(dashboard)/settings')} variant="ghost" size="sm">View your role</Button>
+			<Button href={resolve('/(dashboard)/overview')} variant="outline" size="sm"
+				>Back to overview</Button
+			>
+			<Button href={resolve('/(dashboard)/settings')} variant="ghost" size="sm"
+				>View your role</Button
+			>
 		</EmptyState>
 	{:else if data.nodes.length === 0}
 		<EmptyState
@@ -118,14 +122,18 @@
 				<Card.Root class="gap-4">
 					<Card.Header>
 						<div class="flex items-start gap-3">
-							<span class="relative grid size-10 shrink-0 place-items-center rounded-lg border bg-muted/40">
+							<span
+								class="relative grid size-10 shrink-0 place-items-center rounded-lg border bg-muted/40"
+							>
 								<ServerIcon class="size-[18px] text-muted-foreground" />
 								<StatusDot status={node.status} class="absolute -top-0.5 -right-0.5" />
 							</span>
 							<div class="min-w-0 space-y-1">
 								<Card.Title class="flex flex-wrap items-center gap-2">
 									{node.name}
-									<Badge variant="outline" class="font-mono text-[10px] uppercase">{node.mode}</Badge>
+									<Badge variant="outline" class="font-mono text-[10px] uppercase"
+										>{node.mode}</Badge
+									>
 									<StatusBadge status={node.status} />
 								</Card.Title>
 								<Card.Description class="truncate font-mono text-[11px]" title={node.id}>
@@ -163,30 +171,41 @@
 						<NodeStats stats={node.stats} />
 						<dl class="kv border-t">
 							<dt>Agent</dt>
-							<dd class="font-mono text-[12px]">{node.agentVersion ?? node.version ?? 'not reported'}</dd>
+							<dd class="font-mono text-[12px]">
+								{node.agentVersion ?? node.version ?? 'not reported'}
+							</dd>
 							<dt>Address</dt>
 							<dd class="font-mono text-[12px]">{node.publicAddress ?? 'not reported'}</dd>
 							<dt>Heartbeat</dt>
 							<dd class="text-[13px]">
 								{#if node.lastHeartbeatAt}
-									<time datetime={node.lastHeartbeatAt}>{formatDateTime(node.lastHeartbeatAt)}</time>
+									<time datetime={node.lastHeartbeatAt}>{formatDateTime(node.lastHeartbeatAt)}</time
+									>
 								{:else}
 									<span class="text-muted-foreground">never</span>
 								{/if}
 							</dd>
 							<dt>Enrolled</dt>
-							<dd class="text-[13px]"><time datetime={node.createdAt}>{formatDateTime(node.createdAt)}</time></dd>
+							<dd class="text-[13px]">
+								<time datetime={node.createdAt}>{formatDateTime(node.createdAt)}</time>
+							</dd>
 						</dl>
 						{#if node.stats}
 							<Collapsible.Root>
 								<Collapsible.Trigger
 									class="group inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
 								>
-									<ChevronRightIcon class="size-3 transition-transform group-data-[state=open]:rotate-90" />
+									<ChevronRightIcon
+										class="size-3 transition-transform group-data-[state=open]:rotate-90"
+									/>
 									Raw heartbeat stats
 								</Collapsible.Trigger>
 								<Collapsible.Content>
-									<pre class="code-block mt-1.5 max-h-56">{JSON.stringify(node.stats, null, 2)}</pre>
+									<pre class="code-block mt-1.5 max-h-56">{JSON.stringify(
+											node.stats,
+											null,
+											2
+										)}</pre>
 								</Collapsible.Content>
 							</Collapsible.Root>
 						{/if}
@@ -238,7 +257,9 @@
 	>
 		{#if result.expiresAt}
 			<p class="text-xs text-muted-foreground">
-				Single-use. Expires <time datetime={result.expiresAt}>{formatDateTime(result.expiresAt)}</time>.
+				Single-use. Expires <time datetime={result.expiresAt}
+					>{formatDateTime(result.expiresAt)}</time
+				>.
 			</p>
 		{/if}
 	</SecretDialog>

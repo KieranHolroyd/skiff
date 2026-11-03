@@ -7,6 +7,7 @@ import {
 	normalizeHost,
 	readCookie,
 	signVisitorCookie,
+	UsedTokenCache,
 } from './verify.ts';
 
 const NOW = 1_800_000_000;
@@ -48,8 +49,14 @@ function verifyRequest(headers: Record<string, string>): Request {
 	return new Request('http://agent.local/_skiff/verify', { headers });
 }
 
+/** Callback token as the control plane mints it: 60 s `exp`, session `sexp`, one-time `jti`. */
 function token(claims: Record<string, unknown>, key = SITE_KEY): string {
-	const payload = Buffer.from(JSON.stringify(claims)).toString('base64url');
+	const full = {
+		jti: crypto.randomUUID(),
+		sexp: typeof claims.exp === 'number' ? claims.exp + 3600 : NOW + 3600,
+		...claims,
+	};
+	const payload = Buffer.from(JSON.stringify(full)).toString('base64url');
 	const signature = createHmac('sha256', key).update(payload).digest('base64url');
 	return `${payload}.${signature}`;
 }
@@ -187,9 +194,10 @@ describe('visitor cookies', () => {
 });
 
 describe('login callback', () => {
-	test('exchanges a signed token for a host-only cookie', () => {
-		const exp = NOW + 120;
-		const signed = token({ host: HOST, exp, sub: 'usr_1', kind: 'platform', sid: 'ses_1' });
+	test('exchanges a signed token for a host-only cookie that carries the session expiry', () => {
+		const exp = NOW + 60;
+		const sexp = NOW + 3600;
+		const signed = token({ host: HOST, exp, sexp, sub: 'usr_1', kind: 'platform', sid: 'ses_1' });
 		const response = handleSiteRequest(
 			new Request(`http://agent.local/_skiff/callback?token=${signed}`, {
 				headers: { 'x-forwarded-host': HOST },
@@ -199,13 +207,70 @@ describe('login callback', () => {
 		expect(response.status).toBe(302);
 		expect(response.headers.get('location')).toBe('/');
 		const cookie = response.headers.get('set-cookie') ?? '';
-		const expected = `${exp}.ses_1.${signVisitorCookie(SITE_KEY, HOST, exp, 'ses_1')}`;
+		const expected = `${sexp}.ses_1.${signVisitorCookie(SITE_KEY, HOST, sexp, 'ses_1')}`;
 		expect(cookie).toContain(`__skiff_s=${expected}`);
 		expect(cookie).toContain('Path=/');
 		expect(cookie).toContain('HttpOnly');
 		expect(cookie).toContain('Secure');
 		expect(cookie).toContain('SameSite=Lax');
-		expect(cookie).toContain(`Max-Age=${exp - NOW}`);
+		expect(cookie).toContain(`Max-Age=${sexp - NOW}`);
+	});
+
+	test('redeems a callback token only once', () => {
+		const usedTokens = new UsedTokenCache();
+		const signed = token({ host: HOST, exp: NOW + 60, sub: 'usr_1', kind: 'platform' });
+		const request = () =>
+			new Request(`http://agent.local/_skiff/callback?token=${signed}`, {
+				headers: { 'x-forwarded-host': HOST },
+			});
+		expect(handleSiteRequest(request(), { ...options, usedTokens }).status).toBe(302);
+		const replay = handleSiteRequest(request(), { ...options, usedTokens });
+		expect(replay.status).toBe(403);
+		expect(replay.headers.get('set-cookie')).toBeNull();
+		// Once the token itself has expired its id is forgotten; the expiry check still refuses it.
+		const later = handleSiteRequest(request(), { ...options, usedTokens, nowSeconds: () => NOW + 61 });
+		expect(later.status).toBe(403);
+		// Expired ids are pruned on the next claim, so memory stays bounded by the token lifetime.
+		expect(usedTokens.claim('next-token', NOW + 120, NOW + 61)).toBe(true);
+		expect(usedTokens.size).toBe(1);
+	});
+
+	test('rejects long-lived tokens and tokens without a one-time id', () => {
+		const longLived = token({ host: HOST, exp: NOW + 3600, sub: 'usr_1', kind: 'platform' });
+		const response = handleSiteRequest(
+			new Request(`http://agent.local/_skiff/callback?token=${longLived}`, {
+				headers: { 'x-forwarded-host': HOST },
+			}),
+			options,
+		);
+		expect(response.status).toBe(403);
+
+		const payload = Buffer.from(
+			JSON.stringify({ host: HOST, exp: NOW + 60, sub: 'usr_1', kind: 'platform' }),
+		).toString('base64url');
+		const legacy = `${payload}.${createHmac('sha256', SITE_KEY).update(payload).digest('base64url')}`;
+		const legacyResponse = handleSiteRequest(
+			new Request(`http://agent.local/_skiff/callback?token=${legacy}`, {
+				headers: { 'x-forwarded-host': HOST },
+			}),
+			options,
+		);
+		expect(legacyResponse.status).toBe(400);
+	});
+
+	test('refuses a callback for a revoked share session', () => {
+		const revoked = {
+			...options,
+			state: { ...state(), revocations: [{ id: 'red_1', kind: 'session' as const, revokedAt: new Date().toISOString() }] },
+		};
+		const signed = token({ host: HOST, exp: NOW + 60, sub: 'v', kind: 'share', sid: 'red_1' });
+		const response = handleSiteRequest(
+			new Request(`http://agent.local/_skiff/callback?token=${signed}`, {
+				headers: { 'x-forwarded-host': HOST },
+			}),
+			revoked,
+		);
+		expect(response.status).toBe(403);
 	});
 
 	test('works through forward_auth using X-Forwarded-Uri', () => {

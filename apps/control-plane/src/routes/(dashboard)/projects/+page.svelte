@@ -98,7 +98,11 @@
 	{:else}
 		<div class="flex flex-wrap items-center justify-between gap-3">
 			<InputGroup.Root class="max-w-xs bg-card">
-				<InputGroup.Input placeholder="Search projects" bind:value={query} aria-label="Search projects" />
+				<InputGroup.Input
+					placeholder="Search projects"
+					bind:value={query}
+					aria-label="Search projects"
+				/>
 				<InputGroup.Addon><SearchIcon /></InputGroup.Addon>
 				{#if query}
 					<InputGroup.Addon align="inline-end">
@@ -171,7 +175,10 @@
 									</DropdownMenu.Item>
 									{#if data.can.deleteProject}
 										<DropdownMenu.Separator />
-										<DropdownMenu.Item variant="destructive" onSelect={() => confirmDelete(project)}>
+										<DropdownMenu.Item
+											variant="destructive"
+											onSelect={() => confirmDelete(project)}
+										>
 											<TrashIcon />Delete project
 										</DropdownMenu.Item>
 									{/if}
@@ -234,7 +241,9 @@
 						<InputGroup.Text class="font-mono text-xs">.{data.contentDomain}</InputGroup.Text>
 					</InputGroup.Addon>
 				</InputGroup.Root>
-				<Field.Description>Leave blank to derive it from the name. Slugs are globally unique.</Field.Description>
+				<Field.Description
+					>Leave blank to derive it from the name. Slugs are globally unique.</Field.Description
+				>
 				{#if result?.fieldErrors?.slug}<Field.Error>{result.fieldErrors.slug}</Field.Error>{/if}
 				{#if result?.suggestions?.length}
 					<div class="flex flex-wrap items-center gap-1.5">

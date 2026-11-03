@@ -1,13 +1,15 @@
 <script lang="ts">
+	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
+	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import FingerprintIcon from '@lucide/svelte/icons/fingerprint';
 	import MailIcon from '@lucide/svelte/icons/mail';
 	import { authClient } from '#lib/auth-client.js';
 	import AuthShell from '#lib/components/skiff/AuthShell.svelte';
 	import GitHubMark from '#lib/components/skiff/GitHubMark.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
-	import { Label } from '#lib/components/ui/label/index.js';
+	import * as Field from '#lib/components/ui/field/index.js';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -105,8 +107,8 @@
 	</div>
 
 	<form class="space-y-3" onsubmit={sendMagicLink}>
-		<div class="space-y-1.5">
-			<Label for="magic-email">Email address</Label>
+		<Field.Field>
+			<Field.Label for="magic-email">Email address</Field.Label>
 			<Input
 				id="magic-email"
 				type="email"
@@ -116,7 +118,7 @@
 				bind:value={email}
 				required
 			/>
-		</div>
+		</Field.Field>
 		<Button type="submit" variant="secondary" size="lg" class="h-10 w-full" disabled={pending}>
 			<MailIcon aria-hidden="true" />
 			Email me a sign-in link
@@ -129,8 +131,8 @@
 			onsubmit={signInWithPassword}
 		>
 			<p class="eyebrow text-warning-soft-foreground">Development sign-in</p>
-			<div class="space-y-1.5">
-				<Label for="email">Email</Label>
+			<Field.Field>
+				<Field.Label for="email">Email</Field.Label>
 				<Input
 					id="email"
 					type="email"
@@ -139,9 +141,9 @@
 					bind:value={email}
 					required
 				/>
-			</div>
-			<div class="space-y-1.5">
-				<Label for="password">Password</Label>
+			</Field.Field>
+			<Field.Field>
+				<Field.Label for="password">Password</Field.Label>
 				<Input
 					id="password"
 					type="password"
@@ -150,14 +152,18 @@
 					bind:value={password}
 					required
 				/>
-			</div>
+			</Field.Field>
 			<Button type="submit" class="w-full" disabled={pending}>Sign in</Button>
 			<p class="text-[11px] text-muted-foreground">Disabled in production.</p>
 		</form>
 	{/if}
 
-	{#if error}<Notice tone="danger" class="mt-5">{error}</Notice>{/if}
-	{#if notice}<Notice tone="success" class="mt-5">{notice}</Notice>{/if}
+	{#if error}<Alert.Root variant="destructive" class="mt-5"
+			><CircleAlertIcon /><Alert.Description>{error}</Alert.Description></Alert.Root
+		>{/if}
+	{#if notice}<Alert.Root variant="success" class="mt-5"
+			><CircleCheckIcon /><Alert.Description>{notice}</Alert.Description></Alert.Root
+		>{/if}
 
 	{#snippet footer()}
 		Signed-in sessions can be reviewed and revoked at any time under Settings → Account.

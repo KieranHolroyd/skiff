@@ -15,6 +15,7 @@ import {
 	type SelfUpdateOutcome,
 	type SelfUpdateStatus,
 } from '../../packages/contracts/src/self-update.ts';
+import { formatEnvFile, readEnvFile } from '../install/env-file.ts';
 import { TRIGGER_PATH_UNIT, triggerUnits } from './units.ts';
 import {
 	AGENT,
@@ -120,18 +121,6 @@ function usageError(text: string): never {
 }
 
 // ------------------------------------------------------------------- real host
-
-function readEnvFile(path: string): Map<string, string> {
-	const map = new Map<string, string>();
-	if (!existsSync(path)) return map;
-	for (const raw of readFileSync(path, 'utf8').split(/\r?\n/)) {
-		const line = raw.trim();
-		if (!line || line.startsWith('#')) continue;
-		const index = line.indexOf('=');
-		if (index > 0) map.set(line.slice(0, index), line.slice(index + 1));
-	}
-	return map;
-}
 
 function run(
 	cmd: string[],
@@ -399,7 +388,7 @@ const host: Host = {
 		// The sandbox makes $HOME read-only; do not let Bun try to write its transpiler cache there.
 		env.set('BUN_RUNTIME_TRANSPILER_CACHE_PATH', '0');
 		const envFile = join(dirname(scratch), `${unit}.env`);
-		writeFileSync(envFile, `${[...env].map(([k, v]) => `${k}=${v}`).join('\n')}\n`, { mode: 0o600 });
+		writeFileSync(envFile, formatEnvFile(env, false), { mode: 0o600 });
 
 		const props = [
 			'User=skiff',

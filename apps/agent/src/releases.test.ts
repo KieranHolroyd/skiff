@@ -3,7 +3,8 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { crc32, deflateRawSync } from 'node:zlib';
-import { extractZip, safeEntryPath } from './releases.ts';
+import { desiredStateSchema } from '@skiff/contracts';
+import { extractZip, ReleaseManager, safeEntryPath } from './releases.ts';
 
 interface ZipInput {
 	name: string;
@@ -194,5 +195,54 @@ describe('extractZip', () => {
 		const central = archive.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
 		archive.writeUInt16LE(0x801, central + 8);
 		await expect(extractZip(archive, join(root, 'dest'))).rejects.toThrow(/Encrypted/i);
+	});
+});
+
+describe('ReleaseManager', () => {
+	const PROD = 'd'.repeat(64);
+	const PREVIEW = 'e'.repeat(64);
+
+	function route(projectId: string, host: string, release: string, extra: Record<string, unknown> = {}) {
+		return {
+			projectId,
+			slug: projectId,
+			host,
+			deploymentId: `dep_${release.slice(0, 4)}`,
+			release,
+			access: { mode: 'public', siteKey: 'site-key-0123456789', loginUrl: 'https://cloud.example.com/login' },
+			accessMode: 'public',
+			spa: false,
+			cleanUrls: false,
+			trailingSlash: 'ignore',
+			notFound: null,
+			...extra,
+		};
+	}
+
+	test('gc keeps production symlinks and every local release, and drops the rest', async () => {
+		const dir = await tempDir();
+		const manager = new ReleaseManager(dir);
+		await manager.init();
+		for (const sha of [PROD, PREVIEW]) await fs.mkdir(join(dir, 'releases', sha), { recursive: true });
+		await manager.activate('blog', PROD);
+		await manager.activate('gone', PREVIEW);
+
+		const desired = desiredStateSchema.parse({
+			version: 1,
+			nodeId: 'nod_1',
+			agentVersion: '0.1.0',
+			generatedAt: new Date().toISOString(),
+			contentDomain: 'example.com',
+			releases: [],
+			routes: [
+				route('blog', 'blog.example.com', PROD, { production: true }),
+				route('blog', 'blog--x1.example.com', PREVIEW, { production: false }),
+			],
+		});
+		await manager.gc(desired);
+
+		expect(await fs.readlink(join(dir, 'sites', 'blog'))).toBe(join(dir, 'releases', PROD));
+		await expect(fs.lstat(join(dir, 'sites', 'gone'))).rejects.toThrow();
+		expect(await manager.hasRelease(PREVIEW)).toBe(true);
 	});
 });

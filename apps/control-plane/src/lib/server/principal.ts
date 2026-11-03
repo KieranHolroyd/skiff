@@ -1,9 +1,10 @@
 import type { RequestEvent } from '@sveltejs/kit';
 import type { AuthInfo } from '@modelcontextprotocol/server';
-import { buildPrincipal, resolveMembership } from '@skiff/core';
+import { buildPrincipal, isPlatformAdminUser, resolveMembership } from '@skiff/core';
 import type { Permission, Principal, Role } from '@skiff/contracts';
 import { effectivePermissions, isPermission, roles as roleDefinitions } from '@skiff/contracts';
 import { auth } from './auth';
+import { openSignup } from './config';
 import { sqlite } from './db';
 
 function hashIp(request: Request): string | undefined {
@@ -16,13 +17,18 @@ function hashIp(request: Request): string | undefined {
 	return new Bun.CryptoHasher('sha256').update(`ip:${ip}`).digest('hex').slice(0, 16);
 }
 
-/** Resolve a dashboard/browser session into the shared Principal shape. */
+/**
+ * Resolve a dashboard/browser session into the shared Principal shape. Returns `undefined` for a
+ * signed-in user who belongs to no org yet (an invitee who hasn't accepted): they can reach
+ * `/accept-invitation/*` but no org-scoped surface.
+ */
 export function principalFromSession(
 	userId: string,
 	request: Request,
 	options: { name?: string; granted?: Iterable<string>; kind?: Principal['kind'] } = {},
-): Principal {
-	const membership = resolveMembership(sqlite, userId, options.name);
+): Principal | undefined {
+	const membership = resolveMembership(sqlite, userId, { fallbackName: options.name, openSignup });
+	if (!membership) return undefined;
 	return buildPrincipal({
 		userId,
 		orgId: membership.orgId,
@@ -30,6 +36,7 @@ export function principalFromSession(
 		kind: options.kind ?? 'user',
 		granted: options.granted,
 		ipHash: hashIp(request),
+		platformAdmin: isPlatformAdminUser(sqlite, userId),
 	});
 }
 
@@ -51,6 +58,7 @@ export async function principalFromRequest(request: Request): Promise<Principal 
 			kind: 'apiKey',
 			granted: Array.isArray(granted) ? granted : undefined,
 		});
+		if (!principal) return undefined;
 		principal.keyId = result.key.id;
 		return principal;
 	}
@@ -78,7 +86,8 @@ export function principalFromMcp(authInfo: AuthInfo | undefined, request: Reques
 	if (!authInfo) return undefined;
 	const userId = String(authInfo.extra?.sub ?? '');
 	if (!userId) return undefined;
-	const membership = resolveMembership(sqlite, userId);
+	const membership = resolveMembership(sqlite, userId, { openSignup });
+	if (!membership) return undefined;
 	const granted = new Set<string>(authInfo.scopes ?? []);
 	const permissions = effectivePermissions(granted, membership.role as Role);
 	return buildPrincipal({
@@ -89,6 +98,7 @@ export function principalFromMcp(authInfo: AuthInfo | undefined, request: Reques
 		granted: [...permissions],
 		clientId: authInfo.clientId,
 		ipHash: hashIp(request),
+		platformAdmin: isPlatformAdminUser(sqlite, userId),
 	});
 }
 

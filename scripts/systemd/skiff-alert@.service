@@ -1,0 +1,39 @@
+[Unit]
+Description=Skiff failure alert for %i
+Documentation=https://github.com/kieranholroyd/private-cloud-deploys/blob/main/docs/OPS.md
+# Triggered through OnFailure= by skiff-litestream.service and skiff-restore-drill.service.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=skiff
+Group=skiff
+EnvironmentFile=/etc/skiff/skiff.env
+# Installed by the installer; runs scripts/skiff-alert.ts from the active release with its Bun.
+ExecStart=/usr/local/sbin/skiff-alert %i
+TimeoutStartSec=2min
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service io_uring_setup io_uring_enter io_uring_register
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+# Bun must not try to write its transpiler cache under the read-only $HOME.
+Environment=BUN_RUNTIME_TRANSPILER_CACHE_PATH=0

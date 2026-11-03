@@ -5,20 +5,19 @@ import {
 	nodes,
 	projects,
 	releases,
-	shareLinks,
-	shareRedemptions,
 	slugRedirects,
 	type nodes as nodesTable,
 } from '@skiff/db';
 import {
-	limits,
+	canAdministerPlatform,
+	canViewPlatform,
 	type DesiredState,
 	type Heartbeat,
 	type Principal,
 	type RouteSpec,
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
-import { NotFoundError, UnauthorizedError } from './errors.ts';
+import { CoreError, NotFoundError, UnauthorizedError } from './errors.ts';
 import { siteKeyFor } from './config.ts';
 import { newId, randomToken, sha256Hex, parseJson } from './util.ts';
 import type { ParsedConfig } from '@skiff/site-config';
@@ -27,6 +26,14 @@ const JOIN_TTL_MS = 60 * 60 * 1000;
 /** An agent is offline after 30 s without a heartbeat; alerts fire at 2 min (DESIGN §9). */
 export const OFFLINE_AFTER_MS = 30_000;
 export const ALERT_AFTER_MS = 120_000;
+
+export interface UnhealthyNode {
+	nodeId: string;
+	name: string;
+	reason: 'no_heartbeat' | 'caddy_down';
+	/** Known for `no_heartbeat`; `caddy_down` nodes still heartbeat, so the caller tracks it. */
+	offlineForMs: number | null;
+}
 
 export interface NodeView {
 	id: string;
@@ -60,14 +67,25 @@ export class NodeService {
 		};
 	}
 
-	/** Platform-admin only: nodes and Caddy are global (DESIGN §6.2). */
-	private assertPlatformAdmin(principal: Principal): void {
-		if (principal.role !== 'owner' && principal.role !== 'admin')
-			throw new UnauthorizedError('Platform admin required.');
+	/**
+	 * Platform-admin only: nodes and Caddy are global (DESIGN §6.2). This is the admin plugin's
+	 * `user.role`, never an org role, and mutations need the admin's own session (no API keys or
+	 * OAuth tokens), so a scoped key can't mint node credentials.
+	 */
+	private assertPlatformAdmin(principal: Principal, access: 'read' | 'write' = 'write'): void {
+		const allowed = access === 'read' ? canViewPlatform(principal) : canAdministerPlatform(principal);
+		if (!allowed)
+			throw new CoreError(
+				'forbidden',
+				principal.platformAdmin
+					? 'Fleet changes need a platform admin signed in to the dashboard (not an API key or MCP token).'
+					: 'Platform admin required.',
+				403,
+			);
 	}
 
 	list(principal: Principal): NodeView[] {
-		this.assertPlatformAdmin(principal);
+		this.assertPlatformAdmin(principal, 'read');
 		return this.ctx.db
 			.select()
 			.from(nodes)
@@ -173,7 +191,8 @@ export class NodeService {
 		this.ctx.db
 			.update(nodes)
 			.set({
-				status: input.status,
+				// Draining is an operator decision; the agent's liveness report must not undo it.
+				status: node.status === 'draining' ? 'draining' : input.status,
 				agentVersion: input.agentVersion,
 				lastHeartbeatAt: now,
 				statsJson: input.stats ? JSON.stringify(input.stats) : node.statsJson,
@@ -195,6 +214,27 @@ export class NodeService {
 		for (const node of stale)
 			this.ctx.db.update(nodes).set({ status: 'offline', updatedAt: now }).where(eq(nodes.id, node.id)).run();
 		return stale.map((node) => ({ nodeId: node.id, offlineForMs: now - (node.lastHeartbeatAt ?? 0) }));
+	}
+
+	/**
+	 * Every node that is currently unhealthy, for alerting (DESIGN §8: node offline > 2 min).
+	 * `no_heartbeat` nodes carry how long they have been silent; `caddy_down` nodes still
+	 * heartbeat but report that their proxy is not serving, so the caller tracks the duration.
+	 */
+	unhealthy(): UnhealthyNode[] {
+		const now = this.ctx.now();
+		return this.ctx.db
+			.select()
+			.from(nodes)
+			.all()
+			.flatMap((node): UnhealthyNode[] => {
+				const last = node.lastHeartbeatAt ?? node.createdAt;
+				if (last < now - OFFLINE_AFTER_MS)
+					return [{ nodeId: node.id, name: node.name, reason: 'no_heartbeat' as const, offlineForMs: now - last }];
+				if (node.status === 'offline')
+					return [{ nodeId: node.id, name: node.name, reason: 'caddy_down' as const, offlineForMs: null }];
+				return [];
+			});
 	}
 
 	setDraining(principal: Principal, nodeId: string, draining: boolean): NodeView {
@@ -309,6 +349,7 @@ export class NodeService {
 					routes.push({
 						...base,
 						host: `${project.slug}.${this.ctx.config.contentDomain}`,
+						production: true,
 						accessMode: productionAccessMode,
 						access: {
 							mode: productionAccessMode,
@@ -330,18 +371,6 @@ export class NodeService {
 				url: await this.ctx.objectStore.presignGet(release.objectKey, 3600),
 			})),
 		);
-
-		const since = now - limits.redirectDays * 86_400_000;
-		const revokedLinks = this.ctx.db
-			.select({ id: shareLinks.id, revokedAt: shareLinks.revokedAt })
-			.from(shareLinks)
-			.where(and(sql`${shareLinks.revokedAt} IS NOT NULL`, sql`${shareLinks.revokedAt} > ${since}`))
-			.all();
-		const revokedSessions = this.ctx.db
-			.select({ id: shareRedemptions.id, revokedAt: shareRedemptions.revokedAt })
-			.from(shareRedemptions)
-			.where(and(sql`${shareRedemptions.revokedAt} IS NOT NULL`, sql`${shareRedemptions.revokedAt} > ${since}`))
-			.all();
 
 		const hostRedirects = this.ctx.db
 			.select({ fromSlug: slugRedirects.fromSlug, projectId: slugRedirects.projectId })
@@ -368,18 +397,9 @@ export class NodeService {
 			contentDomain: this.ctx.config.contentDomain,
 			releases: releaseSpecs,
 			routes,
-			revocations: [
-				...revokedLinks.flatMap((row) =>
-					row.revokedAt
-						? [{ id: row.id, kind: 'shareLink' as const, revokedAt: new Date(row.revokedAt).toISOString() }]
-						: [],
-				),
-				...revokedSessions.flatMap((row) =>
-					row.revokedAt
-						? [{ id: row.id, kind: 'session' as const, revokedAt: new Date(row.revokedAt).toISOString() }]
-						: [],
-				),
-			],
+			// Kept until every session a revocation affects has expired (share sessions last up to
+			// 30 days), not for a fixed window.
+			revocations: this.ctx.access.revocations(),
 			hostRedirects,
 		};
 	}

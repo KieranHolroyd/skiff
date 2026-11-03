@@ -1,8 +1,10 @@
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import {
 	McpServer,
 	acceptedContent,
 	createMcpHandler,
 	inputRequired,
+	isInputRequiredResult,
 	type AuthInfo,
 	type ScopeChallengeHandler,
 } from '@modelcontextprotocol/server';
@@ -14,12 +16,14 @@ import {
 	limits,
 	projectCreateSchema,
 	projectUpdateSchema,
+	requirePermission,
 	setAccessSchema,
 	shareLinkCreateSchema,
 	type Permission,
 	type Principal,
 	type Role,
 } from '@skiff/contracts';
+import { authSecret } from './config';
 import { core } from './core';
 import { principalFromMcp } from './principal';
 
@@ -77,15 +81,137 @@ async function run(handler: () => Promise<unknown> | unknown) {
 	}
 }
 
+// --- audit ------------------------------------------------------------------
+
+/** Results the user declined in a confirmation prompt; audited as such rather than as success. */
+const declined = new WeakSet<object>();
+
+/** Inline file contents can be megabytes: keep paths and sizes, never bodies, in the audit log. */
+function summarizeArgs(input: unknown): unknown {
+	if (!input || typeof input !== 'object') return input;
+	const out: Record<string, unknown> = { ...(input as Record<string, unknown>) };
+	if (Array.isArray(out.files)) {
+		const files = out.files as Array<{ path?: unknown; content?: unknown }>;
+		out.files = {
+			count: files.length,
+			bytes: files.reduce((sum, file) => sum + (typeof file?.content === 'string' ? file.content.length : 0), 0),
+			paths: files.slice(0, 20).map((file) => file?.path),
+		};
+	}
+	return out;
+}
+
+function resultError(result: unknown): string | undefined {
+	const value = result as { isError?: boolean; content?: Array<{ type: string; text?: string }> };
+	if (!value?.isError) return undefined;
+	return value.content?.find((part) => part.type === 'text')?.text?.slice(0, 500) ?? 'error';
+}
+
+/** Every MCP tool call lands in the audit log: user, client, tool, args and result (DESIGN §6.3). */
+function auditTool(principal: Principal, tool: string, input: unknown, error?: string): void {
+	try {
+		const project = (input as { project?: unknown; name?: unknown } | undefined)?.project;
+		core.audit.record({
+			principal,
+			action: `mcp.${tool}`,
+			resource: 'mcp',
+			resourceId: typeof project === 'string' ? project : undefined,
+			args: summarizeArgs(input),
+			result: error ? 'error' : 'ok',
+			error,
+		});
+	} catch (auditError) {
+		console.error('[mcp] audit failed:', auditError);
+	}
+}
+
+// --- confirmations ------------------------------------------------------------
+
+const CONFIRM_TTL_MS = 10 * 60_000;
+
+function confirmationMac(payload: string): string {
+	return createHmac('sha256', authSecret).update(`skiff-mcp-confirm:${payload}`).digest('base64url');
+}
+
+/**
+ * Server-minted `requestState` for a confirmation prompt (MCP multi-round-trip). It binds the
+ * answer to this user, client, tool and target, so a client can't skip the prompt by pre-filling
+ * `inputResponses` on the first call: an answer only counts with a state we issued.
+ */
+function mintConfirmation(principal: Principal, tool: string, target: string): string {
+	const payload = Buffer.from(
+		JSON.stringify({ t: tool, r: target, u: principal.userId, c: principal.clientId ?? '', e: Date.now() + CONFIRM_TTL_MS }),
+	).toString('base64url');
+	return `${payload}.${confirmationMac(payload)}`;
+}
+
+function verifyConfirmation(state: unknown, principal: Principal, tool: string, target: string): boolean {
+	if (typeof state !== 'string') return false;
+	const [payload, mac] = state.split('.');
+	if (!payload || !mac) return false;
+	const expected = Buffer.from(confirmationMac(payload));
+	const given = Buffer.from(mac);
+	if (expected.length !== given.length || !timingSafeEqual(expected, given)) return false;
+	try {
+		const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as Record<string, unknown>;
+		return (
+			claims.t === tool &&
+			claims.r === target &&
+			claims.u === principal.userId &&
+			claims.c === (principal.clientId ?? '') &&
+			typeof claims.e === 'number' &&
+			claims.e > Date.now()
+		);
+	} catch {
+		return false;
+	}
+}
+
 function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 	const server = new McpServer({ name: 'skiff', version: '0.1.0' });
 
-	server.registerTool(
+	/** `server.registerTool` with auditing of every call, including scope denials. */
+	const tool = ((name: string, config: Record<string, unknown>, callback: (...args: unknown[]) => unknown) => {
+		const challenge = config.scopeChallenge as ScopeChallengeHandler | undefined;
+		const scopeChallenge: ScopeChallengeHandler | undefined = challenge
+			? async (context) => {
+					const result = await challenge(context);
+					if (result)
+						auditTool(
+							principal,
+							name,
+							(context.request.params as { arguments?: unknown } | undefined)?.arguments,
+							`insufficient_scope: ${result.errorDescription ?? 'missing scope'}`,
+						);
+					return result;
+				}
+			: undefined;
+		return server.registerTool(name, { ...config, scopeChallenge } as never, (async (...args: unknown[]) => {
+			const input = config.inputSchema ? args[0] : undefined;
+			try {
+				const result = await callback(...args);
+				// A pending confirmation is audited when the follow-up call completes.
+				if (isInputRequiredResult(result)) return result;
+				auditTool(
+					principal,
+					name,
+					input,
+					resultError(result) ?? (declined.has(result as object) ? 'declined by the user' : undefined),
+				);
+				return result;
+			} catch (error) {
+				auditTool(principal, name, input, (error as Error).message ?? String(error));
+				throw error;
+			}
+		}) as never);
+	}) as unknown as McpServer['registerTool'];
+
+	tool(
 		'whoami',
 		{
 			title: 'Who am I',
 			description: 'Show the authenticated user, MCP client and effective Skiff permissions.',
-			annotations: { readOnlyHint: true, idempotentHint: true },
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 		},
 		async () =>
 			run(() => ({
@@ -99,24 +225,24 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 	);
 
 	// --- projects -----------------------------------------------------------
-	server.registerTool(
+	tool(
 		'list_projects',
 		{
 			title: 'List projects',
 			description: 'List projects you can access, with their production and preview URLs.',
-			annotations: { readOnlyHint: true, idempotentHint: true },
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 			scopeChallenge: requires('project:read'),
 		},
 		async () => run(() => ({ projects: core.projects.list(principal) })),
 	);
 
-	server.registerTool(
+	tool(
 		'get_project',
 		{
 			title: 'Get project',
 			description: 'Get one project by slug, including access modes and deployment counts.',
 			inputSchema: z.object({ project: z.string().describe('Project slug') }),
-			annotations: { readOnlyHint: true, idempotentHint: true },
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 			scopeChallenge: requires('project:read'),
 		},
 		async ({ project }) =>
@@ -130,38 +256,38 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 			}),
 	);
 
-	server.registerTool(
+	tool(
 		'create_project',
 		{
 			title: 'Create project',
 			description: 'Create a project. Slugs are globally unique; collisions return suggestions.',
 			inputSchema: projectCreateSchema,
-			annotations: { idempotentHint: false },
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
 			scopeChallenge: requires('project:create'),
 		},
 		async (input) => run(() => core.projects.create(principal, input)),
 	);
 
-	server.registerTool(
+	tool(
 		'update_project',
 		{
 			title: 'Update project',
 			description: 'Rename, re-place or change access modes for a project.',
 			inputSchema: projectUpdateSchema.extend({ project: z.string(), slug: z.string().optional() }),
-			annotations: { idempotentHint: true },
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
 			scopeChallenge: requires('project:update'),
 		},
 		async ({ project, ...input }) => run(() => core.projects.update(principal, project, input)),
 	);
 
-	server.registerTool(
+	tool(
 		'delete_project',
 		{
 			title: 'Delete project',
 			description:
 				'Soft-delete a project (stops serving immediately; restorable for 7 days). Requires confirmation.',
 			inputSchema: z.object({ project: z.string().describe('Project slug') }),
-			annotations: { destructiveHint: true, idempotentHint: true },
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
 			scopeChallenge: requires('project:delete'),
 		},
 		async ({ project }, ctx) => {
@@ -175,10 +301,15 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 				};
 			const key = `confirm_delete:${project}`;
 			const schema = z.object({ confirm: z.boolean() });
-			const answer = acceptedContent(ctx.mcpReq.inputResponses, key, schema);
-			const responded = ctx.mcpReq.inputResponses?.[key] !== undefined;
-			if (responded && answer?.confirm !== true)
-				return text(`Cancelled: "${project}" was not deleted (the user did not confirm).`);
+			// Only an answer to a prompt we issued (signed requestState bound to this target) counts.
+			const prompted = verifyConfirmation(ctx.mcpReq.requestState(), principal, 'delete_project', project);
+			const answer = prompted ? acceptedContent(ctx.mcpReq.inputResponses, key, schema) : undefined;
+			const responded = prompted && ctx.mcpReq.inputResponses?.[key] !== undefined;
+			if (responded && answer?.confirm !== true) {
+				const cancelled = text(`Cancelled: "${project}" was not deleted (the user did not confirm).`);
+				declined.add(cancelled);
+				return cancelled;
+			}
 			if (answer?.confirm !== true) {
 				return inputRequired({
 					inputRequests: {
@@ -187,6 +318,7 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 							requestedSchema: schema,
 						}),
 					},
+					requestState: mintConfirmation(principal, 'delete_project', project),
 				});
 			}
 			return run(async () => {
@@ -202,14 +334,14 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 	);
 
 	// --- deploying ----------------------------------------------------------
-	server.registerTool(
+	tool(
 		'deploy_site',
 		{
 			title: 'Deploy a site',
 			description:
 				'One-shot deploy: creates the project if missing, then deploys inline files (≤5 MB) or a finalized upload. Promotes to production by default.',
 			inputSchema: deploySiteSchema,
-			annotations: { destructiveHint: false, idempotentHint: false },
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
 			scopeChallenge: requires('project:create', 'deployment:create'),
 		},
 		async (input) =>
@@ -226,19 +358,19 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 			}),
 	);
 
-	server.registerTool(
+	tool(
 		'deploy_files',
 		{
 			title: 'Deploy files',
 			description: 'Deploy inline files (≤5 MB total) to an existing project.',
 			inputSchema: deployFilesSchema,
-			annotations: { idempotentHint: false },
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
 			scopeChallenge: requires('deployment:create'),
 		},
 		async (input) => run(() => core.deploy.deployFiles(principal, input)),
 	);
 
-	server.registerTool(
+	tool(
 		'create_upload',
 		{
 			title: 'Create upload',
@@ -249,7 +381,7 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 				fileCount: z.number().int().positive().optional(),
 				totalBytes: z.number().int().positive().optional(),
 			}),
-			annotations: { idempotentHint: false },
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
 			scopeChallenge: requires('deployment:create'),
 		},
 		async ({ project, fileCount, totalBytes }) =>
@@ -264,7 +396,7 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 			}),
 	);
 
-	server.registerTool(
+	tool(
 		'finalize_upload',
 		{
 			title: 'Finalize upload',
@@ -275,7 +407,7 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 				promote: z.boolean().default(true),
 				message: z.string().max(500).optional(),
 			}),
-			annotations: { idempotentHint: false },
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
 			scopeChallenge: requires('deployment:create'),
 		},
 		async ({ project, uploadId, promote, message }) =>
@@ -285,13 +417,13 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 			}),
 	);
 
-	server.registerTool(
+	tool(
 		'list_deployments',
 		{
 			title: 'List deployments',
 			description: 'List deployments for a project, newest first, with preview URLs.',
 			inputSchema: z.object({ project: z.string(), limit: z.number().int().min(1).max(200).default(20) }),
-			annotations: { readOnlyHint: true, idempotentHint: true },
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 			scopeChallenge: requires('deployment:read'),
 		},
 		async ({ project, limit }) =>
@@ -301,77 +433,77 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 			}),
 	);
 
-	server.registerTool(
+	tool(
 		'get_deployment',
 		{
 			title: 'Get deployment',
 			description: 'Get one deployment by id or short id.',
 			inputSchema: z.object({ project: z.string(), deployment: z.string() }),
-			annotations: { readOnlyHint: true, idempotentHint: true },
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 			scopeChallenge: requires('deployment:read'),
 		},
 		async ({ project, deployment }) =>
 			run(() => core.deployments.get(principal, core.projects.requireRow(principal, project), deployment)),
 	);
 
-	server.registerTool(
+	tool(
 		'promote_deployment',
 		{
 			title: 'Promote deployment',
 			description: 'Point production at an existing deployment. Instant; no rebuild.',
 			inputSchema: z.object({ project: z.string(), deployment: z.string() }),
-			annotations: { idempotentHint: true },
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
 			scopeChallenge: requires('deployment:promote'),
 		},
 		async ({ project, deployment }) =>
 			run(() => core.deployments.promote(principal, core.projects.requireRow(principal, project), deployment)),
 	);
 
-	server.registerTool(
+	tool(
 		'rollback',
 		{
 			title: 'Roll back production',
 			description: 'Point production at the previous deployment (code and config together).',
 			inputSchema: z.object({ project: z.string() }),
-			annotations: { idempotentHint: true },
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
 			scopeChallenge: requires('deployment:rollback'),
 		},
 		async ({ project }) => run(() => core.deployments.rollback(principal, core.projects.requireRow(principal, project))),
 	);
 
 	// --- access -------------------------------------------------------------
-	server.registerTool(
+	tool(
 		'set_access',
 		{
 			title: 'Set access mode',
 			description: 'Set public/password/platform access for production or previews.',
 			inputSchema: setAccessSchema.extend({ project: z.string() }),
-			annotations: { idempotentHint: true },
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
 			scopeChallenge: requires('project:update'),
 		},
 		async ({ project, ...input }) => run(() => core.projects.setAccess(principal, project, input)),
 	);
 
-	server.registerTool(
+	tool(
 		'create_share_link',
 		{
 			title: 'Create share link',
 			description: 'Create a time- and usage-limited link to a protected deployment.',
 			inputSchema: shareLinkCreateSchema,
-			annotations: { idempotentHint: false },
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
 			scopeChallenge: requires('shareLink:create'),
 		},
 		async ({ project, ...input }) =>
 			run(() => core.access.createShareLink(principal, core.projects.requireRow(principal, project), input)),
 	);
 
-	server.registerTool(
+	tool(
 		'list_share_links',
 		{
 			title: 'List share links',
 			description: 'List share links for a project, including redemption counts.',
 			inputSchema: z.object({ project: z.string() }),
-			annotations: { readOnlyHint: true, idempotentHint: true },
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 			scopeChallenge: requires('shareLink:read'),
 		},
 		async ({ project }) =>
@@ -380,13 +512,13 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 			})),
 	);
 
-	server.registerTool(
+	tool(
 		'revoke_share_link',
 		{
 			title: 'Revoke share link',
 			description: 'Revoke a share link and every session it created. Takes effect within seconds.',
 			inputSchema: z.object({ project: z.string(), shareLinkId: z.string() }),
-			annotations: { destructiveHint: true, idempotentHint: true },
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
 			scopeChallenge: requires('shareLink:revoke'),
 		},
 		async ({ project, shareLinkId }) =>
@@ -397,54 +529,60 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 	);
 
 	// --- observability ------------------------------------------------------
-	server.registerTool(
+	tool(
 		'get_status',
 		{
 			title: 'Get status',
 			description: 'Fleet and platform summary: nodes, projects, deployments, storage.',
-			annotations: { readOnlyHint: true, idempotentHint: true },
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 			scopeChallenge: requires('project:read'),
 		},
 		async () => run(() => core.metrics.status(principal)),
 	);
 
-	server.registerTool(
+	tool(
 		'get_metrics',
 		{
 			title: 'Get traffic metrics',
-			description: 'Aggregated request metrics from DuckDB (1m or 1h buckets), optionally filtered by host.',
+			description:
+				'Aggregated request metrics for your org\'s projects from DuckDB (1m or 1h buckets), optionally filtered by project or host.',
 			inputSchema: z.object({
+				project: z.string().optional().describe('Project slug'),
 				host: z.string().optional(),
 				from: z.string().datetime().optional(),
 				to: z.string().datetime().optional(),
 				interval: z.enum(['1m', '1h']).default('1h'),
 			}),
-			annotations: { readOnlyHint: true, idempotentHint: true },
-			scopeChallenge: requires('metrics:read'),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('metrics:read', 'project:read'),
 		},
-		async ({ host, from, to, interval }) =>
+		async ({ project, host, from, to, interval }) =>
 			run(async () => {
+				requirePermission(principal, 'metrics:read');
 				if (!core.ctx.telemetry?.available)
 					return { points: [], note: 'Telemetry is not enabled on this install.' };
+				// Telemetry is global; only this org's projects are visible to this principal.
+				const projectId = project ? core.projects.requireRow(principal, project).id : undefined;
+				const orgProjects = new Set(core.projects.list(principal, { includeDeleted: true }).map((row) => row.id));
 				const now = Date.now();
-				return {
-					points: await core.ctx.telemetry.query({
-						host,
-						from: from ? new Date(from) : new Date(now - 24 * 3600_000),
-						to: to ? new Date(to) : new Date(now),
-						interval,
-					}),
-				};
+				const points = await core.ctx.telemetry.query({
+					host,
+					projectId,
+					from: from ? new Date(from) : new Date(now - 24 * 3600_000),
+					to: to ? new Date(to) : new Date(now),
+					interval,
+				});
+				return { points: points.filter((point) => point.projectId !== null && orgProjects.has(point.projectId)) };
 			}),
 	);
 
-	server.registerTool(
+	tool(
 		'get_logs',
 		{
 			title: 'Get logs',
 			description: 'Application logs for a project (tier 2+). Static sites have access logs in get_metrics instead.',
 			inputSchema: z.object({ project: z.string(), since: z.string().datetime().optional() }),
-			annotations: { readOnlyHint: true, idempotentHint: true },
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 			scopeChallenge: requires('logs:read'),
 		},
 		async ({ project, since }) =>
@@ -459,7 +597,7 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 			}),
 	);
 
-	server.registerTool(
+	tool(
 		'get_audit_log',
 		{
 			title: 'Get audit log',
@@ -469,21 +607,21 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 				action: z.string().optional(),
 				resource: z.string().optional(),
 			}),
-			annotations: { readOnlyHint: true, idempotentHint: true },
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 			scopeChallenge: requires('project:read'),
 		},
 		async ({ limit, action, resource }) =>
 			run(() => ({
-				entries: core.audit.list({ orgId: principal.orgId, limit, action, resource }),
+				entries: core.audit.list({ principal, limit, action, resource }),
 			})),
 	);
 
-	server.registerTool(
+	tool(
 		'list_nodes',
 		{
 			title: 'List nodes',
 			description: 'List fleet nodes (read-only). Requires a platform admin role.',
-			annotations: { readOnlyHint: true, idempotentHint: true },
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 			scopeChallenge: requires('project:read'),
 		},
 		async () => run(() => ({ nodes: core.nodes.list(principal) })),

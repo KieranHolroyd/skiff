@@ -19,7 +19,10 @@ set -eu
 
 ENV_FILE="${SKIFF_ENV_FILE:-/etc/skiff/skiff.env}"
 LITESTREAM_CONFIG="${SKIFF_LITESTREAM_CONFIG:-/etc/skiff/litestream.yml}"
-APP_DIR="${SKIFF_APP_DIR:-/opt/skiff/current/control-plane}"
+# Installer layout: /opt/skiff/current/{runtime/bun,repo/scripts}. Release-bundle layout:
+# $SKIFF_APP_DIR/{runtime/bun,tools}. Both are supported.
+ROOT="${SKIFF_ROOT:-/opt/skiff/current}"
+APP_DIR="${SKIFF_APP_DIR:-$ROOT/control-plane}"
 CONTROL_SOCKET="${SKIFF_CONTROL_SOCKET:-/run/skiff/control.sock}"
 DRILL_DIR="${SKIFF_RESTORE_DRILL_DIR:-/var/lib/skiff/drill}"
 KEEP="${SKIFF_RESTORE_DRILL_KEEP:-3}"
@@ -32,6 +35,45 @@ say() { [ "$QUIET" = "1" ] || printf '%s\n' "$*"; }
 warn() { printf 'skiff-drill: warning: %s\n' "$*" >&2; }
 die() { printf 'skiff-drill: error: %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
+
+# Read only the named keys from the systemd EnvironmentFile and export them. The file is never
+# executed: values such as `Skiff <noreply@…>` or passwords containing `$`, `;` or spaces are not
+# shell syntax. Double-quoted values use systemd escapes (\" \\ \` \$).
+load_env() {
+	_file="$1"
+	shift
+	while IFS= read -r _line || [ -n "$_line" ]; do
+		case "$_line" in '' | '#'* | ';'*) continue ;; esac
+		_key=${_line%%=*}
+		[ "$_key" != "$_line" ] || continue
+		_val=${_line#*=}
+		for _want in "$@"; do
+			[ "$_key" = "$_want" ] || continue
+			case "$_val" in
+				\"*\")
+					_val=${_val#\"}
+					_val=${_val%\"}
+					_val=$(printf '%s' "$_val" | sed 's/\\\(["\\`$]\)/\1/g')
+					;;
+				\'*\')
+					_val=${_val#\'}
+					_val=${_val%\'}
+					;;
+			esac
+			export "$_key=$_val"
+		done
+	done <"$_file"
+}
+
+find_bun() {
+	for _candidate in "${SKIFF_BUN:-}" "$ROOT/runtime/bun" "$ROOT/runtime/bin/bun" "$APP_DIR/runtime/bun"; do
+		if [ -n "$_candidate" ] && [ -x "$_candidate" ]; then
+			printf '%s\n' "$_candidate"
+			return 0
+		fi
+	done
+	command -v bun 2>/dev/null
+}
 
 for _arg in "$@"; do
 	case "$_arg" in
@@ -58,10 +100,10 @@ have sqlite3 || die "sqlite3 is not installed"
 have cmp || die "cmp is not installed"
 have curl || die "curl is not installed"
 
-set -a
-# shellcheck disable=SC1090
-. "$ENV_FILE"
-set +a
+load_env "$ENV_FILE" SKIFF_DATA_DIR R2_ACCOUNT_ID R2_BUCKET R2_ENDPOINT R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY
+if [ -z "${R2_ENDPOINT:-}" ] && [ -n "${R2_ACCOUNT_ID:-}" ]; then
+	export R2_ENDPOINT="https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com"
+fi
 
 DB_PATH="${SKIFF_DATA_DIR:-/var/lib/skiff/data}/skiff.db"
 [ -f "$DB_PATH" ] || die "live database $DB_PATH does not exist"
@@ -74,11 +116,8 @@ if [ ! -f "$FINGERPRINT" ]; then
 fi
 [ -f "$FINGERPRINT" ] || die "missing fingerprint helper (looked in $SELF_DIR and $APP_DIR/tools)"
 
-BUN="${SKIFF_BUN:-$APP_DIR/runtime/bun}"
-if [ ! -x "$BUN" ]; then
-	have bun || die "no Bun runtime (expected $APP_DIR/runtime/bun)"
-	BUN=$(command -v bun)
-fi
+BUN=$(find_bun || true)
+[ -n "$BUN" ] || die "no Bun runtime (looked for $ROOT/runtime/bun, $APP_DIR/runtime/bun and bun on PATH)"
 
 mkdir -p "$DRILL_DIR"
 RUN_DIR="$DRILL_DIR/run-$(date -u +%Y%m%dT%H%M%SZ)-$$"

@@ -1,9 +1,10 @@
 <script lang="ts">
+	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import { onMount } from 'svelte';
 	import BotIcon from '@lucide/svelte/icons/bot';
 	import { authClient } from '#lib/auth-client.js';
 	import AuthShell from '#lib/components/skiff/AuthShell.svelte';
-	import Notice from '#lib/components/skiff/Notice.svelte';
+	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
@@ -90,7 +91,9 @@
 		</ul>
 	</fieldset>
 
-	{#if error}<Notice tone="danger" class="mt-4">{error}</Notice>{/if}
+	{#if error}<Alert.Root variant="destructive" class="mt-4"
+			><CircleAlertIcon /><Alert.Description>{error}</Alert.Description></Alert.Root
+		>{/if}
 
 	<div class="mt-6 grid grid-cols-2 gap-3">
 		<Button

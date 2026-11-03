@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, isNull, isNotNull } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, isNotNull, lte } from 'drizzle-orm';
 import { projects, slugRedirects } from '@skiff/db';
 import {
 	checkSlug,
@@ -53,9 +53,15 @@ export class ProjectService {
 		return this.ctx.config.contentDomain;
 	}
 
+	/** Live project slugs plus rename redirects still inside their 30-day window (D32). */
 	private takenSlugs(): string[] {
 		const slugs = this.ctx.db.select({ slug: projects.slug }).from(projects).all().map((row) => row.slug);
-		const redirects = this.ctx.db.select({ slug: slugRedirects.fromSlug }).from(slugRedirects).all().map((row) => row.slug);
+		const redirects = this.ctx.db
+			.select({ slug: slugRedirects.fromSlug })
+			.from(slugRedirects)
+			.where(gt(slugRedirects.expiresAt, this.ctx.now()))
+			.all()
+			.map((row) => row.slug);
 		return [...slugs, ...redirects];
 	}
 
@@ -251,7 +257,9 @@ export class ProjectService {
 			() => {
 				this.ctx.db
 					.update(projects)
-					.set({ deletedAt: now, purgeAt: now + limits.trashDays * 86_400_000, productionDeploymentId: null, updatedAt: now })
+					// Keep the production pointer so a restore brings the site straight back (D29);
+					// desired state and site access already skip deleted projects.
+					.set({ deletedAt: now, purgeAt: now + limits.trashDays * 86_400_000, updatedAt: now })
 					.where(eq(projects.id, row.id))
 					.run();
 				this.bump(principal.orgId);
@@ -308,12 +316,25 @@ export class ProjectService {
 		return purged;
 	}
 
+	/** Release old slugs whose 30-day redirect has lapsed (D32). Meant for the maintenance sweep. */
+	pruneExpiredRedirects(): number {
+		const expired = this.ctx.db
+			.select({ id: slugRedirects.id })
+			.from(slugRedirects)
+			.where(lte(slugRedirects.expiresAt, this.ctx.now()))
+			.all();
+		if (!expired.length) return 0;
+		this.ctx.db.delete(slugRedirects).where(lte(slugRedirects.expiresAt, this.ctx.now())).run();
+		this.bump();
+		return expired.length;
+	}
+
 	redirects(orgId: string): Array<{ from: string; to: string }> {
 		const now = this.ctx.now();
 		const rows = this.ctx.db
 			.select({ fromSlug: slugRedirects.fromSlug, projectId: slugRedirects.projectId, local: slugRedirects.id })
 			.from(slugRedirects)
-			.where(and(eq(slugRedirects.orgId, orgId), isNotNull(slugRedirects.expiresAt)))
+			.where(and(eq(slugRedirects.orgId, orgId), gt(slugRedirects.expiresAt, now)))
 			.all();
 		const out: Array<{ from: string; to: string }> = [];
 		for (const row of rows) {

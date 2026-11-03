@@ -73,6 +73,24 @@ export class CaddyAdmin {
 		await response.body?.cancel().catch(() => undefined);
 	}
 
+	/** Whether the running config contains an object with this `@id` (Caddy answers 404 if not). */
+	async hasId(id: string, signal?: AbortSignal): Promise<boolean> {
+		try {
+			const response = await this.request(
+				'GET',
+				`/id/${encodeURIComponent(id)}`,
+				undefined,
+				signal,
+				HEALTH_TIMEOUT_MS,
+			);
+			await response.body?.cancel().catch(() => undefined);
+			return true;
+		} catch (error) {
+			if (error instanceof CaddyError && error.status === 404) return false;
+			throw error;
+		}
+	}
+
 	/** Current config as JSON, useful for diagnostics. */
 	async load(signal?: AbortSignal): Promise<unknown> {
 		const response = await this.request('GET', '/config/', undefined, signal, HEALTH_TIMEOUT_MS);

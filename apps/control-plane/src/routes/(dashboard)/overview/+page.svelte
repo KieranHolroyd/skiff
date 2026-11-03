@@ -167,7 +167,8 @@
 									</p>
 								</Table.Cell>
 								<Table.Cell class="hidden text-xs text-muted-foreground sm:table-cell">
-									<time datetime={deployment.createdAt}>{formatDateTime(deployment.createdAt)}</time>
+									<time datetime={deployment.createdAt}>{formatDateTime(deployment.createdAt)}</time
+									>
 								</Table.Cell>
 								<Table.Cell><StatusBadge status={deployment.status} /></Table.Cell>
 								<Table.Cell class="pr-4">
@@ -217,9 +218,9 @@
 					{/if}
 				</EmptyState>
 			{:else}
-				<Item.Group class="gap-3">
+				<div class="space-y-3">
 					{#each data.nodes as node (node.id)}
-						<Item.Root variant="outline" class="flex-col items-stretch gap-3">
+						<div class="space-y-3 rounded-lg border p-3">
 							<div class="flex items-start gap-3">
 								<Item.Media variant="icon" class="relative">
 									<ServerIcon />
@@ -248,9 +249,9 @@
 									No heartbeat received yet
 								{/if}
 							</p>
-						</Item.Root>
+						</div>
 					{/each}
-				</Item.Group>
+				</div>
 			{/if}
 		</Panel>
 	</div>
@@ -269,7 +270,8 @@
 				description="Ask your agent to deploy a site, or create a project and deploy with the CLI."
 			>
 				{#if data.can.createProject}
-					<Button href="{resolve('/(dashboard)/projects')}?new=1" size="sm">Create a project</Button>
+					<Button href="{resolve('/(dashboard)/projects')}?new=1" size="sm">Create a project</Button
+					>
 				{/if}
 			</EmptyState>
 		{:else}

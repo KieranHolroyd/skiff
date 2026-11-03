@@ -3,6 +3,7 @@ export * from './principal.ts';
 export * from './slugs.ts';
 export * from './semver.ts';
 export * from './self-update.ts';
+export * from './platform-config.ts';
 export * from './model.ts';
 export * from './api.ts';
 export * from './agent.ts';

@@ -30,6 +30,9 @@ const handler: RequestHandler = async (event) => {
 
 		if (action === 'desired-state') {
 			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
+			// Authenticate before holding the long-poll: an unknown or rotated token gets a 401
+			// immediately instead of a 304 after the wait.
+			core.nodes.authenticate(token);
 			const current = core.nodes.stateVersion();
 			const etag = `"v${current}"`;
 			const clientVersion = Number(request.headers.get('if-none-match')?.replace(/[^0-9]/g, '') ?? 0);

@@ -2,7 +2,7 @@ import { building } from '$app/env';
 import { svelteKitHandler } from 'better-auth/svelte-kit';
 import { getMigrations } from 'better-auth/db/migration';
 import type { Handle, ServerInit } from '@sveltejs/kit/hooks';
-import { auth, backfillApiKeyRateLimits } from '#lib/server/auth.js';
+import { auth, backfillApiKeyRateLimits, ensurePlatformAdmin } from '#lib/server/auth.js';
 import { platformOrigin } from '#lib/server/config.js';
 import { checkCsrf } from '#lib/server/csrf.js';
 import { core } from '#lib/server/core.js';
@@ -19,6 +19,8 @@ export const init: ServerInit = async () => {
 	await runMigrations();
 	const lifted = backfillApiKeyRateLimits();
 	if (lifted > 0) console.info(`[auth] raised rate limit on ${lifted} API key(s)`);
+	const promoted = ensurePlatformAdmin();
+	if (promoted) console.info(`[auth] made the bootstrap user ${promoted} the platform admin`);
 
 	// One maintenance loop per process (HMR can call init more than once).
 	const global = globalThis as typeof globalThis & { __skiffMaintenance?: ReturnType<typeof setInterval> };
@@ -45,5 +47,27 @@ export const handle: Handle = async ({ event, resolve }) => {
 		event.locals.principal = await principalFromRequest(event.request);
 	}
 
-	return svelteKitHandler({ event, resolve, auth, building });
+	const response = await svelteKitHandler({ event, resolve, auth, building });
+	return withFrameProtection(response);
 };
+
+/**
+ * Nothing on the platform origin is meant to be framed. This stops clickjacking of the consent and
+ * CLI-approval pages (an attacker-registered client could otherwise frame a pre-ticked consent).
+ */
+function withFrameProtection(response: Response): Response {
+	try {
+		response.headers.set('x-frame-options', 'DENY');
+		const csp = response.headers.get('content-security-policy');
+		if (!csp?.includes('frame-ancestors'))
+			response.headers.set('content-security-policy', csp ? `${csp}; frame-ancestors 'none'` : "frame-ancestors 'none'");
+		return response;
+	} catch {
+		// Immutable headers (e.g. a proxied fetch response): copy once so the headers can be set.
+		const copy = new Response(response.body, response);
+		copy.headers.set('x-frame-options', 'DENY');
+		if (!copy.headers.get('content-security-policy')?.includes('frame-ancestors'))
+			copy.headers.append('content-security-policy', "frame-ancestors 'none'");
+		return copy;
+	}
+}

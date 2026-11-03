@@ -38,13 +38,7 @@
 	import PageHeader from '../../_lib/PageHeader.svelte';
 	import ProjectMark from '../../_lib/ProjectMark.svelte';
 	import RowMenu from '../../_lib/RowMenu.svelte';
-	import {
-		displayUrl,
-		formatBytes,
-		formatDateTime,
-		shortId,
-		shortSha
-	} from '../../_lib/format.js';
+	import { displayUrl, formatBytes, formatDateTime, shortId, shortSha } from '../../_lib/format.js';
 	import type { PageProps } from './$types';
 
 	interface ProjectFormResult {
@@ -111,7 +105,8 @@
 
 	function openAccess(scope: 'production' | 'previews') {
 		accessScope = scope;
-		accessMode = scope === 'production' ? data.project.productionAccess : data.project.previewAccess;
+		accessMode =
+			scope === 'production' ? data.project.productionAccess : data.project.previewAccess;
 		accessOpen = true;
 	}
 
@@ -234,52 +229,58 @@
 		</DropdownMenu.Root>
 	</PageHeader>
 
-	<Card.Root class="relative overflow-hidden">
+	<Card.Root class="relative overflow-hidden py-0">
 		<div class="absolute inset-y-0 left-0 w-1 bg-brand" aria-hidden="true"></div>
-		<Card.Header class="items-center gap-x-5 pl-7 sm:grid-cols-[auto_1fr_auto]">
-			<div class="hidden sm:block sm:row-span-2"><ProjectMark slug={data.project.slug} name={data.project.name} size="lg" /></div>
-			<Card.Description class="eyebrow flex items-center gap-1.5 text-brand-soft-foreground">
-				<RadioTowerIcon class="size-3" />
-				Live in production
-			</Card.Description>
-			<Card.Title class="flex flex-wrap items-center gap-2">
+		<Card.Content class="flex flex-wrap items-center gap-x-5 gap-y-4 py-5 pl-7">
+			<div class="hidden sm:block">
+				<ProjectMark slug={data.project.slug} name={data.project.name} size="lg" />
+			</div>
+			<div class="min-w-0 flex-1 basis-64 space-y-1">
+				<p class="eyebrow flex items-center gap-1.5 text-brand-soft-foreground">
+					<RadioTowerIcon class="size-3" />
+					Live in production
+				</p>
 				{#if production}
-					<span class="font-mono text-lg tracking-tight">{production.shortId}</span>
-					<StatusBadge status={production.status} />
-					{#if production.pinned}<Badge variant="outline"><PinIcon />pinned</Badge>{/if}
-					<span class="basis-full text-[13px] font-normal text-muted-foreground">
+					<div class="flex flex-wrap items-center gap-2">
+						<span class="font-mono text-lg font-semibold tracking-tight">{production.shortId}</span>
+						<StatusBadge status={production.status} />
+						{#if production.pinned}<Badge variant="outline"><PinIcon />pinned</Badge>{/if}
+					</div>
+					<p class="truncate text-[13px] text-muted-foreground">
 						{#if production.message}{production.message} ·
 						{/if}<span class="font-mono text-xs">{shortSha(production.release.sha256)}</span>
 						· {formatBytes(production.release.sizeBytes)} · deployed
 						<time datetime={production.createdAt}>{formatDateTime(production.createdAt)}</time>
-					</span>
+					</p>
 				{:else}
-					<span class="text-lg">Nothing in production yet</span>
-					<span class="basis-full text-[13px] font-normal text-muted-foreground">
+					<p class="text-lg font-semibold tracking-tight">Nothing in production yet</p>
+					<p class="text-[13px] text-muted-foreground">
 						Promote a deployment to serve it at {displayUrl(data.project.productionUrl)}.
-					</span>
+					</p>
 				{/if}
-			</Card.Title>
+			</div>
 			{#if data.can.rollback && data.project.productionDeploymentId}
-				<Card.Action class="sm:row-span-2 sm:self-center">
-					<Button variant="outline" onclick={rollback}>
-						<RotateCcwIcon />
-						Roll back
-					</Button>
-				</Card.Action>
+				<Button variant="outline" onclick={rollback}>
+					<RotateCcwIcon />
+					Roll back
+				</Button>
 			{/if}
-		</Card.Header>
+		</Card.Content>
 	</Card.Root>
 
 	<Tabs.Root bind:value={tab} class="gap-5">
 		<Tabs.List variant="line" class="w-full justify-start border-b">
 			<Tabs.Trigger value="deployments" class="flex-none">
 				<RocketIcon />Deployments
-				<Badge variant="neutral" class="h-4 px-1.5 font-mono text-[10px]">{data.deployments.length}</Badge>
+				<Badge variant="neutral" class="h-4 px-1.5 font-mono text-[10px]"
+					>{data.deployments.length}</Badge
+				>
 			</Tabs.Trigger>
 			<Tabs.Trigger value="shares" class="flex-none">
 				<LinkIcon />Share links
-				<Badge variant="neutral" class="h-4 px-1.5 font-mono text-[10px]">{activeShares.length}</Badge>
+				<Badge variant="neutral" class="h-4 px-1.5 font-mono text-[10px]"
+					>{activeShares.length}</Badge
+				>
 			</Tabs.Trigger>
 			<Tabs.Trigger value="settings" class="flex-none"><KeyRoundIcon />Settings</Tabs.Trigger>
 		</Tabs.List>
@@ -309,7 +310,9 @@
 						</Table.Header>
 						<Table.Body>
 							{#each data.deployments as deployment (deployment.id)}
-								<Table.Row class={deployment.isProduction ? 'bg-brand-soft/35 hover:bg-brand-soft/50' : ''}>
+								<Table.Row
+									class={deployment.isProduction ? 'bg-brand-soft/35 hover:bg-brand-soft/50' : ''}
+								>
 									<Table.Cell class="pl-4 whitespace-normal">
 										<div class="flex flex-wrap items-center gap-1.5">
 											<span class="font-mono text-[13px] font-medium">{deployment.shortId}</span>
@@ -327,17 +330,26 @@
 											<ArrowUpRightIcon class="size-3 shrink-0" />
 										</a>
 										{#if deployment.message}
-											<p class="max-w-xl truncate text-xs text-muted-foreground" title={deployment.message}>
+											<p
+												class="max-w-xl truncate text-xs text-muted-foreground"
+												title={deployment.message}
+											>
 												{deployment.message}
 											</p>
 										{/if}
 									</Table.Cell>
 									<Table.Cell class="hidden font-mono text-xs text-muted-foreground md:table-cell">
-										<span title={deployment.release.sha256}>{shortSha(deployment.release.sha256)}</span>
-										<p class="text-[11px] opacity-80">{formatBytes(deployment.release.sizeBytes)}</p>
+										<span title={deployment.release.sha256}
+											>{shortSha(deployment.release.sha256)}</span
+										>
+										<p class="text-[11px] opacity-80">
+											{formatBytes(deployment.release.sizeBytes)}
+										</p>
 									</Table.Cell>
 									<Table.Cell class="hidden text-xs text-muted-foreground lg:table-cell">
-										<time datetime={deployment.createdAt}>{formatDateTime(deployment.createdAt)}</time>
+										<time datetime={deployment.createdAt}
+											>{formatDateTime(deployment.createdAt)}</time
+										>
 									</Table.Cell>
 									<Table.Cell class="pr-4">
 										<div class="flex items-center justify-end gap-1">
@@ -348,7 +360,8 @@
 											{/if}
 											<RowMenu label="Actions for {deployment.shortId}">
 												<DropdownMenu.Item
-													onSelect={() => window.open(deployment.previewUrl, '_blank', 'noreferrer')}
+													onSelect={() =>
+														window.open(deployment.previewUrl, '_blank', 'noreferrer')}
 												>
 													<ArrowUpRightIcon />Open preview
 												</DropdownMenu.Item>
@@ -368,7 +381,8 @@
 																pinned: deployment.pinned ? 'false' : 'true'
 															})}
 													>
-														{#if deployment.pinned}<PinOffIcon />Unpin{:else}<PinIcon />Pin (keep forever){/if}
+														{#if deployment.pinned}<PinOffIcon />Unpin{:else}<PinIcon />Pin (keep
+															forever){/if}
 													</DropdownMenu.Item>
 												{/if}
 												{#if data.can.deleteDeployment}
@@ -399,7 +413,8 @@
 				<Card.Header class="border-b py-4">
 					<Card.Title>Share links</Card.Title>
 					<Card.Description>
-						Time- and usage-limited access to protected sites. A visit is a redemption, not a page load.
+						Time- and usage-limited access to protected sites. A visit is a redemption, not a page
+						load.
 					</Card.Description>
 					{#if data.can.createShare}
 						<Card.Action class="self-center">
@@ -437,7 +452,9 @@
 											{#if link.note}<p class="text-xs text-muted-foreground">{link.note}</p>{/if}
 										</Table.Cell>
 										<Table.Cell class="hidden font-mono text-xs tabular-nums sm:table-cell">
-											{link.redemptions}{link.maxRedemptions !== null ? ` / ${link.maxRedemptions}` : ''}
+											{link.redemptions}{link.maxRedemptions !== null
+												? ` / ${link.maxRedemptions}`
+												: ''}
 										</Table.Cell>
 										<Table.Cell class="hidden text-xs md:table-cell">
 											{#if link.expiresAt}
@@ -449,7 +466,11 @@
 										<Table.Cell><StatusBadge status={state} /></Table.Cell>
 										<Table.Cell class="pr-4">
 											{#if data.can.revokeShare && !link.revokedAt}
-												<Button variant="ghost-danger" size="sm" onclick={() => revokeShare(link.id)}>
+												<Button
+													variant="ghost-danger"
+													size="sm"
+													onclick={() => revokeShare(link.id)}
+												>
 													Revoke
 												</Button>
 											{/if}
@@ -486,7 +507,8 @@
 										<Button
 											variant="outline"
 											size="sm"
-											onclick={() => openAccess(row.scope as 'production' | 'previews')}>Change</Button
+											onclick={() => openAccess(row.scope as 'production' | 'previews')}
+											>Change</Button
 										>
 									{/if}
 								</Item.Actions>
@@ -514,7 +536,8 @@
 						<dd class="font-mono text-[13px]">{data.project.placement}</dd>
 						<dt>Created</dt>
 						<dd class="text-[13px]">
-							<time datetime={data.project.createdAt}>{formatDateTime(data.project.createdAt)}</time>
+							<time datetime={data.project.createdAt}>{formatDateTime(data.project.createdAt)}</time
+							>
 						</dd>
 						<dt>Project ID</dt>
 						<dd class="flex items-center justify-end gap-1">
@@ -536,7 +559,9 @@
 							preview stop serving immediately.
 						</Card.Description>
 						<Card.Action class="self-center">
-							<Button variant="destructive" onclick={deleteProject}><TrashIcon />Delete project</Button>
+							<Button variant="destructive" onclick={deleteProject}
+								><TrashIcon />Delete project</Button
+							>
 						</Card.Action>
 					</Card.Header>
 				</Card.Root>
@@ -557,11 +582,18 @@
 		<Field.Group>
 			<Field.Field>
 				<Field.Label for="share-deployment">Deployment</Field.Label>
-				<NativeSelect.Root id="share-deployment" name="deploymentId" bind:value={shareDeploymentId} class="w-full">
+				<NativeSelect.Root
+					id="share-deployment"
+					name="deploymentId"
+					bind:value={shareDeploymentId}
+					class="w-full"
+				>
 					<NativeSelect.Option value="">Production site</NativeSelect.Option>
 					{#each data.deployments as deployment (deployment.id)}
 						<NativeSelect.Option value={deployment.id}
-							>{deployment.shortId}{deployment.isProduction ? ' (production)' : ''}</NativeSelect.Option
+							>{deployment.shortId}{deployment.isProduction
+								? ' (production)'
+								: ''}</NativeSelect.Option
 						>
 					{/each}
 				</NativeSelect.Root>
@@ -587,13 +619,24 @@
 					<Field.Label for="share-max">
 						Max visits <span class="font-normal text-muted-foreground">optional</span>
 					</Field.Label>
-					<Input id="share-max" name="maxRedemptions" type="number" min="1" step="1" placeholder="Unlimited" />
+					<Input
+						id="share-max"
+						name="maxRedemptions"
+						type="number"
+						min="1"
+						step="1"
+						placeholder="Unlimited"
+					/>
 				</Field.Field>
 			</div>
 			<Field.Field>
-				<Field.Label for="share-note">Note <span class="font-normal text-muted-foreground">optional</span></Field.Label>
+				<Field.Label for="share-note"
+					>Note <span class="font-normal text-muted-foreground">optional</span></Field.Label
+				>
 				<Input id="share-note" name="note" maxlength={500} placeholder="Design review with Alex" />
-				<Field.Description>Only shown to your org, to remember who the link is for.</Field.Description>
+				<Field.Description
+					>Only shown to your org, to remember who the link is for.</Field.Description
+				>
 			</Field.Field>
 		</Field.Group>
 	</FormDialog>
@@ -635,8 +678,11 @@
 						required
 						aria-invalid={result?.fieldErrors?.password ? 'true' : undefined}
 					/>
-					<Field.Description>At least 8 characters. One secret for the whole project.</Field.Description>
-					{#if result?.fieldErrors?.password}<Field.Error>{result.fieldErrors.password}</Field.Error>{/if}
+					<Field.Description
+						>At least 8 characters. One secret for the whole project.</Field.Description
+					>
+					{#if result?.fieldErrors?.password}<Field.Error>{result.fieldErrors.password}</Field.Error
+						>{/if}
 				</Field.Field>
 			{/if}
 		</Field.Group>

@@ -39,4 +39,10 @@ describe('checkCsrf', () => {
 		expect(checkCsrf(...req('POST', '/api/auth/oauth2/token-evil'), ORIGIN).ok).toBe(false);
 		expect(checkCsrf(...req('POST', '/mcp/admin'), ORIGIN).ok).toBe(false);
 	});
+
+	test('cookieless prefixes cover only their own subtree', () => {
+		expect(checkCsrf(...req('POST', '/api/agent/heartbeat', { origin: 'https://evil.example' }), ORIGIN).ok).toBe(true);
+		for (const path of ['/api/agentx', '/api/v1/site-access', '/api/v1/site-access-evil'])
+			expect(checkCsrf(...req('POST', path, { origin: 'https://evil.example' }), ORIGIN).ok).toBe(false);
+	});
 });

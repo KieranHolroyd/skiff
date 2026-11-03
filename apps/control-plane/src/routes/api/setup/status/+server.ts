@@ -1,6 +1,6 @@
 import type { RequestHandler } from './$types';
 import { sqlite } from '#lib/server/db.js';
-import { contentDomain, objectStoreKind, platformOrigin, smtp } from '#lib/server/config.js';
+import { contentDomain, objectStoreKind, platformOrigin, sharedDomain, smtp } from '#lib/server/config.js';
 import { json } from '#lib/server/api.js';
 
 /**
@@ -11,12 +11,11 @@ import { json } from '#lib/server/api.js';
 export const GET: RequestHandler = async () => {
 	const count = sqlite.query<{ count: number }, []>('SELECT count(*) AS count FROM user').get();
 	const nodes = sqlite.query<{ count: number }, []>('SELECT count(*) AS count FROM nodes').get();
-	const platformHost = new URL(platformOrigin).hostname;
 	return json({
 		needsSetup: (count?.count ?? 0) === 0,
 		platformOrigin,
 		contentDomain,
-		sharedDomain: platformHost === contentDomain || platformHost.endsWith(`.${contentDomain}`),
+		sharedDomain,
 		objectStore: objectStoreKind,
 		email: smtp ? 'smtp' : 'console',
 		nodes: nodes?.count ?? 0,
