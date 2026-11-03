@@ -610,7 +610,7 @@ function installUpdateCommand(): void {
 		return;
 	}
 	const script = `#!/bin/sh
-# Installed by the Skiff installer. See docs/OPS.md §4.2.
+# Installed by the Skiff installer. See docs/OPS.md §4.1.
 set -eu
 for release in ${OPT_DIR}/current ${OPT_DIR}/previous; do
 	if [ -f "$release/repo/scripts/update-self/main.ts" ]; then

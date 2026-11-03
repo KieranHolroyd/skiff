@@ -14,6 +14,8 @@ D24 (the VPS is an accepted single point of failure), D25 (R2 is canonical), D28
 | Path | Owner / mode | Purpose |
 |---|---|---|
 | `/opt/skiff/current` | symlink | Active release. Atomic swap is the upgrade/rollback primitive. |
+| `/opt/skiff/previous` | symlink | Last known-good release, kept until the next successful update (`skiff-update-self rollback` target). |
+| `/opt/skiff/update-state.json` | `root:root 0600` | Self-updater state: last switch + its DB snapshot, in-flight switch, commits that failed. |
 | `/opt/skiff/releases/<version>/control-plane` | `root:root 0755` | SvelteKit build, bundled Bun runtime, units, scripts, migrations. |
 | `/opt/skiff/releases/<version>/agent` | `root:root 0755` | `skiff-agent` compiled binary. |
 | `/opt/skiff/releases/<version>/caddy` | `root:root 0755` | Caddy 2.11.7 + `caddy-dns/cloudflare`. |
@@ -251,7 +253,62 @@ Policy (D28): patch releases may auto-apply in a maintenance window; minor/major
 notify you first. Never upgrade across a database backup window without confirming
 Litestream is current.
 
-### 4.1 Uninstall
+### 4.1 Self-update from GitHub
+
+```sh
+sudo skiff-update-self              # pull, build, canary, swap, verify (rolls back on failure)
+sudo skiff-update-self --dry-run    # show the commit and the plan
+sudo skiff-update-self status       # current / previous / last switch / failed commits
+sudo skiff-update-self rollback     # back to previous; run again to undo the rollback
+```
+
+`skiff-update-self` (source: [`scripts/update-self/`](../scripts/update-self)) pulls the
+ref the current release was built from (default `main`; `--ref` to pin a tag or sha), and keeps
+a known-good control plane serving at every step:
+
+1. **Build beside the running release.** The commit is downloaded and built into
+   `/opt/skiff/releases/<UTC>-<sha12>`. Nothing that serves is touched; a failed build leaves
+   no trace.
+2. **Canary.** The new build boots as a transient systemd unit with the production user and
+   sandbox, its own socket, and a `VACUUM INTO` copy of the live database in
+   `/var/lib/skiff/update-canary/`. Migrations therefore run against real data before the swap.
+   SMTP, alerts, R2 and backups are stripped from the canary's environment. If it does not
+   answer `/api/setup/status` and render `/login`, the release is deleted and the commit is
+   remembered as failed (skipped until `--force`).
+3. **Swap.** Stop the control plane, snapshot SQLite to
+   `/var/lib/skiff/backups/pre-update-<release>.db`, repoint `previous` → old release, then
+   `current` → new release (each an atomic rename), start.
+4. **Verify.** The socket must answer health checks, then stay up without crash-restarts for
+   10 s. If the public URL answered before the update, it must answer after
+   (`--require-public` / `--no-public-check` to override).
+5. **Keep or revert.** On success, releases other than `current` and `previous` are pruned,
+   as are superseded snapshots. On failure the old release, the old `previous` link and the
+   pre-update database are restored (Litestream is paused for the swap so it starts a clean
+   generation), the old release is verified, and the commit is marked failed.
+
+The swap is a restart, so the control plane is unavailable for a few seconds; Caddy and the
+agent keep serving sites. Downtime does not cover the build or the canary. `--with-agent` also
+restarts `skiff-agent` on the new binary (the agent otherwise picks it up on its next restart).
+Run it under `systemd-run --unit=skiff-update-self --wait sudo skiff-update-self` or `tmux` on
+flaky SSH. If the process dies mid-swap anyway, the next `skiff-update-self` invocation keeps
+the new release when it is healthy and reverts it otherwise.
+
+**Rollback and the database.** Every switch records the database exactly as the outgoing
+release left it. `rollback` takes a fresh snapshot, then swaps `current` and `previous`:
+
+- no flag: allowed only when the previous release knows every applied migration;
+- `--restore-db`: also restore the snapshot from the switch (writes since then are lost, but
+  the pre-rollback snapshot makes this undoable: `rollback --restore-db` again goes forward);
+- `--keep-db`: run the old code against the newer schema (fine for purely additive migrations).
+
+Exit codes: `0` updated or nothing to do, `1` nothing changed or rolled back (old release
+serving), `2` the old release did not come back healthy (look at
+`journalctl -u skiff-control-plane` now). The updater does not rewrite systemd units: it refuses
+a release that lacks a path the installed unit references, and unit changes still go through
+`install.sh --upgrade`. Private repositories need `SKIFF_GITHUB_TOKEN` or
+`/etc/skiff/github.token` (`0600`).
+
+### 4.2 Uninstall
 
 ```sh
 sudo skiff-uninstall                 # remove binaries/units; keep data + config
