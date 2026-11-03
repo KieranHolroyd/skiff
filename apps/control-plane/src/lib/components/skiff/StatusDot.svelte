@@ -14,9 +14,13 @@
 	const color = $derived(dot[statusTone(status)]);
 </script>
 
-<span class="relative inline-grid size-2 shrink-0 place-items-center {className}" aria-hidden="true">
+<span
+	class="relative inline-grid size-2 shrink-0 place-items-center {className}"
+	aria-hidden="true"
+>
 	{#if isLive(status)}
-		<span class="absolute inline-flex size-full animate-ping rounded-full opacity-50 {color}"></span>
+		<span class="absolute inline-flex size-full animate-ping rounded-full opacity-50 {color}"
+		></span>
 	{/if}
 	<span class="relative size-2 rounded-full ring-2 ring-card {color}"></span>
 </span>

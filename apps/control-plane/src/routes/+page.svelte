@@ -1,7 +1,17 @@
+<script lang="ts">
+	import Logo from '#lib/components/skiff/Logo.svelte';
+</script>
+
 <svelte:head>
 	<title>Skiff</title>
 </svelte:head>
 
-<main class="flex min-h-svh items-center justify-center p-6">
-	<p class="text-sm text-muted-foreground">Redirecting…</p>
+<main class="grid min-h-svh place-items-center bg-background p-6">
+	<div class="flex flex-col items-center gap-4">
+		<Logo size="lg" />
+		<p class="flex items-center gap-2 text-sm text-muted-foreground">
+			<span class="size-1.5 animate-pulse rounded-full bg-brand"></span>
+			Redirecting…
+		</p>
+	</div>
 </main>

@@ -35,7 +35,9 @@
 	<div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 border-b px-4 py-3.5">
 		<div class="flex min-w-0 items-start gap-3">
 			{#if Icon}
-				<span class="mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg border bg-muted/40 text-muted-foreground">
+				<span
+					class="mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg border bg-muted/40 text-muted-foreground"
+				>
 					<span aria-hidden="true"><Icon class="size-3.5" /></span>
 				</span>
 			{/if}
@@ -43,7 +45,10 @@
 				<h2 class="flex items-center gap-2 text-[14.5px] font-semibold tracking-[-0.01em]">
 					{title}
 					{#if count !== undefined}
-						<span class="rounded-md bg-muted px-1.5 py-px font-mono text-[11px] font-medium text-muted-foreground tabular-nums">{count}</span>
+						<span
+							class="rounded-md bg-muted px-1.5 py-px font-mono text-[11px] font-medium text-muted-foreground tabular-nums"
+							>{count}</span
+						>
 					{/if}
 				</h2>
 				{#if description}

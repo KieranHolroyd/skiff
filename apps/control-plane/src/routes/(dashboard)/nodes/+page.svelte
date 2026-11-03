@@ -61,12 +61,7 @@
 	<FormFeedback {result} />
 
 	{#if result?.command}
-		<SecretReveal
-			title="Join command"
-			value={result.command}
-			copyLabel="Copy command"
-			multiline
-		>
+		<SecretReveal title="Join command" value={result.command} copyLabel="Copy command" multiline>
 			<p class="text-xs text-muted-foreground">
 				Run this on the machine you are enrolling. The token works once
 				{#if result.expiresAt}
@@ -96,7 +91,9 @@
 			<Button href={resolve('/(dashboard)/overview')} variant="outline" size="sm">
 				Back to overview
 			</Button>
-			<Button href={resolve('/(dashboard)/settings')} variant="ghost" size="sm">View your role</Button>
+			<Button href={resolve('/(dashboard)/settings')} variant="ghost" size="sm"
+				>View your role</Button
+			>
 		</EmptyState>
 	{:else if data.nodes.length === 0}
 		<EmptyState
@@ -130,7 +127,9 @@
 							<div class="min-w-0">
 								<div class="flex flex-wrap items-center gap-2">
 									<h2 class="truncate text-[15px] font-semibold tracking-[-0.01em]">{node.name}</h2>
-									<Badge variant="outline" class="font-mono text-[10.5px] uppercase">{node.mode}</Badge>
+									<Badge variant="outline" class="font-mono text-[10.5px] uppercase"
+										>{node.mode}</Badge
+									>
 								</div>
 								<div class="mt-0.5 flex items-center gap-1">
 									<p class="truncate font-mono text-[11px] text-muted-foreground" title={node.id}>
@@ -151,7 +150,9 @@
 
 					<dl class="kv mx-4 border-t text-[13px]">
 						<dt>Agent</dt>
-						<dd class="font-mono text-[12px]">{node.agentVersion ?? node.version ?? 'not reported'}</dd>
+						<dd class="font-mono text-[12px]">
+							{node.agentVersion ?? node.version ?? 'not reported'}
+						</dd>
 						<dt>Address</dt>
 						<dd class="font-mono text-[12px]">{node.publicAddress ?? 'not reported'}</dd>
 						<dt>Heartbeat</dt>
@@ -223,7 +224,9 @@
 			{/each}
 		</ul>
 
-		<div class="flex items-start gap-3 rounded-xl border border-dashed px-4 py-3 text-xs leading-relaxed text-muted-foreground">
+		<div
+			class="flex items-start gap-3 rounded-xl border border-dashed px-4 py-3 text-xs leading-relaxed text-muted-foreground"
+		>
 			<InfoIcon class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
 			<p>
 				An agent is marked offline after 30 seconds without a heartbeat and alerts after 2 minutes.

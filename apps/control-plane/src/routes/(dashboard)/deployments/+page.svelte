@@ -39,7 +39,9 @@
 	<Panel
 		title="Recent deployments"
 		count={data.deployments.length}
-		description="Across {data.projects.length} {data.projects.length === 1 ? 'project' : 'projects'}."
+		description="Across {data.projects.length} {data.projects.length === 1
+			? 'project'
+			: 'projects'}."
 		flush
 	>
 		{#snippet actions()}
@@ -117,7 +119,8 @@
 										>
 											{deployment.projectSlug}
 										</a>
-										<span class="font-mono text-xs text-muted-foreground">{deployment.shortId}</span>
+										<span class="font-mono text-xs text-muted-foreground">{deployment.shortId}</span
+										>
 										{#if deployment.isProduction}<Badge variant="brand">production</Badge>{/if}
 										{#if deployment.pinned}<Badge variant="outline"
 												><PinIcon aria-hidden="true" />pinned</Badge
@@ -144,11 +147,16 @@
 									</a>
 								</td>
 								<td class="hidden font-mono text-xs text-muted-foreground lg:table-cell">
-									<span title={deployment.release.sha256}>{shortSha(deployment.release.sha256)}</span>
-									<span class="ml-1 text-[11px] opacity-75">{formatBytes(deployment.release.sizeBytes)}</span>
+									<span title={deployment.release.sha256}
+										>{shortSha(deployment.release.sha256)}</span
+									>
+									<span class="ml-1 text-[11px] opacity-75"
+										>{formatBytes(deployment.release.sizeBytes)}</span
+									>
 								</td>
 								<td class="hidden text-xs whitespace-nowrap text-muted-foreground sm:table-cell">
-									<time datetime={deployment.createdAt}>{formatDateTime(deployment.createdAt)}</time>
+									<time datetime={deployment.createdAt}>{formatDateTime(deployment.createdAt)}</time
+									>
 								</td>
 								<td class="text-right">
 									<StatusBadge status={deployment.status} />

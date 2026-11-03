@@ -22,14 +22,20 @@
 		? 'py-7'
 		: 'py-12'}"
 >
-	<div class="chart-grid pointer-events-none absolute inset-0 text-foreground [mask-image:radial-gradient(ellipse_at_center,black,transparent_70%)]"></div>
-	<span class="relative grid size-10 place-items-center rounded-xl border bg-card text-muted-foreground shadow-card">
+	<div
+		class="chart-grid pointer-events-none absolute inset-0 [mask-image:radial-gradient(ellipse_at_center,black,transparent_70%)] text-foreground"
+	></div>
+	<span
+		class="relative grid size-10 place-items-center rounded-xl border bg-card text-muted-foreground shadow-card"
+	>
 		<span aria-hidden="true"><Icon class="size-[18px]" /></span>
 	</span>
 	<div class="relative space-y-1">
 		<p class="text-sm font-semibold">{title}</p>
 		{#if description}
-			<p class="mx-auto max-w-sm text-[13px] leading-relaxed text-pretty text-muted-foreground">{description}</p>
+			<p class="mx-auto max-w-sm text-[13px] leading-relaxed text-pretty text-muted-foreground">
+				{description}
+			</p>
 		{/if}
 	</div>
 	{#if children}

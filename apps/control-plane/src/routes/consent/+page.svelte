@@ -1,11 +1,12 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import BotIcon from '@lucide/svelte/icons/bot';
 	import { authClient } from '#lib/auth-client.js';
+	import AuthShell from '#lib/components/skiff/AuthShell.svelte';
+	import Notice from '#lib/components/skiff/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
-	import * as Card from '#lib/components/ui/card/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
-	import { Label } from '#lib/components/ui/label/index.js';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -16,43 +17,96 @@
 	// svelte-ignore state_referenced_locally
 	let selected = $state(Object.fromEntries(data.scopes.map((s) => [s.scope, s.checked])));
 
+	const selectedCount = $derived(Object.values(selected).filter(Boolean).length);
+
 	onMount(async () => {
-		const { data: client } = await authClient.oauth2.publicClient({ query: { client_id: data.clientId } });
+		const { data: client } = await authClient.oauth2.publicClient({
+			query: { client_id: data.clientId }
+		});
 		clientName = (client as { client_name?: string } | null)?.client_name ?? data.clientId;
 	});
 
 	async function decide(accept: boolean) {
 		pending = true;
-		const scope = Object.entries(selected).filter(([, on]) => on).map(([s]) => s).join(' ');
+		const scope = Object.entries(selected)
+			.filter(([, on]) => on)
+			.map(([s]) => s)
+			.join(' ');
 		const { data: result, error: err } = await authClient.oauth2.consent({ accept, scope });
 		pending = false;
 		if (err) return (error = err.message ?? 'Consent failed');
-		const next = (result as { url?: string; redirect_uri?: string } | null);
+		const next = result as { url?: string; redirect_uri?: string } | null;
 		window.location.href = next?.url ?? next?.redirect_uri ?? '/';
 	}
 </script>
 
-<main class="flex min-h-svh items-center justify-center p-6">
-	<Card.Root class="w-full max-w-md">
-		<Card.Header>
-			<Card.Title>Authorize {clientName || 'application'}</Card.Title>
-			<Card.Description>
-				Choose what this client may do on your behalf. You can revoke access at any time.
-			</Card.Description>
-		</Card.Header>
-		<Card.Content class="space-y-2">
+<svelte:head>
+	<title>Authorize {clientName || 'application'} · Skiff</title>
+</svelte:head>
+
+<AuthShell
+	eyebrow="Authorization request"
+	title="Authorize {clientName || 'application'}"
+	description="Choose what this client may do on your behalf. You can revoke access at any time."
+>
+	<div class="mb-4 flex items-center gap-3 rounded-xl border bg-card p-3 shadow-card">
+		<span
+			class="grid size-10 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground"
+		>
+			<BotIcon class="size-5" aria-hidden="true" />
+		</span>
+		<div class="min-w-0">
+			<p class="truncate text-sm font-semibold">{clientName || 'Loading client…'}</p>
+			<p class="truncate font-mono text-[11px] text-muted-foreground" title={data.clientId}>
+				{data.clientId}
+			</p>
+		</div>
+	</div>
+
+	<fieldset class="overflow-hidden rounded-xl border bg-card shadow-card">
+		<legend class="sr-only">Requested permissions</legend>
+		<div class="flex items-center justify-between border-b bg-muted/40 px-3.5 py-2">
+			<span class="eyebrow">Permissions</span>
+			<span class="font-mono text-[11px] text-muted-foreground tabular-nums"
+				>{selectedCount}/{data.scopes.length}</span
+			>
+		</div>
+		<ul class="max-h-80 divide-y overflow-y-auto">
 			{#each data.scopes as s (s.scope)}
-				<div class="flex items-center gap-3">
-					<Checkbox id={s.scope} bind:checked={selected[s.scope]} disabled={!s.permission} />
-					<Label for={s.scope} class="font-mono text-xs">{s.scope}</Label>
-					{#if s.destructive}<Badge variant="destructive">destructive</Badge>{/if}
-				</div>
+				<li>
+					<label
+						for={s.scope}
+						class="flex items-center gap-3 px-3.5 py-2.5 transition-colors {s.permission
+							? 'cursor-pointer hover:bg-muted/40'
+							: 'cursor-not-allowed opacity-55'}"
+					>
+						<Checkbox id={s.scope} bind:checked={selected[s.scope]} disabled={!s.permission} />
+						<span class="min-w-0 flex-1 truncate font-mono text-[12.5px]">{s.scope}</span>
+						{#if s.destructive}<Badge variant="danger">destructive</Badge>{/if}
+						{#if !s.permission}<Badge variant="neutral">not in your role</Badge>{/if}
+					</label>
+				</li>
 			{/each}
-			{#if error}<p class="text-sm text-destructive">{error}</p>{/if}
-		</Card.Content>
-		<Card.Footer class="flex justify-end gap-2">
-			<Button variant="outline" disabled={pending} onclick={() => decide(false)}>Deny</Button>
-			<Button disabled={pending} onclick={() => decide(true)}>Allow</Button>
-		</Card.Footer>
-	</Card.Root>
-</main>
+		</ul>
+	</fieldset>
+
+	{#if error}<Notice tone="danger" class="mt-4">{error}</Notice>{/if}
+
+	<div class="mt-6 grid grid-cols-2 gap-3">
+		<Button
+			variant="outline"
+			size="lg"
+			class="h-10"
+			disabled={pending}
+			onclick={() => decide(false)}>Deny</Button
+		>
+		<Button size="lg" class="h-10" disabled={pending} onclick={() => decide(true)}
+			>Allow access</Button
+		>
+	</div>
+
+	{#snippet footer()}
+		Tokens are limited to the intersection of these permissions and your role, and can be revoked at
+		any time.
+	{/snippet}
+</AuthShell>

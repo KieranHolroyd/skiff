@@ -22,13 +22,17 @@
 </script>
 
 <header
-	class="flex flex-wrap items-end justify-between gap-x-6 gap-y-4 {bordered ? 'border-b pb-6' : 'pb-4'}"
+	class="flex flex-wrap items-end justify-between gap-x-6 gap-y-4 {bordered
+		? 'border-b pb-6'
+		: 'pb-4'}"
 >
 	<div class="min-w-0 space-y-1.5">
 		{#if eyebrow}<p class="eyebrow">{eyebrow}</p>{/if}
 		<h1 class="text-[26px] leading-tight font-semibold tracking-[-0.03em] text-balance">{title}</h1>
 		{#if description}
-			<p class="max-w-2xl text-sm leading-relaxed text-pretty text-muted-foreground">{description}</p>
+			<p class="max-w-2xl text-sm leading-relaxed text-pretty text-muted-foreground">
+				{description}
+			</p>
 		{/if}
 		{#if meta}<div class="pt-1">{@render meta()}</div>{/if}
 	</div>

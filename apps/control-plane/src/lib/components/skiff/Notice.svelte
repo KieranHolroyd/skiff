@@ -43,7 +43,10 @@
 	const c = $derived(config[tone]);
 </script>
 
-<div class="flex items-start gap-2.5 rounded-lg border px-3 py-2.5 text-[13px] leading-5 {c.box} {className}" role={c.role}>
+<div
+	class="flex items-start gap-2.5 rounded-lg border px-3 py-2.5 text-[13px] leading-5 {c.box} {className}"
+	role={c.role}
+>
 	<c.icon class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
 	<div class="min-w-0 flex-1">
 		{#if title}<p class="font-medium">{title}</p>{/if}

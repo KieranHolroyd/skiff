@@ -36,9 +36,24 @@
 		{
 			label: 'Operate',
 			items: [
-				{ label: 'Overview', href: '/(dashboard)/overview', path: '/overview', icon: LayoutDashboardIcon },
-				{ label: 'Projects', href: '/(dashboard)/projects', path: '/projects', icon: FolderKanbanIcon },
-				{ label: 'Deployments', href: '/(dashboard)/deployments', path: '/deployments', icon: RocketIcon }
+				{
+					label: 'Overview',
+					href: '/(dashboard)/overview',
+					path: '/overview',
+					icon: LayoutDashboardIcon
+				},
+				{
+					label: 'Projects',
+					href: '/(dashboard)/projects',
+					path: '/projects',
+					icon: FolderKanbanIcon
+				},
+				{
+					label: 'Deployments',
+					href: '/(dashboard)/deployments',
+					path: '/deployments',
+					icon: RocketIcon
+				}
 			]
 		},
 		{
@@ -63,8 +78,8 @@
 	const crumbs = $derived.by(() => {
 		const segments = page.url.pathname.split('/').filter(Boolean);
 		const top = nav.find((item) => item.path === `/${segments[0] ?? ''}`);
-		const out: { label: string; href?: string; mono?: boolean }[] = [];
-		if (top) out.push({ label: top.label, href: segments.length > 1 ? resolve(top.href) : undefined });
+		const out: { label: string; route?: (typeof nav)[number]['href']; mono?: boolean }[] = [];
+		if (top) out.push({ label: top.label, route: segments.length > 1 ? top.href : undefined });
 		// Project slugs read best verbatim in mono; other sub-pages are title-cased words.
 		const isProject = top?.path === '/projects';
 		for (const raw of segments.slice(1)) {
@@ -137,7 +152,9 @@
 		<nav class="flex-1 space-y-5 overflow-y-auto px-3 py-3" aria-label="Primary">
 			{#each groups as group (group.label)}
 				<div class="space-y-0.5">
-					<p class="px-2.5 pb-1.5 font-mono text-[10px] tracking-[0.12em] text-sidebar-muted/80 uppercase">
+					<p
+						class="px-2.5 pb-1.5 font-mono text-[10px] tracking-[0.12em] text-sidebar-muted/80 uppercase"
+					>
 						{group.label}
 					</p>
 					{#each group.items as item (item.href)}
@@ -190,8 +207,9 @@
 				</button>
 			</div>
 			<div class="flex items-center justify-between gap-2 px-1">
-				<span class="truncate font-mono text-[10.5px] text-sidebar-muted" title={data.platform.origin}
-					>{data.platform.hostname}</span
+				<span
+					class="truncate font-mono text-[10.5px] text-sidebar-muted"
+					title={data.platform.origin}>{data.platform.hostname}</span
 				>
 				<ThemeToggle />
 			</div>
@@ -245,12 +263,15 @@
 				<ol class="flex items-center gap-1.5 text-[13px]">
 					<li class="text-muted-foreground">{data.org.name}</li>
 					{#each crumbs as crumb, i (i)}
-						<li aria-hidden="true"><ChevronRightIcon class="size-3.5 text-muted-foreground/60" /></li>
+						<li aria-hidden="true">
+							<ChevronRightIcon class="size-3.5 text-muted-foreground/60" />
+						</li>
 						<li>
-							{#if crumb.href}
+							{#if crumb.route}
 								<a
-									href={crumb.href}
-									class="text-muted-foreground transition-colors hover:text-foreground">{crumb.label}</a
+									href={resolve(crumb.route)}
+									class="text-muted-foreground transition-colors hover:text-foreground"
+									>{crumb.label}</a
 								>
 							{:else}
 								<span

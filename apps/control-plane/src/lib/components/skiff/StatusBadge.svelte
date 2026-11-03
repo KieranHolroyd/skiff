@@ -28,7 +28,10 @@
 >
 	<span class="relative grid size-1.5 place-items-center" aria-hidden="true">
 		{#if live}
-			<span class="absolute inline-flex size-full animate-ping rounded-full opacity-60 {styles[resolved].dot}"></span>
+			<span
+				class="absolute inline-flex size-full animate-ping rounded-full opacity-60 {styles[resolved]
+					.dot}"
+			></span>
 		{/if}
 		<span class="relative size-1.5 rounded-full {styles[resolved].dot}"></span>
 	</span>

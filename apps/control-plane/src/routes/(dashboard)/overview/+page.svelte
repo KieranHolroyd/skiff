@@ -109,11 +109,7 @@
 	</section>
 
 	<div class="grid items-start gap-5 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
-		<Panel
-			title="Recent deployments"
-			description="Across every project in {data.org.name}."
-			flush
-		>
+		<Panel title="Recent deployments" description="Across every project in {data.org.name}." flush>
 			{#snippet actions()}
 				<Button href={resolve('/(dashboard)/deployments')} variant="ghost" size="sm">
 					View all
@@ -150,9 +146,12 @@
 									{/if}
 								</div>
 								<p class="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
-									<span title={deployment.release.sha256}>{shortSha(deployment.release.sha256)}</span>
+									<span title={deployment.release.sha256}
+										>{shortSha(deployment.release.sha256)}</span
+									>
 									<span class="mx-1 opacity-50">·</span>
-									<time datetime={deployment.createdAt}>{formatDateTime(deployment.createdAt)}</time>
+									<time datetime={deployment.createdAt}>{formatDateTime(deployment.createdAt)}</time
+									>
 								</p>
 							</div>
 							<StatusBadge status={deployment.status} class="hidden sm:inline-flex" />
@@ -211,12 +210,13 @@
 									<div class="flex items-center gap-2">
 										<StatusDot status={node.status} />
 										<p class="truncate text-sm font-medium">{node.name}</p>
-										<Badge variant="outline" class="font-mono text-[10.5px] uppercase">{node.mode}</Badge>
+										<Badge variant="outline" class="font-mono text-[10.5px] uppercase"
+											>{node.mode}</Badge
+										>
 									</div>
 									<p class="mt-1 truncate pl-4 font-mono text-[11px] text-muted-foreground">
-										{#if node.publicAddress}{node.publicAddress} · {/if}agent {node.agentVersion ??
-											node.version ??
-											'unknown'}
+										{#if node.publicAddress}{node.publicAddress} ·
+										{/if}agent {node.agentVersion ?? node.version ?? 'unknown'}
 									</p>
 								</div>
 								<StatusBadge status={node.status} />

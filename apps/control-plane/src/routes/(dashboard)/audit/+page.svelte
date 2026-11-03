@@ -54,7 +54,12 @@
 		description="Every mutating surface writes here: the dashboard, REST API, CLI and MCP. Tokens and secrets are redacted in args."
 	/>
 
-	<Panel title="Activity" count={data.entries.length} description="Most recent first, in {data.org.name}." flush>
+	<Panel
+		title="Activity"
+		count={data.entries.length}
+		description="Most recent first, in {data.org.name}."
+		flush
+	>
 		<form
 			method="GET"
 			class="flex flex-wrap items-end gap-3 border-b bg-muted/25 px-4 py-3"
@@ -153,7 +158,9 @@
 											<p class="text-[13px] font-medium">{actorLabel(entry)}</p>
 											<p class="font-mono text-[10.5px] text-muted-foreground">
 												{entry.actorType}{#if entry.clientId}
-													<span title={entry.clientId}> · {shortId(entry.clientId, 14)}</span>{/if}{#if entry.ipHash}
+													<span title={entry.clientId}>
+														· {shortId(entry.clientId, 14)}</span
+													>{/if}{#if entry.ipHash}
 													<span> · ip {entry.ipHash}</span>{/if}
 											</p>
 										</div>
@@ -185,13 +192,19 @@
 								<td class="hidden text-xs lg:table-cell">
 									<span class="font-medium">{entry.resource}</span>
 									{#if entry.resourceId}
-										<p class="font-mono text-[10.5px] text-muted-foreground" title={entry.resourceId}>
+										<p
+											class="font-mono text-[10.5px] text-muted-foreground"
+											title={entry.resourceId}
+										>
 											{shortId(entry.resourceId, 18)}
 										</p>
 									{/if}
 								</td>
 								<td class="text-right">
-									<StatusBadge status={entry.result} tone={entry.result === 'ok' ? 'success' : 'danger'} />
+									<StatusBadge
+										status={entry.result}
+										tone={entry.result === 'ok' ? 'success' : 'danger'}
+									/>
 								</td>
 							</tr>
 						{/each}

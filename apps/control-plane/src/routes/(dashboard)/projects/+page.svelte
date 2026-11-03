@@ -4,7 +4,7 @@
 	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
 	import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
 	import PlusIcon from '@lucide/svelte/icons/plus';
-	import TrashIcon from '@lucide/svelte/icons/trash-2';
+	import TrashIcon from '@lucide/svelte/icons/trash';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import { Label } from '#lib/components/ui/label/index.js';
@@ -116,7 +116,9 @@
 											<AccessChip scope="Preview" mode={project.previewAccess} />
 										</div>
 									</td>
-									<td class="hidden font-mono text-xs whitespace-nowrap text-muted-foreground sm:table-cell">
+									<td
+										class="hidden font-mono text-xs whitespace-nowrap text-muted-foreground sm:table-cell"
+									>
 										<time datetime={project.createdAt}>{formatDate(project.createdAt)}</time>
 									</td>
 									<td>

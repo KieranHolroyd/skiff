@@ -25,9 +25,13 @@
 	class="overflow-hidden rounded-xl border border-brand/35 bg-card shadow-card"
 	aria-label={title}
 >
-	<div class="flex flex-wrap items-start justify-between gap-3 border-b border-brand/20 bg-brand-soft/60 px-4 py-3">
+	<div
+		class="flex flex-wrap items-start justify-between gap-3 border-b border-brand/20 bg-brand-soft/60 px-4 py-3"
+	>
 		<div class="flex min-w-0 items-start gap-3">
-			<span class="mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg bg-brand text-brand-foreground">
+			<span
+				class="mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg bg-brand text-brand-foreground"
+			>
 				<KeyRoundIcon class="size-3.5" aria-hidden="true" />
 			</span>
 			<div class="min-w-0">
@@ -41,7 +45,7 @@
 	</div>
 	<div class="space-y-3 p-4">
 		{#if multiline}
-			<pre class="code-block whitespace-pre-wrap break-all select-all">{value}</pre>
+			<pre class="code-block break-all whitespace-pre-wrap select-all">{value}</pre>
 		{:else}
 			<code class="code-block block break-all select-all">{value}</code>
 		{/if}

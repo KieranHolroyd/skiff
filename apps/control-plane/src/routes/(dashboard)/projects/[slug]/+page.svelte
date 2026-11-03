@@ -10,7 +10,7 @@
 	import RadioTowerIcon from '@lucide/svelte/icons/radio-tower';
 	import RocketIcon from '@lucide/svelte/icons/rocket';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
-	import TrashIcon from '@lucide/svelte/icons/trash-2';
+	import TrashIcon from '@lucide/svelte/icons/trash';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
@@ -24,13 +24,7 @@
 	import PageHeader from '../../_lib/PageHeader.svelte';
 	import Panel from '../../_lib/Panel.svelte';
 	import ProjectMark from '../../_lib/ProjectMark.svelte';
-	import {
-		displayUrl,
-		formatBytes,
-		formatDateTime,
-		shortId,
-		shortSha
-	} from '../../_lib/format.js';
+	import { displayUrl, formatBytes, formatDateTime, shortId, shortSha } from '../../_lib/format.js';
 	import type { PageProps } from './$types';
 
 	interface ProjectFormResult {
@@ -84,7 +78,12 @@
 	<title>{data.project.name} · Skiff</title>
 </svelte:head>
 
-{#snippet accessForm(scope: 'production' | 'previews', current: string, selected: string, onSelect: (value: string) => void)}
+{#snippet accessForm(
+	scope: 'production' | 'previews',
+	current: string,
+	selected: string,
+	onSelect: (value: string) => void
+)}
 	{@const id = scope === 'production' ? 'production-mode' : 'preview-mode'}
 	<form method="POST" action="?/setAccess" use:enhance class="space-y-2.5">
 		<input type="hidden" name="scope" value={scope} />
@@ -133,7 +132,7 @@
 				<a
 					href={data.project.productionUrl}
 					target="_blank"
-					rel="noreferrer"
+					rel="external noreferrer"
 					class="inline-flex items-center gap-1 font-mono text-[13px] text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
 				>
 					{displayUrl(data.project.productionUrl)}
@@ -171,7 +170,10 @@
 		<div class="flex flex-wrap items-center gap-x-6 gap-y-4 p-5 pl-6">
 			<ProjectMark slug={data.project.slug} name={data.project.name} size="lg" />
 			<div class="min-w-0 flex-1 space-y-1">
-				<p id="production-heading" class="eyebrow flex items-center gap-1.5 text-brand-soft-foreground">
+				<p
+					id="production-heading"
+					class="eyebrow flex items-center gap-1.5 text-brand-soft-foreground"
+				>
 					<RadioTowerIcon class="size-3" aria-hidden="true" />
 					Live in production
 				</p>
@@ -182,9 +184,8 @@
 						{#if production.pinned}<Badge variant="outline">pinned</Badge>{/if}
 					</div>
 					<p class="truncate text-[13px] text-muted-foreground">
-						{#if production.message}{production.message} · {/if}<span class="font-mono text-xs"
-							>{shortSha(production.release.sha256)}</span
-						>
+						{#if production.message}{production.message} ·
+						{/if}<span class="font-mono text-xs">{shortSha(production.release.sha256)}</span>
 						· {formatBytes(production.release.sizeBytes)} · deployed
 						<time datetime={production.createdAt}>{formatDateTime(production.createdAt)}</time>
 					</p>
@@ -233,8 +234,8 @@
 							description="Deployments come from the CLI, MCP clients or the REST API. Every deploy gets an immutable preview URL."
 						>
 							<code class="rounded-md border bg-card px-2.5 py-1.5 font-mono text-xs"
-								><span class="text-muted-foreground select-none">$ </span>skif deploy ./dist --project {data
-									.project.slug}</code
+								><span class="text-muted-foreground select-none">$ </span>skif deploy ./dist
+								--project {data.project.slug}</code
 							>
 						</EmptyState>
 					</div>
@@ -252,7 +253,9 @@
 							</thead>
 							<tbody>
 								{#each data.deployments as deployment (deployment.id)}
-									<tr class={deployment.isProduction ? 'bg-brand-soft/35 hover:bg-brand-soft/50' : ''}>
+									<tr
+										class={deployment.isProduction ? 'bg-brand-soft/35 hover:bg-brand-soft/50' : ''}
+									>
 										<td>
 											<div class="flex flex-wrap items-center gap-1.5">
 												<span class="font-mono text-[13px] font-medium">{deployment.shortId}</span>
@@ -283,11 +286,19 @@
 											{/if}
 										</td>
 										<td class="hidden font-mono text-xs text-muted-foreground md:table-cell">
-											<span title={deployment.release.sha256}>{shortSha(deployment.release.sha256)}</span>
-											<p class="text-[11px] opacity-80">{formatBytes(deployment.release.sizeBytes)}</p>
+											<span title={deployment.release.sha256}
+												>{shortSha(deployment.release.sha256)}</span
+											>
+											<p class="text-[11px] opacity-80">
+												{formatBytes(deployment.release.sizeBytes)}
+											</p>
 										</td>
-										<td class="hidden text-xs whitespace-nowrap text-muted-foreground lg:table-cell">
-											<time datetime={deployment.createdAt}>{formatDateTime(deployment.createdAt)}</time>
+										<td
+											class="hidden text-xs whitespace-nowrap text-muted-foreground lg:table-cell"
+										>
+											<time datetime={deployment.createdAt}
+												>{formatDateTime(deployment.createdAt)}</time
+											>
 										</td>
 										<td>
 											<div class="flex items-center justify-end gap-1">
@@ -468,7 +479,9 @@
 											>
 											redemptions ·
 											{#if link.expiresAt}
-												expires <time datetime={link.expiresAt}>{formatDateTime(link.expiresAt)}</time>
+												expires <time datetime={link.expiresAt}
+													>{formatDateTime(link.expiresAt)}</time
+												>
 											{:else}
 												no expiry
 											{/if}
@@ -482,7 +495,9 @@
 												variant="ghost-danger"
 												size="sm"
 												onclick={(event) => {
-													if (!confirm('Revoke this share link? Existing sessions are revoked too.'))
+													if (
+														!confirm('Revoke this share link? Existing sessions are revoked too.')
+													)
 														event.preventDefault();
 												}}
 											>
@@ -499,12 +514,26 @@
 		</div>
 
 		<div class="space-y-5 xl:sticky xl:top-20">
-			<Panel title="Access" icon={KeyRoundIcon} description="Production and previews are set separately.">
+			<Panel
+				title="Access"
+				icon={KeyRoundIcon}
+				description="Production and previews are set separately."
+			>
 				{#if data.can.update}
 					<div class="space-y-5">
-						{@render accessForm('production', data.project.productionAccess, productionMode, (v) => (productionMode = v as typeof productionMode))}
+						{@render accessForm(
+							'production',
+							data.project.productionAccess,
+							productionMode,
+							(v) => (productionMode = v as typeof productionMode)
+						)}
 						<div class="border-t"></div>
-						{@render accessForm('previews', data.project.previewAccess, previewMode, (v) => (previewMode = v as typeof previewMode))}
+						{@render accessForm(
+							'previews',
+							data.project.previewAccess,
+							previewMode,
+							(v) => (previewMode = v as typeof previewMode)
+						)}
 					</div>
 				{:else}
 					<dl class="kv">
@@ -518,8 +547,8 @@
 					<p class="mt-3 text-xs text-destructive">{result.fieldErrors.password}</p>
 				{/if}
 				{#snippet footer()}
-					Protected sites set <span class="font-mono">X-Robots-Tag: noindex</span> and never receive
-					platform session cookies.
+					Protected sites set <span class="font-mono">X-Robots-Tag: noindex</span> and never receive platform
+					session cookies.
 				{/snippet}
 			</Panel>
 

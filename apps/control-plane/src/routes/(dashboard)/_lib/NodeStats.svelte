@@ -6,7 +6,9 @@
 	let { stats }: { stats: unknown } = $props();
 
 	const s = $derived(
-		stats && typeof stats === 'object' ? (stats as Record<string, unknown>) : ({} as Record<string, unknown>)
+		stats && typeof stats === 'object'
+			? (stats as Record<string, unknown>)
+			: ({} as Record<string, unknown>)
 	);
 	const num = (key: string): number | null => {
 		const value = s[key];
@@ -20,9 +22,7 @@
 	const diskTotal = $derived(num('diskTotalBytes'));
 	const uptime = $derived(num('uptimeSeconds'));
 	const load1 = $derived(num('load1'));
-	const hasAny = $derived(
-		[cpu, memUsed, diskUsed, uptime, load1].some((value) => value !== null)
-	);
+	const hasAny = $derived([cpu, memUsed, diskUsed, uptime, load1].some((value) => value !== null));
 </script>
 
 {#if hasAny}

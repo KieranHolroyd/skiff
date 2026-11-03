@@ -1,7 +1,11 @@
 <script lang="ts">
+	import FingerprintIcon from '@lucide/svelte/icons/fingerprint';
+	import MailIcon from '@lucide/svelte/icons/mail';
 	import { authClient } from '#lib/auth-client.js';
+	import AuthShell from '#lib/components/skiff/AuthShell.svelte';
+	import GitHubMark from '#lib/components/skiff/GitHubMark.svelte';
+	import Notice from '#lib/components/skiff/Notice.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
-	import * as Card from '#lib/components/ui/card/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import { Label } from '#lib/components/ui/label/index.js';
 	import type { PageProps } from './$types';
@@ -10,6 +14,7 @@
 	let email = $state('');
 	let password = $state('');
 	let error = $state('');
+	let notice = $state('');
 	let pending = $state(false);
 
 	/** `redirect` lets a protected site send the visitor back after sign-in. */
@@ -26,6 +31,7 @@
 		event.preventDefault();
 		pending = true;
 		error = '';
+		notice = '';
 		const { data: result, error: err } = await authClient.signIn.email({ email, password });
 		pending = false;
 		if (err) error = err.message ?? 'Sign-in failed';
@@ -35,6 +41,7 @@
 	async function signInWithPasskey() {
 		pending = true;
 		error = '';
+		notice = '';
 		const { data: result, error: err } = await authClient.signIn.passkey();
 		pending = false;
 		if (err) error = err.message ?? 'Passkey sign-in failed';
@@ -44,9 +51,10 @@
 	async function signInWithGitHub() {
 		pending = true;
 		error = '';
+		notice = '';
 		const { error: err } = await authClient.signIn.social({
 			provider: 'github',
-			callbackURL: destination,
+			callbackURL: destination
 		});
 		pending = false;
 		if (err) error = err.message ?? 'GitHub sign-in failed';
@@ -56,49 +64,102 @@
 		event.preventDefault();
 		pending = true;
 		error = '';
+		notice = '';
 		const { error: err } = await authClient.signIn.magicLink({ email, callbackURL: destination });
 		pending = false;
 		if (err) error = err.message ?? 'Could not send the link';
-		else error = 'Check your email for a sign-in link.';
+		else notice = 'Check your email for a sign-in link.';
 	}
 </script>
 
-<main class="flex min-h-svh items-center justify-center p-6">
-	<Card.Root class="w-full max-w-sm">
-		<Card.Header>
-			<Card.Title>Sign in to Skiff</Card.Title>
-			<Card.Description>Passkeys and GitHub are the primary sign-in methods. Invite only.</Card.Description>
-		</Card.Header>
-		<Card.Content class="space-y-4">
-			<Button class="w-full" disabled={pending} onclick={signInWithPasskey}>Sign in with a passkey</Button>
-			<Button class="w-full" variant="outline" disabled={pending} onclick={signInWithGitHub}>
-				Continue with GitHub
-			</Button>
+<svelte:head>
+	<title>Sign in · Skiff</title>
+</svelte:head>
 
-			<form class="space-y-3 border-t pt-4" onsubmit={sendMagicLink}>
-				<div class="space-y-1">
-					<Label for="magic-email">Email a sign-in link</Label>
-					<Input id="magic-email" type="email" autocomplete="email" bind:value={email} required />
-				</div>
-				<Button type="submit" variant="secondary" class="w-full" disabled={pending}>Send magic link</Button>
-			</form>
+<AuthShell
+	eyebrow="Invite only"
+	title="Sign in to Skiff"
+	description="Use a passkey or GitHub. No account? Ask an organisation owner for an invitation."
+>
+	<div class="space-y-3">
+		<Button size="lg" class="h-10 w-full" disabled={pending} onclick={signInWithPasskey}>
+			<FingerprintIcon aria-hidden="true" />
+			Sign in with a passkey
+		</Button>
+		<Button
+			size="lg"
+			variant="outline"
+			class="h-10 w-full"
+			disabled={pending}
+			onclick={signInWithGitHub}
+		>
+			<GitHubMark />
+			Continue with GitHub
+		</Button>
+	</div>
 
-			{#if data.devPasswordLogin}
-				<form class="space-y-3 border-t pt-4" onsubmit={signInWithPassword}>
-					<p class="text-xs text-muted-foreground">Development sign-in (disabled in production)</p>
-					<div class="space-y-1">
-						<Label for="email">Email</Label>
-						<Input id="email" type="email" autocomplete="username" bind:value={email} required />
-					</div>
-					<div class="space-y-1">
-						<Label for="password">Password</Label>
-						<Input id="password" type="password" autocomplete="current-password" bind:value={password} required />
-					</div>
-					<Button type="submit" class="w-full" disabled={pending}>Sign in</Button>
-				</form>
-			{/if}
+	<div class="my-6 flex items-center gap-3" aria-hidden="true">
+		<span class="h-px flex-1 bg-border"></span>
+		<span class="eyebrow">or email</span>
+		<span class="h-px flex-1 bg-border"></span>
+	</div>
 
-			{#if error}<p class="text-sm text-destructive">{error}</p>{/if}
-		</Card.Content>
-	</Card.Root>
-</main>
+	<form class="space-y-3" onsubmit={sendMagicLink}>
+		<div class="space-y-1.5">
+			<Label for="magic-email">Email address</Label>
+			<Input
+				id="magic-email"
+				type="email"
+				autocomplete="email"
+				placeholder="you@example.com"
+				class="h-10"
+				bind:value={email}
+				required
+			/>
+		</div>
+		<Button type="submit" variant="secondary" size="lg" class="h-10 w-full" disabled={pending}>
+			<MailIcon aria-hidden="true" />
+			Email me a sign-in link
+		</Button>
+	</form>
+
+	{#if data.devPasswordLogin}
+		<form
+			class="mt-6 space-y-3 rounded-xl border border-dashed border-warning/50 bg-warning-soft/40 p-4"
+			onsubmit={signInWithPassword}
+		>
+			<p class="eyebrow text-warning-soft-foreground">Development sign-in</p>
+			<div class="space-y-1.5">
+				<Label for="email">Email</Label>
+				<Input
+					id="email"
+					type="email"
+					autocomplete="username"
+					class="bg-card"
+					bind:value={email}
+					required
+				/>
+			</div>
+			<div class="space-y-1.5">
+				<Label for="password">Password</Label>
+				<Input
+					id="password"
+					type="password"
+					autocomplete="current-password"
+					class="bg-card"
+					bind:value={password}
+					required
+				/>
+			</div>
+			<Button type="submit" class="w-full" disabled={pending}>Sign in</Button>
+			<p class="text-[11px] text-muted-foreground">Disabled in production.</p>
+		</form>
+	{/if}
+
+	{#if error}<Notice tone="danger" class="mt-5">{error}</Notice>{/if}
+	{#if notice}<Notice tone="success" class="mt-5">{notice}</Notice>{/if}
+
+	{#snippet footer()}
+		Signed-in sessions can be reviewed and revoked at any time under Settings → Account.
+	{/snippet}
+</AuthShell>

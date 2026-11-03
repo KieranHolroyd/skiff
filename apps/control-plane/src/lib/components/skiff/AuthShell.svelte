@@ -50,15 +50,16 @@
 			</p>
 			<ul class="space-y-2.5 text-sm text-sidebar-muted">
 				<li class="flex gap-3">
-					<span class="mt-2 size-1 shrink-0 rounded-full bg-brand"></span>Instant subdomains, immutable
-					preview URLs.
+					<span class="mt-2 size-1 shrink-0 rounded-full bg-brand"></span>Instant subdomains,
+					immutable preview URLs.
 				</li>
 				<li class="flex gap-3">
-					<span class="mt-2 size-1 shrink-0 rounded-full bg-brand"></span>Zero-cost promote and rollback.
+					<span class="mt-2 size-1 shrink-0 rounded-full bg-brand"></span>Zero-cost promote and
+					rollback.
 				</li>
 				<li class="flex gap-3">
-					<span class="mt-2 size-1 shrink-0 rounded-full bg-brand"></span>One control plane for the CLI,
-					REST and MCP.
+					<span class="mt-2 size-1 shrink-0 rounded-full bg-brand"></span>One control plane for the
+					CLI, REST and MCP.
 				</li>
 			</ul>
 		</div>
