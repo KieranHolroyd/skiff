@@ -23,6 +23,10 @@ Environment=NODE_ENV=production
 Environment=SOCKET_PATH=/run/skiff/control.sock
 Environment=PROTOCOL_HEADER=x-forwarded-proto
 Environment=HOST_HEADER=x-forwarded-host
+# adapter-bun caps request bodies at 512 KB unless told otherwise, which makes Bun reject
+# any local-store artifact upload over that with a bare 413. Allow the full artifact limit
+# (limits.artifactBytes, 500 MiB) plus headroom; the upload route enforces the real limit.
+Environment=BODY_SIZE_LIMIT=520M
 Environment=SKIFF_MASTER_KEY_FILE=%d/master-key
 # The master key is delivered as a systemd credential, not through the environment.
 LoadCredential=master-key:/etc/skiff/master.key
@@ -35,7 +39,7 @@ TimeoutStopSec=35
 KillSignal=SIGTERM
 LimitNOFILE=65535
 TasksMax=256
-MemoryMax=512M
+MemoryMax=1G
 
 # Sandboxing. ProtectSystem=strict makes everything read-only except the paths below;
 # the control plane only writes its SQLite/DuckDB data and the runtime socket.

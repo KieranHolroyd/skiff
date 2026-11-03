@@ -470,6 +470,7 @@ Environment=NODE_ENV=production
 Environment=SOCKET_PATH=${RUN_DIR}/control.sock
 Environment=PROTOCOL_HEADER=x-forwarded-proto
 Environment=HOST_HEADER=x-forwarded-host
+Environment=BODY_SIZE_LIMIT=520M
 Environment=SKIFF_MASTER_KEY_FILE=%d/master-key
 LoadCredential=master-key:${MASTER_KEY_FILE}
 ExecStart=${OPT_DIR}/current/runtime/bun ${OPT_DIR}/current/repo/apps/control-plane/build/index.js
@@ -479,7 +480,7 @@ TimeoutStopSec=35
 KillSignal=SIGTERM
 LimitNOFILE=65535
 TasksMax=256
-MemoryMax=512M
+MemoryMax=1G
 NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes

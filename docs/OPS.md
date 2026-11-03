@@ -85,6 +85,7 @@ root:skiff`.
 | `SOCKET_PATH` | `/run/skiff/control.sock` | no | adapter-bun unix socket (D37), set by the unit. |
 | `PROTOCOL_HEADER` | `x-forwarded-proto` | no | Trust Caddy's forwarded protocol, set by the unit. |
 | `HOST_HEADER` | `x-forwarded-host` | no | Trust Caddy's forwarded host, set by the unit. |
+| `BODY_SIZE_LIMIT` | `520M` | no | adapter-bun request body cap, set by the unit. Its 512 KB default would reject artifact uploads with a bare 413; 520M covers the 500 MiB artifact limit, which the upload route enforces. |
 
 ### 2.2 Secrets
 
@@ -135,7 +136,8 @@ account-wide key. Presigned uploads use the same credentials through the control
 | `SKIFF_FORCE_OS` | `0` | Installer: override the Debian 13 check. |
 
 Units also set `SOCKET_PATH=/run/skiff/control.sock`, `PROTOCOL_HEADER=x-forwarded-proto`
-and `HOST_HEADER=x-forwarded-host` (D37), plus
+and `HOST_HEADER=x-forwarded-host` (D37), `BODY_SIZE_LIMIT=520M` (so artifact uploads
+are not capped at adapter-bun's 512 KB default), plus
 `SKIFF_MASTER_KEY_FILE=%d/master-key` (the systemd credential path).
 
 ---
@@ -587,7 +589,7 @@ minutes, not hours. Cloudflare Tunnel backup ingress and DNS failover are future
 | `RestrictSUIDSGID=yes` | Files created by the service cannot gain setuid/setgid bits. |
 | `LockPersonality=yes`, `SystemCallArchitectures=native` | No 32-bit ABI or personality switching. |
 | `SystemCallFilter=@system-service + io_uring` | Removes privileged/mount/obsolete syscalls. Bun needs the io_uring syscalls on some kernels; they are explicitly allowed. If a future Bun release adds a syscall, add it here rather than dropping the filter. |
-| `MemoryMax=` | Control plane 512 MB, agent 192 MB, Caddy 256 MB, Litestream 256 MB, drill 1 GB. Bounds a runaway DuckDB/Bun/Caddy process on a 4 GB VPS. |
+| `MemoryMax=` | Control plane 1 GB (room to buffer a full 500 MiB artifact upload), agent 192 MB, Caddy 256 MB, Litestream 256 MB, drill 1 GB. Bounds a runaway DuckDB/Bun/Caddy process on a 4 GB VPS. |
 | `TasksMax=`, `LimitNOFILE=` | Prevents fork/descriptor exhaustion. |
 | `LoadCredential=master-key:…` | The master key is placed in the service's credential directory (`%d`), not the environment, and is not readable by other services. `/etc/skiff/master.key` stays `0400 root`. |
 | `CapabilityBoundingSet=` (empty) | Control plane, agent, Litestream and drill have no capabilities. Only Caddy keeps `CAP_NET_BIND_SERVICE`. |
