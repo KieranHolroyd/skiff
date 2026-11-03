@@ -1,0 +1,488 @@
+#!/usr/bin/env bun
+/**
+ * skiff-update-self: pull the latest Skiff from GitHub, build it next to the running release,
+ * prove it boots, then hot-swap the control plane with automatic rollback.
+ *
+ * Installed by the installer as /usr/local/sbin/skiff-update-self, which runs this file from the
+ * *current* (known-good) release, so a broken updater in a new release can never block its own
+ * rollback.
+ */
+import { randomBytes } from 'node:crypto';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import {
+	AGENT,
+	CONTROL_PLANE,
+	type Host,
+	type RollbackResult,
+	type UpdateResult,
+	RecoveryError,
+	UpdateError,
+	Updater,
+	layoutFromEnv,
+} from './updater.ts';
+
+const USAGE = `skiff-update-self — update the Skiff control plane from GitHub, reversibly
+
+Usage:
+  skiff-update-self [update] [options]   build the latest commit and swap it in
+  skiff-update-self rollback [options]   switch back to the previous release (repeat to undo)
+  skiff-update-self status [--json]      show current/previous releases and the last switch
+
+update options:
+  --ref <ref>          branch, tag or sha (default: the ref the current release was built from, else main)
+  --repo <owner/name>  GitHub repository (default: from the current release, else KieranHolroyd/skiff)
+  --force              rebuild even if up to date, or retry a commit that failed before
+  --with-agent         also restart skiff-agent on the new release (and back on rollback)
+  --no-canary          skip the isolated pre-swap boot against a copy of the database
+  --require-public     the public URL must answer after the swap (default: only if it did before)
+  --no-public-check    never gate on the public URL
+  --dry-run            resolve the commit and print the plan; change nothing
+
+rollback options:
+  --restore-db         also restore the database snapshot taken when the current release was activated
+  --keep-db            run the previous code against the current (possibly newer) schema
+  --with-agent         also restart skiff-agent
+  --dry-run            print the plan; change nothing
+
+Environment:
+  SKIFF_GITHUB_TOKEN   token for a private repository (or put it in /etc/skiff/github.token, 0600)
+  SKIFF_REPO, SKIFF_REF  defaults for --repo / --ref
+
+Exit status: 0 updated / up to date / nothing to do, 1 nothing changed or rolled back to the old
+release (it is serving), 2 the old release could not be brought back (act now), 64 usage error.
+`;
+
+const layout = layoutFromEnv();
+const ETC_DIR = process.env.SKIFF_ETC_DIR ?? '/etc/skiff';
+const RUN_DIR = process.env.SKIFF_RUN_DIR ?? '/run/skiff';
+const ENV_FILE = join(ETC_DIR, 'skiff.env');
+const AGENT_ENV_FILE = join(ETC_DIR, 'agent.env');
+const MASTER_KEY_FILE = join(ETC_DIR, 'master.key');
+const CONTROL_SOCKET = join(RUN_DIR, 'control.sock');
+
+const tty = process.stdout.isTTY;
+const paint = (code: number) => (s: string) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
+const dim = paint(2);
+const yellow = paint(33);
+const red = paint(31);
+const bold = paint(1);
+
+// ------------------------------------------------------------------ CLI parsing
+
+const argv = process.argv.slice(2);
+const command = argv[0] && !argv[0].startsWith('-') ? argv.shift()! : 'update';
+const known = new Set([
+	'--ref',
+	'--repo',
+	'--force',
+	'--with-agent',
+	'--no-canary',
+	'--require-public',
+	'--no-public-check',
+	'--dry-run',
+	'--restore-db',
+	'--keep-db',
+	'--json',
+	'--help',
+	'-h',
+]);
+const withValue = new Set(['--ref', '--repo']);
+for (let i = 0; i < argv.length; i++) {
+	if (!known.has(argv[i]!)) usageError(`unknown option ${argv[i]}`);
+	if (withValue.has(argv[i]!)) {
+		if (!argv[i + 1] || argv[i + 1]!.startsWith('-')) usageError(`${argv[i]} needs a value`);
+		i++;
+	}
+}
+const flag = (name: string) => argv.includes(name);
+const option = (name: string) => {
+	const index = argv.indexOf(name);
+	return index >= 0 ? argv[index + 1] : undefined;
+};
+
+function usageError(text: string): never {
+	console.error(`skiff-update-self: ${text}\n\n${USAGE}`);
+	process.exit(64);
+}
+
+// ------------------------------------------------------------------- real host
+
+function readEnvFile(path: string): Map<string, string> {
+	const map = new Map<string, string>();
+	if (!existsSync(path)) return map;
+	for (const raw of readFileSync(path, 'utf8').split(/\r?\n/)) {
+		const line = raw.trim();
+		if (!line || line.startsWith('#')) continue;
+		const index = line.indexOf('=');
+		if (index > 0) map.set(line.slice(0, index), line.slice(index + 1));
+	}
+	return map;
+}
+
+function run(
+	cmd: string[],
+	opts: { cwd?: string; quiet?: boolean; allowFailure?: boolean; env?: Record<string, string> } = {},
+): { code: number; stdout: string; stderr: string } {
+	if (!opts.quiet) console.log(dim(`  $ ${cmd.join(' ')}`));
+	const result = Bun.spawnSync({
+		cmd,
+		cwd: opts.cwd,
+		env: { ...process.env, PATH: `${dirname(layout.bunBin)}:${process.env.PATH ?? ''}`, ...opts.env },
+		stdout: opts.quiet ? 'pipe' : 'inherit',
+		stderr: opts.quiet ? 'pipe' : 'inherit',
+	});
+	const out = {
+		code: result.exitCode ?? 1,
+		stdout: result.stdout ? new TextDecoder().decode(result.stdout).trim() : '',
+		stderr: result.stderr ? new TextDecoder().decode(result.stderr).trim() : '',
+	};
+	if (out.code !== 0 && !opts.allowFailure)
+		throw new Error(`${cmd.join(' ')} exited ${out.code}${out.stderr ? `: ${out.stderr}` : ''}`);
+	return out;
+}
+
+function githubToken(): string | undefined {
+	if (process.env.SKIFF_GITHUB_TOKEN) return process.env.SKIFF_GITHUB_TOKEN;
+	const file = join(ETC_DIR, 'github.token');
+	return existsSync(file) ? readFileSync(file, 'utf8').trim() || undefined : undefined;
+}
+
+function githubHeaders(accept: string): Record<string, string> {
+	const token = githubToken();
+	return {
+		Accept: accept,
+		'User-Agent': 'skiff-update-self',
+		'X-GitHub-Api-Version': '2022-11-28',
+		...(token ? { Authorization: `Bearer ${token}` } : {}),
+	};
+}
+
+const platformOrigin = () => readEnvFile(ENV_FILE).get('SKIFF_PLATFORM_ORIGIN')?.replace(/\/$/, '');
+
+/**
+ * Healthy = `/api/setup/status` returns the setup JSON (proves the app booted and can query SQLite)
+ * and `/login` renders without a server error (proves SSR works).
+ */
+async function socketHealthy(socket: string): Promise<boolean> {
+	const origin = platformOrigin() ?? 'http://localhost';
+	const host = new URL(origin).host;
+	const headers = { Host: host, 'X-Forwarded-Proto': 'https', 'X-Forwarded-Host': host };
+	try {
+		const status = await fetch('http://localhost/api/setup/status', {
+			unix: socket,
+			headers,
+			signal: AbortSignal.timeout(3_000),
+		});
+		if (status.status !== 200) return false;
+		const body = (await status.json()) as { needsSetup?: unknown };
+		if (typeof body.needsSetup !== 'boolean') return false;
+		const login = await fetch('http://localhost/login', {
+			unix: socket,
+			headers,
+			redirect: 'manual',
+			signal: AbortSignal.timeout(5_000),
+		});
+		await login.arrayBuffer();
+		return login.status < 500;
+	} catch {
+		return false;
+	}
+}
+
+async function poll(check: () => Promise<boolean>, timeoutMs: number, everyMs = 1_000): Promise<boolean> {
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
+		if (await check()) return true;
+		if (Date.now() + everyMs > deadline) return false;
+		await Bun.sleep(everyMs);
+	}
+}
+
+const unitState = (unit: string) =>
+	run(['systemctl', 'is-active', unit], { quiet: true, allowFailure: true }).stdout;
+
+const SHIELDED = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+// Root has no @types/node, so Bun's `process.on` typing only knows `memoryPressure`.
+const signals = process as unknown as { on(e: string, l: () => void): void; off(e: string, l: () => void): void };
+let shield: (() => void) | null = null;
+
+const host: Host = {
+	log: (text) => console.log(`${dim('  •')} ${text}`),
+	warn: (text) => console.error(`${yellow('  !')} ${text}`),
+	now: () => new Date(),
+	sleep: (ms) => Bun.sleep(ms),
+
+	async resolveCommit(repo, ref) {
+		const response = await fetch(`https://api.github.com/repos/${repo}/commits/${encodeURIComponent(ref)}`, {
+			headers: githubHeaders('application/vnd.github.sha'),
+			signal: AbortSignal.timeout(20_000),
+		});
+		if (!response.ok)
+			throw new UpdateError(
+				`GitHub ${response.status} resolving ${repo}@${ref}${response.status === 404 ? ' (private repo? set SKIFF_GITHUB_TOKEN)' : ''}`,
+			);
+		return (await response.text()).trim();
+	},
+
+	async fetchSource(repo, commit, dest) {
+		const response = await fetch(`https://api.github.com/repos/${repo}/tarball/${commit}`, {
+			headers: githubHeaders('application/vnd.github+json'),
+			signal: AbortSignal.timeout(300_000),
+		});
+		if (!response.ok) throw new UpdateError(`GitHub ${response.status} downloading ${repo}@${commit}`);
+		const archive = `${dest}.tar.gz`;
+		await Bun.write(archive, response);
+		try {
+			run(['tar', '-xzf', archive, '-C', dest, '--strip-components=1', '--no-same-owner'], { quiet: true });
+		} finally {
+			rmSync(archive, { force: true });
+		}
+		if (!existsSync(join(dest, 'apps', 'control-plane', 'package.json')))
+			throw new UpdateError(`${repo}@${commit} does not look like Skiff (no apps/control-plane)`);
+	},
+
+	async build(repoDir) {
+		const bun = layout.bunBin;
+		run([bun, 'install', '--frozen-lockfile'], { cwd: repoDir });
+		run([bun, 'run', '--cwd', 'apps/control-plane', 'build'], { cwd: repoDir });
+		run([bun, 'run', '--cwd', 'apps/agent', 'build'], { cwd: repoDir });
+	},
+
+	/**
+	 * Transient unit with the production identity and sandbox, but its own socket and data dir.
+	 * The environment is written to a file (not --setenv) so secrets stay off the command line, and
+	 * every override is in that one file: with EnvironmentFile= and Environment= both set, systemd
+	 * lets the file win, which could otherwise point the canary at the live database.
+	 */
+	async canary(release, scratch) {
+		const unit = `skiff-update-canary-${randomBytes(4).toString('hex')}`;
+		const socket = join(scratch, 'control.sock');
+		const env = readEnvFile(ENV_FILE);
+		// No outbound side effects from the copy: no email, alerts, R2 writes or backups.
+		for (const key of [...env.keys()])
+			if (/^(SKIFF_SMTP_|SKIFF_ALERT_|R2_|SKIFF_R2_)/.test(key)) env.delete(key);
+		env.set('SKIFF_OBJECT_STORE', 'local');
+		env.set('SKIFF_DAILY_BACKUPS', '0');
+		env.set('SKIFF_DATA_DIR', join(scratch, 'data'));
+		env.set('SKIFF_MASTER_KEY_FILE', `/run/credentials/${unit}.service/master-key`);
+		env.set('SOCKET_PATH', socket);
+		env.set('NODE_ENV', 'production');
+		env.set('PROTOCOL_HEADER', 'x-forwarded-proto');
+		env.set('HOST_HEADER', 'x-forwarded-host');
+		// The sandbox makes $HOME read-only; do not let Bun try to write its transpiler cache there.
+		env.set('BUN_RUNTIME_TRANSPILER_CACHE_PATH', '0');
+		const envFile = join(dirname(scratch), `${unit}.env`);
+		writeFileSync(envFile, `${[...env].map(([k, v]) => `${k}=${v}`).join('\n')}\n`, { mode: 0o600 });
+
+		const props = [
+			'User=skiff',
+			'Group=skiff',
+			'UMask=0007',
+			`EnvironmentFile=${envFile}`,
+			`LoadCredential=master-key:${MASTER_KEY_FILE}`,
+			`WorkingDirectory=${release}/repo/apps/control-plane`,
+			'NoNewPrivileges=yes',
+			'PrivateTmp=yes',
+			'PrivateDevices=yes',
+			'ProtectSystem=strict',
+			'ProtectHome=yes',
+			`ReadWritePaths=${scratch}`,
+			'MemoryMax=512M',
+			'RuntimeMaxSec=180',
+		];
+		let healthy = false;
+		try {
+			run(
+				[
+					'systemd-run',
+					`--unit=${unit}`,
+					'--quiet',
+					'--collect',
+					...props.map((p) => `--property=${p}`),
+					'--',
+					`${release}/runtime/bun`,
+					`${release}/repo/apps/control-plane/build/index.js`,
+				],
+				{ quiet: true },
+			);
+			healthy = await poll(async () => {
+				const state = unitState(unit);
+				if (state !== 'active' && state !== 'activating') throw new Error(`canary exited (${state || 'gone'})`);
+				return socketHealthy(socket);
+			}, 90_000).catch(() => false);
+			if (healthy) {
+				await Bun.sleep(3_000);
+				healthy = unitState(unit) === 'active' && (await socketHealthy(socket));
+			}
+		} finally {
+			run(['systemctl', 'stop', unit], { quiet: true, allowFailure: true });
+			rmSync(envFile, { force: true });
+		}
+		if (!healthy) {
+			const logs = run(['journalctl', '-u', unit, '-n', '60', '--no-pager', '-o', 'cat'], {
+				quiet: true,
+				allowFailure: true,
+			}).stdout;
+			throw new UpdateError(`the new release did not become healthy in isolation\n${logs}`);
+		}
+	},
+
+	async start(unit) {
+		run(['systemctl', 'start', unit]);
+	},
+	async stop(unit) {
+		run(['systemctl', 'stop', unit], { allowFailure: true });
+	},
+	async restart(unit) {
+		run(['systemctl', 'restart', unit]);
+	},
+	async isActive(unit) {
+		return unitState(unit) === 'active';
+	},
+	async restartCount(unit) {
+		return Number(run(['systemctl', 'show', '-p', 'NRestarts', '--value', unit], { quiet: true, allowFailure: true }).stdout) || 0;
+	},
+	controlPlaneHealthy: (timeoutMs) => poll(() => socketHealthy(CONTROL_SOCKET), timeoutMs),
+	publicHealthy(timeoutMs) {
+		const origin = platformOrigin();
+		if (!origin) return Promise.resolve(false);
+		return poll(async () => {
+			try {
+				const response = await fetch(`${origin}/api/setup/status`, { signal: AbortSignal.timeout(10_000) });
+				await response.arrayBuffer();
+				return response.ok;
+			} catch {
+				return false;
+			}
+		}, timeoutMs, 2_000);
+	},
+	agentEnrolled: () => existsSync(AGENT_ENV_FILE),
+	chownToSkiff(path) {
+		run(['chown', '-R', 'skiff:skiff', path], { quiet: true });
+	},
+	freeBytes(path) {
+		const line = run(['df', '-Pk', path], { quiet: true }).stdout.split('\n')[1] ?? '';
+		return Number(line.trim().split(/\s+/)[3] ?? 0) * 1024;
+	},
+	enterCritical() {
+		if (shield) return;
+		shield = () => host.warn('swap in progress; ignoring the signal so it can finish or roll back');
+		for (const signal of SHIELDED) signals.on(signal, shield);
+	},
+	leaveCritical() {
+		if (!shield) return;
+		for (const signal of SHIELDED) signals.off(signal, shield);
+		shield = null;
+	},
+};
+
+// ------------------------------------------------------------------- commands
+
+function preflight(): void {
+	if (process.platform !== 'linux') throw new UpdateError('skiff-update-self runs on the Skiff host (Linux).');
+	if (process.getuid?.() !== 0) throw new UpdateError('Run as root: sudo skiff-update-self');
+	if (!existsSync('/run/systemd/system')) throw new UpdateError('systemd is required.');
+	if (!existsSync(layout.bunBin)) throw new UpdateError(`Bun not found at ${layout.bunBin}.`);
+}
+
+function describe(path: string | undefined, meta: { commit?: string; builtAt?: string; ref?: string; status?: string }) {
+	if (!path) return dim('none');
+	const parts = [meta.commit ? meta.commit.slice(0, 12) : 'unknown commit', meta.ref, meta.builtAt && `built ${meta.builtAt}`];
+	return `${path.split('/').pop()} ${dim(`(${parts.filter(Boolean).join(', ')})`)}`;
+}
+
+function exitCodeForUpdate(result: UpdateResult): number {
+	switch (result.status) {
+		case 'updated':
+		case 'up-to-date':
+		case 'skipped':
+		case 'dry-run':
+			return 0;
+		case 'rolled-back':
+			return result.recovered ? 1 : 2;
+		default:
+			return 1;
+	}
+}
+
+function exitCodeForRollback(result: RollbackResult): number {
+	if (result.status === 'reverted') return result.recovered ? 1 : 2;
+	return 0;
+}
+
+async function main(): Promise<number> {
+	if (flag('--help') || flag('-h') || command === 'help') {
+		console.log(USAGE);
+		return 0;
+	}
+	const updater = new Updater(layout, host);
+
+	if (command === 'status') {
+		const status = updater.status();
+		if (flag('--json')) {
+			console.log(JSON.stringify(status, null, 2));
+			return 0;
+		}
+		console.log(`${bold('current ')} ${describe(status.current?.path, status.current?.meta ?? {})}`);
+		console.log(`${bold('previous')} ${describe(status.previous?.path, status.previous?.meta ?? {})}`);
+		const last = status.state.lastSwitch;
+		if (last)
+			console.log(`${bold('last    ')} ${last.kind} ${last.from.split('/').pop()} -> ${last.to.split('/').pop()} at ${last.at}${last.snapshot ? dim(` (db snapshot ${last.snapshot})`) : ''}`);
+		if (status.state.inProgress) console.log(yellow(`interrupted ${status.state.inProgress.kind}; the next command will recover it`));
+		for (const [commit, failure] of Object.entries(status.state.failedCommits))
+			console.log(`${red('failed  ')} ${commit.slice(0, 12)} at ${failure.at}: ${failure.reason}`);
+		return 0;
+	}
+
+	preflight();
+
+	if (command === 'update') {
+		console.log(bold('Skiff self-update'));
+		const publicCheck = flag('--no-public-check') ? 'skip' : flag('--require-public') ? 'require' : 'auto';
+		const result = await updater.update({
+			repo: option('--repo') ?? process.env.SKIFF_REPO,
+			ref: option('--ref') ?? process.env.SKIFF_REF,
+			force: flag('--force'),
+			withAgent: flag('--with-agent'),
+			canary: !flag('--no-canary'),
+			dryRun: flag('--dry-run'),
+			publicCheck,
+		});
+		if (result.status === 'build-failed' || result.status === 'canary-failed') console.error(red(result.reason));
+		if (result.status === 'rolled-back')
+			console.error(
+				result.recovered
+					? yellow(`Rolled back: ${result.reason}. The previous release is serving; ${result.commit.slice(0, 12)} will be skipped until --force.`)
+					: red(`Rollback did not recover the control plane (${result.reason}). Run: journalctl -u ${CONTROL_PLANE} -n 200`),
+			);
+		return exitCodeForUpdate(result);
+	}
+
+	if (command === 'rollback') {
+		console.log(bold('Skiff rollback'));
+		const result = await updater.rollback({
+			restoreDb: flag('--restore-db'),
+			keepDb: flag('--keep-db'),
+			withAgent: flag('--with-agent'),
+			dryRun: flag('--dry-run'),
+		});
+		if (result.status === 'reverted')
+			console.error(
+				result.recovered
+					? yellow(`The previous release was unhealthy (${result.reason}); still on the current release.`)
+					: red(`Neither release is healthy (${result.reason}). Run: journalctl -u ${CONTROL_PLANE} -u ${AGENT} -n 200`),
+			);
+		return exitCodeForRollback(result);
+	}
+
+	usageError(`unknown command ${command}`);
+}
+
+main().then(
+	(code) => process.exit(code),
+	(error: unknown) => {
+		console.error(red(`skiff-update-self: ${error instanceof Error ? error.message : String(error)}`));
+		process.exit(error instanceof RecoveryError ? 2 : 1);
+	},
+);

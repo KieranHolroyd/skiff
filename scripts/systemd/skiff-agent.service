@@ -1,0 +1,68 @@
+[Unit]
+Description=Skiff node agent
+Documentation=https://github.com/kieranholroyd/private-cloud-deploys/blob/main/docs/OPS.md
+After=network-online.target skiff-caddy.service
+Wants=network-online.target
+# A node that has not joined yet must not crash-loop. `skiff-agent join` writes this file
+# and then starts the unit.
+ConditionPathExists=/etc/skiff/agent.env
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=skiff
+Group=skiff
+# skiff-caddy is the supplementary group that grants:
+#   - read/write access to /run/skiff/agent.sock (created in a setgid dir)
+#   - connect access to Caddy's admin socket /run/skiff/caddy-admin.sock
+SupplementaryGroups=skiff-caddy
+UMask=0007
+WorkingDirectory=/opt/skiff/current/agent
+
+# The shared file carries the cookie secret and common settings. agent.env is written by
+# `skiff-agent join` and overrides SKIFF_DATA_DIR with the agent's own cache directory.
+EnvironmentFile=/etc/skiff/skiff.env
+EnvironmentFile=-/etc/skiff/agent.env
+Environment=SKIFF_DATA_DIR=/var/lib/skiff/agent
+Environment=SKIFF_AGENT_SOCKET=/run/skiff/agent.sock
+Environment=SKIFF_CADDY_ADMIN_SOCKET=/run/skiff/caddy-admin.sock
+
+ExecStart=/opt/skiff/current/agent/skiff-agent
+
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=20
+KillSignal=SIGTERM
+LimitNOFILE=65535
+TasksMax=128
+MemoryMax=192M
+
+# The agent reads /proc for node metrics and Caddy's access logs, but writes only its
+# release cache and the runtime socket. It never needs root (D26).
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service io_uring_setup io_uring_enter io_uring_register
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+ReadWritePaths=/var/lib/skiff /srv/skiff /run/skiff
+
+[Install]
+WantedBy=multi-user.target

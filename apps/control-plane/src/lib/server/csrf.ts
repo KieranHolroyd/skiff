@@ -18,14 +18,23 @@ const COOKIELESS_ENDPOINTS = new Set([
 	'/api/auth/oauth2/register',
 	'/api/auth/oauth2/revoke',
 	'/api/auth/oauth2/introspect',
+	'/api/v1/cli/token',
 	'/mcp',
+	'/_skiff/site-login',
 ]);
+
+/**
+ * Prefixes of endpoints authenticated exclusively by a bearer/signature (node tokens, presigned
+ * object URLs, one-time site tokens). A cross-site request gains nothing there.
+ */
+const COOKIELESS_PREFIXES = ['/api/agent/', '/api/objects/', '/api/v1/site-access'];
 
 export type CsrfDecision = { ok: true } | { ok: false; reason: string };
 
 export function checkCsrf(request: Request, url: URL, platformOrigin: string): CsrfDecision {
 	if (SAFE_METHODS.has(request.method)) return { ok: true };
 	if (COOKIELESS_ENDPOINTS.has(url.pathname)) return { ok: true };
+	if (COOKIELESS_PREFIXES.some((prefix) => url.pathname.startsWith(prefix))) return { ok: true };
 
 	const origin = request.headers.get('origin');
 	if (origin) {

@@ -1,0 +1,17 @@
+{
+	"name": "@skiff/db",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"exports": { ".": "./src/index.ts", "./schema": "./src/schema.ts" },
+	"scripts": {
+		"check": "tsc -p . --noEmit",
+		"generate": "bun scripts/generate-migrations.ts"
+	},
+	"dependencies": {
+		"drizzle-orm": "^0.45.1"
+	},
+	"devDependencies": {
+		"drizzle-kit": "^0.31.7"
+	}
+}

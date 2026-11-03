@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test and type-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.0'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Test
+        run: bun test
+
+      - name: Type-check and lint
+        run: bun run check
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build the CLI and smoke-test it under Node
+        working-directory: apps/cli
+        run: |
+          bun run build
+          node dist/skif.js --version
+          node dist/skif.js --help >/dev/null
+          npm pack --dry-run
+
+  e2e:
+    name: End-to-end (REST + MCP)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.0'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Start control plane
+        working-directory: apps/control-plane
+        env:
+          SKIFF_DEV_PASSWORD_LOGIN: '1'
+          SKIFF_DATA_DIR: .data-ci
+          SKIFF_PLATFORM_ORIGIN: http://localhost:5173
+          SKIFF_CONTENT_DOMAIN: localhost
+          BETTER_AUTH_SECRET: ci-secret-0123456789abcdef0123456789
+        run: |
+          bun run dev -- --port 5173 &
+          echo $! > /tmp/skiff-cp.pid
+          for i in $(seq 1 90); do
+            curl -sf http://localhost:5173/api/setup/status >/dev/null && exit 0
+            sleep 1
+          done
+          echo "control plane did not start" >&2
+          exit 1
+
+      - name: REST + agent e2e
+        working-directory: apps/control-plane
+        run: SKIFF_BASE=http://localhost:5173 bun tests/rest.e2e.ts
+
+      - name: MCP OAuth e2e
+        working-directory: apps/control-plane
+        run: SKIFF_BASE=http://localhost:5173 bun tests/mcp-oauth.e2e.ts
+
+      - name: Stop control plane
+        if: always()
+        run: kill "$(cat /tmp/skiff-cp.pid)" 2>/dev/null || true
+
+  shellcheck:
+    name: Shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends shellcheck
+
+      - name: Check installer and ops scripts
+        run: shellcheck -s sh scripts/*.sh

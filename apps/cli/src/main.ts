@@ -1,27 +1,135 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * Skiff CLI. Published as the `skif` npm package and installed under two command names,
  * `skif` and `skiff` (D33), both pointing at this entrypoint.
- *
- * Commands (ROADMAP v1): login, deploy (presigned upload), status. Not implemented yet.
  */
 import pkg from '../package.json' with { type: 'json' };
+import { ApiError, CliError } from './errors.ts';
+import { configCommand } from './commands/config.ts';
+import { deployCommand } from './commands/deploy.ts';
+import { deploymentsCommand } from './commands/deployments.ts';
+import { loginCommand } from './commands/login.ts';
+import { logoutCommand } from './commands/logout.ts';
+import { logsCommand } from './commands/logs.ts';
+import { openCommand } from './commands/open.ts';
+import { projectsCommand } from './commands/projects.ts';
+import { promoteCommand } from './commands/promote.ts';
+import { rollbackCommand } from './commands/rollback.ts';
+import { statusCommand } from './commands/status.ts';
 
-// Symlinked bins resolve to this file's path, so the invoked name isn't recoverable; use the canonical one.
 const invokedAs = 'skif';
-const [command] = process.argv.slice(2);
 
-switch (command) {
-	case undefined:
-	case '--help':
-	case '-h':
-		console.log(`${invokedAs} ${pkg.version}\n\nUsage: ${invokedAs} <command>   (\`skiff\` works too)\n\nCommands:\n  login     Sign in to a Skiff platform (not implemented yet)\n  deploy    Deploy a directory (not implemented yet)\n  status    Show platform and project status (not implemented yet)\n  --version Print the version`);
-		break;
-	case '--version':
-	case '-v':
+const commands: Record<string, (argv: string[]) => Promise<void>> = {
+	login: loginCommand,
+	logout: logoutCommand,
+	config: configCommand,
+	deploy: deployCommand,
+	status: statusCommand,
+	projects: projectsCommand,
+	deployments: deploymentsCommand,
+	promote: promoteCommand,
+	rollback: rollbackCommand,
+	logs: logsCommand,
+	open: openCommand,
+};
+
+const help = `${invokedAs} ${pkg.version} — deploy to your own Skiff cloud
+
+Usage: ${invokedAs} <command> [options]   (\`skiff\` works too)
+
+Commands:
+  login [--url <platform>] [--token <key>]  Sign in (browser by default)
+  logout [--all]                             Forget the API key (settings are kept)
+  config [list|get|set|unset|path]           Inspect or change persistent settings
+  deploy [dir] [options]                     Zip and deploy a directory
+  status [project]                           Fleet health, or one project's status
+  projects                                   List projects
+  deployments <project>                      List deployments
+  promote <project> <deploymentId>           Move production to a deployment
+  rollback <project>                         Move production back one deployment
+  logs <project>                             Show recent project logs
+  open <project>                             Open the site in a browser
+
+Global:
+  -h, --help      Show help (also works per command)
+  -v, --version   Print the version
+
+Environment:
+  SKIFF_URL              Platform URL, e.g. https://control.example.com (overrides the config)
+  SKIFF_TOKEN            API key (overrides the config)
+  SKIFF_CONTENT_DOMAIN   Domain deployed sites use, e.g. sites.example.com (overrides the config)
+
+Settings and credentials are stored at ~/.config/skiff/config.json with mode 0600.
+\`logout\` removes the API key but keeps the URL and domains; \`logout --all\` removes the file.`;
+
+async function run(): Promise<void> {
+	const argv = process.argv.slice(2);
+	const [command, ...rest] = argv;
+	const wantsJson = argv.some((arg) => arg === '--json' || arg.startsWith('--json='));
+
+	if (command === undefined || command === '--help' || command === '-h' || command === 'help') {
+		if (command === 'help' && rest[0] && commands[rest[0]]) {
+			await commands[rest[0]]!(['--help']);
+			return;
+		}
+		console.log(help);
+		return;
+	}
+	if (command === '--version' || command === '-v' || command === 'version') {
 		console.log(pkg.version);
-		break;
-	default:
-		console.error(`${invokedAs}: '${command}' is not implemented yet`);
-		process.exit(1);
+		return;
+	}
+
+	const handler = commands[command];
+	if (!handler) {
+		if (command === 'agent') {
+			console.error(
+				`${invokedAs}: 'agent join' is handled by the Skiff agent installer, not the CLI.`,
+			);
+		} else {
+			console.error(`${invokedAs}: '${command}' is not a command. Run \`${invokedAs} --help\`.`);
+		}
+		process.exitCode = 1;
+		return;
+	}
+
+	try {
+		await handler(rest);
+	} catch (error) {
+		const cliError = toCliError(error);
+		if (wantsJson) {
+			const payload: Record<string, unknown> = {
+				error: {
+					code: cliError.code,
+					message: cliError.message,
+					suggestions: cliError.suggestions,
+				},
+			};
+			if (cliError instanceof ApiError) {
+				payload.error = {
+					...(payload.error as Record<string, unknown>),
+					status: cliError.status,
+					requestId: cliError.requestId,
+				};
+			}
+			console.error(JSON.stringify(payload, null, 2));
+		} else {
+			console.error(`${invokedAs}: ${cliError.message}`);
+			for (const suggestion of cliError.suggestions) console.error(`  ${suggestion}`);
+		}
+		if (process.env.SKIFF_DEBUG === '1') console.error(cliError);
+		process.exitCode = cliError.exitCode;
+	}
 }
+
+function toCliError(error: unknown): CliError {
+	if (error instanceof CliError) return error;
+	if (error instanceof Error) {
+		const wrapped = new CliError(error.message);
+		wrapped.stack = error.stack;
+		return wrapped;
+	}
+	return new CliError(String(error));
+}
+
+await run();

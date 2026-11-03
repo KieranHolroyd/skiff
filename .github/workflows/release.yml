@@ -1,0 +1,236 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  BUN_VERSION: '1.4.0'
+  CADDY_VERSION: '2.11.7'
+  CADDY_DNS_CLOUDFLARE_VERSION: 'v0.2.4'
+  XCADDY_VERSION: 'v0.4.7'
+  GO_VERSION: '1.24'
+
+jobs:
+  control-plane:
+    name: Control plane (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            bun_arch: x64
+            cpu: x64
+          - arch: arm64
+            bun_arch: aarch64
+            cpu: arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install build dependencies
+        run: bun install --frozen-lockfile --linker=hoisted
+
+      - name: Build control plane
+        working-directory: apps/control-plane
+        run: bun run build
+
+      # The adapter-bun output externalises node_modules. Ship a production-only,
+      # hoisted tree at control-plane/node_modules so imports resolve without a
+      # package manager on the VPS. --os/--cpu selects the correct DuckDB native
+      # binding for the target architecture.
+      - name: Install production runtime dependencies
+        run: |
+          rm -rf node_modules apps/*/node_modules packages/*/node_modules spikes/*/node_modules
+          bun install --frozen-lockfile --production --linker=hoisted \
+            --os=linux --cpu=${{ matrix.cpu }}
+          du -sh node_modules
+
+      - name: Fetch the matching Bun runtime for the bundle
+        run: |
+          curl -fsSL --proto '=https' --tlsv1.2 --retry 3 \
+            -o bun-runtime.zip \
+            "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-${{ matrix.bun_arch }}.zip"
+          unzip -q bun-runtime.zip -d bun-runtime
+
+      - name: Stage the release bundle
+        run: |
+          mkdir -p staging/runtime staging/tools staging/scripts
+          cp -a apps/control-plane/build staging/build
+          cp -a node_modules staging/node_modules
+          # Workspace packages were bundled into build/; their symlinks would dangle in
+          # the tarball, so drop them rather than ship broken links. `.bin` is only for
+          # build-time tooling.
+          rm -rf staging/node_modules/@skiff staging/node_modules/.bin
+          cp apps/control-plane/package.json staging/package.json
+          cp -a packages/db/migrations staging/migrations
+          cp -a scripts/systemd staging/systemd
+          cp scripts/litestream.yml staging/litestream.yml
+          cp scripts/skiff-migrate.ts scripts/skiff-db-fingerprint.ts staging/tools/
+          cp scripts/*.sh staging/scripts/
+          cp "bun-runtime/bun-linux-${{ matrix.bun_arch }}/bun" staging/runtime/bun
+          chmod 0755 staging/runtime/bun staging/scripts/*.sh
+          tar -C staging -czf "skiff-control-plane-${VERSION}-linux-${{ matrix.arch }}.tar.gz" .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: control-plane-${{ matrix.arch }}
+          path: skiff-control-plane-*-linux-${{ matrix.arch }}.tar.gz
+          retention-days: 7
+
+  agent:
+    name: Agent (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            bun_arch: x64
+          - arch: arm64
+            bun_arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Compile the agent
+        run: |
+          mkdir -p dist
+          bun build --compile --minify \
+            --target=bun-linux-${{ matrix.bun_arch }} \
+            apps/agent/src/main.ts \
+            --outfile dist/skiff-agent
+          tar -C dist -czf "skiff-agent-${VERSION}-linux-${{ matrix.arch }}.tar.gz" skiff-agent
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-${{ matrix.arch }}
+          path: skiff-agent-*-linux-${{ matrix.arch }}.tar.gz
+          retention-days: 7
+
+  caddy:
+    name: Caddy (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            goarch: amd64
+          - arch: arm64
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Build Caddy with caddy-dns/cloudflare
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          go install "github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}"
+          "$(go env GOPATH)/bin/xcaddy" build "v${CADDY_VERSION}" \
+            --with "github.com/caddy-dns/cloudflare@${CADDY_DNS_CLOUDFLARE_VERSION}" \
+            --output caddy
+          tar -czf "skiff-caddy-${VERSION}-linux-${{ matrix.arch }}.tar.gz" caddy
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: caddy-${{ matrix.arch }}
+          path: skiff-caddy-*-linux-${{ matrix.arch }}.tar.gz
+          retention-days: 7
+
+  publish:
+    name: Sign and publish
+    runs-on: ubuntu-latest
+    needs: [control-plane, agent, caddy]
+    env:
+      # Secrets cannot be referenced directly in `if:`; surface the choice as an env bool.
+      HAS_MINISIGN: ${{ secrets.MINISIGN_SECRET_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Write SHA256SUMS
+        working-directory: dist
+        run: |
+          ls -l
+          sha256sum *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Sign with minisign
+        if: env.HAS_MINISIGN == 'true'
+        working-directory: dist
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PUBLIC_KEY: ${{ secrets.MINISIGN_PUBLIC_KEY }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends minisign
+          test -n "$MINISIGN_PUBLIC_KEY" || { echo "MINISIGN_PUBLIC_KEY must be set when MINISIGN_SECRET_KEY is used"; exit 1; }
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$RUNNER_TEMP/minisign.key"
+          chmod 0600 "$RUNNER_TEMP/minisign.key"
+          minisign -Sm SHA256SUMS -s "$RUNNER_TEMP/minisign.key"
+          printf '%s\n' "$MINISIGN_PUBLIC_KEY" > minisign.pub
+          rm -f "$RUNNER_TEMP/minisign.key"
+
+      - name: Sign with cosign (keyless)
+        if: env.HAS_MINISIGN != 'true'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Create the cosign bundle
+        if: env.HAS_MINISIGN != 'true'
+        working-directory: dist
+        run: cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" \
+              --title "Skiff $GITHUB_REF_NAME" \
+              --generate-notes \
+              --verify-tag
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber

@@ -1,0 +1,68 @@
+[Unit]
+Description=Skiff control plane (dashboard, REST, MCP)
+Documentation=https://github.com/kieranholroyd/private-cloud-deploys/blob/main/docs/OPS.md
+After=network-online.target skiff-caddy.service
+Wants=network-online.target
+# Caddy is the only ingress. Starting the control plane without it is safe (sites and
+# the agent keep running), so this is deliberately not a hard Requires=.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=skiff
+Group=skiff
+# The runtime directory is setgid skiff-caddy, so the unix socket created here is
+# group-owned by skiff-caddy and Caddy can connect without joining the skiff group.
+SupplementaryGroups=skiff-caddy
+UMask=0007
+WorkingDirectory=/opt/skiff/current/control-plane
+
+EnvironmentFile=/etc/skiff/skiff.env
+Environment=NODE_ENV=production
+Environment=SOCKET_PATH=/run/skiff/control.sock
+Environment=PROTOCOL_HEADER=x-forwarded-proto
+Environment=HOST_HEADER=x-forwarded-host
+Environment=SKIFF_MASTER_KEY_FILE=%d/master-key
+# The master key is delivered as a systemd credential, not through the environment.
+LoadCredential=master-key:/etc/skiff/master.key
+
+ExecStart=/opt/skiff/current/control-plane/runtime/bun /opt/skiff/current/control-plane/build/index.js
+
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=35
+KillSignal=SIGTERM
+LimitNOFILE=65535
+TasksMax=256
+MemoryMax=512M
+
+# Sandboxing. ProtectSystem=strict makes everything read-only except the paths below;
+# the control plane only writes its SQLite/DuckDB data and the runtime socket.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service io_uring_setup io_uring_enter io_uring_register
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+ReadWritePaths=/var/lib/skiff /run/skiff
+
+[Install]
+WantedBy=multi-user.target

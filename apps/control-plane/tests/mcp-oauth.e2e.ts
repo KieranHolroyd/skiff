@@ -117,7 +117,7 @@ async function authorize(scope: string, consentScope = scope) {
 	return tok as { access_token: string; scope?: string; refresh_token?: string };
 }
 
-const baseScope = 'openid offline_access project:read deployment:create';
+const baseScope = 'openid offline_access project:read project:create deployment:create';
 const tok1 = await authorize(baseScope);
 const claims = JSON.parse(Buffer.from(tok1.access_token.split('.')[1]!, 'base64url').toString());
 const aud = ([] as string[]).concat(claims.aud);
@@ -145,9 +145,13 @@ let client = await connect(tok1.access_token, 'accept');
 const tools = await client.listTools();
 check('tools/list over authenticated MCP', tools.tools.some((t) => t.name === 'delete_project'), tools.tools.map((t) => t.name).join(','));
 const who = JSON.parse(textOf(await client.callTool({ name: 'whoami', arguments: {} })));
-check('whoami reflects token scopes ∩ role', JSON.stringify(who.permissions) === JSON.stringify(['deployment:create', 'project:read']), JSON.stringify(who.permissions));
+check('whoami reflects token scopes ∩ role', JSON.stringify(who.permissions) === JSON.stringify(['deployment:create', 'project:create', 'project:read']), JSON.stringify(who.permissions));
 const list = await client.callTool({ name: 'list_projects', arguments: {} });
 check('scoped tool works with granted scope', !list.isError);
+
+// Create the project the delete tests operate on (real service layer, not a stub).
+const created = await client.callTool({ name: 'create_project', arguments: { name: 'Demo', slug: 'demo' } });
+check('create_project works over MCP', !created.isError, textOf(created).slice(0, 100));
 
 // 10. Missing scope → step-up challenge
 let stepUp = '';
@@ -164,7 +168,7 @@ await client.close();
 const tok2 = await authorize(`${baseScope} project:delete`);
 client = await connect(tok2.access_token, 'accept');
 const del = await client.callTool({ name: 'delete_project', arguments: { project: 'demo' } });
-check('delete with scope + user confirms → done', !del.isError && /trash/.test(textOf(del)), textOf(del));
+check('delete with scope + user confirms → done', !del.isError && /restorable/.test(textOf(del)), textOf(del));
 await client.close();
 
 client = await connect(tok2.access_token, 'decline');
@@ -175,7 +179,7 @@ try {
 } catch (e) {
 	declined = `error: ${(e as Error).message}`;
 }
-check('delete when user declines → not deleted', !/moved to trash/.test(declined), declined.slice(0, 140));
+check('delete when user declines → not deleted', !/moved to trash/.test(declined) && !/restorable/.test(declined), declined.slice(0, 140));
 await client.close();
 
 // 12. 2025-era client: destructive tool degrades to a clear "use the dashboard" error

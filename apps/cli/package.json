@@ -1,12 +1,29 @@
 {
   "name": "skif",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "CLI for Skiff, a lightweight self-hosted deploy platform",
+  "keywords": ["skiff", "deploy", "static-site", "self-hosted", "cli", "paas"],
+  "license": "MIT",
+  "author": "Kieran Holroyd",
+  "homepage": "https://github.com/KieranHolroyd/skiff#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KieranHolroyd/skiff.git",
+    "directory": "apps/cli"
+  },
+  "bugs": "https://github.com/KieranHolroyd/skiff/issues",
   "type": "module",
   "bin": {
-    "skif": "./src/main.ts",
-    "skiff": "./src/main.ts"
+    "skif": "dist/skif.js",
+    "skiff": "dist/skif.js"
   },
-  "scripts": { "check": "tsc -p . --noEmit" },
-  "engines": { "bun": ">=1.4" }
+  "files": ["dist", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "bun build src/main.ts --target=node --outfile dist/skif.js",
+    "check": "tsc -p . --noEmit",
+    "test": "bun test",
+    "prepack": "bun run build"
+  },
+  "engines": { "node": ">=20" },
+  "publishConfig": { "access": "public", "provenance": true }
 }

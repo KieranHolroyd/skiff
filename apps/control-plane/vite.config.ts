@@ -18,5 +18,9 @@ export default defineConfig({
 			// Replaced by a stricter Origin policy in src/lib/server/csrf.ts, enforced in hooks.
 			csrf: { trustedOrigins: ['*'] }
 		})
-	]
+	],
+	// DuckDB is a native N-API addon; never bundle it. It is loaded dynamically at runtime
+	// (packages/core/src/telemetry.ts) and degrades to no-op telemetry if unavailable.
+	ssr: { external: ['@duckdb/node-api', '@duckdb/node-bindings'] },
+	optimizeDeps: { exclude: ['@duckdb/node-api'] }
 });

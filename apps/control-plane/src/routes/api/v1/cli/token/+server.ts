@@ -1,0 +1,71 @@
+import * as z from 'zod';
+import { auth } from '#lib/server/auth.js';
+import { json, readJson, route } from '#lib/server/api.js';
+import { redeemCliLoginCode } from '#lib/server/cli-login.js';
+import { contentDomain, platformOrigin } from '#lib/server/config.js';
+import { core } from '#lib/server/core.js';
+import { principalFromSession } from '#lib/server/principal.js';
+import type { RequestHandler } from './$types';
+
+/**
+ * Exchange a one-time browser-login code for a regular API key. The CLI holds the PKCE
+ * verifier; only the CLI that started the flow can redeem the code. The key is returned once
+ * and then behaves exactly like a key created in the dashboard.
+ */
+const bodySchema = z.object({
+	code: z.string().min(32).max(200),
+	codeVerifier: z.string().min(43).max(128).regex(/^[A-Za-z0-9_-]+$/),
+});
+
+export const POST: RequestHandler = ({ request }) =>
+	route(async () => {
+		const input = await readJson(request, bodySchema);
+		const redeemed = redeemCliLoginCode(input.code, input.codeVerifier);
+		if (!redeemed.ok) {
+			return json(
+				{
+					error: 'invalid_grant',
+					message:
+						redeemed.reason === 'expired'
+							? 'This login link has expired. Run `skif login --web` again.'
+							: 'This login link is invalid or has already been used. Run `skif login --web` again.',
+				},
+				400,
+				{ 'cache-control': 'no-store' },
+			);
+		}
+
+		const created = await auth.api.createApiKey({
+			body: {
+				userId: redeemed.userId,
+				name: 'Skiff CLI (browser login)',
+			},
+		});
+		if (!created?.key)
+			return json(
+				{ error: 'server_error', message: 'Could not create an API key.' },
+				500,
+				{ 'cache-control': 'no-store' },
+			);
+
+		try {
+			const principal = principalFromSession(redeemed.userId, request, { kind: 'user' });
+			core.audit.record({
+				principal,
+				action: 'cli.login',
+				resource: 'apiKey',
+				resourceId: created.id,
+				result: 'ok',
+				args: { method: 'browser' },
+			});
+		} catch (error) {
+			// The key is already minted; auditing must not fail the login.
+			console.error('[cli-login] audit failed:', error);
+		}
+
+		return json(
+			{ token: created.key, keyId: created.id, platform: platformOrigin, contentDomain },
+			200,
+			{ 'cache-control': 'no-store' },
+		);
+	});

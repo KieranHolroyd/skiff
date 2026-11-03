@@ -1,0 +1,101 @@
+import * as z from 'zod';
+import { accessModes, runtimes } from './model.ts';
+
+const slug = z.string().min(3).max(40);
+const hostname = z.string().min(1).max(253);
+
+export const projectCreateSchema = z.object({
+	name: z.string().min(1).max(120).optional(),
+	slug: slug.optional(),
+	runtime: z.enum(runtimes).default('static'),
+	placement: z.string().min(1).max(64).default('edge'),
+	productionAccess: z.enum(accessModes).default('public'),
+	previewAccess: z.enum(accessModes).default('platform'),
+});
+export type ProjectCreate = z.infer<typeof projectCreateSchema>;
+
+export const projectUpdateSchema = z.object({
+	name: z.string().min(1).max(120).optional(),
+	placement: z.string().min(1).max(64).optional(),
+	productionAccess: z.enum(accessModes).optional(),
+	previewAccess: z.enum(accessModes).optional(),
+	pinned: z.boolean().optional(),
+});
+export type ProjectUpdate = z.infer<typeof projectUpdateSchema>;
+
+/** One file in an inline deploy. `content` is text or base64 (`encoding: 'base64'`). */
+export const inlineFileSchema = z.object({
+	path: z.string().min(1).max(1024),
+	content: z.string(),
+	encoding: z.enum(['utf8', 'base64']).default('utf8'),
+});
+export type InlineFile = z.infer<typeof inlineFileSchema>;
+
+export const deployFilesSchema = z.object({
+	project: slug,
+	files: z.array(inlineFileSchema).min(1).max(20000),
+	promote: z.boolean().default(true),
+	message: z.string().max(500).optional(),
+});
+export type DeployFiles = z.infer<typeof deployFilesSchema>;
+
+export const deploySiteSchema = z.object({
+	name: slug,
+	files: z.array(inlineFileSchema).min(1).max(20000).optional(),
+	uploadId: z.string().min(1).max(64).optional(),
+	promote: z.boolean().default(true),
+	spa: z.boolean().optional(),
+});
+export type DeploySite = z.infer<typeof deploySiteSchema>;
+
+export const createUploadSchema = z.object({
+	project: slug,
+	fileCount: z.number().int().positive().max(20000).optional(),
+	totalBytes: z.number().int().positive().optional(),
+});
+export type CreateUpload = z.infer<typeof createUploadSchema>;
+
+export const finalizeUploadSchema = z.object({
+	uploadId: z.string().min(1).max(64),
+	project: slug,
+	promote: z.boolean().default(true),
+	message: z.string().max(500).optional(),
+});
+export type FinalizeUpload = z.infer<typeof finalizeUploadSchema>;
+
+export const setAccessSchema = z.object({
+	scope: z.enum(['production', 'previews']).default('production'),
+	mode: z.enum(accessModes),
+	password: z.string().min(8).max(200).optional(),
+});
+export type SetAccess = z.infer<typeof setAccessSchema>;
+
+export const shareLinkCreateSchema = z.object({
+	project: slug,
+	deploymentId: z.string().max(64).optional(),
+	expiresAt: z.string().datetime().optional(),
+	maxVisitors: z.number().int().positive().optional(),
+	maxRedemptions: z.number().int().positive().optional(),
+	sessionTtlSeconds: z.number().int().positive().max(60 * 60 * 24 * 30).optional(),
+	allowedEmails: z.array(z.string().email()).max(100).optional(),
+	note: z.string().max(500).optional(),
+});
+export type ShareLinkCreate = z.infer<typeof shareLinkCreateSchema>;
+
+export const promoteSchema = z.object({
+	project: slug,
+	deploymentId: z.string().min(1).max(64),
+});
+export type Promote = z.infer<typeof promoteSchema>;
+
+export const domainCreateSchema = z.object({
+	project: slug,
+	hostname,
+});
+export type DomainCreate = z.infer<typeof domainCreateSchema>;
+
+export const paginationSchema = z.object({
+	limit: z.coerce.number().int().min(1).max(200).default(50),
+	cursor: z.string().max(256).optional(),
+});
+export type Pagination = z.infer<typeof paginationSchema>;

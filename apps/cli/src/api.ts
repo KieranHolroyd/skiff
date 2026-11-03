@@ -1,0 +1,720 @@
+/**
+ * Typed control-plane client for the CLI.
+ *
+ * Every control-plane request sends `Authorization: Bearer <api-key>` and an
+ * `Origin` header. The control plane's CSRF policy (DESIGN §6.3.1) requires an
+ * origin for mutations; bearer requests are exempt from cookies but still pass
+ * the same check. Presigned object-store PUTs are sent with the returned headers
+ * only (they are authenticated by the signature in the URL).
+ */
+import { platformOrigin } from './config.ts';
+import { ApiError, CliError } from './errors.ts';
+
+export interface ApiClientOptions {
+	baseUrl: string;
+	token: string;
+	origin?: string;
+	timeoutMs?: number;
+	uploadTimeoutMs?: number;
+	fetch?: typeof fetch;
+	userAgent?: string;
+}
+
+export interface UserView {
+	id?: string;
+	email?: string;
+	name?: string;
+}
+
+export interface OrgView {
+	id?: string;
+	slug?: string;
+	name?: string;
+	role?: string;
+}
+
+export interface ProjectView {
+	id?: string;
+	slug: string;
+	name?: string;
+	runtime?: string;
+	placement?: string;
+	productionDeploymentId?: string | null;
+	productionUrl?: string;
+	previewPattern?: string;
+	productionAccess?: string;
+	previewAccess?: string;
+	createdAt?: string;
+	updatedAt?: string;
+	deletedAt?: string | null;
+}
+
+export interface DeploymentView {
+	id?: string;
+	shortId?: string;
+	status?: string;
+	message?: string;
+	url?: string;
+	previewUrl?: string;
+	previewHost?: string;
+	productionUrl?: string;
+	projectSlug?: string;
+	pinned?: boolean;
+	production?: boolean;
+	createdAt?: string;
+	activatedAt?: string;
+}
+
+export interface NodeView {
+	id?: string;
+	name?: string;
+	status?: string;
+	version?: string;
+	lastHeartbeat?: string;
+	cpuPercent?: number;
+	memoryUsedBytes?: number;
+	memoryTotalBytes?: number;
+	diskUsedPercent?: number;
+}
+
+export interface StatusView {
+	platform?: { version?: string; origin?: string; uptimeSeconds?: number };
+	versions?: { controlPlane?: string; agent?: string };
+	nodes: NodeView[];
+	counts: {
+		projects?: number;
+		deployments?: number;
+		activeDeployments?: number;
+		offlineNodes?: number;
+		storageBytes?: number;
+		nodes?: number;
+		onlineNodes?: number;
+	};
+	health: string;
+}
+
+export interface UploadTicket {
+	uploadId: string;
+	url: string;
+	method: string;
+	headers: Record<string, string>;
+	expiresAt?: string;
+}
+
+export interface ProjectCreateInput {
+	slug: string;
+	name?: string;
+	productionAccess?: 'public' | 'password' | 'platform';
+	previewAccess?: 'public' | 'password' | 'platform';
+}
+
+export interface FinalizeOutcome {
+	deployment?: DeploymentView;
+	project?: ProjectView;
+	nextSteps: string[];
+	promoted: boolean;
+	deploymentUrl?: string;
+	previewUrl?: string;
+	productionUrl?: string;
+	raw: unknown;
+}
+
+export interface LogLine {
+	timestamp?: string;
+	level?: string;
+	message: string;
+}
+
+const DEFAULT_TIMEOUT = 30_000;
+const DEFAULT_UPLOAD_TIMEOUT = 15 * 60_000;
+
+export class ApiClient {
+	readonly baseUrl: string;
+	readonly origin: string;
+	private readonly token: string;
+	private readonly timeoutMs: number;
+	private readonly uploadTimeoutMs: number;
+	private readonly fetchImpl: typeof fetch;
+	private readonly userAgent: string;
+
+	constructor(options: ApiClientOptions) {
+		this.baseUrl = options.baseUrl.replace(/\/+$/, '');
+		this.token = options.token;
+		this.origin = options.origin ?? platformOrigin(options.baseUrl);
+		this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT;
+		this.uploadTimeoutMs = options.uploadTimeoutMs ?? DEFAULT_UPLOAD_TIMEOUT;
+		this.fetchImpl = options.fetch ?? globalThis.fetch;
+		this.userAgent = options.userAgent ?? 'skif-cli';
+	}
+
+	async whoami(): Promise<{
+		user: UserView;
+		org: OrgView | null;
+		permissions: string[];
+		platform: string;
+		contentDomain?: string;
+		raw: unknown;
+	}> {
+		const raw = await this.request('GET', '/api/v1/whoami');
+		const record = asRecord(unwrap(raw)) ?? {};
+		const userRecord = asRecord(record.user) ?? record;
+		const orgRecord =
+			asRecord(record.org) ??
+			asRecord(record.organization) ??
+			(Array.isArray(record.organizations) ? asRecord(record.organizations[0]) : undefined) ??
+			(userRecord.orgId || userRecord.org_id
+				? { id: userRecord.orgId ?? userRecord.org_id, role: userRecord.role }
+				: undefined) ??
+			null;
+		const user: UserView = {
+			id: stringValue(userRecord.id ?? userRecord.userId ?? userRecord.user_id),
+			email: stringValue(userRecord.email),
+			name: stringValue(userRecord.name ?? userRecord.displayName),
+		};
+		if (!user.id && !user.email && !user.name)
+			throw new CliError('The platform returned an unexpected whoami response.', { code: 'protocol' });
+		const org: OrgView | null = orgRecord
+			? {
+					id: stringValue(orgRecord.id),
+					slug: stringValue(orgRecord.slug),
+					name: stringValue(orgRecord.name),
+					role: stringValue(orgRecord.role ?? userRecord.role ?? record.role),
+				}
+			: null;
+		const permissions = stringArray(record.permissions ?? userRecord.permissions);
+		const platform = stringValue(record.platform) ?? this.origin;
+		const contentDomain = stringValue(record.contentDomain ?? record.content_domain);
+		return { user, org, permissions, platform, contentDomain, raw };
+	}
+
+	async getStatus(): Promise<{ status: StatusView; raw: unknown }> {
+		const raw = await this.request('GET', '/api/v1/status');
+		const record = asRecord(unwrap(raw)) ?? {};
+		const nodeRecords = asArray(record.nodes);
+		const nodes = (nodeRecords ?? []).map((node) => normalizeNode(node)).filter(isPresent);
+		const countsRecord = asRecord(record.counts) ?? {};
+		const nodeCounts = asRecord(record.nodes) ?? {};
+		const deploymentCounts = asRecord(record.deployments) ?? {};
+		const versionRecord = asRecord(record.versions);
+		const counts = {
+			projects: numberValue(countsRecord.projects ?? record.projects),
+			deployments: numberValue(
+				deploymentCounts.total ?? countsRecord.deployments ?? (nodeRecords ? undefined : record.deployments),
+			),
+			activeDeployments: numberValue(
+				deploymentCounts.active ?? countsRecord.activeDeployments ?? countsRecord.active,
+			),
+			offlineNodes: numberValue(nodeCounts.offline ?? countsRecord.offlineNodes),
+			storageBytes: numberValue(record.storageBytes ?? record.storage_bytes ?? countsRecord.storageBytes),
+			nodes: numberValue(nodeCounts.total ?? countsRecord.nodes ?? record.nodeCount) ?? nodes.length,
+			onlineNodes:
+				numberValue(nodeCounts.online ?? countsRecord.onlineNodes ?? countsRecord.online ?? record.onlineNodes) ??
+				nodes.filter((node) => node.status === 'online').length,
+		};
+		const platformRecord = asRecord(record.platform);
+		const version = stringValue(versionRecord?.controlPlane ?? record.version);
+		const origin = stringValue(record.platform ?? platformRecord?.origin ?? platformRecord?.url);
+		const status: StatusView = {
+			platform:
+				platformRecord || version || origin
+					? {
+							version: stringValue(platformRecord?.version) ?? version,
+							origin: stringValue(platformRecord?.origin ?? platformRecord?.url) ?? origin,
+							uptimeSeconds: numberValue(
+								platformRecord?.uptimeSeconds ?? platformRecord?.uptime_seconds,
+							),
+						}
+					: undefined,
+			versions: versionRecord
+				? {
+						controlPlane: stringValue(versionRecord.controlPlane),
+						agent: stringValue(versionRecord.agent),
+					}
+				: undefined,
+			nodes,
+			counts,
+			health:
+				stringValue(record.health ?? record.status) ??
+				(counts.onlineNodes >= counts.nodes ? 'ok' : 'degraded'),
+		};
+		return { status, raw };
+	}
+
+	async listProjects(): Promise<{ projects: ProjectView[]; raw: unknown }> {
+		const raw = await this.request('GET', '/api/v1/projects');
+		const unwrapped = unwrap(raw);
+		const record = asRecord(unwrapped);
+		const values = Array.isArray(unwrapped) ? unwrapped : asArray(record?.projects ?? record?.items);
+		const projects = (values ?? []).map((value) => normalizeProject(value)).filter(isPresent);
+		return { projects, raw };
+	}
+
+	async getProject(slug: string): Promise<{ project: ProjectView; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/projects/${encodeURIComponent(slug)}`);
+		const record = asRecord(unwrap(raw)) ?? {};
+		const project = normalizeProject(record.project ?? record, slug);
+		if (!project) throw new CliError('The platform returned an unexpected project response.', { code: 'protocol' });
+		return { project, raw };
+	}
+
+	async createProject(input: ProjectCreateInput): Promise<{ project: ProjectView; raw: unknown }> {
+		const body: Record<string, unknown> = {
+			slug: input.slug,
+			productionAccess: input.productionAccess ?? 'public',
+			previewAccess: input.previewAccess ?? 'platform',
+		};
+		if (input.name) body.name = input.name;
+		const raw = await this.request('POST', '/api/v1/projects', { body });
+		const record = asRecord(unwrap(raw)) ?? {};
+		const project = normalizeProject(record.project ?? record, input.slug);
+		if (!project) throw new CliError('The platform returned an unexpected project response.', { code: 'protocol' });
+		return { project, raw };
+	}
+
+	async listDeployments(project: string): Promise<{ deployments: DeploymentView[]; raw: unknown }> {
+		const raw = await this.request(
+			'GET',
+			`/api/v1/projects/${encodeURIComponent(project)}/deployments`,
+		);
+		const unwrapped = unwrap(raw);
+		const record = asRecord(unwrapped);
+		const values = Array.isArray(unwrapped) ? unwrapped : asArray(record?.deployments ?? record?.items);
+		const deployments = (values ?? [])
+			.map((value) => normalizeDeployment(value, { projectSlug: project }))
+			.filter(isPresent)
+			.sort((a, b) => timestamp(b.createdAt) - timestamp(a.createdAt));
+		return { deployments, raw };
+	}
+
+	async createUpload(input: { project: string; fileCount: number; totalBytes: number }): Promise<UploadTicket> {
+		const raw = await this.request('POST', '/api/v1/uploads', { body: input });
+		const record = asRecord(unwrap(raw)) ?? {};
+		const uploadId = stringValue(record.uploadId ?? record.upload_id ?? record.id);
+		const url = stringValue(record.url ?? record.uploadUrl ?? record.upload_url);
+		const method = stringValue(record.method ?? record.httpMethod) ?? 'PUT';
+		if (!uploadId || !url)
+			throw new CliError('The platform did not return an upload URL.', { code: 'protocol', details: raw });
+		const headers: Record<string, string> = {};
+		const headerRecord = asRecord(record.headers);
+		if (headerRecord) {
+			for (const [key, value] of Object.entries(headerRecord)) {
+				if (typeof value === 'string') headers[key] = value;
+				else if (typeof value === 'number' || typeof value === 'boolean') headers[key] = String(value);
+			}
+		}
+		return {
+			uploadId,
+			url,
+			method,
+			headers,
+			expiresAt: stringValue(record.expiresAt ?? record.expires_at),
+		};
+	}
+
+	async putUpload(ticket: UploadTicket, bytes: Uint8Array): Promise<void> {
+		let response: Response;
+		try {
+			response = await this.fetchImpl(ticket.url, {
+				method: ticket.method,
+				headers: ticket.headers,
+				body: bytes as unknown as RequestInit['body'],
+				signal: AbortSignal.timeout(this.uploadTimeoutMs),
+			});
+		} catch (error) {
+			throw new CliError(
+				`Upload failed: ${errorMessage(error)}`,
+				{ code: 'upload_failed', cause: error, details: redactUrl(ticket.url) },
+			);
+		}
+		if (response.ok) return;
+		const suffix = (await response.text().catch(() => '')).slice(0, 500).trim();
+		throw new ApiError(
+			`Upload failed (${response.status})${suffix ? `: ${suffix}` : '.'}`,
+			{
+				status: response.status,
+				method: ticket.method,
+				url: redactUrl(ticket.url),
+				code: 'upload_failed',
+				body: suffix || undefined,
+			},
+		);
+	}
+
+	async finalizeUpload(
+		uploadId: string,
+		input: { project: string; promote: boolean; message?: string },
+	): Promise<FinalizeOutcome> {
+		// The path identifies the upload. `uploadId` is repeated in the body because the
+		// shared `finalizeUploadSchema` requires it; unknown fields are stripped by servers
+		// that only read the path.
+		const body: Record<string, unknown> = {
+			uploadId,
+			project: input.project,
+			promote: input.promote,
+		};
+		if (input.message) body.message = input.message;
+		const raw = await this.request(
+			'POST',
+			`/api/v1/uploads/${encodeURIComponent(uploadId)}/finalize`,
+			{ body },
+		);
+		return normalizeOutcome(raw, { projectSlug: input.project, requestedPromote: input.promote });
+	}
+
+	async promote(project: string, deploymentId: string): Promise<FinalizeOutcome> {
+		const raw = await this.request(
+			'POST',
+			`/api/v1/projects/${encodeURIComponent(project)}/promote`,
+			{ body: { project, deploymentId } },
+		);
+		return normalizeOutcome(raw, { projectSlug: project, requestedPromote: true });
+	}
+
+	async rollback(project: string): Promise<FinalizeOutcome> {
+		const raw = await this.request(
+			'POST',
+			`/api/v1/projects/${encodeURIComponent(project)}/rollback`,
+			{ body: {} },
+		);
+		return normalizeOutcome(raw, { projectSlug: project, requestedPromote: true });
+	}
+
+	async getLogs(project: string, options: { limit?: number } = {}): Promise<{ lines: LogLine[]; raw: unknown }> {
+		const limit = options.limit ?? 200;
+		const raw = await this.request(
+			'GET',
+			`/api/v1/projects/${encodeURIComponent(project)}/logs?limit=${encodeURIComponent(String(limit))}`,
+		);
+		if (typeof raw === 'string') {
+			return {
+				lines: raw
+					.split(/\r?\n/)
+					.filter((line) => line.length > 0)
+					.map((message) => ({ message })),
+				raw,
+			};
+		}
+		const record = asRecord(unwrap(raw)) ?? {};
+		const values = asArray(record.lines ?? record.logs ?? record.items) ?? [];
+		const lines: LogLine[] = values.map((value) => {
+			if (typeof value === 'string') return { message: value };
+			const line = asRecord(value) ?? {};
+			return {
+				timestamp: stringValue(line.timestamp ?? line.ts ?? line.time),
+				level: stringValue(line.level ?? line.severity),
+				message: stringValue(line.message ?? line.msg ?? line.line) ?? JSON.stringify(value),
+			};
+		});
+		return { lines, raw };
+	}
+
+	private async request(
+		method: string,
+		path: string,
+		options: { body?: unknown } = {},
+	): Promise<unknown> {
+		const url = `${this.baseUrl}${path}`;
+		const headers = new Headers({
+			accept: 'application/json, text/plain',
+			authorization: `Bearer ${this.token}`,
+			origin: this.origin,
+			'user-agent': this.userAgent,
+		});
+		let body: string | undefined;
+		if (options.body !== undefined) {
+			headers.set('content-type', 'application/json');
+			body = JSON.stringify(options.body);
+		}
+
+		let response: Response;
+		try {
+			response = await this.fetchImpl(url, {
+				method,
+				headers,
+				body,
+				signal: AbortSignal.timeout(this.timeoutMs),
+			});
+		} catch (error) {
+			if (isTimeout(error))
+				throw new CliError(`Request to ${this.baseUrl} timed out after ${this.timeoutMs}ms.`, {
+					code: 'timeout',
+					cause: error,
+				});
+			throw new CliError(`Could not reach ${this.baseUrl}: ${errorMessage(error)}`, {
+				code: 'network',
+				cause: error,
+			});
+		}
+
+		const text = await response.text().catch(() => '');
+		const parsed = parseJson(text);
+		if (!response.ok) {
+			const details = extractError(parsed, text);
+			throw new ApiError(
+				`${method} ${new URL(url).pathname} failed (${response.status}): ${details.message}`,
+				{
+					status: response.status,
+					method,
+					url: redactUrl(url),
+					code: details.code,
+					suggestions: details.suggestions,
+					requestId:
+						response.headers.get('x-request-id') ??
+						response.headers.get('request-id') ??
+						undefined,
+					body: parsed ?? (text ? text.slice(0, 1000) : undefined),
+				},
+			);
+		}
+		if (!text) return null;
+		return parsed === undefined ? text : parsed;
+	}
+}
+
+function normalizeProject(value: unknown, fallbackSlug?: string): ProjectView | null {
+	const record = asRecord(unwrap(value));
+	if (!record) return null;
+	const slug = stringValue(record.slug ?? record.projectSlug ?? record.project_slug) ?? fallbackSlug;
+	if (!slug) return null;
+	return {
+		id: stringValue(record.id),
+		slug,
+		name: stringValue(record.name),
+		runtime: stringValue(record.runtime),
+		placement: stringValue(record.placement),
+		productionDeploymentId:
+			stringValue(record.productionDeploymentId ?? record.production_deployment_id) ?? null,
+		productionUrl: stringValue(record.productionUrl ?? record.production_url ?? record.url),
+		previewPattern: stringValue(record.previewPattern ?? record.preview_pattern),
+		productionAccess: stringValue(record.productionAccess ?? record.production_access),
+		previewAccess: stringValue(record.previewAccess ?? record.preview_access),
+		createdAt: stringValue(record.createdAt ?? record.created_at),
+		updatedAt: stringValue(record.updatedAt ?? record.updated_at),
+		deletedAt: stringValue(record.deletedAt ?? record.deleted_at),
+	};
+}
+
+function normalizeDeployment(
+	value: unknown,
+	options: { projectSlug?: string; productionDeploymentId?: string | null } = {},
+): DeploymentView | null {
+	const record = asRecord(unwrap(value));
+	if (!record) return null;
+	const id = stringValue(record.id ?? record.deploymentId ?? record.deployment_id);
+	const shortId = stringValue(record.shortId ?? record.short_id);
+	if (!id && !shortId) return null;
+	const previewHost = stringValue(record.previewHost ?? record.preview_host);
+	const previewUrl =
+		stringValue(record.previewUrl ?? record.preview_url) ??
+		(previewHost ? `https://${previewHost}` : undefined);
+	return {
+		id,
+		shortId,
+		status: stringValue(record.status),
+		message: stringValue(record.message),
+		url: stringValue(record.url ?? record.deploymentUrl ?? record.deployment_url),
+		previewUrl,
+		previewHost,
+		productionUrl: stringValue(record.productionUrl ?? record.production_url),
+		projectSlug:
+			stringValue(record.projectSlug ?? record.project_slug) ??
+			stringValue(asRecord(record.project)?.slug) ??
+			options.projectSlug,
+		pinned: booleanValue(record.pinned),
+		production:
+			booleanValue(record.production ?? record.isProduction ?? record.is_production) ??
+			(options.productionDeploymentId ? id === options.productionDeploymentId : undefined),
+		createdAt: stringValue(record.createdAt ?? record.created_at),
+		activatedAt: stringValue(record.activatedAt ?? record.activated_at),
+	};
+}
+
+function normalizeNode(value: unknown): NodeView | null {
+	const record = asRecord(unwrap(value));
+	if (!record) return null;
+	const name = stringValue(record.name ?? record.nodeName ?? record.node_name ?? record.hostname);
+	const id = stringValue(record.id ?? record.nodeId ?? record.node_id);
+	if (!name && !id) return null;
+	return {
+		id,
+		name,
+		status: stringValue(record.status),
+		version: stringValue(record.version ?? record.agentVersion ?? record.agent_version),
+		lastHeartbeat: stringValue(
+			record.lastHeartbeat ?? record.last_heartbeat ?? record.lastSeen ?? record.last_seen,
+		),
+		cpuPercent: numberValue(record.cpuPercent ?? record.cpu_percent ?? record.cpu),
+		memoryUsedBytes: numberValue(
+			record.memoryUsedBytes ?? record.memory_used_bytes ?? record.memoryUsed,
+		),
+		memoryTotalBytes: numberValue(
+			record.memoryTotalBytes ?? record.memory_total_bytes ?? record.memoryTotal,
+		),
+		diskUsedPercent: numberValue(
+			record.diskUsedPercent ?? record.disk_used_percent ?? record.diskPercent,
+		),
+	};
+}
+
+function normalizeOutcome(
+	value: unknown,
+	options: { projectSlug?: string; requestedPromote?: boolean },
+): FinalizeOutcome {
+	const record = asRecord(unwrap(value)) ?? {};
+	const project = normalizeProject(record.project, options.projectSlug);
+	const deploymentRecord =
+		asRecord(record.deployment) ??
+		(asRecord(record.result)?.deployment as Record<string, unknown> | undefined) ??
+		(record.id || record.deploymentId || record.deployment_id ? record : undefined);
+	const deployment = deploymentRecord
+		? normalizeDeployment(deploymentRecord, {
+				projectSlug: project?.slug ?? options.projectSlug,
+				productionDeploymentId: project?.productionDeploymentId,
+			})
+		: undefined;
+
+	const promotedValue =
+		booleanValue(record.promoted) ??
+		booleanValue(deploymentRecord?.promoted) ??
+		(deployment?.id && project?.productionDeploymentId
+			? deployment.id === project.productionDeploymentId
+			: undefined) ??
+		options.requestedPromote ??
+		false;
+
+	let previewUrl = deployment?.previewUrl;
+	if (!previewUrl && project?.previewPattern && (deployment?.shortId || deployment?.id)) {
+		previewUrl = project.previewPattern
+			.replace('<id>', deployment.shortId ?? deployment.id ?? '')
+			.replace('<shortid>', deployment.shortId ?? deployment.id ?? '');
+	}
+
+	const productionUrl =
+		stringValue(record.productionUrl ?? record.production_url) ??
+		deployment?.productionUrl ??
+		project?.productionUrl ??
+		(promotedValue && deployment?.url ? deployment.url : undefined);
+
+	const nextSteps = stringArray(
+		record.nextSteps ?? record.next_steps ?? asRecord(record.result)?.nextSteps,
+	);
+
+	return {
+		deployment: deployment ?? undefined,
+		project: project ?? undefined,
+		nextSteps,
+		promoted: promotedValue,
+		deploymentUrl: deployment?.url ?? previewUrl ?? productionUrl,
+		previewUrl,
+		productionUrl,
+		raw: value,
+	};
+}
+
+function unwrap(value: unknown): unknown {
+	const record = asRecord(value);
+	if (record && 'data' in record && Object.keys(record).length === 1) return record.data;
+	return value;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+	if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+	return value as Record<string, unknown>;
+}
+
+function asArray(value: unknown): unknown[] | null {
+	return Array.isArray(value) ? value : null;
+}
+
+function stringValue(value: unknown): string | undefined {
+	if (typeof value === 'string' && value.length > 0) return value;
+	if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+	return undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+	const num = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+	return Number.isFinite(num) ? num : undefined;
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+	return typeof value === 'boolean' ? value : undefined;
+}
+
+function stringArray(value: unknown): string[] {
+	return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function parseJson(text: string): unknown {
+	if (!text) return undefined;
+	try {
+		return JSON.parse(text);
+	} catch {
+		return undefined;
+	}
+}
+
+function extractError(
+	parsed: unknown,
+	text: string,
+): { message: string; code?: string; suggestions: string[] } {
+	const record = asRecord(unwrap(parsed));
+	if (!record) {
+		const trimmed = text.trim();
+		return { message: trimmed ? trimmed.slice(0, 500) : 'Unknown error.', suggestions: [] };
+	}
+	const errorField = record.error;
+	const errorString = typeof errorField === 'string' ? errorField : undefined;
+	const nested = asRecord(errorField);
+	const source = nested ?? record;
+	const issues = asArray(record.issues ?? nested?.issues ?? asRecord(record.details)?.issues) ?? [];
+	const issueMessage = issues
+		.map((issue) => stringValue(asRecord(issue)?.message))
+		.filter((value): value is string => Boolean(value))
+		.join('; ');
+	const message =
+		stringValue(source.message) ??
+		stringValue(record.message) ??
+		stringValue(record.detail) ??
+		(issueMessage || undefined) ??
+		errorString ??
+		'Unknown error.';
+	const code = errorString ?? stringValue(nested?.code ?? record.code ?? record.errorCode);
+	const suggestions = stringArray(
+		source.suggestions ??
+			record.suggestions ??
+			asRecord(source.details)?.suggestions ??
+			asRecord(record.details)?.suggestions,
+	);
+	return { message, code, suggestions };
+}
+
+function isTimeout(error: unknown): boolean {
+	if (!(error instanceof Error)) return false;
+	return error.name === 'TimeoutError' || error.name === 'AbortError' || /timed out/i.test(error.message);
+}
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+function redactUrl(value: string): string {
+	try {
+		const url = new URL(value);
+		url.search = '';
+		url.hash = '';
+		return url.toString();
+	} catch {
+		return value;
+	}
+}
+
+function isPresent<T>(value: T | null): value is T {
+	return value !== null;
+}
+
+function timestamp(value: string | undefined): number {
+	if (!value) return 0;
+	const parsed = Date.parse(value);
+	return Number.isFinite(parsed) ? parsed : 0;
+}

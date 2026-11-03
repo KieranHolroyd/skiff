@@ -1,7 +1,9 @@
 {
   "name": "@skiff/contracts",
   "private": true,
+  "version": "0.1.0",
   "type": "module",
   "exports": { ".": "./src/index.ts" },
-  "scripts": { "check": "tsc -p . --noEmit" }
+  "scripts": { "check": "tsc -p . --noEmit" },
+  "dependencies": { "zod": "^4.6.7" }
 }

@@ -1,0 +1,33 @@
+Skiff installer
+
+Usage: curl -fsSL <install.sh> | sudo sh
+       bun scripts/install/main.ts [options]
+
+Options:
+  --yes                       Non-interactive; required values must be flags/env.
+  --dry-run                   Print the plan; change nothing.
+  --upgrade                   Reuse /etc/skiff and data, build and activate a new release.
+  --uninstall                 Stop and remove the Skiff units (keeps data/config).
+  --purge                     With --uninstall, also delete /opt/skiff, /var/lib/skiff, /etc/skiff.
+  --platform-host <host>      Dashboard/API/MCP host (default control.kieran.dev).
+  --content-domain <domain>   Domain for deployed sites (default kierancloud.dev).
+  --acme-email <email>        ACME account email (required for TLS).
+  --admin-email <email>       First-owner email; prints a one-time magic link.
+  --cloudflare-token-file     Caddy DNS-01 token file (default /etc/caddy/cloudflare.token).
+  --github-client-id <id>     Optional GitHub OAuth app.
+  --github-client-secret <s>  Optional GitHub OAuth secret.
+  --smtp-host <host>          Optional SMTP host (SES).
+  --smtp-port <port>          SMTP port (default 587).
+  --smtp-user <user>          SMTP username.
+  --smtp-password <pass>      SMTP password.
+  --smtp-from <address>       From address.
+  --object-store local|r2     Artifact storage (default local).
+  --r2-account-id <id>        R2 account id.
+  --r2-bucket <bucket>        R2 bucket.
+  --r2-access-key-id <id>     R2 access key.
+  --r2-secret-access-key <s>  R2 secret.
+  --no-agent                  Install the control plane only.
+  --version <label>           Release label (default 0.1.0).
+
+Bootstrap environment:
+  SKIFF_REPO, SKIFF_REF, SKIFF_GITHUB_TOKEN, SKIFF_BUN_VERSION, SKIFF_SOURCE_DIR.

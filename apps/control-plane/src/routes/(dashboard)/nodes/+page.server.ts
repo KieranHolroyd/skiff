@@ -1,0 +1,79 @@
+import { fail } from '@sveltejs/kit';
+import type { NodeView } from '@skiff/core';
+import { core } from '#lib/server/core.js';
+import { failStatus, formBoolean, formString, toFormFailure } from '../_lib/errors.js';
+import type { Actions, PageServerLoad } from './$types';
+
+export const load: PageServerLoad = ({ locals }) => {
+	const principal = locals.principal!;
+	let nodes: NodeView[] = [];
+	let denied = false;
+	try {
+		nodes = core.nodes.list(principal);
+	} catch {
+		denied = true;
+	}
+
+	return {
+		nodes,
+		denied,
+		platformOrigin: core.ctx.config.platformOrigin
+	};
+};
+
+export const actions: Actions = {
+	createToken: async ({ locals }) => {
+		const principal = locals.principal!;
+		try {
+			const token = core.nodes.createJoinToken(principal);
+			const command = `sudo skiff-agent join ${core.ctx.config.platformOrigin} --token ${token.token} --name edge`;
+			return {
+				success: 'Join token created. It is single-use and expires in one hour.',
+				token: token.token,
+				command,
+				expiresAt: token.expiresAt
+			};
+		} catch (error) {
+			return fail(failStatus(error), toFormFailure(error));
+		}
+	},
+
+	setDraining: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const nodeId = formString(data, 'nodeId');
+		const draining = formBoolean(data, 'draining');
+		if (!nodeId) return fail(400, { message: 'Missing node id.' });
+
+		try {
+			core.nodes.setDraining(principal, nodeId, draining);
+		} catch (error) {
+			return fail(failStatus(error), toFormFailure(error));
+		}
+
+		return {
+			success: draining
+				? 'Node is draining. It stops receiving new placements.'
+				: 'Node resumed and available for placements.'
+		};
+	},
+
+	rotateToken: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const nodeId = formString(data, 'nodeId');
+		if (!nodeId) return fail(400, { message: 'Missing node id.' });
+
+		try {
+			const rotated = core.nodes.rotateToken(principal, nodeId);
+			return {
+				success:
+					'Node token rotated. Update /etc/skiff/agent.env on the node and restart the agent.',
+				rotatedToken: rotated.token,
+				nodeId
+			};
+		} catch (error) {
+			return fail(failStatus(error), toFormFailure(error));
+		}
+	}
+};

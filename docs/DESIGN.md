@@ -13,7 +13,8 @@ decision log with rationale, and [ROADMAP.md](./ROADMAP.md) for v1/v2 scope.
 
 **Goals**
 - Deploy a site in one agent tool call (`deploy_site`), from chat-only or shell-capable agents.
-- Use as few resources as humanly possible. Target baseline ≤ 250 MB RSS on the edge VPS.
+- Use as few resources as humanly possible. Target baseline ≤ 250 MB RSS on the edge VPS (platform
+  services only; edge-placed apps run in a capped workload slice on top, §3.4.1).
 - Instant subdomains (no DNS propagation, no per-site certs).
 - Instant, zero-cost promote and rollback.
 - Multi-user ready (orgs, RBAC) even though it's single-user today.
@@ -45,7 +46,8 @@ decision log with rationale, and [ROADMAP.md](./ROADMAP.md) for v1/v2 scope.
 | **Config snapshot** | An immutable set of env vars, secret *version references* and parsed site config (`_redirects`, `_headers`, `skiff.json`). |
 | **Deployment** | Release + config snapshot. It has a permanent preview URL `<slug>--<shortid>.<contentDomain>`. |
 | **Production pointer** | The project's reference to the deployment served at `<slug>.<contentDomain>`. Promote and rollback move it. |
-| **Placement** | Where a project runs: `edge`, `homelab` (any named node), or `auto`. |
+| **Placement** | Where a project runs: `edge`, a named node (e.g. `homelab`), or `auto`. Applies to every runtime tier: the edge can run apps too (D41). |
+| **Workload slice** | The systemd slice (`skiff-workloads.slice`) every app on a node runs in. Its memory/CPU budget keeps the platform services on that node responsive. |
 | **Access mode** | `public`, `password`, or `platform`, set separately for production and previews. |
 | **Share link** | A magic link granting time- and usage-limited access to a protected deployment. |
 | **Platform domain** | The domain for dashboard, API, MCP and auth. |
@@ -64,10 +66,10 @@ decision log with rationale, and [ROADMAP.md](./ROADMAP.md) for v1/v2 scope.
                        ▼
 ┌──────────────────────────── VPS (edge node) ─ Debian 13, 2 vCPU / 4 GB / 40 GB ────────┐
 │ Caddy (custom build + caddy-dns/cloudflare)  ← admin API on unix socket only           │
-│   *.contentDomain  ─► local static sites   or ─► homelab over WireGuard               │
-│   cloud./api./mcp.platformDomain ─► control plane                                     │
+│   *.contentDomain  ─► local sites/apps     or ─► homelab over WireGuard                │
+│   cloud./api./mcp.platformDomain ─► control plane                                      │
 │ Control plane (SvelteKit on Bun): UI · REST · MCP · Better Auth · SQLite · DuckDB      │
-│ Node agent (bun --compile)                                                             │
+│ Node agent (bun --compile) · [v2: edge-placed tier-2/3 apps in skiff-workloads.slice]  │
 │ WireGuard (wg0) ◄─────────────────────────────┐                                        │
 └───────────────────────────────────────────────┼────────────────────────────────────────┘
                                                 │ homelab dials out (no inbound ports)
@@ -89,13 +91,13 @@ installs on separate machines, each fully independent with no federation.
 | Control plane | SvelteKit 3 (`@sveltejs/adapter-bun`, listening on a unix socket behind Caddy with `PROTOCOL_HEADER`/`HOST_HEADER`), shadcn-svelte (nova preset), Better Auth, Drizzle + SQLite, DuckDB | `skiff-cp` (unprivileged) | 80–150 MB target (spike: 92 idle / ~160 MB under load on macOS) |
 | Node agent | Bun, `bun build --compile` single binary | `skiff-agent` (unprivileged) | 30–50 MB |
 | Proxy | Caddy (prebuilt with `caddy-dns/cloudflare`), driven only via admin API on a unix socket | `caddy` | 30–50 MB |
-| Privileged helper (v2) | Bun binary; fixed verbs over a root-only unix socket; renders unit files from validated specs | root | small |
+| Privileged helper (v2) | Bun binary; fixed verbs over a root-only unix socket; renders unit files from validated specs. Installed on every node that runs apps, edge included | root | small |
 
 **Monorepo (Bun workspaces):**
 ```
 apps/control-plane     SvelteKit app (UI + REST + MCP + OTLP receiver)
 apps/agent             node agent
-apps/cli               CLI, npm package `skif`; installs both `skif` and `skiff` commands (wraps presigned upload, login, etc.)
+apps/cli               CLI, npm package `skif` (bundled, runs on Node 20+ or Bun); installs both `skif` and `skiff` commands
 packages/contracts     shared Zod/Valibot schemas: API, agent protocol, MCP tool I/O
 packages/core          service layer (all business logic + RBAC checks)
 packages/site-config   _redirects / _headers / skiff.json parser → Caddy route compiler
@@ -133,6 +135,31 @@ interface RuntimeDriver {
 ```
 
 Data for future tier-2 apps defaults to **a SQLite file per project**, not a shared database server.
+
+#### 3.4.1 Placement and the edge
+
+Every runtime tier can be placed on **any node, the edge included** (D41). The edge is not limited to
+static sites.
+
+- **Placement values:** `edge`, a node name/id, or `auto`. The control plane resolves `auto` once, at
+  deploy time, and records the node on the deployment, so a running app never moves on its own.
+  - Static: `auto` → edge (local `file_server`, no WireGuard hop).
+  - Process/container: `auto` → the online, non-draining node with the most free workload-slice
+    budget, preferring workers. Falls back to the edge when no worker can admit it.
+- **Serving:** an edge-placed app listens on a unix socket (or a loopback port) and the edge Caddy
+  reverse-proxies to it locally. Worker-placed apps are proxied over WireGuard as before.
+- **Protecting the edge:** on every node, apps run under `skiff-workloads.slice`, never beside the
+  platform services.
+  - The slice has a node-level `MemoryMax` (edge default **1 GiB** on the 4 GB VPS, set per node) and a
+    lower `CPUWeight` than `skiff-cp`, `skiff-agent` and `caddy`. A runaway app hits its own limit or the
+    slice limit, and the control plane, Caddy and ingress for every other site stay up.
+  - **Admission:** each app declares `MemoryMax` (default 256 MB). The control plane refuses a deploy
+    whose reservation would exceed the target node's slice budget, with an error naming the free
+    budget and suggesting another node.
+- **Builds stay on the homelab** (D3), even for edge-placed apps: the Builder produces an artifact and
+  the edge only runs it. Single-node mode builds locally inside the workload slice.
+- **Why place an app on the edge:** it keeps serving when the homelab is offline, skips the WireGuard
+  hop, and lets a single-node install run apps at all.
 
 ---
 
@@ -264,6 +291,24 @@ SvelteKit's built-in CSRF check is disabled because it would block the OAuth tok
 - Every non-GET/HEAD request must have `Origin` equal to the platform origin, or `Sec-Fetch-Site: same-origin`.
 - Exceptions are an exact allowlist of cookieless endpoints: `oauth2/token`, `register`, `revoke`, `introspect`, `/mcp`.
 
+### 6.3.2 CLI configuration
+`skif` keeps persistent settings in `~/.config/skiff/config.json` (`$SKIFF_CONFIG_DIR`, else
+`$XDG_CONFIG_HOME/skiff`, else `~/.config/skiff`), mode 0600:
+- `url` — control-plane origin, e.g. `https://control.kieran.dev`.
+- `contentDomain` — domain deployed sites use, e.g. `kierancloud.dev`; used to build preview
+  URLs when the API does not return one.
+- `token` — API key.
+
+`skif config list|get|set|unset|path` manages them and shows whether each effective value comes
+from the file or the environment. `skif login` is browser-first: it opens the dashboard approval
+page, which redirects a one-time PKCE-bound code to the CLI's loopback listener; the CLI exchanges
+that code for a new API key (`--no-browser` prints the URL, `--token` stores a key created in the
+dashboard). The code is stored hashed in `cli_login_codes`, expires after five minutes, and can be
+redeemed once. Login records the canonical platform and content domain the server reports.
+`skif logout` removes only the token, so the next login remembers the URL and domains;
+`skif logout --all` removes the file. `SKIFF_URL`, `SKIFF_TOKEN` and `SKIFF_CONTENT_DOMAIN`
+override the file for CI and agent use.
+
 ### 6.4 Protected sites
 - Access modes per project, set separately for production and previews: `public | password | platform`.
   **Defaults: production `public`, previews `platform`.**
@@ -330,7 +375,8 @@ SvelteKit's built-in CSRF check is disabled because it would block the OAuth tok
 
 | Failure | Effect | Behaviour |
 |---|---|---|
-| Homelab offline | Homelab-placed projects unreachable | Edge Caddy health-checks and serves a branded 503 + `Retry-After`. Alert after 2 min. Optional static mirror to edge (per project, opt-in). |
+| Homelab offline | Homelab-placed projects unreachable | Edge Caddy health-checks and serves a branded 503 + `Retry-After`. Alert after 2 min. Optional static mirror to edge (per project, opt-in). Edge-placed sites and apps keep serving. |
+| Edge app exhausts memory | That app is OOM-killed and restarted | Contained by its own `MemoryMax` and `skiff-workloads.slice`. The control plane, Caddy and other sites are unaffected. Alert on restart loops. |
 | Control plane crash | Dashboard/API/MCP down | All sites keep serving (agents use cached desired state). systemd restarts it. |
 | VPS lost | Everything down | **Accepted single point of failure for v1.** Restore to a fresh VPS in under 15 min. |
 | R2 unreachable | New deploys fail | Existing sites unaffected (node-local cache). |
@@ -363,7 +409,8 @@ SvelteKit's built-in CSRF check is disabled because it would block the OAuth tok
 - VPS nftables: allow 80, 443 and the WireGuard UDP port only. SSH over WireGuard (or key-only break-glass).
 - Homelab: no inbound ports. It dials out over WireGuard.
 - Unattended security upgrades.
-- v1 needs **no root** at runtime. The privileged helper arrives with tier 2.
+- v1 needs **no root** at runtime. The privileged helper arrives with tier 2, on every node that runs
+  apps (edge included).
 
 ---
 
@@ -378,7 +425,7 @@ SvelteKit's built-in CSRF check is disabled because it would block the OAuth tok
   4. SES SMTP (flags the SES sandbox).
   5. First admin with a passkey.
   6. Recovery kit.
-- **Join a node:** `skif agent join https://cloud.<platformDomain> --token <single-use, 1h>`.
+- **Join a node:** `skiff-agent join https://cloud.<platformDomain> --token <single-use, 1h> --name <name>`.
 - **Self-update:**
   1. Verify the signature.
   2. Snapshot SQLite.
