@@ -441,12 +441,88 @@ export const auditLog = sqliteTable(
 		result: text('result', { enum: ['ok', 'error'] }).notNull(),
 		error: text('error'),
 		ipHash: text('ip_hash'),
+		/** Set on the per-item rows a mass operation writes (docs/OPERATIONS.md §7). */
+		operationId: text('operation_id'),
 		createdAt: integer('created_at').notNull().$defaultFn(now),
 	},
 	(t) => [
 		index('audit_org_idx').on(t.orgId),
+		index('audit_operation_idx').on(t.operationId),
 		index('audit_created_idx').on(t.createdAt),
 		index('audit_action_idx').on(t.action),
+	],
+);
+
+/**
+ * Mass actions and prune runs (docs/OPERATIONS.md §2). An operation is planned (verdict per item),
+ * then applied item by item; item status is persisted as it runs so a restart resumes where it
+ * stopped.
+ */
+export const operations = sqliteTable(
+	'operations',
+	{
+		id: text('id').primaryKey(),
+		/** Null for a platform-scope prune. */
+		orgId: text('org_id'),
+		kind: text('kind', { enum: ['bulk', 'prune'] }).notNull(),
+		action: text('action').notNull(),
+		status: text('status', {
+			enum: ['queued', 'planning', 'planned', 'applying', 'succeeded', 'partial', 'failed', 'cancelled', 'expired'],
+		})
+			.notNull()
+			.default('queued'),
+		/** What to do after planning: stop for review, or apply straight away. */
+		stage: text('stage', { enum: ['plan', 'apply'] }).notNull().default('plan'),
+		paramsJson: text('params_json'),
+		summaryJson: text('summary_json'),
+		phase: text('phase'),
+		total: integer('total').notNull().default(0),
+		done: integer('done').notNull().default(0),
+		failed: integer('failed').notNull().default(0),
+		cancelRequested: integer('cancel_requested', { mode: 'boolean' }).notNull().default(false),
+		actorType: text('actor_type').notNull(),
+		actorId: text('actor_id'),
+		clientId: text('client_id'),
+		/** The principal the run executes as (permissions are re-checked against it per item). */
+		principalJson: text('principal_json').notNull(),
+		idempotencyKey: text('idempotency_key'),
+		heartbeatAt: integer('heartbeat_at'),
+		planExpiresAt: integer('plan_expires_at'),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		startedAt: integer('started_at'),
+		finishedAt: integer('finished_at'),
+	},
+	(t) => [
+		index('operations_org_idx').on(t.orgId, t.createdAt),
+		index('operations_status_idx').on(t.status),
+		uniqueIndex('operations_idempotency_idx').on(t.orgId, t.actorId, t.idempotencyKey),
+	],
+);
+
+export const operationItems = sqliteTable(
+	'operation_items',
+	{
+		operationId: text('operation_id').notNull(),
+		seq: integer('seq').notNull(),
+		category: text('category'),
+		targetKind: text('target_kind').notNull(),
+		targetId: text('target_id').notNull(),
+		label: text('label'),
+		verdict: text('verdict', { enum: ['ok', 'skip', 'blocked'] }).notNull(),
+		reason: text('reason'),
+		flagsJson: text('flags_json'),
+		status: text('status', { enum: ['pending', 'succeeded', 'skipped', 'failed', 'cancelled'] })
+			.notNull()
+			.default('pending'),
+		error: text('error'),
+		bytes: integer('bytes'),
+		/** Category-specific data the apply step needs (e.g. org id and object key). */
+		dataJson: text('data_json'),
+		updatedAt: integer('updated_at'),
+	},
+	(t) => [
+		primaryKey({ columns: [t.operationId, t.seq] }),
+		index('operation_items_status_idx').on(t.operationId, t.status),
 	],
 );
 

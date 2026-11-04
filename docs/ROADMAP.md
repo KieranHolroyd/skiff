@@ -67,6 +67,17 @@
 - [ ] Named environments (staging, …)
 - [x] Dashboard surfaces for environments, workloads, builds, domains and fleet capacity
 
+## Mass actions & prune ([OPERATIONS.md](./OPERATIONS.md))
+- [x] Trash cascade fixes: owned rows, domains + Cloudflare records, stale workload reservations, snapshot GC, `cleanupRows` wired
+- [x] Operation primitive (plan → apply, resumable, SSE progress) with bulk delete / restore / purge
+- [x] Prune (org + platform scope, incl. unreferenced stored objects via `ObjectStore.list`)
+- [x] Dashboard: bulk selection, Trash, Undo, Settings → Maintenance, operation detail
+- [x] CLI: `projects delete|restore|trash|purge`, `prune`, `operations`
+- [x] MCP: `delete_projects`, `restore_projects`, `get_operation`
+- [ ] More bulk actions: pause/resume, set access, set placement, redeploy (§3.1)
+- [ ] Scheduled plan-only prune with a notification when it finds something
+- [ ] Agent-side release cache prune (`node_caches`)
+
 ## Later / maybe
 - Backup ingress (Cloudflare Tunnel from the homelab + DNS failover)
 - Importing external Prometheus datasources

@@ -46,7 +46,25 @@ export interface ProjectView {
 	previewAccess: string;
 	createdAt: string;
 	deletedAt: string | null;
+	/** When a trashed project is permanently deleted. */
+	purgeAt: string | null;
 }
+
+/**
+ * Tables whose rows belong to exactly one project and go with it on a hard delete. Share links,
+ * redemptions and domains need extra handling and are cleaned up separately.
+ */
+export const projectOwnedTables = [
+	'workloads',
+	'environments',
+	'builds',
+	'git_sources',
+	'log_events',
+	'secrets',
+	'deployments',
+	'upload_sessions',
+	'slug_redirects',
+] as const;
 
 export class ProjectService {
 	constructor(private readonly ctx: CoreContext) {}
@@ -91,6 +109,7 @@ export class ProjectService {
 			previewAccess: row.previewAccess,
 			createdAt: new Date(row.createdAt).toISOString(),
 			deletedAt: row.deletedAt ? new Date(row.deletedAt).toISOString() : null,
+			purgeAt: row.purgeAt ? new Date(row.purgeAt).toISOString() : null,
 		};
 	}
 
@@ -163,15 +182,17 @@ export class ProjectService {
 		return row;
 	}
 
-	list(principal: Principal, options: { includeDeleted?: boolean } = {}): ProjectView[] {
+	list(principal: Principal, options: { includeDeleted?: boolean; onlyDeleted?: boolean } = {}): ProjectView[] {
 		requirePermission(principal, 'project:read');
 		const rows = this.ctx.db
 			.select()
 			.from(projects)
 			.where(
-				options.includeDeleted
-					? eq(projects.orgId, principal.orgId)
-					: and(eq(projects.orgId, principal.orgId), isNull(projects.deletedAt)),
+				options.onlyDeleted
+					? and(eq(projects.orgId, principal.orgId), isNotNull(projects.deletedAt))
+					: options.includeDeleted
+						? eq(projects.orgId, principal.orgId)
+						: and(eq(projects.orgId, principal.orgId), isNull(projects.deletedAt)),
 			)
 			.orderBy(desc(projects.createdAt))
 			.all() as ProjectRow[];
@@ -253,12 +274,12 @@ export class ProjectService {
 		this.bump();
 	}
 
-	async softDelete(principal: Principal, slug: string): Promise<void> {
+	async softDelete(principal: Principal, slug: string, options: { operationId?: string } = {}): Promise<void> {
 		requirePermission(principal, 'project:delete');
 		const row = this.requireRow(principal, slug);
 		const now = this.ctx.now();
 		await this.ctx.audit.wrap(
-			{ principal, action: 'project.delete', resource: 'project', resourceId: row.id, args: { slug } },
+			{ principal, action: 'project.delete', resource: 'project', resourceId: row.id, args: { slug }, operationId: options.operationId },
 			() => {
 				this.ctx.db
 					.update(projects)
@@ -272,12 +293,14 @@ export class ProjectService {
 		);
 	}
 
-	async restore(principal: Principal, slug: string): Promise<ProjectView> {
+	async restore(principal: Principal, slug: string, options: { operationId?: string } = {}): Promise<ProjectView> {
 		requirePermission(principal, 'project:update');
 		const row = this.requireRow(principal, slug, { includeDeleted: true });
 		if (!row.deletedAt) return this.view(row);
+		// A restored project counts against the quota again, exactly like a new one.
+		this.ctx.quota.assertCanCreateProject(principal.orgId);
 		await this.ctx.audit.wrap(
-			{ principal, action: 'project.restore', resource: 'project', resourceId: row.id },
+			{ principal, action: 'project.restore', resource: 'project', resourceId: row.id, operationId: options.operationId },
 			() => {
 				this.ctx.db
 					.update(projects)
@@ -291,34 +314,64 @@ export class ProjectService {
 	}
 
 	/** Hard delete after the 7-day trash window; frees the slug and its dependent rows. */
-	purgeExpired(): number {
+	async purgeExpired(): Promise<number> {
 		const now = this.ctx.now();
 		const expired = this.ctx.db
 			.select()
 			.from(projects)
-			.where(and(isNotNull(projects.deletedAt), isNotNull(projects.purgeAt)))
+			.where(and(isNotNull(projects.deletedAt), isNotNull(projects.purgeAt), lte(projects.purgeAt, now)))
 			.all() as ProjectRow[];
-		const orgIds = new Set<string>();
 		let purged = 0;
 		for (const row of expired) {
-			if (!row.purgeAt || row.purgeAt > now) continue;
-			orgIds.add(row.orgId);
-			this.ctx.sqlite.transaction(() => {
-				this.ctx.sqlite.run('DELETE FROM deployments WHERE project_id = ?', [row.id]);
-				this.ctx.sqlite.run('DELETE FROM upload_sessions WHERE project_id = ?', [row.id]);
-				this.ctx.sqlite.run('DELETE FROM share_links WHERE project_id = ?', [row.id]);
-				this.ctx.sqlite.run('DELETE FROM domains WHERE project_id = ?', [row.id]);
-				this.ctx.sqlite.run('DELETE FROM slug_redirects WHERE project_id = ?', [row.id]);
-				this.ctx.sqlite.run('DELETE FROM projects WHERE id = ?', [row.id]);
-			})();
+			await this.purgeRow(row);
 			purged++;
 		}
-		if (purged) {
-			this.bump();
-			for (const orgId of orgIds)
-				void this.ctx.deployments.gcReleases(orgId).catch(() => undefined);
-		}
 		return purged;
+	}
+
+	/**
+	 * Permanently delete a project that is already in the trash, without waiting for the window
+	 * (bulk `project.purge`). Irreversible, so it only accepts trashed projects.
+	 */
+	async purgeNow(principal: Principal, slug: string, options: { operationId?: string } = {}): Promise<void> {
+		requirePermission(principal, 'project:delete');
+		const row = this.requireRow(principal, slug, { includeDeleted: true });
+		if (!row.deletedAt) throw new ConflictError(`"${slug}" is not in the trash. Delete it first.`);
+		await this.ctx.audit.wrap(
+			{
+				principal,
+				action: 'project.purge',
+				resource: 'project',
+				resourceId: row.id,
+				args: { slug },
+				operationId: options.operationId,
+			},
+			() => this.purgeRow(row),
+		);
+	}
+
+	/**
+	 * The one cascade for a hard project delete (trash expiry and purge-now). Everything keyed by
+	 * the project goes with it: a leftover workload keeps node memory reserved, leftover
+	 * environments/builds point at deleted deployments, and domains must go through the domain
+	 * service so their managed Cloudflare records are removed too (docs/OPERATIONS.md L1/L2).
+	 */
+	async purgeRow(row: ProjectRow): Promise<void> {
+		// Outside the transaction: Cloudflare is a network call. A failure is audited by the domain
+		// service and the row is still removed; prune reports any record it could not clean up.
+		await this.ctx.domains.removeForProject(row);
+		this.ctx.sqlite.transaction(() => {
+			for (const table of projectOwnedTables)
+				this.ctx.sqlite.run(`DELETE FROM ${table} WHERE project_id = ?`, [row.id]);
+			this.ctx.sqlite.run(
+				'DELETE FROM share_redemptions WHERE share_link_id IN (SELECT id FROM share_links WHERE project_id = ?)',
+				[row.id],
+			);
+			this.ctx.sqlite.run('DELETE FROM share_links WHERE project_id = ?', [row.id]);
+			this.ctx.sqlite.run('DELETE FROM projects WHERE id = ?', [row.id]);
+		})();
+		this.bump();
+		void this.ctx.deployments.gcReleases(row.orgId).catch(() => undefined);
 	}
 
 	/** Release old slugs whose 30-day redirect has lapsed (D32). Meant for the maintenance sweep. */

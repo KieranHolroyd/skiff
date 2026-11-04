@@ -15,13 +15,16 @@ import {
 	effectivePermissions,
 	environmentCreateSchema,
 	inlineFileSchema,
+	isTerminalOperation,
 	limits,
+	operationLimits,
 	projectCreateSchema,
 	projectUpdateSchema,
 	requirePermission,
 	setAccessSchema,
 	shareLinkCreateSchema,
 	workloadSpecSchema,
+	type OperationView,
 	type Permission,
 	type Principal,
 	type Role,
@@ -167,6 +170,17 @@ function verifyConfirmation(state: unknown, principal: Principal, tool: string, 
 		);
 	} catch {
 		return false;
+	}
+}
+
+/** The target a confirmation state names, before verification (verify it with `verifyConfirmation`). */
+function confirmationTarget(state: unknown): string | undefined {
+	if (typeof state !== 'string') return undefined;
+	try {
+		const claims = JSON.parse(Buffer.from(state.split('.')[0] ?? '', 'base64url').toString('utf8')) as { r?: unknown };
+		return typeof claims.r === 'string' ? claims.r : undefined;
+	} catch {
+		return undefined;
 	}
 }
 
@@ -334,6 +348,155 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 				};
 			});
 		},
+	);
+
+	// --- mass actions (docs/OPERATIONS.md §6.3) ------------------------------
+	/** Wrap a finished operation as a compact tool result agents can act on. */
+	const operationResult = (operation: OperationView) => {
+		const items = core.operations.items(principal, operation.id, { limit: 200 }).items;
+		const by = (status: string) => items.filter((item) => item.status === status);
+		return {
+			operationId: operation.id,
+			status: operation.status,
+			succeeded: by('succeeded').map((item) => item.label),
+			skipped: by('skipped').map((item) => ({ project: item.label, reason: item.reason })),
+			failed: by('failed').map((item) => ({ project: item.label, error: item.error })),
+			...(isTerminalOperation(operation.status)
+				? {}
+				: { nextSteps: [`Still running. Call get_operation with id "${operation.id}" to follow it.`] }),
+		};
+	};
+	const projectListSchema = z
+		.array(z.string().min(1))
+		.min(1)
+		.max(operationLimits.mcpTargets)
+		.describe(`Project slugs (at most ${operationLimits.mcpTargets})`);
+
+	tool(
+		'delete_projects',
+		{
+			title: 'Delete several projects',
+			description:
+				`Soft-delete up to ${operationLimits.mcpTargets} projects at once (each stops serving immediately; restorable for 7 days with restore_projects). ` +
+				'The user confirms the exact list. Prefer this over repeated delete_project calls.',
+			inputSchema: z.object({ projects: projectListSchema }),
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+			scopeChallenge: requires('project:delete'),
+		},
+		async ({ projects }, ctx) => {
+			const wanted = [...new Set(projects.map((slug) => slug.trim()))].sort();
+			if (era === 'legacy') {
+				const link = `${core.ctx.config.platformOrigin}/projects?select=${encodeURIComponent(wanted.join(','))}`;
+				return {
+					isError: true,
+					...text(
+						`Deleting ${wanted.length} projects needs your confirmation, which this MCP client can't show. ` +
+							`Ask the user to delete them from the Skiff dashboard: ${link}`,
+					),
+				};
+			}
+			const key = 'confirm_delete_projects';
+			const schema = z.object({ confirm: z.boolean() });
+			// The prompt is bound to a planned operation: the confirmed list can't change afterwards.
+			const state = ctx.mcpReq.requestState();
+			const target = confirmationTarget(state);
+			const prompted =
+				target?.startsWith('op:') && verifyConfirmation(state, principal, 'delete_projects', target) ? target.slice(3) : undefined;
+			if (prompted) {
+				let planned: OperationView;
+				try {
+					planned = core.operations.get(principal, prompted);
+				} catch {
+					return { isError: true, ...text('That confirmation no longer matches an operation. Call delete_projects again.') };
+				}
+				const same = [...(planned.params.targets ?? [])].sort().join('\n') === wanted.join('\n');
+				if (!same) return { isError: true, ...text('The project list changed after the user was asked. Call delete_projects again.') };
+				const answer = acceptedContent(ctx.mcpReq.inputResponses, key, schema);
+				if (ctx.mcpReq.inputResponses?.[key] !== undefined && answer?.confirm !== true) {
+					core.operations.cancel(principal, planned.id);
+					const cancelled = text(`Cancelled: none of the ${wanted.length} projects were deleted (the user did not confirm).`);
+					declined.add(cancelled);
+					return cancelled;
+				}
+				if (answer?.confirm === true)
+					return run(async () => {
+						core.operations.apply(principal, planned.id);
+						const done = await core.operations.wait(principal, planned.id, 20_000);
+						return {
+							...operationResult(done),
+							restoreBefore: new Date(Date.now() + limits.trashDays * 86_400_000).toISOString(),
+						};
+					});
+			}
+			// The prompt itself must be returned as-is (not through `run`, which serialises results).
+			let plan: OperationView;
+			try {
+				const created = core.operations.create(principal, { action: 'project.delete', targets: wanted });
+				plan = await core.operations.wait(principal, created.id, 10_000);
+			} catch (error) {
+				return run(() => {
+					throw error;
+				});
+			}
+			if (plan.status !== 'planned')
+				return run(() => ({ operationId: plan.id, status: plan.status, nextSteps: ['Planning did not finish; try again.'] }));
+			const items = core.operations.items(principal, plan.id, { limit: 200 }).items;
+			const ok = items.filter((item) => item.verdict === 'ok');
+			if (ok.length === 0) {
+				core.operations.cancel(principal, plan.id);
+				return run(() => ({
+					deleted: [],
+					skipped: items.map((item) => ({ project: item.label, reason: item.reason })),
+					message: 'Nothing to delete.',
+				}));
+			}
+			const live = ok.filter((item) => item.flags.includes('live')).map((item) => item.label);
+			const skipped = items.filter((item) => item.verdict !== 'ok');
+			const message = [
+				`Delete ${ok.length} project${ok.length === 1 ? '' : 's'}: ${ok.map((item) => item.label).join(', ')}?`,
+				live.length ? `${live.length} ${live.length === 1 ? 'is' : 'are'} serving production: ${live.join(', ')}.` : '',
+				skipped.length ? `Skipped: ${skipped.map((item) => `${item.label} (${item.reason})`).join(', ')}.` : '',
+				'They stop serving immediately and can be restored for 7 days.',
+			]
+				.filter(Boolean)
+				.join(' ');
+			return inputRequired({
+				inputRequests: { [key]: inputRequired.elicit({ message, requestedSchema: schema }) },
+				requestState: mintConfirmation(principal, 'delete_projects', `op:${plan.id}`),
+			});
+		},
+	);
+
+	tool(
+		'restore_projects',
+		{
+			title: 'Restore projects from the trash',
+			description: `Restore up to ${operationLimits.mcpTargets} soft-deleted projects; production comes straight back.`,
+			inputSchema: z.object({ projects: projectListSchema }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('project:update'),
+		},
+		async ({ projects }) =>
+			run(async () => {
+				const created = core.operations.create(principal, { action: 'project.restore', targets: projects, stage: 'apply' });
+				return operationResult(await core.operations.wait(principal, created.id, 20_000));
+			}),
+	);
+
+	tool(
+		'get_operation',
+		{
+			title: 'Get a mass operation',
+			description: 'Status, progress and per-item results of a bulk operation (e.g. one started by delete_projects).',
+			inputSchema: z.object({ id: z.string().describe('Operation id (op_…)') }),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('project:read'),
+		},
+		async ({ id }) =>
+			run(() => {
+				const operation = core.operations.get(principal, id);
+				return { ...operationResult(operation), progress: { done: operation.done, total: operation.total, phase: operation.phase } };
+			}),
 	);
 
 	// --- deploying ----------------------------------------------------------

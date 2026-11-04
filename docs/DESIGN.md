@@ -292,6 +292,7 @@ create_upload → presigned PUT ─┼─► Upload session ─► finalize ─�
 |---|---|
 | One-shot | `deploy_site({ name, files?, uploadId?, promote? })`: creates the project if missing, then deploys |
 | Projects | `list_projects`, `get_project`, `create_project`, `update_project`, `delete_project` |
+| Mass actions | `delete_projects` (≤25, one confirmation for the whole list), `restore_projects`, `get_operation` (D53; no purge or prune over MCP) |
 | Deploying | `create_upload`, `deploy_files`, `finalize_upload`, `list_deployments`, `get_deployment`, `promote_deployment`, `rollback` |
 | Access | `set_access`, `create_share_link`, `list_share_links`, `revoke_share_link` |
 | Observability | `get_status`, `get_metrics`, `get_logs`, `get_audit_log` |

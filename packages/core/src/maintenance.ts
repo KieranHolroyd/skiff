@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { backupRuns, deployments, shareLinks, shareRedemptions } from '@skiff/db';
+import { operationLimits } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import { ALERT_AFTER_MS } from './nodes.ts';
 
@@ -39,7 +40,11 @@ export class MaintenanceService {
 	constructor(private readonly ctx: CoreContext) {}
 
 	async run(): Promise<MaintenanceReport> {
-		const projectsPurged = this.ctx.projects.purgeExpired();
+		const projectsPurged = await this.ctx.projects.purgeExpired();
+		// Cheap, certain cleanup runs every sweep; prune is the on-demand deep backstop.
+		this.cleanupRows();
+		this.ctx.releases.gcSnapshots(operationLimits.pruneGraceMs);
+		this.ctx.operations.expireAndPrune();
 		// Rename redirects older than 30 days release their slug (DESIGN §5.1).
 		this.ctx.projects.pruneExpiredRedirects();
 		const uploadsExpired = this.ctx.uploads.expireStale();

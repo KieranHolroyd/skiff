@@ -334,6 +334,32 @@ export class DomainService {
 		return this.view(row, project);
 	}
 
+	/**
+	 * Remove every domain of a project that is being hard-deleted, including the managed Cloudflare
+	 * records (internal: the caller already checked permissions). Returns how many were removed.
+	 */
+	async removeForProject(project: ProjectRow): Promise<number> {
+		const rows = this.ctx.db.select().from(domains).where(eq(domains.projectId, project.id)).all();
+		for (const row of rows) await this.removeOrphan(row, project);
+		return rows.length;
+	}
+
+	/** Remove one domain row and its managed records; `project` may already be gone (prune). */
+	async removeOrphan(row: DomainRow, project: ProjectRow | null, operationId?: string): Promise<void> {
+		await this.removeCloudflareRecords(row, project);
+		this.ctx.db.delete(domains).where(eq(domains.id, row.id)).run();
+		this.ctx.audit.record({
+			orgId: row.orgId,
+			action: 'domain.delete',
+			resource: 'domain',
+			resourceId: row.id,
+			args: { hostname: row.hostname, reason: project?.deletedAt || !project ? 'project_purged' : 'removed' },
+			result: 'ok',
+			operationId,
+		});
+		this.ctx.projects.bump(row.orgId);
+	}
+
 	async remove(principal: Principal, id: string): Promise<void> {
 		requirePermission(principal, 'domain:delete');
 		const row = this.ctx.db.select().from(domains).where(and(eq(domains.id, id), eq(domains.orgId, principal.orgId))).get();

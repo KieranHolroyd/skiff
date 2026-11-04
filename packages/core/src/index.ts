@@ -20,6 +20,7 @@ import { BuildService } from './builds.ts';
 import { LogService } from './logs.ts';
 import { EnvironmentService } from './environments.ts';
 import { SourceService } from './source.ts';
+import { createOperationService, type OperationService } from './operations/index.ts';
 
 export * from './config.ts';
 export * from './context.ts';
@@ -47,6 +48,7 @@ export * from './environments.ts';
 export * from './source.ts';
 export * from './notify.ts';
 export * from './telemetry.ts';
+export * from './operations/index.ts';
 
 export interface CoreOptions {
 	db: SkiffDb;
@@ -74,6 +76,7 @@ export interface Core {
 	environments: EnvironmentService;
 	source: SourceService;
 	audit: AuditService;
+	operations: OperationService;
 }
 
 /**
@@ -104,6 +107,7 @@ export function createCore(options: CoreOptions): Core {
 	ctx.domains = new DomainService(ctx);
 	ctx.logs = new LogService(ctx);
 	ctx.builds = new BuildService(ctx);
+	ctx.operations = createOperationService(ctx);
 	const source = new SourceService(ctx);
 
 	const deploy = new DeployService(ctx);
@@ -130,5 +134,6 @@ export function createCore(options: CoreOptions): Core {
 		environments: ctx.environments,
 		source,
 		audit: ctx.audit,
+		operations: ctx.operations,
 	};
 }

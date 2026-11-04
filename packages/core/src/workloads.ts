@@ -342,7 +342,11 @@ export class WorkloadService {
 	private reservedByNode(): Map<string, number> {
 		const rows = this.ctx.sqlite
 			.query<{ nodeId: string; total: number | null }, [string, string, string]>(
-				'SELECT node_id AS nodeId, SUM(memory_mb) AS total FROM workloads WHERE node_id IS NOT NULL AND status IN (?, ?, ?) GROUP BY node_id',
+				// Only live projects reserve budget: a trashed project's workload is no longer in desired
+				// state, so its agent stops it and never reports it again (docs/OPERATIONS.md L5).
+				`SELECT w.node_id AS nodeId, SUM(w.memory_mb) AS total FROM workloads w
+				 JOIN projects p ON p.id = w.project_id AND p.deleted_at IS NULL
+				 WHERE w.node_id IS NOT NULL AND w.status IN (?, ?, ?) GROUP BY w.node_id`,
 			)
 			.all('pending', 'starting', 'running');
 		return new Map(rows.map((row) => [row.nodeId, row.total ?? 0]));

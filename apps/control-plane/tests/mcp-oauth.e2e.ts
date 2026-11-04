@@ -125,14 +125,17 @@ check('access token is a JWT bound to the MCP resource', aud.includes(MCP), `aud
 check('refresh token issued (offline_access)', !!tok1.refresh_token);
 
 // 9. MCP client with the token
+/** The last confirmation prompt the server sent, to check what the human was shown. */
+let lastElicitation = '';
 async function connect(token: string, elicitAnswer: 'accept' | 'decline', mode: 'auto' | 'legacy' = 'auto') {
 	const client = new Client(
 		{ name: 'skiff-e2e', version: '0.0.0' },
 		{ capabilities: { elicitation: { form: {} } }, versionNegotiation: { mode } },
 	);
-	client.setRequestHandler('elicitation/create', async () =>
-		elicitAnswer === 'accept' ? { action: 'accept', content: { confirm: true } } : { action: 'decline' },
-	);
+	client.setRequestHandler('elicitation/create', async (request: { params?: { message?: string } }) => {
+		lastElicitation = request.params?.message ?? '';
+		return elicitAnswer === 'accept' ? { action: 'accept', content: { confirm: true } } : { action: 'decline' };
+	});
 	await client.connect(new StreamableHTTPClientTransport(new URL(MCP), {
 		requestInit: { headers: { authorization: `Bearer ${token}` } },
 	}));
@@ -182,10 +185,51 @@ try {
 check('delete when user declines → not deleted', !/moved to trash/.test(declined) && !/restorable/.test(declined), declined.slice(0, 140));
 await client.close();
 
+// 11b. Bulk delete: one prompt names every project; accept deletes them, decline deletes none.
+client = await connect(tok2.access_token, 'accept');
+for (const slug of ['bulk-one', 'bulk-two', 'bulk-keep'])
+	await client.callTool({ name: 'create_project', arguments: { name: slug, slug } });
+lastElicitation = '';
+const bulk = await client.callTool({ name: 'delete_projects', arguments: { projects: ['bulk-one', 'bulk-two', 'bulk-ghost'] } });
+const bulkBody = (() => {
+	try {
+		return JSON.parse(textOf(bulk));
+	} catch {
+		return {};
+	}
+})();
+check(
+	'delete_projects prompt lists the projects and the skipped one',
+	/bulk-one/.test(lastElicitation) && /bulk-two/.test(lastElicitation) && /bulk-ghost \(not_found\)/.test(lastElicitation),
+	lastElicitation.slice(0, 160),
+);
+check(
+	'delete_projects after confirmation deletes exactly the confirmed list',
+	!bulk.isError && bulkBody.status === 'succeeded' && bulkBody.succeeded?.length === 2,
+	textOf(bulk).slice(0, 600),
+);
+await client.close();
+
+client = await connect(tok2.access_token, 'decline');
+const bulkDeclined = await client.callTool({ name: 'delete_projects', arguments: { projects: ['bulk-keep'] } });
+const stillThere = textOf(await client.callTool({ name: 'list_projects', arguments: {} }));
+check(
+	'delete_projects declined → nothing deleted',
+	/Cancelled/.test(textOf(bulkDeclined)) && /bulk-keep/.test(stillThere),
+	textOf(bulkDeclined).slice(0, 120),
+);
+await client.close();
+
 // 12. 2025-era client: destructive tool degrades to a clear "use the dashboard" error
 client = await connect(tok2.access_token, 'accept', 'legacy');
 const legacyDel = await client.callTool({ name: 'delete_project', arguments: { project: 'demo' } });
 check('legacy client: delete → dashboard hand-off, not deleted', !!legacyDel.isError && /dashboard/.test(textOf(legacyDel)), textOf(legacyDel).slice(0, 100));
+const legacyBulk = await client.callTool({ name: 'delete_projects', arguments: { projects: ['bulk-keep'] } });
+check(
+	'legacy client: delete_projects → dashboard link with the selection',
+	!!legacyBulk.isError && /projects\?select=bulk-keep/.test(textOf(legacyBulk)),
+	textOf(legacyBulk).slice(0, 140),
+);
 await client.close();
 
 // 13. A forged / wrong-audience token is rejected

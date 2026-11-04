@@ -318,3 +318,101 @@ describe('ApiClient', () => {
 		);
 	});
 });
+
+describe('ApiClient operations', () => {
+	const operation = {
+		id: 'op_1',
+		kind: 'bulk',
+		action: 'project.delete',
+		status: 'planned',
+		scope: null,
+		phase: null,
+		total: 1,
+		done: 0,
+		failed: 0,
+		summary: { verdicts: { ok: 1 }, statuses: { pending: 1 }, flags: {}, freedBytes: 0 },
+		createdAt: '2026-11-04T12:00:00.000Z',
+		startedAt: null,
+		finishedAt: null,
+		planExpiresAt: '2026-11-04T13:00:00.000Z',
+	};
+
+	test('createOperation sends the body, wait and Idempotency-Key, and reads the bare view', async () => {
+		let seen: { url: string; key: string | null; body: unknown } | undefined;
+		await withServer(
+			async (request) => {
+				seen = { url: request.url, key: request.headers.get('idempotency-key'), body: await request.json() };
+				return Response.json(operation, { status: 202 });
+			},
+			async (server) => {
+				const client = new ApiClient({ baseUrl: baseUrl(server), token });
+				const view = await client.createOperation(
+					{ action: 'project.delete', targets: ['a'], stage: 'plan' },
+					{ idempotencyKey: 'k-1', waitSeconds: 40 },
+				);
+				expect(view.id).toBe('op_1');
+				expect(view.summary.verdicts.ok).toBe(1);
+				expect(seen?.url).toBe(`${baseUrl(server)}/api/v1/operations?wait=25`);
+				expect(seen?.key).toBe('k-1');
+				expect(seen?.body).toEqual({ action: 'project.delete', targets: ['a'], stage: 'plan' });
+			},
+		);
+	});
+
+	test('getOperation unwraps { operation } and listOperationItems follows the cursor', async () => {
+		const urls: string[] = [];
+		await withServer(
+			(request) => {
+				const url = new URL(request.url);
+				urls.push(`${url.pathname}${url.search}`);
+				if (!url.searchParams.get('items')) return Response.json({ operation });
+				const after = Number(url.searchParams.get('after'));
+				return Response.json({
+					operation,
+					items: after === 0 ? [{ seq: 1 }, { seq: 2 }] : [{ seq: 3 }],
+					cursor: after === 0 ? 2 : 3,
+					hasMore: after === 0,
+				});
+			},
+			async (server) => {
+				const client = new ApiClient({ baseUrl: baseUrl(server), token });
+				expect((await client.getOperation('op_1')).status).toBe('planned');
+				const { items } = await client.listOperationItems('op_1', { status: 'failed' });
+				expect(items.map((entry) => entry.seq)).toEqual([1, 2, 3]);
+				expect(urls.slice(1)).toEqual([
+					'/api/v1/operations/op_1?items=1&status=failed&after=0&limit=1000',
+					'/api/v1/operations/op_1?items=1&status=failed&after=2&limit=1000',
+				]);
+			},
+		);
+	});
+
+	test('a 409 on apply becomes an ApiError with the server message', async () => {
+		await withServer(
+			() => Response.json({ error: 'conflict', message: 'Only a planned operation can be applied (it is cancelled).' }, { status: 409 }),
+			async (server) => {
+				const client = new ApiClient({ baseUrl: baseUrl(server), token });
+				const error = await client.applyOperation('op_1').catch((caught) => caught);
+				expect(error).toBeInstanceOf(ApiError);
+				expect(error.status).toBe(409);
+				expect(error.message).toContain('Only a planned operation can be applied');
+			},
+		);
+	});
+
+	test('listProjects({ trash }) asks for the trash and keeps purgeAt', async () => {
+		await withServer(
+			(request) => {
+				expect(new URL(request.url).search).toBe('?trash=1');
+				return Response.json({
+					projects: [{ slug: 'old', deletedAt: '2026-11-01T00:00:00Z', purgeAt: '2026-11-08T00:00:00Z' }],
+				});
+			},
+			async (server) => {
+				const client = new ApiClient({ baseUrl: baseUrl(server), token });
+				const { projects } = await client.listProjects({ trash: true });
+				expect(projects[0]?.purgeAt).toBe('2026-11-08T00:00:00Z');
+			},
+		);
+	});
+});

@@ -13,6 +13,8 @@ export interface AuditInput {
 	result: 'ok' | 'error';
 	error?: string;
 	orgId?: string;
+	/** Set when the entry is one item of a mass operation (docs/OPERATIONS.md §7). */
+	operationId?: string;
 }
 
 /** Every mutating surface writes here; MCP calls include the client id (DESIGN §6.3). */
@@ -43,6 +45,7 @@ export class AuditService {
 				result: input.result,
 				error: input.error ?? null,
 				ipHash: principal?.ipHash ?? null,
+				operationId: input.operationId ?? null,
 			})
 			.run();
 	}

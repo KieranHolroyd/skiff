@@ -12,9 +12,11 @@ import { loginCommand } from './commands/login.ts';
 import { logoutCommand } from './commands/logout.ts';
 import { logsCommand } from './commands/logs.ts';
 import { openCommand } from './commands/open.ts';
+import { operationsCommand } from './commands/operations.ts';
 import { profileCommand } from './commands/profile.ts';
 import { projectsCommand } from './commands/projects.ts';
 import { promoteCommand } from './commands/promote.ts';
+import { pruneCommand } from './commands/prune.ts';
 import { rollbackCommand } from './commands/rollback.ts';
 import { statusCommand } from './commands/status.ts';
 import { PROFILE_ENV, setProfileOverride } from './config.ts';
@@ -34,6 +36,9 @@ const commands: Record<string, (argv: string[]) => Promise<void>> = {
 	rollback: rollbackCommand,
 	logs: logsCommand,
 	open: openCommand,
+	prune: pruneCommand,
+	operations: operationsCommand,
+	ops: operationsCommand,
 };
 
 const help = `${invokedAs} ${pkg.version} — deploy to your own Skiff cloud
@@ -48,11 +53,15 @@ Commands:
   deploy [dir] [options]                     Zip and deploy a directory
   status [project]                           Fleet health, or one project's status
   projects                                   List projects
+  projects delete|restore|purge <slug…>      Bulk actions: shows the plan, then asks
+  projects trash                             List the trash with purge dates
   deployments <project>                      List deployments
   promote <project> <deploymentId>           Move production to a deployment
   rollback <project>                         Move production back one deployment
   logs <project>                             Show recent project logs
   open <project>                             Open the site in a browser
+  prune [--apply] [--plan <id>]              Find and remove orphaned data (dry run by default)
+  operations [list|show|watch|cancel]        Inspect and follow bulk and prune operations
 
 Global:
   --profile <name>  Use a saved profile (also ${PROFILE_ENV})
@@ -68,7 +77,11 @@ Environment:
 Settings and credentials are stored per profile at ~/.config/skiff/config.json with
 mode 0600. With one profile commands use it automatically; with several, run
 \`skif profile use <name>\` or pass --profile. \`logout\` removes only the selected
-profile's API key; \`logout --all\` removes the file.`;
+profile's API key; \`logout --all\` removes the file.
+
+Bulk and prune commands exit 0 when everything succeeded, 3 when some items failed,
+and 1 when the run failed or was cancelled. Ctrl-C detaches: the run keeps going on
+the server and \`skif operations watch <id>\` picks it up again.`;
 
 async function run(): Promise<void> {
 	let argv: string[];

@@ -13,6 +13,16 @@ import {
 	domainCreateSchema,
 	logLevels,
 	logSources,
+	itemStatuses,
+	itemVerdicts,
+	operationApplySchema,
+	operationCreateSchema,
+	operationKinds,
+	operationStatuses,
+	type ItemStatus,
+	type ItemVerdict,
+	type OperationKind,
+	type OperationStatus,
 	type LogLevel,
 	type LogSource,
 } from '@skiff/contracts';
@@ -62,7 +72,10 @@ const api: RequestHandler = async (event) => {
 		// --- projects ---------------------------------------------------------
 		if (segments[0] === 'projects') {
 			if (segments.length === 1) {
-				if (method === 'GET') return { projects: core.projects.list(principal) };
+				if (method === 'GET') {
+					const trash = event.url.searchParams.get('trash');
+					return { projects: core.projects.list(principal, { onlyDeleted: trash === '1' || trash === 'true' }) };
+				}
 				if (method === 'POST') {
 					const input = await readJson(request, projectCreateSchema);
 					return json(await core.projects.create(principal, input), 201);
@@ -172,6 +185,60 @@ const api: RequestHandler = async (event) => {
 					return { ok: true };
 				}
 			}
+			return json({ error: 'not_found' }, 404);
+		}
+
+		// --- operations: mass actions and prune (docs/OPERATIONS.md) -------------
+		if (segments[0] === 'operations') {
+			const params = event.url.searchParams;
+			const waitMs = Math.min(Math.max(Number(params.get('wait') ?? 0) || 0, 0), 25) * 1000;
+			const settle = async (view: { id: string }) => (waitMs ? core.operations.wait(principal, view.id, waitMs) : view);
+			if (segments.length === 1) {
+				if (method === 'GET') {
+					const kind = params.get('kind');
+					const status = params.get('status');
+					return {
+						operations: core.operations.list(principal, {
+							...(kind && (operationKinds as readonly string[]).includes(kind) ? { kind: kind as OperationKind } : {}),
+							...(status && (operationStatuses as readonly string[]).includes(status) ? { status: status as OperationStatus } : {}),
+							...(params.get('scope') === 'platform' ? { scope: 'platform' as const } : {}),
+							...(Number(params.get('limit')) > 0 ? { limit: Number(params.get('limit')) } : {}),
+						}),
+					};
+				}
+				if (method === 'POST') {
+					const input = await readJson(request, operationCreateSchema);
+					const idempotencyKey = request.headers.get('idempotency-key')?.trim().slice(0, 128) || undefined;
+					const operation = core.operations.create(principal, input, { idempotencyKey });
+					return json(await settle(operation), 202);
+				}
+				return json({ error: 'method_not_allowed' }, 405);
+			}
+			if (segments.length === 2 && segments[1] === 'actions' && method === 'GET')
+				return { actions: core.operations.actions(principal) };
+			const id = segments[1]!;
+			if (segments.length === 2 && method === 'GET') {
+				const operation = await settle(core.operations.get(principal, id));
+				if (!params.get('items')) return { operation };
+				const status = params.get('status');
+				const verdict = params.get('verdict');
+				return {
+					operation,
+					...core.operations.items(principal, id, {
+						...(Number(params.get('after')) > 0 ? { after: Number(params.get('after')) } : {}),
+						...(Number(params.get('limit')) > 0 ? { limit: Number(params.get('limit')) } : {}),
+						...(status && (itemStatuses as readonly string[]).includes(status) ? { status: status as ItemStatus } : {}),
+						...(verdict && (itemVerdicts as readonly string[]).includes(verdict) ? { verdict: verdict as ItemVerdict } : {}),
+						...(params.get('category') ? { category: params.get('category')! } : {}),
+					}),
+				};
+			}
+			if (segments.length === 3 && segments[2] === 'apply' && method === 'POST') {
+				const input = operationApplySchema.parse(await request.json().catch(() => ({})));
+				return settle(core.operations.apply(principal, id, input));
+			}
+			if (segments.length === 3 && segments[2] === 'cancel' && method === 'POST')
+				return core.operations.cancel(principal, id);
 			return json({ error: 'not_found' }, 404);
 		}
 

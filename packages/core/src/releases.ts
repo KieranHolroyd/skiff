@@ -90,13 +90,32 @@ export class ReleaseService {
 			.from(configSnapshots)
 			.where(and(eq(configSnapshots.orgId, orgId), eq(configSnapshots.hash, hash)))
 			.get();
-		if (existing) return existing.id;
+		if (existing) {
+			// Reuse refreshes the timestamp so snapshot GC's grace window covers an in-flight deploy
+			// that picked up an old, currently unreferenced snapshot.
+			this.ctx.db.update(configSnapshots).set({ createdAt: this.ctx.now() }).where(eq(configSnapshots.id, existing.id)).run();
+			return existing.id;
+		}
 		const id = newId('cfg_');
 		this.ctx.db
 			.insert(configSnapshots)
 			.values({ id, orgId, hash, siteConfigJson: JSON.stringify(config) })
 			.run();
 		return id;
+	}
+
+	/**
+	 * Delete config snapshots no deployment references and that are older than `graceMs`
+	 * (docs/OPERATIONS.md L4). Returns how many were removed.
+	 */
+	gcSnapshots(graceMs: number, orgId?: string): number {
+		const cutoff = this.ctx.now() - graceMs;
+		const result = this.ctx.sqlite.run(
+			`DELETE FROM config_snapshots WHERE created_at < ? ${orgId ? 'AND org_id = ?' : ''}
+			 AND NOT EXISTS (SELECT 1 FROM deployments d WHERE d.config_snapshot_id = config_snapshots.id)`,
+			orgId ? [cutoff, orgId] : [cutoff],
+		);
+		return result.changes;
 	}
 
 	get(orgId: string, id: string) {

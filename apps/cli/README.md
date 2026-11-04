@@ -38,14 +38,63 @@ skif deploy ./dist --project my-site --json
 | `deploy [dir]` | Zip a directory and deploy it (`--project`, `--name`, `--no-promote`, `--message`, `--spa`, `--no-create`) |
 | `status [project]` | Fleet health, or one project's status |
 | `projects` | List projects |
+| `projects delete\|restore\|purge <slug…>` | Bulk actions: plan, confirm, apply (see below) |
+| `projects trash` | List deleted projects and when each is purged |
 | `deployments <project>` | List deployments |
 | `promote <project> <deploymentId>` | Point production at a deployment |
 | `rollback <project>` | Move production back one deployment |
 | `logs <project>` | Show recent project logs |
 | `open <project>` | Open the site in a browser |
+| `prune [--apply] [--plan <id>]` | Find and remove orphaned data (dry run by default) |
+| `operations [list\|show\|watch\|cancel]` | Inspect and follow bulk and prune operations |
 
 Every command accepts `--help`, and most accept `--json` for scripting. Errors in `--json` mode
 are printed to stderr as `{ "error": { "code", "message", "suggestions" } }`.
+
+## Bulk actions and prune
+
+Deleting, restoring and purging many projects, and pruning orphaned data, run as server-side
+*operations*. Each one is planned first: the server decides, per project, what it will do, and
+the CLI shows that plan before asking.
+
+```sh
+skif projects delete blog old-demo                       # named projects
+skif projects delete --match 'test-*' --not-deployed     # selectors (combine with AND)
+skif projects delete --older-than 90d --not-deployed --yes
+cat slugs.txt | skif projects delete --stdin --yes       # one slug per line
+
+skif projects trash                                      # what's deleted, and when it purges
+skif projects restore --match 'test-*'                   # selectors resolve against the trash
+skif projects purge old-demo                             # permanent; trash only
+```
+
+- Selectors (`--match <glob>`, `--not-deployed`, `--older-than 30d|12h|2w`, `--stdin`) are
+  resolved by the CLI into an explicit list; the server only ever acts on that list. In the
+  trash, `--older-than` compares the deletion time. At most 100 projects per run.
+- The plan table shows each slug's verdict (`ok`, `skip`, `blocked`), flags (`live`,
+  `workload`, `custom_domain`) and reason, then asks `Delete 12 projects (3 live)? [y/N]`.
+  Purging more than 10 asks you to type the count.
+- When stdin isn't a terminal, the CLI won't prompt: pass `--yes`, or it cancels the plan and exits 1.
+
+```sh
+skif prune                                   # dry run: scan, per-category table, apply command
+skif prune --apply --plan op_…               # apply exactly that plan (within 1 hour)
+skif prune --apply --only releases,deployments   # scan these, confirm, apply
+skif prune --scope platform                  # every org, plus stored objects (platform admins)
+```
+
+Progress shows one redrawn line per category on a terminal
+(`releases ▕████████░░▏ 384/480 · 46 MiB`), one line per phase in logs, and NDJSON events
+(`plan`, `progress`, `items`, `done`) with `--json`. **Ctrl-C detaches**: the operation keeps
+running on the server, and `skif operations watch <id>` picks it up again. Stop one with
+`skif operations cancel <id>`. Exit codes: `0` succeeded, `3` partial (some items failed),
+`1` failed, cancelled or expired.
+
+```sh
+skif operations                  # recent operations
+skif operations show op_…        # status, counts and items
+skif operations watch op_…       # follow to the end
+```
 
 ## Profiles
 

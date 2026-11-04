@@ -63,3 +63,31 @@ async function readStdin(): Promise<string> {
 	for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
 	return Buffer.concat(chunks).toString('utf8');
 }
+
+/**
+ * Ask one question on the terminal (prompt on stderr, so stdout stays clean for output).
+ * Ctrl-C or Ctrl-D answers with an empty string, which callers treat as "no".
+ */
+export async function askTerminal(question: string): Promise<string> {
+	const readline = createInterface({ input: process.stdin, output: process.stderr });
+	try {
+		return await new Promise<string>((resolve) => {
+			readline.once('SIGINT', () => {
+				process.stderr.write('\n');
+				resolve('');
+			});
+			readline.once('close', () => resolve(''));
+			readline.question(question).then(
+				(answer) => resolve(answer.trim()),
+				() => resolve(''),
+			);
+		});
+	} finally {
+		readline.close();
+	}
+}
+
+/** Everything piped on stdin, as text. */
+export async function readAllStdin(): Promise<string> {
+	return readStdin();
+}

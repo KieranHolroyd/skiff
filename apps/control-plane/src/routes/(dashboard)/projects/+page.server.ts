@@ -1,11 +1,13 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { accessModes, runtimes } from '@skiff/contracts';
+import { accessModes, runtimes, type OperationView } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
 import { failStatus, formString, toFormFailure } from '../_lib/errors.js';
 import type { Actions, PageServerLoad } from './$types';
 
-export const load: PageServerLoad = ({ locals }) => {
+export const load: PageServerLoad = ({ locals, url }) => {
 	const principal = locals.principal!;
+	const view =
+		url.searchParams.get('view') === 'trash' ? ('trash' as const) : ('projects' as const);
 	let capacity: Awaited<ReturnType<typeof core.workloads.capacity>> = [];
 	if (principal.platformAdmin === true) {
 		try {
@@ -14,9 +16,27 @@ export const load: PageServerLoad = ({ locals }) => {
 			// Platform capacity is a nicety for admins; project creation still works without it.
 		}
 	}
+	// Bulk actions come from the registry, already filtered to what this viewer may run.
+	const actions = core.operations
+		.actions(principal)
+		.filter((action) => action.appliesTo === 'projects' || action.appliesTo === 'trash');
+	// Resume the progress card if the viewer reloads while one of their bulk actions runs.
+	let activeBulk: OperationView | null = null;
+	try {
+		activeBulk =
+			core.operations
+				.list(principal, { kind: 'bulk', status: 'applying', limit: 10 })
+				.find((operation) => operation.actor.id === principal.userId) ?? null;
+	} catch {
+		// History needs project:read; without it there is nothing to resume.
+	}
 	return {
+		view,
 		projects: core.projects.list(principal),
-		capacity
+		trash: core.projects.list(principal, { onlyDeleted: true }),
+		capacity,
+		actions,
+		activeBulk
 	};
 };
 
@@ -89,5 +109,20 @@ export const actions: Actions = {
 		return {
 			success: `“${slug}” moved to the trash. It is kept for 7 days before permanent deletion.`
 		};
+	},
+
+	restore: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const slug = formString(data, 'slug');
+		if (!slug) return fail(400, { message: 'Missing project slug.' });
+
+		try {
+			await core.projects.restore(principal, slug);
+		} catch (error) {
+			return fail(failStatus(error), toFormFailure(error));
+		}
+
+		return { success: `“${slug}” restored.` };
 	}
 };

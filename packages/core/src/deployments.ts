@@ -545,6 +545,53 @@ export class DeploymentService {
 		}
 	}
 
+	/**
+	 * Prune: delete one release row when no surviving deployment references it and it is older than
+	 * `createdBefore` (a release row is inserted before its deployment), then its object once no
+	 * release in any org uses the key. Returns the bytes freed, or null when the release was kept.
+	 */
+	async deleteReleaseIfUnused(releaseId: string, createdBefore: number): Promise<number | null> {
+		const row = this.ctx.db.select().from(releases).where(eq(releases.id, releaseId)).get();
+		if (!row) return null;
+		const removed = this.ctx.sqlite.run(
+			`DELETE FROM releases WHERE id = ? AND created_at < ?
+			 AND NOT EXISTS (SELECT 1 FROM deployments d WHERE d.release_id = ? AND d.status != 'deleted')`,
+			[releaseId, createdBefore, releaseId],
+		);
+		if (removed.changes === 0) return null;
+		const shared = this.ctx.db.select({ id: releases.id }).from(releases).where(eq(releases.objectKey, row.objectKey)).get();
+		if (!shared) await this.deleteTrackedObject(row.objectKey);
+		return shared ? 0 : row.sizeBytes;
+	}
+
+	/**
+	 * Prune (platform scope): delete a stored object that no release or live upload references.
+	 * Re-checks the rows immediately before deleting. Returns whether it was deleted.
+	 */
+	async deleteObjectIfUnreferenced(key: string): Promise<boolean> {
+		if (key.startsWith('releases/')) {
+			if (this.ctx.db.select({ id: releases.id }).from(releases).where(eq(releases.objectKey, key)).get()) return false;
+		} else if (key.startsWith('uploads/')) {
+			const live = this.ctx.sqlite
+				.query<{ id: string }, [string]>("SELECT id FROM upload_sessions WHERE object_key = ? AND status = 'pending' LIMIT 1")
+				.get(key);
+			if (live) return false;
+		} else return false;
+		await this.deleteTrackedObject(key);
+		return true;
+	}
+
+	/** Delete an object while letting a concurrent re-upload wait for it (`objectDeleteSettled`). */
+	private async deleteTrackedObject(key: string): Promise<void> {
+		const deletion = this.ctx.objectStore.delete(key);
+		this.objectDeletes.set(key, deletion);
+		try {
+			await deletion;
+		} finally {
+			if (this.objectDeletes.get(key) === deletion) this.objectDeletes.delete(key);
+		}
+	}
+
 	/** The parsed config a route needs at activation. */
 	configFor(row: typeof deployments.$inferSelect): ParsedConfig {
 		const snapshot = this.ctx.db

@@ -13,3 +13,4 @@ export * from './domain.ts';
 export * from './environment.ts';
 export * from './url.ts';
 export * from './agent.ts';
+export * from './operations.ts';

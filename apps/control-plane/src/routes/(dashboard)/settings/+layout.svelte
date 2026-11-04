@@ -8,6 +8,8 @@
 	import DatabaseBackupIcon from '@lucide/svelte/icons/database-backup';
 	import UserRoundIcon from '@lucide/svelte/icons/user-round';
 	import UsersIcon from '@lucide/svelte/icons/users';
+	import WrenchIcon from '@lucide/svelte/icons/wrench';
+	import type { Permission } from '@skiff/contracts';
 	import * as Tabs from '#lib/components/ui/tabs/index.js';
 	import PageHeader from '../_lib/PageHeader.svelte';
 
@@ -21,10 +23,13 @@
 			| '/(dashboard)/settings/members'
 			| '/(dashboard)/settings/backups'
 			| '/(dashboard)/settings/notifications'
+			| '/(dashboard)/settings/maintenance'
 			| '/(dashboard)/settings/updates';
 		path: string;
 		icon: typeof Building2Icon;
 		platformAdmin?: boolean;
+		/** Needs this org permission. */
+		permission?: Permission;
 		/** Platform admin who also owns the current org (canConfigurePlatform on the server). */
 		ownerOnly?: boolean;
 	};
@@ -63,6 +68,13 @@
 			ownerOnly: true
 		},
 		{
+			label: 'Maintenance',
+			href: '/(dashboard)/settings/maintenance',
+			path: '/settings/maintenance',
+			icon: WrenchIcon,
+			permission: 'project:read'
+		},
+		{
 			label: 'Updates',
 			href: '/(dashboard)/settings/updates',
 			path: '/settings/updates',
@@ -74,11 +86,19 @@
 	const isOwner = $derived(data.can.manageNodes && data.role === 'owner');
 	const tabs = $derived(
 		allTabs.filter(
-			(tab) => (!tab.platformAdmin || data.can.manageNodes) && (!tab.ownerOnly || isOwner)
+			(tab) =>
+				(!tab.platformAdmin || data.can.manageNodes) &&
+				(!tab.ownerOnly || isOwner) &&
+				(!tab.permission || data.permissions.includes(tab.permission))
 		)
 	);
+	// Nested pages (an operation under Maintenance) keep their section's tab selected.
 	const current = $derived(
-		tabs.find((tab) => tab.path === page.url.pathname)?.href ?? allTabs[0].href
+		tabs.find(
+			(tab) =>
+				tab.path === page.url.pathname ||
+				(tab.path !== '/settings' && page.url.pathname.startsWith(`${tab.path}/`))
+		)?.href ?? allTabs[0].href
 	);
 </script>
 

@@ -9,6 +9,7 @@
  */
 import { platformOrigin } from './config.ts';
 import { ApiError, CliError } from './errors.ts';
+import type { OperationItemView, OperationView } from './operations.ts';
 
 export interface ApiClientOptions {
 	baseUrl: string;
@@ -47,6 +48,31 @@ export interface ProjectView {
 	createdAt?: string;
 	updatedAt?: string;
 	deletedAt?: string | null;
+	/** Trash only: when the maintenance sweep purges it for good. */
+	purgeAt?: string | null;
+}
+
+export interface OperationCreateInput {
+	action: 'project.delete' | 'project.restore' | 'project.purge' | 'prune';
+	targets?: string[];
+	scope?: 'org' | 'platform';
+	categories?: string[];
+	stage: 'plan' | 'apply';
+}
+
+export interface OperationItemsPage {
+	operation: OperationView;
+	items: OperationItemView[];
+	cursor: number;
+	hasMore: boolean;
+}
+
+export interface OperationItemsFilter {
+	after?: number;
+	limit?: number;
+	status?: string;
+	verdict?: string;
+	category?: string;
 }
 
 export interface DeploymentView {
@@ -240,8 +266,8 @@ export class ApiClient {
 		return { status, raw };
 	}
 
-	async listProjects(): Promise<{ projects: ProjectView[]; raw: unknown }> {
-		const raw = await this.request('GET', '/api/v1/projects');
+	async listProjects(options: { trash?: boolean } = {}): Promise<{ projects: ProjectView[]; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/projects${options.trash ? '?trash=1' : ''}`);
 		const unwrapped = unwrap(raw);
 		const record = asRecord(unwrapped);
 		const values = Array.isArray(unwrapped) ? unwrapped : asArray(record?.projects ?? record?.items);
@@ -408,18 +434,128 @@ export class ApiClient {
 		return { lines, raw };
 	}
 
-	private async request(
-		method: string,
-		path: string,
-		options: { body?: unknown } = {},
-	): Promise<unknown> {
-		const url = `${this.baseUrl}${path}`;
-		const headers = new Headers({
+
+	// --- operations (docs/OPERATIONS.md) ---------------------------------------------------
+
+	/** `POST /operations`. `waitSeconds` (≤25) holds the response until planned or finished. */
+	async createOperation(
+		input: OperationCreateInput,
+		options: { idempotencyKey?: string; waitSeconds?: number } = {},
+	): Promise<OperationView> {
+		const raw = await this.request('POST', `/api/v1/operations${waitQuery(options.waitSeconds)}`, {
+			body: input,
+			headers: options.idempotencyKey ? { 'idempotency-key': options.idempotencyKey } : undefined,
+			timeoutMs: waitTimeout(this.timeoutMs, options.waitSeconds),
+		});
+		return operationFrom(raw);
+	}
+
+	async getOperation(id: string, options: { waitSeconds?: number } = {}): Promise<OperationView> {
+		const raw = await this.request(
+			'GET',
+			`/api/v1/operations/${encodeURIComponent(id)}${waitQuery(options.waitSeconds)}`,
+			{ timeoutMs: waitTimeout(this.timeoutMs, options.waitSeconds) },
+		);
+		return operationFrom(raw);
+	}
+
+	async getOperationItems(id: string, filter: OperationItemsFilter = {}): Promise<OperationItemsPage> {
+		const params = new URLSearchParams({ items: '1' });
+		for (const [key, value] of Object.entries(filter))
+			if (value !== undefined && value !== '') params.set(key, String(value));
+		const raw = await this.request('GET', `/api/v1/operations/${encodeURIComponent(id)}?${params}`);
+		const record = asRecord(raw) ?? {};
+		return {
+			operation: operationFrom(raw),
+			items: (asArray(record.items) ?? []) as OperationItemView[],
+			cursor: numberValue(record.cursor) ?? filter.after ?? 0,
+			hasMore: record.hasMore === true,
+		};
+	}
+
+	/** Every item matching `filter`, following the cursor (bounded by `max`). */
+	async listOperationItems(
+		id: string,
+		filter: Omit<OperationItemsFilter, 'after' | 'limit'> = {},
+		max = 10_000,
+	): Promise<{ operation: OperationView; items: OperationItemView[] }> {
+		const items: OperationItemView[] = [];
+		let after = 0;
+		for (;;) {
+			const page = await this.getOperationItems(id, { ...filter, after, limit: 1000 });
+			items.push(...page.items);
+			if (!page.hasMore || page.items.length === 0 || items.length >= max)
+				return { operation: page.operation, items: items.slice(0, max) };
+			after = page.cursor;
+		}
+	}
+
+	async applyOperation(id: string, input: { categories?: string[] } = {}): Promise<OperationView> {
+		const raw = await this.request('POST', `/api/v1/operations/${encodeURIComponent(id)}/apply`, { body: input });
+		return operationFrom(raw);
+	}
+
+	async cancelOperation(id: string): Promise<OperationView> {
+		const raw = await this.request('POST', `/api/v1/operations/${encodeURIComponent(id)}/cancel`, { body: {} });
+		return operationFrom(raw);
+	}
+
+	async listOperations(
+		filter: { kind?: string; status?: string; limit?: number; scope?: string } = {},
+	): Promise<{ operations: OperationView[]; raw: unknown }> {
+		const params = new URLSearchParams();
+		for (const [key, value] of Object.entries(filter))
+			if (value !== undefined && value !== '') params.set(key, String(value));
+		const query = params.size > 0 ? `?${params}` : '';
+		const raw = await this.request('GET', `/api/v1/operations${query}`);
+		const operations = (asArray(asRecord(raw)?.operations) ?? []) as OperationView[];
+		return { operations, raw };
+	}
+
+	/**
+	 * Open the SSE progress stream. Has no timeout of its own: the caller aborts via `signal`
+	 * (Ctrl-C, or its idle watchdog). `lastEventId` resumes after the items already seen.
+	 */
+	async openOperationStream(
+		id: string,
+		options: { untilDone: boolean; lastEventId?: string; signal?: AbortSignal },
+	): Promise<ReadableStream<Uint8Array>> {
+		const url = `${this.baseUrl}/api/v1/operations/${encodeURIComponent(id)}/stream${options.untilDone ? '?until=done' : ''}`;
+		const headers = this.headers({ accept: 'text/event-stream' });
+		if (options.lastEventId) headers.set('last-event-id', options.lastEventId);
+		let response: Response;
+		try {
+			response = await this.fetchImpl(url, { method: 'GET', headers, signal: options.signal });
+		} catch (error) {
+			if (options.signal?.aborted) throw error;
+			throw new CliError(`Could not reach ${this.baseUrl}: ${errorMessage(error)}`, { code: 'network', cause: error });
+		}
+		if (!response.ok) {
+			const text = await response.text().catch(() => '');
+			throw apiError(response, 'GET', url, text, parseJson(text));
+		}
+		if (!response.body) throw new CliError('The progress stream had no body.', { code: 'protocol' });
+		return response.body;
+	}
+
+	private headers(extra: Record<string, string> = {}): Headers {
+		return new Headers({
 			accept: 'application/json, text/plain',
 			authorization: `Bearer ${this.token}`,
 			origin: this.origin,
 			'user-agent': this.userAgent,
+			...extra,
 		});
+	}
+
+	private async request(
+		method: string,
+		path: string,
+		options: { body?: unknown; headers?: Record<string, string>; timeoutMs?: number } = {},
+	): Promise<unknown> {
+		const url = `${this.baseUrl}${path}`;
+		const headers = this.headers(options.headers);
+		const timeoutMs = options.timeoutMs ?? this.timeoutMs;
 		let body: string | undefined;
 		if (options.body !== undefined) {
 			headers.set('content-type', 'application/json');
@@ -432,11 +568,11 @@ export class ApiClient {
 				method,
 				headers,
 				body,
-				signal: AbortSignal.timeout(this.timeoutMs),
+				signal: AbortSignal.timeout(timeoutMs),
 			});
 		} catch (error) {
 			if (isTimeout(error))
-				throw new CliError(`Request to ${this.baseUrl} timed out after ${this.timeoutMs}ms.`, {
+				throw new CliError(`Request to ${this.baseUrl} timed out after ${timeoutMs}ms.`, {
 					code: 'timeout',
 					cause: error,
 				});
@@ -448,24 +584,7 @@ export class ApiClient {
 
 		const text = await response.text().catch(() => '');
 		const parsed = parseJson(text);
-		if (!response.ok) {
-			const details = extractError(parsed, text);
-			throw new ApiError(
-				`${method} ${new URL(url).pathname} failed (${response.status}): ${details.message}`,
-				{
-					status: response.status,
-					method,
-					url: redactUrl(url),
-					code: details.code,
-					suggestions: details.suggestions,
-					requestId:
-						response.headers.get('x-request-id') ??
-						response.headers.get('request-id') ??
-						undefined,
-					body: parsed ?? (text ? text.slice(0, 1000) : undefined),
-				},
-			);
-		}
+		if (!response.ok) throw apiError(response, method, url, text, parsed);
 		if (!text) return null;
 		return parsed === undefined ? text : parsed;
 	}
@@ -491,7 +610,50 @@ function normalizeProject(value: unknown, fallbackSlug?: string): ProjectView | 
 		createdAt: stringValue(record.createdAt ?? record.created_at),
 		updatedAt: stringValue(record.updatedAt ?? record.updated_at),
 		deletedAt: stringValue(record.deletedAt ?? record.deleted_at),
+		purgeAt: stringValue(record.purgeAt ?? record.purge_at),
 	};
+}
+
+function apiError(response: Response, method: string, url: string, text: string, parsed: unknown): ApiError {
+	const details = extractError(parsed, text);
+	return new ApiError(`${method} ${new URL(url).pathname} failed (${response.status}): ${details.message}`, {
+		status: response.status,
+		method,
+		url: redactUrl(url),
+		code: details.code,
+		suggestions: details.suggestions,
+		requestId: response.headers.get('x-request-id') ?? response.headers.get('request-id') ?? undefined,
+		body: parsed ?? (text ? text.slice(0, 1000) : undefined),
+	});
+}
+
+/** Create/apply/cancel return the view itself; `GET /operations/:id` wraps it in `{ operation }`. */
+function operationFrom(raw: unknown): OperationView {
+	const record = asRecord(raw);
+	const view = asRecord(record?.operation) ?? record;
+	if (!view || typeof view.id !== 'string' || typeof view.status !== 'string')
+		throw new CliError('The platform returned an unexpected operation response.', { code: 'protocol', details: raw });
+	const summary = asRecord(view.summary) ?? {};
+	return {
+		...(view as unknown as OperationView),
+		summary: {
+			verdicts: asRecord(summary.verdicts) ?? {},
+			statuses: asRecord(summary.statuses) ?? {},
+			flags: asRecord(summary.flags) ?? {},
+			...(asRecord(summary.categories) ? { categories: asRecord(summary.categories)! } : {}),
+			freedBytes: numberValue(summary.freedBytes) ?? 0,
+		} as OperationView['summary'],
+	};
+}
+
+function waitQuery(seconds: number | undefined): string {
+	if (!seconds || seconds <= 0) return '';
+	return `?wait=${Math.min(Math.ceil(seconds), 25)}`;
+}
+
+/** A waiting request may legitimately take `wait` seconds before the server answers. */
+function waitTimeout(base: number, seconds: number | undefined): number {
+	return seconds && seconds > 0 ? Math.max(base, Math.min(seconds, 25) * 1000 + 15_000) : base;
 }
 
 function normalizeDeployment(

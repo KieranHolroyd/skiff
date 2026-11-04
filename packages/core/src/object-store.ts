@@ -1,5 +1,5 @@
 import { AwsClient } from 'aws4fetch';
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, normalize, resolve } from 'node:path';
 import { hmac, randomToken, safeEqual } from './util.ts';
 
@@ -20,6 +20,19 @@ export interface ObjectStore {
 	presignPut(key: string, ttlSeconds: number, contentType?: string): Promise<string>;
 	/** Agent GET URL. */
 	presignGet(key: string, ttlSeconds: number): Promise<string>;
+	/**
+	 * Every object under `prefix` (e.g. `releases/`), in pages. Prune uses it to find objects with
+	 * no row (docs/OPERATIONS.md L6). Optional so third-party stores without listing still work;
+	 * prune then skips the `objects` category and says why.
+	 */
+	list?(prefix: string): AsyncIterable<StoredObject>;
+}
+
+export interface StoredObject {
+	key: string;
+	size: number;
+	/** Epoch milliseconds. */
+	lastModified: number;
 }
 
 export class LocalObjectStore implements ObjectStore {
@@ -64,6 +77,24 @@ export class LocalObjectStore implements ObjectStore {
 			return info.isFile() ? info.size : null;
 		} catch {
 			return null;
+		}
+	}
+
+	async *list(prefix: string): AsyncIterable<StoredObject> {
+		const base = resolve(this.root);
+		const start = resolve(join(base, normalize(prefix)));
+		if (start !== base && !start.startsWith(base + '/')) throw new Error('Invalid object prefix');
+		let entries: string[];
+		try {
+			entries = (await readdir(start, { recursive: true })) as string[];
+		} catch {
+			return;
+		}
+		for (const entry of entries.sort()) {
+			const full = join(start, entry);
+			const info = await stat(full).catch(() => null);
+			if (!info?.isFile()) continue;
+			yield { key: full.slice(base.length + 1), size: info.size, lastModified: info.mtimeMs };
 		}
 	}
 
@@ -152,6 +183,22 @@ export class R2ObjectStore implements ObjectStore {
 		return Number.isFinite(length) ? length : null;
 	}
 
+	async *list(prefix: string): AsyncIterable<StoredObject> {
+		let token: string | undefined;
+		do {
+			const url = new URL(`${this.endpoint}/${this.options.bucket}`);
+			url.searchParams.set('list-type', '2');
+			url.searchParams.set('prefix', prefix);
+			url.searchParams.set('max-keys', '1000');
+			if (token) url.searchParams.set('continuation-token', token);
+			const response = await this.client.fetch(url);
+			if (!response.ok) throw new Error(`R2 LIST ${prefix} failed: ${response.status} ${await response.text()}`);
+			const page = parseListObjects(await response.text());
+			yield* page.objects;
+			token = page.nextToken;
+		} while (token);
+	}
+
 	private async presign(method: 'GET' | 'PUT', key: string, ttlSeconds: number): Promise<string> {
 		const url = this.url(key);
 		url.searchParams.set('X-Amz-Expires', String(ttlSeconds));
@@ -168,6 +215,31 @@ export class R2ObjectStore implements ObjectStore {
 	presignGet(key: string, ttlSeconds: number): Promise<string> {
 		return this.presign('GET', key, ttlSeconds);
 	}
+}
+
+const xmlEntities: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+const unescapeXml = (value: string): string =>
+	value.replace(/&(amp|lt|gt|quot|apos);/g, (_match, name: string) => xmlEntities[name]!);
+const xmlTag = (xml: string, tag: string): string | undefined =>
+	xml.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`))?.[1];
+
+/** Parse one S3 ListObjectsV2 response page (R2, MinIO and Garage all speak it). */
+export function parseListObjects(xml: string): { objects: StoredObject[]; nextToken?: string } {
+	const objects: StoredObject[] = [];
+	for (const match of xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
+		const body = match[1]!;
+		const key = xmlTag(body, 'Key');
+		if (key === undefined) continue;
+		const modified = Date.parse(xmlTag(body, 'LastModified') ?? '');
+		objects.push({
+			key: unescapeXml(key),
+			size: Number(xmlTag(body, 'Size') ?? 0),
+			lastModified: Number.isFinite(modified) ? modified : 0,
+		});
+	}
+	const truncated = xmlTag(xml, 'IsTruncated') === 'true';
+	const next = xmlTag(xml, 'NextContinuationToken');
+	return { objects, ...(truncated && next ? { nextToken: unescapeXml(next) } : {}) };
 }
 
 export function objectKeyForUpload(id: string): string {

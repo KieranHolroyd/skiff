@@ -14,12 +14,19 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | GET | `/whoami` | — | user, org, role, effective permissions |
 | GET | `/status` | `project:read` | fleet + deployment summary |
 | GET | `/metrics` | — | Prometheus text (also at `/metrics`) |
-| GET | `/projects` | `project:read` | |
+| GET | `/projects` | `project:read` | `?trash=1` lists the trash (with `deletedAt`, `purgeAt`) |
 | POST | `/projects` | `project:create` | `{ name?, slug?, runtime?, placement?, productionAccess?, previewAccess? }` |
 | GET | `/projects/:slug` | `project:read` | |
 | PATCH | `/projects/:slug` | `project:update` | rename via `slug` (old slug 301s 30 days) |
 | DELETE | `/projects/:slug` | `project:delete` | soft delete, restorable 7 days |
-| POST | `/projects/:slug/restore` | `project:update` | |
+| POST | `/projects/:slug/restore` | `project:update` | re-checks the project quota |
+| GET | `/operations/actions` | — | mass actions the caller can run (docs/OPERATIONS.md) |
+| POST | `/operations` | per action | `{ action, targets?, scope?, categories?, stage: plan\|apply }`; `Idempotency-Key` header; `?wait=<s≤25>` → `202 { operation }`. Prune must be planned first |
+| GET | `/operations` | `project:read` | `?kind&status&limit`; `?scope=platform` for platform admins |
+| GET | `/operations/:id` | creator or `project:read` | `?items=1&after&limit&status&verdict&category`, `?wait` |
+| GET | `/operations/:id/stream` | same | SSE: `progress`, `items` (`id: <seq>`, resume with `Last-Event-ID`), `done`; `?until=done` follows an applied plan to the end |
+| POST | `/operations/:id/apply` | per action, planner only | from `planned`; `{ categories? }` narrows a prune |
+| POST | `/operations/:id/cancel` | creator or `project:delete` | stops after the current item |
 | POST | `/projects/:slug/access` | `project:update` | `{ scope: production\|previews, mode: public\|password\|platform, password? }` |
 | POST | `/projects/:slug/deploy` | `deployment:create` | inline files (`deploy_files`); the URL slug is the target (`project` in the body is optional and must match); `environment` selects a named environment. Process/container projects run one workload, so only the latest deployment is active |
 | GET | `/projects/:slug/deployments` | `deployment:read` | |

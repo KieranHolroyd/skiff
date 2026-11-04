@@ -33,6 +33,15 @@ export const init: ServerInit = async () => {
 			void core.maintenance.run().catch((error) => console.error('[maintenance]', error));
 		}, 60_000);
 		global.__skiffMaintenance.unref?.();
+		// Pick up mass operations whose runner died with the previous process (docs/OPERATIONS.md §2.2).
+		setTimeout(() => {
+			try {
+				const resumed = core.operations.resume();
+				if (resumed.length) console.info(`[operations] resumed ${resumed.length} operation(s)`);
+			} catch (error) {
+				console.error('[operations] resume failed:', error);
+			}
+		}, 65_000).unref?.();
 	}
 };
 
