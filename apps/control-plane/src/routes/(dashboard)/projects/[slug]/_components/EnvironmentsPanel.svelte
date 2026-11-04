@@ -9,9 +9,11 @@
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import TrashIcon from '@lucide/svelte/icons/trash';
+	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
 	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
@@ -57,6 +59,14 @@
 	let deploymentChoice = $state('');
 
 	const activeDeployments = $derived(deployments.filter((row) => row.status === 'active'));
+
+	const promoteDescription = $derived(
+		`Point ${promoting?.host ?? 'this host'} at an existing deployment. Its release and config are served at this host.${
+			runtime !== 'static'
+				? ' The running app only switches when this is production; environment pointers do not change the active workload.'
+				: ''
+		}`
+	);
 
 	function pointer(environment: EnvironmentView): DeploymentView | undefined {
 		return environment.deploymentId
@@ -128,9 +138,6 @@
 				<p class="text-sm font-medium">Named environments</p>
 				<p class="text-xs text-muted-foreground">
 					Each environment has its own host and deployment pointer. Production is built in.
-					{#if runtime !== 'static'}
-						App workloads run once per project; environment hosts share that workload in v2.
-					{/if}
 				</p>
 			</div>
 		</div>
@@ -139,11 +146,26 @@
 		{/if}
 	</div>
 
+	{#if runtime !== 'static'}
+		<Alert.Root variant="warning">
+			<TriangleAlertIcon />
+			<Alert.Title>Only the latest deployment is active</Alert.Title>
+			<Alert.Description>
+				This project runs one app workload. Deploying to any environment makes that release the
+				running app, and every environment host and preview URL proxies to it. Environment pointers
+				do not start separate copies; promoting an older deployment to production moves the workload
+				back to that release.
+			</Alert.Description>
+		</Alert.Root>
+	{/if}
+
 	{#if environments.length === 0}
 		<EmptyState
 			icon={LayersIcon}
 			title="No environments"
-			description="Production is created lazily on the next deploy. Add staging or preview environments to test before promoting."
+			description={runtime === 'static'
+				? 'Production is created lazily on the next deploy. Add staging or preview environments to test before promoting.'
+				: 'Production is created lazily on the next deploy. Process and container apps run one workload, so adding staging does not create an isolated copy: a deploy to any environment switches the running app.'}
 		/>
 	{:else}
 		<div class="grid gap-4 lg:grid-cols-2">
@@ -312,8 +334,7 @@
 		bind:open={promoteOpen}
 		icon={GitBranchIcon}
 		title="Promote to {promoting?.name ?? 'environment'}"
-		description="Point {promoting?.host ??
-			'this host'} at an existing deployment. Its release and config are served at this host."
+		description={promoteDescription}
 		action="?/promoteEnvironment"
 		submitLabel="Promote deployment"
 	>

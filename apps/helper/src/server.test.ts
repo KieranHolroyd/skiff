@@ -70,6 +70,18 @@ class FakeRuntime implements HelperRuntime {
 	async status(id: string): Promise<HelperWorkloadStatus> {
 		return { id, status: 'running', restarts: 2 };
 	}
+
+	logReads: Array<{ id: string; cursor?: string; lines?: number }> = [];
+
+	async logs(id: string, options: { cursor?: string; lines?: number } = {}) {
+		this.logReads.push({ id, ...options });
+		return {
+			entries: [
+				{ cursor: 's=1', ts: 1_700_000_000_000, priority: 6, message: 'listening on :3000' },
+			],
+			nextCursor: 's=1',
+		};
+	}
 }
 
 function handler(runtime: HelperRuntime = new FakeRuntime()): (request: Request) => Promise<Response> {
@@ -137,6 +149,29 @@ describe('helper HTTP surface', () => {
 		);
 		expect(del.status).toBe(200);
 		expect(runtime.calls).toEqual(['remove:wld_abc123']);
+	});
+
+	test('reads workload logs with a cursor and a bounded line count', async () => {
+		const runtime = new FakeRuntime();
+		const response = await handler(runtime)(
+			new Request('http://localhost/v1/workloads/wld_abc123/logs?cursor=s%3D0&lines=50'),
+		);
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as {
+			ok: boolean;
+			entries: Array<{ message: string }>;
+			nextCursor: string | null;
+		};
+		expect(body.entries[0]?.message).toContain('listening');
+		expect(body.nextCursor).toBe('s=1');
+		expect(runtime.logReads).toEqual([{ id: 'wld_abc123', cursor: 's=0', lines: 50 }]);
+	});
+
+	test('rejects an out-of-range log line count', async () => {
+		const response = await handler()(
+			new Request('http://localhost/v1/workloads/wld_abc123/logs?lines=5000'),
+		);
+		expect(response.status).toBe(400);
 	});
 
 	test('rejects unsafe ids in the path', async () => {

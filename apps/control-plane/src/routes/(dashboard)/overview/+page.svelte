@@ -24,6 +24,7 @@
 	import PageHeader from '../_lib/PageHeader.svelte';
 	import Panel from '../_lib/Panel.svelte';
 	import ProjectMark from '../_lib/ProjectMark.svelte';
+	import TrafficDashboard from '../_lib/TrafficDashboard.svelte';
 	import { formatBytes, formatDateTime, plural, shortSha } from '../_lib/format.js';
 	import type { PageProps } from './$types';
 
@@ -240,6 +241,15 @@
 			</div>
 		</div>
 	</Panel>
+
+	<TrafficDashboard
+		traffic={data.traffic}
+		range={data.trafficRange}
+		ranges={data.trafficRanges}
+		links={data.trafficLinks}
+		projectNames={data.projectNames}
+		variant="overview"
+	/>
 
 	<div class="grid items-start gap-5 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
 		<Panel title="Recent deployments" description="Across every project in {data.org.name}." flush>

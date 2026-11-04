@@ -74,8 +74,11 @@ class CounterStore {
 	}
 
 	static open(): CounterStore {
+		// `StateDirectory=` in the systemd unit exports STATE_DIRECTORY; containers get /data.
+		const systemdState = process.env.STATE_DIRECTORY?.split(':')[0]?.trim();
 		const candidates = [
 			process.env.STRESS_DATA_DIR?.trim(),
+			systemdState,
 			'/data',
 			join(process.cwd(), '.stress-data')
 		].filter((value): value is string => Boolean(value));

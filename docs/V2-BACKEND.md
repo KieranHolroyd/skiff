@@ -128,8 +128,9 @@ targeted `bun test` green.
 
 - **Environment host shape**: `<slug>--<env>` (used here, fits the wildcard) vs `env.<slug>`
   (needs a second wildcard).
-- **Per-preview app runtimes**: v2 runs one workload per project (the environment/production pointer).
-  Running every preview would need per-deployment units; deferred.
+- **Per-preview app runtimes**: v2 runs one workload per project, so only the latest deployment is
+  active (a production promote or rollback re-points the workload). Running every preview would need
+  per-deployment units; deferred.
 - **Builder placement**: node flag today (`nodes.can_build`), with one job per Builder at a time.
 - **Secret rotation**: activation version is a hash of refs + public spec; rotating a secret bumps
   the version at activation without a redeploy.

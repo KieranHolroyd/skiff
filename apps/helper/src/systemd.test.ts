@@ -11,10 +11,12 @@ const directories: string[] = [];
 class FakeRunner implements CommandRunner {
 	calls: string[][] = [];
 	show = '';
+	journal = '';
 
 	async run(argv: string[]): Promise<RunResult> {
 		this.calls.push(argv);
 		if (argv[1] === 'show') return { code: 0, stdout: this.show, stderr: '' };
+		if (argv[0]?.includes('journalctl')) return { code: 0, stdout: this.journal, stderr: '' };
 		return { code: 0, stdout: '', stderr: '' };
 	}
 
@@ -213,6 +215,38 @@ describe('apply', () => {
 			'restart',
 			'skiff-workload-wld_abc123.service',
 		]);
+	});
+});
+
+describe('logs', () => {
+	test('reads journald JSON after a cursor with a fixed argv', async () => {
+		const f = await fixture();
+		f.runner.journal = [
+			JSON.stringify({
+				__CURSOR: 's=10',
+				__REALTIME_TIMESTAMP: '1700000000000000',
+				PRIORITY: '3',
+				MESSAGE: 'upstream refused',
+			}),
+			JSON.stringify({
+				__CURSOR: 's=11',
+				__REALTIME_TIMESTAMP: '1700000000100000',
+				PRIORITY: '6',
+				MESSAGE: [104, 105],
+			}),
+			'not json',
+		].join('\n');
+
+		const result = await f.driver.logs('wld_abc123', { cursor: 's=9', lines: 50 });
+		expect(result.entries).toEqual([
+			{ cursor: 's=10', ts: 1_700_000_000_000, priority: 3, message: 'upstream refused' },
+			{ cursor: 's=11', ts: 1_700_000_000_100, priority: 6, message: 'hi' },
+		]);
+		expect(result.nextCursor).toBe('s=11');
+		const call = f.runner.calls.find((argv) => argv[0]?.includes('journalctl'));
+		expect(call).toContain('--after-cursor');
+		expect(call).toContain('skiff-workload-wld_abc123.service');
+		expect(call).toContain('50');
 	});
 });
 

@@ -397,6 +397,35 @@ export const builds = sqliteTable(
 	],
 );
 
+/**
+ * Ordered log drain (DESIGN §8). Builders and agents append small batches; the dashboard tails
+ * `seq` over SSE. `seq` is the cursor, so a reconnect never depends on clock resolution.
+ */
+export const logEvents = sqliteTable(
+	'log_events',
+	{
+		seq: integer('seq').primaryKey({ autoIncrement: true }),
+		orgId: text('org_id').notNull(),
+		projectId: text('project_id').notNull(),
+		deploymentId: text('deployment_id'),
+		buildId: text('build_id'),
+		nodeId: text('node_id'),
+		source: text('source', { enum: ['runtime', 'build', 'system'] }).notNull(),
+		stream: text('stream', { enum: ['stdout', 'stderr', 'system'] }).notNull(),
+		level: text('level', { enum: ['debug', 'info', 'warn', 'error'] })
+			.notNull()
+			.default('info'),
+		message: text('message').notNull(),
+		ts: integer('ts').notNull(),
+	},
+	(t) => [
+		index('log_events_project_seq_idx').on(t.projectId, t.seq),
+		index('log_events_deployment_seq_idx').on(t.deploymentId, t.seq),
+		index('log_events_build_seq_idx').on(t.buildId, t.seq),
+		index('log_events_ts_idx').on(t.ts),
+	],
+);
+
 export const auditLog = sqliteTable(
 	'audit_log',
 	{
@@ -495,6 +524,7 @@ export const schema = {
 	workloads,
 	gitSources,
 	builds,
+	logEvents,
 	auditLog,
 	orgQuotas,
 	orgKeys,

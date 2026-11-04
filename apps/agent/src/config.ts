@@ -58,6 +58,10 @@ export interface AgentConfig {
 	workloadSocketDir: string;
 	/** How long to wait for `healthPath` before reporting a workload as starting. */
 	workloadHealthTimeoutMs: number;
+	/** Drain workload stdout/stderr from the helper into the control plane. */
+	logDrain: boolean;
+	/** How often the agent asks the helper for new journal lines. */
+	logDrainIntervalMs: number;
 }
 
 export class ConfigError extends Error {
@@ -301,6 +305,8 @@ export function loadConfig(env: Env = process.env): AgentConfig {
 			1_000,
 			600_000,
 		),
+		logDrain: parseBooleanValue(env.SKIFF_LOG_DRAIN) ?? true,
+		logDrainIntervalMs: parseIntegerEnv(env, 'SKIFF_LOG_DRAIN_INTERVAL_MS', 2_000, 500, 60_000),
 	};
 }
 

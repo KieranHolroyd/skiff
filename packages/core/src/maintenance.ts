@@ -23,6 +23,7 @@ export interface MaintenanceReport {
 	projectsPurged: number;
 	uploadsExpired: number;
 	nodesOffline: number;
+	logsPruned: number;
 	alertsFired: string[];
 	telemetry?: { rolledUp: number; pruned: { raw: number; hourly: number }; archivedDay?: string };
 }
@@ -42,6 +43,7 @@ export class MaintenanceService {
 		// Rename redirects older than 30 days release their slug (DESIGN §5.1).
 		this.ctx.projects.pruneExpiredRedirects();
 		const uploadsExpired = this.ctx.uploads.expireStale();
+		const logsPruned = this.ctx.logs.prune(this.ctx.now());
 		const stale = this.ctx.nodes.markStale();
 		const alertsFired: string[] = [];
 
@@ -120,7 +122,14 @@ export class MaintenanceService {
 			}
 		}
 
-		return { projectsPurged, uploadsExpired, nodesOffline: stale.length, alertsFired, telemetry };
+		return {
+			projectsPurged,
+			uploadsExpired,
+			nodesOffline: stale.length,
+			logsPruned,
+			alertsFired,
+			telemetry,
+		};
 	}
 
 	/**

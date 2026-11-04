@@ -11,6 +11,7 @@ describe('loadHelperConfig', () => {
 		expect(config.releaseDirs).toEqual(['/srv/skiff/releases', '/var/lib/skiff/agent/releases']);
 		expect(config.bunPath).toBe('/usr/local/bin/bun');
 		expect(config.systemctlPath).toBe('/usr/bin/systemctl');
+		expect(config.journalctlPath).toBe('/usr/bin/journalctl');
 		expect(config.workloadSocketMode).toBe('0666');
 		expect(config.workloadSocketGroup).toBeNull();
 		expect(config.controlSocketMode).toBe('0660');
@@ -25,6 +26,7 @@ describe('loadHelperConfig', () => {
 			SKIFF_HELPER_STATE_DIR: '/var/lib/custom',
 			SKIFF_HELPER_RELEASE_DIRS: '/srv/a, /srv/b',
 			SKIFF_HELPER_BUN_PATH: '/opt/bun',
+			SKIFF_HELPER_JOURNALCTL: '/opt/journalctl',
 			SKIFF_HELPER_WORKLOAD_SOCKET_MODE: '0660',
 			SKIFF_HELPER_WORKLOAD_SOCKET_GROUP: 'caddy',
 			SKIFF_HELPER_CONTROL_SOCKET_MODE: '0600',
@@ -33,6 +35,7 @@ describe('loadHelperConfig', () => {
 		});
 		expect(config.socketPath).toBe('/run/custom/helper.sock');
 		expect(config.releaseDirs).toEqual(['/srv/a', '/srv/b']);
+		expect(config.journalctlPath).toBe('/opt/journalctl');
 		expect(config.workloadSocketMode).toBe('0660');
 		expect(config.workloadSocketGroup).toBe('caddy');
 		expect(config.controlSocketMode).toBe('0600');

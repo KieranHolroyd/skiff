@@ -11,6 +11,10 @@ import {
 	createUploadSchema,
 	finalizeUploadSchema,
 	domainCreateSchema,
+	logLevels,
+	logSources,
+	type LogLevel,
+	type LogSource,
 } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
 import { json, readJson, route } from '#lib/server/api.js';
@@ -101,12 +105,39 @@ const api: RequestHandler = async (event) => {
 			}
 			if (action === 'logs' && method === 'GET') {
 				const project = core.projects.requireRow(principal, slug);
+				const params = event.url.searchParams;
+				const afterRaw = Number(params.get('after') ?? '');
+				const limitRaw = Number(params.get('limit') ?? '');
+				const source = params.get('source');
+				const level = params.get('level');
+				const result = core.logs.query(principal, project, {
+					...(Number.isFinite(afterRaw) && afterRaw >= 0 ? { after: Math.floor(afterRaw) } : {}),
+					...(Number.isFinite(limitRaw) && limitRaw > 0 ? { limit: Math.floor(limitRaw) } : {}),
+					...(source && (logSources as readonly string[]).includes(source)
+						? { source: source as LogSource }
+						: {}),
+					...(level && (logLevels as readonly string[]).includes(level)
+						? { level: level as LogLevel }
+						: {}),
+					...(params.get('buildId') ? { buildId: params.get('buildId')! } : {}),
+					...(params.get('deploymentId') ? { deploymentId: params.get('deploymentId')! } : {}),
+					...(params.get('q') ? { q: params.get('q')! } : {}),
+				});
 				return {
-					lines: [],
+					lines: result.events.map((item) => ({
+						timestamp: new Date(item.ts).toISOString(),
+						level: item.level,
+						stream: item.stream,
+						source: item.source,
+						message: item.message,
+					})),
+					events: result.events,
+					cursor: result.cursor,
+					hasMore: result.hasMore,
 					note:
-						project.runtime === 'static'
-							? 'Static deployments have no application logs. Use /api/v1/metrics for traffic.'
-							: `Log streaming for ${project.runtime} apps arrives with runtime tiers in v2.`,
+						project.runtime === 'static' && result.events.length === 0
+							? 'Static deployments have no application logs. Build logs appear here when a git build runs.'
+							: undefined,
 				};
 			}
 			if (action === 'deployments') {

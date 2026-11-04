@@ -133,6 +133,32 @@ describe('extractZip', () => {
 		expect(await fs.readFile(join(destination, 'index.html.br'))).toEqual(Buffer.from([1, 2, 3]));
 	});
 
+	test('makes release trees traversable despite the agent umask', async () => {
+		const root = await tempDir();
+		const destination = join(root, 'dest');
+		const previous = process.umask(0o007);
+		try {
+			await extractZip(
+				makeZip([
+					{ name: 'dir/', mode: 0o040755 },
+					{ name: 'server.js', data: 'bun' },
+					{ name: 'dir/run', data: '#!/bin/sh\n', mode: 0o100755 }
+				]),
+				destination
+			);
+		} finally {
+			process.umask(previous);
+		}
+		const directory = await fs.stat(destination);
+		const nested = await fs.stat(join(destination, 'dir'));
+		const file = await fs.stat(join(destination, 'server.js'));
+		const executable = await fs.stat(join(destination, 'dir/run'));
+		expect(directory.mode & 0o001).toBe(0o001);
+		expect(nested.mode & 0o001).toBe(0o001);
+		expect(file.mode & 0o004).toBe(0o004);
+		expect(executable.mode & 0o111).toBe(0o111);
+	});
+
 	test('rejects path traversal before writing outside the destination', async () => {
 		const root = await tempDir();
 		const destination = join(root, 'dest');

@@ -259,7 +259,34 @@ async function extractFromSource(
 		await fs.writeFile(target, data, { flag: 'wx', mode: executable ? 0o755 : 0o644 });
 	}
 
+	// The agent service runs with UMask=0007 (desired-state/site keys must stay private), so every
+	// path just written is 0750/0640. Tier-2 workloads run under DynamicUser and must be able to
+	// traverse and read the release; chmod explicitly instead of widening the service umask.
+	await makeTreeWorldReadable(extracted);
+
 	return { files, totalBytes };
+}
+
+async function makeTreeWorldReadable(root: string): Promise<void> {
+	const pending = [root];
+	while (pending.length > 0) {
+		const directory = pending.pop()!;
+		await fs.chmod(directory, 0o755).catch(() => undefined);
+		for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+			const path = join(directory, entry.name);
+			if (entry.isDirectory()) {
+				pending.push(path);
+				continue;
+			}
+			if (!entry.isFile()) continue;
+			try {
+				const stat = await fs.stat(path);
+				await fs.chmod(path, stat.mode & 0o111 ? 0o755 : 0o644);
+			} catch {
+				// A file removed mid-walk is fine; extraction owns this tree.
+			}
+		}
+	}
 }
 
 async function readLocalData(
@@ -326,6 +353,9 @@ export class ReleaseManager {
 		await fs.mkdir(this.releasesDir, { recursive: true, mode: 0o755 });
 		await fs.mkdir(this.sitesDir, { recursive: true, mode: 0o755 });
 		await fs.mkdir(this.tmpDir, { recursive: true, mode: 0o700 });
+		// UMask=0007 on the agent service otherwise makes these 0750; Caddy and DynamicUser
+		// workloads both need to traverse them.
+		await fs.chmod(this.releasesDir, 0o755).catch(() => undefined);
 
 		for (const name of await fs.readdir(this.tmpDir)) {
 			await fs.rm(join(this.tmpDir, name), { recursive: true, force: true }).catch(() => undefined);

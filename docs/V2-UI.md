@@ -3,11 +3,11 @@
 For operators who know the v1 dashboard: where v2 appears ([V2-BACKEND.md](./V2-BACKEND.md)), the
 multi-screen flows, and deliberate limits. Rationale: [DESIGN.md](./DESIGN.md), [DECISIONS.md](./DECISIONS.md).
 
-| Surface | Route | Purpose |
-|---|---|---|
-| Projects | `/projects` | Create by runtime + placement; production state |
-| Project | `/projects/<slug>` | Deployments, Environments, Builds, Domains, Runtime, Share links, Settings |
-| Nodes | `/nodes` | Platform-admin fleet: slice capacity, draining, Builder role |
+| Surface  | Route              | Purpose                                                                    |
+| -------- | ------------------ | -------------------------------------------------------------------------- |
+| Projects | `/projects`        | Create by runtime + placement; production state                            |
+| Project  | `/projects/<slug>` | Deployments, Environments, Builds, Domains, Runtime, Share links, Settings |
+| Nodes    | `/nodes`           | Platform-admin fleet: slice capacity, draining, Builder role               |
 
 ## Projects list
 
@@ -19,10 +19,13 @@ choose `edge` or `auto`. `auto` resolves once at deploy time and is recorded on 
 running app never moves by itself. The table shows runtime icon, placement and `Live` / `Not
 deployed`.
 
-## Project tabs
+## Project navigation
 
-Header shows runtime and placement badges; tabs are deep-linkable with `?tab=`. The primary
-**Deploy** action accepts a `.zip` of an already-built artifact (contents of the output directory,
+Header shows runtime and placement badges. Sections live in a sticky rail beside the content on wide
+screens and in a scrollable pill row on narrow screens: **Monitor** (Traffic, Logs), **Ship**
+(Deployments, Environments, Builds, Source) and **Configure** (Domains, Runtime, Share links,
+Settings). Every section is deep-linkable with `?tab=`, the active pill survives reloads, and quiet
+counters show section size. The primary **Deploy** action accepts a `.zip` of an already-built artifact (contents of the output directory,
 not the folder) and deploys it to a chosen environment, with an optional message and
 promote-on-success. It is subject to the same 500 MB / 20,000 files / 25 MB per-file limits as the
 CLI. For repositories, use **Builds** instead.
@@ -38,8 +41,10 @@ CLI. For repositories, use **Builds** instead.
   move together; non-production pointers never touch the production pointer.
 - `Roll back` returns to the previously promoted deployment. Edit (name/access) and delete exist for
   non-production environments only; delete requires the environment to be empty first.
-- **v2 runs one workload per project.** For process/container projects, environment hosts serve the
-  project's current workload; only static deployments differ per environment today.
+- **v2 runs one workload per project.** For process/container projects only the latest deployment is
+  active: deploying to any environment switches the running app, and every environment host and
+  preview URL proxies to it. Environment pointers do not run separate copies; promoting to
+  production moves the workload back to that release.
 
 ### Builds
 
@@ -52,6 +57,26 @@ CLI. For repositories, use **Builds** instead.
   on success” is ticked by default.
 - Rows show status, ref, commit, start, duration; open a log dialog or cancel while `queued` /
   `building`. One job per Builder, 15-minute abandoned-claim requeue, 10-minute build cap.
+
+### Source
+
+`Source` is a read-only IDE for a deployment's immutable release artifact. It uses the manifest in
+SQLite as the file index and lazily extracts individual entries from the stored zip, so browsing
+does not unpack the whole artifact or write anything to disk.
+
+- Pick any deployment from the release picker; production is selected by default. The header shows
+  the release SHA, file count and artifact size.
+- The explorer has collapsible folders and a path filter. `⌘P` / `Ctrl P` quick-opens a file and
+  `⌘B` / `Ctrl B` toggles the explorer.
+- Monaco opens each file in a tab and keeps per-file cursor and scroll state. Syntax highlighting
+  covers the common web languages; word wrap, minimap and sticky scroll are in the toolbar.
+- Raster images get a zoomable preview. SVG is shown as XML and everything else as text; files over
+  2 MB and non-previewable binaries offer a download instead.
+- **Download .zip** returns the original artifact and **Open site** opens the deployment URL.
+
+Reading source requires `deployment:read`; there is no write path. File responses are
+`text/plain` (or an image type only for raster previews) with `nosniff` and a sandbox CSP, so
+deployed content can never execute on the platform origin.
 
 ### Domains
 
@@ -75,18 +100,18 @@ the node slice), the specification, node capacity (platform admins), and secrets
 `Configure` edits the spec; saved values apply on the **next deploy**, never hot-reloaded. `Reset`
 stops the workload and clears the spec but keeps deployments and releases.
 
-| Field | Applies to | Notes |
-|---|---|---|
-| `command` | process | argv split on whitespace — no shell; defaults to `bun run start` |
-| `image` | container | OCI reference, pulled rootlessly on the node |
-| `port` | both | listen port; Caddy proxies to it locally |
-| `healthPath` | both | probed before the agent reports ready |
-| `memoryMb` | both | admission unit and `MemoryMax` (32–8192) |
-| `cpus` | both | CPU quota (0.1–8), not a hard pin |
-| `socketActivation` | process | pass the socket via `LISTEN_FDS` (default on) |
-| `env` | both | plain, readable `NAME=value` pairs |
-| `secrets` | both | write-only refs, delivered as env var or file; optional pinned version |
-| `data.sizeMb` | both | optional persistent directory at `/data` |
+| Field              | Applies to | Notes                                                                  |
+| ------------------ | ---------- | ---------------------------------------------------------------------- |
+| `command`          | process    | argv split on whitespace — no shell; defaults to `bun run start`       |
+| `image`            | container  | OCI reference, pulled rootlessly on the node                           |
+| `port`             | both       | listen port; Caddy proxies to it locally                               |
+| `healthPath`       | both       | probed before the agent reports ready                                  |
+| `memoryMb`         | both       | admission unit and `MemoryMax` (32–8192)                               |
+| `cpus`             | both       | CPU quota (0.1–8), not a hard pin                                      |
+| `socketActivation` | process    | pass the socket via `LISTEN_FDS` (default on)                          |
+| `env`              | both       | plain, readable `NAME=value` pairs                                     |
+| `secrets`          | both       | write-only refs, delivered as env var or file; optional pinned version |
+| `data.sizeMb`      | both       | optional persistent directory at `/data`                               |
 
 ### Settings
 
@@ -120,10 +145,10 @@ is shown to platform admins only.
 One mapping (`apps/control-plane/src/lib/status.ts`) colours every badge; `online`, `running` and
 `building` also get the animated live dot.
 
-| Tone | Statuses |
-|---|---|
-| success | `active`, `online`, `ok`, `verified`, `succeeded`, `running` |
-| info / warning | `pending`, `queued`, `starting` / `building`, `draining`, `used up`, `unverified` |
+| Tone             | Statuses                                                                                                                 |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| success          | `active`, `online`, `ok`, `verified`, `succeeded`, `running`                                                             |
+| info / warning   | `pending`, `queued`, `starting` / `building`, `draining`, `used up`, `unverified`                                        |
 | danger / neutral | `failed`, `error`, `denied`, `offline`, `revoked` / `expired`, `inactive`, `disabled`, `deleted`, `cancelled`, `stopped` |
 
 Workload status: `pending → starting → running`, plus `failed` / `stopped`. Domain status:
@@ -160,7 +185,7 @@ or rolled back like any other deploy.
 - **Dashboard deploys are `.zip` uploads** of a built artifact; there is no folder picker or
   presigned/multipart upload UI yet.
 - **Static projects have no workload** and cannot configure a runtime.
-- **One workload per project** (the current environment/production pointer); per-preview runtimes are
-  deferred.
+- **One workload per project.** For process/container projects only the latest deployment is active
+  (a production promote or rollback re-points the workload); per-preview runtimes are deferred.
 - **Builds run only on a Builder node** (one at a time, 10-minute cap), and **spec/placement edits
   apply on the next deploy** — settings never restart or move a running workload.

@@ -5,12 +5,9 @@
 	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
 	import CopyIcon from '@lucide/svelte/icons/copy';
-	import CpuIcon from '@lucide/svelte/icons/cpu';
 	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
-	import GitBranchIcon from '@lucide/svelte/icons/git-branch';
-	import GlobeIcon from '@lucide/svelte/icons/globe';
+	import FolderTreeIcon from '@lucide/svelte/icons/folder-tree';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
-	import LayersIcon from '@lucide/svelte/icons/layers';
 	import LinkIcon from '@lucide/svelte/icons/link-2';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PinIcon from '@lucide/svelte/icons/pin';
@@ -19,7 +16,9 @@
 	import RadioTowerIcon from '@lucide/svelte/icons/radio-tower';
 	import RocketIcon from '@lucide/svelte/icons/rocket';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
+	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
 	import TrashIcon from '@lucide/svelte/icons/trash';
+	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import UploadIcon from '@lucide/svelte/icons/upload';
 	import { toast } from 'svelte-sonner';
 	import { runAction } from '#lib/actions.js';
@@ -38,17 +37,21 @@
 	import * as Item from '#lib/components/ui/item/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
 	import * as Table from '#lib/components/ui/table/index.js';
-	import * as Tabs from '#lib/components/ui/tabs/index.js';
 	import AccessChip from '../../_lib/AccessChip.svelte';
 	import AccessSelect from '../../_lib/AccessSelect.svelte';
 	import EmptyState from '../../_lib/EmptyState.svelte';
 	import PageHeader from '../../_lib/PageHeader.svelte';
 	import ProjectMark from '../../_lib/ProjectMark.svelte';
 	import RowMenu from '../../_lib/RowMenu.svelte';
+	import TrafficDashboard from '../../_lib/TrafficDashboard.svelte';
 	import BuildsPanel from './_components/BuildsPanel.svelte';
 	import DomainsPanel from './_components/DomainsPanel.svelte';
 	import EnvironmentsPanel from './_components/EnvironmentsPanel.svelte';
+	import LogsPanel from './_components/LogsPanel.svelte';
+	import ProjectNav from './_components/ProjectNav.svelte';
+	import { readProjectTab, type ProjectTab } from './_components/project-nav.js';
 	import RuntimePanel from './_components/RuntimePanel.svelte';
+	import SourcePanel from './_components/SourcePanel.svelte';
 	import { displayUrl, formatBytes, formatDateTime, shortId, shortSha } from '../../_lib/format.js';
 	import type { PageProps } from './$types';
 
@@ -66,7 +69,12 @@
 
 	type Deployment = (typeof data.deployments)[number];
 
-	let tab = $state(page.url.searchParams.get('tab') ?? 'deployments');
+	let tab = $state<ProjectTab>(readProjectTab(page.url.searchParams.get('tab')));
+	let logSource = $state<'runtime' | 'build'>(
+		page.url.searchParams.get('logSource') === 'build' ? 'build' : 'runtime'
+	);
+	let logBuildId = $state(page.url.searchParams.get('build') ?? '');
+	let logDeploymentId = $state(page.url.searchParams.get('deployment') ?? '');
 
 	// Deploy dialog
 	let deployOpen = $state(false);
@@ -114,7 +122,35 @@
 	const production = $derived(
 		data.deployments.find((d) => d.id === data.project.productionDeploymentId)
 	);
+	const runningDeployment = $derived(
+		data.workload ? data.deployments.find((d) => d.id === data.workload?.deploymentId) : undefined
+	);
+	const runningAppDrift = $derived(
+		data.project.runtime !== 'static' &&
+			runningDeployment !== undefined &&
+			runningDeployment.id !== data.project.productionDeploymentId
+	);
 	const activeShares = $derived(data.shareLinks.filter((link) => shareState(link) === 'active'));
+	const runningBuilds = $derived(
+		data.builds.filter((build) => build.status === 'building' || build.status === 'queued').length
+	);
+	const navCounts = $derived({
+		deployments: data.deployments.length,
+		environments: data.environments.length,
+		builds: data.builds.length,
+		domains: data.domains.length,
+		shares: activeShares.length
+	});
+
+	/** Switch sections in place, keeping `?tab=` deep-linkable. */
+	function setTab(next: ProjectTab) {
+		tab = next;
+		if (page.url.searchParams.get('tab') === next) return;
+		const url = new URL(page.url.href);
+		url.searchParams.set('tab', next);
+		// eslint-disable-next-line svelte/no-navigation-without-resolve -- same route, only `?tab` changes
+		void goto(url, { shallow: true, replace: true });
+	}
 
 	function shareState(link: {
 		revokedAt: string | null;
@@ -157,6 +193,18 @@
 		projectSlug = data.project.slug;
 		placement = data.project.placement;
 		projectOpen = true;
+	}
+
+	function openBuildLog(id: string) {
+		logSource = 'build';
+		logBuildId = id;
+		setTab('logs');
+	}
+
+	function openDeploymentLog(id: string) {
+		logSource = 'runtime';
+		logDeploymentId = id;
+		setTab('logs');
 	}
 
 	function promote(deployment: Deployment) {
@@ -317,6 +365,24 @@
 						Promote a deployment to serve it at {displayUrl(data.project.productionUrl)}.
 					</p>
 				{/if}
+				{#if data.project.runtime !== 'static'}
+					{#if runningAppDrift && runningDeployment}
+						<p class="flex items-start gap-1.5 text-xs text-warning-soft-foreground">
+							<TriangleAlertIcon class="mt-0.5 size-3.5 shrink-0" />
+							<span>
+								Only the latest deployment is active. The running app is
+								<span class="font-mono">{runningDeployment.shortId}</span>
+								({runningDeployment.environmentName}), not the production pointer above. Every
+								environment host and preview URL proxies to it.
+							</span>
+						</p>
+					{:else}
+						<p class="text-xs text-muted-foreground">
+							Process and container apps run only the latest deployment; every environment host and
+							preview URL proxies to it.
+						</p>
+					{/if}
+				{/if}
 			</div>
 			{#if data.can.rollback && data.project.productionDeploymentId}
 				<Button variant="outline" onclick={rollback}>
@@ -327,423 +393,439 @@
 		</Card.Content>
 	</Card.Root>
 
-	<Tabs.Root bind:value={tab} class="gap-5">
-		<Tabs.List variant="line" class="w-full justify-start overflow-x-auto border-b">
-			<Tabs.Trigger value="deployments" class="flex-none">
-				<RocketIcon />Deployments
-				<Badge variant="neutral" class="h-4 px-1.5 font-mono text-[10px]"
-					>{data.deployments.length}</Badge
-				>
-			</Tabs.Trigger>
-			<Tabs.Trigger value="environments" class="flex-none">
-				<LayersIcon />Environments
-				<Badge variant="neutral" class="h-4 px-1.5 font-mono text-[10px]"
-					>{data.environments.length}</Badge
-				>
-			</Tabs.Trigger>
-			<Tabs.Trigger value="builds" class="flex-none">
-				<GitBranchIcon />Builds
-				<Badge variant="neutral" class="h-4 px-1.5 font-mono text-[10px]"
-					>{data.builds.length}</Badge
-				>
-			</Tabs.Trigger>
-			<Tabs.Trigger value="domains" class="flex-none">
-				<GlobeIcon />Domains
-				<Badge variant="neutral" class="h-4 px-1.5 font-mono text-[10px]"
-					>{data.domains.length}</Badge
-				>
-			</Tabs.Trigger>
-			<Tabs.Trigger value="runtime" class="flex-none"><CpuIcon />Runtime</Tabs.Trigger>
-			<Tabs.Trigger value="shares" class="flex-none">
-				<LinkIcon />Share links
-				<Badge variant="neutral" class="h-4 px-1.5 font-mono text-[10px]"
-					>{activeShares.length}</Badge
-				>
-			</Tabs.Trigger>
-			<Tabs.Trigger value="settings" class="flex-none"><KeyRoundIcon />Settings</Tabs.Trigger>
-		</Tabs.List>
+	<ProjectNav variant="bar" {tab} counts={navCounts} {runningBuilds} onselect={setTab} />
 
-		<Tabs.Content value="environments">
-			<EnvironmentsPanel
-				environments={data.environments}
-				deployments={data.deployments}
-				platformOrigin={data.platform.origin}
-				previewAccess={data.project.previewAccess}
-				productionAccess={data.project.productionAccess}
-				runtime={data.project.runtime}
-				can={{
-					manageEnvironments: data.can.manageEnvironments,
-					promoteEnvironment: data.can.promoteEnvironment,
-					rollbackEnvironment: data.can.rollbackEnvironment
-				}}
-			/>
-		</Tabs.Content>
+	<div class="grid gap-5 xl:grid-cols-[184px_minmax(0,1fr)] xl:gap-8">
+		<ProjectNav variant="rail" {tab} counts={navCounts} {runningBuilds} onselect={setTab} />
 
-		<Tabs.Content value="builds">
-			<BuildsPanel
-				project={data.project}
-				gitSource={data.gitSource}
-				builds={data.builds}
-				platformOrigin={data.platform.origin}
-				can={{ createBuild: data.can.createBuild, cancelBuild: data.can.cancelBuild }}
-			/>
-		</Tabs.Content>
-
-		<Tabs.Content value="domains">
-			<DomainsPanel
-				project={data.project}
-				domains={data.domains}
-				contentDomain={data.contentDomain}
-				platformOrigin={data.platform.origin}
-				can={{ createDomain: data.can.createDomain, deleteDomain: data.can.deleteDomain }}
-			/>
-		</Tabs.Content>
-
-		<Tabs.Content value="runtime">
-			<RuntimePanel
-				project={data.project}
-				spec={data.workloadSpec}
-				workload={data.workload}
-				secrets={data.secrets}
-				capacity={data.capacity}
-				can={{
-					manageWorkload: data.can.manageWorkload,
-					createSecret: data.can.createSecret,
-					deleteSecret: data.can.deleteSecret,
-					viewCapacity: data.can.viewCapacity
-				}}
-			/>
-		</Tabs.Content>
-
-		<Tabs.Content value="deployments">
-			{#if data.deployments.length === 0}
-				<EmptyState
-					icon={RocketIcon}
-					title="No deployments yet"
-					description="Deploy a built .zip from this page, or use the CLI, MCP clients or the REST API. Every deploy gets an immutable preview URL."
-				>
-					<code class="rounded-md border bg-card px-2.5 py-1.5 font-mono text-xs"
-						><span class="text-muted-foreground select-none">$ </span>skif deploy ./dist --project {data
-							.project.slug}</code
+		<div class="min-w-0">
+			{#if tab === 'traffic'}
+				<TrafficDashboard
+					traffic={data.traffic}
+					range={data.trafficRange}
+					ranges={data.trafficRanges}
+					links={data.trafficLinks}
+					variant="project"
+				/>
+			{:else if tab === 'environments'}
+				<EnvironmentsPanel
+					environments={data.environments}
+					deployments={data.deployments}
+					platformOrigin={data.platform.origin}
+					previewAccess={data.project.previewAccess}
+					productionAccess={data.project.productionAccess}
+					runtime={data.project.runtime}
+					can={{
+						manageEnvironments: data.can.manageEnvironments,
+						promoteEnvironment: data.can.promoteEnvironment,
+						rollbackEnvironment: data.can.rollbackEnvironment
+					}}
+				/>
+			{:else if tab === 'source'}
+				{#if data.deployments.length === 0}
+					<EmptyState
+						icon={FolderTreeIcon}
+						title="Nothing to browse yet"
+						description="The source viewer reads the immutable release artifact behind a deployment. Deploy a build and its files will appear here."
+					/>
+				{:else}
+					<SourcePanel
+						slug={data.project.slug}
+						deployments={data.deployments}
+						productionDeploymentId={data.project.productionDeploymentId}
+					/>
+				{/if}
+			{:else if tab === 'builds'}
+				<BuildsPanel
+					project={data.project}
+					gitSource={data.gitSource}
+					builds={data.builds}
+					platformOrigin={data.platform.origin}
+					can={{ createBuild: data.can.createBuild, cancelBuild: data.can.cancelBuild }}
+					onOpenLog={openBuildLog}
+					onBuildQueued={() => {
+						logSource = 'build';
+						logBuildId = '';
+						setTab('logs');
+					}}
+				/>
+			{:else if tab === 'logs'}
+				<LogsPanel
+					bind:source={logSource}
+					bind:buildId={logBuildId}
+					bind:deploymentId={logDeploymentId}
+					project={data.project}
+					deployments={data.deployments}
+					builds={data.builds}
+					workloadStatus={data.workload?.status ?? null}
+					workloadDeploymentId={data.workload?.deploymentId ?? ''}
+					canRead={data.can.readLogs}
+				/>
+			{:else if tab === 'domains'}
+				<DomainsPanel
+					project={data.project}
+					domains={data.domains}
+					contentDomain={data.contentDomain}
+					platformOrigin={data.platform.origin}
+					can={{ createDomain: data.can.createDomain, deleteDomain: data.can.deleteDomain }}
+				/>
+			{:else if tab === 'runtime'}
+				<RuntimePanel
+					project={data.project}
+					spec={data.workloadSpec}
+					workload={data.workload}
+					secrets={data.secrets}
+					capacity={data.capacity}
+					can={{
+						manageWorkload: data.can.manageWorkload,
+						createSecret: data.can.createSecret,
+						deleteSecret: data.can.deleteSecret,
+						viewCapacity: data.can.viewCapacity
+					}}
+				/>
+			{:else if tab === 'deployments'}
+				{#if data.deployments.length === 0}
+					<EmptyState
+						icon={RocketIcon}
+						title="No deployments yet"
+						description="Deploy a built .zip from this page, or use the CLI, MCP clients or the REST API. Every deploy gets an immutable preview URL."
 					>
-				</EmptyState>
-			{:else}
-				<div class="overflow-hidden rounded-xl border bg-card shadow-card">
-					<Table.Root>
-						<Table.Header class="bg-muted/45">
-							<Table.Row>
-								<Table.Head class="pl-4">Deployment</Table.Head>
-								<Table.Head class="hidden md:table-cell">Release</Table.Head>
-								<Table.Head class="hidden lg:table-cell">Created</Table.Head>
-								<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
-							</Table.Row>
-						</Table.Header>
-						<Table.Body>
-							{#each data.deployments as deployment (deployment.id)}
-								<Table.Row
-									class={deployment.isProduction ? 'bg-brand-soft/35 hover:bg-brand-soft/50' : ''}
-								>
-									<Table.Cell class="pl-4 whitespace-normal">
-										<div class="flex flex-wrap items-center gap-1.5">
-											<span class="font-mono text-[13px] font-medium">{deployment.shortId}</span>
-											<StatusBadge status={deployment.status} />
-											{#if deployment.isProduction}<Badge variant="brand">production</Badge>{/if}
-											{#if !deployment.isProduction}
-												<Badge variant="outline" class="font-mono text-[10px]"
-													>{deployment.environmentSlug}</Badge
-												>
-											{/if}
-											{#if deployment.pinned}<Badge variant="outline"><PinIcon />pinned</Badge>{/if}
-										</div>
-										<a
-											href={deployment.previewUrl}
-											target="_blank"
-											rel="external noreferrer"
-											class="mt-0.5 inline-flex max-w-full items-center gap-1 truncate font-mono text-[11px] text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-										>
-											{displayUrl(deployment.previewUrl)}
-											<ArrowUpRightIcon class="size-3 shrink-0" />
-										</a>
-										{#if deployment.message}
-											<p
-												class="max-w-xl truncate text-xs text-muted-foreground"
-												title={deployment.message}
-											>
-												{deployment.message}
-											</p>
-										{/if}
-									</Table.Cell>
-									<Table.Cell class="hidden font-mono text-xs text-muted-foreground md:table-cell">
-										<span title={deployment.release.sha256}
-											>{shortSha(deployment.release.sha256)}</span
-										>
-										<p class="text-[11px] opacity-80">
-											{formatBytes(deployment.release.sizeBytes)}
-										</p>
-									</Table.Cell>
-									<Table.Cell class="hidden text-xs text-muted-foreground lg:table-cell">
-										<time datetime={deployment.createdAt}
-											>{formatDateTime(deployment.createdAt)}</time
-										>
-									</Table.Cell>
-									<Table.Cell class="pr-4">
-										<div class="flex items-center justify-end gap-1">
-											{#if data.can.promote && !deployment.isProduction && deployment.status === 'active'}
-												<Button variant="outline" size="sm" onclick={() => promote(deployment)}>
-													<ArrowUpIcon />Promote
-												</Button>
-											{/if}
-											<RowMenu label="Actions for {deployment.shortId}">
-												<DropdownMenu.Item
-													onSelect={() =>
-														window.open(deployment.previewUrl, '_blank', 'noreferrer')}
-												>
-													<ArrowUpRightIcon />Open preview
-												</DropdownMenu.Item>
-												<DropdownMenu.Item onSelect={() => copy(deployment.previewUrl)}>
-													<CopyIcon />Copy preview URL
-												</DropdownMenu.Item>
-												{#if data.can.createShare}
-													<DropdownMenu.Item onSelect={() => openShare(deployment.id)}>
-														<LinkIcon />Share this deployment
-													</DropdownMenu.Item>
-												{/if}
-												{#if data.can.promote}
-													<DropdownMenu.Item
-														onSelect={() =>
-															runAction('?/pin', {
-																deploymentId: deployment.id,
-																pinned: deployment.pinned ? 'false' : 'true'
-															})}
-													>
-														{#if deployment.pinned}<PinOffIcon />Unpin{:else}<PinIcon />Pin (keep
-															forever){/if}
-													</DropdownMenu.Item>
-												{/if}
-												{#if data.can.deleteDeployment}
-													<DropdownMenu.Separator />
-													<DropdownMenu.Item
-														variant="destructive"
-														onSelect={() => deleteDeployment(deployment)}
-													>
-														<TrashIcon />Delete deployment
-													</DropdownMenu.Item>
-												{/if}
-											</RowMenu>
-										</div>
-									</Table.Cell>
-								</Table.Row>
-							{/each}
-						</Table.Body>
-					</Table.Root>
-				</div>
-				<p class="mt-3 text-xs text-muted-foreground">
-					{activeDeployments.length} active · the last 10 unpinned deployments are retained.
-				</p>
-			{/if}
-		</Tabs.Content>
-
-		<Tabs.Content value="shares">
-			<Card.Root class="gap-0 py-0">
-				<Card.Header class="border-b py-4">
-					<Card.Title>Share links</Card.Title>
-					<Card.Description>
-						Time- and usage-limited access to protected sites. A visit is a redemption, not a page
-						load.
-					</Card.Description>
-					{#if data.can.createShare}
-						<Card.Action class="self-center">
-							<Button onclick={() => openShare()}><PlusIcon />Create link</Button>
-						</Card.Action>
-					{/if}
-				</Card.Header>
-				<Card.Content class="px-0">
-					{#if data.shareLinks.length === 0}
-						<div class="p-4">
-							<EmptyState
-								icon={LinkIcon}
-								compact
-								title="No share links"
-								description="Create a link when someone outside the org needs temporary access to a protected site."
-							/>
-						</div>
-					{:else}
+						<code class="rounded-md border bg-card px-2.5 py-1.5 font-mono text-xs"
+							><span class="text-muted-foreground select-none">$ </span>skif deploy ./dist --project {data
+								.project.slug}</code
+						>
+					</EmptyState>
+				{:else}
+					<div class="overflow-hidden rounded-xl border bg-card shadow-card">
 						<Table.Root>
-							<Table.Header>
+							<Table.Header class="bg-muted/45">
 								<Table.Row>
-									<Table.Head class="pl-4">Link</Table.Head>
-									<Table.Head class="hidden sm:table-cell">Redemptions</Table.Head>
-									<Table.Head class="hidden md:table-cell">Expires</Table.Head>
-									<Table.Head>Status</Table.Head>
+									<Table.Head class="pl-4">Deployment</Table.Head>
+									<Table.Head class="hidden md:table-cell">Release</Table.Head>
+									<Table.Head class="hidden lg:table-cell">Created</Table.Head>
 									<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
 								</Table.Row>
 							</Table.Header>
 							<Table.Body>
-								{#each data.shareLinks as link (link.id)}
-									{@const state = shareState(link)}
-									<Table.Row class={state === 'active' ? '' : 'text-muted-foreground'}>
-										<Table.Cell class="pl-4">
-											<p class="font-mono text-[13px]">{link.host}</p>
-											{#if link.note}<p class="text-xs text-muted-foreground">{link.note}</p>{/if}
-										</Table.Cell>
-										<Table.Cell class="hidden font-mono text-xs tabular-nums sm:table-cell">
-											{link.redemptions}{link.maxRedemptions !== null
-												? ` / ${link.maxRedemptions}`
-												: ''}
-										</Table.Cell>
-										<Table.Cell class="hidden text-xs md:table-cell">
-											{#if link.expiresAt}
-												<time datetime={link.expiresAt}>{formatDateTime(link.expiresAt)}</time>
-											{:else}
-												Never
-											{/if}
-										</Table.Cell>
-										<Table.Cell><StatusBadge status={state} /></Table.Cell>
-										<Table.Cell class="pr-4">
-											{#if data.can.revokeShare && !link.revokedAt}
-												<Button
-													variant="ghost-danger"
-													size="sm"
-													onclick={() => revokeShare(link.id)}
+								{#each data.deployments as deployment (deployment.id)}
+									<Table.Row
+										class={deployment.isProduction ? 'bg-brand-soft/35 hover:bg-brand-soft/50' : ''}
+									>
+										<Table.Cell class="pl-4 whitespace-normal">
+											<div class="flex flex-wrap items-center gap-1.5">
+												<span class="font-mono text-[13px] font-medium">{deployment.shortId}</span>
+												<StatusBadge status={deployment.status} />
+												{#if deployment.isProduction}<Badge variant="brand">production</Badge>{/if}
+												{#if !deployment.isProduction}
+													<Badge variant="outline" class="font-mono text-[10px]"
+														>{deployment.environmentSlug}</Badge
+													>
+												{/if}
+												{#if deployment.pinned}<Badge variant="outline"><PinIcon />pinned</Badge
+													>{/if}
+											</div>
+											<a
+												href={deployment.previewUrl}
+												target="_blank"
+												rel="external noreferrer"
+												class="mt-0.5 inline-flex max-w-full items-center gap-1 truncate font-mono text-[11px] text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+											>
+												{displayUrl(deployment.previewUrl)}
+												<ArrowUpRightIcon class="size-3 shrink-0" />
+											</a>
+											{#if deployment.message}
+												<p
+													class="max-w-xl truncate text-xs text-muted-foreground"
+													title={deployment.message}
 												>
-													Revoke
-												</Button>
+													{deployment.message}
+												</p>
 											{/if}
+										</Table.Cell>
+										<Table.Cell
+											class="hidden font-mono text-xs text-muted-foreground md:table-cell"
+										>
+											<span title={deployment.release.sha256}
+												>{shortSha(deployment.release.sha256)}</span
+											>
+											<p class="text-[11px] opacity-80">
+												{formatBytes(deployment.release.sizeBytes)}
+											</p>
+										</Table.Cell>
+										<Table.Cell class="hidden text-xs text-muted-foreground lg:table-cell">
+											<time datetime={deployment.createdAt}
+												>{formatDateTime(deployment.createdAt)}</time
+											>
+										</Table.Cell>
+										<Table.Cell class="pr-4">
+											<div class="flex items-center justify-end gap-1">
+												<Button
+													variant="ghost"
+													size="icon-sm"
+													aria-label="Tail runtime logs for {deployment.shortId}"
+													onclick={() => openDeploymentLog(deployment.id)}
+												>
+													<ScrollTextIcon />
+												</Button>
+												{#if data.can.promote && !deployment.isProduction && deployment.status === 'active'}
+													<Button variant="outline" size="sm" onclick={() => promote(deployment)}>
+														<ArrowUpIcon />Promote
+													</Button>
+												{/if}
+												<RowMenu label="Actions for {deployment.shortId}">
+													<DropdownMenu.Item onSelect={() => openDeploymentLog(deployment.id)}>
+														<ScrollTextIcon />Tail logs
+													</DropdownMenu.Item>
+													<DropdownMenu.Item
+														onSelect={() =>
+															window.open(deployment.previewUrl, '_blank', 'noreferrer')}
+													>
+														<ArrowUpRightIcon />Open preview
+													</DropdownMenu.Item>
+													<DropdownMenu.Item onSelect={() => copy(deployment.previewUrl)}>
+														<CopyIcon />Copy preview URL
+													</DropdownMenu.Item>
+													{#if data.can.createShare}
+														<DropdownMenu.Item onSelect={() => openShare(deployment.id)}>
+															<LinkIcon />Share this deployment
+														</DropdownMenu.Item>
+													{/if}
+													{#if data.can.promote}
+														<DropdownMenu.Item
+															onSelect={() =>
+																runAction('?/pin', {
+																	deploymentId: deployment.id,
+																	pinned: deployment.pinned ? 'false' : 'true'
+																})}
+														>
+															{#if deployment.pinned}<PinOffIcon />Unpin{:else}<PinIcon />Pin (keep
+																forever){/if}
+														</DropdownMenu.Item>
+													{/if}
+													{#if data.can.deleteDeployment}
+														<DropdownMenu.Separator />
+														<DropdownMenu.Item
+															variant="destructive"
+															onSelect={() => deleteDeployment(deployment)}
+														>
+															<TrashIcon />Delete deployment
+														</DropdownMenu.Item>
+													{/if}
+												</RowMenu>
+											</div>
 										</Table.Cell>
 									</Table.Row>
 								{/each}
 							</Table.Body>
 						</Table.Root>
-					{/if}
-				</Card.Content>
-				<Card.Footer class="py-3 text-xs text-muted-foreground">
-					Sessions last one hour by default. Revocation reaches agents in seconds.
-				</Card.Footer>
-			</Card.Root>
-		</Tabs.Content>
-
-		<Tabs.Content value="settings" class="grid items-start gap-5 lg:grid-cols-2">
-			<Card.Root class="lg:col-span-2">
-				<Card.Header>
-					<Card.Title>Project</Card.Title>
-					<Card.Description>Name, address and where the project is placed.</Card.Description>
-					{#if data.can.update}
-						<Card.Action class="self-center">
-							<Button variant="outline" size="sm" onclick={openProject}
-								><PencilIcon />Edit project</Button
-							>
-						</Card.Action>
-					{/if}
-				</Card.Header>
-				<Card.Content>
-					<dl class="kv">
-						<dt>Name</dt>
-						<dd class="text-[13px]">{data.project.name}</dd>
-						<dt>Address</dt>
-						<dd class="font-mono text-[12px]">{data.project.slug}.{data.contentDomain}</dd>
-						<dt>Runtime</dt>
-						<dd class="capitalize">{data.project.runtime}</dd>
-						<dt>Placement</dt>
-						<dd class="font-mono text-[13px]">{data.project.placement}</dd>
-						<dt>Environments</dt>
-						<dd class="font-mono text-[13px]">{data.environments.length}</dd>
-						<dt>Custom domains</dt>
-						<dd class="font-mono text-[13px]">{data.domains.length}</dd>
-					</dl>
-				</Card.Content>
-			</Card.Root>
-
-			<Card.Root>
-				<Card.Header>
-					<Card.Title>Access</Card.Title>
-					<Card.Description>Production and previews are protected separately.</Card.Description>
-				</Card.Header>
-				<Card.Content>
-					<Item.Group class="gap-2">
-						{#each [{ scope: 'production', label: 'Production', mode: data.project.productionAccess, hint: displayUrl(data.project.productionUrl) }, { scope: 'previews', label: 'Previews', mode: data.project.previewAccess, hint: `${data.project.slug}--<id>.${data.contentDomain}` }] as row (row.scope)}
-							<Item.Root variant="outline">
-								<Item.Content>
-									<Item.Title>{row.label}</Item.Title>
-									<Item.Description class="font-mono text-[11px]">{row.hint}</Item.Description>
-								</Item.Content>
-								<Item.Actions>
-									<AccessChip mode={row.mode} />
-									{#if data.can.update}
-										<Button
-											variant="outline"
-											size="sm"
-											onclick={() => openAccess(row.scope as 'production' | 'previews')}
-											>Change</Button
-										>
-									{/if}
-								</Item.Actions>
-							</Item.Root>
-						{/each}
-					</Item.Group>
-				</Card.Content>
-				<Card.Footer class="text-xs text-muted-foreground">
-					Protected sites set <code class="mx-1 font-mono">X-Robots-Tag: noindex</code> and never receive
-					platform session cookies.
-				</Card.Footer>
-			</Card.Root>
-
-			<Card.Root>
-				<Card.Header>
-					<Card.Title>Details</Card.Title>
-				</Card.Header>
-				<Card.Content>
-					<dl class="kv">
-						<dt>Production</dt>
-						<dd class="font-mono text-[13px]">{production?.shortId ?? 'not deployed'}</dd>
-						<dt>Runtime</dt>
-						<dd class="capitalize">{data.project.runtime}</dd>
-						<dt>Placement</dt>
-						<dd class="font-mono text-[13px]">{data.project.placement}</dd>
-						<dt>Workload</dt>
-						<dd class="text-[13px]">
-							{#if data.workload}
-								<span class="capitalize">{data.workload.status}</span>
-								<span class="text-muted-foreground">
-									· {data.workload.memoryMb} MB · {data.workload.cpus} vCPU</span
-								>
-							{:else}
-								<span class="text-muted-foreground">not running</span>
-							{/if}
-						</dd>
-						<dt>Created</dt>
-						<dd class="text-[13px]">
-							<time datetime={data.project.createdAt}>{formatDateTime(data.project.createdAt)}</time
-							>
-						</dd>
-						<dt>Project ID</dt>
-						<dd class="flex items-center justify-end gap-1">
-							<span class="truncate font-mono text-[12px]" title={data.project.id}
-								>{shortId(data.project.id, 14)}</span
-							>
-							<CopyButton value={data.project.id} label="Copy project ID" iconOnly />
-						</dd>
-					</dl>
-				</Card.Content>
-			</Card.Root>
-
-			{#if data.can.deleteProject}
-				<Card.Root class="border-destructive/30 lg:col-span-2">
-					<Card.Header>
-						<Card.Title class="text-destructive">Danger zone</Card.Title>
+					</div>
+					<p class="mt-3 text-xs text-muted-foreground">
+						{activeDeployments.length} active · the last 10 unpinned deployments are retained.
+					</p>
+				{/if}
+			{:else if tab === 'shares'}
+				<Card.Root class="gap-0 py-0">
+					<Card.Header class="border-b py-4">
+						<Card.Title>Share links</Card.Title>
 						<Card.Description>
-							Deleting moves the project to the trash for 7 days. Its production site and every
-							preview stop serving immediately.
+							Time- and usage-limited access to protected sites. A visit is a redemption, not a page
+							load.
 						</Card.Description>
-						<Card.Action class="self-center">
-							<Button variant="destructive" onclick={deleteProject}
-								><TrashIcon />Delete project</Button
-							>
-						</Card.Action>
+						{#if data.can.createShare}
+							<Card.Action class="self-center">
+								<Button onclick={() => openShare()}><PlusIcon />Create link</Button>
+							</Card.Action>
+						{/if}
 					</Card.Header>
+					<Card.Content class="px-0">
+						{#if data.shareLinks.length === 0}
+							<div class="p-4">
+								<EmptyState
+									icon={LinkIcon}
+									compact
+									title="No share links"
+									description="Create a link when someone outside the org needs temporary access to a protected site."
+								/>
+							</div>
+						{:else}
+							<Table.Root>
+								<Table.Header>
+									<Table.Row>
+										<Table.Head class="pl-4">Link</Table.Head>
+										<Table.Head class="hidden sm:table-cell">Redemptions</Table.Head>
+										<Table.Head class="hidden md:table-cell">Expires</Table.Head>
+										<Table.Head>Status</Table.Head>
+										<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
+									</Table.Row>
+								</Table.Header>
+								<Table.Body>
+									{#each data.shareLinks as link (link.id)}
+										{@const state = shareState(link)}
+										<Table.Row class={state === 'active' ? '' : 'text-muted-foreground'}>
+											<Table.Cell class="pl-4">
+												<p class="font-mono text-[13px]">{link.host}</p>
+												{#if link.note}<p class="text-xs text-muted-foreground">{link.note}</p>{/if}
+											</Table.Cell>
+											<Table.Cell class="hidden font-mono text-xs tabular-nums sm:table-cell">
+												{link.redemptions}{link.maxRedemptions !== null
+													? ` / ${link.maxRedemptions}`
+													: ''}
+											</Table.Cell>
+											<Table.Cell class="hidden text-xs md:table-cell">
+												{#if link.expiresAt}
+													<time datetime={link.expiresAt}>{formatDateTime(link.expiresAt)}</time>
+												{:else}
+													Never
+												{/if}
+											</Table.Cell>
+											<Table.Cell><StatusBadge status={state} /></Table.Cell>
+											<Table.Cell class="pr-4">
+												{#if data.can.revokeShare && !link.revokedAt}
+													<Button
+														variant="ghost-danger"
+														size="sm"
+														onclick={() => revokeShare(link.id)}
+													>
+														Revoke
+													</Button>
+												{/if}
+											</Table.Cell>
+										</Table.Row>
+									{/each}
+								</Table.Body>
+							</Table.Root>
+						{/if}
+					</Card.Content>
+					<Card.Footer class="py-3 text-xs text-muted-foreground">
+						Sessions last one hour by default. Revocation reaches agents in seconds.
+					</Card.Footer>
 				</Card.Root>
+			{:else if tab === 'settings'}
+				<div class="grid items-start gap-5 xl:grid-cols-2">
+					<Card.Root class="xl:col-span-2">
+						<Card.Header>
+							<Card.Title>Project</Card.Title>
+							<Card.Description>Name, address and where the project is placed.</Card.Description>
+							{#if data.can.update}
+								<Card.Action class="self-center">
+									<Button variant="outline" size="sm" onclick={openProject}
+										><PencilIcon />Edit project</Button
+									>
+								</Card.Action>
+							{/if}
+						</Card.Header>
+						<Card.Content>
+							<dl class="kv">
+								<dt>Name</dt>
+								<dd class="text-[13px]">{data.project.name}</dd>
+								<dt>Address</dt>
+								<dd class="font-mono text-[12px]">{data.project.slug}.{data.contentDomain}</dd>
+								<dt>Runtime</dt>
+								<dd class="capitalize">{data.project.runtime}</dd>
+								<dt>Placement</dt>
+								<dd class="font-mono text-[13px]">{data.project.placement}</dd>
+								<dt>Environments</dt>
+								<dd class="font-mono text-[13px]">{data.environments.length}</dd>
+								<dt>Custom domains</dt>
+								<dd class="font-mono text-[13px]">{data.domains.length}</dd>
+							</dl>
+						</Card.Content>
+					</Card.Root>
+
+					<Card.Root>
+						<Card.Header>
+							<Card.Title>Access</Card.Title>
+							<Card.Description>Production and previews are protected separately.</Card.Description>
+						</Card.Header>
+						<Card.Content>
+							<Item.Group class="gap-2">
+								{#each [{ scope: 'production', label: 'Production', mode: data.project.productionAccess, hint: displayUrl(data.project.productionUrl) }, { scope: 'previews', label: 'Previews', mode: data.project.previewAccess, hint: `${data.project.slug}--<id>.${data.contentDomain}` }] as row (row.scope)}
+									<Item.Root variant="outline">
+										<Item.Content>
+											<Item.Title>{row.label}</Item.Title>
+											<Item.Description class="font-mono text-[11px]">{row.hint}</Item.Description>
+										</Item.Content>
+										<Item.Actions>
+											<AccessChip mode={row.mode} />
+											{#if data.can.update}
+												<Button
+													variant="outline"
+													size="sm"
+													onclick={() => openAccess(row.scope as 'production' | 'previews')}
+													>Change</Button
+												>
+											{/if}
+										</Item.Actions>
+									</Item.Root>
+								{/each}
+							</Item.Group>
+						</Card.Content>
+						<Card.Footer class="text-xs text-muted-foreground">
+							Protected sites set <code class="mx-1 font-mono">X-Robots-Tag: noindex</code> and never
+							receive platform session cookies.
+						</Card.Footer>
+					</Card.Root>
+
+					<Card.Root>
+						<Card.Header>
+							<Card.Title>Details</Card.Title>
+						</Card.Header>
+						<Card.Content>
+							<dl class="kv">
+								<dt>Production</dt>
+								<dd class="font-mono text-[13px]">{production?.shortId ?? 'not deployed'}</dd>
+								<dt>Runtime</dt>
+								<dd class="capitalize">{data.project.runtime}</dd>
+								<dt>Placement</dt>
+								<dd class="font-mono text-[13px]">{data.project.placement}</dd>
+								<dt>Workload</dt>
+								<dd class="text-[13px]">
+									{#if data.workload}
+										<span class="capitalize">{data.workload.status}</span>
+										<span class="text-muted-foreground">
+											· {data.workload.memoryMb} MB · {data.workload.cpus} vCPU</span
+										>
+									{:else}
+										<span class="text-muted-foreground">not running</span>
+									{/if}
+								</dd>
+								<dt>Created</dt>
+								<dd class="text-[13px]">
+									<time datetime={data.project.createdAt}
+										>{formatDateTime(data.project.createdAt)}</time
+									>
+								</dd>
+								<dt>Project ID</dt>
+								<dd class="flex items-center justify-end gap-1">
+									<span class="truncate font-mono text-[12px]" title={data.project.id}
+										>{shortId(data.project.id, 14)}</span
+									>
+									<CopyButton value={data.project.id} label="Copy project ID" iconOnly />
+								</dd>
+							</dl>
+						</Card.Content>
+					</Card.Root>
+
+					{#if data.can.deleteProject}
+						<Card.Root class="border-destructive/30 xl:col-span-2">
+							<Card.Header>
+								<Card.Title class="text-destructive">Danger zone</Card.Title>
+								<Card.Description>
+									Deleting moves the project to the trash for 7 days. Its production site and every
+									preview stop serving immediately.
+								</Card.Description>
+								<Card.Action class="self-center">
+									<Button variant="destructive" onclick={deleteProject}
+										><TrashIcon />Delete project</Button
+									>
+								</Card.Action>
+							</Card.Header>
+						</Card.Root>
+					{/if}
+				</div>
 			{/if}
-		</Tabs.Content>
-	</Tabs.Root>
+		</div>
+	</div>
 </div>
 
 {#if data.can.createDeployment}
@@ -754,7 +836,7 @@
 		description="Upload an already-built static site or app. Every deploy gets an immutable preview URL; promote moves production."
 		action="?/deploy"
 		submitLabel="Deploy"
-		onsuccess={() => (tab = 'deployments')}
+		onsuccess={() => setTab('deployments')}
 	>
 		<Field.Group>
 			<Field.Field data-invalid={result?.fieldErrors?.artifact ? true : undefined}>
@@ -794,8 +876,14 @@
 					{/if}
 				</NativeSelect.Root>
 				<Field.Description>
-					Production moves the live site when promoted; other environments update only their own
-					host.
+					{#if data.project.runtime === 'static'}
+						Production moves the live site when promoted; other environments update only their own
+						host.
+					{:else}
+						Process and container apps run one workload, so only the latest deployment is active:
+						deploying to any environment restarts the app on this release, whether or not you
+						promote it.
+					{/if}
 				</Field.Description>
 			</Field.Field>
 			<Field.Field data-invalid={result?.fieldErrors?.message ? true : undefined}>

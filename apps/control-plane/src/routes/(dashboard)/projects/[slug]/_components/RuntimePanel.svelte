@@ -194,6 +194,8 @@
 							{project.runtime === 'container'
 								? 'A rootless Podman container in the node workload slice.'
 								: 'A sandboxed systemd service in the node workload slice.'}
+							Only the latest deployment is active — deploying to any environment restarts this workload
+							on that release.
 						</Card.Description>
 					</div>
 				</div>

@@ -16,6 +16,7 @@ import { buildCaddyConfig, isProductionRoute, tlsSubjects } from './caddy-config
 import { loadConfig, type AgentConfig } from './config.ts';
 import { HelperClient } from './helper-client.ts';
 import { formatEnv, JOIN_USAGE, joinNode, nodeFilePath, parseJoinArgs } from './join.ts';
+import { WorkloadLogDrain } from './log-drain.ts';
 import { ReleaseManager } from './releases.ts';
 import { WorkloadRuntime, workloadHeartbeat } from './runtime.ts';
 import { StatsCollector } from './stats.ts';
@@ -62,7 +63,9 @@ class AgentRuntime {
 	private readonly caddy: CaddyAdmin;
 	private readonly stats: StatsCollector;
 	private readonly certs: CertProbe | null;
+	private readonly helper: HelperClient;
 	private readonly workloads: WorkloadRuntime;
+	private readonly logDrain: WorkloadLogDrain;
 
 	private desired: DesiredState | null = null;
 	private desiredEtag: string | null = null;
@@ -107,8 +110,16 @@ class AgentRuntime {
 					tlsCertReader(config.certProbe),
 				)
 			: null;
+		this.helper = new HelperClient(config.helperSocket);
+		this.logDrain = new WorkloadLogDrain({
+			helper: this.helper,
+			controlUrl: config.controlUrl,
+			nodeToken: config.nodeToken,
+			intervalMs: config.logDrainIntervalMs,
+			log,
+		});
 		this.workloads = new WorkloadRuntime({
-			helper: new HelperClient(config.helperSocket),
+			helper: this.helper,
 			releases: this.releases,
 			fetchActivation: (id, signal) => this.fetchWorkloadActivation(id, signal),
 			sliceMemoryMb: config.workloadSliceMb,
@@ -179,6 +190,8 @@ class AgentRuntime {
 		signals.once('SIGINT', () => this.beginShutdown());
 
 		this.loops = [this.reconcileLoop(), this.heartbeatLoop(), this.telemetryLoop()];
+		if (this.config.logDrain)
+			this.loops.push(this.logDrain.run(() => this.desired, this.shutdownController.signal));
 		log(
 			'info',
 			`Agent ${this.config.agentVersion} for ${this.config.nodeId} running (control ${this.config.controlUrl})`,

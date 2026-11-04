@@ -17,6 +17,25 @@ export interface HelperWorkloadStatus {
 	memoryBytes?: number;
 }
 
+export interface HelperLogEntry {
+	cursor: string;
+	/** Epoch milliseconds. */
+	ts: number;
+	/** Syslog priority: 0–3 error, 4 warning, 5–6 info, 7 debug. */
+	priority: number;
+	message: string;
+}
+
+export interface HelperLogResult {
+	entries: HelperLogEntry[];
+	nextCursor: string | null;
+}
+
+export interface LogReadOptions {
+	cursor?: string;
+	lines?: number;
+}
+
 export interface HelperApi {
 	ensureSlice(options: { memoryMb: number; cpuWeight?: number }): Promise<void>;
 	apply(input: {
@@ -25,6 +44,7 @@ export interface HelperApi {
 	}): Promise<HelperWorkloadStatus>;
 	remove(id: string): Promise<void>;
 	status(id: string): Promise<HelperWorkloadStatus>;
+	logs(id: string, options?: LogReadOptions): Promise<HelperLogResult>;
 }
 
 export class HelperError extends Error {
@@ -39,6 +59,7 @@ const SLICE_TIMEOUT_MS = 30_000;
 const APPLY_TIMEOUT_MS = 90_000;
 const REMOVE_TIMEOUT_MS = 60_000;
 const STATUS_TIMEOUT_MS = 2_000;
+const LOG_TIMEOUT_MS = 8_000;
 const STATUSES: readonly WorkloadStatus[] = ['pending', 'starting', 'running', 'failed', 'stopped'];
 
 export class HelperClient implements HelperApi {
@@ -82,6 +103,23 @@ export class HelperClient implements HelperApi {
 			STATUS_TIMEOUT_MS,
 		);
 		return parseStatus(asRecord(body).workload);
+	}
+
+	async logs(id: string, options: LogReadOptions = {}): Promise<HelperLogResult> {
+		const params = new URLSearchParams({ lines: String(options.lines ?? 200) });
+		if (options.cursor) params.set('cursor', options.cursor);
+		const body = await this.request(
+			'GET',
+			`/v1/workloads/${encodeURIComponent(id)}/logs?${params.toString()}`,
+			undefined,
+			LOG_TIMEOUT_MS,
+		);
+		const record = asRecord(body);
+		const entries = Array.isArray(record.entries) ? record.entries : [];
+		return {
+			entries: entries.map((value) => parseLogEntry(value)),
+			nextCursor: typeof record.nextCursor === 'string' ? record.nextCursor : null,
+		};
 	}
 
 	private async request(
@@ -131,6 +169,21 @@ function asRecord(value: unknown): Record<string, unknown> {
 	if (typeof value !== 'object' || value === null || Array.isArray(value))
 		throw new HelperError('helper returned an invalid JSON body');
 	return value as Record<string, unknown>;
+}
+
+function parseLogEntry(value: unknown): HelperLogEntry {
+	const record = asRecord(value);
+	if (typeof record.cursor !== 'string' || typeof record.message !== 'string')
+		throw new HelperError('helper log entry is missing cursor or message');
+	const ts = Number(record.ts);
+	if (!Number.isFinite(ts) || ts < 0) throw new HelperError('helper log entry has an invalid timestamp');
+	const priority = Number(record.priority ?? 6);
+	return {
+		cursor: record.cursor,
+		ts: Math.floor(ts),
+		priority: Number.isInteger(priority) ? Math.max(0, Math.min(priority, 7)) : 6,
+		message: record.message.slice(0, 16_384),
+	};
 }
 
 function parseStatus(value: unknown): HelperWorkloadStatus {

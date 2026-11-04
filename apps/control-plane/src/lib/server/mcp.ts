@@ -454,7 +454,7 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 		{
 			title: 'Promote deployment',
 			description:
-				'Point an environment (production by default) at an existing deployment. Instant; no rebuild.',
+				'Point an environment (production by default) at an existing deployment. Instant; no rebuild. Production also re-points a process/container workload; other environments only move their pointer.',
 			inputSchema: z.object({
 				project: z.string(),
 				deployment: z.string(),
@@ -526,7 +526,7 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 		{
 			title: 'Deploy to an environment',
 			description:
-				'Deploy inline files or a finalized upload into a named environment. Moves only that environment\'s pointer; production is untouched.',
+				'Deploy inline files or a finalized upload into a named environment. Moves only that environment\'s pointer and leaves production untouched. For process/container projects only the latest deployment is active, so the running app switches to this release.',
 			inputSchema: z.object({
 				project: z.string(),
 				environment: z.string().describe('Environment slug (production is allowed explicitly)'),
@@ -704,20 +704,38 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 		'get_logs',
 		{
 			title: 'Get logs',
-			description: 'Application logs for a project (tier 2+). Static sites have access logs in get_metrics instead.',
-			inputSchema: z.object({ project: z.string(), since: z.string().datetime().optional() }),
+			description:
+				'Recent runtime or build logs for a project. Pass `after` with the previous cursor to tail without duplicates; static sites have access logs in get_metrics instead.',
+			inputSchema: z.object({
+				project: z.string(),
+				source: z.enum(['runtime', 'build']).optional(),
+				buildId: z.string().optional(),
+				deploymentId: z.string().optional(),
+				after: z.number().int().nonnegative().optional(),
+				limit: z.number().int().positive().max(2_000).optional(),
+				level: z.enum(['debug', 'info', 'warn', 'error']).optional(),
+				q: z.string().max(200).optional(),
+			}),
 			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 			scopeChallenge: requires('logs:read'),
 		},
-		async ({ project, since }) =>
+		async (input) =>
 			run(() => {
-				const row = core.projects.requireRow(principal, project);
-				if (row.runtime === 'static')
-					return {
-						lines: [],
-						note: 'Static deployments have no application logs. Use get_metrics for traffic and error rates.',
-					};
-				return { lines: [], note: `Log streaming for ${row.runtime} apps arrives with runtime tiers in v2.` };
+				const row = core.projects.requireRow(principal, input.project);
+				const result = core.logs.query(principal, row, input);
+				return {
+					events: result.events,
+					lines: result.events.map((event) => ({
+						timestamp: new Date(event.ts).toISOString(),
+						level: event.level,
+						message: event.message,
+					})),
+					cursor: result.cursor,
+					hasMore: result.hasMore,
+					...(result.events.length === 0 && row.runtime === 'static'
+						? { note: 'Static deployments have no application logs. Use get_metrics for traffic and error rates.' }
+						: {}),
+				};
 			}),
 	);
 
@@ -769,7 +787,7 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 						'',
 						'Every deployment gets an immutable preview URL `<slug>--<id>.<contentDomain>`. `promote_deployment` and `rollback` are instant because they only move a pointer.',
 						'',
-						'Named environments (`create_environment`, `list_environments`) serve at `<slug>--<env>.<contentDomain>`. Use `deploy_to_environment` to deploy into one; only its own pointer moves.',
+						'Named environments (`create_environment`, `list_environments`) serve at `<slug>--<env>.<contentDomain>`. Use `deploy_to_environment` to deploy into one; only its own pointer moves. Process/container projects run a single workload: only the latest deployment is active, every environment host and preview URL proxies to it, and a production promote or rollback re-points the workload.',
 					].join('\n'),
 				},
 			],

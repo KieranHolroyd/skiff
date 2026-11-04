@@ -10,7 +10,7 @@ import {
 	type WorkloadActivation,
 	type WorkloadDesired,
 } from '@skiff/contracts';
-import type { HelperApi, HelperWorkloadStatus } from './helper-client.ts';
+import type { HelperApi, HelperLogResult, HelperWorkloadStatus } from './helper-client.ts';
 import { WorkloadRuntime, workloadFingerprint, workloadHeartbeat } from './runtime.ts';
 
 const SHA = 'a'.repeat(64);
@@ -105,6 +105,10 @@ class FakeHelper implements HelperApi {
 	async status(id: string): Promise<HelperWorkloadStatus> {
 		this.statusCalls.push(id);
 		return this.statuses.get(id) ?? { id, status: 'running', restarts: 0 };
+	}
+
+	async logs(_id: string, _options: { cursor?: string; lines?: number } = {}): Promise<HelperLogResult> {
+		return { entries: [], nextCursor: null };
 	}
 }
 

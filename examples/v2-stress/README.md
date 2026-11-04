@@ -23,11 +23,11 @@ reproducer when a v2 feature misbehaves.
 | Tier-2 process runtime   | `bun server.js` in a sandboxed unit, loopback port, health probe                                                |
 | Tier-3 container runtime | Same app as a read-only, cap-drop-all Quadlet container                                                         |
 | Placement + admission    | Explicit placement, memory/CPU budget recorded in the node slice                                                |
-| `/data`                  | SQLite counter that survives restarts and redeploys                                                             |
+| `/data`                   | SQLite counter that survives restarts and redeploys (systemd `STATE_DIRECTORY` for processes, `/data` for containers)                                                                   |
 | Env + secret injection   | Public env plus one env secret and one file secret (`*_FILE`)                                                   |
 | JIT activation           | `--node-token` checks the desired state has refs only, then compares the activation digest with the running app |
 | Resource limits          | `/api/cpu`, `/api/memory`, and `--crash` against `MemoryMax` / `CPUQuota` / restart policy                      |
-| Health + readiness       | `/healthz` and `/healthz?strict=1` (fails when `/data` is unavailable)                                          |
+| Health + readiness       | `/healthz` and `/healthz?strict=1` (fails when the data directory is unavailable)                              |
 | Proxy correctness        | Host header, 4xx/5xx passthrough, 512 KiB response digest, SSE streaming                                        |
 | Git builds               | `--git-repo` configures a public HTTPS source, build command and output dir                                     |
 | Environments             | Creates `staging` and verifies `<slug>--staging.<contentDomain>`                                                |
@@ -71,8 +71,9 @@ bun examples/v2-stress/src/server.ts
 ```
 
 and pass `--secrets --expect-env local --secret-env-sha <sha256>` to the stress script. Without a
-Skiff workload, `/data` is not mounted; the app falls back to `./.stress-data` (or memory) and says
-so in `/api/info` and in the stress report.
+Skiff workload, the app falls back to `./.stress-data` (or memory) and says so in `/api/info` and in
+the stress report. A process unit's persistent directory arrives as `STATE_DIRECTORY`; a container
+gets `/data`.
 
 ## Provisioning options
 
@@ -88,7 +89,7 @@ The important ones:
 | `--runtime`                      | `process`            | `container` requires `--image`                                              |
 | `--placement`                    | `edge`               | `edge`, `auto` or a node id/name                                            |
 | `--memory` / `--cpus` / `--port` | `256` / `1` / `3000` | Admission and `MemoryMax`/`CPUQuota`                                        |
-| `--data`                         | `128`                | `/data` size in MB; `0` disables the mount                                  |
+| `--data`                         | `128`                | data directory size in MB; `0` disables the spec field                     |
 | `--environment`                  | `staging`            | Creates `<slug>--staging.<contentDomain>`                                   |
 | `--domain`                       | —                    | Attaches a custom host and prints the records                               |
 | `--git-repo`                     | —                    | Public HTTPS repo; the Builder runs `bun run build` in `examples/v2-stress` |
@@ -172,7 +173,7 @@ Full checks:
 - optional control plane: project/workload/deployment/environment/capacity state
 - optional node view: desired state contains refs only, activation values never leak, activation
   digests match the running app
-- optional `--crash`: the app restarts, `/data` survives and the workload returns to `running`
+- optional `--crash`: the app restarts, its data survives and the workload returns to `running`
 
 The exit code is non-zero on any failed check, so it drops into CI or a deploy gate.
 
@@ -183,7 +184,7 @@ The exit code is non-zero on any failed check, so it drops into CI or a deploy g
 | `workload status: expected running, got starting` | Health path never answered, or the agent/helper is not installed on the node                 |
 | `secret is not injected`                          | The project spec references a name with no value, or `delivery` mismatches (`env` vs `file`) |
 | `activation matches the running app` fails        | A secret was rotated but the workload was not restarted (activation is JIT by design)        |
-| `counter did not grow`                            | No `/data` mount (`--data 0`) or the app fell back to memory; see `config.data.kind`         |
+| `counter did not grow`                            | No data directory (`--data 0`), or the app fell back to memory; see `config.data.kind`      |
 | p95 above budget                                  | CPU quota too low, cold node, or the load generator shares the machine                       |
 | 502/503 from the proxy                            | Workload is `failed`, restarting, or Caddy's upstream is stale; check the Runtime tab        |
 | Host header mismatch                              | Testing the origin directly instead of the deployed host                                     |
@@ -214,6 +215,9 @@ releases the buffer) or the kernel kills the unit and the report fails with a ti
   deferred. The staging check therefore verifies host/pointer state, not a second process.
 - **Public HTTPS git only.** Per-project private-repo credentials are not in v2; use a public mirror
   or a Builder-side deploy key.
+- **Process data is `STATE_DIRECTORY`, not `/data`.** The helper's process unit creates a
+  per-workload `StateDirectory`; the example reads that first. Containers get `/data` from the
+  Quadlet volume. `/api/info` reports which path won.
 - **Bun must be on the workload PATH.** The spec runs `bun server.js`, so the node's Bun needs to be
   visible to systemd (`/usr/local/bin/bun` is the helper default; this repo's installer currently
   puts it in `/opt/skiff/runtime/bin/bun`). If yours differs, provision with

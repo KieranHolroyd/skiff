@@ -64,6 +64,24 @@ export interface HelperWorkloadStatus {
 	memoryBytes?: number;
 }
 
+export interface HelperLogEntry {
+	cursor: string;
+	/** Epoch milliseconds. */
+	ts: number;
+	priority: number;
+	message: string;
+}
+
+export interface HelperLogResult {
+	entries: HelperLogEntry[];
+	nextCursor: string | null;
+}
+
+export interface LogReadOptions {
+	cursor?: string;
+	lines?: number;
+}
+
 export interface SliceOptions {
 	memoryMb: number;
 	cpuWeight?: number;
@@ -82,6 +100,7 @@ export interface SystemdDriverOptions {
 	/** Absolute bun binary used for the default process command. */
 	bunPath: string;
 	systemctlPath?: string;
+	journalctlPath?: string;
 	socketMode?: string;
 	socketGroup?: string | null;
 }
@@ -100,6 +119,7 @@ export class SystemdDriver {
 	private readonly releaseDirs: string[];
 	private readonly bunPath: string;
 	private readonly systemctlPath: string;
+	private readonly journalctlPath: string;
 	private readonly socketMode: string;
 	private readonly socketGroup: string | null;
 
@@ -113,6 +133,10 @@ export class SystemdDriver {
 		this.releaseDirs = options.releaseDirs.map((dir) => assertAbsolutePath(dir, 'releaseDir'));
 		this.bunPath = assertAbsolutePath(options.bunPath, 'bunPath');
 		this.systemctlPath = assertAbsolutePath(options.systemctlPath ?? '/usr/bin/systemctl', 'systemctlPath');
+		this.journalctlPath = assertAbsolutePath(
+			options.journalctlPath ?? '/usr/bin/journalctl',
+			'journalctlPath',
+		);
 		this.socketMode = validateSocketMode(options.socketMode ?? '0666');
 		this.socketGroup = options.socketGroup ?? null;
 	}
@@ -316,6 +340,52 @@ export class SystemdDriver {
 		return { id, status, restarts, ...(memoryBytes !== null ? { memoryBytes } : {}) };
 	}
 
+	/**
+	 * Read new journal entries for one workload unit. This is the helper's only read verb: a
+	 * fixed journalctl argv, a bounded line count and JSON output. The agent drains it into the
+	 * control plane so logs survive a node reboot or an agent restart.
+	 */
+	async logs(id: string, options: LogReadOptions = {}): Promise<HelperLogResult> {
+		assertId(id, 'workload id');
+		const lines = Math.max(1, Math.min(Math.floor(options.lines ?? 200), 1_000));
+		const args = [
+			this.journalctlPath,
+			'-u',
+			serviceUnitName(id),
+			'--no-pager',
+			'-o',
+			'json',
+			'--output-fields=__CURSOR,__REALTIME_TIMESTAMP,MESSAGE,PRIORITY',
+			'-n',
+			String(lines),
+		];
+		const cursor = options.cursor?.trim();
+		if (cursor) args.splice(2, 0, '--after-cursor', cursor);
+		const result = await this.runner.run(args);
+		if (result.code !== 0) {
+			const detail = result.stderr.trim() || result.stdout.trim() || 'no output';
+			throw new Error(`journalctl for ${id} failed (${result.code}): ${detail.slice(0, 500)}`);
+		}
+		const entries: HelperLogEntry[] = [];
+		for (const line of result.stdout.split('\n')) {
+			const trimmed = line.trim();
+			if (!trimmed) continue;
+			let record: Record<string, unknown>;
+			try {
+				record = JSON.parse(trimmed) as Record<string, unknown>;
+			} catch {
+				continue;
+			}
+			const entry = toLogEntry(record);
+			if (entry) entries.push(entry);
+		}
+		entries.sort((a, b) => a.ts - b.ts);
+		return {
+			entries,
+			nextCursor: entries.at(-1)?.cursor ?? cursor ?? null,
+		};
+	}
+
 	private async writeSecrets(
 		secretsDir: string,
 		workload: WorkloadDesired,
@@ -443,6 +513,31 @@ export class SystemdDriver {
 			throw error;
 		}
 	}
+}
+
+/** Journald stores MESSAGE as a string, or as bytes when the unit emitted invalid UTF-8. */
+function journalMessage(value: unknown): string {
+	if (typeof value === 'string') return value.slice(0, 16_384);
+	if (Array.isArray(value)) {
+		try {
+			return new TextDecoder().decode(Uint8Array.from(value as number[])).slice(0, 16_384);
+		} catch {
+			return '';
+		}
+	}
+	return '';
+}
+
+function toLogEntry(record: Record<string, unknown>): HelperLogEntry | null {
+	const cursor = typeof record.__CURSOR === 'string' ? record.__CURSOR : '';
+	if (!cursor) return null;
+	const micros = Number(record.__REALTIME_TIMESTAMP ?? 0);
+	const ts = Number.isFinite(micros) && micros > 0 ? Math.floor(micros / 1000) : Date.now();
+	const priorityRaw = Number(record.PRIORITY ?? 6);
+	const priority = Number.isInteger(priorityRaw) ? Math.max(0, Math.min(priorityRaw, 7)) : 6;
+	const message = journalMessage(record.MESSAGE);
+	if (!message) return null;
+	return { cursor, ts, priority, message };
 }
 
 function validateSocketMode(mode: string): string {

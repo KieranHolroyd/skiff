@@ -21,7 +21,7 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | DELETE | `/projects/:slug` | `project:delete` | soft delete, restorable 7 days |
 | POST | `/projects/:slug/restore` | `project:update` | |
 | POST | `/projects/:slug/access` | `project:update` | `{ scope: production\|previews, mode: public\|password\|platform, password? }` |
-| POST | `/projects/:slug/deploy` | `deployment:create` | inline files (`deploy_files`); the URL slug is the target (`project` in the body is optional and must match); `environment` selects a named environment |
+| POST | `/projects/:slug/deploy` | `deployment:create` | inline files (`deploy_files`); the URL slug is the target (`project` in the body is optional and must match); `environment` selects a named environment. Process/container projects run one workload, so only the latest deployment is active |
 | GET | `/projects/:slug/deployments` | `deployment:read` | |
 | GET | `/projects/:slug/deployments/:id` | `deployment:read` | id or short id |
 | DELETE | `/projects/:slug/deployments/:id` | `deployment:delete` | |
@@ -31,7 +31,7 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | GET | `/projects/:slug/shares` | `shareLink:read` | clear URL only on creation |
 | POST | `/projects/:slug/shares` | `shareLink:create` | expiry, caps, emails, note |
 | DELETE | `/projects/:slug/shares/:id` | `shareLink:revoke` | pushes revocation to agents |
-| GET | `/projects/:slug/logs` | `logs:read` | static sites: empty + note |
+| GET | `/projects/:slug/logs` | `logs:read` | `?after&limit&source&buildId&deploymentId&level&q`; ordered events plus a `cursor` for tailing |
 | POST | `/uploads` | `deployment:create` | `{ project, fileCount?, totalBytes? }` → presigned PUT |
 | POST | `/uploads/:id/finalize` | `deployment:create` | `{ project, uploadId?, promote?, message? }`; `uploadId` must match `:id`, and the upload must belong to `project` |
 | GET | `/nodes` | platform admin | any surface (session, API key, MCP) of a platform-admin user |
@@ -47,7 +47,7 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | POST | `/cli/token` | `apiKey:create` | exchange a one-time CLI login code + PKCE verifier for an API key |
 | GET/POST | `/projects/:slug/environments` | `project:read` / `project:update` | list or create a named environment |
 | PATCH/DELETE | `/projects/:slug/environments/:env` | `project:update` | rename/access or remove (production is built in) |
-| POST | `/projects/:slug/environments/:env/promote` | `deployment:promote` | `{ deploymentId }`; moves only that environment's pointer |
+| POST | `/projects/:slug/environments/:env/promote` | `deployment:promote` | `{ deploymentId }`; moves only that environment's pointer (production also re-points a process/container workload) |
 | GET/PUT/DELETE | `/projects/:slug/workload` | `deployment:read` / `project:update` | tier 2/3 runtime spec for the project |
 | GET/PUT/DELETE | `/projects/:slug/git` | `build:read` / `build:create` | git source, branch, build/output dirs, webhook secret |
 | GET/POST | `/projects/:slug/builds` | `build:read` / `build:create` | build history or enqueue `{ ref?, promote? }` |
@@ -84,6 +84,10 @@ single-use join token and returns the node's long-lived token.
   clone/ref/command plus a presigned upload URL.
 - `POST /api/agent/builds/:id/log` and `POST /api/agent/builds/:id/report` — stream logs and report
   `building` / `succeeded` / `failed` / `cancelled`.
+- `POST /api/agent/logs` — runtime log drain: `{ workloadId, cursor?, lines[] }`. The node token
+  must own the workload; the server resolves its project and deployment.
+- Dashboard live logs use `GET /projects/:slug/logs/stream?source=runtime|build&…` (SSE, session
+  authenticated). The stream sends `id: <cursor>` so `EventSource` reconnects resume without a gap.
 
 ## v2 machine endpoints
 

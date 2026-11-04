@@ -79,6 +79,8 @@ root:skiff`.
 | `SKIFF_CADDY_LISTEN` | `:443,:80` | no | Agent only: listeners Caddy should bind. |
 | `SKIFF_CADDY_ACCESS_LOG` | installer: `/var/log/caddy/skiff-access.log` | no | Agent only: Caddy JSON access log (0640, read via the `caddy` group). The agent adds it to the Caddy config and aggregates it into 1-minute buckets. |
 | `SKIFF_CERT_PROBE_ADDR` | loopback on the TLS listen port (when TLS is on) | no | Agent only: where the agent handshakes to read served certificate expiry (every 6 h) for the cert-expiry alert; `off` disables it. |
+| `SKIFF_LOG_DRAIN` | `1` | no | Agent only: drain workload stdout/stderr through the helper into the control plane for the dashboard's live Logs tab. `0` disables the drain. |
+| `SKIFF_LOG_DRAIN_INTERVAL_MS` | `2000` | no | Agent only: how often the log drain asks the helper for new journal lines (500–60000 ms). |
 | `SKIFF_MCP_ALLOW_DCR` | `1` | no | Keep legacy Dynamic Client Registration alongside CIMD. |
 | `SKIFF_OPEN_SIGNUP` | unset | no | `1` allows open sign-up. Production is invite-only (D10); the first user is always allowed so setup can create the owner. |
 | `SKIFF_DEV_PASSWORD_LOGIN` | unset | no | Development only; refused in production. |
@@ -568,6 +570,8 @@ sudo skiff-recovery-kit import <file> [--restore-env] [--force]
 
 - Control plane and agent expose Prometheus `/metrics`; OTLP export is optional.
 - `journalctl -u skiff-control-plane|skiff-agent|caddy|skiff-litestream`.
+- Workload stdout/stderr is drained to the dashboard's Logs tab (7-day retention, 500k-row ceiling)
+  and `skif logs <project>` reads the same ordered events. Raw Caddy access logs stay on the node.
 - The drill writes `/var/lib/skiff/drill/status.json` (`ok`, timestamp, reason).
 - `systemd-analyze security <unit>` for sandbox drift.
 - Litestream: check R2 object age under `skiff/sqlite` (the newest WAL segment

@@ -36,9 +36,61 @@ export interface MetricPoint {
 export interface TelemetryQuery {
 	host?: string;
 	projectId?: string;
+	/** Restrict to a set of projects (an empty array matches nothing). */
+	projectIds?: string[];
 	from: TimeInput;
 	to: TimeInput;
 	interval: TelemetryInterval;
+}
+
+/** Totals for one dashboard range, aggregated across every matching host. */
+export interface TrafficTotals {
+	requests: number;
+	bytes: number;
+	status2xx: number;
+	status3xx: number;
+	status4xx: number;
+	status5xx: number;
+	/** Request-weighted latency estimate for the whole range. */
+	durationP50Ms: number;
+	durationP95Ms: number;
+}
+
+export interface TrafficSeriesPoint extends TrafficTotals {
+	bucket: string;
+}
+
+/** One host or project in a traffic breakdown. `key` is the host name or project id. */
+export interface TrafficBreakdownRow {
+	key: string;
+	requests: number;
+	bytes: number;
+	status4xx: number;
+	status5xx: number;
+	durationP95Ms: number;
+}
+
+export interface TrafficTopEntry {
+	key: string;
+	count: number;
+}
+
+/**
+ * Everything one dashboard needs from DuckDB in a single round trip: totals, a gap-filled
+ * time series, per-host/per-project breakdowns and the busiest paths/referrers.
+ */
+export interface TrafficReport {
+	totals: TrafficTotals;
+	series: TrafficSeriesPoint[];
+	hosts: TrafficBreakdownRow[];
+	projects: TrafficBreakdownRow[];
+	topPaths: TrafficTopEntry[];
+	topReferrers: TrafficTopEntry[];
+}
+
+export interface TrafficReportQuery extends TelemetryQuery {
+	/** How many path/referrer entries to return (default 10). */
+	topLimit?: number;
 }
 
 export interface PruneOptions {
@@ -262,6 +314,142 @@ function toMetricPoint(row: Record<string, unknown>): MetricPoint {
 	};
 }
 
+export function emptyTrafficReport(): TrafficReport {
+	return {
+		totals: {
+			requests: 0,
+			bytes: 0,
+			status2xx: 0,
+			status3xx: 0,
+			status4xx: 0,
+			status5xx: 0,
+			durationP50Ms: 0,
+			durationP95Ms: 0,
+		},
+		series: [],
+		hosts: [],
+		projects: [],
+		topPaths: [],
+		topReferrers: [],
+	};
+}
+
+function emptyTotals(): TrafficTotals {
+	return {
+		requests: 0,
+		bytes: 0,
+		status2xx: 0,
+		status3xx: 0,
+		status4xx: 0,
+		status5xx: 0,
+		durationP50Ms: 0,
+		durationP95Ms: 0,
+	};
+}
+
+interface TotalsAccumulator extends TrafficTotals {
+	p50Weighted: number;
+	p95Weighted: number;
+}
+
+function emptyAccumulator(): TotalsAccumulator {
+	return { ...emptyTotals(), p50Weighted: 0, p95Weighted: 0 };
+}
+
+function accumulate(acc: TotalsAccumulator, point: TrafficTotals): void {
+	acc.requests += point.requests;
+	acc.bytes += point.bytes;
+	acc.status2xx += point.status2xx;
+	acc.status3xx += point.status3xx;
+	acc.status4xx += point.status4xx;
+	acc.status5xx += point.status5xx;
+	acc.p50Weighted += point.durationP50Ms * point.requests;
+	acc.p95Weighted += point.durationP95Ms * point.requests;
+}
+
+function finishTotals(acc: TotalsAccumulator): TrafficTotals {
+	return {
+		requests: acc.requests,
+		bytes: acc.bytes,
+		status2xx: acc.status2xx,
+		status3xx: acc.status3xx,
+		status4xx: acc.status4xx,
+		status5xx: acc.status5xx,
+		durationP50Ms: acc.requests > 0 ? acc.p50Weighted / acc.requests : 0,
+		durationP95Ms: acc.requests > 0 ? acc.p95Weighted / acc.requests : 0,
+	};
+}
+
+function intervalMs(interval: TelemetryInterval): number {
+	return interval === '1h' ? HOUR_MS : MINUTE_MS;
+}
+
+function floorToMs(value: string, step: number): number {
+	return Math.floor(toEpochMs(value) / step) * step;
+}
+
+function upsertAccumulator(
+	map: Map<string | number, TotalsAccumulator>,
+	key: string | number,
+	point: TrafficTotals,
+): void {
+	const current = map.get(key);
+	if (current) {
+		accumulate(current, point);
+		return;
+	}
+	const created = emptyAccumulator();
+	accumulate(created, point);
+	map.set(key, created);
+}
+
+function finishBreakdown(map: Map<string | number, TotalsAccumulator>): TrafficBreakdownRow[] {
+	return [...map.entries()]
+		.map(([key, acc]) => {
+			const totals = finishTotals(acc);
+			return {
+				key: String(key),
+				requests: totals.requests,
+				bytes: totals.bytes,
+				status4xx: totals.status4xx,
+				status5xx: totals.status5xx,
+				durationP95Ms: totals.durationP95Ms,
+			};
+		})
+		.sort((a, b) => b.requests - a.requests || a.key.localeCompare(b.key));
+}
+
+/** Fill quiet minutes/hours with zeros so the chart has a continuous baseline. */
+function fillSeries(
+	map: Map<string | number, TotalsAccumulator>,
+	fromMs: number,
+	toMs: number,
+	step: number,
+): TrafficSeriesPoint[] {
+	const start = Math.floor(fromMs / step) * step;
+	const end = Math.floor(toMs / step) * step;
+	if (end < start) return [];
+	const count = Math.floor((end - start) / step) + 1;
+	// A pathological range must not allocate millions of points for a dashboard.
+	if (count > 20_000) {
+		return [...map.entries()]
+			.sort(([a], [b]) => Number(a) - Number(b))
+			.map(([bucketMs, acc]) => ({
+				bucket: isoFromMs(Number(bucketMs)),
+				...finishTotals(acc),
+			}));
+	}
+	const series: TrafficSeriesPoint[] = [];
+	for (let index = 0; index < count; index++) {
+		const bucketMs = start + index * step;
+		series.push({
+			bucket: isoFromMs(bucketMs),
+			...finishTotals(map.get(bucketMs) ?? emptyAccumulator()),
+		});
+	}
+	return series;
+}
+
 function escapeSqlString(value: string): string {
 	return value.replaceAll("'", "''");
 }
@@ -421,54 +609,7 @@ export class TelemetryStore {
 			const toMs = toEpochMs(input.to);
 			if (toMs < fromMs) return [];
 			const interval = input.interval === '1h' ? '1 hour' : '1 minute';
-
-			const filters: string[] = [];
-			const filterParams: string[] = [];
-			if (input.host !== undefined) {
-				filters.push('host = ?');
-				filterParams.push(input.host);
-			}
-			if (input.projectId !== undefined) {
-				filters.push('project_id = ?');
-				filterParams.push(input.projectId);
-			}
-			const where = filters.length > 0 ? `AND ${filters.join(' AND ')}` : '';
-
-			// Hourly queries read metrics_1h wherever an hour has been rolled up (1-minute rows
-			// are pruned after 48 h) and fall back to 1-minute rows for hours not rolled yet,
-			// such as the current one. Minute queries only have 1-minute data to read.
-			let source: string;
-			let params: string[];
-			if (input.interval === '1h') {
-				source = `(
-					SELECT * FROM metrics_1h
-					WHERE bucket >= date_trunc('hour', CAST(? AS TIMESTAMPTZ)) AND bucket <= CAST(? AS TIMESTAMPTZ)
-						${where}
-					UNION ALL
-					SELECT * FROM metrics_1m m
-					WHERE bucket >= CAST(? AS TIMESTAMPTZ) AND bucket <= CAST(? AS TIMESTAMPTZ)
-						${where}
-						AND NOT EXISTS (
-							SELECT 1 FROM metrics_1h h
-							WHERE h.host = m.host AND h.bucket = date_trunc('hour', m.bucket)
-						)
-				)`;
-				params = [
-					isoFromMs(fromMs),
-					isoFromMs(toMs),
-					...filterParams,
-					isoFromMs(fromMs),
-					isoFromMs(toMs),
-					...filterParams,
-				];
-			} else {
-				source = `(
-					SELECT * FROM metrics_1m
-					WHERE bucket >= CAST(? AS TIMESTAMPTZ) AND bucket <= CAST(? AS TIMESTAMPTZ)
-						${where}
-				)`;
-				params = [isoFromMs(fromMs), isoFromMs(toMs), ...filterParams];
-			}
+			const source = this.#sourceFor(input);
 
 			const sql = `
 				SELECT epoch_ms(time_bucket(INTERVAL '${interval}', bucket)) AS bucket_ms,
@@ -487,14 +628,147 @@ export class TelemetryStore {
 						sum(duration_p95_ms * CAST(requests AS DOUBLE)) / NULLIF(sum(CAST(requests AS DOUBLE)), 0),
 						0
 					) AS duration_p95_ms
-				FROM ${source} AS src
+				FROM ${source.sql} AS src
 				GROUP BY time_bucket(INTERVAL '${interval}', bucket), host, project_id
 				ORDER BY bucket_ms ASC, host ASC, project_id ASC`;
 
 			return this.#withReadConnection(async (connection) => {
-				const result = await connection.runAndReadAll(sql, params);
+				const result = await connection.runAndReadAll(sql, source.params);
 				return result.getRowObjectsJson().map((row) => toMetricPoint(row));
 			});
+		});
+	}
+
+	/**
+	 * Dashboard projection of the same hot store. Totals, series, host/project breakdowns and
+	 * top paths/referrers come from two DuckDB reads instead of one per card.
+	 */
+	async report(input: TrafficReportQuery): Promise<TrafficReport> {
+		return this.#guarded('report', emptyTrafficReport(), async () => {
+			const fromMs = toEpochMs(input.from);
+			const toMs = toEpochMs(input.to);
+			if (toMs < fromMs) return emptyTrafficReport();
+
+			const points = await this.query(input);
+			const step = intervalMs(input.interval);
+			const byBucket = new Map<string | number, TotalsAccumulator>();
+			const byHost = new Map<string | number, TotalsAccumulator>();
+			const byProject = new Map<string | number, TotalsAccumulator>();
+			const totals = emptyAccumulator();
+
+			for (const point of points) {
+				accumulate(totals, point);
+				const bucketMs = floorToMs(point.bucket, step);
+				upsertAccumulator(byBucket, bucketMs, point);
+				upsertAccumulator(byHost, point.host, point);
+				if (point.projectId) upsertAccumulator(byProject, point.projectId, point);
+			}
+
+			const topLimit = Math.min(Math.max(input.topLimit ?? 10, 1), 100);
+			const top = await this.#topEntries(input, topLimit);
+
+			return {
+				totals: finishTotals(totals),
+				series: fillSeries(byBucket, fromMs, toMs, step),
+				hosts: finishBreakdown(byHost),
+				projects: finishBreakdown(byProject),
+				topPaths: top.paths,
+				topReferrers: top.referrers,
+			};
+		});
+	}
+
+	/** Shared `metrics_1h ∪ metrics_1m` source for dashboard queries, with filters applied. */
+	#sourceFor(input: TelemetryQuery): { sql: string; params: string[] } {
+		const fromMs = toEpochMs(input.from);
+		const toMs = toEpochMs(input.to);
+		const filters: string[] = [];
+		const filterParams: string[] = [];
+		if (input.host !== undefined) {
+			filters.push('host = ?');
+			filterParams.push(input.host);
+		}
+		if (input.projectId !== undefined) {
+			filters.push('project_id = ?');
+			filterParams.push(input.projectId);
+		}
+		if (input.projectIds !== undefined) {
+			if (input.projectIds.length === 0) {
+				filters.push('false');
+			} else {
+				filters.push(`project_id IN (${input.projectIds.map(() => '?').join(', ')})`);
+				filterParams.push(...input.projectIds);
+			}
+		}
+		const where = filters.length > 0 ? `AND ${filters.join(' AND ')}` : '';
+
+		// Hourly queries read metrics_1h wherever an hour has been rolled up (1-minute rows
+		// are pruned after 48 h) and fall back to 1-minute rows for hours not rolled yet,
+		// such as the current one. Minute queries only have 1-minute data to read.
+		if (input.interval === '1h') {
+			return {
+				sql: `(
+					SELECT * FROM metrics_1h
+					WHERE bucket >= date_trunc('hour', CAST(? AS TIMESTAMPTZ)) AND bucket <= CAST(? AS TIMESTAMPTZ)
+						${where}
+					UNION ALL
+					SELECT * FROM metrics_1m m
+					WHERE bucket >= CAST(? AS TIMESTAMPTZ) AND bucket <= CAST(? AS TIMESTAMPTZ)
+						${where}
+						AND NOT EXISTS (
+							SELECT 1 FROM metrics_1h h
+							WHERE h.host = m.host AND h.bucket = date_trunc('hour', m.bucket)
+						)
+				)`,
+				params: [
+					isoFromMs(fromMs),
+					isoFromMs(toMs),
+					...filterParams,
+					isoFromMs(fromMs),
+					isoFromMs(toMs),
+					...filterParams,
+				],
+			};
+		}
+		return {
+			sql: `(
+				SELECT * FROM metrics_1m
+				WHERE bucket >= CAST(? AS TIMESTAMPTZ) AND bucket <= CAST(? AS TIMESTAMPTZ)
+					${where}
+			)`,
+			params: [isoFromMs(fromMs), isoFromMs(toMs), ...filterParams],
+		};
+	}
+
+	async #topEntries(
+		input: TelemetryQuery,
+		limit: number,
+	): Promise<{ paths: TrafficTopEntry[]; referrers: TrafficTopEntry[] }> {
+		const source = this.#sourceFor(input);
+		const pathsSql = `
+			SELECT json_extract_string(entry, '$.path') AS key,
+				CAST(sum(CAST(json_extract(entry, '$.count') AS UBIGINT)) AS DOUBLE) AS count
+			FROM ${source.sql} AS src, unnest(from_json(top_paths, '["JSON"]')) AS u(entry)
+			GROUP BY key
+			ORDER BY count DESC, key ASC
+			LIMIT ?`;
+		const referrersSql = `
+			SELECT json_extract_string(entry, '$.referrer') AS key,
+				CAST(sum(CAST(json_extract(entry, '$.count') AS UBIGINT)) AS DOUBLE) AS count
+			FROM ${source.sql} AS src, unnest(from_json(top_referrers, '["JSON"]')) AS u(entry)
+			GROUP BY key
+			ORDER BY count DESC, key ASC
+			LIMIT ?`;
+
+		return this.#withReadConnection(async (connection) => {
+			const paths = await connection.runAndReadAll(pathsSql, [...source.params, limit]);
+			const referrers = await connection.runAndReadAll(referrersSql, [...source.params, limit]);
+			const toEntries = (result: typeof paths) =>
+				result
+					.getRowObjectsJson()
+					.filter((row) => row['key'] != null)
+					.map((row) => ({ key: readString(row['key']), count: readNumber(row['count']) }));
+			return { paths: toEntries(paths), referrers: toEntries(referrers) };
 		});
 	}
 

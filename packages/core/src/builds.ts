@@ -149,7 +149,15 @@ export class BuildService {
 			.where(and(eq(builds.status, 'building'), lt(builds.claimedAt, now - CLAIM_TTL_MS)))
 			.all();
 		for (const row of stale) {
-			const log = this.appendText(row, `[builder] claim expired after ${Math.round(CLAIM_TTL_MS / 60_000)}m; requeued\n`);
+			const message = `[builder] claim expired after ${Math.round(CLAIM_TTL_MS / 60_000)}m; requeued`;
+			const log = this.appendText(row, `${message}\n`);
+			this.ctx.logs.appendSystem({
+				orgId: row.orgId,
+				projectId: row.projectId,
+				buildId: row.id,
+				level: 'warn',
+				message,
+			});
 			this.ctx.db
 				.update(builds)
 				.set({
@@ -321,18 +329,27 @@ export class BuildService {
 		}
 
 		this.ctx.db.update(builds).set(patch).where(eq(builds.id, buildId)).run();
+		this.ctx.logs.appendSystem({
+			orgId: row.orgId,
+			projectId: row.projectId,
+			buildId,
+			nodeId,
+			level: patch.status === 'succeeded' ? 'info' : 'error',
+			message:
+				patch.status === 'succeeded'
+					? `Build succeeded${patch.deploymentId ? `; deployment ${patch.deploymentId}` : ''}.`
+					: `Build ${patch.status}: ${patch.error ?? 'no detail'}`,
+		});
 		this.ctx.projects.bump(row.orgId);
 		return this.view(project, { ...row, ...patch } as BuildRow);
 	}
 
-	/** Append a chunk of Builder output; `tail` is enough for the list view. */
+	/**
+	 * Append a chunk of Builder output. The ordered log drain keeps the full stream for SSE and
+	 * the row keeps a bounded copy for the REST/CLI compatibility path.
+	 */
 	appendLog(nodeId: string, buildId: string, text: string): boolean {
-		const row = this.ctx.db.select().from(builds).where(eq(builds.id, buildId)).get();
-		if (!row || row.nodeId !== nodeId) return false;
-		if (row.status !== 'building') return false;
-		const log = this.appendText(row, text);
-		this.ctx.db.update(builds).set(log).where(eq(builds.id, buildId)).run();
-		return true;
+		return this.ctx.logs.appendBuildText(nodeId, buildId, text);
 	}
 
 	cancel(principal: Principal, project: ProjectRow, buildId: string): BuildView {
@@ -347,6 +364,14 @@ export class BuildService {
 			.set({ status, error: 'Build was cancelled.', finishedAt: now })
 			.where(and(eq(builds.id, buildId), eq(builds.status, row.status)))
 			.run();
+		this.ctx.logs.appendSystem({
+			orgId: row.orgId,
+			projectId: row.projectId,
+			buildId,
+			nodeId: row.nodeId,
+			level: 'warn',
+			message: 'Build was cancelled by an operator.',
+		});
 		void this.cleanupObject(`builds/${row.id}.zip`);
 		this.ctx.audit.record({
 			principal,

@@ -30,6 +30,7 @@ export async function runHelper(): Promise<void> {
 		releaseDirs: config.releaseDirs,
 		bunPath: config.bunPath,
 		systemctlPath: config.systemctlPath,
+		journalctlPath: config.journalctlPath,
 		socketMode: config.workloadSocketMode,
 		socketGroup: config.workloadSocketGroup,
 	});

@@ -15,6 +15,7 @@ import type { SecretService } from './secrets.ts';
 import type { WorkloadService } from './workloads.ts';
 import type { DomainService } from './domains.ts';
 import type { BuildService } from './builds.ts';
+import type { LogService } from './logs.ts';
 import type { EnvironmentService } from './environments.ts';
 
 /**
@@ -41,5 +42,6 @@ export interface CoreContext {
 	workloads: WorkloadService;
 	domains: DomainService;
 	builds: BuildService;
+	logs: LogService;
 	environments: EnvironmentService;
 }

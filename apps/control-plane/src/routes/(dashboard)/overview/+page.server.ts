@@ -1,6 +1,7 @@
 import type { DeploymentView, NodeView, StatusSummary } from '@skiff/core';
 import type { PageServerLoad } from './$types';
 import { core } from '#lib/server/core.js';
+import { trafficRanges, parseTrafficRange, trafficRangeHref } from '#lib/server/traffic-range.js';
 
 interface V2Summary {
 	capacity: {
@@ -24,7 +25,7 @@ interface V2Summary {
  * Fleet overview (DESIGN §8): a small, cheap summary built from the service layer.
  * Node detail is platform-admin only, so non-admins simply get `nodesDenied: true`.
  */
-export const load: PageServerLoad = ({ locals }) => {
+export const load: PageServerLoad = async ({ locals, url }) => {
 	const principal = locals.principal!;
 
 	let status: StatusSummary | null = null;
@@ -35,6 +36,21 @@ export const load: PageServerLoad = ({ locals }) => {
 	}
 
 	const projects = core.projects.list(principal);
+
+	const trafficRange = parseTrafficRange(url.searchParams.get('range'));
+	const traffic = await core.metrics.trafficOverview(principal, {
+		from: trafficRange.from,
+		to: trafficRange.to,
+		interval: trafficRange.interval
+	});
+	const trafficLinks = Object.fromEntries(
+		trafficRanges.map((range) => [range.key, trafficRangeHref(url, range.key)])
+	);
+	const projectNames = Object.fromEntries(
+		core.projects
+			.list(principal, { includeDeleted: true })
+			.map((project) => [project.id, { name: project.name, slug: project.slug }])
+	);
 
 	let nodes: NodeView[] = [];
 	let nodesDenied = false;
@@ -110,6 +126,11 @@ export const load: PageServerLoad = ({ locals }) => {
 		status,
 		projects: projects.slice(0, 5),
 		projectCount: projects.length,
+		traffic,
+		trafficRange,
+		trafficRanges,
+		trafficLinks,
+		projectNames,
 		nodes,
 		nodesDenied,
 		deployments: recent.slice(0, 12),

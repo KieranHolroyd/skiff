@@ -43,6 +43,18 @@ describe('loadConfig', () => {
 		expect(config.workloadSliceMb).toBe(1024);
 		expect(config.workloadSocketDir).toBe('/run/skiff-workloads');
 		expect(config.workloadHealthTimeoutMs).toBe(30_000);
+		expect(config.logDrain).toBe(true);
+		expect(config.logDrainIntervalMs).toBe(2_000);
+	});
+
+	test('lets an operator disable or slow the log drain', () => {
+		const config = loadConfig({
+			...base,
+			SKIFF_LOG_DRAIN: '0',
+			SKIFF_LOG_DRAIN_INTERVAL_MS: '5000',
+		});
+		expect(config.logDrain).toBe(false);
+		expect(config.logDrainIntervalMs).toBe(5_000);
 	});
 
 	test('parses comma-separated listeners and optional access logs', () => {

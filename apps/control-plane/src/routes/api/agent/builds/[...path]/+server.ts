@@ -30,10 +30,7 @@ const handler: RequestHandler = async (event) => {
 		if (log) {
 			if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
 			const chunk = await readJson(request, buildLogChunkSchema);
-			const text = chunk.lines
-				.map((line) => (chunk.stream === 'stderr' ? `[stderr] ${line}` : line))
-				.join('\n');
-			const appended = core.builds.appendLog(node.id, log[1]!, text ? `${text}\n` : '');
+			const appended = core.logs.appendBuild(node.id, log[1]!, chunk);
 			if (!appended) return json({ error: 'not_found' }, 404);
 			return { ok: true };
 		}

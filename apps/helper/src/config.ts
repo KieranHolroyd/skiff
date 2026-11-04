@@ -19,6 +19,8 @@ export interface HelperConfig {
 	/** Absolute bun used for the default `bun run start` process command. */
 	bunPath: string;
 	systemctlPath: string;
+	/** Absolute journalctl used to drain workload stdout/stderr for the agent. */
+	journalctlPath: string;
 	/** Socket file mode for workload sockets; the Caddy user must be able to connect. */
 	workloadSocketMode: string;
 	/** Optional group for workload sockets (e.g. the Caddy group). */
@@ -113,6 +115,7 @@ export function loadHelperConfig(env: Env = process.env): HelperConfig {
 		releaseDirs: releaseDirs(optional(env, 'SKIFF_HELPER_RELEASE_DIRS', DEFAULT_RELEASE_DIRS.join(','))),
 		bunPath: absolute(env, 'SKIFF_HELPER_BUN_PATH', '/usr/local/bin/bun'),
 		systemctlPath: absolute(env, 'SKIFF_HELPER_SYSTEMCTL', '/usr/bin/systemctl'),
+		journalctlPath: absolute(env, 'SKIFF_HELPER_JOURNALCTL', '/usr/bin/journalctl'),
 		workloadSocketMode: socketMode(
 			optional(env, 'SKIFF_HELPER_WORKLOAD_SOCKET_MODE', '0666'),
 			'SKIFF_HELPER_WORKLOAD_SOCKET_MODE',

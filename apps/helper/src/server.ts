@@ -11,7 +11,7 @@ import {
 	type WorkloadActivation,
 	type WorkloadDesired,
 } from './validate.ts';
-import type { HelperWorkloadStatus } from './systemd.ts';
+import type { HelperLogResult, HelperWorkloadStatus, LogReadOptions } from './systemd.ts';
 
 /**
  * The helper's entire network surface: four fixed verbs on a root-owned, group-restricted unix
@@ -24,6 +24,7 @@ export interface HelperRuntime {
 	apply(workload: WorkloadDesired, activation: WorkloadActivation): Promise<HelperWorkloadStatus>;
 	remove(id: string): Promise<void>;
 	status(id: string): Promise<HelperWorkloadStatus>;
+	logs(id: string, options?: LogReadOptions): Promise<HelperLogResult>;
 }
 
 export interface HandlerOptions {
@@ -43,7 +44,8 @@ export function createHandler(
 
 	return async (request: Request): Promise<Response> => {
 		try {
-			const path = new URL(request.url).pathname;
+			const url = new URL(request.url);
+			const path = url.pathname;
 			const method = request.method;
 
 			if (path === '/healthz') {
@@ -83,6 +85,26 @@ export function createHandler(
 					return json({ ok: true });
 				}
 				return methodNotAllowed('GET, DELETE');
+			}
+
+			const logMatch = /^\/v1\/workloads\/([^/]+)\/logs$/.exec(path);
+			if (logMatch) {
+				if (method !== 'GET') return methodNotAllowed('GET');
+				let id: string;
+				try {
+					id = assertId(decodeURIComponent(logMatch[1]!), 'workload id');
+				} catch (error) {
+					if (error instanceof ValidationError) throw error;
+					throw new ValidationError('workload id is not valid URL encoding');
+				}
+				const lines = Number(url.searchParams.get('lines') ?? 200);
+				if (!Number.isFinite(lines) || lines < 1 || lines > 1_000)
+					throw new ValidationError('lines must be between 1 and 1000');
+				const cursor = url.searchParams.get('cursor')?.trim() || undefined;
+				if (cursor && cursor.length > 512)
+					throw new ValidationError('cursor must be 512 characters or fewer');
+				const result = await runtime.logs(id, { cursor, lines: Math.floor(lines) });
+				return json({ ok: true, ...result });
 			}
 
 			return json({ error: 'not_found', path }, 404);

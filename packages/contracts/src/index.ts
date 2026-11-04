@@ -8,6 +8,7 @@ export * from './model.ts';
 export * from './api.ts';
 export * from './workload.ts';
 export * from './build.ts';
+export * from './log.ts';
 export * from './domain.ts';
 export * from './environment.ts';
 export * from './url.ts';

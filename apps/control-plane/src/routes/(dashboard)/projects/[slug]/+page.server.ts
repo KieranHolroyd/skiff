@@ -13,6 +13,7 @@ import {
 } from '@skiff/contracts';
 import type { SecretView } from '@skiff/core';
 import { core } from '#lib/server/core.js';
+import { parseTrafficRange, trafficRangeHref, trafficRanges } from '#lib/server/traffic-range.js';
 import {
 	failStatus,
 	formBoolean,
@@ -90,11 +91,23 @@ function fieldErrorsFrom(issues: Array<{ path: PropertyKey[]; message: string }>
 	return fieldErrors;
 }
 
-export const load: PageServerLoad = async ({ locals, params }) => {
+export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const principal = locals.principal!;
 	try {
 		const project = await core.projects.get(principal, params.slug);
 		const row = core.projects.requireRow(principal, params.slug);
+		const trafficRange = parseTrafficRange(url.searchParams.get('range'));
+		const traffic = await core.metrics.trafficForProject(principal, params.slug, {
+			from: trafficRange.from,
+			to: trafficRange.to,
+			interval: trafficRange.interval
+		});
+		const trafficLinks = Object.fromEntries(
+			trafficRanges.map((range) => [
+				range.key,
+				trafficRangeHref(url, range.key, { tab: 'traffic' })
+			])
+		);
 		const deployments = core.deployments.list(principal, row, { limit: 100 });
 		let shareLinks: Awaited<ReturnType<typeof core.access.listShareLinks>> = [];
 		if (hasPermission(principal, 'shareLink:read')) {
@@ -129,6 +142,10 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 
 		return {
 			project,
+			traffic,
+			trafficRange,
+			trafficRanges,
+			trafficLinks,
 			deployments,
 			shareLinks,
 			environments,
@@ -153,6 +170,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 				rollbackEnvironment: hasPermission(principal, 'deployment:rollback'),
 				createBuild: hasPermission(principal, 'build:create'),
 				cancelBuild: hasPermission(principal, 'build:cancel'),
+				readLogs: hasPermission(principal, 'logs:read'),
 				createDomain: hasPermission(principal, 'domain:create'),
 				deleteDomain: hasPermission(principal, 'domain:delete'),
 				createSecret: hasPermission(principal, 'secret:create'),

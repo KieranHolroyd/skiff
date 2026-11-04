@@ -295,6 +295,105 @@ describe('TelemetryStore', () => {
 		expect(text).not.toContain('host="b.test"');
 	});
 
+	test('report aggregates totals, series, breakdowns and top paths for a project', async () => {
+		await store.open();
+		await store.ingest([
+			makeBucket('a.test', START, {
+				requests: 10,
+				status2xx: 8,
+				status4xx: 1,
+				status5xx: 1,
+				bytes: 1_000,
+				durationP95Ms: 100,
+				topPaths: [
+					{ path: '/', count: 7 },
+					{ path: '/pricing', count: 3 },
+				],
+				topReferrers: [{ referrer: 'https://example.com', count: 6 }],
+			}),
+			makeBucket('a.test', START + MINUTE, {
+				requests: 6,
+				status2xx: 5,
+				status4xx: 0,
+				status5xx: 1,
+				bytes: 600,
+				durationP95Ms: 200,
+				topPaths: [{ path: '/', count: 4 }],
+				topReferrers: [],
+			}),
+			// A second host on the same project (e.g. a preview host).
+			makeBucket('a--preview.test', START, {
+				requests: 4,
+				status2xx: 4,
+				status4xx: 0,
+				status5xx: 0,
+				bytes: 400,
+				topPaths: [{ path: '/pricing', count: 2 }],
+				topReferrers: [],
+			}),
+			// Another project must not leak into a project-scoped report.
+			makeBucket('b.test', START, {
+				projectId: 'proj_2',
+				requests: 50,
+				topPaths: [{ path: '/other', count: 50 }],
+			}),
+		]);
+
+		const report = await store.report({
+			projectId: 'proj_1',
+			from: START,
+			to: START + 4 * MINUTE,
+			interval: '1m',
+		});
+
+		expect(report.totals.requests).toBe(20);
+		expect(report.totals.status4xx).toBe(1);
+		expect(report.totals.status5xx).toBe(2);
+		expect(report.totals.bytes).toBe(2_000);
+		expect(report.totals.durationP95Ms).toBeCloseTo((10 * 100 + 6 * 200 + 4 * 20) / 20, 5);
+
+		// Gaps are filled so every minute in the range has a chart point.
+		expect(report.series).toHaveLength(5);
+		expect(report.series[0]!.requests).toBe(14);
+		expect(report.series[1]!.requests).toBe(6);
+		expect(report.series[2]!.requests).toBe(0);
+
+		expect(report.hosts.map((host) => host.key)).toEqual(['a.test', 'a--preview.test']);
+		expect(report.projects).toHaveLength(1);
+		expect(report.projects[0]!.key).toBe('proj_1');
+		expect(report.topPaths[0]).toEqual({ key: '/', count: 11 });
+		expect(report.topPaths[1]).toEqual({ key: '/pricing', count: 5 });
+		expect(report.topReferrers[0]).toEqual({ key: 'https://example.com', count: 6 });
+	});
+
+	test('report scopes a fleet query to an explicit project list', async () => {
+		await store.open();
+		await store.ingest([
+			makeBucket('a.test', START, { projectId: 'proj_1', requests: 3 }),
+			makeBucket('b.test', START, { projectId: 'proj_2', requests: 7 }),
+			makeBucket('c.test', START, { projectId: null, requests: 11 }),
+		]);
+
+		const report = await store.report({
+			projectIds: ['proj_2'],
+			from: START,
+			to: START + MINUTE,
+			interval: '1m',
+		});
+		expect(report.totals.requests).toBe(7);
+		expect(report.projects.map((project) => project.key)).toEqual(['proj_2']);
+		expect(report.topPaths).toHaveLength(1);
+
+		const none = await store.report({
+			projectIds: [],
+			from: START,
+			to: START + MINUTE,
+			interval: '1m',
+		});
+		expect(none.totals.requests).toBe(0);
+		expect(none.topPaths).toEqual([]);
+	});
+
 	test('falls back to a no-op store when DuckDB cannot load', async () => {
 		const errors: Error[] = [];
 		store = new TelemetryStore({

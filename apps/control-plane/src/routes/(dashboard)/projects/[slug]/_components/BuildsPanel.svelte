@@ -34,13 +34,19 @@
 		gitSource,
 		builds,
 		platformOrigin,
-		can
+		can,
+		onOpenLog,
+		onBuildQueued
 	}: {
 		project: ProjectView;
 		gitSource: GitSourceView | null;
 		builds: BuildView[];
 		platformOrigin: string;
 		can: { createBuild: boolean; cancelBuild: boolean };
+		/** The project page opens its live Logs tab; the dialog below is a standalone fallback. */
+		onOpenLog?: (buildId: string) => void;
+		/** Switch to the newest build's live tail after the queue action succeeds. */
+		onBuildQueued?: () => void;
 	} = $props();
 
 	let sourceOpen = $state(false);
@@ -95,6 +101,10 @@
 	}
 
 	async function openLog(build: BuildView) {
+		if (onOpenLog) {
+			onOpenLog(build.id);
+			return;
+		}
 		const request = ++logRequest;
 		logTitle = `${build.ref} · ${shortId(build.id)}`;
 		logText = '';
@@ -355,6 +365,7 @@
 										<Button
 											variant="ghost"
 											size="icon-sm"
+											class={build.status === 'building' ? 'text-warning' : ''}
 											aria-label={`View log for build ${shortId(build.id)}`}
 											onclick={() => openLog(build)}
 										>
@@ -496,6 +507,7 @@
 		description="Queue a build for {project.slug}. The Builder clones, builds and uploads the artifact."
 		action="?/triggerBuild"
 		submitLabel="Queue build"
+		onsuccess={onBuildQueued}
 	>
 		<Field.Group>
 			<Field.Field>

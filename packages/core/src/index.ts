@@ -17,7 +17,9 @@ import { MetricsService } from './metrics.ts';
 import { WorkloadService } from './workloads.ts';
 import { DomainService } from './domains.ts';
 import { BuildService } from './builds.ts';
+import { LogService } from './logs.ts';
 import { EnvironmentService } from './environments.ts';
+import { SourceService } from './source.ts';
 
 export * from './config.ts';
 export * from './context.ts';
@@ -40,7 +42,9 @@ export * from './placement.ts';
 export * from './workloads.ts';
 export * from './domains.ts';
 export * from './builds.ts';
+export * from './logs.ts';
 export * from './environments.ts';
+export * from './source.ts';
 export * from './notify.ts';
 export * from './telemetry.ts';
 
@@ -66,7 +70,9 @@ export interface Core {
 	workloads: WorkloadService;
 	domains: DomainService;
 	builds: BuildService;
+	logs: LogService;
 	environments: EnvironmentService;
+	source: SourceService;
 	audit: AuditService;
 }
 
@@ -96,7 +102,9 @@ export function createCore(options: CoreOptions): Core {
 	ctx.secrets = new SecretService(ctx);
 	ctx.workloads = new WorkloadService(ctx);
 	ctx.domains = new DomainService(ctx);
+	ctx.logs = new LogService(ctx);
 	ctx.builds = new BuildService(ctx);
+	const source = new SourceService(ctx);
 
 	const deploy = new DeployService(ctx);
 	const maintenance = new MaintenanceService(ctx);
@@ -118,7 +126,9 @@ export function createCore(options: CoreOptions): Core {
 		workloads: ctx.workloads,
 		domains: ctx.domains,
 		builds: ctx.builds,
+		logs: ctx.logs,
 		environments: ctx.environments,
+		source,
 		audit: ctx.audit,
 	};
 }

@@ -3,6 +3,12 @@ import { deployments, nodes, projects, releases } from '@skiff/db';
 import type { Principal } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import { requirePermission } from '@skiff/contracts';
+import {
+	emptyTrafficReport,
+	type TelemetryInterval,
+	type TimeInput,
+	type TrafficReport,
+} from './telemetry.ts';
 
 export interface StatusSummary {
 	nodes: { total: number; online: number; offline: number };
@@ -10,6 +16,19 @@ export interface StatusSummary {
 	deployments: { active: number; total: number };
 	storageBytes: number;
 	versions: { controlPlane: string; agent: string };
+}
+
+export interface TrafficWindow {
+	from: TimeInput;
+	to: TimeInput;
+	interval: TelemetryInterval;
+}
+
+/** Dashboard payload: `available` separates "DuckDB is off" from "quiet period". */
+export interface TrafficView {
+	permitted: boolean;
+	available: boolean;
+	report: TrafficReport;
 }
 
 export class MetricsService {
@@ -50,6 +69,48 @@ export class MetricsService {
 			storageBytes: storage?.total ?? 0,
 			versions: { controlPlane: this.version, agent: this.ctx.config.desiredAgentVersion ?? this.version },
 		};
+	}
+
+	/**
+	 * DuckDB traffic for one project (every environment host), scoped by RBAC. Returns a
+	 * `permitted: false` payload instead of throwing so a read-only token without metrics
+	 * visibility can still open the project page.
+	 */
+	async trafficForProject(
+		principal: Principal,
+		projectSlug: string,
+		window: TrafficWindow,
+	): Promise<TrafficView> {
+		const empty = { permitted: false, available: false, report: emptyTrafficReport() } as const;
+		if (!principal.permissions.has('metrics:read')) return { ...empty };
+		requirePermission(principal, 'project:read');
+		const project = this.ctx.projects.requireRow(principal, projectSlug);
+		const telemetry = this.ctx.telemetry;
+		if (!telemetry?.available) {
+			return { permitted: true, available: false, report: emptyTrafficReport() };
+		}
+		const report = await telemetry.report({ ...window, projectId: project.id });
+		return { permitted: true, available: true, report };
+	}
+
+	/** Fleet traffic for every project this principal can read. */
+	async trafficOverview(principal: Principal, window: TrafficWindow): Promise<TrafficView> {
+		if (!principal.permissions.has('metrics:read')) {
+			return { permitted: false, available: false, report: emptyTrafficReport() };
+		}
+		requirePermission(principal, 'project:read');
+		const telemetry = this.ctx.telemetry;
+		if (!telemetry?.available) {
+			return { permitted: true, available: false, report: emptyTrafficReport() };
+		}
+		const projectIds = this.ctx.projects
+			.list(principal, { includeDeleted: true })
+			.map((project) => project.id);
+		if (projectIds.length === 0) {
+			return { permitted: true, available: true, report: emptyTrafficReport() };
+		}
+		const report = await telemetry.report({ ...window, projectIds });
+		return { permitted: true, available: true, report };
 	}
 
 	/** Prometheus text exposition (DESIGN §8: export only, no external scraper required). */
