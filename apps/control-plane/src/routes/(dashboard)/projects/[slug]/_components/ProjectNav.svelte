@@ -107,7 +107,7 @@
 		<div class="sticky top-[4.5rem] space-y-6">
 			{#each groups as group (group.label)}
 				<div>
-					<p class="eyebrow mb-2 px-2.5">{group.label}</p>
+					<p class="mb-1 px-2 text-xs font-medium text-muted-foreground">{group.label}</p>
 					<ul class="space-y-0.5">
 						{#each group.items as item (item.id)}
 							{@const active = tab === item.id}
@@ -116,20 +116,14 @@
 									href={href(item.id)}
 									onclick={(event) => select(event, item.id)}
 									aria-current={active ? 'page' : undefined}
-									class="group relative flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] font-medium transition-colors {active
-										? 'bg-brand-soft/55 text-foreground'
-										: 'text-muted-foreground hover:bg-muted/70 hover:text-foreground'}"
+									class="group flex h-8 items-center gap-2 rounded-md px-2 text-sm transition-colors {active
+										? 'bg-muted font-medium text-foreground'
+										: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
 								>
-									{#if active}
-										<span
-											class="absolute inset-y-1.5 -left-2 w-0.5 rounded-full bg-brand"
-											aria-hidden="true"
-										></span>
-									{/if}
 									<item.icon
 										class="size-4 shrink-0 {active
-											? 'text-brand-soft-foreground'
-											: 'text-muted-foreground/75 group-hover:text-foreground'}"
+											? 'text-brand'
+											: 'text-muted-foreground group-hover:text-foreground'}"
 									/>
 									<span class="truncate">{item.label}</span>
 									{#if item.live}
@@ -141,10 +135,8 @@
 											<span class="sr-only">Build in progress</span>
 										</span>
 									{:else if item.count !== undefined}
-										<span
-											class="ml-auto font-mono text-[10px] tabular-nums {active
-												? 'text-brand-soft-foreground'
-												: 'text-muted-foreground/60'}">{item.count}</span
+										<span class="ml-auto text-xs text-muted-foreground tabular-nums"
+											>{item.count}</span
 										>
 									{/if}
 								</a>
@@ -158,7 +150,7 @@
 {:else}
 	<!-- Narrow screens: one scrollable row, groups divided by rules. -->
 	<div
-		class="sticky top-12 z-10 -mx-4 border-b bg-background/90 backdrop-blur-md md:-mx-8 xl:hidden"
+		class="sticky top-14 z-10 -mx-4 border-b bg-background/90 backdrop-blur-md md:-mx-8 xl:hidden"
 	>
 		<nav
 			bind:this={strip}
@@ -176,7 +168,7 @@
 						onclick={(event) => select(event, item.id)}
 						aria-current={active ? 'page' : undefined}
 						class="flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium transition-colors {active
-							? 'bg-brand-soft text-brand-soft-foreground'
+							? 'bg-muted text-foreground'
 							: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
 					>
 						<item.icon class="size-3.5 shrink-0" />
@@ -186,7 +178,7 @@
 								<span class="sr-only">Build in progress</span>
 							</span>
 						{:else if item.count !== undefined}
-							<span class="font-mono text-[10px] tabular-nums opacity-70">{item.count}</span>
+							<span class="font-mono text-xs tabular-nums opacity-70">{item.count}</span>
 						{/if}
 					</a>
 				{/each}

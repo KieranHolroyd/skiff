@@ -429,17 +429,17 @@
 
 <div class="space-y-3">
 	<div
-		class="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border bg-card px-3 py-2 shadow-card"
+		class="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border bg-card px-3 py-2 shadow-xs"
 	>
 		<div class="flex items-center gap-2">
 			<span
-				class="grid size-7 shrink-0 place-items-center rounded-md border bg-muted/40 text-muted-foreground"
+				class="flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
 			>
 				<FolderTreeIcon class="size-4" />
 			</span>
 			<div class="leading-tight">
-				<p class="text-[13px] font-medium">Source</p>
-				<p class="font-mono text-[10px] text-muted-foreground">release browser</p>
+				<p class="text-sm font-medium">Source</p>
+				<p class="font-mono text-xs text-muted-foreground">release browser</p>
 			</div>
 		</div>
 
@@ -459,7 +459,7 @@
 		</NativeSelect.Root>
 
 		{#if view}
-			<div class="flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+			<div class="flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
 				<button
 					type="button"
 					class="rounded font-mono underline-offset-4 hover:text-foreground hover:underline"
@@ -473,7 +473,7 @@
 				<span class="text-border">·</span>
 				<span>{formatBytes(view.release.sizeBytes)}</span>
 				{#if view.release.precompressed}
-					<Badge variant="outline" class="ml-0.5 h-4 px-1 font-mono text-[9px]">br+gz</Badge>
+					<Badge variant="outline" class="ml-0.5 h-4 px-1 font-mono text-xs">br+gz</Badge>
 				{/if}
 			</div>
 		{/if}
@@ -498,7 +498,7 @@
 		</div>
 	</div>
 
-	<div class="overflow-hidden rounded-xl border bg-card shadow-card">
+	<div class="overflow-hidden rounded-xl border bg-card shadow-xs">
 		<div class="flex h-[clamp(480px,calc(100vh-300px),820px)] flex-col">
 			<div class="flex h-10 shrink-0 items-center gap-1.5 border-b bg-muted/25 px-2">
 				<Button
@@ -512,7 +512,7 @@
 				</Button>
 				<div class="mx-1 h-4 w-px bg-border"></div>
 				{#if activePath}
-					<div class="flex min-w-0 items-center gap-0.5 font-mono text-[11px]">
+					<div class="flex min-w-0 items-center gap-0.5 font-mono text-xs">
 						{#each activePath.split('/') as segment, index (index)}
 							{#if index > 0}
 								<ChevronRightIcon class="size-3 shrink-0 text-muted-foreground/60" />
@@ -525,7 +525,7 @@
 						{/each}
 					</div>
 				{:else}
-					<span class="font-mono text-[11px] text-muted-foreground">No file open</span>
+					<span class="font-mono text-xs text-muted-foreground">No file open</span>
 				{/if}
 				<div class="ml-auto flex items-center gap-0.5">
 					{#if activePath}
@@ -588,8 +588,8 @@
 				{#if sidebarOpen}
 					<aside class="flex w-60 shrink-0 flex-col border-r bg-muted/10">
 						<div class="flex h-9 shrink-0 items-center justify-between border-b px-3">
-							<span class="eyebrow">Explorer</span>
-							<span class="font-mono text-[10px] text-muted-foreground tabular-nums"
+							<span class="text-xs font-medium text-muted-foreground">Explorer</span>
+							<span class="font-mono text-xs text-muted-foreground tabular-nums"
 								>{files.length}</span
 							>
 						</div>
@@ -601,7 +601,7 @@
 								<Input
 									bind:value={filter}
 									placeholder="Filter files"
-									class="h-7 pl-7 font-mono text-[11px]"
+									class="h-7 pl-7 font-mono text-xs"
 									aria-label="Filter files"
 								/>
 								{#if filter}
@@ -625,7 +625,7 @@
 								</div>
 							{:else if viewError}
 								<div class="space-y-2 p-3 text-xs">
-									<p class="flex items-start gap-1.5 text-danger">
+									<p class="flex items-start gap-1.5 text-destructive">
 										<AlertTriangleIcon class="mt-0.5 size-3.5 shrink-0" />
 										{viewError}
 									</p>
@@ -640,16 +640,16 @@
 										<button
 											type="button"
 											data-source-path={file.path}
-											class="flex w-full items-center gap-1.5 px-2 py-1 text-left font-mono text-[11px] transition-colors hover:bg-muted/70 {file.path ===
+											class="flex w-full items-center gap-1.5 px-2 py-1 text-left font-mono text-xs transition-colors hover:bg-muted/70 {file.path ===
 											activePath
-												? 'bg-brand-soft/50 text-foreground'
+												? 'bg-brand/5 text-foreground'
 												: 'text-foreground/85'}"
 											onclick={() => selectFile(file.path)}
 											title={file.path}
 										>
 											<FileIcon class="size-3.5 shrink-0 {iconClassFor(file.path)}" />
 											<span class="truncate">{basename(file.path)}</span>
-											<span class="ml-auto shrink-0 truncate text-[10px] text-muted-foreground/70"
+											<span class="ml-auto shrink-0 truncate text-xs text-muted-foreground/70"
 												>{visiblePath(file.path)}</span
 											>
 										</button>
@@ -663,7 +663,7 @@
 										<button
 											type="button"
 											data-source-path={node.path}
-											class="flex w-full items-center gap-1 py-1 pr-2 text-left font-mono text-[11px] text-foreground/85 transition-colors hover:bg-muted/70"
+											class="flex w-full items-center gap-1 py-1 pr-2 text-left font-mono text-xs text-foreground/85 transition-colors hover:bg-muted/70"
 											style:padding-left={`${6 + depth * 12}px`}
 											onclick={() => toggleDir(node.path)}
 											aria-expanded={!!expanded[node.path]}
@@ -682,9 +682,9 @@
 										<button
 											type="button"
 											data-source-path={node.path}
-											class="group flex w-full items-center gap-1.5 py-1 pr-2 text-left font-mono text-[11px] transition-colors hover:bg-muted/70 {node.path ===
+											class="group flex w-full items-center gap-1.5 py-1 pr-2 text-left font-mono text-xs transition-colors hover:bg-muted/70 {node.path ===
 											activePath
-												? 'bg-brand-soft/55 text-foreground'
+												? 'bg-brand/5 text-foreground'
 												: 'text-foreground/85'}"
 											style:padding-left={`${6 + depth * 12 + 16}px`}
 											onclick={() => selectFile(node.path)}
@@ -714,7 +714,7 @@
 								>
 									<button
 										type="button"
-										class="flex max-w-52 items-center gap-1.5 py-1.5 pr-1 pl-2.5 font-mono text-[11px] {path ===
+										class="flex max-w-52 items-center gap-1.5 py-1.5 pr-1 pl-2.5 font-mono text-xs {path ===
 										activePath
 											? 'text-foreground'
 											: 'text-muted-foreground'}"
@@ -754,14 +754,14 @@
 					<div class="relative min-h-0 flex-1">
 						{#if viewLoading && !view}
 							<div class="grid h-full place-items-center">
-								<span class="flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
+								<span class="flex items-center gap-2 font-mono text-xs text-muted-foreground">
 									<Spinner class="size-3.5" /> Loading release
 								</span>
 							</div>
 						{:else if viewError}
 							<div class="grid h-full place-items-center p-6 text-center">
 								<div class="max-w-sm space-y-3">
-									<AlertTriangleIcon class="mx-auto size-6 text-danger" />
+									<AlertTriangleIcon class="mx-auto size-6 text-destructive" />
 									<p class="text-sm font-medium">Could not load this release</p>
 									<p class="text-xs text-muted-foreground">{viewError}</p>
 									<Button variant="outline" size="sm" onclick={refresh}>Try again</Button>
@@ -771,7 +771,7 @@
 							<div class="grid h-full place-items-center p-6">
 								<div class="max-w-md space-y-4 text-center">
 									<div
-										class="mx-auto grid size-12 place-items-center rounded-xl border bg-muted/40 text-brand"
+										class="mx-auto flex size-12 shrink-0 items-center justify-center rounded-md bg-muted text-brand"
 									>
 										<FolderCodeIcon class="size-6" />
 									</div>
@@ -798,7 +798,7 @@
 											{/each}
 										</div>
 									{/if}
-									<p class="font-mono text-[10px] text-muted-foreground">
+									<p class="font-mono text-xs text-muted-foreground">
 										Press
 										<kbd class="rounded border bg-muted px-1 py-0.5">{shortcutLabel}</kbd>
 										to quick-open a file
@@ -838,7 +838,7 @@
 									>
 										<MinusIcon />
 									</Button>
-									<span class="w-12 text-center font-mono text-[10px] tabular-nums"
+									<span class="w-12 text-center font-mono text-xs tabular-nums"
 										>{Math.round(imageZoom * 100)}%</span
 									>
 									<Button
@@ -864,7 +864,7 @@
 							<div class="grid h-full place-items-center p-6 text-center">
 								<div class="max-w-sm space-y-3">
 									<div
-										class="mx-auto grid size-11 place-items-center rounded-xl border bg-muted/40"
+										class="mx-auto flex size-11 shrink-0 items-center justify-center rounded-md bg-muted"
 									>
 										<ActiveIcon class="size-5 {iconClassFor(activePath ?? '')}" />
 									</div>
@@ -885,7 +885,7 @@
 							<div class="grid h-full place-items-center p-6 text-center">
 								<div class="max-w-sm space-y-3">
 									<div
-										class="mx-auto grid size-11 place-items-center rounded-xl border bg-muted/40"
+										class="mx-auto flex size-11 shrink-0 items-center justify-center rounded-md bg-muted"
 									>
 										<AlertTriangleIcon class="size-5 text-warning" />
 									</div>
@@ -905,14 +905,14 @@
 							</div>
 						{:else if contentLoading}
 							<div class="grid h-full place-items-center">
-								<span class="flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
+								<span class="flex items-center gap-2 font-mono text-xs text-muted-foreground">
 									<Spinner class="size-3.5" /> Loading {basename(activePath)}
 								</span>
 							</div>
 						{:else if contentError}
 							<div class="grid h-full place-items-center p-6 text-center">
 								<div class="max-w-sm space-y-3">
-									<AlertTriangleIcon class="mx-auto size-6 text-danger" />
+									<AlertTriangleIcon class="mx-auto size-6 text-destructive" />
 									<p class="text-sm font-medium">Could not load this file</p>
 									<p class="text-xs text-muted-foreground">{contentError}</p>
 									<Button variant="outline" size="sm" onclick={retryFile}>Try again</Button>
@@ -952,13 +952,13 @@
 											onkeydown={onQuickKeydown}
 											oninput={() => (quickIndex = 0)}
 											placeholder="Search files by path"
-											class="h-11 min-w-0 flex-1 bg-transparent font-mono text-[12px] outline-none placeholder:text-muted-foreground"
+											class="h-11 min-w-0 flex-1 bg-transparent font-mono text-xs outline-none placeholder:text-muted-foreground"
 											aria-label="Search files"
 											autocomplete="off"
 											spellcheck="false"
 										/>
 										<kbd
-											class="rounded border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+											class="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground"
 											>esc</kbd
 										>
 									</div>
@@ -974,16 +974,16 @@
 												{@const QuickIcon = iconFor(file.path)}
 												<button
 													type="button"
-													class="flex w-full items-center gap-2 px-3 py-1.5 text-left font-mono text-[11px] {index ===
+													class="flex w-full items-center gap-2 px-3 py-1.5 text-left font-mono text-xs {index ===
 													quickIndex
-														? 'bg-brand-soft/60 text-foreground'
+														? 'bg-brand/5 text-foreground'
 														: 'text-foreground/85 hover:bg-muted/60'}"
 													onmouseenter={() => (quickIndex = index)}
 													onclick={() => selectFile(file.path)}
 												>
 													<QuickIcon class="size-3.5 shrink-0 {iconClassFor(file.path)}" />
 													<span class="truncate">{basename(file.path)}</span>
-													<span class="ml-auto shrink-0 truncate text-[10px] text-muted-foreground"
+													<span class="ml-auto shrink-0 truncate text-xs text-muted-foreground"
 														>{visiblePath(file.path)}</span
 													>
 												</button>
@@ -991,7 +991,7 @@
 										{/if}
 									</div>
 									<div
-										class="flex items-center gap-3 border-t px-3 py-1.5 font-mono text-[10px] text-muted-foreground"
+										class="flex items-center gap-3 border-t px-3 py-1.5 font-mono text-xs text-muted-foreground"
 									>
 										<span>↑↓ navigate</span><span>↵ open</span><span class="ml-auto"
 											>{quickResults.length} file{quickResults.length === 1 ? '' : 's'}</span
@@ -1003,11 +1003,11 @@
 					</div>
 
 					<div
-						class="flex h-7 shrink-0 items-center justify-between gap-3 border-t bg-muted/30 px-3 font-mono text-[10px] text-muted-foreground"
+						class="flex h-7 shrink-0 items-center justify-between gap-3 border-t bg-muted/30 px-3 font-mono text-xs text-muted-foreground"
 					>
 						<div class="flex min-w-0 items-center gap-2">
 							{#if view}
-								<Badge variant="outline" class="h-4 px-1 text-[9px]"
+								<Badge variant="outline" class="h-4 px-1 text-xs"
 									>{view.deployment.environmentSlug}</Badge
 								>
 								<span class="truncate">{view.deployment.shortId}</span>
@@ -1045,7 +1045,7 @@
 	</div>
 
 	<p
-		class="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 font-mono text-[10px] text-muted-foreground"
+		class="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 font-mono text-xs text-muted-foreground"
 	>
 		<span>{shortcutLabel} quick open</span>
 		<span class="text-border">·</span>

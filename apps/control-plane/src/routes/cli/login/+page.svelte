@@ -18,12 +18,12 @@
 	title="Authorize the Skiff CLI"
 	description="The CLI will receive an API key for {data.email ?? data.name ?? 'your account'}."
 >
-	<div class="overflow-hidden rounded-xl border bg-card shadow-card">
+	<div class="overflow-hidden rounded-xl border bg-card shadow-xs">
 		<div class="flex items-center gap-2 border-b bg-muted/40 px-3.5 py-2">
 			<TerminalIcon class="size-3.5 text-muted-foreground" aria-hidden="true" />
-			<span class="eyebrow">Terminal</span>
+			<span class="text-xs font-medium text-muted-foreground">Terminal</span>
 		</div>
-		<pre class="px-4 py-3.5 font-mono text-[13px]"><span class="text-muted-foreground select-none"
+		<pre class="px-4 py-3.5 font-mono text-sm"><span class="text-muted-foreground select-none"
 				>$ </span>skif login --web</pre>
 	</div>
 

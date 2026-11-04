@@ -44,7 +44,8 @@
 			{#if request.typeToConfirm}
 				<Field.Field>
 					<Field.Label for="confirm-text">
-						Type <code class="rounded bg-muted px-1 font-mono text-xs">{request.typeToConfirm}</code
+						Type <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs"
+							>{request.typeToConfirm}</code
 						> to confirm
 					</Field.Label>
 					<Input id="confirm-text" bind:value={typed} autocomplete="off" spellcheck="false" />

@@ -169,13 +169,13 @@
 		<dl class="grid gap-x-8 gap-y-4 text-sm sm:grid-cols-3">
 			<div class="space-y-1">
 				<dt class="text-xs text-muted-foreground">Running</dt>
-				<dd class="font-mono text-[15px] font-medium">v{view.version}</dd>
+				<dd class="font-mono text-base font-medium">v{view.version}</dd>
 			</div>
 			<div class="space-y-1">
 				<dt class="text-xs text-muted-foreground">Latest</dt>
 				<dd class="flex items-center gap-2">
 					{#if data.latest.ok}
-						<span class="font-mono text-[15px] font-medium">v{data.latest.version}</span>
+						<span class="font-mono text-base font-medium">v{data.latest.version}</span>
 						{#if data.comparison.available}
 							<StatusBadge
 								status="available"
@@ -195,7 +195,7 @@
 						href={githubUrl}
 						target="_blank"
 						rel="external noreferrer"
-						class="inline-flex items-center gap-1.5 font-mono text-[13px] underline-offset-4 hover:underline"
+						class="inline-flex items-center gap-1.5 font-mono text-sm underline-offset-4 hover:underline"
 					>
 						<GitBranchIcon class="size-3.5 text-muted-foreground" aria-hidden="true" />
 						{data.source.repo}@{data.source.ref}
@@ -239,7 +239,7 @@
 						};
 					}}
 				>
-					<Button type="submit" variant="brand" disabled={requesting} onclick={confirmUpdate}>
+					<Button type="submit" disabled={requesting} onclick={confirmUpdate}>
 						{#if requesting}
 							<LoaderCircleIcon class="animate-spin" aria-hidden="true" />
 						{:else}
@@ -273,8 +273,8 @@
 					<li
 						class="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium {active
 							? currentPhase === 'rolling-back'
-								? 'bg-warning-soft text-warning-soft-foreground'
-								: 'bg-brand-soft text-brand-soft-foreground'
+								? 'bg-warning/10 text-warning'
+								: 'bg-brand/10 text-brand'
 							: done
 								? 'text-foreground'
 								: 'text-muted-foreground'}"

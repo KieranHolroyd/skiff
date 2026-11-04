@@ -139,7 +139,7 @@
 			</p>
 		</div>
 
-		<div class="overflow-hidden rounded-xl border bg-card shadow-card">
+		<div class="overflow-hidden rounded-xl border bg-card shadow-xs">
 			<Table.Root>
 				<Table.Header class="bg-muted/45">
 					<Table.Row>
@@ -162,7 +162,7 @@
 										<a {href} class="font-medium underline-offset-4 group-hover:underline"
 											>{project.name}</a
 										>
-										<p class="truncate font-mono text-[11px] text-muted-foreground">
+										<p class="truncate font-mono text-xs text-muted-foreground">
 											{project.slug}.{data.contentDomain}
 										</p>
 									</div>
@@ -174,7 +174,7 @@
 									<Icon class="size-3.5" />
 									<span class="capitalize">{project.runtime}</span>
 								</span>
-								<p class="font-mono text-[10px] text-muted-foreground">{project.placement}</p>
+								<p class="font-mono text-xs text-muted-foreground">{project.placement}</p>
 							</Table.Cell>
 							<Table.Cell class="hidden md:table-cell">
 								{#if project.productionDeploymentId}
@@ -266,7 +266,7 @@
 						maxlength={40}
 						autocapitalize="off"
 						spellcheck="false"
-						class="font-mono text-[13px]"
+						class="font-mono text-sm"
 						aria-invalid={result?.fieldErrors?.slug ? 'true' : undefined}
 					/>
 					<InputGroup.Addon align="inline-end">

@@ -47,13 +47,13 @@
 				<div class="space-y-1.5">
 					<div class="flex items-baseline justify-between gap-2 text-xs">
 						<span class="text-muted-foreground">{meter.label}</span>
-						<span class="font-mono text-[11px] tabular-nums">{meter.detail}</span>
+						<span class="font-mono text-xs tabular-nums">{meter.detail}</span>
 					</div>
 					<Progress
 						value={Math.min(100, Math.max(0, meter.pct))}
 						aria-label={meter.label}
 						class="h-1.5 {meter.pct >= 90
-							? '*:data-[slot=progress-indicator]:bg-danger'
+							? '*:data-[slot=progress-indicator]:bg-destructive'
 							: meter.pct >= 75
 								? '*:data-[slot=progress-indicator]:bg-warning'
 								: '*:data-[slot=progress-indicator]:bg-info'}"
@@ -62,7 +62,7 @@
 			{/each}
 		</div>
 		{#if uptime !== null || load1 !== null}
-			<p class="flex flex-wrap gap-x-4 gap-y-1 font-mono text-[11px] text-muted-foreground">
+			<p class="flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs text-muted-foreground">
 				{#if uptime !== null}<span>up {formatDuration(uptime)}</span>{/if}
 				{#if load1 !== null}<span>load {load1.toFixed(2)}</span>{/if}
 			</p>

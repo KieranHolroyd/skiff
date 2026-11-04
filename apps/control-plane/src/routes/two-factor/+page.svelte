@@ -120,12 +120,17 @@
 				{#if data.hasPasskey}
 					<div class="flex items-center gap-3" aria-hidden="true">
 						<span class="h-px flex-1 bg-border"></span>
-						<span class="eyebrow">or a code</span>
+						<span class="text-xs font-medium text-muted-foreground">or a code</span>
 						<span class="h-px flex-1 bg-border"></span>
 					</div>
 				{/if}
 				{#if !useBackup}
-					<form method="POST" action="?/verifyTotp&redirect={encodeURIComponent(data.redirect)}" class="space-y-3" use:enhance={submitting}>
+					<form
+						method="POST"
+						action="?/verifyTotp&redirect={encodeURIComponent(data.redirect)}"
+						class="space-y-3"
+						use:enhance={submitting}
+					>
 						<Field.Field>
 							<Field.Label for="totp-code">Authenticator code</Field.Label>
 							<Input
@@ -139,43 +144,81 @@
 								required
 							/>
 						</Field.Field>
-						<Button type="submit" variant={data.hasPasskey ? 'secondary' : 'default'} size="lg" class="h-10 w-full" disabled={pending}>
+						<Button
+							type="submit"
+							variant={data.hasPasskey ? 'secondary' : 'default'}
+							size="lg"
+							class="h-10 w-full"
+							disabled={pending}
+						>
 							<SmartphoneIcon aria-hidden="true" />
 							Verify code
 						</Button>
 					</form>
-					<button type="button" class="text-xs text-muted-foreground underline-offset-4 hover:underline" onclick={() => (useBackup = true)}>
+					<button
+						type="button"
+						class="text-xs text-muted-foreground underline-offset-4 hover:underline"
+						onclick={() => (useBackup = true)}
+					>
 						Lost your device? Use a backup code
 					</button>
 				{:else}
-					<form method="POST" action="?/verifyBackupCode&redirect={encodeURIComponent(data.redirect)}" class="space-y-3" use:enhance={submitting}>
+					<form
+						method="POST"
+						action="?/verifyBackupCode&redirect={encodeURIComponent(data.redirect)}"
+						class="space-y-3"
+						use:enhance={submitting}
+					>
 						<Field.Field>
 							<Field.Label for="backup-code">Backup code</Field.Label>
-							<Input id="backup-code" name="code" autocomplete="off" class="h-10 font-mono" required />
+							<Input
+								id="backup-code"
+								name="code"
+								autocomplete="off"
+								class="h-10 font-mono"
+								required
+							/>
 							<Field.Description>Each backup code works once.</Field.Description>
 						</Field.Field>
-						<Button type="submit" variant="secondary" size="lg" class="h-10 w-full" disabled={pending}>
+						<Button
+							type="submit"
+							variant="secondary"
+							size="lg"
+							class="h-10 w-full"
+							disabled={pending}
+						>
 							<KeyRoundIcon aria-hidden="true" />
 							Use backup code
 						</Button>
 					</form>
-					<button type="button" class="text-xs text-muted-foreground underline-offset-4 hover:underline" onclick={() => (useBackup = false)}>
+					<button
+						type="button"
+						class="text-xs text-muted-foreground underline-offset-4 hover:underline"
+						onclick={() => (useBackup = false)}
+					>
 						Use the authenticator app instead
 					</button>
 				{/if}
 			{/if}
 		{:else}
 			{#if data.mode === 'enrol'}
-				<Button size="lg" class="h-10 w-full" disabled={pending || passkeySupported === false} onclick={addPasskey}>
+				<Button
+					size="lg"
+					class="h-10 w-full"
+					disabled={pending || passkeySupported === false}
+					onclick={addPasskey}
+				>
 					<FingerprintIcon aria-hidden="true" />
 					Add a passkey
 				</Button>
 				{#if passkeySupported === false}
-					<p class="text-xs text-muted-foreground">This browser does not support passkeys. Use an authenticator app instead.</p>
+					<p class="text-xs text-muted-foreground">
+						This browser does not support passkeys. Use an authenticator app instead.
+					</p>
 				{/if}
 				<div class="flex items-center gap-3" aria-hidden="true">
 					<span class="h-px flex-1 bg-border"></span>
-					<span class="eyebrow">or</span>
+					<span class="text-xs font-medium text-muted-foreground">or</span>
 					<span class="h-px flex-1 bg-border"></span>
 				</div>
 			{/if}
@@ -183,12 +226,24 @@
 			{#if data.hasTotp}
 				<Alert.Root variant="success">
 					<ShieldCheckIcon />
-					<Alert.Description>An authenticator app is already set up for this account.</Alert.Description>
+					<Alert.Description
+						>An authenticator app is already set up for this account.</Alert.Description
+					>
 				</Alert.Root>
 				<Button variant="outline" class="w-full" href={data.redirect}>Continue</Button>
 			{:else if !enrolment}
-				<form method="POST" action="?/startTotp&setup=1&redirect={encodeURIComponent(data.redirect)}" use:enhance={submitting}>
-					<Button type="submit" variant={data.mode === 'enrol' ? 'outline' : 'default'} size="lg" class="h-10 w-full" disabled={pending}>
+				<form
+					method="POST"
+					action="?/startTotp&setup=1&redirect={encodeURIComponent(data.redirect)}"
+					use:enhance={submitting}
+				>
+					<Button
+						type="submit"
+						variant={data.mode === 'enrol' ? 'outline' : 'default'}
+						size="lg"
+						class="h-10 w-full"
+						disabled={pending}
+					>
 						<SmartphoneIcon aria-hidden="true" />
 						Set up an authenticator app
 					</Button>
@@ -197,7 +252,10 @@
 				<ol class="list-decimal space-y-4 pl-5 text-sm">
 					<li class="space-y-2">
 						<p>
-							Add Skiff to your authenticator app. On a phone, <a class="font-medium underline underline-offset-4" href={enrolment.totpURI}>open the setup link</a>; otherwise enter this key manually:
+							Add Skiff to your authenticator app. On a phone, <a
+								class="font-medium underline underline-offset-4"
+								href={enrolment.totpURI}>open the setup link</a
+							>; otherwise enter this key manually:
 						</p>
 						<div class="flex items-center gap-2 rounded-lg border bg-muted/40 p-2.5">
 							<code class="min-w-0 flex-1 font-mono text-xs break-all">{enrolment.secret}</code>
@@ -206,15 +264,25 @@
 					</li>
 					{#if enrolment.backupCodes.length > 0}
 						<li class="space-y-2">
-							<p>Save these backup codes somewhere safe. Each works once, and they are shown only now.</p>
-							<div class="grid grid-cols-2 gap-1.5 rounded-lg border bg-muted/40 p-2.5 font-mono text-xs">
+							<p>
+								Save these backup codes somewhere safe. Each works once, and they are shown only
+								now.
+							</p>
+							<div
+								class="grid grid-cols-2 gap-1.5 rounded-lg border bg-muted/40 p-2.5 font-mono text-xs"
+							>
 								{#each enrolment.backupCodes as backup (backup)}<span>{backup}</span>{/each}
 							</div>
 							<CopyButton value={enrolment.backupCodes.join('\n')} label="Copy backup codes" />
 						</li>
 					{/if}
 					<li>
-						<form method="POST" action="?/verifyTotp&setup=1&redirect={encodeURIComponent(data.redirect)}" class="space-y-3" use:enhance={submitting}>
+						<form
+							method="POST"
+							action="?/verifyTotp&setup=1&redirect={encodeURIComponent(data.redirect)}"
+							class="space-y-3"
+							use:enhance={submitting}
+						>
 							<Field.Field>
 								<Field.Label for="enrol-code">Enter the 6-digit code it shows</Field.Label>
 								<Input
@@ -228,7 +296,9 @@
 									required
 								/>
 							</Field.Field>
-							<Button type="submit" size="lg" class="h-10 w-full" disabled={pending}>Verify and finish</Button>
+							<Button type="submit" size="lg" class="h-10 w-full" disabled={pending}
+								>Verify and finish</Button
+							>
 						</form>
 					</li>
 				</ol>

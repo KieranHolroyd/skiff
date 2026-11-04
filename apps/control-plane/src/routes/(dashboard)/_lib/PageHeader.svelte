@@ -26,11 +26,11 @@
 		? 'border-b pb-6'
 		: 'pb-4'}"
 >
-	<div class="min-w-0 space-y-1.5">
-		{#if eyebrow}<p class="eyebrow">{eyebrow}</p>{/if}
-		<h1 class="text-[26px] leading-tight font-semibold tracking-[-0.03em] text-balance">{title}</h1>
+	<div class="min-w-0 space-y-1">
+		{#if eyebrow}<p class="text-sm text-muted-foreground">{eyebrow}</p>{/if}
+		<h1 class="text-2xl font-semibold tracking-tight text-balance">{title}</h1>
 		{#if description}
-			<p class="max-w-2xl text-sm leading-relaxed text-pretty text-muted-foreground">
+			<p class="max-w-2xl text-sm text-pretty text-muted-foreground">
 				{description}
 			</p>
 		{/if}

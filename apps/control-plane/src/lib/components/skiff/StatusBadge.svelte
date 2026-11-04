@@ -14,10 +14,10 @@
 	const dots: Record<Tone, string> = {
 		success: 'bg-success',
 		warning: 'bg-warning',
-		danger: 'bg-danger',
+		danger: 'bg-destructive',
 		info: 'bg-info',
 		brand: 'bg-brand',
-		neutral: 'bg-muted-foreground/60'
+		neutral: 'bg-muted-foreground'
 	};
 </script>
 

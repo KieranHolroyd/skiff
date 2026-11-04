@@ -84,7 +84,7 @@
 </script>
 
 <div class={className}>
-	<div class="flex items-center justify-between gap-3 pb-2 text-[11px] text-muted-foreground">
+	<div class="flex items-center justify-between gap-3 pb-2 text-xs text-muted-foreground">
 		<span class="font-mono tabular-nums">peak {peakLabel}/bucket</span>
 		<span class="flex items-center gap-3">
 			<span class="flex items-center gap-1.5">
@@ -92,7 +92,7 @@
 				requests
 			</span>
 			<span class="flex items-center gap-1.5">
-				<span class="size-2 rounded-[2px] bg-danger"></span>
+				<span class="size-2 rounded-[2px] bg-destructive"></span>
 				5xx
 			</span>
 		</span>
@@ -140,7 +140,7 @@
 				y={HEIGHT - bar.height}
 				width={bar.width}
 				height={bar.height}
-				fill="var(--color-danger)"
+				fill="var(--color-destructive)"
 				fill-opacity="0.7"
 			>
 				<title>{label(bar.point.bucket)}: {bar.point.status5xx} 5xx</title>
@@ -158,7 +158,7 @@
 			</rect>
 		{/each}
 	</svg>
-	<div class="flex justify-between pt-1 font-mono text-[11px] text-muted-foreground">
+	<div class="flex justify-between pt-1 font-mono text-xs text-muted-foreground">
 		<span>{first}</span>
 		<span>{last}</span>
 	</div>

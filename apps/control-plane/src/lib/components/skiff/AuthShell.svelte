@@ -1,6 +1,8 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import * as Card from '#lib/components/ui/card/index.js';
 	import Logo from './Logo.svelte';
+	import ThemeToggle from './ThemeToggle.svelte';
 
 	let {
 		eyebrow,
@@ -17,73 +19,32 @@
 	} = $props();
 </script>
 
-<div class="grid min-h-svh bg-background lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
-	<!-- Brand panel -->
-	<aside
-		class="relative hidden overflow-hidden bg-sidebar text-sidebar-foreground lg:flex lg:flex-col lg:justify-between lg:p-10"
-	>
-		<div class="chart-grid pointer-events-none absolute inset-0 text-sidebar-foreground"></div>
-		<svg
-			class="pointer-events-none absolute -right-24 -bottom-24 size-[560px] text-sidebar-foreground/[0.07]"
-			viewBox="0 0 400 400"
-			fill="none"
-			stroke="currentColor"
-			aria-hidden="true"
-		>
-			{#each [40, 80, 120, 160, 200, 240] as r (r)}
-				<circle cx="260" cy="260" {r} stroke-width="1" />
-			{/each}
-			<path d="M260 20v480M20 260h480" stroke-width="1" stroke-dasharray="3 6" />
-		</svg>
-		<div
-			class="pointer-events-none absolute -top-40 -left-40 size-[420px] rounded-full bg-brand/20 blur-[120px]"
-		></div>
-
-		<Logo size="lg" class="relative" />
-
-		<div class="relative max-w-md space-y-6">
-			<p class="font-mono text-[11px] tracking-[0.14em] text-brand uppercase">
-				Self-hosted private cloud
-			</p>
-			<p class="text-3xl leading-tight font-semibold tracking-[-0.025em] text-balance">
-				Ask your agent to deploy a website — and it does.
-			</p>
-			<ul class="space-y-2.5 text-sm text-sidebar-muted">
-				<li class="flex gap-3">
-					<span class="mt-2 size-1 shrink-0 rounded-full bg-brand"></span>Instant subdomains,
-					immutable preview URLs.
-				</li>
-				<li class="flex gap-3">
-					<span class="mt-2 size-1 shrink-0 rounded-full bg-brand"></span>Zero-cost promote and
-					rollback.
-				</li>
-				<li class="flex gap-3">
-					<span class="mt-2 size-1 shrink-0 rounded-full bg-brand"></span>One control plane for the
-					CLI, REST and MCP.
-				</li>
-			</ul>
-		</div>
-
-		<p class="relative font-mono text-[11px] text-sidebar-muted">Skiff control plane</p>
-	</aside>
-
-	<!-- Form side -->
-	<main class="relative flex flex-col items-center justify-center px-5 py-12 sm:px-8">
-		<div class="w-full max-w-[400px]">
-			<Logo class="mb-10 lg:hidden" />
-			<div class="mb-7 space-y-2">
-				{#if eyebrow}<p class="eyebrow text-brand-soft-foreground">{eyebrow}</p>{/if}
-				<h1 class="text-2xl font-semibold tracking-[-0.025em] text-balance">{title}</h1>
+<div
+	class="flex min-h-svh flex-col items-center justify-center gap-6 bg-muted p-6 md:p-10 dark:bg-background"
+>
+	<div class="flex w-full max-w-sm flex-col gap-6">
+		<Logo class="self-center" />
+		<Card.Root>
+			<Card.Header class="text-center">
+				{#if eyebrow}<p class="text-xs font-medium text-brand">{eyebrow}</p>{/if}
+				<Card.Title class="text-xl text-balance">{title}</Card.Title>
 				{#if typeof description === 'string'}
-					<p class="text-sm leading-relaxed text-muted-foreground">{description}</p>
+					<Card.Description class="text-pretty">{description}</Card.Description>
 				{:else if description}
-					<div class="text-sm leading-relaxed text-muted-foreground">{@render description()}</div>
+					<Card.Description class="text-pretty">{@render description()}</Card.Description>
 				{/if}
+			</Card.Header>
+			<Card.Content>
+				{@render children()}
+			</Card.Content>
+		</Card.Root>
+		{#if footer}
+			<div class="px-6 text-center text-xs text-balance text-muted-foreground">
+				{@render footer()}
 			</div>
-			{@render children()}
-			{#if footer}
-				<div class="mt-8 border-t pt-5 text-xs text-muted-foreground">{@render footer()}</div>
-			{/if}
+		{/if}
+		<div class="flex justify-center">
+			<ThemeToggle />
 		</div>
-	</main>
+	</div>
 </div>

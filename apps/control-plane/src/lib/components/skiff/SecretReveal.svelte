@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
+	import * as Card from '#lib/components/ui/card/index.js';
 	import CopyButton from './CopyButton.svelte';
 
 	/** A one-time secret (API key, token, share link, join command) that cannot be shown again. */
@@ -21,34 +22,27 @@
 	} = $props();
 </script>
 
-<section
-	class="overflow-hidden rounded-xl border border-brand/35 bg-card shadow-card"
-	aria-label={title}
->
-	<div
-		class="flex flex-wrap items-start justify-between gap-3 border-b border-brand/20 bg-brand-soft/60 px-4 py-3"
-	>
-		<div class="flex min-w-0 items-start gap-3">
-			<span
-				class="mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg bg-brand text-brand-foreground"
-			>
-				<KeyRoundIcon class="size-3.5" aria-hidden="true" />
-			</span>
-			<div class="min-w-0">
-				<p class="text-sm font-semibold">{title}</p>
-				{#if description}
-					<p class="text-[13px] text-muted-foreground">{description}</p>
-				{/if}
-			</div>
-		</div>
-		<CopyButton {value} label={copyLabel} variant="brand" size="sm" />
-	</div>
-	<div class="space-y-3 p-4">
+<Card.Root class="border-brand/40" aria-label={title}>
+	<Card.Header>
+		<Card.Title class="flex items-center gap-2">
+			<KeyRoundIcon class="size-4 text-brand" aria-hidden="true" />
+			{title}
+		</Card.Title>
+		{#if description}<Card.Description>{description}</Card.Description>{/if}
+		<Card.Action>
+			<CopyButton {value} label={copyLabel} variant="default" size="sm" />
+		</Card.Action>
+	</Card.Header>
+	<Card.Content class="space-y-3">
 		{#if multiline}
-			<pre class="code-block break-all whitespace-pre-wrap select-all">{value}</pre>
+			<pre
+				class="overflow-auto rounded-md border bg-muted p-3 font-mono text-xs leading-relaxed break-all whitespace-pre-wrap select-all">{value}</pre>
 		{:else}
-			<code class="code-block block break-all select-all">{value}</code>
+			<code
+				class="block overflow-auto rounded-md border bg-muted p-3 font-mono text-xs break-all select-all"
+				>{value}</code
+			>
 		{/if}
 		{@render children?.()}
-	</div>
-</section>
+	</Card.Content>
+</Card.Root>

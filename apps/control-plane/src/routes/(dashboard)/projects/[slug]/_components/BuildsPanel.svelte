@@ -1,4 +1,5 @@
 <script lang="ts">
+	import DetailList from '#lib/components/skiff/DetailList.svelte';
 	import { resolve } from '$app/paths';
 	import type { ProjectView } from '@skiff/core';
 	import type { BuildView, GitSourceView } from '@skiff/contracts';
@@ -149,7 +150,7 @@
 		<Card.Header class="border-b py-4">
 			<div class="flex items-start gap-3">
 				<span
-					class="grid size-8 shrink-0 place-items-center rounded-lg border bg-muted/40 text-muted-foreground"
+					class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
 				>
 					<GitBranchIcon class="size-4" />
 				</span>
@@ -191,32 +192,32 @@
 					{/if}
 				</EmptyState>
 			{:else}
-				<dl class="kv">
+				<DetailList>
 					<dt>Repository</dt>
 					<dd class="flex min-w-0 items-center justify-end gap-2">
 						<a
 							href={gitSource.repoUrl}
 							target="_blank"
 							rel="external noreferrer"
-							class="inline-flex min-w-0 items-center gap-1 font-mono text-[12px] text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+							class="inline-flex min-w-0 items-center gap-1 font-mono text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
 						>
 							<span class="truncate">{gitSource.repoUrl}</span>
 							<ArrowUpRightIcon class="size-3 shrink-0" />
 						</a>
 					</dd>
 					<dt>Branch</dt>
-					<dd class="truncate font-mono text-[13px]" title={gitSource.branch}>
+					<dd class="truncate font-mono text-sm" title={gitSource.branch}>
 						{gitSource.branch}
 					</dd>
 					<dt>Root / output</dt>
 					<dd
-						class="truncate font-mono text-[12px]"
+						class="truncate font-mono text-xs"
 						title={`${gitSource.rootDir} → ${gitSource.outputDir}`}
 					>
 						{gitSource.rootDir} → {gitSource.outputDir}
 					</dd>
 					<dt>Build command</dt>
-					<dd class="max-w-full truncate font-mono text-[12px]" title={gitSource.buildCommand}>
+					<dd class="max-w-full truncate font-mono text-xs" title={gitSource.buildCommand}>
 						{gitSource.buildCommand}
 					</dd>
 					<dt>State</dt>
@@ -227,10 +228,10 @@
 					</dd>
 					<dt>Webhook</dt>
 					<dd class="flex min-w-0 items-center justify-end gap-2">
-						<span class="truncate font-mono text-[11px] text-muted-foreground">{webhookUrl}</span>
+						<span class="truncate font-mono text-xs text-muted-foreground">{webhookUrl}</span>
 						<CopyButton value={webhookUrl} label="Copy webhook URL" iconOnly />
 					</dd>
-				</dl>
+				</DetailList>
 				<p class="mt-3 flex items-start gap-2 text-xs text-muted-foreground">
 					<WebhookIcon class="mt-0.5 size-3.5 shrink-0" />
 					<span>
@@ -295,11 +296,11 @@
 							<Table.Row>
 								<Table.Cell class="pl-4 whitespace-normal">
 									<div class="flex flex-wrap items-center gap-2">
-										<span class="font-mono text-[12px] font-medium">{shortId(build.id)}</span>
+										<span class="font-mono text-xs font-medium">{shortId(build.id)}</span>
 										<StatusBadge status={build.status} />
 										<Badge
 											variant="outline"
-											class="max-w-full truncate font-mono text-[10px]"
+											class="max-w-full truncate font-mono text-xs"
 											title={build.ref}>{build.ref}</Badge
 										>
 									</div>
@@ -416,7 +417,7 @@
 					required
 					autocapitalize="off"
 					spellcheck="false"
-					class="font-mono text-[13px]"
+					class="font-mono text-sm"
 				/>
 				<Field.Description>
 					Public HTTPS, SSH or git URL. Private repositories need a Builder-side deploy key.
@@ -431,7 +432,7 @@
 						value={gitSource?.branch ?? 'main'}
 						placeholder="main"
 						required
-						class="font-mono text-[13px]"
+						class="font-mono text-sm"
 					/>
 				</Field.Field>
 				<Field.Field>
@@ -441,7 +442,7 @@
 						name="rootDir"
 						value={gitSource?.rootDir ?? '.'}
 						placeholder="."
-						class="font-mono text-[13px]"
+						class="font-mono text-sm"
 					/>
 				</Field.Field>
 			</div>
@@ -453,7 +454,7 @@
 					value={gitSource?.buildCommand ?? 'bun install && bun run build'}
 					placeholder="bun install && bun run build"
 					required
-					class="font-mono text-[13px]"
+					class="font-mono text-sm"
 				/>
 				<Field.Description>
 					Runs inside the worktree with a shared build cache, memory and CPU limits.
@@ -468,7 +469,7 @@
 						value={gitSource?.outputDir ?? 'dist'}
 						placeholder="dist"
 						required
-						class="font-mono text-[13px]"
+						class="font-mono text-sm"
 					/>
 				</Field.Field>
 				<Field.Field>
@@ -487,7 +488,7 @@
 						placeholder={gitSource?.hasWebhookSecret
 							? '••••••••••••••••'
 							: 'At least 16 characters'}
-						class="font-mono text-[13px]"
+						class="font-mono text-sm"
 					/>
 				</Field.Field>
 			</div>
@@ -518,7 +519,7 @@
 					id="build-ref"
 					name="ref"
 					placeholder={gitSource?.branch ?? 'main'}
-					class="font-mono text-[13px]"
+					class="font-mono text-sm"
 				/>
 				<Field.Description>Leave blank to build the configured branch.</Field.Description>
 			</Field.Field>
@@ -548,7 +549,8 @@
 		{:else if logError}
 			<p class="py-8 text-center text-sm text-destructive">{logText}</p>
 		{:else}
-			<pre class="code-block max-h-[26rem] overflow-auto whitespace-pre-wrap">{logText}</pre>
+			<pre
+				class="max-h-[26rem] overflow-auto rounded-md border bg-muted p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap">{logText}</pre>
 		{/if}
 		<Dialog.Footer>
 			<Dialog.Close>

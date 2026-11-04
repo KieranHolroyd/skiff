@@ -1,4 +1,5 @@
 <script lang="ts">
+	import DetailList from '#lib/components/skiff/DetailList.svelte';
 	import type { ProjectView } from '@skiff/core';
 	import { contentUrl, type DomainView } from '@skiff/contracts';
 	import AlertCircleIcon from '@lucide/svelte/icons/circle-alert';
@@ -79,7 +80,7 @@
 	>
 		<div class="flex items-start gap-3">
 			<span
-				class="grid size-8 shrink-0 place-items-center rounded-lg border bg-muted/40 text-muted-foreground"
+				class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
 			>
 				<GlobeIcon class="size-4" />
 			</span>
@@ -127,9 +128,9 @@
 									<ArrowUpRightIcon class="size-3.5 shrink-0 text-muted-foreground" />
 								</a>
 								<StatusBadge status={domain.status} />
-								<Badge variant="outline" class="font-mono text-[10px]">{domain.kind}</Badge>
+								<Badge variant="outline" class="font-mono text-xs">{domain.kind}</Badge>
 								{#if domain.redirectWww}
-									<Badge variant="neutral" class="font-mono text-[10px]">www → apex</Badge>
+									<Badge variant="neutral" class="font-mono text-xs">www → apex</Badge>
 								{/if}
 							</Card.Title>
 							<p class="text-xs text-muted-foreground">
@@ -184,8 +185,10 @@
 							<div class="grid gap-3 sm:grid-cols-2">
 								{#if domain.verification}
 									<div class="rounded-lg border bg-muted/25 p-3">
-										<p class="eyebrow mb-1.5">1 · Prove control (TXT)</p>
-										<dl class="kv text-xs">
+										<p class="mb-1.5 text-xs font-medium text-muted-foreground">
+											1 · Prove control (TXT)
+										</p>
+										<DetailList class="text-xs">
 											<dt>Name</dt>
 											<dd class="flex min-w-0 items-center justify-end gap-1">
 												<span class="truncate font-mono" title={domain.verification.recordName}
@@ -208,12 +211,14 @@
 													iconOnly
 												/>
 											</dd>
-										</dl>
+										</DetailList>
 									</div>
 								{/if}
 								<div class="rounded-lg border bg-muted/25 p-3">
-									<p class="eyebrow mb-1.5">2 · Point traffic ({target.type})</p>
-									<dl class="kv text-xs">
+									<p class="mb-1.5 text-xs font-medium text-muted-foreground">
+										2 · Point traffic ({target.type})
+									</p>
+									<DetailList class="text-xs">
 										<dt>Name</dt>
 										<dd class="flex min-w-0 items-center justify-end gap-1">
 											<span class="truncate font-mono" title={domain.hostname}
@@ -230,7 +235,7 @@
 											<dt>www</dt>
 											<dd class="truncate font-mono">www.{domain.hostname}</dd>
 										{/if}
-									</dl>
+									</DetailList>
 								</div>
 							</div>
 						{/if}
@@ -267,7 +272,7 @@
 					required
 					autocapitalize="off"
 					spellcheck="false"
-					class="font-mono text-[13px]"
+					class="font-mono text-sm"
 				/>
 				<Field.Description
 					>No scheme, port or path. Apex and subdomains both work.</Field.Description

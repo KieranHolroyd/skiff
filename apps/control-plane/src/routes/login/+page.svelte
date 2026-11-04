@@ -102,7 +102,7 @@
 
 	<div class="my-6 flex items-center gap-3" aria-hidden="true">
 		<span class="h-px flex-1 bg-border"></span>
-		<span class="eyebrow">or email</span>
+		<span class="text-xs font-medium text-muted-foreground">or email</span>
 		<span class="h-px flex-1 bg-border"></span>
 	</div>
 
@@ -127,10 +127,10 @@
 
 	{#if data.devPasswordLogin}
 		<form
-			class="mt-6 space-y-3 rounded-xl border border-dashed border-warning/50 bg-warning-soft/40 p-4"
+			class="mt-6 space-y-3 rounded-xl border border-dashed border-warning/50 bg-warning/5 p-4"
 			onsubmit={signInWithPassword}
 		>
-			<p class="eyebrow text-warning-soft-foreground">Development sign-in</p>
+			<p class="text-xs font-medium text-warning">Development sign-in</p>
 			<Field.Field>
 				<Field.Label for="email">Email</Field.Label>
 				<Input
@@ -154,7 +154,7 @@
 				/>
 			</Field.Field>
 			<Button type="submit" class="w-full" disabled={pending}>Sign in</Button>
-			<p class="text-[11px] text-muted-foreground">Disabled in production.</p>
+			<p class="text-xs text-muted-foreground">Disabled in production.</p>
 		</form>
 	{/if}
 

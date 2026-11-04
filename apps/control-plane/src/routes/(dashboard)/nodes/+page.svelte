@@ -1,4 +1,5 @@
 <script lang="ts">
+	import DetailList from '#lib/components/skiff/DetailList.svelte';
 	import { resolve } from '$app/paths';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import CirclePauseIcon from '@lucide/svelte/icons/circle-pause';
@@ -142,7 +143,7 @@
 					<Card.Header>
 						<div class="flex items-start gap-3">
 							<span
-								class="relative grid size-10 shrink-0 place-items-center rounded-lg border bg-muted/40"
+								class="relative flex size-10 shrink-0 items-center justify-center rounded-md bg-muted"
 							>
 								<ServerIcon class="size-[18px] text-muted-foreground" />
 								<StatusDot status={node.status} class="absolute -top-0.5 -right-0.5" />
@@ -150,9 +151,7 @@
 							<div class="min-w-0 space-y-1">
 								<Card.Title class="flex flex-wrap items-center gap-2">
 									{node.name}
-									<Badge variant="outline" class="font-mono text-[10px] uppercase"
-										>{node.mode}</Badge
-									>
+									<Badge variant="secondary" class="capitalize">{node.mode}</Badge>
 									{#if node.canBuild}
 										<Badge variant="brand" class="gap-1">
 											<HammerIcon class="size-3" />Builder
@@ -160,7 +159,7 @@
 									{/if}
 									<StatusBadge status={node.status} />
 								</Card.Title>
-								<Card.Description class="truncate font-mono text-[11px]" title={node.id}>
+								<Card.Description class="truncate font-mono text-xs" title={node.id}>
 									{node.id}
 								</Card.Description>
 							</div>
@@ -204,11 +203,11 @@
 								<div class="flex flex-wrap items-baseline justify-between gap-2 text-xs">
 									<span class="text-muted-foreground">
 										Workload slice
-										<span class="ml-1 font-mono text-[11px] text-foreground"
+										<span class="ml-1 font-mono text-xs text-foreground"
 											>{capacity.reservedMemoryMb} / {capacity.sliceMemoryMb} MB</span
 										>
 									</span>
-									<span class="font-mono text-[11px] text-muted-foreground tabular-nums"
+									<span class="font-mono text-xs text-muted-foreground tabular-nums"
 										>{capacity.freeMemoryMb} MB free · {capacity.workloadCount} workloads</span
 									>
 								</div>
@@ -220,15 +219,15 @@
 							</div>
 						{/if}
 						<NodeStats stats={node.stats} />
-						<dl class="kv border-t">
+						<DetailList class="border-t">
 							<dt>Agent</dt>
-							<dd class="font-mono text-[12px]">
+							<dd class="font-mono text-xs">
 								{node.agentVersion ?? node.version ?? 'not reported'}
 							</dd>
 							<dt>Address</dt>
-							<dd class="font-mono text-[12px]">{node.publicAddress ?? 'not reported'}</dd>
+							<dd class="font-mono text-xs">{node.publicAddress ?? 'not reported'}</dd>
 							<dt>Heartbeat</dt>
-							<dd class="text-[13px]">
+							<dd class="text-sm">
 								{#if node.lastHeartbeatAt}
 									<time datetime={node.lastHeartbeatAt}>{formatDateTime(node.lastHeartbeatAt)}</time
 									>
@@ -237,14 +236,14 @@
 								{/if}
 							</dd>
 							<dt>Enrolled</dt>
-							<dd class="text-[13px]">
+							<dd class="text-sm">
 								<time datetime={node.createdAt}>{formatDateTime(node.createdAt)}</time>
 							</dd>
-						</dl>
+						</DetailList>
 						{#if node.stats}
 							<Collapsible.Root>
 								<Collapsible.Trigger
-									class="group inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+									class="group inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
 								>
 									<ChevronRightIcon
 										class="size-3 transition-transform group-data-[state=open]:rotate-90"
@@ -252,7 +251,8 @@
 									Raw heartbeat stats
 								</Collapsible.Trigger>
 								<Collapsible.Content>
-									<pre class="code-block mt-1.5 max-h-56">{JSON.stringify(
+									<pre
+										class="mt-1.5 max-h-56 overflow-auto rounded-md border bg-muted p-3 font-mono text-xs leading-relaxed">{JSON.stringify(
 											node.stats,
 											null,
 											2

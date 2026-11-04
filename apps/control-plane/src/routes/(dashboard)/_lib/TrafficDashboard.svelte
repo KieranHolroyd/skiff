@@ -62,7 +62,7 @@
 		{ label: '2xx', value: totals.status2xx, tone: 'bg-success' },
 		{ label: '3xx', value: totals.status3xx, tone: 'bg-info' },
 		{ label: '4xx', value: totals.status4xx, tone: 'bg-warning' },
-		{ label: '5xx', value: totals.status5xx, tone: 'bg-danger' }
+		{ label: '5xx', value: totals.status5xx, tone: 'bg-destructive' }
 	]);
 
 	const kpis = $derived([
@@ -127,7 +127,7 @@
 <div class="space-y-5">
 	<div class="flex flex-wrap items-end justify-between gap-3">
 		<div>
-			<p class="eyebrow">Traffic · last {range.label}</p>
+			<p class="text-xs font-medium text-muted-foreground">Traffic · last {range.label}</p>
 			<p class="text-sm text-muted-foreground">
 				Aggregated from DuckDB request buckets reported by the edge agents.
 			</p>
@@ -169,16 +169,18 @@
 			{#each kpis as kpi (kpi.label)}
 				<Card.Root class="gap-3">
 					<Card.Header>
-						<Card.Description class="eyebrow">{kpi.label}</Card.Description>
+						<Card.Description class="text-xs font-medium text-muted-foreground"
+							>{kpi.label}</Card.Description
+						>
 						<Card.Title
-							class="text-[28px] leading-none font-semibold tracking-[-0.035em] tabular-nums"
+							class="text-2xl leading-none font-semibold tracking-tight tabular-nums"
 							title={kpi.title}
 						>
 							{kpi.value}
 						</Card.Title>
 						<Card.Action>
 							<span
-								class="grid size-8 place-items-center rounded-lg border bg-muted/40 text-muted-foreground"
+								class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
 							>
 								<kpi.icon class="size-4" />
 							</span>
@@ -263,7 +265,7 @@
 												>
 													{project.name}
 												</a>
-												<p class="font-mono text-[11px] text-muted-foreground">{project.slug}</p>
+												<p class="font-mono text-xs text-muted-foreground">{project.slug}</p>
 											{:else}
 												<span class="font-mono text-xs">{row.key}</span>
 											{/if}

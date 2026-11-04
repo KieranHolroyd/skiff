@@ -1,4 +1,5 @@
 <script lang="ts">
+	import DetailList from '#lib/components/skiff/DetailList.svelte';
 	import { resolve } from '$app/paths';
 	import BotIcon from '@lucide/svelte/icons/bot';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
@@ -66,30 +67,36 @@
 
 	<form method="GET" class="flex flex-wrap items-end gap-3" aria-label="Filter audit entries">
 		<Field.Field class="w-60">
-			<Field.Label for="audit-action" class="eyebrow">Action</Field.Label>
+			<Field.Label for="audit-action" class="text-xs font-medium text-muted-foreground"
+				>Action</Field.Label
+			>
 			<InputGroup.Root class="bg-card">
 				<InputGroup.Input
 					id="audit-action"
 					name="action"
 					value={data.action}
 					placeholder="deployment.promote"
-					class="font-mono text-[12.5px]"
+					class="font-mono text-xs"
 				/>
 				<InputGroup.Addon><SearchIcon /></InputGroup.Addon>
 			</InputGroup.Root>
 		</Field.Field>
 		<Field.Field class="w-40">
-			<Field.Label for="audit-resource" class="eyebrow">Resource</Field.Label>
+			<Field.Label for="audit-resource" class="text-xs font-medium text-muted-foreground"
+				>Resource</Field.Label
+			>
 			<Input
 				id="audit-resource"
 				name="resource"
 				value={data.resource}
 				placeholder="project"
-				class="bg-card font-mono text-[12.5px]"
+				class="bg-card font-mono text-xs"
 			/>
 		</Field.Field>
 		<Field.Field class="w-28">
-			<Field.Label for="audit-limit" class="eyebrow">Show</Field.Label>
+			<Field.Label for="audit-limit" class="text-xs font-medium text-muted-foreground"
+				>Show</Field.Label
+			>
 			<Select.Root type="single" name="limit" bind:value={limit}>
 				<Select.Trigger id="audit-limit" class="w-full bg-card">{limit}</Select.Trigger>
 				<Select.Content>
@@ -122,7 +129,7 @@
 			{/if}
 		</EmptyState>
 	{:else}
-		<div class="overflow-hidden rounded-xl border bg-card shadow-card">
+		<div class="overflow-hidden rounded-xl border bg-card shadow-xs">
 			<Table.Root>
 				<Table.Header class="bg-muted/45">
 					<Table.Row>
@@ -138,7 +145,7 @@
 					{#each data.entries as entry (entry.id)}
 						{@const Icon = actorIcon(entry.actorType)}
 						<Table.Row>
-							<Table.Cell class="pl-4 font-mono text-[11.5px] text-muted-foreground">
+							<Table.Cell class="pl-4 font-mono text-xs text-muted-foreground">
 								<time datetime={new Date(entry.createdAt).toISOString()}
 									>{formatDateTime(entry.createdAt)}</time
 								>
@@ -146,19 +153,19 @@
 							<Table.Cell>
 								<div class="flex items-center gap-2">
 									<span
-										class="grid size-6 shrink-0 place-items-center rounded-md border bg-muted/40 text-muted-foreground"
+										class="flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
 										title={entry.actorType}
 									>
 										<Icon class="size-3.5" />
 									</span>
 									<div class="min-w-0 leading-tight">
-										<p class="text-[13px] font-medium">{actorLabel(entry)}</p>
-										<p class="font-mono text-[10.5px] text-muted-foreground">{entry.actorType}</p>
+										<p class="text-sm font-medium">{actorLabel(entry)}</p>
+										<p class="font-mono text-xs text-muted-foreground">{entry.actorType}</p>
 									</div>
 								</div>
 							</Table.Cell>
 							<Table.Cell>
-								<code class="rounded-md border bg-muted/40 px-1.5 py-0.5 font-mono text-[12px]"
+								<code class="rounded-md border bg-muted/40 px-1.5 py-0.5 font-mono text-xs"
 									>{entry.action}</code
 								>
 								{#if entry.error}
@@ -168,7 +175,7 @@
 							<Table.Cell class="hidden text-xs lg:table-cell">
 								<span class="font-medium">{entry.resource}</span>
 								{#if entry.resourceId}
-									<p class="font-mono text-[10.5px] text-muted-foreground" title={entry.resourceId}>
+									<p class="font-mono text-xs text-muted-foreground" title={entry.resourceId}>
 										{shortId(entry.resourceId, 18)}
 									</p>
 								{/if}
@@ -211,7 +218,7 @@
 			</Sheet.Header>
 			<ScrollArea class="min-h-0 flex-1">
 				<div class="space-y-6 p-4">
-					<dl class="kv">
+					<DetailList>
 						<dt>Result</dt>
 						<dd>
 							<StatusBadge
@@ -226,29 +233,30 @@
 						</dd>
 						{#if selected.clientId}
 							<dt>Client</dt>
-							<dd class="font-mono text-[12px] break-all">{selected.clientId}</dd>
+							<dd class="font-mono text-xs break-all">{selected.clientId}</dd>
 						{/if}
 						{#if selected.ipHash}
 							<dt>IP hash</dt>
-							<dd class="font-mono text-[12px]">{selected.ipHash}</dd>
+							<dd class="font-mono text-xs">{selected.ipHash}</dd>
 						{/if}
 						<dt>Resource</dt>
 						<dd>{selected.resource}</dd>
 						{#if selected.resourceId}
 							<dt>Resource ID</dt>
-							<dd class="font-mono text-[12px] break-all">{selected.resourceId}</dd>
+							<dd class="font-mono text-xs break-all">{selected.resourceId}</dd>
 						{/if}
-					</dl>
+					</DetailList>
 					{#if selected.error}
 						<div class="space-y-1.5">
-							<p class="eyebrow">Error</p>
+							<p class="text-xs font-medium text-muted-foreground">Error</p>
 							<p class="text-sm text-destructive">{selected.error}</p>
 						</div>
 					{/if}
 					<div class="space-y-1.5">
-						<p class="eyebrow">Arguments</p>
+						<p class="text-xs font-medium text-muted-foreground">Arguments</p>
 						{#if args}
-							<pre class="code-block max-h-[50svh]">{args}</pre>
+							<pre
+								class="max-h-[50svh] overflow-auto rounded-md border bg-muted p-3 font-mono text-xs leading-relaxed">{args}</pre>
 						{:else}
 							<p class="text-sm text-muted-foreground">No arguments recorded.</p>
 						{/if}

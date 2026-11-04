@@ -19,6 +19,13 @@
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
+	import * as InputGroup from '#lib/components/ui/input-group/index.js';
+	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
+	import { Separator } from '#lib/components/ui/separator/index.js';
+	import { Spinner } from '#lib/components/ui/spinner/index.js';
+	import { Toggle } from '#lib/components/ui/toggle/index.js';
+	import * as ToggleGroup from '#lib/components/ui/toggle-group/index.js';
+	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
 	import { displayUrl, formatDuration, shortId, shortSha } from '../../../_lib/format.js';
 
 	type Source = 'runtime' | 'build';
@@ -285,16 +292,16 @@
 	}
 
 	const dot: Record<LogEventView['level'], string> = {
-		debug: 'bg-slate-500',
-		info: 'bg-sky-400',
-		warn: 'bg-amber-400',
-		error: 'bg-red-400'
+		debug: 'bg-muted-foreground/50',
+		info: 'bg-info',
+		warn: 'bg-warning',
+		error: 'bg-destructive'
 	};
 	const textTone: Record<LogEventView['level'], string> = {
-		debug: 'text-slate-400',
-		info: 'text-slate-200',
-		warn: 'text-amber-200/90',
-		error: 'text-red-300/90'
+		debug: 'text-muted-foreground',
+		info: 'text-foreground',
+		warn: 'text-warning',
+		error: 'text-destructive'
 	};
 </script>
 
@@ -302,7 +309,7 @@
 	<Card.Header class="border-b py-4">
 		<div class="flex items-start gap-3">
 			<span
-				class="grid size-8 shrink-0 place-items-center rounded-lg border bg-muted/40 text-muted-foreground"
+				class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
 			>
 				<SquareTerminalIcon class="size-4" />
 			</span>
@@ -311,7 +318,7 @@
 					Live logs
 					{#if live}
 						<span
-							class="inline-flex items-center gap-1.5 rounded-full bg-success-soft px-2 py-0.5 text-[10.5px] font-medium text-success-soft-foreground"
+							class="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2 py-0.5 text-xs font-medium text-success"
 						>
 							<span class="relative grid size-1.5 place-items-center">
 								<span class="absolute size-full animate-ping rounded-full bg-success opacity-60"
@@ -382,75 +389,64 @@
 			</p>
 		</div>
 	{:else}
-		<div class="bg-[#080b11] text-slate-200">
-			<div
-				class="flex flex-wrap items-center gap-2 border-b border-white/10 bg-white/[0.025] px-3 py-2"
-			>
-				<div class="flex rounded-lg border border-white/10 bg-black/25 p-0.5">
-					<button
-						type="button"
-						class="rounded-md px-2.5 py-1 text-[11.5px] font-medium transition-colors {source ===
-						'runtime'
-							? 'bg-white/10 text-white shadow-sm'
-							: 'text-slate-400 hover:text-slate-200'}"
-						onclick={() => (source = 'runtime')}
-					>
-						<RocketIcon class="mr-1 inline size-3" />Runtime
-					</button>
-					<button
-						type="button"
-						class="rounded-md px-2.5 py-1 text-[11.5px] font-medium transition-colors {source ===
-						'build'
-							? 'bg-white/10 text-white shadow-sm'
-							: 'text-slate-400 hover:text-slate-200'}"
-						onclick={() => (source = 'build')}
-					>
-						<HammerIcon class="mr-1 inline size-3" />Build
-					</button>
-				</div>
+		<div>
+			<div class="flex flex-wrap items-center gap-2 border-b px-3 py-2">
+				<ToggleGroup.Root
+					type="single"
+					variant="outline"
+					size="sm"
+					value={source}
+					onValueChange={(value) => value && (source = value as typeof source)}
+					aria-label="Log source"
+				>
+					<ToggleGroup.Item value="runtime"><RocketIcon />Runtime</ToggleGroup.Item>
+					<ToggleGroup.Item value="build"><HammerIcon />Build</ToggleGroup.Item>
+				</ToggleGroup.Root>
 
 				{#if source === 'runtime'}
 					<label class="sr-only" for="log-deployment">Deployment</label>
-					<select
+					<NativeSelect.Root
 						id="log-deployment"
-						class="h-7 min-w-0 rounded-md border border-white/10 bg-[#11151d] px-2 font-mono text-[11.5px] text-slate-200 outline-none focus:border-sky-400/50"
+						size="sm"
+						class="w-auto font-mono text-xs"
 						bind:value={deploymentId}
 					>
 						{#each deployments as deployment (deployment.id)}
-							<option value={deployment.id}>
+							<NativeSelect.Option value={deployment.id}>
 								{deployment.shortId}{deployment.isProduction
 									? ' · production'
 									: ` · ${deployment.environmentSlug}`}{deployment.id === workloadDeploymentId
 									? ' · running'
 									: ''}
-							</option>
+							</NativeSelect.Option>
 						{/each}
-					</select>
+					</NativeSelect.Root>
 					{#if activeDeployment}
 						<a
 							href={activeDeployment.previewUrl}
 							target="_blank"
 							rel="external noreferrer"
-							class="hidden max-w-56 truncate font-mono text-[11px] text-slate-500 underline-offset-4 hover:text-slate-300 hover:underline sm:block"
+							class="hidden max-w-56 truncate font-mono text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline sm:block"
 						>
 							{displayUrl(activeDeployment.previewUrl)}
 						</a>
 					{/if}
 				{:else}
 					<label class="sr-only" for="log-build">Build</label>
-					<select
+					<NativeSelect.Root
 						id="log-build"
-						class="h-7 min-w-0 rounded-md border border-white/10 bg-[#11151d] px-2 font-mono text-[11.5px] text-slate-200 outline-none focus:border-sky-400/50"
+						size="sm"
+						class="w-auto font-mono text-xs"
 						bind:value={buildId}
 					>
 						{#each builds as build (build.id)}
-							<option value={build.id}>
+							<NativeSelect.Option value={build.id}>
 								{shortId(build.id)} · {build.ref}{build.status === 'building' ? ' · building' : ''}
-							</option>
+							</NativeSelect.Option>
 						{/each}
-					</select>
+					</NativeSelect.Root>
 					{#if activeBuild}
-						<span class="hidden font-mono text-[11px] text-slate-500 sm:block">
+						<span class="hidden font-mono text-xs text-muted-foreground sm:block">
 							{activeBuild.commitSha ? shortSha(activeBuild.commitSha) : 'no commit'} · {duration(
 								activeBuild.startedAt
 							)}
@@ -460,24 +456,11 @@
 
 				<div class="ml-auto flex flex-wrap items-center gap-2">
 					{#if targetStatus}
-						<span
-							class="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 font-mono text-[10.5px] text-slate-300"
-						>
-							<span
-								class="size-1.5 rounded-full {targetStatus === 'running' ||
-								targetStatus === 'building'
-									? 'animate-pulse bg-emerald-400'
-									: targetStatus === 'failed'
-										? 'bg-red-400'
-										: 'bg-slate-500'}"
-							></span>
-							{targetStatus}
-						</span>
+						<StatusBadge status={targetStatus} />
 					{/if}
 					<Button
 						variant="ghost"
-						size="icon-xs"
-						class="text-slate-400 hover:bg-white/10 hover:text-white"
+						size="icon-sm"
 						aria-label="Clear the visible log buffer"
 						onclick={clearLogs}
 						disabled={events.length === 0}
@@ -487,80 +470,65 @@
 				</div>
 			</div>
 
-			<div class="flex flex-wrap items-center gap-2 border-b border-white/10 px-3 py-2">
-				<div class="relative min-w-40 flex-1">
-					<SearchIcon
-						class="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-slate-500"
-					/>
-					<input
-						class="h-7 w-full rounded-md border border-white/10 bg-black/20 pr-2 pl-7 font-mono text-[11.5px] text-slate-200 outline-none placeholder:text-slate-600 focus:border-sky-400/50"
+			<div class="flex flex-wrap items-center gap-2 border-b px-3 py-2">
+				<InputGroup.Root class="h-7 min-w-40 flex-1">
+					<InputGroup.Addon><SearchIcon /></InputGroup.Addon>
+					<InputGroup.Input
+						class="font-mono text-xs"
 						placeholder="Filter lines…"
 						autocapitalize="off"
 						spellcheck="false"
 						bind:value={query}
 					/>
-				</div>
-				<div class="flex items-center gap-1">
+				</InputGroup.Root>
+				<ToggleGroup.Root
+					type="single"
+					size="sm"
+					value={level}
+					onValueChange={(value) => value && (level = value as LevelFilter)}
+					aria-label="Log level"
+				>
 					{#each [{ value: 'all', label: 'All' }, { value: 'info', label: 'Info' }, { value: 'warn', label: `Warn${counts.warn ? ` ${counts.warn}` : ''}` }, { value: 'error', label: `Error${counts.error ? ` ${counts.error}` : ''}` }] as option (option.value)}
-						<button
-							type="button"
-							class="rounded-md px-2 py-1 font-mono text-[10.5px] transition-colors {level ===
-							option.value
-								? 'bg-white/10 text-white'
-								: 'text-slate-500 hover:bg-white/5 hover:text-slate-300'}"
-							onclick={() => (level = option.value as LevelFilter)}
+						<ToggleGroup.Item value={option.value} class="px-2 text-xs"
+							>{option.label}</ToggleGroup.Item
 						>
-							{option.label}
-						</button>
 					{/each}
-				</div>
-				<div class="flex items-center gap-1 border-l border-white/10 pl-2">
-					<button
-						type="button"
-						class="inline-flex items-center gap-1 rounded-md px-2 py-1 font-mono text-[10.5px] transition-colors {autoScroll
-							? 'text-sky-300'
-							: 'text-slate-500 hover:text-slate-300'}"
-						aria-pressed={autoScroll}
-						onclick={() => (autoScroll = !autoScroll)}
-					>
-						{#if autoScroll}<ActivityIcon class="size-3" />Live edge{:else}<ArrowDownToLineIcon
-								class="size-3"
-							/>Follow{/if}
-					</button>
-				</div>
+				</ToggleGroup.Root>
+				<Separator orientation="vertical" class="data-[orientation=vertical]:h-5" />
+				<Toggle
+					size="sm"
+					class="text-xs"
+					pressed={autoScroll}
+					onPressedChange={(pressed) => (pressed ? scrollToBottom() : (autoScroll = false))}
+				>
+					{#if autoScroll}<ActivityIcon />Live edge{:else}<ArrowDownToLineIcon />Follow{/if}
+				</Toggle>
 			</div>
 
 			<div
 				bind:this={viewport}
-				class="relative h-[30rem] overflow-auto overscroll-contain font-mono text-[12px] leading-[1.65]"
+				class="relative h-[30rem] overflow-auto overscroll-contain bg-muted/30 font-mono text-xs leading-relaxed"
 				role="log"
 				aria-live="polite"
 				aria-label="Live log output"
 			>
 				{#if phase === 'connecting' && events.length === 0}
-					<div class="flex h-full flex-col items-center justify-center gap-3 text-slate-500">
-						<span class="relative grid size-8 place-items-center">
-							<span class="absolute size-8 animate-ping rounded-full bg-sky-400/10"></span>
-							<WifiIcon class="size-4 text-sky-400/70" />
-						</span>
-						<p class="text-[11.5px]">Connecting to the log drain…</p>
+					<div class="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
+						<Spinner />
+						<p class="text-xs">Connecting to the log drain…</p>
 					</div>
 				{:else if filtered.length === 0}
 					<div
-						class="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-slate-500"
+						class="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-muted-foreground"
 					>
 						<SquareTerminalIcon class="size-5" />
 						{#if source === 'runtime' && project.runtime === 'static'}
-							<p class="text-[11.5px]">Static deployment — there is no process output to drain.</p>
-							<button
-								type="button"
-								class="rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
-								onclick={() => (source = 'build')}
-							>
+							<p class="text-xs">Static deployment — there is no process output to drain.</p>
+							<Button variant="outline" size="sm" onclick={() => (source = 'build')}>
 								Open build logs
-							</button>
+							</Button>
 						{:else}
-							<p class="text-[11.5px]">
+							<p class="text-xs">
 								{#if events.length > 0}
 									No lines match this filter.
 								{:else if source === 'build' && activeBuild && activeBuild.status === 'queued'}
@@ -577,15 +545,15 @@
 					<div class="py-1">
 						{#each filtered as event (event.seq)}
 							<div
-								class="group grid grid-cols-[6.7rem_0.55rem_minmax(0,1fr)] items-start gap-x-3 px-4 py-0.5 hover:bg-white/[0.035]"
+								class="group grid grid-cols-[6.7rem_0.55rem_minmax(0,1fr)] items-start gap-x-3 px-4 py-0.5 hover:bg-muted"
 							>
-								<span class="pt-px text-[10.5px] text-slate-600 tabular-nums select-none">
+								<span class="pt-px text-muted-foreground tabular-nums select-none">
 									{clock(event.ts)}
 								</span>
 								<span class="mt-[0.42rem] size-1.5 rounded-full {dot[event.level]}"></span>
 								<span class="min-w-0 break-words whitespace-pre-wrap {textTone[event.level]}">
 									{#if event.stream === 'stderr'}<span
-											class="mr-1.5 rounded bg-red-400/10 px-1 py-px align-[1px] text-[9px] font-semibold tracking-wide text-red-300/80 uppercase"
+											class="mr-1.5 rounded bg-destructive/10 px-1 py-px font-semibold text-destructive"
 											>err</span
 										>{/if}{event.message}
 								</span>
@@ -596,23 +564,23 @@
 			</div>
 
 			<div
-				class="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-white/10 bg-white/[0.02] px-3 py-2 font-mono text-[10.5px] text-slate-500"
+				class="flex flex-wrap items-center gap-x-3 gap-y-1 border-t px-3 py-2 font-mono text-xs text-muted-foreground"
 			>
 				<span class="inline-flex items-center gap-1.5">
 					{#if live}
-						<span class="size-1.5 rounded-full bg-emerald-400"></span>Live
+						<span class="size-1.5 rounded-full bg-success"></span>Live
 					{:else if phase === 'ended'}
-						<span class="size-1.5 rounded-full bg-slate-500"></span>Stream closed
+						<span class="size-1.5 rounded-full bg-muted-foreground"></span>Stream closed
 					{:else if phase === 'paused'}
-						<span class="size-1.5 rounded-full bg-amber-400"></span>Paused
+						<span class="size-1.5 rounded-full bg-warning"></span>Paused
 					{:else}
-						<span class="size-1.5 rounded-full bg-sky-400"></span>Reconnecting
+						<span class="size-1.5 rounded-full bg-info"></span>Reconnecting
 					{/if}
 				</span>
 				<span>{filtered.length} / {events.length} lines</span>
 				{#if cursor}<span class="hidden sm:inline">cursor {cursor}</span>{/if}
-				{#if errorText}<span class="text-amber-300/80">{errorText}</span>{/if}
-				<span class="ml-auto hidden items-center gap-1 text-slate-600 sm:inline-flex">
+				{#if errorText}<span class="text-warning">{errorText}</span>{/if}
+				<span class="ml-auto hidden items-center gap-1 sm:inline-flex">
 					<WifiIcon class="size-3" /> 7-day retention
 				</span>
 			</div>

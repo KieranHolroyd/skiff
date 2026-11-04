@@ -144,13 +144,10 @@
 	<Card.Root>
 		<Card.Content class="flex flex-wrap items-center gap-4">
 			<Avatar.Root class="size-14">
-				<Avatar.Fallback
-					class="bg-gradient-to-br from-brand to-[oklch(0.55_0.17_25)] text-lg font-semibold text-brand-foreground"
-					>{initials}</Avatar.Fallback
-				>
+				<Avatar.Fallback class="text-lg font-medium">{initials}</Avatar.Fallback>
 			</Avatar.Root>
 			<div class="min-w-0 flex-1 basis-56 space-y-1">
-				<p class="text-lg leading-tight font-semibold tracking-[-0.015em]">{data.user.name}</p>
+				<p class="text-lg font-semibold tracking-tight">{data.user.name}</p>
 				<div class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
 					<span class="break-all">{data.user.email}</span>
 					{#if data.user.emailVerified}
@@ -223,13 +220,11 @@
 					</Table.Header>
 					<Table.Body>
 						{#each data.sessions as session (session.id)}
-							<Table.Row
-								class={session.current ? 'bg-success-soft/40 hover:bg-success-soft/50' : ''}
-							>
+							<Table.Row class={session.current ? 'bg-success/5 hover:bg-success/5' : ''}>
 								<Table.Cell class="pl-4">
 									<div class="flex items-center gap-3">
 										<span
-											class="grid size-8 shrink-0 place-items-center rounded-lg border bg-card text-muted-foreground"
+											class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
 										>
 											<MonitorSmartphoneIcon class="size-4" />
 										</span>
@@ -396,7 +391,7 @@
 								</Item.Media>
 								<Item.Content class="min-w-0">
 									<Item.Title class="capitalize">{account.provider}</Item.Title>
-									<Item.Description class="truncate font-mono text-[11px]"
+									<Item.Description class="truncate font-mono text-xs"
 										>{account.providerId}</Item.Description
 									>
 								</Item.Content>
@@ -445,7 +440,7 @@
 	<Dialog.Content class="sm:max-w-sm">
 		<Dialog.Header class="flex-row items-start gap-3.5">
 			<span
-				class="grid size-9 shrink-0 place-items-center rounded-lg border bg-muted/50 text-muted-foreground"
+				class="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
 			>
 				<FingerprintIcon class="size-4" />
 			</span>

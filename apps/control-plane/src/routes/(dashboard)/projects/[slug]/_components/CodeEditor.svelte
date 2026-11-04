@@ -403,7 +403,7 @@
 		<div
 			class="pointer-events-none absolute inset-0 grid place-items-center bg-card text-muted-foreground"
 		>
-			<span class="flex items-center gap-2 font-mono text-[11px]">
+			<span class="flex items-center gap-2 font-mono text-xs">
 				<Spinner class="size-3.5" />
 				Starting editor
 			</span>

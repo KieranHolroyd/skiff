@@ -50,7 +50,7 @@
 	title="Authorize {clientName || 'application'}"
 	description="Choose what this client may do on your behalf. You can revoke access at any time."
 >
-	<div class="mb-4 flex items-center gap-3 rounded-xl border bg-card p-3 shadow-card">
+	<div class="mb-4 flex items-center gap-3 rounded-xl border bg-card p-3 shadow-xs">
 		<span
 			class="grid size-10 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground"
 		>
@@ -58,17 +58,17 @@
 		</span>
 		<div class="min-w-0">
 			<p class="truncate text-sm font-semibold">{clientName || 'Loading client…'}</p>
-			<p class="truncate font-mono text-[11px] text-muted-foreground" title={data.clientId}>
+			<p class="truncate font-mono text-xs text-muted-foreground" title={data.clientId}>
 				{data.clientId}
 			</p>
 		</div>
 	</div>
 
-	<fieldset class="overflow-hidden rounded-xl border bg-card shadow-card">
+	<fieldset class="overflow-hidden rounded-xl border bg-card shadow-xs">
 		<legend class="sr-only">Requested permissions</legend>
 		<div class="flex items-center justify-between border-b bg-muted/40 px-3.5 py-2">
-			<span class="eyebrow">Permissions</span>
-			<span class="font-mono text-[11px] text-muted-foreground tabular-nums"
+			<span class="text-xs font-medium text-muted-foreground">Permissions</span>
+			<span class="font-mono text-xs text-muted-foreground tabular-nums"
 				>{selectedCount}/{data.scopes.length}</span
 			>
 		</div>
@@ -82,7 +82,7 @@
 							: 'cursor-not-allowed opacity-55'}"
 					>
 						<Checkbox id={s.scope} bind:checked={selected[s.scope]} disabled={!s.permission} />
-						<span class="min-w-0 flex-1 truncate font-mono text-[12.5px]">{s.scope}</span>
+						<span class="min-w-0 flex-1 truncate font-mono text-xs">{s.scope}</span>
 						{#if s.destructive}<Badge variant="danger">destructive</Badge>{/if}
 						{#if !s.permission}<Badge variant="neutral">not in your role</Badge>{/if}
 					</label>

@@ -111,8 +111,7 @@
 					{#each data.projects as project (project.slug)}
 						<Select.Item value={project.slug} label={project.name}>
 							{project.name}
-							<span class="ml-auto font-mono text-[11px] text-muted-foreground">{project.slug}</span
-							>
+							<span class="ml-auto font-mono text-xs text-muted-foreground">{project.slug}</span>
 						</Select.Item>
 					{/each}
 				</Select.Content>
@@ -146,7 +145,7 @@
 					{#each environmentChoices as choice (choice.slug)}
 						<Select.Item value={choice.slug} label={choice.name}>
 							{choice.name}
-							<span class="ml-auto font-mono text-[11px] text-muted-foreground">{choice.slug}</span>
+							<span class="ml-auto font-mono text-xs text-muted-foreground">{choice.slug}</span>
 						</Select.Item>
 					{/each}
 				</Select.Content>
@@ -168,7 +167,7 @@
 			<Button href={resolve('/(dashboard)/projects')} size="sm">Open projects</Button>
 		</EmptyState>
 	{:else}
-		<div class="overflow-hidden rounded-xl border bg-card shadow-card">
+		<div class="overflow-hidden rounded-xl border bg-card shadow-xs">
 			<Table.Root>
 				<Table.Header class="bg-muted/45">
 					<Table.Row>
@@ -195,14 +194,14 @@
 									{:else}
 										<Badge
 											variant="outline"
-											class="text-[10px] font-medium"
+											class="text-xs font-medium"
 											title="Environment: {deployment.environmentSlug}"
 											>{deployment.environmentName}</Badge
 										>
 									{/if}
 									{#if deployment.runtime !== 'static'}
 										<span
-											class="inline-flex items-center gap-1 text-[10px] text-muted-foreground"
+											class="inline-flex items-center gap-1 text-xs text-muted-foreground"
 											title="{deployment.runtime} runtime"
 										>
 											{#if deployment.runtime === 'container'}
@@ -210,7 +209,7 @@
 											{:else}
 												<CpuIcon class="size-3" />
 											{/if}
-											<span class="font-mono tracking-wide uppercase">{deployment.runtime}</span>
+											<span class="capitalize">{deployment.runtime}</span>
 										</span>
 									{/if}
 									{#if deployment.pinned}<Badge variant="outline"><PinIcon />pinned</Badge>{/if}
@@ -229,7 +228,7 @@
 									href={deployment.previewUrl}
 									target="_blank"
 									rel="external noreferrer"
-									class="inline-flex max-w-72 items-center gap-1 font-mono text-[11.5px] text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+									class="inline-flex max-w-72 items-center gap-1 font-mono text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
 								>
 									<span class="truncate">{displayUrl(deployment.previewUrl)}</span>
 									<ArrowUpRightIcon class="size-3 shrink-0" />
@@ -237,7 +236,7 @@
 							</Table.Cell>
 							<Table.Cell class="hidden font-mono text-xs text-muted-foreground lg:table-cell">
 								<span title={deployment.release.sha256}>{shortSha(deployment.release.sha256)}</span>
-								<span class="ml-1 text-[11px] opacity-75"
+								<span class="ml-1 text-xs opacity-75"
 									>{formatBytes(deployment.release.sizeBytes)}</span
 								>
 							</Table.Cell>

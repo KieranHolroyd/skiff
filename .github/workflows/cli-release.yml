@@ -141,7 +141,17 @@ jobs:
         working-directory: apps/cli
         env:
           VERSION: ${{ steps.version.outputs.version }}
-        run: npm version "$VERSION" --no-git-tag-version --allow-same-version
+        # Not `npm version`: inside the Bun workspace it tries to reify the whole tree and fails on
+        # the `workspace:*` protocol. Only the version field needs to change.
+        run: |
+          node -e '
+            const fs = require("fs");
+            const src = fs.readFileSync("package.json", "utf8");
+            const out = src.replace(/("version":\s*)"[^"]*"/, (_, k) => k + JSON.stringify(process.env.VERSION));
+            if (out === src && JSON.parse(src).version !== process.env.VERSION) process.exit(1);
+            fs.writeFileSync("package.json", out);
+          '
+          test "$(node -p "require('./package.json').version")" = "$VERSION"
 
       - name: Build, pack and smoke-test under Node
         working-directory: apps/cli

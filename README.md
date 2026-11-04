@@ -19,7 +19,8 @@ Skiff is a Bun monorepo:
 
 Read the design first: [`docs/DESIGN.md`](docs/DESIGN.md), decisions in
 [`docs/DECISIONS.md`](docs/DECISIONS.md), scope in [`docs/ROADMAP.md`](docs/ROADMAP.md), and
-operations in [`docs/OPS.md`](docs/OPS.md).
+operations in [`docs/OPS.md`](docs/OPS.md). Competitive research and the proposed feature build
+order are in [`docs/FEATURE-RESEARCH.md`](docs/FEATURE-RESEARCH.md).
 
 ## How it fits together
 

@@ -6,16 +6,14 @@
 	}: { size?: 'sm' | 'md' | 'lg'; wordmark?: boolean; class?: string } = $props();
 
 	const box = $derived(
-		size === 'lg' ? 'size-10 rounded-xl' : size === 'sm' ? 'size-6 rounded-md' : 'size-7 rounded-lg'
+		size === 'lg' ? 'size-10 rounded-xl' : size === 'sm' ? 'size-6 rounded-md' : 'size-8 rounded-lg'
 	);
 	const icon = $derived(size === 'lg' ? 'size-6' : size === 'sm' ? 'size-3.5' : 'size-4');
-	const text = $derived(size === 'lg' ? 'text-xl' : 'text-[15px]');
+	const text = $derived(size === 'lg' ? 'text-xl' : 'text-base');
 </script>
 
-<span class="inline-flex items-center gap-2.5 {className}">
-	<span
-		class="grid shrink-0 place-items-center bg-brand text-brand-foreground shadow-[inset_0_-2px_0_oklch(0_0_0/18%),0_1px_2px_oklch(0_0_0/20%)] {box}"
-	>
+<span class="inline-flex items-center gap-2 {className}">
+	<span class="flex shrink-0 items-center justify-center bg-brand text-brand-foreground {box}">
 		<svg viewBox="0 0 24 24" class={icon} aria-hidden="true">
 			<g
 				fill="none"
@@ -31,6 +29,6 @@
 		</svg>
 	</span>
 	{#if wordmark}
-		<span class="font-semibold tracking-[-0.03em] {text}">Skiff</span>
+		<span class="font-semibold tracking-tight {text}">Skiff</span>
 	{/if}
 </span>

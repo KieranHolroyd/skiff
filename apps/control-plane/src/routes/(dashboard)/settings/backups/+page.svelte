@@ -178,7 +178,7 @@
 				description="Litestream copies every change to the platform database to an R2 bucket within about a second, and a monthly drill proves the backup restores. R2 has no egress fees; the free tier covers most installs."
 			>
 				{#if canEdit}
-					<Button variant="brand" onclick={() => (configureOpen = true)} disabled={!ready}>
+					<Button onclick={() => (configureOpen = true)} disabled={!ready}>
 						<CloudIcon />Set up R2 backups
 					</Button>
 				{/if}
@@ -187,7 +187,7 @@
 			<dl class="grid gap-x-8 gap-y-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
 				<div class="space-y-1">
 					<dt class="text-xs text-muted-foreground">Destination</dt>
-					<dd class="font-mono text-[13px] break-all">
+					<dd class="font-mono text-sm break-all">
 						r2://{data.r2.values.R2_BUCKET}/skiff/sqlite
 					</dd>
 				</div>
@@ -225,7 +225,7 @@
 				</div>
 				<div class="space-y-1">
 					<dt class="text-xs text-muted-foreground">Next drill</dt>
-					<dd class="text-[13px]">
+					<dd class="text-sm">
 						{health.enabled && health.drillTimer?.next
 							? formatDateTime(health.drillTimer.next)
 							: '—'}
@@ -269,12 +269,7 @@
 							<FlaskConicalIcon />Run restore drill
 						</Button>
 					{:else}
-						<Button
-							variant="brand"
-							size="sm"
-							onclick={() => runAction('?/enable')}
-							disabled={!ready}
-						>
+						<Button size="sm" onclick={() => runAction('?/enable')} disabled={!ready}>
 							<DatabaseBackupIcon />Turn on backups
 						</Button>
 					{/if}

@@ -211,7 +211,7 @@ const KIND_CLASSES: Record<FileKind, string> = {
 	data: 'text-warning',
 	image: 'text-success',
 	font: 'text-[oklch(0.58_0.14_290)] dark:text-[oklch(0.76_0.1_290)]',
-	media: 'text-danger',
+	media: 'text-destructive',
 	archive: 'text-muted-foreground',
 	text: 'text-muted-foreground'
 };

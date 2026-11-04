@@ -127,7 +127,7 @@
 </svelte:head>
 
 <Sidebar.Provider open={data.sidebarOpen}>
-	<Sidebar.Root collapsible="icon">
+	<Sidebar.Root collapsible="icon" variant="inset">
 		<Sidebar.Header>
 			<Sidebar.Menu>
 				<Sidebar.MenuItem>
@@ -135,15 +135,11 @@
 						{#snippet child({ props })}
 							<a href={resolve('/(dashboard)/overview')} {...props}>
 								<Logo wordmark={false} class="shrink-0" />
-								<span class="grid flex-1 text-left leading-tight">
-									<span class="truncate font-semibold tracking-[-0.02em]">Skiff</span>
-									<span class="truncate text-xs text-sidebar-muted">{data.org.name}</span>
+								<span class="grid flex-1 text-left text-sm leading-tight">
+									<span class="truncate font-semibold">Skiff</span>
+									<span class="truncate text-xs text-muted-foreground">{data.org.name}</span>
 								</span>
-								<Badge
-									variant="outline"
-									class="border-sidebar-border font-mono text-[10px] text-sidebar-muted capitalize"
-									>{data.role}</Badge
-								>
+								<Badge variant="outline" class="capitalize">{data.role}</Badge>
 							</a>
 						{/snippet}
 					</Sidebar.MenuButton>
@@ -154,10 +150,7 @@
 		<Sidebar.Content>
 			{#each groups as group (group.label)}
 				<Sidebar.Group>
-					<Sidebar.GroupLabel
-						class="font-mono text-[10px] tracking-[0.12em] text-sidebar-muted/80 uppercase"
-						>{group.label}</Sidebar.GroupLabel
-					>
+					<Sidebar.GroupLabel>{group.label}</Sidebar.GroupLabel>
 					<Sidebar.Menu>
 						{#each group.items as item (item.href)}
 							{@const active = isActive(item.path)}
@@ -165,7 +158,7 @@
 								<Sidebar.MenuButton
 									isActive={active}
 									tooltipContent={item.label}
-									class="text-sidebar-muted data-active:text-sidebar-accent-foreground data-active:[&_svg]:text-sidebar-primary"
+									class="data-active:[&_svg]:text-brand"
 								>
 									{#snippet child({ props })}
 										<a
@@ -197,18 +190,17 @@
 									{...props}
 								>
 									<Avatar.Root class="size-8 rounded-lg after:rounded-lg">
-										<Avatar.Fallback
-											class="rounded-lg bg-gradient-to-br from-brand to-[oklch(0.55_0.17_25)] text-[11px] font-semibold text-brand-foreground"
+										<Avatar.Fallback class="rounded-lg text-xs font-medium"
 											>{initials}</Avatar.Fallback
 										>
 									</Avatar.Root>
-									<span class="grid flex-1 text-left leading-tight">
-										<span class="truncate text-[13px] font-medium">{data.user.name}</span>
-										<span class="truncate text-[11px] text-sidebar-muted"
+									<span class="grid flex-1 text-left text-sm leading-tight">
+										<span class="truncate font-medium">{data.user.name}</span>
+										<span class="truncate text-xs text-muted-foreground"
 											>{data.user.email ?? data.org.name}</span
 										>
 									</span>
-									<ChevronsUpDownIcon class="ml-auto size-4 text-sidebar-muted" />
+									<ChevronsUpDownIcon class="ml-auto size-4" />
 								</Sidebar.MenuButton>
 							{/snippet}
 						</DropdownMenu.Trigger>
@@ -228,7 +220,7 @@
 							</DropdownMenu.Item>
 							<DropdownMenu.Separator />
 							<div class="flex items-center justify-between gap-2 px-2 py-1">
-								<span class="text-[13px] text-muted-foreground">Theme</span>
+								<span class="text-sm text-muted-foreground">Theme</span>
 								<ThemeToggle />
 							</div>
 							<DropdownMenu.Separator />
@@ -246,7 +238,7 @@
 
 	<Sidebar.Inset class="min-w-0">
 		<header
-			class="sticky top-0 z-20 flex h-12 shrink-0 items-center gap-2 border-b bg-background/85 px-4 backdrop-blur-md md:px-6"
+			class="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b bg-background/80 px-4 backdrop-blur md:rounded-t-xl md:px-6"
 		>
 			<Sidebar.Trigger class="-ml-1" />
 			<Separator orientation="vertical" class="mr-1 data-[orientation=vertical]:h-4" />
@@ -259,7 +251,7 @@
 							{#if crumb.route}
 								<Breadcrumb.Link href={resolve(crumb.route)}>{crumb.label}</Breadcrumb.Link>
 							{:else}
-								<Breadcrumb.Page class={crumb.mono ? 'font-mono text-[12.5px]' : ''}
+								<Breadcrumb.Page class={crumb.mono ? 'font-mono' : ''}
 									>{crumb.label}</Breadcrumb.Page
 								>
 							{/if}
@@ -269,7 +261,7 @@
 			</Breadcrumb.Root>
 			<Badge
 				variant="outline"
-				class="ml-auto hidden h-6 gap-1.5 bg-card font-mono text-[11px] font-normal text-muted-foreground sm:inline-flex"
+				class="ml-auto hidden font-mono font-normal text-muted-foreground sm:inline-flex"
 				title="Content domain for deployed sites"
 			>
 				<GlobeIcon />*.{data.contentDomain}
@@ -294,7 +286,7 @@
 			{@render children()}
 		</main>
 
-		<footer class="px-4 py-5 text-[11px] text-muted-foreground md:px-8">
+		<footer class="px-4 py-5 text-xs text-muted-foreground md:px-8">
 			<div class="mx-auto flex max-w-[1320px] flex-wrap items-center justify-between gap-2">
 				<span>Skiff control plane</span>
 				<span class="font-mono">{data.platform.origin}</span>

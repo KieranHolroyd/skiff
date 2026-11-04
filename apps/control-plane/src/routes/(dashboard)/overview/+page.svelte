@@ -107,15 +107,15 @@
 		{#each stats as stat (stat.label)}
 			<Card.Root class="gap-3">
 				<Card.Header>
-					<Card.Description class="eyebrow">{stat.label}</Card.Description>
-					<Card.Title
-						class="text-[30px] leading-none font-semibold tracking-[-0.035em] tabular-nums"
+					<Card.Description class="text-xs font-medium text-muted-foreground"
+						>{stat.label}</Card.Description
 					>
+					<Card.Title class="text-3xl leading-none font-semibold tracking-tight tabular-nums">
 						{stat.value}<span class="text-lg font-normal text-muted-foreground">{stat.suffix}</span>
 					</Card.Title>
 					<Card.Action>
 						<span
-							class="grid size-8 place-items-center rounded-lg border bg-muted/40 text-muted-foreground"
+							class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
 						>
 							<stat.icon class="size-4" />
 						</span>
@@ -145,12 +145,12 @@
 		{/snippet}
 		<div class="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
 			<div class="space-y-2">
-				<p class="eyebrow flex items-center gap-1.5">
+				<p class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
 					<CpuIcon class="size-3.5 text-muted-foreground" />
 					Workload slice
 				</p>
 				{#if data.v2.capacity}
-					<p class="text-2xl font-semibold tracking-[-0.03em] tabular-nums">
+					<p class="text-2xl font-semibold tracking-tight tabular-nums">
 						{data.v2.capacity.reservedMemoryMb}<span
 							class="text-sm font-normal text-muted-foreground"
 						>
@@ -177,12 +177,12 @@
 			</div>
 
 			<div class="space-y-2">
-				<p class="eyebrow flex items-center gap-1.5">
+				<p class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
 					<ServerIcon class="size-3.5 text-muted-foreground" />
 					Workloads placed
 				</p>
 				{#if data.v2.capacity}
-					<p class="text-2xl font-semibold tracking-[-0.03em] tabular-nums">
+					<p class="text-2xl font-semibold tracking-tight tabular-nums">
 						{data.v2.capacity.workloads}
 					</p>
 					<p class="text-xs text-muted-foreground">
@@ -199,12 +199,12 @@
 			</div>
 
 			<div class="space-y-2">
-				<p class="eyebrow flex items-center gap-1.5">
+				<p class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
 					<GlobeIcon class="size-3.5 text-muted-foreground" />
 					Custom domains
 				</p>
 				{#if data.v2.domains}
-					<p class="text-2xl font-semibold tracking-[-0.03em] tabular-nums">
+					<p class="text-2xl font-semibold tracking-tight tabular-nums">
 						{data.v2.domains.verified}<span class="text-sm font-normal text-muted-foreground">
 							/ {data.v2.domains.total}</span
 						>
@@ -221,12 +221,12 @@
 			</div>
 
 			<div class="space-y-2">
-				<p class="eyebrow flex items-center gap-1.5">
+				<p class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
 					<HammerIcon class="size-3.5 text-muted-foreground" />
 					Active builds
 				</p>
 				{#if data.v2.builds.readable}
-					<p class="text-2xl font-semibold tracking-[-0.03em] tabular-nums">
+					<p class="text-2xl font-semibold tracking-tight tabular-nums">
 						{data.v2.builds.active}
 					</p>
 					<p class="text-xs text-muted-foreground">
@@ -296,7 +296,7 @@
 										{#if deployment.isProduction}<Badge variant="brand">production</Badge>{/if}
 									</div>
 									<p
-										class="font-mono text-[11px] text-muted-foreground"
+										class="font-mono text-xs text-muted-foreground"
 										title={deployment.release.sha256}
 									>
 										{shortSha(deployment.release.sha256)}
@@ -365,18 +365,16 @@
 								<Item.Content>
 									<Item.Title>
 										{node.name}
-										<Badge variant="outline" class="font-mono text-[10px] uppercase"
-											>{node.mode}</Badge
-										>
+										<Badge variant="secondary" class="capitalize">{node.mode}</Badge>
 									</Item.Title>
-									<Item.Description class="font-mono text-[11px]">
+									<Item.Description class="font-mono text-xs">
 										agent {node.agentVersion ?? node.version ?? 'unknown'}
 									</Item.Description>
 								</Item.Content>
 								<Item.Actions><StatusBadge status={node.status} /></Item.Actions>
 							</div>
 							<NodeStats stats={node.stats} />
-							<p class="text-[11px] text-muted-foreground">
+							<p class="text-xs text-muted-foreground">
 								{#if node.lastHeartbeatAt}
 									Last heartbeat <time datetime={node.lastHeartbeatAt}
 										>{formatDateTime(node.lastHeartbeatAt)}</time
@@ -419,7 +417,7 @@
 								<Item.Media><ProjectMark slug={project.slug} name={project.name} /></Item.Media>
 								<Item.Content class="min-w-0">
 									<Item.Title class="w-full truncate">{project.name}</Item.Title>
-									<Item.Description class="truncate font-mono text-[11px]">
+									<Item.Description class="truncate font-mono text-xs">
 										{project.slug}.{data.contentDomain}
 									</Item.Description>
 								</Item.Content>

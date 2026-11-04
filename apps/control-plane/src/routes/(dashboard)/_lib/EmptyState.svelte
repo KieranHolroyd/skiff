@@ -18,7 +18,7 @@
 	} = $props();
 </script>
 
-<Empty.Root class="border border-dashed bg-muted/20 {compact ? 'py-8' : 'py-12'}">
+<Empty.Root class="border border-dashed {compact ? 'py-8' : 'py-12'}">
 	<Empty.Header>
 		<Empty.Media variant="icon">
 			<Icon />

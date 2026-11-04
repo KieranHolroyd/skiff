@@ -6,10 +6,10 @@
 	const dot: Record<string, string> = {
 		success: 'bg-success',
 		warning: 'bg-warning',
-		danger: 'bg-danger',
+		danger: 'bg-destructive',
 		info: 'bg-info',
 		brand: 'bg-brand',
-		neutral: 'bg-muted-foreground/50'
+		neutral: 'bg-muted-foreground'
 	};
 	const color = $derived(dot[statusTone(status)]);
 </script>
@@ -22,5 +22,5 @@
 		<span class="absolute inline-flex size-full animate-ping rounded-full opacity-50 {color}"
 		></span>
 	{/if}
-	<span class="relative size-2 rounded-full ring-2 ring-card {color}"></span>
+	<span class="relative size-2 rounded-full {color}"></span>
 </span>

@@ -16,7 +16,7 @@
 	);
 </script>
 
-<Badge variant="outline" class="h-6 gap-1.5 rounded-md bg-card px-2 font-normal">
+<Badge variant="outline" class="font-normal">
 	<config.icon class={config.tone} />
 	{#if scope}<span class="text-muted-foreground">{scope}</span>{/if}
 	<span class="font-medium">{config.label}</span>

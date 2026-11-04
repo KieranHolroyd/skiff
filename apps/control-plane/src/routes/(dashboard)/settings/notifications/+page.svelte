@@ -99,17 +99,17 @@
 			<dl class="grid gap-x-8 gap-y-4 text-sm sm:grid-cols-3">
 				<div class="space-y-1">
 					<dt class="text-xs text-muted-foreground">Server</dt>
-					<dd class="font-mono text-[13px] break-all">
+					<dd class="font-mono text-sm break-all">
 						{email.SKIFF_SMTP_HOST}:{email.SKIFF_SMTP_PORT ?? '587'}
 					</dd>
 				</div>
 				<div class="space-y-1">
 					<dt class="text-xs text-muted-foreground">From</dt>
-					<dd class="text-[13px] break-all">{email.SKIFF_SMTP_FROM ?? '—'}</dd>
+					<dd class="text-sm break-all">{email.SKIFF_SMTP_FROM ?? '—'}</dd>
 				</div>
 				<div class="space-y-1">
 					<dt class="text-xs text-muted-foreground">Username</dt>
-					<dd class="font-mono text-[13px] break-all">{email.SKIFF_SMTP_USER ?? '—'}</dd>
+					<dd class="font-mono text-sm break-all">{email.SKIFF_SMTP_USER ?? '—'}</dd>
 				</div>
 			</dl>
 		{:else}
@@ -120,7 +120,7 @@
 				description="Until it is, sign-in links and invitations are only written to the server log (journalctl -u skiff-control-plane)."
 			>
 				{#if canEdit}
-					<Button variant="brand" onclick={() => (emailOpen = true)} disabled={!ready}
+					<Button onclick={() => (emailOpen = true)} disabled={!ready}
 						><MailIcon />Set up email</Button
 					>
 				{/if}
@@ -172,17 +172,17 @@
 					<dt class="flex items-center gap-1.5 text-xs text-muted-foreground">
 						<WebhookIcon class="size-3.5" />Webhook
 					</dt>
-					<dd class="font-mono text-[13px] break-all">{alerts.SKIFF_ALERT_WEBHOOK ?? '—'}</dd>
+					<dd class="font-mono text-sm break-all">{alerts.SKIFF_ALERT_WEBHOOK ?? '—'}</dd>
 				</div>
 				<div class="space-y-1">
 					<dt class="flex items-center gap-1.5 text-xs text-muted-foreground">
 						<MailIcon class="size-3.5" />Email
 					</dt>
-					<dd class="text-[13px] break-all">{alerts.SKIFF_ALERT_EMAIL ?? '—'}</dd>
+					<dd class="text-sm break-all">{alerts.SKIFF_ALERT_EMAIL ?? '—'}</dd>
 				</div>
 			</dl>
 			<div class="space-y-2">
-				<p class="eyebrow">You’re alerted when</p>
+				<p class="text-xs font-medium text-muted-foreground">You’re alerted when</p>
 				<ul class="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
 					{#each alertList as item (item)}<li>{item}</li>{/each}
 				</ul>
@@ -211,7 +211,7 @@
 				{/if}
 				{#if canEdit}
 					<Button
-						variant={data.alerts.configured ? 'outline' : 'brand'}
+						variant={data.alerts.configured ? 'outline' : 'default'}
 						size="sm"
 						onclick={() => (alertsOpen = true)}
 						disabled={!ready}

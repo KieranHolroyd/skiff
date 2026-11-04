@@ -1,4 +1,5 @@
 <script lang="ts">
+	import DetailList from '#lib/components/skiff/DetailList.svelte';
 	import type { ProjectView, SecretView } from '@skiff/core';
 	import type { NodeCapacityView, WorkloadSpec, WorkloadView } from '@skiff/contracts';
 	import BoxesIcon from '@lucide/svelte/icons/boxes';
@@ -176,7 +177,7 @@
 			<Card.Header class="border-b py-4">
 				<div class="flex items-start gap-3">
 					<span
-						class="grid size-8 shrink-0 place-items-center rounded-lg border bg-muted/40 text-muted-foreground"
+						class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
 					>
 						{#if project.runtime === 'container'}
 							<BoxesIcon class="size-4" />
@@ -213,9 +214,9 @@
 			</Card.Header>
 			<Card.Content class="py-4">
 				{#if workload}
-					<dl class="kv">
+					<DetailList>
 						<dt>Node</dt>
-						<dd class="font-mono text-[12px]">
+						<dd class="font-mono text-xs">
 							{#if node}
 								{node.name}
 							{:else}
@@ -223,25 +224,25 @@
 							{/if}
 						</dd>
 						<dt>Upstream</dt>
-						<dd class="truncate font-mono text-[11px]" title={workload.upstream ?? ''}>
+						<dd class="truncate font-mono text-xs" title={workload.upstream ?? ''}>
 							{workload.upstream ?? '—'}
 						</dd>
 						<dt>Memory / CPU</dt>
-						<dd class="font-mono text-[12px]">{workload.memoryMb} MB · {workload.cpus} vCPU</dd>
+						<dd class="font-mono text-xs">{workload.memoryMb} MB · {workload.cpus} vCPU</dd>
 						<dt>Deployment</dt>
-						<dd class="truncate font-mono text-[11px]">{shortId(workload.deploymentId, 12)}</dd>
+						<dd class="truncate font-mono text-xs">{shortId(workload.deploymentId, 12)}</dd>
 						<dt>Updated</dt>
-						<dd class="text-[13px]">
+						<dd class="text-sm">
 							<time datetime={workload.updatedAt}>{formatDateTime(workload.updatedAt)}</time>
 						</dd>
-					</dl>
+					</DetailList>
 					{#if workload.message}
 						<p class="mt-3 text-xs break-words text-muted-foreground">{workload.message}</p>
 					{/if}
 					<div class="mt-4 space-y-1.5">
 						<div class="flex flex-wrap items-baseline justify-between gap-2 text-xs">
 							<span class="text-muted-foreground">Memory reservation</span>
-							<span class="font-mono text-[11px] tabular-nums">
+							<span class="font-mono text-xs tabular-nums">
 								{node
 									? `${workload.memoryMb} MB of ${node.sliceMemoryMb} MB slice`
 									: `${workload.memoryMb} MB`}
@@ -284,37 +285,37 @@
 				</Card.Header>
 				<Card.Content class="py-4">
 					{#if spec}
-						<dl class="kv">
+						<DetailList>
 							{#if project.runtime === 'process'}
 								<dt>Command</dt>
-								<dd class="truncate font-mono text-[12px]" title={spec.command?.join(' ') ?? ''}>
+								<dd class="truncate font-mono text-xs" title={spec.command?.join(' ') ?? ''}>
 									{spec.command?.join(' ') ?? 'bun run start'}
 								</dd>
 								<dt>Socket activation</dt>
-								<dd class="text-[13px]">{spec.socketActivation ? 'enabled' : 'disabled'}</dd>
+								<dd class="text-sm">{spec.socketActivation ? 'enabled' : 'disabled'}</dd>
 							{:else}
 								<dt>Image</dt>
-								<dd class="truncate font-mono text-[12px]" title={spec.image ?? ''}>
+								<dd class="truncate font-mono text-xs" title={spec.image ?? ''}>
 									{spec.image ?? 'not set'}
 								</dd>
 							{/if}
 							<dt>Port</dt>
-							<dd class="font-mono text-[13px]">{spec.port}</dd>
+							<dd class="font-mono text-sm">{spec.port}</dd>
 							<dt>Health check</dt>
-							<dd class="font-mono text-[13px]">{spec.healthPath}</dd>
+							<dd class="font-mono text-sm">{spec.healthPath}</dd>
 							<dt>Memory</dt>
-							<dd class="font-mono text-[13px]">{spec.memoryMb} MB</dd>
+							<dd class="font-mono text-sm">{spec.memoryMb} MB</dd>
 							<dt>CPU</dt>
-							<dd class="font-mono text-[13px]">{spec.cpus} vCPU</dd>
+							<dd class="font-mono text-sm">{spec.cpus} vCPU</dd>
 							<dt>Env vars</dt>
-							<dd class="font-mono text-[13px]">{Object.keys(spec.env).length}</dd>
+							<dd class="font-mono text-sm">{Object.keys(spec.env).length}</dd>
 							<dt>Secret refs</dt>
-							<dd class="font-mono text-[13px]">{spec.secrets.length}</dd>
+							<dd class="font-mono text-sm">{spec.secrets.length}</dd>
 							<dt>Data volume</dt>
-							<dd class="font-mono text-[13px]">
+							<dd class="font-mono text-sm">
 								{spec.data ? `${spec.data.sizeMb} MB` : 'none'}
 							</dd>
-						</dl>
+						</DetailList>
 					{:else}
 						<p class="text-sm text-muted-foreground">
 							No spec saved. Configure the runtime to choose a command or image, port, memory budget
@@ -331,7 +332,7 @@
 						Node capacity
 					</Card.Title>
 					<Card.Description>
-						Admission reserves memory from each node's <code class="font-mono text-[11px]"
+						Admission reserves memory from each node's <code class="font-mono text-xs"
 							>skiff-workloads.slice</code
 						>.
 					</Card.Description>
@@ -356,14 +357,12 @@
 										<span class="inline-flex items-center gap-1.5">
 											<ServerIcon class="size-3 text-muted-foreground" />
 											<span class="font-medium">{item.name}</span>
-											<Badge variant="outline" class="font-mono text-[10px] uppercase"
-												>{item.mode}</Badge
-											>
+											<Badge variant="secondary" class="capitalize">{item.mode}</Badge>
 											{#if workload?.nodeId === item.nodeId}
 												<Badge variant="brand">this workload</Badge>
 											{/if}
 										</span>
-										<span class="font-mono text-[11px] text-muted-foreground tabular-nums"
+										<span class="font-mono text-xs text-muted-foreground tabular-nums"
 											>{item.freeMemoryMb} MB free · {item.workloadCount} workloads</span
 										>
 									</div>
@@ -384,7 +383,7 @@
 			<Card.Header class="border-b py-4">
 				<div class="flex items-start gap-3">
 					<span
-						class="grid size-8 shrink-0 place-items-center rounded-lg border bg-muted/40 text-muted-foreground"
+						class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
 					>
 						<KeyRoundIcon class="size-4" />
 					</span>
@@ -427,9 +426,8 @@
 						<Table.Body>
 							{#each uniqueSecrets as secret (secret.id)}
 								<Table.Row>
-									<Table.Cell
-										class="max-w-48 truncate pl-4 font-mono text-[12px]"
-										title={secret.name}>{secret.name}</Table.Cell
+									<Table.Cell class="max-w-48 truncate pl-4 font-mono text-xs" title={secret.name}
+										>{secret.name}</Table.Cell
 									>
 									<Table.Cell class="hidden sm:table-cell">
 										<Badge variant={secret.type === 'secret' ? 'brand' : 'outline'}>
@@ -510,7 +508,7 @@
 						name="command"
 						bind:value={command}
 						placeholder="bun run start"
-						class="font-mono text-[13px]"
+						class="font-mono text-sm"
 					/>
 					<Field.Description>
 						Split on spaces and run without a shell; quotes are not interpreted. Leave blank to use
@@ -537,7 +535,7 @@
 						bind:value={image}
 						placeholder="ghcr.io/acme/app:latest"
 						required
-						class="font-mono text-[13px]"
+						class="font-mono text-sm"
 					/>
 					<Field.Description>
 						Pulled rootlessly on the node. Use a digest or immutable tag for reproducible deploys.
@@ -621,14 +619,14 @@
 									bind:value={row.key}
 									placeholder="DATABASE_URL"
 									aria-label="Environment variable name"
-									class="font-mono text-[12px] sm:max-w-52"
+									class="font-mono text-xs sm:max-w-52"
 								/>
 								<Input
 									name="envValue"
 									bind:value={row.value}
 									placeholder="value"
 									aria-label="Environment variable value"
-									class="font-mono text-[12px]"
+									class="font-mono text-xs"
 								/>
 								<Button
 									type="button"
@@ -681,7 +679,7 @@
 									name="secretName"
 									bind:value={row.name}
 									aria-label="Secret"
-									class="min-w-40 flex-1 font-mono text-[12px]"
+									class="min-w-40 flex-1 font-mono text-xs"
 								>
 									{#each secretNames as name (name)}
 										<NativeSelect.Option value={name}>{name}</NativeSelect.Option>
@@ -704,7 +702,7 @@
 									placeholder="latest"
 									aria-label="Pin secret version"
 									bind:value={row.version}
-									class="w-24 font-mono text-[12px]"
+									class="w-24 font-mono text-xs"
 								/>
 								<Button
 									type="button"
@@ -743,7 +741,7 @@
 					required
 					autocapitalize="characters"
 					spellcheck="false"
-					class="font-mono text-[13px]"
+					class="font-mono text-sm"
 				/>
 				<Field.Description
 					>UPPER_SNAKE_CASE. Re-using a name creates a new version.</Field.Description
@@ -757,7 +755,7 @@
 					type="password"
 					autocomplete="new-password"
 					required
-					class="font-mono text-[13px]"
+					class="font-mono text-sm"
 				/>
 			</Field.Field>
 			<Field.Field>

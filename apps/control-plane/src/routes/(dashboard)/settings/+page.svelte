@@ -1,4 +1,5 @@
 <script lang="ts">
+	import DetailList from '#lib/components/skiff/DetailList.svelte';
 	import Building2Icon from '@lucide/svelte/icons/building-2';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import PlusIcon from '@lucide/svelte/icons/plus';
@@ -97,23 +98,23 @@
 				<Card.Description>Tenant boundary for every project and deployment.</Card.Description>
 			</Card.Header>
 			<Card.Content>
-				<dl class="kv">
+				<DetailList>
 					<dt>Name</dt>
 					<dd class="font-medium">{data.org.name}</dd>
 					<dt>Slug</dt>
-					<dd class="font-mono text-[12.5px]">{data.org.slug ?? '—'}</dd>
+					<dd class="font-mono text-xs">{data.org.slug ?? '—'}</dd>
 					<dt>Your role</dt>
 					<dd><Badge variant={roleBadge(data.role)} class="capitalize">{data.role}</Badge></dd>
 					<dt>Created</dt>
-					<dd class="text-[13px]">{formatDateTime(data.org.createdAt)}</dd>
+					<dd class="text-sm">{formatDateTime(data.org.createdAt)}</dd>
 					<dt>Org ID</dt>
 					<dd class="flex items-center justify-end gap-1">
-						<span class="truncate font-mono text-[12px]" title={data.org.id}
+						<span class="truncate font-mono text-xs" title={data.org.id}
 							>{shortId(data.org.id, 16)}</span
 						>
 						<CopyButton value={data.org.id} label="Copy org ID" iconOnly />
 					</dd>
-				</dl>
+				</DetailList>
 			</Card.Content>
 		</Card.Root>
 
@@ -141,7 +142,7 @@
 							<Item.Root size="sm" class="px-0">
 								<Item.Media>
 									<Avatar.Root class="size-8">
-										<Avatar.Fallback class="text-[11px] font-semibold"
+										<Avatar.Fallback class="text-xs font-semibold"
 											>{initials(member.name)}</Avatar.Fallback
 										>
 									</Avatar.Root>
@@ -226,7 +227,7 @@
 							<Table.Row>
 								<Table.Cell class="pl-4">
 									<p class="font-medium">{key.name ?? 'Unnamed key'}</p>
-									<p class="font-mono text-[11px] text-muted-foreground">
+									<p class="font-mono text-xs text-muted-foreground">
 										{key.start ?? key.prefix ?? key.id}
 									</p>
 								</Table.Cell>
@@ -311,7 +312,7 @@
 				>
 					{#each data.scopeGroups as group (group.resource)}
 						<div class="space-y-2">
-							<p class="eyebrow">{group.resource}</p>
+							<p class="text-xs font-medium text-muted-foreground">{group.resource}</p>
 							{#each group.permissions as permission (permission)}
 								<Field.Field orientation="horizontal" class="gap-2">
 									<Checkbox id="scope-{permission}" name="permissions" value={permission} checked />
@@ -340,10 +341,10 @@
 	>
 		{#if result.createdKeyScopes?.length}
 			<div class="space-y-1.5">
-				<p class="eyebrow">Scopes granted</p>
+				<p class="text-xs font-medium text-muted-foreground">Scopes granted</p>
 				<div class="flex flex-wrap gap-1">
 					{#each result.createdKeyScopes as scope (scope)}
-						<Badge variant="outline" class="font-mono text-[11px]">{scope}</Badge>
+						<Badge variant="outline" class="font-mono text-xs">{scope}</Badge>
 					{/each}
 				</div>
 			</div>

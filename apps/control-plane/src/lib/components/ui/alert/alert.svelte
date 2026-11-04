@@ -6,10 +6,10 @@
 		variants: {
 			variant: {
 				default: "bg-card text-card-foreground",
-				destructive: "text-destructive bg-card *:data-[slot=alert-description]:text-destructive/90 *:[svg]:text-current",
-				success: "border-success/30 bg-success-soft text-success-soft-foreground *:data-[slot=alert-description]:text-success-soft-foreground/90",
-				warning: "border-warning/40 bg-warning-soft text-warning-soft-foreground *:data-[slot=alert-description]:text-warning-soft-foreground/90",
-				info: "border-info/30 bg-info-soft text-info-soft-foreground *:data-[slot=alert-description]:text-info-soft-foreground/90",
+				destructive: "border-destructive/25 bg-destructive/5 text-destructive *:data-[slot=alert-description]:text-destructive/90 *:[svg]:text-current",
+				success: "border-success/25 bg-success/5 text-success *:data-[slot=alert-description]:text-success/90",
+				warning: "border-warning/25 bg-warning/5 text-warning *:data-[slot=alert-description]:text-warning/90",
+				info: "border-info/25 bg-info/5 text-info *:data-[slot=alert-description]:text-info/90",
 			},
 		},
 		defaultVariants: {

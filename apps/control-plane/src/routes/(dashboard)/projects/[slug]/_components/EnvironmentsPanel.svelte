@@ -130,7 +130,7 @@
 	>
 		<div class="flex items-start gap-3">
 			<span
-				class="grid size-8 shrink-0 place-items-center rounded-lg border bg-muted/40 text-muted-foreground"
+				class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
 			>
 				<LayersIcon class="size-4" />
 			</span>
@@ -179,7 +179,7 @@
 								{#if environment.isProduction}
 									<Badge variant="brand">production</Badge>
 								{:else}
-									<Badge variant="outline" class="font-mono text-[10px]">{environment.slug}</Badge>
+									<Badge variant="outline" class="font-mono text-xs">{environment.slug}</Badge>
 								{/if}
 							</Card.Title>
 							<a
@@ -187,7 +187,7 @@
 								target="_blank"
 								rel="external noreferrer"
 								title={environment.host}
-								class="inline-flex max-w-full min-w-0 items-center gap-1 font-mono text-[11px] text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+								class="inline-flex max-w-full min-w-0 items-center gap-1 font-mono text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
 							>
 								<GlobeIcon class="size-3 shrink-0" />
 								<span class="truncate">{environment.host}</span>
@@ -206,7 +206,7 @@
 								<StatusBadge status={deployment.status} />
 								{#if deployment.pinned}<Badge variant="outline">pinned</Badge>{/if}
 								{#if deployment.environmentSlug !== environment.slug}
-									<Badge variant="outline" class="font-mono text-[10px]"
+									<Badge variant="outline" class="font-mono text-xs"
 										>{deployment.environmentName}</Badge
 									>
 								{/if}
@@ -293,7 +293,7 @@
 						maxlength={30}
 						autocapitalize="off"
 						spellcheck="false"
-						class="font-mono text-[13px]"
+						class="font-mono text-sm"
 					/>
 				</Field.Field>
 			</div>

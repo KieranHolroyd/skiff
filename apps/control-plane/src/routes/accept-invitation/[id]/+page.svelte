@@ -32,10 +32,8 @@
 	title="Join this Skiff organisation"
 	description="Accept the invitation to access its projects, deployments and audit log."
 >
-	<div class="flex items-center gap-3 rounded-xl border bg-card p-3.5 shadow-card">
-		<span
-			class="grid size-10 shrink-0 place-items-center rounded-lg bg-brand-soft text-brand-soft-foreground"
-		>
+	<div class="flex items-center gap-3 rounded-xl border bg-card p-3.5 shadow-xs">
+		<span class="grid size-10 shrink-0 place-items-center rounded-lg bg-brand/10 text-brand">
 			<UsersIcon class="size-5" aria-hidden="true" />
 		</span>
 		<div class="min-w-0">

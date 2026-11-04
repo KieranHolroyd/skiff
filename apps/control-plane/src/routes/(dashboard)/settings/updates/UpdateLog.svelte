@@ -27,10 +27,10 @@
 	const levelClass: Record<SelfUpdateLogLevel, string> = {
 		info: 'text-sidebar-foreground/90',
 		phase: 'text-brand',
-		command: 'text-sidebar-muted',
+		command: 'text-muted-foreground',
 		output: 'text-sidebar-foreground/70',
 		warn: 'text-warning',
-		error: 'text-danger'
+		error: 'text-destructive'
 	};
 
 	$effect(() => {
@@ -64,7 +64,7 @@
 >
 	{#snippet actions()}
 		{#if running}
-			<span class="flex items-center gap-1.5 text-[11px] font-medium text-success-soft-foreground">
+			<span class="flex items-center gap-1.5 text-xs font-medium text-success">
 				<span class="relative flex size-1.5">
 					<span class="absolute size-full animate-ping rounded-full bg-success opacity-60"></span>
 					<span class="relative size-1.5 rounded-full bg-success"></span>
@@ -82,10 +82,10 @@
 			role="log"
 			aria-label="Self-update log"
 			aria-live="off"
-			class="max-h-[22rem] min-h-24 overflow-auto rounded-lg border border-sidebar-border bg-sidebar p-3 font-mono text-[11.5px] leading-relaxed text-sidebar-foreground"
+			class="max-h-[22rem] min-h-24 overflow-auto rounded-lg border border-sidebar-border bg-sidebar p-3 font-mono text-xs leading-relaxed text-sidebar-foreground"
 		>
 			{#if lines.length === 0}
-				<p class="text-sidebar-muted">
+				<p class="text-muted-foreground">
 					{running
 						? 'Waiting for the updater to write its first line…'
 						: 'The updater did not write a log for this run.'}
@@ -93,7 +93,7 @@
 			{:else}
 				{#each lines as line, index (index)}
 					<div class="flex gap-3">
-						<span class="shrink-0 text-sidebar-muted/60 tabular-nums select-none"
+						<span class="shrink-0 text-muted-foreground/60 tabular-nums select-none"
 							>{line.at.slice(11, 19)}</span
 						>
 						<span class="min-w-0 break-words whitespace-pre-wrap {levelClass[line.level]}"
@@ -108,7 +108,7 @@
 				type="button"
 				variant="secondary"
 				size="xs"
-				class="absolute right-3 bottom-3 shadow-card"
+				class="absolute right-3 bottom-3 shadow-xs"
 				onclick={jumpToLatest}
 			>
 				<ArrowDownIcon />

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import DetailList from '#lib/components/skiff/DetailList.svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -278,17 +279,15 @@
 					href={data.project.productionUrl}
 					target="_blank"
 					rel="external noreferrer"
-					class="inline-flex items-center gap-1 font-mono text-[13px] text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+					class="inline-flex items-center gap-1 font-mono text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
 				>
 					{displayUrl(data.project.productionUrl)}
 					<ArrowUpRightIcon class="size-3.5" />
 				</a>
 				<AccessChip scope="Prod" mode={data.project.productionAccess} />
 				<AccessChip scope="Preview" mode={data.project.previewAccess} />
-				<Badge variant="outline" class="font-mono text-[10px] uppercase"
-					>{data.project.runtime}</Badge
-				>
-				<Badge variant="outline" class="font-mono text-[10px]">{data.project.placement}</Badge>
+				<Badge variant="secondary" class="capitalize">{data.project.runtime}</Badge>
+				<Badge variant="outline" class="font-mono text-xs">{data.project.placement}</Badge>
 			</div>
 		{/snippet}
 		{#if data.can.createDeployment}
@@ -343,7 +342,7 @@
 				<ProjectMark slug={data.project.slug} name={data.project.name} size="lg" />
 			</div>
 			<div class="min-w-0 flex-1 basis-64 space-y-1">
-				<p class="eyebrow flex items-center gap-1.5 text-brand-soft-foreground">
+				<p class="flex items-center gap-1.5 text-xs font-medium text-brand">
 					<RadioTowerIcon class="size-3" />
 					Live in production
 				</p>
@@ -353,7 +352,7 @@
 						<StatusBadge status={production.status} />
 						{#if production.pinned}<Badge variant="outline"><PinIcon />pinned</Badge>{/if}
 					</div>
-					<p class="truncate text-[13px] text-muted-foreground">
+					<p class="truncate text-sm text-muted-foreground">
 						{#if production.message}{production.message} ·
 						{/if}<span class="font-mono text-xs">{shortSha(production.release.sha256)}</span>
 						· {formatBytes(production.release.sizeBytes)} · deployed
@@ -361,13 +360,13 @@
 					</p>
 				{:else}
 					<p class="text-lg font-semibold tracking-tight">Nothing in production yet</p>
-					<p class="text-[13px] text-muted-foreground">
+					<p class="text-sm text-muted-foreground">
 						Promote a deployment to serve it at {displayUrl(data.project.productionUrl)}.
 					</p>
 				{/if}
 				{#if data.project.runtime !== 'static'}
 					{#if runningAppDrift && runningDeployment}
-						<p class="flex items-start gap-1.5 text-xs text-warning-soft-foreground">
+						<p class="flex items-start gap-1.5 text-xs text-warning">
 							<TriangleAlertIcon class="mt-0.5 size-3.5 shrink-0" />
 							<span>
 								Only the latest deployment is active. The running app is
@@ -496,7 +495,7 @@
 						>
 					</EmptyState>
 				{:else}
-					<div class="overflow-hidden rounded-xl border bg-card shadow-card">
+					<div class="overflow-hidden rounded-xl border bg-card shadow-xs">
 						<Table.Root>
 							<Table.Header class="bg-muted/45">
 								<Table.Row>
@@ -508,16 +507,14 @@
 							</Table.Header>
 							<Table.Body>
 								{#each data.deployments as deployment (deployment.id)}
-									<Table.Row
-										class={deployment.isProduction ? 'bg-brand-soft/35 hover:bg-brand-soft/50' : ''}
-									>
+									<Table.Row class={deployment.isProduction ? 'bg-brand/5 hover:bg-brand/5' : ''}>
 										<Table.Cell class="pl-4 whitespace-normal">
 											<div class="flex flex-wrap items-center gap-1.5">
-												<span class="font-mono text-[13px] font-medium">{deployment.shortId}</span>
+												<span class="font-mono text-sm font-medium">{deployment.shortId}</span>
 												<StatusBadge status={deployment.status} />
 												{#if deployment.isProduction}<Badge variant="brand">production</Badge>{/if}
 												{#if !deployment.isProduction}
-													<Badge variant="outline" class="font-mono text-[10px]"
+													<Badge variant="outline" class="font-mono text-xs"
 														>{deployment.environmentSlug}</Badge
 													>
 												{/if}
@@ -528,7 +525,7 @@
 												href={deployment.previewUrl}
 												target="_blank"
 												rel="external noreferrer"
-												class="mt-0.5 inline-flex max-w-full items-center gap-1 truncate font-mono text-[11px] text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+												class="mt-0.5 inline-flex max-w-full items-center gap-1 truncate font-mono text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
 											>
 												{displayUrl(deployment.previewUrl)}
 												<ArrowUpRightIcon class="size-3 shrink-0" />
@@ -548,7 +545,7 @@
 											<span title={deployment.release.sha256}
 												>{shortSha(deployment.release.sha256)}</span
 											>
-											<p class="text-[11px] opacity-80">
+											<p class="text-xs opacity-80">
 												{formatBytes(deployment.release.sizeBytes)}
 											</p>
 										</Table.Cell>
@@ -663,7 +660,7 @@
 										{@const state = shareState(link)}
 										<Table.Row class={state === 'active' ? '' : 'text-muted-foreground'}>
 											<Table.Cell class="pl-4">
-												<p class="font-mono text-[13px]">{link.host}</p>
+												<p class="font-mono text-sm">{link.host}</p>
 												{#if link.note}<p class="text-xs text-muted-foreground">{link.note}</p>{/if}
 											</Table.Cell>
 											<Table.Cell class="hidden font-mono text-xs tabular-nums sm:table-cell">
@@ -715,20 +712,20 @@
 							{/if}
 						</Card.Header>
 						<Card.Content>
-							<dl class="kv">
+							<DetailList>
 								<dt>Name</dt>
-								<dd class="text-[13px]">{data.project.name}</dd>
+								<dd class="text-sm">{data.project.name}</dd>
 								<dt>Address</dt>
-								<dd class="font-mono text-[12px]">{data.project.slug}.{data.contentDomain}</dd>
+								<dd class="font-mono text-xs">{data.project.slug}.{data.contentDomain}</dd>
 								<dt>Runtime</dt>
 								<dd class="capitalize">{data.project.runtime}</dd>
 								<dt>Placement</dt>
-								<dd class="font-mono text-[13px]">{data.project.placement}</dd>
+								<dd class="font-mono text-sm">{data.project.placement}</dd>
 								<dt>Environments</dt>
-								<dd class="font-mono text-[13px]">{data.environments.length}</dd>
+								<dd class="font-mono text-sm">{data.environments.length}</dd>
 								<dt>Custom domains</dt>
-								<dd class="font-mono text-[13px]">{data.domains.length}</dd>
-							</dl>
+								<dd class="font-mono text-sm">{data.domains.length}</dd>
+							</DetailList>
 						</Card.Content>
 					</Card.Root>
 
@@ -743,7 +740,7 @@
 									<Item.Root variant="outline">
 										<Item.Content>
 											<Item.Title>{row.label}</Item.Title>
-											<Item.Description class="font-mono text-[11px]">{row.hint}</Item.Description>
+											<Item.Description class="font-mono text-xs">{row.hint}</Item.Description>
 										</Item.Content>
 										<Item.Actions>
 											<AccessChip mode={row.mode} />
@@ -771,15 +768,15 @@
 							<Card.Title>Details</Card.Title>
 						</Card.Header>
 						<Card.Content>
-							<dl class="kv">
+							<DetailList>
 								<dt>Production</dt>
-								<dd class="font-mono text-[13px]">{production?.shortId ?? 'not deployed'}</dd>
+								<dd class="font-mono text-sm">{production?.shortId ?? 'not deployed'}</dd>
 								<dt>Runtime</dt>
 								<dd class="capitalize">{data.project.runtime}</dd>
 								<dt>Placement</dt>
-								<dd class="font-mono text-[13px]">{data.project.placement}</dd>
+								<dd class="font-mono text-sm">{data.project.placement}</dd>
 								<dt>Workload</dt>
-								<dd class="text-[13px]">
+								<dd class="text-sm">
 									{#if data.workload}
 										<span class="capitalize">{data.workload.status}</span>
 										<span class="text-muted-foreground">
@@ -790,19 +787,19 @@
 									{/if}
 								</dd>
 								<dt>Created</dt>
-								<dd class="text-[13px]">
+								<dd class="text-sm">
 									<time datetime={data.project.createdAt}
 										>{formatDateTime(data.project.createdAt)}</time
 									>
 								</dd>
 								<dt>Project ID</dt>
 								<dd class="flex items-center justify-end gap-1">
-									<span class="truncate font-mono text-[12px]" title={data.project.id}
+									<span class="truncate font-mono text-xs" title={data.project.id}
 										>{shortId(data.project.id, 14)}</span
 									>
 									<CopyButton value={data.project.id} label="Copy project ID" iconOnly />
 								</dd>
-							</dl>
+							</DetailList>
 						</Card.Content>
 					</Card.Root>
 
@@ -1052,7 +1049,7 @@
 					maxlength={40}
 					autocapitalize="off"
 					spellcheck="false"
-					class="font-mono text-[13px]"
+					class="font-mono text-sm"
 				/>
 				<Field.Description>
 					Address: <span class="font-mono">{projectSlug || '…'}.{data.contentDomain}</span> — the old

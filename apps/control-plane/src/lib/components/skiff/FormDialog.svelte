@@ -75,18 +75,12 @@
 		</Dialog.Trigger>
 	{/if}
 	<Dialog.Content class={widths[size]}>
-		<Dialog.Header class="flex-row items-start gap-3.5">
-			{#if Icon}
-				<span
-					class="grid size-9 shrink-0 place-items-center rounded-lg border bg-muted/50 text-muted-foreground"
-				>
-					<Icon class="size-4" />
-				</span>
-			{/if}
-			<div class="space-y-1.5">
-				<Dialog.Title>{title}</Dialog.Title>
-				{#if description}<Dialog.Description>{description}</Dialog.Description>{/if}
-			</div>
+		<Dialog.Header>
+			<Dialog.Title class="flex items-center gap-2">
+				{#if Icon}<Icon class="size-4 text-muted-foreground" />{/if}
+				{title}
+			</Dialog.Title>
+			{#if description}<Dialog.Description>{description}</Dialog.Description>{/if}
 		</Dialog.Header>
 		<form method="POST" {action} use:enhance={submit} class="grid gap-5">
 			{#if error}
