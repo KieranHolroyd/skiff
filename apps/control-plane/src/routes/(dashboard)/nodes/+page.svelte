@@ -1,6 +1,9 @@
 <script lang="ts">
 	import DetailList from '#lib/components/skiff/DetailList.svelte';
 	import { resolve } from '$app/paths';
+	import type { NodeView } from '@skiff/core';
+	import { NODE_STORAGE_DEFAULTS } from '@skiff/contracts';
+	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import CirclePauseIcon from '@lucide/svelte/icons/circle-pause';
 	import CirclePlayIcon from '@lucide/svelte/icons/circle-play';
@@ -8,6 +11,7 @@
 	import HammerIcon from '@lucide/svelte/icons/hammer';
 	import InfoIcon from '@lucide/svelte/icons/info';
 	import NetworkIcon from '@lucide/svelte/icons/network';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import ServerIcon from '@lucide/svelte/icons/server';
@@ -23,8 +27,11 @@
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
+	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
 	import * as Collapsible from '#lib/components/ui/collapsible/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
+	import * as Field from '#lib/components/ui/field/index.js';
+	import { Input } from '#lib/components/ui/input/index.js';
 	import { Progress } from '#lib/components/ui/progress/index.js';
 	import EmptyState from '../_lib/EmptyState.svelte';
 	import NodeStats from '../_lib/NodeStats.svelte';
@@ -47,6 +54,48 @@
 	let commandOpen = $state(false);
 	let tokenOpen = $state(false);
 
+	let editOpen = $state(false);
+	let editing = $state<NodeView | null>(null);
+	let editName = $state('');
+	let editAddress = $state('');
+	let editSliceMemory = $state(1024);
+	let editCpuWeight = $state(200);
+	let editCanBuild = $state(false);
+	let editDataDir = $state('');
+	let editBuildDir = $state('');
+	const storageChanging = $derived(
+		editing !== null &&
+			((editDataDir.trim() || null) !== editing.storage.dataDir ||
+				(editBuildDir.trim() || null) !== editing.storage.buildDir)
+	);
+
+	function edit(node: NodeView) {
+		editing = node;
+		editName = node.name;
+		editAddress = node.publicAddress ?? '';
+		editSliceMemory = node.sliceMemoryMb;
+		editCpuWeight = node.sliceCpuWeight;
+		editCanBuild = node.canBuild;
+		editDataDir = node.storage.dataDir ?? '';
+		editBuildDir = node.storage.buildDir ?? '';
+		editOpen = true;
+	}
+
+	/** Requested vs applied storage, for the node card. */
+	function storageState(node: NodeView): { tone: 'pending' | 'failed'; text: string } | null {
+		const { dataDir, buildDir, status } = node.storage;
+		if (!status) {
+			if (!dataDir && !buildDir) return null;
+			return { tone: 'pending', text: 'Storage move requested; waiting for the node to report.' };
+		}
+		const current = status.requested.dataDir === dataDir && status.requested.buildDir === buildDir;
+		if (current && status.status === 'failed')
+			return { tone: 'failed', text: `Storage move failed: ${status.message ?? 'see journalctl -u skiff-storage'}` };
+		if (!current || status.status === 'pending')
+			return { tone: 'pending', text: status.message ?? 'Storage move in progress.' };
+		return null;
+	}
+
 	$effect(() => {
 		if (result?.command) commandOpen = true;
 	});
@@ -59,6 +108,9 @@
 		data.denied ? undefined : data.nodes.find((node) => node.id === result?.nodeId)
 	);
 	const capacityByNode = $derived(new Map(data.capacity.map((item) => [item.nodeId, item])));
+	const editReserved = $derived(
+		editing ? (capacityByNode.get(editing.id)?.reservedMemoryMb ?? 0) : 0
+	);
 
 	function rotate(node: { id: string; name: string }) {
 		askConfirm({
@@ -79,7 +131,7 @@
 				: `Make ${node.name} a Builder?`,
 			description: node.canBuild
 				? 'Queued git builds wait for another Builder node. Existing deployments are unaffected.'
-				: 'This node will claim git builds one at a time. Builds run in a transient sandboxed unit with a 10-minute cap.',
+				: 'This node will claim git builds one at a time. Builds run in a transient sandboxed unit with a 10-minute cap, so they need skiff-builder.service on the node.',
 			confirmLabel: node.canBuild ? 'Remove Builder role' : 'Make Builder',
 			tone: node.canBuild ? 'danger' : 'default',
 			action: '?/setBuilder',
@@ -171,6 +223,9 @@
 						</div>
 						<Card.Action>
 							<RowMenu label="Actions for {node.name}">
+								<DropdownMenu.Item onSelect={() => edit(node)}>
+									<PencilIcon />Edit node
+								</DropdownMenu.Item>
 								<DropdownMenu.Item
 									onSelect={() =>
 										runAction('?/setDraining', {
@@ -223,6 +278,16 @@
 								/>
 							</div>
 						{/if}
+						{@const storage = storageState(node)}
+						{#if storage}
+							<p
+								class="flex items-start gap-1.5 text-xs {storage.tone === 'failed'
+									? 'text-destructive'
+									: 'text-muted-foreground'}"
+							>
+								<HardDriveIcon class="mt-px size-3.5 shrink-0" />{storage.text}
+							</p>
+						{/if}
 						<NodeStats stats={node.stats} />
 						<DetailList class="border-t">
 							<dt>Agent</dt>
@@ -231,6 +296,10 @@
 							</dd>
 							<dt>Address</dt>
 							<dd class="font-mono text-xs">{node.publicAddress ?? 'not reported'}</dd>
+							<dt>Data</dt>
+							<dd class="truncate font-mono text-xs" title="Release cache and agent state">
+								{node.storage.status?.dataDir ?? node.storage.dataDir ?? NODE_STORAGE_DEFAULTS.dataDir}
+							</dd>
 							<dt>Heartbeat</dt>
 							<dd class="text-sm">
 								{#if node.lastHeartbeatAt}
@@ -275,8 +344,9 @@
 			<Alert.Description>
 				An agent is marked offline after 30 seconds without a heartbeat and alerts after 2 minutes.
 				Draining stops new placements but keeps existing sites and workloads serving. App workloads
-				run in <code class="font-mono">skiff-workloads.slice</code>; a Builder node claims one git
-				build at a time.
+				run in <code class="font-mono">skiff-workloads.slice</code>. Any node can be a Builder: its
+				<code class="font-mono">skiff-builder.service</code> claims one git build at a time and idles
+				while the role is off.
 			</Alert.Description>
 		</Alert.Root>
 	{/if}
@@ -310,6 +380,132 @@
 				>Follow the WireGuard worker guide</a
 			>. It sets up the tunnel and generates a join command with the right address.
 		</p>
+	</FormDialog>
+{/if}
+
+{#if !data.denied && editing}
+	<FormDialog
+		bind:open={editOpen}
+		icon={PencilIcon}
+		title="Edit {editing.name}"
+		description="Changes reach the agent with its next desired-state pull, usually within seconds."
+		action="?/updateNode"
+		submitLabel="Save node"
+		size="lg"
+	>
+		<input type="hidden" name="nodeId" value={editing.id} />
+		<Field.Group>
+			<div class="grid gap-4 sm:grid-cols-2">
+				<Field.Field>
+					<Field.Label for="node-name">Name</Field.Label>
+					<Input id="node-name" name="name" bind:value={editName} maxlength={120} required />
+				</Field.Field>
+				<Field.Field>
+					<Field.Label for="node-address">Address</Field.Label>
+					<Input
+						id="node-address"
+						name="publicAddress"
+						bind:value={editAddress}
+						placeholder="10.8.0.2:80"
+						class="font-mono text-sm"
+					/>
+					<Field.Description>
+						{editing.mode === 'edge'
+							? 'Informational on the edge.'
+							: 'host:port the edge proxies to, usually the WireGuard address.'}
+					</Field.Description>
+				</Field.Field>
+			</div>
+
+			<div class="grid gap-4 sm:grid-cols-2">
+				<Field.Field>
+					<Field.Label for="node-slice-memory">Workload slice memory (MB)</Field.Label>
+					<Input
+						id="node-slice-memory"
+						name="sliceMemoryMb"
+						type="number"
+						min={Math.max(32, editReserved)}
+						max="65536"
+						bind:value={editSliceMemory}
+					/>
+					<Field.Description>
+						MemoryMax for <code class="font-mono">skiff-workloads.slice</code> and the admission
+						budget. {editReserved} MB is reserved by workloads now, so you cannot go below that.
+					</Field.Description>
+				</Field.Field>
+				<Field.Field>
+					<Field.Label for="node-cpu-weight">Workload slice CPU weight</Field.Label>
+					<Input
+						id="node-cpu-weight"
+						name="sliceCpuWeight"
+						type="number"
+						min="1"
+						max="10000"
+						bind:value={editCpuWeight}
+					/>
+					<Field.Description>
+						CPUWeight relative to the other slices (systemd default 100). Lower it so the platform
+						services win under contention.
+					</Field.Description>
+				</Field.Field>
+			</div>
+
+			<Field.Field orientation="horizontal" class="gap-2">
+				<Checkbox id="node-can-build" name="canBuild" value="1" bind:checked={editCanBuild} />
+				<Field.Label for="node-can-build" class="font-normal">
+					Builder: claim git builds on this node, one at a time
+				</Field.Label>
+			</Field.Field>
+			<Field.Separator />
+			<Field.Set>
+				<Field.Legend variant="label">Storage</Field.Legend>
+				<Field.Description>
+					Move this node's data to another disk or partition. Leave a field blank for the default.
+					The node copies the data, restarts the agent, then deletes the old copy. Sites keep
+					serving throughout.
+				</Field.Description>
+				<div class="grid gap-4 sm:grid-cols-2">
+					<Field.Field>
+						<Field.Label for="node-data-dir">Release cache and agent state</Field.Label>
+						<Input
+							id="node-data-dir"
+							name="dataDir"
+							bind:value={editDataDir}
+							placeholder={NODE_STORAGE_DEFAULTS.dataDir}
+							class="font-mono text-sm"
+						/>
+						<Field.Description>
+							What Caddy serves sites from. Use an empty or new directory.
+						</Field.Description>
+					</Field.Field>
+					<Field.Field>
+						<Field.Label for="node-build-dir">Build scratch</Field.Label>
+						<Input
+							id="node-build-dir"
+							name="buildDir"
+							bind:value={editBuildDir}
+							placeholder={NODE_STORAGE_DEFAULTS.buildDir}
+							class="font-mono text-sm"
+						/>
+						<Field.Description>One checkout per running build; nothing is copied.</Field.Description>
+					</Field.Field>
+				</div>
+				{#if storageChanging}
+					<p class="text-xs text-muted-foreground">
+						Every parent directory must be reachable by the <code class="font-mono">skiff</code> user.
+						A move waits for any running build to finish. Needs
+						<code class="font-mono">skiff-storage.path</code> on the node.
+					</p>
+				{/if}
+			</Field.Set>
+
+			{#if editCanBuild && editing.mode === 'edge'}
+				<p class="text-xs text-muted-foreground">
+					Builds on the edge share its CPU and memory with ingress. Each build is capped at 2 GB and
+					200% CPU, but a small VPS may still slow down while one runs.
+				</p>
+			{/if}
+		</Field.Group>
 	</FormDialog>
 {/if}
 

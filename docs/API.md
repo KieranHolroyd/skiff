@@ -36,6 +36,7 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | POST | `/uploads/:id/finalize` | `deployment:create` | `{ project, uploadId?, promote?, message? }`; `uploadId` must match `:id`, and the upload must belong to `project` |
 | GET | `/nodes` | platform admin | any surface (session, API key, MCP) of a platform-admin user |
 | GET | `/nodes/capacity` | platform admin | workload-slice budget per node (`sliceMemoryMb`, reserved, free) |
+| PATCH | `/nodes/:id` | platform admin **session** | any of `{ name, publicAddress (host[:port] or null), sliceMemoryMb (32–65536, ≥ reserved), sliceCpuWeight (1–10000), canBuild, dataDir, buildDir }`; agents apply it on their next pull. `dataDir`/`buildDir` (absolute paths, `null` = default) move node storage (D48); progress is in `storage.status` on the node |
 | POST | `/nodes/:id/builder` | platform admin **session** | `{ builder: boolean }`; lets the node claim git builds |
 | POST | `/nodes/join-token` | platform admin **session** | single-use, 1 h; 403 for API keys / OAuth tokens |
 | POST | `/nodes/:id/drain` \| `/resume` | platform admin **session** | |
@@ -76,7 +77,8 @@ single-use join token and returns the node's long-lived token.
   (server cap 25). The agent sends `wait=8` to stay under Bun's default 10 s idle timeout
   (`CONNECTION_IDLE_TIMEOUT`), and re-pulls without `If-None-Match` after a failed converge so
   expired presigned release URLs are reissued. The token is checked before the wait.
-- `POST /api/agent/heartbeat` — stats + actual state version every ~10 s.
+- `POST /api/agent/heartbeat` — stats + actual state version every ~10 s, plus `storage` (what `skiff-storage.service` last applied).
+- `GET /api/agent/storage` — `{ dataDir, buildDir }` for the node's root `skiff-storage.service`, which re-reads the paths here instead of trusting the agent (D48).
 - `POST /api/agent/telemetry` — pre-aggregated 1-minute access buckets (never raw requests).
 - `GET /api/agent/workloads/:id/activation` — decrypted env/secret-file values for a workload
   owned by the calling node. Never cached on disk by the agent.

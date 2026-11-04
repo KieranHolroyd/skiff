@@ -14,13 +14,18 @@ import {
 	canAdministerPlatform,
 	canViewPlatform,
 	contentUrl,
+	nodeStorageStatusSchema,
+	nodeUpdateSchema,
 	type DesiredState,
+	type NodeStorage,
+	type NodeStorageStatus,
 	type Heartbeat,
+	type NodeUpdate,
 	type Principal,
 	type RouteSpec,
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
-import { CoreError, NotFoundError, UnauthorizedError } from './errors.ts';
+import { CoreError, NotFoundError, UnauthorizedError, ValidationError } from './errors.ts';
 import { siteKeyFor } from './config.ts';
 import { newId, randomToken, sha256Hex, parseJson } from './util.ts';
 import type { ParsedConfig } from '@skiff/site-config';
@@ -48,8 +53,14 @@ export interface NodeView {
 	agentVersion: string | null;
 	lastHeartbeatAt: string | null;
 	stats: unknown;
-	/** True when this node polls for git-build jobs (D3). */
+	/** True when this node's Builder may claim git-build jobs (D45, D47). */
 	canBuild: boolean;
+	/** `skiff-workloads.slice` memory budget, in MB (D42). */
+	sliceMemoryMb: number;
+	/** `skiff-workloads.slice` CPUWeight. */
+	sliceCpuWeight: number;
+	/** Requested storage locations (`null` = install default) and what the node last reported (D48). */
+	storage: NodeStorage & { status: NodeStorageStatus | null };
 	createdAt: string;
 }
 
@@ -69,6 +80,13 @@ export class NodeService {
 			lastHeartbeatAt: row.lastHeartbeatAt ? new Date(row.lastHeartbeatAt).toISOString() : null,
 			stats: parseJson(row.statsJson, null),
 			canBuild: row.canBuild,
+			sliceMemoryMb: row.sliceMemoryMb,
+			sliceCpuWeight: row.sliceCpuWeight,
+			storage: {
+				dataDir: row.storageDataDir,
+				buildDir: row.storageBuildDir,
+				status: storageStatus(row.storageStatusJson),
+			},
 			createdAt: new Date(row.createdAt).toISOString(),
 		};
 	}
@@ -202,6 +220,7 @@ export class NodeService {
 				agentVersion: input.agentVersion,
 				lastHeartbeatAt: now,
 				statsJson: input.stats ? JSON.stringify(input.stats) : node.statsJson,
+				storageStatusJson: input.storage ? JSON.stringify(input.storage) : node.storageStatusJson,
 				updatedAt: now,
 			})
 			.where(eq(nodes.id, node.id))
@@ -276,6 +295,77 @@ export class NodeService {
 			result: 'ok',
 		});
 		return this.view({ ...node, canBuild: builder });
+	}
+
+	/**
+	 * Edit operator settings: name, the address the edge proxies to, the workload-slice budget and
+	 * the Builder role. The slice budget cannot drop below what admitted workloads already reserve
+	 * (D42), because the kernel limit would then OOM-kill workloads the control plane accepted.
+	 * Every change is in desired state, so agents converge on their next pull.
+	 */
+	update(principal: Principal, nodeId: string, input: NodeUpdate): NodeView {
+		this.assertPlatformAdmin(principal);
+		const parsed = nodeUpdateSchema.safeParse(input);
+		if (!parsed.success)
+			throw new ValidationError(parsed.error.issues.map((issue) => issue.message).join('; '));
+		const patch = parsed.data;
+		const node = this.ctx.db.select().from(nodes).where(eq(nodes.id, nodeId)).get();
+		if (!node) throw new NotFoundError('Node');
+
+		if (patch.sliceMemoryMb !== undefined && patch.sliceMemoryMb < node.sliceMemoryMb) {
+			const reserved =
+				this.ctx.workloads.capacityInternal().find((item) => item.nodeId === nodeId)?.reservedMemoryMb ?? 0;
+			if (patch.sliceMemoryMb < reserved)
+				throw new ValidationError(
+					`Workloads on ${node.name} already reserve ${reserved} MB; the slice budget cannot be lower than that. Move or shrink workloads first.`,
+				);
+		}
+
+		const changes: Partial<typeof nodesTable.$inferInsert> = {};
+		if (patch.name !== undefined && patch.name !== node.name) changes.name = patch.name;
+		if (patch.publicAddress !== undefined) {
+			const address = patch.publicAddress || null;
+			if (address !== node.publicAddress) changes.publicAddress = address;
+		}
+		if (patch.sliceMemoryMb !== undefined && patch.sliceMemoryMb !== node.sliceMemoryMb)
+			changes.sliceMemoryMb = patch.sliceMemoryMb;
+		if (patch.sliceCpuWeight !== undefined && patch.sliceCpuWeight !== node.sliceCpuWeight)
+			changes.sliceCpuWeight = patch.sliceCpuWeight;
+		if (patch.canBuild !== undefined && patch.canBuild !== node.canBuild) changes.canBuild = patch.canBuild;
+		const dataDir = patch.dataDir === undefined ? node.storageDataDir : patch.dataDir || null;
+		const buildDir = patch.buildDir === undefined ? node.storageBuildDir : patch.buildDir || null;
+		if (dataDir && buildDir && (dataDir === buildDir || dataDir.startsWith(`${buildDir}/`) || buildDir.startsWith(`${dataDir}/`)))
+			throw new ValidationError('The data and build directories must be separate; neither may contain the other.');
+		if (dataDir !== node.storageDataDir) changes.storageDataDir = dataDir;
+		if (buildDir !== node.storageBuildDir) changes.storageBuildDir = buildDir;
+		if (Object.keys(changes).length === 0) return this.view(node);
+
+		const now = this.ctx.now();
+		this.ctx.db
+			.update(nodes)
+			.set({ ...changes, updatedAt: now })
+			.where(eq(nodes.id, nodeId))
+			.run();
+		this.ctx.audit.record({
+			principal,
+			action: 'node.update',
+			resource: 'node',
+			resourceId: nodeId,
+			args: changes,
+			result: 'ok',
+		});
+		// Address, slice and storage changes all reach agents through desired state.
+		this.bump();
+		return this.view({ ...node, ...changes, updatedAt: now });
+	}
+
+	/**
+	 * Storage paths for the node's root `skiff-storage.service`. It asks the control plane rather
+	 * than trusting the request file the agent drops, so only a platform admin picks paths (D48).
+	 */
+	storageFor(token: string): NodeStorage {
+		const node = this.authenticate(token);
+		return { dataDir: node.storageDataDir, buildDir: node.storageBuildDir };
 	}
 
 	rotateToken(principal: Principal, nodeId: string): { token: string } {
@@ -493,6 +583,8 @@ export class NodeService {
 			contentDomain: this.ctx.config.contentDomain,
 			platformOrigin: this.ctx.config.platformOrigin,
 			sliceMemoryMb: node.sliceMemoryMb,
+			sliceCpuWeight: node.sliceCpuWeight,
+			storage: { dataDir: node.storageDataDir, buildDir: node.storageBuildDir },
 			releases: releaseSpecs,
 			routes,
 			// Kept until every session a revocation affects has expired (share sessions last up to
@@ -514,4 +606,9 @@ export class NodeService {
 			headers: [],
 		});
 	}
+}
+
+function storageStatus(json: string | null): NodeStorageStatus | null {
+	const parsed = nodeStorageStatusSchema.safeParse(parseJson(json, null));
+	return parsed.success ? parsed.data : null;
 }

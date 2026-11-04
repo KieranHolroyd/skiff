@@ -117,7 +117,7 @@ targeted `bun test` green.
 2. A/B/C/D (done): helper + agent runtime, custom domains, git builds + Builder, environments + surfaces.
 3. Integration pass (done): API docs, protected custom-domain access, mandatory webhook secrets,
    `command`/`image` in desired state, per-node slice budget in desired state.
-4. Remaining: installer/release wiring for `skiff-helper`, `skiff-builder`, the helper socket,
+4. Remaining: installer/release wiring for `skiff-helper` (`skiff-builder` is wired, D47), the helper socket,
    `skiff-workloads.slice`, and node requirements (`systemd-run`, `podman` for tier 3); then the
    REST/MCP e2e against a dev server.
 5. Example stress project: `examples/v2-stress` provisions a process or container workload through
@@ -131,6 +131,6 @@ targeted `bun test` green.
 - **Per-preview app runtimes**: v2 runs one workload per project, so only the latest deployment is
   active (a production promote or rollback re-points the workload). Running every preview would need
   per-deployment units; deferred.
-- **Builder placement**: node flag today (`nodes.can_build`), with one job per Builder at a time.
+- **Builder placement**: settled in D47. Any node (edge included) can have the `nodes.can_build` role, one job per Builder at a time, via `skiff-builder.service` on every node.
 - **Secret rotation**: activation version is a hash of refs + public spec; rotating a secret bumps
   the version at activation without a redeploy.

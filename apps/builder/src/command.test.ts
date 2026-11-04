@@ -62,6 +62,28 @@ describe('systemd argv', () => {
 		]);
 	});
 
+	test('sandboxes the unit and runs it as the build account when a user is set', () => {
+		const argv = systemdRunArgs({
+			workDir: '/var/lib/skiff-builder/build-abc/apps/web',
+			writableDir: '/var/lib/skiff-builder/build-abc',
+			command: 'bun run build',
+			unit: unitName('bld_123'),
+			user: 'skiff-build',
+			env: { HOME: '/var/lib/skiff-builder/build-abc/.home', CI: '1' },
+		});
+		expect(argv).toContain('--property=User=skiff-build');
+		expect(argv).toContain('--property=NoNewPrivileges=yes');
+		expect(argv).toContain('--property=ProtectSystem=strict');
+		expect(argv).toContain('--property=ReadWritePaths=/var/lib/skiff-builder/build-abc');
+		expect(argv).toContain('--property=CapabilityBoundingSet=');
+		expect(argv.find((arg) => arg.startsWith('--property=InaccessiblePaths='))).toContain('-/etc/skiff');
+		expect(argv).toContain('--setenv=HOME=/var/lib/skiff-builder/build-abc/.home');
+		expect(argv).toContain('--setenv=CI=1');
+		// The command is still the last argument, after every property.
+		expect(argv.slice(-3)).toEqual(['/bin/bash', '-lc', 'bun run build']);
+		expect(argv.indexOf('--working-directory=/var/lib/skiff-builder/build-abc/apps/web')).toBe(argv.length - 4);
+	});
+
 	test('direct fallback uses the same shell boundary', () => {
 		expect(directRunArgs('bun run build')).toEqual(['/bin/bash', '-lc', 'bun run build']);
 	});

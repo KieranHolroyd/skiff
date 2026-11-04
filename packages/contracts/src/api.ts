@@ -1,5 +1,6 @@
 import * as z from 'zod';
 import { accessModes, runtimes } from './model.ts';
+import { nodeStoragePathSchema } from './storage.ts';
 
 const slug = z.string().min(3).max(40);
 export const projectCreateSchema = z.object({
@@ -114,3 +115,33 @@ export const paginationSchema = z.object({
 	cursor: z.string().max(256).optional(),
 });
 export type Pagination = z.infer<typeof paginationSchema>;
+
+/**
+ * Operator-editable node settings (platform admin). Identity (`id`, `mode`, token) is not editable
+ * here: the edge is the first node to join and a token only changes through rotation. The slice
+ * bounds match what `skiff-helper` accepts, so a saved value can always be applied.
+ */
+export const nodeUpdateSchema = z
+	.object({
+		name: z.string().trim().min(1).max(120).optional(),
+		/** `host:port` the edge proxies to over WireGuard; `null` clears it. */
+		publicAddress: z
+			.string()
+			.trim()
+			.max(253)
+			.regex(/^[A-Za-z0-9.\-[\]:]+$/, 'Use host or host:port, without a scheme or path.')
+			.nullable()
+			.optional(),
+		/** `skiff-workloads.slice` memory budget (MemoryMax), in MB. */
+		sliceMemoryMb: z.number().int().min(32).max(65_536).optional(),
+		/** `skiff-workloads.slice` CPUWeight, relative to sibling slices (systemd default 100). */
+		sliceCpuWeight: z.number().int().min(1).max(10_000).optional(),
+		/** Lets the node's Builder claim git builds. */
+		canBuild: z.boolean().optional(),
+		/** Agent state and release cache directory; `null` restores the install default (D48). */
+		dataDir: nodeStoragePathSchema.nullable().optional(),
+		/** Builder scratch directory; `null` restores the install default (D48). */
+		buildDir: nodeStoragePathSchema.nullable().optional(),
+	})
+	.strict();
+export type NodeUpdate = z.infer<typeof nodeUpdateSchema>;

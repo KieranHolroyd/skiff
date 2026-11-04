@@ -18,6 +18,10 @@ export interface AgentConfig {
 	nodeId: string;
 	/** Root for cached state, releases and site symlinks. */
 	dataDir: string;
+	/** What skiff-storage.service last applied (D48). */
+	storageStateFile: string;
+	/** Dropped to ask skiff-storage.service to apply the desired storage paths. */
+	storageRequestFile: string;
 	agentVersion: string;
 	/** Caddy admin API socket. Caddy is never reachable over TCP (D7). */
 	caddyAdminSocket: string;
@@ -274,6 +278,8 @@ export function loadConfig(env: Env = process.env): AgentConfig {
 		nodeToken,
 		nodeId,
 		dataDir,
+		storageStateFile: optional(env, 'SKIFF_STORAGE_STATE_FILE', '/etc/skiff/storage.json'),
+		storageRequestFile: optional(env, 'SKIFF_STORAGE_REQUEST_FILE', '/run/skiff/storage.request'),
 		agentVersion: optional(env, 'SKIFF_AGENT_VERSION', '0.1.0'),
 		caddyAdminSocket: optional(env, 'SKIFF_CADDY_ADMIN_SOCKET', '/var/lib/caddy/admin.sock'),
 		caddyListen,

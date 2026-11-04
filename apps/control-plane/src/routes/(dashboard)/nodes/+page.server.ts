@@ -2,7 +2,13 @@ import { fail } from '@sveltejs/kit';
 import type { NodeView } from '@skiff/core';
 import type { NodeCapacityView } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
-import { failStatus, formBoolean, formString, toFormFailure } from '../_lib/errors.js';
+import {
+	failStatus,
+	formBoolean,
+	formOptionalPositiveInt,
+	formString,
+	toFormFailure
+} from '../_lib/errors.js';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = ({ locals }) => {
@@ -65,6 +71,36 @@ export const actions: Actions = {
 				? 'Node is draining. It stops receiving new placements.'
 				: 'Node resumed and available for placements.'
 		};
+	},
+
+	updateNode: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const nodeId = formString(data, 'nodeId');
+		if (!nodeId) return fail(400, { message: 'Missing node id.' });
+		const name = formString(data, 'name');
+		if (!name) return fail(400, { message: 'Give the node a name.' });
+		const sliceMemoryMb = formOptionalPositiveInt(data, 'sliceMemoryMb');
+		const sliceCpuWeight = formOptionalPositiveInt(data, 'sliceCpuWeight');
+		if (sliceMemoryMb === null) return fail(400, { message: 'Slice memory must be a whole number of MB.' });
+		if (sliceCpuWeight === null) return fail(400, { message: 'CPU weight must be a whole number.' });
+
+		try {
+			core.nodes.update(principal, nodeId, {
+				name,
+				publicAddress: formString(data, 'publicAddress') || null,
+				sliceMemoryMb,
+				sliceCpuWeight,
+				canBuild: formBoolean(data, 'canBuild'),
+				// Blank restores the install default.
+				dataDir: formString(data, 'dataDir') || null,
+				buildDir: formString(data, 'buildDir') || null
+			});
+		} catch (error) {
+			return fail(failStatus(error), toFormFailure(error));
+		}
+
+		return { success: 'Node updated. The agent applies the change on its next pull.' };
 	},
 
 	setBuilder: async ({ request, locals }) => {

@@ -35,6 +35,12 @@ export const nodes = sqliteTable(
 		sliceCpuWeight: integer('slice_cpu_weight').notNull().default(200),
 		/** This node is allowed to claim git build jobs (D3: the homelab Builder). */
 		canBuild: integer('can_build', { mode: 'boolean' }).notNull().default(false),
+		/** Requested agent data/release-cache directory; null keeps the install default (D48). */
+		storageDataDir: text('storage_data_dir'),
+		/** Requested Builder scratch directory; null keeps the install default (D48). */
+		storageBuildDir: text('storage_build_dir'),
+		/** Last report from the node's skiff-storage.service (`NodeStorageStatus`). */
+		storageStatusJson: text('storage_status_json'),
 		createdAt: integer('created_at').notNull().$defaultFn(now),
 		updatedAt: integer('updated_at').notNull().$defaultFn(now),
 	},

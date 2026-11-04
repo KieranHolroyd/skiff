@@ -10,6 +10,7 @@
 		"build": "bun build --compile --outfile dist/skiff-agent src/main.ts"
 	},
 	"dependencies": {
+		"@skiff/builder": "workspace:*",
 		"@skiff/contracts": "workspace:*",
 		"@skiff/site-config": "workspace:*"
 	},

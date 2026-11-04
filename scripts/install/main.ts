@@ -35,6 +35,8 @@ import { parseSemver } from '../../packages/contracts/src/semver.ts';
 import { TRIGGER_PATH_UNIT, triggerUnits } from '../update-self/units.ts';
 import { CONFIG_COMMAND, CONFIG_PATH_UNIT, CONFIG_SERVICE_UNIT, ensurePlatformConfigUnits } from '../platform-config/units.ts';
 import { readEnvFile, writeEnvFile } from './env-file.ts';
+import { BUILDER_UNIT, ensureBuilder, linkAgentCommands } from '../systemd/builder.ts';
+import { ensureStorageUnits, STORAGE_PATH_UNIT } from '../systemd/storage.ts';
 
 const SOURCE = process.env.SKIFF_SOURCE_DIR ? resolve(process.env.SKIFF_SOURCE_DIR) : resolve(import.meta.dir, '../..');
 const OPT_DIR = process.env.SKIFF_OPT_DIR ?? '/opt/skiff';
@@ -455,6 +457,7 @@ function buildRelease(env: Map<string, string>): string {
 	run(BUN_BIN, ['run', '--cwd', 'apps/cli', 'build'], { cwd: join(release, 'repo') });
 	cpSync(join(release, 'repo', 'apps', 'agent', 'dist', 'skiff-agent'), join(release, 'agent', 'skiff-agent'));
 	chmodSync(join(release, 'agent', 'skiff-agent'), 0o755);
+	linkAgentCommands(release);
 	ensureDir(join(release, 'cli'), '0755', 'root:root');
 	cpSync(join(release, 'repo', 'apps', 'cli', 'dist', 'skif.js'), join(release, 'cli', 'skif.js'));
 	chmodSync(join(release, 'cli', 'skif.js'), 0o644);
@@ -815,7 +818,7 @@ function waitFor(label: string, check: () => boolean, timeoutMs = 60_000): void 
 function startServices(): void {
 	step('Start services');
 	if (options.dryRun) {
-		log('would enable and restart skiff-control-plane, skiff-agent');
+		log(`would enable and restart skiff-control-plane, skiff-agent, ${BUILDER_UNIT}, ${STORAGE_PATH_UNIT}`);
 		return;
 	}
 	run('systemctl', ['enable', 'skiff-control-plane.service']);
@@ -827,6 +830,26 @@ function startServices(): void {
 		run('systemctl', ['enable', 'skiff-agent.service']);
 		run('systemctl', ['restart', 'skiff-agent.service']);
 		waitFor('agent socket', () => existsSync(join(RUN_DIR, 'agent.sock')), 90_000);
+	}
+	if (!options.noAgent) {
+		// Every node can build once an admin turns the Builder role on (D47); until then it idles.
+		// On a first install agent.env does not exist yet, so bootstrapNode starts it after enrolment.
+		ensureBuilder({
+			systemdDir: SYSTEMD_DIR,
+			optDir: OPT_DIR,
+			agentEnvFile: AGENT_ENV_FILE,
+			run: (cmd) => void run(cmd[0]!, cmd.slice(1), { allowFailure: true }),
+			capture: (cmd) => capture(cmd[0]!, cmd.slice(1)),
+			log,
+		});
+		// Storage locations can be changed from the dashboard after install (D48).
+		ensureStorageUnits({
+			systemdDir: SYSTEMD_DIR,
+			optDir: OPT_DIR,
+			agentEnvFile: AGENT_ENV_FILE,
+			run: (cmd) => void run(cmd[0]!, cmd.slice(1), { allowFailure: true }),
+			log,
+		});
 	}
 }
 
@@ -901,6 +924,8 @@ function bootstrapNode(env: Map<string, string>, release: string): void {
 	if (result.code !== 0) fail('Node enrollment failed.');
 	// The agent unit is gated on agent.env; restart to pick it up.
 	run('systemctl', ['restart', 'skiff-agent.service']);
+	run('systemctl', ['restart', BUILDER_UNIT], { allowFailure: true });
+	run('systemctl', ['restart', STORAGE_PATH_UNIT], { allowFailure: true });
 }
 
 function publicHealth(env: Map<string, string>): void {

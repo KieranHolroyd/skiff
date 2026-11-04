@@ -172,7 +172,10 @@ export class WorkloadRuntime {
 		if (signal.aborted) return;
 
 		try {
-			await this.helper.ensureSlice({ memoryMb: state.sliceMemoryMb ?? this.sliceMemoryMb });
+			await this.helper.ensureSlice({
+				memoryMb: state.sliceMemoryMb ?? this.sliceMemoryMb,
+				...(state.sliceCpuWeight ? { cpuWeight: state.sliceCpuWeight } : {}),
+			});
 		} catch (error) {
 			// Without the slice every unit would start beside the platform services. Report each
 			// workload as failed, keep static serving untouched, and retry later.

@@ -8,7 +8,15 @@
  *
  * Optional: `SKIFF_GIT_TOKEN` for private HTTPS repositories (never logged), and
  * `SKIFF_BUILDER_SYSTEMD=false` to force direct execution on a development workstation.
+ *
+ * On a node, `skiff-builder.service` runs `skiff-agent builder` with the agent's own
+ * `/etc/skiff/agent.env`, so every enrolled node can build once an admin turns the role on (D47).
+ * Builds then run as `SKIFF_BUILDER_USER` (default `skiff-build`) in a sandboxed transient unit.
  */
+
+/** Toolchains a build can find: Skiff's own Bun first, then the system's. */
+export const DEFAULT_BUILD_PATH =
+	'/opt/skiff/current/runtime/bin:/opt/skiff/runtime/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 
 export interface BuilderConfig {
 	controlUrl: string;
@@ -22,6 +30,12 @@ export interface BuilderConfig {
 	timeoutSeconds: number;
 	memoryMax: string;
 	cpuQuota: string;
+	/** Account each sandboxed build runs as; null runs as the daemon's own user (development). */
+	buildUser: string | null;
+	/** PATH inside the build. */
+	buildPath: string;
+	/** How long to wait before asking again while this node does not have the Builder role. */
+	idlePollMs: number;
 }
 
 export class ConfigError extends Error {
@@ -68,15 +82,29 @@ export function loadConfig(env: Env = process.env): BuilderConfig {
 
 	const explicitSystemd = truthy(env.SKIFF_BUILDER_SYSTEMD);
 	const available = process.platform === 'linux' && Boolean(Bun.which('systemd-run'));
+	const systemd = explicitSystemd ?? available;
+	const rawUser = env.SKIFF_BUILDER_USER?.trim();
+	const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+	// Only root can start a unit as another user; never run user code as root by default.
+	const buildUser =
+		rawUser === 'none' || rawUser === '' ? null : rawUser ?? (systemd && isRoot ? 'skiff-build' : null);
+	if (buildUser && !/^[a-z_][a-z0-9_-]{0,31}$/.test(buildUser))
+		throw new ConfigError('SKIFF_BUILDER_USER must be a plain system user name');
+	if (buildUser && !systemd) throw new ConfigError('SKIFF_BUILDER_USER needs systemd-run (SKIFF_BUILDER_SYSTEMD)');
+	if (isRoot && !buildUser)
+		throw new ConfigError('Refusing to run builds as root; set SKIFF_BUILDER_USER and enable systemd-run');
 	return {
 		controlUrl,
 		nodeToken: required(env, 'SKIFF_NODE_TOKEN'),
 		buildDir: required(env, 'SKIFF_BUILD_DIR'),
 		gitToken: env.SKIFF_GIT_TOKEN?.trim() || null,
 		pollMs: positiveInt(env, 'SKIFF_BUILDER_POLL_MS', 5_000),
-		systemd: explicitSystemd ?? available,
+		systemd,
 		timeoutSeconds: positiveInt(env, 'SKIFF_BUILDER_TIMEOUT_SECONDS', 600),
 		memoryMax: env.SKIFF_BUILDER_MEMORY_MAX?.trim() || '2G',
 		cpuQuota: env.SKIFF_BUILDER_CPU_QUOTA?.trim() || '200%',
+		buildUser,
+		buildPath: env.SKIFF_BUILDER_PATH?.trim() || DEFAULT_BUILD_PATH,
+		idlePollMs: positiveInt(env, 'SKIFF_BUILDER_IDLE_POLL_MS', 30_000),
 	};
 }

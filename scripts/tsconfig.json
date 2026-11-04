@@ -8,6 +8,7 @@
 		"recovery-kit.ts",
 		"recovery-kit.test.ts",
 		"skiff-alert.ts",
-		"install/**/*.ts"
+		"install/**/*.ts",
+		"systemd/**/*.ts"
 	]
 }

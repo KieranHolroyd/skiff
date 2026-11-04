@@ -20,6 +20,7 @@ import { WorkloadLogDrain } from './log-drain.ts';
 import { ReleaseManager } from './releases.ts';
 import { WorkloadRuntime, workloadHeartbeat } from './runtime.ts';
 import { StatsCollector } from './stats.ts';
+import { StorageRequester } from './storage.ts';
 import { DesiredStateStore, desiredStateEtag } from './state.ts';
 import { TelemetryClient } from './telemetry.ts';
 import { handleSiteRequest, normalizeHost, UsedTokenCache } from './verify.ts';
@@ -66,6 +67,7 @@ class AgentRuntime {
 	private readonly helper: HelperClient;
 	private readonly workloads: WorkloadRuntime;
 	private readonly logDrain: WorkloadLogDrain;
+	private readonly storage: StorageRequester;
 
 	private desired: DesiredState | null = null;
 	private desiredEtag: string | null = null;
@@ -111,6 +113,7 @@ class AgentRuntime {
 				)
 			: null;
 		this.helper = new HelperClient(config.helperSocket);
+		this.storage = new StorageRequester(config.storageStateFile, config.storageRequestFile);
 		this.logDrain = new WorkloadLogDrain({
 			helper: this.helper,
 			controlUrl: config.controlUrl,
@@ -512,6 +515,14 @@ class AgentRuntime {
 		if (certs.length > 0) stats.certs = certs;
 		// Actual unit state, so restart loops and OOM kills show up in the fleet view.
 		const reports = await this.workloads.refreshReports();
+		const storage = await this.storage.status();
+		// A storage move happens outside the agent's sandbox (D48); ask for it while it is due.
+		await this.storage
+			.reconcile(this.desired?.storage, storage)
+			.then((requested) => {
+				if (requested) log('info', 'Requested a storage move from skiff-storage.service');
+			})
+			.catch((error: unknown) => log('warn', `Could not request a storage move: ${errorText(error)}`));
 		const body: Heartbeat = {
 			nodeId: this.config.nodeId,
 			agentVersion: this.config.agentVersion,
@@ -520,6 +531,7 @@ class AgentRuntime {
 			caddyOk: this.caddyOk,
 			stats,
 			releases: this.releases.listReleases(),
+			...(storage ? { storage } : {}),
 			...(reports.length > 0 ? { workloads: workloadHeartbeat(reports) } : {}),
 		};
 
@@ -770,8 +782,22 @@ async function main(): Promise<void> {
 
 if (import.meta.main) {
 	// `bun src/main.ts join …` has the script at argv[1]; a compiled binary may not.
-	const joinIndex = process.argv[2] === 'join' ? 2 : process.argv[1] === 'join' ? 1 : -1;
-	if (joinIndex >= 0) {
+	const subcommand = (name: string) => (process.argv[2] === name ? 2 : process.argv[1] === name ? 1 : -1);
+	const joinIndex = subcommand('join');
+	const storageIndex = subcommand('storage');
+	if (storageIndex >= 0) {
+		// Root-only node storage moves (D48), run by skiff-storage.service.
+		const { runStorageCli } = await import('./storage-apply.ts');
+		process.exitCode = await runStorageCli(process.argv.slice(storageIndex + 1));
+	} else if (subcommand('builder') >= 0) {
+		// The git Builder ships inside the agent binary so every node can build (D47). It runs as its
+		// own unit (`skiff-builder.service`), never inside the agent's sandbox or memory budget.
+		const { runBuilder } = await import('@skiff/builder');
+		await runBuilder().catch((error: unknown) => {
+			console.error(`[skiff-agent builder] fatal: ${errorText(error)}`);
+			process.exitCode = 1;
+		});
+	} else if (joinIndex >= 0) {
 		await runJoinCli(process.argv.slice(joinIndex + 1)).catch((error: unknown) => {
 			console.error(`skiff-agent join: ${errorText(error)}`);
 			process.exitCode = 1;

@@ -11,6 +11,7 @@ import {
 	createUploadSchema,
 	finalizeUploadSchema,
 	domainCreateSchema,
+	nodeUpdateSchema,
 	logLevels,
 	logSources,
 	type LogLevel,
@@ -204,6 +205,8 @@ const api: RequestHandler = async (event) => {
 				return json(core.nodes.createJoinToken(principal, body.name), 201);
 			}
 			const nodeId = segments[1]!;
+			if (segments.length === 2 && method === 'PATCH')
+				return core.nodes.update(principal, nodeId, await readJson(request, nodeUpdateSchema));
 			if (segments[2] === 'drain' && method === 'POST')
 				return core.nodes.setDraining(principal, nodeId, true);
 			if (segments[2] === 'resume' && method === 'POST')

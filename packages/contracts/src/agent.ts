@@ -2,6 +2,7 @@ import * as z from 'zod';
 import { accessModes, deploymentStatuses, nodeStatuses, runtimes } from './model.ts';
 import { domainKinds } from './domain.ts';
 import { workloadDesiredSchema, workloadStatuses } from './workload.ts';
+import { nodeStorageSchema, nodeStorageStatusSchema } from './storage.ts';
 
 /**
  * The agent protocol (DESIGN §3.3). The control plane stores desired state per node;
@@ -71,6 +72,10 @@ export const desiredStateSchema = z.object({
 	platformOrigin: z.string().url().optional(),
 	/** This node's `skiff-workloads.slice` budget; the agent applies it before starting units. */
 	sliceMemoryMb: z.number().int().positive().optional(),
+	/** CPUWeight for the same slice; omitted by older control planes (agent default 200). */
+	sliceCpuWeight: z.number().int().positive().optional(),
+	/** Where this node should keep its data; omitted by older control planes (D48). */
+	storage: nodeStorageSchema.optional(),
 	/** Releases this node must have locally, keyed by sha256. */
 	releases: z.array(releaseSpecSchema),
 	/** Every route on this node, production and preview. */
@@ -120,6 +125,8 @@ export const heartbeatSchema = z.object({
 		certs: z.array(z.object({ host: z.string().max(253), notAfter: z.string().max(40) })).max(50),
 	}).partial().optional(),
 	releases: z.array(z.object({ sha256: z.string(), sizeBytes: z.number().int().nonnegative() })).default([]),
+	/** What the node's storage service last applied (D48). */
+	storage: nodeStorageStatusSchema.optional(),
 	/** Actual workload state, so the fleet view reflects restart loops and OOM kills (DESIGN §9). */
 	workloads: z.array(z.object({
 		id: z.string(),

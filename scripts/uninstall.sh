@@ -57,6 +57,9 @@ skiff-platform-config.service
 skiff-restore-drill.timer
 skiff-restore-drill.service
 skiff-litestream.service
+skiff-builder.service
+skiff-storage.path
+skiff-storage.service
 skiff-agent.service
 skiff-control-plane.service
 skiff-caddy.service
@@ -95,16 +98,21 @@ if [ "$PURGE" != "1" ]; then
 fi
 
 say "Purging local data and configuration"
-rm -rf "$VAR_DIR" "$SRV_DIR" "$ETC_DIR"
+# Storage moved from the dashboard (D48) lives outside the default paths; never guess-delete it.
+if [ -f "$ETC_DIR/storage.json" ]; then
+	warn "node storage was relocated; remove these by hand if they are no longer needed:"
+	grep -E '"(dataDir|buildDir)"' "$ETC_DIR/storage.json" | sed 's/^/    /' >&2 || true
+fi
+rm -rf "$VAR_DIR" "$SRV_DIR" "$ETC_DIR" /var/lib/skiff-builder
 rm -f "$CADDY_ETC_DIR/skiff.Caddyfile" "$CADDY_ETC_DIR/cloudflare.token"
 rm -rf /run/skiff
 
-for _user in skiff caddy; do
+for _user in skiff skiff-build caddy; do
 	if id -u "$_user" >/dev/null 2>&1; then
 		userdel "$_user" >/dev/null 2>&1 || warn "could not remove user $_user (a process may still be running)"
 	fi
 done
-for _group in skiff-caddy skiff; do
+for _group in skiff-caddy skiff-build skiff; do
 	if getent group "$_group" >/dev/null 2>&1; then
 		groupdel "$_group" >/dev/null 2>&1 || warn "could not remove group $_group"
 	fi
