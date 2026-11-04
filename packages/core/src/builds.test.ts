@@ -116,6 +116,28 @@ describe('build queue', () => {
 		expect(row?.logTail).toContain('claim expired');
 	});
 
+	test('deleting the project cancels its builds and a late report never deploys', async () => {
+		const { project, builderNodeId } = await projectWithSource();
+		const running = core.builds.enqueue(principal, project, { ref: 'main', promote: true });
+		clock += 1000;
+		const queued = core.builds.enqueue(principal, project, { ref: 'main', promote: true });
+		expect((await core.builds.claim(builderNodeId))?.buildId).toBe(running.id);
+
+		await core.projects.softDelete(principal, project.slug);
+		for (const id of [running.id, queued.id])
+			expect(opened.db.select().from(builds).where(eq(builds.id, id)).get()?.status).toBe('cancelled');
+		expect(await core.builds.claim(builderNodeId)).toBeNull();
+
+		// A Builder that never heard about the cancel reports success; nothing is deployed.
+		opened.sqlite.run("UPDATE builds SET status = 'building' WHERE id = ?", [running.id]);
+		await expect(core.builds.report(builderNodeId, running.id, { status: 'succeeded' })).rejects.toMatchObject({
+			code: 'not_found',
+		});
+		expect(opened.db.select().from(builds).where(eq(builds.id, running.id)).get()?.status).toBe('cancelled');
+		const restored = core.projects.requireRow(principal, project.slug, { includeDeleted: true });
+		expect(restored.productionDeploymentId).toBeNull();
+	});
+
 	test('rejects nodes that are not Builders', async () => {
 		const node = core.nodes.join({ token: core.nodes.createJoinToken(principal, 'plain').token, name: 'plain' });
 		await expect(core.builds.claim(node.nodeId)).rejects.toMatchObject({ status: 403 });

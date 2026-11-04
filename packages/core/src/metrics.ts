@@ -1,4 +1,4 @@
-import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, eq, isNull, ne, sql } from 'drizzle-orm';
 import { deployments, nodes, projects, releases } from '@skiff/db';
 import type { Principal } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
@@ -46,7 +46,10 @@ export class MetricsService {
 				total: sql<number>`count(*)`,
 			})
 			.from(deployments)
-			.where(and(eq(deployments.orgId, principal.orgId), isNotNull(deployments.status)))
+			.innerJoin(projects, eq(projects.id, deployments.projectId))
+			.where(
+				and(eq(deployments.orgId, principal.orgId), ne(deployments.status, 'deleted'), isNull(projects.deletedAt)),
+			)
 			.get();
 		const projectCount = this.ctx.db
 			.select({ count: sql<number>`count(*)` })
@@ -141,6 +144,8 @@ export class MetricsService {
 		const deploymentsRow = this.ctx.db
 			.select({ active: sql<number>`sum(case when ${deployments.status} = 'active' then 1 else 0 end)` })
 			.from(deployments)
+			.innerJoin(projects, eq(projects.id, deployments.projectId))
+			.where(isNull(projects.deletedAt))
 			.get();
 		const projectCount = this.ctx.db
 			.select({ count: sql<number>`count(*)` })

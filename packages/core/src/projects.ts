@@ -288,6 +288,8 @@ export class ProjectService {
 					.set({ deletedAt: now, purgeAt: now + limits.trashDays * 86_400_000, updatedAt: now })
 					.where(eq(projects.id, row.id))
 					.run();
+				// A queued or running git build must not land a deployment in a deleted project.
+				this.ctx.builds.cancelForProject(row.id);
 				this.bump(principal.orgId);
 			},
 		);
@@ -357,6 +359,8 @@ export class ProjectService {
 	 * service so their managed Cloudflare records are removed too (docs/OPERATIONS.md L1/L2).
 	 */
 	async purgeRow(row: ProjectRow): Promise<void> {
+		// Builds that slipped past the soft-delete cancel must not outlive their project.
+		this.ctx.builds.cancelForProject(row.id);
 		// Outside the transaction: Cloudflare is a network call. A failure is audited by the domain
 		// service and the row is still removed; prune reports any record it could not clean up.
 		await this.ctx.domains.removeForProject(row);
