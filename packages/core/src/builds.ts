@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { and, asc, desc, eq, lt } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, lt } from 'drizzle-orm';
 import { builds, deployments, gitSources, nodes, projects, releases } from '@skiff/db';
 import {
 	buildCreateSchema,
@@ -252,7 +252,16 @@ export class BuildService {
 		if (row.status !== 'building') throw new ConflictError(`Build is already ${row.status}.`);
 		if (input.status === 'queued') throw new ValidationError('A Builder cannot return a build to the queue.');
 		const project = this.ctx.db.select().from(projects).where(eq(projects.id, row.projectId)).get();
-		if (!project) throw new NotFoundError('Project');
+		if (!project || project.deletedAt) {
+			// The project was deleted mid-build: never deploy into it, and leave nothing claimed.
+			this.ctx.db
+				.update(builds)
+				.set({ status: 'cancelled', error: 'Project was deleted.', finishedAt: this.ctx.now() })
+				.where(eq(builds.id, row.id))
+				.run();
+			void this.cleanupObject(`builds/${row.id}.zip`);
+			throw new NotFoundError('Project');
+		}
 		const now = this.ctx.now();
 		const system = buildPrincipal({
 			kind: 'system',
@@ -350,6 +359,23 @@ export class BuildService {
 	 */
 	appendLog(nodeId: string, buildId: string, text: string): boolean {
 		return this.ctx.logs.appendBuildText(nodeId, buildId, text);
+	}
+
+	/** Cancel every queued or running build of a project being deleted. Returns the count. */
+	cancelForProject(projectId: string): number {
+		const active = this.ctx.db
+			.select({ id: builds.id })
+			.from(builds)
+			.where(and(eq(builds.projectId, projectId), inArray(builds.status, ACTIVE)))
+			.all();
+		if (!active.length) return 0;
+		this.ctx.db
+			.update(builds)
+			.set({ status: 'cancelled', error: 'Project was deleted.', finishedAt: this.ctx.now() })
+			.where(and(eq(builds.projectId, projectId), inArray(builds.status, ACTIVE)))
+			.run();
+		for (const { id } of active) void this.cleanupObject(`builds/${id}.zip`);
+		return active.length;
 	}
 
 	cancel(principal: Principal, project: ProjectRow, buildId: string): BuildView {

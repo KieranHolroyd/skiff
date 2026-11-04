@@ -267,6 +267,8 @@ export class ProjectService {
 					.set({ deletedAt: now, purgeAt: now + limits.trashDays * 86_400_000, updatedAt: now })
 					.where(eq(projects.id, row.id))
 					.run();
+				// A queued or running git build must not land a deployment in a deleted project.
+				this.ctx.builds.cancelForProject(row.id);
 				this.bump(principal.orgId);
 			},
 		);
@@ -303,9 +305,23 @@ export class ProjectService {
 		for (const row of expired) {
 			if (!row.purgeAt || row.purgeAt > now) continue;
 			orgIds.add(row.orgId);
+			// Builds that slipped past the soft-delete cancel must not outlive their project.
+			this.ctx.builds.cancelForProject(row.id);
 			this.ctx.sqlite.transaction(() => {
+				// Everything keyed by the project goes with it: a leftover workload would keep its
+				// node memory reserved, and leftover environments/builds point at deleted deployments.
+				this.ctx.sqlite.run('DELETE FROM workloads WHERE project_id = ?', [row.id]);
+				this.ctx.sqlite.run('DELETE FROM environments WHERE project_id = ?', [row.id]);
+				this.ctx.sqlite.run('DELETE FROM builds WHERE project_id = ?', [row.id]);
+				this.ctx.sqlite.run('DELETE FROM git_sources WHERE project_id = ?', [row.id]);
+				this.ctx.sqlite.run('DELETE FROM log_events WHERE project_id = ?', [row.id]);
+				this.ctx.sqlite.run('DELETE FROM secrets WHERE project_id = ?', [row.id]);
 				this.ctx.sqlite.run('DELETE FROM deployments WHERE project_id = ?', [row.id]);
 				this.ctx.sqlite.run('DELETE FROM upload_sessions WHERE project_id = ?', [row.id]);
+				this.ctx.sqlite.run(
+					'DELETE FROM share_redemptions WHERE share_link_id IN (SELECT id FROM share_links WHERE project_id = ?)',
+					[row.id],
+				);
 				this.ctx.sqlite.run('DELETE FROM share_links WHERE project_id = ?', [row.id]);
 				this.ctx.sqlite.run('DELETE FROM domains WHERE project_id = ?', [row.id]);
 				this.ctx.sqlite.run('DELETE FROM slug_redirects WHERE project_id = ?', [row.id]);

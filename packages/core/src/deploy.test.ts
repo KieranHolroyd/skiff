@@ -107,6 +107,35 @@ describe('project lifecycle', () => {
 		expect(restored.productionDeploymentId).toBe(deployment.id);
 	});
 
+	test('purging a deleted project removes its deployments and everything keyed by it', async () => {
+		const p = await project(orgA, 'purge-me');
+		await core.uploads.deployInline(orgA, p, [file('index.html', 'bye')]);
+		const before = core.metrics.status(orgA).deployments.total;
+		const tables = ['deployments', 'environments', 'workloads', 'builds', 'git_sources', 'log_events', 'secrets'];
+		const insertedAt = clock;
+		opened.sqlite.run(
+			`INSERT INTO workloads (id, org_id, project_id, deployment_id, node_id, runtime, status, spec_json, memory_mb, created_at, updated_at)
+			 VALUES ('wl_purge', 'org_a', ?, 'dep_x', 'node_x', 'process', 'running', '{}', 256, ?, ?)`,
+			[p.id, insertedAt, insertedAt],
+		);
+		opened.sqlite.run(
+			`INSERT INTO log_events (org_id, project_id, source, stream, message, ts) VALUES ('org_a', ?, 'system', 'system', 'x', ?)`,
+			[p.id, insertedAt],
+		);
+		const count = (table: string) =>
+			opened.sqlite.query<{ n: number }, [string]>(`SELECT COUNT(*) AS n FROM ${table} WHERE project_id = ?`).get(p.id)!.n;
+		expect(count('deployments')).toBeGreaterThan(0);
+
+		await core.projects.softDelete(orgA, 'purge-me');
+		// Status counts stop including the deleted project's deployments straight away.
+		expect(core.metrics.status(orgA).deployments.total).toBeLessThan(before);
+
+		clock += (limits.trashDays + 1) * 86_400_000;
+		expect(core.projects.purgeExpired()).toBeGreaterThanOrEqual(1);
+		for (const table of tables) expect(count(table)).toBe(0);
+		expect(opened.sqlite.query('SELECT 1 FROM projects WHERE id = ?').get(p.id)).toBeNull();
+	});
+
 	test('an old slug is released once its rename redirect expires', async () => {
 		await project(orgA, 'old-name');
 		await core.projects.update(orgA, 'old-name', { slug: 'new-name' });
