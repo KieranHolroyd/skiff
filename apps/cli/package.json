@@ -1,6 +1,6 @@
 {
   "name": "skif",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "CLI for Skiff, a lightweight self-hosted deploy platform",
   "keywords": ["skiff", "deploy", "static-site", "self-hosted", "cli", "paas"],
   "license": "MIT",
