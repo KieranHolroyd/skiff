@@ -59,6 +59,10 @@ systemd units, Caddy hand-off, edge-node enrollment, health check and rollback. 
 
 Requirements: Bun ≥ 1.4, a Caddy binary for the agent (dev), and optionally Docker/R2.
 
+TypeScript 7 (the native compiler) type-checks the Bun packages and scripts. The SvelteKit app
+keeps TypeScript 6 for now because `svelte-check` and `typescript-eslint` still use the classic
+compiler API that the native port does not expose; both versions are installed side by side.
+
 ```sh
 bun install
 
