@@ -205,6 +205,12 @@ checkout with `SKIFF_SOURCE_DIR=/path/to/skiff`.
    agent takes over the whole Caddy config (platform + content routes) via the admin API.
 8. **Node enrolment** — creates the edge node (or reuses it), rotates its token, writes
    `/etc/skiff/agent.env`, bumps the desired-state watermark, and starts the agent.
+   It also installs `skiff-builder.service` and the `skiff-build` account. The Builder idles until
+   you give the node the Builder role (**Nodes → Edit node**). It then claims one git build at a
+   time and runs it with `systemd-run` as `skiff-build`: 2 GB, 200% CPU, 10 minutes, writable
+   checkout only, no access to Skiff state or the node token (D47). Workers get the same unit from
+   the WireGuard guide. Builds use the toolchains on the node (Skiff's Bun is on `PATH`; install
+   Node or anything else the build command needs).
 9. **Health** — waits for the public platform URL, then prints a one-time magic-link sign-in URL.
    With SMTP configured it is emailed instead.
 
@@ -375,6 +381,32 @@ sudo skiff-uninstall --purge --yes   # remove local state too (R2 is never touch
 The default keeps `/var/lib/skiff`, `/etc/skiff` and `/etc/caddy/Caddyfile` so a
 reinstall can reuse the database and master key. `--purge` also removes the system users.
 Backups and releases in R2 survive both modes by design.
+
+### 4.2.1 Moving node storage to another disk
+
+**Nodes → Edit node → Storage** sets where a node keeps its release cache and agent state (what
+Caddy serves sites from) and its build scratch. Leave a field blank for the default
+(`/var/lib/skiff/agent`, `/var/lib/skiff-builder`). The change reaches the agent in desired state,
+and the agent asks `skiff-storage.path` to apply it. The root `skiff-storage.service` re-reads the
+paths from the control plane, checks them, and then:
+
+1. waits if a build is running (the node card says so; it retries every minute);
+2. for the data directory: stops the agent (and with it the Builder), runs `cp -a` into the new
+   directory, re-points `sites/` links, sets `SKIFF_DATA_DIR` in `/etc/skiff/agent.env`, adds
+   `ReadWritePaths=` in `skiff-agent.service.d/skiff-storage.conf`, and starts the agent. Caddy
+   keeps serving the old copy until the agent re-applies its config; the old copy is deleted about
+   20 s after the agent is back. If the agent does not stay up, everything is put back;
+3. for the build directory: writes `skiff-builder.service.d/skiff-storage.conf` and restarts an
+   idle Builder. Nothing is copied.
+
+Prepare the target first: mount the disk (add it to `/etc/fstab` so it survives a reboot), and make
+sure every parent directory can be traversed by the `skiff` user. The target must be empty or new.
+Paths under `/etc`, `/usr`, `/home`, `/tmp`, `/run`, `/opt/skiff`, the control-plane data and bare
+mount roots such as `/mnt` are refused. Use `/mnt/data/skiff` rather than `/mnt/data`.
+
+The result is in `/etc/skiff/storage.json` and on the node card; details are in
+`journalctl -u skiff-storage`. The control plane's own data (`/var/lib/skiff/data`, database,
+objects and backups) is not moved by this; stop the services and relocate it by hand.
 
 ### 4.3 Platform settings from the dashboard
 
@@ -701,6 +733,7 @@ minutes, not hours. Cloudflare Tunnel backup ingress and DNS failover are future
 | `TasksMax=`, `LimitNOFILE=` | Prevents fork/descriptor exhaustion. |
 | `LoadCredential=master-key:…` | The master key is placed in the service's credential directory (`%d`), not the environment, and is not readable by other services. `/etc/skiff/master.key` stays `0400 root`. |
 | `CapabilityBoundingSet=` (empty) | Control plane, agent, Litestream and drill have no capabilities. Only Caddy keeps `CAP_NET_BIND_SERVICE`. |
+| `skiff-builder.service` | Root, because only root can start a transient unit as another user. It keeps only `CAP_CHOWN`/`CAP_DAC_*`/`CAP_FOWNER` (hand a checkout to `skiff-build`, then read and delete it). Each build unit runs as `skiff-build` with `NoNewPrivileges`, `ProtectSystem=strict`, `ReadWritePaths=` its checkout, `InaccessiblePaths=` for `/etc/skiff`, `/var/lib/skiff`, `/run/skiff`, `/srv/skiff` and `/run/skiff-workloads`, no capabilities, and `TasksMax=1024`. The build gets only `HOME`, `PATH` and `CI`, never the daemon's environment. |
 | `ProtectProc=invisible` (control plane) | Hides other processes. `ProcSubset=pid` is deliberately not set because Bun/DuckDB read `/proc/cpuinfo` and `/proc/meminfo`; the agent also needs `/proc` for node metrics. |
 | Setgid `/run/skiff` | The alternative to a root socket helper: socket ownership is controlled by directory group inheritance, and no service joins another's primary group. |
 
@@ -716,6 +749,7 @@ Review drift with:
 ```sh
 systemd-analyze security skiff-control-plane.service
 systemd-analyze security skiff-agent.service
+systemd-analyze security skiff-builder.service
 systemd-analyze security caddy.service
 ```
 

@@ -37,6 +37,7 @@ import {
 } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { compareSemver, parseSemver } from '../../packages/contracts/src/semver.ts';
+import { linkAgentCommands } from '../systemd/builder.ts';
 
 export const CONTROL_PLANE = 'skiff-control-plane.service';
 export const AGENT = 'skiff-agent.service';
@@ -866,6 +867,7 @@ export function assembleRelease(release: string, bunBin: string): void {
 	if (existsSync(agent)) {
 		copyFileSync(agent, join(release, 'agent', 'skiff-agent'));
 		chmodSync(join(release, 'agent', 'skiff-agent'), 0o755);
+		linkAgentCommands(release);
 	}
 	// Optional: `/usr/local/bin/skif` falls back to the previous release if this one lacks it.
 	const cli = join(release, 'repo', 'apps', 'cli', 'dist', 'skif.js');

@@ -199,9 +199,91 @@ ReadWritePaths=/var/lib/skiff /run/skiff
 WantedBy=multi-user.target
 EOF`;
 
+	// Same unit the installer writes on the edge (scripts/systemd/builder.ts). It idles until the
+	// node has the Builder role, so it is safe to install on every worker.
+	const builderUnit = `sudo useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin skiff-build
+# Marks an agent binary with the builder subcommand; the unit only starts when it exists.
+sudo ln -sf skiff-agent /opt/skiff/current/agent/skiff-builder
+sudo tee /etc/systemd/system/skiff-builder.service >/dev/null <<'EOF'
+[Unit]
+Description=Skiff git Builder (idle unless this node has the Builder role)
+After=network-online.target skiff-agent.service
+Wants=network-online.target
+ConditionPathExists=/etc/skiff/agent.env
+ConditionPathExists=/opt/skiff/current/agent/skiff-builder
+PartOf=skiff-agent.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/skiff/agent.env
+Environment=SKIFF_BUILD_DIR=/var/lib/skiff-builder
+Environment=SKIFF_BUILDER_USER=skiff-build
+Environment=HOME=/var/lib/skiff-builder
+StateDirectory=skiff-builder
+StateDirectoryMode=0711
+WorkingDirectory=/var/lib/skiff-builder
+ExecStart=/opt/skiff/current/agent/skiff-builder builder
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=60
+KillSignal=SIGTERM
+MemoryMax=1G
+TasksMax=256
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER
+
+[Install]
+WantedBy=multi-user.target
+EOF`;
+
+	// Same units as scripts/systemd/storage.ts: lets the dashboard move this node's data (D48).
+	const storageUnits = `sudo ln -sf skiff-agent /opt/skiff/current/agent/skiff-storage
+sudo tee /etc/systemd/system/skiff-storage.path >/dev/null <<'EOF'
+[Unit]
+Description=Move Skiff node storage when the agent requests it
+ConditionPathExists=/etc/skiff/agent.env
+ConditionPathExists=/opt/skiff/current/agent/skiff-storage
+
+[Path]
+PathExists=/run/skiff/storage.request
+Unit=skiff-storage.service
+
+[Install]
+WantedBy=paths.target
+EOF
+sudo tee /etc/systemd/system/skiff-storage.service >/dev/null <<'EOF'
+[Unit]
+Description=Skiff node storage move (requested from the dashboard)
+ConditionPathExists=/etc/skiff/agent.env
+ConditionPathExists=/opt/skiff/current/agent/skiff-storage
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/rm -f /run/skiff/storage.request
+ExecStart=/opt/skiff/current/agent/skiff-storage storage apply
+SuccessExitStatus=1
+TimeoutStartSec=6h
+Nice=10
+IOSchedulingClass=idle
+EOF`;
+
 	const startAgent = `sudo systemctl daemon-reload
-sudo systemctl enable --now skiff-agent
-journalctl -u skiff-agent -f`;
+sudo systemctl enable --now skiff-agent skiff-builder skiff-storage.path
+journalctl -u skiff-agent -u skiff-builder -f`;
 
 	const workerFirewall =
 		$derived(`# Optional nftables rule on the worker: only the edge may reach Caddy.
@@ -470,6 +552,24 @@ curl -sS -o /dev/null -w '%{http_code}\\n' -H 'Host: ${probeHost}' http://${tunn
 					<h3 class="text-sm font-medium">systemd unit</h3>
 					<CodeBlock label="worker · /etc/systemd/system/skiff-agent.service" code={agentUnit} />
 				</div>
+				<div class="space-y-2">
+					<h3 class="text-sm font-medium">Builder unit</h3>
+					<p class="text-sm text-muted-foreground">
+						Lets this node run git builds once you give it the Builder role on the Nodes page. Until
+						then it idles. Builds run as <code class="font-mono">skiff-build</code> in a sandboxed
+						transient unit (2 GB, 200% CPU, 10 minutes), so install the toolchains they need, such as
+						Node or Bun, on the worker.
+					</p>
+					<CodeBlock label="worker · /etc/systemd/system/skiff-builder.service" code={builderUnit} />
+				</div>
+				<div class="space-y-2">
+					<h3 class="text-sm font-medium">Storage units</h3>
+					<p class="text-sm text-muted-foreground">
+						Let you move this node's release cache and build directory to another disk later from
+						<span class="font-medium">Edit node</span>. The move itself runs as root on the worker.
+					</p>
+					<CodeBlock label="worker · skiff-storage.path + skiff-storage.service" code={storageUnits} />
+				</div>
 			</Card.Content>
 		</Card.Root>
 
@@ -479,7 +579,8 @@ curl -sS -o /dev/null -w '%{http_code}\\n' -H 'Host: ${probeHost}' http://${tunn
 				<Card.Description>
 					The join command registers the node with its tunnel address,
 					<code class="font-mono">{tunnelAddress}</code>, which the edge then proxies to. The
-					address is set at join time; to change it later, join again with a new command.
+					address is set at join time; change it later with <span class="font-medium">Edit node</span> on
+					the Nodes page.
 				</Card.Description>
 			</Card.Header>
 			<Card.Content class="space-y-4">

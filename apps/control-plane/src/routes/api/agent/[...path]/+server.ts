@@ -59,6 +59,11 @@ const handler: RequestHandler = async (event) => {
 			return core.nodes.heartbeat(token, input);
 		}
 
+		if (action === 'storage') {
+			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
+			return core.nodes.storageFor(token);
+		}
+
 		const activation = /^workloads\/([^/]+)\/activation$/.exec(action);
 		if (activation) {
 			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);

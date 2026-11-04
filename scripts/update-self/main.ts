@@ -19,7 +19,7 @@ import {
 	rmSync,
 	writeFileSync,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import {
 	SELF_UPDATE_DEFAULTS,
 	type SelfUpdateLogLevel,
@@ -29,6 +29,8 @@ import {
 import { formatEnvFile, readEnvFile } from '../install/env-file.ts';
 import { TRIGGER_PATH_UNIT, triggerUnits } from './units.ts';
 import { ensurePlatformConfigUnits } from '../platform-config/units.ts';
+import { ensureBuilder, linkAgentCommands } from '../systemd/builder.ts';
+import { ensureStorageUnits } from '../systemd/storage.ts';
 import {
 	AGENT,
 	CONTROL_PLANE,
@@ -409,6 +411,30 @@ function ensureTriggerUnits(): void {
 		run: (cmd) => void run(cmd, { quiet: true, allowFailure: true }),
 		log: (message) => host.log(message),
 	});
+	// Hosts installed before D47 get the Builder unit; it idles until the node has the role. This
+	// updater's own release was built from source with the builder subcommand, so mark it too (a
+	// release assembled by an older updater lacks the link).
+	if (existsSync(AGENT_ENV_FILE)) {
+		linkAgentCommands(resolve(import.meta.dir, '../../..'));
+		ensureBuilder({
+			systemdDir: SYSTEMD_DIR,
+			optDir: layout.optDir,
+			agentEnvFile: AGENT_ENV_FILE,
+			run: (cmd) => void run(cmd, { quiet: true, allowFailure: true }),
+			capture: (cmd) => {
+				const result = run(cmd, { quiet: true, allowFailure: true });
+				return result.code === 0 ? result.stdout : null;
+			},
+			log: (message) => host.log(message),
+		});
+		ensureStorageUnits({
+			systemdDir: SYSTEMD_DIR,
+			optDir: layout.optDir,
+			agentEnvFile: AGENT_ENV_FILE,
+			run: (cmd) => void run(cmd, { quiet: true, allowFailure: true }),
+			log: (message) => host.log(message),
+		});
+	}
 }
 
 const SHIELDED = ['SIGINT', 'SIGTERM', 'SIGHUP'];

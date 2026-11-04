@@ -1,5 +1,5 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
+import { isAbsolute, join, relative, sep } from 'node:path';
 import type { BuildJob, BuildLogChunk } from '@skiff/contracts';
 import type { BuilderConfig } from './config.ts';
 import type { ControlClient } from './client.ts';
@@ -212,22 +212,34 @@ export class JobRunner {
 				})
 				.catch((error: unknown) => console.error(`[builder] ${job.buildId} progress report failed: ${errorText(error)}`));
 
-			const workDir = rootDir === '.' ? tempDir : join(tempDir, rootDir);
-			const outputPath = outputDir === '.' ? workDir : join(workDir, outputDir);
+			// A repository can make rootDir a symlink; never build (or later zip) outside the checkout.
+			const workDir = await insideCheckout(tempDir, rootDir === '.' ? tempDir : join(tempDir, rootDir), 'rootDir');
+			// A sandboxed build starts from an empty environment, so give it a HOME it can write and the
+			// node's toolchains. Direct execution (development) keeps the developer's own.
+			const buildEnv: Record<string, string> = { GIT_TERMINAL_PROMPT: '0', CI: '1' };
+			if (this.config.systemd) {
+				buildEnv.HOME = join(tempDir, '.home');
+				buildEnv.PATH = this.config.buildPath;
+				await mkdir(buildEnv.HOME, { recursive: true });
+			}
+			if (this.config.buildUser) await this.handOver(tempDir);
 			logs = new LogPump(job.buildId, this.client);
 			const argv = this.config.systemd
 				? systemdRunArgs({
 						workDir,
+						writableDir: tempDir,
 						command: job.buildCommand,
 						unit: unitName(job.buildId),
 						memoryMax: this.config.memoryMax,
 						cpuQuota: this.config.cpuQuota,
 						timeoutSeconds: this.config.timeoutSeconds,
+						user: this.config.buildUser,
+						env: buildEnv,
 					})
 				: directRunArgs(job.buildCommand);
 			const result = await runLogged(argv, {
 				cwd: workDir,
-				env: { GIT_TERMINAL_PROMPT: '0', CI: '1' },
+				env: buildEnv,
 				// The unit enforces the real timeout; this is the local watchdog.
 				timeoutMs: (this.config.timeoutSeconds + 30) * 1_000,
 				onLine: logs.push,
@@ -238,6 +250,12 @@ export class JobRunner {
 				throw new BuildFailure(`Build exceeded ${this.config.timeoutSeconds}s and was killed.`, null);
 			if (result.code !== 0) throw new BuildFailure(`Build command exited with code ${result.code}.`, result.code);
 
+			// Resolved after the build, which may have replaced outputDir with a symlink.
+			const outputPath = await insideCheckout(
+				tempDir,
+				outputDir === '.' ? workDir : join(workDir, outputDir),
+				'outputDir',
+			);
 			const zipped = await zipDirectory(outputPath);
 			const upload = await fetch(job.uploadUrl, {
 				method: 'PUT',
@@ -273,6 +291,14 @@ export class JobRunner {
 		}
 	}
 
+	/** Give the checkout to the unprivileged build account; the daemon keeps only its own scratch. */
+	private async handOver(dir: string): Promise<void> {
+		const user = this.config.buildUser!;
+		const result = await capture(['chown', '-R', '--no-dereference', `${user}:${user}`, dir]);
+		if (result.code !== 0)
+			throw new Error(`Could not hand the checkout to ${user}: ${result.stderr.trim().slice(0, 500) || `exit ${result.code}`}`);
+	}
+
 	/** Branch/tag clone first; a commit SHA (which `--branch` rejects) falls back to fetch + checkout. */
 	private async clone(job: BuildJob, dir: string): Promise<void> {
 		const url = repoUrlWithToken(job.repoUrl, this.config.gitToken);
@@ -299,6 +325,21 @@ export class JobRunner {
 				);
 		}
 	}
+}
+
+/** Resolve `path` (following symlinks) and require it to stay inside `root`. */
+export async function insideCheckout(root: string, path: string, label: string): Promise<string> {
+	const realRoot = await realpath(root);
+	let resolved: string;
+	try {
+		resolved = await realpath(path);
+	} catch {
+		throw new BuildValidationError(`${label} "${relative(root, path) || '.'}" does not exist in the checkout`);
+	}
+	const rel = relative(realRoot, resolved);
+	if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel))
+		throw new BuildValidationError(`${label} resolves outside the repository`);
+	return resolved;
 }
 
 async function commitInfo(dir: string): Promise<{ sha: string | null; message: string | null }> {

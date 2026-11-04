@@ -13,6 +13,7 @@
       "name": "@skiff/agent",
       "version": "0.1.0",
       "dependencies": {
+        "@skiff/builder": "workspace:*",
         "@skiff/contracts": "workspace:*",
         "@skiff/site-config": "workspace:*",
       },
@@ -27,7 +28,7 @@
     },
     "apps/cli": {
       "name": "@skiffy/skiff",
-      "version": "0.1.1",
+      "version": "0.2.0",
       "bin": {
         "skif": "dist/skif.js",
         "skiff": "dist/skif.js",

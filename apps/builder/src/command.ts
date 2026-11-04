@@ -44,6 +44,49 @@ export interface SystemdLimits {
 	memoryMax?: string;
 	cpuQuota?: string;
 	timeoutSeconds?: number;
+	/**
+	 * Unprivileged account the build runs as. When set, the unit is also sandboxed: it can write
+	 * only `workDir`, cannot see the node's Skiff state or secrets, and cannot gain privileges.
+	 * This is what makes it safe for any node (the edge included) to be a Builder (D47).
+	 */
+	user?: string | null;
+	/** The only writable path in the sandbox; defaults to `workDir` (the whole checkout in practice). */
+	writableDir?: string;
+	/** Variables for the build itself; systemd-run does not forward the daemon's environment. */
+	env?: Record<string, string>;
+	/** Cap on processes in the unit, so a fork bomb stays inside the build. */
+	tasksMax?: number;
+}
+
+/** Paths a build must never read, whatever account it runs as. `-` tolerates a missing path. */
+export const BUILD_INACCESSIBLE_PATHS = ['/etc/skiff', '/var/lib/skiff', '/run/skiff', '/srv/skiff', '/run/skiff-workloads'];
+
+/** Hardening applied to every sandboxed build unit. */
+function sandboxProperties(input: SystemdLimits): string[] {
+	if (!input.user) return [];
+	return [
+		`User=${input.user}`,
+		`Group=${input.user}`,
+		'NoNewPrivileges=yes',
+		'PrivateTmp=yes',
+		'PrivateDevices=yes',
+		'ProtectSystem=strict',
+		'ProtectHome=yes',
+		`ReadWritePaths=${input.writableDir ?? input.workDir}`,
+		`InaccessiblePaths=${BUILD_INACCESSIBLE_PATHS.map((path) => `-${path}`).join(' ')}`,
+		'ProtectKernelTunables=yes',
+		'ProtectKernelModules=yes',
+		'ProtectKernelLogs=yes',
+		'ProtectControlGroups=yes',
+		'ProtectClock=yes',
+		'ProtectHostname=yes',
+		'RestrictSUIDSGID=yes',
+		'RestrictRealtime=yes',
+		'LockPersonality=yes',
+		'CapabilityBoundingSet=',
+		`TasksMax=${input.tasksMax ?? 1024}`,
+		'UMask=0022',
+	];
 }
 
 /**
@@ -63,6 +106,8 @@ export function systemdRunArgs(input: SystemdLimits): string[] {
 		`--property=TimeoutStartSec=${input.timeoutSeconds ?? 600}`,
 		// TimeoutStartSec only covers startup for Type=simple; RuntimeMaxSec bounds the build.
 		`--property=RuntimeMaxSec=${input.timeoutSeconds ?? 600}`,
+		...sandboxProperties(input).map((property) => `--property=${property}`),
+		...Object.entries(input.env ?? {}).map(([key, value]) => `--setenv=${key}=${value}`),
 		`--working-directory=${input.workDir}`,
 		'/bin/bash',
 		'-lc',
