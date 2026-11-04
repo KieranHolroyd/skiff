@@ -24,6 +24,38 @@ const DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const PROJECT_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
+/**
+ * Stream a response body to disk with bounded memory, stopping as soon as it exceeds `maxBytes`.
+ * Deliberately not `Bun.write(path, response)`: on Bun 1.4.0 that never resolves (or creates the
+ * file) for large bodies, which hung the reconcile loop on an 86 MB release.
+ */
+export async function downloadToFile(
+	response: Response,
+	path: string,
+	maxBytes: number,
+	label: string,
+): Promise<number> {
+	const declared = Number(response.headers.get('content-length') ?? '');
+	if (Number.isFinite(declared) && declared > maxBytes)
+		throw new ReleaseError(`Release archive ${label} exceeds the size limit`);
+	if (!response.body) throw new ReleaseError(`Release archive ${label} has no body`);
+
+	const sink = Bun.file(path).writer();
+	let written = 0;
+	try {
+		for await (const chunk of response.body) {
+			written += chunk.byteLength;
+			if (written > maxBytes) throw new ReleaseError(`Release archive ${label} exceeds the size limit`);
+			sink.write(chunk);
+			// Let the sink drain so a fast network never buffers the whole archive in memory.
+			await sink.flush();
+		}
+	} finally {
+		await sink.end();
+	}
+	return written;
+}
+
 export class ReleaseError extends Error {
 	constructor(message: string) {
 		super(message);
@@ -422,10 +454,7 @@ export class ReleaseManager {
 					`Download of release ${spec.sha256} failed: ${response.status} ${await response.text().catch(() => '')}`,
 				);
 			}
-			await Bun.write(zipPath, response);
-			const stat = await fs.stat(zipPath);
-			if (stat.size > MAX_ARCHIVE_BYTES)
-				throw new ReleaseError(`Release archive ${spec.sha256} exceeds the size limit`);
+			await downloadToFile(response, zipPath, MAX_ARCHIVE_BYTES, spec.sha256);
 
 			// `sizeBytes`/`fileCount` describe the original artifact, while the zip also contains
 			// precompressed `.br`/`.gz` siblings. Only use them as a lower-bound sanity check;
