@@ -1,7 +1,8 @@
 name: Release CLI
 
 # Manual "Run workflow" button (Actions → Release CLI). Bumps apps/cli/package.json on main,
-# tags `cli-v<version>`, publishes `skif` to npm with provenance, and creates a GitHub release.
+# tags `cli-v<version>`, publishes `@skiffy/skiff` (the `skif` command) to npm with provenance, and
+# creates a GitHub release.
 #
 # The CLI is versioned independently of the platform (`v*` tags, release.yml).
 #
@@ -36,10 +37,14 @@ concurrency:
 
 env:
   BUN_VERSION: '1.4.0'
+  # Must match "name" in apps/cli/package.json. `npm pack` names a scoped tarball
+  # `<scope>-<name>-<version>.tgz`.
+  PACKAGE: '@skiffy/skiff'
+  TARBALL_PREFIX: 'skiffy-skiff'
 
 jobs:
   release:
-    name: Release skif
+    name: Release @skiffy/skiff
     runs-on: ubuntu-latest
     steps:
       - name: Require main
@@ -93,13 +98,13 @@ jobs:
             tag_exists=false
           fi
 
-          if npm view "skif@$version" version >/dev/null 2>&1; then
+          if npm view "$PACKAGE@$version" version >/dev/null 2>&1; then
             on_npm=true
           else
             on_npm=false
           fi
           if [ "$tag_exists" = true ] && [ "$on_npm" = true ] && gh release view "$tag" >/dev/null 2>&1; then
-            echo "::error::skif $version is already fully released."
+            echo "::error::$PACKAGE $version is already fully released."
             exit 1
           fi
 
@@ -111,7 +116,7 @@ jobs:
             echo "tag_exists=$tag_exists"
             echo "on_npm=$on_npm"
           } >> "$GITHUB_OUTPUT"
-          echo "### skif $current → $version" >> "$GITHUB_STEP_SUMMARY"
+          echo "### $PACKAGE $current → $version" >> "$GITHUB_STEP_SUMMARY"
           echo "tag \`$tag\`, npm dist-tag \`$dist_tag\`, tag exists: $tag_exists, on npm: $on_npm, dry run: ${{ inputs.dry_run }}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build from the existing tag
@@ -124,6 +129,11 @@ jobs:
           actual="$(node -p "require('./apps/cli/package.json').version")"
           if [ "$actual" != "$VERSION" ]; then
             echo "::error::$TAG has apps/cli version $actual, expected $VERSION."
+            exit 1
+          fi
+          name="$(node -p "require('./apps/cli/package.json').name")"
+          if [ "$name" != "$PACKAGE" ]; then
+            echo "::error::$TAG builds package '$name', not $PACKAGE. Release a new version instead."
             exit 1
           fi
 
@@ -158,12 +168,14 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
+          test "$(node -p "require('./package.json').name")" = "$PACKAGE"
           bun run build
           test "$(node dist/skif.js --version)" = "$VERSION"
           node dist/skif.js --help >/dev/null
           mkdir -p "$RUNNER_TEMP/pack"
           npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/pack"
           ls -l "$RUNNER_TEMP/pack"
+          test -f "$RUNNER_TEMP/pack/$TARBALL_PREFIX-$VERSION.tgz"
 
       - name: Commit and tag
         if: steps.version.outputs.tag_exists == 'false'
@@ -176,9 +188,9 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add apps/cli/package.json
           if ! git diff --cached --quiet; then
-            git commit -m "release(cli): skif $VERSION"
+            git commit -m "release(cli): $PACKAGE $VERSION"
           fi
-          git tag -a "$TAG" -m "skif $VERSION"
+          git tag -a "$TAG" -m "$PACKAGE $VERSION"
           if [ "$DRY_RUN" = true ]; then
             echo "Dry run: not pushing $TAG."
             git show --stat HEAD
@@ -193,10 +205,10 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           DIST_TAG: ${{ steps.version.outputs.dist_tag }}
           DRY_RUN: ${{ inputs.dry_run }}
-          # Optional: only needed until trusted publishing is configured for `skif` on npmjs.com.
+          # Optional: only needed until trusted publishing is configured for @skiffy/skiff on npmjs.com.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          tarball="$RUNNER_TEMP/pack/skif-$VERSION.tgz"
+          tarball="$RUNNER_TEMP/pack/$TARBALL_PREFIX-$VERSION.tgz"
           if [ "$DRY_RUN" = true ]; then
             npm publish "$tarball" --access public --tag "$DIST_TAG" --dry-run
           else
@@ -218,13 +230,13 @@ jobs:
           previous="$(git tag --list 'cli-v*' --sort=-v:refname --merged "$TAG" | grep -vx "$TAG" | head -n1 || true)"
           range="${previous:+$previous..}$TAG"
           {
-            echo "Install: \`npm install -g skif@$VERSION\`"
+            echo "Install: \`npm install -g $PACKAGE@$VERSION\`"
             echo
             echo "## Changes"
             git log --no-merges --pretty='- %s (%h)' "$range" -- apps/cli | grep -v 'release(cli):' || echo '- No CLI changes recorded.'
             echo
-            echo "https://www.npmjs.com/package/skif/v/$VERSION"
+            echo "https://www.npmjs.com/package/$PACKAGE/v/$VERSION"
           } > "$RUNNER_TEMP/notes.md"
-          flags=(--title "skif $VERSION" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag --latest=false)
+          flags=(--title "$PACKAGE $VERSION" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag --latest=false)
           if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
-          gh release create "$TAG" "${flags[@]}" "$RUNNER_TEMP/pack/skif-$VERSION.tgz"
+          gh release create "$TAG" "${flags[@]}" "$RUNNER_TEMP/pack/$TARBALL_PREFIX-$VERSION.tgz"

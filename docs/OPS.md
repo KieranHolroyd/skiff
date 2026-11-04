@@ -226,7 +226,7 @@ the platform is invite-only). Create an API key in **Settings → API keys** for
 The installer also puts `skif` and `skiff` in `/usr/local/bin`. They run the CLI bundled with the
 active release (`/opt/skiff/current/cli/skif.js`) on Skiff's own Bun, so the host needs no Node.js
 and the CLI upgrades and rolls back with the platform. Sign in with `skif login --url
-https://control.example.com`. On other machines install it from npm (`npm i -g skif`).
+https://control.example.com`. On other machines install it from npm (`npm i -g @skiffy/skiff`).
 
 ## 4. Upgrade
 

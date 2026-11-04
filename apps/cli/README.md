@@ -1,12 +1,12 @@
-# skif
+# @skiffy/skiff
 
 Command-line client for [Skiff](https://github.com/KieranHolroyd/skiff), a lightweight
-self-hosted deploy platform. Installing it gives you two commands, `skif` and `skiff`, which do
-the same thing.
+self-hosted deploy platform. Installing the `@skiffy/skiff` package gives you two commands, `skif`
+and `skiff`, which do the same thing.
 
 ```sh
-npm install -g skif     # or: bun add -g skif / pnpm add -g skif
-npx skif --help         # or run it without installing
+npm install -g @skiffy/skiff   # or: bun add -g @skiffy/skiff / pnpm add -g @skiffy/skiff
+npx @skiffy/skiff --help       # or run it without installing
 ```
 
 Requires Node.js 20+ or Bun.
