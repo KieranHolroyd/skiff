@@ -1,10 +1,11 @@
 <script lang="ts">
 	import type { TrafficSeriesPoint } from '@skiff/core';
+	import { downsampleSeries } from './traffic-series.js';
 
 	/**
-	 * Dependency-free traffic chart. The series is summed down to at most ~160 points so a
-	 * day of 1-minute buckets stays a light SVG, then drawn as an area for requests with
-	 * 5xx errors overlaid as bars.
+	 * Dependency-free traffic chart. Long series are merged into clock-aligned chart buckets
+	 * (at most ~160 points) and plotted as an average rate per minute/hour, with 5xx errors
+	 * overlaid as bars on the same scale.
 	 */
 	let {
 		series,
@@ -14,45 +15,22 @@
 
 	const WIDTH = 800;
 	const HEIGHT = 200;
-	const MAX_POINTS = 160;
 
-	const buckets = $derived.by(() => {
-		if (series.length <= MAX_POINTS) return series;
-		const size = Math.ceil(series.length / MAX_POINTS);
-		const out: TrafficSeriesPoint[] = [];
-		for (let index = 0; index < series.length; index += size) {
-			const chunk = series.slice(index, index + size);
-			const sum = (key: keyof TrafficSeriesPoint) =>
-				chunk.reduce((total, point) => total + Number(point[key]), 0);
-			out.push({
-				bucket: chunk[0]!.bucket,
-				requests: sum('requests'),
-				bytes: sum('bytes'),
-				status2xx: sum('status2xx'),
-				status3xx: sum('status3xx'),
-				status4xx: sum('status4xx'),
-				status5xx: sum('status5xx'),
-				durationP50Ms: chunk[0]!.durationP50Ms,
-				durationP95Ms: Math.max(...chunk.map((point) => point.durationP95Ms))
-			});
-		}
-		return out;
-	});
-
-	const peak = $derived(Math.max(1, ...buckets.map((point) => point.requests)));
-	const total = $derived(buckets.reduce((sum, point) => sum + point.requests, 0));
+	const chart = $derived(downsampleSeries(series, interval));
+	const buckets = $derived(chart.buckets);
+	const top = $derived(Math.max(1e-9, ...buckets.map((point) => point.requestRate)));
 	const step = $derived(buckets.length > 1 ? WIDTH / (buckets.length - 1) : WIDTH);
 	const x = $derived((index: number) => (buckets.length > 1 ? index * step : WIDTH / 2));
-	const y = $derived((value: number) => HEIGHT - (value / peak) * HEIGHT);
+	const y = $derived((value: number) => HEIGHT - (value / top) * HEIGHT);
 
 	const areaPath = $derived.by(() => {
 		if (buckets.length === 0) return '';
-		const points = buckets.map((point, index) => `${x(index)},${y(point.requests)}`);
+		const points = buckets.map((point, index) => `${x(index)},${y(point.requestRate)}`);
 		return `M0,${HEIGHT} L${points.join(' L')} L${WIDTH},${HEIGHT} Z`;
 	});
 	const linePath = $derived.by(() => {
 		if (buckets.length === 0) return '';
-		return `M${buckets.map((point, index) => `${x(index)},${y(point.requests)}`).join(' L')}`;
+		return `M${buckets.map((point, index) => `${x(index)},${y(point.requestRate)}`).join(' L')}`;
 	});
 	const errorBars = $derived(
 		buckets
@@ -61,11 +39,13 @@
 			.map(({ point, index }) => ({
 				x: x(index) - Math.max(step * 0.3, 0.6),
 				width: Math.max(step * 0.6, 1.2),
-				height: Math.max((point.status5xx / peak) * HEIGHT, 1.2),
+				height: Math.max((point.errorRate / top) * HEIGHT, 1.2),
 				point
 			}))
 	);
 
+	const numberFormat = new Intl.NumberFormat('en-GB');
+	const rateFormat = new Intl.NumberFormat('en-GB', { maximumFractionDigits: 1 });
 	const timeFormatter = $derived(
 		new Intl.DateTimeFormat('en-GB', {
 			hour: '2-digit',
@@ -75,17 +55,30 @@
 			timeZone: 'UTC'
 		})
 	);
-	const label = $derived((bucket: string) => `${timeFormatter.format(new Date(bucket))} UTC`);
-	const first = $derived(buckets[0] ? label(buckets[0].bucket) : '');
-	const last = $derived(buckets.at(-1) ? label(buckets.at(-1)!.bucket) : '');
+	const label = $derived((iso: string) => `${timeFormatter.format(new Date(iso))} UTC`);
+	const rangeLabel = $derived((point: { start: string; end: string }) =>
+		chart.span === 1
+			? label(point.start)
+			: `${timeFormatter.format(new Date(point.start))}–${label(point.end)}`
+	);
+	const tooltip = $derived((point: (typeof buckets)[number]) => {
+		const rate =
+			chart.span > 1 ? ` (${rateFormat.format(point.requestRate)}/${chart.unit} avg)` : '';
+		return `${rangeLabel(point)}: ${numberFormat.format(point.requests)} requests${rate}, ${numberFormat.format(point.status5xx)} 5xx`;
+	});
+	const first = $derived(buckets[0] ? label(buckets[0].start) : '');
+	const last = $derived(buckets.at(-1) ? label(buckets.at(-1)!.end) : '');
 	const peakLabel = $derived(
-		peak >= 1000 ? `${(peak / 1000).toFixed(1)}k` : String(Math.round(peak))
+		chart.peak >= 1000 ? `${(chart.peak / 1000).toFixed(1)}k` : String(Math.round(chart.peak))
 	);
 </script>
 
 <div class={className}>
 	<div class="flex items-center justify-between gap-3 pb-2 text-xs text-muted-foreground">
-		<span class="font-mono tabular-nums">peak {peakLabel}/bucket</span>
+		<span class="font-mono tabular-nums">
+			peak {peakLabel}/{chart.unit}{#if chart.span > 1}
+				· {chart.spanLabel} averages{/if}
+		</span>
 		<span class="flex items-center gap-3">
 			<span class="flex items-center gap-1.5">
 				<span class="size-2 rounded-[2px] bg-chart-1"></span>
@@ -102,7 +95,7 @@
 		preserveAspectRatio="none"
 		class="h-44 w-full overflow-visible"
 		role="img"
-		aria-label={`Requests over time: ${Math.round(total)} total, peak ${peakLabel} per bucket`}
+		aria-label={`Requests over time: ${numberFormat.format(chart.total)} total, peak ${peakLabel} per ${chart.unit === 'h' ? 'hour' : 'minute'}`}
 	>
 		{#each [0.25, 0.5, 0.75] as fraction (fraction)}
 			<line
@@ -134,7 +127,7 @@
 			stroke-linejoin="round"
 			vector-effect="non-scaling-stroke"
 		/>
-		{#each errorBars as bar (bar.point.bucket)}
+		{#each errorBars as bar (bar.point.start)}
 			<rect
 				x={bar.x}
 				y={HEIGHT - bar.height}
@@ -143,10 +136,10 @@
 				fill="var(--color-destructive)"
 				fill-opacity="0.7"
 			>
-				<title>{label(bar.point.bucket)}: {bar.point.status5xx} 5xx</title>
+				<title>{rangeLabel(bar.point)}: {numberFormat.format(bar.point.status5xx)} 5xx</title>
 			</rect>
 		{/each}
-		{#each buckets as point, index (point.bucket)}
+		{#each buckets as point, index (point.start)}
 			<rect
 				x={x(index) - step / 2}
 				y="0"
@@ -154,7 +147,7 @@
 				height={HEIGHT}
 				fill="transparent"
 			>
-				<title>{label(point.bucket)}: {point.requests} requests, {point.status5xx} 5xx</title>
+				<title>{tooltip(point)}</title>
 			</rect>
 		{/each}
 	</svg>

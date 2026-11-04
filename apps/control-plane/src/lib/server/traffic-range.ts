@@ -41,28 +41,50 @@ export interface TrafficRange {
 	key: TrafficRangeKey;
 	label: string;
 	interval: TelemetryInterval;
-	/** ISO timestamps (plain strings so SvelteKit can serialise them). */
+	/**
+	 * ISO timestamps (plain strings so SvelteKit can serialise them). Both are bucket starts and
+	 * inclusive: the data covers `[from, to + 1 minute)`.
+	 */
 	from: string;
 	to: string;
+	/** Wall-clock seconds the queried buckets cover; the denominator for per-second averages. */
+	windowSeconds: number;
 }
 
-/** Parse `?range=`, falling back to the last 24 hours. Timestamps are bucket-aligned. */
+const MINUTE_MS = 60_000;
+const HOUR_MS = 3_600_000;
+
+/**
+ * Agents ship a minute only after it closes, on a 60 s cadence (DESIGN §8), so the current minute
+ * is never reported and the previous one is reported only part of the time. Ending the range
+ * before them keeps the series from dropping to a false zero and the averages from counting
+ * time that has no data yet.
+ */
+export const TRAFFIC_REPORTING_LAG_MINUTES = 2;
+
+/**
+ * Parse `?range=`, falling back to the last 24 hours. Timestamps are bucket-aligned and the range
+ * ends on the newest minute every agent has reported.
+ */
 export function parseTrafficRange(raw: string | null, now = Date.now()): TrafficRange {
 	const preset =
 		trafficRanges.find((item) => item.key === raw) ??
 		trafficRanges.find((item) => item.key === '24h') ??
 		trafficRanges[0]!;
-	const step = preset.interval === '1h' ? 3_600_000 : 60_000;
-	// End on the current minute so the open hour/minute is included; align the start to a
-	// whole bucket so an hourly query never pulls in traffic from before the window.
-	const to = Math.floor(now / 60_000) * 60_000;
-	const from = Math.floor((to - preset.hours * 3_600_000) / step) * step;
+	const step = preset.interval === '1h' ? HOUR_MS : MINUTE_MS;
+	// `to` is the start of the last reported minute; the window ends when that minute does.
+	const to = (Math.floor(now / MINUTE_MS) - TRAFFIC_REPORTING_LAG_MINUTES) * MINUTE_MS;
+	const end = to + MINUTE_MS;
+	// Align the start to a whole bucket so an hourly query never pulls in traffic from before
+	// the window (an hourly range can therefore cover up to 59 extra minutes).
+	const from = Math.floor((end - preset.hours * HOUR_MS) / step) * step;
 	return {
 		key: preset.key,
 		label: preset.label,
 		interval: preset.interval,
 		from: new Date(from).toISOString(),
-		to: new Date(to).toISOString()
+		to: new Date(to).toISOString(),
+		windowSeconds: (end - from) / 1000
 	};
 }
 

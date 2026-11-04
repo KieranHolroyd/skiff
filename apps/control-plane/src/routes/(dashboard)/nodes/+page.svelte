@@ -7,6 +7,7 @@
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import HammerIcon from '@lucide/svelte/icons/hammer';
 	import InfoIcon from '@lucide/svelte/icons/info';
+	import NetworkIcon from '@lucide/svelte/icons/network';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import ServerIcon from '@lucide/svelte/icons/server';
@@ -103,6 +104,10 @@
 		description="Edge and worker machines running the Skiff agent. Agents pull desired state; the control plane never pushes. App workloads are admitted against each node's workload slice, and a Builder node runs git builds."
 	>
 		{#if !data.denied}
+			<Button href={resolve('/(dashboard)/nodes/vpn')} variant="outline">
+				<NetworkIcon />
+				Worker over WireGuard
+			</Button>
 			<Button onclick={() => (addOpen = true)}>
 				<PlusIcon />
 				Add node
@@ -297,6 +302,14 @@
 				</li>
 			{/each}
 		</ol>
+		<p class="text-sm text-muted-foreground">
+			Adding a machine behind NAT, like a homelab?
+			<a
+				href={resolve('/(dashboard)/nodes/vpn')}
+				class="font-medium text-foreground underline underline-offset-4"
+				>Follow the WireGuard worker guide</a
+			>. It sets up the tunnel and generates a join command with the right address.
+		</p>
 	</FormDialog>
 {/if}
 

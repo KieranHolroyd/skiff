@@ -36,7 +36,14 @@
 		variant = 'project'
 	}: {
 		traffic: { permitted: boolean; available: boolean; report: TrafficReport };
-		range: { key: string; label: string; interval: '1m' | '1h'; from: string; to: string };
+		range: {
+			key: string;
+			label: string;
+			interval: '1m' | '1h';
+			from: string;
+			to: string;
+			windowSeconds: number;
+		};
 		ranges: ReadonlyArray<RangeOption>;
 		links: Record<string, string>;
 		projectNames?: Record<string, ProjectRef>;
@@ -51,11 +58,16 @@
 
 	const report = $derived(traffic.report);
 	const totals = $derived(report.totals);
-	const windowSeconds = $derived(
-		Math.max(1, (Date.parse(range.to) - Date.parse(range.from)) / 1000)
-	);
+	const windowSeconds = $derived(Math.max(1, range.windowSeconds));
 	const perSecond = $derived(totals.requests / windowSeconds);
 	const bytesPerSecond = $derived(totals.bytes / windowSeconds);
+	const lastReported = $derived(
+		`${new Intl.DateTimeFormat('en-GB', {
+			hour: '2-digit',
+			minute: '2-digit',
+			timeZone: 'UTC'
+		}).format(new Date(Date.parse(range.to) + 60_000))} UTC`
+	);
 	const errorRate = $derived(totals.requests > 0 ? (totals.status5xx / totals.requests) * 100 : 0);
 
 	const statuses = $derived([
@@ -193,9 +205,9 @@
 
 		<Panel
 			title="Requests over time"
-			description="{range.interval === '1m'
-				? 'One minute'
-				: 'One hour'} buckets · {totals.requests.toLocaleString('en-GB')} requests total"
+			description="Requests per {range.interval === '1m'
+				? 'minute'
+				: 'hour'} · {numberFormat.format(totals.requests)} total · up to {lastReported}"
 			icon={ChartNoAxesCombinedIcon}
 		>
 			<TrafficChart series={report.series} interval={range.interval} />

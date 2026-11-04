@@ -29,8 +29,13 @@ export const actions: Actions = {
 	createToken: async ({ locals }) => {
 		const principal = locals.principal!;
 		try {
-			const token = core.nodes.createJoinToken(principal);
-			const command = `sudo skiff-agent join ${core.ctx.config.platformOrigin} --token ${token.token} --name edge`;
+			// The first node to join becomes the edge; later ones are workers and need an address
+			// the edge can proxy to (see /nodes/vpn for the WireGuard walkthrough).
+			const hasEdge = core.nodes.list(principal).some((node) => node.mode === 'edge');
+			const token = core.nodes.createJoinToken(principal, hasEdge ? undefined : 'edge');
+			const command = hasEdge
+				? `sudo skiff-agent join ${core.ctx.config.platformOrigin} --token ${token.token} --name <name> --public-address <tunnel-ip>:<port>`
+				: `sudo skiff-agent join ${core.ctx.config.platformOrigin} --token ${token.token} --name edge`;
 			return {
 				success: 'Join token created. It is single-use and expires in one hour.',
 				token: token.token,
