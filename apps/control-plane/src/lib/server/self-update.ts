@@ -1,13 +1,27 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import {
+	closeSync,
+	existsSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	readSync,
+	renameSync,
+	statSync,
+	writeFileSync
+} from 'node:fs';
 import { dirname } from 'node:path';
 import {
 	SELF_UPDATE_DEFAULTS,
+	SELF_UPDATE_LOG_LINES,
 	SELF_UPDATE_STALE_MS,
 	canAdministerPlatform,
 	compareSemver,
 	parseSemver,
 	semverBump,
 	type Principal,
+	type SelfUpdateLog,
+	type SelfUpdateLogLevel,
+	type SelfUpdateLogLine,
 	type SelfUpdateStatus
 } from '@skiff/contracts';
 import { platformVersion } from './version';
@@ -22,6 +36,7 @@ const env = process.env;
 const paths = {
 	requestFile: env.SKIFF_UPDATE_REQUEST_FILE ?? SELF_UPDATE_DEFAULTS.requestFile,
 	statusFile: env.SKIFF_UPDATE_STATUS_FILE ?? SELF_UPDATE_DEFAULTS.statusFile,
+	logFile: env.SKIFF_UPDATE_LOG_FILE ?? SELF_UPDATE_DEFAULTS.logFile,
 	pathUnit: env.SKIFF_UPDATE_PATH_UNIT ?? SELF_UPDATE_DEFAULTS.pathUnit,
 	releaseMeta: env.SKIFF_RELEASE_META ?? SELF_UPDATE_DEFAULTS.releaseMeta
 };
@@ -162,6 +177,73 @@ export function readUpdateStatus(): UpdateStatusView | null {
 	} catch {
 		return null;
 	}
+}
+
+const LOG_LEVELS: SelfUpdateLogLevel[] = ['info', 'warn', 'error', 'command', 'output', 'phase'];
+const LOG_TAIL_BYTES = 256 * 1024;
+
+/**
+ * Parse the updater's JSON Lines log. Tolerates a truncated first record (a byte-window tail can
+ * start mid-line) and never throws: a corrupt log must not break the updates page.
+ */
+export function parseUpdateLog(
+	text: string,
+	limit = SELF_UPDATE_LOG_LINES
+): { lines: SelfUpdateLogLine[]; truncated: boolean } {
+	const lines: SelfUpdateLogLine[] = [];
+	for (const raw of text.split('\n')) {
+		if (!raw.trim()) continue;
+		try {
+			const value = JSON.parse(raw) as Partial<SelfUpdateLogLine>;
+			if (typeof value?.at !== 'string' || typeof value?.text !== 'string') continue;
+			const level = LOG_LEVELS.includes(value.level as SelfUpdateLogLevel)
+				? (value.level as SelfUpdateLogLevel)
+				: 'info';
+			lines.push({ at: value.at, level, text: value.text.slice(0, 4_000) });
+		} catch {
+			// A partial record from the read window; skip it.
+		}
+	}
+	return lines.length > limit
+		? { lines: lines.slice(-limit), truncated: true }
+		: { lines, truncated: false };
+}
+
+/** The live update log: the last few hundred lines, read from a bounded tail of the file. */
+export function readUpdateLog(limit = SELF_UPDATE_LOG_LINES): SelfUpdateLog {
+	let stat: ReturnType<typeof statSync>;
+	try {
+		stat = statSync(paths.logFile);
+	} catch {
+		return { lines: [], exists: false, truncated: false, updatedAt: null };
+	}
+	const size = Math.min(stat.size, LOG_TAIL_BYTES);
+	const start = stat.size - size;
+	let text: string;
+	try {
+		const fd = openSync(paths.logFile, 'r');
+		try {
+			const buffer = Buffer.alloc(size);
+			readSync(fd, buffer, 0, size, start);
+			text = buffer.toString('utf8');
+		} finally {
+			closeSync(fd);
+		}
+	} catch {
+		return { lines: [], exists: false, truncated: false, updatedAt: null };
+	}
+	// Drop the byte-window's partial first record.
+	if (start > 0) {
+		const newline = text.indexOf('\n');
+		text = newline === -1 ? '' : text.slice(newline + 1);
+	}
+	const parsed = parseUpdateLog(text, limit);
+	return {
+		lines: parsed.lines,
+		exists: true,
+		truncated: parsed.truncated || start > 0,
+		updatedAt: new Date(stat.mtimeMs).toISOString()
+	};
 }
 
 /** A request is waiting for systemd to start the updater. */

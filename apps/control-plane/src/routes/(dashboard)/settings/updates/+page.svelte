@@ -7,7 +7,12 @@
 	import PackageIcon from '@lucide/svelte/icons/package';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import ServerCogIcon from '@lucide/svelte/icons/server-cog';
-	import type { SelfUpdateOutcome, SelfUpdatePhase, SelfUpdateStatus } from '@skiff/contracts';
+	import type {
+		SelfUpdateLog,
+		SelfUpdateOutcome,
+		SelfUpdatePhase,
+		SelfUpdateStatus
+	} from '@skiff/contracts';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import FormFeedback from '#lib/components/skiff/FormFeedback.svelte';
 	import Notice from '#lib/components/skiff/Notice.svelte';
@@ -15,6 +20,7 @@
 	import type { Tone } from '#lib/status.js';
 	import Panel from '../../_lib/Panel.svelte';
 	import { formatDateTime } from '../../_lib/format.js';
+	import UpdateLog from './UpdateLog.svelte';
 	import type { PageProps } from './$types';
 
 	type StatusView = SelfUpdateStatus & { stale: boolean };
@@ -23,6 +29,7 @@
 		status: StatusView | null;
 		pending: boolean;
 		inFlight: boolean;
+		log: SelfUpdateLog;
 	}
 
 	let { data, form }: PageProps = $props();
@@ -39,12 +46,19 @@
 			version: data.comparison.current,
 			status: data.status,
 			pending: data.pending,
-			inFlight: data.inFlight
+			inFlight: data.inFlight,
+			log: data.log
 		}
 	);
 	const ready = $derived(data.availability === 'ready');
 	const running = $derived(view.inFlight);
 	const lastRun = $derived(view.status && !view.status.running ? view.status : null);
+	/** Until the updater truncates and rewrites the file, a queued run has no log of its own. */
+	const currentLog = $derived(
+		view.pending && !view.status?.running
+			? { lines: [], exists: false, truncated: false, updatedAt: null }
+			: view.log
+	);
 
 	const steps: Array<{ phase: SelfUpdatePhase; label: string }> = [
 		{ phase: 'queued', label: 'Queued' },
@@ -98,9 +112,9 @@
 			} catch {
 				reconnecting = true;
 			}
-			if (!stopped) timer = setTimeout(tick, 2_000);
+			if (!stopped) timer = setTimeout(tick, 1_000);
 		};
-		timer = setTimeout(tick, 1_500);
+		timer = setTimeout(tick, 800);
 		return () => {
 			stopped = true;
 			clearTimeout(timer);
@@ -293,6 +307,8 @@
 				take a few minutes. You can leave this page; the update carries on.
 			{/snippet}
 		</Panel>
+
+		<UpdateLog log={currentLog} running />
 	{:else if view.status?.stale}
 		<Notice tone="warning" title="The last update stopped reporting">
 			It last reported “{view.status.message}” at {formatDateTime(view.status.updatedAt)} and probably
@@ -315,5 +331,9 @@
 				)}. Roll back on the server with <code>sudo skiff-update-self rollback</code>.
 			{/snippet}
 		</Panel>
+	{/if}
+
+	{#if !running && currentLog.exists}
+		<UpdateLog log={currentLog} />
 	{/if}
 </div>

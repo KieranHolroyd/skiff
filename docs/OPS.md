@@ -17,6 +17,7 @@ D24 (the VPS is an accepted single point of failure), D25 (R2 is canonical), D28
 | `/opt/skiff/previous` | symlink | Last known-good release, kept until the next successful update (`skiff-update-self rollback` target). |
 | `/var/lib/skiff/update/` | `skiff:skiff 0750` | Dashboard update requests (the control plane writes `request`). |
 | `/var/lib/skiff-update/status.json` | `root:skiff 0640` | Updater progress/outcome, read by the dashboard. |
+| `/var/lib/skiff-update/update.log` | `root:skiff 0640` | JSON Lines update log (phases, commands, build output), tailed by the dashboard. |
 | `/var/lib/skiff/platform-config/` | `skiff:skiff 0750` | Dashboard settings requests (Settings → Backups / Notifications, §4.3). |
 | `/var/lib/skiff-config/status.json` | `root:skiff 0640` | `skiff-platform-config` progress/outcome, read by the dashboard. |
 | `/etc/skiff/skiff.env.previous` | `root:skiff 0640` | The env file before the last dashboard change (automatic revert). |
@@ -310,9 +311,13 @@ restart itself. The button drops `/var/lib/skiff/update/request`. A root path un
 request and runs `skiff-update-self update --trigger dashboard`. The updater treats the request
 purely as a trigger: it re-checks GitHub itself and never reads the file. Progress goes to
 `/var/lib/skiff-update/status.json` (`root:skiff 0640`), which the page polls through the
-restart. Every request is recorded in the audit log as `platform.update`. The installer creates
+restart, and the same run appends a JSON Lines log to `/var/lib/skiff-update/update.log`
+(`root:skiff 0640`): phases, the commands it runs and streamed `bun install` / build output. The
+page tails the newest lines into **Live log** while the update runs and keeps the last run's log
+afterwards. Every request is recorded in the audit log as `platform.update`. The installer creates
 both units, and so does any `sudo skiff-update-self` run, which is how existing hosts get the
-button. Logs: `journalctl -u skiff-update-self`.
+button. Logs: the page, `/var/lib/skiff-update/update.log`, and
+`journalctl -u skiff-update-self`.
 
 `skiff-update-self` (source: [`scripts/update-self/`](../scripts/update-self)) pulls the
 ref the current release was built from (default `main`; `--ref` to pin a tag), and keeps

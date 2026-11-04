@@ -13,6 +13,8 @@ export const SELF_UPDATE_DEFAULTS = {
 	requestFile: '/var/lib/skiff/update/request',
 	/** Written by the updater (root-owned directory, group skiff can read). */
 	statusFile: '/var/lib/skiff-update/status.json',
+	/** JSON Lines progress log written by the updater; tailed by the dashboard. */
+	logFile: '/var/lib/skiff-update/update.log',
 	/** Its presence means dashboard-triggered updates are wired up on this host. */
 	pathUnit: '/etc/systemd/system/skiff-update-self.path',
 	/** Release metadata of the active release (repo/ref the updater pulls from). */
@@ -53,3 +55,26 @@ export interface SelfUpdateStatus {
 
 /** A run that has not written progress for this long is treated as dead (updater crashed). */
 export const SELF_UPDATE_STALE_MS = 60 * 60 * 1000;
+
+/** Lines the dashboard asks for by default; also the server-side cap on one response. */
+export const SELF_UPDATE_LOG_LINES = 400;
+
+export type SelfUpdateLogLevel = 'info' | 'warn' | 'error' | 'command' | 'output' | 'phase';
+
+/** One line of `/var/lib/skiff-update/update.log` (JSON Lines on disk). */
+export interface SelfUpdateLogLine {
+	/** ISO timestamp written by the updater. */
+	at: string;
+	level: SelfUpdateLogLevel;
+	text: string;
+}
+
+export interface SelfUpdateLog {
+	lines: SelfUpdateLogLine[];
+	/** False before the first update (or after a host rebuilt the directory). */
+	exists: boolean;
+	/** Older lines were dropped: the file is larger than the read window or the line cap. */
+	truncated: boolean;
+	/** File mtime, so the page can tell a live log from yesterday's. */
+	updatedAt: string | null;
+}

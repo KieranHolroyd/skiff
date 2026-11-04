@@ -4,6 +4,7 @@ import {
 	canManagePlatform,
 	compareToRunning,
 	latestVersion,
+	readUpdateLog,
 	readUpdateStatus,
 	requestUpdate,
 	selfUpdateAvailability,
@@ -25,6 +26,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		latest,
 		comparison: compareToRunning(latest),
 		status,
+		log: readUpdateLog(),
 		pending: updatePending(),
 		inFlight: updateInFlight(status)
 	};

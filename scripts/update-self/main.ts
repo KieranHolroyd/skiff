@@ -8,10 +8,21 @@
  * rollback.
  */
 import { randomBytes } from 'node:crypto';
-import { chmodSync, chownSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+	appendFileSync,
+	chmodSync,
+	chownSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
 	SELF_UPDATE_DEFAULTS,
+	type SelfUpdateLogLevel,
 	type SelfUpdateOutcome,
 	type SelfUpdateStatus,
 } from '../../packages/contracts/src/self-update.ts';
@@ -72,6 +83,7 @@ const AGENT_ENV_FILE = join(ETC_DIR, 'agent.env');
 const MASTER_KEY_FILE = join(ETC_DIR, 'master.key');
 const CONTROL_SOCKET = join(RUN_DIR, 'control.sock');
 const STATUS_FILE = process.env.SKIFF_UPDATE_STATUS_FILE ?? SELF_UPDATE_DEFAULTS.statusFile;
+const LOG_FILE = process.env.SKIFF_UPDATE_LOG_FILE ?? SELF_UPDATE_DEFAULTS.logFile;
 const REQUEST_FILE = process.env.SKIFF_UPDATE_REQUEST_FILE ?? SELF_UPDATE_DEFAULTS.requestFile;
 const SYSTEMD_DIR = process.env.SKIFF_SYSTEMD_DIR ?? '/etc/systemd/system';
 
@@ -123,11 +135,58 @@ function usageError(text: string): never {
 
 // ------------------------------------------------------------------- real host
 
+/**
+ * Live update log for the dashboard (JSON Lines, root:skiff 0640). A fresh file per update run;
+ * the control plane only reads it. Writing must never break an update, so every failure is silent
+ * (after one console warning).
+ */
+let logEnabled = false;
+
+function stripAnsi(text: string): string {
+	// eslint-disable-next-line no-control-regex
+	return text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '');
+}
+
+function appendLog(level: SelfUpdateLogLevel, text: string): void {
+	if (!logEnabled) return;
+	const at = new Date().toISOString();
+	for (const raw of stripAnsi(text).split(/\r\n|\r|\n/)) {
+		const line = raw.trimEnd();
+		if (!line) continue;
+		try {
+			appendFileSync(LOG_FILE, `${JSON.stringify({ at, level, text: line.slice(0, 4000) })}\n`);
+		} catch {
+			// Progress reporting must never break an update.
+		}
+	}
+}
+
+function startUpdateLog(trigger: string): void {
+	try {
+		const dir = dirname(LOG_FILE);
+		mkdirSync(dir, { recursive: true, mode: 0o750 });
+		const gid = skiffGroupId();
+		if (gid !== null) chownSync(dir, 0, gid);
+		chmodSync(dir, 0o750);
+		writeFileSync(LOG_FILE, '', { mode: 0o640 });
+		if (gid !== null) chownSync(LOG_FILE, 0, gid);
+		chmodSync(LOG_FILE, 0o640);
+		logEnabled = true;
+		appendLog('info', `Skiff self-update started from the ${trigger} at ${new Date().toISOString()}`);
+	} catch (error) {
+		logEnabled = false;
+		console.error(dim(`  (could not write ${LOG_FILE}: ${(error as Error).message})`));
+	}
+}
+
 function run(
 	cmd: string[],
 	opts: { cwd?: string; quiet?: boolean; allowFailure?: boolean; env?: Record<string, string> } = {},
 ): { code: number; stdout: string; stderr: string } {
-	if (!opts.quiet) console.log(dim(`  $ ${cmd.join(' ')}`));
+	if (!opts.quiet) {
+		console.log(dim(`  $ ${cmd.join(' ')}`));
+		appendLog('command', `$ ${cmd.join(' ')}`);
+	}
 	const result = Bun.spawnSync({
 		cmd,
 		cwd: opts.cwd,
@@ -140,9 +199,57 @@ function run(
 		stdout: result.stdout ? new TextDecoder().decode(result.stdout).trim() : '',
 		stderr: result.stderr ? new TextDecoder().decode(result.stderr).trim() : '',
 	};
-	if (out.code !== 0 && !opts.allowFailure)
+	if (out.code !== 0 && !opts.allowFailure) {
+		if (out.stderr) appendLog('error', out.stderr);
 		throw new Error(`${cmd.join(' ')} exited ${out.code}${out.stderr ? `: ${out.stderr}` : ''}`);
+	}
 	return out;
+}
+
+/**
+ * Build steps can run for minutes, so their output is streamed line by line to the console and
+ * the live log instead of being buffered until exit.
+ */
+async function runStreaming(cmd: string[], opts: { cwd?: string } = {}): Promise<void> {
+	console.log(dim(`  $ ${cmd.join(' ')}`));
+	appendLog('command', `$ ${cmd.join(' ')}`);
+	const child = Bun.spawn({
+		cmd,
+		cwd: opts.cwd,
+		env: { ...process.env, PATH: `${dirname(layout.bunBin)}:${process.env.PATH ?? ''}` },
+		stdout: 'pipe',
+		stderr: 'pipe',
+	});
+	const tail: string[] = [];
+	const consume = async (stream: ReadableStream<Uint8Array>, level: 'output' | 'error') => {
+		const decoder = new TextDecoder();
+		let pending = '';
+		const emit = (line: string) => {
+			const text = line.replace(/\r$/, '');
+			if (!text) return;
+			process.stdout.write(`${text}\n`);
+			appendLog(level, text);
+			if (level === 'error') {
+				tail.push(text);
+				if (tail.length > 20) tail.shift();
+			}
+		};
+		for await (const chunk of stream) {
+			pending += decoder.decode(chunk, { stream: true });
+			const parts = pending.split(/\r\n|\r|\n/);
+			pending = parts.pop() ?? '';
+			for (const part of parts) emit(part);
+		}
+		pending += decoder.decode();
+		if (pending) emit(pending);
+	};
+	const readers: Promise<void>[] = [];
+	if (child.stdout) readers.push(consume(child.stdout, 'output'));
+	if (child.stderr) readers.push(consume(child.stderr, 'error'));
+	await Promise.all(readers);
+	const code = await child.exited;
+	if (code !== 0)
+		throw new Error(`${cmd.join(' ')} exited ${code}${tail.length ? `: ${tail.join(' ')}` : ''}`);
 }
 
 function githubToken(): string | undefined {
@@ -310,8 +417,14 @@ const signals = process as unknown as { on(e: string, l: () => void): void; off(
 let shield: (() => void) | null = null;
 
 const host: Host = {
-	log: (text) => console.log(`${dim('  •')} ${text}`),
-	warn: (text) => console.error(`${yellow('  !')} ${text}`),
+	log: (text) => {
+		console.log(`${dim('  •')} ${text}`);
+		appendLog('info', text);
+	},
+	warn: (text) => {
+		console.error(`${yellow('  !')} ${text}`);
+		appendLog('warn', text);
+	},
 	now: () => new Date(),
 	sleep: (ms) => Bun.sleep(ms),
 
@@ -340,7 +453,8 @@ const host: Host = {
 	},
 
 	phase(phase, detail, versions) {
-		host.log(detail);
+		console.log(`${dim('  •')} ${detail}`);
+		appendLog('phase', `[${phase}] ${detail}`);
 		reportStatus({
 			phase,
 			message: detail,
@@ -367,10 +481,10 @@ const host: Host = {
 
 	async build(repoDir) {
 		const bun = layout.bunBin;
-		run([bun, 'install', '--frozen-lockfile'], { cwd: repoDir });
-		run([bun, 'run', '--cwd', 'apps/control-plane', 'build'], { cwd: repoDir });
-		run([bun, 'run', '--cwd', 'apps/agent', 'build'], { cwd: repoDir });
-		run([bun, 'run', '--cwd', 'apps/cli', 'build'], { cwd: repoDir });
+		await runStreaming([bun, 'install', '--frozen-lockfile'], { cwd: repoDir });
+		await runStreaming([bun, 'run', '--cwd', 'apps/control-plane', 'build'], { cwd: repoDir });
+		await runStreaming([bun, 'run', '--cwd', 'apps/agent', 'build'], { cwd: repoDir });
+		await runStreaming([bun, 'run', '--cwd', 'apps/cli', 'build'], { cwd: repoDir });
 	},
 
 	/**
@@ -591,6 +705,7 @@ async function main(): Promise<number> {
 		const trigger = option('--trigger') === 'dashboard' ? 'dashboard' : 'cli';
 		const dryRun = flag('--dry-run');
 		if (!dryRun) {
+			startUpdateLog(trigger);
 			const now = new Date().toISOString();
 			status = {
 				running: true,
@@ -604,8 +719,10 @@ async function main(): Promise<number> {
 			};
 			writeStatusFile(status);
 		}
-		const finish = (outcome: SelfUpdateOutcome, message: string, versions: Partial<SelfUpdateStatus> = {}) =>
+		const finish = (outcome: SelfUpdateOutcome, message: string, versions: Partial<SelfUpdateStatus> = {}) => {
+			appendLog(outcome === 'updated' || outcome === 'up-to-date' ? 'info' : 'warn', message);
 			reportStatus({ running: false, phase: 'done', outcome, message, finishedAt: new Date().toISOString(), ...versions });
+		};
 		signals.on('exit', () => {
 			if (status?.running) finish('error', `The updater exited unexpectedly. Check journalctl -u skiff-update-self.`);
 		});

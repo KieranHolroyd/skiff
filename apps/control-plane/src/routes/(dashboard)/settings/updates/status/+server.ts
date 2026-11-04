@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit';
 import { platformVersion } from '#lib/server/version.js';
 import {
 	canManagePlatform,
+	readUpdateLog,
 	readUpdateStatus,
 	updateInFlight,
 	updatePending
@@ -16,6 +17,7 @@ export const GET: RequestHandler = ({ locals }) => {
 		{
 			version: platformVersion,
 			status,
+			log: readUpdateLog(),
 			pending: updatePending(),
 			inFlight: updateInFlight(status)
 		},
