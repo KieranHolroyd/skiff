@@ -863,7 +863,40 @@ function parseText(
 		return make('text', match[2]!, opts, { level: levelFromWord(match[1]!) });
 	}
 
+	// The diagnostics below carry their level in prose rather than a level column, so the
+	// whole line stays as the message; only the level is inferred.
+	const diagnostic = diagnosticLevel(line, raw);
+	if (diagnostic) return make('text', raw, opts, { level: diagnostic });
+
 	return make('raw', raw, opts);
+}
+
+/**
+ * CLI and runtime diagnostics that most app output actually consists of: bun/cargo/go/git
+ * (`error: …`, `warning: …`), package managers (`npm ERR!`), uncaught exceptions
+ * (`TypeError: …`, `java.lang.IllegalStateException: …`), Python tracebacks and stack frames.
+ */
+function diagnosticLevel(line: string, raw: string): LogLevel | undefined {
+	if (/^(?:error|fatal|panic)(?:\[[^\]\s]*\])?:\s/i.test(line)) return 'error';
+	if (/^(?:warning|warn)(?:\[[^\]\s]*\])?:\s/i.test(line)) return 'warn';
+	if (/^(?:npm|pnpm|yarn)\s+(?:ERR!|error)(?:\s|$)/i.test(line)) return 'error';
+	if (/^(?:npm|pnpm|yarn)\s+(?:WARN|warning)(?:\s|$)/i.test(line)) return 'warn';
+	if (/^ERR_PNPM_\w+/.test(line)) return 'error';
+	if (
+		/^(?:Uncaught |Unhandled )?(?:[a-z_$][\w$]*\.)*(?:[A-Z][\w$]*)?(?:Error|Exception)(?: \[[A-Z0-9_]+\])?(?::\s|$)/.test(
+			line,
+		)
+	)
+		return 'error';
+	if (/^Exception in thread /.test(line)) return 'error';
+	if (/^Traceback \(most recent call last\):$/.test(line)) return 'error';
+	// Stack frames only count when indented, so a sentence starting with "at" stays plain text.
+	if (/^\s/.test(raw)) {
+		if (/^at \S.*(?::\d+(?::\d+)?\)?|\((?:native|<anonymous>|Unknown Source)\))$/.test(line))
+			return 'error';
+		if (/^File "[^"]+", line \d+/.test(line)) return 'error';
+	}
+	return undefined;
 }
 
 const ISO_DATE =

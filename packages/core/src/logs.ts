@@ -271,8 +271,7 @@ export class LogService {
 					serviceId: row.serviceId,
 					source: row.source,
 					stream: row.stream,
-					level: row.level,
-					message: row.message,
+					...present(row.source, row.level, row.message),
 				}),
 			),
 			cursor: rows.at(-1)?.seq ?? after ?? 0,
@@ -405,14 +404,33 @@ function sanitize(message: string): string {
 	);
 }
 
+/**
+ * Parse again on the way out, so rows stored before ingestion parsed lines (or by an older
+ * parser) still read as level + message. A parsed level only replaces the default `info`, never
+ * a level the node or an earlier parse already chose.
+ */
+function present(
+	source: string,
+	level: LogLevel,
+	message: string,
+): { level: LogLevel; message: string } {
+	if (source === 'system') return { level, message };
+	const replica = /^\[r\d+\] /.exec(message)?.[0] ?? '';
+	const parsed = parseLogLine(message.slice(replica.length));
+	if (parsed.format === 'raw') return { level, message };
+	return {
+		level: level === 'info' && parsed.level ? parsed.level : level,
+		message: parsed.message ? `${replica}${sanitize(parsed.message)}` : message,
+	};
+}
+
 function toView(row: typeof logEvents.$inferSelect): LogEventView {
 	return {
 		seq: row.seq,
 		ts: row.ts,
 		source: row.source,
 		stream: row.stream,
-		level: row.level,
-		message: row.message,
+		...present(row.source, row.level, row.message),
 		projectId: row.projectId,
 		deploymentId: row.deploymentId,
 		buildId: row.buildId,

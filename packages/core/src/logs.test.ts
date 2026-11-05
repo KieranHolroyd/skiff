@@ -262,6 +262,32 @@ describe('log drain', () => {
 		expect(runtime.events[1]?.ts).toBe(embedded);
 	});
 
+	test('parses rows stored before ingestion parsing when they are read', async () => {
+		const { project, nodeId, deploymentId } = await projectWithBuild();
+		const insert = (level: string, message: string) =>
+			opened.sqlite.run(
+				`INSERT INTO log_events (org_id, project_id, deployment_id, node_id, source, stream, level, message, ts)
+				 VALUES (?, ?, ?, ?, 'runtime', 'stdout', ?, ?, ?)`,
+				[project.orgId, project.id, deploymentId, nodeId, level, message, clock],
+			);
+		insert('info', '[r1] {"level":50,"msg":"db down"}');
+		insert('info', 'error: bun is unable to write files: EROFS');
+		insert('warn', 'INFO retrying');
+		insert('info', 'Started the workload.');
+
+		const events = core.logs.query(principal, project, {
+			source: 'runtime',
+			deploymentId,
+		}).events;
+		expect(events.map((event) => [event.level, event.message])).toEqual([
+			['error', '[r1] db down'],
+			['error', 'error: bun is unable to write files: EROFS'],
+			// A level the node already chose is kept.
+			['warn', 'retrying'],
+			['info', 'Started the workload.'],
+		]);
+	});
+
 	test('requires logs:read and prunes by age', async () => {
 		const { project } = await projectWithBuild();
 		const reader = buildPrincipal({

@@ -296,6 +296,31 @@ describe('parseLogLine', () => {
 		expect(long.message).toHaveLength(16_384);
 	});
 
+	test('infers levels from CLI diagnostics, exceptions and stack frames', () => {
+		const level = (line: string) => parse(line).level;
+		expect(parse('error: bun is unable to write files: EROFS')).toEqual({
+			message: 'error: bun is unable to write files: EROFS',
+			level: 'error',
+			format: 'text',
+		});
+		expect(level('error[E0308]: mismatched types')).toBe('error');
+		expect(level('warning: unused variable `x`')).toBe('warn');
+		expect(level('panic: runtime error: index out of range')).toBe('error');
+		expect(level('npm ERR! code ELIFECYCLE')).toBe('error');
+		expect(level('npm warn deprecated inflight@1.0.6')).toBe('warn');
+		expect(level('TypeError: Cannot read properties of undefined')).toBe('error');
+		expect(level('Error [ERR_MODULE_NOT_FOUND]: Cannot find package')).toBe('error');
+		expect(level('java.lang.IllegalStateException: closed')).toBe('error');
+		expect(level('Traceback (most recent call last):')).toBe('error');
+		expect(level('    at Server.<anonymous> (/app/server.js:12:5)')).toBe('error');
+		expect(level('  File "/app/main.py", line 3, in <module>')).toBe('error');
+
+		// Prose that only looks similar stays unlevelled.
+		expect(level('at 10:00 the job ran: ok')).toBeUndefined();
+		expect(level('errors: 0, warnings: 0')).toBeUndefined();
+		expect(level('Started skiff-workload.service - Skiff workload')).toBeUndefined();
+	});
+
 	test('leaves malformed JSON tagged as JSON without losing the line', () => {
 		expect(parse('{"level":"info"')).toEqual({
 			message: '{"level":"info"',
