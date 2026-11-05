@@ -24,6 +24,7 @@ import {
 	siteCookieSecret,
 	smtp,
 	webhookUrl,
+	features,
 } from './config';
 import { db, sqlite } from './db';
 import { platformVersion } from './version';
@@ -55,6 +56,7 @@ export const core = createCore({
 		edgeNodeId,
 		notifiers,
 		email: emailTransport,
+		features,
 	},
 });
 

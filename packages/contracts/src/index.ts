@@ -2,6 +2,7 @@ export * from './permissions.ts';
 export * from './principal.ts';
 export * from './slugs.ts';
 export * from './semver.ts';
+export * from './features.ts';
 export * from './self-update.ts';
 export * from './platform-config.ts';
 export * from './assistant.ts';

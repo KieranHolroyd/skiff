@@ -5,6 +5,8 @@
 		"platform-config/**/*.ts",
 		"version.ts",
 		"version.test.ts",
+		"check-migrations.ts",
+		"check-migrations.test.ts",
 		"recovery-kit.ts",
 		"recovery-kit.test.ts",
 		"skiff-alert.ts",

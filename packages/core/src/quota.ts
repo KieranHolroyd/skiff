@@ -2,6 +2,7 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import { deployments, orgQuotas, projects, releases } from '@skiff/db';
 import { limits } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
+import { featureEnabled } from './config.ts';
 import { QuotaError } from './errors.ts';
 
 /** Unlimited for the owner org, enforced for everyone else (D9). */
@@ -17,7 +18,13 @@ const UNLIMITED: Quota = { projects: -1, storageBytes: -1, retainedDeployments: 
 export class QuotaService {
 	constructor(private readonly ctx: CoreContext) {}
 
+	/** `SKIFF_FEATURE_QUOTAS` defaults on, so unset keeps the shipped behaviour. */
+	private enforced(): boolean {
+		return featureEnabled(this.ctx.config, 'QUOTAS');
+	}
+
 	get(orgId: string): Quota {
+		if (!this.enforced()) return UNLIMITED;
 		const row = this.ctx.db.select().from(orgQuotas).where(eq(orgQuotas.orgId, orgId)).get();
 		if (!row) return UNLIMITED;
 		return {
@@ -37,6 +44,7 @@ export class QuotaService {
 	}
 
 	assertCanCreateProject(orgId: string): void {
+		if (!this.enforced()) return;
 		const quota = this.get(orgId);
 		if (quota.projects < 0) return;
 		const count = this.ctx.db
@@ -49,6 +57,7 @@ export class QuotaService {
 	}
 
 	assertCanUpload(orgId: string, bytes: number): void {
+		if (!this.enforced()) return;
 		const quota = this.get(orgId);
 		if (quota.maxUploadBytes >= 0 && bytes > quota.maxUploadBytes)
 			throw new QuotaError(`Upload is ${bytes} bytes; this org allows ${quota.maxUploadBytes}.`);
@@ -64,6 +73,7 @@ export class QuotaService {
 
 	/** Effective retention count: org quota if set, otherwise the platform default. */
 	retention(orgId: string): number {
+		if (!this.enforced()) return limits.retainedDeployments;
 		const quota = this.get(orgId);
 		return quota.retainedDeployments >= 0 ? quota.retainedDeployments : limits.retainedDeployments;
 	}
