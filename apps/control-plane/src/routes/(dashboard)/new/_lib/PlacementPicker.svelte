@@ -149,7 +149,7 @@
 							<span
 								class="h-full transition-[width] duration-500 ease-out {fit
 									? 'bg-brand'
-									: 'bg-destructive bg-[repeating-linear-gradient(135deg,transparent_0_3px,rgb(255_255_255/0.25)_3px_6px)]'}"
+									: 'bg-destructive'}"
 								style:width="{Math.min(adding, 100 - reserved)}%"
 							></span>
 						{/if}

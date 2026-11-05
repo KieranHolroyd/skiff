@@ -88,11 +88,11 @@ const PAGES: Record<ErrorPageKind, ErrorPage> = {
 };
 
 const STYLE = `
-:root{color-scheme:light dark;--bg:#fafafa;--card:#fff;--fg:#0a0a0a;--muted:#737373;--border:#e5e5e5;--accent:#171717;--accent-fg:#fafafa;--code:#f5f5f5;--glow:rgba(0,0,0,.04)}
-@media (prefers-color-scheme:dark){:root{--bg:#0a0a0a;--card:#141414;--fg:#fafafa;--muted:#a3a3a3;--border:#262626;--accent:#fafafa;--accent-fg:#0a0a0a;--code:#1f1f1f;--glow:rgba(255,255,255,.03)}}
+:root{color-scheme:light dark;--bg:#fafafa;--card:#fff;--fg:#0a0a0a;--muted:#737373;--border:#e5e5e5;--accent:#171717;--accent-fg:#fafafa;--code:#f5f5f5}
+@media (prefers-color-scheme:dark){:root{--bg:#0a0a0a;--card:#141414;--fg:#fafafa;--muted:#a3a3a3;--border:#262626;--accent:#fafafa;--accent-fg:#0a0a0a;--code:#1f1f1f}}
 *{box-sizing:border-box}
 html,body{height:100%}
-body{margin:0;display:grid;place-items:center;padding:24px 16px;background:var(--bg) radial-gradient(circle at 50% 0,var(--glow),transparent 60%);color:var(--fg);font:15px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;-webkit-font-smoothing:antialiased}
+body{margin:0;display:grid;place-items:center;padding:24px 16px;background:var(--bg);color:var(--fg);font:15px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;-webkit-font-smoothing:antialiased}
 main{width:100%;max-width:440px;text-align:center}
 .icon{width:48px;height:48px;margin:0 auto 20px;display:grid;place-items:center;border:1px solid var(--border);border-radius:12px;background:var(--card);color:var(--muted)}
 .icon svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}

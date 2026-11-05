@@ -41,14 +41,6 @@
 		source: { repo: string; ref: string };
 	} = $props();
 
-	const glow: Record<Tone, string> = {
-		success: 'from-success/[0.07]',
-		warning: 'from-warning/[0.08]',
-		danger: 'from-destructive/[0.07]',
-		info: 'from-info/[0.07]',
-		brand: 'from-brand/[0.07]',
-		neutral: 'from-muted/60'
-	};
 	const eyebrowTone: Record<Tone, string> = {
 		success: 'text-success',
 		warning: 'text-warning',
@@ -65,13 +57,6 @@
 	class="relative overflow-hidden rounded-xl border bg-card text-card-foreground shadow-xs"
 	aria-labelledby="update-hero-title"
 >
-	<div
-		class="pointer-events-none absolute inset-0 bg-linear-to-br via-transparent to-transparent {glow[
-			tone
-		]}"
-		aria-hidden="true"
-	></div>
-
 	<div class="relative flex flex-col gap-5 p-5 sm:flex-row sm:items-center sm:gap-6 sm:p-6">
 		<div class="flex min-w-0 flex-1 items-start gap-4">
 			<span

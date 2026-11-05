@@ -144,12 +144,6 @@
 					<li
 						class="group relative overflow-hidden rounded-2xl border bg-card shadow-xs transition-all hover:border-foreground/20 hover:shadow-md has-focus-visible:ring-3 has-focus-visible:ring-ring/50"
 					>
-						<!-- Soft wash in the template's colour, strongest behind the icon. -->
-						<div
-							class="pointer-events-none absolute -top-24 -left-24 size-72 rounded-full opacity-60 blur-3xl transition-opacity group-hover:opacity-90"
-							style="background: radial-gradient(circle, color-mix(in oklch, var(--brand) 14%, transparent), transparent 70%);"
-							aria-hidden="true"
-						></div>
 						<div
 							class="relative grid gap-6 p-5 sm:p-6 {featured
 								? 'lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] lg:gap-10'

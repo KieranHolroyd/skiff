@@ -26,9 +26,7 @@
 	class="relative flex shrink-0 items-center justify-center border shadow-xs {sizes[
 		size
 	]} {className}"
-	style="background: linear-gradient(140deg, color-mix(in oklch, oklch(0.7 0.14 {hue}) 22%, var(--card)), color-mix(in oklch, oklch(0.6 0.16 {(hue +
-		40) %
-		360}) 8%, var(--card))); color: color-mix(in oklch, oklch(0.55 0.17 {hue}) 85%, var(--foreground));"
+	style="background: color-mix(in oklch, oklch(0.7 0.14 {hue}) 16%, var(--card)); color: color-mix(in oklch, oklch(0.55 0.17 {hue}) 85%, var(--foreground));"
 	aria-hidden="true"
 >
 	<Icon strokeWidth={1.75} />

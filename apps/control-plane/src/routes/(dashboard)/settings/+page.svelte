@@ -129,10 +129,6 @@
 		class="relative overflow-hidden rounded-xl border bg-card shadow-xs"
 		aria-labelledby="org-name"
 	>
-		<div
-			class="pointer-events-none absolute inset-x-0 top-0 h-24 bg-[radial-gradient(120%_100%_at_0%_0%,color-mix(in_oklch,var(--brand)_14%,transparent),transparent_70%)]"
-			aria-hidden="true"
-		></div>
 		<div class="relative flex flex-wrap items-center gap-4 p-5">
 			<span
 				class="flex size-14 shrink-0 items-center justify-center rounded-xl bg-brand text-lg font-semibold tracking-tight text-brand-foreground shadow-sm ring-4 ring-brand/10"
