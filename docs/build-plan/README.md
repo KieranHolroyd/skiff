@@ -465,11 +465,14 @@ upgrade safety (06). Do not rebuild the shipped halves.
 
 | ID | Plan | Status | Branch | PR |
 |---|---|---|---|---|
-| F1 | Contracts/schema/modules | in progress | feat/wave0-f1-contracts | |
-| F2 | Streaming ObjectStore | in progress | feat/wave0-f2-streaming-objectstore | |
-| F3 | Debian 13 e2e | in progress | feat/wave0-f3-e2e | |
-| F4 | Scheduler primitive | in progress | feat/wave0-f4-scheduler | |
-| F5 | Flags/migrations | in progress | feat/wave0-f5-flags | |
+| F1 | Contracts/schema/modules | merged — d92cfc0, 8 contract modules | feat/wave0-f1-contracts | |
+| F2 | Streaming ObjectStore | merged — 36a5634, 14 tests | feat/wave0-f2-streaming-objectstore | |
+| F3 | Debian 13 e2e | merged — 9642fef, 16 container checks | feat/wave0-f3-e2e | |
+| F4 | Scheduler primitive | merged — 0e39d76, migration renumbered to 0017 | feat/wave0-f4-scheduler | |
+| F5 | Flags/migrations | merged — f71c200, shipped-surface defaults corrected | feat/wave0-f5-flags | |
+
+Integration branch: `feat/wave0-foundations` at `e081f56`: 977 tests pass, `bun run check`
+green, 17 migrations check clean.
 | 01 | Backups/PITR/restore | partial — logical backups shipped; PITR missing | | |
 | 02 | Object-storage surface | partial — browser shipped; bucket config missing | | |
 | 03 | Pooling/TLS | partial — pooler shipped; TLS/UX missing | | |

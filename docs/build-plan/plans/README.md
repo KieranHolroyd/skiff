@@ -38,15 +38,20 @@ ownership, and agent protocol.
 
 ## Current highest-leverage parallel set
 
-After F1–F5 merge, these six can run at once:
+Wave 0 is merged on `feat/wave0-foundations`. Most of the original Wave 1 surface already shipped
+before the plans were finalised, so start with the remaining gaps:
 
-- **01** backups/PITR (lane A)
-- **02** object-storage surface (lane B)
-- **03** pooling/TLS (lane C)
-- **04** isolation/rotation (lane C — pair with 03, different files)
-- **05** backup target (lane A — do this before 01's remote path)
-- **09** scheduler primitive + jobs (lane C — scheduler first)
+- **05** backup target — the next storage foundation; unblocks PITR and portability
+- **01b** PITR on top of the shipped logical backups
+- **02b** bucket versioning/lifecycle/CORS/quota/object-lock/share links
+- **03b** TLS and pooled/direct connection UX on top of the shipped pooler
+- **04b** per-org networks, named keys, encryption-at-rest proof
+- **06** upgrade safety, now that backups and `/readyz` have a base
 - **16** quota schema/usage (lane E)
 
-Do not start **06** until 01's snapshot hook exists. Do not start **10** until 03 and 04 are
-merged. Do not start **12** until 11's plan/apply is stable.
+Do not rebuild the shipped halves: database backups, object browser, PgBouncer, rotation, node
+volumes, extensions, or the MCP backup tools. Mark them `partial` and implement only the missing
+columns/behaviour from the status board.
+
+Do not start **10** until 03b and 04b are merged. Do not start **12** until 11's plan/apply is
+stable.
