@@ -57,10 +57,14 @@ const proxy: RequestHandler = (event) =>
 		}
 
 		// The studio root must end in `/` for DBGate's relative asset URLs (see `trailingSlash`).
+		// Temporary and uncacheable: a cached permanent redirect here is what looped before.
 		if (rest === '' && !event.url.pathname.endsWith('/')) {
 			return new Response(null, {
-				status: 308,
-				headers: { location: `${event.url.pathname}/${event.url.search}` }
+				status: 307,
+				headers: {
+					location: `${event.url.pathname}/${event.url.search}`,
+					'cache-control': 'no-store'
+				}
 			});
 		}
 

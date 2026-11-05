@@ -1,5 +1,16 @@
 import { describe, expect, test } from 'bun:test';
-import { rewriteStudioLocation, studioPath, studioUpstreamPath } from './studio.ts';
+import { rewriteStudioLocation, studioFrameUrl, studioPath, studioUpstreamPath } from './studio.ts';
+
+describe('studioFrameUrl', () => {
+	test('serves the studio root with a trailing slash and a cache-busting query', () => {
+		expect(studioFrameUrl('/databases/app-db/studio/proxy')).toBe(
+			'/databases/app-db/studio/proxy/?skiff-studio=1'
+		);
+		expect(studioFrameUrl('/databases/app-db/studio/proxy/')).toBe(
+			'/databases/app-db/studio/proxy/?skiff-studio=1'
+		);
+	});
+});
 
 describe('studioPath', () => {
 	test('builds the platform proxy path and encodes the database name', () => {

@@ -3,6 +3,19 @@ export function studioPath(name: string): string {
 	return `/databases/${encodeURIComponent(name)}/studio/proxy`;
 }
 
+/**
+ * The URL the dashboard loads the studio from (iframe and "open in new tab").
+ *
+ * The root must end in `/`: DBGate resolves its bundle relative to it. The query string is part of
+ * the browser's cache key, so it steps around the `…/proxy/` → `…/proxy` 308 that older builds
+ * served without cache headers. Browsers cached that permanent redirect, and replaying it against
+ * the current `…/proxy` → `…/proxy/` redirect loops. DBGate ignores the parameter.
+ */
+export function studioFrameUrl(path: string): string {
+	const root = path.endsWith('/') ? path : `${path}/`;
+	return `${root}?skiff-studio=1`;
+}
+
 /** Join the upstream gateway path with the request's rest path and query string. */
 export function studioUpstreamPath(
 	webRoot: string,

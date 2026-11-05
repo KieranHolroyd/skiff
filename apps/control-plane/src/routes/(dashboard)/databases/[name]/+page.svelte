@@ -72,7 +72,7 @@
 	import StorageMeter from '../_lib/StorageMeter.svelte';
 	import { databaseChart, databaseTotals, storagePercent } from '../_lib/database-series.js';
 	import { DATABASE_DEFAULT_TAB, DATABASE_TABS, type DatabaseTab } from '../_lib/database-tabs.js';
-	import { studioPath } from './_lib/studio.js';
+	import { studioFrameUrl, studioPath } from './_lib/studio.js';
 	import type { PageProps } from './$types';
 
 	interface DatabaseFormResult {
@@ -215,8 +215,7 @@
 	let slowStart = $state(false);
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-	// The trailing slash matters: DBGate resolves its assets relative to the studio root.
-	const consolePath = $derived(live?.path || `${studioPath(db.name)}/`);
+	const consolePath = $derived(studioFrameUrl(live?.path || studioPath(db.name)));
 	const frameKey = $derived(`${consolePath}:${live?.readOnly}:${live?.status}`);
 
 	$effect(() => {
