@@ -147,6 +147,19 @@
 	// --- buckets ---------------------------------------------------------------------------------
 
 	let bucketOpen = $state(false);
+	let bucketSettings = $state<StorageBucketView | null>(null);
+
+	const jsonText = (value: unknown) => JSON.stringify(value, null, 2);
+	const bucketQuotaMb = (bucket: StorageBucketView) =>
+		bucket.quotaBytes === null ? '' : String(Math.round(bucket.quotaBytes / 1024 / 1024));
+	const configTone = (status: StorageBucketView['configStatus']) =>
+		status === 'converged'
+			? 'success'
+			: status === 'error'
+				? 'danger'
+				: status === 'unsupported'
+					? 'warning'
+					: 'neutral';
 
 	function grantedTo(bucket: string): string[] {
 		return st.attachments
@@ -773,6 +786,11 @@
 							<Table.Cell class="pr-4">
 								{#if !deleted && (data.storageCan.update || data.storageCan.delete) && bucket.state !== 'deleting'}
 									<RowMenu label="Actions for {bucket.name}">
+										{#if data.storageCan.update && !deleted && bucket.state === 'ready'}
+											<DropdownMenu.Item onSelect={() => (bucketSettings = bucket)}>
+												<SlidersHorizontalIcon />Bucket settings…
+											</DropdownMenu.Item>
+										{/if}
 										{#if bucket.state === 'delete-blocked'}
 											{#if data.storageCan.update}
 												<DropdownMenu.Item onSelect={() => keepBucket(bucket)}>
@@ -1035,6 +1053,90 @@
 				</Field.Description>
 			</Field.Field>
 		</Field.Group>
+	</FormDialog>
+{/if}
+
+{#if data.storageCan.update && !deleted}
+	<FormDialog
+		bind:open={() => bucketSettings !== null, (open) => (bucketSettings = open ? bucketSettings : null)}
+		icon={SlidersHorizontalIcon}
+		title="Configure {bucketSettings?.name ?? ''}"
+		description="Desired state; the node applies it on its next reconcile and reports convergence. Object lock is set at creation and cannot be undone."
+		action="?/bucketConfig"
+		submitLabel="Save configuration"
+		size="lg"
+	>
+		{#if bucketSettings}
+			<input type="hidden" name="bucket" value={bucketSettings.name} />
+			<Field.Group>
+				<div class="grid gap-4 sm:grid-cols-2">
+					<Field.Field>
+						<Field.Label for="bucket-versioning">Versioning</Field.Label>
+						<NativeSelect.Root id="bucket-versioning" name="versioning" class="w-full" value={bucketSettings.versioning ? 'on' : 'off'}>
+							<NativeSelect.Option value="off">Off</NativeSelect.Option>
+							<NativeSelect.Option value="on">On</NativeSelect.Option>
+						</NativeSelect.Root>
+						<Field.Description>
+							{bucketSettings.objectLock
+								? 'Object lock is configured: versioning cannot be suspended.'
+								: 'Keeps previous object versions. Noncurrent lifecycle expiry needs it.'}
+						</Field.Description>
+					</Field.Field>
+					<Field.Field>
+						<Field.Label for="bucket-quota">Hard quota (MB)</Field.Label>
+						<Input
+							id="bucket-quota"
+							name="quotaMb"
+							value={bucketQuotaMb(bucketSettings)}
+							placeholder="none"
+							class="font-mono text-sm"
+						/>
+						<Field.Description>Empty or “none” means unlimited. Writes fail when the bucket is full.</Field.Description>
+					</Field.Field>
+				</div>
+				<Field.Field>
+					<Field.Label for="bucket-lifecycle">Lifecycle rules (JSON)</Field.Label>
+					<textarea
+						id="bucket-lifecycle"
+						name="lifecycle"
+						rows="5"
+						class="w-full rounded-md border bg-background p-2 font-mono text-xs"
+						value={jsonText(bucketSettings.lifecycle)}
+					></textarea>
+					<Field.Description>
+						Array of {`{ id, prefix?, expireDays?, noncurrentExpireDays?, abortIncompleteDays?, enabled }`}.
+					</Field.Description>
+				</Field.Field>
+				<Field.Field>
+					<Field.Label for="bucket-cors">CORS rules (JSON)</Field.Label>
+					<textarea
+						id="bucket-cors"
+						name="cors"
+						rows="4"
+						class="w-full rounded-md border bg-background p-2 font-mono text-xs"
+						value={jsonText(bucketSettings.cors)}
+					></textarea>
+					<Field.Description>
+						Array of {`{ origin: [], method: [], header?: [], expose?: [], maxAge? }`}.
+					</Field.Description>
+				</Field.Field>
+				{#if bucketSettings.objectLock}
+					<Notice tone="warning" title="Object lock is irreversible">
+						{bucketSettings.objectLock.mode} retention of {bucketSettings.objectLock.retainDays} days.
+						It was enabled at creation and cannot be disabled from Skiff.
+					</Notice>
+				{/if}
+				<div class="flex items-center gap-2 text-xs text-muted-foreground">
+					<StatusBadge
+						status={bucketSettings.configStatus}
+						label={bucketSettings.configStatus}
+						tone={configTone(bucketSettings.configStatus)}
+					/>
+					<span>config version {bucketSettings.configVersion}</span>
+					{#if bucketSettings.configMessage}<span>· {bucketSettings.configMessage}</span>{/if}
+				</div>
+			</Field.Group>
+		{/if}
 	</FormDialog>
 {/if}
 

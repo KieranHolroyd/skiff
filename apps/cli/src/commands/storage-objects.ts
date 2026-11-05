@@ -21,6 +21,8 @@ Commands:
                                  Create a folder marker (a zero-byte object ending in /)
   presign <storage> -b <bucket> -k <key> [--put] [--expires 1h]
                                  Print a presigned URL (public instances only)
+  share <storage> -b <bucket> -k <key> [--expires 7d] [--downloads <n>]
+                                 Share a signed link (private instances use the gateway; no key is exposed)
 
 Options:
   -b, --bucket <name>            Bucket to operate on (required)
@@ -55,6 +57,7 @@ const flags: FlagSpec = {
 	'content-type': { type: 'string' },
 	put: { type: 'boolean' },
 	expires: { type: 'string' },
+	downloads: { type: 'string' },
 	yes: { type: 'boolean', short: 'y' },
 	json: { type: 'boolean' },
 	help: { type: 'boolean', short: 'h' },
@@ -236,6 +239,37 @@ async function presignObject(argv: string[]): Promise<void> {
 	console.log(result.url);
 }
 
+async function shareObject(argv: string[]): Promise<void> {
+	const parsed = parse('share', argv);
+	if (!parsed) return;
+	const { args, name, bucket } = parsed;
+	const key = keyOf(args, usage);
+	const expiresMs = args.string('expires') ? parseDuration(args.string('expires')!, '--expires') : 604_800_000;
+	const expiresIn = Math.min(604_800, Math.max(60, Math.floor(expiresMs / 1000)));
+	const downloads = args.string('downloads');
+	const maxDownloads = downloads === undefined ? undefined : Number(downloads);
+	if (maxDownloads !== undefined && (!Number.isInteger(maxDownloads) || maxDownloads < 1))
+		throw new UsageError('--downloads must be a positive whole number.');
+	const client = await authenticatedClient();
+	const result = await client.signObject(name, bucket, {
+		key,
+		method: args.boolean('put') ? 'PUT' : 'GET',
+		expiresIn,
+		...(maxDownloads ? { maxDownloads } : {}),
+	});
+	if (args.boolean('json')) {
+		printJson(result);
+		return;
+	}
+	console.log(result.url);
+	if (process.stderr.isTTY)
+		process.stderr.write(
+			`Expires ${formatTime(result.expiresAt)}` +
+				`${result.maxDownloads ? `, ${result.maxDownloads} download${result.maxDownloads === 1 ? '' : 's'}` : ''}` +
+				`${result.direct ? ' (direct S3 URL)' : ' (platform gateway)'}.\n`,
+		);
+}
+
 export async function storageObjectsCommand(argv: string[]): Promise<void> {
 	const first = argv[0];
 	const handlers: Record<string, (rest: string[]) => Promise<void>> = {
@@ -251,6 +285,7 @@ export async function storageObjectsCommand(argv: string[]): Promise<void> {
 		folder: makeFolder,
 		presign: presignObject,
 		link: presignObject,
+		share: shareObject,
 	};
 	if (!first || first.startsWith('-')) {
 		console.log(usage);

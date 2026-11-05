@@ -342,7 +342,16 @@ describe('managed object storage', () => {
 
 		let entry = (await core.nodes.desiredState(edgeToken)).workloads.find((w) => w.projectSlug === 'media')!;
 		expect(entry.objectStorage!.buckets.map((bucket) => bucket.name)).toEqual(['avatars', 'uploads']);
-		expect(entry.objectStorage!.buckets[0]).toEqual({ name: 'avatars', access: 'public-read' });
+		expect(entry.objectStorage!.buckets[0]).toMatchObject({
+			name: 'avatars',
+			access: 'public-read',
+			versioning: false,
+			lifecycle: [],
+			cors: [],
+			quotaBytes: null,
+			objectLock: null,
+			configVersion: 2,
+		});
 		expect(entry.objectStorage!.deleteBuckets).toEqual([{ name: 'tmp', force: true }]);
 
 		heartbeat(edgeToken, edgeId, { storageBucketDeletions: [{ storageId: media.id, bucket: 'tmp', result: 'deleted' }] });

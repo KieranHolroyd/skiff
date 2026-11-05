@@ -82,6 +82,8 @@ const WRITE_PERMISSION: Record<string, Permission> = {
 	delete_database: 'database:delete',
 	create_storage: 'storage:create',
 	create_bucket: 'storage:update',
+	get_bucket_config: 'storage:read',
+	update_bucket_config: 'storage:update',
 	attach_storage: 'storage:update',
 	detach_storage: 'storage:update',
 	delete_storage: 'storage:delete'

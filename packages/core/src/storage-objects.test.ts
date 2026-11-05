@@ -206,4 +206,92 @@ describe('storage object browser', () => {
 			core.storageObjects.presign(owner, 'private', 'uploads', { key: 'x', method: 'GET', expiresIn: 60 }),
 		).rejects.toThrow(/public instance/);
 	});
+
+	test('stores bucket config and enforces object lock immutability', () => {
+		const bucket = core.storage.createBucket(owner, storageName, {
+			name: 'configured',
+			versioning: true,
+			lifecycle: [{ id: 'tmp', prefix: 'tmp/', expireDays: 7, abortIncompleteDays: 2 }],
+			cors: [{ origin: ['https://app.test'], method: ['GET'], header: [], expose: [] }],
+			quotaBytes: 1024 * 1024,
+			objectLock: { mode: 'governance', retainDays: 30 },
+		});
+		expect(bucket).toMatchObject({
+			versioning: true,
+			quotaBytes: 1024 * 1024,
+			objectLock: { mode: 'governance', retainDays: 30 },
+			configVersion: 1,
+			configStatus: 'pending',
+		});
+		expect(core.storage.getBucketConfig(owner, storageName, 'configured').lifecycle).toHaveLength(1);
+		expect(() => core.storage.updateBucket(owner, storageName, 'configured', { versioning: false })).toThrow(
+			/versioning cannot be suspended/,
+		);
+		expect(() =>
+			core.storage.updateBucket(owner, storageName, 'configured', {
+				objectLock: { mode: 'governance', retainDays: 30 },
+			} as never),
+		).toThrow(/cannot be changed/);
+		const updated = core.storage.updateBucket(owner, storageName, 'configured', {
+			quotaBytes: null,
+			lifecycle: [],
+		});
+		expect(updated).toMatchObject({ quotaBytes: null, lifecycle: [], configVersion: 2, configStatus: 'pending' });
+	});
+
+	test('mints direct share links for public instances and never leaks the root key', async () => {
+		const secret = core.storage.credentials(owner, storageName).secretAccessKey;
+		const link = await core.storageObjects.share(owner, storageName, 'uploads', {
+			key: 'photos/a b.png',
+			method: 'GET',
+			expiresIn: 600,
+		});
+		expect(link.direct).toBe(true);
+		expect(link.url).toStartWith('https://media--s3.sites.test/uploads/photos/a%20b.png?');
+		expect(link.url).toContain('X-Amz-Signature=');
+		expect(link.expiresIn).toBe(600);
+		expect(JSON.stringify(link)).not.toContain(secret);
+		expect(core.audit.list({ principal: owner, limit: 10 }).map((entry) => entry.action)).toContain(
+			'storage.share.create',
+		);
+	});
+
+	test('counts downloads on a limited GET link and rejects it afterwards', async () => {
+		const link = await core.storageObjects.share(owner, storageName, 'uploads', {
+			key: 'hello.txt',
+			method: 'GET',
+			expiresIn: 600,
+			maxDownloads: 1,
+		});
+		expect(link.direct).toBe(false);
+		expect(link.url).toContain('/share/storage/');
+		const token = link.url.split('/').at(-1)!;
+		const response = await core.storageObjects.redeem(token, new Request(`https://control.test/share/storage/${token}`));
+		expect(await response.text()).toBe('hello object');
+		await expect(
+			core.storageObjects.redeem(token, new Request(`https://control.test/share/storage/${token}`)),
+		).rejects.toThrow(/download limit/);
+	});
+
+	test('private share links use the gateway and are bound to their method and expiry', async () => {
+		const privateStorage = core.storage.create(owner, { name: 'private-share', buckets: ['uploads'] });
+		expect(privateStorage.publicUrl).toBeNull();
+		const link = await core.storageObjects.share(owner, 'private-share', 'uploads', {
+			key: 'hello.txt',
+			method: 'GET',
+			expiresIn: 60,
+		});
+		expect(link.direct).toBe(false);
+		expect(link.url).toStartWith('https://control.test/share/storage/');
+		const token = link.url.split('/').at(-1)!;
+		await expect(
+			core.storageObjects.redeem(token, new Request(`https://control.test/share/storage/${token}`, { method: 'PUT' })),
+		).rejects.toThrow(/GET requests only/);
+
+		clock += 61_000;
+		await expect(
+			core.storageObjects.redeem(token, new Request(`https://control.test/share/storage/${token}`)),
+		).rejects.toThrow(/expired or was revoked/);
+		clock -= 61_000;
+	});
 });

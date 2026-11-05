@@ -624,8 +624,9 @@ class AgentRuntime {
 		const backupResults = this.databaseBackups.pendingResults();
 		const rotationResults = this.databaseRotations.pendingResults();
 		const poolerRestarted = this.databasePoolerRestarts.pending();
-		// Bucket deletions are reported once, capped by the heartbeat schema (S8).
+		// Bucket deletions and config convergence are reported once, capped by the heartbeat schema.
 		const storageBucketDeletions = this.storageAdmin.pendingBucketDeletions().slice(0, 500);
+		const storageBucketConfigs = this.storageAdmin.pendingBucketConfigs().slice(0, 500);
 		// A storage move happens outside the agent's sandbox (D48); ask for it while it is due.
 		await this.storage
 			.reconcile(this.desired?.storage, storage)
@@ -649,6 +650,7 @@ class AgentRuntime {
 			...(purgedDatabases.length > 0 ? { purgedDatabases } : {}),
 			...(purgedStorage.length > 0 ? { purgedStorage } : {}),
 			...(storageBucketDeletions.length > 0 ? { storageBucketDeletions } : {}),
+			...(storageBucketConfigs.length > 0 ? { storageBucketConfigs } : {}),
 			...(volumeInventory ? { volumes: volumeInventory } : {}),
 		};
 
@@ -677,6 +679,7 @@ class AgentRuntime {
 		this.workloads.acknowledgePurgedDatabases(purgedDatabases);
 		this.workloads.acknowledgePurgedStorage(purgedStorage);
 		this.storageAdmin.acknowledgeBucketDeletions(storageBucketDeletions);
+		this.storageAdmin.acknowledgeBucketConfigs(storageBucketConfigs);
 		return true;
 	}
 

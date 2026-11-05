@@ -596,6 +596,23 @@ export const storageBuckets = sqliteTable(
 		storageId: text('storage_id').notNull(),
 		name: text('name').notNull(),
 		access: text('access', { enum: ['private', 'public-read'] }).notNull().default('private'),
+		/** Desired-state bucket configuration, converged by the node's agent. */
+		versioning: integer('versioning', { mode: 'boolean' }).notNull().default(false),
+		/** `BucketLifecycleRule[]`. */
+		lifecycleJson: text('lifecycle_json').notNull().default('[]'),
+		/** `BucketCorsRule[]`. */
+		corsJson: text('cors_json').notNull().default('[]'),
+		/** Hard byte cap; null means unlimited. */
+		quotaBytes: integer('quota_bytes'),
+		/** `BucketObjectLock`; create-only and irreversible. */
+		objectLockJson: text('object_lock_json'),
+		/** Bumped on every desired-state change; the agent echoes it in its report. */
+		configVersion: integer('config_version').notNull().default(1),
+		configStatus: text('config_status', { enum: ['pending', 'converged', 'error', 'unsupported'] })
+			.notNull()
+			.default('pending'),
+		configMessage: text('config_message'),
+		lastConvergedAt: integer('last_converged_at'),
 		sizeBytes: integer('size_bytes'),
 		objects: integer('objects'),
 		statsAt: integer('stats_at'),
@@ -608,6 +625,30 @@ export const storageBuckets = sqliteTable(
 		createdAt: integer('created_at').notNull().$defaultFn(now),
 	},
 	(t) => [uniqueIndex('storage_buckets_name_idx').on(t.storageId, t.name)],
+);
+
+/** Share links for one object. Only a hash of the browser token is stored; never a key. */
+export const storageShareLinks = sqliteTable(
+	'storage_share_links',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		storageId: text('storage_id').notNull(),
+		bucket: text('bucket').notNull(),
+		key: text('key').notNull(),
+		method: text('method', { enum: ['GET', 'PUT'] }).notNull().default('GET'),
+		tokenHash: text('token_hash').notNull(),
+		expiresAt: integer('expires_at').notNull(),
+		maxDownloads: integer('max_downloads'),
+		downloads: integer('downloads').notNull().default(0),
+		revokedAt: integer('revoked_at'),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+	},
+	(t) => [
+		uniqueIndex('storage_share_links_token_idx').on(t.tokenHash),
+		index('storage_share_links_storage_idx').on(t.storageId),
+	],
 );
 
 export const storageAttachments = sqliteTable(

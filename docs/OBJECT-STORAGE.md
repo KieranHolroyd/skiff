@@ -215,10 +215,34 @@ and refuses to run if it is gone (D76). See [VOLUMES.md](./VOLUMES.md).
 | Surface | What |
 |---|---|
 | Permissions | New `storage` resource: `create`, `read`, `update`, `delete`, `credentials`. Deployer gets everything except `delete`; viewer gets `read`; agents get the deployer set minus `credentials`. |
-| REST | `GET/POST /api/v1/storage`, `GET/PATCH/DELETE /api/v1/storage/:name`, `POST …/:name/restore`, `GET …/:name/credentials`, `GET …/:name/metrics`, `GET/POST …/:name/buckets`, `PATCH/DELETE …/:name/buckets/:bucket`, `GET/POST /api/v1/projects/:slug/storage`, `PATCH/DELETE …/storage/:name`; object endpoints under `…/:name/objects` (list, item GET/HEAD/PUT/DELETE, bulk delete, folder, presign) |
-| MCP | `list_storage`, `get_storage`, `create_storage`, `create_bucket`, `attach_storage`, `detach_storage`, `delete_storage` (confirmed, soft), `list_objects`, `presign_object`, `create_object_folder`, `restart_storage`, `get_storage_logs`. No bucket force-delete, object delete, key reveal or purge. |
-| CLI | `skif storage list\|create\|info\|update\|restart\|delete\|restore\|credentials`, `skif storage buckets list\|create\|delete`, `skif storage attach\|detach`, `skif storage objects ls\|get\|put\|rm\|mkdir\|presign` |
-| Dashboard | Storage list + create, detail (status, endpoint, public toggle, buckets, attached projects, charts), attach from a project with bucket grants, and an object browser (folder navigation, upload, download, delete, presigned links) |
+| REST | `GET/POST /api/v1/storage`, `GET/PATCH/DELETE /api/v1/storage/:name`, `POST …/:name/restore`, `GET …/:name/credentials`, `GET …/:name/metrics`, `GET/POST …/:name/buckets`, `PATCH/DELETE …/:name/buckets/:bucket`, `GET/PATCH …/:name/buckets/:bucket/config`, `POST …/:name/buckets/:bucket/sign`, `GET/POST /api/v1/projects/:slug/storage`, `PATCH/DELETE …/storage/:name`; object endpoints under `…/:name/objects` (list, item GET/HEAD/PUT/DELETE, bulk delete, folder, presign) |
+| MCP | `list_storage`, `get_storage`, `create_storage`, `create_bucket`, `get_bucket_config`, `update_bucket_config`, `attach_storage`, `detach_storage`, `delete_storage` (confirmed, soft), `list_objects`, `presign_object`, `create_object_folder`, `restart_storage`, `get_storage_logs`. No bucket force-delete, object delete, key reveal or purge. |
+| CLI | `skif storage list\|create\|info\|update\|restart\|delete\|restore\|credentials`, `skif storage bucket list\|create\|config\|update\|delete`, `skif storage attach\|detach`, `skif storage objects ls\|get\|put\|rm\|mkdir\|presign\|share` |
+| Dashboard | Storage list + create, detail (status, endpoint, public toggle, buckets, per-bucket settings, attached projects, charts), attach from a project with bucket grants, and an object browser (folder navigation, upload, download, delete, signed share links) |
+
+### Bucket configuration
+
+A bucket's desired state is `access`, `versioning`, `lifecycle`, `cors`, `quotaBytes` and
+`objectLock`. The control plane stores it on `storage_buckets` and increments `config_version` on
+every change; the node's agent converges it over the S3 and RustFS admin APIs and reports
+`configStatus` (`pending`, `converged`, `error`, `unsupported`) on its heartbeat.
+
+- **Object lock** is create-only, requires versioning, and is irreversible. It is rejected by the
+  update schema; the service also refuses to suspend versioning on a locked bucket.
+- **Quota** is a hard byte cap through `/rustfs/admin/v3/quota/<bucket>`; a missing endpoint is
+  reported as `unsupported`, never silently ignored. RustFS logs a quota degradation itself when
+  enforcement cannot read its config.
+- **CORS** uses the S3 bucket CORS API. RustFS's own documentation only describes a server-wide
+  `RUSTFS_CORS_ALLOWED_ORIGINS` allowlist, so a 1.0 build that lacks `PUT ?cors` reports
+  `unsupported` on the bucket instead of pretending the rule was applied.
+- **Repair**: a changed `config_version` re-applies immediately; every 15 minutes the agent
+  re-asserts all buckets, so out-of-band edits are repaired.
+- **Share links** are signed server-side with the instance root key. Public GET/PUT links go
+  straight to S3; a limit or a private instance goes through `/share/storage/<token>`, which
+  enforces the GET download count atomically. Only a hash of the token is stored; a key is never
+  returned. All creation and configuration changes are audited.
+
+New bucket-configuration and share mutations are gated by `SKIFF_FEATURE_OBJECT_BROWSER`.
 
 **Restart and bulk actions.** `POST /storage/:name/restart` (and `skif storage restart <name>`)
 bumps the instance's restart generation; the node re-applies the unit and RustFS restarts with its
@@ -249,6 +273,6 @@ and report per-item skips.
   any endpoint) can point at a managed instance. It's allowed as a **replication target only**:
   canonical platform artifacts can't live on a workload whose own deploys need those artifacts.
   This covers part of the roadmap's "Garage/MinIO" item.
-- Human access keys with bucket grants; key rotation in the dashboard; per-bucket quotas; lifecycle
-  rules (expire after N days); CORS config per bucket; custom domains for public instances; Garage
-  as a second engine; bulk actions and prune for storage.
+- Human access keys with bucket grants; key rotation in the dashboard; custom domains for public
+  instances; Garage as a second engine; bulk actions and prune for storage; share-link revocation
+  and view history in the dashboard (the API records and counts, but no UI to revoke yet).

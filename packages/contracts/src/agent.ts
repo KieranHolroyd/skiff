@@ -6,6 +6,7 @@ import { databaseMetricBucketSchema, databaseSnapshotSchema } from './database.t
 import { databaseBackupResultSchema, databaseBackupTaskSchema } from './database-backup.ts';
 import { databaseRotationResultSchema, databaseRotationTaskSchema } from './database.ts';
 import {
+	storageBucketConfigReportSchema,
 	storageBucketDeletionSchema,
 	storageBucketSnapshotSchema,
 	storageMetricBucketSchema,
@@ -175,6 +176,8 @@ export const heartbeatSchema = z.object({
 	databasePoolerRestarted: z.array(z.string()).max(50).optional(),
 	/** Outcomes of `objectStorage.deleteBuckets` entries since the last heartbeat. */
 	storageBucketDeletions: z.array(storageBucketDeletionSchema).max(500).optional(),
+	/** Bucket configuration convergence outcomes since the last heartbeat. */
+	storageBucketConfigs: z.array(storageBucketConfigReportSchema).max(500).optional(),
 });
 export type Heartbeat = z.infer<typeof heartbeatSchema>;
 

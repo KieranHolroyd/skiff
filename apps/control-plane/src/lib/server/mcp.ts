@@ -11,6 +11,7 @@ import {
 import * as z from 'zod';
 import {
 	bucketCreateSchema,
+	bucketUpdateSchema,
 	bucketNameSchema,
 	databaseAttachSchema,
 	databaseBackupCreateSchema,
@@ -1485,6 +1486,43 @@ function buildServer(
 			scopeChallenge: requires('storage:update'),
 		},
 		async ({ storage, ...input }) => run(() => ({ bucket: core.storage.createBucket(principal, storage, input) })),
+	);
+
+	tool(
+		'get_bucket_config',
+		{
+			title: 'Get bucket configuration',
+			description:
+				'Read a bucket’s desired configuration and the node’s last convergence report: access, versioning, lifecycle rules, ' +
+				'CORS, hard quota and object lock. `configStatus` is pending, converged, error or unsupported.',
+			inputSchema: z.object({
+				storage: z.string().describe('Storage instance name'),
+				bucket: bucketNameSchema,
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('storage:read'),
+		},
+		async ({ storage, bucket }) =>
+			run(() => ({ config: core.storage.getBucketConfig(principal, storage, bucket) })),
+	);
+
+	tool(
+		'update_bucket_config',
+		{
+			title: 'Update bucket configuration',
+			description:
+				'Change a bucket’s desired versioning, lifecycle, CORS or hard byte quota. Send only the fields that change; the node ' +
+				'applies them on its next reconcile and reports configStatus. Object lock is create-only and cannot be changed here. ' +
+				'Disabling versioning is refused while object lock is configured.',
+			inputSchema: bucketUpdateSchema.extend({
+				storage: z.string().describe('Storage instance name'),
+				bucket: bucketNameSchema,
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('storage:update'),
+		},
+		async ({ storage, bucket, ...input }) =>
+			run(() => ({ config: core.storage.updateBucket(principal, storage, bucket, input) })),
 	);
 
 	tool(
