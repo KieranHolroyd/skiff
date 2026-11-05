@@ -109,6 +109,8 @@ export interface WorkloadDatabase {
 	version: string;
 	/** WAL archiving for PITR (docs/PITR.md); omitted when the feature is off. */
 	pitr?: { stanza: string; archiveTimeoutSeconds: number };
+	/** Render Postgres with the helper-generated certificate (SKIFF_FEATURE_DB_TLS). */
+	tls?: boolean;
 }
 
 /** Workload ids of managed databases carry this prefix; `purge` accepts these and `st_` ids. */
@@ -134,7 +136,7 @@ export function parseDatabase(value: unknown, label = 'workload.database'): Work
 	if (typeof version !== 'string' || !(info.versions as readonly string[]).includes(version))
 		throw new ValidationError(`${label}.version must be one of ${info.versions.join(', ')}`);
 	for (const key of Object.keys(record)) {
-		if (key !== 'engine' && key !== 'version' && key !== 'pitr')
+		if (key !== 'engine' && key !== 'version' && key !== 'pitr' && key !== 'tls')
 			throw new ValidationError(`${label}.${key} is not supported`);
 	}
 	const parsed: WorkloadDatabase = { engine: engine as DatabaseEngine, version };
@@ -154,6 +156,10 @@ export function parseDatabase(value: unknown, label = 'workload.database'): Work
 			if (key !== 'stanza' && key !== 'archiveTimeoutSeconds')
 				throw new ValidationError(`${label}.pitr.${key} is not supported`);
 		}
+	}
+	if (record.tls !== undefined) {
+		if (typeof record.tls !== 'boolean') throw new ValidationError(`${label}.tls must be a boolean`);
+		parsed.tls = record.tls;
 	}
 	return parsed;
 }

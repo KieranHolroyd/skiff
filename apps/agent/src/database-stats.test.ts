@@ -5,6 +5,10 @@ import {
 	bunSqlConnector,
 	counterDeltas,
 	DatabaseStatsSampler,
+	POOLER_POOLS_SQL,
+	POOLER_STATS_SQL,
+	parsePoolerPools,
+	parsePoolerStats,
 	STATEMENT_TIMEOUT_SQL,
 	STATS_SQL,
 	TABLES_SQL,
@@ -68,7 +72,14 @@ class FakePostgres {
 	/** Usernames whose connection fails (auth error, server down). */
 	refuse = new Set<string>();
 	failTables = false;
+	failPooler = false;
 	stats: Record<string, unknown> = baseStats();
+	poolRows: Array<Record<string, unknown>> = [
+		{ database: 'orders', cl_active: 4, cl_waiting: 2, sv_active: 3, sv_idle: 7 },
+	];
+	poolStatsRows: Array<Record<string, unknown>> = [
+		{ database: 'orders', total_xact_count: 100, avg_wait_time: 2_000 },
+	];
 	tables: Array<Record<string, unknown>> = [
 		{
 			schema: 'public',
@@ -89,6 +100,12 @@ class FakePostgres {
 				if (this.refuse.has(options.username))
 					throw new Error(`password authentication failed for user "${options.username}"`);
 				this.queries.push({ user: options.username, text, params });
+				if (options.database === 'pgbouncer') {
+					if (this.failPooler) throw new Error('pooler admin is down');
+					if (text === POOLER_POOLS_SQL) return this.poolRows;
+					if (text === POOLER_STATS_SQL) return this.poolStatsRows;
+					return [];
+				}
 				if (text === BOOTSTRAP_SQL)
 					return [
 						{
@@ -461,6 +478,99 @@ describe('bunSqlConnector', () => {
 		});
 		await expect(client.query('SELECT 1')).rejects.toThrow();
 		await client.close();
+	});
+});
+
+describe('pooler metrics', () => {
+	test('parses SHOW POOLS and SHOW STATS into gauges', () => {
+		const pools = parsePoolerPools(
+			[
+				{ database: 'orders', cl_active: 4, cl_waiting: 2, sv_active: 3, sv_idle: 7 },
+				{ database: 'pgbouncer', cl_active: 1, sv_active: 1 },
+			],
+			20,
+		);
+		expect(pools).toMatchObject({
+			poolerUp: 1,
+			poolActive: 4,
+			poolIdle: 7,
+			poolWaiting: 2,
+			poolSaturation: 0.3,
+		});
+		const withWait = parsePoolerStats(
+			[
+				{ database: 'orders', total_xact_count: 100, avg_wait_time: 2_000 },
+				{ database: 'orders', total_xact_count: 300, avg_wait_time: 6_000 },
+			],
+			pools,
+		);
+		expect(withWait.poolAvgWaitMs).toBe(5);
+	});
+
+	test('samples the admin console without affecting the database bucket', async () => {
+		const f = fixture();
+		f.source.targets = [
+			target({
+				tls: { caPem: '-----BEGIN CERTIFICATE-----\nCA\n' },
+				pooler: { port: 16432, username: 'orders', password: OWNER_PASSWORD },
+			}),
+		];
+		await f.sampler.sample();
+		const [bucket] = f.sampler.pending().databases;
+		expect(bucket).toMatchObject({
+			up: true,
+			poolerUp: 1,
+			poolActive: 4,
+			poolIdle: 7,
+			poolWaiting: 2,
+			poolAvgWaitMs: 2,
+		});
+		expect(
+			f.pg.connects.some(
+				(options) =>
+					options.database === 'pgbouncer' &&
+					options.tls !== false &&
+					typeof options.tls === 'object',
+			),
+		).toBe(true);
+		expect(
+			f.pg.connects
+				.filter((options) => options.database === 'orders')
+				.every((options) => options.tls && typeof options.tls === 'object' && options.tls.rejectUnauthorized),
+		).toBe(true);
+	});
+
+	test('a pooler failure keeps the database sample', async () => {
+		const f = fixture();
+		f.pg.failPooler = true;
+		f.source.targets = [
+			target({ pooler: { port: 16432, username: 'orders', password: OWNER_PASSWORD } }),
+		];
+		await f.sampler.sample();
+		const [bucket] = f.sampler.pending().databases;
+		expect(bucket).toMatchObject({ up: true, poolerUp: 0, poolActive: 0 });
+		expect(f.logs.some((message) => message.includes('pooler sample failed'))).toBe(true);
+	});
+});
+
+describe('database TLS', () => {
+	test('passes the CA to the driver when the helper reports one', async () => {
+		const f = fixture();
+		f.source.targets = [target({ tls: { caPem: 'ca-pem' } })];
+		await f.sampler.sample();
+		const connects = f.pg.connects.filter((options) => options.database === 'orders');
+		expect(connects.length).toBeGreaterThan(0);
+		expect(connects.every((options) => options.tls && typeof options.tls === 'object')).toBe(true);
+		for (const options of connects)
+			expect(options.tls).toEqual({ ca: 'ca-pem', rejectUnauthorized: true });
+	});
+
+	test('uses an encrypted, unverified connection when TLS is on but the CA is not known yet', async () => {
+		const f = fixture();
+		f.source.targets = [target({ tls: { caPem: null } })];
+		await f.sampler.sample();
+		const options = f.pg.connects.find((item) => item.database === 'orders');
+		expect(options?.tls).toEqual({ rejectUnauthorized: false });
 	});
 });
 

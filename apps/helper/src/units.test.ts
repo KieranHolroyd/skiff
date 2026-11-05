@@ -292,6 +292,26 @@ describe('database unit', () => {
 			renderDatabaseUnit({ workload: workload(), envFile: '/run/env', dataDir: '/var/lib/x' }),
 		).toThrow(/database/);
 	});
+
+	test('mounts the TLS directory and enables ssl with TLSv1.2', () => {
+		const unit = renderDatabaseUnit({
+			workload: database(),
+			envFile: '/run/env',
+			dataDir: '/var/lib/x',
+			tlsDir: `/run/skiff-workloads/${DB_ID}/tls`,
+		});
+		expect(unit).toContain(`Volume=/run/skiff-workloads/${DB_ID}/tls:/run/skiff-tls:ro,Z`);
+		expect(unit).toContain('ssl=on');
+		expect(unit).toContain('ssl_cert_file=/run/skiff-tls/server.crt');
+		expect(unit).toContain('ssl_key_file=/run/skiff-tls/server.key');
+		expect(unit).toContain('ssl_min_protocol_version=TLSv1.2');
+	});
+
+	test('does not mount TLS when the directory is absent', () => {
+		const unit = renderDatabaseUnit({ workload: database(), envFile: '/run/env', dataDir: '/var/lib/x' });
+		expect(unit).not.toContain('/run/skiff-tls');
+		expect(unit).not.toContain('ssl=on');
+	});
 });
 
 describe('database pooler unit', () => {
@@ -332,6 +352,24 @@ describe('database pooler unit', () => {
 			'pool_mode = transaction',
 		);
 		expect(renderPoolerUserlist('main_db', 'p"a\\ss')).toBe('"main_db" "p\\"a\\\\ss"\n');
+		const config = renderPoolerConfig({
+			databaseAlias: 'db-abc123',
+			authFile: '/etc/pgbouncer/userlist.txt',
+			adminUser: 'main_db',
+			tls: { certFile: '/run/skiff-tls/server.crt', keyFile: '/run/skiff-tls/server.key' },
+		});
+		expect(config).toContain('admin_users = main_db');
+		expect(config).toContain('client_tls_sslmode = require');
+		expect(config).toContain('client_tls_cert_file = /run/skiff-tls/server.crt');
+		expect(config).toContain('client_tls_key_file = /run/skiff-tls/server.key');
+		expect(
+			renderPoolerUnit({
+				workload: database(),
+				configPath: '/run/pgbouncer.ini',
+				userlistPath: '/run/users.txt',
+				tlsDir: '/run/skiff-workloads/db_abc123/tls',
+			}),
+		).toContain('Volume=/run/skiff-workloads/db_abc123/tls:/run/skiff-tls:ro,Z');
 	});
 });
 

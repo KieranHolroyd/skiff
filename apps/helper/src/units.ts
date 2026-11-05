@@ -64,9 +64,20 @@ export function renderPoolerConfig(options: {
 	authFile: string;
 	maxClientConn?: number;
 	defaultPoolSize?: number;
+	/** Database owner allowed to run `SHOW POOLS`/`SHOW STATS` for metrics. */
+	adminUser?: string;
+	/** Client-facing TLS files inside the pooler container (DB_TLS). */
+	tls?: { certFile: string; keyFile: string } | null;
 }): string {
 	const maxClient = options.maxClientConn ?? 200;
 	const poolSize = options.defaultPoolSize ?? 20;
+	const admin =
+		options.adminUser && /^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(options.adminUser)
+			? `admin_users = ${options.adminUser}\n`
+			: '';
+	const tls = options.tls
+		? `client_tls_sslmode = require\nclient_tls_cert_file = ${options.tls.certFile}\nclient_tls_key_file = ${options.tls.keyFile}\n`
+		: '';
 	return `[databases]
 * = host=${options.databaseAlias} port=5432
 
@@ -75,7 +86,7 @@ listen_addr = 0.0.0.0
 listen_port = 6432
 auth_type = scram-sha-256
 auth_file = ${options.authFile}
-pool_mode = transaction
+${admin}${tls}pool_mode = transaction
 max_client_conn = ${maxClient}
 default_pool_size = ${poolSize}
 reserve_pool_size = 5
@@ -98,6 +109,8 @@ export function renderPoolerUnit(options: {
 	workload: WorkloadDesired;
 	configPath: string;
 	userlistPath: string;
+	/** Host TLS directory mounted read-only when the pooler terminates client TLS. */
+	tlsDir?: string | null;
 }): string {
 	const { workload } = options;
 	if (!workload.database || !workload.pooler)
@@ -119,6 +132,7 @@ export function renderPoolerUnit(options: {
 	lines.push(`NetworkAlias=${databaseAlias(workload.id)}-pool`);
 	lines.push(`Volume=${options.configPath}:/etc/pgbouncer/pgbouncer.ini:ro,Z`);
 	lines.push(`Volume=${options.userlistPath}:/etc/pgbouncer/userlist.txt:ro,Z`);
+	if (options.tlsDir) lines.push(`Volume=${options.tlsDir}:/run/skiff-tls:ro,Z`);
 	lines.push('DropCapability=all');
 	lines.push('NoNewPrivileges=true');
 	lines.push('ReadOnly=true');
@@ -377,6 +391,8 @@ export interface ContainerUnitOptions {
 	secretsDir: string | null;
 	/** Managed database WAL archiving (docs/PITR.md). */
 	pitr?: DatabaseUnitOptions['pitr'];
+	/** Host directory holding the database certificate/key, mounted read-only when TLS is on. */
+	tlsDir?: string | null;
 }
 
 /**
@@ -391,6 +407,7 @@ export function renderContainerUnit(options: ContainerUnitOptions): string {
 			envFile: options.envFile,
 			dataDir: options.dataDir,
 			...(options.pitr ? { pitr: options.pitr } : {}),
+			tlsDir: options.tlsDir ?? null,
 		});
 	if (workload.objectStorage) return renderStorageUnit({ workload, envFile: options.envFile, dataDir: options.dataDir });
 	const lines: string[] = [];
@@ -445,6 +462,8 @@ export interface DatabaseUnitOptions {
 		pgpassPath: string;
 		archiveTimeoutSeconds: number;
 	};
+	/** Host TLS directory mounted read-only at /run/skiff-tls; null renders plaintext only. */
+	tlsDir?: string | null;
 }
 
 /**
@@ -492,6 +511,18 @@ export function renderDatabaseUnit(options: DatabaseUnitOptions): string {
 			`archive_timeout=${options.pitr.archiveTimeoutSeconds}`,
 		);
 	}
+	if (options.tlsDir) {
+		execArgs.push(
+			'-c',
+			'ssl=on',
+			'-c',
+			'ssl_cert_file=/run/skiff-tls/server.crt',
+			'-c',
+			'ssl_key_file=/run/skiff-tls/server.key',
+			'-c',
+			'ssl_min_protocol_version=TLSv1.2',
+		);
+	}
 	lines.push(`Exec=${execArgs.map(quoteSystemdArg).join(' ')}`);
 	lines.push(`User=${info.uid}:${info.gid}`);
 	lines.push(`PublishPort=127.0.0.1:${workload.port}:${info.containerPort}`);
@@ -503,6 +534,7 @@ export function renderDatabaseUnit(options: DatabaseUnitOptions): string {
 		lines.push(`Volume=${options.pitr.configPath}:/etc/pgbackrest/pgbackrest.conf:ro,Z`);
 		lines.push(`Volume=${options.pitr.pgpassPath}:/etc/pgbackrest/pgpass:ro,Z`);
 	}
+	if (options.tlsDir) lines.push(`Volume=${options.tlsDir}:/run/skiff-tls:ro,Z`);
 	// The socket dir is created 3777 by the image; ReadOnly=true needs it (and /tmp) on tmpfs.
 	lines.push('Tmpfs=/var/run/postgresql:rw,size=8m,mode=1777');
 	lines.push('Tmpfs=/tmp:rw,size=64m');

@@ -26,6 +26,8 @@ import {
 	databaseAttachSchema,
 	databaseBackupCreateSchema,
 	databaseBackupPolicySchema,
+	databaseConnectionSnippets,
+	databaseConnectionUrl,
 	databaseCreateSchema,
 	databaseEngineRegistry,
 	databaseEnvNames,
@@ -61,6 +63,7 @@ import {
 	type DatabaseRotationTask,
 	type DatabaseRotationView,
 	type DatabaseSnapshot,
+	type DatabaseSslMode,
 	type DatabaseStatus,
 	type DatabaseTableStat,
 	type DatabaseUpdate,
@@ -71,6 +74,7 @@ import {
 	type WorkloadRuntime,
 	type WorkloadStatus,
 } from '@skiff/contracts';
+import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
 import { featureEnabled } from './config.ts';
 import { nextCronTime } from './cron.ts';
@@ -110,6 +114,13 @@ interface ResolvedAttachment {
  * attached apps only at activation (D56, D58).
  */
 export class DatabaseService {
+	/**
+	 * Latest TLS state reported by nodes, keyed by database id. It is derived from the helper's
+	 * certificate files and deliberately not persisted: a control-plane restart loses only the CA
+	 * PEM until the next heartbeat (10 s), never the certificate itself.
+	 */
+	private readonly tlsReports = new Map<string, { caPem: string | null; error: string | null }>();
+
 	constructor(private readonly ctx: CoreContext) {}
 
 	// ---------------------------------------------------------------- reads
@@ -425,16 +436,52 @@ export class DatabaseService {
 			args: { name },
 			result: 'ok',
 		});
+		const tls = this.tlsState(row);
+		const directUrl = databaseConnectionUrl({
+			scheme: info.scheme,
+			user,
+			pass,
+			host: '127.0.0.1',
+			port: row.hostPort,
+			database: user,
+			sslmode: tls.mode,
+		});
+		const poolerUrl =
+			row.poolerEnabled && row.poolerPort !== null
+				? databaseConnectionUrl({
+						scheme: info.scheme,
+						user,
+						pass,
+						host: '127.0.0.1',
+						port: row.poolerPort,
+						database: user,
+						sslmode: tls.mode,
+					})
+				: null;
+		const tlsNote = tls.enabled
+			? 'TLS is on; use sslmode=require (or verify-full with the CA).'
+			: 'TLS is off; enable SKIFF_FEATURE_DB_TLS to encrypt connections.';
 		return {
 			databaseId: row.id,
 			name: row.name,
 			username: user,
 			password: pass,
 			databaseName: user,
-			url: connectionUrl(info.scheme, user, pass, '127.0.0.1', row.hostPort, user),
+			url: directUrl,
+			directUrl,
+			poolerUrl,
 			host: '127.0.0.1',
 			port: row.hostPort,
-			note: `Listens on loopback on node "${node?.name ?? row.nodeId}" only. From elsewhere, tunnel: ssh -L ${row.hostPort}:127.0.0.1:${row.hostPort} <node>.`,
+			sslmode: tls.mode,
+			tlsEnabled: tls.enabled,
+			caPem: tls.caPem,
+			connectionSnippets: databaseConnectionSnippets({
+				directUrl,
+				poolerUrl,
+				sslmode: tls.mode,
+				caPem: tls.caPem,
+			}),
+			note: `${tlsNote} Listens on loopback on node "${node?.name ?? row.nodeId}" only. From elsewhere, tunnel: ssh -L ${row.hostPort}:127.0.0.1:${row.hostPort} <node>. Use the direct URL for migrations and session-only features.`,
 		};
 	}
 
@@ -1812,23 +1859,38 @@ export class DatabaseService {
 		const env: Record<string, string> = {};
 		for (const item of this.resolveForConsumer(projectId, nodeId, runtime)) {
 			const pass = this.ctx.secrets.open(item.row.orgId, item.row.ownerSecret);
-			env[`${item.prefix}_URL`] = connectionUrl(item.scheme, item.user, pass, item.host, item.port, item.databaseName);
+			const tls = this.tlsState(item.row);
+			const direct = databaseConnectionUrl({
+				scheme: item.scheme,
+				user: item.user,
+				pass,
+				host: item.host,
+				port: item.port,
+				database: item.databaseName,
+				sslmode: tls.mode,
+			});
+			env[`${item.prefix}_URL`] = direct;
 			env[`${item.prefix}_HOST`] = item.host;
 			env[`${item.prefix}_PORT`] = String(item.port);
 			env[`${item.prefix}_USER`] = item.user;
 			env[`${item.prefix}_PASSWORD`] = pass;
 			env[`${item.prefix}_NAME`] = item.databaseName;
+			env[`${item.prefix}_SSL_MODE`] = tls.mode;
+			// Container env files cannot carry a multi-line PEM; those apps use sslmode=require or
+			// fetch the public CA from the credentials endpoint. Process env files escape newlines.
+			if (tls.enabled && tls.caPem && runtime === 'process') env[`${item.prefix}_CA_CERT`] = tls.caPem;
 			if (item.poolerPort !== null) {
 				const poolHost = runtime === 'container' ? `${databaseAlias(item.databaseId)}-pool` : '127.0.0.1';
 				const poolPort = runtime === 'container' ? 6432 : item.poolerPort;
-				env[`${item.prefix}_POOL_URL`] = connectionUrl(
-					item.scheme,
-					item.user,
+				env[`${item.prefix}_POOL_URL`] = databaseConnectionUrl({
+					scheme: item.scheme,
+					user: item.user,
 					pass,
-					poolHost,
-					poolPort,
-					item.databaseName,
-				);
+					host: poolHost,
+					port: poolPort,
+					database: item.databaseName,
+					sslmode: tls.mode,
+				});
 				env[`${item.prefix}_POOL_HOST`] = poolHost;
 				env[`${item.prefix}_POOL_PORT`] = String(poolPort);
 			}
@@ -1841,12 +1903,14 @@ export class DatabaseService {
 	 * version so attach/detach re-activates the app. Empty string when nothing applies.
 	 */
 	consumerVersion(projectId: string, nodeId: string | null, runtime: WorkloadRuntime): string {
+		const tls = this.tlsEnabled();
 		const items = this.resolveForConsumer(projectId, nodeId, runtime).map((item) => ({
 			id: item.databaseId,
 			prefix: item.prefix,
 			host: item.host,
 			port: item.port,
 			poolerPort: item.poolerPort,
+			tls,
 		}));
 		return items.length === 0 ? '' : sha256Hex(JSON.stringify(items));
 	}
@@ -1870,6 +1934,7 @@ export class DatabaseService {
 							.where(and(eq(databasePitr.databaseId, row.id), eq(databasePitr.enabled, true)))
 							.get()
 					: undefined;
+				const tls = this.tlsEnabled();
 				return {
 					id: row.id,
 					projectId: row.id,
@@ -1887,7 +1952,7 @@ export class DatabaseService {
 					port: row.hostPort,
 					healthPath: '/',
 					socketActivation: false,
-					activationVersion: databaseActivationVersion(row, env, pitr?.stanza ?? null),
+					activationVersion: databaseActivationVersion(row, env, pitr?.stanza ?? null, tls),
 					env,
 					secrets: [],
 					dataSizeMb: null,
@@ -1903,6 +1968,7 @@ export class DatabaseService {
 									},
 								}
 							: {}),
+						...(tls ? { tls: true } : {}),
 					},
 					...(row.poolerEnabled && row.poolerPort ? { pooler: { port: row.poolerPort } } : {}),
 				};
@@ -1939,7 +2005,7 @@ export class DatabaseService {
 			: undefined;
 		return {
 			workloadId: row.id,
-			activationVersion: databaseActivationVersion(row, env, pitr?.stanza ?? null),
+			activationVersion: databaseActivationVersion(row, env, pitr?.stanza ?? null, this.tlsEnabled()),
 			env: { POSTGRES_PASSWORD: ownerPassword },
 			files: {},
 			databaseSetup: { extensions: parseJson<string[]>(row.extensionsJson, []) },
@@ -2117,6 +2183,62 @@ export class DatabaseService {
 		return this.ctx.db.select().from(databases).where(eq(databases.id, id)).get();
 	}
 
+	/** TLS is a control-plane feature flag; the node only renders it when desired state asks. */
+	private tlsEnabled(): boolean {
+		return featureEnabled(this.ctx.config, 'DB_TLS');
+	}
+
+	private tlsState(row: DatabaseRow): {
+		enabled: boolean;
+		mode: DatabaseSslMode;
+		caPem: string | null;
+		error: string | null;
+	} {
+		if (!this.tlsEnabled()) return { enabled: false, mode: 'disable', caPem: null, error: null };
+		const report = this.tlsReports.get(row.id);
+		// A generation failure means the node started Postgres without TLS; report that honestly
+		// rather than handing out an sslmode=require URL that cannot work.
+		if (report?.error)
+			return { enabled: false, mode: 'disable', caPem: null, error: report.error };
+		return {
+			enabled: true,
+			mode: 'require',
+			caPem: report?.caPem ?? null,
+			error: null,
+		};
+	}
+
+	/**
+	 * Record the node's certificate state from a heartbeat. The private key never leaves the
+	 * node; only the public CA PEM is kept in memory for the credentials response.
+	 */
+	applyTlsReport(
+		nodeId: string,
+		reports: Array<{ id: string; enabled: boolean; caPem?: string | null; error?: string | null }>,
+	): void {
+		let changed = false;
+		for (const report of reports) {
+			const row = this.rowById(report.id);
+			if (!row || row.nodeId !== nodeId || row.deletedAt) continue;
+			const previous = this.tlsReports.get(report.id);
+			if (report.enabled) {
+				const caPem = report.caPem ?? null;
+				if (previous?.caPem !== caPem || previous?.error !== null) {
+					this.tlsReports.set(report.id, { caPem, error: null });
+					changed = true;
+				}
+			} else if (report.error) {
+				if (previous?.error !== report.error || previous?.caPem !== null) {
+					this.tlsReports.set(report.id, { caPem: null, error: report.error });
+					changed = true;
+				}
+			} else if (this.tlsReports.delete(report.id)) {
+				changed = true;
+			}
+		}
+		if (changed) this.ctx.projects.bump();
+	}
+
 	/** Admission for a database growing to (or coming back with) `memoryMb` on its node. */
 	private admit(row: DatabaseRow, memoryMb: number): void {
 		const capacity = this.ctx.workloads.capacityInternal().find((item) => item.nodeId === row.nodeId);
@@ -2193,7 +2315,10 @@ export class DatabaseService {
 				projectId: project.id,
 				projectSlug: project.slug,
 				envPrefix: attachment.envPrefix,
-				envNames: databaseEnvNames(attachment.envPrefix),
+				envNames: databaseEnvNames(attachment.envPrefix, {
+					pooler: db.poolerEnabled && db.poolerPort !== null,
+					tls: this.tlsEnabled(),
+				}),
 				createdAt: new Date(attachment.createdAt).toISOString(),
 			}))
 			.sort((a, b) => a.projectSlug.localeCompare(b.projectSlug) || a.databaseName.localeCompare(b.databaseName));
@@ -2236,6 +2361,7 @@ export class DatabaseService {
 		const info = databaseEngineRegistry[row.engine];
 		const node = this.ctx.db.select({ name: nodes.name }).from(nodes).where(eq(nodes.id, row.nodeId)).get();
 		const user = databaseIdentifier(row.name);
+		const tls = this.tlsState(row);
 		return {
 			id: row.id,
 			name: row.name,
@@ -2263,7 +2389,13 @@ export class DatabaseService {
 					container: row.poolerPort ? `${databaseAlias(row.id)}-pool:6432` : '',
 				},
 				port: row.poolerPort,
+				mode: 'transaction',
+				urlTemplate:
+					row.poolerEnabled && row.poolerPort !== null
+						? `postgres://{user}:{pass}@{host}:{port}/{database}${tls.enabled ? '?sslmode=require' : ''}`
+						: null,
 			},
+			tls,
 			volume: this.ctx.volumes.summary(row.volumeId),
 			attachments: this.attachmentsOf(row.id),
 			tables: parseJson<DatabaseTableStat[]>(row.statsJson, []),
@@ -2282,10 +2414,6 @@ export class DatabaseService {
 
 function password(): string {
 	return Buffer.from(randomBytes(24)).toString('base64url');
-}
-
-function connectionUrl(scheme: string, user: string, pass: string, host: string, port: number, db: string): string {
-	return `${scheme}://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${host}:${port}/${encodeURIComponent(db)}`;
 }
 
 function toRotationView(row: typeof databaseRotations.$inferSelect): DatabaseRotationView {
@@ -2308,17 +2436,20 @@ function databaseActivationVersion(
 	row: DatabaseRow,
 	env: Record<string, string>,
 	pitrStanza: string | null = null,
+	tls = false,
 ): string {
 	return sha256Hex(
 		JSON.stringify({
 			id: row.id,
 			// Bump when the fixed helper profile changes and existing units must be re-rendered.
-			profile: 3,
+			profile: 4,
 			engine: row.engine,
 			version: row.version,
 			port: row.hostPort,
 			poolerPort: row.poolerPort,
 			restartGeneration: row.restartGeneration,
+			// Omitted when off so enabling the flag is the only change that restarts databases.
+			...(tls ? { tls: true } : {}),
 			env,
 			extensions: row.extensionsJson,
 			pitrStanza,

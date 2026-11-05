@@ -61,10 +61,9 @@
 	const deleted = $derived(db.deletedAt !== null);
 	const nodeLabel = $derived(db.nodeName ?? db.nodeId);
 	const hostPort = $derived(db.internalHost.process.split(':').at(-1) ?? '');
-	const defaultEnvNames = $derived([
-		...databaseEnvNames('DATABASE'),
-		...(db.pooler.enabled ? ['DATABASE_POOL_URL', 'DATABASE_POOL_HOST', 'DATABASE_POOL_PORT'] : [])
-	]);
+	const defaultEnvNames = $derived(
+		databaseEnvNames('DATABASE', { pooler: db.pooler.enabled, tls: db.tls.enabled })
+	);
 
 	// --- credentials (D58): revealed on demand, audited, never in page data -------------------
 
@@ -118,6 +117,14 @@
 	const maskedUrl = $derived(
 		credentials
 			? credentials.url.replace(`:${encodeURIComponent(credentials.password)}@`, ':••••••••@')
+			: ''
+	);
+	const maskedPoolerUrl = $derived(
+		credentials?.poolerUrl
+			? credentials.poolerUrl.replace(
+					`:${encodeURIComponent(credentials.password)}@`,
+					':••••••••@'
+				)
 			: ''
 	);
 
@@ -379,6 +386,14 @@
 						<CopyButton value={db.pooler.host.container} label="Copy pooler host" iconOnly />
 					</dd>
 				{/if}
+				<dt>TLS</dt>
+				<dd class="font-mono text-xs">
+					{db.tls.enabled ? `on (${db.tls.mode})` : 'off'}
+				</dd>
+				{#if db.tls.error}
+					<dt>Warning</dt>
+					<dd class="text-xs text-amber-600">{db.tls.error}</dd>
+				{/if}
 				{#if credentials}
 					<dt>Password</dt>
 					<dd class="flex items-center justify-end gap-1 font-mono text-xs">
@@ -395,13 +410,22 @@
 						</Button>
 						<CopyButton value={credentials.password} label="Copy password" iconOnly />
 					</dd>
-					<dt>URL</dt>
+					<dt>Direct URL</dt>
 					<dd class="flex items-center justify-end gap-1 font-mono text-xs">
 						<span class="truncate" title="Copy to see the full URL">
 							{showPassword ? credentials.url : maskedUrl}
 						</span>
-						<CopyButton value={credentials.url} label="Copy URL" iconOnly />
+						<CopyButton value={credentials.url} label="Copy direct URL" iconOnly />
 					</dd>
+					{#if credentials.poolerUrl}
+						<dt>Pooled URL</dt>
+						<dd class="flex items-center justify-end gap-1 font-mono text-xs">
+							<span class="truncate" title="Copy to see the full URL">
+								{showPassword ? credentials.poolerUrl : maskedPoolerUrl}
+							</span>
+							<CopyButton value={credentials.poolerUrl} label="Copy pooled URL" iconOnly />
+						</dd>
+					{/if}
 				{/if}
 			</DetailList>
 

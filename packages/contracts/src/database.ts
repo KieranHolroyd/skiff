@@ -68,6 +68,12 @@ export const DATABASE_PORT_MAX = 16431;
 /** Host ports for per-database PgBouncer sidecars (loopback only). */
 export const DATABASE_POOLER_PORT_MIN = 16432;
 export const DATABASE_POOLER_PORT_MAX = 17431;
+/** PgBouncer's `max_client_conn`; the helper renders the same value (D85). */
+export const DATABASE_POOLER_MAX_CLIENTS = 200;
+
+/** TLS modes a managed database connection can use. `require` encrypts; `verify-full` pins the CA. */
+export const databaseSslModes = ['disable', 'require', 'verify-full'] as const;
+export type DatabaseSslMode = (typeof databaseSslModes)[number];
 
 export const databaseStatuses = ['pending', 'starting', 'running', 'failed', 'stopped'] as const;
 export type DatabaseStatus = (typeof databaseStatuses)[number];
@@ -251,7 +257,23 @@ export interface DatabaseView {
 	/** What an attached app on the same node connects to (no password). */
 	internalHost: { process: string; container: string };
 	/** Optional PgBouncer sidecar and the addresses an app uses for it. */
-	pooler: { enabled: boolean; host: { process: string; container: string }; port: number | null };
+	pooler: {
+		enabled: boolean;
+		host: { process: string; container: string };
+		port: number | null;
+		/** Transaction pooling; session-only features need the direct URL. */
+		mode: 'transaction';
+		/** Template for the pooled URL (`{user}`, `{password}`, `{host}`, `{port}`, `{database}`). */
+		urlTemplate: string | null;
+	};
+	/** TLS state derived from the node's certificate files (no private key leaves the node). */
+	tls: {
+		enabled: boolean;
+		mode: DatabaseSslMode;
+		caPem: string | null;
+		/** Last certificate-generation / startup warning from the node, if any. */
+		error: string | null;
+	};
 	/** Where the data dir lives; null keeps the helper state dir (D74). */
 	volume: VolumeSummary | null;
 	attachments: DatabaseAttachmentView[];
@@ -276,10 +298,20 @@ export interface DatabaseCredentials {
 	username: string;
 	password: string;
 	databaseName: string;
-	/** Same-node URL for a process app (loopback). */
+	/** Same-node direct URL for a process app (loopback). */
 	url: string;
+	/** Direct URL; use this for migrations and session-only features. */
+	directUrl: string;
+	/** Pooled URL when the pooler is enabled; null otherwise. */
+	poolerUrl: string | null;
 	host: string;
 	port: number;
+	sslmode: DatabaseSslMode;
+	tlsEnabled: boolean;
+	/** PEM of the per-database CA; public material, never a private key. */
+	caPem: string | null;
+	/** Copy-paste snippets keyed by client (`psql`, `prisma`, `drizzle`, …). */
+	connectionSnippets: Record<string, string>;
 	note: string;
 }
 
@@ -287,6 +319,8 @@ export interface DatabaseCredentials {
 export const workloadDatabaseSchema = z.object({
 	engine: z.enum(databaseEngines),
 	version: z.string().min(1).max(16),
+	/** Render Postgres with a helper-generated server certificate (SKIFF_FEATURE_DB_TLS). */
+	tls: z.boolean().optional(),
 	/**
 	 * WAL archiving for PITR (docs/PITR.md). Present only while the `PITR` flag is on and the
 	 * database has PITR enabled; the helper renders `archive_mode`/`archive_command` from it.
@@ -322,6 +356,13 @@ export const databaseMetricBucketSchema = z.object({
 	connectionsTotal: z.number().int().nonnegative().default(0),
 	maxConnections: z.number().int().nonnegative().default(0),
 	memoryBytes: z.number().int().nonnegative().default(0),
+	/** PgBouncer `SHOW POOLS`/`SHOW STATS` gauges; zero when the pooler is disabled or down. */
+	poolerUp: z.number().int().min(0).max(1).default(0),
+	poolActive: z.number().int().nonnegative().default(0),
+	poolIdle: z.number().int().nonnegative().default(0),
+	poolWaiting: z.number().int().nonnegative().default(0),
+	poolSaturation: z.number().min(0).max(1).default(0),
+	poolAvgWaitMs: z.number().nonnegative().default(0),
 	xactCommit: z.number().int().nonnegative().default(0),
 	xactRollback: z.number().int().nonnegative().default(0),
 	tupReturned: z.number().int().nonnegative().default(0),
@@ -377,6 +418,12 @@ export interface DatabaseMetricPoint {
 	connectionsTotal: number;
 	maxConnections: number;
 	memoryBytes: number;
+	poolerUp: number;
+	poolActive: number;
+	poolIdle: number;
+	poolWaiting: number;
+	poolSaturation: number;
+	poolAvgWaitMs: number;
 	xactCommit: number;
 	xactRollback: number;
 	tupReturned: number;
@@ -401,8 +448,73 @@ export function databaseIdentifier(name: string): string {
 }
 
 /** Env var names a project receives for one attachment. */
-export function databaseEnvNames(prefix: string): string[] {
-	return ['URL', 'HOST', 'PORT', 'USER', 'PASSWORD', 'NAME'].map((suffix) => `${prefix}_${suffix}`);
+export function databaseEnvNames(
+	prefix: string,
+	options: { pooler?: boolean; tls?: boolean } = {},
+): string[] {
+	const names = ['URL', 'HOST', 'PORT', 'USER', 'PASSWORD', 'NAME'];
+	if (options.tls) names.push('SSL_MODE', 'CA_CERT');
+	if (options.pooler) names.push('POOL_URL', 'POOL_HOST', 'POOL_PORT');
+	return names.map((suffix) => `${prefix}_${suffix}`);
+}
+
+export interface DatabaseUrlOptions {
+	scheme: string;
+	user: string;
+	pass: string;
+	host: string;
+	port: number;
+	database: string;
+	sslmode?: DatabaseSslMode;
+}
+
+/** A connection string; `sslmode` is appended only when TLS is in use. */
+export function databaseConnectionUrl(options: DatabaseUrlOptions): string {
+	const user = encodeURIComponent(options.user);
+	const pass = encodeURIComponent(options.pass);
+	const database = encodeURIComponent(options.database);
+	const base = `${options.scheme}://${user}:${pass}@${options.host}:${options.port}/${database}`;
+	return options.sslmode && options.sslmode !== 'disable' ? `${base}?sslmode=${options.sslmode}` : base;
+}
+
+export interface DatabaseSnippetInput {
+	/** Direct URL. */
+	directUrl: string;
+	/** Pooled URL when enabled. */
+	poolerUrl: string | null;
+	sslmode: DatabaseSslMode;
+	caPem: string | null;
+	/** Env prefix the attached app receives (default `DATABASE`). */
+	envPrefix?: string;
+}
+
+/**
+ * Copy-paste connection snippets for the credentials response (docs/DATABASES.md §10). The
+ * default `url` is pooled when available; `direct` is explicit because migrations, logical
+ * replication, `LISTEN`, advisory locks and session state need a direct connection.
+ */
+export function databaseConnectionSnippets(input: DatabaseSnippetInput): Record<string, string> {
+	const prefix = input.envPrefix ?? 'DATABASE';
+	const url = input.poolerUrl ?? input.directUrl;
+	const direct = input.directUrl;
+	const ca = input.caPem ? `\n-- ${prefix}_CA_CERT holds the PEM CA certificate.` : '';
+	const pooledEnv = input.poolerUrl ? `${prefix}_POOL_URL` : `${prefix}_URL`;
+	const caEnv = input.caPem ? `\n${prefix}_CA_CERT="$(cat ca.pem)"` : '';
+	const ssl = input.sslmode === 'disable' ? '' : '?sslmode=require';
+	return {
+		psql: `psql "${url}"`,
+		direct: `psql "${direct}"  # migrations, pg_dump, LISTEN/NOTIFY, advisory locks, session state`,
+		prisma: `# schema.prisma (run migrations against directUrl)\ndatasource db {\n  provider  = "postgresql"\n  url       = env("${pooledEnv}")\n  directUrl = env("${prefix}_URL")\n}${ca}`,
+		drizzle: `import { drizzle } from 'drizzle-orm/postgres-js';\nimport postgres from 'postgres';\n\nconst sql = postgres(process.env.${prefix}_URL!, { ssl: 'require' });\nexport const db = drizzle(sql);${ca}`,
+		kysely: `import { Kysely, PostgresDialect } from 'kysely';\nimport { Pool } from 'pg';\n\nexport const db = new Kysely({\n  dialect: new PostgresDialect({ pool: new Pool({ connectionString: process.env.${prefix}_URL }) }),\n});${ca}`,
+		django: `# settings.py\nimport os, dj_database_url\nDATABASES = {'default': dj_database_url.parse(os.environ['${prefix}_URL'])}${ca}`,
+		rails: `# config/database.yml\nproduction:\n  url: <%= ENV.fetch('${prefix}_URL') %>${ca}`,
+		pgx: `pool, err := pgxpool.New(ctx, os.Getenv("${prefix}_URL"))\nif err != nil { log.Fatal(err) }${ca}`,
+		nodePostgres: `import fs from 'node:fs';\nimport { Pool } from 'pg';\n\nconst pool = new Pool({\n  connectionString: process.env.${prefix}_URL,\n${input.caPem ? `  ssl: { ca: fs.readFileSync(process.env.${prefix}_CA_CERT || 'ca.pem') },\n` : ''}});${ca}`,
+		verifyFull: input.caPem
+			? `# Verify the server certificate against the per-database CA (host must be in the SAN):\npsql "${direct.replace(ssl, '?sslmode=verify-full')}"  # also set sslrootcert=ca.pem${caEnv}`
+			: '# TLS is disabled; enable SKIFF_FEATURE_DB_TLS to encrypt connections.',
+	};
 }
 
 /** OCI image for an engine version. The helper has its own copy and rejects any mismatch (D61). */

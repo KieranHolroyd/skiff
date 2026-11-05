@@ -116,7 +116,14 @@ export interface DatabaseView {
 		rows: number;
 	}>;
 	slowQueriesAt?: string | null;
-	pooler?: { enabled: boolean; host: { process: string; container: string }; port: number | null };
+	pooler?: {
+		enabled: boolean;
+		host: { process: string; container: string };
+		port: number | null;
+		mode?: 'transaction';
+		urlTemplate?: string | null;
+	};
+	tls?: { enabled: boolean; mode: string; caPem: string | null; error: string | null };
 	backup?: DatabaseBackupSummary;
 	createdAt: string;
 	updatedAt: string;
@@ -131,8 +138,14 @@ export interface DatabaseCredentials {
 	password: string;
 	databaseName: string;
 	url: string;
+	directUrl?: string;
+	poolerUrl?: string | null;
 	host: string;
 	port: number;
+	sslmode?: string;
+	tlsEnabled?: boolean;
+	caPem?: string | null;
+	connectionSnippets?: Record<string, string>;
 	note: string;
 }
 

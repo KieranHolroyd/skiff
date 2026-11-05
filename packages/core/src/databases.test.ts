@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDb } from '@skiff/db';
-import { databaseAlias } from '@skiff/contracts';
+import { databaseAlias, DEFAULT_FEATURES } from '@skiff/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
@@ -301,6 +301,50 @@ describe('managed databases', () => {
 		expect(core.databases.get(owner, 'main-db').attachments.map((item) => item.projectSlug)).toEqual(['backend']);
 	});
 
+	test('DB_TLS publishes direct and pooled URLs, injects the CA, and keeps the key off the wire', async () => {
+		const previous = core.ctx.config.features;
+		core.ctx.config.features = { ...(previous ?? DEFAULT_FEATURES), DB_TLS: true };
+		const db = core.databases.get(owner, 'main-db');
+		try {
+			const pending = core.databases.credentials(owner, 'main-db');
+			expect(pending.sslmode).toBe('require');
+			expect(pending.tlsEnabled).toBe(true);
+			expect(pending.url).toContain('sslmode=require');
+			expect(pending.directUrl).toContain(':15432/');
+			expect(pending.poolerUrl).toContain(':16432/');
+			expect(pending.poolerUrl).toContain('sslmode=require');
+			expect(pending.caPem).toBeNull();
+			expect(Object.keys(pending.connectionSnippets)).toEqual(
+				expect.arrayContaining(['psql', 'prisma', 'drizzle', 'kysely', 'django', 'rails', 'pgx', 'nodePostgres']),
+			);
+
+			core.databases.applyTlsReport(edgeId, [
+				{ id: db.id, enabled: true, caPem: '-----BEGIN CERTIFICATE-----\nCA\n' },
+			]);
+			const creds = core.databases.credentials(owner, 'main-db');
+			expect(creds.caPem).toContain('BEGIN CERTIFICATE');
+			expect(core.databases.get(owner, 'main-db').tls).toEqual({
+				enabled: true,
+				mode: 'require',
+				caPem: '-----BEGIN CERTIFICATE-----\nCA\n',
+				error: null,
+			});
+
+			const workload = (await core.nodes.desiredState(edgeToken)).workloads.find(
+				(item) => item.projectSlug === 'backend',
+			)!;
+			const activation = core.workloads.activation(edgeId, workload.id);
+			expect(activation.env.DATABASE_URL).toContain('sslmode=require');
+			expect(activation.env.DATABASE_POOL_URL).toContain('sslmode=require');
+			expect(activation.env.DATABASE_SSL_MODE).toBe('require');
+			expect(activation.env.DATABASE_CA_CERT).toContain('BEGIN CERTIFICATE');
+			expect(JSON.stringify(workload)).not.toContain('BEGIN CERTIFICATE');
+		} finally {
+			core.ctx.config.features = previous;
+			core.databases.applyTlsReport(edgeId, [{ id: db.id, enabled: false }]);
+		}
+	});
+
 	test('container apps reach the database by its network alias', async () => {
 		await core.projects.create(owner, {
 			name: 'web',
@@ -373,6 +417,12 @@ describe('managed databases', () => {
 			connectionsTotal: 5,
 			maxConnections: 100,
 			memoryBytes: 50_000_000,
+			poolerUp: 0,
+			poolActive: 0,
+			poolIdle: 0,
+			poolWaiting: 0,
+			poolSaturation: 0,
+			poolAvgWaitMs: 0,
 			xactCommit: 10,
 			xactRollback: 0,
 			tupReturned: 100,
