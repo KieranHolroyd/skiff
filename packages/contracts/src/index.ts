@@ -11,6 +11,7 @@ export * from './workload.ts';
 export * from './env.ts';
 export * from './database.ts';
 export * from './database-backup.ts';
+export * from './services.ts';
 export * from './object-storage.ts';
 export * from './build.ts';
 export * from './log.ts';

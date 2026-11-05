@@ -95,6 +95,8 @@ contain credentials, except `/credentials`.
 | GET/PATCH | `/databases/:name/backup-policy` | `database:read` / `database:update` | `{ enabled, schedule (five-field UTC cron), retentionDays }` |
 | GET/POST | `/databases/:name/rotate` | `database:read` / `database:credentials` + `database:update` | `{ role: owner\|monitor }` → `202 { rotation }`; the node applies ALTER ROLE before the secret swaps |
 | POST | `/databases/:name/restart` | `database:update` | `{ target: "database"\|"pooler" }` → `202 { database, target }`; database restarts the container and pooler, pooler restarts only PgBouncer |
+| POST | `/services/restart` | `database:update` and/or `storage:update` by scope | `{ scope: "all"\|"databases"\|"storage", databases?, storage? }` → `202 { restarted, skipped }` |
+| POST | `/services/backup-databases` | `database:update` | queues a backup for every live database → `202 { queued, skipped }` |
 | GET | `/projects/:slug/databases` | `database:read` | `{ attachments }` with the env names each one injects |
 | POST | `/projects/:slug/databases` | `database:update` + `project:update` | `{ database, envPrefix? (UPPER_SNAKE, default DATABASE) }` → `201 { attachment, warning }`. The project gets `<PREFIX>_URL`, `_HOST`, `_PORT`, `_USER`, `_PASSWORD`, `_NAME` at activation and restarts; `warning` says when it must be redeployed onto the database's node (same node only, D56) |
 | DELETE | `/projects/:slug/databases/:name` | `database:update` + `project:update` | detach; the app re-activates without the variables → `{ ok: true }` |
@@ -133,6 +135,8 @@ secret keys, except `/credentials`.
 | DELETE | `/storage/:name?purge=1` | `storage:delete` | trashed instances only: the node removes the data, then the rows go → `{ ok: true }` |
 | POST | `/storage/:name/restore` | `storage:delete` | re-checks admission; 409 once a purge was requested → `{ storage }` |
 | POST | `/storage/:name/restart` | `storage:update` | restarts the RustFS container (buckets, objects and keys stay); the node applies it on its next reconcile → `202 { storage }` |
+| GET | `/storage/:name/logs` | `logs:read` (+ `storage:read` to resolve the name) | `?after&limit&level&q` → `{ events: [{ seq, ts, kind, serviceId, source, stream, level, message }], cursor, hasMore }`. Newest page without `after`; the cursor tails new lines. RustFS writes to the unit journal and the agent drains it every couple of seconds |
+| POST | `/storage/:name/restart` | `storage:update` | restarts the RustFS container (buckets, objects and keys stay); the node applies it on its next reconcile → `202 { storage }` |
 | GET | `/storage/:name/credentials` | `storage:credentials` | `{ credentials: { accessKeyId, secretAccessKey, region, endpoint, internalEndpoint, publicEndpoint, note } }`, the root key; `endpoint` is the public URL when public, else loopback on the node; `cache-control: no-store`; every read is audited. Not available over MCP (S6) |
 | GET | `/storage/:name/metrics` | `storage:read` | same `?from&to&interval` rules as database metrics → `{ points: [{ bucket, up, usedBytes, objects, bucketCount, memoryBytes }], interval }` |
 | GET | `/storage/:name/buckets` | `storage:read` | `{ buckets: [{ name, access, state (ready\|deleting\|delete-blocked), sizeBytes, objects, createdAt, statsAt }] }` |
@@ -167,13 +171,13 @@ envPrefix?, grants? }`; without `grants`, read-write on the only bucket), `detac
 bound to the instance, refused before prompting while attached; 2025-era clients get a dashboard
 link). Object tools: `list_objects` (folder view, pagination), `presign_object` (public instances
 only) and `create_object_folder`; `restart_storage` restarts the RustFS container with data and
-keys intact. There is **no key reveal, bucket delete, object delete or purge** over MCP (S6, D82). Guide:
+keys intact, and `get_storage_logs` pages the container log stream. There is **no key reveal, bucket delete, object delete or purge** over MCP (S6, D82). Guide:
 `skiff://guides/storage`.
 
 **CLI.** `skif storage list [--all]`, `create <name> [-b <bucket>]… [-p <project>] [--prefix P]
 [--public] [--placement …] [--memory 512M] [--cpus 1] [--storage 10G]`, `info <name>`,
 `update <name> [--memory] [--cpus] [--storage] [--version] [--public|--no-public]`,
-`buckets [list] <name>`, `buckets create|update <name> <bucket> [--access private|public-read]`,
+`restart <name>`, `logs <name> [--follow] [--limit] [--level] [--q]`, `buckets [list] <name>`, `buckets create|update <name> <bucket> [--access private|public-read]`,
 `buckets delete <name> <bucket> [--force]`, `attach <name> -p <project> [-b <bucket>[:read|:read-write]]…
 [--prefix P]` (no `--bucket`: the only bucket, read-write), `grants <name> -p <project> -b …`,
 `detach <name> -p <project>`, `delete <name>` (asks; `--yes`), `restore <name>`, `purge <name>`

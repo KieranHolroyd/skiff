@@ -50,6 +50,35 @@ export interface LogQueryResult {
 	hasMore: boolean;
 }
 
+/** Managed-service logs (RustFS, Postgres) use the same level/stream vocabulary. */
+export const serviceLogKinds = ['storage', 'database'] as const;
+export type ServiceLogKind = (typeof serviceLogKinds)[number];
+
+export interface ServiceLogEvent {
+	seq: number;
+	/** Epoch milliseconds. */
+	ts: number;
+	kind: ServiceLogKind;
+	serviceId: string;
+	source: 'runtime' | 'system';
+	stream: LogStream;
+	level: LogLevel;
+	message: string;
+}
+
+export interface ServiceLogQuery {
+	after?: number;
+	limit?: number;
+	level?: LogLevel;
+	q?: string;
+}
+
+export interface ServiceLogQueryResult {
+	events: ServiceLogEvent[];
+	cursor: number;
+	hasMore: boolean;
+}
+
 /** A drained journald line posted by an agent for one workload. */
 export const runtimeLogLineSchema = z.object({
 	/** Epoch milliseconds; the agent falls back to its own clock when journald omits it. */

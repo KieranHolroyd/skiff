@@ -216,6 +216,12 @@ value. A failed rotation leaves the old secret in place and records the error.
 - Both actions require `database:update`, are audited, and are exposed as
   `POST /databases/:name/restart` (`{ target: "database" | "pooler" }`), `skif db restart <name>
   [--pooler]`, the MCP `restart_database` tool, and the dashboard Resources/Pooler controls.
+- **Bulk actions** are on the Databases page header: **Restart all services** (databases and
+  storage), **Restart all databases**, and **Back up all databases**. They fan out to the same
+  per-item methods and return per-item skips. REST: `POST /services/restart`
+  (`{ scope: "all" | "databases" | "storage", databases?, storage? }`) and
+  `POST /services/backup-databases`; MCP: `restart_services`, `backup_all_databases`; CLI:
+  `skif db restart --all`, `skif db backup --all`, `skif storage restart --all`.
 
 ## 13. Follow-ups (on the roadmap)
 

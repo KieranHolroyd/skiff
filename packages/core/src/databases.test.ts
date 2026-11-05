@@ -470,6 +470,20 @@ describe('managed databases', () => {
 		expect(core.databases.list(owner).map((db) => db.name)).toEqual(['main-db']);
 	});
 
+	test('bulk service actions restart databases and queue backups', async () => {
+		const bulk = core.databases.create(owner, { name: 'bulk-db', memoryMb: 128, pooler: false });
+		const restarted = core.serviceActions.restart(owner, { scope: 'databases' });
+		expect(restarted.restarted.databases).toContain('main-db');
+		expect(restarted.restarted.databases).toContain('bulk-db');
+		expect(restarted.skipped).toEqual([]);
+
+		const backups = core.serviceActions.backupAllDatabases(owner);
+		expect(backups.queued).toContain('bulk-db');
+		core.databases.delete(owner, 'bulk-db');
+		core.databases.purgeNow(owner, 'bulk-db');
+		core.databases.applyPurged(edgeId, [bulk.id]);
+	});
+
 	test('project purge drops its attachments', async () => {
 		await core.projects.softDelete(owner, 'web');
 		await core.projects.purgeNow(owner, 'web');

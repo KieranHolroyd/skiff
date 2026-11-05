@@ -22,6 +22,7 @@ import type { BuildService } from './builds.ts';
 import type { LogService } from './logs.ts';
 import type { EnvironmentService } from './environments.ts';
 import type { OperationService } from './operations/service.ts';
+import type { ServiceActionsService } from './service-actions.ts';
 
 /**
  * Shared dependency object. Service instances are attached after construction (in `createCore`)
@@ -54,4 +55,5 @@ export interface CoreContext {
 	logs: LogService;
 	environments: EnvironmentService;
 	operations: OperationService;
+	serviceActions: ServiceActionsService;
 }

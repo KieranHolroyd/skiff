@@ -19,6 +19,7 @@ import {
 	databaseRestartSchema,
 	databaseRestoreSchema,
 	databaseRotateSchema,
+	serviceRestartSchema,
 	deployFilesSchema,
 	deploySiteSchema,
 	effectivePermissions,
@@ -1080,6 +1081,57 @@ function buildServer(
 	);
 
 	tool(
+		'restart_services',
+		{
+			title: 'Restart managed services',
+			description:
+				'Restart all managed databases, all storage instances, or both. Each item is an ordinary restart request ' +
+				'(generation bump); the nodes apply them on their next pull. Returns per-item skips, never credentials.',
+			inputSchema: serviceRestartSchema,
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requiresWith([], (args) => {
+				const scope = typeof args.scope === 'string' ? args.scope : 'all';
+				return scope === 'databases'
+					? ['database:update']
+					: scope === 'storage'
+						? ['storage:update']
+						: ['database:update', 'storage:update'];
+			}),
+		},
+		async (input) =>
+			run(() => {
+				const result = core.serviceActions.restart(principal, input);
+				return {
+					...result,
+					nextSteps: [
+						'The nodes restart the selected containers on their next pull; follow each service status in the dashboard.',
+					],
+				};
+			}),
+	);
+
+	tool(
+		'backup_all_databases',
+		{
+			title: 'Back up all databases',
+			description:
+				'Queue a logical backup for every live database that is not already backing up. Returns the queued names and ' +
+				'per-database skips (for example an attached database that is already running a backup).',
+			inputSchema: z.object({}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('database:update'),
+		},
+		async () =>
+			run(() => {
+				const result = core.serviceActions.backupAllDatabases(principal);
+				return {
+					...result,
+					nextSteps: ['The nodes upload the dumps on their next pull; follow each database Backups panel.'],
+				};
+			}),
+	);
+
+	tool(
 		'restart_database',
 		{
 			title: 'Restart database',
@@ -1542,6 +1594,35 @@ function buildServer(
 				};
 			});
 		},
+	);
+
+	tool(
+		'get_storage_logs',
+		{
+			title: 'Get object storage logs',
+			description:
+				'Return recent RustFS container log lines for a storage instance (the agent drains the unit journal). ' +
+				'Use `after` as a cursor to poll for new lines; `level` and `q` filter server-side.',
+			inputSchema: z.object({
+				storage: z.string().describe('Storage instance name'),
+				after: z.number().int().nonnegative().optional().describe('Return lines after this cursor'),
+				limit: z.number().int().min(1).max(2000).default(200),
+				level: z.enum(['debug', 'info', 'warn', 'error']).optional(),
+				q: z.string().max(200).optional(),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('storage:read', 'logs:read'),
+		},
+		async ({ storage, after, limit, level, q }) =>
+			run(() => {
+				const view = core.storage.requireRow(principal, storage, { includeDeleted: true });
+				return core.logs.queryService(principal, 'storage', view.id, {
+					...(after !== undefined ? { after } : {}),
+					limit,
+					...(level ? { level } : {}),
+					...(q ? { q } : {}),
+				});
+			}),
 	);
 
 	tool(

@@ -172,12 +172,19 @@ The telemetry batch gets an additive `storage` field, sent once a minute per run
 | Counters | requests and bytes in/out from RustFS's metrics endpoint if spike 3 finds one usable; otherwise public-endpoint traffic only, from access logs |
 
 These land in DuckDB as `storage_metrics_1m`, rolled up into `storage_metrics_1h` with traffic's
-retention. Per-bucket size and object count (from RustFS's data-usage info, spike 3) are sampled
+retention.
+
+RustFS container output is drained from the unit journal by the agent like every other workload
+and stored in `service_log_events` (7-day retention), with lifecycle breadcrumbs such as a
+requested restart in the same stream. The dashboard has a live tail at `/storage/:name/logs`; the
+REST endpoint is `GET /storage/:name/logs` and the CLI `skif storage logs <name> --follow`.
+
+Per-bucket size and object count (from RustFS's data-usage info, spike 3) are sampled
 every five minutes into `storage_buckets` as a latest-only snapshot, like the database table
 snapshot.
 
 Surfaces: `GET /api/v1/storage/:name/metrics`, dashboard charts and a bucket list,
-`skiff_storage_*` on `/metrics`. One alert: disk above 85% of the storage budget.
+`skiff_storage_*` on `/metrics`, and a live log tail (`GET /api/v1/storage/:name/logs`). One alert: disk above 85% of the storage budget.
 
 ## 7. Lifecycle (S8)
 
@@ -209,9 +216,15 @@ and refuses to run if it is gone (D76). See [VOLUMES.md](./VOLUMES.md).
 |---|---|
 | Permissions | New `storage` resource: `create`, `read`, `update`, `delete`, `credentials`. Deployer gets everything except `delete`; viewer gets `read`; agents get the deployer set minus `credentials`. |
 | REST | `GET/POST /api/v1/storage`, `GET/PATCH/DELETE /api/v1/storage/:name`, `POST …/:name/restore`, `GET …/:name/credentials`, `GET …/:name/metrics`, `GET/POST …/:name/buckets`, `PATCH/DELETE …/:name/buckets/:bucket`, `GET/POST /api/v1/projects/:slug/storage`, `PATCH/DELETE …/storage/:name`; object endpoints under `…/:name/objects` (list, item GET/HEAD/PUT/DELETE, bulk delete, folder, presign) |
-| MCP | `list_storage`, `get_storage`, `create_storage`, `create_bucket`, `attach_storage`, `detach_storage`, `delete_storage` (confirmed, soft), `list_objects`, `presign_object`, `create_object_folder`, `restart_storage`. No bucket force-delete, object delete, key reveal or purge. |
-| CLI | `skif storage list\|create\|info\|update\|delete\|restore\|credentials`, `skif storage buckets list\|create\|delete`, `skif storage attach\|detach`, `skif storage objects ls\|get\|put\|rm\|mkdir\|presign` |
+| MCP | `list_storage`, `get_storage`, `create_storage`, `create_bucket`, `attach_storage`, `detach_storage`, `delete_storage` (confirmed, soft), `list_objects`, `presign_object`, `create_object_folder`, `restart_storage`, `get_storage_logs`. No bucket force-delete, object delete, key reveal or purge. |
+| CLI | `skif storage list\|create\|info\|update\|restart\|delete\|restore\|credentials`, `skif storage buckets list\|create\|delete`, `skif storage attach\|detach`, `skif storage objects ls\|get\|put\|rm\|mkdir\|presign` |
 | Dashboard | Storage list + create, detail (status, endpoint, public toggle, buckets, attached projects, charts), attach from a project with bucket grants, and an object browser (folder navigation, upload, download, delete, presigned links) |
+
+**Restart and bulk actions.** `POST /storage/:name/restart` (and `skif storage restart <name>`)
+bumps the instance's restart generation; the node re-applies the unit and RustFS restarts with its
+data, buckets and keys intact. The Storage page also has **Restart all services** (storage and
+databases) and **Restart all storage**; these call `POST /services/restart` with the matching scope
+and report per-item skips.
 
 ## 9. Spikes before building
 
