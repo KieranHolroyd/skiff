@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
+	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import TerminalIcon from '@lucide/svelte/icons/terminal';
 	import type { SelfUpdateLog, SelfUpdateLogLevel } from '@skiff/contracts';
 	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
@@ -9,11 +10,18 @@
 
 	let {
 		log,
-		running = false
+		running = false,
+		defaultOpen = true
 	}: {
 		log: SelfUpdateLog;
 		running?: boolean;
+		/** A finished run's log starts folded unless it explains a failure. */
+		defaultOpen?: boolean;
 	} = $props();
+
+	let toggled = $state<boolean | null>(null);
+	const open = $derived(running || (toggled ?? defaultOpen));
+	const lastLine = $derived(log.lines.at(-1) ?? null);
 
 	let scroller = $state<HTMLDivElement | null>(null);
 	/** Follow the tail until the reader scrolls up; then leave them where they are. */
@@ -73,55 +81,84 @@
 			</span>
 		{/if}
 		<CopyButton value={text} label="Copy log" />
-	{/snippet}
-
-	<div class="relative">
-		<div
-			bind:this={scroller}
-			{onscroll}
-			role="log"
-			aria-label="Self-update log"
-			aria-live="off"
-			class="max-h-[22rem] min-h-24 overflow-auto rounded-lg border border-sidebar-border bg-sidebar p-3 font-mono text-xs leading-relaxed text-sidebar-foreground"
-		>
-			{#if lines.length === 0}
-				<p class="text-muted-foreground">
-					{running
-						? 'Waiting for the updater to write its first line…'
-						: 'The updater did not write a log for this run.'}
-				</p>
-			{:else}
-				{#each lines as line, index (index)}
-					<div class="flex gap-3">
-						<span class="shrink-0 text-muted-foreground/60 tabular-nums select-none"
-							>{line.at.slice(11, 19)}</span
-						>
-						<span class="min-w-0 break-words whitespace-pre-wrap {levelClass[line.level]}"
-							>{line.text}</span
-						>
-					</div>
-				{/each}
-			{/if}
-		</div>
-		{#if !pinned && lines.length > 0}
+		{#if !running}
 			<Button
 				type="button"
-				variant="secondary"
-				size="xs"
-				class="absolute right-3 bottom-3 shadow-xs"
-				onclick={jumpToLatest}
+				variant="ghost"
+				size="sm"
+				aria-expanded={open}
+				aria-controls="update-log-body"
+				onclick={() => (toggled = !open)}
 			>
-				<ArrowDownIcon />
-				Latest
+				{open ? 'Hide' : 'Show'}
+				<ChevronDownIcon class="transition-transform {open ? 'rotate-180' : ''}" />
 			</Button>
 		{/if}
-	</div>
+	{/snippet}
+
+	{#if !open}
+		<button
+			type="button"
+			class="flex w-full items-center gap-3 rounded-lg border border-sidebar-border bg-sidebar px-3 py-2 text-left font-mono text-xs text-sidebar-foreground/70 transition-colors hover:text-sidebar-foreground"
+			onclick={() => (toggled = true)}
+		>
+			{#if lastLine}
+				<span class="shrink-0 text-muted-foreground/60 tabular-nums"
+					>{lastLine.at.slice(11, 19)}</span
+				>
+				<span class="min-w-0 flex-1 truncate {levelClass[lastLine.level]}">{lastLine.text}</span>
+			{:else}
+				<span class="text-muted-foreground">The updater did not write a log for this run.</span>
+			{/if}
+		</button>
+	{:else}
+		<div class="relative" id="update-log-body">
+			<div
+				bind:this={scroller}
+				{onscroll}
+				role="log"
+				aria-label="Self-update log"
+				aria-live="off"
+				class="max-h-[22rem] min-h-24 overflow-auto rounded-lg border border-sidebar-border bg-sidebar p-3 font-mono text-xs leading-relaxed text-sidebar-foreground"
+			>
+				{#if lines.length === 0}
+					<p class="text-muted-foreground">
+						{running
+							? 'Waiting for the updater to write its first line…'
+							: 'The updater did not write a log for this run.'}
+					</p>
+				{:else}
+					{#each lines as line, index (index)}
+						<div class="flex gap-3">
+							<span class="shrink-0 text-muted-foreground/60 tabular-nums select-none"
+								>{line.at.slice(11, 19)}</span
+							>
+							<span class="min-w-0 break-words whitespace-pre-wrap {levelClass[line.level]}"
+								>{line.text}</span
+							>
+						</div>
+					{/each}
+				{/if}
+			</div>
+			{#if !pinned && lines.length > 0}
+				<Button
+					type="button"
+					variant="secondary"
+					size="xs"
+					class="absolute right-3 bottom-3 shadow-xs"
+					onclick={jumpToLatest}
+				>
+					<ArrowDownIcon />
+					Latest
+				</Button>
+			{/if}
+		</div>
+	{/if}
 
 	{#snippet footer()}
 		{#if log.truncated}
 			Showing the newest {lines.length} lines; the full output is in
 			<code>journalctl -u skiff-update-self</code>.{/if}
-		Times are UTC.{#if running}
-			The update keeps running if you close this page.{/if}
+		{running ? 'Times are UTC. The update keeps running if you close this page.' : 'Times are UTC.'}
 	{/snippet}
 </Panel>
