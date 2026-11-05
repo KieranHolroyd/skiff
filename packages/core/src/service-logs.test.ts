@@ -102,6 +102,10 @@ describe('managed-service logs', () => {
 		const last = page.events.at(-1)!;
 		expect(last.source).toBe('system');
 		expect(last.message).toContain('Restart requested by user_1');
+
+		core.databases.restart(owner, 'primary');
+		const dbPage = core.logs.queryService(owner, 'database', databaseId, { limit: 10 });
+		expect(dbPage.events.at(-1)?.message).toContain('Database restart requested');
 	});
 
 	test('rejects another org and another node', () => {

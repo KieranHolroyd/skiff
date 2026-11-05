@@ -145,10 +145,10 @@ missing (D76). See [VOLUMES.md](./VOLUMES.md).
 
 | Surface | What |
 |---|---|
-| REST | `GET/POST /api/v1/databases`, `GET/PATCH/DELETE /api/v1/databases/:name`, `POST …/:name/restore`, `GET …/:name/credentials`, `GET …/:name/metrics`, `GET/POST …/:name/backups`, `GET/DELETE …/:name/backups/:id`, `POST …/:name/backups/:id/restore`, `GET/PATCH …/:name/backup-policy`, `GET/POST …/:name/rotate`, `POST …/:name/restart`, `GET/POST /api/v1/projects/:slug/databases`, `DELETE …/databases/:name` |
-| MCP | `list_databases`, `get_database`, `create_database`, `attach_database`, `detach_database`, `delete_database` (confirmed, soft), `list_database_backups`, `backup_database`, `restore_database`, `set_database_backup_policy`, `rotate_database_credentials`, `restart_database` |
-| CLI | `skif db list\|create\|info\|attach\|detach\|delete\|restore\|credentials\|backups\|backup\|backup-delete\|restore-backup\|backup-policy\|rotate\|restart` |
-| Dashboard | Databases list + create, detail (status, connection, pooler, attached projects, charts, tables, extensions/slow queries, backups/restore, rotate, restart), attach from a project |
+| REST | `GET/POST /api/v1/databases`, `GET/PATCH/DELETE /api/v1/databases/:name`, `POST …/:name/restore`, `GET …/:name/credentials`, `GET …/:name/metrics`, `GET …/:name/logs`, `GET/POST …/:name/backups`, `GET/DELETE …/:name/backups/:id`, `POST …/:name/backups/:id/restore`, `GET/PATCH …/:name/backup-policy`, `GET/POST …/:name/rotate`, `POST …/:name/restart`, `GET/POST /api/v1/projects/:slug/databases`, `DELETE …/databases/:name` |
+| MCP | `list_databases`, `get_database`, `create_database`, `attach_database`, `detach_database`, `delete_database` (confirmed, soft), `list_database_backups`, `backup_database`, `restore_database`, `set_database_backup_policy`, `rotate_database_credentials`, `restart_database`, `get_database_logs` |
+| CLI | `skif db list\|create\|info\|attach\|detach\|delete\|restore\|credentials\|logs\|backups\|backup\|backup-delete\|restore-backup\|backup-policy\|rotate\|restart` |
+| Dashboard | Databases list + create, detail (status, connection, pooler, attached projects, charts, tables, extensions/slow queries, backups/restore, rotate, restart, logs), attach from a project |
 
 ## 8. Backups and restore (D83)
 
@@ -223,7 +223,19 @@ value. A failed rotation leaves the old secret in place and records the error.
   `POST /services/backup-databases`; MCP: `restart_services`, `backup_all_databases`; CLI:
   `skif db restart --all`, `skif db backup --all`, `skif storage restart --all`.
 
-## 13. Follow-ups (on the roadmap)
+## 13. Logs
+
+The agent already drains every workload's journald output, including managed database units. The
+control plane stores those lines in `service_log_events` (`kind = database`, scoped to the
+database id, org and node) with the same 7-day retention as runtime logs. Lifecycle breadcrumbs
+(restart and rotation requests) are written into the same stream.
+
+Surfaces: `GET /api/v1/databases/:name/logs` (`after`, `limit`, `level`, `q`), the dashboard live
+tail at `/databases/:name/logs` (pause, level filter, search, download, clear view), `skif db logs
+<name> [--follow]`, and the MCP `get_database_logs` tool. Reading needs `logs:read` plus
+`database:read`; the API route resolves the database through the normal service permission check.
+
+## 14. Follow-ups (on the roadmap)
 
 - On-demand SQL console: an open-source admin UI (pgweb or Adminer) as a short-lived container on
   the database's node, behind `platform` access, `database:console`, audited, idle-stopped (D60).

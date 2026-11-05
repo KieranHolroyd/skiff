@@ -96,6 +96,7 @@
 - [x] Owner/monitor credential rotation with node-side `ALTER ROLE` and verified swap (D86)
 - [x] Restart controls for the database (container + pooler) and the pooler alone (D87)
 - [x] Bulk actions: restart all services/databases/storage and back up all databases
+- [x] Database container logs: drained journal, `GET /databases/:name/logs`, dashboard tail, `skif db logs`, MCP `get_database_logs`
 - [ ] TLS in transit with a per-node CA and `sslmode=require` URLs
 - [ ] On-demand SQL console (pgweb or Adminer) behind `platform` access (D60)
 - [ ] Database metrics in the Parquet archive; bulk actions and prune for databases; `restore_database` over MCP

@@ -27,6 +27,7 @@ Commands:
   delete <name>                Move it to the trash (restorable for 7 days)
   restore <name>               Bring it back from the trash
   purge <name>                 Permanently delete a trashed database and its data
+  logs <name>                  Tail the Postgres container journal (--follow to stream)
   credentials <name>           Print the connection URL (--json for user, password, host, port)
   restart <name>|--all         Restart a database (and its pooler) or every database
   rotate <name>                Rotate the owner password (--monitor for the monitor role)
@@ -107,6 +108,14 @@ const backupPolicyFlags: FlagSpec = {
 };
 const rotateFlags: FlagSpec = { ...baseFlags, monitor: { type: 'boolean' } };
 const restartFlags: FlagSpec = { ...baseFlags, pooler: { type: 'boolean' }, all: { type: 'boolean' } };
+const logsFlags: FlagSpec = {
+	...baseFlags,
+	follow: { type: 'boolean', short: 'f' },
+	limit: { type: 'string' },
+	level: { type: 'string' },
+	q: { type: 'string' },
+	after: { type: 'string' },
+};
 
 const subcommands: Record<string, (argv: string[]) => Promise<void>> = {
 	list: listDatabases,
@@ -122,6 +131,7 @@ const subcommands: Record<string, (argv: string[]) => Promise<void>> = {
 	purge: purgeDatabase,
 	credentials: showCredentials,
 	creds: showCredentials,
+	logs: databaseLogs,
 	backups: listBackups,
 	backup: createBackup,
 	'backup-delete': deleteBackup,
@@ -373,6 +383,50 @@ async function showCredentials(argv: string[]): Promise<void> {
 	// The URL alone on stdout, so `psql "$(skif db credentials main)"` works.
 	console.log(credentials.url);
 	if (process.stderr.isTTY && credentials.note) process.stderr.write(`${credentials.note}\n`);
+}
+
+async function databaseLogs(argv: string[]): Promise<void> {
+	const parsed = parseNamed(argv, logsFlags, 'logs');
+	if (!parsed) return;
+	const { args, name } = parsed;
+	const client = await authenticatedClient();
+	const level = args.string('level');
+	if (level && !['debug', 'info', 'warn', 'error'].includes(level))
+		throw new UsageError('--level must be debug, info, warn or error.');
+	const limit = args.string('limit') ? Number(args.string('limit')) : undefined;
+	if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 2000))
+		throw new UsageError('--limit must be a whole number between 1 and 2000.');
+	const after = args.string('after') ? Number(args.string('after')) : undefined;
+	const follow = args.boolean('follow');
+	let cursor = after;
+	let first = true;
+
+	do {
+		const page = await client.databaseLogs(name, {
+			...(cursor !== undefined ? { after: cursor } : {}),
+			limit: limit ?? (follow ? 200 : 500),
+			...(level ? { level } : {}),
+			...(args.string('q') ? { q: args.string('q') } : {}),
+		});
+		if (args.boolean('json') && !follow) {
+			printJson(page.raw);
+			return;
+		}
+		if (page.events.length > 0) {
+			if (!first && follow) console.log('---');
+			for (const event of page.events) {
+				const time = new Date(event.ts).toISOString().slice(11, 19);
+				console.log(`${time} ${event.level.toUpperCase().padEnd(5)} ${event.message}`);
+			}
+			first = false;
+		} else if (!follow) {
+			console.log(`No logs for "${name}" yet.`);
+			return;
+		}
+		cursor = page.cursor;
+		if (!follow) return;
+		await Bun.sleep(2_000);
+	} while (follow);
 }
 
 async function restartDatabase(argv: string[]): Promise<void> {

@@ -293,6 +293,13 @@
 				</span>
 			</div>
 		{/snippet}
+		<Button
+			variant="outline"
+			href={resolve('/(dashboard)/databases/[name]/logs', { name: db.name })}
+		>
+			<TerminalIcon />
+			Logs
+		</Button>
 	</PageHeader>
 
 	{#if deleted}

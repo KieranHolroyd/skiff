@@ -969,6 +969,35 @@ function buildServer(
 	);
 
 	tool(
+		'get_database_logs',
+		{
+			title: 'Get database logs',
+			description:
+				'Return recent Postgres container log lines for a managed database (the agent drains the unit journal). ' +
+				'Use `after` as a cursor to poll for new lines; `level` and `q` filter server-side.',
+			inputSchema: z.object({
+				database: z.string().describe('Database name'),
+				after: z.number().int().nonnegative().optional().describe('Return lines after this cursor'),
+				limit: z.number().int().min(1).max(2000).default(200),
+				level: z.enum(['debug', 'info', 'warn', 'error']).optional(),
+				q: z.string().max(200).optional(),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('database:read', 'logs:read'),
+		},
+		async ({ database, after, limit, level, q }) =>
+			run(() => {
+				const view = core.databases.requireRow(principal, database, { includeDeleted: true });
+				return core.logs.queryService(principal, 'database', view.id, {
+					...(after !== undefined ? { after } : {}),
+					limit,
+					...(level ? { level } : {}),
+					...(q ? { q } : {}),
+				});
+			}),
+	);
+
+	tool(
 		'create_database',
 		{
 			title: 'Create database',

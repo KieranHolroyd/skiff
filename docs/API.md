@@ -88,6 +88,7 @@ contain credentials, except `/credentials`.
 | POST | `/databases/:name/restore` | `database:delete` | re-checks admission; 409 once a purge was requested → `{ database }` |
 | GET | `/databases/:name/credentials` | `database:credentials` | `{ credentials: { url, host, port, username, password, databaseName, note } }`; loopback URL on the database's node; `cache-control: no-store`; every read is audited. Not available over MCP (D58) |
 | GET | `/databases/:name/metrics` | `database:read` | `?from&to` (ISO or epoch ms; default the last hour) `&interval=1m\|1h` (default `1m`, `1h` when the range exceeds 48 h; `1m` over 48 h is rejected; ranges ≤ 92 days) → `{ points, interval }`. Counters are per bucket |
+| GET | `/databases/:name/logs` | `database:read` + `logs:read` | `?after&limit&level&q` → `{ events, cursor, hasMore }`; the agent drains the unit journal into `service_log_events` |
 | GET | `/databases/:name/backups` | `database:read` | `{ backups }` (size, SHA-256, status, verified restore) |
 | POST | `/databases/:name/backups` | `database:update` | `{ pinned? }` → `202 { backup }`; the node streams a `pg_dump -Fc` to the object store |
 | GET/DELETE | `/databases/:name/backups/:id` | `database:read` / `database:delete` | one artifact; delete removes the object first |

@@ -448,6 +448,16 @@ export class DatabaseService {
 				.where(eq(databases.id, row.id))
 				.run();
 		}
+		this.ctx.logs.appendServiceSystem({
+			kind: 'database',
+			serviceId: row.id,
+			orgId: row.orgId,
+			nodeId: row.nodeId,
+			message:
+				input.target === 'pooler'
+					? 'Pooler restart requested.'
+					: 'Database restart requested; the container and its pooler will restart.',
+		});
 		this.ctx.audit.record({
 			principal,
 			action: input.target === 'pooler' ? 'database.pooler-restart' : 'database.restart',
@@ -549,6 +559,13 @@ export class DatabaseService {
 				createdAt: now,
 			})
 			.run();
+		this.ctx.logs.appendServiceSystem({
+			kind: 'database',
+			serviceId: db.id,
+			orgId: db.orgId,
+			nodeId: db.nodeId,
+			message: `${input.role === 'owner' ? 'Owner' : 'Monitor'} credential rotation requested.`,
+		});
 		this.ctx.audit.record({
 			principal,
 			action: 'database.rotate',
