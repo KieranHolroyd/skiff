@@ -143,8 +143,10 @@ function withFrameProtection(response: Response, pathname: string): Response {
 
 function applyFrameHeaders(headers: Headers, pathname: string): void {
 	const studio = STUDIO_PROXY.test(pathname);
-	headers.set('x-frame-options', studio ? 'SAMEORIGIN' : 'DENY');
 	const csp = headers.get('content-security-policy');
+	// A route that explicitly allows same-origin framing (the dashboard's PDF preview) keeps it.
+	const selfFramed = /frame-ancestors\s+'self'\s*(?:;|$)/i.test(csp ?? '');
+	headers.set('x-frame-options', studio || selfFramed ? 'SAMEORIGIN' : 'DENY');
 	if (studio) {
 		headers.set('content-security-policy', withFrameAncestors(csp, "'self'"));
 	} else if (!csp?.includes('frame-ancestors')) {

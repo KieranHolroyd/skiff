@@ -155,8 +155,13 @@ export class S3Client {
 	}
 
 	/** Raw GET; the caller streams the body to the browser. */
-	async getObject(bucket: string, key: string): Promise<Response> {
-		const response = await this.send('GET', this.path(bucket, key));
+	/** `range` is a single `bytes=` range, passed through so media can seek (206 is returned as-is). */
+	async getObject(bucket: string, key: string, range?: string): Promise<Response> {
+		const response = await this.send('GET', this.path(bucket, key), {
+			...(range ? { headers: { range } } : {}),
+		});
+		if (response.status === 416)
+			throw new CoreError('range_not_satisfiable', 'The requested range is outside the object.', 416);
 		if (!response.ok) await this.fail(response);
 		return response;
 	}

@@ -11,6 +11,7 @@
 	import CloudUploadIcon from '@lucide/svelte/icons/cloud-upload';
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import DownloadIcon from '@lucide/svelte/icons/download';
+	import EyeIcon from '@lucide/svelte/icons/eye';
 	import EarthIcon from '@lucide/svelte/icons/earth';
 	import FileIcon from '@lucide/svelte/icons/file';
 	import FolderIcon from '@lucide/svelte/icons/folder';
@@ -24,6 +25,9 @@
 	import UploadIcon from '@lucide/svelte/icons/upload';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { toast } from 'svelte-sonner';
+	import { SvelteSet } from 'svelte/reactivity';
+	import type { StorageObject } from '@skiff/contracts';
+	import { previewOf, THUMBNAIL_MAX_BYTES } from '#lib/storage-preview.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
 	import Notice from '#lib/components/skiff/Notice.svelte';
@@ -46,6 +50,7 @@
 	import { fileIcon } from './_lib/file-icon.js';
 	import { dragHasFiles, fromDataTransfer, fromFileList, type Picked } from './_lib/picked.js';
 	import { UploadQueue } from './_lib/upload-queue.svelte.js';
+	import PreviewDialog from './_lib/PreviewDialog.svelte';
 	import UploadPanel from './_lib/UploadPanel.svelte';
 	import type { PageProps } from './$types';
 
@@ -107,6 +112,36 @@
 		const params = new URLSearchParams({ bucket: data.bucket ?? '', key });
 		return `/api/v1/storage/${encodeURIComponent(data.storage.name)}/objects/item?${params.toString()}`;
 	}
+
+	// --- previews ------------------------------------------------------------------------------
+
+	/** The inline (preview) URL; the etag busts the short private cache when an object changes. */
+	function previewHref(object: StorageObject): string {
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- a one-off string builder
+		const params = new URLSearchParams({ bucket: data.bucket ?? '', key: object.key, inline: '1' });
+		if (object.etag) params.set('v', object.etag);
+		return `/api/v1/storage/${encodeURIComponent(data.storage.name)}/objects/item?${params.toString()}`;
+	}
+
+	/** Everything in the current (filtered) view that has a viewer, in list order. */
+	const previewable = $derived(objects.filter((object) => previewOf(object.key)));
+	let previewOpen = $state(false);
+	let previewIndex = $state(0);
+
+	function openPreview(key: string) {
+		const index = previewable.findIndex((object) => object.key === key);
+		if (index < 0) return;
+		previewIndex = index;
+		previewOpen = true;
+	}
+
+	// Thumbnails that failed to load fall back to the file-type icon.
+	const brokenThumbs = new SvelteSet<string>();
+	const hasThumb = (object: StorageObject) =>
+		previewOf(object.key)?.kind === 'image' &&
+		object.sizeBytes > 0 &&
+		object.sizeBytes <= THUMBNAIL_MAX_BYTES &&
+		!brokenThumbs.has(object.key);
 
 	const crumbs = $derived(
 		data.prefix
@@ -626,6 +661,7 @@
 							{#each objects as object (object.key)}
 								{@const checked = selected.has(object.key)}
 								{@const Icon = fileIcon(object.key) ?? FileIcon}
+								{@const canPreview = !!previewOf(object.key)}
 								<Table.Row
 									data-state={checked ? 'selected' : undefined}
 									class={data.canWrite ? 'cursor-pointer' : ''}
@@ -643,10 +679,30 @@
 									{/if}
 									<Table.Cell class="max-w-0 {data.canWrite ? '' : 'pl-4'}">
 										<span class="flex min-w-0 items-center gap-2">
-											<Icon class="size-4 shrink-0 text-muted-foreground" />
-											<span class="truncate font-mono text-xs" title={object.key}
-												>{visibleName(object.key)}</span
-											>
+											{#if hasThumb(object)}
+												<img
+													src={previewHref(object)}
+													alt=""
+													loading="lazy"
+													decoding="async"
+													class="-my-1 size-7 shrink-0 rounded border bg-muted object-cover"
+													onerror={() => brokenThumbs.add(object.key)}
+												/>
+											{:else}
+												<Icon class="size-4 shrink-0 text-muted-foreground" />
+											{/if}
+											{#if canPreview}
+												<button
+													type="button"
+													class="truncate text-left font-mono text-xs underline-offset-4 hover:underline focus-visible:underline focus-visible:outline-none"
+													title="Preview {object.key}"
+													onclick={() => openPreview(object.key)}>{visibleName(object.key)}</button
+												>
+											{:else}
+												<span class="truncate font-mono text-xs" title={object.key}
+													>{visibleName(object.key)}</span
+												>
+											{/if}
 										</span>
 									</Table.Cell>
 									<Table.Cell
@@ -662,6 +718,17 @@
 									</Table.Cell>
 									<Table.Cell class="pr-4">
 										<div class="flex items-center justify-end gap-0.5">
+											{#if canPreview}
+												<Button
+													size="icon-sm"
+													variant="ghost"
+													onclick={() => openPreview(object.key)}
+													aria-label="Preview {visibleName(object.key)}"
+													title="Preview"
+												>
+													<EyeIcon />
+												</Button>
+											{/if}
 											<Button
 												size="icon-sm"
 												variant="ghost"
@@ -673,6 +740,11 @@
 												<DownloadIcon />
 											</Button>
 											<RowMenu label="Actions for {visibleName(object.key)}">
+												{#if canPreview}
+													<DropdownMenu.Item onSelect={() => openPreview(object.key)}>
+														<EyeIcon />Preview
+													</DropdownMenu.Item>
+												{/if}
 												<DropdownMenu.Item onSelect={() => openShare(object.key)}>
 													<LinkIcon />Create share link…
 												</DropdownMenu.Item>
@@ -784,6 +856,17 @@
 {/if}
 
 <UploadPanel {queue} />
+
+<PreviewDialog
+	bind:open={previewOpen}
+	bind:index={previewIndex}
+	items={previewable}
+	name={visibleName}
+	{previewHref}
+	{downloadHref}
+	onCopyKey={copyKey}
+	onShare={openShare}
+/>
 
 <Dialog.Root bind:open={shareOpen}>
 	<Dialog.Content class="sm:max-w-md">

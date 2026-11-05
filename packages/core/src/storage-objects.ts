@@ -115,12 +115,15 @@ export class StorageObjectsService {
 		name: string,
 		bucket: string,
 		key: string,
+		range?: string | null,
 	): Promise<{ response: Response; key: string; contentType: string | null; etag: string | null }> {
 		requirePermission(principal, 'storage:read');
 		const row = this.ctx.storage.requireRow(principal, name);
 		this.bucket(row, bucket);
 		const safeKey = storageObjectKeySchema.parse(key);
-		const response = await this.client(row).getObject(bucket, safeKey);
+		// Only a single, well-formed byte range is forwarded; anything else gets the whole object.
+		const safeRange = range && /^bytes=(\d+-\d*|-\d+)$/.test(range.trim()) ? range.trim() : undefined;
+		const response = await this.client(row).getObject(bucket, safeKey, safeRange);
 		return {
 			response,
 			key: safeKey,

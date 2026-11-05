@@ -2,6 +2,7 @@ import type { RequestHandler } from './$types';
 import { CoreError } from '@skiff/core';
 import { bucketNameSchema } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
+import { inlineMediaType } from '#lib/storage-preview.js';
 import { json, route } from '#lib/server/api.js';
 import { requirePrincipal } from '#lib/server/principal.js';
 
@@ -34,16 +35,48 @@ export const GET: RequestHandler = (event) =>
 		const principal = requirePrincipal(event);
 		const bucket = bucketOf(event);
 		const key = keyOf(event);
-		const result = await core.storageObjects.download(principal, event.params.name, bucket, key);
+		const result = await core.storageObjects.download(
+			principal,
+			event.params.name,
+			bucket,
+			key,
+			event.request.headers.get('range')
+		);
 		const headers = new Headers();
-		headers.set('content-type', result.contentType ?? 'application/octet-stream');
 		const length = result.response.headers.get('content-length');
 		if (length) headers.set('content-length', length);
+		// Byte ranges let media previews seek (and Safari play video at all) and downloads resume.
+		headers.set('accept-ranges', 'bytes');
+		const contentRange = result.response.headers.get('content-range');
+		if (contentRange) headers.set('content-range', contentRange);
 		if (result.etag) headers.set('etag', `"${result.etag}"`);
-		headers.set('content-disposition', disposition(key, event.url.searchParams.get('inline') === '1'));
-		headers.set('cache-control', 'private, no-store');
 		headers.set('x-content-type-options', 'nosniff');
-		return new Response(result.response.body, { status: 200, headers });
+
+		// `inline=1` is the dashboard preview. Only allowlisted media is ever served inline, under a
+		// type derived from the key, so an uploaded HTML or script can't run on the platform origin.
+		const inlineType =
+			event.url.searchParams.get('inline') === '1'
+				? inlineMediaType(key, result.contentType)
+				: null;
+		if (inlineType) {
+			headers.set('content-type', inlineType);
+			headers.set('content-disposition', disposition(key, true));
+			// Preview URLs carry the etag (`v=`), so a short private cache is safe and keeps thumbnails cheap.
+			headers.set('cache-control', 'private, max-age=600');
+			headers.set(
+				'content-security-policy',
+				inlineType === 'application/pdf'
+					? // The browser's PDF viewer needs an unsandboxed document; the dashboard frames it.
+						"frame-ancestors 'self'"
+					: "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'"
+			);
+		} else {
+			headers.set('content-type', result.contentType ?? 'application/octet-stream');
+			headers.set('content-disposition', disposition(key, false));
+			headers.set('cache-control', 'private, no-store');
+		}
+		const status = result.response.status === 206 && contentRange ? 206 : 200;
+		return new Response(result.response.body, { status, headers });
 	});
 
 export const HEAD: RequestHandler = (event) =>
