@@ -7,6 +7,8 @@
 		description,
 		meta,
 		bordered = true,
+		/** Stable anchor for the assistant's guided tour. */
+		target,
 		children
 	}: {
 		title: string;
@@ -16,12 +18,15 @@
 		meta?: Snippet;
 		/** Draw the bottom rule; turn off when tabs sit directly underneath. */
 		bordered?: boolean;
+		/** Stable `data-skiff-target` id for the assistant. */
+		target?: string;
 		/** Actions, right-aligned. */
 		children?: Snippet;
 	} = $props();
 </script>
 
 <header
+	data-skiff-target={target}
 	class="flex flex-wrap items-end justify-between gap-x-6 gap-y-4 {bordered
 		? 'border-b pb-6'
 		: 'pb-4'}"
