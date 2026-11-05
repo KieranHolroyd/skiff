@@ -238,6 +238,8 @@ export class NodeService {
 			this.ctx.databases.applyBackupResults(node.id, input.databaseBackupResults);
 		if (input.databaseRotationResults?.length)
 			this.ctx.databases.applyRotationResults(node.id, input.databaseRotationResults);
+		if (input.databasePoolerRestarted?.length)
+			this.ctx.databases.applyPoolerRestarted(node.id, input.databasePoolerRestarted);
 		if (input.purgedDatabases?.length) this.ctx.databases.applyPurged(node.id, input.purgedDatabases);
 		if (input.purgedStorage?.length) this.ctx.storage.applyPurged(node.id, input.purgedStorage);
 		if (input.storageBucketDeletions?.length)
@@ -642,6 +644,7 @@ export class NodeService {
 			databasePurges: this.ctx.databases.purgesForNode(node.id),
 			databaseBackupTasks: await this.ctx.databases.backupTasksForNode(node.id),
 			databaseRotations: this.ctx.databases.rotationTasksForNode(node.id),
+			databasePoolerRestarts: this.ctx.databases.poolerRestartTasksForNode(node.id),
 			storageGateway: this.ctx.storage.gatewayForNode(node.id, isEdge, (id) => nodeById.get(id)?.publicAddress ?? null),
 			storageRoutes: this.ctx.storage.routesForNode(node.id, isEdge, (id) => nodeById.get(id)?.publicAddress ?? null),
 			storagePurges: this.ctx.storage.purgesForNode(node.id),

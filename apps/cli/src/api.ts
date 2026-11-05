@@ -622,6 +622,16 @@ export class ApiClient {
 		return { database: databaseFrom(raw), raw };
 	}
 
+	async restartDatabase(
+		name: string,
+		target: 'database' | 'pooler',
+	): Promise<{ database: DatabaseView; target: string; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/databases/${encodeURIComponent(name)}/restart`, {
+			body: { target },
+		});
+		return { database: databaseFrom(raw), target, raw };
+	}
+
 	async listDatabaseRotations(name: string): Promise<{ rotations: DatabaseRotationView[]; raw: unknown }> {
 		const raw = await this.request('GET', `/api/v1/databases/${encodeURIComponent(name)}/rotate`);
 		return {
@@ -693,6 +703,11 @@ export class ApiClient {
 
 	async createStorage(input: StorageCreateInput): Promise<{ storage: StorageView; raw: unknown }> {
 		const raw = await this.request('POST', '/api/v1/storage', { body: input });
+		return { storage: storageFrom(raw), raw };
+	}
+
+	async restartStorage(name: string): Promise<{ storage: StorageView; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/storage/${encodeURIComponent(name)}/restart`);
 		return { storage: storageFrom(raw), raw };
 	}
 

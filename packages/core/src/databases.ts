@@ -24,6 +24,7 @@ import {
 	databaseEnvNames,
 	databaseIdentifier,
 	databaseImage,
+	databaseRestartSchema,
 	databaseRestoreSchema,
 	databaseRotateSchema,
 	databaseUpdateSchema,
@@ -415,6 +416,87 @@ export class DatabaseService {
 			port: row.hostPort,
 			note: `Listens on loopback on node "${node?.name ?? row.nodeId}" only. From elsewhere, tunnel: ssh -L ${row.hostPort}:127.0.0.1:${row.hostPort} <node>.`,
 		};
+	}
+
+	// ---------------------------------------------------------------- restarts
+
+	/**
+	 * Restart the database container (and its pooler) by bumping the restart generation, or only
+	 * the PgBouncer sidecar through a small request flag the node acknowledges.
+	 */
+	restart(principal: Principal, name: string, raw: unknown = {}): DatabaseView {
+		requirePermission(principal, 'database:update');
+		const input = databaseRestartSchema.parse(raw);
+		const row = this.requireRow(principal, name);
+		const now = this.ctx.now();
+		if (input.target === 'pooler') {
+			if (!row.poolerEnabled || row.poolerPort === null)
+				throw new ConflictError(`Database "${name}" does not have a pooler. Enable it first.`);
+			this.ctx.db
+				.update(databases)
+				.set({ poolerRestartRequestedAt: now, updatedAt: now })
+				.where(eq(databases.id, row.id))
+				.run();
+		} else {
+			this.ctx.db
+				.update(databases)
+				.set({
+					restartGeneration: row.restartGeneration + 1,
+					message: 'Restart requested.',
+					updatedAt: now,
+				})
+				.where(eq(databases.id, row.id))
+				.run();
+		}
+		this.ctx.audit.record({
+			principal,
+			action: input.target === 'pooler' ? 'database.pooler-restart' : 'database.restart',
+			resource: 'database',
+			resourceId: row.id,
+			args: { name, target: input.target },
+			result: 'ok',
+		});
+		this.ctx.projects.bump(principal.orgId);
+		return this.toView(this.requireRow(principal, name));
+	}
+
+	poolerRestartTasksForNode(nodeId: string): string[] {
+		return this.ctx.db
+			.select({ id: databases.id })
+			.from(databases)
+			.where(
+				and(
+					eq(databases.nodeId, nodeId),
+					eq(databases.poolerEnabled, true),
+					isNotNull(databases.poolerRestartRequestedAt),
+					isNull(databases.deletedAt),
+				),
+			)
+			.all()
+			.map((row) => row.id);
+	}
+
+	applyPoolerRestarted(nodeId: string, ids: string[]): void {
+		let changed = false;
+		for (const id of ids) {
+			const row = this.ctx.db.select().from(databases).where(eq(databases.id, id)).get();
+			if (!row || row.nodeId !== nodeId || row.poolerRestartRequestedAt === null) continue;
+			this.ctx.db
+				.update(databases)
+				.set({ poolerRestartRequestedAt: null, updatedAt: this.ctx.now() })
+				.where(eq(databases.id, id))
+				.run();
+			this.ctx.audit.record({
+				orgId: row.orgId,
+				action: 'database.pooler-restarted',
+				resource: 'database',
+				resourceId: id,
+				args: { name: row.name },
+				result: 'ok',
+			});
+			changed = true;
+		}
+		if (changed) this.ctx.projects.bump();
 	}
 
 	// ---------------------------------------------------------------- credential rotation
@@ -1315,7 +1397,15 @@ export class DatabaseService {
 			const row = this.rowById(report.id);
 			if (!row || row.nodeId !== nodeId || row.deletedAt) continue;
 			const status: DatabaseStatus = report.status === 'running' && report.restarts >= 5 ? 'failed' : report.status;
-			if (status === row.status) continue;
+			if (status === row.status) {
+				if (status === 'running' && row.message === 'Restart requested.')
+					this.ctx.db
+						.update(databases)
+						.set({ message: null, updatedAt: this.ctx.now() })
+						.where(eq(databases.id, row.id))
+						.run();
+				continue;
+			}
 			this.ctx.db
 				.update(databases)
 				.set({
@@ -1658,6 +1748,7 @@ function databaseActivationVersion(row: DatabaseRow, env: Record<string, string>
 			version: row.version,
 			port: row.hostPort,
 			poolerPort: row.poolerPort,
+			restartGeneration: row.restartGeneration,
 			env,
 			extensions: row.extensionsJson,
 			// A rotated secret must re-activate consumers even though the public spec is unchanged.

@@ -110,6 +110,8 @@ export const desiredStateSchema = z.object({
 	databaseBackupTasks: z.array(databaseBackupTaskSchema).default([]),
 	/** Credential rotations this node must apply (docs/DATABASES.md §4). */
 	databaseRotations: z.array(databaseRotationTaskSchema).default([]),
+	/** Database ids whose PgBouncer sidecar must be restarted (docs/DATABASES.md §11). */
+	databasePoolerRestarts: z.array(z.string()).default([]),
 	/** Registered volumes this node must know about, for volume-backed data dirs (D74). */
 	volumes: z.array(nodeVolumeDesiredSchema).default([]),
 	/** Internal S3 gateway routes the control plane uses to manage object contents (D81). */
@@ -169,6 +171,8 @@ export const heartbeatSchema = z.object({
 	databaseBackupResults: z.array(databaseBackupResultSchema).max(50).optional(),
 	/** Outcomes of `databaseRotations` since the last heartbeat. */
 	databaseRotationResults: z.array(databaseRotationResultSchema).max(50).optional(),
+	/** Database ids whose pooler restart the node completed. */
+	databasePoolerRestarted: z.array(z.string()).max(50).optional(),
 	/** Outcomes of `objectStorage.deleteBuckets` entries since the last heartbeat. */
 	storageBucketDeletions: z.array(storageBucketDeletionSchema).max(500).optional(),
 });

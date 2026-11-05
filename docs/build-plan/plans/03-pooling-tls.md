@@ -6,6 +6,10 @@
 **Primary files:** `packages/contracts/src/database.ts`, `packages/core/src/databases.ts`,
 `apps/helper/src/units.ts`, `apps/agent/src/runtime.ts`, `docs/DATABASES.md`
 
+> **Status update (5 Nov 2026):** the per-database PgBouncer sidecar, port allocation, and unit
+> rendering are shipped. Remaining: TLS, pooled/direct connection UX, pool metrics, rotation
+> integration. Verify before implementing.
+
 ## Goal
 
 Make Postgres safe under real application connection patterns: a pooler by default, TLS in transit,

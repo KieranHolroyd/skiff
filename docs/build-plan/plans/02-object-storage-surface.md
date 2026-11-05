@@ -7,6 +7,10 @@
 `apps/agent/src/storage-admin.ts`, `apps/control-plane/src/routes/api/v1/storage/**`,
 `docs/OBJECT-STORAGE.md`
 
+> **Status update (5 Nov 2026):** the object browser (list/upload/download/delete/presign, private
+> gateway) is shipped. Remaining: bucket versioning, lifecycle, CORS, quotas, object lock, signed
+> share links, write-only backup keys. Verify before implementing.
+
 ## Goal
 
 Turn a bucket from "credentials plus a public URL" into a usable product: browse and manage objects,

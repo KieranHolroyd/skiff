@@ -126,6 +126,23 @@ export const actions: Actions = {
 		};
 	},
 
+	restart: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const target = formString(data, 'target') === 'pooler' ? 'pooler' : 'database';
+		try {
+			core.databases.restart(principal, params.name, { target });
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+		return {
+			success:
+				target === 'pooler'
+					? 'Pooler restart requested. Postgres keeps its connections.'
+					: 'Restart requested. The node restarts the container and its pooler on the next reconcile.'
+		};
+	},
+
 	rotate: async ({ request, locals, params }) => {
 		const principal = locals.principal!;
 		const data = await request.formData();

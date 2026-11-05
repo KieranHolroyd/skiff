@@ -145,10 +145,10 @@ missing (D76). See [VOLUMES.md](./VOLUMES.md).
 
 | Surface | What |
 |---|---|
-| REST | `GET/POST /api/v1/databases`, `GET/PATCH/DELETE /api/v1/databases/:name`, `POST …/:name/restore`, `GET …/:name/credentials`, `GET …/:name/metrics`, `GET/POST …/:name/backups`, `GET/DELETE …/:name/backups/:id`, `POST …/:name/backups/:id/restore`, `GET/PATCH …/:name/backup-policy`, `GET/POST …/:name/rotate`, `GET/POST /api/v1/projects/:slug/databases`, `DELETE …/databases/:name` |
-| MCP | `list_databases`, `get_database`, `create_database`, `attach_database`, `detach_database`, `delete_database` (confirmed, soft), `list_database_backups`, `backup_database`, `restore_database`, `set_database_backup_policy`, `rotate_database_credentials` |
-| CLI | `skif db list\|create\|info\|attach\|detach\|delete\|restore\|credentials\|backups\|backup\|backup-delete\|restore-backup\|backup-policy\|rotate` |
-| Dashboard | Databases list + create, detail (status, connection, pooler, attached projects, charts, tables, extensions/slow queries, backups/restore, rotate), attach from a project |
+| REST | `GET/POST /api/v1/databases`, `GET/PATCH/DELETE /api/v1/databases/:name`, `POST …/:name/restore`, `GET …/:name/credentials`, `GET …/:name/metrics`, `GET/POST …/:name/backups`, `GET/DELETE …/:name/backups/:id`, `POST …/:name/backups/:id/restore`, `GET/PATCH …/:name/backup-policy`, `GET/POST …/:name/rotate`, `POST …/:name/restart`, `GET/POST /api/v1/projects/:slug/databases`, `DELETE …/databases/:name` |
+| MCP | `list_databases`, `get_database`, `create_database`, `attach_database`, `detach_database`, `delete_database` (confirmed, soft), `list_database_backups`, `backup_database`, `restore_database`, `set_database_backup_policy`, `rotate_database_credentials`, `restart_database` |
+| CLI | `skif db list\|create\|info\|attach\|detach\|delete\|restore\|credentials\|backups\|backup\|backup-delete\|restore-backup\|backup-policy\|rotate\|restart` |
+| Dashboard | Databases list + create, detail (status, connection, pooler, attached projects, charts, tables, extensions/slow queries, backups/restore, rotate, restart), attach from a project |
 
 ## 8. Backups and restore (D83)
 
@@ -205,7 +205,19 @@ argv) and verifies a fresh connection. Only after the node reports success does 
 replace the live secret and bump the activation version, which restarts attached apps with the new
 value. A failed rotation leaves the old secret in place and records the error.
 
-## 12. Follow-ups (on the roadmap)
+## 12. Restart controls (D87)
+
+- **Restart database** bumps `databases.restart_generation`, which is folded into the activation
+  version. The agent re-fetches the activation and re-applies the unit, so the container and its
+  PgBouncer sidecar restart together without a config change.
+- **Restart pooler** sets `pooler_restart_requested_at`; the node sees the id in
+  `databasePoolerRestarts`, calls the helper's dedicated fixed verb (`systemctl restart` on the
+  pooler unit only), and acknowledges it on the next heartbeat. Postgres connections are untouched.
+- Both actions require `database:update`, are audited, and are exposed as
+  `POST /databases/:name/restart` (`{ target: "database" | "pooler" }`), `skif db restart <name>
+  [--pooler]`, the MCP `restart_database` tool, and the dashboard Resources/Pooler controls.
+
+## 13. Follow-ups (on the roadmap)
 
 - On-demand SQL console: an open-source admin UI (pgweb or Adminer) as a short-lived container on
   the database's node, behind `platform` access, `database:console`, audited, idle-stopped (D60).

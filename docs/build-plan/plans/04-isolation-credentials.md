@@ -7,6 +7,10 @@
 `packages/core/src/databases.ts`, `packages/core/src/storage-instances.ts`,
 `apps/helper/src/units.ts`, `docs/DATABASES.md`, `docs/OBJECT-STORAGE.md`
 
+> **Status update (5 Nov 2026):** credential rotation (`database_rotations`) is shipped. Remaining:
+> per-org networks, TLS, named app/backup/read-only keys, encryption-at-rest proof, data-access
+> audit. Verify before implementing.
+
 ## Goal
 
 Make it safe to run more than one tenant on a node: per-org networks, no public database ports,

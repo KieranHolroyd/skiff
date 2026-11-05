@@ -84,6 +84,10 @@ class FakeRuntime implements HelperRuntime {
 		this.calls.push(`rotate:${id}:${role}`);
 	}
 
+	async restartPooler(id: string): Promise<void> {
+		this.calls.push(`restart-pooler:${id}`);
+	}
+
 	async status(id: string): Promise<HelperWorkloadStatus> {
 		return { id, status: 'running', restarts: 2 };
 	}

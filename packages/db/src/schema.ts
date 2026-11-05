@@ -413,6 +413,10 @@ export const databases = sqliteTable(
 		/** PgBouncer sidecar (docs/DATABASES.md §11); null port when disabled. */
 		poolerEnabled: integer('pooler_enabled', { mode: 'boolean' }).notNull().default(false),
 		poolerPort: integer('pooler_port'),
+		/** Bumped by an explicit restart so the agent re-applies the unit without a config change. */
+		restartGeneration: integer('restart_generation').notNull().default(0),
+		/** Set while a pooler-only restart is waiting for the node to acknowledge it. */
+		poolerRestartRequestedAt: integer('pooler_restart_requested_at'),
 		status: text('status', { enum: ['pending', 'starting', 'running', 'failed', 'stopped'] })
 			.notNull()
 			.default('pending'),
@@ -552,6 +556,8 @@ export const storageInstances = sqliteTable(
 		storageMb: integer('storage_mb').notNull().default(10_240),
 		/** Node volume holding the data dir; null keeps the helper state dir (D74). */
 		volumeId: text('volume_id'),
+		/** Bumped by an explicit restart; folded into the activation version (D82). */
+		restartGeneration: integer('restart_generation').notNull().default(0),
 		public: integer('public', { mode: 'boolean' }).notNull().default(false),
 		/** `<name>--s3.<contentDomain>` while public (and while trashed, so restore gets it back). */
 		publicHost: text('public_host'),

@@ -94,6 +94,7 @@ contain credentials, except `/credentials`.
 | POST | `/databases/:name/backups/:id/restore` | `database:create` (+ `project:update` with `project`) | `{ name, placement?, memoryMb?, cpus?, storageMb?, volume?, project?, envPrefix? }` → `202 { database }`; restore always creates a new database and verifies it |
 | GET/PATCH | `/databases/:name/backup-policy` | `database:read` / `database:update` | `{ enabled, schedule (five-field UTC cron), retentionDays }` |
 | GET/POST | `/databases/:name/rotate` | `database:read` / `database:credentials` + `database:update` | `{ role: owner\|monitor }` → `202 { rotation }`; the node applies ALTER ROLE before the secret swaps |
+| POST | `/databases/:name/restart` | `database:update` | `{ target: "database"\|"pooler" }` → `202 { database, target }`; database restarts the container and pooler, pooler restarts only PgBouncer |
 | GET | `/projects/:slug/databases` | `database:read` | `{ attachments }` with the env names each one injects |
 | POST | `/projects/:slug/databases` | `database:update` + `project:update` | `{ database, envPrefix? (UPPER_SNAKE, default DATABASE) }` → `201 { attachment, warning }`. The project gets `<PREFIX>_URL`, `_HOST`, `_PORT`, `_USER`, `_PASSWORD`, `_NAME` at activation and restarts; `warning` says when it must be redeployed onto the database's node (same node only, D56) |
 | DELETE | `/projects/:slug/databases/:name` | `database:update` + `project:update` | detach; the app re-activates without the variables → `{ ok: true }` |
@@ -131,6 +132,7 @@ secret keys, except `/credentials`.
 | DELETE | `/storage/:name` | `storage:delete` | soft delete, restorable 7 days; the container and public route stop; 409 while projects are attached → `{ storage }` |
 | DELETE | `/storage/:name?purge=1` | `storage:delete` | trashed instances only: the node removes the data, then the rows go → `{ ok: true }` |
 | POST | `/storage/:name/restore` | `storage:delete` | re-checks admission; 409 once a purge was requested → `{ storage }` |
+| POST | `/storage/:name/restart` | `storage:update` | restarts the RustFS container (buckets, objects and keys stay); the node applies it on its next reconcile → `202 { storage }` |
 | GET | `/storage/:name/credentials` | `storage:credentials` | `{ credentials: { accessKeyId, secretAccessKey, region, endpoint, internalEndpoint, publicEndpoint, note } }`, the root key; `endpoint` is the public URL when public, else loopback on the node; `cache-control: no-store`; every read is audited. Not available over MCP (S6) |
 | GET | `/storage/:name/metrics` | `storage:read` | same `?from&to&interval` rules as database metrics → `{ points: [{ bucket, up, usedBytes, objects, bucketCount, memoryBytes }], interval }` |
 | GET | `/storage/:name/buckets` | `storage:read` | `{ buckets: [{ name, access, state (ready\|deleting\|delete-blocked), sizeBytes, objects, createdAt, statsAt }] }` |

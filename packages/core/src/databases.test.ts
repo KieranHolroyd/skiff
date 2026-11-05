@@ -119,6 +119,32 @@ describe('managed databases', () => {
 		expect(() => core.workloads.activation('nod_other', entry!.id)).toThrow();
 	});
 
+	test('restarts the database and the pooler independently', async () => {
+		const before = (await core.nodes.desiredState(edgeToken)).workloads.find(
+			(workload) => workload.projectSlug === 'main-db',
+		)!;
+		core.databases.restart(owner, 'main-db', { target: 'database' });
+		const after = (await core.nodes.desiredState(edgeToken)).workloads.find(
+			(workload) => workload.projectSlug === 'main-db',
+		)!;
+		expect(after.activationVersion).not.toBe(before.activationVersion);
+
+		const view = core.databases.restart(owner, 'main-db', { target: 'pooler' });
+		expect(view.pooler.enabled).toBe(true);
+		const state = await core.nodes.desiredState(edgeToken);
+		expect(state.databasePoolerRestarts).toContain(view.id);
+		core.databases.applyPoolerRestarted(edgeId, [view.id]);
+		expect((await core.nodes.desiredState(edgeToken)).databasePoolerRestarts).not.toContain(view.id);
+
+		const noPool = core.databases.create(owner, { name: 'no-pool', memoryMb: 128, pooler: false });
+		expect(() => core.databases.restart(owner, 'no-pool', { target: 'pooler' })).toThrow(
+			/does not have a pooler/,
+		);
+		core.databases.delete(owner, 'no-pool');
+		core.databases.purgeNow(owner, 'no-pool');
+		core.databases.applyPurged(edgeId, [noPool.id]);
+	});
+
 	test('rotates the owner secret only after the node confirms ALTER ROLE', async () => {
 		const before = core.databases.credentials(owner, 'main-db').password;
 		const rotation = core.databases.rotateCredentials(owner, 'main-db', { role: 'owner' });

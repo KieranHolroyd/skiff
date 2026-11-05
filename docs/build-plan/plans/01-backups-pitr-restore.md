@@ -7,6 +7,11 @@
 `apps/helper/src/backups.ts`, `apps/agent/src/backups.ts`,
 `apps/control-plane/src/routes/api/v1/backups/**`, `docs/BACKUPS.md`
 
+> **Status update (5 Nov 2026):** logical `pg_dump` backups, retention, restore-to-new,
+> `verified_at`, and CLI/MCP/dashboard surfaces are already shipped. Remaining: PITR,
+> S3-first artifact listing, backup targets, cross-node restore. Verify the current code before
+> implementing; do not rebuild the shipped half.
+
 ## Goal
 
 Make managed Postgres and RustFS data recoverable with a restore that has actually been tested.

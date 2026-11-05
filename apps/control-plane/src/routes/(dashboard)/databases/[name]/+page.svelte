@@ -88,6 +88,20 @@
 		showPassword = false;
 	}
 
+	function restart(target: 'database' | 'pooler') {
+		askConfirm({
+			title: target === 'pooler' ? `Restart the pooler for ${db.name}?` : `Restart ${db.name}?`,
+			description:
+				target === 'pooler'
+					? 'Only PgBouncer restarts. Postgres and its existing connections are untouched; apps reconnect through the pooler in a few seconds.'
+					: 'The database container and its pooler restart. Attached apps lose their connections briefly and reconnect when the database is back.',
+			confirmLabel: 'Restart',
+			tone: 'danger',
+			action: '?/restart',
+			fields: { target }
+		});
+	}
+
 	function rotate(role: 'owner' | 'monitor') {
 		askConfirm({
 			title: `Rotate the ${role} password?`,
@@ -965,6 +979,9 @@
 		>
 			{#snippet actions()}
 				{#if data.dbCan.update && !deleted}
+					<Button variant="outline" size="sm" onclick={() => restart('database')}>
+						<RotateCcwIcon />Restart
+					</Button>
 					<Button variant="outline" size="sm" onclick={() => (resizeOpen = true)}>
 						<PencilIcon />Resize
 					</Button>
@@ -978,8 +995,13 @@
 				<dt>Storage</dt>
 				<dd><StorageMeter sizeBytes={db.sizeBytes} storageMb={db.storageMb} /></dd>
 				<dt>Pooler</dt>
-				<dd class="text-xs">
-					{db.pooler.enabled ? `PgBouncer on ${db.pooler.host.process}` : 'disabled'}
+				<dd class="flex items-center justify-end gap-2 text-xs">
+					<span>{db.pooler.enabled ? `PgBouncer on ${db.pooler.host.process}` : 'disabled'}</span>
+					{#if db.pooler.enabled && data.dbCan.update && !deleted}
+						<Button variant="ghost" size="sm" class="h-6 px-2 text-xs" onclick={() => restart('pooler')}>
+							Restart
+						</Button>
+					{/if}
 				</dd>
 				<dt>Updated</dt>
 				<dd class="text-xs">

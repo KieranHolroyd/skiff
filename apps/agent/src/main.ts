@@ -16,6 +16,7 @@ import { CertProbe, certProbeTargets, tlsCertReader } from './certs.ts';
 import { buildCaddyConfig, isProductionRoute, tlsSubjects } from './caddy-config.ts';
 import { loadConfig, type AgentConfig } from './config.ts';
 import { DatabaseBackupRunner } from './database-backups.ts';
+import { DatabasePoolerRestartRunner } from './database-pooler-restarts.ts';
 import { DatabaseRotationRunner } from './database-rotations.ts';
 import { DATABASE_STATS_INTERVAL_MS, DatabaseStatsSampler } from './database-stats.ts';
 import { HelperClient } from './helper-client.ts';
@@ -79,6 +80,7 @@ class AgentRuntime {
 	private readonly databaseStats: DatabaseStatsSampler;
 	private readonly databaseBackups: DatabaseBackupRunner;
 	private readonly databaseRotations: DatabaseRotationRunner;
+	private readonly databasePoolerRestarts: DatabasePoolerRestartRunner;
 	private readonly storageAdmin: StorageReconciler;
 	private readonly storageStats: StorageStatsSampler;
 
@@ -154,6 +156,7 @@ class AgentRuntime {
 			helper: this.helper,
 			log,
 		});
+		this.databasePoolerRestarts = new DatabasePoolerRestartRunner({ helper: this.helper, log });
 		// Buckets and scoped keys are desired state converged over the loopback S3/admin API; the
 		// root key and user secrets stay in the workload runtime's memory (S4).
 		this.storageAdmin = new StorageReconciler({ source: this.workloads, log });
@@ -226,6 +229,7 @@ class AgentRuntime {
 			this.databaseStatsLoop(),
 			this.databaseBackupLoop(),
 			this.databaseRotationLoop(),
+			this.databasePoolerRestartLoop(),
 			this.storageAdminLoop(),
 			this.storageStatsLoop(),
 		];
@@ -550,6 +554,20 @@ class AgentRuntime {
 		}
 	}
 
+	private async databasePoolerRestartLoop(): Promise<void> {
+		while (this.running) {
+			await sleep(5_000, this.shutdownController.signal).catch(() => undefined);
+			if (!this.running) break;
+			const state = this.desired;
+			if (!state) continue;
+			try {
+				await this.databasePoolerRestarts.runOnce(state, this.shutdownController.signal);
+			} catch (error) {
+				log('warn', `Database pooler restart failed: ${errorText(error)}`);
+			}
+		}
+	}
+
 	private async databaseRotationLoop(): Promise<void> {
 		while (this.running) {
 			await sleep(5_000, this.shutdownController.signal).catch(() => undefined);
@@ -605,6 +623,7 @@ class AgentRuntime {
 		const volumeInventory = await this.volumeInventoryForHeartbeat();
 		const backupResults = this.databaseBackups.pendingResults();
 		const rotationResults = this.databaseRotations.pendingResults();
+		const poolerRestarted = this.databasePoolerRestarts.pending();
 		// Bucket deletions are reported once, capped by the heartbeat schema (S8).
 		const storageBucketDeletions = this.storageAdmin.pendingBucketDeletions().slice(0, 500);
 		// A storage move happens outside the agent's sandbox (D48); ask for it while it is due.
@@ -626,6 +645,7 @@ class AgentRuntime {
 			...(reports.length > 0 ? { workloads: workloadHeartbeat(reports) } : {}),
 			...(backupResults.length > 0 ? { databaseBackupResults: backupResults } : {}),
 			...(rotationResults.length > 0 ? { databaseRotationResults: rotationResults } : {}),
+			...(poolerRestarted.length > 0 ? { databasePoolerRestarted: poolerRestarted } : {}),
 			...(purgedDatabases.length > 0 ? { purgedDatabases } : {}),
 			...(purgedStorage.length > 0 ? { purgedStorage } : {}),
 			...(storageBucketDeletions.length > 0 ? { storageBucketDeletions } : {}),
@@ -653,6 +673,7 @@ class AgentRuntime {
 		}
 		this.databaseBackups.acknowledge(backupResults.map((result) => result.taskId));
 		this.databaseRotations.acknowledge(rotationResults.map((result) => result.taskId));
+		this.databasePoolerRestarts.acknowledge(poolerRestarted);
 		this.workloads.acknowledgePurgedDatabases(purgedDatabases);
 		this.workloads.acknowledgePurgedStorage(purgedStorage);
 		this.storageAdmin.acknowledgeBucketDeletions(storageBucketDeletions);

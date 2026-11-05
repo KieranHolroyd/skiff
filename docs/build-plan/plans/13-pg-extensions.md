@@ -6,6 +6,10 @@
 **Primary files:** `packages/contracts/src/database.ts`, `packages/core/src/databases.ts`,
 `apps/agent/src/database-stats.ts`, `apps/helper/src/databases.ts`, `docs/DATABASES.md`
 
+> **Status update (5 Nov 2026):** the extension allowlist, `pg_stat_statements` slow-query sample,
+> and dashboard panel are shipped. Remaining: verify on Debian 13, confirm PostGIS availability in
+> the pinned image. Do not rebuild the shipped half.
+
 ## Goal
 
 Make Skiff's Postgres feel like a real application database: enable common extensions (pgvector,

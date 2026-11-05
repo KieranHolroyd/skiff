@@ -28,6 +28,7 @@ Commands:
   restore <name>               Bring it back from the trash
   purge <name>                 Permanently delete a trashed database and its data
   credentials <name>           Print the connection URL (--json for user, password, host, port)
+  restart <name>               Restart the database container (and its pooler)
   rotate <name>                Rotate the owner password (--monitor for the monitor role)
   backups <name>               List backups and the last verified restore
   backup <name>                Take a backup now (--pin keeps it past retention)
@@ -105,6 +106,7 @@ const backupPolicyFlags: FlagSpec = {
 	disable: { type: 'boolean' },
 };
 const rotateFlags: FlagSpec = { ...baseFlags, monitor: { type: 'boolean' } };
+const restartFlags: FlagSpec = { ...baseFlags, pooler: { type: 'boolean' } };
 
 const subcommands: Record<string, (argv: string[]) => Promise<void>> = {
 	list: listDatabases,
@@ -125,6 +127,7 @@ const subcommands: Record<string, (argv: string[]) => Promise<void>> = {
 	'backup-delete': deleteBackup,
 	'restore-backup': restoreBackup,
 	'backup-policy': backupPolicy,
+	restart: restartDatabase,
 	rotate: rotateCredentials,
 };
 
@@ -370,6 +373,24 @@ async function showCredentials(argv: string[]): Promise<void> {
 	// The URL alone on stdout, so `psql "$(skif db credentials main)"` works.
 	console.log(credentials.url);
 	if (process.stderr.isTTY && credentials.note) process.stderr.write(`${credentials.note}\n`);
+}
+
+async function restartDatabase(argv: string[]): Promise<void> {
+	const parsed = parseNamed(argv, restartFlags, 'restart');
+	if (!parsed) return;
+	const { args, name } = parsed;
+	const target = args.boolean('pooler') ? 'pooler' : 'database';
+	const client = await authenticatedClient();
+	const { database, raw } = await client.restartDatabase(name, target);
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	console.log(
+		target === 'pooler'
+			? `Restarting the pooler for "${name}". Postgres keeps its connections; the sidecar comes back in a few seconds.`
+			: `Restarting "${name}" on node ${nodeLabel(database)}. Attached apps reconnect when it is back.`,
+	);
 }
 
 async function rotateCredentials(argv: string[]): Promise<void> {

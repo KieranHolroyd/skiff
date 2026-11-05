@@ -91,6 +91,19 @@ export const actions: Actions = {
 		}
 	},
 
+	restart: async ({ locals, params }) => {
+		const principal = locals.principal!;
+		try {
+			core.storage.restart(principal, params.name);
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+		return {
+			success:
+				'Restart requested. The node restarts the container on its next reconcile; S3 requests fail briefly.'
+		};
+	},
+
 	update: async ({ request, locals, params }) => {
 		const principal = locals.principal!;
 		const data = await request.formData();

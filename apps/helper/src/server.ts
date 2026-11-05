@@ -35,6 +35,8 @@ export interface HelperRuntime {
 	dumpDatabase(id: string): Promise<{ path: string; sizeBytes: number; filename: string }>;
 	/** Apply a new password to the owner or monitor role (docs/DATABASES.md §4). */
 	rotateDatabaseRole(id: string, role: 'owner' | 'monitor', newPassword: string): Promise<void>;
+	/** Restart only the PgBouncer sidecar. */
+	restartPooler(id: string): Promise<void>;
 	/** Restore a custom-format dump into a managed database. */
 	restoreDatabase(id: string, body: ReadableStream<Uint8Array> | null): Promise<void>;
 	/** Mounts and free block devices for the volume wizard (D72). */
@@ -164,6 +166,14 @@ export function createHandler(
 				}
 				await runtime.restoreDatabase(id, request.body);
 				return json({ ok: true, restored: id });
+			}
+
+			const poolerRestartMatch = /^\/v1\/workloads\/([^/]+)\/pooler\/restart$/.exec(path);
+			if (poolerRestartMatch) {
+				if (method !== 'POST') return methodNotAllowed('POST');
+				const id = assertDatabaseId(decodeURIComponent(poolerRestartMatch[1]!), 'database id');
+				await runtime.restartPooler(id);
+				return json({ ok: true, restarted: id });
 			}
 
 			const rotateMatch = /^\/v1\/workloads\/([^/]+)\/rotate$/.exec(path);

@@ -32,6 +32,7 @@ Commands:
   create <name>                  Create an S3-compatible storage instance (RustFS)
   info <name>                    Status, node, endpoints, usage, buckets and attached projects
   update <name>                  Change limits, version or public access
+  restart <name>                 Restart the RustFS container (buckets and objects are kept)
   delete <name>                  Move it to the trash (restorable for 7 days)
   restore <name>                 Bring it back from the trash
   purge <name>                   Permanently delete a trashed instance and its objects
@@ -164,6 +165,7 @@ const subcommands: Record<string, (argv: string[]) => Promise<void>> = {
 	show: showStorage,
 	update: updateStorage,
 	set: updateStorage,
+	restart: restartStorage,
 	delete: deleteStorage,
 	rm: deleteStorage,
 	restore: restoreStorage,
@@ -327,6 +329,21 @@ async function updateStorage(argv: string[]): Promise<void> {
 	console.log(
 		`Updated "${storage.name}": ${storage.memoryMb} MB memory, ${storage.cpus} CPU${storage.cpus === 1 ? '' : 's'}, ` +
 			`${usedVsBudget(storage)}, ${storage.publicUrl ? `public at ${storage.publicUrl}` : 'private'}.`,
+	);
+}
+
+async function restartStorage(argv: string[]): Promise<void> {
+	const parsed = parseNamed(argv, baseFlags, 'restart');
+	if (!parsed) return;
+	const { args, name } = parsed;
+	const client = await authenticatedClient();
+	const { storage, raw } = await client.restartStorage(name);
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	console.log(
+		`Restarting "${name}" on node ${nodeLabel(storage)}. S3 requests fail briefly; buckets, objects and keys are kept.`,
 	);
 }
 

@@ -235,6 +235,21 @@ describe('managed object storage', () => {
 		expect(core.workloads.activation(edgeId, after.id).env.S3_BUCKET).toBeUndefined();
 	});
 
+	test('restart re-activates the container without touching buckets', async () => {
+		const before = await core.nodes.desiredState(edgeToken);
+		const beforeWorkload = before.workloads.find((item) => item.projectSlug === 'media')!;
+		const restarted = core.storage.restart(owner, 'media');
+		expect(restarted.message).toBe('Restart requested.');
+		const after = await core.nodes.desiredState(edgeToken);
+		const afterWorkload = after.workloads.find((item) => item.projectSlug === 'media')!;
+		expect(afterWorkload.activationVersion).not.toBe(beforeWorkload.activationVersion);
+		expect(afterWorkload.objectStorage?.buckets).toEqual(beforeWorkload.objectStorage?.buckets);
+		expect(() => core.storage.restart(viewer, 'media')).toThrow(/storage:update/);
+		expect(core.audit.list({ principal: owner, limit: 50 }).some((entry) => entry.action === 'storage.restart')).toBe(
+			true,
+		);
+	});
+
 	test('AWS prefix produces the SDK variable names', async () => {
 		core.storage.createBucket(owner, 'scratch', { name: 'uploads' });
 		const { attachment } = core.storage.attach(owner, core.projects.requireRow(owner, 'backend'), {

@@ -451,6 +451,12 @@ export class SystemdDriver {
 		return this.status(workload.id);
 	}
 
+	/** Restart only the PgBouncer sidecar, leaving Postgres and its connections untouched. */
+	async restartPooler(id: string): Promise<void> {
+		assertDatabaseId(id, 'database id');
+		await this.systemctl(['restart', '--no-block', poolerServiceName(id)]);
+	}
+
 	/**
 	 * Fixed `ALTER ROLE` verb for credential rotation (docs/DATABASES.md §4). The SQL goes over
 	 * stdin, never argv, and the new password is verified with a fresh connection.

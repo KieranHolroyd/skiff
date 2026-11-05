@@ -56,6 +56,8 @@ export interface HelperApi {
 	restoreDatabase(id: string, body: ReadableStream<Uint8Array> | null): Promise<void>;
 	/** Apply a rotated owner/monitor password. */
 	rotateDatabaseRole(id: string, role: 'owner' | 'monitor', password: string): Promise<void>;
+	/** Restart only the PgBouncer sidecar. */
+	restartPooler(id: string): Promise<void>;
 }
 
 export class HelperError extends Error {
@@ -126,6 +128,15 @@ export class HelperClient implements HelperApi {
 		if (!response.body) throw new HelperError(`helper dump ${id} returned no body`);
 		const length = Number(response.headers.get('content-length') ?? '');
 		return { body: response.body, sizeBytes: Number.isFinite(length) ? length : null };
+	}
+
+	async restartPooler(id: string): Promise<void> {
+		await this.request(
+			'POST',
+			`/v1/workloads/${encodeURIComponent(id)}/pooler/restart`,
+			undefined,
+			30_000,
+		);
 	}
 
 	async rotateDatabaseRole(id: string, role: 'owner' | 'monitor', password: string): Promise<void> {

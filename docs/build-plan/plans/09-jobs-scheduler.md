@@ -7,6 +7,10 @@
 `apps/helper/src/jobs.ts`, `apps/agent/src/jobs.ts`,
 `apps/control-plane/src/routes/api/v1/jobs/**`, `docs/JOBS.md`
 
+> **Status update (5 Nov 2026):** the five-field cron parser and the backup scheduling sweep are
+> shipped; generic scheduler work is F4. Remaining: user jobs, one-off runs, retries/logs, preview
+> teardown. Verify before implementing.
+
 ## Goal
 
 Give projects a first-class scheduler: cron jobs, one-off tasks, retries, timeouts, concurrency

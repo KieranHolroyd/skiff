@@ -304,6 +304,17 @@
 		void runAction('?/restore');
 	}
 
+	function restart() {
+		askConfirm({
+			title: `Restart ${st.name}?`,
+			description:
+				'The RustFS container stops and starts again. S3 requests fail briefly; buckets, objects and access keys are kept.',
+			confirmLabel: 'Restart',
+			tone: 'danger',
+			action: '?/restart'
+		});
+	}
+
 	function purge() {
 		askConfirm({
 			title: `Delete ${st.name} permanently?`,
@@ -359,6 +370,9 @@
 				<FolderKanbanIcon />
 				Browse objects
 			</Button>
+			{#if data.storageCan.update}
+				<Button variant="outline" onclick={restart}><RotateCcwIcon />Restart</Button>
+			{/if}
 		{/if}
 	</PageHeader>
 

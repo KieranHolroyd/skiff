@@ -6,6 +6,9 @@
 **Primary files:** `packages/contracts/src/app-volume.ts`, `packages/core/src/app-volumes.ts`,
 `packages/contracts/src/workload.ts`, `apps/helper/src/units.ts`, `docs/VOLUMES.md`
 
+> **Status update (5 Nov 2026):** node volumes (D72–D80) are shipped for managed instances.
+> Remaining: app volumes for workloads, snapshots, disk admission. Verify before implementing.
+
 ## Goal
 
 Give process and container apps real persistent storage: multiple named volumes, a mount path,

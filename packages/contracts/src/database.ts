@@ -158,6 +158,14 @@ export interface DatabaseAttachmentView {
 export const databaseRotationRoles = ['owner', 'monitor'] as const;
 export type DatabaseRotationRole = (typeof databaseRotationRoles)[number];
 
+export const databaseRestartTargets = ['database', 'pooler'] as const;
+export type DatabaseRestartTarget = (typeof databaseRestartTargets)[number];
+
+export const databaseRestartSchema = z.object({
+	target: z.enum(databaseRestartTargets).default('database'),
+});
+export type DatabaseRestart = z.input<typeof databaseRestartSchema>;
+
 export const databaseRotateSchema = z.object({
 	role: z.enum(databaseRotationRoles).default('owner'),
 });

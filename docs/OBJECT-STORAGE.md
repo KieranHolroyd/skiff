@@ -187,6 +187,9 @@ Mirrors databases (D59):
   any buckets given on create.
 - **Update**: memory, CPUs, storage budget (admission re-checked), `public`. Engine version bumps
   within the pinned list restart the container.
+- **Restart**: an explicit restart bumps the instance's restart generation, which changes its
+  activation version; the node re-applies the unit and systemd restarts RustFS. Buckets, objects,
+  access keys and the data dir are untouched (D82).
 - **Delete** is soft for 7 days and is refused while projects are attached. The container stops,
   the route is removed and the data dir stays, so **restore** is lossless (the public host is held
   for the 7 days).

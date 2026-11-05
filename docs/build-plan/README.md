@@ -162,7 +162,37 @@ brief is [`plans/00-foundations.md`](plans/00-foundations.md).
 **Do not start Wave 1 until F1/F2 are merged.** A feature built against a moving contract will be
 rewritten.
 
-### Wave 1 — Data safety (parallel, ~3–4 weeks)
+### Wave 0 integration checklist
+
+When the five foundation branches are ready, merge in this order to minimise conflicts:
+
+1. **F1 contracts** — new `packages/contracts/src/*` files, `index.ts` exports, additive
+   `WorkloadDesired` fields. No schema, no services.
+2. **F2 streaming ObjectStore** — `packages/core/src/object-store.ts` + tests; update call sites.
+3. **F4 scheduler** — `scheduled_tasks` migration (next number), `scheduler.ts`, context/index,
+   one line in `MaintenanceService`.
+4. **F5 flags/migrations** — feature registry, config, `/api/setup/status`, CI migration check.
+5. **F3 e2e** — harness, CI job, `docs/TESTING.md`.
+
+For each merge:
+
+```sh
+bun install --frozen-lockfile
+bun test
+bun run check
+bun scripts/check-migrations.ts   # after F5
+```
+
+Then verify the foundation invariants:
+
+- A new contracts file imports without touching another domain's file.
+- `WorkloadDesired` parses with and without the new optional fields.
+- `putStream/getStream` round-trip a large object without a full buffer.
+- The scheduler is idempotent, leases expire, and a retry is bounded.
+- Every risky feature flag defaults off; `/api/setup/status` shows the resolved set.
+- The e2e harness skips cleanly without Podman and runs the Postgres/RustFS lane with it.
+
+
 
 | Lane | Plans | Notes |
 |---|---|---|
@@ -413,33 +443,53 @@ destructive feature by default in the same release that introduces it.
 Update this table as work lands. Use `not started` / `contract` / `in progress` / `blocked` /
 `review` / `merged`.
 
+### Reality check — 5 November 2026
+
+The repository moved while the plans were being written. These are already shipped or partly
+shipped; do not re-implement them. Verify the exact gaps before starting the plan.
+
+| Area | Shipped | Still missing |
+|---|---|---|
+| Database backups | `database_backups`, `pg_dump -Fc`, manual/scheduled, retention, restore-to-new, `verified_at`, MCP/CLI/dashboard | PITR, S3-first artifact listing, backup targets, cross-node restore |
+| Object storage | Object browser (list/upload/download/delete/presign), private gateway, CLI/MCP | Versioning, lifecycle, CORS, quotas, object lock, signed share links, image transforms |
+| Pooling | Per-database PgBouncer sidecar, port allocation, unit rendering | TLS, pooled/direct UX, pool metrics, node-level pooler decision |
+| Isolation | Credential rotation (`database_rotations`), sealed secrets | Per-org networks, TLS, named app/backup keys, encryption-at-rest proof |
+| Extensions | `pgvector`/`pg_trgm`/etc. allowlist, `pg_stat_statements` slow queries | Verify on Debian 13; PostGIS image availability |
+| Volumes | Node volumes for managed instances (D72–D80) | App volumes for workloads, snapshots, disk admission |
+| Scheduling | Cron parser, backup `next_backup_at` sweep | Generic durable scheduler, user jobs, preview teardown |
+| Agent/MCP | DB backups/restore/rotation tools | Read-only SQL, presigned URLs, plan/apply stack, fork, data health |
+
+**Wave 1 is therefore narrower than originally planned.** The remaining P0 work is backup targets
+(05), PITR (01b), TLS + connection UX (03b), bucket config (02b), per-org isolation (04b), and
+upgrade safety (06). Do not rebuild the shipped halves.
+
 | ID | Plan | Status | Branch | PR |
 |---|---|---|---|---|
-| F1 | Contracts/schema/modules | not started | | |
-| F2 | Streaming ObjectStore | not started | | |
-| F3 | Debian 13 e2e | not started | | |
-| F4 | Scheduler primitive | not started | | |
-| F5 | Flags/migrations | not started | | |
-| 01 | Backups/PITR/restore | not started | | |
-| 02 | Object-storage surface | not started | | |
-| 03 | Pooling/TLS | not started | | |
-| 04 | Isolation/credentials | not started | | |
+| F1 | Contracts/schema/modules | in progress | feat/wave0-f1-contracts | |
+| F2 | Streaming ObjectStore | in progress | feat/wave0-f2-streaming-objectstore | |
+| F3 | Debian 13 e2e | in progress | feat/wave0-f3-e2e | |
+| F4 | Scheduler primitive | in progress | feat/wave0-f4-scheduler | |
+| F5 | Flags/migrations | in progress | feat/wave0-f5-flags | |
+| 01 | Backups/PITR/restore | partial — logical backups shipped; PITR missing | | |
+| 02 | Object-storage surface | partial — browser shipped; bucket config missing | | |
+| 03 | Pooling/TLS | partial — pooler shipped; TLS/UX missing | | |
+| 04 | Isolation/credentials | partial — rotation shipped; networks/TLS missing | | |
 | 05 | Backup target | not started | | |
 | 06 | Upgrade safety | not started | | |
-| 07 | App volumes | not started | | |
+| 07 | App volumes | partial — node volumes shipped; app volumes missing | | |
 | 08 | Valkey | not started | | |
-| 09 | Jobs/scheduler | not started | | |
+| 09 | Jobs/scheduler | partial — cron parser/backup sweep shipped; generic scheduler in F4 | | |
 | 10 | Private networking | not started | | |
 | 11 | Blueprints | not started | | |
 | 12 | Preview data | not started | | |
-| 13 | PG extensions | not started | | |
+| 13 | PG extensions | shipped — verify on Debian 13 | | |
 | 14 | Stacks/compose | not started | | |
 | 15 | Image transforms | not started | | |
 | 16 | Quotas/showback | not started | | |
 | 17 | Portability | not started | | |
 | 18 | OpenAPI/Terraform | not started | | |
 | 19 | Process groups | not started | | |
-| 20 | Agent data tools | not started | | |
+| 20 | Agent data tools | partial — backup/restore/rotation tools shipped | | |
 
 ---
 

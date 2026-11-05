@@ -7,6 +7,10 @@
 **Primary files:** `apps/control-plane/src/lib/server/mcp/tools/data.ts`,
 `packages/contracts/src/mcp-data.ts`, `docs/MCP.md`
 
+> **Status update (5 Nov 2026):** MCP database backup/restore/rotation tools are shipped.
+> Remaining: read-only SQL, presigned URLs, plan/apply stack, fork, data health, durable tasks,
+> server-enforced approval for in-place restore. Verify before implementing.
+
 ## Goal
 
 Let an agent do what a careful operator can do with data, and nothing more: plan/apply a full

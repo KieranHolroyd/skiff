@@ -415,6 +415,36 @@ export class StorageService {
 		};
 	}
 
+	/**
+	 * Restart the RustFS container. Bumping the generation changes the activation version, so the
+	 * node re-fetches activation and re-applies the unit; systemd restarts it. Buckets, objects and
+	 * keys are untouched (D82).
+	 */
+	restart(principal: Principal, name: string): StorageView {
+		requirePermission(principal, 'storage:update');
+		const row = this.requireRow(principal, name);
+		const now = this.ctx.now();
+		this.ctx.db
+			.update(storageInstances)
+			.set({
+				restartGeneration: row.restartGeneration + 1,
+				message: 'Restart requested.',
+				updatedAt: now,
+			})
+			.where(eq(storageInstances.id, row.id))
+			.run();
+		this.ctx.audit.record({
+			principal,
+			action: 'storage.restart',
+			resource: 'storage',
+			resourceId: row.id,
+			args: { name },
+			result: 'ok',
+		});
+		this.ctx.projects.bump(principal.orgId);
+		return this.toView(this.requireRow(principal, name));
+	}
+
 	// ---------------------------------------------------------------- buckets
 
 	createBucket(principal: Principal, name: string, raw: BucketCreate): StorageBucketView {
@@ -1283,6 +1313,8 @@ function storageActivationVersion(row: StorageRow): string {
 			version: row.version,
 			port: row.hostPort,
 			root: row.rootAccessKey,
+			// A restart must re-activate (and so restart) the container without touching data.
+			restartGeneration: row.restartGeneration,
 			env: RUSTFS_ENV,
 		}),
 	);

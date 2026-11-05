@@ -16,6 +16,7 @@ import {
 	databaseBackupCreateSchema,
 	databaseBackupPolicySchema,
 	databaseCreateSchema,
+	databaseRestartSchema,
 	databaseRestoreSchema,
 	databaseRotateSchema,
 	deployFilesSchema,
@@ -1079,6 +1080,32 @@ function buildServer(
 	);
 
 	tool(
+		'restart_database',
+		{
+			title: 'Restart database',
+			description:
+				'Restart the database container (and its PgBouncer sidecar), or only the pooler. The node picks the ' +
+				'request up on its next pull; attached apps keep their connection settings and reconnect automatically.',
+			inputSchema: databaseRestartSchema.extend({ database: z.string().describe('Database name') }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('database:update'),
+		},
+		async ({ database, target }) =>
+			run(() => {
+				const view = core.databases.restart(principal, database, { target });
+				return {
+					database: view,
+					target,
+					nextSteps: [
+						target === 'pooler'
+							? 'The pooler restarts without touching Postgres; follow the database status for readiness.'
+							: 'The database restarts on its node; follow get_database until it is running again.',
+					],
+				};
+			}),
+	);
+
+	tool(
 		'rotate_database_credentials',
 		{
 			title: 'Rotate database credentials',
@@ -1515,6 +1542,24 @@ function buildServer(
 				};
 			});
 		},
+	);
+
+	tool(
+		'restart_storage',
+		{
+			title: 'Restart object storage',
+			description:
+				'Restart the RustFS container for a storage instance. Buckets, objects and access keys are kept; S3 requests ' +
+				'fail briefly while it comes back. Use this after an engine change or when the API is wedged.',
+			inputSchema: z.object({ storage: z.string().describe('Storage instance name') }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('storage:update'),
+		},
+		async ({ storage }) =>
+			run(() => {
+				const view = core.storage.restart(principal, storage);
+				return { ok: true, storage: view.name, status: view.status, message: view.message };
+			}),
 	);
 
 	// --- access -------------------------------------------------------------
