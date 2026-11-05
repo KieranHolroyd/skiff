@@ -267,6 +267,15 @@ export interface UnitSecretFile {
 	path: string;
 }
 
+/** One app volume resolved by the helper: host directory and sandbox mount point. */
+export interface UnitVolumeMount {
+	/** Absolute host directory the helper created under a verified backing. */
+	hostPath: string;
+	/** Absolute path inside the workload sandbox. */
+	mountPath: string;
+	readOnly: boolean;
+}
+
 export interface ProcessUnitOptions {
 	workload: WorkloadDesired;
 	releaseDir: string;
@@ -275,6 +284,8 @@ export interface ProcessUnitOptions {
 	command: string[];
 	/** Environment keys already present in the activation payload. */
 	envNames: string[];
+	/** App volumes mounted into the sandbox (plan 07). */
+	volumeMounts?: UnitVolumeMount[];
 }
 
 export function renderProcessUnit(options: ProcessUnitOptions): string {
@@ -305,6 +316,14 @@ export function renderProcessUnit(options: ProcessUnitOptions): string {
 		// systemd reads the file as the service manager; the unit sees it via $CREDENTIALS_DIRECTORY.
 		lines.push(`LoadCredential=${secret.name}:${secret.path}`);
 		lines.push(`Environment=${secret.name}_FILE=%d/${secret.name}`);
+	}
+	// A missing app-volume backing fails in SystemdDriver before this renderer is called. Bind
+	// mounts are explicit, never a write to the root disk through an empty directory.
+	for (const mount of options.volumeMounts ?? []) {
+		lines.push(
+			`${mount.readOnly ? 'BindReadOnlyPaths' : 'BindPaths'}=${mount.hostPath}:${mount.mountPath}`,
+		);
+		if (!mount.readOnly) lines.push(`ReadWritePaths=${mount.mountPath}`);
 	}
 	lines.push(`ExecStart=${renderExecStart(options.command)}`);
 	lines.push('Restart=on-failure');
@@ -375,6 +394,8 @@ export interface ContainerUnitOptions {
 	dataDir: string;
 	/** Host directory holding file secrets, mounted read-only when non-empty. */
 	secretsDir: string | null;
+	/** App volumes mounted into the container (plan 07). */
+	volumeMounts?: UnitVolumeMount[];
 }
 
 /**
@@ -401,6 +422,9 @@ export function renderContainerUnit(options: ContainerUnitOptions): string {
 	lines.push(`Network=${WORKLOAD_NETWORK_UNIT}`);
 	lines.push(`EnvironmentFile=${options.envFile}`);
 	lines.push(`Volume=${options.dataDir}:/data:Z`);
+	for (const mount of options.volumeMounts ?? []) {
+		lines.push(`Volume=${mount.hostPath}:${mount.mountPath}${mount.readOnly ? ':ro' : ''}:Z`);
+	}
 	if (options.secretsDir) {
 		lines.push(`Volume=${options.secretsDir}:/run/skiff-secrets:ro,Z`);
 		for (const secret of workload.secrets) {

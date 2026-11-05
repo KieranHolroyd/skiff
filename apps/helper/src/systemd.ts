@@ -30,6 +30,7 @@ import {
 	serviceUnitName,
 	socketUnitName,
 	type UnitSecretFile,
+	type UnitVolumeMount,
 } from './units.ts';
 import {
 	DATABASE_ENGINES,
@@ -275,6 +276,71 @@ export class SystemdDriver {
 		return join(entry.mountPath, 'skiff', workload.id);
 	}
 
+	/**
+	 * Resolve app volumes to host directories before anything is written (plan 07).
+	 *
+	 * A node-volume backing is verified with `findmnt` every start; a missing mount fails the
+	 * start rather than creating `/mnt/empty/skiff/apps/...` on the root disk. State-dir volumes
+	 * live under the helper's own state directory. Only `<base>/<volumeId>` is created.
+	 */
+	async resolveAppVolumeMounts(workload: WorkloadDesired): Promise<UnitVolumeMount[]> {
+		const mounts = workload.volumes ?? [];
+		if (mounts.length === 0) return [];
+		const registry = await readVolumeRegistry(this.volumeRegistryFile);
+		const verified = new Set<string>();
+		const owner = workload.database
+			? DATABASE_ENGINES[workload.database.engine]
+			: workload.objectStorage
+				? STORAGE_ENGINES[workload.objectStorage.engine]
+				: null;
+		const out: UnitVolumeMount[] = [];
+		for (const mount of mounts) {
+			let base: string;
+			if (mount.backing === 'node_volume') {
+				const nodeVolumeId = mount.nodeVolumeId;
+				if (!nodeVolumeId)
+					throw new ValidationError(
+						`App volume "${mount.id}" names no node volume; refusing to start ${workload.id}.`,
+					);
+				const entry = registry[nodeVolumeId];
+				if (!entry)
+					throw new ValidationError(
+						`App volume "${mount.id}" is backed by node volume "${nodeVolumeId}", which is not registered on this node; refusing to start ${workload.id}.`,
+					);
+				if (!verified.has(nodeVolumeId)) {
+					const mounted = await verifyMount(this.runner, entry.mountPath, entry.sourceKey);
+					if (!mounted.ok)
+						throw new ValidationError(
+							`App volume "${mount.id}" backing is not mounted: ${mounted.message ?? 'unknown error'}. Refusing to start ${workload.id}; the root disk is never used as a fallback.`,
+						);
+					verified.add(nodeVolumeId);
+				}
+				base = join(entry.mountPath, 'skiff', 'apps', workload.projectId);
+			} else {
+				base = join(this.stateDir, 'apps', workload.projectId);
+			}
+			await fs.mkdir(base, { recursive: true, mode: 0o755 });
+			const hostPath = join(base, mount.id);
+			await fs.mkdir(hostPath, { recursive: true, mode: 0o700 });
+			const info = await fs.lstat(hostPath);
+			if (!info.isDirectory() || info.isSymbolicLink())
+				throw new ValidationError(
+					`App volume "${mount.id}" resolves to something that is not a directory; refusing to start ${workload.id}.`,
+				);
+			if (owner) {
+				await fs.chmod(hostPath, 0o700);
+				await this.chown(hostPath, owner.uid, owner.gid);
+			} else {
+				// Generic images run as their own user and process units use DynamicUser; the
+				// dedicated volume directory is writable only by that sandboxed workload in
+				// practice. Read-only attachments are not writable at the filesystem level either.
+				await fs.chmod(hostPath, mount.readOnly ? 0o555 : 0o777);
+			}
+			out.push({ hostPath, mountPath: mount.mountPath, readOnly: mount.readOnly });
+		}
+		return out;
+	}
+
 	/** Render, install and (re)start one workload. Idempotent. */
 	async apply(
 		workload: WorkloadDesired,
@@ -297,6 +363,9 @@ export class SystemdDriver {
 				'Container workloads need an image; the control plane must include workload.image',
 			);
 		}
+
+		// Resolve/verify app-volume backing before writing secrets or units. Fail closed.
+		const volumeMounts = await this.resolveAppVolumeMounts(workload);
 
 		await fs.mkdir(this.runtimeDir, { recursive: true, mode: 0o755 });
 		// The runtime dir holds secret files: owner-only.
@@ -335,6 +404,7 @@ export class SystemdDriver {
 				secrets: secretFiles,
 				command: command!,
 				envNames: Object.keys(env),
+				volumeMounts,
 			});
 			changed = (await this.writeIfChanged(paths.service, service, 0o644)) || changed;
 
@@ -395,6 +465,7 @@ export class SystemdDriver {
 				envFile,
 				dataDir,
 				secretsDir: Object.keys(activation.files).length > 0 ? secretsDir : null,
+				volumeMounts,
 			});
 			changed = (await this.writeIfChanged(paths.container, container, 0o644)) || changed;
 			changed = (await this.removeIfExists(paths.service)) || changed;

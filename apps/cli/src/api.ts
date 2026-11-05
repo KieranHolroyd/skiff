@@ -33,6 +33,7 @@ import type {
 	StorageView,
 } from './object-storage.ts';
 import type { OperationItemView, OperationView } from './operations.ts';
+import type { AppVolumeView } from './volumes.ts';
 
 export interface ApiClientOptions {
 	baseUrl: string;
@@ -559,6 +560,71 @@ export class ApiClient {
 		}
 		if (!response.body) throw new CliError('The progress stream had no body.', { code: 'protocol' });
 		return response.body;
+	}
+
+	// --- app volumes (plan 07) ---------------------------------------------------------------
+
+	async listVolumes(project: string): Promise<{ volumes: AppVolumeView[]; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/projects/${encodeURIComponent(project)}/volumes`);
+		return { volumes: (asArray(asRecord(raw)?.volumes) ?? []) as AppVolumeView[], raw };
+	}
+
+	async getVolume(project: string, name: string): Promise<{ volume: AppVolumeView; raw: unknown }> {
+		const raw = await this.request(
+			'GET',
+			`/api/v1/projects/${encodeURIComponent(project)}/volumes/${encodeURIComponent(name)}`,
+		);
+		return { volume: asRecord(raw)?.volume as unknown as AppVolumeView, raw };
+	}
+
+	async createVolume(
+		project: string,
+		input: {
+			name: string;
+			sizeMb?: number;
+			backing?: 'state_dir' | 'node_volume';
+			nodeVolume?: string;
+			singleWriter?: boolean;
+		},
+	): Promise<{ volume: AppVolumeView; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/projects/${encodeURIComponent(project)}/volumes`, {
+			body: input,
+		});
+		return { volume: raw as unknown as AppVolumeView, raw };
+	}
+
+	async attachVolume(
+		project: string,
+		name: string,
+		input: { mountPath: string; workload?: string; environment?: string; readOnly?: boolean },
+	): Promise<{ volume: AppVolumeView; raw: unknown }> {
+		const raw = await this.request(
+			'POST',
+			`/api/v1/projects/${encodeURIComponent(project)}/volumes/${encodeURIComponent(name)}/attach`,
+			{ body: { workload: input.workload ?? project, ...input } },
+		);
+		return { volume: raw as unknown as AppVolumeView, raw };
+	}
+
+	async detachVolume(
+		project: string,
+		name: string,
+		input: { workload?: string; environment?: string } = {},
+	): Promise<{ volume: AppVolumeView; raw: unknown }> {
+		const raw = await this.request(
+			'DELETE',
+			`/api/v1/projects/${encodeURIComponent(project)}/volumes/${encodeURIComponent(name)}/attach`,
+			{ body: { workload: input.workload ?? project, environment: input.environment ?? 'production' } },
+		);
+		return { volume: asRecord(raw)?.volume as unknown as AppVolumeView, raw };
+	}
+
+	async deleteVolume(project: string, name: string): Promise<{ purgeAt: string; raw: unknown }> {
+		const raw = await this.request(
+			'DELETE',
+			`/api/v1/projects/${encodeURIComponent(project)}/volumes/${encodeURIComponent(name)}`,
+		);
+		return { purgeAt: stringValue(asRecord(raw)?.purgeAt) ?? 'seven days', raw };
 	}
 
 	// --- managed databases (docs/DATABASES.md) ---------------------------------------------

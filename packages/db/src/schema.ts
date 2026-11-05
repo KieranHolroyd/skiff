@@ -107,6 +107,94 @@ export const nodeVolumes = sqliteTable(
 );
 
 /**
+ * Project-owned application volumes (plan 07, docs/VOLUMES.md). Distinct from `node_volumes`:
+ * an app volume is the user-facing resource a workload mounts, backed by a node volume or the
+ * helper's state directory. The host path is derived on the node and never stored here.
+ */
+export const appVolumes = sqliteTable(
+	'app_volumes',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		projectId: text('project_id').notNull(),
+		name: text('name').notNull(),
+		nodeId: text('node_id').notNull(),
+		backing: text('backing', { enum: ['node_volume', 'state_dir'] }).notNull().default('state_dir'),
+		nodeVolumeId: text('node_volume_id'),
+		/** Quota and disk-admission input. */
+		sizeMb: integer('size_mb').notNull(),
+		/** Latest helper usage sample; null until the node reports one. */
+		usedBytes: integer('used_bytes'),
+		/** Last attached mount path, for display; attachments carry the authoritative value. */
+		mountPath: text('mount_path').notNull().default(''),
+		status: text('status', { enum: ['pending', 'ready', 'missing', 'failed', 'deleting'] })
+			.notNull()
+			.default('pending'),
+		message: text('message'),
+		singleWriter: integer('single_writer', { mode: 'boolean' }).notNull().default(true),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+		deletedAt: integer('deleted_at'),
+		/** Soft-deleted volumes keep their data until this point (seven days). */
+		purgeAt: integer('purge_at'),
+	},
+	(t) => [
+		uniqueIndex('app_volumes_project_name_idx').on(t.projectId, t.name),
+		index('app_volumes_project_idx').on(t.projectId),
+		index('app_volumes_node_idx').on(t.nodeId),
+		index('app_volumes_deleted_idx').on(t.deletedAt),
+	],
+);
+
+export const appVolumeAttachments = sqliteTable(
+	'app_volume_attachments',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		projectId: text('project_id').notNull(),
+		volumeId: text('volume_id').notNull(),
+		workloadId: text('workload_id').notNull(),
+		environment: text('environment').notNull().default('production'),
+		mountPath: text('mount_path').notNull(),
+		readOnly: integer('read_only', { mode: 'boolean' }).notNull().default(false),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+	},
+	(t) => [
+		uniqueIndex('app_volume_attachments_volume_idx').on(t.volumeId, t.workloadId, t.environment),
+		uniqueIndex('app_volume_attachments_mount_idx').on(t.workloadId, t.environment, t.mountPath),
+		index('app_volume_attachments_project_idx').on(t.projectId),
+		index('app_volume_attachments_workload_idx').on(t.workloadId),
+	],
+);
+
+export const appVolumeSnapshots = sqliteTable(
+	'app_volume_snapshots',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		volumeId: text('volume_id').notNull(),
+		/** Backup target (plan 05); null while queued or after the target was removed. */
+		targetId: text('target_id'),
+		objectKey: text('object_key').notNull(),
+		sizeBytes: integer('size_bytes'),
+		checksum: text('checksum'),
+		pinned: integer('pinned', { mode: 'boolean' }).notNull().default(false),
+		status: text('status', { enum: ['pending', 'running', 'ok', 'failed'] })
+			.notNull()
+			.default('pending'),
+		error: text('error'),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		expiresAt: integer('expires_at'),
+		restoreVerifiedAt: integer('restore_verified_at'),
+	},
+	(t) => [
+		index('app_volume_snapshots_volume_idx').on(t.volumeId, t.createdAt),
+		index('app_volume_snapshots_status_idx').on(t.status),
+	],
+);
+
+/**
  * One-time codes for `skif login --web`. The CLI generates a PKCE verifier, the dashboard
  * approves the request and redirects the code to loopback, and the CLI exchanges it for an API
  * key. Only the hash is stored, the code expires quickly, and each code can be redeemed once.

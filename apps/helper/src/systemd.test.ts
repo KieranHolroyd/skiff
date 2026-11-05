@@ -34,6 +34,7 @@ interface Fixture {
 	quadletDir: string;
 	runtimeDir: string;
 	stateDir: string;
+	volumeRegistryFile: string;
 	chowns: Array<[string, number, number]>;
 }
 
@@ -61,11 +62,23 @@ async function fixture(options: { packageJson?: boolean } = {}): Promise<Fixture
 		runtimeDir,
 		stateDir,
 		releaseDirs: [releases],
+		volumeRegistryFile: join(root, 'volumes.json'),
 		bunPath: '/usr/local/bin/bun',
 		socketMode: '0660',
 		socketGroup: 'caddy',
 	});
-	return { root, releaseDir, driver, runner, unitDir, quadletDir, runtimeDir, stateDir, chowns };
+	return {
+		root,
+		releaseDir,
+		driver,
+		runner,
+		unitDir,
+		quadletDir,
+		runtimeDir,
+		stateDir,
+		volumeRegistryFile: join(root, 'volumes.json'),
+		chowns,
+	};
 }
 
 function workload(overrides: Record<string, unknown> = {}): WorkloadDesired {
@@ -566,5 +579,69 @@ describe('purge', () => {
 		expect((await fs.stat(join(f.stateDir, 'wld_abc123'))).isDirectory()).toBe(true);
 		// Nothing was stopped for a rejected id.
 		expect(f.runner.calls).toEqual([]);
+	});
+});
+
+describe('app volumes (plan 07)', () => {
+	const volume = (id: string, mountPath: string, readOnly = false) => ({
+		id,
+		mountPath,
+		readOnly,
+		backing: 'state_dir' as const,
+	});
+
+	test('creates a state-dir volume and binds it into the unit', async () => {
+		const f = await fixture();
+		const desired = workload({ volumes: [volume('av_1', '/var/lib/app')] });
+		await f.driver.apply(desired, activation());
+		const hostPath = join(f.stateDir, 'apps', 'prj_abc123', 'av_1');
+		const info = await fs.stat(hostPath);
+		expect(info.isDirectory()).toBe(true);
+		expect(info.mode & 0o777).toBe(0o777);
+		const unit = await fs.readFile(join(f.unitDir, 'skiff-workload-wld_abc123.service'), 'utf8');
+		expect(unit).toContain(`BindPaths=${hostPath}:/var/lib/app`);
+		expect(unit).toContain('ReadWritePaths=/var/lib/app');
+	});
+
+	test('a node-volume backing that is not registered fails the start, with no unit written', async () => {
+		const f = await fixture();
+		const desired = workload({
+			volumes: [
+				{
+					id: 'av_1',
+					mountPath: '/var/lib/app',
+					readOnly: false,
+					backing: 'node_volume',
+					nodeVolumeId: 'vol_missing',
+				},
+			],
+		});
+		await expect(f.driver.apply(desired, activation())).rejects.toThrow(/not registered/);
+		await expect(fs.stat(join(f.unitDir, 'skiff-workload-wld_abc123.service'))).rejects.toThrow();
+	});
+
+	test('a registered node volume that is not mounted fails closed instead of using the root disk', async () => {
+		const f = await fixture();
+		await fs.writeFile(
+			f.volumeRegistryFile,
+			JSON.stringify({
+				vol_missing: { mountPath: '/mnt/data', sourceKey: 'fs:uuid-1', fsType: 'ext4' },
+			}),
+		);
+		const desired = workload({
+			volumes: [
+				{
+					id: 'av_1',
+					mountPath: '/var/lib/app',
+					readOnly: false,
+					backing: 'node_volume',
+					nodeVolumeId: 'vol_missing',
+				},
+			],
+		});
+		await expect(f.driver.apply(desired, activation())).rejects.toThrow(/not mounted|Could not read mounts/);
+		// The helper never creates the path under the (empty) mountpoint or the root disk.
+		await expect(fs.stat('/mnt/data/skiff/apps/prj_abc123/av_1')).rejects.toThrow();
+		await expect(fs.stat(join(f.unitDir, 'skiff-workload-wld_abc123.service'))).rejects.toThrow();
 	});
 });

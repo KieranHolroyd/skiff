@@ -66,6 +66,8 @@ export const projectOwnedTables = [
 	'slug_redirects',
 	'database_attachments',
 	'storage_attachments',
+	'app_volume_attachments',
+	'app_volumes',
 ] as const;
 
 export class ProjectService {
@@ -367,6 +369,11 @@ export class ProjectService {
 		// service and the row is still removed; prune reports any record it could not clean up.
 		await this.ctx.domains.removeForProject(row);
 		this.ctx.sqlite.transaction(() => {
+			// Snapshot rows key on the volume, not the project; remove them before the volumes.
+			this.ctx.sqlite.run(
+				'DELETE FROM app_volume_snapshots WHERE volume_id IN (SELECT id FROM app_volumes WHERE project_id = ?)',
+				[row.id],
+			);
 			for (const table of projectOwnedTables)
 				this.ctx.sqlite.run(`DELETE FROM ${table} WHERE project_id = ?`, [row.id]);
 			this.ctx.sqlite.run(

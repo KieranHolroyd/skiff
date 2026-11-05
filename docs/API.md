@@ -61,6 +61,9 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | PATCH/DELETE | `/projects/:slug/environments/:env` | `project:update` | rename/access or remove (production is built in) |
 | POST | `/projects/:slug/environments/:env/promote` | `deployment:promote` | `{ deploymentId }`; moves only that environment's pointer (production also re-points a process/container workload) |
 | GET/PUT/DELETE | `/projects/:slug/workload` | `deployment:read` / `project:update` | tier 2/3 runtime spec for the project |
+| GET/POST | `/projects/:slug/volumes` | `project:read` / `project:update` | app volumes (plan 07); create takes `{ name, sizeMb?, backing?, nodeVolume?, singleWriter? }` and returns `AppVolumeView` with no host path |
+| GET/PATCH/DELETE | `/projects/:slug/volumes/:name` | `project:read` / `project:update` | get, grow/rename, or soft-delete (refused while attached; data kept 7 days) |
+| POST/DELETE | `/projects/:slug/volumes/:name/attach` | `project:update` | `{ workload, environment?, mountPath, readOnly? }` / `{ workload, environment? }`; a second read-write mount on a single-writer volume is a 409 |
 | GET/PUT/DELETE | `/projects/:slug/git` | `build:read` / `build:create` | git source, branch, build/output dirs, webhook secret |
 | GET/POST | `/projects/:slug/builds` | `build:read` / `build:create` | build history or enqueue `{ ref?, promote? }` |
 | GET | `/projects/:slug/builds/:id` | `build:read` | build status + full log |

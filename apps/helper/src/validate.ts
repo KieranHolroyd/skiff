@@ -8,6 +8,8 @@
  * widen the privileged surface.
  */
 
+import { volumePathProblem } from './volumes.ts';
+
 export const WORKLOAD_RUNTIMES = ['process', 'container'] as const;
 export type WorkloadRuntime = (typeof WORKLOAD_RUNTIMES)[number];
 
@@ -44,6 +46,14 @@ export interface SecretRef {
 	name: string;
 	version?: number;
 	delivery: SecretDeliveryMode;
+}
+
+export interface WorkloadVolumeMount {
+	id: string;
+	mountPath: string;
+	readOnly: boolean;
+	backing: 'node_volume' | 'state_dir';
+	nodeVolumeId?: string;
 }
 
 export interface WorkloadDesired {
@@ -86,6 +96,8 @@ export interface WorkloadDesired {
 	objectStorage?: WorkloadObjectStorage;
 	/** Node volume for the data dir (D74); resolved and verified against the helper's registry. */
 	volumeId?: string;
+	/** App volumes mounted into this workload (plan 07); ids and mount points only, never paths. */
+	volumes?: WorkloadVolumeMount[];
 }
 
 /**
@@ -413,6 +425,52 @@ function parseSecrets(value: unknown): SecretRef[] {
 	});
 }
 
+/** App-volume mounts from desired state. The host path is derived by the helper, never accepted. */
+export function parseWorkloadVolumes(value: unknown): WorkloadVolumeMount[] {
+	if (value === undefined) return [];
+	if (!Array.isArray(value) || value.length > 20)
+		throw new ValidationError('workload.volumes must be an array of at most 20 mounts');
+	const out: WorkloadVolumeMount[] = [];
+	const ids = new Set<string>();
+	const mounts = new Set<string>();
+	for (const [index, entry] of value.entries()) {
+		const record = assertRecord(entry, `workload.volumes[${index}]`);
+		const id = assertId(record.id, `workload.volumes[${index}].id`);
+		if (ids.has(id)) throw new ValidationError(`Duplicate app volume ${id}`);
+		ids.add(id);
+		const mountPath = assertString(record.mountPath, `workload.volumes[${index}].mountPath`, {
+			max: 200,
+		});
+		const problem = volumePathProblem(mountPath);
+		if (problem) throw new ValidationError(`App volume ${id}: ${problem}`);
+		if (mounts.has(mountPath))
+			throw new ValidationError(`Two app volumes cannot mount at the same path: ${mountPath}`);
+		mounts.add(mountPath);
+		if (record.readOnly !== undefined && typeof record.readOnly !== 'boolean')
+			throw new ValidationError(`workload.volumes[${index}].readOnly must be a boolean`);
+		const backing = record.backing ?? 'state_dir';
+		if (backing !== 'node_volume' && backing !== 'state_dir')
+			throw new ValidationError(`workload.volumes[${index}].backing must be "node_volume" or "state_dir"`);
+		let nodeVolumeId: string | undefined;
+		if (backing === 'node_volume') {
+			nodeVolumeId = assertId(
+				record.nodeVolumeId,
+				`workload.volumes[${index}].nodeVolumeId`,
+			);
+		} else if (record.nodeVolumeId !== undefined) {
+			throw new ValidationError('A state-dir app volume cannot name a node volume');
+		}
+		out.push({
+			id,
+			mountPath,
+			readOnly: record.readOnly === true,
+			backing,
+			...(nodeVolumeId ? { nodeVolumeId } : {}),
+		});
+	}
+	return out;
+}
+
 /** Validate and normalize the workload half of `POST /v1/workloads`. */
 export function parseWorkload(value: unknown): WorkloadDesired {
 	const record = assertRecord(value, 'workload');
@@ -506,6 +564,8 @@ export function parseWorkload(value: unknown): WorkloadDesired {
 		workload.pooler = { port: assertPort(pooler.port, 'workload.pooler.port') };
 	}
 	if (objectStorage) workload.objectStorage = objectStorage;
+	const volumes = parseWorkloadVolumes(record.volumes);
+	if (volumes.length > 0) workload.volumes = volumes;
 	const volumeId = record.volumeId === undefined ? undefined : assertId(record.volumeId, 'workload.volumeId');
 	if (volumeId) {
 		// Volumes hold managed-service data (D74); an app workload never mounts one.

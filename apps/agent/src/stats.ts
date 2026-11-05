@@ -33,6 +33,7 @@ export class StatsCollector {
 		if (disk) {
 			stats.diskUsedBytes = disk.used;
 			stats.diskTotalBytes = disk.total;
+			stats.diskFreeBytes = disk.free;
 		}
 
 		const uptime = await readFirstNumber('/proc/uptime');
@@ -95,13 +96,13 @@ async function memoryUsage(): Promise<{ used: number; total: number } | null> {
 	}
 }
 
-async function diskUsage(path: string): Promise<{ used: number; total: number } | null> {
+async function diskUsage(path: string): Promise<{ used: number; total: number; free: number } | null> {
 	try {
 		const stat = await fs.statfs(path);
 		const blockSize = Number(stat.bsize);
 		const total = Number(stat.blocks) * blockSize;
 		const free = Number(stat.bfree) * blockSize;
-		return { used: Math.max(0, total - free), total };
+		return { used: Math.max(0, total - free), total, free };
 	} catch {
 		return null;
 	}

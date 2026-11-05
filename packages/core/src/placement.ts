@@ -1,4 +1,5 @@
 import type { Runtime } from '@skiff/contracts';
+import { diskAdmissionProblem } from './app-volumes.ts';
 
 /**
  * Placement and admission for tier 2/3 workloads (DESIGN §3.4.1, D41).
@@ -17,6 +18,10 @@ export interface PlacementCandidate {
 	sliceMemoryMb: number;
 	/** Memory already reserved by workloads on this node (pending, starting or running). */
 	reservedMemoryMb: number;
+	/** Free space on the data filesystem; null before the node reports, undefined = not checked. */
+	diskFreeBytes?: number | null;
+	/** Bytes already reserved by app volumes backed by the state directory. */
+	reservedDiskBytes?: number;
 }
 
 export interface PlacementRequest {
@@ -25,6 +30,11 @@ export interface PlacementRequest {
 	requested: string;
 	/** Admission unit for the requested workload. */
 	memoryMb: number;
+	/**
+	 * Optional disk admission for a workload that needs a new volume. Placement for ordinary
+	 * workloads leaves it unset; app volumes also re-check disk in their service.
+	 */
+	diskMb?: number;
 	edgeNodeId: string | null;
 	candidates: PlacementCandidate[];
 }
@@ -44,7 +54,17 @@ const isEdge = (node: PlacementCandidate, edgeNodeId: string | null): boolean =>
 
 const freeMemory = (node: PlacementCandidate): number => node.sliceMemoryMb - node.reservedMemoryMb;
 
-const canAdmit = (node: PlacementCandidate, memoryMb: number): boolean => freeMemory(node) >= memoryMb;
+const diskProblem = (node: PlacementCandidate, diskMb: number | undefined): string | null =>
+	diskMb === undefined
+		? null
+		: diskAdmissionProblem({
+				requestMb: diskMb,
+				freeBytes: node.diskFreeBytes ?? null,
+				reservedBytes: node.reservedDiskBytes ?? 0,
+			});
+
+const canAdmit = (node: PlacementCandidate, memoryMb: number, diskMb?: number): boolean =>
+	freeMemory(node) >= memoryMb && diskProblem(node, diskMb) === null;
 
 function freeByNode(candidates: PlacementCandidate[]) {
 	return candidates.map((node) => ({
@@ -82,12 +102,16 @@ export function resolvePlacement(request: PlacementRequest): PlacementDecision {
 				message: `The edge node "${edge.name}" is ${edge.status}; it cannot accept workloads.`,
 				freeByNode: freeByNode(candidates),
 			};
-		if (!canAdmit(edge, memoryMb))
+		if (!canAdmit(edge, memoryMb, request.diskMb)) {
+			const disk = diskProblem(edge, request.diskMb);
 			return {
 				ok: false,
-				message: `The edge node "${edge.name}" only has ${freeMemory(edge)} MB of workload budget free, but this app reserves ${memoryMb} MB.`,
+				message:
+					disk ??
+					`The edge node "${edge.name}" only has ${freeMemory(edge)} MB of workload budget free, but this app reserves ${memoryMb} MB.`,
 				freeByNode: freeByNode(candidates),
 			};
+		}
 		return { ok: true, nodeId: edge.id, mode: 'edge', reason: 'Explicitly placed on the edge.' };
 	}
 
@@ -105,19 +129,23 @@ export function resolvePlacement(request: PlacementRequest): PlacementDecision {
 				message: `Node "${target.name}" is ${target.status}; pick an online node or "auto".`,
 				freeByNode: freeByNode(candidates),
 			};
-		if (!canAdmit(target, memoryMb))
+		if (!canAdmit(target, memoryMb, request.diskMb)) {
+			const disk = diskProblem(target, request.diskMb);
 			return {
 				ok: false,
-				message: `Node "${target.name}" only has ${freeMemory(target)} MB of workload budget free, but this app reserves ${memoryMb} MB.`,
+				message:
+					disk ??
+					`Node "${target.name}" only has ${freeMemory(target)} MB of workload budget free, but this app reserves ${memoryMb} MB.`,
 				freeByNode: freeByNode(candidates),
 			};
+		}
 		return { ok: true, nodeId: target.id, mode: 'worker', reason: `Explicitly placed on ${target.name}.` };
 	}
 
 	// `auto`: prefer a worker with room (keeps the edge for ingress and survives a homelab outage
 	// only when the operator pins the app there). Ties go to the emptiest node.
 	const workers = healthy
-		.filter((node) => !isEdge(node, edgeNodeId) && canAdmit(node, memoryMb))
+		.filter((node) => !isEdge(node, edgeNodeId) && canAdmit(node, memoryMb, request.diskMb))
 		.sort((a, b) => freeMemory(b) - freeMemory(a) || a.name.localeCompare(b.name));
 	const worker = workers[0];
 	if (worker)
@@ -128,7 +156,7 @@ export function resolvePlacement(request: PlacementRequest): PlacementDecision {
 			reason: `Auto: ${describe(worker)}.`,
 		};
 
-	if (edge && canAdmit(edge, memoryMb))
+	if (edge && canAdmit(edge, memoryMb, request.diskMb))
 		return {
 			ok: true,
 			nodeId: edge.id,

@@ -16,6 +16,7 @@ import type { WorkloadService } from './workloads.ts';
 import type { DatabaseService } from './databases.ts';
 import type { StorageService } from './storage-instances.ts';
 import type { VolumeService } from './volumes.ts';
+import type { AppVolumeService } from './app-volumes.ts';
 import type { StorageObjectsService } from './storage-objects.ts';
 import type { DomainService } from './domains.ts';
 import type { BuildService } from './builds.ts';
@@ -51,6 +52,7 @@ export interface CoreContext {
 	storage: StorageService;
 	storageObjects: StorageObjectsService;
 	volumes: VolumeService;
+	appVolumes: AppVolumeService;
 	domains: DomainService;
 	builds: BuildService;
 	logs: LogService;
