@@ -166,8 +166,8 @@ envPrefix?, grants? }`; without `grants`, read-write on the only bucket), `detac
 (`{ project, storage }`) and `delete_storage` (soft delete, confirmed by multi-round-trip input
 bound to the instance, refused before prompting while attached; 2025-era clients get a dashboard
 link). Object tools: `list_objects` (folder view, pagination), `presign_object` (public instances
-only) and `create_object_folder`. There is **no key reveal, bucket delete, object delete or purge**
-over MCP (S6, D82). Guide:
+only) and `create_object_folder`; `restart_storage` restarts the RustFS container with data and
+keys intact. There is **no key reveal, bucket delete, object delete or purge** over MCP (S6, D82). Guide:
 `skiff://guides/storage`.
 
 **CLI.** `skif storage list [--all]`, `create <name> [-b <bucket>]… [-p <project>] [--prefix P]

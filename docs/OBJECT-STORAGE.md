@@ -209,7 +209,7 @@ and refuses to run if it is gone (D76). See [VOLUMES.md](./VOLUMES.md).
 |---|---|
 | Permissions | New `storage` resource: `create`, `read`, `update`, `delete`, `credentials`. Deployer gets everything except `delete`; viewer gets `read`; agents get the deployer set minus `credentials`. |
 | REST | `GET/POST /api/v1/storage`, `GET/PATCH/DELETE /api/v1/storage/:name`, `POST …/:name/restore`, `GET …/:name/credentials`, `GET …/:name/metrics`, `GET/POST …/:name/buckets`, `PATCH/DELETE …/:name/buckets/:bucket`, `GET/POST /api/v1/projects/:slug/storage`, `PATCH/DELETE …/storage/:name`; object endpoints under `…/:name/objects` (list, item GET/HEAD/PUT/DELETE, bulk delete, folder, presign) |
-| MCP | `list_storage`, `get_storage`, `create_storage`, `create_bucket`, `attach_storage`, `detach_storage`, `delete_storage` (confirmed, soft), `list_objects`, `presign_object`, `create_object_folder`. No bucket force-delete, object delete, key reveal or purge. |
+| MCP | `list_storage`, `get_storage`, `create_storage`, `create_bucket`, `attach_storage`, `detach_storage`, `delete_storage` (confirmed, soft), `list_objects`, `presign_object`, `create_object_folder`, `restart_storage`. No bucket force-delete, object delete, key reveal or purge. |
 | CLI | `skif storage list\|create\|info\|update\|delete\|restore\|credentials`, `skif storage buckets list\|create\|delete`, `skif storage attach\|detach`, `skif storage objects ls\|get\|put\|rm\|mkdir\|presign` |
 | Dashboard | Storage list + create, detail (status, endpoint, public toggle, buckets, attached projects, charts), attach from a project with bucket grants, and an object browser (folder navigation, upload, download, delete, presigned links) |
 
