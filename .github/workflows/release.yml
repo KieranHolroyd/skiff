@@ -182,8 +182,11 @@ jobs:
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
         run: |
-          go install "github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}"
-          "$(go env GOPATH)/bin/xcaddy" build "v${CADDY_VERSION}" \
+          # xcaddy runs on the runner, so build it for the host. With the target GOARCH set,
+          # go install cross-compiles it into bin/linux_arm64/ and the path below misses it.
+          env -u GOOS -u GOARCH GOBIN="$RUNNER_TEMP/bin" \
+            go install "github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}"
+          "$RUNNER_TEMP/bin/xcaddy" build "v${CADDY_VERSION}" \
             --with "github.com/caddy-dns/cloudflare@${CADDY_DNS_CLOUDFLARE_VERSION}" \
             --output caddy
           tar -czf "skiff-caddy-${VERSION}-linux-${{ matrix.arch }}.tar.gz" caddy
