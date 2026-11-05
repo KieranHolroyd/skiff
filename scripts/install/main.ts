@@ -36,6 +36,7 @@ import { TRIGGER_PATH_UNIT, triggerUnits } from '../update-self/units.ts';
 import { CONFIG_COMMAND, CONFIG_PATH_UNIT, CONFIG_SERVICE_UNIT, ensurePlatformConfigUnits } from '../platform-config/units.ts';
 import { readEnvFile, writeEnvFile } from './env-file.ts';
 import { BUILDER_UNIT, ensureBuilder, linkAgentCommands } from '../systemd/builder.ts';
+import { HELPER_UNIT, ensureHelper } from '../systemd/helper.ts';
 import { ensureStorageUnits, STORAGE_PATH_UNIT } from '../systemd/storage.ts';
 import {
 	createUpgradeSnapshotBundle,
@@ -324,6 +325,18 @@ function preflight(): void {
 	if (!['x64', 'arm64'].includes(arch)) fail(`Unsupported architecture ${arch}.`);
 	log(`${arch}, bun ${Bun.version}`);
 
+	if (!options.noAgent) {
+		if (!capture('sh', ['-c', 'command -v podman']))
+			log(
+				color.yellow(
+					'warning: podman is not installed; managed databases and object storage cannot start. ' +
+						'Install it with: apt-get install podman uidmap passt netavark aardvark-dns',
+				),
+			);
+		else if (!existsSync('/usr/lib/systemd/system-generators/podman-system-generator'))
+			log(color.yellow('warning: the Podman Quadlet generator is missing; container workloads cannot start'));
+	}
+
 	for (const command of ['systemctl', 'journalctl', 'caddy']) {
 		if (!capture('sh', ['-c', `command -v ${command}`])) fail(`Required command not found: ${command}`);
 	}
@@ -483,9 +496,13 @@ function buildRelease(env: Map<string, string>): string {
 	run(BUN_BIN, ['run', '--cwd', 'apps/control-plane', 'build'], { cwd: join(release, 'repo') });
 	run(BUN_BIN, ['run', '--cwd', 'apps/agent', 'build'], { cwd: join(release, 'repo') });
 	run(BUN_BIN, ['run', '--cwd', 'apps/cli', 'build'], { cwd: join(release, 'repo') });
+	run(BUN_BIN, ['run', '--cwd', 'apps/helper', 'build'], { cwd: join(release, 'repo') });
 	cpSync(join(release, 'repo', 'apps', 'agent', 'dist', 'skiff-agent'), join(release, 'agent', 'skiff-agent'));
 	chmodSync(join(release, 'agent', 'skiff-agent'), 0o755);
 	linkAgentCommands(release);
+	ensureDir(join(release, 'helper'), '0755', 'root:root');
+	cpSync(join(release, 'repo', 'apps', 'helper', 'dist', 'skiff-helper'), join(release, 'helper', 'skiff-helper'));
+	chmodSync(join(release, 'helper', 'skiff-helper'), 0o755);
 	ensureDir(join(release, 'cli'), '0755', 'root:root');
 	cpSync(join(release, 'repo', 'apps', 'cli', 'dist', 'skif.js'), join(release, 'cli', 'skif.js'));
 	chmodSync(join(release, 'cli', 'skif.js'), 0o644);
@@ -628,6 +645,17 @@ WantedBy=multi-user.target
 	}
 	writeFileSync(join(SYSTEMD_DIR, 'skiff-control-plane.service'), control);
 	writeFileSync(join(SYSTEMD_DIR, 'skiff-agent.service'), agent);
+	// The privileged runtime helper ships in the active release so a `current` swap upgrades it.
+	ensureHelper({
+		systemdDir: SYSTEMD_DIR,
+		optDir: OPT_DIR,
+		etcDir: ETC_DIR,
+		varDir: VAR_DIR,
+		bunBin: BUN_BIN,
+		run: (cmd) => void run(cmd[0]!, cmd.slice(1), { allowFailure: true }),
+		log,
+		start: false,
+	});
 	for (const [name, body] of Object.entries(triggerUnits())) writeFileSync(join(SYSTEMD_DIR, name), body);
 	run('systemctl', ['daemon-reload']);
 	// Settings → Backups / Notifications in the dashboard (docs/OPS.md §4.3).
@@ -846,9 +874,11 @@ function waitFor(label: string, check: () => boolean, timeoutMs = 60_000): void 
 function startServices(): void {
 	step('Start services');
 	if (options.dryRun) {
-		log(`would enable and restart skiff-control-plane, skiff-agent, ${BUILDER_UNIT}, ${STORAGE_PATH_UNIT}`);
+		log(`would enable and restart skiff-control-plane, skiff-agent, ${HELPER_UNIT}, ${BUILDER_UNIT}, ${STORAGE_PATH_UNIT}`);
 		return;
 	}
+	run('systemctl', ['enable', HELPER_UNIT]);
+	run('systemctl', ['restart', HELPER_UNIT]);
 	run('systemctl', ['enable', 'skiff-control-plane.service']);
 	run('systemctl', ['enable', '--now', TRIGGER_PATH_UNIT], { allowFailure: true });
 	run('systemctl', ['restart', 'skiff-control-plane.service']);
@@ -1192,7 +1222,7 @@ function uninstall(): void {
 		log('would stop/disable/remove skiff units and, with --purge, delete data');
 		return;
 	}
-	for (const service of ['skiff-agent', 'skiff-control-plane']) {
+	for (const service of ['skiff-agent', 'skiff-control-plane', 'skiff-helper']) {
 		run('systemctl', ['disable', '--now', `${service}.service`], { allowFailure: true });
 		rmSync(join(SYSTEMD_DIR, `${service}.service`), { force: true });
 	}
