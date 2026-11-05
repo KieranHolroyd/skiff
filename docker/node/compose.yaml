@@ -1,0 +1,69 @@
+# A Skiff node (agent + Caddy) as an Arcane-managed Compose project.
+#
+# This is the static-serving path only: the agent reconciles releases into its
+# cache and Caddy serves them. Tier-2/3 workloads need the host install because
+# they are systemd units rendered by the privileged helper.
+#
+# Create the node in the control plane first (Nodes -> Add node), copy
+# .env.example to .env, fill it in, then join and start:
+#
+#   docker compose run --rm --entrypoint /opt/skiff/skiff-agent \
+#     node join "$SKIFF_CONTROL_URL" --token "$JOIN_TOKEN" --name "$(hostname)"
+#   docker compose up -d
+
+name: skiff-node
+
+services:
+  node:
+    image: ghcr.io/kieranholroyd/skiff-node:${SKIFF_IMAGE_TAG:-latest}
+    container_name: skiff-node
+    restart: unless-stopped
+
+    ports:
+      # The edge reaches Caddy on the WireGuard address. Never expose this on
+      # 0.0.0.0: it is the node's public content listener for the tunnel.
+      - '${SKIFF_BIND_ADDRESS:?Set SKIFF_BIND_ADDRESS to the WireGuard address}:${SKIFF_HTTP_PORT:-8080}:8080'
+
+    environment:
+      SKIFF_CONTROL_URL: ${SKIFF_CONTROL_URL:?Set SKIFF_CONTROL_URL}
+      # Leave both empty to use the node.json written by `join`, or set them to
+      # skip the join step for an environment created directly in the dashboard.
+      SKIFF_NODE_ID: ${SKIFF_NODE_ID:-}
+      SKIFF_NODE_TOKEN: ${SKIFF_NODE_TOKEN:-}
+      # Plain HTTP inside the container: the edge terminates TLS and WireGuard
+      # encrypts the hop.
+      SKIFF_CADDY_LISTEN: ':8080'
+      SKIFF_TLS: '0'
+      SKIFF_CERT_PROBE_ADDR: 'off'
+      # No helper in this container, so there are no workload journals to drain.
+      SKIFF_LOG_DRAIN: '0'
+
+    volumes:
+      # Releases, Caddy state and the joined node identity.
+      - skiff-data:/var/lib/skiff
+
+    # Sockets only. A fresh tmpfs avoids a stale caddy-admin.sock blocking a
+    # restart; uid/gid match the image's skiff user.
+    tmpfs:
+      - /run/skiff:mode=0770,uid=10001,gid=10001
+
+    healthcheck:
+      test: ['CMD-SHELL', 'test -S /run/skiff/caddy-admin.sock && test -S /run/skiff/agent.sock']
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+
+volumes:
+  skiff-data:

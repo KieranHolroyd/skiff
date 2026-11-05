@@ -83,6 +83,28 @@ jobs:
           node dist/skif.js --help >/dev/null
           npm pack --dry-run
 
+  node-image:
+    name: Node image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Build-only: the release workflow publishes the multi-arch tags. This
+      # catches a broken Dockerfile before a tag does.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/node/Dockerfile
+          platforms: linux/amd64
+          push: false
+          outputs: type=cacheonly
+          build-args: |
+            SKIFF_VERSION=ci
+          cache-from: type=gha,scope=node-ci
+          cache-to: type=gha,mode=max,scope=node-ci
+
   managed-data-e2e:
     name: Managed data e2e (Podman)
     needs: changes

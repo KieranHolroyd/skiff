@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+.git
+.github
+.data-agent
+.data-ci
+**/dist
+**/.svelte-kit
+**/build
+reports
+research_notes
+examples/v2-stress/.state.json
+*.log

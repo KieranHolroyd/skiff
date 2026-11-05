@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   id-token: write
+  packages: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -193,10 +194,82 @@ jobs:
           path: skiff-caddy-*-linux-${{ matrix.arch }}.tar.gz
           retention-days: 7
 
+  image:
+    name: Node image (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    needs: [test]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+          - arch: arm64
+            platform: linux/arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image name and version
+        run: |
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          echo "IMAGE=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/skiff-node" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Both binaries are cross-compiled from the runner, so this is one native
+      # build per architecture rather than a compiler under QEMU.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/node/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: ${{ env.IMAGE }}:${{ env.VERSION }}-linux-${{ matrix.arch }}
+          build-args: |
+            SKIFF_VERSION=${{ env.VERSION }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=node-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=node-${{ matrix.arch }}
+          sbom: true
+          provenance: true
+
+  image-manifest:
+    name: Node image manifest
+    runs-on: ubuntu-latest
+    needs: [image]
+    steps:
+      - name: Resolve image name and version
+        run: |
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          echo "IMAGE=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/skiff-node" >> "$GITHUB_ENV"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish the multi-arch tag
+        run: |
+          docker buildx imagetools create \
+            --tag "$IMAGE:$VERSION" \
+            --tag "$IMAGE:latest" \
+            "$IMAGE:$VERSION-linux-amd64" \
+            "$IMAGE:$VERSION-linux-arm64"
+
   publish:
     name: Sign and publish
     runs-on: ubuntu-latest
-    needs: [test, control-plane, agent, caddy]
+    needs: [test, control-plane, agent, caddy, image-manifest]
     env:
       # Secrets cannot be referenced directly in `if:`; surface the choice as an env bool.
       HAS_MINISIGN: ${{ secrets.MINISIGN_SECRET_KEY != '' }}
