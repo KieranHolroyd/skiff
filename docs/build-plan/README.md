@@ -471,15 +471,15 @@ upgrade safety (06). Do not rebuild the shipped halves.
 | F4 | Scheduler primitive | merged — 0e39d76, migration renumbered to 0018 | feat/wave0-f4-scheduler | |
 | F5 | Flags/migrations | merged — f71c200, shipped-surface defaults corrected | feat/wave0-f5-flags | |
 
-Integration branch: `feat/wave0-foundations` at `e081f56`: 977 tests pass, `bun run check`
-green, 17 migrations check clean.
+Integration: all Wave 0 and Wave 1 branches merged to `main`; final verification 1127 tests,
+`bun run check` green, 24 migrations clean.
 | 01 | Backups/PITR/restore | partial — logical backups + PITR foundation merged; PITR flag off and image requirement documented | | |
 | 02 | Object-storage surface | shipped — browser + bucket config/share links merged | | |
-| 03 | Pooling/TLS | partial — pooler shipped; TLS/UX missing | | |
-| 04 | Isolation/credentials | partial — rotation shipped; networks/TLS missing | | |
+| 03 | Pooling/TLS | shipped — pooler + TLS/connection UX merged; TLS flag off by default | | |
+| 04 | Isolation/credentials | shipped — rotation + per-org networks/named credentials merged; surfaces follow-up | | |
 | 05 | Backup target | merged — b065c71; per-backup target id still a follow-up | | |
-| 06 | Upgrade safety | not started | | |
-| 07 | App volumes | partial — node volumes shipped; app volumes missing | | |
+| 06 | Upgrade safety | shipped — preflight, `/readyz`, sealed snapshots, rollback merged; no migration | | |
+| 07 | App volumes | shipped — app volumes + disk admission merged; snapshots follow-up | | |
 | 08 | Valkey | not started | | |
 | 09 | Jobs/scheduler | partial — cron parser/backup sweep shipped; generic scheduler in F4 | | |
 | 10 | Private networking | not started | | |
@@ -488,7 +488,7 @@ green, 17 migrations check clean.
 | 13 | PG extensions | shipped — verify on Debian 13 | | |
 | 14 | Stacks/compose | not started | | |
 | 15 | Image transforms | not started | | |
-| 16 | Quotas/showback | not started | | |
+| 16 | Quotas/showback | shipped — quotas/usage merged; jobs/previews schema-only | | |
 | 17 | Portability | not started | | |
 | 18 | OpenAPI/Terraform | not started | | |
 | 19 | Process groups | not started | | |

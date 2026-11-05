@@ -11,14 +11,26 @@ The Wave 1 worktrees were created from `feat/wave0-foundations` and should be re
 | 05 backup target | `wave1-05-backup-target` | `feat/wave1-05-backup-target` | `0019_backup_targets.sql` (merged `b065c71`) |
 | 01b PITR | `wave1-01b-pitr` | `feat/wave1-01b-pitr` | `0020_database_pitr.sql` (merged `b90e6f9`) |
 | 02b bucket config | `wave1-02b-bucket-config` | `feat/wave1-02b-bucket-config` | `0021_bucket_config.sql` (merged `d646fe6`) |
-| 03b TLS + UX | `wave1-03b-tls` | `feat/wave1-03b-tls` | `0022_database_tls.sql` (only if needed) |
-| 04b per-org isolation | `wave1-04b-isolation` | `feat/wave1-04b-isolation` | `0023_org_networks.sql` (only if needed) |
-| 07 app volumes | `wave1-07-app-volumes` | `feat/wave1-07-app-volumes` | `0024_app_volumes.sql` |
-| 16 quotas | `wave1-16-quotas` | `feat/wave1-16-quotas` | `0025_quotas.sql` |
-| 06 upgrade safety | `wave1-06-upgrade` | `feat/wave1-06-upgrade` | `0026_upgrade_safety.sql` (only if needed) |
+| 03b TLS + UX | `wave1-03b-tls` | `feat/wave1-03b-tls` | no migration (merged `1fc6651`) |
+| 04b per-org isolation | `wave1-04b-isolation` | `feat/wave1-04b-isolation` | `0022_org_networks.sql` (merged `6182bc1`, renumbered) |
+| 07 app volumes | `wave1-07-app-volumes` | `feat/wave1-07-app-volumes` | `0023_app_volumes.sql` (merged `6aa061d`, renumbered) |
+| 16 quotas | `wave1-16-quotas` | `feat/wave1-16-quotas` | `0024_quotas.sql` (merged `39a410e`, renumbered) |
+| 06 upgrade safety | `wave1-06-upgrade` | `feat/wave1-06-upgrade` | no migration (merged `ca61b79`) |
 
-Migration numbers are reserved to avoid the `0015` collision from Wave 0. If an agent finds a
-different latest migration, it stops and reports rather than renumbering silently.
+**Final state:** all Wave 1 branches are merged to `main`. The sequence is contiguous
+`0001`–`0024`; 03b and 06 added no migration. 04b was renumbered `0023` → `0022`, 07 `0024` →
+`0023`, and 16 `0025` → `0024`. Main was verified at 1127 tests with 24 migrations.
+
+## Residual gaps
+
+- **01b PITR:** flag off; the pinned Postgres image must ship `pgbackrest`; `scripts/pitr-drill.sh`
+  has not passed on Debian 13.
+- **03b TLS:** `ssl=on` but `pg_hba.conf` still accepts plaintext; enforce TLS-only in a follow-up.
+- **04b isolation:** core/helper/agent merged; REST/MCP/CLI surfaces for named credentials are a
+  follow-up. Per-org networks stay behind `ORG_NETWORKS`.
+- **07 app volumes:** create/attach/delete/disk admission merged; snapshot/restore is a follow-up.
+- **16 quotas:** enforcement covers existing resources; jobs/previews/egress are schema-only until
+  those features land.
 
 ## Existing flags to use
 
