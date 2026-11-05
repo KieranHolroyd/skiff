@@ -375,6 +375,8 @@ export interface ContainerUnitOptions {
 	dataDir: string;
 	/** Host directory holding file secrets, mounted read-only when non-empty. */
 	secretsDir: string | null;
+	/** Managed database WAL archiving (docs/PITR.md). */
+	pitr?: DatabaseUnitOptions['pitr'];
 }
 
 /**
@@ -383,7 +385,13 @@ export interface ContainerUnitOptions {
  */
 export function renderContainerUnit(options: ContainerUnitOptions): string {
 	const { workload } = options;
-	if (workload.database) return renderDatabaseUnit({ workload, envFile: options.envFile, dataDir: options.dataDir });
+	if (workload.database)
+		return renderDatabaseUnit({
+			workload,
+			envFile: options.envFile,
+			dataDir: options.dataDir,
+			...(options.pitr ? { pitr: options.pitr } : {}),
+		});
 	if (workload.objectStorage) return renderStorageUnit({ workload, envFile: options.envFile, dataDir: options.dataDir });
 	const lines: string[] = [];
 	lines.push('[Unit]');
@@ -430,6 +438,13 @@ export interface DatabaseUnitOptions {
 	envFile: string;
 	/** Host directory mounted at /data, created 0700 and owned by the engine's user. */
 	dataDir: string;
+	/** WAL archiving (docs/PITR.md); config files are written by the helper before apply. */
+	pitr?: {
+		stanza: string;
+		configPath: string;
+		pgpassPath: string;
+		archiveTimeoutSeconds: number;
+	};
 }
 
 /**
@@ -454,15 +469,40 @@ export function renderDatabaseUnit(options: DatabaseUnitOptions): string {
 	lines.push(`ContainerName=skiff-workload-${workload.id}`);
 	lines.push(`Image=${databaseImage(database)}`);
 	// Keep the image entrypoint (initdb, then exec "$@") and pass the fixed Postgres flags. The
-	// shared preload is required before `CREATE EXTENSION pg_stat_statements` can work.
+	// shared preload is required before `CREATE EXTENSION pg_stat_statements` can work. When PITR
+	// is enabled the same Exec turns on WAL archiving; the pinned Postgres image must ship the
+	// `pgbackrest` binary (docs/PITR.md).
 	lines.push('Entrypoint=/usr/local/bin/docker-entrypoint.sh');
-	lines.push('Exec=postgres -c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all');
+	const execArgs = [
+		'postgres',
+		'-c',
+		'shared_preload_libraries=pg_stat_statements',
+		'-c',
+		'pg_stat_statements.track=all',
+	];
+	if (options.pitr) {
+		execArgs.push(
+			'-c',
+			'wal_level=replica',
+			'-c',
+			'archive_mode=on',
+			'-c',
+			`archive_command=/usr/local/bin/pgbackrest --config=/etc/pgbackrest/pgbackrest.conf --stanza=${options.pitr.stanza} archive-push %p`,
+			'-c',
+			`archive_timeout=${options.pitr.archiveTimeoutSeconds}`,
+		);
+	}
+	lines.push(`Exec=${execArgs.map(quoteSystemdArg).join(' ')}`);
 	lines.push(`User=${info.uid}:${info.gid}`);
 	lines.push(`PublishPort=127.0.0.1:${workload.port}:${info.containerPort}`);
 	lines.push(`Network=${WORKLOAD_NETWORK_UNIT}`);
 	lines.push(`NetworkAlias=${databaseAlias(workload.id)}`);
 	lines.push(`EnvironmentFile=${options.envFile}`);
 	lines.push(`Volume=${options.dataDir}:/data:Z`);
+	if (options.pitr) {
+		lines.push(`Volume=${options.pitr.configPath}:/etc/pgbackrest/pgbackrest.conf:ro,Z`);
+		lines.push(`Volume=${options.pitr.pgpassPath}:/etc/pgbackrest/pgpass:ro,Z`);
+	}
 	// The socket dir is created 3777 by the image; ReadOnly=true needs it (and /tmp) on tmpfs.
 	lines.push('Tmpfs=/var/run/postgresql:rw,size=8m,mode=1777');
 	lines.push('Tmpfs=/tmp:rw,size=64m');

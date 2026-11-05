@@ -4,6 +4,7 @@ import { domainKinds } from './domain.ts';
 import { workloadDesiredSchema, workloadStatuses } from './workload.ts';
 import { databaseMetricBucketSchema, databaseSnapshotSchema } from './database.ts';
 import { databaseBackupResultSchema, databaseBackupTaskSchema } from './database-backup.ts';
+import { databasePitrResultSchema, databasePitrTaskSchema } from './database-pitr.ts';
 import { databaseRotationResultSchema, databaseRotationTaskSchema } from './database.ts';
 import {
 	storageBucketDeletionSchema,
@@ -108,6 +109,8 @@ export const desiredStateSchema = z.object({
 	databasePurges: z.array(z.string()).default([]),
 	/** Backup dumps and restores this node must execute (docs/DATABASES.md §9). */
 	databaseBackupTasks: z.array(databaseBackupTaskSchema).default([]),
+	/** pgBackRest base backups, PITR restores and status checks (docs/PITR.md). */
+	databasePitrTasks: z.array(databasePitrTaskSchema).default([]),
 	/** Credential rotations this node must apply (docs/DATABASES.md §4). */
 	databaseRotations: z.array(databaseRotationTaskSchema).default([]),
 	/** Database ids whose PgBouncer sidecar must be restarted (docs/DATABASES.md §11). */
@@ -169,6 +172,8 @@ export const heartbeatSchema = z.object({
 	purgedStorage: z.array(z.string()).optional(),
 	/** Outcomes of `databaseBackupTasks` since the last heartbeat. */
 	databaseBackupResults: z.array(databaseBackupResultSchema).max(50).optional(),
+	/** Outcomes of `databasePitrTasks` since the last heartbeat. */
+	databasePitrResults: z.array(databasePitrResultSchema).max(50).optional(),
 	/** Outcomes of `databaseRotations` since the last heartbeat. */
 	databaseRotationResults: z.array(databaseRotationResultSchema).max(50).optional(),
 	/** Database ids whose pooler restart the node completed. */

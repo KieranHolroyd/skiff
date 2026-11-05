@@ -2,6 +2,8 @@ import { and, desc, eq, inArray, isNotNull, isNull, lte } from 'drizzle-orm';
 import {
 	databaseAttachments,
 	databaseBackups,
+	databasePitr,
+	databasePitrTasks,
 	databaseRotations,
 	databases,
 	nodes,
@@ -15,6 +17,11 @@ import {
 	DATABASE_POOLER_PORT_MIN,
 	DATABASE_PORT_MAX,
 	DATABASE_PORT_MIN,
+	PITR_ARCHIVE_TIMEOUT_SECONDS,
+	PITR_DIFF_SCHEDULE,
+	PITR_FULL_SCHEDULE,
+	PITR_RETENTION_DIFF,
+	PITR_RETENTION_FULL,
 	databaseAlias,
 	databaseAttachSchema,
 	databaseBackupCreateSchema,
@@ -24,12 +31,17 @@ import {
 	databaseEnvNames,
 	databaseIdentifier,
 	databaseImage,
+	databasePitrBackupSchema,
+	databasePitrPolicySchema,
+	databasePitrRestoreSchema,
 	databaseRestartSchema,
 	databaseRestoreSchema,
 	databaseRotateSchema,
 	databaseUpdateSchema,
 	limits,
+	pitrStanzaFor,
 	requirePermission,
+	validatePitrTargetTime,
 	type DatabaseAttach,
 	type DatabaseAttachmentView,
 	type DatabaseBackupResult,
@@ -40,6 +52,10 @@ import {
 	type DatabaseCredentials,
 	type DatabaseMetricBucket,
 	type DatabaseMetricPoint,
+	type DatabasePitrActivation,
+	type DatabasePitrResult,
+	type DatabasePitrStatus,
+	type DatabasePitrTask,
 	type DatabaseRotationActivation,
 	type DatabaseRotationResult,
 	type DatabaseRotationTask,
@@ -56,6 +72,7 @@ import {
 	type WorkloadStatus,
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
+import { featureEnabled } from './config.ts';
 import { nextCronTime } from './cron.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { resolvePlacement } from './placement.ts';
@@ -70,6 +87,9 @@ const DAY_MS = 86_400_000;
 /** Presigned upload/download URLs handed to a node; regenerated on every desired-state pull. */
 const BACKUP_TASK_TTL_SECONDS = 3_600;
 const BACKUP_OBJECT_PREFIX = 'database-backups';
+/** Full backups are kept ~4 weeks; differentials cover the rest of the retention window. */
+const PITR_RETENTION_DAYS = PITR_RETENTION_FULL * 7 + PITR_RETENTION_DIFF;
+const PITR_SCHEDULER_KIND = 'database.pitr.basebackup';
 
 /** A consumer's view of one attachment, resolved for the node and runtime it runs on. */
 interface ResolvedAttachment {
@@ -1162,6 +1182,501 @@ export class DatabaseService {
 		return removed;
 	}
 
+	// ---------------------------------------------------------------- point-in-time recovery
+
+	/** PITR state for one database (docs/PITR.md). Readable while the feature flag is off. */
+	pitrStatus(principal: Principal, name: string): DatabasePitrStatus {
+		requirePermission(principal, 'database:read');
+		const row = this.requireRow(principal, name);
+		const state = this.ctx.db.select().from(databasePitr).where(eq(databasePitr.databaseId, row.id)).get();
+		let repo: DatabasePitrStatus['repo'];
+		if (state) {
+			try {
+				repo = parseJson<DatabasePitrStatus['repo']>(state.repoJson, this.pitrRepoView());
+			} catch {
+				repo = this.pitrRepoView();
+			}
+		} else {
+			repo = this.pitrRepoView();
+		}
+		const toIso = (value: number | null | undefined) => (value ? new Date(value).toISOString() : null);
+		return {
+			databaseId: row.id,
+			databaseName: row.name,
+			enabled: state?.enabled ?? false,
+			stanza: state?.stanza ?? pitrStanzaFor(row.id),
+			status: state?.status ?? 'pending',
+			repo,
+			archiveStatus: state?.archiveStatus ?? null,
+			archiveAt: toIso(state?.archiveAt),
+			lastBaseBackupAt: toIso(state?.lastBaseBackupAt),
+			lastBaseBackupType: state?.lastBaseBackupType ?? null,
+			nextFullAt: toIso(state?.nextFullAt),
+			nextDiffAt: toIso(state?.nextDiffAt),
+			lastRestoreTargetAt: toIso(state?.lastRestoreTargetAt),
+			lastRestoreDatabaseId: state?.lastRestoreDatabaseId ?? null,
+			verifiedAt: toIso(state?.verifiedAt),
+			error: state?.error ?? null,
+		};
+	}
+
+	/** Enable or disable WAL archiving and the full/diff base-backup schedule. */
+	setPitrPolicy(principal: Principal, name: string, raw: unknown): DatabasePitrStatus {
+		requirePermission(principal, 'database:update');
+		this.requirePitrFeature();
+		const input = databasePitrPolicySchema.parse(raw);
+		const row = this.requireRow(principal, name);
+		const now = this.ctx.now();
+		const existing = this.ctx.db
+			.select()
+			.from(databasePitr)
+			.where(eq(databasePitr.databaseId, row.id))
+			.get();
+		const repo = this.pitrRepoView();
+		let nextFullAt: number | null = null;
+		let nextDiffAt: number | null = null;
+		if (input.enabled) {
+			nextFullAt = nextCronTime(PITR_FULL_SCHEDULE, now);
+			nextDiffAt = nextCronTime(PITR_DIFF_SCHEDULE, now);
+			if (nextFullAt === null || nextDiffAt === null)
+				throw new ValidationError('The PITR base-backup schedule never fires; check the cron constants.');
+		}
+		if (existing) {
+			this.ctx.db
+				.update(databasePitr)
+				.set({
+					enabled: input.enabled,
+					repoJson: JSON.stringify(repo),
+					status: input.enabled ? 'pending' : existing.status,
+					nextFullAt,
+					nextDiffAt,
+					error: input.enabled ? null : existing.error,
+					updatedAt: now,
+				})
+				.where(eq(databasePitr.databaseId, row.id))
+				.run();
+		} else {
+			this.ctx.db
+				.insert(databasePitr)
+				.values({
+					databaseId: row.id,
+					orgId: row.orgId,
+					enabled: input.enabled,
+					stanza: pitrStanzaFor(row.id),
+					repoJson: JSON.stringify(repo),
+					status: input.enabled ? 'pending' : 'paused',
+					nextFullAt,
+					nextDiffAt,
+					createdAt: now,
+					updatedAt: now,
+				})
+				.run();
+		}
+		this.ctx.audit.record({
+			principal,
+			action: 'database.pitr-policy',
+			resource: 'database',
+			resourceId: row.id,
+			args: { name, enabled: input.enabled },
+			result: 'ok',
+		});
+		this.ctx.projects.bump(principal.orgId);
+		return this.pitrStatus(principal, name);
+	}
+
+	/** Queue a base backup now; the scheduler handles the recurring full/diff pair. */
+	pitrBackup(principal: Principal, name: string, raw: unknown = {}): DatabasePitrTask {
+		requirePermission(principal, 'database:update');
+		this.requirePitrFeature();
+		const input = databasePitrBackupSchema.parse(raw);
+		const row = this.requireRow(principal, name);
+		const state = this.requirePitrEnabled(row);
+		const busy = this.ctx.db
+			.select({ id: databasePitrTasks.id })
+			.from(databasePitrTasks)
+			.where(
+				and(
+					eq(databasePitrTasks.databaseId, row.id),
+					eq(databasePitrTasks.action, 'basebackup'),
+					inArray(databasePitrTasks.status, ['pending', 'running']),
+				),
+			)
+			.get();
+		if (busy) throw new ConflictError(`A PITR base backup for "${name}" is already queued.`);
+		const now = this.ctx.now();
+		const id = newId('pitr_');
+		this.ctx.db
+			.insert(databasePitrTasks)
+			.values({
+				id,
+				orgId: row.orgId,
+				databaseId: row.id,
+				action: 'basebackup',
+				status: 'pending',
+				baseBackupType: input.type,
+				createdBy: principal.userId,
+				createdAt: now,
+			})
+			.run();
+		this.ctx.db
+			.update(databasePitr)
+			.set({ status: 'pending', error: null, updatedAt: now })
+			.where(eq(databasePitr.databaseId, row.id))
+			.run();
+		this.ctx.audit.record({
+			principal,
+			action: 'database.pitr-basebackup',
+			resource: 'database',
+			resourceId: row.id,
+			args: { name, type: input.type, taskId: id },
+			result: 'ok',
+		});
+		this.ctx.projects.bump(principal.orgId);
+		return {
+			id,
+			action: 'basebackup',
+			databaseId: row.id,
+			databaseName: databaseIdentifier(row.name),
+			engine: row.engine,
+			stanza: state.stanza,
+			baseBackupType: input.type,
+			targetDatabaseId: null,
+			targetTime: null,
+		};
+	}
+
+	/**
+	 * Restore to a timestamp into a NEW database on the source's node. The target is created with
+	 * fresh credentials and stays `pending` with scheduled dumps paused until the node verifies it.
+	 */
+	restoreToTimestamp(principal: Principal, sourceName: string, raw: unknown): DatabaseView {
+		requirePermission(principal, 'database:create');
+		this.requirePitrFeature();
+		const input = databasePitrRestoreSchema.parse(raw);
+		const source = this.requireRow(principal, sourceName);
+		const state = this.requirePitrEnabled(source);
+		const targetTime = Date.parse(input.targetTime);
+		const check = validatePitrTargetTime(targetTime, this.ctx.now(), PITR_RETENTION_DAYS);
+		if (!check.ok) throw new ValidationError(check.message);
+		const target = this.create(principal, {
+			name: input.name,
+			engine: source.engine,
+			version: source.version,
+			placement: source.nodeId,
+			...(input.memoryMb !== undefined ? { memoryMb: input.memoryMb } : {}),
+			...(input.cpus !== undefined ? { cpus: input.cpus } : {}),
+			...(input.storageMb !== undefined ? { storageMb: input.storageMb } : {}),
+			...(input.volume !== undefined ? { volume: input.volume } : {}),
+			extensions: parseJson<string[]>(source.extensionsJson, []) as DatabaseCreate['extensions'],
+			pooler: source.poolerEnabled,
+		});
+		const now = this.ctx.now();
+		const id = newId('pitr_');
+		this.ctx.sqlite.transaction(() => {
+			this.ctx.db
+				.update(databases)
+				.set({
+					status: 'pending',
+					message: `Restoring to ${new Date(targetTime).toISOString()}.`,
+					backupEnabled: false,
+					nextBackupAt: null,
+					updatedAt: now,
+				})
+				.where(eq(databases.id, target.id))
+				.run();
+			this.ctx.db
+				.insert(databasePitrTasks)
+				.values({
+					id,
+					orgId: source.orgId,
+					databaseId: source.id,
+					targetDatabaseId: target.id,
+					action: 'restore',
+					status: 'pending',
+					targetTime,
+					createdBy: principal.userId,
+					createdAt: now,
+				})
+				.run();
+			this.ctx.db
+				.update(databasePitr)
+				.set({
+					status: 'pending',
+					lastRestoreTargetAt: targetTime,
+					lastRestoreDatabaseId: target.id,
+					error: null,
+					updatedAt: now,
+				})
+				.where(eq(databasePitr.databaseId, source.id))
+				.run();
+		})();
+		this.ctx.audit.record({
+			principal,
+			action: 'database.pitr-restore',
+			resource: 'database',
+			resourceId: target.id,
+			args: { source: sourceName, name: input.name, targetTime: new Date(targetTime).toISOString(), taskId: id },
+			result: 'ok',
+		});
+		this.ctx.projects.bump(principal.orgId);
+		return this.toView(this.requireRow(principal, input.name));
+	}
+
+	/** Pending PITR tasks for one node, additive to the logical backup task list. */
+	async pitrTasksForNode(nodeId: string): Promise<DatabasePitrTask[]> {
+		if (!featureEnabled(this.ctx.config, 'PITR')) return [];
+		const rows = this.ctx.db
+			.select({ task: databasePitrTasks, db: databases, state: databasePitr })
+			.from(databasePitrTasks)
+			.innerJoin(databases, eq(databases.id, databasePitrTasks.databaseId))
+			.leftJoin(databasePitr, eq(databasePitr.databaseId, databasePitrTasks.databaseId))
+			.where(
+				and(
+					eq(databasePitrTasks.status, 'pending'),
+					eq(databases.nodeId, nodeId),
+					isNull(databases.deletedAt),
+				),
+			)
+			.all();
+		return rows.map(({ task, db, state }) => ({
+			id: task.id,
+			action: task.action,
+			databaseId: db.id,
+			databaseName: databaseIdentifier(db.name),
+			engine: db.engine,
+			stanza: state?.stanza ?? pitrStanzaFor(db.id),
+			baseBackupType: task.baseBackupType ?? null,
+			targetDatabaseId: task.targetDatabaseId ?? null,
+			targetTime: task.targetTime ?? null,
+		}));
+	}
+
+	/** Repository credentials for one node task; never reaches desired state or SQLite. */
+	pitrActivation(nodeId: string, taskId: string): DatabasePitrActivation {
+		this.requirePitrFeature();
+		const row = this.ctx.db
+			.select({ task: databasePitrTasks, db: databases, state: databasePitr })
+			.from(databasePitrTasks)
+			.innerJoin(databases, eq(databases.id, databasePitrTasks.databaseId))
+			.leftJoin(databasePitr, eq(databasePitr.databaseId, databasePitrTasks.databaseId))
+			.where(eq(databasePitrTasks.id, taskId))
+			.get();
+		if (!row) throw new NotFoundError('PITR task');
+		if (row.db.nodeId !== nodeId)
+			throw new CoreError('forbidden', 'This PITR task belongs to another node.', 403);
+		const repo = this.ctx.config.pitrRepository;
+		if (!repo) throw new ValidationError(this.pitrRepoMissingMessage());
+		return {
+			taskId: row.task.id,
+			databaseId: row.db.id,
+			action: row.task.action,
+			stanza: row.state?.stanza ?? pitrStanzaFor(row.db.id),
+			repo,
+			archiveTimeoutSeconds: PITR_ARCHIVE_TIMEOUT_SECONDS,
+		};
+	}
+
+	/** Record base-backup, restore and status outcomes from a node heartbeat. */
+	applyPitrResults(nodeId: string, results: DatabasePitrResult[]): void {
+		const now = this.ctx.now();
+		let changed = false;
+		for (const result of results) {
+			const row = this.ctx.db
+				.select({ task: databasePitrTasks, db: databases })
+				.from(databasePitrTasks)
+				.innerJoin(databases, eq(databases.id, databasePitrTasks.databaseId))
+				.where(eq(databasePitrTasks.id, result.taskId))
+				.get();
+			if (!row || row.db.nodeId !== nodeId) continue;
+			if (row.task.status === 'ok' || row.task.status === 'failed') continue;
+			const ok = result.status === 'ok';
+			this.ctx.db
+				.update(databasePitrTasks)
+				.set({
+					status: ok ? 'ok' : 'failed',
+					startedAt: row.task.startedAt ?? now,
+					finishedAt: now,
+					error: ok ? null : result.error ?? 'PITR task failed on the node.',
+				})
+				.where(eq(databasePitrTasks.id, row.task.id))
+				.run();
+
+			if (row.task.action === 'basebackup') {
+				this.ctx.db
+					.update(databasePitr)
+					.set({
+						status: ok ? 'ok' : 'failed',
+						archiveStatus: ok ? 'ok' : 'failing',
+						archiveAt: now,
+						lastBaseBackupAt: ok ? now : undefined,
+						lastBaseBackupType: ok ? (result.baseBackupType ?? row.task.baseBackupType) : undefined,
+						error: ok ? null : result.error ?? 'Base backup failed on the node.',
+						updatedAt: now,
+					})
+					.where(eq(databasePitr.databaseId, row.db.id))
+					.run();
+			} else if (row.task.action === 'restore') {
+				const targetId = row.task.targetDatabaseId;
+				this.ctx.db
+					.update(databasePitr)
+					.set({
+						status: ok ? 'ok' : 'failed',
+						lastRestoreTargetAt: result.targetTime ?? row.task.targetTime ?? null,
+						lastRestoreDatabaseId: targetId,
+						verifiedAt: ok ? now : undefined,
+						error: ok ? null : result.error ?? 'PITR restore failed on the node.',
+						updatedAt: now,
+					})
+					.where(eq(databasePitr.databaseId, row.db.id))
+					.run();
+				if (targetId) {
+					const target = this.ctx.db.select().from(databases).where(eq(databases.id, targetId)).get();
+					if (target) {
+						this.ctx.db
+							.update(databases)
+							.set({
+								status: ok ? 'running' : 'failed',
+								message: ok ? null : `PITR restore failed: ${result.error ?? 'unknown error'}`,
+								backupEnabled: ok,
+								nextBackupAt: ok ? nextCronTime(target.backupSchedule, now) : null,
+								lastVerifiedAt: ok ? now : target.lastVerifiedAt,
+								updatedAt: now,
+							})
+							.where(eq(databases.id, targetId))
+							.run();
+					}
+				}
+			} else {
+				this.ctx.db
+					.update(databasePitr)
+					.set({
+						archiveStatus: result.archiveStatus ?? 'unknown',
+						archiveAt: now,
+						updatedAt: now,
+					})
+					.where(eq(databasePitr.databaseId, row.db.id))
+					.run();
+			}
+			this.ctx.audit.record({
+				orgId: row.db.orgId,
+				action: ok ? `database.pitr-${row.task.action}-ok` : `database.pitr-${row.task.action}-failed`,
+				resource: 'database',
+				resourceId: row.task.action === 'restore' && row.task.targetDatabaseId ? row.task.targetDatabaseId : row.db.id,
+				args: { name: row.db.name, taskId: row.task.id, targetTime: row.task.targetTime },
+				result: ok ? 'ok' : 'error',
+				...(ok ? {} : { error: result.error ?? 'PITR task failed on the node.' }),
+			});
+			changed = true;
+		}
+		if (changed) this.ctx.projects.bump();
+	}
+
+	/**
+	 * Maintenance sweep: enqueue due full/diff backups through the F4 scheduler, then claim the
+	 * pitr kind only and turn each claim into a node task. `kind + key` prevents duplicate slots.
+	 */
+	tickPitr(now = this.ctx.now()): number {
+		if (!featureEnabled(this.ctx.config, 'PITR')) return 0;
+		const rows = this.ctx.db.select().from(databasePitr).where(eq(databasePitr.enabled, true)).all();
+		for (const row of rows) {
+			for (const [type, dueAt, schedule] of [
+				['full', row.nextFullAt, PITR_FULL_SCHEDULE],
+				['diff', row.nextDiffAt, PITR_DIFF_SCHEDULE],
+			] as const) {
+				if (dueAt === null || dueAt > now) continue;
+				this.ctx.scheduler.enqueue({
+					kind: PITR_SCHEDULER_KIND,
+					key: `${row.databaseId}:${type}:${new Date(dueAt).toISOString()}`,
+					runAt: dueAt,
+					payload: { databaseId: row.databaseId, type },
+				});
+				const next = nextCronTime(schedule, now);
+				this.ctx.db
+					.update(databasePitr)
+					.set(type === 'full' ? { nextFullAt: next, updatedAt: now } : { nextDiffAt: next, updatedAt: now })
+					.where(eq(databasePitr.databaseId, row.databaseId))
+					.run();
+			}
+		}
+		let queued = 0;
+		for (const claimed of this.ctx.scheduler.claim('maintenance:pitr', 50, now, undefined, PITR_SCHEDULER_KIND)) {
+			try {
+				const payload = claimed.payloadJson ? (JSON.parse(claimed.payloadJson) as { databaseId?: string; type?: string }) : {};
+				const databaseId = payload.databaseId;
+				const type =
+					payload.type === 'full' || payload.type === 'diff' || payload.type === 'incr'
+						? payload.type
+						: null;
+				if (!databaseId || !type) {
+					this.ctx.scheduler.fail(claimed.id, 'PITR scheduler payload is invalid.');
+					continue;
+				}
+				const db = this.ctx.db.select().from(databases).where(eq(databases.id, databaseId)).get();
+				if (!db || db.deletedAt) {
+					this.ctx.scheduler.complete(claimed.id, JSON.stringify({ skipped: 'database-gone' }));
+					continue;
+				}
+				const busy = this.ctx.db
+					.select({ id: databasePitrTasks.id })
+					.from(databasePitrTasks)
+					.where(
+						and(
+							eq(databasePitrTasks.databaseId, db.id),
+							eq(databasePitrTasks.action, 'basebackup'),
+							inArray(databasePitrTasks.status, ['pending', 'running']),
+						),
+					)
+					.get();
+				if (busy) {
+					this.ctx.scheduler.complete(claimed.id, JSON.stringify({ skipped: 'busy' }));
+					continue;
+				}
+				this.ctx.db
+					.insert(databasePitrTasks)
+					.values({
+						id: newId('pitr_'),
+						orgId: db.orgId,
+						databaseId: db.id,
+						action: 'basebackup',
+						status: 'pending',
+						baseBackupType: type,
+						createdBy: 'system',
+						createdAt: now,
+					})
+					.run();
+				this.ctx.scheduler.complete(claimed.id, JSON.stringify({ task: 'queued' }));
+				queued += 1;
+			} catch (error) {
+				this.ctx.scheduler.fail(claimed.id, error instanceof Error ? error.message : String(error));
+			}
+		}
+		if (queued > 0) this.ctx.projects.bump();
+		return queued;
+	}
+
+	private requirePitrFeature(): void {
+		if (!featureEnabled(this.ctx.config, 'PITR'))
+			throw new ValidationError('PITR is disabled on this control plane (SKIFF_FEATURE_PITR).');
+	}
+
+	private pitrRepoMissingMessage(): string {
+		return 'PITR is enabled but no pgBackRest repository is configured; set SKIFF_PITR_REPO_BUCKET, SKIFF_PITR_ACCESS_KEY_ID and SKIFF_PITR_SECRET_ACCESS_KEY.';
+	}
+
+	private pitrRepoView(): DatabasePitrStatus['repo'] {
+		const repo = this.ctx.config.pitrRepository;
+		if (!repo) throw new ValidationError(this.pitrRepoMissingMessage());
+		const { accessKeyId: _accessKeyId, secretAccessKey: _secretAccessKey, ...view } = repo;
+		return view;
+	}
+
+	private requirePitrEnabled(row: DatabaseRow): typeof databasePitr.$inferSelect {
+		const state = this.ctx.db.select().from(databasePitr).where(eq(databasePitr.databaseId, row.id)).get();
+		if (!state?.enabled)
+			throw new ConflictError(`PITR is not enabled for "${row.name}". Enable it before using base backups or restores.`);
+		return state;
+	}
+
 	private toBackupView(row: typeof databaseBackups.$inferSelect, databaseName: string): DatabaseBackupView {
 		return {
 			id: row.id,
@@ -1348,6 +1863,13 @@ export class DatabaseService {
 			.map((row) => {
 				const user = databaseIdentifier(row.name);
 				const env = { POSTGRES_USER: user, POSTGRES_DB: user, PGDATA: '/data/pgdata' };
+				const pitr = featureEnabled(this.ctx.config, 'PITR')
+					? this.ctx.db
+							.select()
+							.from(databasePitr)
+							.where(and(eq(databasePitr.databaseId, row.id), eq(databasePitr.enabled, true)))
+							.get()
+					: undefined;
 				return {
 					id: row.id,
 					projectId: row.id,
@@ -1365,12 +1887,23 @@ export class DatabaseService {
 					port: row.hostPort,
 					healthPath: '/',
 					socketActivation: false,
-					activationVersion: databaseActivationVersion(row, env),
+					activationVersion: databaseActivationVersion(row, env, pitr?.stanza ?? null),
 					env,
 					secrets: [],
 					dataSizeMb: null,
 					...(row.volumeId ? { volumeId: row.volumeId } : {}),
-					database: { engine: row.engine, version: row.version },
+					database: {
+						engine: row.engine,
+						version: row.version,
+						...(pitr
+							? {
+									pitr: {
+										stanza: pitr.stanza,
+										archiveTimeoutSeconds: PITR_ARCHIVE_TIMEOUT_SECONDS,
+									},
+								}
+							: {}),
+					},
 					...(row.poolerEnabled && row.poolerPort ? { pooler: { port: row.poolerPort } } : {}),
 				};
 			});
@@ -1397,9 +1930,16 @@ export class DatabaseService {
 		const user = databaseIdentifier(row.name);
 		const ownerPassword = this.ctx.secrets.open(row.orgId, row.ownerSecret);
 		const env = { POSTGRES_USER: user, POSTGRES_DB: user, PGDATA: '/data/pgdata' };
+		const pitr = featureEnabled(this.ctx.config, 'PITR')
+			? this.ctx.db
+					.select()
+					.from(databasePitr)
+					.where(and(eq(databasePitr.databaseId, row.id), eq(databasePitr.enabled, true)))
+					.get()
+			: undefined;
 		return {
 			workloadId: row.id,
-			activationVersion: databaseActivationVersion(row, env),
+			activationVersion: databaseActivationVersion(row, env, pitr?.stanza ?? null),
 			env: { POSTGRES_PASSWORD: ownerPassword },
 			files: {},
 			databaseSetup: { extensions: parseJson<string[]>(row.extensionsJson, []) },
@@ -1764,12 +2304,16 @@ function backupObjectKey(orgId: string, databaseId: string, backupId: string): s
 	return `${BACKUP_OBJECT_PREFIX}/${orgId}/${databaseId}/${backupId}.dump`;
 }
 
-function databaseActivationVersion(row: DatabaseRow, env: Record<string, string>): string {
+function databaseActivationVersion(
+	row: DatabaseRow,
+	env: Record<string, string>,
+	pitrStanza: string | null = null,
+): string {
 	return sha256Hex(
 		JSON.stringify({
 			id: row.id,
 			// Bump when the fixed helper profile changes and existing units must be re-rendered.
-			profile: 2,
+			profile: 3,
 			engine: row.engine,
 			version: row.version,
 			port: row.hostPort,
@@ -1777,6 +2321,7 @@ function databaseActivationVersion(row: DatabaseRow, env: Record<string, string>
 			restartGeneration: row.restartGeneration,
 			env,
 			extensions: row.extensionsJson,
+			pitrStanza,
 			// A rotated secret must re-activate consumers even though the public spec is unchanged.
 			secret: sha256Hex(`${row.ownerSecret}:${row.monitorSecret}`),
 		}),

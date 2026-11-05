@@ -174,25 +174,27 @@ export class SchedulerService {
 		limit = 1,
 		now = this.ctx.now(),
 		leaseMs = DEFAULT_LEASE_MS,
+		kind?: string,
 	): ClaimedTask[] {
 		const worker = requireText(workerId, 'workerId');
 		if (!Number.isInteger(limit) || limit < 1) throw new ValidationError('limit must be positive.');
 		if (!Number.isInteger(leaseMs) || leaseMs < 1)
 			throw new ValidationError('leaseMs must be positive.');
+		const filter = 'AND (? IS NULL OR kind = ?)';
 		const leaseUntil = now + leaseMs;
 		const rows = this.ctx.sqlite
-			.query<ScheduledTaskRow, [number, number, number, number]>(
+			.query<ScheduledTaskRow, [number, number, number, string | null, string | null, number]>(
 				`UPDATE scheduled_tasks
 				 SET status = 'leased', lease_until = ?, attempts = attempts + 1, updated_at = ?
 				 WHERE id IN (
 				   SELECT id FROM scheduled_tasks
-				   WHERE status = 'queued' AND run_at <= ?
+				   WHERE status = 'queued' AND run_at <= ? ${filter}
 				   ORDER BY run_at ASC, created_at ASC
 				   LIMIT ?
 				 )
 				 RETURNING ${SELECT_COLUMNS}`,
 			)
-			.all(leaseUntil, now, now, limit);
+			.all(leaseUntil, now, now, kind ?? null, kind ?? null, limit);
 		return rows.map((row) => ({ ...toTask(row), workerId: worker }));
 	}
 

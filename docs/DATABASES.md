@@ -173,6 +173,10 @@ duplicated.
 The local filesystem object store buffers uploads and enforces the 500 MB artifact limit; R2 gets a
 direct presigned PUT with no buffering. A production install should use R2 for large databases.
 
+PITR (pgBackRest WAL archiving and restore-to-time) is a separate, flag-gated path documented in
+[PITR.md](./PITR.md). It is not enabled by default and logical backups remain the supported restore
+path until a real restore drill passes.
+
 ## 9. Extensions and slow queries (D84)
 
 `extensions` is an allowlist (`pg_stat_statements`, `pg_trgm`, `pgcrypto`, `citext`, `hstore`,
@@ -240,4 +244,5 @@ tail at `/databases/:name/logs` (pause, level filter, search, download, clear vi
 - On-demand SQL console: an open-source admin UI (pgweb or Adminer) as a short-lived container on
   the database's node, behind `platform` access, `database:console`, audited, idle-stopped (D60).
 - Cross-node access via a node private address; more engines (MySQL, Valkey); bulk actions and
-  prune for databases; PITR (pgBackRest/WAL-G) on top of the logical backups.
+  prune for databases; fully automated PITR drills (see [PITR.md](./PITR.md) for the current
+  foundation and remaining gaps).

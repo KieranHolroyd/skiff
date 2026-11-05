@@ -107,6 +107,8 @@ export type DatabaseEngine = keyof typeof DATABASE_ENGINES;
 export interface WorkloadDatabase {
 	engine: DatabaseEngine;
 	version: string;
+	/** WAL archiving for PITR (docs/PITR.md); omitted when the feature is off. */
+	pitr?: { stanza: string; archiveTimeoutSeconds: number };
 }
 
 /** Workload ids of managed databases carry this prefix; `purge` accepts these and `st_` ids. */
@@ -132,9 +134,28 @@ export function parseDatabase(value: unknown, label = 'workload.database'): Work
 	if (typeof version !== 'string' || !(info.versions as readonly string[]).includes(version))
 		throw new ValidationError(`${label}.version must be one of ${info.versions.join(', ')}`);
 	for (const key of Object.keys(record)) {
-		if (key !== 'engine' && key !== 'version') throw new ValidationError(`${label}.${key} is not supported`);
+		if (key !== 'engine' && key !== 'version' && key !== 'pitr')
+			throw new ValidationError(`${label}.${key} is not supported`);
 	}
-	return { engine: engine as DatabaseEngine, version };
+	const parsed: WorkloadDatabase = { engine: engine as DatabaseEngine, version };
+	if (record.pitr !== undefined) {
+		const pitr = assertRecord(record.pitr, `${label}.pitr`);
+		const stanza = assertString(pitr.stanza, `${label}.pitr.stanza`, { max: 64 });
+		if (!/^[A-Za-z0-9_-]{1,64}$/.test(stanza))
+			throw new ValidationError(`${label}.pitr.stanza must match ^[A-Za-z0-9_-]{1,64}$`);
+		parsed.pitr = {
+			stanza,
+			archiveTimeoutSeconds:
+				pitr.archiveTimeoutSeconds === undefined
+					? 60
+					: assertInteger(pitr.archiveTimeoutSeconds, `${label}.pitr.archiveTimeoutSeconds`, 1, 3600),
+		};
+		for (const key of Object.keys(pitr)) {
+			if (key !== 'stanza' && key !== 'archiveTimeoutSeconds')
+				throw new ValidationError(`${label}.pitr.${key} is not supported`);
+		}
+	}
+	return parsed;
 }
 
 /** `db_` ids only, so a purge can never point at an app's data directory. */

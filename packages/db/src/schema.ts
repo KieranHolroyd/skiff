@@ -972,6 +972,64 @@ export const scheduledTasks = sqliteTable(
 	],
 );
 
+/**
+ * Point-in-time recovery state for one managed database (docs/PITR.md). The repository secrets are
+ * deliberately absent: the node fetches them from the agent activation endpoint and the helper
+ * writes a 0400 pgBackRest config. `repoJson` is safe to render in views.
+ */
+export const databasePitr = sqliteTable(
+	'database_pitr',
+	{
+		databaseId: text('database_id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		enabled: integer('enabled', { mode: 'boolean' }).notNull().default(false),
+		stanza: text('stanza').notNull(),
+		repoJson: text('repo_json').notNull(),
+		status: text('status', { enum: ['pending', 'ok', 'failed', 'paused'] })
+			.notNull()
+			.default('pending'),
+		archiveStatus: text('archive_status', { enum: ['ok', 'failing', 'unknown'] }),
+		archiveAt: integer('archive_at'),
+		lastBaseBackupAt: integer('last_base_backup_at'),
+		lastBaseBackupType: text('last_base_backup_type', { enum: ['full', 'diff', 'incr'] }),
+		nextFullAt: integer('next_full_at'),
+		nextDiffAt: integer('next_diff_at'),
+		lastRestoreTargetAt: integer('last_restore_target_at'),
+		lastRestoreDatabaseId: text('last_restore_database_id'),
+		verifiedAt: integer('verified_at'),
+		error: text('error'),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [index('database_pitr_status_idx').on(t.status)],
+);
+
+/** One base-backup, status or restore request handed to a database's node. */
+export const databasePitrTasks = sqliteTable(
+	'database_pitr_tasks',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		databaseId: text('database_id').notNull(),
+		targetDatabaseId: text('target_database_id'),
+		action: text('action', { enum: ['basebackup', 'restore', 'status'] }).notNull(),
+		status: text('status', { enum: ['pending', 'running', 'ok', 'failed'] })
+			.notNull()
+			.default('pending'),
+		baseBackupType: text('base_backup_type', { enum: ['full', 'diff', 'incr'] }),
+		targetTime: integer('target_time'),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		startedAt: integer('started_at'),
+		finishedAt: integer('finished_at'),
+		error: text('error'),
+	},
+	(t) => [
+		index('database_pitr_tasks_pending_idx').on(t.status, t.createdAt),
+		index('database_pitr_tasks_database_idx').on(t.databaseId, t.createdAt),
+	],
+);
+
 /** Every table worth exporting, for tooling and tests. */
 export const schema = {
 	nodes,
@@ -999,6 +1057,8 @@ export const schema = {
 	alertState,
 	databaseBackups,
 	backupTargets,
+	databasePitr,
+	databasePitrTasks,
 	scheduledTasks,
 };
 

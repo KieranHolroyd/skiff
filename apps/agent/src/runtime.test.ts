@@ -123,6 +123,18 @@ class FakeHelper implements HelperApi {
 	async restoreDatabase(): Promise<void> {}
 	async rotateDatabaseRole(): Promise<void> {}
 	async restartPooler(): Promise<void> {}
+	async pitrConfigure(): Promise<never> {
+		throw new Error('pitrConfigure not used in this test');
+	}
+	async pitrBaseBackup(): Promise<never> {
+		throw new Error('pitrBaseBackup not used in this test');
+	}
+	async pitrRestore(): Promise<never> {
+		throw new Error('pitrRestore not used in this test');
+	}
+	async pitrStatus(): Promise<never> {
+		throw new Error('pitrStatus not used in this test');
+	}
 
 	async status(id: string): Promise<HelperWorkloadStatus> {
 		this.statusCalls.push(id);

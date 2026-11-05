@@ -236,6 +236,8 @@ export class NodeService {
 		}
 		if (input.databaseBackupResults?.length)
 			this.ctx.databases.applyBackupResults(node.id, input.databaseBackupResults);
+		if (input.databasePitrResults?.length)
+			this.ctx.databases.applyPitrResults(node.id, input.databasePitrResults);
 		if (input.databaseRotationResults?.length)
 			this.ctx.databases.applyRotationResults(node.id, input.databaseRotationResults);
 		if (input.databasePoolerRestarted?.length)
@@ -643,6 +645,7 @@ export class NodeService {
 			volumes: this.ctx.volumes.desiredForNode(node.id),
 			databasePurges: this.ctx.databases.purgesForNode(node.id),
 			databaseBackupTasks: await this.ctx.databases.backupTasksForNode(node.id),
+			databasePitrTasks: await this.ctx.databases.pitrTasksForNode(node.id),
 			databaseRotations: this.ctx.databases.rotationTasksForNode(node.id),
 			databasePoolerRestarts: this.ctx.databases.poolerRestartTasksForNode(node.id),
 			storageGateway: this.ctx.storage.gatewayForNode(node.id, isEdge, (id) => nodeById.get(id)?.publicAddress ?? null),

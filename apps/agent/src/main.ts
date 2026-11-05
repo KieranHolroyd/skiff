@@ -16,6 +16,7 @@ import { CertProbe, certProbeTargets, tlsCertReader } from './certs.ts';
 import { buildCaddyConfig, isProductionRoute, tlsSubjects } from './caddy-config.ts';
 import { loadConfig, type AgentConfig } from './config.ts';
 import { DatabaseBackupRunner } from './database-backups.ts';
+import { DatabasePitrRunner } from './database-pitr.ts';
 import { DatabasePoolerRestartRunner } from './database-pooler-restarts.ts';
 import { DatabaseRotationRunner } from './database-rotations.ts';
 import { DATABASE_STATS_INTERVAL_MS, DatabaseStatsSampler } from './database-stats.ts';
@@ -79,6 +80,7 @@ class AgentRuntime {
 	private readonly storage: StorageRequester;
 	private readonly databaseStats: DatabaseStatsSampler;
 	private readonly databaseBackups: DatabaseBackupRunner;
+	private readonly databasePitr: DatabasePitrRunner;
 	private readonly databaseRotations: DatabaseRotationRunner;
 	private readonly databasePoolerRestarts: DatabasePoolerRestartRunner;
 	private readonly storageAdmin: StorageReconciler;
@@ -150,6 +152,12 @@ class AgentRuntime {
 		});
 		this.databaseStats = new DatabaseStatsSampler({ source: this.workloads, log });
 		this.databaseBackups = new DatabaseBackupRunner({ helper: this.helper, log });
+		this.databasePitr = new DatabasePitrRunner({
+			controlUrl: config.controlUrl,
+			nodeToken: config.nodeToken,
+			helper: this.helper,
+			log,
+		});
 		this.databaseRotations = new DatabaseRotationRunner({
 			controlUrl: config.controlUrl,
 			nodeToken: config.nodeToken,
@@ -228,6 +236,7 @@ class AgentRuntime {
 			this.telemetryLoop(),
 			this.databaseStatsLoop(),
 			this.databaseBackupLoop(),
+			this.databasePitrLoop(),
 			this.databaseRotationLoop(),
 			this.databasePoolerRestartLoop(),
 			this.storageAdminLoop(),
@@ -554,6 +563,21 @@ class AgentRuntime {
 		}
 	}
 
+	/** PITR tasks are additive to the logical backup loop and only exist when the flag is on. */
+	private async databasePitrLoop(): Promise<void> {
+		while (this.running) {
+			await sleep(5_000, this.shutdownController.signal).catch(() => undefined);
+			if (!this.running) break;
+			const state = this.desired;
+			if (!state || state.databasePitrTasks.length === 0) continue;
+			try {
+				await this.databasePitr.runOnce(state, this.shutdownController.signal);
+			} catch (error) {
+				log('warn', `Database PITR task failed: ${errorText(error)}`);
+			}
+		}
+	}
+
 	private async databasePoolerRestartLoop(): Promise<void> {
 		while (this.running) {
 			await sleep(5_000, this.shutdownController.signal).catch(() => undefined);
@@ -622,6 +646,7 @@ class AgentRuntime {
 		const purgedStorage = this.workloads.pendingPurgedStorage();
 		const volumeInventory = await this.volumeInventoryForHeartbeat();
 		const backupResults = this.databaseBackups.pendingResults();
+		const pitrResults = this.databasePitr.pendingResults();
 		const rotationResults = this.databaseRotations.pendingResults();
 		const poolerRestarted = this.databasePoolerRestarts.pending();
 		// Bucket deletions are reported once, capped by the heartbeat schema (S8).
@@ -644,6 +669,7 @@ class AgentRuntime {
 			...(storage ? { storage } : {}),
 			...(reports.length > 0 ? { workloads: workloadHeartbeat(reports) } : {}),
 			...(backupResults.length > 0 ? { databaseBackupResults: backupResults } : {}),
+			...(pitrResults.length > 0 ? { databasePitrResults: pitrResults } : {}),
 			...(rotationResults.length > 0 ? { databaseRotationResults: rotationResults } : {}),
 			...(poolerRestarted.length > 0 ? { databasePoolerRestarted: poolerRestarted } : {}),
 			...(purgedDatabases.length > 0 ? { purgedDatabases } : {}),
@@ -672,6 +698,7 @@ class AgentRuntime {
 			throw new Error(`heartbeat -> ${response.status}${text ? `: ${text}` : ''}`);
 		}
 		this.databaseBackups.acknowledge(backupResults.map((result) => result.taskId));
+		this.databasePitr.acknowledge(pitrResults.map((result) => result.taskId));
 		this.databaseRotations.acknowledge(rotationResults.map((result) => result.taskId));
 		this.databasePoolerRestarts.acknowledge(poolerRestarted);
 		this.workloads.acknowledgePurgedDatabases(purgedDatabases);

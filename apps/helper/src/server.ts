@@ -39,6 +39,22 @@ export interface HelperRuntime {
 	restartPooler(id: string): Promise<void>;
 	/** Restore a custom-format dump into a managed database. */
 	restoreDatabase(id: string, body: ReadableStream<Uint8Array> | null): Promise<void>;
+	/** Write the 0400 pgBackRest config for PITR (docs/PITR.md). */
+	pitrConfigure(id: string, repo: unknown): Promise<{ stanza: string; configPath: string }>;
+	/** Run a full or differential pgBackRest base backup. */
+	pitrBaseBackup(id: string, type: unknown): Promise<{ stanza: string; type: 'full' | 'diff' | 'incr' }>;
+	/** Restore a stanza to a timestamp into a new database and verify it. */
+	pitrRestore(
+		id: string,
+		input: { targetDatabaseId: unknown; targetTime: unknown },
+	): Promise<{ targetDatabaseId: string; targetTime: number; verified: true }>;
+	/** Credential-free archive/repository status. */
+	pitrStatus(id: string): Promise<{
+		configured: boolean;
+		stanza: string;
+		repo: { bucket: string | null; region: string | null; endpoint: string | null; path: string | null };
+		archiveStatus: 'ok' | 'failing' | 'unknown';
+	}>;
 	/** Mounts and free block devices for the volume wizard (D72). */
 	volumesInventory(): Promise<HelperInventory>;
 	/** Replace the volume registry from desired state (D74). */
@@ -186,6 +202,34 @@ export function createHandler(
 				const password = assertString(body.password, 'password', { max: 200 });
 				await runtime.rotateDatabaseRole(id, role, password);
 				return json({ ok: true, rotated: role });
+			}
+
+			// --- PITR (docs/PITR.md): fixed pgBackRest verbs, no command passthrough ------------
+			const pitrMatch = /^\/v1\/workloads\/([^/]+)\/pitr\/(configure|basebackup|restore|status)$/.exec(path);
+			if (pitrMatch) {
+				const id = assertDatabaseId(decodeURIComponent(pitrMatch[1]!), 'database id');
+				const verb = pitrMatch[2]!;
+				if (verb === 'status') {
+					if (method !== 'GET') return methodNotAllowed('GET');
+					return json({ ok: true, ...(await runtime.pitrStatus(id)) });
+				}
+				if (method !== 'POST') return methodNotAllowed('POST');
+				if (verb === 'configure') {
+					const body = assertRecord(await readJson(request, maxBodyBytes), 'request');
+					return json({ ok: true, ...(await runtime.pitrConfigure(id, body.repo)) });
+				}
+				if (verb === 'basebackup') {
+					const body = assertRecord(await readJson(request, maxBodyBytes), 'request');
+					return json({ ok: true, ...(await runtime.pitrBaseBackup(id, body.type)) });
+				}
+				const body = assertRecord(await readJson(request, maxBodyBytes), 'request');
+				return json({
+					ok: true,
+					...(await runtime.pitrRestore(id, {
+						targetDatabaseId: body.targetDatabaseId,
+						targetTime: body.targetTime,
+					})),
+				});
 			}
 
 			const purgeMatch = /^\/v1\/workloads\/([^/]+)\/purge$/.exec(path);
