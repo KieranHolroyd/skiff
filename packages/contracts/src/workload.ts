@@ -136,6 +136,11 @@ export interface NodeCapacityView {
 	reservedMemoryMb: number;
 	freeMemoryMb: number;
 	workloadCount: number;
+	/** Latest root/data-disk free space the node reported; null before the first heartbeat. */
+	diskFreeBytes: number | null;
+	diskTotalBytes: number | null;
+	/** App volumes backed by the helper state directory on this node, as a disk reservation. */
+	reservedDiskBytes: number;
 }
 
 /** Placement request: `edge`, a node id, or `auto` (resolved once at deploy time, D41). */
@@ -150,6 +155,13 @@ export const workloadVolumeMountSchema = z.object({
 	id: z.string().min(1).max(100),
 	mountPath: z.string().min(1).max(200),
 	readOnly: z.boolean().default(false),
+	/**
+	 * How the helper resolves the backing directory. `node_volume` names a node volume in the
+	 * helper's own registry (verified before start); `state_dir` is the helper's state directory.
+	 * These are ids and kinds only — never a host path or a device.
+	 */
+	backing: z.enum(['node_volume', 'state_dir']).optional(),
+	nodeVolumeId: z.string().min(1).max(100).optional(),
 });
 export type WorkloadVolumeMount = z.infer<typeof workloadVolumeMountSchema>;
 

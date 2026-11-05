@@ -2,6 +2,9 @@ import { error, fail, redirect } from '@sveltejs/kit';
 import { CoreError, entriesFromZip } from '@skiff/core';
 import {
 	accessModes,
+	appVolumeAttachSchema,
+	appVolumeCreateSchema,
+	appVolumeDetachSchema,
 	databaseAttachSchema,
 	hasPermission,
 	storageAttachSchema,
@@ -183,6 +186,10 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 				.filter((item) => storageAttachments.some((attached) => attached.storageId === item.id))
 				.map((item) => [item.name, readyBuckets(item)])
 		);
+		// App volumes (plan 07) are project-owned and only meaningful for runtime projects.
+		const appVolumesEnabled = core.appVolumes.enabled();
+		const appVolumes =
+			appVolumesEnabled && row.runtime !== 'static' ? safely(() => core.appVolumes.list(principal, row), []) : [];
 
 		return {
 			project,
@@ -205,6 +212,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			storageAttachments,
 			attachableStorage,
 			storageBuckets,
+			appVolumesEnabled,
+			appVolumes,
 			can: {
 				update: hasPermission(principal, 'project:update'),
 				deleteProject: hasPermission(principal, 'project:delete'),
@@ -233,7 +242,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 				readStorage: hasPermission(principal, 'storage:read'),
 				createStorage: hasPermission(principal, 'storage:create'),
 				attachStorage:
-					hasPermission(principal, 'storage:update') && hasPermission(principal, 'project:update')
+					hasPermission(principal, 'storage:update') && hasPermission(principal, 'project:update'),
+				manageVolumes: appVolumesEnabled && hasPermission(principal, 'project:update')
 			}
 		};
 	} catch (caught) {
@@ -980,6 +990,95 @@ export const actions: Actions = {
 			return fail(failStatus(caught), toFormFailure(caught));
 		}
 		return { success: `${name} detached. Its key is deleted and the app restarts without it.` };
+	},
+
+	// --- App volumes (plan 07) -------------------------------------------------
+
+	createVolume: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const backing = formString(data, 'backing') === 'node_volume' ? 'node_volume' : 'state_dir';
+		const nodeVolume = formOptionalString(data, 'nodeVolume');
+		const parsed = appVolumeCreateSchema.safeParse({
+			name: formString(data, 'name'),
+			sizeMb: numberField(data, 'sizeMb', 1024),
+			backing,
+			...(nodeVolume ? { nodeVolume } : {}),
+			singleWriter: formBoolean(data, 'singleWriter')
+		});
+		if (!parsed.success) {
+			return fail(400, {
+				message: parsed.error.issues[0]?.message ?? 'Check the volume settings.',
+				fieldErrors: fieldErrorsFrom(parsed.error.issues)
+			});
+		}
+		try {
+			const project = core.projects.requireRow(principal, params.slug);
+			const volume = core.appVolumes.create(principal, project, parsed.data);
+			return {
+				success: `Volume "${volume.name}" created (${volume.sizeMb} MB). Attach it to a mount path to use it.`
+			};
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	attachVolume: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const parsed = appVolumeAttachSchema.safeParse({
+			workload: formString(data, 'workload') || params.slug,
+			environment: formString(data, 'environment') || 'production',
+			mountPath: formString(data, 'mountPath'),
+			readOnly: formBoolean(data, 'readOnly')
+		});
+		if (!parsed.success) {
+			return fail(400, {
+				message: parsed.error.issues[0]?.message ?? 'Check the mount path.',
+				fieldErrors: fieldErrorsFrom(parsed.error.issues)
+			});
+		}
+		const volumeName = formString(data, 'volume');
+		try {
+			const project = core.projects.requireRow(principal, params.slug);
+			core.appVolumes.attach(principal, project, volumeName, parsed.data);
+			return { success: `Volume "${volumeName}" mounted at ${parsed.data.mountPath}; the workload restarts with it.` };
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	detachVolume: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const volumeName = formString(data, 'volume');
+		const parsed = appVolumeDetachSchema.safeParse({
+			workload: formString(data, 'workload') || params.slug,
+			environment: formString(data, 'environment') || 'production'
+		});
+		if (!parsed.success)
+			return fail(400, { message: parsed.error.issues[0]?.message ?? 'Check the attachment.' });
+		try {
+			const project = core.projects.requireRow(principal, params.slug);
+			core.appVolumes.detach(principal, project, volumeName, parsed.data);
+			return { success: `Volume "${volumeName}" detached. The data is untouched.` };
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	deleteVolume: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const volumeName = formString(await request.formData(), 'volume');
+		try {
+			const project = core.projects.requireRow(principal, params.slug);
+			const result = core.appVolumes.delete(principal, project, volumeName);
+			return {
+				success: `Volume "${volumeName}" deleted. Its data is kept until ${new Date(result.purgeAt).toISOString().slice(0, 10)}.`
+			};
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
 	},
 
 	deleteSecret: async ({ request, locals }) => {

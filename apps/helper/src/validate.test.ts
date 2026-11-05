@@ -404,3 +404,36 @@ describe('per-org network fields', () => {
 		).toThrow(/skiff-workloads/);
 	});
 });
+describe('app volume desired state', () => {
+	test('accepts ids and mount points and defaults the backing to the state dir', () => {
+		const workload = parseWorkload(
+			workloadInput({
+				volumes: [
+					{ id: 'av_abc', mountPath: '/var/lib/app', readOnly: false },
+					{ id: 'av_def', mountPath: '/var/lib/media', readOnly: true, backing: 'node_volume', nodeVolumeId: 'vol_1' },
+				],
+			}),
+		);
+		expect(workload.volumes).toEqual([
+			{ id: 'av_abc', mountPath: '/var/lib/app', readOnly: false, backing: 'state_dir' },
+			{ id: 'av_def', mountPath: '/var/lib/media', readOnly: true, backing: 'node_volume', nodeVolumeId: 'vol_1' },
+		]);
+	});
+
+	test('rejects reserved mount points, traversal and duplicate mounts', () => {
+		const withVolumes = (volumes: unknown) =>
+			parseWorkload(workloadInput({ volumes }));
+		expect(() => withVolumes([{ id: 'av_1', mountPath: '/etc' }])).toThrow(/reserved|inside/);
+		expect(() => withVolumes([{ id: 'av_1', mountPath: '/var/lib/../etc' }])).toThrow(/normalized/);
+		expect(() => withVolumes([{ id: 'av_1', mountPath: '/data' }])).toThrow(/reserved|broad/);
+		expect(() =>
+			withVolumes([
+				{ id: 'av_1', mountPath: '/var/lib/app' },
+				{ id: 'av_2', mountPath: '/var/lib/app' },
+			]),
+		).toThrow(/same path/);
+		expect(() =>
+			withVolumes([{ id: 'av_1', mountPath: '/var/lib/app', backing: 'node_volume' }]),
+		).toThrow(/nodeVolumeId/);
+	});
+});

@@ -512,3 +512,63 @@ describe('env files and argv quoting', () => {
 		expect(renderExecStart(['bun', 'run'])).toBe('/usr/bin/env "bun" "run"');
 	});
 });
+
+describe('app volume mounts (plan 07)', () => {
+	test('process units bind each volume at its sandbox path, read-only when attached so', () => {
+		const unit = renderProcessUnit({
+			workload: workload({
+				volumes: [
+					{ id: 'av_1', mountPath: '/var/lib/app', readOnly: false, backing: 'state_dir' },
+					{ id: 'av_2', mountPath: '/var/lib/media', readOnly: true, backing: 'state_dir' },
+				],
+			}),
+			releaseDir: '/srv/skiff/releases/' + SHA,
+			envFile: '/run/skiff-workloads/wld_abc123/env',
+			secrets: [],
+			command: ['bun', 'run', 'start'],
+			envNames: [],
+			volumeMounts: [
+				{ hostPath: '/var/lib/skiff-workloads/apps/prj_abc123/av_1', mountPath: '/var/lib/app', readOnly: false },
+				{ hostPath: '/var/lib/skiff-workloads/apps/prj_abc123/av_2', mountPath: '/var/lib/media', readOnly: true },
+			],
+		});
+		expect(unit).toContain(
+			'BindPaths=/var/lib/skiff-workloads/apps/prj_abc123/av_1:/var/lib/app',
+		);
+		expect(unit).toContain('ReadWritePaths=/var/lib/app');
+		expect(unit).toContain(
+			'BindReadOnlyPaths=/var/lib/skiff-workloads/apps/prj_abc123/av_2:/var/lib/media',
+		);
+		expect(unit).not.toContain('ReadWritePaths=/var/lib/media');
+		// The legacy /data mount is not reused for app volumes.
+		expect(unit).not.toContain(':/data');
+	});
+
+	test('container units mount each volume, read-only when asked', () => {
+		const unit = renderContainerUnit({
+			workload: workload({
+				runtime: 'container',
+				image: 'docker.io/library/nginx:1',
+				socketActivation: false,
+				volumes: [
+					{ id: 'av_1', mountPath: '/var/lib/app', readOnly: false, backing: 'state_dir' },
+					{ id: 'av_2', mountPath: '/var/lib/media', readOnly: true, backing: 'state_dir' },
+				],
+			}),
+			image: 'docker.io/library/nginx:1',
+			envFile: '/run/skiff-workloads/wld_abc123/env',
+			dataDir: '/var/lib/skiff-workloads/wld_abc123',
+			secretsDir: null,
+			volumeMounts: [
+				{ hostPath: '/var/lib/skiff-workloads/apps/prj_abc123/av_1', mountPath: '/var/lib/app', readOnly: false },
+				{ hostPath: '/var/lib/skiff-workloads/apps/prj_abc123/av_2', mountPath: '/var/lib/media', readOnly: true },
+			],
+		});
+		expect(unit).toContain(
+			'Volume=/var/lib/skiff-workloads/apps/prj_abc123/av_1:/var/lib/app:Z',
+		);
+		expect(unit).toContain(
+			'Volume=/var/lib/skiff-workloads/apps/prj_abc123/av_2:/var/lib/media:ro:Z',
+		);
+	});
+});

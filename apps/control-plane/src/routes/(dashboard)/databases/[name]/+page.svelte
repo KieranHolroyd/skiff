@@ -1,28 +1,38 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
+	import { enhance } from '$app/forms';
+	import { goto, replaceState } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import ActivityIcon from '@lucide/svelte/icons/activity';
 	import ArchiveIcon from '@lucide/svelte/icons/archive';
 	import CableIcon from '@lucide/svelte/icons/cable';
-	import CloudUploadIcon from '@lucide/svelte/icons/cloud-upload';
-	import EyeIcon from '@lucide/svelte/icons/eye';
-	import EyeOffIcon from '@lucide/svelte/icons/eye-off';
+	import CalendarClockIcon from '@lucide/svelte/icons/calendar-clock';
 	import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
+	import GaugeIcon from '@lucide/svelte/icons/gauge';
+	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
+	import EyeOffIcon from '@lucide/svelte/icons/eye-off';
+	import LayersIcon from '@lucide/svelte/icons/layers';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PlugIcon from '@lucide/svelte/icons/plug';
 	import PlusIcon from '@lucide/svelte/icons/plus';
+	import PuzzleIcon from '@lucide/svelte/icons/puzzle';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
+	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import SlidersHorizontalIcon from '@lucide/svelte/icons/sliders-horizontal';
 	import TableIcon from '@lucide/svelte/icons/table';
 	import TerminalIcon from '@lucide/svelte/icons/terminal';
+	import TimerIcon from '@lucide/svelte/icons/timer';
 	import TrashIcon from '@lucide/svelte/icons/trash';
 	import UnplugIcon from '@lucide/svelte/icons/unplug';
-	import { databaseEnvNames, databaseExtensionAllowlist, type DatabaseCredentials } from '@skiff/contracts';
-	import { runAction } from '#lib/actions.js';
+	import UsersIcon from '@lucide/svelte/icons/users';
+	import {
+		databaseEnvNames,
+		databaseExtensionAllowlist,
+		type DatabaseCredentials
+	} from '@skiff/contracts';
+	import { notify, runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
 	import DetailList from '#lib/components/skiff/DetailList.svelte';
 	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
 	import MetricChart from '#lib/components/skiff/MetricChart.svelte';
@@ -30,20 +40,29 @@
 	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
-	import * as Card from '#lib/components/ui/card/index.js';
+	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
+	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as InputGroup from '#lib/components/ui/input-group/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
 	import { Spinner } from '#lib/components/ui/spinner/index.js';
+	import { Switch } from '#lib/components/ui/switch/index.js';
 	import * as Table from '#lib/components/ui/table/index.js';
 	import EmptyState from '../../_lib/EmptyState.svelte';
-	import PageHeader from '../../_lib/PageHeader.svelte';
 	import Panel from '../../_lib/Panel.svelte';
+	import RowMenu from '../../_lib/RowMenu.svelte';
+	import CopyValue from '../../_lib/service/CopyValue.svelte';
+	import DangerZone from '../../_lib/service/DangerZone.svelte';
+	import RangePicker from '../../_lib/service/RangePicker.svelte';
+	import StatStrip, { type Stat } from '../../_lib/service/StatStrip.svelte';
+	import { readTab, tabHref } from '../../_lib/service/sections.js';
 	import { formatBytes, formatDate, formatDateTime, formatDuration } from '../../_lib/format.js';
 	import { purgeCountdown } from '../../_lib/operations/copy.js';
+	import DatabaseHeader from '../_lib/DatabaseHeader.svelte';
 	import StorageMeter from '../_lib/StorageMeter.svelte';
-	import { databaseChart, databaseTotals } from '../_lib/database-series.js';
+	import { databaseChart, databaseTotals, storagePercent } from '../_lib/database-series.js';
+	import { DATABASE_DEFAULT_TAB, DATABASE_TABS, type DatabaseTab } from '../_lib/database-tabs.js';
 	import type { PageProps } from './$types';
 
 	interface DatabaseFormResult {
@@ -58,18 +77,67 @@
 	const errors = $derived(result?.fieldErrors ?? {});
 
 	const db = $derived(data.database);
+	const can = $derived(data.dbCan);
 	const deleted = $derived(db.deletedAt !== null);
+	const editable = $derived(can.update && !deleted);
 	const nodeLabel = $derived(db.nodeName ?? db.nodeId);
 	const hostPort = $derived(db.internalHost.process.split(':').at(-1) ?? '');
-	const defaultEnvNames = $derived(
-		databaseEnvNames('DATABASE', { pooler: db.pooler.enabled, tls: db.tls.enabled })
+	const defaultEnvNames = $derived([
+		...databaseEnvNames('DATABASE'),
+		...(db.pooler.enabled ? ['DATABASE_POOL_URL', 'DATABASE_POOL_HOST', 'DATABASE_POOL_PORT'] : [])
+	]);
+
+	// --- sections ------------------------------------------------------------------------------
+
+	let tab = $state<DatabaseTab>(
+		readTab(page.url.searchParams.get('tab'), DATABASE_TABS, DATABASE_DEFAULT_TAB)
 	);
+
+	/** Switch sections in place (no reload), keeping `?tab=` deep-linkable. */
+	function setTab(next: DatabaseTab) {
+		tab = next;
+		// eslint-disable-next-line svelte/no-navigation-without-resolve -- same route, only `?tab` changes
+		replaceState(tabHref(page.url.pathname + page.url.search, next, DATABASE_DEFAULT_TAB), {});
+	}
+
+	// --- formatting ----------------------------------------------------------------------------
+
+	const numberFormat = new Intl.NumberFormat('en-GB');
+	const rateFormat = new Intl.NumberFormat('en-GB', { maximumFractionDigits: 1 });
+	const compactFormat = new Intl.NumberFormat('en-GB', {
+		notation: 'compact',
+		maximumFractionDigits: 1
+	});
+	const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
+	const rate = (value: number) => rateFormat.format(value);
+	const count = (value: number) =>
+		value >= 10_000 ? compactFormat.format(value) : rateFormat.format(value);
+
+	function ago(iso: string | null): string {
+		if (!iso) return 'never';
+		const ms = Date.parse(iso);
+		if (!Number.isFinite(ms)) return 'never';
+		return `${formatDuration(Math.max(0, (Date.now() - ms) / 1000))} ago`;
+	}
+
+	/** Re-run page data after an inline form and toast the outcome. */
+	const submitInline = () => {
+		return async ({
+			result: outcome,
+			update
+		}: {
+			result: import('@sveltejs/kit').ActionResult;
+			update: (options?: { reset?: boolean }) => Promise<void>;
+		}) => {
+			await update({ reset: false });
+			notify(outcome);
+		};
+	};
 
 	// --- credentials (D58): revealed on demand, audited, never in page data -------------------
 
 	let credentials = $state<DatabaseCredentials | null>(null);
 	let revealing = $state(false);
-	let showPassword = $state(false);
 
 	async function reveal() {
 		revealing = true;
@@ -78,53 +146,12 @@
 		if (outcome.type === 'success') {
 			credentials =
 				(outcome.data as { credentials?: DatabaseCredentials } | undefined)?.credentials ?? null;
-			showPassword = false;
 		}
 	}
 
-	function hide() {
-		credentials = null;
-		showPassword = false;
-	}
-
-	function restart(target: 'database' | 'pooler') {
-		askConfirm({
-			title: target === 'pooler' ? `Restart the pooler for ${db.name}?` : `Restart ${db.name}?`,
-			description:
-				target === 'pooler'
-					? 'Only PgBouncer restarts. Postgres and its existing connections are untouched; apps reconnect through the pooler in a few seconds.'
-					: 'The database container and its pooler restart. Attached apps lose their connections briefly and reconnect when the database is back.',
-			confirmLabel: 'Restart',
-			tone: 'danger',
-			action: '?/restart',
-			fields: { target }
-		});
-	}
-
-	function rotate(role: 'owner' | 'monitor') {
-		askConfirm({
-			title: `Rotate the ${role} password?`,
-			description:
-				'The node runs ALTER ROLE and verifies the new password before Skiff swaps the stored secret. Attached apps restart with the new value; a failed rotation leaves the old one working.',
-			confirmLabel: 'Rotate',
-			tone: 'danger',
-			action: '?/rotate',
-			fields: { role }
-		});
-	}
-
-	const mask = (value: string) => '•'.repeat(Math.min(24, Math.max(12, value.length)));
 	const maskedUrl = $derived(
 		credentials
 			? credentials.url.replace(`:${encodeURIComponent(credentials.password)}@`, ':••••••••@')
-			: ''
-	);
-	const maskedPoolerUrl = $derived(
-		credentials?.poolerUrl
-			? credentials.poolerUrl.replace(
-					`:${encodeURIComponent(credentials.password)}@`,
-					':••••••••@'
-				)
 			: ''
 	);
 
@@ -149,18 +176,28 @@
 		});
 	}
 
+	const canAttach = $derived(can.attach && !deleted && data.projects.length > 0);
+
 	// --- backups -------------------------------------------------------------------------------
 
 	const backups = $derived(data.backups);
-	const backupPolicy = $derived(db.backup);
+	const policy = $derived(db.backup);
+	const lastGood = $derived(backups.find((backup) => backup.status === 'ok') ?? null);
 	let restoreOpen = $state(false);
 	let restoreBackupId = $state('');
 	let restoreBackupName = $state('');
+	let policyOpen = $state(false);
+	let policyEnabled = $state(true);
 
 	function openRestore(backupId: string) {
 		restoreBackupId = backupId;
 		restoreBackupName = `${db.name}-restored`;
 		restoreOpen = true;
+	}
+
+	function openPolicy() {
+		policyEnabled = policy?.enabled ?? true;
+		policyOpen = true;
 	}
 
 	function deleteBackup(backupId: string) {
@@ -176,13 +213,6 @@
 
 	// --- metrics -------------------------------------------------------------------------------
 
-	const numberFormat = new Intl.NumberFormat('en-GB');
-	const rateFormat = new Intl.NumberFormat('en-GB', { maximumFractionDigits: 1 });
-	const compactFormat = new Intl.NumberFormat('en-GB', {
-		notation: 'compact',
-		maximumFractionDigits: 1
-	});
-
 	const windowFrom = $derived(Date.parse(data.range.from));
 	const windowTo = $derived(Date.parse(data.range.to) + 60_000);
 	const chart = $derived(
@@ -196,79 +226,83 @@
 	const ratePer = $derived(
 		chart.span > 1 ? `per minute · ${chart.spanLabel} averages` : 'per minute'
 	);
+	const sizeBytes = $derived(totals.latestSizeBytes ?? db.sizeBytes);
 
-	const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
-	const rate = (value: number) => rateFormat.format(value);
-	const count = (value: number) =>
-		value >= 10_000 ? compactFormat.format(value) : rateFormat.format(value);
-
-	const kpis = $derived([
+	const overviewStats = $derived<Stat[]>([
 		{
-			label: 'Size',
-			value: formatBytes(totals.latestSizeBytes ?? db.sizeBytes),
-			caption: `of ${formatBytes(db.storageMb * 1024 * 1024)} budget`
+			label: 'Storage',
+			icon: HardDriveIcon,
+			value: sizeBytes === null ? '—' : formatBytes(sizeBytes),
+			unit: `/ ${formatBytes(db.storageMb * 1024 * 1024)}`,
+			meter: storagePercent(sizeBytes, db.storageMb),
+			caption: 'Budget for alerts, not a hard quota'
 		},
 		{
 			label: 'Connections',
+			icon: UsersIcon,
 			value:
 				totals.latestConnections === null ? '—' : numberFormat.format(totals.latestConnections),
-			caption: totals.maxConnections
-				? `of ${numberFormat.format(totals.maxConnections)} max`
-				: 'latest'
+			unit: totals.maxConnections ? `/ ${numberFormat.format(totals.maxConnections)}` : undefined,
+			caption: db.pooler.enabled ? 'PgBouncer pooling on' : 'Direct connections'
 		},
+		{
+			label: 'Cache hit ratio',
+			icon: GaugeIcon,
+			value: totals.cacheHitRatio === null ? '—' : percent(totals.cacheHitRatio),
+			caption: `Last ${data.range.label}`
+		},
+		{
+			label: 'Last backup',
+			icon: ArchiveIcon,
+			value: lastGood ? ago(lastGood.finishedAt ?? lastGood.startedAt) : 'Never',
+			caption: !policy
+				? 'No schedule'
+				: !policy.enabled
+					? 'Schedule paused'
+					: policy.nextBackupAt
+						? `Next ${formatDateTime(policy.nextBackupAt)}`
+						: 'Scheduled'
+		}
+	]);
+
+	const metricStats = $derived<Stat[]>([
 		{
 			label: 'Transactions',
 			value: compactFormat.format(totals.commits + totals.rollbacks),
 			caption: `${numberFormat.format(totals.rollbacks)} rolled back`
 		},
 		{
+			label: 'Peak connections',
+			value: totals.maxConnections ? numberFormat.format(totals.maxConnections) : '—',
+			caption: 'Configured maximum'
+		},
+		{
 			label: 'Cache hit ratio',
 			value: totals.cacheHitRatio === null ? '—' : percent(totals.cacheHitRatio),
-			caption:
-				totals.deadlocks > 0 ? `${numberFormat.format(totals.deadlocks)} deadlocks` : 'buffer cache'
+			caption: 'Shared buffers vs disk'
+		},
+		{
+			label: 'Deadlocks',
+			value: numberFormat.format(totals.deadlocks),
+			caption: totals.deadlocks > 0 ? 'Check slow queries' : 'None in this window'
 		}
 	]);
 
-	// --- tables / misc -------------------------------------------------------------------------
-
-	function ago(iso: string | null): string {
-		if (!iso) return 'never';
-		const ms = Date.parse(iso);
-		if (!Number.isFinite(ms)) return 'never';
-		return `${formatDuration(Math.max(0, (Date.now() - ms) / 1000))} ago`;
-	}
-
-	// --- settings and danger zone --------------------------------------------------------------
+	// --- settings ------------------------------------------------------------------------------
 
 	let resizeOpen = $state(false);
 
-	function deleteDatabase() {
+	function setPooler(next: boolean) {
+		if (next === db.pooler.enabled) return;
 		askConfirm({
-			title: `Delete ${db.name}?`,
-			description:
-				db.attachments.length > 0
-					? `It is attached to ${db.attachments.map((item) => item.projectSlug).join(', ')}. Detach it first; the delete will be refused until then.`
-					: 'The container stops and the database moves to the trash for 7 days. Its data stays on the node, so a restore is lossless.',
-			confirmLabel: 'Move to trash',
-			tone: 'danger',
-			typeToConfirm: db.name,
-			action: '?/delete'
-		});
-	}
-
-	function restore() {
-		void runAction('?/restore');
-	}
-
-	function purge() {
-		askConfirm({
-			title: `Delete ${db.name} permanently?`,
-			description:
-				'Its node deletes the data directory and the database is gone for good. This cannot be undone.',
-			confirmLabel: 'Delete permanently',
-			tone: 'danger',
-			typeToConfirm: db.name,
-			action: '?/purge'
+			title: next ? 'Turn on the connection pooler?' : 'Turn off the connection pooler?',
+			description: next
+				? 'A PgBouncer sidecar starts next to Postgres in transaction-pooling mode. Attached apps restart and also receive DATABASE_POOL_URL.'
+				: 'The PgBouncer sidecar stops. Attached apps restart without the DATABASE_POOL_* variables, so anything using them must switch to DATABASE_URL first.',
+			confirmLabel: next ? 'Turn on' : 'Turn off',
+			tone: next ? 'default' : 'danger',
+			action: '?/update',
+			fields: { pooler: next ? 'on' : '' }
 		});
 	}
 
@@ -284,51 +318,19 @@
 </svelte:head>
 
 <div class="space-y-6">
-	<PageHeader eyebrow="Database" title={db.name} target="page.database">
-		{#snippet meta()}
-			<div class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-				{#if deleted}
-					<StatusBadge status="deleted" />
-				{:else}
-					<StatusBadge status={db.status} />
-				{/if}
-				<Badge variant="outline">{db.engineLabel} {db.version}</Badge>
-				<span class="font-mono text-xs">on {nodeLabel}</span>
-				<span aria-hidden="true">·</span>
-				<span class="text-xs">
-					Created <time datetime={db.createdAt}>{formatDate(db.createdAt)}</time>
-				</span>
-			</div>
-		{/snippet}
-		<Button
-			variant="outline"
-			href={resolve('/(dashboard)/databases/[name]/logs', { name: db.name })}
-		>
-			<TerminalIcon />
-			Logs
-		</Button>
-	</PageHeader>
+	<DatabaseHeader {db} {can} active={tab} backups={backups.length} onselect={setTab} />
 
 	{#if deleted}
 		<Notice tone="warning" title="This database is in the trash">
-			The container is stopped and its data is kept on {nodeLabel}.
-			{purgeCountdown(db.purgeAt)}.
-			{#if data.dbCan.delete}
-				<span class="mt-2 flex flex-wrap gap-2">
-					<Button size="sm" variant="outline" onclick={restore}><RotateCcwIcon />Restore</Button>
-					<Button size="sm" variant="destructive" onclick={purge}>
-						<TrashIcon />Delete permanently
-					</Button>
-				</span>
-			{/if}
+			The container is stopped and its data is kept on {nodeLabel}. {purgeCountdown(db.purgeAt)}.
+			Restore it from the buttons above to bring it back with its data.
 		</Notice>
 	{:else}
 		{#if created}
 			<Notice tone="success" title="Database created">
 				{nodeLabel} pulls the {db.engineLabel}
 				{db.version} image and initialises the cluster; the first start can take a minute.
-				<Button variant="link" size="sm" class="h-auto p-0" onclick={dismissCreated}>Dismiss</Button
-				>
+				<Button variant="link" size="sm" class="h-auto p-0" onclick={dismissCreated}>Dismiss</Button>
 			</Notice>
 		{/if}
 		{#if db.message}
@@ -336,366 +338,167 @@
 		{/if}
 	{/if}
 
-	<div class="grid items-start gap-5 xl:grid-cols-2">
-		<!-- Connection ------------------------------------------------------------------------ -->
-		<Panel
-			title="Connection"
-			icon={CableIcon}
-			description="Attached apps on {nodeLabel} receive these as environment variables at start-up."
-		>
-			{#snippet actions()}
-				{#if data.dbCan.credentials && !deleted}
-					{#if credentials}
-						<Button variant="outline" size="sm" onclick={hide}><EyeOffIcon />Hide</Button>
-					{:else}
-						<Button variant="outline" size="sm" onclick={reveal} disabled={revealing}>
-							{#if revealing}<Spinner />{:else}<KeyRoundIcon />{/if}
-							Reveal credentials
-						</Button>
-					{/if}
-					<Button variant="ghost" size="sm" onclick={() => rotate('owner')}>
-						<RotateCcwIcon />Rotate
-					</Button>
-				{/if}
-			{/snippet}
+	{#if tab === 'overview'}
+		<!-- Overview ------------------------------------------------------------------------------ -->
+		<StatStrip label="Database summary" stats={overviewStats} />
 
-			<DetailList>
-				<dt>Database</dt>
-				<dd class="font-mono text-xs">{db.databaseName}</dd>
-				<dt>User</dt>
-				<dd class="font-mono text-xs">{db.username}</dd>
-				<dt>Process apps</dt>
-				<dd class="flex items-center justify-end gap-1 font-mono text-xs">
-					<span class="truncate">{db.internalHost.process}</span>
-					<CopyButton value={db.internalHost.process} label="Copy host" iconOnly />
-				</dd>
-				<dt>Container apps</dt>
-				<dd class="flex items-center justify-end gap-1 font-mono text-xs">
-					<span class="truncate">{db.internalHost.container}</span>
-					<CopyButton value={db.internalHost.container} label="Copy host" iconOnly />
-				</dd>
-				{#if db.pooler.enabled}
-					<dt>Pooled (process)</dt>
-					<dd class="flex items-center justify-end gap-1 font-mono text-xs">
-						<span class="truncate">{db.pooler.host.process}</span>
-						<CopyButton value={db.pooler.host.process} label="Copy pooler host" iconOnly />
-					</dd>
-					<dt>Pooled (container)</dt>
-					<dd class="flex items-center justify-end gap-1 font-mono text-xs">
-						<span class="truncate">{db.pooler.host.container}</span>
-						<CopyButton value={db.pooler.host.container} label="Copy pooler host" iconOnly />
-					</dd>
-				{/if}
-				<dt>TLS</dt>
-				<dd class="font-mono text-xs">
-					{db.tls.enabled ? `on (${db.tls.mode})` : 'off'}
-				</dd>
-				{#if db.tls.error}
-					<dt>Warning</dt>
-					<dd class="text-xs text-amber-600">{db.tls.error}</dd>
-				{/if}
-				{#if credentials}
-					<dt>Password</dt>
-					<dd class="flex items-center justify-end gap-1 font-mono text-xs">
-						<span class="truncate">
-							{showPassword ? credentials.password : mask(credentials.password)}
-						</span>
-						<Button
-							variant="ghost"
-							size="icon-xs"
-							aria-label={showPassword ? 'Hide password' : 'Show password'}
-							onclick={() => (showPassword = !showPassword)}
-						>
-							{#if showPassword}<EyeOffIcon />{:else}<EyeIcon />{/if}
-						</Button>
-						<CopyButton value={credentials.password} label="Copy password" iconOnly />
-					</dd>
-					<dt>Direct URL</dt>
-					<dd class="flex items-center justify-end gap-1 font-mono text-xs">
-						<span class="truncate" title="Copy to see the full URL">
-							{showPassword ? credentials.url : maskedUrl}
-						</span>
-						<CopyButton value={credentials.url} label="Copy direct URL" iconOnly />
-					</dd>
-					{#if credentials.poolerUrl}
-						<dt>Pooled URL</dt>
-						<dd class="flex items-center justify-end gap-1 font-mono text-xs">
-							<span class="truncate" title="Copy to see the full URL">
-								{showPassword ? credentials.poolerUrl : maskedPoolerUrl}
-							</span>
-							<CopyButton value={credentials.poolerUrl} label="Copy pooled URL" iconOnly />
-						</dd>
-					{/if}
-				{/if}
-			</DetailList>
-
-			<div class="mt-4 space-y-1.5">
-				<p class="text-xs text-muted-foreground">
-					Env vars an attached app receives (with its prefix, default <code class="font-mono"
-						>DATABASE</code
-					>):
-				</p>
-				<div class="flex flex-wrap gap-1.5">
-					{#each defaultEnvNames as name (name)}
-						<Badge variant="secondary" class="font-mono font-normal">{name}</Badge>
-					{/each}
-				</div>
-			</div>
-
-			{#snippet footer()}
-				<span class="flex items-start gap-2">
-					<TerminalIcon class="mt-0.5 size-3.5 shrink-0" />
-					<span>
+		<div class="grid items-start gap-5 xl:grid-cols-5">
+			<Panel
+				title="Connection"
+				icon={CableIcon}
+				description="Attached apps on {nodeLabel} receive these as environment variables at start-up."
+				class="xl:col-span-3"
+			>
+				{#snippet actions()}
+					{#if can.credentials && !deleted}
 						{#if credentials}
-							{credentials.note}
+							<Button variant="outline" size="sm" onclick={() => (credentials = null)}>
+								<EyeOffIcon />Hide credentials
+							</Button>
 						{:else}
-							Listens on loopback on node “{nodeLabel}” only, never on a public or WireGuard
-							address. From elsewhere, tunnel:
-							<code class="font-mono">ssh -L {hostPort}:127.0.0.1:{hostPort} &lt;node&gt;</code>.
+							<Button variant="outline" size="sm" onclick={reveal} disabled={revealing}>
+								{#if revealing}<Spinner />{:else}<KeyRoundIcon />{/if}
+								Reveal credentials
+							</Button>
 						{/if}
-						{#if !data.dbCan.credentials}
-							Revealing the password needs the <code class="font-mono">database:credentials</code>
-							permission.
-						{/if}
+					{/if}
+				{/snippet}
+
+				<DetailList>
+					<dt>Database</dt>
+					<dd><CopyValue value={db.databaseName} label="database name" /></dd>
+					<dt>User</dt>
+					<dd><CopyValue value={db.username} label="user" /></dd>
+					<dt>Host · process apps</dt>
+					<dd><CopyValue value={db.internalHost.process} label="host" /></dd>
+					<dt>Host · container apps</dt>
+					<dd><CopyValue value={db.internalHost.container} label="host" /></dd>
+					{#if db.pooler.enabled}
+						<dt>Pooled · process</dt>
+						<dd><CopyValue value={db.pooler.host.process} label="pooler host" /></dd>
+						<dt>Pooled · container</dt>
+						<dd><CopyValue value={db.pooler.host.container} label="pooler host" /></dd>
+					{/if}
+					{#if credentials}
+						<dt>Password</dt>
+						<dd><CopyValue value={credentials.password} label="password" secret /></dd>
+						<dt>Connection URL</dt>
+						<dd><CopyValue value={credentials.url} label="URL" display={maskedUrl} secret /></dd>
+					{/if}
+				</DetailList>
+
+				<div class="mt-4 space-y-2 rounded-lg border bg-muted/30 p-3">
+					<p class="text-xs text-muted-foreground">
+						An attached app receives these, with its prefix (default
+						<code class="font-mono">DATABASE</code>):
+					</p>
+					<div class="flex flex-wrap gap-1.5">
+						{#each defaultEnvNames as name (name)}
+							<Badge variant="secondary" class="font-mono font-normal">{name}</Badge>
+						{/each}
+					</div>
+				</div>
+
+				{#snippet footer()}
+					<span class="flex items-start gap-2">
+						<TerminalIcon class="mt-0.5 size-3.5 shrink-0" />
+						<span>
+							{#if credentials}
+								{credentials.note}
+							{:else}
+								Listens on loopback on {nodeLabel} only. From elsewhere, tunnel:
+								<code class="font-mono">ssh -L {hostPort}:127.0.0.1:{hostPort} &lt;node&gt;</code>
+							{/if}
+							{#if !can.credentials}
+								Revealing the password needs <code class="font-mono">database:credentials</code>.
+							{/if}
+						</span>
 					</span>
-				</span>
-			{/snippet}
-		</Panel>
+				{/snippet}
+			</Panel>
 
-		<!-- Attachments ----------------------------------------------------------------------- -->
-		<Panel
-			title="Attached projects"
-			icon={PlugIcon}
-			count={db.attachments.length}
-			description="Apps run on the database's node (D56). Attaching or detaching restarts the app; no redeploy needed."
-			flush
-		>
-			{#snippet actions()}
-				{#if data.dbCan.attach && !deleted && data.projects.length > 0}
-					<Button size="sm" variant="outline" onclick={openAttach}><PlusIcon />Attach</Button>
+			<Panel
+				title="Attached projects"
+				icon={PlugIcon}
+				count={db.attachments.length}
+				description="Apps run on the database's node. Attaching or detaching restarts the app."
+				flush
+				class="xl:col-span-2"
+			>
+				{#snippet actions()}
+					{#if canAttach && db.attachments.length > 0}
+						<Button size="sm" variant="outline" onclick={openAttach}><PlusIcon />Attach</Button>
+					{/if}
+				{/snippet}
+
+				{#if result?.warning}
+					<div class="px-4 pt-4"><Notice tone="warning">{result.warning}</Notice></div>
 				{/if}
-			{/snippet}
 
-			{#if result?.warning}
-				<div class="px-4 pt-4">
-					<Notice tone="warning">{result.warning}</Notice>
-				</div>
-			{/if}
-
-			{#if db.attachments.length === 0}
-				<div class="p-4">
-					<EmptyState
-						icon={UnplugIcon}
-						compact
-						title="Not attached"
-						description="Attach a process or container project to inject the connection env. Static projects can't use a database."
-					>
-						{#if data.dbCan.attach && !deleted && data.projects.length > 0}
-							<Button size="sm" onclick={openAttach}><PlusIcon />Attach a project</Button>
-						{/if}
-					</EmptyState>
-				</div>
-			{:else}
-				<Table.Root>
-					<Table.Header>
-						<Table.Row>
-							<Table.Head class="pl-4">Project</Table.Head>
-							<Table.Head>Env</Table.Head>
-							<Table.Head class="hidden sm:table-cell">Attached</Table.Head>
-							<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
-						</Table.Row>
-					</Table.Header>
-					<Table.Body>
+				{#if db.attachments.length === 0}
+					<div class="p-4">
+						<EmptyState
+							icon={UnplugIcon}
+							compact
+							title="Not attached yet"
+							description="Attach a process or container project to inject the connection env. Static projects can't use a database."
+						>
+							{#if canAttach}
+								<Button size="sm" onclick={openAttach}><PlusIcon />Attach a project</Button>
+							{/if}
+						</EmptyState>
+					</div>
+				{:else}
+					<ul class="divide-y">
 						{#each db.attachments as attachment (attachment.projectId)}
-							<Table.Row>
-								<Table.Cell class="pl-4">
+							<li class="flex items-center gap-3 px-4 py-3">
+								<span
+									class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
+								>
+									<FolderKanbanIcon class="size-4" />
+								</span>
+								<div class="min-w-0 flex-1">
 									<a
 										href={resolve('/(dashboard)/projects/[slug]', { slug: attachment.projectSlug })}
-										class="inline-flex items-center gap-1.5 font-mono text-xs font-medium underline-offset-4 hover:underline"
+										class="font-mono text-sm font-medium underline-offset-4 hover:underline"
 									>
-										<FolderKanbanIcon class="size-3.5 text-muted-foreground" />
 										{attachment.projectSlug}
 									</a>
-								</Table.Cell>
-								<Table.Cell>
-									<span class="font-mono text-xs" title={attachment.envNames.join(', ')}>
-										{attachment.envPrefix}_URL
-										<span class="text-muted-foreground">+{attachment.envNames.length - 1}</span>
-									</span>
-								</Table.Cell>
-								<Table.Cell class="hidden text-xs text-muted-foreground sm:table-cell">
-									<time datetime={attachment.createdAt}>{formatDate(attachment.createdAt)}</time>
-								</Table.Cell>
-								<Table.Cell class="pr-4 text-right">
-									{#if data.dbCan.attach}
-										<Button
-											variant="ghost-danger"
-											size="icon-sm"
-											aria-label="Detach from {attachment.projectSlug}"
-											onclick={() => detach(attachment.projectSlug, attachment.envPrefix)}
-										>
-											<UnplugIcon />
-										</Button>
-									{/if}
-								</Table.Cell>
-							</Table.Row>
-						{/each}
-					</Table.Body>
-				</Table.Root>
-			{/if}
-		</Panel>
-	</div>
-
-	<!-- Backups --------------------------------------------------------------------------------- -->
-	<Panel
-		title="Backups"
-		description="Logical dumps streamed to the platform object store. Restores always create a new database and verify it."
-	>
-		{#snippet actions()}
-			{#if data.dbCan.update && !deleted}
-				<form method="POST" action="?/backup">
-					<Button size="sm" variant="outline" type="submit"><CloudUploadIcon />Back up now</Button>
-				</form>
-			{/if}
-		{/snippet}
-		{#if backupPolicy}
-			<div class="flex flex-wrap items-center gap-3 border-b px-4 py-3 text-xs text-muted-foreground">
-				<span>
-					{backupPolicy.enabled ? 'Scheduled' : 'Paused'} · <span class="font-mono">{backupPolicy.schedule}</span> UTC
-					· {backupPolicy.retentionDays}-day retention
-				</span>
-				{#if backupPolicy.nextBackupAt}
-					<span>Next {formatDateTime(backupPolicy.nextBackupAt)}</span>
-				{/if}
-				<span>
-					Last verified restore:
-					{backupPolicy.lastVerifiedAt ? formatDateTime(backupPolicy.lastVerifiedAt) : 'never'}
-				</span>
-				{#if backupPolicy.lastBackupError}
-					<span class="text-destructive">{backupPolicy.lastBackupError}</span>
-				{/if}
-			</div>
-		{/if}
-		{#if backups.length === 0}
-			<div class="p-4">
-				<EmptyState
-					icon={ArchiveIcon}
-					compact
-					title="No backups yet"
-					description="Take one now, or wait for the daily schedule. A dump that has never been restored is not yet proven."
-				/>
-			</div>
-		{:else}
-			<Table.Root>
-				<Table.Header>
-					<Table.Row>
-						<Table.Head class="pl-4">Backup</Table.Head>
-						<Table.Head>Status</Table.Head>
-						<Table.Head>Size</Table.Head>
-						<Table.Head class="hidden sm:table-cell">Created</Table.Head>
-						<Table.Head class="hidden md:table-cell">Verified</Table.Head>
-						<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
-					</Table.Row>
-				</Table.Header>
-				<Table.Body>
-					{#each backups as backup (backup.id)}
-						<Table.Row>
-							<Table.Cell class="pl-4">
-								<span class="font-mono text-xs">{backup.id}</span>
-								<div class="text-xs text-muted-foreground">
-									{backup.kind}{backup.pinned ? ' · pinned' : ''}
-								</div>
-							</Table.Cell>
-							<Table.Cell><StatusBadge status={backup.status} /></Table.Cell>
-							<Table.Cell class="text-xs tabular-nums">
-								{backup.sizeBytes === null ? '—' : formatBytes(backup.sizeBytes)}
-							</Table.Cell>
-							<Table.Cell class="hidden text-xs text-muted-foreground sm:table-cell">
-								{formatDateTime(backup.finishedAt ?? backup.startedAt)}
-							</Table.Cell>
-							<Table.Cell class="hidden text-xs md:table-cell">
-								{backup.verifiedAt ? formatDateTime(backup.verifiedAt) : '—'}
-							</Table.Cell>
-							<Table.Cell class="pr-4 text-right">
-								{#if backup.status === 'ok' && backupPolicy?.pendingRestoreId === null}
-									<Button
-										size="sm"
-										variant="ghost"
-										disabled={deleted}
-										onclick={() => openRestore(backup.id)}
+									<p
+										class="truncate font-mono text-xs text-muted-foreground"
+										title={attachment.envNames.join(', ')}
 									>
-										<RotateCcwIcon />Restore
-									</Button>
-								{/if}
-								{#if data.dbCan.delete && backup.status !== 'pending' && backup.status !== 'running'}
+										{attachment.envPrefix}_URL +{attachment.envNames.length - 1} · since
+										{formatDate(attachment.createdAt)}
+									</p>
+								</div>
+								{#if can.attach}
 									<Button
 										variant="ghost-danger"
 										size="icon-sm"
-										aria-label="Delete backup {backup.id}"
-										onclick={() => deleteBackup(backup.id)}
+										aria-label="Detach from {attachment.projectSlug}"
+										title="Detach"
+										onclick={() => detach(attachment.projectSlug, attachment.envPrefix)}
 									>
-										<TrashIcon />
+										<UnplugIcon />
 									</Button>
 								{/if}
-							</Table.Cell>
-						</Table.Row>
-					{/each}
-				</Table.Body>
-			</Table.Root>
-		{/if}
-		{#if data.dbCan.update && !deleted && backupPolicy}
-			<form method="POST" action="?/backup-policy" class="flex flex-wrap items-end gap-3 border-t px-4 py-3">
-				<label class="flex items-center gap-2 text-xs">
-					<input type="checkbox" name="enabled" checked={backupPolicy.enabled} />
-					Scheduled
-				</label>
-				<label class="flex flex-col gap-1 text-xs">
-					<span class="text-muted-foreground">Cron (UTC)</span>
-					<input
-						name="schedule"
-						value={backupPolicy.schedule}
-						class="h-8 w-40 rounded-md border bg-background px-2 font-mono text-xs"
-					/>
-				</label>
-				<label class="flex flex-col gap-1 text-xs">
-					<span class="text-muted-foreground">Retention days</span>
-					<input
-						name="retentionDays"
-						type="number"
-						min="1"
-						max="365"
-						value={backupPolicy.retentionDays}
-						class="h-8 w-24 rounded-md border bg-background px-2 font-mono text-xs"
-					/>
-				</label>
-				<Button size="sm" variant="outline" type="submit">Save policy</Button>
-			</form>
-		{/if}
-	</Panel>
-
-	<!-- Metrics --------------------------------------------------------------------------------- -->
-	<section class="space-y-4" aria-labelledby="database-metrics">
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</Panel>
+		</div>
+	{:else if tab === 'metrics'}
+		<!-- Metrics ------------------------------------------------------------------------------- -->
 		<div class="flex flex-wrap items-end justify-between gap-3">
 			<div>
-				<h2 id="database-metrics" class="text-xs font-medium text-muted-foreground">
-					Metrics · last {data.range.label}
-				</h2>
+				<h2 class="text-base font-semibold">Last {data.range.label}</h2>
 				<p class="text-sm text-muted-foreground">
 					Sampled once a minute by the node's agent as a read-only monitor role.
 				</p>
 			</div>
-			<div class="flex items-center gap-1 rounded-lg border bg-muted/30 p-1">
-				{#each data.ranges as option (option.key)}
-					<Button
-						href={data.rangeLinks[option.key]}
-						variant={option.key === data.range.key ? 'secondary' : 'ghost'}
-						size="sm"
-						class="h-7 px-2.5 text-xs"
-					>
-						{option.shortLabel}
-					</Button>
-				{/each}
-			</div>
+			<RangePicker ranges={data.ranges} current={data.range.key} links={data.rangeLinks} tab="metrics" />
 		</div>
 
 		{#if !data.telemetryAvailable}
@@ -713,21 +516,7 @@
 					: 'Stats arrive about a minute after the database starts.'}
 			/>
 		{:else}
-			<section class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-label="Database summary">
-				{#each kpis as kpi (kpi.label)}
-					<Card.Root class="gap-3">
-						<Card.Header>
-							<Card.Description class="text-xs font-medium text-muted-foreground"
-								>{kpi.label}</Card.Description
-							>
-							<Card.Title class="text-2xl leading-none font-semibold tracking-tight tabular-nums">
-								{kpi.value}
-							</Card.Title>
-						</Card.Header>
-						<Card.Footer class="text-xs text-muted-foreground">{kpi.caption}</Card.Footer>
-					</Card.Root>
-				{/each}
-			</section>
+			<StatStrip label="Metrics summary" stats={metricStats} />
 
 			<div class="grid items-start gap-5 xl:grid-cols-2">
 				<Panel title="Size" description="On-disk size of the database.">
@@ -737,6 +526,7 @@
 						to={windowTo}
 						interval={data.range.interval}
 						format={formatBytes}
+						reference={{ label: 'budget', value: db.storageMb * 1024 * 1024 }}
 						series={[
 							{
 								label: 'size',
@@ -750,9 +540,7 @@
 				</Panel>
 				<Panel
 					title="Connections"
-					description="Active and idle backends{chart.span > 1
-						? `, ${chart.spanLabel} averages`
-						: ''}."
+					description="Active and idle backends{chart.span > 1 ? `, ${chart.spanLabel} averages` : ''}."
 				>
 					<MetricChart
 						buckets={chartBuckets}
@@ -799,10 +587,7 @@
 						label="Transactions per minute over time"
 					/>
 				</Panel>
-				<Panel
-					title="Cache hit ratio"
-					description="Blocks served from shared buffers instead of disk."
-				>
+				<Panel title="Cache hit ratio" description="Blocks served from shared buffers instead of disk.">
 					<MetricChart
 						buckets={chartBuckets}
 						from={windowFrom}
@@ -844,235 +629,431 @@
 				</Panel>
 			</div>
 		{/if}
-	</section>
-
-	<!-- Tables ---------------------------------------------------------------------------------- -->
-	<Panel
-		title="Tables"
-		icon={TableIcon}
-		count={db.tables.length}
-		description={db.statsAt
-			? `Largest tables, from a snapshot taken ${ago(db.statsAt)} (refreshed every five minutes).`
-			: 'Largest tables, refreshed every five minutes once the database runs.'}
-		flush
-	>
-		{#if db.tables.length === 0}
-			<div class="p-4">
-				<EmptyState
-					icon={TableIcon}
-					compact
-					title={db.statsAt ? 'No tables yet' : 'No snapshot yet'}
-					description={db.statsAt
-						? 'Create tables from your app or a migration and they show up here.'
-						: 'The agent sends the first table snapshot a few minutes after the database starts.'}
-				/>
-			</div>
-		{:else}
-			<Table.Root>
-				<Table.Header>
-					<Table.Row>
-						<Table.Head class="pl-4">Table</Table.Head>
-						<Table.Head class="text-right">Rows (est.)</Table.Head>
-						<Table.Head class="text-right">Size</Table.Head>
-						<Table.Head class="hidden text-right md:table-cell">Seq scans</Table.Head>
-						<Table.Head class="hidden text-right md:table-cell">Index scans</Table.Head>
-						<Table.Head class="hidden pr-4 lg:table-cell">Last autovacuum</Table.Head>
-					</Table.Row>
-				</Table.Header>
-				<Table.Body>
-					{#each db.tables as table (`${table.schema}.${table.name}`)}
-						<Table.Row>
-							<Table.Cell class="max-w-72 truncate pl-4 font-mono text-xs">
-								<span class="text-muted-foreground">{table.schema}.</span>{table.name}
-							</Table.Cell>
-							<Table.Cell class="text-right font-mono text-xs tabular-nums">
-								{numberFormat.format(table.rows)}
-							</Table.Cell>
-							<Table.Cell class="text-right font-mono text-xs tabular-nums">
-								{formatBytes(table.totalBytes)}
-							</Table.Cell>
-							<Table.Cell class="hidden text-right font-mono text-xs tabular-nums md:table-cell">
-								{numberFormat.format(table.seqScans)}
-							</Table.Cell>
-							<Table.Cell class="hidden text-right font-mono text-xs tabular-nums md:table-cell">
-								{numberFormat.format(table.idxScans)}
-							</Table.Cell>
-							<Table.Cell class="hidden pr-4 text-xs text-muted-foreground lg:table-cell">
-								<time
-									datetime={table.lastAutovacuum ?? undefined}
-									title={formatDateTime(table.lastAutovacuum)}>{ago(table.lastAutovacuum)}</time
-								>
-							</Table.Cell>
-						</Table.Row>
-					{/each}
-				</Table.Body>
-			</Table.Root>
-		{/if}
-		{#snippet footer()}
-			<span class="flex items-center gap-2">
-				<TerminalIcon class="size-3.5" />
-				A SQL console is planned. Until then, connect with psql over an SSH tunnel.
-			</span>
-		{/snippet}
-	</Panel>
-
-	<!-- Extensions + slow queries ---------------------------------------------------------------- -->
-	<Panel
-		title="Extensions & slow queries"
-		description="Allowlisted Postgres extensions and the top statements by total execution time from pg_stat_statements."
-	>
-		<div class="flex flex-wrap items-center gap-2 border-b px-4 py-3">
-			{#if db.extensions.length === 0}
-				<span class="text-xs text-muted-foreground">No extensions requested.</span>
-			{:else}
-				{#each db.extensions as extension (extension)}
-					<Badge variant="outline" class="font-mono text-xs">{extension}</Badge>
-				{/each}
+	{:else if tab === 'backups'}
+		<!-- Backups ------------------------------------------------------------------------------- -->
+		{#if policy}
+			<StatStrip
+				label="Backup policy"
+				stats={[
+					{
+						label: 'Schedule',
+						icon: CalendarClockIcon,
+						value: policy.enabled ? policy.schedule : 'Paused',
+						unit: policy.enabled ? 'UTC' : undefined,
+						caption: policy.nextBackupAt
+							? `Next ${formatDateTime(policy.nextBackupAt)}`
+							: 'Cron expression'
+					},
+					{
+						label: 'Retention',
+						icon: TimerIcon,
+						value: String(policy.retentionDays),
+						unit: policy.retentionDays === 1 ? 'day' : 'days',
+						caption: 'Pinned backups are kept'
+					},
+					{
+						label: 'Last backup',
+						icon: ArchiveIcon,
+						value: lastGood ? ago(lastGood.finishedAt ?? lastGood.startedAt) : 'Never',
+						caption: lastGood?.sizeBytes ? formatBytes(lastGood.sizeBytes) : 'Logical dump'
+					},
+					{
+						label: 'Verified restore',
+						icon: ShieldCheckIcon,
+						value: policy.lastVerifiedAt ? ago(policy.lastVerifiedAt) : 'Never',
+						caption: policy.lastVerifiedAt
+							? formatDateTime(policy.lastVerifiedAt)
+							: 'An unrestored dump is not yet proven'
+					}
+				]}
+			/>
+			{#if policy.lastBackupError}
+				<Notice tone="danger" title="The last backup failed">{policy.lastBackupError}</Notice>
 			{/if}
-			{#if db.slowQueriesAt}
-				<span class="ml-auto text-xs text-muted-foreground">
-					Queries sampled {ago(db.slowQueriesAt)}
-				</span>
-			{/if}
-		</div>
-		{#if db.slowQueries.length === 0}
-			<div class="p-4">
-				<EmptyState
-					icon={TerminalIcon}
-					compact
-					title="No slow-query snapshot yet"
-					description="Enable pg_stat_statements and run some queries; the node samples the top 50 every five minutes."
-				/>
-			</div>
-		{:else}
-			<Table.Root>
-				<Table.Header>
-					<Table.Row>
-						<Table.Head class="pl-4">Query</Table.Head>
-						<Table.Head class="text-right">Calls</Table.Head>
-						<Table.Head class="text-right">Mean</Table.Head>
-						<Table.Head class="text-right">Total</Table.Head>
-						<Table.Head class="hidden text-right md:table-cell">Rows</Table.Head>
-					</Table.Row>
-				</Table.Header>
-				<Table.Body>
-					{#each db.slowQueries as query (query.queryId)}
-						<Table.Row>
-							<Table.Cell class="max-w-md pl-4">
-								<code class="line-clamp-2 font-mono text-xs">{query.query}</code>
-							</Table.Cell>
-							<Table.Cell class="text-right font-mono text-xs tabular-nums">
-								{numberFormat.format(query.calls)}
-							</Table.Cell>
-							<Table.Cell class="text-right font-mono text-xs tabular-nums">
-								{formatDuration(query.meanMs / 1000)}
-							</Table.Cell>
-							<Table.Cell class="text-right font-mono text-xs tabular-nums">
-								{formatDuration(query.totalMs / 1000)}
-							</Table.Cell>
-							<Table.Cell class="hidden text-right font-mono text-xs tabular-nums md:table-cell">
-								{numberFormat.format(query.rows)}
-							</Table.Cell>
-						</Table.Row>
-					{/each}
-				</Table.Body>
-			</Table.Root>
 		{/if}
-		{#if data.dbCan.update && !deleted}
-			<form method="POST" action="?/extensions" class="flex flex-wrap items-end gap-3 border-t px-4 py-3">
-				<div class="flex flex-wrap gap-3">
-					{#each databaseExtensionAllowlist as extension (extension)}
-						<label class="flex items-center gap-1.5 font-mono text-xs">
-							<input
-								type="checkbox"
-								name="extensions"
-								value={extension}
-								checked={db.extensions.includes(extension)}
-							/>
-							{extension}
-						</label>
-					{/each}
-				</div>
-				<Button size="sm" variant="outline" type="submit">Save extensions</Button>
-			</form>
-		{/if}
-		{#snippet footer()}
-			<span>Removing an extension here never drops it; the database keeps the objects until you run DROP EXTENSION.</span>
-		{/snippet}
-	</Panel>
 
-	<!-- Settings + danger zone ------------------------------------------------------------------ -->
-	<div class="grid items-start gap-5 xl:grid-cols-2">
 		<Panel
-			title="Resources"
-			icon={SlidersHorizontalIcon}
-			description="Limits apply when the node restarts the container. The engine version can't change in place."
+			title="Backups"
+			icon={ArchiveIcon}
+			count={backups.length}
+			description="Logical dumps streamed to the backup target. Restores always create a new database and verify it."
+			flush
 		>
 			{#snippet actions()}
-				{#if data.dbCan.update && !deleted}
-					<Button variant="outline" size="sm" onclick={() => restart('database')}>
-						<RotateCcwIcon />Restart
-					</Button>
-					<Button variant="outline" size="sm" onclick={() => (resizeOpen = true)}>
-						<PencilIcon />Resize
+				{#if editable && policy}
+					<Button size="sm" variant="outline" onclick={openPolicy}>
+						<CalendarClockIcon />Schedule
 					</Button>
 				{/if}
 			{/snippet}
-			<DetailList>
-				<dt>Memory</dt>
-				<dd class="font-mono text-xs">{db.memoryMb} MB</dd>
-				<dt>CPU</dt>
-				<dd class="font-mono text-xs">{db.cpus} vCPU</dd>
-				<dt>Storage</dt>
-				<dd><StorageMeter sizeBytes={db.sizeBytes} storageMb={db.storageMb} /></dd>
-				<dt>Pooler</dt>
-				<dd class="flex items-center justify-end gap-2 text-xs">
-					<span>{db.pooler.enabled ? `PgBouncer on ${db.pooler.host.process}` : 'disabled'}</span>
-					{#if db.pooler.enabled && data.dbCan.update && !deleted}
-						<Button variant="ghost" size="sm" class="h-6 px-2 text-xs" onclick={() => restart('pooler')}>
-							Restart
-						</Button>
-					{/if}
-				</dd>
-				<dt>Updated</dt>
-				<dd class="text-xs">
-					<time datetime={db.updatedAt}>{formatDateTime(db.updatedAt)}</time>
-				</dd>
-			</DetailList>
+
+			{#if backups.length === 0}
+				<div class="p-4">
+					<EmptyState
+						icon={ArchiveIcon}
+						compact
+						title="No backups yet"
+						description="Take one now from the header, or wait for the schedule. A dump that has never been restored is not yet proven."
+					/>
+				</div>
+			{:else}
+				<Table.Root>
+					<Table.Header>
+						<Table.Row>
+							<Table.Head class="pl-4">Backup</Table.Head>
+							<Table.Head>Status</Table.Head>
+							<Table.Head class="text-right">Size</Table.Head>
+							<Table.Head class="hidden sm:table-cell">Taken</Table.Head>
+							<Table.Head class="hidden md:table-cell">Verified</Table.Head>
+							<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
+						</Table.Row>
+					</Table.Header>
+					<Table.Body>
+						{#each backups as backup (backup.id)}
+							{@const restorable =
+								backup.status === 'ok' && policy?.pendingRestoreId === null && !deleted}
+							{@const removable =
+								can.delete && backup.status !== 'pending' && backup.status !== 'running'}
+							<Table.Row>
+								<Table.Cell class="pl-4">
+									<span class="font-mono text-xs">{backup.id}</span>
+									<div class="flex items-center gap-1.5 text-xs text-muted-foreground">
+										<span class="capitalize">{backup.kind}</span>
+										{#if backup.pinned}<Badge variant="outline" class="h-4 px-1.5 text-[10px]">pinned</Badge>{/if}
+									</div>
+								</Table.Cell>
+								<Table.Cell><StatusBadge status={backup.status} /></Table.Cell>
+								<Table.Cell class="text-right font-mono text-xs tabular-nums">
+									{backup.sizeBytes === null ? '—' : formatBytes(backup.sizeBytes)}
+								</Table.Cell>
+								<Table.Cell class="hidden text-xs text-muted-foreground sm:table-cell">
+									{formatDateTime(backup.finishedAt ?? backup.startedAt)}
+								</Table.Cell>
+								<Table.Cell class="hidden text-xs md:table-cell">
+									{#if backup.verifiedAt}
+										<span class="inline-flex items-center gap-1 text-success">
+											<ShieldCheckIcon class="size-3.5" />{formatDate(backup.verifiedAt)}
+										</span>
+									{:else}
+										<span class="text-muted-foreground">—</span>
+									{/if}
+								</Table.Cell>
+								<Table.Cell class="pr-4">
+									{#if (editable && restorable) || removable}
+										<RowMenu label="Actions for backup {backup.id}">
+											{#if editable && restorable}
+												<DropdownMenu.Item onSelect={() => openRestore(backup.id)}>
+													<RotateCcwIcon />Restore into new database…
+												</DropdownMenu.Item>
+											{/if}
+											{#if removable}
+												{#if editable && restorable}<DropdownMenu.Separator />{/if}
+												<DropdownMenu.Item variant="destructive" onSelect={() => deleteBackup(backup.id)}>
+													<TrashIcon />Delete backup
+												</DropdownMenu.Item>
+											{/if}
+										</RowMenu>
+									{/if}
+								</Table.Cell>
+							</Table.Row>
+						{/each}
+					</Table.Body>
+				</Table.Root>
+			{/if}
+			{#if policy?.pendingRestoreId}
+				{#snippet footer()}
+					<span>A restore is in progress; new restores are available once it finishes.</span>
+				{/snippet}
+			{/if}
+		</Panel>
+	{:else if tab === 'insights'}
+		<!-- Tables & queries ---------------------------------------------------------------------- -->
+		<Panel
+			title="Tables"
+			icon={TableIcon}
+			count={db.tables.length}
+			description={db.statsAt
+				? `Largest tables, from a snapshot taken ${ago(db.statsAt)}. Refreshed every five minutes.`
+				: 'Largest tables, refreshed every five minutes once the database runs.'}
+			flush
+		>
+			{#if db.tables.length === 0}
+				<div class="p-4">
+					<EmptyState
+						icon={TableIcon}
+						compact
+						title={db.statsAt ? 'No tables yet' : 'No snapshot yet'}
+						description={db.statsAt
+							? 'Create tables from your app or a migration and they show up here.'
+							: 'The agent sends the first table snapshot a few minutes after the database starts.'}
+					/>
+				</div>
+			{:else}
+				<Table.Root>
+					<Table.Header>
+						<Table.Row>
+							<Table.Head class="pl-4">Table</Table.Head>
+							<Table.Head class="text-right">Rows (est.)</Table.Head>
+							<Table.Head class="text-right">Size</Table.Head>
+							<Table.Head class="hidden text-right md:table-cell">Seq scans</Table.Head>
+							<Table.Head class="hidden text-right md:table-cell">Index scans</Table.Head>
+							<Table.Head class="hidden pr-4 lg:table-cell">Last autovacuum</Table.Head>
+						</Table.Row>
+					</Table.Header>
+					<Table.Body>
+						{#each db.tables as table (`${table.schema}.${table.name}`)}
+							<Table.Row>
+								<Table.Cell class="max-w-72 truncate pl-4 font-mono text-xs">
+									<span class="text-muted-foreground">{table.schema}.</span>{table.name}
+								</Table.Cell>
+								<Table.Cell class="text-right font-mono text-xs tabular-nums">
+									{numberFormat.format(table.rows)}
+								</Table.Cell>
+								<Table.Cell class="text-right font-mono text-xs tabular-nums">
+									{formatBytes(table.totalBytes)}
+								</Table.Cell>
+								<Table.Cell class="hidden text-right font-mono text-xs tabular-nums md:table-cell">
+									{numberFormat.format(table.seqScans)}
+								</Table.Cell>
+								<Table.Cell class="hidden text-right font-mono text-xs tabular-nums md:table-cell">
+									{numberFormat.format(table.idxScans)}
+								</Table.Cell>
+								<Table.Cell class="hidden pr-4 text-xs text-muted-foreground lg:table-cell">
+									<time
+										datetime={table.lastAutovacuum ?? undefined}
+										title={formatDateTime(table.lastAutovacuum)}>{ago(table.lastAutovacuum)}</time
+									>
+								</Table.Cell>
+							</Table.Row>
+						{/each}
+					</Table.Body>
+				</Table.Root>
+			{/if}
 		</Panel>
 
-		{#if data.dbCan.delete}
-			<Card.Root class="border-destructive/30">
-				<Card.Header>
-					<Card.Title class="text-destructive">Danger zone</Card.Title>
-					<Card.Description>
-						{#if deleted}
-							In the trash. Restore brings it back with its data, or delete it permanently now.
-						{:else if db.attachments.length > 0}
-							Detach it from {db.attachments.map((item) => item.projectSlug).join(', ')} before deleting.
-							Deleted databases stay in the trash for 7 days with their data intact.
-						{:else}
-							Deleting stops the container and moves the database to the trash for 7 days. Its data
-							stays on the node until it is purged.
-						{/if}
-					</Card.Description>
-					<Card.Action class="flex flex-wrap gap-2 self-center">
-						{#if deleted}
-							<Button variant="outline" onclick={restore}><RotateCcwIcon />Restore</Button>
-							<Button variant="destructive" onclick={purge}><TrashIcon />Delete permanently</Button>
-						{:else}
-							<Button variant="destructive" onclick={deleteDatabase}>
-								<TrashIcon />Delete database
+		<Panel
+			title="Slow queries"
+			icon={TimerIcon}
+			count={db.slowQueries.length || undefined}
+			description={db.slowQueriesAt
+				? `Top statements by total execution time, sampled ${ago(db.slowQueriesAt)}.`
+				: 'Top statements by total execution time from pg_stat_statements.'}
+			flush
+		>
+			{#if db.slowQueries.length === 0}
+				<div class="p-4">
+					<EmptyState
+						icon={TimerIcon}
+						compact
+						title="No slow-query snapshot yet"
+						description={db.extensions.includes('pg_stat_statements')
+							? 'Run some queries; the node samples the top 50 every five minutes.'
+							: 'Turn on pg_stat_statements under Settings → Extensions, then run some queries.'}
+					>
+						{#if editable && !db.extensions.includes('pg_stat_statements')}
+							<Button size="sm" variant="outline" onclick={() => setTab('settings')}>
+								<PuzzleIcon />Manage extensions
 							</Button>
 						{/if}
-					</Card.Action>
-				</Card.Header>
-			</Card.Root>
+					</EmptyState>
+				</div>
+			{:else}
+				<Table.Root>
+					<Table.Header>
+						<Table.Row>
+							<Table.Head class="pl-4">Query</Table.Head>
+							<Table.Head class="text-right">Calls</Table.Head>
+							<Table.Head class="text-right">Mean</Table.Head>
+							<Table.Head class="text-right">Total</Table.Head>
+							<Table.Head class="hidden pr-4 text-right md:table-cell">Rows</Table.Head>
+						</Table.Row>
+					</Table.Header>
+					<Table.Body>
+						{#each db.slowQueries as query (query.queryId)}
+							<Table.Row>
+								<Table.Cell class="max-w-md pl-4 whitespace-normal">
+									<code class="line-clamp-2 font-mono text-xs" title={query.query}>{query.query}</code>
+								</Table.Cell>
+								<Table.Cell class="text-right font-mono text-xs tabular-nums">
+									{numberFormat.format(query.calls)}
+								</Table.Cell>
+								<Table.Cell class="text-right font-mono text-xs tabular-nums">
+									{formatDuration(query.meanMs / 1000)}
+								</Table.Cell>
+								<Table.Cell class="text-right font-mono text-xs tabular-nums">
+									{formatDuration(query.totalMs / 1000)}
+								</Table.Cell>
+								<Table.Cell class="hidden pr-4 text-right font-mono text-xs tabular-nums md:table-cell">
+									{numberFormat.format(query.rows)}
+								</Table.Cell>
+							</Table.Row>
+						{/each}
+					</Table.Body>
+				</Table.Root>
+			{/if}
+			{#snippet footer()}
+				<span class="flex items-center gap-2">
+					<TerminalIcon class="size-3.5" />
+					A SQL console is planned. Until then, connect with psql over an SSH tunnel.
+				</span>
+			{/snippet}
+		</Panel>
+	{:else if tab === 'settings'}
+		<!-- Settings ------------------------------------------------------------------------------ -->
+		<div class="grid items-start gap-5 xl:grid-cols-2">
+			<Panel
+				title="Resources"
+				icon={SlidersHorizontalIcon}
+				description="Limits apply when the node restarts the container. The engine version can't change in place."
+			>
+				{#snippet actions()}
+					{#if editable}
+						<Button variant="outline" size="sm" onclick={() => (resizeOpen = true)}>
+							<PencilIcon />Resize
+						</Button>
+					{/if}
+				{/snippet}
+				<DetailList>
+					<dt>Engine</dt>
+					<dd class="text-xs">{db.engineLabel} {db.version}</dd>
+					<dt>Node</dt>
+					<dd class="font-mono text-xs">{nodeLabel}</dd>
+					<dt>Memory</dt>
+					<dd class="font-mono text-xs">{db.memoryMb} MB</dd>
+					<dt>CPU</dt>
+					<dd class="font-mono text-xs">{db.cpus} vCPU</dd>
+					<dt>Storage</dt>
+					<dd><StorageMeter sizeBytes={db.sizeBytes} storageMb={db.storageMb} /></dd>
+					<dt>Updated</dt>
+					<dd class="text-xs">
+						<time datetime={db.updatedAt}>{formatDateTime(db.updatedAt)}</time>
+					</dd>
+				</DetailList>
+			</Panel>
+
+			<div class="space-y-5">
+				<Panel
+					title="Connection pooler"
+					icon={LayersIcon}
+					description="PgBouncer in transaction-pooling mode, next to Postgres on {nodeLabel}."
+				>
+					<div class="flex items-start justify-between gap-4">
+						<div class="space-y-1">
+							<label for="database-pooler" class="text-sm font-medium">
+								{db.pooler.enabled ? 'Pooling is on' : 'Pooling is off'}
+							</label>
+							<p class="text-xs text-muted-foreground">
+								{#if db.pooler.enabled}
+									Apps also receive <code class="font-mono">DATABASE_POOL_URL</code>, served at
+									<span class="font-mono">{db.pooler.host.process}</span>.
+								{:else}
+									Turn it on for apps that open many short-lived connections (serverless-style
+									handlers, many workers).
+								{/if}
+							</p>
+						</div>
+						<Switch
+							id="database-pooler"
+							bind:checked={() => db.pooler.enabled, setPooler}
+							disabled={!editable}
+							aria-label="Connection pooler"
+						/>
+					</div>
+				</Panel>
+
+				<Panel
+					title="Extensions"
+					icon={PuzzleIcon}
+					count={db.extensions.length || undefined}
+					description="Allowlisted Postgres extensions the node installs on activation."
+				>
+					<form method="POST" action="?/extensions" use:enhance={submitInline} class="space-y-4">
+						<div class="grid gap-2 sm:grid-cols-2">
+							{#each databaseExtensionAllowlist as extension (extension)}
+								<label
+									class="flex items-center gap-2.5 rounded-md border px-3 py-2 font-mono text-xs transition-colors has-data-checked:border-primary/40 has-data-checked:bg-muted/40"
+								>
+									<Checkbox
+										name="extensions"
+										value={extension}
+										checked={db.extensions.includes(extension)}
+										disabled={!editable}
+									/>
+									{extension}
+								</label>
+							{/each}
+						</div>
+						<div class="flex flex-wrap items-center justify-between gap-3">
+							<p class="text-xs text-muted-foreground">
+								Unticking never drops an extension; run <code class="font-mono">DROP EXTENSION</code>
+								yourself.
+							</p>
+							{#if editable}
+								<Button size="sm" variant="outline" type="submit">Save extensions</Button>
+							{/if}
+						</div>
+					</form>
+				</Panel>
+			</div>
+		</div>
+
+		{#if can.delete}
+			<DangerZone>
+				{#snippet description()}
+					{#if deleted}
+						In the trash. Restore brings it back with its data, or delete it permanently now.
+					{:else if db.attachments.length > 0}
+						Detach it from {db.attachments.map((item) => item.projectSlug).join(', ')} first. Deleted
+						databases stay in the trash for 7 days with their data intact.
+					{:else}
+						Deleting stops the container and moves the database to the trash for 7 days. Its data
+						stays on the node until it is purged.
+					{/if}
+				{/snippet}
+				{#if deleted}
+					<Button variant="outline" onclick={() => runAction('?/restore')}>
+						<RotateCcwIcon />Restore
+					</Button>
+					<Button
+						variant="destructive"
+						onclick={() =>
+							askConfirm({
+								title: `Delete ${db.name} permanently?`,
+								description:
+									'Its node deletes the data directory and the database is gone for good. This cannot be undone.',
+								confirmLabel: 'Delete permanently',
+								tone: 'danger',
+								typeToConfirm: db.name,
+								action: '?/purge'
+							})}
+					>
+						<TrashIcon />Delete permanently
+					</Button>
+				{:else}
+					<Button
+						variant="destructive"
+						onclick={() =>
+							askConfirm({
+								title: `Delete ${db.name}?`,
+								description:
+									db.attachments.length > 0
+										? `It is attached to ${db.attachments.map((item) => item.projectSlug).join(', ')}. Detach it first; the delete will be refused until then.`
+										: 'The container stops and the database moves to the trash for 7 days. Its data stays on the node, so a restore is lossless.',
+								confirmLabel: 'Move to trash',
+								tone: 'danger',
+								typeToConfirm: db.name,
+								action: '?/delete'
+							})}
+					>
+						<TrashIcon />Delete database
+					</Button>
+				{/if}
+			</DangerZone>
 		{/if}
-	</div>
+	{/if}
 </div>
 
-{#if data.dbCan.attach && !deleted}
+{#if can.attach && !deleted}
 	<FormDialog
 		bind:open={attachOpen}
 		icon={PlugIcon}
@@ -1114,7 +1095,7 @@
 	</FormDialog>
 {/if}
 
-{#if data.dbCan.update && !deleted}
+{#if editable}
 	<FormDialog
 		bind:open={restoreOpen}
 		icon={RotateCcwIcon}
@@ -1143,6 +1124,66 @@
 		</Field.Group>
 	</FormDialog>
 
+	{#if policy}
+		<FormDialog
+			bind:open={policyOpen}
+			icon={CalendarClockIcon}
+			title="Backup schedule"
+			description="When {db.name} is dumped and how long dumps are kept. Pinned backups are never pruned."
+			action="?/backup-policy"
+			submitLabel="Save schedule"
+		>
+			<Field.Group>
+				<Field.Field orientation="horizontal">
+					<Field.Content>
+						<Field.Label for="policy-enabled">Scheduled backups</Field.Label>
+						<Field.Description>Pause to stop new dumps; existing ones are kept.</Field.Description>
+					</Field.Content>
+					<Switch id="policy-enabled" name="enabled" bind:checked={policyEnabled} />
+				</Field.Field>
+				<div class="grid gap-4 sm:grid-cols-2">
+					<Field.Field data-invalid={errors.schedule ? true : undefined}>
+						<Field.Label for="policy-schedule">Cron schedule</Field.Label>
+						<InputGroup.Root>
+							<InputGroup.Input
+								id="policy-schedule"
+								name="schedule"
+								value={policy.schedule}
+								spellcheck="false"
+								class="font-mono text-sm"
+								disabled={!policyEnabled}
+							/>
+							<InputGroup.Addon align="inline-end">
+								<InputGroup.Text class="font-mono text-xs">UTC</InputGroup.Text>
+							</InputGroup.Addon>
+						</InputGroup.Root>
+						<Field.Description class="font-mono text-xs">0 3 * * * = daily at 03:00</Field.Description>
+						{#if errors.schedule}<Field.Error>{errors.schedule}</Field.Error>{/if}
+					</Field.Field>
+					<Field.Field data-invalid={errors.retentionDays ? true : undefined}>
+						<Field.Label for="policy-retention">Retention</Field.Label>
+						<InputGroup.Root>
+							<InputGroup.Input
+								id="policy-retention"
+								name="retentionDays"
+								type="number"
+								min={1}
+								max={365}
+								value={String(policy.retentionDays)}
+								class="font-mono text-sm"
+							/>
+							<InputGroup.Addon align="inline-end">
+								<InputGroup.Text class="font-mono text-xs">days</InputGroup.Text>
+							</InputGroup.Addon>
+						</InputGroup.Root>
+						{#if errors.retentionDays}<Field.Error>{errors.retentionDays}</Field.Error>{/if}
+					</Field.Field>
+				</div>
+			</Field.Group>
+			{#if !policyEnabled}<input type="hidden" name="schedule" value={policy.schedule} />{/if}
+		</FormDialog>
+	{/if}
+
 	<FormDialog
 		bind:open={resizeOpen}
 		icon={SlidersHorizontalIcon}
@@ -1151,6 +1192,8 @@
 		action="?/update"
 		submitLabel="Save resources"
 	>
+		<!-- The action reads a missing `pooler` as off; carry the current state through. -->
+		<input type="hidden" name="pooler" value={db.pooler.enabled ? 'on' : ''} />
 		<Field.Group>
 			<div class="grid gap-4 sm:grid-cols-2">
 				<Field.Field data-invalid={errors.memoryMb ? true : undefined}>
@@ -1209,18 +1252,8 @@
 						<InputGroup.Text class="font-mono text-xs">MB</InputGroup.Text>
 					</InputGroup.Addon>
 				</InputGroup.Root>
-				<Field.Description>
-					Drives the gauge and the 85% alert. It is not enforced on disk.
-				</Field.Description>
+				<Field.Description>Drives the gauge and the 85% alert. It is not enforced on disk.</Field.Description>
 				{#if errors.storageMb}<Field.Error>{errors.storageMb}</Field.Error>{/if}
-			</Field.Field>
-			<Field.Field>
-				<label class="flex items-center gap-2 text-sm">
-					<input type="checkbox" name="pooler" checked={db.pooler.enabled} />
-					PgBouncer sidecar (transaction pooling; injects <code class="font-mono text-xs"
-						>DATABASE_POOL_URL</code
-					>)
-				</label>
 			</Field.Field>
 		</Field.Group>
 	</FormDialog>

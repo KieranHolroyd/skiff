@@ -182,11 +182,13 @@ export type AppVolumeRestore = z.input<typeof appVolumeRestoreSchema>;
 
 // -------------------------------------------------------------------- views
 
-/** The node volume backing a volume; a summary, never a device or host path. */
+/**
+ * The node volume backing a volume. A summary only: the node's mount path and device are host
+ * details and deliberately absent from project-facing responses.
+ */
 export const appVolumeNodeVolumeSchema = z.strictObject({
 	id: z.string(),
 	name: z.string(),
-	mountPath: z.string(),
 	remote: z.boolean(),
 });
 export type AppVolumeNodeVolume = z.infer<typeof appVolumeNodeVolumeSchema>;

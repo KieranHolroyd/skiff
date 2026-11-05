@@ -124,7 +124,7 @@ export const AGENTS: Record<AssistantAgentId, AgentDefinition> = {
 	},
 	data: {
 		id: 'data',
-		brief: 'Managed Postgres databases, object storage, buckets, attachments.',
+		brief: 'Managed Postgres databases, object storage, buckets, attachments, app volumes.',
 		system: DATA_SYSTEM,
 		tools: [
 			'whoami',
@@ -133,6 +133,10 @@ export const AGENTS: Record<AssistantAgentId, AgentDefinition> = {
 			'get_node_capacity',
 			'list_databases',
 			'get_database',
+			'list_volumes',
+			'create_volume',
+			'attach_volume',
+			'detach_volume',
 			'create_database',
 			'attach_database',
 			'detach_database',

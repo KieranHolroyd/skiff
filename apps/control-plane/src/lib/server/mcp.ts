@@ -11,6 +11,8 @@ import {
 import * as z from 'zod';
 import {
 	backupTargetCreateSchema,
+	appVolumeAttachSchema,
+	appVolumeDetachSchema,
 	bucketCreateSchema,
 	bucketUpdateSchema,
 	bucketNameSchema,
@@ -930,6 +932,110 @@ function buildServer(
 			scopeChallenge: requires('project:read'),
 		},
 		async () => run(() => ({ capacity: core.workloads.capacity(principal) })),
+	);
+
+	// --- app volumes (plan 07; ids and mount paths only, never a host path) -----------------
+	tool(
+		'list_volumes',
+		{
+			title: 'List app volumes',
+			description:
+				'List the persistent app volumes for one project, with size, usage, status, attachments and the current read-write owner. No host path or device is returned.',
+			inputSchema: z.object({ project: z.string().describe('Project slug') }),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('project:read'),
+		},
+		async ({ project }) =>
+			run(() => {
+				const row = core.projects.requireRow(principal, project);
+				return { project, volumes: core.appVolumes.list(principal, row) };
+			}),
+	);
+
+	tool(
+		'create_volume',
+		{
+			title: 'Create app volume',
+			description:
+				'Create a project-owned persistent volume with a size quota. It is backed by the helper state directory by default, or by a registered node volume (`backing: "node_volume"` plus `nodeVolume`). Disk admission reserves at most 90% of free space. Attach it with attach_volume.',
+			inputSchema: z.object({
+				project: z.string().describe('Project slug'),
+				name: z.string().min(3).max(40).describe('Volume name (slug rules)'),
+				sizeMb: z.number().int().min(1).max(1_048_576).default(1024).describe('Quota in MB'),
+				backing: z.enum(['state_dir', 'node_volume']).default('state_dir'),
+				nodeVolume: z.string().optional().describe('Node volume name, required for backing "node_volume"'),
+				singleWriter: z.boolean().default(true),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('project:update'),
+		},
+		async ({ project, ...input }) =>
+			run(() => {
+				const row = core.projects.requireRow(principal, project);
+				const view = core.appVolumes.create(principal, row, input);
+				return {
+					volume: view,
+					nextSteps: [
+						`Attach it with attach_volume({ project: "${project}", volume: "${view.name}", mountPath: "/var/lib/app" }).`,
+						'Mount paths are inside the workload; they are never host paths.',
+					],
+				};
+			}),
+	);
+
+	tool(
+		'attach_volume',
+		{
+			title: 'Attach app volume',
+			description:
+				'Mount a volume into a project workload at an absolute sandbox path. A single-writer volume refuses a second read-write attachment; read-only attachments are unlimited. The app restarts with the mount.',
+			inputSchema: appVolumeAttachSchema.extend({
+				project: z.string().describe('Project slug'),
+				volume: z.string().describe('Volume name'),
+				workload: z.string().optional().describe('Workload id or project slug; defaults to the project'),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('project:update'),
+		},
+		async ({ project, volume, workload, ...input }) =>
+			run(() => {
+				const row = core.projects.requireRow(principal, project);
+				const view = core.appVolumes.attach(principal, row, volume, {
+					...input,
+					workload: workload ?? project,
+				});
+				return {
+					volume: view,
+					nextSteps: [
+						'The workload restarts with the mount on its node; a missing backing mount fails the start.',
+					],
+				};
+			}),
+	);
+
+	tool(
+		'detach_volume',
+		{
+			title: 'Detach app volume',
+			description:
+				'Unmount a volume from a project workload. The volume and its data are untouched and can be attached again.',
+			inputSchema: appVolumeDetachSchema.extend({
+				project: z.string().describe('Project slug'),
+				volume: z.string().describe('Volume name'),
+				workload: z.string().optional().describe('Workload id or project slug; defaults to the project'),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+			scopeChallenge: requires('project:update'),
+		},
+		async ({ project, volume, workload, ...input }) =>
+			run(() => {
+				const row = core.projects.requireRow(principal, project);
+				core.appVolumes.detach(principal, row, volume, {
+					...input,
+					workload: workload ?? project,
+				});
+				return { ok: true, project, volume };
+			}),
 	);
 
 	// --- managed databases (docs/DATABASES.md; no credentials or purge over MCP, D58/D53) ----

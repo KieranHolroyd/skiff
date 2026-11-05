@@ -72,6 +72,19 @@ describe('resolvePlacement', () => {
 		if (!decision.ok) expect(decision.freeByNode.map((row) => row.freeMemoryMb)).toEqual([124, 212]);
 	});
 
+	test('optional disk admission refuses a node without room', () => {
+		const decision = resolvePlacement({
+			runtime: 'process',
+			requested: homelab.id,
+			memoryMb: 128,
+			diskMb: 9_500,
+			edgeNodeId: edge.id,
+			candidates: [{ ...homelab, diskFreeBytes: 10 * 1024 * 1024 * 1024, reservedDiskBytes: 0 }],
+		});
+		expect(decision.ok).toBe(false);
+		if (!decision.ok) expect(decision.message).toContain('90% admission limit');
+	});
+
 	test('never places an app on a draining node', () => {
 		const decision = resolvePlacement({
 			runtime: 'process',

@@ -212,3 +212,74 @@ a new model.
 - Multi-drive RustFS (one instance across several volumes) and erasure coding.
 - Disk health (SMART) and temperature.
 - Move an instance between volumes from the dashboard.
+
+## 14. App volumes (plan 07, MVP)
+
+Node volumes (§1–§13) place managed databases and storage instances. **App volumes** are a
+separate, project-owned resource: a directory with a size quota that a process or container
+workload mounts at an absolute path. They are enabled by `SKIFF_FEATURE_APP_VOLUMES` (off by
+default) and never replace the legacy `/data` mount.
+
+### Model and backing
+
+| Table | Purpose |
+|---|---|
+| `app_volumes` | Project, name, node, backing (`node_volume`/`state_dir`), node volume id, quota, usage, last mount path, status, single-writer flag, soft-delete timestamps. |
+| `app_volume_attachments` | Volume, workload, environment, sandbox mount path, read-only flag. |
+| `app_volume_snapshots` | Versioned snapshot metadata (target, object key, size, checksum, status). |
+
+A volume pins its project to one node. With `backing: node_volume`, the volume names a registered
+node volume and the helper resolves `<node volume mount>/skiff/apps/<projectId>/<volumeId>`.
+With `backing: state_dir` it uses `<helper state dir>/apps/<projectId>/<volumeId>`. Only that
+subtree is created; the host path is derived on the node and is never stored or returned by the
+API. A project-facing view contains the volume name, size, usage, status, attachments and — for a
+node-volume backing — only `{ id, name, remote }`.
+
+### Mount rendering and fail-closed starts
+
+`WorkloadDesired.volumes` carries `{ id, mountPath, readOnly, backing, nodeVolumeId? }`; it never
+carries a host path or device. Before writing a unit the helper:
+
+1. resolves each mount through its own node-volume registry or its state directory;
+2. verifies a node-volume backing with `findmnt` and the registered stable source key;
+3. refuses the start if the registry entry or mount is missing — it never creates the directory
+   under an empty mountpoint or falls back to the root disk;
+4. creates only the per-volume subtree.
+
+Process units render `BindPaths=<host>:<mountPath>` (or `BindReadOnlyPaths`) plus
+`ReadWritePaths`; container units render `Volume=<host>:<mountPath>[:ro]:Z`. Mount points are
+validated by the same rules as the contract: absolute, normalized, no traversal, not a system
+tree, not `/data`, not `/var/lib/skiff`.
+
+### Size quota, disk admission and single writer
+
+`sizeMb` is the quota and the disk-admission input. Create and grow are refused when
+`reserved + requested > 90% of free`, naming the free, reserved and requested megabytes; a node
+that has not reported `diskFreeBytes` yet is refused instead of guessed at. State-dir volumes
+reserve against the node's data-disk free space; node-volume volumes reserve against that
+volume's reported `freeBytes`. Usage is reported by the node when available (currently `null`
+until a helper usage sampler lands); the dashboard shows used vs quota and the top-level capacity
+view exposes `diskFreeBytes`, `diskTotalBytes` and `reservedDiskBytes`.
+
+A single-writer volume accepts one read-write attachment. Additional attachments must be
+read-only. Mount paths are unique per workload and environment, and a volume can be attached once
+per environment.
+
+### Surfaces
+
+| Surface | What |
+|---|---|
+| REST | `GET/POST /api/v1/projects/:slug/volumes`, `GET/PATCH/DELETE /…/volumes/:name`, `POST/DELETE /…/volumes/:name/attach`. |
+| MCP | `list_volumes`, `create_volume`, `attach_volume`, `detach_volume`. |
+| CLI | `skif volume create|list|attach|detach|delete`. |
+| Dashboard | Project **Volumes** tab: create, attach/detach, usage and delete. |
+
+Deleting a volume is refused while it is attached. The soft delete keeps the data and sets a
+seven-day purge time; an automatic purge/restore worker is **not** implemented yet.
+
+### Snapshots (follow-up)
+
+The `app_volume_snapshots` table is in place, but snapshot and restore are **not implemented**.
+The follow-up must stream a versioned archive to a plan-05 backup target, record size/checksum,
+quiesce the writer by default, and restore into a **new** volume. No surface claims a verified
+snapshot today.

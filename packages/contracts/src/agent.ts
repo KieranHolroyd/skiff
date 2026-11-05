@@ -154,6 +154,8 @@ export const heartbeatSchema = z.object({
 		memoryTotalBytes: z.number().int().nonnegative(),
 		diskUsedBytes: z.number().int().nonnegative(),
 		diskTotalBytes: z.number().int().nonnegative(),
+		/** Free space on the data filesystem; derived from total-used when an older agent omits it. */
+		diskFreeBytes: z.number().int().nonnegative().optional(),
 		uptimeSeconds: z.number().nonnegative(),
 		load1: z.number().nonnegative(),
 		/**

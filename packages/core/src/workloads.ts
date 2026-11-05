@@ -19,6 +19,7 @@ import type { CoreContext } from './context.ts';
 import { CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { resolvePlacement, type PlacementCandidate } from './placement.ts';
 import { parseJson, newId, sha256Hex } from './util.ts';
+import { nodeDiskFreeBytes } from './app-volumes.ts';
 import type { ProjectRow } from './projects.ts';
 
 export type WorkloadRow = typeof workloads.$inferSelect;
@@ -206,25 +207,34 @@ export class WorkloadService {
 
 	capacityInternal(): NodeCapacityView[] {
 		const reserved = this.reservedByNode();
+		const reservedDisk = this.ctx.appVolumes.reservedDiskByNode();
 		const databaseCounts = this.ctx.databases.countByNode();
 		const storageCounts = this.ctx.storage.countByNode();
 		return this.ctx.db
 			.select()
 			.from(nodes)
 			.all()
-			.map((node) => ({
-				nodeId: node.id,
-				name: node.name,
-				mode: node.mode,
-				status: node.status,
-				sliceMemoryMb: node.sliceMemoryMb,
-				reservedMemoryMb: reserved.get(node.id) ?? 0,
-				freeMemoryMb: node.sliceMemoryMb - (reserved.get(node.id) ?? 0),
-				workloadCount:
-					(this.countByNode().get(node.id) ?? 0) +
-					(databaseCounts.get(node.id) ?? 0) +
-					(storageCounts.get(node.id) ?? 0),
-			}));
+			.map((node) => {
+				const stats = parseJson<Record<string, unknown> | null>(node.statsJson, null);
+				const total = stats?.diskTotalBytes;
+				return {
+					nodeId: node.id,
+					name: node.name,
+					mode: node.mode,
+					status: node.status,
+					sliceMemoryMb: node.sliceMemoryMb,
+					reservedMemoryMb: reserved.get(node.id) ?? 0,
+					freeMemoryMb: node.sliceMemoryMb - (reserved.get(node.id) ?? 0),
+					workloadCount:
+						(this.countByNode().get(node.id) ?? 0) +
+						(databaseCounts.get(node.id) ?? 0) +
+						(storageCounts.get(node.id) ?? 0),
+					diskFreeBytes: nodeDiskFreeBytes(stats),
+					diskTotalBytes:
+						typeof total === 'number' && Number.isFinite(total) ? Math.max(0, Math.floor(total)) : null,
+					reservedDiskBytes: reservedDisk.get(node.id) ?? 0,
+				};
+			});
 	}
 
 	/** Desired state for one node, including only public spec fields and secret references. */
@@ -245,6 +255,7 @@ export class WorkloadService {
 				.where(eq(releases.id, deployment.releaseId))
 				.get();
 			const isolated = featureEnabled(this.ctx.config, 'ORG_NETWORKS');
+			const volumes = this.ctx.appVolumes.mountsForWorkload(workload.id);
 			return {
 				id: workload.id,
 				projectId: project.id,
@@ -266,6 +277,7 @@ export class WorkloadService {
 				env: spec.env,
 				secrets: spec.secrets,
 				dataSizeMb: spec.data?.sizeMb ?? null,
+				...(volumes.length > 0 ? { volumes } : {}),
 			};
 		});
 	}
@@ -373,6 +385,7 @@ export class WorkloadService {
 		return [
 			this.ctx.databases.consumerVersion(projectId, nodeId, runtime),
 			this.ctx.storage.consumerVersion(projectId, nodeId, runtime),
+			this.ctx.appVolumes.projectVersion(projectId),
 		]
 			.filter(Boolean)
 			.join(':');
@@ -399,6 +412,7 @@ export class WorkloadService {
 
 	private candidates(): PlacementCandidate[] {
 		const reserved = this.reservedByNode();
+		const reservedDisk = this.ctx.appVolumes.reservedDiskByNode();
 		return this.ctx.db
 			.select()
 			.from(nodes)
@@ -410,6 +424,8 @@ export class WorkloadService {
 				status: node.status,
 				sliceMemoryMb: node.sliceMemoryMb,
 				reservedMemoryMb: reserved.get(node.id) ?? 0,
+				diskFreeBytes: nodeDiskFreeBytes(parseJson<Record<string, unknown> | null>(node.statsJson, null)),
+				reservedDiskBytes: reservedDisk.get(node.id) ?? 0,
 			}));
 	}
 

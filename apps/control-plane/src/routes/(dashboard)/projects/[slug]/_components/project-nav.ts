@@ -7,6 +7,7 @@ export const PROJECT_TABS = [
 	'builds',
 	'source',
 	'domains',
+	'volumes',
 	'runtime',
 	'shares',
 	'settings'

@@ -55,6 +55,7 @@
 	import RuntimePanel from './_components/RuntimePanel.svelte';
 	import SourcePanel from './_components/SourcePanel.svelte';
 	import StorageCard from './_components/StorageCard.svelte';
+	import VolumesCard from './_components/VolumesCard.svelte';
 	import { displayUrl, formatBytes, formatDateTime, shortId, shortSha } from '../../_lib/format.js';
 	import type { PageProps } from './$types';
 
@@ -144,6 +145,7 @@
 		environments: data.environments.length,
 		builds: data.builds.length,
 		domains: data.domains.length,
+		volumes: data.appVolumes.length,
 		shares: activeShares.length
 	});
 
@@ -471,6 +473,15 @@
 					contentDomain={data.contentDomain}
 					platformOrigin={data.platform.origin}
 					can={{ createDomain: data.can.createDomain, deleteDomain: data.can.deleteDomain }}
+				/>
+			{:else if tab === 'volumes'}
+				<VolumesCard
+					slug={data.project.slug}
+					volumes={data.appVolumes}
+					workloadId={data.workload?.id ?? data.project.slug}
+					enabled={data.appVolumesEnabled}
+					fieldErrors={result?.fieldErrors}
+					can={{ manageVolumes: data.can.manageVolumes }}
 				/>
 			{:else if tab === 'runtime'}
 				<RuntimePanel
