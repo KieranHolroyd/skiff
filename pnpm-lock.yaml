@@ -11,6 +11,9 @@ importers:
       '@types/bun':
         specifier: latest
         version: 1.4.4
+      aws4fetch:
+        specifier: ^1.0.20
+        version: 1.0.20
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
