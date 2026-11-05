@@ -876,6 +876,43 @@ export const alertState = sqliteTable('alert_state', {
 	lastValue: text('last_value'),
 });
 
+// ---------------------------------------------------------------------------
+// Append-only migration blocks: new tables go below this line, in migration
+// order, so rebases do not churn existing definitions.
+// ---------------------------------------------------------------------------
+
+/**
+ * Generic durable scheduler (docs/SCHEDULER.md, F4). Feature code supplies the meaning of `kind`
+ * and `key`; the service only stores, leases, retries and completes work. `kind + key` is unique
+ * so enqueueing the same work twice is a no-op while it is queued or leased.
+ */
+export const scheduledTasks = sqliteTable(
+	'scheduled_tasks',
+	{
+		id: text('id').primaryKey(),
+		kind: text('kind').notNull(),
+		key: text('key').notNull(),
+		/** Epoch ms; claimable once `run_at <= now`. */
+		runAt: integer('run_at').notNull(),
+		leaseUntil: integer('lease_until'),
+		attempts: integer('attempts').notNull().default(0),
+		maxAttempts: integer('max_attempts').notNull().default(5),
+		payloadJson: text('payload_json'),
+		status: text('status', { enum: ['queued', 'leased', 'ok', 'failed', 'cancelled'] })
+			.notNull()
+			.default('queued'),
+		resultJson: text('result_json'),
+		lastError: text('last_error'),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [
+		uniqueIndex('scheduled_tasks_kind_key_idx').on(t.kind, t.key),
+		index('scheduled_tasks_due_idx').on(t.status, t.runAt),
+		index('scheduled_tasks_lease_idx').on(t.status, t.leaseUntil),
+	],
+);
+
 /** Every table worth exporting, for tooling and tests. */
 export const schema = {
 	nodes,
@@ -902,6 +939,7 @@ export const schema = {
 	backupRuns,
 	alertState,
 	databaseBackups,
+	scheduledTasks,
 };
 
 export { primaryKey };
