@@ -73,6 +73,13 @@ unique per project). At activation the consumer workload receives:
 - Values are injected at activation only (D18, D43): they never enter desired state, its disk
   cache, or the project's spec. The consumer's activation version includes a hash of its
   attachments, so attach/detach re-activates (restarts) the app without a redeploy.
+- **Suggestions and one-click linking.** The runtime editor lazily loads the dashboard route
+  `GET /projects/:slug/env-suggestions`, which merges the names above with organisation secrets
+  and names found in the deployment's `.env*` files and source. Injected names are marked as such
+  (adding them to the spec would shadow the real value). If the code expects a name like
+  `DATABASE_URL`, the editor offers to link an unattached database under the inferred
+  `DATABASE` prefix; the attach action then makes the whole `<P>_*` group available at the next
+  start. Only names are scanned and returned, never `.env` values.
 
 ## 4. Credentials (D58)
 
@@ -125,6 +132,11 @@ connections above 90% of `max_connections`).
 - **Purge** (after 7 days, or explicitly with `database:delete` from the dashboard/CLI): desired
   state lists the id under `databasePurges`; the agent calls the helper's fixed `purge` verb, which
   removes only `<stateDir>/<id>`, then reports it, and the control plane deletes the row.
+
+**Data location.** By default the data dir lives under the helper's state root. A database can
+instead be placed on a node volume (`volume` on create, or the node's default volume); its data
+then lives at `<mount>/skiff/<id>` (D74, D78), and the node refuses to start it when the mount is
+missing (D76). See [VOLUMES.md](./VOLUMES.md).
 
 ## 7. Surfaces
 

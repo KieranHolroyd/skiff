@@ -41,6 +41,10 @@ export const nodes = sqliteTable(
 		storageBuildDir: text('storage_build_dir'),
 		/** Last report from the node's skiff-storage.service (`NodeStorageStatus`). */
 		storageStatusJson: text('storage_status_json'),
+		/** Volume new managed instances use when they name none (D74). */
+		defaultVolumeId: text('default_volume_id'),
+		/** Latest raw volume inventory (`VolumeInventory`), for the adopt/provision wizard. */
+		volumeInventoryJson: text('volume_inventory_json'),
 		createdAt: integer('created_at').notNull().$defaultFn(now),
 		updatedAt: integer('updated_at').notNull().$defaultFn(now),
 	},
@@ -60,6 +64,46 @@ export const nodeJoinTokens = sqliteTable(
 		createdAt: integer('created_at').notNull().$defaultFn(now),
 	},
 	(t) => [uniqueIndex('node_join_tokens_hash_idx').on(t.tokenHash)],
+);
+
+/**
+ * A mounted filesystem a node can place managed workloads on (docs/VOLUMES.md, D72). `source_key`
+ * is the stable node-reported identity (filesystem UUID, `zfs:pool/dataset`, `nfs:host:/export`);
+ * `stack_json` records how a provisioned volume was built. Names are unique per node.
+ */
+export const nodeVolumes = sqliteTable(
+	'node_volumes',
+	{
+		id: text('id').primaryKey(),
+		nodeId: text('node_id').notNull(),
+		name: text('name').notNull(),
+		kind: text('kind', { enum: ['filesystem', 'lvm', 'mdadm', 'zfs', 'luks', 'nfs', 'cifs'] })
+			.notNull()
+			.default('filesystem'),
+		sourceKey: text('source_key').notNull(),
+		mountPath: text('mount_path').notNull(),
+		fsType: text('fs_type').notNull(),
+		/** Comma-separated mount options as last observed; display and re-mount hints only. */
+		options: text('options').notNull().default(''),
+		remote: integer('remote', { mode: 'boolean' }).notNull().default(false),
+		/** Provisioning plan/steps (`VolumeStack`); null for an adopted mount. */
+		stackJson: text('stack_json'),
+		status: text('status', { enum: ['pending', 'ready', 'missing', 'failed', 'removing'] })
+			.notNull()
+			.default('pending'),
+		message: text('message'),
+		sizeBytes: integer('size_bytes'),
+		freeBytes: integer('free_bytes'),
+		statsAt: integer('stats_at'),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [
+		uniqueIndex('node_volumes_node_name_idx').on(t.nodeId, t.name),
+		uniqueIndex('node_volumes_node_source_idx').on(t.nodeId, t.sourceKey),
+		index('node_volumes_node_idx').on(t.nodeId),
+	],
 );
 
 /**
@@ -364,6 +408,8 @@ export const databases = sqliteTable(
 		memoryMb: integer('memory_mb').notNull(),
 		cpus: real('cpus').notNull().default(1),
 		storageMb: integer('storage_mb').notNull().default(10_240),
+		/** Node volume holding the data dir; null keeps the helper state dir (D74). */
+		volumeId: text('volume_id'),
 		status: text('status', { enum: ['pending', 'starting', 'running', 'failed', 'stopped'] })
 			.notNull()
 			.default('pending'),
@@ -426,6 +472,8 @@ export const storageInstances = sqliteTable(
 		memoryMb: integer('memory_mb').notNull(),
 		cpus: real('cpus').notNull().default(1),
 		storageMb: integer('storage_mb').notNull().default(10_240),
+		/** Node volume holding the data dir; null keeps the helper state dir (D74). */
+		volumeId: text('volume_id'),
 		public: integer('public', { mode: 'boolean' }).notNull().default(false),
 		/** `<name>--s3.<contentDomain>` while public (and while trashed, so restore gets it back). */
 		publicHost: text('public_host'),

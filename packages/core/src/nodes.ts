@@ -3,6 +3,7 @@ import {
 	deployments,
 	environments,
 	nodeJoinTokens,
+	nodeVolumes,
 	nodes,
 	projects,
 	releases,
@@ -61,6 +62,8 @@ export interface NodeView {
 	sliceCpuWeight: number;
 	/** Requested storage locations (`null` = install default) and what the node last reported (D48). */
 	storage: NodeStorage & { status: NodeStorageStatus | null };
+	/** Volume new managed instances use when they name none (D74). */
+	defaultVolumeId: string | null;
 	createdAt: string;
 }
 
@@ -87,6 +90,7 @@ export class NodeService {
 				buildDir: row.storageBuildDir,
 				status: storageStatus(row.storageStatusJson),
 			},
+			defaultVolumeId: row.defaultVolumeId,
 			createdAt: new Date(row.createdAt).toISOString(),
 		};
 	}
@@ -234,6 +238,7 @@ export class NodeService {
 		if (input.purgedStorage?.length) this.ctx.storage.applyPurged(node.id, input.purgedStorage);
 		if (input.storageBucketDeletions?.length)
 			this.ctx.storage.applyBucketDeletions(node.id, input.storageBucketDeletions);
+		if (input.volumes) this.ctx.volumes.applyInventory(node.id, input.volumes);
 		return { ok: true, desiredStateVersion: this.stateVersion() };
 	}
 
@@ -340,6 +345,18 @@ export class NodeService {
 		if (patch.sliceCpuWeight !== undefined && patch.sliceCpuWeight !== node.sliceCpuWeight)
 			changes.sliceCpuWeight = patch.sliceCpuWeight;
 		if (patch.canBuild !== undefined && patch.canBuild !== node.canBuild) changes.canBuild = patch.canBuild;
+		if (patch.defaultVolumeId !== undefined && patch.defaultVolumeId !== node.defaultVolumeId) {
+			if (patch.defaultVolumeId === null) changes.defaultVolumeId = null;
+			else {
+				const volume = this.ctx.db
+					.select({ id: nodeVolumes.id })
+					.from(nodeVolumes)
+					.where(and(eq(nodeVolumes.id, patch.defaultVolumeId), eq(nodeVolumes.nodeId, nodeId)))
+					.get();
+				if (!volume) throw new ValidationError('That volume is not registered on this node.');
+				changes.defaultVolumeId = volume.id;
+			}
+		}
 		const dataDir = patch.dataDir === undefined ? node.storageDataDir : patch.dataDir || null;
 		const buildDir = patch.buildDir === undefined ? node.storageBuildDir : patch.buildDir || null;
 		if (dataDir && buildDir && (dataDir === buildDir || dataDir.startsWith(`${buildDir}/`) || buildDir.startsWith(`${dataDir}/`)))
@@ -617,6 +634,7 @@ export class NodeService {
 			revocations: this.ctx.access.revocations(),
 			hostRedirects,
 			workloads: workloadRows,
+			volumes: this.ctx.volumes.desiredForNode(node.id),
 			databasePurges: this.ctx.databases.purgesForNode(node.id),
 			storageRoutes: this.ctx.storage.routesForNode(node.id, isEdge, (id) => nodeById.get(id)?.publicAddress ?? null),
 			storagePurges: this.ctx.storage.purgesForNode(node.id),

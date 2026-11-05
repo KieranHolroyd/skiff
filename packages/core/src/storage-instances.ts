@@ -47,6 +47,7 @@ import type { CoreContext } from './context.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { resolvePlacement } from './placement.ts';
 import type { ProjectRow } from './projects.ts';
+import type { VolumeRow } from './volumes.ts';
 import { newId, parseJson, randomBytes, sha256Hex } from './util.ts';
 
 export type StorageRow = typeof storageInstances.$inferSelect;
@@ -150,6 +151,19 @@ export class StorageService {
 			}
 		}
 
+		// A named volume pins the node: the data dir has to be on the same node as the container.
+		let volume: VolumeRow | null = null;
+		if (input.volume) {
+			volume = this.ctx.volumes.findByName(input.volume);
+			const edgeNodeId = this.ctx.workloads.edgeNode();
+			const target = requested === 'auto' ? null : requested === 'edge' ? edgeNodeId : requested;
+			if (target && target !== volume.nodeId)
+				throw new ValidationError(
+					`Volume "${volume.name}" is on another node; place this instance there or pick a volume on the target node.`,
+				);
+			requested = volume.nodeId;
+		}
+
 		const decision = resolvePlacement({
 			runtime: 'container',
 			requested,
@@ -165,6 +179,9 @@ export class StorageService {
 
 		const id = newId(STORAGE_ID_PREFIX);
 		const now = this.ctx.now();
+		// No explicit volume: use the node's default, so an operator only sets it once.
+		if (!volume) volume = this.ctx.volumes.defaultFor(decision.nodeId);
+		if (volume) this.ctx.volumes.assertRoom(volume, input.storageMb);
 		const hostPort = this.allocatePort(decision.nodeId);
 		this.ctx.sqlite.transaction(() => {
 			this.ctx.db
@@ -180,6 +197,7 @@ export class StorageService {
 					memoryMb,
 					cpus: input.cpus,
 					storageMb: input.storageMb,
+					volumeId: volume?.id ?? null,
 					public: input.public,
 					publicHost,
 					status: 'pending',
@@ -213,6 +231,7 @@ export class StorageService {
 				memoryMb,
 				public: input.public,
 				buckets: input.buckets,
+				...(volume ? { volume: volume.name } : {}),
 				...(project ? { project: project.slug } : {}),
 			},
 			result: 'ok',
@@ -300,6 +319,7 @@ export class StorageService {
 		if (row.purgeRequestedAt)
 			throw new ConflictError(`Storage "${name}" is being purged and can no longer be restored.`);
 		this.admit(row, row.memoryMb);
+		this.ctx.volumes.assertVolumeReady(row.volumeId, row.storageMb);
 		this.ctx.db
 			.update(storageInstances)
 			.set({ deletedAt: null, purgeAt: null, status: 'pending', message: null, updatedAt: this.ctx.now() })
@@ -671,6 +691,7 @@ export class StorageService {
 					status: 'running' as const,
 					release: null,
 					image: storageImage(row.engine, row.version),
+					...(row.volumeId ? { volumeId: row.volumeId } : {}),
 					upstream: `127.0.0.1:${row.hostPort}`,
 					memoryMb: row.memoryMb,
 					cpus: row.cpus,
@@ -1169,6 +1190,7 @@ export class StorageService {
 				process: `http://127.0.0.1:${row.hostPort}`,
 				container: `http://${storageAlias(row.id)}:${info.containerPort}`,
 			},
+			volume: this.ctx.volumes.summary(row.volumeId),
 			region: STORAGE_REGION,
 			buckets: this.ctx.db
 				.select()

@@ -139,6 +139,11 @@ export const workloadDesiredSchema = z.object({
 	database: workloadDatabaseSchema.optional(),
 	/** Managed object storage profile (S1); buckets and scoped users are converged by the agent. */
 	objectStorage: workloadObjectStorageSchema.optional(),
+	/**
+	 * Managed services only: the node volume the data dir lives on (D74). The helper resolves the
+	 * mount path from its own registry and fails the start if it is not mounted (D76).
+	 */
+	volumeId: z.string().max(100).optional(),
 });
 export type WorkloadDesired = z.infer<typeof workloadDesiredSchema>;
 

@@ -1,5 +1,6 @@
 import * as z from 'zod';
 import { SLUG_PATTERN } from './slugs.ts';
+import type { VolumeSummary } from './volume.ts';
 
 /**
  * Managed databases (docs/DATABASES.md, D55–D61).
@@ -72,6 +73,8 @@ export const databaseCreateSchema = z
 		cpus: z.number().positive().max(8).default(1),
 		/** Storage budget used for alerts and the dashboard gauge, in MB. */
 		storageMb: z.number().int().min(256).max(1_048_576).default(10_240),
+		/** Node volume for the data dir; null keeps the helper state dir (D74). */
+		volume: z.string().min(3).max(40).optional(),
 		/** Attach to this project right away (placement then follows the project's workload node). */
 		project: z.string().min(1).max(64).optional(),
 		envPrefix: databaseEnvPrefixSchema.optional(),
@@ -151,6 +154,8 @@ export interface DatabaseView {
 	username: string;
 	/** What an attached app on the same node connects to (no password). */
 	internalHost: { process: string; container: string };
+	/** Where the data dir lives; null keeps the helper state dir (D74). */
+	volume: VolumeSummary | null;
 	attachments: DatabaseAttachmentView[];
 	tables: DatabaseTableStat[];
 	statsAt: string | null;

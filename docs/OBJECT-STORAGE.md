@@ -129,6 +129,13 @@ Using prefix `AWS` produces the AWS SDKs' own variable names (`AWS_ENDPOINT_URL`
 `AWS_ACCESS_KEY_ID`, …), so most SDKs work with zero config. The docs call this out; it isn't the
 default because it would shadow real AWS credentials.
 
+**Suggestions and one-click linking.** The runtime editor suggests `<P>_ENDPOINT_URL`,
+`<P>_ACCESS_KEY_ID` and the rest for attached instances, plus names detected in the deployment's
+`.env*` files and source. When the code references something like `S3_BUCKET` or
+`AWS_ACCESS_KEY_ID`, the editor offers to link an unattached instance with the inferred prefix
+(default `S3`) and read-write grants on its ready buckets. Attaching restarts the app with the
+scoped key at its next activation; no redeploy is needed.
+
 **Placement (S5).** Attachments to a **private** instance are same-node only, enforced at deploy
 time as for databases. Attachments to a **public** instance work from any node through the public
 URL. That is the first cross-node managed resource, and it's safe because the traffic is
@@ -180,6 +187,11 @@ Mirrors databases (D59):
   removes only `<stateDir>/<id>`. The row is deleted on the agent's report.
 - **Bucket delete**: refused if the bucket isn't empty, unless `--force` (a human with
   `storage:delete`, typed confirmation in the dashboard; never over MCP).
+
+**Data location.** By default the data dir lives under the helper's state root. An instance can
+instead be placed on a node volume — pass `volume` on create or set the node's default volume; its
+data then lives at `<mount>/skiff/<id>` (D74, D78). The node verifies the mount before every start
+and refuses to run if it is gone (D76). See [VOLUMES.md](./VOLUMES.md).
 
 ## 8. Surfaces
 

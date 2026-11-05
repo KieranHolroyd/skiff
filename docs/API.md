@@ -43,11 +43,15 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | POST | `/uploads/:id/finalize` | `deployment:create` | `{ project, uploadId?, promote?, message? }`; `uploadId` must match `:id`, and the upload must belong to `project` |
 | GET | `/nodes` | platform admin | any surface (session, API key, MCP) of a platform-admin user |
 | GET | `/nodes/capacity` | platform admin | workload-slice budget per node (`sliceMemoryMb`, reserved, free) |
-| PATCH | `/nodes/:id` | platform admin **session** | any of `{ name, publicAddress (host[:port] or null), sliceMemoryMb (32–65536, ≥ reserved), sliceCpuWeight (1–10000), canBuild, dataDir, buildDir }`; agents apply it on their next pull. `dataDir`/`buildDir` (absolute paths, `null` = default) move node storage (D48); progress is in `storage.status` on the node |
+| PATCH | `/nodes/:id` | platform admin **session** | any of `{ name, publicAddress (host[:port] or null), sliceMemoryMb (32–65536, ≥ reserved), sliceCpuWeight (1–10000), canBuild, dataDir, buildDir, defaultVolumeId }`; agents apply it on their next pull. `dataDir`/`buildDir` (absolute paths, `null` = default) move node storage (D48); progress is in `storage.status` on the node. `defaultVolumeId` (or `null`) picks the volume new managed instances use (D74) |
 | POST | `/nodes/:id/builder` | platform admin **session** | `{ builder: boolean }`; lets the node claim git builds |
 | POST | `/nodes/join-token` | platform admin **session** | single-use, 1 h; 403 for API keys / OAuth tokens |
 | POST | `/nodes/:id/drain` \| `/resume` | platform admin **session** | |
 | POST | `/nodes/:id/rotate-token` | platform admin **session** | |
+| GET | `/nodes/:id/volumes` | platform admin | `{ volumes: VolumeView[], inventory: { generatedAt, mounts, devices } \| null }`. `mounts` is what the node reports (stable `sourceKey`, mount path, fs type, size/free, `remote`); `devices` is the free/used block-device list for the provisioning wizard (D72) |
+| POST | `/nodes/:id/volumes` | platform admin **session** | `{ name, sourceKey, default? }` adopts a mount from the latest inventory; no formatting or mounting happens (P0). 409 when the mount is not reported right now, the name/source is taken, or the node has not sent an inventory yet |
+| PATCH | `/nodes/:id/volumes/:name` | platform admin **session** | `{ name?, default? }`; `default: true` makes it the node default, `false` clears it |
+| DELETE | `/nodes/:id/volumes/:name` | platform admin **session** | removes the registration only; the mount stays. 409 while storage/database instances still live on it (D74) |
 | GET | `/audit` | `project:read` | `?limit&action&resource` |
 | GET | `/secrets` | `secret:read-metadata` | values never returned |
 | POST | `/secrets` | `secret:create` | `{ name, value, projectId?, type? }` |
@@ -76,7 +80,7 @@ contain credentials, except `/credentials`.
 | Method | Path | Permission | Notes |
 |---|---|---|---|
 | GET | `/databases` | `database:read` | `?includeDeleted=1` adds the trash → `{ databases }` |
-| POST | `/databases` | `database:create` (+ `project:update` with `project`) | `{ name, engine?, version? (16\|17), placement? (auto\|edge\|node id), memoryMb?, cpus?, storageMb?, project?, envPrefix? }` → `201 { database }`. Placement is resolved once; with `project` it follows the project's node and the attachment is created in the same call |
+| POST | `/databases` | `database:create` (+ `project:update` with `project`) | `{ name, engine?, version? (16\|17), placement? (auto\|edge\|node id), memoryMb?, cpus?, storageMb?, volume?, project?, envPrefix? }` → `201 { database }`. Placement is resolved once; with `project` it follows the project's node and the attachment is created in the same call |
 | GET | `/databases/:name` | `database:read` | `?includeDeleted=1` to read a trashed one → `{ database }` |
 | PATCH | `/databases/:name` | `database:update` | any of `{ memoryMb, cpus, storageMb }`; more memory re-checks admission → `{ database }` |
 | DELETE | `/databases/:name` | `database:delete` | soft delete, restorable 7 days; 409 while projects are attached → `{ database }` |
@@ -115,7 +119,7 @@ secret keys, except `/credentials`.
 | Method | Path | Permission | Notes |
 |---|---|---|---|
 | GET | `/storage` | `storage:read` | `?includeDeleted=1` adds the trash → `{ storage: StorageView[] }` |
-| POST | `/storage` | `storage:create` (+ `project:update` with `project`) | `{ name, engine? (rustfs), version?, placement? (auto\|edge\|node id), memoryMb?, cpus?, storageMb?, public?, buckets? (names, created private), project?, envPrefix? }` → `201 { storage }`. `project` needs at least one bucket and is granted read-write on all of them; a private instance with `project` follows the project's node |
+| POST | `/storage` | `storage:create` (+ `project:update` with `project`) | `{ name, engine? (rustfs), version?, placement? (auto\|edge\|node id), memoryMb?, cpus?, storageMb?, volume?, public?, buckets? (names, created private), project?, envPrefix? }` → `201 { storage }`. `project` needs at least one bucket and is granted read-write on all of them; a private instance with `project` follows the project's node |
 | GET | `/storage/:name` | `storage:read` | `?includeDeleted=1` to read a trashed one → `{ storage }` |
 | PATCH | `/storage/:name` | `storage:update` | any of `{ memoryMb, cpus, storageMb, public, version }`; more memory re-checks admission; going private is refused (409) while apps on other nodes use it → `{ storage }` |
 | DELETE | `/storage/:name` | `storage:delete` | soft delete, restorable 7 days; the container and public route stop; 409 while projects are attached → `{ storage }` |
@@ -207,3 +211,16 @@ session or password), redeems share links, and redirects to
 `https://<host>/_skiff/callback?token=<host-bound token>` where the agent sets the host-only cookie.
 The token is valid for 60 s and is redeemed once (the agent remembers its `jti`); the cookie
 carries the session expiry (`sexp`).
+
+## Dashboard assistant (optional)
+
+Enabled only when an owner has configured a model provider (Settings → Assistant,
+[ASSISTANT.md](./ASSISTANT.md)). The session cookie is the intended credential; an API key works
+too, with the user's normal permissions. One message is at most 8,000 characters, and a user gets
+12 turns a minute.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/assistant/status` | signed in | `{ enabled, configured, provider, model, agents, maxAgents }`; never the API key |
+| POST | `/assistant/chat` | `project:read` | `{ message, history?, context: { path, title?, project?, targets? } }` → SSE of `run.started`, `agent.started`, `text.delta`, `tool.started`, `tool.finished`, `ui.guide`, `confirmation.required`, `agent.finished`, `run.finished`, `error` |
+| POST | `/assistant/confirm` | `project:read` | `{ token }` from a `confirmation.required` event; runs exactly the approved destructive tool, bound to the user, org, tool and arguments (10 min) |

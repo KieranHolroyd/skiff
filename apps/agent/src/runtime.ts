@@ -769,6 +769,8 @@ export function workloadFingerprint(workload: WorkloadDesired): string {
 		healthPath: workload.healthPath,
 		socketActivation: workload.socketActivation,
 		dataSizeMb: workload.dataSizeMb,
+		// A volume move must re-render the unit and restart the container (D74).
+		...(workload.volumeId ? { volumeId: workload.volumeId } : {}),
 		// Only present for databases, so existing app fingerprints (and units) stay unchanged.
 		...(workload.database
 			? { database: { engine: workload.database.engine, version: workload.database.version } }

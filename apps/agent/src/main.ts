@@ -7,6 +7,7 @@ import {
 	type DesiredState,
 	type Heartbeat,
 	type NodeStatus,
+	type VolumeInventory,
 	type WorkloadActivation,
 } from '@skiff/contracts';
 import type { TlsOptions } from '@skiff/site-config';
@@ -34,6 +35,8 @@ const HEARTBEAT_INTERVAL_MS = 10_000;
 const LONG_POLL_SECONDS = 8;
 const LONG_POLL_TIMEOUT_MS = (LONG_POLL_SECONDS + 10) * 1_000;
 const TELEMETRY_INTERVAL_MS = 60_000;
+/** Mounts change rarely; heartbeat every 10 s but re-read the helper's inventory once a minute. */
+const VOLUME_INVENTORY_INTERVAL_MS = 60_000;
 /** `@id` present in every config the agent loads (site-config's catch-all route). */
 const CONVERGED_SENTINEL_ID = 'catch-all';
 const TELEMETRY_POLL_MS = 1_000;
@@ -98,6 +101,8 @@ class AgentRuntime {
 	private telemetryStartWarned = false;
 	private heartbeatWasFailing = false;
 	private pullBeforeConverge = false;
+	private volumeInventory: VolumeInventory | null = null;
+	private volumeInventoryAt = 0;
 
 	private readonly reconcileBackoff = new Backoff(1_000, 30_000);
 	private readonly heartbeatBackoff = new Backoff(5_000, 60_000);
@@ -424,6 +429,14 @@ class AgentRuntime {
 				await this.releases.activate(route.projectId, route.release);
 		}
 
+		// The helper needs the registered volumes before it can resolve a volume-backed data dir
+		// (D74). A failure is logged; affected workloads then fail closed at start (D76).
+		try {
+			await this.helper.syncVolumes(state.volumes, this.shutdownController.signal);
+		} catch (error) {
+			log('error', `Volume registry sync failed: ${errorText(error)}`);
+		}
+
 		// Tier 2/3 workloads converge before Caddy loads their upstreams. A helper outage or a
 		// broken workload must never take static serving down, so failures are logged inside the
 		// runtime and this call is defensive as well.
@@ -541,6 +554,7 @@ class AgentRuntime {
 		// Purged data dirs (D59, S8); cleared only once the control plane accepts this heartbeat.
 		const purgedDatabases = this.workloads.pendingPurgedDatabases();
 		const purgedStorage = this.workloads.pendingPurgedStorage();
+		const volumeInventory = await this.volumeInventoryForHeartbeat();
 		// Bucket deletions are reported once, capped by the heartbeat schema (S8).
 		const storageBucketDeletions = this.storageAdmin.pendingBucketDeletions().slice(0, 500);
 		// A storage move happens outside the agent's sandbox (D48); ask for it while it is due.
@@ -563,6 +577,7 @@ class AgentRuntime {
 			...(purgedDatabases.length > 0 ? { purgedDatabases } : {}),
 			...(purgedStorage.length > 0 ? { purgedStorage } : {}),
 			...(storageBucketDeletions.length > 0 ? { storageBucketDeletions } : {}),
+			...(volumeInventory ? { volumes: volumeInventory } : {}),
 		};
 
 		const parsed = heartbeatSchema.safeParse(body);
@@ -588,6 +603,21 @@ class AgentRuntime {
 		this.workloads.acknowledgePurgedStorage(purgedStorage);
 		this.storageAdmin.acknowledgeBucketDeletions(storageBucketDeletions);
 		return true;
+	}
+
+	/** Cached mount/device inventory (D72, D80); a failure keeps the last report and retries later. */
+	private async volumeInventoryForHeartbeat(): Promise<VolumeInventory | null> {
+		if (this.volumeInventory && Date.now() - this.volumeInventoryAt < VOLUME_INVENTORY_INTERVAL_MS)
+			return this.volumeInventory;
+		try {
+			this.volumeInventory = await this.helper.volumes(this.shutdownController.signal);
+		} catch (error) {
+			log('warn', `Volume inventory failed: ${errorText(error)}`);
+		} finally {
+			// Throttle retries too: the helper may be down, and the next heartbeat is 10 s away.
+			this.volumeInventoryAt = Date.now();
+		}
+		return this.volumeInventory;
 	}
 
 	private async checkCaddy(): Promise<void> {

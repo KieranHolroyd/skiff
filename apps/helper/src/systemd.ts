@@ -2,6 +2,16 @@ import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import {
+	DEFAULT_VOLUMES_FILE,
+	parseWorkloadVolumes,
+	readInventory,
+	readVolumeRegistry,
+	verifyMount,
+	type HelperInventory,
+	type VerifyResult,
+	type VolumeRegistry,
+} from './volumes.ts';
+import {
 	DATABASE_PGDATA,
 	WORKLOAD_NETWORK_UNIT,
 	containerUnitName,
@@ -105,6 +115,8 @@ export interface SystemdDriverOptions {
 	runtimeDir: string;
 	/** Persistent container data root, normally /var/lib/skiff-workloads. */
 	stateDir: string;
+	/** Volume registry written by the root applier, normally /etc/skiff/volumes.json (D74). */
+	volumeRegistryFile?: string;
 	/** Where the agent extracts content-addressed releases, in probe order. */
 	releaseDirs: string[];
 	/** Absolute bun binary used for the default process command. */
@@ -137,6 +149,7 @@ export class SystemdDriver {
 	private readonly quadletDir: string;
 	private readonly runtimeDir: string;
 	private readonly stateDir: string;
+	private readonly volumeRegistryFile: string;
 	private readonly releaseDirs: string[];
 	private readonly bunPath: string;
 	private readonly systemctlPath: string;
@@ -151,6 +164,10 @@ export class SystemdDriver {
 		this.quadletDir = assertAbsolutePath(options.quadletDir ?? options.unitDir, 'quadletDir');
 		this.runtimeDir = assertAbsolutePath(options.runtimeDir, 'runtimeDir');
 		this.stateDir = assertAbsolutePath(options.stateDir, 'stateDir');
+		this.volumeRegistryFile = assertAbsolutePath(
+			options.volumeRegistryFile ?? DEFAULT_VOLUMES_FILE,
+			'volumeRegistryFile',
+		);
 		if (options.releaseDirs.length === 0)
 			throw new ValidationError('releaseDirs must contain at least one directory');
 		this.releaseDirs = options.releaseDirs.map((dir) => assertAbsolutePath(dir, 'releaseDir'));
@@ -182,6 +199,67 @@ export class SystemdDriver {
 		const changed = await this.writeIfChanged(path, renderSliceUnit(memoryMb, cpuWeight), 0o644);
 		if (changed) await this.daemonReload();
 		await this.systemctl(['start', 'skiff-workloads.slice']);
+	}
+
+	/**
+	 * Replace the volume registry from desired state (D74). The agent may ask, but the helper
+	 * validates ids, paths and identities itself; a bad entry rejects the whole list. Writes are
+	 * atomic and only when the content changed.
+	 */
+	async syncVolumes(raw: unknown): Promise<number> {
+		let volumes;
+		try {
+			volumes = parseWorkloadVolumes(raw);
+		} catch (error) {
+			throw new ValidationError(error instanceof Error ? error.message : 'invalid volume list');
+		}
+		const registry: VolumeRegistry = {};
+		for (const volume of volumes)
+			registry[volume.id] = {
+				mountPath: volume.mountPath,
+				sourceKey: volume.sourceKey,
+				fsType: volume.fsType,
+			};
+		const content = `${JSON.stringify(registry, null, 2)}\n`;
+		const existing = await fs.readFile(this.volumeRegistryFile, 'utf8').catch(() => null);
+		if (existing === content) return volumes.length;
+		await fs.mkdir(dirname(this.volumeRegistryFile), { recursive: true, mode: 0o700 });
+		const temporary = `${this.volumeRegistryFile}.tmp`;
+		await fs.writeFile(temporary, content, { mode: 0o600 });
+		await fs.rename(temporary, this.volumeRegistryFile);
+		return volumes.length;
+	}
+
+	/** Read-only inventory for the volume wizard (D72). */
+	async volumesInventory(): Promise<HelperInventory> {
+		return readInventory(this.runner);
+	}
+
+	/** Verify a registered volume without writing anything (D76). */
+	async verifyVolume(input: { mountPath: string; sourceKey: string }): Promise<VerifyResult> {
+		return verifyMount(this.runner, input.mountPath, input.sourceKey);
+	}
+
+	/**
+	 * Where one container's data lives (D74). A volume-backed workload is resolved through the
+	 * root applier's registry and verified *before* anything is written: if the mount is gone the
+	 * start fails, because the alternative is silently filling the root disk (D76). The helper
+	 * never accepts a path from the wire.
+	 */
+	async resolveDataDir(workload: WorkloadDesired): Promise<string> {
+		if (!workload.volumeId) return join(this.stateDir, workload.id);
+		const registry = await readVolumeRegistry(this.volumeRegistryFile);
+		const entry = registry[workload.volumeId];
+		if (!entry)
+			throw new ValidationError(
+				`Volume "${workload.volumeId}" is not registered on this node; refusing to start ${workload.id}.`,
+			);
+		const mounted = await verifyMount(this.runner, entry.mountPath, entry.sourceKey);
+		if (!mounted.ok)
+			throw new ValidationError(
+				`Volume "${workload.volumeId}" is not mounted at ${entry.mountPath}: ${mounted.message ?? 'unknown error'}. Refusing to start ${workload.id}.`,
+			);
+		return join(entry.mountPath, 'skiff', workload.id);
 	}
 
 	/** Render, install and (re)start one workload. Idempotent. */
@@ -283,7 +361,8 @@ export class SystemdDriver {
 			const image = workload.image!;
 			// Every container joins the shared network; write it first so Quadlet can resolve it.
 			changed = (await this.ensureNetworkUnit()) || changed;
-			const dataDir = join(this.stateDir, workload.id);
+			const dataDir = await this.resolveDataDir(workload);
+			if (workload.volumeId) await fs.mkdir(dirname(dataDir), { recursive: true, mode: 0o755 });
 			await fs.mkdir(dataDir, { recursive: true, mode: 0o700 });
 			const owner = workload.database
 				? DATABASE_ENGINES[workload.database.engine]
@@ -336,11 +415,17 @@ export class SystemdDriver {
 	async purge(id: string): Promise<void> {
 		assertManagedId(id, 'managed id');
 		await this.remove(id);
-		const root = resolve(this.stateDir);
-		const target = resolve(root, id);
-		if (dirname(target) !== root || basename(target) !== id)
-			throw new ValidationError(`Refusing to purge ${target}: not a direct child of ${root}`);
-		await fs.rm(target, { recursive: true, force: true });
+		// The data dir is under the state root or, for a volume-backed workload, `<mount>/skiff`
+		// (D74). Both are fixed shapes with the id as the basename; nothing else is ever removed.
+		const roots = [resolve(this.stateDir)];
+		const registry = await readVolumeRegistry(this.volumeRegistryFile);
+		for (const entry of Object.values(registry)) roots.push(resolve(entry.mountPath, 'skiff'));
+		for (const root of roots) {
+			const target = resolve(root, id);
+			if (dirname(target) !== root || basename(target) !== id)
+				throw new ValidationError(`Refusing to purge ${target}: not a direct child of ${root}`);
+			await fs.rm(target, { recursive: true, force: true });
+		}
 	}
 
 	/** Stop both drivers, remove generated units and scrub the runtime secret directory. */

@@ -20,6 +20,8 @@ import {
 	operationCreateSchema,
 	operationKinds,
 	operationStatuses,
+	volumeAdoptSchema,
+	volumeUpdateSchema,
 	type ItemStatus,
 	type ItemVerdict,
 	type OperationKind,
@@ -274,6 +276,25 @@ const api: RequestHandler = async (event) => {
 			const nodeId = segments[1]!;
 			if (segments.length === 2 && method === 'PATCH')
 				return core.nodes.update(principal, nodeId, await readJson(request, nodeUpdateSchema));
+			// --- node volumes (docs/VOLUMES.md, D72) ---------------------------
+			if (segments[2] === 'volumes') {
+				if (segments.length === 3 && method === 'GET') return core.volumes.list(principal, nodeId);
+				if (segments.length === 3 && method === 'POST')
+					return json(
+						core.volumes.adopt(principal, nodeId, await readJson(request, volumeAdoptSchema)),
+						201,
+					);
+				if (segments.length === 4 && method === 'PATCH')
+					return core.volumes.update(
+						principal,
+						nodeId,
+						segments[3]!,
+						await readJson(request, volumeUpdateSchema),
+					);
+				if (segments.length === 4 && method === 'DELETE')
+					return core.volumes.remove(principal, nodeId, segments[3]!);
+				return json({ error: 'not_found' }, 404);
+			}
 			if (segments[2] === 'drain' && method === 'POST')
 				return core.nodes.setDraining(principal, nodeId, true);
 			if (segments[2] === 'resume' && method === 'POST')

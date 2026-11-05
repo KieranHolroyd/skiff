@@ -82,6 +82,8 @@ export interface WorkloadDesired {
 	 * The agent's bucket/user desired state is accepted on the wire but never reaches a unit.
 	 */
 	objectStorage?: WorkloadObjectStorage;
+	/** Node volume for the data dir (D74); resolved and verified against the helper's registry. */
+	volumeId?: string;
 }
 
 /**
@@ -497,6 +499,13 @@ export function parseWorkload(value: unknown): WorkloadDesired {
 	if (image) workload.image = image;
 	if (database) workload.database = database;
 	if (objectStorage) workload.objectStorage = objectStorage;
+	const volumeId = record.volumeId === undefined ? undefined : assertId(record.volumeId, 'workload.volumeId');
+	if (volumeId) {
+		// Volumes hold managed-service data (D74); an app workload never mounts one.
+		if (!database && !objectStorage)
+			throw new ValidationError('workload.volumeId is only valid for a database or objectStorage workload');
+		workload.volumeId = volumeId;
+	}
 	return workload;
 }
 

@@ -10,6 +10,7 @@ import {
 	storageRouteSchema,
 } from './object-storage.ts';
 import { nodeStorageSchema, nodeStorageStatusSchema } from './storage.ts';
+import { nodeVolumeDesiredSchema, volumeInventorySchema } from './volume.ts';
 
 /**
  * The agent protocol (DESIGN §3.3). The control plane stores desired state per node;
@@ -102,6 +103,8 @@ export const desiredStateSchema = z.object({
 	workloads: z.array(workloadDesiredSchema).default([]),
 	/** Purged databases whose data dir this node must delete, then report (D59). */
 	databasePurges: z.array(z.string()).default([]),
+	/** Registered volumes this node must know about, for volume-backed data dirs (D74). */
+	volumes: z.array(nodeVolumeDesiredSchema).default([]),
 	/** Public storage endpoints this node serves (S3): byte-for-byte proxies, not sites. */
 	storageRoutes: z.array(storageRouteSchema).default([]),
 	/** Purged storage instances whose data dir this node must delete, then report (S8). */
@@ -140,6 +143,8 @@ export const heartbeatSchema = z.object({
 	releases: z.array(z.object({ sha256: z.string(), sizeBytes: z.number().int().nonnegative() })).default([]),
 	/** What the node's storage service last applied (D48). */
 	storage: nodeStorageStatusSchema.optional(),
+	/** Mounts and free block devices the node reports for the volume wizard (D72, D80). */
+	volumes: volumeInventorySchema.optional(),
 	/** Actual workload state, so the fleet view reflects restart loops and OOM kills (DESIGN §9). */
 	workloads: z.array(z.object({
 		id: z.string(),

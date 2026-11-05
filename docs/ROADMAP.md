@@ -1,5 +1,9 @@
 # Skiff — Roadmap
 
+> **Execution plans:** the data-platform work is broken into 20 independently assignable plans with
+> a dependency graph, file ownership, and a parallel build order in
+> [docs/build-plan/README.md](./build-plan/README.md).
+
 ## v0: Spikes (de-risk first). Results: [SPIKES.md](./SPIKES.md)
 - [x] DuckDB (`@duckdb/node-api`) under Bun: ingest + time-bucket query + Parquet export
 - [x] Better Auth MCP/OAuth provider: CIMD + DCR, PKCE, consent with permission subsets, scope step-up (e2e 15/15)
@@ -104,6 +108,16 @@
 - [ ] Human access keys with bucket grants and rotation in the dashboard
 - [ ] Per-bucket quotas, lifecycle rules, CORS, custom domains for public instances, Garage as a second engine
 - [ ] Bulk actions and prune for storage; `S3ObjectStore` replication target (D71)
+
+## Node volumes ([VOLUMES.md](./VOLUMES.md))
+- [x] P0: `node_volumes`, per-instance `volume_id`, node default, inventory heartbeat, adopt an existing mount, fail-closed mount verification (D72, D74, D76, D78)
+- [x] P0: helper `volumes.inventory`/`volumes.verify`, `<mount>/skiff/<id>` data dirs, storage/database create `volume`, REST
+- [ ] P0: dashboard volumes page (adopt/set default/usage) and `--volume` on the CLI
+- [ ] P1: guided local format (GPT + ext4/xfs) with plan/confirm/apply (D73, D75)
+- [ ] P2: LVM and mdadm provisioning; array/pool health alerts
+- [ ] P3: ZFS pools/datasets; LUKS2 with keyfile/TPM2
+- [ ] P4: native NFS/CIFS creation with sealed credentials; migration between volumes (D77, D79); multi-drive RustFS
+- [ ] Volume snapshots/backups, quota per volume, SMART health, instance move UI
 
 ## Later / maybe
 - Backup ingress (Cloudflare Tunnel from the homelab + DNS failover)

@@ -1,5 +1,6 @@
 import * as z from 'zod';
 import { SLUG_PATTERN } from './slugs.ts';
+import type { VolumeSummary } from './volume.ts';
 
 /**
  * Managed object storage (docs/OBJECT-STORAGE.md, S1–S10).
@@ -115,6 +116,8 @@ export const storageCreateSchema = z
 		public: z.boolean().default(false),
 		/** Buckets to create right away (all `private`). */
 		buckets: z.array(bucketNameSchema).max(20).default([]),
+		/** Node volume for the data dir; null keeps the helper state dir (D74). */
+		volume: z.string().min(3).max(40).optional(),
 		/** Attach to this project right away, read-write on every bucket created here. */
 		project: z.string().min(1).max(64).optional(),
 		envPrefix: storageEnvPrefixSchema.optional(),
@@ -211,6 +214,8 @@ export interface StorageView {
 	publicUrl: string | null;
 	/** What an attached app on the same node connects to. */
 	internalEndpoint: { process: string; container: string };
+	/** Where the data dir lives; null keeps the helper state dir (D74). */
+	volume: VolumeSummary | null;
 	region: string;
 	buckets: StorageBucketView[];
 	attachments: StorageAttachmentView[];

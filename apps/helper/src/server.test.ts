@@ -75,6 +75,21 @@ class FakeRuntime implements HelperRuntime {
 		return { id, status: 'running', restarts: 2 };
 	}
 
+	async volumesInventory() {
+		this.calls.push('volumes:inventory');
+		return { generatedAt: '2026-11-05T00:00:00.000Z', mounts: [], devices: [] };
+	}
+
+	async syncVolumes(volumes: unknown) {
+		this.calls.push(`volumes:sync:${Array.isArray(volumes) ? volumes.length : 'invalid'}`);
+		return Array.isArray(volumes) ? volumes.length : 0;
+	}
+
+	async verifyVolume(input: { mountPath: string; sourceKey: string }) {
+		this.calls.push(`volumes:verify:${input.mountPath}:${input.sourceKey}`);
+		return { ok: true, mountPath: input.mountPath, sourceKey: input.sourceKey, message: null };
+	}
+
 	logReads: Array<{ id: string; cursor?: string; lines?: number }> = [];
 
 	async logs(id: string, options: { cursor?: string; lines?: number } = {}) {
@@ -327,6 +342,28 @@ describe('helper HTTP surface', () => {
 		const body = (await response.json()) as { error: string };
 		expect(body.error).toContain('systemctl');
 		expect(body.error).not.toContain('activation');
+	});
+
+	test('serves the read-only volume inventory', async () => {
+		const runtime = new FakeRuntime();
+		const response = await handler(runtime)(new Request('http://localhost/v1/volumes'));
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as { ok: boolean; inventory: { mounts: unknown[] } };
+		expect(body.ok).toBe(true);
+		expect(body.inventory.mounts).toEqual([]);
+		expect(runtime.calls).toEqual(['volumes:inventory']);
+	});
+
+	test('verifies a volume and rejects a non-absolute path', async () => {
+		const runtime = new FakeRuntime();
+		const ok = await handler(runtime)(
+			post('/v1/volumes/verify', { mountPath: '/mnt/data', sourceKey: 'fs:data-uuid' }),
+		);
+		expect(ok.status).toBe(200);
+		expect(await ok.json()).toMatchObject({ ok: true, mountPath: '/mnt/data' });
+
+		const bad = await handler(runtime)(post('/v1/volumes/verify', { mountPath: 'mnt/data', sourceKey: 'fs:x' }));
+		expect(bad.status).toBe(400);
 	});
 
 	test('rejects oversized bodies', async () => {

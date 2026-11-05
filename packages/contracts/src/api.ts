@@ -142,6 +142,8 @@ export const nodeUpdateSchema = z
 		dataDir: nodeStoragePathSchema.nullable().optional(),
 		/** Builder scratch directory; `null` restores the install default (D48). */
 		buildDir: nodeStoragePathSchema.nullable().optional(),
+		/** Volume new managed instances on this node use when they name none (D74). */
+		defaultVolumeId: z.string().max(100).nullable().optional(),
 	})
 	.strict();
 export type NodeUpdate = z.infer<typeof nodeUpdateSchema>;

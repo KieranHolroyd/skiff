@@ -7,12 +7,14 @@ import {
 	assertManagedId,
 	assertMemoryMb,
 	assertRecord,
+	assertString,
 	parseApplyRequest,
 	ValidationError,
 	type WorkloadActivation,
 	type WorkloadDesired,
 } from './validate.ts';
 import type { HelperLogResult, HelperWorkloadStatus, LogReadOptions } from './systemd.ts';
+import type { HelperInventory, VerifyResult } from './volumes.ts';
 
 /**
  * The helper's entire network surface: six fixed verbs (slice, apply, status, remove, logs and
@@ -28,6 +30,12 @@ export interface HelperRuntime {
 	logs(id: string, options?: LogReadOptions): Promise<HelperLogResult>;
 	/** Remove a purged database's or storage instance's unit and `<stateDir>/<id>` data dir (D59, S8). */
 	purge(id: string): Promise<void>;
+	/** Mounts and free block devices for the volume wizard (D72). */
+	volumesInventory(): Promise<HelperInventory>;
+	/** Replace the volume registry from desired state (D74). */
+	syncVolumes(volumes: unknown): Promise<number>;
+	/** Prove that a registered volume is really mounted before a workload starts (D76). */
+	verifyVolume(input: { mountPath: string; sourceKey: string }): Promise<VerifyResult>;
 }
 
 export interface HandlerOptions {
@@ -63,6 +71,28 @@ export function createHandler(
 				const cpuWeight = body.cpuWeight === undefined ? 200 : assertCpuWeight(body.cpuWeight, 'cpuWeight');
 				await runtime.ensureSlice({ memoryMb, cpuWeight });
 				return json({ ok: true, memoryMb, cpuWeight });
+			}
+
+			// --- volumes (D72, D76): read-only inventory and mount verification -----------------
+			if (path === '/v1/volumes') {
+				if (method !== 'GET') return methodNotAllowed('GET');
+				return json({ ok: true, inventory: await runtime.volumesInventory() });
+			}
+			if (path === '/v1/volumes/registry') {
+				if (method !== 'POST') return methodNotAllowed('POST');
+				const body = assertRecord(await readJson(request, maxBodyBytes), 'request');
+				if (!Array.isArray(body.volumes)) throw new ValidationError('volumes must be an array');
+				const count = await runtime.syncVolumes(body.volumes);
+				return json({ ok: true, count });
+			}
+			if (path === '/v1/volumes/verify') {
+				if (method !== 'POST') return methodNotAllowed('POST');
+				const body = assertRecord(await readJson(request, maxBodyBytes), 'request');
+				const mountPath = assertString(body.mountPath, 'mountPath', { max: 200 });
+				if (!mountPath.startsWith('/') || mountPath.includes('/../') || mountPath.endsWith('/..'))
+					throw new ValidationError('mountPath must be an absolute, normalized path');
+				const sourceKey = assertString(body.sourceKey, 'sourceKey', { max: 300 });
+				return json(await runtime.verifyVolume({ mountPath, sourceKey }));
 			}
 
 			if (path === '/v1/workloads') {

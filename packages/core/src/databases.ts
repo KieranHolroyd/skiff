@@ -35,6 +35,7 @@ import type { CoreContext } from './context.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { resolvePlacement } from './placement.ts';
 import type { ProjectRow } from './projects.ts';
+import type { VolumeRow } from './volumes.ts';
 import { newId, parseJson, randomBytes, sha256Hex } from './util.ts';
 
 export type DatabaseRow = typeof databases.$inferSelect;
@@ -134,6 +135,19 @@ export class DatabaseService {
 			requested = pinned ?? workloadNode ?? project.placement;
 		}
 
+		// A named volume pins the node: the data dir has to be on the same node as the container.
+		let volume: VolumeRow | null = null;
+		if (input.volume) {
+			volume = this.ctx.volumes.findByName(input.volume);
+			const edgeNodeId = this.ctx.workloads.edgeNode();
+			const target = requested === 'auto' ? null : requested === 'edge' ? edgeNodeId : requested;
+			if (target && target !== volume.nodeId)
+				throw new ValidationError(
+					`Volume "${volume.name}" is on another node; place this database there or pick a volume on the target node.`,
+				);
+			requested = volume.nodeId;
+		}
+
 		const decision = resolvePlacement({
 			runtime: 'container',
 			requested,
@@ -143,6 +157,10 @@ export class DatabaseService {
 		});
 		if (!decision.ok)
 			throw new ValidationError(decision.message.replace('this app reserves', 'this database reserves'), decision.freeByNode);
+
+		// No explicit volume: use the node's default, so an operator only sets it once.
+		if (!volume) volume = this.ctx.volumes.defaultFor(decision.nodeId);
+		if (volume) this.ctx.volumes.assertRoom(volume, input.storageMb);
 
 		const id = newId('db_');
 		const now = this.ctx.now();
@@ -161,6 +179,7 @@ export class DatabaseService {
 					memoryMb,
 					cpus: input.cpus,
 					storageMb: input.storageMb,
+					volumeId: volume?.id ?? null,
 					status: 'pending',
 					ownerSecret: this.ctx.secrets.seal(principal.orgId, password()),
 					monitorSecret: this.ctx.secrets.seal(principal.orgId, password()),
@@ -183,6 +202,7 @@ export class DatabaseService {
 				version,
 				nodeId: decision.nodeId,
 				memoryMb,
+				...(volume ? { volume: volume.name } : {}),
 				...(project ? { project: project.slug } : {}),
 			},
 			result: 'ok',
@@ -252,6 +272,7 @@ export class DatabaseService {
 		if (row.purgeRequestedAt)
 			throw new ConflictError(`Database "${name}" is being purged and can no longer be restored.`);
 		this.admit(row, row.memoryMb);
+		this.ctx.volumes.assertVolumeReady(row.volumeId, row.storageMb);
 		this.ctx.db
 			.update(databases)
 			.set({ deletedAt: null, purgeAt: null, status: 'pending', message: null, updatedAt: this.ctx.now() })
@@ -515,6 +536,7 @@ export class DatabaseService {
 					env,
 					secrets: [],
 					dataSizeMb: null,
+					...(row.volumeId ? { volumeId: row.volumeId } : {}),
 					database: { engine: row.engine, version: row.version },
 				};
 			});
@@ -817,6 +839,7 @@ export class DatabaseService {
 				process: `127.0.0.1:${row.hostPort}`,
 				container: `${databaseAlias(row.id)}:${info.containerPort}`,
 			},
+			volume: this.ctx.volumes.summary(row.volumeId),
 			attachments: this.attachmentsOf(row.id),
 			tables: parseJson<DatabaseTableStat[]>(row.statsJson, []),
 			statsAt: row.statsAt ? new Date(row.statsAt).toISOString() : null,

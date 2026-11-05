@@ -1,7 +1,10 @@
-import type {
-	WorkloadActivation,
-	WorkloadDesired,
-	WorkloadStatus,
+import {
+	volumeInventorySchema,
+	type NodeVolumeDesired,
+	type VolumeInventory,
+	type WorkloadActivation,
+	type WorkloadDesired,
+	type WorkloadStatus,
 } from '@skiff/contracts';
 
 /**
@@ -63,6 +66,7 @@ const REMOVE_TIMEOUT_MS = 60_000;
 /** Stopping Postgres (TimeoutStopSec=120) plus deleting a large data dir. */
 const PURGE_TIMEOUT_MS = 300_000;
 const STATUS_TIMEOUT_MS = 2_000;
+const VOLUME_TIMEOUT_MS = 10_000;
 const LOG_TIMEOUT_MS = 8_000;
 const STATUSES: readonly WorkloadStatus[] = ['pending', 'starting', 'running', 'failed', 'stopped'];
 
@@ -101,6 +105,37 @@ export class HelperClient implements HelperApi {
 
 	async purge(id: string): Promise<void> {
 		await this.request('POST', `/v1/workloads/${encodeURIComponent(id)}/purge`, undefined, PURGE_TIMEOUT_MS);
+	}
+
+	/** Read-only mount/device inventory for the volume wizard (D72). */
+	async volumes(signal?: AbortSignal): Promise<VolumeInventory> {
+		const body = await this.request('GET', '/v1/volumes', undefined, VOLUME_TIMEOUT_MS, signal);
+		return volumeInventorySchema.parse(asRecord(body).inventory);
+	}
+
+	/** Replace the helper's volume registry from desired state (D74). */
+	async syncVolumes(volumes: NodeVolumeDesired[], signal?: AbortSignal): Promise<void> {
+		await this.request('POST', '/v1/volumes/registry', { volumes }, VOLUME_TIMEOUT_MS, signal);
+	}
+
+	/** Prove a registered volume is mounted before a workload references it (D76). */
+	async verifyVolume(
+		mountPath: string,
+		sourceKey: string,
+		signal?: AbortSignal,
+	): Promise<{ ok: boolean; message: string | null }> {
+		const body = await this.request(
+			'POST',
+			'/v1/volumes/verify',
+			{ mountPath, sourceKey },
+			VOLUME_TIMEOUT_MS,
+			signal,
+		);
+		const record = asRecord(body);
+		return {
+			ok: record.ok === true,
+			message: typeof record.message === 'string' ? record.message : null,
+		};
 	}
 
 	async status(id: string): Promise<HelperWorkloadStatus> {

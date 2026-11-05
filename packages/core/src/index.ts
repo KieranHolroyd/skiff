@@ -17,6 +17,7 @@ import { MetricsService } from './metrics.ts';
 import { WorkloadService } from './workloads.ts';
 import { DatabaseService } from './databases.ts';
 import { StorageService } from './storage-instances.ts';
+import { VolumeService } from './volumes.ts';
 import { DomainService } from './domains.ts';
 import { BuildService } from './builds.ts';
 import { LogService } from './logs.ts';
@@ -45,6 +46,7 @@ export * from './placement.ts';
 export * from './workloads.ts';
 export * from './databases.ts';
 export * from './storage-instances.ts';
+export * from './volumes.ts';
 export * from './domains.ts';
 export * from './builds.ts';
 export * from './logs.ts';
@@ -76,6 +78,7 @@ export interface Core {
 	workloads: WorkloadService;
 	databases: DatabaseService;
 	storage: StorageService;
+	volumes: VolumeService;
 	domains: DomainService;
 	builds: BuildService;
 	logs: LogService;
@@ -112,6 +115,7 @@ export function createCore(options: CoreOptions): Core {
 	ctx.workloads = new WorkloadService(ctx);
 	ctx.databases = new DatabaseService(ctx);
 	ctx.storage = new StorageService(ctx);
+	ctx.volumes = new VolumeService(ctx);
 	ctx.domains = new DomainService(ctx);
 	ctx.logs = new LogService(ctx);
 	ctx.builds = new BuildService(ctx);
@@ -138,6 +142,7 @@ export function createCore(options: CoreOptions): Core {
 		workloads: ctx.workloads,
 		databases: ctx.databases,
 		storage: ctx.storage,
+		volumes: ctx.volumes,
 		domains: ctx.domains,
 		builds: ctx.builds,
 		logs: ctx.logs,
