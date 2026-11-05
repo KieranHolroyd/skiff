@@ -23,6 +23,7 @@
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import PuzzleIcon from '@lucide/svelte/icons/puzzle';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
+	import SearchIcon from '@lucide/svelte/icons/search';
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import SlidersHorizontalIcon from '@lucide/svelte/icons/sliders-horizontal';
 	import SquareIcon from '@lucide/svelte/icons/square';
@@ -36,6 +37,9 @@
 	import {
 		databaseEnvNames,
 		databaseExtensionAllowlist,
+		databaseExtensionCatalog,
+		databaseExtensionCategories,
+		databaseExtensionCategoryLabels,
 		type DatabaseConsoleView,
 		type DatabaseCredentials
 	} from '@skiff/contracts';
@@ -136,6 +140,29 @@
 			notify(outcome);
 		};
 	};
+
+	// --- extensions (D84) ---------------------------------------------------------------------
+
+	let extensionQuery = $state('');
+	const extensionGroups = databaseExtensionCategories.map((category) => ({
+		category,
+		label: databaseExtensionCategoryLabels[category],
+		extensions: databaseExtensionAllowlist.filter(
+			(extension) => databaseExtensionCatalog[extension].category === category
+		)
+	}));
+	/** Filtered rows stay in the DOM (hidden) so their checkboxes still submit with the form. */
+	function extensionMatches(extension: (typeof databaseExtensionAllowlist)[number]): boolean {
+		const needle = extensionQuery.trim().toLowerCase();
+		if (!needle) return true;
+		const info = databaseExtensionCatalog[extension];
+		return (
+			extension.toLowerCase().includes(needle) ||
+			info.description.toLowerCase().includes(needle) ||
+			databaseExtensionCategoryLabels[info.category].toLowerCase().includes(needle)
+		);
+	}
+	const extensionMatchCount = $derived(databaseExtensionAllowlist.filter(extensionMatches).length);
 
 	// --- credentials (D58): revealed on demand, audited, never in page data -------------------
 
@@ -562,8 +589,8 @@
 							</div>
 							<p class="mt-1 text-[11px] text-muted-foreground">
 								Encrypted at rest · set
-								{db.publicUrl.updatedAt ? formatDateTime(db.publicUrl.updatedAt) : '—'} · through
-								your own proxy or tunnel
+								{db.publicUrl.updatedAt ? formatDateTime(db.publicUrl.updatedAt) : '—'} · through your
+								own proxy or tunnel
 							</p>
 						{:else}
 							<div class="flex flex-wrap items-center justify-end gap-2">
@@ -1350,23 +1377,62 @@
 					title="Extensions"
 					icon={PuzzleIcon}
 					count={db.extensions.length || undefined}
-					description="Allowlisted Postgres extensions the node installs on activation."
+					description="Allowlisted Postgres extensions the node installs on the next activation."
 				>
 					<form method="POST" action="?/extensions" use:enhance={submitInline} class="space-y-4">
-						<div class="grid gap-2 sm:grid-cols-2">
-							{#each databaseExtensionAllowlist as extension (extension)}
-								<label
-									class="flex items-center gap-2.5 rounded-md border px-3 py-2 font-mono text-xs transition-colors has-data-checked:border-primary/40 has-data-checked:bg-muted/40"
+						<InputGroup.Root>
+							<InputGroup.Input
+								type="search"
+								placeholder="Filter extensions"
+								bind:value={extensionQuery}
+								aria-label="Filter extensions"
+							/>
+							<InputGroup.Addon><SearchIcon /></InputGroup.Addon>
+							{#if extensionQuery}
+								<InputGroup.Addon align="inline-end">
+									<InputGroup.Text class="font-mono text-xs">{extensionMatchCount}</InputGroup.Text>
+								</InputGroup.Addon>
+							{/if}
+						</InputGroup.Root>
+						<div class="max-h-[28rem] space-y-4 overflow-y-auto pr-1">
+							{#each extensionGroups as group (group.category)}
+								<section
+									class="space-y-1.5"
+									class:hidden={!group.extensions.some(extensionMatches)}
+									aria-label={group.label}
 								>
-									<Checkbox
-										name="extensions"
-										value={extension}
-										checked={db.extensions.includes(extension)}
-										disabled={!editable}
-									/>
-									{extension}
-								</label>
+									<h3 class="text-xs font-medium text-muted-foreground">{group.label}</h3>
+									{#each group.extensions as extension (extension)}
+										{@const info = databaseExtensionCatalog[extension]}
+										<label
+											class="flex items-start gap-2.5 rounded-md border px-3 py-2 transition-colors has-data-checked:border-primary/40 has-data-checked:bg-muted/40"
+											class:hidden={!extensionMatches(extension)}
+										>
+											<Checkbox
+												name="extensions"
+												value={extension}
+												checked={db.extensions.includes(extension)}
+												disabled={!editable}
+												class="mt-0.5"
+											/>
+											<span class="min-w-0 flex-1 space-y-0.5">
+												<span class="flex flex-wrap items-center gap-1.5">
+													<span class="font-mono text-xs">{extension}</span>
+													{#if !info.bundled}
+														<Badge variant="outline" class="text-[10px]">Not in stock image</Badge>
+													{/if}
+												</span>
+												<span class="block text-xs text-muted-foreground">{info.description}</span>
+											</span>
+										</label>
+									{/each}
+								</section>
 							{/each}
+							{#if extensionMatchCount === 0}
+								<p class="py-6 text-center text-sm text-muted-foreground">
+									No extension matches “{extensionQuery}”.
+								</p>
+							{/if}
 						</div>
 						<div class="flex flex-wrap items-center justify-between gap-3">
 							<p class="text-xs text-muted-foreground">

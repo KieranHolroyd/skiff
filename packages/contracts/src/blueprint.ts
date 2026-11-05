@@ -1,6 +1,11 @@
 import * as z from 'zod';
 import { appVolumeBackings, appVolumeMountPathProblem, appVolumeMountPathSchema } from './app-volume.ts';
-import { databaseEngineRegistry, databaseEngines, databaseExtensionSchema } from './database.ts';
+import {
+	databaseEngineRegistry,
+	databaseEngines,
+	databaseExtensionAllowlist,
+	databaseExtensionSchema,
+} from './database.ts';
 import { cronSchema } from './database-backup.ts';
 import { jobConcurrencyModes } from './job.ts';
 import { accessModes } from './model.ts';
@@ -194,7 +199,7 @@ export const blueprintDatabaseSchema = z
 		cpus: z.number().positive().max(8).optional(),
 		/** Storage budget in MB (applied as `storageMb` on the database). */
 		sizeMb: z.number().int().min(256).max(1_048_576).default(10_240),
-		extensions: z.array(databaseExtensionSchema).max(20).default([]),
+		extensions: z.array(databaseExtensionSchema).max(databaseExtensionAllowlist.length).default([]),
 		pooler: z.boolean().default(true),
 	})
 	.superRefine((input, ctx) => {

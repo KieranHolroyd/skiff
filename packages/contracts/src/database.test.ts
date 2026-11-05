@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { databaseConnectionSnippets, databaseConnectionUrl, databaseEnvNames } from './database.ts';
+import {
+	databaseConnectionSnippets,
+	databaseConnectionUrl,
+	databaseEnvNames,
+	databaseExtensionAllowlist,
+	databaseExtensionCatalog,
+	databaseUpdateSchema,
+} from './database.ts';
 
 describe('database connection URLs', () => {
 	test('omits sslmode when TLS is disabled', () => {
@@ -82,5 +89,26 @@ describe('connection snippets', () => {
 			caPem: null,
 		});
 		expect(snippets.verifyFull).toContain('TLS is disabled');
+	});
+});
+
+describe('database extensions', () => {
+	test('every allowlisted extension has a catalog entry with a safe SQL name', () => {
+		expect(Object.keys(databaseExtensionCatalog).sort()).toEqual([...databaseExtensionAllowlist].sort());
+		for (const info of Object.values(databaseExtensionCatalog)) {
+			expect(info.sqlName).toMatch(/^[a-z0-9_-]+$/);
+		}
+		expect(databaseExtensionCatalog.pgvector.sqlName).toBe('vector');
+	});
+
+	test('network, filesystem and procedural-language extensions stay off the allowlist', () => {
+		const refused = ['dblink', 'postgres_fdw', 'file_fdw', 'adminpack', 'plpython3u', 'plperlu', 'plperl', 'pg_surgery'];
+		for (const name of refused) {
+			expect(databaseUpdateSchema.safeParse({ extensions: [name] }).success).toBe(false);
+		}
+	});
+
+	test('the whole allowlist can be enabled at once', () => {
+		expect(databaseUpdateSchema.safeParse({ extensions: [...databaseExtensionAllowlist] }).success).toBe(true);
 	});
 });

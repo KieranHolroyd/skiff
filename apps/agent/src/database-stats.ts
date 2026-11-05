@@ -1,6 +1,7 @@
 import { SQL } from 'bun';
 import {
 	DATABASE_POOLER_MAX_CLIENTS,
+	databaseExtensionCatalog,
 	databaseMetricBucketSchema,
 	databaseSnapshotSchema,
 	type DatabaseMetricBucket,
@@ -22,20 +23,16 @@ import {
 
 export const DATABASE_STATS_INTERVAL_MS = 60_000;
 const SNAPSHOT_EVERY = 5;
-const EXTENSION_ALLOWLIST = new Set([
-	'pg_stat_statements',
-	'pg_trgm',
-	'pgcrypto',
-	'citext',
-	'hstore',
-	'unaccent',
-	'pg_cron',
-	'pgvector',
-	'postgis',
-]);
 const MAX_BUCKETS = 5_000;
 const MAX_SNAPSHOTS = 200;
 const TABLE_LIMIT = 50;
+
+/** The `CREATE EXTENSION` name for an allowlisted extension, or null for anything else. */
+export function extensionSqlName(extension: string): string | null {
+	return Object.hasOwn(databaseExtensionCatalog, extension)
+		? databaseExtensionCatalog[extension as keyof typeof databaseExtensionCatalog].sqlName
+		: null;
+}
 
 /** What the sampler needs to know about one database; provided by the workload runtime. */
 export interface DatabaseTarget {
@@ -538,9 +535,12 @@ export class DatabaseStatsSampler {
 			}
 			// Extensions are best-effort: an image without one must not fail the monitor role.
 			for (const extension of target.extensions ?? []) {
-				if (!EXTENSION_ALLOWLIST.has(extension)) continue;
+				const sqlName = extensionSqlName(extension);
+				if (!sqlName) continue;
 				try {
-					await client.query(`CREATE EXTENSION IF NOT EXISTS "${extension}"`);
+					// CASCADE pulls in a required extension (earthdistance needs cube); the identifier
+					// comes from the contracts catalog, never from the wire.
+					await client.query(`CREATE EXTENSION IF NOT EXISTS "${sqlName}" CASCADE`);
 				} catch (error) {
 					this.log(
 						'warn',

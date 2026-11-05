@@ -5,6 +5,7 @@ import {
 	bunSqlConnector,
 	counterDeltas,
 	DatabaseStatsSampler,
+	extensionSqlName,
 	POOLER_POOLS_SQL,
 	POOLER_STATS_SQL,
 	parsePoolerPools,
@@ -221,6 +222,26 @@ describe('DatabaseStatsSampler bootstrap', () => {
 		expect(f.pg.ofUser('orders')).toHaveLength(4);
 		// Every connection is closed.
 		expect(f.pg.closed).toBe(f.pg.connects.length);
+	});
+
+	test('creates allowlisted extensions by their SQL name and skips anything else', async () => {
+		const f = fixture();
+		f.source.targets = [
+			target({ extensions: ['pgvector', 'uuid-ossp', 'earthdistance', 'dblink', 'x"; DROP TABLE t; --'] }),
+		];
+
+		await f.sampler.sample();
+
+		const created = f.pg
+			.ofUser('orders')
+			.map((query) => query.text)
+			.filter((text) => text.startsWith('CREATE EXTENSION'));
+		expect(created).toEqual([
+			'CREATE EXTENSION IF NOT EXISTS "vector" CASCADE',
+			'CREATE EXTENSION IF NOT EXISTS "uuid-ossp" CASCADE',
+			'CREATE EXTENSION IF NOT EXISTS "earthdistance" CASCADE',
+		]);
+		expect(extensionSqlName('toString')).toBeNull();
 	});
 
 	test('bootstraps again for a new activation version', async () => {

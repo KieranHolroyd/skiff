@@ -47,7 +47,7 @@ Create options:
       --cpus <n>               CPU limit (default 1)
       --storage <size>         Storage budget for alerts and the gauge (default 10G)
       --[no-]pooler            PgBouncer sidecar (default on; injects <PREFIX>_POOL_URL)
-      --extension <name>       Enable an allowlisted extension (repeatable)
+      --extension <name>       Enable an allowlisted extension, e.g. pg_trgm, uuid-ossp (repeatable)
 
 Options:
   -y, --yes                    Don't ask for confirmation (required when stdin isn't a terminal)

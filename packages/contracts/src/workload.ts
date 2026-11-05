@@ -1,5 +1,5 @@
 import * as z from 'zod';
-import { databaseMonitorSchema, workloadDatabaseSchema } from './database.ts';
+import { databaseExtensionAllowlist, databaseMonitorSchema, workloadDatabaseSchema } from './database.ts';
 import { storageAdminSchema, workloadObjectStorageSchema } from './object-storage.ts';
 import { githubRunnerSchema } from './github-runner.ts';
 
@@ -373,7 +373,9 @@ export const workloadActivationSchema = z.object({
 	/** Managed databases only: stats-sampler credentials, kept in agent memory (D57). */
 	monitor: databaseMonitorSchema.optional(),
 	/** Managed databases only: extensions to install idempotently on first start. */
-	databaseSetup: z.object({ extensions: z.array(z.string().max(64)).max(20).default([]) }).optional(),
+	databaseSetup: z
+		.object({ extensions: z.array(z.string().max(64)).max(databaseExtensionAllowlist.length).default([]) })
+		.optional(),
 	/** Storage instances only: root and scoped keys for bucket/user reconcile, agent memory only. */
 	storageAdmin: storageAdminSchema.optional(),
 });

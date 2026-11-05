@@ -196,10 +196,23 @@ path until a real restore drill passes.
 
 ## 9. Extensions and slow queries (D84)
 
-`extensions` is an allowlist (`pg_stat_statements`, `pg_trgm`, `pgcrypto`, `citext`, `hstore`,
-`unaccent`, `pg_cron`, `pgvector`, `postgis`). The helper preloads `pg_stat_statements`; the agent
-creates requested extensions idempotently after the monitor role is bootstrapped. An extension the
-pinned image does not ship fails softly and is logged; it does not stop the database.
+`extensions` is an allowlist, defined with a description and category per entry in
+`databaseExtensionCatalog` (`packages/contracts/src/database.ts`). It covers the contrib set the
+pinned `postgres:{16,17}-alpine` image ships (observability such as `pg_stat_statements`,
+`pg_buffercache`, `pgstattuple`, `amcheck`; text search such as `pg_trgm`, `unaccent`,
+`fuzzystrmatch`; types such as `citext`, `hstore`, `ltree`, `isn`; `btree_gin`/`btree_gist`/`bloom`
+indexing; `pgcrypto`, `uuid-ossp`, `tablefunc`, `earthdistance`; trigger helpers such as
+`moddatetime` and `tcn`), plus `pg_cron`, `pgvector` and
+`postgis`, which the stock image does not ship yet.
+
+Excluded on purpose: anything that reaches outside the container (`dblink`, `postgres_fdw`,
+`file_fdw`, `adminpack`), procedural languages (the image ships `plperl`/`pltcl` control files
+without the Perl/Tcl runtimes; the untrusted variants can escape the database), `pg_surgery`, and the deprecated `xml2`, `intagg` and `old_snapshot`.
+
+The helper preloads `pg_stat_statements`; the agent runs `CREATE EXTENSION IF NOT EXISTS "<sql
+name>" CASCADE` for each requested extension after the monitor role is bootstrapped (`pgvector`
+maps to `vector`; `CASCADE` pulls in `cube` for `earthdistance`). An extension the pinned image does
+not ship fails softly and is logged; it does not stop the database.
 
 The five-minute snapshot also carries the top 50 `pg_stat_statements` rows (query id, normalized
 SQL, calls, total/mean time, rows, shared/temp blocks) when the extension is enabled. The control

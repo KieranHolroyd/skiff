@@ -42,24 +42,350 @@ export const databaseEngineRegistry: Record<DatabaseEngine, DatabaseEngineInfo> 
 };
 
 /**
- * Extensions Skiff can enable on a managed Postgres database. The helper preloads
+ * Extensions Skiff can enable on a managed Postgres database (D84). The helper preloads
  * `pg_stat_statements`; the rest are created idempotently by the agent after the monitor role is
  * bootstrapped. Extensions that are not shipped by the pinned official image fail softly (they
  * are reported in the log, not treated as a database failure).
+ *
+ * The list is the contrib set shipped by `postgres:{16,17}-alpine`, minus anything that reaches
+ * outside the container or can destroy data on its own: `dblink`, `postgres_fdw`, `file_fdw`,
+ * `adminpack`, the procedural languages (the Alpine image ships `plperl`/`pltcl` control files but
+ * not the Perl/Tcl runtimes, and the untrusted variants can escape the database), `pg_surgery`,
+ * plus the deprecated `xml2`, `intagg` and `old_snapshot`. Adding one is a contract change and an
+ * image check: `CREATE EXTENSION` must succeed on every supported version.
  */
 export const databaseExtensionAllowlist = [
+	// Observability
 	'pg_stat_statements',
+	'pg_buffercache',
+	'pgstattuple',
+	'pgrowlocks',
+	'pg_freespacemap',
+	'pg_visibility',
+	'pg_walinspect',
+	'pageinspect',
+	'amcheck',
+	'pg_prewarm',
+	'sslinfo',
+	// Text search
 	'pg_trgm',
-	'pgcrypto',
+	'unaccent',
+	'fuzzystrmatch',
+	'dict_int',
+	'dict_xsyn',
+	// Data types
 	'citext',
 	'hstore',
-	'unaccent',
+	'ltree',
+	'isn',
+	'cube',
+	'seg',
+	'lo',
+	// Indexing
+	'btree_gin',
+	'btree_gist',
+	'bloom',
+	// Functions
+	'pgcrypto',
+	'uuid-ossp',
+	'tablefunc',
+	'intarray',
+	'earthdistance',
+	'tsm_system_rows',
+	'tsm_system_time',
+	// Triggers
+	'moddatetime',
+	'autoinc',
+	'insert_username',
+	'refint',
+	'tcn',
+	// Not in the stock image
 	'pg_cron',
 	'pgvector',
 	'postgis',
 ] as const;
 export type DatabaseExtension = (typeof databaseExtensionAllowlist)[number];
 export const databaseExtensionSchema = z.enum(databaseExtensionAllowlist);
+
+export const databaseExtensionCategories = [
+	'observability',
+	'search',
+	'types',
+	'indexing',
+	'functions',
+	'triggers',
+	'external',
+] as const;
+export type DatabaseExtensionCategory = (typeof databaseExtensionCategories)[number];
+
+export const databaseExtensionCategoryLabels: Record<DatabaseExtensionCategory, string> = {
+	observability: 'Observability',
+	search: 'Text search',
+	types: 'Data types',
+	indexing: 'Indexing',
+	functions: 'Functions',
+	triggers: 'Triggers',
+	external: 'Needs a custom image',
+};
+
+export interface DatabaseExtensionInfo {
+	/** The name passed to `CREATE EXTENSION` (differs from the allowlist key for `pgvector`). */
+	sqlName: string;
+	category: DatabaseExtensionCategory;
+	description: string;
+	/** Shipped by the pinned `postgres:*-alpine` image; others are skipped with a node warning. */
+	bundled: boolean;
+}
+
+/** One entry per allowlisted extension; the `Record` type keeps the two in step. */
+export const databaseExtensionCatalog: Record<DatabaseExtension, DatabaseExtensionInfo> = {
+	pg_stat_statements: {
+		sqlName: 'pg_stat_statements',
+		category: 'observability',
+		description: 'Planning and execution stats for every statement; powers the slow-query panel.',
+		bundled: true,
+	},
+	pg_buffercache: {
+		sqlName: 'pg_buffercache',
+		category: 'observability',
+		description: 'Inspect what is in the shared buffer cache.',
+		bundled: true,
+	},
+	pgstattuple: {
+		sqlName: 'pgstattuple',
+		category: 'observability',
+		description: 'Tuple-level statistics: bloat, dead tuples and free space per table or index.',
+		bundled: true,
+	},
+	pgrowlocks: {
+		sqlName: 'pgrowlocks',
+		category: 'observability',
+		description: 'Show row-level locking information for a table.',
+		bundled: true,
+	},
+	pg_freespacemap: {
+		sqlName: 'pg_freespacemap',
+		category: 'observability',
+		description: 'Examine the free space map of a relation.',
+		bundled: true,
+	},
+	pg_visibility: {
+		sqlName: 'pg_visibility',
+		category: 'observability',
+		description: 'Examine the visibility map and page-level visibility info.',
+		bundled: true,
+	},
+	pg_walinspect: {
+		sqlName: 'pg_walinspect',
+		category: 'observability',
+		description: 'Inspect the contents of the write-ahead log.',
+		bundled: true,
+	},
+	pageinspect: {
+		sqlName: 'pageinspect',
+		category: 'observability',
+		description: 'Read raw page contents for low-level debugging.',
+		bundled: true,
+	},
+	amcheck: {
+		sqlName: 'amcheck',
+		category: 'observability',
+		description: 'Verify the logical consistency of tables and B-tree indexes.',
+		bundled: true,
+	},
+	pg_prewarm: {
+		sqlName: 'pg_prewarm',
+		category: 'observability',
+		description: 'Load relation data into the buffer cache ahead of traffic.',
+		bundled: true,
+	},
+	sslinfo: {
+		sqlName: 'sslinfo',
+		category: 'observability',
+		description: 'Information about the current client TLS connection.',
+		bundled: true,
+	},
+	pg_trgm: {
+		sqlName: 'pg_trgm',
+		category: 'search',
+		description: 'Trigram similarity and GIN/GiST indexes for fast LIKE/ILIKE and fuzzy search.',
+		bundled: true,
+	},
+	unaccent: {
+		sqlName: 'unaccent',
+		category: 'search',
+		description: 'Text search dictionary that strips accents.',
+		bundled: true,
+	},
+	fuzzystrmatch: {
+		sqlName: 'fuzzystrmatch',
+		category: 'search',
+		description: 'Levenshtein distance, Soundex and Metaphone string matching.',
+		bundled: true,
+	},
+	dict_int: {
+		sqlName: 'dict_int',
+		category: 'search',
+		description: 'Text search dictionary template for integers.',
+		bundled: true,
+	},
+	dict_xsyn: {
+		sqlName: 'dict_xsyn',
+		category: 'search',
+		description: 'Text search dictionary for extended synonym processing.',
+		bundled: true,
+	},
+	citext: {
+		sqlName: 'citext',
+		category: 'types',
+		description: 'Case-insensitive text type; handy for emails and usernames.',
+		bundled: true,
+	},
+	hstore: {
+		sqlName: 'hstore',
+		category: 'types',
+		description: 'Key/value pairs in a single column.',
+		bundled: true,
+	},
+	ltree: {
+		sqlName: 'ltree',
+		category: 'types',
+		description: 'Hierarchical tree-like labels (materialized paths) with indexed queries.',
+		bundled: true,
+	},
+	isn: {
+		sqlName: 'isn',
+		category: 'types',
+		description: 'Types for ISBN, ISSN, EAN13, UPC and other product numbers.',
+		bundled: true,
+	},
+	cube: {
+		sqlName: 'cube',
+		category: 'types',
+		description: 'Multi-dimensional cubes and points.',
+		bundled: true,
+	},
+	seg: {
+		sqlName: 'seg',
+		category: 'types',
+		description: 'Line segments and floating-point intervals.',
+		bundled: true,
+	},
+	lo: {
+		sqlName: 'lo',
+		category: 'types',
+		description: 'Large object maintenance helpers.',
+		bundled: true,
+	},
+	btree_gin: {
+		sqlName: 'btree_gin',
+		category: 'indexing',
+		description: 'GIN operator classes for B-tree types, for multi-column GIN indexes.',
+		bundled: true,
+	},
+	btree_gist: {
+		sqlName: 'btree_gist',
+		category: 'indexing',
+		description: 'GiST operator classes for B-tree types; enables exclusion constraints on scalars.',
+		bundled: true,
+	},
+	bloom: {
+		sqlName: 'bloom',
+		category: 'indexing',
+		description: 'Bloom filter index access method.',
+		bundled: true,
+	},
+	pgcrypto: {
+		sqlName: 'pgcrypto',
+		category: 'functions',
+		description: 'Hashing, encryption and random bytes.',
+		bundled: true,
+	},
+	'uuid-ossp': {
+		sqlName: 'uuid-ossp',
+		category: 'functions',
+		description: 'UUID generators (v1, v3, v4, v5).',
+		bundled: true,
+	},
+	tablefunc: {
+		sqlName: 'tablefunc',
+		category: 'functions',
+		description: 'crosstab() pivots, connectby() and normal_rand().',
+		bundled: true,
+	},
+	intarray: {
+		sqlName: 'intarray',
+		category: 'functions',
+		description: 'Functions, operators and indexes for integer arrays.',
+		bundled: true,
+	},
+	earthdistance: {
+		sqlName: 'earthdistance',
+		category: 'functions',
+		description: 'Great-circle distances on the Earth (installs cube).',
+		bundled: true,
+	},
+	tsm_system_rows: {
+		sqlName: 'tsm_system_rows',
+		category: 'functions',
+		description: 'TABLESAMPLE method that takes a fixed number of rows.',
+		bundled: true,
+	},
+	tsm_system_time: {
+		sqlName: 'tsm_system_time',
+		category: 'functions',
+		description: 'TABLESAMPLE method bounded by time.',
+		bundled: true,
+	},
+	moddatetime: {
+		sqlName: 'moddatetime',
+		category: 'triggers',
+		description: 'Trigger that keeps an updated_at column current.',
+		bundled: true,
+	},
+	autoinc: {
+		sqlName: 'autoinc',
+		category: 'triggers',
+		description: 'Trigger that fills a column from a sequence.',
+		bundled: true,
+	},
+	insert_username: {
+		sqlName: 'insert_username',
+		category: 'triggers',
+		description: 'Trigger that records the current user in a column.',
+		bundled: true,
+	},
+	refint: {
+		sqlName: 'refint',
+		category: 'triggers',
+		description: 'Triggers for referential integrity without foreign keys.',
+		bundled: true,
+	},
+	tcn: {
+		sqlName: 'tcn',
+		category: 'triggers',
+		description: 'Trigger that sends NOTIFY events on table changes.',
+		bundled: true,
+	},
+	pg_cron: {
+		sqlName: 'pg_cron',
+		category: 'external',
+		description: 'Cron-style scheduled SQL jobs. Needs a preload and an image that ships it.',
+		bundled: false,
+	},
+	pgvector: {
+		sqlName: 'vector',
+		category: 'external',
+		description: 'Vector embeddings with HNSW/IVFFlat indexes. Needs an image that ships it.',
+		bundled: false,
+	},
+	postgis: {
+		sqlName: 'postgis',
+		category: 'external',
+		description: 'Geospatial types, functions and indexes. Needs an image that ships it.',
+		bundled: false,
+	},
+};
 
 /** Host ports allocated per node for database containers (loopback only, D56). */
 export const DATABASE_PORT_MIN = 15432;
@@ -202,7 +528,7 @@ export const databaseCreateSchema = z
 		project: z.string().min(1).max(64).optional(),
 		envPrefix: databaseEnvPrefixSchema.optional(),
 		/** Extensions to create on first start (allowlist only). */
-		extensions: z.array(databaseExtensionSchema).max(20).default([]),
+		extensions: z.array(databaseExtensionSchema).max(databaseExtensionAllowlist.length).default([]),
 		/** Run a transaction-mode PgBouncer sidecar and inject <PREFIX>_POOL_URL. */
 		pooler: z.boolean().default(true),
 	})
@@ -234,7 +560,7 @@ export const databaseUpdateSchema = z
 		 */
 		version: z.string().max(16).optional(),
 		/** Adding installs on the next activation. Removing never drops an extension automatically. */
-		extensions: z.array(databaseExtensionSchema).max(20).optional(),
+		extensions: z.array(databaseExtensionSchema).max(databaseExtensionAllowlist.length).optional(),
 		/** Enable or disable the PgBouncer sidecar. */
 		pooler: z.boolean().optional(),
 	})
