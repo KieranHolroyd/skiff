@@ -161,6 +161,21 @@ export function quotaPercent(used: number, limit: number): number | null {
 	return Math.round((used / limit) * 1000) / 10;
 }
 
+/**
+ * Resolve a project's effective quota: every non-null override replaces the org value, and a
+ * missing/null field inherits it. Both `-1` and null mean unlimited in storage, so they are
+ * normalised to `QUOTA_UNLIMITED` here.
+ */
+export function resolveQuota(base: OrgQuota, overrides: ProjectQuotaFields | null | undefined): OrgQuota {
+	const resolved = { ...base };
+	if (!overrides) return resolved;
+	for (const field of quotaFieldNames) {
+		const value = overrides[field];
+		if (value !== null && value !== undefined) resolved[field] = value;
+	}
+	return resolved;
+}
+
 export const quotaUsageMetricSchema = z.strictObject({
 	used: z.number().nonnegative(),
 	/** -1 is unlimited. */

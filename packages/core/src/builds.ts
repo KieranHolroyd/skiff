@@ -103,6 +103,7 @@ export class BuildService {
 		const parsed = buildCreateSchema.parse(input);
 		const source = this.requireGitSource(project);
 		if (!source.enabled) throw new ConflictError('Git builds are disabled for this project.');
+		this.ctx.quota.assertCanCreateBuild(project.orgId, project.id);
 		const now = this.ctx.now();
 		const row: BuildRow = {
 			id: newId('bld_'),
@@ -452,6 +453,7 @@ export class BuildService {
 		}
 		const branch = payload.ref?.replace('refs/heads/', '');
 		if (!branch || branch !== source.branch) return null;
+		this.ctx.quota.assertCanCreateBuild(project.orgId, project.id);
 		const now = this.ctx.now();
 		const row: BuildRow = {
 			id: newId('bld_'),

@@ -23,6 +23,7 @@ import { promoteCommand } from './commands/promote.ts';
 import { pruneCommand } from './commands/prune.ts';
 import { rollbackCommand } from './commands/rollback.ts';
 import { statusCommand } from './commands/status.ts';
+import { usageCommand } from './commands/usage.ts';
 import { PROFILE_ENV, setProfileOverride } from './config.ts';
 
 const invokedAs = 'skif';
@@ -34,6 +35,7 @@ const commands: Record<string, (argv: string[]) => Promise<void>> = {
 	profile: profileCommand,
 	deploy: deployCommand,
 	status: statusCommand,
+	usage: usageCommand,
 	projects: projectsCommand,
 	deployments: deploymentsCommand,
 	promote: promoteCommand,
@@ -64,6 +66,7 @@ Commands:
   profile [list|add|use|remove|show|current] Manage profiles for multiple deployments
   deploy [dir] [options]                     Zip and deploy a directory
   status [project]                           Fleet health, or one project's status
+  usage [project]                            Usage and quota percentages (showback)
   projects                                   List projects
   projects delete|restore|purge <slug…>      Bulk actions: shows the plan, then asks
   projects trash                             List the trash with purge dates

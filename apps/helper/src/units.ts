@@ -59,9 +59,34 @@ export function poolerServiceName(id: string): string {
 	return `skiff-workload-${id}-pool.service`;
 }
 
-/** Pinned PgBouncer image (D61-style: the helper chooses it, never the wire). */
+/**
+ * Pinned PgBouncer image (D61-style: the helper chooses it, never the wire). The digest is the
+ * multi-arch index, not a single platform manifest: pinning the arm64 manifest (`88769b6…`) made
+ * every amd64 node fail with `Exec format error` (and vice versa).
+ */
 export const DATABASE_POOLER_IMAGE =
-	'docker.io/edoburu/pgbouncer:latest@sha256:88769b6bbae0fbe0a198c26dc4c2f6bc3bf95bec4cab7d18c6a4348fa36cccc2';
+	'docker.io/edoburu/pgbouncer:latest@sha256:8638aa563607256d3c7440437534195f1066a92b68015d89ae9d6b935b444a6d';
+
+/**
+ * AppArmor is disabled for a container only when the host needs it. Ubuntu 26.04 (and recent
+ * kernels on 24.04/Debian 13) sets `kernel.apparmor_restrict_unprivileged_unconfined=1`; with
+ * `NoNewPrivileges=true` the runtime's profile change becomes a stack (`containers-default//&crun`),
+ * and the stock profile only allows signals to the unstacked peer. Postgres then cannot signal its
+ * own checkpointer (`could not signal for checkpoint: Permission denied`) and never starts.
+ * `apparmor=unconfined` is the documented per-container workaround; every other confinement
+ * (no capabilities, no-new-privileges, read-only root) stays in place.
+ */
+function apparmorPodmanArgs(profile: string | null | undefined): string | null {
+	if (!profile) return null;
+	if (!/^[A-Za-z0-9_.-]+$/.test(profile))
+		throw new ValidationError(`Unsafe AppArmor profile name: ${profile}`);
+	return `PodmanArgs=--security-opt apparmor=${profile}`;
+}
+
+function pushApparmor(lines: string[], profile: string | null | undefined): void {
+	const line = apparmorPodmanArgs(profile);
+	if (line) lines.push(line);
+}
 
 /** PgBouncer config for one database. `auth_file` is the 0600 userlist written beside it. */
 export function renderPoolerConfig(options: {
@@ -117,6 +142,8 @@ export function renderPoolerUnit(options: {
 	userlistPath: string;
 	/** Host TLS directory mounted read-only when the pooler terminates client TLS. */
 	tlsDir?: string | null;
+	/** AppArmor profile workaround for hosts with the stacked-profile kernel bug. */
+	apparmorProfile?: string | null;
 }): string {
 	const { workload } = options;
 	if (!workload.database || !workload.pooler)
@@ -143,6 +170,7 @@ export function renderPoolerUnit(options: {
 	lines.push('NoNewPrivileges=true');
 	lines.push('ReadOnly=true');
 	lines.push('Tmpfs=/tmp:rw,size=16m');
+	pushApparmor(lines, options.apparmorProfile);
 	lines.push('');
 	lines.push('[Service]');
 	lines.push('Restart=on-failure');
@@ -420,6 +448,8 @@ export interface ContainerUnitOptions {
 	tlsDir?: string | null;
 	/** App volumes mounted into the container (plan 07). */
 	volumeMounts?: UnitVolumeMount[];
+	/** AppArmor profile workaround for hosts with the stacked-profile kernel bug. */
+	apparmorProfile?: string | null;
 }
 
 /**
@@ -435,8 +465,15 @@ export function renderContainerUnit(options: ContainerUnitOptions): string {
 			dataDir: options.dataDir,
 			...(options.pitr ? { pitr: options.pitr } : {}),
 			tlsDir: options.tlsDir ?? null,
+			apparmorProfile: options.apparmorProfile ?? null,
 		});
-	if (workload.objectStorage) return renderStorageUnit({ workload, envFile: options.envFile, dataDir: options.dataDir });
+	if (workload.objectStorage)
+		return renderStorageUnit({
+			workload,
+			envFile: options.envFile,
+			dataDir: options.dataDir,
+			apparmorProfile: options.apparmorProfile ?? null,
+		});
 	const lines: string[] = [];
 	lines.push('[Unit]');
 	lines.push(`Description=${description(workload)} (container)`);

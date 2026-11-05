@@ -3,6 +3,7 @@ import type { SkiffDb } from '@skiff/db';
 import type { Notifier, CoreConfig } from './config.ts';
 import type { AuditService } from './audit.ts';
 import type { QuotaService } from './quota.ts';
+import type { UsageService } from './usage.ts';
 import type { ObjectStore } from './object-store.ts';
 import type { TelemetryStore } from './telemetry.ts';
 import type { ProjectService } from './projects.ts';
@@ -38,6 +39,7 @@ export interface CoreContext {
 	objectStore: ObjectStore;
 	audit: AuditService;
 	quota: QuotaService;
+	usage: UsageService;
 	telemetry?: TelemetryStore;
 	notifiers: Notifier[];
 	now(): number;

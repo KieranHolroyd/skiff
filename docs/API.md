@@ -231,6 +231,18 @@ single-use join token and returns the node's long-lived token.
 - `POST /api/webhooks/github/:project` — `X-GitHub-Event` + `X-Hub-Signature-256`; requires the
   project's webhook secret and queues a build for pushes to the configured branch.
 
+## Usage and quotas
+
+Quotas bound org and project resources; usage is read-only showback (no billing). See
+[QUOTAS.md](./QUOTAS.md).
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/usage?project=<slug>&format=csv&history=1` | `project:read` | Current org/project usage, CSV export or daily points |
+| GET | `/quotas?project=<slug>` | `project:read` | Org quota, or a project's base/overrides/effective limits |
+| PUT/PATCH | `/quotas?project=<slug>` | platform admin | Replace org quota fields or project overrides (`-1` unlimited; project `null` inherits) |
+| DELETE | `/quotas?project=<slug>` | platform admin | Remove project overrides |
+
 ## Objects (local store only)
 
 With `SKIFF_OBJECT_STORE=local`, presigned URLs point at `/api/objects/<key>?exp=&sig=` and are

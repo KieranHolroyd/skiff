@@ -2,7 +2,7 @@ import { lt } from 'drizzle-orm';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { backupRuns, deployments, shareLinks, shareRedemptions } from '@skiff/db';
+import { backupRuns, deployments, orgQuotas, shareLinks, shareRedemptions } from '@skiff/db';
 import { operationLimits } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import { ALERT_AFTER_MS } from './nodes.ts';
@@ -123,6 +123,9 @@ export class MaintenanceService {
 
 		alertsFired.push(...(await this.databaseAlerts()));
 		alertsFired.push(...(await this.storageAlerts()));
+		alertsFired.push(...(await this.quotaAlerts()));
+		// Daily trend points are idempotent: after the first sweep of a UTC day this is a no-op.
+		await this.ctx.usage.captureSnapshots();
 
 		alertsFired.push(...(await this.promoteSpikeAlerts()));
 
@@ -344,6 +347,44 @@ export class MaintenanceService {
 		return fired;
 	}
 
+	/**
+	 * Org quota warnings at 80% and 95% (plan 16). Quotas are a warning, never a page: a breach
+	 * limits new resources but does not take a running workload down. The alert key includes the
+	 * UTC day and the threshold, so each threshold fires once per day rather than every sweep.
+	 */
+	private async quotaAlerts(): Promise<string[]> {
+		const rows = this.ctx.db.select().from(orgQuotas).all();
+		if (rows.length === 0) return [];
+		const day = new Date(this.ctx.now()).toISOString().slice(0, 10);
+		const fired: string[] = [];
+		for (const row of rows) {
+			let view;
+			try {
+				view = await this.ctx.usage.orgUsage(row.orgId);
+			} catch (error) {
+				console.error(`[maintenance] usage for ${row.orgId} failed:`, error);
+				continue;
+			}
+			for (const [metric, value] of Object.entries(view.metrics)) {
+				if (value.limit < 0 || value.percent === null || value.percent < 80) continue;
+				const threshold = value.percent >= 95 ? 95 : 80;
+				const key = `quota:${row.orgId}:${metric}:${threshold}:${day}`;
+				if (this.alertSeen(key)) continue;
+				fired.push(key);
+				await this.notify({
+					key,
+					title: `Quota ${threshold}%: ${metric}`,
+					detail:
+						`Org ${row.orgId} uses ${quotaValue(value.used, value.unit)} of its ` +
+						`${quotaValue(value.limit, value.unit)} ${metric} quota (${value.percent}%). ` +
+						'New resources may be refused; raise the quota or delete unused resources.',
+					severity: 'warning',
+				});
+			}
+		}
+		return fired;
+	}
+
 	private async notify(alert: { key: string; title: string; detail: string; severity: 'info' | 'warning' | 'critical' }): Promise<void> {
 		const last = this.ctx.sqlite
 			.query<{ last_fired_at: number | null }, [string]>('SELECT last_fired_at FROM alert_state WHERE key = ?')
@@ -362,6 +403,17 @@ export class MaintenanceService {
 			}
 		}
 	}
+}
+
+function quotaValue(value: number, unit: string): string {
+	if (unit === 'bytes') {
+		if (value < 1024) return `${value} B`;
+		if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+		if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+		return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+	}
+	if (unit === 'megabytes') return `${value} MB`;
+	return String(value);
 }
 
 /**

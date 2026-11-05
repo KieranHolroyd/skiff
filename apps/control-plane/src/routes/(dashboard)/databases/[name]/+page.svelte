@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
+	import { enhance, type SubmitFunction } from '$app/forms';
 	import { goto, replaceState } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -55,8 +55,8 @@
 	import CopyValue from '../../_lib/service/CopyValue.svelte';
 	import DangerZone from '../../_lib/service/DangerZone.svelte';
 	import RangePicker from '../../_lib/service/RangePicker.svelte';
-	import StatStrip, { type Stat } from '../../_lib/service/StatStrip.svelte';
-	import { readTab, tabHref } from '../../_lib/service/sections.js';
+	import StatStrip from '../../_lib/service/StatStrip.svelte';
+	import { readTab, tabHref, type Stat } from '../../_lib/service/sections.js';
 	import { formatBytes, formatDate, formatDateTime, formatDuration } from '../../_lib/format.js';
 	import { purgeCountdown } from '../../_lib/operations/copy.js';
 	import DatabaseHeader from '../_lib/DatabaseHeader.svelte';
@@ -121,14 +121,8 @@
 	}
 
 	/** Re-run page data after an inline form and toast the outcome. */
-	const submitInline = () => {
-		return async ({
-			result: outcome,
-			update
-		}: {
-			result: import('@sveltejs/kit').ActionResult;
-			update: (options?: { reset?: boolean }) => Promise<void>;
-		}) => {
+	const submitInline: SubmitFunction = () => {
+		return async ({ result: outcome, update }) => {
 			await update({ reset: false });
 			notify(outcome);
 		};
@@ -687,6 +681,11 @@
 				{/if}
 			{/snippet}
 
+			{#if policy?.pendingRestoreId}
+				<div class="px-4 pt-4">
+					<Notice tone="info">A restore is in progress; new restores are available once it finishes.</Notice>
+				</div>
+			{/if}
 			{#if backups.length === 0}
 				<div class="p-4">
 					<EmptyState
@@ -759,11 +758,6 @@
 						{/each}
 					</Table.Body>
 				</Table.Root>
-			{/if}
-			{#if policy?.pendingRestoreId}
-				{#snippet footer()}
-					<span>A restore is in progress; new restores are available once it finishes.</span>
-				{/snippet}
 			{/if}
 		</Panel>
 	{:else if tab === 'insights'}
@@ -1151,7 +1145,6 @@
 								value={policy.schedule}
 								spellcheck="false"
 								class="font-mono text-sm"
-								disabled={!policyEnabled}
 							/>
 							<InputGroup.Addon align="inline-end">
 								<InputGroup.Text class="font-mono text-xs">UTC</InputGroup.Text>
@@ -1180,7 +1173,6 @@
 					</Field.Field>
 				</div>
 			</Field.Group>
-			{#if !policyEnabled}<input type="hidden" name="schedule" value={policy.schedule} />{/if}
 		</FormDialog>
 	{/if}
 

@@ -2,6 +2,7 @@ import { error } from '@sveltejs/kit';
 import { CoreError } from '@skiff/core';
 import { hasPermission, type ServiceLogQueryResult, type DatabaseView } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
+import { databaseCan } from '../../_lib/forms.server.js';
 import type { PageServerLoad } from './$types';
 
 /**
@@ -33,6 +34,7 @@ export const load: PageServerLoad = ({ locals, params }) => {
 		database,
 		initial,
 		logsError,
-		canRead
+		canRead,
+		dbCan: databaseCan(principal)
 	};
 };

@@ -23,3 +23,15 @@ export function tabHref(href: string, tab: string, fallback: string): string {
 	else url.searchParams.set('tab', tab);
 	return `${url.pathname}${url.search}`;
 }
+
+/** One headline number in a `StatStrip`. */
+export interface Stat {
+	label: string;
+	value: string;
+	/** Quiet unit after the value ("/ 10 GB"). */
+	unit?: string;
+	caption?: string;
+	icon?: Component<{ class?: string }>;
+	/** 0–100; draws a budget bar under the value (warns at 70, alerts at 85). */
+	meter?: number | null;
+}

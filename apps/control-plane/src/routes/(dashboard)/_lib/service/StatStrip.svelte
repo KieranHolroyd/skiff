@@ -1,17 +1,6 @@
 <script lang="ts">
-	import type { Component } from 'svelte';
 	import { Progress } from '#lib/components/ui/progress/index.js';
-
-	export type Stat = {
-		label: string;
-		value: string;
-		/** Quiet unit after the value ("/ 10 GB"). */
-		unit?: string;
-		caption?: string;
-		icon?: Component<{ class?: string }>;
-		/** 0–100; draws a budget bar under the value (warns at 70, alerts at 85). */
-		meter?: number | null;
-	};
+	import type { Stat } from './sections.js';
 
 	/** A row of headline numbers in one bordered strip; hairline dividers survive any wrap. */
 	let { stats, label }: { stats: Stat[]; label: string } = $props();

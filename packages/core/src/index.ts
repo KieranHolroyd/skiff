@@ -4,6 +4,7 @@ import type { CoreConfig } from './config.ts';
 import type { CoreContext } from './context.ts';
 import { AuditService } from './audit.ts';
 import { QuotaService } from './quota.ts';
+import { UsageService } from './usage.ts';
 import { ProjectService } from './projects.ts';
 import { ReleaseService } from './releases.ts';
 import { DeploymentService } from './deployments.ts';
@@ -65,6 +66,7 @@ export * from './notify.ts';
 export * from './telemetry.ts';
 export * from './operations/index.ts';
 export * from './scheduler.ts';
+export * from './usage.ts';
 export * from './service-actions.ts';
 export * from './backup-targets.ts';
 
@@ -103,6 +105,7 @@ export interface Core {
 	scheduler: SchedulerService;
 	serviceActions: ServiceActionsService;
 	backupTargets: BackupTargetService;
+	usage: UsageService;
 }
 
 /**
@@ -142,6 +145,7 @@ export function createCore(options: CoreOptions): Core {
 	ctx.scheduler = new SchedulerService(ctx);
 	ctx.serviceActions = new ServiceActionsService(ctx);
 	ctx.backupTargets = new BackupTargetService(ctx);
+	ctx.usage = new UsageService(ctx);
 	const source = new SourceService(ctx);
 
 	const deploy = new DeployService(ctx);
@@ -177,5 +181,6 @@ export function createCore(options: CoreOptions): Core {
 		scheduler: ctx.scheduler,
 		serviceActions: ctx.serviceActions,
 		backupTargets: ctx.backupTargets,
+		usage: ctx.usage,
 	};
 }
