@@ -32,7 +32,8 @@ export const FEATURE_ENV_PREFIX = 'SKIFF_FEATURE_';
 export const FEATURE_FLAGS = {
 	BACKUPS_RESTORE: {
 		name: 'BACKUPS_RESTORE',
-		default: false,
+		// Shipped: logical backups and restore-to-new are live. Default on preserves behaviour.
+		default: true,
 		area: 'backups',
 		description: 'Create, restore and delete managed database backups from the dashboard and API.'
 	},
@@ -44,13 +45,15 @@ export const FEATURE_FLAGS = {
 	},
 	OBJECT_BROWSER: {
 		name: 'OBJECT_BROWSER',
-		default: false,
+		// Shipped: list/upload/download/delete/presign are live. Default on preserves behaviour.
+		default: true,
 		area: 'storage',
 		description: 'Browse, upload, download and delete objects in managed storage buckets.'
 	},
 	POOLER: {
 		name: 'POOLER',
-		default: false,
+		// Shipped: the per-database PgBouncer sidecar is live. Default on preserves behaviour.
+		default: true,
 		area: 'databases',
 		description: 'Run a PgBouncer sidecar and publish the pooled connection port for a database.'
 	},

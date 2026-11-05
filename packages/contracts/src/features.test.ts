@@ -33,12 +33,17 @@ describe('feature registry', () => {
 		}
 	});
 
-	test('risky features default off', () => {
+	test('shipped surfaces default on', () => {
+		// These are live features; unset must preserve existing behaviour.
+		expect(DEFAULT_FEATURES.BACKUPS_RESTORE).toBe(true);
+		expect(DEFAULT_FEATURES.OBJECT_BROWSER).toBe(true);
+		expect(DEFAULT_FEATURES.POOLER).toBe(true);
+		expect(DEFAULT_FEATURES.QUOTAS).toBe(true);
+	});
+
+	test('unshipped risky features default off', () => {
 		for (const name of [
-			'BACKUPS_RESTORE',
 			'PITR',
-			'OBJECT_BROWSER',
-			'POOLER',
 			'DB_TLS',
 			'ORG_NETWORKS',
 			'APP_VOLUMES',
@@ -50,8 +55,6 @@ describe('feature registry', () => {
 		] as const) {
 			expect(DEFAULT_FEATURES[name]).toBe(false);
 		}
-		// Quotas are shipped and safe; unset must preserve enforcement.
-		expect(DEFAULT_FEATURES.QUOTAS).toBe(true);
 	});
 
 	test('uses SKIFF_FEATURE_<NAME> as the env key', () => {
@@ -121,10 +124,10 @@ describe('parseFeatureFlags', () => {
 
 	test('malformed values keep the safe default', () => {
 		const flags = parseFeatureFlags({
-			SKIFF_FEATURE_BACKUPS_RESTORE: 'enabled',
+			SKIFF_FEATURE_PITR: 'enabled',
 			SKIFF_FEATURE_QUOTAS: 'disabled'
 		});
-		expect(flags.BACKUPS_RESTORE).toBe(false);
+		expect(flags.PITR).toBe(false);
 		expect(flags.QUOTAS).toBe(true);
 	});
 
