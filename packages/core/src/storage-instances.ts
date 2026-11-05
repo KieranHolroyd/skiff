@@ -183,6 +183,7 @@ export class StorageService {
 		// No explicit volume: use the node's default, so an operator only sets it once.
 		if (!volume) volume = this.ctx.volumes.defaultFor(decision.nodeId);
 		if (volume) this.ctx.volumes.assertRoom(volume, input.storageMb);
+		this.ctx.quota.assertCanCreateStorage(principal.orgId, project?.id, input.storageMb, memoryMb);
 		const hostPort = this.allocatePort(decision.nodeId);
 		this.ctx.sqlite.transaction(() => {
 			this.ctx.db
@@ -246,6 +247,17 @@ export class StorageService {
 		const patch = storageUpdateSchema.parse(raw);
 		const row = this.requireRow(principal, name);
 		const info = storageEngineRegistry[row.engine];
+		const projectId = this.attachmentsOf(row.id)[0]?.projectId;
+		if (patch.storageMb !== undefined || patch.memoryMb !== undefined)
+			this.ctx.quota.assertCanResizeStorage(
+				principal.orgId,
+				projectId,
+				{ storageMb: row.storageMb, memoryMb: row.memoryMb },
+				{
+					...(patch.storageMb !== undefined ? { storageMb: patch.storageMb } : {}),
+					...(patch.memoryMb !== undefined ? { memoryMb: patch.memoryMb } : {}),
+				},
+			);
 		if (patch.memoryMb !== undefined) {
 			if (patch.memoryMb < info.minMemoryMb)
 				throw new ValidationError(`${info.label} needs at least ${info.minMemoryMb} MB.`);
@@ -319,6 +331,12 @@ export class StorageService {
 		if (!row.deletedAt) return this.toView(row);
 		if (row.purgeRequestedAt)
 			throw new ConflictError(`Storage "${name}" is being purged and can no longer be restored.`);
+		this.ctx.quota.assertCanCreateStorage(
+			principal.orgId,
+			this.attachmentsOf(row.id)[0]?.projectId,
+			row.storageMb,
+			row.memoryMb,
+		);
 		this.admit(row, row.memoryMb);
 		this.ctx.volumes.assertVolumeReady(row.volumeId, row.storageMb);
 		this.ctx.db

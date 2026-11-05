@@ -147,6 +147,7 @@ export class StorageObjectsService {
 				`Objects uploaded through the control plane are limited to ${formatLimit(max)}; use a presigned upload for larger files.`,
 				413,
 			);
+		this.ctx.quota.assertCanCreateObject(row.orgId, null, 1, body.byteLength);
 		const result = await this.client(row).putObject(
 			bucket,
 			safeKey,
@@ -196,6 +197,7 @@ export class StorageObjectsService {
 		const bucketRow = this.bucket(row, bucket);
 		this.writable(bucketRow);
 		const { prefix } = storageFolderSchema.parse({ prefix: rawPrefix });
+		this.ctx.quota.assertCanCreateObject(row.orgId, null, 1, 0);
 		await this.client(row).putObject(bucket, prefix, new Uint8Array(), 'application/x-directory');
 		this.ctx.audit.record({
 			principal,

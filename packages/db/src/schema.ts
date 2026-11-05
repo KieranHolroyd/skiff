@@ -850,8 +850,67 @@ export const orgQuotas = sqliteTable('org_quotas', {
 	storageBytes: integer('storage_bytes').notNull().default(-1),
 	retainedDeployments: integer('retained_deployments').notNull().default(-1),
 	maxUploadBytes: integer('max_upload_bytes').notNull().default(-1),
+	/** Extended org quotas (plan 16, migration 0025). Null and -1 both mean unlimited. */
+	databases: integer('databases').default(-1),
+	databaseStorageBytes: integer('database_storage_bytes').default(-1),
+	storageInstances: integer('storage_instances').default(-1),
+	storageObjects: integer('storage_objects').default(-1),
+	appVolumes: integer('app_volumes').default(-1),
+	appVolumeBytes: integer('app_volume_bytes').default(-1),
+	jobs: integer('jobs').default(-1),
+	jobRunsPerDay: integer('job_runs_per_day').default(-1),
+	buildsPerDay: integer('builds_per_day').default(-1),
+	previews: integer('previews').default(-1),
+	workloadMemoryMb: integer('workload_memory_mb').default(-1),
+	egressBytes: integer('egress_bytes').default(-1),
 	updatedAt: integer('updated_at').notNull().$defaultFn(now),
 });
+
+/**
+ * Per-project quota overrides (plan 16). Every column is nullable: null inherits the org quota,
+ * so an override only has to name what differs. Timestamps are epoch milliseconds.
+ */
+export const projectQuotas = sqliteTable(
+	'project_quotas',
+	{
+		projectId: text('project_id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		projects: integer('projects'),
+		storageBytes: integer('storage_bytes'),
+		retainedDeployments: integer('retained_deployments'),
+		maxUploadBytes: integer('max_upload_bytes'),
+		databases: integer('databases'),
+		databaseStorageBytes: integer('database_storage_bytes'),
+		storageInstances: integer('storage_instances'),
+		storageObjects: integer('storage_objects'),
+		appVolumes: integer('app_volumes'),
+		appVolumeBytes: integer('app_volume_bytes'),
+		jobs: integer('jobs'),
+		jobRunsPerDay: integer('job_runs_per_day'),
+		buildsPerDay: integer('builds_per_day'),
+		previews: integer('previews'),
+		workloadMemoryMb: integer('workload_memory_mb'),
+		egressBytes: integer('egress_bytes'),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [index('project_quotas_org_idx').on(t.orgId)],
+);
+
+/**
+ * One usage snapshot per org/project and UTC day (plan 16). `project_id` is an empty string for
+ * the org roll-up so the composite primary key works in SQLite (NULLs are distinct in a key).
+ */
+export const usageSnapshots = sqliteTable(
+	'usage_snapshots',
+	{
+		orgId: text('org_id').notNull(),
+		projectId: text('project_id').notNull().default(''),
+		day: text('day').notNull(),
+		metricsJson: text('metrics_json').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+	},
+	(t) => [primaryKey({ columns: [t.orgId, t.projectId, t.day] })],
+);
 
 export const orgKeys = sqliteTable('org_keys', {
 	orgId: text('org_id').primaryKey(),
@@ -957,6 +1016,8 @@ export const schema = {
 	logEvents,
 	auditLog,
 	orgQuotas,
+	projectQuotas,
+	usageSnapshots,
 	orgKeys,
 	secrets,
 	settings,

@@ -457,7 +457,7 @@ export class DeploymentService {
 
 	/** Keep the last N unpinned deployments plus pinned and production; GC unreferenced releases. */
 	retention(project: ProjectRow): void {
-		const keep = this.ctx.quota.retention(project.orgId);
+		const keep = this.ctx.quota.retention(project.orgId, project.id);
 		if (keep < 0) return;
 		const rows = this.ctx.db
 			.select()

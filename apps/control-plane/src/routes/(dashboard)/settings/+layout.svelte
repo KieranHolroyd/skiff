@@ -6,6 +6,7 @@
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import Building2Icon from '@lucide/svelte/icons/building-2';
 	import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
+	import ChartColumnIcon from '@lucide/svelte/icons/chart-column';
 	import DatabaseBackupIcon from '@lucide/svelte/icons/database-backup';
 	import UserRoundIcon from '@lucide/svelte/icons/user-round';
 	import UsersIcon from '@lucide/svelte/icons/users';
@@ -23,6 +24,7 @@
 			| '/(dashboard)/settings/account'
 			| '/(dashboard)/settings/members'
 			| '/(dashboard)/settings/backups'
+			| '/(dashboard)/settings/usage'
 			| '/(dashboard)/settings/notifications'
 			| '/(dashboard)/settings/assistant'
 			| '/(dashboard)/settings/maintenance'
@@ -61,6 +63,13 @@
 			path: '/settings/backups',
 			icon: DatabaseBackupIcon,
 			ownerOnly: true
+		},
+		{
+			label: 'Usage',
+			href: '/(dashboard)/settings/usage',
+			path: '/settings/usage',
+			icon: ChartColumnIcon,
+			permission: 'project:read'
 		},
 		{
 			label: 'Notifications',

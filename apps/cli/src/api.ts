@@ -57,6 +57,23 @@ export interface OrgView {
 	role?: string;
 }
 
+export interface UsageMetricView {
+	used: number;
+	limit: number;
+	unit: 'count' | 'bytes' | 'megabytes';
+	percent: number | null;
+}
+
+export interface UsageView {
+	orgId: string;
+	projectId: string | null;
+	projectSlug: string | null;
+	at: string;
+	periodDays: number;
+	metrics: Record<string, UsageMetricView>;
+	warnings: Array<{ metric: string; used: number; limit: number; percent: number }>;
+}
+
 export interface ProjectView {
 	id?: string;
 	slug: string;
@@ -287,6 +304,22 @@ export class ApiClient {
 				(counts.onlineNodes >= counts.nodes ? 'ok' : 'degraded'),
 		};
 		return { status, raw };
+	}
+
+	async getUsage(project?: string): Promise<{ usage: UsageView; raw: unknown }> {
+		const raw = await this.request(
+			'GET',
+			`/api/v1/usage${project ? `?project=${encodeURIComponent(project)}` : ''}`,
+		);
+		return { usage: raw as UsageView, raw };
+	}
+
+	async getQuotas(project?: string): Promise<{ quotas: unknown; raw: unknown }> {
+		const raw = await this.request(
+			'GET',
+			`/api/v1/quotas${project ? `?project=${encodeURIComponent(project)}` : ''}`,
+		);
+		return { quotas: raw, raw };
 	}
 
 	async listProjects(options: { trash?: boolean } = {}): Promise<{ projects: ProjectView[]; raw: unknown }> {

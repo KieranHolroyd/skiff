@@ -29,7 +29,7 @@ export class ValidationError extends CoreError {
 
 export class QuotaError extends CoreError {
 	constructor(message: string) {
-		super('quota_exceeded', message, 403);
+		super('quota_exceeded', message, 409);
 	}
 }
 

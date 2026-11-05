@@ -1939,6 +1939,40 @@ function buildServer(
 		}),
 	);
 
+	tool(
+		'get_usage',
+		{
+			title: 'Get usage',
+			description:
+				'Show org usage (or one project with `project`): counts, actual database/storage bytes, ' +
+				'30-day egress, builds and jobs today, and the percentage of each quota in use. Read-only.',
+			inputSchema: z.object({
+				project: z.string().optional().describe('Project slug; omit for the whole org'),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('project:read'),
+		},
+		async ({ project }) =>
+			run(() => core.usage.view(principal, project ? { projectSlug: project } : {})),
+	);
+
+	tool(
+		'get_quotas',
+		{
+			title: 'Get quotas',
+			description:
+				'Show the effective org quotas, or one project’s org base, overrides and effective limits ' +
+				'with `project`. Read-only; only a platform admin can change quotas.',
+			inputSchema: z.object({
+				project: z.string().optional().describe('Project slug; omit for the org quota'),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('project:read'),
+		},
+		async ({ project }) =>
+			run(() => core.usage.quotas(principal, project ? { projectSlug: project } : {})),
+	);
+
 	return server;
 }
 

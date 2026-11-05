@@ -86,6 +86,16 @@ export class WorkloadService {
 			candidates: this.candidates(),
 		});
 		if (!decision.ok) throw new ValidationError(decision.message, decision.freeByNode);
+		const current = this.ctx.db
+			.select({ memoryMb: workloads.memoryMb })
+			.from(workloads)
+			.where(eq(workloads.projectId, project.id))
+			.get();
+		this.ctx.quota.assertCanAdmitMemory(
+			project.orgId,
+			project.id,
+			Math.max(0, spec.memoryMb - (current?.memoryMb ?? 0)),
+		);
 		const upstream = upstreamFor(project.id, spec);
 		return {
 			spec,
@@ -103,12 +113,17 @@ export class WorkloadService {
 				`Project "${project.slug}" is static. Create it with runtime "process" or "container" to run a workload.`,
 			);
 		const spec = workloadSpecSchema.parse({ ...input, runtime: project.runtime });
+		const existing = this.ctx.db.select().from(workloads).where(eq(workloads.projectId, project.id)).get();
+		this.ctx.quota.assertCanAdmitMemory(
+			project.orgId,
+			project.id,
+			Math.max(0, spec.memoryMb - (existing?.memoryMb ?? 0)),
+		);
 		this.ctx.db
 			.update(projects)
 			.set({ workloadJson: JSON.stringify(spec), updatedAt: this.ctx.now() })
 			.where(eq(projects.id, project.id))
 			.run();
-		const existing = this.ctx.db.select().from(workloads).where(eq(workloads.projectId, project.id)).get();
 		if (existing)
 			this.ctx.db
 				.update(workloads)
