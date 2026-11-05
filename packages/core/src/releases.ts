@@ -5,7 +5,7 @@ import { requirePermission, type Principal } from '@skiff/contracts';
 import { buildArtifact, entryMap, type FileEntry, type ReleaseArtifact } from './artifact.ts';
 import type { CoreContext } from './context.ts';
 import { NotFoundError, ValidationError } from './errors.ts';
-import { objectKeyForRelease } from './object-store.ts';
+import { objectKeyForRelease, storageKindForDb } from './object-store.ts';
 import { newId, sha256Hex } from './util.ts';
 
 export interface PreparedRelease {
@@ -61,7 +61,7 @@ export class ReleaseService {
 			orgId: principal.orgId,
 			sha256: artifact.sha256,
 			objectKey,
-			storage: this.ctx.objectStore.kind,
+			storage: storageKindForDb(this.ctx.objectStore.kind),
 			sizeBytes: artifact.sizeBytes,
 			fileCount: artifact.fileCount,
 			manifestJson: JSON.stringify(artifact.manifest),

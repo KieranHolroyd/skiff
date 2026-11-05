@@ -4,7 +4,7 @@ import { limits, requirePermission, type InlineFile, type Principal } from '@ski
 import { entriesFromFiles, entriesFromZip, type FileEntry } from './artifact.ts';
 import type { CoreContext } from './context.ts';
 import { NotFoundError, ValidationError } from './errors.ts';
-import { objectKeyForUpload } from './object-store.ts';
+import { objectKeyForUpload, storageKindForDb } from './object-store.ts';
 import type { DeploymentView } from './deployments.ts';
 import type { ProjectRow } from './projects.ts';
 import { newId } from './util.ts';
@@ -44,7 +44,7 @@ export class UploadService {
 				kind: 'presigned',
 				status: 'pending',
 				objectKey,
-				storage: this.ctx.objectStore.kind,
+				storage: storageKindForDb(this.ctx.objectStore.kind),
 				fileCount: input.fileCount ?? null,
 				totalBytes: input.totalBytes ?? null,
 				createdBy: principal.userId,
