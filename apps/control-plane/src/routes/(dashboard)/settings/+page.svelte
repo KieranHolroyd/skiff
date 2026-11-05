@@ -1,353 +1,456 @@
 <script lang="ts">
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
-	import Building2Icon from '@lucide/svelte/icons/building-2';
-	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
-	import PlusIcon from '@lucide/svelte/icons/plus';
+	import { resolve } from '$app/paths';
+	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
+	import BellRingIcon from '@lucide/svelte/icons/bell-ring';
+	import CheckIcon from '@lucide/svelte/icons/check';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
+	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
+	import CircleDashedIcon from '@lucide/svelte/icons/circle-dashed';
+	import CircleXIcon from '@lucide/svelte/icons/circle-x';
+	import DatabaseBackupIcon from '@lucide/svelte/icons/database-backup';
+	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
+	import MailIcon from '@lucide/svelte/icons/mail';
+	import MinusIcon from '@lucide/svelte/icons/minus';
+	import ServerCogIcon from '@lucide/svelte/icons/server-cog';
+	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
+	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import UsersIcon from '@lucide/svelte/icons/users';
-	import { askConfirm } from '#lib/confirm.svelte.js';
 	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
-	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import SecretDialog from '#lib/components/skiff/SecretDialog.svelte';
-	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
-	import * as Alert from '#lib/components/ui/alert/index.js';
 	import * as Avatar from '#lib/components/ui/avatar/index.js';
-	import { Badge, type BadgeVariant } from '#lib/components/ui/badge/index.js';
+	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
-	import * as Card from '#lib/components/ui/card/index.js';
-	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
-	import * as Field from '#lib/components/ui/field/index.js';
-	import { Input } from '#lib/components/ui/input/index.js';
-	import * as Item from '#lib/components/ui/item/index.js';
-	import * as Select from '#lib/components/ui/select/index.js';
-	import * as Table from '#lib/components/ui/table/index.js';
-	import EmptyState from '../_lib/EmptyState.svelte';
-	import { formatDate, formatDateTime, shortId } from '../_lib/format.js';
+	import { Progress } from '#lib/components/ui/progress/index.js';
+	import type { Tone } from '#lib/status.js';
+	import Panel from '../_lib/Panel.svelte';
+	import { formatDate, plural, shortId } from '../_lib/format.js';
+	import SettingsHeader from './_lib/SettingsHeader.svelte';
+	import { ROLE_DESCRIPTIONS, ROLE_ORDER, initials, roleBadge } from './_lib/roles.js';
+	import type { SectionHref } from './_lib/sections.js';
 	import type { PageProps } from './$types';
 
-	interface SettingsFormResult {
-		fieldErrors?: Record<string, string>;
-		createdKey?: string;
-		createdKeyName?: string;
-		createdKeyScopes?: string[];
+	let { data }: PageProps = $props();
+
+	const AVATARS = 6;
+	const shownMembers = $derived(data.members.slice(0, AVATARS));
+	const roleCounts = $derived(
+		ROLE_ORDER.map((role) => ({
+			role,
+			count: data.members.filter((member) => member.role === role).length
+		})).filter((entry) => entry.count > 0)
+	);
+
+	const orgMark = $derived(initials(data.org.name));
+
+	// --- platform setup (owners) ----------------------------------------------------------------
+
+	type Check = {
+		id: string;
+		label: string;
+		icon: typeof MailIcon;
+		href: SectionHref;
+		optional?: boolean;
+		state: 'done' | 'todo' | 'problem' | 'loading' | 'optional';
+		detail: string;
+	};
+
+	const platform = $derived(data.hints.platform);
+	const local = $derived(platform?.availability === 'local');
+
+	function baseChecks(): Check[] {
+		if (!platform) return [];
+		return [
+			{
+				id: 'email',
+				label: 'Outbound email',
+				icon: MailIcon,
+				href: '/(dashboard)/settings/notifications',
+				state: platform.email ? 'done' : 'todo',
+				detail: platform.email
+					? 'Sign-in links and invitations are delivered.'
+					: 'Sign-in links and invitations only reach the server log.'
+			},
+			{
+				id: 'alerts',
+				label: 'Alert channel',
+				icon: BellRingIcon,
+				href: '/(dashboard)/settings/notifications',
+				state: platform.alerts ? 'done' : 'todo',
+				detail: platform.alerts
+					? 'Offline nodes, full disks and failed backups reach you.'
+					: 'Nobody hears about an offline node or a failed backup.'
+			},
+			{
+				id: 'assistant',
+				label: 'Dashboard assistant',
+				icon: SparklesIcon,
+				href: '/(dashboard)/settings/assistant',
+				optional: true,
+				state: platform.assistant ? 'done' : 'optional',
+				detail: platform.assistant
+					? 'Members can ask the assistant and take guided tours.'
+					: 'Optional. Bring any OpenAI-compatible provider.'
+			}
+		];
 	}
 
-	let { data, form }: PageProps = $props();
-	const result = $derived(form as SettingsFormResult | null);
+	const backupTone: Record<Tone, Check['state']> = {
+		success: 'done',
+		neutral: 'todo',
+		warning: 'todo',
+		info: 'todo',
+		brand: 'todo',
+		danger: 'problem'
+	};
 
-	let createOpen = $state(false);
-	let keyOpen = $state(false);
-	let expiresIn = $state('90');
-	const expiryOptions = [
-		{ value: '30', label: '30 days' },
-		{ value: '90', label: '90 days' },
-		{ value: '365', label: '365 days' },
-		{ value: 'never', label: 'Never' }
-	];
-
-	$effect(() => {
-		if (result?.createdKey) keyOpen = true;
-	});
-
-	function roleBadge(role: string): BadgeVariant {
-		if (role === 'owner') return 'brand';
-		if (role === 'admin') return 'info';
-		return 'neutral';
-	}
-
-	function keyState(key: { enabled: boolean; expiresAt: string | null }): string {
-		if (!key.enabled) return 'disabled';
-		if (key.expiresAt && Date.parse(key.expiresAt) <= Date.now()) return 'expired';
-		return 'active';
-	}
-
-	function initials(name: string): string {
-		return (
-			name
-				.split(/\s+/)
-				.filter(Boolean)
-				.slice(0, 2)
-				.map((part) => part[0]?.toUpperCase() ?? '')
-				.join('') || '?'
-		);
-	}
-
-	function revoke(key: { id: string; name: string | null }) {
-		askConfirm({
-			title: `Revoke ${key.name ?? 'this API key'}?`,
-			description: 'Requests using it stop working immediately. This cannot be undone.',
-			confirmLabel: 'Revoke key',
-			tone: 'danger',
-			action: '?/deleteKey',
-			fields: { keyId: key.id }
-		});
-	}
+	const stateLook = {
+		done: { icon: CircleCheckIcon, class: 'text-success', label: 'Done' },
+		todo: { icon: CircleDashedIcon, class: 'text-warning', label: 'To do' },
+		problem: { icon: CircleXIcon, class: 'text-destructive', label: 'Problem' },
+		loading: {
+			icon: LoaderCircleIcon,
+			class: 'animate-spin text-muted-foreground',
+			label: 'Checking'
+		},
+		optional: { icon: CircleDashedIcon, class: 'text-muted-foreground/60', label: 'Optional' }
+	} as const;
 </script>
 
 <svelte:head>
-	<title>Organisation settings · Skiff</title>
+	<title>General · Settings · Skiff</title>
 </svelte:head>
 
-<div class="space-y-5">
-	<div class="grid items-start gap-5 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
-		<Card.Root>
-			<Card.Header>
-				<Card.Title class="flex items-center gap-2"
-					><Building2Icon class="size-4 text-muted-foreground" />Organisation</Card.Title
-				>
-				<Card.Description>Tenant boundary for every project and deployment.</Card.Description>
-			</Card.Header>
-			<Card.Content>
-				<DetailList>
-					<dt>Name</dt>
-					<dd class="font-medium">{data.org.name}</dd>
-					<dt>Slug</dt>
-					<dd class="font-mono text-xs">{data.org.slug ?? '—'}</dd>
-					<dt>Your role</dt>
-					<dd><Badge variant={roleBadge(data.role)} class="capitalize">{data.role}</Badge></dd>
-					<dt>Created</dt>
-					<dd class="text-sm">{formatDateTime(data.org.createdAt)}</dd>
-					<dt>Org ID</dt>
-					<dd class="flex items-center justify-end gap-1">
-						<span class="truncate font-mono text-xs" title={data.org.id}
-							>{shortId(data.org.id, 16)}</span
+<SettingsHeader id="general" />
+
+<!-- Identity and people -->
+<div class="grid items-stretch gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
+	<section
+		class="relative overflow-hidden rounded-xl border bg-card shadow-xs"
+		aria-labelledby="org-name"
+	>
+		<div
+			class="pointer-events-none absolute inset-x-0 top-0 h-24 bg-[radial-gradient(120%_100%_at_0%_0%,color-mix(in_oklch,var(--brand)_14%,transparent),transparent_70%)]"
+			aria-hidden="true"
+		></div>
+		<div class="relative flex flex-wrap items-center gap-4 p-5">
+			<span
+				class="flex size-14 shrink-0 items-center justify-center rounded-xl bg-brand text-lg font-semibold tracking-tight text-brand-foreground shadow-sm ring-4 ring-brand/10"
+				aria-hidden="true">{orgMark}</span
+			>
+			<div class="min-w-0 flex-1 space-y-1">
+				<h3 id="org-name" class="truncate text-xl font-semibold tracking-tight">
+					{data.org.name}
+				</h3>
+				<p class="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+					<span class="font-mono text-xs">{data.org.slug ?? 'no slug'}</span>
+					<span aria-hidden="true">·</span>
+					<span>You are {data.role === 'admin' || data.role === 'owner' ? 'an' : 'a'}</span>
+					<Badge variant={roleBadge(data.role)} class="capitalize">{data.role}</Badge>
+					{#if data.platformAdmin}
+						<Badge variant="outline" title="Manages nodes and installs Skiff updates"
+							><ServerCogIcon />Platform admin</Badge
 						>
-						<CopyButton value={data.org.id} label="Copy org ID" iconOnly />
-					</dd>
-				</DetailList>
-			</Card.Content>
-		</Card.Root>
+					{/if}
+				</p>
+			</div>
+		</div>
+		<dl class="relative grid border-t text-sm sm:grid-cols-3 sm:divide-x">
+			<div class="space-y-1 px-5 py-3.5">
+				<dt class="text-xs text-muted-foreground">Organisation ID</dt>
+				<dd class="flex items-center gap-1">
+					<span class="truncate font-mono text-xs" title={data.org.id}
+						>{shortId(data.org.id, 18)}</span
+					>
+					<CopyButton value={data.org.id} label="Copy organisation ID" iconOnly />
+				</dd>
+			</div>
+			<div class="space-y-1 border-t px-5 py-3.5 sm:border-t-0">
+				<dt class="text-xs text-muted-foreground">Created</dt>
+				<dd>{data.org.createdAt ? formatDate(data.org.createdAt) : '—'}</dd>
+			</div>
+			<div class="space-y-1 border-t px-5 py-3.5 sm:border-t-0">
+				<dt class="text-xs text-muted-foreground">Tenant boundary</dt>
+				<dd class="text-pretty">Every project, database and key</dd>
+			</div>
+		</dl>
+	</section>
 
-		<Card.Root>
-			<Card.Header>
-				<Card.Title class="flex items-center gap-2">
-					<UsersIcon class="size-4 text-muted-foreground" />Members
-					<Badge variant="neutral" class="font-mono">{data.members.length}</Badge>
-				</Card.Title>
-				<Card.Description
-					>Roles are enforced identically by the dashboard, API, CLI and MCP.</Card.Description
-				>
-			</Card.Header>
-			<Card.Content>
-				{#if data.members.length === 0}
-					<EmptyState
-						icon={UsersIcon}
-						compact
-						title="No members loaded"
-						description="The auth tables may still be initialising on first boot."
-					/>
-				{:else}
-					<Item.Group class="gap-1">
-						{#each data.members as member (member.userId)}
-							<Item.Root size="sm" class="px-0">
-								<Item.Media>
-									<Avatar.Root class="size-8">
-										<Avatar.Fallback class="text-xs font-semibold"
-											>{initials(member.name)}</Avatar.Fallback
-										>
-									</Avatar.Root>
-								</Item.Media>
-								<Item.Content class="min-w-0">
-									<Item.Title class="truncate">{member.name}</Item.Title>
-									<Item.Description class="truncate"
-										>{member.email ?? 'Email hidden'}</Item.Description
-									>
-								</Item.Content>
-								<Item.Actions>
-									<span class="hidden text-xs text-muted-foreground sm:inline"
-										>joined {formatDate(member.joinedAt)}</span
-									>
-									<Badge variant={roleBadge(member.role)} class="capitalize">{member.role}</Badge>
-								</Item.Actions>
-							</Item.Root>
-						{/each}
-					</Item.Group>
-				{/if}
-			</Card.Content>
-			{#if !data.canSeeEmails}
-				<Card.Footer class="text-xs text-muted-foreground">
-					Member emails are visible to owners and admins only.
-				</Card.Footer>
-			{/if}
-		</Card.Root>
-	</div>
-
-	<Card.Root class="gap-0 py-0">
-		<Card.Header class="border-b py-4">
-			<Card.Title class="flex items-center gap-2">
-				<KeyRoundIcon class="size-4 text-muted-foreground" />API keys
-				{#if data.canReadKeys}<Badge variant="neutral" class="font-mono"
-						>{data.apiKeys.length}</Badge
-					>{/if}
-			</Card.Title>
-			<Card.Description>
-				Headless access for CI, scripts and the CLI. A key's permissions are always a subset of your
-				current role.
-			</Card.Description>
-			{#if data.canCreateKey}
-				<Card.Action class="self-center">
-					<Button onclick={() => (createOpen = true)}><PlusIcon />Create API key</Button>
-				</Card.Action>
-			{/if}
-		</Card.Header>
-		<Card.Content class="px-0">
-			{#if data.apiKeysError}
-				<div class="border-b p-4">
-					<Alert.Root variant="warning">
-						<TriangleAlertIcon />
-						<Alert.Description>{data.apiKeysError}</Alert.Description>
-					</Alert.Root>
-				</div>
-			{/if}
-			{#if !data.canReadKeys}
-				<p class="p-4 text-sm text-muted-foreground">Your role cannot list API keys.</p>
-			{:else if data.apiKeys.length === 0}
-				<div class="p-4">
-					<EmptyState
-						icon={KeyRoundIcon}
-						compact
-						title="No API keys"
-						description="Create a key for the CLI or CI. Prefer narrow scopes and a short expiry."
-					/>
-				</div>
+	<section class="flex flex-col rounded-xl border bg-card shadow-xs" aria-labelledby="people">
+		<div class="flex items-center justify-between gap-3 px-5 pt-5">
+			<h3 id="people" class="flex items-center gap-2 font-medium">
+				<UsersIcon class="size-4 text-muted-foreground" />People
+			</h3>
+			<span class="text-sm text-muted-foreground tabular-nums"
+				>{data.members.length} {plural(data.members.length, 'member')}</span
+			>
+		</div>
+		<div class="flex flex-1 flex-col justify-center gap-4 px-5 py-5">
+			{#if data.members.length === 0}
+				<p class="text-sm text-muted-foreground">
+					Members are still loading. The auth tables may be initialising on first boot.
+				</p>
 			{:else}
-				<Table.Root>
-					<Table.Header>
-						<Table.Row>
-							<Table.Head class="pl-4">Key</Table.Head>
-							<Table.Head class="hidden md:table-cell">Created</Table.Head>
-							<Table.Head class="hidden md:table-cell">Expires</Table.Head>
-							<Table.Head class="hidden lg:table-cell">Last used</Table.Head>
-							<Table.Head>Status</Table.Head>
-							<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
-						</Table.Row>
-					</Table.Header>
-					<Table.Body>
-						{#each data.apiKeys as key (key.id)}
-							<Table.Row>
-								<Table.Cell class="pl-4">
-									<p class="font-medium">{key.name ?? 'Unnamed key'}</p>
-									<p class="font-mono text-xs text-muted-foreground">
-										{key.start ?? key.prefix ?? key.id}
-									</p>
-								</Table.Cell>
-								<Table.Cell class="hidden text-xs text-muted-foreground md:table-cell"
-									>{formatDate(key.createdAt)}</Table.Cell
+				<div class="flex items-center">
+					<div class="flex -space-x-2">
+						{#each shownMembers as member (member.userId)}
+							<Avatar.Root class="size-9 ring-2 ring-card" title="{member.name} · {member.role}">
+								<Avatar.Fallback
+									class="text-xs font-semibold {member.role === 'owner'
+										? 'bg-brand/15 text-brand'
+										: ''}">{initials(member.name)}</Avatar.Fallback
 								>
-								<Table.Cell class="hidden text-xs text-muted-foreground md:table-cell">
-									{key.expiresAt ? formatDate(key.expiresAt) : 'Never'}
-								</Table.Cell>
-								<Table.Cell class="hidden text-xs text-muted-foreground lg:table-cell">
-									{key.lastRequest ? formatDateTime(key.lastRequest) : 'Never'}
-								</Table.Cell>
-								<Table.Cell><StatusBadge status={keyState(key)} /></Table.Cell>
-								<Table.Cell class="pr-4">
-									{#if data.canRevokeKey}
-										<Button variant="ghost-danger" size="sm" onclick={() => revoke(key)}
-											>Revoke</Button
-										>
-									{/if}
-								</Table.Cell>
-							</Table.Row>
+							</Avatar.Root>
 						{/each}
-					</Table.Body>
-				</Table.Root>
+						{#if data.members.length > AVATARS}
+							<span
+								class="flex size-9 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground ring-2 ring-card"
+								>+{data.members.length - AVATARS}</span
+							>
+						{/if}
+					</div>
+				</div>
+				<div class="flex flex-wrap gap-1.5">
+					{#each roleCounts as entry (entry.role)}
+						<Badge variant="outline" class="font-normal">
+							<span class="font-medium tabular-nums">{entry.count}</span>
+							{entry.count === 1 ? entry.role : `${entry.role}s`}
+						</Badge>
+					{/each}
+					{#if data.hints.invitations}
+						<Badge variant="info" class="font-normal">
+							<span class="font-medium tabular-nums">{data.hints.invitations}</span> invited
+						</Badge>
+					{/if}
+				</div>
 			{/if}
-		</Card.Content>
-		{#if data.canReadKeys && data.apiKeys.length > 0}
-			<Card.Footer class="py-3 text-xs text-muted-foreground">
-				Keys are user-owned. Their scopes are intersected with your current role on every request.
-			</Card.Footer>
-		{/if}
-	</Card.Root>
+		</div>
+		<div class="border-t px-5 py-3">
+			<a
+				href={resolve('/(dashboard)/settings/members')}
+				class="group inline-flex items-center gap-1.5 text-sm font-medium"
+			>
+				{data.permissions.includes('member:invite')
+					? 'Manage and invite members'
+					: 'See all members'}
+				<ArrowRightIcon class="size-3.5 transition-transform group-hover:translate-x-0.5" />
+			</a>
+		</div>
+	</section>
 </div>
 
-{#if data.canCreateKey}
-	<FormDialog
-		bind:open={createOpen}
-		icon={KeyRoundIcon}
-		title="Create API key"
-		description="The full key is shown once. Revoking a key or narrowing your role takes effect immediately."
-		action="?/createKey"
-		submitLabel="Create key"
-		size="lg"
-	>
-		<Field.Group>
-			<div class="grid gap-4 sm:grid-cols-[1fr_10rem]">
-				<Field.Field data-invalid={result?.fieldErrors?.name ? true : undefined}>
-					<Field.Label for="key-name">Name</Field.Label>
-					<Input
-						id="key-name"
-						name="name"
-						maxlength={64}
-						placeholder="CI deploy key"
-						required
-						aria-invalid={result?.fieldErrors?.name ? 'true' : undefined}
-					/>
-					{#if result?.fieldErrors?.name}<Field.Error>{result.fieldErrors.name}</Field.Error>{/if}
-				</Field.Field>
-				<Field.Field>
-					<Field.Label for="key-expiry">Expires after</Field.Label>
-					<Select.Root type="single" name="expiresIn" bind:value={expiresIn}>
-						<Select.Trigger id="key-expiry" class="w-full">
-							{expiryOptions.find((option) => option.value === expiresIn)?.label}
-						</Select.Trigger>
-						<Select.Content>
-							{#each expiryOptions as option (option.value)}
-								<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
-							{/each}
-						</Select.Content>
-					</Select.Root>
-				</Field.Field>
-			</div>
+<!-- Platform setup: owners only -->
+{#if platform}
+	{#await platform.backups}
+		{@render setup([
+			{
+				id: 'backups',
+				label: 'Off-site backups',
+				icon: DatabaseBackupIcon,
+				href: '/(dashboard)/settings/backups',
+				state: 'loading',
+				detail: 'Checking Litestream and the last restore drill…'
+			},
+			...baseChecks()
+		])}
+	{:then status}
+		{@render setup([
+			{
+				id: 'backups',
+				label: 'Off-site backups',
+				icon: DatabaseBackupIcon,
+				href: '/(dashboard)/settings/backups',
+				state: status ? backupTone[status.tone] : 'todo',
+				detail: status?.detail ?? 'Backup status is unavailable right now.'
+			},
+			...baseChecks()
+		])}
+	{/await}
+{/if}
 
-			<Field.Set>
-				<Field.Legend variant="label">Scopes</Field.Legend>
-				<Field.Description>
-					Everything you hold is selected. Uncheck what this key does not need — it can never exceed
-					your role.
-				</Field.Description>
-				<div
-					class="grid max-h-72 gap-x-6 gap-y-4 overflow-y-auto rounded-lg border bg-muted/25 p-4 sm:grid-cols-2"
+{#snippet setup(checks: Check[])}
+	{@const essentials = checks.filter((check) => !check.optional)}
+	{@const done = essentials.filter((check) => check.state === 'done').length}
+	{@const complete = done === essentials.length}
+	<Panel
+		title="Platform setup"
+		icon={complete ? CircleCheckIcon : TriangleAlertIcon}
+		description={complete
+			? 'Everything an install needs is in place.'
+			: 'What this install needs before you can rely on it. Each row opens where it is fixed.'}
+		flush
+	>
+		{#snippet actions()}
+			<div class="flex items-center gap-3">
+				<span class="text-sm text-muted-foreground tabular-nums">
+					<span class="font-medium text-foreground">{done}</span> of {essentials.length}
+				</span>
+				<Progress
+					value={(done / Math.max(essentials.length, 1)) * 100}
+					class="hidden h-1.5 w-24 sm:block {complete
+						? '[&_[data-slot=progress-indicator]]:bg-success'
+						: '[&_[data-slot=progress-indicator]]:bg-warning'}"
+					aria-label="Setup progress"
+				/>
+			</div>
+		{/snippet}
+		<ul class="divide-y">
+			{#each checks as check (check.id)}
+				{@const look = stateLook[check.state]}
+				<li>
+					<a
+						href={resolve(check.href)}
+						class="group flex items-center gap-3.5 px-4 py-3 transition-colors hover:bg-muted/40"
+					>
+						<look.icon class="size-[1.125rem] shrink-0 {look.class}" aria-label={look.label} />
+						<span
+							class="hidden size-8 shrink-0 items-center justify-center rounded-md border bg-background text-muted-foreground sm:flex"
+						>
+							<check.icon class="size-4" />
+						</span>
+						<span class="min-w-0 flex-1">
+							<span class="flex flex-wrap items-center gap-2 text-sm font-medium">
+								{check.label}
+								{#if check.optional}<span class="text-xs font-normal text-muted-foreground"
+										>optional</span
+									>{/if}
+							</span>
+							<span class="block text-sm text-pretty text-muted-foreground">{check.detail}</span>
+						</span>
+						<ChevronRightIcon
+							class="size-4 shrink-0 text-muted-foreground/60 transition-transform group-hover:translate-x-0.5 group-hover:text-foreground"
+						/>
+					</a>
+				</li>
+			{/each}
+			{#if data.updateAvailable}
+				{#await data.updateAvailable then update}
+					{#if update}
+						<li>
+							<a
+								href={resolve('/(dashboard)/settings/updates')}
+								class="group flex items-center gap-3.5 bg-brand/5 px-4 py-3 transition-colors hover:bg-brand/10"
+							>
+								<CircleArrowUpIcon class="size-[1.125rem] shrink-0 text-brand" />
+								<span
+									class="hidden size-8 shrink-0 items-center justify-center rounded-md border bg-background text-muted-foreground sm:flex"
+								>
+									<ServerCogIcon class="size-4" />
+								</span>
+								<span class="min-w-0 flex-1">
+									<span class="text-sm font-medium"
+										>Skiff <span class="font-mono">{update.latest}</span> is available</span
+									>
+									<span class="block text-sm text-muted-foreground">
+										Running {update.current}. Upgrades snapshot first and roll back on failure.
+									</span>
+								</span>
+								<ChevronRightIcon
+									class="size-4 shrink-0 text-muted-foreground/60 transition-transform group-hover:translate-x-0.5 group-hover:text-foreground"
+								/>
+							</a>
+						</li>
+					{/if}
+				{/await}
+			{/if}
+		</ul>
+		{#snippet footer()}
+			<p>
+				{#if local}
+					Local dev server: settings are saved to <code>.data/platform-settings.json</code> and apply
+					after a restart.
+				{:else}
+					Platform settings are owner-only and every change is recorded in the audit log.
+				{/if}
+			</p>
+		{/snippet}
+	</Panel>
+{/snippet}
+
+<!-- What the viewer's role can do -->
+<section id="access" class="scroll-mt-24">
+	<Panel
+		title="Your access"
+		icon={ShieldCheckIcon}
+		description="Exactly what the {data.role} role can do here. The dashboard, API, CLI and MCP all enforce the same table."
+		flush
+	>
+		{#snippet actions()}
+			<span class="text-sm text-muted-foreground tabular-nums">
+				<span class="font-medium text-foreground">{data.heldCount}</span> of {data.totalCount}
+				permissions
+			</span>
+		{/snippet}
+		<div class="border-b bg-muted/30 px-4 py-3">
+			<p class="flex flex-wrap items-center gap-2 text-sm">
+				<Badge variant={roleBadge(data.role)} class="capitalize">{data.role}</Badge>
+				<span class="text-muted-foreground">{ROLE_DESCRIPTIONS[data.role] ?? ''}.</span>
+			</p>
+		</div>
+		<!-- 1px gaps over a border-coloured background draw the grid lines. -->
+		<div class="grid gap-px bg-border sm:grid-cols-2 xl:grid-cols-3">
+			{#each data.access as group (group.resource)}
+				{@const heldHere = group.actions.filter((action) => action.held).length}
+				<div class="space-y-2.5 bg-card px-4 py-3.5">
+					<p class="flex items-center justify-between gap-2 text-sm font-medium">
+						{group.label}
+						<span
+							class="text-xs font-normal tabular-nums {heldHere === 0
+								? 'text-muted-foreground/60'
+								: heldHere === group.actions.length
+									? 'text-success'
+									: 'text-muted-foreground'}"
+						>
+							{heldHere === group.actions.length
+								? 'Full'
+								: heldHere === 0
+									? 'None'
+									: `${heldHere}/${group.actions.length}`}
+						</span>
+					</p>
+					<ul class="flex flex-wrap gap-1.5">
+						{#each group.actions as action (action.action)}
+							<li
+								class="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[0.7rem] {action.held
+									? action.destructive
+										? 'border-destructive/25 bg-destructive/5 text-destructive'
+										: 'bg-background text-foreground'
+									: 'border-dashed text-muted-foreground/60 line-through decoration-muted-foreground/40'}"
+								title={action.held
+									? action.destructive
+										? 'Held — destructive'
+										: 'Held'
+									: 'Not held by your role'}
+							>
+								{#if action.held}<CheckIcon class="size-3" />{:else}<MinusIcon
+										class="size-3"
+									/>{/if}
+								{action.action}
+							</li>
+						{/each}
+					</ul>
+				</div>
+			{/each}
+		</div>
+		{#snippet footer()}
+			<span class="flex flex-wrap items-center gap-x-4 gap-y-1">
+				<span class="inline-flex items-center gap-1.5"
+					><span class="size-2 rounded-sm border border-destructive/40 bg-destructive/10"
+					></span>Destructive</span
 				>
-					{#each data.scopeGroups as group (group.resource)}
-						<div class="space-y-2">
-							<p class="text-xs font-medium text-muted-foreground">{group.resource}</p>
-							{#each group.permissions as permission (permission)}
-								<Field.Field orientation="horizontal" class="gap-2">
-									<Checkbox id="scope-{permission}" name="permissions" value={permission} checked />
-									<Field.Label for="scope-{permission}" class="font-mono text-xs font-normal">
-										{permission.split(':')[1] ?? permission}
-									</Field.Label>
-								</Field.Field>
-							{/each}
-						</div>
-					{/each}
-				</div>
-				{#if result?.fieldErrors?.permissions}<Field.Error
-						>{result.fieldErrors.permissions}</Field.Error
-					>{/if}
-			</Field.Set>
-		</Field.Group>
-	</FormDialog>
-{/if}
-
-{#if result?.createdKey}
-	<SecretDialog
-		bind:open={keyOpen}
-		title="{result.createdKeyName ?? 'API key'} created"
-		description="Use it as a Bearer token or with skif login --token."
-		value={result.createdKey}
-	>
-		{#if result.createdKeyScopes?.length}
-			<div class="space-y-1.5">
-				<p class="text-xs font-medium text-muted-foreground">Scopes granted</p>
-				<div class="flex flex-wrap gap-1">
-					{#each result.createdKeyScopes as scope (scope)}
-						<Badge variant="outline" class="font-mono text-xs">{scope}</Badge>
-					{/each}
-				</div>
-			</div>
-		{/if}
-	</SecretDialog>
-{/if}
+				<span class="inline-flex items-center gap-1.5"
+					><span class="size-2 rounded-sm border border-dashed"></span>Not held</span
+				>
+				<span>API keys and agents only ever get a subset of this.</span>
+				{#if data.permissions.includes('apiKey:create')}
+					<Button
+						href={resolve('/(dashboard)/settings/api-keys')}
+						variant="link"
+						size="sm"
+						class="h-auto p-0 text-xs">Create a scoped key</Button
+					>
+				{/if}
+			</span>
+		{/snippet}
+	</Panel>
+</section>

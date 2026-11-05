@@ -53,3 +53,32 @@ IOSchedulingClass=idle
 `,
 	};
 }
+
+export interface UpdateCommandPaths {
+	optDir: string;
+	bunBin: string;
+	updaterDir: string;
+}
+
+/**
+ * /usr/local/sbin/skiff-update-self. Prefers the qualified stage-0 binary; if it is missing or
+ * does not even run (`--version`), falls back to the TypeScript updater shipped in the current,
+ * then the previous, release. Set SKIFF_UPDATER=source to force the fallback.
+ */
+export function updateCommandScript(paths: UpdateCommandPaths): string {
+	return `#!/bin/sh
+# Installed by Skiff. See docs/OPS.md §4.1.
+set -eu
+stage0=${paths.updaterDir}/current/skiff-updated
+if [ "\${SKIFF_UPDATER:-}" != source ] && [ -x "$stage0" ] && "$stage0" --version >/dev/null 2>&1; then
+	exec "$stage0" "$@"
+fi
+for release in ${paths.optDir}/current ${paths.optDir}/previous; do
+	if [ -f "$release/repo/scripts/update-self/main.ts" ]; then
+		exec ${paths.bunBin} "$release/repo/scripts/update-self/main.ts" "$@"
+	fi
+done
+echo "skiff-update-self: no working updater; see skiff-recover (docs/OPS.md)" >&2
+exit 1
+`;
+}

@@ -31,6 +31,7 @@
 	import EmptyState from '../../_lib/EmptyState.svelte';
 	import { formatDate, formatDateTime, shortId } from '../../_lib/format.js';
 	import type { PageProps } from './$types';
+	import SettingsHeader from '../_lib/SettingsHeader.svelte';
 
 	interface AccountFormResult {
 		fieldErrors?: Record<string, string>;
@@ -139,6 +140,8 @@
 <svelte:head>
 	<title>Account settings · Skiff</title>
 </svelte:head>
+
+<SettingsHeader id="account" />
 
 <div class="space-y-5">
 	<Card.Root>

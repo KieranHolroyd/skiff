@@ -24,6 +24,7 @@
 	import RowMenu from '../../_lib/RowMenu.svelte';
 	import { formatDateTime } from '../../_lib/format.js';
 	import type { PageProps } from './$types';
+	import SettingsHeader from '../_lib/SettingsHeader.svelte';
 
 	let { data }: PageProps = $props();
 
@@ -71,6 +72,8 @@
 </script>
 
 <svelte:head><title>Backup targets · Settings · Skiff</title></svelte:head>
+
+<SettingsHeader id="backup-targets" />
 
 <div class="space-y-6">
 	<Panel

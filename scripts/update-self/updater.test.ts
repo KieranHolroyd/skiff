@@ -1,23 +1,31 @@
 import { Database } from 'bun:sqlite';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { createPublicKey, generateKeyPairSync } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import {
 	CONTROL_PLANE,
 	LITESTREAM,
+	STANDBY,
 	type Host,
+	type HookOutcome,
 	type Layout,
+	type SocketTarget,
 	type UpdateState,
 	Updater,
 	acquireLock,
 	assembleRelease,
 	layoutFromEnv,
 	readLink,
+	readMeta,
 	setLink,
 	unitReleasePaths,
 	verifyRelease,
 } from './updater.ts';
+import { prepareScratch } from '../release/canary.ts';
+import { sha256File, signManifest } from './signing.ts';
 
 const OLD = '0'.repeat(40);
 const NEW = 'a'.repeat(40);
@@ -103,6 +111,8 @@ class FakeHost implements Host {
 	running: string | null = null;
 	publicUp = false;
 	canaryDbSeen = false;
+	/** Directories under the canary scratch dir that existed when it was chowned to skiff. */
+	canaryChowned: string[] = [];
 	critical = 0;
 	clock = Date.parse('2026-11-03T12:00:00Z');
 
@@ -118,10 +128,30 @@ class FakeHost implements Host {
 		this.calls.push('build');
 		if (this.buildFails) throw new Error('bun install failed');
 	};
+	/** Release hooks: `verdict` (default), `error` (crash/timeout), or `absent` (pre-hook release). */
+	hookMode: 'verdict' | 'error' | 'absent' = 'verdict';
+	/** Reason the next failing canary reports (overridable to simulate updater-caused failures). */
+	canaryReason = 'migration 0003 failed';
+	/** The release-owned canary hook: the real prepareScratch, with chown recorded instead of run. */
+	releaseHook = async (_release: string, hook: string, args: string[]): Promise<HookOutcome> => {
+		if (this.hookMode === 'absent') return { kind: 'absent' };
+		this.calls.push(`hook ${hook}`);
+		if (this.hookMode === 'error') return { kind: 'error', reason: 'canary hook timed out after 240s' };
+		const scratch = args[args.indexOf('--scratch') + 1]!;
+		const dbPath = args[args.indexOf('--db') + 1]!;
+		prepareScratch({ scratch, dbPath }, (cmd) => {
+			if (cmd[0] === 'chown') this.chownToSkiff(cmd[cmd.length - 1]!);
+			return { code: 0, stdout: '', stderr: '' };
+		});
+		this.canaryDbSeen = existsSync(join(scratch, 'data', 'skiff.db'));
+		return this.canaryFails
+			? { kind: 'verdict', verdict: { protocol: 1, ok: false, step: 'health', reason: this.canaryReason, detail: 'journal…' } }
+			: { kind: 'verdict', verdict: { protocol: 1, ok: true, step: 'stability' } };
+	};
 	canary = async (_release: string, scratch: string) => {
 		this.calls.push('canary');
 		this.canaryDbSeen = existsSync(join(scratch, 'data', 'skiff.db'));
-		if (this.canaryFails) throw new Error('migration 0003 failed\nstack…');
+		if (this.canaryFails) throw new Error(`${this.canaryReason}\nstack…`);
 	};
 	start = async (unit: string) => {
 		this.calls.push(`start ${unit}`);
@@ -154,8 +184,20 @@ class FakeHost implements Host {
 	backupTarget = async () => ({ ok: !this.backupUnreachable, kind: 'local', ...(this.backupUnreachable ? { error: 'connection refused' } : {}) });
 	publicHealthy = async () => this.publicUp;
 	agentEnrolled = () => false;
-	chownToSkiff = () => {};
+	chownToSkiff = (path: string) => {
+		if (!path.includes('update-canary')) return;
+		for (const dir of ['data', join('data', 'objects')]) if (existsSync(join(path, dir))) this.canaryChowned.push(dir);
+	};
 	freeBytes = () => 100 * 1024 ** 3;
+	listReleases?: Host['listReleases'];
+	fetchBytes?: Host['fetchBytes'];
+	download?: Host['download'];
+	extract?: Host['extract'];
+	sha256?: Host['sha256'];
+	trustedKeys?: Host['trustedKeys'];
+	platform?: Host['platform'];
+	updaterIdentity?: Host['updaterIdentity'];
+	qualifyUpdater?: Host['qualifyUpdater'];
 	enterCritical = () => void this.critical++;
 	leaveCritical = () => void this.critical--;
 }
@@ -170,6 +212,7 @@ beforeEach(() => {
 		SKIFF_VAR_DIR: join(root, 'var'),
 		SKIFF_SYSTEMD_DIR: join(root, 'systemd'),
 		SKIFF_BUN_BIN: join(root, 'opt', 'runtime', 'bin', 'bun'),
+		SKIFF_UPDATER_DIR: join(root, 'updater'),
 	});
 	mkdirSync(join(root, 'systemd'), { recursive: true });
 	mkdirSync(join(root, 'var', 'data'), { recursive: true });
@@ -262,6 +305,8 @@ describe('update', () => {
 		expect(readLink(layout.previousLink)).toBe(original);
 		expect(readdirSync(layout.releasesDir).sort()).toEqual([basename(current), basename(original)].sort());
 		expect(host.canaryDbSeen).toBe(true);
+		// The canary runs as skiff: its writable dirs must exist before the recursive chown.
+		expect(host.canaryChowned).toEqual(['data', join('data', 'objects')]);
 		expect(host.running).toBe(basename(current));
 		expect(JSON.parse(readFileSync(join(current, 'meta.json'), 'utf8'))).toMatchObject({
 			commit: NEW,
@@ -528,5 +573,335 @@ describe('helpers', () => {
 		expect(readFileSync(lock, 'utf8')).toBe(String(process.pid));
 		release();
 		expect(existsSync(lock)).toBe(false);
+	});
+});
+
+// --------------------------------------------------------------- failure attribution
+
+describe('failure attribution', () => {
+	test('a hook that gives no verdict is inconclusive: recorded, never skipped', async () => {
+		host.hookMode = 'error';
+		const updater = new Updater(layout, host);
+		const result = await updater.update();
+		expect(result).toMatchObject({ status: 'canary-failed', cause: 'inconclusive' });
+		expect(state().failedCommits[NEW]).toMatchObject({ cause: 'inconclusive', phase: 'canary' });
+		host.hookMode = 'verdict';
+		expect((await updater.update()).status).toBe('updated');
+	});
+
+	test('two different releases failing the same way blame neither (the updater is suspected)', async () => {
+		host.canaryFails = true;
+		host.canaryReason = '/readyz: Data directory /var/lib/skiff/update-canary/20261105090503-82c6b19c8fa7/data/objects is not writable.';
+		const updater = new Updater(layout, host);
+		expect((await updater.update()).status).toBe('canary-failed');
+		expect(state().failedCommits[NEW]?.cause).toBe('release');
+
+		host.commit = NEWER;
+		host.version = '0.3.0';
+		host.canaryReason = '/readyz: Data directory /var/lib/skiff/update-canary/20261105112639-381ee8171ec7/data/objects is not writable.';
+		expect(await updater.update()).toMatchObject({ status: 'canary-failed', cause: 'suspect' });
+		expect(state().failedCommits[NEW]?.cause).toBe('suspect');
+		expect(state().failedCommits[NEWER]?.cause).toBe('suspect');
+		expect(host.logs.some((line) => line.includes('points at the updater'))).toBe(true);
+
+		// Once the cause is fixed, the newest release installs without --force.
+		host.canaryFails = false;
+		expect((await updater.update()).status).toBe('updated');
+	});
+
+	test('a verdict recorded by another updater build does not skip the release', async () => {
+		writeFileSync(
+			layout.stateFile,
+			JSON.stringify({ failedCommits: { [NEW]: { at: 'then', release: 'x', reason: 'canary: the new release did not become healthy in isolation' } } }),
+		);
+		expect((await new Updater(layout, host).update()).status).toBe('updated');
+	});
+
+	test('releases without hooks fall back to the built-in canary', async () => {
+		host.hookMode = 'absent';
+		expect((await new Updater(layout, host).update()).status).toBe('updated');
+		expect(host.calls).toContain('canary');
+	});
+});
+
+// --------------------------------------------------------------- zero-downtime cutover
+
+/** Adds the standby unit and control.sock to the fake host. */
+class BlueGreenHost extends FakeHost {
+	socket: 'primary' | 'standby' | 'legacy' = 'primary';
+	standbyRunning: string | null = null;
+	/** The new release answers on its own socket but fails while serving real traffic. */
+	failsUnderTraffic = false;
+	unitsEnsured = 0;
+	socketMoves: string[] = [];
+
+	override start = async (unit: string) => {
+		this.calls.push(`start ${unit}`);
+		this.active.set(unit, true);
+		if (unit === CONTROL_PLANE) {
+			const release = readLink(layout.currentLink)!;
+			this.running = basename(release);
+			applyMigrations(release);
+		}
+		if (unit === STANDBY) {
+			const release = readLink(layout.standbyLink)!;
+			this.standbyRunning = basename(release);
+			applyMigrations(release);
+		}
+	};
+	override stop = async (unit: string) => {
+		this.calls.push(`stop ${unit}`);
+		this.active.set(unit, false);
+		if (unit === CONTROL_PLANE) this.running = null;
+		if (unit === STANDBY) this.standbyRunning = null;
+	};
+	override restart = async (unit: string) => {
+		await this.stop(unit);
+		await this.start(unit);
+	};
+	private serving(target: 'primary' | 'standby'): boolean {
+		const name = target === 'primary' ? this.running : this.standbyRunning;
+		const unit = target === 'primary' ? CONTROL_PLANE : STANDBY;
+		return Boolean(this.active.get(unit) && name && !this.unhealthy.has(name));
+	}
+	probe = async (target: SocketTarget) => {
+		if (target === 'public') {
+			if (this.socket === 'standby' && this.failsUnderTraffic) return { ok: false, reason: '/readyz answered 503' };
+			return { ok: this.serving(this.socket === 'standby' ? 'standby' : 'primary'), reason: 'down' };
+		}
+		return { ok: this.serving(target), reason: 'down' };
+	};
+	pointControlSocket = (target: 'primary' | 'standby') => {
+		this.socket = target;
+		this.socketMoves.push(target);
+	};
+	controlSocketTarget = () => this.socket;
+	ensureControlPlaneUnits = () => void this.unitsEnsured++;
+	override controlPlaneHealthy = async () => (await this.probe('public')).ok;
+	override readyz = async () => (await this.probe('public')).ok;
+}
+
+describe('zero-downtime cutover', () => {
+	let bg: BlueGreenHost;
+	beforeEach(() => {
+		bg = new BlueGreenHost();
+		bg.running = basename(original);
+		host = bg;
+	});
+
+	test('overlap: the old release serves until the new one is proven, then the primary moves', async () => {
+		const result = await new Updater(layout, bg).update();
+		expect(result.status).toBe('updated');
+		const current = readLink(layout.currentLink)!;
+		expect(basename(current)).toBe('20261103120001-aaaaaaaaaaaa');
+		// The primary was never stopped before traffic moved to the proven standby.
+		const standbyStart = bg.calls.indexOf(`start ${STANDBY}`);
+		const firstPrimaryStop = bg.calls.indexOf(`stop ${CONTROL_PLANE}`);
+		expect(standbyStart).toBeGreaterThanOrEqual(0);
+		expect(firstPrimaryStop).toBeGreaterThan(standbyStart);
+		// Cutover, re-asserted while the primary restarts behind the standby, then back.
+		expect(bg.socketMoves).toEqual(['standby', 'standby', 'primary']);
+		expect(bg.socket).toBe('primary');
+		expect(bg.active.get(STANDBY)).toBe(false);
+		expect(bg.running).toBe(basename(current));
+		expect(existsSync(layout.standbyLink)).toBe(false);
+		expect(state().lastSwitch).toMatchObject({ mode: 'overlap', stage: 'commit', from: original, to: current });
+		expect(bg.unitsEnsured).toBe(1);
+		expect(bg.critical).toBe(0);
+	});
+
+	test('fenced: a release with migrations stops the old release before migrating', async () => {
+		bg.migrations = ['0001_init.sql', '0003_new.sql'];
+		const result = await new Updater(layout, bg).update();
+		expect(result.status).toBe('updated');
+		expect(bg.calls.indexOf(`stop ${CONTROL_PLANE}`)).toBeLessThan(bg.calls.indexOf(`start ${STANDBY}`));
+		expect(state().lastSwitch?.mode).toBe('fenced');
+		expect(migrationsInDb()).toEqual(['0001_init.sql', '0003_new.sql']);
+	});
+
+	test('a standby that never becomes healthy never receives traffic', async () => {
+		bg.unhealthy.add('20261103120001-aaaaaaaaaaaa');
+		const result = await new Updater(layout, bg).update();
+		expect(result).toMatchObject({ status: 'rolled-back', recovered: true });
+		expect(bg.socketMoves).toEqual([]);
+		expect(bg.calls).not.toContain(`stop ${CONTROL_PLANE}`);
+		expect(readLink(layout.currentLink)).toBe(original);
+		expect(state().failedCommits[NEW]).toMatchObject({ cause: 'release', phase: 'standby' });
+	});
+
+	test('a bake failure is a code-only revert: traffic back on the untouched primary', async () => {
+		bg.failsUnderTraffic = true;
+		writeNote('during bake');
+		const result = await new Updater(layout, bg).update();
+		expect(result).toMatchObject({ status: 'rolled-back', recovered: true });
+		expect(bg.socketMoves).toEqual(['standby', 'primary']);
+		expect(bg.calls).not.toContain(`stop ${CONTROL_PLANE}`);
+		expect(readLink(layout.currentLink)).toBe(original);
+		expect(bg.running).toBe(basename(original));
+		expect(bg.active.get(STANDBY)).toBe(false);
+		// No snapshot restore: writes made while the new release served are kept.
+		expect(notes()).toEqual(['before update', 'during bake']);
+		expect(state().failedCommits[NEW]).toMatchObject({ cause: 'release', phase: 'bake' });
+	});
+
+	test('a fenced bake failure restores the pre-update database', async () => {
+		bg.migrations = ['0001_init.sql', '0003_new.sql'];
+		bg.failsUnderTraffic = true;
+		const result = await new Updater(layout, bg).update();
+		expect(result).toMatchObject({ status: 'rolled-back', recovered: true });
+		expect(migrationsInDb()).toEqual(['0001_init.sql']);
+		expect(bg.running).toBe(basename(original));
+		expect(bg.socket as string).toBe('primary');
+	});
+
+	test('the first update from a legacy single socket restarts the primary onto its new socket', async () => {
+		bg.socket = 'legacy';
+		bg.failsUnderTraffic = true;
+		// A legacy primary listens on the old path, so its own socket does not answer.
+		const probe = bg.probe;
+		let legacyPrimary = true;
+		bg.probe = async (target) => (target === 'primary' && legacyPrimary ? { ok: false, reason: 'no socket' } : probe(target));
+		const start = bg.start;
+		bg.start = async (unit) => {
+			if (unit === CONTROL_PLANE) legacyPrimary = false;
+			await start(unit);
+		};
+		// A legacy primary unlinks control.sock (its own SOCKET_PATH) when it stops.
+		const stop = bg.stop;
+		bg.stop = async (unit) => {
+			if (unit === CONTROL_PLANE && legacyPrimary) bg.socket = 'legacy';
+			await stop(unit);
+		};
+		const result = await new Updater(layout, bg).update();
+		expect(result).toMatchObject({ status: 'rolled-back', recovered: true });
+		// While the legacy primary restarted, traffic stayed on the standby.
+		expect(bg.socketMoves).toEqual(['standby', 'standby', 'primary']);
+		expect(bg.socket as string).toBe('primary');
+		expect(bg.running).toBe(basename(original));
+	});
+
+	test('the boot guard reverts an update that never committed', async () => {
+		const release = makeRelease('20261103000000-dddddddddddd', NEW, ['0001_init.sql'], '0.2.0');
+		setLink(layout.standbyLink, release);
+		const sw = { kind: 'update', mode: 'overlap', stage: 'cutover', from: original, to: release, previousBefore: older, snapshot: null, commit: NEW, withAgent: false, at: 'then' };
+		writeFileSync(layout.stateFile, JSON.stringify({ inProgress: sw, failedCommits: {} }));
+		expect(await new Updater(layout, bg).bootRecover()).toBe('reverted');
+		expect(readLink(layout.currentLink)).toBe(original);
+		expect(existsSync(layout.standbyLink)).toBe(false);
+		expect(state().inProgress).toBeUndefined();
+		expect(state().failedCommits[NEW]?.cause).toBe('inconclusive');
+		expect(bg.calls).toEqual([]);
+	});
+});
+
+// --------------------------------------------------------------- signed artifacts
+
+describe('signed release artifacts', () => {
+	const keys = generateKeyPairSync('ed25519');
+	const pem = keys.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+	let bytes: Map<string, Uint8Array>;
+	let artifactPath: string;
+
+	function publish(input: { version?: string; signWith?: string; tamper?: boolean; updater?: boolean } = {}) {
+		const version = input.version ?? '0.2.0';
+		const build = join(root, `artifact-${version}`);
+		writeRepo(join(build, 'repo'), ['0001_init.sql']);
+		if (input.updater) {
+			mkdirSync(join(build, 'updater'), { recursive: true });
+			writeFileSync(join(build, 'updater', 'skiff-updated'), '#!/bin/sh\necho stage0');
+		}
+		artifactPath = join(root, `skiff-${version}-linux-amd64.tar.gz`);
+		execFileSync('tar', ['-czf', artifactPath, '-C', build, '.']);
+		const manifest = {
+			schema: 1,
+			version,
+			commit: NEW,
+			repo: 'owner/skiff',
+			channel: 'stable',
+			createdAt: '2026-11-05T00:00:00Z',
+			updaterVersion: '2.0.0',
+			minUpdater: '2.0.0',
+			hookProtocol: 1,
+			artifacts: {
+				'linux-amd64': {
+					file: basename(artifactPath),
+					sha256: input.tamper ? '0'.repeat(64) : sha256File(artifactPath),
+					size: readFileSync(artifactPath).length,
+				},
+			},
+		};
+		const body = new TextEncoder().encode(JSON.stringify(manifest));
+		bytes = new Map([
+			['https://dl/manifest.json', body],
+			['https://dl/manifest.json.sig', new TextEncoder().encode(signManifest(body, input.signWith ?? pem))],
+		]);
+		host.listReleases = async () => [
+			{ tag: 'cli-v9.9.9', draft: false, prerelease: false, assets: [] },
+			{
+				tag: `v${version}`,
+				draft: false,
+				prerelease: false,
+				assets: [
+					{ name: 'manifest.json', url: 'https://dl/manifest.json', size: body.length },
+					{ name: 'manifest.json.sig', url: 'https://dl/manifest.json.sig', size: 88 },
+					{ name: basename(artifactPath), url: 'https://dl/artifact', size: 1 },
+				],
+			},
+		];
+	}
+
+	beforeEach(() => {
+		host.fetchBytes = async (url) => bytes.get(url)!;
+		host.download = async (_url, path) => void writeFileSync(path, readFileSync(artifactPath));
+		host.extract = async (archive, dest) => void execFileSync('tar', ['-xzf', archive, '-C', dest]);
+		host.sha256 = sha256File;
+		host.trustedKeys = () => new Map([['test', createPublicKey(keys.publicKey.export({ type: 'spki', format: 'pem' }))]]);
+		host.platform = () => 'linux-amd64';
+	});
+
+	test('installs the newest signed release without building on the host', async () => {
+		publish();
+		const result = await new Updater(layout, host).update();
+		expect(result).toMatchObject({ status: 'updated', version: '0.2.0' });
+		expect(host.calls).not.toContain('build');
+		expect(readMeta(readLink(layout.currentLink)!)).toMatchObject({ source: 'artifact', ref: 'v0.2.0', commit: NEW, status: 'active' });
+	});
+
+	test('a manifest signed by an untrusted key is refused and not held against the release', async () => {
+		publish({ signWith: generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }).toString() });
+		await expect(new Updater(layout, host).update()).rejects.toThrow(/not trusted/);
+		expect(readLink(layout.currentLink)).toBe(original);
+		expect(existsSync(layout.stateFile)).toBe(false);
+	});
+
+	test('an artifact that does not match its signed checksum is never unpacked', async () => {
+		publish({ tamper: true });
+		const result = await new Updater(layout, host).update();
+		expect(result.status).toBe('build-failed');
+		expect(result.status === 'build-failed' ? result.reason : '').toMatch(/signed checksum/);
+		expect(readdirSync(layout.releasesDir).sort()).toEqual([basename(older), basename(original)].sort());
+		expect(existsSync(layout.stateFile)).toBe(false);
+	});
+
+	test('source: artifact refuses to build when nothing is published', async () => {
+		host.listReleases = async () => [];
+		await expect(new Updater(layout, host).update({ source: 'artifact' })).rejects.toThrow(/refusing to build/);
+		expect(host.calls).toEqual([]);
+	});
+
+	test('a qualified stage-0 from the release becomes the active updater; an unqualified one does not', async () => {
+		publish({ updater: true });
+		host.updaterIdentity = async () => '2.1.0+abc123';
+		host.qualifyUpdater = async () => ({ ok: false, reason: 'no release-signing keys' });
+		const updater = new Updater(layout, host);
+		expect((await updater.update()).status).toBe('updated');
+		expect(existsSync(join(layout.updaterDir, 'current'))).toBe(false);
+		expect(host.logs.some((line) => line.includes('failed its self-test'))).toBe(true);
+
+		publish({ updater: true, version: '0.3.0' });
+		host.commit = NEWER;
+		host.qualifyUpdater = async () => ({ ok: true });
+		expect((await updater.update()).status).toBe('updated');
+		expect(basename(readLink(join(layout.updaterDir, 'current'))!)).toBe('2.1.0+abc123');
 	});
 });

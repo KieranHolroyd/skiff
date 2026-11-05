@@ -9,7 +9,7 @@
 	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import * as Avatar from '#lib/components/ui/avatar/index.js';
-	import { Badge, type BadgeVariant } from '#lib/components/ui/badge/index.js';
+	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
@@ -18,6 +18,8 @@
 	import * as Table from '#lib/components/ui/table/index.js';
 	import EmptyState from '../../_lib/EmptyState.svelte';
 	import { formatDate } from '../../_lib/format.js';
+	import SettingsHeader from '../_lib/SettingsHeader.svelte';
+	import { ROLE_DESCRIPTIONS, initials, roleBadge } from '../_lib/roles.js';
 	import type { PageProps } from './$types';
 
 	interface MembersFormResult {
@@ -30,27 +32,7 @@
 	let inviteOpen = $state(false);
 	let pendingMember = $state<string | null>(null);
 
-	const roleDescriptions: Record<string, string> = {
-		owner: 'Everything, including members, API keys and deleting projects',
-		admin: 'Manage projects, deployments, members (except owners) and keys',
-		deployer: 'Create projects and deploy, promote and roll back',
-		viewer: 'Read-only access to projects, deployments and logs'
-	};
-
-	function roleBadge(role: string): BadgeVariant {
-		return role === 'owner' ? 'brand' : role === 'admin' ? 'info' : 'neutral';
-	}
-
-	function initials(name: string) {
-		return (
-			name
-				.split(/\s+/)
-				.filter(Boolean)
-				.slice(0, 2)
-				.map((part) => part[0]?.toUpperCase() ?? '')
-				.join('') || '?'
-		);
-	}
+	const roleDescriptions = ROLE_DESCRIPTIONS;
 
 	/** Owners can only be changed by owners, and the last owner stays an owner. */
 	function canChangeRole(member: (typeof data.members)[number]) {
@@ -101,6 +83,14 @@
 	<title>Members · Settings · Skiff</title>
 </svelte:head>
 
+<SettingsHeader id="members">
+	{#snippet actions()}
+		{#if data.can.invite}
+			<Button onclick={() => (inviteOpen = true)}><UserPlusIcon />Invite member</Button>
+		{/if}
+	{/snippet}
+</SettingsHeader>
+
 <div class="space-y-5">
 	{#if data.loadError}
 		<Alert.Root variant="warning">
@@ -112,17 +102,12 @@
 	<Card.Root class="gap-0 py-0">
 		<Card.Header class="border-b py-4">
 			<Card.Title class="flex items-center gap-2">
-				<UsersIcon class="size-4 text-muted-foreground" />Members
-				<Badge variant="neutral" class="font-mono">{data.members.length}</Badge>
+				<UsersIcon class="size-4 text-muted-foreground" />People
+				<Badge variant="secondary" class="tabular-nums">{data.members.length}</Badge>
 			</Card.Title>
 			<Card.Description>
-				Everyone with access to this organisation. Roles follow the platform RBAC table.
+				Roles are enforced identically by the dashboard, API, CLI and MCP.
 			</Card.Description>
-			{#if data.can.invite}
-				<Card.Action class="self-center">
-					<Button onclick={() => (inviteOpen = true)}><UserPlusIcon />Invite member</Button>
-				</Card.Action>
-			{/if}
 		</Card.Header>
 		<Card.Content class="px-0">
 			{#if data.members.length === 0}
@@ -211,7 +196,7 @@
 			<Card.Header class="border-b py-4">
 				<Card.Title class="flex items-center gap-2">
 					<MailIcon class="size-4 text-muted-foreground" />Pending invitations
-					<Badge variant="neutral" class="font-mono">{data.invitations.length}</Badge>
+					<Badge variant="secondary" class="tabular-nums">{data.invitations.length}</Badge>
 				</Card.Title>
 				<Card.Description>
 					Skiff is invite-only: only invited email addresses can create an account. Invitees sign in
@@ -292,19 +277,27 @@
 		/>
 		{#if result?.fieldErrors?.email}<Field.Error>{result.fieldErrors.email}</Field.Error>{/if}
 	</Field.Field>
-	<Field.Field>
-		<Field.Label for="invite-role">Role</Field.Label>
-		<NativeSelect.Root id="invite-role" name="role" value="deployer" class="w-full">
+	<Field.Set>
+		<Field.Legend variant="label">Role</Field.Legend>
+		<div class="grid gap-2" role="radiogroup" aria-label="Role">
 			{#each data.assignableRoles as role (role)}
-				<NativeSelect.Option value={role} class="capitalize">{role}</NativeSelect.Option>
-			{/each}
-		</NativeSelect.Root>
-		<Field.Description>
-			{#each data.assignableRoles as role (role)}
-				<span class="block"
-					><span class="font-medium capitalize">{role}</span>: {roleDescriptions[role]}</span
+				<label
+					class="flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 transition-colors hover:bg-muted/40 has-checked:border-brand/50 has-checked:bg-brand/5 has-checked:ring-2 has-checked:ring-brand/15 has-focus-visible:ring-2 has-focus-visible:ring-ring/50"
 				>
+					<input
+						type="radio"
+						name="role"
+						value={role}
+						checked={role ===
+							(data.assignableRoles.includes('deployer') ? 'deployer' : data.assignableRoles[0])}
+						class="mt-1 accent-(--brand)"
+					/>
+					<span class="min-w-0">
+						<span class="block text-sm font-medium capitalize">{role}</span>
+						<span class="block text-xs text-muted-foreground">{roleDescriptions[role]}</span>
+					</span>
+				</label>
 			{/each}
-		</Field.Description>
-	</Field.Field>
+		</div>
+	</Field.Set>
 </FormDialog>

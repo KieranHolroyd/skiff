@@ -362,15 +362,21 @@ Litestream is current.
 ### 4.1 Self-update from GitHub
 
 ```sh
-sudo skiff-update-self              # install the newer VERSION, if any (rolls back on failure)
+sudo skiff-update-self              # install the newest signed release, if newer (reverts on failure)
 sudo skiff-update-self check        # running vs latest version; changes nothing
 sudo skiff-update-self plan         # preflight without changing anything (disk, target, migrations)
-sudo skiff-update-self --dry-run    # show the commit and the plan
-sudo skiff-update-self status       # current / previous / last switch / failed commits
+sudo skiff-update-self --dry-run    # show the release and the plan
+sudo skiff-update-self status       # current / previous / last switch / recorded failures
 sudo skiff-update-self rollback     # back to previous; run again to undo the rollback
+sudo skiff-update-self recover      # resolve an interrupted update now (also automatic)
 ```
 
 Or use **Settings → Updates** in the dashboard (platform owners and admins only).
+
+The goal is an updater that cannot leave the host broken and cannot block its own future: a bad
+release, a crash mid-update, a power cut or a bug in the updater itself all end with the last
+committed release serving and the next release still installable. The design and the research
+behind it are in [`reports/Failsafe self update architecture.md`](../reports/Failsafe%20self%20update%20architecture.md).
 
 **Versioning.** The platform version is the repository-root [`VERSION`](../VERSION) file, a
 [semantic version](https://semver.org) such as `1.4.0` or `1.5.0-rc.1`. To ship an update, bump
@@ -391,50 +397,120 @@ to see what is released and what is pending. To skip the hook, use `git commit -
 before a batch. The build bakes `VERSION` in, so the dashboard always shows the version
 of the code that is actually running.
 
+**Releases are built and signed in CI, never on the host.** Every push to `main` whose `VERSION`
+has no release yet runs [`.github/workflows/publish.yml`](../.github/workflows/publish.yml):
+tests, one build per architecture (native amd64 and arm64 runners), the stage-0 updater compiled
+with `bun build --compile`, and the release's own canary hook run as the `skiff` user under the
+production systemd sandbox ([`scripts/release/ci-canary.sh`](../scripts/release/ci-canary.sh)).
+Only then is `manifest.json` written and signed with Ed25519
+([`scripts/release/manifest.ts`](../scripts/release/manifest.ts); the workflow refuses to
+publish a signature the updater would not accept) and the GitHub release `v<VERSION>` created
+with `skiff-<version>-linux-<arch>.tar.gz`, `manifest.json`, `manifest.json.sig` and
+`skiff-recover.sh`. The signing key is the `SKIFF_RELEASE_SIGNING_KEY` repository secret; its
+public half is compiled into the updater ([`signing.ts`](../scripts/update-self/signing.ts)),
+and extra trusted keys can be dropped into `/etc/skiff/updater/keys/*.pub` for rotation.
+
+The updater installs the newest non-draft, non-prerelease `v<semver>` release whose manifest
+verifies, after checking the artifact's size and sha256 against it. Network, signature and
+checksum problems never mark a release bad; they are retried. With no signed release published
+(or with `--ref`), it falls back to building the ref from source as before; `--source artifact`
+(or `SKIFF_UPDATE_SOURCE=artifact`) forbids that fallback, `--source source` forces it.
+
 **From the dashboard.** The control plane is unprivileged and sandboxed, so it cannot update or
 restart itself. The button drops `/var/lib/skiff/update/request`. A root path unit
 (`skiff-update-self.path`) notices it and starts `skiff-update-self.service`, which deletes the
 request and runs `skiff-update-self update --trigger dashboard`. The updater treats the request
 purely as a trigger: it re-checks GitHub itself and never reads the file. Progress goes to
-`/var/lib/skiff-update/status.json` (`root:skiff 0640`), which the page polls through the
-restart, and the same run appends a JSON Lines log to `/var/lib/skiff-update/update.log`
-(`root:skiff 0640`): phases, the commands it runs and streamed `bun install` / build output. The
-page tails the newest lines into **Live log** while the update runs and keeps the last run's log
-afterwards. Every request is recorded in the audit log as `platform.update`. The installer creates
-both units, and so does any `sudo skiff-update-self` run, which is how existing hosts get the
-button. Logs: the page, `/var/lib/skiff-update/update.log`, and
-`journalctl -u skiff-update-self`.
+`/var/lib/skiff-update/status.json` (`root:skiff 0640`), which the page polls, and the same run
+appends a JSON Lines log to `/var/lib/skiff-update/update.log` (`root:skiff 0640`). The page
+tails it into **Live log**. Every request is recorded in the audit log as `platform.update`.
+Logs: the page, `/var/lib/skiff-update/update.log`, and `journalctl -u skiff-update-self`.
 
-`skiff-update-self` (source: [`scripts/update-self/`](../scripts/update-self)) pulls the
-ref the current release was built from (default `main`; `--ref` to pin a tag), and keeps
-a known-good control plane serving at every step:
+**The update, step by step** (source: [`scripts/update-self/`](../scripts/update-self)):
 
-1. **Build beside the running release.** The commit is downloaded and built into
-   `/opt/skiff/releases/<UTC>-<sha12>`. Nothing that serves is touched; a failed build leaves
-   no trace.
-2. **Canary.** The new build boots as a transient systemd unit with the production user and
-   sandbox, its own socket, and a `VACUUM INTO` copy of the live database in
-   `/var/lib/skiff/update-canary/`. Migrations therefore run against real data before the swap.
-   SMTP, alerts, R2 and backups are stripped from the canary's environment. If it does not
-   answer `/api/setup/status` and render `/login`, the release is deleted and the commit is
-   remembered as failed (skipped until `--force`).
-3. **Swap.** Stop the control plane, write a sealed upgrade bundle under
-   `/var/lib/skiff/backups/upgrade-<UTC>-v<version>/` (control DB + env/APP_KEY + versions),
-   repoint `previous` → old release, then `current` → new release (each an atomic rename), start.
-4. **Verify.** The socket must answer health checks, then stay up without crash-restarts for
-   10 s. If the public URL answered before the update, it must answer after
-   (`--require-public` / `--no-public-check` to override).
-5. **Keep or revert.** On success, releases other than `current` and `previous` are pruned,
-   as are superseded snapshots. On failure the old release, the old `previous` link and the
-   pre-update database are restored (Litestream is paused for the swap so it starts a clean
-   generation), the old release is verified, and the commit is marked failed.
+1. **Stage beside the running release.** The signed artifact is downloaded, verified and
+   unpacked into `/opt/skiff/releases/<UTC>-<sha12>` (or built there from source). Nothing that
+   serves is touched; a failed stage leaves no trace.
+2. **Canary, judged by the release itself.** Stage-0 hands the new release an empty scratch
+   directory and runs *that release's* hook,
+   [`scripts/release/hooks.ts canary`](../scripts/release/hooks.ts), with its own Bun. The hook
+   lays out the data dir (directories first, then ownership), takes a `VACUUM INTO` copy of the
+   live database, and boots the release as a transient unit with the production user and
+   sandbox, its own socket and no outbound side effects (SMTP, alerts, R2 and backups stripped;
+   `SKIFF_STANDBY=1`). It must pass `/api/setup/status`, `/login` and `/readyz`, stay up 3 s
+   more, and report a verdict whose reason is the failing `/readyz` check or the crash line from
+   its journal. Because the data-layout knowledge ships *in the release*, a bug in it can only
+   fail the release that contains it; the next release brings its own fixed copy. (This is the
+   lesson of 2026-11-05, when a bug in the installed updater's canary rejected every new
+   release.) Releases from before hooks existed use stage-0's bundled copy of the same canary.
+3. **Cut over with zero downtime.** The incoming release starts as
+   `skiff-control-plane-standby.service` on `/run/skiff/control-standby.sock` while the primary
+   keeps serving. Once it is healthy on its own socket, `/run/skiff/control.sock` (a symlink
+   that Caddy, the agent, the CLI and every script use) is renamed to point at it: one atomic
+   rename, new connections follow, open ones finish on the old process.
+4. **Bake.** The new release serves real traffic for 60 s (`--bake <seconds>`), probed every
+   second through `control.sock`. If it stops, crash-restarts or stops answering, `control.sock`
+   is pointed back at the untouched primary and the standby stops: a code-only revert, no
+   restart, no database restore, no lost writes.
+5. **Commit.** `previous` → old release, `current` → new release, then the primary restarts on
+   it while the standby keeps serving (`control.sock` is re-pointed at the standby between stop
+   and start, so even a primary that unlinks the path on shutdown drops nothing). When the
+   primary answers, `control.sock` points back at it, the standby drains and stops, the helper
+   restarts, and the live checks of the old design run once more (health, `/readyz`, 10 s
+   without crash-restarts, the public URL if it answered before).
+6. **Keep or revert.** On success, releases other than `current` and `previous` are pruned, as
+   are superseded snapshots, and the release's own stage-0 updater is qualified (below).
 
-The swap is a restart, so the control plane is unavailable for a few seconds; Caddy and the
-agent keep serving sites. Downtime does not cover the build or the canary. `--with-agent` also
-restarts `skiff-agent` on the new binary (the agent otherwise picks it up on its next restart).
-Run it under `systemd-run --unit=skiff-update-self --wait sudo skiff-update-self` or `tmux` on
-flaky SSH. If the process dies mid-swap anyway, the next `skiff-update-self` invocation keeps
-the new release when it is healthy and reverts it otherwise.
+**Releases with migrations are fenced.** Two releases may share the SQLite file only if the old
+one understands the schema. When the new release ships migrations the database has not applied,
+the old release is stopped first (a few seconds of downtime, as before), a sealed upgrade bundle
+is written to `/var/lib/skiff/backups/upgrade-<UTC>-v<version>/`, and only then does the new
+release start and migrate. Any failure before commit restores that bundle's database (Litestream
+is paused so it starts a clean generation) and restarts the old release. Code-only releases
+always get the zero-downtime path. `--no-zero-downtime` forces the old stop/swap/start behaviour.
+
+Exactly one process owns background work. The standby (and the canary) run with
+`SKIFF_STANDBY=1`, which skips the maintenance loop and the resumption of interrupted mass
+operations; the primary keeps them throughout.
+
+**Failures are attributed, not just recorded.** A release is marked bad only when its own hook
+returns a well-formed failing verdict, or it fails while serving (standby health or bake). It is
+then skipped until `--force`, and only by the same updater build: a verdict is stamped with the
+updater identity (`skiff-update-self --version`), so installing a fixed updater automatically
+retries releases an older one blamed. A hook that crashes, times out or gives no verdict, an
+interrupted update and a release that served fine on the standby but not on the primary are
+`inconclusive` and always retried. If two *different* releases fail at the same step for the same
+reason, neither is blamed (`suspect`) and the log says the updater or host is the likely cause.
+`status` lists every verdict with its cause.
+
+**Stage-0 updater.** `/usr/local/sbin/skiff-update-self` runs
+`/usr/local/lib/skiff-updater/current/skiff-updated`, a self-contained compiled binary that does
+not use any release's Bun or `node_modules`. If it is missing or does not answer `--version`,
+the wrapper falls back to the TypeScript updater in `current`, then `previous`
+(`SKIFF_UPDATER=source` forces that). Each release carries its own `updater/skiff-updated`.
+After the release commits, never in the same transaction, that binary is installed side by side,
+must pass `skiff-updated self-test` (state readable, release keys trusted, the active release's
+hooks callable), and only then becomes `current`; a candidate that fails is discarded.
+
+**Crashes, reboots and power cuts.** `skiff-update-guard.service` runs at boot before the control
+plane and Litestream. If an update was in flight and not committed, it restores the committed
+pointers (and, for a fenced update, the pre-update database), removes the standby link and
+records the attempt as `inconclusive`. It touches only files, so it can never wait on the units it
+precedes. The standby unit is never enabled, so a reboot always comes up on `current`, and the
+primary's pre-start creates `control.sock` → `control-primary.sock`. Without a reboot, the next
+`skiff-update-self` invocation finishes or reverts the interrupted switch. The updater's own unit
+ignores SIGINT/SIGTERM/SIGHUP while a switch is in flight.
+
+**When nothing else works: `skiff-recover`.** Published with every release and independent of
+the updater:
+
+```sh
+curl -fsSL https://github.com/KieranHolroyd/skiff/releases/latest/download/skiff-recover.sh | sudo sh -s -- status
+#   use <release|previous>   point current at a release on disk, restart the control plane
+#   clear-verdicts           forget every recorded update failure
+#   install-updater [vX.Y.Z] install the stage-0 updater from a signed release
+#   source-updater ARGS...   run the TypeScript updater from the current release
+```
 
 **Rollback and the database.** Every switch records the database exactly as the outgoing
 release left it. `rollback` takes a fresh snapshot, then swaps `current` and `previous`:
@@ -446,10 +522,12 @@ release left it. `rollback` takes a fresh snapshot, then swaps `current` and `pr
 
 Exit codes: `0` updated or nothing to do, `1` nothing changed or rolled back (old release
 serving), `2` the old release did not come back healthy (look at
-`journalctl -u skiff-control-plane` now). The updater does not rewrite systemd units: it refuses
-a release that lacks a path the installed unit references, and unit changes still go through
-`install.sh --upgrade`. Private repositories need `SKIFF_GITHUB_TOKEN` or
-`/etc/skiff/github.token` (`0600`).
+`journalctl -u skiff-control-plane` now). The updater writes the control-plane units
+(`skiff-control-plane.service`, `skiff-control-plane-standby.service`, `skiff-update-guard.service`)
+itself on the first zero-downtime update, from the same template as the installer
+([`scripts/systemd/control-plane.ts`](../scripts/systemd/control-plane.ts)); other unit
+changes still go through `install.sh --upgrade`. Private repositories need `SKIFF_GITHUB_TOKEN`
+or `/etc/skiff/github.token` (`0600`).
 
 ### 4.2 Uninstall
 

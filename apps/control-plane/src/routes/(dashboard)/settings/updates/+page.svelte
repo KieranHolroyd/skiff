@@ -31,6 +31,7 @@
 	import { formatDateTime } from '../../_lib/format.js';
 	import UpdateLog from './UpdateLog.svelte';
 	import type { PageProps } from './$types';
+	import SettingsHeader from '../_lib/SettingsHeader.svelte';
 
 	type StatusView = SelfUpdateStatus & { stale: boolean };
 	interface Live {
@@ -170,6 +171,8 @@
 </script>
 
 <svelte:head><title>Updates · Settings · Skiff</title></svelte:head>
+
+<SettingsHeader id="updates" />
 
 <div class="space-y-6">
 	<FormFeedback {result} />

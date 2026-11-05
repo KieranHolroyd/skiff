@@ -106,6 +106,9 @@
 		return current === path || current.startsWith(`${path}/`);
 	}
 
+	/** Path segments whose label is not just the capitalised segment. */
+	const CRUMB_LABELS: Record<string, string> = { 'api-keys': 'API keys', usage: 'Usage & limits' };
+
 	/** Breadcrumbs from the URL: `/projects/foo` → Projects › foo. */
 	const crumbs = $derived.by(() => {
 		const segments = page.url.pathname.split('/').filter(Boolean);
@@ -117,7 +120,10 @@
 		for (const raw of segments.slice(1)) {
 			const segment = decodeURIComponent(raw);
 			out.push({
-				label: isProject ? segment : segment.charAt(0).toUpperCase() + segment.slice(1),
+				label: isProject
+					? segment
+					: (CRUMB_LABELS[segment] ??
+						segment.charAt(0).toUpperCase() + segment.slice(1).replace(/-/g, ' ')),
 				mono: isProject
 			});
 		}

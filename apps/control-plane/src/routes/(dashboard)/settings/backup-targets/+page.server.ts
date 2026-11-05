@@ -29,8 +29,13 @@ export const actions: Actions = {
 				kind === 'local'
 					? core.backupTargets.create(
 							principal,
-							{ name: string(data, 'name'), kind, path: string(data, 'path'), writeOnly: data.get('writeOnly') === 'on' },
-							{ platform: data.get('platform') === 'on' },
+							{
+								name: string(data, 'name'),
+								kind,
+								path: string(data, 'path'),
+								writeOnly: data.get('writeOnly') === 'on'
+							},
+							{ platform: data.get('platform') === 'on' }
 						)
 					: core.backupTargets.create(
 							principal,
@@ -44,9 +49,9 @@ export const actions: Actions = {
 								...(string(data, 'region') ? { region: string(data, 'region') } : {}),
 								...(string(data, 'pathPrefix') ? { pathPrefix: string(data, 'pathPrefix') } : {}),
 								writeOnly: data.get('writeOnly') === 'on',
-								objectLock: data.get('objectLock') === 'on',
+								objectLock: data.get('objectLock') === 'on'
 							},
-							{ platform: data.get('platform') === 'on' },
+							{ platform: data.get('platform') === 'on' }
 						);
 			return {
 				success: `Created ${result.target.name}. Test it before relying on it.`,
@@ -62,9 +67,7 @@ export const actions: Actions = {
 		const id = string(await request.formData(), 'id');
 		try {
 			const result = await core.backupTargets.testConnection(principal, id);
-			return result.ok
-				? { success: result.message }
-				: fail(400, { message: result.message });
+			return result.ok ? { success: result.message } : fail(400, { message: result.message });
 		} catch (cause) {
 			return fail(400, { message: (cause as Error).message });
 		}

@@ -15,6 +15,7 @@
 	} from '../../_lib/operations/copy.js';
 	import PruneCard from './PruneCard.svelte';
 	import type { PageProps } from './$types';
+	import SettingsHeader from '../_lib/SettingsHeader.svelte';
 
 	let { data }: PageProps = $props();
 
@@ -26,6 +27,8 @@
 </script>
 
 <svelte:head><title>Maintenance · Settings · Skiff</title></svelte:head>
+
+<SettingsHeader id="maintenance" />
 
 <div class="space-y-6">
 	{#if data.canPrune}

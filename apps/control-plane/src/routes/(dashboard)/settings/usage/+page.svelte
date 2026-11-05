@@ -22,6 +22,7 @@
 	import { formatBytes, formatDate, formatDateTime } from '../../_lib/format.js';
 	import Sparkline from './Sparkline.svelte';
 	import { inputValue, isUsageMetric, QUOTA_FIELDS, QUOTA_GROUPS } from './quota-fields.js';
+	import SettingsHeader from '../_lib/SettingsHeader.svelte';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -74,31 +75,28 @@
 
 <svelte:head><title>Usage · Settings · Skiff</title></svelte:head>
 
-<div class="space-y-6">
-	<div class="flex flex-wrap items-end justify-between gap-3">
-		<div class="space-y-1">
-			<h2 class="text-base font-semibold">Usage and limits</h2>
-			<p class="max-w-2xl text-sm text-muted-foreground">
-				What this organisation is using against its limits. Measured {formatDateTime(data.view.at)};
-				{limitedCount === 0
-					? 'no limits are set, so nothing is refused.'
-					: `${limitedCount} of ${Object.keys(metrics).length} meters have a limit.`}
-			</p>
-		</div>
-		<div class="flex flex-wrap items-center gap-2">
-			<Button variant="outline" size="sm" href={exportHref} download>
-				<DownloadIcon />
-				Export CSV
+<SettingsHeader
+	id="usage"
+	description="What this organisation is using against its limits. {limitedCount === 0
+		? 'No limits are set, so nothing is refused.'
+		: `${limitedCount} of ${Object.keys(metrics).length} meters have a limit.`}"
+>
+	{#snippet actions()}
+		<Button variant="outline" href={exportHref} download>
+			<DownloadIcon />
+			Export CSV
+		</Button>
+		{#if data.canSetQuotas}
+			<Button onclick={() => (editing = true)}>
+				<SlidersHorizontalIcon />
+				Edit limits
 			</Button>
-			{#if data.canSetQuotas}
-				<Button size="sm" onclick={() => (editing = true)}>
-					<SlidersHorizontalIcon />
-					Edit limits
-				</Button>
-			{/if}
-		</div>
-	</div>
+		{/if}
+	{/snippet}
+	<p class="text-xs text-muted-foreground">Measured {formatDateTime(data.view.at)}</p>
+</SettingsHeader>
 
+<div class="space-y-6">
 	{#if warnings.length > 0}
 		<Notice
 			tone={warnings.some((warning) => warning.percent >= 100) ? 'danger' : 'warning'}

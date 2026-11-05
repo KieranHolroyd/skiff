@@ -96,7 +96,44 @@ export type LatestVersion =
 
 let cached: { key: string; at: number; value: LatestVersion } | null = null;
 
-/** The VERSION file on the update ref. Cached for five minutes unless `force`. */
+/**
+ * Newest signed release (`v<semver>` with a manifest), the same choice the updater makes.
+ * null when nothing is published or GitHub cannot be asked; the caller falls back to VERSION.
+ */
+async function latestPublishedVersion(repo: string): Promise<string | null> {
+	try {
+		const response = await fetch(`https://api.github.com/repos/${repo}/releases?per_page=30`, {
+			headers: { 'User-Agent': 'skiff-control-plane', Accept: 'application/vnd.github+json' },
+			signal: AbortSignal.timeout(8_000)
+		});
+		if (!response.ok) return null;
+		const releases = (await response.json()) as {
+			tag_name?: string;
+			draft?: boolean;
+			prerelease?: boolean;
+			assets?: { name?: string }[];
+		}[];
+		const versions = releases
+			.filter(
+				(release) =>
+					!release.draft &&
+					!release.prerelease &&
+					/^v\d+\.\d+\.\d+$/.test(release.tag_name ?? '') &&
+					(release.assets ?? []).some((asset) => asset.name === 'manifest.json')
+			)
+			.map((release) => release.tag_name!.slice(1))
+			.sort((a, b) => compareSemver(b, a));
+		return versions[0] ?? null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * The version the updater would install: the newest signed release, else the VERSION file on
+ * the update ref (hosts whose repository publishes no releases build from source). Cached for
+ * five minutes unless `force`.
+ */
 export async function latestVersion(
 	source: UpdateSource,
 	{ force = false }: { force?: boolean } = {}
@@ -107,6 +144,12 @@ export async function latestVersion(
 	const checkedAt = new Date().toISOString();
 	const ref = source.ref.split('/').map(encodeURIComponent).join('/');
 	let value: LatestVersion;
+	const published = await latestPublishedVersion(source.repo);
+	if (published) {
+		value = { ok: true, version: published, checkedAt };
+		cached = { key, at: Date.now(), value };
+		return value;
+	}
 	try {
 		const response = await fetch(
 			`https://raw.githubusercontent.com/${source.repo}/${ref}/VERSION`,

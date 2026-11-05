@@ -18,11 +18,12 @@
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as Table from '#lib/components/ui/table/index.js';
-	import type { Tone } from '#lib/status.js';
 	import EmptyState from '../../_lib/EmptyState.svelte';
 	import Panel from '../../_lib/Panel.svelte';
 	import { formatBytes, formatDateTime, formatDuration } from '../../_lib/format.js';
 	import ConfigProgress from '../ConfigProgress.svelte';
+	import SettingsHeader from '../_lib/SettingsHeader.svelte';
+	import { backupStatus } from '../_lib/backup-status.js';
 	import type { PageProps } from './$types';
 
 	let { data, form }: PageProps = $props();
@@ -41,61 +42,8 @@
 	const configured = $derived(data.r2.configured);
 	const savedSecret = $derived(data.r2.secretsSet.includes('R2_SECRET_ACCESS_KEY'));
 
-	/** One headline state for the panel. */
-	const overall = $derived.by((): { label: string; tone: Tone; detail: string } => {
-		if (!configured)
-			return {
-				label: 'Not set up',
-				tone: 'warning',
-				detail: 'The platform database is not backed up off this server.'
-			};
-		if (local)
-			return {
-				label: 'Saved locally',
-				tone: 'neutral',
-				detail:
-					'R2 credentials are saved for this dev server. Continuous backups run on an installed server.'
-			};
-		if (!health.enabled)
-			return {
-				label: 'Off',
-				tone: 'neutral',
-				detail: 'R2 is configured, but continuous backups are turned off.'
-			};
-		if (health.litestream && health.litestream.active !== 'active')
-			return {
-				label: 'Failing',
-				tone: 'danger',
-				detail: `Litestream is ${health.litestream.active}, so new changes are not being backed up.`
-			};
-		if (health.replication && !health.replication.ok)
-			return {
-				label: 'Failing',
-				tone: 'danger',
-				detail: health.replication.error ?? 'R2 has no recent backup.'
-			};
-		if (
-			health.replication?.lagSeconds !== null &&
-			health.replication?.lagSeconds !== undefined &&
-			health.replication.lagSeconds > 300
-		)
-			return {
-				label: 'Behind',
-				tone: 'warning',
-				detail: `The newest backup in R2 is ${formatDuration(health.replication.lagSeconds)} old.`
-			};
-		if (health.drill && !health.drill.ok)
-			return {
-				label: 'Drill failed',
-				tone: 'danger',
-				detail: 'The last restore drill could not reproduce the live database.'
-			};
-		return {
-			label: 'Protected',
-			tone: 'success',
-			detail: 'Every change is copied to R2 within seconds and restores are tested monthly.'
-		};
-	});
+	/** One headline state for the panel (the settings nav shows the same one). */
+	const overall = $derived(backupStatus({ configured, local, health }));
 
 	async function refresh() {
 		refreshing = true;
@@ -146,6 +94,8 @@
 </script>
 
 <svelte:head><title>Backups · Settings · Skiff</title></svelte:head>
+
+<SettingsHeader id="backups" />
 
 <div class="space-y-6">
 	<ConfigProgress

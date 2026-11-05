@@ -91,7 +91,10 @@
 		}
 		const current = status.requested.dataDir === dataDir && status.requested.buildDir === buildDir;
 		if (current && status.status === 'failed')
-			return { tone: 'failed', text: `Storage move failed: ${status.message ?? 'see journalctl -u skiff-storage'}` };
+			return {
+				tone: 'failed',
+				text: `Storage move failed: ${status.message ?? 'see journalctl -u skiff-storage'}`
+			};
 		if (!current || status.status === 'pending')
 			return { tone: 'pending', text: status.message ?? 'Storage move in progress.' };
 		return null;
@@ -206,7 +209,7 @@
 			<Button href={resolve('/(dashboard)/overview')} variant="outline" size="sm"
 				>Back to overview</Button
 			>
-			<Button href={resolve('/(dashboard)/settings')} variant="ghost" size="sm"
+			<Button href={`${resolve('/(dashboard)/settings')}#access`} variant="ghost" size="sm"
 				>View your role</Button
 			>
 		</EmptyState>
@@ -328,7 +331,9 @@
 							<dd class="font-mono text-xs">{node.publicAddress ?? 'not reported'}</dd>
 							<dt>Data</dt>
 							<dd class="truncate font-mono text-xs" title="Release cache and agent state">
-								{node.storage.status?.dataDir ?? node.storage.dataDir ?? NODE_STORAGE_DEFAULTS.dataDir}
+								{node.storage.status?.dataDir ??
+									node.storage.dataDir ??
+									NODE_STORAGE_DEFAULTS.dataDir}
 							</dd>
 							<dt>Heartbeat</dt>
 							<dd class="text-sm">
@@ -398,9 +403,19 @@
 									</div>
 								{/each}
 								{#if adoptable(node.id).length > 0}
-									<form method="POST" action="?/adoptVolume" class="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+									<form
+										method="POST"
+										action="?/adoptVolume"
+										class="grid gap-2 sm:grid-cols-[1fr_1fr_auto]"
+									>
 										<input type="hidden" name="nodeId" value={node.id} />
-										<Input name="name" placeholder="volume name" required minlength={3} maxlength={40} />
+										<Input
+											name="name"
+											placeholder="volume name"
+											required
+											minlength={3}
+											maxlength={40}
+										/>
 										<NativeSelect.Root name="sourceKey" required class="w-full">
 											{#each adoptable(node.id) as mount (mount.sourceKey)}
 												<NativeSelect.Option value={mount.sourceKey}>
@@ -412,7 +427,8 @@
 									</form>
 								{:else if volumeView.volumes.length === 0}
 									<p class="text-xs text-muted-foreground">
-										No mounts reported yet. The agent sends its inventory within a minute of starting.
+										No mounts reported yet. The agent sends its inventory within a minute of
+										starting.
 									</p>
 								{/if}
 							</div>
@@ -590,13 +606,14 @@
 							placeholder={NODE_STORAGE_DEFAULTS.buildDir}
 							class="font-mono text-sm"
 						/>
-						<Field.Description>One checkout per running build; nothing is copied.</Field.Description>
+						<Field.Description>One checkout per running build; nothing is copied.</Field.Description
+						>
 					</Field.Field>
 				</div>
 				{#if storageChanging}
 					<p class="text-xs text-muted-foreground">
-						Every parent directory must be reachable by the <code class="font-mono">skiff</code> user.
-						A move waits for any running build to finish. Needs
+						Every parent directory must be reachable by the <code class="font-mono">skiff</code>
+						user. A move waits for any running build to finish. Needs
 						<code class="font-mono">skiff-storage.path</code> on the node.
 					</p>
 				{/if}

@@ -1,19 +1,30 @@
 /**
- * Skiff self-updater: orchestration.
+ * Skiff self-updater (stage-0): orchestration.
  *
  * Invariant: a release that has been proven to serve is always either running or one atomic
- * symlink swap away. Concretely:
+ * rename away. Concretely:
  *
- *   /opt/skiff/current  -> the release serving now
+ *   /opt/skiff/current  -> the release serving now (what boots after a reboot)
  *   /opt/skiff/previous -> the release that served before it (kept until the next good update)
+ *   /opt/skiff/standby  -> the incoming release, only while an update is in flight
  *
- * An update builds the new release next to the running one, boots it in isolation against a
- * copy of the live database (canary), and only then stops the control plane, snapshots SQLite,
- * swaps `current`, starts and health-checks. Any failure after the swap restores the snapshot,
- * the old `current`/`previous` links and restarts the old release.
+ * An update stages a release (a signed, CI-built artifact when one is published; otherwise a
+ * source build), asks the *new release's own* hook to boot it against a copy of the live
+ * database (canary), then cuts over with zero downtime:
  *
- * Every switch (update or rollback) records `{ from, to, snapshot }`, where `snapshot` is the
- * database exactly as `from` left it. That makes every switch reversible, including a rollback.
+ *   1. start the standby unit on the new release (the primary keeps serving)
+ *   2. prove it healthy on its own socket
+ *   3. rename /run/skiff/control.sock to point at the standby (atomic; open requests finish)
+ *   4. bake: watch it serve real traffic; any failure points control.sock back (code-only revert)
+ *   5. commit: move `current`, restart the primary on it, point control.sock back, stop the standby
+ *
+ * A release that brings schema migrations is fenced instead: the old release stops before the
+ * new one migrates the live database, so old code never runs against a schema it does not know.
+ * A failed fenced update restores the pre-update snapshot.
+ *
+ * Failures are attributed. Only a well-formed verdict from the release's own hook, or a failed
+ * bake, marks a release bad, and only for this updater build. Anything else (network, signature,
+ * a hook that crashed or timed out, an updater exception) is retried next time.
  *
  * All side effects on the machine go through `Host` so this file can be tested without systemd.
  */
@@ -31,6 +42,7 @@ import {
 	realpathSync,
 	renameSync,
 	rmSync,
+	statSync,
 	symlinkSync,
 	writeFileSync,
 	writeSync,
@@ -53,8 +65,15 @@ import {
 	type UpgradePreflight,
 	type UpgradeSnapshotBundle
 } from '../../packages/core/src/upgrade-plan.ts';
+import type { HookVerdict } from '../release/canary.ts';
+import type { Probe } from '../release/health.ts';
+import { PRIMARY_UNIT, STANDBY_UNIT } from '../systemd/control-plane.ts';
+import { SignatureError, verifyManifest, type ManifestArtifact, type ReleaseManifest } from './signing.ts';
+import { HOOK_PROTOCOL_MIN, UPDATER_IDENTITY } from './version.ts';
+import type { KeyObject } from 'node:crypto';
 
-export const CONTROL_PLANE = 'skiff-control-plane.service';
+export const CONTROL_PLANE = PRIMARY_UNIT;
+export const STANDBY = STANDBY_UNIT;
 export const AGENT = 'skiff-agent.service';
 export const HELPER = 'skiff-helper.service';
 export const LITESTREAM = 'skiff-litestream.service';
@@ -66,6 +85,10 @@ export interface Layout {
 	releasesDir: string;
 	currentLink: string;
 	previousLink: string;
+	/** The incoming release while an update is in flight (the standby unit runs it). */
+	standbyLink: string;
+	/** Stage-0 installs: <updaterDir>/<identity>/skiff-updated, <updaterDir>/current. */
+	updaterDir: string;
 	dbPath: string;
 	backupsDir: string;
 	canaryDir: string;
@@ -84,6 +107,8 @@ export function layoutFromEnv(env: Record<string, string | undefined> = process.
 		releasesDir: join(optDir, 'releases'),
 		currentLink: join(optDir, 'current'),
 		previousLink: join(optDir, 'previous'),
+		standbyLink: join(optDir, 'standby'),
+		updaterDir: env.SKIFF_UPDATER_DIR ?? '/usr/local/lib/skiff-updater',
 		dbPath: join(varDir, 'data', 'skiff.db'),
 		backupsDir: join(varDir, 'backups'),
 		canaryDir: join(varDir, 'update-canary'),
@@ -95,6 +120,23 @@ export function layoutFromEnv(env: Record<string, string | undefined> = process.
 }
 
 export type UpdatePhase = 'checking' | 'building' | 'canary' | 'swapping' | 'verifying' | 'rolling-back';
+
+/** Which control-plane socket a probe targets. `public` is control.sock (what Caddy uses). */
+export type SocketTarget = 'public' | 'primary' | 'standby';
+
+/** A GitHub release as listed by the API (only the fields the updater uses). */
+export interface PublishedRelease {
+	tag: string;
+	draft: boolean;
+	prerelease: boolean;
+	assets: { name: string; url: string; size: number }[];
+}
+
+/** Outcome of running a release hook. Only `verdict` can blame the release. */
+export type HookOutcome =
+	| { kind: 'verdict'; verdict: HookVerdict }
+	| { kind: 'absent' }
+	| { kind: 'error'; reason: string };
 
 /** Machine side effects. The real implementation lives in main.ts. */
 export interface Host {
@@ -113,10 +155,41 @@ export interface Host {
 	/** Install dependencies and build the control plane and agent inside `repoDir`. */
 	build(repoDir: string): Promise<void>;
 	/**
-	 * Boot `release` in isolation (own socket, own data dir at `scratchDir/data`, no outbound
-	 * notifications) and resolve once it answers health checks; reject with logs otherwise.
+	 * Fallback canary for releases that predate release hooks: boot `release` in isolation (own
+	 * socket, own data dir at `scratchDir/data`) and resolve once healthy; reject otherwise.
 	 */
 	canary(release: string, scratchDir: string): Promise<void>;
+	/**
+	 * Run `<release>/repo/scripts/release/hooks.ts <hook> ...args` with the release's own Bun and
+	 * a hard timeout. `absent` when the release ships no hooks.
+	 */
+	releaseHook?(release: string, hook: string, args: string[], timeoutMs: number): Promise<HookOutcome>;
+	/** Published GitHub releases, newest first. Absent: always build from source. */
+	listReleases?(repo: string): Promise<PublishedRelease[]>;
+	/** GET a (small) URL into memory. */
+	fetchBytes?(url: string): Promise<Uint8Array>;
+	/** Download `url` to `path`. */
+	download?(url: string, path: string): Promise<void>;
+	/** Extract a .tar.gz into an existing directory. */
+	extract?(archive: string, dest: string): Promise<void>;
+	/** sha256 hex of a file. */
+	sha256?(path: string): string;
+	/** Release-signing keys trusted on this host. */
+	trustedKeys?(): Map<string, KeyObject>;
+	/** e.g. linux-amd64 */
+	platform?(): string;
+	/** Probe one control-plane socket until fully healthy (setup, login, /readyz) or timeout. */
+	probe?(target: SocketTarget, timeoutMs: number): Promise<Probe>;
+	/** Rename control.sock to point at the primary or standby socket. */
+	pointControlSocket?(target: 'primary' | 'standby'): void;
+	/** Which socket control.sock names now (null: missing; `legacy`: a real socket file). */
+	controlSocketTarget?(): 'primary' | 'standby' | 'legacy' | null;
+	/** Write the primary/standby/guard units if they changed (daemon-reload). */
+	ensureControlPlaneUnits?(): void;
+	/** Run `<binary> self-test --json`; ok when the candidate stage-0 qualifies. */
+	qualifyUpdater?(binary: string): Promise<Probe>;
+	/** `<binary> --version` (identity), or null when it does not run. */
+	updaterIdentity?(binary: string): Promise<string | null>;
 	start(unit: string): Promise<void>;
 	stop(unit: string): Promise<void>;
 	restart(unit: string): Promise<void>;
@@ -155,6 +228,13 @@ export interface ReleaseMeta {
 
 export interface Switch {
 	kind: 'update' | 'rollback';
+	/**
+	 * Zero-downtime updates only. `overlap`: both releases share the live DB (no new migrations).
+	 * `fenced`: the old release was stopped before the new one migrated the DB.
+	 */
+	mode?: 'overlap' | 'fenced';
+	/** How far a zero-downtime update got: standby running, traffic on it, or committing. */
+	stage?: 'standby' | 'cutover' | 'commit';
 	/** Release that was serving before the switch. */
 	from: string;
 	/** Release activated by the switch. */
@@ -170,11 +250,34 @@ export interface Switch {
 	at: string;
 }
 
+export interface FailureVerdict {
+	at: string;
+	release: string;
+	reason: string;
+	/** Where it failed: canary, standby, bake, commit, live. */
+	phase?: string;
+	/**
+	 * `release`: the release's own hook said no, or it failed while serving. Skipped (unless
+	 * --force) by the same updater build only.
+	 * `inconclusive`: could not tell (hook crashed/timed out, interrupted). Retried.
+	 * `suspect`: two different releases failed the same way in a row; likely the updater. Retried.
+	 */
+	cause?: 'release' | 'inconclusive' | 'suspect';
+	/** UPDATER_IDENTITY of the updater that recorded it. */
+	updater?: string;
+	version?: string;
+}
+
 export interface UpdateState {
 	inProgress?: Switch;
 	lastSwitch?: Switch;
-	/** Commits whose release failed the canary or the live health check. Skipped unless --force. */
-	failedCommits: Record<string, { at: string; release: string; reason: string }>;
+	/** Failure verdicts by commit. Only {@link isBlocking} ones make the updater skip a commit. */
+	failedCommits: Record<string, FailureVerdict>;
+}
+
+/** A recorded failure blocks a commit only if this updater build blamed the release itself. */
+export function isBlocking(verdict: FailureVerdict | undefined): boolean {
+	return Boolean(verdict && verdict.cause === 'release' && verdict.updater === UPDATER_IDENTITY);
 }
 
 export interface UpdateOptions {
@@ -193,6 +296,15 @@ export interface UpdateOptions {
 	allowDestructiveMigrations?: boolean;
 	/** How many successful pre-update bundles to retain (pinned bundles are always kept). */
 	snapshotKeep?: number;
+	/**
+	 * `auto` (default): install the newest signed published release; build from source only when
+	 * none is published or `ref` is given. `artifact`: never build on the host. `source`: always build.
+	 */
+	source?: 'auto' | 'artifact' | 'source';
+	/** Default true. false: stop the old release before starting the new one (old behaviour). */
+	zeroDowntime?: boolean;
+	/** How long the new release must serve real traffic before it is committed. Default 60s. */
+	bakeMs?: number;
 }
 
 export interface RollbackOptions {
@@ -218,7 +330,7 @@ export type UpdateResult = Versions &
 	| { status: 'skipped'; commit: string; reason: string }
 	| { status: 'dry-run'; commit: string; plan: string[] }
 	| { status: 'build-failed'; commit: string; reason: string }
-	| { status: 'canary-failed'; commit: string; reason: string }
+	| { status: 'canary-failed'; commit: string; reason: string; cause?: FailureVerdict['cause'] }
 	| { status: 'updated'; commit: string; release: string; previous: string }
 	| { status: 'rolled-back'; commit: string; reason: string; recovered: boolean }
 	);
@@ -241,12 +353,35 @@ export type RollbackResult =
 export class UpdateError extends Error {}
 /** The switch was reverted but the old release did not come back healthy. Needs a human. */
 export class RecoveryError extends UpdateError {}
+/** The release's own check said no (well-formed verdict): the release is at fault. */
+export class ReleaseFailure extends UpdateError {
+	constructor(
+		reason: string,
+		readonly step?: string,
+		readonly detail?: string,
+	) {
+		super(reason);
+	}
+}
 
 const DEFAULTS = {
 	minFreeBytes: 2 * 1024 ** 3,
 	healthTimeoutMs: 90_000,
 	stabilizeMs: 10_000,
+	bakeMs: 60_000,
+	bakeEveryMs: 1_000,
+	hookTimeoutMs: 240_000,
 };
+
+/** The release could not be judged (hook crashed, timed out, gave no verdict). Never blocklists. */
+export class InconclusiveError extends UpdateError {}
+
+/** A verified, published release ready to download. */
+interface VerifiedRelease {
+	tag: string;
+	manifest: ReleaseManifest;
+	artifact: ManifestArtifact & { url: string };
+}
 
 export class Updater {
 	private snapshotKeep = 3;
@@ -269,9 +404,11 @@ export class Updater {
 			const repo = options.repo ?? currentMeta.repo ?? DEFAULT_REPO;
 			const ref = options.ref ?? currentMeta.ref ?? DEFAULT_REF;
 
+			host.log(`updater ${UPDATER_IDENTITY}`);
 			host.log(`current release ${basename(current)} (${currentMeta.version ?? 'unknown version'}, ${short(currentMeta.commit) || 'unknown commit'})`);
-			host.phase('checking', `Checking ${repo}@${ref}`);
-			const { commit, version, fromVersion } = await this.resolve(repo, ref, currentMeta);
+			host.phase('checking', `Checking ${repo} for a newer release`);
+			const target = await this.resolveTarget(repo, ref, currentMeta, options);
+			const { commit, version, fromVersion, published } = target;
 			const v: Versions = { version, fromVersion };
 			host.phase('checking', `Latest is ${version}; running ${fromVersion ?? 'an unversioned release'}`, v);
 
@@ -281,7 +418,7 @@ export class Updater {
 					host.log(
 						order === 0
 							? `already on ${version}`
-							: `${repo}@${ref} is at ${version}, older than the running ${fromVersion}; not downgrading (use rollback, or --force)`,
+							: `the newest available is ${version}, older than the running ${fromVersion}; not downgrading (use rollback, or --force)`,
 					);
 					return { status: 'up-to-date', commit, ...v };
 				}
@@ -289,26 +426,28 @@ export class Updater {
 			if (!fromVersion) host.warn(`the current release has no semantic version; installing ${version}`);
 			else if (options.force && compareSemver(version, fromVersion) < 0)
 				host.warn(`downgrading ${fromVersion} -> ${version} (--force); forward-only migrations may not undo cleanly`);
-			host.log(`${fromVersion ?? 'unknown'} -> ${version} (${short(commit)})`);
+			host.log(`${fromVersion ?? 'unknown'} -> ${version} (${short(commit)}, ${published ? `signed release ${published.tag}` : 'built from source'})`);
 
-			const state = this.readState();
-			const failed = state.failedCommits[commit];
-			if (!options.force && failed) {
-				const reason = `${version} (${short(commit)}) failed on ${failed.at} (${failed.reason}); pass --force to retry`;
+			const failed = this.readState().failedCommits[commit];
+			if (!options.force && isBlocking(failed)) {
+				const reason = `${version} (${short(commit)}) failed on ${failed!.at} (${failed!.reason}); pass --force to retry`;
 				host.warn(reason);
 				return { status: 'skipped', commit, reason, ...v };
 			}
+			if (failed && !isBlocking(failed))
+				host.log(`retrying ${version}: its earlier failure (${failed.reason}) was ${failed.cause === 'release' ? 'recorded by a different updater build' : failed.cause ?? 'recorded by an older updater'}`);
 
 			const name = releaseName(host.now(), commit);
 			const release = join(layout.releasesDir, name);
 			if (options.dryRun) {
 				const plan = [
-					`build ${repo}@${short(commit)} (${version}) into ${release}`,
-					options.canary === false ? 'skip the canary' : 'boot a canary against a copy of the database',
-					`stop ${CONTROL_PLANE}, snapshot the control DB and seal .env/APP_KEY in ${layout.backupsDir}`,
-					`${layout.previousLink} -> ${current}`,
-					`${layout.currentLink} -> ${release}`,
-					`start ${CONTROL_PLANE}${options.withAgent ? ` and restart ${AGENT}` : ''}, verify /readyz and health, roll back on failure`,
+					published
+						? `download and verify ${published.artifact.file} (${published.tag}) into ${release}`
+						: `build ${repo}@${short(commit)} (${version}) into ${release}`,
+					options.canary === false ? 'skip the canary' : "boot a canary against a copy of the database (the release's own hook)",
+					options.zeroDowntime === false
+						? `stop ${CONTROL_PLANE}, swap ${layout.currentLink}, start it, verify, roll back on failure`
+						: `start ${STANDBY} on the new release, cut ${layout.currentLink.replace(/current$/, '')}control.sock over, bake, then move ${layout.currentLink} and restart ${CONTROL_PLANE} (fenced if the release brings migrations)`,
 					'prune releases other than current and previous',
 				];
 				for (const line of plan) host.log(`would ${line}`);
@@ -329,14 +468,15 @@ export class Updater {
 			const free = host.freeBytes(layout.optDir);
 			const minFree = options.minFreeBytes ?? DEFAULTS.minFreeBytes;
 			if (free < minFree)
-				throw new UpdateError(`Only ${gib(free)} free under ${layout.optDir}; at least ${gib(minFree)} is needed to build.`);
+				throw new UpdateError(`Only ${gib(free)} free under ${layout.optDir}; at least ${gib(minFree)} is needed to stage a release.`);
 
-			// 1. Build next to the running release. Nothing serving is touched until this succeeds.
+			// 1. Stage next to the running release. Nothing serving is touched until this succeeds.
 			try {
-				await this.stage(release, { repo, ref, commit, version });
+				if (published) await this.stageArtifact(release, { repo, version, published });
+				else await this.stage(release, { repo, ref, commit, version });
 			} catch (error) {
 				const reason = message(error);
-				host.warn(`build failed; ${basename(current)} is still serving untouched: ${reason}`);
+				host.warn(`staging failed; ${basename(current)} is still serving untouched: ${reason}`);
 				return { status: 'build-failed', commit, reason, ...v };
 			}
 
@@ -356,45 +496,121 @@ export class Updater {
 			}
 			for (const warning of stagedPreflight.warnings) host.warn(`preflight: ${warning}`);
 
-			// 2. Boot it in isolation against a copy of the live database.
+			// 2. Boot it in isolation against a copy of the live database, judged by its own hook.
 			if (options.canary !== false) {
 				try {
 					await this.runCanary(release);
 				} catch (error) {
 					const reason = message(error);
-					host.warn(`canary failed; ${basename(current)} is still serving untouched`);
 					rmSync(release, { recursive: true, force: true });
-					this.recordFailure(commit, name, `canary: ${firstLine(reason)}`);
-					return { status: 'canary-failed', commit, reason, ...v };
+					const verdict = this.recordFailure(commit, name, `canary: ${firstLine(reason)}`, {
+						phase: 'canary',
+						cause: error instanceof InconclusiveError ? 'inconclusive' : 'release',
+						version,
+					});
+					host.warn(
+						`canary failed (${verdict.cause === 'release' ? 'the release is at fault' : verdict.cause === 'suspect' ? 'the updater is suspected' : 'inconclusive; it will be retried'}); ${basename(current)} is still serving untouched`,
+					);
+					if (error instanceof ReleaseFailure && error.detail) host.log(`canary diagnostics:\n${error.detail}`);
+					return { status: 'canary-failed', commit, reason, cause: verdict.cause, ...v };
 				}
 			}
 
-			// 3. Swap, verify, keep or revert.
+			// 3. Cut over, bake, commit or revert.
 			const publicCheck = options.publicCheck ?? 'auto';
 			const requirePublic =
 				publicCheck === 'require' || (publicCheck === 'auto' && (await host.publicHealthy(10_000)));
 			if (publicCheck === 'auto')
 				host.log(requirePublic ? 'public URL is healthy; it must stay healthy after the swap' : 'public URL is not reachable now; it will not gate the swap');
-			const result = await this.activate({ current, release, commit, version, requirePublic, options });
+			const zeroDowntime = options.zeroDowntime !== false && Boolean(host.probe && host.pointControlSocket);
+			const result = zeroDowntime
+				? await this.activateZeroDowntime({ current, release, commit, version, requirePublic, options })
+				: await this.activate({ current, release, commit, version, requirePublic, options });
+			if (result.status === 'updated') await this.maybeInstallUpdater(release);
 			return { ...result, ...v };
 		});
 	}
 
 	/** Read-only: what would `update` install? Does not take the lock or touch the machine. */
-	async check(options: Pick<UpdateOptions, 'repo' | 'ref'> = {}): Promise<CheckResult> {
+	async check(options: Pick<UpdateOptions, 'repo' | 'ref' | 'source'> = {}): Promise<CheckResult> {
 		const current = readLink(this.layout.currentLink);
 		const currentMeta = current ? readMeta(current) : {};
 		const repo = options.repo ?? currentMeta.repo ?? DEFAULT_REPO;
 		const ref = options.ref ?? currentMeta.ref ?? DEFAULT_REF;
-		const resolved = await this.resolve(repo, ref, currentMeta);
+		const { published, ...resolved } = await this.resolveTarget(repo, ref, currentMeta, options);
 		const failed = this.readState().failedCommits[resolved.commit];
 		return {
 			repo,
-			ref,
+			ref: published ? published.tag : ref,
 			...resolved,
 			available: !resolved.fromVersion || compareSemver(resolved.version, resolved.fromVersion) > 0,
-			...(failed ? { failed: `${failed.at}: ${failed.reason}` } : {}),
+			...(isBlocking(failed) ? { failed: `${failed!.at}: ${failed!.reason}` } : {}),
 		};
+	}
+
+	/**
+	 * What to install: the newest signed published release, unless the caller pinned a ref or
+	 * asked for a source build. Network and signature problems throw (retried, never blamed).
+	 */
+	private async resolveTarget(
+		repo: string,
+		ref: string,
+		currentMeta: ReleaseMeta,
+		options: Pick<UpdateOptions, 'ref' | 'source'>,
+	): Promise<{ commit: string; published: VerifiedRelease | null } & Versions> {
+		const source = options.source ?? 'auto';
+		const fromVersion = parseSemver(currentMeta.version)?.version ?? null;
+		if (source !== 'source' && !options.ref && this.host.listReleases) {
+			const published = await this.resolvePublished(repo);
+			if (published) return { commit: published.manifest.commit, version: published.manifest.version, fromVersion, published };
+			if (source === 'artifact')
+				throw new UpdateError(`No signed release of ${repo} is published; refusing to build on the host (source: artifact).`);
+			this.host.log(`no signed release of ${repo} is published; building ${ref} from source`);
+		} else if (source === 'artifact') {
+			throw new UpdateError('source: artifact cannot be combined with --ref (a ref is always built from source).');
+		}
+		return { ...(await this.resolve(repo, ref, currentMeta)), published: null };
+	}
+
+	private async resolvePublished(repo: string): Promise<VerifiedRelease | null> {
+		const { host } = this;
+		if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new UpdateError(`Invalid repository "${repo}" (expected owner/name).`);
+		const releases = await host.listReleases!(repo);
+		const candidates = releases
+			.filter(
+				(release) =>
+					!release.draft &&
+					!release.prerelease &&
+					/^v\d+\.\d+\.\d+$/.test(release.tag) &&
+					release.assets.some((asset) => asset.name === 'manifest.json') &&
+					release.assets.some((asset) => asset.name === 'manifest.json.sig'),
+			)
+			.sort((a, b) => compareSemver(b.tag.slice(1), a.tag.slice(1)));
+		const top = candidates[0];
+		if (!top) return null;
+		if (!host.fetchBytes || !host.trustedKeys) throw new UpdateError('this host cannot verify signed releases');
+		const asset = (name: string) => top.assets.find((entry) => entry.name === name)!;
+		const bytes = await host.fetchBytes(asset('manifest.json').url);
+		const signature = new TextDecoder().decode(await host.fetchBytes(asset('manifest.json.sig').url));
+		let manifest: ReleaseManifest;
+		try {
+			manifest = verifyManifest(bytes, signature, host.trustedKeys());
+		} catch (error) {
+			if (error instanceof SignatureError) throw new UpdateError(`${top.tag} is not trusted: ${error.message}`);
+			throw error;
+		}
+		if (manifest.version !== top.tag.slice(1))
+			throw new UpdateError(`${top.tag}'s signed manifest describes ${manifest.version}; refusing a mislabelled release`);
+		if (manifest.repo.toLowerCase() !== repo.toLowerCase())
+			throw new UpdateError(`${top.tag}'s signed manifest is for ${manifest.repo}, not ${repo}`);
+		if (manifest.hookProtocol < HOOK_PROTOCOL_MIN)
+			host.warn(`${top.tag} ships release-hook protocol ${manifest.hookProtocol}; the fallback canary will be used`);
+		const platform = host.platform?.() ?? `${process.platform}-${process.arch === 'x64' ? 'amd64' : process.arch}`;
+		const entry = manifest.artifacts[platform];
+		if (!entry) throw new UpdateError(`${top.tag} has no ${platform} artifact`);
+		const download = top.assets.find((item) => item.name === entry.file);
+		if (!download) throw new UpdateError(`${top.tag} lists ${entry.file} but the release has no such asset`);
+		return { tag: top.tag, manifest, artifact: { ...entry, url: download.url } };
 	}
 
 	private async resolve(repo: string, ref: string, currentMeta: ReleaseMeta): Promise<{ commit: string } & Versions> {
@@ -412,15 +628,67 @@ export class Updater {
 		return { commit, version: parsed.version, fromVersion: parseSemver(currentMeta.version)?.version ?? null };
 	}
 
+	private clearStaging(): void {
+		const { layout } = this;
+		mkdirSync(layout.releasesDir, { recursive: true });
+		// Leftovers from an interrupted stage are safe to remove: we hold the lock.
+		for (const entry of readdirSync(layout.releasesDir))
+			if (entry.startsWith('.staging-') || entry.startsWith('.download-'))
+				rmSync(join(layout.releasesDir, entry), { recursive: true, force: true });
+	}
+
+	/** Download the signed artifact, check size and sha256 against the manifest, unpack. */
+	private async stageArtifact(
+		release: string,
+		input: { repo: string; version: string; published: VerifiedRelease },
+	): Promise<void> {
+		const { host, layout } = this;
+		const { published } = input;
+		if (!host.download || !host.extract || !host.sha256) throw new UpdateError('this host cannot install release artifacts');
+		this.clearStaging();
+		const staging = join(layout.releasesDir, `.staging-${basename(release)}`);
+		const archive = join(layout.releasesDir, `.download-${basename(release)}.tar.gz`);
+		mkdirSync(staging, { recursive: true });
+		try {
+			host.phase('building', `Downloading the signed ${input.version} release`);
+			host.log(`downloading ${published.artifact.file} (${(published.artifact.size / 1024 ** 2).toFixed(0)} MiB) from ${published.tag}`);
+			await host.download(published.artifact.url, archive);
+			const size = statSync(archive).size;
+			if (size !== published.artifact.size)
+				throw new UpdateError(`${published.artifact.file} is ${size} bytes; the signed manifest says ${published.artifact.size}`);
+			const sha = host.sha256(archive);
+			if (sha !== published.artifact.sha256)
+				throw new UpdateError(`${published.artifact.file} does not match its signed checksum (got ${sha.slice(0, 16)}…)`);
+			host.log('checksum and signature verified');
+			await host.extract(archive, staging);
+			rmSync(archive, { force: true });
+			assembleRelease(staging, layout.bunBin);
+			const missing = verifyRelease(staging, layout);
+			if (missing.length) throw new UpdateError(`the release artifact is missing ${missing.join(', ')}`);
+			writeMeta(staging, {
+				version: input.version,
+				builtAt: published.manifest.createdAt,
+				source: 'artifact',
+				repo: input.repo,
+				ref: published.tag,
+				commit: published.manifest.commit,
+				status: 'staged',
+			});
+			renameSync(staging, release);
+			host.log(`staged ${release}`);
+		} catch (error) {
+			rmSync(staging, { recursive: true, force: true });
+			rmSync(archive, { force: true });
+			throw error;
+		}
+	}
+
 	private async stage(
 		release: string,
 		source: { repo: string; ref: string; commit: string; version: string },
 	): Promise<void> {
 		const { host, layout } = this;
-		mkdirSync(layout.releasesDir, { recursive: true });
-		// Leftovers from an interrupted build are safe to remove: we hold the lock.
-		for (const entry of readdirSync(layout.releasesDir))
-			if (entry.startsWith('.staging-')) rmSync(join(layout.releasesDir, entry), { recursive: true, force: true });
+		this.clearStaging();
 		const staging = join(layout.releasesDir, `.staging-${basename(release)}`);
 		mkdirSync(staging, { recursive: true });
 		try {
@@ -451,22 +719,40 @@ export class Updater {
 		}
 	}
 
+	/**
+	 * The release judges itself: its own `canary` hook prepares the scratch dir (data layout,
+	 * ownership, DB copy) and boots it. Stage-0 only supplies an empty directory and reads the
+	 * verdict. Releases from before hooks existed use the built-in fallback.
+	 */
 	private async runCanary(release: string): Promise<void> {
 		const { host, layout } = this;
 		const scratch = join(layout.canaryDir, basename(release));
 		rmSync(scratch, { recursive: true, force: true });
-		mkdirSync(join(scratch, 'data'), { recursive: true });
+		mkdirSync(scratch, { recursive: true });
+		host.phase('canary', 'Test-booting the new release against a copy of the database');
 		try {
-			if (existsSync(layout.dbPath)) {
-				snapshotDb(layout.dbPath, join(scratch, 'data', 'skiff.db'));
-				fixSidecarOwnership(layout.dbPath, host);
+			const outcome: HookOutcome = host.releaseHook
+				? await host.releaseHook(release, 'canary', ['--release', release, '--scratch', scratch, '--db', layout.dbPath], DEFAULTS.hookTimeoutMs)
+				: { kind: 'absent' };
+			if (outcome.kind === 'error')
+				throw new InconclusiveError(`the release's canary hook gave no verdict: ${outcome.reason}`);
+			if (outcome.kind === 'verdict') {
+				if (!outcome.verdict.ok)
+					throw new ReleaseFailure(outcome.verdict.reason ?? 'unhealthy', outcome.verdict.step, outcome.verdict.detail);
+				host.log(`canary is healthy (release hook, protocol ${outcome.verdict.protocol})`);
+				return;
 			}
-			host.chownToSkiff(scratch);
-			host.phase('canary', 'Test-booting the new release against a copy of the database');
-			host.log('booting canary against a copy of the database');
-			await host.canary(release, scratch);
+			// Fallback for releases without hooks: stage-0's bundled copy of the same canary, which
+			// prepares the scratch dir itself.
+			host.log('this release ships no canary hook; using the built-in canary');
+			try {
+				await host.canary(release, scratch);
+			} catch (error) {
+				throw new ReleaseFailure(message(error), 'fallback');
+			}
 			host.log('canary is healthy');
 		} finally {
+			fixSidecarOwnership(layout.dbPath, host);
 			rmSync(scratch, { recursive: true, force: true });
 		}
 	}
@@ -542,7 +828,7 @@ export class Updater {
 			host.warn(`${basename(release)} is unhealthy (${problem}); rolling back`);
 			host.phase('rolling-back', `Rolling back: ${problem}`);
 			const recovered = await this.revert(sw);
-			this.recordFailure(commit, basename(release), problem);
+			this.recordFailure(commit, basename(release), problem, { phase: 'live', cause: 'release', version: input.version });
 			if (recovered) rmSync(release, { recursive: true, force: true });
 			return { status: 'rolled-back', commit, reason: problem, recovered };
 		} catch (error) {
@@ -557,6 +843,309 @@ export class Updater {
 			throw error;
 		} finally {
 			host.leaveCritical();
+		}
+	}
+
+	// ------------------------------------------------------- zero-downtime cutover
+
+	/**
+	 * Blue/green on one host. The primary keeps serving while the standby boots the new release;
+	 * control.sock moves to the standby only once it is healthy, and the new release is committed
+	 * (`current` moved, primary restarted on it) only after it has served real traffic for the
+	 * bake window. Until commit, reverting is pointing control.sock back: no restart, no restore.
+	 */
+	private async activateZeroDowntime(input: {
+		current: string;
+		release: string;
+		commit: string;
+		version: string;
+		requirePublic: boolean;
+		options: UpdateOptions;
+	}): Promise<
+		| { status: 'updated'; commit: string; release: string; previous: string }
+		| { status: 'rolled-back'; commit: string; reason: string; recovered: boolean }
+	> {
+		const { host, layout } = this;
+		const { current, release, commit, options } = input;
+		const withAgent = Boolean(options.withAgent);
+		const healthTimeout = options.healthTimeoutMs ?? DEFAULTS.healthTimeoutMs;
+		const pending = pendingMigrations(layout.dbPath, release);
+		const sw: Switch = {
+			kind: 'update',
+			mode: pending.length ? 'fenced' : 'overlap',
+			stage: 'standby',
+			from: current,
+			to: release,
+			previousBefore: readLink(layout.previousLink),
+			snapshot: null,
+			commit,
+			withAgent,
+			at: host.now().toISOString(),
+		};
+		const fail = async (phase: 'standby' | 'bake' | 'commit', problem: string) => {
+			host.warn(`${basename(release)} failed at ${phase} (${problem}); reverting`);
+			host.phase('rolling-back', `Rolling back: ${problem}`);
+			const recovered = await this.revertZeroDowntime(sw);
+			// A release that served fine on the standby but not as the primary points at the host.
+			this.recordFailure(commit, basename(release), `${phase}: ${problem}`, {
+				phase,
+				cause: phase === 'commit' ? 'inconclusive' : 'release',
+				version: input.version,
+			});
+			if (recovered) rmSync(release, { recursive: true, force: true });
+			return { status: 'rolled-back' as const, commit, reason: problem, recovered };
+		};
+
+		host.ensureControlPlaneUnits?.();
+		host.enterCritical();
+		try {
+			if (sw.mode === 'fenced') {
+				host.phase('swapping', `Stopping the old release to apply ${pending.length} migration(s)`);
+				host.log(
+					`${basename(release)} brings migrations ${pending.join(', ')}; the old release must not run on a schema it does not know, so this cutover is fenced (the old release stops first)`,
+				);
+				await host.stop(CONTROL_PLANE);
+			} else {
+				host.phase('swapping', 'Starting the new release beside the running one');
+			}
+			const bundle = this.takeSnapshotBundle(`pre-update-${basename(release)}`, {
+				fromVersion: readMeta(current).version ?? null,
+				targetVersion: input.version,
+				migrations: readMigrationsFromDir(join(release, 'repo/packages/db/migrations')).map((migration) => migration.id),
+			});
+			sw.snapshot = bundle?.controlDb ?? null;
+			sw.bundle = bundle?.dir;
+			setLink(layout.standbyLink, release);
+			this.writeState({ ...this.readState(), inProgress: sw });
+
+			// 1. Standby: the new release on its own socket. The primary still serves (overlap).
+			await host.stop(STANDBY);
+			await host.start(STANDBY);
+			const ready = await host.probe!('standby', healthTimeout);
+			if (!ready.ok) return await fail('standby', `the new release did not become healthy: ${ready.reason}`);
+			host.log('standby is healthy on its own socket');
+
+			// 2. Cutover: one rename; new connections go to the standby, open ones finish where they are.
+			sw.stage = 'cutover';
+			this.writeState({ ...this.readState(), inProgress: sw });
+			host.pointControlSocket!('standby');
+			host.log('control.sock -> standby: the new release is taking traffic');
+
+			// 3. Bake: it must keep serving real traffic before anything irreversible happens.
+			const bakeMs = options.bakeMs ?? DEFAULTS.bakeMs;
+			host.phase('verifying', `Watching the new release serve traffic for ${Math.round(bakeMs / 1000)}s before committing`);
+			const problem = await this.bake({ bakeMs, requirePublic: input.requirePublic });
+			if (problem) return await fail('bake', problem);
+
+			// 4. Commit: `current` moves, the primary restarts on it while the standby keeps serving.
+			sw.stage = 'commit';
+			this.writeState({ ...this.readState(), inProgress: sw });
+			setLink(layout.previousLink, current);
+			setLink(layout.currentLink, release);
+			host.log(`${layout.currentLink} -> ${release}`);
+			host.ensureHelper(release);
+			await this.restartPrimaryBehindStandby();
+			const primary = await host.probe!('primary', healthTimeout);
+			if (!primary.ok) return await fail('commit', `the primary did not come up on the new release: ${primary.reason}`);
+			host.pointControlSocket!('primary');
+			host.log('control.sock -> primary (now on the new release)');
+			// Requests already on the standby finish within its stop timeout (graceful SIGTERM).
+			await host.sleep(2_000);
+			await host.stop(STANDBY);
+			rmSync(layout.standbyLink, { force: true });
+			await host.restart(HELPER);
+			if (withAgent && host.agentEnrolled()) await host.restart(AGENT);
+			const settled = await this.verifyLive({
+				requirePublic: input.requirePublic,
+				withAgent,
+				healthTimeoutMs: options.healthTimeoutMs,
+				stabilizeMs: options.stabilizeMs,
+			});
+			if (settled) return await fail('commit', settled);
+
+			this.finish(sw);
+			retireUpgradeSnapshotBundles(layout.backupsDir, sw.bundle ?? null);
+			writeMeta(release, { ...readMeta(release), status: 'active', activatedAt: host.now().toISOString() });
+			this.prune();
+			host.log(`updated to ${basename(release)} with ${sw.mode === 'fenced' ? 'a fenced' : 'a zero-downtime'} cutover; ${basename(current)} kept as previous`);
+			return { status: 'updated', commit, release, previous: current };
+		} catch (error) {
+			if (this.readState().inProgress) {
+				host.warn(`update failed during the cutover (${message(error)}); reverting`);
+				if (!(await this.revertZeroDowntime(sw))) throw new RecoveryError(`${message(error)}; reverting also failed`);
+			} else if (sw.mode === 'fenced') {
+				host.warn(`update failed before the cutover (${message(error)}); restarting ${basename(current)}`);
+				await host.start(CONTROL_PLANE).catch(() => undefined);
+			}
+			throw error;
+		} finally {
+			host.leaveCritical();
+		}
+	}
+
+	/**
+	 * (Re)start the primary while the standby keeps serving. The old process may unlink
+	 * control.sock on its way down (a pre-standby primary listened on that very path), so the link
+	 * is re-pointed at the standby between stop and start; the primary's pre-start then leaves it
+	 * there until the updater moves it once the primary answers.
+	 */
+	private async restartPrimaryBehindStandby(): Promise<void> {
+		const { host } = this;
+		await host.stop(CONTROL_PLANE);
+		if (await host.isActive(STANDBY)) host.pointControlSocket!('standby');
+		await host.start(CONTROL_PLANE);
+	}
+
+	/** The new release serves real traffic through control.sock; any wobble fails the bake. */
+	private async bake(input: { bakeMs: number; requirePublic: boolean }): Promise<string | null> {
+		const { host } = this;
+		const restarts = await host.restartCount(STANDBY);
+		const rounds = Math.max(1, Math.ceil(input.bakeMs / DEFAULTS.bakeEveryMs));
+		for (let round = 0; round < rounds; round++) {
+			await host.sleep(Math.min(DEFAULTS.bakeEveryMs, input.bakeMs));
+			if (!(await host.isActive(STANDBY))) return 'the new release stopped while serving';
+			if ((await host.restartCount(STANDBY)) !== restarts) return 'the new release crashed while serving';
+			const probe = await host.probe!('public', 10_000);
+			if (!probe.ok) return `the new release stopped answering: ${probe.reason}`;
+		}
+		if (input.requirePublic && !(await host.publicHealthy(60_000))) return 'public platform URL stopped answering';
+		return null;
+	}
+
+	/**
+	 * Undo a zero-downtime switch, whatever stage it reached, without dropping traffic where that
+	 * is possible: the standby keeps serving until the old release answers again on the primary.
+	 */
+	private async revertZeroDowntime(sw: Switch): Promise<boolean> {
+		const { host, layout } = this;
+		const stage = sw.stage ?? 'standby';
+		try {
+			if (stage === 'commit') {
+				setLink(layout.currentLink, sw.from);
+				if (sw.previousBefore && existsSync(sw.previousBefore) && sw.previousBefore !== sw.from)
+					setLink(layout.previousLink, sw.previousBefore);
+				else rmSync(layout.previousLink, { force: true });
+				host.log(`${layout.currentLink} -> ${sw.from}`);
+			}
+			host.ensureHelper(sw.from);
+			if (sw.mode === 'overlap') {
+				if (stage === 'standby') {
+					// Traffic never moved; the primary never stopped.
+					await host.stop(STANDBY);
+				} else {
+					let primary: Probe = stage === 'commit' ? { ok: false } : await host.probe!('primary', 5_000);
+					if (!primary.ok) {
+						// The primary runs the new release (commit), or listens on a pre-standby socket path
+						// (first update after the upgrade to zero-downtime units). Restart it on `current`;
+						// while the standby is active its pre-start leaves control.sock on the standby.
+						await this.restartPrimaryBehindStandby();
+						primary = await host.probe!('primary', DEFAULTS.healthTimeoutMs);
+					}
+					if (primary.ok) host.pointControlSocket!('primary');
+					await host.stop(STANDBY);
+					if (!primary.ok) await host.restart(CONTROL_PLANE);
+				}
+			} else {
+				await host.stop(STANDBY);
+				await host.stop(CONTROL_PLANE);
+				if (sw.snapshot && existsSync(sw.snapshot)) await this.restoreDatabase(sw.snapshot);
+				await host.start(CONTROL_PLANE);
+				host.pointControlSocket!('primary');
+			}
+			rmSync(layout.standbyLink, { force: true });
+			await host.restart(HELPER).catch(() => undefined);
+			if (sw.withAgent && host.agentEnrolled()) await host.restart(AGENT);
+			const problem = await this.verifyLive({ requirePublic: false, withAgent: sw.withAgent });
+			const state = this.readState();
+			delete state.inProgress;
+			this.writeState(state);
+			if (problem) {
+				host.warn(`${basename(sw.from)} is also unhealthy after reverting (${problem}). Check journalctl -u ${CONTROL_PLANE}.`);
+				return false;
+			}
+			host.log(`${basename(sw.from)} is serving again`);
+			return true;
+		} catch (error) {
+			host.warn(`revert failed: ${message(error)}. Inspect ${layout.stateFile} and journalctl -u ${CONTROL_PLANE}.`);
+			return false;
+		}
+	}
+
+	/**
+	 * Boot-time arbiter (skiff-update-guard.service, ordered before the control plane). Like a
+	 * bootloader's try-counter: a zero-downtime update that never committed falls back to the
+	 * committed release. Filesystem only, so it cannot wait on the units it runs before.
+	 */
+	async bootRecover(): Promise<'nothing' | 'reverted' | 'deferred'> {
+		return this.locked(async () => {
+			const { host, layout } = this;
+			const state = this.readState();
+			const sw = state.inProgress;
+			if (!sw) return 'nothing';
+			if (!sw.mode) return 'deferred';
+			if (readLink(layout.currentLink) !== sw.from) setLink(layout.currentLink, sw.from);
+			if (sw.previousBefore && existsSync(sw.previousBefore) && sw.previousBefore !== sw.from)
+				setLink(layout.previousLink, sw.previousBefore);
+			else if (readLink(layout.previousLink) === sw.from) rmSync(layout.previousLink, { force: true });
+			if (sw.mode === 'fenced' && sw.snapshot && existsSync(sw.snapshot)) {
+				restoreDbFile(sw.snapshot, layout.dbPath);
+				host.chownToSkiff(layout.dbPath);
+			}
+			rmSync(layout.standbyLink, { force: true });
+			delete state.inProgress;
+			this.writeState(state);
+			if (sw.commit)
+				this.recordFailure(sw.commit, basename(sw.to), 'interrupted by a reboot before it was committed', {
+					phase: sw.stage ?? 'standby',
+					cause: 'inconclusive',
+				});
+			host.log(`an uncommitted update to ${basename(sw.to)} was interrupted; booting ${basename(sw.from)}`);
+			return 'reverted';
+		});
+	}
+
+	/**
+	 * Stage-0 updates itself the Chromium way, never in the same transaction as the app: after a
+	 * release commits, its bundled updater is installed side by side, must pass `self-test`, and
+	 * only then becomes `current`. A candidate that fails qualification is discarded.
+	 */
+	private async maybeInstallUpdater(release: string): Promise<void> {
+		const { host, layout } = this;
+		const binary = join(release, 'updater', 'skiff-updated');
+		if (!existsSync(binary) || !host.updaterIdentity || !host.qualifyUpdater) return;
+		try {
+			const identity = await host.updaterIdentity(binary);
+			if (!identity) {
+				host.warn(`the stage-0 updater shipped in ${basename(release)} does not run; keeping ${UPDATER_IDENTITY}`);
+				return;
+			}
+			const name = identity.replace(/[^\w.+-]/g, '_');
+			const currentLink = join(layout.updaterDir, 'current');
+			const installed = readLink(currentLink);
+			if (installed && basename(installed) === name) return;
+			const dir = join(layout.updaterDir, name);
+			mkdirSync(dir, { recursive: true });
+			const target = join(dir, 'skiff-updated');
+			copyFileSync(binary, `${target}.tmp`);
+			chmodSync(`${target}.tmp`, 0o755);
+			renameSync(`${target}.tmp`, target);
+			const qualified = await host.qualifyUpdater(target);
+			if (!qualified.ok) {
+				host.warn(`stage-0 updater ${identity} failed its self-test (${qualified.reason}); keeping ${installed ? basename(installed) : 'the current updater'}`);
+				if (dir !== installed) rmSync(dir, { recursive: true, force: true });
+				return;
+			}
+			if (installed) setLink(join(layout.updaterDir, 'previous'), installed);
+			setLink(currentLink, dir);
+			host.log(`stage-0 updater ${identity} passed its self-test and is now active`);
+			const keep = new Set([dir, installed].filter(Boolean));
+			for (const entry of readdirSync(layout.updaterDir)) {
+				const path = join(layout.updaterDir, entry);
+				if (entry === 'current' || entry === 'previous' || keep.has(path)) continue;
+				rmSync(path, { recursive: true, force: true });
+			}
+		} catch (error) {
+			host.warn(`could not install the stage-0 updater from ${basename(release)}: ${message(error)}`);
 		}
 	}
 
@@ -665,6 +1254,11 @@ export class Updater {
 		});
 	}
 
+	/** Resolve an interrupted switch now (also happens at the start of every update/rollback). */
+	async recover(): Promise<void> {
+		return this.locked(() => this.recoverInterrupted());
+	}
+
 	// ---------------------------------------------------------------- status
 
 	status(): {
@@ -750,6 +1344,32 @@ export class Updater {
 		host.warn(`an earlier ${sw.kind} (${basename(sw.from)} -> ${basename(sw.to)}) did not finish; recovering`);
 		host.enterCritical();
 		try {
+			if (sw.mode) {
+				// Zero-downtime switch. Only a commit that already restarted the primary on the new
+				// release and answers there is kept; anything earlier is reverted.
+				if (sw.stage === 'commit' && readLink(layout.currentLink) === sw.to && host.probe && host.pointControlSocket) {
+					const primary = await host.probe('primary', 15_000);
+					if (primary.ok) {
+						host.pointControlSocket('primary');
+						await host.stop(STANDBY);
+						rmSync(layout.standbyLink, { force: true });
+						host.log(`${basename(sw.to)} is healthy on the primary; keeping it`);
+						this.finish(sw);
+						retireUpgradeSnapshotBundles(layout.backupsDir, sw.bundle ?? null);
+						this.prune();
+						writeMeta(sw.to, { ...readMeta(sw.to), status: 'active', activatedAt: host.now().toISOString() });
+						return;
+					}
+				}
+				const recovered = await this.revertZeroDowntime(sw);
+				if (sw.commit)
+					this.recordFailure(sw.commit, basename(sw.to), 'interrupted before it was committed', {
+						phase: sw.stage ?? 'standby',
+						cause: 'inconclusive',
+					});
+				if (!recovered) throw new RecoveryError('Recovery failed; fix the control plane manually before updating again.');
+				return;
+			}
 			if (readLink(layout.currentLink) === sw.to) {
 				host.ensureHelper(sw.to);
 				if (!(await host.isActive(CONTROL_PLANE))) await host.start(CONTROL_PLANE);
@@ -765,7 +1385,8 @@ export class Updater {
 				}
 				host.warn(`${basename(sw.to)} is unhealthy (${problem}); reverting to ${basename(sw.from)}`);
 				const recovered = await this.revert(sw);
-				if (sw.kind === 'update' && sw.commit) this.recordFailure(sw.commit, basename(sw.to), problem);
+				if (sw.kind === 'update' && sw.commit)
+					this.recordFailure(sw.commit, basename(sw.to), problem, { phase: 'live', cause: 'release' });
 				if (!recovered) throw new RecoveryError('Recovery failed; fix the control plane manually before updating again.');
 				return;
 			}
@@ -893,10 +1514,45 @@ export class Updater {
 		}
 	}
 
-	private recordFailure(commit: string, release: string, reason: string): void {
+	/**
+	 * Record why `commit` failed. If the previous *different* release failed at the same phase
+	 * for the same reason, neither is blamed: two releases failing identically points at the
+	 * updater or the host (the 2026-11-05 trap), so both stay retryable and the operator is told.
+	 */
+	private recordFailure(
+		commit: string,
+		release: string,
+		reason: string,
+		input: { phase?: string; cause?: FailureVerdict['cause']; version?: string } = {},
+	): FailureVerdict {
 		const state = this.readState();
-		state.failedCommits[commit] = { at: this.host.now().toISOString(), release, reason };
+		let cause = input.cause ?? 'release';
+		if (cause === 'release') {
+			const key = normalizeReason(reason, release);
+			const last = Object.entries(state.failedCommits)
+				.filter(([other, verdict]) => other !== commit && verdict.updater === UPDATER_IDENTITY && (verdict.cause === 'release' || verdict.cause === 'suspect'))
+				.sort(([, a], [, b]) => b.at.localeCompare(a.at))[0];
+			if (last && last[1].phase === input.phase && normalizeReason(last[1].reason, last[1].release) === key) {
+				cause = 'suspect';
+				state.failedCommits[last[0]] = { ...last[1], cause: 'suspect' };
+				this.host.warn(
+					`${input.version ?? short(commit)} failed exactly like ${last[1].version ?? short(last[0])} did (${firstLine(reason)}). ` +
+						'Two different releases failing the same way points at the updater or this host, not the releases; neither will be skipped.',
+				);
+			}
+		}
+		const verdict: FailureVerdict = {
+			at: this.host.now().toISOString(),
+			release,
+			reason,
+			...(input.phase ? { phase: input.phase } : {}),
+			cause,
+			updater: UPDATER_IDENTITY,
+			...(input.version ? { version: input.version } : {}),
+		};
+		state.failedCommits[commit] = verdict;
 		this.writeState(state);
+		return verdict;
 	}
 
 	/** Keep exactly `current` and `previous`; remove other releases and superseded snapshots. */
@@ -1044,6 +1700,13 @@ export function assembleRelease(release: string, bunBin: string): void {
 		copyFileSync(cli, join(release, 'cli', 'skif.js'));
 		chmodSync(join(release, 'cli', 'skif.js'), 0o644);
 	}
+	// Stage-0 updater compiled from this release (a CI artifact ships it at updater/ already).
+	const updater = join(release, 'repo', 'scripts', 'update-self', 'dist', 'skiff-updated');
+	if (existsSync(updater) && !existsSync(join(release, 'updater', 'skiff-updated'))) {
+		mkdirSync(join(release, 'updater'), { recursive: true });
+		copyFileSync(updater, join(release, 'updater', 'skiff-updated'));
+		chmodSync(join(release, 'updater', 'skiff-updated'), 0o755);
+	}
 	// The privileged helper is part of the release so a `current` swap upgrades it atomically.
 	const helper = join(release, 'repo', 'apps', 'helper', 'dist', 'skiff-helper');
 	if (existsSync(helper)) {
@@ -1109,6 +1772,26 @@ export function restoreDbFile(snapshot: string, dbPath: string): void {
 /** Opening the DB as root can create -wal/-shm owned by root, which would lock out the service user. */
 function fixSidecarOwnership(dbPath: string, host: Host): void {
 	for (const suffix of ['-wal', '-shm']) if (existsSync(`${dbPath}${suffix}`)) host.chownToSkiff(`${dbPath}${suffix}`);
+}
+
+/** Migration ids `release` ships that the database has not applied yet (the schema would change). */
+export function pendingMigrations(dbPath: string, release: string): string[] {
+	const dir = join(release, 'repo', 'packages', 'db', 'migrations');
+	if (!existsSync(dir)) return [];
+	const shipped = readdirSync(dir).filter((file) => /^\d+_.*\.sql$/.test(file)).sort();
+	if (!existsSync(dbPath)) return shipped;
+	const applied = new Set(readAppliedMigrations(dbPath));
+	return shipped.filter((id) => !applied.has(id));
+}
+
+/** A failure reason with release-specific noise (names, shas, numbers) removed, for comparison. */
+export function normalizeReason(reason: string, release: string): string {
+	return firstLine(reason)
+		.split(release)
+		.join('<release>')
+		.replace(/[0-9a-f]{12,40}/g, '<sha>')
+		.replace(/\d+/g, '<n>')
+		.trim();
 }
 
 /** Migration ids applied to the database that `release` does not ship. null = cannot tell. */

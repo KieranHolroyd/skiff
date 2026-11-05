@@ -25,6 +25,7 @@
 	import Panel from '../../_lib/Panel.svelte';
 	import ConfigProgress from '../ConfigProgress.svelte';
 	import type { PageProps } from './$types';
+	import SettingsHeader from '../_lib/SettingsHeader.svelte';
 
 	let { data, form }: PageProps = $props();
 	const fieldErrors = $derived(
@@ -177,6 +178,8 @@
 </script>
 
 <svelte:head><title>Assistant · Settings · Skiff</title></svelte:head>
+
+<SettingsHeader id="assistant" />
 
 <div class="space-y-6">
 	<ConfigProgress

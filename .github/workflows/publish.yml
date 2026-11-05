@@ -1,0 +1,156 @@
+name: Publish release
+
+# Every push to main whose VERSION has no release yet is tested, built once in CI per
+# architecture, canaried under the production sandbox, signed and published as v<VERSION>.
+# Hosts install these signed artifacts (skiff-update-self); nothing is compiled on a server.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - 'research_notes/**'
+      - 'reports/**'
+      - '**/*.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+
+env:
+  BUN_VERSION: '1.4.0'
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      publish: ${{ steps.plan.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "v$VERSION is already published"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  test:
+    name: Test and type-check
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+      - run: bun test
+      - run: bun run check
+      - run: bunx tsc -p scripts/tsconfig.json --noEmit
+
+  build:
+    name: Build (${{ matrix.arch }})
+    needs: [plan, test]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: repo
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      # The same steps the host updater used to run, done once here instead of on every server.
+      - name: Install and build
+        working-directory: repo
+        run: |
+          bun install --frozen-lockfile
+          bun run --cwd apps/control-plane build
+          bun run --cwd apps/agent build
+          bun run --cwd apps/cli build
+          bun run --cwd apps/helper build
+
+      - name: Compile the stage-0 updater
+        working-directory: repo
+        run: |
+          bun build --compile scripts/update-self/main.ts \
+            --define "SKIFF_UPDATER_BUILD=\"${GITHUB_SHA::12}\"" \
+            --outfile ../updater/skiff-updated
+          ../updater/skiff-updated --version
+
+      - name: Canary under the production sandbox
+        run: sudo env BUN_BIN="$(command -v bun)" repo/scripts/release/ci-canary.sh repo
+
+      - name: Package
+        run: |
+          tar -czf "skiff-${VERSION}-linux-${{ matrix.arch }}.tar.gz" \
+            --exclude='repo/.git' \
+            --exclude='repo/node_modules/.old_modules-*' \
+            --exclude='repo/node_modules/.cache' \
+            repo updater
+          ls -l skiff-*.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: skiff-${{ matrix.arch }}
+          path: skiff-*.tar.gz
+          retention-days: 7
+
+  publish:
+    name: Sign and publish v${{ needs.plan.outputs.version }}
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Write and sign the manifest
+        env:
+          SKIFF_RELEASE_SIGNING_KEY: ${{ secrets.SKIFF_RELEASE_SIGNING_KEY }}
+        run: |
+          bun scripts/release/manifest.ts \
+            --version "$VERSION" --commit "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" --dir dist
+          cp scripts/release/recover.sh dist/skiff-recover.sh
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v$VERSION" dist/* \
+            --target "$GITHUB_SHA" \
+            --title "Skiff $VERSION" \
+            --notes "Signed release built from ${GITHUB_SHA::12}. Hosts install it with \`skiff-update-self\` (dashboard: Settings → Updates)."

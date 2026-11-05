@@ -26,6 +26,13 @@ export const init: ServerInit = async () => {
 	const promoted = ensurePlatformAdmin();
 	if (promoted) console.info(`[auth] made the bootstrap user ${promoted} the platform admin`);
 
+	// A standby (zero-downtime update slot, or the updater's canary) serves requests only. The
+	// primary keeps owning background work, so nothing runs twice while both are up.
+	if (process.env.SKIFF_STANDBY === '1') {
+		console.info('[standby] serving requests only; background work stays with the primary');
+		return;
+	}
+
 	// One maintenance loop per process (HMR can call init more than once).
 	const global = globalThis as typeof globalThis & { __skiffMaintenance?: ReturnType<typeof setInterval> };
 	if (!global.__skiffMaintenance) {

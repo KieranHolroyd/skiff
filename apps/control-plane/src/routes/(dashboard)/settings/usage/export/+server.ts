@@ -13,7 +13,7 @@ export const GET: RequestHandler = async ({ locals }) => {
 		headers: {
 			'content-type': 'text/csv; charset=utf-8',
 			'content-disposition': `attachment; filename="skiff-usage-${view.at.slice(0, 10)}.csv"`,
-			'cache-control': 'no-store',
-		},
+			'cache-control': 'no-store'
+		}
 	});
 };

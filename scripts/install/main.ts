@@ -32,7 +32,8 @@ import { createInterface } from 'node:readline/promises';
 import { randomBytes } from 'node:crypto';
 import { SELF_UPDATE_DEFAULTS } from '../../packages/contracts/src/self-update.ts';
 import { parseSemver } from '../../packages/contracts/src/semver.ts';
-import { TRIGGER_PATH_UNIT, triggerUnits } from '../update-self/units.ts';
+import { TRIGGER_PATH_UNIT, triggerUnits, updateCommandScript } from '../update-self/units.ts';
+import { controlPlaneUnits, DEFAULT_CONTROL_PLANE_PATHS, GUARD_UNIT } from '../systemd/control-plane.ts';
 import { CONFIG_COMMAND, CONFIG_PATH_UNIT, CONFIG_SERVICE_UNIT, ensurePlatformConfigUnits } from '../platform-config/units.ts';
 import { readEnvFile, writeEnvFile } from './env-file.ts';
 import { BUILDER_UNIT, ensureBuilder, linkAgentCommands } from '../systemd/builder.ts';
@@ -529,64 +530,15 @@ function buildRelease(env: Map<string, string>): string {
 function writeUnits(release: string): void {
 	step('systemd units');
 	ensureCaddyAccess();
-	const control = `[Unit]
-Description=Skiff control plane (dashboard, REST, MCP)
-After=network-online.target caddy.service
-Wants=network-online.target
-StartLimitIntervalSec=60
-StartLimitBurst=5
-
-[Service]
-Type=simple
-User=skiff
-Group=skiff
-SupplementaryGroups=caddy
-UMask=0007
-WorkingDirectory=${OPT_DIR}/current/repo/apps/control-plane
-EnvironmentFile=${ENV_FILE}
-Environment=NODE_ENV=production
-Environment=SOCKET_PATH=${RUN_DIR}/control.sock
-Environment=PROTOCOL_HEADER=x-forwarded-proto
-Environment=HOST_HEADER=x-forwarded-host
-Environment=BODY_SIZE_LIMIT=520M
-Environment=SKIFF_MASTER_KEY_FILE=%d/master-key
-LoadCredential=master-key:${MASTER_KEY_FILE}
-ExecStart=${OPT_DIR}/current/runtime/bun ${OPT_DIR}/current/repo/apps/control-plane/build/index.js
-Restart=on-failure
-RestartSec=2
-TimeoutStopSec=35
-KillSignal=SIGTERM
-LimitNOFILE=65535
-TasksMax=256
-MemoryMax=1G
-NoNewPrivileges=yes
-PrivateTmp=yes
-PrivateDevices=yes
-ProtectSystem=strict
-ProtectHome=yes
-ProtectClock=yes
-ProtectHostname=yes
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectKernelLogs=yes
-ProtectControlGroups=yes
-ProtectProc=invisible
-ProcSubset=pid
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-RestrictNamespaces=yes
-RestrictRealtime=yes
-RestrictSUIDSGID=yes
-LockPersonality=yes
-SystemCallArchitectures=native
-SystemCallFilter=@system-service io_uring_setup io_uring_enter io_uring_register
-SystemCallErrorNumber=EPERM
-CapabilityBoundingSet=
-AmbientCapabilities=
-ReadWritePaths=${VAR_DIR} ${RUN_DIR}
-
-[Install]
-WantedBy=multi-user.target
-`;
+	// Primary + standby (zero-downtime updates) + boot guard; shared with the self-updater.
+	const controlUnits = controlPlaneUnits({
+		...DEFAULT_CONTROL_PLANE_PATHS,
+		optDir: OPT_DIR,
+		runDir: RUN_DIR,
+		varDir: VAR_DIR,
+		envFile: ENV_FILE,
+		masterKeyFile: MASTER_KEY_FILE,
+	});
 	const agent = `[Unit]
 Description=Skiff node agent
 After=network-online.target caddy.service
@@ -642,10 +594,10 @@ ReadWritePaths=${VAR_DIR} ${RUN_DIR}
 WantedBy=multi-user.target
 `;
 	if (options.dryRun) {
-		log('would write skiff-control-plane.service and skiff-agent.service');
+		log(`would write ${Object.keys(controlUnits).join(', ')} and skiff-agent.service`);
 		return;
 	}
-	writeFileSync(join(SYSTEMD_DIR, 'skiff-control-plane.service'), control);
+	for (const [name, body] of Object.entries(controlUnits)) writeFileSync(join(SYSTEMD_DIR, name), body);
 	writeFileSync(join(SYSTEMD_DIR, 'skiff-agent.service'), agent);
 	// The privileged runtime helper ships in the active release so a `current` swap upgrades it.
 	ensureHelper({
@@ -735,17 +687,7 @@ function installUpdateCommand(): void {
 		log(`would install ${path}`);
 		return;
 	}
-	const script = `#!/bin/sh
-# Installed by the Skiff installer. See docs/OPS.md §4.1.
-set -eu
-for release in ${OPT_DIR}/current ${OPT_DIR}/previous; do
-	if [ -f "$release/repo/scripts/update-self/main.ts" ]; then
-		exec ${BUN_BIN} "$release/repo/scripts/update-self/main.ts" "$@"
-	fi
-done
-echo "skiff-update-self: no release under ${OPT_DIR} ships the updater; re-run the installer" >&2
-exit 1
-`;
+	const script = updateCommandScript({ optDir: OPT_DIR, bunBin: BUN_BIN, updaterDir: '/usr/local/lib/skiff-updater' });
 	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(`${path}.tmp`, script, { mode: 0o755 });
 	renameSync(`${path}.tmp`, path);
@@ -882,7 +824,7 @@ function startServices(): void {
 	}
 	run('systemctl', ['enable', HELPER_UNIT]);
 	run('systemctl', ['restart', HELPER_UNIT]);
-	run('systemctl', ['enable', 'skiff-control-plane.service']);
+	run('systemctl', ['enable', 'skiff-control-plane.service', GUARD_UNIT]);
 	run('systemctl', ['enable', '--now', TRIGGER_PATH_UNIT], { allowFailure: true });
 	run('systemctl', ['restart', 'skiff-control-plane.service']);
 	waitFor('control plane socket', () => existsSync(join(RUN_DIR, 'control.sock')), 90_000);
