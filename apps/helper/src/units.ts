@@ -17,6 +17,8 @@ import {
  */
 
 export const WORKLOAD_SLICE = 'skiff-workloads.slice';
+/** Fixed entrypoint of runner images built on actions/runner (plan 21); never from the wire. */
+export const RUNNER_ENTRYPOINT = '/home/runner/run.sh';
 export const WORKLOAD_SOCKET_DIR = '/run/skiff-workloads';
 /** Podman network shared by every container workload, so apps reach databases by alias (D56). */
 export const WORKLOAD_NETWORK = 'skiff-workloads';
@@ -485,11 +487,19 @@ export function renderContainerUnit(options: ContainerUnitOptions): string {
 	lines.push('[Container]');
 	lines.push(`ContainerName=skiff-workload-${workload.id}`);
 	lines.push(`Image=${options.image}`);
-	// Caddy on the host proxies to loopback; the container listens on the declared port.
-	lines.push(`PublishPort=127.0.0.1:${workload.port}:${workload.port}`);
+	const runner = Boolean(workload.runner);
+	if (runner) {
+		// Ephemeral runners (plan 21, D91): always the newest image, a fixed entrypoint, and a fresh
+		// container per job (Quadlet runs `podman run --rm`), so no job sees another job's files.
+		lines.push('Pull=newer');
+		lines.push(`Exec=${RUNNER_ENTRYPOINT}`);
+	}
+	// Caddy on the host proxies to loopback; the container listens on the declared port. Workers
+	// (plan 21) publish nothing: they only make outbound connections.
+	if (workload.ingress !== 'none') lines.push(`PublishPort=127.0.0.1:${workload.port}:${workload.port}`);
 	lines.push(`Network=${networkUnitName(workloadNetworkName(workload))}`);
 	lines.push(`EnvironmentFile=${options.envFile}`);
-	lines.push(`Volume=${options.dataDir}:/data:Z`);
+	if (!runner) lines.push(`Volume=${options.dataDir}:/data:Z`);
 	for (const mount of options.volumeMounts ?? []) {
 		lines.push(`Volume=${mount.hostPath}:${mount.mountPath}${mount.readOnly ? ':ro' : ''}:Z`);
 	}
@@ -502,13 +512,24 @@ export function renderContainerUnit(options: ContainerUnitOptions): string {
 	}
 	lines.push('DropCapability=all');
 	lines.push('NoNewPrivileges=true');
-	lines.push('ReadOnly=true');
-	lines.push('Tmpfs=/tmp:rw,size=64m');
+	// A runner writes its config and `_work` checkout under /home/runner; its root is a throwaway
+	// layer recreated per job, which is the isolation boundary instead of a read-only root.
+	if (!runner) {
+		lines.push('ReadOnly=true');
+		lines.push('Tmpfs=/tmp:rw,size=64m');
+	}
 	pushApparmor(lines, options.apparmorProfile);
 	lines.push('');
 	lines.push('[Service]');
-	lines.push('Restart=on-failure');
-	lines.push('RestartSec=2');
+	if (runner) {
+		// The agent replaces a runner after each job with a new JIT config; systemd must not
+		// restart it with the spent one. The first start pulls a large image.
+		lines.push('Restart=no');
+		lines.push('TimeoutStartSec=900');
+	} else {
+		lines.push('Restart=on-failure');
+		lines.push('RestartSec=2');
+	}
 	lines.push(`MemoryMax=${workload.memoryMb}M`);
 	lines.push(`CPUQuota=${cpuQuota(workload.cpus)}`);
 	lines.push(`Slice=${WORKLOAD_SLICE}`);

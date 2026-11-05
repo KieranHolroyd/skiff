@@ -68,6 +68,8 @@ export interface WorkloadRuntimeOptions {
 	retryDelayMs?: number;
 	/** Optional non-secret diff cache (`<dataDir>/workloads-state.json`). */
 	statePath?: string | null;
+	/** How long after an apply a stopped runner is assumed to be still starting (default 20 s). */
+	runnerSettleMs?: number;
 }
 
 interface AppliedWorkload {
@@ -104,6 +106,8 @@ const DEFAULT_HEALTH_TIMEOUT_MS = 30_000;
 const DEFAULT_RETRY_DELAY_MS = 60_000;
 const HEALTH_PROBE_INTERVAL_MS = 500;
 const HEALTH_PROBE_TIMEOUT_MS = 2_000;
+/** A runner reported stopped this soon after its apply may just not have started yet. */
+const RUNNER_SETTLE_MS = 20_000;
 
 export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSource {
 	private readonly helper: HelperApi;
@@ -117,6 +121,7 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 	private readonly log: WorkloadLog;
 	private readonly retryDelayMs: number;
 	private readonly statePath: string | null;
+	private readonly runnerSettleMs: number;
 
 	private readonly applied = new Map<string, AppliedWorkload>();
 	private readonly reports = new Map<string, WorkloadRuntimeReport>();
@@ -134,6 +139,15 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 	private readonly purgedStoragePending = new Set<string>();
 	private retryAt = 0;
 	private pendingFailure = false;
+	/** Desired workloads from the last converge, for the runner recycler (plan 21). */
+	private desiredById = new Map<string, WorkloadDesired>();
+	/** Runner replicas whose container exited after a job and need a fresh JIT config. */
+	private readonly recycleDue = new Set<string>();
+	/** When each runner was last applied; a just-queued `--no-block` start can still read inactive. */
+	private readonly runnerAppliedAt = new Map<string, number>();
+	private recycling: Promise<void> | null = null;
+	/** Serialises converge and recycle so one unit is never applied twice at once. */
+	private lock: Promise<void> = Promise.resolve();
 	private stateLoaded = false;
 	private dirty = false;
 
@@ -151,6 +165,7 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 		this.log = options.log ?? (() => undefined);
 		this.retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
 		this.statePath = options.statePath ?? null;
+		this.runnerSettleMs = options.runnerSettleMs ?? RUNNER_SETTLE_MS;
 	}
 
 	/** True when a previous converge left work behind and the retry window has passed. */
@@ -172,6 +187,14 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 			[...this.reports.keys()].map(async (id) => {
 				try {
 					const actual = await this.helper.status(id);
+					// An ephemeral runner whose job finished exits cleanly (`stopped`). That is the
+					// normal cycle, not an outage: report it as starting and replace it right away.
+					// A `failed` runner (bad credential, broken image) takes the normal retry backoff.
+					if (actual.status === 'stopped' && this.desiredById.get(id)?.runner) {
+						this.reports.set(id, { ...reportFromStatus(actual), status: 'starting' });
+						if (Date.now() - (this.runnerAppliedAt.get(id) ?? 0) >= this.runnerSettleMs) this.recycleDue.add(id);
+						return;
+					}
 					this.reports.set(id, reportFromStatus(actual));
 					// A unit that systemd reports as down gets a retry from the reconcile loop even
 					// when the desired version has not changed.
@@ -186,7 +209,49 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 				}
 			}),
 		);
+		if (this.recycleDue.size > 0) void this.recycleRunners();
 		return this.currentReports();
+	}
+
+	/**
+	 * Re-apply runner replicas that finished a job (D91). Re-applying fetches a new activation,
+	 * which carries a fresh single-use JIT config, and recreates the container from a clean image.
+	 * Runs outside the reconcile loop so a finished runner is replaced within one heartbeat instead
+	 * of waiting for the next desired-state long poll.
+	 */
+	recycleRunners(signal: AbortSignal = new AbortController().signal): Promise<void> {
+		// One pass at a time; a caller during a pass waits for it. Ids added meanwhile stay due and
+		// the next heartbeat starts another pass.
+		this.recycling ??= this.recyclePass(signal).finally(() => {
+			this.recycling = null;
+		});
+		return this.recycling;
+	}
+
+	private async recyclePass(signal: AbortSignal): Promise<void> {
+		try {
+			await this.exclusive(async () => {
+				for (const id of [...this.recycleDue]) {
+					if (signal.aborted) return;
+					this.recycleDue.delete(id);
+					const workload = this.desiredById.get(id);
+					if (!workload?.runner) continue;
+					await this.applyOne(workload, new Map(), signal);
+					if (this.reports.get(id)?.status === 'failed') this.scheduleRetry();
+				}
+			});
+		} finally {
+			if (this.dirty) await this.persistState();
+		}
+	}
+
+	private exclusive<T>(fn: () => Promise<T>): Promise<T> {
+		const run = this.lock.then(fn, fn);
+		this.lock = run.then(
+			() => undefined,
+			() => undefined,
+		);
+		return run;
 	}
 
 	/** Running-or-not database workloads the sampler may connect to (credentials in memory only). */
@@ -272,16 +337,21 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 	/** Idempotently converge all workloads placed on this node. Never throws. */
 	async converge(state: DesiredState, signal: AbortSignal = new AbortController().signal): Promise<void> {
 		await this.loadState();
-		try {
-			await this.convergeState(state, signal);
-		} finally {
-			if (this.dirty) await this.persistState();
-		}
+		await this.exclusive(async () => {
+			try {
+				await this.convergeState(state, signal);
+			} finally {
+				if (this.dirty) await this.persistState();
+			}
+		});
 	}
 
 	private async convergeState(state: DesiredState, signal: AbortSignal): Promise<void> {
 		const desired = state.workloads.filter((workload) => workload.status !== 'stopped');
 		const desiredIds = new Set(desired.map((workload) => workload.id));
+		this.desiredById = new Map(desired.map((workload) => [workload.id, workload]));
+		for (const id of [...this.recycleDue]) if (!desiredIds.has(id)) this.recycleDue.delete(id);
+		for (const id of [...this.runnerAppliedAt.keys()]) if (!desiredIds.has(id)) this.runnerAppliedAt.delete(id);
 		// Anything listed at all, stopped included, is never purged.
 		const listedIds = new Set(state.workloads.map((workload) => workload.id));
 		this.databases = new Map(
@@ -524,6 +594,7 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 			});
 			this.holdMonitor(workload, monitor, databaseSetup?.extensions ?? []);
 			this.holdStorageAdmin(workload, storageAdmin);
+			if (workload.runner) this.runnerAppliedAt.set(id, Date.now());
 			this.applied.set(id, {
 				fingerprint,
 				activationVersion: workload.activationVersion,
@@ -537,7 +608,10 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 				return;
 			}
 
-			const healthy = await this.waitForHealth(workload, signal);
+			// A worker has nothing to probe: it is running once systemd says so. Runners restart with
+			// --no-block (the first start pulls a large image), so they may still be activating here.
+			const healthy =
+				workload.ingress === 'none' ? applied.status === 'running' : await this.waitForHealth(workload, signal);
 			const status: WorkloadStatus = healthy ? 'running' : 'starting';
 			this.reports.set(id, {
 				id,
@@ -548,7 +622,7 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 			});
 			if (healthy) {
 				this.log('info', `Workload ${id} (${workload.projectSlug}) is running`);
-			} else {
+			} else if (workload.ingress !== 'none') {
 				this.log(
 					'warn',
 					`Workload ${id} (${workload.projectSlug}) did not answer ${workload.database ? `on 127.0.0.1:${workload.port}` : workload.objectStorage ? STORAGE_HEALTH_PATH : workload.healthPath} yet; reporting starting`,
@@ -696,6 +770,8 @@ export async function probeWorkloadHealth(
 	socketDir: string,
 	signal: AbortSignal,
 ): Promise<boolean> {
+	// Workers (plan 21) listen on nothing; the caller only probes a unit systemd reports active.
+	if (workload.ingress === 'none') return true;
 	if (workload.database) return probeDatabasePort(workload.port, signal, { postgres: workload.database.engine === 'postgres' });
 	const healthPath = workload.objectStorage ? STORAGE_HEALTH_PATH : workload.healthPath;
 	const socketPath =
@@ -816,6 +892,9 @@ export function workloadFingerprint(workload: WorkloadDesired): string {
 		healthPath: workload.healthPath,
 		socketActivation: workload.socketActivation,
 		dataSizeMb: workload.dataSizeMb,
+		// Worker and runner profiles change the unit; only present when set (no restart on upgrade).
+		...(workload.ingress ? { ingress: workload.ingress } : {}),
+		...(workload.runner ? { runner: workload.runner.provider } : {}),
 		// A volume move must re-render the unit and restart the container (D74).
 		...(workload.volumeId ? { volumeId: workload.volumeId } : {}),
 		// Only present for databases, so existing app fingerprints (and units) stay unchanged.

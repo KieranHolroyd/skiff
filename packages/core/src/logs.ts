@@ -2,6 +2,7 @@ import { and, asc, desc, eq, gt, inArray, sql } from 'drizzle-orm';
 import { builds, databases, logEvents, projects, serviceLogEvents, storageInstances, workloads } from '@skiff/db';
 import {
 	levelForBuildLine,
+	parseWorkloadReplicaId,
 	requirePermission,
 	type BuildLogChunk,
 	type LogEventView,
@@ -86,10 +87,12 @@ export class LogService {
 
 	/** Runtime journal output drained by an agent, one batch per workload. */
 	appendRuntime(nodeId: string, batch: RuntimeLogBatch): number {
+		// Replicas (plan 21) drain under `<id>-r<n>` and belong to the workload `<id>`.
+		const { workloadId, replica } = parseWorkloadReplicaId(batch.workloadId);
 		const workload = this.ctx.db
 			.select()
 			.from(workloads)
-			.where(eq(workloads.id, batch.workloadId))
+			.where(eq(workloads.id, workloadId))
 			.get();
 		// A workload may have moved or stopped between the helper read and this POST. Treat that as
 		// an empty, successful drain instead of failing the agent's loop. Managed services are not
@@ -118,7 +121,7 @@ export class LogService {
 			source: 'runtime' as const,
 			stream: line.stream,
 			level: line.level,
-			message: sanitize(line.message),
+			message: replica > 0 ? `[r${replica}] ${sanitize(line.message)}` : sanitize(line.message),
 			ts: Number.isFinite(line.ts) ? Math.max(0, Number(line.ts)) : now,
 		}));
 		this.ctx.db.insert(logEvents).values(rows).run();

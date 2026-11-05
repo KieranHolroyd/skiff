@@ -58,6 +58,7 @@
 	import SourcePanel from './_components/SourcePanel.svelte';
 	import StorageCard from './_components/StorageCard.svelte';
 	import VolumesCard from './_components/VolumesCard.svelte';
+	import WorkerCard from './_components/WorkerCard.svelte';
 	import { displayUrl, formatBytes, formatDateTime, shortId, shortSha } from '../../_lib/format.js';
 	import type { PageProps } from './$types';
 
@@ -542,6 +543,16 @@
 					}}
 				/>
 			{:else if tab === 'runtime'}
+				{#if data.project.runtime !== 'static' && data.workloadSpec}
+					<div class="mb-5">
+						<WorkerCard
+							spec={data.workloadSpec}
+							workload={data.workload}
+							pool={data.runnerPool}
+							canManage={data.can.manageWorkload}
+						/>
+					</div>
+				{/if}
 				<RuntimePanel
 					project={data.project}
 					spec={data.workloadSpec}

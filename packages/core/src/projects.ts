@@ -68,6 +68,7 @@ export const projectOwnedTables = [
 	'storage_attachments',
 	'app_volume_attachments',
 	'app_volumes',
+	'github_runner_registrations',
 ] as const;
 
 export class ProjectService {
@@ -297,6 +298,16 @@ export class ProjectService {
 				this.bump(principal.orgId);
 			},
 		);
+		// The runner units stop with the project; take their registrations off GitHub too (plan 21).
+		void this.ctx.githubRunners.deregisterProject(row, this.runnerOf(row)).catch(() => undefined);
+	}
+
+	private runnerOf(row: ProjectRow) {
+		try {
+			return this.ctx.workloads.projectSpec(row)?.runner;
+		} catch {
+			return undefined;
+		}
 	}
 
 	async restore(principal: Principal, slug: string, options: { operationId?: string } = {}): Promise<ProjectView> {
@@ -368,6 +379,8 @@ export class ProjectService {
 		// Outside the transaction: Cloudflare is a network call. A failure is audited by the domain
 		// service and the row is still removed; prune reports any record it could not clean up.
 		await this.ctx.domains.removeForProject(row);
+		// Needs the project's credential secret, so it runs before the cascade deletes it.
+		await this.ctx.githubRunners.deregisterProject(row, this.runnerOf(row)).catch(() => undefined);
 		this.ctx.sqlite.transaction(() => {
 			// Snapshot rows key on the volume, not the project; remove them before the volumes.
 			this.ctx.sqlite.run(

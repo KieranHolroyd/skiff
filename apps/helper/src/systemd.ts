@@ -581,7 +581,7 @@ export class SystemdDriver {
 			// TimeoutStartSec=600, which would outlive the agent's apply request. Queue the restart;
 			// the agent probes readiness.
 			await this.systemctl(
-				owner
+				owner || workload.runner
 					? ['restart', '--no-block', serviceUnitName(workload.id)]
 					: ['restart', serviceUnitName(workload.id)],
 			);

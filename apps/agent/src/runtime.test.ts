@@ -720,3 +720,92 @@ describe('database health probe', () => {
 		expect(await probeDatabasePort(1, controller.signal)).toBe(false);
 	});
 });
+
+describe('runner replicas (plan 21)', () => {
+	const runnerOverrides = {
+		runtime: 'container',
+		release: null,
+		image: 'ghcr.io/actions/actions-runner:latest',
+		upstream: 'none',
+		socketActivation: false,
+		ingress: 'none',
+		runner: { provider: 'github' },
+	};
+
+	test('a runner that finished its job is re-applied with a fresh activation', async () => {
+		const f = fixture({ healthy: false });
+		const replica = workload('wld_ci-r1', { ...runnerOverrides, replica: { index: 1 } });
+		let mint = 0;
+		f.runtime = new WorkloadRuntime({
+			helper: f.helper,
+			releases: f.releases,
+			fetchActivation: async (id) => {
+				f.activationCalls.push(id);
+				mint += 1;
+				return { ...activationFor(id), env: { ACTIONS_RUNNER_INPUT_JITCONFIG: `jit-${mint}` } };
+			},
+			sliceMemoryMb: 1024,
+			healthTimeoutMs: 5,
+			sleep: async () => undefined,
+			runnerSettleMs: 0,
+		});
+		await f.runtime.converge(state([replica], 1, []));
+		expect(f.helper.applied.get('wld_ci-r1')?.activation.env.ACTIONS_RUNNER_INPUT_JITCONFIG).toBe('jit-1');
+		// Workers need no HTTP answer: the default probe treats an active unit as running.
+		expect(f.runtime.currentReports()[0]?.status).toBe('running');
+
+		// The job finished and the container exited cleanly.
+		f.helper.statuses.set('wld_ci-r1', { id: 'wld_ci-r1', status: 'stopped', restarts: 0 });
+		const reports = await f.runtime.refreshReports();
+		expect(reports[0]?.status).toBe('starting');
+		// `refreshReports` already started the pass; this waits for it.
+		await f.runtime.recycleRunners();
+		expect(f.helper.applied.get('wld_ci-r1')?.activation.env.ACTIONS_RUNNER_INPUT_JITCONFIG).toBe('jit-2');
+		expect(f.runtime.needsRetry()).toBe(false);
+	});
+
+	test('a runner that reads stopped right after its apply is not recycled yet', async () => {
+		const f = fixture();
+		const replica = workload('wld_ci', runnerOverrides);
+		f.activations.set('wld_ci', activationFor('wld_ci'));
+		await f.runtime.converge(state([replica], 1, []));
+		f.helper.statuses.set('wld_ci', { id: 'wld_ci', status: 'stopped', restarts: 0 });
+		const applies = f.helper.applyCalls.length;
+		const reports = await f.runtime.refreshReports();
+		await f.runtime.recycleRunners();
+		expect(reports[0]?.status).toBe('starting');
+		expect(f.helper.applyCalls.length).toBe(applies);
+	});
+
+	test('a failed runner waits for the retry backoff instead of recycling', async () => {
+		const f = fixture();
+		const replica = workload('wld_ci', runnerOverrides);
+		f.activations.set('wld_ci', activationFor('wld_ci'));
+		await f.runtime.converge(state([replica], 1, []));
+		f.helper.statuses.set('wld_ci', { id: 'wld_ci', status: 'failed', restarts: 0 });
+		const applies = f.helper.applyCalls.length;
+		await f.runtime.refreshReports();
+		await f.runtime.recycleRunners();
+		expect(f.helper.applyCalls.length).toBe(applies);
+		expect(f.runtime.currentReports()[0]?.status).toBe('failed');
+	});
+
+	test('an app workload that stops is not recycled', async () => {
+		const f = fixture();
+		const app = workload('app');
+		f.activations.set('app', activationFor('app'));
+		await f.runtime.converge(state([app]));
+		f.helper.statuses.set('app', { id: 'app', status: 'stopped', restarts: 0 });
+		const applies = f.helper.applyCalls.length;
+		await f.runtime.refreshReports();
+		await f.runtime.recycleRunners();
+		expect(f.helper.applyCalls.length).toBe(applies);
+		expect(f.runtime.currentReports()[0]?.status).toBe('stopped');
+	});
+
+	test('worker and runner profiles are part of the fingerprint only when set', () => {
+		const plain = workload('app');
+		expect(workloadFingerprint(plain)).not.toContain('ingress');
+		expect(workloadFingerprint(workload('wld_ci', runnerOverrides))).toContain('"runner":"github"');
+	});
+});

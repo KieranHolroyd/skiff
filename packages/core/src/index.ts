@@ -31,6 +31,8 @@ import { SchedulerService } from './scheduler.ts';
 import { ServiceActionsService } from './service-actions.ts';
 import { BackupTargetService } from './backup-targets.ts';
 import { UpgradeService } from './upgrades.ts';
+import { GithubRunnerService } from './github-runners.ts';
+import { TemplateService } from './templates.ts';
 
 export * from './config.ts';
 export * from './context.ts';
@@ -52,6 +54,8 @@ export * from './secrets.ts';
 export * from './metrics.ts';
 export * from './placement.ts';
 export * from './workloads.ts';
+export * from './github-runners.ts';
+export * from './templates.ts';
 export * from './databases.ts';
 export * from './storage-instances.ts';
 export * from './volumes.ts';
@@ -109,6 +113,8 @@ export interface Core {
 	backupTargets: BackupTargetService;
 	usage: UsageService;
 	upgrades: UpgradeService;
+	githubRunners: GithubRunnerService;
+	templates: TemplateService;
 }
 
 /**
@@ -153,6 +159,8 @@ export function createCore(options: CoreOptions): Core {
 		platformVersion: options.version ?? '0.0.0',
 		agentVersion: options.config.desiredAgentVersion ?? null
 	});
+	ctx.githubRunners = new GithubRunnerService(ctx);
+	ctx.templates = new TemplateService(ctx);
 	const source = new SourceService(ctx);
 
 	const deploy = new DeployService(ctx);
@@ -190,5 +198,7 @@ export function createCore(options: CoreOptions): Core {
 		backupTargets: ctx.backupTargets,
 		usage: ctx.usage,
 		upgrades: ctx.upgrades,
+		githubRunners: ctx.githubRunners,
+		templates: ctx.templates,
 	};
 }

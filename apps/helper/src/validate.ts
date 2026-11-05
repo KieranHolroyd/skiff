@@ -123,6 +123,13 @@ export interface WorkloadDesired {
 	volumeId?: string;
 	/** App volumes mounted into this workload (plan 07); ids and mount points only, never paths. */
 	volumes?: WorkloadVolumeMount[];
+	/** Worker (plan 21): no published port. */
+	ingress?: 'none';
+	/**
+	 * Ephemeral CI runner profile (plan 21). The helper derives the fixed entrypoint, `Restart=no`,
+	 * `Pull=newer` and a writable, throwaway root from it; nothing about it comes from the wire.
+	 */
+	runner?: { provider: 'github' };
 }
 
 /**
@@ -631,6 +638,19 @@ export function parseWorkload(value: unknown): WorkloadDesired {
 		workload.pooler = { port: assertPort(pooler.port, 'workload.pooler.port') };
 	}
 	if (objectStorage) workload.objectStorage = objectStorage;
+	if (record.ingress !== undefined) {
+		if (record.ingress !== 'none') throw new ValidationError('workload.ingress must be "none" when present');
+		if (database || objectStorage) throw new ValidationError('Managed services cannot be workers');
+		workload.ingress = 'none';
+	}
+	if (record.runner !== undefined) {
+		const runner = assertRecord(record.runner, 'workload.runner');
+		if (runner.provider !== 'github') throw new ValidationError('workload.runner.provider must be "github"');
+		if (runtime !== 'container') throw new ValidationError('Runner workloads must use the container runtime');
+		if (workload.ingress !== 'none') throw new ValidationError('Runner workloads must be workers (ingress "none")');
+		if (dataSizeMb !== null) throw new ValidationError('Runner workloads cannot keep a data directory');
+		workload.runner = { provider: 'github' };
+	}
 	const volumes = parseWorkloadVolumes(record.volumes);
 	if (volumes.length > 0) workload.volumes = volumes;
 	const volumeId = record.volumeId === undefined ? undefined : assertId(record.volumeId, 'workload.volumeId');

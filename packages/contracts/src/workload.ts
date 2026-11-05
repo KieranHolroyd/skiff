@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import { databaseMonitorSchema, workloadDatabaseSchema } from './database.ts';
 import { storageAdminSchema, workloadObjectStorageSchema } from './object-storage.ts';
+import { githubRunnerSchema } from './github-runner.ts';
 
 /**
  * Tier 2 (process) and tier 3 (container) workloads (DESIGN §3.4, §3.4.1, D41).
@@ -13,6 +14,17 @@ import { storageAdminSchema, workloadObjectStorageSchema } from './object-storag
  */
 
 export const workloadRuntimes = ['process', 'container'] as const;
+
+/**
+ * `http` workloads listen on `port`, get a Caddy route and an HTTP health probe. `none` is a
+ * worker (plan 21, D89): no route, no published port, healthy while its unit is active. Runners,
+ * queue consumers and bots are workers.
+ */
+export const workloadIngresses = ['http', 'none'] as const;
+export type WorkloadIngress = (typeof workloadIngresses)[number];
+
+/** Replicas run on the workload's one node; more than one is allowed for workers only (D90). */
+export const MAX_WORKLOAD_REPLICAS = 20;
 export type WorkloadRuntime = (typeof workloadRuntimes)[number];
 
 /** `env` injects `NAME=value`; `file` writes a 0400 file and points `NAME_FILE` at it. */
@@ -64,8 +76,26 @@ export const workloadSpecSchema = z
 		data: z
 			.object({ sizeMb: z.number().int().min(32).max(65_536).default(256) })
 			.optional(),
+		/** `none` makes a worker: no port, no route, health is "the unit is active" (D89). */
+		ingress: z.enum(workloadIngresses).default('http'),
+		/** Identical copies on the same node; `memoryMb`/`cpus` are per replica (D90). */
+		replicas: z.number().int().min(1).max(MAX_WORKLOAD_REPLICAS).default(1),
+		/** GitHub Actions runner profile (plan 21); container workers only. */
+		runner: githubRunnerSchema.optional(),
 	})
 	.superRefine((spec, ctx) => {
+		if (spec.replicas > 1 && spec.ingress !== 'none')
+			ctx.addIssue({
+				code: 'custom',
+				path: ['replicas'],
+				message: 'Only workers (ingress "none") can run more than one replica.',
+			});
+		if (spec.runner && spec.runtime !== 'container')
+			ctx.addIssue({ code: 'custom', path: ['runner'], message: 'Runners use the container runtime.' });
+		if (spec.runner && spec.ingress !== 'none')
+			ctx.addIssue({ code: 'custom', path: ['ingress'], message: 'Runners are workers; set ingress to "none".' });
+		if (spec.runner && spec.data)
+			ctx.addIssue({ code: 'custom', path: ['data'], message: 'Runners are ephemeral and cannot keep a data directory.' });
 		if (spec.runtime === 'process' && spec.image)
 			ctx.addIssue({ code: 'custom', path: ['image'], message: 'Process workloads cannot set an image.' });
 		if (spec.runtime === 'container' && spec.command)
@@ -74,6 +104,8 @@ export const workloadSpecSchema = z
 			ctx.addIssue({ code: 'custom', path: ['image'], message: 'Container workloads need an image.' });
 	});
 export type WorkloadSpec = z.infer<typeof workloadSpecSchema>;
+/** What callers may pass before defaults apply (`ingress`, `replicas`, … optional). */
+export type WorkloadSpecInput = z.input<typeof workloadSpecSchema>;
 
 /**
  * One save from the Variables view: the full plain env and secret references, plus values for
@@ -172,6 +204,12 @@ export interface WorkloadView {
 	nodeId: string | null;
 	runtime: WorkloadRuntime;
 	status: WorkloadStatus;
+	/** `none` for workers (plan 21). */
+	ingress: WorkloadIngress;
+	replicas: number;
+	/** Set for CI runner pools; details come from `GET /projects/:slug/runners`. */
+	runner: { provider: 'github'; target: string } | null;
+	/** Total reservation across replicas. */
 	memoryMb: number;
 	cpus: number;
 	/** Process/container upstream Caddy on the target node proxies to. */
@@ -298,8 +336,32 @@ export const workloadDesiredSchema = z.object({
 	processes: z.array(workloadProcessSchema).max(20).optional(),
 	/** The project's scheduled job, when this workload is also its runner (plan 09). */
 	job: workloadJobSchema.optional(),
+	/** Present only for workers (plan 21): no published port, no route, unit-active health. */
+	ingress: z.literal('none').optional(),
+	/**
+	 * Ephemeral CI runner profile (plan 21). The helper derives the entrypoint, `Restart=no` and
+	 * `Pull=newer` from it; the agent re-applies a replica that exited so it gets a fresh JIT config.
+	 */
+	runner: z.object({ provider: z.literal('github') }).optional(),
+	/**
+	 * Which copy this is when the spec asks for replicas; replica 0 keeps the workload id and the
+	 * others are `<id>-r<index>`. The count is deliberately absent so scaling never restarts a copy.
+	 */
+	replica: z.object({ index: z.number().int().min(0).max(MAX_WORKLOAD_REPLICAS - 1) }).optional(),
 });
 export type WorkloadDesired = z.infer<typeof workloadDesiredSchema>;
+
+/** Desired-state id of one replica: the workload id for replica 0, `<id>-r<n>` otherwise. */
+export function workloadReplicaId(workloadId: string, index: number): string {
+	return index === 0 ? workloadId : `${workloadId}-r${index}`;
+}
+
+/** Inverse of `workloadReplicaId`. */
+export function parseWorkloadReplicaId(id: string): { workloadId: string; replica: number } {
+	const match = /^(.+)-r([1-9][0-9]?)$/.exec(id);
+	if (!match) return { workloadId: id, replica: 0 };
+	return { workloadId: match[1]!, replica: Number(match[2]) };
+}
 
 /** Activation payload: decrypted values, returned only to the authenticated node. */
 export const workloadActivationSchema = z.object({

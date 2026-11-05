@@ -28,6 +28,8 @@ import type { SchedulerService } from './scheduler.ts';
 import type { ServiceActionsService } from './service-actions.ts';
 import type { BackupTargetService } from './backup-targets.ts';
 import type { UpgradeService } from './upgrades.ts';
+import type { GithubRunnerService } from './github-runners.ts';
+import type { TemplateService } from './templates.ts';
 
 /**
  * Shared dependency object. Service instances are attached after construction (in `createCore`)
@@ -66,4 +68,6 @@ export interface CoreContext {
 	serviceActions: ServiceActionsService;
 	backupTargets: BackupTargetService;
 	upgrades: UpgradeService;
+	githubRunners: GithubRunnerService;
+	templates: TemplateService;
 }

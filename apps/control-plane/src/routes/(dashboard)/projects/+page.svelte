@@ -10,6 +10,7 @@
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import CpuIcon from '@lucide/svelte/icons/cpu';
 	import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
+	import LayoutTemplateIcon from '@lucide/svelte/icons/layout-template';
 	import LayersIcon from '@lucide/svelte/icons/layers';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
@@ -37,6 +38,7 @@
 	import PageHeader from '../_lib/PageHeader.svelte';
 	import ProjectMark from '../_lib/ProjectMark.svelte';
 	import RowMenu from '../_lib/RowMenu.svelte';
+	import TemplateDialog from '../_lib/TemplateDialog.svelte';
 	import { formatDate } from '../_lib/format.js';
 	import BulkBar from '../_lib/operations/BulkBar.svelte';
 	import BulkConfirmDialog from '../_lib/operations/BulkConfirmDialog.svelte';
@@ -55,6 +57,7 @@
 	const result = $derived(form as ProjectFormResult | null);
 
 	let createOpen = $state(page.url.searchParams.get('new') === '1');
+	let templateOpen = $state(page.url.searchParams.get('template') !== null);
 	let query = $state('');
 	let slug = $state('');
 	let runtime = $state('static');
@@ -317,9 +320,15 @@
 		target="page.projects"
 		eyebrow="Operate"
 		title="Projects"
-		description="A project owns one global slug, its deployments, environments and production pointer. Projects can serve static files, run a process app, or run a container."
+		description="A project owns one global slug, its deployments, environments and production pointer. Projects can serve static files, run a process app, run a container, or run a background worker such as a CI runner pool."
 	>
 		{#if data.can.createProject}
+			{#if data.templates.length > 0}
+				<Button variant="outline" onclick={() => (templateOpen = true)}>
+					<LayoutTemplateIcon />
+					From template
+				</Button>
+			{/if}
 			<Button onclick={() => (createOpen = true)}>
 				<PlusIcon />
 				New project
@@ -426,6 +435,15 @@
 </div>
 
 <BulkConfirmDialog controller={bulk} contentDomain={data.contentDomain} />
+
+{#if data.can.createProject && data.templates.length > 0}
+	<TemplateDialog
+		bind:open={templateOpen}
+		templates={data.templates}
+		placements={placementChoices}
+		form={form as { template?: string; fieldErrors?: Record<string, string> } | null}
+	/>
+{/if}
 
 {#if data.can.createProject}
 	<FormDialog

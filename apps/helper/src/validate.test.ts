@@ -437,3 +437,35 @@ describe('app volume desired state', () => {
 		).toThrow(/nodeVolumeId/);
 	});
 });
+
+describe('worker and runner desired state (plan 21)', () => {
+	const runner = {
+		runtime: 'container',
+		release: null,
+		image: 'ghcr.io/actions/actions-runner:latest',
+		socketActivation: false,
+		upstream: 'none',
+		ingress: 'none',
+		runner: { provider: 'github' },
+	};
+
+	test('accepts a runner replica', () => {
+		const parsed = parseWorkload(workloadInput({ ...runner, id: 'wld_abc-r2', replica: { index: 2 } }));
+		expect(parsed.ingress).toBe('none');
+		expect(parsed.runner).toEqual({ provider: 'github' });
+		expect(parsed.id).toBe('wld_abc-r2');
+	});
+
+	test('a runner must be a container worker without a data dir', () => {
+		expect(() => parseWorkload(workloadInput({ ...runner, ingress: undefined }))).toThrow(/workers/);
+		expect(() => parseWorkload(workloadInput({ ...runner, dataSizeMb: 256 }))).toThrow(/data directory/);
+		expect(() => parseWorkload(workloadInput({ ...runner, runner: { provider: 'gitlab' } }))).toThrow(/provider/);
+		expect(() =>
+			parseWorkload(workloadInput({ runtime: 'process', ingress: 'none', runner: { provider: 'github' } })),
+		).toThrow(/container runtime/);
+	});
+
+	test('ingress only accepts "none"', () => {
+		expect(() => parseWorkload(workloadInput({ ingress: 'http' }))).toThrow(/ingress/);
+	});
+});

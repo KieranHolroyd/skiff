@@ -68,7 +68,7 @@ const handler: RequestHandler = async (event) => {
 		if (activation) {
 			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
 			const node = core.nodes.authenticate(token);
-			return core.workloads.activation(node.id, activation[1]!);
+			return core.workloads.activationFor(node.id, activation[1]!);
 		}
 
 		const rotation = /^database-rotations\/([^/]+)$/.exec(action);

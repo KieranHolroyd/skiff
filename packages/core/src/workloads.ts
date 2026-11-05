@@ -2,17 +2,23 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { deployments, nodes, projects, releases, workloads } from '@skiff/db';
 import {
 	canViewPlatform,
+	githubRunnerSecretNames,
+	githubRunnerTarget,
 	orgNetworkName,
+	parseWorkloadReplicaId,
 	requirePermission,
 	workloadEnvIssues,
+	workloadReplicaId,
 	workloadSpecSchema,
 	workloadVariablesSchema,
+	type GithubRunnerPoolView,
 	type NodeCapacityView,
 	type Principal,
 	type WorkloadActivation,
 	type WorkloadDesired,
 	type WorkloadRuntime,
 	type WorkloadSpec,
+	type WorkloadSpecInput,
 	type WorkloadStatus,
 	type WorkloadVariables,
 	type WorkloadView,
@@ -87,7 +93,7 @@ export class WorkloadService {
 		const decision = resolvePlacement({
 			runtime: project.runtime,
 			requested: pinned ?? project.placement,
-			memoryMb: spec.memoryMb,
+			memoryMb: reservedMemoryMb(spec),
 			edgeNodeId: this.edgeNodeId(),
 			candidates: this.candidates(),
 		});
@@ -100,8 +106,9 @@ export class WorkloadService {
 		this.ctx.quota.assertCanAdmitMemory(
 			project.orgId,
 			project.id,
-			Math.max(0, spec.memoryMb - (current?.memoryMb ?? 0)),
+			Math.max(0, reservedMemoryMb(spec) - (current?.memoryMb ?? 0)),
 		);
+		this.assertRunnerResolvable(project, spec);
 		const upstream = upstreamFor(project.id, spec);
 		return {
 			spec,
@@ -112,7 +119,7 @@ export class WorkloadService {
 	}
 
 	/** Persist the project-level spec (validated); placement is still resolved at deploy time. */
-	setSpec(principal: Principal, project: ProjectRow, input: WorkloadSpec): WorkloadView | null {
+	setSpec(principal: Principal, project: ProjectRow, input: WorkloadSpecInput): WorkloadView | null {
 		requirePermission(principal, 'project:update');
 		if (project.runtime === 'static')
 			throw new ValidationError(
@@ -120,11 +127,12 @@ export class WorkloadService {
 			);
 		const spec = workloadSpecSchema.parse({ ...input, runtime: project.runtime });
 		this.assertEnvResolvable(project, spec);
+		this.assertRunnerResolvable(project, spec);
 		const existing = this.ctx.db.select().from(workloads).where(eq(workloads.projectId, project.id)).get();
 		this.ctx.quota.assertCanAdmitMemory(
 			project.orgId,
 			project.id,
-			Math.max(0, spec.memoryMb - (existing?.memoryMb ?? 0)),
+			Math.max(0, reservedMemoryMb(spec) - (existing?.memoryMb ?? 0)),
 		);
 		this.ctx.db
 			.update(projects)
@@ -137,7 +145,7 @@ export class WorkloadService {
 				.set({
 					specJson: JSON.stringify(spec),
 					runtime: spec.runtime,
-					memoryMb: spec.memoryMb,
+					memoryMb: reservedMemoryMb(spec),
 					cpus: Math.round(spec.cpus),
 					upstream: upstreamFor(project.id, spec),
 					status: 'pending',
@@ -197,6 +205,22 @@ export class WorkloadService {
 		if (issues.length > 0) throw new ValidationError(issues.join(' '), issues);
 	}
 
+	/**
+	 * A runner's GitHub credential is read by the control plane only, so it is not in
+	 * `spec.secrets`; check it resolves here or the pool would fail at its first activation.
+	 */
+	private assertRunnerResolvable(project: ProjectRow, spec: WorkloadSpec): void {
+		if (!spec.runner) return;
+		const missing = githubRunnerSecretNames(spec.runner).filter(
+			(name) => !this.ctx.secrets.resolve(project.orgId, project.id, name),
+		);
+		if (missing.length > 0)
+			throw new ValidationError(
+				`Runner credential secret ${missing.join(', ')} does not exist. Create it before deploying.`,
+				missing.map((name) => `Secret ${name} does not exist.`),
+			);
+	}
+
 	/** Re-point the workload at an existing deployment (promote/rollback); placement is preserved. */
 	syncDeployment(project: ProjectRow, deploymentId: string): void {
 		const deployment = this.ctx.db.select().from(deployments).where(eq(deployments.id, deploymentId)).get();
@@ -226,7 +250,7 @@ export class WorkloadService {
 			runtime: resolved.spec.runtime,
 			status: 'pending' as const,
 			specJson: JSON.stringify(resolved.spec),
-			memoryMb: resolved.spec.memoryMb,
+			memoryMb: reservedMemoryMb(resolved.spec),
 			cpus: Math.round(resolved.spec.cpus),
 			upstream: resolved.upstream,
 			message: null,
@@ -254,7 +278,10 @@ export class WorkloadService {
 		requirePermission(principal, 'project:update');
 		const row = this.ctx.db.select().from(workloads).where(eq(workloads.projectId, project.id)).get();
 		if (!row) throw new NotFoundError('Workload');
+		const runner = workloadSpecSchema.safeParse(parseJson<unknown>(row.specJson, null)).data?.runner;
 		this.ctx.db.delete(workloads).where(eq(workloads.id, row.id)).run();
+		// Registrations are removed from GitHub in the background; the units stop on reconcile.
+		void this.ctx.githubRunners.deregisterProject(project, runner);
 		this.ctx.db.update(projects).set({ workloadJson: null, updatedAt: this.ctx.now() }).where(eq(projects.id, project.id)).run();
 		this.ctx.audit.record({
 			principal,
@@ -314,7 +341,7 @@ export class WorkloadService {
 			.where(and(eq(workloads.nodeId, nodeId), isNull(projects.deletedAt), eq(deployments.status, 'active')))
 			.all();
 
-		return rows.map(({ workload, project, deployment }) => {
+		return rows.flatMap(({ workload, project, deployment }) => {
 			const spec = this.specOf(project, workload);
 			const release = this.ctx.db
 				.select({ sha256: releases.sha256 })
@@ -323,7 +350,8 @@ export class WorkloadService {
 				.get();
 			const isolated = featureEnabled(this.ctx.config, 'ORG_NETWORKS');
 			const volumes = this.ctx.appVolumes.mountsForWorkload(workload.id);
-			return {
+			const worker = spec.ingress === 'none';
+			const base: WorkloadDesired = {
 				id: workload.id,
 				projectId: project.id,
 				projectSlug: project.slug,
@@ -335,17 +363,27 @@ export class WorkloadService {
 				...(spec.command ? { command: spec.command } : {}),
 				...(spec.image ? { image: spec.image } : {}),
 				upstream: workload.upstream ?? upstreamFor(project.id, spec),
-				memoryMb: workload.memoryMb,
+				// The row holds the whole reservation (D90); each unit is capped at one replica's share.
+				memoryMb: spec.memoryMb,
 				cpus: workload.cpus,
 				port: spec.port,
 				healthPath: spec.healthPath,
-				socketActivation: spec.socketActivation,
+				socketActivation: worker ? false : spec.socketActivation,
 				activationVersion: activationVersion(spec, this.attachmentsVersion(project.id, workload.nodeId, spec.runtime, project.orgId, spec)),
 				env: spec.env,
 				secrets: spec.secrets,
 				dataSizeMb: spec.data?.sizeMb ?? null,
 				...(volumes.length > 0 ? { volumes } : {}),
+				...(worker ? { ingress: 'none' as const } : {}),
+				...(spec.runner ? { runner: { provider: 'github' as const } } : {}),
 			};
+			// Plain single-copy workloads keep exactly the desired state they had before plan 21.
+			if (spec.replicas === 1 && !spec.runner) return [base];
+			return Array.from({ length: spec.replicas }, (_, index) => ({
+				...base,
+				id: workloadReplicaId(workload.id, index),
+				replica: { index },
+			}));
 		});
 	}
 
@@ -353,13 +391,15 @@ export class WorkloadService {
 	 * Decrypted values for one workload. The node token must own the workload's node; the payload
 	 * is never cached on disk by the agent.
 	 */
-	activation(nodeId: string, workloadId: string): WorkloadActivation {
-		if (this.ctx.databases.isDatabaseId(workloadId)) return this.ctx.databases.activation(nodeId, workloadId);
-		if (this.ctx.storage.isStorageId(workloadId)) return this.ctx.storage.activation(nodeId, workloadId);
+	activation(nodeId: string, desiredId: string): WorkloadActivation {
+		if (this.ctx.databases.isDatabaseId(desiredId)) return this.ctx.databases.activation(nodeId, desiredId);
+		if (this.ctx.storage.isStorageId(desiredId)) return this.ctx.storage.activation(nodeId, desiredId);
+		const { workloadId, replica } = parseWorkloadReplicaId(desiredId);
 		const row = this.ctx.db.select().from(workloads).where(eq(workloads.id, workloadId)).get();
 		if (!row) throw new NotFoundError('Workload');
 		if (row.nodeId !== nodeId) throw new CoreError('forbidden', 'This workload is placed on another node.', 403);
 		const spec = this.specOf(this.requireProject(row.projectId), row);
+		if (replica >= spec.replicas) throw new NotFoundError('Workload replica');
 		// Attached database and storage connection values sit under the spec's own env and secrets (D56, S4).
 		const env: Record<string, string> = {
 			...this.ctx.storage.consumerEnv(row.projectId, row.nodeId, spec.runtime),
@@ -374,16 +414,47 @@ export class WorkloadService {
 			else env[ref.name] = value.value;
 		}
 		return {
-			workloadId: row.id,
+			workloadId: desiredId,
 			activationVersion: activationVersion(spec, this.attachmentsVersion(row.projectId, row.nodeId, spec.runtime, row.orgId, spec)),
 			env,
 			files,
 		};
 	}
 
+	/**
+	 * The activation the agent endpoint serves. A runner replica additionally gets a fresh,
+	 * single-use JIT config on every call (D91): the agent only asks again after the replica's
+	 * container exited, so each job runs on a newly registered runner.
+	 */
+	async activationFor(nodeId: string, desiredId: string): Promise<WorkloadActivation> {
+		const activation = this.activation(nodeId, desiredId);
+		const { workloadId, replica } = parseWorkloadReplicaId(desiredId);
+		const row = this.ctx.db.select().from(workloads).where(eq(workloads.id, workloadId)).get();
+		if (!row) return activation;
+		const project = this.requireProject(row.projectId);
+		const spec = this.specOf(project, row);
+		if (!spec.runner) return activation;
+		try {
+			const env = await this.ctx.githubRunners.mintJitConfig({
+				orgId: row.orgId,
+				projectId: row.projectId,
+				projectSlug: project.slug,
+				workloadId: row.id,
+				replica,
+				runner: spec.runner,
+			});
+			if (row.message?.startsWith(RUNNER_MESSAGE_PREFIX)) this.ctx.githubRunners.noteFailure(row.id, null);
+			return { ...activation, env: { ...activation.env, ...env } };
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			this.ctx.githubRunners.noteFailure(row.id, `${RUNNER_MESSAGE_PREFIX}${message}`.slice(0, 500));
+			throw error;
+		}
+	}
+
 	/** Apply the agent's actual-state report from a heartbeat. */
 	applyHeartbeat(nodeId: string, reports: Array<{ id: string; status: WorkloadStatus; restarts: number }>): void {
-		for (const report of reports) {
+		for (const report of aggregateReplicaReports(reports)) {
 			const row = this.ctx.db.select().from(workloads).where(eq(workloads.id, report.id)).get();
 			if (!row || row.nodeId !== nodeId) continue;
 			const status: WorkloadStatus =
@@ -401,6 +472,15 @@ export class WorkloadService {
 		}
 	}
 
+	/** The runner pool as GitHub reports it, for the dashboard and `GET .../runners`. */
+	async runnerPool(principal: Principal, project: ProjectRow): Promise<GithubRunnerPoolView | null> {
+		requirePermission(principal, 'deployment:read');
+		const row = this.ctx.db.select().from(workloads).where(eq(workloads.projectId, project.id)).get();
+		const spec = row ? this.specOf(project, row) : this.projectSpec(project);
+		if (!spec?.runner) return null;
+		return this.ctx.githubRunners.pool(principal, project, spec);
+	}
+
 	private requireProject(projectId: string): ProjectRow {
 		const row = this.ctx.db.select().from(projects).where(eq(projects.id, projectId)).get();
 		if (!row) throw new NotFoundError('Project');
@@ -408,7 +488,11 @@ export class WorkloadService {
 	}
 
 	private toView(project: ProjectRow, row: WorkloadRow): WorkloadView {
+		const spec = workloadSpecSchema.safeParse(parseJson<unknown>(row.specJson, null)).data;
 		return {
+			ingress: spec?.ingress ?? 'http',
+			replicas: spec?.replicas ?? 1,
+			runner: spec?.runner ? { provider: 'github', target: githubRunnerTarget(spec.runner) } : null,
 			id: row.id,
 			projectId: project.id,
 			projectSlug: project.slug,
@@ -544,8 +628,40 @@ export class WorkloadService {
 	}
 }
 
+const RUNNER_MESSAGE_PREFIX = 'Runner: ';
+
+/** Slice budget a workload reserves: one share per replica (D90). */
+export function reservedMemoryMb(spec: Pick<WorkloadSpec, 'memoryMb' | 'replicas'>): number {
+	return spec.memoryMb * (spec.replicas ?? 1);
+}
+
+const STATUS_RANK: Record<WorkloadStatus, number> = { failed: 4, pending: 3, starting: 2, stopped: 1, running: 0 };
+
+/**
+ * Fold replica reports (`<id>-r<n>`) into one report per workload: the worst status wins and
+ * restarts is the largest count, so one crash-looping copy marks the pool failed.
+ */
+export function aggregateReplicaReports(
+	reports: Array<{ id: string; status: WorkloadStatus; restarts: number }>,
+): Array<{ id: string; status: WorkloadStatus; restarts: number }> {
+	const merged = new Map<string, { id: string; status: WorkloadStatus; restarts: number }>();
+	for (const report of reports) {
+		const { workloadId } = parseWorkloadReplicaId(report.id);
+		const current = merged.get(workloadId);
+		if (!current) {
+			merged.set(workloadId, { id: workloadId, status: report.status, restarts: report.restarts });
+			continue;
+		}
+		if (STATUS_RANK[report.status] > STATUS_RANK[current.status]) current.status = report.status;
+		current.restarts = Math.max(current.restarts, report.restarts);
+	}
+	return [...merged.values()];
+}
+
 /** The upstream Caddy proxies to on the workload's node. Socket activation is the default. */
 export function upstreamFor(projectId: string, spec: WorkloadSpec): string {
+	// Workers have no route; the value is never dialled and marks the row in listings.
+	if (spec.ingress === 'none') return 'none';
 	if (spec.runtime === 'process' && spec.socketActivation) return `unix//run/skiff-workloads/${projectId}.sock`;
 	return `127.0.0.1:${spec.port}`;
 }
@@ -564,6 +680,10 @@ export function activationVersion(spec: WorkloadSpec, databases = ''): string {
 			image: spec.image,
 			port: spec.port,
 			...(databases ? { databases } : {}),
+			// Only present when set, so existing workloads keep their version (no restart on upgrade).
+			// `replicas` is left out on purpose: scaling adds or removes copies without restarting any.
+			...(spec.ingress === 'none' ? { ingress: 'none' } : {}),
+			...(spec.runner ? { runner: spec.runner } : {}),
 		}),
 	);
 }

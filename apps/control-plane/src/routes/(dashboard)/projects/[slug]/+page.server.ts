@@ -110,6 +110,10 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		);
 		const workload: WorkloadView | null = safely(() => core.workloads.get(principal, row), null);
 		const workloadSpec = safely(() => core.workloads.projectSpec(row), null);
+		// Plan 21: GitHub's view of a runner pool. Streamed so a slow GitHub never blocks the page.
+		const runnerPool = workloadSpec?.runner
+			? core.workloads.runnerPool(principal, row).catch(() => null)
+			: Promise.resolve(null);
 		const secrets: SecretView[] = safely(
 			() => core.secrets.list(principal, { visibleTo: row.id }),
 			[]
@@ -174,6 +178,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			gitSource,
 			workload,
 			workloadSpec,
+			runnerPool,
 			secrets,
 			capacity,
 			databaseAttachments,
@@ -766,6 +771,50 @@ export const actions: Actions = {
 
 	// --- Workload runtime + secrets (D18, D41) -------------------------------
 
+	/** Plan 21: worker ingress and replicas, and a runner pool's labels. */
+	saveWorker: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const project = core.projects.requireRow(principal, params.slug);
+		if (project.runtime === 'static')
+			return fail(400, { message: 'Static projects have no workload to scale.' });
+		const existing = safely(() => core.workloads.projectSpec(project), null);
+		if (!existing)
+			return fail(400, {
+				message: 'Save the runtime configuration first, then choose worker settings.'
+			});
+		const ingress = formString(data, 'ingress') === 'none' || existing.runner ? 'none' : 'http';
+		const input: Record<string, unknown> = {
+			...existing,
+			ingress,
+			replicas: ingress === 'none' ? numberField(data, 'replicas', existing.replicas) : 1
+		};
+		if (existing.runner) {
+			const labels = formString(data, 'labels')
+				.split(/[\s,]+/)
+				.map((label) => label.trim())
+				.filter(Boolean);
+			input.runner = { ...existing.runner, labels };
+		}
+		const parsed = workloadSpecSchema.safeParse(input);
+		if (!parsed.success)
+			return fail(400, {
+				message: parsed.error.issues[0]?.message ?? 'Check the worker settings.',
+				fieldErrors: fieldErrorsFrom(parsed.error.issues)
+			});
+		try {
+			core.workloads.setSpec(principal, project, parsed.data);
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+		return {
+			success:
+				ingress === 'none'
+					? `Worker settings saved: ${parsed.data.replicas} ${parsed.data.replicas === 1 ? 'copy' : 'copies'}, no public route.`
+					: 'Worker settings saved. The app gets its route back on the next reconcile.'
+		};
+	},
+
 	saveWorkload: async ({ request, locals, params }) => {
 		const principal = locals.principal!;
 		const data = await request.formData();
@@ -796,6 +845,16 @@ export const actions: Actions = {
 			input.socketActivation = formBoolean(data, 'socketActivation');
 		} else {
 			input.image = image;
+		}
+		// Worker settings and a runner profile (plan 21) are edited on the Worker card; this form
+		// does not carry them, so keep what the project already has.
+		if (current) {
+			input.ingress = current.ingress;
+			input.replicas = current.replicas;
+			if (current.runner) {
+				input.runner = current.runner;
+				delete input.data;
+			}
 		}
 
 		const parsed = workloadSpecSchema.safeParse(input);

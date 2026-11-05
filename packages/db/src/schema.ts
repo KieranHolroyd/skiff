@@ -1284,6 +1284,30 @@ export const databasePitrTasks = sqliteTable(
 	],
 );
 
+/**
+ * GitHub runners registered through a JIT config (plan 21). Lets the control plane remove a
+ * replica's previous registration when it mints the next one; no credential is stored.
+ */
+export const githubRunnerRegistrations = sqliteTable(
+	'github_runner_registrations',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		projectId: text('project_id').notNull(),
+		workloadId: text('workload_id').notNull(),
+		replica: integer('replica').notNull(),
+		runnerId: integer('runner_id').notNull(),
+		runnerName: text('runner_name').notNull(),
+		/** `owner/repo` or `owner` (org scope) at registration time. */
+		target: text('target').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+	},
+	(t) => [
+		index('github_runner_registrations_workload_idx').on(t.workloadId, t.replica),
+		index('github_runner_registrations_project_idx').on(t.projectId),
+	],
+);
+
 /** Every table worth exporting, for tooling and tests. */
 export const schema = {
 	nodes,
@@ -1316,6 +1340,7 @@ export const schema = {
 	databasePitr,
 	databasePitrTasks,
 	scheduledTasks,
+	githubRunnerRegistrations,
 };
 
 export { primaryKey };

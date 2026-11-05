@@ -51,6 +51,8 @@ export interface CoreConfig {
 	storageObjectMaxBytes?: number;
 	/** Injected S3 transport for tests; production uses the global fetch. */
 	storageFetch?: typeof fetch;
+	/** Injected GitHub API transport for tests (plan 21); production uses the global fetch. */
+	githubFetch?: typeof fetch;
 	/**
 	 * Resolved `SKIFF_FEATURE_*` flags. Optional so existing tests and embedders keep working;
 	 * services must read them through `featureEnabled`, which falls back to the registry defaults.

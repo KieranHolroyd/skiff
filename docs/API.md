@@ -61,6 +61,10 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | PATCH/DELETE | `/projects/:slug/environments/:env` | `project:update` | rename/access or remove (production is built in) |
 | POST | `/projects/:slug/environments/:env/promote` | `deployment:promote` | `{ deploymentId }`; moves only that environment's pointer (production also re-points a process/container workload) |
 | GET/PUT/DELETE | `/projects/:slug/workload` | `deployment:read` / `project:update` | tier 2/3 runtime spec for the project |
+| GET | `/projects/:slug/runners` | `deployment:read` | GitHub Actions runner pool as GitHub reports it (`null` for other projects); `error` is set when GitHub cannot be reached (docs/RUNNERS.md) |
+| GET | `/templates` | `project:read` | first-party app templates and their form fields (plan 21) |
+| GET | `/templates/:id` | `project:read` | one template |
+| POST | `/templates/:id` | `project:create` + `project:update` + `deployment:create` (+ `secret:create` when a credential is pasted) | `{ values }`; creates the project, its secrets, the workload spec and the first deployment in one step. Returns `{ project, deployment, secrets }` where `secrets` lists names only. A failure purges the half-made project |
 | GET/POST | `/projects/:slug/volumes` | `project:read` / `project:update` | app volumes (plan 07); create takes `{ name, sizeMb?, backing?, nodeVolume?, singleWriter? }` and returns `AppVolumeView` with no host path |
 | GET/PATCH/DELETE | `/projects/:slug/volumes/:name` | `project:read` / `project:update` | get, grow/rename, or soft-delete (refused while attached; data kept 7 days) |
 | POST/DELETE | `/projects/:slug/volumes/:name/attach` | `project:update` | `{ workload, environment?, mountPath, readOnly? }` / `{ workload, environment? }`; a second read-write mount on a single-writer volume is a 409 |

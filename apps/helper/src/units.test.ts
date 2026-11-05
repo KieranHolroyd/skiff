@@ -603,3 +603,60 @@ describe('app volume mounts (plan 07)', () => {
 		);
 	});
 });
+
+describe('worker and runner units (plan 21)', () => {
+	const options = {
+		image: 'ghcr.io/actions/actions-runner:latest',
+		envFile: '/run/skiff-workloads/wld_abc123-r1/env',
+		dataDir: '/var/lib/skiff-workloads/wld_abc123-r1',
+		secretsDir: null,
+	};
+
+	test('a worker publishes no port but keeps the hardened container shape', () => {
+		const unit = renderContainerUnit({
+			workload: workload({
+				runtime: 'container',
+				release: null,
+				image: 'ghcr.io/acme/bot:1',
+				socketActivation: false,
+				upstream: 'none',
+				ingress: 'none',
+			}),
+			...options,
+			image: 'ghcr.io/acme/bot:1',
+		});
+		expect(unit).not.toContain('PublishPort=');
+		expect(unit).toContain('ReadOnly=true');
+		expect(unit).toContain('Restart=on-failure');
+		expect(unit).toContain('Volume=/var/lib/skiff-workloads/wld_abc123-r1:/data:Z');
+	});
+
+	test('a runner is ephemeral: fixed entrypoint, newest image, no restart, no data dir', () => {
+		const unit = renderContainerUnit({
+			workload: workload({
+				id: 'wld_abc123-r1',
+				runtime: 'container',
+				release: null,
+				image: 'ghcr.io/actions/actions-runner:latest',
+				socketActivation: false,
+				upstream: 'none',
+				ingress: 'none',
+				runner: { provider: 'github' },
+			}),
+			...options,
+		});
+		expect(unit).toContain('ContainerName=skiff-workload-wld_abc123-r1');
+		expect(unit).toContain('Exec=/home/runner/run.sh');
+		expect(unit).toContain('Pull=newer');
+		expect(unit).toContain('Restart=no');
+		expect(unit).toContain('TimeoutStartSec=900');
+		expect(unit).not.toContain('Restart=on-failure');
+		expect(unit).not.toContain('PublishPort=');
+		expect(unit).not.toContain(':/data:');
+		expect(unit).not.toContain('ReadOnly=true');
+		// Still unprivileged: sudo inside the runner image cannot escalate.
+		expect(unit).toContain('DropCapability=all');
+		expect(unit).toContain('NoNewPrivileges=true');
+		expect(unit).toContain('Slice=skiff-workloads.slice');
+	});
+});

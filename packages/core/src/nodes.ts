@@ -17,6 +17,7 @@ import {
 	contentUrl,
 	nodeStorageStatusSchema,
 	nodeUpdateSchema,
+	workloadSpecSchema,
 	type DesiredState,
 	type NodeStorage,
 	type NodeStorageStatus,
@@ -481,6 +482,26 @@ export class NodeService {
 			const target = targetOf(project) ?? node.id;
 			const local = target === node.id;
 			const workload = workloadByProject.get(project.id);
+			// Workers (plan 21) have no route at all: no preview URL, no environment host. Their
+			// release is app code or a template manifest and must never be served as a static site;
+			// a process worker on this node still needs the release itself.
+			if (isWorkerProject(project)) {
+				if (local && project.runtime === 'process') {
+					for (const deployment of this.ctx.db
+						.select({ releaseId: deployments.releaseId })
+						.from(deployments)
+						.where(and(eq(deployments.projectId, project.id), eq(deployments.status, 'active')))
+						.all()) {
+						const release = this.ctx.db
+							.select({ sha256: releases.sha256 })
+							.from(releases)
+							.where(eq(releases.id, deployment.releaseId))
+							.get();
+						if (release) releaseShas.add(release.sha256);
+					}
+				}
+				continue;
+			}
 			// Apps proxy to the workload on their node; the edge reaches a worker's Caddy over WireGuard.
 			const upstream =
 				project.runtime !== 'static' && local
@@ -676,4 +697,11 @@ export class NodeService {
 function storageStatus(json: string | null): NodeStorageStatus | null {
 	const parsed = nodeStorageStatusSchema.safeParse(parseJson(json, null));
 	return parsed.success ? parsed.data : null;
+}
+
+/** A project whose current spec is a worker (`ingress: "none"`, plan 21): it gets no route. */
+function isWorkerProject(project: { runtime: string; workloadJson: string | null }): boolean {
+	if (project.runtime === 'static' || !project.workloadJson) return false;
+	const spec = workloadSpecSchema.safeParse(parseJson<unknown>(project.workloadJson, null));
+	return spec.success && spec.data.ingress === 'none';
 }
