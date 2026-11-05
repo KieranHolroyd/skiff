@@ -1,6 +1,7 @@
 <script lang="ts">
-	import { tick } from 'svelte';
-	import { onMount } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
+	import { browser } from '$app/env';
+	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { toast } from 'svelte-sonner';
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
 	import AlertTriangleIcon from '@lucide/svelte/icons/triangle-alert';
@@ -28,6 +29,7 @@
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
 	import { Skeleton } from '#lib/components/ui/skeleton/index.js';
 	import Spinner from '#lib/components/ui/spinner/spinner.svelte';
+	import { errorText, fetchJson, fetchText } from '#lib/query.js';
 	import { formatBytes, shortSha } from '../../../_lib/format.js';
 	import CodeEditor from './CodeEditor.svelte';
 	import {
@@ -42,7 +44,6 @@
 		isPreviewableImage,
 		languageFor,
 		searchFiles,
-		SourceTextCache,
 		sourceFileUrl,
 		type DeploymentSummary,
 		type SourceView,
@@ -63,11 +64,8 @@
 
 	let selectedId = $state('');
 	let initialised = false;
-	let view = $state<SourceView | null>(null);
-	let viewLoading = $state(false);
-	let viewError = $state<string | null>(null);
-	let loadToken = 0;
-	let loadedId = '';
+	/** The release whose files the tabs and tree currently describe. */
+	let appliedId = '';
 
 	let expanded = $state<Record<string, boolean>>({});
 	let filter = $state('');
@@ -78,11 +76,6 @@
 
 	let openPaths = $state<string[]>([]);
 	let activePath = $state<string | null>(null);
-	let content = $state<string | null>(null);
-	let contentLoading = $state(false);
-	let contentError = $state<string | null>(null);
-	let reloadToken = $state(0);
-	const contentCache = new SourceTextCache();
 
 	let wordWrap = $state(false);
 	let minimap = $state(true);
@@ -95,6 +88,47 @@
 	let panel: HTMLDivElement | null = null;
 	let isMac = $state(true);
 
+	// --- data: a release is immutable, so its manifest and files are cached for the session --------
+
+	const queryClient = useQueryClient();
+
+	const manifest = createQuery(() => ({
+		queryKey: ['source', slug, selectedId] as const,
+		queryFn: ({ signal }) =>
+			fetchJson<SourceView>(
+				`/projects/${encodeURIComponent(slug)}/source?deployment=${encodeURIComponent(selectedId)}`,
+				{ signal, fallback: 'Could not load this release' }
+			),
+		enabled: browser && selectedId !== '',
+		staleTime: Infinity
+	}));
+	// Only trust a manifest for the release that is selected right now.
+	const view = $derived(
+		manifest.data && manifest.data.deployment.id === selectedId ? manifest.data : null
+	);
+	const viewLoading = $derived(manifest.isFetching);
+	const viewError = $derived(
+		manifest.isError ? errorText(manifest.error, 'This release could not be loaded.') : null
+	);
+
+	/** Text files are fetched; images, binaries and oversized files never download their bytes. */
+	function isTextual(path: string, size: number): boolean {
+		return !isPreviewableImage(path) && !isBinary(path) && size <= MAX_TEXT_BYTES;
+	}
+
+	function fileOptions(deployment: string, path: string) {
+		return {
+			queryKey: ['source-file', slug, deployment, path] as const,
+			queryFn: ({ signal }: { signal: AbortSignal }) =>
+				fetchText(sourceFileUrl(slug, deployment, path), {
+					signal,
+					fallback: `Could not load ${path}`
+				}),
+			staleTime: Infinity,
+			gcTime: 10 * 60_000
+		};
+	}
+
 	const files = $derived(view?.files ?? []);
 	const tree = $derived(buildTree(files));
 	const activeFile = $derived(files.find((file) => file.path === activePath) ?? null);
@@ -103,6 +137,28 @@
 		activePath ? isBinary(activePath) && !isPreviewableImage(activePath) : false
 	);
 	const activeTooLarge = $derived((activeFile?.size ?? 0) > MAX_TEXT_BYTES);
+	const activeTextual = $derived(
+		activePath !== null && activeFile !== null && isTextual(activePath, activeFile.size)
+	);
+
+	const fileQuery = createQuery(() => ({
+		...fileOptions(selectedId, activePath ?? ''),
+		enabled: browser && activeTextual
+	}));
+	const content = $derived(activeTextual ? (fileQuery.data ?? null) : null);
+	const contentLoading = $derived(activeTextual && fileQuery.isLoading);
+	const contentError = $derived(
+		activeTextual && fileQuery.isError
+			? errorText(fileQuery.error, 'The file could not be loaded.')
+			: null
+	);
+
+	/** Warm the cache on hover, so opening a file feels instant. */
+	function prefetch(path: string) {
+		const file = files.find((entry) => entry.path === path);
+		if (!file || !selectedId || !isTextual(path, file.size)) return;
+		void queryClient.prefetchQuery(fileOptions(selectedId, path));
+	}
 	const rows = $derived(visibleRows(tree, expanded));
 	const filtered = $derived(filter.trim() ? searchFiles(files, filter) : []);
 	const quickResults = $derived(
@@ -154,77 +210,20 @@
 		selectedId = preferred?.id ?? deployments[0]?.id ?? '';
 	});
 
+	// Never resolve a path from one release against another: switching clears the tabs, and the
+	// new manifest picks a starting file. A refetch of the same release keeps what is open.
 	$effect(() => {
 		const id = selectedId;
-		if (!id) {
-			view = null;
-			return;
-		}
-		void load(id);
-	});
-
-	// Fetch the active file. Binary and oversized files never download their bytes.
-	$effect(() => {
-		const path = activePath;
-		const deployment = selectedId;
-		const allFiles = view?.files;
-		void reloadToken;
-		if (!path || !deployment || !allFiles) {
-			content = null;
-			contentLoading = false;
-			return;
-		}
-		const file = allFiles.find((entry) => entry.path === path);
-		if (!file) {
-			content = null;
-			return;
-		}
-		if (isPreviewableImage(path) || isBinary(path) || file.size > MAX_TEXT_BYTES) {
-			content = null;
-			contentError = null;
-			contentLoading = false;
-			return;
-		}
-		const key = `${deployment}:${path}`;
-		const cached = contentCache.get(key);
-		if (cached !== undefined) {
-			content = cached;
-			contentError = null;
-			contentLoading = false;
-			return;
-		}
-		content = null;
-		contentError = null;
-		contentLoading = true;
-		const controller = new AbortController();
-		fetch(sourceFileUrl(slug, selectedId, path), {
-			signal: controller.signal,
-			headers: { accept: 'text/plain' }
-		})
-			.then(async (response) => {
-				if (!response.ok) {
-					let message = `Could not load ${path} (${response.status}).`;
-					try {
-						const body = (await response.json()) as { message?: string };
-						if (body?.message) message = body.message;
-					} catch {
-						// Not JSON; keep the status message.
-					}
-					throw new Error(message);
+		const next = view;
+		untrack(() => {
+			if (id !== appliedId) {
+				clearSelection();
+				if (next) {
+					appliedId = id;
+					resetSelection(next);
 				}
-				return response.text();
-			})
-			.then((text) => {
-				contentCache.set(key, text);
-				content = text;
-				contentLoading = false;
-			})
-			.catch((error) => {
-				if (controller.signal.aborted) return;
-				contentError = error instanceof Error ? error.message : 'The file could not be loaded.';
-				contentLoading = false;
-			});
-		return () => controller.abort();
+			} else if (next) keepSelection(next);
+		});
 	});
 
 	$effect(() => {
@@ -239,51 +238,12 @@
 		imageLoaded = false;
 	});
 
-	async function load(id: string) {
-		const token = ++loadToken;
-		const switching = id !== loadedId;
-		viewLoading = true;
-		viewError = null;
-		if (switching) {
-			// Never resolve a path from one release against another.
-			view = null;
-			openPaths = [];
-			activePath = null;
-			content = null;
-			contentError = null;
-			contentLoading = false;
-			expanded = {};
-			filter = '';
-			quickOpen = false;
-		}
-		try {
-			const response = await fetch(
-				`/projects/${encodeURIComponent(slug)}/source?deployment=${encodeURIComponent(id)}`,
-				{ headers: { accept: 'application/json' } }
-			);
-			if (!response.ok) {
-				let message = `Could not load this release (${response.status}).`;
-				try {
-					const body = (await response.json()) as { message?: string };
-					if (body?.message) message = body.message;
-				} catch {
-					// Keep the status message.
-				}
-				throw new Error(message);
-			}
-			const next = (await response.json()) as SourceView;
-			if (token !== loadToken) return;
-			view = next;
-			loadedId = id;
-			if (switching) resetSelection(next);
-			else keepSelection(next);
-		} catch (error) {
-			if (token !== loadToken) return;
-			viewError = error instanceof Error ? error.message : 'This release could not be loaded.';
-			view = null;
-		} finally {
-			if (token === loadToken) viewLoading = false;
-		}
+	function clearSelection() {
+		openPaths = [];
+		activePath = null;
+		expanded = {};
+		filter = '';
+		quickOpen = false;
 	}
 
 	/** A refresh keeps the open tabs and active file when they still exist in the new manifest. */
@@ -295,14 +255,7 @@
 	}
 
 	function resetSelection(next: SourceView) {
-		openPaths = [];
-		activePath = null;
-		content = null;
-		contentError = null;
-		contentLoading = false;
-		filter = '';
-		quickOpen = false;
-		expanded = {};
+		clearSelection();
 		primeTree(buildTree(next.files));
 		const entry =
 			next.files.find((file) => file.path === 'index.html')?.path ??
@@ -396,15 +349,13 @@
 	}
 
 	function refresh() {
-		contentCache.clear();
-		reloadToken += 1;
-		if (selectedId) void load(selectedId);
+		if (!selectedId) return;
+		void queryClient.invalidateQueries({ queryKey: ['source', slug, selectedId] });
+		void queryClient.invalidateQueries({ queryKey: ['source-file', slug, selectedId] });
 	}
 
 	function retryFile() {
-		if (!activePath) return;
-		contentCache.delete(`${selectedId}:${activePath}`);
-		reloadToken += 1;
+		void fileQuery.refetch();
 	}
 
 	function zoom(delta: number) {
@@ -645,6 +596,7 @@
 												? 'bg-brand/5 text-foreground'
 												: 'text-foreground/85'}"
 											onclick={() => selectFile(file.path)}
+											onpointerenter={() => prefetch(file.path)}
 											title={file.path}
 										>
 											<FileIcon class="size-3.5 shrink-0 {iconClassFor(file.path)}" />
@@ -688,6 +640,7 @@
 												: 'text-foreground/85'}"
 											style:padding-left={`${6 + depth * 12 + 16}px`}
 											onclick={() => selectFile(node.path)}
+											onpointerenter={() => prefetch(node.path)}
 											title={node.path}
 										>
 											<FileIcon class="size-3.5 shrink-0 {iconClassFor(node.path)}" />
@@ -980,6 +933,7 @@
 														: 'text-foreground/85 hover:bg-muted/60'}"
 													onmouseenter={() => (quickIndex = index)}
 													onclick={() => selectFile(file.path)}
+													onpointerenter={() => prefetch(file.path)}
 												>
 													<QuickIcon class="size-3.5 shrink-0 {iconClassFor(file.path)}" />
 													<span class="truncate">{basename(file.path)}</span>

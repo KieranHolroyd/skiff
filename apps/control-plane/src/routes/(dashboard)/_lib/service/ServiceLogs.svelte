@@ -1,4 +1,8 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
+	import { browser } from '$app/env';
+	import { createQuery } from '@tanstack/svelte-query';
+	import { createVirtualizer } from '@tanstack/svelte-virtual';
 	import DownloadIcon from '@lucide/svelte/icons/download';
 	import EraserIcon from '@lucide/svelte/icons/eraser';
 	import PauseIcon from '@lucide/svelte/icons/pause';
@@ -12,11 +16,14 @@
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as InputGroup from '#lib/components/ui/input-group/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
+	import { errorText, fetchJson } from '#lib/query.js';
 	import EmptyState from '../EmptyState.svelte';
 
 	/**
 	 * Live container logs for a managed service. The server load supplies the newest page; after
-	 * that this component tails `endpoint` every two seconds and owns the list.
+	 * that a TanStack query tails `endpoint` every two seconds (paused while the tab is hidden,
+	 * retried with backoff) and this component owns the list. Rows are virtualised, so a full
+	 * buffer of 5,000 lines costs the same to render as a screenful.
 	 */
 	let {
 		endpoint,
@@ -43,8 +50,6 @@
 	let live = $state(true);
 	let level = $state<'all' | LogLevel>('all');
 	let query = $state('');
-	// svelte-ignore state_referenced_locally
-	let errorText = $state<string | null>(loadError);
 	let viewport = $state<HTMLDivElement | null>(null);
 	let pinned = $state(true);
 	const MAX_EVENTS = 5000;
@@ -82,6 +87,66 @@
 		debug: 'text-muted-foreground'
 	};
 
+	// --- the tail ----------------------------------------------------------------------------
+
+	type Page = { events: ServiceLogEvent[]; cursor: number };
+	const tail = createQuery(() => ({
+		queryKey: ['service-logs', endpoint] as const,
+		// Reads the cursor when it runs, so each poll asks only for lines after the last one seen.
+		queryFn: ({ signal }) =>
+			fetchJson<Page>(
+				`${endpoint}?${new URLSearchParams({ after: String(cursor), limit: '300' }).toString()}`,
+				{ signal, fallback: 'Could not read logs' }
+			),
+		enabled: browser && canRead && live,
+		refetchInterval: 2_000,
+		refetchIntervalInBackground: false,
+		staleTime: 0,
+		gcTime: 0,
+		retry: 3
+	}));
+
+	let applied = 0;
+	$effect(() => {
+		const page = tail.data;
+		const at = tail.dataUpdatedAt;
+		if (!page || at === applied) return;
+		applied = at;
+		untrack(() => {
+			if (page.events.length > 0) {
+				events = [...events, ...page.events].slice(-MAX_EVENTS);
+				if (pinned) void scrollToEnd();
+			}
+			if (page.cursor) cursor = page.cursor;
+		});
+	});
+
+	const problem = $derived(tail.isError ? errorText(tail.error, 'Could not read logs.') : null);
+	// The load's error shows until the tail has succeeded once.
+	const shownError = $derived(problem ?? (tail.isSuccess ? null : loadError));
+
+	// --- virtual list -------------------------------------------------------------------------
+
+	const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>({
+		count: 0,
+		getScrollElement: () => viewport,
+		estimateSize: () => 20,
+		overscan: 24
+	});
+
+	// `setOptions` writes the store, so it must not be read reactively here or the effect loops.
+	$effect(() => {
+		const rows = filtered;
+		const element = viewport;
+		untrack(() =>
+			$virtualizer.setOptions({
+				count: rows.length,
+				getScrollElement: () => element,
+				getItemKey: (index) => rows[index]?.seq ?? index
+			})
+		);
+	});
+
 	/** Follow new lines only while the reader is at the bottom. */
 	function onscroll() {
 		if (!viewport) return;
@@ -90,40 +155,12 @@
 
 	async function scrollToEnd(): Promise<void> {
 		await Promise.resolve();
-		if (viewport) viewport.scrollTop = viewport.scrollHeight;
+		if (filtered.length > 0) $virtualizer.scrollToIndex(filtered.length - 1, { align: 'end' });
+		pinned = true;
 	}
 
 	$effect(() => {
-		if (viewport) void scrollToEnd();
-	});
-
-	async function poll(): Promise<void> {
-		if (!canRead || !live) return;
-		try {
-			const params = new URLSearchParams({ after: String(cursor), limit: '300' });
-			const response = await fetch(`${endpoint}?${params.toString()}`, {
-				headers: { accept: 'application/json' }
-			});
-			if (!response.ok) {
-				const body = (await response.json().catch(() => ({}))) as { message?: string };
-				throw new Error(body.message ?? `HTTP ${response.status}`);
-			}
-			const page = (await response.json()) as { events: ServiceLogEvent[]; cursor: number };
-			if (page.events.length > 0) {
-				events = [...events, ...page.events].slice(-MAX_EVENTS);
-				if (pinned) await scrollToEnd();
-			}
-			if (page.cursor) cursor = page.cursor;
-			errorText = null;
-		} catch (error) {
-			errorText = error instanceof Error ? error.message : 'Could not read logs.';
-		}
-	}
-
-	$effect(() => {
-		if (!canRead) return;
-		const timer = setInterval(() => void poll(), 2000);
-		return () => clearInterval(timer);
+		if (viewport) void untrack(() => scrollToEnd());
 	});
 
 	function download(): void {
@@ -213,9 +250,11 @@
 			</div>
 		</div>
 
-		{#if errorText}
+		{#if shownError}
 			<div class="border-b px-3 py-2">
-				<Notice tone="warning">Live tail failed: {errorText}. Retrying…</Notice>
+				<Notice tone="warning">
+					Live tail failed: {shownError}{live ? ' Retrying…' : ''}
+				</Notice>
 			</div>
 		{/if}
 
@@ -238,23 +277,31 @@
 					/>
 				</div>
 			{:else}
-				{#each filtered as event (event.seq)}
-					<div class="flex gap-3 px-3 hover:bg-muted/60">
-						<span class="shrink-0 text-muted-foreground tabular-nums select-none"
-							>{clock(event.ts)}</span
+				<div class="relative w-full" style="height: {$virtualizer.getTotalSize()}px">
+					{#each $virtualizer.getVirtualItems() as row (row.key)}
+						{@const event = filtered[row.index]!}
+						<div
+							data-index={row.index}
+							{@attach (node) => untrack(() => $virtualizer.measureElement(node))}
+							class="absolute top-0 left-0 flex w-full gap-3 px-3 hover:bg-muted/60"
+							style="transform: translateY({row.start}px)"
 						>
-						<span class="w-11 shrink-0 font-medium {levelTone[event.level]} select-none">
-							{event.level.toUpperCase()}
-						</span>
-						<span
-							class="min-w-0 break-words whitespace-pre-wrap {event.level === 'error'
-								? 'text-destructive'
-								: event.level === 'debug'
-									? 'text-muted-foreground'
-									: ''}">{event.message}</span
-						>
-					</div>
-				{/each}
+							<span class="shrink-0 text-muted-foreground tabular-nums select-none"
+								>{clock(event.ts)}</span
+							>
+							<span class="w-11 shrink-0 font-medium {levelTone[event.level]} select-none">
+								{event.level.toUpperCase()}
+							</span>
+							<span
+								class="min-w-0 break-words whitespace-pre-wrap {event.level === 'error'
+									? 'text-destructive'
+									: event.level === 'debug'
+										? 'text-muted-foreground'
+										: ''}">{event.message}</span
+							>
+						</div>
+					{/each}
+				</div>
 			{/if}
 		</div>
 

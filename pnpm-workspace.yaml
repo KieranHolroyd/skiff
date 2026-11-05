@@ -7,3 +7,6 @@ allowBuilds:
 minimumReleaseAgeExclude:
   - '@lucide/svelte@1.67.0'
   - shadcn-svelte@1.8.0
+  - '@tanstack/query-core@5.106.1'
+  - '@tanstack/svelte-query@6.3.11'
+  - '@tanstack/charts@1.4.0'

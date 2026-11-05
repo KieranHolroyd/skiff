@@ -1,11 +1,19 @@
 <script lang="ts">
 	import type { TrafficSeriesPoint } from '@skiff/core';
+	import { areaY, defineChart, lineY, rect } from '@tanstack/charts';
+	import { crosshair } from '@tanstack/charts/crosshair';
+	import { decorative } from '@tanstack/charts/mark/decorative';
+	import { scaleLinear } from '@tanstack/charts/scales/linear';
+	import { scaleUtc } from '@tanstack/charts/scales/time';
+	import { Chart } from '@tanstack/charts/svelte';
+	import { tooltip } from '@tanstack/charts/tooltip';
+	import { CHART_GRID, CHART_TOOLTIP_CLASS, utcTimeFormat } from '#lib/charts.js';
 	import { downsampleSeries } from './traffic-series.js';
 
 	/**
-	 * Dependency-free traffic chart. Long series are merged into clock-aligned chart buckets
-	 * (at most ~160 points) and plotted as an average rate per minute/hour, with 5xx errors
-	 * overlaid as bars on the same scale.
+	 * Traffic chart. Long series are merged into clock-aligned chart buckets (at most ~160 points)
+	 * and plotted as an average rate per minute/hour, with 5xx errors overlaid as bars on the same
+	 * scale.
 	 */
 	let {
 		series,
@@ -13,63 +21,134 @@
 		class: className = ''
 	}: { series: TrafficSeriesPoint[]; interval: '1m' | '1h'; class?: string } = $props();
 
-	const WIDTH = 800;
-	const HEIGHT = 200;
-
 	const chart = $derived(downsampleSeries(series, interval));
-	const buckets = $derived(chart.buckets);
-	const top = $derived(Math.max(1e-9, ...buckets.map((point) => point.requestRate)));
-	const step = $derived(buckets.length > 1 ? WIDTH / (buckets.length - 1) : WIDTH);
-	const x = $derived((index: number) => (buckets.length > 1 ? index * step : WIDTH / 2));
-	const y = $derived((value: number) => HEIGHT - (value / top) * HEIGHT);
-
-	const areaPath = $derived.by(() => {
-		if (buckets.length === 0) return '';
-		const points = buckets.map((point, index) => `${x(index)},${y(point.requestRate)}`);
-		return `M0,${HEIGHT} L${points.join(' L')} L${WIDTH},${HEIGHT} Z`;
-	});
-	const linePath = $derived.by(() => {
-		if (buckets.length === 0) return '';
-		return `M${buckets.map((point, index) => `${x(index)},${y(point.requestRate)}`).join(' L')}`;
-	});
-	const errorBars = $derived(
-		buckets
-			.map((point, index) => ({ point, index }))
-			.filter(({ point }) => point.status5xx > 0)
-			.map(({ point, index }) => ({
-				x: x(index) - Math.max(step * 0.3, 0.6),
-				width: Math.max(step * 0.6, 1.2),
-				height: Math.max((point.errorRate / top) * HEIGHT, 1.2),
-				point
-			}))
+	const rows = $derived(
+		chart.buckets.map((point) => {
+			const start = new Date(point.start);
+			const end = new Date(point.end);
+			return { ...point, startAt: start, endAt: end, at: new Date((+start + +end) / 2) };
+		})
+	);
+	const topRate = $derived(Math.max(0, ...rows.map((row) => row.requestRate)));
+	// Bars fill the middle 60% of their bucket and keep a sliver of height, so a single error in a
+	// busy hour is still visible.
+	const errors = $derived(
+		rows
+			.filter((row) => row.status5xx > 0)
+			.map((row) => {
+				const pad = (+row.endAt - +row.startAt) * 0.2;
+				return {
+					...row,
+					barStart: new Date(+row.startAt + pad),
+					barEnd: new Date(+row.endAt - pad),
+					barTop: Math.max(row.errorRate, topRate * 0.035)
+				};
+			})
 	);
 
 	const numberFormat = new Intl.NumberFormat('en-GB');
 	const rateFormat = new Intl.NumberFormat('en-GB', { maximumFractionDigits: 1 });
-	const timeFormatter = $derived(
-		new Intl.DateTimeFormat('en-GB', {
-			hour: '2-digit',
-			minute: '2-digit',
-			day: interval === '1h' ? '2-digit' : undefined,
-			month: interval === '1h' ? 'short' : undefined,
-			timeZone: 'UTC'
-		})
-	);
-	const label = $derived((iso: string) => `${timeFormatter.format(new Date(iso))} UTC`);
-	const rangeLabel = $derived((point: { start: string; end: string }) =>
-		chart.span === 1
-			? label(point.start)
-			: `${timeFormatter.format(new Date(point.start))}–${label(point.end)}`
-	);
-	const tooltip = $derived((point: (typeof buckets)[number]) => {
-		const rate =
-			chart.span > 1 ? ` (${rateFormat.format(point.requestRate)}/${chart.unit} avg)` : '';
-		return `${rangeLabel(point)}: ${numberFormat.format(point.requests)} requests${rate}, ${numberFormat.format(point.status5xx)} 5xx`;
+	const compactFormat = new Intl.NumberFormat('en-GB', {
+		notation: 'compact',
+		maximumFractionDigits: 1
 	});
-	const first = $derived(buckets[0] ? label(buckets[0].start) : '');
-	const last = $derived(buckets.at(-1) ? label(buckets.at(-1)!.end) : '');
+	const timeFormatter = $derived(utcTimeFormat(interval));
+	const rangeLabel = (row: { startAt: Date; endAt: Date }) =>
+		chart.span === 1
+			? `${timeFormatter.format(row.startAt)} UTC`
+			: `${timeFormatter.format(row.startAt)}–${timeFormatter.format(row.endAt)} UTC`;
 	const peakLabel = $derived(
 		chart.peak >= 1000 ? `${(chart.peak / 1000).toFixed(1)}k` : String(Math.round(chart.peak))
+	);
+
+	const definition = $derived(
+		defineChart(
+			{
+				marks: [
+					decorative(
+						areaY(rows, {
+							id: 'requests-area',
+							x: 'at',
+							y1: 0,
+							y2: 'requestRate',
+							fill: 'var(--color-chart-1)',
+							fillOpacity: 0.16
+						})
+					),
+					decorative(
+						rect(errors, {
+							id: 'errors',
+							x1: 'barStart',
+							x2: 'barEnd',
+							y1: () => 0,
+							y2: 'barTop',
+							fill: 'var(--color-destructive)',
+							fillOpacity: 0.7
+						})
+					),
+					lineY(rows, {
+						id: 'requests',
+						x: 'at',
+						y: 'requestRate',
+						key: 'start',
+						stroke: 'var(--color-chart-1)',
+						strokeWidth: 2
+					}),
+					crosshair({ x: true, y: false })
+				],
+				scales: {
+					x: {
+						scale:
+							rows.length > 0
+								? scaleUtc().domain([rows[0]!.startAt, rows.at(-1)!.endAt])
+								: scaleUtc,
+						axis: {
+							line: { strokeOpacity: 0.25 },
+							ticks: { size: 0, format: (value: Date) => timeFormatter.format(value) }
+						}
+					},
+					y: {
+						scale: scaleLinear,
+						nice: 4,
+						grid: CHART_GRID,
+						axis: {
+							line: false,
+							ticks: { size: 0, count: 4, format: (value: number) => compactFormat.format(value) }
+						}
+					}
+				}
+			},
+			{
+				focus: 'nearest-x',
+				maxFocusDistance: Number.POSITIVE_INFINITY,
+				tooltip: {
+					use: tooltip,
+					className: CHART_TOOLTIP_CLASS,
+					content: (points) => {
+						const row = points[0]?.datum;
+						if (!row) return { rows: [] };
+						return {
+							title: rangeLabel(row),
+							rows: [
+								{
+									label: 'requests',
+									value:
+										chart.span > 1
+											? `${numberFormat.format(row.requests)} · ${rateFormat.format(row.requestRate)}/${chart.unit} avg`
+											: numberFormat.format(row.requests),
+									color: 'var(--color-chart-1)'
+								},
+								{
+									label: '5xx',
+									value: numberFormat.format(row.status5xx),
+									color: 'var(--color-destructive)'
+								}
+							]
+						};
+					}
+				}
+			}
+		)
 	);
 </script>
 
@@ -90,69 +169,11 @@
 			</span>
 		</span>
 	</div>
-	<svg
-		viewBox="0 0 {WIDTH} {HEIGHT}"
-		preserveAspectRatio="none"
-		class="h-44 w-full overflow-visible"
-		role="img"
-		aria-label={`Requests over time: ${numberFormat.format(chart.total)} total, peak ${peakLabel} per ${chart.unit === 'h' ? 'hour' : 'minute'}`}
-	>
-		{#each [0.25, 0.5, 0.75] as fraction (fraction)}
-			<line
-				x1="0"
-				x2={WIDTH}
-				y1={HEIGHT * fraction}
-				y2={HEIGHT * fraction}
-				class="stroke-border"
-				stroke-dasharray="3 5"
-				stroke-width="1"
-				vector-effect="non-scaling-stroke"
-			/>
-		{/each}
-		<line
-			x1="0"
-			x2={WIDTH}
-			y1={HEIGHT}
-			y2={HEIGHT}
-			class="stroke-border"
-			stroke-width="1"
-			vector-effect="non-scaling-stroke"
-		/>
-		<path d={areaPath} fill="var(--color-chart-1)" fill-opacity="0.16" />
-		<path
-			d={linePath}
-			stroke="var(--color-chart-1)"
-			fill="none"
-			stroke-width="2"
-			stroke-linejoin="round"
-			vector-effect="non-scaling-stroke"
-		/>
-		{#each errorBars as bar (bar.point.start)}
-			<rect
-				x={bar.x}
-				y={HEIGHT - bar.height}
-				width={bar.width}
-				height={bar.height}
-				fill="var(--color-destructive)"
-				fill-opacity="0.7"
-			>
-				<title>{rangeLabel(bar.point)}: {numberFormat.format(bar.point.status5xx)} 5xx</title>
-			</rect>
-		{/each}
-		{#each buckets as point, index (point.start)}
-			<rect
-				x={x(index) - step / 2}
-				y="0"
-				width={Math.max(step, 0.5)}
-				height={HEIGHT}
-				fill="transparent"
-			>
-				<title>{tooltip(point)}</title>
-			</rect>
-		{/each}
-	</svg>
-	<div class="flex justify-between pt-1 font-mono text-xs text-muted-foreground">
-		<span>{first}</span>
-		<span>{last}</span>
-	</div>
+	<Chart
+		{definition}
+		ariaLabel={`Requests over time: ${numberFormat.format(chart.total)} total, peak ${peakLabel} per ${chart.unit === 'h' ? 'hour' : 'minute'}`}
+		height={208}
+		initialWidth={960}
+		class="text-muted-foreground"
+	/>
 </div>

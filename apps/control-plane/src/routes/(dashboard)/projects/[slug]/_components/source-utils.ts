@@ -271,30 +271,6 @@ export function sourceFileUrl(
 	return `/projects/${encodeURIComponent(slug)}/source/file?${params.toString()}`;
 }
 
-/**
- * Text bodies already fetched for the current deployment. Deliberately a plain class rather than
- * a `SvelteMap`: the cache must not make the fetch effect re-run when it is written.
- */
-export class SourceTextCache {
-	private readonly entries = new Map<string, string>();
-
-	get(key: string): string | undefined {
-		return this.entries.get(key);
-	}
-
-	set(key: string, value: string): void {
-		this.entries.set(key, value);
-	}
-
-	delete(key: string): void {
-		this.entries.delete(key);
-	}
-
-	clear(): void {
-		this.entries.clear();
-	}
-}
-
 export function dirname(path: string): string {
 	const index = path.lastIndexOf('/');
 	return index === -1 ? '' : path.slice(0, index);

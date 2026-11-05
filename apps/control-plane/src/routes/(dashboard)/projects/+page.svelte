@@ -27,7 +27,7 @@
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as InputGroup from '#lib/components/ui/input-group/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
-	import * as Table from '#lib/components/ui/table/index.js';
+	import DataTable, { type DataColumn } from '#lib/components/skiff/DataTable.svelte';
 	import * as Tabs from '#lib/components/ui/tabs/index.js';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
@@ -77,12 +77,91 @@
 
 	const trashView = $derived(data.view === 'trash');
 	const rows = $derived(trashView ? data.trash : data.projects);
-	const filtered = $derived(
-		rows.filter((project) => {
-			const q = query.trim().toLowerCase();
-			return !q || project.name.toLowerCase().includes(q) || project.slug.includes(q);
-		})
-	);
+	/** Rows as the table shows them (searched and sorted); selection ranges follow this order. */
+	let ordered = $state<Row[]>([]);
+
+	type Row = PageProps['data']['projects'][number];
+	const selectColumn: DataColumn<Row> = {
+		id: 'select',
+		header: '',
+		srHeader: 'Select',
+		head: selectAllHead,
+		cell: selectCell,
+		class: 'w-0 pr-0 pl-4'
+	};
+	const nameColumn: DataColumn<Row> = {
+		id: 'name',
+		header: 'Project',
+		value: (row) => `${row.name} ${row.slug}`,
+		cell: nameCell
+	};
+	const actionsColumn: DataColumn<Row> = {
+		id: 'actions',
+		header: '',
+		srHeader: 'Actions',
+		cell: actionsCell,
+		class: 'w-0 pr-4'
+	};
+	const activeColumns: DataColumn<Row>[] = [
+		nameColumn,
+		{
+			id: 'runtime',
+			header: 'Runtime',
+			value: (row) => row.runtime,
+			cell: runtimeCell,
+			class: 'hidden md:table-cell'
+		},
+		{
+			id: 'production',
+			header: 'Production',
+			value: (row) => (row.productionDeploymentId ? 'live' : 'not deployed'),
+			searchable: false,
+			cell: productionCell,
+			class: 'hidden md:table-cell'
+		},
+		{
+			id: 'access',
+			header: 'Access',
+			cell: accessCell,
+			class: 'hidden lg:table-cell'
+		},
+		{
+			id: 'created',
+			header: 'Created',
+			value: (row) => row.createdAt,
+			searchable: false,
+			descFirst: true,
+			cell: createdCell,
+			class: 'hidden font-mono text-xs text-muted-foreground sm:table-cell'
+		},
+		actionsColumn
+	];
+	const trashColumns: DataColumn<Row>[] = [
+		nameColumn,
+		{
+			id: 'deleted',
+			header: 'Deleted',
+			value: (row) => row.deletedAt,
+			searchable: false,
+			descFirst: true,
+			cell: deletedCell,
+			class: 'hidden font-mono text-xs text-muted-foreground sm:table-cell'
+		},
+		{
+			id: 'purge',
+			header: 'Purge',
+			value: (row) => row.purgeAt,
+			searchable: false,
+			cell: purgeCell,
+			class: 'text-xs text-muted-foreground'
+		},
+		actionsColumn
+	];
+	const columns = $derived.by(() => {
+		const base = trashView ? trashColumns : activeColumns;
+		if (!selecting) return [{ ...base[0]!, class: 'pl-4' }, ...base.slice(1)];
+		return [selectColumn, ...base];
+	});
 
 	// --- selection and bulk actions (docs/OPERATIONS.md §6.4) --------------------------------
 
@@ -104,12 +183,12 @@
 	let shiftHeld = false;
 
 	const selectedRows = $derived(rows.filter((project) => selected.has(project.slug)));
-	const selectable = $derived(filtered.slice(0, LIMIT));
+	const selectable = $derived(ordered.slice(0, LIMIT));
 	const allSelected = $derived(
 		selectable.length > 0 && selectable.every((project) => selected.has(project.slug))
 	);
 	const someSelected = $derived(
-		!allSelected && filtered.some((project) => selected.has(project.slug))
+		!allSelected && ordered.some((project) => selected.has(project.slug))
 	);
 
 	function clearSelection() {
@@ -132,15 +211,16 @@
 		if (!value || allSelected) return clearSelection();
 		selected.clear();
 		for (const project of selectable) selected.add(project.slug);
-		capped = filtered.length > LIMIT;
+		capped = ordered.length > LIMIT;
 		anchor = null;
 	}
 
-	function toggleRow(index: number, value: boolean) {
+	function toggleRow(slug: string, value: boolean) {
+		const index = ordered.findIndex((project) => project.slug === slug);
 		const range =
 			shiftHeld && anchor !== null && anchor !== index
-				? filtered.slice(Math.min(anchor, index), Math.max(anchor, index) + 1)
-				: [filtered[index]];
+				? ordered.slice(Math.min(anchor, index), Math.max(anchor, index) + 1)
+				: [ordered[index]];
 		for (const project of range) {
 			if (!project) continue;
 			if (value) {
@@ -292,7 +372,7 @@
 				<InputGroup.Addon><SearchIcon /></InputGroup.Addon>
 				{#if query}
 					<InputGroup.Addon align="inline-end">
-						<InputGroup.Text class="font-mono text-xs">{filtered.length}</InputGroup.Text>
+						<InputGroup.Text class="font-mono text-xs">{ordered.length}</InputGroup.Text>
 					</InputGroup.Addon>
 				{/if}
 			</InputGroup.Root>
@@ -307,155 +387,19 @@
 		</div>
 
 		<div class="overflow-hidden rounded-xl border bg-card shadow-xs">
-			<Table.Root>
-				<Table.Header class="bg-muted/45">
-					<Table.Row>
-						{#if selecting}
-							<Table.Head class="w-0 pr-0 pl-4">
-								<Checkbox
-									bind:checked={() => allSelected, toggleAll}
-									bind:indeterminate={() => someSelected, () => {}}
-									disabled={filtered.length === 0}
-									aria-label={filtered.length > LIMIT
-										? `Select the first ${LIMIT} projects`
-										: 'Select all projects'}
-								/>
-							</Table.Head>
-						{/if}
-						<Table.Head class={selecting ? '' : 'pl-4'}>Project</Table.Head>
-						{#if trashView}
-							<Table.Head class="hidden sm:table-cell">Deleted</Table.Head>
-							<Table.Head>Purge</Table.Head>
-						{:else}
-							<Table.Head class="hidden md:table-cell">Runtime</Table.Head>
-							<Table.Head class="hidden md:table-cell">Production</Table.Head>
-							<Table.Head class="hidden lg:table-cell">Access</Table.Head>
-							<Table.Head class="hidden sm:table-cell">Created</Table.Head>
-						{/if}
-						<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
-					</Table.Row>
-				</Table.Header>
-				<Table.Body>
-					{#each filtered as project, index (project.slug)}
-						{@const href = resolve('/(dashboard)/projects/[slug]', { slug: project.slug })}
-						{@const checked = selected.has(project.slug)}
-						<Table.Row class="group" data-state={checked ? 'selected' : undefined}>
-							{#if selecting}
-								<Table.Cell class="pr-0 pl-4">
-									<Checkbox
-										bind:checked={() => checked, (value) => toggleRow(index, value)}
-										onclick={(event: MouseEvent) => (shiftHeld = event.shiftKey)}
-										onmousedown={(event: MouseEvent) => event.shiftKey && event.preventDefault()}
-										aria-label="Select {project.name}"
-									/>
-								</Table.Cell>
-							{/if}
-							<Table.Cell class={selecting ? '' : 'pl-4'}>
-								<div class="flex items-center gap-3">
-									<ProjectMark slug={project.slug} name={project.name} />
-									<div class="min-w-0">
-										{#if trashView}
-											<span class="font-medium">{project.name}</span>
-										{:else}
-											<a {href} class="font-medium underline-offset-4 group-hover:underline"
-												>{project.name}</a
-											>
-										{/if}
-										<p class="truncate font-mono text-xs text-muted-foreground">
-											{project.slug}.{data.contentDomain}
-										</p>
-									</div>
-								</div>
-							</Table.Cell>
-							{#if trashView}
-								<Table.Cell class="hidden font-mono text-xs text-muted-foreground sm:table-cell">
-									<time datetime={project.deletedAt}>{formatDate(project.deletedAt)}</time>
-								</Table.Cell>
-								<Table.Cell class="text-xs text-muted-foreground">
-									<time datetime={project.purgeAt}>{purgeCountdown(project.purgeAt)}</time>
-								</Table.Cell>
-							{:else}
-								<Table.Cell class="hidden md:table-cell">
-									{@const Icon = runtimeIcon(project.runtime)}
-									<span class="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-										<Icon class="size-3.5" />
-										<span class="capitalize">{project.runtime}</span>
-									</span>
-									<p class="font-mono text-xs text-muted-foreground">{project.placement}</p>
-								</Table.Cell>
-								<Table.Cell class="hidden md:table-cell">
-									{#if project.productionDeploymentId}
-										<StatusBadge status="online" tone="success" label="Live" />
-									{:else}
-										<StatusBadge status="inactive" label="Not deployed" />
-									{/if}
-								</Table.Cell>
-								<Table.Cell class="hidden lg:table-cell">
-									<div class="flex flex-wrap gap-1.5">
-										<AccessChip scope="Prod" mode={project.productionAccess} />
-										<AccessChip scope="Preview" mode={project.previewAccess} />
-									</div>
-								</Table.Cell>
-								<Table.Cell class="hidden font-mono text-xs text-muted-foreground sm:table-cell">
-									<time datetime={project.createdAt}>{formatDate(project.createdAt)}</time>
-								</Table.Cell>
-							{/if}
-							<Table.Cell class="pr-4">
-								{#if trashView}
-									{#if data.can.updateProject || purgeInfo}
-										<RowMenu label="Actions for {project.name}">
-											{#if data.can.updateProject}
-												<DropdownMenu.Item onSelect={() => restoreOne(project)}>
-													<RotateCcwIcon />Restore
-												</DropdownMenu.Item>
-											{/if}
-											{#if purgeInfo}
-												<DropdownMenu.Separator />
-												<DropdownMenu.Item
-													variant="destructive"
-													disabled={bulk.busy}
-													onSelect={() => runBulk(purgeInfo, [project.slug])}
-												>
-													<TrashIcon />Delete permanently
-												</DropdownMenu.Item>
-											{/if}
-										</RowMenu>
-									{/if}
-								{:else}
-									<RowMenu label="Actions for {project.name}">
-										<DropdownMenu.Item onSelect={() => goto(href)}>
-											<ArrowRightIcon />Open project
-										</DropdownMenu.Item>
-										<DropdownMenu.Item
-											onSelect={() => window.open(project.productionUrl, '_blank', 'noreferrer')}
-										>
-											<ArrowUpRightIcon />Visit site
-										</DropdownMenu.Item>
-										<DropdownMenu.Item onSelect={() => copy(project.productionUrl)}>
-											<CopyIcon />Copy URL
-										</DropdownMenu.Item>
-										{#if data.can.deleteProject}
-											<DropdownMenu.Separator />
-											<DropdownMenu.Item
-												variant="destructive"
-												onSelect={() => confirmDelete(project)}
-											>
-												<TrashIcon />Delete project
-											</DropdownMenu.Item>
-										{/if}
-									</RowMenu>
-								{/if}
-							</Table.Cell>
-						</Table.Row>
-					{:else}
-						<Table.Row>
-							<Table.Cell colspan={7} class="py-10 text-center text-sm text-muted-foreground">
-								No projects match “{query}”.
-							</Table.Cell>
-						</Table.Row>
-					{/each}
-				</Table.Body>
-			</Table.Root>
+			<DataTable
+				label={trashView ? 'Deleted projects' : 'Projects'}
+				{rows}
+				{columns}
+				rowId={(row) => row.slug}
+				search={query.trim()}
+				sort={trashView ? { id: 'deleted', desc: true } : { id: 'created', desc: true }}
+				selected={(row) => selected.has(row.slug)}
+				onrows={(next) => {
+					ordered = next;
+					anchor = null;
+				}}
+			/>
 		</div>
 	{/if}
 
@@ -622,3 +566,123 @@
 		</Field.Group>
 	</FormDialog>
 {/if}
+
+{#snippet selectAllHead()}
+	<Checkbox
+		bind:checked={() => allSelected, toggleAll}
+		bind:indeterminate={() => someSelected, () => {}}
+		disabled={ordered.length === 0}
+		aria-label={ordered.length > LIMIT
+			? `Select the first ${LIMIT} projects`
+			: 'Select all projects'}
+	/>
+{/snippet}
+
+{#snippet selectCell(project: Row)}
+	<Checkbox
+		bind:checked={() => selected.has(project.slug), (value) => toggleRow(project.slug, value)}
+		onclick={(event: MouseEvent) => (shiftHeld = event.shiftKey)}
+		onmousedown={(event: MouseEvent) => event.shiftKey && event.preventDefault()}
+		aria-label="Select {project.name}"
+	/>
+{/snippet}
+
+{#snippet nameCell(project: Row)}
+	<div class="flex items-center gap-3">
+		<ProjectMark slug={project.slug} name={project.name} />
+		<div class="min-w-0">
+			{#if trashView}
+				<span class="font-medium">{project.name}</span>
+			{:else}
+				<a
+					href={resolve('/(dashboard)/projects/[slug]', { slug: project.slug })}
+					class="font-medium underline-offset-4 group-hover:underline">{project.name}</a
+				>
+			{/if}
+			<p class="truncate font-mono text-xs text-muted-foreground">
+				{project.slug}.{data.contentDomain}
+			</p>
+		</div>
+	</div>
+{/snippet}
+
+{#snippet runtimeCell(project: Row)}
+	{@const Icon = runtimeIcon(project.runtime)}
+	<span class="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+		<Icon class="size-3.5" />
+		<span class="capitalize">{project.runtime}</span>
+	</span>
+	<p class="font-mono text-xs text-muted-foreground">{project.placement}</p>
+{/snippet}
+
+{#snippet productionCell(project: Row)}
+	{#if project.productionDeploymentId}
+		<StatusBadge status="online" tone="success" label="Live" />
+	{:else}
+		<StatusBadge status="inactive" label="Not deployed" />
+	{/if}
+{/snippet}
+
+{#snippet accessCell(project: Row)}
+	<div class="flex flex-wrap gap-1.5">
+		<AccessChip scope="Prod" mode={project.productionAccess} />
+		<AccessChip scope="Preview" mode={project.previewAccess} />
+	</div>
+{/snippet}
+
+{#snippet createdCell(project: Row)}
+	<time datetime={project.createdAt}>{formatDate(project.createdAt)}</time>
+{/snippet}
+
+{#snippet deletedCell(project: Row)}
+	<time datetime={project.deletedAt}>{formatDate(project.deletedAt)}</time>
+{/snippet}
+
+{#snippet purgeCell(project: Row)}
+	<time datetime={project.purgeAt}>{purgeCountdown(project.purgeAt)}</time>
+{/snippet}
+
+{#snippet actionsCell(project: Row)}
+	{@const href = resolve('/(dashboard)/projects/[slug]', { slug: project.slug })}
+	{#if trashView}
+		{#if data.can.updateProject || purgeInfo}
+			<RowMenu label="Actions for {project.name}">
+				{#if data.can.updateProject}
+					<DropdownMenu.Item onSelect={() => restoreOne(project)}>
+						<RotateCcwIcon />Restore
+					</DropdownMenu.Item>
+				{/if}
+				{#if purgeInfo}
+					<DropdownMenu.Separator />
+					<DropdownMenu.Item
+						variant="destructive"
+						disabled={bulk.busy}
+						onSelect={() => runBulk(purgeInfo, [project.slug])}
+					>
+						<TrashIcon />Delete permanently
+					</DropdownMenu.Item>
+				{/if}
+			</RowMenu>
+		{/if}
+	{:else}
+		<RowMenu label="Actions for {project.name}">
+			<DropdownMenu.Item onSelect={() => goto(href)}>
+				<ArrowRightIcon />Open project
+			</DropdownMenu.Item>
+			<DropdownMenu.Item
+				onSelect={() => window.open(project.productionUrl, '_blank', 'noreferrer')}
+			>
+				<ArrowUpRightIcon />Visit site
+			</DropdownMenu.Item>
+			<DropdownMenu.Item onSelect={() => copy(project.productionUrl)}>
+				<CopyIcon />Copy URL
+			</DropdownMenu.Item>
+			{#if data.can.deleteProject}
+				<DropdownMenu.Separator />
+				<DropdownMenu.Item variant="destructive" onSelect={() => confirmDelete(project)}>
+					<TrashIcon />Delete project
+				</DropdownMenu.Item>
+			{/if}
+		</RowMenu>
+	{/if}
+{/snippet}

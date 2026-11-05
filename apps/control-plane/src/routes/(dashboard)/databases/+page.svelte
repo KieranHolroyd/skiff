@@ -25,7 +25,7 @@
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as InputGroup from '#lib/components/ui/input-group/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
-	import * as Table from '#lib/components/ui/table/index.js';
+	import DataTable, { type DataColumn } from '#lib/components/skiff/DataTable.svelte';
 	import * as Tabs from '#lib/components/ui/tabs/index.js';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
@@ -54,12 +54,91 @@
 
 	const trashView = $derived(data.view === 'trash');
 	const rows = $derived(trashView ? data.trash : data.databases);
-	const filtered = $derived(
-		rows.filter((database) => {
-			const q = query.trim().toLowerCase();
-			return !q || database.name.includes(q) || (database.nodeName ?? '').toLowerCase().includes(q);
-		})
-	);
+	let matched = $state(0);
+
+	type Row = PageProps['data']['databases'][number];
+	const nodeOf = (row: Row) => row.nodeName ?? row.nodeId;
+	const nameColumn: DataColumn<Row> = {
+		id: 'name',
+		header: 'Database',
+		value: (row) => row.name,
+		cell: nameCell,
+		class: 'pl-4'
+	};
+	const actionsColumn: DataColumn<Row> = {
+		id: 'actions',
+		header: '',
+		srHeader: 'Actions',
+		cell: actionsCell,
+		class: 'w-0 pr-4'
+	};
+	const activeColumns: DataColumn<Row>[] = [
+		nameColumn,
+		{ id: 'status', header: 'Status', value: (row) => row.status, cell: statusCell },
+		{
+			id: 'node',
+			header: 'Node',
+			value: nodeOf,
+			cell: nodeCell,
+			class: 'hidden font-mono text-xs md:table-cell'
+		},
+		{
+			id: 'storage',
+			header: 'Storage',
+			value: (row) => row.sizeBytes,
+			searchable: false,
+			descFirst: true,
+			cell: storageCell,
+			class: 'hidden w-48 lg:table-cell'
+		},
+		{
+			id: 'memory',
+			header: 'Memory',
+			value: (row) => row.memoryMb,
+			searchable: false,
+			descFirst: true,
+			cell: memoryCell,
+			class: 'hidden font-mono text-xs tabular-nums md:table-cell'
+		},
+		{
+			id: 'attached',
+			header: 'Attached to',
+			// Searchable by project, not sortable: a list of projects has no natural order.
+			value: (row) => row.attachments.map((item) => item.projectSlug).join(' '),
+			sortable: false,
+			cell: attachedCell,
+			class: 'hidden lg:table-cell'
+		},
+		actionsColumn
+	];
+	const trashColumns: DataColumn<Row>[] = [
+		nameColumn,
+		{
+			id: 'node',
+			header: 'Node',
+			value: nodeOf,
+			cell: nodeCell,
+			class: 'hidden font-mono text-xs text-muted-foreground sm:table-cell'
+		},
+		{
+			id: 'deleted',
+			header: 'Deleted',
+			value: (row) => row.deletedAt,
+			searchable: false,
+			descFirst: true,
+			cell: deletedCell,
+			class: 'hidden font-mono text-xs text-muted-foreground sm:table-cell'
+		},
+		{
+			id: 'purge',
+			header: 'Purge',
+			value: (row) => row.purgeAt,
+			searchable: false,
+			cell: purgeCell,
+			class: 'text-xs text-muted-foreground'
+		},
+		actionsColumn
+	];
 
 	const placementChoices = $derived([
 		{ value: 'auto', label: 'Auto — most free slice budget' },
@@ -233,7 +312,7 @@
 					<InputGroup.Addon><SearchIcon /></InputGroup.Addon>
 					{#if query}
 						<InputGroup.Addon align="inline-end">
-							<InputGroup.Text class="font-mono text-xs">{filtered.length}</InputGroup.Text>
+							<InputGroup.Text class="font-mono text-xs">{matched}</InputGroup.Text>
 						</InputGroup.Addon>
 					{/if}
 				</InputGroup.Root>
@@ -248,150 +327,15 @@
 			</div>
 
 			<div class="overflow-hidden rounded-xl border bg-card shadow-xs">
-				<Table.Root>
-					<Table.Header class="bg-muted/45">
-						<Table.Row>
-							<Table.Head class="pl-4">Database</Table.Head>
-							{#if trashView}
-								<Table.Head class="hidden sm:table-cell">Node</Table.Head>
-								<Table.Head class="hidden sm:table-cell">Deleted</Table.Head>
-								<Table.Head>Purge</Table.Head>
-							{:else}
-								<Table.Head>Status</Table.Head>
-								<Table.Head class="hidden md:table-cell">Node</Table.Head>
-								<Table.Head class="hidden lg:table-cell">Storage</Table.Head>
-								<Table.Head class="hidden md:table-cell">Memory</Table.Head>
-								<Table.Head class="hidden lg:table-cell">Attached to</Table.Head>
-							{/if}
-							<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
-						</Table.Row>
-					</Table.Header>
-					<Table.Body>
-						{#each filtered as database (database.id)}
-							{@const href = resolve('/(dashboard)/databases/[name]', { name: database.name })}
-							<Table.Row class="group">
-								<Table.Cell class="pl-4">
-									<div class="flex items-center gap-3">
-										<span
-											class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
-										>
-											<DatabaseIcon class="size-4" />
-										</span>
-										<div class="min-w-0">
-											<a
-												{href}
-												class="font-mono text-sm font-medium underline-offset-4 group-hover:underline"
-												>{database.name}</a
-											>
-											<p class="text-xs text-muted-foreground">
-												{database.engineLabel}
-												{database.version}
-											</p>
-										</div>
-									</div>
-								</Table.Cell>
-								{#if trashView}
-									<Table.Cell class="hidden font-mono text-xs text-muted-foreground sm:table-cell">
-										{database.nodeName ?? database.nodeId}
-									</Table.Cell>
-									<Table.Cell class="hidden font-mono text-xs text-muted-foreground sm:table-cell">
-										<time datetime={database.deletedAt}>{formatDate(database.deletedAt)}</time>
-									</Table.Cell>
-									<Table.Cell class="text-xs text-muted-foreground">
-										<time datetime={database.purgeAt}>{purgeCountdown(database.purgeAt)}</time>
-									</Table.Cell>
-								{:else}
-									<Table.Cell>
-										<StatusBadge status={database.status} />
-									</Table.Cell>
-									<Table.Cell class="hidden font-mono text-xs md:table-cell">
-										{database.nodeName ?? database.nodeId}
-									</Table.Cell>
-									<Table.Cell class="hidden w-48 lg:table-cell">
-										<StorageMeter
-											sizeBytes={database.sizeBytes}
-											storageMb={database.storageMb}
-											compact
-										/>
-									</Table.Cell>
-									<Table.Cell class="hidden font-mono text-xs tabular-nums md:table-cell">
-										{database.memoryMb} MB
-									</Table.Cell>
-									<Table.Cell class="hidden lg:table-cell">
-										{#if database.attachments.length === 0}
-											<span class="text-xs text-muted-foreground">—</span>
-										{:else}
-											<div class="flex flex-wrap gap-1.5">
-												{#each database.attachments as attachment (attachment.projectId)}
-													<Badge
-														variant="outline"
-														class="font-mono font-normal"
-														href={resolve('/(dashboard)/projects/[slug]', {
-															slug: attachment.projectSlug
-														})}
-														title="{attachment.envPrefix}_URL"
-													>
-														<FolderKanbanIcon />{attachment.projectSlug}
-													</Badge>
-												{/each}
-											</div>
-										{/if}
-									</Table.Cell>
-								{/if}
-								<Table.Cell class="pr-4">
-									{#if trashView}
-										{#if data.dbCan.delete}
-											<RowMenu label="Actions for {database.name}">
-												<DropdownMenu.Item onSelect={() => restore(database.name)}>
-													<RotateCcwIcon />Restore
-												</DropdownMenu.Item>
-												<DropdownMenu.Separator />
-												<DropdownMenu.Item
-													variant="destructive"
-													onSelect={() => purge(database.name)}
-												>
-													<TrashIcon />Delete permanently
-												</DropdownMenu.Item>
-											</RowMenu>
-										{/if}
-									{:else}
-										<RowMenu label="Actions for {database.name}">
-											{#if data.dbCan.update}
-												<DropdownMenu.Item onSelect={() => restartOne(database.name)}>
-													<RotateCcwIcon />Restart
-												</DropdownMenu.Item>
-												<DropdownMenu.Separator />
-											{/if}
-											<DropdownMenu.Item onSelect={() => goto(href)}>
-												<ArrowRightIcon />Open database
-											</DropdownMenu.Item>
-											<DropdownMenu.Item onSelect={() => openSection(href, 'metrics')}>
-												<ActivityIcon />Metrics
-											</DropdownMenu.Item>
-											<DropdownMenu.Item onSelect={() => openSection(href, 'backups')}>
-												<ArchiveIcon />Backups
-											</DropdownMenu.Item>
-											<DropdownMenu.Item
-												onSelect={() =>
-													goto(
-														resolve('/(dashboard)/databases/[name]/logs', { name: database.name })
-													)}
-											>
-												<ScrollTextIcon />Logs
-											</DropdownMenu.Item>
-										</RowMenu>
-									{/if}
-								</Table.Cell>
-							</Table.Row>
-						{:else}
-							<Table.Row>
-								<Table.Cell colspan={7} class="py-10 text-center text-sm text-muted-foreground">
-									No databases match “{query}”.
-								</Table.Cell>
-							</Table.Row>
-						{/each}
-					</Table.Body>
-				</Table.Root>
+				<DataTable
+					label={trashView ? 'Deleted databases' : 'Databases'}
+					{rows}
+					columns={trashView ? trashColumns : activeColumns}
+					rowId={(row) => row.id}
+					search={query.trim()}
+					sort={trashView ? { id: 'deleted', desc: true } : { id: 'name', desc: false }}
+					onmatch={(count) => (matched = count)}
+				/>
 			</div>
 		{/if}
 	{/if}
@@ -558,3 +502,105 @@
 		</Field.Group>
 	</FormDialog>
 {/if}
+
+{#snippet nameCell(database: Row)}
+	<div class="flex items-center gap-3">
+		<span
+			class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
+		>
+			<DatabaseIcon class="size-4" />
+		</span>
+		<div class="min-w-0">
+			<a
+				href={resolve('/(dashboard)/databases/[name]', { name: database.name })}
+				class="font-mono text-sm font-medium underline-offset-4 group-hover:underline"
+				>{database.name}</a
+			>
+			<p class="text-xs text-muted-foreground">{database.engineLabel} {database.version}</p>
+		</div>
+	</div>
+{/snippet}
+
+{#snippet statusCell(database: Row)}
+	<StatusBadge status={database.status} />
+{/snippet}
+
+{#snippet nodeCell(database: Row)}
+	{nodeOf(database)}
+{/snippet}
+
+{#snippet storageCell(database: Row)}
+	<StorageMeter sizeBytes={database.sizeBytes} storageMb={database.storageMb} compact />
+{/snippet}
+
+{#snippet memoryCell(database: Row)}
+	{database.memoryMb} MB
+{/snippet}
+
+{#snippet attachedCell(database: Row)}
+	{#if database.attachments.length === 0}
+		<span class="text-xs text-muted-foreground">—</span>
+	{:else}
+		<div class="flex flex-wrap gap-1.5">
+			{#each database.attachments as attachment (attachment.projectId)}
+				<Badge
+					variant="outline"
+					class="font-mono font-normal"
+					href={resolve('/(dashboard)/projects/[slug]', { slug: attachment.projectSlug })}
+					title="{attachment.envPrefix}_URL"
+				>
+					<FolderKanbanIcon />{attachment.projectSlug}
+				</Badge>
+			{/each}
+		</div>
+	{/if}
+{/snippet}
+
+{#snippet deletedCell(database: Row)}
+	<time datetime={database.deletedAt}>{formatDate(database.deletedAt)}</time>
+{/snippet}
+
+{#snippet purgeCell(database: Row)}
+	<time datetime={database.purgeAt}>{purgeCountdown(database.purgeAt)}</time>
+{/snippet}
+
+{#snippet actionsCell(database: Row)}
+	{@const href = resolve('/(dashboard)/databases/[name]', { name: database.name })}
+	{#if trashView}
+		{#if data.dbCan.delete}
+			<RowMenu label="Actions for {database.name}">
+				<DropdownMenu.Item onSelect={() => restore(database.name)}>
+					<RotateCcwIcon />Restore
+				</DropdownMenu.Item>
+				<DropdownMenu.Separator />
+				<DropdownMenu.Item variant="destructive" onSelect={() => purge(database.name)}>
+					<TrashIcon />Delete permanently
+				</DropdownMenu.Item>
+			</RowMenu>
+		{/if}
+	{:else}
+		<RowMenu label="Actions for {database.name}">
+			{#if data.dbCan.update}
+				<DropdownMenu.Item onSelect={() => restartOne(database.name)}>
+					<RotateCcwIcon />Restart
+				</DropdownMenu.Item>
+				<DropdownMenu.Separator />
+			{/if}
+			<DropdownMenu.Item onSelect={() => goto(href)}>
+				<ArrowRightIcon />Open database
+			</DropdownMenu.Item>
+			<DropdownMenu.Item onSelect={() => openSection(href, 'metrics')}>
+				<ActivityIcon />Metrics
+			</DropdownMenu.Item>
+			<DropdownMenu.Item onSelect={() => openSection(href, 'backups')}>
+				<ArchiveIcon />Backups
+			</DropdownMenu.Item>
+			<DropdownMenu.Item
+				onSelect={() =>
+					goto(resolve('/(dashboard)/databases/[name]/logs', { name: database.name }))}
+			>
+				<ScrollTextIcon />Logs
+			</DropdownMenu.Item>
+		</RowMenu>
+	{/if}
+{/snippet}

@@ -1,5 +1,7 @@
 <script lang="ts">
+	import { browser } from '$app/env';
 	import { invalidateAll } from '$app/navigation';
+	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
 	import InfoIcon from '@lucide/svelte/icons/info';
@@ -7,6 +9,7 @@
 	import type { PlatformConfigOutcome, PlatformConfigStatus } from '@skiff/contracts';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Spinner } from '#lib/components/ui/spinner/index.js';
+	import { fetchJson } from '#lib/query.js';
 	import { formatDateTime } from '../_lib/format.js';
 
 	type StatusView = PlatformConfigStatus & { stale: boolean };
@@ -39,41 +42,39 @@
 		restartPending?: boolean;
 	} = $props();
 
-	let live = $state<Live | null>(null);
-	let reconnecting = $state(false);
+	const queryClient = useQueryClient();
+	/** True from the moment a change is in flight until its result has been loaded. */
+	let following = $state(false);
+	$effect(() => {
+		if (inFlight) following = true;
+	});
+
+	// Failed polls are expected while the control plane restarts: no retries, just keep the
+	// interval going and say we are reconnecting.
+	const poll = createQuery(() => ({
+		queryKey: ['platform-status'] as const,
+		queryFn: ({ signal }) =>
+			fetchJson<Live>('/settings/platform-status', { signal, cache: 'no-store' }),
+		enabled: browser && following,
+		refetchInterval: 1_500,
+		staleTime: 0,
+		retry: false
+	}));
+
+	$effect(() => {
+		if (!following || !poll.data || poll.data.inFlight) return;
+		void invalidateAll().then(() => {
+			following = false;
+			queryClient.removeQueries({ queryKey: ['platform-status'] });
+		});
+	});
+
+	const live = $derived(following ? (poll.data ?? null) : null);
+	const reconnecting = $derived(following && poll.isError);
 	const view = $derived<Live>(live ?? { status, pending, inFlight });
 	const relevant = $derived(
 		view.status && sections.includes(view.status.section ?? view.status.action) ? view.status : null
 	);
-
-	$effect(() => {
-		if (!view.inFlight) return;
-		let stopped = false;
-		let timer: ReturnType<typeof setTimeout>;
-		const tick = async () => {
-			try {
-				const response = await fetch('/settings/platform-status', { cache: 'no-store' });
-				if (!response.ok) throw new Error(String(response.status));
-				const next = (await response.json()) as Live;
-				reconnecting = false;
-				if (stopped) return;
-				live = next;
-				if (!next.inFlight) {
-					await invalidateAll();
-					live = null;
-					return;
-				}
-			} catch {
-				reconnecting = true;
-			}
-			if (!stopped) timer = setTimeout(tick, 1_500);
-		};
-		timer = setTimeout(tick, 1_000);
-		return () => {
-			stopped = true;
-			clearTimeout(timer);
-		};
-	});
 
 	const finished: Record<
 		PlatformConfigOutcome,

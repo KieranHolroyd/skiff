@@ -29,7 +29,7 @@
 	import * as InputGroup from '#lib/components/ui/input-group/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
 	import { Switch } from '#lib/components/ui/switch/index.js';
-	import * as Table from '#lib/components/ui/table/index.js';
+	import DataTable, { type DataColumn } from '#lib/components/skiff/DataTable.svelte';
 	import * as Tabs from '#lib/components/ui/tabs/index.js';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
@@ -60,12 +60,99 @@
 
 	const trashView = $derived(data.view === 'trash');
 	const rows = $derived(trashView ? data.trash : data.instances);
-	const filtered = $derived(
-		rows.filter((item) => {
-			const q = query.trim().toLowerCase();
-			return !q || item.name.includes(q) || (item.nodeName ?? '').toLowerCase().includes(q);
-		})
-	);
+	let matched = $state(0);
+
+	type Row = PageProps['data']['instances'][number];
+	const nodeOf = (row: Row) => row.nodeName ?? row.nodeId;
+	const liveBuckets = (row: Row) =>
+		row.buckets.filter((bucket) => bucket.state !== 'deleting').length;
+	const nameColumn: DataColumn<Row> = {
+		id: 'name',
+		header: 'Instance',
+		value: (row) => row.name,
+		cell: nameCell,
+		class: 'pl-4'
+	};
+	const actionsColumn: DataColumn<Row> = {
+		id: 'actions',
+		header: '',
+		srHeader: 'Actions',
+		cell: actionsCell,
+		class: 'w-0 pr-4'
+	};
+	const activeColumns: DataColumn<Row>[] = [
+		nameColumn,
+		{ id: 'status', header: 'Status', value: (row) => row.status, cell: statusCell },
+		{
+			id: 'access',
+			header: 'Access',
+			value: (row) => (row.public ? 'public' : 'private'),
+			cell: accessCell,
+			class: 'hidden sm:table-cell'
+		},
+		{
+			id: 'node',
+			header: 'Node',
+			value: nodeOf,
+			cell: nodeCell,
+			class: 'hidden font-mono text-xs md:table-cell'
+		},
+		{
+			id: 'used',
+			header: 'Used',
+			value: (row) => row.usedBytes,
+			searchable: false,
+			descFirst: true,
+			cell: usedCell,
+			class: 'hidden w-48 lg:table-cell'
+		},
+		{
+			id: 'buckets',
+			header: 'Buckets',
+			value: liveBuckets,
+			searchable: false,
+			descFirst: true,
+			cell: bucketsCell,
+			class: 'hidden text-right font-mono text-xs tabular-nums md:table-cell'
+		},
+		{
+			id: 'attached',
+			header: 'Attached to',
+			value: (row) => row.attachments.map((item) => item.projectSlug).join(' '),
+			sortable: false,
+			cell: attachedCell,
+			class: 'hidden lg:table-cell'
+		},
+		actionsColumn
+	];
+	const trashColumns: DataColumn<Row>[] = [
+		nameColumn,
+		{
+			id: 'node',
+			header: 'Node',
+			value: nodeOf,
+			cell: nodeCell,
+			class: 'hidden font-mono text-xs text-muted-foreground sm:table-cell'
+		},
+		{
+			id: 'deleted',
+			header: 'Deleted',
+			value: (row) => row.deletedAt,
+			searchable: false,
+			descFirst: true,
+			cell: deletedCell,
+			class: 'hidden font-mono text-xs text-muted-foreground sm:table-cell'
+		},
+		{
+			id: 'purge',
+			header: 'Purge',
+			value: (row) => row.purgeAt,
+			searchable: false,
+			cell: purgeCell,
+			class: 'text-xs text-muted-foreground'
+		},
+		actionsColumn
+	];
 
 	const placementChoices = $derived([
 		{ value: 'auto', label: 'Auto — most free slice budget' },
@@ -239,7 +326,7 @@
 					<InputGroup.Addon><SearchIcon /></InputGroup.Addon>
 					{#if query}
 						<InputGroup.Addon align="inline-end">
-							<InputGroup.Text class="font-mono text-xs">{filtered.length}</InputGroup.Text>
+							<InputGroup.Text class="font-mono text-xs">{matched}</InputGroup.Text>
 						</InputGroup.Addon>
 					{/if}
 				</InputGroup.Root>
@@ -254,157 +341,15 @@
 			</div>
 
 			<div class="overflow-hidden rounded-xl border bg-card shadow-xs">
-				<Table.Root>
-					<Table.Header class="bg-muted/45">
-						<Table.Row>
-							<Table.Head class="pl-4">Instance</Table.Head>
-							{#if trashView}
-								<Table.Head class="hidden sm:table-cell">Node</Table.Head>
-								<Table.Head class="hidden sm:table-cell">Deleted</Table.Head>
-								<Table.Head>Purge</Table.Head>
-							{:else}
-								<Table.Head>Status</Table.Head>
-								<Table.Head class="hidden sm:table-cell">Access</Table.Head>
-								<Table.Head class="hidden md:table-cell">Node</Table.Head>
-								<Table.Head class="hidden lg:table-cell">Used</Table.Head>
-								<Table.Head class="hidden text-right md:table-cell">Buckets</Table.Head>
-								<Table.Head class="hidden lg:table-cell">Attached to</Table.Head>
-							{/if}
-							<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
-						</Table.Row>
-					</Table.Header>
-					<Table.Body>
-						{#each filtered as item (item.id)}
-							{@const href = resolve('/(dashboard)/storage/[name]', { name: item.name })}
-							<Table.Row class="group">
-								<Table.Cell class="pl-4">
-									<div class="flex items-center gap-3">
-										<span
-											class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
-										>
-											<CylinderIcon class="size-4" />
-										</span>
-										<div class="min-w-0">
-											<a
-												{href}
-												class="font-mono text-sm font-medium underline-offset-4 group-hover:underline"
-												>{item.name}</a
-											>
-											<p class="text-xs text-muted-foreground">
-												{item.engineLabel}
-												{item.version}
-											</p>
-										</div>
-									</div>
-								</Table.Cell>
-								{#if trashView}
-									<Table.Cell class="hidden font-mono text-xs text-muted-foreground sm:table-cell">
-										{item.nodeName ?? item.nodeId}
-									</Table.Cell>
-									<Table.Cell class="hidden font-mono text-xs text-muted-foreground sm:table-cell">
-										<time datetime={item.deletedAt}>{formatDate(item.deletedAt)}</time>
-									</Table.Cell>
-									<Table.Cell class="text-xs text-muted-foreground">
-										<time datetime={item.purgeAt}>{purgeCountdown(item.purgeAt)}</time>
-									</Table.Cell>
-								{:else}
-									<Table.Cell>
-										<StatusBadge status={item.status} />
-									</Table.Cell>
-									<Table.Cell class="hidden sm:table-cell">
-										{#if item.public}
-											<Badge variant="info" title={item.publicUrl ?? undefined}>
-												<EarthIcon />Public
-											</Badge>
-										{:else}
-											<Badge variant="outline"><LockIcon />Private</Badge>
-										{/if}
-									</Table.Cell>
-									<Table.Cell class="hidden font-mono text-xs md:table-cell">
-										{item.nodeName ?? item.nodeId}
-									</Table.Cell>
-									<Table.Cell class="hidden w-48 lg:table-cell">
-										<StorageMeter sizeBytes={item.usedBytes} storageMb={item.storageMb} compact />
-									</Table.Cell>
-									<Table.Cell
-										class="hidden text-right font-mono text-xs tabular-nums md:table-cell"
-									>
-										{item.buckets.filter((bucket) => bucket.state !== 'deleting').length}
-									</Table.Cell>
-									<Table.Cell class="hidden lg:table-cell">
-										{#if item.attachments.length === 0}
-											<span class="text-xs text-muted-foreground">—</span>
-										{:else}
-											<div class="flex flex-wrap gap-1.5">
-												{#each item.attachments as attachment (attachment.projectId)}
-													<Badge
-														variant="outline"
-														class="font-mono font-normal"
-														href={resolve('/(dashboard)/projects/[slug]', {
-															slug: attachment.projectSlug
-														})}
-														title="{attachment.envPrefix}_* · {attachment.grants
-															.length} bucket grants"
-													>
-														<FolderKanbanIcon />{attachment.projectSlug}
-													</Badge>
-												{/each}
-											</div>
-										{/if}
-									</Table.Cell>
-								{/if}
-								<Table.Cell class="pr-4">
-									{#if trashView}
-										{#if data.storageCan.delete}
-											<RowMenu label="Actions for {item.name}">
-												<DropdownMenu.Item onSelect={() => restore(item.name)}>
-													<RotateCcwIcon />Restore
-												</DropdownMenu.Item>
-												<DropdownMenu.Separator />
-												<DropdownMenu.Item variant="destructive" onSelect={() => purge(item.name)}>
-													<TrashIcon />Delete permanently
-												</DropdownMenu.Item>
-											</RowMenu>
-										{/if}
-									{:else}
-										<RowMenu label="Actions for {item.name}">
-											{#if data.storageCan.update}
-												<DropdownMenu.Item onSelect={() => restartOne(item.name)}>
-													<RotateCcwIcon />Restart
-												</DropdownMenu.Item>
-												<DropdownMenu.Separator />
-											{/if}
-											<DropdownMenu.Item onSelect={() => goto(href)}>
-												<ArrowRightIcon />Open storage
-											</DropdownMenu.Item>
-											<DropdownMenu.Item onSelect={() => openSection(href, 'buckets')}>
-												<ArchiveIcon />Buckets
-											</DropdownMenu.Item>
-											<DropdownMenu.Item
-												onSelect={() =>
-													goto(resolve('/(dashboard)/storage/[name]/objects', { name: item.name }))}
-											>
-												<FolderOpenIcon />Browse objects
-											</DropdownMenu.Item>
-											<DropdownMenu.Item
-												onSelect={() =>
-													goto(resolve('/(dashboard)/storage/[name]/logs', { name: item.name }))}
-											>
-												<ScrollTextIcon />Logs
-											</DropdownMenu.Item>
-										</RowMenu>
-									{/if}
-								</Table.Cell>
-							</Table.Row>
-						{:else}
-							<Table.Row>
-								<Table.Cell colspan={8} class="py-10 text-center text-sm text-muted-foreground">
-									No storage matches “{query}”.
-								</Table.Cell>
-							</Table.Row>
-						{/each}
-					</Table.Body>
-				</Table.Root>
+				<DataTable
+					label={trashView ? 'Deleted storage' : 'Object storage'}
+					{rows}
+					columns={trashView ? trashColumns : activeColumns}
+					rowId={(row) => row.id}
+					search={query.trim()}
+					sort={trashView ? { id: 'deleted', desc: true } : { id: 'name', desc: false }}
+					onmatch={(count) => (matched = count)}
+				/>
 			</div>
 		{/if}
 	{/if}
@@ -637,3 +582,114 @@
 		</Field.Group>
 	</FormDialog>
 {/if}
+
+{#snippet nameCell(item: Row)}
+	<div class="flex items-center gap-3">
+		<span
+			class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
+		>
+			<CylinderIcon class="size-4" />
+		</span>
+		<div class="min-w-0">
+			<a
+				href={resolve('/(dashboard)/storage/[name]', { name: item.name })}
+				class="font-mono text-sm font-medium underline-offset-4 group-hover:underline"
+				>{item.name}</a
+			>
+			<p class="text-xs text-muted-foreground">{item.engineLabel} {item.version}</p>
+		</div>
+	</div>
+{/snippet}
+
+{#snippet statusCell(item: Row)}
+	<StatusBadge status={item.status} />
+{/snippet}
+
+{#snippet accessCell(item: Row)}
+	{#if item.public}
+		<Badge variant="info" title={item.publicUrl ?? undefined}><EarthIcon />Public</Badge>
+	{:else}
+		<Badge variant="outline"><LockIcon />Private</Badge>
+	{/if}
+{/snippet}
+
+{#snippet nodeCell(item: Row)}
+	{nodeOf(item)}
+{/snippet}
+
+{#snippet usedCell(item: Row)}
+	<StorageMeter sizeBytes={item.usedBytes} storageMb={item.storageMb} compact />
+{/snippet}
+
+{#snippet bucketsCell(item: Row)}
+	{liveBuckets(item)}
+{/snippet}
+
+{#snippet attachedCell(item: Row)}
+	{#if item.attachments.length === 0}
+		<span class="text-xs text-muted-foreground">—</span>
+	{:else}
+		<div class="flex flex-wrap gap-1.5">
+			{#each item.attachments as attachment (attachment.projectId)}
+				<Badge
+					variant="outline"
+					class="font-mono font-normal"
+					href={resolve('/(dashboard)/projects/[slug]', { slug: attachment.projectSlug })}
+					title="{attachment.envPrefix}_* · {attachment.grants.length} bucket grants"
+				>
+					<FolderKanbanIcon />{attachment.projectSlug}
+				</Badge>
+			{/each}
+		</div>
+	{/if}
+{/snippet}
+
+{#snippet deletedCell(item: Row)}
+	<time datetime={item.deletedAt}>{formatDate(item.deletedAt)}</time>
+{/snippet}
+
+{#snippet purgeCell(item: Row)}
+	<time datetime={item.purgeAt}>{purgeCountdown(item.purgeAt)}</time>
+{/snippet}
+
+{#snippet actionsCell(item: Row)}
+	{@const href = resolve('/(dashboard)/storage/[name]', { name: item.name })}
+	{#if trashView}
+		{#if data.storageCan.delete}
+			<RowMenu label="Actions for {item.name}">
+				<DropdownMenu.Item onSelect={() => restore(item.name)}>
+					<RotateCcwIcon />Restore
+				</DropdownMenu.Item>
+				<DropdownMenu.Separator />
+				<DropdownMenu.Item variant="destructive" onSelect={() => purge(item.name)}>
+					<TrashIcon />Delete permanently
+				</DropdownMenu.Item>
+			</RowMenu>
+		{/if}
+	{:else}
+		<RowMenu label="Actions for {item.name}">
+			{#if data.storageCan.update}
+				<DropdownMenu.Item onSelect={() => restartOne(item.name)}>
+					<RotateCcwIcon />Restart
+				</DropdownMenu.Item>
+				<DropdownMenu.Separator />
+			{/if}
+			<DropdownMenu.Item onSelect={() => goto(href)}>
+				<ArrowRightIcon />Open storage
+			</DropdownMenu.Item>
+			<DropdownMenu.Item onSelect={() => openSection(href, 'buckets')}>
+				<ArchiveIcon />Buckets
+			</DropdownMenu.Item>
+			<DropdownMenu.Item
+				onSelect={() => goto(resolve('/(dashboard)/storage/[name]/objects', { name: item.name }))}
+			>
+				<FolderOpenIcon />Browse objects
+			</DropdownMenu.Item>
+			<DropdownMenu.Item
+				onSelect={() => goto(resolve('/(dashboard)/storage/[name]/logs', { name: item.name }))}
+			>
+				<ScrollTextIcon />Logs
+			</DropdownMenu.Item>
+		</RowMenu>
+	{/if}
+{/snippet}

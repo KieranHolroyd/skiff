@@ -2,6 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
+	import { QueryClientProvider } from '@tanstack/svelte-query';
 	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
 	import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
 	import CylinderIcon from '@lucide/svelte/icons/cylinder';
@@ -28,9 +29,13 @@
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import { Separator } from '#lib/components/ui/separator/index.js';
 	import * as Sidebar from '#lib/components/ui/sidebar/index.js';
+	import { createDashboardQueryClient } from '#lib/query.js';
 	import type { LayoutProps } from './$types';
 
 	let { data, children }: LayoutProps = $props();
+
+	/** Client-side reads (tails, polled status, lazily loaded files); see `#lib/query`. */
+	const queryClient = createDashboardQueryClient();
 
 	type NavItem = {
 		label: string;
@@ -329,7 +334,9 @@
 		{/if}
 
 		<main class="mx-auto w-full max-w-[1320px] flex-1 px-4 py-6 md:px-8 md:py-8">
-			{@render children()}
+			<QueryClientProvider client={queryClient}>
+				{@render children()}
+			</QueryClientProvider>
 		</main>
 
 		<footer class="px-4 py-5 text-xs text-muted-foreground md:px-8">

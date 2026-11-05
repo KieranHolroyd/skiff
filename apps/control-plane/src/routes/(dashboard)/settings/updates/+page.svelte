@@ -1,6 +1,8 @@
 <script lang="ts">
+	import { browser } from '$app/env';
 	import { enhance } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
+	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import ArchiveIcon from '@lucide/svelte/icons/archive';
 	import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
 	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
@@ -24,6 +26,7 @@
 	import Notice from '#lib/components/skiff/Notice.svelte';
 	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
 	import type { Tone } from '#lib/status.js';
+	import { fetchJson } from '#lib/query.js';
 	import Panel from '../../_lib/Panel.svelte';
 	import { formatDateTime } from '../../_lib/format.js';
 	import UpdateLog from './UpdateLog.svelte';
@@ -41,9 +44,38 @@
 	let { data, form }: PageProps = $props();
 	const result = $derived(form as { success?: string; message?: string } | null);
 
+	const queryClient = useQueryClient();
+	/** True from the moment an update is queued until the finished state has been loaded. */
+	let following = $state(false);
+	$effect(() => {
+		if (data.inFlight) following = true;
+	});
+
+	// The control plane restarts near the end, so failed polls are expected for a few seconds:
+	// no retries, keep the interval going, and say we are reconnecting.
+	const poll = createQuery(() => ({
+		queryKey: ['self-update-status'] as const,
+		queryFn: ({ signal }) =>
+			fetchJson<Live>('/settings/updates/status', { signal, cache: 'no-store' }),
+		enabled: browser && following,
+		refetchInterval: 1_000,
+		staleTime: 0,
+		retry: false
+	}));
+
+	$effect(() => {
+		const next = poll.data;
+		if (!following || !next) return;
+		if (next.inFlight && next.version === data.comparison.current) return;
+		void invalidateAll().then(() => {
+			following = false;
+			queryClient.removeQueries({ queryKey: ['self-update-status'] });
+		});
+	});
+
 	/** Fresh state from the status endpoint while an update runs; null = use the page data. */
-	let live = $state<Live | null>(null);
-	let reconnecting = $state(false);
+	const live = $derived(following ? (poll.data ?? null) : null);
+	const reconnecting = $derived(following && poll.isError);
 	let checking = $state(false);
 	let requesting = $state(false);
 
@@ -95,37 +127,6 @@
 		'rolled-back': { label: 'Rolled back', tone: 'warning' },
 		error: { label: 'Failed', tone: 'danger' }
 	};
-
-	// Poll while an update is queued or running. The control plane restarts near the end, so
-	// failed polls are expected for a few seconds; keep going and say we are reconnecting.
-	$effect(() => {
-		if (!running) return;
-		let stopped = false;
-		let timer: ReturnType<typeof setTimeout>;
-		const tick = async () => {
-			try {
-				const response = await fetch('/settings/updates/status', { cache: 'no-store' });
-				if (!response.ok) throw new Error(String(response.status));
-				const next = (await response.json()) as Live;
-				reconnecting = false;
-				if (stopped) return;
-				live = next;
-				if (!next.inFlight || next.version !== data.comparison.current) {
-					await invalidateAll();
-					live = null;
-					return;
-				}
-			} catch {
-				reconnecting = true;
-			}
-			if (!stopped) timer = setTimeout(tick, 1_000);
-		};
-		timer = setTimeout(tick, 800);
-		return () => {
-			stopped = true;
-			clearTimeout(timer);
-		};
-	});
 
 	function confirmUpdate(event: MouseEvent) {
 		const target = data.comparison.latest;

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { createVirtualizer } from '@tanstack/svelte-virtual';
 	import type { DeploymentView, ProjectView } from '@skiff/core';
 	import type { BuildView, LogEventView, LogLevel } from '@skiff/contracts';
 	import ActivityIcon from '@lucide/svelte/icons/activity';
@@ -14,7 +15,7 @@
 	import TrashIcon from '@lucide/svelte/icons/trash';
 	import WifiIcon from '@lucide/svelte/icons/wifi';
 	import WifiOffIcon from '@lucide/svelte/icons/wifi-off';
-	import { tick } from 'svelte';
+	import { tick, untrack } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
@@ -139,12 +140,35 @@
 		return () => closeStream();
 	});
 
+	// Only the rows on screen are in the DOM, so a 4,000-line build log scrolls like a short one.
+	const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>({
+		count: 0,
+		getScrollElement: () => viewport,
+		estimateSize: () => 20,
+		overscan: 24,
+		paddingStart: 4,
+		paddingEnd: 4
+	});
+
+	// `setOptions` writes the store, so it must not be read reactively here or the effect loops.
+	$effect(() => {
+		const rows = filtered;
+		const element = viewport;
+		untrack(() =>
+			$virtualizer.setOptions({
+				count: rows.length,
+				getScrollElement: () => element,
+				getItemKey: (index) => rows[index]?.seq ?? index
+			})
+		);
+	});
+
 	$effect(() => {
 		// Depend on the visible list so a filtered append still reaches the bottom.
 		const size = filtered.length;
 		if (!autoScroll || !viewport || size === 0) return;
 		void tick().then(() => {
-			if (viewport && autoScroll) viewport.scrollTop = viewport.scrollHeight;
+			if (autoScroll) untrack(() => $virtualizer.scrollToIndex(size - 1, { align: 'end' }));
 		});
 	});
 
@@ -156,6 +180,7 @@
 		buildStatus = null;
 		phase = 'connecting';
 		paused = false;
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- a throwaway query builder, not state
 		const params = new URLSearchParams({ source: nextSource });
 		if (nextSource === 'build') params.set('buildId', nextBuild);
 		else if (nextDeployment) params.set('deploymentId', nextDeployment);
@@ -242,7 +267,7 @@
 
 	function scrollToBottom(): void {
 		autoScroll = true;
-		if (viewport) viewport.scrollTop = viewport.scrollHeight;
+		if (filtered.length > 0) $virtualizer.scrollToIndex(filtered.length - 1, { align: 'end' });
 	}
 
 	function download(): void {
@@ -542,10 +567,14 @@
 						{/if}
 					</div>
 				{:else}
-					<div class="py-1">
-						{#each filtered as event (event.seq)}
+					<div class="relative w-full" style="height: {$virtualizer.getTotalSize()}px">
+						{#each $virtualizer.getVirtualItems() as row (row.key)}
+							{@const event = filtered[row.index]!}
 							<div
-								class="group grid grid-cols-[6.7rem_0.55rem_minmax(0,1fr)] items-start gap-x-3 px-4 py-0.5 hover:bg-muted"
+								data-index={row.index}
+								{@attach (node) => untrack(() => $virtualizer.measureElement(node))}
+								class="group absolute top-0 left-0 grid w-full grid-cols-[6.7rem_0.55rem_minmax(0,1fr)] items-start gap-x-3 px-4 py-0.5 hover:bg-muted"
+								style="transform: translateY({row.start}px)"
 							>
 								<span class="pt-px text-muted-foreground tabular-nums select-none">
 									{clock(event.ts)}

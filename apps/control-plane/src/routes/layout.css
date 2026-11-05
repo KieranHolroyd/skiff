@@ -162,3 +162,35 @@
 		@apply bg-background text-foreground;
 	}
 }
+
+/* TanStack Charts: series palette, type and tooltip surface follow the dashboard theme. The
+   tooltip class repeats the tokens because a portalled tooltip can end up directly under <body>. */
+.ts-chart-host,
+.skiff-chart-tooltip {
+	--ts-chart-1: var(--chart-1);
+	--ts-chart-2: var(--chart-2);
+	--ts-chart-3: var(--chart-3);
+	--ts-chart-4: var(--chart-4);
+	--ts-chart-5: var(--chart-5);
+	--ts-chart-tooltip-background: var(--popover);
+	--ts-chart-tooltip-color: var(--popover-foreground);
+	--ts-chart-tooltip-border: 1px solid var(--border);
+	--ts-chart-tooltip-border-radius: var(--radius-md);
+	--ts-chart-tooltip-shadow: 0 4px 12px rgb(0 0 0 / 0.12);
+	--ts-chart-tooltip-padding: 0.375rem 0.5rem;
+	--ts-chart-tooltip-font: 500 0.75rem/1.35 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
+	--ts-chart-tooltip-active-row-background: transparent;
+	--ts-chart-tooltip-active-row-shadow: none;
+	--ts-chart-tooltip-active-row-font-weight: 500;
+	--ts-chart-tooltip-max-width: 20rem;
+	font-variant-numeric: tabular-nums;
+}
+.skiff-chart-tooltip {
+	white-space: nowrap;
+}
+.ts-chart-host:focus-visible,
+.ts-chart-host :focus-visible {
+	outline: 2px solid var(--ring);
+	outline-offset: 2px;
+	border-radius: var(--radius-sm);
+}
