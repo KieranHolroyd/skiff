@@ -26,7 +26,7 @@
  *   --no-agent                install the control plane only
  *   --version <label>         release label (default: the repository VERSION file)
  */
-import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { randomBytes } from 'node:crypto';
@@ -37,6 +37,12 @@ import { CONFIG_COMMAND, CONFIG_PATH_UNIT, CONFIG_SERVICE_UNIT, ensurePlatformCo
 import { readEnvFile, writeEnvFile } from './env-file.ts';
 import { BUILDER_UNIT, ensureBuilder, linkAgentCommands } from '../systemd/builder.ts';
 import { ensureStorageUnits, STORAGE_PATH_UNIT } from '../systemd/storage.ts';
+import {
+	createUpgradeSnapshotBundle,
+	pruneUpgradeSnapshotBundles,
+	readDesiredStateVersion,
+	retireUpgradeSnapshotBundles
+} from '../../packages/core/src/upgrade-plan.ts';
 
 const SOURCE = process.env.SKIFF_SOURCE_DIR ? resolve(process.env.SKIFF_SOURCE_DIR) : resolve(import.meta.dir, '../..');
 const OPT_DIR = process.env.SKIFF_OPT_DIR ?? '/opt/skiff';
@@ -63,6 +69,28 @@ function sourceVersion(): string {
 		console.warn(`warning: no VERSION file in ${SOURCE}; using 0.0.0`);
 	}
 	return '0.0.0';
+}
+
+/** Version from an existing release's meta.json, or null for a first install. */
+function releaseVersion(release: string | null): string | null {
+	if (!release) return null;
+	try {
+		const meta = JSON.parse(readFileSync(join(release, 'meta.json'), 'utf8')) as { version?: unknown };
+		return typeof meta.version === 'string' ? meta.version : null;
+	} catch {
+		return null;
+	}
+}
+
+/** Migration file names in the target/source tree, recorded in the pre-upgrade bundle. */
+function migrationIds(root: string): string[] {
+	try {
+		return readdirSync(join(root, 'packages', 'db', 'migrations'))
+			.filter((name) => /^\d{4}_.*\.sql$/.test(name))
+			.sort();
+	} catch {
+		return [];
+	}
 }
 
 const color = {
@@ -825,6 +853,30 @@ function startServices(): void {
 	run('systemctl', ['enable', '--now', TRIGGER_PATH_UNIT], { allowFailure: true });
 	run('systemctl', ['restart', 'skiff-control-plane.service']);
 	waitFor('control plane socket', () => existsSync(join(RUN_DIR, 'control.sock')), 90_000);
+	waitFor(
+		'control plane /readyz',
+		() =>
+			Bun.spawnSync({
+				cmd: [
+					'curl',
+					'-fsS',
+					'--max-time',
+					'10',
+					'--unix-socket',
+					join(RUN_DIR, 'control.sock'),
+					'-H',
+					'Host: localhost',
+					'-H',
+					'X-Forwarded-Proto: https',
+					'-H',
+					'X-Forwarded-Host: localhost',
+					'http://localhost/readyz'
+				],
+				stdout: 'pipe',
+				stderr: 'pipe'
+			}).exitCode === 0,
+		60_000
+	);
 	patchCaddyfilePlatform();
 	if (!options.noAgent && existsSync(AGENT_ENV_FILE)) {
 		run('systemctl', ['enable', 'skiff-agent.service']);
@@ -1017,6 +1069,7 @@ function rollback(previous: string | null, snapshot: string | null, previousLink
 		rmSync(`${target}-wal`, { force: true });
 		rmSync(`${target}-shm`, { force: true });
 		copyFileSync(snapshot, target);
+		run('chown', ['skiff:skiff', target], { allowFailure: true });
 		console.error(color.yellow(`restored database snapshot ${snapshot}`));
 	}
 	if (previous) {
@@ -1051,15 +1104,32 @@ async function install(): Promise<void> {
 		? capture('readlink', ['-f', join(OPT_DIR, 'previous')])
 		: null;
 	let snapshot: string | null = null;
+	let snapshotBundle: string | null = null;
 	let release: string | null = null;
 	try {
 		// Any re-run against an existing database (with or without --upgrade) may apply
-		// migrations, so always take a snapshot the rollback can restore.
+		// migrations, so always take a sealed bundle the rollback/operator can restore.
 		if (existsSync(join(VAR_DIR, 'data', 'skiff.db'))) {
-			step('Snapshot SQLite');
-			snapshot = join(VAR_DIR, 'backups', `pre-${options.upgrade ? 'upgrade' : 'install'}-${Date.now()}.db`);
-			if (!options.dryRun) snapshotDatabase(join(VAR_DIR, 'data', 'skiff.db'), snapshot);
-			log(snapshot);
+			step('Upgrade snapshot');
+			if (options.dryRun) {
+				log(`would seal a pre-upgrade bundle in ${join(VAR_DIR, 'backups')}`);
+			} else {
+				const bundle = createUpgradeSnapshotBundle({
+					backupsDir: join(VAR_DIR, 'backups'),
+					dbPath: join(VAR_DIR, 'data', 'skiff.db'),
+					dataDir: join(VAR_DIR, 'data'),
+					envDir: ETC_DIR,
+					fromVersion: releaseVersion(previousRelease),
+					targetVersion: options.version,
+					migrations: migrationIds(SOURCE),
+					desiredStateVersion: readDesiredStateVersion(join(VAR_DIR, 'data', 'skiff.db')),
+					pinned: true,
+					retain: 3
+				});
+				snapshot = bundle.controlDb;
+				snapshotBundle = bundle.dir;
+				log(`${bundle.dir}${bundle.controlDb ? '' : ' (no control DB)'}`);
+			}
 		}
 		release = buildRelease(env);
 		switchCurrent(release);
@@ -1075,6 +1145,10 @@ async function install(): Promise<void> {
 			publicHealth(env);
 		}
 		requestMagicLink(env);
+		if (!options.dryRun && snapshotBundle) {
+			retireUpgradeSnapshotBundles(join(VAR_DIR, 'backups'), snapshotBundle);
+			pruneUpgradeSnapshotBundles(join(VAR_DIR, 'backups'), { keep: 3, protect: [snapshotBundle] });
+		}
 		step('Installed');
 		console.log(`${color.green('Skiff is installed.')} Platform: ${env.get('SKIFF_PLATFORM_ORIGIN')}`);
 		console.log(`Logs: ${color.dim('journalctl -u skiff-control-plane -u skiff-agent -f')}`);

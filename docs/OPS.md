@@ -73,6 +73,7 @@ root:skiff`.
 | `SKIFF_AGENT_SOCKET` | `/run/skiff/agent.sock` | no | Agent unix socket (`forward_auth` and local control-plane calls). |
 | `SKIFF_CADDY_ADMIN_SOCKET` | `/var/lib/caddy/admin.sock` | no | Caddy admin unix socket. |
 | `SKIFF_AGENT_VERSION` | empty | no | Optional desired agent version; normally set by the control plane. |
+| `SKIFF_RELEASE_CHANNEL` | `stable` | no | `stable` or `edge`. Edge is reported as a preflight warning (shorter support window). |
 | `SKIFF_EDGE_NODE_ID` | empty | no | Node identity for single-node mode. |
 | `SKIFF_CONTROL_URL` | — | no | Agent only (`/etc/skiff/agent.env`): control-plane origin, `http(s)://…`. |
 | `SKIFF_NODE_ID` | — | no | Agent only: node id from `skiff-agent join`. |
@@ -174,6 +175,7 @@ the default below, so a typo cannot turn a destructive feature on. Change a flag
 | `SKIFF_FEATURE_PREVIEW_DATA` | off | automation | Clone database and bucket data into previews (can copy production data). |
 | `SKIFF_FEATURE_AGENT_DATA_WRITE` | off | agents | Let MCP/agent tools mutate user data instead of read-only access. |
 | `SKIFF_FEATURE_QUOTAS` | **on** | platform | Enforce per-org project, storage and upload quotas. Set `0` only to lift limits temporarily. |
+| `SKIFF_FEATURE_UPGRADE_ROLLBACK` | off | platform | Reserved for dashboard-triggered automatic rollback after `/readyz` fails. The CLI updater rollback path is the tested default. |
 | `SKIFF_FEATURE_BLUEPRINTS` | off | automation | Plan and apply `skiff.yaml` blueprints, including `--prune`. |
 | `SKIFF_FEATURE_MEDIA` | off | storage | Image/video uploads, transforms and delivery. |
 
@@ -289,9 +291,10 @@ curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/skiff/main/install.sh
 
 The installer is the updater. On an existing install it:
 
-1. Snapshots SQLite to `/var/lib/skiff/backups/pre-upgrade-<UTC>.db` with
-   `sqlite3 .backup` whenever `skiff.db` exists (with or without `--upgrade`). Settings
-   not given as flags are kept from the existing `skiff.env`.
+1. Writes a sealed pre-upgrade bundle to `/var/lib/skiff/backups/upgrade-<UTC>-v<version>/`
+   (control SQLite, `.env`, `AGENT.env`, master key and platform settings), whenever `skiff.db`
+   exists (with or without `--upgrade`). Settings not given as flags are kept from the existing
+   `skiff.env`.
 2. Stops the control plane, agent and Caddy (sites are briefly unavailable on the edge;
    homelab-placed projects with cached state keep serving).
 3. Downloads the source tarball, builds the release on the host, then atomically repoints
@@ -324,6 +327,7 @@ Litestream is current.
 ```sh
 sudo skiff-update-self              # install the newer VERSION, if any (rolls back on failure)
 sudo skiff-update-self check        # running vs latest version; changes nothing
+sudo skiff-update-self plan         # preflight without changing anything (disk, target, migrations)
 sudo skiff-update-self --dry-run    # show the commit and the plan
 sudo skiff-update-self status       # current / previous / last switch / failed commits
 sudo skiff-update-self rollback     # back to previous; run again to undo the rollback
@@ -377,9 +381,9 @@ a known-good control plane serving at every step:
    SMTP, alerts, R2 and backups are stripped from the canary's environment. If it does not
    answer `/api/setup/status` and render `/login`, the release is deleted and the commit is
    remembered as failed (skipped until `--force`).
-3. **Swap.** Stop the control plane, snapshot SQLite to
-   `/var/lib/skiff/backups/pre-update-<release>.db`, repoint `previous` → old release, then
-   `current` → new release (each an atomic rename), start.
+3. **Swap.** Stop the control plane, write a sealed upgrade bundle under
+   `/var/lib/skiff/backups/upgrade-<UTC>-v<version>/` (control DB + env/APP_KEY + versions),
+   repoint `previous` → old release, then `current` → new release (each an atomic rename), start.
 4. **Verify.** The socket must answer health checks, then stay up without crash-restarts for
    10 s. If the public URL answered before the update, it must answer after
    (`--require-public` / `--no-public-check` to override).
@@ -480,9 +484,9 @@ with `--strict` to make those fail. CI runs it as its own step on every PR and p
 
 **Pre-update snapshot**
 
-The installer and self-updater already snapshot the control DB before running migrations
-(`/var/lib/skiff/backups/pre-upgrade-<UTC>.db` or `pre-update-<release>.db`). Before a manual
-migration or a hand-run restore, take the same three things:
+The installer and self-updater write a sealed bundle before running migrations
+(`/var/lib/skiff/backups/upgrade-<UTC>-v<version>/`, §4.2.4). Before a manual migration or a
+hand-run restore, take the same three things:
 
 | State | What to keep | Why |
 |---|---|---|
@@ -510,6 +514,113 @@ DB. They do not replace an infrastructure snapshot of managed data, and they nev
    nothing in this protocol makes a destructive data restore happen on its own.
 6. Record the incident and the snapshot names in the audit/ops log. A schema downgrade without a
    snapshot is not a supported rollback path.
+
+### 4.2.3 Readiness (`/readyz`)
+
+`GET /readyz` is the public health document used by the updater and by load balancers. It never
+contains secrets:
+
+```json
+{
+  "ok": true,
+  "status": "ok",
+  "version": "1.4.0",
+  "schema": { "latest": "0017_scheduler.sql", "expected": "0017_scheduler.sql", "applied": 17, "pending": [] },
+  "agent": { "desiredVersion": "1.4.0", "nodes": [{ "id": "nod_…", "name": "edge", "version": "1.4.0" }] },
+  "dataDirs": [{ "name": "data", "path": "/var/lib/skiff/data", "exists": true, "writable": true }],
+  "disk": { "freeBytes": 18446744073, "requiredBytes": 2097152, "headroom": true },
+  "backupTarget": { "kind": "r2", "reachable": true, "checkedAt": "…" },
+  "helper": { "version": "1.4.0" }
+}
+```
+
+It answers **200** while the control plane can serve. It answers **503** when the database or
+schema is not usable, a data directory is missing, or migrations the running release ships are
+pending; that is the signal the self-updater uses before it keeps a new release. An unreachable
+backup target or low disk is reported as `degraded` but does not take a serving platform down
+(upgrades are refused instead).
+
+```sh
+curl -fsS --unix-socket /run/skiff/control.sock http://localhost/readyz | jq
+```
+
+### 4.2.4 Upgrade preflight and sealed snapshots
+
+`UpgradeService.preflight()` (and `sudo skiff-update-self plan`, or **Settings → Updates**) refuses
+an upgrade when it cannot be undone:
+
+| Check | Refusal |
+|---|---|
+| Backup target | unreachable: fix Settings → Backups / `SKIFF_OBJECT_STORE` / `R2_*` first |
+| Disk | less than **2×** the control DB size free for the snapshot |
+| Data dirs | `data`, `objects` or `backups` missing or not writable |
+| Migrations | a destructive `DROP TABLE` / `DROP COLUMN` / `ALTER COLUMN TYPE` without explicit approval, or an applied migration the target does not ship (a downgrade) |
+| PostgreSQL | any managed database major-version change; use `skif db upgrade` |
+| Release | target older than the running version (`--force` turns this into a warning) |
+
+Before the release switch the updater writes a sealed bundle under
+`/var/lib/skiff/backups/upgrade-<UTC>-v<version>/`:
+
+```
+manifest.json          # versions, migration ids, sha256 per file, pinned flag
+db/control.db          # VACUUM INTO snapshot of the control SQLite
+config/skiff.env       # 0600/0400, includes APP_KEY/master key
+config/agent.env
+config/master.key
+config/platform-settings.json
+```
+
+The directory is `0700` and every file is `0600` (the master key is `0400`); only root can read it.
+`sudo skiff-update-self status` lists the retained bundles and `sudo cp -a` is the download path;
+the dashboard shows the count it can inspect. The pre-update bundle is **pinned until the next
+successful upgrade**, and the last three successful bundles are retained. A failed update keeps
+its bundle for inspection.
+
+Restoring a bundle is always a human decision:
+
+```sh
+sudo systemctl stop skiff-control-plane
+sudo cp /var/lib/skiff/backups/upgrade-…/db/control.db /var/lib/skiff/data/skiff.db
+sudo chown skiff:skiff /var/lib/skiff/data/skiff.db
+# Only from the same point in time, and only if the master key changed:
+sudo cp /var/lib/skiff/backups/upgrade-…/config/master.key /etc/skiff/master.key
+sudo systemctl start skiff-control-plane
+```
+
+Managed database rows, buckets, app volumes and release artifacts are **not** in this bundle and
+are never restored automatically.
+
+The self-updater runs: `preflight → sealed snapshot → release switch → /readyz + health smoke →
+automatic control-plane rollback`. The automatic rollback covers the release symlink, the control
+SQLite and the services. It does **not** restore `.env`/APP_KEY or any managed data; those remain
+manual so a bad update cannot silently rewind user data. `SKIFF_FEATURE_UPGRADE_ROLLBACK` is
+reserved for the dashboard control; the CLI path is the tested default.
+
+### 4.2.5 Postgres major upgrades
+
+Changing `databases.version` across majors (for example 16 → 17) is refused by
+`PATCH /api/v1/databases/:name`. The error points at the wizard:
+
+```sh
+skif db upgrade main --to 17 --plan     # backup, disk, extensions, pg_upgrade/dump-restore plan
+skif db upgrade main --to 17 --apply    # queues a pinned backup + returns the same runbook
+```
+
+`--apply` does **not** switch the data directory. It queues a pinned logical backup and records
+the plan. Follow the printed steps on the node:
+
+1. stop attached consumers (the plan lists them);
+2. wait for the pinned backup to reach `ok`;
+3. run `pg_upgrade --check` inside the target image, or `pg_dump --format=custom` and verify a
+   restore into a scratch instance of the new major;
+4. start the new major against a **new** data directory (or restore the dump) and verify row counts
+   and extensions;
+5. attach one non-production consumer as a canary before production;
+6. keep the old data directory until the canary passes. Re-point the old directory to roll back.
+
+The helper image is the official `postgres:<major>-alpine`; `pg_upgrade` availability varies by
+image, so dump/restore is the supported fallback with planned downtime. Never point a new major at
+a data directory written by an older major, and never let an image tag change perform the switch.
 
 ### 4.3 Platform settings from the dashboard
 

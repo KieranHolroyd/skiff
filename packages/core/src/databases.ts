@@ -28,6 +28,7 @@ import {
 	databaseRestoreSchema,
 	databaseRotateSchema,
 	databaseUpdateSchema,
+	databaseUpgradeSchema,
 	limits,
 	requirePermission,
 	type DatabaseAttach,
@@ -48,6 +49,9 @@ import {
 	type DatabaseStatus,
 	type DatabaseTableStat,
 	type DatabaseUpdate,
+	type DatabaseUpgradeInput,
+	type DatabaseUpgradePlan,
+	type DatabaseUpgradeStep,
 	type DatabaseView,
 	type Principal,
 	type WorkloadActivation,
@@ -61,6 +65,7 @@ import { ConflictError, CoreError, NotFoundError, ValidationError } from './erro
 import { resolvePlacement } from './placement.ts';
 import type { ProjectRow } from './projects.ts';
 import type { VolumeRow } from './volumes.ts';
+import { isPostgresMajorChange, postgresMajor } from './upgrade-plan.ts';
 import { newId, parseJson, randomBytes, sha256Hex } from './util.ts';
 
 export type DatabaseRow = typeof databases.$inferSelect;
@@ -250,6 +255,15 @@ export class DatabaseService {
 		const patch = databaseUpdateSchema.parse(raw);
 		const row = this.requireRow(principal, name);
 		const info = databaseEngineRegistry[row.engine];
+		if (patch.version !== undefined && patch.version !== row.version) {
+			if (!info.versions.includes(patch.version))
+				throw new ValidationError(`${info.label} versions: ${info.versions.join(', ')}.`);
+			if (isPostgresMajorChange(row.version, patch.version))
+				throw new ConflictError(
+					`PostgreSQL ${row.version} → ${patch.version} is a major-version upgrade. ` +
+						`Run \`skif db upgrade ${name} --to ${patch.version} --plan\`; the platform never switches a Postgres major automatically.`
+				);
+		}
 		if (patch.memoryMb !== undefined) {
 			if (patch.memoryMb < info.minMemoryMb)
 				throw new ValidationError(`${info.label} needs at least ${info.minMemoryMb} MB.`);
@@ -284,8 +298,139 @@ export class DatabaseService {
 		return this.toView(this.requireRow(principal, name));
 	}
 
-	/** Soft delete (D59): the container stops, the data dir stays on the node for `trashDays`. */
-	delete(principal: Principal, name: string): DatabaseView {
+	/**
+	 * A PostgreSQL major upgrade is a data-layer operation, never a row update. Plan it, refuse
+	 * when it cannot be reversed, and—on `apply`—queue a pinned backup and return the runbook.
+	 * The platform deliberately does not start the version switch itself in this release.
+	 */
+	upgradeDatabase(principal: Principal, name: string, raw: DatabaseUpgradeInput): DatabaseUpgradePlan {
+		requirePermission(principal, 'database:update');
+		const input = databaseUpgradeSchema.parse(raw);
+		const row = this.requireRow(principal, name);
+		const info = databaseEngineRegistry[row.engine];
+		if (!info.versions.includes(input.targetVersion))
+			throw new ValidationError(`${info.label} versions: ${info.versions.join(', ')}.`);
+		const fromMajor = postgresMajor(row.version);
+		const toMajor = postgresMajor(input.targetVersion);
+		if (!fromMajor || !toMajor)
+			throw new ValidationError(`Cannot compare PostgreSQL version "${row.version}" with "${input.targetVersion}".`);
+		if (fromMajor === toMajor)
+			throw new ValidationError(
+				`${row.version} → ${input.targetVersion} is not a major change; use \`skif db update\` for a maintenance update.`
+			);
+
+		const blockers: string[] = [];
+		const warnings: string[] = [];
+		if (row.pendingRestoreId) blockers.push('A backup restore is running on this database.');
+		const busy = this.ctx.db
+			.select({ id: databaseBackups.id })
+			.from(databaseBackups)
+			.where(and(eq(databaseBackups.databaseId, row.id), inArray(databaseBackups.status, ['pending', 'running'])))
+			.get();
+		if (busy) blockers.push('Wait for the in-flight backup to finish.');
+		if (row.status !== 'running' && row.status !== 'stopped')
+			blockers.push(`The database is ${row.status}; start it and verify it is healthy first.`);
+		const attachments = this.attachmentsOf(row.id);
+		if (attachments.length > 0)
+			warnings.push(
+				`Attached projects (${attachments.map((item) => item.projectSlug).join(', ')}) must be stopped for the duration of the dump/restore.`
+			);
+		const extensions = parseJson<string[]>(row.extensionsJson, []);
+		if (extensions.length > 0)
+			warnings.push(
+				`Verify extension compatibility for ${extensions.join(', ')} in PostgreSQL ${input.targetVersion}; missing extensions block the restore.`
+			);
+		warnings.push(
+			'The old data directory is kept until the new instance passes a canary and a row-count check. Re-pointing it back is the rollback path.'
+		);
+
+		const steps: DatabaseUpgradeStep[] = [
+			{
+				id: 'freeze',
+				title: 'Stop consumers',
+				detail:
+					attachments.length > 0
+						? `Stop or detach ${attachments.map((item) => item.projectSlug).join(', ')} so no writes occur during the dump.`
+						: 'Confirm no external clients are connected; the database listens on loopback only (D56).',
+				automatic: false
+			},
+			{
+				id: 'backup',
+				title: 'Take a pinned backup',
+				detail: input.apply
+					? 'Queued a manual pinned backup; wait for it to reach status ok before continuing.'
+					: 'Queue a manual pinned backup and verify it reaches status ok.',
+				automatic: true
+			},
+			{
+				id: 'preflight',
+				title: 'Run pg_upgrade --check or verify dump/restore',
+				detail:
+					`Run \`pg_upgrade --check\` in the PostgreSQL ${input.targetVersion} image if available. ` +
+					'Otherwise export with pg_dump (custom format) and verify it restores into a scratch instance of the new major.',
+				automatic: false
+			},
+			{
+				id: 'upgrade',
+				title: 'Switch the data directory',
+				detail:
+					`Use the new PostgreSQL ${input.targetVersion} image with a new data dir (pg_upgrade) or restore the dump into it. ` +
+					'Never point an old major at a data dir written by a newer major.',
+				automatic: false
+			},
+			{
+				id: 'verify',
+				title: 'Verify and run a canary',
+				detail: 'Check row counts, the expected extensions, and attach one non-production consumer before switching production.',
+				automatic: false
+			}
+		];
+
+		let backupId: string | null = null;
+		if (input.apply && blockers.length === 0) {
+			const backup = this.createBackup(principal, name, { pinned: true });
+			backupId = backup.id;
+		}
+		const status: DatabaseUpgradePlan['status'] =
+			blockers.length > 0 ? 'blocked' : input.apply ? 'manual' : 'planned';
+		this.ctx.audit.record({
+			principal,
+			action: input.apply ? 'database.upgrade-request' : 'database.upgrade-plan',
+			resource: 'database',
+			resourceId: row.id,
+			args: {
+				name,
+				from: row.version,
+				to: input.targetVersion,
+				apply: input.apply,
+				backupId,
+				blockers: blockers.length
+			},
+			result: blockers.length > 0 ? 'error' : 'ok'
+		});
+		return {
+			databaseId: row.id,
+			name: row.name,
+			fromVersion: row.version,
+			toVersion: input.targetVersion,
+			majorChange: true,
+			status,
+			mode: 'dump-restore',
+			blockers,
+			warnings,
+			steps,
+			backupId,
+			docs: 'docs/OPS.md#425-postgres-major-upgrades',
+			message:
+				status === 'manual'
+					? `Pre-upgrade backup ${backupId} is queued. Follow the steps, then update the database version only after the new instance is verified.`
+					: status === 'blocked'
+						? `This major upgrade is blocked: ${blockers.join(' ')}`
+						: 'Plan only. Re-run with --apply to queue the pinned pre-upgrade backup.'
+		};
+	}
+
+	/** Soft delete (D59): the container stops, the data dir stays on the node for `trashDays`. */	delete(principal: Principal, name: string): DatabaseView {
 		requirePermission(principal, 'database:delete');
 		const row = this.requireRow(principal, name);
 		const attached = this.attachmentsOf(row.id);

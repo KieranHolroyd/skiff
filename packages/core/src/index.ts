@@ -26,6 +26,7 @@ import { EnvironmentService } from './environments.ts';
 import { SourceService } from './source.ts';
 import { createOperationService, type OperationService } from './operations/index.ts';
 import { SchedulerService } from './scheduler.ts';
+import { UpgradeService } from './upgrades.ts';
 
 export * from './config.ts';
 export * from './context.ts';
@@ -61,6 +62,7 @@ export * from './notify.ts';
 export * from './telemetry.ts';
 export * from './operations/index.ts';
 export * from './scheduler.ts';
+export * from './upgrades.ts';
 
 export interface CoreOptions {
 	db: SkiffDb;
@@ -94,6 +96,7 @@ export interface Core {
 	audit: AuditService;
 	operations: OperationService;
 	scheduler: SchedulerService;
+	upgrades: UpgradeService;
 }
 
 /**
@@ -130,6 +133,10 @@ export function createCore(options: CoreOptions): Core {
 	ctx.builds = new BuildService(ctx);
 	ctx.operations = createOperationService(ctx);
 	ctx.scheduler = new SchedulerService(ctx);
+	ctx.upgrades = new UpgradeService(ctx, {
+		platformVersion: options.version ?? '0.0.0',
+		agentVersion: options.config.desiredAgentVersion ?? null
+	});
 	const source = new SourceService(ctx);
 
 	const deploy = new DeployService(ctx);
@@ -162,5 +169,6 @@ export function createCore(options: CoreOptions): Core {
 		audit: ctx.audit,
 		operations: ctx.operations,
 		scheduler: ctx.scheduler,
+		upgrades: ctx.upgrades,
 	};
 }

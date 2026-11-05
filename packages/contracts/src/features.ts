@@ -99,6 +99,12 @@ export const FEATURE_FLAGS = {
 		area: 'platform',
 		description: 'Enforce per-org project, storage and upload quotas. Set 0 to temporarily lift limits.'
 	},
+	UPGRADE_ROLLBACK: {
+		name: 'UPGRADE_ROLLBACK',
+		default: false,
+		area: 'platform',
+		description: 'Reserved for dashboard-triggered automatic rollback after /readyz fails; CLI rollback is the tested path.'
+	},
 	BLUEPRINTS: {
 		name: 'BLUEPRINTS',
 		default: false,

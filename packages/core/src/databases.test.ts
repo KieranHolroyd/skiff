@@ -97,6 +97,41 @@ describe('managed databases', () => {
 		expect(core.databases.update(owner, 'second', { memoryMb: 128 }).memoryMb).toBe(128);
 	});
 
+	test('rejects a PostgreSQL major change in update and plans it explicitly', async () => {
+		const second = core.databases.get(owner, 'second');
+		core.databases.applyHeartbeat(edgeId, [{ id: second.id, status: 'running', restarts: 0 }]);
+		expect(() => core.databases.update(owner, 'second', { version: '16' })).toThrow(
+			/major-version upgrade.*skif db upgrade second --to 16 --plan/
+		);
+		expect(core.databases.get(owner, 'second').version).toBe('17');
+
+		const plan = core.databases.upgradeDatabase(owner, 'second', { targetVersion: '16' });
+		expect(plan).toMatchObject({
+			name: 'second',
+			fromVersion: '17',
+			toVersion: '16',
+			majorChange: true,
+			status: 'planned',
+			mode: 'dump-restore',
+			backupId: null
+		});
+		expect(plan.steps.map((step) => step.id)).toEqual(['freeze', 'backup', 'preflight', 'upgrade', 'verify']);
+
+		const applied = core.databases.upgradeDatabase(owner, 'second', { targetVersion: '16', apply: true });
+		expect(applied.status).toBe('manual');
+		expect(applied.backupId).toMatch(/^bkp_/);
+		expect(core.databases.listBackups(owner, 'second').some((backup) => backup.pinned)).toBe(true);
+		// The row still says 17: applying the plan only queues the backup and runbook.
+		expect(core.databases.get(owner, 'second').version).toBe('17');
+		const pending = (await core.nodes.desiredState(edgeToken)).databaseBackupTasks.find(
+			(task) => task.databaseId === second.id
+		);
+		if (pending)
+			core.databases.applyBackupResults(edgeId, [
+				{ taskId: pending.id, action: 'backup', databaseId: second.id, backupId: null, status: 'ok' }
+			]);
+	});
+
 	test('desired state carries the database profile but never its password', async () => {
 		const state = await core.nodes.desiredState(edgeToken);
 		const entry = state.workloads.find((workload) => workload.projectSlug === 'main-db');

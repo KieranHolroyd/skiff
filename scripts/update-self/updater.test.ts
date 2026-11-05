@@ -2,7 +2,7 @@ import { Database } from 'bun:sqlite';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import {
 	CONTROL_PLANE,
 	LITESTREAM,
@@ -97,6 +97,8 @@ class FakeHost implements Host {
 	canaryFails = false;
 	/** Release basenames that never become healthy when running. */
 	unhealthy = new Set<string>();
+	readyzFails = false;
+	backupUnreachable = false;
 	/** Release basename -> true when it is the commit currently fetched. */
 	running: string | null = null;
 	publicUp = false;
@@ -143,6 +145,12 @@ class FakeHost implements Host {
 	restartCount = async () => 0;
 	controlPlaneHealthy = async () =>
 		Boolean(this.active.get(CONTROL_PLANE) && this.running && !this.unhealthy.has(this.running));
+	readyz = async () => {
+		const running = this.running;
+		if (this.readyzFails && running?.includes(NEW.slice(0, 12))) return false;
+		return Boolean(this.active.get(CONTROL_PLANE) && running && !this.unhealthy.has(running));
+	};
+	backupTarget = async () => ({ ok: !this.backupUnreachable, kind: 'local', ...(this.backupUnreachable ? { error: 'connection refused' } : {}) });
 	publicHealthy = async () => this.publicUp;
 	agentEnrolled = () => false;
 	chownToSkiff = () => {};
@@ -164,6 +172,8 @@ beforeEach(() => {
 	});
 	mkdirSync(join(root, 'systemd'), { recursive: true });
 	mkdirSync(join(root, 'var', 'data'), { recursive: true });
+	mkdirSync(join(root, 'var', 'data', 'objects'), { recursive: true });
+	mkdirSync(join(root, 'var', 'backups'), { recursive: true });
 	mkdirSync(join(root, 'opt', 'runtime', 'bin'), { recursive: true });
 	writeFileSync(layout.bunBin, '#!/bin/sh');
 	writeFileSync(
@@ -265,7 +275,7 @@ describe('update', () => {
 		expect(host.critical).toBe(0);
 	});
 
-	test('a second update drops the oldest release and its snapshot', async () => {
+	test('a second update drops the oldest release and keeps the last N snapshots', async () => {
 		const updater = new Updater(layout, host);
 		await updater.update();
 		const first = readLink(layout.currentLink)!;
@@ -275,8 +285,11 @@ describe('update', () => {
 		await updater.update();
 		expect(readLink(layout.previousLink)).toBe(first);
 		expect(existsSync(original)).toBe(false);
-		expect(existsSync(firstSnapshot)).toBe(false);
-		expect(readdirSync(layout.backupsDir)).toEqual([basename(state().lastSwitch!.snapshot!)]);
+		// Pre-update bundles are retained (pinned until the next success, then the last N).
+		expect(existsSync(firstSnapshot)).toBe(true);
+		const bundles = readdirSync(layout.backupsDir).filter((entry) => entry.startsWith('upgrade-'));
+		expect(bundles).toHaveLength(2);
+		expect(bundles).toContain(basename(dirname(dirname(state().lastSwitch!.snapshot!))));
 	});
 
 	test('a build failure never touches the running release', async () => {
@@ -304,6 +317,46 @@ describe('update', () => {
 		expect((await updater.update()).status).toBe('skipped');
 		host.canaryFails = false;
 		expect((await updater.update({ force: true })).status).toBe('updated');
+	});
+
+	test('a release whose /readyz never becomes ready is rolled back', async () => {
+		host.readyzFails = true;
+		const result = await new Updater(layout, host).update();
+		expect(result).toMatchObject({ status: 'rolled-back', recovered: true });
+		expect(result.status === 'rolled-back' ? result.reason : '').toMatch(/readyz/);
+		expect(readLink(layout.currentLink)).toBe(original);
+		expect(host.running).toBe(basename(original));
+	});
+
+	test('refuses to start when the backup target is unreachable', async () => {
+		host.backupUnreachable = true;
+		await expect(new Updater(layout, host).update()).rejects.toThrow(
+			/backup target \(local\) is unreachable/
+		);
+		expect(host.calls).toEqual([]);
+		expect(readLink(layout.currentLink)).toBe(original);
+	});
+
+	test('refuses a destructive migration before the canary or the swap', async () => {
+		host.migrations = ['0001_init.sql', '0003_drop.sql'];
+		// Make the fetched release ship a destructive migration body.
+		const originalFetch = host.fetchSource;
+		host.fetchSource = async (repo, commit, dest) => {
+			await originalFetch(repo, commit, dest);
+			mkdirSync(join(dest, 'packages', 'db', 'migrations'), { recursive: true });
+			writeFileSync(join(dest, 'packages', 'db', 'migrations', '0003_drop.sql'), 'DROP TABLE notes;');
+		};
+		await expect(new Updater(layout, host).update()).rejects.toThrow(/Destructive migration 0003_drop\.sql/);
+		expect(host.calls).not.toContain('canary');
+		expect(readLink(layout.currentLink)).toBe(original);
+		expect(readdirSync(layout.releasesDir).some((entry) => entry.startsWith('202611031200'))).toBe(false);
+	});
+
+	test('plan returns the same preflight rules without changing anything', async () => {
+		const planned = await new Updater(layout, host).plan();
+		expect(planned.check).toMatchObject({ version: '0.2.0', fromVersion: '0.1.0' });
+		expect(planned.preflight.ok).toBe(true);
+		expect(host.calls).toEqual([]);
 	});
 
 	test('an unhealthy release is rolled back with its database changes undone', async () => {

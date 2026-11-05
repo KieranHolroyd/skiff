@@ -39,6 +39,22 @@ export interface DatabaseRotationView {
 	finishedAt: string | null;
 }
 
+export interface DatabaseUpgradePlan {
+	databaseId: string;
+	name: string;
+	fromVersion: string;
+	toVersion: string;
+	majorChange: boolean;
+	status: 'planned' | 'blocked' | 'manual';
+	mode: 'dump-restore' | 'pg-upgrade';
+	blockers: string[];
+	warnings: string[];
+	steps: Array<{ id: string; title: string; detail: string; automatic: boolean }>;
+	backupId: string | null;
+	docs: string;
+	message: string;
+}
+
 export interface DatabaseBackupSummary {
 	enabled: boolean;
 	schedule: string;
