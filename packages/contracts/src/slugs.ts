@@ -25,6 +25,16 @@ export interface SlugCheck {
 	reason?: string;
 }
 
+/** The slug a project gets when none is given: the name, lowercased and hyphenated. */
+export function deriveSlug(name: string): string {
+	const base = name
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/^-+|-+$/g, '')
+		.slice(0, SLUG_MAX);
+	return base.length >= SLUG_MIN ? base : `site-${base}`.slice(0, SLUG_MAX);
+}
+
 export function checkSlug(slug: string, taken: Iterable<string> = []): SlugCheck {
 	if (slug.length < SLUG_MIN || slug.length > SLUG_MAX)
 		return { ok: false, problem: 'length', reason: `Slug must be ${SLUG_MIN}–${SLUG_MAX} characters.` };

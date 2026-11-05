@@ -5,7 +5,7 @@
 **Primary files:** `packages/contracts/src/{workload,github-runner,templates}.ts`,
 `packages/core/src/{workloads,github-runners,templates,nodes,logs}.ts`,
 `apps/agent/src/runtime.ts`, `apps/helper/src/{validate,units,systemd}.ts`,
-`apps/control-plane/src/routes/(dashboard)/{_lib/TemplateDialog,projects/[slug]/_components/WorkerCard}.svelte`,
+`apps/control-plane/src/routes/(dashboard)/{new/**,projects/[slug]/_components/WorkerCard}.svelte`,
 `docs/RUNNERS.md`, D89–D93
 
 ## Goal
@@ -18,7 +18,7 @@ self-hosted runner pool, with the same one-step ease as the other app types.
 - `ingress: "none"` workers for process and container projects (D89): no route, port or HTTP probe.
 - `replicas` 1–20 for workers, expanded in desired state as `<id>-r<n>` (D90).
 - A first-party template catalog (D92): `GET/POST /api/v1/templates[/:id]`, a **From template**
-  dialog generated from the template's fields, and a `skiff-template.json` release so no upload is
+  page per template (`/new/<id>`) generated from the template's fields and groups, and a `skiff-template.json` release so no upload is
   needed.
 - The **GitHub Actions runner** template (D91, D93): repo or org scope, labels, runner group,
   replicas, PAT or GitHub App (pasted or an existing secret), ephemeral one-job containers,

@@ -7,6 +7,7 @@ multi-screen flows, and deliberate limits. Rationale: [DESIGN.md](./DESIGN.md), 
 | -------- | ------------------ | -------------------------------------------------------------------------- |
 | Projects | `/projects`        | Create by runtime + placement; production state                            |
 | Project  | `/projects/<slug>` | Deployments, Environments, Builds, Domains, Runtime, Share links, Settings |
+| New      | `/new`, `/new/<id>` | Template catalog and blank runtimes; one page per template                |
 | Nodes    | `/nodes`           | Platform-admin fleet: slice capacity, draining, Builder role               |
 
 ## Projects list
@@ -18,6 +19,27 @@ deploy. Node choices come from capacity, so they are complete only for platform 
 choose `edge` or `auto`. `auto` resolves once at deploy time and is recorded on the deployment, so a
 running app never moves by itself. The table shows runtime icon, placement and `Live` / `Not
 deployed`.
+
+## New from a template
+
+`/new` lists the first-party templates (plan 21) and the three blank runtimes, which open the
+`New project` dialog with that runtime chosen. `/new/<template>` is generated entirely from the
+template's definition in `@skiff/contracts`: its `groups` become numbered sections, and field hints
+(`options[].description`, `unit`, `presets`, `accept`, `fixed`, `replaces`, `suggest`) pick the
+control. A new catalog entry needs no dashboard change.
+
+- The **launch plan** rail runs the template's own `build` on every change, so it shows exactly
+  what the server will create: project and slug, workload (copies, per-copy memory and CPU, total
+  reservation), secret names (new ones with the slug suffix; existing ones checked against the
+  organisation's secrets) and the first deployment. Runner templates add the `runs-on:` line.
+- Section ticks and the "things to do" count come from the same validation. Errors show once a
+  field is left or the form is submitted; submitting with problems jumps to the first one.
+- **Placement** is a card per choice. Platform admins see each node's slice with the new
+  reservation drawn on it, a fit verdict, and where `auto` would land right now (the real choice is
+  still made at deploy time).
+- A credential can be pasted or swapped for an existing secret; pasted values are never echoed
+  back on a failed submit, and the **Same thing over the API** snippet leaves them out.
+- `⌘↵` / `Ctrl ↵` submits. Old `/projects?template=<id>` links redirect to `/new/<id>`.
 
 ## Project navigation
 

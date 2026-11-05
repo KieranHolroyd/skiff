@@ -1,12 +1,14 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { accessModes, getAppTemplate, runtimes, type OperationView } from '@skiff/contracts';
-import { ValidationError } from '@skiff/core';
+import { accessModes, runtimes, type OperationView } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
 import { failStatus, formString, toFormFailure } from '../_lib/errors.js';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = ({ locals, url }) => {
 	const principal = locals.principal!;
+	// Old links opened a template dialog here; templates now have their own pages.
+	const template = url.searchParams.get('template');
+	if (template !== null) redirect(307, template ? `/new/${encodeURIComponent(template)}` : '/new');
 	const view =
 		url.searchParams.get('view') === 'trash' ? ('trash' as const) : ('projects' as const);
 	let capacity: Awaited<ReturnType<typeof core.workloads.capacity>> = [];
@@ -100,43 +102,6 @@ export const actions: Actions = {
 		}
 
 		redirect(303, `/projects/${project.slug}`);
-	},
-
-	/** Plan 21: create, configure and deploy a project from a first-party template. */
-	fromTemplate: async ({ request, locals }) => {
-		const principal = locals.principal!;
-		const data = await request.formData();
-		const id = formString(data, 'template');
-		const template = getAppTemplate(id);
-		if (!template) return fail(400, { message: 'Choose a template.' });
-		// Only the template's own fields (plus placement) are read; anything else is ignored.
-		const values: Record<string, unknown> = { placement: formString(data, 'placement') || 'auto' };
-		for (const field of template.fields) {
-			const raw = data.get(field.key);
-			if (typeof raw !== 'string') continue;
-			// Keep a PEM's line breaks; trim everything else.
-			values[field.key] = field.kind === 'textarea' ? raw : raw.trim();
-		}
-
-		let slug: string;
-		try {
-			const created = await core.templates.instantiate(principal, id, values);
-			slug = created.project.slug;
-		} catch (error) {
-			const failure = toFormFailure(error);
-			const fieldErrors: Record<string, string> = {};
-			if (error instanceof ValidationError) {
-				for (const issue of error.issues) {
-					if (typeof issue !== 'string') continue;
-					const [key, ...rest] = issue.split(': ');
-					if (key && rest.length > 0 && !fieldErrors[key]) fieldErrors[key] = rest.join(': ');
-				}
-			}
-			// Never echo credentials back into the page.
-			return fail(failStatus(error), { ...failure, template: id, fieldErrors });
-		}
-
-		redirect(303, `/projects/${slug}`);
 	},
 
 	delete: async ({ request, locals }) => {

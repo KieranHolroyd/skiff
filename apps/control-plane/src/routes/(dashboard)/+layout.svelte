@@ -98,11 +98,13 @@
 		}
 	];
 	const nav = groups.flatMap((group) => group.items);
+	type CrumbRoute = NavItem['href'] | '/(dashboard)/new';
 
 	let signingOut = $state(false);
 
 	function isActive(path: string): boolean {
 		const current = page.url.pathname;
+		if (path === '/projects' && (current === '/new' || current.startsWith('/new/'))) return true;
 		return current === path || current.startsWith(`${path}/`);
 	}
 
@@ -112,8 +114,22 @@
 	/** Breadcrumbs from the URL: `/projects/foo` → Projects › foo. */
 	const crumbs = $derived.by(() => {
 		const segments = page.url.pathname.split('/').filter(Boolean);
+		// The "new" hub and its templates sit under Projects.
+		if (segments[0] === 'new') {
+			const projects = nav.find((item) => item.path === '/projects')!;
+			const template = (page.data as { template?: { name?: string } }).template;
+			return [
+				{ label: projects.label, route: projects.href },
+				...(segments.length > 1
+					? [
+							{ label: 'New', route: '/(dashboard)/new' as const },
+							{ label: template?.name ?? decodeURIComponent(segments[1]!) }
+						]
+					: [{ label: 'New' }])
+			] as { label: string; route?: CrumbRoute; mono?: boolean }[];
+		}
 		const top = nav.find((item) => item.path === `/${segments[0] ?? ''}`);
-		const out: { label: string; route?: NavItem['href']; mono?: boolean }[] = [];
+		const out: { label: string; route?: CrumbRoute; mono?: boolean }[] = [];
 		if (top) out.push({ label: top.label, route: segments.length > 1 ? top.href : undefined });
 		const isProject =
 			top?.path === '/projects' || top?.path === '/databases' || top?.path === '/storage';

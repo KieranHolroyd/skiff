@@ -1,5 +1,6 @@
 import * as z from 'zod';
 import {
+	GITHUB_RUNNER_BASE_LABELS,
 	GITHUB_RUNNER_DEFAULT_IMAGE,
 	githubOwnerSchema,
 	githubRepoSchema,
@@ -22,19 +23,57 @@ import { MAX_WORKLOAD_REPLICAS, type WorkloadSpec } from './workload.ts';
 export const templateCategories = ['ci', 'worker'] as const;
 export type TemplateCategory = (typeof templateCategories)[number];
 
-/** A form field the dashboard renders; `showWhen` hides it unless another field has a value. */
+/** One choice of a `select` field; `description` is shown when the choices render as cards. */
+export interface TemplateFieldOption {
+	value: string;
+	label: string;
+	description?: string;
+}
+
+/**
+ * A form field the dashboard renders; `showWhen` hides it unless another field has a value.
+ * Everything past `kind` is presentation: clients that ignore it still produce a valid request.
+ */
 export interface TemplateField {
 	key: string;
 	label: string;
 	kind: 'text' | 'number' | 'select' | 'secret' | 'textarea' | 'labels';
+	/** Must be filled whenever the field is shown (the template's schema has the final say). */
 	required?: boolean;
 	help?: string;
 	placeholder?: string;
-	options?: Array<{ value: string; label: string }>;
+	options?: TemplateFieldOption[];
 	default?: string | number;
 	min?: number;
 	max?: number;
+	step?: number;
 	showWhen?: { key: string; equals: string };
+	/** The `TemplateGroup.id` this field is shown under; ungrouped fields go in a default group. */
+	group?: string;
+	/** Unit shown beside a number (`MB`, `CPU`). */
+	unit?: string;
+	/** Quick-pick values for a number field. */
+	presets?: number[];
+	/** For a textarea: file types that may be dropped or picked to fill it (`.pem`). */
+	accept?: string;
+	/** For a labels field: labels that are always added, shown but not editable. */
+	fixed?: readonly string[];
+	/**
+	 * This field is an alternative to the named fields (for example an existing secret instead of
+	 * a pasted credential): fill one or the other, never both.
+	 */
+	replaces?: string[];
+	/** Offer the organisation's existing secret names as suggestions. */
+	suggest?: 'secrets';
+}
+
+/** A titled section of a template's form, in display order. */
+export interface TemplateGroup {
+	id: string;
+	title: string;
+	description?: string;
+	/** Collapsed until opened; for fields whose defaults suit almost everyone. */
+	advanced?: boolean;
 }
 
 /** A secret the template creates on the new project. The value never leaves `packages/core`. */
@@ -64,6 +103,11 @@ export interface AppTemplate {
 	/** A lucide icon name the dashboard maps to a component. */
 	icon: string;
 	docsUrl?: string;
+	/** Short selling points for the catalog card. */
+	highlights?: string[];
+	/** What the user needs to have ready before filling the form. */
+	requirements?: string[];
+	groups?: TemplateGroup[];
 	fields: TemplateField[];
 }
 
@@ -173,20 +217,37 @@ export const githubRunnerTemplate: AppTemplate = {
 	category: 'ci',
 	icon: 'workflow',
 	docsUrl: 'https://docs.github.com/actions/hosting-your-own-runners',
+	highlights: [
+		'One fresh container per job, so no job sees another job’s files.',
+		'The token or App key stays on the control plane; nodes only get a single-use JIT config.',
+		'Finished runners are replaced within seconds; GitHub sees a steady pool.',
+	],
+	requirements: [
+		'A fine-grained token with Administration: write on the repository (or Self-hosted runners: write on the organisation), or a GitHub App with the same permission.',
+		'Room on a node for every runner’s memory: the whole pool runs on one node.',
+	],
+	groups: [
+		{ id: 'project', title: 'Project', description: 'The Skiff project that owns the runner pool.' },
+		{ id: 'github', title: 'Repository', description: 'Where the runners register and which jobs they pick up.' },
+		{ id: 'credential', title: 'GitHub credential', description: 'Used by the control plane to mint a single-use runner config per job.' },
+		{ id: 'capacity', title: 'Capacity', description: 'Memory and CPU apply per runner; admission reserves memory for every runner.' },
+		{ id: 'advanced', title: 'Advanced', advanced: true },
+	],
 	fields: [
-		{ key: 'name', label: 'Name', kind: 'text', required: true, placeholder: 'CI runners' },
+		{ key: 'name', label: 'Name', kind: 'text', required: true, placeholder: 'CI runners', group: 'project' },
 		{
 			key: 'scope',
 			label: 'Runners for',
 			kind: 'select',
 			default: 'repo',
+			group: 'github',
 			options: [
-				{ value: 'repo', label: 'One repository' },
-				{ value: 'org', label: 'A whole organisation' },
+				{ value: 'repo', label: 'One repository', description: 'Jobs from a single repository.' },
+				{ value: 'org', label: 'A whole organisation', description: 'Shared by every repository in a runner group.' },
 			],
 		},
-		{ key: 'owner', label: 'Owner', kind: 'text', required: true, placeholder: 'my-org', help: 'User or organisation that owns the repository.' },
-		{ key: 'repo', label: 'Repository', kind: 'text', placeholder: 'my-repo', showWhen: { key: 'scope', equals: 'repo' } },
+		{ key: 'owner', label: 'Owner', kind: 'text', required: true, placeholder: 'my-org', help: 'User or organisation that owns the repository.', group: 'github' },
+		{ key: 'repo', label: 'Repository', kind: 'text', required: true, placeholder: 'my-repo', showWhen: { key: 'scope', equals: 'repo' }, group: 'github' },
 		{
 			key: 'runnerGroupId',
 			label: 'Runner group ID',
@@ -195,51 +256,93 @@ export const githubRunnerTemplate: AppTemplate = {
 			min: 1,
 			help: '1 is the Default group.',
 			showWhen: { key: 'scope', equals: 'org' },
+			group: 'github',
 		},
 		{
 			key: 'labels',
 			label: 'Extra labels',
 			kind: 'labels',
-			placeholder: 'skiff, X64',
-			help: 'self-hosted and linux are always added. Use them in runs-on.',
+			placeholder: 'gpu, X64',
+			help: 'Add these to runs-on to target this pool.',
+			fixed: GITHUB_RUNNER_BASE_LABELS,
+			group: 'github',
 		},
-		{ key: 'replicas', label: 'Runners', kind: 'number', default: 2, min: 1, max: MAX_WORKLOAD_REPLICAS, help: 'How many jobs can run at once.' },
-		{ key: 'memoryMb', label: 'Memory per runner (MB)', kind: 'number', default: 2048, min: 256, max: 8192 },
-		{ key: 'cpus', label: 'CPUs per runner', kind: 'number', default: 2, min: 1, max: 8 },
 		{
 			key: 'auth',
 			label: 'Authenticate with',
 			kind: 'select',
 			default: 'pat',
+			group: 'credential',
 			options: [
-				{ value: 'pat', label: 'Personal access token' },
-				{ value: 'app', label: 'GitHub App' },
+				{ value: 'pat', label: 'Personal access token', description: 'Quickest to set up. Fine-grained tokens are scoped to the repository or organisation.' },
+				{ value: 'app', label: 'GitHub App', description: 'Not tied to a person; GitHub issues short-lived tokens.' },
 			],
 		},
 		{
 			key: 'token',
 			label: 'Personal access token',
 			kind: 'secret',
+			required: true,
+			placeholder: 'github_pat_…',
 			showWhen: { key: 'auth', equals: 'pat' },
 			help: 'Fine-grained: Administration (write) on the repository, or Self-hosted runners (write) on the organisation. Stored as a project secret.',
+			group: 'credential',
 		},
-		{ key: 'appId', label: 'App ID', kind: 'number', showWhen: { key: 'auth', equals: 'app' } },
-		{ key: 'installationId', label: 'Installation ID', kind: 'number', showWhen: { key: 'auth', equals: 'app' } },
+		{ key: 'appId', label: 'App ID', kind: 'number', required: true, min: 1, showWhen: { key: 'auth', equals: 'app' }, group: 'credential' },
+		{
+			key: 'installationId',
+			label: 'Installation ID',
+			kind: 'number',
+			required: true,
+			min: 1,
+			help: 'The number at the end of the installation’s settings URL.',
+			showWhen: { key: 'auth', equals: 'app' },
+			group: 'credential',
+		},
 		{
 			key: 'privateKey',
-			label: 'App private key (PEM)',
+			label: 'App private key',
 			kind: 'textarea',
+			required: true,
+			accept: '.pem',
+			placeholder: '-----BEGIN RSA PRIVATE KEY-----',
 			showWhen: { key: 'auth', equals: 'app' },
 			help: 'Stored as a project secret; only the control plane reads it.',
+			group: 'credential',
 		},
 		{
 			key: 'existingSecret',
-			label: 'Or use an existing secret',
+			label: 'Existing secret',
 			kind: 'text',
+			required: true,
 			placeholder: 'ORG_RUNNER_TOKEN',
 			help: 'Name of a project or organisation secret holding the token or key, instead of pasting it.',
+			replaces: ['token', 'privateKey'],
+			suggest: 'secrets',
+			group: 'credential',
 		},
-		{ key: 'image', label: 'Runner image', kind: 'text', default: GITHUB_RUNNER_DEFAULT_IMAGE, help: 'Must be based on actions/runner (runs /home/runner/run.sh).' },
+		{ key: 'replicas', label: 'Runners', kind: 'number', default: 2, min: 1, max: MAX_WORKLOAD_REPLICAS, help: 'How many jobs can run at once.', group: 'capacity' },
+		{
+			key: 'memoryMb',
+			label: 'Memory per runner',
+			kind: 'number',
+			default: 2048,
+			min: 256,
+			max: 8192,
+			step: 256,
+			unit: 'MB',
+			presets: [1024, 2048, 4096, 8192],
+			group: 'capacity',
+		},
+		{ key: 'cpus', label: 'CPUs per runner', kind: 'number', default: 2, min: 1, max: 8, unit: 'CPU', presets: [1, 2, 4], group: 'capacity' },
+		{
+			key: 'image',
+			label: 'Runner image',
+			kind: 'text',
+			default: GITHUB_RUNNER_DEFAULT_IMAGE,
+			help: 'Must be based on actions/runner (runs /home/runner/run.sh). Pulled again each time a runner is replaced.',
+			group: 'advanced',
+		},
 	],
 };
 

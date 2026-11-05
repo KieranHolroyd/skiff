@@ -16,9 +16,11 @@ the **GitHub Actions runner** template.
      repository, or organisation permission *Self-hosted runners: write* for an organisation.
    - Or a **GitHub App** with the same permission, installed on the repository or organisation. You
      need its App ID, the installation ID (from the installation URL) and a private key (`.pem`).
-2. In Skiff, open **Projects → From template → GitHub Actions runner**. Fill in the owner, the
-   repository (or choose *A whole organisation*), the number of runners, memory per runner, and the
-   credential.
+2. In Skiff, open **Projects → From template → GitHub Actions runner** (or go straight to
+   `/new/github-actions-runner`). Fill in the owner, the repository (or choose *A whole
+   organisation*), the credential, the number of runners and memory per runner. The launch plan
+   beside the form shows the secrets, the memory the pool reserves and the `runs-on:` line before
+   anything is created; platform admins also see which nodes have room.
 3. Skiff creates the project, stores the credential as a project secret, and deploys. Within a few
    seconds the runners appear under **Settings → Actions → Runners** in GitHub.
 4. Use them in a workflow:

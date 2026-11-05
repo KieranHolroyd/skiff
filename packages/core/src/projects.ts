@@ -2,6 +2,7 @@ import { and, desc, eq, gt, isNull, isNotNull, lte } from 'drizzle-orm';
 import { projects, slugRedirects } from '@skiff/db';
 import {
 	checkSlug,
+	deriveSlug,
 	contentUrl,
 	requirePermission,
 	suggestSlugs,
@@ -91,12 +92,7 @@ export class ProjectService {
 	}
 
 	deriveSlug(name: string): string {
-		const base = name
-			.toLowerCase()
-			.replace(/[^a-z0-9]+/g, '-')
-			.replace(/^-+|-+$/g, '')
-			.slice(0, 40);
-		return base.length >= 3 ? base : `site-${base}`.slice(0, 40);
+		return deriveSlug(name);
 	}
 
 	view(row: ProjectRow): ProjectView {
