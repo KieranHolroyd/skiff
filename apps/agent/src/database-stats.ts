@@ -1,5 +1,6 @@
 import { SQL } from 'bun';
 import {
+	DATABASE_POOLER_MAX_CLIENTS,
 	databaseMetricBucketSchema,
 	databaseSnapshotSchema,
 	type DatabaseMetricBucket,
@@ -49,6 +50,19 @@ export interface DatabaseTarget {
 	monitor: Omit<DatabaseMonitor, 'ownerPassword'> & { ownerPassword: string | null };
 	/** Allowlisted extensions to create after the monitor role is bootstrapped. */
 	extensions?: string[];
+	/** Present when TLS is active; the CA is public material from the helper. */
+	tls?: { caPem: string | null };
+	/** Present when the PgBouncer sidecar is enabled; the admin credential is memory-only. */
+	pooler?: { port: number; username: string; password: string };
+}
+
+export interface DatabasePoolMetrics {
+	poolerUp: number;
+	poolActive: number;
+	poolIdle: number;
+	poolWaiting: number;
+	poolSaturation: number;
+	poolAvgWaitMs: number;
 }
 
 export interface DatabaseTargetSource {
@@ -68,11 +82,13 @@ export interface SqlConnectOptions {
 	username: string;
 	password: string;
 	database: string;
+	/** `false` keeps a loopback/admin connection plaintext; the sampler uses the CA when present. */
+	tls?: { ca?: string; rejectUnauthorized?: boolean } | false;
 }
 
 export type SqlConnector = (options: SqlConnectOptions) => SqlClient;
 
-/** Bun's built-in Postgres client: one short-lived connection per sample, no TLS on loopback. */
+/** Bun's built-in Postgres client: one short-lived connection per sample. */
 export function bunSqlConnector(): SqlConnector {
 	return (options) => {
 		const sql = new SQL({
@@ -86,7 +102,7 @@ export function bunSqlConnector(): SqlConnector {
 			connectionTimeout: 5,
 			idleTimeout: 5,
 			maxLifetime: 60,
-			tls: false,
+			tls: options.tls ?? false,
 		});
 		return {
 			async query(text, params = []) {
@@ -203,6 +219,67 @@ export const TABLES_SQL = `SELECT
 FROM pg_stat_user_tables
 ORDER BY pg_total_relation_size(relid) DESC, schemaname, relname
 LIMIT ${TABLE_LIMIT}`;
+
+/** PgBouncer admin console queries (the database must be `pgbouncer`). */
+export const POOLER_POOLS_SQL = 'SHOW POOLS';
+export const POOLER_STATS_SQL = 'SHOW STATS';
+
+const EMPTY_POOL: DatabasePoolMetrics = {
+	poolerUp: 0,
+	poolActive: 0,
+	poolIdle: 0,
+	poolWaiting: 0,
+	poolSaturation: 0,
+	poolAvgWaitMs: 0,
+};
+
+/**
+ * Aggregate `SHOW POOLS` rows. `cl_active`/`cl_waiting` are client connections; `sv_idle` is the
+ * server pool's idle capacity. Saturation is measured against PgBouncer's `max_client_conn`, which
+ * the helper renders as `DATABASE_POOLER_MAX_CLIENTS`.
+ */
+export function parsePoolerPools(
+	rows: Array<Record<string, unknown>>,
+	maxClients = DATABASE_POOLER_MAX_CLIENTS,
+): DatabasePoolMetrics {
+	let active = 0;
+	let idle = 0;
+	let waiting = 0;
+	for (const row of rows) {
+		// The `pgbouncer` admin pseudo-database is not a user pool.
+		if (String(row.database ?? '') === 'pgbouncer') continue;
+		active += int(row.cl_active);
+		idle += int(row.sv_idle);
+		waiting += int(row.cl_waiting);
+	}
+	const used = active + waiting;
+	const saturation = maxClients > 0 ? Math.min(1, used / maxClients) : 0;
+	return {
+		poolerUp: 1,
+		poolActive: active,
+		poolIdle: idle,
+		poolWaiting: waiting,
+		poolSaturation: saturation,
+		poolAvgWaitMs: 0,
+	};
+}
+
+/** Add the average server wait from `SHOW STATS` (microseconds, weighted by transactions). */
+export function parsePoolerStats(
+	rows: Array<Record<string, unknown>>,
+	base: DatabasePoolMetrics = EMPTY_POOL,
+): DatabasePoolMetrics {
+	let weighted = 0;
+	let transactions = 0;
+	for (const row of rows) {
+		if (String(row.database ?? '') === 'pgbouncer') continue;
+		const count = int(row.total_xact_count);
+		weighted += int(row.avg_wait_time) * count;
+		transactions += count;
+	}
+	const poolAvgWaitMs = transactions > 0 ? Math.max(0, weighted / transactions / 1_000) : 0;
+	return { ...base, poolerUp: 1, poolAvgWaitMs };
+}
 
 const COUNTER_COLUMNS: Record<CounterName, string> = {
 	xactCommit: 'xact_commit',
@@ -340,6 +417,7 @@ export class DatabaseStatsSampler {
 				username: target.monitor.monitorUser,
 				password: target.monitor.monitorPassword,
 				database: target.monitor.databaseName,
+				...tlsOptions(target),
 			});
 			await client.query(STATEMENT_TIMEOUT_SQL);
 			const [row] = await client.query(STATS_SQL);
@@ -347,6 +425,7 @@ export class DatabaseStatsSampler {
 			const counters = readCounters(row);
 			const deltas = counterDeltas(state.counters, counters);
 			state.counters = counters;
+			const pool = await this.samplePooler(target);
 			const pushed = this.pushBucket({
 				databaseId: target.id,
 				bucket,
@@ -357,6 +436,7 @@ export class DatabaseStatsSampler {
 				connectionsTotal: int(row.connections_total),
 				maxConnections: int(row.max_connections),
 				memoryBytes: int(target.memoryBytes),
+				...pool,
 				...deltas,
 			});
 
@@ -397,6 +477,45 @@ export class DatabaseStatsSampler {
 		}
 	}
 
+	/**
+	 * Sample the PgBouncer admin console. This is loopback-only and separate from the database
+	 * connection; a pooler failure never marks the database down. `SHOW STATS` is best effort.
+	 */
+	private async samplePooler(target: DatabaseTarget): Promise<DatabasePoolMetrics> {
+		if (!target.pooler) return { ...EMPTY_POOL };
+		let client: SqlClient | null = null;
+		try {
+			client = this.connect({
+				hostname: '127.0.0.1',
+				port: target.pooler.port,
+				username: target.pooler.username,
+				password: target.pooler.password,
+				database: 'pgbouncer',
+				// The sidecar mirrors the database's TLS mode for client connections.
+				...tlsOptions(target),
+			});
+			const pools = await client.query(POOLER_POOLS_SQL);
+			let metrics = parsePoolerPools(pools);
+			try {
+				metrics = parsePoolerStats(await client.query(POOLER_STATS_SQL), metrics);
+			} catch (error) {
+				this.log(
+					'warn',
+					`Database ${target.id}: pooler stats failed: ${scrub(errorText(error), [target.pooler.password])}`,
+				);
+			}
+			return metrics;
+		} catch (error) {
+			this.log(
+				'warn',
+				`Database ${target.id}: pooler sample failed: ${scrub(errorText(error), [target.pooler.password])}`,
+			);
+			return { ...EMPTY_POOL };
+		} finally {
+			await client?.close().catch(() => undefined);
+		}
+	}
+
 	private async bootstrap(target: DatabaseTarget, ownerPassword: string): Promise<void> {
 		const client = this.connect({
 			hostname: '127.0.0.1',
@@ -404,6 +523,7 @@ export class DatabaseStatsSampler {
 			username: target.monitor.ownerUser,
 			password: ownerPassword,
 			database: target.monitor.databaseName,
+			...tlsOptions(target),
 		});
 		try {
 			const [row] = await client.query(BOOTSTRAP_SQL, [
@@ -465,6 +585,15 @@ export class DatabaseStatsSampler {
 	}
 }
 
+function tlsOptions(target: DatabaseTarget): Pick<SqlConnectOptions, 'tls'> {
+	if (!target.tls) return {};
+	return {
+		tls: target.tls.caPem
+			? { ca: target.tls.caPem, rejectUnauthorized: true }
+			: { rejectUnauthorized: false },
+	};
+}
+
 function downBucket(target: DatabaseTarget, bucket: string): DatabaseMetricBucket {
 	return {
 		databaseId: target.id,
@@ -476,6 +605,7 @@ function downBucket(target: DatabaseTarget, bucket: string): DatabaseMetricBucke
 		connectionsTotal: 0,
 		maxConnections: 0,
 		memoryBytes: int(target.memoryBytes),
+		...EMPTY_POOL,
 		...zeroCounters(),
 	};
 }

@@ -44,6 +44,8 @@ export interface WorkloadRuntimeReport {
 	status: WorkloadStatus;
 	restarts: number;
 	memoryBytes?: number;
+	/** Managed databases only: TLS state from the helper (the CA PEM is public material). */
+	tls?: { enabled: boolean; caPem: string | null; error: string | null };
 }
 
 export type WorkloadLogLevel = 'info' | 'warn' | 'error';
@@ -80,6 +82,12 @@ interface HeldMonitor {
 	monitor: Omit<DatabaseMonitor, 'ownerPassword'> & { ownerPassword: string | null };
 	/** Allowlisted extensions to create on first start. */
 	extensions: string[];
+	/**
+	 * Owner credential kept in memory only for the PgBouncer admin console (`SHOW POOLS`/`SHOW
+	 * STATS`). It never reaches disk, desired state or the helper, and `ownerPassword` above is
+	 * still dropped after the monitor role exists.
+	 */
+	poolerPassword: string | null;
 }
 
 /** Root and scoped keys for one storage instance (memory only). */
@@ -197,6 +205,18 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 				...(report?.memoryBytes !== undefined ? { memoryBytes: report.memoryBytes } : {}),
 				monitor: { ...held.monitor },
 				extensions: [...held.extensions],
+				...(report?.tls?.enabled
+					? { tls: { caPem: report.tls.caPem } }
+					: {}),
+				...(workload.pooler && held.poolerPassword
+					? {
+							pooler: {
+								port: workload.pooler.port,
+								username: held.monitor.ownerUser,
+								password: held.poolerPassword,
+							},
+						}
+					: {}),
 			});
 		}
 		return targets.sort((a, b) => a.id.localeCompare(b.id));
@@ -429,6 +449,7 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 			activationVersion: workload.activationVersion,
 			monitor: { ...monitor },
 			extensions: [...extensions],
+			poolerPassword: monitor.ownerPassword,
 		});
 	}
 
@@ -475,6 +496,7 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 						status: healthy ? 'running' : 'starting',
 						restarts: status.restarts,
 						...(status.memoryBytes !== undefined ? { memoryBytes: status.memoryBytes } : {}),
+						...(status.tls ? { tls: status.tls } : {}),
 					});
 					return;
 				}
@@ -522,6 +544,7 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 				status,
 				restarts: applied.restarts,
 				...(applied.memoryBytes !== undefined ? { memoryBytes: applied.memoryBytes } : {}),
+				...(applied.tls ? { tls: applied.tls } : {}),
 			});
 			if (healthy) {
 				this.log('info', `Workload ${id} (${workload.projectSlug}) is running`);
@@ -649,6 +672,20 @@ export function workloadHeartbeat(reports: WorkloadRuntimeReport[]): Array<{
 	}));
 }
 
+/** TLS state for the heartbeat; the CA PEM is public and the private key stays on the node. */
+export function databaseTlsHeartbeat(
+	reports: WorkloadRuntimeReport[],
+): Array<{ id: string; enabled: boolean; caPem: string | null; error: string | null }> {
+	return reports
+		.filter((report) => report.tls)
+		.map((report) => ({
+			id: report.id,
+			enabled: report.tls?.enabled ?? false,
+			caPem: report.tls?.caPem ?? null,
+			error: report.tls?.error ?? null,
+		}));
+}
+
 /**
  * One health probe. Socket-activated processes are reached through their socket (Caddy does the
  * same); databases get a TCP probe on their loopback port; everything else answers HTTP on
@@ -758,6 +795,7 @@ function reportFromStatus(status: HelperWorkloadStatus): WorkloadRuntimeReport {
 		status: status.status,
 		restarts: status.restarts,
 		...(status.memoryBytes !== undefined ? { memoryBytes: status.memoryBytes } : {}),
+		...(status.tls ? { tls: status.tls } : {}),
 	};
 }
 
@@ -782,7 +820,13 @@ export function workloadFingerprint(workload: WorkloadDesired): string {
 		...(workload.volumeId ? { volumeId: workload.volumeId } : {}),
 		// Only present for databases, so existing app fingerprints (and units) stay unchanged.
 		...(workload.database
-			? { database: { engine: workload.database.engine, version: workload.database.version } }
+			? {
+					database: {
+						engine: workload.database.engine,
+						version: workload.database.version,
+						...(workload.database.tls ? { tls: true } : {}),
+					},
+				}
 			: {}),
 		// Engine + version only: buckets, users and keysVersion are converged over S3 and must never
 		// restart the container.
@@ -820,6 +864,7 @@ export function withOptionalSpec(workload: WorkloadDesired): WorkloadDesired {
 		extras.database = {
 			engine: database.engine as NonNullable<WorkloadDesired['database']>['engine'],
 			version: database.version,
+			...((candidate.database as { tls?: unknown } | undefined)?.tls === true ? { tls: true } : {}),
 		};
 	if (workload.objectStorage)
 		extras.objectStorage = {

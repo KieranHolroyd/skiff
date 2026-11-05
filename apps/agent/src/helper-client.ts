@@ -18,6 +18,8 @@ export interface HelperWorkloadStatus {
 	status: WorkloadStatus;
 	restarts: number;
 	memoryBytes?: number;
+	/** Managed databases only: TLS state derived from the helper's certificate files. */
+	tls?: { enabled: boolean; caPem: string | null; error: string | null };
 }
 
 export interface HelperLogEntry {
@@ -299,5 +301,19 @@ function parseStatus(value: unknown): HelperWorkloadStatus {
 	};
 	if (typeof record.memoryBytes === 'number' && Number.isFinite(record.memoryBytes) && record.memoryBytes >= 0)
 		status.memoryBytes = record.memoryBytes;
+	const tls = asOptionalRecord(record.tls);
+	if (tls && typeof tls.enabled === 'boolean') {
+		status.tls = {
+			enabled: tls.enabled,
+			caPem: typeof tls.caPem === 'string' ? tls.caPem : null,
+			error: typeof tls.error === 'string' ? tls.error : null,
+		};
+	}
 	return status;
+}
+
+function asOptionalRecord(value: unknown): Record<string, unknown> | null {
+	return typeof value === 'object' && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: null;
 }

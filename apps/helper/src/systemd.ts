@@ -48,6 +48,14 @@ import {
 	type WorkloadDesired,
 	type WorkloadStatus,
 } from './validate.ts';
+import {
+	databaseTlsPaths,
+	disableDatabaseTls,
+	generateDatabaseTls,
+	readDatabaseTlsState,
+	type DatabaseTlsGenerator,
+	type DatabaseTlsState,
+} from './tls.ts';
 
 /**
  * systemd is the primary runtime driver. This module owns *all* privileges: it writes unit files,
@@ -87,6 +95,8 @@ export interface HelperWorkloadStatus {
 	status: WorkloadStatus;
 	restarts: number;
 	memoryBytes?: number;
+	/** Managed databases only: TLS state derived from the node's certificate files. */
+	tls?: DatabaseTlsState;
 }
 
 export interface HelperLogEntry {
@@ -132,6 +142,10 @@ export interface SystemdDriverOptions {
 	journalctlPath?: string;
 	/** Absolute podman binary used by the fixed database dump/restore verbs. */
 	podmanPath?: string;
+	/** Absolute openssl used to generate per-database certificates (DB_TLS). */
+	opensslPath?: string;
+	/** Injectable certificate generator for tests; defaults to the fixed openssl argv sequence. */
+	databaseTlsGenerator?: DatabaseTlsGenerator;
 	socketMode?: string;
 	socketGroup?: string | null;
 	/**
@@ -165,6 +179,8 @@ export class SystemdDriver {
 	private readonly systemctlPath: string;
 	private readonly journalctlPath: string;
 	private readonly podmanPath: string;
+	private readonly opensslPath: string;
+	private readonly databaseTlsGenerator: DatabaseTlsGenerator;
 	private readonly socketMode: string;
 	private readonly socketGroup: string | null;
 	private readonly chown: (path: string, uid: number, gid: number) => Promise<void>;
@@ -189,6 +205,8 @@ export class SystemdDriver {
 			'journalctlPath',
 		);
 		this.podmanPath = assertAbsolutePath(options.podmanPath ?? '/usr/bin/podman', 'podmanPath');
+		this.opensslPath = assertAbsolutePath(options.opensslPath ?? '/usr/bin/openssl', 'opensslPath');
+		this.databaseTlsGenerator = options.databaseTlsGenerator ?? generateDatabaseTls;
 		this.socketMode = validateSocketMode(options.socketMode ?? '0666');
 		this.socketGroup = options.socketGroup ?? null;
 		this.chown = options.chown ?? defaultChown();
@@ -389,12 +407,14 @@ export class SystemdDriver {
 				await fs.chmod(dataDir, 0o700);
 				await this.chown(dataDir, owner.uid, owner.gid);
 			}
+			const tls = await this.databaseTlsFor(workload);
 			const container = renderContainerUnit({
 				workload,
 				image,
 				envFile,
 				dataDir,
 				secretsDir: Object.keys(activation.files).length > 0 ? secretsDir : null,
+				tlsDir: tls?.enabled ? databaseTlsPaths(this.runtimeDir, workload.id).dir : null,
 			});
 			changed = (await this.writeIfChanged(paths.container, container, 0o644)) || changed;
 			changed = (await this.removeIfExists(paths.service)) || changed;
@@ -410,6 +430,13 @@ export class SystemdDriver {
 				const config = renderPoolerConfig({
 					databaseAlias: databaseAlias(workload.id),
 					authFile: '/etc/pgbouncer/userlist.txt',
+					adminUser: user,
+					tls: tls?.enabled
+						? {
+								certFile: '/run/skiff-tls/server.crt',
+								keyFile: '/run/skiff-tls/server.key',
+							}
+						: null,
 				});
 				const userlist = renderPoolerUserlist(user, password);
 				changed = (await this.writeIfChanged(configPath, config, 0o600)) || changed;
@@ -419,7 +446,12 @@ export class SystemdDriver {
 				changed =
 					(await this.writeIfChanged(
 						paths.pooler,
-						renderPoolerUnit({ workload, configPath, userlistPath }),
+						renderPoolerUnit({
+							workload,
+							configPath,
+							userlistPath,
+							tlsDir: tls?.enabled ? databaseTlsPaths(this.runtimeDir, workload.id).dir : null,
+						}),
 						0o644,
 					)) || changed;
 			} else {
@@ -751,7 +783,14 @@ export class SystemdDriver {
 		// A systemd restart loop shows up as `failed` only between attempts; NRestarts makes it
 		// visible to the control plane even when the unit is momentarily active.
 		if (status === 'running' && restarts >= 5) status = 'failed';
-		return { id, status, restarts, ...(memoryBytes !== null ? { memoryBytes } : {}) };
+		const tls = id.startsWith('db_') ? await readDatabaseTlsState(this.runtimeDir, id) : null;
+		return {
+			id,
+			status,
+			restarts,
+			...(memoryBytes !== null ? { memoryBytes } : {}),
+			...(tls ? { tls } : {}),
+		};
 	}
 
 	/**
@@ -798,6 +837,31 @@ export class SystemdDriver {
 			entries,
 			nextCursor: entries.at(-1)?.cursor ?? cursor ?? null,
 		};
+	}
+
+	/**
+	 * Generate the database certificate when DB_TLS asked for it. A certificate failure is not a
+	 * database failure: the unit is rendered without TLS and the error is reported by `status`.
+	 */
+	private async databaseTlsFor(workload: WorkloadDesired): Promise<DatabaseTlsState | null> {
+		if (!workload.database) return null;
+		if (!workload.database.tls) {
+			await disableDatabaseTls(this.runtimeDir, workload.id);
+			return readDatabaseTlsState(this.runtimeDir, workload.id);
+		}
+		try {
+			return await this.databaseTlsGenerator({
+				runner: this.runner,
+				opensslPath: this.opensslPath,
+				runtimeDir: this.runtimeDir,
+				id: workload.id,
+				alias: databaseAlias(workload.id),
+				chown: this.chown,
+			});
+		} catch {
+			// The generator records the detail in tls/error; status surfaces it to the control plane.
+			return readDatabaseTlsState(this.runtimeDir, workload.id);
+		}
 	}
 
 	private async writeSecrets(

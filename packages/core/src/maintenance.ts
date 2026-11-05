@@ -313,6 +313,17 @@ export class MaintenanceService {
 				severity: 'warning',
 			});
 		}
+		for (const sample of samples) {
+			if (!sample.up || !sample.poolerUp || sample.poolSaturation < 0.9) continue;
+			const key = `database_pool_saturation:${sample.databaseId}`;
+			fired.push(key);
+			await this.notify({
+				key,
+				title: 'Database pool above 90% saturation',
+				detail: `Database ${sample.databaseId}'s PgBouncer pool is ${(sample.poolSaturation * 100).toFixed(1)}% full (${sample.poolActive} active, ${sample.poolWaiting} waiting). Use the direct URL or raise the pool size.`,
+				severity: sample.poolSaturation >= 0.95 ? 'critical' : 'warning',
+			});
+		}
 		return fired;
 	}
 

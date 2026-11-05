@@ -491,6 +491,19 @@ describe('managed databases', () => {
 		expect(f.runtime.databaseTargets()[0]?.monitor.ownerPassword).toBeNull();
 	});
 
+	test('forwards database.tls to the helper and includes it in the diff', async () => {
+		const f = fixture();
+		f.activations.set(DB_ID, databaseActivation());
+		const tls = databaseWorkload({ database: { engine: 'postgres', version: '17', tls: true } });
+		await f.runtime.converge(state([tls], 1, []));
+		expect(f.helper.applied.get(DB_ID)?.workload.database).toEqual({
+			engine: 'postgres',
+			version: '17',
+			tls: true,
+		});
+		expect(workloadFingerprint(tls)).toContain('"tls":true');
+	});
+
 	test('app workloads expose no database targets', async () => {
 		const f = fixture();
 		f.activations.set('app', activationFor('app'));

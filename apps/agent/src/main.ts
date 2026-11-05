@@ -23,7 +23,7 @@ import { HelperClient } from './helper-client.ts';
 import { formatEnv, JOIN_USAGE, joinNode, nodeFilePath, parseJoinArgs } from './join.ts';
 import { WorkloadLogDrain } from './log-drain.ts';
 import { ReleaseManager } from './releases.ts';
-import { WorkloadRuntime, workloadHeartbeat } from './runtime.ts';
+import { databaseTlsHeartbeat, WorkloadRuntime, workloadHeartbeat } from './runtime.ts';
 import { StatsCollector } from './stats.ts';
 import { StorageReconciler, STORAGE_RECONCILE_INTERVAL_MS } from './storage-admin.ts';
 import { StorageRequester } from './storage.ts';
@@ -624,6 +624,7 @@ class AgentRuntime {
 		const backupResults = this.databaseBackups.pendingResults();
 		const rotationResults = this.databaseRotations.pendingResults();
 		const poolerRestarted = this.databasePoolerRestarts.pending();
+		const databaseTls = databaseTlsHeartbeat(reports);
 		// Bucket deletions are reported once, capped by the heartbeat schema (S8).
 		const storageBucketDeletions = this.storageAdmin.pendingBucketDeletions().slice(0, 500);
 		// A storage move happens outside the agent's sandbox (D48); ask for it while it is due.
@@ -646,6 +647,7 @@ class AgentRuntime {
 			...(backupResults.length > 0 ? { databaseBackupResults: backupResults } : {}),
 			...(rotationResults.length > 0 ? { databaseRotationResults: rotationResults } : {}),
 			...(poolerRestarted.length > 0 ? { databasePoolerRestarted: poolerRestarted } : {}),
+			...(databaseTls.length > 0 ? { databaseTls } : {}),
 			...(purgedDatabases.length > 0 ? { purgedDatabases } : {}),
 			...(purgedStorage.length > 0 ? { purgedStorage } : {}),
 			...(storageBucketDeletions.length > 0 ? { storageBucketDeletions } : {}),

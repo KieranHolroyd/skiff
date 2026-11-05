@@ -14,6 +14,12 @@ export const DB_GAUGES = [
 	['connections_total', 'connectionsTotal'],
 	['max_connections', 'maxConnections'],
 	['memory_bytes', 'memoryBytes'],
+	['pooler_up', 'poolerUp'],
+	['pool_active', 'poolActive'],
+	['pool_idle', 'poolIdle'],
+	['pool_waiting', 'poolWaiting'],
+	['pool_saturation', 'poolSaturation'],
+	['pool_avg_wait_ms', 'poolAvgWaitMs'],
 ] as const;
 
 export const DB_COUNTERS = [
@@ -42,6 +48,13 @@ export const dbMetricsTableSql = (table: string): string => `
 		${DB_GAUGES.map(([c]) => `${c} DOUBLE NOT NULL`).join(',\n\t\t')},
 		${DB_COUNTERS.map(([c]) => `${c} UBIGINT NOT NULL`).join(',\n\t\t')}
 	)`;
+
+/** Additive column upgrades for databases created by an earlier release. */
+export function dbMetricsColumnUpgrades(table: string): string[] {
+	return DB_GAUGES.map(
+		([column]) => `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${column} DOUBLE DEFAULT 0`,
+	);
+}
 
 /** Aggregates for one bucket of rows, used by the rollup and by hourly queries. */
 export function dbAggregateSelect(): string {
@@ -100,7 +113,13 @@ export const DB_LATEST_SQL = `
 		arg_max(size_bytes, bucket) AS size_bytes,
 		arg_max(connections_total, bucket) AS connections_total,
 		arg_max(max_connections, bucket) AS max_connections,
-		arg_max(memory_bytes, bucket) AS memory_bytes
+		arg_max(memory_bytes, bucket) AS memory_bytes,
+		arg_max(pooler_up, bucket) AS pooler_up,
+		arg_max(pool_active, bucket) AS pool_active,
+		arg_max(pool_idle, bucket) AS pool_idle,
+		arg_max(pool_waiting, bucket) AS pool_waiting,
+		arg_max(pool_saturation, bucket) AS pool_saturation,
+		arg_max(pool_avg_wait_ms, bucket) AS pool_avg_wait_ms
 	FROM db_metrics_1m
 	WHERE bucket >= CAST(? AS TIMESTAMPTZ)
 	GROUP BY database_id

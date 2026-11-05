@@ -64,7 +64,10 @@ databases (a restore must get its port back).
 `attach` links a database to a project with an env prefix (default `DATABASE`, UPPER_SNAKE,
 unique per project). At activation the consumer workload receives:
 
-`<P>_URL`, `<P>_HOST`, `<P>_PORT`, `<P>_USER`, `<P>_PASSWORD`, `<P>_NAME`
+`<P>_URL`, `<P>_HOST`, `<P>_PORT`, `<P>_USER`, `<P>_PASSWORD`, `<P>_NAME`,
+`<P>_SSL_MODE`, `<P>_CA_CERT` (TLS), and `<P>_POOL_URL`, `<P>_POOL_HOST`, `<P>_POOL_PORT` (pooler).
+`<P>_URL` is the direct connection; the pooled URL is a separate variable so an app can choose per
+query path (Prisma uses `url = _POOL_URL`, `directUrl = _URL`).
 
 - Process app on the database's node → `127.0.0.1:<hostPort>`.
 - Container app on the database's node → `db-<id hex>:5432` over `skiff-workloads` network.
@@ -88,8 +91,10 @@ unique per project). At activation the consumer workload receives:
 
 - The control plane generates an owner password and a monitor password on create, sealed with the
   org data key (envelope encryption, D18).
-- `GET /api/v1/databases/:name/credentials` reveals the connection URL for humans and CLIs. It
-  needs `database:credentials`, which is never pre-ticked for agents, and every read is audited.
+- `GET /api/v1/databases/:name/credentials` reveals the direct URL, the pooled URL (when enabled),
+  `sslmode`, the public CA PEM (never the private key) and copy-paste snippets for psql, Prisma,
+  Drizzle, Kysely, Django, Rails, Go `pgx` and node-postgres. It needs `database:credentials`,
+  which is never pre-ticked for agents, and every read is audited.
 - **MCP never returns credentials.** Agents get the URL injected into the apps they deploy, which
   is all they need.
 - Rotation is a follow-up (needs `ALTER ROLE` from the agent plus a re-activation of consumers).
@@ -106,7 +111,7 @@ and pruning as traffic): per database and minute,
 
 | Kind | Fields |
 |---|---|
-| Gauges | `size_bytes`, `connections_active`, `connections_idle`, `connections_total`, `max_connections`, `memory_bytes` (container), `up` |
+| Gauges | `size_bytes`, `connections_active`, `connections_idle`, `connections_total`, `max_connections`, `memory_bytes` (container), `up`, `pooler_up`, `pool_active`, `pool_idle`, `pool_waiting`, `pool_saturation`, `pool_avg_wait_ms` |
 | Counters (per-minute deltas) | `xact_commit`, `xact_rollback`, `tup_returned`, `tup_fetched`, `tup_inserted`, `tup_updated`, `tup_deleted`, `blks_hit`, `blks_read`, `deadlocks`, `temp_bytes` |
 
 Counters are sent as deltas the agent computes from `pg_stat_database`; a stats reset or restart
@@ -120,9 +125,14 @@ snapshot is kept (`databases.stats_json`); history isn't needed for "what's in m
 Both ride the existing `POST /api/agent/telemetry` batch as an additive `databases` field. The
 control plane drops samples for databases that are not placed on the reporting node.
 
+When the pooler is enabled, the same one-minute sample also opens a short-lived connection to
+PgBouncer's admin console on loopback and runs `SHOW POOLS` and `SHOW STATS` (the database owner
+is an `admin_users` entry). A failed pooler sample records `pooler_up=0` and leaves the Postgres
+sample intact. Pool saturation is `(active + waiting) / max_client_conn` (200).
+
 Surfaces: `GET /api/v1/databases/:name/metrics`, charts and a tables list on the dashboard,
-`skiff_database_*` series on `/metrics`, and two alerts (size above 85% of the storage budget,
-connections above 90% of `max_connections`).
+`skiff_database_*` series on `/metrics`, and three alerts (size above 85% of the storage budget,
+connections above 90% of `max_connections`, pool saturation above 90%).
 
 ## 6. Lifecycle
 
@@ -185,7 +195,7 @@ SQL, calls, total/mean time, rows, shared/temp blocks) when the extension is ena
 plane keeps the latest snapshot in SQLite; the dashboard shows it in **Extensions & slow queries**.
 Removing an extension from the list never drops it automatically.
 
-## 10. Connection pooling (D85)
+## 10. Connection pooling and TLS (D85)
 
 New databases get a transaction-mode PgBouncer sidecar by default. The helper renders a second
 Quadlet unit with a loopback-only `PublishPort`, the `skiff-workloads` network, a 0600 config and
@@ -193,8 +203,39 @@ userlist owned by the image's uid 70, and the fixed `edoburu/pgbouncer` digest. 
 separate from the Postgres unit: a pooler crash leaves direct connections working.
 
 Attachments receive `<PREFIX>_POOL_URL`, `<PREFIX>_POOL_HOST` and `<PREFIX>_POOL_PORT` in addition
-to the direct values. Use the direct URL for migrations, `pg_dump`, logical replication,
-`LISTEN/NOTIFY`, advisory locks, cursors and prepared statements in transaction mode.
+to the direct values. `<PREFIX>_URL` / `<PREFIX>_DIRECT_URL` always point at Postgres directly.
+
+**Pooler limitations.** Transaction mode is wrong for anything that needs one session:
+migrations and schema tools, `pg_dump`/`pg_restore`, logical replication, `LISTEN`/`NOTIFY`,
+advisory locks, cursors held across transactions, `SET`/temp tables used across statements, and
+prepared statements. Use the direct URL for those. The credentials response and the dashboard show
+both URLs and a "use direct for migrations" note.
+
+### TLS
+
+`SKIFF_FEATURE_DB_TLS` (default off) asks the helper to generate a per-database CA and server
+certificate with the host's fixed `openssl` argv. Files live at
+`/run/skiff-workloads/<id>/tls/{ca.crt,server.crt,server.key}`, are `0400`, and are handed to the
+image's uid/gid 70. The Postgres unit mounts that directory read-only at `/run/skiff-tls` and starts
+with `ssl=on`, `ssl_cert_file`, `ssl_key_file` and `ssl_min_protocol_version=TLSv1.2`.
+
+- `<PREFIX>_URL` / `<PREFIX>_POOL_URL` carry `?sslmode=require`. PgBouncer mounts the same
+  certificate and requires client TLS (`client_tls_sslmode = require`), so the pooled hop is
+  encrypted too; it still connects to Postgres inside the private container network.
+- `<PREFIX>_CA_CERT` carries the public CA PEM for process apps; `<PREFIX>_SSL_MODE` is `require`.
+  Container env files cannot carry multi-line values, so container apps use `sslmode=require` or
+  read the CA from the credentials response (the PEM is public).
+- `GET /credentials` returns `sslmode`, `caPem` (not a secret), `directUrl`, `poolerUrl` and
+  snippets. Use `sslmode=verify-full` with `sslrootcert=ca.pem` when the client supports hostname
+  verification; `require` is the compatible default because clients reach the database by loopback
+  or the container alias.
+- If certificate generation fails, the helper logs the error in `tls/error`, starts Postgres without
+  TLS, and the database view shows a warning. A certificate bug never blocks startup.
+- The private key never enters desired state, heartbeats, logs or the credentials response; only
+  the CA PEM is relayed. TLS state is derived from the helper's files, so there is no schema column.
+
+The pinned Postgres image does not generate certificates, so Debian's `openssl` is a helper
+dependency (`SKIFF_HELPER_OPENSSL`, default `/usr/bin/openssl`).
 
 ## 11. Credential rotation (D86)
 

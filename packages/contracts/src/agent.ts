@@ -173,6 +173,18 @@ export const heartbeatSchema = z.object({
 	databaseRotationResults: z.array(databaseRotationResultSchema).max(50).optional(),
 	/** Database ids whose pooler restart the node completed. */
 	databasePoolerRestarted: z.array(z.string()).max(50).optional(),
+	/** TLS state derived from the helper's certificate files (CA PEM is public, never a key). */
+	databaseTls: z
+		.array(
+			z.object({
+				id: z.string().max(100),
+				enabled: z.boolean(),
+				caPem: z.string().max(16_384).nullable().optional(),
+				error: z.string().max(2_000).nullable().optional(),
+			}),
+		)
+		.max(200)
+		.optional(),
 	/** Outcomes of `objectStorage.deleteBuckets` entries since the last heartbeat. */
 	storageBucketDeletions: z.array(storageBucketDeletionSchema).max(500).optional(),
 });

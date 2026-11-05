@@ -107,6 +107,8 @@ export type DatabaseEngine = keyof typeof DATABASE_ENGINES;
 export interface WorkloadDatabase {
 	engine: DatabaseEngine;
 	version: string;
+	/** Render Postgres with the helper-generated certificate (SKIFF_FEATURE_DB_TLS). */
+	tls?: boolean;
 }
 
 /** Workload ids of managed databases carry this prefix; `purge` accepts these and `st_` ids. */
@@ -132,9 +134,15 @@ export function parseDatabase(value: unknown, label = 'workload.database'): Work
 	if (typeof version !== 'string' || !(info.versions as readonly string[]).includes(version))
 		throw new ValidationError(`${label}.version must be one of ${info.versions.join(', ')}`);
 	for (const key of Object.keys(record)) {
-		if (key !== 'engine' && key !== 'version') throw new ValidationError(`${label}.${key} is not supported`);
+		if (key !== 'engine' && key !== 'version' && key !== 'tls')
+			throw new ValidationError(`${label}.${key} is not supported`);
 	}
-	return { engine: engine as DatabaseEngine, version };
+	const database: WorkloadDatabase = { engine: engine as DatabaseEngine, version };
+	if (record.tls !== undefined) {
+		if (typeof record.tls !== 'boolean') throw new ValidationError(`${label}.tls must be a boolean`);
+		database.tls = record.tls;
+	}
+	return database;
 }
 
 /** `db_` ids only, so a purge can never point at an app's data directory. */

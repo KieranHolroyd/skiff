@@ -240,6 +240,7 @@ export class NodeService {
 			this.ctx.databases.applyRotationResults(node.id, input.databaseRotationResults);
 		if (input.databasePoolerRestarted?.length)
 			this.ctx.databases.applyPoolerRestarted(node.id, input.databasePoolerRestarted);
+		if (input.databaseTls?.length) this.ctx.databases.applyTlsReport(node.id, input.databaseTls);
 		if (input.purgedDatabases?.length) this.ctx.databases.applyPurged(node.id, input.purgedDatabases);
 		if (input.purgedStorage?.length) this.ctx.storage.applyPurged(node.id, input.purgedStorage);
 		if (input.storageBucketDeletions?.length)

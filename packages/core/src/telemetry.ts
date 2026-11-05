@@ -22,6 +22,7 @@ import {
 	DB_LATEST_SQL,
 	DB_ROLLUP_DELETE_SQL,
 	DB_ROLLUP_INSERT_SQL,
+	dbMetricsColumnUpgrades,
 	dbMetricsTableSql,
 	dbSeriesSql,
 } from './database-metrics-sql.ts';
@@ -127,6 +128,12 @@ export interface DatabaseLatestSample {
 	connectionsTotal: number;
 	maxConnections: number;
 	memoryBytes: number;
+	poolerUp: boolean;
+	poolActive: number;
+	poolIdle: number;
+	poolWaiting: number;
+	poolSaturation: number;
+	poolAvgWaitMs: number;
 }
 
 export interface StorageMetricsQuery {
@@ -959,6 +966,12 @@ export class TelemetryStore {
 					connectionsTotal: readNumber(row['connections_total']),
 					maxConnections: readNumber(row['max_connections']),
 					memoryBytes: readNumber(row['memory_bytes']),
+					poolerUp: readNumber(row['pooler_up']) >= 0.5,
+					poolActive: readNumber(row['pool_active']),
+					poolIdle: readNumber(row['pool_idle']),
+					poolWaiting: readNumber(row['pool_waiting']),
+					poolSaturation: readNumber(row['pool_saturation']),
+					poolAvgWaitMs: readNumber(row['pool_avg_wait_ms']),
 				}));
 			}),
 		);
@@ -1190,6 +1203,12 @@ export class TelemetryStore {
 					['skiff_database_size_bytes', 'size_bytes', 'Database size on disk.'],
 					['skiff_database_connections', 'connections_total', 'Open connections.'],
 					['skiff_database_max_connections', 'max_connections', 'Configured max_connections.'],
+					['skiff_database_pooler_up', 'pooler_up', 'Whether the PgBouncer admin console answered (1 = up).'],
+					['skiff_database_pool_active', 'pool_active', 'PgBouncer client/server connections in use.'],
+					['skiff_database_pool_idle', 'pool_idle', 'Idle PgBouncer server connections.'],
+					['skiff_database_pool_waiting', 'pool_waiting', 'Clients waiting for a PgBouncer server connection.'],
+					['skiff_database_pool_saturation', 'pool_saturation', 'Share of max_client_conn in use (0–1).'],
+					['skiff_database_pool_avg_wait_ms', 'pool_avg_wait_ms', 'Average PgBouncer wait, milliseconds.'],
 				];
 				for (const [name, column, help] of series) {
 					lines.push(`# HELP ${name} ${help}`, `# TYPE ${name} gauge`);
@@ -1239,6 +1258,9 @@ export class TelemetryStore {
 			await connection.run(metricsTableSql('metrics_1h'));
 			await connection.run(dbMetricsTableSql('db_metrics_1m'));
 			await connection.run(dbMetricsTableSql('db_metrics_1h'));
+			for (const table of ['db_metrics_1m', 'db_metrics_1h']) {
+				for (const sql of dbMetricsColumnUpgrades(table)) await connection.run(sql);
+			}
 			await connection.run(storageMetricsTableSql('storage_metrics_1m'));
 			await connection.run(storageMetricsTableSql('storage_metrics_1h'));
 			this.#instance = instance;

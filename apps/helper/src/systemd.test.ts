@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SystemdDriver, type CommandRunner, type RunResult } from './systemd.ts';
+import { databaseTlsPaths } from './tls.ts';
 import { parseWorkload, type WorkloadActivation, type WorkloadDesired } from './validate.ts';
 
 const SHA = 'a'.repeat(64);
@@ -37,7 +38,9 @@ interface Fixture {
 	chowns: Array<[string, number, number]>;
 }
 
-async function fixture(options: { packageJson?: boolean } = {}): Promise<Fixture> {
+async function fixture(
+	options: { packageJson?: boolean; databaseTlsGenerator?: import('./tls.ts').DatabaseTlsGenerator } = {},
+): Promise<Fixture> {
 	const root = await fs.mkdtemp(join(tmpdir(), 'skiff-helper-systemd-'));
 	directories.push(root);
 	const unitDir = join(root, 'units');
@@ -64,6 +67,7 @@ async function fixture(options: { packageJson?: boolean } = {}): Promise<Fixture
 		bunPath: '/usr/local/bin/bun',
 		socketMode: '0660',
 		socketGroup: 'caddy',
+		...(options.databaseTlsGenerator ? { databaseTlsGenerator: options.databaseTlsGenerator } : {}),
 	});
 	return { root, releaseDir, driver, runner, unitDir, quadletDir, runtimeDir, stateDir, chowns };
 }
@@ -395,6 +399,55 @@ describe('database profile', () => {
 			'--no-block',
 			`skiff-workload-${DB_ID}.service`,
 		]);
+	});
+
+	test('a certificate failure never blocks startup and is surfaced in status', async () => {
+		const f = await fixture({
+			databaseTlsGenerator: async ({ runtimeDir, id }) => {
+				const paths = databaseTlsPaths(runtimeDir, id);
+				await fs.mkdir(paths.dir, { recursive: true, mode: 0o700 });
+				await fs.writeFile(paths.error, 'openssl is missing\n', { mode: 0o600 });
+				throw new Error('openssl is missing');
+			},
+		});
+		f.runner.show = 'ActiveState=active\nSubState=running\nNRestarts=0\n';
+		const status = await f.driver.apply(
+			database({ database: { engine: 'postgres', version: '17', tls: true } }),
+			databaseActivation(),
+		);
+		expect(status.status).toBe('running');
+		expect(status.tls).toEqual({ enabled: false, caPem: null, error: 'openssl is missing' });
+		const quadlet = await fs.readFile(join(f.quadletDir, `skiff-workload-${DB_ID}.container`), 'utf8');
+		expect(quadlet).not.toContain('/run/skiff-tls');
+		expect(quadlet).not.toContain('ssl=on');
+	});
+
+	test('a successful generator mounts TLS and reports the CA', async () => {
+		const f = await fixture({
+			databaseTlsGenerator: async ({ runtimeDir, id }) => {
+				const paths = databaseTlsPaths(runtimeDir, id);
+				await fs.mkdir(paths.dir, { recursive: true, mode: 0o700 });
+				await fs.writeFile(paths.caCert, '-----BEGIN CERTIFICATE-----\nCA\n', { mode: 0o400 });
+				await fs.writeFile(paths.serverCert, 'cert', { mode: 0o400 });
+				await fs.writeFile(paths.serverKey, 'key', { mode: 0o400 });
+				await fs.writeFile(paths.marker, '1\n', { mode: 0o400 });
+				return {
+					enabled: true,
+					caPem: '-----BEGIN CERTIFICATE-----\nCA\n',
+					error: null,
+				};
+			},
+		});
+		f.runner.show = 'ActiveState=active\nSubState=running\nNRestarts=0\n';
+		const status = await f.driver.apply(
+			database({ database: { engine: 'postgres', version: '17', tls: true } }),
+			databaseActivation(),
+		);
+		expect(status.tls?.enabled).toBe(true);
+		expect(status.tls?.caPem).toContain('BEGIN CERTIFICATE');
+		const quadlet = await fs.readFile(join(f.quadletDir, `skiff-workload-${DB_ID}.container`), 'utf8');
+		expect(quadlet).toContain(`Volume=${join(f.runtimeDir, DB_ID, 'tls')}:/run/skiff-tls:ro,Z`);
+		expect(quadlet).toContain('ssl=on');
 	});
 
 	test('app containers are not chowned and restart synchronously', async () => {
