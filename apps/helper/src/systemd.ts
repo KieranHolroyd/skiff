@@ -1350,7 +1350,7 @@ END $$;`];
 			String(lines),
 		];
 		const cursor = options.cursor?.trim();
-		if (cursor) args.splice(2, 0, '--after-cursor', cursor);
+		if (cursor) args.push('--after-cursor', cursor);
 		const result = await this.runner.run(args);
 		if (result.code !== 0) {
 			const detail = result.stderr.trim() || result.stdout.trim() || 'no output';

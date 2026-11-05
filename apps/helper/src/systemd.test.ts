@@ -275,7 +275,11 @@ describe('logs', () => {
 		expect(result.nextCursor).toBe('s=11');
 		const call = f.runner.calls.find((argv) => argv[0]?.includes('journalctl'));
 		expect(call).toContain('--after-cursor');
-		expect(call).toContain('skiff-workload-wld_abc123.service');
+		// Each option keeps its own value: `-u --after-cursor <c>` would make journalctl treat
+		// the cursor as a match ("Failed to add match ... Invalid argument").
+		const after = call!.indexOf('--after-cursor');
+		expect(call![after + 1]).toBe('s=9');
+		expect(call![call!.indexOf('-u') + 1]).toBe('skiff-workload-wld_abc123.service');
 		expect(call).toContain('50');
 	});
 });

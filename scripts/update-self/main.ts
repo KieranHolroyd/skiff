@@ -89,7 +89,8 @@ update options:
   --repo <owner/name>  GitHub repository (default: from the current release, else KieranHolroyd/skiff)
   --force              install even if not newer (rebuild/downgrade), or retry a release that failed
   --trigger <who>      cli (default) or dashboard; recorded in the status the dashboard shows
-  --with-agent         also restart skiff-agent on the new release (and back on rollback)
+  --no-agent           leave skiff-agent running its old binary (by default it restarts on the new
+                       release, and back on rollback, so agent fixes take effect)
   --no-canary          skip the isolated pre-swap boot against a copy of the database
   --no-zero-downtime   stop the old release before starting the new one (no standby cutover)
   --bake <seconds>     how long the new release must serve traffic before commit (default 60)
@@ -101,7 +102,7 @@ update options:
 rollback options:
   --restore-db         also restore the database snapshot taken when the current release was activated
   --keep-db            run the previous code against the current (possibly newer) schema
-  --with-agent         also restart skiff-agent
+  --no-agent           do not restart skiff-agent on the previous release
   --dry-run            print the plan; change nothing
 
 Environment:
@@ -143,6 +144,7 @@ const known = new Set([
 	'--repo',
 	'--force',
 	'--with-agent',
+	'--no-agent',
 	'--no-canary',
 	'--require-public',
 	'--no-public-check',
@@ -1065,7 +1067,7 @@ async function main(): Promise<number> {
 			repo: option('--repo') ?? process.env.SKIFF_REPO,
 			ref: option('--ref') ?? process.env.SKIFF_REF,
 			force: flag('--force'),
-			withAgent: flag('--with-agent'),
+			withAgent: !flag('--no-agent'),
 			canary: !flag('--no-canary'),
 			dryRun,
 			publicCheck,
@@ -1095,7 +1097,7 @@ async function main(): Promise<number> {
 		const result = await updater.rollback({
 			restoreDb: flag('--restore-db'),
 			keepDb: flag('--keep-db'),
-			withAgent: flag('--with-agent'),
+			withAgent: !flag('--no-agent'),
 			dryRun: flag('--dry-run'),
 		});
 		if (result.status === 'reverted')
