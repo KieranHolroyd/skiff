@@ -46,10 +46,34 @@
 	const result = $derived(form as { success?: string; message?: string } | null);
 
 	const queryClient = useQueryClient();
-	/** True from the moment an update is queued until the finished state has been loaded. */
+	/**
+	 * True from the moment an update is requested until its finished state has been loaded. It
+	 * cannot rely on `data.inFlight` alone: systemd consumes the request file before the updater
+	 * writes its status, so for a moment nothing on disk says a run is under way.
+	 */
 	let following = $state(false);
+	/** The status `updatedAt` from before the request; a later one proves this run has started. */
+	let baseline = $state<string | null>(null);
+	/** The updater never picked the request up; stop waiting and point at the server. */
+	let startTimedOut = $state(false);
+	let checking = $state(false);
+	let requesting = $state(false);
+
+	function beginFollowing(previousUpdatedAt: string | null) {
+		baseline = previousUpdatedAt;
+		startTimedOut = false;
+		following = true;
+	}
+
+	function stopFollowing() {
+		following = false;
+		queryClient.removeQueries({ queryKey: ['self-update-status'] });
+	}
+
+	// The page was opened (or reloaded) while a run was already queued or running.
 	$effect(() => {
-		if (data.inFlight) following = true;
+		if (requesting || following || !data.inFlight) return;
+		beginFollowing(data.status?.updatedAt ?? null);
 	});
 
 	// The control plane restarts near the end, so failed polls are expected for a few seconds:
@@ -64,21 +88,9 @@
 		retry: false
 	}));
 
-	$effect(() => {
-		const next = poll.data;
-		if (!following || !next) return;
-		if (next.inFlight && next.version === data.comparison.current) return;
-		void invalidateAll().then(() => {
-			following = false;
-			queryClient.removeQueries({ queryKey: ['self-update-status'] });
-		});
-	});
-
 	/** Fresh state from the status endpoint while an update runs; null = use the page data. */
 	const live = $derived(following ? (poll.data ?? null) : null);
 	const reconnecting = $derived(following && poll.isError);
-	let checking = $state(false);
-	let requesting = $state(false);
 
 	const view = $derived<Live>(
 		live ?? {
@@ -89,15 +101,43 @@
 			log: data.log
 		}
 	);
+	/** The updater has written progress for this run, not just the previous run's last status. */
+	const runObserved = $derived(
+		Boolean(view.status && (view.status.running || view.status.updatedAt !== baseline))
+	);
 	const ready = $derived(data.availability === 'ready');
-	const running = $derived(view.inFlight);
-	const lastRun = $derived(view.status && !view.status.running ? view.status : null);
+	/** Following but not observed yet means "queued": the trigger has fired, status is next. */
+	const running = $derived(view.inFlight || (following && !runObserved));
+	const lastRun = $derived(view.status && !view.status.running && !running ? view.status : null);
 	/** Until the updater truncates and rewrites the file, a queued run has no log of its own. */
 	const currentLog = $derived(
-		view.pending && !view.status?.running
+		(following && !runObserved) || (view.pending && !view.status?.running)
 			? { lines: [], exists: false, truncated: false, updatedAt: null }
 			: view.log
 	);
+
+	$effect(() => {
+		const next = poll.data;
+		if (!following || !next) return;
+		const status = next.status;
+		const observed = Boolean(status && (status.running || status.updatedAt !== baseline));
+		// Keep following through the gap between the request being consumed and status being
+		// written; the previous run's finished status does not mean this run is over.
+		if (!observed && !next.inFlight) return;
+		if (next.inFlight && next.version === data.comparison.current) return;
+		void invalidateAll().then(stopFollowing);
+	});
+
+	// If nothing starts at all (for example the path unit was removed), do not sit on "Queued"
+	// forever: reload once after a minute and tell the reader where to look.
+	$effect(() => {
+		if (!following || runObserved || view.inFlight) return;
+		const timer = setTimeout(() => {
+			startTimedOut = true;
+			void invalidateAll().then(stopFollowing);
+		}, 60_000);
+		return () => clearTimeout(timer);
+	});
 
 	const steps: Array<{ phase: SelfUpdatePhase; label: string }> = [
 		{ phase: 'queued', label: 'Queued' },
@@ -268,16 +308,28 @@
 				</Notice>
 			{/if}
 
+			{#if startTimedOut && !running && !data.inFlight}
+				<Notice tone="warning" title="The updater hasn't started">
+					The request is queued on the server, but nothing has reported progress yet. Check
+					<code>systemctl status skiff-update-self.path</code> and
+					<code>journalctl -u skiff-update-self</code>.
+				</Notice>
+			{/if}
+
 			{#if ready && !running && (data.comparison.available || !data.latest.ok)}
 				<form
 					method="POST"
 					action="?/update"
 					class="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/30 px-3 py-3"
 					use:enhance={() => {
+						// Capture the pre-request status before the action runs, so the first new
+						// timestamp proves the updater started this run rather than a previous one.
+						const previous = data.status?.updatedAt ?? null;
 						requesting = true;
-						return async ({ update }) => {
+						return async ({ result, update }) => {
 							await update();
 							requesting = false;
+							if (result.type === 'success') beginFollowing(previous);
 						};
 					}}
 				>
@@ -303,7 +355,7 @@
 	{#if running}
 		<Panel
 			title="Update in progress"
-			description={view.status?.toVersion
+			description={runObserved && view.status?.toVersion
 				? `${view.status.fromVersion ?? 'Current'} → ${view.status.toVersion}`
 				: 'Waiting for the updater to start'}
 			icon={LoaderCircleIcon}
