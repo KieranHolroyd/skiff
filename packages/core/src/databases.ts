@@ -42,7 +42,6 @@ import {
 	databaseRestoreSchema,
 	databaseRotateSchema,
 	databaseUpdateSchema,
-	databaseUpdateSchema,
 	orgNetworkName,
 	databaseUpgradeSchema,
 	limits,
