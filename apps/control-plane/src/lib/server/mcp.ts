@@ -11,6 +11,7 @@ import {
 import * as z from 'zod';
 import {
 	bucketCreateSchema,
+	bucketNameSchema,
 	databaseAttachSchema,
 	databaseCreateSchema,
 	deployFilesSchema,
@@ -28,6 +29,7 @@ import {
 	shareLinkCreateSchema,
 	storageAttachSchema,
 	storageCreateSchema,
+	storageObjectKeySchema,
 	workloadSpecSchema,
 	type DatabaseMetricPoint,
 	type DatabaseView,
@@ -1082,6 +1084,67 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 				const view = core.storage.get(principal, storage, { includeDeleted: true });
 				return { ...view, lastHour: await storageLastHour(principal, view.name, view.storageMb) };
 			}),
+	);
+
+	tool(
+		'list_objects',
+		{
+			title: 'List bucket objects',
+			description:
+				'List objects and folder prefixes in a managed storage bucket. Use delimiter "/" (the default) for a folder view, ' +
+				'`prefix` to descend, and `token` to continue a truncated listing. Object contents are not returned.',
+			inputSchema: z.object({
+				storage: z.string().describe('Storage instance name'),
+				bucket: bucketNameSchema,
+				prefix: z.string().max(1024).default(''),
+				delimiter: z.string().max(1).default('/'),
+				token: z.string().max(2048).optional(),
+				limit: z.number().int().min(1).max(1000).default(100),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('storage:read'),
+		},
+		async ({ storage, bucket, prefix, delimiter, token, limit }) =>
+			run(() => core.storageObjects.list(principal, storage, { bucket, prefix, delimiter, token, limit })),
+	);
+
+	tool(
+		'presign_object',
+		{
+			title: 'Presign an object URL',
+			description:
+				'Create a short-lived presigned GET or PUT URL for one object. Only public storage instances have a browser-reachable ' +
+				'endpoint; private instances are reachable through the dashboard, the CLI or an attached app. The URL carries a signature, not the root key.',
+			inputSchema: z.object({
+				storage: z.string().describe('Storage instance name'),
+				bucket: bucketNameSchema,
+				key: storageObjectKeySchema,
+				method: z.enum(['GET', 'PUT']).default('GET'),
+				expiresIn: z.number().int().min(60).max(604_800).default(3600).describe('Seconds (max 7 days)'),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('storage:read'),
+		},
+		async ({ storage, bucket, key, method, expiresIn }) =>
+			run(() => core.storageObjects.presign(principal, storage, bucket, { key, method, expiresIn })),
+	);
+
+	tool(
+		'create_object_folder',
+		{
+			title: 'Create an object folder',
+			description:
+				'Create a folder marker (a zero-byte object whose key ends in "/") in a bucket. Useful before uploading or granting a prefix.',
+			inputSchema: z.object({
+				storage: z.string().describe('Storage instance name'),
+				bucket: bucketNameSchema,
+				prefix: z.string().min(1).max(1024).describe('Folder prefix; a trailing slash is added'),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('storage:update'),
+		},
+		async ({ storage, bucket, prefix }) =>
+			run(() => core.storageObjects.folder(principal, storage, bucket, prefix)),
 	);
 
 	tool(

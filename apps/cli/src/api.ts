@@ -18,6 +18,9 @@ import type {
 import type {
 	StorageAttachmentView,
 	StorageBucketView,
+	StorageObjectDeleteResult,
+	StorageObjectList,
+	StorageObjectStat,
 	StorageCreateInput,
 	StorageCredentials,
 	StorageGrant,
@@ -748,6 +751,128 @@ export class ApiClient {
 
 	async detachStorage(project: string, name: string): Promise<unknown> {
 		return this.request('DELETE', `/api/v1/projects/${encodeURIComponent(project)}/storage/${encodeURIComponent(name)}`);
+	}
+
+	// --- object browser (D81) -------------------------------------------------
+
+	async listObjects(
+		name: string,
+		options: { bucket: string; prefix?: string; token?: string; limit?: number },
+	): Promise<StorageObjectList> {
+		const params = new URLSearchParams({ bucket: options.bucket });
+		if (options.prefix) params.set('prefix', options.prefix);
+		if (options.token) params.set('token', options.token);
+		if (options.limit) params.set('limit', String(options.limit));
+		return (await this.request(
+			'GET',
+			`/api/v1/storage/${encodeURIComponent(name)}/objects?${params.toString()}`,
+		)) as StorageObjectList;
+	}
+
+	async downloadObject(name: string, bucket: string, key: string): Promise<{ body: Uint8Array; contentType: string | null }> {
+		const params = new URLSearchParams({ bucket, key });
+		const response = await this.binaryRequest(
+			'GET',
+			`/api/v1/storage/${encodeURIComponent(name)}/objects/item?${params.toString()}`,
+		);
+		return {
+			body: new Uint8Array(await response.arrayBuffer()),
+			contentType: response.headers.get('content-type'),
+		};
+	}
+
+	async uploadObject(
+		name: string,
+		bucket: string,
+		key: string,
+		body: Uint8Array,
+		contentType = 'application/octet-stream',
+	): Promise<StorageObjectStat> {
+		const params = new URLSearchParams({ bucket, key });
+		const response = await this.binaryRequest(
+			'PUT',
+			`/api/v1/storage/${encodeURIComponent(name)}/objects/item?${params.toString()}`,
+			{
+				body: body.slice().buffer as ArrayBuffer,
+				headers: { 'content-type': contentType },
+			},
+		);
+		const payload = asRecord(await response.json().catch(() => ({})));
+		const object = asRecord(payload?.object);
+		if (!object) throw new CliError('The control plane did not return the uploaded object.');
+		return {
+			key: stringValue(object.key) ?? key,
+			sizeBytes: numberValue(object.sizeBytes ?? object.size_bytes ?? body.byteLength) ?? body.byteLength,
+			etag: stringValue(object.etag) ?? null,
+			lastModified: stringValue(object.lastModified ?? object.last_modified) ?? null,
+			storageClass: stringValue(object.storageClass ?? object.storage_class) ?? null,
+			contentType: stringValue(object.contentType ?? object.content_type) ?? contentType,
+		};
+	}
+
+	async deleteObjects(name: string, bucket: string, keys: string[]): Promise<StorageObjectDeleteResult> {
+		return (await this.request(
+			'POST',
+			`/api/v1/storage/${encodeURIComponent(name)}/objects/delete?bucket=${encodeURIComponent(bucket)}`,
+			{ body: { keys } },
+		)) as StorageObjectDeleteResult;
+	}
+
+	async createObjectFolder(name: string, bucket: string, prefix: string): Promise<{ prefix: string }> {
+		return (await this.request(
+			'POST',
+			`/api/v1/storage/${encodeURIComponent(name)}/objects/folder?bucket=${encodeURIComponent(bucket)}`,
+			{ body: { prefix } },
+		)) as { prefix: string };
+	}
+
+	async presignObject(
+		name: string,
+		bucket: string,
+		key: string,
+		options: { method?: 'GET' | 'PUT'; expiresIn?: number } = {},
+	): Promise<{ url: string; method: string; expiresIn: number }> {
+		return (await this.request(
+			'POST',
+			`/api/v1/storage/${encodeURIComponent(name)}/objects/presign`,
+			{
+				body: {
+					bucket,
+					key,
+					method: options.method ?? 'GET',
+					...(options.expiresIn ? { expiresIn: options.expiresIn } : {}),
+				},
+			},
+		)) as { url: string; method: string; expiresIn: number };
+	}
+
+	private async binaryRequest(
+		method: string,
+		path: string,
+		options: { body?: ArrayBuffer; headers?: Record<string, string> } = {},
+	): Promise<Response> {
+		const url = `${this.baseUrl}${path}`;
+		let response: Response;
+		try {
+			response = await this.fetchImpl(url, {
+				method,
+				headers: this.headers(options.headers),
+				...(options.body ? { body: options.body } : {}),
+				signal: AbortSignal.timeout(this.uploadTimeoutMs),
+			});
+		} catch (error) {
+			if (isTimeout(error))
+				throw new CliError(`Request to ${this.baseUrl} timed out.`, { code: 'timeout', cause: error });
+			throw new CliError(`Could not reach ${this.baseUrl}: ${errorMessage(error)}`, {
+				code: 'network',
+				cause: error,
+			});
+		}
+		if (!response.ok) {
+			const text = await response.text().catch(() => '');
+			throw apiError(response, method, url, text, parseJson(text));
+		}
+		return response;
 	}
 
 	private headers(extra: Record<string, string> = {}): Headers {

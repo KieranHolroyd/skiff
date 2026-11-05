@@ -285,3 +285,32 @@ export function metricsTable(points: StorageMetricPoint[]): string {
 		]),
 	);
 }
+
+// --- object browser (D82) ---------------------------------------------------
+
+export interface StorageObject {
+	key: string;
+	sizeBytes: number;
+	etag: string | null;
+	lastModified: string | null;
+	storageClass: string | null;
+}
+
+export interface StorageObjectStat extends StorageObject {
+	contentType: string | null;
+}
+
+export interface StorageObjectList {
+	bucket: string;
+	prefix: string;
+	delimiter: string;
+	objects: StorageObject[];
+	prefixes: string[];
+	isTruncated: boolean;
+	nextToken: string | null;
+}
+
+export interface StorageObjectDeleteResult {
+	deleted: string[];
+	errors: Array<{ key: string; code: string; message: string }>;
+}

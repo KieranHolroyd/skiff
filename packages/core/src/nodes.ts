@@ -636,6 +636,7 @@ export class NodeService {
 			workloads: workloadRows,
 			volumes: this.ctx.volumes.desiredForNode(node.id),
 			databasePurges: this.ctx.databases.purgesForNode(node.id),
+			storageGateway: this.ctx.storage.gatewayForNode(node.id, isEdge, (id) => nodeById.get(id)?.publicAddress ?? null),
 			storageRoutes: this.ctx.storage.routesForNode(node.id, isEdge, (id) => nodeById.get(id)?.publicAddress ?? null),
 			storagePurges: this.ctx.storage.purgesForNode(node.id),
 			domains: this.ctx.domains.desiredForProjects(servedProjectIds),

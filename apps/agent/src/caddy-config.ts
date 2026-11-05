@@ -151,14 +151,14 @@ function compileHostRedirect(host: string, to: string): CaddyRoute {
  * byte-for-byte, keeping `Host` on both hops (SigV4 signs it) and streaming bodies so multipart
  * uploads of many GB pass through without buffering or a size limit.
  */
-export function compileStorageRoute(route: DesiredState['storageRoutes'][number]): CaddyRoute {
+function compileProxyRoute(id: string, host: string, upstream: string): CaddyRoute {
 	return {
-		'@id': `storage:${route.storageId}`,
-		match: [{ host: [normalizeHost(route.host)] }],
+		'@id': id,
+		match: [{ host: [normalizeHost(host)] }],
 		handle: [
 			{
 				handler: 'reverse_proxy',
-				upstreams: [{ dial: route.upstream.replace(/^https?:\/\//, '') }],
+				upstreams: [{ dial: upstream.replace(/^https?:\/\//, '') }],
 				headers: { request: { set: { Host: ['{http.request.host}'] } } },
 				flush_interval: -1,
 				transport: {
@@ -187,6 +187,15 @@ export function compileStorageRoute(route: DesiredState['storageRoutes'][number]
 			},
 		],
 	};
+}
+
+export function compileStorageRoute(route: DesiredState['storageRoutes'][number]): CaddyRoute {
+	return compileProxyRoute(`storage:${route.storageId}`, route.host, route.upstream);
+}
+
+/** Only the loopback may carry the internal gateway; a public listener would expose private S3. */
+export function isLoopbackListen(listen: string): boolean {
+	return /^(127\.0\.0\.1|\[::1\]|localhost):\d{1,5}$/.test(listen);
 }
 
 /**
@@ -275,6 +284,26 @@ export function buildCaddyConfig(options: CompileAgentConfigOptions): Record<str
 	// Public storage endpoints match on a dedicated host and never collide with site routes (S3).
 	const storageRoutes = options.state.storageRoutes.map(compileStorageRoute);
 	server.routes = [...storageRoutes, ...redirects, ...domainRedirects, ...server.routes];
+
+	// The control plane's object browser reaches instances through an internal gateway (D82).
+	// The edge gets a loopback listener; a worker puts its routes on the WireGuard-only server.
+	const gateway = options.state.storageGateway;
+	const gatewayRoutes = gateway.routes.map((route) =>
+		compileProxyRoute(`gateway:${route.host}`, route.host, route.upstream),
+	);
+	if (gateway.listen) {
+		if (!isLoopbackListen(gateway.listen))
+			throw new Error(`storageGateway.listen must be loopback, got "${gateway.listen}"`);
+		if (apps) {
+			apps.http.servers.storage_gateway = {
+				listen: [gateway.listen],
+				routes: gatewayRoutes,
+				...(server.logs ? { logs: server.logs } : {}),
+			};
+		}
+	} else if (gatewayRoutes.length > 0) {
+		server.routes = [...gatewayRoutes, ...server.routes];
+	}
 
 	// Only nodes that actually serve custom domains ask the control plane before issuing a cert.
 	// `automation.on_demand` only configures the ask endpoint; Caddy also needs an automation

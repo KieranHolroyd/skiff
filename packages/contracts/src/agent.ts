@@ -7,6 +7,7 @@ import {
 	storageBucketDeletionSchema,
 	storageBucketSnapshotSchema,
 	storageMetricBucketSchema,
+	storageGatewaySchema,
 	storageRouteSchema,
 } from './object-storage.ts';
 import { nodeStorageSchema, nodeStorageStatusSchema } from './storage.ts';
@@ -105,6 +106,8 @@ export const desiredStateSchema = z.object({
 	databasePurges: z.array(z.string()).default([]),
 	/** Registered volumes this node must know about, for volume-backed data dirs (D74). */
 	volumes: z.array(nodeVolumeDesiredSchema).default([]),
+	/** Internal S3 gateway routes the control plane uses to manage object contents (D82). */
+	storageGateway: storageGatewaySchema.default({ listen: null, routes: [] }),
 	/** Public storage endpoints this node serves (S3): byte-for-byte proxies, not sites. */
 	storageRoutes: z.array(storageRouteSchema).default([]),
 	/** Purged storage instances whose data dir this node must delete, then report (S8). */

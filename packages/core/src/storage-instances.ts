@@ -18,6 +18,7 @@ import {
 	storageEngineRegistry,
 	storageEnvNames,
 	storageImage,
+	storageGatewayHost,
 	storagePublicHost,
 	storageUpdateSchema,
 	type BucketCreate,
@@ -722,6 +723,39 @@ export class StorageService {
 	 * Public endpoints this node serves (S3). The instance's own node proxies to its loopback port;
 	 * the edge reaches a worker-placed instance through that worker's Caddy, like worker apps.
 	 */
+	/**
+	 * Internal gateway routes for the control plane's object browser (D82). The edge gets a
+	 * loopback listener covering every instance (local loopback, remote through the worker's
+	 * Caddy); a worker gets its own routes, which the agent puts on the WireGuard-only server.
+	 */
+	gatewayForNode(
+		nodeId: string,
+		isEdge: boolean,
+		publicAddressOf: (nodeId: string) => string | null,
+	): { listen: string | null; routes: Array<{ host: string; upstream: string }> } {
+		const rows = this.ctx.db
+			.select()
+			.from(storageInstances)
+			.where(isNull(storageInstances.deletedAt))
+			.all();
+		const routes: Array<{ host: string; upstream: string }> = [];
+		for (const row of rows) {
+			const host = storageGatewayHost(row.id);
+			if (row.nodeId === nodeId) {
+				routes.push({ host, upstream: `127.0.0.1:${row.hostPort}` });
+				continue;
+			}
+			if (!isEdge) continue;
+			routes.push({
+				host,
+				upstream: `http://${publicAddressOf(row.nodeId) ?? '127.0.0.1:1'}`,
+			});
+		}
+		routes.sort((a, b) => a.host.localeCompare(b.host));
+		const port = this.ctx.config.storageGatewayPort ?? 8081;
+		return { listen: isEdge ? `127.0.0.1:${port}` : null, routes };
+	}
+
 	routesForNode(nodeId: string, isEdge: boolean, publicAddressOf: (nodeId: string) => string | null): StorageRoute[] {
 		return this.ctx.db
 			.select()

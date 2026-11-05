@@ -398,6 +398,55 @@ describe('per-deployment roots, worker routes and logging', () => {
 		expect((remoteProxy.upstreams as Json[])[0]!.dial).toBe('10.8.0.2:8080');
 	});
 
+	test('the edge serves the internal gateway on loopback only', () => {
+		const value = state();
+		value.storageGateway = {
+			listen: '127.0.0.1:8081',
+			routes: [
+				{ host: 's3-local.storage.internal', upstream: '127.0.0.1:19000' },
+				{ host: 's3-remote.storage.internal', upstream: 'http://10.8.0.2:8080' },
+			],
+		};
+		const compiled = config(value);
+		const apps = compiled.apps as Json;
+		const servers = (apps.http as Json).servers as Json;
+		const gateway = servers.storage_gateway as Json;
+		expect(gateway.listen).toEqual(['127.0.0.1:8081']);
+		const gatewayRoutes = gateway.routes as Json[];
+		expect(gatewayRoutes.map((route) => route['@id'])).toEqual([
+			'gateway:s3-local.storage.internal',
+			'gateway:s3-remote.storage.internal',
+		]);
+		const proxy = collectHandlers(gatewayRoutes[1]).find((handler) => handler.handler === 'reverse_proxy')!;
+		expect((proxy.upstreams as Json[])[0]!.dial).toBe('10.8.0.2:8080');
+		expect((proxy.headers as Json).request).toEqual({ set: { Host: ['{http.request.host}'] } });
+		// The public content server must never expose an internal host.
+		expect(routes(compiled).some((route) => JSON.stringify(route.match ?? null).includes('storage.internal'))).toBe(
+			false,
+		);
+	});
+
+	test('a worker puts its gateway routes on the WireGuard-only server', () => {
+		const value = state();
+		value.storageGateway = {
+			listen: null,
+			routes: [{ host: 's3-local.storage.internal', upstream: '127.0.0.1:19000' }],
+		};
+		const compiled = config(value);
+		const apps = compiled.apps as Json;
+		const servers = (apps.http as Json).servers as Json;
+		expect(servers.storage_gateway).toBeUndefined();
+		expect(routes(compiled)[0]!['@id']).toBe('gateway:s3-local.storage.internal');
+	});
+
+	test('refuses a non-loopback gateway listener', () => {
+		const value = state();
+		value.storageGateway = { listen: ':8081', routes: [] };
+		expect(() => config(value)).toThrow(/loopback/);
+		value.storageGateway = { listen: '0.0.0.0:8081', routes: [] };
+		expect(() => config(value)).toThrow(/loopback/);
+	});
+
 	test('writes a JSON access log for telemetry, skipping the platform host', () => {
 		const compiled = buildCaddyConfig({
 			state: state(),

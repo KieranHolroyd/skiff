@@ -40,6 +40,15 @@ export interface CoreConfig {
 	now?: () => number;
 	/** The node that terminates ingress; the first registered node if unset. */
 	edgeNodeId?: string;
+	/**
+	 * Loopback port of the edge's internal S3 gateway (Caddy). The control plane reaches every
+	 * managed instance through it to browse and manage objects (D82).
+	 */
+	storageGatewayPort?: number;
+	/** Largest object a single dashboard/API upload may send, in bytes (default 100 MiB). */
+	storageObjectMaxBytes?: number;
+	/** Injected S3 transport for tests; production uses the global fetch. */
+	storageFetch?: typeof fetch;
 }
 
 export function coreConfigFromEnv(overrides: Partial<CoreConfig> & Pick<CoreConfig, 'objectStore' | 'masterKey' | 'dataDir'>): CoreConfig {
@@ -58,7 +67,16 @@ export function coreConfigFromEnv(overrides: Partial<CoreConfig> & Pick<CoreConf
 		objectStoreSecret,
 		desiredAgentVersion: overrides.desiredAgentVersion ?? env.SKIFF_AGENT_VERSION ?? '0.1.0',
 		edgeNodeId: overrides.edgeNodeId ?? env.SKIFF_EDGE_NODE_ID,
+		storageGatewayPort:
+			overrides.storageGatewayPort ?? positiveInteger(env.SKIFF_STORAGE_GATEWAY_PORT, 8081),
+		storageObjectMaxBytes:
+			overrides.storageObjectMaxBytes ?? positiveInteger(env.SKIFF_STORAGE_OBJECT_MAX_BYTES, 104_857_600),
 	};
+}
+
+function positiveInteger(value: string | undefined, fallback: number): number {
+	const parsed = Number(value);
+	return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 /** Per-project HMAC key for the agent's host-only cookie (never the platform session key). */

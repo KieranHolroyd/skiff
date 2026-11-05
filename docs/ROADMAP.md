@@ -103,6 +103,9 @@
 - [x] Public endpoints on `<name>--s3.<contentDomain>` as byte-for-byte SigV4-only Caddy routes (D64)
 - [x] Stats: agent sampler → telemetry → DuckDB `storage_metrics_1m/1h`, bucket snapshots, `/metrics`, disk alert (D68)
 - [x] REST, MCP, CLI (`skif storage`), dashboard list/detail/charts/buckets/attach
+- [x] Control-plane object browser: list, upload, download, delete, folder markers, presigned links for public instances, REST + dashboard + `skif storage objects` (D82)
+- [x] MCP object tools: `list_objects`, `presign_object`, `create_object_folder`
+- [ ] Object delete over MCP (confirmed) and bulk folder delete in the dashboard
 - [ ] End-to-end on a Debian 13 node: RustFS container under Quadlet, health probe, SigV4 through edge → WireGuard → worker
 - [ ] Backups: bucket replication/sync to the platform `ObjectStore`, retention, restore into a new instance (D70, S9)
 - [ ] Human access keys with bucket grants and rotation in the dashboard

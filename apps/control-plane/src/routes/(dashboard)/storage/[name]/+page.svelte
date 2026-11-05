@@ -351,6 +351,15 @@
 				</span>
 			</div>
 		{/snippet}
+		{#if !deleted}
+			<Button
+				variant="outline"
+				href={resolve('/(dashboard)/storage/[name]/objects', { name: st.name })}
+			>
+				<FolderKanbanIcon />
+				Browse objects
+			</Button>
+		{/if}
 	</PageHeader>
 
 	{#if deleted}

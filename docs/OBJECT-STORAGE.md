@@ -100,6 +100,13 @@ for worker-placed instances. The dashboard says so when the toggle is turned on.
 via a dedicated storage route on `<name>--s3.<contentDomain>` that authenticates with S3
 signatures only.
 
+**Control-plane object access (D82).** Browsing and managing contents goes through an internal
+gateway, never the public endpoint: the edge Caddy listens on `127.0.0.1:8081`, a worker exposes
+host-matched routes on its WireGuard-only app port, and the control plane signs requests for
+`s3-<id>.storage.internal`. Caddy preserves `Host`, so RustFS verifies the SigV4 signature. The
+root key stays in the control plane; uploads are capped at 100 MiB by default, mutations are
+audited, and presigned links are offered only for public instances.
+
 ## 4. Buckets, keys and attachments
 
 **Buckets are desired state.** Creating a bucket in Skiff writes a row; the instance's desired
@@ -198,10 +205,10 @@ and refuses to run if it is gone (D76). See [VOLUMES.md](./VOLUMES.md).
 | Surface | What |
 |---|---|
 | Permissions | New `storage` resource: `create`, `read`, `update`, `delete`, `credentials`. Deployer gets everything except `delete`; viewer gets `read`; agents get the deployer set minus `credentials`. |
-| REST | `GET/POST /api/v1/storage`, `GET/PATCH/DELETE /api/v1/storage/:name`, `POST …/:name/restore`, `GET …/:name/credentials`, `GET …/:name/metrics`, `GET/POST …/:name/buckets`, `PATCH/DELETE …/:name/buckets/:bucket`, `GET/POST /api/v1/projects/:slug/storage`, `PATCH/DELETE …/storage/:name` |
-| MCP | `list_storage`, `get_storage`, `create_storage`, `create_bucket`, `attach_storage`, `detach_storage`, `delete_storage` (confirmed, soft). No bucket force-delete, no key reveal. |
-| CLI | `skif storage list\|create\|info\|update\|delete\|restore\|credentials`, `skif storage buckets list\|create\|delete`, `skif storage attach\|detach` |
-| Dashboard | Storage list + create, detail (status, endpoint, public toggle, buckets, attached projects, charts), attach from a project with bucket grants |
+| REST | `GET/POST /api/v1/storage`, `GET/PATCH/DELETE /api/v1/storage/:name`, `POST …/:name/restore`, `GET …/:name/credentials`, `GET …/:name/metrics`, `GET/POST …/:name/buckets`, `PATCH/DELETE …/:name/buckets/:bucket`, `GET/POST /api/v1/projects/:slug/storage`, `PATCH/DELETE …/storage/:name`; object endpoints under `…/:name/objects` (list, item GET/HEAD/PUT/DELETE, bulk delete, folder, presign) |
+| MCP | `list_storage`, `get_storage`, `create_storage`, `create_bucket`, `attach_storage`, `detach_storage`, `delete_storage` (confirmed, soft), `list_objects`, `presign_object`, `create_object_folder`. No bucket force-delete, object delete, key reveal or purge. |
+| CLI | `skif storage list\|create\|info\|update\|delete\|restore\|credentials`, `skif storage buckets list\|create\|delete`, `skif storage attach\|detach`, `skif storage objects ls\|get\|put\|rm\|mkdir\|presign` |
+| Dashboard | Storage list + create, detail (status, endpoint, public toggle, buckets, attached projects, charts), attach from a project with bucket grants, and an object browser (folder navigation, upload, download, delete, presigned links) |
 
 ## 9. Spikes before building
 

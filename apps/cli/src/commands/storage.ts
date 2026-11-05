@@ -20,6 +20,7 @@ import {
 } from '../object-storage.ts';
 import { formatTime, indent, plural, printJson } from '../output.ts';
 import { authenticatedClient } from './common.ts';
+import { storageObjectsCommand } from './storage-objects.ts';
 import { confirmOrRefuse } from './run-operation.ts';
 
 /** Managed object storage (docs/OBJECT-STORAGE.md). Every check lives on the server; this is a thin client. */
@@ -37,6 +38,7 @@ Commands:
   credentials <name>             Print the root key as env lines (--json for everything)
   metrics <name>                 Usage samples (--since 1h, or --from/--to; --interval 1m|1h)
   buckets <command>              list|create|update|delete buckets (\`skif storage buckets --help\`)
+  objects <command>              Browse and manage bucket contents (\`skif storage objects --help\`)
   attach <name> -p <project>     Give a project a scoped key (injects <PREFIX>_ENDPOINT_URL, …)
   grants <name> -p <project>     Replace an attachment's bucket grants
   detach <name> -p <project>     Revoke it; the app restarts without the variables
@@ -171,6 +173,8 @@ const subcommands: Record<string, (argv: string[]) => Promise<void>> = {
 	metrics: showMetrics,
 	buckets: bucketsCommand,
 	bucket: bucketsCommand,
+	objects: storageObjectsCommand,
+	object: storageObjectsCommand,
 	attach: attachStorage,
 	grants: updateGrants,
 	grant: updateGrants,

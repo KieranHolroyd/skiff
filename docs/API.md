@@ -92,6 +92,13 @@ contain credentials, except `/credentials`.
 | POST | `/projects/:slug/databases` | `database:update` + `project:update` | `{ database, envPrefix? (UPPER_SNAKE, default DATABASE) }` → `201 { attachment, warning }`. The project gets `<PREFIX>_URL`, `_HOST`, `_PORT`, `_USER`, `_PASSWORD`, `_NAME` at activation and restarts; `warning` says when it must be redeployed onto the database's node (same node only, D56) |
 | DELETE | `/projects/:slug/databases/:name` | `database:update` + `project:update` | detach; the app re-activates without the variables → `{ ok: true }` |
 
+**Object transport.** The control plane reaches every instance through an internal gateway: the
+edge Caddy listens on `127.0.0.1:8081` (never the public listener), and a worker exposes
+host-matched routes on its WireGuard-only app port. Requests are SigV4-signed for
+`s3-<id>.storage.internal`, the gateway preserves `Host`, and RustFS verifies the signature. The
+root key stays sealed in the control plane; every upload, delete and folder creation is audited.
+The dashboard browser (`/storage/:name/objects`) uses the same endpoints (D82).
+
 **MCP tools.** `list_databases` (`includeDeleted?`), `get_database` (the view plus a `lastHour`
 summary: latest size vs the storage budget, connections vs `max_connections`, commits/min,
 cache hit ratio), `create_database` (same input as `POST /databases`; step-up adds
@@ -135,6 +142,13 @@ secret keys, except `/credentials`.
 | POST | `/projects/:slug/storage` | `storage:update` + `project:update` | `{ storage, envPrefix? (UPPER_SNAKE, default S3), grants: [{ bucket, mode? (read\|read-write, default read-write) }] }` → `201 { attachment, warning }`. The project gets its own key as `<PREFIX>_ENDPOINT_URL`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`, `_REGION`, `_FORCE_PATH_STYLE` (+ `_BUCKET` with one grant, `_PUBLIC_ENDPOINT_URL` when public) at activation and restarts. A private instance must share the project's node; `warning` says when it must be redeployed there |
 | PATCH | `/projects/:slug/storage/:name` | `storage:update` + `project:update` | `{ grants }` replaces the grants; the key's policy changes in place → `{ attachment }` |
 | DELETE | `/projects/:slug/storage/:name` | `storage:update` + `project:update` | detach and revoke the key; the app re-activates without the variables → `{ ok: true }` |
+| GET | `/storage/:name/objects` | `storage:read` | `?bucket&prefix&delimiter=/&token&limit` → `{ bucket, prefix, delimiter, objects: [{ key, sizeBytes, etag, lastModified, storageClass }], prefixes, isTruncated, nextToken }`. `delimiter=/` gives the folder view; `token` continues a truncated listing (D82) |
+| GET/HEAD | `/storage/:name/objects/item` | `storage:read` | `?bucket&key[&inline=1]`: GET streams the object (`content-disposition: attachment`, `etag`, `content-type`); HEAD returns the same headers without a body. Object keys travel in the query, never the path, so slashes are unambiguous |
+| PUT | `/storage/:name/objects/item` | `storage:update` | `?bucket&key`, raw body. Limited to `SKIFF_STORAGE_OBJECT_MAX_BYTES` (default 100 MiB); `content-type` is stored. Larger files need a presigned PUT (public instances) or the CLI |
+| DELETE | `/storage/:name/objects/item` | `storage:update` | `?bucket&key` → `{ deleted, errors }`; idempotent |
+| POST | `/storage/:name/objects/delete` | `storage:update` | `{ keys }` (1–1000) in one S3 DeleteObjects call → `{ deleted, errors }` |
+| POST | `/storage/:name/objects/folder` | `storage:update` | `{ prefix }` creates a zero-byte folder marker ending in `/` |
+| POST | `/storage/:name/objects/presign` | `storage:read` | `{ bucket, key, method? (GET\|PUT), expiresIn? (60–604800) }` → `{ url, method, expiresIn }`. **Public instances only**: private instances have no browser-reachable endpoint |
 
 **MCP tools.** `list_storage` (`includeDeleted?`), `get_storage` (the view plus a `lastHour`
 summary: bytes used vs the storage budget, objects, buckets, memory), `create_storage` (same
@@ -143,7 +157,9 @@ input as `POST /storage`; step-up adds `project:update` only when `project` is g
 envPrefix?, grants? }`; without `grants`, read-write on the only bucket), `detach_storage`
 (`{ project, storage }`) and `delete_storage` (soft delete, confirmed by multi-round-trip input
 bound to the instance, refused before prompting while attached; 2025-era clients get a dashboard
-link). There is **no key reveal, bucket delete or purge** over MCP (S6). Guide:
+link). Object tools: `list_objects` (folder view, pagination), `presign_object` (public instances
+only) and `create_object_folder`. There is **no key reveal, bucket delete, object delete or purge**
+over MCP (S6, D82). Guide:
 `skiff://guides/storage`.
 
 **CLI.** `skif storage list [--all]`, `create <name> [-b <bucket>]… [-p <project>] [--prefix P]

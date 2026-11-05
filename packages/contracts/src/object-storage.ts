@@ -362,6 +362,98 @@ export function storagePublicHost(name: string, contentDomain: string): string {
 	return `${name}--s3.${contentDomain}`;
 }
 
+/**
+ * Internal host the control plane uses to reach an instance's S3 API through the node gateway
+ * (D82). It is never in public DNS: the edge serves it on a loopback listener, and a worker's
+ * Caddy serves it on the WireGuard-only app port.
+ */
+export const STORAGE_GATEWAY_SUFFIX = 'storage.internal';
+
+export function storageGatewayHost(id: string): string {
+	const label = id.replace(/^st_/, '').toLowerCase().replace(/[^a-z0-9-]/g, '');
+	return `s3-${label}.${STORAGE_GATEWAY_SUFFIX}`;
+}
+
+/** One internal gateway route. `upstream` is loopback on the instance's node, or the worker Caddy. */
+export const storageGatewayRouteSchema = z.object({
+	host: z.string().min(1).max(253),
+	upstream: z.string().min(1).max(300),
+});
+export type StorageGatewayRoute = z.infer<typeof storageGatewayRouteSchema>;
+
+/**
+ * The node's gateway: the edge gets a loopback listener for every instance (local and remote);
+ * a worker gets its own routes on the WireGuard-only main server (`listen` is null).
+ */
+export const storageGatewaySchema = z.object({
+	listen: z.string().max(200).nullable().default(null),
+	routes: z.array(storageGatewayRouteSchema).max(200).default([]),
+});
+export type StorageGateway = z.infer<typeof storageGatewaySchema>;
+
+// -------------------------------------------------------------------- objects
+
+/**
+ * S3 object keys. Slashes are allowed (they are prefixes, not filesystem paths); a leading
+ * slash, `.`/`..` segments and control characters are refused so a dashboard action can never
+ * escape the bucket or confuse a client.
+ */
+export const storageObjectKeySchema = z
+	.string()
+	.min(1)
+	.max(1024)
+	.refine((key) => !key.startsWith('/'), 'Object keys cannot start with "/".')
+	.refine((key) => !key.includes('\0'), 'Object keys cannot contain NUL bytes.')
+	.refine((key) => !key.split('/').some((part) => part === '.' || part === '..'), 'Object keys cannot contain "." or ".." segments.')
+	.refine((key) => !key.includes('//'), 'Object keys cannot contain "//".');
+
+export interface StorageObject {
+	key: string;
+	sizeBytes: number;
+	etag: string | null;
+	lastModified: string | null;
+	storageClass: string | null;
+}
+
+export interface StorageObjectStat extends StorageObject {
+	contentType: string | null;
+}
+
+export interface StorageObjectList {
+	bucket: string;
+	prefix: string;
+	delimiter: string;
+	objects: StorageObject[];
+	/** Folder-like prefixes when a delimiter is used. */
+	prefixes: string[];
+	isTruncated: boolean;
+	nextToken: string | null;
+}
+
+export const storageObjectDeleteSchema = z.object({
+	keys: z.array(storageObjectKeySchema).min(1).max(1000),
+});
+export type StorageObjectDelete = z.infer<typeof storageObjectDeleteSchema>;
+
+export const storageFolderSchema = z.object({
+	prefix: z
+		.string()
+		.min(1)
+		.max(1024)
+		.refine((prefix) => !prefix.startsWith('/'), 'Folder prefixes cannot start with "/".')
+		.refine((prefix) => !prefix.includes('\0'), 'Folder prefixes cannot contain NUL bytes.')
+		.transform((prefix) => (prefix.endsWith('/') ? prefix : `${prefix}/`)),
+});
+export type StorageFolder = z.infer<typeof storageFolderSchema>;
+
+export const storagePresignSchema = z.object({
+	key: storageObjectKeySchema,
+	method: z.enum(['GET', 'PUT']).default('GET'),
+	/** Seconds; S3 allows up to 7 days. */
+	expiresIn: z.number().int().min(60).max(604_800).default(3600),
+});
+export type StoragePresign = z.infer<typeof storagePresignSchema>;
+
 /** Env var names a project receives for one attachment. */
 export function storageEnvNames(prefix: string, options: { public: boolean; singleBucket: boolean }): string[] {
 	const names = ['ENDPOINT_URL', 'ACCESS_KEY_ID', 'SECRET_ACCESS_KEY', 'REGION', 'FORCE_PATH_STYLE'];
