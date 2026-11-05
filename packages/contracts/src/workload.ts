@@ -104,9 +104,44 @@ export interface NodeCapacityView {
 export const placementSchema = z.string().min(1).max(64).default('edge');
 
 /**
+ * One app volume attached to a workload (plan 07). The helper resolves the backing directory
+ * from its own registry: desired state names the volume and mount point, never a host path.
+ * Optional so an older agent that predates app volumes ignores it (unknown fields are dropped).
+ */
+export const workloadVolumeMountSchema = z.object({
+	id: z.string().min(1).max(100),
+	mountPath: z.string().min(1).max(200),
+	readOnly: z.boolean().default(false),
+});
+export type WorkloadVolumeMount = z.infer<typeof workloadVolumeMountSchema>;
+
+/** One process in a multi-process workload (plan 19). */
+export const workloadProcessSchema = z.object({
+	name: z
+		.string()
+		.min(1)
+		.max(40)
+		.regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/, 'Process names use lowercase letters, digits and hyphens.'),
+	command: z.array(z.string().min(1).max(1024)).min(1).max(64),
+	port: z.number().int().min(1).max(65535).optional(),
+	healthPath: z.string().startsWith('/').max(512).optional(),
+});
+export type WorkloadProcess = z.infer<typeof workloadProcessSchema>;
+
+/** A scheduled job that runs the workload's release (plan 09). */
+export const workloadJobSchema = z.object({
+	id: z.string().min(1).max(100),
+	timeoutSeconds: z.number().int().min(10).max(86_400),
+});
+export type WorkloadJob = z.infer<typeof workloadJobSchema>;
+
+/**
  * What one node must converge for its local workloads. Secret *values* are deliberately absent:
  * the agent fetches them just-in-time from `/api/agent/workloads/:id/activation`, so the cached
  * desired-state file on disk never contains a secret (D18, D23).
+ *
+ * The `volumes`, `processes` and `job` fields are additive and optional (F1). An older agent
+ * ignores fields it does not know, so the same desired state works across agent versions.
  */
 export const workloadDesiredSchema = z.object({
 	id: z.string(),
@@ -146,6 +181,12 @@ export const workloadDesiredSchema = z.object({
 	 * mount path from its own registry and fails the start if it is not mounted (D76).
 	 */
 	volumeId: z.string().max(100).optional(),
+	/** App volumes mounted into this workload (plan 07); omitted by older control planes. */
+	volumes: z.array(workloadVolumeMountSchema).max(20).optional(),
+	/** Additional processes in one release (plan 19); omitted by older control planes. */
+	processes: z.array(workloadProcessSchema).max(20).optional(),
+	/** The project's scheduled job, when this workload is also its runner (plan 09). */
+	job: workloadJobSchema.optional(),
 });
 export type WorkloadDesired = z.infer<typeof workloadDesiredSchema>;
 
