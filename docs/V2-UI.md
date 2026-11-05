@@ -121,23 +121,37 @@ access. Placement changes are next-deploy changes too.
 
 ### Variables
 
-One list of everything the app's environment gets at start-up: **plain** variables (readable, edited
-inline), **secrets** (masked, `Replace value` writes a new version) and **linked** variables injected
-by attached databases and storage (read-only, with their source). Edits are staged; the footer counts
-unsaved changes and `Save and restart` writes them in one `saveVariables` action
-(`core.workloads.setVariables`): new secret values first, then the spec's `env` and `secrets`. The
-whole save is validated before anything is written, so a refused save leaves no secret versions.
+Modelled on Vercel's and Cloudflare's environment variable screens. One sorted list of everything
+the app's environment gets at start-up: **plaintext** variables, **secrets** (encrypted, write-only)
+and **linked** variables injected by attached databases and storage (read-only, linking to their
+source). Edits are a local draft (`_components/variables-draft.ts`, unit-tested); the footer counts
+added, edited and removed rows, and `Save and restart` (or ⌘S/Ctrl+S) writes them in one
+`saveVariables` action (`core.workloads.setVariables`): new secret values first, then the spec's
+`env` and `secrets`. The whole save is validated before anything is written, so a refused save
+leaves no secret versions.
 
-- `Add` takes a name and value; tick **Secret** to store it encrypted as a project secret and
-  reference it in one step. Pasting `KEY=value` lines into the name field imports them all.
-- `Raw editor` shows the plain variables as `.env` text (`parseEnvFile`/`formatEnvFile` in
-  `@skiff/contracts`: `export`, comments, quotes and multi-line values; no `${VAR}` expansion). Names
-  left out of the text are removed; secrets and linked variables are untouched.
+- **Add form**: rows of Key, Value and Type (Plaintext or Secret), with `Add another` and "mark all
+  as plaintext/secret". Pasting `.env` text into a Key field spreads it over rows. `Import .env`, or
+  dropping a file anywhere on the card, does the same. Each row says what adding it will do
+  (overwrite, replace a plain variable with a secret or the reverse, override a linked value) before
+  it joins the list. Rows still in the form are added when you save.
+- **List**: search; filter by type with counts; plaintext values are masked until revealed, per row
+  or with `Show values`; copy a value. Each row's menu has Edit (also on double-click), Copy as
+  KEY=value, Convert to secret, Revert changes and Remove. Rows show Added, Edited or Removed until
+  saved. Removed rows stay struck through with `Undo`. Select rows to copy them as `.env` or remove
+  them together.
+- **Secrets**: editing one replaces its value (a new version on save), switches delivery between a
+  variable and a `_FILE` path, or pins a version.
+- **Edit as .env** shows the plaintext variables as `.env` text (`parseEnvFile`/`formatEnvFile` in
+  `@skiff/contracts`: `export`, comments, quotes and multi-line values; no `${VAR}` expansion).
+  Names left out of the text are removed. Secrets and linked variables are untouched.
+- **Export**: copy or download the draft as `.env`. Secrets cannot be read back, so they appear as
+  `# NAME=` comments.
 - Inline errors block the save: an invalid or duplicate name, a plain variable that a secret also
   sets (`NAME`, or `NAME_FILE` for file delivery), a reference to a missing secret or version. A plain
   variable that overrides a linked one is a warning.
-- Suggestions from `.env` files and code, and `Link` for a managed service the code expects, sit
-  under the add row.
+- Suggestions from `.env` files and code go into the add form so you can fill in values first.
+  `Link` attaches a managed service the code expects.
 - The **Secrets** card lists what the project can reference, marks the ones in use, offers `Use` for
   the others and `Delete` for this project's own.
 
