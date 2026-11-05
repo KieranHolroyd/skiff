@@ -10,6 +10,7 @@ import {
 	storageAttachSchema,
 	storageAttachmentUpdateSchema,
 	workloadSpecSchema,
+	workloadVariablesSchema,
 	type BuildView,
 	type DatabaseAttachmentView,
 	type DomainView,
@@ -53,37 +54,6 @@ function numberField(data: FormData, key: string, fallback: number): number {
 /** Commands are argv arrays, never shell strings: split on whitespace, keep quotes literal. */
 function commandArgs(value: string): string[] {
 	return value.trim().split(/\s+/).filter(Boolean);
-}
-
-function envFromForm(data: FormData): Record<string, string> {
-	const keys = data.getAll('envKey').map((value) => String(value).trim());
-	const values = data.getAll('envValue').map((value) => String(value));
-	const env: Record<string, string> = {};
-	for (let index = 0; index < keys.length; index++) {
-		if (keys[index]) env[keys[index]] = values[index] ?? '';
-	}
-	return env;
-}
-
-function secretsFromForm(data: FormData): Array<{
-	name: string;
-	delivery: 'env' | 'file';
-	version?: number;
-}> {
-	const names = data
-		.getAll('secretName')
-		.map((value) => String(value).trim())
-		.filter(Boolean);
-	const deliveries = data.getAll('secretDelivery').map((value) => String(value));
-	const versions = data.getAll('secretVersion').map((value) => String(value).trim());
-	return names.map((name, index) => {
-		const parsed = versions[index] ? Number(versions[index]) : undefined;
-		return {
-			name,
-			delivery: deliveries[index] === 'file' ? 'file' : 'env',
-			...(parsed && Number.isInteger(parsed) && parsed > 0 ? { version: parsed } : {})
-		};
-	});
 }
 
 function accessMode(value: string): (typeof accessModes)[number] | null {
@@ -141,10 +111,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		const workload: WorkloadView | null = safely(() => core.workloads.get(principal, row), null);
 		const workloadSpec = safely(() => core.workloads.projectSpec(row), null);
 		const secrets: SecretView[] = safely(
-			() =>
-				core.secrets
-					.list(principal)
-					.filter((secret) => secret.projectId === null || secret.projectId === row.id),
+			() => core.secrets.list(principal, { visibleTo: row.id }),
 			[]
 		);
 		const capacity: NodeCapacityView[] =
@@ -189,7 +156,9 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		// App volumes (plan 07) are project-owned and only meaningful for runtime projects.
 		const appVolumesEnabled = core.appVolumes.enabled();
 		const appVolumes =
-			appVolumesEnabled && row.runtime !== 'static' ? safely(() => core.appVolumes.list(principal, row), []) : [];
+			appVolumesEnabled && row.runtime !== 'static'
+				? safely(() => core.appVolumes.list(principal, row), [])
+				: [];
 
 		return {
 			project,
@@ -810,14 +779,16 @@ export const actions: Actions = {
 		const command = formString(data, 'command');
 		const image = formString(data, 'image');
 		const dataEnabled = formBoolean(data, 'dataEnabled');
+		// Variables are edited on their own tab; the runtime form keeps whatever is saved.
+		const current = safely(() => core.workloads.projectSpec(project), null);
 		const input: Record<string, unknown> = {
 			runtime: project.runtime,
 			port: numberField(data, 'port', 3000),
 			memoryMb: numberField(data, 'memoryMb', 256),
 			cpus: numberField(data, 'cpus', 1),
 			healthPath: formString(data, 'healthPath') || '/',
-			env: envFromForm(data),
-			secrets: secretsFromForm(data),
+			env: current?.env ?? {},
+			secrets: current?.secrets ?? [],
 			...(dataEnabled ? { data: { sizeMb: numberField(data, 'dataSizeMb', 256) } } : {})
 		};
 		if (project.runtime === 'process') {
@@ -857,33 +828,29 @@ export const actions: Actions = {
 		return { success: 'Workload stopped and runtime configuration cleared.' };
 	},
 
-	setSecret: async ({ request, locals, params }) => {
+	saveVariables: async ({ request, locals, params }) => {
 		const principal = locals.principal!;
 		const data = await request.formData();
-		const name = formString(data, 'secretName').toUpperCase();
-		const value = formRawString(data, 'secretValue');
-		const type = formString(data, 'secretType') === 'env' ? 'env' : 'secret';
-
-		const fieldErrors: Record<string, string> = {};
-		if (!/^[A-Z][A-Z0-9_]*$/.test(name))
-			fieldErrors.secretName = 'Use UPPER_SNAKE_CASE, starting with a letter.';
-		if (!value) fieldErrors.secretValue = 'Enter a value.';
-		if (Object.keys(fieldErrors).length > 0)
-			return fail(400, { message: 'Check the secret.', fieldErrors });
-
+		let payload: unknown;
+		try {
+			payload = JSON.parse(formRawString(data, 'variables'));
+		} catch {
+			return fail(400, { message: 'The variables could not be read. Reload and try again.' });
+		}
+		const parsed = workloadVariablesSchema.safeParse(payload);
+		if (!parsed.success) {
+			return fail(400, {
+				message: parsed.error.issues[0]?.message ?? 'Check the variables.',
+				fieldErrors: fieldErrorsFrom(parsed.error.issues)
+			});
+		}
 		try {
 			const project = core.projects.requireRow(principal, params.slug);
-			const secret = await core.secrets.set(principal, {
-				name,
-				value,
-				type,
-				projectId: project.id
-			});
+			const workload = await core.workloads.setVariables(principal, project, parsed.data);
 			return {
-				success:
-					secret.type === 'secret'
-						? `${secret.name} saved as secret version ${secret.version}.`
-						: `${secret.name} saved as a plain environment variable.`
+				success: workload
+					? 'Variables saved. The app restarts with them on the next reconcile.'
+					: 'Variables saved. They apply when the app is next deployed.'
 			};
 		} catch (caught) {
 			return fail(failStatus(caught), toFormFailure(caught));
@@ -1042,7 +1009,9 @@ export const actions: Actions = {
 		try {
 			const project = core.projects.requireRow(principal, params.slug);
 			core.appVolumes.attach(principal, project, volumeName, parsed.data);
-			return { success: `Volume "${volumeName}" mounted at ${parsed.data.mountPath}; the workload restarts with it.` };
+			return {
+				success: `Volume "${volumeName}" mounted at ${parsed.data.mountPath}; the workload restarts with it.`
+			};
 		} catch (caught) {
 			return fail(failStatus(caught), toFormFailure(caught));
 		}

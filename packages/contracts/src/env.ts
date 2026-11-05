@@ -120,6 +120,101 @@ export function parseEnvFileNames(text: string, limit = 100): string[] {
 	return names;
 }
 
+export interface EnvFileEntry {
+	key: string;
+	value: string;
+}
+
+export interface EnvFileParseResult {
+	/** In file order; a key that appears twice keeps its last value, as dotenv does. */
+	entries: EnvFileEntry[];
+	/** 1-based line numbers that are not `KEY=value`, comments or blank. */
+	invalidLines: number[];
+}
+
+const ENV_ASSIGNMENT = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/s;
+
+function unescapeDoubleQuoted(value: string): string {
+	return value.replace(/\\([nrt"\\])/g, (_, char: string) =>
+		char === 'n' ? '\n' : char === 'r' ? '\r' : char === 't' ? '\t' : char
+	);
+}
+
+/**
+ * Parse `.env` text into keys and values, following the common dotenv rules: `export` prefixes,
+ * `#` comments, single quotes kept literally, double quotes with `\n` escapes and multi-line
+ * values, and an unquoted value ending at ` #`. No `${VAR}` expansion: values are stored as typed.
+ */
+export function parseEnvFile(text: string): EnvFileParseResult {
+	const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/);
+	const values = new Map<string, string>();
+	const invalidLines: number[] = [];
+	for (let index = 0; index < lines.length; index++) {
+		const line = lines[index]!.trim();
+		if (!line || line.startsWith('#')) continue;
+		const match = ENV_ASSIGNMENT.exec(line);
+		if (!match) {
+			invalidLines.push(index + 1);
+			continue;
+		}
+		const key = match[1]!;
+		let raw = match[2]!;
+		const quote = raw[0];
+		let value: string;
+		if (quote === '"' || quote === "'" || quote === '`') {
+			// A quoted value may continue over the following lines until its closing quote.
+			let body = raw.slice(1);
+			let end = findClosingQuote(body, quote);
+			const start = index;
+			while (end === -1 && index + 1 < lines.length) {
+				index++;
+				body += '\n' + lines[index]!;
+				end = findClosingQuote(body, quote);
+			}
+			if (end === -1) {
+				invalidLines.push(start + 1);
+				continue;
+			}
+			body = body.slice(0, end);
+			value = quote === '"' ? unescapeDoubleQuoted(body) : body;
+		} else {
+			const comment = raw.search(/\s#/);
+			if (comment !== -1) raw = raw.slice(0, comment);
+			value = raw.trim();
+		}
+		values.delete(key);
+		values.set(key, value);
+	}
+	return { entries: [...values].map(([key, value]) => ({ key, value })), invalidLines };
+}
+
+function findClosingQuote(body: string, quote: string): number {
+	for (let index = 0; index < body.length; index++) {
+		if (quote === '"' && body[index] === '\\') {
+			index++;
+			continue;
+		}
+		if (body[index] === quote) return index;
+	}
+	return -1;
+}
+
+/** Serialise entries as `.env` text that `parseEnvFile` reads back unchanged. */
+export function formatEnvFile(entries: Iterable<EnvFileEntry>): string {
+	const lines: string[] = [];
+	for (const { key, value } of entries) {
+		const plain = /^[A-Za-z0-9_./:@%+,-]*$/.test(value);
+		const quoted = value
+			.replace(/\\/g, '\\\\')
+			.replace(/"/g, '\\"')
+			.replace(/\n/g, '\\n')
+			.replace(/\r/g, '\\r')
+			.replace(/\t/g, '\\t');
+		lines.push(`${key}=${plain ? value : `"${quoted}"`}`);
+	}
+	return lines.length > 0 ? lines.join('\n') + '\n' : '';
+}
+
 /**
  * Names the container/agent environment is expected to define already. They are noise in a
  * suggestion list: the user configures the app, not the OS.

@@ -16,6 +16,7 @@
 	import LinkIcon from '@lucide/svelte/icons/link-2';
 	import RocketIcon from '@lucide/svelte/icons/rocket';
 	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
+	import VariableIcon from '@lucide/svelte/icons/variable';
 	import type { ProjectTab } from './project-nav.js';
 
 	type NavItem = {
@@ -71,6 +72,7 @@
 			items: [
 				{ id: 'domains', label: 'Domains', icon: GlobeIcon, count: counts.domains },
 				{ id: 'data', label: 'Data', icon: DatabaseIcon, count: counts.data },
+				{ id: 'variables', label: 'Variables', icon: VariableIcon, count: counts.variables },
 				{ id: 'runtime', label: 'Runtime', icon: CpuIcon },
 				{ id: 'shares', label: 'Share links', icon: LinkIcon, count: counts.shares },
 				{ id: 'settings', label: 'Settings', icon: KeyRoundIcon }

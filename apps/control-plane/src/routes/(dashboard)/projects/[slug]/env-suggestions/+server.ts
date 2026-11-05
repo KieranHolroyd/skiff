@@ -39,8 +39,7 @@ export const GET: RequestHandler = (event) =>
 		}
 		try {
 			secretNames = core.secrets
-				.list(principal)
-				.filter((secret) => secret.projectId === null || secret.projectId === project.id)
+				.list(principal, { visibleTo: project.id })
 				.map((secret) => secret.name);
 		} catch {
 			// Without secret:read-metadata the plain env suggestions still work.

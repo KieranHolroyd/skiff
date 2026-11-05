@@ -30,6 +30,12 @@ export const secretRefSchema = z.object({
 });
 export type SecretRef = z.infer<typeof secretRefSchema>;
 
+/** Plain (readable) environment variables: `NAME=value`, names as POSIX shells accept them. */
+export const workloadEnvSchema = z
+	.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string().max(16_384))
+	.default({});
+export const workloadSecretRefsSchema = z.array(secretRefSchema).max(128).default([]);
+
 export const workloadSpecSchema = z
 	.object({
 		runtime: z.enum(workloadRuntimes),
@@ -51,9 +57,9 @@ export const workloadSpecSchema = z
 		/** Process only: pass the listen socket with `LISTEN_FDS` (systemd socket activation). */
 		socketActivation: z.boolean().default(true),
 		/** Plain (readable) environment variables captured in the config snapshot. */
-		env: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string().max(16_384)).default({}),
+		env: workloadEnvSchema,
 		/** Write-only secret references, resolved at activation. Values never live in the spec. */
-		secrets: z.array(secretRefSchema).max(128).default([]),
+		secrets: workloadSecretRefsSchema,
 		/** Persistent data directory (a SQLite file per project by default, DESIGN §3.4). */
 		data: z
 			.object({ sizeMb: z.number().int().min(32).max(65_536).default(256) })
@@ -68,6 +74,54 @@ export const workloadSpecSchema = z
 			ctx.addIssue({ code: 'custom', path: ['image'], message: 'Container workloads need an image.' });
 	});
 export type WorkloadSpec = z.infer<typeof workloadSpecSchema>;
+
+/**
+ * One save from the Variables view: the full plain env and secret references, plus values for
+ * project secrets to create (or add a version to) before the spec is written.
+ */
+export const workloadVariablesSchema = z.object({
+	env: workloadEnvSchema,
+	secrets: workloadSecretRefsSchema,
+	newSecrets: z
+		.array(
+			z.object({
+				name: secretRefSchema.shape.name,
+				value: z.string().min(1, 'Secret values cannot be empty.').max(65_536),
+			}),
+		)
+		.max(64)
+		.default([]),
+});
+export type WorkloadVariables = z.input<typeof workloadVariablesSchema>;
+
+/**
+ * The environment variable a secret reference sets: `NAME` for env delivery, `NAME_FILE` (the
+ * path of the 0400 file) for file delivery.
+ */
+export function secretRefEnvName(ref: Pick<SecretRef, 'name' | 'delivery'>): string {
+	return ref.delivery === 'file' ? `${ref.name}_FILE` : ref.name;
+}
+
+/**
+ * Names a spec would set twice. A secret reference is applied after plain env, so a clash
+ * silently hides the plain value; a duplicate reference hides the first one. Checked on write
+ * only, so specs saved before this check still load.
+ */
+export function workloadEnvIssues(spec: Pick<WorkloadSpec, 'env' | 'secrets'>): string[] {
+	const issues: string[] = [];
+	const refs = new Map<string, SecretRef>();
+	for (const ref of spec.secrets) {
+		const name = secretRefEnvName(ref);
+		if (refs.has(name)) {
+			issues.push(`Secret ${ref.name} is referenced more than once.`);
+			continue;
+		}
+		refs.set(name, ref);
+		if (Object.hasOwn(spec.env, name))
+			issues.push(`${name} is set both as a plain variable and by secret ${ref.name}. Keep one.`);
+	}
+	return issues;
+}
 
 export const workloadStatuses = ['pending', 'starting', 'running', 'failed', 'stopped'] as const;
 export type WorkloadStatus = (typeof workloadStatuses)[number];

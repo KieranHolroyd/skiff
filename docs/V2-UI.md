@@ -95,7 +95,8 @@ deployed content can never execute on the platform origin.
 
 Static projects show a “Static project” empty state — there is no workload. Process/container
 projects show the runtime card (node, upstream, memory/CPU, deployment, memory reservation against
-the node slice), the specification, node capacity (platform admins), and secrets.
+the node slice), the specification and node capacity (platform admins). Environment variables and
+secrets live on their own **Variables** tab.
 
 `Configure` edits the spec; saved values apply on the **next deploy**, never hot-reloaded. `Reset`
 stops the workload and clears the spec but keeps deployments and releases.
@@ -118,15 +119,38 @@ stops the workload and clears the spec but keeps deployments and releases.
 Name, slug (30-day redirect from the old address), placement, and separate production/preview
 access. Placement changes are next-deploy changes too.
 
+### Variables
+
+One list of everything the app's environment gets at start-up: **plain** variables (readable, edited
+inline), **secrets** (masked, `Replace value` writes a new version) and **linked** variables injected
+by attached databases and storage (read-only, with their source). Edits are staged; the footer counts
+unsaved changes and `Save and restart` writes them in one `saveVariables` action
+(`core.workloads.setVariables`): new secret values first, then the spec's `env` and `secrets`. The
+whole save is validated before anything is written, so a refused save leaves no secret versions.
+
+- `Add` takes a name and value; tick **Secret** to store it encrypted as a project secret and
+  reference it in one step. Pasting `KEY=value` lines into the name field imports them all.
+- `Raw editor` shows the plain variables as `.env` text (`parseEnvFile`/`formatEnvFile` in
+  `@skiff/contracts`: `export`, comments, quotes and multi-line values; no `${VAR}` expansion). Names
+  left out of the text are removed; secrets and linked variables are untouched.
+- Inline errors block the save: an invalid or duplicate name, a plain variable that a secret also
+  sets (`NAME`, or `NAME_FILE` for file delivery), a reference to a missing secret or version. A plain
+  variable that overrides a linked one is a warning.
+- Suggestions from `.env` files and code, and `Link` for a managed service the code expects, sit
+  under the add row.
+- The **Secrets** card lists what the project can reference, marks the ones in use, offers `Use` for
+  the others and `Delete` for this project's own.
+
 ## Secrets lifecycle
 
-Add a `UPPER_SNAKE_CASE` name, value and type: **secret** (write-only) or **plain env** (readable).
-Reusing a name creates a new version; only the latest is listed. Reference secrets from the spec with
-`env` or `file` delivery (a `0400` file exposed through `NAME_FILE`). Values never enter desired
-state; the agent fetches them just-in-time at activation, so a new version is picked up at the next
-activation (restart or redeploy), not hot-swapped into a running process. Deleting removes the latest
-version; running workloads keep the activated value until restart. Org-level secrets work from any
-project.
+Secret names are `UPPER_SNAKE_CASE`. Reusing a name adds a version **within its scope**: this
+project's `FOO` and the organisation's `FOO` are versioned separately. A reference resolves to the
+project's own secret first, then the organisation's; another project's secrets are never visible or
+delivered (D88). References use `env` or `file` delivery (a `0400` file exposed through
+`NAME_FILE`) and may pin a version. Values never enter desired state; the agent fetches them
+just-in-time at activation. The version each reference resolves to is part of the activation
+fingerprint, so a new value (or deleting the latest version) restarts the apps that use it; it is
+never hot-swapped into a running process.
 
 ## Node capacity and the Builder role
 
@@ -157,7 +181,7 @@ Workload status: `pending → starting → running`, plus `failed` / `stopped`. 
 ## End-to-end flows
 
 **Process app.** `/projects` → `New project` with runtime `process` and a placement → project
-**Runtime** → `Configure` (command, port, health path, memory, env, secret refs) → deploy from CLI,
+**Runtime** → `Configure` (command, port, health path, memory) → **Variables** (plain, secrets) → deploy from CLI,
 MCP or REST (`skif deploy ./dist --project <slug>`) → confirm node, upstream and reservation on the
 Runtime card. **Container app:** same, but set the `image` before the first deploy.
 

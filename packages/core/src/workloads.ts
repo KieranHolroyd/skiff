@@ -4,7 +4,9 @@ import {
 	canViewPlatform,
 	orgNetworkName,
 	requirePermission,
+	workloadEnvIssues,
 	workloadSpecSchema,
+	workloadVariablesSchema,
 	type NodeCapacityView,
 	type Principal,
 	type WorkloadActivation,
@@ -12,6 +14,7 @@ import {
 	type WorkloadRuntime,
 	type WorkloadSpec,
 	type WorkloadStatus,
+	type WorkloadVariables,
 	type WorkloadView,
 } from '@skiff/contracts';
 import { featureEnabled } from './config.ts';
@@ -104,7 +107,7 @@ export class WorkloadService {
 			spec,
 			nodeId: decision.nodeId,
 			upstream,
-			activationVersion: activationVersion(spec, this.attachmentsVersion(project.id, decision.nodeId, spec.runtime)),
+			activationVersion: activationVersion(spec, this.attachmentsVersion(project.id, decision.nodeId, spec.runtime, project.orgId, spec)),
 		};
 	}
 
@@ -116,6 +119,7 @@ export class WorkloadService {
 				`Project "${project.slug}" is static. Create it with runtime "process" or "container" to run a workload.`,
 			);
 		const spec = workloadSpecSchema.parse({ ...input, runtime: project.runtime });
+		this.assertEnvResolvable(project, spec);
 		const existing = this.ctx.db.select().from(workloads).where(eq(workloads.projectId, project.id)).get();
 		this.ctx.quota.assertCanAdmitMemory(
 			project.orgId,
@@ -145,6 +149,54 @@ export class WorkloadService {
 		return this.view(project);
 	}
 
+	/**
+	 * Replace a project's environment in one step: write any new secret values as project secrets,
+	 * then save the plain env and references into the spec. Everything is validated before the
+	 * first write, so a refused save creates no secret versions. A running workload restarts with
+	 * the result on its next reconcile.
+	 */
+	async setVariables(principal: Principal, project: ProjectRow, input: WorkloadVariables): Promise<WorkloadView | null> {
+		requirePermission(principal, 'project:update');
+		const variables = workloadVariablesSchema.parse(input);
+		if (variables.newSecrets.length > 0) requirePermission(principal, 'secret:create');
+		if (project.runtime === 'static')
+			throw new ValidationError(`Project "${project.slug}" is static and has no environment variables.`);
+		const current = this.projectSpec(project);
+		if (!current && project.runtime === 'container')
+			throw new ValidationError('Set the container image under Runtime before adding variables.');
+		const spec = workloadSpecSchema.parse({
+			...(current ?? this.defaultSpec(project)),
+			env: variables.env,
+			secrets: variables.secrets,
+		});
+		const pending = new Set<string>();
+		for (const secret of variables.newSecrets) {
+			if (pending.has(secret.name)) throw new ValidationError(`Secret ${secret.name} is set more than once.`);
+			pending.add(secret.name);
+		}
+		this.assertEnvResolvable(project, spec, pending);
+		for (const secret of variables.newSecrets) {
+			await this.ctx.secrets.set(principal, { name: secret.name, value: secret.value, projectId: project.id });
+		}
+		return this.setSpec(principal, project, spec);
+	}
+
+	/**
+	 * Refuse a spec whose variables clash or whose secret references cannot resolve for this
+	 * project. Activation skips a missing secret, so without this the app would start without it.
+	 */
+	private assertEnvResolvable(project: ProjectRow, spec: WorkloadSpec, pending: Set<string> = new Set()): void {
+		const issues = workloadEnvIssues(spec);
+		for (const ref of spec.secrets) {
+			if (pending.has(ref.name) && ref.version === undefined) continue;
+			const resolved = this.ctx.secrets.resolve(project.orgId, project.id, ref.name);
+			if (!resolved) issues.push(`Secret ${ref.name} does not exist for this project or the organisation.`);
+			else if (ref.version !== undefined && !resolved.versions.includes(ref.version))
+				issues.push(`Secret ${ref.name} has no version ${ref.version}.`);
+		}
+		if (issues.length > 0) throw new ValidationError(issues.join(' '), issues);
+	}
+
 	/** Re-point the workload at an existing deployment (promote/rollback); placement is preserved. */
 	syncDeployment(project: ProjectRow, deploymentId: string): void {
 		const deployment = this.ctx.db.select().from(deployments).where(eq(deployments.id, deploymentId)).get();
@@ -157,7 +209,7 @@ export class WorkloadService {
 			upstream: upstreamFor(project.id, parsed.data),
 			activationVersion: activationVersion(
 				parsed.data,
-				this.attachmentsVersion(project.id, deployment.nodeId, parsed.data.runtime),
+				this.attachmentsVersion(project.id, deployment.nodeId, parsed.data.runtime, project.orgId, parsed.data),
 			),
 		});
 	}
@@ -288,7 +340,7 @@ export class WorkloadService {
 				port: spec.port,
 				healthPath: spec.healthPath,
 				socketActivation: spec.socketActivation,
-				activationVersion: activationVersion(spec, this.attachmentsVersion(project.id, workload.nodeId, spec.runtime)),
+				activationVersion: activationVersion(spec, this.attachmentsVersion(project.id, workload.nodeId, spec.runtime, project.orgId, spec)),
 				env: spec.env,
 				secrets: spec.secrets,
 				dataSizeMb: spec.data?.sizeMb ?? null,
@@ -316,14 +368,14 @@ export class WorkloadService {
 		};
 		const files: Record<string, string> = {};
 		for (const ref of spec.secrets) {
-			const value = this.ctx.secrets.getValue(row.orgId, ref.name, ref.version);
+			const value = this.ctx.secrets.getValue(row.orgId, ref.name, ref.version, row.projectId);
 			if (!value) continue;
 			if (ref.delivery === 'file') files[ref.name] = value.value;
 			else env[ref.name] = value.value;
 		}
 		return {
 			workloadId: row.id,
-			activationVersion: activationVersion(spec, this.attachmentsVersion(row.projectId, row.nodeId, spec.runtime)),
+			activationVersion: activationVersion(spec, this.attachmentsVersion(row.projectId, row.nodeId, spec.runtime, row.orgId, spec)),
 			env,
 			files,
 		};
@@ -395,15 +447,34 @@ export class WorkloadService {
 	/**
 	 * Attachment fingerprint for the activation version. Databases alone keep their existing
 	 * fingerprint, and projects with no attachments keep the plain spec hash (no restart on upgrade).
+	 * Secret references add the version each one resolves to, so saving a new secret value restarts
+	 * the app with it; a spec without secret references keeps its hash.
 	 */
-	private attachmentsVersion(projectId: string, nodeId: string | null, runtime: WorkloadRuntime): string {
+	private attachmentsVersion(
+		projectId: string,
+		nodeId: string | null,
+		runtime: WorkloadRuntime,
+		orgId: string,
+		spec: WorkloadSpec,
+	): string {
 		return [
 			this.ctx.databases.consumerVersion(projectId, nodeId, runtime),
 			this.ctx.storage.consumerVersion(projectId, nodeId, runtime),
 			this.ctx.appVolumes.projectVersion(projectId),
+			this.secretsVersion(orgId, projectId, spec),
 		]
 			.filter(Boolean)
 			.join(':');
+	}
+
+	private secretsVersion(orgId: string, projectId: string, spec: WorkloadSpec): string {
+		if (spec.secrets.length === 0) return '';
+		const resolved = spec.secrets.map((ref) => {
+			const found = this.ctx.secrets.resolve(orgId, projectId, ref.name);
+			const version = ref.version ?? found?.versions[0] ?? 0;
+			return `${ref.name}=${found?.scope ?? 'missing'}@${version}`;
+		});
+		return `secrets:${sha256Hex(resolved.join(','))}`;
 	}
 
 	/** Edge node id (config or first edge), for placement by other services. */

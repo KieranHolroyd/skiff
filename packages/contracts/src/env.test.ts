@@ -4,8 +4,10 @@ import {
 	databasePrefixFromEnvName,
 	databasePrefixesFromEnvNames,
 	detectEnvNames,
+	formatEnvFile,
 	isEnvFileName,
 	nextEnvPrefix,
+	parseEnvFile,
 	parseEnvFileNames,
 	storagePrefixFromEnvName,
 	storagePrefixesFromEnvNames
@@ -151,5 +153,56 @@ describe('attachment prefixes', () => {
 		expect(storagePrefixesFromEnvNames(['AWS_REGION'])).toEqual(['AWS']);
 		expect(storagePrefixesFromEnvNames(['APP_REGION'])).toEqual([]);
 		expect(storagePrefixesFromEnvNames(['MEDIA_ENDPOINT_URL', 'MEDIA_BUCKET'])).toEqual(['MEDIA']);
+	});
+});
+
+describe('parseEnvFile', () => {
+	test('reads values with dotenv quoting rules', () => {
+		const text = [
+			'# comment',
+			'',
+			'export PORT=3000',
+			'NAME = skiff ',
+			'URL=https://example.com/#anchor # trailing comment',
+			"SINGLE='keep $HOME \\n literal'",
+			'DOUBLE="line one\\nline \\"two\\""',
+			'EMPTY=',
+			'MULTI="first',
+			'second"',
+			'not a variable',
+			'PORT=4000'
+		].join('\n');
+		const parsed = parseEnvFile(text);
+		expect(parsed.entries).toEqual([
+			{ key: 'NAME', value: 'skiff' },
+			{ key: 'URL', value: 'https://example.com/#anchor' },
+			{ key: 'SINGLE', value: 'keep $HOME \\n literal' },
+			{ key: 'DOUBLE', value: 'line one\nline "two"' },
+			{ key: 'EMPTY', value: '' },
+			{ key: 'MULTI', value: 'first\nsecond' },
+			{ key: 'PORT', value: '4000' }
+		]);
+		expect(parsed.invalidLines).toEqual([11]);
+	});
+
+	test('reports an unterminated quote and keeps going', () => {
+		expect(parseEnvFile('A="open\nB=2')).toEqual({ entries: [], invalidLines: [1] });
+		expect(parseEnvFile('﻿A=1\r\nB=2\r\n').entries).toEqual([
+			{ key: 'A', value: '1' },
+			{ key: 'B', value: '2' }
+		]);
+	});
+
+	test('formatEnvFile round-trips through parseEnvFile', () => {
+		const entries = [
+			{ key: 'PLAIN', value: 'postgres://u@h:5432/db' },
+			{ key: 'SPACES', value: 'hello world' },
+			{ key: 'TRICKY', value: 'a "quote" \\ back\nslash # hash\ttab' },
+			{ key: 'EMPTY', value: '' }
+		];
+		const text = formatEnvFile(entries);
+		expect(text.startsWith('PLAIN=postgres://u@h:5432/db\nSPACES="hello world"\n')).toBe(true);
+		expect(parseEnvFile(text)).toEqual({ entries, invalidLines: [] });
+		expect(formatEnvFile([])).toBe('');
 	});
 });

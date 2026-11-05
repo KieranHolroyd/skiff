@@ -54,7 +54,7 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | DELETE | `/nodes/:id/volumes/:name` | platform admin **session** | removes the registration only; the mount stays. 409 while storage/database instances still live on it (D74) |
 | GET | `/audit` | `project:read` | `?limit&action&resource` |
 | GET | `/secrets` | `secret:read-metadata` | values never returned |
-| POST | `/secrets` | `secret:create` | `{ name, value, projectId?, type? }` |
+| POST | `/secrets` | `secret:create` | `{ name, value, projectId?, type? }`; versions count per scope, a project secret shadows the org's (D88); `projectId` must be in the org |
 | DELETE | `/secrets/:id` | `secret:delete` | |
 | POST | `/cli/token` | `apiKey:create` | exchange a one-time CLI login code + PKCE verifier for an API key |
 | GET/POST | `/projects/:slug/environments` | `project:read` / `project:update` | list or create a named environment |

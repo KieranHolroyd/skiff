@@ -363,6 +363,8 @@ domains; `skif logout --all` removes the file and every profile. `SKIFF_URL`, `S
 - **Envelope encryption:** per-org data keys, encrypted by a master key held as a **`systemd-creds`**
   credential (TPM2-bound where available, host key otherwise).
 - Secrets are **write-only** through the API and MCP. Plain env vars are a separate, readable type.
+- Secrets are **scoped**: a project secret shadows an organisation secret of the same name; another project's
+  secrets never resolve (D88). Changing a referenced secret restarts the apps that use it.
 - Snapshots reference **secret versions**. A version is kept while any retained deployment references it.
 - Delivery (tier 2): decrypted at activation, sent to the agent over WireGuard/mTLS, and injected as env vars
   by default or as files via `LoadCredential` (opt-in per secret).

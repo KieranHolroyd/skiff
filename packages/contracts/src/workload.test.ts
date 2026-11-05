@@ -2,7 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import {
 	DEFAULT_WORKLOAD_NETWORK,
 	orgNetworkName,
+	secretRefEnvName,
 	workloadDesiredSchema,
+	workloadEnvIssues,
 	workloadNetworkName,
 	workloadsShareNetwork,
 } from './workload.ts';
@@ -85,5 +87,37 @@ describe('per-org network derivation', () => {
 	test('desired state accepts the new fields and old state stays valid', () => {
 		expect(workloadDesiredSchema.parse({ ...base, orgId: 'org_1' }).orgId).toBe('org_1');
 		expect(workloadDesiredSchema.parse(base).orgId).toBeUndefined();
+	});
+});
+
+describe('workloadEnvIssues', () => {
+	test('accepts distinct plain variables and secret references', () => {
+		expect(
+			workloadEnvIssues({
+				env: { PORT: '3000', TLS_KEY: 'not-a-clash' },
+				secrets: [
+					{ name: 'API_KEY', delivery: 'env' },
+					{ name: 'TLS_KEY', delivery: 'file' }
+				]
+			})
+		).toEqual([]);
+		expect(secretRefEnvName({ name: 'TLS_KEY', delivery: 'file' })).toBe('TLS_KEY_FILE');
+	});
+
+	test('flags names that would be set twice', () => {
+		expect(
+			workloadEnvIssues({
+				env: { API_KEY: 'plain', TLS_KEY_FILE: '/tmp/key' },
+				secrets: [
+					{ name: 'API_KEY', delivery: 'env' },
+					{ name: 'API_KEY', delivery: 'env' },
+					{ name: 'TLS_KEY', delivery: 'file' }
+				]
+			})
+		).toEqual([
+			'API_KEY is set both as a plain variable and by secret API_KEY. Keep one.',
+			'Secret API_KEY is referenced more than once.',
+			'TLS_KEY_FILE is set both as a plain variable and by secret TLS_KEY. Keep one.'
+		]);
 	});
 });

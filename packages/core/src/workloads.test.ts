@@ -131,6 +131,115 @@ describe('tier 2 workloads', () => {
 		expect(activation.env.DATABASE_URL).toBe('postgres://secret');
 		expect(() => core.workloads.activation('nod_other', workoutId(state))).toThrow();
 	});
+
+	test('scopes secrets to their project and lets a project secret override the organisation', async () => {
+		await core.projects.create(principal, {
+			name: 'other',
+			slug: 'other',
+			runtime: 'process',
+			placement: 'auto',
+			productionAccess: 'public',
+			previewAccess: 'platform',
+		});
+		const app = core.projects.requireRow(principal, 'app');
+		const other = core.projects.requireRow(principal, 'other');
+		const otherSecret = await core.secrets.set(principal, { name: 'API_KEY', value: 'other-key', projectId: other.id });
+		const spec = {
+			runtime: 'process' as const,
+			command: ['bun', 'run', 'start'],
+			port: 3000,
+			memoryMb: 256,
+			cpus: 1,
+			healthPath: '/',
+			socketActivation: true,
+			env: {},
+			secrets: [{ name: 'API_KEY', delivery: 'env' as const }],
+		};
+		// Another project's secret is invisible: referencing it is refused up front.
+		expect(() => core.workloads.setSpec(principal, app, spec)).toThrow(/API_KEY does not exist/);
+		expect(core.secrets.getValue('org_1', 'API_KEY', undefined, app.id)).toBeNull();
+		expect(otherSecret.version).toBe(1);
+
+		const orgSecret = await core.secrets.set(principal, { name: 'API_KEY', value: 'org-key' });
+		expect(orgSecret.version).toBe(1);
+		core.workloads.setSpec(principal, app, spec);
+		const state = await core.nodes.desiredState(nodeToken);
+		const appWorkload = state.workloads.find((item) => item.projectSlug === 'app')!;
+		expect(core.workloads.activation(nodeId, appWorkload.id).env.API_KEY).toBe('org-key');
+
+		await core.secrets.set(principal, { name: 'API_KEY', value: 'app-key', projectId: app.id });
+		expect(core.workloads.activation(nodeId, appWorkload.id).env.API_KEY).toBe('app-key');
+		expect(core.secrets.getValue('org_1', 'API_KEY', undefined, other.id)?.value).toBe('other-key');
+		const visible = core.secrets.list(principal, { visibleTo: app.id }).filter((item) => item.name === 'API_KEY');
+		expect(visible.map((item) => item.projectId).sort()).toEqual([app.id, null].sort());
+		await expect(
+			core.secrets.set(principal, { name: 'API_KEY', value: 'x', projectId: 'prj_missing' }),
+		).rejects.toMatchObject({ code: 'not_found' });
+	});
+
+	test('refuses specs that set a variable twice or pin a missing version', () => {
+		const app = core.projects.requireRow(principal, 'app');
+		const base = {
+			runtime: 'process' as const,
+			command: ['bun', 'run', 'start'],
+			port: 3000,
+			memoryMb: 256,
+			cpus: 1,
+			healthPath: '/',
+			socketActivation: true,
+		};
+		expect(() =>
+			core.workloads.setSpec(principal, app, {
+				...base,
+				env: { API_KEY: 'plain' },
+				secrets: [{ name: 'API_KEY', delivery: 'env' }],
+			}),
+		).toThrow(/set both as a plain variable/);
+		expect(() =>
+			core.workloads.setSpec(principal, app, {
+				...base,
+				env: {},
+				secrets: [{ name: 'API_KEY', delivery: 'env', version: 9 }],
+			}),
+		).toThrow(/has no version 9/);
+	});
+
+	test('saves plain env and new secrets together, and restarts on a new secret value', async () => {
+		const app = core.projects.requireRow(principal, 'app');
+		await core.workloads.setVariables(principal, app, {
+			env: { NODE_ENV: 'production' },
+			secrets: [{ name: 'STRIPE_KEY', delivery: 'env' }],
+			newSecrets: [{ name: 'STRIPE_KEY', value: 'sk_one' }],
+		});
+		const spec = core.workloads.projectSpec(core.projects.requireRow(principal, 'app'))!;
+		expect(spec.env).toEqual({ NODE_ENV: 'production' });
+		expect(spec.command).toEqual(['bun', 'run', 'start']);
+		expect(JSON.stringify(spec)).not.toContain('sk_one');
+
+		const before = (await core.nodes.desiredState(nodeToken)).workloads.find((item) => item.projectSlug === 'app');
+		await core.workloads.setVariables(principal, core.projects.requireRow(principal, 'app'), {
+			env: { NODE_ENV: 'production' },
+			secrets: [{ name: 'STRIPE_KEY', delivery: 'env' }],
+			newSecrets: [{ name: 'STRIPE_KEY', value: 'sk_two' }],
+		});
+		const after = (await core.nodes.desiredState(nodeToken)).workloads.find((item) => item.projectSlug === 'app');
+		expect(before).toBeDefined();
+		expect(after!.activationVersion).not.toBe(before!.activationVersion);
+		expect(core.secrets.getValue('org_1', 'STRIPE_KEY', undefined, app.id)?.value).toBe('sk_two');
+	});
+
+	test('a refused save writes no secret versions', async () => {
+		const app = core.projects.requireRow(principal, 'app');
+		const count = () => core.secrets.list(principal, { projectId: app.id }).filter((item) => item.name === 'LEAK_TEST').length;
+		await expect(
+			core.workloads.setVariables(principal, app, {
+				env: { LEAK_TEST: 'plain' },
+				secrets: [{ name: 'LEAK_TEST', delivery: 'env' }],
+				newSecrets: [{ name: 'LEAK_TEST', value: 'value' }],
+			}),
+		).rejects.toMatchObject({ code: 'validation' });
+		expect(count()).toBe(0);
+	});
 });
 
 function workoutId(state: Awaited<ReturnType<Core['nodes']['desiredState']>>): string {

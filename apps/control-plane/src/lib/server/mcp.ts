@@ -914,7 +914,7 @@ function buildServer(
 		{
 			title: 'Set workload',
 			description:
-				'Set the runtime spec for a process/container project. Secrets are references only; values never leave the platform.',
+				'Set the runtime spec for a process/container project. Secrets are references only; values never leave the platform. A reference resolves to the project\'s own secret, then the organisation\'s; unknown names, missing pinned versions and names set both as plain env and by a secret are refused.',
 			inputSchema: workloadSpecSchema.extend({ project: z.string() }),
 			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
 			scopeChallenge: requires('project:update'),

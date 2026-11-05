@@ -54,6 +54,7 @@
 	import ProjectNav from './_components/ProjectNav.svelte';
 	import { readProjectTab, type ProjectTab } from './_components/project-nav.js';
 	import RuntimePanel from './_components/RuntimePanel.svelte';
+	import VariablesPanel from './_components/VariablesPanel.svelte';
 	import SourcePanel from './_components/SourcePanel.svelte';
 	import StorageCard from './_components/StorageCard.svelte';
 	import VolumesCard from './_components/VolumesCard.svelte';
@@ -147,6 +148,9 @@
 		builds: data.builds.length,
 		domains: data.domains.length,
 		data: data.appVolumes.length + data.databaseAttachments.length + data.storageAttachments.length,
+		variables: data.workloadSpec
+			? Object.keys(data.workloadSpec.env).length + data.workloadSpec.secrets.length
+			: undefined,
 		shares: activeShares.length
 	});
 
@@ -519,13 +523,12 @@
 						/>
 					{/if}
 				</div>
-			{:else if tab === 'runtime'}
-				<RuntimePanel
+			{:else if tab === 'variables'}
+				<VariablesPanel
 					project={data.project}
 					spec={data.workloadSpec}
 					workload={data.workload}
 					secrets={data.secrets}
-					capacity={data.capacity}
 					databaseAttachments={data.databaseAttachments}
 					storageAttachments={data.storageAttachments}
 					attachableDatabases={data.attachableDatabases}
@@ -533,9 +536,19 @@
 					canAttachDatabase={data.can.attachDatabase}
 					canAttachStorage={data.can.attachStorage}
 					can={{
-						manageWorkload: data.can.manageWorkload,
+						edit: data.can.manageWorkload,
 						createSecret: data.can.createSecret,
-						deleteSecret: data.can.deleteSecret,
+						deleteSecret: data.can.deleteSecret
+					}}
+				/>
+			{:else if tab === 'runtime'}
+				<RuntimePanel
+					project={data.project}
+					spec={data.workloadSpec}
+					workload={data.workload}
+					capacity={data.capacity}
+					can={{
+						manageWorkload: data.can.manageWorkload,
 						viewCapacity: data.can.viewCapacity
 					}}
 				/>
