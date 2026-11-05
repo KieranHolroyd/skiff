@@ -27,7 +27,7 @@ D24 (the VPS is an accepted single point of failure), D25 (R2 is canonical), D28
 | `/opt/skiff/releases/<version>/agent` | `root:root 0755` | `skiff-agent` compiled binary. |
 | `/opt/skiff/helper/skiff-helper` | `root:root 0755` | Privileged runtime helper installed from the active release (one binary, swapped by the updater). |
 | `/etc/skiff/helper.env` | `root:skiff 0640` | Helper environment (socket groups, release roots, AppArmor mode). |
-| `/opt/skiff/releases/<version>/caddy` | `root:root 0755` | Caddy 2.11.7 + `caddy-dns/cloudflare`. |
+| `/opt/skiff/releases/<version>/caddy/caddy` | `root:root 0755` | Caddy 2.11.8 + `caddy-dns/cloudflare`; installed by the updater. |
 | `/etc/skiff/skiff.env` | `root:skiff 0640` | Runtime environment and secrets (see §2). |
 | `/etc/skiff/master.key` | `root:root 0400` | Master key, delivered via `LoadCredential=`, never sourced by shell. |
 | `/etc/skiff/setup-token` | `root:skiff 0640` | Single-use setup URL token. |
@@ -77,6 +77,7 @@ root:skiff`.
 | `SKIFF_CADDY_ADMIN_SOCKET` | `/var/lib/caddy/admin.sock` | no | Caddy admin unix socket. |
 | `SKIFF_AGENT_VERSION` | empty | no | Optional desired agent version; normally set by the control plane. |
 | `SKIFF_RELEASE_CHANNEL` | `stable` | no | `stable` or `edge`. Edge is reported as a preflight warning (shorter support window). |
+| `SKIFF_UPDATE_METHOD` | `auto` | no | Initial choice on Settings → Updates: `auto`, `download` or `build`. Security-sensitive hosts can default it to `build`; the CLI still accepts `--source`. |
 | `SKIFF_EDGE_NODE_ID` | empty | no | Node identity for single-node mode. |
 | `SKIFF_CONTROL_URL` | — | no | Agent only (`/etc/skiff/agent.env`): control-plane origin, `http(s)://…`. |
 | `SKIFF_NODE_ID` | — | no | Agent only: node id from `skiff-agent join`. |
@@ -363,13 +364,15 @@ Litestream is current.
 ### 4.1 Self-update from GitHub
 
 ```sh
-sudo skiff-update-self              # install the newest signed release, if newer (reverts on failure)
-sudo skiff-update-self check        # running vs latest version; changes nothing
-sudo skiff-update-self plan         # preflight without changing anything (disk, target, migrations)
-sudo skiff-update-self --dry-run    # show the release and the plan
-sudo skiff-update-self status       # current / previous / last switch / recorded failures
-sudo skiff-update-self rollback     # back to previous; run again to undo the rollback
-sudo skiff-update-self recover      # resolve an interrupted update now (also automatic)
+sudo skiff-update-self                     # automatic: signed release if published, else source
+sudo skiff-update-self --source download   # signed release only; never builds on the host
+sudo skiff-update-self --source build      # build the configured ref from source only
+sudo skiff-update-self check               # running vs latest version; changes nothing
+sudo skiff-update-self plan                # preflight without changing anything (disk, target, migrations)
+sudo skiff-update-self --dry-run           # show the release and the plan
+sudo skiff-update-self status              # current / previous / last switch / recorded failures
+sudo skiff-update-self rollback            # back to previous; run again to undo the rollback
+sudo skiff-update-self recover             # resolve an interrupted update now (also automatic)
 ```
 
 Or use **Settings → Updates** in the dashboard (platform owners and admins only).
@@ -401,8 +404,9 @@ of the code that is actually running.
 **Releases are built and signed in CI, never on the host.** Every push to `main` whose `VERSION`
 has no release yet runs [`.github/workflows/publish.yml`](../.github/workflows/publish.yml):
 tests, one build per architecture (native amd64 and arm64 runners), the stage-0 updater compiled
-with `bun build --compile`, and the release's own canary hook run as the `skiff` user under the
-production systemd sandbox ([`scripts/release/ci-canary.sh`](../scripts/release/ci-canary.sh)).
+with `bun build --compile`, Caddy built with `caddy-dns/cloudflare`, and the release's own canary
+hook run as the `skiff` user under the production systemd sandbox
+([`scripts/release/ci-canary.sh`](../scripts/release/ci-canary.sh)).
 Only then is `manifest.json` written and signed with Ed25519
 ([`scripts/release/manifest.ts`](../scripts/release/manifest.ts); the workflow refuses to
 publish a signature the updater would not accept) and the GitHub release `v<VERSION>` created
@@ -413,15 +417,48 @@ and extra trusted keys can be dropped into `/etc/skiff/updater/keys/*.pub` for r
 
 The updater installs the newest non-draft, non-prerelease `v<semver>` release whose manifest
 verifies, after checking the artifact's size and sha256 against it. Network, signature and
-checksum problems never mark a release bad; they are retried. With no signed release published
-(or with `--ref`), it falls back to building the ref from source as before; `--source artifact`
-(or `SKIFF_UPDATE_SOURCE=artifact`) forbids that fallback, `--source source` forces it.
+checksum problems never mark a release bad; they are retried.
+
+**Choose how to install.** The dashboard (Settings → Updates) and the CLI expose the same choice,
+so a host can avoid running prebuilt binaries if that matters to it:
+
+| Method | CLI | What it trusts | Trade-off |
+|---|---|---|---|
+| Automatic (default) | `--source auto` | The signed release when one exists, otherwise the source ref | No choice needed; follows the published channel |
+| Download signed release | `--source download` (alias `artifact`) | The Ed25519-signed manifest, the artifact's SHA-256 and the release key compiled into the updater | Fast; nothing is compiled on the host. Needs a published release. |
+| Build from source | `--source build` (alias `source`, or `--ref <ref>`) | GitHub and the exact commit/ref it checks out; no CI binary is executed | Slower and needs disk/CPU; useful when you do not want to trust a prebuilt artifact |
+
+`SKIFF_UPDATE_SOURCE` sets the CLI default. The dashboard writes the choice to an allowlisted
+sidecar next to the update request (`request.mode`); the root updater consumes and deletes it,
+with `--source` taking precedence. A request from an older control plane has no sidecar and
+falls back to `auto`, which is also why the *first* update after this change still uses the
+installed updater's old default: the new choice applies from the following run and from the
+first CLI invocation. With `--source download`, a missing signed release is an error rather
+than a silent fallback to a source build.
+
+**Caddy is part of the release.** CI builds the pinned Caddy (`CADDY_VERSION` in
+[`publish.yml`](../.github/workflows/publish.yml)) with `caddy-dns/cloudflare` and puts it at
+`caddy/caddy` in the release tarball. At commit the updater validates it (`caddy version` and
+`caddy list-modules`), installs it at the binary path the running unit executes, and restarts
+that unit. A stock `caddy.service` keeps its config and admin socket; the old binary is saved as
+`<path>.skiff-previous` and restored if the restart or the post-update health checks fail. A
+host running `skiff-caddy.service` already resolves `/opt/skiff/current/caddy/caddy`, so only
+the restart is needed. On the first update to a Caddy-bearing release the updater adds the same
+binary to `previous`, so a later rollback stays bootable. The release's Caddy is skipped when
+`caddy/caddy` is absent (an older artifact or a source ref that predates it). If the unit executes
+a package-managed path such as `/usr/bin/caddy`, the updater replaces that file (keeping
+`.skiff-previous`); a distro package upgrade can overwrite it, and the next Skiff update puts the
+release build back. Moving the host to `skiff-caddy.service` avoids that. As with the install
+method, the updater that *installs* this feature predates it, so Caddy is managed from the
+following run onward.
 
 **From the dashboard.** The control plane is unprivileged and sandboxed, so it cannot update or
 restart itself. The button drops `/var/lib/skiff/update/request`. A root path unit
 (`skiff-update-self.path`) notices it and starts `skiff-update-self.service`, which deletes the
 request and runs `skiff-update-self update --trigger dashboard`. The updater treats the request
-purely as a trigger: it re-checks GitHub itself and never reads the file. Progress goes to
+purely as a trigger: it re-checks GitHub itself and never reads the request file. The chosen
+install method is the one exception, carried in the allowlisted `request.mode` sidecar described
+above. Progress goes to
 `/var/lib/skiff-update/status.json` (`root:skiff 0640`), which the page polls, and the same run
 appends a JSON Lines log to `/var/lib/skiff-update/update.log` (`root:skiff 0640`). The page
 tails it into **Live log**. Every request is recorded in the audit log as `platform.update`.
@@ -1278,7 +1315,7 @@ internet while debugging.
 - Litestream is installed separately (`/usr/local/bin/litestream`); the installer detects
   it and enables replication only when R2 is configured. It is not compiled by the release
   workflow.
-- Bun `1.4.0`, Caddy `2.11.7` and `caddy-dns/cloudflare` `v0.2.4` are pinned in the release
+- Bun `1.4.0`, Caddy `2.11.8` and `caddy-dns/cloudflare` `v0.2.4` are pinned in the release
   workflow. Bump them together and re-run the drill.
 - The browser setup wizard and the `skif admin keys rotate` command are product surfaces
   described by DESIGN §12 and §11.2; this delivery defines their contracts (setup token,

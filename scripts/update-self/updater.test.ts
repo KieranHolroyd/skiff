@@ -174,6 +174,13 @@ class FakeHost implements Host {
 	isActive = async (unit: string) => this.active.get(unit) ?? false;
 	restartCount = async () => 0;
 	ensureHelper = (_release: string) => void this.calls.push('ensure-helper');
+	/** Release basename whose Caddy upgrade fails (simulates a bad binary or a failed restart). */
+	caddyFailsFor: string | null = null;
+	ensureCaddy = (release: string) => {
+		this.calls.push(`ensure-caddy ${basename(release)}`);
+		if (this.caddyFailsFor === basename(release)) throw new Error('caddy did not restart');
+		return true;
+	};
 	controlPlaneHealthy = async () =>
 		Boolean(this.active.get(CONTROL_PLANE) && this.running && !this.unhealthy.has(this.running));
 	readyz = async () => {
@@ -308,6 +315,7 @@ describe('update', () => {
 		// The canary runs as skiff: its writable dirs must exist before the recursive chown.
 		expect(host.canaryChowned).toEqual(['data', join('data', 'objects')]);
 		expect(host.running).toBe(basename(current));
+		expect(host.calls).toContain(`ensure-caddy ${basename(current)}`);
 		expect(JSON.parse(readFileSync(join(current, 'meta.json'), 'utf8'))).toMatchObject({
 			commit: NEW,
 			version: '0.2.0',
@@ -319,6 +327,13 @@ describe('update', () => {
 		expect(last).toMatchObject({ kind: 'update', from: original, to: current });
 		expect(existsSync(last.snapshot!)).toBe(true);
 		expect(host.critical).toBe(0);
+	});
+
+	test('a failed Caddy upgrade reverts the release and keeps the old one serving', async () => {
+		host.caddyFailsFor = '20261103120001-aaaaaaaaaaaa';
+		await expect(new Updater(layout, host).update()).rejects.toThrow(/caddy did not restart/);
+		expect(readLink(layout.currentLink)).toBe(original);
+		expect(host.running).toBe(basename(original));
 	});
 
 	test('a second update drops the oldest release and keeps the last N snapshots', async () => {
@@ -451,6 +466,7 @@ describe('rollback', () => {
 		expect(readLink(layout.currentLink)).toBe(original);
 		expect(readLink(layout.previousLink)).toBe(updated);
 		expect(host.running).toBe(basename(original));
+		expect(host.calls).toContain(`ensure-caddy ${basename(original)}`);
 		expect((await updater.rollback()).status).toBe('rolled-back');
 		expect(readLink(layout.currentLink)).toBe(updated);
 		expect(readLink(layout.previousLink)).toBe(original);
@@ -562,6 +578,31 @@ describe('helpers', () => {
 		const release = makeRelease('x', NEW);
 		rmSync(join(release, 'repo', 'apps', 'control-plane', 'build'), { recursive: true });
 		expect(verifyRelease(release, layout)).toContain('repo/apps/control-plane/build/index.js');
+	});
+
+	test('verifyRelease requires the Caddy binary when the unit executes it', () => {
+		writeFileSync(
+			layout.caddyUnitFile,
+			`[Service]\nExecStart=${layout.optDir}/current/caddy/caddy run --resume\n`
+		);
+		const release = makeRelease('caddy-required', NEW);
+		expect(verifyRelease(release, layout)).toContain('caddy/caddy');
+		mkdirSync(join(release, 'caddy'), { recursive: true });
+		writeFileSync(join(release, 'caddy', 'caddy'), 'caddy');
+		expect(verifyRelease(release, layout)).toEqual([]);
+	});
+
+	test('a source build carries the running Caddy into the new release', async () => {
+		mkdirSync(join(original, 'caddy'), { recursive: true });
+		writeFileSync(join(original, 'caddy', 'caddy'), 'running-caddy');
+		writeFileSync(
+			layout.caddyUnitFile,
+			`[Service]\nExecStart=${layout.optDir}/current/caddy/caddy run --resume\n`
+		);
+		const result = await new Updater(layout, host).update();
+		expect(result.status).toBe('updated');
+		const current = readLink(layout.currentLink)!;
+		expect(readFileSync(join(current, 'caddy', 'caddy'), 'utf8')).toBe('running-caddy');
 	});
 
 	test('the lock is exclusive while its owner lives and taken over after it dies', () => {

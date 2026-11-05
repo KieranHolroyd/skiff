@@ -5,7 +5,9 @@
  * Instead it drops `requestFile`; a systemd path unit notices and starts
  * `skiff-update-self.service` as root, which deletes the request, runs the updater and keeps
  * `statusFile` current. The request carries no data the updater trusts: it is only a trigger,
- * and the updater re-checks the version on GitHub itself.
+ * and the updater re-checks the version on GitHub itself. The one exception is the install
+ * method: it is an allowlisted enum written to a sidecar file (see {@link SELF_UPDATE_METHODS}),
+ * because a systemd unit cannot pass form data through to the updater.
  */
 
 export const SELF_UPDATE_DEFAULTS = {
@@ -20,6 +22,30 @@ export const SELF_UPDATE_DEFAULTS = {
 	/** Release metadata of the active release (repo/ref the updater pulls from). */
 	releaseMeta: '/opt/skiff/current/meta.json',
 } as const;
+
+/**
+ * How the updater obtains the release. `download` installs the CI-built, signed artifact;
+ * `build` fetches the configured ref and compiles it on the host. `auto` preserves the historic
+ * behaviour (download when a signed release exists, otherwise build from source).
+ */
+export const SELF_UPDATE_METHODS = ['auto', 'download', 'build'] as const;
+export type SelfUpdateMethod = (typeof SELF_UPDATE_METHODS)[number];
+
+export function isSelfUpdateMethod(value: unknown): value is SelfUpdateMethod {
+	return typeof value === 'string' && (SELF_UPDATE_METHODS as readonly string[]).includes(value);
+}
+
+/** Map the user-facing method onto the updater's source mode. */
+export function updateSourceForMethod(
+	method: SelfUpdateMethod
+): 'auto' | 'artifact' | 'source' {
+	return method === 'download' ? 'artifact' : method === 'build' ? 'source' : 'auto';
+}
+
+/** The sidecar the control plane writes beside the request; the updater consumes it. */
+export function selfUpdateModeFile(requestFile: string): string {
+	return `${requestFile}.mode`;
+}
 
 export type SelfUpdatePhase =
 	| 'queued'
@@ -43,6 +69,8 @@ export type SelfUpdateOutcome =
 export interface SelfUpdateStatus {
 	running: boolean;
 	trigger: 'dashboard' | 'cli';
+	/** How this run obtains the release; absent on status files from older updaters. */
+	method?: SelfUpdateMethod;
 	phase: SelfUpdatePhase;
 	message: string;
 	outcome?: SelfUpdateOutcome;

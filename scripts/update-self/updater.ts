@@ -96,6 +96,8 @@ export interface Layout {
 	lockFile: string;
 	bunBin: string;
 	controlPlaneUnitFile: string;
+	/** Release-managed Caddy unit, when the host uses it (stock `caddy.service` has no file here). */
+	caddyUnitFile: string;
 }
 
 export function layoutFromEnv(env: Record<string, string | undefined> = process.env): Layout {
@@ -116,6 +118,7 @@ export function layoutFromEnv(env: Record<string, string | undefined> = process.
 		lockFile: join(optDir, 'update.lock'),
 		bunBin: env.SKIFF_BUN_BIN ?? join(optDir, 'runtime', 'bin', 'bun'),
 		controlPlaneUnitFile: join(systemdDir, CONTROL_PLANE),
+		caddyUnitFile: join(systemdDir, 'skiff-caddy.service'),
 	};
 }
 
@@ -195,6 +198,12 @@ export interface Host {
 	restart(unit: string): Promise<void>;
 	/** Install/refresh skiff-helper from `release` (older hosts may lack the unit). */
 	ensureHelper(release: string): void;
+	/**
+	 * Install this release's Caddy binary at the path the running unit executes and restart it.
+	 * False when the release ships no Caddy or the host has no Caddy unit. Throws when the new
+	 * binary cannot be validated or Caddy does not come back (after restoring the old binary).
+	 */
+	ensureCaddy?(release: string): boolean;
 	isActive(unit: string): Promise<boolean>;
 	/** systemd NRestarts (automatic restarts since the last manual start). */
 	restartCount(unit: string): Promise<number>;
@@ -564,10 +573,10 @@ export class Updater {
 			const published = await this.resolvePublished(repo);
 			if (published) return { commit: published.manifest.commit, version: published.manifest.version, fromVersion, published };
 			if (source === 'artifact')
-				throw new UpdateError(`No signed release of ${repo} is published; refusing to build on the host (source: artifact).`);
+				throw new UpdateError(`No signed release of ${repo} is published; refusing to build on the host (source: download).`);
 			this.host.log(`no signed release of ${repo} is published; building ${ref} from source`);
 		} else if (source === 'artifact') {
-			throw new UpdateError('source: artifact cannot be combined with --ref (a ref is always built from source).');
+			throw new UpdateError('source: download cannot be combined with --ref (a ref is always built from source).');
 		}
 		return { ...(await this.resolve(repo, ref, currentMeta)), published: null };
 	}
@@ -663,6 +672,7 @@ export class Updater {
 			await host.extract(archive, staging);
 			rmSync(archive, { force: true });
 			assembleRelease(staging, layout.bunBin);
+			this.inheritCaddy(staging);
 			const missing = verifyRelease(staging, layout);
 			if (missing.length) throw new UpdateError(`the release artifact is missing ${missing.join(', ')}`);
 			writeMeta(staging, {
@@ -700,6 +710,7 @@ export class Updater {
 			host.log('building');
 			await host.build(repoDir);
 			assembleRelease(staging, layout.bunBin);
+			this.inheritCaddy(staging);
 			const missing = verifyRelease(staging, layout);
 			if (missing.length) throw new UpdateError(`the new release is missing ${missing.join(', ')}`);
 			writeMeta(staging, {
@@ -717,6 +728,45 @@ export class Updater {
 			rmSync(staging, { recursive: true, force: true });
 			throw error;
 		}
+	}
+
+	/**
+	 * Source builds (and artifacts built before Caddy was bundled) carry no Caddy binary. Keep the
+	 * running one in the staged release so `/opt/skiff/current/caddy/caddy` still resolves after
+	 * the swap; the canary does not exercise Caddy.
+	 */
+	/**
+	 * The first release that bundles Caddy would otherwise make `previous` unbootable: a rollback
+	 * to a release with no `caddy/caddy` fails verifyRelease on a host whose unit executes it. Add
+	 * the new binary to the release we just superseded; it is inert until a rollback runs it.
+	 */
+	private backfillCaddy(previous: string, release: string): void {
+		const { host } = this;
+		const source = join(release, 'caddy', 'caddy');
+		const target = join(previous, 'caddy', 'caddy');
+		if (!existsSync(source) || existsSync(target)) return;
+		try {
+			mkdirSync(dirname(target), { recursive: true });
+			copyFileSync(source, target);
+			chmodSync(target, 0o755);
+			host.log(`added Caddy to ${basename(previous)} so rollback keeps working`);
+		} catch (error) {
+			host.warn(`could not add Caddy to ${basename(previous)}: ${message(error)}`);
+		}
+	}
+
+	private inheritCaddy(staging: string): void {
+		const { host, layout } = this;
+		const target = join(staging, 'caddy', 'caddy');
+		if (existsSync(target)) return;
+		const current = readLink(layout.currentLink);
+		if (!current) return;
+		const source = join(current, 'caddy', 'caddy');
+		if (!existsSync(source)) return;
+		mkdirSync(dirname(target), { recursive: true });
+		copyFileSync(source, target);
+		chmodSync(target, 0o755);
+		host.log(`carried Caddy over from ${basename(current)}`);
 	}
 
 	/**
@@ -802,11 +852,13 @@ export class Updater {
 			setLink(layout.previousLink, current);
 			setLink(layout.currentLink, release);
 			host.log(`${layout.currentLink} -> ${release}`);
+			this.backfillCaddy(current, release);
 
 			// The helper binary lives outside releases; install this release's copy before restart.
 			host.ensureHelper(release);
 			await host.start(CONTROL_PLANE);
 			await host.restart(HELPER);
+			host.ensureCaddy?.(release);
 			if (withAgent && host.agentEnrolled()) await host.restart(AGENT);
 
 			host.phase('verifying', 'Waiting for the new release to prove it is healthy');
@@ -943,6 +995,7 @@ export class Updater {
 			setLink(layout.previousLink, current);
 			setLink(layout.currentLink, release);
 			host.log(`${layout.currentLink} -> ${release}`);
+			this.backfillCaddy(current, release);
 			host.ensureHelper(release);
 			await this.restartPrimaryBehindStandby();
 			const primary = await host.probe!('primary', healthTimeout);
@@ -954,6 +1007,7 @@ export class Updater {
 			await host.stop(STANDBY);
 			rmSync(layout.standbyLink, { force: true });
 			await host.restart(HELPER);
+			host.ensureCaddy?.(release);
 			if (withAgent && host.agentEnrolled()) await host.restart(AGENT);
 			const settled = await this.verifyLive({
 				requirePublic: input.requirePublic,
@@ -1054,6 +1108,7 @@ export class Updater {
 			}
 			rmSync(layout.standbyLink, { force: true });
 			await host.restart(HELPER).catch(() => undefined);
+			host.ensureCaddy?.(sw.from);
 			if (sw.withAgent && host.agentEnrolled()) await host.restart(AGENT);
 			const problem = await this.verifyLive({ requirePublic: false, withAgent: sw.withAgent });
 			const state = this.readState();
@@ -1223,6 +1278,7 @@ export class Updater {
 				host.ensureHelper(previous);
 				await host.start(CONTROL_PLANE);
 				await host.restart(HELPER);
+				host.ensureCaddy?.(previous);
 				if (withAgent && host.agentEnrolled()) await host.restart(AGENT);
 				const problem = await this.verifyLive({
 					requirePublic: false,
@@ -1316,6 +1372,7 @@ export class Updater {
 			host.ensureHelper(sw.from);
 			await host.start(CONTROL_PLANE);
 			await host.restart(HELPER);
+			host.ensureCaddy?.(sw.from);
 			if (sw.withAgent && host.agentEnrolled()) await host.restart(AGENT);
 			const problem = await this.verifyLive({ requirePublic: false, withAgent: sw.withAgent });
 			const state = this.readState();
@@ -1353,6 +1410,7 @@ export class Updater {
 						host.pointControlSocket('primary');
 						await host.stop(STANDBY);
 						rmSync(layout.standbyLink, { force: true });
+						host.ensureCaddy?.(sw.to);
 						host.log(`${basename(sw.to)} is healthy on the primary; keeping it`);
 						this.finish(sw);
 						retireUpgradeSnapshotBundles(layout.backupsDir, sw.bundle ?? null);
@@ -1374,6 +1432,7 @@ export class Updater {
 				host.ensureHelper(sw.to);
 				if (!(await host.isActive(CONTROL_PLANE))) await host.start(CONTROL_PLANE);
 				await host.restart(HELPER).catch(() => undefined);
+				host.ensureCaddy?.(sw.to);
 				const problem = await this.verifyLive({ requirePublic: false, withAgent: false });
 				if (!problem) {
 					host.log(`${basename(sw.to)} is healthy; keeping it`);
@@ -1413,7 +1472,7 @@ export class Updater {
 	 * Read-only plan for `skiff-update-self plan` and the CLI. Uses the running release's migration
 	 * list; the update itself re-runs this against the exact staged release before the canary.
 	 */
-	async plan(options: Pick<UpdateOptions, 'repo' | 'ref'> = {}): Promise<{ check: CheckResult; preflight: UpgradePreflight }> {
+	async plan(options: Pick<UpdateOptions, 'repo' | 'ref' | 'source'> = {}): Promise<{ check: CheckResult; preflight: UpgradePreflight }> {
 		const check = await this.check(options);
 		const current = readLink(this.layout.currentLink);
 		const preflight = await this.preflight({
@@ -1714,6 +1773,9 @@ export function assembleRelease(release: string, bunBin: string): void {
 		copyFileSync(helper, join(release, 'helper', 'skiff-helper'));
 		chmodSync(join(release, 'helper', 'skiff-helper'), 0o755);
 	}
+	// CI-built Caddy ships at the release root (`caddy/caddy`); the updater installs it.
+	const caddy = join(release, 'caddy', 'caddy');
+	if (existsSync(caddy)) chmodSync(caddy, 0o755);
 }
 
 /** Paths below `<optDir>/current/` that a unit file references (ExecStart, WorkingDirectory). */
@@ -1733,14 +1795,18 @@ export function unitReleasePaths(unit: string, optDir: string): string[] {
 }
 
 /** Everything the installed units need from a release. Returns the missing relative paths. */
-export function verifyRelease(release: string, layout: Pick<Layout, 'optDir' | 'controlPlaneUnitFile'>): string[] {
+export function verifyRelease(
+	release: string,
+	layout: Pick<Layout, 'optDir' | 'controlPlaneUnitFile' | 'caddyUnitFile'>,
+): string[] {
 	const required = new Set([
 		'repo/apps/control-plane/build/index.js',
 		'runtime/bun',
 		'agent/skiff-agent',
 	]);
-	if (existsSync(layout.controlPlaneUnitFile)) {
-		for (const path of unitReleasePaths(readFileSync(layout.controlPlaneUnitFile, 'utf8'), layout.optDir))
+	for (const unitFile of [layout.controlPlaneUnitFile, layout.caddyUnitFile]) {
+		if (!existsSync(unitFile)) continue;
+		for (const path of unitReleasePaths(readFileSync(unitFile, 'utf8'), layout.optDir))
 			required.add(path);
 	}
 	return [...required].filter((path) => !existsSync(join(release, path)));

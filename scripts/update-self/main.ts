@@ -24,7 +24,10 @@ import {
 import { basename, dirname, join } from 'node:path';
 import {
 	SELF_UPDATE_DEFAULTS,
+	selfUpdateModeFile,
+	updateSourceForMethod,
 	type SelfUpdateLogLevel,
+	type SelfUpdateMethod,
 	type SelfUpdateOutcome,
 	type SelfUpdateStatus,
 } from '../../packages/contracts/src/self-update.ts';
@@ -40,9 +43,11 @@ import {
 } from '../systemd/control-plane.ts';
 import { hostPlatform, loadTrustedKeys, sha256File } from './signing.ts';
 import { UPDATER_IDENTITY } from './version.ts';
+import { consumeRequestedMethod } from './request.ts';
 import { ensurePlatformConfigUnits } from '../platform-config/units.ts';
 import { ensureBuilder, linkAgentCommands } from '../systemd/builder.ts';
 import { ensureHelper } from '../systemd/helper.ts';
+import { ensureCaddy } from '../systemd/caddy.ts';
 import { ensureStorageUnits } from '../systemd/storage.ts';
 import { R2ObjectStore } from '../../packages/core/src/object-store.ts';
 import { listUpgradeSnapshotBundles } from '../../packages/core/src/upgrade-plan.ts';
@@ -77,8 +82,10 @@ Usage:
 
 update options:
   --source <mode>      auto (default): newest signed GitHub release, else build from source;
-                       artifact: never build on the host; source: always build --ref from source
-  --ref <ref>          build this branch, tag or sha from source (implies --source source)
+                       download: install the signed release (never build on the host);
+                       build: compile --ref from source (never run a prebuilt binary).
+                       artifact/source are accepted as aliases of download/build.
+  --ref <ref>          build this branch, tag or sha from source (implies --source build)
   --repo <owner/name>  GitHub repository (default: from the current release, else KieranHolroyd/skiff)
   --force              install even if not newer (rebuild/downgrade), or retry a release that failed
   --trigger <who>      cli (default) or dashboard; recorded in the status the dashboard shows
@@ -100,7 +107,7 @@ rollback options:
 Environment:
   SKIFF_GITHUB_TOKEN   token for a private repository (or put it in /etc/skiff/github.token, 0600)
   SKIFF_REPO, SKIFF_REF  defaults for --repo / --ref
-  SKIFF_UPDATE_SOURCE  default for --source
+  SKIFF_UPDATE_SOURCE  default for --source (auto, download or build)
   SKIFF_UPDATER=source run the TypeScript updater from the current release instead of stage-0
 
 Exit status: 0 updated / up to date / nothing to do, 1 nothing changed or rolled back to the old
@@ -462,11 +469,31 @@ function ensureUpdateCommand(): void {
 	host.log(`${UPDATE_COMMAND} now prefers the stage-0 updater`);
 }
 
+const SOURCE_ALIASES: Record<string, 'auto' | 'artifact' | 'source'> = {
+	auto: 'auto',
+	download: 'artifact',
+	artifact: 'artifact',
+	build: 'source',
+	source: 'source'
+};
+
 function sourceOption(): 'auto' | 'artifact' | 'source' | undefined {
 	const value = option('--source') ?? process.env.SKIFF_UPDATE_SOURCE;
 	if (!value) return undefined;
-	if (value === 'auto' || value === 'artifact' || value === 'source') return value;
-	usageError(`--source must be auto, artifact or source (got ${value})`);
+	const mode = SOURCE_ALIASES[value];
+	if (mode) return mode;
+	usageError(`--source must be auto, download or build (got ${value})`);
+}
+
+/** `--source`/the environment wins over the dashboard's request, then the auto default. */
+function resolveMethod(
+	source: 'auto' | 'artifact' | 'source' | undefined,
+	requested: SelfUpdateMethod | null
+): SelfUpdateMethod {
+	if (source === 'artifact') return 'download';
+	if (source === 'source') return 'build';
+	if (source === 'auto') return 'auto';
+	return requested ?? 'auto';
 }
 
 /**
@@ -680,6 +707,15 @@ const host: Host = {
 			run: (cmd) => void run(cmd, { quiet: true, allowFailure: true }),
 			log: (message) => appendLog('info', message),
 			start: false,
+		});
+	},
+	ensureCaddy(release) {
+		return ensureCaddy({
+			release,
+			optDir: layout.optDir,
+			run: (cmd, options) =>
+				run(cmd, { quiet: true, allowFailure: options?.allowFailure }),
+			log: (message) => appendLog('info', message),
 		});
 	},
 	async isActive(unit) {
@@ -943,6 +979,7 @@ async function main(): Promise<number> {
 		const result: CheckResult = await updater.check({
 			repo: option('--repo') ?? process.env.SKIFF_REPO,
 			ref: option('--ref') ?? process.env.SKIFF_REF,
+			source: sourceOption(),
 		});
 		if (flag('--json')) console.log(JSON.stringify(result, null, 2));
 		else {
@@ -962,7 +999,8 @@ async function main(): Promise<number> {
 	if (command === 'plan') {
 		const result = await updater.plan({
 			repo: option('--repo') ?? process.env.SKIFF_REPO,
-			ref: option('--ref') ?? process.env.SKIFF_REF
+			ref: option('--ref') ?? process.env.SKIFF_REF,
+			source: sourceOption()
 		});
 		if (flag('--json')) {
 			console.log(JSON.stringify(result, null, 2));
@@ -985,12 +1023,18 @@ async function main(): Promise<number> {
 		console.log(bold('Skiff self-update'));
 		const trigger = option('--trigger') === 'dashboard' ? 'dashboard' : 'cli';
 		const dryRun = flag('--dry-run');
+		const method = resolveMethod(
+			sourceOption(),
+			consumeRequestedMethod(selfUpdateModeFile(REQUEST_FILE), trigger),
+		);
+		const source = updateSourceForMethod(method);
 		if (!dryRun) {
 			startUpdateLog(trigger);
 			const now = new Date().toISOString();
 			status = {
 				running: true,
 				trigger,
+				method,
 				phase: 'checking',
 				message: 'Checking for a newer version',
 				fromVersion: null,
@@ -1000,6 +1044,13 @@ async function main(): Promise<number> {
 			};
 			writeStatusFile(status);
 		}
+		host.log(
+			method === 'download'
+				? 'Install method: download the signed release'
+				: method === 'build'
+					? `Install method: build ${option('--ref') ?? process.env.SKIFF_REF ?? 'the configured ref'} from source`
+					: 'Install method: automatic (signed release when published, otherwise source)',
+		);
 		const finish = (outcome: SelfUpdateOutcome, message: string, versions: Partial<SelfUpdateStatus> = {}) => {
 			appendLog(outcome === 'updated' || outcome === 'up-to-date' ? 'info' : 'warn', message);
 			reportStatus({ running: false, phase: 'done', outcome, message, finishedAt: new Date().toISOString(), ...versions });
@@ -1019,7 +1070,7 @@ async function main(): Promise<number> {
 			dryRun,
 			publicCheck,
 			allowDestructiveMigrations: flag('--allow-destructive'),
-			source: sourceOption(),
+			source,
 			zeroDowntime: !flag('--no-zero-downtime'),
 			...(option('--bake') ? { bakeMs: Math.max(0, Number(option('--bake'))) * 1000 } : {}),
 		});

@@ -2,6 +2,7 @@
 	import { browser } from '$app/env';
 	import { enhance } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
+	import { untrack } from 'svelte';
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import ArchiveIcon from '@lucide/svelte/icons/archive';
 	import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
@@ -16,6 +17,7 @@
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import type {
 		SelfUpdateLog,
+		SelfUpdateMethod,
 		SelfUpdateOutcome,
 		SelfUpdatePhase,
 		SelfUpdateStatus
@@ -58,6 +60,36 @@
 	let startTimedOut = $state(false);
 	let checking = $state(false);
 	let requesting = $state(false);
+
+	const methods: Array<{ value: SelfUpdateMethod; label: string; description: string }> = [
+		{
+			value: 'auto',
+			label: 'Automatic',
+			description: 'Download the signed release when one exists, otherwise build from source.'
+		},
+		{
+			value: 'download',
+			label: 'Download signed release',
+			description:
+				'Install the CI-built release after verifying its signed manifest and SHA-256. Requires a published release; nothing is compiled.'
+		},
+		{
+			value: 'build',
+			label: 'Build from source',
+			description:
+				'Fetch the configured ref and compile it on this server. Slower, but no prebuilt binary is executed.'
+		}
+	];
+	let method = $state<SelfUpdateMethod>(untrack(() => data.defaultMethod));
+	const methodLabel = $derived(methods.find((item) => item.value === method)?.label ?? 'Automatic');
+
+	function methodName(value: SelfUpdateMethod | undefined): string {
+		return value === 'download'
+			? 'signed release download'
+			: value === 'build'
+				? 'source build'
+				: 'automatic';
+	}
 
 	function beginFollowing(previousUpdatedAt: string | null) {
 		baseline = previousUpdatedAt;
@@ -176,7 +208,11 @@
 				? `Update Skiff from ${data.comparison.current} to ${target}?`
 				: 'Check GitHub and install the newest version?',
 			'',
-			'The new version is built and test-booted against a copy of your database first. The control plane then restarts: the dashboard and API are unavailable for a few seconds; deployed sites keep serving.',
+			`Method: ${methodLabel}.`,
+			method === 'build'
+				? 'The source is compiled on this server, so the host needs disk space, memory and time for the build.'
+				: 'The release is verified against its signed manifest and checksum before anything runs.',
+			'The new version is test-booted against a copy of your database first. The control plane then restarts: the dashboard and API are unavailable for a few seconds; deployed sites keep serving.',
 			'If it fails its health checks, Skiff rolls back to the current version automatically.'
 		].join('\n');
 		if (!confirm(message)) event.preventDefault();
@@ -320,7 +356,7 @@
 				<form
 					method="POST"
 					action="?/update"
-					class="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/30 px-3 py-3"
+					class="space-y-3 rounded-lg border bg-muted/30 px-3 py-3"
 					use:enhance={() => {
 						// Capture the pre-request status before the action runs, so the first new
 						// timestamp proves the updater started this run rather than a previous one.
@@ -333,20 +369,50 @@
 						};
 					}}
 				>
-					<Button type="submit" disabled={requesting} onclick={confirmUpdate}>
-						{#if requesting}
-							<LoaderCircleIcon class="animate-spin" aria-hidden="true" />
-						{:else}
-							<CircleArrowUpIcon aria-hidden="true" />
-						{/if}
-						{data.comparison.latest
-							? `Update to v${data.comparison.latest}`
-							: 'Check and install updates'}
-					</Button>
-					<p class="min-w-0 flex-1 text-xs leading-relaxed text-muted-foreground">
-						Built and test-booted before anything changes. The dashboard restarts for a few seconds;
-						sites keep serving. Rolls back automatically on failure.
-					</p>
+					<fieldset class="space-y-2">
+						<legend class="text-xs font-medium text-muted-foreground">How to install</legend>
+						<div class="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Update method">
+							{#each methods as option (option.value)}
+								<label
+									class="flex cursor-pointer items-start gap-2.5 rounded-lg border bg-background px-3 py-2.5 transition-colors hover:bg-muted/40 has-checked:border-brand/50 has-checked:bg-brand/5 has-checked:ring-2 has-checked:ring-brand/15 has-focus-visible:ring-2 has-focus-visible:ring-ring/50"
+								>
+									<input
+										type="radio"
+										name="method"
+										value={option.value}
+										bind:group={method}
+										class="mt-1 accent-(--brand)"
+									/>
+									<span class="min-w-0">
+										<span class="block text-sm font-medium">{option.label}</span>
+										<span class="mt-0.5 block text-xs leading-relaxed text-muted-foreground"
+											>{option.description}</span
+										>
+									</span>
+								</label>
+							{/each}
+						</div>
+						<p class="text-xs leading-relaxed text-muted-foreground">
+							Downloads verify a signed manifest and checksum. Source builds fetch the configured
+							ref and never execute a prebuilt binary.
+						</p>
+					</fieldset>
+					<div class="flex flex-wrap items-center gap-3">
+						<Button type="submit" disabled={requesting} onclick={confirmUpdate}>
+							{#if requesting}
+								<LoaderCircleIcon class="animate-spin" aria-hidden="true" />
+							{:else}
+								<CircleArrowUpIcon aria-hidden="true" />
+							{/if}
+							{data.comparison.latest
+								? `Update to v${data.comparison.latest}`
+								: 'Check and install updates'}
+						</Button>
+						<p class="min-w-0 flex-1 text-xs leading-relaxed text-muted-foreground">
+							Built and test-booted before anything changes. The dashboard restarts for a few
+							seconds; sites keep serving. Rolls back automatically on failure.
+						</p>
+					</div>
 				</form>
 			{/if}
 		</div>
@@ -397,8 +463,9 @@
 				</p>
 			{/if}
 			{#snippet footer()}
-				Started {formatDateTime(view.status?.running ? view.status.startedAt : null)}. Building can
-				take a few minutes. You can leave this page; the update carries on.
+				Started {formatDateTime(view.status?.running ? view.status.startedAt : null)} via {methodName(
+					view.status?.method
+				)}. Building can take a few minutes. You can leave this page; the update carries on.
 			{/snippet}
 		</Panel>
 
@@ -484,7 +551,7 @@
 			{#snippet footer()}
 				{lastRun.trigger === 'dashboard'
 					? 'Started from the dashboard'
-					: 'Started from the command line'}, finished {formatDateTime(
+					: 'Started from the command line'} via {methodName(lastRun.method)}, finished {formatDateTime(
 					lastRun.finishedAt ?? lastRun.updatedAt
 				)}. Roll back on the server with <code>sudo skiff-update-self rollback</code>.
 			{/snippet}

@@ -412,6 +412,9 @@ describe('per-deployment roots, worker routes and logging', () => {
 		const servers = (apps.http as Json).servers as Json;
 		const gateway = servers.storage_gateway as Json;
 		expect(gateway.listen).toEqual(['127.0.0.1:8081']);
+		// The control plane speaks plain HTTP to the loopback gateway; automatic HTTPS would
+		// answer it with a 400 TLS error.
+		expect(gateway.automatic_https).toEqual({ disable: true });
 		const gatewayRoutes = gateway.routes as Json[];
 		expect(gatewayRoutes.map((route) => route['@id'])).toEqual([
 			'gateway:s3-local.storage.internal',

@@ -16,12 +16,15 @@ import {
 	SELF_UPDATE_STALE_MS,
 	canAdministerPlatform,
 	compareSemver,
+	isSelfUpdateMethod,
 	parseSemver,
+	selfUpdateModeFile,
 	semverBump,
 	type Principal,
 	type SelfUpdateLog,
 	type SelfUpdateLogLevel,
 	type SelfUpdateLogLine,
+	type SelfUpdateMethod,
 	type SelfUpdateStatus
 } from '@skiff/contracts';
 import { platformVersion } from './version';
@@ -33,8 +36,10 @@ import { platformVersion } from './version';
  */
 
 const env = process.env;
+const requestFile = env.SKIFF_UPDATE_REQUEST_FILE ?? SELF_UPDATE_DEFAULTS.requestFile;
 const paths = {
-	requestFile: env.SKIFF_UPDATE_REQUEST_FILE ?? SELF_UPDATE_DEFAULTS.requestFile,
+	requestFile,
+	modeFile: selfUpdateModeFile(requestFile),
 	statusFile: env.SKIFF_UPDATE_STATUS_FILE ?? SELF_UPDATE_DEFAULTS.statusFile,
 	logFile: env.SKIFF_UPDATE_LOG_FILE ?? SELF_UPDATE_DEFAULTS.logFile,
 	pathUnit: env.SKIFF_UPDATE_PATH_UNIT ?? SELF_UPDATE_DEFAULTS.pathUnit,
@@ -130,25 +135,38 @@ async function latestPublishedVersion(repo: string): Promise<string | null> {
 }
 
 /**
- * The version the updater would install: the newest signed release, else the VERSION file on
- * the update ref (hosts whose repository publishes no releases build from source). Cached for
- * five minutes unless `force`.
+ * The version the updater would install for the chosen method: the newest signed release, the
+ * VERSION file on the update ref for a source build, or either for `auto` (signed first, then
+ * source). Cached for five minutes unless `force`.
  */
 export async function latestVersion(
 	source: UpdateSource,
-	{ force = false }: { force?: boolean } = {}
+	{ force = false, method = 'auto' }: { force?: boolean; method?: SelfUpdateMethod } = {}
 ): Promise<LatestVersion> {
-	const key = `${source.repo}@${source.ref}`;
+	const key = `${source.repo}@${source.ref}#${method}`;
 	if (!force && cached && cached.key === key && Date.now() - cached.at < CACHE_MS)
 		return cached.value;
 	const checkedAt = new Date().toISOString();
 	const ref = source.ref.split('/').map(encodeURIComponent).join('/');
 	let value: LatestVersion;
-	const published = await latestPublishedVersion(source.repo);
-	if (published) {
-		value = { ok: true, version: published, checkedAt };
-		cached = { key, at: Date.now(), value };
-		return value;
+	// A source build always reads VERSION at the update ref. Downloading only ever installs a
+	// signed published release; `auto` prefers one and falls back to the source path.
+	if (method !== 'build') {
+		const published = await latestPublishedVersion(source.repo);
+		if (published) {
+			value = { ok: true, version: published, checkedAt };
+			cached = { key, at: Date.now(), value };
+			return value;
+		}
+		if (method === 'download') {
+			value = {
+				ok: false,
+				error: `No signed release is published for ${source.repo} (or GitHub could not be reached). Choose “Build from source”, or publish a signed release first.`,
+				checkedAt
+			};
+			cached = { key, at: Date.now(), value };
+			return value;
+		}
 	}
 	try {
 		const response = await fetch(
@@ -161,7 +179,7 @@ export async function latestVersion(
 		if (response.status === 404) {
 			value = {
 				ok: false,
-				error: `No VERSION file on ${key} (or the repository is private).`,
+				error: `No VERSION file on ${source.repo}@${source.ref} (or the repository is private).`,
 				checkedAt
 			};
 		} else if (!response.ok) {
@@ -173,7 +191,7 @@ export async function latestVersion(
 				? { ok: true, version: parsed.version, checkedAt }
 				: {
 						ok: false,
-						error: `VERSION on ${key} is not a semantic version ("${body.trim().slice(0, 40)}").`,
+						error: `VERSION on ${source.repo}@${source.ref} is not a semantic version ("${body.trim().slice(0, 40)}").`,
 						checkedAt
 					};
 		}
@@ -312,16 +330,38 @@ export function updateInFlight(status = readUpdateStatus()): boolean {
 }
 
 /**
- * Ask the root updater to run. The content is informational only (the updater never reads it);
- * the audit log is the record of who asked.
+ * Ask the root updater to run. The request body stays informational (the updater never reads it);
+ * the audit log is the record of who asked. The install method travels in an allowlisted sidecar
+ * because the trigger unit cannot pass form data to the updater.
  */
-export function requestUpdate(principal: Principal, target: string | null): void {
+export function requestUpdate(
+	principal: Principal,
+	target: string | null,
+	method: SelfUpdateMethod = 'auto'
+): void {
+	if (!isSelfUpdateMethod(method)) throw new Error(`Unknown update method "${String(method)}".`);
 	mkdirSync(dirname(paths.requestFile), { recursive: true });
+	// Write the method first so the path unit cannot fire before it exists. The updater deletes
+	// the sidecar as soon as it has read it, even when the value is not recognised.
+	const modeTmp = `${paths.modeFile}.${process.pid}.tmp`;
+	writeFileSync(modeTmp, `${method}\n`, { mode: 0o640 });
+	renameSync(modeTmp, paths.modeFile);
 	const tmp = `${paths.requestFile}.${process.pid}.tmp`;
 	writeFileSync(
 		tmp,
-		`${JSON.stringify({ requestedAt: new Date().toISOString(), by: principal.userId, target })}\n`,
+		`${JSON.stringify({ requestedAt: new Date().toISOString(), by: principal.userId, target, method })}\n`,
 		{ mode: 0o640 }
 	);
 	renameSync(tmp, paths.requestFile);
+}
+
+/** The dashboard's default choice; `SKIFF_UPDATE_METHOD` lets operators pin it per host. */
+export function defaultUpdateMethod(): SelfUpdateMethod {
+	const value = env.SKIFF_UPDATE_METHOD;
+	return isSelfUpdateMethod(value) ? value : 'auto';
+}
+
+/** Parse a submitted radio value; null means it was not one of the allowlisted choices. */
+export function updateMethodFromForm(value: unknown): SelfUpdateMethod | null {
+	return isSelfUpdateMethod(value) ? value : null;
 }

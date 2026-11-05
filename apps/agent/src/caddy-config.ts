@@ -297,6 +297,10 @@ export function buildCaddyConfig(options: CompileAgentConfigOptions): Record<str
 		if (apps) {
 			apps.http.servers.storage_gateway = {
 				listen: [gateway.listen],
+				// The control plane dials this listener over plain HTTP. Host-matched routes would
+				// otherwise switch on automatic HTTPS, so Caddy would answer plaintext requests with
+				// `400 Client sent an HTTP request to an HTTPS server`.
+				automatic_https: { disable: true },
 				routes: gatewayRoutes,
 				...(server.logs ? { logs: server.logs } : {}),
 			};
