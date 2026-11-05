@@ -71,6 +71,98 @@ export const DATABASE_POOLER_PORT_MAX = 17431;
 /** PgBouncer's `max_client_conn`; the helper renders the same value (D85). */
 export const DATABASE_POOLER_MAX_CLIENTS = 200;
 
+/**
+ * On-demand database studio (D60). A short-lived DBGate sidecar listens on loopback; the control
+ * plane reaches it through the node's internal Caddy gateway and proxies it under the platform
+ * origin, so the platform session is the only way in. Ports never leave loopback.
+ */
+export const DATABASE_CONSOLE_PORT_MIN = 17432;
+export const DATABASE_CONSOLE_PORT_MAX = 18431;
+/** Internal host suffix the node gateway matches for a console (never public DNS). */
+export const DATABASE_CONSOLE_GATEWAY_SUFFIX = 'console.internal';
+/** Default session lifetime and inactivity window, in minutes. */
+export const DATABASE_CONSOLE_DEFAULT_TTL_MINUTES = 60;
+export const DATABASE_CONSOLE_DEFAULT_IDLE_MINUTES = 15;
+export const DATABASE_CONSOLE_MIN_TTL_MINUTES = 5;
+export const DATABASE_CONSOLE_MAX_TTL_MINUTES = 480;
+export const DATABASE_CONSOLE_MIN_IDLE_MINUTES = 5;
+export const DATABASE_CONSOLE_MAX_IDLE_MINUTES = 240;
+
+export function databaseConsoleHost(databaseId: string): string {
+	const label = databaseId.replace(/^db_/, '').toLowerCase().replace(/[^a-z0-9-]/g, '');
+	return `db-${label}.${DATABASE_CONSOLE_GATEWAY_SUFFIX}`;
+}
+
+export const databaseConsoleStatuses = ['stopped', 'starting', 'running', 'failed'] as const;
+export type DatabaseConsoleStatus = (typeof databaseConsoleStatuses)[number];
+
+export const databaseConsoleOpenSchema = z.object({
+	/**
+	 * Read-only studios connect with DBGate's `READONLY` connection flag. Write mode additionally
+	 * needs `database:update`; it is not a database-role change.
+	 */
+	readOnly: z.boolean().default(true),
+	ttlMinutes: z
+		.number()
+		.int()
+		.min(DATABASE_CONSOLE_MIN_TTL_MINUTES)
+		.max(DATABASE_CONSOLE_MAX_TTL_MINUTES)
+		.default(DATABASE_CONSOLE_DEFAULT_TTL_MINUTES),
+	idleMinutes: z
+		.number()
+		.int()
+		.min(DATABASE_CONSOLE_MIN_IDLE_MINUTES)
+		.max(DATABASE_CONSOLE_MAX_IDLE_MINUTES)
+		.default(DATABASE_CONSOLE_DEFAULT_IDLE_MINUTES),
+});
+export type DatabaseConsoleOpen = z.input<typeof databaseConsoleOpenSchema>;
+
+export interface DatabaseConsoleView {
+	status: DatabaseConsoleStatus;
+	/** True while the node should have a sidecar running (including `starting`). */
+	active: boolean;
+	readOnly: boolean;
+	port: number | null;
+	/** Session expiry, ISO 8601. */
+	expiresAt: string | null;
+	idleMinutes: number;
+	lastUsedAt: string | null;
+	error: string | null;
+	/** Path on the platform origin where the embedded studio is served. */
+	path: string;
+}
+
+/** Desired-state task the node executes against the helper's fixed console verbs. */
+export const databaseConsoleTaskSchema = z.object({
+	id: z.string().min(1).max(100),
+	action: z.enum(['start', 'stop']),
+	generation: z.number().int().nonnegative(),
+});
+export type DatabaseConsoleTask = z.infer<typeof databaseConsoleTaskSchema>;
+
+/** Node-authenticated activation for a `start` task (never desired state, never SQLite). */
+export const databaseConsoleActivationSchema = z.object({
+	databaseId: z.string().min(1).max(100),
+	port: z.number().int().positive(),
+	/** DBGate's `WEB_ROOT`: the exact platform path the proxy serves it under. */
+	webRoot: z.string().min(1).max(200),
+	readOnly: z.boolean(),
+	authUser: z.string().min(1).max(64),
+	authPassword: z.string().min(16).max(200),
+	/** Connect to Postgres with TLS (the helper mounts the CA at /run/skiff-tls). */
+	tls: z.boolean().optional(),
+});
+export type DatabaseConsoleActivation = z.infer<typeof databaseConsoleActivationSchema>;
+
+export const databaseConsoleResultSchema = z.object({
+	id: z.string().min(1).max(100),
+	action: z.enum(['start', 'stop']),
+	generation: z.number().int().nonnegative(),
+	status: z.enum(['ok', 'failed']),
+	error: z.string().max(2_000).optional(),
+});
+export type DatabaseConsoleResult = z.infer<typeof databaseConsoleResultSchema>;
+
 /** TLS modes a managed database connection can use. `require` encrypts; `verify-full` pins the CA. */
 export const databaseSslModes = ['disable', 'require', 'verify-full'] as const;
 export type DatabaseSslMode = (typeof databaseSslModes)[number];
@@ -397,10 +489,43 @@ export interface DatabaseView {
 	slowQueriesAt: string | null;
 	/** Backup policy and last known result (docs/DATABASES.md §9). */
 	backup: DatabaseBackupSummary;
+	/** On-demand database studio session (D60); never contains its password. */
+	console: DatabaseConsoleView;
+	/** Public URL metadata only; the URL itself needs `revealPublicUrl` (and `database:credentials`). */
+	publicUrl: DatabasePublicUrlView;
 	createdAt: string;
 	updatedAt: string;
 	deletedAt: string | null;
 	purgeAt: string | null;
+}
+
+/**
+ * A public connection URL for a database (for example, the address of an operator-managed TCP
+ * proxy or tunnel in front of the node). It is a secret: sealed with the org key and only
+ * decrypted by an explicit reveal. Skiff itself keeps Postgres loopback-only (D56).
+ */
+export const databasePublicUrlSchema = z
+	.string()
+	.trim()
+	.min(8)
+	.max(4096)
+	.refine(
+		(value) => /^postgres(?:ql)?:\/\/[^\s]+$/i.test(value),
+		'Use a postgres:// or postgresql:// URL.'
+	);
+
+export const databasePublicUrlUpdateSchema = z.object({ url: databasePublicUrlSchema });
+export type DatabasePublicUrlUpdate = z.infer<typeof databasePublicUrlUpdateSchema>;
+
+export interface DatabasePublicUrlView {
+	configured: boolean;
+	updatedAt: string | null;
+	updatedBy: string | null;
+}
+
+/** Returned only by an audited reveal; never in a list/get view. */
+export interface DatabasePublicUrlReveal extends DatabasePublicUrlView {
+	url: string;
 }
 
 export interface DatabaseCredentials {

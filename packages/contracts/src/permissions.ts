@@ -15,7 +15,7 @@ export const statements = {
 	domain: ['create', 'read', 'delete'],
 	secret: ['create', 'read-metadata', 'update', 'delete'],
 	build: ['create', 'read', 'cancel'],
-	database: ['create', 'read', 'update', 'delete', 'credentials'],
+	database: ['create', 'read', 'update', 'delete', 'credentials', 'console'],
 	storage: ['create', 'read', 'update', 'delete', 'credentials'],
 	shareLink: ['create', 'read', 'revoke'],
 	logs: ['read'],
@@ -46,7 +46,7 @@ export const roles = {
 		'deployment:create', 'deployment:read', 'deployment:promote', 'deployment:rollback',
 		'domain:read', 'secret:create', 'secret:read-metadata', 'secret:update',
 		'build:create', 'build:read', 'build:cancel',
-		'database:create', 'database:read', 'database:update', 'database:credentials',
+		'database:create', 'database:read', 'database:update', 'database:credentials', 'database:console',
 		'storage:create', 'storage:read', 'storage:update', 'storage:credentials',
 		'shareLink:create', 'shareLink:read', 'shareLink:revoke',
 		'logs:read', 'metrics:read',
@@ -65,7 +65,11 @@ export type Role = keyof typeof roles;
  */
 export const defaultAgentScopes: readonly Permission[] = roles.deployer.filter(
 	// Agents get connection URLs injected into apps; revealing passwords is a human opt-in (D58).
-	(permission) => permission !== 'database:credentials' && permission !== 'storage:credentials',
+	// The studio is an interactive human surface (D60); agents never get it as a default scope.
+	(permission) =>
+		permission !== 'database:credentials' &&
+		permission !== 'storage:credentials' &&
+		permission !== 'database:console',
 );
 
 /** Permissions that are never pre-ticked and always require an explicit opt-in. */

@@ -6,6 +6,8 @@ import { databaseMetricBucketSchema, databaseSnapshotSchema } from './database.t
 import { databaseBackupResultSchema, databaseBackupTaskSchema } from './database-backup.ts';
 import { databasePitrResultSchema, databasePitrTaskSchema } from './database-pitr.ts';
 import {
+	databaseConsoleResultSchema,
+	databaseConsoleTaskSchema,
 	databaseCredentialResultSchema,
 	databaseCredentialTaskSchema,
 	databaseRotationResultSchema,
@@ -123,10 +125,14 @@ export const desiredStateSchema = z.object({
 	databaseCredentialTasks: z.array(databaseCredentialTaskSchema).default([]),
 	/** Database ids whose PgBouncer sidecar must be restarted (docs/DATABASES.md §11). */
 	databasePoolerRestarts: z.array(z.string()).default([]),
+	/** On-demand database studio start/stop tasks (D60). */
+	databaseConsoles: z.array(databaseConsoleTaskSchema).default([]),
 	/** Registered volumes this node must know about, for volume-backed data dirs (D74). */
 	volumes: z.array(nodeVolumeDesiredSchema).default([]),
 	/** Internal S3 gateway routes the control plane uses to manage object contents (D81). */
 	storageGateway: storageGatewaySchema.default({ listen: null, routes: [] }),
+	/** Internal gateway routes the control plane uses to reach on-demand database studios (D60). */
+	databaseGateway: storageGatewaySchema.default({ listen: null, routes: [] }),
 	/** Public storage endpoints this node serves (S3): byte-for-byte proxies, not sites. */
 	storageRoutes: z.array(storageRouteSchema).default([]),
 	/** Purged storage instances whose data dir this node must delete, then report (S8). */
@@ -190,6 +196,8 @@ export const heartbeatSchema = z.object({
 	databaseCredentialResults: z.array(databaseCredentialResultSchema).max(50).optional(),
 	/** Database ids whose pooler restart the node completed. */
 	databasePoolerRestarted: z.array(z.string()).max(50).optional(),
+	/** Outcomes of `databaseConsoles` start/stop tasks (D60). */
+	databaseConsoleResults: z.array(databaseConsoleResultSchema).max(50).optional(),
 	/** TLS state derived from the helper's certificate files (CA PEM is public, never a key). */
 	databaseTls: z
 		.array(

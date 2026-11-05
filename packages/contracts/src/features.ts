@@ -57,6 +57,13 @@ export const FEATURE_FLAGS = {
 		area: 'databases',
 		description: 'Run a PgBouncer sidecar and publish the pooled connection port for a database.'
 	},
+	DB_CONSOLE: {
+		name: 'DB_CONSOLE',
+		// On-demand, permission-gated and read-only by default, so it is safe to ship enabled.
+		default: true,
+		area: 'databases',
+		description: 'Open an on-demand DBGate studio for a managed database (D60).'
+	},
 	DB_TLS: {
 		name: 'DB_TLS',
 		default: false,

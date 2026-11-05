@@ -13,10 +13,14 @@ import {
 } from './volumes.ts';
 import {
 	DATABASE_PGDATA,
+	consoleServiceName,
+	consoleUnitName,
 	containerUnitName,
 	networkUnitName,
 	poolerServiceName,
 	poolerUnitName,
+	renderConsoleEnv,
+	renderConsoleUnit,
 	renderContainerEnvFile,
 	renderContainerUnit,
 	renderEnvFile,
@@ -43,10 +47,12 @@ import {
 	assertMemoryMb,
 	assertCpuWeight,
 	assertId,
+	assertPort,
 	assertRelativePath,
 	databaseAlias,
 	workloadNetworkName,
 	type WorkloadActivation,
+	type WorkloadConsoleActivation,
 	type WorkloadDesired,
 	type WorkloadStatus,
 } from './validate.ts';
@@ -185,6 +191,7 @@ interface UnitPaths {
 	socket: string;
 	container: string;
 	pooler: string;
+	console: string;
 }
 
 export class SystemdDriver {
@@ -243,6 +250,7 @@ export class SystemdDriver {
 			socket: join(this.unitDir, socketUnitName(id)),
 			container: join(this.quadletDir, containerUnitName(id)),
 			pooler: join(this.quadletDir, poolerUnitName(id)),
+			console: join(this.quadletDir, consoleUnitName(id)),
 		};
 	}
 
@@ -602,6 +610,71 @@ export class SystemdDriver {
 	async restartPooler(id: string): Promise<void> {
 		assertDatabaseId(id, 'database id');
 		await this.systemctl(['restart', '--no-block', poolerServiceName(id)]);
+	}
+
+	/**
+	 * Start (or replace) an on-demand DBGate studio sidecar (D60). The Postgres container is never
+	 * re-applied or restarted: the console is a separate Quadlet on the same network. Credentials
+	 * come from the database's own helper-written env file; the session password only reaches the
+	 * 0600 console env file.
+	 */
+	async startConsole(
+		workload: WorkloadDesired,
+		activation: WorkloadConsoleActivation,
+	): Promise<void> {
+		const id = assertDatabaseId(workload.id, 'database id');
+		if (!workload.database)
+			throw new ValidationError('A studio console needs a database workload');
+		if (activation.databaseId !== id)
+			throw new ValidationError('activation.databaseId does not match workload.id');
+		const port = assertPort(activation.port, 'console port');
+		const env = await this.readDatabaseEnv(id);
+
+		const runtimeDir = join(this.runtimeDir, id);
+		await fs.mkdir(runtimeDir, { recursive: true, mode: 0o700 });
+		await fs.chmod(runtimeDir, 0o700).catch(() => undefined);
+		const envFile = join(runtimeDir, 'console.env');
+		await this.writeAtomic(
+			envFile,
+			renderConsoleEnv({
+				id,
+				database: env,
+				webRoot: activation.webRoot,
+				authUser: activation.authUser,
+				authPassword: activation.authPassword,
+				readOnly: activation.readOnly,
+				...(activation.tls ? { tls: true } : {}),
+			}),
+			0o600,
+		);
+
+		const paths = this.unitPaths(id);
+		await this.writeIfChanged(
+			paths.console,
+			renderConsoleUnit({
+				workload,
+				envFile,
+				port,
+				apparmorProfile: this.apparmorProfile,
+			}),
+			0o644,
+		);
+		await this.daemonReload();
+		// The unit may be disabled after a previous stop; enabling is best effort because the
+		// start below is explicit and does not depend on it.
+		await this.systemctl(['enable', consoleServiceName(id)], { allowFailure: true });
+		// The first start pulls the image under TimeoutStartSec=120; queue it like a database.
+		await this.systemctl(['restart', '--no-block', consoleServiceName(id)]);
+	}
+
+	/** Stop a studio sidecar and remove its generated unit and env file. Never touches Postgres. */
+	async stopConsole(id: string): Promise<void> {
+		assertDatabaseId(id, 'database id');
+		await this.systemctl(['disable', '--now', consoleServiceName(id)], { allowFailure: true });
+		const paths = this.unitPaths(id);
+		await this.removeIfExists(paths.console);
+		await this.removeIfExists(join(this.runtimeDir, id, 'console.env'));
+		await this.daemonReload();
 	}
 
 	/**
@@ -1193,9 +1266,10 @@ END $$;`];
 		await this.systemctl(['disable', '--now', serviceUnitName(id)], { allowFailure: true });
 		await this.systemctl(['disable', '--now', socketUnitName(id)], { allowFailure: true });
 		await this.systemctl(['disable', '--now', poolerServiceName(id)], { allowFailure: true });
+		await this.systemctl(['disable', '--now', consoleServiceName(id)], { allowFailure: true });
 
 		let changed = false;
-		for (const path of [paths.service, paths.socket, paths.container, paths.pooler]) {
+		for (const path of [paths.service, paths.socket, paths.container, paths.pooler, paths.console]) {
 			changed = (await this.removeIfExists(path)) || changed;
 		}
 		if (changed) await this.daemonReload();

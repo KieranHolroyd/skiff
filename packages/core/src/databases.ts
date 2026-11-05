@@ -21,10 +21,14 @@ import {
 	PITR_FULL_SCHEDULE,
 	PITR_RETENTION_DIFF,
 	PITR_RETENTION_FULL,
+	DATABASE_CONSOLE_PORT_MAX,
+	DATABASE_CONSOLE_PORT_MIN,
 	DATABASE_POOLER_PORT_MAX,
 	DATABASE_POOLER_PORT_MIN,
 	databaseAlias,
 	databaseAttachSchema,
+	databaseConsoleHost,
+	databaseConsoleOpenSchema,
 	databaseBackupCreateSchema,
 	databaseBackupPolicySchema,
 	databaseConnectionSnippets,
@@ -38,6 +42,7 @@ import {
 	databasePitrBackupSchema,
 	databasePitrPolicySchema,
 	databasePitrRestoreSchema,
+	databasePublicUrlUpdateSchema,
 	databaseRestartSchema,
 	databaseRestoreSchema,
 	databaseRotateSchema,
@@ -54,6 +59,11 @@ import {
 	type DatabaseBackupSummary,
 	type DatabaseBackupTask,
 	type DatabaseBackupView,
+	type DatabaseConsoleActivation,
+	type DatabaseConsoleResult,
+	type DatabaseConsoleStatus,
+	type DatabaseConsoleTask,
+	type DatabaseConsoleView,
 	type DatabaseCreate,
 	type DatabaseCredentialActivation,
 	type DatabaseCredentialCreate,
@@ -67,6 +77,8 @@ import {
 	type DatabasePitrResult,
 	type DatabasePitrStatus,
 	type DatabasePitrTask,
+	type DatabasePublicUrlReveal,
+	type DatabasePublicUrlView,
 	type DatabaseRotationActivation,
 	type DatabaseRotationResult,
 	type DatabaseRotationTask,
@@ -494,7 +506,20 @@ export class DatabaseService {
 		const now = this.ctx.now();
 		this.ctx.db
 			.update(databases)
-			.set({ deletedAt: now, purgeAt: now + limits.trashDays * DAY_MS, status: 'stopped', updatedAt: now })
+			.set({
+				deletedAt: now,
+				purgeAt: now + limits.trashDays * DAY_MS,
+				status: 'stopped',
+				// The workload removal also removes the studio sidecar; clear the session so a
+				// restore never advertises a console that is no longer running.
+				consoleRequested: false,
+				consoleStatus: 'stopped',
+				consolePort: null,
+				consoleSecret: null,
+				consoleExpiresAt: null,
+				consoleError: null,
+				updatedAt: now
+			})
 			.where(eq(databases.id, row.id))
 			.run();
 		// A backup queued before the delete can no longer run; fail it rather than leaving a task
@@ -658,6 +683,91 @@ export class DatabaseService {
 		};
 	}
 
+	// ---------------------------------------------------------------- public connection URL
+
+	/** Metadata only: whether a public URL exists and when it was last set. */
+	publicUrl(principal: Principal, name: string): DatabasePublicUrlView {
+		requirePermission(principal, 'database:read');
+		return this.publicUrlView(this.requireRow(principal, name));
+	}
+
+	/**
+	 * Store an operator-managed public URL. The value is sealed with the org key before it touches
+	 * SQLite; the URL is never written to the audit row, desired state or a view.
+	 */
+	setPublicUrl(principal: Principal, name: string, raw: unknown): DatabasePublicUrlView {
+		requirePermission(principal, 'database:update');
+		const input = databasePublicUrlUpdateSchema.parse(raw);
+		const row = this.requireRow(principal, name);
+		const now = this.ctx.now();
+		this.ctx.db
+			.update(databases)
+			.set({
+				publicUrlSealed: this.ctx.secrets.seal(row.orgId, input.url),
+				publicUrlUpdatedAt: now,
+				publicUrlUpdatedBy: principal.userId,
+				updatedAt: now,
+			})
+			.where(eq(databases.id, row.id))
+			.run();
+		this.ctx.audit.record({
+			principal,
+			action: 'database.public-url.set',
+			resource: 'database',
+			resourceId: row.id,
+			args: { name },
+			result: 'ok',
+		});
+		return this.publicUrlView(this.requireRow(principal, name));
+	}
+
+	/** Decrypt the public URL. This is the only read path; every call is audited. */
+	revealPublicUrl(principal: Principal, name: string): DatabasePublicUrlReveal {
+		requirePermission(principal, 'database:read');
+		requirePermission(principal, 'database:credentials');
+		const row = this.requireRow(principal, name);
+		if (!row.publicUrlSealed) throw new NotFoundError(`Public URL for "${name}"`);
+		const url = this.ctx.secrets.open(row.orgId, row.publicUrlSealed);
+		this.ctx.audit.record({
+			principal,
+			action: 'database.public-url.reveal',
+			resource: 'database',
+			resourceId: row.id,
+			args: { name },
+			result: 'ok',
+		});
+		return {
+			configured: true,
+			url,
+			updatedAt: row.publicUrlUpdatedAt ? new Date(row.publicUrlUpdatedAt).toISOString() : null,
+			updatedBy: row.publicUrlUpdatedBy,
+		};
+	}
+
+	clearPublicUrl(principal: Principal, name: string): DatabasePublicUrlView {
+		requirePermission(principal, 'database:update');
+		const row = this.requireRow(principal, name);
+		this.ctx.db
+			.update(databases)
+			.set({
+				publicUrlSealed: null,
+				publicUrlUpdatedAt: null,
+				publicUrlUpdatedBy: null,
+				updatedAt: this.ctx.now(),
+			})
+			.where(eq(databases.id, row.id))
+			.run();
+		this.ctx.audit.record({
+			principal,
+			action: 'database.public-url.clear',
+			resource: 'database',
+			resourceId: row.id,
+			args: { name },
+			result: 'ok',
+		});
+		return this.publicUrlView(this.requireRow(principal, name));
+	}
+
 	// ---------------------------------------------------------------- restarts
 
 	/**
@@ -747,6 +857,375 @@ export class DatabaseService {
 			changed = true;
 		}
 		if (changed) this.ctx.projects.bump();
+	}
+
+	// ---------------------------------------------------------------- on-demand studio (D60)
+
+	/**
+	 * The studio state for one database. A session that has passed its expiry is reported as
+	 * stopped without writing to the row; the maintenance sweep performs the actual close.
+	 */
+	console(principal: Principal, name: string): DatabaseConsoleView {
+		requirePermission(principal, 'database:read');
+		requirePermission(principal, 'database:console');
+		return this.consoleView(this.requireRow(principal, name));
+	}
+
+	/**
+	 * Start (or extend) a DBGate session. The password is generated per session, sealed with the
+	 * org key and only ever leaves through `consoleEndpoint`; desired state carries the port but
+	 * never the secret. Opening never re-applies the Postgres workload.
+	 */
+	openConsole(principal: Principal, name: string, raw: unknown = {}): DatabaseConsoleView {
+		requirePermission(principal, 'database:console');
+		if (!featureEnabled(this.ctx.config, 'DB_CONSOLE'))
+			throw new ConflictError('The database studio is disabled on this control plane.');
+		if (principal.kind !== 'user')
+			throw new CoreError('forbidden', 'The database studio needs an interactive user session.', 403);
+		const input = databaseConsoleOpenSchema.parse(raw);
+		if (input.readOnly === false) requirePermission(principal, 'database:update');
+		const row = this.requireRow(principal, name, { includeDeleted: true });
+		if (row.deletedAt)
+			throw new ConflictError(`Database "${name}" is in the trash. Restore it before opening the studio.`);
+		if (row.status !== 'running')
+			throw new ConflictError(
+				`Database "${name}" is ${row.status}. Start it and wait until it is running before opening the studio.`,
+			);
+
+		const now = this.ctx.now();
+		const ttlMs = input.ttlMinutes * 60_000;
+		const idleMs = input.idleMinutes * 60_000;
+		const expiresAt = now + ttlMs;
+		const active =
+			row.consoleRequested &&
+			(row.consoleStatus === 'starting' || row.consoleStatus === 'running') &&
+			row.consoleExpiresAt !== null &&
+			row.consoleExpiresAt > now;
+		// Same mode: keep the running sidecar and password, only extend the session and idle window.
+		if (active && row.consoleReadOnly === input.readOnly) {
+			this.ctx.db
+				.update(databases)
+				.set({ consoleExpiresAt: expiresAt, consoleIdleMs: idleMs, updatedAt: now })
+				.where(eq(databases.id, row.id))
+				.run();
+			this.ctx.audit.record({
+				principal,
+				action: 'database.console.open',
+				resource: 'database',
+				resourceId: row.id,
+				args: { readOnly: input.readOnly, ttlMinutes: input.ttlMinutes },
+				result: 'ok',
+			});
+			this.ctx.projects.bump(row.orgId);
+			return this.consoleView(this.requireRow(principal, name, { includeDeleted: true }));
+		}
+
+		const port = row.consolePort ?? this.allocateConsolePort(row.nodeId);
+		const secret = this.ctx.secrets.seal(row.orgId, password());
+		this.ctx.db
+			.update(databases)
+			.set({
+				consoleRequested: true,
+				consoleStatus: 'starting',
+				consolePort: port,
+				consoleSecret: secret,
+				consoleReadOnly: input.readOnly,
+				consoleExpiresAt: expiresAt,
+				consoleIdleMs: idleMs,
+				consoleLastUsedAt: now,
+				consoleGeneration: row.consoleGeneration + 1,
+				consoleError: null,
+				updatedAt: now,
+			})
+			.where(eq(databases.id, row.id))
+			.run();
+		this.ctx.audit.record({
+			principal,
+			action: 'database.console.open',
+			resource: 'database',
+			resourceId: row.id,
+			args: { readOnly: input.readOnly, ttlMinutes: input.ttlMinutes },
+			result: 'ok',
+		});
+		this.ctx.projects.bump(row.orgId);
+		return this.consoleView(this.requireRow(principal, name, { includeDeleted: true }));
+	}
+
+	/** Stop a session now. The node gets a `stop` task; the port and secret are released at once. */
+	closeConsole(principal: Principal, name: string): DatabaseConsoleView {
+		requirePermission(principal, 'database:console');
+		requireInteractiveStudio(principal);
+		const row = this.requireRow(principal, name, { includeDeleted: true });
+		const now = this.ctx.now();
+		this.ctx.db
+			.update(databases)
+			.set({
+				consoleRequested: false,
+				consoleStatus: 'stopped',
+				consoleGeneration: row.consoleGeneration + 1,
+				consolePort: null,
+				consoleSecret: null,
+				consoleExpiresAt: null,
+				consoleError: null,
+				updatedAt: now,
+			})
+			.where(eq(databases.id, row.id))
+			.run();
+		this.ctx.audit.record({
+			principal,
+			action: 'database.console.close',
+			resource: 'database',
+			resourceId: row.id,
+			args: { name },
+			result: 'ok',
+		});
+		this.ctx.projects.bump(row.orgId);
+		return this.consoleView(this.requireRow(principal, name, { includeDeleted: true }));
+	}
+
+	/** Record activity for the idle timeout; writes at most once a minute to keep proxies cheap. */
+	touchConsole(principal: Principal, name: string): DatabaseConsoleView {
+		requirePermission(principal, 'database:console');
+		const row = this.requireRow(principal, name, { includeDeleted: true });
+		const now = this.ctx.now();
+		if (row.consoleLastUsedAt === null || now - row.consoleLastUsedAt >= 60_000) {
+			this.ctx.db
+				.update(databases)
+				.set({ consoleLastUsedAt: now, updatedAt: now })
+				.where(eq(databases.id, row.id))
+				.run();
+		}
+		return this.consoleView(this.requireRow(principal, name, { includeDeleted: true }));
+	}
+
+	/**
+	 * The values the platform proxy needs to reach one studio. The basic-auth password is opened
+	 * here only; desired state, audit and every view stay secret-free.
+	 */
+	consoleEndpoint(
+		principal: Principal,
+		name: string,
+	): { host: string; authHeader: string; webRoot: string; readOnly: boolean; expiresAt: string | null } {
+		requirePermission(principal, 'database:console');
+		if (!featureEnabled(this.ctx.config, 'DB_CONSOLE'))
+			throw new ConflictError('The database studio is disabled on this control plane.');
+		// The studio is a human surface (D60). An API key must not reuse an open session.
+		requireInteractiveStudio(principal);
+		const row = this.requireRow(principal, name);
+		const now = this.ctx.now();
+		if (row.consoleRequested && row.consoleExpiresAt !== null && row.consoleExpiresAt <= now) {
+			this.closeConsole(principal, name);
+			throw new ConflictError('The database studio session has expired. Open it again.');
+		}
+		if (
+			!row.consoleRequested ||
+			(row.consoleStatus !== 'starting' && row.consoleStatus !== 'running') ||
+			row.consolePort === null ||
+			row.consoleSecret === null ||
+			row.consoleExpiresAt === null ||
+			row.consoleExpiresAt <= now
+		)
+			throw new ConflictError('The database studio is not running. Open it first.');
+		const secret = this.ctx.secrets.open(row.orgId, row.consoleSecret);
+		this.touchConsole(principal, name);
+		return {
+			host: databaseConsoleHost(row.id),
+			authHeader: `Basic ${Buffer.from(`skiff:${secret}`).toString('base64')}`,
+			webRoot: `/databases/${encodeURIComponent(row.name)}/studio/proxy`,
+			readOnly: row.consoleReadOnly,
+			expiresAt: new Date(row.consoleExpiresAt).toISOString(),
+		};
+	}
+
+	/** Start/stop tasks for one node; a row is pending until the node reports its generation. */
+	consoleTasksForNode(nodeId: string): DatabaseConsoleTask[] {
+		return this.ctx.db
+			.select()
+			.from(databases)
+			.where(and(eq(databases.nodeId, nodeId), isNull(databases.deletedAt)))
+			.all()
+			.filter((row) => row.consoleGeneration !== row.consoleAppliedGeneration)
+			.map((row) => ({
+				id: row.id,
+				action: row.consoleRequested ? ('start' as const) : ('stop' as const),
+				generation: row.consoleGeneration,
+			}))
+			.sort((a, b) => a.id.localeCompare(b.id));
+	}
+
+	/** Node-authenticated activation for a `start` task; never appears in desired state. */
+	consoleActivation(nodeId: string, id: string): DatabaseConsoleActivation {
+		const row = this.rowById(id);
+		if (!row || row.deletedAt) throw new NotFoundError('Database');
+		if (row.nodeId !== nodeId) throw new CoreError('forbidden', 'This database is placed on another node.', 403);
+		if (!row.consoleRequested)
+			throw new ConflictError('The database studio is not requested on this node.');
+		if (row.consolePort === null || row.consoleSecret === null || row.consoleExpiresAt === null)
+			throw new ConflictError('The database studio has no active session.');
+		if (row.consoleExpiresAt <= this.ctx.now()) throw new ConflictError('The database studio session has expired.');
+		const tls = this.tlsState(row).enabled;
+		return {
+			databaseId: row.id,
+			port: row.consolePort,
+			webRoot: `/databases/${encodeURIComponent(row.name)}/studio/proxy`,
+			readOnly: row.consoleReadOnly,
+			authUser: 'skiff',
+			authPassword: this.ctx.secrets.open(row.orgId, row.consoleSecret),
+			...(tls ? { tls: true } : {}),
+		};
+	}
+
+	/** Apply start/stop outcomes from a heartbeat, ignoring stale generations. */
+	applyConsoleResults(nodeId: string, results: DatabaseConsoleResult[]): void {
+		const now = this.ctx.now();
+		let changed = false;
+		for (const result of results) {
+			const row = this.rowById(result.id);
+			if (!row || row.nodeId !== nodeId) continue;
+			if (row.consoleGeneration !== result.generation) continue;
+			let action: string;
+			if (result.action === 'start') {
+				if (result.status === 'ok') {
+					action = 'database.console.started';
+					this.ctx.db
+						.update(databases)
+						.set({
+							consoleStatus: 'running',
+							consoleAppliedGeneration: row.consoleGeneration,
+							consoleError: null,
+							consoleLastUsedAt: now,
+							updatedAt: now,
+						})
+						.where(eq(databases.id, row.id))
+						.run();
+				} else {
+					action = 'database.console.start-failed';
+					this.ctx.db
+						.update(databases)
+						.set({
+							consoleStatus: 'failed',
+							consoleRequested: false,
+							consolePort: null,
+							consoleSecret: null,
+							consoleAppliedGeneration: row.consoleGeneration,
+							consoleError: result.error ?? 'Database studio failed to start on the node.',
+							updatedAt: now,
+						})
+						.where(eq(databases.id, row.id))
+						.run();
+				}
+			} else if (result.status === 'ok') {
+				action = 'database.console.stopped';
+				this.ctx.db
+					.update(databases)
+					.set({
+						consoleStatus: 'stopped',
+						consoleRequested: false,
+						consoleAppliedGeneration: row.consoleGeneration,
+						consoleError: null,
+						updatedAt: now,
+					})
+					.where(eq(databases.id, row.id))
+					.run();
+			} else {
+				action = 'database.console.stop-failed';
+				this.ctx.db
+					.update(databases)
+					.set({
+						consoleStatus: 'failed',
+						consoleRequested: false,
+						consoleAppliedGeneration: row.consoleGeneration,
+						consoleError: result.error ?? 'Database studio failed to stop on the node.',
+						updatedAt: now,
+					})
+					.where(eq(databases.id, row.id))
+					.run();
+			}
+			this.ctx.audit.record({
+				orgId: row.orgId,
+				action,
+				resource: 'database',
+				resourceId: row.id,
+				args: { name: row.name, generation: row.consoleGeneration },
+				result: result.status === 'ok' ? 'ok' : 'error',
+				...(result.status === 'ok' ? {} : { error: result.error ?? 'Console task failed on the node.' }),
+			});
+			changed = true;
+		}
+		if (changed) this.ctx.projects.bump();
+	}
+
+	/** Maintenance: close sessions that have expired or gone idle. Returns how many were closed. */
+	tickConsoles(now = this.ctx.now()): number {
+		const rows = this.ctx.db
+			.select()
+			.from(databases)
+			.where(and(eq(databases.consoleRequested, true), isNull(databases.deletedAt)))
+			.all();
+		let closed = 0;
+		for (const row of rows) {
+			const expired = row.consoleExpiresAt !== null && row.consoleExpiresAt <= now;
+			const idle =
+				row.consoleLastUsedAt !== null && row.consoleLastUsedAt + row.consoleIdleMs <= now;
+			if (!expired && !idle) continue;
+			this.ctx.db
+				.update(databases)
+				.set({
+					consoleRequested: false,
+					consoleStatus: 'stopped',
+					consoleGeneration: row.consoleGeneration + 1,
+					consolePort: null,
+					consoleSecret: null,
+					consoleExpiresAt: null,
+					consoleError: null,
+					updatedAt: now,
+				})
+				.where(eq(databases.id, row.id))
+				.run();
+			this.ctx.audit.record({
+				orgId: row.orgId,
+				action: 'database.console.expired',
+				resource: 'database',
+				resourceId: row.id,
+				args: { name: row.name, reason: expired ? 'expired' : 'idle' },
+				result: 'ok',
+			});
+			closed += 1;
+		}
+		if (closed > 0) this.ctx.projects.bump();
+		return closed;
+	}
+
+	/**
+	 * Internal studio gateway routes (D60), mirroring the object-browser gateway. Only a requested
+	 * session with a port is routable; workers serve their own databases, the edge proxies the rest.
+	 */
+	gatewayForNode(
+		nodeId: string,
+		isEdge: boolean,
+		publicAddressOf: (nodeId: string) => string | null,
+	): { listen: string | null; routes: Array<{ host: string; upstream: string }> } {
+		const rows = this.ctx.db
+			.select()
+			.from(databases)
+			.where(and(eq(databases.consoleRequested, true), isNull(databases.deletedAt), isNotNull(databases.consolePort)))
+			.all();
+		const routes: Array<{ host: string; upstream: string }> = [];
+		for (const row of rows) {
+			const host = databaseConsoleHost(row.id);
+			if (row.nodeId === nodeId) {
+				routes.push({ host, upstream: `127.0.0.1:${row.consolePort}` });
+				continue;
+			}
+			if (!isEdge) continue;
+			routes.push({
+				host,
+				upstream: `http://${publicAddressOf(row.nodeId) ?? '127.0.0.1:1'}`,
+			});
+		}
+		routes.sort((a, b) => a.host.localeCompare(b.host));
+		const port = this.ctx.config.databaseGatewayPort ?? 8082;
+		return { listen: isEdge ? `127.0.0.1:${port}` : null, routes };
 	}
 
 	// ---------------------------------------------------------------- credential rotation
@@ -2479,6 +2958,7 @@ export class DatabaseService {
 	}
 
 	applyHeartbeat(nodeId: string, reports: Array<{ id: string; status: WorkloadStatus; restarts: number }>): void {
+		let consoleClosed = false;
 		for (const report of reports) {
 			if (!this.isDatabaseId(report.id)) continue;
 			const row = this.rowById(report.id);
@@ -2493,16 +2973,33 @@ export class DatabaseService {
 						.run();
 				continue;
 			}
+			// A studio is only useful while Postgres is up; clear it and queue the stop task so the
+			// sidecar does not keep running (and holding a connection) behind a failed database.
+			const closeConsole = status !== 'running' && row.consoleRequested;
 			this.ctx.db
 				.update(databases)
 				.set({
 					status,
 					message: report.restarts >= 5 ? `Restart loop (${report.restarts} restarts)` : null,
+					...(closeConsole
+						? {
+								consoleRequested: false,
+								consoleStatus: 'stopped',
+								consolePort: null,
+								consoleSecret: null,
+								consoleExpiresAt: null,
+								consoleError: null,
+								consoleGeneration: row.consoleGeneration + 1
+							}
+						: {}),
 					updatedAt: this.ctx.now(),
 				})
 				.where(eq(databases.id, row.id))
 				.run();
+			if (closeConsole) consoleClosed = true;
 		}
+		// The stop task is part of desired state; push it now instead of waiting for the next bump.
+		if (consoleClosed) this.ctx.projects.bump();
 	}
 
 	/** The node deleted these data dirs; drop the rows (D59). */
@@ -2736,6 +3233,20 @@ export class DatabaseService {
 		throw new ValidationError('This node has no free database pooler ports left.');
 	}
 
+	private allocateConsolePort(nodeId: string): number {
+		const used = new Set(
+			this.ctx.db
+				.select({ port: databases.consolePort })
+				.from(databases)
+				.where(and(eq(databases.nodeId, nodeId), isNotNull(databases.consolePort)))
+				.all()
+				.flatMap((row) => (row.port === null ? [] : [row.port])),
+		);
+		for (let port = DATABASE_CONSOLE_PORT_MIN; port <= DATABASE_CONSOLE_PORT_MAX; port++)
+			if (!used.has(port)) return port;
+		throw new ValidationError('This node has no free database studio ports left.');
+	}
+
 	private insertAttachment(principal: Principal, databaseId: string, project: ProjectRow, envPrefix: string): void {
 		const credential = this.ensureBuiltInCredential(databaseId, 'owner');
 		this.ctx.db
@@ -2893,6 +3404,32 @@ export class DatabaseService {
 			});
 	}
 
+	/** Studio view. An expired request reads as stopped; the password is deliberately absent. */
+	private publicUrlView(row: DatabaseRow): DatabasePublicUrlView {
+		return {
+			configured: row.publicUrlSealed !== null,
+			updatedAt: row.publicUrlUpdatedAt ? new Date(row.publicUrlUpdatedAt).toISOString() : null,
+			updatedBy: row.publicUrlUpdatedBy,
+		};
+	}
+
+	private consoleView(row: DatabaseRow, now = this.ctx.now()): DatabaseConsoleView {
+		const expired = row.consoleRequested && row.consoleExpiresAt !== null && row.consoleExpiresAt <= now;
+		const active = row.consoleRequested && !expired;
+		const status: DatabaseConsoleStatus = expired ? 'stopped' : row.consoleStatus;
+		return {
+			status,
+			active,
+			readOnly: row.consoleReadOnly,
+			port: active ? row.consolePort : null,
+			expiresAt: active && row.consoleExpiresAt !== null ? new Date(row.consoleExpiresAt).toISOString() : null,
+			idleMinutes: Math.max(1, Math.round(row.consoleIdleMs / 60_000)),
+			lastUsedAt: row.consoleLastUsedAt ? new Date(row.consoleLastUsedAt).toISOString() : null,
+			error: expired ? null : row.consoleError,
+			path: `/databases/${encodeURIComponent(row.name)}/studio/proxy/`,
+		};
+	}
+
 	private toView(row: DatabaseRow): DatabaseView {
 		const info = databaseEngineRegistry[row.engine];
 		const node = this.ctx.db.select({ name: nodes.name }).from(nodes).where(eq(nodes.id, row.nodeId)).get();
@@ -2940,12 +3477,20 @@ export class DatabaseService {
 			slowQueries: parseJson(row.slowQueriesJson, []),
 			slowQueriesAt: row.slowQueriesAt ? new Date(row.slowQueriesAt).toISOString() : null,
 			backup: this.backupSummary(row),
+			console: this.consoleView(row),
+			publicUrl: this.publicUrlView(row),
 			createdAt: new Date(row.createdAt).toISOString(),
 			updatedAt: new Date(row.updatedAt).toISOString(),
 			deletedAt: row.deletedAt ? new Date(row.deletedAt).toISOString() : null,
 			purgeAt: row.purgeAt ? new Date(row.purgeAt).toISOString() : null,
 		};
 	}
+}
+
+/** The studio is an interactive, audited human surface (D60); agents and API keys cannot use it. */
+function requireInteractiveStudio(principal: Principal): void {
+	if (principal.kind !== 'user')
+		throw new CoreError('forbidden', 'The database studio needs an interactive user session.', 403);
 }
 
 function password(): string {

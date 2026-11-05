@@ -74,7 +74,10 @@ export const handle: Handle = async ({ event, resolve }) => {
 	// The REST API is bearer/session authenticated throughout; answer 401 here, as JSON, so no handler
 	// can turn a missing principal into a 500 (a `Response` thrown outside `route()` would).
 	if (!event.locals.principal && isAuthenticatedApi(event.url.pathname))
-		return withFrameProtection(Response.json({ error: 'unauthorized', message: 'Sign in or send a valid API key.' }, { status: 401 }));
+		return withFrameProtection(
+			Response.json({ error: 'unauthorized', message: 'Sign in or send a valid API key.' }, { status: 401 }),
+			event.url.pathname,
+		);
 
 	// Owner second factor (D10, second-factor-policy.ts): an owner's session must have proved a
 	// passkey or authenticator code before it can reach anything beyond the challenge page.
@@ -86,11 +89,11 @@ export const handle: Handle = async ({ event, resolve }) => {
 			sessionFactor: (session.session as { secondFactor?: string | null }).secondFactor,
 			hasFactor: event.locals.principal.role === 'owner' && userHasSecondFactor(session.user.id),
 		});
-		if (state !== 'satisfied') return withFrameProtection(secondFactorRequired(event));
+		if (state !== 'satisfied') return withFrameProtection(secondFactorRequired(event), event.url.pathname);
 	}
 
 	const response = await svelteKitHandler({ event, resolve, auth, building });
-	return withFrameProtection(response);
+	return withFrameProtection(response, event.url.pathname);
 };
 
 /** `/api/v1/**` except the endpoints that authenticate themselves (CLI code exchange). */
@@ -120,22 +123,43 @@ function secondFactorRequired(event: RequestEvent): Response {
 }
 
 /**
- * Nothing on the platform origin is meant to be framed. This stops clickjacking of the consent and
- * CLI-approval pages (an attacker-registered client could otherwise frame a pre-ticked consent).
+ * Nothing on the platform origin is meant to be framed, except the on-demand database studio proxy.
+ * This stops clickjacking of the consent and CLI-approval pages (an attacker-registered client could
+ * otherwise frame a pre-ticked consent) while letting the same origin embed DBGate.
  */
-function withFrameProtection(response: Response): Response {
+const STUDIO_PROXY = /^\/databases\/[^/]+\/studio\/proxy(?:\/|$)/;
+
+function withFrameProtection(response: Response, pathname: string): Response {
 	try {
-		response.headers.set('x-frame-options', 'DENY');
-		const csp = response.headers.get('content-security-policy');
-		if (!csp?.includes('frame-ancestors'))
-			response.headers.set('content-security-policy', csp ? `${csp}; frame-ancestors 'none'` : "frame-ancestors 'none'");
+		applyFrameHeaders(response.headers, pathname);
 		return response;
 	} catch {
 		// Immutable headers (e.g. a proxied fetch response): copy once so the headers can be set.
 		const copy = new Response(response.body, response);
-		copy.headers.set('x-frame-options', 'DENY');
-		if (!copy.headers.get('content-security-policy')?.includes('frame-ancestors'))
-			copy.headers.append('content-security-policy', "frame-ancestors 'none'");
+		applyFrameHeaders(copy.headers, pathname);
 		return copy;
 	}
+}
+
+function applyFrameHeaders(headers: Headers, pathname: string): void {
+	const studio = STUDIO_PROXY.test(pathname);
+	headers.set('x-frame-options', studio ? 'SAMEORIGIN' : 'DENY');
+	const csp = headers.get('content-security-policy');
+	if (studio) {
+		headers.set('content-security-policy', withFrameAncestors(csp, "'self'"));
+	} else if (!csp?.includes('frame-ancestors')) {
+		headers.set(
+			'content-security-policy',
+			csp ? `${csp}; frame-ancestors 'none'` : "frame-ancestors 'none'",
+		);
+	}
+}
+
+/** Add or replace `frame-ancestors` in an existing CSP without duplicating the directive. */
+function withFrameAncestors(csp: string | null, value: string): string {
+	const directive = `frame-ancestors ${value}`;
+	if (!csp) return directive;
+	return /frame-ancestors\b[^;]*/i.test(csp)
+		? csp.replace(/frame-ancestors\b[^;]*/i, directive)
+		: `${csp}; ${directive}`;
 }

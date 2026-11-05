@@ -1,10 +1,13 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { CoreError } from '@skiff/core';
+import { CoreError, featureEnabled } from '@skiff/core';
 import {
 	databaseAttachSchema,
+	databaseConsoleOpenSchema,
 	databaseEngineRegistry,
+	databasePublicUrlUpdateSchema,
 	databaseUpdateSchema,
 	hasPermission,
+	type DatabaseConsoleView,
 	type DatabaseMetricPoint,
 	type DatabaseView,
 	type Principal
@@ -41,6 +44,18 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		trafficRanges.map((item) => [item.key, trafficRangeHref(url, item.key)])
 	);
 
+	const dbCan = databaseCan(principal);
+	const consoleEnabled = featureEnabled(core.ctx.config, 'DB_CONSOLE');
+	let databaseConsole: DatabaseConsoleView | null = null;
+	if (dbCan.console && consoleEnabled) {
+		try {
+			databaseConsole = core.databases.console(principal, params.name);
+		} catch {
+			// A missing or failed console must not take down the rest of the page.
+			databaseConsole = null;
+		}
+	}
+
 	const attached = new Set(database.attachments.map((item) => item.projectSlug));
 	let projects: Array<{ slug: string; name: string; runtime: string }> = [];
 	if (hasPermission(principal, 'project:update')) {
@@ -64,7 +79,9 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		rangeLinks,
 		projects,
 		engine: databaseEngineRegistry[database.engine],
-		dbCan: databaseCan(principal)
+		dbCan,
+		consoleEnabled,
+		console: databaseConsole
 	};
 };
 
@@ -81,6 +98,81 @@ export const actions: Actions = {
 		} catch (caught) {
 			return fail(failStatus(caught), toFormFailure(caught));
 		}
+	},
+
+	'studio-open': async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		// The form omits `readOnly` for the safe default; `readOnly=0` opts in to writes.
+		const readOnly = formString(data, 'readOnly') !== '0';
+		const parsed = databaseConsoleOpenSchema.safeParse({ readOnly });
+		if (!parsed.success) {
+			return fail(400, {
+				message: parsed.error.issues[0]?.message ?? 'Could not open the studio.',
+				fieldErrors: fieldErrorsFrom(parsed.error.issues)
+			});
+		}
+		try {
+			core.databases.openConsole(principal, params.name, parsed.data);
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+		return {
+			success: readOnly
+				? 'Studio starting in read-only mode. It opens as soon as DBGate is ready.'
+				: 'Studio starting in read-write mode. Writes are enabled for this session only.'
+		};
+	},
+
+	'public-url': async ({ locals, params }) => {
+		const principal = locals.principal!;
+		try {
+			return { publicUrl: core.databases.revealPublicUrl(principal, params.name) };
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	'set-public-url': async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const parsed = databasePublicUrlUpdateSchema.safeParse({
+			url: formString(data, 'url'),
+		});
+		if (!parsed.success) {
+			return fail(400, {
+				message: parsed.error.issues[0]?.message ?? 'Check the public URL.',
+				fieldErrors: fieldErrorsFrom(parsed.error.issues),
+			});
+		}
+		try {
+			core.databases.setPublicUrl(principal, params.name, parsed.data);
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+		return {
+			success: 'Public URL saved. It is encrypted with the org key and only revealed on demand.',
+		};
+	},
+
+	'clear-public-url': async ({ locals, params }) => {
+		const principal = locals.principal!;
+		try {
+			core.databases.clearPublicUrl(principal, params.name);
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+		return { success: 'Public URL cleared.' };
+	},
+
+	'studio-close': async ({ locals, params }) => {
+		const principal = locals.principal!;
+		try {
+			core.databases.closeConsole(principal, params.name);
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+		return { success: 'Studio stopped.' };
 	},
 
 	update: async ({ request, locals, params }) => {

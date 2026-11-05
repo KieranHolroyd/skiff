@@ -243,6 +243,8 @@ export class NodeService {
 			this.ctx.databases.applyRotationResults(node.id, input.databaseRotationResults);
 		if (input.databaseCredentialResults?.length)
 			this.ctx.databases.applyCredentialResults(node.id, input.databaseCredentialResults);
+		if (input.databaseConsoleResults?.length)
+			this.ctx.databases.applyConsoleResults(node.id, input.databaseConsoleResults);
 		if (input.databasePoolerRestarted?.length)
 			this.ctx.databases.applyPoolerRestarted(node.id, input.databasePoolerRestarted);
 		if (input.databaseTls?.length) this.ctx.databases.applyTlsReport(node.id, input.databaseTls);
@@ -675,7 +677,9 @@ export class NodeService {
 			databaseRotations: this.ctx.databases.rotationTasksForNode(node.id),
 			databaseCredentialTasks: this.ctx.databases.credentialTasksForNode(node.id),
 			databasePoolerRestarts: this.ctx.databases.poolerRestartTasksForNode(node.id),
+			databaseConsoles: this.ctx.databases.consoleTasksForNode(node.id),
 			storageGateway: this.ctx.storage.gatewayForNode(node.id, isEdge, (id) => nodeById.get(id)?.publicAddress ?? null),
+			databaseGateway: this.ctx.databases.gatewayForNode(node.id, isEdge, (id) => nodeById.get(id)?.publicAddress ?? null),
 			storageRoutes: this.ctx.storage.routesForNode(node.id, isEdge, (id) => nodeById.get(id)?.publicAddress ?? null),
 			storagePurges: this.ctx.storage.purgesForNode(node.id),
 			domains: this.ctx.domains.desiredForProjects(servedProjectIds),

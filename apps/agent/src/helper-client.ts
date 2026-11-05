@@ -1,5 +1,6 @@
 import {
 	volumeInventorySchema,
+	type DatabaseConsoleActivation,
 	type NodeVolumeDesired,
 	type VolumeInventory,
 	type WorkloadActivation,
@@ -68,6 +69,10 @@ export interface HelperApi {
 	): Promise<void>;
 	/** Restart only the PgBouncer sidecar. */
 	restartPooler(id: string): Promise<void>;
+	/** Start/replace the on-demand DBGate studio sidecar (D60). */
+	startConsole(workload: WorkloadDesired, activation: DatabaseConsoleActivation): Promise<void>;
+	/** Stop the on-demand DBGate studio sidecar. */
+	stopConsole(id: string): Promise<void>;
 	/** Write the 0400 pgBackRest config for PITR (docs/PITR.md). */
 	pitrConfigure(
 		id: string,
@@ -107,6 +112,8 @@ const PURGE_TIMEOUT_MS = 300_000;
 const STATUS_TIMEOUT_MS = 2_000;
 const VOLUME_TIMEOUT_MS = 10_000;
 const LOG_TIMEOUT_MS = 8_000;
+/** The first console start pulls the DBGate image; the helper queues the restart itself. */
+const CONSOLE_TIMEOUT_MS = 120_000;
 const STATUSES: readonly WorkloadStatus[] = ['pending', 'starting', 'running', 'failed', 'stopped'];
 
 export class HelperClient implements HelperApi {
@@ -167,6 +174,27 @@ export class HelperClient implements HelperApi {
 			`/v1/workloads/${encodeURIComponent(id)}/pooler/restart`,
 			undefined,
 			30_000,
+		);
+	}
+
+	async startConsole(
+		workload: WorkloadDesired,
+		activation: DatabaseConsoleActivation,
+	): Promise<void> {
+		await this.request(
+			'POST',
+			`/v1/workloads/${encodeURIComponent(workload.id)}/console/start`,
+			{ workload, activation },
+			CONSOLE_TIMEOUT_MS,
+		);
+	}
+
+	async stopConsole(id: string): Promise<void> {
+		await this.request(
+			'POST',
+			`/v1/workloads/${encodeURIComponent(id)}/console/stop`,
+			undefined,
+			CONSOLE_TIMEOUT_MS,
 		);
 	}
 

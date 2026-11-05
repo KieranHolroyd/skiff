@@ -7,6 +7,7 @@ export function databaseCan(principal: Principal) {
 		update: hasPermission(principal, 'database:update'),
 		delete: hasPermission(principal, 'database:delete'),
 		credentials: hasPermission(principal, 'database:credentials'),
+		console: hasPermission(principal, 'database:console'),
 		/** Attach/detach also changes the project (D56). */
 		attach:
 			hasPermission(principal, 'database:update') && hasPermission(principal, 'project:update')

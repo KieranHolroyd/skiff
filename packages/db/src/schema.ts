@@ -501,6 +501,26 @@ export const databases = sqliteTable(
 		/** PgBouncer sidecar (docs/DATABASES.md §11); null port when disabled. */
 		poolerEnabled: integer('pooler_enabled', { mode: 'boolean' }).notNull().default(false),
 		poolerPort: integer('pooler_port'),
+		/**
+		 * On-demand database studio (D60). `consoleSecret` is the DBGate basic-auth password sealed
+		 * with the org data key; it never appears in a view or desired state.
+		 */
+		consoleStatus: text('console_status', {
+			enum: ['stopped', 'starting', 'running', 'failed']
+		})
+			.notNull()
+			.default('stopped'),
+		consoleRequested: integer('console_requested', { mode: 'boolean' }).notNull().default(false),
+		consolePort: integer('console_port'),
+		consoleSecret: text('console_secret'),
+		consoleReadOnly: integer('console_read_only', { mode: 'boolean' }).notNull().default(true),
+		consoleExpiresAt: integer('console_expires_at'),
+		consoleIdleMs: integer('console_idle_ms').notNull().default(900_000),
+		consoleLastUsedAt: integer('console_last_used_at'),
+		/** Bumped on open/close; the node applies the latest generation and reports it back. */
+		consoleGeneration: integer('console_generation').notNull().default(0),
+		consoleAppliedGeneration: integer('console_applied_generation').notNull().default(0),
+		consoleError: text('console_error'),
 		/** Bumped by an explicit restart so the agent re-applies the unit without a config change. */
 		restartGeneration: integer('restart_generation').notNull().default(0),
 		/** Set while a pooler-only restart is waiting for the node to acknowledge it. */
@@ -539,6 +559,13 @@ export const databases = sqliteTable(
 		purgeAt: integer('purge_at'),
 		/** Set when the purge was handed to the node; the row goes once the node reports it (D59). */
 		purgeRequestedAt: integer('purge_requested_at'),
+		/**
+		 * Operator-managed public connection URL, sealed with the org data key. Only returned by
+		 * an audited reveal; every list/get view carries metadata only.
+		 */
+		publicUrlSealed: text('public_url_sealed'),
+		publicUrlUpdatedAt: integer('public_url_updated_at'),
+		publicUrlUpdatedBy: text('public_url_updated_by'),
 	},
 	(t) => [
 		uniqueIndex('databases_org_name_idx').on(t.orgId, t.name),

@@ -47,6 +47,11 @@ export interface CoreConfig {
 	 * managed instance through it to browse and manage objects (D82).
 	 */
 	storageGatewayPort?: number;
+	/**
+	 * Loopback port of the edge's internal database gateway (Caddy). The control plane reaches an
+	 * on-demand studio on any node through it (D60), mirroring the S3 gateway (D82).
+	 */
+	databaseGatewayPort?: number;
 	/** Largest object a single dashboard/API upload may send, in bytes (default 100 MiB). */
 	storageObjectMaxBytes?: number;
 	/** Injected S3 transport for tests; production uses the global fetch. */
@@ -84,6 +89,8 @@ export function coreConfigFromEnv(overrides: Partial<CoreConfig> & Pick<CoreConf
 		edgeNodeId: overrides.edgeNodeId ?? env.SKIFF_EDGE_NODE_ID,
 		storageGatewayPort:
 			overrides.storageGatewayPort ?? positiveInteger(env.SKIFF_STORAGE_GATEWAY_PORT, 8081),
+		databaseGatewayPort:
+			overrides.databaseGatewayPort ?? positiveInteger(env.SKIFF_DATABASE_GATEWAY_PORT, 8082),
 		storageObjectMaxBytes:
 			overrides.storageObjectMaxBytes ?? positiveInteger(env.SKIFF_STORAGE_OBJECT_MAX_BYTES, 104_857_600),
 		features: overrides.features ?? parseFeatureFlags(env),

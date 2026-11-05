@@ -15,6 +15,7 @@ describe('feature registry', () => {
 			'PITR',
 			'OBJECT_BROWSER',
 			'POOLER',
+			'DB_CONSOLE',
 			'DB_TLS',
 			'ORG_NETWORKS',
 			'APP_VOLUMES',
@@ -39,6 +40,7 @@ describe('feature registry', () => {
 		expect(DEFAULT_FEATURES.BACKUPS_RESTORE).toBe(true);
 		expect(DEFAULT_FEATURES.OBJECT_BROWSER).toBe(true);
 		expect(DEFAULT_FEATURES.POOLER).toBe(true);
+		expect(DEFAULT_FEATURES.DB_CONSOLE).toBe(true);
 		expect(DEFAULT_FEATURES.QUOTAS).toBe(true);
 	});
 

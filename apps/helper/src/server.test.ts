@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { loadHelperConfig } from './config.ts';
 import { createHandler, startHelperServer, type HelperRuntime } from './server.ts';
 import type { HelperWorkloadStatus } from './systemd.ts';
-import type { WorkloadActivation, WorkloadDesired } from './validate.ts';
+import type { WorkloadActivation, WorkloadConsoleActivation, WorkloadDesired } from './validate.ts';
 
 const SHA = 'a'.repeat(64);
 const directories: string[] = [];
@@ -96,6 +96,16 @@ class FakeRuntime implements HelperRuntime {
 
 	async restartPooler(id: string): Promise<void> {
 		this.calls.push(`restart-pooler:${id}`);
+	}
+
+	async startConsole(workload: WorkloadDesired, activation: WorkloadConsoleActivation): Promise<void> {
+		this.calls.push(
+			`console-start:${workload.id}:${activation.databaseId}:${activation.port}`,
+		);
+	}
+
+	async stopConsole(id: string): Promise<void> {
+		this.calls.push(`console-stop:${id}`);
 	}
 
 	async pitrConfigure(id: string, repo: unknown): Promise<{ stanza: string; configPath: string }> {
@@ -316,6 +326,89 @@ describe('helper HTTP surface', () => {
 		expect(response.status).toBe(200);
 		expect(runtime.applyInput?.workload.database).toEqual({ engine: 'postgres', version: '16' });
 		expect(JSON.stringify(runtime.applyInput?.activation)).not.toContain('mon');
+	});
+
+	test('starts and stops a database studio through fixed verbs', async () => {
+		const runtime = new FakeRuntime();
+		const id = 'db_0123456789abcdef0123456789abcdef';
+		const workload = workloadInput({
+			id,
+			projectId: id,
+			deploymentId: id,
+			runtime: 'container',
+			release: null,
+			image: 'docker.io/library/postgres:17-alpine',
+			port: 15432,
+			socketActivation: false,
+			database: { engine: 'postgres', version: '17' },
+		});
+		const activation = {
+			databaseId: id,
+			port: 17432,
+			webRoot: '/databases/orders/studio/proxy',
+			readOnly: true,
+			authUser: 'skiff',
+			authPassword: 'session-password-1234',
+			tls: true,
+		};
+
+		const started = await handler(runtime)(
+			post(`/v1/workloads/${id}/console/start`, { workload, activation }),
+		);
+		expect(started.status).toBe(200);
+		expect(runtime.calls).toContain(`console-start:${id}:${id}:17432`);
+
+		const stopped = await handler(runtime)(
+			new Request(`http://localhost/v1/workloads/${id}/console/stop`, { method: 'POST' }),
+		);
+		expect(stopped.status).toBe(200);
+		expect(runtime.calls).toContain(`console-stop:${id}`);
+	});
+
+	test('rejects a console start for a non-database or mismatched workload', async () => {
+		const runtime = new FakeRuntime();
+		const id = 'db_0123456789abcdef0123456789abcdef';
+		const activation = {
+			databaseId: id,
+			port: 17432,
+			webRoot: '/studio',
+			readOnly: true,
+			authUser: 'skiff',
+			authPassword: 'session-password-1234',
+		};
+
+		// A process workload is not a database.
+		const notDatabase = await handler(runtime)(
+			post(`/v1/workloads/${id}/console/start`, {
+				workload: workloadInput({ id, projectId: id, deploymentId: id }),
+				activation,
+			}),
+		);
+		expect(notDatabase.status).toBe(400);
+
+		// The path id must match the body.
+		const database = workloadInput({
+			id,
+			projectId: id,
+			deploymentId: id,
+			runtime: 'container',
+			release: null,
+			image: 'docker.io/library/postgres:17-alpine',
+			port: 15432,
+			socketActivation: false,
+			database: { engine: 'postgres', version: '17' },
+		});
+		const mismatched = await handler(runtime)(
+			post('/v1/workloads/db_other/console/start', { workload: database, activation }),
+		);
+		expect(mismatched.status).toBe(400);
+
+		// A stop needs a database id too.
+		const wrongPath = await handler(runtime)(
+			new Request('http://localhost/v1/workloads/wld_abc123/console/stop', { method: 'POST' }),
+		);
+		expect(wrongPath.status).toBe(400);
+		expect(runtime.calls).toEqual([]);
 	});
 
 	test('accepts a storage workload with agent desired state and strips it to engine + version', async () => {

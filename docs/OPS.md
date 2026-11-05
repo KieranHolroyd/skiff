@@ -100,6 +100,7 @@ root:skiff`.
 | `HOST_HEADER` | `x-forwarded-host` | no | Trust Caddy's forwarded host, set by the unit. |
 | `BODY_SIZE_LIMIT` | `520M` | no | adapter-bun request body cap, set by the unit. Its 512 KB default would reject artifact uploads with a bare 413; 520M covers the 500 MiB artifact limit, which the upload route enforces. |
 | `SKIFF_STORAGE_GATEWAY_PORT` | `8081` | no | Loopback port of the edge's internal S3 gateway (D82). The agent listens on `127.0.0.1:<port>`; the control plane connects there to browse bucket contents. Must match on both processes. |
+| `SKIFF_DATABASE_GATEWAY_PORT` | `8082` | no | Loopback port of the edge's internal database gateway (D60). The agent listens on `127.0.0.1:<port>` and routes `db-<label>.console.internal` to the database studio; the control plane connects there for `/databases/:name/studio/proxy/*`. Must match on both processes. |
 | `SKIFF_STORAGE_OBJECT_MAX_BYTES` | `104857600` | no | Largest single object uploaded through the dashboard/API (100 MiB). Larger files need a presigned upload (public instances) or `skif storage objects put`. |
 
 ### 2.2 Secrets
@@ -172,6 +173,7 @@ the default below, so a typo cannot turn a destructive feature on. Change a flag
 | `SKIFF_FEATURE_PITR` | off | backups | Point-in-time recovery (WAL archiving and replay) for managed databases. |
 | `SKIFF_FEATURE_OBJECT_BROWSER` | off | storage | Browse, upload, download and delete objects in managed buckets. |
 | `SKIFF_FEATURE_POOLER` | off | databases | PgBouncer sidecar and pooled connection port for a managed database. |
+| `SKIFF_FEATURE_DB_CONSOLE` | **on** | databases | On-demand DBGate studio for managed databases (D60). It stays permission-gated and read-only unless the caller has `database:update`; set `0` to hide the Studio tab and API. |
 | `SKIFF_FEATURE_DB_TLS` | off | databases | TLS-only managed database connections (`sslmode=require`). |
 | `SKIFF_FEATURE_ORG_NETWORKS` | off | networking | Private per-org networks connecting workloads and databases. |
 | `SKIFF_FEATURE_APP_VOLUMES` | off | workloads | Persistent application volumes attached to deployed workloads. |
@@ -215,6 +217,10 @@ desired state or SQLite.
 | `SKIFF_HELPER_CONTROL_SOCKET_GROUP` | `skiff` | Group allowed to connect to the helper socket. |
 | `SKIFF_HELPER_WORKLOAD_SOCKET_GROUP` | `caddy` | Group for socket-activated workload sockets. |
 | `SKIFF_HELPER_APPARMOR_PROFILE` | `auto` | `auto` sets `apparmor=unconfined` on containers only when `kernel.apparmor_restrict_unprivileged_unconfined=1` (Ubuntu 26.04 and newer kernels stack the container profile, which denies a process signalling its own children, so Postgres cannot start). `none` keeps the runtime default; any other value is passed as the profile name. |
+
+The database studio image is fixed by the helper (DBGate 7.3.4, pinned by digest); it is not
+configurable through `helper.env`, desired state or the control plane. Update it by shipping a new
+helper release.
 
 A helper update is installed from the active release at `/opt/skiff/helper/skiff-helper` and
 restarted by the installer/updater. Existing container units are re-rendered on their next apply,

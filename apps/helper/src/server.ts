@@ -10,17 +10,20 @@ import {
 	assertRecord,
 	assertString,
 	parseApplyRequest,
+	parseConsoleStartRequest,
 	ValidationError,
 	type WorkloadActivation,
+	type WorkloadConsoleActivation,
 	type WorkloadDesired,
 } from './validate.ts';
 import type { HelperLogResult, HelperWorkloadStatus, LogReadOptions } from './systemd.ts';
 import type { HelperInventory, VerifyResult } from './volumes.ts';
 
 /**
- * The helper's entire network surface: six fixed verbs (slice, apply, status, remove, logs and
- * purge) plus `/healthz` on a root-owned, group-restricted unix socket. There is no passthrough, no command parameter and no shell. Malformed input is a 400,
- * never a best-effort attempt.
+ * The helper's entire network surface is a fixed set of verbs (slice, apply, status, remove, logs,
+ * purge, dump/restore, rotation, credentials, PITR and the database studio) plus `/healthz` on a
+ * root-owned, group-restricted unix socket. There is no passthrough, no command parameter and no
+ * shell. Malformed input is a 400, never a best-effort attempt.
  */
 
 export interface HelperRuntime {
@@ -45,6 +48,10 @@ export interface HelperRuntime {
 	): Promise<void>;
 	/** Restart only the PgBouncer sidecar. */
 	restartPooler(id: string): Promise<void>;
+	/** Start/replace an on-demand DBGate studio sidecar (D60); never restarts Postgres. */
+	startConsole(workload: WorkloadDesired, activation: WorkloadConsoleActivation): Promise<void>;
+	/** Stop a studio sidecar and remove its generated unit/env file. */
+	stopConsole(id: string): Promise<void>;
 	/** Restore a custom-format dump into a managed database. */
 	restoreDatabase(id: string, body: ReadableStream<Uint8Array> | null): Promise<void>;
 	/** Write the 0400 pgBackRest config for PITR (docs/PITR.md). */
@@ -198,6 +205,28 @@ export function createHandler(
 				const id = assertDatabaseId(decodeURIComponent(poolerRestartMatch[1]!), 'database id');
 				await runtime.restartPooler(id);
 				return json({ ok: true, restarted: id });
+			}
+
+			// --- on-demand database studio (D60): fixed sidecar verbs, no apply/passthrough ------
+			const consoleStartMatch = /^\/v1\/workloads\/([^/]+)\/console\/start$/.exec(path);
+			if (consoleStartMatch) {
+				if (method !== 'POST') return methodNotAllowed('POST');
+				const id = assertDatabaseId(decodeURIComponent(consoleStartMatch[1]!), 'database id');
+				const { workload, activation } = parseConsoleStartRequest(
+					await readJson(request, maxBodyBytes),
+				);
+				if (workload.id !== id)
+					throw new ValidationError('workload.id does not match the path id');
+				await runtime.startConsole(workload, activation);
+				return json({ ok: true, started: id });
+			}
+
+			const consoleStopMatch = /^\/v1\/workloads\/([^/]+)\/console\/stop$/.exec(path);
+			if (consoleStopMatch) {
+				if (method !== 'POST') return methodNotAllowed('POST');
+				const id = assertDatabaseId(decodeURIComponent(consoleStopMatch[1]!), 'database id');
+				await runtime.stopConsole(id);
+				return json({ ok: true, stopped: id });
 			}
 
 			const rotateMatch = /^\/v1\/workloads\/([^/]+)\/rotate$/.exec(path);

@@ -82,7 +82,7 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 Org-owned PostgreSQL run as tier-3 containers ([DATABASES.md](./DATABASES.md), D55–D61). Names
 follow slug rules and are unique per org. Responses carry a `DatabaseView` (status, node, limits,
 `sizeBytes`, `attachments`, the latest top-50 `tables` snapshot, `deletedAt`/`purgeAt`) and never
-contain credentials, except `/credentials`.
+contain credentials, except `/credentials`, `/public-url` and the embedded studio proxy.
 
 | Method | Path | Permission | Notes |
 |---|---|---|---|
@@ -94,6 +94,9 @@ contain credentials, except `/credentials`.
 | DELETE | `/databases/:name?purge=1` | `database:delete` | trashed databases only: the node removes the data, then the row goes → `{ ok: true }` |
 | POST | `/databases/:name/restore` | `database:delete` | re-checks admission; 409 once a purge was requested → `{ database }` |
 | GET | `/databases/:name/credentials` | `database:credentials` | `{ credentials: { url, host, port, username, password, databaseName, note } }`; loopback URL on the database's node; `cache-control: no-store`; every read is audited. Not available over MCP (D58) |
+| GET | `/databases/:name/public-url` | `database:read` + `database:credentials` | decrypts the operator-managed public URL → `{ publicUrl: { url, updatedAt, updatedBy } }`; `cache-control: no-store`; audited as `database.public-url.reveal`. Metadata (`configured`, `updatedAt`) is in the normal view; the URL never is |
+| PUT | `/databases/:name/public-url` | `database:update` | `{ url }` (`postgres://` or `postgresql://`) → `{ publicUrl }` metadata; the URL is sealed with the org key and replaces any previous value |
+| DELETE | `/databases/:name/public-url` | `database:update` | clears the sealed URL → `{ publicUrl }` metadata |
 | GET | `/databases/:name/metrics` | `database:read` | `?from&to` (ISO or epoch ms; default the last hour) `&interval=1m\|1h` (default `1m`, `1h` when the range exceeds 48 h; `1m` over 48 h is rejected; ranges ≤ 92 days) → `{ points, interval }`. Counters are per bucket |
 | GET | `/databases/:name/logs` | `database:read` + `logs:read` | `?after&limit&level&q` → `{ events, cursor, hasMore }`; the agent drains the unit journal into `service_log_events` |
 | GET | `/databases/:name/backups` | `database:read` | `{ backups }` (size, SHA-256, status, verified restore) |
@@ -103,6 +106,10 @@ contain credentials, except `/credentials`.
 | GET/PATCH | `/databases/:name/backup-policy` | `database:read` / `database:update` | `{ enabled, schedule (five-field UTC cron), retentionDays }` |
 | GET/POST | `/databases/:name/rotate` | `database:read` / `database:credentials` + `database:update` | `{ role: owner\|monitor }` → `202 { rotation }`; the node applies ALTER ROLE before the secret swaps |
 | POST | `/databases/:name/restart` | `database:update` | `{ target: "database"\|"pooler" }` → `202 { database, target }`; database restarts the container and pooler, pooler restarts only PgBouncer |
+| GET | `/databases/:name/console` | `database:read` + `database:console` | the on-demand DBGate studio session → `{ console }`; interactive users only |
+| POST | `/databases/:name/console` | `database:console` (+ `database:update` when `readOnly: false`) | `{ readOnly? (default true), ttlMinutes? (5–480, default 60), idleMinutes? (5–240, default 15) }` → `201 { console }`; opening is a node task and never restarts Postgres |
+| DELETE | `/databases/:name/console` | `database:console` | stops the session now → `{ console }` |
+| ANY | `/databases/:name/studio/proxy/*` | `database:console` + active session | same-origin proxy for the embedded DBGate studio; injects the per-session Basic auth and never caches |
 | POST | `/services/restart` | `database:update` and/or `storage:update` by scope | `{ scope: "all"\|"databases"\|"storage", databases?, storage? }` → `202 { restarted, skipped }` |
 | POST | `/services/backup-databases` | `database:update` | queues a backup for every live database → `202 { queued, skipped }` |
 | GET | `/projects/:slug/databases` | `database:read` | `{ attachments }` with the env names each one injects |

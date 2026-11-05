@@ -61,6 +61,24 @@ export function poolerServiceName(id: string): string {
 	return `skiff-workload-${id}-pool.service`;
 }
 
+/** Sidecar Quadlet for a database's on-demand DBGate studio (D60). */
+export function consoleUnitName(id: string): string {
+	return `skiff-workload-${id}-console.container`;
+}
+
+export function consoleServiceName(id: string): string {
+	return `skiff-workload-${id}-console.service`;
+}
+
+/**
+ * Pinned DBGate image (D60). The helper chooses it, never the wire; the digest is the multi-arch
+ * index so both amd64 and arm64 nodes resolve a manifest.
+ */
+export const DATABASE_CONSOLE_IMAGE =
+	'docker.io/dbgate/dbgate:7.3.4@sha256:ac3df6116e3bb15ea0cb7d1fc373c2f5378f42ee5327ff2c6e830e0fc8e86039';
+/** DBGate listens on this container port; the host port is loopback-only. */
+export const DATABASE_CONSOLE_PORT = 3000;
+
 /**
  * Pinned PgBouncer image (D61-style: the helper chooses it, never the wire). The digest is the
  * multi-arch index, not a single platform manifest: pinning the arm64 manifest (`88769b6…`) made
@@ -181,6 +199,104 @@ export function renderPoolerUnit(options: {
 	lines.push('TimeoutStopSec=30');
 	lines.push(`MemoryMax=64M`);
 	lines.push(`CPUQuota=50%`);
+	lines.push(`Slice=${WORKLOAD_SLICE}`);
+	lines.push('');
+	lines.push('[Install]');
+	lines.push('WantedBy=default.target');
+	return `${lines.join('\n')}\n`;
+}
+
+export interface ConsoleEnvOptions {
+	/** Managed database id (`db_…`); the connection targets its network alias. */
+	id: string;
+	/** Postgres credentials read by the helper from the database's own env file. */
+	database: { user: string; password: string; database: string };
+	/** Exact platform path the proxy serves the studio under. */
+	webRoot: string;
+	/** Per-session DBGate basic-auth login and password; never persisted anywhere else. */
+	authUser: string;
+	authPassword: string;
+	readOnly: boolean;
+	tls?: boolean;
+}
+
+/**
+ * DBGate's single-connection environment (D60). Everything is fixed except the database name,
+ * credentials, subpath and basic-auth password. `renderContainerEnvFile` refuses line breaks, so
+ * no value can inject another setting into the container env file.
+ */
+export function renderConsoleEnv(options: ConsoleEnvOptions): string {
+	const encode = encodeURIComponent;
+	const database = options.database.database;
+	const alias = databaseAlias(options.id);
+	const url = `postgres://${encode(options.database.user)}:${encode(options.database.password)}@${alias}:5432/${encode(database)}${options.tls ? '?sslmode=require' : ''}`;
+	const webRoot = options.webRoot.replace(/\/+$/, '') || '/';
+	return renderContainerEnvFile({
+		CONNECTIONS: 'skiff',
+		LABEL_skiff: database,
+		URL_skiff: url,
+		ENGINE_skiff: 'postgres@dbgate-plugin-postgres',
+		SINGLE_CONNECTION: 'skiff',
+		SINGLE_DATABASE: database,
+		WEB_ROOT: webRoot,
+		LOGIN: options.authUser,
+		PASSWORD: options.authPassword,
+		BASIC_AUTH: '1',
+		PORT: String(DATABASE_CONSOLE_PORT),
+		SHELL_CONNECTION: '0',
+		SHELL_SCRIPTING: '0',
+		...(options.readOnly ? { READONLY_skiff: '1' } : {}),
+	});
+}
+
+/**
+ * The on-demand DBGate studio sidecar: loopback-only, on the database's network, with a read-only
+ * root and two small tmpfs mounts for the browser's own state. It is started and stopped by the
+ * helper's fixed console verbs; it never touches the Postgres unit.
+ */
+export function renderConsoleUnit(options: {
+	workload: WorkloadDesired;
+	envFile: string;
+	port: number;
+	/** AppArmor profile workaround for hosts with the stacked-profile kernel bug. */
+	apparmorProfile?: string | null;
+}): string {
+	const { workload } = options;
+	if (!workload.database) throw new ValidationError('renderConsoleUnit needs a database workload');
+	const lines: string[] = [];
+	lines.push('[Unit]');
+	lines.push(`Description=Skiff database studio ${workload.id} (${workload.projectSlug})`);
+	lines.push('After=network-online.target');
+	lines.push('Wants=network-online.target');
+	lines.push('StartLimitIntervalSec=300');
+	lines.push('StartLimitBurst=10');
+	lines.push('');
+	lines.push('[Container]');
+	lines.push(`ContainerName=skiff-workload-${workload.id}-console`);
+	lines.push(`Image=${DATABASE_CONSOLE_IMAGE}`);
+	lines.push(`PublishPort=127.0.0.1:${options.port}:${DATABASE_CONSOLE_PORT}`);
+	lines.push(`Network=${networkUnitName(workloadNetworkName(workload))}`);
+	lines.push(`NetworkAlias=${databaseAlias(workload.id)}-console`);
+	lines.push(`EnvironmentFile=${options.envFile}`);
+	// DBGate writes its own state under /root/.dbgate and temp files under /tmp; the root
+	// filesystem stays read-only.
+	lines.push('Tmpfs=/root/.dbgate:rw,size=64m');
+	lines.push('Tmpfs=/tmp:rw,size=64m');
+	lines.push('DropCapability=all');
+	lines.push('NoNewPrivileges=true');
+	lines.push('ReadOnly=true');
+	pushApparmor(lines, options.apparmorProfile);
+	lines.push('');
+	lines.push('[Service]');
+	// A console is short-lived: the control plane stops it, and a crash must not restart it with
+	// stale session credentials.
+	lines.push('Restart=no');
+	// The first start may pull the image; the agent then waits for the HTTP port before reporting
+	// the session as running, so a cold pull is not mistaken for a failed start.
+	lines.push('TimeoutStartSec=300');
+	lines.push('TimeoutStopSec=30');
+	lines.push('MemoryMax=256M');
+	lines.push('CPUQuota=100%');
 	lines.push(`Slice=${WORKLOAD_SLICE}`);
 	lines.push('');
 	lines.push('[Install]');

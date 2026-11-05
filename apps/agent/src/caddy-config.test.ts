@@ -450,6 +450,55 @@ describe('per-deployment roots, worker routes and logging', () => {
 		expect(() => config(value)).toThrow(/loopback/);
 	});
 
+	test('the edge serves the database studio gateway on loopback only', () => {
+		const value = state();
+		value.databaseGateway = {
+			listen: '127.0.0.1:8082',
+			routes: [{ host: 'db-orders.console.internal', upstream: '127.0.0.1:17432' }],
+		};
+		const compiled = config(value);
+		const apps = compiled.apps as Json;
+		const servers = (apps.http as Json).servers as Json;
+		const gateway = servers.database_gateway as Json;
+		expect(gateway.listen).toEqual(['127.0.0.1:8082']);
+		expect(gateway.automatic_https).toEqual({ disable: true });
+		const gatewayRoutes = gateway.routes as Json[];
+		expect(gatewayRoutes.map((route) => route['@id'])).toEqual([
+			'gateway:db-orders.console.internal',
+		]);
+		const proxy = collectHandlers(gatewayRoutes[0]).find(
+			(handler) => handler.handler === 'reverse_proxy',
+		)!;
+		expect((proxy.upstreams as Json[])[0]!.dial).toBe('127.0.0.1:17432');
+		// The public content server must never expose a console host.
+		expect(
+			routes(compiled).some((route) =>
+				JSON.stringify(route.match ?? null).includes('console.internal'),
+			),
+		).toBe(false);
+	});
+
+	test('a worker puts database studio gateway routes on the main server', () => {
+		const value = state();
+		value.databaseGateway = {
+			listen: null,
+			routes: [{ host: 'db-orders.console.internal', upstream: '127.0.0.1:17432' }],
+		};
+		const compiled = config(value);
+		const apps = compiled.apps as Json;
+		const servers = (apps.http as Json).servers as Json;
+		expect(servers.database_gateway).toBeUndefined();
+		expect(routes(compiled)[0]!['@id']).toBe('gateway:db-orders.console.internal');
+	});
+
+	test('refuses a non-loopback database studio gateway listener', () => {
+		const value = state();
+		value.databaseGateway = { listen: ':8082', routes: [] };
+		expect(() => config(value)).toThrow(/databaseGateway.*loopback/);
+		value.databaseGateway = { listen: '0.0.0.0:8082', routes: [] };
+		expect(() => config(value)).toThrow(/databaseGateway.*loopback/);
+	});
+
 	test('writes a JSON access log for telemetry, skipping the platform host', () => {
 		const compiled = buildCaddyConfig({
 			state: state(),

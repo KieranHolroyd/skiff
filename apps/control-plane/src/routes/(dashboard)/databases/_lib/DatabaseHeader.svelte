@@ -9,6 +9,7 @@
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
 	import Settings2Icon from '@lucide/svelte/icons/settings-2';
+	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import TableIcon from '@lucide/svelte/icons/table';
 	import TrashIcon from '@lucide/svelte/icons/trash';
 	import type { DatabaseView } from '@skiff/contracts';
@@ -24,7 +25,12 @@
 	import { formatDate } from '../../_lib/format.js';
 	import { DATABASE_DEFAULT_TAB, type DatabaseTab } from './database-tabs.js';
 
-	type Can = { update: boolean; delete: boolean; credentials: boolean };
+	type Can = {
+		update: boolean;
+		delete: boolean;
+		credentials: boolean;
+		console: boolean;
+	};
 
 	let {
 		db,
@@ -58,6 +64,7 @@
 				icon: TableIcon,
 				count: db.tables.length || undefined
 			},
+			...(can.console ? [{ id: 'studio', label: 'Studio', icon: SquareTerminalIcon }] : []),
 			{ id: 'settings', label: 'Settings', icon: Settings2Icon }
 		]
 			.map((item) => ({ ...item, href: tabHref(base, item.id, DATABASE_DEFAULT_TAB), local: true }))

@@ -309,6 +309,27 @@ export function buildCaddyConfig(options: CompileAgentConfigOptions): Record<str
 		server.routes = [...gatewayRoutes, ...server.routes];
 	}
 
+	// On-demand database studios use the same internal-gateway pattern (D60): a loopback listener
+	// on the edge, or host routes on the WireGuard-only server for a worker.
+	const databaseGateway = options.state.databaseGateway;
+	const databaseGatewayRoutes = databaseGateway.routes.map((route) =>
+		compileProxyRoute(`gateway:${route.host}`, route.host, route.upstream),
+	);
+	if (databaseGateway.listen) {
+		if (!isLoopbackListen(databaseGateway.listen))
+			throw new Error(`databaseGateway.listen must be loopback, got "${databaseGateway.listen}"`);
+		if (apps) {
+			apps.http.servers.database_gateway = {
+				listen: [databaseGateway.listen],
+				automatic_https: { disable: true },
+				routes: databaseGatewayRoutes,
+				...(server.logs ? { logs: server.logs } : {}),
+			};
+		}
+	} else if (databaseGatewayRoutes.length > 0) {
+		server.routes = [...databaseGatewayRoutes, ...server.routes];
+	}
+
 	// Only nodes that actually serve custom domains ask the control plane before issuing a cert.
 	// `automation.on_demand` only configures the ask endpoint; Caddy also needs an automation
 	// policy with `on_demand: true` for the custom hosts. The wildcard policy is left untouched,

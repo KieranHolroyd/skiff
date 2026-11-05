@@ -98,7 +98,8 @@
 - [x] Bulk actions: restart all services/databases/storage and back up all databases
 - [x] Database container logs: drained journal, `GET /databases/:name/logs`, dashboard tail, `skif db logs`, MCP `get_database_logs`
 - [ ] TLS in transit with a per-node CA and `sslmode=require` URLs
-- [ ] On-demand SQL console (pgweb or Adminer) behind `platform` access (D60)
+- [x] On-demand DBGate 7.3.4 studio: loopback sidecar, internal gateway + platform proxy, `database:console`, read-only default, write mode with `database:update`, audited and idle-stopped (D60)
+- [ ] Native table editor and query history beyond the embedded studio
 - [ ] Database metrics in the Parquet archive; bulk actions and prune for databases; `restore_database` over MCP
 - [ ] Cross-node access via a node private address; PITR (pgBackRest/WAL-G); MySQL/Valkey
 
