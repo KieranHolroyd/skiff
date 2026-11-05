@@ -2,6 +2,7 @@ import { and, asc, desc, eq, gt, inArray, sql } from 'drizzle-orm';
 import { builds, databases, logEvents, projects, serviceLogEvents, storageInstances, workloads } from '@skiff/db';
 import {
 	levelForBuildLine,
+	parseLogLine,
 	parseWorkloadReplicaId,
 	requirePermission,
 	type BuildLogChunk,
@@ -53,18 +54,21 @@ export class LogService {
 		const now = this.ctx.now();
 		const text = `${lines.map((line) => (chunk.stream === 'stderr' ? `[stderr] ${line}` : line)).join('\n')}\n`;
 		const log = `${build.log ?? ''}${text}`.slice(-LOG_LIMIT);
-		const rows = lines.map((line) => ({
-			orgId: build.orgId,
-			projectId: build.projectId,
-			deploymentId: null,
-			buildId: build.id,
-			nodeId,
-			source: 'build' as const,
-			stream: chunk.stream,
-			level: levelForBuildLine(line, chunk.stream),
-			message: line,
-			ts: now,
-		}));
+		const rows = lines.map((line) => {
+			const parsed = parseLogLine(line);
+			return {
+				orgId: build.orgId,
+				projectId: build.projectId,
+				deploymentId: null,
+				buildId: build.id,
+				nodeId,
+				source: 'build' as const,
+				stream: chunk.stream,
+				level: parsed.level ?? levelForBuildLine(line, chunk.stream),
+				message: sanitize(parsed.message),
+				ts: parsed.ts ?? now,
+			};
+		});
 		this.ctx.db.transaction((tx) => {
 			tx.insert(logEvents).values(rows).run();
 			tx.update(builds)
@@ -112,18 +116,23 @@ export class LogService {
 		if (!project || project.deletedAt) return 0;
 		if (batch.lines.length === 0) return 0;
 		const now = this.ctx.now();
-		const rows = batch.lines.map((line) => ({
-			orgId: workload.orgId,
-			projectId: workload.projectId,
-			deploymentId: workload.deploymentId,
-			buildId: null,
-			nodeId,
-			source: 'runtime' as const,
-			stream: line.stream,
-			level: line.level,
-			message: replica > 0 ? `[r${replica}] ${sanitize(line.message)}` : sanitize(line.message),
-			ts: Number.isFinite(line.ts) ? Math.max(0, Number(line.ts)) : now,
-		}));
+		const rows = batch.lines.map((line) => {
+			const parsed = parseLogLine(line.message);
+			return {
+				orgId: workload.orgId,
+				projectId: workload.projectId,
+				deploymentId: workload.deploymentId,
+				buildId: null,
+				nodeId,
+				source: 'runtime' as const,
+				stream: line.stream,
+				level: parsed.level ?? line.level,
+				message: replica > 0
+					? `[r${replica}] ${sanitize(parsed.message)}`
+					: sanitize(parsed.message),
+				ts: Number.isFinite(line.ts) ? Math.max(0, Number(line.ts)) : parsed.ts ?? now,
+			};
+		});
 		this.ctx.db.insert(logEvents).values(rows).run();
 		return rows.length;
 	}
@@ -148,17 +157,20 @@ export class LogService {
 		if (batch.lines.length === 0) return 0;
 		const kind: ServiceLogKind = storage ? 'storage' : 'database';
 		const now = this.ctx.now();
-		const rows = batch.lines.map((line) => ({
-			orgId: service.orgId,
-			kind,
-			serviceId: service.id,
-			nodeId,
-			source: 'runtime' as const,
-			stream: line.stream,
-			level: line.level,
-			message: sanitize(line.message),
-			ts: Number.isFinite(line.ts) ? Math.max(0, Number(line.ts)) : now,
-		}));
+		const rows = batch.lines.map((line) => {
+			const parsed = parseLogLine(line.message);
+			return {
+				orgId: service.orgId,
+				kind,
+				serviceId: service.id,
+				nodeId,
+				source: 'runtime' as const,
+				stream: line.stream,
+				level: parsed.level ?? line.level,
+				message: sanitize(parsed.message),
+				ts: Number.isFinite(line.ts) ? Math.max(0, Number(line.ts)) : parsed.ts ?? now,
+			};
+		});
 		this.ctx.db.insert(serviceLogEvents).values(rows).run();
 		return rows.length;
 	}

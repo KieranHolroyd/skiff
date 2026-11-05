@@ -129,6 +129,24 @@ describe('managed-service logs', () => {
 		).toEqual(['disk full']);
 	});
 
+	test('extracts structured levels and messages from drained lines', () => {
+		const embedded = Date.parse('2026-11-05T09:30:00Z');
+		core.logs.appendRuntime(nodeId, {
+			workloadId: storageId,
+			lines: [
+				line(`level=error msg="bucket missing" ts=${embedded}`),
+				line('<11>Nov  5 10:00:00 host rustfs[7]: disk failure'),
+			],
+		});
+		const page = core.logs.queryService(owner, 'storage', storageId, { limit: 10 });
+		const [logfmt, syslog] = page.events.slice(-2);
+		expect(logfmt?.level).toBe('error');
+		expect(logfmt?.message).toBe('bucket missing');
+		expect(logfmt?.ts).toBe(clock);
+		expect(syslog?.level).toBe('error');
+		expect(syslog?.message).toBe('disk failure');
+	});
+
 	test('prunes service logs with the same retention as runtime logs', () => {
 		clock += 8 * 86_400_000;
 		core.logs.prune();

@@ -173,6 +173,60 @@ describe('workload log drain', () => {
 		expect(helper.readCalls[1]?.options.cursor).toBe('s=2');
 	});
 
+	test('parses a JSON line into level, message and embedded timestamp', async () => {
+		const helper = new FakeHelper();
+		helper.results.push({
+			entries: [
+				{
+					cursor: 's=1',
+					ts: 1_700_000_000_500,
+					priority: 6,
+					message: '{"level":"error","time":1700000000123,"msg":"boom"}',
+				},
+			],
+			nextCursor: 's=1',
+		});
+		const client = drain(helper);
+
+		expect(await client.drain(state())).toBe(1);
+		expect(posts).toHaveLength(1);
+		expect(posts[0]!.lines).toEqual([
+			{
+				ts: 1_700_000_000_123,
+				stream: 'stdout',
+				level: 'error',
+				message: 'boom',
+			},
+		]);
+	});
+
+	test('parses a logfmt line into level, message and embedded timestamp', async () => {
+		const helper = new FakeHelper();
+		helper.results.push({
+			entries: [
+				{
+					cursor: 's=1',
+					ts: 1_700_000_000_500,
+					priority: 6,
+					message: 'time=2024-07-03T12:00:00Z level=warn msg="slow request"',
+				},
+			],
+			nextCursor: 's=1',
+		});
+		const client = drain(helper);
+
+		expect(await client.drain(state())).toBe(1);
+		expect(posts).toHaveLength(1);
+		expect(posts[0]!.lines).toEqual([
+			{
+				ts: 1_720_008_000_000,
+				stream: 'stdout',
+				level: 'warn',
+				message: 'slow request',
+			},
+		]);
+	});
+
 	test('does not advance the cursor when the control plane rejects a batch', async () => {
 		const helper = new FakeHelper();
 		helper.results.push(

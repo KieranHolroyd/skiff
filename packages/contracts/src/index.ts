@@ -17,6 +17,7 @@ export * from './services.ts';
 export * from './object-storage.ts';
 export * from './build.ts';
 export * from './log.ts';
+export * from './log-parse.ts';
 export * from './domain.ts';
 export * from './environment.ts';
 export * from './url.ts';

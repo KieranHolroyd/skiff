@@ -1,5 +1,6 @@
 import {
 	levelForPriority,
+	parseLogLine,
 	type DesiredState,
 	type RuntimeLogBatch,
 	type WorkloadDesired,
@@ -101,14 +102,17 @@ export class WorkloadLogDrain {
 			return 0;
 		}
 
-		const lines = result.entries.map((entry) => ({
-			ts: entry.ts,
-			stream: (entry.priority <= 3 ? 'stderr' : 'stdout') as
-				| 'stdout'
-				| 'stderr',
-			level: levelForPriority(entry.priority),
-			message: entry.message,
-		}));
+		const lines = result.entries.map((entry) => {
+			const parsed = parseLogLine(entry.message);
+			return {
+				ts: parsed.ts ?? entry.ts,
+				stream: (entry.priority <= 3 ? 'stderr' : 'stdout') as
+					| 'stdout'
+					| 'stderr',
+				level: parsed.level ?? levelForPriority(entry.priority),
+				message: parsed.message,
+			};
+		});
 
 		let sent = 0;
 		for (let index = 0; index < lines.length; index += LINES_PER_POST) {

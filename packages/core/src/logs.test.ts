@@ -134,6 +134,31 @@ describe('log drain', () => {
 		expect(after.cursor).toBe(all.cursor);
 	});
 
+	test('extracts structured build lines but keeps the raw text', async () => {
+		const { project, buildId, nodeId } = await projectWithBuild();
+		const embedded = Date.parse('2026-11-04T09:00:00Z');
+		expect(
+			core.logs.appendBuild(nodeId, buildId, {
+				stream: 'stdout',
+				lines: [`{"level":"error","time":${embedded},"msg":"build broke"}`],
+			}),
+		).toBe(true);
+
+		const all = core.logs.query(principal, project, {
+			source: 'build',
+			buildId,
+		});
+		expect(all.events).toHaveLength(1);
+		expect(all.events[0]?.level).toBe('error');
+		expect(all.events[0]?.message).toBe('build broke');
+		expect(all.events[0]?.ts).toBe(embedded);
+
+		const row = opened.sqlite
+			.query<{ log: string }, [string]>('SELECT log FROM builds WHERE id = ?')
+			.get(buildId);
+		expect(row?.log).toContain(`{"level":"error","time":${embedded},"msg":"build broke"}`);
+	});
+
 	test('appends runtime lines only for the workload node', async () => {
 		const { project, nodeId, deploymentId } = await projectWithBuild();
 		opened.sqlite.run(
@@ -184,6 +209,57 @@ describe('log drain', () => {
 				],
 			}),
 		).toThrow(/another node/);
+	});
+
+	test('extracts structured levels, messages and timestamps from runtime lines', async () => {
+		const { project, nodeId, deploymentId } = await projectWithBuild();
+		const workloadId = `wld_structured_${Math.random().toString(36).slice(2, 8)}`;
+		opened.sqlite.run(
+			`INSERT INTO workloads (id, org_id, project_id, deployment_id, node_id, runtime, status, spec_json, memory_mb, cpus, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, 'process', 'running', '{}', 128, 1, ?, ?)`,
+			[
+				workloadId,
+				project.orgId,
+				project.id,
+				deploymentId,
+				nodeId,
+				clock,
+				clock,
+			],
+		);
+
+		const embedded = Date.parse('2026-11-04T09:00:00Z');
+		const stored = core.logs.appendRuntime(nodeId, {
+			workloadId,
+			lines: [
+				{
+					ts: clock,
+					stream: 'stdout',
+					level: 'info',
+					message: `{"level":"warn","time":${embedded},"msg":"slow request"}`,
+				},
+				{
+					stream: 'stdout',
+					level: 'error',
+					message: `level=debug msg="cache warm" ts=${embedded}`,
+				},
+			],
+		});
+		expect(stored).toBe(2);
+
+		const runtime = core.logs.query(principal, project, {
+			source: 'runtime',
+			deploymentId,
+		});
+		expect(runtime.events.map((event) => event.message)).toEqual([
+			'slow request',
+			'cache warm',
+		]);
+		// The agent's own ts wins for the JSON line; logfmt without one uses the embedded time.
+		expect(runtime.events[0]?.level).toBe('warn');
+		expect(runtime.events[0]?.ts).toBe(clock);
+		expect(runtime.events[1]?.level).toBe('debug');
+		expect(runtime.events[1]?.ts).toBe(embedded);
 	});
 
 	test('requires logs:read and prunes by age', async () => {
