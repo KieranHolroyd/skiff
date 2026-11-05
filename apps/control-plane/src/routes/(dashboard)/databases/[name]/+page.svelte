@@ -49,6 +49,7 @@
 	import { Spinner } from '#lib/components/ui/spinner/index.js';
 	import { Switch } from '#lib/components/ui/switch/index.js';
 	import * as Table from '#lib/components/ui/table/index.js';
+	import CodeBlock from '../../_lib/CodeBlock.svelte';
 	import EmptyState from '../../_lib/EmptyState.svelte';
 	import Panel from '../../_lib/Panel.svelte';
 	import RowMenu from '../../_lib/RowMenu.svelte';
@@ -82,10 +83,9 @@
 	const editable = $derived(can.update && !deleted);
 	const nodeLabel = $derived(db.nodeName ?? db.nodeId);
 	const hostPort = $derived(db.internalHost.process.split(':').at(-1) ?? '');
-	const defaultEnvNames = $derived([
-		...databaseEnvNames('DATABASE'),
-		...(db.pooler.enabled ? ['DATABASE_POOL_URL', 'DATABASE_POOL_HOST', 'DATABASE_POOL_PORT'] : [])
-	]);
+	const defaultEnvNames = $derived(
+		databaseEnvNames('DATABASE', { pooler: db.pooler.enabled, tls: db.tls.enabled })
+	);
 
 	// --- sections ------------------------------------------------------------------------------
 
@@ -143,11 +143,27 @@
 		}
 	}
 
-	const maskedUrl = $derived(
-		credentials
-			? credentials.url.replace(`:${encodeURIComponent(credentials.password)}@`, ':••••••••@')
-			: ''
+	const maskUrl = (url: string, password: string) =>
+		url.replace(`:${encodeURIComponent(password)}@`, ':••••••••@');
+
+	/** Snippet picker, in the order people reach for them. */
+	const SNIPPETS: Array<{ key: string; label: string; file: string }> = [
+		{ key: 'psql', label: 'psql', file: 'shell' },
+		{ key: 'direct', label: 'psql (direct)', file: 'shell' },
+		{ key: 'nodePostgres', label: 'node-postgres', file: 'db.ts' },
+		{ key: 'drizzle', label: 'Drizzle', file: 'db.ts' },
+		{ key: 'prisma', label: 'Prisma', file: 'schema.prisma' },
+		{ key: 'kysely', label: 'Kysely', file: 'db.ts' },
+		{ key: 'django', label: 'Django', file: 'settings.py' },
+		{ key: 'rails', label: 'Rails', file: 'database.yml' },
+		{ key: 'pgx', label: 'Go (pgx)', file: 'main.go' },
+		{ key: 'verifyFull', label: 'Verify TLS', file: 'shell' }
+	];
+	let snippet = $state('psql');
+	const snippets = $derived(
+		SNIPPETS.filter((item) => credentials?.connectionSnippets[item.key] !== undefined)
 	);
+	const activeSnippet = $derived(snippets.find((item) => item.key === snippet) ?? snippets[0]);
 
 	// --- attachments ---------------------------------------------------------------------------
 
@@ -373,13 +389,67 @@
 						<dt>Pooled · container</dt>
 						<dd><CopyValue value={db.pooler.host.container} label="pooler host" /></dd>
 					{/if}
+					<dt>TLS</dt>
+					<dd class="text-xs">
+						{#if db.tls.enabled}
+							<span class="inline-flex items-center gap-1 text-success">
+								<ShieldCheckIcon class="size-3.5" />Required
+								<span class="font-mono text-muted-foreground">sslmode={db.tls.mode}</span>
+							</span>
+						{:else}
+							<span class="text-muted-foreground">Off</span>
+						{/if}
+					</dd>
 					{#if credentials}
 						<dt>Password</dt>
 						<dd><CopyValue value={credentials.password} label="password" secret /></dd>
-						<dt>Connection URL</dt>
-						<dd><CopyValue value={credentials.url} label="URL" display={maskedUrl} secret /></dd>
+						<dt>Direct URL</dt>
+						<dd>
+							<CopyValue
+								value={credentials.url}
+								label="direct URL"
+								display={maskUrl(credentials.url, credentials.password)}
+								secret
+							/>
+						</dd>
+						{#if credentials.poolerUrl}
+							<dt>Pooled URL</dt>
+							<dd>
+								<CopyValue
+									value={credentials.poolerUrl}
+									label="pooled URL"
+									display={maskUrl(credentials.poolerUrl, credentials.password)}
+									secret
+								/>
+							</dd>
+						{/if}
+						{#if credentials.caPem}
+							<dt>CA certificate</dt>
+							<dd><CopyValue value={credentials.caPem} label="CA certificate" display="PEM · public" secret /></dd>
+						{/if}
 					{/if}
 				</DetailList>
+
+				{#if db.tls.error}
+					<Notice tone="warning" title="TLS is not active" class="mt-4">{db.tls.error}</Notice>
+				{/if}
+
+				{#if credentials && activeSnippet}
+					<div class="mt-4 space-y-2">
+						<div class="flex items-center justify-between gap-3">
+							<p class="text-sm font-medium">Connect from code</p>
+							<NativeSelect.Root bind:value={snippet} size="sm" class="w-40" aria-label="Client">
+								{#each snippets as item (item.key)}
+									<NativeSelect.Option value={item.key}>{item.label}</NativeSelect.Option>
+								{/each}
+							</NativeSelect.Root>
+						</div>
+						<CodeBlock
+							label={activeSnippet.file}
+							code={credentials.connectionSnippets[activeSnippet.key] ?? ''}
+						/>
+					</div>
+				{/if}
 
 				<div class="mt-4 space-y-2 rounded-lg border bg-muted/30 p-3">
 					<p class="text-xs text-muted-foreground">

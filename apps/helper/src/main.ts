@@ -34,6 +34,7 @@ export async function runHelper(): Promise<void> {
 		journalctlPath: config.journalctlPath,
 		podmanPath: config.podmanPath,
 		opensslPath: config.opensslPath,
+		apparmorProfile: config.apparmorProfile,
 		socketMode: config.workloadSocketMode,
 		socketGroup: config.workloadSocketGroup,
 	});

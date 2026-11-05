@@ -24,6 +24,7 @@ import { pruneCommand } from './commands/prune.ts';
 import { rollbackCommand } from './commands/rollback.ts';
 import { statusCommand } from './commands/status.ts';
 import { usageCommand } from './commands/usage.ts';
+import { upgradeCommand } from './commands/upgrade.ts';
 import { PROFILE_ENV, setProfileOverride } from './config.ts';
 
 const invokedAs = 'skif';
@@ -53,6 +54,7 @@ const commands: Record<string, (argv: string[]) => Promise<void>> = {
 	backupTargets: backupTargetCommand,
 	volume: volumeCommand,
 	volumes: volumeCommand,
+	upgrade: upgradeCommand,
 };
 
 const help = `${invokedAs} ${pkg.version} — deploy to your own Skiff cloud
@@ -78,6 +80,7 @@ Commands:
   prune [--apply] [--plan <id>]              Find and remove orphaned data (dry run by default)
   operations [list|show|watch|cancel]        Inspect and follow bulk and prune operations
   db [list|create|info|attach|detach|…]      Managed PostgreSQL databases (\`skif db --help\`)
+  upgrade <plan|apply|rollback>              Preflight, install or roll back the platform
   storage [list|create|info|buckets|…]       Managed S3-compatible object storage (\`skif storage --help\`)
   backup-target [list|add|test|remove]       Where backups are written (\`skif backup-target --help\`)
   volume [list|create|attach|detach|delete]  Persistent app volumes (\`skif volume --help\`)

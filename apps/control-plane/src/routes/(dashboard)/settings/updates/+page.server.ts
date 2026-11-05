@@ -20,15 +20,29 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const source = updateSource();
 	const latest = await latestVersion(source);
 	const status = readUpdateStatus();
+	const comparison = compareToRunning(latest);
+	const preflight = await core.upgrades.preflight({
+		targetVersion: latest.ok ? latest.version : comparison.current,
+		checkBackupTarget: false
+	});
+	const snapshots = core.upgrades.listSnapshotBundles().map((bundle) => ({
+		dir: bundle.dir,
+		createdAt: bundle.manifest.createdAt,
+		pinned: bundle.manifest.pinned,
+		targetVersion: bundle.manifest.targetVersion,
+		hasControlDb: Boolean(bundle.controlDb)
+	}));
 	return {
 		availability: selfUpdateAvailability(),
 		source,
 		latest,
-		comparison: compareToRunning(latest),
+		comparison,
 		status,
 		log: readUpdateLog(),
 		pending: updatePending(),
-		inFlight: updateInFlight(status)
+		inFlight: updateInFlight(status),
+		preflight,
+		snapshots
 	};
 };
 

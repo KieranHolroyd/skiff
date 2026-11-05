@@ -16,6 +16,7 @@ import type {
 	DatabaseCreateInput,
 	DatabaseCredentials,
 	DatabaseRotationView,
+	DatabaseUpgradePlan,
 	DatabaseView,
 	ServiceRestartResult,
 } from './databases.ts';
@@ -894,8 +895,33 @@ export class ApiClient {
 		return { rotation: asRecord(asRecord(raw)?.rotation) as unknown as DatabaseRotationView, raw };
 	}
 
-	async databaseBackupPolicy(name: string): Promise<{ policy: unknown; raw: unknown }> {
-		const raw = await this.request('GET', `/api/v1/databases/${encodeURIComponent(name)}/backup-policy`);
+	async databaseUpgradePlan(name: string, targetVersion: string): Promise<{ plan: DatabaseUpgradePlan; raw: unknown }> {
+		const raw = await this.request(
+			'GET',
+			`/api/v1/databases/${encodeURIComponent(name)}/upgrade?to=${encodeURIComponent(targetVersion)}`,
+		);
+		const plan = asRecord(raw)?.plan as unknown as DatabaseUpgradePlan | undefined;
+		if (!plan) throw new CliError('The platform returned an unexpected upgrade plan.', { code: 'protocol' });
+		return { plan, raw };
+	}
+
+	async applyDatabaseUpgrade(name: string, targetVersion: string): Promise<{ plan: DatabaseUpgradePlan; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/databases/${encodeURIComponent(name)}/upgrade`, {
+			body: { targetVersion, apply: true },
+		});
+		const plan = asRecord(raw)?.plan as unknown as DatabaseUpgradePlan | undefined;
+		if (!plan) throw new CliError('The platform returned an unexpected upgrade plan.', { code: 'protocol' });
+		return { plan, raw };
+	}
+
+	async platformUpgradePlan(version?: string): Promise<{ plan: unknown; snapshots: unknown; raw: unknown }> {
+		const query = version ? `?version=${encodeURIComponent(version)}` : '';
+		const raw = await this.request('GET', `/api/v1/platform/upgrade/plan${query}`);
+		const record = asRecord(raw);
+		return { plan: record?.plan, snapshots: record?.snapshots, raw };
+	}
+
+	async databaseBackupPolicy(name: string): Promise<{ policy: unknown; raw: unknown }> {		const raw = await this.request('GET', `/api/v1/databases/${encodeURIComponent(name)}/backup-policy`);
 		return { policy: asRecord(raw)?.backup, raw };
 	}
 

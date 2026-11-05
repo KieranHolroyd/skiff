@@ -136,13 +136,58 @@ export const databaseUpdateSchema = z
 		memoryMb: z.number().int().min(128).max(16_384).optional(),
 		cpus: z.number().positive().max(8).optional(),
 		storageMb: z.number().int().min(256).max(1_048_576).optional(),
+		/**
+		 * Target major version. Same-major changes are accepted; crossing a major is refused here
+		 * and must go through the explicit `skif db upgrade` plan/apply flow.
+		 */
+		version: z.string().max(16).optional(),
 		/** Adding installs on the next activation. Removing never drops an extension automatically. */
 		extensions: z.array(databaseExtensionSchema).max(20).optional(),
 		/** Enable or disable the PgBouncer sidecar. */
 		pooler: z.boolean().optional(),
 	})
-	.refine((input) => Object.keys(input).length > 0, 'Nothing to update.');
+	.superRefine((input, ctx) => {
+		if (input.version && !databaseEngineRegistry.postgres.versions.includes(input.version))
+			ctx.addIssue({
+				code: 'custom',
+				path: ['version'],
+				message: `PostgreSQL versions: ${databaseEngineRegistry.postgres.versions.join(', ')}.`
+			});
+		if (Object.keys(input).length === 0) ctx.addIssue({ code: 'custom', message: 'Nothing to update.' });
+	});
 export type DatabaseUpdate = z.infer<typeof databaseUpdateSchema>;
+
+export const databaseUpgradeSchema = z.object({
+	targetVersion: z.string().min(1).max(16),
+	/** Create the verified backup and return the manual runbook; never switches the major itself. */
+	apply: z.boolean().default(false),
+});
+export type DatabaseUpgradeInput = z.input<typeof databaseUpgradeSchema>;
+
+export interface DatabaseUpgradeStep {
+	id: string;
+	title: string;
+	detail: string;
+	automatic: boolean;
+}
+
+export interface DatabaseUpgradePlan {
+	databaseId: string;
+	name: string;
+	fromVersion: string;
+	toVersion: string;
+	majorChange: boolean;
+	/** `manual`: the platform provides the plan and backup; an operator runs pg_upgrade/dump-restore. */
+	status: 'planned' | 'blocked' | 'manual';
+	mode: 'dump-restore' | 'pg-upgrade';
+	blockers: string[];
+	warnings: string[];
+	steps: DatabaseUpgradeStep[];
+	/** Set when `apply` queued the pre-upgrade backup. */
+	backupId: string | null;
+	docs: string;
+	message: string;
+}
 
 export const databaseAttachSchema = z.object({
 	database: databaseNameSchema,

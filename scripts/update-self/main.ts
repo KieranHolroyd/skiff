@@ -19,7 +19,7 @@ import {
 	rmSync,
 	writeFileSync,
 } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import {
 	SELF_UPDATE_DEFAULTS,
 	type SelfUpdateLogLevel,
@@ -31,6 +31,8 @@ import { TRIGGER_PATH_UNIT, triggerUnits } from './units.ts';
 import { ensurePlatformConfigUnits } from '../platform-config/units.ts';
 import { ensureBuilder, linkAgentCommands } from '../systemd/builder.ts';
 import { ensureStorageUnits } from '../systemd/storage.ts';
+import { R2ObjectStore } from '../../packages/core/src/object-store.ts';
+import { listUpgradeSnapshotBundles } from '../../packages/core/src/upgrade-plan.ts';
 import {
 	AGENT,
 	CONTROL_PLANE,
@@ -49,6 +51,7 @@ const USAGE = `skiff-update-self — update the Skiff control plane from GitHub,
 Usage:
   skiff-update-self [update] [options]   install the latest version if VERSION on GitHub is newer (semver)
   skiff-update-self check [--json]       show the running and latest versions; change nothing
+  skiff-update-self plan [--json]        preflight the upgrade (disk, backup target, migrations)
   skiff-update-self rollback [options]   switch back to the previous release (repeat to undo)
   skiff-update-self status [--json]      show current/previous releases and the last switch
 
@@ -61,6 +64,7 @@ update options:
   --no-canary          skip the isolated pre-swap boot against a copy of the database
   --require-public     the public URL must answer after the swap (default: only if it did before)
   --no-public-check    never gate on the public URL
+  --allow-destructive  approve a reviewed destructive migration in the preflight
   --dry-run            resolve the commit and print the plan; change nothing
 
 rollback options:
@@ -108,6 +112,7 @@ const known = new Set([
 	'--no-canary',
 	'--require-public',
 	'--no-public-check',
+	'--allow-destructive',
 	'--dry-run',
 	'--restore-db',
 	'--keep-db',
@@ -302,8 +307,32 @@ async function socketHealthy(socket: string): Promise<boolean> {
 	}
 }
 
-async function poll(check: () => Promise<boolean>, timeoutMs: number, everyMs = 1_000): Promise<boolean> {
-	const deadline = Date.now() + timeoutMs;
+/**
+ * `/readyz` smoke test. A release from before the endpoint existed (a forced downgrade) falls
+ * back to the older setup-status check so the updater stays backward compatible.
+ */
+async function readyzHealthy(socket: string, timeoutMs: number): Promise<boolean> {
+	const origin = platformOrigin() ?? 'http://localhost';
+	const host = new URL(origin).host;
+	const headers = { Host: host, 'X-Forwarded-Proto': 'https', 'X-Forwarded-Host': host };
+	return poll(async () => {
+		try {
+			const response = await fetch('http://localhost/readyz', {
+				unix: socket,
+				headers,
+				signal: AbortSignal.timeout(5_000)
+			});
+			if (response.status === 404) return socketHealthy(socket);
+			if (response.status !== 200) return false;
+			const body = (await response.json()) as { ok?: unknown };
+			return body.ok === true;
+		} catch {
+			return false;
+		}
+	}, timeoutMs);
+}
+
+async function poll(check: () => Promise<boolean>, timeoutMs: number, everyMs = 1_000): Promise<boolean> {	const deadline = Date.now() + timeoutMs;
 	for (;;) {
 		if (await check()) return true;
 		if (Date.now() + everyMs > deadline) return false;
@@ -522,6 +551,7 @@ const host: Host = {
 	async canary(release, scratch) {
 		const unit = `skiff-update-canary-${randomBytes(4).toString('hex')}`;
 		const socket = join(scratch, 'control.sock');
+		mkdirSync(join(scratch, 'data', 'objects'), { recursive: true });
 		const env = readEnvFile(ENV_FILE);
 		// No outbound side effects from the copy: no email, alerts, R2 writes or backups.
 		for (const key of [...env.keys()])
@@ -573,11 +603,11 @@ const host: Host = {
 			healthy = await poll(async () => {
 				const state = unitState(unit);
 				if (state !== 'active' && state !== 'activating') throw new Error(`canary exited (${state || 'gone'})`);
-				return socketHealthy(socket);
+				return (await socketHealthy(socket)) && (await readyzHealthy(socket, 5_000));
 			}, 90_000).catch(() => false);
 			if (healthy) {
 				await Bun.sleep(3_000);
-				healthy = unitState(unit) === 'active' && (await socketHealthy(socket));
+				healthy = unitState(unit) === 'active' && (await socketHealthy(socket)) && (await readyzHealthy(socket, 5_000));
 			}
 		} finally {
 			run(['systemctl', 'stop', unit], { quiet: true, allowFailure: true });
@@ -629,6 +659,39 @@ const host: Host = {
 		const line = run(['df', '-Pk', path], { quiet: true }).stdout.split('\n')[1] ?? '';
 		return Number(line.trim().split(/\s+/)[3] ?? 0) * 1024;
 	},
+	async backupTarget() {
+		try {
+			const env = readEnvFile(ENV_FILE);
+			if (env.get('SKIFF_OBJECT_STORE') !== 'r2') {
+				const dir = join(env.get('SKIFF_DATA_DIR') ?? dirname(layout.dbPath), 'objects');
+				mkdirSync(dir, { recursive: true });
+				return { ok: true, kind: 'local' };
+			}
+			const accountId = env.get('R2_ACCOUNT_ID');
+			const bucket = env.get('R2_BUCKET');
+			const accessKeyId = env.get('R2_ACCESS_KEY_ID');
+			const secretAccessKey = env.get('R2_SECRET_ACCESS_KEY');
+			if (!accountId || !bucket || !accessKeyId || !secretAccessKey)
+				return { ok: false, kind: 'r2', error: 'R2_ACCOUNT_ID, R2_BUCKET, R2_ACCESS_KEY_ID or R2_SECRET_ACCESS_KEY is missing.' };
+			const store = new R2ObjectStore({
+				accountId,
+				bucket,
+				accessKeyId,
+				secretAccessKey,
+				...(env.get('R2_ENDPOINT') ? { endpoint: env.get('R2_ENDPOINT')! } : {})
+			});
+			const result = await Promise.race([
+				store.testConnection(),
+				new Promise<never>((_, reject) =>
+					setTimeout(() => reject(new Error('backup target probe timed out after 10s')), 10_000).unref?.()
+				)
+			]);
+			return { ok: result.ok, kind: 'r2', ...(result.error ? { error: result.error } : {}) };
+		} catch (error) {
+			return { ok: false, kind: 'unknown', error: error instanceof Error ? error.message : String(error) };
+		}
+	},
+	readyz: (timeoutMs) => readyzHealthy(CONTROL_SOCKET, timeoutMs),
 	enterCritical() {
 		if (shield) return;
 		shield = () => host.warn('swap in progress; ignoring the signal so it can finish or roll back');
@@ -696,6 +759,14 @@ async function main(): Promise<number> {
 		if (status.state.inProgress) console.log(yellow(`interrupted ${status.state.inProgress.kind}; the next command will recover it`));
 		for (const [commit, failure] of Object.entries(status.state.failedCommits))
 			console.log(`${red('failed  ')} ${commit.slice(0, 12)} at ${failure.at}: ${failure.reason}`);
+		const bundles = listUpgradeSnapshotBundles(layout.backupsDir);
+		if (bundles.length > 0) {
+			console.log(bold('snapshots'));
+			for (const bundle of bundles)
+				console.log(
+					`  ${basename(bundle.dir)} ${bundle.manifest.pinned ? yellow('pinned') : ''} ${dim(`${bundle.manifest.createdAt} ${bundle.manifest.fromVersion ?? '?'} -> ${bundle.manifest.targetVersion ?? '?'}`)}`
+				);
+		}
 		return 0;
 	}
 
@@ -724,6 +795,28 @@ async function main(): Promise<number> {
 			);
 		}
 		return 0;
+	}
+
+	if (command === 'plan') {
+		const result = await updater.plan({
+			repo: option('--repo') ?? process.env.SKIFF_REPO,
+			ref: option('--ref') ?? process.env.SKIFF_REF
+		});
+		if (flag('--json')) {
+			console.log(JSON.stringify(result, null, 2));
+			return result.preflight.ok ? 0 : 1;
+		}
+		const { check, preflight } = result;
+		console.log(`${bold('running')} ${check.fromVersion ?? dim('unknown')}`);
+		console.log(`${bold('latest ')} ${check.version} ${dim(`(${check.repo}@${check.ref}, ${check.commit.slice(0, 12)})`)}`);
+		console.log(
+			`${bold('plan    ')} ${preflight.ok ? 'ready' : 'refused'} · ${preflight.migrations.pending.length} pending migration(s)${preflight.migrations.destructive ? ' · destructive' : ''}`
+		);
+		for (const check of preflight.checks) console.log(`  ${check.status === 'ok' ? dim('ok  ') : check.status === 'warn' ? yellow('warn') : red('fail')} ${check.id}: ${check.message}`);
+		for (const warning of preflight.warnings) console.log(yellow(`warning: ${warning}`));
+		for (const error of preflight.errors) console.error(red(`error: ${error}`));
+		console.log(dim(`The update re-runs this against the exact staged release before the canary.`));
+		return preflight.ok ? 0 : 1;
 	}
 
 	if (command === 'update') {
@@ -763,6 +856,7 @@ async function main(): Promise<number> {
 			canary: !flag('--no-canary'),
 			dryRun,
 			publicCheck,
+			allowDestructiveMigrations: flag('--allow-destructive'),
 		});
 		} catch (error) {
 			finish('error', (error as Error).message);

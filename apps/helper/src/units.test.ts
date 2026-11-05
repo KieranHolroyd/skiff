@@ -208,6 +208,25 @@ describe('container unit', () => {
 		expect(unit).not.toContain('NetworkAlias=');
 		expect(unit).not.toContain('User=');
 	});
+
+	test('passes an AppArmor override only when the host needs it', () => {
+		const base = {
+			workload: workload({
+				runtime: 'container',
+				release: null,
+				image: 'ghcr.io/acme/app:1.2.3',
+				socketActivation: false,
+			}),
+			image: 'ghcr.io/acme/app:1.2.3',
+			envFile: '/run/skiff-workloads/wld_abc123/env',
+			dataDir: '/var/lib/skiff-workloads/wld_abc123',
+			secretsDir: null,
+		};
+		expect(renderContainerUnit(base)).not.toContain('PodmanArgs=');
+		expect(renderContainerUnit({ ...base, apparmorProfile: 'unconfined' })).toContain(
+			'PodmanArgs=--security-opt apparmor=unconfined',
+		);
+	});
 });
 
 describe('network unit', () => {
@@ -383,6 +402,18 @@ describe('database pooler unit', () => {
 		expect(unit).toContain('pgbouncer.ini:ro,Z');
 		expect(unit).toContain('DropCapability=all');
 		expect(unit).toContain('MemoryMax=64M');
+		// The pin is the multi-arch index, so both amd64 and arm64 nodes can resolve a manifest.
+		expect(unit).toContain('Image=docker.io/edoburu/pgbouncer:latest@sha256:8638aa56');
+	});
+
+	test('passes the AppArmor override to the sidecar too', () => {
+		const unit = renderPoolerUnit({
+			workload: database(),
+			configPath: '/run/pgbouncer.ini',
+			userlistPath: '/run/users.txt',
+			apparmorProfile: 'unconfined',
+		});
+		expect(unit).toContain('PodmanArgs=--security-opt apparmor=unconfined');
 	});
 
 	test('renders a transaction-mode config and a quoted userlist', () => {

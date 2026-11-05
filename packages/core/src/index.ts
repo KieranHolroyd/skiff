@@ -30,6 +30,7 @@ import { createOperationService, type OperationService } from './operations/inde
 import { SchedulerService } from './scheduler.ts';
 import { ServiceActionsService } from './service-actions.ts';
 import { BackupTargetService } from './backup-targets.ts';
+import { UpgradeService } from './upgrades.ts';
 
 export * from './config.ts';
 export * from './context.ts';
@@ -69,6 +70,7 @@ export * from './scheduler.ts';
 export * from './usage.ts';
 export * from './service-actions.ts';
 export * from './backup-targets.ts';
+export * from './upgrades.ts';
 
 export interface CoreOptions {
 	db: SkiffDb;
@@ -106,6 +108,7 @@ export interface Core {
 	serviceActions: ServiceActionsService;
 	backupTargets: BackupTargetService;
 	usage: UsageService;
+	upgrades: UpgradeService;
 }
 
 /**
@@ -146,6 +149,10 @@ export function createCore(options: CoreOptions): Core {
 	ctx.serviceActions = new ServiceActionsService(ctx);
 	ctx.backupTargets = new BackupTargetService(ctx);
 	ctx.usage = new UsageService(ctx);
+	ctx.upgrades = new UpgradeService(ctx, {
+		platformVersion: options.version ?? '0.0.0',
+		agentVersion: options.config.desiredAgentVersion ?? null
+	});
 	const source = new SourceService(ctx);
 
 	const deploy = new DeployService(ctx);
@@ -182,5 +189,6 @@ export function createCore(options: CoreOptions): Core {
 		serviceActions: ctx.serviceActions,
 		backupTargets: ctx.backupTargets,
 		usage: ctx.usage,
+		upgrades: ctx.upgrades,
 	};
 }

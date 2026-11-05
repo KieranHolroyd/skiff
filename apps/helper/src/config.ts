@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { assertAbsolutePath } from './validate.ts';
 
 /**
@@ -30,6 +31,12 @@ export interface HelperConfig {
 	podmanPath: string;
 	/** Absolute openssl used to generate per-database TLS certificates (DB_TLS). */
 	opensslPath: string;
+	/**
+	 * AppArmor profile applied to container workloads, or null for the runtime default.
+	 * `auto` selects `unconfined` only on hosts where the kernel stacks unprivileged profile
+	 * changes; the stock profile then denies a container's own processes signals (see units.ts).
+	 */
+	apparmorProfile: string | null;
 	/** Socket file mode for workload sockets; the Caddy user must be able to connect. */
 	workloadSocketMode: string;
 	/** Optional group for workload sockets (e.g. the Caddy group). */
@@ -107,6 +114,29 @@ function socketGroup(value: string | null, label: string): string | null {
 	return value;
 }
 
+const APPARMOR_RESTRICT_SYSCTL = '/proc/sys/kernel/apparmor_restrict_unprivileged_unconfined';
+
+/**
+ * `auto` (the default) turns AppArmor off for containers only when the kernel restricts
+ * unprivileged profile changes. With that sysctl the runtime's profile change is converted to a
+ * stack, and the stock profile does not allow a process to signal a peer in the stacked label, so
+ * Postgres cannot stop or checkpoint itself. `none` keeps the runtime default; any other value is
+ * passed through as an explicit profile name.
+ */
+function apparmorProfile(value: string | null): string | null {
+	if (value === null || value === 'auto') {
+		try {
+			return readFileSync(APPARMOR_RESTRICT_SYSCTL, 'utf8').trim() === '1' ? 'unconfined' : null;
+		} catch {
+			return null;
+		}
+	}
+	if (value === 'none') return null;
+	if (!/^[A-Za-z0-9_.-]+$/.test(value))
+		throw new HelperConfigError('SKIFF_HELPER_APPARMOR_PROFILE must be "auto", "none" or a profile name');
+	return value;
+}
+
 export function loadHelperConfig(env: Env = process.env): HelperConfig {
 	const socketPath = absolute(env, 'SKIFF_HELPER_SOCKET', '/run/skiff-helper/helper.sock');
 	const runtimeDir = absolute(env, 'SKIFF_HELPER_RUNTIME_DIR', '/run/skiff-workloads');
@@ -128,6 +158,7 @@ export function loadHelperConfig(env: Env = process.env): HelperConfig {
 		journalctlPath: absolute(env, 'SKIFF_HELPER_JOURNALCTL', '/usr/bin/journalctl'),
 		podmanPath: absolute(env, 'SKIFF_HELPER_PODMAN', '/usr/bin/podman'),
 		opensslPath: absolute(env, 'SKIFF_HELPER_OPENSSL', '/usr/bin/openssl'),
+		apparmorProfile: apparmorProfile(optionalValue(env, 'SKIFF_HELPER_APPARMOR_PROFILE')),
 		workloadSocketMode: socketMode(
 			optional(env, 'SKIFF_HELPER_WORKLOAD_SOCKET_MODE', '0666'),
 			'SKIFF_HELPER_WORKLOAD_SOCKET_MODE',

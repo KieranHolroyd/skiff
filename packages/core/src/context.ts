@@ -27,6 +27,7 @@ import type { OperationService } from './operations/service.ts';
 import type { SchedulerService } from './scheduler.ts';
 import type { ServiceActionsService } from './service-actions.ts';
 import type { BackupTargetService } from './backup-targets.ts';
+import type { UpgradeService } from './upgrades.ts';
 
 /**
  * Shared dependency object. Service instances are attached after construction (in `createCore`)
@@ -64,4 +65,5 @@ export interface CoreContext {
 	scheduler: SchedulerService;
 	serviceActions: ServiceActionsService;
 	backupTargets: BackupTargetService;
+	upgrades: UpgradeService;
 }

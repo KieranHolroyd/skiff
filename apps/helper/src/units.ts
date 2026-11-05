@@ -504,6 +504,7 @@ export function renderContainerUnit(options: ContainerUnitOptions): string {
 	lines.push('NoNewPrivileges=true');
 	lines.push('ReadOnly=true');
 	lines.push('Tmpfs=/tmp:rw,size=64m');
+	pushApparmor(lines, options.apparmorProfile);
 	lines.push('');
 	lines.push('[Service]');
 	lines.push('Restart=on-failure');
@@ -531,6 +532,8 @@ export interface DatabaseUnitOptions {
 	};
 	/** Host TLS directory mounted read-only at /run/skiff-tls; null renders plaintext only. */
 	tlsDir?: string | null;
+	/** AppArmor profile workaround for hosts with the stacked-profile kernel bug. */
+	apparmorProfile?: string | null;
 }
 
 /**
@@ -608,6 +611,7 @@ export function renderDatabaseUnit(options: DatabaseUnitOptions): string {
 	lines.push('DropCapability=all');
 	lines.push('NoNewPrivileges=true');
 	lines.push('ReadOnly=true');
+	pushApparmor(lines, options.apparmorProfile);
 	lines.push('');
 	lines.push('[Service]');
 	lines.push('Restart=on-failure');
@@ -656,6 +660,7 @@ export function renderStorageUnit(options: DatabaseUnitOptions): string {
 	lines.push('DropCapability=all');
 	lines.push('NoNewPrivileges=true');
 	lines.push('ReadOnly=true');
+	pushApparmor(lines, options.apparmorProfile);
 	lines.push('');
 	lines.push('[Service]');
 	lines.push('Restart=on-failure');

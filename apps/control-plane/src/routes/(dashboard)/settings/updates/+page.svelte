@@ -258,6 +258,70 @@
 		</div>
 	</Panel>
 
+	<Panel
+		title="Upgrade safety"
+		description="Preflight rules, the sealed pre-update snapshot and the last rollback point."
+		icon={ServerCogIcon}
+	>
+		{#snippet actions()}
+			<StatusBadge
+				status={data.preflight.ok ? 'ready' : 'blocked'}
+				label={data.preflight.ok ? 'Ready' : 'Refused'}
+				tone={data.preflight.ok ? 'success' : 'danger'}
+			/>
+		{/snippet}
+		<dl class="grid gap-x-8 gap-y-4 text-sm sm:grid-cols-3">
+			<div class="space-y-1">
+				<dt class="text-xs text-muted-foreground">Target</dt>
+				<dd class="font-mono">{data.preflight.currentVersion} → {data.preflight.targetVersion}</dd>
+			</div>
+			<div class="space-y-1">
+				<dt class="text-xs text-muted-foreground">Migrations</dt>
+				<dd>
+					{data.preflight.migrations.pending.length} pending
+					{#if data.preflight.migrations.destructive}
+						<span class="text-destructive">· destructive</span>
+					{/if}
+				</dd>
+			</div>
+			<div class="space-y-1">
+				<dt class="text-xs text-muted-foreground">Snapshots retained</dt>
+				<dd>{data.snapshots.length}</dd>
+			</div>
+		</dl>
+		{#if data.preflight.errors.length > 0}
+			<Notice tone="danger" title="This upgrade would be refused">
+				<ul class="list-disc space-y-1 pl-4">
+					{#each data.preflight.errors as error (error)}
+						<li>{error}</li>
+					{/each}
+				</ul>
+			</Notice>
+		{:else if data.preflight.warnings.length > 0}
+			<Notice tone="warning" title="Warnings">
+				<ul class="list-disc space-y-1 pl-4">
+					{#each data.preflight.warnings as warning (warning)}
+						<li>{warning}</li>
+					{/each}
+				</ul>
+			</Notice>
+		{/if}
+		{#if data.snapshots.length > 0}
+			<ul class="mt-4 space-y-1 text-xs text-muted-foreground">
+				{#each data.snapshots.slice(0, 3) as snapshot (snapshot.dir)}
+					<li class="font-mono">
+						{snapshot.dir.split('/').at(-1)} · {formatDateTime(snapshot.createdAt)}
+						{snapshot.pinned ? '· pinned' : ''}
+					</li>
+				{/each}
+			</ul>
+		{/if}
+		{#snippet footer()}
+			The updater re-runs this against the exact staged release. A failed /readyz rolls the control
+			plane back; data and APP_KEY restores are always manual.
+		{/snippet}
+	</Panel>
+
 	{#if running}
 		<Panel
 			title="Update in progress"

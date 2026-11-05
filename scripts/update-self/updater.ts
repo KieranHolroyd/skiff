@@ -38,6 +38,21 @@ import {
 import { basename, dirname, join } from 'node:path';
 import { compareSemver, parseSemver } from '../../packages/contracts/src/semver.ts';
 import { linkAgentCommands } from '../systemd/builder.ts';
+import {
+	createUpgradeSnapshotBundle,
+	directoryStatus,
+	diskFacts,
+	evaluateUpgradePreflight,
+	fileBytes,
+	pruneUpgradeSnapshotBundles,
+	readAppliedMigrations,
+	readDesiredStateVersion,
+	readManagedDatabaseFacts,
+	readMigrationsFromDir,
+	retireUpgradeSnapshotBundles,
+	type UpgradePreflight,
+	type UpgradeSnapshotBundle
+} from '../../packages/core/src/upgrade-plan.ts';
 
 export const CONTROL_PLANE = 'skiff-control-plane.service';
 export const AGENT = 'skiff-agent.service';
@@ -115,6 +130,10 @@ export interface Host {
 	/** chown -R skiff:skiff */
 	chownToSkiff(path: string): void;
 	freeBytes(path: string): number;
+	/** Probe the configured backup target before an upgrade. Optional for old hosts/tests. */
+	backupTarget?(): Promise<{ ok: boolean; kind: string; error?: string }>;
+	/** GET /readyz on the production socket; falls back to controlPlaneHealthy when absent. */
+	readyz?(timeoutMs: number): Promise<boolean>;
 	/** Ignore SIGINT/SIGTERM/SIGHUP while the swap is in flight. */
 	enterCritical(): void;
 	leaveCritical(): void;
@@ -141,6 +160,8 @@ export interface Switch {
 	previousBefore: string | null;
 	/** The database exactly as `from` left it. */
 	snapshot: string | null;
+	/** Sealed upgrade bundle containing the control DB, env/APP_KEY and versions. */
+	bundle?: string;
 	commit?: string;
 	withAgent: boolean;
 	at: string;
@@ -165,6 +186,10 @@ export interface UpdateOptions {
 	minFreeBytes?: number;
 	healthTimeoutMs?: number;
 	stabilizeMs?: number;
+	/** Explicit approval for a destructive migration; default false. */
+	allowDestructiveMigrations?: boolean;
+	/** How many successful pre-update bundles to retain (pinned bundles are always kept). */
+	snapshotKeep?: number;
 }
 
 export interface RollbackOptions {
@@ -221,6 +246,8 @@ const DEFAULTS = {
 };
 
 export class Updater {
+	private snapshotKeep = 3;
+
 	constructor(
 		private readonly layout: Layout,
 		private readonly host: Host,
@@ -229,6 +256,7 @@ export class Updater {
 	// ---------------------------------------------------------------- update
 
 	async update(options: UpdateOptions = {}): Promise<UpdateResult> {
+		this.snapshotKeep = Math.max(1, options.snapshotKeep ?? 3);
 		return this.locked(async () => {
 			await this.recoverInterrupted();
 			const { host, layout } = this;
@@ -274,15 +302,26 @@ export class Updater {
 				const plan = [
 					`build ${repo}@${short(commit)} (${version}) into ${release}`,
 					options.canary === false ? 'skip the canary' : 'boot a canary against a copy of the database',
-					`stop ${CONTROL_PLANE}, snapshot ${layout.dbPath}`,
+					`stop ${CONTROL_PLANE}, snapshot the control DB and seal .env/APP_KEY in ${layout.backupsDir}`,
 					`${layout.previousLink} -> ${current}`,
 					`${layout.currentLink} -> ${release}`,
-					`start ${CONTROL_PLANE}${options.withAgent ? ` and restart ${AGENT}` : ''}, health-check, roll back on failure`,
+					`start ${CONTROL_PLANE}${options.withAgent ? ` and restart ${AGENT}` : ''}, verify /readyz and health, roll back on failure`,
 					'prune releases other than current and previous',
 				];
 				for (const line of plan) host.log(`would ${line}`);
 				return { status: 'dry-run', commit, plan, ...v };
 			}
+
+			// Refuse early when the host cannot take a snapshot or the backup target is down. The
+			// exact target migrations are checked again after staging.
+			const initialPreflight = await this.preflight({
+				release: null,
+				targetVersion: version,
+				allowDestructiveMigrations: options.allowDestructiveMigrations,
+				allowDowngrade: options.force
+			});
+			if (!initialPreflight.ok)
+				throw new UpdateError(`Upgrade preflight failed:\n- ${initialPreflight.errors.join('\n- ')}`);
 
 			const free = host.freeBytes(layout.optDir);
 			const minFree = options.minFreeBytes ?? DEFAULTS.minFreeBytes;
@@ -297,6 +336,22 @@ export class Updater {
 				host.warn(`build failed; ${basename(current)} is still serving untouched: ${reason}`);
 				return { status: 'build-failed', commit, reason, ...v };
 			}
+
+			// The staged release ships the exact migration list. Refuse a destructive or unknown
+			// migration before the canary or any link moves.
+			const stagedPreflight = await this.preflight({
+				release,
+				targetVersion: version,
+				allowDestructiveMigrations: options.allowDestructiveMigrations,
+				allowDowngrade: options.force
+			});
+			if (!stagedPreflight.ok) {
+				rmSync(release, { recursive: true, force: true });
+				throw new UpdateError(
+					`Upgrade preflight refused ${version}:\n- ${stagedPreflight.errors.join('\n- ')}`
+				);
+			}
+			for (const warning of stagedPreflight.warnings) host.warn(`preflight: ${warning}`);
 
 			// 2. Boot it in isolation against a copy of the live database.
 			if (options.canary !== false) {
@@ -317,7 +372,7 @@ export class Updater {
 				publicCheck === 'require' || (publicCheck === 'auto' && (await host.publicHealthy(10_000)));
 			if (publicCheck === 'auto')
 				host.log(requirePublic ? 'public URL is healthy; it must stay healthy after the swap' : 'public URL is not reachable now; it will not gate the swap');
-			const result = await this.activate({ current, release, commit, requirePublic, options });
+			const result = await this.activate({ current, release, commit, version, requirePublic, options });
 			return { ...result, ...v };
 		});
 	}
@@ -417,6 +472,7 @@ export class Updater {
 		current: string;
 		release: string;
 		commit: string;
+		version: string;
 		requirePublic: boolean;
 		options: UpdateOptions;
 	}): Promise<
@@ -442,7 +498,15 @@ export class Updater {
 			host.phase('swapping', 'Restarting the control plane on the new release');
 			host.log(`stopping ${CONTROL_PLANE}`);
 			await host.stop(CONTROL_PLANE);
-			sw.snapshot = this.takeSnapshot(`pre-update-${basename(release)}`);
+			const bundle = this.takeSnapshotBundle(`pre-update-${basename(release)}`, {
+				fromVersion: readMeta(current).version ?? null,
+				targetVersion: input.version,
+				migrations: readMigrationsFromDir(join(release, 'repo/packages/db/migrations')).map(
+					(migration) => migration.id
+				)
+			});
+			sw.snapshot = bundle?.controlDb ?? null;
+			sw.bundle = bundle?.dir;
 			this.writeState({ ...this.readState(), inProgress: sw });
 
 			// `previous` first: if we die between the two renames, both links still name good releases.
@@ -462,6 +526,7 @@ export class Updater {
 			});
 			if (!problem) {
 				this.finish(sw);
+				retireUpgradeSnapshotBundles(layout.backupsDir, sw.bundle ?? null);
 				writeMeta(release, { ...readMeta(release), status: 'active', activatedAt: host.now().toISOString() });
 				this.prune();
 				host.log(`updated to ${basename(release)}; ${basename(current)} kept as previous`);
@@ -623,11 +688,14 @@ export class Updater {
 		const { host } = this;
 		const timeout = input.healthTimeoutMs ?? DEFAULTS.healthTimeoutMs;
 		if (!(await host.controlPlaneHealthy(timeout))) return 'control plane did not answer health checks';
+		const ready = host.readyz ? await host.readyz(15_000) : true;
+		if (!ready) return '/readyz did not become ready';
 		const restarts = await host.restartCount(CONTROL_PLANE);
 		await host.sleep(input.stabilizeMs ?? DEFAULTS.stabilizeMs);
 		if (!(await host.isActive(CONTROL_PLANE)) || (await host.restartCount(CONTROL_PLANE)) !== restarts)
 			return 'control plane crashed after becoming healthy';
 		if (!(await host.controlPlaneHealthy(5_000))) return 'control plane stopped answering health checks';
+		if (host.readyz && !(await host.readyz(5_000))) return '/readyz stopped being ready';
 		if (input.requirePublic && !(await host.publicHealthy(60_000))) return 'public platform URL stopped answering';
 		if (input.withAgent && host.agentEnrolled() && !(await host.isActive(AGENT))) return 'agent is not running';
 		return null;
@@ -678,6 +746,8 @@ export class Updater {
 				if (!problem) {
 					host.log(`${basename(sw.to)} is healthy; keeping it`);
 					this.finish(sw);
+					retireUpgradeSnapshotBundles(layout.backupsDir, sw.bundle ?? null);
+					this.prune();
 					if (sw.kind === 'update') writeMeta(sw.to, { ...readMeta(sw.to), status: 'active', activatedAt: host.now().toISOString() });
 					return;
 				}
@@ -704,6 +774,85 @@ export class Updater {
 		delete state.inProgress;
 		state.lastSwitch = sw;
 		this.writeState(state);
+	}
+
+	/**
+	 * Read-only plan for `skiff-update-self plan` and the CLI. Uses the running release's migration
+	 * list; the update itself re-runs this against the exact staged release before the canary.
+	 */
+	async plan(options: Pick<UpdateOptions, 'repo' | 'ref'> = {}): Promise<{ check: CheckResult; preflight: UpgradePreflight }> {
+		const check = await this.check(options);
+		const current = readLink(this.layout.currentLink);
+		const preflight = await this.preflight({
+			release: current,
+			targetVersion: check.version
+		});
+		return { check, preflight };
+	}
+
+	/** Apply the same refusal rules as the dashboard/service to the self-updater. */
+	private async preflight(input: {
+		release: string | null;
+		targetVersion: string;
+		allowDestructiveMigrations?: boolean;
+		allowDowngrade?: boolean;
+	}): Promise<UpgradePreflight> {
+		const { host, layout } = this;
+		const dataDir = dirname(layout.dbPath);
+		const migrations = input.release
+			? readMigrationsFromDir(join(input.release, 'repo', 'packages', 'db', 'migrations'))
+			: [];
+		const backup = host.backupTarget ? await host.backupTarget() : null;
+		const disk = diskFacts(layout.backupsDir);
+		return evaluateUpgradePreflight({
+			currentVersion: (readLink(layout.currentLink) && readMeta(readLink(layout.currentLink)!).version) || '0.0.0',
+			targetVersion: input.targetVersion,
+			channel: process.env.SKIFF_RELEASE_CHANNEL === 'edge' ? 'edge' : 'stable',
+			migrations,
+			appliedMigrations: readAppliedMigrations(layout.dbPath),
+			controlDbBytes: fileBytes(layout.dbPath),
+			freeBytes: host.freeBytes(layout.backupsDir) || disk.freeBytes,
+			totalBytes: disk.totalBytes,
+			dataDirs: [
+				directoryStatus('data', dataDir),
+				directoryStatus('objects', join(dataDir, 'objects')),
+				directoryStatus('backups', layout.backupsDir)
+			],
+			backupTarget: backup
+				? { kind: backup.kind, reachable: backup.ok, ...(backup.error ? { error: backup.error } : {}) }
+				: null,
+			managedDatabases: readManagedDatabaseFacts(layout.dbPath),
+			allowDestructiveMigrations: input.allowDestructiveMigrations,
+			allowDowngrade: input.allowDowngrade,
+			now: host.now().getTime()
+		});
+	}
+
+	private takeSnapshotBundle(
+		name: string,
+		input: { fromVersion: string | null; targetVersion: string; migrations: string[] }
+	): UpgradeSnapshotBundle | null {
+		const { host, layout } = this;
+		if (!existsSync(layout.dbPath)) return null;
+		const bundle = createUpgradeSnapshotBundle({
+			backupsDir: layout.backupsDir,
+			dbPath: layout.dbPath,
+			envDir: process.env.SKIFF_ETC_DIR ?? '/etc/skiff',
+			dataDir: dirname(layout.dbPath),
+			label: name.replace(/^pre-update-/, ''),
+			kind: 'pre-update',
+			fromVersion: input.fromVersion,
+			targetVersion: input.targetVersion,
+			migrations: input.migrations,
+			agentVersion: process.env.SKIFF_AGENT_VERSION ?? null,
+			desiredStateVersion: readDesiredStateVersion(layout.dbPath),
+			pinned: true,
+			retain: this.snapshotKeep,
+			now: host.now().getTime()
+		});
+		fixSidecarOwnership(layout.dbPath, host);
+		host.log(`upgrade snapshot bundle ${bundle.dir}${bundle.controlDb ? '' : ' (control DB missing)'}`);
+		return bundle;
 	}
 
 	private takeSnapshot(name: string): string | null {
@@ -760,7 +909,14 @@ export class Updater {
 	private pruneSnapshots(): void {
 		const { layout } = this;
 		if (!existsSync(layout.backupsDir)) return;
-		const keep = this.readState().lastSwitch?.snapshot;
+		const last = this.readState().lastSwitch;
+		pruneUpgradeSnapshotBundles(layout.backupsDir, {
+			keep: this.snapshotKeep,
+			protect: last?.bundle ? [last.bundle] : []
+		});
+		// Legacy single-file snapshots from older updaters and the installer. A bundle's control DB
+		// lives inside its own directory and is handled above.
+		const keep = last?.snapshot && !last.snapshot.includes('/upgrade-') ? last.snapshot : null;
 		for (const entry of readdirSync(layout.backupsDir)) {
 			if (!/^pre-(update|rollback)-.+\.db$/.test(entry)) continue;
 			const path = join(layout.backupsDir, entry);

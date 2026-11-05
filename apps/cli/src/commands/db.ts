@@ -30,6 +30,7 @@ Commands:
   logs <name>                  Tail the Postgres container journal (--follow to stream)
   credentials <name>           Print the connection URL (--json for user, password, host, port)
   restart <name>|--all         Restart a database (and its pooler) or every database
+  upgrade <name> --to <major>  Plan a PostgreSQL major upgrade; --apply queues a backup
   rotate <name>                Rotate the owner password (--monitor for the monitor role)
   backups <name>               List backups and the last verified restore
   backup <name>|--all          Take a backup now (--pin keeps it past retention); --all backs up every database
@@ -108,6 +109,13 @@ const backupPolicyFlags: FlagSpec = {
 };
 const rotateFlags: FlagSpec = { ...baseFlags, monitor: { type: 'boolean' } };
 const restartFlags: FlagSpec = { ...baseFlags, pooler: { type: 'boolean' }, all: { type: 'boolean' } };
+const upgradeFlags: FlagSpec = {
+	...baseFlags,
+	to: { type: 'string' },
+	apply: { type: 'boolean' },
+	plan: { type: 'boolean' },
+	yes: { type: 'boolean', short: 'y' },
+};
 const logsFlags: FlagSpec = {
 	...baseFlags,
 	follow: { type: 'boolean', short: 'f' },
@@ -139,6 +147,7 @@ const subcommands: Record<string, (argv: string[]) => Promise<void>> = {
 	'backup-policy': backupPolicy,
 	restart: restartDatabase,
 	rotate: rotateCredentials,
+	upgrade: upgradeDatabase,
 };
 
 export async function dbCommand(argv: string[]): Promise<void> {
@@ -461,6 +470,46 @@ async function restartDatabase(argv: string[]): Promise<void> {
 			? `Restarting the pooler for "${name}". Postgres keeps its connections; the sidecar comes back in a few seconds.`
 			: `Restarting "${name}" on node ${nodeLabel(database)}. Attached apps reconnect when it is back.`,
 	);
+}
+
+async function upgradeDatabase(argv: string[]): Promise<void> {
+	const parsed = parseNamed(argv, upgradeFlags, 'upgrade');
+	if (!parsed) return;
+	const { args, name } = parsed;
+	const target = args.string('to');
+	if (!target) throw new UsageError(`Usage: skif db upgrade ${name} --to <major> [--apply]`);
+	const client = await authenticatedClient();
+	if (!args.boolean('apply')) {
+		const { plan, raw } = await client.databaseUpgradePlan(name, target);
+		if (args.boolean('json')) {
+			printJson(raw);
+			return;
+		}
+		console.log(`PostgreSQL ${plan.fromVersion} → ${plan.toVersion} for "${name}" (${plan.status}).`);
+		for (const blocker of plan.blockers) console.log(`Blocker: ${blocker}`);
+		for (const warning of plan.warnings) console.log(`Warning: ${warning}`);
+		for (const [index, step] of plan.steps.entries())
+			console.log(`${index + 1}. ${step.title}${step.automatic ? ' (queued)' : ''}: ${step.detail}`);
+		console.log(`\nDocs: ${plan.docs}. Re-run with --apply to queue the pinned pre-upgrade backup.`);
+		return;
+	}
+	const confirmed = await confirmOrRefuse(
+		`Queue a pinned backup and the manual PostgreSQL ${target} upgrade runbook for "${name}"? The major is not switched automatically.`,
+		{ yes: args.boolean('yes'), refusal: 'Refusing to queue the upgrade backup without confirmation.' },
+	);
+	if (!confirmed) throw new UsageError('Cancelled.');
+	const { plan, raw } = await client.applyDatabaseUpgrade(name, target);
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	if (plan.status === 'blocked') {
+		throw new CliError(`Upgrade blocked: ${plan.blockers.join(' ')}`, { code: 'upgrade_blocked' });
+	}
+	console.log(plan.message);
+	if (plan.backupId) console.log(`Pre-upgrade backup: ${plan.backupId} (pinned).`);
+	for (const [index, step] of plan.steps.entries()) console.log(`${index + 1}. ${step.title}: ${step.detail}`);
+	console.log(`\nFollow ${plan.docs}. Nothing is switched automatically.`);
 }
 
 async function rotateCredentials(argv: string[]): Promise<void> {

@@ -156,6 +156,8 @@ export interface SystemdDriverOptions {
 	podmanPath?: string;
 	/** Absolute openssl used to generate per-database certificates (DB_TLS). */
 	opensslPath?: string;
+	/** AppArmor profile for container workloads; null keeps the runtime default. */
+	apparmorProfile?: string | null;
 	/** Injectable certificate generator for tests; defaults to the fixed openssl argv sequence. */
 	databaseTlsGenerator?: DatabaseTlsGenerator;
 	socketMode?: string;
@@ -192,6 +194,7 @@ export class SystemdDriver {
 	private readonly journalctlPath: string;
 	private readonly podmanPath: string;
 	private readonly opensslPath: string;
+	private readonly apparmorProfile: string | null;
 	private readonly databaseTlsGenerator: DatabaseTlsGenerator;
 	private readonly socketMode: string;
 	private readonly socketGroup: string | null;
@@ -218,6 +221,7 @@ export class SystemdDriver {
 		);
 		this.podmanPath = assertAbsolutePath(options.podmanPath ?? '/usr/bin/podman', 'podmanPath');
 		this.opensslPath = assertAbsolutePath(options.opensslPath ?? '/usr/bin/openssl', 'opensslPath');
+		this.apparmorProfile = options.apparmorProfile ?? null;
 		this.databaseTlsGenerator = options.databaseTlsGenerator ?? generateDatabaseTls;
 		this.socketMode = validateSocketMode(options.socketMode ?? '0666');
 		this.socketGroup = options.socketGroup ?? null;
@@ -509,6 +513,7 @@ export class SystemdDriver {
 					: {}),
 				tlsDir: tls?.enabled ? databaseTlsPaths(this.runtimeDir, workload.id).dir : null,
 				volumeMounts,
+				apparmorProfile: this.apparmorProfile,
 			});
 			changed = (await this.writeIfChanged(paths.container, container, 0o644)) || changed;
 			changed = (await this.removeIfExists(paths.service)) || changed;
@@ -545,6 +550,7 @@ export class SystemdDriver {
 							configPath,
 							userlistPath,
 							tlsDir: tls?.enabled ? databaseTlsPaths(this.runtimeDir, workload.id).dir : null,
+							apparmorProfile: this.apparmorProfile,
 						}),
 						0o644,
 					)) || changed;

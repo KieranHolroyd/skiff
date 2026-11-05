@@ -22,6 +22,7 @@ describe('feature registry', () => {
 			'PREVIEW_DATA',
 			'AGENT_DATA_WRITE',
 			'QUOTAS',
+			'UPGRADE_ROLLBACK',
 			'BLUEPRINTS',
 			'MEDIA'
 		]);
@@ -50,6 +51,7 @@ describe('feature registry', () => {
 			'JOBS',
 			'PREVIEW_DATA',
 			'AGENT_DATA_WRITE',
+			'UPGRADE_ROLLBACK',
 			'BLUEPRINTS',
 			'MEDIA'
 		] as const) {

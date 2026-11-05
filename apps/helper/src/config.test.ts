@@ -33,6 +33,7 @@ describe('loadHelperConfig', () => {
 			SKIFF_HELPER_CONTROL_SOCKET_MODE: '0600',
 			SKIFF_HELPER_CONTROL_SOCKET_GROUP: 'skiff-agent',
 			SKIFF_HELPER_VERSION: '9.9.9',
+			SKIFF_HELPER_APPARMOR_PROFILE: 'unconfined',
 		});
 		expect(config.socketPath).toBe('/run/custom/helper.sock');
 		expect(config.releaseDirs).toEqual(['/srv/a', '/srv/b']);
@@ -42,6 +43,14 @@ describe('loadHelperConfig', () => {
 		expect(config.controlSocketMode).toBe('0600');
 		expect(config.controlSocketGroup).toBe('skiff-agent');
 		expect(config.version).toBe('9.9.9');
+		expect(config.apparmorProfile).toBe('unconfined');
+	});
+
+	test('maps AppArmor none to the runtime default and rejects unsafe names', () => {
+		expect(loadHelperConfig({ SKIFF_HELPER_APPARMOR_PROFILE: 'none' }).apparmorProfile).toBeNull();
+		expect(() => loadHelperConfig({ SKIFF_HELPER_APPARMOR_PROFILE: 'a b' })).toThrow(
+			HelperConfigError,
+		);
 	});
 
 	test('rejects unsafe configuration', () => {

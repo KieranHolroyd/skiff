@@ -2,6 +2,7 @@ import { error } from '@sveltejs/kit';
 import { CoreError } from '@skiff/core';
 import { hasPermission, type ServiceLogQueryResult, type StorageView } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
+import { storageCan } from '../../_lib/forms.server.js';
 import type { PageServerLoad } from './$types';
 
 /**
@@ -33,6 +34,7 @@ export const load: PageServerLoad = ({ locals, params }) => {
 		storage,
 		initial,
 		logsError,
-		canRead
+		canRead,
+		storageCan: storageCan(principal)
 	};
 };

@@ -9,6 +9,7 @@ import {
 } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
 import { failStatus, formString, toFormFailure } from '../../../_lib/errors.js';
+import { storageCan } from '../../_lib/forms.server.js';
 import type { Actions, PageServerLoad } from './$types';
 
 /**
@@ -64,6 +65,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		list,
 		listError,
 		canWrite: hasPermission(principal, 'storage:update'),
+		storageCan: storageCan(principal),
 		maxUploadMb: Math.floor(core.storageObjects.maxUploadBytes / 1024 / 1024)
 	};
 };
