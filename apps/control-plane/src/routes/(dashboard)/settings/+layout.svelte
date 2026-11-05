@@ -23,6 +23,7 @@
 			| '/(dashboard)/settings/account'
 			| '/(dashboard)/settings/members'
 			| '/(dashboard)/settings/backups'
+			| '/(dashboard)/settings/backup-targets'
 			| '/(dashboard)/settings/notifications'
 			| '/(dashboard)/settings/assistant'
 			| '/(dashboard)/settings/maintenance'
@@ -61,6 +62,13 @@
 			path: '/settings/backups',
 			icon: DatabaseBackupIcon,
 			ownerOnly: true
+		},
+		{
+			label: 'Backup targets',
+			href: '/(dashboard)/settings/backup-targets',
+			path: '/settings/backup-targets',
+			icon: DatabaseBackupIcon,
+			permission: 'database:read'
 		},
 		{
 			label: 'Notifications',

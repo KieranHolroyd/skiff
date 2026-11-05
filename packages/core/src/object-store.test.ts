@@ -305,7 +305,7 @@ describe('S3ObjectStore', () => {
 		const result = await s3(fake).testConnection();
 		expect(result.ok).toBe(true);
 		expect(result.checks).toEqual({ head: true, put: true, list: true, delete: true });
-		expect(fake.calls.map((call) => call.method)).toEqual(['HEAD', 'PUT', 'GET', 'DELETE']);
+		expect(fake.calls.map((call) => call.method)).toEqual(['HEAD', 'GET', 'PUT', 'GET', 'DELETE']);
 	});
 
 	test('testConnection reports a clear failure on bad credentials', async () => {

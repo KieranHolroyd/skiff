@@ -817,7 +817,9 @@ export class DatabaseService {
 			throw new ConflictError('Wait for the backup to finish before deleting it.');
 		if (db.pendingRestoreId === backup.id)
 			throw new ConflictError('This backup is being restored into a database right now.');
-		await this.ctx.objectStore.delete(backup.objectKey).catch(() => undefined);
+		const resolved = this.ctx.backupTargets.storeFor(db.orgId);
+		this.ctx.backupTargets.assertDeleteAllowed(resolved.target);
+		await resolved.store.delete(backup.objectKey).catch(() => undefined);
 		this.ctx.db.delete(databaseBackups).where(eq(databaseBackups.id, backup.id)).run();
 		this.ctx.audit.record({
 			principal,
@@ -987,6 +989,7 @@ export class DatabaseService {
 			.where(and(eq(databases.nodeId, nodeId), eq(databaseBackups.status, 'pending'), isNull(databases.deletedAt)))
 			.all();
 		for (const { backup, db } of backups) {
+			const { store } = this.ctx.backupTargets.storeFor(db.orgId);
 			tasks.push({
 				id: backup.id,
 				action: 'backup',
@@ -995,7 +998,7 @@ export class DatabaseService {
 				engine: db.engine,
 				backupId: null,
 				objectKey: backup.objectKey,
-				url: await this.ctx.objectStore.presignPut(backup.objectKey, BACKUP_TASK_TTL_SECONDS, 'application/octet-stream'),
+				url: await store.presignPut(backup.objectKey, BACKUP_TASK_TTL_SECONDS, 'application/octet-stream'),
 				format: DATABASE_BACKUP_FORMAT,
 			});
 		}
@@ -1011,6 +1014,7 @@ export class DatabaseService {
 				.where(eq(databaseBackups.id, db.pendingRestoreId!))
 				.get();
 			if (!backup) continue;
+			const { store } = this.ctx.backupTargets.storeFor(db.orgId);
 			tasks.push({
 				id: `restore:${db.id}`,
 				action: 'restore',
@@ -1019,7 +1023,7 @@ export class DatabaseService {
 				engine: db.engine,
 				backupId: backup.id,
 				objectKey: backup.objectKey,
-				url: await this.ctx.objectStore.presignGet(backup.objectKey, BACKUP_TASK_TTL_SECONDS),
+				url: await store.presignGet(backup.objectKey, BACKUP_TASK_TTL_SECONDS),
 				format: DATABASE_BACKUP_FORMAT,
 			});
 		}
@@ -1148,7 +1152,9 @@ export class DatabaseService {
 				.limit(1)
 				.get();
 			if (newest?.id === backup.id) continue;
-			await this.ctx.objectStore.delete(backup.objectKey).catch(() => undefined);
+			const resolved = this.ctx.backupTargets.storeFor(db.orgId);
+			if (resolved.target.writeOnly) continue;
+			await resolved.store.delete(backup.objectKey).catch(() => undefined);
 			this.ctx.db.delete(databaseBackups).where(eq(databaseBackups.id, backup.id)).run();
 			removed += 1;
 		}
@@ -1445,8 +1451,11 @@ export class DatabaseService {
 				.from(databaseBackups)
 				.where(eq(databaseBackups.databaseId, id))
 				.all();
-			for (const backup of backups)
-				void this.ctx.objectStore.delete(backup.key).catch(() => undefined);
+			for (const backup of backups) {
+				const resolved = this.ctx.backupTargets.storeFor(row.orgId);
+				if (!resolved.target.writeOnly)
+					void resolved.store.delete(backup.key).catch(() => undefined);
+			}
 			this.ctx.sqlite.transaction(() => {
 				this.ctx.db.delete(databaseAttachments).where(eq(databaseAttachments.databaseId, id)).run();
 				this.ctx.db.delete(databaseRotations).where(eq(databaseRotations.databaseId, id)).run();

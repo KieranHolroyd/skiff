@@ -98,6 +98,64 @@ export interface OperationItemsFilter {
 	category?: string;
 }
 
+export interface BackupTargetView {
+	id: string;
+	orgId: string | null;
+	name: string;
+	kind: 'local' | 's3';
+	path: string | null;
+	endpoint: string | null;
+	bucket: string | null;
+	region: string | null;
+	pathPrefix: string;
+	forcePathStyle: boolean;
+	writeOnly: boolean;
+	objectLock: boolean;
+	hasCredentials: boolean;
+	status: 'pending' | 'ok' | 'failed';
+	lastCheckedAt: string | null;
+	lastError: string | null;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export type BackupTargetCreateInput =
+	| { name: string; kind: 'local'; path: string; writeOnly?: boolean }
+	| {
+			name: string;
+			kind: 's3';
+			endpoint?: string;
+			bucket: string;
+			region?: string;
+			pathPrefix?: string;
+			forcePathStyle?: boolean;
+			accessKeyId: string;
+			secretAccessKey: string;
+			writeOnly?: boolean;
+			objectLock?: boolean;
+	  };
+
+export interface BackupTargetCredentials {
+	targetId: string;
+	name: string;
+	kind: 'local' | 's3';
+	accessKeyId: string;
+	secretAccessKey: string;
+	endpoint: string | null;
+	bucket: string | null;
+	region: string | null;
+	note: string;
+}
+
+export interface BackupTargetTestResult {
+	ok: boolean;
+	checkedAt: string;
+	message: string;
+	latencyMs: number | null;
+	versioning: boolean | null;
+	objectLock: boolean | null;
+}
+
 export interface DeploymentView {
 	id?: string;
 	shortId?: string;
@@ -671,6 +729,43 @@ export class ApiClient {
 	async backupAllDatabases(): Promise<{ result: DatabaseBackupAllResult; raw: unknown }> {
 		const raw = await this.request('POST', '/api/v1/services/backup-databases', { body: {} });
 		return { result: raw as DatabaseBackupAllResult, raw };
+	}
+
+	// --- backup targets (plan 05, docs/BACKUPS.md) -----------------------------------------
+
+	async listBackupTargets(): Promise<{ targets: BackupTargetView[]; raw: unknown }> {
+		const raw = await this.request('GET', '/api/v1/backup-targets');
+		return { targets: (asArray(asRecord(raw)?.targets) ?? []) as BackupTargetView[], raw };
+	}
+
+	async createBackupTarget(
+		input: BackupTargetCreateInput,
+		options: { platform?: boolean } = {},
+	): Promise<{
+		target: BackupTargetView;
+		credentials: BackupTargetCredentials | null;
+		raw: unknown;
+	}> {
+		const raw = await this.request(
+			'POST',
+			`/api/v1/backup-targets${options.platform ? '?platform=1' : ''}`,
+			{ body: input },
+		);
+		const record = asRecord(raw);
+		return {
+			target: asRecord(record?.target) as unknown as BackupTargetView,
+			credentials: (asRecord(record?.credentials) as unknown as BackupTargetCredentials) ?? null,
+			raw,
+		};
+	}
+
+	async testBackupTarget(id: string): Promise<{ result: BackupTargetTestResult; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/backup-targets/${encodeURIComponent(id)}/test`, { body: {} });
+		return { result: asRecord(asRecord(raw)?.result) as unknown as BackupTargetTestResult, raw };
+	}
+
+	async deleteBackupTarget(id: string): Promise<unknown> {
+		return this.request('DELETE', `/api/v1/backup-targets/${encodeURIComponent(id)}`);
 	}
 
 	async restartDatabase(

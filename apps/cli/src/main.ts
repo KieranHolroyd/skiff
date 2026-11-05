@@ -8,6 +8,7 @@ import { ApiError, CliError, UsageError } from './errors.ts';
 import { configCommand } from './commands/config.ts';
 import { dbCommand } from './commands/db.ts';
 import { storageCommand } from './commands/storage.ts';
+import { backupTargetCommand } from './commands/backup-target.ts';
 import { deployCommand } from './commands/deploy.ts';
 import { deploymentsCommand } from './commands/deployments.ts';
 import { loginCommand } from './commands/login.ts';
@@ -45,6 +46,8 @@ const commands: Record<string, (argv: string[]) => Promise<void>> = {
 	databases: dbCommand,
 	storage: storageCommand,
 	s3: storageCommand,
+	'backup-target': backupTargetCommand,
+	backupTargets: backupTargetCommand,
 };
 
 const help = `${invokedAs} ${pkg.version} — deploy to your own Skiff cloud
@@ -70,6 +73,7 @@ Commands:
   operations [list|show|watch|cancel]        Inspect and follow bulk and prune operations
   db [list|create|info|attach|detach|…]      Managed PostgreSQL databases (\`skif db --help\`)
   storage [list|create|info|buckets|…]       Managed S3-compatible object storage (\`skif storage --help\`)
+  backup-target [list|add|test|remove]       Where backups are written (\`skif backup-target --help\`)
 
 Global:
   --profile <name>  Use a saved profile (also ${PROFILE_ENV})
