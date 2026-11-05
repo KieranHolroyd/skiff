@@ -37,6 +37,10 @@ export interface ObjectStoreTestResult {
 	latencyMs: number;
 	checks: ObjectStoreTestChecks;
 	error?: string;
+	/** Bucket versioning, when the backend can report it. Null means unknown/unsupported. */
+	versioning?: boolean | null;
+	/** Bucket object-lock, when the backend can report it. Null means unknown/unsupported. */
+	objectLock?: boolean | null;
 }
 
 export interface ObjectStore {
@@ -155,6 +159,8 @@ export class LocalObjectStore implements ObjectStore {
 		private readonly root: string,
 		private readonly publicUrl: string,
 		private readonly signingSecret: string,
+		/** Path the signed URL is served from; backup targets mount their own object route. */
+		private readonly urlBase = '/api/objects/',
 	) {}
 
 	private path(key: string): string {
@@ -257,7 +263,7 @@ export class LocalObjectStore implements ObjectStore {
 	private sign(method: 'GET' | 'PUT', key: string, ttlSeconds: number): string {
 		const exp = Math.floor(Date.now() / 1000) + ttlSeconds;
 		const signature = hmac(this.signingSecret, `${method}\n${key}\n${exp}`);
-		return `${this.publicUrl}/api/objects/${key}?exp=${exp}&sig=${signature}`;
+		return `${this.publicUrl}${this.urlBase}${key}?exp=${exp}&sig=${signature}`;
 	}
 
 	/** Verify a presigned URL produced by `presignPut` / `presignGet`. */
@@ -284,7 +290,7 @@ export class LocalObjectStore implements ObjectStore {
 			}
 			await this.delete(key);
 			checks.delete = true;
-			return { ok: true, kind: this.kind, latencyMs: Date.now() - started, checks };
+			return { ok: true, kind: this.kind, latencyMs: Date.now() - started, checks, versioning: null, objectLock: false };
 		} catch (error) {
 			await this.delete(key).catch(() => undefined);
 			return {
@@ -293,6 +299,8 @@ export class LocalObjectStore implements ObjectStore {
 				latencyMs: Date.now() - started,
 				checks,
 				error: errorMessage(error),
+				versioning: null,
+				objectLock: false,
 			};
 		}
 	}
@@ -306,6 +314,11 @@ export interface S3Options {
 	region?: string;
 	/** Path-style (`endpoint/bucket/key`) or virtual-hosted (`bucket.endpoint/key`). Defaults true. */
 	forcePathStyle?: boolean;
+	/**
+	 * Key prefix owned by this store (`skiff/backups`). Callers keep using relative keys; the store
+	 * adds the prefix to every operation and strips it from listed keys.
+	 */
+	prefix?: string;
 	accessKeyId: string;
 	secretAccessKey: string;
 	sessionToken?: string;
@@ -339,11 +352,13 @@ export class S3ObjectStore implements ObjectStore {
 	private readonly bucket: string;
 	private readonly forcePathStyle: boolean;
 	private readonly fetchImpl: typeof fetch;
+	private readonly prefix: string;
 
 	constructor(options: S3Options) {
 		this.endpoint = options.endpoint.replace(/\/+$/, '');
 		this.bucket = options.bucket;
 		this.forcePathStyle = options.forcePathStyle ?? true;
+		this.prefix = (options.prefix ?? '').replace(/^\/+|\/+$/g, '');
 		this.fetchImpl = options.fetch ?? fetch;
 		this.client = new AwsClient({
 			accessKeyId: options.accessKeyId,
@@ -370,8 +385,12 @@ export class S3ObjectStore implements ObjectStore {
 		return url;
 	}
 
+	private fullKey(key: string): string {
+		return this.prefix ? `${this.prefix}/${key}` : key;
+	}
+
 	private url(key: string): URL {
-		const encoded = key
+		const encoded = this.fullKey(key)
 			.split('/')
 			.map((part) => encodeURIComponent(part))
 			.join('/');
@@ -448,16 +467,25 @@ export class S3ObjectStore implements ObjectStore {
 
 	async *list(prefix: string): AsyncIterable<StoredObject> {
 		let token: string | undefined;
+		const searchPrefix = this.fullKey(prefix);
 		do {
 			const url = this.bucketUrl();
 			url.searchParams.set('list-type', '2');
-			url.searchParams.set('prefix', prefix);
+			url.searchParams.set('prefix', searchPrefix);
 			url.searchParams.set('max-keys', '1000');
 			if (token) url.searchParams.set('continuation-token', token);
 			const response = await this.send(url);
 			if (!response.ok) throw new Error(`S3 LIST ${prefix} failed: ${response.status} ${await response.text()}`);
 			const page = parseListObjects(await response.text());
-			yield* page.objects;
+			if (this.prefix) {
+				for (const object of page.objects)
+					yield {
+						...object,
+						key: object.key.startsWith(`${this.prefix}/`) ? object.key.slice(this.prefix.length + 1) : object.key,
+					};
+			} else {
+				yield* page.objects;
+			}
 			token = page.nextToken;
 		} while (token);
 	}
@@ -483,10 +511,22 @@ export class S3ObjectStore implements ObjectStore {
 		const started = Date.now();
 		const checks: ObjectStoreTestChecks = { head: false, put: false, list: false, delete: false };
 		const key = `skiff/healthcheck/${randomUUID()}.txt`;
+		let versioning: boolean | null = null;
+		let objectLock: boolean | null = null;
 		try {
 			const head = await this.send(this.bucketUrl(), { method: 'HEAD' });
 			if (!head.ok) throw new Error(`S3 HEAD bucket ${this.bucket} failed: ${head.status}`);
 			checks.head = true;
+			const lock = head.headers.get('x-amz-bucket-object-lock-enabled');
+			if (lock !== null) objectLock = lock === 'true';
+			try {
+				const url = this.bucketUrl();
+				url.searchParams.set('versioning', '');
+				const response = await this.send(url);
+				if (response.ok) versioning = /<Status>\s*Enabled\s*<\/Status>/i.test(await response.text());
+			} catch {
+				// Versioning is a nice-to-have; a key without GetBucketVersioning still backs up.
+			}
 			const data = new TextEncoder().encode(`skiff connection test ${new Date().toISOString()}\n`);
 			await this.putStream(key, bytesAsStream(data), 'text/plain', data.byteLength);
 			checks.put = true;
@@ -498,7 +538,7 @@ export class S3ObjectStore implements ObjectStore {
 			}
 			await this.delete(key);
 			checks.delete = true;
-			return { ok: true, kind: this.kind, latencyMs: Date.now() - started, checks };
+			return { ok: true, kind: this.kind, latencyMs: Date.now() - started, checks, versioning, objectLock };
 		} catch (error) {
 			await this.delete(key).catch(() => undefined);
 			return {
@@ -507,6 +547,8 @@ export class S3ObjectStore implements ObjectStore {
 				latencyMs: Date.now() - started,
 				checks,
 				error: errorMessage(error),
+				versioning,
+				objectLock,
 			};
 		}
 	}

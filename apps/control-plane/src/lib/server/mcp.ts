@@ -10,6 +10,7 @@ import {
 } from '@modelcontextprotocol/server';
 import * as z from 'zod';
 import {
+	backupTargetCreateSchema,
 	bucketCreateSchema,
 	bucketNameSchema,
 	databaseAttachSchema,
@@ -1044,6 +1045,49 @@ function buildServer(
 				backups: core.databases.listBackups(principal, database),
 				policy: core.databases.backupPolicy(principal, database),
 			})),
+	);
+
+	tool(
+		'list_backup_targets',
+		{
+			title: 'List backup targets',
+			description:
+				'List local and S3-compatible backup targets for this org and the platform default. Credentials are never returned.',
+			inputSchema: z.object({}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('database:read'),
+		},
+		async () => run(() => ({ targets: core.backupTargets.list(principal) })),
+	);
+
+	tool(
+		'create_backup_target',
+		{
+			title: 'Create backup target',
+			description:
+				'Create a local directory or S3-compatible backup target (R2, RustFS, MinIO, Garage, Backblaze, Wasabi). ' +
+				'Credentials are sealed and never returned here; use the dashboard or API for the one-time reveal. ' +
+				'Test it with test_backup_target before relying on it.',
+			inputSchema: backupTargetCreateSchema,
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('database:update'),
+		},
+		async (input) =>
+			run(() => ({ target: core.backupTargets.create(principal, input).target })),
+	);
+
+	tool(
+		'test_backup_target',
+		{
+			title: 'Test backup target',
+			description:
+				'Probe a backup target (bucket/head, put, list and delete when allowed) and record its status. ' +
+				'Returns capabilities and a clear error; never credentials.',
+			inputSchema: z.object({ target: z.string().describe('Backup target id from list_backup_targets') }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('database:update'),
+		},
+		async ({ target }) => run(() => ({ result: core.backupTargets.testConnection(principal, target) })),
 	);
 
 	tool(

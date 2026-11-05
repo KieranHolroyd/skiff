@@ -514,6 +514,41 @@ export const databaseBackups = sqliteTable(
 );
 
 /**
+ * Where platform and managed-data backups are written (plan 05, docs/BACKUPS.md). A null `orgId`
+ * is the platform default; an org row overrides it. Credentials are sealed with the org data key
+ * (the platform key for a platform row) and never selected by a view.
+ */
+export const backupTargets = sqliteTable(
+	'backup_targets',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id'),
+		name: text('name').notNull(),
+		kind: text('kind', { enum: ['local', 's3'] }).notNull(),
+		/** Local directory; null for S3 targets. */
+		path: text('path'),
+		endpoint: text('endpoint'),
+		bucket: text('bucket'),
+		region: text('region'),
+		pathPrefix: text('path_prefix').notNull().default(''),
+		forcePathStyle: integer('force_path_style', { mode: 'boolean' }).notNull().default(true),
+		accessKeySealed: text('access_key_sealed'),
+		secretSealed: text('secret_sealed'),
+		writeOnly: integer('write_only', { mode: 'boolean' }).notNull().default(false),
+		objectLock: integer('object_lock', { mode: 'boolean' }).notNull().default(false),
+		status: text('status', { enum: ['pending', 'ok', 'failed'] }).notNull().default('pending'),
+		lastCheckedAt: integer('last_checked_at'),
+		lastError: text('last_error'),
+		lastTestJson: text('last_test_json'),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [
+		index('backup_targets_org_idx').on(t.orgId, t.createdAt),
+	],
+);
+
+/**
  * Credential rotation for a managed database (docs/DATABASES.md §4). The new password is sealed
  * here until the node reports that `ALTER ROLE` succeeded; only then does it replace the live
  * secret, so a failed rotation never locks an app out.
@@ -963,6 +998,7 @@ export const schema = {
 	backupRuns,
 	alertState,
 	databaseBackups,
+	backupTargets,
 	scheduledTasks,
 };
 
