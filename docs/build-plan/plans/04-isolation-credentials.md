@@ -10,6 +10,11 @@
 > **Status update (5 Nov 2026):** credential rotation (`database_rotations`) is shipped. Remaining:
 > per-org networks, TLS, named app/backup/read-only keys, encryption-at-rest proof, data-access
 > audit. Verify before implementing.
+>
+> **Wave 1 04b update:** per-org networks, named database credentials and named storage keys are
+> implemented behind `ORG_NETWORKS` (migration `0023_org_networks.sql`). Reveals are interactive-only
+> and audited; MCP still has no secret-returning tool. TLS (`03b`) and the encryption-at-rest
+> `doctor` check remain out of scope for this branch.
 
 ## Goal
 

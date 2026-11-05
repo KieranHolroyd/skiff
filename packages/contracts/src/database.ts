@@ -164,6 +164,72 @@ export interface DatabaseAttachmentView {
 export const databaseRotationRoles = ['owner', 'monitor'] as const;
 export type DatabaseRotationRole = (typeof databaseRotationRoles)[number];
 
+/**
+ * Named database credentials (plan 04b). `owner` and `monitor` are created with the database;
+ * `app`, `readonly` and `backup` are opt-in and provisioned as separate Postgres roles.
+ */
+export const databaseCredentialRoles = ['owner', 'app', 'monitor', 'readonly', 'backup'] as const;
+export type DatabaseCredentialRole = (typeof databaseCredentialRoles)[number];
+
+/** The roles a human can add after create. Owner/monitor are managed by the database itself. */
+export const databaseNamedCredentialRoles = ['app', 'readonly', 'backup'] as const;
+export type DatabaseNamedCredentialRole = (typeof databaseNamedCredentialRoles)[number];
+
+export const databaseCredentialStatuses = ['pending', 'ready', 'failed', 'revoking', 'revoked'] as const;
+export type DatabaseCredentialStatus = (typeof databaseCredentialStatuses)[number];
+
+export const databaseCredentialCreateSchema = z.object({
+	role: z.enum(databaseNamedCredentialRoles).default('app'),
+	purpose: z.string().min(1).max(120).optional(),
+	expiresAt: z.string().datetime().optional(),
+});
+export type DatabaseCredentialCreate = z.input<typeof databaseCredentialCreateSchema>;
+
+export interface DatabaseCredentialView {
+	id: string;
+	databaseId: string;
+	role: DatabaseCredentialRole;
+	username: string;
+	purpose: string | null;
+	status: DatabaseCredentialStatus;
+	lastUsedAt: string | null;
+	expiresAt: string | null;
+	createdAt: string;
+	revokedAt: string | null;
+}
+
+/** A credential plus its secret. Only an interactive reveal returns this shape. */
+export interface DatabaseCredentialReveal extends DatabaseCredentialView {
+	password: string;
+}
+
+export const databaseCredentialTaskSchema = z.object({
+	id: z.string().min(1).max(100),
+	databaseId: z.string().min(1).max(100),
+	action: z.enum(['grant', 'revoke']),
+	role: z.enum(databaseCredentialRoles),
+	username: z.string().min(1).max(63),
+});
+export type DatabaseCredentialTask = z.infer<typeof databaseCredentialTaskSchema>;
+
+export const databaseCredentialActivationSchema = z.object({
+	id: z.string(),
+	databaseId: z.string(),
+	action: z.enum(['grant', 'revoke']),
+	role: z.enum(databaseCredentialRoles),
+	username: z.string(),
+	password: z.string().optional(),
+});
+export type DatabaseCredentialActivation = z.infer<typeof databaseCredentialActivationSchema>;
+
+export const databaseCredentialResultSchema = z.object({
+	taskId: z.string().min(1).max(100),
+	databaseId: z.string().min(1).max(100),
+	status: z.enum(['ok', 'failed']),
+	error: z.string().max(2_000).optional(),
+});
+export type DatabaseCredentialResult = z.infer<typeof databaseCredentialResultSchema>;
+
 export const databaseRestartTargets = ['database', 'pooler'] as const;
 export type DatabaseRestartTarget = (typeof databaseRestartTargets)[number];
 
@@ -437,7 +503,7 @@ export interface DatabaseMetricPoint {
 	tempBytes: number;
 }
 
-/** `db-<hex>`: the container's DNS alias on the `skiff-workloads` network. */
+/** `db-<hex>`: the container's DNS alias on the workload's org network (or the legacy shared network). */
 export function databaseAlias(id: string): string {
 	return `db-${id.replace(/^db_/, '').toLowerCase().replace(/[^a-z0-9-]/g, '')}`;
 }

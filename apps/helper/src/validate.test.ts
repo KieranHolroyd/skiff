@@ -12,6 +12,7 @@ import {
 	assertRelativePath,
 	databaseAlias,
 	databaseImage,
+	orgNetworkName,
 	parseActivation,
 	parseApplyRequest,
 	parseWorkload,
@@ -379,5 +380,27 @@ describe('parseActivation', () => {
 		const parsed = parseApplyRequest({ workload: workloadInput(), activation: activationInput() });
 		expect(parsed.workload.id).toBe('wld_abc123');
 		expect(parsed.activation.env.DATABASE_URL).toBe('postgres://example');
+	});
+});
+
+describe('per-org network fields', () => {
+	test('accepts an org id and derives the network, or keeps the legacy fallback', () => {
+		expect(parseWorkload(workloadInput()).networkName).toBeUndefined();
+		expect(parseWorkload(workloadInput({ orgId: 'org_1' }))).toMatchObject({
+			orgId: 'org_1',
+		});
+		expect(parseWorkload(workloadInput({ orgId: 'org_1', networkName: 'skiff-org-org_1' })).networkName).toBe(
+			'skiff-org-org_1',
+		);
+		expect(orgNetworkName('org_1')).toBe('skiff-org-org_1');
+	});
+
+	test('rejects a network name that does not belong to the org', () => {
+		expect(() =>
+			parseWorkload(workloadInput({ orgId: 'org_1', networkName: 'skiff-org-org_2' })),
+		).toThrow(/derived/);
+		expect(() =>
+			parseWorkload(workloadInput({ networkName: 'host' })),
+		).toThrow(/skiff-workloads/);
 	});
 });

@@ -468,6 +468,8 @@ export const databaseAttachments = sqliteTable(
 		databaseId: text('database_id').notNull(),
 		projectId: text('project_id').notNull(),
 		envPrefix: text('env_prefix').notNull().default('DATABASE'),
+		/** Credential row this attachment consumes; null on rows created before named credentials. */
+		credentialId: text('credential_id'),
 		createdBy: text('created_by').notNull(),
 		createdAt: integer('created_at').notNull().$defaultFn(now),
 	},
@@ -570,6 +572,38 @@ export const databaseRotations = sqliteTable(
 		finishedAt: integer('finished_at'),
 	},
 	(t) => [index('database_rotations_database_idx').on(t.databaseId, t.createdAt)],
+);
+
+/**
+ * Named database credentials (plan 04b). Owner and monitor rows mirror the database's built-in
+ * secrets; app/readonly/backup rows are provisioned by the node. `pending_secret_sealed` holds a
+ * new password until the node confirms the role change, so a failed rotation never locks anyone out.
+ */
+export const databaseCredentials = sqliteTable(
+	'database_credentials',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		databaseId: text('database_id').notNull(),
+		role: text('role', { enum: ['owner', 'app', 'monitor', 'readonly', 'backup'] }).notNull(),
+		username: text('username').notNull(),
+		secretSealed: text('secret_sealed'),
+		pendingSecretSealed: text('pending_secret_sealed'),
+		purpose: text('purpose'),
+		status: text('status', { enum: ['pending', 'ready', 'failed', 'revoking', 'revoked'] })
+			.notNull()
+			.default('ready'),
+		lastUsedAt: integer('last_used_at'),
+		expiresAt: integer('expires_at'),
+		revokedAt: integer('revoked_at'),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [
+		index('database_credentials_database_idx').on(t.databaseId, t.role),
+		uniqueIndex('database_credentials_username_idx').on(t.databaseId, t.username),
+	],
 );
 
 /**
@@ -698,6 +732,8 @@ export const storageAttachments = sqliteTable(
 		grantsJson: text('grants_json').notNull(),
 		accessKeyId: text('access_key_id').notNull(),
 		secretSealed: text('secret_sealed').notNull(),
+		/** Named key row this attachment consumes; null on rows created before named keys. */
+		credentialId: text('credential_id'),
 		createdBy: text('created_by').notNull(),
 		createdAt: integer('created_at').notNull().$defaultFn(now),
 		updatedAt: integer('updated_at').notNull().$defaultFn(now),
@@ -707,6 +743,36 @@ export const storageAttachments = sqliteTable(
 		uniqueIndex('storage_attachments_prefix_idx').on(t.projectId, t.envPrefix),
 		uniqueIndex('storage_attachments_key_idx').on(t.accessKeyId),
 		index('storage_attachments_project_idx').on(t.projectId),
+	],
+);
+
+/**
+ * Named storage keys (plan 04b): human/service access keys with bucket grants, independent of
+ * project attachments. The agent's existing IAM reconciler consumes them as `objectStorage.users`;
+ * secrets are sealed with the org key and only an interactive reveal returns them.
+ */
+export const storageKeys = sqliteTable(
+	'storage_keys',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		storageId: text('storage_id').notNull(),
+		name: text('name').notNull(),
+		accessKeyId: text('access_key_id').notNull(),
+		secretSealed: text('secret_sealed').notNull(),
+		grantsJson: text('grants_json').notNull(),
+		purpose: text('purpose'),
+		lastUsedAt: integer('last_used_at'),
+		expiresAt: integer('expires_at'),
+		revokedAt: integer('revoked_at'),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [
+		uniqueIndex('storage_keys_name_idx').on(t.storageId, t.name),
+		uniqueIndex('storage_keys_key_idx').on(t.accessKeyId),
+		index('storage_keys_storage_idx').on(t.storageId),
 	],
 );
 

@@ -1,5 +1,13 @@
-import { and, eq, inArray, isNotNull, isNull, lte } from 'drizzle-orm';
-import { nodes, projects, storageAttachments, storageBuckets, storageInstances, workloads } from '@skiff/db';
+import { and, desc, eq, inArray, isNotNull, isNull, lte } from 'drizzle-orm';
+import {
+	nodes,
+	projects,
+	storageAttachments,
+	storageBuckets,
+	storageInstances,
+	storageKeys,
+	workloads,
+} from '@skiff/db';
 import {
 	STORAGE_ID_PREFIX,
 	STORAGE_PORT_MAX,
@@ -10,6 +18,7 @@ import {
 	bucketCreateSchema,
 	bucketUpdateSchema,
 	limits,
+	orgNetworkName,
 	requirePermission,
 	storageAlias,
 	storageAttachSchema,
@@ -19,6 +28,8 @@ import {
 	storageEnvNames,
 	storageImage,
 	storageGatewayHost,
+	storageGrantsSchema,
+	storageKeyCreateSchema,
 	storagePublicHost,
 	storageUpdateSchema,
 	type BucketCreate,
@@ -37,6 +48,9 @@ import {
 	type StorageCreate,
 	type StorageCredentials,
 	type StorageGrant,
+	type StorageKeyCreate,
+	type StorageKeyReveal,
+	type StorageKeyView,
 	type StorageMetricBucket,
 	type StorageMetricPoint,
 	type StorageRoute,
@@ -458,6 +472,144 @@ export class StorageService {
 		return this.toView(this.requireRow(principal, name));
 	}
 
+	// ---------------------------------------------------------------- named keys
+
+	listKeys(principal: Principal, name: string): StorageKeyView[] {
+		requirePermission(principal, 'storage:read');
+		const row = this.requireRow(principal, name, { includeDeleted: true });
+		return this.keysOf(row.id).map((key) => toStorageKeyView(key));
+	}
+
+	createKey(principal: Principal, name: string, raw: unknown): StorageKeyView {
+		requirePermission(principal, 'storage:update');
+		const input = storageKeyCreateSchema.parse(raw ?? {});
+		const row = this.requireRow(principal, name);
+		this.assertGrants(row, input.grants);
+		if (this.keysOf(row.id).some((key) => key.name === input.name))
+			throw new ConflictError(`"${row.name}" already has a key named "${input.name}".`);
+		const now = this.ctx.now();
+		const id = newId('stk_');
+		this.ctx.db
+			.insert(storageKeys)
+			.values({
+				id,
+				orgId: row.orgId,
+				storageId: row.id,
+				name: input.name,
+				accessKeyId: accessKeyId(STORAGE_USER_KEY_PREFIX),
+				secretSealed: this.ctx.secrets.seal(row.orgId, secretKey()),
+				grantsJson: JSON.stringify(input.grants),
+				purpose: input.purpose ?? null,
+				expiresAt: input.expiresAt ? Date.parse(input.expiresAt) : null,
+				createdBy: principal.userId,
+				createdAt: now,
+				updatedAt: now,
+			})
+			.run();
+		this.ctx.audit.record({
+			principal,
+			action: 'storage.key.create',
+			resource: 'storage',
+			resourceId: row.id,
+			args: { name: row.name, id, label: input.name, grants: input.grants },
+			result: 'ok',
+		});
+		this.ctx.projects.bump(principal.orgId);
+		return toStorageKeyView(this.requireKey(row.id, id));
+	}
+
+	revokeKey(principal: Principal, name: string, keyId: string): StorageKeyView {
+		requirePermission(principal, 'storage:update');
+		const row = this.requireRow(principal, name);
+		const key = this.requireKey(row.id, keyId);
+		if (key.revokedAt === null) {
+			this.ctx.db
+				.update(storageKeys)
+				.set({ revokedAt: this.ctx.now(), updatedAt: this.ctx.now() })
+				.where(eq(storageKeys.id, key.id))
+				.run();
+			this.ctx.audit.record({
+				principal,
+				action: 'storage.key.revoke',
+				resource: 'storage',
+				resourceId: row.id,
+				args: { name: row.name, id: key.id, label: key.name },
+				result: 'ok',
+			});
+			this.ctx.projects.bump(principal.orgId);
+		}
+		return toStorageKeyView(this.requireKey(row.id, key.id));
+	}
+
+	/**
+	 * Reveal a named key. Interactive only: MCP/API keys never receive secrets. The surface
+	 * re-authenticates before calling this, and the read is audited.
+	 */
+	revealKey(principal: Principal, name: string, keyId: string): StorageKeyReveal {
+		requirePermission(principal, 'storage:credentials');
+		if (principal.kind !== 'user')
+			throw new CoreError('forbidden', 'Credential reveal needs an interactive user session.', 403);
+		const row = this.requireRow(principal, name);
+		const key = this.requireKey(row.id, keyId);
+		if (key.revokedAt !== null) throw new ConflictError('This key is revoked.');
+		if (key.expiresAt !== null && key.expiresAt <= this.ctx.now())
+			throw new ConflictError('This key has expired.');
+		const now = this.ctx.now();
+		this.ctx.db.update(storageKeys).set({ lastUsedAt: now, updatedAt: now }).where(eq(storageKeys.id, key.id)).run();
+		this.ctx.audit.record({
+			principal,
+			action: 'storage.key.reveal',
+			resource: 'storage',
+			resourceId: row.id,
+			args: { name: row.name, id: key.id, label: key.name },
+			result: 'ok',
+		});
+		return {
+			...toStorageKeyView(key),
+			secretAccessKey: this.ctx.secrets.open(row.orgId, key.secretSealed),
+		};
+	}
+
+	private keysOf(storageId: string): Array<typeof storageKeys.$inferSelect> {
+		return this.ctx.db
+			.select()
+			.from(storageKeys)
+			.where(eq(storageKeys.storageId, storageId))
+			.orderBy(desc(storageKeys.createdAt))
+			.all();
+	}
+
+	private liveKeysOf(storageId: string): Array<typeof storageKeys.$inferSelect> {
+		const now = this.ctx.now();
+		return this.keysOf(storageId).filter(
+			(key) => key.revokedAt === null && (key.expiresAt === null || key.expiresAt > now),
+		);
+	}
+
+	/**
+	 * Keys that belong in desired state. Attachment-backed rows are only included while the live
+	 * attachment that owns them exists, so a trashed project revokes its key on the next pull.
+	 */
+	private desiredKeysOf(
+		storageId: string,
+		attachments: AttachmentRow[],
+	): Array<typeof storageKeys.$inferSelect> {
+		const attached = new Set(attachments.map((item) => item.accessKeyId));
+		return this.liveKeysOf(storageId).filter(
+			(key) => !key.name.startsWith('attachment-') || attached.has(key.accessKeyId),
+		);
+	}
+
+	private requireKey(storageId: string, keyId: string): typeof storageKeys.$inferSelect {
+		const row = this.ctx.db
+			.select()
+			.from(storageKeys)
+			.where(and(eq(storageKeys.storageId, storageId), eq(storageKeys.id, keyId)))
+			.get();
+		if (!row) throw new NotFoundError('Storage key');
+		return row;
+	}
+
 	// ---------------------------------------------------------------- buckets
 
 	createBucket(principal: Principal, name: string, raw: BucketCreate): StorageBucketView {
@@ -673,11 +825,24 @@ export class StorageService {
 		const input = storageAttachmentUpdateSchema.parse(raw);
 		const row = this.requireRow(principal, name);
 		this.assertGrants(row, input.grants);
+		const now = this.ctx.now();
 		const result = this.ctx.sqlite.run(
 			'UPDATE storage_attachments SET grants_json = ?, updated_at = ? WHERE storage_id = ? AND project_id = ?',
-			[JSON.stringify(input.grants), this.ctx.now(), row.id, project.id],
+			[JSON.stringify(input.grants), now, row.id, project.id],
 		);
 		if (result.changes === 0) throw new NotFoundError(`Attachment of "${name}" to "${project.slug}"`);
+		// Keep the credential row's grants in sync so the agent's IAM policy follows the attachment.
+		const attachment = this.ctx.db
+			.select({ credentialId: storageAttachments.credentialId })
+			.from(storageAttachments)
+			.where(and(eq(storageAttachments.storageId, row.id), eq(storageAttachments.projectId, project.id)))
+			.get();
+		if (attachment?.credentialId)
+			this.ctx.db
+				.update(storageKeys)
+				.set({ grantsJson: JSON.stringify(input.grants), updatedAt: now })
+				.where(eq(storageKeys.id, attachment.credentialId))
+				.run();
 		this.ctx.audit.record({
 			principal,
 			action: 'storage.attachment.update',
@@ -694,11 +859,22 @@ export class StorageService {
 		requirePermission(principal, 'storage:update');
 		requirePermission(principal, 'project:update');
 		const row = this.requireRow(principal, name, { includeDeleted: true });
+		const attachment = this.ctx.db
+			.select({ credentialId: storageAttachments.credentialId })
+			.from(storageAttachments)
+			.where(and(eq(storageAttachments.storageId, row.id), eq(storageAttachments.projectId, project.id)))
+			.get();
 		const result = this.ctx.sqlite.run('DELETE FROM storage_attachments WHERE storage_id = ? AND project_id = ?', [
 			row.id,
 			project.id,
 		]);
 		if (result.changes === 0) throw new NotFoundError(`Attachment of "${name}" to "${project.slug}"`);
+		if (attachment?.credentialId)
+			this.ctx.db
+				.update(storageKeys)
+				.set({ revokedAt: this.ctx.now(), updatedAt: this.ctx.now() })
+				.where(eq(storageKeys.id, attachment.credentialId))
+				.run();
 		this.ctx.audit.record({
 			principal,
 			action: 'storage.detach',
@@ -777,15 +953,17 @@ export class StorageService {
 			.map((row) => {
 				const buckets = this.ctx.db.select().from(storageBuckets).where(eq(storageBuckets.storageId, row.id)).all();
 				const attachments = this.liveAttachmentsOf(row.id);
-				const users = attachments.map((item) => ({
-					accessKeyId: item.accessKeyId,
-					grants: parseGrants(item.grantsJson),
-				}));
+				const keys = this.desiredKeysOf(row.id, attachments);
+				const users = new Map<string, StorageGrant[]>();
+				for (const item of attachments) users.set(item.accessKeyId, parseGrants(item.grantsJson));
+				for (const key of keys) users.set(key.accessKeyId, parseGrants(key.grantsJson));
+				const isolated = featureEnabled(this.ctx.config, 'ORG_NETWORKS');
 				return {
 					id: row.id,
 					projectId: row.id,
 					projectSlug: row.name,
 					deploymentId: row.id,
+					...(isolated ? { orgId: row.orgId, networkName: orgNetworkName(row.orgId) } : {}),
 					runtime: 'container' as const,
 					// Desired, not observed: an instance on this list must run (see DatabaseService).
 					status: 'running' as const,
@@ -817,11 +995,13 @@ export class StorageService {
 								objectLock: parseObjectLock(bucket.objectLockJson),
 								configVersion: bucket.configVersion,
 							})),
-						users,
+						users: [...users.entries()]
+							.map(([accessKeyId, grants]) => ({ accessKeyId, grants }))
+							.sort((a, b) => a.accessKeyId.localeCompare(b.accessKeyId)),
 						deleteBuckets: buckets
 							.filter((bucket) => bucket.deleteRequestedAt && (!bucket.deleteBlocked || bucket.deleteForce))
 							.map((bucket) => ({ name: bucket.name, force: bucket.deleteForce })),
-						keysVersion: keysVersion(row, attachments),
+						keysVersion: keysVersion(row, attachments, keys),
 					},
 				};
 			});
@@ -904,6 +1084,11 @@ export class StorageService {
 		if (row.nodeId !== nodeId) throw new CoreError('forbidden', 'This storage instance is placed on another node.', 403);
 		const rootSecret = this.ctx.secrets.open(row.orgId, row.rootSecret);
 		const attachments = this.liveAttachmentsOf(row.id);
+		const keys = this.desiredKeysOf(row.id, attachments);
+		const userSecrets = new Map<string, string>();
+		for (const item of attachments)
+			userSecrets.set(item.accessKeyId, this.ctx.secrets.open(item.orgId, item.secretSealed));
+		for (const key of keys) userSecrets.set(key.accessKeyId, this.ctx.secrets.open(key.orgId, key.secretSealed));
 		return {
 			workloadId: row.id,
 			activationVersion: storageActivationVersion(row),
@@ -913,10 +1098,8 @@ export class StorageService {
 				rootAccessKeyId: row.rootAccessKey,
 				rootSecretAccessKey: rootSecret,
 				port: row.hostPort,
-				keysVersion: keysVersion(row, attachments),
-				users: Object.fromEntries(
-					attachments.map((item) => [item.accessKeyId, this.ctx.secrets.open(item.orgId, item.secretSealed)]),
-				),
+				keysVersion: keysVersion(row, attachments, keys),
+				users: Object.fromEntries([...userSecrets.entries()].sort(([a], [b]) => a.localeCompare(b))),
 			},
 		};
 	}
@@ -1273,6 +1456,27 @@ export class StorageService {
 		grants: StorageGrant[],
 	): void {
 		const now = this.ctx.now();
+		const keyId = newId('stk_');
+		const keyAccessKeyId = accessKeyId(STORAGE_USER_KEY_PREFIX);
+		const secretSealed = this.ctx.secrets.seal(project.orgId, secretKey());
+		// The attachment's key is a credential row too, so named keys and project keys share one
+		// lifecycle (list, revoke, last-used). The attachment keeps its copy for backward compat.
+		this.ctx.db
+			.insert(storageKeys)
+			.values({
+				id: keyId,
+				orgId: project.orgId,
+				storageId,
+				name: `attachment-${project.slug.slice(0, 40)}-${randomBytes(3).toString('hex')}`,
+				accessKeyId: keyAccessKeyId,
+				secretSealed,
+				grantsJson: JSON.stringify(grants),
+				purpose: `Project attachment (${project.slug})`,
+				createdBy: principal.userId,
+				createdAt: now,
+				updatedAt: now,
+			})
+			.run();
 		this.ctx.db
 			.insert(storageAttachments)
 			.values({
@@ -1282,8 +1486,9 @@ export class StorageService {
 				projectId: project.id,
 				envPrefix,
 				grantsJson: JSON.stringify(grants),
-				accessKeyId: accessKeyId(STORAGE_USER_KEY_PREFIX),
-				secretSealed: this.ctx.secrets.seal(project.orgId, secretKey()),
+				accessKeyId: keyAccessKeyId,
+				secretSealed,
+				credentialId: keyId,
 				createdBy: principal.userId,
 				createdAt: now,
 				updatedAt: now,
@@ -1407,6 +1612,22 @@ export class StorageService {
 	}
 }
 
+function toStorageKeyView(row: typeof storageKeys.$inferSelect): StorageKeyView {
+	return {
+		id: row.id,
+		storageId: row.storageId,
+		name: row.name,
+		accessKeyId: row.accessKeyId,
+		grants: parseGrants(row.grantsJson),
+		purpose: row.purpose,
+		status: row.revokedAt !== null ? 'revoked' : row.expiresAt !== null && row.expiresAt <= Date.now() ? 'expired' : 'active',
+		lastUsedAt: row.lastUsedAt ? new Date(row.lastUsedAt).toISOString() : null,
+		expiresAt: row.expiresAt ? new Date(row.expiresAt).toISOString() : null,
+		createdAt: new Date(row.createdAt).toISOString(),
+		revokedAt: row.revokedAt ? new Date(row.revokedAt).toISOString() : null,
+	};
+}
+
 function bucketView(row: StorageBucketRow): StorageBucketView {
 	return {
 		name: row.name,
@@ -1468,11 +1689,18 @@ function storageActivationVersion(row: StorageRow): string {
 }
 
 /** Changes whenever the set of scoped keys changes, so the agent re-fetches their secrets. */
-function keysVersion(row: StorageRow, attachments: AttachmentRow[]): string {
+function keysVersion(
+	row: StorageRow,
+	attachments: AttachmentRow[],
+	keys: Array<typeof storageKeys.$inferSelect>,
+): string {
+	const users = new Map<string, string>();
+	for (const item of attachments) users.set(item.accessKeyId, item.secretSealed);
+	for (const key of keys) users.set(key.accessKeyId, key.secretSealed);
 	return sha256Hex(
 		JSON.stringify({
 			root: row.rootAccessKey,
-			users: attachments.map((item) => [item.accessKeyId, item.secretSealed]),
+			users: [...users.entries()].sort(([a], [b]) => a.localeCompare(b)),
 		}),
 	);
 }

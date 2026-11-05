@@ -35,6 +35,14 @@ export interface HelperRuntime {
 	dumpDatabase(id: string): Promise<{ path: string; sizeBytes: number; filename: string }>;
 	/** Apply a new password to the owner or monitor role (docs/DATABASES.md §4). */
 	rotateDatabaseRole(id: string, role: 'owner' | 'monitor', newPassword: string): Promise<void>;
+	/** Grant or revoke a named database role (plan 04b). */
+	applyDatabaseCredential(
+		id: string,
+		action: 'grant' | 'revoke',
+		role: 'owner' | 'app' | 'monitor' | 'readonly' | 'backup',
+		username: string,
+		password?: string,
+	): Promise<void>;
 	/** Restart only the PgBouncer sidecar. */
 	restartPooler(id: string): Promise<void>;
 	/** Restore a custom-format dump into a managed database. */
@@ -230,6 +238,32 @@ export function createHandler(
 						targetTime: body.targetTime,
 					})),
 				});
+			}
+
+			const credentialMatch = /^\/v1\/workloads\/([^/]+)\/credential$/.exec(path);
+			if (credentialMatch) {
+				if (method !== 'POST') return methodNotAllowed('POST');
+				const id = assertDatabaseId(decodeURIComponent(credentialMatch[1]!), 'database id');
+				const body = assertRecord(await readJson(request, maxBodyBytes), 'request');
+				const action = body.action === 'grant' || body.action === 'revoke' ? body.action : null;
+				if (!action) throw new ValidationError('action must be grant or revoke');
+				const role =
+					body.role === 'owner' ||
+					body.role === 'app' ||
+					body.role === 'monitor' ||
+					body.role === 'readonly' ||
+					body.role === 'backup'
+						? body.role
+						: null;
+				if (!role) throw new ValidationError('role must be owner, app, monitor, readonly or backup');
+				const username = assertString(body.username, 'username', { max: 63 });
+				if (action === 'grant') {
+					const password = assertString(body.password, 'password', { max: 200 });
+					await runtime.applyDatabaseCredential(id, action, role, username, password);
+				} else {
+					await runtime.applyDatabaseCredential(id, action, role, username);
+				}
+				return json({ ok: true, credential: { action, role } });
 			}
 
 			const purgeMatch = /^\/v1\/workloads\/([^/]+)\/purge$/.exec(path);

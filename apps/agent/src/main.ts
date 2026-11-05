@@ -17,6 +17,7 @@ import { buildCaddyConfig, isProductionRoute, tlsSubjects } from './caddy-config
 import { loadConfig, type AgentConfig } from './config.ts';
 import { DatabaseBackupRunner } from './database-backups.ts';
 import { DatabasePitrRunner } from './database-pitr.ts';
+import { DatabaseCredentialRunner } from './database-credentials.ts';
 import { DatabasePoolerRestartRunner } from './database-pooler-restarts.ts';
 import { DatabaseRotationRunner } from './database-rotations.ts';
 import { DATABASE_STATS_INTERVAL_MS, DatabaseStatsSampler } from './database-stats.ts';
@@ -82,6 +83,7 @@ class AgentRuntime {
 	private readonly databaseBackups: DatabaseBackupRunner;
 	private readonly databasePitr: DatabasePitrRunner;
 	private readonly databaseRotations: DatabaseRotationRunner;
+	private readonly databaseCredentials: DatabaseCredentialRunner;
 	private readonly databasePoolerRestarts: DatabasePoolerRestartRunner;
 	private readonly storageAdmin: StorageReconciler;
 	private readonly storageStats: StorageStatsSampler;
@@ -164,6 +166,12 @@ class AgentRuntime {
 			helper: this.helper,
 			log,
 		});
+		this.databaseCredentials = new DatabaseCredentialRunner({
+			controlUrl: config.controlUrl,
+			nodeToken: config.nodeToken,
+			helper: this.helper,
+			log,
+		});
 		this.databasePoolerRestarts = new DatabasePoolerRestartRunner({ helper: this.helper, log });
 		// Buckets and scoped keys are desired state converged over the loopback S3/admin API; the
 		// root key and user secrets stay in the workload runtime's memory (S4).
@@ -238,6 +246,7 @@ class AgentRuntime {
 			this.databaseBackupLoop(),
 			this.databasePitrLoop(),
 			this.databaseRotationLoop(),
+			this.databaseCredentialLoop(),
 			this.databasePoolerRestartLoop(),
 			this.storageAdminLoop(),
 			this.storageStatsLoop(),
@@ -606,6 +615,20 @@ class AgentRuntime {
 		}
 	}
 
+	private async databaseCredentialLoop(): Promise<void> {
+		while (this.running) {
+			await sleep(5_000, this.shutdownController.signal).catch(() => undefined);
+			if (!this.running) break;
+			const state = this.desired;
+			if (!state) continue;
+			try {
+				await this.databaseCredentials.runOnce(state, this.shutdownController.signal);
+			} catch (error) {
+				log('warn', `Database credential task failed: ${errorText(error)}`);
+			}
+		}
+	}
+
 	// --- heartbeat -----------------------------------------------------------
 
 	private async heartbeatLoop(): Promise<void> {
@@ -648,6 +671,7 @@ class AgentRuntime {
 		const backupResults = this.databaseBackups.pendingResults();
 		const pitrResults = this.databasePitr.pendingResults();
 		const rotationResults = this.databaseRotations.pendingResults();
+		const credentialResults = this.databaseCredentials.pendingResults();
 		const poolerRestarted = this.databasePoolerRestarts.pending();
 		const databaseTls = databaseTlsHeartbeat(reports);
 		// Bucket deletions and config convergence are reported once, capped by the heartbeat schema.
@@ -673,6 +697,7 @@ class AgentRuntime {
 			...(backupResults.length > 0 ? { databaseBackupResults: backupResults } : {}),
 			...(pitrResults.length > 0 ? { databasePitrResults: pitrResults } : {}),
 			...(rotationResults.length > 0 ? { databaseRotationResults: rotationResults } : {}),
+			...(credentialResults.length > 0 ? { databaseCredentialResults: credentialResults } : {}),
 			...(poolerRestarted.length > 0 ? { databasePoolerRestarted: poolerRestarted } : {}),
 			...(databaseTls.length > 0 ? { databaseTls } : {}),
 			...(purgedDatabases.length > 0 ? { purgedDatabases } : {}),
@@ -704,6 +729,7 @@ class AgentRuntime {
 		this.databaseBackups.acknowledge(backupResults.map((result) => result.taskId));
 		this.databasePitr.acknowledge(pitrResults.map((result) => result.taskId));
 		this.databaseRotations.acknowledge(rotationResults.map((result) => result.taskId));
+		this.databaseCredentials.acknowledge(credentialResults.map((result) => result.taskId));
 		this.databasePoolerRestarts.acknowledge(poolerRestarted);
 		this.workloads.acknowledgePurgedDatabases(purgedDatabases);
 		this.workloads.acknowledgePurgedStorage(purgedStorage);

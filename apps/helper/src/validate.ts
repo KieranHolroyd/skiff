@@ -23,6 +23,27 @@ export const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 export const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export const SECRET_NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 export const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+/** The legacy shared network; kept as the fallback for desired state without an org id. */
+export const DEFAULT_WORKLOAD_NETWORK = 'skiff-workloads';
+export const ORG_NETWORK_PREFIX = 'skiff-org-';
+export const NETWORK_NAME_PATTERN = /^skiff-(?:org-[a-z0-9][a-z0-9_-]*|workloads)$/;
+
+/** Derive `skiff-org-<orgId>` exactly like the contract; it is never stored. */
+export function orgNetworkName(orgId: string): string {
+	const label = orgId
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z0-9_-]+/g, '-')
+		.replace(/^-+|-+$/g, '');
+	return `${ORG_NETWORK_PREFIX}${label}`;
+}
+
+/** Resolve the network a workload joins: explicit name, org-derived name, then the legacy shared one. */
+export function workloadNetworkName(workload: { orgId?: string; networkName?: string }): string {
+	if (workload.networkName) return workload.networkName;
+	if (workload.orgId) return orgNetworkName(workload.orgId);
+	return DEFAULT_WORKLOAD_NETWORK;
+}
 
 const MAX_ID_LENGTH = 100;
 const MAX_ENV_VALUE = 16_384;
@@ -51,6 +72,10 @@ export interface WorkloadDesired {
 	projectId: string;
 	projectSlug: string;
 	deploymentId: string;
+	/** Owning org (plan 04b); when absent the legacy shared network is used. */
+	orgId?: string;
+	/** Explicit network name; normally derived from `orgId`. */
+	networkName?: string;
 	runtime: WorkloadRuntime;
 	status: WorkloadStatus;
 	release: string | null;
@@ -121,7 +146,7 @@ export function databaseImage(database: WorkloadDatabase): string {
 	return DATABASE_ENGINES[database.engine].image(database.version);
 }
 
-/** `db-<hex>`: DNS alias on the `skiff-workloads` network (same derivation as the contract). */
+/** `db-<hex>`: DNS alias on the workload's org network (or the legacy shared network); same derivation as the contract. */
 export function databaseAlias(id: string): string {
 	return `db-${id.replace(/^db_/, '').toLowerCase().replace(/[^a-z0-9-]/g, '')}`;
 }
@@ -218,7 +243,7 @@ export function storageImage(storage: WorkloadObjectStorage): string {
 	return image;
 }
 
-/** `s3-<hex>`: DNS alias on the `skiff-workloads` network (same derivation as the contract). */
+/** `s3-<hex>`: DNS alias on the workload's org network (or the legacy shared network); same derivation as the contract. */
 export function storageAlias(id: string): string {
 	return `s3-${id.replace(/^st_/, '').toLowerCase().replace(/[^a-z0-9-]/g, '')}`;
 }
@@ -296,6 +321,14 @@ export function assertSlug(value: unknown, label = 'projectSlug'): string {
 	const slug = assertString(value, label, { max: 100 });
 	if (!SLUG_PATTERN.test(slug)) throw new ValidationError(`${label} must match ${SLUG_PATTERN}`);
 	return slug;
+}
+
+/** Network names are helper-owned: an org network or the legacy shared one, nothing else. */
+export function assertNetworkName(value: unknown, label = 'networkName'): string {
+	const name = assertString(value, label, { max: 100 });
+	if (!NETWORK_NAME_PATTERN.test(name))
+		throw new ValidationError(`${label} must be "skiff-workloads" or "skiff-org-<id>"`);
+	return name;
 }
 
 export function assertSha256(value: unknown, label = 'sha256'): string {
@@ -475,6 +508,11 @@ export function parseWorkload(value: unknown): WorkloadDesired {
 	if (database && objectStorage)
 		throw new ValidationError('A workload cannot have both a database and an objectStorage profile');
 	const id = assertId(record.id, 'workload.id');
+	const orgId = record.orgId === undefined ? undefined : assertId(record.orgId, 'workload.orgId');
+	const networkName =
+		record.networkName === undefined ? undefined : assertNetworkName(record.networkName, 'workload.networkName');
+	if (orgId && networkName && networkName !== orgNetworkName(orgId))
+		throw new ValidationError('workload.networkName must match the network derived from workload.orgId');
 	const secrets = parseSecrets(record.secrets);
 	if (objectStorage) {
 		if (runtime !== 'container') throw new ValidationError('Storage workloads must use the container runtime');
@@ -507,6 +545,8 @@ export function parseWorkload(value: unknown): WorkloadDesired {
 
 	const workload: WorkloadDesired = {
 		id,
+		...(orgId ? { orgId } : {}),
+		...(networkName ? { networkName } : {}),
 		projectId: assertId(record.projectId, 'workload.projectId'),
 		projectSlug: assertSlug(record.projectSlug, 'workload.projectSlug'),
 		deploymentId: assertId(record.deploymentId, 'workload.deploymentId'),

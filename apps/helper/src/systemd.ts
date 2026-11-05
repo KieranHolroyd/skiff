@@ -13,8 +13,8 @@ import {
 } from './volumes.ts';
 import {
 	DATABASE_PGDATA,
-	WORKLOAD_NETWORK_UNIT,
 	containerUnitName,
+	networkUnitName,
 	poolerServiceName,
 	poolerUnitName,
 	renderContainerEnvFile,
@@ -44,6 +44,7 @@ import {
 	assertId,
 	assertRelativePath,
 	databaseAlias,
+	workloadNetworkName,
 	type WorkloadActivation,
 	type WorkloadDesired,
 	type WorkloadStatus,
@@ -400,8 +401,10 @@ export class SystemdDriver {
 			}
 		} else {
 			const image = workload.image!;
-			// Every container joins the shared network; write it first so Quadlet can resolve it.
-			changed = (await this.ensureNetworkUnit()) || changed;
+			// Each org gets its own network; write it first so Quadlet can resolve it. A workload
+			// without an org keeps the legacy shared network, so old desired state still converges.
+			const networkName = workloadNetworkName(workload);
+			changed = (await this.ensureNetworkUnit(networkName)) || changed;
 			const dataDir = await this.resolveDataDir(workload);
 			if (workload.volumeId) await fs.mkdir(dirname(dataDir), { recursive: true, mode: 0o755 });
 			await fs.mkdir(dataDir, { recursive: true, mode: 0o700 });
@@ -498,6 +501,9 @@ export class SystemdDriver {
 					allowFailure: true,
 				});
 			}
+			// Quadlet attaches the container, but verify it and repair a missing attachment. This is
+			// best effort: a managed service is restarted with --no-block and may not exist yet.
+			await this.ensureNetworkMembership(workload, networkName);
 		}
 
 		return this.status(workload.id);
@@ -579,6 +585,143 @@ export class SystemdDriver {
 		const [verifyCode, out] = await Promise.all([verify.exited, new Response(verify.stdout).text()]);
 		if (verifyCode !== 0 || out.trim() !== '1')
 			throw new Error('The rotated credential did not pass the verification query.');
+	}
+
+	/**
+	 * Named database credential verb (plan 04b). Grants create/update a Postgres role with only the
+	 * privileges its role name implies; revoke disables login. The SQL goes over stdin and every
+	 * identifier is validated first, so the helper never builds a shell string.
+	 */
+	async applyDatabaseCredential(
+		id: string,
+		action: 'grant' | 'revoke',
+		role: 'owner' | 'app' | 'monitor' | 'readonly' | 'backup',
+		username: string,
+		newPassword?: string,
+	): Promise<void> {
+		assertDatabaseId(id, 'database id');
+		if (!identifier(username)) throw new ValidationError('credential username must be a Postgres identifier');
+		const env = await this.readDatabaseEnv(id);
+		const target = role === 'owner' ? env.user : username;
+		if (action === 'revoke') {
+			if (role === 'owner') throw new ValidationError('The owner role cannot be revoked');
+			await this.executeDatabaseSql(
+				id,
+				env,
+				`DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${target}') THEN ALTER ROLE "${target}" NOLOGIN; END IF; END $$;\n`,
+			);
+			return;
+		}
+		if (!newPassword || !/^[A-Za-z0-9_-]{16,200}$/.test(newPassword))
+			throw new ValidationError('The credential password must be base64url (16–200 characters)');
+
+		const password = newPassword.replace(/'/g, "''");
+		const statements = [`DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${target}') THEN
+    CREATE ROLE "${target}" LOGIN PASSWORD '${password}';
+  ELSE
+    ALTER ROLE "${target}" WITH LOGIN PASSWORD '${password}';
+  END IF;
+END $$;`];
+		if (role === 'owner') {
+			// The owner already exists; the DO block above just changes its password.
+		} else if (role === 'monitor') {
+			statements.push(`GRANT pg_monitor TO "${target}";`);
+		} else {
+			statements.push(
+				`GRANT CONNECT ON DATABASE "${env.database}" TO "${target}";`,
+				`GRANT USAGE ON SCHEMA public TO "${target}";`,
+			);
+			if (role === 'app') {
+				statements.push(
+					`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "${target}";`,
+					`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO "${target}";`,
+					`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "${target}";`,
+					`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO "${target}";`,
+				);
+			} else {
+				statements.push(
+					`GRANT SELECT ON ALL TABLES IN SCHEMA public TO "${target}";`,
+					`GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO "${target}";`,
+					`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO "${target}";`,
+					`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON SEQUENCES TO "${target}";`,
+				);
+			}
+		}
+		await this.executeDatabaseSql(id, env, `${statements.join('\n')}\n`);
+		await this.verifyDatabaseRole(id, env, target, newPassword);
+	}
+
+	private async executeDatabaseSql(
+		id: string,
+		env: { user: string; password: string; database: string },
+		sql: string,
+	): Promise<void> {
+		const child = Bun.spawn(
+			[
+				this.podmanPath,
+				'exec',
+				'-i',
+				'-e',
+				'PGPASSWORD',
+				`skiff-workload-${id}`,
+				'psql',
+				'-h',
+				'127.0.0.1',
+				'-v',
+				'ON_ERROR_STOP=1',
+				'-U',
+				env.user,
+				'-d',
+				env.database,
+			],
+			{
+				env: { ...process.env, PGPASSWORD: env.password },
+				stdin: 'pipe',
+				stdout: 'ignore',
+				stderr: 'pipe',
+			},
+		);
+		child.stdin.write(sql);
+		child.stdin.end();
+		const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+		if (code !== 0)
+			throw new Error(`credential SQL failed (${code}): ${stderr.trim().slice(0, 500) || 'no detail'}`);
+	}
+
+	private async verifyDatabaseRole(
+		id: string,
+		env: { user: string; password: string; database: string },
+		target: string,
+		password: string,
+	): Promise<void> {
+		const verify = Bun.spawn(
+			[
+				this.podmanPath,
+				'exec',
+				'-e',
+				'PGPASSWORD',
+				`skiff-workload-${id}`,
+				'psql',
+				'-h',
+				'127.0.0.1',
+				'-tAc',
+				'SELECT 1',
+				'-U',
+				target,
+				'-d',
+				env.database,
+			],
+			{
+				env: { ...process.env, PGPASSWORD: password },
+				stdin: 'ignore',
+				stdout: 'pipe',
+				stderr: 'pipe',
+			},
+		);
+		const [code, out] = await Promise.all([verify.exited, new Response(verify.stdout).text()]);
+		if (code !== 0 || out.trim() !== '1')
+			throw new Error('The named credential did not pass the verification query.');
 	}
 
 	/**
@@ -1168,9 +1311,30 @@ export class SystemdDriver {
 		}
 	}
 
-	/** Write the shared Quadlet network; returns true when systemd needs a daemon-reload. */
-	private async ensureNetworkUnit(): Promise<boolean> {
-		return this.writeIfChanged(join(this.quadletDir, WORKLOAD_NETWORK_UNIT), renderNetworkUnit(), 0o644);
+	/** Write a Quadlet network; returns true when systemd needs a daemon-reload. */
+	private async ensureNetworkUnit(networkName: string): Promise<boolean> {
+		return this.writeIfChanged(
+			join(this.quadletDir, networkUnitName(networkName)),
+			renderNetworkUnit(networkName),
+			0o644,
+		);
+	}
+
+	/**
+	 * Confirm the workload container is a member of its network, and attach it if Quadlet did not.
+	 * A failed inspect is not fatal: the network or container may still be starting.
+	 */
+	private async ensureNetworkMembership(workload: WorkloadDesired, networkName: string): Promise<boolean> {
+		const inspect = await this.runner
+			.run([this.podmanPath, 'network', 'inspect', networkName, '--format', '{{json .Containers}}'])
+			.catch(() => null);
+		if (!inspect || inspect.code !== 0) return false;
+		const container = `skiff-workload-${workload.id}`;
+		if (networkHasContainer(inspect.stdout, container)) return true;
+		const connect = await this.runner
+			.run([this.podmanPath, 'network', 'connect', networkName, container])
+			.catch(() => null);
+		return connect?.code === 0;
 	}
 
 	private async systemctl(args: string[], options: { allowFailure?: boolean } = {}): Promise<RunResult> {
@@ -1227,6 +1391,28 @@ export class SystemdDriver {
 			throw error;
 		}
 	}
+}
+
+/** `podman network inspect --format {{json .Containers}}` is a map, but accept a list too. */
+function networkHasContainer(stdout: string, container: string): boolean {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(stdout);
+	} catch {
+		return false;
+	}
+	const matches = (value: unknown): boolean => {
+		if (!value || typeof value !== 'object') return false;
+		const record = value as Record<string, unknown>;
+		return record.Name === container || record.name === container;
+	};
+	if (Array.isArray(parsed)) return parsed.some(matches);
+	if (parsed && typeof parsed === 'object') {
+		return Object.entries(parsed as Record<string, unknown>).some(
+			([key, value]) => key === container || matches(value),
+		);
+	}
+	return false;
 }
 
 /** Journald stores MESSAGE as a string, or as bytes when the unit emitted invalid UTF-8. */

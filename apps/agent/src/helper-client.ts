@@ -58,6 +58,14 @@ export interface HelperApi {
 	restoreDatabase(id: string, body: ReadableStream<Uint8Array> | null): Promise<void>;
 	/** Apply a rotated owner/monitor password. */
 	rotateDatabaseRole(id: string, role: 'owner' | 'monitor', password: string): Promise<void>;
+	/** Grant or revoke a named database role (plan 04b). */
+	applyDatabaseCredential(
+		id: string,
+		action: 'grant' | 'revoke',
+		role: 'owner' | 'app' | 'monitor' | 'readonly' | 'backup',
+		username: string,
+		password?: string,
+	): Promise<void>;
 	/** Restart only the PgBouncer sidecar. */
 	restartPooler(id: string): Promise<void>;
 	/** Write the 0400 pgBackRest config for PITR (docs/PITR.md). */
@@ -167,6 +175,21 @@ export class HelperClient implements HelperApi {
 			'POST',
 			`/v1/workloads/${encodeURIComponent(id)}/rotate`,
 			{ role, password },
+			60_000,
+		);
+	}
+
+	async applyDatabaseCredential(
+		id: string,
+		action: 'grant' | 'revoke',
+		role: 'owner' | 'app' | 'monitor' | 'readonly' | 'backup',
+		username: string,
+		password?: string,
+	): Promise<void> {
+		await this.request(
+			'POST',
+			`/v1/workloads/${encodeURIComponent(id)}/credential`,
+			{ action, role, username, ...(password ? { password } : {}) },
 			60_000,
 		);
 	}

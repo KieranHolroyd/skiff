@@ -171,7 +171,7 @@ export const storageGrantSchema = z.object({
 });
 export type StorageGrant = z.infer<typeof storageGrantSchema>;
 
-const grantsSchema = z
+export const storageGrantsSchema = z
 	.array(storageGrantSchema)
 	.min(1, 'Grant at least one bucket.')
 	.max(20)
@@ -265,12 +265,47 @@ export type BucketUpdate = z.infer<typeof bucketUpdateSchema>;
 export const storageAttachSchema = z.object({
 	storage: storageNameSchema,
 	envPrefix: storageEnvPrefixSchema.default('S3'),
-	grants: grantsSchema,
+	grants: storageGrantsSchema,
 });
 export type StorageAttach = z.input<typeof storageAttachSchema>;
 
-export const storageAttachmentUpdateSchema = z.object({ grants: grantsSchema });
+export const storageAttachmentUpdateSchema = z.object({ grants: storageGrantsSchema });
 export type StorageAttachmentUpdate = z.input<typeof storageAttachmentUpdateSchema>;
+
+/** Named human/service storage keys (plan 04b), independent of project attachments. */
+export const storageKeyNameSchema = z
+	.string()
+	.min(1)
+	.max(60)
+	.regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/, 'Key names use lowercase letters, digits and single hyphens.');
+
+export const storageKeyCreateSchema = z.object({
+	name: storageKeyNameSchema,
+	grants: storageGrantsSchema,
+	purpose: z.string().min(1).max(120).optional(),
+	expiresAt: z.string().datetime().optional(),
+});
+export type StorageKeyCreate = z.input<typeof storageKeyCreateSchema>;
+
+export interface StorageKeyView {
+	id: string;
+	storageId: string;
+	name: string;
+	accessKeyId: string;
+	grants: StorageGrant[];
+	purpose: string | null;
+	/** `expired` is derived: the row is live but past `expiresAt`. */
+	status: 'active' | 'expired' | 'revoked';
+	lastUsedAt: string | null;
+	expiresAt: string | null;
+	createdAt: string;
+	revokedAt: string | null;
+}
+
+/** A named key plus its secret; only an interactive reveal returns this shape. */
+export interface StorageKeyReveal extends StorageKeyView {
+	secretAccessKey: string;
+}
 
 // -------------------------------------------------------------------- views
 
@@ -494,7 +529,7 @@ export const STORAGE_ROOT_KEY_PREFIX = 'SKR';
 /** Workload ids of storage instances carry this prefix. */
 export const STORAGE_ID_PREFIX = 'st_';
 
-/** `s3-<hex>`: the container's DNS alias on the `skiff-workloads` network. */
+/** `s3-<hex>`: the container's DNS alias on the workload's org network (or the legacy shared network). */
 export function storageAlias(id: string): string {
 	return `s3-${id.replace(/^st_/, '').toLowerCase().replace(/[^a-z0-9-]/g, '')}`;
 }

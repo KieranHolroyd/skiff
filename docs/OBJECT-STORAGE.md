@@ -273,6 +273,29 @@ and report per-item skips.
   any endpoint) can point at a managed instance. It's allowed as a **replication target only**:
   canonical platform artifacts can't live on a workload whose own deploys need those artifacts.
   This covers part of the roadmap's "Garage/MinIO" item.
-- Human access keys with bucket grants; key rotation in the dashboard; custom domains for public
-  instances; Garage as a second engine; bulk actions and prune for storage; share-link revocation
-  and view history in the dashboard (the API records and counts, but no UI to revoke yet).
+- Human access keys with bucket grants; key rotation in the dashboard; per-bucket quotas; lifecycle
+  rules (expire after N days); CORS config per bucket; custom domains for public instances; Garage
+  as a second engine; bulk actions and prune for storage; share-link revocation and view history in
+  the dashboard (the API records and counts, but no UI to revoke yet).
+
+## 11. Named keys and per-org networks (plan 04b)
+
+`storage_keys` adds named human/service keys alongside project attachments. Each key has bucket
+grants, an optional purpose and expiry, `lastUsedAt`, and independent revocation. The existing agent
+IAM reconciler consumes keys and attachments together through `objectStorage.users`; a key change
+moves `keysVersion`, so the agent re-fetches activation without restarting the container. An
+attachment also gets a credential row (purpose `Project attachment`), and detaching or deleting the
+project removes it from desired state.
+
+Revealing a key needs `storage:credentials`, an interactive user session (MCP/API keys never receive
+secrets) and writes `storage.key.reveal` to the audit log. Key create/revoke are audited as
+`storage.key.create` / `storage.key.revoke`.
+
+With `SKIFF_FEATURE_ORG_NETWORKS` on, the storage container joins `skiff-org-<orgId>.network` and is
+not resolvable from another org. Caddy keeps using the loopback endpoint, so public routes and the
+internal gateway are unchanged.
+
+**Rollback / existing installs:** `0022_org_networks.sql` is additive and adds `credential_id` as a
+nullable column; pre-existing attachments keep their current key and secret. Named keys are new
+rows, so turning the feature off leaves existing data untouched. Reverting the release is a
+snapshot/rollback, never a destructive migration.

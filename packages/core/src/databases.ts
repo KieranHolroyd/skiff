@@ -4,6 +4,7 @@ import {
 	databaseBackups,
 	databasePitr,
 	databasePitrTasks,
+	databaseCredentials,
 	databaseRotations,
 	databases,
 	nodes,
@@ -13,8 +14,6 @@ import {
 import {
 	DATABASE_BACKUP_FORMAT,
 	DATABASE_MONITOR_USER,
-	DATABASE_POOLER_PORT_MAX,
-	DATABASE_POOLER_PORT_MIN,
 	DATABASE_PORT_MAX,
 	DATABASE_PORT_MIN,
 	PITR_ARCHIVE_TIMEOUT_SECONDS,
@@ -22,6 +21,8 @@ import {
 	PITR_FULL_SCHEDULE,
 	PITR_RETENTION_DIFF,
 	PITR_RETENTION_FULL,
+	DATABASE_POOLER_PORT_MAX,
+	DATABASE_POOLER_PORT_MIN,
 	databaseAlias,
 	databaseAttachSchema,
 	databaseBackupCreateSchema,
@@ -29,6 +30,7 @@ import {
 	databaseConnectionSnippets,
 	databaseConnectionUrl,
 	databaseCreateSchema,
+	databaseCredentialCreateSchema,
 	databaseEngineRegistry,
 	databaseEnvNames,
 	databaseIdentifier,
@@ -40,6 +42,7 @@ import {
 	databaseRestoreSchema,
 	databaseRotateSchema,
 	databaseUpdateSchema,
+	orgNetworkName,
 	limits,
 	pitrStanzaFor,
 	requirePermission,
@@ -51,6 +54,11 @@ import {
 	type DatabaseBackupTask,
 	type DatabaseBackupView,
 	type DatabaseCreate,
+	type DatabaseCredentialActivation,
+	type DatabaseCredentialCreate,
+	type DatabaseCredentialResult,
+	type DatabaseCredentialTask,
+	type DatabaseCredentialView,
 	type DatabaseCredentials,
 	type DatabaseMetricBucket,
 	type DatabaseMetricPoint,
@@ -225,6 +233,8 @@ export class DatabaseService {
 		const now = this.ctx.now();
 		const hostPort = this.allocatePort(decision.nodeId);
 		const poolerPort = input.pooler ? this.allocatePoolerPort(decision.nodeId) : null;
+		const ownerSecret = this.ctx.secrets.seal(principal.orgId, password());
+		const monitorSecret = this.ctx.secrets.seal(principal.orgId, password());
 		this.ctx.sqlite.transaction(() => {
 			this.ctx.db
 				.insert(databases)
@@ -244,14 +254,15 @@ export class DatabaseService {
 					poolerEnabled: input.pooler,
 					poolerPort,
 					status: 'pending',
-					ownerSecret: this.ctx.secrets.seal(principal.orgId, password()),
-					monitorSecret: this.ctx.secrets.seal(principal.orgId, password()),
+					ownerSecret,
+					monitorSecret,
 					nextBackupAt: nextCronTime('0 3 * * *', now),
 					createdBy: principal.userId,
 					createdAt: now,
 					updatedAt: now,
 				})
 				.run();
+			this.insertBuiltInCredentials(principal, id, input.name, ownerSecret, monitorSecret);
 			if (project)
 				this.insertAttachment(principal, id, project, input.envPrefix ?? 'DATABASE');
 		})();
@@ -713,6 +724,22 @@ export class DatabaseService {
 						.set({ status: 'ok', finishedAt: now, error: null })
 						.where(eq(databaseRotations.id, row.rotation.id))
 						.run();
+					// Keep the built-in credential row in step with the live secret.
+					this.ctx.db
+						.update(databaseCredentials)
+						.set({
+							secretSealed: row.rotation.secretSealed,
+							pendingSecretSealed: null,
+							status: 'ready',
+							updatedAt: now,
+						})
+						.where(
+							and(
+								eq(databaseCredentials.databaseId, row.db.id),
+								eq(databaseCredentials.role, result.role),
+							),
+						)
+						.run();
 				})();
 			} else {
 				this.ctx.db
@@ -742,6 +769,273 @@ export class DatabaseService {
 			changed = true;
 		}
 		if (changed) this.ctx.projects.bump();
+	}
+
+	// ---------------------------------------------------------------- named credentials
+
+	listCredentials(principal: Principal, name: string): DatabaseCredentialView[] {
+		requirePermission(principal, 'database:read');
+		const db = this.requireRow(principal, name, { includeDeleted: true });
+		this.ensureBuiltInCredential(db.id, 'owner');
+		this.ensureBuiltInCredential(db.id, 'monitor');
+		return this.credentialsOf(db.id).map(toCredentialView);
+	}
+
+	createCredential(principal: Principal, name: string, raw: unknown): DatabaseCredentialView {
+		requirePermission(principal, 'database:credentials');
+		requirePermission(principal, 'database:update');
+		const input = databaseCredentialCreateSchema.parse(raw ?? {}) as DatabaseCredentialCreate;
+		const db = this.requireRow(principal, name);
+		if (input.role !== 'app' && input.role !== 'readonly' && input.role !== 'backup')
+			throw new ValidationError('Only app, readonly and backup credentials can be created.');
+		const now = this.ctx.now();
+		const id = newId('dbc_');
+		const username = `skiff_${input.role}_${randomBytes(4).toString('hex')}`;
+		this.ctx.db
+			.insert(databaseCredentials)
+			.values({
+				id,
+				orgId: db.orgId,
+				databaseId: db.id,
+				role: input.role,
+				username,
+				secretSealed: null,
+				pendingSecretSealed: this.ctx.secrets.seal(db.orgId, password()),
+				purpose: input.purpose ?? null,
+				status: 'pending',
+				expiresAt: input.expiresAt ? Date.parse(input.expiresAt) : null,
+				createdBy: principal.userId,
+				createdAt: now,
+				updatedAt: now,
+			})
+			.run();
+		this.ctx.audit.record({
+			principal,
+			action: 'database.credential.create',
+			resource: 'database',
+			resourceId: db.id,
+			args: { name, credentialId: id, role: input.role, username },
+			result: 'ok',
+		});
+		this.ctx.projects.bump(principal.orgId);
+		return toCredentialView(this.requireCredential(db.id, id));
+	}
+
+	rotateNamedCredential(principal: Principal, name: string, credentialId: string): DatabaseCredentialView {
+		requirePermission(principal, 'database:credentials');
+		requirePermission(principal, 'database:update');
+		const db = this.requireRow(principal, name);
+		const credential = this.requireCredential(db.id, credentialId);
+		if (credential.role === 'owner' || credential.role === 'monitor')
+			throw new ValidationError('Rotate the owner or monitor credential with rotate_database_credentials.');
+		if (credential.status === 'revoked') throw new ConflictError('This credential is revoked.');
+		this.ctx.db
+			.update(databaseCredentials)
+			.set({
+				pendingSecretSealed: this.ctx.secrets.seal(db.orgId, password()),
+				status: 'pending',
+				updatedAt: this.ctx.now(),
+			})
+			.where(eq(databaseCredentials.id, credential.id))
+			.run();
+		this.ctx.audit.record({
+			principal,
+			action: 'database.credential.rotate',
+			resource: 'database',
+			resourceId: db.id,
+			args: { name, credentialId, role: credential.role },
+			result: 'ok',
+		});
+		this.ctx.projects.bump(principal.orgId);
+		return toCredentialView(this.requireCredential(db.id, credential.id));
+	}
+
+	revokeCredential(principal: Principal, name: string, credentialId: string): DatabaseCredentialView {
+		requirePermission(principal, 'database:credentials');
+		requirePermission(principal, 'database:update');
+		const db = this.requireRow(principal, name);
+		const credential = this.requireCredential(db.id, credentialId);
+		if (credential.role === 'owner' || credential.role === 'monitor')
+			throw new ValidationError('The built-in owner and monitor credentials cannot be revoked here.');
+		if (credential.status === 'revoked') return toCredentialView(credential);
+		const now = this.ctx.now();
+		this.ctx.db
+			.update(databaseCredentials)
+			.set({ status: 'revoking', revokedAt: now, pendingSecretSealed: null, updatedAt: now })
+			.where(eq(databaseCredentials.id, credential.id))
+			.run();
+		this.ctx.audit.record({
+			principal,
+			action: 'database.credential.revoke',
+			resource: 'database',
+			resourceId: db.id,
+			args: { name, credentialId, role: credential.role },
+			result: 'ok',
+		});
+		this.ctx.projects.bump(principal.orgId);
+		return toCredentialView(this.requireCredential(db.id, credential.id));
+	}
+
+	/**
+	 * Reveal a named credential. This is an interactive action: an MCP/API-key principal never
+	 * receives the secret, and the read is audited. Step-up is enforced by the surface (the
+	 * dashboard action re-authenticates before calling this service).
+	 */
+	revealCredential(principal: Principal, name: string, credentialId: string): DatabaseCredentialView & { password: string } {
+		requirePermission(principal, 'database:credentials');
+		if (principal.kind !== 'user')
+			throw new CoreError('forbidden', 'Credential reveal needs an interactive user session.', 403);
+		const db = this.requireRow(principal, name);
+		const credential = this.requireCredential(db.id, credentialId);
+		if (credential.status !== 'ready' || credential.revokedAt !== null)
+			throw new ConflictError('This credential is not active.');
+		if (credential.expiresAt !== null && credential.expiresAt <= this.ctx.now())
+			throw new ConflictError('This credential has expired.');
+		const secret = credential.secretSealed
+			? this.ctx.secrets.open(db.orgId, credential.secretSealed)
+			: credential.role === 'owner'
+				? this.ctx.secrets.open(db.orgId, db.ownerSecret)
+				: null;
+		if (!secret) throw new ConflictError('This credential has no active secret.');
+		this.ctx.db
+			.update(databaseCredentials)
+			.set({ lastUsedAt: this.ctx.now() })
+			.where(eq(databaseCredentials.id, credential.id))
+			.run();
+		this.ctx.audit.record({
+			principal,
+			action: 'database.credentials.reveal',
+			resource: 'database',
+			resourceId: db.id,
+			args: { name, credentialId, role: credential.role },
+			result: 'ok',
+		});
+		return { ...toCredentialView(credential), password: secret };
+	}
+
+	credentialTasksForNode(nodeId: string): DatabaseCredentialTask[] {
+		return this.ctx.db
+			.select({ credential: databaseCredentials, db: databases })
+			.from(databaseCredentials)
+			.innerJoin(databases, eq(databases.id, databaseCredentials.databaseId))
+			.where(
+				and(
+					eq(databases.nodeId, nodeId),
+					inArray(databaseCredentials.status, ['pending', 'revoking']),
+					isNull(databases.deletedAt),
+				),
+			)
+			.all()
+			.map(({ credential }) => ({
+				id: credential.id,
+				databaseId: credential.databaseId,
+				action: credential.status === 'revoking' ? ('revoke' as const) : ('grant' as const),
+				role: credential.role,
+				username: credential.username,
+			}));
+	}
+
+	credentialActivation(nodeId: string, id: string): DatabaseCredentialActivation {
+		const row = this.ctx.db
+			.select({ credential: databaseCredentials, db: databases })
+			.from(databaseCredentials)
+			.innerJoin(databases, eq(databases.id, databaseCredentials.databaseId))
+			.where(eq(databaseCredentials.id, id))
+			.get();
+		if (!row || row.db.nodeId !== nodeId)
+			throw new CoreError('forbidden', 'This credential is not on this node.', 403);
+		if (row.credential.status !== 'pending' && row.credential.status !== 'revoking')
+			throw new ConflictError('This credential task has already finished.');
+		const action = row.credential.status === 'revoking' ? ('revoke' as const) : ('grant' as const);
+		const password =
+			action === 'grant' && row.credential.pendingSecretSealed
+				? this.ctx.secrets.open(row.db.orgId, row.credential.pendingSecretSealed)
+				: undefined;
+		return {
+			id: row.credential.id,
+			databaseId: row.db.id,
+			action,
+			role: row.credential.role,
+			username: row.credential.username,
+			...(password ? { password } : {}),
+		};
+	}
+
+	applyCredentialResults(nodeId: string, results: DatabaseCredentialResult[]): void {
+		const now = this.ctx.now();
+		let changed = false;
+		for (const result of results) {
+			const row = this.ctx.db
+				.select({ credential: databaseCredentials, db: databases })
+				.from(databaseCredentials)
+				.innerJoin(databases, eq(databases.id, databaseCredentials.databaseId))
+				.where(eq(databaseCredentials.id, result.taskId))
+				.get();
+			if (!row || row.db.nodeId !== nodeId) continue;
+			if (row.credential.status === 'ready' || row.credential.status === 'revoked') continue;
+			const action = row.credential.status === 'revoking' ? ('revoke' as const) : ('grant' as const);
+			if (result.status === 'ok') {
+				this.ctx.db
+					.update(databaseCredentials)
+					.set(
+						action === 'revoke'
+							? {
+									status: 'revoked',
+									pendingSecretSealed: null,
+									revokedAt: now,
+									updatedAt: now,
+								}
+							: {
+									status: 'ready',
+									secretSealed: row.credential.pendingSecretSealed,
+									pendingSecretSealed: null,
+									updatedAt: now,
+								},
+					)
+					.where(eq(databaseCredentials.id, row.credential.id))
+					.run();
+			} else {
+				this.ctx.db
+					.update(databaseCredentials)
+					.set({
+						status: action === 'revoke' ? 'revoked' : 'failed',
+						pendingSecretSealed: null,
+						updatedAt: now,
+					})
+					.where(eq(databaseCredentials.id, row.credential.id))
+					.run();
+			}
+			this.ctx.audit.record({
+				orgId: row.db.orgId,
+				action: result.status === 'ok' ? 'database.credential.ready' : 'database.credential.failed',
+				resource: 'database',
+				resourceId: row.db.id,
+				args: { name: row.db.name, credentialId: row.credential.id, action },
+				result: result.status === 'ok' ? 'ok' : 'error',
+				...(result.status === 'ok' ? {} : { error: result.error ?? 'Credential task failed on the node.' }),
+			});
+			changed = true;
+		}
+		if (changed) this.ctx.projects.bump();
+	}
+
+	private credentialsOf(databaseId: string): Array<typeof databaseCredentials.$inferSelect> {
+		return this.ctx.db
+			.select()
+			.from(databaseCredentials)
+			.where(eq(databaseCredentials.databaseId, databaseId))
+			.orderBy(desc(databaseCredentials.createdAt))
+			.all();
+	}
+
+	private requireCredential(databaseId: string, credentialId: string): typeof databaseCredentials.$inferSelect {
+		const row = this.ctx.db
+			.select()
+			.from(databaseCredentials)
+			.where(and(eq(databaseCredentials.databaseId, databaseId), eq(databaseCredentials.id, credentialId)))
+			.get();
+		if (!row) throw new NotFoundError('Database credential');
+		return row;
 	}
 
 	// ---------------------------------------------------------------- backups
@@ -1934,11 +2228,13 @@ export class DatabaseService {
 							.get()
 					: undefined;
 				const tls = this.tlsEnabled();
+				const isolated = featureEnabled(this.ctx.config, 'ORG_NETWORKS');
 				return {
 					id: row.id,
 					projectId: row.id,
 					projectSlug: row.name,
 					deploymentId: row.id,
+					...(isolated ? { orgId: row.orgId, networkName: orgNetworkName(row.orgId) } : {}),
 					runtime: 'container' as const,
 					// Desired, not observed: a database on this list must run. Echoing a reported
 					// `stopped` back would make the agent remove the unit and never start it again.
@@ -2278,6 +2574,7 @@ export class DatabaseService {
 	}
 
 	private insertAttachment(principal: Principal, databaseId: string, project: ProjectRow, envPrefix: string): void {
+		const credential = this.ensureBuiltInCredential(databaseId, 'owner');
 		this.ctx.db
 			.insert(databaseAttachments)
 			.values({
@@ -2286,10 +2583,87 @@ export class DatabaseService {
 				databaseId,
 				projectId: project.id,
 				envPrefix,
+				credentialId: credential?.id ?? null,
 				createdBy: principal.userId,
 				createdAt: this.ctx.now(),
 			})
 			.run();
+	}
+
+	private insertBuiltInCredentials(
+		principal: Principal,
+		databaseId: string,
+		name: string,
+		ownerSecret: string,
+		monitorSecret: string,
+	): void {
+		const now = this.ctx.now();
+		const username = databaseIdentifier(name);
+		this.ctx.db
+			.insert(databaseCredentials)
+			.values([
+				{
+					id: newId('dbc_'),
+					orgId: principal.orgId,
+					databaseId,
+					role: 'owner',
+					username,
+					secretSealed: ownerSecret,
+					purpose: 'Database owner (built in)',
+					status: 'ready',
+					createdBy: principal.userId,
+					createdAt: now,
+					updatedAt: now,
+				},
+				{
+					id: newId('dbc_'),
+					orgId: principal.orgId,
+					databaseId,
+					role: 'monitor',
+					username: DATABASE_MONITOR_USER,
+					secretSealed: monitorSecret,
+					purpose: 'Stats sampler (built in)',
+					status: 'ready',
+					createdBy: principal.userId,
+					createdAt: now,
+					updatedAt: now,
+				},
+			])
+			.run();
+	}
+
+	/** Old databases predate credential rows; materialise the built-in row on first use. */
+	private ensureBuiltInCredential(
+		databaseId: string,
+		role: 'owner' | 'monitor',
+	): typeof databaseCredentials.$inferSelect | undefined {
+		const existing = this.ctx.db
+			.select()
+			.from(databaseCredentials)
+			.where(and(eq(databaseCredentials.databaseId, databaseId), eq(databaseCredentials.role, role)))
+			.get();
+		if (existing) return existing;
+		const db = this.ctx.db.select().from(databases).where(eq(databases.id, databaseId)).get();
+		if (!db) return undefined;
+		const row = {
+			id: newId('dbc_'),
+			orgId: db.orgId,
+			databaseId,
+			role,
+			username: role === 'owner' ? databaseIdentifier(db.name) : DATABASE_MONITOR_USER,
+			secretSealed: role === 'owner' ? db.ownerSecret : db.monitorSecret,
+			pendingSecretSealed: null,
+			purpose: role === 'owner' ? 'Database owner (built in)' : 'Stats sampler (built in)',
+			status: 'ready' as const,
+			lastUsedAt: null,
+			expiresAt: null,
+			revokedAt: null,
+			createdBy: db.createdBy,
+			createdAt: db.createdAt,
+			updatedAt: this.ctx.now(),
+		};
+		this.ctx.db.insert(databaseCredentials).values(row).run();
+		return row;
 	}
 
 	private attachmentsOf(databaseId: string): DatabaseAttachmentView[] {
@@ -2413,6 +2787,25 @@ export class DatabaseService {
 
 function password(): string {
 	return Buffer.from(randomBytes(24)).toString('base64url');
+}
+
+function connectionUrl(scheme: string, user: string, pass: string, host: string, port: number, db: string): string {
+	return `${scheme}://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${host}:${port}/${encodeURIComponent(db)}`;
+}
+
+function toCredentialView(row: typeof databaseCredentials.$inferSelect): DatabaseCredentialView {
+	return {
+		id: row.id,
+		databaseId: row.databaseId,
+		role: row.role,
+		username: row.username,
+		purpose: row.purpose,
+		status: row.status,
+		lastUsedAt: row.lastUsedAt ? new Date(row.lastUsedAt).toISOString() : null,
+		expiresAt: row.expiresAt ? new Date(row.expiresAt).toISOString() : null,
+		createdAt: new Date(row.createdAt).toISOString(),
+		revokedAt: row.revokedAt ? new Date(row.revokedAt).toISOString() : null,
+	};
 }
 
 function toRotationView(row: typeof databaseRotations.$inferSelect): DatabaseRotationView {
