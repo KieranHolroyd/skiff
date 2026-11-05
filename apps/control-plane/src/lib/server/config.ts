@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { building } from '$app/env';
+import { parseFeatureFlags } from '@skiff/contracts';
 import { isSharedDomain } from './domains';
 import { loadLocalSettings } from './local-settings';
 
@@ -98,6 +99,12 @@ export const alertEmail = env.SKIFF_ALERT_EMAIL;
 
 /** Escape hatch for local development; production is invite-only (D10). */
 export const openSignup = env.SKIFF_OPEN_SIGNUP === '1' || devPasswordLogin;
+
+/**
+ * Feature flags read once at startup from `SKIFF_FEATURE_*` (docs/OPS.md §2.5). The same resolved
+ * values are exposed by `/api/setup/status`; secrets are never involved.
+ */
+export const features = parseFeatureFlags(env);
 
 export const r2 =
 	objectStoreKind === 'r2'

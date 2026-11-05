@@ -18,6 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Migration history is compared with the base SHA, which may be many commits back.
+          fetch-depth: 0
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -31,6 +34,12 @@ jobs:
 
       - name: Type-check and lint
         run: bun run check
+
+      - name: Migration safety
+        env:
+          # Compare against the target branch (PR) or previous push, not the branch tip.
+          SKIFF_MIGRATION_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD' }}
+        run: bun scripts/check-migrations.ts
 
       - uses: actions/setup-node@v4
         with:

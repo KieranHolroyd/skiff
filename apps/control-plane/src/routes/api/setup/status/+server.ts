@@ -1,6 +1,6 @@
 import type { RequestHandler } from './$types';
 import { sqlite } from '#lib/server/db.js';
-import { contentDomain, objectStoreKind, platformOrigin, sharedDomain, smtp } from '#lib/server/config.js';
+import { contentDomain, features, objectStoreKind, platformOrigin, sharedDomain, smtp } from '#lib/server/config.js';
 import { json } from '#lib/server/api.js';
 
 /**
@@ -19,5 +19,7 @@ export const GET: RequestHandler = async () => {
 		objectStore: objectStoreKind,
 		email: smtp ? 'smtp' : 'console',
 		nodes: nodes?.count ?? 0,
+		/** Resolved SKIFF_FEATURE_* values; booleans only, never env values or secrets. */
+		features,
 	});
 };
