@@ -260,7 +260,8 @@ value. A failed rotation leaves the old secret in place and records the error.
   pooler unit only), and acknowledges it on the next heartbeat. Postgres connections are untouched.
 - Both actions require `database:update`, are audited, and are exposed as
   `POST /databases/:name/restart` (`{ target: "database" | "pooler" }`), `skif db restart <name>
-  [--pooler]`, the MCP `restart_database` tool, and the dashboard Resources/Pooler controls.
+  [--pooler]`, the MCP `restart_database` tool, the per-row **Restart** action on the Databases
+  list, and the dashboard Resources/Pooler controls.
 - **Bulk actions** are on the Databases page header: **Restart all services** (databases and
   storage), **Restart all databases**, and **Back up all databases**. They fan out to the same
   per-item methods and return per-item skips. REST: `POST /services/restart`

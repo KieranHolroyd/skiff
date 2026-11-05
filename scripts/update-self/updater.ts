@@ -56,6 +56,7 @@ import {
 
 export const CONTROL_PLANE = 'skiff-control-plane.service';
 export const AGENT = 'skiff-agent.service';
+export const HELPER = 'skiff-helper.service';
 export const LITESTREAM = 'skiff-litestream.service';
 export const DEFAULT_REPO = 'KieranHolroyd/skiff';
 export const DEFAULT_REF = 'main';
@@ -119,6 +120,8 @@ export interface Host {
 	start(unit: string): Promise<void>;
 	stop(unit: string): Promise<void>;
 	restart(unit: string): Promise<void>;
+	/** Install/refresh skiff-helper from `release` (older hosts may lack the unit). */
+	ensureHelper(release: string): void;
 	isActive(unit: string): Promise<boolean>;
 	/** systemd NRestarts (automatic restarts since the last manual start). */
 	restartCount(unit: string): Promise<number>;
@@ -514,7 +517,10 @@ export class Updater {
 			setLink(layout.currentLink, release);
 			host.log(`${layout.currentLink} -> ${release}`);
 
+			// The helper binary lives outside releases; install this release's copy before restart.
+			host.ensureHelper(release);
 			await host.start(CONTROL_PLANE);
+			await host.restart(HELPER);
 			if (withAgent && host.agentEnrolled()) await host.restart(AGENT);
 
 			host.phase('verifying', 'Waiting for the new release to prove it is healthy');
@@ -625,7 +631,9 @@ export class Updater {
 				setLink(layout.currentLink, previous);
 				setLink(layout.previousLink, current);
 				host.log(`${layout.currentLink} -> ${previous}`);
+				host.ensureHelper(previous);
 				await host.start(CONTROL_PLANE);
+				await host.restart(HELPER);
 				if (withAgent && host.agentEnrolled()) await host.restart(AGENT);
 				const problem = await this.verifyLive({
 					requirePublic: false,
@@ -711,7 +719,9 @@ export class Updater {
 			if (sw.previousBefore && existsSync(sw.previousBefore) && sw.previousBefore !== sw.from)
 				setLink(layout.previousLink, sw.previousBefore);
 			else rmSync(layout.previousLink, { force: true });
+			host.ensureHelper(sw.from);
 			await host.start(CONTROL_PLANE);
+			await host.restart(HELPER);
 			if (sw.withAgent && host.agentEnrolled()) await host.restart(AGENT);
 			const problem = await this.verifyLive({ requirePublic: false, withAgent: sw.withAgent });
 			const state = this.readState();
@@ -741,7 +751,9 @@ export class Updater {
 		host.enterCritical();
 		try {
 			if (readLink(layout.currentLink) === sw.to) {
+				host.ensureHelper(sw.to);
 				if (!(await host.isActive(CONTROL_PLANE))) await host.start(CONTROL_PLANE);
+				await host.restart(HELPER).catch(() => undefined);
 				const problem = await this.verifyLive({ requirePublic: false, withAgent: false });
 				if (!problem) {
 					host.log(`${basename(sw.to)} is healthy; keeping it`);
@@ -1031,6 +1043,13 @@ export function assembleRelease(release: string, bunBin: string): void {
 		mkdirSync(join(release, 'cli'), { recursive: true });
 		copyFileSync(cli, join(release, 'cli', 'skif.js'));
 		chmodSync(join(release, 'cli', 'skif.js'), 0o644);
+	}
+	// The privileged helper is part of the release so a `current` swap upgrades it atomically.
+	const helper = join(release, 'repo', 'apps', 'helper', 'dist', 'skiff-helper');
+	if (existsSync(helper)) {
+		mkdirSync(join(release, 'helper'), { recursive: true });
+		copyFileSync(helper, join(release, 'helper', 'skiff-helper'));
+		chmodSync(join(release, 'helper', 'skiff-helper'), 0o755);
 	}
 }
 

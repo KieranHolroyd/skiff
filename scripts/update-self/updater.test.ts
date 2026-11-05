@@ -143,6 +143,7 @@ class FakeHost implements Host {
 	};
 	isActive = async (unit: string) => this.active.get(unit) ?? false;
 	restartCount = async () => 0;
+	ensureHelper = (_release: string) => void this.calls.push('ensure-helper');
 	controlPlaneHealthy = async () =>
 		Boolean(this.active.get(CONTROL_PLANE) && this.running && !this.unhealthy.has(this.running));
 	readyz = async () => {

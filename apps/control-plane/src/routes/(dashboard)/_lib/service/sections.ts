@@ -12,7 +12,11 @@ export interface ServiceSection {
 }
 
 /** Narrow an untrusted `?tab=` to one of the page's in-place sections. */
-export function readTab<T extends string>(value: string | null, tabs: readonly T[], fallback: T): T {
+export function readTab<T extends string>(
+	value: string | null,
+	tabs: readonly T[],
+	fallback: T
+): T {
 	return tabs.includes(value as T) ? (value as T) : fallback;
 }
 

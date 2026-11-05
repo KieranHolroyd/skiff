@@ -99,6 +99,20 @@ export const actions: Actions = {
 		redirect(303, `/databases/${created.name}?created=1`);
 	},
 
+	restart: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const name = formString(await request.formData(), 'name');
+		if (!name) return fail(400, { message: 'A database name is required.' });
+		try {
+			core.databases.restart(principal, name);
+		} catch (error) {
+			return fail(failStatus(error), toFormFailure(error));
+		}
+		return {
+			success: `Restarting ${name}. The node restarts the container and its pooler; data and credentials are kept.`
+		};
+	},
+
 	'restart-all': async ({ locals }) => {
 		const principal = locals.principal!;
 		try {

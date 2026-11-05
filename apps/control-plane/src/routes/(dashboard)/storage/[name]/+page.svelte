@@ -1,5 +1,7 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
+	/* Bucket links are the resolved objects route plus `?bucket=`. */
+	/* eslint svelte/no-navigation-without-resolve: ['error', { ignoreLinks: true, ignoreGoto: true }] */
+	import { goto, replaceState } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import ActivityIcon from '@lucide/svelte/icons/activity';
@@ -7,16 +9,18 @@
 	import Undo2Icon from '@lucide/svelte/icons/undo-2';
 	import CableIcon from '@lucide/svelte/icons/cable';
 	import EarthIcon from '@lucide/svelte/icons/earth';
-	import EyeIcon from '@lucide/svelte/icons/eye';
 	import EyeOffIcon from '@lucide/svelte/icons/eye-off';
 	import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
+	import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
+	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
+	import MemoryStickIcon from '@lucide/svelte/icons/memory-stick';
+	import FileIcon from '@lucide/svelte/icons/file';
 	import LockIcon from '@lucide/svelte/icons/lock';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PlugIcon from '@lucide/svelte/icons/plug';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
-	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
 	import SlidersHorizontalIcon from '@lucide/svelte/icons/sliders-horizontal';
 	import TerminalIcon from '@lucide/svelte/icons/terminal';
 	import TrashIcon from '@lucide/svelte/icons/trash';
@@ -29,7 +33,6 @@
 	} from '@skiff/contracts';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
 	import DetailList from '#lib/components/skiff/DetailList.svelte';
 	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
 	import MetricChart from '#lib/components/skiff/MetricChart.svelte';
@@ -37,7 +40,6 @@
 	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
-	import * as Card from '#lib/components/ui/card/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
@@ -45,14 +47,22 @@
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
 	import { Spinner } from '#lib/components/ui/spinner/index.js';
 	import { Switch } from '#lib/components/ui/switch/index.js';
+	import { Textarea } from '#lib/components/ui/textarea/index.js';
 	import * as Table from '#lib/components/ui/table/index.js';
 	import EmptyState from '../../_lib/EmptyState.svelte';
-	import PageHeader from '../../_lib/PageHeader.svelte';
 	import Panel from '../../_lib/Panel.svelte';
 	import RowMenu from '../../_lib/RowMenu.svelte';
-	import { formatBytes, formatDate, formatDateTime, formatDuration } from '../../_lib/format.js';
+	import CopyValue from '../../_lib/service/CopyValue.svelte';
+	import DangerZone from '../../_lib/service/DangerZone.svelte';
+	import RangePicker from '../../_lib/service/RangePicker.svelte';
+	import StatStrip from '../../_lib/service/StatStrip.svelte';
+	import { readTab, tabHref, type Stat } from '../../_lib/service/sections.js';
+	import { formatBytes, formatDateTime, formatDuration } from '../../_lib/format.js';
 	import { purgeCountdown } from '../../_lib/operations/copy.js';
 	import StorageMeter from '../../databases/_lib/StorageMeter.svelte';
+	import { storagePercent } from '../../databases/_lib/database-series.js';
+	import StorageHeader from '../_lib/StorageHeader.svelte';
+	import { STORAGE_DEFAULT_TAB, STORAGE_TABS, type StorageTab } from '../_lib/storage-tabs.js';
 	import GrantsFields from '../_lib/GrantsFields.svelte';
 	import { storageChart, storageTotals } from '../_lib/storage-series.js';
 	import type { PageProps } from './$types';
@@ -70,6 +80,7 @@
 	const errors = $derived(result?.fieldErrors ?? {});
 
 	const st = $derived(data.storage);
+	const can = $derived(data.storageCan);
 	const deleted = $derived(st.deletedAt !== null);
 	const nodeLabel = $derived(st.nodeName ?? st.nodeId);
 	const hostPort = $derived(st.internalEndpoint.process.split(':').at(-1) ?? '');
@@ -79,6 +90,24 @@
 	const defaultEnvNames = $derived(
 		storageEnvNames('S3', { public: st.public, singleBucket: readyBuckets.length === 1 })
 	);
+
+	// --- sections --------------------------------------------------------------------------------
+
+	let tab = $state<StorageTab>(
+		readTab(page.url.searchParams.get('tab'), STORAGE_TABS, STORAGE_DEFAULT_TAB)
+	);
+
+	/** Switch sections in place (no reload), keeping `?tab=` deep-linkable. */
+	function setTab(next: StorageTab) {
+		tab = next;
+		// eslint-disable-next-line svelte/no-navigation-without-resolve -- same route, only `?tab` changes
+		replaceState(tabHref(page.url.pathname + page.url.search, next, STORAGE_DEFAULT_TAB), {});
+	}
+
+	const objectsHref = (bucket?: string) => {
+		const href = resolve('/(dashboard)/storage/[name]/objects', { name: st.name });
+		return bucket ? `${href}?bucket=${encodeURIComponent(bucket)}` : href;
+	};
 
 	const numberFormat = new Intl.NumberFormat('en-GB');
 	const compactFormat = new Intl.NumberFormat('en-GB', {
@@ -124,7 +153,6 @@
 
 	let credentials = $state<StorageCredentials | null>(null);
 	let revealing = $state(false);
-	let showSecret = $state(false);
 
 	async function reveal() {
 		revealing = true;
@@ -133,16 +161,12 @@
 		if (outcome.type === 'success') {
 			credentials =
 				(outcome.data as { credentials?: StorageCredentials } | undefined)?.credentials ?? null;
-			showSecret = false;
 		}
 	}
 
 	function hide() {
 		credentials = null;
-		showSecret = false;
 	}
-
-	const mask = (value: string) => '•'.repeat(Math.min(24, Math.max(12, value.length)));
 
 	// --- buckets ---------------------------------------------------------------------------------
 
@@ -270,14 +294,19 @@
 	const totals = $derived(storageTotals(data.metrics));
 	const chartBuckets = $derived(chart.buckets);
 
-	const kpis = $derived([
+	const usedBytes = $derived(totals.latestUsedBytes ?? st.usedBytes);
+	const kpis = $derived<Stat[]>([
 		{
 			label: 'Used',
-			value: formatBytes(totals.latestUsedBytes ?? st.usedBytes),
-			caption: `of ${formatBytes(st.storageMb * 1024 * 1024)} budget`
+			icon: HardDriveIcon,
+			value: usedBytes === null ? '—' : formatBytes(usedBytes),
+			unit: `/ ${formatBytes(st.storageMb * 1024 * 1024)}`,
+			meter: storagePercent(usedBytes, st.storageMb),
+			caption: 'Budget for alerts, not a hard quota'
 		},
 		{
 			label: 'Objects',
+			icon: FileIcon,
 			value:
 				(totals.latestObjects ?? st.objects) === null
 					? '—'
@@ -286,11 +315,15 @@
 		},
 		{
 			label: 'Buckets',
+			icon: ArchiveIcon,
 			value: numberFormat.format(totals.latestBucketCount ?? readyBuckets.length),
-			caption: 'reported by the node'
+			caption: st.buckets.some((bucket) => bucket.access === 'public-read')
+				? 'Some allow public reads'
+				: 'All private'
 		},
 		{
 			label: 'Memory',
+			icon: MemoryStickIcon,
 			value: totals.latestMemoryBytes === null ? '—' : formatBytes(totals.latestMemoryBytes),
 			caption: `of ${st.memoryMb} MB limit${totals.uptime !== null && totals.uptime < 1 ? ` · up ${(totals.uptime * 100).toFixed(1)}%` : ''}`
 		}
@@ -318,17 +351,6 @@
 		void runAction('?/restore');
 	}
 
-	function restart() {
-		askConfirm({
-			title: `Restart ${st.name}?`,
-			description:
-				'The RustFS container stops and starts again. S3 requests fail briefly; buckets, objects and access keys are kept.',
-			confirmLabel: 'Restart',
-			tone: 'danger',
-			action: '?/restart'
-		});
-	}
-
 	function purge() {
 		askConfirm({
 			title: `Delete ${st.name} permanently?`,
@@ -340,6 +362,10 @@
 			action: '?/purge'
 		});
 	}
+
+	const canAttach = $derived(
+		can.attach && !deleted && data.projects.length > 0 && readyBuckets.length > 0
+	);
 
 	const created = $derived(page.url.searchParams.get('created') === '1');
 	function dismissCreated() {
@@ -353,64 +379,12 @@
 </svelte:head>
 
 <div class="space-y-6">
-	<PageHeader eyebrow="Storage" title={st.name} target="page.storage">
-		{#snippet meta()}
-			<div class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-				{#if deleted}
-					<StatusBadge status="deleted" />
-				{:else}
-					<StatusBadge status={st.status} />
-				{/if}
-				<Badge variant="outline">{st.engineLabel} {st.version}</Badge>
-				{#if st.public}
-					<Badge variant="info"><EarthIcon />Public</Badge>
-				{:else}
-					<Badge variant="outline"><LockIcon />Private</Badge>
-				{/if}
-				<span class="font-mono text-xs">on {nodeLabel}</span>
-				<span aria-hidden="true">·</span>
-				<span class="font-mono text-xs">{st.memoryMb} MB · {st.cpus} vCPU</span>
-				<span aria-hidden="true">·</span>
-				<span class="text-xs">
-					Created <time datetime={st.createdAt}>{formatDate(st.createdAt)}</time>
-				</span>
-			</div>
-		{/snippet}
-		{#if !deleted}
-			{#if data.logsCanRead}
-				<Button
-					variant="outline"
-					href={resolve('/(dashboard)/storage/[name]/logs', { name: st.name })}
-				>
-					<ScrollTextIcon />
-					Logs
-				</Button>
-			{/if}
-			<Button
-				variant="outline"
-				href={resolve('/(dashboard)/storage/[name]/objects', { name: st.name })}
-			>
-				<FolderKanbanIcon />
-				Browse objects
-			</Button>
-			{#if data.storageCan.update}
-				<Button variant="outline" onclick={restart}><RotateCcwIcon />Restart</Button>
-			{/if}
-		{/if}
-	</PageHeader>
+	<StorageHeader {st} {can} active={tab} onselect={setTab} />
 
 	{#if deleted}
 		<Notice tone="warning" title="This storage instance is in the trash">
 			The container is stopped, the public route is removed and its buckets are kept on {nodeLabel}.
-			{purgeCountdown(st.purgeAt)}.
-			{#if data.storageCan.delete}
-				<span class="mt-2 flex flex-wrap gap-2">
-					<Button size="sm" variant="outline" onclick={restore}><RotateCcwIcon />Restore</Button>
-					<Button size="sm" variant="destructive" onclick={purge}>
-						<TrashIcon />Delete permanently
-					</Button>
-				</span>
-			{/if}
+			{purgeCountdown(st.purgeAt)}. Restore it from the buttons above to bring it back intact.
 		</Notice>
 	{:else}
 		{#if created}
@@ -418,7 +392,8 @@
 				{nodeLabel} pulls the {st.engineLabel}
 				{st.version} image and starts it; buckets are created once it answers. The first start can take
 				a minute.
-				<Button variant="link" size="sm" class="h-auto p-0" onclick={dismissCreated}>Dismiss</Button>
+				<Button variant="link" size="sm" class="h-auto p-0" onclick={dismissCreated}>Dismiss</Button
+				>
 			</Notice>
 		{/if}
 		{#if st.message}
@@ -426,123 +401,79 @@
 		{/if}
 	{/if}
 
-	<div class="grid items-start gap-5 xl:grid-cols-2">
-		<!-- Endpoints --------------------------------------------------------------------------- -->
-		<Panel
-			title="Endpoints"
-			icon={CableIcon}
-			description="Attached apps receive the right endpoint and their own scoped key as environment variables at start-up."
-		>
-			{#snippet actions()}
-				{#if data.storageCan.credentials && !deleted}
-					{#if credentials}
-						<Button variant="outline" size="sm" onclick={hide}><EyeOffIcon />Hide</Button>
-					{:else}
-						<Button variant="outline" size="sm" onclick={reveal} disabled={revealing}>
-							{#if revealing}<Spinner />{:else}<KeyRoundIcon />{/if}
-							Reveal root key
-						</Button>
-					{/if}
-				{/if}
-			{/snippet}
+	{#if tab === 'overview'}
+		<!-- Overview ------------------------------------------------------------------------------ -->
+		<StatStrip label="Storage summary" stats={kpis} />
 
-			<div class="space-y-4">
+		<div class="grid items-start gap-5 xl:grid-cols-5">
+			<Panel
+				title="Endpoints"
+				icon={CableIcon}
+				description="Attached apps receive the right endpoint and their own scoped key as environment variables at start-up."
+				class="xl:col-span-3"
+			>
+				{#snippet actions()}
+					{#if can.credentials && !deleted}
+						{#if credentials}
+							<Button variant="outline" size="sm" onclick={hide}><EyeOffIcon />Hide root key</Button
+							>
+						{:else}
+							<Button variant="outline" size="sm" onclick={reveal} disabled={revealing}>
+								{#if revealing}<Spinner />{:else}<KeyRoundIcon />{/if}
+								Reveal root key
+							</Button>
+						{/if}
+					{/if}
+				{/snippet}
+
 				<DetailList>
 					<dt>Process apps</dt>
-					<dd class="flex items-center justify-end gap-1 font-mono text-xs">
-						<span class="truncate">{st.internalEndpoint.process}</span>
-						<CopyButton value={st.internalEndpoint.process} label="Copy endpoint" iconOnly />
-					</dd>
+					<dd><CopyValue value={st.internalEndpoint.process} label="endpoint" /></dd>
 					<dt>Container apps</dt>
-					<dd class="flex items-center justify-end gap-1 font-mono text-xs">
-						<span class="truncate">{st.internalEndpoint.container}</span>
-						<CopyButton value={st.internalEndpoint.container} label="Copy endpoint" iconOnly />
-					</dd>
+					<dd><CopyValue value={st.internalEndpoint.container} label="endpoint" /></dd>
 					<dt>Public URL</dt>
-					<dd class="flex items-center justify-end gap-1 font-mono text-xs">
+					<dd>
 						{#if st.publicUrl}
-							<span class="truncate">{st.publicUrl}</span>
-							<CopyButton value={st.publicUrl} label="Copy URL" iconOnly />
+							<CopyValue value={st.publicUrl} label="public URL" />
 						{:else}
-							<span class="text-muted-foreground">Private</span>
+							<span class="inline-flex items-center gap-1 text-xs text-muted-foreground">
+								<LockIcon class="size-3" />Private ·
+								<button
+									type="button"
+									class="underline-offset-4 hover:text-foreground hover:underline"
+									onclick={() => setTab('settings')}>change</button
+								>
+							</span>
 						{/if}
 					</dd>
 					<dt>Region</dt>
 					<dd class="font-mono text-xs">{st.region}</dd>
 					<dt>Addressing</dt>
-					<dd class="text-xs">Path-style required</dd>
+					<dd class="text-xs">Path-style</dd>
 					{#if credentials}
 						<dt>Root endpoint</dt>
-						<dd class="flex items-center justify-end gap-1 font-mono text-xs">
-							<span class="truncate">{credentials.endpoint}</span>
-							<CopyButton value={credentials.endpoint} label="Copy endpoint" iconOnly />
-						</dd>
+						<dd><CopyValue value={credentials.endpoint} label="root endpoint" /></dd>
 						<dt>Access key ID</dt>
-						<dd class="flex items-center justify-end gap-1 font-mono text-xs">
-							<span class="truncate">{credentials.accessKeyId}</span>
-							<CopyButton value={credentials.accessKeyId} label="Copy access key ID" iconOnly />
-						</dd>
+						<dd><CopyValue value={credentials.accessKeyId} label="access key ID" /></dd>
 						<dt>Secret key</dt>
-						<dd class="flex items-center justify-end gap-1 font-mono text-xs">
-							<span class="truncate">
-								{showSecret ? credentials.secretAccessKey : mask(credentials.secretAccessKey)}
-							</span>
-							<Button
-								variant="ghost"
-								size="icon-xs"
-								aria-label={showSecret ? 'Hide secret key' : 'Show secret key'}
-								onclick={() => (showSecret = !showSecret)}
-							>
-								{#if showSecret}<EyeOffIcon />{:else}<EyeIcon />{/if}
-							</Button>
-							<CopyButton value={credentials.secretAccessKey} label="Copy secret key" iconOnly />
-						</dd>
+						<dd><CopyValue value={credentials.secretAccessKey} label="secret key" secret /></dd>
 					{/if}
 				</DetailList>
 
 				{#if credentials}
-					<Notice tone="warning" title="This is the root key">
+					<Notice tone="warning" title="This is the root key" class="mt-4">
 						It can manage every bucket on {st.name}. Use it for tools like rclone or
-						<code class="font-mono">aws s3</code>; apps should be attached instead, so each gets
-						its own key scoped to its buckets. This reveal was recorded in the audit log.
+						<code class="font-mono">aws s3</code>; attach apps instead so each gets its own key
+						scoped to its buckets. This reveal was recorded in the audit log.
 					</Notice>
 				{/if}
 
-				<div class="rounded-lg border p-3">
-					<div class="flex items-start justify-between gap-4">
-						<div class="space-y-1">
-							<label for="storage-public-toggle" class="text-sm font-medium">Public endpoint</label>
-							<p class="text-xs text-muted-foreground">
-								{#if st.public}
-									Served at <span class="font-mono">{st.publicUrl}</span>. All public traffic goes
-									through the edge VPS, and over WireGuard when the instance runs on a worker.
-								{:else}
-									Off: listens on loopback and the workload network of {nodeLabel} only. Turning it
-									on serves the S3 API at
-									<span class="font-mono">{st.name}--s3.{data.contentDomain}</span> through the edge
-									VPS (and over WireGuard for worker nodes), authenticated by S3 signatures.
-								{/if}
-							</p>
-						</div>
-						<Switch
-							id="storage-public-toggle"
-							bind:checked={() => st.public, setPublic}
-							disabled={!data.storageCan.update || deleted}
-							aria-label="Public endpoint"
-						/>
-					</div>
-					{#if result?.publicError && result.message}
-						<div class="mt-3">
-							<Notice tone="danger" title="Could not change the endpoint">{result.message}</Notice>
-						</div>
-					{/if}
-				</div>
-
-				<div class="space-y-1.5">
+				<div class="mt-4 space-y-2 rounded-lg border bg-muted/30 p-3">
 					<p class="text-xs text-muted-foreground">
-						Env vars an attached app receives (with its prefix, default <code class="font-mono"
+						An attached app receives these, with its prefix (default <code class="font-mono"
 							>S3</code
-						>; <code class="font-mono">AWS</code> gives the AWS SDK names):
+						>;
+						<code class="font-mono">AWS</code> gives the AWS SDK names):
 					</p>
 					<div class="flex flex-wrap gap-1.5">
 						{#each defaultEnvNames as name (name)}
@@ -550,103 +481,99 @@
 						{/each}
 					</div>
 				</div>
-			</div>
 
-			{#snippet footer()}
-				<span class="flex items-start gap-2">
-					<TerminalIcon class="mt-0.5 size-3.5 shrink-0" />
-					<span>
-						{#if credentials}
-							{credentials.note}
-						{:else if st.public}
-							S3 clients must use path-style addressing
-							(<code class="font-mono">{st.publicUrl}/&lt;bucket&gt;/&lt;key&gt;</code>) and any
-							region; Skiff sends <code class="font-mono">{st.region}</code>.
-						{:else}
-							Private: from elsewhere, tunnel with
-							<code class="font-mono">ssh -L {hostPort}:127.0.0.1:{hostPort} &lt;node&gt;</code>, or
-							make it public. Clients must use path-style addressing.
-						{/if}
-						{#if !data.storageCan.credentials}
-							Revealing the root key needs the <code class="font-mono">storage:credentials</code>
-							permission.
-						{/if}
+				{#snippet footer()}
+					<span class="flex items-start gap-2">
+						<TerminalIcon class="mt-0.5 size-3.5 shrink-0" />
+						<span>
+							{#if credentials}
+								{credentials.note}
+							{:else if st.public}
+								S3 clients must use path-style addressing (<code class="font-mono"
+									>{st.publicUrl}/&lt;bucket&gt;/&lt;key&gt;</code
+								>) and any region; Skiff sends <code class="font-mono">{st.region}</code>.
+							{:else}
+								Private: from elsewhere, tunnel with
+								<code class="font-mono">ssh -L {hostPort}:127.0.0.1:{hostPort} &lt;node&gt;</code>
+								or make it public.
+							{/if}
+							{#if !can.credentials}
+								Revealing the root key needs <code class="font-mono">storage:credentials</code>.
+							{/if}
+						</span>
 					</span>
-				</span>
-			{/snippet}
-		</Panel>
+				{/snippet}
+			</Panel>
 
-		<!-- Attachments ------------------------------------------------------------------------- -->
-		<Panel
-			title="Attached projects"
-			icon={PlugIcon}
-			count={st.attachments.length}
-			description={st.public
-				? 'Public storage works from any node. Each project gets its own key limited to its granted buckets; changes restart the app, no redeploy needed.'
-				: `Private storage is reachable on ${nodeLabel} only, so attached apps run there. Each project gets its own key limited to its granted buckets.`}
-			flush
-		>
-			{#snippet actions()}
-				{#if data.storageCan.attach && !deleted && data.projects.length > 0 && readyBuckets.length > 0}
-					<Button size="sm" variant="outline" onclick={openAttach}><PlusIcon />Attach</Button>
+			<Panel
+				title="Attached projects"
+				icon={PlugIcon}
+				count={st.attachments.length}
+				description={st.public
+					? 'Public storage works from any node. Each project gets its own key limited to its granted buckets.'
+					: `Private storage is reachable on ${nodeLabel} only, so attached apps run there.`}
+				flush
+				class="xl:col-span-2"
+			>
+				{#snippet actions()}
+					{#if canAttach && st.attachments.length > 0}
+						<Button size="sm" variant="outline" onclick={openAttach}><PlusIcon />Attach</Button>
+					{/if}
+				{/snippet}
+
+				{#if result?.warning}
+					<div class="px-4 pt-4"><Notice tone="warning">{result.warning}</Notice></div>
 				{/if}
-			{/snippet}
 
-			{#if result?.warning}
-				<div class="px-4 pt-4">
-					<Notice tone="warning">{result.warning}</Notice>
-				</div>
-			{/if}
-
-			{#if st.attachments.length === 0}
-				<div class="p-4">
-					<EmptyState
-						icon={UnplugIcon}
-						compact
-						title="Not attached"
-						description={readyBuckets.length === 0
-							? 'Create a bucket first, then attach a process or container project to it.'
-							: 'Attach a process or container project to give it an endpoint and a key scoped to the buckets you choose. Static projects cannot use storage.'}
-					>
-						{#if data.storageCan.attach && !deleted && data.projects.length > 0 && readyBuckets.length > 0}
-							<Button size="sm" onclick={openAttach}><PlusIcon />Attach a project</Button>
-						{/if}
-					</EmptyState>
-				</div>
-			{:else}
-				<Table.Root>
-					<Table.Header>
-						<Table.Row>
-							<Table.Head class="pl-4">Project</Table.Head>
-							<Table.Head>Grants</Table.Head>
-							<Table.Head class="hidden md:table-cell">Env</Table.Head>
-							<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
-						</Table.Row>
-					</Table.Header>
-					<Table.Body>
+				{#if st.attachments.length === 0}
+					<div class="p-4">
+						<EmptyState
+							icon={UnplugIcon}
+							compact
+							title="Not attached yet"
+							description={readyBuckets.length === 0
+								? 'Create a bucket first, then attach a process or container project to it.'
+								: 'Attach a process or container project to give it an endpoint and a key scoped to the buckets you choose.'}
+						>
+							{#if canAttach}
+								<Button size="sm" onclick={openAttach}><PlusIcon />Attach a project</Button>
+							{:else if can.update && !deleted && readyBuckets.length === 0}
+								<Button size="sm" variant="outline" onclick={() => (bucketOpen = true)}>
+									<PlusIcon />Create a bucket
+								</Button>
+							{/if}
+						</EmptyState>
+					</div>
+				{:else}
+					<ul class="divide-y">
 						{#each st.attachments as item (item.projectId)}
-							<Table.Row>
-								<Table.Cell class="pl-4 align-top">
-									<a
-										href={resolve('/(dashboard)/projects/[slug]', { slug: item.projectSlug })}
-										class="inline-flex items-center gap-1.5 font-mono text-xs font-medium underline-offset-4 hover:underline"
-									>
-										<FolderKanbanIcon class="size-3.5 text-muted-foreground" />
-										{item.projectSlug}
-									</a>
-									<p
-										class="mt-1 font-mono text-[11px] text-muted-foreground"
-										title="The project's own access key ID"
-									>
-										{item.accessKeyId}
-									</p>
-								</Table.Cell>
-								<Table.Cell class="align-top whitespace-normal">
+							<li class="flex items-start gap-3 px-4 py-3">
+								<span
+									class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
+								>
+									<FolderKanbanIcon class="size-4" />
+								</span>
+								<div class="min-w-0 flex-1 space-y-1.5">
+									<div>
+										<a
+											href={resolve('/(dashboard)/projects/[slug]', { slug: item.projectSlug })}
+											class="font-mono text-sm font-medium underline-offset-4 hover:underline"
+										>
+											{item.projectSlug}
+										</a>
+										<p
+											class="truncate font-mono text-xs text-muted-foreground"
+											title={item.envNames.join('\n')}
+										>
+											{item.envPrefix}_* · key {item.accessKeyId}
+										</p>
+									</div>
 									<div class="flex flex-wrap gap-1">
 										{#each item.grants as grant (grant.bucket)}
 											<Badge
 												variant={grant.mode === 'read-write' ? 'secondary' : 'outline'}
 												class="font-mono font-normal"
+												title={grant.mode}
 											>
 												{grant.bucket}<span class="text-muted-foreground"
 													>{grant.mode === 'read-write' ? 'rw' : 'r'}</span
@@ -654,42 +581,176 @@
 											</Badge>
 										{/each}
 									</div>
+								</div>
+								{#if can.attach}
+									<RowMenu label="Actions for {item.projectSlug}">
+										{#if !deleted}
+											<DropdownMenu.Item onSelect={() => editGrants(item)}>
+												<PencilIcon />Edit grants…
+											</DropdownMenu.Item>
+											<DropdownMenu.Separator />
+										{/if}
+										<DropdownMenu.Item variant="destructive" onSelect={() => detach(item)}>
+											<UnplugIcon />Detach
+										</DropdownMenu.Item>
+									</RowMenu>
+								{/if}
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</Panel>
+		</div>
+	{:else if tab === 'buckets'}
+		<!-- Buckets ------------------------------------------------------------------------------- -->
+		<Panel
+			title="Buckets"
+			icon={ArchiveIcon}
+			count={readyBuckets.length}
+			description={st.statsAt
+				? `Sizes from a snapshot taken ${ago(st.statsAt)}. Refreshed every five minutes.`
+				: 'Sizes and object counts arrive a few minutes after the instance starts.'}
+			flush
+		>
+			{#snippet actions()}
+				{#if can.update && !deleted}
+					<Button size="sm" variant="outline" onclick={() => (bucketOpen = true)}>
+						<PlusIcon />New bucket
+					</Button>
+				{/if}
+			{/snippet}
+
+			{#if st.buckets.length === 0}
+				<div class="p-4">
+					<EmptyState
+						icon={ArchiveIcon}
+						compact
+						title="No buckets yet"
+						description="Buckets are created by the node once the instance runs. Grant them to attached projects to give apps access."
+					>
+						{#if can.update && !deleted}
+							<Button size="sm" onclick={() => (bucketOpen = true)}
+								><PlusIcon />Create a bucket</Button
+							>
+						{/if}
+					</EmptyState>
+				</div>
+			{:else}
+				<Table.Root>
+					<Table.Header>
+						<Table.Row>
+							<Table.Head class="pl-4">Bucket</Table.Head>
+							<Table.Head>Public read</Table.Head>
+							<Table.Head class="text-right">Size</Table.Head>
+							<Table.Head class="hidden text-right sm:table-cell">Objects</Table.Head>
+							<Table.Head class="hidden md:table-cell">State</Table.Head>
+							<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
+						</Table.Row>
+					</Table.Header>
+					<Table.Body>
+						{#each st.buckets as bucket (bucket.name)}
+							{@const users = grantedTo(bucket.name)}
+							{@const hasObjects = (bucket.objects ?? 0) > 0}
+							{@const browsable = !deleted && bucket.state === 'ready'}
+							<Table.Row class="group">
+								<Table.Cell class="pl-4">
+									<div class="flex items-center gap-3">
+										<span
+											class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
+										>
+											<ArchiveIcon class="size-4" />
+										</span>
+										<div class="min-w-0">
+											{#if browsable}
+												<a
+													href={objectsHref(bucket.name)}
+													class="font-mono text-sm font-medium underline-offset-4 group-hover:underline"
+													>{bucket.name}</a
+												>
+											{:else}
+												<span class="font-mono text-sm font-medium">{bucket.name}</span>
+											{/if}
+											<p class="truncate text-xs text-muted-foreground">
+												{users.length > 0
+													? `Granted to ${users.join(', ')}`
+													: 'Not granted to any project'}
+												{#if bucket.versioning}· versioned{/if}
+											</p>
+										</div>
+									</div>
 								</Table.Cell>
-								<Table.Cell class="hidden align-top md:table-cell">
-									<span class="font-mono text-xs" title={item.envNames.join('\n')}>
-										{item.envPrefix}_*
-										<span class="text-muted-foreground">{item.envNames.length} vars</span>
+								<Table.Cell>
+									<span class="inline-flex items-center gap-2">
+										<Switch
+											size="sm"
+											bind:checked={
+												() => bucket.access === 'public-read', (next) => setAccess(bucket, next)
+											}
+											disabled={!can.update || deleted || bucket.state !== 'ready'}
+											aria-label="Public read for {bucket.name}"
+										/>
+										<span class="text-xs text-muted-foreground">
+											{bucket.access === 'public-read' ? 'Public' : 'Private'}
+										</span>
 									</span>
 								</Table.Cell>
-								<Table.Cell class="pr-4 text-right align-top">
-									{#if data.storageCan.attach && !deleted}
-										<div class="flex justify-end gap-1">
-											<Button
-												variant="ghost"
-												size="icon-sm"
-												aria-label="Edit grants for {item.projectSlug}"
-												onclick={() => editGrants(item)}
-											>
-												<PencilIcon />
-											</Button>
-											<Button
-												variant="ghost-danger"
-												size="icon-sm"
-												aria-label="Detach from {item.projectSlug}"
-												onclick={() => detach(item)}
-											>
-												<UnplugIcon />
-											</Button>
-										</div>
-									{:else if data.storageCan.attach}
-										<Button
-											variant="ghost-danger"
-											size="icon-sm"
-											aria-label="Detach from {item.projectSlug}"
-											onclick={() => detach(item)}
-										>
-											<UnplugIcon />
-										</Button>
+								<Table.Cell class="text-right font-mono text-xs tabular-nums">
+									{bucket.sizeBytes === null ? '—' : formatBytes(bucket.sizeBytes)}
+								</Table.Cell>
+								<Table.Cell class="hidden text-right font-mono text-xs tabular-nums sm:table-cell">
+									{bucket.objects === null ? '—' : numberFormat.format(bucket.objects)}
+								</Table.Cell>
+								<Table.Cell class="hidden md:table-cell">
+									<StatusBadge
+										status={bucket.state}
+										label={bucketStateLabel[bucket.state]}
+										tone={bucketStateTone[bucket.state]}
+									/>
+								</Table.Cell>
+								<Table.Cell class="pr-4">
+									{#if !deleted && bucket.state !== 'deleting'}
+										<RowMenu label="Actions for {bucket.name}">
+											{#if browsable}
+												<DropdownMenu.Item onSelect={() => goto(objectsHref(bucket.name))}>
+													<FolderOpenIcon />Browse objects
+												</DropdownMenu.Item>
+											{/if}
+											{#if can.update && bucket.state === 'ready'}
+												<DropdownMenu.Item onSelect={() => (bucketSettings = bucket)}>
+													<SlidersHorizontalIcon />Bucket settings…
+												</DropdownMenu.Item>
+											{/if}
+											{#if bucket.state === 'delete-blocked' && can.update}
+												<DropdownMenu.Item onSelect={() => keepBucket(bucket)}>
+													<Undo2Icon />Keep bucket (cancel delete)
+												</DropdownMenu.Item>
+											{/if}
+											{#if (can.update && !hasObjects && bucket.state !== 'delete-blocked') || hasObjects || bucket.state === 'delete-blocked'}
+												<DropdownMenu.Separator />
+											{/if}
+											{#if can.update && !hasObjects && bucket.state !== 'delete-blocked'}
+												<DropdownMenu.Item
+													variant="destructive"
+													onSelect={() => deleteBucket(bucket)}
+												>
+													<TrashIcon />Delete bucket
+												</DropdownMenu.Item>
+											{/if}
+											{#if hasObjects || bucket.state === 'delete-blocked'}
+												{#if can.delete}
+													<DropdownMenu.Item
+														variant="destructive"
+														onSelect={() => forceDeleteBucket(bucket)}
+													>
+														<TrashIcon />Delete with all objects…
+													</DropdownMenu.Item>
+												{:else}
+													<DropdownMenu.Item disabled>
+														<TrashIcon />Force delete needs storage:delete
+													</DropdownMenu.Item>
+												{/if}
+											{/if}
+										</RowMenu>
 									{/if}
 								</Table.Cell>
 							</Table.Row>
@@ -697,161 +758,27 @@
 					</Table.Body>
 				</Table.Root>
 			{/if}
+			{#snippet footer()}
+				<span>
+					An empty bucket deletes normally; one that holds objects needs a force delete, which
+					empties it first. If a delete finds objects the snapshot missed, the bucket is marked
+					<em>delete blocked</em>: keep it or force it.
+				</span>
+			{/snippet}
 		</Panel>
-	</div>
-
-	<!-- Buckets ------------------------------------------------------------------------------- -->
-	<Panel
-		title="Buckets"
-		icon={ArchiveIcon}
-		count={readyBuckets.length}
-		description={st.statsAt
-			? `Sizes from a snapshot taken ${ago(st.statsAt)} (refreshed every five minutes).`
-			: 'Sizes and object counts arrive a few minutes after the instance starts.'}
-		flush
-	>
-		{#snippet actions()}
-			{#if data.storageCan.update && !deleted}
-				<Button size="sm" variant="outline" onclick={() => (bucketOpen = true)}>
-					<PlusIcon />New bucket
-				</Button>
-			{/if}
-		{/snippet}
-
-		{#if st.buckets.length === 0}
-			<div class="p-4">
-				<EmptyState
-					icon={ArchiveIcon}
-					compact
-					title="No buckets yet"
-					description="Buckets are created by the node once the instance runs. Grant them to attached projects to give apps access."
-				>
-					{#if data.storageCan.update && !deleted}
-						<Button size="sm" onclick={() => (bucketOpen = true)}><PlusIcon />Create a bucket</Button>
-					{/if}
-				</EmptyState>
-			</div>
-		{:else}
-			<Table.Root>
-				<Table.Header>
-					<Table.Row>
-						<Table.Head class="pl-4">Bucket</Table.Head>
-						<Table.Head>Public read</Table.Head>
-						<Table.Head class="text-right">Size</Table.Head>
-						<Table.Head class="hidden text-right sm:table-cell">Objects</Table.Head>
-						<Table.Head class="hidden md:table-cell">State</Table.Head>
-						<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
-					</Table.Row>
-				</Table.Header>
-				<Table.Body>
-					{#each st.buckets as bucket (bucket.name)}
-						{@const users = grantedTo(bucket.name)}
-						{@const hasObjects = (bucket.objects ?? 0) > 0}
-						<Table.Row>
-							<Table.Cell class="pl-4">
-								<span class="inline-flex items-center gap-1.5 font-mono text-xs font-medium">
-									<ArchiveIcon class="size-3.5 text-muted-foreground" />
-									{bucket.name}
-								</span>
-								{#if users.length > 0}
-									<p class="mt-0.5 text-[11px] text-muted-foreground">
-										Granted to {users.join(', ')}
-									</p>
-								{/if}
-							</Table.Cell>
-							<Table.Cell>
-								<Switch
-									size="sm"
-									bind:checked={() => bucket.access === 'public-read', (next) => setAccess(bucket, next)}
-									disabled={!data.storageCan.update || deleted || bucket.state !== 'ready'}
-									aria-label="Public read for {bucket.name}"
-								/>
-								<span class="ml-1.5 text-xs text-muted-foreground">
-									{bucket.access === 'public-read' ? 'public-read' : 'private'}
-								</span>
-							</Table.Cell>
-							<Table.Cell class="text-right font-mono text-xs tabular-nums">
-								{bucket.sizeBytes === null ? '—' : formatBytes(bucket.sizeBytes)}
-							</Table.Cell>
-							<Table.Cell class="hidden text-right font-mono text-xs tabular-nums sm:table-cell">
-								{bucket.objects === null ? '—' : numberFormat.format(bucket.objects)}
-							</Table.Cell>
-							<Table.Cell class="hidden md:table-cell">
-								<StatusBadge
-									status={bucket.state}
-									label={bucketStateLabel[bucket.state]}
-									tone={bucketStateTone[bucket.state]}
-								/>
-							</Table.Cell>
-							<Table.Cell class="pr-4">
-								{#if !deleted && (data.storageCan.update || data.storageCan.delete) && bucket.state !== 'deleting'}
-									<RowMenu label="Actions for {bucket.name}">
-										{#if data.storageCan.update && !deleted && bucket.state === 'ready'}
-											<DropdownMenu.Item onSelect={() => (bucketSettings = bucket)}>
-												<SlidersHorizontalIcon />Bucket settings…
-											</DropdownMenu.Item>
-										{/if}
-										{#if bucket.state === 'delete-blocked'}
-											{#if data.storageCan.update}
-												<DropdownMenu.Item onSelect={() => keepBucket(bucket)}>
-													<Undo2Icon />Keep bucket (cancel delete)
-												</DropdownMenu.Item>
-											{/if}
-										{:else if data.storageCan.update && !hasObjects}
-											<DropdownMenu.Item variant="destructive" onSelect={() => deleteBucket(bucket)}>
-												<TrashIcon />Delete bucket
-											</DropdownMenu.Item>
-										{/if}
-										{#if data.storageCan.delete && (hasObjects || bucket.state === 'delete-blocked')}
-											<DropdownMenu.Item
-												variant="destructive"
-												onSelect={() => forceDeleteBucket(bucket)}
-											>
-												<TrashIcon />Delete with all objects…
-											</DropdownMenu.Item>
-										{:else if hasObjects || bucket.state === 'delete-blocked'}
-											<DropdownMenu.Item disabled>
-												<TrashIcon />Force delete needs storage:delete
-											</DropdownMenu.Item>
-										{/if}
-									</RowMenu>
-								{/if}
-							</Table.Cell>
-						</Table.Row>
-					{/each}
-				</Table.Body>
-			</Table.Root>
-		{/if}
-		{#snippet footer()}
-			<span>
-				An empty bucket deletes normally. One that holds objects needs a force delete, which empties
-				it first. If a delete finds objects the snapshot missed, the bucket is kept and marked
-				<em>delete blocked</em>: keep it (re-creating it cancels the delete) or force it.
-			</span>
-		{/snippet}
-	</Panel>
-
-	<!-- Metrics ------------------------------------------------------------------------------- -->
-	<section class="space-y-4" aria-labelledby="storage-metrics">
+	{:else if tab === 'metrics'}
+		<!-- Metrics ------------------------------------------------------------------------------- -->
 		<div class="flex flex-wrap items-end justify-between gap-3">
 			<div>
-				<h2 id="storage-metrics" class="text-xs font-medium text-muted-foreground">
-					Metrics · last {data.range.label}
-				</h2>
+				<h2 class="text-base font-semibold">Last {data.range.label}</h2>
 				<p class="text-sm text-muted-foreground">Sampled once a minute by the node's agent.</p>
 			</div>
-			<div class="flex items-center gap-1 rounded-lg border bg-muted/30 p-1">
-				{#each data.ranges as option (option.key)}
-					<Button
-						href={data.rangeLinks[option.key]}
-						variant={option.key === data.range.key ? 'secondary' : 'ghost'}
-						size="sm"
-						class="h-7 px-2.5 text-xs"
-					>
-						{option.shortLabel}
-					</Button>
-				{/each}
-			</div>
+			<RangePicker
+				ranges={data.ranges}
+				current={data.range.key}
+				links={data.rangeLinks}
+				tab="metrics"
+			/>
 		</div>
 
 		{#if !data.telemetryAvailable}
@@ -869,22 +796,6 @@
 					: 'Stats arrive about a minute after the instance starts.'}
 			/>
 		{:else}
-			<section class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-label="Storage summary">
-				{#each kpis as kpi (kpi.label)}
-					<Card.Root class="gap-3">
-						<Card.Header>
-							<Card.Description class="text-xs font-medium text-muted-foreground"
-								>{kpi.label}</Card.Description
-							>
-							<Card.Title class="text-2xl leading-none font-semibold tracking-tight tabular-nums">
-								{kpi.value}
-							</Card.Title>
-						</Card.Header>
-						<Card.Footer class="text-xs text-muted-foreground">{kpi.caption}</Card.Footer>
-					</Card.Root>
-				{/each}
-			</section>
-
 			<div class="grid items-start gap-5 xl:grid-cols-2">
 				<Panel title="Used" description="Bytes stored across all buckets.">
 					<MetricChart
@@ -947,68 +858,99 @@
 				</Panel>
 			</div>
 		{/if}
-	</section>
-
-	<!-- Settings + danger zone ---------------------------------------------------------------- -->
-	<div class="grid items-start gap-5 xl:grid-cols-2">
-		<Panel
-			title="Resources"
-			icon={SlidersHorizontalIcon}
-			description="Limits apply when the node restarts the container. The engine version can't change here."
-		>
-			{#snippet actions()}
-				{#if data.storageCan.update && !deleted}
-					<Button variant="outline" size="sm" onclick={() => (resizeOpen = true)}>
-						<PencilIcon />Resize
-					</Button>
+	{:else if tab === 'settings'}
+		<!-- Settings ------------------------------------------------------------------------------ -->
+		<div class="grid items-start gap-5 xl:grid-cols-2">
+			<Panel
+				title="Public endpoint"
+				icon={EarthIcon}
+				description="Serve the S3 API on the internet through the edge, authenticated by S3 signatures."
+			>
+				<div class="flex items-start justify-between gap-4">
+					<div class="space-y-1">
+						<label for="storage-public-toggle" class="text-sm font-medium">
+							{st.public ? 'Public' : 'Private'}
+						</label>
+						<p class="text-xs text-muted-foreground">
+							{#if st.public}
+								Served at <span class="font-mono">{st.publicUrl}</span>. Public traffic goes through
+								the edge VPS, and over WireGuard when the instance runs on a worker.
+							{:else}
+								Listens on loopback and the workload network of {nodeLabel} only. Turning it on serves
+								<span class="font-mono">{st.name}--s3.{data.contentDomain}</span> through the edge VPS.
+							{/if}
+						</p>
+					</div>
+					<Switch
+						id="storage-public-toggle"
+						bind:checked={() => st.public, setPublic}
+						disabled={!can.update || deleted}
+						aria-label="Public endpoint"
+					/>
+				</div>
+				{#if result?.publicError && result.message}
+					<Notice tone="danger" title="Could not change the endpoint" class="mt-4">
+						{result.message}
+					</Notice>
 				{/if}
-			{/snippet}
-			<DetailList>
-				<dt>Memory</dt>
-				<dd class="font-mono text-xs">{st.memoryMb} MB</dd>
-				<dt>CPU</dt>
-				<dd class="font-mono text-xs">{st.cpus} vCPU</dd>
-				<dt>Storage</dt>
-				<dd><StorageMeter sizeBytes={st.usedBytes} storageMb={st.storageMb} /></dd>
-				<dt>Updated</dt>
-				<dd class="text-xs">
-					<time datetime={st.updatedAt}>{formatDateTime(st.updatedAt)}</time>
-				</dd>
-			</DetailList>
-		</Panel>
+			</Panel>
 
-		{#if data.storageCan.delete}
-			<Card.Root class="border-destructive/30">
-				<Card.Header>
-					<Card.Title class="text-destructive">Danger zone</Card.Title>
-					<Card.Description>
-						{#if deleted}
-							In the trash. Restore brings it back with its buckets, or delete it permanently now.
-						{:else if st.attachments.length > 0}
-							Detach it from {st.attachments.map((item) => item.projectSlug).join(', ')} before deleting.
-							Deleted storage stays in the trash for 7 days with its data intact.
-						{:else}
-							Deleting stops the container, removes the public route and moves the instance to the
-							trash for 7 days. Its buckets stay on the node until it is purged.
-						{/if}
-					</Card.Description>
-					<Card.Action class="flex flex-wrap gap-2 self-center">
-						{#if deleted}
-							<Button variant="outline" onclick={restore}><RotateCcwIcon />Restore</Button>
-							<Button variant="destructive" onclick={purge}><TrashIcon />Delete permanently</Button>
-						{:else}
-							<Button variant="destructive" onclick={deleteStorage}>
-								<TrashIcon />Delete storage
-							</Button>
-						{/if}
-					</Card.Action>
-				</Card.Header>
-			</Card.Root>
+			<Panel
+				title="Resources"
+				icon={SlidersHorizontalIcon}
+				description="Limits apply when the node restarts the container. The engine version can't change here."
+			>
+				{#snippet actions()}
+					{#if can.update && !deleted}
+						<Button variant="outline" size="sm" onclick={() => (resizeOpen = true)}>
+							<PencilIcon />Resize
+						</Button>
+					{/if}
+				{/snippet}
+				<DetailList>
+					<dt>Engine</dt>
+					<dd class="text-xs">{st.engineLabel} {st.version}</dd>
+					<dt>Node</dt>
+					<dd class="font-mono text-xs">{nodeLabel}</dd>
+					<dt>Memory</dt>
+					<dd class="font-mono text-xs">{st.memoryMb} MB</dd>
+					<dt>CPU</dt>
+					<dd class="font-mono text-xs">{st.cpus} vCPU</dd>
+					<dt>Storage</dt>
+					<dd><StorageMeter sizeBytes={st.usedBytes} storageMb={st.storageMb} /></dd>
+					<dt>Updated</dt>
+					<dd class="text-xs">
+						<time datetime={st.updatedAt}>{formatDateTime(st.updatedAt)}</time>
+					</dd>
+				</DetailList>
+			</Panel>
+		</div>
+
+		{#if can.delete}
+			<DangerZone>
+				{#snippet description()}
+					{#if deleted}
+						In the trash. Restore brings it back with its buckets, or delete it permanently now.
+					{:else if st.attachments.length > 0}
+						Detach it from {st.attachments.map((item) => item.projectSlug).join(', ')} first. Deleted
+						storage stays in the trash for 7 days with its data intact.
+					{:else}
+						Deleting stops the container, removes the public route and moves the instance to the
+						trash for 7 days. Its buckets stay on the node until it is purged.
+					{/if}
+				{/snippet}
+				{#if deleted}
+					<Button variant="outline" onclick={restore}><RotateCcwIcon />Restore</Button>
+					<Button variant="destructive" onclick={purge}><TrashIcon />Delete permanently</Button>
+				{:else}
+					<Button variant="destructive" onclick={deleteStorage}><TrashIcon />Delete storage</Button>
+				{/if}
+			</DangerZone>
 		{/if}
-	</div>
+	{/if}
 </div>
 
-{#if data.storageCan.update && !deleted}
+{#if can.update && !deleted}
 	<FormDialog
 		bind:open={bucketOpen}
 		icon={ArchiveIcon}
@@ -1056,9 +998,11 @@
 	</FormDialog>
 {/if}
 
-{#if data.storageCan.update && !deleted}
+{#if can.update && !deleted}
 	<FormDialog
-		bind:open={() => bucketSettings !== null, (open) => (bucketSettings = open ? bucketSettings : null)}
+		bind:open={
+			() => bucketSettings !== null, (open) => (bucketSettings = open ? bucketSettings : null)
+		}
 		icon={SlidersHorizontalIcon}
 		title="Configure {bucketSettings?.name ?? ''}"
 		description="Desired state; the node applies it on its next reconcile and reports convergence. Object lock is set at creation and cannot be undone."
@@ -1072,7 +1016,12 @@
 				<div class="grid gap-4 sm:grid-cols-2">
 					<Field.Field>
 						<Field.Label for="bucket-versioning">Versioning</Field.Label>
-						<NativeSelect.Root id="bucket-versioning" name="versioning" class="w-full" value={bucketSettings.versioning ? 'on' : 'off'}>
+						<NativeSelect.Root
+							id="bucket-versioning"
+							name="versioning"
+							class="w-full"
+							value={bucketSettings.versioning ? 'on' : 'off'}
+						>
 							<NativeSelect.Option value="off">Off</NativeSelect.Option>
 							<NativeSelect.Option value="on">On</NativeSelect.Option>
 						</NativeSelect.Root>
@@ -1091,31 +1040,35 @@
 							placeholder="none"
 							class="font-mono text-sm"
 						/>
-						<Field.Description>Empty or “none” means unlimited. Writes fail when the bucket is full.</Field.Description>
+						<Field.Description
+							>Empty or “none” means unlimited. Writes fail when the bucket is full.</Field.Description
+						>
 					</Field.Field>
 				</div>
 				<Field.Field>
 					<Field.Label for="bucket-lifecycle">Lifecycle rules (JSON)</Field.Label>
-					<textarea
+					<Textarea
 						id="bucket-lifecycle"
 						name="lifecycle"
-						rows="5"
-						class="w-full rounded-md border bg-background p-2 font-mono text-xs"
+						rows={5}
+						spellcheck="false"
+						class="font-mono text-xs"
 						value={jsonText(bucketSettings.lifecycle)}
-					></textarea>
+					/>
 					<Field.Description>
 						Array of {`{ id, prefix?, expireDays?, noncurrentExpireDays?, abortIncompleteDays?, enabled }`}.
 					</Field.Description>
 				</Field.Field>
 				<Field.Field>
 					<Field.Label for="bucket-cors">CORS rules (JSON)</Field.Label>
-					<textarea
+					<Textarea
 						id="bucket-cors"
 						name="cors"
-						rows="4"
-						class="w-full rounded-md border bg-background p-2 font-mono text-xs"
+						rows={4}
+						spellcheck="false"
+						class="font-mono text-xs"
 						value={jsonText(bucketSettings.cors)}
-					></textarea>
+					/>
 					<Field.Description>
 						Array of {`{ origin: [], method: [], header?: [], expose?: [], maxAge? }`}.
 					</Field.Description>
@@ -1140,7 +1093,7 @@
 	</FormDialog>
 {/if}
 
-{#if data.storageCan.attach && !deleted}
+{#if can.attach && !deleted}
 	<FormDialog
 		bind:open={attachOpen}
 		icon={PlugIcon}
@@ -1187,7 +1140,9 @@
 				{storageEnvNames((attachPrefix || 'S3').toUpperCase(), {
 					public: st.public,
 					singleBucket: false
-				}).join(' ')}{readyBuckets.length > 0 ? ` (+${(attachPrefix || 'S3').toUpperCase()}_BUCKET with one bucket)` : ''}
+				}).join(' ')}{readyBuckets.length > 0
+					? ` (+${(attachPrefix || 'S3').toUpperCase()}_BUCKET with one bucket)`
+					: ''}
 			</p>
 			<GrantsFields
 				buckets={readyBucketNames}
@@ -1202,7 +1157,8 @@
 		bind:open={grantsOpen}
 		icon={KeyRoundIcon}
 		title="Grants for {editing?.projectSlug ?? ''}"
-		description="Changes the policy on the project's own key ({editing?.accessKeyId ?? ''}). The app restarts with the new grants."
+		description="Changes the policy on the project's own key ({editing?.accessKeyId ??
+			''}). The app restarts with the new grants."
 		action="?/updateGrants"
 		submitLabel="Save grants"
 	>
@@ -1218,7 +1174,7 @@
 	</FormDialog>
 {/if}
 
-{#if data.storageCan.update && !deleted}
+{#if can.update && !deleted}
 	<FormDialog
 		bind:open={resizeOpen}
 		icon={SlidersHorizontalIcon}

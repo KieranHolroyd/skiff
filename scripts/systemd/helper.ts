@@ -2,11 +2,11 @@
  * `skiff-helper.service`: the privileged runtime helper. It renders systemd units and Quadlet
  * files from validated desired state and is the only Skiff process that runs as root (D26).
  *
- * Shared by the installer and `skiff-update-self`. The binary lives inside a release
- * (`<optDir>/current/helper/skiff-helper`) so an atomic `current` swap also upgrades the helper;
- * the caller restarts the unit after the swap.
+ * Shared by the installer and `skiff-update-self`. Each release carries its own helper binary;
+ * activation copies it to the stable `<optDir>/helper/skiff-helper` path the unit runs, so a
+ * rollback to a release that predates the helper keeps the working binary.
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export const HELPER_UNIT = 'skiff-helper.service';
@@ -37,7 +37,7 @@ Type=simple
 User=root
 ExecStartPre=+/usr/bin/install -d -o root -g skiff -m 0750 /run/skiff-helper
 ExecStartPre=+/usr/bin/install -d -o root -g root -m 0755 /etc/containers/systemd
-ExecStart=${optDir}/current/helper/skiff-helper
+ExecStart=${optDir}/helper/skiff-helper
 EnvironmentFile=${etcDir}/helper.env
 Restart=on-failure
 RestartSec=2
@@ -69,20 +69,49 @@ export function helperEnv(paths: HelperPaths = {}): string {
 
 export interface EnsureHelperOptions extends HelperPaths {
 	systemdDir?: string;
+	/** Active release whose `helper/skiff-helper` is installed at the stable path. */
+	release?: string;
 	run: (cmd: string[]) => void;
 	log?: (message: string) => void;
 	/** Start or restart the helper now (false when the caller starts it separately). */
 	start?: boolean;
 }
 
-/** Install the helper unit and its env file. Idempotent; returns whether anything was written. */
+/**
+ * Copy a release's helper binary to the stable path the unit runs. Atomic, so a running helper
+ * keeps its old inode until the restart. A release without a helper leaves the current binary.
+ */
+export function installHelperBinary(
+	options: Pick<EnsureHelperOptions, 'optDir' | 'release' | 'log'>,
+): boolean {
+	if (!options.release) return false;
+	const source = join(options.release, 'helper', 'skiff-helper');
+	if (!existsSync(source)) return false;
+	const optDir = options.optDir ?? '/opt/skiff';
+	const dir = join(optDir, 'helper');
+	mkdirSync(dir, { recursive: true, mode: 0o755 });
+	const target = join(dir, 'skiff-helper');
+	try {
+		if (readFileSync(target).equals(readFileSync(source))) return false;
+	} catch {
+		// Missing or unreadable target: replace it.
+	}
+	const tmp = `${target}.new`;
+	rmSync(tmp, { force: true });
+	copyFileSync(source, tmp);
+	chmodSync(tmp, 0o755);
+	renameSync(tmp, target);
+	options.log?.(`installed ${target}`);
+	return true;
+}
+
+/** Install the helper binary, unit and env file. Idempotent; returns whether anything changed. */
 export function ensureHelper(options: EnsureHelperOptions): boolean {
 	const systemdDir = options.systemdDir ?? '/etc/systemd/system';
 	const etcDir = options.etcDir ?? '/etc/skiff';
 	const envFile = join(etcDir, 'helper.env');
-	let changed = false;
+	let changed = installHelperBinary(options);
 	mkdirSync(etcDir, { recursive: true, mode: 0o750 });
-	mkdirSync('/etc/containers/systemd', { recursive: true, mode: 0o755 });
 	if (!existsSync(envFile)) {
 		writeFileSync(envFile, helperEnv(options), { mode: 0o640 });
 		options.run(['chown', 'root:skiff', envFile]);

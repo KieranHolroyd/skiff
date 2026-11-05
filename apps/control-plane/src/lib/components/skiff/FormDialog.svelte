@@ -22,6 +22,7 @@
 		submitLabel = 'Save',
 		submitVariant = 'default',
 		size = 'md',
+		enctype,
 		trigger,
 		children,
 		onsuccess
@@ -34,6 +35,8 @@
 		submitLabel?: string;
 		submitVariant?: ButtonVariant;
 		size?: 'sm' | 'md' | 'lg';
+		/** Set to `multipart/form-data` for file inputs. */
+		enctype?: 'multipart/form-data';
 		trigger?: Snippet<[Record<string, unknown>]>;
 		children: Snippet;
 		onsuccess?: () => void;
@@ -82,7 +85,7 @@
 			</Dialog.Title>
 			{#if description}<Dialog.Description>{description}</Dialog.Description>{/if}
 		</Dialog.Header>
-		<form method="POST" {action} use:enhance={submit} class="grid gap-5">
+		<form method="POST" {action} {enctype} use:enhance={submit} class="grid gap-5">
 			{#if error}
 				<Alert.Root variant="destructive">
 					<CircleAlertIcon />

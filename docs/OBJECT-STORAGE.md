@@ -246,7 +246,8 @@ New bucket-configuration and share mutations are gated by `SKIFF_FEATURE_OBJECT_
 
 **Restart and bulk actions.** `POST /storage/:name/restart` (and `skif storage restart <name>`)
 bumps the instance's restart generation; the node re-applies the unit and RustFS restarts with its
-data, buckets and keys intact. The Storage page also has **Restart all services** (storage and
+data, buckets and keys intact. The per-row **Restart** action on the Storage list uses the same
+call. The Storage page also has **Restart all services** (storage and
 databases) and **Restart all storage**; these call `POST /services/restart` with the matching scope
 and report per-item skips.
 

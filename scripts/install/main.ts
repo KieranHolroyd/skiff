@@ -398,6 +398,8 @@ function ensureUsersAndDirs(): void {
 	ensureDir(dirname(SELF_UPDATE_DEFAULTS.requestFile), '0750', 'skiff:skiff');
 	ensureDir(dirname(SELF_UPDATE_DEFAULTS.statusFile), '0750', 'root:skiff');
 	ensureDir(RUN_DIR, '2770', 'root:caddy');
+	// Quadlet's generator reads .container/.network files from here for managed services.
+	ensureDir('/etc/containers/systemd', '0755', 'root:root');
 	// Caddy writes its JSON access log here (0640); the agent reads it via the caddy group (DESIGN §8).
 	ensureDir(dirname(CADDY_ACCESS_LOG), '0750', 'caddy:caddy');
 	if (!options.dryRun) {
@@ -524,7 +526,7 @@ function buildRelease(env: Map<string, string>): string {
 	return release;
 }
 
-function writeUnits(): void {
+function writeUnits(release: string): void {
 	step('systemd units');
 	ensureCaddyAccess();
 	const control = `[Unit]
@@ -652,6 +654,7 @@ WantedBy=multi-user.target
 		etcDir: ETC_DIR,
 		varDir: VAR_DIR,
 		bunBin: BUN_BIN,
+		release,
 		run: (cmd) => void run(cmd[0]!, cmd.slice(1), { allowFailure: true }),
 		log,
 		start: false,
@@ -1166,7 +1169,7 @@ async function install(): Promise<void> {
 		installUpdateCommand();
 		installCliCommands();
 		installReleaseCommands();
-		writeUnits();
+		writeUnits(release);
 		startServices();
 		installBackups(env);
 		bootstrapNode(env, release);

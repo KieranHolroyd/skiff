@@ -2,7 +2,11 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
+	import ArchiveIcon from '@lucide/svelte/icons/archive';
 	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
+	import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
+	import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
+	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import CylinderIcon from '@lucide/svelte/icons/cylinder';
 	import EarthIcon from '@lucide/svelte/icons/earth';
@@ -94,8 +98,26 @@
 		void goto(value === 'trash' ? `${href}?view=trash` : href);
 	}
 
+	/** Open a detail page on one of its sections. */
+	function openSection(href: string, tab: string) {
+		// eslint-disable-next-line svelte/no-navigation-without-resolve -- resolved route plus `?tab`
+		void goto(`${href}?tab=${tab}`);
+	}
+
 	function restore(name: string) {
 		void runAction('?/restore', { name });
+	}
+
+	function restartOne(name: string) {
+		askConfirm({
+			title: `Restart ${name}?`,
+			description:
+				'The RustFS container restarts. S3 requests and attached apps fail briefly; buckets, objects and keys are kept.',
+			confirmLabel: 'Restart',
+			tone: 'danger',
+			action: '?/restart',
+			fields: { name }
+		});
 	}
 
 	function restartAll(scope: 'storage' | 'all') {
@@ -136,31 +158,33 @@
 		title="Storage"
 		description="Managed S3-compatible object storage (RustFS). Attach an instance to a process or container project and it receives an endpoint and its own scoped access key at start-up."
 	>
+		{#if data.storageCan.update && !trashView && data.instances.length > 0}
+			<DropdownMenu.Root>
+				<DropdownMenu.Trigger>
+					{#snippet child({ props })}
+						<Button {...props} variant="outline">
+							Bulk actions
+							<ChevronDownIcon />
+						</Button>
+					{/snippet}
+				</DropdownMenu.Trigger>
+				<DropdownMenu.Content align="end" class="w-60">
+					<DropdownMenu.Item onSelect={() => restartAll('storage')}>
+						<RotateCcwIcon />Restart all storage
+					</DropdownMenu.Item>
+					<DropdownMenu.Separator />
+					<DropdownMenu.Item onSelect={() => restartAll('all')}>
+						<RotateCcwIcon />Restart all services
+						<span class="ml-auto text-xs text-muted-foreground">+ databases</span>
+					</DropdownMenu.Item>
+				</DropdownMenu.Content>
+			</DropdownMenu.Root>
+		{/if}
 		{#if data.storageCan.create}
 			<Button onclick={() => (createOpen = true)}>
 				<PlusIcon />
 				New storage
 			</Button>
-		{/if}
-		{#if data.storageCan.update && !trashView}
-			<Button variant="outline" onclick={() => restartAll('all')}>
-				<RotateCcwIcon />
-				Restart all services
-			</Button>
-			<DropdownMenu.Root>
-				<DropdownMenu.Trigger>
-					{#snippet child({ props })}
-						<Button {...props} variant="ghost" size="icon-sm" aria-label="More bulk actions">
-							<ChevronDownIcon />
-						</Button>
-					{/snippet}
-				</DropdownMenu.Trigger>
-				<DropdownMenu.Content align="end" class="w-56">
-					<DropdownMenu.Item onSelect={() => restartAll('storage')}>
-						Restart all storage
-					</DropdownMenu.Item>
-				</DropdownMenu.Content>
-			</DropdownMenu.Root>
 		{/if}
 	</PageHeader>
 
@@ -244,7 +268,7 @@
 								<Table.Head class="hidden md:table-cell">Node</Table.Head>
 								<Table.Head class="hidden lg:table-cell">Used</Table.Head>
 								<Table.Head class="hidden text-right md:table-cell">Buckets</Table.Head>
-								<Table.Head class="hidden text-right lg:table-cell">Attached</Table.Head>
+								<Table.Head class="hidden lg:table-cell">Attached to</Table.Head>
 							{/if}
 							<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
 						</Table.Row>
@@ -302,17 +326,30 @@
 									<Table.Cell class="hidden w-48 lg:table-cell">
 										<StorageMeter sizeBytes={item.usedBytes} storageMb={item.storageMb} compact />
 									</Table.Cell>
-									<Table.Cell class="hidden text-right font-mono text-xs tabular-nums md:table-cell">
+									<Table.Cell
+										class="hidden text-right font-mono text-xs tabular-nums md:table-cell"
+									>
 										{item.buckets.filter((bucket) => bucket.state !== 'deleting').length}
 									</Table.Cell>
-									<Table.Cell class="hidden text-right font-mono text-xs tabular-nums lg:table-cell">
+									<Table.Cell class="hidden lg:table-cell">
 										{#if item.attachments.length === 0}
-											<span class="text-muted-foreground">—</span>
+											<span class="text-xs text-muted-foreground">—</span>
 										{:else}
-											<span title={item.attachments.map((a) => a.projectSlug).join(', ')}>
-												{item.attachments.length}
-												{item.attachments.length === 1 ? 'project' : 'projects'}
-											</span>
+											<div class="flex flex-wrap gap-1.5">
+												{#each item.attachments as attachment (attachment.projectId)}
+													<Badge
+														variant="outline"
+														class="font-mono font-normal"
+														href={resolve('/(dashboard)/projects/[slug]', {
+															slug: attachment.projectSlug
+														})}
+														title="{attachment.envPrefix}_* · {attachment.grants
+															.length} bucket grants"
+													>
+														<FolderKanbanIcon />{attachment.projectSlug}
+													</Badge>
+												{/each}
+											</div>
 										{/if}
 									</Table.Cell>
 								{/if}
@@ -331,8 +368,29 @@
 										{/if}
 									{:else}
 										<RowMenu label="Actions for {item.name}">
+											{#if data.storageCan.update}
+												<DropdownMenu.Item onSelect={() => restartOne(item.name)}>
+													<RotateCcwIcon />Restart
+												</DropdownMenu.Item>
+												<DropdownMenu.Separator />
+											{/if}
 											<DropdownMenu.Item onSelect={() => goto(href)}>
 												<ArrowRightIcon />Open storage
+											</DropdownMenu.Item>
+											<DropdownMenu.Item onSelect={() => openSection(href, 'buckets')}>
+												<ArchiveIcon />Buckets
+											</DropdownMenu.Item>
+											<DropdownMenu.Item
+												onSelect={() =>
+													goto(resolve('/(dashboard)/storage/[name]/objects', { name: item.name }))}
+											>
+												<FolderOpenIcon />Browse objects
+											</DropdownMenu.Item>
+											<DropdownMenu.Item
+												onSelect={() =>
+													goto(resolve('/(dashboard)/storage/[name]/logs', { name: item.name }))}
+											>
+												<ScrollTextIcon />Logs
 											</DropdownMenu.Item>
 										</RowMenu>
 									{/if}
@@ -357,7 +415,8 @@
 		bind:open={createOpen}
 		icon={CylinderIcon}
 		title="New storage"
-		description="A {data.engine.label} container on one node serving the S3 API. Placement is decided once and never moves."
+		description="A {data.engine
+			.label} container on one node serving the S3 API. Placement is decided once and never moves."
 		action="?/create"
 		submitLabel="Create storage"
 		size="lg"
@@ -415,7 +474,8 @@
 				<Field.Content>
 					<Field.Label for="storage-public">Public endpoint</Field.Label>
 					<Field.Description>
-						Serve the S3 API at <code class="font-mono">&lt;name&gt;--s3.{data.contentDomain}</code>, authenticated by S3 signatures. Off keeps it on loopback and the workload network of
+						Serve the S3 API at <code class="font-mono">&lt;name&gt;--s3.{data.contentDomain}</code
+						>, authenticated by S3 signatures. Off keeps it on loopback and the workload network of
 						its node.
 					</Field.Description>
 				</Field.Content>

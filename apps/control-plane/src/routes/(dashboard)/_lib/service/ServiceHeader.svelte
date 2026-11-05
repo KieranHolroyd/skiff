@@ -3,7 +3,7 @@
 	 * Section links are built by the caller from resolved routes plus a `?tab=`; the resolver rule
 	 * cannot follow that, so link checks are off for this navigation only.
 	 */
-	/* eslint svelte/no-navigation-without-resolve: ['error', { ignoreLinks: true }] */
+	/* eslint svelte/no-navigation-without-resolve: ['error', { ignoreLinks: true, ignoreGoto: true }] */
 	import type { Component, Snippet } from 'svelte';
 	import { goto } from '$app/navigation';
 	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
@@ -83,15 +83,20 @@
 	<Tabs.Root value={active} onValueChange={select}>
 		<Tabs.List
 			variant="line"
-			class="w-full justify-start overflow-x-auto border-b [scrollbar-width:none]"
+			class="w-full [scrollbar-width:none] justify-start overflow-x-auto border-b"
 			aria-label="{title} sections"
 		>
 			{#each sections as section (section.id)}
-				<Tabs.Trigger value={section.id} class="flex-none" data-skiff-target="service.tab.{section.id}">
+				<Tabs.Trigger
+					value={section.id}
+					class="flex-none"
+					data-skiff-target="service.tab.{section.id}"
+				>
 					<section.icon />
 					{section.label}
 					{#if section.count !== undefined}
-						<span class="font-mono text-xs text-muted-foreground tabular-nums">{section.count}</span>
+						<span class="font-mono text-xs text-muted-foreground tabular-nums">{section.count}</span
+						>
 					{/if}
 				</Tabs.Trigger>
 			{/each}

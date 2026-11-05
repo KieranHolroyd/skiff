@@ -30,6 +30,7 @@ import { formatEnvFile, readEnvFile } from '../install/env-file.ts';
 import { TRIGGER_PATH_UNIT, triggerUnits } from './units.ts';
 import { ensurePlatformConfigUnits } from '../platform-config/units.ts';
 import { ensureBuilder, linkAgentCommands } from '../systemd/builder.ts';
+import { ensureHelper } from '../systemd/helper.ts';
 import { ensureStorageUnits } from '../systemd/storage.ts';
 import { R2ObjectStore } from '../../packages/core/src/object-store.ts';
 import { listUpgradeSnapshotBundles } from '../../packages/core/src/upgrade-plan.ts';
@@ -540,6 +541,7 @@ const host: Host = {
 		await runStreaming([bun, 'run', '--cwd', 'apps/control-plane', 'build'], { cwd: repoDir });
 		await runStreaming([bun, 'run', '--cwd', 'apps/agent', 'build'], { cwd: repoDir });
 		await runStreaming([bun, 'run', '--cwd', 'apps/cli', 'build'], { cwd: repoDir });
+		await runStreaming([bun, 'run', '--cwd', 'apps/helper', 'build'], { cwd: repoDir });
 	},
 
 	/**
@@ -630,6 +632,15 @@ const host: Host = {
 	},
 	async restart(unit) {
 		run(['systemctl', 'restart', unit]);
+	},
+	ensureHelper(release) {
+		ensureHelper({
+			systemdDir: SYSTEMD_DIR,
+			release,
+			run: (cmd) => void run(cmd, { quiet: true, allowFailure: true }),
+			log: (message) => appendLog('info', message),
+			start: false,
+		});
 	},
 	async isActive(unit) {
 		return unitState(unit) === 'active';

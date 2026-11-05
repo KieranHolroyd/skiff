@@ -76,7 +76,8 @@ describe('volume inventory', () => {
 	test('derives stable keys for ext4, LVM, LUKS, ZFS and NFS and skips pseudo filesystems', () => {
 		const keys = Object.fromEntries(mounts().map((mount) => [mount.mountPath, mount.sourceKey]));
 		expect(keys['/mnt/data']).toBe('fs:data-uuid');
-		expect(keys['/']).toBe('lvm:vg-root');
+		// Reserved paths (root, /data, /var/lib/skiff, …) cannot hold node data and are never offered.
+		expect(keys['/']).toBeUndefined();
 		expect(keys['/mnt/luks']).toBe('luks:cryptdata');
 		expect(keys['/mnt/zfs']).toBe('zfs:tank/media');
 		expect(keys['/srv/nas']).toBe('nfs:nas.test:/exports/skiff');

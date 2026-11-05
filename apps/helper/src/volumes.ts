@@ -354,6 +354,9 @@ export function inventoryFrom(
 	const mounts: HelperMount[] = [];
 	const seen = new Set<string>();
 	for (const entry of findmnt) {
+		// The inventory is the list of adoptable data volumes. Root, /var/lib/skiff and the other
+		// reserved paths cannot hold node data (the contract rejects them), so never advertise them.
+		if (volumePathProblem(entry.mountPath)) continue;
 		const identity = classifyMount(entry, devices);
 		if (!identity || seen.has(identity.sourceKey)) continue;
 		seen.add(identity.sourceKey);

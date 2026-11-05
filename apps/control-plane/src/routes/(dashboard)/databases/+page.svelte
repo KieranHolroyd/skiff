@@ -2,12 +2,16 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
+	import ActivityIcon from '@lucide/svelte/icons/activity';
+	import ArchiveIcon from '@lucide/svelte/icons/archive';
 	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
+	import CloudUploadIcon from '@lucide/svelte/icons/cloud-upload';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import DatabaseIcon from '@lucide/svelte/icons/database';
 	import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
+	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
 	import TrashIcon from '@lucide/svelte/icons/trash';
@@ -74,8 +78,26 @@
 		void goto(value === 'trash' ? `${href}?view=trash` : href);
 	}
 
+	/** Open a detail page on one of its sections. */
+	function openSection(href: string, tab: string) {
+		// eslint-disable-next-line svelte/no-navigation-without-resolve -- resolved route plus `?tab`
+		void goto(`${href}?tab=${tab}`);
+	}
+
 	function restore(name: string) {
 		void runAction('?/restore', { name });
+	}
+
+	function restartOne(name: string) {
+		askConfirm({
+			title: `Restart ${name}?`,
+			description:
+				'The database container and its pooler restart. Attached apps lose their connections briefly and reconnect; data and credentials are kept.',
+			confirmLabel: 'Restart',
+			tone: 'danger',
+			action: '?/restart',
+			fields: { name }
+		});
 	}
 
 	function restartAll(scope: 'databases' | 'all') {
@@ -127,32 +149,36 @@
 		title="Databases"
 		description="Managed PostgreSQL that runs next to your apps. Attach a database to a process or container project and it receives a DATABASE_URL at start-up."
 	>
+		{#if data.dbCan.update && !trashView && data.databases.length > 0}
+			<DropdownMenu.Root>
+				<DropdownMenu.Trigger>
+					{#snippet child({ props })}
+						<Button {...props} variant="outline">
+							Bulk actions
+							<ChevronDownIcon />
+						</Button>
+					{/snippet}
+				</DropdownMenu.Trigger>
+				<DropdownMenu.Content align="end" class="w-60">
+					<DropdownMenu.Item onSelect={backupAll}>
+						<CloudUploadIcon />Back up all databases
+					</DropdownMenu.Item>
+					<DropdownMenu.Item onSelect={() => restartAll('databases')}>
+						<RotateCcwIcon />Restart all databases
+					</DropdownMenu.Item>
+					<DropdownMenu.Separator />
+					<DropdownMenu.Item onSelect={() => restartAll('all')}>
+						<RotateCcwIcon />Restart all services
+						<span class="ml-auto text-xs text-muted-foreground">+ storage</span>
+					</DropdownMenu.Item>
+				</DropdownMenu.Content>
+			</DropdownMenu.Root>
+		{/if}
 		{#if data.dbCan.create}
 			<Button onclick={() => (createOpen = true)}>
 				<PlusIcon />
 				New database
 			</Button>
-		{/if}
-		{#if data.dbCan.update && !trashView}
-			<Button variant="outline" onclick={() => restartAll('all')}>
-				<RotateCcwIcon />
-				Restart all services
-			</Button>
-			<DropdownMenu.Root>
-				<DropdownMenu.Trigger>
-					{#snippet child({ props })}
-						<Button {...props} variant="ghost" size="icon-sm" aria-label="More bulk actions">
-							<ChevronDownIcon />
-						</Button>
-					{/snippet}
-				</DropdownMenu.Trigger>
-				<DropdownMenu.Content align="end" class="w-56">
-					<DropdownMenu.Item onSelect={() => restartAll('databases')}>
-						Restart all databases
-					</DropdownMenu.Item>
-					<DropdownMenu.Item onSelect={backupAll}>Back up all databases</DropdownMenu.Item>
-				</DropdownMenu.Content>
-			</DropdownMenu.Root>
 		{/if}
 	</PageHeader>
 
@@ -330,8 +356,28 @@
 										{/if}
 									{:else}
 										<RowMenu label="Actions for {database.name}">
+											{#if data.dbCan.update}
+												<DropdownMenu.Item onSelect={() => restartOne(database.name)}>
+													<RotateCcwIcon />Restart
+												</DropdownMenu.Item>
+												<DropdownMenu.Separator />
+											{/if}
 											<DropdownMenu.Item onSelect={() => goto(href)}>
 												<ArrowRightIcon />Open database
+											</DropdownMenu.Item>
+											<DropdownMenu.Item onSelect={() => openSection(href, 'metrics')}>
+												<ActivityIcon />Metrics
+											</DropdownMenu.Item>
+											<DropdownMenu.Item onSelect={() => openSection(href, 'backups')}>
+												<ArchiveIcon />Backups
+											</DropdownMenu.Item>
+											<DropdownMenu.Item
+												onSelect={() =>
+													goto(
+														resolve('/(dashboard)/databases/[name]/logs', { name: database.name })
+													)}
+											>
+												<ScrollTextIcon />Logs
 											</DropdownMenu.Item>
 										</RowMenu>
 									{/if}

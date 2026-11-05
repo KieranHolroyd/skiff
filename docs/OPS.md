@@ -24,6 +24,8 @@ D24 (the VPS is an accepted single point of failure), D25 (R2 is canonical), D28
 | `/opt/skiff/update-state.json` | `root:root 0600` | Self-updater state: last switch + its DB snapshot, in-flight switch, commits that failed. |
 | `/opt/skiff/releases/<version>/control-plane` | `root:root 0755` | SvelteKit build, bundled Bun runtime, units, scripts, migrations. |
 | `/opt/skiff/releases/<version>/agent` | `root:root 0755` | `skiff-agent` compiled binary. |
+| `/opt/skiff/helper/skiff-helper` | `root:root 0755` | Privileged runtime helper installed from the active release (one binary, swapped by the updater). |
+| `/etc/skiff/helper.env` | `root:skiff 0640` | Helper environment (socket groups, release roots, AppArmor mode). |
 | `/opt/skiff/releases/<version>/caddy` | `root:root 0755` | Caddy 2.11.7 + `caddy-dns/cloudflare`. |
 | `/etc/skiff/skiff.env` | `root:skiff 0640` | Runtime environment and secrets (see §2). |
 | `/etc/skiff/master.key` | `root:root 0400` | Master key, delivered via `LoadCredential=`, never sourced by shell. |
@@ -200,6 +202,23 @@ desired state or SQLite.
 > flag on for existing installs or call the behaviour change out in the release notes/upgrade
 > checklist; silently turning shipped functionality off would be a regression, not a rollout.
 
+### 2.6 Privileged helper
+
+`/etc/skiff/helper.env` configures `skiff-helper` (created by the installer, preserved on upgrade):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SKIFF_HELPER_RELEASE_DIRS` | `/var/lib/skiff/agent/releases,/opt/skiff/releases` | Release roots probed for process workloads. |
+| `SKIFF_HELPER_QUADLET_DIR` | `/etc/containers/systemd` | Where `.container`/`.network` files are written for Podman's Quadlet generator. |
+| `SKIFF_HELPER_CONTROL_SOCKET_GROUP` | `skiff` | Group allowed to connect to the helper socket. |
+| `SKIFF_HELPER_WORKLOAD_SOCKET_GROUP` | `caddy` | Group for socket-activated workload sockets. |
+| `SKIFF_HELPER_APPARMOR_PROFILE` | `auto` | `auto` sets `apparmor=unconfined` on containers only when `kernel.apparmor_restrict_unprivileged_unconfined=1` (Ubuntu 26.04 and newer kernels stack the container profile, which denies a process signalling its own children, so Postgres cannot start). `none` keeps the runtime default; any other value is passed as the profile name. |
+
+A helper update is installed from the active release at `/opt/skiff/helper/skiff-helper` and
+restarted by the installer/updater. Existing container units are re-rendered on their next apply,
+so after a helper upgrade use **Restart** on each managed service (or redeploy an app) to pick up
+unit changes.
+
 ---
 
 ## 3. Install
@@ -211,6 +230,14 @@ desired state or SQLite.
 - **Caddy 2.7+ with `caddy-dns/cloudflare`** already installed. The installer verifies the
   module and fails with a clear message if it is missing. Caddy is driven only through its
   admin unix socket; the installer fixes the socket mode and group access.
+- **Podman for managed services.** Managed Postgres and RustFS run as rootful Quadlet containers,
+  so a node that hosts them needs `podman`, `netavark`, `aardvark-dns` and `uidmap`:
+  `apt-get install podman uidmap passt netavark aardvark-dns`. The installer warns when Podman or
+  its systemd generator is missing; everything else works without it.
+- **Port 53 for Podman DNS.** A DNS daemon such as BIND must not listen on `0.0.0.0:53`: Podman's
+  per-network DNS (aardvark-dns) binds the bridge gateway (for example `10.89.0.1:53`) and fails
+  every container start with `Address already in use`. Bind only the host's real addresses in
+  `named.conf.options` (`listen-on { 127.0.0.1; <public-ip>; };`) before enabling managed services.
 - At least 2 GB free disk. The installer downloads Bun and builds the control plane on the host.
 
 ### 3.2 Bootstrap
@@ -246,11 +273,12 @@ checkout with `SKIFF_SOURCE_DIR=/path/to/skiff`.
 3. **Secrets** — generates `/etc/skiff/master.key` (0400), `BETTER_AUTH_SECRET`,
    `SKIFF_SITE_COOKIE_SECRET`, `SKIFF_OBJECT_STORE_SECRET`; preserves them on upgrade.
 4. **Build** — copies the repo to a new immutable release, runs `bun install --frozen-lockfile`,
-   `vite build` (adapter-bun), and `bun build --compile` for the agent.
-5. **Activate** — atomically switches `/opt/skiff/current` to the new release.
-6. **Services** — writes hardened units, fixes Caddy's admin socket mode (`0660`, group `caddy`),
-   adds the `skiff` supplementary group to Caddy so it can read release artifacts, and starts
-   the control plane.
+   `vite build` (adapter-bun), and `bun build --compile` for the agent and the privileged helper.
+5. **Activate** — atomically switches `/opt/skiff/current` to the new release and installs the
+   release's helper binary at `/opt/skiff/helper/skiff-helper`.
+6. **Services** — writes hardened units (control plane, agent, helper), fixes Caddy's admin socket
+   mode (`0660`, group `caddy`), adds the `skiff` supplementary group to Caddy so it can read
+   release artifacts, starts the helper, then the control plane.
 7. **Caddy bootstrap fix** — points the platform vhost at `unix//run/skiff/control.sock`, then the
    agent takes over the whole Caddy config (platform + content routes) via the admin API.
 8. **Node enrolment** — creates the edge node (or reuses it), rotates its token, writes

@@ -180,7 +180,8 @@
 				>
 					{#if live}
 						<span class="relative flex size-2" aria-hidden="true">
-							<span class="absolute size-full animate-ping rounded-full bg-success opacity-60"></span>
+							<span class="absolute size-full animate-ping rounded-full bg-success opacity-60"
+							></span>
 							<span class="relative size-2 rounded-full bg-success"></span>
 						</span>
 						Live
@@ -239,7 +240,9 @@
 			{:else}
 				{#each filtered as event (event.seq)}
 					<div class="flex gap-3 px-3 hover:bg-muted/60">
-						<span class="shrink-0 text-muted-foreground tabular-nums select-none">{clock(event.ts)}</span>
+						<span class="shrink-0 text-muted-foreground tabular-nums select-none"
+							>{clock(event.ts)}</span
+						>
 						<span class="w-11 shrink-0 font-medium {levelTone[event.level]} select-none">
 							{event.level.toUpperCase()}
 						</span>

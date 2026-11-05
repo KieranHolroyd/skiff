@@ -24,7 +24,7 @@
 	import { formatDate } from '../../_lib/format.js';
 	import { DATABASE_DEFAULT_TAB, type DatabaseTab } from './database-tabs.js';
 
-	type Can = { update: boolean; delete: boolean; credentials: boolean; attach: boolean };
+	type Can = { update: boolean; delete: boolean; credentials: boolean };
 
 	let {
 		db,
@@ -47,23 +47,30 @@
 	/** Actions live on the detail route, so the header works from every sub-route. */
 	const act = (name: string) => `${base}?/${name}`;
 
-	const sections = $derived<ServiceSection[]>([
-		{ id: 'overview', label: 'Overview', icon: LayoutDashboardIcon },
-		{ id: 'metrics', label: 'Metrics', icon: ActivityIcon },
-		{ id: 'backups', label: 'Backups', icon: ArchiveIcon, count: backups },
-		{ id: 'insights', label: 'Tables & queries', icon: TableIcon, count: db.tables.length || undefined },
-		{ id: 'settings', label: 'Settings', icon: Settings2Icon }
-	]
-		.map((item) => ({ ...item, href: tabHref(base, item.id, DATABASE_DEFAULT_TAB), local: true }))
-		.concat([
+	const sections = $derived<ServiceSection[]>(
+		[
+			{ id: 'overview', label: 'Overview', icon: LayoutDashboardIcon },
+			{ id: 'metrics', label: 'Metrics', icon: ActivityIcon },
+			{ id: 'backups', label: 'Backups', icon: ArchiveIcon, count: backups },
 			{
-				id: 'logs',
-				label: 'Logs',
-				icon: ScrollTextIcon,
-				href: resolve('/(dashboard)/databases/[name]/logs', { name: db.name }),
-				local: false
-			}
-		]));
+				id: 'insights',
+				label: 'Tables & queries',
+				icon: TableIcon,
+				count: db.tables.length || undefined
+			},
+			{ id: 'settings', label: 'Settings', icon: Settings2Icon }
+		]
+			.map((item) => ({ ...item, href: tabHref(base, item.id, DATABASE_DEFAULT_TAB), local: true }))
+			.concat([
+				{
+					id: 'logs',
+					label: 'Logs',
+					icon: ScrollTextIcon,
+					href: resolve('/(dashboard)/databases/[name]/logs', { name: db.name }),
+					local: false
+				}
+			])
+	);
 
 	function restart(target: 'database' | 'pooler') {
 		askConfirm({
@@ -143,7 +150,9 @@
 		<span aria-hidden="true">·</span>
 		<span class="font-mono text-xs tabular-nums">{db.memoryMb} MB · {db.cpus} vCPU</span>
 		<span aria-hidden="true">·</span>
-		<span class="text-xs">Created <time datetime={db.createdAt}>{formatDate(db.createdAt)}</time></span>
+		<span class="text-xs"
+			>Created <time datetime={db.createdAt}>{formatDate(db.createdAt)}</time></span
+		>
 	{/snippet}
 
 	{#if deleted}
@@ -154,25 +163,28 @@
 	{:else if can.update || can.delete || can.credentials}
 		{#if can.update}
 			<Button variant="outline" onclick={backupNow}><CloudUploadIcon />Back up now</Button>
-			<Button variant="outline" onclick={() => restart('database')}><RotateCcwIcon />Restart</Button>
+			<Button variant="outline" onclick={() => restart('database')}><RotateCcwIcon />Restart</Button
+			>
 		{/if}
 		{#if (can.update && db.pooler.enabled) || can.credentials || can.delete}
-		<RowMenu label="More actions for {db.name}">
-			{#if can.update && db.pooler.enabled}
-				<DropdownMenu.Item onSelect={() => restart('pooler')}>
-					<RotateCcwIcon />Restart pooler only
-				</DropdownMenu.Item>
-			{/if}
-			{#if can.credentials}
-				<DropdownMenu.Item onSelect={rotate}><KeyRoundIcon />Rotate owner password</DropdownMenu.Item>
-			{/if}
-			{#if can.delete}
-				{#if (can.update && db.pooler.enabled) || can.credentials}<DropdownMenu.Separator />{/if}
-				<DropdownMenu.Item variant="destructive" onSelect={moveToTrash}>
-					<TrashIcon />Delete database
-				</DropdownMenu.Item>
-			{/if}
-		</RowMenu>
+			<RowMenu label="More actions for {db.name}">
+				{#if can.update && db.pooler.enabled}
+					<DropdownMenu.Item onSelect={() => restart('pooler')}>
+						<RotateCcwIcon />Restart pooler only
+					</DropdownMenu.Item>
+				{/if}
+				{#if can.credentials}
+					<DropdownMenu.Item onSelect={rotate}
+						><KeyRoundIcon />Rotate owner password</DropdownMenu.Item
+					>
+				{/if}
+				{#if can.delete}
+					{#if (can.update && db.pooler.enabled) || can.credentials}<DropdownMenu.Separator />{/if}
+					<DropdownMenu.Item variant="destructive" onSelect={moveToTrash}>
+						<TrashIcon />Delete database
+					</DropdownMenu.Item>
+				{/if}
+			</RowMenu>
 		{/if}
 	{/if}
 </ServiceHeader>

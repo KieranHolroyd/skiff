@@ -213,7 +213,8 @@
 	function deleteBackup(backupId: string) {
 		askConfirm({
 			title: `Delete backup ${backupId}?`,
-			description: 'The dump is removed from the object store. A restore of it is no longer possible.',
+			description:
+				'The dump is removed from the object store. A restore of it is no longer possible.',
 			confirmLabel: 'Delete backup',
 			tone: 'danger',
 			action: '?/delete-backup',
@@ -340,7 +341,8 @@
 			<Notice tone="success" title="Database created">
 				{nodeLabel} pulls the {db.engineLabel}
 				{db.version} image and initialises the cluster; the first start can take a minute.
-				<Button variant="link" size="sm" class="h-auto p-0" onclick={dismissCreated}>Dismiss</Button>
+				<Button variant="link" size="sm" class="h-auto p-0" onclick={dismissCreated}>Dismiss</Button
+				>
 			</Notice>
 		{/if}
 		{#if db.message}
@@ -425,7 +427,14 @@
 						{/if}
 						{#if credentials.caPem}
 							<dt>CA certificate</dt>
-							<dd><CopyValue value={credentials.caPem} label="CA certificate" display="PEM · public" secret /></dd>
+							<dd>
+								<CopyValue
+									value={credentials.caPem}
+									label="CA certificate"
+									display="PEM · public"
+									secret
+								/>
+							</dd>
 						{/if}
 					{/if}
 				</DetailList>
@@ -562,7 +571,12 @@
 					Sampled once a minute by the node's agent as a read-only monitor role.
 				</p>
 			</div>
-			<RangePicker ranges={data.ranges} current={data.range.key} links={data.rangeLinks} tab="metrics" />
+			<RangePicker
+				ranges={data.ranges}
+				current={data.range.key}
+				links={data.rangeLinks}
+				tab="metrics"
+			/>
 		</div>
 
 		{#if !data.telemetryAvailable}
@@ -604,7 +618,9 @@
 				</Panel>
 				<Panel
 					title="Connections"
-					description="Active and idle backends{chart.span > 1 ? `, ${chart.spanLabel} averages` : ''}."
+					description="Active and idle backends{chart.span > 1
+						? `, ${chart.spanLabel} averages`
+						: ''}."
 				>
 					<MetricChart
 						buckets={chartBuckets}
@@ -651,7 +667,10 @@
 						label="Transactions per minute over time"
 					/>
 				</Panel>
-				<Panel title="Cache hit ratio" description="Blocks served from shared buffers instead of disk.">
+				<Panel
+					title="Cache hit ratio"
+					description="Blocks served from shared buffers instead of disk."
+				>
 					<MetricChart
 						buckets={chartBuckets}
 						from={windowFrom}
@@ -753,7 +772,9 @@
 
 			{#if policy?.pendingRestoreId}
 				<div class="px-4 pt-4">
-					<Notice tone="info">A restore is in progress; new restores are available once it finishes.</Notice>
+					<Notice tone="info"
+						>A restore is in progress; new restores are available once it finishes.</Notice
+					>
 				</div>
 			{/if}
 			{#if backups.length === 0}
@@ -788,7 +809,9 @@
 									<span class="font-mono text-xs">{backup.id}</span>
 									<div class="flex items-center gap-1.5 text-xs text-muted-foreground">
 										<span class="capitalize">{backup.kind}</span>
-										{#if backup.pinned}<Badge variant="outline" class="h-4 px-1.5 text-[10px]">pinned</Badge>{/if}
+										{#if backup.pinned}<Badge variant="outline" class="h-4 px-1.5 text-[10px]"
+												>pinned</Badge
+											>{/if}
 									</div>
 								</Table.Cell>
 								<Table.Cell><StatusBadge status={backup.status} /></Table.Cell>
@@ -817,7 +840,10 @@
 											{/if}
 											{#if removable}
 												{#if editable && restorable}<DropdownMenu.Separator />{/if}
-												<DropdownMenu.Item variant="destructive" onSelect={() => deleteBackup(backup.id)}>
+												<DropdownMenu.Item
+													variant="destructive"
+													onSelect={() => deleteBackup(backup.id)}
+												>
 													<TrashIcon />Delete backup
 												</DropdownMenu.Item>
 											{/if}
@@ -936,7 +962,9 @@
 						{#each db.slowQueries as query (query.queryId)}
 							<Table.Row>
 								<Table.Cell class="max-w-md pl-4 whitespace-normal">
-									<code class="line-clamp-2 font-mono text-xs" title={query.query}>{query.query}</code>
+									<code class="line-clamp-2 font-mono text-xs" title={query.query}
+										>{query.query}</code
+									>
 								</Table.Cell>
 								<Table.Cell class="text-right font-mono text-xs tabular-nums">
 									{numberFormat.format(query.calls)}
@@ -947,7 +975,9 @@
 								<Table.Cell class="text-right font-mono text-xs tabular-nums">
 									{formatDuration(query.totalMs / 1000)}
 								</Table.Cell>
-								<Table.Cell class="hidden pr-4 text-right font-mono text-xs tabular-nums md:table-cell">
+								<Table.Cell
+									class="hidden pr-4 text-right font-mono text-xs tabular-nums md:table-cell"
+								>
 									{numberFormat.format(query.rows)}
 								</Table.Cell>
 							</Table.Row>
@@ -1049,7 +1079,8 @@
 						</div>
 						<div class="flex flex-wrap items-center justify-between gap-3">
 							<p class="text-xs text-muted-foreground">
-								Unticking never drops an extension; run <code class="font-mono">DROP EXTENSION</code>
+								Unticking never drops an extension; run <code class="font-mono">DROP EXTENSION</code
+								>
 								yourself.
 							</p>
 							{#if editable}
@@ -1220,7 +1251,9 @@
 								<InputGroup.Text class="font-mono text-xs">UTC</InputGroup.Text>
 							</InputGroup.Addon>
 						</InputGroup.Root>
-						<Field.Description class="font-mono text-xs">0 3 * * * = daily at 03:00</Field.Description>
+						<Field.Description class="font-mono text-xs"
+							>0 3 * * * = daily at 03:00</Field.Description
+						>
 						{#if errors.schedule}<Field.Error>{errors.schedule}</Field.Error>{/if}
 					</Field.Field>
 					<Field.Field data-invalid={errors.retentionDays ? true : undefined}>
@@ -1314,7 +1347,9 @@
 						<InputGroup.Text class="font-mono text-xs">MB</InputGroup.Text>
 					</InputGroup.Addon>
 				</InputGroup.Root>
-				<Field.Description>Drives the gauge and the 85% alert. It is not enforced on disk.</Field.Description>
+				<Field.Description
+					>Drives the gauge and the 85% alert. It is not enforced on disk.</Field.Description
+				>
 				{#if errors.storageMb}<Field.Error>{errors.storageMb}</Field.Error>{/if}
 			</Field.Field>
 		</Field.Group>
