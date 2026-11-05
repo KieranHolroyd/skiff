@@ -473,7 +473,7 @@ upgrade safety (06). Do not rebuild the shipped halves.
 
 Integration branch: `feat/wave0-foundations` at `e081f56`: 977 tests pass, `bun run check`
 green, 17 migrations check clean.
-| 01 | Backups/PITR/restore | partial — logical backups shipped; PITR missing | | |
+| 01 | Backups/PITR/restore | partial — logical backups + PITR foundation merged; PITR flag off and image requirement documented | | |
 | 02 | Object-storage surface | partial — browser shipped; bucket config missing | | |
 | 03 | Pooling/TLS | partial — pooler shipped; TLS/UX missing | | |
 | 04 | Isolation/credentials | partial — rotation shipped; networks/TLS missing | | |

@@ -9,7 +9,7 @@ The Wave 1 worktrees were created from `feat/wave0-foundations` and should be re
 | Plan | Worktree | Branch | Migration reservation |
 |---|---|---|---|
 | 05 backup target | `wave1-05-backup-target` | `feat/wave1-05-backup-target` | `0019_backup_targets.sql` (merged `b065c71`) |
-| 01b PITR | `wave1-01b-pitr` | `feat/wave1-01b-pitr` | `0020_database_pitr.sql` |
+| 01b PITR | `wave1-01b-pitr` | `feat/wave1-01b-pitr` | `0020_database_pitr.sql` (merged `b90e6f9`) |
 | 02b bucket config | `wave1-02b-bucket-config` | `feat/wave1-02b-bucket-config` | `0021_bucket_config.sql` |
 | 03b TLS + UX | `wave1-03b-tls` | `feat/wave1-03b-tls` | `0022_database_tls.sql` (only if needed) |
 | 04b per-org isolation | `wave1-04b-isolation` | `feat/wave1-04b-isolation` | `0023_org_networks.sql` (only if needed) |
