@@ -92,8 +92,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Resolve image name
-        run: echo "IMAGE=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/skiff-node" >> "$GITHUB_ENV"
+      - name: Resolve image name and version
+        run: |
+          echo "IMAGE=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/skiff-node" >> "$GITHUB_ENV"
+          echo "SKIFF_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -119,7 +121,7 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
           build-args: |
-            SKIFF_VERSION=ci
+            SKIFF_VERSION=${{ env.SKIFF_VERSION }}
           cache-from: type=gha,scope=node-ci
           cache-to: type=gha,mode=max,scope=node-ci
 
