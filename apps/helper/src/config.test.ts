@@ -6,6 +6,7 @@ describe('loadHelperConfig', () => {
 		const config = loadHelperConfig({});
 		expect(config.socketPath).toBe('/run/skiff-helper/helper.sock');
 		expect(config.unitDir).toBe('/etc/systemd/system');
+		expect(config.quadletDir).toBe('/etc/containers/systemd');
 		expect(config.runtimeDir).toBe('/run/skiff-workloads');
 		expect(config.stateDir).toBe('/var/lib/skiff-workloads');
 		expect(config.releaseDirs).toEqual(['/srv/skiff/releases', '/var/lib/skiff/agent/releases']);

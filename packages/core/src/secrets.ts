@@ -138,6 +138,19 @@ export class SecretService {
 		});
 	}
 
+	/** Seal an internal value (database credentials, D58) with the org data key: `nonce.ciphertext`. */
+	seal(orgId: string, value: string): string {
+		const encrypted = encrypt(this.orgKey(orgId), new TextEncoder().encode(value));
+		return `${encrypted.nonce}.${encrypted.ciphertext}`;
+	}
+
+	/** Open a value produced by `seal`. */
+	open(orgId: string, sealed: string): string {
+		const [nonce, ciphertext] = sealed.split('.');
+		if (!nonce || !ciphertext) throw new ValidationError('Sealed value is malformed.');
+		return new TextDecoder().decode(decrypt(this.orgKey(orgId), ciphertext, nonce));
+	}
+
 	/** Internal delivery only (tier 2); never exposed by REST/MCP. */
 	getValue(orgId: string, name: string, version?: number): { name: string; value: string; version: number } | null {
 		const row = this.ctx.db

@@ -41,6 +41,9 @@ export class MaintenanceService {
 
 	async run(): Promise<MaintenanceReport> {
 		const projectsPurged = await this.ctx.projects.purgeExpired();
+		// Trashed databases past their window are handed to their node, which deletes the data (D59).
+		this.ctx.databases.requestExpiredPurges();
+		this.ctx.storage.requestExpiredPurges();
 		// Cheap, certain cleanup runs every sweep; prune is the on-demand deep backstop.
 		this.cleanupRows();
 		this.ctx.releases.gcSnapshots(operationLimits.pruneGraceMs);
@@ -112,6 +115,9 @@ export class MaintenanceService {
 				/* ignore malformed stats */
 			}
 		}
+
+		alertsFired.push(...(await this.databaseAlerts()));
+		alertsFired.push(...(await this.storageAlerts()));
 
 		alertsFired.push(...(await this.promoteSpikeAlerts()));
 
@@ -273,6 +279,53 @@ export class MaintenanceService {
 		this.ctx.db.delete(deployments).where(lt(deployments.deletedAt, cutoff)).run();
 		this.ctx.db.delete(shareRedemptions).where(lt(shareRedemptions.expiresAt, cutoff)).run();
 		this.ctx.db.delete(shareLinks).where(lt(shareLinks.revokedAt, cutoff)).run();
+	}
+
+	/** Managed databases near their storage budget or connection limit (D57). */
+	private async databaseAlerts(): Promise<string[]> {
+		const fired: string[] = [];
+		for (const { row, ratio } of this.ctx.databases.alertCandidates()) {
+			const key = `database_storage:${row.id}`;
+			fired.push(key);
+			await this.notify({
+				key,
+				title: 'Database storage above 85%',
+				detail: `Database ${row.name} uses ${(ratio * 100).toFixed(1)}% of its ${row.storageMb} MB storage budget.`,
+				severity: ratio >= 0.95 ? 'critical' : 'warning',
+			});
+		}
+		if (!this.ctx.telemetry?.available) return fired;
+		const samples = await this.ctx.telemetry.latestDatabaseMetrics(this.ctx.now() - 5 * 60_000);
+		for (const sample of samples) {
+			if (!sample.up || sample.maxConnections <= 0) continue;
+			const ratio = sample.connectionsTotal / sample.maxConnections;
+			if (ratio < 0.9) continue;
+			const key = `database_connections:${sample.databaseId}`;
+			fired.push(key);
+			await this.notify({
+				key,
+				title: 'Database connections above 90%',
+				detail: `Database ${sample.databaseId} has ${sample.connectionsTotal} of ${sample.maxConnections} connections in use.`,
+				severity: 'warning',
+			});
+		}
+		return fired;
+	}
+
+	/** Managed object storage near its storage budget (S7). */
+	private async storageAlerts(): Promise<string[]> {
+		const fired: string[] = [];
+		for (const { row, ratio } of this.ctx.storage.alertCandidates()) {
+			const key = `storage_usage:${row.id}`;
+			fired.push(key);
+			await this.notify({
+				key,
+				title: 'Object storage above 85%',
+				detail: `Storage ${row.name} uses ${(ratio * 100).toFixed(1)}% of its ${row.storageMb} MB budget.`,
+				severity: ratio >= 0.95 ? 'critical' : 'warning',
+			});
+		}
+		return fired;
 	}
 
 	private async notify(alert: { key: string; title: string; detail: string; severity: 'info' | 'warning' | 'critical' }): Promise<void> {

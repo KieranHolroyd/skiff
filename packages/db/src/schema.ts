@@ -1,4 +1,4 @@
-import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 /**
  * Skiff platform schema (SQLite; DESIGN §6.2, D9, D17). Better Auth owns the `user`,
@@ -344,6 +344,161 @@ export const workloads = sqliteTable(
 		uniqueIndex('workloads_project_idx').on(t.projectId),
 		index('workloads_node_idx').on(t.nodeId),
 		index('workloads_status_idx').on(t.status),
+	],
+);
+
+/**
+ * Managed databases (docs/DATABASES.md, D55). `owner_secret` / `monitor_secret` hold
+ * `nonce.ciphertext` sealed with the org data key; they are never returned by list/get.
+ */
+export const databases = sqliteTable(
+	'databases',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		name: text('name').notNull(),
+		engine: text('engine', { enum: ['postgres'] }).notNull().default('postgres'),
+		version: text('version').notNull(),
+		nodeId: text('node_id').notNull(),
+		hostPort: integer('host_port').notNull(),
+		memoryMb: integer('memory_mb').notNull(),
+		cpus: real('cpus').notNull().default(1),
+		storageMb: integer('storage_mb').notNull().default(10_240),
+		status: text('status', { enum: ['pending', 'starting', 'running', 'failed', 'stopped'] })
+			.notNull()
+			.default('pending'),
+		message: text('message'),
+		ownerSecret: text('owner_secret').notNull(),
+		monitorSecret: text('monitor_secret').notNull(),
+		/** Latest sampled `pg_database_size`. */
+		sizeBytes: integer('size_bytes'),
+		/** Latest table snapshot (`DatabaseTableStat[]`). */
+		statsJson: text('stats_json'),
+		statsAt: integer('stats_at'),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+		deletedAt: integer('deleted_at'),
+		purgeAt: integer('purge_at'),
+		/** Set when the purge was handed to the node; the row goes once the node reports it (D59). */
+		purgeRequestedAt: integer('purge_requested_at'),
+	},
+	(t) => [
+		uniqueIndex('databases_org_name_idx').on(t.orgId, t.name),
+		uniqueIndex('databases_node_port_idx').on(t.nodeId, t.hostPort),
+		index('databases_node_idx').on(t.nodeId),
+		index('databases_deleted_idx').on(t.deletedAt),
+	],
+);
+
+export const databaseAttachments = sqliteTable(
+	'database_attachments',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		databaseId: text('database_id').notNull(),
+		projectId: text('project_id').notNull(),
+		envPrefix: text('env_prefix').notNull().default('DATABASE'),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+	},
+	(t) => [
+		uniqueIndex('database_attachments_pair_idx').on(t.databaseId, t.projectId),
+		uniqueIndex('database_attachments_prefix_idx').on(t.projectId, t.envPrefix),
+		index('database_attachments_project_idx').on(t.projectId),
+	],
+);
+
+/**
+ * Managed object storage (docs/OBJECT-STORAGE.md, S1). `root_secret` and attachment
+ * `secret_sealed` hold `nonce.ciphertext` sealed with the org data key; never returned by list/get.
+ */
+export const storageInstances = sqliteTable(
+	'storage_instances',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		name: text('name').notNull(),
+		engine: text('engine', { enum: ['rustfs'] }).notNull().default('rustfs'),
+		version: text('version').notNull(),
+		nodeId: text('node_id').notNull(),
+		hostPort: integer('host_port').notNull(),
+		memoryMb: integer('memory_mb').notNull(),
+		cpus: real('cpus').notNull().default(1),
+		storageMb: integer('storage_mb').notNull().default(10_240),
+		public: integer('public', { mode: 'boolean' }).notNull().default(false),
+		/** `<name>--s3.<contentDomain>` while public (and while trashed, so restore gets it back). */
+		publicHost: text('public_host'),
+		status: text('status', { enum: ['pending', 'starting', 'running', 'failed', 'stopped'] })
+			.notNull()
+			.default('pending'),
+		message: text('message'),
+		rootAccessKey: text('root_access_key').notNull(),
+		rootSecret: text('root_secret').notNull(),
+		/** Latest sampled totals across buckets. */
+		usedBytes: integer('used_bytes'),
+		objects: integer('objects'),
+		statsAt: integer('stats_at'),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+		deletedAt: integer('deleted_at'),
+		purgeAt: integer('purge_at'),
+		/** Set when the purge was handed to the node; the row goes once the node reports it (S8). */
+		purgeRequestedAt: integer('purge_requested_at'),
+	},
+	(t) => [
+		uniqueIndex('storage_instances_org_name_idx').on(t.orgId, t.name),
+		uniqueIndex('storage_instances_node_port_idx').on(t.nodeId, t.hostPort),
+		uniqueIndex('storage_instances_public_host_idx').on(t.publicHost),
+		index('storage_instances_node_idx').on(t.nodeId),
+		index('storage_instances_deleted_idx').on(t.deletedAt),
+	],
+);
+
+export const storageBuckets = sqliteTable(
+	'storage_buckets',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		storageId: text('storage_id').notNull(),
+		name: text('name').notNull(),
+		access: text('access', { enum: ['private', 'public-read'] }).notNull().default('private'),
+		sizeBytes: integer('size_bytes'),
+		objects: integer('objects'),
+		statsAt: integer('stats_at'),
+		/** Set by a bucket delete; the agent deletes it and the row goes on its report. */
+		deleteRequestedAt: integer('delete_requested_at'),
+		deleteForce: integer('delete_force', { mode: 'boolean' }).notNull().default(false),
+		/** The agent found the bucket non-empty and left it; a forced delete clears this. */
+		deleteBlocked: integer('delete_blocked', { mode: 'boolean' }).notNull().default(false),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+	},
+	(t) => [uniqueIndex('storage_buckets_name_idx').on(t.storageId, t.name)],
+);
+
+export const storageAttachments = sqliteTable(
+	'storage_attachments',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		storageId: text('storage_id').notNull(),
+		projectId: text('project_id').notNull(),
+		envPrefix: text('env_prefix').notNull().default('S3'),
+		/** `StorageGrant[]`. */
+		grantsJson: text('grants_json').notNull(),
+		accessKeyId: text('access_key_id').notNull(),
+		secretSealed: text('secret_sealed').notNull(),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [
+		uniqueIndex('storage_attachments_pair_idx').on(t.storageId, t.projectId),
+		uniqueIndex('storage_attachments_prefix_idx').on(t.projectId, t.envPrefix),
+		uniqueIndex('storage_attachments_key_idx').on(t.accessKeyId),
+		index('storage_attachments_project_idx').on(t.projectId),
 	],
 );
 

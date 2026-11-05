@@ -12,7 +12,8 @@
 	"dependencies": {
 		"@skiff/builder": "workspace:*",
 		"@skiff/contracts": "workspace:*",
-		"@skiff/site-config": "workspace:*"
+		"@skiff/site-config": "workspace:*",
+		"aws4fetch": "^1.0.20"
 	},
 	"engines": {
 		"bun": ">=1.4"

@@ -78,6 +78,33 @@
 - [ ] Scheduled plan-only prune with a notification when it finds something
 - [ ] Agent-side release cache prune (`node_caches`)
 
+## Managed databases ([DATABASES.md](./DATABASES.md))
+- [x] Postgres 16/17 as tier-3 containers: create, resize, soft delete, restore, purge (D55, D59, D61)
+- [x] Attach to projects with `<PREFIX>_URL` injected at activation; same-node placement (D56)
+- [x] Sealed credentials, reveal for humans only (`database:credentials`, D58)
+- [x] Stats: agent sampler → telemetry batch → DuckDB `db_metrics_1m/1h`, table snapshot, `/metrics`, size/connection alerts (D57)
+- [x] REST, MCP, CLI (`skif db`), dashboard list/detail/charts/attach
+- [ ] End-to-end on a Debian 13 node: Quadlet `.container`/`.network` from `/etc/containers/systemd`, installer installs/checks Podman ≥ 5 with netavark
+- [ ] Per-org Podman networks (today every container on a node shares `skiff-workloads`; databases still need a password)
+- [ ] Backups: scheduled `pg_dump` → `ObjectStore`, retention, restore into a new database
+- [ ] On-demand SQL console (pgweb or Adminer) behind `platform` access (D60)
+- [ ] Database metrics in the Parquet archive; bulk actions and prune for databases; `restore_database` over MCP
+- [ ] Cross-node access via a node private address; credential rotation; `pg_stat_statements`; MySQL/Valkey
+
+## Managed object storage ([OBJECT-STORAGE.md](./OBJECT-STORAGE.md))
+- [x] RustFS 1.0 as a tier-3 container: create, resize, soft delete, restore, purge (D62, D69)
+- [x] Buckets as desired state, `public-read` policies, force delete reported through heartbeats (D65)
+- [x] Attachments with scoped `SKF*` IAM users and `<PREFIX>_*` env injected at activation (D66)
+- [x] Sealed root credentials, reveal for humans only (`storage:credentials`, D67); console off (D63)
+- [x] Public endpoints on `<name>--s3.<contentDomain>` as byte-for-byte SigV4-only Caddy routes (D64)
+- [x] Stats: agent sampler → telemetry → DuckDB `storage_metrics_1m/1h`, bucket snapshots, `/metrics`, disk alert (D68)
+- [x] REST, MCP, CLI (`skif storage`), dashboard list/detail/charts/buckets/attach
+- [ ] End-to-end on a Debian 13 node: RustFS container under Quadlet, health probe, SigV4 through edge → WireGuard → worker
+- [ ] Backups: bucket replication/sync to the platform `ObjectStore`, retention, restore into a new instance (D70, S9)
+- [ ] Human access keys with bucket grants and rotation in the dashboard
+- [ ] Per-bucket quotas, lifecycle rules, CORS, custom domains for public instances, Garage as a second engine
+- [ ] Bulk actions and prune for storage; `S3ObjectStore` replication target (D71)
+
 ## Later / maybe
 - Backup ingress (Cloudflare Tunnel from the homelab + DNS failover)
 - Importing external Prometheus datasources

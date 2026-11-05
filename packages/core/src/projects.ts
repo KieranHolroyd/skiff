@@ -64,6 +64,8 @@ export const projectOwnedTables = [
 	'deployments',
 	'upload_sessions',
 	'slug_redirects',
+	'database_attachments',
+	'storage_attachments',
 ] as const;
 
 export class ProjectService {

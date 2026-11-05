@@ -15,6 +15,8 @@ export const statements = {
 	domain: ['create', 'read', 'delete'],
 	secret: ['create', 'read-metadata', 'update', 'delete'],
 	build: ['create', 'read', 'cancel'],
+	database: ['create', 'read', 'update', 'delete', 'credentials'],
+	storage: ['create', 'read', 'update', 'delete', 'credentials'],
 	shareLink: ['create', 'read', 'revoke'],
 	logs: ['read'],
 	metrics: ['read'],
@@ -44,12 +46,14 @@ export const roles = {
 		'deployment:create', 'deployment:read', 'deployment:promote', 'deployment:rollback',
 		'domain:read', 'secret:create', 'secret:read-metadata', 'secret:update',
 		'build:create', 'build:read', 'build:cancel',
+		'database:create', 'database:read', 'database:update', 'database:credentials',
+		'storage:create', 'storage:read', 'storage:update', 'storage:credentials',
 		'shareLink:create', 'shareLink:read', 'shareLink:revoke',
 		'logs:read', 'metrics:read',
 	),
 	viewer: pick(
 		'project:read', 'deployment:read', 'domain:read', 'secret:read-metadata',
-		'build:read', 'shareLink:read', 'logs:read', 'metrics:read',
+		'build:read', 'database:read', 'storage:read', 'shareLink:read', 'logs:read', 'metrics:read',
 	),
 } as const satisfies Record<string, readonly Permission[]>;
 
@@ -59,13 +63,18 @@ export type Role = keyof typeof roles;
  * Default scopes pre-ticked on the OAuth consent screen for an agent (DESIGN §6.3):
  * deployer-level, with destructive permissions left unticked.
  */
-export const defaultAgentScopes: readonly Permission[] = roles.deployer;
+export const defaultAgentScopes: readonly Permission[] = roles.deployer.filter(
+	// Agents get connection URLs injected into apps; revealing passwords is a human opt-in (D58).
+	(permission) => permission !== 'database:credentials' && permission !== 'storage:credentials',
+);
 
 /** Permissions that are never pre-ticked and always require an explicit opt-in. */
 export const destructivePermissions: readonly Permission[] = [
 	'project:delete',
 	'deployment:delete',
 	'domain:delete',
+	'database:delete',
+	'storage:delete',
 	'secret:delete',
 	'apiKey:revoke',
 	'member:remove',

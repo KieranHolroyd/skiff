@@ -16,6 +16,7 @@
         "@skiff/builder": "workspace:*",
         "@skiff/contracts": "workspace:*",
         "@skiff/site-config": "workspace:*",
+        "aws4fetch": "^1.0.20",
       },
     },
     "apps/builder": {

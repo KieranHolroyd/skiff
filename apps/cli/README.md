@@ -47,6 +47,8 @@ skif deploy ./dist --project my-site --json
 | `open <project>` | Open the site in a browser |
 | `prune [--apply] [--plan <id>]` | Find and remove orphaned data (dry run by default) |
 | `operations [list\|show\|watch\|cancel]` | Inspect and follow bulk and prune operations |
+| `db [list\|create\|info\|attach\|detach\|delete\|restore\|purge\|credentials]` | Managed PostgreSQL databases (see below) |
+| `storage [list\|create\|info\|update\|buckets\|attach\|grants\|detach\|delete\|restore\|purge\|credentials\|metrics]` | Managed S3-compatible object storage (see below) |
 
 Every command accepts `--help`, and most accept `--json` for scripting. Errors in `--json` mode
 are printed to stderr as `{ "error": { "code", "message", "suggestions" } }`.
@@ -95,6 +97,69 @@ skif operations                  # recent operations
 skif operations show op_…        # status, counts and items
 skif operations watch op_…       # follow to the end
 ```
+
+## Databases
+
+Managed PostgreSQL databases are org resources that run on one node. Attached process and
+container projects get `<PREFIX>_URL`, `_HOST`, `_PORT`, `_USER`, `_PASSWORD` and `_NAME` at
+activation (the prefix defaults to `DATABASE`) and are placed on the database's node.
+
+```sh
+skif db create main --project api                    # create and attach in one go
+skif db create analytics --version 16 --memory 512M --storage 20G
+skif db attach main --project worker --prefix DATABASE
+skif db info main                                    # status, node, size vs budget, projects, top tables
+skif db detach main --project worker
+skif db delete main                                  # trash: restorable for 7 days
+skif db restore main
+skif db purge main                                   # permanent; asks you to type the name
+psql "$(skif db credentials main)"                   # URL only; --json for everything
+```
+
+The URL points at `127.0.0.1` on the database's node: run it there, or tunnel first with
+`ssh -L <port>:127.0.0.1:<port> <node>` (the port is in the URL).
+
+`delete` is refused while projects are attached. `purge` only works on a database in the trash.
+Off a terminal, `delete` and `purge` need `--yes`. `credentials` needs the
+`database:credentials` permission, and every read is audited.
+
+## Object storage
+
+Managed object storage instances are S3-compatible servers (RustFS) that run on one node and hold
+buckets. Each attached process or container project gets its own scoped key at activation:
+`<PREFIX>_ENDPOINT_URL`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`, `_REGION` and `_FORCE_PATH_STYLE`,
+plus `_BUCKET` when exactly one bucket is granted and `_PUBLIC_ENDPOINT_URL` when the instance is
+public. The prefix defaults to `S3`; `--prefix AWS` gives the names the AWS SDKs read on their own.
+Clients must use path-style addressing. A private instance serves apps on its own node only (they
+are placed there); `--public` serves it at `https://<name>--s3.<content domain>` for everyone else.
+
+```sh
+skif storage create media --bucket uploads --project api      # create, add a bucket, attach
+skif storage create assets --bucket img,css --public --storage 50G
+skif storage info media                                       # status, endpoints, buckets, projects
+skif storage update media --public                            # or --no-public, --memory 1G, --storage 20G
+skif storage buckets media                                    # list buckets with size and objects
+skif storage buckets create media avatars --access public-read
+skif storage buckets update media avatars --access private
+skif storage buckets delete media avatars                     # only when empty; --force deletes objects
+skif storage attach media --project worker                    # read-write on the only bucket
+skif storage attach media --project cdn --bucket uploads:read --bucket avatars --prefix AWS
+skif storage grants media --project cdn --bucket uploads:read-write
+skif storage detach media --project cdn
+skif storage metrics media --since 24h                        # --from/--to, --interval 1m|1h
+skif storage delete media                                     # trash: restorable for 7 days
+skif storage restore media
+skif storage purge media                                      # permanent; asks you to type the name
+set -a; eval "$(skif storage credentials media)"; set +a      # root key as AWS_* lines; --json for all
+```
+
+`attach` without `--bucket` grants read-write on the instance's only bucket, and asks for
+`--bucket` when there are several. `grants` replaces an attachment's grants. `delete` is refused
+while projects are attached, and a bucket can't be deleted while it is granted. Off a terminal,
+`delete`, `purge` and `buckets delete` need `--yes`; `buckets delete --force` and `purge` ask you to
+type the name. `credentials` prints the root key and needs the `storage:credentials` permission;
+every read is audited. On a private instance its endpoint is `127.0.0.1` on the node, so run it
+there or tunnel with `ssh -L <port>:127.0.0.1:<port> <node>`.
 
 ## Profiles
 

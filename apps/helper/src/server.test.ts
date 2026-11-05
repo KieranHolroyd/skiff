@@ -67,6 +67,10 @@ class FakeRuntime implements HelperRuntime {
 		this.calls.push(`remove:${id}`);
 	}
 
+	async purge(id: string): Promise<void> {
+		this.calls.push(`purge:${id}`);
+	}
+
 	async status(id: string): Promise<HelperWorkloadStatus> {
 		return { id, status: 'running', restarts: 2 };
 	}
@@ -170,6 +174,125 @@ describe('helper HTTP surface', () => {
 	test('rejects an out-of-range log line count', async () => {
 		const response = await handler()(
 			new Request('http://localhost/v1/workloads/wld_abc123/logs?lines=5000'),
+		);
+		expect(response.status).toBe(400);
+	});
+
+	test('purges a database by id with POST only', async () => {
+		const runtime = new FakeRuntime();
+		const id = 'db_0123456789abcdef0123456789abcdef';
+		const response = await handler(runtime)(
+			new Request(`http://localhost/v1/workloads/${id}/purge`, { method: 'POST' }),
+		);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ ok: true, purged: id });
+		expect(runtime.calls).toEqual([`purge:${id}`]);
+
+		const get = await handler(runtime)(new Request(`http://localhost/v1/workloads/${id}/purge`));
+		expect(get.status).toBe(405);
+		expect(get.headers.get('allow')).toBe('POST');
+	});
+
+	test('purges a storage instance by id', async () => {
+		const runtime = new FakeRuntime();
+		const id = 'st_fedcba9876543210fedcba9876543210';
+		const response = await handler(runtime)(
+			new Request(`http://localhost/v1/workloads/${id}/purge`, { method: 'POST' }),
+		);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ ok: true, purged: id });
+		expect(runtime.calls).toEqual([`purge:${id}`]);
+	});
+
+	test('refuses to purge anything but a db_ or st_ id', async () => {
+		const runtime = new FakeRuntime();
+		for (const raw of ['wld_abc123', '..%2Fstate', 'db_', 'db_a%2Fb', 'st_', 'st_a%2Fb', '%E0%A4%A']) {
+			const response = await handler(runtime)(
+				new Request(`http://localhost/v1/workloads/${raw}/purge`, { method: 'POST' }),
+			);
+			expect(response.status).toBe(400);
+		}
+		expect(runtime.calls).toEqual([]);
+	});
+
+	test('accepts a database workload and passes its profile through', async () => {
+		const runtime = new FakeRuntime();
+		const id = 'db_0123456789abcdef0123456789abcdef';
+		const response = await handler(runtime)(
+			post('/v1/workloads', {
+				workload: workloadInput({
+					id,
+					projectId: id,
+					deploymentId: id,
+					runtime: 'container',
+					release: null,
+					image: 'docker.io/library/postgres:16-alpine',
+					port: 15433,
+					socketActivation: false,
+					database: { engine: 'postgres', version: '16' },
+				}),
+				activation: activationInput({
+					workloadId: id,
+					env: { POSTGRES_PASSWORD: 'pw' },
+					monitor: { ownerPassword: 'pw', monitorPassword: 'mon' },
+				}),
+			}),
+		);
+		expect(response.status).toBe(200);
+		expect(runtime.applyInput?.workload.database).toEqual({ engine: 'postgres', version: '16' });
+		expect(JSON.stringify(runtime.applyInput?.activation)).not.toContain('mon');
+	});
+
+	test('accepts a storage workload with agent desired state and strips it to engine + version', async () => {
+		const runtime = new FakeRuntime();
+		const id = 'st_fedcba9876543210fedcba9876543210';
+		const response = await handler(runtime)(
+			post('/v1/workloads', {
+				workload: workloadInput({
+					id,
+					projectId: id,
+					deploymentId: id,
+					runtime: 'container',
+					release: null,
+					image: 'docker.io/rustfs/rustfs:1.0.4',
+					port: 19000,
+					healthPath: '/health',
+					socketActivation: false,
+					objectStorage: {
+						engine: 'rustfs',
+						version: '1.0.4',
+						buckets: [{ name: 'uploads', access: 'private' }],
+						users: [{ accessKeyId: 'SKFAAAAAAAAAAAAAAAAA', grants: [{ bucket: 'uploads', mode: 'read-write' }] }],
+						deleteBuckets: [],
+						keysVersion: 'c'.repeat(64),
+					},
+				}),
+				activation: activationInput({
+					workloadId: id,
+					env: { RUSTFS_ACCESS_KEY: 'SKRROOT', RUSTFS_SECRET_KEY: 'root-secret' },
+					storageAdmin: { rootSecretAccessKey: 'root-secret', users: { SKFAAAAAAAAAAAAAAAAA: 'user-secret' } },
+				}),
+			}),
+		);
+		expect(response.status).toBe(200);
+		expect(runtime.applyInput?.workload.objectStorage).toEqual({ engine: 'rustfs', version: '1.0.4' });
+		expect(JSON.stringify(runtime.applyInput)).not.toContain('user-secret');
+	});
+
+	test('rejects a database workload with a foreign image', async () => {
+		const id = 'db_0123456789abcdef0123456789abcdef';
+		const response = await handler()(
+			post('/v1/workloads', {
+				workload: workloadInput({
+					id,
+					runtime: 'container',
+					release: null,
+					image: 'ghcr.io/evil/postgres:16-alpine',
+					socketActivation: false,
+					database: { engine: 'postgres', version: '16' },
+				}),
+				activation: activationInput({ workloadId: id }),
+			}),
 		);
 		expect(response.status).toBe(400);
 	});

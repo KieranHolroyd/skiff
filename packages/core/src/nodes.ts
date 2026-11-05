@@ -225,7 +225,15 @@ export class NodeService {
 			})
 			.where(eq(nodes.id, node.id))
 			.run();
-		if (input.workloads?.length) this.ctx.workloads.applyHeartbeat(node.id, input.workloads);
+		if (input.workloads?.length) {
+			this.ctx.workloads.applyHeartbeat(node.id, input.workloads);
+			this.ctx.databases.applyHeartbeat(node.id, input.workloads);
+			this.ctx.storage.applyHeartbeat(node.id, input.workloads);
+		}
+		if (input.purgedDatabases?.length) this.ctx.databases.applyPurged(node.id, input.purgedDatabases);
+		if (input.purgedStorage?.length) this.ctx.storage.applyPurged(node.id, input.purgedStorage);
+		if (input.storageBucketDeletions?.length)
+			this.ctx.storage.applyBucketDeletions(node.id, input.storageBucketDeletions);
 		return { ok: true, desiredStateVersion: this.stateVersion() };
 	}
 
@@ -401,13 +409,26 @@ export class NodeService {
 		const isEdge = node.id === edgeId || node.mode === 'edge';
 		const nodeById = new Map(allNodes.map((row) => [row.id, row]));
 
+		// Apps are served from the node their workload was admitted to (`auto` and database pinning
+		// resolve at deploy time); the placement request is only the fallback before a deploy.
+		const workloadNodeByProject = new Map(
+			this.ctx.db
+				.select({ projectId: workloads.projectId, nodeId: workloads.nodeId })
+				.from(workloads)
+				.all()
+				.flatMap((row) => (row.nodeId ? [[row.projectId, row.nodeId] as const] : [])),
+		);
+		const targetOf = (project: { id: string; runtime: string; placement: string }): string | null =>
+			(project.runtime !== 'static' ? workloadNodeByProject.get(project.id) : undefined) ??
+			(project.placement === 'edge' || project.placement === 'auto' ? edgeId : project.placement);
+
 		const projectRows = this.ctx.db
 			.select()
 			.from(projects)
 			.where(isNull(projects.deletedAt))
 			.all()
 			.filter((project) => {
-				const target = project.placement === 'edge' || project.placement === 'auto' ? edgeId : project.placement;
+				const target = targetOf(project);
 				// Edge serves edge-placed projects locally and proxies worker-placed ones; a worker
 				// only serves the projects placed on it.
 				return isEdge || target === node.id;
@@ -427,8 +448,7 @@ export class NodeService {
 		);
 
 		for (const project of projectRows) {
-			const target =
-				project.placement === 'edge' || project.placement === 'auto' ? (edgeId ?? node.id) : project.placement;
+			const target = targetOf(project) ?? node.id;
 			const local = target === node.id;
 			const workload = workloadByProject.get(project.id);
 			// Apps proxy to the workload on their node; the edge reaches a worker's Caddy over WireGuard.
@@ -570,7 +590,12 @@ export class NodeService {
 					: [];
 			});
 
-		const workloadRows = this.ctx.workloads.desiredForNode(node.id);
+		// Managed databases ride the workload list as container workloads with a database profile.
+		const workloadRows = [
+			...this.ctx.workloads.desiredForNode(node.id),
+			...this.ctx.databases.desiredForNode(node.id),
+			...this.ctx.storage.desiredForNode(node.id),
+		];
 		// Custom domains always clone the production route (stream B), so only projects with a
 		// production pointer are candidates; staging-only projects must not serve them.
 		const servedProjectIds = productionProjectIds;
@@ -592,6 +617,9 @@ export class NodeService {
 			revocations: this.ctx.access.revocations(),
 			hostRedirects,
 			workloads: workloadRows,
+			databasePurges: this.ctx.databases.purgesForNode(node.id),
+			storageRoutes: this.ctx.storage.routesForNode(node.id, isEdge, (id) => nodeById.get(id)?.publicAddress ?? null),
+			storagePurges: this.ctx.storage.purgesForNode(node.id),
 			domains: this.ctx.domains.desiredForProjects(servedProjectIds),
 		};
 	}

@@ -45,6 +45,8 @@ export interface HelperApi {
 	remove(id: string): Promise<void>;
 	status(id: string): Promise<HelperWorkloadStatus>;
 	logs(id: string, options?: LogReadOptions): Promise<HelperLogResult>;
+	/** Delete a purged database's unit and data dir (D59). Idempotent. */
+	purge(id: string): Promise<void>;
 }
 
 export class HelperError extends Error {
@@ -58,6 +60,8 @@ const HEALTH_TIMEOUT_MS = 3_000;
 const SLICE_TIMEOUT_MS = 30_000;
 const APPLY_TIMEOUT_MS = 90_000;
 const REMOVE_TIMEOUT_MS = 60_000;
+/** Stopping Postgres (TimeoutStopSec=120) plus deleting a large data dir. */
+const PURGE_TIMEOUT_MS = 300_000;
 const STATUS_TIMEOUT_MS = 2_000;
 const LOG_TIMEOUT_MS = 8_000;
 const STATUSES: readonly WorkloadStatus[] = ['pending', 'starting', 'running', 'failed', 'stopped'];
@@ -93,6 +97,10 @@ export class HelperClient implements HelperApi {
 
 	async remove(id: string): Promise<void> {
 		await this.request('DELETE', `/v1/workloads/${encodeURIComponent(id)}`, undefined, REMOVE_TIMEOUT_MS);
+	}
+
+	async purge(id: string): Promise<void> {
+		await this.request('POST', `/v1/workloads/${encodeURIComponent(id)}/purge`, undefined, PURGE_TIMEOUT_MS);
 	}
 
 	async status(id: string): Promise<HelperWorkloadStatus> {

@@ -77,9 +77,14 @@ const handler: RequestHandler = async (event) => {
 			// The token authenticates the node; the payload must not claim another one.
 			const node = core.nodes.authenticate(token);
 			if (node.id !== batch.nodeId) return json({ error: 'node_mismatch' }, 403);
-			if (!core.ctx.telemetry?.available) return json({ ok: true, stored: 0, detail: 'telemetry disabled' });
-			const result = await core.ctx.telemetry.ingest(batch.buckets);
-			return { ok: true, stored: result.inserted };
+			// Database and object-storage sizes and snapshots land in SQLite even when DuckDB is
+			// disabled (D57, S7).
+			const databases = await core.databases.ingestTelemetry(node.id, batch.databases, batch.databaseSnapshots);
+			const storage = await core.storage.ingestTelemetry(node.id, batch.objectStorage, batch.objectStorageBuckets);
+			if (!core.ctx.telemetry?.available)
+				return json({ ok: true, stored: 0, databasesStored: 0, storageStored: 0, detail: 'telemetry disabled' });
+			const result = batch.buckets.length > 0 ? await core.ctx.telemetry.ingest(batch.buckets) : { inserted: 0 };
+			return { ok: true, stored: result.inserted, databasesStored: databases.stored, storageStored: storage.stored };
 		}
 
 		return json({ error: 'not_found', action }, 404);

@@ -1,10 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import {
+	DATABASE_PGDATA,
+	WORKLOAD_NETWORK_UNIT,
 	containerUnitName,
+	renderContainerEnvFile,
 	renderContainerUnit,
 	renderEnvFile,
+	renderNetworkUnit,
 	renderProcessUnit,
 	renderSliceUnit,
 	renderSocketUnit,
@@ -13,8 +17,12 @@ import {
 	type UnitSecretFile,
 } from './units.ts';
 import {
+	DATABASE_ENGINES,
+	STORAGE_ENGINES,
+	STORAGE_ENV,
 	ValidationError,
 	assertAbsolutePath,
+	assertManagedId,
 	assertMemoryMb,
 	assertCpuWeight,
 	assertId,
@@ -91,6 +99,8 @@ export interface SystemdDriverOptions {
 	runner: CommandRunner;
 	/** Where generated units live, normally /etc/systemd/system. */
 	unitDir: string;
+	/** Quadlet source directory, normally /etc/containers/systemd. Defaults to `unitDir` (tests). */
+	quadletDir?: string;
 	/** Root-owned runtime directory for env files and sockets, normally /run/skiff-workloads. */
 	runtimeDir: string;
 	/** Persistent container data root, normally /var/lib/skiff-workloads. */
@@ -103,6 +113,16 @@ export interface SystemdDriverOptions {
 	journalctlPath?: string;
 	socketMode?: string;
 	socketGroup?: string | null;
+	/**
+	 * Hands a database data dir to the engine's user. Defaults to `fs.chown` when running as root
+	 * and to a no-op otherwise, so tests (and dev) run unprivileged.
+	 */
+	chown?: (path: string, uid: number, gid: number) => Promise<void>;
+}
+
+export function defaultChown(): (path: string, uid: number, gid: number) => Promise<void> {
+	const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+	return isRoot ? (path, uid, gid) => fs.chown(path, uid, gid) : async () => undefined;
 }
 
 interface UnitPaths {
@@ -114,6 +134,7 @@ interface UnitPaths {
 export class SystemdDriver {
 	private readonly runner: CommandRunner;
 	private readonly unitDir: string;
+	private readonly quadletDir: string;
 	private readonly runtimeDir: string;
 	private readonly stateDir: string;
 	private readonly releaseDirs: string[];
@@ -122,10 +143,12 @@ export class SystemdDriver {
 	private readonly journalctlPath: string;
 	private readonly socketMode: string;
 	private readonly socketGroup: string | null;
+	private readonly chown: (path: string, uid: number, gid: number) => Promise<void>;
 
 	constructor(options: SystemdDriverOptions) {
 		this.runner = options.runner;
 		this.unitDir = assertAbsolutePath(options.unitDir, 'unitDir');
+		this.quadletDir = assertAbsolutePath(options.quadletDir ?? options.unitDir, 'quadletDir');
 		this.runtimeDir = assertAbsolutePath(options.runtimeDir, 'runtimeDir');
 		this.stateDir = assertAbsolutePath(options.stateDir, 'stateDir');
 		if (options.releaseDirs.length === 0)
@@ -139,6 +162,7 @@ export class SystemdDriver {
 		);
 		this.socketMode = validateSocketMode(options.socketMode ?? '0666');
 		this.socketGroup = options.socketGroup ?? null;
+		this.chown = options.chown ?? defaultChown();
 	}
 
 	unitPaths(id: string): UnitPaths {
@@ -146,7 +170,7 @@ export class SystemdDriver {
 		return {
 			service: join(this.unitDir, serviceUnitName(id)),
 			socket: join(this.unitDir, socketUnitName(id)),
-			container: join(this.unitDir, containerUnitName(id)),
+			container: join(this.quadletDir, containerUnitName(id)),
 		};
 	}
 
@@ -191,7 +215,13 @@ export class SystemdDriver {
 
 		const envFile = join(workloadRuntimeDir, 'env');
 		const env = { ...workload.env, ...activation.env };
-		await this.writeAtomic(envFile, renderEnvFile(env), 0o400);
+		// The database profile pins its cluster inside the /data mount; never the image's VOLUME.
+		if (workload.database) env.PGDATA = DATABASE_PGDATA;
+		// The storage profile's fixed settings win over anything on the wire (S1).
+		if (workload.objectStorage) Object.assign(env, STORAGE_ENV);
+		// systemd and Podman parse env files differently; each driver gets its own format.
+		const envText = workload.runtime === 'container' ? renderContainerEnvFile(env) : renderEnvFile(env);
+		await this.writeAtomic(envFile, envText, 0o400);
 
 		const secretsDir = join(workloadRuntimeDir, 'secrets');
 		const secretFiles = await this.writeSecrets(secretsDir, workload, activation);
@@ -251,8 +281,22 @@ export class SystemdDriver {
 			}
 		} else {
 			const image = workload.image!;
+			// Every container joins the shared network; write it first so Quadlet can resolve it.
+			changed = (await this.ensureNetworkUnit()) || changed;
 			const dataDir = join(this.stateDir, workload.id);
 			await fs.mkdir(dataDir, { recursive: true, mode: 0o700 });
+			const owner = workload.database
+				? DATABASE_ENGINES[workload.database.engine]
+				: workload.objectStorage
+					? STORAGE_ENGINES[workload.objectStorage.engine]
+					: null;
+			if (owner) {
+				// chown follows symlinks; the data dir must be a real directory under stateDir.
+				if (!(await fs.lstat(dataDir)).isDirectory())
+					throw new ValidationError(`${dataDir} is not a directory`);
+				await fs.chmod(dataDir, 0o700);
+				await this.chown(dataDir, owner.uid, owner.gid);
+			}
 			const container = renderContainerUnit({
 				workload,
 				image,
@@ -271,10 +315,32 @@ export class SystemdDriver {
 			await this.systemctl(['disable', '--now', socketUnitName(workload.id)], {
 				allowFailure: true,
 			});
-			await this.systemctl(['restart', serviceUnitName(workload.id)]);
+			// A managed service's first start pulls the image (and runs initdb for a database) under
+			// TimeoutStartSec=600, which would outlive the agent's apply request. Queue the restart;
+			// the agent probes readiness.
+			await this.systemctl(
+				owner
+					? ['restart', '--no-block', serviceUnitName(workload.id)]
+					: ['restart', serviceUnitName(workload.id)],
+			);
 		}
 
 		return this.status(workload.id);
+	}
+
+	/**
+	 * Delete a purged database's or storage instance's data dir (D59, S8). Only `db_`/`st_` ids,
+	 * only `<stateDir>/<id>`, and only after the unit is gone. A missing dir is success, so the
+	 * verb is idempotent.
+	 */
+	async purge(id: string): Promise<void> {
+		assertManagedId(id, 'managed id');
+		await this.remove(id);
+		const root = resolve(this.stateDir);
+		const target = resolve(root, id);
+		if (dirname(target) !== root || basename(target) !== id)
+			throw new ValidationError(`Refusing to purge ${target}: not a direct child of ${root}`);
+		await fs.rm(target, { recursive: true, force: true });
 	}
 
 	/** Stop both drivers, remove generated units and scrub the runtime secret directory. */
@@ -457,6 +523,11 @@ export class SystemdDriver {
 				`workload.command is required: ${releaseDir} has no package.json to derive "bun run start" from`,
 			);
 		}
+	}
+
+	/** Write the shared Quadlet network; returns true when systemd needs a daemon-reload. */
+	private async ensureNetworkUnit(): Promise<boolean> {
+		return this.writeIfChanged(join(this.quadletDir, WORKLOAD_NETWORK_UNIT), renderNetworkUnit(), 0o644);
 	}
 
 	private async systemctl(args: string[], options: { allowFailure?: boolean } = {}): Promise<RunResult> {

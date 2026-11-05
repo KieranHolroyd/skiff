@@ -2,13 +2,19 @@ import { error, fail, redirect } from '@sveltejs/kit';
 import { CoreError, entriesFromZip } from '@skiff/core';
 import {
 	accessModes,
+	databaseAttachSchema,
 	hasPermission,
+	storageAttachSchema,
+	storageAttachmentUpdateSchema,
 	workloadSpecSchema,
 	type BuildView,
+	type DatabaseAttachmentView,
 	type DomainView,
 	type EnvironmentView,
 	type GitSourceView,
 	type NodeCapacityView,
+	type StorageAttachmentView,
+	type StorageView,
 	type WorkloadView
 } from '@skiff/contracts';
 import type { SecretView } from '@skiff/core';
@@ -23,6 +29,7 @@ import {
 	formString,
 	toFormFailure
 } from '../../_lib/errors.js';
+import { grantsFromForm } from '../../storage/_lib/forms.server.js';
 import type { Actions, PageServerLoad } from './$types';
 
 /** Run a read that a viewer may not be allowed to make without taking the page down. */
@@ -139,6 +146,43 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		);
 		const capacity: NodeCapacityView[] =
 			principal.platformAdmin === true ? safely(() => core.workloads.capacity(principal), []) : [];
+		// Managed databases (D56): only process/container projects can attach one.
+		const databaseAttachments: DatabaseAttachmentView[] =
+			row.runtime === 'static' ? [] : safely(() => core.databases.attachments(principal, row), []);
+		const attachableDatabases =
+			row.runtime === 'static'
+				? []
+				: safely(() => core.databases.list(principal), [])
+						.filter((db) => !databaseAttachments.some((item) => item.databaseId === db.id))
+						.map((db) => ({
+							name: db.name,
+							version: db.version,
+							engineLabel: db.engineLabel,
+							nodeName: db.nodeName ?? db.nodeId
+						}));
+		// Managed object storage (S4): same rule, process/container projects only.
+		const storageAttachments: StorageAttachmentView[] =
+			row.runtime === 'static' ? [] : safely(() => core.storage.attachments(principal, row), []);
+		const storageInstances: StorageView[] =
+			row.runtime === 'static' ? [] : safely(() => core.storage.list(principal), []);
+		const readyBuckets = (item: StorageView) =>
+			item.buckets.filter((bucket) => bucket.state === 'ready').map((bucket) => bucket.name);
+		const attachableStorage = storageInstances
+			.filter((item) => !storageAttachments.some((attached) => attached.storageId === item.id))
+			.map((item) => ({
+				name: item.name,
+				engineLabel: item.engineLabel,
+				version: item.version,
+				nodeName: item.nodeName ?? item.nodeId,
+				public: item.public,
+				buckets: readyBuckets(item)
+			}))
+			.filter((item) => item.buckets.length > 0);
+		const storageBuckets: Record<string, string[]> = Object.fromEntries(
+			storageInstances
+				.filter((item) => storageAttachments.some((attached) => attached.storageId === item.id))
+				.map((item) => [item.name, readyBuckets(item)])
+		);
 
 		return {
 			project,
@@ -156,6 +200,11 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			workloadSpec,
 			secrets,
 			capacity,
+			databaseAttachments,
+			attachableDatabases,
+			storageAttachments,
+			attachableStorage,
+			storageBuckets,
 			can: {
 				update: hasPermission(principal, 'project:update'),
 				deleteProject: hasPermission(principal, 'project:delete'),
@@ -176,7 +225,15 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 				createSecret: hasPermission(principal, 'secret:create'),
 				deleteSecret: hasPermission(principal, 'secret:delete'),
 				manageWorkload: hasPermission(principal, 'project:update'),
-				viewCapacity: principal.platformAdmin === true
+				viewCapacity: principal.platformAdmin === true,
+				readDatabases: hasPermission(principal, 'database:read'),
+				createDatabase: hasPermission(principal, 'database:create'),
+				attachDatabase:
+					hasPermission(principal, 'database:update') && hasPermission(principal, 'project:update'),
+				readStorage: hasPermission(principal, 'storage:read'),
+				createStorage: hasPermission(principal, 'storage:create'),
+				attachStorage:
+					hasPermission(principal, 'storage:update') && hasPermission(principal, 'project:update')
 			}
 		};
 	} catch (caught) {
@@ -821,6 +878,108 @@ export const actions: Actions = {
 		} catch (caught) {
 			return fail(failStatus(caught), toFormFailure(caught));
 		}
+	},
+
+	// --- Managed databases (D56) ------------------------------------------------
+
+	attachDatabase: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const parsed = databaseAttachSchema.safeParse({
+			database: formString(data, 'database'),
+			envPrefix: formString(data, 'envPrefix').toUpperCase() || 'DATABASE'
+		});
+		if (!parsed.success) {
+			return fail(400, {
+				message: parsed.error.issues[0]?.message ?? 'Check the attachment.',
+				fieldErrors: fieldErrorsFrom(parsed.error.issues)
+			});
+		}
+		try {
+			const project = core.projects.requireRow(principal, params.slug);
+			const { attachment, warning } = core.databases.attach(principal, project, parsed.data);
+			return {
+				success: `${attachment.databaseName} attached as ${attachment.envPrefix}_URL. The app restarts with the new env.`,
+				databaseWarning: warning
+			};
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	detachDatabase: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const name = formString(await request.formData(), 'database');
+		if (!name) return fail(400, { message: 'Missing database name.' });
+		try {
+			const project = core.projects.requireRow(principal, params.slug);
+			core.databases.detach(principal, project, name);
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+		return { success: `${name} detached. The app restarts without its env.` };
+	},
+
+	// --- Managed object storage (S4) ---------------------------------------------
+
+	attachStorage: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const parsed = storageAttachSchema.safeParse({
+			storage: formString(data, 'storage'),
+			envPrefix: formString(data, 'envPrefix').toUpperCase() || 'S3',
+			grants: grantsFromForm(data)
+		});
+		if (!parsed.success) {
+			return fail(400, {
+				message: parsed.error.issues[0]?.message ?? 'Check the attachment.',
+				fieldErrors: fieldErrorsFrom(parsed.error.issues)
+			});
+		}
+		try {
+			const project = core.projects.requireRow(principal, params.slug);
+			const { attachment, warning } = core.storage.attach(principal, project, parsed.data);
+			return {
+				success: `${attachment.storageName} attached as ${attachment.envPrefix}_*. The app restarts with the new env.`,
+				storageWarning: warning
+			};
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	updateStorageGrants: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const name = formString(data, 'storage');
+		if (!name) return fail(400, { message: 'Missing storage name.' });
+		const parsed = storageAttachmentUpdateSchema.safeParse({ grants: grantsFromForm(data) });
+		if (!parsed.success) {
+			return fail(400, {
+				message: parsed.error.issues[0]?.message ?? 'Check the grants.',
+				fieldErrors: fieldErrorsFrom(parsed.error.issues)
+			});
+		}
+		try {
+			const project = core.projects.requireRow(principal, params.slug);
+			core.storage.updateAttachment(principal, project, name, parsed.data);
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+		return { success: `Grants on ${name} saved. The app restarts with its updated key policy.` };
+	},
+
+	detachStorage: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const name = formString(await request.formData(), 'storage');
+		if (!name) return fail(400, { message: 'Missing storage name.' });
+		try {
+			const project = core.projects.requireRow(principal, params.slug);
+			core.storage.detach(principal, project, name);
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+		return { success: `${name} detached. Its key is deleted and the app restarts without it.` };
 	},
 
 	deleteSecret: async ({ request, locals }) => {

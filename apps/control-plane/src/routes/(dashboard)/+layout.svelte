@@ -3,6 +3,9 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
+	import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
+	import CylinderIcon from '@lucide/svelte/icons/cylinder';
+	import DatabaseIcon from '@lucide/svelte/icons/database';
 	import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
 	import GlobeIcon from '@lucide/svelte/icons/globe';
 	import LayoutDashboardIcon from '@lucide/svelte/icons/layout-dashboard';
@@ -32,6 +35,8 @@
 		href:
 			| '/(dashboard)/overview'
 			| '/(dashboard)/projects'
+			| '/(dashboard)/databases'
+			| '/(dashboard)/storage'
 			| '/(dashboard)/deployments'
 			| '/(dashboard)/nodes'
 			| '/(dashboard)/audit'
@@ -55,6 +60,18 @@
 					href: '/(dashboard)/projects',
 					path: '/projects',
 					icon: FolderKanbanIcon
+				},
+				{
+					label: 'Databases',
+					href: '/(dashboard)/databases',
+					path: '/databases',
+					icon: DatabaseIcon
+				},
+				{
+					label: 'Storage',
+					href: '/(dashboard)/storage',
+					path: '/storage',
+					icon: CylinderIcon
 				},
 				{
 					label: 'Deployments',
@@ -88,7 +105,8 @@
 		const top = nav.find((item) => item.path === `/${segments[0] ?? ''}`);
 		const out: { label: string; route?: NavItem['href']; mono?: boolean }[] = [];
 		if (top) out.push({ label: top.label, route: segments.length > 1 ? top.href : undefined });
-		const isProject = top?.path === '/projects';
+		const isProject =
+			top?.path === '/projects' || top?.path === '/databases' || top?.path === '/storage';
 		for (const raw of segments.slice(1)) {
 			const segment = decodeURIComponent(raw);
 			out.push({
@@ -171,6 +189,16 @@
 										</a>
 									{/snippet}
 								</Sidebar.MenuButton>
+								{#if item.path === '/settings'}
+									{#await data.updateAvailable then update}
+										{#if update}
+											<Sidebar.MenuBadge title={`Skiff ${update.latest} is available`}>
+												<span class="size-2 rounded-full bg-brand"></span>
+												<span class="sr-only">Update available</span>
+											</Sidebar.MenuBadge>
+										{/if}
+									{/await}
+								{/if}
 							</Sidebar.MenuItem>
 						{/each}
 					</Sidebar.Menu>
@@ -259,13 +287,28 @@
 					{/each}
 				</Breadcrumb.List>
 			</Breadcrumb.Root>
-			<Badge
-				variant="outline"
-				class="ml-auto hidden font-mono font-normal text-muted-foreground sm:inline-flex"
-				title="Content domain for deployed sites"
-			>
-				<GlobeIcon />*.{data.contentDomain}
-			</Badge>
+			<div class="ml-auto flex items-center gap-2">
+				{#await data.updateAvailable then update}
+					{#if update}
+						<Badge
+							href={resolve('/(dashboard)/settings/updates')}
+							variant="brand"
+							title={`Running ${update.current}. Open Settings › Updates to install ${update.latest}.`}
+						>
+							<CircleArrowUpIcon />
+							<span>Update available</span>
+							<span class="hidden font-mono sm:inline">{update.latest}</span>
+						</Badge>
+					{/if}
+				{/await}
+				<Badge
+					variant="outline"
+					class="hidden font-mono font-normal text-muted-foreground sm:inline-flex"
+					title="Content domain for deployed sites"
+				>
+					<GlobeIcon />*.{data.contentDomain}
+				</Badge>
+			</div>
 		</header>
 
 		{#if data.sharedDomain}

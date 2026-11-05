@@ -13,6 +13,8 @@ import type { NodeService } from './nodes.ts';
 import type { AccessService } from './access.ts';
 import type { SecretService } from './secrets.ts';
 import type { WorkloadService } from './workloads.ts';
+import type { DatabaseService } from './databases.ts';
+import type { StorageService } from './storage-instances.ts';
 import type { DomainService } from './domains.ts';
 import type { BuildService } from './builds.ts';
 import type { LogService } from './logs.ts';
@@ -41,6 +43,8 @@ export interface CoreContext {
 	access: AccessService;
 	secrets: SecretService;
 	workloads: WorkloadService;
+	databases: DatabaseService;
+	storage: StorageService;
 	domains: DomainService;
 	builds: BuildService;
 	logs: LogService;

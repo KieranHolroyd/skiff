@@ -66,6 +66,93 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | GET/DELETE | `/domains/:id` | `domain:read` / `domain:delete` | deleting also removes managed Cloudflare records |
 | POST | `/domains/:id/check` | `domain:read` | re-check TXT/address records and report drift |
 
+## Managed databases
+
+Org-owned PostgreSQL run as tier-3 containers ([DATABASES.md](./DATABASES.md), D55–D61). Names
+follow slug rules and are unique per org. Responses carry a `DatabaseView` (status, node, limits,
+`sizeBytes`, `attachments`, the latest top-50 `tables` snapshot, `deletedAt`/`purgeAt`) and never
+contain credentials, except `/credentials`.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/databases` | `database:read` | `?includeDeleted=1` adds the trash → `{ databases }` |
+| POST | `/databases` | `database:create` (+ `project:update` with `project`) | `{ name, engine?, version? (16\|17), placement? (auto\|edge\|node id), memoryMb?, cpus?, storageMb?, project?, envPrefix? }` → `201 { database }`. Placement is resolved once; with `project` it follows the project's node and the attachment is created in the same call |
+| GET | `/databases/:name` | `database:read` | `?includeDeleted=1` to read a trashed one → `{ database }` |
+| PATCH | `/databases/:name` | `database:update` | any of `{ memoryMb, cpus, storageMb }`; more memory re-checks admission → `{ database }` |
+| DELETE | `/databases/:name` | `database:delete` | soft delete, restorable 7 days; 409 while projects are attached → `{ database }` |
+| DELETE | `/databases/:name?purge=1` | `database:delete` | trashed databases only: the node removes the data, then the row goes → `{ ok: true }` |
+| POST | `/databases/:name/restore` | `database:delete` | re-checks admission; 409 once a purge was requested → `{ database }` |
+| GET | `/databases/:name/credentials` | `database:credentials` | `{ credentials: { url, host, port, username, password, databaseName, note } }`; loopback URL on the database's node; `cache-control: no-store`; every read is audited. Not available over MCP (D58) |
+| GET | `/databases/:name/metrics` | `database:read` | `?from&to` (ISO or epoch ms; default the last hour) `&interval=1m\|1h` (default `1m`, `1h` when the range exceeds 48 h; `1m` over 48 h is rejected; ranges ≤ 92 days) → `{ points, interval }`. Counters are per bucket |
+| GET | `/projects/:slug/databases` | `database:read` | `{ attachments }` with the env names each one injects |
+| POST | `/projects/:slug/databases` | `database:update` + `project:update` | `{ database, envPrefix? (UPPER_SNAKE, default DATABASE) }` → `201 { attachment, warning }`. The project gets `<PREFIX>_URL`, `_HOST`, `_PORT`, `_USER`, `_PASSWORD`, `_NAME` at activation and restarts; `warning` says when it must be redeployed onto the database's node (same node only, D56) |
+| DELETE | `/projects/:slug/databases/:name` | `database:update` + `project:update` | detach; the app re-activates without the variables → `{ ok: true }` |
+
+**MCP tools.** `list_databases` (`includeDeleted?`), `get_database` (the view plus a `lastHour`
+summary: latest size vs the storage budget, connections vs `max_connections`, commits/min,
+cache hit ratio), `create_database` (same input as `POST /databases`; step-up adds
+`project:update` only when `project` is given), `attach_database` (`{ project, database,
+envPrefix? }`), `detach_database` (`{ project, database }`) and `delete_database` (soft delete,
+confirmed by multi-round-trip input bound to the database, refused before prompting while
+attached; 2025-era clients get a dashboard link). There is **no credentials tool and no purge**
+over MCP (D58, D53). Guide: `skiff://guides/databases`.
+
+**CLI.** `skif db list [--all]`, `create <name> [-p <project>] [--prefix P] [--version 16|17]
+[--placement …] [--memory 256M] [--cpus 1] [--storage 10G]`, `info <name>` (status, node, size
+vs budget, attachments, top tables), `attach|detach <name> -p <project> [--prefix P]`,
+`delete <name>` (asks; `--yes`), `restore <name>`, `purge <name>` (type the name, or `--yes`),
+`credentials <name>` (prints the URL; `--json` prints everything). All accept `--json`.
+
+## Managed object storage
+
+Org-owned S3-compatible storage (RustFS) run as tier-3 containers ([OBJECT-STORAGE.md](./OBJECT-STORAGE.md),
+S1–S10). Instance names follow slug rules (3–40 chars, no `--`) and are unique per org; bucket
+names are 3–63 lowercase letters, digits and single hyphens (no dots). Responses carry a
+`StorageView` (status, node, limits, `usedBytes`/`objects`, `public`/`publicUrl`,
+`internalEndpoint`, `region`, `buckets`, `attachments`, `deletedAt`/`purgeAt`) and never contain
+secret keys, except `/credentials`.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/storage` | `storage:read` | `?includeDeleted=1` adds the trash → `{ storage: StorageView[] }` |
+| POST | `/storage` | `storage:create` (+ `project:update` with `project`) | `{ name, engine? (rustfs), version?, placement? (auto\|edge\|node id), memoryMb?, cpus?, storageMb?, public?, buckets? (names, created private), project?, envPrefix? }` → `201 { storage }`. `project` needs at least one bucket and is granted read-write on all of them; a private instance with `project` follows the project's node |
+| GET | `/storage/:name` | `storage:read` | `?includeDeleted=1` to read a trashed one → `{ storage }` |
+| PATCH | `/storage/:name` | `storage:update` | any of `{ memoryMb, cpus, storageMb, public, version }`; more memory re-checks admission; going private is refused (409) while apps on other nodes use it → `{ storage }` |
+| DELETE | `/storage/:name` | `storage:delete` | soft delete, restorable 7 days; the container and public route stop; 409 while projects are attached → `{ storage }` |
+| DELETE | `/storage/:name?purge=1` | `storage:delete` | trashed instances only: the node removes the data, then the rows go → `{ ok: true }` |
+| POST | `/storage/:name/restore` | `storage:delete` | re-checks admission; 409 once a purge was requested → `{ storage }` |
+| GET | `/storage/:name/credentials` | `storage:credentials` | `{ credentials: { accessKeyId, secretAccessKey, region, endpoint, internalEndpoint, publicEndpoint, note } }`, the root key; `endpoint` is the public URL when public, else loopback on the node; `cache-control: no-store`; every read is audited. Not available over MCP (S6) |
+| GET | `/storage/:name/metrics` | `storage:read` | same `?from&to&interval` rules as database metrics → `{ points: [{ bucket, up, usedBytes, objects, bucketCount, memoryBytes }], interval }` |
+| GET | `/storage/:name/buckets` | `storage:read` | `{ buckets: [{ name, access, state (ready\|deleting\|delete-blocked), sizeBytes, objects, createdAt, statsAt }] }` |
+| POST | `/storage/:name/buckets` | `storage:update` | `{ name, access? (private\|public-read) }` → `201 { bucket }`; re-creating a bucket whose delete was blocked cancels that delete. At most 200 per instance |
+| PATCH | `/storage/:name/buckets/:bucket` | `storage:update` | `{ access }` → `{ bucket }`. `public-read` allows unsigned GETs of objects, not listing |
+| DELETE | `/storage/:name/buckets/:bucket` | `storage:update`; with `?force=1` `storage:delete` | the node deletes it if empty (else it turns `delete-blocked`); 409 while granted to a project, or when it is known to hold objects without `force`. `force` empties it first → `{ bucket }` |
+| GET | `/projects/:slug/storage` | `storage:read` | `{ attachments }` with grants, the env names each one injects and its access key id |
+| POST | `/projects/:slug/storage` | `storage:update` + `project:update` | `{ storage, envPrefix? (UPPER_SNAKE, default S3), grants: [{ bucket, mode? (read\|read-write, default read-write) }] }` → `201 { attachment, warning }`. The project gets its own key as `<PREFIX>_ENDPOINT_URL`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`, `_REGION`, `_FORCE_PATH_STYLE` (+ `_BUCKET` with one grant, `_PUBLIC_ENDPOINT_URL` when public) at activation and restarts. A private instance must share the project's node; `warning` says when it must be redeployed there |
+| PATCH | `/projects/:slug/storage/:name` | `storage:update` + `project:update` | `{ grants }` replaces the grants; the key's policy changes in place → `{ attachment }` |
+| DELETE | `/projects/:slug/storage/:name` | `storage:update` + `project:update` | detach and revoke the key; the app re-activates without the variables → `{ ok: true }` |
+
+**MCP tools.** `list_storage` (`includeDeleted?`), `get_storage` (the view plus a `lastHour`
+summary: bytes used vs the storage budget, objects, buckets, memory), `create_storage` (same
+input as `POST /storage`; step-up adds `project:update` only when `project` is given),
+`create_bucket` (`{ storage, name, access? }`), `attach_storage` (`{ project, storage,
+envPrefix?, grants? }`; without `grants`, read-write on the only bucket), `detach_storage`
+(`{ project, storage }`) and `delete_storage` (soft delete, confirmed by multi-round-trip input
+bound to the instance, refused before prompting while attached; 2025-era clients get a dashboard
+link). There is **no key reveal, bucket delete or purge** over MCP (S6). Guide:
+`skiff://guides/storage`.
+
+**CLI.** `skif storage list [--all]`, `create <name> [-b <bucket>]… [-p <project>] [--prefix P]
+[--public] [--placement …] [--memory 512M] [--cpus 1] [--storage 10G]`, `info <name>`,
+`update <name> [--memory] [--cpus] [--storage] [--version] [--public|--no-public]`,
+`buckets [list] <name>`, `buckets create|update <name> <bucket> [--access private|public-read]`,
+`buckets delete <name> <bucket> [--force]`, `attach <name> -p <project> [-b <bucket>[:read|:read-write]]…
+[--prefix P]` (no `--bucket`: the only bucket, read-write), `grants <name> -p <project> -b …`,
+`detach <name> -p <project>`, `delete <name>` (asks; `--yes`), `restore <name>`, `purge <name>`
+(type the name, or `--yes`), `credentials <name> [--prefix AWS]` (prints the root key as env
+lines; `--json` prints everything), `metrics <name> [--since 1h | --from … --to …] [--interval
+1m|1h]`. All accept `--json`; `skif s3` is an alias.
+
 ## CLI browser login (`/cli/login`, `/api/v1/cli/token`)
 
 `skif login` (browser sign-in is the default) opens
@@ -86,7 +173,10 @@ single-use join token and returns the node's long-lived token.
   expired presigned release URLs are reissued. The token is checked before the wait.
 - `POST /api/agent/heartbeat` — stats + actual state version every ~10 s, plus `storage` (what `skiff-storage.service` last applied).
 - `GET /api/agent/storage` — `{ dataDir, buildDir }` for the node's root `skiff-storage.service`, which re-reads the paths here instead of trusting the agent (D48).
-- `POST /api/agent/telemetry` — pre-aggregated 1-minute access buckets (never raw requests).
+- `POST /api/agent/telemetry` — pre-aggregated 1-minute access buckets (never raw requests), plus
+  `databases` / `databaseSnapshots` and `objectStorage` / `objectStorageBuckets` samples. Database
+  and storage sizes land in SQLite even when DuckDB telemetry is disabled; samples for instances
+  the calling node doesn't host are dropped. → `{ ok, stored, databasesStored, storageStored }`.
 - `GET /api/agent/workloads/:id/activation` — decrypted env/secret-file values for a workload
   owned by the calling node. Never cached on disk by the agent.
 - `GET /api/agent/builds/next` — claim the oldest queued build (builder nodes only); returns the

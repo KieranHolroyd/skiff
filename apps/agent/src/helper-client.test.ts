@@ -59,7 +59,8 @@ describe('HelperClient', () => {
 			unix: path,
 			async fetch(request) {
 				const url = new URL(request.url);
-				const body = request.method === 'POST' ? await request.json() : null;
+				const text = request.method === 'POST' ? await request.text() : '';
+				const body = text ? JSON.parse(text) : null;
 				requests.push({ method: request.method, path: url.pathname, body });
 				if (url.pathname === '/healthz') return Response.json({ ok: true, version: 'test' });
 				if (url.pathname === '/v1/slice') return Response.json({ ok: true });
@@ -70,6 +71,8 @@ describe('HelperClient', () => {
 					});
 				if (url.pathname === '/v1/workloads/wld_abc123' && request.method === 'DELETE')
 					return Response.json({ ok: true });
+				if (url.pathname === '/v1/workloads/db_abc/purge' && request.method === 'POST')
+					return Response.json({ ok: true, purged: 'db_abc' });
 				if (url.pathname === '/v1/workloads/wld_abc123')
 					return Response.json({
 						ok: true,
@@ -104,6 +107,10 @@ describe('HelperClient', () => {
 
 		expect((await client.status('wld_abc123')).status).toBe('failed');
 		await client.remove('wld_abc123');
+		expect(requests.at(-1)).toEqual({ method: 'DELETE', path: '/v1/workloads/wld_abc123', body: null });
+
+		await client.purge('db_abc');
+		expect(requests.at(-1)).toEqual({ method: 'POST', path: '/v1/workloads/db_abc/purge', body: null });
 	});
 
 	test('surfaces helper errors with the endpoint', async () => {

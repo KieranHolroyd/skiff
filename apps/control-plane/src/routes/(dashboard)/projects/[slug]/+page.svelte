@@ -46,6 +46,7 @@
 	import RowMenu from '../../_lib/RowMenu.svelte';
 	import TrafficDashboard from '../../_lib/TrafficDashboard.svelte';
 	import BuildsPanel from './_components/BuildsPanel.svelte';
+	import DatabasesCard from './_components/DatabasesCard.svelte';
 	import DomainsPanel from './_components/DomainsPanel.svelte';
 	import EnvironmentsPanel from './_components/EnvironmentsPanel.svelte';
 	import LogsPanel from './_components/LogsPanel.svelte';
@@ -53,6 +54,7 @@
 	import { readProjectTab, type ProjectTab } from './_components/project-nav.js';
 	import RuntimePanel from './_components/RuntimePanel.svelte';
 	import SourcePanel from './_components/SourcePanel.svelte';
+	import StorageCard from './_components/StorageCard.svelte';
 	import { displayUrl, formatBytes, formatDateTime, shortId, shortSha } from '../../_lib/format.js';
 	import type { PageProps } from './$types';
 
@@ -63,6 +65,8 @@
 		fieldErrors?: Record<string, string>;
 		shareUrl?: string;
 		shareHost?: string;
+		databaseWarning?: string | null;
+		storageWarning?: string | null;
 	}
 
 	let { data, form }: PageProps = $props();
@@ -482,6 +486,37 @@
 						viewCapacity: data.can.viewCapacity
 					}}
 				/>
+				{#if data.project.runtime !== 'static'}
+					<div class="mt-5">
+						<DatabasesCard
+							slug={data.project.slug}
+							attachments={data.databaseAttachments}
+							databases={data.attachableDatabases}
+							warning={result?.databaseWarning ?? null}
+							fieldErrors={result?.fieldErrors}
+							can={{
+								readDatabases: data.can.readDatabases,
+								createDatabase: data.can.createDatabase,
+								attachDatabase: data.can.attachDatabase
+							}}
+						/>
+					</div>
+					<div class="mt-5">
+						<StorageCard
+							slug={data.project.slug}
+							attachments={data.storageAttachments}
+							instances={data.attachableStorage}
+							bucketsByStorage={data.storageBuckets}
+							warning={result?.storageWarning ?? null}
+							fieldErrors={result?.fieldErrors}
+							can={{
+								readStorage: data.can.readStorage,
+								createStorage: data.can.createStorage,
+								attachStorage: data.can.attachStorage
+							}}
+						/>
+					</div>
+				{/if}
 			{:else if tab === 'deployments'}
 				{#if data.deployments.length === 0}
 					<EmptyState

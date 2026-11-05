@@ -1,0 +1,487 @@
+import { SQL } from 'bun';
+import {
+	databaseMetricBucketSchema,
+	databaseSnapshotSchema,
+	type DatabaseMetricBucket,
+	type DatabaseMonitor,
+	type DatabaseSnapshot,
+	type DatabaseTableStat,
+	type WorkloadStatus,
+} from '@skiff/contracts';
+
+/**
+ * Managed database sampler (D57). Once a minute it connects to every database on this node over
+ * loopback, as the `skiff_monitor` role (`pg_monitor` only), and buffers one bucket per database
+ * for the telemetry batch. Every fifth sample it also takes the top-50 table snapshot.
+ *
+ * Credentials live in memory only. The owner password from the activation payload is used once
+ * per (database, activation version) to create or update the monitor role, and is then dropped.
+ */
+
+export const DATABASE_STATS_INTERVAL_MS = 60_000;
+const SNAPSHOT_EVERY = 5;
+const MAX_BUCKETS = 5_000;
+const MAX_SNAPSHOTS = 200;
+const TABLE_LIMIT = 50;
+
+/** What the sampler needs to know about one database; provided by the workload runtime. */
+export interface DatabaseTarget {
+	id: string;
+	activationVersion: string;
+	/** Loopback host port. */
+	port: number;
+	status: WorkloadStatus;
+	/** Container memory from the helper's status report. */
+	memoryBytes?: number;
+	/** `ownerPassword` is null once the monitor role is known to exist. */
+	monitor: Omit<DatabaseMonitor, 'ownerPassword'> & { ownerPassword: string | null };
+}
+
+export interface DatabaseTargetSource {
+	databaseTargets(): DatabaseTarget[];
+	forgetOwnerPassword(id: string, activationVersion: string): void;
+}
+
+/** The slice of a SQL client the sampler uses; Bun's `SQL` in production, a fake in tests. */
+export interface SqlClient {
+	query(text: string, params?: unknown[]): Promise<Array<Record<string, unknown>>>;
+	close(): Promise<void>;
+}
+
+export interface SqlConnectOptions {
+	hostname: string;
+	port: number;
+	username: string;
+	password: string;
+	database: string;
+}
+
+export type SqlConnector = (options: SqlConnectOptions) => SqlClient;
+
+/** Bun's built-in Postgres client: one short-lived connection per sample, no TLS on loopback. */
+export function bunSqlConnector(): SqlConnector {
+	return (options) => {
+		const sql = new SQL({
+			adapter: 'postgres',
+			hostname: options.hostname,
+			port: options.port,
+			username: options.username,
+			password: options.password,
+			database: options.database,
+			max: 1,
+			connectionTimeout: 5,
+			idleTimeout: 5,
+			maxLifetime: 60,
+			tls: false,
+		});
+		return {
+			async query(text, params = []) {
+				const rows = (await sql.unsafe(text, params)) as unknown as Array<Record<string, unknown>>;
+				return [...rows];
+			},
+			async close() {
+				await sql.close({ timeout: 1 });
+			},
+		};
+	};
+}
+
+export interface DatabaseTelemetryPayload {
+	databases: DatabaseMetricBucket[];
+	databaseSnapshots: DatabaseSnapshot[];
+}
+
+export type DatabaseStatsLog = (level: 'info' | 'warn' | 'error', message: string) => void;
+
+export interface DatabaseStatsSamplerOptions {
+	source: DatabaseTargetSource;
+	connect?: SqlConnector;
+	now?: () => number;
+	log?: DatabaseStatsLog;
+	snapshotEvery?: number;
+	maxBuckets?: number;
+	maxSnapshots?: number;
+}
+
+const COUNTERS = [
+	'xactCommit',
+	'xactRollback',
+	'tupReturned',
+	'tupFetched',
+	'tupInserted',
+	'tupUpdated',
+	'tupDeleted',
+	'blksHit',
+	'blksRead',
+	'deadlocks',
+	'tempBytes',
+] as const;
+type CounterName = (typeof COUNTERS)[number];
+type Counters = Record<CounterName, number>;
+
+/** Keeps the sampler cheap even on a database with a huge catalog. */
+export const STATEMENT_TIMEOUT_SQL = "SET statement_timeout = '10s'";
+
+/**
+ * Idempotent monitor-role bootstrap, run as the owner. Identifiers and the password are quoted by
+ * Postgres itself (`format` with `%I`/`%L`); the statements it returns are then executed as-is.
+ */
+export const BOOTSTRAP_SQL = `SELECT
+	CASE WHEN EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = $1::text)
+		THEN format('ALTER ROLE %I WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION CONNECTION LIMIT 5 PASSWORD %L', $1::text, $2::text)
+		ELSE format('CREATE ROLE %I WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION CONNECTION LIMIT 5 PASSWORD %L', $1::text, $2::text)
+	END AS role_sql,
+	format('GRANT pg_monitor TO %I', $1::text) AS monitor_sql,
+	format('GRANT CONNECT ON DATABASE %I TO %I', current_database(), $1::text) AS connect_sql`;
+
+/** Gauges and raw counters for the current database, as `skiff_monitor`. */
+export const STATS_SQL = `SELECT
+	pg_database_size(current_database())::float8 AS size_bytes,
+	(SELECT count(*) FROM pg_stat_activity a
+		WHERE a.datname = current_database() AND a.backend_type = 'client backend'
+			AND a.pid <> pg_backend_pid() AND a.state = 'active')::int AS connections_active,
+	(SELECT count(*) FROM pg_stat_activity a
+		WHERE a.datname = current_database() AND a.backend_type = 'client backend'
+			AND a.pid <> pg_backend_pid() AND a.state LIKE 'idle%')::int AS connections_idle,
+	(SELECT count(*) FROM pg_stat_activity a
+		WHERE a.datname = current_database() AND a.backend_type = 'client backend'
+			AND a.pid <> pg_backend_pid())::int AS connections_total,
+	current_setting('max_connections')::int AS max_connections,
+	d.xact_commit::float8 AS xact_commit,
+	d.xact_rollback::float8 AS xact_rollback,
+	d.tup_returned::float8 AS tup_returned,
+	d.tup_fetched::float8 AS tup_fetched,
+	d.tup_inserted::float8 AS tup_inserted,
+	d.tup_updated::float8 AS tup_updated,
+	d.tup_deleted::float8 AS tup_deleted,
+	d.blks_hit::float8 AS blks_hit,
+	d.blks_read::float8 AS blks_read,
+	d.deadlocks::float8 AS deadlocks,
+	d.temp_bytes::float8 AS temp_bytes
+FROM pg_stat_database d
+WHERE d.datname = current_database()`;
+
+/** Top tables by total size (heap + indexes + TOAST). */
+export const TABLES_SQL = `SELECT
+	schemaname AS schema,
+	relname AS name,
+	n_live_tup::float8 AS rows,
+	pg_total_relation_size(relid)::float8 AS total_bytes,
+	seq_scan::float8 AS seq_scans,
+	COALESCE(idx_scan, 0)::float8 AS idx_scans,
+	last_autovacuum,
+	last_autoanalyze
+FROM pg_stat_user_tables
+ORDER BY pg_total_relation_size(relid) DESC, schemaname, relname
+LIMIT ${TABLE_LIMIT}`;
+
+const COUNTER_COLUMNS: Record<CounterName, string> = {
+	xactCommit: 'xact_commit',
+	xactRollback: 'xact_rollback',
+	tupReturned: 'tup_returned',
+	tupFetched: 'tup_fetched',
+	tupInserted: 'tup_inserted',
+	tupUpdated: 'tup_updated',
+	tupDeleted: 'tup_deleted',
+	blksHit: 'blks_hit',
+	blksRead: 'blks_read',
+	deadlocks: 'deadlocks',
+	tempBytes: 'temp_bytes',
+};
+
+interface SampleState {
+	activationVersion: string;
+	bootstrapped: boolean;
+	counters: Counters | null;
+	/** Successful samples so far; the snapshot is taken on 0, 5, 10, … */
+	samples: number;
+}
+
+export class DatabaseStatsSampler {
+	private readonly source: DatabaseTargetSource;
+	private readonly connect: SqlConnector;
+	private readonly now: () => number;
+	private readonly log: DatabaseStatsLog;
+	private readonly snapshotEvery: number;
+	private readonly maxBuckets: number;
+	private readonly maxSnapshots: number;
+
+	private readonly state = new Map<string, SampleState>();
+	private buckets: DatabaseMetricBucket[] = [];
+	private snapshots: DatabaseSnapshot[] = [];
+	private sampling = false;
+	private totalDropped = 0;
+
+	constructor(options: DatabaseStatsSamplerOptions) {
+		this.source = options.source;
+		this.connect = options.connect ?? bunSqlConnector();
+		this.now = options.now ?? Date.now;
+		this.log = options.log ?? (() => undefined);
+		this.snapshotEvery = Math.max(1, options.snapshotEvery ?? SNAPSHOT_EVERY);
+		this.maxBuckets = options.maxBuckets ?? MAX_BUCKETS;
+		this.maxSnapshots = options.maxSnapshots ?? MAX_SNAPSHOTS;
+	}
+
+	/** Buckets and snapshots dropped to keep the buffer bounded. */
+	get dropped(): number {
+		return this.totalDropped;
+	}
+
+	/** What the next telemetry POST would carry. */
+	pending(): DatabaseTelemetryPayload {
+		return { databases: [...this.buckets], databaseSnapshots: [...this.snapshots] };
+	}
+
+	/** Sample every database once. Never throws; overlapping calls are skipped. */
+	async sample(): Promise<number> {
+		if (this.sampling) return 0;
+		this.sampling = true;
+		try {
+			const targets = this.source.databaseTargets();
+			const ids = new Set(targets.map((target) => target.id));
+			for (const id of [...this.state.keys()]) if (!ids.has(id)) this.state.delete(id);
+			const bucket = new Date(Math.floor(this.now() / 60_000) * 60_000).toISOString();
+			const results = await Promise.all(targets.map((target) => this.sampleOne(target, bucket)));
+			return results.filter(Boolean).length;
+		} finally {
+			this.sampling = false;
+		}
+	}
+
+	/**
+	 * POST the buffer through `post`. The buffer is cleared only after `post` resolves; a failure
+	 * keeps everything for the next attempt and rethrows.
+	 */
+	async flush(post: (payload: DatabaseTelemetryPayload) => Promise<void>): Promise<boolean> {
+		if (this.buckets.length === 0 && this.snapshots.length === 0) return false;
+		const payload = this.pending();
+		await post(payload);
+		const sentBuckets = new Set(payload.databases);
+		const sentSnapshots = new Set(payload.databaseSnapshots);
+		this.buckets = this.buckets.filter((bucket) => !sentBuckets.has(bucket));
+		this.snapshots = this.snapshots.filter((snapshot) => !sentSnapshots.has(snapshot));
+		return true;
+	}
+
+	private stateFor(target: DatabaseTarget): SampleState {
+		let state = this.state.get(target.id);
+		if (!state || state.activationVersion !== target.activationVersion) {
+			// A new activation may carry new credentials: bootstrap again. Counters survive, since
+			// the cluster (and its stats) did not change.
+			state = {
+				activationVersion: target.activationVersion,
+				bootstrapped: false,
+				counters: state?.counters ?? null,
+				samples: state?.samples ?? 0,
+			};
+			this.state.set(target.id, state);
+		}
+		return state;
+	}
+
+	private async sampleOne(target: DatabaseTarget, bucket: string): Promise<boolean> {
+		const state = this.stateFor(target);
+		if (target.status !== 'running') return this.pushBucket(downBucket(target, bucket));
+
+		if (!state.bootstrapped) {
+			if (target.monitor.ownerPassword !== null) {
+				try {
+					await this.bootstrap(target, target.monitor.ownerPassword);
+					state.bootstrapped = true;
+					this.source.forgetOwnerPassword(target.id, target.activationVersion);
+					this.log('info', `Database ${target.id}: monitor role ready`);
+				} catch (error) {
+					// Usually the cluster is still initialising; try again next minute.
+					const detail = scrub(errorText(error), [target.monitor.ownerPassword, target.monitor.monitorPassword]);
+					this.log('warn', `Database ${target.id}: monitor bootstrap failed: ${detail}`);
+					return this.pushBucket(downBucket(target, bucket));
+				}
+			}
+			// Without an owner password the role was bootstrapped earlier; sample as the monitor.
+		} else if (target.monitor.ownerPassword !== null) {
+			// A re-fetched activation brought the owner password back; it is not needed.
+			this.source.forgetOwnerPassword(target.id, target.activationVersion);
+		}
+
+		let client: SqlClient | null = null;
+		try {
+			client = this.connect({
+				hostname: '127.0.0.1',
+				port: target.port,
+				username: target.monitor.monitorUser,
+				password: target.monitor.monitorPassword,
+				database: target.monitor.databaseName,
+			});
+			await client.query(STATEMENT_TIMEOUT_SQL);
+			const [row] = await client.query(STATS_SQL);
+			if (!row) throw new Error('pg_stat_database has no row for the current database');
+			const counters = readCounters(row);
+			const deltas = counterDeltas(state.counters, counters);
+			state.counters = counters;
+			const pushed = this.pushBucket({
+				databaseId: target.id,
+				bucket,
+				up: true,
+				sizeBytes: int(row.size_bytes),
+				connectionsActive: int(row.connections_active),
+				connectionsIdle: int(row.connections_idle),
+				connectionsTotal: int(row.connections_total),
+				maxConnections: int(row.max_connections),
+				memoryBytes: int(target.memoryBytes),
+				...deltas,
+			});
+
+			const snapshotDue = state.samples % this.snapshotEvery === 0;
+			state.samples += 1;
+			if (snapshotDue) {
+				try {
+					const rows = await client.query(TABLES_SQL);
+					this.pushSnapshot({
+						databaseId: target.id,
+						at: new Date(this.now()).toISOString(),
+						tables: rows.slice(0, TABLE_LIMIT).map(readTable),
+					});
+				} catch (error) {
+					// The bucket is still good; retry the snapshot on the next sample.
+					state.samples = 0;
+					this.log('warn', `Database ${target.id}: table snapshot failed: ${errorText(error)}`);
+				}
+			}
+			return pushed;
+		} catch (error) {
+			const detail = scrub(errorText(error), [target.monitor.monitorPassword]);
+			this.log('warn', `Database ${target.id}: sample failed: ${detail}`);
+			return this.pushBucket(downBucket(target, bucket));
+		} finally {
+			await client?.close().catch(() => undefined);
+		}
+	}
+
+	private async bootstrap(target: DatabaseTarget, ownerPassword: string): Promise<void> {
+		const client = this.connect({
+			hostname: '127.0.0.1',
+			port: target.port,
+			username: target.monitor.ownerUser,
+			password: ownerPassword,
+			database: target.monitor.databaseName,
+		});
+		try {
+			const [row] = await client.query(BOOTSTRAP_SQL, [
+				target.monitor.monitorUser,
+				target.monitor.monitorPassword,
+			]);
+			const statements = [row?.role_sql, row?.monitor_sql, row?.connect_sql];
+			for (const statement of statements) {
+				if (typeof statement !== 'string' || !statement)
+					throw new Error('bootstrap query returned no statement');
+				await client.query(statement);
+			}
+		} finally {
+			await client.close().catch(() => undefined);
+		}
+	}
+
+	private pushBucket(bucket: DatabaseMetricBucket): boolean {
+		const parsed = databaseMetricBucketSchema.safeParse(bucket);
+		if (!parsed.success) {
+			this.log('warn', `Dropping an invalid sample for ${bucket.databaseId}: ${parsed.error.message}`);
+			return false;
+		}
+		this.buckets.push(parsed.data);
+		const overflow = this.buckets.length - this.maxBuckets;
+		if (overflow > 0) {
+			this.buckets.splice(0, overflow);
+			this.totalDropped += overflow;
+		}
+		return true;
+	}
+
+	/** Only the newest snapshot per database matters; the control plane keeps the latest only. */
+	private pushSnapshot(snapshot: DatabaseSnapshot): void {
+		const parsed = databaseSnapshotSchema.safeParse(snapshot);
+		if (!parsed.success) {
+			this.log('warn', `Dropping an invalid table snapshot for ${snapshot.databaseId}: ${parsed.error.message}`);
+			return;
+		}
+		this.snapshots = this.snapshots.filter((existing) => existing.databaseId !== snapshot.databaseId);
+		this.snapshots.push(parsed.data);
+		const overflow = this.snapshots.length - this.maxSnapshots;
+		if (overflow > 0) {
+			this.snapshots.splice(0, overflow);
+			this.totalDropped += overflow;
+		}
+	}
+}
+
+function downBucket(target: DatabaseTarget, bucket: string): DatabaseMetricBucket {
+	return {
+		databaseId: target.id,
+		bucket,
+		up: false,
+		sizeBytes: 0,
+		connectionsActive: 0,
+		connectionsIdle: 0,
+		connectionsTotal: 0,
+		maxConnections: 0,
+		memoryBytes: int(target.memoryBytes),
+		...zeroCounters(),
+	};
+}
+
+function zeroCounters(): Counters {
+	return Object.fromEntries(COUNTERS.map((name) => [name, 0])) as Counters;
+}
+
+function readCounters(row: Record<string, unknown>): Counters {
+	return Object.fromEntries(COUNTERS.map((name) => [name, int(row[COUNTER_COLUMNS[name]])])) as Counters;
+}
+
+/**
+ * Per-minute deltas. The first sample has no baseline and reports 0; a counter that went
+ * backwards (stats reset, crash recovery) reports its raw value, which is what accrued since.
+ */
+export function counterDeltas(previous: Counters | null, current: Counters): Counters {
+	if (!previous) return zeroCounters();
+	return Object.fromEntries(
+		COUNTERS.map((name) => {
+			const delta = current[name] - previous[name];
+			return [name, delta < 0 ? current[name] : delta];
+		}),
+	) as Counters;
+}
+
+function readTable(row: Record<string, unknown>): DatabaseTableStat {
+	return {
+		schema: String(row.schema ?? '').slice(0, 128),
+		name: String(row.name ?? '').slice(0, 128),
+		rows: int(row.rows),
+		totalBytes: int(row.total_bytes),
+		seqScans: int(row.seq_scans),
+		idxScans: int(row.idx_scans),
+		lastAutovacuum: timestamp(row.last_autovacuum),
+		lastAutoanalyze: timestamp(row.last_autoanalyze),
+	};
+}
+
+/** Postgres numerics arrive as number, string or bigint depending on the type and driver. */
+function int(value: unknown): number {
+	const number = typeof value === 'bigint' ? Number(value) : Number(value ?? 0);
+	return Number.isFinite(number) && number > 0 ? Math.round(number) : 0;
+}
+
+function timestamp(value: unknown): string | null {
+	if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString();
+	if (typeof value === 'string' && value) return value.slice(0, 40);
+	return null;
+}
+
+/** Driver errors should never echo a statement, but a password must not reach a log either way. */
+function scrub(message: string, secrets: Array<string | null>): string {
+	let scrubbed = message;
+	for (const secret of secrets) if (secret) scrubbed = scrubbed.split(secret).join('***');
+	return scrubbed;
+}
+
+function errorText(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}

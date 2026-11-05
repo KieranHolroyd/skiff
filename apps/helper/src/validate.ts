@@ -71,6 +71,161 @@ export interface WorkloadDesired {
 	 */
 	command?: string[];
 	image?: string;
+	/**
+	 * Managed database profile (D55, D61). When present the helper renders a fixed unit: the image,
+	 * user, mounts and container port all come from the helper's own registry, never the wire.
+	 */
+	database?: WorkloadDatabase;
+	/**
+	 * Managed object storage profile (S1). Like `database`, only `engine` + `version` matter here:
+	 * the image (pinned by digest), user, mounts and container port come from `STORAGE_ENGINES`.
+	 * The agent's bucket/user desired state is accepted on the wire but never reaches a unit.
+	 */
+	objectStorage?: WorkloadObjectStorage;
+}
+
+/**
+ * The helper's own copy of the engine registry (D61). It is deliberately not imported from
+ * `@skiff/contracts`: a wider contract must not widen what the privileged helper will run.
+ */
+export const DATABASE_ENGINES = {
+	postgres: {
+		versions: ['16', '17'],
+		/** The official image's `postgres` user and group. */
+		uid: 70,
+		gid: 70,
+		containerPort: 5432,
+		image: (version: string) => `docker.io/library/postgres:${version}-alpine`,
+	},
+} as const;
+export type DatabaseEngine = keyof typeof DATABASE_ENGINES;
+
+export interface WorkloadDatabase {
+	engine: DatabaseEngine;
+	version: string;
+}
+
+/** Workload ids of managed databases carry this prefix; `purge` accepts these and `st_` ids. */
+export const DATABASE_ID_PREFIX = 'db_';
+
+/** The image the helper runs for a database profile. */
+export function databaseImage(database: WorkloadDatabase): string {
+	return DATABASE_ENGINES[database.engine].image(database.version);
+}
+
+/** `db-<hex>`: DNS alias on the `skiff-workloads` network (same derivation as the contract). */
+export function databaseAlias(id: string): string {
+	return `db-${id.replace(/^db_/, '').toLowerCase().replace(/[^a-z0-9-]/g, '')}`;
+}
+
+export function parseDatabase(value: unknown, label = 'workload.database'): WorkloadDatabase {
+	const record = assertRecord(value, label);
+	const engine = record.engine;
+	if (typeof engine !== 'string' || !Object.hasOwn(DATABASE_ENGINES, engine))
+		throw new ValidationError(`${label}.engine must be one of ${Object.keys(DATABASE_ENGINES).join(', ')}`);
+	const info = DATABASE_ENGINES[engine as DatabaseEngine];
+	const version = record.version;
+	if (typeof version !== 'string' || !(info.versions as readonly string[]).includes(version))
+		throw new ValidationError(`${label}.version must be one of ${info.versions.join(', ')}`);
+	for (const key of Object.keys(record)) {
+		if (key !== 'engine' && key !== 'version') throw new ValidationError(`${label}.${key} is not supported`);
+	}
+	return { engine: engine as DatabaseEngine, version };
+}
+
+/** `db_` ids only, so a purge can never point at an app's data directory. */
+export function assertDatabaseId(value: unknown, label = 'database id'): string {
+	const id = assertId(value, label);
+	if (!id.startsWith(DATABASE_ID_PREFIX) || id.length === DATABASE_ID_PREFIX.length)
+		throw new ValidationError(`${label} must start with "${DATABASE_ID_PREFIX}"`);
+	return id;
+}
+
+/**
+ * The helper's own copy of the object-storage registry (S1, same reasoning as D61). Images are
+ * pinned by digest: the wire names a tag, the helper runs only the digest it knows.
+ */
+export const STORAGE_ENGINES = {
+	rustfs: {
+		versions: ['1.0.4'],
+		/** The image's `rustfs` user and group. */
+		uid: 10001,
+		gid: 10001,
+		containerPort: 9000,
+		images: {
+			'1.0.4': 'docker.io/rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2',
+		} as Record<string, string>,
+		/** The tag the control plane sends (`storageImage` in the contract). */
+		tag: (version: string) => `docker.io/rustfs/rustfs:${version}`,
+	},
+} as const;
+export type StorageEngine = keyof typeof STORAGE_ENGINES;
+
+export interface WorkloadObjectStorage {
+	engine: StorageEngine;
+	version: string;
+}
+
+/** Workload ids of storage instances carry this prefix; `purge` accepts them too. */
+export const STORAGE_ID_PREFIX = 'st_';
+
+/**
+ * Fixed RustFS settings, forced into the env file whatever the wire says. The empty log directory
+ * overrides the image's `/logs` default so logs go to stdout and the journal.
+ */
+export const STORAGE_ENV: Readonly<Record<string, string>> = {
+	RUSTFS_VOLUMES: '/data',
+	RUSTFS_ADDRESS: ':9000',
+	RUSTFS_CONSOLE_ENABLE: 'false',
+	RUSTFS_OBS_LOG_DIRECTORY: '',
+};
+
+/** The digest-pinned image the helper runs for a storage profile. */
+export function storageImage(storage: WorkloadObjectStorage): string {
+	const image = STORAGE_ENGINES[storage.engine].images[storage.version];
+	if (!image) throw new ValidationError(`No pinned image for ${storage.engine} ${storage.version}`);
+	return image;
+}
+
+/** `s3-<hex>`: DNS alias on the `skiff-workloads` network (same derivation as the contract). */
+export function storageAlias(id: string): string {
+	return `s3-${id.replace(/^st_/, '').toLowerCase().replace(/[^a-z0-9-]/g, '')}`;
+}
+
+/** Agent-side desired state the helper accepts and ignores (buckets and keys are converged over S3). */
+const STORAGE_AGENT_KEYS = new Set(['buckets', 'users', 'deleteBuckets', 'keysVersion']);
+
+export function parseObjectStorage(value: unknown, label = 'workload.objectStorage'): WorkloadObjectStorage {
+	const record = assertRecord(value, label);
+	const engine = record.engine;
+	if (typeof engine !== 'string' || !Object.hasOwn(STORAGE_ENGINES, engine))
+		throw new ValidationError(`${label}.engine must be one of ${Object.keys(STORAGE_ENGINES).join(', ')}`);
+	const info = STORAGE_ENGINES[engine as StorageEngine];
+	const version = record.version;
+	if (typeof version !== 'string' || !(info.versions as readonly string[]).includes(version))
+		throw new ValidationError(`${label}.version must be one of ${info.versions.join(', ')}`);
+	for (const key of Object.keys(record)) {
+		if (key !== 'engine' && key !== 'version' && !STORAGE_AGENT_KEYS.has(key))
+			throw new ValidationError(`${label}.${key} is not supported`);
+	}
+	return { engine: engine as StorageEngine, version };
+}
+
+/** `st_` ids only. */
+export function assertStorageId(value: unknown, label = 'storage id'): string {
+	const id = assertId(value, label);
+	if (!id.startsWith(STORAGE_ID_PREFIX) || id.length === STORAGE_ID_PREFIX.length)
+		throw new ValidationError(`${label} must start with "${STORAGE_ID_PREFIX}"`);
+	return id;
+}
+
+/** A managed-service id (`db_` or `st_`): the only ids whose data dir `purge` may delete. */
+export function assertManagedId(value: unknown, label = 'managed id'): string {
+	const id = assertId(value, label);
+	for (const prefix of [DATABASE_ID_PREFIX, STORAGE_ID_PREFIX]) {
+		if (id.startsWith(prefix) && id.length > prefix.length) return id;
+	}
+	throw new ValidationError(`${label} must start with "${DATABASE_ID_PREFIX}" or "${STORAGE_ID_PREFIX}"`);
 }
 
 export interface WorkloadActivation {
@@ -228,7 +383,8 @@ function parseEnvRecord(value: unknown, label: string): Record<string, string> {
 	const env: Record<string, string> = {};
 	for (const [key, raw] of Object.entries(record)) {
 		assertEnvName(key, `${label} key`);
-		const value = assertString(raw, `${label}.${key}`, { max: MAX_ENV_VALUE });
+		// Empty is a real value (`RUSTFS_OBS_LOG_DIRECTORY=` overrides an image default).
+		const value = assertString(raw, `${label}.${key}`, { min: 0, max: MAX_ENV_VALUE });
 		env[key] = value;
 	}
 	return env;
@@ -282,13 +438,44 @@ export function parseWorkload(value: unknown): WorkloadDesired {
 			);
 	}
 
+	const database = record.database === undefined ? undefined : parseDatabase(record.database);
+	const objectStorage =
+		record.objectStorage === undefined ? undefined : parseObjectStorage(record.objectStorage);
+	if (database && objectStorage)
+		throw new ValidationError('A workload cannot have both a database and an objectStorage profile');
+	const id = assertId(record.id, 'workload.id');
+	const secrets = parseSecrets(record.secrets);
+	if (objectStorage) {
+		if (runtime !== 'container') throw new ValidationError('Storage workloads must use the container runtime');
+		const tag = STORAGE_ENGINES[objectStorage.engine].tag(objectStorage.version);
+		const pinned = storageImage(objectStorage);
+		if (image !== tag && image !== pinned)
+			throw new ValidationError(`workload.image must be ${tag} for ${objectStorage.engine} ${objectStorage.version}`);
+		assertStorageId(id, 'workload.id');
+		if (secrets.some((secret) => secret.delivery === 'file'))
+			throw new ValidationError('Storage workloads cannot mount file secrets');
+	} else if (id.startsWith(STORAGE_ID_PREFIX)) {
+		throw new ValidationError(`workload.id prefix "${STORAGE_ID_PREFIX}" is reserved for object storage`);
+	}
+	if (database) {
+		if (runtime !== 'container') throw new ValidationError('Database workloads must use the container runtime');
+		const expected = databaseImage(database);
+		if (image !== expected)
+			throw new ValidationError(`workload.image must be ${expected} for ${database.engine} ${database.version}`);
+		assertDatabaseId(id, 'workload.id');
+		if (secrets.some((secret) => secret.delivery === 'file'))
+			throw new ValidationError('Database workloads cannot mount file secrets');
+	} else if (id.startsWith(DATABASE_ID_PREFIX)) {
+		throw new ValidationError(`workload.id prefix "${DATABASE_ID_PREFIX}" is reserved for databases`);
+	}
+
 	const dataSizeMb =
 		record.dataSizeMb === null || record.dataSizeMb === undefined
 			? null
 			: assertInteger(record.dataSizeMb, 'workload.dataSizeMb', 32, 65_536);
 
 	const workload: WorkloadDesired = {
-		id: assertId(record.id, 'workload.id'),
+		id,
 		projectId: assertId(record.projectId, 'workload.projectId'),
 		projectSlug: assertSlug(record.projectSlug, 'workload.projectSlug'),
 		deploymentId: assertId(record.deploymentId, 'workload.deploymentId'),
@@ -303,11 +490,13 @@ export function parseWorkload(value: unknown): WorkloadDesired {
 		socketActivation: record.socketActivation === true,
 		activationVersion: assertSha256(record.activationVersion, 'workload.activationVersion'),
 		env: parseEnvRecord(record.env, 'workload.env'),
-		secrets: parseSecrets(record.secrets),
+		secrets,
 		dataSizeMb,
 	};
 	if (command) workload.command = command;
 	if (image) workload.image = image;
+	if (database) workload.database = database;
+	if (objectStorage) workload.objectStorage = objectStorage;
 	return workload;
 }
 

@@ -1,5 +1,30 @@
 import type { DuckDBAppender, DuckDBConnection, DuckDBInstance } from '@duckdb/node-api';
-import type { MetricBucket } from '@skiff/contracts';
+import type {
+	DatabaseMetricBucket,
+	DatabaseMetricPoint,
+	MetricBucket,
+	StorageMetricBucket,
+	StorageMetricPoint,
+} from '@skiff/contracts';
+import {
+	ST_COLUMNS,
+	ST_GAUGES,
+	ST_LATEST_SQL,
+	ST_ROLLUP_DELETE_SQL,
+	ST_ROLLUP_INSERT_SQL,
+	storageMetricsTableSql,
+	storageSeriesSql,
+} from './storage-metrics-sql.ts';
+import {
+	DB_COLUMNS,
+	DB_COUNTERS,
+	DB_GAUGES,
+	DB_LATEST_SQL,
+	DB_ROLLUP_DELETE_SQL,
+	DB_ROLLUP_INSERT_SQL,
+	dbMetricsTableSql,
+	dbSeriesSql,
+} from './database-metrics-sql.ts';
 import { mkdir, readFile, readdir, rm, rmdir, stat } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
 import type { ObjectStore } from './object-store.ts';
@@ -86,6 +111,29 @@ export interface TrafficReport {
 	projects: TrafficBreakdownRow[];
 	topPaths: TrafficTopEntry[];
 	topReferrers: TrafficTopEntry[];
+}
+
+export interface DatabaseMetricsQuery {
+	databaseId: string;
+	from: TimeInput;
+	to: TimeInput;
+	interval: TelemetryInterval;
+}
+
+export interface DatabaseLatestSample {
+	databaseId: string;
+	up: boolean;
+	sizeBytes: number;
+	connectionsTotal: number;
+	maxConnections: number;
+	memoryBytes: number;
+}
+
+export interface StorageMetricsQuery {
+	storageId: string;
+	from: TimeInput;
+	to: TimeInput;
+	interval: TelemetryInterval;
 }
 
 export interface TrafficReportQuery extends TelemetryQuery {
@@ -772,6 +820,150 @@ export class TelemetryStore {
 		});
 	}
 
+	/** Managed-database minute samples (D57). Re-sending a minute replaces it. */
+	async ingestDatabaseMetrics(buckets: DatabaseMetricBucket[]): Promise<{ inserted: number }> {
+		return this.#guarded('ingestDatabaseMetrics', { inserted: 0 }, async () => {
+			const rows = new Map<string, DatabaseMetricBucket & { bucketMs: number }>();
+			for (const bucket of buckets) {
+				const bucketMs = floorToMinute(toEpochMs(bucket.bucket));
+				rows.set(`${bucket.databaseId}\u0000${bucketMs}`, { ...bucket, bucketMs });
+			}
+			if (rows.size === 0) return { inserted: 0 };
+			const values = [...rows.values()];
+			return this.#serialize(async () => {
+				const connection = this.#requireWriteConnection();
+				await connection.run('BEGIN TRANSACTION');
+				try {
+					for (let start = 0; start < values.length; start += 200) {
+						const chunk = values.slice(start, start + 200);
+						const keys = chunk.map(() => '(?, CAST(? AS TIMESTAMPTZ))').join(', ');
+						const keyParams: string[] = [];
+						for (const row of chunk) keyParams.push(row.databaseId, isoFromMs(row.bucketMs));
+						await connection.run(`DELETE FROM db_metrics_1m WHERE (database_id, bucket) IN (${keys})`, keyParams);
+						const rowSql = `(?, CAST(? AS TIMESTAMPTZ), ${DB_COLUMNS.slice(2).map(() => '?').join(', ')})`;
+						const params: Array<string | number> = [];
+						for (const row of chunk) {
+							params.push(row.databaseId, isoFromMs(row.bucketMs));
+							for (const [, key] of DB_GAUGES) params.push(key === 'up' ? (row.up ? 1 : 0) : toDouble(row[key]));
+							for (const [, key] of DB_COUNTERS) params.push(Math.max(0, Math.trunc(row[key] ?? 0)));
+						}
+						await connection.run(
+							`INSERT INTO db_metrics_1m (${DB_COLUMNS.join(', ')}) VALUES ${chunk.map(() => rowSql).join(', ')}`,
+							params,
+						);
+					}
+					await connection.run('COMMIT');
+				} catch (error) {
+					try {
+						await connection.run('ROLLBACK');
+					} catch {
+						// Already rolled back or the connection is gone.
+					}
+					throw error;
+				}
+				return { inserted: values.length };
+			});
+		});
+	}
+
+	async queryDatabaseMetrics(input: DatabaseMetricsQuery): Promise<DatabaseMetricPoint[]> {
+		return this.#guarded('queryDatabaseMetrics', [], async () => {
+			const fromMs = toEpochMs(input.from);
+			const toMs = toEpochMs(input.to);
+			if (toMs < fromMs) return [];
+			const range = [input.databaseId, isoFromMs(fromMs), isoFromMs(toMs)];
+			const params = input.interval === '1h' ? [...range, ...range] : range;
+			return this.#withReadConnection(async (connection) => {
+				const result = await connection.runAndReadAll(dbSeriesSql(input.interval), params);
+				return result.getRowObjectsJson().map((row) => {
+					const point = { bucket: isoFromMs(readNumber(row['bucket_ms'])) } as Record<string, unknown>;
+					for (const [column, key] of [...DB_GAUGES, ...DB_COUNTERS]) point[key] = readNumber(row[column]);
+					return point as unknown as DatabaseMetricPoint;
+				});
+			});
+		});
+	}
+
+	/** Managed object storage minute samples (S7). Re-sending a minute replaces it. */
+	async ingestStorageMetrics(buckets: StorageMetricBucket[]): Promise<{ inserted: number }> {
+		return this.#guarded('ingestStorageMetrics', { inserted: 0 }, async () => {
+			const rows = new Map<string, StorageMetricBucket & { bucketMs: number }>();
+			for (const bucket of buckets) {
+				const bucketMs = floorToMinute(toEpochMs(bucket.bucket));
+				rows.set(`${bucket.storageId}\u0000${bucketMs}`, { ...bucket, bucketMs });
+			}
+			if (rows.size === 0) return { inserted: 0 };
+			const values = [...rows.values()];
+			return this.#serialize(async () => {
+				const connection = this.#requireWriteConnection();
+				await connection.run('BEGIN TRANSACTION');
+				try {
+					for (let start = 0; start < values.length; start += 200) {
+						const chunk = values.slice(start, start + 200);
+						const keys = chunk.map(() => '(?, CAST(? AS TIMESTAMPTZ))').join(', ');
+						const keyParams: string[] = [];
+						for (const row of chunk) keyParams.push(row.storageId, isoFromMs(row.bucketMs));
+						await connection.run(`DELETE FROM storage_metrics_1m WHERE (storage_id, bucket) IN (${keys})`, keyParams);
+						const rowSql = `(?, CAST(? AS TIMESTAMPTZ), ${ST_COLUMNS.slice(2).map(() => '?').join(', ')})`;
+						const params: Array<string | number> = [];
+						for (const row of chunk) {
+							params.push(row.storageId, isoFromMs(row.bucketMs));
+							for (const [, key] of ST_GAUGES) params.push(key === 'up' ? (row.up ? 1 : 0) : toDouble(row[key]));
+						}
+						await connection.run(
+							`INSERT INTO storage_metrics_1m (${ST_COLUMNS.join(', ')}) VALUES ${chunk.map(() => rowSql).join(', ')}`,
+							params,
+						);
+					}
+					await connection.run('COMMIT');
+				} catch (error) {
+					try {
+						await connection.run('ROLLBACK');
+					} catch {
+						// Already rolled back or the connection is gone.
+					}
+					throw error;
+				}
+				return { inserted: values.length };
+			});
+		});
+	}
+
+	async queryStorageMetrics(input: StorageMetricsQuery): Promise<StorageMetricPoint[]> {
+		return this.#guarded('queryStorageMetrics', [], async () => {
+			const fromMs = toEpochMs(input.from);
+			const toMs = toEpochMs(input.to);
+			if (toMs < fromMs) return [];
+			const range = [input.storageId, isoFromMs(fromMs), isoFromMs(toMs)];
+			const params = input.interval === '1h' ? [...range, ...range] : range;
+			return this.#withReadConnection(async (connection) => {
+				const result = await connection.runAndReadAll(storageSeriesSql(input.interval), params);
+				return result.getRowObjectsJson().map((row) => {
+					const point = { bucket: isoFromMs(readNumber(row['bucket_ms'])) } as Record<string, unknown>;
+					for (const [column, key] of ST_GAUGES) point[key] = readNumber(row[column]);
+					return point as unknown as StorageMetricPoint;
+				});
+			});
+		});
+	}
+
+	/** Newest sample per database since `sinceMs` (alerts and `/metrics`). */
+	async latestDatabaseMetrics(sinceMs: number): Promise<DatabaseLatestSample[]> {
+		return this.#guarded('latestDatabaseMetrics', [], async () =>
+			this.#withReadConnection(async (connection) => {
+				const result = await connection.runAndReadAll(DB_LATEST_SQL, [isoFromMs(sinceMs)]);
+				return result.getRowObjectsJson().map((row) => ({
+					databaseId: readString(row['database_id']),
+					up: readNumber(row['up']) >= 0.5,
+					sizeBytes: readNumber(row['size_bytes']),
+					connectionsTotal: readNumber(row['connections_total']),
+					maxConnections: readNumber(row['max_connections']),
+					memoryBytes: readNumber(row['memory_bytes']),
+				}));
+			}),
+		);
+	}
+
 	/**
 	 * Roll closed hours of 1-minute data into metrics_1h, replacing earlier rollups of the same
 	 * hours. By default only hours that are still *complete* in metrics_1m are recomputed: the
@@ -801,6 +993,12 @@ export class TelemetryStore {
 						await connection.run(ROLLUP_DELETE_SQL, params);
 						await connection.run(ROLLUP_INSERT_SQL);
 					}
+					// Managed databases roll up over the same window (D57).
+					await connection.run(DB_ROLLUP_DELETE_SQL, params);
+					await connection.run(DB_ROLLUP_INSERT_SQL, params);
+					// Managed object storage too (S7).
+					await connection.run(ST_ROLLUP_DELETE_SQL, params);
+					await connection.run(ST_ROLLUP_INSERT_SQL, params);
 					await connection.run('COMMIT');
 					return rolled;
 				} catch (error) {
@@ -844,7 +1042,26 @@ export class TelemetryStore {
 					'DELETE FROM metrics_1h WHERE bucket < CAST(? AS TIMESTAMPTZ)',
 					[hourlyCutoff],
 				);
-				return { raw: raw.rowsChanged, hourly: hourly.rowsChanged };
+				const dbRaw = await connection.run(
+					'DELETE FROM db_metrics_1m WHERE bucket < CAST(? AS TIMESTAMPTZ)',
+					[rawCutoff],
+				);
+				const dbHourly = await connection.run(
+					'DELETE FROM db_metrics_1h WHERE bucket < CAST(? AS TIMESTAMPTZ)',
+					[hourlyCutoff],
+				);
+				const stRaw = await connection.run(
+					'DELETE FROM storage_metrics_1m WHERE bucket < CAST(? AS TIMESTAMPTZ)',
+					[rawCutoff],
+				);
+				const stHourly = await connection.run(
+					'DELETE FROM storage_metrics_1h WHERE bucket < CAST(? AS TIMESTAMPTZ)',
+					[hourlyCutoff],
+				);
+				return {
+					raw: raw.rowsChanged + dbRaw.rowsChanged + stRaw.rowsChanged,
+					hourly: hourly.rowsChanged + dbHourly.rowsChanged + stHourly.rowsChanged,
+				};
 			});
 		});
 	}
@@ -962,6 +1179,48 @@ export class TelemetryStore {
 				lines.push(`skiff_bytes_total ${prometheusNumber(bytes)}`);
 			}
 
+			// Managed databases: the newest sample from the last five minutes (D57).
+			if (host === undefined) {
+				const samples = await this.#withReadConnection(async (connection) => {
+					const result = await connection.runAndReadAll(DB_LATEST_SQL, [isoFromMs(toMs - 5 * MINUTE_MS)]);
+					return result.getRowObjectsJson();
+				});
+				const series: Array<[string, string, string]> = [
+					['skiff_database_up', 'up', 'Whether the database answered its last sample (1 = up).'],
+					['skiff_database_size_bytes', 'size_bytes', 'Database size on disk.'],
+					['skiff_database_connections', 'connections_total', 'Open connections.'],
+					['skiff_database_max_connections', 'max_connections', 'Configured max_connections.'],
+				];
+				for (const [name, column, help] of series) {
+					lines.push(`# HELP ${name} ${help}`, `# TYPE ${name} gauge`);
+					for (const sample of samples) {
+						const id = escapePrometheusLabel(readString(sample['database_id']));
+						lines.push(`${name}{database_id="${id}"} ${prometheusNumber(readNumber(sample[column]))}`);
+					}
+				}
+			}
+
+			// Managed object storage: the newest sample from the last five minutes (S7).
+			if (host === undefined) {
+				const samples = await this.#withReadConnection(async (connection) => {
+					const result = await connection.runAndReadAll(ST_LATEST_SQL, [isoFromMs(toMs - 5 * MINUTE_MS)]);
+					return result.getRowObjectsJson();
+				});
+				const series: Array<[string, string, string]> = [
+					['skiff_storage_up', 'up', 'Whether the storage instance answered its last sample (1 = up).'],
+					['skiff_storage_used_bytes', 'used_bytes', 'Bytes stored across buckets.'],
+					['skiff_storage_objects', 'objects', 'Objects stored across buckets.'],
+					['skiff_storage_buckets', 'bucket_count', 'Buckets on the instance.'],
+				];
+				for (const [name, column, help] of series) {
+					lines.push(`# HELP ${name} ${help}`, `# TYPE ${name} gauge`);
+					for (const sample of samples) {
+						const id = escapePrometheusLabel(readString(sample['storage_id']));
+						lines.push(`${name}{storage_id="${id}"} ${prometheusNumber(readNumber(sample[column]))}`);
+					}
+				}
+			}
+
 			return `${lines.join('\n')}\n`;
 		});
 	}
@@ -978,6 +1237,10 @@ export class TelemetryStore {
 			const connection = await instance.connect();
 			await connection.run(metricsTableSql('metrics_1m'));
 			await connection.run(metricsTableSql('metrics_1h'));
+			await connection.run(dbMetricsTableSql('db_metrics_1m'));
+			await connection.run(dbMetricsTableSql('db_metrics_1h'));
+			await connection.run(storageMetricsTableSql('storage_metrics_1m'));
+			await connection.run(storageMetricsTableSql('storage_metrics_1h'));
 			this.#instance = instance;
 			this.#connection = connection;
 			this.error = null;

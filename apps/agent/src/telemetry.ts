@@ -1,5 +1,5 @@
 import { promises as fs } from 'node:fs';
-import type { MetricBucket } from '@skiff/contracts';
+import type { MetricBucket, TelemetryBatch } from '@skiff/contracts';
 import { normalizeHost } from './verify.ts';
 
 /**
@@ -319,6 +319,35 @@ export class AccessLogTailer {
 	}
 }
 
+export interface TelemetryEndpoint {
+	controlUrl: string;
+	nodeToken: string;
+	nodeId: string;
+}
+
+/**
+ * One `POST /api/agent/telemetry`. Access-log buckets and managed-database samples (D57) share the
+ * endpoint; either half may be empty. Throws on any non-2xx so callers keep their buffer.
+ */
+export async function postTelemetryBatch(
+	endpoint: TelemetryEndpoint,
+	batch: Partial<Omit<TelemetryBatch, 'nodeId'>>,
+): Promise<void> {
+	const response = await fetch(`${endpoint.controlUrl}/api/agent/telemetry`, {
+		method: 'POST',
+		signal: AbortSignal.timeout(10_000),
+		headers: {
+			authorization: `Bearer ${endpoint.nodeToken}`,
+			'content-type': 'application/json',
+		},
+		body: JSON.stringify({ nodeId: endpoint.nodeId, ...batch }),
+	});
+	if (!response.ok) {
+		const text = await response.text().catch(() => '');
+		throw new Error(`Telemetry POST -> ${response.status}${text ? `: ${text}` : ''}`);
+	}
+}
+
 export interface TelemetryClientOptions {
 	controlUrl: string;
 	nodeToken: string;
@@ -400,18 +429,6 @@ export class TelemetryClient {
 	}
 
 	private async post(buckets: MetricBucket[]): Promise<void> {
-		const response = await fetch(`${this.options.controlUrl}/api/agent/telemetry`, {
-			method: 'POST',
-			signal: AbortSignal.timeout(10_000),
-			headers: {
-				authorization: `Bearer ${this.options.nodeToken}`,
-				'content-type': 'application/json',
-			},
-			body: JSON.stringify({ nodeId: this.options.nodeId, buckets }),
-		});
-		if (!response.ok) {
-			const text = await response.text().catch(() => '');
-			throw new Error(`Telemetry POST -> ${response.status}${text ? `: ${text}` : ''}`);
-		}
+		await postTelemetryBatch(this.options, { buckets });
 	}
 }

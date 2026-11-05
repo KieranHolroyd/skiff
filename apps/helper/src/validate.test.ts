@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import {
+	assertDatabaseId,
+	assertManagedId,
+	assertStorageId,
 	assertAbsolutePath,
 	assertCommand,
 	assertEnvName,
@@ -7,9 +10,13 @@ import {
 	assertImage,
 	assertPort,
 	assertRelativePath,
+	databaseAlias,
+	databaseImage,
 	parseActivation,
 	parseApplyRequest,
 	parseWorkload,
+	storageAlias,
+	storageImage,
 	ValidationError,
 } from './validate.ts';
 
@@ -148,7 +155,202 @@ describe('parseWorkload', () => {
 	});
 });
 
+const DB_ID = 'db_0123456789ABCDEF0123456789abcdef';
+
+export function databaseInput(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+	return workloadInput({
+		id: DB_ID,
+		projectId: DB_ID,
+		projectSlug: 'orders',
+		deploymentId: DB_ID,
+		runtime: 'container',
+		release: null,
+		image: 'docker.io/library/postgres:17-alpine',
+		upstream: '127.0.0.1:15432',
+		port: 15432,
+		healthPath: '/',
+		socketActivation: false,
+		env: { POSTGRES_USER: 'orders', POSTGRES_DB: 'orders', PGDATA: '/data/pgdata' },
+		secrets: [],
+		database: { engine: 'postgres', version: '17' },
+		...overrides,
+	});
+}
+
+describe('database profile', () => {
+	test('accepts a database workload whose image matches the helper registry', () => {
+		const workload = parseWorkload(databaseInput());
+		expect(workload.database).toEqual({ engine: 'postgres', version: '17' });
+		expect(workload.image).toBe('docker.io/library/postgres:17-alpine');
+		expect(parseWorkload(databaseInput({
+			image: 'docker.io/library/postgres:16-alpine',
+			database: { engine: 'postgres', version: '16' },
+		})).database?.version).toBe('16');
+		// Plain workloads carry no database field at all.
+		expect('database' in parseWorkload(workloadInput())).toBe(false);
+	});
+
+	test('the image is derived, never taken from the wire', () => {
+		for (const image of [
+			'docker.io/library/postgres:16-alpine',
+			'postgres:17-alpine',
+			'ghcr.io/evil/postgres:17-alpine',
+			'docker.io/library/postgres:17',
+		]) {
+			expect(() => parseWorkload(databaseInput({ image }))).toThrow(/workload.image must be/);
+		}
+		expect(() => parseWorkload(databaseInput({ image: undefined }))).toThrow(ValidationError);
+	});
+
+	test('rejects unknown engines, versions, extra keys and non-container runtimes', () => {
+		expect(() => parseWorkload(databaseInput({ database: { engine: 'mysql', version: '8' } }))).toThrow(/engine/);
+		expect(() => parseWorkload(databaseInput({ database: { engine: 'postgres', version: '15' } }))).toThrow(/version/);
+		expect(() => parseWorkload(databaseInput({ database: { engine: 'toString', version: '17' } }))).toThrow(/engine/);
+		expect(() =>
+			parseWorkload(databaseInput({ database: { engine: 'postgres', version: '17', image: 'x' } })),
+		).toThrow(/not supported/);
+		expect(() => parseWorkload(databaseInput({ database: 'postgres' }))).toThrow(/object/);
+		expect(() =>
+			parseWorkload(databaseInput({ runtime: 'process', release: SHA, image: undefined })),
+		).toThrow(ValidationError);
+	});
+
+	test('db_ ids are reserved for databases, and databases need them', () => {
+		expect(() => parseWorkload(databaseInput({ id: 'wld_abc123' }))).toThrow(/db_/);
+		expect(() => parseWorkload(workloadInput({ id: 'db_abc' }))).toThrow(/reserved/);
+		expect(assertDatabaseId('db_abc')).toBe('db_abc');
+		for (const value of ['db_', 'wld_abc', 'db_../x', 'DB_abc', '']) {
+			expect(() => assertDatabaseId(value)).toThrow(ValidationError);
+		}
+	});
+
+	test('databases cannot mount file secrets', () => {
+		expect(() =>
+			parseWorkload(databaseInput({ secrets: [{ name: 'TLS_KEY', delivery: 'file' }] })),
+		).toThrow(/file secrets/);
+	});
+
+	test('alias and image follow the contract derivation', () => {
+		expect(databaseAlias(DB_ID)).toBe('db-0123456789abcdef0123456789abcdef');
+		expect(databaseAlias('db_a_B-c')).toBe('db-ab-c');
+		expect(databaseImage({ engine: 'postgres', version: '16' })).toBe('docker.io/library/postgres:16-alpine');
+	});
+});
+
+const ST_ID = 'st_fedcba9876543210fedcba9876543210';
+const RUSTFS_PINNED =
+	'docker.io/rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2';
+
+export function storageInput(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+	return workloadInput({
+		id: ST_ID,
+		projectId: ST_ID,
+		projectSlug: 'media',
+		deploymentId: ST_ID,
+		runtime: 'container',
+		release: null,
+		image: 'docker.io/rustfs/rustfs:1.0.4',
+		upstream: '127.0.0.1:19000',
+		port: 19000,
+		healthPath: '/health',
+		socketActivation: false,
+		env: { RUSTFS_VOLUMES: '/data', RUSTFS_OBS_LOG_DIRECTORY: '' },
+		secrets: [],
+		objectStorage: {
+			engine: 'rustfs',
+			version: '1.0.4',
+			buckets: [{ name: 'uploads', access: 'public-read' }],
+			users: [{ accessKeyId: 'SKFAAAAAAAAAAAAAAAAA', grants: [{ bucket: 'uploads', mode: 'read' }] }],
+			deleteBuckets: [{ name: 'old', force: true }],
+			keysVersion: 'c'.repeat(64),
+		},
+		...overrides,
+	});
+}
+
+describe('object storage profile', () => {
+	test('accepts the agent desired state but keeps only engine + version', () => {
+		const workload = parseWorkload(storageInput());
+		expect(workload.objectStorage).toEqual({ engine: 'rustfs', version: '1.0.4' });
+		expect(JSON.stringify(workload)).not.toContain('SKFAAAAAAAAAAAAAAAAA');
+		// The digest-pinned reference is accepted too.
+		expect(parseWorkload(storageInput({ image: RUSTFS_PINNED })).objectStorage?.version).toBe('1.0.4');
+		// An empty env value is still a value.
+		expect(workload.env.RUSTFS_OBS_LOG_DIRECTORY).toBe('');
+		expect('objectStorage' in parseWorkload(workloadInput())).toBe(false);
+	});
+
+	test('the image must match the helper registry', () => {
+		for (const image of [
+			'docker.io/rustfs/rustfs:1.0.3',
+			'docker.io/rustfs/rustfs:latest',
+			'rustfs/rustfs:1.0.4',
+			'docker.io/rustfs/rustfs:1.0.4@sha256:' + '0'.repeat(64),
+			'ghcr.io/evil/rustfs:1.0.4',
+		]) {
+			expect(() => parseWorkload(storageInput({ image }))).toThrow(/workload.image must be/);
+		}
+	});
+
+	test('rejects unknown engines, versions, extra keys and non-container runtimes', () => {
+		const profile = (extra: Record<string, unknown>) => ({ engine: 'rustfs', version: '1.0.4', keysVersion: 'c'.repeat(64), ...extra });
+		expect(() => parseWorkload(storageInput({ objectStorage: profile({ engine: 'minio' }) }))).toThrow(/engine/);
+		expect(() => parseWorkload(storageInput({ objectStorage: profile({ engine: 'constructor' }) }))).toThrow(/engine/);
+		expect(() => parseWorkload(storageInput({ objectStorage: profile({ version: '1.0.3' }) }))).toThrow(/version/);
+		expect(() => parseWorkload(storageInput({ objectStorage: profile({ image: 'x' }) }))).toThrow(/not supported/);
+		expect(() => parseWorkload(storageInput({ objectStorage: 'rustfs' }))).toThrow(/object/);
+		expect(() => parseWorkload(storageInput({ runtime: 'process', release: SHA, image: undefined }))).toThrow(
+			ValidationError,
+		);
+	});
+
+	test('a workload cannot be both a database and a storage instance', () => {
+		expect(() =>
+			parseWorkload(storageInput({ database: { engine: 'postgres', version: '17' } })),
+		).toThrow(/both/);
+		expect(() =>
+			parseWorkload(databaseInput({ objectStorage: { engine: 'rustfs', version: '1.0.4' } })),
+		).toThrow(/both/);
+	});
+
+	test('st_ ids are reserved for storage, and storage needs them', () => {
+		expect(() => parseWorkload(storageInput({ id: 'wld_abc123' }))).toThrow(/st_/);
+		expect(() => parseWorkload(storageInput({ id: DB_ID }))).toThrow(/st_/);
+		expect(() => parseWorkload(workloadInput({ id: 'st_abc' }))).toThrow(/reserved/);
+		expect(() => parseWorkload(databaseInput({ id: 'st_abc' }))).toThrow(/st_/);
+		expect(assertStorageId('st_abc')).toBe('st_abc');
+		for (const value of ['st_', 'wld_abc', 'st_../x', 'ST_abc', '']) {
+			expect(() => assertStorageId(value)).toThrow(ValidationError);
+		}
+		expect(assertManagedId('st_abc')).toBe('st_abc');
+		expect(assertManagedId('db_abc')).toBe('db_abc');
+		for (const value of ['st_', 'db_', 'wld_abc', 'st_a/b', '../db_x', '']) {
+			expect(() => assertManagedId(value)).toThrow(ValidationError);
+		}
+	});
+
+	test('storage cannot mount file secrets', () => {
+		expect(() =>
+			parseWorkload(storageInput({ secrets: [{ name: 'TLS_KEY', delivery: 'file' }] })),
+		).toThrow(/file secrets/);
+	});
+
+	test('alias and image follow the contract derivation', () => {
+		expect(storageAlias(ST_ID)).toBe('s3-fedcba9876543210fedcba9876543210');
+		expect(storageImage({ engine: 'rustfs', version: '1.0.4' })).toBe(RUSTFS_PINNED);
+	});
+});
+
 describe('parseActivation', () => {
+	test('drops fields the helper does not know, such as monitor credentials', () => {
+		const activation = parseActivation(
+			activationInput({ monitor: { ownerPassword: 'hunter2' } }),
+			parseWorkload(workloadInput()),
+		);
+		expect('monitor' in activation).toBe(false);
+		expect(JSON.stringify(activation)).not.toContain('hunter2');
+	});
+
 	test('accepts matching activation and file secrets', () => {
 		const workload = parseWorkload(
 			workloadInput({ secrets: [{ name: 'TLS_KEY', delivery: 'file' }] }),

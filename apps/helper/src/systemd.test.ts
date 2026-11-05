@@ -31,13 +31,17 @@ interface Fixture {
 	driver: SystemdDriver;
 	runner: FakeRunner;
 	unitDir: string;
+	quadletDir: string;
 	runtimeDir: string;
+	stateDir: string;
+	chowns: Array<[string, number, number]>;
 }
 
 async function fixture(options: { packageJson?: boolean } = {}): Promise<Fixture> {
 	const root = await fs.mkdtemp(join(tmpdir(), 'skiff-helper-systemd-'));
 	directories.push(root);
 	const unitDir = join(root, 'units');
+	const quadletDir = join(root, 'quadlet');
 	const runtimeDir = join(root, 'run');
 	const stateDir = join(root, 'state');
 	const releases = join(root, 'releases');
@@ -46,9 +50,14 @@ async function fixture(options: { packageJson?: boolean } = {}): Promise<Fixture
 	if (options.packageJson !== false) await fs.writeFile(join(releaseDir, 'package.json'), '{"name":"app"}');
 
 	const runner = new FakeRunner();
+	const chowns: Array<[string, number, number]> = [];
 	const driver = new SystemdDriver({
+		chown: async (path, uid, gid) => {
+			chowns.push([path, uid, gid]);
+		},
 		runner,
 		unitDir,
+		quadletDir,
 		runtimeDir,
 		stateDir,
 		releaseDirs: [releases],
@@ -56,7 +65,7 @@ async function fixture(options: { packageJson?: boolean } = {}): Promise<Fixture
 		socketMode: '0660',
 		socketGroup: 'caddy',
 	});
-	return { root, releaseDir, driver, runner, unitDir, runtimeDir };
+	return { root, releaseDir, driver, runner, unitDir, quadletDir, runtimeDir, stateDir, chowns };
 }
 
 function workload(overrides: Record<string, unknown> = {}): WorkloadDesired {
@@ -203,7 +212,7 @@ describe('apply', () => {
 		expect(status.status).toBe('running');
 
 		const quadlet = await fs.readFile(
-			join(f.unitDir, 'skiff-workload-wld_abc123.container'),
+			join(f.quadletDir, 'skiff-workload-wld_abc123.container'),
 			'utf8',
 		);
 		expect(quadlet).toContain('Image=ghcr.io/acme/app:1.2.3');
@@ -294,5 +303,268 @@ describe('status', () => {
 
 		f.runner.show = 'ActiveState=inactive\nSubState=dead\nNRestarts=0\n';
 		expect((await f.driver.status('wld_abc123')).status).toBe('stopped');
+	});
+});
+
+const DB_ID = 'db_0123456789abcdef0123456789abcdef';
+
+function database(overrides: Record<string, unknown> = {}): WorkloadDesired {
+	return workload({
+		id: DB_ID,
+		projectId: DB_ID,
+		projectSlug: 'orders',
+		deploymentId: DB_ID,
+		runtime: 'container',
+		release: null,
+		image: 'docker.io/library/postgres:17-alpine',
+		upstream: '127.0.0.1:15432',
+		port: 15432,
+		healthPath: '/',
+		socketActivation: false,
+		env: { POSTGRES_USER: 'orders', POSTGRES_DB: 'orders', PGDATA: '/elsewhere' },
+		database: { engine: 'postgres', version: '17' },
+		...overrides,
+	});
+}
+
+function databaseActivation(): WorkloadActivation {
+	return { workloadId: DB_ID, activationVersion: 'b'.repeat(64), env: { POSTGRES_PASSWORD: 'pw' }, files: {} };
+}
+
+describe('container network', () => {
+	test('writes the shared network before the first container and reloads once', async () => {
+		const f = await fixture();
+		const container = workload({
+			runtime: 'container',
+			release: null,
+			image: 'ghcr.io/acme/app:1.2.3',
+			socketActivation: false,
+		});
+		await f.driver.apply(container, activation());
+		const network = await fs.readFile(join(f.quadletDir, 'skiff-workloads.network'), 'utf8');
+		expect(network).toContain('NetworkName=skiff-workloads');
+		const quadlet = await fs.readFile(join(f.quadletDir, 'skiff-workload-wld_abc123.container'), 'utf8');
+		expect(quadlet).toContain('Network=skiff-workloads.network');
+		expect(f.runner.count('daemon-reload')).toBe(1);
+
+		// Unchanged network + unit: no reload.
+		await f.driver.apply(container, activation());
+		expect(f.runner.count('daemon-reload')).toBe(1);
+
+		// A missing network unit alone triggers a reload.
+		await fs.rm(join(f.quadletDir, 'skiff-workloads.network'));
+		await f.driver.apply(container, activation());
+		expect(f.runner.count('daemon-reload')).toBe(2);
+	});
+
+	test('process workloads do not need the network unit', async () => {
+		const f = await fixture();
+		await f.driver.apply(workload(), activation());
+		await expect(fs.stat(join(f.quadletDir, 'skiff-workloads.network'))).rejects.toThrow();
+	});
+});
+
+describe('database profile', () => {
+	test('renders the database unit, pins PGDATA and hands the data dir to 70:70', async () => {
+		const f = await fixture();
+		f.runner.show = 'ActiveState=activating\nSubState=start\nNRestarts=0\n';
+		const status = await f.driver.apply(database(), databaseActivation());
+		expect(status.status).toBe('starting');
+
+		const quadlet = await fs.readFile(join(f.quadletDir, `skiff-workload-${DB_ID}.container`), 'utf8');
+		expect(quadlet).toContain('User=70:70');
+		expect(quadlet).toContain('PublishPort=127.0.0.1:15432:5432');
+		expect(quadlet).toContain('NetworkAlias=db-0123456789abcdef0123456789abcdef');
+		expect(await fs.readFile(join(f.quadletDir, 'skiff-workloads.network'), 'utf8')).toContain('[Network]');
+
+		const env = await fs.readFile(join(f.runtimeDir, DB_ID, 'env'), 'utf8');
+		// Podman reads env files literally, so container values are written unquoted.
+		expect(env).toContain('PGDATA=/data/pgdata\n');
+		expect(env).not.toContain('/elsewhere');
+		expect(env).toContain('POSTGRES_PASSWORD=pw\n');
+		expect(env).not.toContain('"');
+
+		const dataDir = join(f.stateDir, DB_ID);
+		expect((await fs.stat(dataDir)).mode & 0o777).toBe(0o700);
+		expect(f.chowns).toEqual([[dataDir, 70, 70]]);
+
+		// The first start can pull an image for minutes; the helper must not block on it.
+		expect(f.runner.calls).toContainEqual([
+			'/usr/bin/systemctl',
+			'restart',
+			'--no-block',
+			`skiff-workload-${DB_ID}.service`,
+		]);
+	});
+
+	test('app containers are not chowned and restart synchronously', async () => {
+		const f = await fixture();
+		await f.driver.apply(
+			workload({ runtime: 'container', release: null, image: 'ghcr.io/acme/app:1', socketActivation: false }),
+			activation(),
+		);
+		expect(f.chowns).toEqual([]);
+		expect(f.runner.calls).toContainEqual(['/usr/bin/systemctl', 'restart', 'skiff-workload-wld_abc123.service']);
+	});
+
+	test('refuses to chown a data dir that is a symlink', async () => {
+		const f = await fixture();
+		const outside = join(f.root, 'outside');
+		await fs.mkdir(outside);
+		await fs.mkdir(f.stateDir, { recursive: true });
+		await fs.symlink(outside, join(f.stateDir, DB_ID));
+		await expect(f.driver.apply(database(), databaseActivation())).rejects.toThrow(/not a directory/);
+		expect(f.chowns).toEqual([]);
+	});
+});
+
+const ST_ID = 'st_fedcba9876543210fedcba9876543210';
+
+function storage(overrides: Record<string, unknown> = {}): WorkloadDesired {
+	return workload({
+		id: ST_ID,
+		projectId: ST_ID,
+		projectSlug: 'media',
+		deploymentId: ST_ID,
+		runtime: 'container',
+		release: null,
+		image: 'docker.io/rustfs/rustfs:1.0.4',
+		upstream: '127.0.0.1:19000',
+		port: 19000,
+		healthPath: '/health',
+		socketActivation: false,
+		env: { RUSTFS_VOLUMES: '/elsewhere', RUSTFS_CONSOLE_ENABLE: 'true', RUSTFS_OBS_LOG_DIRECTORY: '/logs' },
+		objectStorage: {
+			engine: 'rustfs',
+			version: '1.0.4',
+			buckets: [{ name: 'uploads', access: 'private' }],
+			users: [{ accessKeyId: 'SKFAAAAAAAAAAAAAAAAA', grants: [{ bucket: 'uploads', mode: 'read-write' }] }],
+			deleteBuckets: [],
+			keysVersion: 'c'.repeat(64),
+		},
+		...overrides,
+	});
+}
+
+function storageActivation(): WorkloadActivation {
+	return {
+		workloadId: ST_ID,
+		activationVersion: 'b'.repeat(64),
+		env: { RUSTFS_ACCESS_KEY: 'SKRROOT', RUSTFS_SECRET_KEY: 'root-secret' },
+		files: {},
+	};
+}
+
+describe('storage profile', () => {
+	test('renders the storage unit, forces the RustFS env and hands the data dir to 10001:10001', async () => {
+		const f = await fixture();
+		f.runner.show = 'ActiveState=activating\nSubState=start\nNRestarts=0\n';
+		const status = await f.driver.apply(storage(), storageActivation());
+		expect(status.status).toBe('starting');
+
+		const quadlet = await fs.readFile(join(f.quadletDir, `skiff-workload-${ST_ID}.container`), 'utf8');
+		expect(quadlet).toContain(
+			'Image=docker.io/rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2',
+		);
+		expect(quadlet).toContain('User=10001:10001');
+		expect(quadlet).toContain('PublishPort=127.0.0.1:19000:9000');
+		expect(quadlet).toContain('NetworkAlias=s3-fedcba9876543210fedcba9876543210');
+
+		const env = await fs.readFile(join(f.runtimeDir, ST_ID, 'env'), 'utf8');
+		expect(env).toBe(
+			[
+				'RUSTFS_ACCESS_KEY=SKRROOT',
+				'RUSTFS_ADDRESS=:9000',
+				'RUSTFS_CONSOLE_ENABLE=false',
+				// An explicit empty value overrides the image's /logs default: logs go to the journal.
+				'RUSTFS_OBS_LOG_DIRECTORY=',
+				'RUSTFS_SECRET_KEY=root-secret',
+				'RUSTFS_VOLUMES=/data',
+				'',
+			].join('\n'),
+		);
+		expect((await fs.stat(join(f.runtimeDir, ST_ID, 'env'))).mode & 0o777).toBe(0o400);
+
+		const dataDir = join(f.stateDir, ST_ID);
+		expect((await fs.stat(dataDir)).mode & 0o777).toBe(0o700);
+		expect(f.chowns).toEqual([[dataDir, 10001, 10001]]);
+		expect(f.runner.calls).toContainEqual([
+			'/usr/bin/systemctl',
+			'restart',
+			'--no-block',
+			`skiff-workload-${ST_ID}.service`,
+		]);
+	});
+
+	test('refuses to chown a storage data dir that is a symlink', async () => {
+		const f = await fixture();
+		const outside = join(f.root, 'outside');
+		await fs.mkdir(outside);
+		await fs.mkdir(f.stateDir, { recursive: true });
+		await fs.symlink(outside, join(f.stateDir, ST_ID));
+		await expect(f.driver.apply(storage(), storageActivation())).rejects.toThrow(/not a directory/);
+		expect(f.chowns).toEqual([]);
+	});
+
+	test('refuses a container env value with a line break before writing anything', async () => {
+		const f = await fixture();
+		await expect(
+			f.driver.apply(storage(), { ...storageActivation(), env: { RUSTFS_SECRET_KEY: 'a\nb' } }),
+		).rejects.toThrow(/line break/);
+		await expect(fs.stat(join(f.runtimeDir, ST_ID, 'env'))).rejects.toThrow();
+	});
+});
+
+describe('purge', () => {
+	test('removes the unit first, then deletes only <stateDir>/<id>', async () => {
+		const f = await fixture();
+		await f.driver.apply(database(), databaseActivation());
+		const dataDir = join(f.stateDir, DB_ID);
+		await fs.mkdir(join(dataDir, 'pgdata', 'base'), { recursive: true });
+		await fs.writeFile(join(dataDir, 'pgdata', 'PG_VERSION'), '17');
+		const sibling = join(f.stateDir, 'db_other');
+		await fs.mkdir(sibling);
+
+		await f.driver.purge(DB_ID);
+
+		const disableAt = f.runner.calls.findIndex(
+			(argv) => argv[1] === 'disable' && argv[3] === `skiff-workload-${DB_ID}.service`,
+		);
+		expect(disableAt).toBeGreaterThanOrEqual(0);
+		await expect(fs.stat(join(f.quadletDir, `skiff-workload-${DB_ID}.container`))).rejects.toThrow();
+		await expect(fs.stat(join(f.runtimeDir, DB_ID))).rejects.toThrow();
+		await expect(fs.stat(dataDir)).rejects.toThrow();
+		expect((await fs.stat(sibling)).isDirectory()).toBe(true);
+		expect((await fs.stat(f.stateDir)).isDirectory()).toBe(true);
+	});
+
+	test('purges a storage instance the same way', async () => {
+		const f = await fixture();
+		await f.driver.apply(storage(), storageActivation());
+		const dataDir = join(f.stateDir, ST_ID);
+		await fs.mkdir(join(dataDir, '.rustfs.sys'), { recursive: true });
+		const sibling = join(f.stateDir, 'st_other');
+		await fs.mkdir(sibling);
+		await f.driver.purge(ST_ID);
+		await expect(fs.stat(join(f.quadletDir, `skiff-workload-${ST_ID}.container`))).rejects.toThrow();
+		await expect(fs.stat(dataDir)).rejects.toThrow();
+		expect((await fs.stat(sibling)).isDirectory()).toBe(true);
+	});
+
+	test('is idempotent: a missing data dir is success', async () => {
+		const f = await fixture();
+		await f.driver.purge(DB_ID);
+		await f.driver.purge(DB_ID);
+	});
+
+	test('only accepts db_/st_ ids that are safe path segments', async () => {
+		const f = await fixture();
+		await fs.mkdir(join(f.stateDir, 'wld_abc123'), { recursive: true });
+		for (const id of ['wld_abc123', '../state', 'db_../x', 'db_', 'db_a/b', 'st_', 'st_../x', 'st_a/b', '']) {
+			await expect(f.driver.purge(id)).rejects.toThrow();
+		}
+		expect((await fs.stat(join(f.stateDir, 'wld_abc123'))).isDirectory()).toBe(true);
+		// Nothing was stopped for a rejected id.
+		expect(f.runner.calls).toEqual([]);
 	});
 });

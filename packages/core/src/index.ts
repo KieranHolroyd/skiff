@@ -15,6 +15,8 @@ import { MaintenanceService } from './maintenance.ts';
 import { SecretService } from './secrets.ts';
 import { MetricsService } from './metrics.ts';
 import { WorkloadService } from './workloads.ts';
+import { DatabaseService } from './databases.ts';
+import { StorageService } from './storage-instances.ts';
 import { DomainService } from './domains.ts';
 import { BuildService } from './builds.ts';
 import { LogService } from './logs.ts';
@@ -41,6 +43,8 @@ export * from './secrets.ts';
 export * from './metrics.ts';
 export * from './placement.ts';
 export * from './workloads.ts';
+export * from './databases.ts';
+export * from './storage-instances.ts';
 export * from './domains.ts';
 export * from './builds.ts';
 export * from './logs.ts';
@@ -70,6 +74,8 @@ export interface Core {
 	secrets: SecretService;
 	metrics: MetricsService;
 	workloads: WorkloadService;
+	databases: DatabaseService;
+	storage: StorageService;
 	domains: DomainService;
 	builds: BuildService;
 	logs: LogService;
@@ -104,6 +110,8 @@ export function createCore(options: CoreOptions): Core {
 	ctx.environments = new EnvironmentService(ctx);
 	ctx.secrets = new SecretService(ctx);
 	ctx.workloads = new WorkloadService(ctx);
+	ctx.databases = new DatabaseService(ctx);
+	ctx.storage = new StorageService(ctx);
 	ctx.domains = new DomainService(ctx);
 	ctx.logs = new LogService(ctx);
 	ctx.builds = new BuildService(ctx);
@@ -128,6 +136,8 @@ export function createCore(options: CoreOptions): Core {
 		secrets,
 		metrics,
 		workloads: ctx.workloads,
+		databases: ctx.databases,
+		storage: ctx.storage,
 		domains: ctx.domains,
 		builds: ctx.builds,
 		logs: ctx.logs,

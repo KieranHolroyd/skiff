@@ -25,6 +25,7 @@ export async function runHelper(): Promise<void> {
 	const driver = new SystemdDriver({
 		runner: spawnRunner(),
 		unitDir: config.unitDir,
+		quadletDir: config.quadletDir,
 		runtimeDir: config.runtimeDir,
 		stateDir: config.stateDir,
 		releaseDirs: config.releaseDirs,

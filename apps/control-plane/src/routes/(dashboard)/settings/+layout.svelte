@@ -120,6 +120,17 @@
 					<Tabs.Trigger value={tab.href} class="flex-none">
 						<tab.icon />
 						{tab.label}
+						{#if tab.path === '/settings/updates'}
+							{#await data.updateAvailable then update}
+								{#if update}
+									<span
+										class="size-1.5 rounded-full bg-brand"
+										title={`Skiff ${update.latest} is available`}
+									></span>
+									<span class="sr-only">(update available)</span>
+								{/if}
+							{/await}
+						{/if}
 					</Tabs.Trigger>
 				{/each}
 			</Tabs.List>

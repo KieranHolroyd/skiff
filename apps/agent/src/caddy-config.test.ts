@@ -376,6 +376,28 @@ describe('per-deployment roots, worker routes and logging', () => {
 		expect(productionRouteFor(state(), 'prj_missing')).toBeNull();
 	});
 
+	test('public storage endpoints proxy byte-for-byte with no site auth or config', () => {
+		const value = state();
+		value.storageRoutes = [
+			{ storageId: 'st_local', host: 'media--s3.example.com', upstream: '127.0.0.1:19000' },
+			{ storageId: 'st_remote', host: 'archive--s3.example.com', upstream: 'http://10.8.0.2:8080' },
+		];
+		const compiled = routes(config(value));
+		const local = compiled.find((route) => route['@id'] === 'storage:st_local')!;
+		expect(JSON.stringify(local.match)).toContain('"media--s3.example.com"');
+
+		const proxy = collectHandlers(local).find((handler) => handler.handler === 'reverse_proxy')!;
+		expect((proxy.upstreams as Json[])[0]!.dial).toBe('127.0.0.1:19000');
+		expect(proxy.flush_interval).toBe(-1);
+		expect((proxy.headers as Json).request).toEqual({ set: { Host: ['{http.request.host}'] } });
+		// No forward_auth, no file server, no site config: SigV4 is the access control.
+		expect(collectHandlers(local).map((handler) => handler.handler)).toEqual(['reverse_proxy', 'static_response']);
+
+		const remote = compiled.find((route) => route['@id'] === 'storage:st_remote')!;
+		const remoteProxy = collectHandlers(remote).find((handler) => handler.handler === 'reverse_proxy')!;
+		expect((remoteProxy.upstreams as Json[])[0]!.dial).toBe('10.8.0.2:8080');
+	});
+
 	test('writes a JSON access log for telemetry, skipping the platform host', () => {
 		const compiled = buildCaddyConfig({
 			state: state(),

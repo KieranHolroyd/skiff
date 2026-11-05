@@ -9,6 +9,22 @@
  */
 import { platformOrigin } from './config.ts';
 import { ApiError, CliError } from './errors.ts';
+import type {
+	DatabaseAttachmentView,
+	DatabaseCreateInput,
+	DatabaseCredentials,
+	DatabaseView,
+} from './databases.ts';
+import type {
+	StorageAttachmentView,
+	StorageBucketView,
+	StorageCreateInput,
+	StorageCredentials,
+	StorageGrant,
+	StorageMetricPoint,
+	StorageUpdateInput,
+	StorageView,
+} from './object-storage.ts';
 import type { OperationItemView, OperationView } from './operations.ts';
 
 export interface ApiClientOptions {
@@ -538,6 +554,202 @@ export class ApiClient {
 		return response.body;
 	}
 
+	// --- managed databases (docs/DATABASES.md) ---------------------------------------------
+
+	async listDatabases(options: { includeDeleted?: boolean } = {}): Promise<{ databases: DatabaseView[]; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/databases${options.includeDeleted ? '?includeDeleted=1' : ''}`);
+		return { databases: (asArray(asRecord(raw)?.databases) ?? []) as DatabaseView[], raw };
+	}
+
+	async getDatabase(name: string, options: { includeDeleted?: boolean } = {}): Promise<{ database: DatabaseView; raw: unknown }> {
+		const raw = await this.request(
+			'GET',
+			`/api/v1/databases/${encodeURIComponent(name)}${options.includeDeleted ? '?includeDeleted=1' : ''}`,
+		);
+		return { database: databaseFrom(raw), raw };
+	}
+
+	async createDatabase(input: DatabaseCreateInput): Promise<{ database: DatabaseView; raw: unknown }> {
+		const raw = await this.request('POST', '/api/v1/databases', { body: input });
+		return { database: databaseFrom(raw), raw };
+	}
+
+	/** Soft delete (restorable for 7 days). */
+	async deleteDatabase(name: string): Promise<{ database: DatabaseView; raw: unknown }> {
+		const raw = await this.request('DELETE', `/api/v1/databases/${encodeURIComponent(name)}`);
+		return { database: databaseFrom(raw), raw };
+	}
+
+	/** Permanently delete a database that is already in the trash. */
+	async purgeDatabase(name: string): Promise<unknown> {
+		return this.request('DELETE', `/api/v1/databases/${encodeURIComponent(name)}?purge=1`);
+	}
+
+	async restoreDatabase(name: string): Promise<{ database: DatabaseView; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/databases/${encodeURIComponent(name)}/restore`, { body: {} });
+		return { database: databaseFrom(raw), raw };
+	}
+
+	async databaseCredentials(name: string): Promise<{ credentials: DatabaseCredentials; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/databases/${encodeURIComponent(name)}/credentials`);
+		const credentials = asRecord(asRecord(raw)?.credentials);
+		if (!credentials || typeof credentials.url !== 'string')
+			throw new CliError('The platform returned an unexpected credentials response.', { code: 'protocol' });
+		return { credentials: credentials as unknown as DatabaseCredentials, raw };
+	}
+
+	async attachDatabase(
+		project: string,
+		input: { database: string; envPrefix?: string },
+	): Promise<{ attachment: DatabaseAttachmentView; warning: string | null; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/projects/${encodeURIComponent(project)}/databases`, { body: input });
+		const record = asRecord(raw) ?? {};
+		const attachment = asRecord(record.attachment);
+		if (!attachment) throw new CliError('The platform returned an unexpected attach response.', { code: 'protocol' });
+		return {
+			attachment: attachment as unknown as DatabaseAttachmentView,
+			warning: stringValue(record.warning) ?? null,
+			raw,
+		};
+	}
+
+	async detachDatabase(project: string, name: string): Promise<unknown> {
+		return this.request(
+			'DELETE',
+			`/api/v1/projects/${encodeURIComponent(project)}/databases/${encodeURIComponent(name)}`,
+		);
+	}
+
+	// --- managed object storage (docs/OBJECT-STORAGE.md) ------------------------------------
+
+	async listStorage(options: { includeDeleted?: boolean } = {}): Promise<{ storage: StorageView[]; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/storage${options.includeDeleted ? '?includeDeleted=1' : ''}`);
+		return { storage: ((asArray(asRecord(raw)?.storage) ?? []) as StorageView[]).map(normalizeStorage), raw };
+	}
+
+	async getStorage(name: string, options: { includeDeleted?: boolean } = {}): Promise<{ storage: StorageView; raw: unknown }> {
+		const raw = await this.request(
+			'GET',
+			`/api/v1/storage/${encodeURIComponent(name)}${options.includeDeleted ? '?includeDeleted=1' : ''}`,
+		);
+		return { storage: storageFrom(raw), raw };
+	}
+
+	async createStorage(input: StorageCreateInput): Promise<{ storage: StorageView; raw: unknown }> {
+		const raw = await this.request('POST', '/api/v1/storage', { body: input });
+		return { storage: storageFrom(raw), raw };
+	}
+
+	async updateStorage(name: string, input: StorageUpdateInput): Promise<{ storage: StorageView; raw: unknown }> {
+		const raw = await this.request('PATCH', `/api/v1/storage/${encodeURIComponent(name)}`, { body: input });
+		return { storage: storageFrom(raw), raw };
+	}
+
+	/** Soft delete (restorable for 7 days). */
+	async deleteStorage(name: string): Promise<{ storage: StorageView; raw: unknown }> {
+		const raw = await this.request('DELETE', `/api/v1/storage/${encodeURIComponent(name)}`);
+		return { storage: storageFrom(raw), raw };
+	}
+
+	/** Permanently delete an instance that is already in the trash. */
+	async purgeStorage(name: string): Promise<unknown> {
+		return this.request('DELETE', `/api/v1/storage/${encodeURIComponent(name)}?purge=1`);
+	}
+
+	async restoreStorage(name: string): Promise<{ storage: StorageView; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/storage/${encodeURIComponent(name)}/restore`, { body: {} });
+		return { storage: storageFrom(raw), raw };
+	}
+
+	async storageCredentials(name: string): Promise<{ credentials: StorageCredentials; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/storage/${encodeURIComponent(name)}/credentials`);
+		const credentials = asRecord(asRecord(raw)?.credentials);
+		if (!credentials || typeof credentials.secretAccessKey !== 'string')
+			throw new CliError('The platform returned an unexpected credentials response.', { code: 'protocol' });
+		return { credentials: credentials as unknown as StorageCredentials, raw };
+	}
+
+	async storageMetrics(
+		name: string,
+		range: { from?: string; to?: string; interval?: string } = {},
+	): Promise<{ points: StorageMetricPoint[]; interval: string; raw: unknown }> {
+		const query = new URLSearchParams();
+		if (range.from) query.set('from', range.from);
+		if (range.to) query.set('to', range.to);
+		if (range.interval) query.set('interval', range.interval);
+		const search = query.toString();
+		const suffix = search ? `?${search}` : '';
+		const raw = await this.request('GET', `/api/v1/storage/${encodeURIComponent(name)}/metrics${suffix}`);
+		const record = asRecord(raw) ?? {};
+		return {
+			points: (asArray(record.points) ?? []) as StorageMetricPoint[],
+			interval: stringValue(record.interval) ?? range.interval ?? '1m',
+			raw,
+		};
+	}
+
+	async listBuckets(name: string): Promise<{ buckets: StorageBucketView[]; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/storage/${encodeURIComponent(name)}/buckets`);
+		return { buckets: (asArray(asRecord(raw)?.buckets) ?? []) as StorageBucketView[], raw };
+	}
+
+	async createBucket(
+		name: string,
+		input: { name: string; access?: string },
+	): Promise<{ bucket: StorageBucketView; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/storage/${encodeURIComponent(name)}/buckets`, { body: input });
+		return { bucket: bucketFrom(raw), raw };
+	}
+
+	async updateBucket(name: string, bucket: string, input: { access: string }): Promise<{ bucket: StorageBucketView; raw: unknown }> {
+		const raw = await this.request(
+			'PATCH',
+			`/api/v1/storage/${encodeURIComponent(name)}/buckets/${encodeURIComponent(bucket)}`,
+			{ body: input },
+		);
+		return { bucket: bucketFrom(raw), raw };
+	}
+
+	/** Ask the node to delete a bucket; `force` empties it first. */
+	async deleteBucket(
+		name: string,
+		bucket: string,
+		options: { force?: boolean } = {},
+	): Promise<{ bucket: StorageBucketView; raw: unknown }> {
+		const raw = await this.request(
+			'DELETE',
+			`/api/v1/storage/${encodeURIComponent(name)}/buckets/${encodeURIComponent(bucket)}${options.force ? '?force=1' : ''}`,
+		);
+		return { bucket: bucketFrom(raw), raw };
+	}
+
+	async attachStorage(
+		project: string,
+		input: { storage: string; envPrefix?: string; grants: StorageGrant[] },
+	): Promise<{ attachment: StorageAttachmentView; warning: string | null; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/projects/${encodeURIComponent(project)}/storage`, { body: input });
+		const record = asRecord(raw) ?? {};
+		return { attachment: storageAttachmentFrom(record.attachment), warning: stringValue(record.warning) ?? null, raw };
+	}
+
+	/** Replace an attachment's bucket grants. */
+	async updateStorageGrants(
+		project: string,
+		name: string,
+		grants: StorageGrant[],
+	): Promise<{ attachment: StorageAttachmentView; raw: unknown }> {
+		const raw = await this.request(
+			'PATCH',
+			`/api/v1/projects/${encodeURIComponent(project)}/storage/${encodeURIComponent(name)}`,
+			{ body: { grants } },
+		);
+		return { attachment: storageAttachmentFrom(asRecord(raw)?.attachment), raw };
+	}
+
+	async detachStorage(project: string, name: string): Promise<unknown> {
+		return this.request('DELETE', `/api/v1/projects/${encodeURIComponent(project)}/storage/${encodeURIComponent(name)}`);
+	}
+
 	private headers(extra: Record<string, string> = {}): Headers {
 		return new Headers({
 			accept: 'application/json, text/plain',
@@ -643,6 +855,54 @@ function operationFrom(raw: unknown): OperationView {
 			...(asRecord(summary.categories) ? { categories: asRecord(summary.categories)! } : {}),
 			freedBytes: numberValue(summary.freedBytes) ?? 0,
 		} as OperationView['summary'],
+	};
+}
+
+/** Database endpoints wrap the view in `{ database }`. */
+function databaseFrom(raw: unknown): DatabaseView {
+	const view = asRecord(asRecord(raw)?.database);
+	if (!view || typeof view.name !== 'string')
+		throw new CliError('The platform returned an unexpected database response.', { code: 'protocol', details: raw });
+	return {
+		...(view as unknown as DatabaseView),
+		attachments: (asArray(view.attachments) ?? []) as DatabaseAttachmentView[],
+		tables: (asArray(view.tables) ?? []) as DatabaseView['tables'],
+	};
+}
+
+/** Storage endpoints wrap the view in `{ storage }`. */
+function storageFrom(raw: unknown): StorageView {
+	const view = asRecord(asRecord(raw)?.storage);
+	if (!view || typeof view.name !== 'string')
+		throw new CliError('The platform returned an unexpected storage response.', { code: 'protocol', details: raw });
+	return normalizeStorage(view as unknown as StorageView);
+}
+
+function normalizeStorage(view: StorageView): StorageView {
+	return {
+		...view,
+		buckets: (asArray(view.buckets) ?? []) as StorageBucketView[],
+		attachments: ((asArray(view.attachments) ?? []) as StorageAttachmentView[]).map((item) => ({
+			...item,
+			grants: (asArray(item.grants) ?? []) as StorageGrant[],
+		})),
+	};
+}
+
+function bucketFrom(raw: unknown): StorageBucketView {
+	const bucket = asRecord(asRecord(raw)?.bucket);
+	if (!bucket || typeof bucket.name !== 'string')
+		throw new CliError('The platform returned an unexpected bucket response.', { code: 'protocol', details: raw });
+	return bucket as unknown as StorageBucketView;
+}
+
+function storageAttachmentFrom(raw: unknown): StorageAttachmentView {
+	const attachment = asRecord(raw);
+	if (!attachment) throw new CliError('The platform returned an unexpected attach response.', { code: 'protocol' });
+	return {
+		...(attachment as unknown as StorageAttachmentView),
+		envNames: (asArray(attachment.envNames) ?? []) as string[],
+		grants: (asArray(attachment.grants) ?? []) as StorageGrant[],
 	};
 }
 

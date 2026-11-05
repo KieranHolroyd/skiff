@@ -4,6 +4,7 @@ import type { HelperConfig } from './config.ts';
 import {
 	assertCpuWeight,
 	assertId,
+	assertManagedId,
 	assertMemoryMb,
 	assertRecord,
 	parseApplyRequest,
@@ -14,8 +15,8 @@ import {
 import type { HelperLogResult, HelperWorkloadStatus, LogReadOptions } from './systemd.ts';
 
 /**
- * The helper's entire network surface: four fixed verbs on a root-owned, group-restricted unix
- * socket. There is no passthrough, no command parameter and no shell. Malformed input is a 400,
+ * The helper's entire network surface: six fixed verbs (slice, apply, status, remove, logs and
+ * purge) plus `/healthz` on a root-owned, group-restricted unix socket. There is no passthrough, no command parameter and no shell. Malformed input is a 400,
  * never a best-effort attempt.
  */
 
@@ -25,6 +26,8 @@ export interface HelperRuntime {
 	remove(id: string): Promise<void>;
 	status(id: string): Promise<HelperWorkloadStatus>;
 	logs(id: string, options?: LogReadOptions): Promise<HelperLogResult>;
+	/** Remove a purged database's or storage instance's unit and `<stateDir>/<id>` data dir (D59, S8). */
+	purge(id: string): Promise<void>;
 }
 
 export interface HandlerOptions {
@@ -85,6 +88,20 @@ export function createHandler(
 					return json({ ok: true });
 				}
 				return methodNotAllowed('GET, DELETE');
+			}
+
+			const purgeMatch = /^\/v1\/workloads\/([^/]+)\/purge$/.exec(path);
+			if (purgeMatch) {
+				if (method !== 'POST') return methodNotAllowed('POST');
+				let id: string;
+				try {
+					id = assertManagedId(decodeURIComponent(purgeMatch[1]!), 'managed id');
+				} catch (error) {
+					if (error instanceof ValidationError) throw error;
+					throw new ValidationError('managed id is not valid URL encoding');
+				}
+				await runtime.purge(id);
+				return json({ ok: true, purged: id });
 			}
 
 			const logMatch = /^\/v1\/workloads\/([^/]+)\/logs$/.exec(path);

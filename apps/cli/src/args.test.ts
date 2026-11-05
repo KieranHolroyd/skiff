@@ -58,4 +58,13 @@ describe('parseArgs', () => {
 	test('rejects --no- on a string flag', () => {
 		expect(() => parseArgs(['--no-project'], spec)).toThrow('only valid for boolean');
 	});
+
+	test('collects every value of a multiple string flag', () => {
+		const multi = { bucket: { type: 'string', short: 'b', multiple: true }, project: { type: 'string' } } as const;
+		const args = parseArgs(['--bucket', 'a', '-b', 'b:read', '--bucket=c', '--project', 'x', '--project', 'y'], multi);
+		expect(args.strings('bucket')).toEqual(['a', 'b:read', 'c']);
+		expect(args.string('bucket')).toBe('c');
+		expect(args.strings('project')).toEqual([]);
+		expect(args.string('project')).toBe('y');
+	});
 });

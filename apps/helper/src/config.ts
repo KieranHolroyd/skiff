@@ -10,6 +10,11 @@ export interface HelperConfig {
 	socketPath: string;
 	/** Where generated unit files are written (systemd's unit directory). */
 	unitDir: string;
+	/**
+	 * Where Quadlet `.container` / `.network` files are written. Quadlet's generator only reads
+	 * /etc/containers/systemd (and /run, /usr/share variants), never systemd's unit directory.
+	 */
+	quadletDir: string;
 	/** Root-owned runtime directory: env files, secret files and workload sockets. */
 	runtimeDir: string;
 	/** Persistent container data root. */
@@ -110,6 +115,7 @@ export function loadHelperConfig(env: Env = process.env): HelperConfig {
 	return {
 		socketPath,
 		unitDir: absolute(env, 'SKIFF_HELPER_UNIT_DIR', '/etc/systemd/system'),
+		quadletDir: absolute(env, 'SKIFF_HELPER_QUADLET_DIR', '/etc/containers/systemd'),
 		runtimeDir,
 		stateDir: absolute(env, 'SKIFF_HELPER_STATE_DIR', '/var/lib/skiff-workloads'),
 		releaseDirs: releaseDirs(optional(env, 'SKIFF_HELPER_RELEASE_DIRS', DEFAULT_RELEASE_DIRS.join(','))),

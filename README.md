@@ -77,6 +77,7 @@
 | **Fleet** | Node agents with desired-state reconciliation, an on-disk release cache and heartbeats; wildcard TLS via DNS-01; a branded 503 with `Retry-After` when a node is down |
 | **Observe** | Dashboard for fleet, projects, deployments, traffic, errors, logs and the audit log; `/metrics` on the control plane and agents; alerts for offline nodes, disk, certs, backups and 5xx spikes after a promote |
 | **Recover** | Litestream → R2, scripted restore, monthly drill, age-encrypted recovery kit, atomic release switch with automatic rollback |
+| **Managed services** | Postgres 16/17 databases and RustFS S3-compatible object storage as tier-3 containers: attachments with scoped credentials, usage charts, soft delete and restore, human-only credential reveal ([DATABASES.md](./docs/DATABASES.md), [OBJECT-STORAGE.md](./docs/OBJECT-STORAGE.md)) |
 | **v2 preview** | Sandboxed systemd process apps, Podman Quadlet containers, git builds on a builder node, custom domains with TXT verification, named environments, per-node workload budgets |
 
 ## Quick start

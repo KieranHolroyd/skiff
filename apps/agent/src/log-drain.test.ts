@@ -56,6 +56,7 @@ class FakeHelper implements HelperApi {
 		return { id: 'wld_1', status: 'running', restarts: 0 };
 	}
 	async remove(): Promise<void> {}
+	async purge(): Promise<void> {}
 	async status(): Promise<HelperWorkloadStatus> {
 		return { id: 'wld_1', status: 'running', restarts: 0 };
 	}

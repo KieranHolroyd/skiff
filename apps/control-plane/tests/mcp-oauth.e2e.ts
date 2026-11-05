@@ -147,6 +147,17 @@ const textOf = (r: { content?: unknown }) =>
 let client = await connect(tok1.access_token, 'accept');
 const tools = await client.listTools();
 check('tools/list over authenticated MCP', tools.tools.some((t) => t.name === 'delete_project'), tools.tools.map((t) => t.name).join(','));
+const toolNames = new Set(tools.tools.map((t) => t.name));
+check(
+	'database tools listed; no credentials or purge tool (D58, D53)',
+	['list_databases', 'get_database', 'create_database', 'attach_database', 'detach_database', 'delete_database'].every((name) => toolNames.has(name)) &&
+		![...toolNames].some((name) => /credential|purge/.test(name)),
+);
+check(
+	'storage tools listed; no key reveal, purge or bucket delete tool (S6)',
+	['list_storage', 'get_storage', 'create_storage', 'create_bucket', 'attach_storage', 'detach_storage', 'delete_storage'].every((name) => toolNames.has(name)) &&
+		!toolNames.has('delete_bucket'),
+);
 const who = JSON.parse(textOf(await client.callTool({ name: 'whoami', arguments: {} })));
 check('whoami reflects token scopes ∩ role', JSON.stringify(who.permissions) === JSON.stringify(['deployment:create', 'project:create', 'project:read']), JSON.stringify(who.permissions));
 const list = await client.callTool({ name: 'list_projects', arguments: {} });

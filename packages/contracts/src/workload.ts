@@ -1,4 +1,6 @@
 import * as z from 'zod';
+import { databaseMonitorSchema, workloadDatabaseSchema } from './database.ts';
+import { storageAdminSchema, workloadObjectStorageSchema } from './object-storage.ts';
 
 /**
  * Tier 2 (process) and tier 3 (container) workloads (DESIGN §3.4, §3.4.1, D41).
@@ -133,6 +135,10 @@ export const workloadDesiredSchema = z.object({
 	secrets: z.array(secretRefSchema).default([]),
 	/** Set when the workload needs a writable data directory at `/data`. */
 	dataSizeMb: z.number().int().positive().nullable().default(null),
+	/** Managed database profile (D55, D61); the helper derives image, user and mounts from it. */
+	database: workloadDatabaseSchema.optional(),
+	/** Managed object storage profile (S1); buckets and scoped users are converged by the agent. */
+	objectStorage: workloadObjectStorageSchema.optional(),
 });
 export type WorkloadDesired = z.infer<typeof workloadDesiredSchema>;
 
@@ -143,6 +149,10 @@ export const workloadActivationSchema = z.object({
 	env: z.record(z.string(), z.string()),
 	/** Secret files keyed by the name the unit expects (`LoadCredential`/`EnvironmentFile`). */
 	files: z.record(z.string(), z.string()).default({}),
+	/** Managed databases only: stats-sampler credentials, kept in agent memory (D57). */
+	monitor: databaseMonitorSchema.optional(),
+	/** Storage instances only: root and scoped keys for bucket/user reconcile, agent memory only. */
+	storageAdmin: storageAdminSchema.optional(),
 });
 export type WorkloadActivation = z.infer<typeof workloadActivationSchema>;
 

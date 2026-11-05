@@ -146,6 +146,50 @@ function compileHostRedirect(host: string, to: string): CaddyRoute {
 }
 
 /**
+ * A public storage endpoint (S3). Not a site: there is no release, site config or forward_auth,
+ * because S3 clients carry no cookies and the SigV4 signature is the access control. Caddy proxies
+ * byte-for-byte, keeping `Host` on both hops (SigV4 signs it) and streaming bodies so multipart
+ * uploads of many GB pass through without buffering or a size limit.
+ */
+export function compileStorageRoute(route: DesiredState['storageRoutes'][number]): CaddyRoute {
+	return {
+		'@id': `storage:${route.storageId}`,
+		match: [{ host: [normalizeHost(route.host)] }],
+		handle: [
+			{
+				handler: 'reverse_proxy',
+				upstreams: [{ dial: route.upstream.replace(/^https?:\/\//, '') }],
+				headers: { request: { set: { Host: ['{http.request.host}'] } } },
+				flush_interval: -1,
+				transport: {
+					protocol: 'http',
+					dial_timeout: '30s',
+					// Multipart uploads and large downloads must not hit an idle header timeout.
+					response_header_timeout: '5m',
+				},
+				handle_response: [
+					{
+						match: { status_code: [502, 503, 504] },
+						routes: [
+							{
+								handle: [
+									{
+										handler: 'static_response',
+										status_code: 503,
+										headers: { 'Retry-After': ['30'], 'Content-Type': ['text/plain; charset=utf-8'] },
+										body: 'This storage endpoint is temporarily unavailable. Please try again shortly.',
+									},
+								],
+							},
+						],
+					},
+				],
+			},
+		],
+	};
+}
+
+/**
  * Caddy's Caddyfile `redir` directive is sugar for a `static_response` with a Location header;
  * `http.handlers.redir` is not a real JSON module. site-config emits the directive shape, so the
  * agent rewrites it into valid Caddy JSON before loading the config.
@@ -228,7 +272,9 @@ export function buildCaddyConfig(options: CompileAgentConfigOptions): Record<str
 		.filter((domain): domain is DesiredDomain & { redirectTo: string } => Boolean(domain.redirectTo))
 		.filter((domain) => !siteHosts.has(normalizeHost(domain.host)))
 		.map((domain) => compileHostRedirect(domain.host, withScheme(domain.redirectTo)));
-	server.routes = [...redirects, ...domainRedirects, ...server.routes];
+	// Public storage endpoints match on a dedicated host and never collide with site routes (S3).
+	const storageRoutes = options.state.storageRoutes.map(compileStorageRoute);
+	server.routes = [...storageRoutes, ...redirects, ...domainRedirects, ...server.routes];
 
 	// Only nodes that actually serve custom domains ask the control plane before issuing a cert.
 	// `automation.on_demand` only configures the ask endpoint; Caddy also needs an automation

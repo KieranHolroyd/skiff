@@ -1,5 +1,6 @@
 import * as z from 'zod';
 import { accessModes } from './model.ts';
+import { STORAGE_RESERVED_ENVIRONMENTS } from './object-storage.ts';
 
 /**
  * Named environments (D13 deferred them from v1). `production` always exists per project and keeps
@@ -18,7 +19,9 @@ export const environmentSlugSchema = z
 	)
 	// `--` is reserved for preview hosts (`<slug>--<shortid>`), so an environment can never shadow one.
 	.refine((value) => !value.includes('--'), 'Environment names cannot contain `--`')
-	.refine((value) => value !== 'production', 'The production environment is built in');
+	.refine((value) => value !== 'production', 'The production environment is built in')
+	// `<slug>--s3` is a public storage endpoint (OBJECT-STORAGE.md S3).
+	.refine((value) => !STORAGE_RESERVED_ENVIRONMENTS.has(value), 'This environment name is reserved for storage endpoints');
 
 export const environmentCreateSchema = z.object({
 	name: z.string().min(1).max(60),

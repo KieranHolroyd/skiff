@@ -7,6 +7,8 @@ export * from './platform-config.ts';
 export * from './model.ts';
 export * from './api.ts';
 export * from './workload.ts';
+export * from './database.ts';
+export * from './object-storage.ts';
 export * from './build.ts';
 export * from './log.ts';
 export * from './domain.ts';

@@ -8,6 +8,7 @@ import {
 	type Principal,
 	type WorkloadActivation,
 	type WorkloadDesired,
+	type WorkloadRuntime,
 	type WorkloadSpec,
 	type WorkloadStatus,
 	type WorkloadView,
@@ -70,9 +71,16 @@ export class WorkloadService {
 			throw new ValidationError(
 				`Project "${project.slug}" is static. Create it with runtime "process" or "container" to run a workload.`,
 			);
+		// A project with attached databases or private storage runs next to them (D56, S5).
+		const pinned = this.attachmentNode(project.id);
+		if (pinned) {
+			const conflict =
+				this.ctx.databases.placementConflict(project, pinned) ?? this.ctx.storage.placementConflict(project, pinned);
+			if (conflict) throw new ValidationError(conflict);
+		}
 		const decision = resolvePlacement({
 			runtime: project.runtime,
-			requested: project.placement,
+			requested: pinned ?? project.placement,
 			memoryMb: spec.memoryMb,
 			edgeNodeId: this.edgeNodeId(),
 			candidates: this.candidates(),
@@ -83,7 +91,7 @@ export class WorkloadService {
 			spec,
 			nodeId: decision.nodeId,
 			upstream,
-			activationVersion: activationVersion(spec),
+			activationVersion: activationVersion(spec, this.attachmentsVersion(project.id, decision.nodeId, spec.runtime)),
 		};
 	}
 
@@ -129,7 +137,10 @@ export class WorkloadService {
 			spec: parsed.data,
 			nodeId: deployment.nodeId,
 			upstream: upstreamFor(project.id, parsed.data),
-			activationVersion: activationVersion(parsed.data),
+			activationVersion: activationVersion(
+				parsed.data,
+				this.attachmentsVersion(project.id, deployment.nodeId, parsed.data.runtime),
+			),
 		});
 	}
 
@@ -193,6 +204,8 @@ export class WorkloadService {
 
 	capacityInternal(): NodeCapacityView[] {
 		const reserved = this.reservedByNode();
+		const databaseCounts = this.ctx.databases.countByNode();
+		const storageCounts = this.ctx.storage.countByNode();
 		return this.ctx.db
 			.select()
 			.from(nodes)
@@ -205,7 +218,10 @@ export class WorkloadService {
 				sliceMemoryMb: node.sliceMemoryMb,
 				reservedMemoryMb: reserved.get(node.id) ?? 0,
 				freeMemoryMb: node.sliceMemoryMb - (reserved.get(node.id) ?? 0),
-				workloadCount: this.countByNode().get(node.id) ?? 0,
+				workloadCount:
+					(this.countByNode().get(node.id) ?? 0) +
+					(databaseCounts.get(node.id) ?? 0) +
+					(storageCounts.get(node.id) ?? 0),
 			}));
 	}
 
@@ -242,7 +258,7 @@ export class WorkloadService {
 				port: spec.port,
 				healthPath: spec.healthPath,
 				socketActivation: spec.socketActivation,
-				activationVersion: activationVersion(spec),
+				activationVersion: activationVersion(spec, this.attachmentsVersion(project.id, workload.nodeId, spec.runtime)),
 				env: spec.env,
 				secrets: spec.secrets,
 				dataSizeMb: spec.data?.sizeMb ?? null,
@@ -255,11 +271,18 @@ export class WorkloadService {
 	 * is never cached on disk by the agent.
 	 */
 	activation(nodeId: string, workloadId: string): WorkloadActivation {
+		if (this.ctx.databases.isDatabaseId(workloadId)) return this.ctx.databases.activation(nodeId, workloadId);
+		if (this.ctx.storage.isStorageId(workloadId)) return this.ctx.storage.activation(nodeId, workloadId);
 		const row = this.ctx.db.select().from(workloads).where(eq(workloads.id, workloadId)).get();
 		if (!row) throw new NotFoundError('Workload');
 		if (row.nodeId !== nodeId) throw new CoreError('forbidden', 'This workload is placed on another node.', 403);
 		const spec = this.specOf(this.requireProject(row.projectId), row);
-		const env: Record<string, string> = { ...spec.env };
+		// Attached database and storage connection values sit under the spec's own env and secrets (D56, S4).
+		const env: Record<string, string> = {
+			...this.ctx.storage.consumerEnv(row.projectId, row.nodeId, spec.runtime),
+			...this.ctx.databases.consumerEnv(row.projectId, row.nodeId, spec.runtime),
+			...spec.env,
+		};
 		const files: Record<string, string> = {};
 		for (const ref of spec.secrets) {
 			const value = this.ctx.secrets.getValue(row.orgId, ref.name, ref.version);
@@ -267,7 +290,12 @@ export class WorkloadService {
 			if (ref.delivery === 'file') files[ref.name] = value.value;
 			else env[ref.name] = value.value;
 		}
-		return { workloadId: row.id, activationVersion: activationVersion(spec), env, files };
+		return {
+			workloadId: row.id,
+			activationVersion: activationVersion(spec, this.attachmentsVersion(row.projectId, row.nodeId, spec.runtime)),
+			env,
+			files,
+		};
 	}
 
 	/** Apply the agent's actual-state report from a heartbeat. */
@@ -314,6 +342,48 @@ export class WorkloadService {
 		};
 	}
 
+	/**
+	 * The node a project must run on because of its attached databases and private storage, or
+	 * null when nothing pins it. Throws when they live on different nodes.
+	 */
+	attachmentNode(projectId: string): string | null {
+		const nodeIds = [
+			...new Set(
+				[this.ctx.databases.requiredNode(projectId), this.ctx.storage.requiredNode(projectId)].filter(
+					(id): id is string => id !== null,
+				),
+			),
+		];
+		if (nodeIds.length > 1)
+			throw new ValidationError(
+				'Attached databases and private storage live on different nodes; detach one, or make the storage public.',
+			);
+		return nodeIds[0] ?? null;
+	}
+
+	/**
+	 * Attachment fingerprint for the activation version. Databases alone keep their existing
+	 * fingerprint, and projects with no attachments keep the plain spec hash (no restart on upgrade).
+	 */
+	private attachmentsVersion(projectId: string, nodeId: string | null, runtime: WorkloadRuntime): string {
+		return [
+			this.ctx.databases.consumerVersion(projectId, nodeId, runtime),
+			this.ctx.storage.consumerVersion(projectId, nodeId, runtime),
+		]
+			.filter(Boolean)
+			.join(':');
+	}
+
+	/** Edge node id (config or first edge), for placement by other services. */
+	edgeNode(): string | null {
+		return this.edgeNodeId();
+	}
+
+	/** Placement candidates with current reservations (workloads + databases). */
+	placementCandidates(): PlacementCandidate[] {
+		return this.candidates();
+	}
+
 	private edgeNodeId(): string | null {
 		if (this.ctx.config.edgeNodeId) return this.ctx.config.edgeNodeId;
 		return (
@@ -349,7 +419,13 @@ export class WorkloadService {
 				 WHERE w.node_id IS NOT NULL AND w.status IN (?, ?, ?) GROUP BY w.node_id`,
 			)
 			.all('pending', 'starting', 'running');
-		return new Map(rows.map((row) => [row.nodeId, row.total ?? 0]));
+		const reserved = new Map(rows.map((row) => [row.nodeId, row.total ?? 0]));
+		// Managed databases and storage share the same slice budget (D55, S1).
+		for (const [nodeId, total] of this.ctx.databases.reservedByNode())
+			reserved.set(nodeId, (reserved.get(nodeId) ?? 0) + total);
+		for (const [nodeId, total] of this.ctx.storage.reservedByNode())
+			reserved.set(nodeId, (reserved.get(nodeId) ?? 0) + total);
+		return reserved;
 	}
 
 	private countByNode(): Map<string, number> {
@@ -368,8 +444,12 @@ export function upstreamFor(projectId: string, spec: WorkloadSpec): string {
 	return `127.0.0.1:${spec.port}`;
 }
 
-/** Stable hash of the parts that affect activation, so the agent knows when to re-fetch values. */
-export function activationVersion(spec: WorkloadSpec): string {
+/**
+ * Stable hash of the parts that affect activation, so the agent knows when to re-fetch values.
+ * `databases` is the attachment fingerprint; it is left out when empty so projects without
+ * databases keep their existing version (no restart on upgrade).
+ */
+export function activationVersion(spec: WorkloadSpec, databases = ''): string {
 	return sha256Hex(
 		JSON.stringify({
 			env: spec.env,
@@ -377,6 +457,7 @@ export function activationVersion(spec: WorkloadSpec): string {
 			command: spec.command,
 			image: spec.image,
 			port: spec.port,
+			...(databases ? { databases } : {}),
 		}),
 	);
 }

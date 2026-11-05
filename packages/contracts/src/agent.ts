@@ -2,6 +2,13 @@ import * as z from 'zod';
 import { accessModes, deploymentStatuses, nodeStatuses, runtimes } from './model.ts';
 import { domainKinds } from './domain.ts';
 import { workloadDesiredSchema, workloadStatuses } from './workload.ts';
+import { databaseMetricBucketSchema, databaseSnapshotSchema } from './database.ts';
+import {
+	storageBucketDeletionSchema,
+	storageBucketSnapshotSchema,
+	storageMetricBucketSchema,
+	storageRouteSchema,
+} from './object-storage.ts';
 import { nodeStorageSchema, nodeStorageStatusSchema } from './storage.ts';
 
 /**
@@ -91,8 +98,14 @@ export const desiredStateSchema = z.object({
 		host: z.string(),
 		to: z.string(),
 	})).default([]),
-	/** Tier 2/3 workloads placed on this node (DESIGN §3.4.1). */
+	/** Tier 2/3 workloads placed on this node (DESIGN §3.4.1), managed databases included. */
 	workloads: z.array(workloadDesiredSchema).default([]),
+	/** Purged databases whose data dir this node must delete, then report (D59). */
+	databasePurges: z.array(z.string()).default([]),
+	/** Public storage endpoints this node serves (S3): byte-for-byte proxies, not sites. */
+	storageRoutes: z.array(storageRouteSchema).default([]),
+	/** Purged storage instances whose data dir this node must delete, then report (S8). */
+	storagePurges: z.array(z.string()).default([]),
 	/** Custom domains this node serves; TLS is on-demand and authorized by the control plane. */
 	domains: z.array(z.object({
 		host: z.string(),
@@ -134,6 +147,12 @@ export const heartbeatSchema = z.object({
 		restarts: z.number().int().nonnegative().default(0),
 		memoryBytes: z.number().int().nonnegative().optional(),
 	})).optional(),
+	/** Database ids whose data dir was deleted after a `databasePurges` entry (D59). */
+	purgedDatabases: z.array(z.string()).optional(),
+	/** Storage instance ids whose data dir was deleted after a `storagePurges` entry (S8). */
+	purgedStorage: z.array(z.string()).optional(),
+	/** Outcomes of `objectStorage.deleteBuckets` entries since the last heartbeat. */
+	storageBucketDeletions: z.array(storageBucketDeletionSchema).max(500).optional(),
 });
 export type Heartbeat = z.infer<typeof heartbeatSchema>;
 
@@ -157,7 +176,15 @@ export type MetricBucket = z.infer<typeof metricBucketSchema>;
 
 export const telemetryBatchSchema = z.object({
 	nodeId: z.string(),
-	buckets: z.array(metricBucketSchema).max(5000),
+	buckets: z.array(metricBucketSchema).max(5000).default([]),
+	/** Managed database samples (D57). */
+	databases: z.array(databaseMetricBucketSchema).max(5000).default([]),
+	/** Latest table snapshot per database (only the newest is kept). */
+	databaseSnapshots: z.array(databaseSnapshotSchema).max(200).default([]),
+	/** Managed object storage samples (S7). */
+	objectStorage: z.array(storageMetricBucketSchema).max(5000).default([]),
+	/** Latest per-bucket usage per storage instance. */
+	objectStorageBuckets: z.array(storageBucketSnapshotSchema).max(200).default([]),
 });
 export type TelemetryBatch = z.infer<typeof telemetryBatchSchema>;
 

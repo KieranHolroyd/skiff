@@ -10,6 +10,9 @@ import {
 } from '@modelcontextprotocol/server';
 import * as z from 'zod';
 import {
+	bucketCreateSchema,
+	databaseAttachSchema,
+	databaseCreateSchema,
 	deployFilesSchema,
 	deploySiteSchema,
 	effectivePermissions,
@@ -23,7 +26,14 @@ import {
 	requirePermission,
 	setAccessSchema,
 	shareLinkCreateSchema,
+	storageAttachSchema,
+	storageCreateSchema,
 	workloadSpecSchema,
+	type DatabaseMetricPoint,
+	type DatabaseView,
+	type StorageGrant,
+	type StorageMetricPoint,
+	type StorageView,
 	type OperationView,
 	type Permission,
 	type Principal,
@@ -64,6 +74,95 @@ const requires =
 			errorDescription: `This tool needs ${missing.join(', ')}. Re-authorize to grant it.`,
 		};
 	};
+
+/** `requires` plus permissions that depend on the call's arguments (e.g. attaching on create). */
+const requiresWith =
+	(base: Permission[], extra: (args: Record<string, unknown>) => Permission[]): ScopeChallengeHandler =>
+	(context) => {
+		const args = (context.request.params as { arguments?: unknown } | undefined)?.arguments;
+		const record = args && typeof args === 'object' ? (args as Record<string, unknown>) : {};
+		return requires(...base, ...extra(record))(context);
+	};
+
+const round = (value: number, digits: number) => Number(value.toFixed(digits));
+
+/**
+ * Last-hour health for `get_database`, from the agent's 1-minute samples (D57). Telemetry
+ * failures degrade to a note: the database view itself is still useful.
+ */
+async function databaseLastHour(principal: Principal, name: string, storageMb: number) {
+	const to = Date.now();
+	let points: DatabaseMetricPoint[];
+	try {
+		points = await core.databases.metrics(principal, name, { from: to - 3_600_000, to, interval: '1m' });
+	} catch (error) {
+		return { note: `Metrics are unavailable: ${(error as Error).message ?? String(error)}` };
+	}
+	if (points.length === 0)
+		return { note: 'No samples in the last hour yet. The agent reports once a minute after the database is running.' };
+	const sorted = [...points].sort((a, b) => a.bucket.localeCompare(b.bucket));
+	const latest = sorted[sorted.length - 1]!;
+	const sum = (key: keyof Omit<DatabaseMetricPoint, 'bucket'>) => sorted.reduce((total, point) => total + point[key], 0);
+	const hit = sum('blksHit');
+	const read = sum('blksRead');
+	return {
+		samples: sorted.length,
+		latestAt: latest.bucket,
+		up: latest.up >= 0.5,
+		sizeBytes: latest.sizeBytes,
+		storageBudgetBytes: storageMb * 1024 * 1024,
+		storageUsedRatio: round(latest.sizeBytes / (storageMb * 1024 * 1024), 4),
+		connections: {
+			total: latest.connectionsTotal,
+			active: latest.connectionsActive,
+			idle: latest.connectionsIdle,
+			max: latest.maxConnections,
+			usedRatio: latest.maxConnections > 0 ? round(latest.connectionsTotal / latest.maxConnections, 4) : null,
+		},
+		commitsPerMinute: round(sum('xactCommit') / sorted.length, 1),
+		rollbacksPerMinute: round(sum('xactRollback') / sorted.length, 1),
+		cacheHitRatio: hit + read > 0 ? round(hit / (hit + read), 4) : null,
+		deadlocks: sum('deadlocks'),
+	};
+}
+
+/** Last-hour usage for `get_storage`, from the agent's 1-minute samples (S7). Failures degrade to a note. */
+async function storageLastHour(principal: Principal, name: string, storageMb: number) {
+	const to = Date.now();
+	let points: StorageMetricPoint[];
+	try {
+		points = await core.storage.metrics(principal, name, { from: to - 3_600_000, to, interval: '1m' });
+	} catch (error) {
+		return { note: `Metrics are unavailable: ${(error as Error).message ?? String(error)}` };
+	}
+	if (points.length === 0)
+		return { note: 'No samples in the last hour yet. The agent reports once a minute after the instance is running.' };
+	const sorted = [...points].sort((a, b) => a.bucket.localeCompare(b.bucket));
+	const latest = sorted[sorted.length - 1]!;
+	const budget = storageMb * 1024 * 1024;
+	return {
+		samples: sorted.length,
+		latestAt: latest.bucket,
+		up: latest.up >= 0.5,
+		usedBytes: latest.usedBytes,
+		storageBudgetBytes: budget,
+		storageUsedRatio: round(latest.usedBytes / budget, 4),
+		objects: latest.objects,
+		buckets: latest.bucketCount,
+		memoryBytes: latest.memoryBytes,
+	};
+}
+
+/** `attach_storage` without grants: read-write on the instance's only bucket, else ask for grants. */
+function defaultStorageGrants(principal: Principal, name: string): StorageGrant[] {
+	const buckets = core.storage.get(principal, name).buckets.filter((bucket) => bucket.state === 'ready');
+	if (buckets.length === 1) return [{ bucket: buckets[0]!.name, mode: 'read-write' }];
+	throw new Error(
+		buckets.length === 0
+			? `Storage "${name}" has no buckets yet. Create one with create_bucket, then attach.`
+			: `Storage "${name}" has ${buckets.length} buckets (${buckets.map((bucket) => bucket.name).join(', ')}). Pass grants to pick which ones.`,
+	);
+}
 
 const text = (value: unknown) => ({
 	content: [
@@ -758,6 +857,411 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 		async () => run(() => ({ capacity: core.workloads.capacity(principal) })),
 	);
 
+	// --- managed databases (docs/DATABASES.md; no credentials or purge over MCP, D58/D53) ----
+	const connectionNote =
+		'Attached apps get <PREFIX>_URL, _HOST, _PORT, _USER, _PASSWORD and _NAME injected at activation (PREFIX defaults to DATABASE), ' +
+		"so read DATABASE_URL from the environment; never hard-code credentials. An app must run on the database's node: " +
+		"placement `auto` handles that, an explicit placement on another node is rejected.";
+
+	tool(
+		'list_databases',
+		{
+			title: 'List databases',
+			description: 'List managed Postgres databases in the org with status, node, size and attached projects.',
+			inputSchema: z.object({
+				includeDeleted: z.boolean().default(false).describe('Also list databases in the trash'),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('database:read'),
+		},
+		async ({ includeDeleted }) => run(() => ({ databases: core.databases.list(principal, { includeDeleted }) })),
+	);
+
+	tool(
+		'get_database',
+		{
+			title: 'Get database',
+			description:
+				'Get one managed database: status, node, limits, attachments, the largest tables, and a last-hour summary ' +
+				'(latest size vs the storage budget, connections vs max_connections, commits/min, cache hit ratio). Never includes credentials.',
+			inputSchema: z.object({ database: z.string().describe('Database name') }),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('database:read'),
+		},
+		async ({ database }) =>
+			run(async () => {
+				const view = core.databases.get(principal, database, { includeDeleted: true });
+				return { ...view, lastHour: await databaseLastHour(principal, view.name, view.storageMb) };
+			}),
+	);
+
+	tool(
+		'create_database',
+		{
+			title: 'Create database',
+			description:
+				'Create a managed Postgres database (v16 or v17, default 17). Pass `project` to attach it in the same call; ' +
+				`the database is then placed on that project's node. ${connectionNote}`,
+			inputSchema: databaseCreateSchema,
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requiresWith(['database:create'], (args) => (args.project ? ['project:update'] : [])),
+		},
+		async (input) =>
+			run(() => {
+				const view = core.databases.create(principal, input);
+				const attached = view.attachments[0];
+				return {
+					database: view,
+					nextSteps: attached
+						? [
+								`"${attached.projectSlug}" receives ${attached.envNames.join(', ')} at its next activation (a running app restarts on its own).`,
+								`The database starts on node "${view.nodeName ?? view.nodeId}"; follow it with get_database.`,
+							]
+						: [
+								`Attach it to an app with attach_database({ project, database: "${view.name}" }).`,
+								`The database starts on node "${view.nodeName ?? view.nodeId}"; follow it with get_database.`,
+							],
+				};
+			}),
+	);
+
+	tool(
+		'attach_database',
+		{
+			title: 'Attach database',
+			description:
+				`Connect a database to a process or container project. ${connectionNote} ` +
+				'Attaching re-activates (restarts) a running app; no redeploy is needed if it already runs on the database node.',
+			inputSchema: databaseAttachSchema.extend({ project: z.string().describe('Project slug') }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('database:update', 'project:update'),
+		},
+		async ({ project, ...input }) =>
+			run(() => {
+				const result = core.databases.attach(principal, core.projects.requireRow(principal, project), input);
+				return {
+					...result,
+					nextSteps: [
+						`Read ${result.attachment.envPrefix}_URL in the app; it is injected at activation.`,
+						...(result.warning ? [result.warning] : []),
+					],
+				};
+			}),
+	);
+
+	tool(
+		'detach_database',
+		{
+			title: 'Detach database',
+			description:
+				'Disconnect a database from a project. The app restarts without its <PREFIX>_* variables; the database and its data are untouched.',
+			inputSchema: z.object({
+				project: z.string().describe('Project slug'),
+				database: z.string().describe('Database name'),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+			scopeChallenge: requires('database:update', 'project:update'),
+		},
+		async ({ project, database }) =>
+			run(() => {
+				core.databases.detach(principal, core.projects.requireRow(principal, project), database);
+				return { ok: true, project, database };
+			}),
+	);
+
+	tool(
+		'delete_database',
+		{
+			title: 'Delete database',
+			description:
+				'Soft-delete a database: its container stops, the data stays on the node and it can be restored for 7 days. ' +
+				'Refused while projects are attached (detach_database first). Requires confirmation. Permanent deletion is dashboard/CLI only.',
+			inputSchema: z.object({ database: z.string().describe('Database name') }),
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+			scopeChallenge: requires('database:read', 'database:delete'),
+		},
+		async ({ database }, ctx) => {
+			if (era === 'legacy')
+				return {
+					isError: true,
+					...text(
+						`Deleting database "${database}" needs your confirmation, which this MCP client can't show. ` +
+							`Ask the user to delete it from the Skiff dashboard: ${core.ctx.config.platformOrigin}/databases/${encodeURIComponent(database)}`,
+					),
+				};
+			const key = `confirm_delete_database:${database}`;
+			const schema = z.object({ confirm: z.boolean() });
+			// Only an answer to a prompt we issued (signed requestState bound to this target) counts.
+			const prompted = verifyConfirmation(ctx.mcpReq.requestState(), principal, 'delete_database', database);
+			const answer = prompted ? acceptedContent(ctx.mcpReq.inputResponses, key, schema) : undefined;
+			const responded = prompted && ctx.mcpReq.inputResponses?.[key] !== undefined;
+			if (responded && answer?.confirm !== true) {
+				const cancelled = text(`Cancelled: database "${database}" was not deleted (the user did not confirm).`);
+				declined.add(cancelled);
+				return cancelled;
+			}
+			if (answer?.confirm !== true) {
+				// Fail before prompting when the delete can't succeed (unknown, or still attached).
+				let view: DatabaseView;
+				try {
+					view = core.databases.get(principal, database);
+				} catch (error) {
+					return run(() => {
+						throw error;
+					});
+				}
+				if (view.attachments.length > 0)
+					return {
+						isError: true,
+						...text(
+							`Database "${database}" is attached to ${view.attachments.map((item) => item.projectSlug).join(', ')}. ` +
+								'Detach it with detach_database first.',
+						),
+					};
+				return inputRequired({
+					inputRequests: {
+						[key]: inputRequired.elicit({
+							message:
+								`Delete database "${database}"? Its container stops now; the data stays on node ` +
+								`"${view.nodeName ?? view.nodeId}" and it can be restored for 7 days.`,
+							requestedSchema: schema,
+						}),
+					},
+					requestState: mintConfirmation(principal, 'delete_database', database),
+				});
+			}
+			return run(() => {
+				const view = core.databases.delete(principal, database);
+				return {
+					ok: true,
+					database: view.name,
+					restorable: true,
+					restoreBefore: view.purgeAt,
+					nextSteps: ['A human can restore it from the dashboard or with `skif db restore`.'],
+				};
+			});
+		},
+	);
+
+	// --- managed object storage (docs/OBJECT-STORAGE.md; no key reveal, bucket force-delete or purge over MCP) ----
+	const storageNote =
+		'Attached apps get a scoped key injected at activation as <PREFIX>_ENDPOINT_URL, _ACCESS_KEY_ID, _SECRET_ACCESS_KEY, _REGION ' +
+		'and _FORCE_PATH_STYLE, plus _BUCKET when exactly one bucket is granted and _PUBLIC_ENDPOINT_URL when the instance is public. ' +
+		'PREFIX defaults to S3; use AWS to get the names the AWS SDKs read on their own (AWS_ENDPOINT_URL, AWS_ACCESS_KEY_ID, …). ' +
+		'Clients must use path-style addressing (forcePathStyle: true / addressing_style "path"); never hard-code keys. ' +
+		"A private instance is reachable only from apps on its node (placement `auto` handles that); a public one from anywhere.";
+
+	tool(
+		'list_storage',
+		{
+			title: 'List object storage',
+			description:
+				'List managed S3-compatible object storage instances (RustFS) in the org with status, node, usage, buckets and attached projects.',
+			inputSchema: z.object({
+				includeDeleted: z.boolean().default(false).describe('Also list instances in the trash'),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('storage:read'),
+		},
+		async ({ includeDeleted }) => run(() => ({ storage: core.storage.list(principal, { includeDeleted }) })),
+	);
+
+	tool(
+		'get_storage',
+		{
+			title: 'Get object storage',
+			description:
+				'Get one object storage instance: status, node, endpoints, buckets (access, size, objects), attachments and a last-hour ' +
+				'summary (bytes used vs the storage budget, objects, memory). Never includes keys.',
+			inputSchema: z.object({ storage: z.string().describe('Storage instance name') }),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('storage:read'),
+		},
+		async ({ storage }) =>
+			run(async () => {
+				const view = core.storage.get(principal, storage, { includeDeleted: true });
+				return { ...view, lastHour: await storageLastHour(principal, view.name, view.storageMb) };
+			}),
+	);
+
+	tool(
+		'create_storage',
+		{
+			title: 'Create object storage',
+			description:
+				'Create a managed S3-compatible object storage instance (RustFS). `buckets` creates private buckets right away; pass ' +
+				'`project` (with at least one bucket) to attach it read-write in the same call, and `public: true` to serve it at ' +
+				`https://<name>--s3.<domain> for browsers or apps on other nodes. ${storageNote}`,
+			inputSchema: storageCreateSchema,
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requiresWith(['storage:create'], (args) => (args.project ? ['project:update'] : [])),
+		},
+		async (input) =>
+			run(() => {
+				const view = core.storage.create(principal, input);
+				const attached = view.attachments[0];
+				const where = `The instance starts on node "${view.nodeName ?? view.nodeId}"; follow it with get_storage.`;
+				return {
+					storage: view,
+					nextSteps: attached
+						? [
+								`"${attached.projectSlug}" receives ${attached.envNames.join(', ')} at its next activation (a running app restarts on its own).`,
+								where,
+							]
+						: [
+								...(view.buckets.length === 0
+									? [`Create a bucket with create_bucket({ storage: "${view.name}", name }).`]
+									: []),
+								`Attach it to an app with attach_storage({ project, storage: "${view.name}" }).`,
+								where,
+							],
+				};
+			}),
+	);
+
+	tool(
+		'create_bucket',
+		{
+			title: 'Create bucket',
+			description:
+				'Create a bucket in an object storage instance. Names are 3–63 lowercase letters, digits and single hyphens (no dots). ' +
+				'`access: "public-read"` allows unsigned GETs of objects (not listing); the default is private. ' +
+				'Grant it to an app with attach_storage, or by changing an existing attachment from the dashboard or CLI.',
+			inputSchema: bucketCreateSchema.extend({ storage: z.string().describe('Storage instance name') }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('storage:update'),
+		},
+		async ({ storage, ...input }) => run(() => ({ bucket: core.storage.createBucket(principal, storage, input) })),
+	);
+
+	tool(
+		'attach_storage',
+		{
+			title: 'Attach object storage',
+			description:
+				`Give a process or container project a scoped key to some buckets of a storage instance. ${storageNote} ` +
+				'Omit `grants` to grant read-write on the only bucket (refused when the instance has several). ' +
+				'Attaching re-activates (restarts) a running app.',
+			inputSchema: storageAttachSchema.extend({
+				project: z.string().describe('Project slug'),
+				grants: storageAttachSchema.shape.grants
+					.optional()
+					.describe('Buckets and modes ({ bucket, mode: "read" | "read-write" }); defaults to read-write on the only bucket'),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('storage:update', 'project:update'),
+		},
+		async ({ project, grants, ...input }) =>
+			run(() => {
+				const row = core.projects.requireRow(principal, project);
+				const resolved = grants ?? defaultStorageGrants(principal, input.storage);
+				const result = core.storage.attach(principal, row, { ...input, grants: resolved });
+				return {
+					...result,
+					nextSteps: [
+						`Read ${result.attachment.envNames.join(', ')} in the app; they are injected at activation. Use path-style addressing.`,
+						...(result.warning ? [result.warning] : []),
+					],
+				};
+			}),
+	);
+
+	tool(
+		'detach_storage',
+		{
+			title: 'Detach object storage',
+			description:
+				"Revoke a project's key to a storage instance. The app restarts without its <PREFIX>_* variables; the buckets and objects are untouched.",
+			inputSchema: z.object({
+				project: z.string().describe('Project slug'),
+				storage: z.string().describe('Storage instance name'),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+			scopeChallenge: requires('storage:update', 'project:update'),
+		},
+		async ({ project, storage }) =>
+			run(() => {
+				core.storage.detach(principal, core.projects.requireRow(principal, project), storage);
+				return { ok: true, project, storage };
+			}),
+	);
+
+	tool(
+		'delete_storage',
+		{
+			title: 'Delete object storage',
+			description:
+				'Soft-delete an object storage instance: its container and public endpoint stop, the data stays on the node and it can be ' +
+				'restored for 7 days. Refused while projects are attached (detach_storage first). Requires confirmation. ' +
+				'Permanent deletion is dashboard/CLI only.',
+			inputSchema: z.object({ storage: z.string().describe('Storage instance name') }),
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+			scopeChallenge: requires('storage:read', 'storage:delete'),
+		},
+		async ({ storage }, ctx) => {
+			if (era === 'legacy')
+				return {
+					isError: true,
+					...text(
+						`Deleting storage "${storage}" needs your confirmation, which this MCP client can't show. ` +
+							`Ask the user to delete it from the Skiff dashboard: ${core.ctx.config.platformOrigin}/storage/${encodeURIComponent(storage)}`,
+					),
+				};
+			const key = `confirm_delete_storage:${storage}`;
+			const schema = z.object({ confirm: z.boolean() });
+			// Only an answer to a prompt we issued (signed requestState bound to this target) counts.
+			const prompted = verifyConfirmation(ctx.mcpReq.requestState(), principal, 'delete_storage', storage);
+			const answer = prompted ? acceptedContent(ctx.mcpReq.inputResponses, key, schema) : undefined;
+			const responded = prompted && ctx.mcpReq.inputResponses?.[key] !== undefined;
+			if (responded && answer?.confirm !== true) {
+				const cancelled = text(`Cancelled: storage "${storage}" was not deleted (the user did not confirm).`);
+				declined.add(cancelled);
+				return cancelled;
+			}
+			if (answer?.confirm !== true) {
+				// Fail before prompting when the delete can't succeed (unknown, or still attached).
+				let view: StorageView;
+				try {
+					view = core.storage.get(principal, storage);
+				} catch (error) {
+					return run(() => {
+						throw error;
+					});
+				}
+				if (view.attachments.length > 0)
+					return {
+						isError: true,
+						...text(
+							`Storage "${storage}" is attached to ${view.attachments.map((item) => item.projectSlug).join(', ')}. ` +
+								'Detach it with detach_storage first.',
+						),
+					};
+				const buckets = view.buckets.length === 1 ? '1 bucket' : `${view.buckets.length} buckets`;
+				return inputRequired({
+					inputRequests: {
+						[key]: inputRequired.elicit({
+							message:
+								`Delete storage "${storage}" (${buckets})? Its container${view.public ? ' and public endpoint' : ''} stop now; ` +
+								`the data stays on node "${view.nodeName ?? view.nodeId}" and it can be restored for 7 days.`,
+							requestedSchema: schema,
+						}),
+					},
+					requestState: mintConfirmation(principal, 'delete_storage', storage),
+				});
+			}
+			return run(() => {
+				const view = core.storage.delete(principal, storage);
+				return {
+					ok: true,
+					storage: view.name,
+					restorable: true,
+					restoreBefore: view.purgeAt,
+					nextSteps: ['A human can restore it from the dashboard or with `skif storage restore`.'],
+				};
+			});
+		},
+	);
+
 	// --- access -------------------------------------------------------------
 	tool(
 		'set_access',
@@ -993,6 +1497,61 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 						'`_headers` (Netlify syntax): a path line followed by indented `Name: value` lines.',
 						'',
 						'`skiff.json`: `{ "spa": bool, "cleanUrls": bool, "trailingSlash": "always"|"never"|"ignore", "notFound": "/404.html" }`.',
+					].join('\n'),
+				},
+			],
+		}),
+	);
+	server.registerResource(
+		'databases',
+		'skiff://guides/databases',
+		{ title: 'Managed databases', mimeType: 'text/markdown' },
+		async (uri) => ({
+			contents: [
+				{
+					uri: uri.href,
+					text: [
+						'# Managed databases',
+						'',
+						'Skiff runs managed PostgreSQL (16 or 17) as an org resource on one node. Create one with `create_database`; pass `project` to attach it to an app in the same call.',
+						'',
+						'An attached process or container project receives `<PREFIX>_URL`, `_HOST`, `_PORT`, `_USER`, `_PASSWORD` and `_NAME` at activation (`PREFIX` defaults to `DATABASE`, so read `DATABASE_URL`). Use a different prefix per database when a project has several. Static projects cannot use databases.',
+						'',
+						"Apps and their databases share a node in v1. A project with attachments is placed on the database's node at deploy time, so `auto` placement just works; an explicit placement on another node is rejected. If `attach_database` warns that the app runs elsewhere, redeploy it.",
+						'',
+						'Credentials are never returned over MCP: apps get them injected, and humans can reveal them from the dashboard or `skif db credentials`.',
+						'',
+						'`get_database` shows status, the largest tables and a last-hour summary (size vs storage budget, connections vs max_connections, commits/min, cache hit ratio).',
+						'',
+						'`delete_database` is a confirmed soft delete (restorable for 7 days) and is refused while projects are attached; `detach_database` first. Permanent deletion is dashboard/CLI only.',
+					].join('\n'),
+				},
+			],
+		}),
+	);
+
+	server.registerResource(
+		'storage',
+		'skiff://guides/storage',
+		{ title: 'Managed object storage', mimeType: 'text/markdown' },
+		async (uri) => ({
+			contents: [
+				{
+					uri: uri.href,
+					text: [
+						'# Managed object storage',
+						'',
+						'Skiff runs S3-compatible object storage (RustFS) as an org resource on one node. Create an instance with `create_storage` (pass `buckets` to create private buckets, and `project` to attach it in the same call), and more buckets with `create_bucket`.',
+						'',
+						'An attached process or container project receives its own scoped key at activation: `<PREFIX>_ENDPOINT_URL`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`, `_REGION` and `_FORCE_PATH_STYLE`, plus `_BUCKET` when exactly one bucket is granted and `_PUBLIC_ENDPOINT_URL` when the instance is public. `PREFIX` defaults to `S3`; `AWS` gives the names the AWS SDKs read on their own. Static projects cannot use storage.',
+						'',
+						'Always use path-style addressing (`forcePathStyle: true` in the AWS JS SDK, `addressing_style: "path"` in boto3); virtual-hosted bucket URLs do not resolve.',
+						'',
+						'Each attachment grants `read` or `read-write` per bucket. A private instance is reachable only from apps on its node, so a project attached to one is placed there at deploy time; a public instance (`https://<name>--s3.<domain>`) works from any node and from browsers (presigned URLs). A `public-read` bucket serves objects without a signature.',
+						'',
+						'Keys are never returned over MCP: apps get them injected, and humans can reveal the root key from the dashboard or `skif storage credentials`.',
+						'',
+						'`delete_storage` is a confirmed soft delete (restorable for 7 days) and is refused while projects are attached; `detach_storage` first. Deleting non-empty buckets and permanent deletion are dashboard/CLI only.',
 					].join('\n'),
 				},
 			],

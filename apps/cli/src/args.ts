@@ -10,17 +10,19 @@ export { UsageError };
 
 export type FlagDef =
 	| { type: 'boolean'; short?: string; default?: boolean; description?: string }
-	| { type: 'string'; short?: string; default?: string; description?: string };
+	| { type: 'string'; short?: string; default?: string; description?: string; multiple?: boolean };
 
 export type FlagSpec = Record<string, FlagDef>;
 
 export class ParsedArgs {
 	readonly positionals: string[];
 	private readonly values: Map<string, string | boolean>;
+	private readonly lists: Map<string, string[]>;
 
-	constructor(positionals: string[], values: Map<string, string | boolean>) {
+	constructor(positionals: string[], values: Map<string, string | boolean>, lists = new Map<string, string[]>()) {
 		this.positionals = positionals;
 		this.values = values;
+		this.lists = lists;
 	}
 
 	has(name: string): boolean {
@@ -36,11 +38,21 @@ export class ParsedArgs {
 		const value = this.values.get(name);
 		return value === true;
 	}
+
+	/** Every value of a `multiple` string option, in order (`string()` returns the last). */
+	strings(name: string): string[] {
+		return [...(this.lists.get(name) ?? [])];
+	}
 }
 
 export function parseArgs(argv: string[], spec: FlagSpec): ParsedArgs {
 	const values = new Map<string, string | boolean>();
+	const lists = new Map<string, string[]>();
 	const aliases = new Map<string, string>();
+	const setString = (name: string, value: string) => {
+		values.set(name, value);
+		if (spec[name]?.type === 'string' && spec[name].multiple) lists.set(name, [...(lists.get(name) ?? []), value]);
+	};
 	for (const [name, def] of Object.entries(spec)) {
 		if (def.default !== undefined) values.set(name, def.default);
 		if (def.short) aliases.set(def.short, name);
@@ -85,12 +97,12 @@ export function parseArgs(argv: string[], spec: FlagSpec): ParsedArgs {
 
 			if (negated) throw new UsageError(`--no-${name} is only valid for boolean options.`);
 			if (inlineValue !== undefined) {
-				values.set(name, inlineValue);
+				setString(name, inlineValue);
 				continue;
 			}
 			const next = argv[i + 1];
 			if (next === undefined) throw new UsageError(`Option --${name} needs a value.`);
-			values.set(name, next);
+			setString(name, next);
 			i++;
 			continue;
 		}
@@ -107,16 +119,16 @@ export function parseArgs(argv: string[], spec: FlagSpec): ParsedArgs {
 			continue;
 		}
 		if (rest) {
-			values.set(name, rest.startsWith('=') ? rest.slice(1) : rest);
+			setString(name, rest.startsWith('=') ? rest.slice(1) : rest);
 			continue;
 		}
 		const next = argv[i + 1];
 		if (next === undefined) throw new UsageError(`Option -${short} needs a value.`);
-		values.set(name, next);
+		setString(name, next);
 		i++;
 	}
 
-	return new ParsedArgs(positionals, values);
+	return new ParsedArgs(positionals, values, lists);
 }
 
 function parseBoolean(value: string, flag: string): boolean {

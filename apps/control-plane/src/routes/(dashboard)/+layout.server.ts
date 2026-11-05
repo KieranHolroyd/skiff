@@ -2,6 +2,7 @@ import { error, redirect } from '@sveltejs/kit';
 import { hasPermission } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
 import { contentDomain, platformOrigin, sharedDomain } from '#lib/server/config.js';
+import { availableUpdate, canManagePlatform } from '#lib/server/self-update.js';
 import type { LayoutServerLoad } from './$types';
 
 /**
@@ -77,6 +78,11 @@ export const load: LayoutServerLoad = ({ locals, url, cookies }) => {
 		/** shadcn sidebar persists its collapsed state in this cookie. */
 		sidebarOpen: cookies.get('sidebar_state') !== 'false',
 		/** Shared-domain mode is warned about persistently (DESIGN §5, D19). */
-		sharedDomain
+		sharedDomain,
+		/**
+		 * Platform admins see an "update available" marker. Streamed (not awaited) so a slow GitHub
+		 * check never holds up navigation; the check itself is cached for five minutes.
+		 */
+		updateAvailable: canManagePlatform(principal) ? availableUpdate().catch(() => null) : null
 	};
 };

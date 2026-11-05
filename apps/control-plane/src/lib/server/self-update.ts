@@ -165,6 +165,18 @@ export function compareToRunning(latest: LatestVersion): VersionComparison {
 	};
 }
 
+/**
+ * The newer version the dashboard shell flags to platform admins, or null (none, the check failed,
+ * an update is already under way, or this is not an installed release). Uses the cached check.
+ */
+export async function availableUpdate(): Promise<{ current: string; latest: string } | null> {
+	if (selfUpdateAvailability() === 'unmanaged' || updateInFlight()) return null;
+	const comparison = compareToRunning(await latestVersion(updateSource()));
+	return comparison.available && comparison.latest
+		? { current: comparison.current, latest: comparison.latest }
+		: null;
+}
+
 export type UpdateStatusView = SelfUpdateStatus & { stale: boolean };
 
 /** The updater's last (or in-flight) run; null when it has never run on this host. */
