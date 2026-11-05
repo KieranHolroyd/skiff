@@ -84,6 +84,16 @@ class FakeRuntime implements HelperRuntime {
 		this.calls.push(`rotate:${id}:${role}`);
 	}
 
+	async applyDatabaseCredential(
+		id: string,
+		action: string,
+		role: string,
+		username: string,
+		password?: string,
+	): Promise<void> {
+		this.calls.push(`credential:${id}:${action}:${role}:${username}:${password ?? ''}`);
+	}
+
 	async restartPooler(id: string): Promise<void> {
 		this.calls.push(`restart-pooler:${id}`);
 	}
@@ -381,6 +391,36 @@ describe('helper HTTP surface', () => {
 
 		const bad = await handler(runtime)(post('/v1/volumes/verify', { mountPath: 'mnt/data', sourceKey: 'fs:x' }));
 		expect(bad.status).toBe(400);
+	});
+
+	test('applies a named database credential without exposing it in the response', async () => {
+		const runtime = new FakeRuntime();
+		const response = await handler(runtime)(
+			post('/v1/workloads/db_abc123/credential', {
+				action: 'grant',
+				role: 'readonly',
+				username: 'skiff_readonly_deadbeef',
+				password: 'abcdefghijklmnop',
+			}),
+		);
+		expect(response.status).toBe(200);
+		const body = await response.json();
+		expect(body).toEqual({ ok: true, credential: { action: 'grant', role: 'readonly' } });
+		expect(runtime.calls).toEqual([
+			'credential:db_abc123:grant:readonly:skiff_readonly_deadbeef:abcdefghijklmnop',
+		]);
+		expect(JSON.stringify(body)).not.toContain('abcdefghijklmnop');
+	});
+
+	test('rejects an invalid credential action', async () => {
+		const response = await handler()(
+			post('/v1/workloads/db_abc123/credential', {
+				action: 'drop',
+				role: 'app',
+				username: 'skiff_app_deadbeef',
+			}),
+		);
+		expect(response.status).toBe(400);
 	});
 
 	test('rejects oversized bodies', async () => {

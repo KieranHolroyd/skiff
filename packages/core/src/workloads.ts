@@ -2,6 +2,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { deployments, nodes, projects, releases, workloads } from '@skiff/db';
 import {
 	canViewPlatform,
+	orgNetworkName,
 	requirePermission,
 	workloadSpecSchema,
 	type NodeCapacityView,
@@ -13,6 +14,7 @@ import {
 	type WorkloadStatus,
 	type WorkloadView,
 } from '@skiff/contracts';
+import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
 import { CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { resolvePlacement, type PlacementCandidate } from './placement.ts';
@@ -242,11 +244,13 @@ export class WorkloadService {
 				.from(releases)
 				.where(eq(releases.id, deployment.releaseId))
 				.get();
+			const isolated = featureEnabled(this.ctx.config, 'ORG_NETWORKS');
 			return {
 				id: workload.id,
 				projectId: project.id,
 				projectSlug: project.slug,
 				deploymentId: deployment.id,
+				...(isolated ? { orgId: project.orgId, networkName: orgNetworkName(project.orgId) } : {}),
 				runtime: workload.runtime,
 				status: workload.status,
 				release: release?.sha256 ?? null,

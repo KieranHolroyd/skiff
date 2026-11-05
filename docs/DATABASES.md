@@ -229,3 +229,26 @@ value. A failed rotation leaves the old secret in place and records the error.
   the database's node, behind `platform` access, `database:console`, audited, idle-stopped (D60).
 - Cross-node access via a node private address; more engines (MySQL, Valkey); bulk actions and
   prune for databases; PITR (pgBackRest/WAL-G) on top of the logical backups.
+
+## 14. Per-org networks and named credentials (plan 04b)
+
+When `SKIFF_FEATURE_ORG_NETWORKS` is on, each workload carries `orgId` and `networkName` in desired
+state and the helper renders `skiff-org-<orgId>.network`. Only that org's containers join it, so
+aliases such as `db-<id>` resolve only inside the org. Workloads without `orgId` keep the legacy
+`skiff-workloads` network, so old desired state and running installs continue to converge unchanged.
+Caddy still proxies to `127.0.0.1:<port>`; it never joins a tenant network. Database ports remain
+loopback-only.
+
+`database_credentials` stores named `owner`, `app`, `monitor`, `readonly` and `backup` roles. Owner
+and monitor rows are created with the database; app/read-only/backup rows are opt-in. A new or
+rotated secret is sealed in `pending_secret_sealed` until the node confirms the Postgres role
+change, so a failed apply never locks an app out. Attachments reference the built-in owner
+credential row. Revealing a named credential needs `database:credentials`, an interactive user
+session (MCP/API keys never receive secrets) and writes `database.credentials.reveal` to the audit
+log. Creates, rotations and revocations are audited too.
+
+**Rollback / existing installs:** the network name is derived, not stored, so turning the flag off
+returns every workload to `skiff-workloads` on its next activation. The migration is additive
+(`0023_org_networks.sql`); existing databases are backfilled with owner/monitor credential rows and
+existing attachments stay NULL (they keep using their current secret). Reverting the release is a
+pre-restore snapshot/rollback; no table or column is dropped.

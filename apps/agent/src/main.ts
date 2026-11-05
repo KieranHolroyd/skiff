@@ -16,6 +16,7 @@ import { CertProbe, certProbeTargets, tlsCertReader } from './certs.ts';
 import { buildCaddyConfig, isProductionRoute, tlsSubjects } from './caddy-config.ts';
 import { loadConfig, type AgentConfig } from './config.ts';
 import { DatabaseBackupRunner } from './database-backups.ts';
+import { DatabaseCredentialRunner } from './database-credentials.ts';
 import { DatabasePoolerRestartRunner } from './database-pooler-restarts.ts';
 import { DatabaseRotationRunner } from './database-rotations.ts';
 import { DATABASE_STATS_INTERVAL_MS, DatabaseStatsSampler } from './database-stats.ts';
@@ -80,6 +81,7 @@ class AgentRuntime {
 	private readonly databaseStats: DatabaseStatsSampler;
 	private readonly databaseBackups: DatabaseBackupRunner;
 	private readonly databaseRotations: DatabaseRotationRunner;
+	private readonly databaseCredentials: DatabaseCredentialRunner;
 	private readonly databasePoolerRestarts: DatabasePoolerRestartRunner;
 	private readonly storageAdmin: StorageReconciler;
 	private readonly storageStats: StorageStatsSampler;
@@ -151,6 +153,12 @@ class AgentRuntime {
 		this.databaseStats = new DatabaseStatsSampler({ source: this.workloads, log });
 		this.databaseBackups = new DatabaseBackupRunner({ helper: this.helper, log });
 		this.databaseRotations = new DatabaseRotationRunner({
+			controlUrl: config.controlUrl,
+			nodeToken: config.nodeToken,
+			helper: this.helper,
+			log,
+		});
+		this.databaseCredentials = new DatabaseCredentialRunner({
 			controlUrl: config.controlUrl,
 			nodeToken: config.nodeToken,
 			helper: this.helper,
@@ -229,6 +237,7 @@ class AgentRuntime {
 			this.databaseStatsLoop(),
 			this.databaseBackupLoop(),
 			this.databaseRotationLoop(),
+			this.databaseCredentialLoop(),
 			this.databasePoolerRestartLoop(),
 			this.storageAdminLoop(),
 			this.storageStatsLoop(),
@@ -582,6 +591,20 @@ class AgentRuntime {
 		}
 	}
 
+	private async databaseCredentialLoop(): Promise<void> {
+		while (this.running) {
+			await sleep(5_000, this.shutdownController.signal).catch(() => undefined);
+			if (!this.running) break;
+			const state = this.desired;
+			if (!state) continue;
+			try {
+				await this.databaseCredentials.runOnce(state, this.shutdownController.signal);
+			} catch (error) {
+				log('warn', `Database credential task failed: ${errorText(error)}`);
+			}
+		}
+	}
+
 	// --- heartbeat -----------------------------------------------------------
 
 	private async heartbeatLoop(): Promise<void> {
@@ -623,6 +646,7 @@ class AgentRuntime {
 		const volumeInventory = await this.volumeInventoryForHeartbeat();
 		const backupResults = this.databaseBackups.pendingResults();
 		const rotationResults = this.databaseRotations.pendingResults();
+		const credentialResults = this.databaseCredentials.pendingResults();
 		const poolerRestarted = this.databasePoolerRestarts.pending();
 		// Bucket deletions are reported once, capped by the heartbeat schema (S8).
 		const storageBucketDeletions = this.storageAdmin.pendingBucketDeletions().slice(0, 500);
@@ -645,6 +669,7 @@ class AgentRuntime {
 			...(reports.length > 0 ? { workloads: workloadHeartbeat(reports) } : {}),
 			...(backupResults.length > 0 ? { databaseBackupResults: backupResults } : {}),
 			...(rotationResults.length > 0 ? { databaseRotationResults: rotationResults } : {}),
+			...(credentialResults.length > 0 ? { databaseCredentialResults: credentialResults } : {}),
 			...(poolerRestarted.length > 0 ? { databasePoolerRestarted: poolerRestarted } : {}),
 			...(purgedDatabases.length > 0 ? { purgedDatabases } : {}),
 			...(purgedStorage.length > 0 ? { purgedStorage } : {}),
@@ -673,6 +698,7 @@ class AgentRuntime {
 		}
 		this.databaseBackups.acknowledge(backupResults.map((result) => result.taskId));
 		this.databaseRotations.acknowledge(rotationResults.map((result) => result.taskId));
+		this.databaseCredentials.acknowledge(credentialResults.map((result) => result.taskId));
 		this.databasePoolerRestarts.acknowledge(poolerRestarted);
 		this.workloads.acknowledgePurgedDatabases(purgedDatabases);
 		this.workloads.acknowledgePurgedStorage(purgedStorage);

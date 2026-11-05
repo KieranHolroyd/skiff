@@ -72,6 +72,44 @@ export type WorkloadSpec = z.infer<typeof workloadSpecSchema>;
 export const workloadStatuses = ['pending', 'starting', 'running', 'failed', 'stopped'] as const;
 export type WorkloadStatus = (typeof workloadStatuses)[number];
 
+/** The pre-isolation network every container joined; kept as the fallback for old desired state. */
+export const DEFAULT_WORKLOAD_NETWORK = 'skiff-workloads';
+export const ORG_NETWORK_PREFIX = 'skiff-org-';
+
+/**
+ * Derive an org's private Podman network name. The name is not stored: it is a pure function of
+ * the org id, so old desired-state documents and new ones agree without a migration.
+ */
+export function orgNetworkName(orgId: string): string {
+	const label = orgId
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z0-9_-]+/g, '-')
+		.replace(/^-+|-+$/g, '');
+	return `${ORG_NETWORK_PREFIX}${label}`;
+}
+
+/**
+ * The network a workload belongs to. A control plane that enables `ORG_NETWORKS` sends both
+ * `orgId` and `networkName`; an older one sends neither and the helper keeps the shared network.
+ */
+export function workloadNetworkName(workload: {
+	orgId?: string;
+	networkName?: string;
+}): string {
+	if (workload.networkName) return workload.networkName;
+	if (workload.orgId) return orgNetworkName(workload.orgId);
+	return DEFAULT_WORKLOAD_NETWORK;
+}
+
+/** True when two workloads can resolve each other's container aliases. */
+export function workloadsShareNetwork(
+	a: { orgId?: string; networkName?: string },
+	b: { orgId?: string; networkName?: string },
+): boolean {
+	return workloadNetworkName(a) === workloadNetworkName(b);
+}
+
 export interface WorkloadView {
 	id: string;
 	projectId: string;
@@ -148,6 +186,13 @@ export const workloadDesiredSchema = z.object({
 	projectId: z.string(),
 	projectSlug: z.string(),
 	deploymentId: z.string(),
+	/**
+	 * Owning org for network isolation (plan 04b). Optional so an older control plane can omit it;
+	 * the helper then keeps the legacy shared network. The helper derives the network name from it.
+	 */
+	orgId: z.string().max(100).optional(),
+	/** Explicit network name; normally derived from `orgId`. Validated by the helper. */
+	networkName: z.string().max(100).optional(),
 	runtime: z.enum(workloadRuntimes),
 	status: z.enum(workloadStatuses),
 	/** Content-addressed release the unit runs from; null for a pure image container. */

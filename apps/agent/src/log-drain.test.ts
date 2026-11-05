@@ -62,6 +62,7 @@ class FakeHelper implements HelperApi {
 	}
 	async restoreDatabase(): Promise<void> {}
 	async rotateDatabaseRole(): Promise<void> {}
+	async applyDatabaseCredential(): Promise<void> {}
 	async restartPooler(): Promise<void> {}
 	async status(): Promise<HelperWorkloadStatus> {
 		return { id: 'wld_1', status: 'running', restarts: 0 };

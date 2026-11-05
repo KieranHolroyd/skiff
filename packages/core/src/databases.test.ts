@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDb } from '@skiff/db';
-import { databaseAlias } from '@skiff/contracts';
+import { DEFAULT_FEATURES, databaseAlias, orgNetworkName } from '@skiff/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
@@ -29,6 +29,7 @@ const core: Core = createCore({
 		objectStoreSecret: 'object-secret-123',
 		desiredAgentVersion: '0.1.0',
 		now: () => clock,
+		features: { ...DEFAULT_FEATURES, ORG_NETWORKS: true },
 	},
 });
 const telemetry = new TelemetryStore({ path: ':memory:', now: () => clock });
@@ -36,6 +37,7 @@ core.ctx.telemetry = telemetry;
 
 const owner = buildPrincipal({ kind: 'user', userId: 'user_1', orgId: 'org_1', role: 'owner', platformAdmin: true });
 const viewer = buildPrincipal({ kind: 'user', userId: 'user_2', orgId: 'org_1', role: 'viewer' });
+const otherOrg = buildPrincipal({ kind: 'user', userId: 'user_9', orgId: 'org_2', role: 'owner' });
 const deployerAgent = buildPrincipal({
 	kind: 'mcp',
 	userId: 'user_1',
@@ -119,6 +121,89 @@ describe('managed databases', () => {
 		expect(() => core.workloads.activation('nod_other', entry!.id)).toThrow();
 	});
 
+	test('two orgs get separate networks; same-org workloads share one', async () => {
+		const other = core.databases.create(otherOrg, { name: 'main-db', memoryMb: 128 });
+		const sameOrg = core.databases.create(owner, { name: 'shares-network', memoryMb: 128 });
+		const state = await core.nodes.desiredState(edgeToken);
+		const mine = state.workloads.find((item) => item.id === core.databases.get(owner, 'main-db').id)!;
+		const theirs = state.workloads.find((item) => item.id === other.id)!;
+		const sibling = state.workloads.find((item) => item.id === sameOrg.id)!;
+		expect(mine.networkName).toBe(orgNetworkName('org_1'));
+		expect(sibling.networkName).toBe(mine.networkName);
+		expect(theirs.networkName).toBe(orgNetworkName('org_2'));
+		expect(theirs.networkName).not.toBe(mine.networkName);
+
+		core.databases.delete(otherOrg, 'main-db');
+		core.databases.purgeNow(otherOrg, 'main-db');
+		core.databases.applyPurged(edgeId, [other.id]);
+		core.databases.delete(owner, 'shares-network');
+		core.databases.purgeNow(owner, 'shares-network');
+		core.databases.applyPurged(edgeId, [sameOrg.id]);
+	});
+
+	test('named credentials are provisioned, rotated and revealed only interactively', async () => {
+		const created = core.databases.createCredential(owner, 'main-db', {
+			role: 'app',
+			purpose: 'web app',
+		});
+		expect(created).toMatchObject({ role: 'app', status: 'pending' });
+		expect(created.username).toStartWith('skiff_app_');
+		expect(() => core.databases.revealCredential(owner, 'main-db', created.id)).toThrow(/not active/);
+
+		const tasks = (await core.nodes.desiredState(edgeToken)).databaseCredentialTasks;
+		const task = tasks.find((item) => item.id === created.id)!;
+		expect(task).toMatchObject({ action: 'grant', role: 'app', username: created.username });
+		const activation = core.databases.credentialActivation(edgeId, created.id);
+		expect(activation.password).toBeTruthy();
+		expect(JSON.stringify(await core.nodes.desiredState(edgeToken))).not.toContain(activation.password!);
+
+		core.databases.applyCredentialResults(edgeId, [
+			{ taskId: created.id, databaseId: created.databaseId, status: 'ok' },
+		]);
+		expect(core.databases.listCredentials(owner, 'main-db').find((item) => item.id === created.id)).toMatchObject({
+			status: 'ready',
+		});
+		const revealed = core.databases.revealCredential(owner, 'main-db', created.id);
+		expect(revealed.password).toBe(activation.password!);
+		expect(() => core.databases.revealCredential(deployerAgent, 'main-db', created.id)).toThrow();
+
+		expect(core.audit.list({ orgId: 'org_1', action: 'database.credential.create' }).length).toBeGreaterThan(0);
+		core.databases.rotateNamedCredential(owner, 'main-db', created.id);
+		expect(core.audit.list({ orgId: 'org_1', action: 'database.credential.rotate' }).length).toBeGreaterThan(0);
+		const rotateTask = (await core.nodes.desiredState(edgeToken)).databaseCredentialTasks.find(
+			(item) => item.id === created.id,
+		)!;
+		expect(rotateTask.action).toBe('grant');
+		const rotated = core.databases.credentialActivation(edgeId, created.id);
+		expect(rotated.password).not.toBe(activation.password!);
+		core.databases.applyCredentialResults(edgeId, [
+			{ taskId: created.id, databaseId: created.databaseId, status: 'ok' },
+		]);
+		expect(core.databases.revealCredential(owner, 'main-db', created.id).password).toBe(rotated.password!);
+
+		core.databases.revokeCredential(owner, 'main-db', created.id);
+		expect(core.audit.list({ orgId: 'org_1', action: 'database.credential.revoke' }).length).toBeGreaterThan(0);
+		const revoke = (await core.nodes.desiredState(edgeToken)).databaseCredentialTasks.find(
+			(item) => item.id === created.id,
+		)!;
+		expect(revoke.action).toBe('revoke');
+		core.databases.applyCredentialResults(edgeId, [
+			{ taskId: created.id, databaseId: created.databaseId, status: 'ok' },
+		]);
+		expect(core.databases.listCredentials(owner, 'main-db').find((item) => item.id === created.id)?.status).toBe(
+			'revoked',
+		);
+
+		const audit = core.audit.list({ orgId: 'org_1', action: 'database.credentials.reveal' });
+		expect(audit.length).toBeGreaterThan(0);
+		expect(JSON.stringify(audit)).not.toContain(revealed.password);
+	});
+
+	test('attachments reference the built-in owner credential row', () => {
+		expect(core.databases.listCredentials(owner, 'main-db').some((item) => item.role === 'owner')).toBe(true);
+		expect(core.databases.listCredentials(owner, 'main-db').some((item) => item.role === 'monitor')).toBe(true);
+	});
+
 	test('restarts the database and the pooler independently', async () => {
 		const before = (await core.nodes.desiredState(edgeToken)).workloads.find(
 			(workload) => workload.projectSlug === 'main-db',
@@ -166,6 +251,8 @@ describe('managed databases', () => {
 		]);
 		expect(core.databases.credentials(owner, 'main-db').password).toBe(activation.password);
 		expect(core.databases.rotations(owner, 'main-db')[0]).toMatchObject({ status: 'ok' });
+		const ownerCredential = core.databases.listCredentials(owner, 'main-db').find((item) => item.role === 'owner')!;
+		expect(core.databases.revealCredential(owner, 'main-db', ownerCredential.id).password).toBe(activation.password);
 	});
 
 	test('carries allowlisted extensions into the activation only', async () => {

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDb } from '@skiff/db';
-import { environmentSlugSchema, storageAlias, storageUserPolicy } from '@skiff/contracts';
+import { DEFAULT_FEATURES, environmentSlugSchema, orgNetworkName, storageAlias, storageUserPolicy } from '@skiff/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
@@ -29,6 +29,7 @@ const core: Core = createCore({
 		objectStoreSecret: 'object-secret-123',
 		desiredAgentVersion: '0.1.0',
 		now: () => clock,
+		features: { ...DEFAULT_FEATURES, ORG_NETWORKS: true },
 	},
 });
 const telemetry = new TelemetryStore({ path: ':memory:', now: () => clock });
@@ -162,6 +163,55 @@ describe('managed object storage', () => {
 		expect(JSON.stringify(audit)).not.toContain(creds.secretAccessKey);
 	});
 
+	test('workloads join their org network', async () => {
+		const state = await core.nodes.desiredState(edgeToken);
+		const media = state.workloads.find((item) => item.projectSlug === 'media')!;
+		expect(media.networkName).toBe(orgNetworkName('org_1'));
+	});
+
+	test('named keys are listed, scoped, revealed with an audit and revoked independently', async () => {
+		const before = (await core.nodes.desiredState(edgeToken)).workloads.find((item) => item.projectSlug === 'media')!;
+		const created = core.storage.createKey(owner, 'media', {
+			name: 'ci-read',
+			grants: [{ bucket: 'uploads', mode: 'read' }],
+			purpose: 'CI uploads',
+		});
+		expect(created).toMatchObject({ name: 'ci-read', status: 'active', purpose: 'CI uploads' });
+		expect(created.accessKeyId).toStartWith('SKF');
+		expect(() => core.storage.createKey(owner, 'media', { name: 'bad', grants: [{ bucket: 'missing' }] })).toThrow(
+			/no bucket/,
+		);
+
+		const after = (await core.nodes.desiredState(edgeToken)).workloads.find((item) => item.projectSlug === 'media')!;
+		expect(after.objectStorage!.users).toContainEqual({
+			accessKeyId: created.accessKeyId,
+			grants: [{ bucket: 'uploads', mode: 'read' }],
+		});
+		expect(after.objectStorage!.keysVersion).not.toBe(before.objectStorage!.keysVersion);
+		const activation = core.workloads.activation(edgeId, after.id);
+		expect(activation.storageAdmin!.users[created.accessKeyId]).toBeTruthy();
+
+		expect(() => core.storage.revealKey(viewer, 'media', created.id)).toThrow();
+		expect(() => core.storage.revealKey(agent, 'media', created.id)).toThrow();
+		const revealed = core.storage.revealKey(owner, 'media', created.id);
+		expect(revealed.secretAccessKey).toBe(activation.storageAdmin!.users[created.accessKeyId]!);
+		const audit = core.audit.list({ orgId: 'org_1', action: 'storage.key.reveal' });
+		expect(audit.length).toBeGreaterThan(0);
+		expect(JSON.stringify(audit)).not.toContain(revealed.secretAccessKey);
+		expect(core.audit.list({ orgId: 'org_1', action: 'storage.key.create' }).length).toBeGreaterThan(0);
+
+		const revoked = core.storage.revokeKey(owner, 'media', created.id);
+		expect(revoked.status).toBe('revoked');
+		expect(core.audit.list({ orgId: 'org_1', action: 'storage.key.revoke' }).length).toBeGreaterThan(0);
+		const afterRevoke = (await core.nodes.desiredState(edgeToken)).workloads.find(
+			(item) => item.projectSlug === 'media',
+		)!;
+		expect(afterRevoke.objectStorage!.users).not.toContainEqual(
+			expect.objectContaining({ accessKeyId: created.accessKeyId }),
+		);
+		expect(() => core.storage.revealKey(owner, 'media', created.id)).toThrow(/revoked/);
+	});
+
 	test('attaching mints a scoped key, injects S3 env at activation and never restarts the instance', async () => {
 		await core.projects.create(owner, {
 			name: 'backend',
@@ -193,6 +243,11 @@ describe('managed object storage', () => {
 		});
 		expect(result.warning).toBeNull();
 		expect(result.attachment.accessKeyId).toMatch(/^SKF[A-Z2-7]{17}$/);
+		expect(
+			core.storage
+				.listKeys(owner, 'media')
+				.some((key) => key.accessKeyId === result.attachment.accessKeyId && key.name.startsWith('attachment-')),
+		).toBe(true);
 		expect(result.attachment.envNames).toEqual([
 			'S3_ENDPOINT_URL',
 			'S3_ACCESS_KEY_ID',

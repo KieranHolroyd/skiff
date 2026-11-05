@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'bun:test';
-import { readMigrations, parseNameStatus, checkMigrations, findDestructiveStatements } from './check-migrations.ts';
+import {
+	RESERVED_MIGRATION_PREFIXES,
+	readMigrations,
+	parseNameStatus,
+	checkMigrations,
+	findDestructiveStatements,
+} from './check-migrations.ts';
 
 const names = (count: number) =>
 	Array.from({ length: count }, (_, index) => `${String(index + 1).padStart(4, '0')}_step_${index + 1}.sql`);
@@ -26,6 +32,13 @@ describe('migration names', () => {
 		});
 		expect(result.ok).toBe(false);
 		expect(result.errors.join('\n')).toContain('expected migration 0003, found 0004');
+	});
+
+	test('accepts a gap reserved for another Wave 1 branch', () => {
+		const result = checkMigrations(
+			{ names: ['0001_init.sql', '0003_isolated.sql'], reserved: new Set([2]) },
+		);
+		expect(result.ok).toBe(true);
 	});
 
 	test('rejects malformed names', () => {
@@ -125,7 +138,9 @@ describe('destructive statements', () => {
 
 describe('repository migrations', () => {
 	test('the checked-in stream is sequential and additive', () => {
-		const result = checkMigrations(readMigrations(`${import.meta.dir}/..`));
+		const result = checkMigrations(readMigrations(`${import.meta.dir}/..`), {
+			reserved: RESERVED_MIGRATION_PREFIXES,
+		});
 		expect(result.errors).toEqual([]);
 		expect(result.warnings).toEqual([]);
 		expect(result.migrations[0]?.prefix).toBe(1);

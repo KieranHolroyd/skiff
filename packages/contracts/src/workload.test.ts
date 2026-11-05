@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'bun:test';
-import { workloadDesiredSchema } from './workload.ts';
+import {
+	DEFAULT_WORKLOAD_NETWORK,
+	orgNetworkName,
+	workloadDesiredSchema,
+	workloadNetworkName,
+	workloadsShareNetwork,
+} from './workload.ts';
 
 const base = {
 	id: 'wl_1',
@@ -56,5 +62,28 @@ describe('WorkloadDesired additive fields', () => {
 			false,
 		);
 		expect(workloadDesiredSchema.safeParse({ ...base, job: { id: 'job_1', timeoutSeconds: 1 } }).success).toBe(false);
+	});
+});
+
+describe('per-org network derivation', () => {
+	test('derives a stable org network and keeps the shared fallback', () => {
+		expect(orgNetworkName('org_123')).toBe('skiff-org-org_123');
+		expect(orgNetworkName('Org ABC')).toBe('skiff-org-org-abc');
+		expect(workloadNetworkName({})).toBe(DEFAULT_WORKLOAD_NETWORK);
+	});
+
+	test('two orgs are isolated and same-org workloads share a network', () => {
+		const a = { orgId: 'org_1' };
+		const b = { orgId: 'org_2' };
+		expect(workloadNetworkName(a)).not.toBe(workloadNetworkName(b));
+		expect(workloadsShareNetwork(a, { orgId: 'org_1' })).toBe(true);
+		expect(workloadsShareNetwork(a, b)).toBe(false);
+		// Explicit names win, which is what the node protocol sends.
+		expect(workloadNetworkName({ orgId: 'org_1', networkName: 'skiff-org-org_1' })).toBe('skiff-org-org_1');
+	});
+
+	test('desired state accepts the new fields and old state stays valid', () => {
+		expect(workloadDesiredSchema.parse({ ...base, orgId: 'org_1' }).orgId).toBe('org_1');
+		expect(workloadDesiredSchema.parse(base).orgId).toBeUndefined();
 	});
 });

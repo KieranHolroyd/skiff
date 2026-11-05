@@ -3,7 +3,8 @@
  * Migration safety check (docs/OPS.md §4.2.2).
  *
  * Enforces the rules that make forward-only migrations safe to roll back to:
- *   1. files are numbered `NNNN_name.sql` and the sequence has no duplicates or gaps;
+ *   1. files are numbered `NNNN_name.sql` and the sequence has no duplicates or unexpected gaps
+ *      (numbers reserved for another Wave 1 branch are allowed while that branch is unmerged);
  *   2. an existing migration is never modified, renamed or deleted (history is append-only);
  *   3. destructive statements are reported for manual review.
  *
@@ -48,12 +49,22 @@ export interface MigrationCheckInput {
 	changed?: MigrationChange[];
 	/** File contents keyed by name, used to report destructive statements. */
 	contents?: Record<string, string>;
+	/** Prefixes reserved for another branch (docs/build-plan/WAVE-1.md); a gap there is allowed. */
+	reserved?: ReadonlySet<number>;
 }
 
 export interface MigrationCheckOptions {
 	/** Treat destructive statements as errors instead of warnings. */
 	strict?: boolean;
+	/** Prefixes reserved for another branch; overrides `input.reserved` when set. */
+	reserved?: ReadonlySet<number>;
 }
+
+/**
+ * Wave 1 reserves numbers across parallel branches (docs/build-plan/WAVE-1.md). A branch that owns
+ * `0023` therefore has a gap until the `0019`–`0022` branches merge. Remove entries as they land.
+ */
+export const RESERVED_MIGRATION_PREFIXES: ReadonlySet<number> = new Set([19, 20, 21, 22]);
 
 export interface MigrationCheckResult {
 	ok: boolean;
@@ -128,8 +139,10 @@ export function checkMigrations(
 	}
 
 	migrations.sort((a, b) => a.prefix - b.prefix);
+	const reserved = options.reserved ?? input.reserved ?? new Set<number>();
 	let expected = 1;
 	for (const migration of migrations) {
+		while (expected < migration.prefix && reserved.has(expected)) expected++;
 		if (migration.prefix !== expected) {
 			const expectedLabel = String(expected).padStart(4, '0');
 			const actualLabel = String(migration.prefix).padStart(4, '0');
@@ -234,7 +247,10 @@ function main(): void {
 		return;
 	}
 
-	const result = checkMigrations({ ...input, changed }, { strict });
+	const result = checkMigrations(
+		{ ...input, changed, reserved: RESERVED_MIGRATION_PREFIXES },
+		{ strict },
+	);
 	console.log(
 		`check-migrations: ${result.migrations.length} migration(s), compared with ${baseRef}`
 	);

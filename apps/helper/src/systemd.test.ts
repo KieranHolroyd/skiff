@@ -12,11 +12,14 @@ class FakeRunner implements CommandRunner {
 	calls: string[][] = [];
 	show = '';
 	journal = '';
+	/** `podman network inspect` output; empty means the container is not attached yet. */
+	network = '';
 
 	async run(argv: string[]): Promise<RunResult> {
 		this.calls.push(argv);
 		if (argv[1] === 'show') return { code: 0, stdout: this.show, stderr: '' };
 		if (argv[0]?.includes('journalctl')) return { code: 0, stdout: this.journal, stderr: '' };
+		if (argv[1] === 'network' && argv[2] === 'inspect') return { code: 0, stdout: this.network, stderr: '' };
 		return { code: 0, stdout: '', stderr: '' };
 	}
 
@@ -361,6 +364,72 @@ describe('container network', () => {
 		const f = await fixture();
 		await f.driver.apply(workload(), activation());
 		await expect(fs.stat(join(f.quadletDir, 'skiff-workloads.network'))).rejects.toThrow();
+	});
+
+	test('each org gets its own network and only sees its own containers', async () => {
+		const f = await fixture();
+		const container = (id: string, orgId: string) =>
+			workload({
+				id,
+				projectId: id,
+				projectSlug: id.replace(/_/g, '-'),
+				deploymentId: id,
+				runtime: 'container',
+				release: null,
+				image: 'ghcr.io/acme/app:1',
+				socketActivation: false,
+				orgId,
+				networkName: `skiff-org-${orgId}`,
+			});
+		await f.driver.apply(container('wld_a', 'org_1'), activation({ workloadId: 'wld_a' }));
+		await f.driver.apply(container('wld_b', 'org_2'), activation({ workloadId: 'wld_b' }));
+		await f.driver.apply(container('wld_c', 'org_1'), activation({ workloadId: 'wld_c' }));
+
+		expect(await fs.readFile(join(f.quadletDir, 'skiff-org-org_1.network'), 'utf8')).toContain(
+			'NetworkName=skiff-org-org_1',
+		);
+		expect(await fs.readFile(join(f.quadletDir, 'skiff-org-org_2.network'), 'utf8')).toContain(
+			'NetworkName=skiff-org-org_2',
+		);
+		expect(await fs.readFile(join(f.quadletDir, 'skiff-workload-wld_a.container'), 'utf8')).toContain(
+			'Network=skiff-org-org_1.network',
+		);
+		expect(await fs.readFile(join(f.quadletDir, 'skiff-workload-wld_b.container'), 'utf8')).toContain(
+			'Network=skiff-org-org_2.network',
+		);
+		// Same-org workloads share one network; the file count proves no per-workload networks.
+		expect(await fs.readFile(join(f.quadletDir, 'skiff-workload-wld_c.container'), 'utf8')).toContain(
+			'Network=skiff-org-org_1.network',
+		);
+		const networks = (await fs.readdir(f.quadletDir)).filter((name) => name.endsWith('.network')).sort();
+		expect(networks).toEqual(['skiff-org-org_1.network', 'skiff-org-org_2.network']);
+		await expect(fs.stat(join(f.quadletDir, 'skiff-workloads.network'))).rejects.toThrow();
+	});
+
+	test('repairs a missing network attachment without a shell', async () => {
+		const f = await fixture();
+		const isolated = workload({
+			runtime: 'container',
+			release: null,
+			image: 'ghcr.io/acme/app:1',
+			socketActivation: false,
+			orgId: 'org_1',
+			networkName: 'skiff-org-org_1',
+		});
+		f.runner.network = '{}';
+		await f.driver.apply(isolated, activation());
+		expect(f.runner.calls).toContainEqual([
+			'/usr/bin/podman',
+			'network',
+			'connect',
+			'skiff-org-org_1',
+			'skiff-workload-wld_abc123',
+		]);
+
+		f.runner.network = '{"skiff-workload-wld_abc123":{}}';
+		f.runner.calls = [];
+		await f.driver.apply(isolated, activation());
+		expect(f.runner.calls.some((argv) => argv[2] === 'connect')).toBe(false);
 	});
 });
 
