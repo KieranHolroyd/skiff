@@ -1,7 +1,8 @@
 # Skiff — Operations
 
-Version: v1. This is the runbook for the single-VPS install: install, upgrade, restore,
-backups, monitoring, the monthly restore drill, and master-key rotation.
+Version: v1. This is the runbook for the single-VPS install: install, upgrade, recovery from a
+stuck or failed update, restore, backups, monitoring, the monthly restore drill, and master-key
+rotation.
 
 Design context: [DESIGN.md](./DESIGN.md) §10–§12, [DECISIONS.md](./DECISIONS.md)
 D24 (the VPS is an accepted single point of failure), D25 (R2 is canonical), D28
@@ -501,16 +502,9 @@ primary's pre-start creates `control.sock` → `control-primary.sock`. Without a
 `skiff-update-self` invocation finishes or reverts the interrupted switch. The updater's own unit
 ignores SIGINT/SIGTERM/SIGHUP while a switch is in flight.
 
-**When nothing else works: `skiff-recover`.** Published with every release and independent of
-the updater:
-
-```sh
-curl -fsSL https://github.com/KieranHolroyd/skiff/releases/latest/download/skiff-recover.sh | sudo sh -s -- status
-#   use <release|previous>   point current at a release on disk, restart the control plane
-#   clear-verdicts           forget every recorded update failure
-#   install-updater [vX.Y.Z] install the stage-0 updater from a signed release
-#   source-updater ARGS...   run the TypeScript updater from the current release
-```
+**When nothing else works: `skiff-recover`.** A break-glass script published with every
+platform release, independent of the updater. It never touches the database. The full procedure
+is in [§4.1.1](#411-recovering-a-stuck-or-failed-update).
 
 **Rollback and the database.** Every switch records the database exactly as the outgoing
 release left it. `rollback` takes a fresh snapshot, then swaps `current` and `previous`:
@@ -528,6 +522,112 @@ itself on the first zero-downtime update, from the same template as the installe
 ([`scripts/systemd/control-plane.ts`](../scripts/systemd/control-plane.ts)); other unit
 changes still go through `install.sh --upgrade`. Private repositories need `SKIFF_GITHUB_TOKEN`
 or `/etc/skiff/github.token` (`0600`).
+
+### 4.1.1 Recovering a stuck or failed update
+
+The updater is designed to fail back to a serving release, so most incidents need nothing but
+a look at what it recorded. Start there, never by moving symlinks:
+
+```sh
+sudo skiff-update-self status              # current/previous, in-flight switch, recorded verdicts
+sudo skiff-update-self check               # running vs newest release; changes nothing
+sudo skiff-update-self version             # which updater build is judging releases
+sudo journalctl -u skiff-update-self -n 200 --no-pager
+sudo tail -n 50 /var/lib/skiff-update/update.log   # JSON Lines: phases, commands, build output
+cat /var/lib/skiff-update/status.json              # exactly what the dashboard is showing
+```
+
+| What you see | What it means | What to do |
+|---|---|---|
+| Dashboard stuck on **Test boot** (`phase: "canary"`) with no new log output | The updater process died or was killed mid-canary; `status.json` still holds the last phase it wrote. The running release is untouched and serving. | `sudo systemctl stop skiff-update-self`, then `sudo skiff-update-self recover`, then update again. |
+| `status` prints `interrupted update` | A switch started and did not commit (crash, reboot, power cut). | `sudo skiff-update-self recover`. The boot guard also does this automatically, filesystem-only, before the control plane starts. |
+| The release is listed under `failed` | Its own canary returned a failing verdict, or it failed while serving. This updater build skips it until `--force`. | Fix the release, or `sudo skiff-update-self update --force` to retry it. `skiff-recover clear-verdicts` forgets *all* verdicts, not just one. |
+| The new release never took traffic and the old one is still serving | The updater reverted automatically (canary, standby or bake). | Read the reason in `status` and the journal. Nothing else is required; the next release is still installable. |
+| Exit code `2`, neither release healthy | Recovery itself failed. This is the only case that needs a human immediately. | `journalctl -u skiff-control-plane -n 200`, then `skiff-recover status` and `skiff-recover use previous` (below). |
+| `skiff-update-self` missing, segfaulting or answering `--version` with garbage | Stage-0 is broken. The wrapper should already fall back to the TypeScript updater in `current`. | `skiff-recover install-updater`, or `skiff-recover source-updater update`. |
+
+**The one-time `--no-canary` bootstrap (installs older than 0.6.7).** The 0.6.1-era installed
+updater ran its canary from the host, and that canary laid out `data/objects` as root *after*
+the chown, so every candidate failed `/readyz` with `objects not writable` and was recorded as
+bad. Releases from 0.6.7 onward ship the canary inside the release itself, so this failure mode
+cannot recur; but the old installed updater must be replaced first. Do that with exactly one run
+that skips the host canary:
+
+```sh
+sudo skiff-update-self plan --no-canary     # confirm the target release and preflight
+sudo skiff-update-self update --no-canary   # one time only
+```
+
+`--no-canary` skips only the isolated test boot. The preflight, sealed database snapshot,
+stop/swap, live health check and automatic rollback still run, so this is the old stop-and-swap
+path with a few seconds of downtime. Add `--force` only if `plan`/`status` says the target
+commit is already listed under `failed`. Do not use the dashboard's **Update** button for this
+run: it invokes the updater with no flags and will hang on the same canary. Once the run
+completes, the new release's own updater is in `current`, and later updates need no flags and
+are zero-downtime.
+
+**Interrupted switches.** `skiff-update-guard.service` runs at boot, before the control plane and
+Litestream, and restores the committed pointers if an update was in flight (for a fenced update
+it also restores the pre-update database) and records the attempt as `inconclusive`. It only
+touches files, so it can never wait on the units it precedes. The standby unit is never enabled,
+so a reboot always comes up on `current`. Without a reboot, the next `skiff-update-self`
+invocation finishes or reverts the switch. A switch in progress ignores SIGINT, SIGTERM and
+SIGHUP; do not kill it deliberately. A SIGKILL during the canary or bake phase leaves the last
+committed release serving, because nothing was committed yet, but run `skiff-update-self
+recover` afterwards to clear the in-flight marker.
+
+**Rollback is the first remedy, and it is reversible.** `sudo skiff-update-self rollback` swaps
+`current`/`previous`; run it again to undo. Without a flag it refuses when the previous release
+does not understand the applied schema. `--restore-db` also restores the database to the moment
+the current release was activated (writes since then are lost, but the pre-rollback snapshot
+makes a second `rollback --restore-db` go forward again); `--keep-db` runs old code against the
+newer schema. Real data recovery is separate: `/opt/skiff/current/repo/scripts/restore.sh` and
+[§5](#5-restore).
+
+**`skiff-recover` reference.** Download it from a platform release and run it as root:
+
+```sh
+curl -fsSL https://github.com/KieranHolroyd/skiff/releases/latest/download/skiff-recover.sh \
+  | sudo sh -s -- status
+```
+
+`/releases/latest` is GitHub's newest release, which can be a CLI release (`cli-v*`) rather than
+a platform release; when that happens this URL returns **404** even though the asset exists on
+the platform tag. Pin the platform tag instead:
+
+```sh
+curl -fsSL https://github.com/KieranHolroyd/skiff/releases/download/v<VERSION>/skiff-recover.sh \
+  | sudo sh -s -- status
+```
+
+Replace `<VERSION>` with the running version (`cat /opt/skiff/current/repo/VERSION`) or the
+newest platform release from `gh release list --repo KieranHolroyd/skiff`. The same file is
+attached to every platform release and can be downloaded from the release page.
+
+| Command | Effect |
+|---|---|
+| `status` | Read-only: `current`/`previous`/`standby` targets, where `control.sock` points, the stage-0 updater, releases on disk, interrupted-update marker, unit states. Run this first. |
+| `use <release\|previous>` | Points `current` at a complete release already on disk (sets `previous` to the outgoing one), removes the standby link and any `inProgress` marker, then restarts the control plane. Refuses an incomplete release. |
+| `clear-verdicts` | Wipes `failedCommits` in `/opt/skiff/update-state.json`, so previously rejected releases are retried. Prefer `update --force` for one release; use this only when the updater itself was at fault. |
+| `install-updater [vX.Y.Z]` | Downloads a platform release's `manifest.json`/`.sig`, verifies them against the running release's trusted keys, checks the artifact's sha256, runs `self-test`, and installs that binary as stage-0. Defaults to the newest signed release. |
+| `source-updater ARGS...` | Runs the TypeScript updater from `current` with `ARGS`, bypassing stage-0 (for example `source-updater update --no-canary`). |
+
+It never touches the database. `install-updater` fails loudly if the active release has no
+signing keys or the manifest does not verify; it will not install an unsigned or unverified
+updater.
+
+**Last resort: repointing by hand.** Prefer `skiff-recover use`. If the script cannot run, a
+release is a directory under `/opt/skiff/releases/<UTC>-<sha12>`; `current` and `previous` are
+symlinks to it, and `control.sock` is a symlink to `control-primary.sock` or
+`control-standby.sock`. Repoint `current` atomically (write a temporary symlink, then
+`mv -Tf`), stop the standby unit, restart `skiff-control-plane`, and check `/readyz`. Never edit
+`update-state.json` while an update is in flight; run `skiff-update-self recover` first.
+
+**Recording the incident.** `update.log` (JSON Lines) and `status.json` are the primary record;
+the updater's identity (`skiff-update-self version`) matters because verdicts are stamped with
+it, so a fixed updater retries releases an older one blamed. The dashboard's **Settings →
+Updates** page shows the same status and live log, and each request is in the audit log as
+`platform.update`.
 
 ### 4.2 Uninstall
 
@@ -1154,6 +1254,8 @@ the control plane.
 | Agent can't use Caddy admin | `ls -l /var/lib/caddy/admin.sock` | Socket must be `0660` and group `caddy`; agent needs that supplementary group. Never expose `:2019` as a workaround. |
 | Litestream exits immediately | `journalctl -u skiff-litestream` | Missing/incorrect `SKIFF_R2_*`; endpoint must be the R2 S3 URL, region `auto`. |
 | Restore says "no snapshots" | R2 prefix/lifecycle, credentials | Check `SKIFF_R2_SQLITE_PREFIX`; confirm objects exist; run a drill. |
+| Update stuck at **Test boot** / canary | `skiff-update-self status`, `journalctl -u skiff-update-self -n 200` | Stop the unit, `skiff-update-self recover`, retry. Installs older than 0.6.7 need one `update --no-canary` bootstrap: [§4.1.1](#411-recovering-a-stuck-or-failed-update). |
+| `skiff-recover.sh` download returns 404 | `gh release list --repo KieranHolroyd/skiff` | `/releases/latest` can resolve to a CLI release; pin the platform tag instead: [§4.1.1](#411-recovering-a-stuck-or-failed-update). |
 | Restore fails health check | Journal + `status` | The pre-restore snapshot was restored automatically; inspect the release/migrations. |
 | Drill fails with table differences | `diff` of `live.json` / `restored.json` | R2 lag, wrong bucket, or writes during a no-quiesce run. Re-run with quiescing. |
 | Disk > 85% | `du -sh /srv/skiff /var/lib/skiff /var/log` | GC releases, rotate journald, prune drill runs/backups. |
