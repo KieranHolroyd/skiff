@@ -434,7 +434,7 @@ export async function testR2(options: {
 				? 'The bucket does not exist in this account.'
 				: / 401/.test(message) || /InvalidAccessKeyId|SignatureDoesNotMatch/.test(message)
 					? 'The access key or secret is wrong.'
-					: /R2 (PUT|GET|DELETE) .* failed: \d{3}/.test(message)
+					: /S3 (PUT|GET|DELETE) .* failed: \d{3}/.test(message)
 						? message.replace(/<[^>]+>/g, ' ').slice(0, 200)
 						: `Could not reach ${options.endpoint ?? `${options.accountId}.r2.cloudflarestorage.com`} (${message.slice(0, 120)}). Check the account ID or endpoint.`;
 		return { ok: false, error: hint };

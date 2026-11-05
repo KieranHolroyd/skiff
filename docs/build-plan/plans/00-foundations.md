@@ -49,6 +49,14 @@ reviewed independently.
 **Exit:** `bun run check` and `bun test` green; the contracts index exports every new domain; a
 feature agent can import a type without touching a shared file.
 
+**Contract note (F1 slice):** Added `backup-target.ts` (targets only, since 01 already owns backup
+schedules/artifacts/runs), `app-volume.ts`, `job.ts`, `blueprint.ts`, `preview.ts`, `quota.ts` and
+`mcp-data.ts`, plus the optional `volumes`/`processes`/`job` fields on `WorkloadDesired`. Consumers:
+01/05 (targets), 07/12 (app volumes, previews), 09 (jobs), 11/14 (blueprint + Compose result),
+16 (quota/usage) and 20 (MCP data tools). Bucket config, pooler and extension contracts are omitted
+because their Wave 1 features already shipped their own contracts. No tables, migrations or service
+implementations are part of this slice; `packages/contracts/src/index.ts` exports the new modules.
+
 ---
 
 ## F2 — Streaming `ObjectStore`

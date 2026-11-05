@@ -1,3 +1,5 @@
+import type { FeatureFlags, FeatureName } from '@skiff/contracts';
+import { FEATURE_FLAGS, parseFeatureFlags } from '@skiff/contracts';
 import type { ObjectStore } from './object-store.ts';
 import { hmac } from './util.ts';
 
@@ -49,6 +51,11 @@ export interface CoreConfig {
 	storageObjectMaxBytes?: number;
 	/** Injected S3 transport for tests; production uses the global fetch. */
 	storageFetch?: typeof fetch;
+	/**
+	 * Resolved `SKIFF_FEATURE_*` flags. Optional so existing tests and embedders keep working;
+	 * services must read them through `featureEnabled`, which falls back to the registry defaults.
+	 */
+	features?: FeatureFlags;
 }
 
 export function coreConfigFromEnv(overrides: Partial<CoreConfig> & Pick<CoreConfig, 'objectStore' | 'masterKey' | 'dataDir'>): CoreConfig {
@@ -71,7 +78,13 @@ export function coreConfigFromEnv(overrides: Partial<CoreConfig> & Pick<CoreConf
 			overrides.storageGatewayPort ?? positiveInteger(env.SKIFF_STORAGE_GATEWAY_PORT, 8081),
 		storageObjectMaxBytes:
 			overrides.storageObjectMaxBytes ?? positiveInteger(env.SKIFF_STORAGE_OBJECT_MAX_BYTES, 104_857_600),
+		features: overrides.features ?? parseFeatureFlags(env),
 	};
+}
+
+/** Resolve a flag for a CoreConfig, using the registry default when no flags were injected. */
+export function featureEnabled(config: Pick<CoreConfig, 'features'>, name: FeatureName): boolean {
+	return config.features?.[name] ?? FEATURE_FLAGS[name].default;
 }
 
 function positiveInteger(value: string | undefined, fallback: number): number {

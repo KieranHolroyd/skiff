@@ -40,6 +40,8 @@ export class MaintenanceService {
 	constructor(private readonly ctx: CoreContext) {}
 
 	async run(): Promise<MaintenanceReport> {
+		// Expire scheduler leases from crashed workers; this is the only periodic loop (F4).
+		this.ctx.scheduler.tick();
 		const projectsPurged = await this.ctx.projects.purgeExpired();
 		// Trashed databases past their window are handed to their node, which deletes the data (D59).
 		this.ctx.databases.requestExpiredPurges();

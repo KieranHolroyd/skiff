@@ -152,6 +152,43 @@ and `HOST_HEADER=x-forwarded-host` (D37), `BODY_SIZE_LIMIT=520M` (so artifact up
 are not capped at adapter-bun's 512 KB default), plus
 `SKIFF_MASTER_KEY_FILE=%d/master-key` (the systemd credential path).
 
+### 2.5 Feature flags
+
+Risky features ship dark. Each flag is read once at startup from
+`SKIFF_FEATURE_<NAME>` in `/etc/skiff/skiff.env`; the resolved booleans are exposed by
+`GET /api/setup/status` under `features` (never the raw environment). Accepted values are
+`1/true/on/yes` and `0/false/off/no`, case-insensitive. An unset **or malformed** value keeps
+the default below, so a typo cannot turn a destructive feature on. Change a flag, then restart
+`skiff-control-plane`.
+
+| Variable | Default | Area | Meaning |
+|---|---|---|---|
+| `SKIFF_FEATURE_BACKUPS_RESTORE` | off | backups | Create, restore and delete managed database backups. Requires a passing restore drill before enabling on new installs. |
+| `SKIFF_FEATURE_PITR` | off | backups | Point-in-time recovery (WAL archiving and replay) for managed databases. |
+| `SKIFF_FEATURE_OBJECT_BROWSER` | off | storage | Browse, upload, download and delete objects in managed buckets. |
+| `SKIFF_FEATURE_POOLER` | off | databases | PgBouncer sidecar and pooled connection port for a managed database. |
+| `SKIFF_FEATURE_DB_TLS` | off | databases | TLS-only managed database connections (`sslmode=require`). |
+| `SKIFF_FEATURE_ORG_NETWORKS` | off | networking | Private per-org networks connecting workloads and databases. |
+| `SKIFF_FEATURE_APP_VOLUMES` | off | workloads | Persistent application volumes attached to deployed workloads. |
+| `SKIFF_FEATURE_JOBS` | off | automation | Scheduled one-off and cron jobs. |
+| `SKIFF_FEATURE_PREVIEW_DATA` | off | automation | Clone database and bucket data into previews (can copy production data). |
+| `SKIFF_FEATURE_AGENT_DATA_WRITE` | off | agents | Let MCP/agent tools mutate user data instead of read-only access. |
+| `SKIFF_FEATURE_QUOTAS` | **on** | platform | Enforce per-org project, storage and upload quotas. Set `0` only to lift limits temporarily. |
+| `SKIFF_FEATURE_BLUEPRINTS` | off | automation | Plan and apply `skiff.yaml` blueprints, including `--prune`. |
+| `SKIFF_FEATURE_MEDIA` | off | storage | Image/video uploads, transforms and delivery. |
+
+Rollout order is dev → single-node test → Debian 13 node → installer default. Never enable a
+destructive feature by default in the release that introduces it, and never enable
+`PREVIEW_DATA`, `AGENT_DATA_WRITE` or `BLUEPRINTS` on a host whose data you are not prepared to
+have copied, changed or pruned.
+
+> **Migration note for already-shipped surfaces.** Database backups/restores, credential
+> rotation, the object browser and the pooler are already shipped in this release. Their flags
+> are registered and default off, but the current code deliberately does **not** hide those
+> existing surfaces behind them. A later release that starts gating them must either default the
+> flag on for existing installs or call the behaviour change out in the release notes/upgrade
+> checklist; silently turning shipped functionality off would be a regression, not a rollout.
+
 ---
 
 ## 3. Install
@@ -409,6 +446,70 @@ mount roots such as `/mnt` are refused. Use `/mnt/data/skiff` rather than `/mnt/
 The result is in `/etc/skiff/storage.json` and on the node card; details are in
 `journalctl -u skiff-storage`. The control plane's own data (`/var/lib/skiff/data`, database,
 objects and backups) is not moved by this; stop the services and relocate it by hand.
+
+### 4.2.2 Migration safety and rollback protocol
+
+Migrations are **forward-only and append-only**. The schema is the only state that a code
+rollback cannot undo, so these rules are enforced before merge and repeated here for operators.
+
+**Rules for a migration**
+
+1. One migration file per feature/Task, named `NNNN_short_description.sql` with the next unused
+   four-digit prefix (`0015_...`). The prefix stream must stay sequential with no duplicates or
+   gaps.
+2. Additive only: `CREATE TABLE`/`CREATE INDEX`, or `ALTER TABLE … ADD COLUMN` (with a safe
+   default when the column is `NOT NULL`). Do not `DROP TABLE`, `DROP COLUMN`, rename a column,
+   or `ALTER COLUMN … TYPE`. Those need a separate, reviewed encode/backfill/swap migration plan.
+3. Never edit, rename or delete a migration that has shipped. Fix a bad migration with a new,
+   higher-numbered file. Editing history makes a restored snapshot and a rolled-back release
+   disagree about what has run.
+4. Do not put secrets, environment-specific values or large data backfills in a migration.
+5. A migration that changes data must be idempotent or guarded, because the migrator records
+   the file only after it succeeds.
+
+The repository check is:
+
+```sh
+bun run check:migrations
+# or, in CI: SKIFF_MIGRATION_BASE_REF=<base-sha> bun scripts/check-migrations.ts
+```
+
+It fails on a non-sequential/duplicate prefix or on a modified/renamed/deleted existing
+migration. It prints `DROP TABLE`, `DROP COLUMN` and `ALTER COLUMN TYPE` for manual review; run
+with `--strict` to make those fail. CI runs it as its own step on every PR and push.
+
+**Pre-update snapshot**
+
+The installer and self-updater already snapshot the control DB before running migrations
+(`/var/lib/skiff/backups/pre-upgrade-<UTC>.db` or `pre-update-<release>.db`). Before a manual
+migration or a hand-run restore, take the same three things:
+
+| State | What to keep | Why |
+|---|---|---|
+| Control DB | `sqlite3 /var/lib/skiff/data/skiff.db ".backup '/var/lib/skiff/backups/pre-migrate-<UTC>.db'"` | The only undo for a bad schema change. |
+| Config + keys | `/etc/skiff/skiff.env` (`BETTER_AUTH_SECRET`, `SKIFF_*`) and `/etc/skiff/master.key` (the APP_KEY used to seal org secrets), offline encrypted | A restored DB is unreadable without the same master key; sessions/tokens need the same auth secret. |
+| Managed data | R2 object versioning/Litestream, managed database backups, volume snapshots | The control DB does **not** contain user database rows, bucket objects, volumes or release artifacts. |
+
+The app-level backup/restore surfaces (Settings → Backups, `skiff-restore`) cover the control
+DB. They do not replace an infrastructure snapshot of managed data, and they never touch R2.
+
+**Rollback a bad migration**
+
+1. Stop `skiff-control-plane` and `skiff-litestream`.
+2. If the migration already applied and the new release is healthy enough to serve, prefer a
+   **forward fix**: write the next-numbered corrective migration, review it, deploy. This keeps
+   history intact and is always the first choice for additive changes.
+3. If you must go back, restore the pre-migration control DB snapshot, then start the previous
+   release (`skiff-update-self rollback --restore-db`, or the manual symlink + restart in §4).
+   Never delete rows from `skiff_migrations` or edit the SQL file to force a re-run.
+4. Restore `.env`/`master.key` from the same point in time. A snapshot restored under a different
+   master key will not decrypt database credentials, storage keys or other sealed secrets.
+5. Managed data is **not** restored automatically. Recover R2 from versioning/Litestream, managed
+   databases from their own backups, and volumes from their own snapshots deliberately, after
+   checking which writes would be lost. The restore command restores the control DB only;
+   nothing in this protocol makes a destructive data restore happen on its own.
+6. Record the incident and the snapshot names in the audit/ops log. A schema downgrade without a
+   snapshot is not a supported rollback path.
 
 ### 4.3 Platform settings from the dashboard
 

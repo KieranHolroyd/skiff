@@ -5,6 +5,7 @@
   "workspaces": ["apps/*", "packages/*", "spikes/*"],
   "scripts": {
     "check": "bun run --filter '*' check",
+    "check:migrations": "bun scripts/check-migrations.ts",
     "test": "bun test",
     "prepare": "git config core.hooksPath .githooks 2>/dev/null || true",
     "version:show": "bun scripts/version.ts show",
@@ -14,6 +15,7 @@
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "aws4fetch": "^1.0.20",
     "typescript": "^7.0.2"
   }
 }

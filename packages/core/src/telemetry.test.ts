@@ -252,7 +252,19 @@ describe('TelemetryStore', () => {
 			put: async (key, data) => {
 				uploaded.set(key, data);
 			},
+			putStream: async (key, body) => {
+				const chunks: Uint8Array[] = [];
+				for await (const chunk of body as AsyncIterable<Uint8Array>) chunks.push(chunk);
+				const merged = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.byteLength, 0));
+				let offset = 0;
+				for (const chunk of chunks) {
+					merged.set(chunk, offset);
+					offset += chunk.byteLength;
+				}
+				uploaded.set(key, merged);
+			},
 			get: async () => new Uint8Array(),
+			getStream: async () => ({ body: new ReadableStream<Uint8Array>(), size: 0 }),
 			delete: async () => undefined,
 			exists: async () => false,
 			presignPut: async () => '',
