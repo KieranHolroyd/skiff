@@ -1,40 +1,48 @@
+import type { BuildView, DatabaseView, DomainView, StorageView } from '@skiff/contracts';
 import type { DeploymentView, NodeView, StatusSummary } from '@skiff/core';
 import type { PageServerLoad } from './$types';
 import { core } from '#lib/server/core.js';
 import { trafficRanges, parseTrafficRange, trafficRangeHref } from '#lib/server/traffic-range.js';
+import { buildAttention } from './attention.js';
 
-interface V2Summary {
-	capacity: {
-		nodes: number;
-		sliceMemoryMb: number;
-		reservedMemoryMb: number;
-		freeMemoryMb: number;
-		workloads: number;
-	} | null;
-	domains: {
-		total: number;
-		verified: number;
-	} | null;
-	builds: {
-		active: number;
-		readable: boolean;
-	};
+/** One row of the activity feed: a deployment or a git build. */
+export type ActivityItem =
+	| { kind: 'deployment'; at: string; deployment: DeploymentView }
+	| { kind: 'build'; at: string; build: BuildView };
+
+export interface DataService {
+	kind: 'database' | 'storage';
+	name: string;
+	status: string;
+	label: string;
+	nodeName: string | null;
+	usedBytes: number | null;
+	budgetBytes: number;
+	/** Databases: last backup outcome. Storage: bucket count. */
+	note: string | null;
+	noteTone: 'danger' | 'muted';
+}
+
+const MB = 1024 * 1024;
+
+/** Run a read that some principals are not allowed to make; denied reads become `fallback`. */
+function attempt<T>(read: () => T, fallback: T): T {
+	try {
+		return read();
+	} catch {
+		return fallback;
+	}
 }
 
 /**
- * Fleet overview (DESIGN §8): a small, cheap summary built from the service layer.
- * Node detail is platform-admin only, so non-admins simply get `nodesDenied: true`.
+ * Fleet overview (DESIGN §8): a cheap summary built from the service layer. Every read is
+ * permission-checked by the service, so a narrow principal sees a smaller page, never an error.
  */
 export const load: PageServerLoad = async ({ locals, url }) => {
 	const principal = locals.principal!;
+	const now = Date.now();
 
-	let status: StatusSummary | null = null;
-	try {
-		status = core.metrics.status(principal);
-	} catch {
-		// A viewer without project:read should not be able to break the whole overview.
-	}
-
+	const status: StatusSummary | null = attempt(() => core.metrics.status(principal), null);
 	const projects = core.projects.list(principal);
 
 	const trafficRange = parseTrafficRange(url.searchParams.get('range'));
@@ -52,80 +60,119 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			.map((project) => [project.id, { name: project.name, slug: project.slug }])
 	);
 
-	let nodes: NodeView[] = [];
 	let nodesDenied = false;
+	let nodes: NodeView[] = [];
 	try {
 		nodes = core.nodes.list(principal);
 	} catch {
 		nodesDenied = true;
 	}
 
-	const v2: V2Summary = {
-		capacity: null,
-		domains: null,
-		builds: { active: 0, readable: true }
-	};
-
 	// Capacity is platform-level: only an admin can see other nodes' slice budgets.
+	let capacity: { sliceMemoryMb: number; reservedMemoryMb: number; workloads: number } | null =
+		null;
 	if (principal.platformAdmin === true) {
-		try {
-			const capacity = core.workloads.capacity(principal);
-			v2.capacity = {
-				nodes: capacity.length,
-				sliceMemoryMb: capacity.reduce((sum, item) => sum + item.sliceMemoryMb, 0),
-				reservedMemoryMb: capacity.reduce((sum, item) => sum + item.reservedMemoryMb, 0),
-				freeMemoryMb: capacity.reduce((sum, item) => sum + item.freeMemoryMb, 0),
-				workloads: capacity.reduce((sum, item) => sum + item.workloadCount, 0)
+		const rows = attempt(() => core.workloads.capacity(principal), null);
+		if (rows)
+			capacity = {
+				sliceMemoryMb: rows.reduce((sum, item) => sum + item.sliceMemoryMb, 0),
+				reservedMemoryMb: rows.reduce((sum, item) => sum + item.reservedMemoryMb, 0),
+				workloads: rows.reduce((sum, item) => sum + item.workloadCount, 0)
 			};
-		} catch {
-			// A missing platform permission must not break the overview.
-		}
 	}
 
-	// Org-wide custom domains; `domain:read` is denied to some token scopes.
-	try {
-		const domains = core.domains.list(principal);
-		v2.domains = {
-			total: domains.length,
-			verified: domains.filter(
-				(domain) => domain.status === 'verified' || domain.status === 'active'
-			).length
-		};
-	} catch {
-		// Leave domains null so the UI can say the data is not visible.
-	}
+	const domains: DomainView[] | null = attempt(() => core.domains.list(principal), null);
+	const databases: DatabaseView[] | null = attempt(() => core.databases.list(principal), null);
+	const storage: StorageView[] | null = attempt(() => core.storage.list(principal), null);
+	const usage = await Promise.resolve(attempt(() => core.usage.view(principal), null)).catch(
+		() => null
+	);
 
-	const recent: DeploymentView[] = [];
-	let activeBuilds = 0;
-	let buildsReadable = false;
+	const deployments: DeploymentView[] = [];
+	const builds: BuildView[] = [];
+	let buildsReadable = projects.length === 0;
 	for (const project of projects.slice(0, 40)) {
-		let row: ReturnType<typeof core.projects.requireRow>;
-		try {
-			row = core.projects.requireRow(principal, project.slug);
-		} catch {
-			continue;
-		}
-		try {
-			recent.push(...core.deployments.list(principal, row, { limit: 5 }));
-		} catch {
-			// One inaccessible project should not hide the rest of the fleet.
-		}
-		try {
-			for (const build of core.builds.list(principal, row, { limit: 10 })) {
-				if (build.status === 'queued' || build.status === 'building') activeBuilds += 1;
-			}
+		const row = attempt(() => core.projects.requireRow(principal, project.slug), null);
+		if (!row) continue;
+		deployments.push(...attempt(() => core.deployments.list(principal, row, { limit: 5 }), []));
+		const projectBuilds = attempt(() => core.builds.list(principal, row, { limit: 10 }), null);
+		if (projectBuilds) {
 			buildsReadable = true;
-		} catch {
-			// `build:read` can be narrower than `project:read`; skip the project.
+			builds.push(...projectBuilds);
 		}
 	}
-	recent.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
-	v2.builds = { active: activeBuilds, readable: projects.length === 0 || buildsReadable };
+	deployments.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+	builds.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+	const activeBuilds = builds.filter(
+		(build) => build.status === 'queued' || build.status === 'building'
+	);
+
+	const attention = buildAttention({
+		now,
+		nodes,
+		databases,
+		storage,
+		deployments,
+		builds,
+		domains,
+		quotaWarnings: usage?.warnings ?? []
+	});
+
+	// --- data services ------------------------------------------------------------------------
+
+	const dataServices: DataService[] = [
+		...(databases ?? []).map((db): DataService => ({
+			kind: 'database',
+			name: db.name,
+			status: db.status,
+			label: `${db.engineLabel} ${db.version}`,
+			nodeName: db.nodeName,
+			usedBytes: db.sizeBytes,
+			budgetBytes: db.storageMb * MB,
+			note:
+				db.backup.lastBackupStatus === 'failed'
+					? 'Last backup failed'
+					: db.backup.lastBackupAt
+						? null
+						: db.backup.enabled
+							? 'No backup yet'
+							: 'Backups off',
+			noteTone: db.backup.lastBackupStatus === 'failed' ? 'danger' : 'muted'
+		})),
+		...(storage ?? []).map((st): DataService => ({
+			kind: 'storage',
+			name: st.name,
+			status: st.status,
+			label: `${st.buckets.length} ${st.buckets.length === 1 ? 'bucket' : 'buckets'}${st.public ? ' · public' : ''}`,
+			nodeName: st.nodeName,
+			usedBytes: st.usedBytes,
+			budgetBytes: st.storageMb * MB,
+			note: null,
+			noteTone: 'muted'
+		}))
+	];
+
+	const activity: ActivityItem[] = [
+		...deployments.map((deployment) => ({
+			kind: 'deployment' as const,
+			at: deployment.createdAt,
+			deployment
+		})),
+		// Successful builds are followed by a deployment row; show builds that are running or failed.
+		...builds
+			.filter((build) => build.status !== 'succeeded')
+			.map((build) => ({ kind: 'build' as const, at: build.createdAt, build }))
+	]
+		.sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
+		.slice(0, 10);
 
 	return {
 		status,
-		projects: projects.slice(0, 5),
+		projects: [...projects]
+			.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+			.slice(0, 6),
 		projectCount: projects.length,
+		liveProjects: projects.filter((project) => project.productionDeploymentId !== null).length,
 		traffic,
 		trafficRange,
 		trafficRanges,
@@ -133,7 +180,31 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		projectNames,
 		nodes,
 		nodesDenied,
-		deployments: recent.slice(0, 12),
-		v2
+		capacity,
+		domains: domains
+			? {
+					total: domains.length,
+					live: domains.filter((d) => d.status === 'verified' || d.status === 'active').length
+				}
+			: null,
+		databases: databases
+			? {
+					total: databases.length,
+					running: databases.filter((db) => db.status === 'running').length,
+					bytes: databases.reduce((sum, db) => sum + (db.sizeBytes ?? 0), 0)
+				}
+			: null,
+		storage: storage
+			? {
+					total: storage.length,
+					running: storage.filter((st) => st.status === 'running').length,
+					bytes: storage.reduce((sum, st) => sum + (st.usedBytes ?? 0), 0),
+					objects: storage.reduce((sum, st) => sum + (st.objects ?? 0), 0)
+				}
+			: null,
+		dataServices,
+		builds: { active: activeBuilds.length, readable: buildsReadable },
+		activity,
+		attention
 	};
 };

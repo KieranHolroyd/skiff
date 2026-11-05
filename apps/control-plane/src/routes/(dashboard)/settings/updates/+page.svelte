@@ -1,18 +1,24 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
+	import ArchiveIcon from '@lucide/svelte/icons/archive';
 	import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
+	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
+	import CircleXIcon from '@lucide/svelte/icons/circle-x';
 	import GitBranchIcon from '@lucide/svelte/icons/git-branch';
 	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 	import PackageIcon from '@lucide/svelte/icons/package';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import ServerCogIcon from '@lucide/svelte/icons/server-cog';
+	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
+	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import type {
 		SelfUpdateLog,
 		SelfUpdateOutcome,
 		SelfUpdatePhase,
 		SelfUpdateStatus
 	} from '@skiff/contracts';
+	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import FormFeedback from '#lib/components/skiff/FormFeedback.svelte';
 	import Notice from '#lib/components/skiff/Notice.svelte';
@@ -134,6 +140,31 @@
 		if (!confirm(message)) event.preventDefault();
 	}
 
+	/** Preflight check ids from `evaluateUpgradePreflight`, in words. */
+	const checkLabels: Record<string, string> = {
+		version: 'Version',
+		channel: 'Release channel',
+		migrations: 'Database migrations',
+		disk: 'Disk space',
+		'data-dirs': 'Data directories',
+		'backup-target': 'Backup target',
+		'last-verified-backup': 'Last verified backup',
+		'postgres-major': 'Managed Postgres versions'
+	};
+	const checkLook = {
+		ok: { icon: CircleCheckIcon, tone: 'text-success', label: 'Passed' },
+		warn: { icon: TriangleAlertIcon, tone: 'text-warning', label: 'Warning' },
+		error: { icon: CircleXIcon, tone: 'text-destructive', label: 'Blocks the update' }
+	} as const;
+	const rank = { error: 0, warn: 1, ok: 2 } as const;
+	// Problems first, so the reason an update is blocked is the first thing read.
+	const sortedChecks = $derived(
+		[...data.preflight.checks].sort((a, b) => rank[a.status] - rank[b.status])
+	);
+	const checkCounts = $derived({
+		warn: data.preflight.checks.filter((check) => check.status === 'warn').length
+	});
+
 	const githubUrl = $derived(`https://github.com/${data.source.repo}/tree/${data.source.ref}`);
 </script>
 
@@ -226,6 +257,13 @@
 				<Notice tone="success">You're on the latest version.</Notice>
 			{/if}
 
+			{#if ready && !running && data.comparison.available && !data.preflight.ok}
+				<Notice tone="danger" title="This update would be refused">
+					A pre-update check below is failing. Fix it first, or the updater stops before changing
+					anything.
+				</Notice>
+			{/if}
+
 			{#if ready && !running && (data.comparison.available || !data.latest.ok)}
 				<form
 					method="POST"
@@ -256,70 +294,6 @@
 				</form>
 			{/if}
 		</div>
-	</Panel>
-
-	<Panel
-		title="Upgrade safety"
-		description="Preflight rules, the sealed pre-update snapshot and the last rollback point."
-		icon={ServerCogIcon}
-	>
-		{#snippet actions()}
-			<StatusBadge
-				status={data.preflight.ok ? 'ready' : 'blocked'}
-				label={data.preflight.ok ? 'Ready' : 'Refused'}
-				tone={data.preflight.ok ? 'success' : 'danger'}
-			/>
-		{/snippet}
-		<dl class="grid gap-x-8 gap-y-4 text-sm sm:grid-cols-3">
-			<div class="space-y-1">
-				<dt class="text-xs text-muted-foreground">Target</dt>
-				<dd class="font-mono">{data.preflight.currentVersion} → {data.preflight.targetVersion}</dd>
-			</div>
-			<div class="space-y-1">
-				<dt class="text-xs text-muted-foreground">Migrations</dt>
-				<dd>
-					{data.preflight.migrations.pending.length} pending
-					{#if data.preflight.migrations.destructive}
-						<span class="text-destructive">· destructive</span>
-					{/if}
-				</dd>
-			</div>
-			<div class="space-y-1">
-				<dt class="text-xs text-muted-foreground">Snapshots retained</dt>
-				<dd>{data.snapshots.length}</dd>
-			</div>
-		</dl>
-		{#if data.preflight.errors.length > 0}
-			<Notice tone="danger" title="This upgrade would be refused">
-				<ul class="list-disc space-y-1 pl-4">
-					{#each data.preflight.errors as error (error)}
-						<li>{error}</li>
-					{/each}
-				</ul>
-			</Notice>
-		{:else if data.preflight.warnings.length > 0}
-			<Notice tone="warning" title="Warnings">
-				<ul class="list-disc space-y-1 pl-4">
-					{#each data.preflight.warnings as warning (warning)}
-						<li>{warning}</li>
-					{/each}
-				</ul>
-			</Notice>
-		{/if}
-		{#if data.snapshots.length > 0}
-			<ul class="mt-4 space-y-1 text-xs text-muted-foreground">
-				{#each data.snapshots.slice(0, 3) as snapshot (snapshot.dir)}
-					<li class="font-mono">
-						{snapshot.dir.split('/').at(-1)} · {formatDateTime(snapshot.createdAt)}
-						{snapshot.pinned ? '· pinned' : ''}
-					</li>
-				{/each}
-			</ul>
-		{/if}
-		{#snippet footer()}
-			The updater re-runs this against the exact staged release. A failed /readyz rolls the control
-			plane back; data and APP_KEY restores are always manual.
-		{/snippet}
 	</Panel>
 
 	{#if running}
@@ -378,6 +352,70 @@
 			It last reported “{view.status.message}” at {formatDateTime(view.status.updatedAt)} and probably
 			crashed. Check <code>journalctl -u skiff-update-self</code> on the server. You can start a new update.
 		</Notice>
+	{/if}
+
+	{#if !running}
+		<Panel
+			title="Pre-update checks"
+			description={data.preflight.versionChange === 'same'
+				? 'Checked against the running version. They run again automatically before every update.'
+				: `Checked against v${data.preflight.targetVersion} before anything changes. The updater runs them again on the exact release it downloads.`}
+			icon={ShieldCheckIcon}
+		>
+			{#snippet actions()}
+				<StatusBadge
+					status={data.preflight.ok ? 'ready' : 'blocked'}
+					label={data.preflight.ok
+						? checkCounts.warn > 0
+							? `Ready · ${checkCounts.warn} to review`
+							: 'Ready'
+						: 'Blocked'}
+					tone={data.preflight.ok ? (checkCounts.warn > 0 ? 'warning' : 'success') : 'danger'}
+				/>
+			{/snippet}
+
+			<ul class="-my-1 divide-y">
+				{#each sortedChecks as check (check.id + check.message)}
+					{@const look = checkLook[check.status]}
+					<li class="flex items-start gap-3 py-2.5">
+						<look.icon class="mt-0.5 size-4 shrink-0 {look.tone}" aria-label={look.label} />
+						<div class="min-w-0 flex-1">
+							<p class="text-sm font-medium">{checkLabels[check.id] ?? check.id}</p>
+							<p class="text-sm text-pretty text-muted-foreground">{check.message}</p>
+						</div>
+					</li>
+				{/each}
+			</ul>
+
+			{#if data.snapshots.length > 0}
+				<div class="mt-4 space-y-2 border-t pt-4">
+					<p class="text-xs font-medium text-muted-foreground">Rollback points</p>
+					<ul class="space-y-1.5">
+						{#each data.snapshots.slice(0, 3) as snapshot (snapshot.dir)}
+							<li class="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+								<ArchiveIcon class="size-3.5 text-muted-foreground" aria-hidden="true" />
+								<span>Before v{snapshot.targetVersion}</span>
+								<span class="text-muted-foreground">{formatDateTime(snapshot.createdAt)}</span>
+								{#if snapshot.pinned}<Badge variant="secondary">Pinned</Badge>{/if}
+								{#if snapshot.hasControlDb}
+									<Badge variant="outline" class="font-normal">Includes control database</Badge>
+								{/if}
+							</li>
+						{/each}
+					</ul>
+					{#if data.snapshots.length > 3}
+						<p class="text-xs text-muted-foreground">
+							and {data.snapshots.length - 3} older on the server
+						</p>
+					{/if}
+				</div>
+			{/if}
+
+			{#snippet footer()}
+				If the new version fails its health check after restarting, Skiff rolls back on its own.
+				Restoring data or the app key from a rollback point is always a manual step on the server.
+			{/snippet}
+		</Panel>
 	{/if}
 
 	{#if lastRun?.outcome}

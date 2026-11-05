@@ -7,7 +7,7 @@ export const PROJECT_TABS = [
 	'builds',
 	'source',
 	'domains',
-	'volumes',
+	'data',
 	'runtime',
 	'shares',
 	'settings'
@@ -17,7 +17,11 @@ export type ProjectTab = (typeof PROJECT_TABS)[number];
 
 export const DEFAULT_PROJECT_TAB: ProjectTab = 'deployments';
 
+/** Sections that were renamed, so old links still land in the right place. */
+const LEGACY_TABS: Record<string, ProjectTab> = { volumes: 'data' };
+
 /** Narrow an untrusted `?tab=` value to a real section. */
 export function readProjectTab(value: string | null): ProjectTab {
+	if (value && value in LEGACY_TABS) return LEGACY_TABS[value]!;
 	return PROJECT_TABS.includes(value as ProjectTab) ? (value as ProjectTab) : DEFAULT_PROJECT_TAB;
 }

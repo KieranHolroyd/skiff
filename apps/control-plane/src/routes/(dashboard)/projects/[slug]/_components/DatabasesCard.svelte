@@ -1,5 +1,7 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
 	import DatabaseIcon from '@lucide/svelte/icons/database';
 	import PlugIcon from '@lucide/svelte/icons/plug';
 	import PlusIcon from '@lucide/svelte/icons/plus';
@@ -8,14 +10,16 @@
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
 	import Notice from '#lib/components/skiff/Notice.svelte';
-	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
-	import * as Table from '#lib/components/ui/table/index.js';
+	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import EmptyState from '../../../_lib/EmptyState.svelte';
 	import Panel from '../../../_lib/Panel.svelte';
+	import RowMenu from '../../../_lib/RowMenu.svelte';
+	import { formatDate } from '../../../_lib/format.js';
+	import EnvNames from '../../../_lib/service/EnvNames.svelte';
 
 	/** Managed databases attached to a process/container project (D56). */
 	let {
@@ -90,52 +94,53 @@
 					compact
 					title="No database attached"
 					description="Attach a managed PostgreSQL database and this app receives DATABASE_URL, DATABASE_HOST, DATABASE_PORT and friends at start-up."
-				/>
+				>
+					{#if can.attachDatabase && databases.length > 0}
+						<Button size="sm" onclick={openAttach}><PlugIcon />Attach a database</Button>
+					{:else if can.createDatabase && can.attachDatabase}
+						<Button size="sm" variant="outline" href={createHref}>
+							<PlusIcon />Create a database
+						</Button>
+					{/if}
+				</EmptyState>
 			</div>
 		{:else}
-			<Table.Root>
-				<Table.Header>
-					<Table.Row>
-						<Table.Head class="pl-4">Database</Table.Head>
-						<Table.Head>Env vars</Table.Head>
-						<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
-					</Table.Row>
-				</Table.Header>
-				<Table.Body>
-					{#each attachments as item (item.databaseId)}
-						<Table.Row>
-							<Table.Cell class="pl-4 align-top">
-								<a
-									href={resolve('/(dashboard)/databases/[name]', { name: item.databaseName })}
-									class="inline-flex items-center gap-1.5 font-mono text-xs font-medium underline-offset-4 hover:underline"
-								>
-									<DatabaseIcon class="size-3.5 text-muted-foreground" />
+			<ul class="divide-y">
+				{#each attachments as item (item.databaseId)}
+					{@const href = resolve('/(dashboard)/databases/[name]', { name: item.databaseName })}
+					<li class="flex items-start gap-3 px-4 py-3">
+						<span
+							class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
+							aria-hidden="true"
+						>
+							<DatabaseIcon class="size-4" />
+						</span>
+						<div class="min-w-0 flex-1 space-y-1.5">
+							<div>
+								<a {href} class="font-mono text-sm font-medium underline-offset-4 hover:underline">
 									{item.databaseName}
 								</a>
-							</Table.Cell>
-							<Table.Cell class="whitespace-normal">
-								<div class="flex flex-wrap gap-1">
-									{#each item.envNames as name (name)}
-										<Badge variant="secondary" class="font-mono font-normal">{name}</Badge>
-									{/each}
-								</div>
-							</Table.Cell>
-							<Table.Cell class="pr-4 text-right align-top">
-								{#if can.attachDatabase}
-									<Button
-										variant="ghost-danger"
-										size="icon-sm"
-										aria-label="Detach {item.databaseName}"
-										onclick={() => detach(item)}
-									>
-										<UnplugIcon />
-									</Button>
-								{/if}
-							</Table.Cell>
-						</Table.Row>
-					{/each}
-				</Table.Body>
-			</Table.Root>
+								<p class="text-xs text-muted-foreground">
+									Injected as <span class="font-mono">{item.envPrefix}_*</span> · attached
+									{formatDate(item.createdAt)}
+								</p>
+							</div>
+							<EnvNames names={item.envNames} />
+						</div>
+						<RowMenu label="Actions for {item.databaseName}">
+							<DropdownMenu.Item onSelect={() => goto(href)}>
+								<ArrowUpRightIcon />Open database
+							</DropdownMenu.Item>
+							{#if can.attachDatabase}
+								<DropdownMenu.Separator />
+								<DropdownMenu.Item variant="destructive" onSelect={() => detach(item)}>
+									<UnplugIcon />Detach
+								</DropdownMenu.Item>
+							{/if}
+						</RowMenu>
+					</li>
+				{/each}
+			</ul>
 		{/if}
 	</Panel>
 

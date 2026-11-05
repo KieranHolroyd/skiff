@@ -1,5 +1,7 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
 	import CylinderIcon from '@lucide/svelte/icons/cylinder';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
@@ -15,9 +17,11 @@
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
-	import * as Table from '#lib/components/ui/table/index.js';
+	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import EmptyState from '../../../_lib/EmptyState.svelte';
 	import Panel from '../../../_lib/Panel.svelte';
+	import RowMenu from '../../../_lib/RowMenu.svelte';
+	import EnvNames from '../../../_lib/service/EnvNames.svelte';
 	import GrantsFields from '../../../storage/_lib/GrantsFields.svelte';
 
 	interface AttachableStorage {
@@ -117,80 +121,72 @@
 					compact
 					title="No storage attached"
 					description="Attach an S3-compatible storage instance and this app receives S3_ENDPOINT_URL, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY and friends at start-up."
-				/>
+				>
+					{#if can.attachStorage && instances.length > 0}
+						<Button size="sm" onclick={openAttach}><PlugIcon />Attach storage</Button>
+					{:else if can.createStorage && can.attachStorage}
+						<Button size="sm" variant="outline" href={createHref}>
+							<PlusIcon />Create storage
+						</Button>
+					{/if}
+				</EmptyState>
 			</div>
 		{:else}
-			<Table.Root>
-				<Table.Header>
-					<Table.Row>
-						<Table.Head class="pl-4">Storage</Table.Head>
-						<Table.Head>Grants</Table.Head>
-						<Table.Head class="hidden md:table-cell">Env vars</Table.Head>
-						<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
-					</Table.Row>
-				</Table.Header>
-				<Table.Body>
-					{#each attachments as item (item.storageId)}
-						<Table.Row>
-							<Table.Cell class="pl-4 align-top">
-								<a
-									href={resolve('/(dashboard)/storage/[name]', { name: item.storageName })}
-									class="inline-flex items-center gap-1.5 font-mono text-xs font-medium underline-offset-4 hover:underline"
-								>
-									<CylinderIcon class="size-3.5 text-muted-foreground" />
+			<ul class="divide-y">
+				{#each attachments as item (item.storageId)}
+					{@const href = resolve('/(dashboard)/storage/[name]', { name: item.storageName })}
+					<li class="flex items-start gap-3 px-4 py-3">
+						<span
+							class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
+							aria-hidden="true"
+						>
+							<CylinderIcon class="size-4" />
+						</span>
+						<div class="min-w-0 flex-1 space-y-1.5">
+							<div>
+								<a {href} class="font-mono text-sm font-medium underline-offset-4 hover:underline">
 									{item.storageName}
 								</a>
-								<p class="mt-1 font-mono text-[11px] text-muted-foreground" title="Access key ID">
-									{item.accessKeyId}
+								<p class="truncate text-xs text-muted-foreground">
+									Injected as <span class="font-mono">{item.envPrefix}_*</span> · key
+									<span class="font-mono">{item.accessKeyId}</span>
 								</p>
-							</Table.Cell>
-							<Table.Cell class="align-top whitespace-normal">
-								<div class="flex flex-wrap gap-1">
-									{#each item.grants as grant (grant.bucket)}
-										<Badge
-											variant={grant.mode === 'read-write' ? 'secondary' : 'outline'}
-											class="font-mono font-normal"
+							</div>
+							<div class="flex flex-wrap items-center gap-1">
+								<span class="mr-0.5 text-xs text-muted-foreground">Buckets</span>
+								{#each item.grants as grant (grant.bucket)}
+									<Badge
+										variant={grant.mode === 'read-write' ? 'secondary' : 'outline'}
+										class="font-mono font-normal"
+										title={grant.mode}
+									>
+										{grant.bucket}<span class="text-muted-foreground"
+											>{grant.mode === 'read-write' ? 'rw' : 'r'}</span
 										>
-											{grant.bucket}<span class="text-muted-foreground"
-												>{grant.mode === 'read-write' ? 'rw' : 'r'}</span
-											>
-										</Badge>
-									{/each}
-								</div>
-							</Table.Cell>
-							<Table.Cell class="hidden whitespace-normal md:table-cell">
-								<div class="flex flex-wrap gap-1">
-									{#each item.envNames as name (name)}
-										<Badge variant="secondary" class="font-mono font-normal">{name}</Badge>
-									{/each}
-								</div>
-							</Table.Cell>
-							<Table.Cell class="pr-4 text-right align-top">
-								{#if can.attachStorage}
-									<div class="flex justify-end gap-1">
-										<Button
-											variant="ghost"
-											size="icon-sm"
-											aria-label="Edit grants on {item.storageName}"
-											onclick={() => editGrants(item)}
-										>
-											<PencilIcon />
-										</Button>
-										<Button
-											variant="ghost-danger"
-											size="icon-sm"
-											aria-label="Detach {item.storageName}"
-											onclick={() => detach(item)}
-										>
-											<UnplugIcon />
-										</Button>
-									</div>
-								{/if}
-							</Table.Cell>
-						</Table.Row>
-					{/each}
-				</Table.Body>
-			</Table.Root>
+									</Badge>
+								{:else}
+									<span class="text-xs text-muted-foreground">none granted</span>
+								{/each}
+							</div>
+							<EnvNames names={item.envNames} />
+						</div>
+						<RowMenu label="Actions for {item.storageName}">
+							<DropdownMenu.Item onSelect={() => goto(href)}>
+								<ArrowUpRightIcon />Open storage
+							</DropdownMenu.Item>
+							{#if can.attachStorage}
+								<DropdownMenu.Item onSelect={() => editGrants(item)}>
+									<PencilIcon />Edit bucket grants…
+								</DropdownMenu.Item>
+								<DropdownMenu.Separator />
+								<DropdownMenu.Item variant="destructive" onSelect={() => detach(item)}>
+									<UnplugIcon />Detach
+								</DropdownMenu.Item>
+							{/if}
+						</RowMenu>
+					</li>
+				{/each}
+			</ul>
 		{/if}
 	</Panel>
 
@@ -267,7 +263,8 @@
 			bind:open={grantsOpen}
 			icon={KeyRoundIcon}
 			title="Grants on {editing?.storageName ?? ''}"
-			description="Changes the policy on this project's key ({editing?.accessKeyId ?? ''}). The app restarts with the new grants."
+			description="Changes the policy on this project's key ({editing?.accessKeyId ??
+				''}). The app restarts with the new grants."
 			action="?/updateStorageGrants"
 			submitLabel="Save grants"
 		>

@@ -7,8 +7,8 @@
 	import { page } from '$app/state';
 	import ChartNoAxesCombinedIcon from '@lucide/svelte/icons/chart-no-axes-combined';
 	import CpuIcon from '@lucide/svelte/icons/cpu';
+	import DatabaseIcon from '@lucide/svelte/icons/database';
 	import FolderTreeIcon from '@lucide/svelte/icons/folder-tree';
-import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 	import GitBranchIcon from '@lucide/svelte/icons/git-branch';
 	import GlobeIcon from '@lucide/svelte/icons/globe';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
@@ -70,7 +70,7 @@ import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 			label: 'Configure',
 			items: [
 				{ id: 'domains', label: 'Domains', icon: GlobeIcon, count: counts.domains },
-				{ id: 'volumes', label: 'Volumes', icon: HardDriveIcon, count: counts.volumes },
+				{ id: 'data', label: 'Data', icon: DatabaseIcon, count: counts.data },
 				{ id: 'runtime', label: 'Runtime', icon: CpuIcon },
 				{ id: 'shares', label: 'Share links', icon: LinkIcon, count: counts.shares },
 				{ id: 'settings', label: 'Settings', icon: KeyRoundIcon }

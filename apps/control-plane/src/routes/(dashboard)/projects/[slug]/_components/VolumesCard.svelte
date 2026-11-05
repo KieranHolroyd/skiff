@@ -8,15 +8,18 @@
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
 	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
+	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
-	import * as Table from '#lib/components/ui/table/index.js';
+	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
+	import { Progress } from '#lib/components/ui/progress/index.js';
 	import EmptyState from '../../../_lib/EmptyState.svelte';
 	import Panel from '../../../_lib/Panel.svelte';
-	import { formatBytes, formatDateTime } from '../../../_lib/format.js';
+	import RowMenu from '../../../_lib/RowMenu.svelte';
+	import { formatBytes, formatDate } from '../../../_lib/format.js';
 
 	/** Project-owned persistent application volumes (plan 07). */
 	let {
@@ -55,9 +58,9 @@
 
 	function detach(volume: AppVolumeView, environment: string) {
 		askConfirm({
-			title: `Detach ${volume.name}?`,
+			title: `Unmount ${volume.name}?`,
 			description: `${slug} restarts without ${volume.mountPath}. The volume and its data are untouched.`,
-			confirmLabel: 'Detach',
+			confirmLabel: 'Unmount',
 			tone: 'danger',
 			action: '?/detachVolume',
 			fields: { volume: volume.name, workload: workloadId, environment }
@@ -68,7 +71,7 @@
 		askConfirm({
 			title: `Delete ${volume.name}?`,
 			description:
-				'Detach it first; after deletion its data is kept for 7 days. This cannot be undone from the dashboard.',
+				'Its data is kept for 7 days after deletion, but it cannot be restored from the dashboard.',
 			confirmLabel: 'Delete volume',
 			tone: 'danger',
 			action: '?/deleteVolume',
@@ -76,12 +79,14 @@
 		});
 	}
 
-	const used = (volume: AppVolumeView) => {
+	/** Usage against the volume's quota; null until the agent reports a sample. */
+	function meter(volume: AppVolumeView) {
 		const budget = volume.sizeMb * 1024 * 1024;
-		if (volume.usedBytes === null) return `— / ${formatBytes(budget)}`;
-		const percent = budget > 0 ? Math.round((volume.usedBytes / budget) * 100) : 0;
-		return `${formatBytes(volume.usedBytes)} / ${formatBytes(budget)} (${percent}%)`;
-	};
+		if (volume.usedBytes === null)
+			return { used: null, budget: formatBytes(budget), percent: null };
+		const percent = budget > 0 ? Math.min(100, Math.round((volume.usedBytes / budget) * 100)) : 0;
+		return { used: formatBytes(volume.usedBytes), budget: formatBytes(budget), percent };
+	}
 </script>
 
 {#if enabled}
@@ -89,7 +94,7 @@
 		title="Volumes"
 		icon={HardDriveIcon}
 		count={volumes.length}
-		description="Persistent directories mounted into the app at an absolute path inside the workload. Quotas and disk admission are enforced by the control plane; the node derives the backing path."
+		description="Directories that survive redeploys and restarts, mounted into the app at a path you choose."
 		flush
 	>
 		{#snippet actions()}
@@ -106,100 +111,103 @@
 					icon={HardDriveIcon}
 					compact
 					title="No volumes yet"
-					description="Create a volume, then attach it at a path such as /var/lib/app. It survives redeploys and restarts."
-				/>
+					description="Create a volume, then mount it at a path such as /var/lib/app. It survives redeploys and restarts."
+				>
+					{#if can.manageVolumes}
+						<Button size="sm" onclick={() => (createOpen = true)}><PlusIcon />New volume</Button>
+					{/if}
+				</EmptyState>
 			</div>
 		{:else}
-			<Table.Root>
-				<Table.Header>
-					<Table.Row>
-						<Table.Head class="pl-4">Volume</Table.Head>
-						<Table.Head>Status</Table.Head>
-						<Table.Head class="hidden md:table-cell">Backing</Table.Head>
-						<Table.Head class="hidden lg:table-cell">Used / quota</Table.Head>
-						<Table.Head>Mounts</Table.Head>
-						<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
-					</Table.Row>
-				</Table.Header>
-				<Table.Body>
-					{#each volumes as volume (volume.id)}
-						<Table.Row>
-							<Table.Cell class="pl-4 align-top">
-								<span class="font-mono text-xs font-medium">{volume.name}</span>
-								<p class="text-[11px] text-muted-foreground">{formatDateTime(volume.createdAt)}</p>
-							</Table.Cell>
-							<Table.Cell class="align-top">
-								<StatusBadge status={volume.status} />
-								{#if volume.message}
-									<p class="mt-1 max-w-52 text-[11px] text-muted-foreground">{volume.message}</p>
-								{/if}
-							</Table.Cell>
-							<Table.Cell class="hidden align-top md:table-cell">
-								<span class="font-mono text-xs">
+			<ul class="divide-y">
+				{#each volumes as volume (volume.id)}
+					{@const usage = meter(volume)}
+					<li class="flex items-start gap-3 px-4 py-3">
+						<span
+							class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
+							aria-hidden="true"
+						>
+							<HardDriveIcon class="size-4" />
+						</span>
+						<div class="min-w-0 flex-1 space-y-2">
+							<div>
+								<p class="flex flex-wrap items-center gap-2">
+									<span class="font-mono text-sm font-medium">{volume.name}</span>
+									<StatusBadge status={volume.status} />
+								</p>
+								<p class="text-xs text-muted-foreground">
 									{volume.backing === 'node_volume'
-										? `node:${volume.nodeVolume?.name ?? 'removed'}`
-										: 'state-dir'}
-								</span>
-								{#if volume.singleWriter}
-									<p class="text-[11px] text-muted-foreground">single writer</p>
+										? `On node volume ${volume.nodeVolume?.name ?? '(removed)'}`
+										: "On the node's state directory"}{volume.singleWriter
+										? ' · single writer'
+										: ''} · created {formatDate(volume.createdAt)}
+								</p>
+								{#if volume.message}
+									<p class="mt-1 text-xs text-muted-foreground">{volume.message}</p>
 								{/if}
-							</Table.Cell>
-							<Table.Cell class="hidden align-top whitespace-normal lg:table-cell">
-								<span class="text-xs tabular-nums">{used(volume)}</span>
-							</Table.Cell>
-							<Table.Cell class="align-top whitespace-normal">
-								{#if volume.attachments.length === 0}
-									<span class="text-xs text-muted-foreground">Not attached</span>
-								{:else}
-									<div class="space-y-1">
-										{#each volume.attachments as attachment (attachment.id)}
-											<div class="flex items-center gap-2">
-												<span class="font-mono text-[11px]">{attachment.mountPath}</span>
-												<span class="text-[11px] text-muted-foreground">
-													{attachment.readOnly ? 'read-only' : 'read-write'}
-												</span>
-												{#if can.manageVolumes}
-													<Button
-														variant="ghost-danger"
-														size="icon-sm"
-														aria-label="Detach {volume.name} from {attachment.environment}"
-														onclick={() => detach(volume, attachment.environment)}
-													>
-														<UnplugIcon />
-													</Button>
-												{/if}
-											</div>
-										{/each}
-									</div>
-								{/if}
-							</Table.Cell>
-							<Table.Cell class="pr-4 text-right align-top">
-								{#if can.manageVolumes}
-									<div class="flex justify-end gap-1">
-										<Button
-											variant="ghost"
-											size="icon-sm"
-											aria-label="Attach {volume.name}"
-											disabled={volume.attachments.length > 0}
-											onclick={() => openAttach(volume)}
-										>
-											<PlugIcon />
-										</Button>
-										<Button
-											variant="ghost-danger"
-											size="icon-sm"
-											aria-label="Delete {volume.name}"
-											onclick={() => remove(volume)}
-										>
-											<TrashIcon />
-										</Button>
-									</div>
-								{/if}
-							</Table.Cell>
-						</Table.Row>
-					{/each}
-				</Table.Body>
-			</Table.Root>
+							</div>
+
+							<div class="max-w-sm space-y-1">
+								<div class="flex justify-between text-xs tabular-nums">
+									<span class="text-muted-foreground">
+										{usage.used === null ? 'Not measured yet' : `${usage.used} used`}
+									</span>
+									<span>{usage.budget}</span>
+								</div>
+								<Progress
+									value={usage.percent ?? 0}
+									class="h-1 {usage.percent !== null && usage.percent >= 85
+										? '[&_[data-slot=progress-indicator]]:bg-destructive'
+										: usage.percent !== null && usage.percent >= 70
+											? '[&_[data-slot=progress-indicator]]:bg-warning'
+											: ''}"
+									aria-label="{volume.name}: {usage.percent ?? 0}% of its quota"
+								/>
+							</div>
+
+							{#if volume.attachments.length === 0}
+								<p class="text-xs text-muted-foreground">Not mounted</p>
+							{:else}
+								<ul class="space-y-1">
+									{#each volume.attachments as attachment (attachment.id)}
+										<li class="flex flex-wrap items-center gap-x-2 text-xs">
+											<PlugIcon class="size-3 text-muted-foreground" aria-hidden="true" />
+											<span class="font-mono">{attachment.mountPath}</span>
+											<Badge variant="outline" class="font-normal">
+												{attachment.readOnly ? 'read-only' : 'read-write'}
+											</Badge>
+											<span class="text-muted-foreground">{attachment.environment}</span>
+										</li>
+									{/each}
+								</ul>
+							{/if}
+						</div>
+						{#if can.manageVolumes}
+							<RowMenu label="Actions for {volume.name}">
+								<DropdownMenu.Item
+									disabled={volume.attachments.length > 0}
+									onSelect={() => openAttach(volume)}
+								>
+									<PlugIcon />Mount in {slug}…
+								</DropdownMenu.Item>
+								{#each volume.attachments as attachment (attachment.id)}
+									<DropdownMenu.Item onSelect={() => detach(volume, attachment.environment)}>
+										<UnplugIcon />Unmount from {attachment.environment}
+									</DropdownMenu.Item>
+								{/each}
+								<DropdownMenu.Separator />
+								<DropdownMenu.Item
+									variant="destructive"
+									disabled={volume.attachments.length > 0}
+									onSelect={() => remove(volume)}
+								>
+									<TrashIcon />Delete volume
+								</DropdownMenu.Item>
+							</RowMenu>
+						{/if}
+					</li>
+				{/each}
+			</ul>
 		{/if}
 	</Panel>
 
@@ -246,7 +254,12 @@
 					</Field.Field>
 					<Field.Field data-invalid={fieldErrors.backing ? true : undefined}>
 						<Field.Label for="volume-backing">Backing</Field.Label>
-						<NativeSelect.Root id="volume-backing" name="backing" bind:value={backing} class="w-full">
+						<NativeSelect.Root
+							id="volume-backing"
+							name="backing"
+							bind:value={backing}
+							class="w-full"
+						>
 							<NativeSelect.Option value="state_dir">Helper state directory</NativeSelect.Option>
 							<NativeSelect.Option value="node_volume">Registered node volume</NativeSelect.Option>
 						</NativeSelect.Root>
@@ -266,16 +279,23 @@
 							aria-invalid={fieldErrors.nodeVolume ? 'true' : undefined}
 						/>
 						<Field.Description>
-							Must already be registered on the project's node. Ask a platform admin if you do not know
-							the name.
+							Must already be registered on the project's node. Ask a platform admin if you do not
+							know the name.
 						</Field.Description>
 						{#if fieldErrors.nodeVolume}<Field.Error>{fieldErrors.nodeVolume}</Field.Error>{/if}
 					</Field.Field>
 				{/if}
 				<Field.Field orientation="horizontal">
-					<Checkbox id="volume-single-writer" name="singleWriter" value="1" bind:checked={singleWriter} />
+					<Checkbox
+						id="volume-single-writer"
+						name="singleWriter"
+						value="1"
+						bind:checked={singleWriter}
+					/>
 					<Field.Label for="volume-single-writer">Single writer</Field.Label>
-					<Field.Description>Refuse a second read-write attachment. Read-only mounts are allowed.</Field.Description>
+					<Field.Description
+						>Refuse a second read-write attachment. Read-only mounts are allowed.</Field.Description
+					>
 				</Field.Field>
 			</Field.Group>
 		</FormDialog>
@@ -283,10 +303,10 @@
 		<FormDialog
 			bind:open={attachOpen}
 			icon={PlugIcon}
-			title="Attach {attaching?.name ?? ''}"
+			title="Mount {attaching?.name ?? ''}"
 			description="The app restarts with the volume mounted at this absolute path inside its sandbox."
 			action="?/attachVolume"
-			submitLabel="Attach"
+			submitLabel="Mount"
 		>
 			<input type="hidden" name="volume" value={attaching?.name ?? ''} />
 			<input type="hidden" name="workload" value={workloadId} />

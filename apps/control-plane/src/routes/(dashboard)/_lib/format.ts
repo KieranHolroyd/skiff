@@ -71,6 +71,21 @@ export function formatDuration(totalSeconds: number): string {
 	return `${Math.floor(totalSeconds)}s`;
 }
 
+/**
+ * "just now", "12m ago", "3h ago", "2d ago"; older than a week falls back to the date. Coarse on
+ * purpose so the server render and the hydrated page rarely disagree.
+ */
+export function formatRelative(value: string | number | Date | null | undefined): string {
+	const date = toDate(value);
+	if (!date) return '—';
+	const seconds = Math.max(0, (Date.now() - date.getTime()) / 1000);
+	if (seconds < 60) return 'just now';
+	if (seconds < 3_600) return `${Math.floor(seconds / 60)}m ago`;
+	if (seconds < 86_400) return `${Math.floor(seconds / 3_600)}h ago`;
+	if (seconds < 7 * 86_400) return `${Math.floor(seconds / 86_400)}d ago`;
+	return formatDate(date);
+}
+
 /** Strip the scheme so hostnames read cleanly in tables. */
 export function displayUrl(url: string): string {
 	return url.replace(/^https?:\/\//, '').replace(/\/$/, '');

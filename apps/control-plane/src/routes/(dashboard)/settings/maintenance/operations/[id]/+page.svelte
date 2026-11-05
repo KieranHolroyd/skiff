@@ -3,6 +3,10 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import ArrowLeftIcon from '@lucide/svelte/icons/arrow-left';
+	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
+	import CircleMinusIcon from '@lucide/svelte/icons/circle-minus';
+	import CircleXIcon from '@lucide/svelte/icons/circle-x';
+	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 	import ListIcon from '@lucide/svelte/icons/list';
 	import {
 		isTerminalOperation,
@@ -12,7 +16,7 @@
 		type OperationView
 	} from '@skiff/contracts';
 	import { toast } from 'svelte-sonner';
-	import DetailList from '#lib/components/skiff/DetailList.svelte';
+	import Notice from '#lib/components/skiff/Notice.svelte';
 	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
@@ -20,6 +24,8 @@
 	import * as Table from '#lib/components/ui/table/index.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import Panel from '../../../../_lib/Panel.svelte';
+	import StatStrip from '../../../../_lib/service/StatStrip.svelte';
+	import type { Stat } from '../../../../_lib/service/sections.js';
 	import { formatBytes, formatDateTime } from '../../../../_lib/format.js';
 	import { streamOperation } from '../../../../_lib/operations/client.js';
 	import {
@@ -41,6 +47,35 @@
 	const info = $derived(operationActions[operation.action]);
 	const prune = $derived(operation.kind === 'prune');
 	const running = $derived(!isTerminalOperation(operation.status));
+
+	const stats = $derived.by((): Stat[] => {
+		const counts = operation.summary.statuses;
+		const list: Stat[] = [
+			{ label: 'Items', value: operation.total.toLocaleString('en-GB'), icon: ListIcon },
+			{
+				label: 'Succeeded',
+				value: counts.succeeded.toLocaleString('en-GB'),
+				icon: CircleCheckIcon
+			},
+			{ label: 'Skipped', value: counts.skipped.toLocaleString('en-GB'), icon: CircleMinusIcon },
+			{
+				label: 'Failed',
+				value: counts.failed.toLocaleString('en-GB'),
+				icon: CircleXIcon,
+				caption: counts.failed > 0 ? 'Filter by status to see why' : undefined
+			}
+		];
+		if (prune)
+			list.push({
+				label: 'Freed',
+				value: formatBytes(operation.summary.freedBytes),
+				icon: HardDriveIcon
+			});
+		return list;
+	});
+
+	const sentence = (value: string) =>
+		(value.charAt(0).toUpperCase() + value.slice(1)).replace(/_/g, ' ');
 
 	// Stream only while something is happening; a plan waiting for review is static.
 	const streamId = $derived(
@@ -167,48 +202,36 @@
 		</div>
 	{/if}
 
-	<div class="grid gap-6 lg:grid-cols-2">
-		<DetailList>
-			<dt>Items</dt>
-			<dd class="font-mono tabular-nums">{operation.total} to run</dd>
-			<dt>Succeeded</dt>
-			<dd class="font-mono tabular-nums">{operation.summary.statuses.succeeded}</dd>
-			<dt>Skipped</dt>
-			<dd class="font-mono tabular-nums">{operation.summary.statuses.skipped}</dd>
-			<dt>Failed</dt>
-			<dd class="font-mono tabular-nums {operation.failed ? 'text-destructive' : ''}">
-				{operation.summary.statuses.failed}
-			</dd>
-			{#if prune}
-				<dt>Freed</dt>
-				<dd class="font-mono tabular-nums">{formatBytes(operation.summary.freedBytes)}</dd>
-			{/if}
-		</DetailList>
-		<DetailList>
-			<dt>By</dt>
-			<dd>
-				{data.mine ? 'You' : (data.actor ?? '—')}
-				{#if operation.actor.type !== 'user'}
-					<span class="text-xs text-muted-foreground">({operation.actor.type})</span>
-				{/if}
-			</dd>
-			<dt>Created</dt>
-			<dd class="font-mono text-xs">{formatDateTime(operation.createdAt)}</dd>
-			<dt>Started</dt>
-			<dd class="font-mono text-xs">{formatDateTime(operation.startedAt)}</dd>
-			<dt>Finished</dt>
-			<dd class="font-mono text-xs">{formatDateTime(operation.finishedAt)}</dd>
-			{#if operation.planExpiresAt}
-				<dt>Plan expires</dt>
-				<dd class="font-mono text-xs">{formatDateTime(operation.planExpiresAt)}</dd>
-			{/if}
-			<dt>Duration</dt>
-			<dd class="font-mono text-xs">{operationDuration(operation)}</dd>
-		</DetailList>
-	</div>
+	<StatStrip label="Operation totals" {stats} />
+
+	<p class="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+		<span>
+			By <span class="text-foreground">{data.mine ? 'you' : (data.actor ?? 'unknown')}</span
+			>{#if operation.actor.type !== 'user'}&nbsp;({operation.actor.type}){/if}
+		</span>
+		<span aria-hidden="true">·</span>
+		<span>Created {formatDateTime(operation.createdAt)}</span>
+		{#if operation.startedAt}
+			<span aria-hidden="true">·</span>
+			<span>Started {formatDateTime(operation.startedAt)}</span>
+		{/if}
+		{#if operation.finishedAt}
+			<span aria-hidden="true">·</span>
+			<span
+				>Finished {formatDateTime(operation.finishedAt)} after {operationDuration(operation)}</span
+			>
+		{/if}
+	</p>
 
 	{#if operation.status === 'failed' && operation.phase}
-		<p class="text-sm text-destructive">{operation.phase}</p>
+		<Notice tone="danger" title="The operation stopped">{operation.phase}</Notice>
+	{:else if operation.status === 'planned'}
+		<Notice tone="info" title="Nothing has changed yet">
+			Review the items below{data.canApply ? `, then ${info.verb.toLowerCase()} them` : ''}. Each
+			item is checked again before it changes{operation.planExpiresAt
+				? `. This plan expires ${formatDateTime(operation.planExpiresAt)}`
+				: ''}.
+		</Notice>
 	{/if}
 
 	<Panel title="Items" icon={ListIcon} flush>
@@ -221,7 +244,7 @@
 			>
 				<NativeSelect.Option value="">Any status</NativeSelect.Option>
 				{#each itemStatuses as status (status)}
-					<NativeSelect.Option value={status}>{status}</NativeSelect.Option>
+					<NativeSelect.Option value={status}>{sentence(status)}</NativeSelect.Option>
 				{/each}
 			</NativeSelect.Root>
 			<NativeSelect.Root
@@ -232,7 +255,7 @@
 			>
 				<NativeSelect.Option value="">Any verdict</NativeSelect.Option>
 				{#each itemVerdicts as verdict (verdict)}
-					<NativeSelect.Option value={verdict}>{verdict}</NativeSelect.Option>
+					<NativeSelect.Option value={verdict}>{sentence(verdict)}</NativeSelect.Option>
 				{/each}
 			</NativeSelect.Root>
 		{/snippet}
@@ -273,7 +296,7 @@
 									? 'text-destructive'
 									: item.verdict === 'skip'
 										? 'text-muted-foreground'
-										: ''}>{item.verdict}</span
+										: ''}>{sentence(item.verdict)}</span
 							>
 							{#if item.reason}
 								<p class="text-muted-foreground">{reasonLabel(item.reason)}</p>

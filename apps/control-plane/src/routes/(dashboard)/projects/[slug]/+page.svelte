@@ -6,6 +6,7 @@
 	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
 	import CopyIcon from '@lucide/svelte/icons/copy';
+	import DatabaseIcon from '@lucide/svelte/icons/database';
 	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
 	import FolderTreeIcon from '@lucide/svelte/icons/folder-tree';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
@@ -145,7 +146,7 @@
 		environments: data.environments.length,
 		builds: data.builds.length,
 		domains: data.domains.length,
-		volumes: data.appVolumes.length,
+		data: data.appVolumes.length + data.databaseAttachments.length + data.storageAttachments.length,
 		shares: activeShares.length
 	});
 
@@ -474,15 +475,50 @@
 					platformOrigin={data.platform.origin}
 					can={{ createDomain: data.can.createDomain, deleteDomain: data.can.deleteDomain }}
 				/>
-			{:else if tab === 'volumes'}
-				<VolumesCard
-					slug={data.project.slug}
-					volumes={data.appVolumes}
-					workloadId={data.workload?.id ?? data.project.slug}
-					enabled={data.appVolumesEnabled}
-					fieldErrors={result?.fieldErrors}
-					can={{ manageVolumes: data.can.manageVolumes }}
-				/>
+			{:else if tab === 'data'}
+				<div class="space-y-5">
+					{#if data.project.runtime === 'static'}
+						<EmptyState
+							icon={DatabaseIcon}
+							title="Static sites have no data services"
+							description="Databases, object storage and volumes attach to a running process or container. A static site is served as files, so there is nothing to attach them to."
+						/>
+					{:else}
+						<DatabasesCard
+							slug={data.project.slug}
+							attachments={data.databaseAttachments}
+							databases={data.attachableDatabases}
+							warning={result?.databaseWarning ?? null}
+							fieldErrors={result?.fieldErrors}
+							can={{
+								readDatabases: data.can.readDatabases,
+								createDatabase: data.can.createDatabase,
+								attachDatabase: data.can.attachDatabase
+							}}
+						/>
+						<StorageCard
+							slug={data.project.slug}
+							attachments={data.storageAttachments}
+							instances={data.attachableStorage}
+							bucketsByStorage={data.storageBuckets}
+							warning={result?.storageWarning ?? null}
+							fieldErrors={result?.fieldErrors}
+							can={{
+								readStorage: data.can.readStorage,
+								createStorage: data.can.createStorage,
+								attachStorage: data.can.attachStorage
+							}}
+						/>
+						<VolumesCard
+							slug={data.project.slug}
+							volumes={data.appVolumes}
+							workloadId={data.workload?.id ?? data.project.slug}
+							enabled={data.appVolumesEnabled}
+							fieldErrors={result?.fieldErrors}
+							can={{ manageVolumes: data.can.manageVolumes }}
+						/>
+					{/if}
+				</div>
 			{:else if tab === 'runtime'}
 				<RuntimePanel
 					project={data.project}
@@ -503,37 +539,6 @@
 						viewCapacity: data.can.viewCapacity
 					}}
 				/>
-				{#if data.project.runtime !== 'static'}
-					<div class="mt-5">
-						<DatabasesCard
-							slug={data.project.slug}
-							attachments={data.databaseAttachments}
-							databases={data.attachableDatabases}
-							warning={result?.databaseWarning ?? null}
-							fieldErrors={result?.fieldErrors}
-							can={{
-								readDatabases: data.can.readDatabases,
-								createDatabase: data.can.createDatabase,
-								attachDatabase: data.can.attachDatabase
-							}}
-						/>
-					</div>
-					<div class="mt-5">
-						<StorageCard
-							slug={data.project.slug}
-							attachments={data.storageAttachments}
-							instances={data.attachableStorage}
-							bucketsByStorage={data.storageBuckets}
-							warning={result?.storageWarning ?? null}
-							fieldErrors={result?.fieldErrors}
-							can={{
-								readStorage: data.can.readStorage,
-								createStorage: data.can.createStorage,
-								attachStorage: data.can.attachStorage
-							}}
-						/>
-					</div>
-				{/if}
 			{:else if tab === 'deployments'}
 				{#if data.deployments.length === 0}
 					<EmptyState
