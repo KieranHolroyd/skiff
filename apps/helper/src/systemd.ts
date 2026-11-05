@@ -15,10 +15,15 @@ import {
 	DATABASE_PGDATA,
 	WORKLOAD_NETWORK_UNIT,
 	containerUnitName,
+	poolerServiceName,
+	poolerUnitName,
 	renderContainerEnvFile,
 	renderContainerUnit,
 	renderEnvFile,
 	renderNetworkUnit,
+	renderPoolerConfig,
+	renderPoolerUnit,
+	renderPoolerUserlist,
 	renderProcessUnit,
 	renderSliceUnit,
 	renderSocketUnit,
@@ -32,11 +37,13 @@ import {
 	STORAGE_ENV,
 	ValidationError,
 	assertAbsolutePath,
+	assertDatabaseId,
 	assertManagedId,
 	assertMemoryMb,
 	assertCpuWeight,
 	assertId,
 	assertRelativePath,
+	databaseAlias,
 	type WorkloadActivation,
 	type WorkloadDesired,
 	type WorkloadStatus,
@@ -123,6 +130,8 @@ export interface SystemdDriverOptions {
 	bunPath: string;
 	systemctlPath?: string;
 	journalctlPath?: string;
+	/** Absolute podman binary used by the fixed database dump/restore verbs. */
+	podmanPath?: string;
 	socketMode?: string;
 	socketGroup?: string | null;
 	/**
@@ -141,6 +150,7 @@ interface UnitPaths {
 	service: string;
 	socket: string;
 	container: string;
+	pooler: string;
 }
 
 export class SystemdDriver {
@@ -154,6 +164,7 @@ export class SystemdDriver {
 	private readonly bunPath: string;
 	private readonly systemctlPath: string;
 	private readonly journalctlPath: string;
+	private readonly podmanPath: string;
 	private readonly socketMode: string;
 	private readonly socketGroup: string | null;
 	private readonly chown: (path: string, uid: number, gid: number) => Promise<void>;
@@ -177,6 +188,7 @@ export class SystemdDriver {
 			options.journalctlPath ?? '/usr/bin/journalctl',
 			'journalctlPath',
 		);
+		this.podmanPath = assertAbsolutePath(options.podmanPath ?? '/usr/bin/podman', 'podmanPath');
 		this.socketMode = validateSocketMode(options.socketMode ?? '0666');
 		this.socketGroup = options.socketGroup ?? null;
 		this.chown = options.chown ?? defaultChown();
@@ -188,6 +200,7 @@ export class SystemdDriver {
 			service: join(this.unitDir, serviceUnitName(id)),
 			socket: join(this.unitDir, socketUnitName(id)),
 			container: join(this.quadletDir, containerUnitName(id)),
+			pooler: join(this.quadletDir, poolerUnitName(id)),
 		};
 	}
 
@@ -386,6 +399,32 @@ export class SystemdDriver {
 			changed = (await this.writeIfChanged(paths.container, container, 0o644)) || changed;
 			changed = (await this.removeIfExists(paths.service)) || changed;
 			changed = (await this.removeIfExists(paths.socket)) || changed;
+
+			if (workload.database && workload.pooler) {
+				const user = env.POSTGRES_USER;
+				const password = env.POSTGRES_PASSWORD;
+				if (!user || !password)
+					throw new ValidationError('A database pooler needs POSTGRES_USER and POSTGRES_PASSWORD');
+				const configPath = join(workloadRuntimeDir, 'pgbouncer.ini');
+				const userlistPath = join(workloadRuntimeDir, 'pgbouncer-users.txt');
+				const config = renderPoolerConfig({
+					databaseAlias: databaseAlias(workload.id),
+					authFile: '/etc/pgbouncer/userlist.txt',
+				});
+				const userlist = renderPoolerUserlist(user, password);
+				changed = (await this.writeIfChanged(configPath, config, 0o600)) || changed;
+				changed = (await this.writeIfChanged(userlistPath, userlist, 0o600)) || changed;
+				await this.chown(configPath, 70, 70).catch(() => undefined);
+				await this.chown(userlistPath, 70, 70).catch(() => undefined);
+				changed =
+					(await this.writeIfChanged(
+						paths.pooler,
+						renderPoolerUnit({ workload, configPath, userlistPath }),
+						0o644,
+					)) || changed;
+			} else {
+				changed = (await this.removeIfExists(paths.pooler)) || changed;
+			}
 			if (changed) await this.daemonReload();
 			// Switching drivers must stop the process units first; Quadlet generates the service.
 			await this.systemctl(['disable', '--now', serviceUnitName(workload.id)], {
@@ -402,9 +441,226 @@ export class SystemdDriver {
 					? ['restart', '--no-block', serviceUnitName(workload.id)]
 					: ['restart', serviceUnitName(workload.id)],
 			);
+			if (workload.database && workload.pooler) {
+				await this.systemctl(['restart', '--no-block', poolerServiceName(workload.id)], {
+					allowFailure: true,
+				});
+			}
 		}
 
 		return this.status(workload.id);
+	}
+
+	/**
+	 * Fixed `ALTER ROLE` verb for credential rotation (docs/DATABASES.md §4). The SQL goes over
+	 * stdin, never argv, and the new password is verified with a fresh connection.
+	 */
+	async rotateDatabaseRole(id: string, role: 'owner' | 'monitor', newPassword: string): Promise<void> {
+		assertDatabaseId(id, 'database id');
+		if (role !== 'owner' && role !== 'monitor') throw new ValidationError('role must be owner or monitor');
+		if (!/^[A-Za-z0-9_-]{16,200}$/.test(newPassword))
+			throw new ValidationError('The rotated password must be base64url (16–200 characters)');
+		const env = await this.readDatabaseEnv(id);
+		const target = role === 'owner' ? env.user : 'skiff_monitor';
+		const container = `skiff-workload-${id}`;
+		const child = Bun.spawn(
+			[
+				this.podmanPath,
+				'exec',
+				'-i',
+				'-e',
+				'PGPASSWORD',
+				container,
+				'psql',
+				'-h',
+				'127.0.0.1',
+				'-v',
+				'ON_ERROR_STOP=1',
+				'-U',
+				env.user,
+				'-d',
+				env.database,
+			],
+			{
+				env: { ...process.env, PGPASSWORD: env.password },
+				stdin: 'pipe',
+				stdout: 'ignore',
+				stderr: 'pipe',
+			},
+		);
+		child.stdin.write(`ALTER ROLE "${target}" WITH PASSWORD '${newPassword.replace(/'/g, "''")}';\n`);
+		child.stdin.end();
+		const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+		if (code !== 0)
+			throw new Error(`ALTER ROLE failed (${code}): ${stderr.trim().slice(0, 500) || 'no detail'}`);
+
+		const verify = Bun.spawn(
+			[
+				this.podmanPath,
+				'exec',
+				'-e',
+				'PGPASSWORD',
+				container,
+				'psql',
+				'-h',
+				'127.0.0.1',
+				'-tAc',
+				'SELECT 1',
+				'-U',
+				target,
+				'-d',
+				env.database,
+			],
+			{
+				env: { ...process.env, PGPASSWORD: newPassword },
+				stdin: 'ignore',
+				stdout: 'pipe',
+				stderr: 'pipe',
+			},
+		);
+		const [verifyCode, out] = await Promise.all([verify.exited, new Response(verify.stdout).text()]);
+		if (verifyCode !== 0 || out.trim() !== '1')
+			throw new Error('The rotated credential did not pass the verification query.');
+	}
+
+	/**
+	 * Fixed `pg_dump -Fc` verb for managed backups (docs/DATABASES.md §9). The dump is written to a
+	 * 0400 staging file under the workload runtime dir; the caller streams it and removes it.
+	 * Credentials are read from the env file the helper itself wrote for the container and passed
+	 * to podman through its environment, never through argv.
+	 */
+	async dumpDatabase(id: string): Promise<{ path: string; sizeBytes: number; filename: string }> {
+		assertDatabaseId(id, 'database id');
+		const env = await this.readDatabaseEnv(id);
+		const runtimeDir = join(this.runtimeDir, id);
+		await fs.mkdir(runtimeDir, { recursive: true, mode: 0o700 });
+		const path = join(runtimeDir, `dump-${randomUUID()}.dump`);
+		const child = Bun.spawn(
+			[
+				this.podmanPath,
+				'exec',
+				'-e',
+				'PGPASSWORD',
+				`skiff-workload-${id}`,
+				'pg_dump',
+				'-Fc',
+				'--no-owner',
+				'-U',
+				env.user,
+				env.database,
+			],
+			{
+				env: { ...process.env, PGPASSWORD: env.password },
+				stdin: 'ignore',
+				stdout: Bun.file(path),
+				stderr: 'pipe',
+			},
+		);
+		const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+		if (code !== 0) {
+			await fs.rm(path, { force: true }).catch(() => undefined);
+			throw new Error(`pg_dump failed (${code}): ${stderr.trim().slice(0, 500) || 'no detail'}`);
+		}
+		const info = await fs.stat(path);
+		await fs.chmod(path, 0o400);
+		return { path, sizeBytes: info.size, filename: `${id}.dump` };
+	}
+
+	/**
+	 * Fixed `pg_restore` verb. The body is a `pg_dump -Fc` stream from the caller; it is piped
+	 * straight into `pg_restore` inside the target container. Only `db_` ids are accepted, the
+	 * database name and role are identifier-checked, and a verification query must pass.
+	 */
+	async restoreDatabase(id: string, body: ReadableStream<Uint8Array> | null): Promise<void> {
+		assertDatabaseId(id, 'database id');
+		if (!body) throw new ValidationError('A restore needs a request body');
+		const env = await this.readDatabaseEnv(id);
+		const child = Bun.spawn(
+			[
+				this.podmanPath,
+				'exec',
+				'-i',
+				'-e',
+				'PGPASSWORD',
+				`skiff-workload-${id}`,
+				'pg_restore',
+				'--clean',
+				'--if-exists',
+				'--no-owner',
+				'--exit-on-error',
+				'-U',
+				env.user,
+				'-d',
+				env.database,
+			],
+			{
+				env: { ...process.env, PGPASSWORD: env.password },
+				stdin: 'pipe',
+				stdout: 'ignore',
+				stderr: 'pipe',
+			},
+		);
+		const reader = body.getReader();
+		try {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				if (value?.byteLength) {
+					child.stdin.write(value);
+					await child.stdin.flush();
+				}
+			}
+		} finally {
+			child.stdin.end();
+		}
+		const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+		if (code !== 0)
+			throw new Error(`pg_restore failed (${code}): ${stderr.trim().slice(0, 500) || 'no detail'}`);
+		const verify = Bun.spawn(
+			[
+				this.podmanPath,
+				'exec',
+				'-e',
+				'PGPASSWORD',
+				`skiff-workload-${id}`,
+				'psql',
+				'-tAc',
+				'SELECT 1',
+				'-U',
+				env.user,
+				'-d',
+				env.database,
+			],
+			{
+				env: { ...process.env, PGPASSWORD: env.password },
+				stdin: 'ignore',
+				stdout: 'pipe',
+				stderr: 'pipe',
+			},
+		);
+		const [verifyCode, verifyOut] = await Promise.all([
+			verify.exited,
+			new Response(verify.stdout).text(),
+		]);
+		if (verifyCode !== 0 || verifyOut.trim() !== '1')
+			throw new Error('The restored database did not answer the verification query.');
+	}
+
+	private async readDatabaseEnv(id: string): Promise<{ user: string; password: string; database: string }> {
+		const text = await fs.readFile(join(this.runtimeDir, id, 'env'), 'utf8').catch(() => null);
+		if (text === null) throw new ValidationError(`Database ${id} has no runtime env file; start it first.`);
+		const values = new Map<string, string>();
+		for (const line of text.split('\n')) {
+			const eq = line.indexOf('=');
+			if (eq <= 0) continue;
+			values.set(line.slice(0, eq), line.slice(eq + 1));
+		}
+		const user = values.get('POSTGRES_USER') ?? '';
+		const password = values.get('POSTGRES_PASSWORD') ?? '';
+		const database = values.get('POSTGRES_DB') ?? '';
+		if (!identifier(user) || !identifier(database) || !password)
+			throw new ValidationError(`Database ${id} is missing valid Postgres credentials in its env file.`);
+		return { user, password, database };
 	}
 
 	/**
@@ -435,9 +691,10 @@ export class SystemdDriver {
 		// Best effort: units may not exist or systemd may be unavailable (dev).
 		await this.systemctl(['disable', '--now', serviceUnitName(id)], { allowFailure: true });
 		await this.systemctl(['disable', '--now', socketUnitName(id)], { allowFailure: true });
+		await this.systemctl(['disable', '--now', poolerServiceName(id)], { allowFailure: true });
 
 		let changed = false;
-		for (const path of [paths.service, paths.socket, paths.container]) {
+		for (const path of [paths.service, paths.socket, paths.container, paths.pooler]) {
 			changed = (await this.removeIfExists(path)) || changed;
 		}
 		if (changed) await this.daemonReload();
@@ -694,6 +951,11 @@ function toLogEntry(record: Record<string, unknown>): HelperLogEntry | null {
 	const message = journalMessage(record.MESSAGE);
 	if (!message) return null;
 	return { cursor, ts, priority, message };
+}
+
+/** Postgres role/database names are derived from slugs; this keeps podman argv free of syntax. */
+function identifier(value: string): boolean {
+	return /^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(value);
 }
 
 function validateSocketMode(mode: string): string {

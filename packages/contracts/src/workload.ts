@@ -137,6 +137,8 @@ export const workloadDesiredSchema = z.object({
 	dataSizeMb: z.number().int().positive().nullable().default(null),
 	/** Managed database profile (D55, D61); the helper derives image, user and mounts from it. */
 	database: workloadDatabaseSchema.optional(),
+	/** Managed database pooler (PgBouncer sidecar) host port; omitted when disabled. */
+	pooler: z.object({ port: z.number().int().positive() }).optional(),
 	/** Managed object storage profile (S1); buckets and scoped users are converged by the agent. */
 	objectStorage: workloadObjectStorageSchema.optional(),
 	/**
@@ -156,6 +158,8 @@ export const workloadActivationSchema = z.object({
 	files: z.record(z.string(), z.string()).default({}),
 	/** Managed databases only: stats-sampler credentials, kept in agent memory (D57). */
 	monitor: databaseMonitorSchema.optional(),
+	/** Managed databases only: extensions to install idempotently on first start. */
+	databaseSetup: z.object({ extensions: z.array(z.string().max(64)).max(20).default([]) }).optional(),
 	/** Storage instances only: root and scoped keys for bucket/user reconcile, agent memory only. */
 	storageAdmin: storageAdminSchema.optional(),
 });

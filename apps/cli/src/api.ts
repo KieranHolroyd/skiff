@@ -11,8 +11,10 @@ import { platformOrigin } from './config.ts';
 import { ApiError, CliError } from './errors.ts';
 import type {
 	DatabaseAttachmentView,
+	DatabaseBackupView,
 	DatabaseCreateInput,
 	DatabaseCredentials,
+	DatabaseRotationView,
 	DatabaseView,
 } from './databases.ts';
 import type {
@@ -591,6 +593,57 @@ export class ApiClient {
 	async restoreDatabase(name: string): Promise<{ database: DatabaseView; raw: unknown }> {
 		const raw = await this.request('POST', `/api/v1/databases/${encodeURIComponent(name)}/restore`, { body: {} });
 		return { database: databaseFrom(raw), raw };
+	}
+
+	async listDatabaseBackups(name: string): Promise<{ backups: DatabaseBackupView[]; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/databases/${encodeURIComponent(name)}/backups`);
+		return { backups: (asArray(asRecord(raw)?.backups) ?? []) as DatabaseBackupView[], raw };
+	}
+
+	async createDatabaseBackup(name: string, input: { pinned?: boolean } = {}): Promise<{ backup: DatabaseBackupView; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/databases/${encodeURIComponent(name)}/backups`, { body: input });
+		return { backup: asRecord(asRecord(raw)?.backup) as unknown as DatabaseBackupView, raw };
+	}
+
+	async deleteDatabaseBackup(name: string, backupId: string): Promise<unknown> {
+		return this.request('DELETE', `/api/v1/databases/${encodeURIComponent(name)}/backups/${encodeURIComponent(backupId)}`);
+	}
+
+	async restoreDatabaseBackup(
+		name: string,
+		backupId: string,
+		input: { name: string; placement?: string; project?: string; envPrefix?: string },
+	): Promise<{ database: DatabaseView; raw: unknown }> {
+		const raw = await this.request(
+			'POST',
+			`/api/v1/databases/${encodeURIComponent(name)}/backups/${encodeURIComponent(backupId)}/restore`,
+			{ body: input },
+		);
+		return { database: databaseFrom(raw), raw };
+	}
+
+	async listDatabaseRotations(name: string): Promise<{ rotations: DatabaseRotationView[]; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/databases/${encodeURIComponent(name)}/rotate`);
+		return {
+			rotations: (asArray(asRecord(raw)?.rotations) ?? []) as DatabaseRotationView[],
+			raw,
+		};
+	}
+
+	async rotateDatabase(name: string, role: 'owner' | 'monitor'): Promise<{ rotation: DatabaseRotationView; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/databases/${encodeURIComponent(name)}/rotate`, {
+			body: { role },
+		});
+		return { rotation: asRecord(asRecord(raw)?.rotation) as unknown as DatabaseRotationView, raw };
+	}
+
+	async databaseBackupPolicy(name: string): Promise<{ policy: unknown; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/databases/${encodeURIComponent(name)}/backup-policy`);
+		return { policy: asRecord(raw)?.backup, raw };
+	}
+
+	async setDatabaseBackupPolicy(name: string, input: { enabled?: boolean; schedule?: string; retentionDays?: number }): Promise<unknown> {
+		return this.request('PATCH', `/api/v1/databases/${encodeURIComponent(name)}/backup-policy`, { body: input });
 	}
 
 	async databaseCredentials(name: string): Promise<{ credentials: DatabaseCredentials; raw: unknown }> {

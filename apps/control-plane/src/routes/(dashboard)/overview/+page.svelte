@@ -85,6 +85,7 @@
 
 <div class="space-y-8">
 	<PageHeader
+		target="page.overview"
 		eyebrow={data.org.name}
 		title="Overview"
 		description="Every project, deployment and node served on {data.contentDomain}."

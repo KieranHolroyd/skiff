@@ -32,6 +32,7 @@ export async function runHelper(): Promise<void> {
 		bunPath: config.bunPath,
 		systemctlPath: config.systemctlPath,
 		journalctlPath: config.journalctlPath,
+		podmanPath: config.podmanPath,
 		socketMode: config.workloadSocketMode,
 		socketGroup: config.workloadSocketGroup,
 	});

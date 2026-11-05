@@ -90,10 +90,14 @@
 - [x] REST, MCP, CLI (`skif db`), dashboard list/detail/charts/attach
 - [ ] End-to-end on a Debian 13 node: Quadlet `.container`/`.network` from `/etc/containers/systemd`, installer installs/checks Podman ≥ 5 with netavark
 - [ ] Per-org Podman networks (today every container on a node shares `skiff-workloads`; databases still need a password)
-- [ ] Backups: scheduled `pg_dump` → `ObjectStore`, retention, restore into a new database
+- [x] Backups: scheduled/manual `pg_dump -Fc` → `ObjectStore`, retention, restore into a new database with verification (D83)
+- [x] Extensions allowlist (`pgvector`, PostGIS, `pg_trgm`, `pgcrypto`, `citext`, `hstore`, `unaccent`, `pg_cron`) and `pg_stat_statements` slow queries (D84)
+- [x] PgBouncer transaction pooler sidecar with `<PREFIX>_POOL_URL` (D85)
+- [x] Owner/monitor credential rotation with node-side `ALTER ROLE` and verified swap (D86)
+- [ ] TLS in transit with a per-node CA and `sslmode=require` URLs
 - [ ] On-demand SQL console (pgweb or Adminer) behind `platform` access (D60)
 - [ ] Database metrics in the Parquet archive; bulk actions and prune for databases; `restore_database` over MCP
-- [ ] Cross-node access via a node private address; credential rotation; `pg_stat_statements`; MySQL/Valkey
+- [ ] Cross-node access via a node private address; PITR (pgBackRest/WAL-G); MySQL/Valkey
 
 ## Managed object storage ([OBJECT-STORAGE.md](./OBJECT-STORAGE.md))
 - [x] RustFS 1.0 as a tier-3 container: create, resize, soft delete, restore, purge (D62, D69)

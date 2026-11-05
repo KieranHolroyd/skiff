@@ -50,6 +50,12 @@ export interface HelperApi {
 	logs(id: string, options?: LogReadOptions): Promise<HelperLogResult>;
 	/** Delete a purged database's unit and data dir (D59). Idempotent. */
 	purge(id: string): Promise<void>;
+	/** Stream a `pg_dump -Fc` artifact from the helper (docs/DATABASES.md §9). */
+	dumpDatabase(id: string): Promise<{ body: ReadableStream<Uint8Array>; sizeBytes: number | null }>;
+	/** Stream a dump into a managed database. */
+	restoreDatabase(id: string, body: ReadableStream<Uint8Array> | null): Promise<void>;
+	/** Apply a rotated owner/monitor password. */
+	rotateDatabaseRole(id: string, role: 'owner' | 'monitor', password: string): Promise<void>;
 }
 
 export class HelperError extends Error {
@@ -105,6 +111,45 @@ export class HelperClient implements HelperApi {
 
 	async purge(id: string): Promise<void> {
 		await this.request('POST', `/v1/workloads/${encodeURIComponent(id)}/purge`, undefined, PURGE_TIMEOUT_MS);
+	}
+
+	async dumpDatabase(id: string): Promise<{ body: ReadableStream<Uint8Array>; sizeBytes: number | null }> {
+		const response = await fetch(`http://localhost/v1/workloads/${encodeURIComponent(id)}/dump`, {
+			method: 'GET',
+			unix: this.socketPath,
+			signal: AbortSignal.timeout(10 * 60_000),
+		});
+		if (!response.ok) {
+			const text = await response.text().catch(() => '');
+			throw new HelperError(`helper dump ${id} -> ${response.status}${text ? `: ${text}` : ''}`);
+		}
+		if (!response.body) throw new HelperError(`helper dump ${id} returned no body`);
+		const length = Number(response.headers.get('content-length') ?? '');
+		return { body: response.body, sizeBytes: Number.isFinite(length) ? length : null };
+	}
+
+	async rotateDatabaseRole(id: string, role: 'owner' | 'monitor', password: string): Promise<void> {
+		await this.request(
+			'POST',
+			`/v1/workloads/${encodeURIComponent(id)}/rotate`,
+			{ role, password },
+			60_000,
+		);
+	}
+
+	async restoreDatabase(id: string, body: ReadableStream<Uint8Array> | null): Promise<void> {
+		const response = await fetch(`http://localhost/v1/workloads/${encodeURIComponent(id)}/restore`, {
+			method: 'POST',
+			unix: this.socketPath,
+			signal: AbortSignal.timeout(30 * 60_000),
+			headers: { 'content-type': 'application/octet-stream' },
+			body: body as never,
+			duplex: 'half',
+		} as RequestInit & { duplex: 'half' });
+		if (!response.ok) {
+			const text = await response.text().catch(() => '');
+			throw new HelperError(`helper restore ${id} -> ${response.status}${text ? `: ${text}` : ''}`);
+		}
 	}
 
 	/** Read-only mount/device inventory for the volume wizard (D72). */

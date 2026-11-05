@@ -78,6 +78,8 @@ interface AppliedWorkload {
 interface HeldMonitor {
 	activationVersion: string;
 	monitor: Omit<DatabaseMonitor, 'ownerPassword'> & { ownerPassword: string | null };
+	/** Allowlisted extensions to create on first start. */
+	extensions: string[];
 }
 
 /** Root and scoped keys for one storage instance (memory only). */
@@ -194,6 +196,7 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 				status: report?.status ?? 'pending',
 				...(report?.memoryBytes !== undefined ? { memoryBytes: report.memoryBytes } : {}),
 				monitor: { ...held.monitor },
+				extensions: [...held.extensions],
 			});
 		}
 		return targets.sort((a, b) => a.id.localeCompare(b.id));
@@ -413,7 +416,11 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 	}
 
 	/** Keep the sampler's credentials in memory; anything else in the activation goes to the helper. */
-	private holdMonitor(workload: WorkloadDesired, monitor: DatabaseMonitor | undefined): void {
+	private holdMonitor(
+		workload: WorkloadDesired,
+		monitor: DatabaseMonitor | undefined,
+		extensions: string[] = [],
+	): void {
 		if (!workload.database || !monitor) {
 			this.monitors.delete(workload.id);
 			return;
@@ -421,6 +428,7 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 		this.monitors.set(workload.id, {
 			activationVersion: workload.activationVersion,
 			monitor: { ...monitor },
+			extensions: [...extensions],
 		});
 	}
 
@@ -435,7 +443,7 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 			const activation = await this.fetchActivation(workload.id, signal);
 			if (activation.workloadId !== workload.id || activation.activationVersion !== workload.activationVersion)
 				return;
-			this.holdMonitor(workload, activation.monitor);
+			this.holdMonitor(workload, activation.monitor, activation.databaseSetup?.extensions ?? []);
 		} catch (error) {
 			this.log('warn', `Could not fetch monitor credentials for database ${workload.id}: ${errorText(error)}`);
 		}
@@ -485,13 +493,14 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 			if (activation.activationVersion !== workload.activationVersion)
 				throw new Error('activation version does not match the desired workload');
 
-			// `monitor` and `storageAdmin` are for this process only: the helper never sees them.
-			const { monitor, storageAdmin, ...helperActivation } = activation;
+			// `monitor`, `databaseSetup` and `storageAdmin` are for this process only: the helper
+			// never sees them.
+			const { monitor, databaseSetup, storageAdmin, ...helperActivation } = activation;
 			const applied = await this.helper.apply({
 				workload: withOptionalSpec(workload),
 				activation: helperActivation,
 			});
-			this.holdMonitor(workload, monitor);
+			this.holdMonitor(workload, monitor, databaseSetup?.extensions ?? []);
 			this.holdStorageAdmin(workload, storageAdmin);
 			this.applied.set(id, {
 				fingerprint,

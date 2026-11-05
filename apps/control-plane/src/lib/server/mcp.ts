@@ -13,7 +13,11 @@ import {
 	bucketCreateSchema,
 	bucketNameSchema,
 	databaseAttachSchema,
+	databaseBackupCreateSchema,
+	databaseBackupPolicySchema,
 	databaseCreateSchema,
+	databaseRestoreSchema,
+	databaseRotateSchema,
 	deployFilesSchema,
 	deploySiteSchema,
 	effectivePermissions,
@@ -54,6 +58,25 @@ import { principalFromMcp } from './principal';
  */
 
 type PrincipalResult = Principal;
+
+/** `assistant` runs the same tools behind the dashboard chat, where the UI owns confirmation. */
+export type SkiffToolEra = 'legacy' | 'modern' | 'assistant';
+
+/** A registered Skiff tool, captured for the in-dashboard assistant (docs/ASSISTANT.md). */
+export interface SkiffToolDefinition {
+	name: string;
+	config: Record<string, unknown> & {
+		title?: string;
+		description?: string;
+		inputSchema?: z.ZodType;
+		annotations?: {
+			readOnlyHint?: boolean;
+			destructiveHint?: boolean;
+			idempotentHint?: boolean;
+		};
+	};
+	handler: (...args: unknown[]) => unknown;
+}
 
 function principalFor(authInfo: AuthInfo | undefined): PrincipalResult {
 	const principal = principalFromMcp(authInfo, new Request('https://mcp.local/mcp'));
@@ -215,13 +238,19 @@ function resultError(result: unknown): string | undefined {
 }
 
 /** Every MCP tool call lands in the audit log: user, client, tool, args and result (DESIGN §6.3). */
-function auditTool(principal: Principal, tool: string, input: unknown, error?: string): void {
+function auditTool(
+	principal: Principal,
+	tool: string,
+	input: unknown,
+	error?: string,
+	prefix: 'mcp' | 'assistant' = 'mcp',
+): void {
 	try {
 		const project = (input as { project?: unknown; name?: unknown } | undefined)?.project;
 		core.audit.record({
 			principal,
-			action: `mcp.${tool}`,
-			resource: 'mcp',
+			action: `${prefix}.${tool}`,
+			resource: prefix === 'assistant' ? 'assistant' : 'mcp',
 			resourceId: typeof project === 'string' ? project : undefined,
 			args: summarizeArgs(input),
 			result: error ? 'error' : 'ok',
@@ -285,8 +314,22 @@ function confirmationTarget(state: unknown): string | undefined {
 	}
 }
 
-function buildServer(principal: Principal, era: 'legacy' | 'modern') {
-	const server = new McpServer({ name: 'skiff', version: '0.1.0' });
+function buildServer(
+	principal: Principal,
+	era: SkiffToolEra,
+	sink?: SkiffToolDefinition[],
+	auditPrefix: 'mcp' | 'assistant' = 'mcp',
+) {
+	// The assistant reuses the exact MCP definitions by capturing them instead of serving them.
+	const server = sink
+		? ({
+				registerTool: (name: string, config: Record<string, unknown>, handler: (...args: unknown[]) => unknown) => {
+					sink.push({ name, config, handler });
+					return {};
+				},
+				registerResource: () => ({})
+			} as unknown as McpServer)
+		: new McpServer({ name: 'skiff', version: '0.1.0' });
 
 	/** `server.registerTool` with auditing of every call, including scope denials. */
 	const tool = ((name: string, config: Record<string, unknown>, callback: (...args: unknown[]) => unknown) => {
@@ -300,6 +343,7 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 							name,
 							(context.request.params as { arguments?: unknown } | undefined)?.arguments,
 							`insufficient_scope: ${result.errorDescription ?? 'missing scope'}`,
+							auditPrefix,
 						);
 					return result;
 				}
@@ -315,10 +359,11 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 					name,
 					input,
 					resultError(result) ?? (declined.has(result as object) ? 'declined by the user' : undefined),
+					auditPrefix,
 				);
 				return result;
 			} catch (error) {
-				auditTool(principal, name, input, (error as Error).message ?? String(error));
+				auditTool(principal, name, input, (error as Error).message ?? String(error), auditPrefix);
 				throw error;
 			}
 		}) as never);
@@ -409,6 +454,17 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 			scopeChallenge: requires('project:delete'),
 		},
 		async ({ project }, ctx) => {
+			// The dashboard assistant gates destructive tools in the chat UI before they reach here.
+			if (era === 'assistant')
+				return run(async () => {
+					await core.projects.softDelete(principal, project);
+					return {
+						ok: true,
+						project,
+						restorable: true,
+						restoreBefore: new Date(Date.now() + limits.trashDays * 86_400_000).toISOString(),
+					};
+				});
 			if (era === 'legacy')
 				return {
 					isError: true,
@@ -486,6 +542,19 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 		},
 		async ({ projects }, ctx) => {
 			const wanted = [...new Set(projects.map((slug) => slug.trim()))].sort();
+			if (era === 'assistant')
+				return run(async () => {
+					const created = core.operations.create(principal, {
+						action: 'project.delete',
+						targets: wanted,
+						stage: 'apply'
+					});
+					const done = await core.operations.wait(principal, created.id, 20_000);
+					return {
+						...operationResult(done),
+						restoreBefore: new Date(Date.now() + limits.trashDays * 86_400_000).toISOString()
+					};
+				});
 			if (era === 'legacy') {
 				const link = `${core.ctx.config.platformOrigin}/projects?select=${encodeURIComponent(wanted.join(','))}`;
 				return {
@@ -928,6 +997,109 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 	);
 
 	tool(
+		'list_database_backups',
+		{
+			title: 'List database backups',
+			description:
+				'List logical backups for one database with size, checksum, age and whether a restore has been verified. ' +
+				'Artifacts live in the platform object store; no credentials are returned.',
+			inputSchema: z.object({ database: z.string().describe('Database name') }),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('database:read'),
+		},
+		async ({ database }) =>
+			run(() => ({
+				database,
+				backups: core.databases.listBackups(principal, database),
+				policy: core.databases.backupPolicy(principal, database),
+			})),
+	);
+
+	tool(
+		'backup_database',
+		{
+			title: 'Back up database',
+			description:
+				'Queue an on-demand `pg_dump -Fc` backup. The node streams it to the platform object store; follow it with ' +
+				'list_database_backups. Agents should call this before a risky migration.',
+			inputSchema: databaseBackupCreateSchema.extend({ database: z.string().describe('Database name') }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('database:update'),
+		},
+		async ({ database, ...input }) =>
+			run(() => {
+				const backup = core.databases.createBackup(principal, database, input);
+				return {
+					backup,
+					nextSteps: ['The database node picks the task up on its next pull; poll list_database_backups.'],
+				};
+			}),
+	);
+
+	tool(
+		'restore_database',
+		{
+			title: 'Restore database backup',
+			description:
+				'Restore a backup into a brand-new database (never in place). The new instance gets new credentials and its node ' +
+				'runs `pg_restore` then a verification query. Requires a completed backup from list_database_backups.',
+			inputSchema: databaseRestoreSchema.extend({
+				database: z.string().describe('Source database name'),
+				backupId: z.string().describe('Backup id'),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requiresWith(['database:create'], (args) => (args.project ? ['project:update'] : [])),
+		},
+		async ({ database, backupId, ...input }) =>
+			run(() => {
+				const view = core.databases.restoreBackup(principal, database, backupId, input);
+				return {
+					database: view,
+					nextSteps: [
+						`The node restores into "${view.name}" and verifies it; follow get_database until backup.pendingRestoreId is null.`,
+						`Connect an app with attach_database({ project, database: "${view.name}" }).`,
+					],
+				};
+			}),
+	);
+
+	tool(
+		'set_database_backup_policy',
+		{
+			title: 'Set database backup policy',
+			description:
+				'Change the schedule, retention or enabled flag for scheduled logical backups. The schedule is a five-field ' +
+				'UTC cron expression; retention never removes the newest good backup.',
+			inputSchema: databaseBackupPolicySchema.extend({ database: z.string().describe('Database name') }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('database:update'),
+		},
+		async ({ database, ...input }) =>
+			run(() => ({ policy: core.databases.setBackupPolicy(principal, database, input) })),
+	);
+
+	tool(
+		'rotate_database_credentials',
+		{
+			title: 'Rotate database credentials',
+			description:
+				'Rotate the owner or monitor password. The node runs ALTER ROLE and verifies the new value before the ' +
+				'control plane swaps the live secret; attached apps restart with it. No password is returned.',
+			inputSchema: databaseRotateSchema.extend({ database: z.string().describe('Database name') }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('database:credentials', 'database:update'),
+		},
+		async ({ database, ...input }) =>
+			run(() => {
+				const rotation = core.databases.rotateCredentials(principal, database, input);
+				return {
+					rotation,
+					nextSteps: ['The node applies ALTER ROLE on its next pull; poll get_database or the rotation list.'],
+				};
+			}),
+	);
+
+	tool(
 		'attach_database',
 		{
 			title: 'Attach database',
@@ -983,6 +1155,16 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 			scopeChallenge: requires('database:read', 'database:delete'),
 		},
 		async ({ database }, ctx) => {
+			if (era === 'assistant')
+				return run(() => {
+					const view = core.databases.delete(principal, database);
+					return {
+						ok: true,
+						database: view.name,
+						restorable: true,
+						restoreBefore: view.purgeAt
+					};
+				});
 			if (era === 'legacy')
 				return {
 					isError: true,
@@ -1262,6 +1444,16 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 			scopeChallenge: requires('storage:read', 'storage:delete'),
 		},
 		async ({ storage }, ctx) => {
+			if (era === 'assistant')
+				return run(() => {
+					const view = core.storage.delete(principal, storage);
+					return {
+						ok: true,
+						storage: view.name,
+						restorable: true,
+						restoreBefore: view.purgeAt
+					};
+				});
 			if (era === 'legacy')
 				return {
 					isError: true,
@@ -1622,6 +1814,17 @@ function buildServer(principal: Principal, era: 'legacy' | 'modern') {
 	);
 
 	return server;
+}
+
+/**
+ * The dashboard assistant's tool catalog: every MCP tool, captured from the same registration
+ * code. Handlers audit as `assistant.<tool>` so the audit log distinguishes a chat action from a
+ * remote MCP client. Destructive tools run directly here because the chat UI confirms them first.
+ */
+export function skiffToolDefinitions(principal: Principal): SkiffToolDefinition[] {
+	const sink: SkiffToolDefinition[] = [];
+	buildServer(principal, 'assistant', sink, 'assistant');
+	return sink;
 }
 
 export const mcpHandler = createMcpHandler(

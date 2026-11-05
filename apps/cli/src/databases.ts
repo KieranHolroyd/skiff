@@ -29,6 +29,47 @@ export interface DatabaseTableStat {
 	lastAutoanalyze: string | null;
 }
 
+export interface DatabaseRotationView {
+	id: string;
+	databaseId: string;
+	role: 'owner' | 'monitor';
+	status: 'pending' | 'running' | 'ok' | 'failed';
+	error: string | null;
+	createdAt: string;
+	finishedAt: string | null;
+}
+
+export interface DatabaseBackupSummary {
+	enabled: boolean;
+	schedule: string;
+	retentionDays: number;
+	nextBackupAt: string | null;
+	lastBackupAt: string | null;
+	lastBackupStatus: string | null;
+	lastBackupError: string | null;
+	lastVerifiedAt: string | null;
+	pendingRestoreId: string | null;
+}
+
+export interface DatabaseBackupView {
+	id: string;
+	databaseId: string;
+	databaseName: string;
+	kind: 'manual' | 'scheduled';
+	status: 'pending' | 'running' | 'ok' | 'failed';
+	format: string;
+	sizeBytes: number | null;
+	sha256: string | null;
+	objectKey: string;
+	pinned: boolean;
+	error: string | null;
+	verifiedAt: string | null;
+	restoredDatabaseId: string | null;
+	startedAt: string;
+	finishedAt: string | null;
+	expiresAt: string | null;
+}
+
 export interface DatabaseView {
 	id: string;
 	name: string;
@@ -49,6 +90,18 @@ export interface DatabaseView {
 	attachments: DatabaseAttachmentView[];
 	tables: DatabaseTableStat[];
 	statsAt: string | null;
+	extensions?: string[];
+	slowQueries?: Array<{
+		queryId: string;
+		query: string;
+		calls: number;
+		totalMs: number;
+		meanMs: number;
+		rows: number;
+	}>;
+	slowQueriesAt?: string | null;
+	pooler?: { enabled: boolean; host: { process: string; container: string }; port: number | null };
+	backup?: DatabaseBackupSummary;
 	createdAt: string;
 	updatedAt: string;
 	deletedAt: string | null;
@@ -76,6 +129,8 @@ export interface DatabaseCreateInput {
 	storageMb?: number;
 	project?: string;
 	envPrefix?: string;
+	extensions?: string[];
+	pooler?: boolean;
 }
 
 /** `--storage 10G`, `--memory 512M`, `--memory 512` (MB): a whole number of megabytes. */
@@ -152,6 +207,12 @@ export function databaseDetails(view: DatabaseView, options: { now?: number; tab
 	field('Limits', `${view.memoryMb} MB memory, ${view.cpus} CPU${view.cpus === 1 ? '' : 's'}`);
 	field('Postgres', `database ${view.databaseName}, user ${view.username}`);
 	field('Apps reach', `${view.internalHost.process} (process), ${view.internalHost.container} (container)`);
+	if (view.pooler?.enabled)
+		field(
+			'Pooled',
+			`${view.pooler.host.process} (process), ${view.pooler.host.container} (container)`,
+		);
+	if (view.extensions?.length) field('Extensions', view.extensions.join(', '));
 	field('Created', formatTime(view.createdAt));
 	if (view.deletedAt) {
 		field('Deleted', formatTime(view.deletedAt));

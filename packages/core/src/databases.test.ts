@@ -71,6 +71,14 @@ describe('managed databases', () => {
 			username: 'main_db',
 			databaseName: 'main_db',
 			internalHost: { process: '127.0.0.1:15432', container: `${databaseAlias(db.id)}:5432` },
+			pooler: {
+				enabled: true,
+				port: 16432,
+				host: {
+					process: '127.0.0.1:16432',
+					container: `${databaseAlias(db.id)}-pool:6432`,
+				},
+			},
 		});
 		expect(JSON.stringify(db)).not.toContain('password');
 		expect(core.databases.create(owner, { name: 'second' }).internalHost.process).toBe('127.0.0.1:15433');
@@ -98,6 +106,7 @@ describe('managed databases', () => {
 			port: 15432,
 			upstream: '127.0.0.1:15432',
 			database: { engine: 'postgres', version: '17' },
+			pooler: { port: 16432 },
 			env: { POSTGRES_USER: 'main_db', POSTGRES_DB: 'main_db', PGDATA: '/data/pgdata' },
 		});
 		const creds = core.databases.credentials(owner, 'main-db');
@@ -108,6 +117,112 @@ describe('managed databases', () => {
 		expect(activation.env.POSTGRES_PASSWORD).toBe(creds.password);
 		expect(activation.monitor).toMatchObject({ monitorUser: 'skiff_monitor', ownerUser: 'main_db', port: 15432 });
 		expect(() => core.workloads.activation('nod_other', entry!.id)).toThrow();
+	});
+
+	test('rotates the owner secret only after the node confirms ALTER ROLE', async () => {
+		const before = core.databases.credentials(owner, 'main-db').password;
+		const rotation = core.databases.rotateCredentials(owner, 'main-db', { role: 'owner' });
+		expect(rotation).toMatchObject({ role: 'owner', status: 'pending' });
+		expect(() => core.databases.rotateCredentials(owner, 'main-db', { role: 'owner' })).toThrow(/already running/);
+		const state = await core.nodes.desiredState(edgeToken);
+		expect(state.databaseRotations.some((task) => task.id === rotation.id)).toBe(true);
+		const activation = core.databases.rotationActivation(edgeId, rotation.id);
+		expect(activation.password).not.toBe(before);
+		expect(core.databases.credentials(owner, 'main-db').password).toBe(before);
+
+		core.databases.applyRotationResults(edgeId, [
+			{
+				taskId: rotation.id,
+				databaseId: rotation.databaseId,
+				role: 'owner',
+				status: 'ok',
+			},
+		]);
+		expect(core.databases.credentials(owner, 'main-db').password).toBe(activation.password);
+		expect(core.databases.rotations(owner, 'main-db')[0]).toMatchObject({ status: 'ok' });
+	});
+
+	test('carries allowlisted extensions into the activation only', async () => {
+		const db = core.databases.create(owner, {
+			name: 'ext-db',
+			memoryMb: 128,
+			extensions: ['pg_trgm', 'pg_stat_statements'],
+		});
+		expect(db.extensions).toEqual(['pg_trgm', 'pg_stat_statements']);
+		const state = await core.nodes.desiredState(edgeToken);
+		const workload = state.workloads.find((item) => item.projectSlug === 'ext-db')!;
+		expect(JSON.stringify(workload)).not.toContain('pg_trgm');
+		const activation = core.workloads.activation(edgeId, workload.id);
+		expect(activation.databaseSetup?.extensions).toEqual(['pg_trgm', 'pg_stat_statements']);
+		const updated = core.databases.update(owner, 'ext-db', { extensions: ['pgcrypto'] });
+		expect(updated.extensions).toEqual(['pgcrypto']);
+		core.databases.delete(owner, 'ext-db');
+		core.databases.purgeNow(owner, 'ext-db');
+		core.databases.applyPurged(edgeId, [db.id]);
+	});
+
+	test('queues a backup and records the node result', async () => {
+		const backup = core.databases.createBackup(owner, 'main-db');
+		expect(backup).toMatchObject({ status: 'pending', kind: 'manual', databaseName: 'main-db' });
+		const state = await core.nodes.desiredState(edgeToken);
+		const task = state.databaseBackupTasks.find((item) => item.action === 'backup')!;
+		expect(task).toMatchObject({ databaseId: backup.databaseId, engine: 'postgres' });
+		expect(task.url).toContain('/api/objects/');
+		expect(JSON.stringify(state)).not.toContain('password');
+
+		const bytes = new TextEncoder().encode('custom-format dump');
+		await store.put(task.objectKey, bytes);
+		core.databases.applyBackupResults(edgeId, [
+			{
+				taskId: backup.id,
+				action: 'backup',
+				databaseId: task.databaseId,
+				backupId: null,
+				status: 'ok',
+				sizeBytes: bytes.byteLength,
+				sha256: 'a'.repeat(64),
+			},
+		]);
+		const list = core.databases.listBackups(owner, 'main-db');
+		expect(list[0]).toMatchObject({ id: backup.id, status: 'ok', sizeBytes: bytes.byteLength });
+		expect(core.databases.get(owner, 'main-db').backup.lastBackupStatus).toBe('ok');
+	});
+
+	test('restores a backup into a new database and tracks the verification', async () => {
+		const source = core.databases.listBackups(owner, 'main-db')[0]!;
+		const restored = core.databases.restoreBackup(owner, 'main-db', source.id, { name: 'main-restored' });
+		expect(restored).toMatchObject({ name: 'main-restored', status: 'pending' });
+		expect(restored.backup.pendingRestoreId).toBe(source.id);
+		const state = await core.nodes.desiredState(edgeToken);
+		const task = state.databaseBackupTasks.find((item) => item.action === 'restore')!;
+		expect(task).toMatchObject({ databaseId: restored.id, backupId: source.id });
+		core.databases.applyBackupResults(edgeId, [
+			{
+				taskId: task.id,
+				action: 'restore',
+				databaseId: restored.id,
+				backupId: source.id,
+				status: 'ok',
+			},
+		]);
+		const again = core.databases.get(owner, 'main-restored');
+		expect(again.backup.pendingRestoreId).toBeNull();
+		expect(again.backup.lastVerifiedAt).not.toBeNull();
+		expect(core.databases.getBackup(owner, 'main-db', source.id).verifiedAt).not.toBeNull();
+		// Leave the fixture list as the later lifecycle test expects.
+		core.databases.delete(owner, 'main-restored');
+		core.databases.purgeNow(owner, 'main-restored');
+		core.databases.applyPurged(edgeId, [restored.id]);
+	});
+
+	test('backup policy validates the cron and retention', () => {
+		expect(() => core.databases.setBackupPolicy(owner, 'main-db', { schedule: 'not a cron' })).toThrow();
+		const policy = core.databases.setBackupPolicy(owner, 'main-db', {
+			schedule: '*/15 * * * *',
+			retentionDays: 30,
+		});
+		expect(policy).toMatchObject({ schedule: '*/15 * * * *', retentionDays: 30, enabled: true });
+		expect(policy.nextBackupAt).not.toBeNull();
 	});
 
 	test('credentials need database:credentials and are audited', () => {
@@ -148,6 +263,9 @@ describe('managed databases', () => {
 		expect(activation.env.DATABASE_HOST).toBe('127.0.0.1');
 		expect(activation.env.DATABASE_PORT).toBe('15432');
 		expect(activation.env.DATABASE_URL).toBe(core.databases.credentials(owner, 'main-db').url);
+		expect(activation.env.DATABASE_POOL_HOST).toBe('127.0.0.1');
+		expect(activation.env.DATABASE_POOL_PORT).toBe('16432');
+		expect(activation.env.DATABASE_POOL_URL).toContain(':16432/');
 
 		expect(() =>
 			core.databases.attach(owner, core.projects.requireRow(owner, 'backend'), { database: 'second' }),

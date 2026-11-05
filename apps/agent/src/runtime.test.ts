@@ -116,6 +116,13 @@ class FakeHelper implements HelperApi {
 		this.applied.delete(id);
 	}
 
+	async dumpDatabase(): Promise<never> {
+		throw new Error('dumpDatabase not used in this test');
+	}
+
+	async restoreDatabase(): Promise<void> {}
+	async rotateDatabaseRole(): Promise<void> {}
+
 	async status(id: string): Promise<HelperWorkloadStatus> {
 		this.statusCalls.push(id);
 		return this.statuses.get(id) ?? { id, status: 'running', restarts: 0 };

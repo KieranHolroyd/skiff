@@ -30,6 +30,7 @@ export * from './config.ts';
 export * from './context.ts';
 export * from './errors.ts';
 export * from './util.ts';
+export * from './cron.ts';
 export * from './artifact.ts';
 export * from './object-store.ts';
 export * from './orgs.ts';

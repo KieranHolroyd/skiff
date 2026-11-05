@@ -49,7 +49,14 @@ afterAll(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-async function setup(slug: string) {
+async function setup(
+  slug: string,
+  files: Array<{ path: string; content: string; encoding: "utf8" }> = [
+    { path: "index.html", content: "<h1>hello</h1>", encoding: "utf8" },
+    { path: "assets/app.js", content: 'console.log("hi")', encoding: "utf8" },
+    { path: "assets/site.css", content: "body{color:red}", encoding: "utf8" },
+  ],
+) {
   await core.projects.create(owner, {
     name: slug,
     slug,
@@ -59,11 +66,7 @@ async function setup(slug: string) {
     previewAccess: "platform",
   });
   const project = core.projects.requireRow(owner, slug);
-  const deployment = await core.uploads.deployInline(owner, project, [
-    { path: "index.html", content: "<h1>hello</h1>", encoding: "utf8" },
-    { path: "assets/app.js", content: 'console.log("hi")', encoding: "utf8" },
-    { path: "assets/site.css", content: "body{color:red}", encoding: "utf8" },
-  ]);
+  const deployment = await core.uploads.deployInline(owner, project, files);
   return { project: core.projects.requireRow(owner, slug), deployment };
 }
 
@@ -126,5 +129,36 @@ describe("source viewer service", () => {
     const artifact = await core.source.artifact(owner, project);
     expect(artifact.release.sha256).toBe(deployment.release.sha256);
     expect(artifact.zip.byteLength).toBeGreaterThan(0);
+  });
+
+  test("suggests env names from .env files and code without returning values", async () => {
+    const { project } = await setup("source-env", [
+      { path: ".env.example", content: "DATABASE_URL=postgres://secret\nAPI_KEY=also-secret\n", encoding: "utf8" },
+      { path: "src/server.ts", content: "const url = process.env.PUBLIC_URL;\nconst token = process.env['API_TOKEN'];\n", encoding: "utf8" },
+      { path: "index.html", content: "<h1>hello</h1>", encoding: "utf8" },
+    ]);
+    const scan = await core.source.envSuggestions(owner, project);
+    expect(scan.names).toEqual([
+      { name: "DATABASE_URL", source: "env-file", detail: ".env.example" },
+      { name: "API_KEY", source: "env-file", detail: ".env.example" },
+      { name: "PUBLIC_URL", source: "code", detail: "src/server.ts" },
+      { name: "API_TOKEN", source: "code", detail: "src/server.ts" },
+    ]);
+    expect(JSON.stringify(scan)).not.toContain("postgres://secret");
+    expect(JSON.stringify(scan)).not.toContain("also-secret");
+  });
+
+  test("env suggestions keep the deployment permission check", async () => {
+    const { project } = await setup("source-env-audience", [
+      { path: ".env.example", content: "API_KEY=secret\n", encoding: "utf8" },
+    ]);
+    expect((await core.source.envSuggestions(viewer, project)).names[0]?.name).toBe("API_KEY");
+    const outsider = buildPrincipal({
+      kind: "user",
+      userId: "user_env_x",
+      orgId: "org_other",
+      role: "owner",
+    });
+    await expect(core.source.envSuggestions(outsider, project)).rejects.toThrow();
   });
 });

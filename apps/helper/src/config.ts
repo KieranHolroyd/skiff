@@ -26,6 +26,8 @@ export interface HelperConfig {
 	systemctlPath: string;
 	/** Absolute journalctl used to drain workload stdout/stderr for the agent. */
 	journalctlPath: string;
+	/** Absolute podman used for fixed database dump/restore verbs. */
+	podmanPath: string;
 	/** Socket file mode for workload sockets; the Caddy user must be able to connect. */
 	workloadSocketMode: string;
 	/** Optional group for workload sockets (e.g. the Caddy group). */
@@ -122,6 +124,7 @@ export function loadHelperConfig(env: Env = process.env): HelperConfig {
 		bunPath: absolute(env, 'SKIFF_HELPER_BUN_PATH', '/usr/local/bin/bun'),
 		systemctlPath: absolute(env, 'SKIFF_HELPER_SYSTEMCTL', '/usr/bin/systemctl'),
 		journalctlPath: absolute(env, 'SKIFF_HELPER_JOURNALCTL', '/usr/bin/journalctl'),
+		podmanPath: absolute(env, 'SKIFF_HELPER_PODMAN', '/usr/bin/podman'),
 		workloadSocketMode: socketMode(
 			optional(env, 'SKIFF_HELPER_WORKLOAD_SOCKET_MODE', '0666'),
 			'SKIFF_HELPER_WORKLOAD_SOCKET_MODE',

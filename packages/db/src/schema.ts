@@ -410,6 +410,9 @@ export const databases = sqliteTable(
 		storageMb: integer('storage_mb').notNull().default(10_240),
 		/** Node volume holding the data dir; null keeps the helper state dir (D74). */
 		volumeId: text('volume_id'),
+		/** PgBouncer sidecar (docs/DATABASES.md §11); null port when disabled. */
+		poolerEnabled: integer('pooler_enabled', { mode: 'boolean' }).notNull().default(false),
+		poolerPort: integer('pooler_port'),
 		status: text('status', { enum: ['pending', 'starting', 'running', 'failed', 'stopped'] })
 			.notNull()
 			.default('pending'),
@@ -421,6 +424,22 @@ export const databases = sqliteTable(
 		/** Latest table snapshot (`DatabaseTableStat[]`). */
 		statsJson: text('stats_json'),
 		statsAt: integer('stats_at'),
+		/** Requested allowlisted extensions (`DatabaseExtension[]`). */
+		extensionsJson: text('extensions_json').notNull().default('[]'),
+		/** Latest slow-query snapshot (`DatabaseSlowQuery[]`). */
+		slowQueriesJson: text('slow_queries_json'),
+		slowQueriesAt: integer('slow_queries_at'),
+		/** Backup policy (docs/DATABASES.md §9). */
+		backupEnabled: integer('backup_enabled', { mode: 'boolean' }).notNull().default(true),
+		backupSchedule: text('backup_schedule').notNull().default('0 3 * * *'),
+		backupRetentionDays: integer('backup_retention_days').notNull().default(7),
+		nextBackupAt: integer('next_backup_at'),
+		lastBackupAt: integer('last_backup_at'),
+		lastBackupStatus: text('last_backup_status', { enum: ['pending', 'running', 'ok', 'failed'] }),
+		lastBackupError: text('last_backup_error'),
+		lastVerifiedAt: integer('last_verified_at'),
+		/** Backup being restored into this database; cleared when the node reports success. */
+		pendingRestoreId: text('pending_restore_id'),
 		createdBy: text('created_by').notNull(),
 		createdAt: integer('created_at').notNull().$defaultFn(now),
 		updatedAt: integer('updated_at').notNull().$defaultFn(now),
@@ -453,6 +472,65 @@ export const databaseAttachments = sqliteTable(
 		uniqueIndex('database_attachments_prefix_idx').on(t.projectId, t.envPrefix),
 		index('database_attachments_project_idx').on(t.projectId),
 	],
+);
+
+/**
+ * Managed database backups (docs/DATABASES.md §9). The dump itself lives in the platform
+ * `ObjectStore`; this row is only the index/metadata. `sha256` is computed by the node while it
+ * uploads, so a corrupt artifact is rejected before it is ever offered for restore.
+ */
+export const databaseBackups = sqliteTable(
+	'database_backups',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		databaseId: text('database_id').notNull(),
+		kind: text('kind', { enum: ['manual', 'scheduled'] }).notNull(),
+		status: text('status', { enum: ['pending', 'running', 'ok', 'failed'] })
+			.notNull()
+			.default('pending'),
+		objectKey: text('object_key').notNull(),
+		sizeBytes: integer('size_bytes'),
+		sha256: text('sha256'),
+		pinned: integer('pinned', { mode: 'boolean' }).notNull().default(false),
+		error: text('error'),
+		verifiedAt: integer('verified_at'),
+		restoredDatabaseId: text('restored_database_id'),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		startedAt: integer('started_at'),
+		finishedAt: integer('finished_at'),
+		expiresAt: integer('expires_at'),
+	},
+	(t) => [
+		index('database_backups_database_idx').on(t.databaseId, t.createdAt),
+		index('database_backups_status_idx').on(t.status),
+		index('database_backups_expires_idx').on(t.expiresAt),
+	],
+);
+
+/**
+ * Credential rotation for a managed database (docs/DATABASES.md §4). The new password is sealed
+ * here until the node reports that `ALTER ROLE` succeeded; only then does it replace the live
+ * secret, so a failed rotation never locks an app out.
+ */
+export const databaseRotations = sqliteTable(
+	'database_rotations',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		databaseId: text('database_id').notNull(),
+		role: text('role', { enum: ['owner', 'monitor'] }).notNull(),
+		status: text('status', { enum: ['pending', 'running', 'ok', 'failed'] })
+			.notNull()
+			.default('pending'),
+		secretSealed: text('secret_sealed').notNull(),
+		error: text('error'),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		finishedAt: integer('finished_at'),
+	},
+	(t) => [index('database_rotations_database_idx').on(t.databaseId, t.createdAt)],
 );
 
 /**
@@ -817,6 +895,7 @@ export const schema = {
 	settings,
 	backupRuns,
 	alertState,
+	databaseBackups,
 };
 
 export { primaryKey };

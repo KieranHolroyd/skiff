@@ -76,6 +76,8 @@ export interface WorkloadDesired {
 	 * user, mounts and container port all come from the helper's own registry, never the wire.
 	 */
 	database?: WorkloadDatabase;
+	/** PgBouncer sidecar host port (managed databases only). */
+	pooler?: { port: number };
 	/**
 	 * Managed object storage profile (S1). Like `database`, only `engine` + `version` matter here:
 	 * the image (pinned by digest), user, mounts and container port come from `STORAGE_ENGINES`.
@@ -498,6 +500,11 @@ export function parseWorkload(value: unknown): WorkloadDesired {
 	if (command) workload.command = command;
 	if (image) workload.image = image;
 	if (database) workload.database = database;
+	if (record.pooler !== undefined) {
+		if (!database) throw new ValidationError('workload.pooler is only valid for a database workload');
+		const pooler = assertRecord(record.pooler, 'workload.pooler');
+		workload.pooler = { port: assertPort(pooler.port, 'workload.pooler.port') };
+	}
 	if (objectStorage) workload.objectStorage = objectStorage;
 	const volumeId = record.volumeId === undefined ? undefined : assertId(record.volumeId, 'workload.volumeId');
 	if (volumeId) {

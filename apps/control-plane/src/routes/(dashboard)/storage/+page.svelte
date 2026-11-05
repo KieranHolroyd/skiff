@@ -117,6 +117,7 @@
 
 <div class="space-y-6">
 	<PageHeader
+		target="page.storage"
 		eyebrow="Operate"
 		title="Storage"
 		description="Managed S3-compatible object storage (RustFS). Attach an instance to a process or container project and it receives an endpoint and its own scoped access key at start-up."

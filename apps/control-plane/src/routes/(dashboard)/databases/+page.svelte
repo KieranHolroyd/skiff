@@ -97,6 +97,7 @@
 
 <div class="space-y-6">
 	<PageHeader
+		target="page.databases"
 		eyebrow="Operate"
 		title="Databases"
 		description="Managed PostgreSQL that runs next to your apps. Attach a database to a process or container project and it receives a DATABASE_URL at start-up."

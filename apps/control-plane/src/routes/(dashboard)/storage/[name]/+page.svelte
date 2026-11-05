@@ -328,7 +328,7 @@
 </svelte:head>
 
 <div class="space-y-6">
-	<PageHeader eyebrow="Storage" title={st.name}>
+	<PageHeader eyebrow="Storage" title={st.name} target="page.storage">
 		{#snippet meta()}
 			<div class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
 				{#if deleted}

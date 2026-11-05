@@ -170,7 +170,13 @@ export function currentSection(section: PlatformConfigSection): SectionView {
 				)
 			: section === 'email'
 				? Boolean(env.SKIFF_SMTP_HOST)
-				: Boolean(env.SKIFF_ALERT_WEBHOOK || env.SKIFF_ALERT_EMAIL);
+				: section === 'assistant'
+					? Boolean(
+							env.SKIFF_ASSISTANT_BASE_URL &&
+								env.SKIFF_ASSISTANT_MODEL &&
+								env.SKIFF_ASSISTANT_DISABLED !== '1'
+						)
+					: Boolean(env.SKIFF_ALERT_WEBHOOK || env.SKIFF_ALERT_EMAIL);
 	return { values, secretsSet, configured };
 }
 

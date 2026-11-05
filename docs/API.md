@@ -80,24 +80,23 @@ contain credentials, except `/credentials`.
 | Method | Path | Permission | Notes |
 |---|---|---|---|
 | GET | `/databases` | `database:read` | `?includeDeleted=1` adds the trash → `{ databases }` |
-| POST | `/databases` | `database:create` (+ `project:update` with `project`) | `{ name, engine?, version? (16\|17), placement? (auto\|edge\|node id), memoryMb?, cpus?, storageMb?, volume?, project?, envPrefix? }` → `201 { database }`. Placement is resolved once; with `project` it follows the project's node and the attachment is created in the same call |
+| POST | `/databases` | `database:create` (+ `project:update` with `project`) | `{ name, engine?, version? (16\|17), placement? (auto\|edge\|node id), memoryMb?, cpus?, storageMb?, volume?, project?, envPrefix?, extensions?, pooler? }` → `201 { database }`. Placement is resolved once; with `project` it follows the project's node and the attachment is created in the same call |
 | GET | `/databases/:name` | `database:read` | `?includeDeleted=1` to read a trashed one → `{ database }` |
-| PATCH | `/databases/:name` | `database:update` | any of `{ memoryMb, cpus, storageMb }`; more memory re-checks admission → `{ database }` |
+| PATCH | `/databases/:name` | `database:update` | any of `{ memoryMb, cpus, storageMb, extensions, pooler }`; more memory re-checks admission → `{ database }` |
 | DELETE | `/databases/:name` | `database:delete` | soft delete, restorable 7 days; 409 while projects are attached → `{ database }` |
 | DELETE | `/databases/:name?purge=1` | `database:delete` | trashed databases only: the node removes the data, then the row goes → `{ ok: true }` |
 | POST | `/databases/:name/restore` | `database:delete` | re-checks admission; 409 once a purge was requested → `{ database }` |
 | GET | `/databases/:name/credentials` | `database:credentials` | `{ credentials: { url, host, port, username, password, databaseName, note } }`; loopback URL on the database's node; `cache-control: no-store`; every read is audited. Not available over MCP (D58) |
 | GET | `/databases/:name/metrics` | `database:read` | `?from&to` (ISO or epoch ms; default the last hour) `&interval=1m\|1h` (default `1m`, `1h` when the range exceeds 48 h; `1m` over 48 h is rejected; ranges ≤ 92 days) → `{ points, interval }`. Counters are per bucket |
+| GET | `/databases/:name/backups` | `database:read` | `{ backups }` (size, SHA-256, status, verified restore) |
+| POST | `/databases/:name/backups` | `database:update` | `{ pinned? }` → `202 { backup }`; the node streams a `pg_dump -Fc` to the object store |
+| GET/DELETE | `/databases/:name/backups/:id` | `database:read` / `database:delete` | one artifact; delete removes the object first |
+| POST | `/databases/:name/backups/:id/restore` | `database:create` (+ `project:update` with `project`) | `{ name, placement?, memoryMb?, cpus?, storageMb?, volume?, project?, envPrefix? }` → `202 { database }`; restore always creates a new database and verifies it |
+| GET/PATCH | `/databases/:name/backup-policy` | `database:read` / `database:update` | `{ enabled, schedule (five-field UTC cron), retentionDays }` |
+| GET/POST | `/databases/:name/rotate` | `database:read` / `database:credentials` + `database:update` | `{ role: owner\|monitor }` → `202 { rotation }`; the node applies ALTER ROLE before the secret swaps |
 | GET | `/projects/:slug/databases` | `database:read` | `{ attachments }` with the env names each one injects |
 | POST | `/projects/:slug/databases` | `database:update` + `project:update` | `{ database, envPrefix? (UPPER_SNAKE, default DATABASE) }` → `201 { attachment, warning }`. The project gets `<PREFIX>_URL`, `_HOST`, `_PORT`, `_USER`, `_PASSWORD`, `_NAME` at activation and restarts; `warning` says when it must be redeployed onto the database's node (same node only, D56) |
 | DELETE | `/projects/:slug/databases/:name` | `database:update` + `project:update` | detach; the app re-activates without the variables → `{ ok: true }` |
-
-**Object transport.** The control plane reaches every instance through an internal gateway: the
-edge Caddy listens on `127.0.0.1:8081` (never the public listener), and a worker exposes
-host-matched routes on its WireGuard-only app port. Requests are SigV4-signed for
-`s3-<id>.storage.internal`, the gateway preserves `Host`, and RustFS verifies the signature. The
-root key stays sealed in the control plane; every upload, delete and folder creation is audited.
-The dashboard browser (`/storage/:name/objects`) uses the same endpoints (D82).
 
 **MCP tools.** `list_databases` (`includeDeleted?`), `get_database` (the view plus a `lastHour`
 summary: latest size vs the storage budget, connections vs `max_connections`, commits/min,
@@ -149,6 +148,13 @@ secret keys, except `/credentials`.
 | POST | `/storage/:name/objects/delete` | `storage:update` | `{ keys }` (1–1000) in one S3 DeleteObjects call → `{ deleted, errors }` |
 | POST | `/storage/:name/objects/folder` | `storage:update` | `{ prefix }` creates a zero-byte folder marker ending in `/` |
 | POST | `/storage/:name/objects/presign` | `storage:read` | `{ bucket, key, method? (GET\|PUT), expiresIn? (60–604800) }` → `{ url, method, expiresIn }`. **Public instances only**: private instances have no browser-reachable endpoint |
+
+**Object transport.** The control plane reaches every instance through an internal gateway: the
+edge Caddy listens on `127.0.0.1:8081` (never the public listener), and a worker exposes
+host-matched routes on its WireGuard-only app port. Requests are SigV4-signed for
+`s3-<id>.storage.internal`, the gateway preserves `Host`, and RustFS verifies the signature. The
+root key stays sealed in the control plane; every upload, delete and folder creation is audited.
+The dashboard browser (`/storage/:name/objects`) uses the same endpoints (D82).
 
 **MCP tools.** `list_storage` (`includeDeleted?`), `get_storage` (the view plus a `lastHour`
 summary: bytes used vs the storage budget, objects, buckets, memory), `create_storage` (same
@@ -238,5 +244,6 @@ too, with the user's normal permissions. One message is at most 8,000 characters
 | Method | Path | Permission | Notes |
 |---|---|---|---|
 | GET | `/assistant/status` | signed in | `{ enabled, configured, provider, model, agents, maxAgents }`; never the API key |
+| GET | `/assistant/models?provider=openrouter` | owner | OpenRouter's catalogue, filtered to models that support tools; `?refresh=1` bypasses the 10-minute cache. Owner-only, like Settings → Assistant |
 | POST | `/assistant/chat` | `project:read` | `{ message, history?, context: { path, title?, project?, targets? } }` → SSE of `run.started`, `agent.started`, `text.delta`, `tool.started`, `tool.finished`, `ui.guide`, `confirmation.required`, `agent.finished`, `run.finished`, `error` |
 | POST | `/assistant/confirm` | `project:read` | `{ token }` from a `confirmation.required` event; runs exactly the approved destructive tool, bound to the user, org, tool and arguments (10 min) |

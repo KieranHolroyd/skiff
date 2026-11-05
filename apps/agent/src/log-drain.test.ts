@@ -57,6 +57,11 @@ class FakeHelper implements HelperApi {
 	}
 	async remove(): Promise<void> {}
 	async purge(): Promise<void> {}
+	async dumpDatabase(): Promise<never> {
+		throw new Error('dumpDatabase not used in this test');
+	}
+	async restoreDatabase(): Promise<void> {}
+	async rotateDatabaseRole(): Promise<void> {}
 	async status(): Promise<HelperWorkloadStatus> {
 		return { id: 'wld_1', status: 'running', restarts: 0 };
 	}

@@ -115,6 +115,7 @@
 								<a
 									href={href(item.id)}
 									onclick={(event) => select(event, item.id)}
+									data-skiff-target={`project.tab.${item.id}`}
 									aria-current={active ? 'page' : undefined}
 									class="group flex h-8 items-center gap-2 rounded-md px-2 text-sm transition-colors {active
 										? 'bg-muted font-medium text-foreground'
@@ -166,6 +167,7 @@
 					<a
 						href={href(item.id)}
 						onclick={(event) => select(event, item.id)}
+						data-skiff-target={`project.tab.${item.id}`}
 						aria-current={active ? 'page' : undefined}
 						class="flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium transition-colors {active
 							? 'bg-muted text-foreground'

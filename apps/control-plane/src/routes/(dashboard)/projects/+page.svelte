@@ -234,6 +234,7 @@
 
 <div class="space-y-6">
 	<PageHeader
+		target="page.projects"
 		eyebrow="Operate"
 		title="Projects"
 		description="A project owns one global slug, its deployments, environments and production pointer. Projects can serve static files, run a process app, or run a container."

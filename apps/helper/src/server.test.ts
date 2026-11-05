@@ -71,6 +71,19 @@ class FakeRuntime implements HelperRuntime {
 		this.calls.push(`purge:${id}`);
 	}
 
+	async dumpDatabase(id: string): Promise<{ path: string; sizeBytes: number; filename: string }> {
+		this.calls.push(`dump:${id}`);
+		return { path: '/tmp/unused.dump', sizeBytes: 0, filename: `${id}.dump` };
+	}
+
+	async restoreDatabase(id: string): Promise<void> {
+		this.calls.push(`restore:${id}`);
+	}
+
+	async rotateDatabaseRole(id: string, role: string): Promise<void> {
+		this.calls.push(`rotate:${id}:${role}`);
+	}
+
 	async status(id: string): Promise<HelperWorkloadStatus> {
 		return { id, status: 'running', restarts: 2 };
 	}

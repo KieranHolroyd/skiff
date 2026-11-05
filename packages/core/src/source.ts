@@ -1,7 +1,14 @@
 import { and, desc, eq, ne, or } from "drizzle-orm";
 import { unzipSync } from "fflate";
 import { deployments, releases } from "@skiff/db";
-import { requirePermission, type Principal } from "@skiff/contracts";
+import {
+  detectEnvNames,
+  isEnvFileName,
+  parseEnvFileNames,
+  requirePermission,
+  type DetectedEnvName,
+  type Principal,
+} from "@skiff/contracts";
 import { parseManifest, type ManifestFile } from "./artifact.ts";
 import type { CoreContext } from "./context.ts";
 import type { DeploymentView } from "./deployments.ts";
@@ -30,6 +37,13 @@ export interface SourceView {
 export interface SourceFileContent {
   file: SourceFileView;
   data: Uint8Array;
+}
+
+export interface SourceEnvSuggestions {
+  /** Detected names, deduped, with the first file that mentioned each one. */
+  names: DetectedEnvName[];
+  /** How many release files were actually read (bounded; used for the UI note). */
+  filesScanned: number;
 }
 
 /** Keep a small, bounded cache: the dashboard is a rare reader on a 4 GB edge box. */
@@ -92,6 +106,69 @@ export class SourceService {
     const entry = manifestFiles(release).find((file) => file.path === path);
     if (!entry) throw new NotFoundError("File");
     return { file: entry, data: await this.extract(release, entry.path) };
+  }
+
+  /**
+   * Railway-style "suggested variables": names found in the release's `.env*` files and in
+   * common environment-access patterns. Bounded in files and bytes, so opening the runtime
+   * editor never downloads or inflates an unbounded artifact.
+   *
+   * Only names are returned; values in a committed `.env` are never read back to a caller.
+   */
+  async envSuggestions(
+    principal: Principal,
+    project: ProjectRow,
+    idOrShort?: string,
+  ): Promise<SourceEnvSuggestions> {
+    const { release } = this.requireDeployment(principal, project, idOrShort);
+    // The zip is downloaded whole; a very large release must not turn a UI hint into a 500 MB read.
+    if (release.sizeBytes > ENV_SCAN_MAX_ARTIFACT_BYTES) {
+      return { names: [], filesScanned: 0 };
+    }
+    const files = manifestFiles(release);
+    const envFiles = files.filter(
+      (file) => isEnvFileName(file.path) && !isScanNoise(file.path),
+    );
+    const codeFiles = files
+      .filter(
+        (file) =>
+          CODE_EXTENSIONS.has(extensionOf(file.path)) && !isScanNoise(file.path),
+      )
+      .sort(
+        (a, b) => pathDepth(a.path) - pathDepth(b.path) || a.path.localeCompare(b.path),
+      );
+    const candidates = [...envFiles, ...codeFiles].slice(0, ENV_SCAN_MAX_FILES);
+    const found = new Map<string, DetectedEnvName>();
+    let bytes = 0;
+    let filesScanned = 0;
+    for (const file of candidates) {
+      if (file.size > ENV_SCAN_MAX_FILE_BYTES) continue;
+      if (bytes + file.size > ENV_SCAN_MAX_BYTES) continue;
+      let data: Uint8Array;
+      try {
+        data = await this.extract(release, file.path);
+      } catch {
+        // One unreadable entry should not hide the rest of the suggestions.
+        continue;
+      }
+      bytes += data.byteLength;
+      filesScanned++;
+      if (looksBinary(data)) continue;
+      const text = new TextDecoder().decode(data);
+      const isEnv = isEnvFileName(file.path);
+      const names = isEnv ? parseEnvFileNames(text) : detectEnvNames(text);
+      for (const name of names) {
+        if (found.has(name)) continue;
+        found.set(name, {
+          name,
+          source: isEnv ? "env-file" : "code",
+          detail: file.path,
+        });
+        if (found.size >= ENV_SCAN_MAX_NAMES) break;
+      }
+      if (found.size >= ENV_SCAN_MAX_NAMES) break;
+    }
+    return { names: [...found.values()], filesScanned };
   }
 
   /** The original artifact, for "download release". */
@@ -265,4 +342,64 @@ function manifestFiles(release: ReleaseRow): SourceFileView[] {
   return out
     .sort((a, b) => a.path.localeCompare(b.path))
     .map((file) => ({ path: file.path, size: file.size, sha256: file.sha256 }));
+}
+
+/** Bounded scan: a 500 MB site must not turn the runtime editor into a download. */
+const ENV_SCAN_MAX_ARTIFACT_BYTES = 64 * 1024 * 1024;
+const ENV_SCAN_MAX_FILES = 24;
+const ENV_SCAN_MAX_FILE_BYTES = 128 * 1024;
+const ENV_SCAN_MAX_BYTES = 512 * 1024;
+const ENV_SCAN_MAX_NAMES = 120;
+
+const CODE_EXTENSIONS = new Set([
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".py",
+  ".rb",
+  ".go",
+  ".rs",
+  ".php",
+  ".java",
+  ".kt",
+  ".cs",
+  ".sh",
+  ".bash",
+  ".yml",
+  ".yaml",
+  ".toml",
+]);
+
+function extensionOf(path: string): string {
+  const name = path.split("/").pop() ?? path;
+  const dot = name.lastIndexOf(".");
+  return dot >= 0 ? name.slice(dot).toLowerCase() : "";
+}
+
+function pathDepth(path: string): number {
+  return path.split("/").length;
+}
+
+/** Vendor trees and generated bundles are not where a project's own config lives. */
+function isScanNoise(path: string): boolean {
+  if (/(?:^|\/)(?:node_modules|vendor|\.git)\//.test(path)) return true;
+  const lower = path.toLowerCase();
+  return (
+    lower.endsWith(".min.js") ||
+    lower.endsWith(".map") ||
+    lower.endsWith(".lock") ||
+    lower.endsWith("-lock.json")
+  );
+}
+
+/** A NUL byte in the first pages means text decoding would only produce noise. */
+function looksBinary(data: Uint8Array): boolean {
+  const end = Math.min(data.byteLength, 4096);
+  for (let index = 0; index < end; index++) if (data[index] === 0) return true;
+  return false;
 }

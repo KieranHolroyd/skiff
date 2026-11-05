@@ -1,25 +1,48 @@
-import { and, eq, inArray, isNotNull, isNull, lte } from 'drizzle-orm';
-import { databaseAttachments, databases, nodes, projects, workloads } from '@skiff/db';
+import { and, desc, eq, inArray, isNotNull, isNull, lte } from 'drizzle-orm';
 import {
+	databaseAttachments,
+	databaseBackups,
+	databaseRotations,
+	databases,
+	nodes,
+	projects,
+	workloads,
+} from '@skiff/db';
+import {
+	DATABASE_BACKUP_FORMAT,
 	DATABASE_MONITOR_USER,
+	DATABASE_POOLER_PORT_MAX,
+	DATABASE_POOLER_PORT_MIN,
 	DATABASE_PORT_MAX,
 	DATABASE_PORT_MIN,
 	databaseAlias,
 	databaseAttachSchema,
+	databaseBackupCreateSchema,
+	databaseBackupPolicySchema,
 	databaseCreateSchema,
 	databaseEngineRegistry,
 	databaseEnvNames,
 	databaseIdentifier,
 	databaseImage,
+	databaseRestoreSchema,
+	databaseRotateSchema,
 	databaseUpdateSchema,
 	limits,
 	requirePermission,
 	type DatabaseAttach,
 	type DatabaseAttachmentView,
+	type DatabaseBackupResult,
+	type DatabaseBackupSummary,
+	type DatabaseBackupTask,
+	type DatabaseBackupView,
 	type DatabaseCreate,
 	type DatabaseCredentials,
 	type DatabaseMetricBucket,
 	type DatabaseMetricPoint,
+	type DatabaseRotationActivation,
+	type DatabaseRotationResult,
+	type DatabaseRotationTask,
+	type DatabaseRotationView,
 	type DatabaseSnapshot,
 	type DatabaseStatus,
 	type DatabaseTableStat,
@@ -32,6 +55,7 @@ import {
 	type WorkloadStatus,
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
+import { nextCronTime } from './cron.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { resolvePlacement } from './placement.ts';
 import type { ProjectRow } from './projects.ts';
@@ -42,6 +66,9 @@ export type DatabaseRow = typeof databases.$inferSelect;
 
 const ACTIVE: DatabaseStatus[] = ['pending', 'starting', 'running'];
 const DAY_MS = 86_400_000;
+/** Presigned upload/download URLs handed to a node; regenerated on every desired-state pull. */
+const BACKUP_TASK_TTL_SECONDS = 3_600;
+const BACKUP_OBJECT_PREFIX = 'database-backups';
 
 /** A consumer's view of one attachment, resolved for the node and runtime it runs on. */
 interface ResolvedAttachment {
@@ -53,6 +80,7 @@ interface ResolvedAttachment {
 	databaseName: string;
 	scheme: string;
 	row: DatabaseRow;
+	poolerPort: number | null;
 }
 
 /**
@@ -165,6 +193,7 @@ export class DatabaseService {
 		const id = newId('db_');
 		const now = this.ctx.now();
 		const hostPort = this.allocatePort(decision.nodeId);
+		const poolerPort = input.pooler ? this.allocatePoolerPort(decision.nodeId) : null;
 		this.ctx.sqlite.transaction(() => {
 			this.ctx.db
 				.insert(databases)
@@ -180,9 +209,13 @@ export class DatabaseService {
 					cpus: input.cpus,
 					storageMb: input.storageMb,
 					volumeId: volume?.id ?? null,
+					extensionsJson: JSON.stringify(input.extensions),
+					poolerEnabled: input.pooler,
+					poolerPort,
 					status: 'pending',
 					ownerSecret: this.ctx.secrets.seal(principal.orgId, password()),
 					monitorSecret: this.ctx.secrets.seal(principal.orgId, password()),
+					nextBackupAt: nextCronTime('0 3 * * *', now),
 					createdBy: principal.userId,
 					createdAt: now,
 					updatedAt: now,
@@ -221,9 +254,21 @@ export class DatabaseService {
 				throw new ValidationError(`${info.label} needs at least ${info.minMemoryMb} MB.`);
 			if (patch.memoryMb > row.memoryMb) this.admit(row, patch.memoryMb);
 		}
+		const { extensions, pooler, ...columns } = patch;
+		const poolerEnabled = pooler ?? row.poolerEnabled;
+		const poolerPort =
+			pooler === false
+				? null
+				: row.poolerPort ?? (poolerEnabled ? this.allocatePoolerPort(row.nodeId) : null);
 		this.ctx.db
 			.update(databases)
-			.set({ ...patch, updatedAt: this.ctx.now() })
+			.set({
+				...columns,
+				...(extensions ? { extensionsJson: JSON.stringify(extensions) } : {}),
+				poolerEnabled,
+				poolerPort,
+				updatedAt: this.ctx.now(),
+			})
 			.where(eq(databases.id, row.id))
 			.run();
 		this.ctx.audit.record({
@@ -252,6 +297,13 @@ export class DatabaseService {
 			.update(databases)
 			.set({ deletedAt: now, purgeAt: now + limits.trashDays * DAY_MS, status: 'stopped', updatedAt: now })
 			.where(eq(databases.id, row.id))
+			.run();
+		// A backup queued before the delete can no longer run; fail it rather than leaving a task
+		// pending forever on a node that no longer receives the database.
+		this.ctx.db
+			.update(databaseBackups)
+			.set({ status: 'failed', error: 'Database was deleted before the backup ran.', finishedAt: now })
+			.where(and(eq(databaseBackups.databaseId, row.id), inArray(databaseBackups.status, ['pending', 'running'])))
 			.run();
 		this.ctx.audit.record({
 			principal,
@@ -362,6 +414,667 @@ export class DatabaseService {
 			host: '127.0.0.1',
 			port: row.hostPort,
 			note: `Listens on loopback on node "${node?.name ?? row.nodeId}" only. From elsewhere, tunnel: ssh -L ${row.hostPort}:127.0.0.1:${row.hostPort} <node>.`,
+		};
+	}
+
+	// ---------------------------------------------------------------- credential rotation
+
+	rotations(principal: Principal, name: string): DatabaseRotationView[] {
+		requirePermission(principal, 'database:read');
+		const db = this.requireRow(principal, name, { includeDeleted: true });
+		return this.ctx.db
+			.select()
+			.from(databaseRotations)
+			.where(eq(databaseRotations.databaseId, db.id))
+			.orderBy(desc(databaseRotations.createdAt))
+			.all()
+			.map(toRotationView);
+	}
+
+	/**
+	 * Rotate the owner or monitor password. The new value is sealed in the rotation row and the
+	 * node applies `ALTER ROLE`; the live secret is replaced only after the node confirms, so a
+	 * failed rotation cannot lock an app out.
+	 */
+	rotateCredentials(principal: Principal, name: string, raw: unknown): DatabaseRotationView {
+		requirePermission(principal, 'database:credentials');
+		requirePermission(principal, 'database:update');
+		const input = databaseRotateSchema.parse(raw);
+		const db = this.requireRow(principal, name);
+		const pending = this.ctx.db
+			.select({ id: databaseRotations.id })
+			.from(databaseRotations)
+			.where(
+				and(
+					eq(databaseRotations.databaseId, db.id),
+					inArray(databaseRotations.status, ['pending', 'running']),
+				),
+			)
+			.get();
+		if (pending) throw new ConflictError(`A ${input.role} rotation for "${name}" is already running.`);
+		const id = newId('rot_');
+		const now = this.ctx.now();
+		this.ctx.db
+			.insert(databaseRotations)
+			.values({
+				id,
+				orgId: db.orgId,
+				databaseId: db.id,
+				role: input.role,
+				status: 'pending',
+				secretSealed: this.ctx.secrets.seal(db.orgId, password()),
+				createdBy: principal.userId,
+				createdAt: now,
+			})
+			.run();
+		this.ctx.audit.record({
+			principal,
+			action: 'database.rotate',
+			resource: 'database',
+			resourceId: db.id,
+			args: { name, role: input.role, rotationId: id },
+			result: 'ok',
+		});
+		this.ctx.projects.bump(principal.orgId);
+		return this.rotations(principal, name)[0]!;
+	}
+
+	rotationTasksForNode(nodeId: string): DatabaseRotationTask[] {
+		return this.ctx.db
+			.select({ rotation: databaseRotations, db: databases })
+			.from(databaseRotations)
+			.innerJoin(databases, eq(databases.id, databaseRotations.databaseId))
+			.where(
+				and(
+					eq(databases.nodeId, nodeId),
+					eq(databaseRotations.status, 'pending'),
+					isNull(databases.deletedAt),
+				),
+			)
+			.all()
+			.map(({ rotation }) => ({
+				id: rotation.id,
+				databaseId: rotation.databaseId,
+				role: rotation.role,
+			}));
+	}
+
+	rotationActivation(nodeId: string, id: string): DatabaseRotationActivation {
+		const row = this.ctx.db
+			.select({ rotation: databaseRotations, db: databases })
+			.from(databaseRotations)
+			.innerJoin(databases, eq(databases.id, databaseRotations.databaseId))
+			.where(eq(databaseRotations.id, id))
+			.get();
+		if (!row || row.db.nodeId !== nodeId)
+			throw new CoreError('forbidden', 'This rotation is not on this node.', 403);
+		if (row.rotation.status !== 'pending' && row.rotation.status !== 'running')
+			throw new ConflictError('This rotation has already finished.');
+		return {
+			id: row.rotation.id,
+			databaseId: row.db.id,
+			role: row.rotation.role,
+			password: this.ctx.secrets.open(row.db.orgId, row.rotation.secretSealed),
+		};
+	}
+
+	applyRotationResults(nodeId: string, results: DatabaseRotationResult[]): void {
+		const now = this.ctx.now();
+		let changed = false;
+		for (const result of results) {
+			const row = this.ctx.db
+				.select({ rotation: databaseRotations, db: databases })
+				.from(databaseRotations)
+				.innerJoin(databases, eq(databases.id, databaseRotations.databaseId))
+				.where(eq(databaseRotations.id, result.taskId))
+				.get();
+			if (!row || row.db.nodeId !== nodeId) continue;
+			if (row.rotation.status === 'ok' || row.rotation.status === 'failed') continue;
+			if (result.status === 'ok') {
+				this.ctx.sqlite.transaction(() => {
+					this.ctx.db
+						.update(databases)
+						.set({
+							...(result.role === 'owner'
+								? { ownerSecret: row.rotation.secretSealed }
+								: { monitorSecret: row.rotation.secretSealed }),
+							message: null,
+							updatedAt: now,
+						})
+						.where(eq(databases.id, row.db.id))
+						.run();
+					this.ctx.db
+						.update(databaseRotations)
+						.set({ status: 'ok', finishedAt: now, error: null })
+						.where(eq(databaseRotations.id, row.rotation.id))
+						.run();
+				})();
+			} else {
+				this.ctx.db
+					.update(databaseRotations)
+					.set({
+						status: 'failed',
+						finishedAt: now,
+						error: result.error ?? 'Rotation failed on the node.',
+					})
+					.where(eq(databaseRotations.id, row.rotation.id))
+					.run();
+				this.ctx.db
+					.update(databases)
+					.set({ message: `Credential rotation failed: ${result.error ?? 'unknown error'}`, updatedAt: now })
+					.where(eq(databases.id, row.db.id))
+					.run();
+			}
+			this.ctx.audit.record({
+				orgId: row.db.orgId,
+				action: result.status === 'ok' ? 'database.rotate-ok' : 'database.rotate-failed',
+				resource: 'database',
+				resourceId: row.db.id,
+				args: { name: row.db.name, role: result.role, rotationId: row.rotation.id },
+				result: result.status === 'ok' ? 'ok' : 'error',
+				...(result.status === 'ok' ? {} : { error: result.error ?? 'Rotation failed on the node.' }),
+			});
+			changed = true;
+		}
+		if (changed) this.ctx.projects.bump();
+	}
+
+	// ---------------------------------------------------------------- backups
+
+	/** Backup policy and last known result for one database. */
+	backupSummary(row: DatabaseRow): DatabaseBackupSummary {
+		return {
+			enabled: row.backupEnabled,
+			schedule: row.backupSchedule,
+			retentionDays: row.backupRetentionDays,
+			nextBackupAt: row.nextBackupAt ? new Date(row.nextBackupAt).toISOString() : null,
+			lastBackupAt: row.lastBackupAt ? new Date(row.lastBackupAt).toISOString() : null,
+			lastBackupStatus: row.lastBackupStatus ?? null,
+			lastBackupError: row.lastBackupError,
+			lastVerifiedAt: row.lastVerifiedAt ? new Date(row.lastVerifiedAt).toISOString() : null,
+			pendingRestoreId: row.pendingRestoreId,
+		};
+	}
+
+	backupPolicy(principal: Principal, name: string): DatabaseBackupSummary {
+		requirePermission(principal, 'database:read');
+		return this.backupSummary(this.requireRow(principal, name));
+	}
+
+	setBackupPolicy(principal: Principal, name: string, raw: unknown): DatabaseBackupSummary {
+		requirePermission(principal, 'database:update');
+		const patch = databaseBackupPolicySchema.parse(raw);
+		const row = this.requireRow(principal, name);
+		const schedule = patch.schedule ?? row.backupSchedule;
+		const enabled = patch.enabled ?? row.backupEnabled;
+		if (enabled) {
+			const next = nextCronTime(schedule, this.ctx.now());
+			if (next === null)
+				throw new ValidationError(`Backup schedule "${schedule}" never fires; check the cron fields.`);
+		}
+		const now = this.ctx.now();
+		this.ctx.db
+			.update(databases)
+			.set({
+				backupEnabled: enabled,
+				backupSchedule: schedule,
+				...(patch.retentionDays !== undefined ? { backupRetentionDays: patch.retentionDays } : {}),
+				nextBackupAt: enabled ? nextCronTime(schedule, now) : null,
+				updatedAt: now,
+			})
+			.where(eq(databases.id, row.id))
+			.run();
+		this.ctx.audit.record({
+			principal,
+			action: 'database.backup-policy',
+			resource: 'database',
+			resourceId: row.id,
+			args: { name, ...patch },
+			result: 'ok',
+		});
+		return this.backupSummary(this.requireRow(principal, name));
+	}
+
+	listBackups(principal: Principal, name: string, options: { includeDeleted?: boolean } = {}): DatabaseBackupView[] {
+		requirePermission(principal, 'database:read');
+		const db = this.requireRow(principal, name, options);
+		return this.ctx.db
+			.select()
+			.from(databaseBackups)
+			.where(eq(databaseBackups.databaseId, db.id))
+			.orderBy(desc(databaseBackups.createdAt))
+			.all()
+			.map((row) => this.toBackupView(row, db.name));
+	}
+
+	getBackup(principal: Principal, name: string, backupId: string): DatabaseBackupView {
+		requirePermission(principal, 'database:read');
+		const db = this.requireRow(principal, name, { includeDeleted: true });
+		const row = this.ctx.db
+			.select()
+			.from(databaseBackups)
+			.where(and(eq(databaseBackups.id, backupId), eq(databaseBackups.databaseId, db.id)))
+			.get();
+		if (!row) throw new NotFoundError('Backup');
+		return this.toBackupView(row, db.name);
+	}
+
+	/** Queue a dump now. The node picks it up on its next desired-state pull. */
+	createBackup(principal: Principal, name: string, raw: unknown = {}): DatabaseBackupView {
+		requirePermission(principal, 'database:update');
+		const input = databaseBackupCreateSchema.parse(raw);
+		const db = this.requireRow(principal, name);
+		const pending = this.ctx.db
+			.select({ id: databaseBackups.id })
+			.from(databaseBackups)
+			.where(and(eq(databaseBackups.databaseId, db.id), inArray(databaseBackups.status, ['pending', 'running'])))
+			.get();
+		if (pending) throw new ConflictError(`A backup for "${name}" is already running.`);
+		const now = this.ctx.now();
+		const id = newId('bkp_');
+		this.ctx.db
+			.insert(databaseBackups)
+			.values({
+				id,
+				orgId: db.orgId,
+				databaseId: db.id,
+				kind: 'manual',
+				status: 'pending',
+				objectKey: backupObjectKey(db.orgId, db.id, id),
+				pinned: input.pinned,
+				createdBy: principal.userId,
+				createdAt: now,
+				expiresAt: now + db.backupRetentionDays * DAY_MS,
+			})
+			.run();
+		this.ctx.db
+			.update(databases)
+			.set({ lastBackupStatus: 'pending', lastBackupError: null, updatedAt: now })
+			.where(eq(databases.id, db.id))
+			.run();
+		this.ctx.audit.record({
+			principal,
+			action: 'database.backup',
+			resource: 'database',
+			resourceId: db.id,
+			args: { name, backupId: id },
+			result: 'ok',
+		});
+		this.ctx.projects.bump(principal.orgId);
+		return this.getBackup(principal, name, id);
+	}
+
+	/** Delete one artifact. The object goes first; a missing object is treated as already gone. */
+	async deleteBackup(principal: Principal, name: string, backupId: string): Promise<void> {
+		requirePermission(principal, 'database:delete');
+		const db = this.requireRow(principal, name, { includeDeleted: true });
+		const backup = this.ctx.db
+			.select()
+			.from(databaseBackups)
+			.where(and(eq(databaseBackups.id, backupId), eq(databaseBackups.databaseId, db.id)))
+			.get();
+		if (!backup) throw new NotFoundError('Backup');
+		if (backup.status === 'pending' || backup.status === 'running')
+			throw new ConflictError('Wait for the backup to finish before deleting it.');
+		if (db.pendingRestoreId === backup.id)
+			throw new ConflictError('This backup is being restored into a database right now.');
+		await this.ctx.objectStore.delete(backup.objectKey).catch(() => undefined);
+		this.ctx.db.delete(databaseBackups).where(eq(databaseBackups.id, backup.id)).run();
+		this.ctx.audit.record({
+			principal,
+			action: 'database.backup-delete',
+			resource: 'database',
+			resourceId: db.id,
+			args: { name, backupId },
+			result: 'ok',
+		});
+		this.ctx.projects.bump(principal.orgId);
+	}
+
+	/**
+	 * Restore a backup into a brand-new database (the default and the only mode in v1). The new
+	 * instance gets new credentials and is marked `pendingRestoreId` until its node confirms the
+	 * `pg_restore` succeeded; consumers can attach it immediately.
+	 */
+	restoreBackup(principal: Principal, sourceName: string, backupId: string, raw: unknown): DatabaseView {
+		requirePermission(principal, 'database:create');
+		const source = this.requireRow(principal, sourceName, { includeDeleted: true });
+		const backup = this.ctx.db
+			.select()
+			.from(databaseBackups)
+			.where(and(eq(databaseBackups.id, backupId), eq(databaseBackups.databaseId, source.id)))
+			.get();
+		if (!backup) throw new NotFoundError('Backup');
+		if (backup.status !== 'ok')
+			throw new ConflictError(`Backup "${backupId}" is ${backup.status}; only a completed backup can be restored.`);
+		const input = databaseRestoreSchema.parse(raw);
+		const created = this.create(principal, {
+			name: input.name,
+			engine: source.engine,
+			version: source.version,
+			placement: input.placement,
+			...(input.memoryMb !== undefined ? { memoryMb: input.memoryMb } : {}),
+			...(input.cpus !== undefined ? { cpus: input.cpus } : {}),
+			...(input.storageMb !== undefined ? { storageMb: input.storageMb } : {}),
+			...(input.volume !== undefined ? { volume: input.volume } : {}),
+			...(input.project !== undefined ? { project: input.project } : {}),
+			...(input.envPrefix !== undefined ? { envPrefix: input.envPrefix } : {}),
+			extensions: parseJson(source.extensionsJson, []),
+			pooler: source.poolerEnabled,
+		});
+		const row = this.requireRow(principal, input.name);
+		this.ctx.db
+			.update(databases)
+			.set({
+				pendingRestoreId: backup.id,
+				// No scheduled dump can fire while the new instance is still being restored.
+				backupEnabled: false,
+				nextBackupAt: null,
+				message: `Restoring backup ${backup.id}.`,
+				updatedAt: this.ctx.now(),
+			})
+			.where(eq(databases.id, row.id))
+			.run();
+		this.ctx.audit.record({
+			principal,
+			action: 'database.restore-backup',
+			resource: 'database',
+			resourceId: row.id,
+			args: { source: sourceName, backupId, name: input.name },
+			result: 'ok',
+		});
+		this.ctx.projects.bump(principal.orgId);
+		return this.toView(this.requireRow(principal, input.name));
+	}
+
+	/**
+	 * Maintenance: queue one scheduled backup per database whose `nextBackupAt` is due. A database
+	 * with a pending/running backup is skipped so a slow dump cannot pile up.
+	 */
+	tickBackups(now = this.ctx.now()): number {
+		const due = this.ctx.db
+			.select()
+			.from(databases)
+			.where(
+				and(
+					isNull(databases.deletedAt),
+					eq(databases.backupEnabled, true),
+					isNotNull(databases.nextBackupAt),
+					lte(databases.nextBackupAt, now),
+				),
+			)
+			.all();
+		let queued = 0;
+		for (const db of due) {
+			const busy = this.ctx.db
+				.select({ id: databaseBackups.id })
+				.from(databaseBackups)
+				.where(
+					and(
+						eq(databaseBackups.databaseId, db.id),
+						inArray(databaseBackups.status, ['pending', 'running']),
+					),
+				)
+				.get();
+			const next = nextCronTime(db.backupSchedule, now);
+			if (busy || next === null) {
+				this.ctx.db
+					.update(databases)
+					.set({
+						nextBackupAt: next,
+						...(next === null
+							? {
+									backupEnabled: false,
+									lastBackupError: `Backup schedule "${db.backupSchedule}" never fires.`,
+								}
+							: {}),
+						updatedAt: now,
+					})
+					.where(eq(databases.id, db.id))
+					.run();
+				continue;
+			}
+			const id = newId('bkp_');
+			this.ctx.sqlite.transaction(() => {
+				this.ctx.db
+					.insert(databaseBackups)
+					.values({
+						id,
+						orgId: db.orgId,
+						databaseId: db.id,
+						kind: 'scheduled',
+						status: 'pending',
+						objectKey: backupObjectKey(db.orgId, db.id, id),
+						createdBy: 'system',
+						createdAt: now,
+						expiresAt: now + db.backupRetentionDays * DAY_MS,
+					})
+					.run();
+				this.ctx.db
+					.update(databases)
+					.set({
+						nextBackupAt: next,
+						lastBackupStatus: 'pending',
+						lastBackupError: null,
+						updatedAt: now,
+					})
+					.where(eq(databases.id, db.id))
+					.run();
+			})();
+			this.ctx.audit.record({
+				orgId: db.orgId,
+				action: 'database.backup',
+				resource: 'database',
+				resourceId: db.id,
+				args: { name: db.name, backupId: id, scheduled: true },
+				result: 'ok',
+			});
+			queued += 1;
+		}
+		if (queued > 0) this.ctx.projects.bump();
+		return queued;
+	}
+
+	/**
+	 * Tasks for one node. Presigned URLs expire in an hour; a pending task whose URL expired is
+	 * regenerated on the next pull without changing the backup row.
+	 */
+	async backupTasksForNode(nodeId: string): Promise<DatabaseBackupTask[]> {
+		const tasks: DatabaseBackupTask[] = [];
+		const backups = this.ctx.db
+			.select({ backup: databaseBackups, db: databases })
+			.from(databaseBackups)
+			.innerJoin(databases, eq(databases.id, databaseBackups.databaseId))
+			.where(and(eq(databases.nodeId, nodeId), eq(databaseBackups.status, 'pending'), isNull(databases.deletedAt)))
+			.all();
+		for (const { backup, db } of backups) {
+			tasks.push({
+				id: backup.id,
+				action: 'backup',
+				databaseId: db.id,
+				databaseName: databaseIdentifier(db.name),
+				engine: db.engine,
+				backupId: null,
+				objectKey: backup.objectKey,
+				url: await this.ctx.objectStore.presignPut(backup.objectKey, BACKUP_TASK_TTL_SECONDS, 'application/octet-stream'),
+				format: DATABASE_BACKUP_FORMAT,
+			});
+		}
+		const restores = this.ctx.db
+			.select()
+			.from(databases)
+			.where(and(eq(databases.nodeId, nodeId), isNotNull(databases.pendingRestoreId), isNull(databases.deletedAt)))
+			.all();
+		for (const db of restores) {
+			const backup = this.ctx.db
+				.select()
+				.from(databaseBackups)
+				.where(eq(databaseBackups.id, db.pendingRestoreId!))
+				.get();
+			if (!backup) continue;
+			tasks.push({
+				id: `restore:${db.id}`,
+				action: 'restore',
+				databaseId: db.id,
+				databaseName: databaseIdentifier(db.name),
+				engine: db.engine,
+				backupId: backup.id,
+				objectKey: backup.objectKey,
+				url: await this.ctx.objectStore.presignGet(backup.objectKey, BACKUP_TASK_TTL_SECONDS),
+				format: DATABASE_BACKUP_FORMAT,
+			});
+		}
+		return tasks;
+	}
+
+	/** Record dump/restore outcomes from a node's heartbeat. */
+	applyBackupResults(nodeId: string, results: DatabaseBackupResult[]): void {
+		const now = this.ctx.now();
+		let changed = false;
+		for (const result of results) {
+			if (result.action === 'backup') {
+				const backup = this.ctx.db
+					.select({ backup: databaseBackups, db: databases })
+					.from(databaseBackups)
+					.innerJoin(databases, eq(databases.id, databaseBackups.databaseId))
+					.where(eq(databaseBackups.id, result.taskId))
+					.get();
+				if (!backup || backup.db.nodeId !== nodeId) continue;
+				if (backup.backup.status === 'ok' || backup.backup.status === 'failed') continue;
+				const ok = result.status === 'ok';
+				this.ctx.db
+					.update(databaseBackups)
+					.set({
+						status: ok ? 'ok' : 'failed',
+						sizeBytes: result.sizeBytes ?? backup.backup.sizeBytes,
+						sha256: result.sha256 ?? backup.backup.sha256,
+						error: ok ? null : result.error ?? 'Backup failed on the node.',
+						startedAt: backup.backup.startedAt ?? now,
+						finishedAt: now,
+					})
+					.where(eq(databaseBackups.id, backup.backup.id))
+					.run();
+				this.ctx.db
+					.update(databases)
+					.set({
+						lastBackupAt: ok ? now : backup.db.lastBackupAt,
+						lastBackupStatus: ok ? 'ok' : 'failed',
+						lastBackupError: ok ? null : result.error ?? 'Backup failed on the node.',
+						updatedAt: now,
+					})
+					.where(eq(databases.id, backup.db.id))
+					.run();
+				this.ctx.audit.record({
+					orgId: backup.db.orgId,
+					action: ok ? 'database.backup-ok' : 'database.backup-failed',
+					resource: 'database',
+					resourceId: backup.db.id,
+					args: { name: backup.db.name, backupId: backup.backup.id, sizeBytes: result.sizeBytes ?? null },
+					result: ok ? 'ok' : 'error',
+					...(ok ? {} : { error: result.error ?? 'Backup failed on the node.' }),
+				});
+				changed = true;
+				continue;
+			}
+
+			const db = this.ctx.db
+				.select()
+				.from(databases)
+				.where(and(eq(databases.id, result.databaseId), eq(databases.nodeId, nodeId)))
+				.get();
+			if (!db || !db.pendingRestoreId) continue;
+			const backup = this.ctx.db
+				.select()
+				.from(databaseBackups)
+				.where(eq(databaseBackups.id, db.pendingRestoreId))
+				.get();
+			if (!backup) continue;
+			const ok = result.status === 'ok';
+			this.ctx.db
+				.update(databases)
+				.set({
+					pendingRestoreId: null,
+					message: ok ? null : `Restore failed: ${result.error ?? 'unknown error'}`,
+					status: ok ? db.status : 'running',
+					backupEnabled: ok,
+					nextBackupAt: ok ? nextCronTime(db.backupSchedule, now) : null,
+					lastVerifiedAt: ok ? now : db.lastVerifiedAt,
+					updatedAt: now,
+				})
+				.where(eq(databases.id, db.id))
+				.run();
+			if (ok) {
+				this.ctx.db
+					.update(databaseBackups)
+					.set({ verifiedAt: now, restoredDatabaseId: db.id })
+					.where(eq(databaseBackups.id, backup.id))
+					.run();
+			}
+			this.ctx.audit.record({
+				orgId: db.orgId,
+				action: ok ? 'database.restore-backup-ok' : 'database.restore-backup-failed',
+				resource: 'database',
+				resourceId: db.id,
+				args: { name: db.name, backupId: backup.id },
+				result: ok ? 'ok' : 'error',
+				...(ok ? {} : { error: result.error ?? 'Restore failed on the node.' }),
+			});
+			changed = true;
+		}
+		if (changed) this.ctx.projects.bump();
+	}
+
+	/** Retention sweep; never deletes a pinned backup or the newest good backup of a database. */
+	async pruneBackups(now = this.ctx.now()): Promise<number> {
+		const candidates = this.ctx.db
+			.select({ backup: databaseBackups, db: databases })
+			.from(databaseBackups)
+			.innerJoin(databases, eq(databases.id, databaseBackups.databaseId))
+			.where(
+				and(
+					eq(databaseBackups.status, 'ok'),
+					eq(databaseBackups.pinned, false),
+					isNotNull(databaseBackups.expiresAt),
+					lte(databaseBackups.expiresAt, now),
+				),
+			)
+			.all();
+		let removed = 0;
+		for (const { backup, db } of candidates) {
+			const newest = this.ctx.db
+				.select({ id: databaseBackups.id })
+				.from(databaseBackups)
+				.where(and(eq(databaseBackups.databaseId, db.id), eq(databaseBackups.status, 'ok')))
+				.orderBy(desc(databaseBackups.createdAt))
+				.limit(1)
+				.get();
+			if (newest?.id === backup.id) continue;
+			await this.ctx.objectStore.delete(backup.objectKey).catch(() => undefined);
+			this.ctx.db.delete(databaseBackups).where(eq(databaseBackups.id, backup.id)).run();
+			removed += 1;
+		}
+		if (removed > 0) this.ctx.projects.bump();
+		return removed;
+	}
+
+	private toBackupView(row: typeof databaseBackups.$inferSelect, databaseName: string): DatabaseBackupView {
+		return {
+			id: row.id,
+			databaseId: row.databaseId,
+			databaseName,
+			kind: row.kind,
+			status: row.status,
+			format: DATABASE_BACKUP_FORMAT,
+			sizeBytes: row.sizeBytes,
+			sha256: row.sha256,
+			objectKey: row.objectKey,
+			pinned: row.pinned,
+			error: row.error,
+			verifiedAt: row.verifiedAt ? new Date(row.verifiedAt).toISOString() : null,
+			restoredDatabaseId: row.restoredDatabaseId,
+			startedAt: new Date(row.startedAt ?? row.createdAt).toISOString(),
+			finishedAt: row.finishedAt ? new Date(row.finishedAt).toISOString() : null,
+			expiresAt: row.expiresAt ? new Date(row.expiresAt).toISOString() : null,
 		};
 	}
 
@@ -485,6 +1198,20 @@ export class DatabaseService {
 			env[`${item.prefix}_USER`] = item.user;
 			env[`${item.prefix}_PASSWORD`] = pass;
 			env[`${item.prefix}_NAME`] = item.databaseName;
+			if (item.poolerPort !== null) {
+				const poolHost = runtime === 'container' ? `${databaseAlias(item.databaseId)}-pool` : '127.0.0.1';
+				const poolPort = runtime === 'container' ? 6432 : item.poolerPort;
+				env[`${item.prefix}_POOL_URL`] = connectionUrl(
+					item.scheme,
+					item.user,
+					pass,
+					poolHost,
+					poolPort,
+					item.databaseName,
+				);
+				env[`${item.prefix}_POOL_HOST`] = poolHost;
+				env[`${item.prefix}_POOL_PORT`] = String(poolPort);
+			}
 		}
 		return env;
 	}
@@ -499,6 +1226,7 @@ export class DatabaseService {
 			prefix: item.prefix,
 			host: item.host,
 			port: item.port,
+			poolerPort: item.poolerPort,
 		}));
 		return items.length === 0 ? '' : sha256Hex(JSON.stringify(items));
 	}
@@ -538,6 +1266,7 @@ export class DatabaseService {
 					dataSizeMb: null,
 					...(row.volumeId ? { volumeId: row.volumeId } : {}),
 					database: { engine: row.engine, version: row.version },
+					...(row.poolerEnabled && row.poolerPort ? { pooler: { port: row.poolerPort } } : {}),
 				};
 			});
 	}
@@ -568,6 +1297,7 @@ export class DatabaseService {
 			activationVersion: databaseActivationVersion(row, env),
 			env: { POSTGRES_PASSWORD: ownerPassword },
 			files: {},
+			databaseSetup: { extensions: parseJson<string[]>(row.extensionsJson, []) },
 			monitor: {
 				databaseName: user,
 				ownerUser: user,
@@ -603,8 +1333,17 @@ export class DatabaseService {
 		for (const id of ids) {
 			const row = this.rowById(id);
 			if (!row || row.nodeId !== nodeId || !row.deletedAt || !row.purgeRequestedAt) continue;
+			const backups = this.ctx.db
+				.select({ key: databaseBackups.objectKey })
+				.from(databaseBackups)
+				.where(eq(databaseBackups.databaseId, id))
+				.all();
+			for (const backup of backups)
+				void this.ctx.objectStore.delete(backup.key).catch(() => undefined);
 			this.ctx.sqlite.transaction(() => {
 				this.ctx.db.delete(databaseAttachments).where(eq(databaseAttachments.databaseId, id)).run();
+				this.ctx.db.delete(databaseRotations).where(eq(databaseRotations.databaseId, id)).run();
+				this.ctx.db.delete(databaseBackups).where(eq(databaseBackups.databaseId, id)).run();
 				this.ctx.db.delete(databases).where(eq(databases.id, id)).run();
 			})();
 			this.ctx.audit.record({
@@ -649,9 +1388,16 @@ export class DatabaseService {
 		for (const snapshot of snapshots) {
 			if (!owned.has(snapshot.databaseId)) continue;
 			const at = Date.parse(snapshot.at);
+			const statsAt = Number.isFinite(at) ? at : this.ctx.now();
 			this.ctx.db
 				.update(databases)
-				.set({ statsJson: JSON.stringify(snapshot.tables), statsAt: Number.isFinite(at) ? at : this.ctx.now() })
+				.set({
+					statsJson: JSON.stringify(snapshot.tables),
+					statsAt,
+					...(snapshot.slowQueries
+						? { slowQueriesJson: JSON.stringify(snapshot.slowQueries), slowQueriesAt: statsAt }
+						: {}),
+				})
 				.where(eq(databases.id, snapshot.databaseId))
 				.run();
 		}
@@ -740,6 +1486,20 @@ export class DatabaseService {
 		throw new ValidationError('This node has no free database ports left.');
 	}
 
+	private allocatePoolerPort(nodeId: string): number {
+		const used = new Set(
+			this.ctx.db
+				.select({ port: databases.poolerPort })
+				.from(databases)
+				.where(and(eq(databases.nodeId, nodeId), isNotNull(databases.poolerPort)))
+				.all()
+				.flatMap((row) => (row.port === null ? [] : [row.port])),
+		);
+		for (let port = DATABASE_POOLER_PORT_MIN; port <= DATABASE_POOLER_PORT_MAX; port++)
+			if (!used.has(port)) return port;
+		throw new ValidationError('This node has no free database pooler ports left.');
+	}
+
 	private insertAttachment(principal: Principal, databaseId: string, project: ProjectRow, envPrefix: string): void {
 		this.ctx.db
 			.insert(databaseAttachments)
@@ -811,6 +1571,7 @@ export class DatabaseService {
 					databaseName: user,
 					scheme: info.scheme,
 					row: db,
+					poolerPort: db.poolerEnabled ? db.poolerPort : null,
 				};
 			});
 	}
@@ -839,10 +1600,22 @@ export class DatabaseService {
 				process: `127.0.0.1:${row.hostPort}`,
 				container: `${databaseAlias(row.id)}:${info.containerPort}`,
 			},
+			pooler: {
+				enabled: row.poolerEnabled && row.poolerPort !== null,
+				host: {
+					process: row.poolerPort ? `127.0.0.1:${row.poolerPort}` : '',
+					container: row.poolerPort ? `${databaseAlias(row.id)}-pool:6432` : '',
+				},
+				port: row.poolerPort,
+			},
 			volume: this.ctx.volumes.summary(row.volumeId),
 			attachments: this.attachmentsOf(row.id),
 			tables: parseJson<DatabaseTableStat[]>(row.statsJson, []),
 			statsAt: row.statsAt ? new Date(row.statsAt).toISOString() : null,
+			extensions: parseJson(row.extensionsJson, []),
+			slowQueries: parseJson(row.slowQueriesJson, []),
+			slowQueriesAt: row.slowQueriesAt ? new Date(row.slowQueriesAt).toISOString() : null,
+			backup: this.backupSummary(row),
 			createdAt: new Date(row.createdAt).toISOString(),
 			updatedAt: new Date(row.updatedAt).toISOString(),
 			deletedAt: row.deletedAt ? new Date(row.deletedAt).toISOString() : null,
@@ -859,8 +1632,36 @@ function connectionUrl(scheme: string, user: string, pass: string, host: string,
 	return `${scheme}://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${host}:${port}/${encodeURIComponent(db)}`;
 }
 
+function toRotationView(row: typeof databaseRotations.$inferSelect): DatabaseRotationView {
+	return {
+		id: row.id,
+		databaseId: row.databaseId,
+		role: row.role,
+		status: row.status,
+		error: row.error,
+		createdAt: new Date(row.createdAt).toISOString(),
+		finishedAt: row.finishedAt ? new Date(row.finishedAt).toISOString() : null,
+	};
+}
+
+function backupObjectKey(orgId: string, databaseId: string, backupId: string): string {
+	return `${BACKUP_OBJECT_PREFIX}/${orgId}/${databaseId}/${backupId}.dump`;
+}
+
 function databaseActivationVersion(row: DatabaseRow, env: Record<string, string>): string {
 	return sha256Hex(
-		JSON.stringify({ id: row.id, engine: row.engine, version: row.version, port: row.hostPort, env }),
+		JSON.stringify({
+			id: row.id,
+			// Bump when the fixed helper profile changes and existing units must be re-rendered.
+			profile: 2,
+			engine: row.engine,
+			version: row.version,
+			port: row.hostPort,
+			poolerPort: row.poolerPort,
+			env,
+			extensions: row.extensionsJson,
+			// A rotated secret must re-activate consumers even though the public spec is unchanged.
+			secret: sha256Hex(`${row.ownerSecret}:${row.monitorSecret}`),
+		}),
 	);
 }

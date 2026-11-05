@@ -56,6 +56,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 
 	return {
 		database,
+		backups: core.databases.listBackups(principal, params.name, { includeDeleted: true }),
 		metrics,
 		telemetryAvailable: core.ctx.telemetry?.available ?? false,
 		range,
@@ -97,12 +98,14 @@ export const actions: Actions = {
 			storageMb: optionalNumber(formString(data, 'storageMb'))
 		};
 		// Only send what changed, so an unchanged field never re-runs admission.
-		const patch: Record<string, number> = {};
+		const patch: Record<string, number | boolean> = {};
 		if (next.memoryMb !== undefined && next.memoryMb !== current.memoryMb)
 			patch.memoryMb = next.memoryMb;
 		if (next.cpus !== undefined && next.cpus !== current.cpus) patch.cpus = next.cpus;
 		if (next.storageMb !== undefined && next.storageMb !== current.storageMb)
 			patch.storageMb = next.storageMb;
+		const pooler = data.get('pooler') === 'on';
+		if (pooler !== current.pooler.enabled) patch.pooler = pooler;
 		if (Object.keys(patch).length === 0) return { success: 'Nothing changed.' };
 
 		const parsed = databaseUpdateSchema.safeParse(patch);
@@ -121,6 +124,107 @@ export const actions: Actions = {
 			success:
 				'Resources saved. The node restarts the database with the new limits on its next reconcile.'
 		};
+	},
+
+	rotate: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const role = formString(data, 'role') === 'monitor' ? 'monitor' : 'owner';
+		try {
+			core.databases.rotateCredentials(principal, params.name, { role });
+			return {
+				success: `Queued ${role} credential rotation. The node applies ALTER ROLE and verifies it before the secret swaps; attached apps restart with the new value.`
+			};
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	extensions: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const parsed = databaseUpdateSchema.safeParse({ extensions: data.getAll('extensions').map(String) });
+		if (!parsed.success)
+			return fail(400, {
+				message: parsed.error.issues[0]?.message ?? 'Check the extensions.',
+				fieldErrors: fieldErrorsFrom(parsed.error.issues)
+			});
+		try {
+			core.databases.update(principal, params.name, parsed.data);
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+		return {
+			success:
+				(parsed.data.extensions?.length ?? 0) === 0
+					? 'Extensions saved. Removing one never drops it; use SQL if the data is no longer needed.'
+					: 'Extensions saved. The node installs them on the next activation.'
+		};
+	},
+
+	backup: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		try {
+			const backup = core.databases.createBackup(principal, params.name, {
+				pinned: formString(data, 'pinned') === 'on'
+			});
+			return { success: `Backup ${backup.id} queued. The node uploads it on its next pull.` };
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	'backup-policy': async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const retentionRaw = formString(data, 'retentionDays');
+		const retentionDays = retentionRaw ? Number(retentionRaw) : undefined;
+		if (retentionDays !== undefined && (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 365))
+			return fail(400, {
+				message: 'Retention must be a whole number of days between 1 and 365.',
+				fieldErrors: { retentionDays: '1–365 days.' }
+			});
+		try {
+			core.databases.setBackupPolicy(principal, params.name, {
+				enabled: formString(data, 'enabled') === 'on',
+				schedule: formString(data, 'schedule') || undefined,
+				...(retentionDays === undefined ? {} : { retentionDays })
+			});
+			return { success: 'Backup policy saved.' };
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	'delete-backup': async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const backupId = formString(await request.formData(), 'backupId');
+		if (!backupId) return fail(400, { message: 'Missing backup id.' });
+		try {
+			await core.databases.deleteBackup(principal, params.name, backupId);
+			return { success: `Deleted backup ${backupId}.` };
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	'restore-backup': async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const backupId = formString(data, 'backupId');
+		const name = formString(data, 'name');
+		if (!backupId || !name) return fail(400, { message: 'Choose a backup and a new database name.' });
+		try {
+			const restored = core.databases.restoreBackup(principal, params.name, backupId, {
+				name,
+				...(formString(data, 'project') ? { project: formString(data, 'project') } : {})
+			});
+			redirect(303, `/databases/${encodeURIComponent(restored.name)}`);
+		} catch (caught) {
+			if (caught instanceof CoreError) return fail(caught.status, { message: caught.message });
+			throw caught;
+		}
 	},
 
 	attach: async ({ request, locals, params }) => {

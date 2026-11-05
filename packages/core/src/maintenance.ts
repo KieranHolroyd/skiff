@@ -43,6 +43,8 @@ export class MaintenanceService {
 		const projectsPurged = await this.ctx.projects.purgeExpired();
 		// Trashed databases past their window are handed to their node, which deletes the data (D59).
 		this.ctx.databases.requestExpiredPurges();
+		this.ctx.databases.tickBackups();
+		await this.ctx.databases.pruneBackups();
 		this.ctx.storage.requestExpiredPurges();
 		// Cheap, certain cleanup runs every sweep; prune is the on-demand deep backstop.
 		this.cleanupRows();

@@ -44,6 +44,100 @@ export function containerUnitName(id: string): string {
 	return `skiff-workload-${id}.container`;
 }
 
+/** Sidecar Quadlet for a managed database's PgBouncer. */
+export function poolerUnitName(id: string): string {
+	return `skiff-workload-${id}-pool.container`;
+}
+
+export function poolerServiceName(id: string): string {
+	return `skiff-workload-${id}-pool.service`;
+}
+
+/** Pinned PgBouncer image (D61-style: the helper chooses it, never the wire). */
+export const DATABASE_POOLER_IMAGE =
+	'docker.io/edoburu/pgbouncer:latest@sha256:88769b6bbae0fbe0a198c26dc4c2f6bc3bf95bec4cab7d18c6a4348fa36cccc2';
+
+/** PgBouncer config for one database. `auth_file` is the 0600 userlist written beside it. */
+export function renderPoolerConfig(options: {
+	databaseAlias: string;
+	/** Absolute path inside the pooler container. */
+	authFile: string;
+	maxClientConn?: number;
+	defaultPoolSize?: number;
+}): string {
+	const maxClient = options.maxClientConn ?? 200;
+	const poolSize = options.defaultPoolSize ?? 20;
+	return `[databases]
+* = host=${options.databaseAlias} port=5432
+
+[pgbouncer]
+listen_addr = 0.0.0.0
+listen_port = 6432
+auth_type = scram-sha-256
+auth_file = ${options.authFile}
+pool_mode = transaction
+max_client_conn = ${maxClient}
+default_pool_size = ${poolSize}
+reserve_pool_size = 5
+server_reset_query = DISCARD ALL
+ignore_startup_parameters = extra_float_digits
+`;
+}
+
+/** PgBouncer `userlist.txt`: one `"user" "password"` line. */
+export function renderPoolerUserlist(user: string, password: string): string {
+	const quote = (value: string) => `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+	return `${quote(user)} ${quote(password)}\n`;
+}
+
+/**
+ * The pooler sidecar: loopback-only PublishPort, the database network, and config files mounted
+ * read-only from the workload runtime dir. It runs as the image's uid 70 and has no capabilities.
+ */
+export function renderPoolerUnit(options: {
+	workload: WorkloadDesired;
+	configPath: string;
+	userlistPath: string;
+}): string {
+	const { workload } = options;
+	if (!workload.database || !workload.pooler)
+		throw new ValidationError('renderPoolerUnit needs a database workload with a pooler port');
+	const lines: string[] = [];
+	lines.push('[Unit]');
+	lines.push(`Description=Skiff database pooler ${workload.id} (${workload.projectSlug})`);
+	lines.push('After=network-online.target');
+	lines.push('Wants=network-online.target');
+	lines.push('StartLimitIntervalSec=300');
+	lines.push('StartLimitBurst=10');
+	lines.push('');
+	lines.push('[Container]');
+	lines.push(`ContainerName=skiff-workload-${workload.id}-pool`);
+	lines.push(`Image=${DATABASE_POOLER_IMAGE}`);
+	lines.push('User=70:70');
+	lines.push(`PublishPort=127.0.0.1:${workload.pooler.port}:6432`);
+	lines.push(`Network=${WORKLOAD_NETWORK_UNIT}`);
+	lines.push(`NetworkAlias=${databaseAlias(workload.id)}-pool`);
+	lines.push(`Volume=${options.configPath}:/etc/pgbouncer/pgbouncer.ini:ro,Z`);
+	lines.push(`Volume=${options.userlistPath}:/etc/pgbouncer/userlist.txt:ro,Z`);
+	lines.push('DropCapability=all');
+	lines.push('NoNewPrivileges=true');
+	lines.push('ReadOnly=true');
+	lines.push('Tmpfs=/tmp:rw,size=16m');
+	lines.push('');
+	lines.push('[Service]');
+	lines.push('Restart=on-failure');
+	lines.push('RestartSec=3');
+	lines.push('TimeoutStartSec=120');
+	lines.push('TimeoutStopSec=30');
+	lines.push(`MemoryMax=64M`);
+	lines.push(`CPUQuota=50%`);
+	lines.push(`Slice=${WORKLOAD_SLICE}`);
+	lines.push('');
+	lines.push('[Install]');
+	lines.push('WantedBy=default.target');
+	return `${lines.join('\n')}\n`;
+}
+
 /** Omit the header for embedding in a containing unit (Quadlet sections). */
 function description(workload: WorkloadDesired): string {
 	return `Skiff workload ${workload.id} (${workload.projectSlug})`;
@@ -359,6 +453,10 @@ export function renderDatabaseUnit(options: DatabaseUnitOptions): string {
 	lines.push('[Container]');
 	lines.push(`ContainerName=skiff-workload-${workload.id}`);
 	lines.push(`Image=${databaseImage(database)}`);
+	// Keep the image entrypoint (initdb, then exec "$@") and pass the fixed Postgres flags. The
+	// shared preload is required before `CREATE EXTENSION pg_stat_statements` can work.
+	lines.push('Entrypoint=/usr/local/bin/docker-entrypoint.sh');
+	lines.push('Exec=postgres -c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all');
 	lines.push(`User=${info.uid}:${info.gid}`);
 	lines.push(`PublishPort=127.0.0.1:${workload.port}:${info.containerPort}`);
 	lines.push(`Network=${WORKLOAD_NETWORK_UNIT}`);

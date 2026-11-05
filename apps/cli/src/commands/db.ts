@@ -10,7 +10,7 @@ import {
 	parseMegabytes,
 	type DatabaseCreateInput,
 } from '../databases.ts';
-import { formatTime, indent, printJson } from '../output.ts';
+import { formatBytes, formatTime, indent, printJson, renderTable } from '../output.ts';
 import { authenticatedClient } from './common.ts';
 import { confirmOrRefuse } from './run-operation.ts';
 
@@ -28,6 +28,12 @@ Commands:
   restore <name>               Bring it back from the trash
   purge <name>                 Permanently delete a trashed database and its data
   credentials <name>           Print the connection URL (--json for user, password, host, port)
+  rotate <name>                Rotate the owner password (--monitor for the monitor role)
+  backups <name>               List backups and the last verified restore
+  backup <name>                Take a backup now (--pin keeps it past retention)
+  backup-delete <name> <id>    Delete one backup artifact
+  restore-backup <name> <id>   Restore a backup into a new database (--as <new-name>)
+  backup-policy <name>         Show or change the schedule and retention
 
 Create options:
   -p, --project <slug>         Attach to this project right away (placed on its node)
@@ -37,6 +43,8 @@ Create options:
       --memory <size>          Memory limit, e.g. 256M or 1G (default 256M)
       --cpus <n>               CPU limit (default 1)
       --storage <size>         Storage budget for alerts and the gauge (default 10G)
+      --[no-]pooler            PgBouncer sidecar (default on; injects <PREFIX>_POOL_URL)
+      --extension <name>       Enable an allowlisted extension (repeatable)
 
 Options:
   -y, --yes                    Don't ask for confirmation (required when stdin isn't a terminal)
@@ -68,6 +76,8 @@ const createFlags: FlagSpec = {
 	memory: { type: 'string' },
 	cpus: { type: 'string' },
 	storage: { type: 'string' },
+	pooler: { type: 'boolean' },
+	extension: { type: 'string', multiple: true },
 };
 
 const attachFlags: FlagSpec = {
@@ -79,6 +89,22 @@ const attachFlags: FlagSpec = {
 const detachFlags: FlagSpec = { ...baseFlags, project: { type: 'string', short: 'p' } };
 
 const confirmFlags: FlagSpec = { ...baseFlags, yes: { type: 'boolean', short: 'y' } };
+const backupsFlags: FlagSpec = { ...baseFlags, pin: { type: 'boolean' } };
+const restoreBackupFlags: FlagSpec = {
+	...baseFlags,
+	as: { type: 'string' },
+	placement: { type: 'string' },
+	project: { type: 'string', short: 'p' },
+	prefix: { type: 'string' },
+};
+const backupPolicyFlags: FlagSpec = {
+	...baseFlags,
+	schedule: { type: 'string' },
+	retention: { type: 'string' },
+	enable: { type: 'boolean' },
+	disable: { type: 'boolean' },
+};
+const rotateFlags: FlagSpec = { ...baseFlags, monitor: { type: 'boolean' } };
 
 const subcommands: Record<string, (argv: string[]) => Promise<void>> = {
 	list: listDatabases,
@@ -94,6 +120,12 @@ const subcommands: Record<string, (argv: string[]) => Promise<void>> = {
 	purge: purgeDatabase,
 	credentials: showCredentials,
 	creds: showCredentials,
+	backups: listBackups,
+	backup: createBackup,
+	'backup-delete': deleteBackup,
+	'restore-backup': restoreBackup,
+	'backup-policy': backupPolicy,
+	rotate: rotateCredentials,
 };
 
 export async function dbCommand(argv: string[]): Promise<void> {
@@ -168,6 +200,9 @@ async function createDatabase(argv: string[]): Promise<void> {
 	if (cpus) input.cpus = parseCpus(cpus);
 	const storage = args.string('storage');
 	if (storage) input.storageMb = parseMegabytes(storage, '--storage');
+	if (args.has('pooler')) input.pooler = args.boolean('pooler');
+	const extensions = args.strings('extension');
+	if (extensions.length > 0) input.extensions = extensions;
 
 	const client = await authenticatedClient();
 	const { database, raw } = await client.createDatabase(input);
@@ -335,4 +370,144 @@ async function showCredentials(argv: string[]): Promise<void> {
 	// The URL alone on stdout, so `psql "$(skif db credentials main)"` works.
 	console.log(credentials.url);
 	if (process.stderr.isTTY && credentials.note) process.stderr.write(`${credentials.note}\n`);
+}
+
+async function rotateCredentials(argv: string[]): Promise<void> {
+	const parsed = parseNamed(argv, rotateFlags, 'rotate');
+	if (!parsed) return;
+	const { args, name } = parsed;
+	const role = args.boolean('monitor') ? 'monitor' : 'owner';
+	const client = await authenticatedClient();
+	const { rotation, raw } = await client.rotateDatabase(name, role);
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	console.log(
+		`Queued ${role} credential rotation ${rotation.id} for "${name}". The node applies it on its next pull; attached apps restart with the new secret.`,
+	);
+}
+
+async function listBackups(argv: string[]): Promise<void> {
+	const parsed = parseNamed(argv, baseFlags, 'backups');
+	if (!parsed) return;
+	const { args, name } = parsed;
+	const client = await authenticatedClient();
+	const { backups, raw } = await client.listDatabaseBackups(name);
+	const { database } = await client.getDatabase(name);
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	const policy = database.backup;
+	if (policy) {
+		console.log(
+			`Policy: ${policy.enabled ? 'enabled' : 'disabled'}, ${policy.schedule} UTC, ${policy.retentionDays}-day retention` +
+				(policy.nextBackupAt ? `; next ${formatTime(policy.nextBackupAt)}` : '') +
+				`; last verified restore ${policy.lastVerifiedAt ? formatTime(policy.lastVerifiedAt) : 'never'}.`,
+		);
+	}
+	if (backups.length === 0) {
+		console.log(`No backups yet. Take one with \`skif db backup ${name}\`.`);
+		return;
+	}
+	console.log(
+		renderTable(
+			['ID', 'KIND', 'STATUS', 'SIZE', 'CREATED', 'VERIFIED', 'EXPIRES'],
+			backups.map((backup) => [
+				backup.id,
+				backup.kind,
+				backup.status,
+				backup.sizeBytes === null ? '—' : formatBytes(backup.sizeBytes),
+				formatTime(backup.finishedAt ?? backup.startedAt),
+				backup.verifiedAt ? formatTime(backup.verifiedAt) : 'no',
+				backup.expiresAt ? formatTime(backup.expiresAt) : 'never',
+			]),
+		),
+	);
+}
+
+async function createBackup(argv: string[]): Promise<void> {
+	const parsed = parseNamed(argv, backupsFlags, 'backup');
+	if (!parsed) return;
+	const { args, name } = parsed;
+	const client = await authenticatedClient();
+	const { backup, raw } = await client.createDatabaseBackup(name, { pinned: args.boolean('pin') });
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	console.log(`Queued backup ${backup.id} for "${name}". The node picks it up on its next pull; follow it with \`skif db backups ${name}\`.`);
+}
+
+async function deleteBackup(argv: string[]): Promise<void> {
+	const args = parseArgs(argv, baseFlags);
+	if (args.boolean('help')) {
+		console.log(usage);
+		return;
+	}
+	rejectExtraPositionals(args, 2, 'Usage: skif db backup-delete <name> <backup-id>');
+	const name = requirePositional(args, 0, 'database name');
+	const backupId = requirePositional(args, 1, 'backup id');
+	const client = await authenticatedClient();
+	await client.deleteDatabaseBackup(name, backupId);
+	if (args.boolean('json')) {
+		printJson({ ok: true });
+		return;
+	}
+	console.log(`Deleted backup ${backupId} of "${name}".`);
+}
+
+async function restoreBackup(argv: string[]): Promise<void> {
+	const args = parseArgs(argv, restoreBackupFlags);
+	if (args.boolean('help')) {
+		console.log(usage);
+		return;
+	}
+	rejectExtraPositionals(args, 2, 'Usage: skif db restore-backup <name> <backup-id> --as <new-name>');
+	const name = requirePositional(args, 0, 'source database name');
+	const backupId = requirePositional(args, 1, 'backup id');
+	const target = args.string('as');
+	if (!target) throw new UsageError('Name the new database with --as <new-name>.');
+	const prefix = args.string('prefix');
+	if (prefix !== undefined) assertEnvPrefix(prefix);
+	const client = await authenticatedClient();
+	const { database, raw } = await client.restoreDatabaseBackup(name, backupId, {
+		name: target,
+		...(args.string('placement') ? { placement: args.string('placement')! } : {}),
+		...(args.string('project') ? { project: args.string('project')! } : {}),
+		...(prefix ? { envPrefix: prefix } : {}),
+	});
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	console.log(`Restoring backup ${backupId} into "${database.name}" on node ${nodeLabel(database)}.`);
+	console.log(`The node verifies the restore; follow it with \`skif db info ${database.name}\`.`);
+}
+
+async function backupPolicy(argv: string[]): Promise<void> {
+	const parsed = parseNamed(argv, backupPolicyFlags, 'backup-policy');
+	if (!parsed) return;
+	const { args, name } = parsed;
+	const retentionRaw = args.string('retention');
+	const patch: { enabled?: boolean; schedule?: string; retentionDays?: number } = {};
+	const schedule = args.string('schedule');
+	if (schedule) patch.schedule = schedule;
+	if (retentionRaw) {
+		const days = Number(retentionRaw);
+		if (!Number.isInteger(days) || days < 1 || days > 365)
+			throw new UsageError('--retention must be a whole number of days between 1 and 365.');
+		patch.retentionDays = days;
+	}
+	if (args.boolean('enable')) patch.enabled = true;
+	if (args.boolean('disable')) patch.enabled = false;
+	const client = await authenticatedClient();
+	if (Object.keys(patch).length > 0) await client.setDatabaseBackupPolicy(name, patch);
+	const { policy, raw } = await client.databaseBackupPolicy(name);
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	console.log(JSON.stringify(policy, null, 2));
 }

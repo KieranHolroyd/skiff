@@ -4,7 +4,7 @@
 	import PlugIcon from '@lucide/svelte/icons/plug';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import UnplugIcon from '@lucide/svelte/icons/unplug';
-	import { databaseEnvNames, type DatabaseAttachmentView } from '@skiff/contracts';
+	import { databaseEnvNames, nextEnvPrefix, type DatabaseAttachmentView } from '@skiff/contracts';
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
 	import Notice from '#lib/components/skiff/Notice.svelte';
@@ -43,10 +43,10 @@
 	);
 
 	function openAttach() {
-		const used = new Set(attachments.map((item) => item.envPrefix));
-		let next = 'DATABASE';
-		for (let index = 2; used.has(next); index++) next = `DATABASE_${index}`;
-		prefix = next;
+		prefix = nextEnvPrefix(
+			'DATABASE',
+			attachments.map((item) => item.envPrefix)
+		);
 		attachOpen = true;
 	}
 

@@ -4,6 +4,7 @@ import {
 	databaseSnapshotSchema,
 	type DatabaseMetricBucket,
 	type DatabaseMonitor,
+	type DatabaseSlowQuery,
 	type DatabaseSnapshot,
 	type DatabaseTableStat,
 	type WorkloadStatus,
@@ -20,6 +21,17 @@ import {
 
 export const DATABASE_STATS_INTERVAL_MS = 60_000;
 const SNAPSHOT_EVERY = 5;
+const EXTENSION_ALLOWLIST = new Set([
+	'pg_stat_statements',
+	'pg_trgm',
+	'pgcrypto',
+	'citext',
+	'hstore',
+	'unaccent',
+	'pg_cron',
+	'pgvector',
+	'postgis',
+]);
 const MAX_BUCKETS = 5_000;
 const MAX_SNAPSHOTS = 200;
 const TABLE_LIMIT = 50;
@@ -35,6 +47,8 @@ export interface DatabaseTarget {
 	memoryBytes?: number;
 	/** `ownerPassword` is null once the monitor role is known to exist. */
 	monitor: Omit<DatabaseMonitor, 'ownerPassword'> & { ownerPassword: string | null };
+	/** Allowlisted extensions to create after the monitor role is bootstrapped. */
+	extensions?: string[];
 }
 
 export interface DatabaseTargetSource {
@@ -162,6 +176,21 @@ FROM pg_stat_database d
 WHERE d.datname = current_database()`;
 
 /** Top tables by total size (heap + indexes + TOAST). */
+/** Top statements by total execution time, when `pg_stat_statements` is installed. */
+export const SLOW_QUERIES_SQL = `SELECT
+	queryid::text AS query_id,
+	query,
+	calls::float8 AS calls,
+	total_exec_time::float8 AS total_ms,
+	mean_exec_time::float8 AS mean_ms,
+	rows::float8 AS rows,
+	shared_blks_hit::float8 + shared_blks_read::float8 AS shared_blocks,
+	temp_blks_read::float8 + temp_blks_written::float8 AS temp_blocks
+FROM pg_stat_statements
+WHERE query NOT LIKE '%pg_stat_statements%'
+ORDER BY total_exec_time DESC
+LIMIT 50`;
+
 export const TABLES_SQL = `SELECT
 	schemaname AS schema,
 	relname AS name,
@@ -336,10 +365,21 @@ export class DatabaseStatsSampler {
 			if (snapshotDue) {
 				try {
 					const rows = await client.query(TABLES_SQL);
+					let slowQueries: DatabaseSlowQuery[] | undefined;
+					if ((target.extensions ?? []).includes('pg_stat_statements')) {
+						try {
+							const slow = await client.query(SLOW_QUERIES_SQL);
+							slowQueries = slow.map(readSlowQuery).filter((query) => query.query.length > 0);
+						} catch (error) {
+							// The extension may not exist in this image; keep the table snapshot.
+							this.log('warn', `Database ${target.id}: slow-query snapshot failed: ${errorText(error)}`);
+						}
+					}
 					this.pushSnapshot({
 						databaseId: target.id,
 						at: new Date(this.now()).toISOString(),
 						tables: rows.slice(0, TABLE_LIMIT).map(readTable),
+						...(slowQueries ? { slowQueries } : {}),
 					});
 				} catch (error) {
 					// The bucket is still good; retry the snapshot on the next sample.
@@ -375,6 +415,18 @@ export class DatabaseStatsSampler {
 				if (typeof statement !== 'string' || !statement)
 					throw new Error('bootstrap query returned no statement');
 				await client.query(statement);
+			}
+			// Extensions are best-effort: an image without one must not fail the monitor role.
+			for (const extension of target.extensions ?? []) {
+				if (!EXTENSION_ALLOWLIST.has(extension)) continue;
+				try {
+					await client.query(`CREATE EXTENSION IF NOT EXISTS "${extension}"`);
+				} catch (error) {
+					this.log(
+						'warn',
+						`Database ${target.id}: extension ${extension} is unavailable: ${scrub(errorText(error), [ownerPassword])}`,
+					);
+				}
 			}
 		} finally {
 			await client.close().catch(() => undefined);
@@ -448,6 +500,25 @@ export function counterDeltas(previous: Counters | null, current: Counters): Cou
 			return [name, delta < 0 ? current[name] : delta];
 		}),
 	) as Counters;
+}
+
+function readSlowQuery(row: Record<string, unknown>): DatabaseSlowQuery {
+	return {
+		queryId: String(row.query_id ?? '').slice(0, 40),
+		// pg_stat_statements normalizes literals to placeholders; trim identifiers defensively.
+		query: String(row.query ?? '').replace(/[\u0000-\u001f]+/g, ' ').slice(0, 2_000),
+		calls: int(row.calls),
+		totalMs: number(row.total_ms),
+		meanMs: number(row.mean_ms),
+		rows: int(row.rows),
+		sharedBlocks: int(row.shared_blocks),
+		tempBlocks: int(row.temp_blocks),
+	};
+}
+
+function number(value: unknown): number {
+	const parsed = typeof value === 'bigint' ? Number(value) : Number(value ?? 0);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
 function readTable(row: Record<string, unknown>): DatabaseTableStat {

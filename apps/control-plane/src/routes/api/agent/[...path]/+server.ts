@@ -71,6 +71,13 @@ const handler: RequestHandler = async (event) => {
 			return core.workloads.activation(node.id, activation[1]!);
 		}
 
+		const rotation = /^database-rotations\/([^/]+)$/.exec(action);
+		if (rotation) {
+			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
+			const node = core.nodes.authenticate(token);
+			return core.databases.rotationActivation(node.id, rotation[1]!);
+		}
+
 		if (action === 'telemetry') {
 			if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
 			const batch = await readJson(request, telemetryBatchSchema);

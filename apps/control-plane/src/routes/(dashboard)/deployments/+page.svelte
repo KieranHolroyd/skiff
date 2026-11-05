@@ -80,6 +80,7 @@
 
 <div class="space-y-6">
 	<PageHeader
+		target="page.deployments"
 		eyebrow="Operate"
 		title="Deployments"
 		description="Every deployment has an immutable preview URL. Only the production pointer moves on promote or rollback."

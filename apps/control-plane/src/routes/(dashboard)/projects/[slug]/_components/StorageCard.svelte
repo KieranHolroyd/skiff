@@ -6,7 +6,7 @@
 	import PlugIcon from '@lucide/svelte/icons/plug';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import UnplugIcon from '@lucide/svelte/icons/unplug';
-	import { storageEnvNames, type StorageAttachmentView } from '@skiff/contracts';
+	import { nextEnvPrefix, storageEnvNames, type StorageAttachmentView } from '@skiff/contracts';
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
 	import Notice from '#lib/components/skiff/Notice.svelte';
@@ -64,10 +64,10 @@
 	);
 
 	function openAttach() {
-		const used = new Set(attachments.map((item) => item.envPrefix));
-		let next = 'S3';
-		for (let index = 2; used.has(next); index++) next = `S3_${index}`;
-		prefix = next;
+		prefix = nextEnvPrefix(
+			'S3',
+			attachments.map((item) => item.envPrefix)
+		);
 		selected = instances[0]?.name ?? '';
 		attachOpen = true;
 	}

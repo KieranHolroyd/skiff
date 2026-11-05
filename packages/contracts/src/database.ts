@@ -1,5 +1,6 @@
 import * as z from 'zod';
 import { SLUG_PATTERN } from './slugs.ts';
+import type { DatabaseBackupSummary } from './database-backup.ts';
 import type { VolumeSummary } from './volume.ts';
 
 /**
@@ -40,9 +41,33 @@ export const databaseEngineRegistry: Record<DatabaseEngine, DatabaseEngineInfo> 
 	},
 };
 
+/**
+ * Extensions Skiff can enable on a managed Postgres database. The helper preloads
+ * `pg_stat_statements`; the rest are created idempotently by the agent after the monitor role is
+ * bootstrapped. Extensions that are not shipped by the pinned official image fail softly (they
+ * are reported in the log, not treated as a database failure).
+ */
+export const databaseExtensionAllowlist = [
+	'pg_stat_statements',
+	'pg_trgm',
+	'pgcrypto',
+	'citext',
+	'hstore',
+	'unaccent',
+	'pg_cron',
+	'pgvector',
+	'postgis',
+] as const;
+export type DatabaseExtension = (typeof databaseExtensionAllowlist)[number];
+export const databaseExtensionSchema = z.enum(databaseExtensionAllowlist);
+
 /** Host ports allocated per node for database containers (loopback only, D56). */
 export const DATABASE_PORT_MIN = 15432;
 export const DATABASE_PORT_MAX = 16431;
+
+/** Host ports for per-database PgBouncer sidecars (loopback only). */
+export const DATABASE_POOLER_PORT_MIN = 16432;
+export const DATABASE_POOLER_PORT_MAX = 17431;
 
 export const databaseStatuses = ['pending', 'starting', 'running', 'failed', 'stopped'] as const;
 export type DatabaseStatus = (typeof databaseStatuses)[number];
@@ -78,6 +103,10 @@ export const databaseCreateSchema = z
 		/** Attach to this project right away (placement then follows the project's workload node). */
 		project: z.string().min(1).max(64).optional(),
 		envPrefix: databaseEnvPrefixSchema.optional(),
+		/** Extensions to create on first start (allowlist only). */
+		extensions: z.array(databaseExtensionSchema).max(20).default([]),
+		/** Run a transaction-mode PgBouncer sidecar and inject <PREFIX>_POOL_URL. */
+		pooler: z.boolean().default(true),
 	})
 	.superRefine((input, ctx) => {
 		const info = databaseEngineRegistry[input.engine];
@@ -101,6 +130,10 @@ export const databaseUpdateSchema = z
 		memoryMb: z.number().int().min(128).max(16_384).optional(),
 		cpus: z.number().positive().max(8).optional(),
 		storageMb: z.number().int().min(256).max(1_048_576).optional(),
+		/** Adding installs on the next activation. Removing never drops an extension automatically. */
+		extensions: z.array(databaseExtensionSchema).max(20).optional(),
+		/** Enable or disable the PgBouncer sidecar. */
+		pooler: z.boolean().optional(),
 	})
 	.refine((input) => Object.keys(input).length > 0, 'Nothing to update.');
 export type DatabaseUpdate = z.infer<typeof databaseUpdateSchema>;
@@ -120,6 +153,61 @@ export interface DatabaseAttachmentView {
 	/** Env var names the project receives at activation. */
 	envNames: string[];
 	createdAt: string;
+}
+
+export const databaseRotationRoles = ['owner', 'monitor'] as const;
+export type DatabaseRotationRole = (typeof databaseRotationRoles)[number];
+
+export const databaseRotateSchema = z.object({
+	role: z.enum(databaseRotationRoles).default('owner'),
+});
+export type DatabaseRotate = z.input<typeof databaseRotateSchema>;
+
+export interface DatabaseRotationView {
+	id: string;
+	databaseId: string;
+	role: DatabaseRotationRole;
+	status: 'pending' | 'running' | 'ok' | 'failed';
+	error: string | null;
+	createdAt: string;
+	finishedAt: string | null;
+}
+
+export const databaseRotationTaskSchema = z.object({
+	id: z.string().min(1).max(100),
+	databaseId: z.string().min(1).max(100),
+	role: z.enum(databaseRotationRoles),
+});
+export type DatabaseRotationTask = z.infer<typeof databaseRotationTaskSchema>;
+
+export const databaseRotationActivationSchema = z.object({
+	id: z.string(),
+	databaseId: z.string(),
+	role: z.enum(databaseRotationRoles),
+	password: z.string(),
+});
+export type DatabaseRotationActivation = z.infer<typeof databaseRotationActivationSchema>;
+
+export const databaseRotationResultSchema = z.object({
+	taskId: z.string().min(1).max(100),
+	databaseId: z.string().min(1).max(100),
+	role: z.enum(databaseRotationRoles),
+	status: z.enum(['ok', 'failed']),
+	error: z.string().max(2_000).optional(),
+});
+export type DatabaseRotationResult = z.infer<typeof databaseRotationResultSchema>;
+
+export interface DatabaseSlowQuery {
+	/** `pg_stat_statements.queryid` (stable for the same normalized query). */
+	queryId: string;
+	/** Normalized SQL; literals are placeholders, never values. */
+	query: string;
+	calls: number;
+	totalMs: number;
+	meanMs: number;
+	rows: number;
+	sharedBlocks: number;
+	tempBlocks: number;
 }
 
 export interface DatabaseTableStat {
@@ -154,11 +242,20 @@ export interface DatabaseView {
 	username: string;
 	/** What an attached app on the same node connects to (no password). */
 	internalHost: { process: string; container: string };
+	/** Optional PgBouncer sidecar and the addresses an app uses for it. */
+	pooler: { enabled: boolean; host: { process: string; container: string }; port: number | null };
 	/** Where the data dir lives; null keeps the helper state dir (D74). */
 	volume: VolumeSummary | null;
 	attachments: DatabaseAttachmentView[];
 	tables: DatabaseTableStat[];
 	statsAt: string | null;
+	/** Requested extensions (the node installs them best-effort on first start). */
+	extensions: DatabaseExtension[];
+	/** Latest top-50 slow-query snapshot from `pg_stat_statements`. */
+	slowQueries: DatabaseSlowQuery[];
+	slowQueriesAt: string | null;
+	/** Backup policy and last known result (docs/DATABASES.md §9). */
+	backup: DatabaseBackupSummary;
 	createdAt: string;
 	updatedAt: string;
 	deletedAt: string | null;
@@ -232,10 +329,23 @@ export const databaseTableStatSchema = z.object({
 	lastAutoanalyze: z.string().max(40).nullable(),
 });
 
+export const databaseSlowQuerySchema = z.object({
+	queryId: z.string().max(40),
+	query: z.string().max(2_000),
+	calls: z.number().nonnegative(),
+	totalMs: z.number().nonnegative(),
+	meanMs: z.number().nonnegative(),
+	rows: z.number().nonnegative(),
+	sharedBlocks: z.number().nonnegative(),
+	tempBlocks: z.number().nonnegative(),
+});
+
 export const databaseSnapshotSchema = z.object({
 	databaseId: z.string().max(100),
 	at: z.string(),
 	tables: z.array(databaseTableStatSchema).max(50),
+	/** Top slow queries when `pg_stat_statements` is enabled; omitted otherwise. */
+	slowQueries: z.array(databaseSlowQuerySchema).max(50).optional(),
 });
 export type DatabaseSnapshot = z.infer<typeof databaseSnapshotSchema>;
 

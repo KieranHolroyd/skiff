@@ -3,6 +3,7 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import BellRingIcon from '@lucide/svelte/icons/bell-ring';
+	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import Building2Icon from '@lucide/svelte/icons/building-2';
 	import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
 	import DatabaseBackupIcon from '@lucide/svelte/icons/database-backup';
@@ -23,6 +24,7 @@
 			| '/(dashboard)/settings/members'
 			| '/(dashboard)/settings/backups'
 			| '/(dashboard)/settings/notifications'
+			| '/(dashboard)/settings/assistant'
 			| '/(dashboard)/settings/maintenance'
 			| '/(dashboard)/settings/updates';
 		path: string;
@@ -68,6 +70,13 @@
 			ownerOnly: true
 		},
 		{
+			label: 'Assistant',
+			href: '/(dashboard)/settings/assistant',
+			path: '/settings/assistant',
+			icon: SparklesIcon,
+			ownerOnly: true
+		},
+		{
 			label: 'Maintenance',
 			href: '/(dashboard)/settings/maintenance',
 			path: '/settings/maintenance',
@@ -105,6 +114,7 @@
 <div class="space-y-6">
 	<div class="space-y-4">
 		<PageHeader
+			target="page.settings"
 			eyebrow="Platform"
 			title="Settings"
 			description="Your account, the organisation you are signed in to, and the keys that act on your behalf."
@@ -117,7 +127,11 @@
 				aria-label="Settings sections"
 			>
 				{#each tabs as tab (tab.href)}
-					<Tabs.Trigger value={tab.href} class="flex-none">
+					<Tabs.Trigger
+						value={tab.href}
+						class="flex-none"
+						data-skiff-target={`settings.tab.${tab.path.split('/').pop() || 'organisation'}`}
+					>
 						<tab.icon />
 						{tab.label}
 						{#if tab.path === '/settings/updates'}

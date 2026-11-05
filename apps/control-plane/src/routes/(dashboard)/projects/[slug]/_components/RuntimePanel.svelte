@@ -1,17 +1,30 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import DetailList from '#lib/components/skiff/DetailList.svelte';
 	import type { ProjectView, SecretView } from '@skiff/core';
-	import type { NodeCapacityView, WorkloadSpec, WorkloadView } from '@skiff/contracts';
+	import {
+		databasePrefixesFromEnvNames,
+		nextEnvPrefix,
+		storagePrefixesFromEnvNames,
+		type DatabaseAttachmentView,
+		type EnvSuggestion,
+		type NodeCapacityView,
+		type StorageAttachmentView,
+		type WorkloadSpec,
+		type WorkloadView
+	} from '@skiff/contracts';
 	import BoxesIcon from '@lucide/svelte/icons/boxes';
 	import CpuIcon from '@lucide/svelte/icons/cpu';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import LayersIcon from '@lucide/svelte/icons/layers';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
+	import PlugIcon from '@lucide/svelte/icons/plug';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import ServerIcon from '@lucide/svelte/icons/server';
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import TrashIcon from '@lucide/svelte/icons/trash';
+	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
 	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
@@ -27,12 +40,42 @@
 	import EmptyState from '../../../_lib/EmptyState.svelte';
 	import { formatDateTime, shortId } from '../../../_lib/format.js';
 
+	interface AttachableDatabase {
+		name: string;
+		version: string;
+		engineLabel: string;
+		nodeName: string;
+	}
+
+	interface AttachableStorage {
+		name: string;
+		engineLabel: string;
+		version: string;
+		nodeName: string;
+		public: boolean;
+		buckets: string[];
+	}
+
+	interface LinkTarget {
+		kind: 'database' | 'storage';
+		name: string;
+		label: string;
+		prefix: string;
+		buckets: string[];
+	}
+
 	let {
 		project,
 		spec,
 		workload,
 		secrets,
 		capacity,
+		databaseAttachments = [],
+		storageAttachments = [],
+		attachableDatabases = [],
+		attachableStorage = [],
+		canAttachDatabase = false,
+		canAttachStorage = false,
 		can
 	}: {
 		project: ProjectView;
@@ -40,6 +83,13 @@
 		workload: WorkloadView | null;
 		secrets: SecretView[];
 		capacity: NodeCapacityView[];
+		/** Managed services already attached, and the ones that could be linked from here. */
+		databaseAttachments?: DatabaseAttachmentView[];
+		storageAttachments?: StorageAttachmentView[];
+		attachableDatabases?: AttachableDatabase[];
+		attachableStorage?: AttachableStorage[];
+		canAttachDatabase?: boolean;
+		canAttachStorage?: boolean;
 		can: {
 			manageWorkload: boolean;
 			createSecret: boolean;
@@ -65,6 +115,10 @@
 
 	let secretType = $state<'secret' | 'env'>('secret');
 
+	let suggestions = $state<EnvSuggestion[]>([]);
+	let suggestionState = $state<'idle' | 'loading' | 'ready' | 'error'>('idle');
+	let linking = $state<string | null>(null);
+
 	/** One row per name: the highest version is what activation resolves by default. */
 	const uniqueSecrets = $derived.by(() => {
 		const latest: SecretView[] = [];
@@ -81,6 +135,74 @@
 	});
 
 	const secretNames = $derived(uniqueSecrets.map((secret) => secret.name));
+
+	const envKeys = $derived(new Set(envRows.map((row) => row.key.trim()).filter(Boolean)));
+
+	function isSuggestionAdded(item: EnvSuggestion): boolean {
+		if (item.source === 'secret') return secretRows.some((row) => row.name === item.name);
+		return envKeys.has(item.name);
+	}
+
+	const visibleSuggestions = $derived(
+		suggestions.filter((item) => item.injected || !isSuggestionAdded(item))
+	);
+
+	const detectedCount = $derived(
+		suggestions.filter(
+			(item) =>
+				!item.injected &&
+				(item.source === 'env-file' || item.source === 'code') &&
+				!isSuggestionAdded(item)
+		).length
+	);
+
+	const envKeySuggestions = $derived(
+		visibleSuggestions.filter((item) => !item.injected && item.source !== 'secret')
+	);
+
+	/**
+	 * A detected name such as DATABASE_URL or S3_BUCKET means the app expects a managed service.
+	 * Offer to link an unattached one, inferring the env prefix from the names the code uses.
+	 */
+	const linkTargets = $derived.by(() => {
+		const targets: LinkTarget[] = [];
+		const used = new Set([
+			...databaseAttachments.map((item) => item.envPrefix),
+			...storageAttachments.map((item) => item.envPrefix)
+		]);
+		const names = suggestions.filter((item) => !item.injected).map((item) => item.name);
+		const databasePrefixes = databasePrefixesFromEnvNames(names);
+		const storagePrefixes = storagePrefixesFromEnvNames(names);
+		if (canAttachDatabase && databasePrefixes.length > 0) {
+			for (const database of attachableDatabases) {
+				const preferred =
+					databasePrefixes.find((prefix) => !used.has(prefix)) ?? nextEnvPrefix('DATABASE', used);
+				used.add(preferred);
+				targets.push({
+					kind: 'database',
+					name: database.name,
+					label: `${database.name} · ${database.engineLabel} ${database.version}`,
+					prefix: preferred,
+					buckets: []
+				});
+			}
+		}
+		if (canAttachStorage && storagePrefixes.length > 0) {
+			for (const instance of attachableStorage) {
+				const preferred =
+					storagePrefixes.find((prefix) => !used.has(prefix)) ?? nextEnvPrefix('S3', used);
+				used.add(preferred);
+				targets.push({
+					kind: 'storage',
+					name: instance.name,
+					label: `${instance.name} · ${instance.public ? 'public' : 'private'}`,
+					prefix: preferred,
+					buckets: instance.buckets
+				});
+			}
+		}
+		return targets;
+	});
 
 	const node = $derived(
 		workload?.nodeId ? capacity.find((item) => item.nodeId === workload?.nodeId) : undefined
@@ -117,6 +239,74 @@
 			version: secret.version ? String(secret.version) : ''
 		}));
 		editOpen = true;
+		void loadSuggestions();
+	}
+
+	async function loadSuggestions(): Promise<void> {
+		// Suggestions are cheap (bounded scan, cached artifact) and change when services attach,
+		// so refresh on every open instead of caching a stale list.
+		if (suggestionState === 'loading') return;
+		suggestionState = 'loading';
+		try {
+			const endpoint = `${resolve('/(dashboard)/projects/[slug]', { slug: project.slug })}/env-suggestions`;
+			const response = await fetch(endpoint, { headers: { accept: 'application/json' } });
+			if (!response.ok) throw new Error(`HTTP ${response.status}`);
+			const body = (await response.json()) as { suggestions?: unknown };
+			suggestions = Array.isArray(body.suggestions) ? (body.suggestions as EnvSuggestion[]) : [];
+			suggestionState = 'ready';
+		} catch {
+			suggestionState = 'error';
+		}
+	}
+
+	function suggestionInitialValue(name: string): string {
+		if (name === 'PORT') return port;
+		if (name === 'NODE_ENV') return 'production';
+		return '';
+	}
+
+	function addSuggestion(item: EnvSuggestion): void {
+		if (item.injected) return;
+		if (item.source === 'secret') {
+			if (!secretNames.includes(item.name)) return;
+			if (secretRows.some((row) => row.name === item.name)) return;
+			secretRows = [...secretRows, { name: item.name, delivery: 'env', version: '' }];
+			return;
+		}
+		if (envRows.some((row) => row.key.trim() === item.name)) return;
+		envRows = [...envRows, { key: item.name, value: suggestionInitialValue(item.name) }];
+	}
+
+	function addDetectedSuggestions(): void {
+		for (const item of suggestions) {
+			if (item.source === 'env-file' || item.source === 'code') addSuggestion(item);
+		}
+	}
+
+	function sourceLabel(source: EnvSuggestion['source']): string {
+		if (source === 'env-file') return 'dotenv';
+		if (source === 'code') return 'code';
+		if (source === 'secret') return 'secret';
+		if (source === 'common') return 'common';
+		return source;
+	}
+
+	async function linkService(target: LinkTarget): Promise<void> {
+		if (linking) return;
+		linking = `${target.kind}:${target.name}`;
+		const fields: Record<string, string> =
+			target.kind === 'database'
+				? { database: target.name, envPrefix: target.prefix }
+				: { storage: target.name, envPrefix: target.prefix };
+		if (target.kind === 'storage') {
+			for (const bucket of target.buckets) fields[`grant:${bucket}`] = 'read-write';
+		}
+		try {
+			await runAction(target.kind === 'database' ? '?/attachDatabase' : '?/attachStorage', fields);
+			await loadSuggestions();
+		} finally {
+			linking = null;
+		}
 	}
 
 	function addEnvRow() {
@@ -606,6 +796,93 @@
 						><PlusIcon />Add variable</Button
 					>
 				</div>
+
+				{#if suggestionState === 'ready' && visibleSuggestions.length > 0}
+					<div class="space-y-2 rounded-lg border bg-muted/30 p-3">
+						<div class="flex flex-wrap items-center justify-between gap-2">
+							<div>
+								<p class="text-xs font-medium">Suggestions</p>
+								<p class="text-xs text-muted-foreground">
+									From linked services, <code class="font-mono">.env</code> files and your code. Injected
+									values are already set at start-up.
+								</p>
+							</div>
+							{#if detectedCount > 0}
+								<Button type="button" variant="outline" size="sm" onclick={addDetectedSuggestions}>
+									Add {detectedCount} detected
+								</Button>
+							{/if}
+						</div>
+						<div class="flex flex-wrap gap-1">
+							{#each visibleSuggestions as item (item.name)}
+								{#if item.injected}
+									<Badge
+										variant="secondary"
+										class="gap-1 font-mono font-normal"
+										title="Injected automatically by {item.detail}"
+									>
+										<PlugIcon class="size-3" />{item.name}
+									</Badge>
+								{:else}
+									<button
+										type="button"
+										class="inline-flex items-center gap-1 rounded-md border bg-background px-2 py-1 font-mono text-[11px] transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+										title={item.detail}
+										onclick={() => addSuggestion(item)}
+									>
+										{item.name}<span class="font-sans text-muted-foreground"
+											>{sourceLabel(item.source)}</span
+										>
+									</button>
+								{/if}
+							{/each}
+						</div>
+					</div>
+				{:else if suggestionState === 'loading'}
+					<p class="text-xs text-muted-foreground">Looking for suggested variables…</p>
+				{:else if suggestionState === 'error'}
+					<p class="text-xs text-muted-foreground">
+						Suggestions could not be loaded. The form still works.
+					</p>
+				{/if}
+
+				{#if linkTargets.length > 0}
+					<div class="space-y-2 rounded-lg border border-dashed p-3">
+						<div>
+							<p class="text-xs font-medium">Link a service</p>
+							<p class="text-xs text-muted-foreground">
+								Your code expects these names. Linking attaches the service and injects them at the
+								next start.
+							</p>
+						</div>
+						<div class="space-y-1.5">
+							{#each linkTargets as target (target.kind + ':' + target.name)}
+								<div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+									<span class="min-w-0" title={target.label}>
+										<span class="font-medium">{target.name}</span>
+										<span class="text-muted-foreground"> → {target.prefix}_*</span>
+									</span>
+									<Button
+										type="button"
+										size="sm"
+										variant="outline"
+										disabled={linking !== null}
+										onclick={() => linkService(target)}
+									>
+										{linking === `${target.kind}:${target.name}` ? 'Linking…' : 'Link'}
+									</Button>
+								</div>
+							{/each}
+						</div>
+					</div>
+				{/if}
+
+				<datalist id="env-key-suggestions">
+					{#each envKeySuggestions as item (item.name)}
+						<option value={item.name}>{item.detail}</option>
+					{/each}
+				</datalist>
+
 				{#if envRows.length === 0}
 					<p class="rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
 						No plain env vars. Reference a secret below for sensitive values.
@@ -617,6 +894,7 @@
 								<Input
 									name="envKey"
 									bind:value={row.key}
+									list="env-key-suggestions"
 									placeholder="DATABASE_URL"
 									aria-label="Environment variable name"
 									class="font-mono text-xs sm:max-w-52"

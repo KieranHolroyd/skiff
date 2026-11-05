@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import type { HelperConfig } from './config.ts';
 import {
 	assertCpuWeight,
+	assertDatabaseId,
 	assertId,
 	assertManagedId,
 	assertMemoryMb,
@@ -30,6 +31,12 @@ export interface HelperRuntime {
 	logs(id: string, options?: LogReadOptions): Promise<HelperLogResult>;
 	/** Remove a purged database's or storage instance's unit and `<stateDir>/<id>` data dir (D59, S8). */
 	purge(id: string): Promise<void>;
+	/** Dump a managed database with the fixed `pg_dump -Fc` profile (docs/DATABASES.md §9). */
+	dumpDatabase(id: string): Promise<{ path: string; sizeBytes: number; filename: string }>;
+	/** Apply a new password to the owner or monitor role (docs/DATABASES.md §4). */
+	rotateDatabaseRole(id: string, role: 'owner' | 'monitor', newPassword: string): Promise<void>;
+	/** Restore a custom-format dump into a managed database. */
+	restoreDatabase(id: string, body: ReadableStream<Uint8Array> | null): Promise<void>;
 	/** Mounts and free block devices for the volume wizard (D72). */
 	volumesInventory(): Promise<HelperInventory>;
 	/** Replace the volume registry from desired state (D74). */
@@ -118,6 +125,57 @@ export function createHandler(
 					return json({ ok: true });
 				}
 				return methodNotAllowed('GET, DELETE');
+			}
+
+			const dumpMatch = /^\/v1\/workloads\/([^/]+)\/dump$/.exec(path);
+			if (dumpMatch) {
+				if (method !== 'GET') return methodNotAllowed('GET');
+				let id: string;
+				try {
+					id = assertDatabaseId(decodeURIComponent(dumpMatch[1]!), 'database id');
+				} catch (error) {
+					if (error instanceof ValidationError) throw error;
+					throw new ValidationError('database id is not valid URL encoding');
+				}
+				const dump = await runtime.dumpDatabase(id);
+				setTimeout(() => {
+					void fs.rm(dump.path, { force: true }).catch(() => undefined);
+				}, 10 * 60_000);
+				const file = Bun.file(dump.path);
+				return new Response(file.stream(), {
+					headers: {
+						'content-type': 'application/octet-stream',
+						'content-length': String(dump.sizeBytes),
+						'content-disposition': `attachment; filename="${dump.filename}"`,
+						'cache-control': 'no-store',
+					},
+				});
+			}
+
+			const restoreMatch = /^\/v1\/workloads\/([^/]+)\/restore$/.exec(path);
+			if (restoreMatch) {
+				if (method !== 'POST') return methodNotAllowed('POST');
+				let id: string;
+				try {
+					id = assertDatabaseId(decodeURIComponent(restoreMatch[1]!), 'database id');
+				} catch (error) {
+					if (error instanceof ValidationError) throw error;
+					throw new ValidationError('database id is not valid URL encoding');
+				}
+				await runtime.restoreDatabase(id, request.body);
+				return json({ ok: true, restored: id });
+			}
+
+			const rotateMatch = /^\/v1\/workloads\/([^/]+)\/rotate$/.exec(path);
+			if (rotateMatch) {
+				if (method !== 'POST') return methodNotAllowed('POST');
+				const id = assertDatabaseId(decodeURIComponent(rotateMatch[1]!), 'database id');
+				const body = assertRecord(await readJson(request, maxBodyBytes), 'request');
+				const role = body.role === 'owner' || body.role === 'monitor' ? body.role : null;
+				if (!role) throw new ValidationError('role must be owner or monitor');
+				const password = assertString(body.password, 'password', { max: 200 });
+				await runtime.rotateDatabaseRole(id, role, password);
+				return json({ ok: true, rotated: role });
 			}
 
 			const purgeMatch = /^\/v1\/workloads\/([^/]+)\/purge$/.exec(path);

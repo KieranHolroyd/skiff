@@ -3,7 +3,9 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import ActivityIcon from '@lucide/svelte/icons/activity';
+	import ArchiveIcon from '@lucide/svelte/icons/archive';
 	import CableIcon from '@lucide/svelte/icons/cable';
+	import CloudUploadIcon from '@lucide/svelte/icons/cloud-upload';
 	import EyeIcon from '@lucide/svelte/icons/eye';
 	import EyeOffIcon from '@lucide/svelte/icons/eye-off';
 	import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
@@ -17,7 +19,7 @@
 	import TerminalIcon from '@lucide/svelte/icons/terminal';
 	import TrashIcon from '@lucide/svelte/icons/trash';
 	import UnplugIcon from '@lucide/svelte/icons/unplug';
-	import { databaseEnvNames, type DatabaseCredentials } from '@skiff/contracts';
+	import { databaseEnvNames, databaseExtensionAllowlist, type DatabaseCredentials } from '@skiff/contracts';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
@@ -59,7 +61,10 @@
 	const deleted = $derived(db.deletedAt !== null);
 	const nodeLabel = $derived(db.nodeName ?? db.nodeId);
 	const hostPort = $derived(db.internalHost.process.split(':').at(-1) ?? '');
-	const defaultEnvNames = databaseEnvNames('DATABASE');
+	const defaultEnvNames = $derived([
+		...databaseEnvNames('DATABASE'),
+		...(db.pooler.enabled ? ['DATABASE_POOL_URL', 'DATABASE_POOL_HOST', 'DATABASE_POOL_PORT'] : [])
+	]);
 
 	// --- credentials (D58): revealed on demand, audited, never in page data -------------------
 
@@ -81,6 +86,18 @@
 	function hide() {
 		credentials = null;
 		showPassword = false;
+	}
+
+	function rotate(role: 'owner' | 'monitor') {
+		askConfirm({
+			title: `Rotate the ${role} password?`,
+			description:
+				'The node runs ALTER ROLE and verifies the new password before Skiff swaps the stored secret. Attached apps restart with the new value; a failed rotation leaves the old one working.',
+			confirmLabel: 'Rotate',
+			tone: 'danger',
+			action: '?/rotate',
+			fields: { role }
+		});
 	}
 
 	const mask = (value: string) => '•'.repeat(Math.min(24, Math.max(12, value.length)));
@@ -108,6 +125,31 @@
 			tone: 'danger',
 			action: '?/detach',
 			fields: { project: slug }
+		});
+	}
+
+	// --- backups -------------------------------------------------------------------------------
+
+	const backups = $derived(data.backups);
+	const backupPolicy = $derived(db.backup);
+	let restoreOpen = $state(false);
+	let restoreBackupId = $state('');
+	let restoreBackupName = $state('');
+
+	function openRestore(backupId: string) {
+		restoreBackupId = backupId;
+		restoreBackupName = `${db.name}-restored`;
+		restoreOpen = true;
+	}
+
+	function deleteBackup(backupId: string) {
+		askConfirm({
+			title: `Delete backup ${backupId}?`,
+			description: 'The dump is removed from the object store. A restore of it is no longer possible.',
+			confirmLabel: 'Delete backup',
+			tone: 'danger',
+			action: '?/delete-backup',
+			fields: { backupId }
 		});
 	}
 
@@ -221,7 +263,7 @@
 </svelte:head>
 
 <div class="space-y-6">
-	<PageHeader eyebrow="Database" title={db.name}>
+	<PageHeader eyebrow="Database" title={db.name} target="page.database">
 		{#snippet meta()}
 			<div class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
 				{#if deleted}
@@ -283,6 +325,9 @@
 							Reveal credentials
 						</Button>
 					{/if}
+					<Button variant="ghost" size="sm" onclick={() => rotate('owner')}>
+						<RotateCcwIcon />Rotate
+					</Button>
 				{/if}
 			{/snippet}
 
@@ -301,6 +346,18 @@
 					<span class="truncate">{db.internalHost.container}</span>
 					<CopyButton value={db.internalHost.container} label="Copy host" iconOnly />
 				</dd>
+				{#if db.pooler.enabled}
+					<dt>Pooled (process)</dt>
+					<dd class="flex items-center justify-end gap-1 font-mono text-xs">
+						<span class="truncate">{db.pooler.host.process}</span>
+						<CopyButton value={db.pooler.host.process} label="Copy pooler host" iconOnly />
+					</dd>
+					<dt>Pooled (container)</dt>
+					<dd class="flex items-center justify-end gap-1 font-mono text-xs">
+						<span class="truncate">{db.pooler.host.container}</span>
+						<CopyButton value={db.pooler.host.container} label="Copy pooler host" iconOnly />
+					</dd>
+				{/if}
 				{#if credentials}
 					<dt>Password</dt>
 					<dd class="flex items-center justify-end gap-1 font-mono text-xs">
@@ -443,6 +500,133 @@
 			{/if}
 		</Panel>
 	</div>
+
+	<!-- Backups --------------------------------------------------------------------------------- -->
+	<Panel
+		title="Backups"
+		description="Logical dumps streamed to the platform object store. Restores always create a new database and verify it."
+	>
+		{#snippet actions()}
+			{#if data.dbCan.update && !deleted}
+				<form method="POST" action="?/backup">
+					<Button size="sm" variant="outline" type="submit"><CloudUploadIcon />Back up now</Button>
+				</form>
+			{/if}
+		{/snippet}
+		{#if backupPolicy}
+			<div class="flex flex-wrap items-center gap-3 border-b px-4 py-3 text-xs text-muted-foreground">
+				<span>
+					{backupPolicy.enabled ? 'Scheduled' : 'Paused'} · <span class="font-mono">{backupPolicy.schedule}</span> UTC
+					· {backupPolicy.retentionDays}-day retention
+				</span>
+				{#if backupPolicy.nextBackupAt}
+					<span>Next {formatDateTime(backupPolicy.nextBackupAt)}</span>
+				{/if}
+				<span>
+					Last verified restore:
+					{backupPolicy.lastVerifiedAt ? formatDateTime(backupPolicy.lastVerifiedAt) : 'never'}
+				</span>
+				{#if backupPolicy.lastBackupError}
+					<span class="text-destructive">{backupPolicy.lastBackupError}</span>
+				{/if}
+			</div>
+		{/if}
+		{#if backups.length === 0}
+			<div class="p-4">
+				<EmptyState
+					icon={ArchiveIcon}
+					compact
+					title="No backups yet"
+					description="Take one now, or wait for the daily schedule. A dump that has never been restored is not yet proven."
+				/>
+			</div>
+		{:else}
+			<Table.Root>
+				<Table.Header>
+					<Table.Row>
+						<Table.Head class="pl-4">Backup</Table.Head>
+						<Table.Head>Status</Table.Head>
+						<Table.Head>Size</Table.Head>
+						<Table.Head class="hidden sm:table-cell">Created</Table.Head>
+						<Table.Head class="hidden md:table-cell">Verified</Table.Head>
+						<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
+					</Table.Row>
+				</Table.Header>
+				<Table.Body>
+					{#each backups as backup (backup.id)}
+						<Table.Row>
+							<Table.Cell class="pl-4">
+								<span class="font-mono text-xs">{backup.id}</span>
+								<div class="text-xs text-muted-foreground">
+									{backup.kind}{backup.pinned ? ' · pinned' : ''}
+								</div>
+							</Table.Cell>
+							<Table.Cell><StatusBadge status={backup.status} /></Table.Cell>
+							<Table.Cell class="text-xs tabular-nums">
+								{backup.sizeBytes === null ? '—' : formatBytes(backup.sizeBytes)}
+							</Table.Cell>
+							<Table.Cell class="hidden text-xs text-muted-foreground sm:table-cell">
+								{formatDateTime(backup.finishedAt ?? backup.startedAt)}
+							</Table.Cell>
+							<Table.Cell class="hidden text-xs md:table-cell">
+								{backup.verifiedAt ? formatDateTime(backup.verifiedAt) : '—'}
+							</Table.Cell>
+							<Table.Cell class="pr-4 text-right">
+								{#if backup.status === 'ok' && backupPolicy?.pendingRestoreId === null}
+									<Button
+										size="sm"
+										variant="ghost"
+										disabled={deleted}
+										onclick={() => openRestore(backup.id)}
+									>
+										<RotateCcwIcon />Restore
+									</Button>
+								{/if}
+								{#if data.dbCan.delete && backup.status !== 'pending' && backup.status !== 'running'}
+									<Button
+										variant="ghost-danger"
+										size="icon-sm"
+										aria-label="Delete backup {backup.id}"
+										onclick={() => deleteBackup(backup.id)}
+									>
+										<TrashIcon />
+									</Button>
+								{/if}
+							</Table.Cell>
+						</Table.Row>
+					{/each}
+				</Table.Body>
+			</Table.Root>
+		{/if}
+		{#if data.dbCan.update && !deleted && backupPolicy}
+			<form method="POST" action="?/backup-policy" class="flex flex-wrap items-end gap-3 border-t px-4 py-3">
+				<label class="flex items-center gap-2 text-xs">
+					<input type="checkbox" name="enabled" checked={backupPolicy.enabled} />
+					Scheduled
+				</label>
+				<label class="flex flex-col gap-1 text-xs">
+					<span class="text-muted-foreground">Cron (UTC)</span>
+					<input
+						name="schedule"
+						value={backupPolicy.schedule}
+						class="h-8 w-40 rounded-md border bg-background px-2 font-mono text-xs"
+					/>
+				</label>
+				<label class="flex flex-col gap-1 text-xs">
+					<span class="text-muted-foreground">Retention days</span>
+					<input
+						name="retentionDays"
+						type="number"
+						min="1"
+						max="365"
+						value={backupPolicy.retentionDays}
+						class="h-8 w-24 rounded-md border bg-background px-2 font-mono text-xs"
+					/>
+				</label>
+				<Button size="sm" variant="outline" type="submit">Save policy</Button>
+			</form>
+		{/if}
+	</Panel>
 
 	<!-- Metrics --------------------------------------------------------------------------------- -->
 	<section class="space-y-4" aria-labelledby="database-metrics">
@@ -687,6 +871,91 @@
 		{/snippet}
 	</Panel>
 
+	<!-- Extensions + slow queries ---------------------------------------------------------------- -->
+	<Panel
+		title="Extensions & slow queries"
+		description="Allowlisted Postgres extensions and the top statements by total execution time from pg_stat_statements."
+	>
+		<div class="flex flex-wrap items-center gap-2 border-b px-4 py-3">
+			{#if db.extensions.length === 0}
+				<span class="text-xs text-muted-foreground">No extensions requested.</span>
+			{:else}
+				{#each db.extensions as extension (extension)}
+					<Badge variant="outline" class="font-mono text-xs">{extension}</Badge>
+				{/each}
+			{/if}
+			{#if db.slowQueriesAt}
+				<span class="ml-auto text-xs text-muted-foreground">
+					Queries sampled {ago(db.slowQueriesAt)}
+				</span>
+			{/if}
+		</div>
+		{#if db.slowQueries.length === 0}
+			<div class="p-4">
+				<EmptyState
+					icon={TerminalIcon}
+					compact
+					title="No slow-query snapshot yet"
+					description="Enable pg_stat_statements and run some queries; the node samples the top 50 every five minutes."
+				/>
+			</div>
+		{:else}
+			<Table.Root>
+				<Table.Header>
+					<Table.Row>
+						<Table.Head class="pl-4">Query</Table.Head>
+						<Table.Head class="text-right">Calls</Table.Head>
+						<Table.Head class="text-right">Mean</Table.Head>
+						<Table.Head class="text-right">Total</Table.Head>
+						<Table.Head class="hidden text-right md:table-cell">Rows</Table.Head>
+					</Table.Row>
+				</Table.Header>
+				<Table.Body>
+					{#each db.slowQueries as query (query.queryId)}
+						<Table.Row>
+							<Table.Cell class="max-w-md pl-4">
+								<code class="line-clamp-2 font-mono text-xs">{query.query}</code>
+							</Table.Cell>
+							<Table.Cell class="text-right font-mono text-xs tabular-nums">
+								{numberFormat.format(query.calls)}
+							</Table.Cell>
+							<Table.Cell class="text-right font-mono text-xs tabular-nums">
+								{formatDuration(query.meanMs / 1000)}
+							</Table.Cell>
+							<Table.Cell class="text-right font-mono text-xs tabular-nums">
+								{formatDuration(query.totalMs / 1000)}
+							</Table.Cell>
+							<Table.Cell class="hidden text-right font-mono text-xs tabular-nums md:table-cell">
+								{numberFormat.format(query.rows)}
+							</Table.Cell>
+						</Table.Row>
+					{/each}
+				</Table.Body>
+			</Table.Root>
+		{/if}
+		{#if data.dbCan.update && !deleted}
+			<form method="POST" action="?/extensions" class="flex flex-wrap items-end gap-3 border-t px-4 py-3">
+				<div class="flex flex-wrap gap-3">
+					{#each databaseExtensionAllowlist as extension (extension)}
+						<label class="flex items-center gap-1.5 font-mono text-xs">
+							<input
+								type="checkbox"
+								name="extensions"
+								value={extension}
+								checked={db.extensions.includes(extension)}
+							/>
+							{extension}
+						</label>
+					{/each}
+				</div>
+				<Button size="sm" variant="outline" type="submit">Save extensions</Button>
+			</form>
+		{/if}
+		{#snippet footer()}
+			<span>Removing an extension here never drops it; the database keeps the objects until you run DROP EXTENSION.</span>
+		{/snippet}
+	</Panel>
+
 	<!-- Settings + danger zone ------------------------------------------------------------------ -->
 	<div class="grid items-start gap-5 xl:grid-cols-2">
 		<Panel
@@ -708,6 +977,10 @@
 				<dd class="font-mono text-xs">{db.cpus} vCPU</dd>
 				<dt>Storage</dt>
 				<dd><StorageMeter sizeBytes={db.sizeBytes} storageMb={db.storageMb} /></dd>
+				<dt>Pooler</dt>
+				<dd class="text-xs">
+					{db.pooler.enabled ? `PgBouncer on ${db.pooler.host.process}` : 'disabled'}
+				</dd>
 				<dt>Updated</dt>
 				<dd class="text-xs">
 					<time datetime={db.updatedAt}>{formatDateTime(db.updatedAt)}</time>
@@ -790,6 +1063,34 @@
 
 {#if data.dbCan.update && !deleted}
 	<FormDialog
+		bind:open={restoreOpen}
+		icon={RotateCcwIcon}
+		title="Restore backup"
+		description="Restore {restoreBackupId} into a brand-new database. The source stays untouched and the new instance gets fresh credentials."
+		action="?/restore-backup"
+		submitLabel="Restore into new database"
+	>
+		<input type="hidden" name="backupId" value={restoreBackupId} />
+		<Field.Group>
+			<Field.Field data-invalid={errors.name ? true : undefined}>
+				<Field.Label for="restore-name">New database name</Field.Label>
+				<Input
+					id="restore-name"
+					name="name"
+					bind:value={restoreBackupName}
+					maxlength={40}
+					spellcheck="false"
+					class="font-mono text-sm"
+				/>
+				<Field.Description>
+					The node runs pg_restore and a verification query before the database reports ready.
+				</Field.Description>
+				{#if errors.name}<Field.Error>{errors.name}</Field.Error>{/if}
+			</Field.Field>
+		</Field.Group>
+	</FormDialog>
+
+	<FormDialog
 		bind:open={resizeOpen}
 		icon={SlidersHorizontalIcon}
 		title="Resize {db.name}"
@@ -859,6 +1160,14 @@
 					Drives the gauge and the 85% alert. It is not enforced on disk.
 				</Field.Description>
 				{#if errors.storageMb}<Field.Error>{errors.storageMb}</Field.Error>{/if}
+			</Field.Field>
+			<Field.Field>
+				<label class="flex items-center gap-2 text-sm">
+					<input type="checkbox" name="pooler" checked={db.pooler.enabled} />
+					PgBouncer sidecar (transaction pooling; injects <code class="font-mono text-xs"
+						>DATABASE_POOL_URL</code
+					>)
+				</label>
 			</Field.Field>
 		</Field.Group>
 	</FormDialog>

@@ -276,7 +276,7 @@
 </svelte:head>
 
 <div class="space-y-6">
-	<PageHeader eyebrow="Project" title={data.project.name}>
+	<PageHeader eyebrow="Project" title={data.project.name} target="page.project">
 		{#snippet meta()}
 			<div class="flex flex-wrap items-center gap-2">
 				<a
@@ -295,7 +295,7 @@
 			</div>
 		{/snippet}
 		{#if data.can.createDeployment}
-			<Button onclick={openDeploy}>
+			<Button onclick={openDeploy} data-skiff-target="project.deploy">
 				<UploadIcon />
 				Deploy
 			</Button>
@@ -479,6 +479,12 @@
 					workload={data.workload}
 					secrets={data.secrets}
 					capacity={data.capacity}
+					databaseAttachments={data.databaseAttachments}
+					storageAttachments={data.storageAttachments}
+					attachableDatabases={data.attachableDatabases}
+					attachableStorage={data.attachableStorage}
+					canAttachDatabase={data.can.attachDatabase}
+					canAttachStorage={data.can.attachStorage}
 					can={{
 						manageWorkload: data.can.manageWorkload,
 						createSecret: data.can.createSecret,

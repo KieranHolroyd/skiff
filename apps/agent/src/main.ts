@@ -15,6 +15,8 @@ import { CaddyAdmin } from './caddy.ts';
 import { CertProbe, certProbeTargets, tlsCertReader } from './certs.ts';
 import { buildCaddyConfig, isProductionRoute, tlsSubjects } from './caddy-config.ts';
 import { loadConfig, type AgentConfig } from './config.ts';
+import { DatabaseBackupRunner } from './database-backups.ts';
+import { DatabaseRotationRunner } from './database-rotations.ts';
 import { DATABASE_STATS_INTERVAL_MS, DatabaseStatsSampler } from './database-stats.ts';
 import { HelperClient } from './helper-client.ts';
 import { formatEnv, JOIN_USAGE, joinNode, nodeFilePath, parseJoinArgs } from './join.ts';
@@ -75,6 +77,8 @@ class AgentRuntime {
 	private readonly logDrain: WorkloadLogDrain;
 	private readonly storage: StorageRequester;
 	private readonly databaseStats: DatabaseStatsSampler;
+	private readonly databaseBackups: DatabaseBackupRunner;
+	private readonly databaseRotations: DatabaseRotationRunner;
 	private readonly storageAdmin: StorageReconciler;
 	private readonly storageStats: StorageStatsSampler;
 
@@ -143,6 +147,13 @@ class AgentRuntime {
 			log,
 		});
 		this.databaseStats = new DatabaseStatsSampler({ source: this.workloads, log });
+		this.databaseBackups = new DatabaseBackupRunner({ helper: this.helper, log });
+		this.databaseRotations = new DatabaseRotationRunner({
+			controlUrl: config.controlUrl,
+			nodeToken: config.nodeToken,
+			helper: this.helper,
+			log,
+		});
 		// Buckets and scoped keys are desired state converged over the loopback S3/admin API; the
 		// root key and user secrets stay in the workload runtime's memory (S4).
 		this.storageAdmin = new StorageReconciler({ source: this.workloads, log });
@@ -213,6 +224,8 @@ class AgentRuntime {
 			this.heartbeatLoop(),
 			this.telemetryLoop(),
 			this.databaseStatsLoop(),
+			this.databaseBackupLoop(),
+			this.databaseRotationLoop(),
 			this.storageAdminLoop(),
 			this.storageStatsLoop(),
 		];
@@ -516,6 +529,41 @@ class AgentRuntime {
 		};
 	}
 
+	/** Dump/restore tasks run beside the normal reconcile loop; they never block static serving. */
+	private async databaseBackupLoop(): Promise<void> {
+		while (this.running) {
+			await sleep(5_000, this.shutdownController.signal).catch(() => undefined);
+			if (!this.running) break;
+			const state = this.desired;
+			if (!state) continue;
+			try {
+				const running = new Set(
+					this.workloads
+						.currentReports()
+						.filter((report) => report.status === 'running')
+						.map((report) => report.id),
+				);
+				await this.databaseBackups.runOnce(state, (id) => running.has(id), this.shutdownController.signal);
+			} catch (error) {
+				log('warn', `Database backup task failed: ${errorText(error)}`);
+			}
+		}
+	}
+
+	private async databaseRotationLoop(): Promise<void> {
+		while (this.running) {
+			await sleep(5_000, this.shutdownController.signal).catch(() => undefined);
+			if (!this.running) break;
+			const state = this.desired;
+			if (!state) continue;
+			try {
+				await this.databaseRotations.runOnce(state, this.shutdownController.signal);
+			} catch (error) {
+				log('warn', `Database rotation task failed: ${errorText(error)}`);
+			}
+		}
+	}
+
 	// --- heartbeat -----------------------------------------------------------
 
 	private async heartbeatLoop(): Promise<void> {
@@ -555,6 +603,8 @@ class AgentRuntime {
 		const purgedDatabases = this.workloads.pendingPurgedDatabases();
 		const purgedStorage = this.workloads.pendingPurgedStorage();
 		const volumeInventory = await this.volumeInventoryForHeartbeat();
+		const backupResults = this.databaseBackups.pendingResults();
+		const rotationResults = this.databaseRotations.pendingResults();
 		// Bucket deletions are reported once, capped by the heartbeat schema (S8).
 		const storageBucketDeletions = this.storageAdmin.pendingBucketDeletions().slice(0, 500);
 		// A storage move happens outside the agent's sandbox (D48); ask for it while it is due.
@@ -574,6 +624,8 @@ class AgentRuntime {
 			releases: this.releases.listReleases(),
 			...(storage ? { storage } : {}),
 			...(reports.length > 0 ? { workloads: workloadHeartbeat(reports) } : {}),
+			...(backupResults.length > 0 ? { databaseBackupResults: backupResults } : {}),
+			...(rotationResults.length > 0 ? { databaseRotationResults: rotationResults } : {}),
 			...(purgedDatabases.length > 0 ? { purgedDatabases } : {}),
 			...(purgedStorage.length > 0 ? { purgedStorage } : {}),
 			...(storageBucketDeletions.length > 0 ? { storageBucketDeletions } : {}),
@@ -599,6 +651,8 @@ class AgentRuntime {
 			const text = await response.text().catch(() => '');
 			throw new Error(`heartbeat -> ${response.status}${text ? `: ${text}` : ''}`);
 		}
+		this.databaseBackups.acknowledge(backupResults.map((result) => result.taskId));
+		this.databaseRotations.acknowledge(rotationResults.map((result) => result.taskId));
 		this.workloads.acknowledgePurgedDatabases(purgedDatabases);
 		this.workloads.acknowledgePurgedStorage(purgedStorage);
 		this.storageAdmin.acknowledgeBucketDeletions(storageBucketDeletions);

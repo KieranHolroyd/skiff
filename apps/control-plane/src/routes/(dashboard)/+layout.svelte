@@ -16,6 +16,8 @@
 	import SettingsIcon from '@lucide/svelte/icons/settings';
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
 	import UserRoundIcon from '@lucide/svelte/icons/user-round';
+	import AssistantLauncher from '#lib/assistant/AssistantLauncher.svelte';
+	import AssistantTour from '#lib/assistant/AssistantTour.svelte';
 	import { authClient } from '#lib/auth-client.js';
 	import Logo from '#lib/components/skiff/Logo.svelte';
 	import ThemeToggle from '#lib/components/skiff/ThemeToggle.svelte';
@@ -182,6 +184,7 @@
 										<a
 											href={resolve(item.href)}
 											aria-current={active ? 'page' : undefined}
+											data-skiff-target={`nav.${item.path.slice(1)}`}
 											{...props}
 										>
 											<item.icon />
@@ -336,4 +339,9 @@
 			</div>
 		</footer>
 	</Sidebar.Inset>
+
+	{#if data.assistant.enabled}
+		<AssistantLauncher status={data.assistant} />
+		<AssistantTour />
+	{/if}
 </Sidebar.Provider>

@@ -9,6 +9,9 @@ import {
 	renderStorageUnit,
 	renderExecStart,
 	renderNetworkUnit,
+	renderPoolerConfig,
+	renderPoolerUnit,
+	renderPoolerUserlist,
 	renderProcessUnit,
 	renderSliceUnit,
 	renderSocketUnit,
@@ -288,6 +291,47 @@ describe('database unit', () => {
 		expect(() =>
 			renderDatabaseUnit({ workload: workload(), envFile: '/run/env', dataDir: '/var/lib/x' }),
 		).toThrow(/database/);
+	});
+});
+
+describe('database pooler unit', () => {
+	const database = (): WorkloadDesired =>
+		parseWorkload({
+			...workload(),
+			id: 'db_abc123',
+			projectId: 'db_abc123',
+			projectSlug: 'main-db',
+			deploymentId: 'db_abc123',
+			runtime: 'container',
+			release: null,
+			image: 'docker.io/library/postgres:17-alpine',
+			upstream: '127.0.0.1:15432',
+			port: 15432,
+			healthPath: '/',
+			socketActivation: false,
+			env: { POSTGRES_USER: 'main_db', POSTGRES_DB: 'main_db' },
+			database: { engine: 'postgres', version: '17' },
+			pooler: { port: 16432 },
+		});
+
+	test('renders a loopback-only sidecar with read-only config mounts', () => {
+		const unit = renderPoolerUnit({
+			workload: database(),
+			configPath: '/run/skiff-workloads/db_abc123/pgbouncer.ini',
+			userlistPath: '/run/skiff-workloads/db_abc123/pgbouncer-users.txt',
+		});
+		expect(unit).toContain('PublishPort=127.0.0.1:16432:6432');
+		expect(unit).toContain('NetworkAlias=db-abc123-pool');
+		expect(unit).toContain('pgbouncer.ini:ro,Z');
+		expect(unit).toContain('DropCapability=all');
+		expect(unit).toContain('MemoryMax=64M');
+	});
+
+	test('renders a transaction-mode config and a quoted userlist', () => {
+		expect(renderPoolerConfig({ databaseAlias: 'db-abc123', authFile: '/etc/pgbouncer/userlist.txt' })).toContain(
+			'pool_mode = transaction',
+		);
+		expect(renderPoolerUserlist('main_db', 'p"a\\ss')).toBe('"main_db" "p\\"a\\\\ss"\n');
 	});
 });
 

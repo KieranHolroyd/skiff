@@ -60,6 +60,7 @@
 
 <div class="space-y-6">
 	<PageHeader
+		target="page.audit"
 		eyebrow="Platform"
 		title="Audit log"
 		description="Every mutating surface writes here: the dashboard, REST API, CLI and MCP. Tokens and secrets are redacted in args."

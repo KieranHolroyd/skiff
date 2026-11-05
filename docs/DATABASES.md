@@ -1,6 +1,6 @@
 # Skiff — Managed databases
 
-Status: **implemented, 2026-11-04** (not yet exercised on a real Debian/Podman node; the container lockdown, monitor bootstrap, sampler SQL and health probe were checked against `postgres:17-alpine`). Decisions are recorded in [DECISIONS.md](./DECISIONS.md) as D55–D61.
+Status: **implemented, 2026-11-05** (not yet exercised on a real Debian/Podman node; the container lockdown, monitor bootstrap, sampler SQL, backup/restore verbs and health probe were checked against `postgres:17-alpine`). Decisions are recorded in [DECISIONS.md](./DECISIONS.md) as D55–D61 and D83–D86.
 
 A managed database is an org-owned Postgres instance that Skiff provisions, runs, observes and
 connects to apps. It is not a project: it has no releases, deployments or routes. It reuses the
@@ -45,6 +45,9 @@ the wire for a database:
   Podman network, so they reach the database by name.
 - `MemoryMax`, `CPUQuota`, `Slice=skiff-workloads.slice` as for any workload. Databases count
   toward the node's reserved memory (admission, D42).
+- The fixed `Exec=` starts Postgres with `shared_preload_libraries=pg_stat_statements` so slow
+  queries work without a manual restart (D84); when pooling is enabled, a second Quadlet unit runs
+  PgBouncer beside the database (D85).
 
 The agent's health probe for a database is TCP, not HTTP: it connects to `127.0.0.1:<hostPort>`
 and sends a Postgres `SSLRequest`, because Podman's port forwarder accepts connections before the
@@ -142,15 +145,69 @@ missing (D76). See [VOLUMES.md](./VOLUMES.md).
 
 | Surface | What |
 |---|---|
-| REST | `GET/POST /api/v1/databases`, `GET/PATCH/DELETE /api/v1/databases/:name`, `POST …/:name/restore`, `GET …/:name/credentials`, `GET …/:name/metrics`, `GET/POST /api/v1/projects/:slug/databases`, `DELETE …/databases/:name` |
-| MCP | `list_databases`, `get_database`, `create_database`, `attach_database`, `detach_database`, `delete_database` (confirmed, soft) |
-| CLI | `skif db list\|create\|info\|attach\|detach\|delete\|restore\|credentials` |
-| Dashboard | Databases list + create, detail (status, connection, attached projects, charts, tables), attach from a project |
+| REST | `GET/POST /api/v1/databases`, `GET/PATCH/DELETE /api/v1/databases/:name`, `POST …/:name/restore`, `GET …/:name/credentials`, `GET …/:name/metrics`, `GET/POST …/:name/backups`, `GET/DELETE …/:name/backups/:id`, `POST …/:name/backups/:id/restore`, `GET/PATCH …/:name/backup-policy`, `GET/POST …/:name/rotate`, `GET/POST /api/v1/projects/:slug/databases`, `DELETE …/databases/:name` |
+| MCP | `list_databases`, `get_database`, `create_database`, `attach_database`, `detach_database`, `delete_database` (confirmed, soft), `list_database_backups`, `backup_database`, `restore_database`, `set_database_backup_policy`, `rotate_database_credentials` |
+| CLI | `skif db list\|create\|info\|attach\|detach\|delete\|restore\|credentials\|backups\|backup\|backup-delete\|restore-backup\|backup-policy\|rotate` |
+| Dashboard | Databases list + create, detail (status, connection, pooler, attached projects, charts, tables, extensions/slow queries, backups/restore, rotate), attach from a project |
 
-## 8. Follow-ups (on the roadmap)
+## 8. Backups and restore (D83)
 
-- Backups: scheduled `pg_dump` → `ObjectStore`, retention, restore into a new database.
+Every database has a policy (`backup_enabled`, five-field UTC cron, `backup_retention_days`,
+default daily 03:00 and 7 days). The maintenance sweep queues a `database_backups` row when
+`next_backup_at` is due; a manual backup queues one immediately. A pending/running backup is never
+duplicated.
+
+- The node sees `databaseBackupTasks` in desired state with a **presigned PUT** URL. The agent
+  calls the helper's fixed `pg_dump -Fc` verb, streams the dump straight to the object store while
+  hashing it, and reports size + SHA-256 on its next heartbeat. The dump never touches the
+  control plane and never enters desired state.
+- Restore is **always into a new database** (`POST /databases/:name/backups/:id/restore`), with new
+  credentials, a fresh port, and the same placement rules as create. The target is marked
+  `pendingRestoreId`; the node streams the artifact into `pg_restore --clean --if-exists
+  --no-owner --exit-on-error` and runs `SELECT 1` before reporting success. Only then is the
+  backup marked verified (`verified_at`, `restored_database_id`) and scheduled backups resume.
+- Retention deletes expired artifacts and their objects, but never a pinned backup or the newest
+  good backup. `skif db backups|backup|restore-backup|backup-policy` and the dashboard Backups panel
+  expose the same service methods as REST/MCP.
+
+The local filesystem object store buffers uploads and enforces the 500 MB artifact limit; R2 gets a
+direct presigned PUT with no buffering. A production install should use R2 for large databases.
+
+## 9. Extensions and slow queries (D84)
+
+`extensions` is an allowlist (`pg_stat_statements`, `pg_trgm`, `pgcrypto`, `citext`, `hstore`,
+`unaccent`, `pg_cron`, `pgvector`, `postgis`). The helper preloads `pg_stat_statements`; the agent
+creates requested extensions idempotently after the monitor role is bootstrapped. An extension the
+pinned image does not ship fails softly and is logged; it does not stop the database.
+
+The five-minute snapshot also carries the top 50 `pg_stat_statements` rows (query id, normalized
+SQL, calls, total/mean time, rows, shared/temp blocks) when the extension is enabled. The control
+plane keeps the latest snapshot in SQLite; the dashboard shows it in **Extensions & slow queries**.
+Removing an extension from the list never drops it automatically.
+
+## 10. Connection pooling (D85)
+
+New databases get a transaction-mode PgBouncer sidecar by default. The helper renders a second
+Quadlet unit with a loopback-only `PublishPort`, the `skiff-workloads` network, a 0600 config and
+userlist owned by the image's uid 70, and the fixed `edoburu/pgbouncer` digest. It is deliberately
+separate from the Postgres unit: a pooler crash leaves direct connections working.
+
+Attachments receive `<PREFIX>_POOL_URL`, `<PREFIX>_POOL_HOST` and `<PREFIX>_POOL_PORT` in addition
+to the direct values. Use the direct URL for migrations, `pg_dump`, logical replication,
+`LISTEN/NOTIFY`, advisory locks, cursors and prepared statements in transaction mode.
+
+## 11. Credential rotation (D86)
+
+`POST /databases/:name/rotate` (owner or monitor) generates a new password, seals it in a
+`database_rotations` row and puts a `databaseRotations` task in desired state. The agent fetches
+the new value from the node-authenticated endpoint just before `ALTER ROLE` (SQL over stdin, never
+argv) and verifies a fresh connection. Only after the node reports success does the control plane
+replace the live secret and bump the activation version, which restarts attached apps with the new
+value. A failed rotation leaves the old secret in place and records the error.
+
+## 12. Follow-ups (on the roadmap)
+
 - On-demand SQL console: an open-source admin UI (pgweb or Adminer) as a short-lived container on
   the database's node, behind `platform` access, `database:console`, audited, idle-stopped (D60).
-- Cross-node access via a node private address; credential rotation; `pg_stat_statements` slow
-  queries; more engines (MySQL, Valkey); bulk actions and prune for databases.
+- Cross-node access via a node private address; more engines (MySQL, Valkey); bulk actions and
+  prune for databases; PITR (pgBackRest/WAL-G) on top of the logical backups.

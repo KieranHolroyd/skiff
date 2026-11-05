@@ -32,9 +32,12 @@ export const PLATFORM_CONFIG_DEFAULTS = {
 /** Litestream release the helper installs when the host has none (sha256 pinned in the helper). */
 export const LITESTREAM_VERSION = '0.3.13';
 
-export type PlatformConfigSection = 'backups' | 'email' | 'alerts';
+export type PlatformConfigSection = 'backups' | 'email' | 'alerts' | 'assistant';
 
-/** The only environment keys the dashboard can change, per section. */
+/**
+ * The only environment keys the dashboard can change, per section. The assistant is optional: it
+ * stays off until `SKIFF_ASSISTANT_BASE_URL` and `SKIFF_ASSISTANT_MODEL` are set.
+ */
 export const PLATFORM_CONFIG_SECTIONS = {
 	backups: ['R2_ACCOUNT_ID', 'R2_BUCKET', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_ENDPOINT'],
 	email: [
@@ -46,18 +49,31 @@ export const PLATFORM_CONFIG_SECTIONS = {
 		'SKIFF_SMTP_SECURE',
 	],
 	alerts: ['SKIFF_ALERT_WEBHOOK', 'SKIFF_ALERT_EMAIL'],
+	assistant: [
+		'SKIFF_ASSISTANT_PROVIDER',
+		'SKIFF_ASSISTANT_BASE_URL',
+		'SKIFF_ASSISTANT_MODEL',
+		'SKIFF_ASSISTANT_ROUTER_MODEL',
+		'SKIFF_ASSISTANT_API_KEY',
+		'SKIFF_ASSISTANT_MAX_AGENTS',
+	],
 } as const satisfies Record<PlatformConfigSection, readonly string[]>;
 
 export type PlatformConfigKey = (typeof PLATFORM_CONFIG_SECTIONS)[PlatformConfigSection][number];
 
 /** Never sent back to the browser; an empty form field means "keep the current value". */
-export const PLATFORM_CONFIG_SECRET_KEYS: ReadonlySet<string> = new Set(['R2_SECRET_ACCESS_KEY', 'SKIFF_SMTP_PASSWORD']);
+export const PLATFORM_CONFIG_SECRET_KEYS: ReadonlySet<string> = new Set([
+	'R2_SECRET_ACCESS_KEY',
+	'SKIFF_SMTP_PASSWORD',
+	'SKIFF_ASSISTANT_API_KEY',
+]);
 
 /** Keys that must be present once a section is configured. */
 export const PLATFORM_CONFIG_REQUIRED: Record<PlatformConfigSection, readonly PlatformConfigKey[]> = {
 	backups: ['R2_ACCOUNT_ID', 'R2_BUCKET', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'],
 	email: ['SKIFF_SMTP_HOST', 'SKIFF_SMTP_PORT', 'SKIFF_SMTP_FROM'],
 	alerts: [],
+	assistant: ['SKIFF_ASSISTANT_BASE_URL', 'SKIFF_ASSISTANT_MODEL'],
 };
 
 const HOSTNAME = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/i;
@@ -114,6 +130,30 @@ export function validatePlatformConfigValue(key: PlatformConfigKey, value: strin
 				: 'must be an http(s) URL without credentials';
 		case 'SKIFF_ALERT_EMAIL':
 			return EMAIL.test(value) ? null : 'must be an email address';
+		case 'SKIFF_ASSISTANT_PROVIDER':
+			return ['openai', 'openai-compatible', 'openrouter', 'ollama'].includes(value)
+				? null
+				: 'must be openai, openai-compatible, openrouter or ollama';
+		case 'SKIFF_ASSISTANT_BASE_URL': {
+			if (value.length > 2048 || !PRINTABLE.test(value)) return 'must be a single-line URL';
+			if (!validUrl(value, ['http:', 'https:'])) return 'must be an http(s) URL without credentials';
+			return /\/$/.test(value) ? 'must not end with a slash' : null;
+		}
+		case 'SKIFF_ASSISTANT_MODEL':
+		case 'SKIFF_ASSISTANT_ROUTER_MODEL':
+			return /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,199}$/.test(value)
+				? null
+				: 'must be a model id (letters, digits, . _ : / -)';
+		case 'SKIFF_ASSISTANT_API_KEY':
+			return PRINTABLE.test(value) && value.length >= 8 && value.length <= 512
+				? null
+				: 'must be printable ASCII, 8–512 characters';
+		case 'SKIFF_ASSISTANT_MAX_AGENTS': {
+			const count = Number(value);
+			return /^[1-4]$/.test(value) && Number.isInteger(count)
+				? null
+				: 'must be a whole number from 1 to 4';
+		}
 	}
 }
 

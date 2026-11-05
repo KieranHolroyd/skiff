@@ -3,6 +3,8 @@ import { accessModes, deploymentStatuses, nodeStatuses, runtimes } from './model
 import { domainKinds } from './domain.ts';
 import { workloadDesiredSchema, workloadStatuses } from './workload.ts';
 import { databaseMetricBucketSchema, databaseSnapshotSchema } from './database.ts';
+import { databaseBackupResultSchema, databaseBackupTaskSchema } from './database-backup.ts';
+import { databaseRotationResultSchema, databaseRotationTaskSchema } from './database.ts';
 import {
 	storageBucketDeletionSchema,
 	storageBucketSnapshotSchema,
@@ -104,9 +106,13 @@ export const desiredStateSchema = z.object({
 	workloads: z.array(workloadDesiredSchema).default([]),
 	/** Purged databases whose data dir this node must delete, then report (D59). */
 	databasePurges: z.array(z.string()).default([]),
+	/** Backup dumps and restores this node must execute (docs/DATABASES.md §9). */
+	databaseBackupTasks: z.array(databaseBackupTaskSchema).default([]),
+	/** Credential rotations this node must apply (docs/DATABASES.md §4). */
+	databaseRotations: z.array(databaseRotationTaskSchema).default([]),
 	/** Registered volumes this node must know about, for volume-backed data dirs (D74). */
 	volumes: z.array(nodeVolumeDesiredSchema).default([]),
-	/** Internal S3 gateway routes the control plane uses to manage object contents (D82). */
+	/** Internal S3 gateway routes the control plane uses to manage object contents (D81). */
 	storageGateway: storageGatewaySchema.default({ listen: null, routes: [] }),
 	/** Public storage endpoints this node serves (S3): byte-for-byte proxies, not sites. */
 	storageRoutes: z.array(storageRouteSchema).default([]),
@@ -159,6 +165,10 @@ export const heartbeatSchema = z.object({
 	purgedDatabases: z.array(z.string()).optional(),
 	/** Storage instance ids whose data dir was deleted after a `storagePurges` entry (S8). */
 	purgedStorage: z.array(z.string()).optional(),
+	/** Outcomes of `databaseBackupTasks` since the last heartbeat. */
+	databaseBackupResults: z.array(databaseBackupResultSchema).max(50).optional(),
+	/** Outcomes of `databaseRotations` since the last heartbeat. */
+	databaseRotationResults: z.array(databaseRotationResultSchema).max(50).optional(),
 	/** Outcomes of `objectStorage.deleteBuckets` entries since the last heartbeat. */
 	storageBucketDeletions: z.array(storageBucketDeletionSchema).max(500).optional(),
 });

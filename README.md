@@ -60,9 +60,9 @@
 - **Agent-native.** A full MCP server with OAuth 2.1 (CIMD and DCR, PKCE, consent with permission
   subsets, scope step-up) and human confirmation before destructive actions. Your agent can do
   exactly what its token allows and nothing more.
-- **One brain, four surfaces.** The dashboard, REST API, MCP server and `skif` CLI all call the
-  same service layer, so no surface can do more than another and every action is audited the
-  same way.
+- **One brain, five surfaces.** The dashboard, optional in-dashboard assistant, REST API, MCP
+  server and `skif` CLI all call the same service layer, so no surface can do more than another
+  and every action is audited the same way.
 - **Operable.** Prometheus metrics, traffic and error telemetry, alerts (email and webhook),
   Litestream backups to R2, a monthly restore drill, a recovery kit, and self-update with rollback
   from the dashboard.
@@ -77,7 +77,8 @@
 | **Fleet** | Node agents with desired-state reconciliation, an on-disk release cache and heartbeats; wildcard TLS via DNS-01; a branded 503 with `Retry-After` when a node is down |
 | **Observe** | Dashboard for fleet, projects, deployments, traffic, errors, logs and the audit log; `/metrics` on the control plane and agents; alerts for offline nodes, disk, certs, backups and 5xx spikes after a promote |
 | **Recover** | Litestream → R2, scripted restore, monthly drill, age-encrypted recovery kit, atomic release switch with automatic rollback |
-| **Managed services** | Postgres 16/17 databases and RustFS S3-compatible object storage as tier-3 containers: attachments with scoped credentials, usage charts, soft delete and restore, human-only credential reveal ([DATABASES.md](./docs/DATABASES.md), [OBJECT-STORAGE.md](./docs/OBJECT-STORAGE.md)) |
+| **Managed services** | Postgres 16/17 databases and RustFS S3-compatible object storage as tier-3 containers: attachments with scoped credentials, Railway-style env suggestions from `.env`/code, one-click linking, usage charts, soft delete and restore, human-only credential reveal, scheduled/verified backups and restore-to-new, PgBouncer pooling, an extension allowlist with slow queries, and staged credential rotation ([DATABASES.md](./docs/DATABASES.md), [OBJECT-STORAGE.md](./docs/OBJECT-STORAGE.md)) |
+| **Assistant** | Optional in-dashboard chat over the same MCP tools, a team of four specialist agents, click-to-confirm destructive actions, and a guided tour that navigates and spotlights elements ([ASSISTANT.md](./docs/ASSISTANT.md)) |
 | **v2 preview** | Sandboxed systemd process apps, Podman Quadlet containers, git builds on a builder node, custom domains with TXT verification, named environments, per-node workload budgets |
 
 ## Quick start
@@ -146,6 +147,18 @@ A token's effective permissions are always **its scopes ∩ the user's current r
 and every token they've issued narrows straight away. Every tool call is recorded in the audit log
 as `mcp.<tool>`, including calls denied for missing scope.
 
+### In-dashboard assistant (optional)
+
+If you want help *inside* the dashboard, an owner can point Skiff at an OpenAI-compatible endpoint
+(OpenAI, OpenRouter, vLLM, LM Studio or a local Ollama; OpenRouter gets a searchable, tool-capable model picker) in **Settings → Assistant**. The chat panel
+uses the same MCP tool catalog, so it can answer questions about the current page and the whole
+platform, with four specialist agents and a lead that routes and synthesises. Its `guide_user` tool
+can move you to the right page and spotlight the element it is talking about.
+
+Nothing is enabled until it is configured. Destructive calls are held for an explicit Confirm in
+the chat and executed only with a signed, target-bound approval; chat tool calls are audited as
+`assistant.<tool>`. Setup, limits and the event protocol are in [ASSISTANT.md](./docs/ASSISTANT.md).
+
 ## Architecture
 
 ```
@@ -209,6 +222,11 @@ BETTER_AUTH_SECRET=<32+ random bytes>
 SKIFF_DATA_DIR=/var/lib/skiff/data
 SKIFF_MASTER_KEY=<base64 32 bytes, or SKIFF_MASTER_KEY_FILE>
 SKIFF_OBJECT_STORE=local|r2          # R2_* credentials when r2
+
+# Optional: the in-dashboard assistant (Settings → Assistant does the same thing)
+SKIFF_ASSISTANT_BASE_URL=https://api.openai.com/v1
+SKIFF_ASSISTANT_MODEL=gpt-4.1-mini
+SKIFF_ASSISTANT_API_KEY=sk-...
 ```
 
 ## Development
