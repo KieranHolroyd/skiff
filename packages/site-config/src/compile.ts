@@ -1,5 +1,6 @@
 import { compilePattern, compileTarget, type HeaderRule, type Redirect, type SiteConfig } from './parse.ts';
 import type { AccessMode } from '@skiff/contracts';
+import { errorPageHandler } from './error-pages.ts';
 
 /** Structural Caddy JSON — intentionally loose; the agent validates with Caddy itself. */
 export type CaddyHandler = Record<string, unknown>;
@@ -241,16 +242,7 @@ export function compileSiteRoute(input: SiteCompileInput): CaddyRoute {
 						{
 							match: { status_code: [502, 503, 504] },
 							routes: [
-								{
-									handle: [
-										{
-											handler: 'static_response',
-											status_code: 503,
-											headers: { 'Retry-After': ['30'] },
-											body: UNAVAILABLE_BODY,
-										},
-									],
-								},
+								{ handle: [errorPageHandler('unavailable', 503, { 'Retry-After': ['30'] })] },
 							],
 						},
 					],
@@ -302,8 +294,6 @@ export function compileErrorRoute(host: string, releasePath: string, notFound: s
 	};
 }
 
-const UNAVAILABLE_BODY = 'This site is temporarily unavailable. Please try again shortly.';
-
 /**
  * Worker-placed site whose upstream cannot be reached (homelab offline, DESIGN §9). A dial
  * failure is a Caddy error, not an upstream response, so `handle_response` never sees it; the
@@ -313,19 +303,28 @@ export function compileUnavailableRoute(host: string): CaddyRoute {
 	return {
 		'@id': `unavailable:${host}`,
 		match: [{ host: [host] }],
-		handle: [
-			{
-				handler: 'static_response',
-				status_code: 503,
-				headers: {
-					'Retry-After': ['30'],
-					'Content-Type': ['text/plain; charset=utf-8'],
-					'Cache-Control': ['no-store'],
-				},
-				body: UNAVAILABLE_BODY,
-			},
-		],
+		handle: [errorPageHandler('unavailable', 503, { 'Retry-After': ['30'] })],
 	};
+}
+
+/**
+ * Server-wide error pages, after the per-host ones. A site without its own 404 page gets a
+ * branded one; anything else (forward_auth agent unreachable, the platform upstream down, a
+ * file_server failure) gets a generic page carrying Caddy's status and error id. Neither ever
+ * serves site files, so protected sites still fail closed.
+ */
+export function compileFallbackErrorRoutes(): CaddyRoute[] {
+	return [
+		{
+			'@id': 'error-fallback:404',
+			match: [{ expression: '{http.error.status_code} == 404' }],
+			handle: [errorPageHandler('not-found', 404)],
+		},
+		{
+			'@id': 'error-fallback',
+			handle: [errorPageHandler('error', '{http.error.status_code}')],
+		},
+	];
 }
 
 export interface TlsOptions {
@@ -407,7 +406,8 @@ export function compileCaddyConfig(options: {
 						site.site.notFound ? site.site.notFound : site.site.spa ? '/index.html' : null,
 					),
 		)
-		.filter((route): route is CaddyRoute => route !== null);
+		.filter((route): route is CaddyRoute => route !== null)
+		.concat(compileFallbackErrorRoutes());
 
 	const servers: Record<string, unknown> = {
 		content: {
@@ -421,28 +421,16 @@ export function compileCaddyConfig(options: {
 								'@id': 'content-placeholder',
 								match: [{ host: [options.contentDomain, `*.${options.contentDomain}`] }],
 								terminal: true,
-								handle: [
-									{
-										handler: 'static_response',
-										status_code: 404,
-										body: 'No site at this address.',
-									},
-								],
+								handle: [errorPageHandler('no-site', 404)],
 							} satisfies CaddyRoute,
 						]
 					: []),
 				{
 					'@id': 'catch-all',
-					handle: [
-						{
-							handler: 'static_response',
-							status_code: options.catchAllStatus ?? 404,
-							body: 'No site at this address.',
-						},
-					],
+					handle: [errorPageHandler('unknown-host', options.catchAllStatus ?? 404)],
 				},
 			],
-			...(errorRoutes.length ? { errors: { routes: errorRoutes } } : {}),
+			errors: { routes: errorRoutes },
 		},
 	};
 
