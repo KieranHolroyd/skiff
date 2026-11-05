@@ -58,6 +58,27 @@ export interface HelperApi {
 	rotateDatabaseRole(id: string, role: 'owner' | 'monitor', password: string): Promise<void>;
 	/** Restart only the PgBouncer sidecar. */
 	restartPooler(id: string): Promise<void>;
+	/** Write the 0400 pgBackRest config for PITR (docs/PITR.md). */
+	pitrConfigure(
+		id: string,
+		repo: unknown,
+	): Promise<{ stanza: string; configPath: string }>;
+	/** Run a full or differential base backup. */
+	pitrBaseBackup(id: string, type: string): Promise<{ stanza: string; type: string }>;
+	/** Restore to a timestamp into a new database and verify it. */
+	pitrRestore(
+		id: string,
+		input: { targetDatabaseId: string; targetTime: number },
+	): Promise<{ targetDatabaseId: string; targetTime: number; verified: true }>;
+	/** Credential-free repository/archive status. */
+	pitrStatus(id: string): Promise<HelperPitrStatus>;
+}
+
+export interface HelperPitrStatus {
+	configured: boolean;
+	stanza: string;
+	repo: { bucket: string | null; region: string | null; endpoint: string | null; path: string | null };
+	archiveStatus: 'ok' | 'failing' | 'unknown';
 }
 
 export class HelperError extends Error {
@@ -161,6 +182,75 @@ export class HelperClient implements HelperApi {
 			const text = await response.text().catch(() => '');
 			throw new HelperError(`helper restore ${id} -> ${response.status}${text ? `: ${text}` : ''}`);
 		}
+	}
+
+	async pitrConfigure(id: string, repo: unknown): Promise<{ stanza: string; configPath: string }> {
+		const body = await this.request(
+			'POST',
+			`/v1/workloads/${encodeURIComponent(id)}/pitr/configure`,
+			{ repo },
+			60_000,
+		);
+		const record = asRecord(body);
+		return {
+			stanza: String(record.stanza ?? ''),
+			configPath: String(record.configPath ?? ''),
+		};
+	}
+
+	async pitrBaseBackup(id: string, type: string): Promise<{ stanza: string; type: string }> {
+		const body = await this.request(
+			'POST',
+			`/v1/workloads/${encodeURIComponent(id)}/pitr/basebackup`,
+			{ type },
+			60 * 60_000,
+		);
+		const record = asRecord(body);
+		return { stanza: String(record.stanza ?? ''), type: String(record.type ?? '') };
+	}
+
+	async pitrRestore(
+		id: string,
+		input: { targetDatabaseId: string; targetTime: number },
+	): Promise<{ targetDatabaseId: string; targetTime: number; verified: true }> {
+		const body = await this.request(
+			'POST',
+			`/v1/workloads/${encodeURIComponent(id)}/pitr/restore`,
+			input,
+			2 * 60 * 60_000,
+		);
+		const record = asRecord(body);
+		if (record.verified !== true) throw new HelperError('helper PITR restore did not verify');
+		return {
+			targetDatabaseId: String(record.targetDatabaseId ?? ''),
+			targetTime: Number(record.targetTime),
+			verified: true,
+		};
+	}
+
+	async pitrStatus(id: string): Promise<HelperPitrStatus> {
+		const body = await this.request(
+			'GET',
+			`/v1/workloads/${encodeURIComponent(id)}/pitr/status`,
+			undefined,
+			30_000,
+		);
+		const record = asRecord(body);
+		const repo = asRecord(record.repo);
+		return {
+			configured: record.configured === true,
+			stanza: String(record.stanza ?? ''),
+			repo: {
+				bucket: typeof repo.bucket === 'string' ? repo.bucket : null,
+				region: typeof repo.region === 'string' ? repo.region : null,
+				endpoint: typeof repo.endpoint === 'string' ? repo.endpoint : null,
+				path: typeof repo.path === 'string' ? repo.path : null,
+			},
+			archiveStatus:
+				record.archiveStatus === 'ok' || record.archiveStatus === 'failing'
+					? record.archiveStatus
+					: 'unknown',
+		};
 	}
 
 	/** Read-only mount/device inventory for the volume wizard (D72). */

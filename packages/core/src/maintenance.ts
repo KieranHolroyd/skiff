@@ -46,6 +46,7 @@ export class MaintenanceService {
 		// Trashed databases past their window are handed to their node, which deletes the data (D59).
 		this.ctx.databases.requestExpiredPurges();
 		this.ctx.databases.tickBackups();
+		this.ctx.databases.tickPitr();
 		await this.ctx.databases.pruneBackups();
 		this.ctx.storage.requestExpiredPurges();
 		// Cheap, certain cleanup runs every sweep; prune is the on-demand deep backstop.

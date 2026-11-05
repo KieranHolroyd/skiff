@@ -287,6 +287,16 @@ export interface DatabaseCredentials {
 export const workloadDatabaseSchema = z.object({
 	engine: z.enum(databaseEngines),
 	version: z.string().min(1).max(16),
+	/**
+	 * WAL archiving for PITR (docs/PITR.md). Present only while the `PITR` flag is on and the
+	 * database has PITR enabled; the helper renders `archive_mode`/`archive_command` from it.
+	 */
+	pitr: z
+		.object({
+			stanza: z.string().min(1).max(64),
+			archiveTimeoutSeconds: z.number().int().min(1).max(3600).default(60),
+		})
+		.optional(),
 });
 export type WorkloadDatabase = z.infer<typeof workloadDatabaseSchema>;
 

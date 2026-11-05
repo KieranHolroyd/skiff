@@ -48,6 +48,16 @@ import {
 	type WorkloadDesired,
 	type WorkloadStatus,
 } from './validate.ts';
+import {
+	parsePitrBackupType,
+	parsePitrRepo,
+	pitrPaths,
+	pitrStanzaFor,
+	renderPgBackRestConfig,
+	renderPgPass,
+	renderPitrPodmanArgs,
+	validatePitrTargetTime,
+} from './pitr.ts';
 
 /**
  * systemd is the primary runtime driver. This module owns *all* privileges: it writes unit files,
@@ -395,6 +405,16 @@ export class SystemdDriver {
 				envFile,
 				dataDir,
 				secretsDir: Object.keys(activation.files).length > 0 ? secretsDir : null,
+				...(workload.database?.pitr
+					? {
+							pitr: {
+								stanza: workload.database.pitr.stanza,
+								configPath: pitrPaths(this.runtimeDir, workload.id).config,
+								pgpassPath: pitrPaths(this.runtimeDir, workload.id).pgpass,
+								archiveTimeoutSeconds: workload.database.pitr.archiveTimeoutSeconds,
+							},
+						}
+					: {}),
 			});
 			changed = (await this.writeIfChanged(paths.container, container, 0o644)) || changed;
 			changed = (await this.removeIfExists(paths.service)) || changed;
@@ -650,6 +670,217 @@ export class SystemdDriver {
 		]);
 		if (verifyCode !== 0 || verifyOut.trim() !== '1')
 			throw new Error('The restored database did not answer the verification query.');
+	}
+
+	/**
+	 * Write the pgBackRest repository config and `.pgpass` for one database (docs/PITR.md). Both
+	 * files are 0400 under `/run/skiff-workloads/<id>/`; credentials never enter desired state.
+	 * Writing them also restarts the database unit so `archive_command` becomes usable.
+	 */
+	async pitrConfigure(id: string, rawRepo: unknown): Promise<{ stanza: string; configPath: string }> {
+		assertDatabaseId(id, 'database id');
+		const repo = parsePitrRepo(rawRepo);
+		const env = await this.readDatabaseEnv(id);
+		const stanza = pitrStanzaFor(id);
+		const paths = pitrPaths(this.runtimeDir, id);
+		await fs.mkdir(paths.dir, { recursive: true, mode: 0o700 });
+		await fs.chmod(paths.dir, 0o700).catch(() => undefined);
+		const config = renderPgBackRestConfig({
+			stanza,
+			repo,
+			pg1Path: DATABASE_PGDATA,
+			pg1Host: databaseAlias(id),
+			pg1Port: DATABASE_ENGINES.postgres.containerPort,
+			pg1User: env.user,
+		});
+		const pgpass = renderPgPass(env.user, env.password, databaseAlias(id), '5432');
+		// Podman may have created a directory at a bind-mount source before the file existed.
+		for (const path of [paths.config, paths.pgpass]) {
+			const stat = await fs.lstat(path).catch(() => null);
+			if (stat?.isDirectory()) await fs.rm(path, { recursive: true, force: true });
+		}
+		await this.writeAtomic(paths.config, config, 0o400);
+		await this.writeAtomic(paths.pgpass, pgpass, 0o400);
+		// The Postgres container and the sidecar run as uid/gid 70; a root-owned 0400 file would be
+		// unreadable to both. Keep the mode 0400 but hand ownership to the engine user.
+		await this.chown(paths.config, DATABASE_ENGINES.postgres.uid, DATABASE_ENGINES.postgres.gid);
+		await this.chown(paths.pgpass, DATABASE_ENGINES.postgres.uid, DATABASE_ENGINES.postgres.gid);
+		await this.systemctl(['restart', '--no-block', serviceUnitName(id)], { allowFailure: true });
+		return { stanza, configPath: paths.config };
+	}
+
+	/** Create the stanza if needed, then run a full or differential pgBackRest base backup. */
+	async pitrBaseBackup(
+		id: string,
+		rawType: unknown,
+	): Promise<{ stanza: string; type: 'full' | 'diff' | 'incr' }> {
+		assertDatabaseId(id, 'database id');
+		const type = parsePitrBackupType(rawType);
+		const stanza = pitrStanzaFor(id);
+		const paths = await this.requirePitrConfig(id);
+		const dataDir = await this.dataDirFor(id);
+		const run = (args: string[], network: boolean) =>
+			this.runner.run(
+				renderPitrPodmanArgs({
+					podmanPath: this.podmanPath,
+					workloadId: id,
+					dataDir,
+					configPath: paths.config,
+					pgpassPath: paths.pgpass,
+					network,
+					args: [`--stanza=${stanza}`, ...args],
+				}),
+			);
+		const created = await run(['stanza-create'], true);
+		if (created.code !== 0) throw new Error(`pgbackrest stanza-create failed (${created.code}): ${created.stderr.trim().slice(0, 500)}`);
+		const backup = await run(['backup', `--type=${type}`], true);
+		if (backup.code !== 0) throw new Error(`pgbackrest backup failed (${backup.code}): ${backup.stderr.trim().slice(0, 500)}`);
+		return { stanza, type };
+	}
+
+	/** Archive/repository status for one database. Never returns repository credentials. */
+	async pitrStatus(id: string): Promise<{
+		configured: boolean;
+		stanza: string;
+		repo: { bucket: string | null; region: string | null; endpoint: string | null; path: string | null };
+		archiveStatus: 'ok' | 'failing' | 'unknown';
+	}> {
+		assertDatabaseId(id, 'database id');
+		const stanza = pitrStanzaFor(id);
+		const paths = pitrPaths(this.runtimeDir, id);
+		const configured = await fs.lstat(paths.config).then((stat) => stat.isFile()).catch(() => false);
+		if (!configured) {
+			return { configured: false, stanza, repo: { bucket: null, region: null, endpoint: null, path: null }, archiveStatus: 'unknown' };
+		}
+		const text = await fs.readFile(paths.config, 'utf8');
+		const value = (key: string) => {
+			const line = text.split('\n').find((entry) => entry.startsWith(`${key}=`));
+			return line ? line.slice(key.length + 1).trim() || null : null;
+		};
+		const repo = {
+			bucket: value('repo1-s3-bucket'),
+			region: value('repo1-s3-region'),
+			endpoint: value('repo1-s3-endpoint'),
+			path: value('repo1-path'),
+		};
+		const dataDir = await this.dataDirFor(id);
+		const info = await this.runner.run(
+			renderPitrPodmanArgs({
+				podmanPath: this.podmanPath,
+				workloadId: id,
+				dataDir,
+				configPath: paths.config,
+				pgpassPath: paths.pgpass,
+				args: [`--stanza=${stanza}`, 'info', '--output=json'],
+			}),
+		);
+		let archiveStatus: 'ok' | 'failing' | 'unknown' = 'unknown';
+		if (info.code === 0) {
+			try {
+				const parsed = JSON.parse(info.stdout) as Array<{ archive?: Array<{ status?: string }> }>;
+				const statuses = parsed.flatMap((entry) => entry.archive ?? []).map((entry) => entry.status);
+				if (statuses.length > 0) archiveStatus = statuses.every((status) => status === 'ok') ? 'ok' : 'failing';
+			} catch {
+				archiveStatus = 'unknown';
+			}
+		} else if (/archive|error/i.test(info.stderr)) {
+			archiveStatus = 'failing';
+		}
+		return { configured: true, stanza, repo, archiveStatus };
+	}
+
+	/**
+	 * Restore one stanza to a timestamp into a NEW database's data dir (docs/PITR.md). The target
+	 * unit is stopped, its cluster is replaced from the repository, the container is started and a
+	 * canary query must answer before the helper reports success.
+	 */
+	async pitrRestore(
+		id: string,
+		input: { targetDatabaseId: unknown; targetTime: unknown },
+	): Promise<{ targetDatabaseId: string; targetTime: number; verified: true }> {
+		assertDatabaseId(id, 'database id');
+		const targetDatabaseId = assertDatabaseId(input.targetDatabaseId, 'target database id');
+		if (targetDatabaseId === id)
+			throw new ValidationError('A PITR restore must target a different database; in-place restore is not supported.');
+		const targetTime = validatePitrTargetTime(input.targetTime, Date.now());
+		const stanza = pitrStanzaFor(id);
+		const paths = await this.requirePitrConfig(id);
+		const targetDir = await this.dataDirFor(targetDatabaseId);
+		const targetEnv = await this.readDatabaseEnv(targetDatabaseId);
+
+		await this.systemctl(['stop', serviceUnitName(targetDatabaseId)], { allowFailure: true });
+		await fs.rm(targetDir, { recursive: true, force: true });
+		await fs.mkdir(targetDir, { recursive: true, mode: 0o700 });
+		await fs.chmod(targetDir, 0o700).catch(() => undefined);
+		await this.chown(targetDir, DATABASE_ENGINES.postgres.uid, DATABASE_ENGINES.postgres.gid).catch(() => undefined);
+
+		const restore = await this.runner.run(
+			renderPitrPodmanArgs({
+				podmanPath: this.podmanPath,
+				workloadId: id,
+				dataDir: targetDir,
+				configPath: paths.config,
+				pgpassPath: paths.pgpass,
+				args: [
+					`--stanza=${stanza}`,
+					'--pg1-path=/data/pgdata',
+					'--type=time',
+					`--target=${new Date(targetTime).toISOString()}`,
+					'--target-action=promote',
+					'restore',
+				],
+			}),
+		);
+		if (restore.code !== 0)
+			throw new Error(`pgbackrest restore failed (${restore.code}): ${restore.stderr.trim().slice(0, 500)}`);
+
+		await this.systemctl(['start', serviceUnitName(targetDatabaseId)], { allowFailure: true });
+		for (let attempt = 0; attempt < 60; attempt += 1) {
+			const verify = await this.runner.run([
+				this.podmanPath,
+				'exec',
+				'-e',
+				'PGPASSWORD',
+				`skiff-workload-${targetDatabaseId}`,
+				'psql',
+				'-tAc',
+				'SELECT 1',
+				'-U',
+				targetEnv.user,
+				'-d',
+				targetEnv.database,
+			]);
+			if (verify.code === 0 && verify.stdout.trim() === '1')
+				return { targetDatabaseId, targetTime, verified: true };
+			await new Promise((resolve) => setTimeout(resolve, 1_000));
+		}
+		throw new Error('The restored database did not answer the canary query within 60 seconds.');
+	}
+
+	private async requirePitrConfig(id: string): Promise<{ config: string; pgpass: string }> {
+		const paths = pitrPaths(this.runtimeDir, id);
+		const ready = await fs
+			.lstat(paths.config)
+			.then((stat) => stat.isFile())
+			.catch(() => false);
+		if (!ready) throw new ValidationError(`Database ${id} has no pgBackRest config; configure PITR first.`);
+		return { config: paths.config, pgpass: paths.pgpass };
+	}
+
+	/** Resolve a managed database's data dir from the same roots `purge` uses (D74). */
+	private async dataDirFor(id: string): Promise<string> {
+		const roots = [resolve(this.stateDir)];
+		const registry = await readVolumeRegistry(this.volumeRegistryFile);
+		for (const entry of Object.values(registry)) roots.push(resolve(entry.mountPath, 'skiff'));
+		for (const root of roots) {
+			const candidate = resolve(root, id);
+			if (dirname(candidate) !== root || basename(candidate) !== id) continue;
+			const stat = await fs.stat(candidate).catch(() => null);
+			if (stat?.isDirectory()) return candidate;
+		}
+		// A not-yet-started target still gets its default state dir; volume-backed targets must be
+		// applied before a restore so the registry can resolve them.
+		return resolve(this.stateDir, id);
 	}
 
 	private async readDatabaseEnv(id: string): Promise<{ user: string; password: string; database: string }> {

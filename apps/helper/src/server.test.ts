@@ -88,6 +88,39 @@ class FakeRuntime implements HelperRuntime {
 		this.calls.push(`restart-pooler:${id}`);
 	}
 
+	async pitrConfigure(id: string, repo: unknown): Promise<{ stanza: string; configPath: string }> {
+		this.calls.push(`pitr-configure:${id}`);
+		return { stanza: id, configPath: `/run/skiff-workloads/${id}/pgbackrest.conf` };
+	}
+
+	async pitrBaseBackup(id: string, type: unknown): Promise<{ stanza: string; type: 'full' | 'diff' | 'incr' }> {
+		this.calls.push(`pitr-basebackup:${id}:${String(type)}`);
+		return { stanza: id, type: type === 'diff' || type === 'incr' ? type : 'full' };
+	}
+
+	async pitrRestore(
+		id: string,
+		input: { targetDatabaseId: unknown; targetTime: unknown },
+	): Promise<{ targetDatabaseId: string; targetTime: number; verified: true }> {
+		this.calls.push(`pitr-restore:${id}:${String(input.targetDatabaseId)}`);
+		return { targetDatabaseId: String(input.targetDatabaseId), targetTime: Number(input.targetTime), verified: true };
+	}
+
+	async pitrStatus(id: string): Promise<{
+		configured: boolean;
+		stanza: string;
+		repo: { bucket: string | null; region: string | null; endpoint: string | null; path: string | null };
+		archiveStatus: 'ok' | 'failing' | 'unknown';
+	}> {
+		this.calls.push(`pitr-status:${id}`);
+		return {
+			configured: false,
+			stanza: id,
+			repo: { bucket: null, region: null, endpoint: null, path: null },
+			archiveStatus: 'unknown',
+		};
+	}
+
 	async status(id: string): Promise<HelperWorkloadStatus> {
 		return { id, status: 'running', restarts: 2 };
 	}

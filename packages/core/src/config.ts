@@ -1,4 +1,4 @@
-import type { FeatureFlags, FeatureName } from '@skiff/contracts';
+import type { DatabasePitrRepoConfig, FeatureFlags, FeatureName } from '@skiff/contracts';
 import { FEATURE_FLAGS, parseFeatureFlags } from '@skiff/contracts';
 import type { ObjectStore } from './object-store.ts';
 import { hmac } from './util.ts';
@@ -56,6 +56,12 @@ export interface CoreConfig {
 	 * services must read them through `featureEnabled`, which falls back to the registry defaults.
 	 */
 	features?: FeatureFlags;
+	/**
+	 * pgBackRest repository for PITR. Only used when `features.PITR` is on. Credentials stay in the
+	 * control-plane process and are handed to a node through the authenticated activation endpoint,
+	 * never through desired state or the SQLite index.
+	 */
+	pitrRepository?: DatabasePitrRepoConfig;
 }
 
 export function coreConfigFromEnv(overrides: Partial<CoreConfig> & Pick<CoreConfig, 'objectStore' | 'masterKey' | 'dataDir'>): CoreConfig {
@@ -79,6 +85,32 @@ export function coreConfigFromEnv(overrides: Partial<CoreConfig> & Pick<CoreConf
 		storageObjectMaxBytes:
 			overrides.storageObjectMaxBytes ?? positiveInteger(env.SKIFF_STORAGE_OBJECT_MAX_BYTES, 104_857_600),
 		features: overrides.features ?? parseFeatureFlags(env),
+		pitrRepository: overrides.pitrRepository ?? pitrRepositoryFromEnv(env),
+	};
+}
+
+/**
+ * A complete pgBackRest repository from environment variables. Incomplete configuration returns
+ * undefined: PITR then fails closed with a clear "repository not configured" error rather than
+ * writing a half-valid config. Endpoint is optional (AWS S3); path-style defaults on because
+ * RustFS/MinIO/Garage need it.
+ */
+function pitrRepositoryFromEnv(env: Record<string, string | undefined>): DatabasePitrRepoConfig | undefined {
+	const bucket = env.SKIFF_PITR_REPO_BUCKET?.trim();
+	const accessKeyId = env.SKIFF_PITR_ACCESS_KEY_ID?.trim();
+	const secretAccessKey = env.SKIFF_PITR_SECRET_ACCESS_KEY?.trim();
+	if (!bucket || !accessKeyId || !secretAccessKey) return undefined;
+	return {
+		kind: 's3',
+		endpoint: env.SKIFF_PITR_REPO_ENDPOINT?.trim() || null,
+		bucket,
+		region: env.SKIFF_PITR_REPO_REGION?.trim() || 'us-east-1',
+		pathPrefix: env.SKIFF_PITR_REPO_PREFIX?.trim() || 'skiff/pitr',
+		forcePathStyle: !['0', 'false', 'off', 'no'].includes(
+			(env.SKIFF_PITR_REPO_FORCE_PATH_STYLE ?? 'true').trim().toLowerCase(),
+		),
+		accessKeyId,
+		secretAccessKey,
 	};
 }
 

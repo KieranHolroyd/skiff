@@ -182,6 +182,15 @@ destructive feature by default in the release that introduces it, and never enab
 `PREVIEW_DATA`, `AGENT_DATA_WRITE` or `BLUEPRINTS` on a host whose data you are not prepared to
 have copied, changed or pruned.
 
+### 2.5.1 PITR repository
+
+`SKIFF_FEATURE_PITR` also reads the pgBackRest repository from the control-plane environment
+(see [PITR.md](./PITR.md)): `SKIFF_PITR_REPO_BUCKET`, `SKIFF_PITR_ACCESS_KEY_ID`,
+`SKIFF_PITR_SECRET_ACCESS_KEY`, optional `SKIFF_PITR_REPO_ENDPOINT`, `SKIFF_PITR_REPO_REGION`,
+`SKIFF_PITR_REPO_PREFIX` and `SKIFF_PITR_REPO_FORCE_PATH_STYLE`. An incomplete set fails closed;
+the credentials are handed to nodes through the authenticated activation endpoint, never through
+desired state or SQLite.
+
 > **Migration note for already-shipped surfaces.** Database backups/restores, credential
 > rotation, the object browser and the pooler are already shipped in this release. Their flags
 > are registered and default off, but the current code deliberately does **not** hide those
