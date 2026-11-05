@@ -178,6 +178,14 @@ export interface TelemetryOptions {
 	now?: () => number;
 	/** Test seam for simulating a missing/broken `@duckdb/node-api`. */
 	loadDuckDb?: () => Promise<typeof import('@duckdb/node-api')>;
+	/**
+	 * Never open the file; report this reason instead. A zero-downtime standby runs beside the
+	 * primary, and DuckDB allows one process per file: if the standby took the lock, the primary
+	 * restarted behind it could not open telemetry.
+	 */
+	disabledReason?: string;
+	/** How long a failed open waits before the next operation retries it (default 30 s). */
+	openRetryMs?: number;
 }
 
 type DuckDbApi = typeof import('@duckdb/node-api');
@@ -526,10 +534,14 @@ export class TelemetryStore {
 	readonly #onError: ((error: Error) => void) | undefined;
 	readonly #now: () => number;
 	readonly #loadDuckDb: () => Promise<DuckDbApi>;
+	readonly #disabledReason: string | undefined;
+	readonly #openRetryMs: number;
 
 	#instance: DuckDBInstance | undefined;
 	#connection: DuckDBConnection | undefined;
 	#openPromise: Promise<void> | undefined;
+	/** After a failed open, the earliest time another open is attempted. */
+	#retryOpenAt = 0;
 	#writeTail: Promise<void> = Promise.resolve();
 	#closed = false;
 
@@ -552,14 +564,27 @@ export class TelemetryStore {
 		this.#onError = options.onError;
 		this.#now = options.now ?? Date.now;
 		this.#loadDuckDb = options.loadDuckDb ?? defaultLoadDuckDb;
+		this.#disabledReason = options.disabledReason;
+		this.#openRetryMs = options.openRetryMs ?? 30_000;
+		if (this.#disabledReason) this.error = new Error(`Telemetry (DuckDB) unavailable: ${this.#disabledReason}`);
 	}
 
-	/** Lazily open DuckDB. A load/open failure leaves the store in no-op mode. */
+	/**
+	 * Lazily open DuckDB. A load/open failure leaves the store in no-op mode until the retry
+	 * window passes, so a transient failure (another process briefly holding the file lock during
+	 * an update) heals itself instead of disabling telemetry until the next restart.
+	 */
 	async open(): Promise<void> {
-		if (this.#closed) return;
+		if (this.#closed || this.#disabledReason) return;
 		if (this.#openPromise) return this.#openPromise;
-		this.#openPromise = this.#doOpen();
-		return this.#openPromise;
+		if (this.#now() < this.#retryOpenAt) return;
+		const attempt = this.#doOpen();
+		this.#openPromise = attempt;
+		await attempt;
+		if (!this.available && this.#openPromise === attempt) {
+			this.#openPromise = undefined;
+			this.#retryOpenAt = this.#now() + this.#openRetryMs;
+		}
 	}
 
 	async close(): Promise<void> {

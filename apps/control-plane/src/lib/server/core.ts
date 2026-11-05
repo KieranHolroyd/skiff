@@ -72,10 +72,13 @@ export const telemetry = new TelemetryStore({
 	threads: 2,
 	objectStore,
 	onError: (error) => console.error('[telemetry]', error),
+	// DuckDB allows one process per file. A zero-downtime standby must leave it to the primary,
+	// or the primary restarted behind the standby finds the file locked.
+	disabledReason: process.env.SKIFF_STANDBY === '1' ? 'this is a standby serving an update' : undefined,
 });
 core.ctx.telemetry = telemetry;
 // Never load the DuckDB native addon while SvelteKit analyses the build.
-if (!building) {
+if (!building && process.env.SKIFF_STANDBY !== '1') {
 	void telemetry.open().catch((error) => console.error('[telemetry] open failed:', error));
 }
 

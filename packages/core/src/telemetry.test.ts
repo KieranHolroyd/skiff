@@ -432,4 +432,47 @@ describe('TelemetryStore', () => {
 		});
 		expect(await store.getPrometheusMetrics()).toBe('');
 	});
+
+	test('retries a failed open once the retry window passes', async () => {
+		let now = START;
+		let attempts = 0;
+		store = new TelemetryStore({
+			path: ':memory:',
+			now: () => now,
+			openRetryMs: 30_000,
+			loadDuckDb: async () => {
+				attempts += 1;
+				if (attempts === 1) throw new Error('Could not set lock on file');
+				return import('@duckdb/node-api');
+			},
+		});
+
+		await store.open();
+		expect(store.available).toBe(false);
+		expect(await store.ingest([makeBucket('a.test', START)])).toEqual({ inserted: 0 });
+		expect(attempts).toBe(1);
+
+		now += 30_000;
+		expect(await store.ingest([makeBucket('a.test', START)])).toEqual({ inserted: 1 });
+		expect(store.available).toBe(true);
+		expect(store.error).toBeNull();
+		expect(attempts).toBe(2);
+	});
+
+	test('a disabled store never loads DuckDB', async () => {
+		let loaded = false;
+		store = new TelemetryStore({
+			path: ':memory:',
+			disabledReason: 'standby',
+			loadDuckDb: async () => {
+				loaded = true;
+				return import('@duckdb/node-api');
+			},
+		});
+		await store.open();
+		expect(await store.ingest([makeBucket('a.test', START)])).toEqual({ inserted: 0 });
+		expect(loaded).toBe(false);
+		expect(store.available).toBe(false);
+		expect(store.error?.message).toContain('standby');
+	});
 });
