@@ -28,10 +28,10 @@ Commands:
   restore <name>               Bring it back from the trash
   purge <name>                 Permanently delete a trashed database and its data
   credentials <name>           Print the connection URL (--json for user, password, host, port)
-  restart <name>               Restart the database container (and its pooler)
+  restart <name>|--all         Restart a database (and its pooler) or every database
   rotate <name>                Rotate the owner password (--monitor for the monitor role)
   backups <name>               List backups and the last verified restore
-  backup <name>                Take a backup now (--pin keeps it past retention)
+  backup <name>|--all          Take a backup now (--pin keeps it past retention); --all backs up every database
   backup-delete <name> <id>    Delete one backup artifact
   restore-backup <name> <id>   Restore a backup into a new database (--as <new-name>)
   backup-policy <name>         Show or change the schedule and retention
@@ -90,7 +90,7 @@ const attachFlags: FlagSpec = {
 const detachFlags: FlagSpec = { ...baseFlags, project: { type: 'string', short: 'p' } };
 
 const confirmFlags: FlagSpec = { ...baseFlags, yes: { type: 'boolean', short: 'y' } };
-const backupsFlags: FlagSpec = { ...baseFlags, pin: { type: 'boolean' } };
+const backupsFlags: FlagSpec = { ...baseFlags, pin: { type: 'boolean' }, all: { type: 'boolean' } };
 const restoreBackupFlags: FlagSpec = {
 	...baseFlags,
 	as: { type: 'string' },
@@ -106,7 +106,7 @@ const backupPolicyFlags: FlagSpec = {
 	disable: { type: 'boolean' },
 };
 const rotateFlags: FlagSpec = { ...baseFlags, monitor: { type: 'boolean' } };
-const restartFlags: FlagSpec = { ...baseFlags, pooler: { type: 'boolean' } };
+const restartFlags: FlagSpec = { ...baseFlags, pooler: { type: 'boolean' }, all: { type: 'boolean' } };
 
 const subcommands: Record<string, (argv: string[]) => Promise<void>> = {
 	list: listDatabases,
@@ -376,6 +376,22 @@ async function showCredentials(argv: string[]): Promise<void> {
 }
 
 async function restartDatabase(argv: string[]): Promise<void> {
+	if (argv.includes('--all')) {
+		const args = parseArgs(argv, restartFlags);
+		if (args.boolean('help')) {
+			console.log(usage);
+			return;
+		}
+		const client = await authenticatedClient();
+		const { result, raw } = await client.restartServices({ scope: 'databases' });
+		if (args.boolean('json')) {
+			printJson(raw);
+			return;
+		}
+		console.log(`Restarting ${result.restarted.databases.length} database${result.restarted.databases.length === 1 ? '' : 's'}.`);
+		for (const item of result.skipped) console.log(`Skipped ${item.name}: ${item.reason}`);
+		return;
+	}
 	const parsed = parseNamed(argv, restartFlags, 'restart');
 	if (!parsed) return;
 	const { args, name } = parsed;
@@ -449,6 +465,22 @@ async function listBackups(argv: string[]): Promise<void> {
 }
 
 async function createBackup(argv: string[]): Promise<void> {
+	if (argv.includes('--all')) {
+		const args = parseArgs(argv, backupsFlags);
+		if (args.boolean('help')) {
+			console.log(usage);
+			return;
+		}
+		const client = await authenticatedClient();
+		const { result, raw } = await client.backupAllDatabases();
+		if (args.boolean('json')) {
+			printJson(raw);
+			return;
+		}
+		console.log(`Queued ${result.queued.length} database backup${result.queued.length === 1 ? '' : 's'}.`);
+		for (const item of result.skipped) console.log(`Skipped ${item.name}: ${item.reason}`);
+		return;
+	}
 	const parsed = parseNamed(argv, backupsFlags, 'backup');
 	if (!parsed) return;
 	const { args, name } = parsed;

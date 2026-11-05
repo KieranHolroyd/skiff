@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, gt, inArray, sql } from 'drizzle-orm';
-import { builds, logEvents, projects, workloads } from '@skiff/db';
+import { builds, databases, logEvents, projects, serviceLogEvents, storageInstances, workloads } from '@skiff/db';
 import {
 	levelForBuildLine,
 	requirePermission,
@@ -9,6 +9,10 @@ import {
 	type LogQuery,
 	type LogQueryResult,
 	type Principal,
+	type ServiceLogEvent,
+	type ServiceLogKind,
+	type ServiceLogQuery,
+	type ServiceLogQueryResult,
 	type RuntimeLogBatch,
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
@@ -88,8 +92,9 @@ export class LogService {
 			.where(eq(workloads.id, batch.workloadId))
 			.get();
 		// A workload may have moved or stopped between the helper read and this POST. Treat that as
-		// an empty, successful drain instead of failing the agent's loop.
-		if (!workload) return 0;
+		// an empty, successful drain instead of failing the agent's loop. Managed services are not
+		// in `workloads`; their ids (`st_…`, `db_…`) resolve to their own table.
+		if (!workload) return this.appendServiceRuntime(nodeId, batch);
 		if (workload.nodeId !== nodeId)
 			throw new CoreError(
 				'forbidden',
@@ -118,6 +123,146 @@ export class LogService {
 		}));
 		this.ctx.db.insert(logEvents).values(rows).run();
 		return rows.length;
+	}
+
+	/**
+	 * Store a drained batch for a managed service. Returns 0 for an unknown id (the unit may have
+	 * been removed between the read and the POST), and 403 if the node does not own it.
+	 */
+	private appendServiceRuntime(nodeId: string, batch: RuntimeLogBatch): number {
+		const storage = this.ctx.db
+			.select()
+			.from(storageInstances)
+			.where(eq(storageInstances.id, batch.workloadId))
+			.get();
+		const database = storage
+			? undefined
+			: this.ctx.db.select().from(databases).where(eq(databases.id, batch.workloadId)).get();
+		const service = storage ?? database;
+		if (!service) return 0;
+		if (service.nodeId !== nodeId)
+			throw new CoreError('forbidden', 'This service is placed on another node.', 403);
+		if (batch.lines.length === 0) return 0;
+		const kind: ServiceLogKind = storage ? 'storage' : 'database';
+		const now = this.ctx.now();
+		const rows = batch.lines.map((line) => ({
+			orgId: service.orgId,
+			kind,
+			serviceId: service.id,
+			nodeId,
+			source: 'runtime' as const,
+			stream: line.stream,
+			level: line.level,
+			message: sanitize(line.message),
+			ts: Number.isFinite(line.ts) ? Math.max(0, Number(line.ts)) : now,
+		}));
+		this.ctx.db.insert(serviceLogEvents).values(rows).run();
+		return rows.length;
+	}
+
+	/** A lifecycle breadcrumb in a managed service's own stream (restart, volume move, …). */
+	appendServiceSystem(input: {
+		kind: ServiceLogKind;
+		serviceId: string;
+		orgId: string;
+		nodeId?: string | null;
+		level?: LogLevel;
+		message: string;
+	}): void {
+		this.ctx.db
+			.insert(serviceLogEvents)
+			.values({
+				orgId: input.orgId,
+				kind: input.kind,
+				serviceId: input.serviceId,
+				nodeId: input.nodeId ?? null,
+				source: 'system',
+				stream: 'system',
+				level: input.level ?? 'info',
+				message: sanitize(input.message),
+				ts: this.ctx.now(),
+			})
+			.run();
+	}
+
+	/** Newest page or everything after a cursor, scoped to one managed service. */
+	queryService(
+		principal: Principal,
+		kind: ServiceLogKind,
+		serviceId: string,
+		input: ServiceLogQuery = {},
+	): ServiceLogQueryResult {
+		requirePermission(principal, 'logs:read');
+		const orgId =
+			kind === 'storage'
+				? this.ctx.db
+						.select({ orgId: storageInstances.orgId })
+						.from(storageInstances)
+						.where(eq(storageInstances.id, serviceId))
+						.get()?.orgId
+				: this.ctx.db
+						.select({ orgId: databases.orgId })
+						.from(databases)
+						.where(eq(databases.id, serviceId))
+						.get()?.orgId;
+		if (!orgId || orgId !== principal.orgId)
+			throw new CoreError('not_found', 'Service not found.', 404);
+
+		const requested = Number(input.limit ?? DEFAULT_LIMIT);
+		const limit = Number.isFinite(requested)
+			? Math.max(1, Math.min(Math.floor(requested), MAX_LIMIT))
+			: DEFAULT_LIMIT;
+		const conditions = [
+			eq(serviceLogEvents.orgId, principal.orgId),
+			eq(serviceLogEvents.kind, kind),
+			eq(serviceLogEvents.serviceId, serviceId),
+		];
+		if (input.level) {
+			const index = LEVEL_ORDER.indexOf(input.level);
+			conditions.push(inArray(serviceLogEvents.level, LEVEL_ORDER.slice(Math.max(0, index))));
+		}
+		const q = input.q?.trim();
+		if (q)
+			conditions.push(sql`instr(lower(${serviceLogEvents.message}), lower(${q.slice(0, 200)})) > 0`);
+
+		const after = input.after;
+		let rows: Array<typeof serviceLogEvents.$inferSelect>;
+		if (after !== undefined) {
+			rows = this.ctx.db
+				.select()
+				.from(serviceLogEvents)
+				.where(and(...conditions, gt(serviceLogEvents.seq, after)))
+				.orderBy(asc(serviceLogEvents.seq))
+				.limit(limit + 1)
+				.all();
+		} else {
+			rows = this.ctx.db
+				.select()
+				.from(serviceLogEvents)
+				.where(and(...conditions))
+				.orderBy(desc(serviceLogEvents.seq))
+				.limit(limit + 1)
+				.all()
+				.reverse();
+		}
+		const hasMore = rows.length > limit;
+		if (hasMore) rows = after !== undefined ? rows.slice(0, limit) : rows.slice(1);
+		return {
+			events: rows.map(
+				(row): ServiceLogEvent => ({
+					seq: row.seq,
+					ts: row.ts,
+					kind: row.kind,
+					serviceId: row.serviceId,
+					source: row.source,
+					stream: row.stream,
+					level: row.level,
+					message: row.message,
+				}),
+			),
+			cursor: rows.at(-1)?.seq ?? after ?? 0,
+			hasMore,
+		};
 	}
 
 	/** Lifecycle breadcrumb (queue recovery, drain notices) that belongs in the same stream. */
@@ -224,7 +369,14 @@ export class LogService {
 			'DELETE FROM log_events WHERE seq IN (SELECT seq FROM log_events ORDER BY seq DESC LIMIT -1 OFFSET ?)',
 			[MAX_ROWS],
 		);
-		return expired.changes + overflow.changes;
+		const expiredService = this.ctx.sqlite.run('DELETE FROM service_log_events WHERE ts < ?', [
+			now - retentionMs,
+		]);
+		const overflowService = this.ctx.sqlite.run(
+			'DELETE FROM service_log_events WHERE seq IN (SELECT seq FROM service_log_events ORDER BY seq DESC LIMIT -1 OFFSET ?)',
+			[MAX_ROWS],
+		);
+		return expired.changes + overflow.changes + expiredService.changes + overflowService.changes;
 	}
 }
 

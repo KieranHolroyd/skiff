@@ -68,7 +68,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		rangeLinks,
 		projects,
 		engine: storageEngineRegistry[storage.engine],
-		storageCan: storageCan(principal)
+		storageCan: storageCan(principal),
+		logsCanRead: hasPermission(principal, 'logs:read')
 	};
 };
 

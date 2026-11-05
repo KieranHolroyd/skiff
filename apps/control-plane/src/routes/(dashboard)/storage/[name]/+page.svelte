@@ -16,6 +16,7 @@
 	import PlugIcon from '@lucide/svelte/icons/plug';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
+	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
 	import SlidersHorizontalIcon from '@lucide/svelte/icons/sliders-horizontal';
 	import TerminalIcon from '@lucide/svelte/icons/terminal';
 	import TrashIcon from '@lucide/svelte/icons/trash';
@@ -363,6 +364,15 @@
 			</div>
 		{/snippet}
 		{#if !deleted}
+			{#if data.logsCanRead}
+				<Button
+					variant="outline"
+					href={resolve('/(dashboard)/storage/[name]/logs', { name: st.name })}
+				>
+					<ScrollTextIcon />
+					Logs
+				</Button>
+			{/if}
 			<Button
 				variant="outline"
 				href={resolve('/(dashboard)/storage/[name]/objects', { name: st.name })}

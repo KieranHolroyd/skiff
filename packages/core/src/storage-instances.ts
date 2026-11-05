@@ -433,6 +433,14 @@ export class StorageService {
 			})
 			.where(eq(storageInstances.id, row.id))
 			.run();
+		this.ctx.logs.appendServiceSystem({
+			kind: 'storage',
+			serviceId: row.id,
+			orgId: row.orgId,
+			nodeId: row.nodeId,
+			level: 'warn',
+			message: `Restart requested by ${principal.userId}.`,
+		});
 		this.ctx.audit.record({
 			principal,
 			action: 'storage.restart',

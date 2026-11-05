@@ -3,6 +3,7 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
+	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import DatabaseIcon from '@lucide/svelte/icons/database';
 	import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
 	import PlusIcon from '@lucide/svelte/icons/plus';
@@ -77,6 +78,30 @@
 		void runAction('?/restore', { name });
 	}
 
+	function restartAll(scope: 'databases' | 'all') {
+		askConfirm({
+			title: scope === 'all' ? 'Restart all services?' : 'Restart all databases?',
+			description:
+				scope === 'all'
+					? 'Every managed database and storage instance restarts. Apps lose their connections briefly and reconnect; data and credentials are kept.'
+					: 'Every managed database restarts, including its pooler. Apps lose their connections briefly and reconnect; data and credentials are kept.',
+			confirmLabel: 'Restart all',
+			tone: 'danger',
+			action: scope === 'all' ? '?/restart-all-services' : '?/restart-all'
+		});
+	}
+
+	function backupAll() {
+		askConfirm({
+			title: 'Back up all databases?',
+			description:
+				'Queues a logical backup for every database that is not already backing up. Dumps stream to the platform object store.',
+			confirmLabel: 'Back up all',
+			tone: 'default',
+			action: '?/backup-all'
+		});
+	}
+
 	function purge(name: string) {
 		askConfirm({
 			title: `Delete ${name} permanently?`,
@@ -107,6 +132,27 @@
 				<PlusIcon />
 				New database
 			</Button>
+		{/if}
+		{#if data.dbCan.update && !trashView}
+			<Button variant="outline" onclick={() => restartAll('all')}>
+				<RotateCcwIcon />
+				Restart all services
+			</Button>
+			<DropdownMenu.Root>
+				<DropdownMenu.Trigger>
+					{#snippet child({ props })}
+						<Button {...props} variant="ghost" size="icon-sm" aria-label="More bulk actions">
+							<ChevronDownIcon />
+						</Button>
+					{/snippet}
+				</DropdownMenu.Trigger>
+				<DropdownMenu.Content align="end" class="w-56">
+					<DropdownMenu.Item onSelect={() => restartAll('databases')}>
+						Restart all databases
+					</DropdownMenu.Item>
+					<DropdownMenu.Item onSelect={backupAll}>Back up all databases</DropdownMenu.Item>
+				</DropdownMenu.Content>
+			</DropdownMenu.Root>
 		{/if}
 	</PageHeader>
 

@@ -468,7 +468,7 @@ upgrade safety (06). Do not rebuild the shipped halves.
 | F1 | Contracts/schema/modules | merged — d92cfc0, 8 contract modules | feat/wave0-f1-contracts | |
 | F2 | Streaming ObjectStore | merged — 36a5634, 14 tests | feat/wave0-f2-streaming-objectstore | |
 | F3 | Debian 13 e2e | merged — 9642fef, 16 container checks | feat/wave0-f3-e2e | |
-| F4 | Scheduler primitive | merged — 0e39d76, migration renumbered to 0017 | feat/wave0-f4-scheduler | |
+| F4 | Scheduler primitive | merged — 0e39d76, migration renumbered to 0018 | feat/wave0-f4-scheduler | |
 | F5 | Flags/migrations | merged — f71c200, shipped-surface defaults corrected | feat/wave0-f5-flags | |
 
 Integration branch: `feat/wave0-foundations` at `e081f56`: 977 tests pass, `bun run check`

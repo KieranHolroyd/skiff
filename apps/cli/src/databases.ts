@@ -29,6 +29,22 @@ export interface DatabaseTableStat {
 	lastAutoanalyze: string | null;
 }
 
+export interface ServiceActionSkip {
+	kind: 'database' | 'storage';
+	name: string;
+	reason: string;
+}
+
+export interface ServiceRestartResult {
+	restarted: { databases: string[]; storage: string[] };
+	skipped: ServiceActionSkip[];
+}
+
+export interface DatabaseBackupAllResult {
+	queued: string[];
+	skipped: ServiceActionSkip[];
+}
+
 export interface DatabaseRotationView {
 	id: string;
 	databaseId: string;

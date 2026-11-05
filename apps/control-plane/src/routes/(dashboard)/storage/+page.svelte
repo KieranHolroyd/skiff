@@ -3,6 +3,7 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
+	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import CylinderIcon from '@lucide/svelte/icons/cylinder';
 	import EarthIcon from '@lucide/svelte/icons/earth';
 	import LockIcon from '@lucide/svelte/icons/lock';
@@ -97,6 +98,19 @@
 		void runAction('?/restore', { name });
 	}
 
+	function restartAll(scope: 'storage' | 'all') {
+		askConfirm({
+			title: scope === 'all' ? 'Restart all services?' : 'Restart all storage?',
+			description:
+				scope === 'all'
+					? 'Every managed storage instance and database restarts. S3 requests and app connections fail briefly; buckets, objects and keys are kept.'
+					: 'Every managed storage instance restarts. S3 requests fail briefly; buckets, objects and keys are kept.',
+			confirmLabel: 'Restart all',
+			tone: 'danger',
+			action: scope === 'all' ? '?/restart-all-services' : '?/restart-all'
+		});
+	}
+
 	function purge(name: string) {
 		askConfirm({
 			title: `Delete ${name} permanently?`,
@@ -127,6 +141,26 @@
 				<PlusIcon />
 				New storage
 			</Button>
+		{/if}
+		{#if data.storageCan.update && !trashView}
+			<Button variant="outline" onclick={() => restartAll('all')}>
+				<RotateCcwIcon />
+				Restart all services
+			</Button>
+			<DropdownMenu.Root>
+				<DropdownMenu.Trigger>
+					{#snippet child({ props })}
+						<Button {...props} variant="ghost" size="icon-sm" aria-label="More bulk actions">
+							<ChevronDownIcon />
+						</Button>
+					{/snippet}
+				</DropdownMenu.Trigger>
+				<DropdownMenu.Content align="end" class="w-56">
+					<DropdownMenu.Item onSelect={() => restartAll('storage')}>
+						Restart all storage
+					</DropdownMenu.Item>
+				</DropdownMenu.Content>
+			</DropdownMenu.Root>
 		{/if}
 	</PageHeader>
 

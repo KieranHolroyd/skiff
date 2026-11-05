@@ -95,6 +95,7 @@
 - [x] PgBouncer transaction pooler sidecar with `<PREFIX>_POOL_URL` (D85)
 - [x] Owner/monitor credential rotation with node-side `ALTER ROLE` and verified swap (D86)
 - [x] Restart controls for the database (container + pooler) and the pooler alone (D87)
+- [x] Bulk actions: restart all services/databases/storage and back up all databases
 - [ ] TLS in transit with a per-node CA and `sslmode=require` URLs
 - [ ] On-demand SQL console (pgweb or Adminer) behind `platform` access (D60)
 - [ ] Database metrics in the Parquet archive; bulk actions and prune for databases; `restore_database` over MCP
@@ -109,6 +110,8 @@
 - [x] Stats: agent sampler → telemetry → DuckDB `storage_metrics_1m/1h`, bucket snapshots, `/metrics`, disk alert (D68)
 - [x] REST, MCP, CLI (`skif storage`), dashboard list/detail/charts/buckets/attach
 - [x] Explicit restart control: dashboard, REST (`POST /storage/:name/restart`), `skif storage restart`, MCP `restart_storage` (D82)
+- [x] RustFS logs: agent journal drain → `service_log_events`, live dashboard tail, `GET /storage/:name/logs`, `skif storage logs --follow`, MCP `get_storage_logs`
+- [ ] Database logs surface (the drain and storage are shared; only the UI/API are missing)
 - [x] Control-plane object browser: list, upload, download, delete, folder markers, presigned links for public instances, REST + dashboard + `skif storage objects` (D82)
 - [x] MCP object tools: `list_objects`, `presign_object`, `create_object_folder`
 - [ ] Object delete over MCP (confirmed) and bulk folder delete in the dashboard

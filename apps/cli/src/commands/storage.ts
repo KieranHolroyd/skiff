@@ -32,7 +32,7 @@ Commands:
   create <name>                  Create an S3-compatible storage instance (RustFS)
   info <name>                    Status, node, endpoints, usage, buckets and attached projects
   update <name>                  Change limits, version or public access
-  restart <name>                 Restart the RustFS container (buckets and objects are kept)
+  restart <name>|--all           Restart the RustFS container (buckets and objects are kept)
   delete <name>                  Move it to the trash (restorable for 7 days)
   restore <name>                 Bring it back from the trash
   purge <name>                   Permanently delete a trashed instance and its objects
@@ -100,6 +100,7 @@ const baseFlags: FlagSpec = {
 };
 
 const listFlags: FlagSpec = { ...baseFlags, all: { type: 'boolean', short: 'a' } };
+const restartFlags: FlagSpec = { ...baseFlags, all: { type: 'boolean' } };
 
 const createFlags: FlagSpec = {
 	...baseFlags,
@@ -166,6 +167,7 @@ const subcommands: Record<string, (argv: string[]) => Promise<void>> = {
 	update: updateStorage,
 	set: updateStorage,
 	restart: restartStorage,
+	logs: storageLogs,
 	delete: deleteStorage,
 	rm: deleteStorage,
 	restore: restoreStorage,
@@ -333,7 +335,25 @@ async function updateStorage(argv: string[]): Promise<void> {
 }
 
 async function restartStorage(argv: string[]): Promise<void> {
-	const parsed = parseNamed(argv, baseFlags, 'restart');
+	if (argv.includes('--all')) {
+		const args = parseArgs(argv, restartFlags);
+		if (args.boolean('help')) {
+			console.log(usage);
+			return;
+		}
+		const client = await authenticatedClient();
+		const { result, raw } = await client.restartServices({ scope: 'storage' });
+		if (args.boolean('json')) {
+			printJson(raw);
+			return;
+		}
+		console.log(
+			`Restarting ${result.restarted.storage.length} storage instance${result.restarted.storage.length === 1 ? '' : 's'}.`,
+		);
+		for (const item of result.skipped) console.log(`Skipped ${item.name}: ${item.reason}`);
+		return;
+	}
+	const parsed = parseNamed(argv, restartFlags, 'restart');
 	if (!parsed) return;
 	const { args, name } = parsed;
 	const client = await authenticatedClient();
@@ -345,6 +365,59 @@ async function restartStorage(argv: string[]): Promise<void> {
 	console.log(
 		`Restarting "${name}" on node ${nodeLabel(storage)}. S3 requests fail briefly; buckets, objects and keys are kept.`,
 	);
+}
+
+const logsFlags: FlagSpec = {
+	...baseFlags,
+	follow: { type: 'boolean', short: 'f' },
+	limit: { type: 'string' },
+	level: { type: 'string' },
+	q: { type: 'string' },
+	after: { type: 'string' },
+};
+
+async function storageLogs(argv: string[]): Promise<void> {
+	const parsed = parseNamed(argv, logsFlags, 'logs');
+	if (!parsed) return;
+	const { args, name } = parsed;
+	const client = await authenticatedClient();
+	const level = args.string('level');
+	if (level && !['debug', 'info', 'warn', 'error'].includes(level))
+		throw new UsageError('--level must be debug, info, warn or error.');
+	const limit = args.string('limit') ? Number(args.string('limit')) : undefined;
+	if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 2000))
+		throw new UsageError('--limit must be a whole number between 1 and 2000.');
+	const after = args.string('after') ? Number(args.string('after')) : undefined;
+	const follow = args.boolean('follow');
+	let cursor = after;
+	let first = true;
+
+	do {
+		const page = await client.storageLogs(name, {
+			...(cursor !== undefined ? { after: cursor } : {}),
+			limit: limit ?? (follow ? 200 : 500),
+			...(level ? { level } : {}),
+			...(args.string('q') ? { q: args.string('q') } : {}),
+		});
+		if (args.boolean('json') && !follow) {
+			printJson(page.raw);
+			return;
+		}
+		if (page.events.length > 0) {
+			if (!first && follow) console.log('---');
+			for (const event of page.events) {
+				const time = new Date(event.ts).toISOString().slice(11, 19);
+				console.log(`${time} ${event.level.toUpperCase().padEnd(5)} ${event.message}`);
+			}
+			first = false;
+		} else if (!follow) {
+			console.log(`No logs for "${name}" yet.`);
+			return;
+		}
+		cursor = page.cursor;
+		if (!follow) return;
+		await Bun.sleep(2_000);
+	} while (follow);
 }
 
 async function deleteStorage(argv: string[]): Promise<void> {

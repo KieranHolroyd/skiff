@@ -719,6 +719,30 @@ export const logEvents = sqliteTable(
 	],
 );
 
+/**
+ * Runtime logs for managed services (docs/OBJECT-STORAGE.md, docs/DATABASES.md). Separate from
+ * `log_events` because a managed service is an org resource with no project/deployment.
+ */
+export const serviceLogEvents = sqliteTable(
+	'service_log_events',
+	{
+		seq: integer('seq').primaryKey({ autoIncrement: true }),
+		orgId: text('org_id').notNull(),
+		kind: text('kind', { enum: ['storage', 'database'] }).notNull(),
+		serviceId: text('service_id').notNull(),
+		nodeId: text('node_id'),
+		source: text('source', { enum: ['runtime', 'system'] }).notNull().default('runtime'),
+		stream: text('stream', { enum: ['stdout', 'stderr', 'system'] }).notNull().default('stdout'),
+		level: text('level', { enum: ['debug', 'info', 'warn', 'error'] }).notNull().default('info'),
+		message: text('message').notNull(),
+		ts: integer('ts').notNull(),
+	},
+	(t) => [
+		index('service_log_events_service_seq_idx').on(t.kind, t.serviceId, t.seq),
+		index('service_log_events_ts_idx').on(t.ts),
+	],
+);
+
 export const auditLog = sqliteTable(
 	'audit_log',
 	{

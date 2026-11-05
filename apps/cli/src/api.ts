@@ -11,11 +11,13 @@ import { platformOrigin } from './config.ts';
 import { ApiError, CliError } from './errors.ts';
 import type {
 	DatabaseAttachmentView,
+	DatabaseBackupAllResult,
 	DatabaseBackupView,
 	DatabaseCreateInput,
 	DatabaseCredentials,
 	DatabaseRotationView,
 	DatabaseView,
+	ServiceRestartResult,
 } from './databases.ts';
 import type {
 	StorageAttachmentView,
@@ -622,6 +624,20 @@ export class ApiClient {
 		return { database: databaseFrom(raw), raw };
 	}
 
+	async restartServices(input: {
+		scope?: 'all' | 'databases' | 'storage';
+		databases?: string[];
+		storage?: string[];
+	}): Promise<{ result: ServiceRestartResult; raw: unknown }> {
+		const raw = await this.request('POST', '/api/v1/services/restart', { body: input });
+		return { result: raw as ServiceRestartResult, raw };
+	}
+
+	async backupAllDatabases(): Promise<{ result: DatabaseBackupAllResult; raw: unknown }> {
+		const raw = await this.request('POST', '/api/v1/services/backup-databases', { body: {} });
+		return { result: raw as DatabaseBackupAllResult, raw };
+	}
+
 	async restartDatabase(
 		name: string,
 		target: 'database' | 'pooler',
@@ -704,6 +720,36 @@ export class ApiClient {
 	async createStorage(input: StorageCreateInput): Promise<{ storage: StorageView; raw: unknown }> {
 		const raw = await this.request('POST', '/api/v1/storage', { body: input });
 		return { storage: storageFrom(raw), raw };
+	}
+
+	async storageLogs(
+		name: string,
+		options: { after?: number; limit?: number; level?: string; q?: string } = {},
+	): Promise<{ events: Array<{ seq: number; ts: number; level: string; stream: string; message: string }>; cursor: number; hasMore: boolean; raw: unknown }> {
+		const params = new URLSearchParams();
+		if (options.after !== undefined) params.set('after', String(options.after));
+		if (options.limit !== undefined) params.set('limit', String(options.limit));
+		if (options.level) params.set('level', options.level);
+		if (options.q) params.set('q', options.q);
+		const query = params.size > 0 ? `?${params.toString()}` : '';
+		const raw = await this.request('GET', `/api/v1/storage/${encodeURIComponent(name)}/logs${query}`);
+		const record = asRecord(raw);
+		const events = (asArray(record?.events) ?? []).map((value) => {
+			const event = asRecord(value) ?? {};
+			return {
+				seq: numberValue(event.seq) ?? 0,
+				ts: numberValue(event.ts) ?? 0,
+				level: stringValue(event.level) ?? 'info',
+				stream: stringValue(event.stream) ?? 'stdout',
+				message: stringValue(event.message) ?? '',
+			};
+		});
+		return {
+			events,
+			cursor: numberValue(record?.cursor) ?? 0,
+			hasMore: record?.hasMore === true,
+			raw,
+		};
 	}
 
 	async restartStorage(name: string): Promise<{ storage: StorageView; raw: unknown }> {
