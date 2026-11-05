@@ -215,7 +215,8 @@
 	let slowStart = $state(false);
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-	const consolePath = $derived(live?.path || studioPath(db.name));
+	// The trailing slash matters: DBGate resolves its assets relative to the studio root.
+	const consolePath = $derived(live?.path || `${studioPath(db.name)}/`);
 	const frameKey = $derived(`${consolePath}:${live?.readOnly}:${live?.status}`);
 
 	$effect(() => {

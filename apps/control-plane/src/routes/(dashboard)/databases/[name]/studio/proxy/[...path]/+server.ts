@@ -8,6 +8,14 @@ import { rewriteStudioLocation, studioUpstreamPath } from '../../../_lib/studio.
  * DBGate's per-session HTTP Basic password is injected here and never reaches the browser.
  */
 
+/**
+ * DBGate's index.html loads its bundle and styles with relative URLs (`build/bundle.js`), so the
+ * studio root must be served as `…/studio/proxy/`. SvelteKit's default (`never`) 308s that to
+ * `…/studio/proxy`, the assets then resolve outside the proxy, and DBGate never leaves its loading
+ * screen. Keep the slash as requested; the handler adds it to a bare root.
+ */
+export const trailingSlash = 'ignore';
+
 /** Headers DBGate needs to answer the request. Everything else stays on the platform origin. */
 const FORWARD_REQUEST_HEADERS = [
 	'content-type',
@@ -45,6 +53,14 @@ const proxy: RequestHandler = (event) =>
 			return new Response('Bad request', {
 				status: 400,
 				headers: { 'content-type': 'text/plain; charset=utf-8' }
+			});
+		}
+
+		// The studio root must end in `/` for DBGate's relative asset URLs (see `trailingSlash`).
+		if (rest === '' && !event.url.pathname.endsWith('/')) {
+			return new Response(null, {
+				status: 308,
+				headers: { location: `${event.url.pathname}/${event.url.search}` }
 			});
 		}
 
