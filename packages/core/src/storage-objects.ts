@@ -1,5 +1,5 @@
 import { and, eq } from 'drizzle-orm';
-import { storageBuckets } from '@skiff/db';
+import { storageBuckets, storageInstances, storageShareLinks } from '@skiff/db';
 import {
 	STORAGE_REGION,
 	requirePermission,
@@ -11,11 +11,15 @@ import {
 	type StorageObjectList,
 	type StorageObjectStat,
 	type StoragePresign,
+	type StorageShareLink,
+	type StorageShareLinkRequest,
 } from '@skiff/contracts';
+import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, CoreError, NotFoundError } from './errors.ts';
 import type { StorageRow } from './storage-instances.ts';
 import { S3Client, presignPublicUrl } from './storage-s3.ts';
+import { newId, randomToken, sha256Hex } from './util.ts';
 
 type BucketRow = typeof storageBuckets.$inferSelect;
 
@@ -227,5 +231,149 @@ export class StorageObjectsService {
 			secretAccessKey: this.ctx.secrets.open(row.orgId, row.rootSecret),
 		});
 		return { url, method: input.method, expiresIn: input.expiresIn };
+	}
+
+	/**
+	 * Mint a share link. The URL carries a signature (public S3) or an opaque platform token
+	 * (private, or when a download limit has to be counted); neither ever carries a key.
+	 */
+	async share(
+		principal: Principal,
+		name: string,
+		bucket: string,
+		input: StorageShareLinkRequest,
+	): Promise<StorageShareLink> {
+		requirePermission(principal, input.method === 'PUT' ? 'storage:update' : 'storage:read');
+		if (!featureEnabled(this.ctx.config, 'OBJECT_BROWSER'))
+			throw new CoreError('feature_disabled', 'Share links need the OBJECT_BROWSER feature.', 403);
+		if (input.method === 'PUT' && input.maxDownloads !== undefined)
+			throw new CoreError('validation', 'A download limit only applies to GET links.', 422);
+		const row = this.ctx.storage.requireRow(principal, name);
+		this.bucket(row, bucket);
+		const now = this.ctx.now();
+		const expiresAt = now + input.expiresIn * 1000;
+		const token = randomToken(32);
+		const direct = Boolean(row.public && row.publicHost && input.maxDownloads === undefined);
+		let url: string;
+		if (direct) {
+			url = await presignPublicUrl({
+				endpoint: `https://${row.publicHost}`,
+				bucket,
+				key: input.key,
+				method: input.method,
+				expiresIn: input.expiresIn,
+				accessKeyId: row.rootAccessKey,
+				secretAccessKey: this.ctx.secrets.open(row.orgId, row.rootSecret),
+			});
+		} else {
+			url = `${this.ctx.config.platformOrigin}/share/storage/${token}`;
+		}
+		this.ctx.db
+			.insert(storageShareLinks)
+			.values({
+				id: newId('ssl_'),
+				orgId: row.orgId,
+				storageId: row.id,
+				bucket,
+				key: input.key,
+				method: input.method,
+				tokenHash: sha256Hex(token),
+				expiresAt,
+				maxDownloads: input.maxDownloads ?? null,
+				createdBy: principal.userId,
+				createdAt: now,
+			})
+			.run();
+		this.ctx.audit.record({
+			principal,
+			action: 'storage.share.create',
+			resource: 'storage',
+			resourceId: row.id,
+			args: {
+				name,
+				bucket,
+				key: input.key,
+				method: input.method,
+				expiresIn: input.expiresIn,
+				maxDownloads: input.maxDownloads ?? null,
+				direct,
+			},
+			result: 'ok',
+		});
+		this.ctx.projects.bump(principal.orgId);
+		return {
+			url,
+			method: input.method,
+			expiresIn: input.expiresIn,
+			expiresAt: new Date(expiresAt).toISOString(),
+			maxDownloads: input.maxDownloads ?? null,
+			direct,
+		};
+	}
+
+	/**
+	 * Redeem a platform share token. Only GET and PUT are proxied, only to the signed key/bucket,
+	 * and GET download limits are enforced atomically before the object is read. No key crosses
+	 * this boundary.
+	 */
+	async redeem(token: string, request: Request): Promise<Response> {
+		const method = request.method;
+		if (method !== 'GET' && method !== 'PUT')
+			throw new CoreError('method_not_allowed', 'Share links support GET and PUT only.', 405);
+		const link = this.ctx.db
+			.select()
+			.from(storageShareLinks)
+			.where(eq(storageShareLinks.tokenHash, sha256Hex(token)))
+			.get();
+		if (!link) throw new NotFoundError('Share link');
+		if (link.revokedAt || link.expiresAt <= this.ctx.now())
+			throw new CoreError('share_expired', 'This share link has expired or was revoked.', 410);
+		if (link.method !== method)
+			throw new CoreError('method_not_allowed', `This share link is for ${link.method} requests only.`, 405);
+		if (method === 'GET' && link.maxDownloads !== null) {
+			const result = this.ctx.sqlite.run(
+				'UPDATE storage_share_links SET downloads = downloads + 1 WHERE id = ? AND downloads < max_downloads',
+				[link.id],
+			);
+			if (result.changes === 0)
+				throw new CoreError('share_limit', 'This share link reached its download limit.', 410);
+		}
+		const row = this.ctx.db
+			.select()
+			.from(storageInstances)
+			.where(eq(storageInstances.id, link.storageId))
+			.get();
+		if (!row || row.deletedAt) throw new NotFoundError('Share link storage');
+		const bucket = this.ctx.db
+			.select()
+			.from(storageBuckets)
+			.where(and(eq(storageBuckets.storageId, row.id), eq(storageBuckets.name, link.bucket)))
+			.get();
+		if (!bucket || bucket.deleteRequestedAt) throw new NotFoundError('Share link bucket');
+		const client = this.client(row);
+		if (method === 'GET') {
+			const response = await client.getObject(link.bucket, link.key);
+			const headers = new Headers(response.headers);
+			headers.set('x-content-type-options', 'nosniff');
+			headers.set('cache-control', 'private, no-store');
+			return new Response(response.body, { status: response.status, headers });
+		}
+		const declared = Number(request.headers.get('content-length') ?? '');
+		const max = this.limit();
+		if (Number.isFinite(declared) && declared > max)
+			throw new CoreError('payload_too_large', `Share uploads are limited to ${formatLimit(max)}.`, 413);
+		const body = new Uint8Array(await request.arrayBuffer());
+		if (body.byteLength > max)
+			throw new CoreError('payload_too_large', `Share uploads are limited to ${formatLimit(max)}.`, 413);
+		const result = await client.putObject(
+			link.bucket,
+			link.key,
+			body,
+			request.headers.get('content-type') || 'application/octet-stream',
+		);
+		return new Response(JSON.stringify({ key: link.key, etag: result.etag, sizeBytes: body.byteLength }), {
+			status: 200,
+			headers: { 'content-type': 'application/json; charset=utf-8' },
+		});
 	}
 }

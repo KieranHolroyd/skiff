@@ -22,11 +22,15 @@ import {
 	storagePublicHost,
 	storageUpdateSchema,
 	type BucketCreate,
+	type BucketLifecycleRule,
+	type BucketCorsRule,
+	type BucketObjectLock,
 	type BucketUpdate,
 	type Principal,
 	type StorageAttach,
 	type StorageAttachmentUpdate,
 	type StorageAttachmentView,
+	type StorageBucketConfigReport,
 	type StorageBucketDeletion,
 	type StorageBucketSnapshot,
 	type StorageBucketView,
@@ -44,6 +48,7 @@ import {
 	type WorkloadRuntime,
 	type WorkloadStatus,
 } from '@skiff/contracts';
+import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { resolvePlacement } from './placement.ts';
@@ -209,7 +214,7 @@ export class StorageService {
 					updatedAt: now,
 				})
 				.run();
-			for (const bucket of input.buckets) this.insertBucket(principal, id, bucket, 'private');
+			for (const bucket of input.buckets) this.insertBucket(principal, id, { name: bucket });
 			if (project)
 				this.insertAttachment(
 					principal,
@@ -458,13 +463,21 @@ export class StorageService {
 	createBucket(principal: Principal, name: string, raw: BucketCreate): StorageBucketView {
 		requirePermission(principal, 'storage:update');
 		const input = bucketCreateSchema.parse(raw);
+		this.assertBucketConfigFlag(input);
 		const row = this.requireRow(principal, name);
 		const existing = this.bucketRow(row.id, input.name);
 		// Re-creating a bucket whose delete was blocked (not empty) cancels that delete.
 		if (existing?.deleteRequestedAt && existing.deleteBlocked && !existing.deleteForce) {
 			this.ctx.db
 				.update(storageBuckets)
-				.set({ deleteRequestedAt: null, deleteBlocked: false, access: input.access })
+				.set({
+					deleteRequestedAt: null,
+					deleteBlocked: false,
+					access: input.access,
+					configVersion: existing.configVersion + 1,
+					configStatus: 'pending',
+					configMessage: null,
+				})
 				.where(eq(storageBuckets.id, existing.id))
 				.run();
 			this.ctx.projects.bump(principal.orgId);
@@ -477,31 +490,79 @@ export class StorageService {
 					: `Bucket "${input.name}" already exists in "${name}".`,
 			);
 		if (this.liveBuckets(row.id).length >= 200) throw new ValidationError('A storage instance holds at most 200 buckets.');
-		this.insertBucket(principal, row.id, input.name, input.access);
+		this.insertBucket(principal, row.id, input);
 		this.ctx.audit.record({
 			principal,
 			action: 'storage.bucket.create',
 			resource: 'storage',
 			resourceId: row.id,
-			args: { name, bucket: input.name, access: input.access },
+			args: {
+				name,
+				bucket: input.name,
+				access: input.access,
+				versioning: input.versioning,
+				lifecycle: input.lifecycle,
+				cors: input.cors,
+				quotaBytes: input.quotaBytes,
+				objectLock: input.objectLock,
+			},
 			result: 'ok',
 		});
 		this.ctx.projects.bump(principal.orgId);
 		return bucketView(this.bucketRow(row.id, input.name)!);
 	}
 
+	/** The desired configuration for one bucket, including the last convergence report. */
+	getBucketConfig(principal: Principal, name: string, bucket: string): StorageBucketView {
+		requirePermission(principal, 'storage:read');
+		const row = this.requireRow(principal, name);
+		return bucketView(this.requireBucket(row, bucket));
+	}
+
 	updateBucket(principal: Principal, name: string, bucket: string, raw: BucketUpdate): StorageBucketView {
 		requirePermission(principal, 'storage:update');
 		const input = bucketUpdateSchema.parse(raw);
+		this.assertBucketConfigFlag(input);
 		const row = this.requireRow(principal, name);
 		const target = this.requireBucket(row, bucket);
-		this.ctx.db.update(storageBuckets).set({ access: input.access }).where(eq(storageBuckets.id, target.id)).run();
+		const objectLock = parseObjectLock(target.objectLockJson);
+		if (objectLock && input.versioning === false)
+			throw new ValidationError(
+				`Bucket "${bucket}" has object lock; versioning cannot be suspended while retention is configured.`,
+			);
+		const set: Partial<typeof storageBuckets.$inferInsert> = {};
+		let changed = false;
+		if (input.access !== undefined && input.access !== target.access) {
+			set.access = input.access;
+			changed = true;
+		}
+		if (input.versioning !== undefined && input.versioning !== target.versioning) {
+			set.versioning = input.versioning;
+			changed = true;
+		}
+		if (input.lifecycle !== undefined) {
+			set.lifecycleJson = JSON.stringify(input.lifecycle);
+			changed ||= JSON.stringify(input.lifecycle) !== target.lifecycleJson;
+		}
+		if (input.cors !== undefined) {
+			set.corsJson = JSON.stringify(input.cors);
+			changed ||= JSON.stringify(input.cors) !== target.corsJson;
+		}
+		if (input.quotaBytes !== undefined && input.quotaBytes !== target.quotaBytes) {
+			set.quotaBytes = input.quotaBytes;
+			changed = true;
+		}
+		if (!changed) return bucketView(target);
+		set.configVersion = target.configVersion + 1;
+		set.configStatus = 'pending';
+		set.configMessage = null;
+		this.ctx.db.update(storageBuckets).set(set).where(eq(storageBuckets.id, target.id)).run();
 		this.ctx.audit.record({
 			principal,
 			action: 'storage.bucket.update',
 			resource: 'storage',
 			resourceId: row.id,
-			args: { name, bucket, access: input.access },
+			args: { name, bucket, ...input },
 			result: 'ok',
 		});
 		this.ctx.projects.bump(principal.orgId);
@@ -744,9 +805,18 @@ export class StorageService {
 					objectStorage: {
 						engine: row.engine,
 						version: row.version,
-						buckets: buckets
+							buckets: buckets
 							.filter((bucket) => !bucket.deleteRequestedAt)
-							.map((bucket) => ({ name: bucket.name, access: bucket.access })),
+							.map((bucket) => ({
+								name: bucket.name,
+								access: bucket.access,
+								versioning: bucket.versioning,
+								lifecycle: parseJson<BucketLifecycleRule[]>(bucket.lifecycleJson, []),
+								cors: parseJson<BucketCorsRule[]>(bucket.corsJson, []),
+								quotaBytes: bucket.quotaBytes,
+								objectLock: parseObjectLock(bucket.objectLockJson),
+								configVersion: bucket.configVersion,
+							})),
 						users,
 						deleteBuckets: buckets
 							.filter((bucket) => bucket.deleteRequestedAt && (!bucket.deleteBlocked || bucket.deleteForce))
@@ -914,6 +984,37 @@ export class StorageService {
 			} else {
 				this.ctx.db.update(storageBuckets).set({ deleteBlocked: true }).where(eq(storageBuckets.id, bucket.id)).run();
 			}
+		}
+		if (changed) this.ctx.projects.bump();
+	}
+
+	/**
+	 * Convergence reports from a node. A report is only accepted for the current `config_version`;
+	 * a stale report from a previous desired state must not mark a newer change as applied.
+	 */
+	applyBucketConfigReports(nodeId: string, reports: StorageBucketConfigReport[]): void {
+		let changed = false;
+		for (const report of reports) {
+			const row = this.rowById(report.storageId);
+			if (!row || row.nodeId !== nodeId) continue;
+			const bucket = this.bucketRow(row.id, report.bucket);
+			if (!bucket || bucket.configVersion !== report.configVersion) continue;
+			if (
+				bucket.configStatus === report.status &&
+				bucket.configMessage === report.message &&
+				(report.status !== 'converged' || bucket.lastConvergedAt !== null)
+			)
+				continue;
+			this.ctx.db
+				.update(storageBuckets)
+				.set({
+					configStatus: report.status,
+					configMessage: report.message,
+					...(report.status === 'converged' ? { lastConvergedAt: this.ctx.now() } : {}),
+				})
+				.where(eq(storageBuckets.id, bucket.id))
+				.run();
+			changed = true;
 		}
 		if (changed) this.ctx.projects.bump();
 	}
@@ -1124,19 +1225,44 @@ export class StorageService {
 			.sort((a, b) => a.name.localeCompare(b.name));
 	}
 
-	private insertBucket(principal: Principal, storageId: string, name: string, access: 'private' | 'public-read'): void {
+	private insertBucket(principal: Principal, storageId: string, input: BucketCreate): void {
 		this.ctx.db
 			.insert(storageBuckets)
 			.values({
 				id: newId('stb_'),
 				orgId: principal.orgId,
 				storageId,
-				name,
-				access,
+				name: input.name,
+				access: input.access ?? 'private',
+				versioning: input.versioning ?? false,
+				lifecycleJson: JSON.stringify(input.lifecycle ?? []),
+				corsJson: JSON.stringify(input.cors ?? []),
+				quotaBytes: input.quotaBytes ?? null,
+				objectLockJson: input.objectLock ? JSON.stringify(input.objectLock) : null,
+				configVersion: 1,
+				configStatus: 'pending',
 				createdBy: principal.userId,
 				createdAt: this.ctx.now(),
 			})
 			.run();
+	}
+
+	/** New bucket configuration mutations are gated by the shipped object-browser flag. */
+	private assertBucketConfigFlag(input: unknown): void {
+		if (featureEnabled(this.ctx.config, 'OBJECT_BROWSER')) return;
+		const record = input as Record<string, unknown>;
+		const hasConfig =
+			record.versioning === true ||
+			(Array.isArray(record.lifecycle) && record.lifecycle.length > 0) ||
+			(Array.isArray(record.cors) && record.cors.length > 0) ||
+			(record.quotaBytes !== undefined && record.quotaBytes !== null) ||
+			record.objectLock !== undefined;
+		if (hasConfig)
+			throw new CoreError(
+				'feature_disabled',
+				'Bucket configuration needs the OBJECT_BROWSER feature. Enable SKIFF_FEATURE_OBJECT_BROWSER first.',
+				403,
+			);
 	}
 
 	private insertAttachment(
@@ -1285,12 +1411,25 @@ function bucketView(row: StorageBucketRow): StorageBucketView {
 	return {
 		name: row.name,
 		access: row.access,
+		versioning: row.versioning,
+		lifecycle: parseJson<BucketLifecycleRule[]>(row.lifecycleJson, []),
+		cors: parseJson<BucketCorsRule[]>(row.corsJson, []),
+		quotaBytes: row.quotaBytes,
+		objectLock: parseObjectLock(row.objectLockJson),
+		configVersion: row.configVersion,
+		configStatus: row.configStatus,
+		configMessage: row.configMessage,
+		lastConvergedAt: row.lastConvergedAt ? new Date(row.lastConvergedAt).toISOString() : null,
 		state: !row.deleteRequestedAt ? 'ready' : row.deleteBlocked && !row.deleteForce ? 'delete-blocked' : 'deleting',
 		sizeBytes: row.sizeBytes,
 		objects: row.objects,
 		createdAt: new Date(row.createdAt).toISOString(),
 		statsAt: row.statsAt ? new Date(row.statsAt).toISOString() : null,
 	};
+}
+
+function parseObjectLock(json: string | null): BucketObjectLock | null {
+	return json ? parseJson<BucketObjectLock | null>(json, null) : null;
 }
 
 function parseGrants(json: string): StorageGrant[] {

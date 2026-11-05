@@ -78,6 +78,90 @@ export const bucketNameSchema = z
 export const bucketAccesses = ['private', 'public-read'] as const;
 export type BucketAccess = (typeof bucketAccesses)[number];
 
+/** SigV4 caps a presigned URL's lifetime at seven days. */
+export const STORAGE_SHARE_MAX_TTL_SECONDS = 604_800;
+
+/** One lifecycle rule. At least one action is required; noncurrent expiry needs versioning. */
+export const bucketLifecycleRuleSchema = z
+	.object({
+		id: z.string().min(1).max(255),
+		prefix: z.string().max(1024).optional(),
+		/** Expire the current object version after this many days. */
+		expireDays: z.number().int().min(1).max(36_500).optional(),
+		/** Expire noncurrent versions after this many days (versioned buckets only). */
+		noncurrentExpireDays: z.number().int().min(1).max(36_500).optional(),
+		/** Abort incomplete multipart uploads after this many days. */
+		abortIncompleteDays: z.number().int().min(1).max(36_500).optional(),
+		enabled: z.boolean().default(true),
+	})
+	.superRefine((rule, ctx) => {
+		if (rule.expireDays === undefined && rule.noncurrentExpireDays === undefined && rule.abortIncompleteDays === undefined)
+			ctx.addIssue({ code: 'custom', message: 'A lifecycle rule needs at least one action (expireDays, noncurrentExpireDays or abortIncompleteDays).' });
+	});
+export type BucketLifecycleRule = z.infer<typeof bucketLifecycleRuleSchema>;
+
+export const bucketCorsMethods = ['GET', 'PUT', 'POST', 'DELETE', 'HEAD'] as const;
+export type BucketCorsMethod = (typeof bucketCorsMethods)[number];
+
+/** One CORS rule (RustFS stores these as S3 CORS rules). */
+export const bucketCorsRuleSchema = z.object({
+	origin: z.array(z.string().min(1).max(255)).min(1).max(20),
+	method: z.array(z.enum(bucketCorsMethods)).min(1).max(bucketCorsMethods.length),
+	header: z.array(z.string().min(1).max(255)).max(50).default([]),
+	expose: z.array(z.string().min(1).max(255)).max(50).default([]),
+	maxAge: z.number().int().min(0).max(86_400).optional(),
+});
+export type BucketCorsRule = z.infer<typeof bucketCorsRuleSchema>;
+
+/** Object lock is enabled only when the bucket is created and cannot be undone. */
+export const bucketObjectLockSchema = z.object({
+	mode: z.enum(['governance', 'compliance']),
+	retainDays: z.number().int().min(1).max(36_500),
+});
+export type BucketObjectLock = z.infer<typeof bucketObjectLockSchema>;
+
+/** A hard byte cap; null means unlimited. */
+export const bucketQuotaSchema = z.number().int().min(1).max(10_485_760 * 1024 * 1024).nullable();
+
+const bucketLifecycleSchema = z.array(bucketLifecycleRuleSchema).max(100).default([]);
+const bucketCorsSchema = z.array(bucketCorsRuleSchema).max(100).default([]);
+
+/** Validate the cross-field rules shared by bucket create and update. */
+function refineBucketConfig(
+	input: {
+		versioning?: boolean;
+		lifecycle?: BucketLifecycleRule[];
+		cors?: BucketCorsRule[];
+		objectLock?: unknown;
+	},
+	ctx: z.RefinementCtx,
+): void {
+	if (input.objectLock && !input.versioning)
+		ctx.addIssue({ code: 'custom', path: ['objectLock'], message: 'Object lock requires versioning; enable it on the same request.' });
+	const lifecycle = input.lifecycle ?? [];
+	const ids = new Set<string>();
+	for (const [index, rule] of lifecycle.entries()) {
+		if (ids.has(rule.id))
+			ctx.addIssue({ code: 'custom', path: ['lifecycle', index, 'id'], message: 'Lifecycle rule ids must be unique.' });
+		ids.add(rule.id);
+		if (rule.noncurrentExpireDays !== undefined && !input.versioning)
+			ctx.addIssue({
+				code: 'custom',
+				path: ['lifecycle', index, 'noncurrentExpireDays'],
+				message: 'Noncurrent version expiry requires versioning.',
+			});
+	}
+	const origins = new Set<string>();
+	for (const [index, rule] of (input.cors ?? []).entries()) {
+		for (const origin of rule.origin) {
+			const key = origin.toLowerCase();
+			if (origins.has(key))
+				ctx.addIssue({ code: 'custom', path: ['cors', index, 'origin'], message: `CORS origin "${origin}" is listed twice.` });
+			origins.add(key);
+		}
+	}
+}
+
 export const storageGrantModes = ['read', 'read-write'] as const;
 export type StorageGrantMode = (typeof storageGrantModes)[number];
 
@@ -146,13 +230,36 @@ export const storageUpdateSchema = z
 	.refine((input) => Object.keys(input).length > 0, 'Nothing to update.');
 export type StorageUpdate = z.infer<typeof storageUpdateSchema>;
 
-export const bucketCreateSchema = z.object({
-	name: bucketNameSchema,
-	access: z.enum(bucketAccesses).default('private'),
-});
+export const bucketCreateSchema = z
+	.object({
+		name: bucketNameSchema,
+		access: z.enum(bucketAccesses).default('private'),
+		versioning: z.boolean().default(false),
+		lifecycle: bucketLifecycleSchema,
+		cors: bucketCorsSchema,
+		quotaBytes: bucketQuotaSchema.default(null),
+		/** Create-only and irreversible: a versioned bucket with a default retention period. */
+		objectLock: bucketObjectLockSchema.nullable().default(null),
+	})
+	.superRefine(refineBucketConfig);
 export type BucketCreate = z.input<typeof bucketCreateSchema>;
 
-export const bucketUpdateSchema = z.object({ access: z.enum(bucketAccesses) });
+/** PATCH semantics: send only the fields that change. Object lock can never be changed. */
+export const bucketUpdateSchema = z
+	.object({
+		access: z.enum(bucketAccesses).optional(),
+		versioning: z.boolean().optional(),
+		lifecycle: z.array(bucketLifecycleRuleSchema).max(100).optional(),
+		cors: z.array(bucketCorsRuleSchema).max(100).optional(),
+		quotaBytes: bucketQuotaSchema.optional(),
+		objectLock: z
+			.unknown()
+			.optional()
+			.refine((value) => value === undefined, 'Object lock is set when a bucket is created and cannot be changed.'),
+	})
+	.strict()
+	.superRefine(refineBucketConfig)
+	.refine((input) => Object.keys(input).length > 0, 'Nothing to update.');
 export type BucketUpdate = z.infer<typeof bucketUpdateSchema>;
 
 export const storageAttachSchema = z.object({
@@ -167,9 +274,25 @@ export type StorageAttachmentUpdate = z.input<typeof storageAttachmentUpdateSche
 
 // -------------------------------------------------------------------- views
 
-export interface StorageBucketView {
-	name: string;
+export const bucketConfigStatuses = ['pending', 'converged', 'error', 'unsupported'] as const;
+export type BucketConfigStatus = (typeof bucketConfigStatuses)[number];
+
+export interface BucketConfig {
 	access: BucketAccess;
+	versioning: boolean;
+	lifecycle: BucketLifecycleRule[];
+	cors: BucketCorsRule[];
+	quotaBytes: number | null;
+	objectLock: BucketObjectLock | null;
+	/** Incremented on every desired-state change; the agent reports it back when applied. */
+	configVersion: number;
+	configStatus: BucketConfigStatus;
+	configMessage: string | null;
+	lastConvergedAt: string | null;
+}
+
+export interface StorageBucketView extends BucketConfig {
+	name: string;
 	/** `deleting` until the node reports; `delete-blocked` when it was not empty (force or re-create to cancel). */
 	state: 'ready' | 'deleting' | 'delete-blocked';
 	/** Latest sampled size and object count; null until the agent reports. */
@@ -242,10 +365,19 @@ export interface StorageCredentials {
 
 // -------------------------------------------------------------------- node wire
 
-export const storageBucketDesiredSchema = z.object({
-	name: bucketNameSchema,
-	access: z.enum(bucketAccesses),
-});
+export const storageBucketDesiredSchema = z
+	.object({
+		name: bucketNameSchema,
+		access: z.enum(bucketAccesses),
+		versioning: z.boolean().default(false),
+		lifecycle: bucketLifecycleSchema,
+		cors: bucketCorsSchema,
+		quotaBytes: bucketQuotaSchema.default(null),
+		objectLock: bucketObjectLockSchema.nullable().default(null),
+		/** Bumped by the control plane; the agent echoes it in its convergence report. */
+		configVersion: z.number().int().nonnegative().default(1),
+	})
+	.superRefine(refineBucketConfig);
 
 export const storageUserDesiredSchema = z.object({
 	accessKeyId: z.string().min(3).max(128),
@@ -344,6 +476,16 @@ export const storageBucketDeletionSchema = z.object({
 	result: z.enum(['deleted', 'not-empty']),
 });
 export type StorageBucketDeletion = z.infer<typeof storageBucketDeletionSchema>;
+
+/** What the agent last achieved for one bucket's desired configuration. */
+export const storageBucketConfigReportSchema = z.object({
+	storageId: z.string(),
+	bucket: z.string(),
+	configVersion: z.number().int().nonnegative(),
+	status: z.enum(bucketConfigStatuses),
+	message: z.string().max(500).nullable().default(null),
+});
+export type StorageBucketConfigReport = z.infer<typeof storageBucketConfigReportSchema>;
 
 /** Access key ids Skiff mints: `SKF` + 17 base32 chars (root keys use `SKR`). The agent owns `SKF*` users. */
 export const STORAGE_USER_KEY_PREFIX = 'SKF';
@@ -453,6 +595,29 @@ export const storagePresignSchema = z.object({
 	expiresIn: z.number().int().min(60).max(604_800).default(3600),
 });
 export type StoragePresign = z.infer<typeof storagePresignSchema>;
+
+/**
+ * A share link. GET and PUT are presigned server-side with the instance's root key; the browser
+ * only ever sees the signature, never a key. `maxDownloads` is enforced by the platform gateway.
+ */
+export const storageShareLinkSchema = z.object({
+	key: storageObjectKeySchema,
+	method: z.enum(['GET', 'PUT']).default('GET'),
+	/** Seconds; SigV4 allows up to seven days. */
+	expiresIn: z.number().int().min(60).max(STORAGE_SHARE_MAX_TTL_SECONDS).default(3600),
+	maxDownloads: z.number().int().min(1).max(100_000).optional(),
+});
+export type StorageShareLinkRequest = z.infer<typeof storageShareLinkSchema>;
+
+export interface StorageShareLink {
+	url: string;
+	method: 'GET' | 'PUT';
+	expiresIn: number;
+	expiresAt: string;
+	maxDownloads: number | null;
+	/** True when the URL goes straight to a public S3 endpoint instead of the platform gateway. */
+	direct: boolean;
+}
 
 /** Env var names a project receives for one attachment. */
 export function storageEnvNames(prefix: string, options: { public: boolean; singleBucket: boolean }): string[] {

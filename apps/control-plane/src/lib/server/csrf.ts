@@ -29,8 +29,14 @@ const COOKIELESS_ENDPOINTS = new Set([
  * object URLs). A cross-site request gains nothing there. Prefixes end in `/` so they never match
  * a sibling path in the cookie-authenticated REST API.
  */
-// `/api/webhooks/` is authenticated by the provider's HMAC signature, never a cookie.
-const COOKIELESS_PREFIXES = ['/api/agent/', '/api/objects/', '/api/backup-targets/', '/api/webhooks/'];
+// `/share/storage/` is authenticated by an unguessable share token, never a cookie.
+const COOKIELESS_PREFIXES = [
+	'/api/agent/',
+	'/api/objects/',
+	'/api/backup-targets/',
+	'/api/webhooks/',
+	'/share/storage/',
+];
 
 export type CsrfDecision = { ok: true } | { ok: false; reason: string };
 

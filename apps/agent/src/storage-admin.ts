@@ -7,7 +7,11 @@ import {
 	storagePolicyName,
 	storageUserPolicy,
 	type BucketAccess,
+	type BucketCorsRule,
+	type BucketLifecycleRule,
+	type BucketObjectLock,
 	type StorageAdmin,
+	type StorageBucketConfigReport,
 	type StorageBucketDeletion,
 	type StorageGrant,
 	type WorkloadObjectStorage,
@@ -70,11 +74,25 @@ export interface RustfsUser {
 /** The S3 and admin calls the agent makes. `RustfsApi` in production, a fake in tests. */
 export interface StorageApi {
 	listBuckets(): Promise<string[]>;
-	createBucket(name: string): Promise<void>;
+	/** `objectLock` must be set at creation; RustFS enables versioning with it. */
+	createBucket(name: string, options?: { objectLock?: boolean }): Promise<void>;
 	/** `missing` covers 404/NoSuchBucket. */
 	deleteBucket(name: string): Promise<'deleted' | 'not-empty' | 'missing'>;
 	putBucketPolicy(name: string, policy: Record<string, unknown>): Promise<void>;
 	deleteBucketPolicy(name: string): Promise<void>;
+	getBucketVersioning(name: string): Promise<'enabled' | 'suspended' | 'unset'>;
+	putBucketVersioning(name: string, enabled: boolean): Promise<void>;
+	getBucketLifecycle(name: string): Promise<BucketLifecycleRule[]>;
+	putBucketLifecycle(name: string, rules: BucketLifecycleRule[]): Promise<void>;
+	deleteBucketLifecycle(name: string): Promise<void>;
+	getBucketCors(name: string): Promise<BucketCorsRule[]>;
+	putBucketCors(name: string, rules: BucketCorsRule[]): Promise<void>;
+	deleteBucketCors(name: string): Promise<void>;
+	/** Hard byte cap; null clears it. */
+	getBucketQuota(name: string): Promise<number | null>;
+	putBucketQuota(name: string, bytes: number | null): Promise<void>;
+	getObjectLock(name: string): Promise<BucketObjectLock | null>;
+	putObjectLock(name: string, lock: BucketObjectLock): Promise<void>;
 	listObjects(bucket: string, continuationToken?: string | null): Promise<{ objects: S3Object[]; next: string | null }>;
 	deleteObjects(bucket: string, keys: string[]): Promise<void>;
 	listUploads(bucket: string): Promise<S3Upload[]>;
@@ -137,9 +155,12 @@ export class RustfsApi implements StorageApi {
 		return blocks(text, 'Bucket').map((block) => tagValue(block, 'Name') ?? '').filter(Boolean);
 	}
 
-	async createBucket(name: string): Promise<void> {
+	async createBucket(name: string, options: { objectLock?: boolean } = {}): Promise<void> {
 		try {
-			await this.call('PUT', `/${bucketPath(name)}`, { expect: [200] });
+			await this.call('PUT', `/${bucketPath(name)}`, {
+				expect: [200],
+				...(options.objectLock ? { headers: { 'x-amz-bucket-object-lock-enabled': 'true' } } : {}),
+			});
 		} catch (error) {
 			// Created by an earlier, interrupted round.
 			if (error instanceof StorageApiError && error.code === 'BucketAlreadyOwnedByYou') return;
@@ -175,6 +196,134 @@ export class RustfsApi implements StorageApi {
 			if (error instanceof StorageApiError && error.code === 'NoSuchBucketPolicy') return;
 			throw error;
 		}
+	}
+
+	async getBucketVersioning(name: string): Promise<'enabled' | 'suspended' | 'unset'> {
+		const text = await this.call('GET', `/${bucketPath(name)}?versioning`, { expect: [200] });
+		const status = tagValue(text, 'Status');
+		return status === 'Enabled' ? 'enabled' : status === 'Suspended' ? 'suspended' : 'unset';
+	}
+
+	async putBucketVersioning(name: string, enabled: boolean): Promise<void> {
+		const body =
+			'<?xml version="1.0" encoding="UTF-8"?>' +
+			`<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Status>${enabled ? 'Enabled' : 'Suspended'}</Status></VersioningConfiguration>`;
+		await this.call('PUT', `/${bucketPath(name)}?versioning`, {
+			body,
+			headers: { 'content-type': 'application/xml' },
+			expect: [200, 204],
+		});
+	}
+
+	async getBucketLifecycle(name: string): Promise<BucketLifecycleRule[]> {
+		try {
+			const text = await this.call('GET', `/${bucketPath(name)}?lifecycle`, { expect: [200] });
+			return parseLifecycleXml(text);
+		} catch (error) {
+			if (isMissingConfiguration(error)) return [];
+			throw error;
+		}
+	}
+
+	async putBucketLifecycle(name: string, rules: BucketLifecycleRule[]): Promise<void> {
+		await this.call('PUT', `/${bucketPath(name)}?lifecycle`, {
+			body: lifecycleXml(rules),
+			headers: { 'content-type': 'application/xml' },
+			expect: [200, 204],
+		});
+	}
+
+	async deleteBucketLifecycle(name: string): Promise<void> {
+		try {
+			await this.call('DELETE', `/${bucketPath(name)}?lifecycle`, { expect: [200, 204] });
+		} catch (error) {
+			if (isMissingConfiguration(error)) return;
+			throw error;
+		}
+	}
+
+	async getBucketCors(name: string): Promise<BucketCorsRule[]> {
+		try {
+			const text = await this.call('GET', `/${bucketPath(name)}?cors`, { expect: [200] });
+			return parseCorsXml(text);
+		} catch (error) {
+			if (isMissingConfiguration(error)) return [];
+			throw error;
+		}
+	}
+
+	async putBucketCors(name: string, rules: BucketCorsRule[]): Promise<void> {
+		await this.call('PUT', `/${bucketPath(name)}?cors`, {
+			body: corsXml(rules),
+			headers: { 'content-type': 'application/xml' },
+			expect: [200, 204],
+		});
+	}
+
+	async deleteBucketCors(name: string): Promise<void> {
+		try {
+			await this.call('DELETE', `/${bucketPath(name)}?cors`, { expect: [200, 204] });
+		} catch (error) {
+			if (isMissingConfiguration(error)) return;
+			throw error;
+		}
+	}
+
+	async getBucketQuota(name: string): Promise<number | null> {
+		try {
+			const value = asRecord(await this.json('GET', `/rustfs/admin/v3/quota/${bucketPath(name)}`));
+			const raw = value.quota ?? value.quota_limit ?? value.size ?? value.limit;
+			const bytes = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : 0;
+			return Number.isFinite(bytes) && bytes > 0 ? Math.trunc(bytes) : null;
+		} catch (error) {
+			if (error instanceof StorageApiError && (error.status === 404 || error.code === 'NoSuchBucketQuota')) return null;
+			throw error;
+		}
+	}
+
+	async putBucketQuota(name: string, bytes: number | null): Promise<void> {
+		if (bytes === null) {
+			try {
+				await this.call('DELETE', `/rustfs/admin/v3/quota/${bucketPath(name)}`, { expect: [200, 204] });
+			} catch (error) {
+				if (error instanceof StorageApiError && (error.status === 404 || error.code === 'NoSuchBucketQuota')) return;
+				throw error;
+			}
+			return;
+		}
+		await this.call('PUT', `/rustfs/admin/v3/quota/${bucketPath(name)}`, {
+			body: JSON.stringify({ quota: bytes, quota_type: 'HARD' }),
+			headers: { 'content-type': 'application/json' },
+			expect: [200, 204],
+		});
+	}
+
+	async getObjectLock(name: string): Promise<BucketObjectLock | null> {
+		try {
+			const text = await this.call('GET', `/${bucketPath(name)}?object-lock`, { expect: [200] });
+			const mode = tagValue(text, 'Mode');
+			const days = Number(tagValue(text, 'Days') ?? 0);
+			if (!mode || !Number.isFinite(days) || days <= 0) return null;
+			return { mode: mode.toLowerCase() === 'compliance' ? 'compliance' : 'governance', retainDays: Math.trunc(days) };
+		} catch (error) {
+			if (isMissingConfiguration(error)) return null;
+			throw error;
+		}
+	}
+
+	async putObjectLock(name: string, lock: BucketObjectLock): Promise<void> {
+		const mode = lock.mode === 'compliance' ? 'COMPLIANCE' : 'GOVERNANCE';
+		const body =
+			'<?xml version="1.0" encoding="UTF-8"?>' +
+			'<ObjectLockConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">' +
+			'<ObjectLockEnabled>Enabled</ObjectLockEnabled>' +
+			`<Rule><DefaultRetention><Mode>${mode}</Mode><Days>${lock.retainDays}</Days></DefaultRetention></Rule>` +
+			'</ObjectLockConfiguration>';
+		await this.call('PUT', `/${bucketPath(name)}?object-lock`, {
+			body,
+			headers: { 'content-type': 'application/xml' },
+			expect: [200, 204],
+		});
 	}
 
 	async listObjects(
@@ -356,6 +505,8 @@ interface InstanceState {
 	activationVersion: string;
 	/** Anonymous access last applied per bucket. */
 	policies: Map<string, BucketAccess>;
+	/** Bucket configuration signature last applied (config version + desired fields). */
+	bucketConfigs: Map<string, string>;
 	/** `keysVersion|grants` last applied per scoped key. */
 	users: Map<string, string>;
 	lastFullAt: number;
@@ -371,6 +522,10 @@ export class StorageReconciler {
 	private readonly state = new Map<string, InstanceState>();
 	/** Outcomes waiting for a heartbeat. */
 	private deletions: StorageBucketDeletion[] = [];
+	/** Latest convergence outcome per bucket, waiting for a heartbeat. */
+	private readonly configReports = new Map<string, StorageBucketConfigReport>();
+	/** The status last queued per bucket, so a steady state does not report every minute. */
+	private readonly reportedConfigs = new Map<string, string>();
 	/**
 	 * Deletions already decided, keyed `<id>/<bucket>/<force>`, kept while the entry is still in
 	 * `deleteBuckets` so each outcome is reported once and the bucket is not deleted twice.
@@ -396,6 +551,16 @@ export class StorageReconciler {
 	acknowledgeBucketDeletions(sent: readonly StorageBucketDeletion[]): void {
 		const keys = new Set(sent.map(deletionKey));
 		this.deletions = this.deletions.filter((deletion) => !keys.has(deletionKey(deletion)));
+	}
+
+	/** Bucket configuration outcomes for the next heartbeat. */
+	pendingBucketConfigs(): StorageBucketConfigReport[] {
+		return [...this.configReports.values()].map((report) => ({ ...report }));
+	}
+
+	/** Call only after the control plane accepted a heartbeat that carried these reports. */
+	acknowledgeBucketConfigs(sent: readonly StorageBucketConfigReport[]): void {
+		for (const report of sent) this.configReports.delete(configReportKey(report));
 	}
 
 	/**
@@ -434,6 +599,12 @@ export class StorageReconciler {
 			const [id] = key.split('/');
 			if (!ids.has(id!)) this.decided.delete(key);
 		}
+		for (const key of [...this.configReports.keys()]) {
+			if (!ids.has(key.split('/')[0]!)) this.configReports.delete(key);
+		}
+		for (const key of [...this.reportedConfigs.keys()]) {
+			if (!ids.has(key.split('/')[0]!)) this.reportedConfigs.delete(key);
+		}
 		for (const target of targets) {
 			if (target.status !== 'running') continue;
 			try {
@@ -448,10 +619,17 @@ export class StorageReconciler {
 		let state = this.state.get(target.id);
 		if (!state || state.activationVersion !== target.activationVersion) {
 			// A new activation may be a fresh server (or new root key): re-assert everything.
-			state = { activationVersion: target.activationVersion, policies: new Map(), users: new Map(), lastFullAt: this.now() };
+			state = {
+				activationVersion: target.activationVersion,
+				policies: new Map(),
+				bucketConfigs: new Map(),
+				users: new Map(),
+				lastFullAt: this.now(),
+			};
 			this.state.set(target.id, state);
 		} else if (this.now() - state.lastFullAt >= FULL_REASSERT_MS) {
 			state.policies.clear();
+			state.bucketConfigs.clear();
 			state.users.clear();
 			state.lastFullAt = this.now();
 		}
@@ -464,13 +642,14 @@ export class StorageReconciler {
 		const desired = target.desired;
 		const existing = new Set(await api.listBuckets());
 
-		// 1. Desired buckets and their anonymous access.
+		// 1. Desired buckets, their anonymous access and their configuration.
 		for (const bucket of desired.buckets) {
 			try {
 				if (!existing.has(bucket.name)) {
-					await api.createBucket(bucket.name);
+					await api.createBucket(bucket.name, { objectLock: Boolean(bucket.objectLock) });
 					existing.add(bucket.name);
 					state.policies.delete(bucket.name);
+					state.bucketConfigs.delete(bucket.name);
 					this.log('info', `Storage ${target.id}: created bucket ${bucket.name}`);
 				}
 				if (state.policies.get(bucket.name) !== bucket.access) {
@@ -478,8 +657,10 @@ export class StorageReconciler {
 					else await api.deleteBucketPolicy(bucket.name);
 					state.policies.set(bucket.name, bucket.access);
 				}
+				await this.reconcileBucketConfig(target, api, bucket, state);
 			} catch (error) {
 				state.policies.delete(bucket.name);
+				state.bucketConfigs.delete(bucket.name);
 				this.log('warn', `Storage ${target.id}: bucket ${bucket.name}: ${scrub(errorText(error), target)}`);
 			}
 		}
@@ -489,6 +670,83 @@ export class StorageReconciler {
 
 		// 3. Scoped keys.
 		await this.reconcileUsers(target, api, state);
+	}
+
+	/**
+	 * Apply one bucket's desired configuration. A signature skips unchanged rounds; the periodic
+	 * full re-assert repairs out-of-band edits. A missing RustFS capability is reported as
+	 * `unsupported` instead of being silently ignored.
+	 */
+	private async reconcileBucketConfig(
+		target: StorageTarget,
+		api: StorageApi,
+		bucket: WorkloadObjectStorage['buckets'][number],
+		state: InstanceState,
+	): Promise<void> {
+		const signature = JSON.stringify({
+			configVersion: bucket.configVersion,
+			versioning: bucket.versioning,
+			lifecycle: bucket.lifecycle,
+			cors: bucket.cors,
+			quotaBytes: bucket.quotaBytes,
+			objectLock: bucket.objectLock,
+		});
+		if (state.bucketConfigs.get(bucket.name) === signature) return;
+
+		const unsupported: string[] = [];
+		const attempt = async (label: string, action: () => Promise<void>) => {
+			try {
+				await action();
+			} catch (error) {
+				if (isUnsupportedError(error)) {
+					unsupported.push(label);
+					return;
+				}
+				throw error;
+			}
+		};
+		try {
+			await attempt('versioning', () => api.putBucketVersioning(bucket.name, bucket.versioning));
+			await attempt('lifecycle', () =>
+				bucket.lifecycle.length > 0
+					? api.putBucketLifecycle(bucket.name, bucket.lifecycle)
+					: api.deleteBucketLifecycle(bucket.name),
+			);
+			await attempt('cors', () =>
+				bucket.cors.length > 0 ? api.putBucketCors(bucket.name, bucket.cors) : api.deleteBucketCors(bucket.name),
+			);
+			await attempt('quota', () => api.putBucketQuota(bucket.name, bucket.quotaBytes));
+			if (bucket.objectLock)
+				await attempt('object lock', () => api.putObjectLock(bucket.name, bucket.objectLock!));
+			state.bucketConfigs.set(bucket.name, signature);
+			if (unsupported.length > 0) {
+				const message = `This RustFS build does not support ${unsupported.join(', ')}.`;
+				this.reportBucketConfig(target, bucket.name, bucket.configVersion, 'unsupported', message);
+				this.log('warn', `Storage ${target.id}: bucket ${bucket.name}: ${message}`);
+			} else {
+				this.reportBucketConfig(target, bucket.name, bucket.configVersion, 'converged', null);
+			}
+		} catch (error) {
+			state.bucketConfigs.delete(bucket.name);
+			const message = scrub(errorText(error), target);
+			this.reportBucketConfig(target, bucket.name, bucket.configVersion, 'error', message);
+			this.log('warn', `Storage ${target.id}: bucket ${bucket.name} config: ${message}`);
+		}
+	}
+
+	private reportBucketConfig(
+		target: StorageTarget,
+		bucket: string,
+		configVersion: number,
+		status: StorageBucketConfigReport['status'],
+		message: string | null,
+	): void {
+		const key = `${target.id}/${bucket}`;
+		const signature = `${configVersion}/${status}/${message ?? ''}`;
+		if (this.reportedConfigs.get(key) === signature) return;
+		this.reportedConfigs.set(key, signature);
+		const report: StorageBucketConfigReport = { storageId: target.id, bucket, configVersion, status, message };
+		this.configReports.set(configReportKey(report), report);
 	}
 
 	private async deleteBuckets(
@@ -522,6 +780,8 @@ export class StorageReconciler {
 				this.decided.add(key);
 				existing.delete(entry.name);
 				state.policies.delete(entry.name);
+				state.bucketConfigs.delete(entry.name);
+				this.reportedConfigs.delete(`${target.id}/${entry.name}`);
 				this.deletions.push({
 					storageId: target.id,
 					bucket: entry.name,
@@ -630,8 +890,113 @@ export class StorageReconciler {
 
 // ------------------------------------------------------------------ helpers
 
+/** S3 answers a missing lifecycle/CORS/object-lock config with 404 + a NoSuch*Configuration code. */
+function isMissingConfiguration(error: unknown): boolean {
+	return (
+		error instanceof StorageApiError &&
+		(error.status === 404 ||
+			error.code === 'NoSuchLifecycleConfiguration' ||
+			error.code === 'NoSuchCORSConfiguration' ||
+			error.code === 'NoSuchObjectLockConfiguration')
+	);
+}
+
+/** A 404/405/501 from an admin or S3 endpoint means this RustFS build lacks the feature. */
+export function isUnsupportedError(error: unknown): boolean {
+	if (!(error instanceof StorageApiError)) return false;
+	return (
+		error.status === 404 ||
+		error.status === 405 ||
+		error.status === 501 ||
+		error.code === 'NotImplemented' ||
+		error.code === 'MethodNotAllowed' ||
+		error.code === 'UnsupportedOperation'
+	);
+}
+
+export function lifecycleXml(rules: readonly BucketLifecycleRule[]): string {
+	const ruleXml = rules
+		.map((rule) => {
+			const actions: string[] = [];
+			if (rule.expireDays !== undefined)
+				actions.push(`<Expiration><Days>${rule.expireDays}</Days></Expiration>`);
+			if (rule.noncurrentExpireDays !== undefined)
+				actions.push(
+					`<NoncurrentVersionExpiration><NoncurrentDays>${rule.noncurrentExpireDays}</NoncurrentDays></NoncurrentVersionExpiration>`,
+				);
+			if (rule.abortIncompleteDays !== undefined)
+				actions.push(
+					`<AbortIncompleteMultipartUpload><DaysAfterInitiation>${rule.abortIncompleteDays}</DaysAfterInitiation></AbortIncompleteMultipartUpload>`,
+				);
+			return (
+				`<Rule><ID>${escapeXml(rule.id)}</ID><Status>${rule.enabled ? 'Enabled' : 'Disabled'}</Status>` +
+				`<Filter><Prefix>${escapeXml(rule.prefix ?? '')}</Prefix></Filter>${actions.join('')}</Rule>`
+			);
+		})
+		.join('');
+	return `<?xml version="1.0" encoding="UTF-8"?><LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">${ruleXml}</LifecycleConfiguration>`;
+}
+
+export function parseLifecycleXml(xml: string): BucketLifecycleRule[] {
+	return blocks(xml, 'Rule').map((block) => {
+		const filter = tagValue(block, 'Filter') ?? block;
+		const expire = blocks(block, 'Expiration')[0] ?? '';
+		const noncurrent = blocks(block, 'NoncurrentVersionExpiration')[0] ?? '';
+		const abort = blocks(block, 'AbortIncompleteMultipartUpload')[0] ?? '';
+		const rule: BucketLifecycleRule = {
+			id: tagValue(block, 'ID') ?? 'rule',
+			prefix: tagValue(filter, 'Prefix') ?? '',
+			enabled: tagValue(block, 'Status') !== 'Disabled',
+		};
+		const expireDays = Number(tagValue(expire, 'Days') ?? 0);
+		const noncurrentDays = Number(tagValue(noncurrent, 'NoncurrentDays') ?? 0);
+		const abortDays = Number(tagValue(abort, 'DaysAfterInitiation') ?? 0);
+		if (expireDays > 0) rule.expireDays = Math.trunc(expireDays);
+		if (noncurrentDays > 0) rule.noncurrentExpireDays = Math.trunc(noncurrentDays);
+		if (abortDays > 0) rule.abortIncompleteDays = Math.trunc(abortDays);
+		return rule;
+	});
+}
+
+export function corsXml(rules: readonly BucketCorsRule[]): string {
+	const ruleXml = rules
+		.map((rule) => {
+			const parts = rule.origin.map((origin) => `<AllowedOrigin>${escapeXml(origin)}</AllowedOrigin>`);
+			parts.push(...rule.method.map((method) => `<AllowedMethod>${method}</AllowedMethod>`));
+			parts.push(...rule.header.map((header) => `<AllowedHeader>${escapeXml(header)}</AllowedHeader>`));
+			parts.push(...rule.expose.map((header) => `<ExposeHeader>${escapeXml(header)}</ExposeHeader>`));
+			if (rule.maxAge !== undefined) parts.push(`<MaxAgeSeconds>${rule.maxAge}</MaxAgeSeconds>`);
+			return `<CORSRule>${parts.join('')}</CORSRule>`;
+		})
+		.join('');
+	return `<?xml version="1.0" encoding="UTF-8"?><CORSConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">${ruleXml}</CORSConfiguration>`;
+}
+
+export function parseCorsXml(xml: string): BucketCorsRule[] {
+	return blocks(xml, 'CORSRule').map((block) => {
+		const rule: BucketCorsRule = {
+			origin: tagValues(block, 'AllowedOrigin'),
+			method: tagValues(block, 'AllowedMethod') as BucketCorsRule['method'],
+			header: tagValues(block, 'AllowedHeader'),
+			expose: tagValues(block, 'ExposeHeader'),
+		};
+		const maxAge = Number(tagValue(block, 'MaxAgeSeconds') ?? NaN);
+		if (Number.isFinite(maxAge)) rule.maxAge = Math.trunc(maxAge);
+		return rule;
+	});
+}
+
+function tagValues(xml: string, tag: string): string[] {
+	const pattern = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, 'g');
+	return [...xml.matchAll(pattern)].map((match) => unescapeXml(match[1] ?? ''));
+}
+
 function deletionKey(deletion: StorageBucketDeletion): string {
 	return `${deletion.storageId}/${deletion.bucket}/${deletion.result}`;
+}
+
+function configReportKey(report: StorageBucketConfigReport): string {
+	return `${report.storageId}/${report.bucket}/${report.configVersion}`;
 }
 
 function grantsSignature(grants: readonly StorageGrant[]): string {

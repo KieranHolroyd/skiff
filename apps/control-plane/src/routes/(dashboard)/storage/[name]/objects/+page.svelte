@@ -15,7 +15,10 @@
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
+	import * as Dialog from '#lib/components/ui/dialog/index.js';
+	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
+	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
 	import * as Table from '#lib/components/ui/table/index.js';
 	import EmptyState from '../../../_lib/EmptyState.svelte';
 	import Notice from '#lib/components/skiff/Notice.svelte';
@@ -104,23 +107,57 @@
 		});
 	}
 
-	async function copyLink(key: string) {
+	let shareOpen = $state(false);
+	let shareKey = $state('');
+	let shareExpiry = $state('604800');
+	let shareLimit = $state('');
+	let shareBusy = $state(false);
+
+	function openShare(key: string) {
+		shareKey = key;
+		shareExpiry = '604800';
+		shareLimit = '';
+		shareOpen = true;
+	}
+
+	async function createShare() {
 		if (!data.bucket) return;
+		const limit = shareLimit.trim() === '' ? undefined : Number(shareLimit);
+		if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+			toast.error('The download limit must be a positive whole number.');
+			return;
+		}
+		shareBusy = true;
 		const response = await fetch(
-			`/api/v1/storage/${encodeURIComponent(data.storage.name)}/objects/presign`,
+			`/api/v1/storage/${encodeURIComponent(data.storage.name)}/buckets/${encodeURIComponent(data.bucket)}/sign`,
 			{
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ bucket: data.bucket, key, method: 'GET', expiresIn: 3600 })
+				body: JSON.stringify({
+					key: shareKey,
+					method: 'GET',
+					expiresIn: Number(shareExpiry),
+					...(limit ? { maxDownloads: limit } : {})
+				})
 			}
 		);
-		const body = (await response.json().catch(() => ({}))) as { url?: string; message?: string };
+		const body = (await response.json().catch(() => ({}))) as {
+			url?: string;
+			message?: string;
+			expiresAt?: string;
+			direct?: boolean;
+		};
+		shareBusy = false;
 		if (!response.ok || !body.url) {
-			toast.error(body.message ?? 'Could not create a link.');
+			toast.error(body.message ?? 'Could not create a share link.');
 			return;
 		}
 		await navigator.clipboard.writeText(body.url);
-		toast.success('Download link copied. It is valid for one hour.');
+		shareOpen = false;
+		toast.success(
+			`Share link copied until ${new Date(body.expiresAt ?? Date.now()).toLocaleString()}` +
+				`${limit ? ` (${limit} download${limit === 1 ? '' : 's'})` : ''}.`
+		);
 	}
 
 	function removeFolder(prefix: string) {
@@ -324,16 +361,14 @@
 										>
 											<DownloadIcon />
 										</Button>
-										{#if data.storage.public}
-											<Button
-												size="sm"
-												variant="ghost"
-												title="Copy a presigned download link"
-												onclick={() => copyLink(object.key)}
-											>
-												<LinkIcon />
-											</Button>
-										{/if}
+										<Button
+											size="sm"
+											variant="ghost"
+											title="Create a signed share link"
+											onclick={() => openShare(object.key)}
+										>
+											<LinkIcon />
+										</Button>
 										{#if data.canWrite}
 											<Button
 												size="sm"
@@ -374,3 +409,40 @@
 		{/if}
 	{/if}
 </div>
+
+<Dialog.Root bind:open={shareOpen}>
+	<Dialog.Content class="sm:max-w-md">
+		<Dialog.Header>
+			<Dialog.Title class="flex items-center gap-2"><LinkIcon class="size-4 text-muted-foreground" />Share “{shareKey}”</Dialog.Title>
+			<Dialog.Description>
+				The link is signed by the server and never contains a key. Private instances go through the
+				platform gateway; a download limit is counted there.
+			</Dialog.Description>
+		</Dialog.Header>
+		<Field.Group>
+			<Field.Field>
+				<Field.Label for="share-expiry">Expires</Field.Label>
+				<NativeSelect.Root id="share-expiry" bind:value={shareExpiry} class="w-full">
+					<NativeSelect.Option value="3600">1 hour</NativeSelect.Option>
+					<NativeSelect.Option value="86400">1 day</NativeSelect.Option>
+					<NativeSelect.Option value="604800">7 days (maximum)</NativeSelect.Option>
+				</NativeSelect.Root>
+			</Field.Field>
+			<Field.Field>
+				<Field.Label for="share-limit">Download limit</Field.Label>
+				<Input id="share-limit" bind:value={shareLimit} placeholder="Unlimited" inputmode="numeric" />
+				<Field.Description>Optional; GET links only.</Field.Description>
+			</Field.Field>
+		</Field.Group>
+		<Dialog.Footer>
+			<Dialog.Close>
+				{#snippet child({ props })}
+					<Button variant="outline" {...props} disabled={shareBusy}>Cancel</Button>
+				{/snippet}
+			</Dialog.Close>
+			<Button onclick={createShare} disabled={shareBusy}>
+				{shareBusy ? 'Creating…' : 'Create and copy link'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>

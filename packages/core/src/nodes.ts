@@ -246,6 +246,8 @@ export class NodeService {
 		if (input.purgedStorage?.length) this.ctx.storage.applyPurged(node.id, input.purgedStorage);
 		if (input.storageBucketDeletions?.length)
 			this.ctx.storage.applyBucketDeletions(node.id, input.storageBucketDeletions);
+		if (input.storageBucketConfigs?.length)
+			this.ctx.storage.applyBucketConfigReports(node.id, input.storageBucketConfigs);
 		if (input.volumes) this.ctx.volumes.applyInventory(node.id, input.volumes);
 		return { ok: true, desiredStateVersion: this.stateVersion() };
 	}

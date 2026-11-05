@@ -2,6 +2,7 @@ import { parseArgs, rejectExtraPositionals, requirePositional, type FlagSpec, ty
 import { CliError, UsageError } from '../errors.ts';
 import { assertEnvPrefix, parseCpus, parseMegabytes } from '../databases.ts';
 import {
+	bucketConfigDetails,
 	bucketTable,
 	credentialsEnv,
 	defaultGrants,
@@ -9,12 +10,16 @@ import {
 	metricsTable,
 	nodeLabel,
 	parseAccess,
+	parseCorsRules,
 	parseDuration,
 	parseGrants,
+	parseLifecycleRules,
+	parseObjectLock,
 	splitList,
 	storageDetails,
 	storageTable,
 	usedVsBudget,
+	type BucketConfigInput,
 	type StorageCreateInput,
 	type StorageUpdateInput,
 } from '../object-storage.ts';
@@ -84,15 +89,24 @@ const bucketsUsage = `Usage: skif storage buckets <command> <storage> [bucket] [
 Commands:
   list <storage>                     List buckets with access, state, size and objects (the default)
   create <storage> <bucket>          Create a bucket (--access private|public-read; default private)
-  update <storage> <bucket>          Change its anonymous access: --access private|public-read
+  config <storage> <bucket>          Show versioning, lifecycle, CORS, quota, object lock and convergence
+  update <storage> <bucket>          Change access or bucket configuration
   delete <storage> <bucket>          Delete an empty bucket; --force deletes its objects too
 
 Options:
       --access <access>              private, or public-read (unsigned GETs of objects, no listing)
+      --versioning <on|off>          Enable or suspend object versioning
+      --quota <size|none>            Hard bucket quota, e.g. 1G, 500M; none removes it
+      --lifecycle <json|@file>       Lifecycle rules as a JSON array
+      --cors <json|@file>            CORS rules as a JSON array
+      --object-lock <mode>:<days>    Create-only: governance:30 or compliance:365 (implies --versioning on)
       --force                        Empty the bucket first (needs storage:delete; cannot be undone)
   -y, --yes                          Don't ask for confirmation
       --json                         JSON output
-  -h, --help                         Show this help`;
+  -h, --help                         Show this help
+
+Object lock cannot be changed after creation. The node applies configuration within a minute and
+reports configStatus (pending, converged, error or unsupported).`;
 
 const baseFlags: FlagSpec = {
 	json: { type: 'boolean' },
@@ -154,6 +168,11 @@ const metricsFlags: FlagSpec = {
 const bucketFlags: FlagSpec = {
 	...baseFlags,
 	access: { type: 'string' },
+	versioning: { type: 'string' },
+	quota: { type: 'string' },
+	lifecycle: { type: 'string' },
+	cors: { type: 'string' },
+	'object-lock': { type: 'string' },
 	force: { type: 'boolean' },
 	yes: { type: 'boolean', short: 'y' },
 };
@@ -614,6 +633,7 @@ const bucketSubcommands: Record<string, (argv: string[]) => Promise<void>> = {
 	list: listBuckets,
 	ls: listBuckets,
 	create: createBucket,
+	config: showBucketConfig,
 	update: updateBucket,
 	set: updateBucket,
 	delete: deleteBucket,
@@ -659,39 +679,93 @@ async function listBuckets(argv: string[]): Promise<void> {
 	console.log(bucketTable(buckets));
 }
 
+/** Read the shared configuration flags. Returns null when none were passed. */
+function readBucketConfigInput(args: ParsedArgs): BucketConfigInput | null {
+	const input: BucketConfigInput = {};
+	const access = args.string('access');
+	if (access) input.access = parseAccess(access);
+	const versioning = args.string('versioning');
+	if (versioning !== undefined) {
+		if (versioning !== 'on' && versioning !== 'off')
+			throw new UsageError('--versioning expects on or off.');
+		input.versioning = versioning === 'on';
+	}
+	const quota = args.string('quota');
+	if (quota !== undefined) {
+		if (quota === 'none' || quota === 'unlimited' || quota === '0') input.quotaBytes = null;
+		else input.quotaBytes = parseMegabytes(quota, '--quota') * 1024 * 1024;
+	}
+	const lifecycle = args.string('lifecycle');
+	if (lifecycle !== undefined) input.lifecycle = parseLifecycleRules(lifecycle, '--lifecycle');
+	const cors = args.string('cors');
+	if (cors !== undefined) input.cors = parseCorsRules(cors, '--cors');
+	return Object.keys(input).length > 0 ? input : null;
+}
+
 async function createBucket(argv: string[]): Promise<void> {
 	const parsed = parseBucketArgs(argv, 'create', true);
 	if (!parsed) return;
 	const { args, name, bucket } = parsed;
-	const access = args.string('access');
+	const config = readBucketConfigInput(args) ?? {};
+	const objectLock = args.string('object-lock');
+	if (objectLock && config.versioning === false)
+		throw new UsageError('--object-lock requires versioning; omit --versioning off.');
 	const client = await authenticatedClient();
 	const { bucket: view, raw } = await client.createBucket(name, {
 		name: bucket,
-		...(access ? { access: parseAccess(access) } : {}),
+		...config,
+		...(objectLock ? { objectLock: parseObjectLock(objectLock), versioning: true } : {}),
 	});
 	if (args.boolean('json')) {
 		printJson(raw);
 		return;
 	}
 	console.log(`Created bucket "${view.name}" in "${name}" (${view.access}). The node creates it within a minute.`);
+	if (view.objectLock)
+		console.log(
+			`Object lock is on (${view.objectLock.mode}, ${view.objectLock.retainDays} days) and cannot be undone.`,
+		);
+	console.log(`Follow it: skif storage bucket config ${name} ${view.name}`);
 	console.log(`Grant it to an app: skif storage attach ${name} --project <slug> --bucket ${view.name}`);
+}
+
+async function showBucketConfig(argv: string[]): Promise<void> {
+	const parsed = parseBucketArgs(argv, 'config', true);
+	if (!parsed) return;
+	const { args, name, bucket } = parsed;
+	const client = await authenticatedClient();
+	const { config, raw } = await client.getBucketConfig(name, bucket);
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	console.log(bucketConfigDetails(config));
 }
 
 async function updateBucket(argv: string[]): Promise<void> {
 	const parsed = parseBucketArgs(argv, 'update', true);
 	if (!parsed) return;
 	const { args, name, bucket } = parsed;
-	const access = args.string('access');
-	if (!access) throw new UsageError(`Nothing to update: skif storage buckets update ${name} ${bucket} --access private|public-read`);
+	if (args.string('object-lock'))
+		throw new UsageError('Object lock can only be set when creating a bucket; it cannot be changed.');
+	const input = readBucketConfigInput(args);
+	if (!input)
+		throw new UsageError(
+			`Nothing to update: skif storage bucket update ${name} ${bucket} ` +
+				'--access private|public-read --versioning on|off --quota 1G --lifecycle @rules.json --cors @cors.json',
+		);
 	const client = await authenticatedClient();
-	const { bucket: view, raw } = await client.updateBucket(name, bucket, { access: parseAccess(access) });
+	const { bucket: config, raw } = await client.updateBucket(name, bucket, input);
 	if (args.boolean('json')) {
 		printJson(raw);
 		return;
 	}
-	console.log(
-		`Bucket "${view.name}" in "${name}" is now ${view.access}${view.access === 'public-read' ? ': anyone can GET its objects (not list them)' : ''}.`,
-	);
+	if (input.access)
+		console.log(
+			`Bucket "${config.name}" in "${name}" is now ${config.access}${config.access === 'public-read' ? ': anyone can GET its objects (not list them)' : ''}.`,
+		);
+	console.log(`Configuration saved (version ${config.configVersion}); the node applies it within a minute.`);
+	console.log(bucketConfigDetails(config));
 }
 
 async function deleteBucket(argv: string[]): Promise<void> {

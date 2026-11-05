@@ -3,6 +3,7 @@ import { CoreError } from '@skiff/core';
 import {
 	bucketAccesses,
 	bucketCreateSchema,
+	bucketUpdateSchema,
 	hasPermission,
 	storageAttachSchema,
 	storageAttachmentUpdateSchema,
@@ -209,6 +210,52 @@ export const actions: Actions = {
 				access === 'public-read'
 					? `“${bucket}” is public-read: anyone who can reach the endpoint can GET its objects.`
 					: `“${bucket}” is private again.`
+		};
+	},
+
+	bucketConfig: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const bucket = formString(data, 'bucket');
+		if (!bucket) return fail(400, { message: 'Missing bucket.' });
+		const patch: Record<string, unknown> = {};
+		if (data.has('versioning'))
+			patch.versioning = ['on', 'true', '1'].includes(formString(data, 'versioning'));
+		const quota = formString(data, 'quotaMb').trim();
+		if (quota !== '') {
+			if (quota === 'none' || quota === '0') patch.quotaBytes = null;
+			else {
+				const mb = Number(quota);
+				if (!Number.isFinite(mb) || mb <= 0)
+					return fail(400, { message: 'Quota must be a positive number of MB, or none.' });
+				patch.quotaBytes = Math.round(mb * 1024 * 1024);
+			}
+		}
+		for (const field of ['lifecycle', 'cors'] as const) {
+			const raw = formString(data, field).trim();
+			if (raw === '') continue;
+			try {
+				patch[field] = JSON.parse(raw) as unknown;
+			} catch {
+				return fail(400, {
+					message: `${field === 'lifecycle' ? 'Lifecycle' : 'CORS'} must be valid JSON.`,
+				});
+			}
+		}
+		if (Object.keys(patch).length === 0) return { success: 'Nothing changed.' };
+		const parsed = bucketUpdateSchema.safeParse(patch);
+		if (!parsed.success) {
+			return fail(400, {
+				message: parsed.error.issues[0]?.message ?? 'Check the bucket configuration.',
+			});
+		}
+		try {
+			core.storage.updateBucket(principal, params.name, bucket, parsed.data);
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+		return {
+			success: `Configuration saved for “${bucket}”. The node applies it on its next reconcile.`,
 		};
 	},
 

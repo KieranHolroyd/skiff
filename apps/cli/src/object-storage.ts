@@ -3,6 +3,7 @@
  * formatting and parsing for `skif storage`. Types mirror `packages/contracts/src/object-storage.ts`;
  * the CLI bundle stays free of runtime dependencies (D40), so keep them in sync.
  */
+import { readFileSync } from 'node:fs';
 import { UsageError } from './errors.ts';
 import { formatBytes, formatNumber, formatTime, renderTable, truncate } from './output.ts';
 
@@ -17,14 +18,64 @@ export interface StorageGrant {
 	mode: StorageGrantMode;
 }
 
+export type BucketConfigStatus = 'pending' | 'converged' | 'error' | 'unsupported';
+
+export interface BucketLifecycleRule {
+	id: string;
+	prefix?: string;
+	expireDays?: number;
+	noncurrentExpireDays?: number;
+	abortIncompleteDays?: number;
+	enabled: boolean;
+}
+
+export interface BucketCorsRule {
+	origin: string[];
+	method: string[];
+	header: string[];
+	expose: string[];
+	maxAge?: number;
+}
+
+export interface BucketObjectLock {
+	mode: 'governance' | 'compliance';
+	retainDays: number;
+}
+
 export interface StorageBucketView {
 	name: string;
 	access: BucketAccess;
 	state: 'ready' | 'deleting' | 'delete-blocked';
 	sizeBytes: number | null;
 	objects: number | null;
+	versioning: boolean;
+	lifecycle: BucketLifecycleRule[];
+	cors: BucketCorsRule[];
+	quotaBytes: number | null;
+	objectLock: BucketObjectLock | null;
+	configVersion: number;
+	configStatus: BucketConfigStatus;
+	configMessage: string | null;
+	lastConvergedAt: string | null;
 	createdAt: string;
 	statsAt: string | null;
+}
+
+export interface BucketConfigInput {
+	access?: BucketAccess;
+	versioning?: boolean;
+	lifecycle?: BucketLifecycleRule[];
+	cors?: BucketCorsRule[];
+	quotaBytes?: number | null;
+}
+
+export interface StorageShareLink {
+	url: string;
+	method: 'GET' | 'PUT';
+	expiresIn: number;
+	expiresAt: string;
+	maxDownloads: number | null;
+	direct: boolean;
 }
 
 export interface StorageAttachmentView {
@@ -313,4 +364,81 @@ export interface StorageObjectList {
 export interface StorageObjectDeleteResult {
 	deleted: string[];
 	errors: Array<{ key: string; code: string; message: string }>;
+}
+
+// --- bucket configuration (plan 02b) ---------------------------------------
+
+/** `@file.json` or inline JSON → lifecycle rules. The server does the real validation. */
+export function parseLifecycleRules(value: string, flag: string): BucketLifecycleRule[] {
+	const parsed = parseJsonValue(value, flag);
+	if (!Array.isArray(parsed)) throw new UsageError(`${flag} expects a JSON array of lifecycle rules.`);
+	return parsed as BucketLifecycleRule[];
+}
+
+/** `@file.json` or inline JSON → CORS rules. */
+export function parseCorsRules(value: string, flag: string): BucketCorsRule[] {
+	const parsed = parseJsonValue(value, flag);
+	if (!Array.isArray(parsed)) throw new UsageError(`${flag} expects a JSON array of CORS rules.`);
+	return parsed as BucketCorsRule[];
+}
+
+function parseJsonValue(value: string, flag: string): unknown {
+	let text = value;
+	if (value.startsWith('@')) {
+		const path = value.slice(1);
+		try {
+			text = readFileSync(path, 'utf8');
+		} catch {
+			throw new UsageError(`${flag}: cannot read ${path}.`);
+		}
+	}
+	try {
+		return JSON.parse(text) as unknown;
+	} catch {
+		throw new UsageError(`${flag}: invalid JSON.`);
+	}
+}
+
+/** `governance:30` / `compliance:365` → object lock; only valid when creating a bucket. */
+export function parseObjectLock(value: string): BucketObjectLock {
+	const match = /^(governance|compliance):(\d+)$/i.exec(value.trim());
+	if (!match) throw new UsageError('--object-lock expects governance:<days> or compliance:<days>.');
+	const days = Number(match[2]);
+	if (!Number.isInteger(days) || days < 1 || days > 36_500)
+		throw new UsageError('--object-lock retention must be 1–36500 days.');
+	return { mode: match[1]!.toLowerCase() as BucketObjectLock['mode'], retainDays: days };
+}
+
+/** The one-line summary `skif storage bucket config` prints without --json. */
+export function bucketConfigDetails(bucket: StorageBucketView): string {
+	const lines: string[] = [];
+	const field = (label: string, value: string) => lines.push(`${label.padEnd(16)}  ${value}`);
+	field('Bucket', bucket.name);
+	field('Access', bucket.access);
+	field('Versioning', bucket.versioning ? 'on' : 'off');
+	field('Quota', bucket.quotaBytes === null ? 'unlimited' : formatBytes(bucket.quotaBytes));
+	field('Object lock', bucket.objectLock ? `${bucket.objectLock.mode}, ${bucket.objectLock.retainDays} days` : 'off');
+	field('Lifecycle rules', String(bucket.lifecycle.length));
+	field('CORS rules', String(bucket.cors.length));
+	field('Config version', String(bucket.configVersion));
+	field('Convergence', `${bucket.configStatus}${bucket.configMessage ? ` (${bucket.configMessage})` : ''}`);
+	field('Last converged', bucket.lastConvergedAt ? formatTime(bucket.lastConvergedAt) : 'never');
+	if (bucket.lifecycle.length > 0) {
+		lines.push('');
+		lines.push('Lifecycle:');
+		for (const rule of bucket.lifecycle)
+			lines.push(
+				`  ${rule.id}${rule.enabled ? '' : ' (disabled)'}${rule.prefix ? ` prefix=${rule.prefix}` : ''}` +
+					`${rule.expireDays ? ` expire=${rule.expireDays}d` : ''}` +
+					`${rule.noncurrentExpireDays ? ` noncurrent=${rule.noncurrentExpireDays}d` : ''}` +
+					`${rule.abortIncompleteDays ? ` abort=${rule.abortIncompleteDays}d` : ''}`,
+			);
+	}
+	if (bucket.cors.length > 0) {
+		lines.push('');
+		lines.push('CORS:');
+		for (const rule of bucket.cors)
+			lines.push(`  ${rule.method.join(',')} ${rule.origin.join(', ')}`);
+	}
+	return lines.join('\n');
 }

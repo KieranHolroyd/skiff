@@ -20,6 +20,7 @@ import type {
 	ServiceRestartResult,
 } from './databases.ts';
 import type {
+	BucketConfigInput,
 	StorageAttachmentView,
 	StorageBucketView,
 	StorageObjectDeleteResult,
@@ -29,6 +30,7 @@ import type {
 	StorageCredentials,
 	StorageGrant,
 	StorageMetricPoint,
+	StorageShareLink,
 	StorageUpdateInput,
 	StorageView,
 } from './object-storage.ts';
@@ -942,19 +944,60 @@ export class ApiClient {
 
 	async createBucket(
 		name: string,
-		input: { name: string; access?: string },
+		input: {
+			name: string;
+			access?: string;
+			versioning?: boolean;
+			lifecycle?: BucketConfigInput['lifecycle'];
+			cors?: BucketConfigInput['cors'];
+			quotaBytes?: number | null;
+			objectLock?: { mode: 'governance' | 'compliance'; retainDays: number } | null;
+		},
 	): Promise<{ bucket: StorageBucketView; raw: unknown }> {
 		const raw = await this.request('POST', `/api/v1/storage/${encodeURIComponent(name)}/buckets`, { body: input });
 		return { bucket: bucketFrom(raw), raw };
 	}
 
-	async updateBucket(name: string, bucket: string, input: { access: string }): Promise<{ bucket: StorageBucketView; raw: unknown }> {
+	async updateBucket(
+		name: string,
+		bucket: string,
+		input: BucketConfigInput,
+	): Promise<{ bucket: StorageBucketView; raw: unknown }> {
 		const raw = await this.request(
 			'PATCH',
 			`/api/v1/storage/${encodeURIComponent(name)}/buckets/${encodeURIComponent(bucket)}`,
 			{ body: input },
 		);
 		return { bucket: bucketFrom(raw), raw };
+	}
+
+	/** The desired configuration plus the node's last convergence report. */
+	async getBucketConfig(name: string, bucket: string): Promise<{ config: StorageBucketView; raw: unknown }> {
+		const raw = await this.request(
+			'GET',
+			`/api/v1/storage/${encodeURIComponent(name)}/buckets/${encodeURIComponent(bucket)}/config`,
+		);
+		return { config: bucketFrom({ bucket: asRecord(raw)?.config }), raw };
+	}
+
+	/** Mint a signed share link; the response never contains a key. */
+	async signObject(
+		name: string,
+		bucket: string,
+		input: { key: string; method?: 'GET' | 'PUT'; expiresIn?: number; maxDownloads?: number },
+	): Promise<StorageShareLink> {
+		return (await this.request(
+			'POST',
+			`/api/v1/storage/${encodeURIComponent(name)}/buckets/${encodeURIComponent(bucket)}/sign`,
+			{
+				body: {
+					key: input.key,
+					method: input.method ?? 'GET',
+					...(input.expiresIn ? { expiresIn: input.expiresIn } : {}),
+					...(input.maxDownloads ? { maxDownloads: input.maxDownloads } : {}),
+				},
+			},
+		)) as StorageShareLink;
 	}
 
 	/** Ask the node to delete a bucket; `force` empties it first. */
