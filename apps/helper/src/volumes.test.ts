@@ -131,7 +131,9 @@ class MountRunner implements CommandRunner {
 	}
 }
 
-async function driverFixture(): Promise<{
+async function driverFixture(
+	volumeRegistry?: (root: string) => Record<string, { mountPath: string; sourceKey: string; fsType: string }>,
+): Promise<{
 	driver: SystemdDriver;
 	runner: MountRunner;
 	root: string;
@@ -152,6 +154,7 @@ async function driverFixture(): Promise<{
 		runtimeDir: join(root, 'run'),
 		stateDir: join(root, 'state'),
 		volumeRegistryFile: volumesFile,
+		...(volumeRegistry ? { volumeRegistry: volumeRegistry(root) } : {}),
 		releaseDirs: [join(root, 'releases')],
 		bunPath: '/usr/local/bin/bun',
 	});
@@ -232,16 +235,16 @@ describe('volume-backed data dirs', () => {
 	});
 
 	test('purge removes the instance subtree on every registered volume', async () => {
-		const { driver, root } = await driverFixture();
+		// The injected registry points at the temp mount path so the test never touches /mnt.
+		// It cannot come from volumes.json: a real registry entry under the test temp directory
+		// (for example /tmp on Linux CI) is rejected by the volume path rules.
+		const { driver, root } = await driverFixture((root) => ({
+			vol_data: { mountPath: join(root, 'mnt-data'), sourceKey: 'fs:data-uuid', fsType: 'ext4' },
+		}));
 		const stateTarget = join(root, 'state', 'st_abc123');
 		const volumeTarget = join(root, 'mnt-data', 'skiff', 'st_abc123');
 		await fs.mkdir(volumeTarget, { recursive: true });
 		await fs.mkdir(stateTarget, { recursive: true });
-		// Point the registry at the temp mount path so the test never touches /mnt.
-		await fs.writeFile(
-			join(root, 'volumes.json'),
-			JSON.stringify({ vol_data: { mountPath: join(root, 'mnt-data'), sourceKey: 'fs:data-uuid', fsType: 'ext4' } }),
-		);
 		await driver.purge('st_abc123');
 		await expect(fs.stat(volumeTarget)).rejects.toThrow();
 		await expect(fs.stat(stateTarget)).rejects.toThrow();

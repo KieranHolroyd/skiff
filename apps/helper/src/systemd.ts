@@ -146,6 +146,12 @@ export interface SystemdDriverOptions {
 	stateDir: string;
 	/** Volume registry written by the root applier, normally /etc/skiff/volumes.json (D74). */
 	volumeRegistryFile?: string;
+	/**
+	 * Injectable registry for tests, used instead of `volumeRegistryFile`. Production always reads
+	 * the file; the override exists because a test temp directory (for example under `/tmp`) is
+	 * not a legal volume mount path.
+	 */
+	volumeRegistry?: VolumeRegistry;
 	/** Where the agent extracts content-addressed releases, in probe order. */
 	releaseDirs: string[];
 	/** Absolute bun binary used for the default process command. */
@@ -188,6 +194,7 @@ export class SystemdDriver {
 	private readonly runtimeDir: string;
 	private readonly stateDir: string;
 	private readonly volumeRegistryFile: string;
+	private readonly volumeRegistryOverride: VolumeRegistry | null;
 	private readonly releaseDirs: string[];
 	private readonly bunPath: string;
 	private readonly systemctlPath: string;
@@ -210,6 +217,7 @@ export class SystemdDriver {
 			options.volumeRegistryFile ?? DEFAULT_VOLUMES_FILE,
 			'volumeRegistryFile',
 		);
+		this.volumeRegistryOverride = options.volumeRegistry ?? null;
 		if (options.releaseDirs.length === 0)
 			throw new ValidationError('releaseDirs must contain at least one directory');
 		this.releaseDirs = options.releaseDirs.map((dir) => assertAbsolutePath(dir, 'releaseDir'));
@@ -287,6 +295,10 @@ export class SystemdDriver {
 		return verifyMount(this.runner, input.mountPath, input.sourceKey);
 	}
 
+	private async registry(): Promise<VolumeRegistry> {
+		return this.volumeRegistryOverride ?? readVolumeRegistry(this.volumeRegistryFile);
+	}
+
 	/**
 	 * Where one container's data lives (D74). A volume-backed workload is resolved through the
 	 * root applier's registry and verified *before* anything is written: if the mount is gone the
@@ -295,7 +307,7 @@ export class SystemdDriver {
 	 */
 	async resolveDataDir(workload: WorkloadDesired): Promise<string> {
 		if (!workload.volumeId) return join(this.stateDir, workload.id);
-		const registry = await readVolumeRegistry(this.volumeRegistryFile);
+		const registry = await this.registry();
 		const entry = registry[workload.volumeId];
 		if (!entry)
 			throw new ValidationError(
@@ -319,7 +331,7 @@ export class SystemdDriver {
 	async resolveAppVolumeMounts(workload: WorkloadDesired): Promise<UnitVolumeMount[]> {
 		const mounts = workload.volumes ?? [];
 		if (mounts.length === 0) return [];
-		const registry = await readVolumeRegistry(this.volumeRegistryFile);
+		const registry = await this.registry();
 		const verified = new Set<string>();
 		const owner = workload.database
 			? DATABASE_ENGINES[workload.database.engine]
@@ -1122,7 +1134,7 @@ END $$;`];
 	/** Resolve a managed database's data dir from the same roots `purge` uses (D74). */
 	private async dataDirFor(id: string): Promise<string> {
 		const roots = [resolve(this.stateDir)];
-		const registry = await readVolumeRegistry(this.volumeRegistryFile);
+		const registry = await this.registry();
 		for (const entry of Object.values(registry)) roots.push(resolve(entry.mountPath, 'skiff'));
 		for (const root of roots) {
 			const candidate = resolve(root, id);
@@ -1163,7 +1175,7 @@ END $$;`];
 		// The data dir is under the state root or, for a volume-backed workload, `<mount>/skiff`
 		// (D74). Both are fixed shapes with the id as the basename; nothing else is ever removed.
 		const roots = [resolve(this.stateDir)];
-		const registry = await readVolumeRegistry(this.volumeRegistryFile);
+		const registry = await this.registry();
 		for (const entry of Object.values(registry)) roots.push(resolve(entry.mountPath, 'skiff'));
 		for (const root of roots) {
 			const target = resolve(root, id);

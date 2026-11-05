@@ -149,9 +149,10 @@ const tools = await client.listTools();
 check('tools/list over authenticated MCP', tools.tools.some((t) => t.name === 'delete_project'), tools.tools.map((t) => t.name).join(','));
 const toolNames = new Set(tools.tools.map((t) => t.name));
 check(
-	'database tools listed; no credentials or purge tool (D58, D53)',
+	'database tools listed; rotation allowed, no credential reveal or purge tool (D58, D53)',
 	['list_databases', 'get_database', 'create_database', 'attach_database', 'detach_database', 'delete_database'].every((name) => toolNames.has(name)) &&
-		![...toolNames].some((name) => /credential|purge/.test(name)),
+		toolNames.has('rotate_database_credentials') &&
+		![...toolNames].some((name) => /purge/.test(name) || (/credential/.test(name) && name !== 'rotate_database_credentials')),
 );
 check(
 	'storage tools listed; no key reveal, purge or bucket delete tool (S6)',
