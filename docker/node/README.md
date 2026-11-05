@@ -25,8 +25,10 @@ docker build -f docker/node/Dockerfile -t skiff-node .
 ```
 
 Release tags publish `linux/amd64` and `linux/arm64` as
-`ghcr.io/<owner>/skiff-node:<version>` and `:latest`. CI builds the image on
-every push so a broken Dockerfile fails before a release.
+`ghcr.io/<owner>/skiff-node:<version>` and `:latest`. Every push to `main`
+publishes the same architectures as `:edge` and `:sha-<commit>`, so the image
+can be pulled before a release. CI builds both on every push, so a broken
+Dockerfile fails before a release.
 
 ## Deploy with Arcane
 
