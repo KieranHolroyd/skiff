@@ -13,6 +13,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      managed_data: ${{ steps.filter.outputs.managed_data }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: filter
+        name: Decide whether the managed-data lane runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="$(git merge-base HEAD "${{ github.event.pull_request.base.sha }}")"
+            git diff --name-only "$base" HEAD > /tmp/changed-files
+          else
+            git diff --name-only HEAD^ HEAD > /tmp/changed-files 2>/dev/null || : > /tmp/changed-files
+          fi
+          echo "Changed files:"
+          cat /tmp/changed-files
+          if [ "${{ github.event_name }}" != "pull_request" ] ||
+            grep -Eq '^(apps/helper/|apps/agent/|packages/core/src/database|packages/core/src/storage|packages/core/src/object-store|tests/e2e/|scripts/e2e/|\.github/workflows/ci\.yml)' /tmp/changed-files; then
+            echo "managed_data=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "managed_data=false" >> "$GITHUB_OUTPUT"
+          fi
+
   test:
     name: Test and type-check
     runs-on: ubuntu-latest
@@ -43,6 +73,37 @@ jobs:
           node dist/skif.js --version
           node dist/skif.js --help >/dev/null
           npm pack --dry-run
+
+  managed-data-e2e:
+    name: Managed data e2e (Podman)
+    needs: changes
+    if: needs.changes.outputs.managed_data == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.0'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install Podman
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends podman uidmap
+          # Rootless Podman on a GitHub runner needs a writable runtime dir; the runner user
+          # has no systemd --user session, so create it explicitly.
+          sudo mkdir -p "/run/user/$(id -u)"
+          sudo chown "$(id -u):$(id -g)" "/run/user/$(id -u)"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          podman --version
+          podman info
+
+      - name: Managed-data container lane
+        run: SKIFF_E2E_ENGINE=podman bun tests/e2e/managed-data.e2e.ts
 
   e2e:
     name: End-to-end (REST + MCP)
