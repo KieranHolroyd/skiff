@@ -94,6 +94,8 @@ root:skiff`.
 | `PROTOCOL_HEADER` | `x-forwarded-proto` | no | Trust Caddy's forwarded protocol, set by the unit. |
 | `HOST_HEADER` | `x-forwarded-host` | no | Trust Caddy's forwarded host, set by the unit. |
 | `BODY_SIZE_LIMIT` | `520M` | no | adapter-bun request body cap, set by the unit. Its 512 KB default would reject artifact uploads with a bare 413; 520M covers the 500 MiB artifact limit, which the upload route enforces. |
+| `SKIFF_STORAGE_GATEWAY_PORT` | `8081` | no | Loopback port of the edge's internal S3 gateway (D82). The agent listens on `127.0.0.1:<port>`; the control plane connects there to browse bucket contents. Must match on both processes. |
+| `SKIFF_STORAGE_OBJECT_MAX_BYTES` | `104857600` | no | Largest single object uploaded through the dashboard/API (100 MiB). Larger files need a presigned upload (public instances) or `skif storage objects put`. |
 
 ### 2.2 Secrets
 
@@ -411,11 +413,12 @@ objects and backups) is not moved by this; stop the services and relocate it by 
 ### 4.3 Platform settings from the dashboard
 
 **Settings → Backups** (R2 credentials, turning Litestream and the monthly restore drill on and off,
-running a drill, downloading a database snapshot) and **Settings → Notifications** (SMTP for
-sign-in links, invites and email alerts, plus the alert webhook and alert email address) change
+running a drill, downloading a database snapshot), **Settings → Notifications** (SMTP for
+sign-in links, invites and email alerts, plus the alert webhook and alert email address) and
+**Settings → Assistant** (the optional in-dashboard chat's OpenAI-compatible endpoint) change
 `/etc/skiff/skiff.env` without SSH.
 
-Both tabs are **owner-only**: you must be a platform admin (§6.2 of DESIGN, the admin-plugin role)
+These tabs are **owner-only**: you must be a platform admin (§6.2 of DESIGN, the admin-plugin role)
 *and* the owner of the org you're signed in to, in your own dashboard session. Org admins, platform
 admins who are not owners, API keys and MCP tokens get 403. On a single-user install that is the
 bootstrap user.
@@ -433,9 +436,10 @@ It works like the update button. The control plane can't write `/etc/skiff`, so:
    regular files only, at most 64 KiB, deleted once read) and validates it again with the same rules
    (`packages/contracts/src/platform-config.ts`). Only these keys can ever be written:
    `R2_ACCOUNT_ID R2_BUCKET R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_ENDPOINT`,
-   `SKIFF_SMTP_HOST/PORT/USER/PASSWORD/FROM/SECURE`, `SKIFF_ALERT_WEBHOOK SKIFF_ALERT_EMAIL`. Values
-   are pattern-checked (single line; nothing that could change the meaning of `litestream.yml`,
-   which expands `${VAR}` before parsing).
+   `SKIFF_SMTP_HOST/PORT/USER/PASSWORD/FROM/SECURE`, `SKIFF_ALERT_WEBHOOK SKIFF_ALERT_EMAIL`, and
+   (Settings → Assistant, optional) `SKIFF_ASSISTANT_PROVIDER/BASE_URL/MODEL/ROUTER_MODEL/API_KEY/
+   MAX_AGENTS`. Values are pattern-checked (single line; nothing that could change the meaning of
+   `litestream.yml`, which expands `${VAR}` before parsing).
 4. It saves the old file as `skiff.env.previous`, writes the new one (`root:skiff 0640`), and
    restarts the control plane. If the control plane is not healthy within 60 s, it restores
    `skiff.env.previous`, restarts again and reports `reverted`.
