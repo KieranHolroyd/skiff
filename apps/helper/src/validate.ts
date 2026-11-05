@@ -136,6 +136,15 @@ export interface WorkloadDesired {
  * The helper's own copy of the engine registry (D61). It is deliberately not imported from
  * `@skiff/contracts`: a wider contract must not widen what the privileged helper will run.
  */
+/**
+ * The helper's own engine registry (D61, D95). It maps `engine` + `version` from the wire to a
+ * fixed image, user, port and the env names its verbs read back; nothing here comes from the
+ * control plane. The images are each vendor's official ones.
+ *
+ * - `env` names the owner user / password / database variables in the container env file, which
+ *   the control plane writes with the same names (`databaseEngineRegistry.containerEnv`).
+ * - `cli` is the in-container client the fixed verbs exec (never a shell).
+ */
 export const DATABASE_ENGINES = {
 	postgres: {
 		versions: ['16', '17'],
@@ -144,8 +153,75 @@ export const DATABASE_ENGINES = {
 		gid: 70,
 		containerPort: 5432,
 		image: (version: string) => `docker.io/library/postgres:${version}-alpine`,
+		env: { user: 'POSTGRES_USER', password: 'POSTGRES_PASSWORD', database: 'POSTGRES_DB' },
+		cli: 'psql',
 	},
-} as const;
+	mysql: {
+		versions: ['8.4', '9.7'],
+		/** The official image's `mysql` user and group. */
+		uid: 999,
+		gid: 999,
+		containerPort: 3306,
+		image: (version: string) => `docker.io/library/mysql:${version}`,
+		env: { user: 'MYSQL_USER', password: 'MYSQL_PASSWORD', database: 'MYSQL_DATABASE' },
+		cli: 'mysql',
+	},
+	mariadb: {
+		versions: ['11.4', '11.8'],
+		/** The official image's `mysql` user and group. */
+		uid: 999,
+		gid: 999,
+		containerPort: 3306,
+		image: (version: string) => `docker.io/library/mariadb:${version}`,
+		env: { user: 'MARIADB_USER', password: 'MARIADB_PASSWORD', database: 'MARIADB_DATABASE' },
+		cli: 'mariadb',
+	},
+	mongodb: {
+		versions: ['8.0', '9.0'],
+		/** The official image's `mongodb` user and group. */
+		uid: 999,
+		gid: 999,
+		containerPort: 27017,
+		image: (version: string) => `docker.io/library/mongo:${version}`,
+		env: {
+			user: 'MONGO_INITDB_ROOT_USERNAME',
+			password: 'MONGO_INITDB_ROOT_PASSWORD',
+			database: 'MONGO_INITDB_DATABASE',
+		},
+		cli: 'mongosh',
+	},
+	valkey: {
+		versions: ['8.1', '9.1'],
+		/** The alpine image's `valkey` user (999) and group (1000). */
+		uid: 999,
+		gid: 1000,
+		containerPort: 6379,
+		image: (version: string) => `docker.io/valkey/valkey:${version}-alpine`,
+		env: { user: 'VALKEY_USER', password: 'VALKEY_PASSWORD', database: null },
+		cli: 'valkey-cli',
+	},
+	redis: {
+		versions: ['8.8', '8.10'],
+		/** The alpine image's `redis` user (999) and group (1000). */
+		uid: 999,
+		gid: 1000,
+		containerPort: 6379,
+		image: (version: string) => `docker.io/library/redis:${version}-alpine`,
+		env: { user: 'REDIS_USER', password: 'REDIS_PASSWORD', database: null },
+		cli: 'redis-cli',
+	},
+} as const satisfies Record<
+	string,
+	{
+		versions: readonly string[];
+		uid: number;
+		gid: number;
+		containerPort: number;
+		image: (version: string) => string;
+		env: { user: string; password: string; database: string | null };
+		cli: string;
+	}
+>;
 export type DatabaseEngine = keyof typeof DATABASE_ENGINES;
 
 export interface WorkloadDatabase {
@@ -184,6 +260,9 @@ export function parseDatabase(value: unknown, label = 'workload.database'): Work
 			throw new ValidationError(`${label}.${key} is not supported`);
 	}
 	const parsed: WorkloadDatabase = { engine: engine as DatabaseEngine, version };
+	// WAL archiving and the helper-generated certificate are Postgres features (docs/DATABASES.md §17).
+	if (engine !== 'postgres' && (record.pitr !== undefined || record.tls === true))
+		throw new ValidationError(`${label}.pitr and ${label}.tls are only supported for postgres`);
 	if (record.pitr !== undefined) {
 		const pitr = assertRecord(record.pitr, `${label}.pitr`);
 		const stanza = assertString(pitr.stanza, `${label}.pitr.stanza`, { max: 64 });
@@ -648,6 +727,8 @@ export function parseWorkload(value: unknown): WorkloadDesired {
 	if (database) workload.database = database;
 	if (record.pooler !== undefined) {
 		if (!database) throw new ValidationError('workload.pooler is only valid for a database workload');
+		if (database.engine !== 'postgres')
+			throw new ValidationError('workload.pooler is only valid for a postgres database');
 		const pooler = assertRecord(record.pooler, 'workload.pooler');
 		workload.pooler = { port: assertPort(pooler.port, 'workload.pooler.port') };
 	}

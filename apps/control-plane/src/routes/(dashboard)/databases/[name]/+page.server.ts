@@ -340,7 +340,8 @@ export const actions: Actions = {
 		const principal = locals.principal!;
 		const data = await request.formData();
 		const slug = formString(data, 'project');
-		const envPrefix = formString(data, 'envPrefix').toUpperCase() || 'DATABASE';
+		// Empty: the engine's default prefix (DATABASE, MONGODB or REDIS).
+		const envPrefix = formString(data, 'envPrefix').toUpperCase() || undefined;
 		if (!slug)
 			return fail(400, {
 				message: 'Choose a project.',

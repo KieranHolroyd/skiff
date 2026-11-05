@@ -24,6 +24,7 @@ import {
 	renderContainerEnvFile,
 	renderContainerUnit,
 	renderEnvFile,
+	renderKeyValueConfig,
 	renderNetworkUnit,
 	renderPoolerConfig,
 	renderPoolerUnit,
@@ -51,6 +52,7 @@ import {
 	assertRelativePath,
 	databaseAlias,
 	workloadNetworkName,
+	type DatabaseEngine,
 	type WorkloadActivation,
 	type WorkloadConsoleActivation,
 	type WorkloadDesired,
@@ -428,8 +430,9 @@ export class SystemdDriver {
 
 		const envFile = join(workloadRuntimeDir, 'env');
 		const env = { ...workload.env, ...activation.env };
-		// The database profile pins its cluster inside the /data mount; never the image's VOLUME.
-		if (workload.database) env.PGDATA = DATABASE_PGDATA;
+		// The database profile pins its data inside the /data mount; never the image's VOLUME. Each
+		// engine's fixed settings win over anything on the wire (D61).
+		if (workload.database) Object.assign(env, databaseFixedEnv(workload.database.engine, env));
 		// The storage profile's fixed settings win over anything on the wire (S1).
 		if (workload.objectStorage) Object.assign(env, STORAGE_ENV);
 		// systemd and Podman parse env files differently; each driver gets its own format.
@@ -515,6 +518,8 @@ export class SystemdDriver {
 				await this.chown(dataDir, owner.uid, owner.gid);
 			}
 			const tls = await this.databaseTlsFor(workload);
+			const serverConfigPath = await this.writeKeyValueConfig(workload, env, workloadRuntimeDir);
+			if (serverConfigPath) changed = serverConfigPath.changed || changed;
 			const container = renderContainerUnit({
 				workload,
 				image,
@@ -532,6 +537,7 @@ export class SystemdDriver {
 						}
 					: {}),
 				tlsDir: tls?.enabled ? databaseTlsPaths(this.runtimeDir, workload.id).dir : null,
+				serverConfigPath: serverConfigPath?.path ?? null,
 				volumeMounts,
 				apparmorProfile: this.apparmorProfile,
 			});
@@ -639,6 +645,7 @@ export class SystemdDriver {
 			renderConsoleEnv({
 				id,
 				database: env,
+				engine: env.engine,
 				webRoot: activation.webRoot,
 				authUser: activation.authUser,
 				authPassword: activation.authPassword,
@@ -687,6 +694,10 @@ export class SystemdDriver {
 		if (!/^[A-Za-z0-9_-]{16,200}$/.test(newPassword))
 			throw new ValidationError('The rotated password must be base64url (16–200 characters)');
 		const env = await this.readDatabaseEnv(id);
+		if (env.engine !== 'postgres') {
+			if (role !== 'owner') throw new ValidationError(`Only the owner can be rotated on ${env.engine}`);
+			return this.rotateEngineOwner(id, env, newPassword);
+		}
 		const target = role === 'owner' ? env.user : 'skiff_monitor';
 		const container = `skiff-workload-${id}`;
 		const child = Bun.spawn(
@@ -763,7 +774,7 @@ export class SystemdDriver {
 	): Promise<void> {
 		assertDatabaseId(id, 'database id');
 		if (!identifier(username)) throw new ValidationError('credential username must be a Postgres identifier');
-		const env = await this.readDatabaseEnv(id);
+		const env = await this.readPostgresEnv(id);
 		const target = role === 'owner' ? env.user : username;
 		if (action === 'revoke') {
 			if (role === 'owner') throw new ValidationError('The owner role cannot be revoked');
@@ -895,6 +906,7 @@ END $$;`];
 	async dumpDatabase(id: string): Promise<{ path: string; sizeBytes: number; filename: string }> {
 		assertDatabaseId(id, 'database id');
 		const env = await this.readDatabaseEnv(id);
+		if (env.engine !== 'postgres') return this.dumpEngine(id, env);
 		const runtimeDir = join(this.runtimeDir, id);
 		await fs.mkdir(runtimeDir, { recursive: true, mode: 0o700 });
 		const path = join(runtimeDir, `dump-${randomUUID()}.dump`);
@@ -938,6 +950,7 @@ END $$;`];
 		assertDatabaseId(id, 'database id');
 		if (!body) throw new ValidationError('A restore needs a request body');
 		const env = await this.readDatabaseEnv(id);
+		if (env.engine !== 'postgres') return this.restoreEngine(id, env, body);
 		const child = Bun.spawn(
 			[
 				this.podmanPath,
@@ -1017,7 +1030,7 @@ END $$;`];
 	async pitrConfigure(id: string, rawRepo: unknown): Promise<{ stanza: string; configPath: string }> {
 		assertDatabaseId(id, 'database id');
 		const repo = parsePitrRepo(rawRepo);
-		const env = await this.readDatabaseEnv(id);
+		const env = await this.readPostgresEnv(id);
 		const stanza = pitrStanzaFor(id);
 		const paths = pitrPaths(this.runtimeDir, id);
 		await fs.mkdir(paths.dir, { recursive: true, mode: 0o700 });
@@ -1143,7 +1156,7 @@ END $$;`];
 		const stanza = pitrStanzaFor(id);
 		const paths = await this.requirePitrConfig(id);
 		const targetDir = await this.dataDirFor(targetDatabaseId);
-		const targetEnv = await this.readDatabaseEnv(targetDatabaseId);
+		const targetEnv = await this.readPostgresEnv(targetDatabaseId);
 
 		await this.systemctl(['stop', serviceUnitName(targetDatabaseId)], { allowFailure: true });
 		await fs.rm(targetDir, { recursive: true, force: true });
@@ -1220,7 +1233,11 @@ END $$;`];
 		return resolve(this.stateDir, id);
 	}
 
-	private async readDatabaseEnv(id: string): Promise<{ user: string; password: string; database: string }> {
+	/**
+	 * Owner credentials from the env file the helper itself wrote for the container. The engine is
+	 * the helper's own `SKIFF_DB_ENGINE` marker; files written before D95 have none and are Postgres.
+	 */
+	private async readDatabaseEnv(id: string): Promise<DatabaseEnv> {
 		const text = await fs.readFile(join(this.runtimeDir, id, 'env'), 'utf8').catch(() => null);
 		if (text === null) throw new ValidationError(`Database ${id} has no runtime env file; start it first.`);
 		const values = new Map<string, string>();
@@ -1229,12 +1246,300 @@ END $$;`];
 			if (eq <= 0) continue;
 			values.set(line.slice(0, eq), line.slice(eq + 1));
 		}
-		const user = values.get('POSTGRES_USER') ?? '';
-		const password = values.get('POSTGRES_PASSWORD') ?? '';
-		const database = values.get('POSTGRES_DB') ?? '';
-		if (!identifier(user) || !identifier(database) || !password)
-			throw new ValidationError(`Database ${id} is missing valid Postgres credentials in its env file.`);
-		return { user, password, database };
+		const marker = values.get('SKIFF_DB_ENGINE') ?? 'postgres';
+		if (!Object.hasOwn(DATABASE_ENGINES, marker))
+			throw new ValidationError(`Database ${id} has an unknown engine "${marker}" in its env file.`);
+		const engine = marker as DatabaseEngine;
+		const keys = DATABASE_ENGINES[engine].env;
+		const user = values.get(keys.user) ?? '';
+		const password = values.get(keys.password) ?? '';
+		const database = keys.database ? (values.get(keys.database) ?? '') : '';
+		if (!identifier(user) || (keys.database && !identifier(database)) || !password)
+			throw new ValidationError(`Database ${id} is missing valid ${engine} credentials in its env file.`);
+		return { engine, user, password, database };
+	}
+
+	/** The Postgres-only verbs (named roles, PITR) refuse any other engine. */
+	private async readPostgresEnv(id: string): Promise<DatabaseEnv> {
+		const env = await this.readDatabaseEnv(id);
+		if (env.engine !== 'postgres') throw new ValidationError(`This operation is only supported for postgres, not ${env.engine}`);
+		return env;
+	}
+
+	/**
+	 * Valkey/Redis read their ACL user from a helper-written config (the images take no credential
+	 * env). It is 0600, owned by the container's uid, beside the env file. Other engines: null.
+	 */
+	private async writeKeyValueConfig(
+		workload: WorkloadDesired,
+		env: Record<string, string>,
+		workloadRuntimeDir: string,
+	): Promise<{ path: string; changed: boolean } | null> {
+		const engine = workload.database?.engine;
+		if (engine !== 'valkey' && engine !== 'redis') return null;
+		const info = DATABASE_ENGINES[engine];
+		const path = join(workloadRuntimeDir, 'server.conf');
+		const content = renderKeyValueConfig({
+			user: env[info.env.user] ?? '',
+			password: env[info.env.password] ?? '',
+			memoryMb: workload.memoryMb,
+		});
+		const changed = await this.writeIfChanged(path, content, 0o600);
+		await this.chown(path, info.uid, info.gid).catch(() => undefined);
+		return { path, changed };
+	}
+
+	/**
+	 * Fixed dump verbs for MySQL/MariaDB (`mysqldump`/`mariadb-dump`, plain SQL of the one
+	 * database, consistent via `--single-transaction`) and MongoDB (`mongodump --archive --gzip`).
+	 * Like `pg_dump`, the dump goes to a 0400 staging file and passwords never reach argv: the SQL
+	 * clients read `MYSQL_PWD` from podman's environment, and MongoDB tools read a 0600 YAML config
+	 * written into the container's tmpfs over stdin.
+	 */
+	private async dumpEngine(id: string, env: DatabaseEnv): Promise<{ path: string; sizeBytes: number; filename: string }> {
+		const runtimeDir = join(this.runtimeDir, id);
+		await fs.mkdir(runtimeDir, { recursive: true, mode: 0o700 });
+		const container = `skiff-workload-${id}`;
+		let argv: string[];
+		let extension: string;
+		let spawnEnv: Record<string, string | undefined> = process.env;
+		switch (env.engine) {
+			case 'mysql':
+			case 'mariadb': {
+				const tool = env.engine === 'mysql' ? 'mysqldump' : 'mariadb-dump';
+				argv = [
+					this.podmanPath,
+					'exec',
+					'-e',
+					'MYSQL_PWD',
+					container,
+					tool,
+					'-uroot',
+					'--single-transaction',
+					'--routines',
+					'--triggers',
+					'--events',
+					...(env.engine === 'mysql' ? ['--no-tablespaces', '--set-gtid-purged=OFF'] : []),
+					env.database,
+				];
+				spawnEnv = { ...process.env, MYSQL_PWD: env.password };
+				extension = 'sql';
+				break;
+			}
+			case 'mongodb': {
+				await this.writeMongoToolConfig(container, env.password);
+				argv = [
+					this.podmanPath,
+					'exec',
+					container,
+					'mongodump',
+					'--quiet',
+					...mongoToolArgs(env.user),
+					'--db',
+					env.database,
+					'--archive',
+					'--gzip',
+				];
+				extension = 'archive.gz';
+				break;
+			}
+			default:
+				throw new ValidationError(`Backups are not supported for ${env.engine}`);
+		}
+		const path = join(runtimeDir, `dump-${randomUUID()}.${extension}`);
+		try {
+			const child = Bun.spawn(argv, { env: spawnEnv, stdin: 'ignore', stdout: Bun.file(path), stderr: 'pipe' });
+			const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+			if (code !== 0) {
+				await fs.rm(path, { force: true }).catch(() => undefined);
+				throw new Error(`${argv[argv.indexOf(container) + 1]} failed (${code}): ${stderr.trim().slice(0, 500) || 'no detail'}`);
+			}
+		} finally {
+			if (env.engine === 'mongodb') await this.removeMongoToolConfig(container);
+		}
+		const info = await fs.stat(path);
+		await fs.chmod(path, 0o400);
+		return { path, sizeBytes: info.size, filename: `${id}.${extension}` };
+	}
+
+	/**
+	 * Restore a dump into a new MySQL/MariaDB/MongoDB database, then run a verification query. A
+	 * MongoDB archive is renamed into the target database (`--nsFrom '$db$.$coll$'`), since a
+	 * restore always targets a new database with its own name.
+	 */
+	private async restoreEngine(id: string, env: DatabaseEnv, body: ReadableStream<Uint8Array>): Promise<void> {
+		const container = `skiff-workload-${id}`;
+		let argv: string[];
+		let spawnEnv: Record<string, string | undefined> = process.env;
+		switch (env.engine) {
+			case 'mysql':
+			case 'mariadb':
+				argv = [this.podmanPath, 'exec', '-i', '-e', 'MYSQL_PWD', container, DATABASE_ENGINES[env.engine].cli, '-uroot', env.database];
+				spawnEnv = { ...process.env, MYSQL_PWD: env.password };
+				break;
+			case 'mongodb':
+				await this.writeMongoToolConfig(container, env.password);
+				argv = [
+					this.podmanPath,
+					'exec',
+					'-i',
+					container,
+					'mongorestore',
+					'--quiet',
+					...mongoToolArgs(env.user),
+					'--archive',
+					'--gzip',
+					'--drop',
+					'--nsFrom',
+					'$db$.$coll$',
+					'--nsTo',
+					`${env.database}.$coll$`,
+				];
+				break;
+			default:
+				throw new ValidationError(`Restores are not supported for ${env.engine}`);
+		}
+		try {
+			const child = Bun.spawn(argv, { env: spawnEnv, stdin: 'pipe', stdout: 'ignore', stderr: 'pipe' });
+			const reader = body.getReader();
+			try {
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+					if (value?.byteLength) {
+						child.stdin.write(value);
+						await child.stdin.flush();
+					}
+				}
+			} finally {
+				child.stdin.end();
+			}
+			const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+			if (code !== 0)
+				throw new Error(`${env.engine} restore failed (${code}): ${stderr.trim().slice(0, 500) || 'no detail'}`);
+		} finally {
+			if (env.engine === 'mongodb') await this.removeMongoToolConfig(container);
+		}
+		if (!(await this.verifyEngineLogin(id, env, env.password)))
+			throw new Error('The restored database did not answer the verification query.');
+	}
+
+	/**
+	 * Owner password rotation for engines other than Postgres (D86). The statements go over stdin,
+	 * never argv; a fresh login with the new password must then succeed.
+	 *
+	 * - MySQL/MariaDB: `ALTER USER` for the owner and for `root@localhost`, which the helper keeps
+	 *   on the owner's password so its fixed verbs can use the local socket.
+	 * - MongoDB: `changeUserPassword` on the owner, who lives in `admin`.
+	 * - Valkey/Redis: `ACL SETUSER … resetpass >new` live; the re-activation that follows a
+	 *   successful rotation rewrites the server config, so a restart keeps the new password.
+	 */
+	private async rotateEngineOwner(id: string, env: DatabaseEnv, newPassword: string): Promise<void> {
+		const container = `skiff-workload-${id}`;
+		let argv: string[];
+		let spawnEnv: Record<string, string | undefined> = process.env;
+		let script: string;
+		switch (env.engine) {
+			case 'mysql':
+			case 'mariadb': {
+				const quoted = newPassword.replace(/'/g, "''");
+				argv = [this.podmanPath, 'exec', '-i', '-e', 'MYSQL_PWD', container, DATABASE_ENGINES[env.engine].cli, '-uroot'];
+				spawnEnv = { ...process.env, MYSQL_PWD: env.password };
+				script = `ALTER USER '${env.user}'@'%' IDENTIFIED BY '${quoted}';\nALTER USER 'root'@'localhost' IDENTIFIED BY '${quoted}';\n`;
+				break;
+			}
+			case 'mongodb':
+				argv = [this.podmanPath, 'exec', '-i', container, 'mongosh', '--quiet', '--nodb'];
+				script =
+					`const c = connect('mongodb://127.0.0.1:27017/admin', ${JSON.stringify(env.user)}, ${JSON.stringify(env.password)});\n` +
+					`c.changeUserPassword(${JSON.stringify(env.user)}, ${JSON.stringify(newPassword)});\n`;
+				break;
+			case 'valkey':
+			case 'redis':
+				argv = [this.podmanPath, 'exec', '-i', '-e', 'REDISCLI_AUTH', container, DATABASE_ENGINES[env.engine].cli, '--no-auth-warning', '--user', env.user];
+				spawnEnv = { ...process.env, REDISCLI_AUTH: env.password };
+				script = `ACL SETUSER ${env.user} resetpass >${newPassword}\n`;
+				break;
+			default:
+				throw new ValidationError(`Rotation is not supported for ${env.engine}`);
+		}
+		const child = Bun.spawn(argv, { env: spawnEnv, stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' });
+		child.stdin.write(script);
+		child.stdin.end();
+		const [code, stdout, stderr] = await Promise.all([
+			child.exited,
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+		]);
+		// valkey-cli exits 0 on a command error; its reply is on stdout.
+		const replyError = (env.engine === 'valkey' || env.engine === 'redis') && /^\(error\)|^ERR|^WRONGPASS|^NOAUTH/m.test(stdout);
+		if (code !== 0 || replyError)
+			throw new Error(`Password change failed (${code}): ${(stderr.trim() || stdout.trim()).slice(0, 500) || 'no detail'}`);
+		if (!(await this.verifyEngineLogin(id, env, newPassword)))
+			throw new Error('The rotated credential did not pass the verification query.');
+	}
+
+	/** A fresh owner login over TCP with `password`, answered by the engine's smallest query. */
+	private async verifyEngineLogin(id: string, env: DatabaseEnv, password: string): Promise<boolean> {
+		const container = `skiff-workload-${id}`;
+		let argv: string[];
+		let spawnEnv: Record<string, string | undefined> = process.env;
+		let stdin: string | null = null;
+		let expected: string;
+		switch (env.engine) {
+			case 'mysql':
+			case 'mariadb':
+				argv = [this.podmanPath, 'exec', '-e', 'MYSQL_PWD', container, DATABASE_ENGINES[env.engine].cli, '-h', '127.0.0.1', '-u', env.user, '-N', '-s', '-e', 'SELECT 1', env.database];
+				spawnEnv = { ...process.env, MYSQL_PWD: password };
+				expected = '1';
+				break;
+			case 'mongodb':
+				argv = [this.podmanPath, 'exec', '-i', container, 'mongosh', '--quiet', '--nodb'];
+				stdin =
+					`const c = connect('mongodb://127.0.0.1:27017/admin', ${JSON.stringify(env.user)}, ${JSON.stringify(password)});\n` +
+					`print('skiff-ok-' + c.runCommand({ ping: 1 }).ok);\n`;
+				expected = 'skiff-ok-1';
+				break;
+			case 'valkey':
+			case 'redis':
+				argv = [this.podmanPath, 'exec', '-e', 'REDISCLI_AUTH', container, DATABASE_ENGINES[env.engine].cli, '--no-auth-warning', '--user', env.user, 'PING'];
+				spawnEnv = { ...process.env, REDISCLI_AUTH: password };
+				expected = 'PONG';
+				break;
+			default:
+				return false;
+		}
+		const child = Bun.spawn(argv, { env: spawnEnv, stdin: stdin === null ? 'ignore' : 'pipe', stdout: 'pipe', stderr: 'ignore' });
+		if (stdin !== null && child.stdin && typeof child.stdin !== 'number') {
+			child.stdin.write(stdin);
+			child.stdin.end();
+		}
+		const [code, out] = await Promise.all([child.exited, new Response(child.stdout).text()]);
+		// mongosh echoes a `> ` prompt before each line it reads from stdin.
+		return code === 0 && out.split('\n').some((line) => line.replace(/^(?:>\s*)+/, '').trim() === expected);
+	}
+
+	/**
+	 * MongoDB tools read the password from `--config`. It is written over stdin with `tee` (no
+	 * shell) into the container's own /tmp tmpfs, where only the image's uid runs, and removed
+	 * after the tool exits.
+	 */
+	private async writeMongoToolConfig(container: string, password: string): Promise<void> {
+		const child = Bun.spawn([this.podmanPath, 'exec', '-i', container, 'tee', MONGO_TOOL_CONFIG], {
+			stdin: 'pipe',
+			stdout: 'ignore',
+			stderr: 'pipe',
+		});
+		child.stdin.write(`password: ${JSON.stringify(password)}\n`);
+		child.stdin.end();
+		const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+		if (code !== 0) throw new Error(`Could not stage the MongoDB tool config (${code}): ${stderr.trim().slice(0, 300)}`);
+	}
+
+	private async removeMongoToolConfig(container: string): Promise<void> {
+		await this.runner
+			.run([this.podmanPath, 'exec', container, 'rm', '-f', MONGO_TOOL_CONFIG])
+			.catch(() => undefined);
 	}
 
 	/**
@@ -1604,6 +1909,50 @@ function toLogEntry(record: Record<string, unknown>): HelperLogEntry | null {
 }
 
 /** Postgres role/database names are derived from slugs; this keeps podman argv free of syntax. */
+/** Owner credentials parsed from a database's helper-written env file. */
+interface DatabaseEnv {
+	engine: DatabaseEngine;
+	user: string;
+	password: string;
+	/** Empty for Valkey/Redis, which have numbered databases. */
+	database: string;
+}
+
+/** Inside the container's /tmp tmpfs; removed after every MongoDB tool run. */
+const MONGO_TOOL_CONFIG = '/tmp/skiff-mongo-tool.yaml';
+
+/** Connection flags shared by `mongodump`/`mongorestore` (the password comes from `--config`). */
+function mongoToolArgs(user: string): string[] {
+	return ['--host', '127.0.0.1', '--username', user, '--authenticationDatabase', 'admin', `--config=${MONGO_TOOL_CONFIG}`];
+}
+
+/**
+ * Settings the helper fixes for each engine, applied over the wire env (D61). Postgres keeps its
+ * original single `PGDATA` so existing env files are unchanged. MySQL/MariaDB keep `root` on the
+ * owner's password but bound to the container's own socket (`ROOT_HOST=localhost`), which is how
+ * the fixed verbs authenticate; MariaDB upgrades its system tables on a version change.
+ */
+export function databaseFixedEnv(engine: DatabaseEngine, env: Record<string, string>): Record<string, string> {
+	const password = env[DATABASE_ENGINES[engine].env.password] ?? '';
+	switch (engine) {
+		case 'postgres':
+			return { PGDATA: DATABASE_PGDATA };
+		case 'mysql':
+			return { SKIFF_DB_ENGINE: engine, MYSQL_ROOT_PASSWORD: password, MYSQL_ROOT_HOST: 'localhost' };
+		case 'mariadb':
+			return {
+				SKIFF_DB_ENGINE: engine,
+				MARIADB_ROOT_PASSWORD: password,
+				MARIADB_ROOT_HOST: 'localhost',
+				MARIADB_AUTO_UPGRADE: '1',
+			};
+		case 'mongodb':
+		case 'valkey':
+		case 'redis':
+			return { SKIFF_DB_ENGINE: engine };
+	}
+}
+
 function identifier(value: string): boolean {
 	return /^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(value);
 }

@@ -489,7 +489,11 @@ export const databases = sqliteTable(
 		id: text('id').primaryKey(),
 		orgId: text('org_id').notNull(),
 		name: text('name').notNull(),
-		engine: text('engine', { enum: ['postgres'] }).notNull().default('postgres'),
+		// Mirrors `databaseEngines` in @skiff/contracts. Stored in `engine_name` (0028): the original
+		// `engine` column has a Postgres-only CHECK and is left at its default.
+		engine: text('engine_name', { enum: ['postgres', 'mysql', 'mariadb', 'mongodb', 'valkey', 'redis'] })
+			.notNull()
+			.default('postgres'),
 		version: text('version').notNull(),
 		nodeId: text('node_id').notNull(),
 		hostPort: integer('host_port').notNull(),

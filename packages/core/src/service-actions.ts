@@ -64,11 +64,15 @@ export class ServiceActionsService {
 		return result;
 	}
 
-	/** Queue a backup for every live database that does not already have one running. */
+	/**
+	 * Queue a backup for every live database that does not already have one running. Engines
+	 * without backups (Valkey, Redis) are not candidates, so they are neither queued nor skipped.
+	 */
 	backupAllDatabases(principal: Principal): DatabaseBackupAllResult {
 		requirePermission(principal, 'database:update');
 		const result: DatabaseBackupAllResult = { queued: [], skipped: [] };
 		for (const database of this.ctx.databases.list(principal)) {
+			if (!database.capabilities.backups) continue;
 			try {
 				this.ctx.databases.createBackup(principal, database.name);
 				result.queued.push(database.name);

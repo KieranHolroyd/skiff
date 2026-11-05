@@ -1,11 +1,18 @@
 import { describe, expect, test } from 'bun:test';
+import { databaseBackupFormat } from './database-backup.ts';
 import {
 	databaseConnectionSnippets,
 	databaseConnectionUrl,
+	databaseEngineRegistry,
+	databaseEngines,
 	databaseEnvNames,
 	databaseExtensionAllowlist,
 	databaseExtensionCatalog,
+	databaseImage,
+	databasePublicUrlSchema,
+	databasePublicUrlSchemes,
 	databaseUpdateSchema,
+	databaseUrlDatabase,
 } from './database.ts';
 
 describe('database connection URLs', () => {
@@ -110,5 +117,55 @@ describe('database extensions', () => {
 
 	test('the whole allowlist can be enabled at once', () => {
 		expect(databaseUpdateSchema.safeParse({ extensions: [...databaseExtensionAllowlist] }).success).toBe(true);
+	});
+});
+
+describe('database engines (D95)', () => {
+	test('every engine has an image per version, a default in its list and a backup format or none', () => {
+		for (const engine of databaseEngines) {
+			const info = databaseEngineRegistry[engine];
+			expect(info.versions).toContain(info.defaultVersion);
+			for (const version of info.versions) expect(databaseImage(engine, version)).toMatch(/^docker\.io\//);
+			expect(databaseBackupFormat(engine) !== null).toBe(info.capabilities.backups);
+			expect(info.defaultMemoryMb).toBeGreaterThanOrEqual(info.minMemoryMb);
+		}
+	});
+
+	test('URLs carry the engine query and the fixed Valkey database', () => {
+		expect(
+			databaseConnectionUrl({
+				scheme: 'mongodb',
+				user: 'shop',
+				pass: 'p@ss',
+				host: 'db-1',
+				port: 27017,
+				database: 'shop',
+				query: 'authSource=admin',
+			}),
+		).toBe('mongodb://shop:p%40ss@db-1:27017/shop?authSource=admin');
+		expect(databaseUrlDatabase('valkey', 'shop')).toBe('0');
+		expect(databaseUrlDatabase('mysql', 'shop')).toBe('shop');
+	});
+
+	test('MongoDB attachments also get <PREFIX>_URI; snippets follow the engine', () => {
+		expect(databaseEnvNames('MONGODB', { engine: 'mongodb' })).toContain('MONGODB_URI');
+		expect(databaseEnvNames('DATABASE', { engine: 'mysql' })).not.toContain('DATABASE_URI');
+		const redis = databaseConnectionSnippets({
+			directUrl: 'redis://u:p@127.0.0.1:16000/0',
+			poolerUrl: null,
+			sslmode: 'disable',
+			caPem: null,
+			engine: 'valkey',
+			envPrefix: 'REDIS',
+		});
+		expect(redis.valkeyCli).toBe('valkey-cli -u "redis://u:p@127.0.0.1:16000/0"');
+		expect(redis.bullmq).toContain('process.env.REDIS_URL');
+		expect(Object.keys(redis)).not.toContain('psql');
+	});
+
+	test('public URLs must use a scheme of the database engine family', () => {
+		expect(databasePublicUrlSchema.safeParse('mongodb+srv://u:p@cluster.example.com/db').success).toBe(true);
+		expect(databasePublicUrlSchema.safeParse('ftp://u:p@example.com').success).toBe(false);
+		expect(databasePublicUrlSchemes('redis')).toEqual(['redis', 'rediss']);
 	});
 });

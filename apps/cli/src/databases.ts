@@ -165,8 +165,12 @@ export interface DatabaseCredentials {
 	note: string;
 }
 
+/** Mirrors `databaseEngines` in @skiff/contracts (D95). Keep in sync; the server validates. */
+export const DATABASE_ENGINES = ['postgres', 'mysql', 'mariadb', 'mongodb', 'valkey', 'redis'] as const;
+
 export interface DatabaseCreateInput {
 	name: string;
+	engine?: string;
 	version?: string;
 	placement?: string;
 	memoryMb?: number;

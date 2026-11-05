@@ -14,6 +14,8 @@ import {
 	renderPoolerConfig,
 	renderPoolerUnit,
 	renderPoolerUserlist,
+	renderKeyValueConfig,
+	databaseServerArgs,
 	renderProcessUnit,
 	renderSliceUnit,
 	renderSocketUnit,
@@ -793,5 +795,113 @@ describe('worker and runner units (plan 21)', () => {
 		expect(unit).toContain('DropCapability=all');
 		expect(unit).toContain('NoNewPrivileges=true');
 		expect(unit).toContain('Slice=skiff-workloads.slice');
+	});
+});
+
+describe('engine database units (D95)', () => {
+	const DB_ID = 'db_0123456789abcdef0123456789abcdef';
+	function engineDb(engine: string, version: string, image: string, memoryMb = 512): WorkloadDesired {
+		return workload({
+			id: DB_ID,
+			projectId: DB_ID,
+			projectSlug: 'orders',
+			deploymentId: DB_ID,
+			runtime: 'container',
+			release: null,
+			image,
+			port: 15432,
+			memoryMb,
+			cpus: 0.5,
+			healthPath: '/',
+			socketActivation: false,
+			env: {},
+			database: { engine, version },
+		});
+	}
+
+	test('MySQL runs the image entrypoint with fixed, memory-sized flags and a socket tmpfs', () => {
+		const unit = renderDatabaseUnit({
+			workload: engineDb('mysql', '8.4', 'docker.io/library/mysql:8.4', 1000),
+			envFile: '/run/env',
+			dataDir: '/var/lib/x',
+		});
+		expect(unit).toContain('Image=docker.io/library/mysql:8.4');
+		expect(unit).not.toContain('Entrypoint=');
+		expect(unit).toContain(
+			'Exec="mysqld" "--datadir=/data/mysql" "--innodb-buffer-pool-size=400M" "--performance-schema=OFF" "--mysqlx=OFF" "--skip-name-resolve" "--host-cache-size=0"',
+		);
+		expect(unit).toContain('User=999:999');
+		expect(unit).toContain('PublishPort=127.0.0.1:15432:3306');
+		expect(unit).toContain('Tmpfs=/var/run/mysqld:rw,size=8m,mode=1777');
+		expect(unit).toContain('ReadOnly=true');
+		expect(unit).toContain('DropCapability=all');
+		expect(unit).toContain('MemoryMax=1000M');
+		expect(unit).not.toContain('postgres');
+	});
+
+	test('MariaDB, MongoDB and Valkey/Redis get their own ports, users and arguments', () => {
+		const maria = renderDatabaseUnit({
+			workload: engineDb('mariadb', '11.8', 'docker.io/library/mariadb:11.8'),
+			envFile: '/run/env',
+			dataDir: '/var/lib/x',
+		});
+		expect(maria).toContain('Exec="mariadbd" "--datadir=/data/mysql" "--innodb-buffer-pool-size=204M"');
+		expect(maria).toContain('Tmpfs=/run/mysqld:rw,size=8m,mode=1777');
+		const mongo = renderDatabaseUnit({
+			workload: engineDb('mongodb', '8.0', 'docker.io/library/mongo:8.0'),
+			envFile: '/run/env',
+			dataDir: '/var/lib/x',
+		});
+		expect(mongo).toContain('Exec="mongod" "--dbpath" "/data/db" "--bind_ip_all" "--wiredTigerCacheSizeGB" "0.25"');
+		expect(mongo).toContain('PublishPort=127.0.0.1:15432:27017');
+		const valkey = renderDatabaseUnit({
+			workload: engineDb('valkey', '9.1', 'docker.io/valkey/valkey:9.1-alpine'),
+			envFile: '/run/env',
+			dataDir: '/var/lib/x',
+			serverConfigPath: '/run/skiff-workloads/db_x/server.conf',
+		});
+		expect(valkey).toContain('Exec="valkey-server" "/etc/skiff/server.conf"');
+		expect(valkey).toContain('Volume=/run/skiff-workloads/db_x/server.conf:/etc/skiff/server.conf:ro,Z');
+		expect(valkey).toContain('User=999:1000');
+		expect(valkey).toContain('PublishPort=127.0.0.1:15432:6379');
+		expect(() =>
+			renderDatabaseUnit({
+				workload: engineDb('redis', '8.10', 'docker.io/library/redis:8.10-alpine'),
+				envFile: '/run/env',
+				dataDir: '/var/lib/x',
+			}),
+		).toThrow(/server config/);
+	});
+
+	test('MongoDB cache grows with memory', () => {
+		expect(databaseServerArgs('mongodb', 4096)).toContain('1.6');
+		expect(databaseServerArgs('mongodb', 256)).toContain('0.25');
+	});
+
+	test('the Valkey/Redis config disables the default user and caps memory below MemoryMax', () => {
+		const config = renderKeyValueConfig({ user: 'orders', password: 'p'.repeat(32), memoryMb: 256 });
+		expect(config).toContain('user default off');
+		expect(config).toContain(`user orders on >${'p'.repeat(32)} ~* &* +@all`);
+		expect(config).toContain('maxmemory 192mb');
+		expect(config).toContain('maxmemory-policy noeviction');
+		expect(config).toContain('appendonly yes');
+		expect(() => renderKeyValueConfig({ user: 'orders', password: 'bad pass\nuser x on', memoryMb: 256 })).toThrow();
+		expect(() => renderKeyValueConfig({ user: 'a b', password: 'p'.repeat(32), memoryMb: 256 })).toThrow();
+	});
+
+	test('the studio env uses each engine\'s DBGate driver', () => {
+		const base = { id: DB_ID, webRoot: '/databases/orders/studio/proxy/', authUser: 'skiff', authPassword: 'x'.repeat(24), readOnly: true };
+		const creds = { user: 'orders', password: 'secret', database: 'orders' };
+		const mysql = renderConsoleEnv({ ...base, engine: 'mysql', database: creds });
+		expect(mysql).toContain('ENGINE_skiff=mysql@dbgate-plugin-mysql');
+		expect(mysql).toContain('SERVER_skiff=db-0123456789abcdef0123456789abcdef');
+		expect(mysql).toContain('PORT_skiff=3306');
+		expect(mysql).toContain('SINGLE_DATABASE=orders');
+		const mongo = renderConsoleEnv({ ...base, engine: 'mongodb', database: creds });
+		expect(mongo).toContain('URL_skiff=mongodb://orders:secret@db-0123456789abcdef0123456789abcdef:27017/orders?authSource=admin');
+		const valkey = renderConsoleEnv({ ...base, engine: 'valkey', database: { ...creds, database: '' } });
+		expect(valkey).toContain('ENGINE_skiff=redis@dbgate-plugin-redis');
+		expect(valkey).not.toContain('SINGLE_DATABASE');
+		expect(valkey).toContain('LABEL_skiff=orders');
 	});
 });

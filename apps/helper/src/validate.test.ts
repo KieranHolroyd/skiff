@@ -178,6 +178,39 @@ export function databaseInput(overrides: Record<string, unknown> = {}): Record<s
 	});
 }
 
+describe('database engines (D95)', () => {
+	const cases = [
+		['mysql', '8.4', 'docker.io/library/mysql:8.4'],
+		['mysql', '9.7', 'docker.io/library/mysql:9.7'],
+		['mariadb', '11.8', 'docker.io/library/mariadb:11.8'],
+		['mongodb', '8.0', 'docker.io/library/mongo:8.0'],
+		['valkey', '9.1', 'docker.io/valkey/valkey:9.1-alpine'],
+		['redis', '8.10', 'docker.io/library/redis:8.10-alpine'],
+	] as const;
+	for (const [engine, version, image] of cases) {
+		test(`accepts ${engine} ${version} only with its own image`, () => {
+			const workload = parseWorkload(databaseInput({ image, database: { engine, version } }));
+			expect(workload.database).toEqual({ engine, version });
+			expect(() =>
+				parseWorkload(databaseInput({ image: 'docker.io/library/postgres:17-alpine', database: { engine, version } })),
+			).toThrow(/workload.image must be/);
+		});
+	}
+
+	test('keeps PITR, TLS and the pooler Postgres-only', () => {
+		const mysql = { image: 'docker.io/library/mysql:8.4', database: { engine: 'mysql', version: '8.4' } };
+		expect(() =>
+			parseWorkload(databaseInput({ ...mysql, database: { ...mysql.database, tls: true } })),
+		).toThrow(/only supported for postgres/);
+		expect(() =>
+			parseWorkload(
+				databaseInput({ ...mysql, database: { ...mysql.database, pitr: { stanza: 'x', archiveTimeoutSeconds: 60 } } }),
+			),
+		).toThrow(/only supported for postgres/);
+		expect(() => parseWorkload(databaseInput({ ...mysql, pooler: { port: 16432 } }))).toThrow(/postgres database/);
+	});
+});
+
 describe('database profile', () => {
 	test('accepts a database workload whose image matches the helper registry', () => {
 		const workload = parseWorkload(databaseInput());
@@ -204,7 +237,10 @@ describe('database profile', () => {
 	});
 
 	test('rejects unknown engines, versions, extra keys and non-container runtimes', () => {
-		expect(() => parseWorkload(databaseInput({ database: { engine: 'mysql', version: '8' } }))).toThrow(/engine/);
+		expect(() => parseWorkload(databaseInput({ database: { engine: 'oracle', version: '23' } }))).toThrow(/engine/);
+		expect(() =>
+			parseWorkload(databaseInput({ image: 'docker.io/library/mysql:8', database: { engine: 'mysql', version: '8' } })),
+		).toThrow(/version/);
 		expect(() => parseWorkload(databaseInput({ database: { engine: 'postgres', version: '15' } }))).toThrow(/version/);
 		expect(() => parseWorkload(databaseInput({ database: { engine: 'toString', version: '17' } }))).toThrow(/engine/);
 		expect(() =>

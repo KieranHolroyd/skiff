@@ -721,6 +721,47 @@ describe('database health probe', () => {
 		controller.abort();
 		expect(await probeDatabasePort(1, controller.signal)).toBe(false);
 	});
+	/** A server that speaks first (the MySQL/MariaDB greeting). */
+	function greet(greeting: Uint8Array): { port: number } {
+		const listener = Bun.listen({
+			hostname: '127.0.0.1',
+			port: 0,
+			socket: {
+				open(socket) {
+					socket.write(greeting);
+				},
+				data() {},
+			},
+		});
+		listeners.push(listener);
+		return { port: listener.port };
+	}
+
+	test('MySQL and MariaDB are healthy once the server greets, without sending anything', async () => {
+		const signal = new AbortController().signal;
+		// Packet header (len 3 + seq 1), then protocol version 10 and "8.4.13\0".
+		const handshake = new Uint8Array([0x4a, 0, 0, 0, 0x0a, 0x38, 0x2e, 0x34, 0x00]);
+		expect(await probeDatabasePort(greet(handshake).port, signal, { engine: 'mysql', timeoutMs: 500 })).toBe(true);
+		expect(await probeDatabasePort(greet(handshake).port, signal, { engine: 'mariadb', timeoutMs: 500 })).toBe(true);
+		// A forwarder that accepts but never greets is not the server.
+		expect(await probeDatabasePort(listen(null).port, signal, { engine: 'mysql', timeoutMs: 200 })).toBe(false);
+	});
+
+	test('MongoDB answers OP_MSG hello; Valkey/Redis answer PING (even with NOAUTH) but not while loading', async () => {
+		const signal = new AbortController().signal;
+		const reply = new Uint8Array(20);
+		reply.set([0xdd, 0x07, 0, 0], 12);
+		const mongo = listen(reply);
+		expect(await probeDatabasePort(mongo.port, signal, { engine: 'mongodb', timeoutMs: 500 })).toBe(true);
+		expect([...mongo.received[0]!.subarray(12, 16)]).toEqual([0xdd, 0x07, 0, 0]);
+		expect(new TextDecoder().decode(mongo.received[0]!)).toContain('hello');
+
+		const noauth = listen(new TextEncoder().encode('-NOAUTH Authentication required.\r\n'));
+		expect(await probeDatabasePort(noauth.port, signal, { engine: 'valkey', timeoutMs: 500 })).toBe(true);
+		expect(new TextDecoder().decode(noauth.received[0]!)).toBe('PING\r\n');
+		const loading = listen(new TextEncoder().encode('-LOADING Valkey is loading the dataset in memory\r\n'));
+		expect(await probeDatabasePort(loading.port, signal, { engine: 'redis', timeoutMs: 500 })).toBe(false);
+	});
 });
 
 describe('runner replicas (plan 21)', () => {

@@ -11,35 +11,249 @@ import type { VolumeSummary } from './volume.ts';
  * imports nothing from `workload.ts` so `workload.ts` can reference the engine enum.
  */
 
-export const databaseEngines = ['postgres'] as const;
+export const databaseEngines = ['postgres', 'mysql', 'mariadb', 'mongodb', 'valkey', 'redis'] as const;
 export type DatabaseEngine = (typeof databaseEngines)[number];
+
+/** What kind of store an engine is; the dashboard groups engines by it. */
+export type DatabaseEngineFamily = 'relational' | 'document' | 'key-value';
+
+/**
+ * Platform features an engine supports (docs/DATABASES.md §17). Everything outside this list
+ * (create, run, attach, credentials, logs, restart, delete/restore/purge, volumes) works for every
+ * engine. A surface checks a capability before offering a feature; the service refuses the
+ * request when it is off.
+ */
+export interface DatabaseEngineCapabilities {
+	/** PgBouncer sidecar and `<PREFIX>_POOL_URL` (D85). */
+	pooler: boolean;
+	/** The extension allowlist (D84). */
+	extensions: boolean;
+	/** Helper-generated server certificate under `SKIFF_FEATURE_DB_TLS` (D85). */
+	tls: boolean;
+	/** WAL archiving and restore-to-time (docs/PITR.md). */
+	pitr: boolean;
+	/** Monitor role, per-minute metrics, the tables snapshot and slow queries (D57). */
+	metrics: boolean;
+	/** Logical backups and restore into a new database (D83). */
+	backups: boolean;
+	/** Owner password rotation (D86). The monitor role exists only where `metrics` is on. */
+	rotation: boolean;
+	/** Opt-in `app` / `readonly` / `backup` roles (plan 04b). */
+	namedCredentials: boolean;
+	/** The embedded DBGate studio (D60). */
+	console: boolean;
+	/** The major-version upgrade planner (`skif db upgrade`). */
+	upgradePlan: boolean;
+}
 
 export interface DatabaseEngineInfo {
 	engine: DatabaseEngine;
 	label: string;
+	family: DatabaseEngineFamily;
+	/** One line for the create form. */
+	description: string;
+	/** Newest first. */
 	versions: readonly string[];
 	defaultVersion: string;
 	/** Port inside the container. */
 	containerPort: number;
 	/** URL scheme for `<PREFIX>_URL`. */
 	scheme: string;
+	/**
+	 * Path segment of the connection URL: `name` uses the database name, anything else is used
+	 * verbatim (Valkey/Redis select logical database `0`).
+	 */
+	urlDatabase: 'name' | string;
+	/** Query string every connection URL carries (MongoDB authenticates against `admin`). */
+	urlQuery: string | null;
+	/** Env prefix an attachment gets when none is given (`REDIS` → `REDIS_URL`). */
+	defaultEnvPrefix: string;
 	minMemoryMb: number;
 	defaultMemoryMb: number;
+	/** Longest database name the engine's user/database identifiers allow. */
+	maxNameLength: number;
+	/** Names that collide with the engine's own users or databases. */
+	reservedNames: readonly string[];
+	/**
+	 * Env names the control plane uses for the owner credentials in the container env file. The
+	 * helper reads the same names back for its fixed verbs and adds the engine's fixed settings.
+	 */
+	containerEnv: { user: string; password: string; database: string | null };
+	/**
+	 * Version changes a plain update may make. `forward`: move to a newer listed version in place
+	 * (the image upgrades the data dir on start). `never`: refuse; Postgres goes through the
+	 * upgrade planner and MongoDB needs feature-compatibility steps, so both use backup + restore.
+	 */
+	inPlaceUpgrade: 'forward' | 'never';
+	capabilities: DatabaseEngineCapabilities;
 }
 
-/** The registry (D61). The helper keeps its own copy of the image/user mapping on purpose. */
+const ALL_CAPABILITIES: DatabaseEngineCapabilities = {
+	pooler: true,
+	extensions: true,
+	tls: true,
+	pitr: true,
+	metrics: true,
+	backups: true,
+	rotation: true,
+	namedCredentials: true,
+	console: true,
+	upgradePlan: true,
+};
+
+/** Engines other than Postgres: core lifecycle, owner rotation and the studio. */
+const CORE_CAPABILITIES: DatabaseEngineCapabilities = {
+	pooler: false,
+	extensions: false,
+	tls: false,
+	pitr: false,
+	metrics: false,
+	backups: false,
+	rotation: true,
+	namedCredentials: false,
+	console: true,
+	upgradePlan: false,
+};
+
+/**
+ * The registry (D61, D95). The helper keeps its own copy of the image/user mapping on purpose.
+ * Engines and versions are chosen from the most-used self-hostable databases (Stack Overflow
+ * 2025, DB-Engines 2026); every image is the vendor's official one.
+ */
 export const databaseEngineRegistry: Record<DatabaseEngine, DatabaseEngineInfo> = {
 	postgres: {
 		engine: 'postgres',
 		label: 'PostgreSQL',
+		family: 'relational',
+		description: 'The default. Extensions, pooling, PITR and full metrics.',
 		versions: ['17', '16'],
 		defaultVersion: '17',
 		containerPort: 5432,
 		scheme: 'postgres',
+		urlDatabase: 'name',
+		urlQuery: null,
+		defaultEnvPrefix: 'DATABASE',
 		minMemoryMb: 128,
 		defaultMemoryMb: 256,
+		maxNameLength: 40,
+		reservedNames: ['postgres', 'template0', 'template1'],
+		containerEnv: { user: 'POSTGRES_USER', password: 'POSTGRES_PASSWORD', database: 'POSTGRES_DB' },
+		inPlaceUpgrade: 'never',
+		capabilities: ALL_CAPABILITIES,
+	},
+	mysql: {
+		engine: 'mysql',
+		label: 'MySQL',
+		family: 'relational',
+		description: 'Oracle MySQL Community Server (LTS releases).',
+		versions: ['9.7', '8.4'],
+		defaultVersion: '8.4',
+		containerPort: 3306,
+		scheme: 'mysql',
+		urlDatabase: 'name',
+		urlQuery: null,
+		defaultEnvPrefix: 'DATABASE',
+		minMemoryMb: 384,
+		defaultMemoryMb: 512,
+		// MySQL user names are at most 32 characters.
+		maxNameLength: 32,
+		reservedNames: ['root', 'mysql', 'sys', 'information-schema', 'performance-schema'],
+		containerEnv: { user: 'MYSQL_USER', password: 'MYSQL_PASSWORD', database: 'MYSQL_DATABASE' },
+		inPlaceUpgrade: 'forward',
+		capabilities: { ...CORE_CAPABILITIES, backups: true },
+	},
+	mariadb: {
+		engine: 'mariadb',
+		label: 'MariaDB',
+		family: 'relational',
+		description: 'MySQL-compatible, community-developed (LTS releases).',
+		versions: ['11.8', '11.4'],
+		defaultVersion: '11.8',
+		containerPort: 3306,
+		scheme: 'mysql',
+		urlDatabase: 'name',
+		urlQuery: null,
+		defaultEnvPrefix: 'DATABASE',
+		minMemoryMb: 192,
+		defaultMemoryMb: 256,
+		maxNameLength: 40,
+		reservedNames: ['root', 'mysql', 'sys', 'healthcheck', 'information-schema', 'performance-schema'],
+		containerEnv: { user: 'MARIADB_USER', password: 'MARIADB_PASSWORD', database: 'MARIADB_DATABASE' },
+		inPlaceUpgrade: 'forward',
+		capabilities: { ...CORE_CAPABILITIES, backups: true },
+	},
+	mongodb: {
+		engine: 'mongodb',
+		label: 'MongoDB',
+		family: 'document',
+		description: 'Document database (MongoDB Community Server).',
+		versions: ['9.0', '8.0'],
+		defaultVersion: '8.0',
+		containerPort: 27017,
+		scheme: 'mongodb',
+		urlDatabase: 'name',
+		// The owner is created in `admin` by the image's init; drivers must authenticate there.
+		urlQuery: 'authSource=admin',
+		defaultEnvPrefix: 'MONGODB',
+		minMemoryMb: 256,
+		defaultMemoryMb: 512,
+		maxNameLength: 40,
+		reservedNames: ['admin', 'local', 'config'],
+		containerEnv: {
+			user: 'MONGO_INITDB_ROOT_USERNAME',
+			password: 'MONGO_INITDB_ROOT_PASSWORD',
+			database: 'MONGO_INITDB_DATABASE',
+		},
+		inPlaceUpgrade: 'never',
+		capabilities: { ...CORE_CAPABILITIES, backups: true },
+	},
+	valkey: {
+		engine: 'valkey',
+		label: 'Valkey',
+		family: 'key-value',
+		description: 'Open-source (BSD) Redis fork from the Linux Foundation. Redis-protocol compatible.',
+		versions: ['9.1', '8.1'],
+		defaultVersion: '9.1',
+		containerPort: 6379,
+		scheme: 'redis',
+		urlDatabase: '0',
+		urlQuery: null,
+		defaultEnvPrefix: 'REDIS',
+		minMemoryMb: 128,
+		defaultMemoryMb: 256,
+		maxNameLength: 40,
+		reservedNames: ['default'],
+		containerEnv: { user: 'VALKEY_USER', password: 'VALKEY_PASSWORD', database: null },
+		inPlaceUpgrade: 'forward',
+		capabilities: CORE_CAPABILITIES,
+	},
+	redis: {
+		engine: 'redis',
+		label: 'Redis',
+		family: 'key-value',
+		description: 'Redis Open Source 8 (AGPLv3). Prefer Valkey unless you need Redis-only modules.',
+		versions: ['8.10', '8.8'],
+		defaultVersion: '8.10',
+		containerPort: 6379,
+		scheme: 'redis',
+		urlDatabase: '0',
+		urlQuery: null,
+		defaultEnvPrefix: 'REDIS',
+		minMemoryMb: 128,
+		defaultMemoryMb: 256,
+		maxNameLength: 40,
+		reservedNames: ['default'],
+		containerEnv: { user: 'REDIS_USER', password: 'REDIS_PASSWORD', database: null },
+		inPlaceUpgrade: 'forward',
+		capabilities: CORE_CAPABILITIES,
 	},
 };
+
+/** Capabilities of an engine; unknown engines (old rows, future data) get none. */
+export function databaseCapabilities(engine: string): DatabaseEngineCapabilities {
+	const info = (databaseEngineRegistry as Record<string, DatabaseEngineInfo | undefined>)[engine];
+	return info?.capabilities ?? { ...CORE_CAPABILITIES, rotation: false, console: false };
+}
 
 /**
  * Extensions Skiff can enable on a managed Postgres database (D84). The helper preloads
@@ -529,7 +743,10 @@ export const databaseCreateSchema = z
 		envPrefix: databaseEnvPrefixSchema.optional(),
 		/** Extensions to create on first start (allowlist only). */
 		extensions: z.array(databaseExtensionSchema).max(databaseExtensionAllowlist.length).default([]),
-		/** Run a transaction-mode PgBouncer sidecar and inject <PREFIX>_POOL_URL. */
+		/**
+		 * Run a transaction-mode PgBouncer sidecar and inject <PREFIX>_POOL_URL. PostgreSQL only;
+		 * other engines ignore the default.
+		 */
 		pooler: z.boolean().default(true),
 	})
 	.superRefine((input, ctx) => {
@@ -545,6 +762,24 @@ export const databaseCreateSchema = z
 				code: 'custom',
 				path: ['memoryMb'],
 				message: `${info.label} needs at least ${info.minMemoryMb} MB.`,
+			});
+		if (input.name.length > info.maxNameLength)
+			ctx.addIssue({
+				code: 'custom',
+				path: ['name'],
+				message: `${info.label} database names are at most ${info.maxNameLength} characters.`,
+			});
+		if (info.reservedNames.includes(input.name))
+			ctx.addIssue({
+				code: 'custom',
+				path: ['name'],
+				message: `"${input.name}" is reserved by ${info.label}; pick another name.`,
+			});
+		if (input.extensions.length > 0 && !info.capabilities.extensions)
+			ctx.addIssue({
+				code: 'custom',
+				path: ['extensions'],
+				message: `Extensions are only available for PostgreSQL.`,
 			});
 	});
 export type DatabaseCreate = z.input<typeof databaseCreateSchema>;
@@ -565,11 +800,16 @@ export const databaseUpdateSchema = z
 		pooler: z.boolean().optional(),
 	})
 	.superRefine((input, ctx) => {
-		if (input.version && !databaseEngineRegistry.postgres.versions.includes(input.version))
+		// The version is checked against the database's own engine by the service; here it only
+		// has to be a version some engine ships.
+		if (
+			input.version &&
+			!Object.values(databaseEngineRegistry).some((info) => info.versions.includes(input.version!))
+		)
 			ctx.addIssue({
 				code: 'custom',
 				path: ['version'],
-				message: `PostgreSQL versions: ${databaseEngineRegistry.postgres.versions.join(', ')}.`
+				message: `Unknown version "${input.version}".`
 			});
 		if (Object.keys(input).length === 0) ctx.addIssue({ code: 'custom', message: 'Nothing to update.' });
 	});
@@ -609,7 +849,8 @@ export interface DatabaseUpgradePlan {
 
 export const databaseAttachSchema = z.object({
 	database: databaseNameSchema,
-	envPrefix: databaseEnvPrefixSchema.default('DATABASE'),
+	/** Defaults to the engine's prefix (`DATABASE`, `MONGODB`, `REDIS`). */
+	envPrefix: databaseEnvPrefixSchema.optional(),
 });
 export type DatabaseAttach = z.input<typeof databaseAttachSchema>;
 
@@ -770,6 +1011,8 @@ export interface DatabaseView {
 	name: string;
 	engine: DatabaseEngine;
 	engineLabel: string;
+	/** What this engine supports; surfaces hide the rest (docs/DATABASES.md §17). */
+	capabilities: DatabaseEngineCapabilities;
 	version: string;
 	status: DatabaseStatus;
 	message: string | null;
@@ -780,7 +1023,7 @@ export interface DatabaseView {
 	storageMb: number;
 	/** Latest sampled size, if the agent has reported one. */
 	sizeBytes: number | null;
-	/** Postgres database / role names (not secret). */
+	/** Engine database / owner names (not secret). */
 	databaseName: string;
 	username: string;
 	/** What an attached app on the same node connects to (no password). */
@@ -830,14 +1073,33 @@ export interface DatabaseView {
  * proxy or tunnel in front of the node). It is a secret: sealed with the org key and only
  * decrypted by an explicit reveal. Skiff itself keeps Postgres loopback-only (D56).
  */
+/** Schemes a stored public URL may use; the service also checks it matches the engine. */
+export const DATABASE_PUBLIC_URL_PATTERN = /^(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?):\/\/[^\s]+$/i;
+
+/** Public URL schemes that fit an engine. */
+export function databasePublicUrlSchemes(engine: DatabaseEngine): readonly string[] {
+	switch (engine) {
+		case 'postgres':
+			return ['postgres', 'postgresql'];
+		case 'mysql':
+		case 'mariadb':
+			return ['mysql', 'mariadb'];
+		case 'mongodb':
+			return ['mongodb', 'mongodb+srv'];
+		case 'valkey':
+		case 'redis':
+			return ['redis', 'rediss'];
+	}
+}
+
 export const databasePublicUrlSchema = z
 	.string()
 	.trim()
 	.min(8)
 	.max(4096)
 	.refine(
-		(value) => /^postgres(?:ql)?:\/\/[^\s]+$/i.test(value),
-		'Use a postgres:// or postgresql:// URL.'
+		(value) => DATABASE_PUBLIC_URL_PATTERN.test(value),
+		'Use a postgres://, mysql://, mariadb://, mongodb://, mongodb+srv://, redis:// or rediss:// URL.'
 	);
 
 export const databasePublicUrlUpdateSchema = z.object({ url: databasePublicUrlSchema });
@@ -1004,7 +1266,10 @@ export function databaseAlias(id: string): string {
 	return `db-${id.replace(/^db_/, '').toLowerCase().replace(/[^a-z0-9-]/g, '')}`;
 }
 
-/** Postgres identifier for a database name: `my-app` → `my_app`. */
+/**
+ * Engine identifier for a database name: `my-app` → `my_app` (Postgres roles, MySQL users and
+ * databases, MongoDB databases and Valkey ACL users all accept it).
+ */
 export function databaseIdentifier(name: string): string {
 	return name.replace(/-/g, '_');
 }
@@ -1012,9 +1277,11 @@ export function databaseIdentifier(name: string): string {
 /** Env var names a project receives for one attachment. */
 export function databaseEnvNames(
 	prefix: string,
-	options: { pooler?: boolean; tls?: boolean } = {},
+	options: { pooler?: boolean; tls?: boolean; engine?: DatabaseEngine } = {},
 ): string[] {
 	const names = ['URL', 'HOST', 'PORT', 'USER', 'PASSWORD', 'NAME'];
+	// MongoDB drivers and docs say "connection string URI"; most apps read `<PREFIX>_URI`.
+	if (options.engine === 'mongodb') names.push('URI');
 	if (options.tls) names.push('SSL_MODE', 'CA_CERT');
 	if (options.pooler) names.push('POOL_URL', 'POOL_HOST', 'POOL_PORT');
 	return names.map((suffix) => `${prefix}_${suffix}`);
@@ -1028,6 +1295,8 @@ export interface DatabaseUrlOptions {
 	port: number;
 	database: string;
 	sslmode?: DatabaseSslMode;
+	/** Extra query string from the engine registry (`authSource=admin`). */
+	query?: string | null;
 }
 
 /** A connection string; `sslmode` is appended only when TLS is in use. */
@@ -1036,7 +1305,16 @@ export function databaseConnectionUrl(options: DatabaseUrlOptions): string {
 	const pass = encodeURIComponent(options.pass);
 	const database = encodeURIComponent(options.database);
 	const base = `${options.scheme}://${user}:${pass}@${options.host}:${options.port}/${database}`;
-	return options.sslmode && options.sslmode !== 'disable' ? `${base}?sslmode=${options.sslmode}` : base;
+	const query: string[] = [];
+	if (options.query) query.push(options.query);
+	if (options.sslmode && options.sslmode !== 'disable') query.push(`sslmode=${options.sslmode}`);
+	return query.length > 0 ? `${base}?${query.join('&')}` : base;
+}
+
+/** The URL path segment for a database: its name, or the engine's fixed value (`0`). */
+export function databaseUrlDatabase(engine: DatabaseEngine, databaseName: string): string {
+	const info = databaseEngineRegistry[engine];
+	return info.urlDatabase === 'name' ? databaseName : info.urlDatabase;
 }
 
 export interface DatabaseSnippetInput {
@@ -1048,6 +1326,8 @@ export interface DatabaseSnippetInput {
 	caPem: string | null;
 	/** Env prefix the attached app receives (default `DATABASE`). */
 	envPrefix?: string;
+	/** Defaults to `postgres` so existing callers keep their snippets. */
+	engine?: DatabaseEngine;
 }
 
 /**
@@ -1056,7 +1336,9 @@ export interface DatabaseSnippetInput {
  * replication, `LISTEN`, advisory locks and session state need a direct connection.
  */
 export function databaseConnectionSnippets(input: DatabaseSnippetInput): Record<string, string> {
-	const prefix = input.envPrefix ?? 'DATABASE';
+	const engine = input.engine ?? 'postgres';
+	if (engine !== 'postgres') return engineSnippets(engine, input);
+	const prefix = input.envPrefix ?? databaseEngineRegistry.postgres.defaultEnvPrefix;
 	const url = input.poolerUrl ?? input.directUrl;
 	const direct = input.directUrl;
 	const ca = input.caPem ? `\n-- ${prefix}_CA_CERT holds the PEM CA certificate.` : '';
@@ -1079,11 +1361,63 @@ export function databaseConnectionSnippets(input: DatabaseSnippetInput): Record<
 	};
 }
 
+function engineSnippets(engine: Exclude<DatabaseEngine, 'postgres'>, input: DatabaseSnippetInput): Record<string, string> {
+	const prefix = input.envPrefix ?? databaseEngineRegistry[engine].defaultEnvPrefix;
+	const url = input.directUrl;
+	switch (engine) {
+		case 'mysql':
+		case 'mariadb': {
+			const cli = engine === 'mysql' ? 'mysql' : 'mariadb';
+			return {
+				[cli]: `${cli} "${url}"`,
+				prisma: `# schema.prisma\ndatasource db {\n  provider = "mysql"\n  url      = env("${prefix}_URL")\n}`,
+				drizzle: `import { drizzle } from 'drizzle-orm/mysql2';\nimport mysql from 'mysql2/promise';\n\nconst pool = mysql.createPool(process.env.${prefix}_URL!);\nexport const db = drizzle(pool);`,
+				kysely: `import { Kysely, MysqlDialect } from 'kysely';\nimport { createPool } from 'mysql2';\n\nexport const db = new Kysely({\n  dialect: new MysqlDialect({ pool: createPool(process.env.${prefix}_URL!) }),\n});`,
+				django: `# settings.py\nimport os, dj_database_url\nDATABASES = {'default': dj_database_url.parse(os.environ['${prefix}_URL'])}`,
+				rails: `# config/database.yml (mysql2 adapter)\nproduction:\n  url: <%= ENV.fetch('${prefix}_URL').sub('mysql://', 'mysql2://') %>`,
+				go: `// github.com/go-sql-driver/mysql takes a DSN, not a URL\ndsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true",\n  os.Getenv("${prefix}_USER"), os.Getenv("${prefix}_PASSWORD"),\n  os.Getenv("${prefix}_HOST"), os.Getenv("${prefix}_PORT"), os.Getenv("${prefix}_NAME"))\ndb, err := sql.Open("mysql", dsn)`,
+			};
+		}
+		case 'mongodb':
+			return {
+				mongosh: `mongosh "${url}"`,
+				node: `import { MongoClient } from 'mongodb';\n\nconst client = new MongoClient(process.env.${prefix}_URI!);\nexport const db = client.db();`,
+				mongoose: `import mongoose from 'mongoose';\n\nawait mongoose.connect(process.env.${prefix}_URI!);`,
+				prisma: `# schema.prisma\ndatasource db {\n  provider = "mongodb"\n  url      = env("${prefix}_URI")\n}`,
+				python: `from pymongo import MongoClient\nimport os\n\nclient = MongoClient(os.environ['${prefix}_URI'])\ndb = client.get_default_database()`,
+				go: `client, err := mongo.Connect(options.Client().ApplyURI(os.Getenv("${prefix}_URI")))`,
+			};
+		case 'valkey':
+		case 'redis': {
+			const cli = engine === 'valkey' ? 'valkey-cli' : 'redis-cli';
+			return {
+				[engine === 'valkey' ? 'valkeyCli' : 'redisCli']: `${cli} -u "${url}"`,
+				ioredis: `import Redis from 'ioredis';\n\nexport const redis = new Redis(process.env.${prefix}_URL!);`,
+				nodeRedis: `import { createClient } from 'redis';\n\nexport const redis = await createClient({ url: process.env.${prefix}_URL }).connect();`,
+				bullmq: `import { Queue } from 'bullmq';\nimport Redis from 'ioredis';\n\nconst connection = new Redis(process.env.${prefix}_URL!, { maxRetriesPerRequest: null });\nexport const queue = new Queue('jobs', { connection });`,
+				python: `import os, redis\n\nr = redis.from_url(os.environ['${prefix}_URL'])`,
+				rails: `# config/environments/production.rb\nconfig.cache_store = :redis_cache_store, { url: ENV.fetch('${prefix}_URL') }`,
+				go: `opt, _ := redis.ParseURL(os.Getenv("${prefix}_URL"))\nrdb := redis.NewClient(opt)`,
+			};
+		}
+	}
+}
+
 /** OCI image for an engine version. The helper has its own copy and rejects any mismatch (D61). */
 export function databaseImage(engine: DatabaseEngine, version: string): string {
 	switch (engine) {
 		case 'postgres':
 			return `docker.io/library/postgres:${version}-alpine`;
+		case 'mysql':
+			return `docker.io/library/mysql:${version}`;
+		case 'mariadb':
+			return `docker.io/library/mariadb:${version}`;
+		case 'mongodb':
+			return `docker.io/library/mongo:${version}`;
+		case 'valkey':
+			return `docker.io/valkey/valkey:${version}-alpine`;
+		case 'redis':
+			return `docker.io/library/redis:${version}-alpine`;
 	}
 }
 

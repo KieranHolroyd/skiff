@@ -208,6 +208,8 @@ export const blueprintDatabaseSchema = z
 			ctx.addIssue({ code: 'custom', path: ['version'], message: `${info.label} versions: ${info.versions.join(', ')}.` });
 		if (input.memoryMb !== undefined && input.memoryMb < info.minMemoryMb)
 			ctx.addIssue({ code: 'custom', path: ['memoryMb'], message: `${info.label} needs at least ${info.minMemoryMb} MB.` });
+		if (input.extensions.length > 0 && !info.capabilities.extensions)
+			ctx.addIssue({ code: 'custom', path: ['extensions'], message: 'Extensions are only available for PostgreSQL.' });
 	});
 
 export const blueprintBucketSchema = z.strictObject({

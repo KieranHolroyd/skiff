@@ -130,6 +130,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 						.filter((db) => !databaseAttachments.some((item) => item.databaseId === db.id))
 						.map((db) => ({
 							name: db.name,
+							engine: db.engine,
 							version: db.version,
 							engineLabel: db.engineLabel,
 							nodeName: db.nodeName ?? db.nodeId
@@ -923,7 +924,8 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const parsed = databaseAttachSchema.safeParse({
 			database: formString(data, 'database'),
-			envPrefix: formString(data, 'envPrefix').toUpperCase() || 'DATABASE'
+			// Empty: the database engine's default prefix (DATABASE, MONGODB or REDIS).
+			envPrefix: formString(data, 'envPrefix').toUpperCase() || undefined
 		});
 		if (!parsed.success) {
 			return fail(400, {

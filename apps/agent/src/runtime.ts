@@ -1,5 +1,7 @@
 import { promises as fs } from 'node:fs';
+import { databaseCapabilities } from '@skiff/contracts';
 import type {
+	DatabaseEngine,
 	DatabaseMonitor,
 	DesiredState,
 	ReleaseSpec,
@@ -528,6 +530,8 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 	 * re-fetched for the helper. Fetch it once for the sampler's credentials only.
 	 */
 	private async recoverMonitor(workload: WorkloadDesired, signal: AbortSignal): Promise<void> {
+		// Only engines with the stats sampler carry monitor credentials (D57).
+		if (!workload.database || !databaseCapabilities(workload.database.engine).metrics) return;
 		const held = this.monitors.get(workload.id);
 		if (held && held.activationVersion === workload.activationVersion) return;
 		try {
@@ -772,7 +776,7 @@ export async function probeWorkloadHealth(
 ): Promise<boolean> {
 	// Workers (plan 21) listen on nothing; the caller only probes a unit systemd reports active.
 	if (workload.ingress === 'none') return true;
-	if (workload.database) return probeDatabasePort(workload.port, signal, { postgres: workload.database.engine === 'postgres' });
+	if (workload.database) return probeDatabasePort(workload.port, signal, { engine: workload.database.engine });
 	const healthPath = workload.objectStorage ? STORAGE_HEALTH_PATH : workload.healthPath;
 	const socketPath =
 		workload.runtime === 'process' && workload.socketActivation
@@ -799,18 +803,76 @@ export async function probeWorkloadHealth(
 const POSTGRES_SSL_REQUEST = new Uint8Array([0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x2f]);
 
 /**
+ * MongoDB `OP_MSG` (opCode 2013) carrying `{ hello: 1, $db: "admin" }`. `hello` needs no
+ * authentication; only a running `mongod` answers it.
+ */
+const MONGODB_HELLO = new Uint8Array([
+	0x34, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xdd, 0x07, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00, 0x10, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x00,
+	0x01, 0x00, 0x00, 0x00, 0x02, 0x24, 0x64, 0x62, 0x00, 0x06, 0x00, 0x00, 0x00, 0x61, 0x64, 0x6d,
+	0x69, 0x6e, 0x00, 0x00,
+]);
+
+/** RESP inline `PING`. Without credentials Valkey/Redis answer `-NOAUTH`, which still proves it is up. */
+const RESP_PING = new TextEncoder().encode('PING\r\n');
+
+/**
+ * Per-engine handshake: what the probe sends after connecting (null: the server speaks first) and
+ * whether the first bytes it gets back come from the real server, not Podman's port forwarder.
+ */
+interface ProbeHandshake {
+	send: Uint8Array | null;
+	accept(data: Uint8Array): boolean;
+}
+
+export function probeHandshake(engine: DatabaseEngine): ProbeHandshake {
+	switch (engine) {
+		case 'postgres':
+			return { send: POSTGRES_SSL_REQUEST, accept: (data) => data[0] === 0x53 || data[0] === 0x4e };
+		case 'mysql':
+		case 'mariadb':
+			// The server greets first: a protocol-10 handshake (byte 4 is 0x0a), or an error packet
+			// (0xff) when it is up but refusing, which still means it is running.
+			return { send: null, accept: (data) => data.length >= 5 && (data[4] === 0x0a || data[4] === 0xff) };
+		case 'mongodb':
+			// Any reply header whose opCode is OP_MSG (2013) or the legacy OP_REPLY (1).
+			return {
+				send: MONGODB_HELLO,
+				accept: (data) => {
+					if (data.length < 16) return false;
+					const opCode = data[12]! | (data[13]! << 8) | (data[14]! << 16) | (data[15]! << 24);
+					return opCode === 2013 || opCode === 1;
+				},
+			};
+		case 'valkey':
+		case 'redis': {
+			return {
+				send: RESP_PING,
+				accept: (data) => {
+					const text = new TextDecoder().decode(data.subarray(0, 16));
+					// `-LOADING` means the dataset is still being read from disk: not ready yet.
+					return (text.startsWith('+') || text.startsWith('-')) && !text.startsWith('-LOADING');
+				},
+			};
+		}
+	}
+}
+
+/**
  * TCP health probe for a database on `127.0.0.1:<port>`. A bare connect can succeed against a
- * port forwarder before the server is up, so for Postgres the probe also sends an `SSLRequest`
- * and waits for the one-byte answer, which only the postmaster gives. No credentials are sent and
- * the server logs nothing for a connection that ends after SSL negotiation.
+ * port forwarder before the server is up, so the probe performs the engine's smallest handshake
+ * (Postgres `SSLRequest`, the MySQL greeting, MongoDB `hello`, RESP `PING`) and waits for an answer
+ * only the server itself gives. No credentials are ever sent.
  */
 export function probeDatabasePort(
 	port: number,
 	signal: AbortSignal,
-	options: { postgres?: boolean; timeoutMs?: number; hostname?: string } = {},
+	options: { engine?: DatabaseEngine; postgres?: boolean; timeoutMs?: number; hostname?: string } = {},
 ): Promise<boolean> {
 	if (signal.aborted) return Promise.resolve(false);
-	const postgres = options.postgres ?? true;
+	// `postgres: false` (older callers) means "a bare TCP connect is enough".
+	const handshake =
+		options.postgres === false && !options.engine ? null : probeHandshake(options.engine ?? 'postgres');
 	return new Promise<boolean>((resolve) => {
 		let settled = false;
 		let socket: { end(): void } | null = null;
@@ -835,12 +897,11 @@ export function probeDatabasePort(
 			socket: {
 				open(opened) {
 					socket = opened;
-					if (!postgres) finish(true);
-					else opened.write(POSTGRES_SSL_REQUEST);
+					if (!handshake) finish(true);
+					else if (handshake.send) opened.write(handshake.send);
 				},
 				data(_socket, data) {
-					const answer = data[0];
-					finish(answer === 0x53 || answer === 0x4e);
+					finish(handshake ? handshake.accept(data) : true);
 				},
 				end() {
 					finish(false);

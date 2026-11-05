@@ -1,6 +1,7 @@
 import {
 	DATABASE_ENGINES,
 	STORAGE_ENGINES,
+	type DatabaseEngine as DatabaseEngineName,
 	ValidationError,
 	databaseAlias,
 	databaseImage,
@@ -209,8 +210,10 @@ export function renderPoolerUnit(options: {
 export interface ConsoleEnvOptions {
 	/** Managed database id (`db_…`); the connection targets its network alias. */
 	id: string;
-	/** Postgres credentials read by the helper from the database's own env file. */
+	/** Owner credentials read by the helper from the database's own env file. */
 	database: { user: string; password: string; database: string };
+	/** Defaults to postgres (the only engine before D95). */
+	engine?: DatabaseEngineName;
 	/** Exact platform path the proxy serves the studio under. */
 	webRoot: string;
 	/** Per-session DBGate basic-auth login and password; never persisted anywhere else. */
@@ -220,6 +223,16 @@ export interface ConsoleEnvOptions {
 	tls?: boolean;
 }
 
+/** DBGate's driver for each engine (all ship with DBGate Community). */
+const DBGATE_ENGINES: Record<DatabaseEngineName, string> = {
+	postgres: 'postgres@dbgate-plugin-postgres',
+	mysql: 'mysql@dbgate-plugin-mysql',
+	mariadb: 'mariadb@dbgate-plugin-mysql',
+	mongodb: 'mongo@dbgate-plugin-mongo',
+	valkey: 'redis@dbgate-plugin-redis',
+	redis: 'redis@dbgate-plugin-redis',
+};
+
 /**
  * DBGate's single-connection environment (D60). Everything is fixed except the database name,
  * credentials, subpath and basic-auth password. `renderContainerEnvFile` refuses line breaks, so
@@ -227,17 +240,35 @@ export interface ConsoleEnvOptions {
  */
 export function renderConsoleEnv(options: ConsoleEnvOptions): string {
 	const encode = encodeURIComponent;
+	const engine = options.engine ?? 'postgres';
 	const database = options.database.database;
 	const alias = databaseAlias(options.id);
-	const url = `postgres://${encode(options.database.user)}:${encode(options.database.password)}@${alias}:5432/${encode(database)}${options.tls ? '?sslmode=require' : ''}`;
+	const port = DATABASE_ENGINES[engine].containerPort;
 	const webRoot = options.webRoot.replace(/\/+$/, '') || '/';
+	const user = encode(options.database.user);
+	const password = encode(options.database.password);
+	const connection: Record<string, string> =
+		engine === 'postgres'
+			? {
+					URL_skiff: `postgres://${user}:${password}@${alias}:5432/${encode(database)}${options.tls ? '?sslmode=require' : ''}`,
+				}
+			: engine === 'mongodb'
+				? { URL_skiff: `mongodb://${user}:${password}@${alias}:${port}/${encode(database)}?authSource=admin` }
+				: {
+						SERVER_skiff: alias,
+						PORT_skiff: String(port),
+						USER_skiff: options.database.user,
+						PASSWORD_skiff: options.database.password,
+					};
+	// Valkey/Redis have numbered databases, not a named one; the studio lists them.
+	const single: Record<string, string> = engine === 'valkey' || engine === 'redis' ? {} : { SINGLE_DATABASE: database };
 	return renderContainerEnvFile({
 		CONNECTIONS: 'skiff',
-		LABEL_skiff: database,
-		URL_skiff: url,
-		ENGINE_skiff: 'postgres@dbgate-plugin-postgres',
+		LABEL_skiff: database || options.database.user,
+		...connection,
+		ENGINE_skiff: DBGATE_ENGINES[engine],
 		SINGLE_CONNECTION: 'skiff',
-		SINGLE_DATABASE: database,
+		...single,
 		WEB_ROOT: webRoot,
 		LOGIN: options.authUser,
 		PASSWORD: options.authPassword,
@@ -564,6 +595,8 @@ export interface ContainerUnitOptions {
 	pitr?: DatabaseUnitOptions['pitr'];
 	/** Host directory holding the database certificate/key, mounted read-only when TLS is on. */
 	tlsDir?: string | null;
+	/** Valkey/Redis server config written by the helper (holds the ACL user). */
+	serverConfigPath?: string | null;
 	/** App volumes mounted into the container (plan 07). */
 	volumeMounts?: UnitVolumeMount[];
 	/** AppArmor profile workaround for hosts with the stacked-profile kernel bug. */
@@ -583,6 +616,7 @@ export function renderContainerUnit(options: ContainerUnitOptions): string {
 			dataDir: options.dataDir,
 			...(options.pitr ? { pitr: options.pitr } : {}),
 			tlsDir: options.tlsDir ?? null,
+			serverConfigPath: options.serverConfigPath ?? null,
 			apparmorProfile: options.apparmorProfile ?? null,
 		});
 	if (workload.objectStorage)
@@ -669,8 +703,86 @@ export interface DatabaseUnitOptions {
 	};
 	/** Host TLS directory mounted read-only at /run/skiff-tls; null renders plaintext only. */
 	tlsDir?: string | null;
+	/** Valkey/Redis: the helper-written 0600 server config, mounted read-only (it holds the ACL). */
+	serverConfigPath?: string | null;
 	/** AppArmor profile workaround for hosts with the stacked-profile kernel bug. */
 	apparmorProfile?: string | null;
+}
+
+/** Where a Valkey/Redis container reads the helper-written server config. */
+export const KEY_VALUE_CONFIG_PATH = '/etc/skiff/server.conf';
+
+/**
+ * Fixed server arguments for engines other than Postgres. Memory knobs are derived from the unit's
+ * `MemoryMax` so the engine's own caches stay well inside the cgroup limit:
+ *
+ * - MySQL/MariaDB: InnoDB buffer pool at 40%. MySQL's performance schema and X Protocol are off
+ *   (together ~250 MB idle); the host cache is disabled so the agent's handshake-only health
+ *   probe can never get the forwarder's address blocked by `max_connect_errors`.
+ * - MongoDB: WiredTiger cache at 40% (minimum 0.25 GB).
+ * - Valkey/Redis: everything lives in the mounted config (`maxmemory` is set there).
+ */
+export function databaseServerArgs(engine: DatabaseEngineName, memoryMb: number): string[] {
+	const bufferPoolMb = Math.max(64, Math.floor(memoryMb * 0.4));
+	switch (engine) {
+		case 'mysql':
+			return [
+				'mysqld',
+				'--datadir=/data/mysql',
+				`--innodb-buffer-pool-size=${bufferPoolMb}M`,
+				'--performance-schema=OFF',
+				'--mysqlx=OFF',
+				'--skip-name-resolve',
+				'--host-cache-size=0',
+			];
+		case 'mariadb':
+			return [
+				'mariadbd',
+				'--datadir=/data/mysql',
+				`--innodb-buffer-pool-size=${bufferPoolMb}M`,
+				'--skip-name-resolve',
+				'--host-cache-size=0',
+			];
+		case 'mongodb': {
+			const cacheGb = Math.max(0.25, Math.floor((memoryMb * 0.4 * 100) / 1024) / 100);
+			return ['mongod', '--dbpath', '/data/db', '--bind_ip_all', '--wiredTigerCacheSizeGB', String(cacheGb)];
+		}
+		case 'valkey':
+			return ['valkey-server', KEY_VALUE_CONFIG_PATH];
+		case 'redis':
+			return ['redis-server', KEY_VALUE_CONFIG_PATH];
+		case 'postgres':
+			throw new ValidationError('Postgres renders its own Exec line');
+	}
+}
+
+/**
+ * Valkey/Redis server config (docs/DATABASES.md §17). The default user is disabled and the
+ * database's owner is the only ACL user, with every command and key; AOF persistence is on and
+ * `maxmemory` is 75% of the unit's limit with `noeviction`, so a full instance refuses writes
+ * instead of being OOM-killed or silently dropping keys. Values are validated before they reach
+ * the file, so nothing can inject another directive.
+ */
+export function renderKeyValueConfig(options: { user: string; password: string; memoryMb: number }): string {
+	if (!/^[a-z0-9_]{1,63}$/.test(options.user)) throw new ValidationError('Invalid Valkey/Redis user name');
+	if (!/^[A-Za-z0-9_-]{16,200}$/.test(options.password))
+		throw new ValidationError('The Valkey/Redis password must be base64url (16–200 characters)');
+	const maxMemoryMb = Math.max(32, Math.floor(options.memoryMb * 0.75));
+	return [
+		'# Generated by skiff-helper. Do not edit; changes are overwritten.',
+		'bind * -::*',
+		'port 6379',
+		// Auth is enforced by the ACL below; the port is loopback/private-network only (D56).
+		'protected-mode no',
+		'dir /data',
+		'appendonly yes',
+		'appendfsync everysec',
+		`maxmemory ${maxMemoryMb}mb`,
+		'maxmemory-policy noeviction',
+		'user default off',
+		`user ${options.user} on >${options.password} ~* &* +@all`,
+		'',
+	].join('\n');
 }
 
 /**
@@ -694,6 +806,7 @@ export function renderDatabaseUnit(options: DatabaseUnitOptions): string {
 	lines.push('[Container]');
 	lines.push(`ContainerName=skiff-workload-${workload.id}`);
 	lines.push(`Image=${databaseImage(database)}`);
+	if (database.engine !== 'postgres') return renderEngineDatabaseUnit(lines, options);
 	// Keep the image entrypoint (initdb, then exec "$@") and pass the fixed Postgres flags. The
 	// shared preload is required before `CREATE EXTENSION pg_stat_statements` can work. When PITR
 	// is enabled the same Exec turns on WAL archiving; the pinned Postgres image must ship the
@@ -754,6 +867,51 @@ export function renderDatabaseUnit(options: DatabaseUnitOptions): string {
 	lines.push('Restart=on-failure');
 	lines.push('RestartSec=5');
 	// The first start pulls the image and runs initdb; a clean shutdown flushes WAL.
+	lines.push('TimeoutStartSec=600');
+	lines.push('TimeoutStopSec=120');
+	lines.push(`MemoryMax=${workload.memoryMb}M`);
+	lines.push(`CPUQuota=${cpuQuota(workload.cpus)}`);
+	lines.push(`Slice=${WORKLOAD_SLICE}`);
+	lines.push('');
+	lines.push('[Install]');
+	lines.push('WantedBy=default.target');
+	return `${lines.join('\n')}\n`;
+}
+
+/**
+ * The rest of the database unit for engines other than Postgres. Like Postgres it keeps the
+ * image's entrypoint (first-start init, then exec), runs as the image's uid, publishes on loopback
+ * only and keeps a read-only root; only the socket tmpfs and the server arguments differ.
+ */
+function renderEngineDatabaseUnit(lines: string[], options: DatabaseUnitOptions): string {
+	const { workload } = options;
+	const database = workload.database!;
+	const engine = database.engine;
+	const info = DATABASE_ENGINES[engine];
+	lines.push(`Exec=${databaseServerArgs(engine, workload.memoryMb).map(quoteSystemdArg).join(' ')}`);
+	lines.push(`User=${info.uid}:${info.gid}`);
+	lines.push(`PublishPort=127.0.0.1:${workload.port}:${info.containerPort}`);
+	lines.push(`Network=${networkUnitName(workloadNetworkName(workload))}`);
+	lines.push(`NetworkAlias=${databaseAlias(workload.id)}`);
+	lines.push(`EnvironmentFile=${options.envFile}`);
+	lines.push(`Volume=${options.dataDir}:/data:Z`);
+	if (engine === 'valkey' || engine === 'redis') {
+		if (!options.serverConfigPath) throw new ValidationError(`${engine} needs its helper-written server config`);
+		lines.push(`Volume=${options.serverConfigPath}:${KEY_VALUE_CONFIG_PATH}:ro,Z`);
+	}
+	// The server socket (and pid file) directory; the root filesystem stays read-only.
+	if (engine === 'mysql') lines.push('Tmpfs=/var/run/mysqld:rw,size=8m,mode=1777');
+	if (engine === 'mariadb') lines.push('Tmpfs=/run/mysqld:rw,size=8m,mode=1777');
+	lines.push('Tmpfs=/tmp:rw,size=64m');
+	lines.push('DropCapability=all');
+	lines.push('NoNewPrivileges=true');
+	lines.push('ReadOnly=true');
+	pushApparmor(lines, options.apparmorProfile);
+	lines.push('');
+	lines.push('[Service]');
+	lines.push('Restart=on-failure');
+	lines.push('RestartSec=5');
+	// The first start pulls the image and initialises the data dir.
 	lines.push('TimeoutStartSec=600');
 	lines.push('TimeoutStopSec=120');
 	lines.push(`MemoryMax=${workload.memoryMb}M`);

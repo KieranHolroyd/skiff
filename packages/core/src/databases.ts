@@ -12,7 +12,7 @@ import {
 	workloads,
 } from '@skiff/db';
 import {
-	DATABASE_BACKUP_FORMAT,
+	databaseBackupFormat,
 	DATABASE_MONITOR_USER,
 	DATABASE_PORT_MAX,
 	DATABASE_PORT_MIN,
@@ -35,7 +35,10 @@ import {
 	databaseConnectionUrl,
 	databaseCreateSchema,
 	databaseCredentialCreateSchema,
+	databaseCapabilities,
 	databaseEngineRegistry,
+	databasePublicUrlSchemes,
+	databaseUrlDatabase,
 	databaseEnvNames,
 	databaseIdentifier,
 	databaseImage,
@@ -84,6 +87,7 @@ import {
 	type DatabaseRotationTask,
 	type DatabaseRotationView,
 	type DatabaseSnapshot,
+	type DatabaseEngineCapabilities,
 	type DatabaseSslMode,
 	type DatabaseStatus,
 	type DatabaseTableStat,
@@ -185,8 +189,11 @@ export class DatabaseService {
 		const info = databaseEngineRegistry[input.engine];
 		const version = input.version ?? info.defaultVersion;
 		const memoryMb = input.memoryMb ?? info.defaultMemoryMb;
-		if (input.name.startsWith('pg-'))
+		if (input.engine === 'postgres' && input.name.startsWith('pg-'))
 			throw new ValidationError('Database names cannot start with "pg-" (Postgres reserves pg_ roles).');
+		// Features the engine lacks are off, whatever the schema defaulted (docs/DATABASES.md §17).
+		const pooler = input.pooler && info.capabilities.pooler;
+		const backups = info.capabilities.backups;
 
 		const existing = this.ctx.db
 			.select({ id: databases.id, deletedAt: databases.deletedAt })
@@ -250,7 +257,7 @@ export class DatabaseService {
 		const id = newId('db_');
 		const now = this.ctx.now();
 		const hostPort = this.allocatePort(decision.nodeId);
-		const poolerPort = input.pooler ? this.allocatePoolerPort(decision.nodeId) : null;
+		const poolerPort = pooler ? this.allocatePoolerPort(decision.nodeId) : null;
 		const ownerSecret = this.ctx.secrets.seal(principal.orgId, password());
 		const monitorSecret = this.ctx.secrets.seal(principal.orgId, password());
 		this.ctx.sqlite.transaction(() => {
@@ -269,20 +276,21 @@ export class DatabaseService {
 					storageMb: input.storageMb,
 					volumeId: volume?.id ?? null,
 					extensionsJson: JSON.stringify(input.extensions),
-					poolerEnabled: input.pooler,
+					poolerEnabled: pooler,
 					poolerPort,
 					status: 'pending',
 					ownerSecret,
 					monitorSecret,
-					nextBackupAt: nextCronTime('0 3 * * *', now),
+					backupEnabled: backups,
+					nextBackupAt: backups ? nextCronTime('0 3 * * *', now) : null,
 					createdBy: principal.userId,
 					createdAt: now,
 					updatedAt: now,
 				})
 				.run();
-			this.insertBuiltInCredentials(principal, id, input.name, ownerSecret, monitorSecret);
+			this.insertBuiltInCredentials(principal, id, input.name, ownerSecret, monitorSecret, info.capabilities.metrics);
 			if (project)
-				this.insertAttachment(principal, id, project, input.envPrefix ?? 'DATABASE');
+				this.insertAttachment(principal, id, project, input.envPrefix ?? info.defaultEnvPrefix);
 		})();
 		this.ctx.audit.record({
 			principal,
@@ -323,11 +331,21 @@ export class DatabaseService {
 		if (patch.version !== undefined && patch.version !== row.version) {
 			if (!info.versions.includes(patch.version))
 				throw new ValidationError(`${info.label} versions: ${info.versions.join(', ')}.`);
-			if (isPostgresMajorChange(row.version, patch.version))
+			if (row.engine === 'postgres' && isPostgresMajorChange(row.version, patch.version))
 				throw new ConflictError(
 					`PostgreSQL ${row.version} → ${patch.version} is a major-version upgrade. ` +
 						`Run \`skif db upgrade ${name} --to ${patch.version} --plan\`; the platform never switches a Postgres major automatically.`
 				);
+			if (row.engine !== 'postgres') {
+				// Versions are listed newest first, so a smaller index is newer.
+				const forward = info.versions.indexOf(patch.version) < info.versions.indexOf(row.version);
+				if (info.inPlaceUpgrade === 'never' || !forward)
+					throw new ConflictError(
+						forward
+							? `${info.label} ${row.version} → ${patch.version} cannot be changed in place. Back up "${name}" and restore it into a new database on ${patch.version}.`
+							: `${info.label} cannot be downgraded in place (${row.version} → ${patch.version}). Restore a backup into a new database instead.`,
+					);
+			}
 		}
 		if (patch.memoryMb !== undefined) {
 			if (patch.memoryMb < info.minMemoryMb)
@@ -335,6 +353,10 @@ export class DatabaseService {
 			if (patch.memoryMb > row.memoryMb) this.admit(row, patch.memoryMb);
 		}
 		const { extensions, pooler, ...columns } = patch;
+		if (pooler === true && !info.capabilities.pooler)
+			throw new ValidationError(`Connection pooling is only available for PostgreSQL, not ${info.label}.`);
+		if (extensions && extensions.length > 0 && !info.capabilities.extensions)
+			throw new ValidationError(`Extensions are only available for PostgreSQL, not ${info.label}.`);
 		const poolerEnabled = pooler ?? row.poolerEnabled;
 		const poolerPort =
 			pooler === false
@@ -373,6 +395,7 @@ export class DatabaseService {
 		const input = databaseUpgradeSchema.parse(raw);
 		const row = this.requireRow(principal, name);
 		const info = databaseEngineRegistry[row.engine];
+		this.requireCapability(row, 'upgradePlan', 'The upgrade planner');
 		if (!info.versions.includes(input.targetVersion))
 			throw new ValidationError(`${info.label} versions: ${info.versions.join(', ')}.`);
 		const fromMajor = postgresMajor(row.version);
@@ -635,14 +658,16 @@ export class DatabaseService {
 			result: 'ok',
 		});
 		const tls = this.tlsState(row);
+		const urlDatabase = databaseUrlDatabase(row.engine, user);
 		const directUrl = databaseConnectionUrl({
 			scheme: info.scheme,
 			user,
 			pass,
 			host: '127.0.0.1',
 			port: row.hostPort,
-			database: user,
+			database: urlDatabase,
 			sslmode: tls.mode,
+			query: info.urlQuery,
 		});
 		const poolerUrl =
 			row.poolerEnabled && row.poolerPort !== null
@@ -656,15 +681,18 @@ export class DatabaseService {
 						sslmode: tls.mode,
 					})
 				: null;
-		const tlsNote = tls.enabled
-			? 'TLS is on; use sslmode=require (or verify-full with the CA).'
-			: 'TLS is off; enable SKIFF_FEATURE_DB_TLS to encrypt connections.';
+		const tlsNote = !info.capabilities.tls
+			? `Connections are unencrypted; ${info.label} is reachable only on loopback and the private container network.`
+			: tls.enabled
+				? 'TLS is on; use sslmode=require (or verify-full with the CA).'
+				: 'TLS is off; enable SKIFF_FEATURE_DB_TLS to encrypt connections.';
+		const sessionNote = info.capabilities.pooler ? ' Use the direct URL for migrations and session-only features.' : '';
 		return {
 			databaseId: row.id,
 			name: row.name,
 			username: user,
 			password: pass,
-			databaseName: user,
+			databaseName: urlDatabase,
 			url: directUrl,
 			directUrl,
 			poolerUrl,
@@ -678,8 +706,9 @@ export class DatabaseService {
 				poolerUrl,
 				sslmode: tls.mode,
 				caPem: tls.caPem,
+				engine: row.engine,
 			}),
-			note: `${tlsNote} Listens on loopback on node "${node?.name ?? row.nodeId}" only. From elsewhere, tunnel: ssh -L ${row.hostPort}:127.0.0.1:${row.hostPort} <node>. Use the direct URL for migrations and session-only features.`,
+			note: `${tlsNote} Listens on loopback on node "${node?.name ?? row.nodeId}" only. From elsewhere, tunnel: ssh -L ${row.hostPort}:127.0.0.1:${row.hostPort} <node>.${sessionNote}`,
 		};
 	}
 
@@ -699,6 +728,12 @@ export class DatabaseService {
 		requirePermission(principal, 'database:update');
 		const input = databasePublicUrlUpdateSchema.parse(raw);
 		const row = this.requireRow(principal, name);
+		const schemes = databasePublicUrlSchemes(row.engine);
+		const scheme = input.url.slice(0, input.url.indexOf('://')).toLowerCase();
+		if (!schemes.includes(scheme))
+			throw new ValidationError(
+				`${databaseEngineRegistry[row.engine].label} public URLs start with ${schemes.map((item) => `${item}://`).join(' or ')}.`,
+			);
 		const now = this.ctx.now();
 		this.ctx.db
 			.update(databases)
@@ -885,6 +920,7 @@ export class DatabaseService {
 		const input = databaseConsoleOpenSchema.parse(raw);
 		if (input.readOnly === false) requirePermission(principal, 'database:update');
 		const row = this.requireRow(principal, name, { includeDeleted: true });
+		this.requireCapability(row, 'console', 'The database studio');
 		if (row.deletedAt)
 			throw new ConflictError(`Database "${name}" is in the trash. Restore it before opening the studio.`);
 		if (row.status !== 'running')
@@ -1252,6 +1288,8 @@ export class DatabaseService {
 		requirePermission(principal, 'database:update');
 		const input = databaseRotateSchema.parse(raw);
 		const db = this.requireRow(principal, name);
+		this.requireCapability(db, 'rotation', 'Credential rotation');
+		if (input.role === 'monitor') this.requireCapability(db, 'metrics', 'The monitor role');
 		const pending = this.ctx.db
 			.select({ id: databaseRotations.id })
 			.from(databaseRotations)
@@ -1419,7 +1457,7 @@ export class DatabaseService {
 		requirePermission(principal, 'database:read');
 		const db = this.requireRow(principal, name, { includeDeleted: true });
 		this.ensureBuiltInCredential(db.id, 'owner');
-		this.ensureBuiltInCredential(db.id, 'monitor');
+		if (databaseCapabilities(db.engine).metrics) this.ensureBuiltInCredential(db.id, 'monitor');
 		return this.credentialsOf(db.id).map(toCredentialView);
 	}
 
@@ -1428,6 +1466,7 @@ export class DatabaseService {
 		requirePermission(principal, 'database:update');
 		const input = databaseCredentialCreateSchema.parse(raw ?? {}) as DatabaseCredentialCreate;
 		const db = this.requireRow(principal, name);
+		this.requireCapability(db, 'namedCredentials', 'Named credentials');
 		if (input.role !== 'app' && input.role !== 'readonly' && input.role !== 'backup')
 			throw new ValidationError('Only app, readonly and backup credentials can be created.');
 		const now = this.ctx.now();
@@ -1706,6 +1745,7 @@ export class DatabaseService {
 		requirePermission(principal, 'database:update');
 		const patch = databaseBackupPolicySchema.parse(raw);
 		const row = this.requireRow(principal, name);
+		this.requireCapability(row, 'backups', 'Backups');
 		const schedule = patch.schedule ?? row.backupSchedule;
 		const enabled = patch.enabled ?? row.backupEnabled;
 		if (enabled) {
@@ -1745,7 +1785,7 @@ export class DatabaseService {
 			.where(eq(databaseBackups.databaseId, db.id))
 			.orderBy(desc(databaseBackups.createdAt))
 			.all()
-			.map((row) => this.toBackupView(row, db.name));
+			.map((row) => this.toBackupView(row, db.name, db.engine));
 	}
 
 	getBackup(principal: Principal, name: string, backupId: string): DatabaseBackupView {
@@ -1757,7 +1797,7 @@ export class DatabaseService {
 			.where(and(eq(databaseBackups.id, backupId), eq(databaseBackups.databaseId, db.id)))
 			.get();
 		if (!row) throw new NotFoundError('Backup');
-		return this.toBackupView(row, db.name);
+		return this.toBackupView(row, db.name, db.engine);
 	}
 
 	/** Queue a dump now. The node picks it up on its next desired-state pull. */
@@ -1765,6 +1805,7 @@ export class DatabaseService {
 		requirePermission(principal, 'database:update');
 		const input = databaseBackupCreateSchema.parse(raw);
 		const db = this.requireRow(principal, name);
+		this.requireCapability(db, 'backups', 'Backups');
 		const pending = this.ctx.db
 			.select({ id: databaseBackups.id })
 			.from(databaseBackups)
@@ -1909,6 +1950,8 @@ export class DatabaseService {
 			.all();
 		let queued = 0;
 		for (const db of due) {
+			// Engines without backups are created with the policy off; skip any row that predates it.
+			if (!databaseCapabilities(db.engine).backups) continue;
 			const busy = this.ctx.db
 				.select({ id: databaseBackups.id })
 				.from(databaseBackups)
@@ -2001,7 +2044,7 @@ export class DatabaseService {
 				backupId: null,
 				objectKey: backup.objectKey,
 				url: await store.presignPut(backup.objectKey, BACKUP_TASK_TTL_SECONDS, 'application/octet-stream'),
-				format: DATABASE_BACKUP_FORMAT,
+				format: databaseBackupFormat(db.engine) ?? 'pg_dump-custom',
 			});
 		}
 		const restores = this.ctx.db
@@ -2026,7 +2069,7 @@ export class DatabaseService {
 				backupId: backup.id,
 				objectKey: backup.objectKey,
 				url: await store.presignGet(backup.objectKey, BACKUP_TASK_TTL_SECONDS),
-				format: DATABASE_BACKUP_FORMAT,
+				format: databaseBackupFormat(db.engine) ?? 'pg_dump-custom',
 			});
 		}
 		return tasks;
@@ -2208,6 +2251,7 @@ export class DatabaseService {
 		this.requirePitrFeature();
 		const input = databasePitrPolicySchema.parse(raw);
 		const row = this.requireRow(principal, name);
+		this.requireCapability(row, 'pitr', 'Point-in-time recovery');
 		const now = this.ctx.now();
 		const existing = this.ctx.db
 			.select()
@@ -2659,14 +2703,18 @@ export class DatabaseService {
 		return state;
 	}
 
-	private toBackupView(row: typeof databaseBackups.$inferSelect, databaseName: string): DatabaseBackupView {
+	private toBackupView(
+		row: typeof databaseBackups.$inferSelect,
+		databaseName: string,
+		engine: DatabaseRow['engine'],
+	): DatabaseBackupView {
 		return {
 			id: row.id,
 			databaseId: row.databaseId,
 			databaseName,
 			kind: row.kind,
 			status: row.status,
-			format: DATABASE_BACKUP_FORMAT,
+			format: databaseBackupFormat(engine) ?? 'pg_dump-custom',
 			sizeBytes: row.sizeBytes,
 			sha256: row.sha256,
 			objectKey: row.objectKey,
@@ -2700,12 +2748,13 @@ export class DatabaseService {
 				`Project "${project.slug}" is static; only process or container projects can use a database.`,
 			);
 		const row = this.requireRow(principal, input.database);
+		const envPrefix = input.envPrefix ?? databaseEngineRegistry[row.engine].defaultEnvPrefix;
 		const current = this.attachmentsForProject(project.id);
 		if (current.some((item) => item.databaseId === row.id))
 			throw new ConflictError(`Database "${row.name}" is already attached to "${project.slug}".`);
-		if (current.some((item) => item.envPrefix === input.envPrefix))
+		if (current.some((item) => item.envPrefix === envPrefix))
 			throw new ConflictError(
-				`"${project.slug}" already uses the env prefix ${input.envPrefix}. Pick another, e.g. ${input.envPrefix}_2.`,
+				`"${project.slug}" already uses the env prefix ${envPrefix}. Pick another, e.g. ${envPrefix}_2.`,
 			);
 		const others = new Set(current.map((item) => this.rowById(item.databaseId)?.nodeId).filter(Boolean));
 		if (others.size > 0 && !others.has(row.nodeId))
@@ -2720,13 +2769,13 @@ export class DatabaseService {
 		const placementProblem = this.placementConflict(project, row.nodeId);
 		if (placementProblem) throw new ValidationError(placementProblem);
 
-		this.insertAttachment(principal, row.id, project, input.envPrefix);
+		this.insertAttachment(principal, row.id, project, envPrefix);
 		this.ctx.audit.record({
 			principal,
 			action: 'database.attach',
 			resource: 'database',
 			resourceId: row.id,
-			args: { name: row.name, project: project.slug, envPrefix: input.envPrefix },
+			args: { name: row.name, project: project.slug, envPrefix },
 			result: 'ok',
 		});
 		this.ctx.projects.bump(principal.orgId);
@@ -2738,7 +2787,7 @@ export class DatabaseService {
 			.get()?.nodeId;
 		const warning =
 			workloadNode && workloadNode !== row.nodeId
-				? `"${project.slug}" currently runs on another node. Redeploy it to move it next to "${row.name}"; until then it gets no ${input.envPrefix}_URL.`
+				? `"${project.slug}" currently runs on another node. Redeploy it to move it next to "${row.name}"; until then it gets no ${envPrefix}_URL.`
 				: workloadNode
 					? null
 					: `"${project.slug}" has no running workload yet. Its next deploy is placed next to "${row.name}".`;
@@ -2795,6 +2844,7 @@ export class DatabaseService {
 		for (const item of this.resolveForConsumer(projectId, nodeId, runtime)) {
 			const pass = this.ctx.secrets.open(item.row.orgId, item.row.ownerSecret);
 			const tls = this.tlsState(item.row);
+			const info = databaseEngineRegistry[item.row.engine];
 			const direct = databaseConnectionUrl({
 				scheme: item.scheme,
 				user: item.user,
@@ -2803,14 +2853,17 @@ export class DatabaseService {
 				port: item.port,
 				database: item.databaseName,
 				sslmode: tls.mode,
+				query: info.urlQuery,
 			});
 			env[`${item.prefix}_URL`] = direct;
+			if (item.row.engine === 'mongodb') env[`${item.prefix}_URI`] = direct;
 			env[`${item.prefix}_HOST`] = item.host;
 			env[`${item.prefix}_PORT`] = String(item.port);
 			env[`${item.prefix}_USER`] = item.user;
 			env[`${item.prefix}_PASSWORD`] = pass;
 			env[`${item.prefix}_NAME`] = item.databaseName;
-			env[`${item.prefix}_SSL_MODE`] = tls.mode;
+			// `sslmode` is a Postgres setting; other engines would only get a misleading value.
+			if (info.capabilities.tls) env[`${item.prefix}_SSL_MODE`] = tls.mode;
 			// Container env files cannot carry a multi-line PEM; those apps use sslmode=require or
 			// fetch the public CA from the credentials endpoint. Process env files escape newlines.
 			if (tls.enabled && tls.caPem && runtime === 'process') env[`${item.prefix}_CA_CERT`] = tls.caPem;
@@ -2860,16 +2913,16 @@ export class DatabaseService {
 			.where(and(eq(databases.nodeId, nodeId), isNull(databases.deletedAt)))
 			.all()
 			.map((row) => {
-				const user = databaseIdentifier(row.name);
-				const env = { POSTGRES_USER: user, POSTGRES_DB: user, PGDATA: '/data/pgdata' };
-				const pitr = featureEnabled(this.ctx.config, 'PITR')
+				const capabilities = databaseCapabilities(row.engine);
+				const env = databaseContainerEnv(row);
+				const pitr = capabilities.pitr && featureEnabled(this.ctx.config, 'PITR')
 					? this.ctx.db
 							.select()
 							.from(databasePitr)
 							.where(and(eq(databasePitr.databaseId, row.id), eq(databasePitr.enabled, true)))
 							.get()
 					: undefined;
-				const tls = this.tlsEnabled();
+				const tls = capabilities.tls && this.tlsEnabled();
 				const isolated = featureEnabled(this.ctx.config, 'ORG_NETWORKS');
 				return {
 					id: row.id,
@@ -2907,7 +2960,7 @@ export class DatabaseService {
 							: {}),
 						...(tls ? { tls: true } : {}),
 					},
-					...(row.poolerEnabled && row.poolerPort ? { pooler: { port: row.poolerPort } } : {}),
+					...(capabilities.pooler && row.poolerEnabled && row.poolerPort ? { pooler: { port: row.poolerPort } } : {}),
 				};
 			});
 	}
@@ -2932,8 +2985,9 @@ export class DatabaseService {
 		if (row.nodeId !== nodeId) throw new CoreError('forbidden', 'This database is placed on another node.', 403);
 		const user = databaseIdentifier(row.name);
 		const ownerPassword = this.ctx.secrets.open(row.orgId, row.ownerSecret);
-		const env = { POSTGRES_USER: user, POSTGRES_DB: user, PGDATA: '/data/pgdata' };
-		const pitr = featureEnabled(this.ctx.config, 'PITR')
+		const info = databaseEngineRegistry[row.engine];
+		const env = databaseContainerEnv(row);
+		const pitr = info.capabilities.pitr && featureEnabled(this.ctx.config, 'PITR')
 			? this.ctx.db
 					.select()
 					.from(databasePitr)
@@ -2942,18 +2996,29 @@ export class DatabaseService {
 			: undefined;
 		return {
 			workloadId: row.id,
-			activationVersion: databaseActivationVersion(row, env, pitr?.stanza ?? null, this.tlsEnabled()),
-			env: { POSTGRES_PASSWORD: ownerPassword },
+			activationVersion: databaseActivationVersion(
+				row,
+				env,
+				pitr?.stanza ?? null,
+				info.capabilities.tls && this.tlsEnabled(),
+			),
+			env: { [info.containerEnv.password]: ownerPassword },
 			files: {},
-			databaseSetup: { extensions: parseJson<string[]>(row.extensionsJson, []) },
-			monitor: {
-				databaseName: user,
-				ownerUser: user,
-				ownerPassword,
-				monitorUser: DATABASE_MONITOR_USER,
-				monitorPassword: this.ctx.secrets.open(row.orgId, row.monitorSecret),
-				port: row.hostPort,
-			},
+			// The monitor role, extensions and the sampler are Postgres-only (D57, D84); other engines
+			// get no `monitor`, so the agent never tries to bootstrap one.
+			...(info.capabilities.metrics
+				? {
+						databaseSetup: { extensions: parseJson<string[]>(row.extensionsJson, []) },
+						monitor: {
+							databaseName: user,
+							ownerUser: user,
+							ownerPassword,
+							monitorUser: DATABASE_MONITOR_USER,
+							monitorPassword: this.ctx.secrets.open(row.orgId, row.monitorSecret),
+							port: row.hostPort,
+						},
+					}
+				: {}),
 		};
 	}
 
@@ -3138,6 +3203,13 @@ export class DatabaseService {
 		return this.ctx.db.select().from(databases).where(eq(databases.id, id)).get();
 	}
 
+	/** Refuse a feature the database's engine does not support (docs/DATABASES.md §17). */
+	private requireCapability(row: DatabaseRow, capability: keyof DatabaseEngineCapabilities, feature: string): void {
+		if (databaseCapabilities(row.engine)[capability]) return;
+		const label = databaseEngineRegistry[row.engine]?.label ?? row.engine;
+		throw new ValidationError(`${feature} is not available for ${label} databases.`);
+	}
+
 	/** TLS is a control-plane feature flag; the node only renders it when desired state asks. */
 	private tlsEnabled(): boolean {
 		return featureEnabled(this.ctx.config, 'DB_TLS');
@@ -3149,7 +3221,8 @@ export class DatabaseService {
 		caPem: string | null;
 		error: string | null;
 	} {
-		if (!this.tlsEnabled()) return { enabled: false, mode: 'disable', caPem: null, error: null };
+		if (!this.tlsEnabled() || !databaseCapabilities(row.engine).tls)
+			return { enabled: false, mode: 'disable', caPem: null, error: null };
 		const report = this.tlsReports.get(row.id);
 		// A generation failure means the node started Postgres without TLS; report that honestly
 		// rather than handing out an sslmode=require URL that cannot work.
@@ -3270,12 +3343,11 @@ export class DatabaseService {
 		name: string,
 		ownerSecret: string,
 		monitorSecret: string,
+		withMonitor: boolean,
 	): void {
 		const now = this.ctx.now();
 		const username = databaseIdentifier(name);
-		this.ctx.db
-			.insert(databaseCredentials)
-			.values([
+		const rows = [
 				{
 					id: newId('dbc_'),
 					orgId: principal.orgId,
@@ -3302,7 +3374,11 @@ export class DatabaseService {
 					createdAt: now,
 					updatedAt: now,
 				},
-			])
+			] as const;
+		// Only engines with the stats sampler have a monitor role (D57).
+		this.ctx.db
+			.insert(databaseCredentials)
+			.values(withMonitor ? [...rows] : [rows[0]])
 			.run();
 	}
 
@@ -3364,7 +3440,8 @@ export class DatabaseService {
 				envPrefix: attachment.envPrefix,
 				envNames: databaseEnvNames(attachment.envPrefix, {
 					pooler: db.poolerEnabled && db.poolerPort !== null,
-					tls: this.tlsEnabled(),
+					tls: this.tlsEnabled() && databaseCapabilities(db.engine).tls,
+					engine: db.engine,
 				}),
 				createdAt: new Date(attachment.createdAt).toISOString(),
 			}))
@@ -3396,10 +3473,10 @@ export class DatabaseService {
 					host: container ? databaseAlias(db.id) : '127.0.0.1',
 					port: container ? info.containerPort : db.hostPort,
 					user,
-					databaseName: user,
+					databaseName: databaseUrlDatabase(db.engine, user),
 					scheme: info.scheme,
 					row: db,
-					poolerPort: db.poolerEnabled ? db.poolerPort : null,
+					poolerPort: db.poolerEnabled && info.capabilities.pooler ? db.poolerPort : null,
 				};
 			});
 	}
@@ -3440,6 +3517,7 @@ export class DatabaseService {
 			name: row.name,
 			engine: row.engine,
 			engineLabel: info.label,
+			capabilities: info.capabilities,
 			version: row.version,
 			status: row.status,
 			message: row.message,
@@ -3449,7 +3527,7 @@ export class DatabaseService {
 			cpus: row.cpus,
 			storageMb: row.storageMb,
 			sizeBytes: row.sizeBytes,
-			databaseName: user,
+			databaseName: databaseUrlDatabase(row.engine, user),
 			username: user,
 			internalHost: {
 				process: `127.0.0.1:${row.hostPort}`,
@@ -3491,6 +3569,18 @@ export class DatabaseService {
 function requireInteractiveStudio(principal: Principal): void {
 	if (principal.kind !== 'user')
 		throw new CoreError('forbidden', 'The database studio needs an interactive user session.', 403);
+}
+
+/**
+ * Non-secret container env for a database. Postgres keeps its original shape exactly, so existing
+ * databases keep their activation version and are not restarted by an upgrade. Other engines use
+ * the registry's env names; the helper adds each engine's fixed settings (D61).
+ */
+function databaseContainerEnv(row: DatabaseRow): Record<string, string> {
+	const user = databaseIdentifier(row.name);
+	if (row.engine === 'postgres') return { POSTGRES_USER: user, POSTGRES_DB: user, PGDATA: '/data/pgdata' };
+	const keys = databaseEngineRegistry[row.engine].containerEnv;
+	return { [keys.user]: user, ...(keys.database ? { [keys.database]: user } : {}) };
 }
 
 function password(): string {

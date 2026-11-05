@@ -101,7 +101,9 @@
 - [x] On-demand DBGate 7.3.4 studio: loopback sidecar, internal gateway + platform proxy, `database:console`, read-only default, write mode with `database:update`, audited and idle-stopped (D60)
 - [ ] Native table editor and query history beyond the embedded studio
 - [ ] Database metrics in the Parquet archive; bulk actions and prune for databases; `restore_database` over MCP
-- [ ] Cross-node access via a node private address; PITR (pgBackRest/WAL-G); MySQL/Valkey
+- [x] More engines: MySQL, MariaDB, MongoDB, Valkey and Redis with create/attach/credentials/rotation/studio/logs; logical backups for MySQL, MariaDB and MongoDB (D95)
+- [ ] Engine parity: metrics samplers, TLS, named credentials and backups for Valkey/Redis (RDB), ClickHouse as a seventh engine
+- [ ] Cross-node access via a node private address; PITR (pgBackRest/WAL-G)
 
 ## Managed object storage ([OBJECT-STORAGE.md](./OBJECT-STORAGE.md))
 - [x] RustFS 1.0 as a tier-3 container: create, resize, soft delete, restore, purge (D62, D69)

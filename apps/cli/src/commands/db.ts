@@ -1,6 +1,7 @@
 import { parseArgs, rejectExtraPositionals, requirePositional, type FlagSpec } from '../args.ts';
 import { CliError, UsageError } from '../errors.ts';
 import {
+	DATABASE_ENGINES,
 	assertEnvPrefix,
 	databaseDetails,
 	databaseTable,
@@ -20,14 +21,14 @@ const usage = `Usage: skif db <command> [options]
 
 Commands:
   list                         List databases (the default); --all includes the trash
-  create <name>                Create a PostgreSQL database
+  create <name>                Create a database (PostgreSQL unless --engine says otherwise)
   info <name>                  Status, node, size vs budget, attached projects, top tables
   attach <name> -p <project>   Connect a database to a project (injects <PREFIX>_URL, …)
   detach <name> -p <project>   Disconnect it; the app restarts without the variables
   delete <name>                Move it to the trash (restorable for 7 days)
   restore <name>               Bring it back from the trash
   purge <name>                 Permanently delete a trashed database and its data
-  logs <name>                  Tail the Postgres container journal (--follow to stream)
+  logs <name>                  Tail the database container journal (--follow to stream)
   credentials <name>           Print the connection URL (--json for user, password, host, port)
   restart <name>|--all         Restart a database (and its pooler) or every database
   upgrade <name> --to <major>  Plan a PostgreSQL major upgrade; --apply queues a backup
@@ -40,14 +41,18 @@ Commands:
 
 Create options:
   -p, --project <slug>         Attach to this project right away (placed on its node)
-      --prefix <PREFIX>        Env prefix for the attachment (default DATABASE)
-      --version <16|17>        PostgreSQL major version (default 17)
+      --engine <engine>        postgres (default), mysql, mariadb, mongodb, valkey or redis
+      --prefix <PREFIX>        Env prefix for the attachment (default DATABASE; MONGODB for
+                               mongodb; REDIS for valkey and redis)
+      --version <version>      Engine version (postgres 17|16, mysql 8.4|9.7, mariadb 11.8|11.4,
+                               mongodb 8.0|9.0, valkey 9.1|8.1, redis 8.10|8.8)
       --placement <where>      auto (default), edge, or a node id
       --memory <size>          Memory limit, e.g. 256M or 1G (default 256M)
       --cpus <n>               CPU limit (default 1)
       --storage <size>         Storage budget for alerts and the gauge (default 10G)
-      --[no-]pooler            PgBouncer sidecar (default on; injects <PREFIX>_POOL_URL)
-      --extension <name>       Enable an allowlisted extension, e.g. pg_trgm, uuid-ossp (repeatable)
+      --[no-]pooler            PgBouncer sidecar (default on; postgres only; injects <PREFIX>_POOL_URL)
+      --extension <name>       Enable an allowlisted extension, e.g. pg_trgm, uuid-ossp
+                               (repeatable; postgres only)
 
 Options:
   -y, --yes                    Don't ask for confirmation (required when stdin isn't a terminal)
@@ -60,6 +65,7 @@ database:credentials permission and every read is audited.
 
 Examples:
   skif db create main --project api
+  skif db create cache --engine valkey --project api    # api receives REDIS_URL
   skif db attach main --project api --prefix DATABASE
   psql "$(skif db credentials main)"     # on the node, or through ssh -L <port>:127.0.0.1:<port>`;
 
@@ -74,6 +80,7 @@ const createFlags: FlagSpec = {
 	...baseFlags,
 	project: { type: 'string', short: 'p' },
 	prefix: { type: 'string' },
+	engine: { type: 'string' },
 	version: { type: 'string' },
 	placement: { type: 'string' },
 	memory: { type: 'string' },
@@ -210,6 +217,12 @@ async function createDatabase(argv: string[]): Promise<void> {
 		assertEnvPrefix(prefix);
 	}
 	const input: DatabaseCreateInput = { name };
+	const engine = args.string('engine');
+	if (engine !== undefined) {
+		if (!(DATABASE_ENGINES as readonly string[]).includes(engine))
+			throw new UsageError(`--engine must be one of ${DATABASE_ENGINES.join(', ')}.`);
+		input.engine = engine;
+	}
 	if (project) input.project = project;
 	if (prefix) input.envPrefix = prefix;
 	const version = args.string('version');

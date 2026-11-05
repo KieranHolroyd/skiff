@@ -1,5 +1,5 @@
 import * as z from 'zod';
-import { databaseEngines, databaseNameSchema } from './database.ts';
+import { databaseEngines, databaseNameSchema, type DatabaseEngine } from './database.ts';
 
 /**
  * Managed database backups (docs/DATABASES.md §9). A backup is a `pg_dump -Fc` artifact written
@@ -8,7 +8,37 @@ import { databaseEngines, databaseNameSchema } from './database.ts';
  * result on its next heartbeat.
  */
 
+/** The Postgres format, kept as a name for existing callers. */
 export const DATABASE_BACKUP_FORMAT = 'pg_dump-custom' as const;
+
+/**
+ * Logical backup formats, one per engine family (docs/DATABASES.md §17). A backup is restored only
+ * into a database of the same engine, so the format follows from the engine and is not stored.
+ */
+export const databaseBackupFormats = [
+	'pg_dump-custom',
+	'mysqldump-sql',
+	'mariadb-dump-sql',
+	'mongodump-archive-gzip',
+] as const;
+export type DatabaseBackupFormat = (typeof databaseBackupFormats)[number];
+
+/** The dump format an engine's backups use; null when the engine has no backups. */
+export function databaseBackupFormat(engine: DatabaseEngine): DatabaseBackupFormat | null {
+	switch (engine) {
+		case 'postgres':
+			return 'pg_dump-custom';
+		case 'mysql':
+			return 'mysqldump-sql';
+		case 'mariadb':
+			return 'mariadb-dump-sql';
+		case 'mongodb':
+			return 'mongodump-archive-gzip';
+		case 'valkey':
+		case 'redis':
+			return null;
+	}
+}
 
 /** Five-field cron expression: `*`, slash steps (`*` + `/n`), ranges and comma lists. */
 export const cronSchema = z
@@ -59,7 +89,7 @@ export interface DatabaseBackupView {
 	databaseName: string;
 	kind: 'manual' | 'scheduled';
 	status: DatabaseBackupStatus;
-	format: typeof DATABASE_BACKUP_FORMAT;
+	format: DatabaseBackupFormat;
 	sizeBytes: number | null;
 	sha256: string | null;
 	objectKey: string;
@@ -99,7 +129,7 @@ export const databaseBackupTaskSchema = z.object({
 	objectKey: z.string().min(1).max(512),
 	/** Presigned PUT (backup) or GET (restore). */
 	url: z.string().url(),
-	format: z.literal(DATABASE_BACKUP_FORMAT),
+	format: z.enum(databaseBackupFormats),
 });
 export type DatabaseBackupTask = z.infer<typeof databaseBackupTaskSchema>;
 

@@ -2,6 +2,8 @@ import { fail, redirect } from '@sveltejs/kit';
 import {
 	databaseCreateSchema,
 	databaseEngineRegistry,
+	databaseEngines,
+	type DatabaseEngine,
 	hasPermission,
 	type DatabaseView,
 	type NodeCapacityView
@@ -53,6 +55,8 @@ export const load: PageServerLoad = ({ locals, url }) => {
 		capacity,
 		projects,
 		engine: databaseEngineRegistry.postgres,
+		/** Every engine the create form offers, in registry order (Postgres first). */
+		engines: databaseEngines.map((engine) => databaseEngineRegistry[engine]),
 		dbCan: databaseCan(principal)
 	};
 };
@@ -63,6 +67,7 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const values = {
 			name: formString(data, 'name'),
+			engine: formString(data, 'engine') || 'postgres',
 			version: formString(data, 'version'),
 			placement: formString(data, 'placement') || 'auto',
 			memoryMb: formString(data, 'memoryMb'),
@@ -71,15 +76,19 @@ export const actions: Actions = {
 			envPrefix: formString(data, 'envPrefix').toUpperCase()
 		};
 
+		const engine = (databaseEngines as readonly string[]).includes(values.engine)
+			? (values.engine as DatabaseEngine)
+			: 'postgres';
 		const input = {
 			name: values.name,
-			engine: 'postgres' as const,
+			engine,
 			version: values.version || undefined,
 			placement: values.placement,
 			memoryMb: optionalNumber(values.memoryMb),
 			storageMb: optionalNumber(values.storageMb),
 			project: values.project || undefined,
-			envPrefix: values.project ? values.envPrefix || 'DATABASE' : undefined
+			// Empty: the engine's default prefix (DATABASE, MONGODB or REDIS).
+			envPrefix: values.project ? values.envPrefix || databaseEngineRegistry[engine].defaultEnvPrefix : undefined
 		};
 		const parsed = databaseCreateSchema.safeParse(input);
 		if (!parsed.success) {

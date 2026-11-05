@@ -2,8 +2,8 @@
 
 Status: **implemented, 2026-11-05** (not yet exercised on a real Debian/Podman node; the container lockdown, monitor bootstrap, sampler SQL, backup/restore verbs and health probe were checked against `postgres:17-alpine`). Decisions are recorded in [DECISIONS.md](./DECISIONS.md) as D55–D61 and D83–D86.
 
-A managed database is an org-owned Postgres instance that Skiff provisions, runs, observes and
-connects to apps. It is not a project: it has no releases, deployments or routes. It reuses the
+A managed database is an org-owned database instance (PostgreSQL by default; MySQL, MariaDB,
+MongoDB, Valkey or Redis on request, §17) that Skiff provisions, runs, observes and connects to apps. It is not a project: it has no releases, deployments or routes. It reuses the
 tier-3 runtime (DESIGN §3.4): a rootless-style Quadlet container rendered by `skiff-helper`, inside
 `skiff-workloads.slice`, admitted against the node's memory budget (D41, D42).
 
@@ -21,8 +21,9 @@ thin surfaces.
 
 - **Names** follow slug rules (3–40, `[a-z0-9-]`, no `--`) and are unique per org. The Postgres
   database and owner role are the name with `-` → `_`.
-- **Engines** are a registry (`packages/contracts/src/database.ts`). v1 ships `postgres` 16 and 17.
-  The registry is the seam for MySQL/Valkey later; nothing outside it hard-codes Postgres.
+- **Engines** are a registry (`packages/contracts/src/database.ts`): `postgres` 16/17, `mysql`
+  8.4/9.7, `mariadb` 11.4/11.8, `mongodb` 8.0/9.0, `valkey` 8.1/9.1 and `redis` 8.8/8.10. Each
+  engine declares what it supports; see §17.
 - **Ids** are `db_<32 hex>`. The id doubles as the workload id on the node, so the helper, the
   journal, logs and the heartbeat all use the same key.
 - **Status** uses the workload vocabulary (`pending/starting/running/failed/stopped`) and is driven
@@ -340,9 +341,10 @@ remain follow-ups (D60).
 ## 15. Follow-ups (on the roadmap)
 
 - Native table editor and query history beyond the embedded DBGate studio (D60).
-- Cross-node access via a node private address; more engines (MySQL, Valkey); bulk actions and
-  prune for databases; fully automated PITR drills (see [PITR.md](./PITR.md) for the current
-  foundation and remaining gaps).
+- Cross-node access via a node private address; bulk prune for databases; fully automated PITR
+  drills (see [PITR.md](./PITR.md) for the current foundation and remaining gaps).
+- Engine parity (§17): metrics samplers, TLS and named credentials for the newer engines, Valkey/Redis
+  backups (RDB), and ClickHouse as a seventh engine.
 
 ## 16. Per-org networks and named credentials (plan 04b)
 
@@ -366,3 +368,93 @@ returns every workload to `skiff-workloads` on its next activation. The migratio
 (`0022_org_networks.sql`); existing databases are backfilled with owner/monitor credential rows and
 existing attachments stay NULL (they keep using their current secret). Reverting the release is a
 pre-restore snapshot/rollback; no table or column is dropped.
+
+## 17. Database engines (D95)
+
+Six engines, all from the vendors' official images, chosen from the most-used self-hostable
+databases (Stack Overflow 2025, DB-Engines 2026). Oracle and SQL Server (proprietary, heavy) and
+SQLite (embedded, not a server) are out of scope.
+
+| Engine | Versions (default) | Image | Port | Default prefix | URL |
+|---|---|---|---|---|---|
+| PostgreSQL | 17, 16 (17) | `postgres:<v>-alpine` | 5432 | `DATABASE` | `postgres://u:p@h:5432/name` |
+| MySQL | 9.7, 8.4 (8.4) | `mysql:<v>` | 3306 | `DATABASE` | `mysql://u:p@h:3306/name` |
+| MariaDB | 11.8, 11.4 (11.8) | `mariadb:<v>` | 3306 | `DATABASE` | `mysql://u:p@h:3306/name` |
+| MongoDB | 9.0, 8.0 (8.0) | `mongo:<v>` | 27017 | `MONGODB` | `mongodb://u:p@h:27017/name?authSource=admin` |
+| Valkey | 9.1, 8.1 (9.1) | `valkey/valkey:<v>-alpine` | 6379 | `REDIS` | `redis://u:p@h:6379/0` |
+| Redis | 8.10, 8.8 (8.10) | `redis:<v>-alpine` | 6379 | `REDIS` | `redis://u:p@h:6379/0` |
+
+Valkey is the BSD-licensed Linux Foundation fork of Redis and the recommended choice for caches and
+queues (BullMQ, Sidekiq, Celery). Redis 8 is AGPLv3; pick it only for Redis-only modules.
+
+**Capabilities.** Every engine supports create, attach, the credentials reveal and snippets, the
+public URL secret, logs, restart, resize, volumes and delete/restore/purge. The rest is declared per
+engine in `databaseEngineRegistry[engine].capabilities`, exposed on `DatabaseView.capabilities`,
+enforced by `DatabaseService` (a clear `ValidationError`), and used by the dashboard to hide tabs and
+panels:
+
+| Capability | Postgres | MySQL | MariaDB | MongoDB | Valkey | Redis |
+|---|---|---|---|---|---|---|
+| Owner password rotation | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Studio (DBGate) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Logical backups + restore into a new database | ✓ `pg_dump -Fc` | ✓ `mysqldump` | ✓ `mariadb-dump` | ✓ `mongodump --archive --gzip` | – | – |
+| Pooler, extensions, metrics/tables/slow queries, TLS, PITR, named credentials, upgrade planner | ✓ | – | – | – | – | – |
+
+**Runtime profile.** The helper keeps its own copy of the registry (D61) and renders the same
+lockdown as Postgres: the image's uid (999 for all four; Valkey/Redis group 1000), read-only root,
+`DropCapability=all`, `NoNewPrivileges`, loopback-only `PublishPort`, the org network alias. The
+image entrypoint initialises the data dir under `/data` on first start; the helper passes fixed
+arguments sized from the unit's `MemoryMax`:
+
+- MySQL: `--datadir=/data/mysql`, InnoDB buffer pool 40%, performance schema and X Protocol off
+  (≈250 MB less at idle), `--skip-name-resolve --host-cache-size=0` so the handshake-only health probe
+  can never get the forwarder's address blocked by `max_connect_errors`. Socket tmpfs `/var/run/mysqld`.
+- MariaDB: the same, without the MySQL-only flags; `MARIADB_AUTO_UPGRADE=1` upgrades the system
+  tables after a version change. Socket tmpfs `/run/mysqld`.
+- MongoDB: `--dbpath /data/db --bind_ip_all`, WiredTiger cache 40% (min 0.25 GB). The owner is the
+  image's root user in `admin`, hence `authSource=admin`.
+- Valkey/Redis: a helper-written 0600 config (owned by the container uid, mounted read-only)
+  disables the `default` user, defines the owner as the only ACL user, turns on AOF and sets
+  `maxmemory` to 75% with `noeviction`, so a full instance refuses writes instead of being OOM-killed
+  or dropping keys. Clients authenticate with `user:password`.
+
+MySQL and MariaDB keep `root` on the owner's password but bound to `localhost`, i.e. the container's
+own socket; that is how the helper's fixed dump/restore/rotate verbs authenticate (`MYSQL_PWD` in
+podman's environment, never argv). The helper marks non-Postgres env files with `SKIFF_DB_ENGINE`;
+a file without it is Postgres, so existing env files and units are unchanged.
+
+**Health.** The agent's TCP probe performs each engine's smallest handshake and needs an answer
+only the server gives (Podman's forwarder accepts before the server is up): the Postgres
+`SSLRequest`, the MySQL/MariaDB protocol-10 greeting, MongoDB `OP_MSG { hello: 1 }`, and RESP
+`PING` (a `-NOAUTH` reply counts; `-LOADING` does not). No credentials are sent.
+
+**Attachments.** Apps receive the usual `<PREFIX>_URL/_HOST/_PORT/_USER/_PASSWORD/_NAME`; MongoDB
+attachments also get `<PREFIX>_URI` (what MongoDB drivers and most apps read). `<PREFIX>_NAME` is
+`0` for Valkey/Redis. `_SSL_MODE` and the pooler variables exist only for Postgres. The env
+suggestions recognise `REDIS_*`, `VALKEY_*`, `MONGODB_*`/`MONGO_*`, `MYSQL_*` and `MARIADB_*` and
+offer a one-click link under that prefix.
+
+**Versions.** Postgres majors go through the upgrade planner (§6). For MySQL, MariaDB, Valkey and
+Redis a plain update may move *forward* to a newer listed version in place (the image upgrades the
+data dir on start); downgrades are refused. MongoDB needs feature-compatibility steps between
+majors, so its version never changes in place: back up and restore into a new database.
+
+**Backups.** The backup task's `format` follows the engine (`pg_dump-custom`, `mysqldump-sql`,
+`mariadb-dump-sql`, `mongodump-archive-gzip`); the rest of the pipeline (presigned PUT, SHA-256,
+restore into a new database, verification, retention) is unchanged. MongoDB restores rename the
+archive's namespaces into the target database (`--nsFrom '$db$.$coll$'`); the tools read the
+password from a `--config` file written over stdin into the container's `/tmp` tmpfs and removed
+afterwards. Valkey/Redis backups are not available yet; their data persists across restarts (AOF).
+
+**Schema.** SQLite cannot change the Postgres-only `CHECK` on `databases.engine` without a table
+rebuild, which the additive-migration rule (OPS §4.2.2) and the updater's preflight refuse. Migration
+`0028_database_engines.sql` therefore adds an unconstrained `engine_name` column (default
+`postgres`), which the service layer reads and writes; the old column stays at its default. A
+release rolled back with `--keep-db` reads the old column and sees every database as Postgres.
+
+**Verified.** Every engine and version above was exercised against the real images with Docker
+standing in for Podman (`podman exec` and `docker exec` share a CLI): the rendered server flags and
+env under a read-only root with no capabilities, the agent probe, and the helper's own dump,
+restore-into-a-new-database, rotation and verification verbs. The DBGate studio env for the new
+engines follows DBGate's documented connection variables but has not yet been opened in a browser
+against a real node.

@@ -53,18 +53,26 @@
 	/** Actions live on the detail route, so the header works from every sub-route. */
 	const act = (name: string) => `${base}?/${name}`;
 
+	/** What the engine supports (docs/DATABASES.md §17); unsupported sections are not shown. */
+	const caps = $derived(db.capabilities);
 	const sections = $derived<ServiceSection[]>(
 		[
 			{ id: 'overview', label: 'Overview', icon: LayoutDashboardIcon },
-			{ id: 'metrics', label: 'Metrics', icon: ActivityIcon },
-			{ id: 'backups', label: 'Backups', icon: ArchiveIcon, count: backups },
-			{
-				id: 'insights',
-				label: 'Tables & queries',
-				icon: TableIcon,
-				count: db.tables.length || undefined
-			},
-			...(can.console ? [{ id: 'studio', label: 'Studio', icon: SquareTerminalIcon }] : []),
+			...(caps.metrics ? [{ id: 'metrics', label: 'Metrics', icon: ActivityIcon }] : []),
+			...(caps.backups ? [{ id: 'backups', label: 'Backups', icon: ArchiveIcon, count: backups }] : []),
+			...(caps.metrics
+				? [
+						{
+							id: 'insights',
+							label: 'Tables & queries',
+							icon: TableIcon,
+							count: db.tables.length || undefined
+						}
+					]
+				: []),
+			...(can.console && caps.console
+				? [{ id: 'studio', label: 'Studio', icon: SquareTerminalIcon }]
+				: []),
 			{ id: 'settings', label: 'Settings', icon: Settings2Icon }
 		]
 			.map((item) => ({ ...item, href: tabHref(base, item.id, DATABASE_DEFAULT_TAB), local: true }))
@@ -85,7 +93,9 @@
 			description:
 				target === 'pooler'
 					? 'Only PgBouncer restarts. Postgres and its existing connections are untouched; apps reconnect through the pooler in a few seconds.'
-					: 'The database container and its pooler restart. Attached apps lose their connections briefly and reconnect when the database is back.',
+					: db.pooler.enabled
+						? 'The database container and its pooler restart. Attached apps lose their connections briefly and reconnect when the database is back.'
+						: 'The database container restarts. Attached apps lose their connections briefly and reconnect when the database is back.',
 			confirmLabel: 'Restart',
 			tone: 'danger',
 			action: act('restart'),
@@ -96,8 +106,7 @@
 	function rotate() {
 		askConfirm({
 			title: 'Rotate the owner password?',
-			description:
-				'The node runs ALTER ROLE and verifies the new password before Skiff swaps the stored secret. Attached apps restart with the new value; a failed rotation leaves the old one working.',
+			description: `The node changes the ${db.engineLabel} owner's password and verifies it before Skiff swaps the stored secret. Attached apps restart with the new value; a failed rotation leaves the old one working.`,
 			confirmLabel: 'Rotate password',
 			tone: 'danger',
 			action: act('rotate'),
@@ -169,7 +178,9 @@
 		{/if}
 	{:else if can.update || can.delete || can.credentials}
 		{#if can.update}
-			<Button variant="outline" onclick={backupNow}><CloudUploadIcon />Back up now</Button>
+			{#if caps.backups}
+				<Button variant="outline" onclick={backupNow}><CloudUploadIcon />Back up now</Button>
+			{/if}
 			<Button variant="outline" onclick={() => restart('database')}><RotateCcwIcon />Restart</Button
 			>
 		{/if}
@@ -180,7 +191,7 @@
 						<RotateCcwIcon />Restart pooler only
 					</DropdownMenu.Item>
 				{/if}
-				{#if can.credentials}
+				{#if can.credentials && caps.rotation}
 					<DropdownMenu.Item onSelect={rotate}
 						><KeyRoundIcon />Rotate owner password</DropdownMenu.Item
 					>

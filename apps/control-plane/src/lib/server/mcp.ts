@@ -1040,15 +1040,16 @@ function buildServer(
 
 	// --- managed databases (docs/DATABASES.md; no credentials or purge over MCP, D58/D53) ----
 	const connectionNote =
-		'Attached apps get <PREFIX>_URL, _HOST, _PORT, _USER, _PASSWORD and _NAME injected at activation (PREFIX defaults to DATABASE), ' +
-		"so read DATABASE_URL from the environment; never hard-code credentials. An app must run on the database's node: " +
+		'Attached apps get <PREFIX>_URL, _HOST, _PORT, _USER, _PASSWORD and _NAME injected at activation (PREFIX defaults to DATABASE; ' +
+		'MONGODB for MongoDB, which also gets _URI; REDIS for Valkey/Redis), ' +
+		"so read the URL from the environment; never hard-code credentials. An app must run on the database's node: " +
 		"placement `auto` handles that, an explicit placement on another node is rejected.";
 
 	tool(
 		'list_databases',
 		{
 			title: 'List databases',
-			description: 'List managed Postgres databases in the org with status, node, size and attached projects.',
+			description: 'List managed databases (every engine) in the org with status, node, size and attached projects.',
 			inputSchema: z.object({
 				includeDeleted: z.boolean().default(false).describe('Also list databases in the trash'),
 			}),
@@ -1081,7 +1082,7 @@ function buildServer(
 		{
 			title: 'Get database logs',
 			description:
-				'Return recent Postgres container log lines for a managed database (the agent drains the unit journal). ' +
+				'Return recent container log lines for a managed database (the agent drains the unit journal). ' +
 				'Use `after` as a cursor to poll for new lines; `level` and `q` filter server-side.',
 			inputSchema: z.object({
 				database: z.string().describe('Database name'),
@@ -1110,7 +1111,9 @@ function buildServer(
 		{
 			title: 'Create database',
 			description:
-				'Create a managed Postgres database (v16 or v17, default 17). Pass `project` to attach it in the same call; ' +
+				'Create a managed database. `engine` is postgres (default; 17 or 16), mysql (8.4 or 9.7), mariadb (11.8 or 11.4), ' +
+				'mongodb (8.0 or 9.0), valkey (9.1 or 8.1, Redis-compatible) or redis (8.10 or 8.8). Pooling, extensions, metrics ' +
+				'and PITR are Postgres-only; MySQL, MariaDB and MongoDB also have backups. Pass `project` to attach it in the same call; ' +
 				`the database is then placed on that project's node. ${connectionNote}`,
 			inputSchema: databaseCreateSchema,
 			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
@@ -2111,9 +2114,9 @@ function buildServer(
 					text: [
 						'# Managed databases',
 						'',
-						'Skiff runs managed PostgreSQL (16 or 17) as an org resource on one node. Create one with `create_database`; pass `project` to attach it to an app in the same call.',
+						'Skiff runs managed databases as org resources on one node: PostgreSQL (16/17, the default), MySQL (8.4/9.7), MariaDB (11.4/11.8), MongoDB (8.0/9.0), Valkey (8.1/9.1) and Redis (8.8/8.10). Create one with `create_database` (set `engine`); pass `project` to attach it to an app in the same call. Use Valkey for caches and queues (BullMQ, Sidekiq) unless the app needs Redis-only modules.',
 						'',
-						'An attached process or container project receives `<PREFIX>_URL`, `_HOST`, `_PORT`, `_USER`, `_PASSWORD` and `_NAME` at activation (`PREFIX` defaults to `DATABASE`, so read `DATABASE_URL`). Use a different prefix per database when a project has several. Static projects cannot use databases.',
+						'An attached process or container project receives `<PREFIX>_URL`, `_HOST`, `_PORT`, `_USER`, `_PASSWORD` and `_NAME` at activation (`PREFIX` defaults to `DATABASE`, `MONGODB` for MongoDB (which also gets `MONGODB_URI`) and `REDIS` for Valkey/Redis, so read `DATABASE_URL`, `MONGODB_URI` or `REDIS_URL`). Use a different prefix per database when a project has several. Static projects cannot use databases.',
 						'',
 						"Apps and their databases share a node in v1. A project with attachments is placed on the database's node at deploy time, so `auto` placement just works; an explicit placement on another node is rejected. If `attach_database` warns that the app runs elsewhere, redeploy it.",
 						'',

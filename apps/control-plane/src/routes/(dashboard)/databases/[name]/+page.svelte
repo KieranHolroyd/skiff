@@ -35,6 +35,7 @@
 	import UnplugIcon from '@lucide/svelte/icons/unplug';
 	import UsersIcon from '@lucide/svelte/icons/users';
 	import {
+		databaseEngineRegistry,
 		databaseEnvNames,
 		databaseExtensionAllowlist,
 		databaseExtensionCatalog,
@@ -96,14 +97,25 @@
 	const editable = $derived(can.update && !deleted);
 	const nodeLabel = $derived(db.nodeName ?? db.nodeId);
 	const hostPort = $derived(db.internalHost.process.split(':').at(-1) ?? '');
+	const caps = $derived(db.capabilities);
+	const enginePrefix = $derived(databaseEngineRegistry[db.engine].defaultEnvPrefix);
 	const defaultEnvNames = $derived(
-		databaseEnvNames('DATABASE', { pooler: db.pooler.enabled, tls: db.tls.enabled })
+		databaseEnvNames(enginePrefix, { pooler: db.pooler.enabled, tls: db.tls.enabled, engine: db.engine })
 	);
 
 	// --- sections ------------------------------------------------------------------------------
 
 	let tab = $state<DatabaseTab>(
 		readTab(page.url.searchParams.get('tab'), DATABASE_TABS, DATABASE_DEFAULT_TAB)
+	);
+
+	/** A section the engine lacks (a stale `?tab=` link) falls back to the overview. */
+	const shown = $derived<DatabaseTab>(
+		((tab === 'metrics' || tab === 'insights') && !caps.metrics) ||
+			(tab === 'backups' && !caps.backups) ||
+			(tab === 'studio' && !caps.console)
+			? 'overview'
+			: tab
 	);
 
 	/** Switch sections in place (no reload), keeping `?tab=` deep-linkable. */
@@ -326,10 +338,10 @@
 	// --- attachments ---------------------------------------------------------------------------
 
 	let attachOpen = $state(false);
-	let attachPrefix = $state('DATABASE');
+	let attachPrefix = $state('');
 
 	function openAttach() {
-		attachPrefix = 'DATABASE';
+		attachPrefix = enginePrefix;
 		attachOpen = true;
 	}
 
@@ -487,7 +499,7 @@
 </svelte:head>
 
 <div class="space-y-6">
-	<DatabaseHeader {db} {can} active={tab} backups={backups.length} onselect={setTab} />
+	<DatabaseHeader {db} {can} active={shown} backups={backups.length} onselect={setTab} />
 
 	{#if deleted}
 		<Notice tone="warning" title="This database is in the trash">
@@ -508,7 +520,7 @@
 		{/if}
 	{/if}
 
-	{#if tab === 'overview'}
+	{#if shown === 'overview'}
 		<!-- Overview ------------------------------------------------------------------------------ -->
 		<StatStrip label="Database summary" stats={overviewStats} />
 
@@ -766,7 +778,7 @@
 				{/if}
 			</Panel>
 		</div>
-	{:else if tab === 'metrics'}
+	{:else if shown === 'metrics'}
 		<!-- Metrics ------------------------------------------------------------------------------- -->
 		<div class="flex flex-wrap items-end justify-between gap-3">
 			<div>
@@ -916,7 +928,7 @@
 				</Panel>
 			</div>
 		{/if}
-	{:else if tab === 'backups'}
+	{:else if shown === 'backups'}
 		<!-- Backups ------------------------------------------------------------------------------- -->
 		{#if policy}
 			<StatStrip
@@ -1060,7 +1072,7 @@
 				</Table.Root>
 			{/if}
 		</Panel>
-	{:else if tab === 'insights'}
+	{:else if shown === 'insights'}
 		<!-- Tables & queries ---------------------------------------------------------------------- -->
 		<Panel
 			title="Tables"
@@ -1201,7 +1213,7 @@
 				</span>
 			{/snippet}
 		</Panel>
-	{:else if tab === 'studio'}
+	{:else if shown === 'studio'}
 		<!-- Studio --------------------------------------------------------------------------------- -->
 		{#if !can.console}
 			<Notice tone="warning" title="Studio access required">
@@ -1310,13 +1322,13 @@
 				</div>
 			</div>
 		{/if}
-	{:else if tab === 'settings'}
+	{:else if shown === 'settings'}
 		<!-- Settings ------------------------------------------------------------------------------ -->
 		<div class="grid items-start gap-5 xl:grid-cols-2">
 			<Panel
 				title="Resources"
 				icon={SlidersHorizontalIcon}
-				description="Limits apply when the node restarts the container. The engine version can't change in place."
+				description="Limits apply when the node restarts the container. The engine version can't change here."
 			>
 				{#snippet actions()}
 					{#if editable}
@@ -1344,6 +1356,18 @@
 			</Panel>
 
 			<div class="space-y-5">
+				{#if !caps.pooler && !caps.extensions}
+					<Panel title="Engine features" icon={PuzzleIcon}>
+						<p class="text-sm text-muted-foreground">
+							Connection pooling, extensions, per-minute metrics, PITR and named credentials are
+							PostgreSQL features. {db.engineLabel} databases support create, attach, credentials{caps.rotation
+								? ', password rotation'
+								: ''}{caps.backups ? ', backups and restore' : ''}{caps.console ? ', the studio' : ''},
+							logs and restart.
+						</p>
+					</Panel>
+				{/if}
+				{#if caps.pooler}
 				<Panel
 					title="Connection pooler"
 					icon={LayersIcon}
@@ -1372,7 +1396,9 @@
 						/>
 					</div>
 				</Panel>
+				{/if}
 
+				{#if caps.extensions}
 				<Panel
 					title="Extensions"
 					icon={PuzzleIcon}
@@ -1446,6 +1472,7 @@
 						</div>
 					</form>
 				</Panel>
+				{/if}
 			</div>
 		</div>
 
@@ -1539,7 +1566,9 @@
 					aria-invalid={errors.envPrefix ? 'true' : undefined}
 				/>
 				<Field.Description class="font-mono text-xs">
-					{databaseEnvNames((attachPrefix || 'DATABASE').toUpperCase()).join(' ')}
+					{databaseEnvNames((attachPrefix || enginePrefix).toUpperCase(), { engine: db.engine }).join(
+						' '
+					)}
 				</Field.Description>
 				{#if errors.envPrefix}<Field.Error>{errors.envPrefix}</Field.Error>{/if}
 			</Field.Field>

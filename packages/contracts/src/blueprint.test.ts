@@ -116,7 +116,15 @@ describe('skiff.yaml v1', () => {
 		expect(blueprintSchema.safeParse({ ...document, databases: { main: { engine: 'postgres', version: '99' } } }).success).toBe(
 			false,
 		);
-		expect(blueprintSchema.safeParse({ ...document, databases: { main: { engine: 'valkey' } } }).success).toBe(false);
+		expect(blueprintSchema.safeParse({ ...document, databases: { main: { engine: 'oracle' } } }).success).toBe(false);
+		expect(blueprintSchema.safeParse({ ...document, databases: { ...document.databases, cache: { engine: 'valkey' } } }).success).toBe(true);
+		expect(
+			blueprintSchema.safeParse({ ...document, databases: { cache: { engine: 'valkey', version: '17' } } }).success,
+		).toBe(false);
+		expect(
+			blueprintSchema.safeParse({ ...document, databases: { main: { engine: 'mysql', extensions: ['pg_trgm'] } } })
+				.success,
+		).toBe(false);
 	});
 
 	test('secret refs are names, never values', () => {

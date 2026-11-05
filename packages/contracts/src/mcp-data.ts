@@ -1,6 +1,6 @@
 import * as z from 'zod';
 import { blueprintApplyViewSchema, blueprintPlanViewSchema, blueprintProjectSchema } from './blueprint.ts';
-import { databaseBackupStatuses, DATABASE_BACKUP_FORMAT } from './database-backup.ts';
+import { databaseBackupFormats, databaseBackupStatuses } from './database-backup.ts';
 import { databaseNameSchema } from './database.ts';
 import { bucketNameSchema, storageObjectKeySchema } from './object-storage.ts';
 import { previewCloneStatuses } from './preview.ts';
@@ -244,7 +244,7 @@ export const backupArtifactSchema = z.strictObject({
 	databaseName: z.string(),
 	kind: z.enum(['manual', 'scheduled']),
 	status: z.enum(databaseBackupStatuses),
-	format: z.literal(DATABASE_BACKUP_FORMAT),
+	format: z.enum(databaseBackupFormats),
 	sizeBytes: z.number().int().nonnegative().nullable(),
 	sha256: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
 	objectKey: z.string(),

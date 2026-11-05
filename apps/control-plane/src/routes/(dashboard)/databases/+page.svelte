@@ -35,6 +35,7 @@
 	import { formatDate } from '../_lib/format.js';
 	import { purgeCountdown } from '../_lib/operations/copy.js';
 	import StorageMeter from './_lib/StorageMeter.svelte';
+	import { databaseEngines } from '@skiff/contracts';
 	import type { PageProps } from './$types';
 
 	interface CreateFormResult {
@@ -50,7 +51,17 @@
 	let createOpen = $state(page.url.searchParams.get('new') === '1' || preselectedProject !== '');
 	let query = $state('');
 	let attachProject = $state(preselectedProject);
-	let envPrefix = $state('DATABASE');
+	let envPrefix = $state('');
+	const requestedEngine = page.url.searchParams.get('engine');
+	let engineId = $state<string>(
+		(databaseEngines as readonly string[]).includes(requestedEngine ?? '') ? requestedEngine! : 'postgres'
+	);
+	const engine = $derived(data.engines.find((item) => item.engine === engineId) ?? data.engines[0]!);
+	const familyLabel: Record<string, string> = {
+		relational: 'SQL',
+		document: 'Document',
+		'key-value': 'Key-value'
+	};
 
 	const trashView = $derived(data.view === 'trash');
 	const rows = $derived(trashView ? data.trash : data.databases);
@@ -226,7 +237,7 @@
 		target="page.databases"
 		eyebrow="Operate"
 		title="Databases"
-		description="Managed PostgreSQL that runs next to your apps. Attach a database to a process or container project and it receives a DATABASE_URL at start-up."
+		description="Managed PostgreSQL, MySQL, MariaDB, MongoDB, Valkey and Redis that run next to your apps. Attach a database to a process or container project and it receives a connection URL at start-up."
 	>
 		{#if data.dbCan.update && !trashView && data.databases.length > 0}
 			<DropdownMenu.Root>
@@ -294,7 +305,7 @@
 				<EmptyState
 					icon={DatabaseIcon}
 					title="No databases yet"
-					description="Create a PostgreSQL database, then attach it to a project. Apps get connection details as environment variables; the database only listens on its own node."
+					description="Create a database (PostgreSQL, MySQL, MariaDB, MongoDB, Valkey or Redis), then attach it to a project. Apps get connection details as environment variables; the database only listens on its own node."
 				>
 					{#if data.dbCan.create}
 						<Button onclick={() => (createOpen = true)}><PlusIcon />Create a database</Button>
@@ -346,12 +357,38 @@
 		bind:open={createOpen}
 		icon={DatabaseIcon}
 		title="New database"
-		description="A {data.engine
-			.label} container on one node. Placement is decided once and never moves."
+		description="A {engine.label} container on one node. Placement is decided once and never moves."
 		action="?/create"
 		submitLabel="Create database"
 	>
 		<Field.Group>
+			<Field.Set>
+				<Field.Legend variant="label">Engine</Field.Legend>
+				<div class="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Database engine">
+					{#each data.engines as option (option.engine)}
+						<label
+							class="flex cursor-pointer flex-col gap-1 rounded-md border p-3 text-left transition-colors hover:bg-muted/50 has-checked:border-primary has-checked:bg-primary/5 has-focus-visible:ring-2 has-focus-visible:ring-ring"
+						>
+							<input
+								type="radio"
+								name="engine"
+								value={option.engine}
+								bind:group={engineId}
+								class="sr-only"
+							/>
+							<span class="flex items-center justify-between gap-2">
+								<span class="text-sm font-medium">{option.label}</span>
+								<Badge variant="outline" class="text-[10px] font-normal"
+									>{familyLabel[option.family] ?? option.family}</Badge
+								>
+							</span>
+							<span class="text-xs text-muted-foreground">{option.description}</span>
+						</label>
+					{/each}
+				</div>
+				{#if errors.engine}<Field.Error>{errors.engine}</Field.Error>{/if}
+			</Field.Set>
+
 			<Field.Field data-invalid={errors.name ? true : undefined}>
 				<Field.Label for="database-name">Name</Field.Label>
 				<Input
@@ -359,7 +396,7 @@
 					name="name"
 					placeholder="app-db"
 					minlength={3}
-					maxlength={40}
+					maxlength={engine.maxNameLength}
 					required
 					autocapitalize="off"
 					spellcheck="false"
@@ -367,8 +404,9 @@
 					aria-invalid={errors.name ? 'true' : undefined}
 				/>
 				<Field.Description>
-					3–40 lowercase letters, digits and single hyphens. The Postgres database and user use the
-					same name with underscores.
+					3–{engine.maxNameLength} lowercase letters, digits and single hyphens. The {engine.label}
+					{engine.family === 'key-value' ? 'user uses' : 'database and user use'} the same name with
+					underscores.
 				</Field.Description>
 				{#if errors.name}<Field.Error>{errors.name}</Field.Error>{/if}
 			</Field.Field>
@@ -376,18 +414,22 @@
 			<div class="grid gap-4 sm:grid-cols-2">
 				<Field.Field data-invalid={errors.version ? true : undefined}>
 					<Field.Label for="database-version">Version</Field.Label>
-					<NativeSelect.Root
-						id="database-version"
-						name="version"
-						value={data.engine.defaultVersion}
-						class="w-full"
-					>
-						{#each data.engine.versions as version (version)}
-							<NativeSelect.Option value={version}
-								>{data.engine.label} {version}</NativeSelect.Option
-							>
-						{/each}
-					</NativeSelect.Root>
+					{#key engine.engine}
+						<NativeSelect.Root
+							id="database-version"
+							name="version"
+							value={engine.defaultVersion}
+							class="w-full"
+						>
+							{#each engine.versions as version (version)}
+								<NativeSelect.Option value={version}
+									>{engine.label} {version}{version === engine.defaultVersion
+										? ' (default)'
+										: ''}</NativeSelect.Option
+								>
+							{/each}
+						</NativeSelect.Root>
+					{/key}
 					{#if errors.version}<Field.Error>{errors.version}</Field.Error>{/if}
 				</Field.Field>
 				<Field.Field data-invalid={errors.placement ? true : undefined}>
@@ -420,10 +462,10 @@
 							id="database-memory"
 							name="memoryMb"
 							type="number"
-							min={data.engine.minMemoryMb}
+							min={engine.minMemoryMb}
 							max={16384}
 							step={1}
-							value={String(data.engine.defaultMemoryMb)}
+							value={String(engine.defaultMemoryMb)}
 							class="font-mono text-sm"
 							aria-invalid={errors.memoryMb ? 'true' : undefined}
 						/>
@@ -431,7 +473,9 @@
 							<InputGroup.Text class="font-mono text-xs">MB</InputGroup.Text>
 						</InputGroup.Addon>
 					</InputGroup.Root>
-					<Field.Description>Reserved from the node's workload slice.</Field.Description>
+					<Field.Description
+						>At least {engine.minMemoryMb} MB, reserved from the node's workload slice.</Field.Description
+					>
 					{#if errors.memoryMb}<Field.Error>{errors.memoryMb}</Field.Error>{/if}
 				</Field.Field>
 				<Field.Field data-invalid={errors.storageMb ? true : undefined}>
@@ -485,6 +529,7 @@
 								id="database-prefix"
 								name="envPrefix"
 								bind:value={envPrefix}
+								placeholder={engine.defaultEnvPrefix}
 								maxlength={64}
 								autocapitalize="characters"
 								spellcheck="false"
@@ -492,7 +537,7 @@
 								aria-invalid={errors.envPrefix ? 'true' : undefined}
 							/>
 							<Field.Description class="font-mono text-xs">
-								{(envPrefix || 'DATABASE').toUpperCase()}_URL, _HOST, _PORT …
+								{(envPrefix || engine.defaultEnvPrefix).toUpperCase()}_URL, _HOST, _PORT …
 							</Field.Description>
 							{#if errors.envPrefix}<Field.Error>{errors.envPrefix}</Field.Error>{/if}
 						</Field.Field>

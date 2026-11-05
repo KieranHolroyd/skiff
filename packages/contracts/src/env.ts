@@ -278,7 +278,8 @@ export function detectEnvNames(text: string, limit = 100): string[] {
 	return names;
 }
 
-const DATABASE_SUFFIXES = ['URL', 'HOST', 'PORT', 'USER', 'PASSWORD', 'NAME'] as const;
+// `URI`: MongoDB apps read `MONGODB_URI`, which MongoDB attachments also receive (D95).
+const DATABASE_SUFFIXES = ['URL', 'URI', 'HOST', 'PORT', 'USER', 'PASSWORD', 'NAME'] as const;
 const STORAGE_SUFFIXES = [
 	'PUBLIC_ENDPOINT_URL',
 	'ENDPOINT_URL',

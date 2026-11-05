@@ -6,7 +6,13 @@
 	import PlugIcon from '@lucide/svelte/icons/plug';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import UnplugIcon from '@lucide/svelte/icons/unplug';
-	import { databaseEnvNames, nextEnvPrefix, type DatabaseAttachmentView } from '@skiff/contracts';
+	import {
+		databaseEngineRegistry,
+		databaseEnvNames,
+		nextEnvPrefix,
+		type DatabaseAttachmentView,
+		type DatabaseEngine
+	} from '@skiff/contracts';
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
 	import Notice from '#lib/components/skiff/Notice.svelte';
@@ -32,7 +38,13 @@
 	}: {
 		slug: string;
 		attachments: DatabaseAttachmentView[];
-		databases: Array<{ name: string; version: string; engineLabel: string; nodeName: string }>;
+		databases: Array<{
+			name: string;
+			engine: DatabaseEngine;
+			version: string;
+			engineLabel: string;
+			nodeName: string;
+		}>;
 		/** `warning` from the last attach (e.g. the app runs on another node). */
 		warning?: string | null;
 		fieldErrors?: Record<string, string>;
@@ -41,16 +53,33 @@
 
 	let attachOpen = $state(false);
 	let prefix = $state('DATABASE');
+	let selected = $state('');
+	const selectedEngine = $derived(
+		databases.find((item) => item.name === selected)?.engine ?? databases[0]?.engine ?? 'postgres'
+	);
+
+	/** The engine's prefix (`REDIS`, `MONGODB`, `DATABASE`), numbered if the project already uses it. */
+	function suggestPrefix(engine: DatabaseEngine): string {
+		return nextEnvPrefix(
+			databaseEngineRegistry[engine].defaultEnvPrefix,
+			attachments.map((item) => item.envPrefix)
+		);
+	}
+
+	function selectDatabase(name: string) {
+		const before = suggestPrefix(selectedEngine);
+		selected = name;
+		// Follow the engine only while the user has not typed their own prefix.
+		if (!prefix || prefix === before) prefix = suggestPrefix(selectedEngine);
+	}
 
 	const createHref = $derived(
 		`${resolve('/(dashboard)/databases')}?project=${encodeURIComponent(slug)}`
 	);
 
 	function openAttach() {
-		prefix = nextEnvPrefix(
-			'DATABASE',
-			attachments.map((item) => item.envPrefix)
-		);
+		selected = databases[0]?.name ?? '';
+		prefix = suggestPrefix(selectedEngine);
 		attachOpen = true;
 	}
 
@@ -156,7 +185,13 @@
 			<Field.Group>
 				<Field.Field data-invalid={fieldErrors.database ? true : undefined}>
 					<Field.Label for="attach-database">Database</Field.Label>
-					<NativeSelect.Root id="attach-database" name="database" class="w-full" required>
+					<NativeSelect.Root
+						id="attach-database"
+						name="database"
+						class="w-full"
+						required
+						bind:value={() => selected, selectDatabase}
+					>
 						{#each databases as database (database.name)}
 							<NativeSelect.Option value={database.name}>
 								{database.name} · {database.engineLabel}
@@ -179,7 +214,9 @@
 						aria-invalid={fieldErrors.envPrefix ? 'true' : undefined}
 					/>
 					<Field.Description class="font-mono text-xs">
-						{databaseEnvNames((prefix || 'DATABASE').toUpperCase()).join(' ')}
+						{databaseEnvNames((prefix || suggestPrefix(selectedEngine)).toUpperCase(), {
+							engine: selectedEngine
+						}).join(' ')}
 					</Field.Description>
 					{#if fieldErrors.envPrefix}<Field.Error>{fieldErrors.envPrefix}</Field.Error>{/if}
 				</Field.Field>
