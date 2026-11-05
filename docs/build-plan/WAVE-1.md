@@ -8,7 +8,7 @@ The Wave 1 worktrees were created from `feat/wave0-foundations` and should be re
 
 | Plan | Worktree | Branch | Migration reservation |
 |---|---|---|---|
-| 05 backup target | `wave1-05-backup-target` | `feat/wave1-05-backup-target` | `0019_backup_targets.sql` |
+| 05 backup target | `wave1-05-backup-target` | `feat/wave1-05-backup-target` | `0019_backup_targets.sql` (merged `b065c71`) |
 | 01b PITR | `wave1-01b-pitr` | `feat/wave1-01b-pitr` | `0020_database_pitr.sql` |
 | 02b bucket config | `wave1-02b-bucket-config` | `feat/wave1-02b-bucket-config` | `0021_bucket_config.sql` |
 | 03b TLS + UX | `wave1-03b-tls` | `feat/wave1-03b-tls` | `0022_database_tls.sql` (only if needed) |
@@ -44,6 +44,13 @@ Do not add new flags in these branches:
 - Postgres extensions and slow-query sampling
 - Node volumes for managed instances
 - MCP database backup/restore/rotation tools
+
+## Known gaps from merged work
+
+- **05 backup targets:** `database_backups` has no `target_id`; resolution happens at operation
+  time, so changing/deleting a target can re-point old rows and orphan artifacts. Litestream still
+  uses env config, not `backup_targets`. Write-only targets skip retention deletes, so expired rows
+  remain. These are follow-ups, not blockers for the default path.
 
 ## Merge order
 

@@ -477,7 +477,7 @@ green, 17 migrations check clean.
 | 02 | Object-storage surface | partial — browser shipped; bucket config missing | | |
 | 03 | Pooling/TLS | partial — pooler shipped; TLS/UX missing | | |
 | 04 | Isolation/credentials | partial — rotation shipped; networks/TLS missing | | |
-| 05 | Backup target | not started | | |
+| 05 | Backup target | merged — b065c71; per-backup target id still a follow-up | | |
 | 06 | Upgrade safety | not started | | |
 | 07 | App volumes | partial — node volumes shipped; app volumes missing | | |
 | 08 | Valkey | not started | | |
