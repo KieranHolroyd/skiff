@@ -1,11 +1,14 @@
 <script lang="ts">
 	/* Browser links are `?bucket=&prefix=` on this same resolved route. */
 	/* eslint svelte/no-navigation-without-resolve: ['error', { ignoreLinks: true, ignoreGoto: true }] */
-	import { goto } from '$app/navigation';
+	import { beforeNavigate, goto, invalidateAll } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import ArchiveIcon from '@lucide/svelte/icons/archive';
+	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import CloudUploadIcon from '@lucide/svelte/icons/cloud-upload';
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import DownloadIcon from '@lucide/svelte/icons/download';
 	import EarthIcon from '@lucide/svelte/icons/earth';
@@ -13,7 +16,10 @@
 	import FolderIcon from '@lucide/svelte/icons/folder';
 	import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
 	import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
+	import FolderUpIcon from '@lucide/svelte/icons/folder-up';
 	import LinkIcon from '@lucide/svelte/icons/link';
+	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
+	import SearchIcon from '@lucide/svelte/icons/search';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import UploadIcon from '@lucide/svelte/icons/upload';
 	import XIcon from '@lucide/svelte/icons/x';
@@ -23,6 +29,7 @@
 	import Notice from '#lib/components/skiff/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
+	import * as ButtonGroup from '#lib/components/ui/button-group/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
 	import * as Dialog from '#lib/components/ui/dialog/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
@@ -34,27 +41,57 @@
 	import * as Table from '#lib/components/ui/table/index.js';
 	import EmptyState from '../../../_lib/EmptyState.svelte';
 	import RowMenu from '../../../_lib/RowMenu.svelte';
-	import { formatBytes, formatDateTime } from '../../../_lib/format.js';
+	import { formatBytes, formatDateTime, formatRelative } from '../../../_lib/format.js';
 	import StorageHeader from '../../_lib/StorageHeader.svelte';
+	import { fileIcon } from './_lib/file-icon.js';
+	import { dragHasFiles, fromDataTransfer, fromFileList, type Picked } from './_lib/picked.js';
+	import { UploadQueue } from './_lib/upload-queue.svelte.js';
+	import UploadPanel from './_lib/UploadPanel.svelte';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
 
 	let selected = $state<Set<string>>(new Set());
-	const objectKeys = $derived(data.list?.objects.map((object) => object.key) ?? []);
+	let filter = $state('');
+	const needle = $derived(filter.trim().toLowerCase());
+	const visibleName = (key: string) =>
+		data.prefix && key.startsWith(data.prefix) ? key.slice(data.prefix.length) : key;
+	const prefixes = $derived(
+		(data.list?.prefixes ?? []).filter(
+			(prefix) => !needle || visibleName(prefix).toLowerCase().includes(needle)
+		)
+	);
+	const objects = $derived(
+		(data.list?.objects ?? []).filter(
+			(object) => !needle || visibleName(object.key).toLowerCase().includes(needle)
+		)
+	);
+	const objectKeys = $derived(objects.map((object) => object.key));
 	const allSelected = $derived(
 		objectKeys.length > 0 && objectKeys.every((key) => selected.has(key))
 	);
 	const someSelected = $derived(!allSelected && objectKeys.some((key) => selected.has(key)));
+	const selectedBytes = $derived(
+		(data.list?.objects ?? [])
+			.filter((object) => selected.has(object.key))
+			.reduce((sum, object) => sum + object.sizeBytes, 0)
+	);
+	const pageBytes = $derived(
+		(data.list?.objects ?? []).reduce((sum, object) => sum + object.sizeBytes, 0)
+	);
 	const currentBucket = $derived(data.buckets.find((item) => item.name === data.bucket) ?? null);
+	const isEmpty = $derived(
+		!!data.list && data.list.objects.length === 0 && data.list.prefixes.length === 0
+	);
 
-	// A new bucket/prefix is a new view; selections from the previous one must not leak into it.
+	// A new bucket/prefix is a new view; selections and filters from the previous one must not leak.
 	let lastView = '';
 	$effect(() => {
 		const view = `${data.bucket ?? ''}|${data.prefix}`;
 		if (view !== lastView) {
 			lastView = view;
 			selected = new Set();
+			filter = '';
 		}
 	});
 
@@ -82,9 +119,6 @@
 	);
 	const parentPrefix = $derived(crumbs.length > 1 ? crumbs[crumbs.length - 2]!.prefix : '');
 
-	const visibleName = (key: string) =>
-		data.prefix && key.startsWith(data.prefix) ? key.slice(data.prefix.length) : key;
-
 	function toggle(key: string, value: boolean) {
 		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- replaced wholesale, not mutated
 		const next = new Set(selected);
@@ -97,9 +131,23 @@
 		selected = value && !allSelected ? new Set(objectKeys) : new Set();
 	}
 
+	/** Clicks on a row's own controls (links, buttons, menus, checkboxes) aren't row clicks. */
+	function isControl(event: MouseEvent): boolean {
+		return !!(event.target as Element | null)?.closest(
+			'a, button, input, label, [role="menuitem"], [role="checkbox"]'
+		);
+	}
+
 	async function copyKey(key: string) {
 		await navigator.clipboard.writeText(key);
 		toast.success('Key copied to the clipboard.');
+	}
+
+	let refreshing = $state(false);
+	async function refresh() {
+		refreshing = true;
+		await invalidateAll();
+		refreshing = false;
 	}
 
 	function deleteObject(key: string) {
@@ -143,9 +191,101 @@
 		});
 	}
 
-	// --- upload and folders --------------------------------------------------------------------
+	// --- uploads -------------------------------------------------------------------------------
 
-	let uploadOpen = $state(false);
+	const queue = new UploadQueue({
+		storage: () => data.storage.name,
+		maxBytes: () => data.maxUploadBytes,
+		onProgress: () => void invalidateAll(),
+		onDrained: ({ done, failed }) => {
+			void invalidateAll();
+			if (failed > 0)
+				toast.error(`${failed} upload${failed === 1 ? '' : 's'} failed.`, {
+					description: done > 0 ? `${done} uploaded.` : undefined
+				});
+			else if (done > 0) toast.success(`Uploaded ${done} item${done === 1 ? '' : 's'}.`);
+		}
+	});
+
+	let fileInput = $state<HTMLInputElement | null>(null);
+	let folderInput = $state<HTMLInputElement | null>(null);
+
+	function enqueue(picked: Picked, prefix = data.prefix) {
+		if (!data.bucket) return;
+		if (picked.files.length === 0 && picked.emptyFolders.length === 0) {
+			toast.error('Nothing to upload: the selection had no files.');
+			return;
+		}
+		queue.add(data.bucket, prefix, picked);
+	}
+
+	function onPicked(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		if (input.files) enqueue(fromFileList(input.files));
+		input.value = '';
+	}
+
+	// Drag and drop: the whole browser card is a drop zone, and a folder row targets that folder.
+	let dragDepth = $state(0);
+	let dropPrefix = $state<string | null>(null);
+	const dragging = $derived(dragDepth > 0);
+	const dropLabel = $derived(`${data.bucket ?? ''}/${dropPrefix ?? data.prefix}`);
+
+	function onDragEnter(event: DragEvent) {
+		if (!data.canWrite || !dragHasFiles(event)) return;
+		event.preventDefault();
+		dragDepth += 1;
+	}
+
+	function onDragOver(event: DragEvent) {
+		if (!data.canWrite || !dragHasFiles(event)) return;
+		event.preventDefault();
+		if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+		const row = (event.target as Element | null)?.closest('[data-drop-prefix]');
+		dropPrefix = row?.getAttribute('data-drop-prefix') ?? null;
+	}
+
+	function onDragLeave(event: DragEvent) {
+		if (!data.canWrite || !dragHasFiles(event)) return;
+		dragDepth = Math.max(0, dragDepth - 1);
+		if (dragDepth === 0) dropPrefix = null;
+	}
+
+	async function onDrop(event: DragEvent) {
+		if (!data.canWrite || !dragHasFiles(event) || !event.dataTransfer) return;
+		event.preventDefault();
+		const target = dropPrefix ?? data.prefix;
+		dragDepth = 0;
+		dropPrefix = null;
+		try {
+			enqueue(await fromDataTransfer(event.dataTransfer), target);
+		} catch {
+			toast.error('Could not read the dropped files.');
+		}
+	}
+
+	// A file dropped anywhere else on the page would make the browser navigate to it.
+	function swallowStrayDrop(event: DragEvent) {
+		if (dragHasFiles(event)) event.preventDefault();
+	}
+
+	beforeNavigate((navigation) => {
+		if (!queue.running) return;
+		const staysHere =
+			navigation.to?.route.id === page.route.id &&
+			navigation.to?.params?.name === data.storage.name;
+		if (staysHere) return;
+		if (navigation.type === 'leave') {
+			navigation.cancel();
+			return;
+		}
+		if (window.confirm('Uploads are still running. Leave this page and cancel them?'))
+			queue.cancelAll();
+		else navigation.cancel();
+	});
+
+	// --- folders -------------------------------------------------------------------------------
+
 	let folderOpen = $state(false);
 	let folderName = $state('');
 
@@ -213,6 +353,31 @@
 	<title>Objects · {data.storage.name} · Skiff</title>
 </svelte:head>
 
+<svelte:window ondragover={swallowStrayDrop} ondrop={swallowStrayDrop} />
+
+{#snippet uploadButtons(size: 'sm' | 'default')}
+	<ButtonGroup.Root>
+		<Button {size} onclick={() => fileInput?.click()}><UploadIcon />Upload</Button>
+		<DropdownMenu.Root>
+			<DropdownMenu.Trigger>
+				{#snippet child({ props })}
+					<Button {...props} {size} class="px-2!" aria-label="More upload options">
+						<ChevronDownIcon />
+					</Button>
+				{/snippet}
+			</DropdownMenu.Trigger>
+			<DropdownMenu.Content align="end" class="w-44">
+				<DropdownMenu.Item onSelect={() => fileInput?.click()}>
+					<UploadIcon />Files…
+				</DropdownMenu.Item>
+				<DropdownMenu.Item onSelect={() => folderInput?.click()}>
+					<FolderUpIcon />Folder…
+				</DropdownMenu.Item>
+			</DropdownMenu.Content>
+		</DropdownMenu.Root>
+	</ButtonGroup.Root>
+{/snippet}
+
 <div class="space-y-6">
 	<StorageHeader st={data.storage} can={data.storageCan} active="objects" />
 
@@ -230,7 +395,15 @@
 			</Button>
 		</EmptyState>
 	{:else if data.bucket}
-		<div class="overflow-hidden rounded-xl border bg-card shadow-xs">
+		<div
+			role="region"
+			aria-label="Objects in {data.bucket}"
+			class="relative overflow-hidden rounded-xl border bg-card shadow-xs"
+			ondragenter={onDragEnter}
+			ondragover={onDragOver}
+			ondragleave={onDragLeave}
+			ondrop={onDrop}
+		>
 			<!-- Toolbar: bucket, path, actions -->
 			<div class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-3 py-2.5">
 				<NativeSelect.Root
@@ -283,14 +456,47 @@
 					{/if}
 				</nav>
 
-				{#if data.canWrite}
-					<div class="ml-auto flex items-center gap-2">
+				<div class="ml-auto flex items-center gap-2">
+					{#if data.list && !isEmpty}
+						<InputGroup.Root class="h-8 w-44">
+							<InputGroup.Addon><SearchIcon /></InputGroup.Addon>
+							<InputGroup.Input
+								bind:value={filter}
+								placeholder="Filter this page"
+								aria-label="Filter objects by name"
+								spellcheck="false"
+								class="text-sm"
+							/>
+							{#if filter}
+								<InputGroup.Addon align="inline-end">
+									<InputGroup.Button
+										size="icon-xs"
+										onclick={() => (filter = '')}
+										aria-label="Clear filter"
+									>
+										<XIcon />
+									</InputGroup.Button>
+								</InputGroup.Addon>
+							{/if}
+						</InputGroup.Root>
+					{/if}
+					<Button
+						size="icon-sm"
+						variant="ghost"
+						onclick={refresh}
+						disabled={refreshing}
+						aria-label="Refresh"
+						title="Refresh"
+					>
+						<RefreshCwIcon class={refreshing ? 'animate-spin' : ''} />
+					</Button>
+					{#if data.canWrite}
 						<Button size="sm" variant="outline" onclick={openFolder}>
 							<FolderPlusIcon />New folder
 						</Button>
-						<Button size="sm" onclick={() => (uploadOpen = true)}><UploadIcon />Upload</Button>
-					</div>
-				{/if}
+						{@render uploadButtons('sm')}
+					{/if}
+				</div>
 			</div>
 
 			{#if selected.size > 0 && data.canWrite}
@@ -298,6 +504,7 @@
 					<span class="text-sm">
 						<span class="font-medium tabular-nums">{selected.size}</span>
 						{selected.size === 1 ? 'object' : 'objects'} selected
+						<span class="text-muted-foreground">· {formatBytes(selectedBytes)}</span>
 					</span>
 					<div class="flex items-center gap-1.5">
 						<Button size="sm" variant="ghost" onclick={() => (selected = new Set())}>
@@ -315,20 +522,31 @@
 					<Notice tone="warning" title="Could not list this bucket">{data.listError}</Notice>
 				</div>
 			{:else if data.list}
-				{#if data.list.objects.length === 0 && data.list.prefixes.length === 0}
+				{#if isEmpty}
 					<div class="p-4">
 						<EmptyState
-							icon={FolderOpenIcon}
-							compact
+							icon={data.canWrite ? CloudUploadIcon : FolderOpenIcon}
 							title={data.prefix ? 'This folder is empty' : 'This bucket is empty'}
 							description={data.canWrite
-								? 'Upload a file or create a folder to get started.'
+								? 'Drag files or whole folders here, or pick them below. Folders keep their structure.'
 								: 'There are no objects under this prefix.'}
 						>
 							{#if data.canWrite}
-								<Button size="sm" onclick={() => (uploadOpen = true)}><UploadIcon />Upload</Button>
+								<Button size="sm" onclick={() => fileInput?.click()}>
+									<UploadIcon />Upload files
+								</Button>
+								<Button size="sm" variant="outline" onclick={() => folderInput?.click()}>
+									<FolderUpIcon />Upload folder
+								</Button>
 							{/if}
 						</EmptyState>
+					</div>
+				{:else if prefixes.length === 0 && objects.length === 0}
+					<div class="px-4 py-10 text-center text-sm text-muted-foreground">
+						Nothing on this page matches “{filter.trim()}”.
+						<Button variant="link" size="sm" class="px-1" onclick={() => (filter = '')}>
+							Clear filter
+						</Button>
 					</div>
 				{:else}
 					<Table.Root>
@@ -351,15 +569,28 @@
 							</Table.Row>
 						</Table.Header>
 						<Table.Body>
-							{#each data.list.prefixes as prefix (prefix)}
-								<Table.Row class="group">
+							{#each prefixes as prefix (prefix)}
+								{@const target = dragging && dropPrefix === prefix}
+								<Table.Row
+									class="group cursor-pointer {target
+										? 'bg-brand/10 outline-2 -outline-offset-2 outline-brand'
+										: ''}"
+									data-drop-prefix={prefix}
+									onclick={(event: MouseEvent) => {
+										if (!isControl(event)) goto(href(data.bucket ?? '', prefix));
+									}}
+								>
 									{#if data.canWrite}<Table.Cell class="pr-0 pl-4"></Table.Cell>{/if}
 									<Table.Cell class={data.canWrite ? '' : 'pl-4'}>
 										<a
 											class="inline-flex items-center gap-2 font-mono text-xs font-medium underline-offset-4 group-hover:underline"
 											href={href(data.bucket, prefix)}
 										>
-											<FolderIcon class="size-4 text-brand" />
+											{#if target}
+												<FolderOpenIcon class="size-4 text-brand" />
+											{:else}
+												<FolderIcon class="size-4 fill-brand/15 text-brand" />
+											{/if}
 											{prefix.slice(data.prefix.length)}
 										</a>
 									</Table.Cell>
@@ -370,29 +601,38 @@
 										>Folder</Table.Cell
 									>
 									<Table.Cell class="pr-4">
-										<RowMenu label="Actions for {prefix}">
-											<DropdownMenu.Item onSelect={() => goto(href(data.bucket ?? '', prefix))}>
-												<FolderOpenIcon />Open folder
-											</DropdownMenu.Item>
-											<DropdownMenu.Item onSelect={() => copyKey(prefix)}>
-												<CopyIcon />Copy prefix
-											</DropdownMenu.Item>
-											{#if data.canWrite}
-												<DropdownMenu.Separator />
-												<DropdownMenu.Item
-													variant="destructive"
-													onSelect={() => removeFolder(prefix)}
-												>
-													<Trash2Icon />Delete folder marker
+										<div class="flex justify-end">
+											<RowMenu label="Actions for {prefix}">
+												<DropdownMenu.Item onSelect={() => goto(href(data.bucket ?? '', prefix))}>
+													<FolderOpenIcon />Open folder
 												</DropdownMenu.Item>
-											{/if}
-										</RowMenu>
+												<DropdownMenu.Item onSelect={() => copyKey(prefix)}>
+													<CopyIcon />Copy prefix
+												</DropdownMenu.Item>
+												{#if data.canWrite}
+													<DropdownMenu.Separator />
+													<DropdownMenu.Item
+														variant="destructive"
+														onSelect={() => removeFolder(prefix)}
+													>
+														<Trash2Icon />Delete folder marker
+													</DropdownMenu.Item>
+												{/if}
+											</RowMenu>
+										</div>
 									</Table.Cell>
 								</Table.Row>
 							{/each}
-							{#each data.list.objects as object (object.key)}
+							{#each objects as object (object.key)}
 								{@const checked = selected.has(object.key)}
-								<Table.Row data-state={checked ? 'selected' : undefined}>
+								{@const Icon = fileIcon(object.key) ?? FileIcon}
+								<Table.Row
+									data-state={checked ? 'selected' : undefined}
+									class={data.canWrite ? 'cursor-pointer' : ''}
+									onclick={(event: MouseEvent) => {
+										if (data.canWrite && !isControl(event)) toggle(object.key, !checked);
+									}}
+								>
 									{#if data.canWrite}
 										<Table.Cell class="pr-0 pl-4">
 											<Checkbox
@@ -403,7 +643,7 @@
 									{/if}
 									<Table.Cell class="max-w-0 {data.canWrite ? '' : 'pl-4'}">
 										<span class="flex min-w-0 items-center gap-2">
-											<FileIcon class="size-4 shrink-0 text-muted-foreground" />
+											<Icon class="size-4 shrink-0 text-muted-foreground" />
 											<span class="truncate font-mono text-xs" title={object.key}
 												>{visibleName(object.key)}</span
 											>
@@ -414,8 +654,11 @@
 									>
 										{formatBytes(object.sizeBytes)}
 									</Table.Cell>
-									<Table.Cell class="hidden text-xs text-muted-foreground md:table-cell">
-										{object.lastModified ? formatDateTime(object.lastModified) : '—'}
+									<Table.Cell
+										class="hidden text-xs text-muted-foreground md:table-cell"
+										title={object.lastModified ? formatDateTime(object.lastModified) : undefined}
+									>
+										{object.lastModified ? formatRelative(object.lastModified) : '—'}
 									</Table.Cell>
 									<Table.Cell class="pr-4">
 										<div class="flex items-center justify-end gap-0.5">
@@ -457,13 +700,18 @@
 				<div
 					class="flex flex-wrap items-center justify-between gap-2 border-t px-3 py-2 text-xs text-muted-foreground"
 				>
-					<span>
+					<span class="tabular-nums">
 						{data.list.prefixes.length}
 						{data.list.prefixes.length === 1 ? 'folder' : 'folders'} ·
 						{data.list.objects.length}
 						{data.list.objects.length === 1 ? 'object' : 'objects'}{data.list.isTruncated
 							? ' on this page'
-							: ''}
+							: ''} · {formatBytes(pageBytes)}
+						{#if data.canWrite}
+							<span class="hidden sm:inline">
+								· Drop files or folders anywhere here to upload (up to {data.maxUploadMb} MB each)
+							</span>
+						{/if}
 					</span>
 					{#if data.list.isTruncated && data.list.nextToken}
 						<Button
@@ -476,52 +724,33 @@
 					{/if}
 				</div>
 			{/if}
+
+			{#if dragging}
+				<!-- Drop overlay: transparent to the pointer so folder rows can still be targeted. -->
+				<div
+					class="pointer-events-none absolute inset-0 z-10 rounded-xl border-2 border-dashed border-brand {dropPrefix
+						? 'bg-brand/[0.03]'
+						: 'bg-brand/[0.07]'}"
+				>
+					<div class="absolute inset-x-0 bottom-4 flex justify-center">
+						<div
+							class="flex max-w-[90%] items-center gap-2 rounded-full bg-brand px-4 py-2 text-sm font-medium text-brand-foreground shadow-lg"
+						>
+							<CloudUploadIcon class="size-4 shrink-0" />
+							<span class="truncate">
+								Drop to upload to <span class="font-mono text-xs">{dropLabel}</span>
+							</span>
+						</div>
+					</div>
+				</div>
+			{/if}
 		</div>
 	{/if}
 </div>
 
 {#if data.canWrite && data.bucket}
-	<FormDialog
-		bind:open={uploadOpen}
-		icon={UploadIcon}
-		title="Upload to {data.bucket}"
-		description="Dashboard uploads are limited to {data.maxUploadMb} MB. Use a presigned upload or the CLI for larger files."
-		action="?/upload"
-		enctype="multipart/form-data"
-		submitLabel="Upload"
-	>
-		<input type="hidden" name="bucket" value={data.bucket} />
-		<input type="hidden" name="prefix" value={data.prefix} />
-		<Field.Group>
-			<Field.Field>
-				<Field.Label for="object-file">File</Field.Label>
-				<Input id="object-file" type="file" name="file" required />
-			</Field.Field>
-			<Field.Field>
-				<Field.Label for="object-key">
-					Name <span class="font-normal text-muted-foreground">optional</span>
-				</Field.Label>
-				<InputGroup.Root>
-					{#if data.prefix}
-						<InputGroup.Addon>
-							<InputGroup.Text class="font-mono text-xs">{data.prefix}</InputGroup.Text>
-						</InputGroup.Addon>
-					{/if}
-					<InputGroup.Input
-						id="object-key"
-						name="key"
-						placeholder="Keeps the file's own name"
-						spellcheck="false"
-						class="font-mono text-sm"
-					/>
-				</InputGroup.Root>
-				<Field.Description
-					>Slashes create folders, e.g. <code class="font-mono">2026/report.pdf</code
-					>.</Field.Description
-				>
-			</Field.Field>
-		</Field.Group>
-	</FormDialog>
+	<input bind:this={fileInput} type="file" multiple hidden onchange={onPicked} />
+	<input bind:this={folderInput} type="file" webkitdirectory multiple hidden onchange={onPicked} />
 
 	<FormDialog
 		bind:open={folderOpen}
@@ -553,6 +782,8 @@
 		</Field.Group>
 	</FormDialog>
 {/if}
+
+<UploadPanel {queue} />
 
 <Dialog.Root bind:open={shareOpen}>
 	<Dialog.Content class="sm:max-w-md">

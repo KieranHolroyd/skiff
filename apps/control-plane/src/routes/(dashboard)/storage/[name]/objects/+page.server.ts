@@ -1,7 +1,6 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { CoreError } from '@skiff/core';
 import {
-	bucketNameSchema,
 	hasPermission,
 	storageObjectDeleteSchema,
 	type StorageObjectList,
@@ -13,8 +12,10 @@ import { storageCan } from '../../_lib/forms.server.js';
 import type { Actions, PageServerLoad } from './$types';
 
 /**
- * The object browser (D82). The list is fetched through the node gateway; mutations are form
- * actions so uploads and deletes share the same permission checks and audit as the REST API.
+ * The object browser (D82). The list is fetched through the node gateway. Deletes and folders are
+ * form actions; uploads go straight from the browser to the object REST endpoint (one `PUT` per
+ * file, so drops of many files or whole folders show per-file progress). Both paths share the same
+ * permission checks and audit.
  */
 
 function bucketHref(name: string, bucket: string, prefix = '', token?: string): string {
@@ -37,7 +38,9 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const buckets = storage.buckets.filter((bucket) => bucket.state === 'ready');
 	const requested = url.searchParams.get('bucket');
 	const bucket =
-		requested && buckets.some((item) => item.name === requested) ? requested : (buckets[0]?.name ?? null);
+		requested && buckets.some((item) => item.name === requested)
+			? requested
+			: (buckets[0]?.name ?? null);
 	const prefix = url.searchParams.get('prefix') ?? '';
 	const token = url.searchParams.get('token') ?? undefined;
 
@@ -66,38 +69,12 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		listError,
 		canWrite: hasPermission(principal, 'storage:update'),
 		storageCan: storageCan(principal),
+		maxUploadBytes: core.storageObjects.maxUploadBytes,
 		maxUploadMb: Math.floor(core.storageObjects.maxUploadBytes / 1024 / 1024)
 	};
 };
 
 export const actions: Actions = {
-	upload: async ({ request, locals, params }) => {
-		const principal = locals.principal!;
-		const data = await request.formData();
-		const bucket = formString(data, 'bucket');
-		const prefix = formString(data, 'prefix');
-		const key = formString(data, 'key');
-		const file = data.get('file');
-		if (!bucket) return fail(400, { message: 'Choose a bucket.' });
-		if (!(file instanceof File) || file.size === 0)
-			return fail(400, { message: 'Choose a file to upload.' });
-		const objectKey = (key || file.name).replace(/^\/+/, '');
-		if (!objectKey) return fail(400, { message: 'The object needs a key.' });
-		try {
-			await core.storageObjects.upload(
-				principal,
-				params.name,
-				bucket,
-				prefix && !objectKey.startsWith(prefix) ? `${prefix}${objectKey}` : objectKey,
-				new Uint8Array(await file.arrayBuffer()),
-				file.type || null
-			);
-		} catch (caught) {
-			return fail(failStatus(caught), toFormFailure(caught));
-		}
-		redirect(303, bucketHref(params.name, bucket, prefix));
-	},
-
 	delete: async ({ request, locals, params }) => {
 		const principal = locals.principal!;
 		const data = await request.formData();
@@ -105,9 +82,10 @@ export const actions: Actions = {
 		const key = formString(data, 'key');
 		if (!bucket || !key) return fail(400, { message: 'Missing bucket or key.' });
 		try {
-			const result = await core.storageObjects.remove(principal, params.name, bucket, { keys: [key] });
-			if (result.errors.length > 0)
-				return fail(502, { message: result.errors[0]!.message });
+			const result = await core.storageObjects.remove(principal, params.name, bucket, {
+				keys: [key]
+			});
+			if (result.errors.length > 0) return fail(502, { message: result.errors[0]!.message });
 		} catch (caught) {
 			return fail(failStatus(caught), toFormFailure(caught));
 		}
@@ -118,9 +96,11 @@ export const actions: Actions = {
 		const principal = locals.principal!;
 		const data = await request.formData();
 		const bucket = formString(data, 'bucket');
-		let keys: string[] = [];
+		let keys: string[];
 		try {
-			keys = storageObjectDeleteSchema.parse({ keys: JSON.parse(formString(data, 'keys') || '[]') }).keys;
+			keys = storageObjectDeleteSchema.parse({
+				keys: JSON.parse(formString(data, 'keys') || '[]')
+			}).keys;
 		} catch {
 			return fail(400, { message: 'Select at least one object.' });
 		}
