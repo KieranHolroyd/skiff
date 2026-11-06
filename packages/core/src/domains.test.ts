@@ -244,6 +244,10 @@ describe('custom domains', () => {
 		const verified = await service.check(principal, view.id);
 		expect(verified.domain.lastError).toBeNull();
 
+		// Caddy asks before issuing the www redirect's certificate too; unrelated www hosts stay denied.
+		expect(service.approve('www.example.com')).toBe(true);
+		expect(service.approve('www.unknown.example.com')).toBe(false);
+
 		// Only verified domains reach nodes, and the www sibling carries the apex redirect.
 		const project = core.projects.requireRow(principal, 'blog');
 		const desired = service.desiredForProjects([project.id]);

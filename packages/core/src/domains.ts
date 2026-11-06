@@ -444,18 +444,28 @@ export class DomainService {
 		return { domain: this.view(updated, project), detail, records };
 	}
 
-	/** Caddy on-demand TLS authorization. Only a verified hostname for a live project is approved. */
+	/**
+	 * Caddy on-demand TLS authorization. Only a verified hostname for a live project is approved,
+	 * plus the `www.` sibling of one that redirects www (nodes serve that redirect over HTTPS too).
+	 */
 	approve(hostname: string): boolean {
 		const host = normalizeDnsName(hostname);
 		if (!host) return false;
-		const row = this.ctx.db
-			.select()
-			.from(domains)
-			.where(and(eq(domains.hostname, host), inArray(domains.status, ['verified', 'active'])))
-			.get();
-		if (!row) return false;
-		const project = this.projectById(row.projectId);
-		return Boolean(project && !project.deletedAt);
+		const servable = (row: DomainRow | undefined): boolean => {
+			if (!row) return false;
+			const project = this.projectById(row.projectId);
+			return Boolean(project && !project.deletedAt);
+		};
+		const verified = (name: string): DomainRow | undefined =>
+			this.ctx.db
+				.select()
+				.from(domains)
+				.where(and(eq(domains.hostname, name), inArray(domains.status, ['verified', 'active'])))
+				.get();
+		if (servable(verified(host))) return true;
+		if (!host.startsWith('www.')) return false;
+		const parent = verified(host.slice(4));
+		return Boolean(parent?.redirectWww) && servable(parent);
 	}
 
 	/** Domains served by a set of projects (the node building routes), verified or active only. */

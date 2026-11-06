@@ -331,15 +331,19 @@ export function buildCaddyConfig(options: CompileAgentConfigOptions): Record<str
 	}
 
 	// Only nodes that actually serve custom domains ask the control plane before issuing a cert.
-	// `automation.on_demand` only configures the ask endpoint; Caddy also needs an automation
+	// `automation.on_demand` only configures the permission endpoint; Caddy also needs an automation
 	// policy with `on_demand: true` for the custom hosts. The wildcard policy is left untouched,
 	// and the on-demand issuer uses HTTP-01 because a custom domain may live outside the
 	// Cloudflare zone that owns the wildcard certificate.
+	//
+	// Caddy decodes config strictly and 2.11 has no `on_demand.rate_limit` (`ask` is deprecated in
+	// favour of the `http` permission module). Emitting `rate_limit` made every /load fail as soon as
+	// a domain was verified, so the custom host never got its route or certificate.
 	const ask = domainsAskUrl(options.state);
 	if (ask && apps && options.tls) {
 		const tls = (apps.tls ??= {});
 		const automation = (tls.automation ??= {}) as Record<string, unknown>;
-		automation.on_demand = { ask, rate_limit: { interval: '10s', burst: 20 } };
+		automation.on_demand = { permission: { module: 'http', endpoint: ask } };
 		const policies = (automation.policies as Record<string, unknown>[] | undefined) ?? [];
 		policies.push({
 			subjects: [...new Set(options.state.domains.map((domain) => domain.host))],

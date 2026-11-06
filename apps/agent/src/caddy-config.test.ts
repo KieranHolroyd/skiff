@@ -344,9 +344,9 @@ describe('per-deployment roots, worker routes and logging', () => {
 			tls,
 		});
 		const automation = ((compiled.apps as Json).tls as Json).automation as Json;
+		// Caddy 2.11 rejects unknown fields: only the `permission` module shape loads.
 		expect(automation.on_demand).toEqual({
-			ask: 'https://cloud.example.com/api/domains/ask',
-			rate_limit: { interval: '10s', burst: 20 },
+			permission: { module: 'http', endpoint: 'https://cloud.example.com/api/domains/ask' },
 		});
 		// The managed wildcard policy is untouched; a separate on-demand policy covers custom hosts.
 		const policies = automation.policies as Json[];
