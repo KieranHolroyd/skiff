@@ -87,8 +87,7 @@
 			<div class="min-w-0">
 				<p class="text-sm font-medium">Custom domains</p>
 				<p class="text-xs text-muted-foreground">
-					{verifiedCount}/{domains.length} verified · on-demand TLS issues a certificate on the first
-					verified request.
+					{verifiedCount}/{domains.length} verified · a certificate is issued as soon as a domain verifies.
 				</p>
 				<p class="text-xs text-muted-foreground">
 					Domains serve the production deployment; environment hosts are separate.
@@ -178,7 +177,7 @@
 								<CheckIcon class="mt-0.5 size-4 shrink-0 text-success" />
 								<p class="text-xs text-muted-foreground">
 									Control is proven. Traffic for <span class="font-mono">{domain.hostname}</span> is routed
-									to this project, and Caddy issues a certificate on the first request.
+									to this project, and its certificate is issued now if it does not already have one.
 								</p>
 							</div>
 						{:else}

@@ -205,8 +205,10 @@ interface RecordCheck {
 }
 
 /**
- * Custom domains (DESIGN §5, D31). A hostname only serves traffic after a TXT record proves control;
- * Caddy's on-demand TLS `ask` endpoint consults `approve()` before issuing a certificate.
+ * Custom domains (DESIGN §5, D31). A hostname only serves traffic after a TXT record proves control.
+ * Once verified it reaches the nodes' desired state and Caddy obtains its certificate straight away
+ * (reusing one already in storage), DNS-01 first so Cloudflare-proxied domains work. `approve()`
+ * still answers the `ask` endpoint for agents that predate that change.
  *
  * When a Cloudflare token and zone are configured, CNAME/A records are created on attach, kept in
  * sync on check, and removed on delete. Records are grey-cloud (DNS only), and a non-address record
@@ -439,7 +441,7 @@ export class DomainService {
 		const detail = verified
 			? problem
 				? `Verified, but DNS needs attention: ${problem}`
-				: `Verified. Caddy will issue a certificate for ${row.hostname} on first request.`
+				: `Verified. ${row.hostname} gets its certificate within a minute if it does not already have one.`
 			: (error ?? `Add TXT ${recordName} = ${expected}, then check again.`);
 		return { domain: this.view(updated, project), detail, records };
 	}

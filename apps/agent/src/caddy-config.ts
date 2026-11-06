@@ -107,17 +107,20 @@ export function productionRouteFor(state: DesiredState, projectId: string): Rout
 	);
 }
 
-/** Custom domains need on-demand certs; `ask` is only configured when a node actually serves one. */
-export function domainsAskUrl(state: Pick<DesiredState, 'platformOrigin' | 'domains'>): string | null {
-	if (state.domains.length === 0 || !state.platformOrigin) return null;
-	let origin: URL;
-	try {
-		origin = new URL(state.platformOrigin);
-	} catch {
-		return null;
-	}
-	if (origin.protocol !== 'https:' && origin.protocol !== 'http:') return null;
-	return `${origin.origin}/api/domains/ask`;
+/**
+ * Issuers for verified custom domains, tried in order. DNS-01 through Cloudflare comes first: it is
+ * the only challenge that works when the customer's record is behind the Cloudflare proxy, because
+ * Cloudflare will not forward HTTP-01 or TLS-ALPN-01 to an origin that has no certificate yet. It
+ * fails fast for a zone the token cannot edit, and Caddy falls through to HTTP-01/TLS-ALPN-01,
+ * which work for grey-cloud and non-Cloudflare DNS.
+ */
+export function customDomainIssuers(tls: TlsOptions): Record<string, unknown>[] {
+	const acme = { module: 'acme', email: tls.email, ...(tls.ca ? { ca: tls.ca } : {}) };
+	if (!tls.cloudflareApiToken) return [acme];
+	return [
+		{ ...acme, challenges: { dns: { provider: { name: 'cloudflare', api_token: tls.cloudflareApiToken } } } },
+		acme,
+	];
 }
 
 function withScheme(target: string): string {
@@ -330,32 +333,19 @@ export function buildCaddyConfig(options: CompileAgentConfigOptions): Record<str
 		server.routes = [...databaseGatewayRoutes, ...server.routes];
 	}
 
-	// Only nodes that actually serve custom domains ask the control plane before issuing a cert.
-	// `automation.on_demand` only configures the permission endpoint; Caddy also needs an automation
-	// policy with `on_demand: true` for the custom hosts. The wildcard policy is left untouched,
-	// and the on-demand issuer uses HTTP-01 because a custom domain may live outside the
-	// Cloudflare zone that owns the wildcard certificate.
-	//
-	// Caddy decodes config strictly and 2.11 has no `on_demand.rate_limit` (`ask` is deprecated in
-	// favour of the `http` permission module). Emitting `rate_limit` made every /load fail as soon as
-	// a domain was verified, so the custom host never got its route or certificate.
-	const ask = domainsAskUrl(options.state);
-	if (ask && apps && options.tls) {
+	// Verified custom domains get certificates up front, as soon as the control plane sends them,
+	// not on demand at the first handshake. On-demand issuance never starts behind the Cloudflare
+	// proxy: Cloudflare refuses (525/526) to talk to an origin without a certificate, so the request
+	// that would trigger issuance is never forwarded. The domain list is already the authorization
+	// (only verified domains of live projects are sent), so no `ask` round-trip is needed. Caddy
+	// manages the names because the routes above match them; this policy only picks the issuers.
+	// The wildcard policy is left untouched.
+	const customHosts = [...new Set(options.state.domains.map((domain) => normalizeHost(domain.host)))];
+	if (customHosts.length > 0 && apps && options.tls) {
 		const tls = (apps.tls ??= {});
 		const automation = (tls.automation ??= {}) as Record<string, unknown>;
-		automation.on_demand = { permission: { module: 'http', endpoint: ask } };
 		const policies = (automation.policies as Record<string, unknown>[] | undefined) ?? [];
-		policies.push({
-			subjects: [...new Set(options.state.domains.map((domain) => domain.host))],
-			on_demand: true,
-			issuers: [
-				{
-					module: 'acme',
-					email: options.tls.email,
-					...(options.tls.ca ? { ca: options.tls.ca } : {}),
-				},
-			],
-		});
+		policies.push({ subjects: customHosts, issuers: customDomainIssuers(options.tls) });
 		automation.policies = policies;
 	}
 

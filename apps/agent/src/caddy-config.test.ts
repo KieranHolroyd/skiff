@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { desiredStateSchema, type DesiredState } from '@skiff/contracts';
 import {
 	buildCaddyConfig,
-	domainsAskUrl,
+	customDomainIssuers,
 	isProductionRoute,
 	productionRouteFor,
 	tlsSubjects,
@@ -314,7 +314,7 @@ describe('per-deployment roots, worker routes and logging', () => {
 		expect(apex).toBeDefined();
 	});
 
-	test('only nodes serving custom domains configure on-demand TLS with the ask endpoint', () => {
+	test('verified custom domains get certificates up front, DNS-01 first behind Cloudflare', () => {
 		const tls = {
 			email: 'ops@example.com',
 			cloudflareApiToken: 'cf-token',
@@ -329,8 +329,8 @@ describe('per-deployment roots, worker routes and logging', () => {
 			caddyAdminSocket: '/var/lib/caddy/admin.sock',
 			tls,
 		});
-		const noDomainsTls = (noDomains.apps as Json).tls as Json;
-		expect((noDomainsTls.automation as Json).on_demand).toBeUndefined();
+		const noDomainsAutomation = ((noDomains.apps as Json).tls as Json).automation as Json;
+		expect(noDomainsAutomation.policies as Json[]).toHaveLength(1);
 
 		const value = state();
 		value.platformOrigin = 'https://cloud.example.com';
@@ -344,35 +344,33 @@ describe('per-deployment roots, worker routes and logging', () => {
 			tls,
 		});
 		const automation = ((compiled.apps as Json).tls as Json).automation as Json;
-		// Caddy 2.11 rejects unknown fields: only the `permission` module shape loads.
-		expect(automation.on_demand).toEqual({
-			permission: { module: 'http', endpoint: 'https://cloud.example.com/api/domains/ask' },
-		});
-		// The managed wildcard policy is untouched; a separate on-demand policy covers custom hosts.
+		// Not on demand: behind the Cloudflare proxy the first request never reaches Caddy without a
+		// certificate. Caddy 2.11 also rejects the removed `on_demand.rate_limit` field.
+		expect(automation.on_demand).toBeUndefined();
 		const policies = automation.policies as Json[];
 		expect(policies[0]!.subjects).toEqual(['*.example.com', 'example.com']);
-		expect(policies[0]!.on_demand).toBeUndefined();
-		expect(policies[1]).toMatchObject({
-			subjects: ['app.customer.test'],
-			on_demand: true,
-		});
-		expect((policies[1]!.issuers as Json[])[0]).toMatchObject({
+		expect(policies[1]!.subjects).toEqual(['app.customer.test']);
+		expect(policies[1]!.on_demand).toBeUndefined();
+		const issuers = policies[1]!.issuers as Json[];
+		expect(issuers).toHaveLength(2);
+		expect(issuers[0]).toMatchObject({
 			module: 'acme',
 			email: 'ops@example.com',
+			challenges: { dns: { provider: { name: 'cloudflare', api_token: 'cf-token' } } },
 		});
-		// Custom certs use HTTP-01 (no Cloudflare DNS challenge) so domains outside the zone work.
-		expect(JSON.stringify(policies[1]!.issuers)).not.toContain('cloudflare');
+		// Fallback for domains outside the token's zones: HTTP-01/TLS-ALPN-01.
+		expect(issuers[1]).toEqual({ module: 'acme', email: 'ops@example.com' });
+		// The custom host is matched by a route, which is what makes Caddy manage its certificate.
+		expect(JSON.stringify(routes(compiled))).toContain('"app.customer.test"');
+	});
+
+	test('without a Cloudflare token custom domains use HTTP challenges only', () => {
+		expect(customDomainIssuers({ email: 'ops@example.com', subjects: [], ca: 'https://acme.test/dir' })).toEqual([
+			{ module: 'acme', email: 'ops@example.com', ca: 'https://acme.test/dir' },
+		]);
 	});
 
 	test('domain helpers tolerate missing origins and production routes', () => {
-		expect(domainsAskUrl({ domains: [], platformOrigin: 'https://cloud.example.com' })).toBeNull();
-		expect(domainsAskUrl({ domains: [{ host: 'a.test', projectId: 'p', kind: 'custom', redirectTo: null }], platformOrigin: 'not a url' })).toBeNull();
-		expect(
-			domainsAskUrl({
-				domains: [{ host: 'a.test', projectId: 'p', kind: 'custom', redirectTo: null }],
-				platformOrigin: 'https://cloud.example.com/',
-			}),
-		).toBe('https://cloud.example.com/api/domains/ask');
 		expect(productionRouteFor(state(), 'prj_missing')).toBeNull();
 	});
 
