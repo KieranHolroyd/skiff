@@ -17,25 +17,35 @@ export type WorkloadRuntime = (typeof WORKLOAD_RUNTIMES)[number];
 export const FUNCTION_MODULE_TYPES = ['esm', 'cjs', 'text', 'data', 'wasm'] as const;
 export type FunctionModuleType = (typeof FUNCTION_MODULE_TYPES)[number];
 
-/** Binding kinds the helper understands today: phase 1 plus the phase-2 native bindings. */
+/**
+ * Binding kinds the helper accepts. Keep in step with `functionBindingTypes` in
+ * `@skiff/contracts` (function.ts): a kind missing here makes every deploy that uses it fail on
+ * the node with a 400 while the control plane accepted it.
+ */
 export const FUNCTION_BINDING_TYPES = [
 	'text',
 	'json',
 	'secret',
 	'service',
 	'app',
+	'r2',
+	'kv',
+	'd1',
 	'durable_object',
 	'hyperdrive',
-	'kv',
+	'analytics_engine',
+	'queue',
 	'cache',
+	'assets',
 ] as const;
 export type FunctionBindingType = (typeof FUNCTION_BINDING_TYPES)[number];
 
 /**
  * Bindings whose backing service keeps SQLite state on the shared `do-storage` disk service.
  * The helper only needs this to know whether the unit must expose the state directory (FN11).
+ * Must match the agent renderers that set `requiresDurableStorage` (function-bindings/*.ts).
  */
-export const DURABLE_FUNCTION_BINDING_TYPES = ['durable_object', 'kv', 'cache'] as const;
+export const DURABLE_FUNCTION_BINDING_TYPES = ['durable_object', 'kv', 'cache', 'd1', 'queue'] as const;
 
 export const WORKLOAD_STATUSES = ['pending', 'starting', 'running', 'failed', 'stopped'] as const;
 export type WorkloadStatus = (typeof WORKLOAD_STATUSES)[number];
@@ -140,9 +150,9 @@ export interface WorkloadFunctionBinding {
 	className?: string;
 	/** `durable_object`: the stable namespace key rendered into the config. */
 	uniqueKey?: string;
-	/** `hyperdrive`: prefix of the attached database's activation env variables. */
+	/** `hyperdrive`, `r2`: prefix of the attached resource's activation env variables. */
 	envPrefix?: string;
-	/** `kv`: stable namespace id, one per binding. */
+	/** `kv`, `d1`, `queue`: stable namespace id, one per binding. */
 	namespaceId?: string;
 }
 
@@ -813,9 +823,12 @@ export function parseWorkloadFunction(value: unknown, label = 'workload.function
 				parsed.uniqueKey = assertFunctionKey(binding.uniqueKey, `${bindingLabel}.uniqueKey`);
 				break;
 			case 'hyperdrive':
+			case 'r2':
 				parsed.envPrefix = assertFunctionEnvPrefix(binding.envPrefix, `${bindingLabel}.envPrefix`);
 				break;
 			case 'kv':
+			case 'd1':
+			case 'queue':
 				parsed.namespaceId = assertFunctionKey(binding.namespaceId, `${bindingLabel}.namespaceId`);
 				break;
 			default:

@@ -5,7 +5,10 @@ import { join } from 'node:path';
 import { createHandler, type HelperRuntime } from './server.ts';
 import { SystemdDriver, type CommandRunner, type RunResult } from './systemd.ts';
 import { renderFunctionUnit } from './units.ts';
+// Test-only: the shipped helper never imports the contracts, but a drift check against them must.
+import { functionBindingTypes } from '../../../packages/contracts/src/function.ts';
 import {
+	FUNCTION_BINDING_TYPES,
 	functionNeedsDurableStorage,
 	parseApplyRequest,
 	parseWorkload,
@@ -186,7 +189,7 @@ describe('parseWorkload: function spec', () => {
 			parseWorkload(workloadInput({ function: { ...fnSpec(), bindings: [{ name: '1BAD', type: 'text' }] } })),
 		).toThrow(ValidationError);
 		expect(() =>
-			parseWorkload(workloadInput({ function: { ...fnSpec(), bindings: [{ name: 'OK', type: 'r2' }] } })),
+			parseWorkload(workloadInput({ function: { ...fnSpec(), bindings: [{ name: 'OK', type: 'vectorize' }] } })),
 		).toThrow(/bindings\[0\]\.type/);
 		expect(() =>
 			parseWorkload(
@@ -281,6 +284,42 @@ describe('parseWorkload: phase-2 binding shapes', () => {
 		expect(functionNeedsDurableStorage(stateless.function!)).toBe(false);
 	});
 
+	test('accepts r2, d1, queue, analytics_engine and assets (every contract binding kind)', () => {
+		const workload = functionWorkload({
+			function: {
+				...fnSpec(),
+				bindings: [
+					{ name: 'BUCKET', type: 'r2', envPrefix: 'STORAGE_MEDIA' },
+					{ name: 'DB', type: 'd1', namespaceId: 'prj_1-DB' },
+					{ name: 'JOBS', type: 'queue', namespaceId: 'prj_1-JOBS' },
+					{ name: 'EVENTS', type: 'analytics_engine', dataset: 'events' },
+					{ name: 'ASSETS', type: 'assets' },
+				],
+			},
+		});
+		expect(workload.function?.bindings).toEqual([
+			{ name: 'BUCKET', type: 'r2', envPrefix: 'STORAGE_MEDIA' },
+			{ name: 'DB', type: 'd1', namespaceId: 'prj_1-DB' },
+			{ name: 'JOBS', type: 'queue', namespaceId: 'prj_1-JOBS' },
+			{ name: 'EVENTS', type: 'analytics_engine' },
+			{ name: 'ASSETS', type: 'assets' },
+		]);
+		// D1 and queues keep SQLite state on do-storage, like the agent renderers say.
+		expect(functionNeedsDurableStorage(workload.function!)).toBe(true);
+		for (const binding of [
+			{ name: 'BUCKET', type: 'r2', envPrefix: 'STORAGE_MEDIA' },
+			{ name: 'EVENTS', type: 'analytics_engine', dataset: 'events' },
+			{ name: 'ASSETS', type: 'assets' },
+		]) {
+			const stateless = functionWorkload({ function: { ...fnSpec(), bindings: [binding] } });
+			expect(functionNeedsDurableStorage(stateless.function!)).toBe(false);
+		}
+	});
+
+	test('the helper accepts every binding kind the contract defines', () => {
+		expect([...FUNCTION_BINDING_TYPES].sort()).toEqual([...functionBindingTypes].sort());
+	});
+
 	test('validates the fields each phase-2 binding needs', () => {
 		const bad: Array<Record<string, unknown>> = [
 			{ name: 'ROOMS', type: 'durable_object', uniqueKey: 'prj_1-ROOMS' },
@@ -290,6 +329,9 @@ describe('parseWorkload: phase-2 binding shapes', () => {
 			{ name: 'DB', type: 'hyperdrive', envPrefix: 'lower' },
 			{ name: 'CACHE', type: 'kv' },
 			{ name: 'CACHE', type: 'kv', namespaceId: 'has space' },
+			{ name: 'BUCKET', type: 'r2' },
+			{ name: 'DB', type: 'd1' },
+			{ name: 'JOBS', type: 'queue', namespaceId: 'bad id' },
 		];
 		for (const binding of bad) {
 			expect(() =>
