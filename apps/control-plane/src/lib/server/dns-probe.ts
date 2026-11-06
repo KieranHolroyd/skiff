@@ -34,10 +34,28 @@ async function lookup(name: string, using = resolver()): Promise<string[]> {
 	return [...v4, ...v6];
 }
 
+/**
+ * Non-loopback interface addresses, or none when they cannot be read. The control-plane unit runs
+ * with `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6` (no AF_NETLINK), and on Linux
+ * getifaddrs() needs a netlink socket, so `networkInterfaces()` throws there. Callers fall back to
+ * the platform host and DNS.
+ */
+export function interfaceAddresses(family?: 'IPv4' | 'IPv6', read = networkInterfaces): string[] {
+	let interfaces: ReturnType<typeof networkInterfaces>;
+	try {
+		interfaces = read();
+	} catch {
+		return [];
+	}
+	const addresses: string[] = [];
+	for (const entries of Object.values(interfaces))
+		for (const entry of entries ?? [])
+			if (!entry.internal && (!family || entry.family === family)) addresses.push(entry.address);
+	return addresses;
+}
+
 export async function serverAddresses(currentPlatformHost: string): Promise<Set<string>> {
-	const known = new Set<string>();
-	for (const entries of Object.values(networkInterfaces()))
-		for (const entry of entries ?? []) if (!entry.internal) known.add(entry.address);
+	const known = new Set<string>(interfaceAddresses());
 	const host = currentPlatformHost.replace(/:\d+$/, '');
 	if (isIpv4(host)) known.add(host);
 	else if (host) for (const address of await lookup(host)) known.add(address);

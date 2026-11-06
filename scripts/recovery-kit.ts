@@ -377,14 +377,32 @@ function fail(message: string): never {
 	process.exit(1);
 }
 
+/**
+ * Read a line from /dev/tty with echo off. `stty sane` first: a caller such as the installer may
+ * have left the terminal in raw mode, where Enter sends `\r` (so `read` never returns) and Ctrl-C
+ * is not a signal. The caller's mode is restored afterwards. Ctrl-C exits 130 (cancelled) instead
+ * of returning an empty line, which export would take as "generate a passphrase".
+ */
+export const PROMPT_SCRIPT = [
+	'exec </dev/tty',
+	'saved=$(stty -g)',
+	`trap 'stty "$saved"' EXIT`,
+	`trap 'stty "$saved"; printf "\\n" >/dev/tty; exit 130' INT TERM`,
+	'stty sane -echo',
+	'printf "%s" "$1" >/dev/tty',
+	'IFS= read -r p || exit 1',
+	'printf "\\n" >/dev/tty',
+	'printf "%s" "$p"',
+].join('\n');
+
 /** Prompt on /dev/tty with echo off. Never reads the passphrase from stdin or argv. */
 function promptTty(prompt: string): string {
 	if (!existsSync('/dev/tty')) throw new Error('no terminal: pass --passphrase-file');
-	const result = spawnSync(
-		'sh',
-		['-c', 'exec </dev/tty; trap "stty echo" EXIT INT TERM; stty -echo; printf "%s" "$1" >/dev/tty; IFS= read -r p; printf "\\n" >/dev/tty; printf "%s" "$p"', 'sh', prompt],
-		{ stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8' },
-	);
+	const result = spawnSync('sh', ['-c', PROMPT_SCRIPT, 'sh', prompt], { stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8' });
+	if (result.status === 130 || result.signal === 'SIGINT') {
+		process.stderr.write('skiff-recovery-kit: cancelled\n');
+		process.exit(130);
+	}
 	if (result.status !== 0) throw new Error('could not read the passphrase from the terminal (pass --passphrase-file)');
 	return result.stdout;
 }

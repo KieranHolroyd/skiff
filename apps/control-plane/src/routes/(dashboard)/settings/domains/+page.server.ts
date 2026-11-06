@@ -1,5 +1,4 @@
 import { existsSync } from 'node:fs';
-import { networkInterfaces } from 'node:os';
 import { fail, isActionFailure } from '@sveltejs/kit';
 import {
 	domainSettingsFromEnv,
@@ -11,7 +10,7 @@ import {
 	validateDomainSettings,
 	type DomainSettings
 } from '@skiff/contracts';
-import { probeDomains, primaryAddress, serverAddresses, type DnsProbe } from '#lib/server/dns-probe.js';
+import { interfaceAddresses, probeDomains, primaryAddress, serverAddresses, type DnsProbe } from '#lib/server/dns-probe.js';
 import { enforceOwnerSecondFactor, userHasTotp } from '#lib/server/second-factor.js';
 import { configState, queueConfig, requireOwnerPage } from '../_platform.server.js';
 import type { Actions, PageServerLoad } from './$types';
@@ -38,8 +37,7 @@ function cloudflareTokenSaved(): boolean {
 function localAddresses(platformHost: string): Set<string> {
 	const known = new Set<string>();
 	if (isIpv4(platformHost)) known.add(platformHost);
-	for (const entries of Object.values(networkInterfaces()))
-		for (const entry of entries ?? []) if (!entry.internal && entry.family === 'IPv4') known.add(entry.address);
+	for (const address of interfaceAddresses('IPv4')) known.add(address);
 	return known;
 }
 

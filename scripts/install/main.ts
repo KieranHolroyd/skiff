@@ -256,6 +256,29 @@ async function ask(question: string, fallback = ''): Promise<string> {
 }
 
 /** An interactive Yes / No toggle (scripts/install/confirm.ts); `fallback` when not interactive. */
+/**
+ * Hand the terminal to a child process. readline (and the yes/no toggle) keep stdin in raw mode,
+ * where Enter sends `\r` and Ctrl-C is just a byte, so a child that reads a line would hang with
+ * no way out. Switch to normal line mode for the child, and let Ctrl-C reach the child alone
+ * (the installer ignores it meanwhile), then put things back.
+ */
+function withTerminal<T>(fn: () => T): T {
+	const stdin = process.stdin;
+	const wasRaw = Boolean(stdin.isTTY && stdin.isRaw);
+	rl?.pause();
+	if (stdin.isTTY) stdin.setRawMode(false);
+	stdin.pause();
+	const ignore = () => {};
+	process.on('SIGINT', ignore);
+	try {
+		return fn();
+	} finally {
+		process.off('SIGINT', ignore);
+		if (wasRaw) stdin.setRawMode(true);
+		rl?.resume();
+	}
+}
+
 async function askYesNo(question: string, fallback: boolean): Promise<boolean> {
 	if (!rl) return fallback;
 	rl.pause(); // the toggle reads raw keypresses from the same terminal
@@ -1465,13 +1488,15 @@ async function offerRecoveryKit(): Promise<void> {
 		log(`Skipped. Later: ${later}`);
 		return;
 	}
-	rl?.pause(); // the kit reads its passphrase from the terminal itself
-	const result = Bun.spawnSync({
-		cmd: ['/usr/local/sbin/skiff-recovery-kit', 'export', '--include-env'],
-		stdio: ['inherit', 'inherit', 'inherit'],
-	});
-	rl?.resume();
-	if (result.exitCode !== 0) log(color.yellow(`Export failed; run: ${later}`));
+	// The kit reads its passphrase from the terminal itself.
+	const result = withTerminal(() =>
+		Bun.spawnSync({
+			cmd: ['/usr/local/sbin/skiff-recovery-kit', 'export', '--include-env'],
+			stdio: ['inherit', 'inherit', 'inherit'],
+		}),
+	);
+	if (result.exitCode === 130) log(`Cancelled. Later: ${later}`);
+	else if (result.exitCode !== 0) log(color.yellow(`Export failed; run: ${later}`));
 }
 
 function uninstall(): void {
