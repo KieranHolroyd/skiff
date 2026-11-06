@@ -426,10 +426,10 @@ Deviations from the plan text, all deliberate:
 - **The unit uses `SupplementaryGroups=caddy`,** because `/run/skiff` is `root:caddy 2770`.
   The static `skiff-agent.service` says `skiff-caddy`; the installer uses `caddy`.
 
-Still open before the flag can be turned on anywhere real:
+Open items at the time (6 Nov 2026), since resolved or still pending:
 
-- **Interim credential:** activations carry the **owner** credential until the read-only
-  principals (track G) land. Until then, read-only rests on the session flags alone.
+- **Interim credential, resolved by track G:** read-only sessions now connect as
+  `skiff_studio_ro` and never fall back to the owner. See "Read-only principal as built".
 - **S5 not yet run:** cold start on Debian 13, plus a live end-to-end check through the gateway
   on a node.
 - **Worker unit snippet:** the node unit printed by `nodes/vpn/+page.svelte` doesn't include the
@@ -519,6 +519,41 @@ Integration changes:
 
 Not yet verified: a live session through agent and studio process with real data, Stop and
 abort against a real query, IndexedDB in a browser, and the light/dark editor theme switch.
+
+## Read-only principal as built (track G, 6 Nov 2026)
+
+Read-only sessions now connect as a per-database `skiff_studio_ro` account and never fall back to
+the owner. Write sessions still use the owner.
+
+- **Storage:** migration 0032 adds `databases.studio_ro_secret` (sealed with the org key, minted
+  once and kept), `studio_ro_generation`, `studio_ro_ready_generation` and `studio_ro_error`.
+  `skiff-studio-ro` is in every engine's `reservedNames`.
+- **Flow (the plan 04b credential pattern):** desired state lists `databaseStudioPrincipals:
+  [{ databaseId, generation }]` for running databases that aren't restoring and whose principal
+  is behind (behind the `DB_STUDIO` flag). The agent fetches `GET
+  /api/agent/database-studio-principal/:id` (node-scoped, 403 elsewhere) and calls the helper's
+  `POST /v1/workloads/:id/studio-principal` (`{ user, password }`; the engine comes from the
+  helper's env file). It retries 3 times, 10 s apart, before reporting. Heartbeat
+  `databaseStudioPrincipalResults` marks the generation ready or failed.
+- **When:** minted at create. The generation is bumped by a backup restore (moves included), a PITR
+  restore (the target carries the source's roles), and a version change. A read-only open starts it
+  for older databases and retries a failed one. Owner rotation doesn't touch other accounts.
+- **Grants:** Postgres gets `pg_read_all_data`, `CONNECT`, `CONNECTION LIMIT 4` and
+  `default_transaction_read_only`. MySQL/MariaDB get `SELECT, SHOW VIEW` on the database and
+  `MAX_USER_CONNECTIONS 4`, created through local root. Mongo gets `read` on the database, defined
+  in `admin`. Valkey/Redis get `+@read +@connection -@write -@admin -@dangerous +command|info
+  +command|docs +client|setname +info +dbsize`.
+- **Valkey/Redis persistence:** the verb runs `ACL SETUSER … reset` live and writes the user line
+  into the helper-generated `server.conf` (no restart). The workload activation carries
+  `SKIFF_STUDIO_RO_PASSWORD`, which isn't in the activation version. `apply` renders the line from
+  it (and keeps an existing line when it's absent) and strips it from the container env file.
+- **UI:** `DatabaseStudioView` gains `principal: ready | preparing | failed` and `principalError`.
+  `endpoint()` refuses with "Preparing read-only access…" until ready. The shell shows a spinner and
+  polls, or shows the error with a retry.
+- **Proof:** `tests/e2e/studio/principal.e2e.test.ts` runs the helper's own statements through
+  `docker exec` on all six engines (`SKIFF_E2E_STUDIO_RO_MATRIX=1` covers all 12 versions). The
+  plugin, connected as the principal with no session flags, reads and has every write refused, and
+  Valkey/Redis keep the user across a restart only through the config line. It needs Bun 1.4.4.
 
 ## Implementation order
 

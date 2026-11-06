@@ -355,6 +355,19 @@ replaced D60's per-database sidecar studio, which was deleted at the cutover.
   Valkey/Redis a read-only ACL), so the database itself refuses writes. Session flags are a second
   layer: read-only transactions on SQL engines and a command check on Valkey/Redis. Write sessions
   use the owner credential.
+  - **Creation:** the principal's password is sealed on the database row (migration 0032). The
+    node applies it through the helper verb `POST /v1/workloads/:id/studio-principal`, after
+    fetching it from `GET /api/agent/database-studio-principal/:id`. It is created with the
+    database and re-applied after a restore, a PITR restore or a version change.
+  - **Older databases:** opening a read-only session creates the principal if missing. The
+    session shows "Preparing read-only access…" until the node confirms, and never falls back
+    to the owner.
+  - **Valkey/Redis persistence:** the ACL line is also written into the helper-generated
+    `server.conf`, so it survives restarts.
+  - **Connection limit:** the principal allows 4 connections, so about two read-only sessions
+    per database can be open at once.
+  - **Reserved name:** `skiff-studio-ro` (the database identifier `skiff_studio_ro`) is reserved
+    on every engine.
 - **Limits** (enforced in the studio process): 1,000 rows per result by default (up to 10,000),
   16 MiB per response (then `truncated: true`), a 30 s statement timeout, one run at a time per
   session, and 8 sessions per node. Results stream as NDJSON and are never buffered past one

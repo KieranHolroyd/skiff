@@ -40,7 +40,7 @@ export function describeStudioError(caught: unknown): StudioErrorInfo {
 			if (/read-only access/i.test(message))
 				return {
 					code: caught.code,
-					title: 'Preparing read-only access',
+					title: /could not/i.test(message) ? 'Read-only access failed' : 'Preparing read-only access',
 					message,
 					reopen: false
 				};
