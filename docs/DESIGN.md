@@ -116,6 +116,8 @@ identical permission checks. No surface can do something another can't.
 - Agents **cache the last desired state on disk**. If the control plane is down or mid-upgrade,
   nodes keep serving unchanged.
 - Agent upgrades are just a desired-state field. The control plane supports agents one minor version behind.
+  A worker installs the control plane's own signed release when an admin clicks **Update node**:
+  the agent asks the root helper, which verifies the release signature itself (D99).
 
 ### 3.4 Runtime tiers
 

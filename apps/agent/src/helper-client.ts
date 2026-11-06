@@ -6,6 +6,7 @@ import {
 	type WorkloadDesired,
 	type WorkloadStatus,
 } from '@skiff/contracts';
+import type { HelperNodeUpdateApi } from './node-update.ts';
 
 /**
  * Client for the privileged helper's fixed verbs. The agent is unprivileged (D26): this is its
@@ -123,9 +124,11 @@ const VOLUME_TIMEOUT_MS = 10_000;
 const LOG_TIMEOUT_MS = 8_000;
 /** Starting or stopping the studio unit is a local systemctl call. */
 const STUDIO_TIMEOUT_MS = 30_000;
+/** Download plus checksum of the node bundle; the helper bounds the download at 10 minutes. */
+const NODE_UPDATE_TIMEOUT_MS = 11 * 60_000;
 const STATUSES: readonly WorkloadStatus[] = ['pending', 'starting', 'running', 'failed', 'stopped'];
 
-export class HelperClient implements HelperApi, HelperStudioApi, HelperStudioPrincipalApi {
+export class HelperClient implements HelperApi, HelperStudioApi, HelperStudioPrincipalApi, HelperNodeUpdateApi {
 	constructor(
 		readonly socketPath: string,
 		private readonly timeouts: { health?: number; apply?: number } = {},
@@ -192,6 +195,16 @@ export class HelperClient implements HelperApi, HelperStudioApi, HelperStudioPri
 
 	async studioStop(): Promise<void> {
 		await this.request('POST', '/v1/studio/stop', undefined, STUDIO_TIMEOUT_MS);
+	}
+
+	/**
+	 * Install a signed release's agent and helper (D99). Downloads and verifies on the node, so it
+	 * may take minutes on a slow link. The helper restarts both services after it answers.
+	 */
+	async updateNode(input: { version: string; repo: string }, signal?: AbortSignal): Promise<{ version: string }> {
+		const body = asRecord(await this.request('POST', '/v1/node/update', input, NODE_UPDATE_TIMEOUT_MS, signal));
+		if (typeof body.version !== 'string') throw new HelperError('helper node update returned no version');
+		return { version: body.version };
 	}
 
 	async ensureStudioPrincipal(id: string, user: string, password: string): Promise<void> {

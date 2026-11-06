@@ -101,7 +101,6 @@ export const edgeNodeId = env.SKIFF_EDGE_NODE_ID || undefined;
  */
 export const storageGatewayPort = Number(env.SKIFF_STORAGE_GATEWAY_PORT) || undefined;
 export const storageGatewayUrl = env.SKIFF_STORAGE_GATEWAY_URL?.replace(/\/+$/, '') || undefined;
-export const agentVersion = env.SKIFF_AGENT_VERSION ?? '0.1.0';
 export const webhookUrl = env.SKIFF_ALERT_WEBHOOK;
 export const alertEmail = env.SKIFF_ALERT_EMAIL;
 

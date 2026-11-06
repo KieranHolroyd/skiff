@@ -216,8 +216,18 @@ export class NodeUpdater {
 	private async downloadTo(url: string, path: string, size: number): Promise<void> {
 		const response = await this.fetch(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS), redirect: 'follow' });
 		if (!response.ok || !response.body) throw new NodeUpdateError(`GitHub ${response.status} downloading ${url}`);
-		await Bun.write(path, response);
-		const written = (await fs.stat(path)).size;
+		// Streamed by hand so an oversized body stops at the signed size instead of filling the disk.
+		const handle = await fs.open(path, 'w', 0o600);
+		let written = 0;
+		try {
+			for await (const chunk of response.body) {
+				written += chunk.byteLength;
+				if (written > size) throw new NodeUpdateError(`${url} is larger than the ${size} bytes its signed manifest says`);
+				await handle.write(chunk);
+			}
+		} finally {
+			await handle.close();
+		}
 		if (written !== size) throw new NodeUpdateError(`${url} is ${written} bytes; the signed manifest says ${size}`);
 	}
 }

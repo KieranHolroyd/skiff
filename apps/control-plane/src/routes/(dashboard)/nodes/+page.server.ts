@@ -41,7 +41,9 @@ export const load: PageServerLoad = ({ locals }) => {
 		capacity,
 		denied,
 		volumesByNode,
-		platformOrigin: core.ctx.config.platformOrigin
+		platformOrigin: core.ctx.config.platformOrigin,
+		/** The release nodes should run: the control plane's own version (D99). */
+		targetVersion: core.ctx.config.desiredAgentVersion ?? null
 	};
 };
 
@@ -210,6 +212,22 @@ export const actions: Actions = {
 					: '';
 			return {
 				success: `Node removed and its token revoked.${builds} Uninstall the agent on the machine to stop it.`
+			};
+		} catch (error) {
+			return fail(failStatus(error), toFormFailure(error));
+		}
+	},
+
+	updateAgent: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const nodeId = formString(data, 'nodeId');
+		if (!nodeId) return fail(400, { message: 'Missing node id.' });
+
+		try {
+			const node = core.nodes.requestUpdate(principal, nodeId);
+			return {
+				success: `${node.name} will install ${node.update?.version ?? 'the new release'} on its next check. Its agent restarts when it is done.`
 			};
 		} catch (error) {
 			return fail(failStatus(error), toFormFailure(error));

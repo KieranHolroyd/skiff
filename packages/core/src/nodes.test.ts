@@ -277,3 +277,91 @@ describe('changing the edge node', () => {
 		opened.sqlite.run(`UPDATE projects SET deleted_at = ? WHERE id = 'prj_edgepin'`, [now]);
 	});
 });
+
+describe('node updates from the dashboard (D99)', () => {
+	const updatesDb = createDb({ path: ':memory:' });
+	const fleet: Core = createCore({
+		db: updatesDb.db,
+		sqlite: updatesDb.sqlite,
+		version: '0.8.0',
+		config: {
+			dataDir: dir,
+			platformOrigin: 'https://control.test',
+			contentDomain: 'sites.test',
+			objectStore: new LocalObjectStore(join(dir, 'objects-updates'), 'https://control.test', 'object-secret-123'),
+			masterKey: new Uint8Array(32).fill(7),
+			siteCookieSecret: 'site-cookie-secret-123',
+			objectStoreSecret: 'object-secret-123',
+			desiredAgentVersion: '0.8.0',
+			releaseRepo: 'owner/skiff',
+			now: () => clock,
+		},
+	});
+	afterAll(() => updatesDb.sqlite.close());
+
+	const enrol = (name: string) => fleet.nodes.join({ token: fleet.nodes.createJoinToken(admin, name).token, name });
+	const beat = (
+		node: { nodeId: string; token: string },
+		agentVersion: string,
+		extra: { capabilities?: string[]; nodeUpdateResult?: { generation: number; error: string } } = {},
+	) =>
+		fleet.nodes.heartbeat(node.token, {
+			nodeId: node.nodeId,
+			agentVersion,
+			actualStateVersion: 1,
+			status: 'online',
+			caddyOk: true,
+			releases: [],
+			capabilities: extra.capabilities ?? ['studio-principal', 'node-update'],
+			...(extra.nodeUpdateResult ? { nodeUpdateResult: extra.nodeUpdateResult } : {}),
+		});
+	const view = (id: string) => fleet.nodes.list(admin).find((node) => node.id === id)!;
+
+	test('asks the node to install the control plane version through desired state', async () => {
+		const worker = enrol('updates-1');
+		beat(worker, '0.7.15');
+		expect((await fleet.nodes.desiredState(worker.token)).nodeUpdate).toBeNull();
+		const before = fleet.nodes.stateVersion();
+		const requested = fleet.nodes.requestUpdate(admin, worker.nodeId);
+		expect(requested.update).toMatchObject({ version: '0.8.0', status: 'pending', error: null });
+		expect(fleet.nodes.stateVersion()).toBeGreaterThan(before);
+		expect((await fleet.nodes.desiredState(worker.token)).nodeUpdate).toEqual({
+			generation: 1,
+			version: '0.8.0',
+			repo: 'owner/skiff',
+		});
+		expect(fleet.audit.list({ principal: admin, limit: 5, action: 'node.update_agent' })[0]).toMatchObject({
+			result: 'ok',
+		});
+
+		// The restarted agent's version is the proof; the task leaves desired state.
+		beat(worker, '0.8.0');
+		expect(view(worker.nodeId).update).toBeNull();
+		expect((await fleet.nodes.desiredState(worker.token)).nodeUpdate).toBeNull();
+		expect(() => fleet.nodes.requestUpdate(admin, worker.nodeId)).toThrow(/already runs 0\.8\.0/);
+	});
+
+	test('a reported failure stops the task until the operator retries', async () => {
+		const worker = enrol('updates-2');
+		beat(worker, '0.7.15');
+		fleet.nodes.requestUpdate(admin, worker.nodeId);
+		// A stale generation is ignored.
+		beat(worker, '0.7.15', { nodeUpdateResult: { generation: 7, error: 'old' } });
+		expect(view(worker.nodeId).update?.status).toBe('pending');
+		beat(worker, '0.7.15', { nodeUpdateResult: { generation: 1, error: 'v0.8.0 is not trusted' } });
+		expect(view(worker.nodeId).update).toMatchObject({ status: 'failed', error: 'v0.8.0 is not trusted' });
+		expect((await fleet.nodes.desiredState(worker.token)).nodeUpdate).toBeNull();
+
+		const retried = fleet.nodes.requestUpdate(admin, worker.nodeId);
+		expect(retried.update).toMatchObject({ status: 'pending', error: null });
+		expect((await fleet.nodes.desiredState(worker.token)).nodeUpdate?.generation).toBe(2);
+	});
+
+	test('refuses agents that cannot update themselves, non-admins and unknown nodes', () => {
+		const worker = enrol('updates-3');
+		beat(worker, '0.7.11', { capabilities: ['studio-principal'] });
+		expect(() => fleet.nodes.requestUpdate(admin, worker.nodeId)).toThrow(/Update it by hand once/);
+		expect(() => fleet.nodes.requestUpdate(member, worker.nodeId)).toThrow();
+		expect(() => fleet.nodes.requestUpdate(admin, 'nod_missing')).toThrow();
+	});
+});

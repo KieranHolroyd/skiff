@@ -21,6 +21,7 @@ import { DatabaseBackupRunner } from './database-backups.ts';
 import { DatabasePitrRunner } from './database-pitr.ts';
 import { DatabaseCredentialRunner } from './database-credentials.ts';
 import { StudioPrincipalRunner } from './studio/principal.ts';
+import { NodeUpdateRunner } from './node-update.ts';
 import { DatabasePoolerRestartRunner } from './database-pooler-restarts.ts';
 import { DatabaseRotationRunner } from './database-rotations.ts';
 import { DATABASE_STATS_INTERVAL_MS, DatabaseStatsSampler } from './database-stats.ts';
@@ -89,6 +90,7 @@ class AgentRuntime {
 	private readonly databaseRotations: DatabaseRotationRunner;
 	private readonly databaseCredentials: DatabaseCredentialRunner;
 	private readonly studioPrincipals: StudioPrincipalRunner;
+	private readonly nodeUpdate: NodeUpdateRunner;
 	private readonly databasePoolerRestarts: DatabasePoolerRestartRunner;
 	private readonly storageAdmin: StorageReconciler;
 	private readonly storageStats: StorageStatsSampler;
@@ -189,6 +191,12 @@ class AgentRuntime {
 			log,
 		});
 		this.databasePoolerRestarts = new DatabasePoolerRestartRunner({ helper: this.helper, log });
+		this.nodeUpdate = new NodeUpdateRunner({
+			helper: this.helper,
+			currentVersion: config.agentVersion,
+			statePath: join(config.dataDir, 'node-update.json'),
+			log,
+		});
 		// Buckets and scoped keys are desired state converged over the loopback S3/admin API; the
 		// root key and user secrets stay in the workload runtime's memory (S4).
 		this.storageAdmin = new StorageReconciler({ source: this.workloads, log });
@@ -265,6 +273,7 @@ class AgentRuntime {
 			this.databaseRotationLoop(),
 			this.databaseCredentialLoop(),
 			this.databasePoolerRestartLoop(),
+			this.nodeUpdateLoop(),
 			this.storageAdminLoop(),
 			this.storageStatsLoop(),
 		];
@@ -641,6 +650,21 @@ class AgentRuntime {
 		}
 	}
 
+	/** Dashboard node updates (D99); its own loop because a download can take minutes. */
+	private async nodeUpdateLoop(): Promise<void> {
+		while (this.running) {
+			await sleep(10_000, this.shutdownController.signal).catch(() => undefined);
+			if (!this.running) break;
+			const state = this.desired;
+			if (!state) continue;
+			try {
+				await this.nodeUpdate.runOnce(state, this.shutdownController.signal);
+			} catch (error) {
+				log('warn', `Node update failed: ${errorText(error)}`);
+			}
+		}
+	}
+
 	private async databasePoolerRestartLoop(): Promise<void> {
 		while (this.running) {
 			await sleep(5_000, this.shutdownController.signal).catch(() => undefined);
@@ -734,6 +758,7 @@ class AgentRuntime {
 		const credentialResults = this.databaseCredentials.pendingResults();
 		const studioPrincipalResults = this.studioPrincipals.pendingResults();
 		const poolerRestarted = this.databasePoolerRestarts.pending();
+		const nodeUpdateResult = this.nodeUpdate.pendingResult();
 		const databaseTls = databaseTlsHeartbeat(reports);
 		// Bucket deletions and config convergence are reported once, capped by the heartbeat schema.
 		const storageBucketDeletions = this.storageAdmin.pendingBucketDeletions().slice(0, 500);
@@ -762,6 +787,7 @@ class AgentRuntime {
 			...(credentialResults.length > 0 ? { databaseCredentialResults: credentialResults } : {}),
 			...(studioPrincipalResults.length > 0 ? { databaseStudioPrincipalResults: studioPrincipalResults } : {}),
 			...(poolerRestarted.length > 0 ? { databasePoolerRestarted: poolerRestarted } : {}),
+			...(nodeUpdateResult ? { nodeUpdateResult } : {}),
 			...(databaseTls.length > 0 ? { databaseTls } : {}),
 			...(purgedDatabases.length > 0 ? { purgedDatabases } : {}),
 			...(purgedStorage.length > 0 ? { purgedStorage } : {}),
@@ -795,6 +821,7 @@ class AgentRuntime {
 		this.databaseCredentials.acknowledge(credentialResults.map((result) => result.taskId));
 		this.studioPrincipals.acknowledge(studioPrincipalResults);
 		this.databasePoolerRestarts.acknowledge(poolerRestarted);
+		await this.nodeUpdate.acknowledge(nodeUpdateResult);
 		this.workloads.acknowledgePurgedDatabases(purgedDatabases);
 		this.workloads.acknowledgePurgedStorage(purgedStorage);
 		this.storageAdmin.acknowledgeBucketDeletions(storageBucketDeletions);

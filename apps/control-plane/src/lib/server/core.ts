@@ -11,7 +11,6 @@ import {
 	type Notifier,
 } from '@skiff/core';
 import {
-	agentVersion,
 	alertEmail,
 	dataDir,
 	edgeNodeId,
@@ -30,6 +29,7 @@ import {
 } from './config';
 import { db, sqlite } from './db';
 import { platformVersion } from './version';
+import { updateSource } from './self-update';
 
 const objectStore =
 	objectStoreKind === 'r2' && r2
@@ -54,7 +54,9 @@ export const core = createCore({
 		masterKey,
 		siteCookieSecret,
 		objectStoreSecret,
-		desiredAgentVersion: agentVersion,
+		// Nodes should run this release (D99); the env value outlives the binary it was written for.
+		desiredAgentVersion: platformVersion,
+		releaseRepo: updateSource().repo,
 		edgeNodeId,
 		storageGatewayPort,
 		storageGatewayUrl,

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { BUILD_VERSION } from './build-version.ts';
 import { formatEnv, JoinError, joinNode, nodeFilePath, parseJoinArgs, type FetchLike } from './join.ts';
 
 const TOKEN = 'j'.repeat(32);
@@ -27,7 +28,7 @@ describe('parseJoinArgs', () => {
 		expect(options.token).toBe(TOKEN);
 		expect(options.name).toBe('edge-1');
 		expect(options.dataDir).toBe('/var/lib/skiff-agent');
-		expect(options.version).toBe('0.1.0');
+		expect(options.version).toBe(BUILD_VERSION);
 		expect(options.publicAddress).toBeUndefined();
 	});
 

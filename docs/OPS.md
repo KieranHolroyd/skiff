@@ -697,6 +697,59 @@ it, so a fixed updater retries releases an older one blamed. The dashboard's **S
 Updates** page shows the same status and live log, and each request is in the audit log as
 `platform.update`.
 
+### 4.1.2 Updating worker nodes
+
+The control plane's own host (and its agent) updates with `skiff-update-self` (§4.1). Every
+other node updates from the dashboard (D99):
+
+1. **Nodes**: a node whose agent is older than the control plane shows **`<version>` available**
+   on its card. Choose **Update node** (on the card or in the `…` menu) and confirm.
+2. On its next desired-state pull the agent asks `skiff-helper` to install that version. The
+   helper downloads the signed `manifest.json` for `v<version>` from GitHub, verifies the
+   signature with the release keys built into it, downloads
+   `skiff-node-<version>-linux-<arch>.tar.gz`, checks its size and sha256, and replaces
+   `/opt/skiff/current/agent/skiff-agent` and `/opt/skiff/helper/skiff-helper`. It then restarts
+   `skiff-agent` and `skiff-helper`, plus `skiff-builder` and `skiff-studio` if they are running.
+3. The card shows **updating to `<version>`** until the agent's heartbeat reports the new version,
+   usually within a minute or two. A failure (no signed release, a bad checksum, no outbound
+   HTTPS to GitHub, no helper) shows its reason on the card; **Retry update** tries again.
+
+Requirements on the node: `skiff-helper` running as root, outbound HTTPS to `github.com` and
+`objects.githubusercontent.com`, and an agent new enough to update itself. The helper refuses a
+downgrade and refuses a control-plane host (`/opt/skiff/current` is a release symlink there).
+Sites and workloads keep running; the node shows offline only while its agent restarts.
+
+**Rolling back a node by hand.** The previous binaries are kept next to the new ones:
+
+```sh
+sudo install -m 0755 /opt/skiff/current/agent/skiff-agent.previous /opt/skiff/current/agent/skiff-agent
+sudo install -m 0755 /opt/skiff/helper/skiff-helper.previous /opt/skiff/helper/skiff-helper
+sudo systemctl restart skiff-helper skiff-agent
+```
+
+**First update of an older agent.** An agent from before dashboard updates says so on its card
+("update it by hand once"). Install the node bundle by hand once; later updates work from the
+dashboard. Set `V` to the control plane's version and `ARCH` to the node's (`amd64` or `arm64`):
+
+```sh
+sudo bash -euo pipefail <<'SCRIPT'
+V=0.0.0 ARCH=amd64 REPO=KieranHolroyd/skiff
+cd "$(mktemp -d)"
+curl -fsSLO "https://github.com/$REPO/releases/download/v$V/manifest.json"
+curl -fsSLO "https://github.com/$REPO/releases/download/v$V/skiff-node-$V-linux-$ARCH.tar.gz"
+grep -q "$(sha256sum "skiff-node-$V-linux-$ARCH.tar.gz" | cut -d' ' -f1)" manifest.json \
+  || { echo "checksum does not match manifest.json" >&2; exit 1; }
+tar -xzf "skiff-node-$V-linux-$ARCH.tar.gz"
+install -m 0755 skiff-agent /opt/skiff/current/agent/skiff-agent
+install -m 0755 skiff-helper /opt/skiff/helper/skiff-helper
+systemctl restart skiff-helper skiff-agent
+SCRIPT
+```
+
+This checks the bundle against `manifest.json` only; the dashboard path also verifies the
+manifest's signature. Workers joined with `scripts/dev/join-linux-worker.sh` can instead rebuild
+from `/opt/skiff/src`. Run neither on the control-plane host: use `skiff-update-self` there.
+
 ### 4.2 Uninstall
 
 ```sh

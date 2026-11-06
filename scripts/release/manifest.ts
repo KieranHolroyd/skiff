@@ -48,6 +48,18 @@ for (const file of readdirSync(dir).sort()) {
 }
 if (!Object.keys(artifacts).length) throw new Error(`no skiff-${version}-linux-*.tar.gz in ${dir}`);
 
+// Worker bundles for dashboard node updates (D99): just skiff-agent + skiff-helper per platform.
+const nodeArtifacts: NonNullable<ReleaseManifest['nodeArtifacts']> = {};
+const nodePattern = new RegExp(`^skiff-node-${version.replace(/\./g, '\\.')}-(linux-[a-z0-9]+)\\.tar\\.gz$`);
+for (const file of readdirSync(dir).sort()) {
+	const match = nodePattern.exec(file);
+	if (!match) continue;
+	const path = join(dir, file);
+	nodeArtifacts[match[1]!] = { file, sha256: sha256File(path), size: statSync(path).size };
+}
+const missingNode = Object.keys(artifacts).filter((platform) => !nodeArtifacts[platform]);
+if (missingNode.length) throw new Error(`no node bundle for ${missingNode.join(', ')} (skiff-node-${version}-<platform>.tar.gz)`);
+
 const manifest: ReleaseManifest = {
 	schema: MANIFEST_SCHEMA,
 	version,
@@ -59,6 +71,7 @@ const manifest: ReleaseManifest = {
 	minUpdater: null,
 	hookProtocol: HOOK_PROTOCOL,
 	artifacts,
+	nodeArtifacts,
 };
 const bytes = new TextEncoder().encode(`${JSON.stringify(manifest, null, 2)}\n`);
 const signature = signManifest(bytes, key);
@@ -70,5 +83,5 @@ verifyManifest(bytes, signature, trusted);
 
 writeFileSync(join(dir, 'manifest.json'), bytes);
 writeFileSync(join(dir, 'manifest.json.sig'), `${signature}\n`);
-console.log(`signed manifest for ${version} (${Object.keys(artifacts).join(', ')})`);
+console.log(`signed manifest for ${version} (${Object.keys(artifacts).join(', ')}; node bundles ${Object.keys(nodeArtifacts).join(', ')})`);
 console.log(readFileSync(join(dir, 'manifest.json'), 'utf8'));

@@ -2,7 +2,11 @@
 	import DetailList from '#lib/components/skiff/DetailList.svelte';
 	import { resolve } from '$app/paths';
 	import type { NodeView } from '@skiff/core';
-	import { NODE_STORAGE_DEFAULTS } from '@skiff/contracts';
+	import { NODE_STORAGE_DEFAULTS, compareSemver, parseSemver } from '@skiff/contracts';
+	import { invalidateAll } from '$app/navigation';
+	import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
+	import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
+	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import CirclePauseIcon from '@lucide/svelte/icons/circle-pause';
@@ -184,6 +188,53 @@
 		});
 	}
 
+	/** A node update counts as stuck after this long without the new version (core NODE_UPDATE_STALE_MS). */
+	const UPDATE_STALE_MS = 15 * 60 * 1000;
+
+	type UpdateState =
+		| { kind: 'current' }
+		| { kind: 'available'; target: string; selfUpdate: boolean }
+		| { kind: 'pending'; target: string; stale: boolean }
+		| { kind: 'failed'; target: string; error: string };
+
+	/** Where a node stands against the control plane's release (D99). */
+	function updateState(node: NodeView): UpdateState {
+		if (node.update?.status === 'pending') {
+			const since = node.update.requestedAt ? Date.parse(node.update.requestedAt) : Date.now();
+			return { kind: 'pending', target: node.update.version, stale: Date.now() - since > UPDATE_STALE_MS };
+		}
+		const target = data.denied ? null : parseSemver(data.targetVersion);
+		const running = parseSemver(node.agentVersion);
+		if (!target || (running && compareSemver(running, target) >= 0)) return { kind: 'current' };
+		if (node.update?.status === 'failed')
+			return { kind: 'failed', target: target.version, error: node.update.error ?? 'The node reported no reason.' };
+		return {
+			kind: 'available',
+			target: target.version,
+			selfUpdate: node.capabilities.includes('node-update')
+		};
+	}
+
+	function updateAgent(node: NodeView, target: string) {
+		askConfirm({
+			title: `Update ${node.name} to ${target}?`,
+			description: `The node downloads the signed ${target} release from GitHub, checks its signature and checksum, replaces skiff-agent and skiff-helper, and restarts them. Sites and workloads keep running; the node shows offline for a few seconds while its agent restarts.`,
+			confirmLabel: 'Update node',
+			action: '?/updateAgent',
+			fields: { nodeId: node.id }
+		});
+	}
+
+	// Follow a running update: the agent restarts on the new version within a minute or two.
+	const updating = $derived(
+		!data.denied && data.nodes.some((node) => node.update?.status === 'pending')
+	);
+	$effect(() => {
+		if (!updating) return;
+		const timer = setInterval(() => void invalidateAll(), 5_000);
+		return () => clearInterval(timer);
+	});
+
 	function setBuilder(node: { id: string; name: string; canBuild: boolean }) {
 		askConfirm({
 			title: node.canBuild
@@ -303,6 +354,12 @@
 								<DropdownMenu.Item onSelect={() => copy(node.id)}>
 									<CopyIcon />Copy node ID
 								</DropdownMenu.Item>
+								{@const nodeUpdate = updateState(node)}
+								{#if (nodeUpdate.kind === 'available' && nodeUpdate.selfUpdate) || nodeUpdate.kind === 'failed'}
+									<DropdownMenu.Item onSelect={() => updateAgent(node, nodeUpdate.target)}>
+										<CircleArrowUpIcon />{nodeUpdate.kind === 'failed' ? 'Retry update' : 'Update node'}
+									</DropdownMenu.Item>
+								{/if}
 								<DropdownMenu.Separator />
 								<DropdownMenu.Item onSelect={() => setBuilder(node)}>
 									<HammerIcon />
@@ -349,6 +406,42 @@
 								/>
 							</div>
 						{/if}
+						{@const update = updateState(node)}
+						{#if update.kind === 'pending'}
+							<p class="flex items-start gap-1.5 text-xs text-muted-foreground">
+								{#if update.stale}
+									<TriangleAlertIcon class="mt-px size-3.5 shrink-0 text-warning" />
+									No answer from the node about {update.target} yet. Check
+									<code class="font-mono">journalctl -u skiff-agent -u skiff-helper</code> on it.
+								{:else}
+									<LoaderCircleIcon class="mt-px size-3.5 shrink-0 animate-spin" />
+									Updating to {update.target}: downloading and verifying the signed release, then
+									restarting the agent.
+								{/if}
+							</p>
+						{:else if update.kind === 'failed'}
+							<p class="flex items-start gap-1.5 text-xs text-destructive">
+								<TriangleAlertIcon class="mt-px size-3.5 shrink-0" />
+								<span>Update to {update.target} failed: {update.error}</span>
+							</p>
+						{:else if update.kind === 'available'}
+							<div class="flex flex-wrap items-center justify-between gap-2 rounded-md border px-2.5 py-2 text-xs">
+								<span class="flex items-center gap-1.5">
+									<CircleArrowUpIcon class="size-3.5 shrink-0 text-brand" />
+									{#if update.selfUpdate}
+										Version {update.target} is available for this node.
+									{:else}
+										This agent predates dashboard updates. Update it to {update.target} by hand once
+										(docs/OPS.md, “Updating worker nodes”); later updates work from here.
+									{/if}
+								</span>
+								{#if update.selfUpdate}
+									<Button size="sm" variant="outline" onclick={() => updateAgent(node, update.target)}>
+										Update node
+									</Button>
+								{/if}
+							</div>
+						{/if}
 						{@const storage = storageState(node)}
 						{#if storage}
 							<p
@@ -362,8 +455,15 @@
 						<NodeStats stats={node.stats} />
 						<DetailList class="border-t">
 							<dt>Agent</dt>
-							<dd class="font-mono text-xs">
+							<dd class="flex flex-wrap items-center gap-1.5 font-mono text-xs">
 								{node.agentVersion ?? node.version ?? 'not reported'}
+								{#if update.kind === 'available'}
+									<Badge variant="brand">{update.target} available</Badge>
+								{:else if update.kind === 'pending'}
+									<Badge variant="info">updating to {update.target}</Badge>
+								{:else if update.kind === 'failed'}
+									<Badge variant="danger">update failed</Badge>
+								{/if}
 							</dd>
 							<dt>Address</dt>
 							<dd class="font-mono text-xs">{node.publicAddress ?? 'not reported'}</dd>
