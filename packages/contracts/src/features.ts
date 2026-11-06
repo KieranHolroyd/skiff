@@ -32,9 +32,9 @@ export const FEATURE_ENV_PREFIX = 'SKIFF_FEATURE_';
 export const FEATURE_FLAGS = {
 	FUNCTIONS: {
 		name: 'FUNCTIONS',
-		// Phase 1 (docs/FUNCTIONS.md, D110): fetch functions on workerd. Off until a real Debian 13
-		// node passes the phase-1 exit criteria (invariant 11).
-		default: false,
+		// Shipped: Functions is enabled by default (D110). Set SKIFF_FEATURE_FUNCTIONS=0 to turn the
+		// tier off without removing already-deployed functions.
+		default: true,
 		area: 'workloads',
 		description:
 			'Deploy Workers-compatible functions on the pinned workerd runtime (docs/FUNCTIONS.md).'

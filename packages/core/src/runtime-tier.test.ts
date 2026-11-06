@@ -28,7 +28,7 @@ const config = {
 	now: () => clock,
 };
 
-/** Functions on: the tier exists only when the flag is on (FEATURE_FLAGS.FUNCTIONS, default off). */
+/** Functions on by default; a node/control plane can still disable the tier explicitly. */
 const core: Core = createCore({
 	db: opened.db,
 	sqlite: opened.sqlite,
@@ -36,12 +36,12 @@ const core: Core = createCore({
 	config: { ...config, features: { ...DEFAULT_FEATURES, FUNCTIONS: true } satisfies FeatureFlags },
 });
 
-/** A second control plane on the same database with the shipped defaults, so functions are off. */
+/** A second control plane on the same database with Functions explicitly disabled. */
 const withoutFunctions: Core = createCore({
 	db: opened.db,
 	sqlite: opened.sqlite,
 	version: '0.1.0',
-	config,
+	config: { ...config, features: { ...DEFAULT_FEATURES, FUNCTIONS: false } satisfies FeatureFlags },
 });
 
 const principal = buildPrincipal({ kind: 'user', userId: 'user_1', orgId: 'org_1', role: 'owner', platformAdmin: true });

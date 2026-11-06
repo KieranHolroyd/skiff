@@ -33,7 +33,8 @@ bindings, workerd cluster mode and multi-node stateful failover, multi-node stat
 Workflows, Worker Loader and Python Workers, and R2 multipart uploads (single-part is implemented).
 `skiff-update-self` does not install a newly pinned workerd yet; the installer does, so a host that
 updates across a workerd pin bump needs the installer (or a manual install under
-`/usr/lib/skiff/workerd/<version>/`). `SKIFF_FEATURE_FUNCTIONS` stays off by default.
+`/usr/lib/skiff/workerd/<version>/`). `SKIFF_FEATURE_FUNCTIONS` is on by default; set it to `0` to disable the tier (existing function
+workloads keep serving).
 
 Naming: Skiff already uses "worker" twice, for a no-ingress app (D89) and for a non-edge node. This
 feature is therefore **Functions**, with `runtime: "function"`. "Workers" appears only when it
@@ -416,7 +417,7 @@ process apps as well. It is not a Functions-only feature.
 | Phase | Goal | Contents | Effort | Exit criteria |
 |---|---|---|---|---|
 | **0. Spikes** | De-risk before any contract change | S1–S8 below | S | A results row per spike in [SPIKES.md](./SPIKES.md) |
-| **1. Fetch functions** | Ship stateless `fetch` functions | Runtime `function` in contracts and admission; bundle and manifest validation; helper unit plus pinned binary; agent config renderer and shim; vars and secrets; assets-first routing; egress policy; journald logs; preview, promote and rollback; `skif deploy` with `wrangler.jsonc`; dashboard card; MCP | M–L | A `wrangler init` hello-world plus a Hono API deploy unchanged; previews and rollback work; the SSRF suite (loopback, overlay, metadata IPs) is blocked; feature flag off by default |
+| **1. Fetch functions** | Ship stateless `fetch` functions | Runtime `function` in contracts and admission; bundle and manifest validation; helper unit plus pinned binary; agent config renderer and shim; vars and secrets; assets-first routing; egress policy; journald logs; preview, promote and rollback; `skif deploy` with `wrangler.jsonc`; dashboard card; MCP | M–L | A `wrangler init` hello-world plus a Hono API deploy unchanged; previews and rollback work; the SSRF suite (loopback, overlay, metadata IPs) is blocked; feature flag on by default |
 | **2. Bindings** | Durable data | Durable Objects on a volume; R2 → RustFS; Hyperdrive → PgBouncer; KV; D1; Analytics Engine → ClickHouse; Cache; SQLite backups and restore | L | A chat-room Durable Object with hibernating WebSockets survives a host restart; an R2 put/get round-trips to RustFS; a D1 backup restores to a new project |
 | **3. Triggers and economics** | Lambda-style | Cron timers; queues; scale to zero with idle stop; the runaway watchdog; tail workers → OTLP; cross-project service bindings | M | A cron fires exactly once per occurrence across agent restarts; an idle function holds 0 MB; cold-start p50 is within the S2 target |
 | **4. HA** | Survive node loss | Multi-node stateless replicas; workerd cluster mode per stateful project; Workflows | L | The CLUSTERING §11 failure matrix rows for functions pass, including killing the owner of a Durable Object |
@@ -452,7 +453,7 @@ process apps as well. It is not a Functions-only feature.
 | FN9 | **Cron fires on the node** through a systemd timer and an internal shim route. Phase 4 adds run leases. | Pull, not push (invariant 1). No control plane in the trigger path. | The control-plane scheduler pushing invocations |
 | FN10 | **Binding services run inside the function's own host**, ported from Miniflare where possible (Apache-2.0 notices kept). R2 maps to RustFS, Hyperdrive to PgBouncer, Analytics Engine to ClickHouse. | No new daemon. Tenant data stays in the tenant's sandbox. Reuses managed services. | A node-wide binding daemon; a control-plane KV |
 | FN11 | **Stateful functions are single-node until workerd cluster mode passes S8.** Each project is then its own cluster on its own bucket prefix, over `wg0`, with Skiff-rendered configs. The shared `workerd deploy` catalog is not used. | Adopts upstream's design rather than inventing one. Upstream's authority model is wrong for tenants. | A Skiff-built Durable Object router; running celld alongside workerd |
-| FN12 | **Feature flag `SKIFF_FUNCTIONS`, off by default until phase 1 passes on a real Debian 13 node** (invariant 11) | Standard for risky work | — |
+| FN12 | **Feature flag `SKIFF_FEATURE_FUNCTIONS`, on by default; `0` disables the tier.** It shipped on once phases 1–3 passed; a disabling flag remains for operators. | Standard for risky work, now shipped | — |
 
 ---
 

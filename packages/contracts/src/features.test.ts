@@ -41,6 +41,7 @@ describe('feature registry', () => {
 
 	test('shipped surfaces default on', () => {
 		// These are live features; unset must preserve existing behaviour.
+		expect(DEFAULT_FEATURES.FUNCTIONS).toBe(true);
 		expect(DEFAULT_FEATURES.BACKUPS_RESTORE).toBe(true);
 		expect(DEFAULT_FEATURES.OBJECT_BROWSER).toBe(true);
 		expect(DEFAULT_FEATURES.POOLER).toBe(true);

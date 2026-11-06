@@ -187,6 +187,7 @@ the default below, so a typo cannot turn a destructive feature on. Change a flag
 | `SKIFF_FEATURE_PITR` | off | backups | Point-in-time recovery (WAL archiving and replay) for managed databases. |
 | `SKIFF_FEATURE_OBJECT_BROWSER` | off | storage | Browse, upload, download and delete objects in managed buckets. |
 | `SKIFF_FEATURE_POOLER` | off | databases | PgBouncer sidecar and pooled connection port for a managed database. |
+| `SKIFF_FEATURE_FUNCTIONS` | **on** | workloads | Functions: Workers-compatible workloads on the pinned workerd runtime (D110). Set `0` to refuse new function projects and deploys; already-deployed functions keep serving. |
 | `SKIFF_FEATURE_DB_STUDIO` | **on** | databases | Native database studio (D96): the Studio tab, `/api/v1/databases/:name/studio` and the session-only studio calls. Permission-gated (`database:console`; writes also need `database:update`). Set `0` as a kill switch: the tab and routes disappear and desired state stops listing studio sessions. |
 | `SKIFF_FEATURE_DB_TLS` | off | databases | TLS-only managed database connections (`sslmode=require`). |
 | `SKIFF_FEATURE_ORG_NETWORKS` | off | networking | Private per-org networks connecting workloads and databases. |

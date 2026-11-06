@@ -125,8 +125,8 @@ export class ProjectService {
 
 	async create(principal: Principal, input: ProjectCreate): Promise<ProjectView> {
 		requirePermission(principal, 'project:create');
-		// Functions are off by default (D110): a platform without the pinned workerd release must
-		// refuse the tier rather than accept a project it can never run.
+		// Functions is on by default (D110), but a platform can disable the tier with
+		// SKIFF_FEATURE_FUNCTIONS=0; refuse a project it could never run.
 		if (input.runtime === 'function' && !featureEnabled(this.ctx.config, 'FUNCTIONS'))
 			throw new ValidationError('Functions are not enabled on this platform (SKIFF_FEATURE_FUNCTIONS).');
 		const name = input.name?.trim() || input.slug || 'Untitled project';

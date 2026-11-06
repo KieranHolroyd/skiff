@@ -20,3 +20,6 @@ spikes/**/tmp/
 reports/security/
 **/[Ss]ecurity[-_ ][Aa]udit*
 **/security-audits/
+
+# Added by ggshield
+.cache_ggshield
