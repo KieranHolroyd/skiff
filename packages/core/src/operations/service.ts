@@ -85,7 +85,6 @@ interface StoredPrincipal {
 const HEARTBEAT_MS = 1_000;
 const PLAN_CHUNK = 500;
 const POLL_MS = 250;
-const DAY_MS = 86_400_000;
 
 const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
 	new Promise((resolve) => {
@@ -448,7 +447,7 @@ export class OperationService {
 			);
 			this.ctx.sqlite.run("UPDATE operations SET status = 'expired', finished_at = ? WHERE id = ? AND status = 'planned'", [now, id]);
 		}
-		const cutoff = now - operationLimits.retentionDays * DAY_MS;
+		const cutoff = now - this.ctx.policies.operationHistoryMs();
 		const old = this.ctx.sqlite
 			.query<{ id: string }, [number]>(
 				"SELECT id FROM operations WHERE status IN ('succeeded','partial','failed','cancelled','expired') AND COALESCE(finished_at, created_at) < ?",

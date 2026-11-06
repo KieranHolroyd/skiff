@@ -1,5 +1,8 @@
 import {
 	volumeInventorySchema,
+	type WireguardState,
+	type WireguardStatus,
+	wireguardStatusSchema,
 	type NodeVolumeDesired,
 	type VolumeInventory,
 	type WorkloadActivation,
@@ -47,9 +50,18 @@ export interface HelperApi {
 	apply(input: {
 		workload: WorkloadDesired;
 		activation: WorkloadActivation;
+		/**
+		 * Functions only: the rendered workerd config, shim module and any extra binding-service
+		 * modules (FN2, PLAN.md). `files` is omitted when a build needs none.
+		 */
+		function?: { config: string; shim: string; files?: Record<string, string> };
 	}): Promise<HelperWorkloadStatus>;
 	remove(id: string): Promise<void>;
 	status(id: string): Promise<HelperWorkloadStatus>;
+	/** Stop one workload's service; its `.socket` unit keeps listening (FN4 scale to zero). */
+	stop(id: string): Promise<void>;
+	/** Restart a socket-activated workload's service, then its socket (FN5 watchdog). */
+	restart(id: string): Promise<void>;
 	logs(id: string, options?: LogReadOptions): Promise<HelperLogResult>;
 	/** Delete a purged database's unit and data dir (D59). Idempotent. */
 	purge(id: string): Promise<void>;
@@ -120,12 +132,16 @@ const REMOVE_TIMEOUT_MS = 60_000;
 /** Stopping Postgres (TimeoutStopSec=120) plus deleting a large data dir. */
 const PURGE_TIMEOUT_MS = 300_000;
 const STATUS_TIMEOUT_MS = 2_000;
+/** `systemctl stop` waits for the unit's TimeoutStopSec; a restart is the same plus a start. */
+const LIFECYCLE_TIMEOUT_MS = 120_000;
 const VOLUME_TIMEOUT_MS = 10_000;
 const LOG_TIMEOUT_MS = 8_000;
 /** Starting or stopping the studio unit is a local systemctl call. */
 const STUDIO_TIMEOUT_MS = 30_000;
 /** Download plus checksum of the node bundle; the helper bounds the download at 10 minutes. */
 const NODE_UPDATE_TIMEOUT_MS = 11 * 60_000;
+/** Kernel WireGuard apply is a handful of local commands. */
+const WIREGUARD_TIMEOUT_MS = 30_000;
 const STATUSES: readonly WorkloadStatus[] = ['pending', 'starting', 'running', 'failed', 'stopped'];
 
 export class HelperClient implements HelperApi, HelperStudioApi, HelperStudioPrincipalApi, HelperNodeUpdateApi {
@@ -147,11 +163,17 @@ export class HelperClient implements HelperApi, HelperStudioApi, HelperStudioPri
 	async apply(input: {
 		workload: WorkloadDesired;
 		activation: WorkloadActivation;
+		function?: { config: string; shim: string; files?: Record<string, string> };
 	}): Promise<HelperWorkloadStatus> {
 		const body = await this.request(
 			'POST',
 			'/v1/workloads',
-			{ workload: input.workload, activation: input.activation },
+			{
+				workload: input.workload,
+				activation: input.activation,
+				// Omitted entirely for non-function workloads, so their request body is unchanged.
+				...(input.function ? { function: input.function } : {}),
+			},
 			this.timeouts.apply ?? APPLY_TIMEOUT_MS,
 		);
 		return parseStatus(asRecord(body).workload);
@@ -205,6 +227,27 @@ export class HelperClient implements HelperApi, HelperStudioApi, HelperStudioPri
 		const body = asRecord(await this.request('POST', '/v1/node/update', input, NODE_UPDATE_TIMEOUT_MS, signal));
 		if (typeof body.version !== 'string') throw new HelperError('helper node update returned no version');
 		return { version: body.version };
+	}
+
+	/** Generate or read the node's WireGuard key pair; only the public key returns (C1). */
+	async wireguardKeygen(): Promise<{ publicKey: string }> {
+		const body = asRecord(await this.request('POST', '/v1/wireguard/keygen', undefined, WIREGUARD_TIMEOUT_MS));
+		if (typeof body.publicKey !== 'string') throw new HelperError('helper keygen returned no public key');
+		return { publicKey: body.publicKey };
+	}
+
+	/** Apply the control plane's overlay state to the kernel interface (C1). */
+	async wireguardApply(state: WireguardState): Promise<{ peers: number }> {
+		const body = asRecord(
+			await this.request('POST', '/v1/wireguard/apply', { state }, WIREGUARD_TIMEOUT_MS),
+		);
+		return { peers: typeof body.peers === 'number' ? body.peers : 0 };
+	}
+
+	/** Latest handshakes and counters, for the node's heartbeat and dashboard (C1). */
+	async wireguardStatus(): Promise<WireguardStatus> {
+		const body = await this.request('GET', '/v1/wireguard/status', undefined, WIREGUARD_TIMEOUT_MS);
+		return wireguardStatusSchema.parse(body);
 	}
 
 	async ensureStudioPrincipal(id: string, user: string, password: string): Promise<void> {
@@ -376,6 +419,29 @@ export class HelperClient implements HelperApi, HelperStudioApi, HelperStudioPri
 			entries: entries.map((value) => parseLogEntry(value)),
 			nextCursor: typeof record.nextCursor === 'string' ? record.nextCursor : null,
 		};
+	}
+
+	/**
+	 * Stop a workload's service. Its socket unit keeps listening, so the next connection starts the
+	 * host again through socket activation (FN4 scale to zero). Idempotent on the helper side.
+	 */
+	async stop(id: string): Promise<void> {
+		await this.request(
+			'POST',
+			`/v1/workloads/${encodeURIComponent(id)}/stop`,
+			undefined,
+			LIFECYCLE_TIMEOUT_MS,
+		);
+	}
+
+	/** Restart the service and then its socket, used by the runaway watchdog (FN5). */
+	async restart(id: string): Promise<void> {
+		await this.request(
+			'POST',
+			`/v1/workloads/${encodeURIComponent(id)}/restart`,
+			undefined,
+			LIFECYCLE_TIMEOUT_MS,
+		);
 	}
 
 	private async request(

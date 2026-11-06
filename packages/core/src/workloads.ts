@@ -1,5 +1,5 @@
-import { and, eq, isNull } from 'drizzle-orm';
-import { deployments, nodes, projects, releases, workloads } from '@skiff/db';
+import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+import { deployments, nodeVolumes, nodes, projects, releases, workloadReplicas, workloads } from '@skiff/db';
 import {
 	canViewPlatform,
 	githubRunnerSecretNames,
@@ -10,6 +10,7 @@ import {
 	workloadEnvIssues,
 	workloadReplicaId,
 	workloadSpecSchema,
+	placementSpecSchema,
 	workloadVariablesSchema,
 	type GithubRunnerPoolView,
 	type NodeCapacityView,
@@ -22,11 +23,14 @@ import {
 	type WorkloadStatus,
 	type WorkloadVariables,
 	type WorkloadView,
+	type WorkloadReplica,
 } from '@skiff/contracts';
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { resolvePlacement, type PlacementCandidate } from './placement.ts';
+import { planReplicas } from './replicas.ts';
+import { effectiveRuntime, storedRuntime, workloadRuntimeOf } from './runtime-tier.ts';
 import { parseJson, newId, sha256Hex } from './util.ts';
 import { nodeDiskFreeBytes } from './app-volumes.ts';
 import type { ProjectRow } from './projects.ts';
@@ -40,6 +44,8 @@ export interface ResolvedWorkload {
 	nodeId: string;
 	upstream: string;
 	activationVersion: string;
+	/** Multi-node replica assignments when the feature flag is on (C4). */
+	replicas?: WorkloadReplica[];
 }
 
 /**
@@ -58,12 +64,18 @@ export class WorkloadService {
 	}
 
 	defaultSpec(project: ProjectRow): WorkloadSpec {
-		if (project.runtime === 'static') throw new ValidationError('Static projects have no workload spec.');
-		if (project.runtime === 'container')
+		const runtime = effectiveRuntime(project);
+		if (runtime === 'static') throw new ValidationError('Static projects have no workload spec.');
+		// A function has no sensible default: the manifest is the program (D110).
+		if (runtime === 'function')
+			throw new ValidationError(
+				`Project "${project.slug}" needs a skiff-function.json bundle before it can deploy.`,
+			);
+		if (runtime === 'container')
 			throw new ValidationError(
 				`Project "${project.slug}" needs a workload spec with an image before it can deploy.`,
 			);
-		return workloadSpecSchema.parse({ runtime: project.runtime, command: ['bun', 'run', 'start'] });
+		return workloadSpecSchema.parse({ runtime, command: ['bun', 'run', 'start'] });
 	}
 
 	private specOf(project: ProjectRow, row: WorkloadRow): WorkloadSpec {
@@ -74,34 +86,75 @@ export class WorkloadService {
 
 	plan(principal: Principal, project: ProjectRow, input?: Partial<WorkloadSpec>): ResolvedWorkload {
 		requirePermission(principal, 'deployment:create');
+		const runtime = effectiveRuntime(project);
 		const spec = workloadSpecSchema.parse({
 			...(this.projectSpec(project) ?? this.defaultSpec(project)),
 			...input,
-			runtime: project.runtime === 'static' ? (input?.runtime ?? 'process') : project.runtime,
+			runtime: runtime === 'static' ? (input?.runtime ?? 'process') : runtime,
 		});
-		if (project.runtime === 'static')
+		if (runtime === 'static')
 			throw new ValidationError(
-				`Project "${project.slug}" is static. Create it with runtime "process" or "container" to run a workload.`,
+				`Project "${project.slug}" is static. Create it with runtime "process", "container" or "function" to run a workload.`,
 			);
+		if (runtime === 'function' && !featureEnabled(this.ctx.config, 'FUNCTIONS'))
+			throw new ValidationError('Functions are not enabled on this platform (SKIFF_FEATURE_FUNCTIONS).');
 		if (this.ctx.moves.quiescedProjectIds().has(project.id))
 			throw new ConflictError(
 				`"${project.slug}" is stopped while a database it uses moves to another node. Deploy again once the move finishes.`,
 			);
-		// A project with attached databases or private storage runs next to them (D56, S5).
-		const pinned = this.attachmentNode(project.id);
+		// A project with attached databases or private storage normally runs next to them (D56, S5).
+		// With C2 endpoints enabled, a process app may run elsewhere: the consumer gets a loopback
+		// endpoint and the provider listens on the overlay. Private storage still pins for now.
+		const crossNode = featureEnabled(this.ctx.config, 'SERVICE_ENDPOINTS') && runtime === 'process';
+		const pinned = crossNode ? null : this.attachmentNode(project.id);
 		if (pinned) {
 			const conflict =
 				this.ctx.databases.placementConflict(project, pinned) ?? this.ctx.storage.placementConflict(project, pinned);
 			if (conflict) throw new ValidationError(conflict);
 		}
-		const decision = resolvePlacement({
-			runtime: project.runtime,
-			requested: pinned ?? project.placement,
-			memoryMb: reservedMemoryMb(spec),
-			edgeNodeId: this.edgeNodeId(),
-			candidates: this.candidates(),
-		});
-		if (!decision.ok) throw new ValidationError(decision.message, decision.freeByNode);
+		const placementSpec = placementSpecFor(project);
+		const clusterConfig = this.ctx.cluster.get().replicas;
+		if (featureEnabled(this.ctx.config, 'MULTI_NODE_REPLICAS') && spec.replicas > clusterConfig.max)
+			throw new ValidationError(`This install allows at most ${clusterConfig.max} replicas per workload.`);
+		const multiNode =
+			featureEnabled(this.ctx.config, 'MULTI_NODE_REPLICAS') &&
+			!crossNode &&
+			!pinned &&
+			spec.replicas > 1 &&
+			spec.ingress !== 'none';
+		let replicas: WorkloadReplica[] | undefined;
+		let decision: ReturnType<typeof resolvePlacement>;
+		if (multiNode) {
+			const planned = planReplicas({
+				count: spec.replicas,
+				memoryMb: spec.memoryMb,
+				spread: clusterConfig.spread,
+				candidates: this.candidates().filter((candidate) => candidate.mode !== 'edge').map((candidate) => ({
+					id: candidate.id,
+					name: candidate.name,
+					zone: candidate.zone ?? 'default',
+					status: candidate.status,
+					freeMemoryMb: candidate.sliceMemoryMb - candidate.reservedMemoryMb,
+				})),
+			});
+			if (!planned.ok) throw new ValidationError(planned.message, planned.refusals);
+			replicas = planned.plan.assignments;
+			decision = { ok: true, nodeId: replicas[0]!.nodeId, mode: 'worker', reason: 'Spread replica placement.' };
+		} else {
+			decision = resolvePlacement({
+				runtime,
+				requested: pinned ?? project.placement,
+				memoryMb: reservedMemoryMb(spec),
+				cpuMillis: (spec.cpus ?? 1) * 1000 * (spec.replicas ?? 1),
+				edgeNodeId: this.edgeNodeId(),
+				candidates: this.candidates(),
+				spec: placementSpec,
+				nearNodeIds: placementSpec?.near ? this.nearNodeIds(placementSpec.near) : undefined,
+			});
+			if (!decision.ok) throw new ValidationError(decision.message, decision.rejections?.length ? decision.rejections : decision.freeByNode);
+		}
+		if (crossNode) this.ctx.endpoints.reconcile(project.id, decision.nodeId);
+		if (runtime === 'function') this.assertFunctionTarget(decision.nodeId);
 		const current = this.ctx.db
 			.select({ memoryMb: workloads.memoryMb })
 			.from(workloads)
@@ -119,17 +172,19 @@ export class WorkloadService {
 			nodeId: decision.nodeId,
 			upstream,
 			activationVersion: activationVersion(spec, this.attachmentsVersion(project.id, decision.nodeId, spec.runtime, project.orgId, spec)),
+			...(replicas ? { replicas } : {}),
 		};
 	}
 
 	/** Persist the project-level spec (validated); placement is still resolved at deploy time. */
 	setSpec(principal: Principal, project: ProjectRow, input: WorkloadSpecInput): WorkloadView | null {
 		requirePermission(principal, 'project:update');
-		if (project.runtime === 'static')
+		const runtime = effectiveRuntime(project);
+		if (runtime === 'static')
 			throw new ValidationError(
-				`Project "${project.slug}" is static. Create it with runtime "process" or "container" to run a workload.`,
+				`Project "${project.slug}" is static. Create it with runtime "process", "container" or "function" to run a workload.`,
 			);
-		const spec = workloadSpecSchema.parse({ ...input, runtime: project.runtime });
+		const spec = workloadSpecSchema.parse({ ...input, runtime });
 		this.assertEnvResolvable(project, spec);
 		this.assertRunnerResolvable(project, spec);
 		const existing = this.ctx.db.select().from(workloads).where(eq(workloads.projectId, project.id)).get();
@@ -148,10 +203,12 @@ export class WorkloadService {
 				.update(workloads)
 				.set({
 					specJson: JSON.stringify(spec),
-					runtime: spec.runtime,
+					runtime: storedWorkloadRuntime(spec.runtime),
+					runtimeName: spec.runtime,
 					memoryMb: reservedMemoryMb(spec),
 					cpus: Math.round(spec.cpus),
-					upstream: upstreamFor(project.id, spec),
+					// A function's socket is named after the workload id (phase 4), not the project.
+					upstream: spec.runtime === 'function' ? upstreamFor(existing.id, spec) : upstreamFor(project.id, spec),
 					status: 'pending',
 					updatedAt: this.ctx.now(),
 				})
@@ -171,10 +228,11 @@ export class WorkloadService {
 		requirePermission(principal, 'project:update');
 		const variables = workloadVariablesSchema.parse(input);
 		if (variables.newSecrets.length > 0) requirePermission(principal, 'secret:create');
-		if (project.runtime === 'static')
+		const runtime = effectiveRuntime(project);
+		if (runtime === 'static')
 			throw new ValidationError(`Project "${project.slug}" is static and has no environment variables.`);
 		const current = this.projectSpec(project);
-		if (!current && project.runtime === 'container')
+		if (!current && runtime === 'container')
 			throw new ValidationError('Set the container image under Runtime before adding variables.');
 		const spec = workloadSpecSchema.parse({
 			...(current ?? this.defaultSpec(project)),
@@ -225,6 +283,22 @@ export class WorkloadService {
 			);
 	}
 
+	/**
+	 * A function runs on workerd, which only an agent that advertised `functions` in its heartbeat
+	 * can render (D110). Refuse the deploy instead of leaving the app pending forever.
+	 */
+	private assertFunctionTarget(nodeId: string): void {
+		const node = this.ctx.db
+			.select({ name: nodes.name, capabilitiesJson: nodes.capabilitiesJson })
+			.from(nodes)
+			.where(eq(nodes.id, nodeId))
+			.get();
+		if (!node || !nodeCapabilities(node.capabilitiesJson).includes('functions'))
+			throw new ValidationError(
+				`Node "${node?.name ?? nodeId}" does not support functions; update the node's agent first.`,
+			);
+	}
+
 	/** Re-point the workload at an existing deployment (promote/rollback); placement is preserved. */
 	syncDeployment(project: ProjectRow, deploymentId: string): void {
 		const deployment = this.ctx.db.select().from(deployments).where(eq(deployments.id, deploymentId)).get();
@@ -246,17 +320,21 @@ export class WorkloadService {
 	record(project: ProjectRow, deploymentId: string, resolved: ResolvedWorkload): void {
 		const now = this.ctx.now();
 		const existing = this.ctx.db.select().from(workloads).where(eq(workloads.projectId, project.id)).get();
+		const id = existing?.id ?? newId('wld_');
 		const values = {
 			orgId: project.orgId,
 			projectId: project.id,
 			deploymentId,
 			nodeId: resolved.nodeId,
-			runtime: resolved.spec.runtime,
+			runtime: storedWorkloadRuntime(resolved.spec.runtime),
+			runtimeName: resolved.spec.runtime,
 			status: 'pending' as const,
 			specJson: JSON.stringify(resolved.spec),
 			memoryMb: reservedMemoryMb(resolved.spec),
 			cpus: Math.round(resolved.spec.cpus),
-			upstream: resolved.upstream,
+			// A function dials a socket named after its workload (phase 4), not after the project, so
+			// recompute it once the row id exists. Every other tier keeps the project socket.
+			upstream: resolved.spec.runtime === 'function' ? upstreamFor(id, resolved.spec) : resolved.upstream,
 			message: null,
 			updatedAt: now,
 		};
@@ -264,8 +342,26 @@ export class WorkloadService {
 		else
 			this.ctx.db
 				.insert(workloads)
-				.values({ ...values, id: newId('wld_'), createdAt: now })
+				.values({ ...values, id, createdAt: now })
 				.run();
+		if (resolved.replicas) {
+			this.ctx.db.delete(workloadReplicas).where(eq(workloadReplicas.workloadId, id)).run();
+			for (const replica of resolved.replicas)
+				this.ctx.db
+					.insert(workloadReplicas)
+					.values({
+						id: newId('wrl_'),
+						workloadId: id,
+						projectId: project.id,
+						nodeId: replica.nodeId,
+						replicaIndex: replica.index,
+						status: 'pending',
+						placementReason: replica.reason,
+						createdAt: now,
+						updatedAt: now,
+					})
+					.run();
+		}
 	}
 
 	view(project: ProjectRow): WorkloadView | null {
@@ -306,6 +402,7 @@ export class WorkloadService {
 	capacityInternal(): NodeCapacityView[] {
 		const reserved = this.reservedByNode();
 		const reservedDisk = this.ctx.appVolumes.reservedDiskByNode();
+		const reservedCpu = this.reservedCpuByNode();
 		const databaseCounts = this.ctx.databases.countByNode();
 		const storageCounts = this.ctx.storage.countByNode();
 		return this.ctx.db
@@ -337,12 +434,24 @@ export class WorkloadService {
 
 	/** Desired state for one node, including only public spec fields and secret references. */
 	desiredForNode(nodeId: string): WorkloadDesired[] {
+		const replicaRows = this.ctx.db
+			.select()
+			.from(workloadReplicas)
+			.where(eq(workloadReplicas.nodeId, nodeId))
+			.all();
+		const replicaWorkloadIds = [...new Set(replicaRows.map((row) => row.workloadId))];
 		const rows = this.ctx.db
 			.select({ workload: workloads, project: projects, deployment: deployments })
 			.from(workloads)
 			.innerJoin(projects, eq(projects.id, workloads.projectId))
 			.innerJoin(deployments, eq(deployments.id, workloads.deploymentId))
-			.where(and(eq(workloads.nodeId, nodeId), isNull(projects.deletedAt), eq(deployments.status, 'active')))
+			.where(
+				and(
+					or(eq(workloads.nodeId, nodeId), replicaWorkloadIds.length > 0 ? inArray(workloads.id, replicaWorkloadIds) : sql`0`),
+					isNull(projects.deletedAt),
+					eq(deployments.status, 'active'),
+				),
+			)
 			.all();
 
 		// Apps whose database is moving stay listed but stopped, so the agent keeps their state (D97).
@@ -363,12 +472,17 @@ export class WorkloadService {
 				projectSlug: project.slug,
 				deploymentId: deployment.id,
 				...(isolated ? { orgId: project.orgId, networkName: orgNetworkName(project.orgId) } : {}),
-				runtime: workload.runtime,
+				runtime: spec.runtime,
 				status: quiesced.has(project.id) ? 'stopped' : workload.status,
 				release: release?.sha256 ?? null,
 				...(spec.command ? { command: spec.command } : {}),
 				...(spec.image ? { image: spec.image } : {}),
-				upstream: workload.upstream ?? upstreamFor(project.id, spec),
+				// A function owns a socket per replica (phase 4). Replica 0 keeps the workload id, so
+				// a single-host function dials `<workload-id>.sock`, matching the helper's socket unit.
+				upstream:
+					spec.runtime === 'function'
+						? upstreamFor(workload.id, spec)
+						: (workload.upstream ?? upstreamFor(project.id, spec)),
 				// The row holds the whole reservation (D90); each unit is capped at one replica's share.
 				memoryMb: spec.memoryMb,
 				cpus: workload.cpus,
@@ -382,15 +496,98 @@ export class WorkloadService {
 				...(volumes.length > 0 ? { volumes } : {}),
 				...(worker ? { ingress: 'none' as const } : {}),
 				...(spec.runner ? { runner: { provider: 'github' as const } } : {}),
+				...(spec.function ? { function: spec.function } : {}),
 			};
+			// A spread workload carries only the copies assigned to this node (C4).
+			const assigned = replicaRows.filter((row) => row.workloadId === workload.id);
+			if (assigned.length > 0) {
+				return assigned.map((row) => {
+					const id = workloadReplicaId(workload.id, row.replicaIndex);
+					return {
+						...base,
+						id,
+						...(spec.runtime === 'function' ? { upstream: upstreamFor(id, spec) } : {}),
+						replica: { index: row.replicaIndex },
+					};
+				});
+			}
 			// Plain single-copy workloads keep exactly the desired state they had before plan 21.
 			if (spec.replicas === 1 && !spec.runner) return [base];
-			return Array.from({ length: spec.replicas }, (_, index) => ({
-				...base,
-				id: workloadReplicaId(workload.id, index),
-				replica: { index },
-			}));
+			return Array.from({ length: spec.replicas }, (_, index) => {
+				const id = workloadReplicaId(workload.id, index);
+				return {
+					...base,
+					id,
+					// Each replica gets its own socket and therefore its own workerd host.
+					...(spec.runtime === 'function' ? { upstream: upstreamFor(id, spec) } : {}),
+					replica: { index },
+				};
+			});
 		});
+	}
+
+	/** Move replicas off offline/draining nodes onto healthy workers (C4). */
+	rebalanceReplicas(): number {
+		if (!featureEnabled(this.ctx.config, 'MULTI_NODE_REPLICAS')) return 0;
+		const rows = this.ctx.db.select().from(workloadReplicas).all();
+		if (rows.length === 0) return 0;
+		const statuses = new Map(this.ctx.db.select().from(nodes).all().map((node) => [node.id, node.status]));
+		const byWorkload = new Map<string, typeof rows>();
+		for (const row of rows) {
+			const list = byWorkload.get(row.workloadId) ?? [];
+			list.push(row);
+			byWorkload.set(row.workloadId, list);
+		}
+		let moved = 0;
+		for (const [workloadId, copies] of byWorkload) {
+			const bad = copies.filter((row) => statuses.get(row.nodeId) !== 'online');
+			if (bad.length === 0) continue;
+			const workload = this.ctx.db.select().from(workloads).where(eq(workloads.id, workloadId)).get();
+			if (!workload) continue;
+			const project = this.requireProject(workload.projectId);
+			const spec = this.specOf(project, workload);
+			const keep = new Set(copies.filter((row) => !bad.includes(row)).map((row) => row.nodeId));
+			const candidates = this.candidates()
+				.filter((candidate) => candidate.status === 'online' && candidate.mode !== 'edge' && !keep.has(candidate.id))
+				.map((candidate) => ({
+					id: candidate.id,
+					name: candidate.name,
+					zone: candidate.zone ?? 'default',
+					status: candidate.status,
+					freeMemoryMb: candidate.sliceMemoryMb - candidate.reservedMemoryMb,
+				}));
+			const planned = planReplicas({
+				count: bad.length,
+				memoryMb: spec.memoryMb,
+				spread: this.ctx.cluster.get().replicas.spread,
+				candidates,
+			});
+			if (!planned.ok) continue;
+			const now = this.ctx.now();
+			planned.plan.assignments.forEach((assignment, index) => {
+				const row = bad[index];
+				if (!row) return;
+				this.ctx.db
+					.update(workloadReplicas)
+					.set({
+						nodeId: assignment.nodeId,
+						status: 'pending',
+						placementReason: 'failover',
+						updatedAt: now,
+					})
+					.where(eq(workloadReplicas.id, row.id))
+					.run();
+				if (row.replicaIndex === 0)
+					this.ctx.db
+						.update(workloads)
+						.set({ nodeId: assignment.nodeId, status: 'pending', updatedAt: now })
+						.where(eq(workloads.id, workloadId))
+						.run();
+				moved += 1;
+			});
+			this.ctx.projects.bump(project.orgId);
+		}
+		return moved;
 	}
 
 	/**
@@ -504,11 +701,13 @@ export class WorkloadService {
 			projectSlug: project.slug,
 			deploymentId: row.deploymentId,
 			nodeId: row.nodeId,
-			runtime: row.runtime,
+			runtime: workloadRuntimeOf(row),
 			status: row.status,
 			memoryMb: row.memoryMb,
 			cpus: row.cpus,
-			upstream: row.upstream,
+			// A function's socket follows the workload id (phase 4). Recomputed from the row id so a
+			// row written before this change still reports the socket the helper now creates.
+			upstream: (spec?.runtime === 'function' ? upstreamFor(row.id, spec) : null) ?? row.upstream,
 			message: row.message,
 			createdAt: new Date(row.createdAt).toISOString(),
 			updatedAt: new Date(row.updatedAt).toISOString(),
@@ -567,6 +766,22 @@ export class WorkloadService {
 		return `secrets:${sha256Hex(resolved.join(','))}`;
 	}
 
+	/** Resolve a `near` reference to the node running that database or storage instance. */
+	private nearNodeIds(reference: string): string[] {
+		const database = this.ctx.sqlite
+			.query<{ nodeId: string }, [string, string]>(
+				'SELECT node_id AS nodeId FROM databases WHERE (id = ? OR name = ?) AND deleted_at IS NULL LIMIT 1',
+			)
+			.get(reference, reference);
+		if (database) return [database.nodeId];
+		const storage = this.ctx.sqlite
+			.query<{ nodeId: string }, [string, string]>(
+				'SELECT node_id AS nodeId FROM storage_instances WHERE (id = ? OR name = ?) AND deleted_at IS NULL LIMIT 1',
+			)
+			.get(reference, reference);
+		return storage ? [storage.nodeId] : [];
+	}
+
 	/** Edge node id (config or first edge), for placement by other services. */
 	edgeNode(): string | null {
 		return this.edgeNodeId();
@@ -589,20 +804,81 @@ export class WorkloadService {
 	private candidates(): PlacementCandidate[] {
 		const reserved = this.reservedByNode();
 		const reservedDisk = this.ctx.appVolumes.reservedDiskByNode();
+		const reservedCpu = this.reservedCpuByNode();
+		const volumes = this.ctx.db
+			.select({
+				nodeId: nodeVolumes.nodeId,
+				id: nodeVolumes.id,
+				class: nodeVolumes.class,
+				classOverride: nodeVolumes.classOverride,
+			})
+			.from(nodeVolumes)
+			.all();
+		const volumeFacts = new Map<string, { classes: string[]; ids: string[] }>();
+		for (const volume of volumes) {
+			const fact = volumeFacts.get(volume.nodeId) ?? { classes: [], ids: [] };
+			fact.classes.push(volume.classOverride ?? volume.class);
+			fact.ids.push(volume.id);
+			volumeFacts.set(volume.nodeId, fact);
+		}
 		return this.ctx.db
 			.select()
 			.from(nodes)
 			.all()
-			.map((node) => ({
-				id: node.id,
-				name: node.name,
-				mode: node.mode,
-				status: node.status,
-				sliceMemoryMb: node.sliceMemoryMb,
-				reservedMemoryMb: reserved.get(node.id) ?? 0,
-				diskFreeBytes: nodeDiskFreeBytes(parseJson<Record<string, unknown> | null>(node.statsJson, null)),
-				reservedDiskBytes: reservedDisk.get(node.id) ?? 0,
-			}));
+			.map((node) => {
+				const facts = this.ctx.nodes.view(node);
+				const volume = volumeFacts.get(node.id);
+				return {
+					id: node.id,
+					name: node.name,
+					mode: node.mode,
+					status: node.status,
+					sliceMemoryMb: node.sliceMemoryMb,
+					reservedMemoryMb: reserved.get(node.id) ?? 0,
+					diskFreeBytes: nodeDiskFreeBytes(parseJson<Record<string, unknown> | null>(node.statsJson, null)),
+					reservedDiskBytes: reservedDisk.get(node.id) ?? 0,
+					zone: facts.zone,
+					roles: facts.roles,
+					labels: facts.derivedLabels,
+					volumeClasses: volume?.classes ?? [],
+					volumeIds: volume?.ids ?? [],
+					cpuBudgetMillis: facts.cpuBudgetMillis,
+					reservedCpuMillis: reservedCpu.get(node.id) ?? 0,
+				};
+			});
+	}
+
+	/** CPU already reserved by workloads, databases and storage instances, in millis. */
+	private reservedCpuByNode(): Map<string, number> {
+		const reserved = new Map<string, number>();
+		const add = (rows: Array<{ nodeId: string | null; total: number | null }>) => {
+			for (const row of rows)
+				if (row.nodeId) reserved.set(row.nodeId, (reserved.get(row.nodeId) ?? 0) + Math.round(row.total ?? 0));
+		};
+		add(
+			this.ctx.sqlite
+				.query<{ nodeId: string | null; total: number | null }, [string, string, string]>(
+					`SELECT w.node_id AS nodeId, SUM(w.cpus * 1000) AS total FROM workloads w
+					 JOIN projects p ON p.id = w.project_id AND p.deleted_at IS NULL
+					 WHERE w.node_id IS NOT NULL AND w.status IN (?, ?, ?) GROUP BY w.node_id`,
+				)
+				.all('pending', 'starting', 'running'),
+		);
+		add(
+			this.ctx.sqlite
+				.query<{ nodeId: string | null; total: number | null }, []>(
+					'SELECT node_id AS nodeId, SUM(cpus * 1000) AS total FROM databases WHERE deleted_at IS NULL GROUP BY node_id',
+				)
+				.all(),
+		);
+		add(
+			this.ctx.sqlite
+				.query<{ nodeId: string | null; total: number | null }, []>(
+					'SELECT node_id AS nodeId, SUM(cpus * 1000) AS total FROM storage_instances WHERE deleted_at IS NULL GROUP BY node_id',
+				)
+				.all(),
+		);
+		return reserved;
 	}
 
 	private reservedByNode(): Map<string, number> {
@@ -664,11 +940,19 @@ export function aggregateReplicaReports(
 	return [...merged.values()];
 }
 
-/** The upstream Caddy proxies to on the workload's node. Socket activation is the default. */
-export function upstreamFor(projectId: string, spec: WorkloadSpec): string {
+/**
+ * The upstream Caddy proxies to on the workload's node. Socket activation is the default.
+ *
+ * `id` is the socket id: a function passes its desired-state id — the workload id for replica 0
+ * and `<id>-r<n>` for the rest (phase 4, `workloadReplicaId`) — so every host has its own socket.
+ * Processes and containers pass the project id, which is the socket the helper has always created.
+ */
+export function upstreamFor(id: string, spec: WorkloadSpec): string {
 	// Workers have no route; the value is never dialled and marks the row in listings.
 	if (spec.ingress === 'none') return 'none';
-	if (spec.runtime === 'process' && spec.socketActivation) return `unix//run/skiff-workloads/${projectId}.sock`;
+	// Functions are socket-activated like a process app (D110): workerd takes the listener.
+	if ((spec.runtime === 'process' || spec.runtime === 'function') && spec.socketActivation)
+		return `unix//run/skiff-workloads/${id}.sock`;
 	return `127.0.0.1:${spec.port}`;
 }
 
@@ -690,6 +974,30 @@ export function activationVersion(spec: WorkloadSpec, databases = ''): string {
 			// `replicas` is left out on purpose: scaling adds or removes copies without restarting any.
 			...(spec.ingress === 'none' ? { ingress: 'none' } : {}),
 			...(spec.runner ? { runner: spec.runner } : {}),
+			// A binding or compatibility change must restart the host, so the function spec is part of
+			// the activation hash (D110). Omitted for every other tier, keeping existing versions.
+			...(spec.function ? { function: spec.function } : {}),
 		}),
 	);
+}
+
+/** Capabilities a node reported in its last heartbeat; empty for agents that predate them. */
+function nodeCapabilities(json: string | null): string[] {
+	const parsed = parseJson<unknown>(json, []);
+	return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === 'string') : [];
+}
+
+/** `storedRuntime` narrowed for a workload row, whose CHECK only allows process/container. */
+function storedWorkloadRuntime(runtime: WorkloadRuntime): 'process' | 'container' {
+	return storedRuntime(runtime) as 'process' | 'container';
+}
+
+function placementSpecFor(project: ProjectRow): import('@skiff/contracts').PlacementSpec | null {
+	if (!project.placementJson) return null;
+	try {
+		const parsed = placementSpecSchema.safeParse(JSON.parse(project.placementJson));
+		return parsed.success ? parsed.data : null;
+	} catch {
+		return null;
+	}
 }

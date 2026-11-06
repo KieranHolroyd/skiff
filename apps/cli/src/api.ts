@@ -232,8 +232,20 @@ export interface UploadTicket {
 export interface ProjectCreateInput {
 	slug: string;
 	name?: string;
+	/** `function` for a wrangler project (docs/FUNCTIONS.md); the server defaults to `static`. */
+	runtime?: 'static' | 'process' | 'container' | 'function';
 	productionAccess?: 'public' | 'password' | 'platform';
 	previewAccess?: 'public' | 'password' | 'platform';
+}
+
+/** Secret metadata only; values never leave the control plane. */
+export interface SecretView {
+	id?: string;
+	name: string;
+	type?: 'secret' | 'env';
+	version?: number;
+	projectId?: string | null;
+	createdAt?: string;
 }
 
 export interface FinalizeOutcome {
@@ -408,11 +420,41 @@ export class ApiClient {
 			previewAccess: input.previewAccess ?? 'platform',
 		};
 		if (input.name) body.name = input.name;
+		if (input.runtime) body.runtime = input.runtime;
 		const raw = await this.request('POST', '/api/v1/projects', { body });
 		const record = asRecord(unwrap(raw)) ?? {};
 		const project = normalizeProject(record.project ?? record, input.slug);
 		if (!project) throw new CliError('The platform returned an unexpected project response.', { code: 'protocol' });
 		return { project, raw };
+	}
+
+	/**
+	 * Metadata for every secret visible to the caller. Values are never returned. Used to
+	 * auto-bind a function project's own secrets; organisation-scoped entries are filtered out
+	 * by the caller so an org secret is never exposed to one project.
+	 */
+	async listSecrets(): Promise<{ secrets: SecretView[]; raw: unknown }> {
+		const raw = await this.request('GET', '/api/v1/secrets');
+		const record = asRecord(unwrap(raw)) ?? {};
+		const values = asArray(record.secrets ?? record.items) ?? [];
+		const secrets: SecretView[] = [];
+		for (const value of values) {
+			const secret = asRecord(value);
+			const name = stringValue(secret?.name);
+			if (!secret || !name) continue;
+			secrets.push({
+				id: stringValue(secret.id),
+				name,
+				type: secret.type === 'env' ? 'env' : secret.type === 'secret' ? 'secret' : undefined,
+				version: numberValue(secret.version),
+				projectId:
+					secret.projectId === null
+						? null
+						: (stringValue(secret.projectId ?? secret.project_id) ?? null),
+				createdAt: stringValue(secret.createdAt ?? secret.created_at),
+			});
+		}
+		return { secrets, raw };
 	}
 
 	async listDeployments(project: string): Promise<{ deployments: DeploymentView[]; raw: unknown }> {

@@ -22,6 +22,7 @@ import {
 	platformOriginFor,
 	validateDomainSettings,
 } from '../../packages/contracts/src/platform-domains.ts';
+import { VAPID_PRIVATE_KEY_ENV, VAPID_PUBLIC_KEY_ENV, ensureVapidKeys } from '../../packages/contracts/src/vapid.ts';
 import { readEnvFile, writeEnvFile } from '../install/env-file.ts';
 import { CLICKHOUSE_PATHS, clickhouseInstalled, ensureClickHouse, uninstallClickHouse } from '../systemd/clickhouse.ts';
 
@@ -233,6 +234,8 @@ export class PlatformConfigHelper {
 					return request.enabled ? await this.installTelemetryFlow() : await this.removeTelemetryFlow(request.purgeData);
 				case 'domains':
 					return await this.domains(request);
+				case 'push-keys':
+					return await this.pushKeys();
 			}
 		} catch (error) {
 			return this.finish('error', (error as Error).message);
@@ -385,6 +388,41 @@ export class PlatformConfigHelper {
 			if (await this.host.platformAnswers(origin)) return true;
 		}
 		return false;
+	}
+
+	// ------------------------------------------------------------- push keys
+
+	/**
+	 * Web Push VAPID keys (D108) for a host updated by an updater that predates them. Adds a pair
+	 * only when there is no valid one, then restarts the control plane so it picks them up (the
+	 * dashboard only asks when its own process has none). Reverts if it does not come back.
+	 */
+	private async pushKeys(): Promise<PlatformConfigStatus> {
+		const { envFile } = this.layout;
+		const env = readEnvFile(envFile);
+		const added = ensureVapidKeys(env);
+		const previous = `${envFile}.previous`;
+		if (added) {
+			copyFileSync(envFile, previous);
+			this.host.chownRootSkiff(previous);
+			writeEnvFile(envFile, env);
+			this.host.chownRootSkiff(envFile);
+			this.host.log(`added ${VAPID_PUBLIC_KEY_ENV} and ${VAPID_PRIVATE_KEY_ENV} to ${envFile}`);
+		}
+		const changed = added ? [VAPID_PUBLIC_KEY_ENV, VAPID_PRIVATE_KEY_ENV] : [];
+		this.progress({ phase: 'restarting', message: 'Restarting the control plane with the push keys', changed });
+		if (await this.restartControlPlane())
+			return this.finish('applied', added ? 'Push notifications are set up.' : 'The push keys were already there; the control plane now uses them.', changed);
+		if (!added) return this.finish('error', `The control plane did not come back after a restart. Check journalctl -u ${CONTROL_PLANE}.`, changed);
+		renameSync(previous, envFile);
+		const recovered = await this.restartControlPlane();
+		return this.finish(
+			recovered ? 'reverted' : 'error',
+			recovered
+				? 'The control plane did not start with the push keys, so they were removed again.'
+				: `The control plane did not start with or without the push keys. Check journalctl -u ${CONTROL_PLANE}.`,
+			changed,
+		);
 	}
 
 	private async restartControlPlane(): Promise<boolean> {

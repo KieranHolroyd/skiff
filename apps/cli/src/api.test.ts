@@ -242,6 +242,45 @@ describe('ApiClient', () => {
 		);
 	});
 
+	test('createProject sends runtime and listSecrets reads secret metadata', async () => {
+		let body: unknown;
+		await withServer(
+			async (request) => {
+				const url = new URL(request.url);
+				if (url.pathname === '/api/v1/projects' && request.method === 'POST') {
+					body = await request.json();
+					return Response.json({ project: { id: 'prj_1', slug: 'fn-app', runtime: 'function' } });
+				}
+				if (url.pathname === '/api/v1/secrets') {
+					return Response.json({
+						secrets: [
+							{ id: 'sec_1', name: 'API_KEY', type: 'secret', version: 2, projectId: 'prj_1' },
+							{ id: 'sec_2', name: 'ORG_KEY', type: 'secret', version: 1, projectId: null },
+						],
+					});
+				}
+				return new Response('not found', { status: 404 });
+			},
+			async (server) => {
+				const client = new ApiClient({ baseUrl: baseUrl(server), token });
+				const created = await client.createProject({ slug: 'fn-app', runtime: 'function' });
+				expect(created.project.runtime).toBe('function');
+				expect(body).toEqual({
+					slug: 'fn-app',
+					runtime: 'function',
+					productionAccess: 'public',
+					previewAccess: 'platform',
+				});
+
+				const { secrets } = await client.listSecrets();
+				expect(secrets).toEqual([
+					{ id: 'sec_1', name: 'API_KEY', type: 'secret', version: 2, projectId: 'prj_1' },
+					{ id: 'sec_2', name: 'ORG_KEY', type: 'secret', version: 1, projectId: null },
+				]);
+			},
+		);
+	});
+
 	test('uses the expected promote and rollback endpoints', async () => {
 		const calls: Array<{ path: string; body: unknown }> = [];
 		await withServer(

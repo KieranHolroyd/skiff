@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { page } from '$app/state';
 	import { createVirtualizer } from '@tanstack/svelte-virtual';
 	import type { DeploymentView, ProjectView } from '@skiff/core';
 	import type { BuildView, LogEventView, LogLevel } from '@skiff/contracts';
@@ -58,6 +59,9 @@
 		/** Scoped to one deployment and its build (the deployment page): no pickers. */
 		single?: boolean;
 	} = $props();
+
+	/** Settings → Policies log retention; the layout loads it. */
+	const logRetentionDays = $derived<number>(page.data.policies?.logRetentionDays ?? 7);
 
 	let events = $state<LogEventView[]>([]);
 	let phase = $state<Phase>('connecting');
@@ -367,7 +371,9 @@
 				</Card.Title>
 				<Card.Description>
 					Tail deployment output and git build output without refreshing. Lines are drained from the
-					node, kept for seven days, and resume from the last cursor after a reconnect.
+					node, kept for {logRetentionDays}
+					{logRetentionDays === 1 ? 'day' : 'days'}, and resume from the last cursor after a
+					reconnect.
 				</Card.Description>
 			</div>
 		</div>
@@ -629,7 +635,8 @@
 				{#if cursor}<span class="hidden sm:inline">cursor {cursor}</span>{/if}
 				{#if errorText}<span class="text-warning">{errorText}</span>{/if}
 				<span class="ml-auto hidden items-center gap-1 sm:inline-flex">
-					<WifiIcon class="size-3" /> 7-day retention
+					<WifiIcon class="size-3" />
+					{logRetentionDays}-day retention
 				</span>
 			</div>
 		</div>

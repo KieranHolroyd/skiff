@@ -1,7 +1,7 @@
 import type { Database } from 'bun:sqlite';
 import type { Permission, Principal, Role } from '@skiff/contracts';
 import { roles as roleDefinitions } from '@skiff/contracts';
-import { ForbiddenError } from './errors.ts';
+import { ConflictError, ForbiddenError, ValidationError } from './errors.ts';
 import { newId } from './util.ts';
 
 /**
@@ -159,4 +159,33 @@ export function memberChangeError(actorRole: Role, change: MemberChange, ownerCo
 				return 'An organisation needs at least one owner. Make someone else an owner first.';
 			return undefined;
 	}
+}
+
+/** Organisation slugs: lowercase letters, digits and single hyphens, 2–48 characters. */
+const ORG_SLUG = /^[a-z0-9](?:[a-z0-9]|-(?=[a-z0-9])){1,47}$/;
+
+/**
+ * Rename the principal's organisation (Settings → General). Owners and admins only, from an
+ * interactive session: Better Auth grants both `organization:update`. The slug is display-only
+ * today (no URL or content hostname is derived from it), so changing it moves nothing.
+ */
+export function renameOrganization(
+	sqlite: Database,
+	principal: Principal,
+	input: { name: string; slug: string },
+): { name: string; slug: string } {
+	if (principal.kind !== 'user' || (principal.role !== 'owner' && principal.role !== 'admin'))
+		throw new ForbiddenError('Only an owner or admin can rename the organisation.');
+	const name = input.name.trim().replace(/\s+/g, ' ');
+	const slug = input.slug.trim().toLowerCase();
+	if (name.length < 1 || name.length > 64 || /[\u0000-\u001f\u007f]/.test(name))
+		throw new ValidationError('The name must be 1–64 characters.');
+	if (!ORG_SLUG.test(slug))
+		throw new ValidationError('The slug must be 2–48 lowercase letters, digits or single hyphens.');
+	const taken = sqlite
+		.query<{ id: string }, [string, string]>('SELECT id FROM organization WHERE slug = ? AND id != ?')
+		.get(slug, principal.orgId);
+	if (taken) throw new ConflictError(`The slug "${slug}" is already used by another organisation.`);
+	sqlite.run('UPDATE organization SET name = ?, slug = ? WHERE id = ?', [name, slug, principal.orgId]);
+	return { name, slug };
 }

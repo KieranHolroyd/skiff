@@ -9,6 +9,7 @@ import {
 	databases,
 	nodes,
 	projects,
+	serviceEndpoints,
 	workloads,
 } from '@skiff/db';
 import {
@@ -48,7 +49,6 @@ import {
 	databaseUpdateSchema,
 	orgNetworkName,
 	databaseUpgradeSchema,
-	limits,
 	pitrStanzaFor,
 	requirePermission,
 	validatePitrTargetTime,
@@ -185,6 +185,7 @@ export class DatabaseService {
 		// Features the engine lacks are off, whatever the schema defaulted (docs/DATABASES.md §17).
 		const pooler = input.pooler && info.capabilities.pooler;
 		const backups = info.capabilities.backups;
+		const policies = this.ctx.policies.get();
 
 		const existing = this.ctx.db
 			.select({ id: databases.id, deletedAt: databases.deletedAt })
@@ -273,7 +274,9 @@ export class DatabaseService {
 					ownerSecret,
 					monitorSecret,
 					backupEnabled: backups,
-					nextBackupAt: backups ? nextCronTime('0 3 * * *', now) : null,
+					backupSchedule: policies.databaseBackupSchedule,
+					backupRetentionDays: policies.databaseBackupRetentionDays,
+					nextBackupAt: backups ? nextCronTime(policies.databaseBackupSchedule, now) : null,
 					createdBy: principal.userId,
 					createdAt: now,
 					updatedAt: now,
@@ -530,7 +533,7 @@ export class DatabaseService {
 			.update(databases)
 			.set({
 				deletedAt: now,
-				purgeAt: now + limits.trashDays * DAY_MS,
+				purgeAt: now + this.ctx.policies.trashMs(),
 				status: 'stopped',
 				updatedAt: now
 			})
@@ -2440,7 +2443,7 @@ export class DatabaseService {
 				`"${project.slug}" already uses a database on another node. Attached databases must share a node (D56).`,
 			);
 		const storageNode = this.ctx.storage.requiredNode(project.id);
-		if (storageNode && storageNode !== row.nodeId)
+		if (!this.crossNodeAllowed(project) && storageNode && storageNode !== row.nodeId)
 			throw new ValidationError(
 				`"${project.slug}" uses private storage on another node. Databases and private storage must share a node (D56).`,
 			);
@@ -2507,6 +2510,7 @@ export class DatabaseService {
 
 	/** Problem message when a project's explicit placement can't reach a database on `nodeId`. */
 	placementConflict(project: ProjectRow, nodeId: string): string | null {
+		if (this.crossNodeAllowed(project)) return null;
 		if (project.placement === 'auto' || project.placement === nodeId) return null;
 		if (project.placement === 'edge' && this.ctx.workloads.edgeNode() === nodeId) return null;
 		const node = this.ctx.db.select({ name: nodes.name }).from(nodes).where(eq(nodes.id, nodeId)).get();
@@ -2826,7 +2830,7 @@ export class DatabaseService {
 	}
 
 	/** Databases near their limits, for the maintenance alert pass. */
-	alertCandidates(): Array<{ row: DatabaseRow; kind: 'storage'; ratio: number }> {
+	alertCandidates(threshold = 0.85): Array<{ row: DatabaseRow; kind: 'storage'; ratio: number }> {
 		return this.ctx.db
 			.select()
 			.from(databases)
@@ -2834,7 +2838,7 @@ export class DatabaseService {
 			.all()
 			.flatMap((row) => {
 				const ratio = (row.sizeBytes ?? 0) / (row.storageMb * 1024 * 1024);
-				return ratio >= 0.85 ? [{ row, kind: 'storage' as const, ratio }] : [];
+				return ratio >= threshold ? [{ row, kind: 'storage' as const, ratio }] : [];
 			});
 	}
 
@@ -3111,24 +3115,46 @@ export class DatabaseService {
 
 	private resolveForConsumer(projectId: string, nodeId: string | null, runtime: WorkloadRuntime): ResolvedAttachment[] {
 		if (!nodeId) return [];
-		return this.liveAttachmentRows(projectId)
-			.filter(({ db }) => db.nodeId === nodeId)
-			.map(({ db, prefix }) => {
-				const info = databaseEngineRegistry[db.engine];
-				const user = databaseIdentifier(db.name);
-				const container = runtime === 'container';
-				return {
-					databaseId: db.id,
-					prefix,
-					host: container ? databaseAlias(db.id) : '127.0.0.1',
-					port: container ? info.containerPort : db.hostPort,
-					user,
-					databaseName: databaseUrlDatabase(db.engine, user),
-					scheme: info.scheme,
-					row: db,
-					poolerPort: db.poolerEnabled && info.capabilities.pooler ? db.poolerPort : null,
-				};
-			});
+		return this.liveAttachmentRows(projectId).flatMap(({ db, prefix }) => {
+			const info = databaseEngineRegistry[db.engine];
+			const user = databaseIdentifier(db.name);
+			const container = runtime === 'container';
+			const sameNode = db.nodeId === nodeId;
+			const endpoint = sameNode
+				? null
+				: this.ctx.db
+						.select({ localPort: serviceEndpoints.localPort })
+						.from(serviceEndpoints)
+						.where(
+							and(
+								eq(serviceEndpoints.consumerNodeId, nodeId),
+								eq(serviceEndpoints.serviceKind, 'database'),
+								eq(serviceEndpoints.serviceId, db.id),
+							),
+						)
+						.get() ?? null;
+			if (!sameNode && !endpoint) return [];
+			return [{
+				databaseId: db.id,
+				prefix,
+				host: sameNode ? (container ? databaseAlias(db.id) : '127.0.0.1') : '127.0.0.1',
+				port: sameNode ? (container ? info.containerPort : db.hostPort) : endpoint!.localPort,
+				user,
+				databaseName: databaseUrlDatabase(db.engine, user),
+				scheme: info.scheme,
+				row: db,
+				poolerPort:
+					sameNode && db.poolerEnabled && info.capabilities.pooler ? db.poolerPort : null,
+			}];
+		});
+	}
+
+	/** Process apps may reach a database on another node through a service endpoint (C2). */
+	private crossNodeAllowed(project: ProjectRow): boolean {
+		return (
+			featureEnabled(this.ctx.config, 'SERVICE_ENDPOINTS') &&
+			project.runtime !== 'container'
+		);
 	}
 
 	private publicUrlView(row: DatabaseRow): DatabasePublicUrlView {

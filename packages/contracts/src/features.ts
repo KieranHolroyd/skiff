@@ -30,6 +30,15 @@ export interface FeatureFlagDefinition {
 export const FEATURE_ENV_PREFIX = 'SKIFF_FEATURE_';
 
 export const FEATURE_FLAGS = {
+	FUNCTIONS: {
+		name: 'FUNCTIONS',
+		// Phase 1 (docs/FUNCTIONS.md, D110): fetch functions on workerd. Off until a real Debian 13
+		// node passes the phase-1 exit criteria (invariant 11).
+		default: false,
+		area: 'workloads',
+		description:
+			'Deploy Workers-compatible functions on the pinned workerd runtime (docs/FUNCTIONS.md).'
+	},
 	BACKUPS_RESTORE: {
 		name: 'BACKUPS_RESTORE',
 		// Shipped: logical backups and restore-to-new are live. Default on preserves behaviour.
@@ -76,6 +85,18 @@ export const FEATURE_FLAGS = {
 		default: false,
 		area: 'networking',
 		description: 'Private per-org networks that connect workloads and databases across nodes.'
+	},
+	MULTI_NODE_REPLICAS: {
+		name: 'MULTI_NODE_REPLICAS',
+		default: false,
+		area: 'workloads',
+		description: 'Spread HTTP workload replicas across nodes with a load-balanced route (CLUSTERING C4).'
+	},
+	SERVICE_ENDPOINTS: {
+		name: 'SERVICE_ENDPOINTS',
+		default: false,
+		area: 'networking',
+		description: 'Cross-node database attachments through loopback service endpoints (CLUSTERING C2).'
 	},
 	APP_VOLUMES: {
 		name: 'APP_VOLUMES',

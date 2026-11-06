@@ -67,6 +67,14 @@ class FakeRuntime implements HelperRuntime {
 		this.calls.push(`remove:${id}`);
 	}
 
+	async stop(id: string): Promise<void> {
+		this.calls.push(`stop:${id}`);
+	}
+
+	async restart(id: string): Promise<void> {
+		this.calls.push(`restart:${id}`);
+	}
+
 	async purge(id: string): Promise<void> {
 		this.calls.push(`purge:${id}`);
 	}
@@ -386,6 +394,56 @@ describe('helper HTTP surface', () => {
 		expect(await response.json()).toEqual({
 			error: 'systemctl start failed (5): Failed to start skiff-studio.service: Unit skiff-studio.service not found.',
 		});
+	});
+
+	test('stops and restarts a workload through the fixed lifecycle verbs', async () => {
+		const runtime = new FakeRuntime();
+		const stopped = await handler(runtime)(
+			new Request('http://localhost/v1/workloads/wld_abc123/stop', { method: 'POST' }),
+		);
+		expect(stopped.status).toBe(200);
+		expect(await stopped.json()).toEqual({ ok: true, stopped: 'wld_abc123' });
+
+		const restarted = await handler(runtime)(
+			new Request('http://localhost/v1/workloads/wld_abc123/restart', { method: 'POST' }),
+		);
+		expect(restarted.status).toBe(200);
+		expect(await restarted.json()).toEqual({ ok: true, restarted: 'wld_abc123' });
+
+		// Idempotent: a second call is the same fixed request, never a new unit name.
+		await handler(runtime)(new Request('http://localhost/v1/workloads/wld_abc123/stop', { method: 'POST' }));
+		await handler(runtime)(new Request('http://localhost/v1/workloads/wld_abc123/restart', { method: 'POST' }));
+		expect(runtime.calls).toEqual([
+			'stop:wld_abc123',
+			'restart:wld_abc123',
+			'stop:wld_abc123',
+			'restart:wld_abc123',
+		]);
+	});
+
+	test('the lifecycle verbs refuse any body, query string or method other than POST', async () => {
+		const runtime = new FakeRuntime();
+		for (const verb of ['stop', 'restart']) {
+			const url = `http://localhost/v1/workloads/wld_abc123/${verb}`;
+			for (const request of [
+				post(`/v1/workloads/wld_abc123/${verb}`, {}),
+				post(`/v1/workloads/wld_abc123/${verb}`, { unit: 'sshd.service' }),
+				new Request(url, { method: 'POST', body: ' ' }),
+				new Request(`${url}?unit=sshd.service`, { method: 'POST' }),
+			]) {
+				const response = await handler(runtime)(request);
+				expect(response.status).toBe(400);
+				expect(((await response.json()) as { error: string }).error).toMatch(/takes no/);
+			}
+			const get = await handler(runtime)(new Request(url));
+			expect(get.status).toBe(405);
+			expect(get.headers.get('allow')).toBe('POST');
+		}
+		const unsafe = await handler(runtime)(
+			new Request('http://localhost/v1/workloads/..%2Fetc/stop', { method: 'POST' }),
+		);
+		expect(unsafe.status).toBe(400);
+		expect(runtime.calls).toEqual([]);
 	});
 
 	test('accepts a storage workload with agent desired state and strips it to engine + version', async () => {

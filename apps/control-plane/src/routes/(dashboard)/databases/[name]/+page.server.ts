@@ -81,8 +81,27 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		}
 	}
 
+	let replicas: Awaited<ReturnType<typeof core.databaseReplicas.list>> = [];
+	try {
+		replicas = core.databaseReplicas.list(principal, params.name);
+	} catch {
+		replicas = [];
+	}
+	let replicaTargets: NodeCapacityView[] = [];
+	if (dbCan.update && database.engine === 'postgres' && !database.deletedAt) {
+		try {
+			replicaTargets = core.workloads
+				.capacity(principal)
+				.filter((node) => node.nodeId !== database.nodeId && node.status === 'online');
+		} catch {
+			replicaTargets = [];
+		}
+	}
+
 	return {
 		database,
+		replicas,
+		replicaTargets,
 		move,
 		moveTargets,
 		backups: core.databases.listBackups(principal, params.name, { includeDeleted: true }),
@@ -104,6 +123,28 @@ function projectRow(principal: Principal, slug: string) {
 }
 
 export const actions: Actions = {
+	addReplica: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		try {
+			core.databaseReplicas.add(principal, params.name, { node: formString(data, 'node') });
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+		return { success: 'Replica registered. It starts streaming when the node converges.' };
+	},
+
+	removeReplica: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		try {
+			core.databaseReplicas.remove(principal, params.name, formString(data, 'id'));
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+		return { success: 'Replica removed.' };
+	},
+
 	credentials: async ({ locals, params }) => {
 		const principal = locals.principal!;
 		try {
@@ -398,7 +439,7 @@ export const actions: Actions = {
 			return fail(failStatus(caught), toFormFailure(caught));
 		}
 		return {
-			success: `“${params.name}” moved to the trash. Its data stays on the node for 7 days.`
+			success: `“${params.name}” moved to the trash. Its data stays on the node for ${core.policies.get().trashDays} days.`
 		};
 	},
 

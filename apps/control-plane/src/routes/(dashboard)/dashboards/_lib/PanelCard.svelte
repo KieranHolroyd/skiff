@@ -10,6 +10,7 @@
 		QueryResult,
 		QueryVariables
 	} from '@skiff/contracts';
+	import BellPlusIcon from '@lucide/svelte/icons/bell-plus';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import EllipsisVerticalIcon from '@lucide/svelte/icons/ellipsis-vertical';
@@ -26,8 +27,12 @@
 	import { Spinner } from '#lib/components/ui/spinner/index.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
 	import { errorText } from '#lib/query.js';
+	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
+	import { DRAFT_KEY, draftFromPanel } from '../../alerts/_lib/rules.js';
 	import { columnUnits } from './panel.js';
-	import { createPanelQuery } from './panel-query.svelte.js';
+	import { createPanelQuery, referencedVariables } from './panel-query.svelte.js';
 	import type { Names } from './series.js';
 	import type { ResolvedRange } from './time.js';
 	import { interpolate } from './variables.js';
@@ -82,6 +87,30 @@
 	const empty = $derived(result !== undefined && result.rows.length === 0);
 	const title = $derived(interpolate(panel.title, variables));
 	const text = $derived(isText ? interpolate(String(panel.options?.text ?? ''), variables) : '');
+	/** "Create alert…": builder panels with a metric, for people who can write alert rules. */
+	const canAlert = $derived(
+		panel.query?.mode === 'builder' &&
+			panel.query.builder.metrics.length > 0 &&
+			Boolean(page.params.id) &&
+			(page.data.role === 'owner' ||
+				page.data.role === 'admin' ||
+				page.data.can?.manageNodes === true)
+	);
+
+	function createAlert() {
+		const draft = draftFromPanel({
+			query: panel.query,
+			title,
+			variables: referencedVariables(panel.query, variables),
+			dashboardId: page.params.id ?? '',
+			panelId: panel.id
+		});
+		if (!draft) return;
+		sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+		// eslint-disable-next-line svelte/no-navigation-without-resolve -- resolved route plus `?draft`
+		void goto(`${resolve('/(dashboard)/alerts/rules/new')}?draft=1`);
+	}
+
 	const warning = $derived(
 		result?.truncated
 			? `Results were cut off at the server's row limit.${result.notice ? ` ${result.notice}` : ''}`
@@ -176,6 +205,11 @@
 						<DropdownMenu.Item onSelect={() => oninspect?.(result, error)}>
 							<SearchCodeIcon />Inspect
 						</DropdownMenu.Item>
+					{/if}
+					{#if canAlert && !isText}
+						<DropdownMenu.Item onSelect={createAlert}
+							><BellPlusIcon />Create alert…</DropdownMenu.Item
+						>
 					{/if}
 					{#if canEdit && (onduplicate || onremove)}
 						<DropdownMenu.Separator />

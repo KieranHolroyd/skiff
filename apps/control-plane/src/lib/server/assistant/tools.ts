@@ -101,7 +101,13 @@ const WRITE_PERMISSION: Record<string, Permission> = {
 	update_dashboard_panel: 'metrics:read',
 	remove_dashboard_panels: 'metrics:read',
 	update_dashboard: 'metrics:read',
-	delete_dashboard: 'metrics:read'
+	delete_dashboard: 'metrics:read',
+	// Alert rules (docs/ALERTS.md): the service further limits writes to owners/admins, silences to deployers.
+	create_alert_rule: 'metrics:read',
+	update_alert_rule: 'metrics:read',
+	delete_alert_rule: 'metrics:read',
+	silence_alerts: 'metrics:read',
+	acknowledge_alert: 'metrics:read'
 };
 
 /** Every permitted MCP tool, plus the UI guide, for one signed-in user. */

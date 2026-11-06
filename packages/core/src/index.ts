@@ -16,7 +16,16 @@ import { MaintenanceService } from './maintenance.ts';
 import { SecretService } from './secrets.ts';
 import { MetricsService } from './metrics.ts';
 import { MetricsExporter } from './metrics-export.ts';
+import { PlatformPolicyService } from './platform-policies.ts';
 import { ObservabilityService } from './observability.ts';
+import { AlertService } from './alerts.ts';
+import { TopologyService } from './topology.ts';
+import { ServiceEndpointService } from './service-endpoints.ts';
+import { ShareService } from './shares.ts';
+import { DatabaseReplicaService } from './database-replica-service.ts';
+import { StorageReplicationService } from './storage-replication-service.ts';
+import { IngressHaService } from './ingress-ha.ts';
+import { ClusterConfigService } from './cluster-config-service.ts';
 import { WorkloadService } from './workloads.ts';
 import { DatabaseService } from './databases.ts';
 import { DatabaseStudioService } from './database-studio.ts';
@@ -36,6 +45,7 @@ import { ServiceActionsService } from './service-actions.ts';
 import { BackupTargetService } from './backup-targets.ts';
 import { UpgradeService } from './upgrades.ts';
 import { GithubRunnerService } from './github-runners.ts';
+import { FunctionService } from './functions.ts';
 import { TemplateService } from './templates.ts';
 
 export * from './config.ts';
@@ -57,11 +67,15 @@ export * from './maintenance.ts';
 export * from './secrets.ts';
 export * from './metrics.ts';
 export * from './metrics-export.ts';
+export * from './platform-policies.ts';
 export * from './observability.ts';
 export * from './observability-query.ts';
+export * from './alerts.ts';
 export * from './clickhouse.ts';
 export * from './placement.ts';
 export * from './workloads.ts';
+export * from './functions.ts';
+export * from './runtime-tier.ts';
 export * from './github-runners.ts';
 export * from './templates.ts';
 export * from './databases.ts';
@@ -79,6 +93,8 @@ export * from './logs.ts';
 export * from './environments.ts';
 export * from './source.ts';
 export * from './notify.ts';
+export * from './web-push.ts';
+export * from './notify-chat.ts';
 export * from './telemetry.ts';
 export * from './operations/index.ts';
 export * from './scheduler.ts';
@@ -107,7 +123,9 @@ export interface Core {
 	secrets: SecretService;
 	metrics: MetricsService;
 	metricsExport: MetricsExporter;
+	policies: PlatformPolicyService;
 	observability: ObservabilityService;
+	alerts: AlertService;
 	workloads: WorkloadService;
 	databases: DatabaseService;
 	databaseStudio: DatabaseStudioService;
@@ -130,6 +148,22 @@ export interface Core {
 	upgrades: UpgradeService;
 	githubRunners: GithubRunnerService;
 	templates: TemplateService;
+	/** Functions: Workers-compatible workloads on workerd (D110). */
+	functions: FunctionService;
+	/** Fleet topology and blast radius (CLUSTERING §3.6, C0). */
+	topology: TopologyService;
+	/** Cross-node service endpoints (CLUSTERING §4.3, C2). */
+	endpoints: ServiceEndpointService;
+	/** Cluster shares (CLUSTERING §5.2, C3). */
+	shares: ShareService;
+	/** Managed database replicas (CLUSTERING §9.2, C7). */
+	databaseReplicas: DatabaseReplicaService;
+	/** Bucket replication (CLUSTERING §10.2, C9). */
+	storageReplication: StorageReplicationService;
+	/** Ingress HA status (CLUSTERING §7, C5). */
+	ingress: IngressHaService;
+	/** Cluster tunables (CLUSTERING). */
+	cluster: ClusterConfigService;
 }
 
 /**
@@ -146,6 +180,7 @@ export function createCore(options: CoreOptions): Core {
 		now: options.config.now ?? (() => Date.now()),
 	} as unknown as CoreContext;
 
+	ctx.policies = new PlatformPolicyService(ctx);
 	ctx.audit = new AuditService(ctx);
 	ctx.quota = new QuotaService(ctx);
 	ctx.projects = new ProjectService(ctx);
@@ -178,6 +213,14 @@ export function createCore(options: CoreOptions): Core {
 	});
 	ctx.githubRunners = new GithubRunnerService(ctx);
 	ctx.templates = new TemplateService(ctx);
+	ctx.functions = new FunctionService(ctx);
+	ctx.topology = new TopologyService(ctx);
+	ctx.endpoints = new ServiceEndpointService(ctx);
+	ctx.shares = new ShareService(ctx);
+	ctx.databaseReplicas = new DatabaseReplicaService(ctx);
+	ctx.storageReplication = new StorageReplicationService(ctx);
+	ctx.ingress = new IngressHaService(ctx);
+	ctx.cluster = new ClusterConfigService(ctx);
 	const source = new SourceService(ctx);
 
 	const deploy = new DeployService(ctx);
@@ -186,6 +229,7 @@ export function createCore(options: CoreOptions): Core {
 	const metrics = new MetricsService(ctx, options.version);
 	ctx.metricsExport = new MetricsExporter(ctx, () => metrics.platformLines());
 	const observability = new ObservabilityService(ctx);
+	ctx.alerts = new AlertService(ctx, observability);
 
 	return {
 		ctx,
@@ -200,7 +244,9 @@ export function createCore(options: CoreOptions): Core {
 		secrets,
 		metrics,
 		metricsExport: ctx.metricsExport,
+		policies: ctx.policies,
 		observability,
+		alerts: ctx.alerts,
 		workloads: ctx.workloads,
 		databases: ctx.databases,
 		databaseStudio: ctx.databaseStudio,
@@ -223,5 +269,13 @@ export function createCore(options: CoreOptions): Core {
 		upgrades: ctx.upgrades,
 		githubRunners: ctx.githubRunners,
 		templates: ctx.templates,
+		functions: ctx.functions,
+		topology: ctx.topology,
+		endpoints: ctx.endpoints,
+		shares: ctx.shares,
+		databaseReplicas: ctx.databaseReplicas,
+		storageReplication: ctx.storageReplication,
+		ingress: ctx.ingress,
+		cluster: ctx.cluster,
 	};
 }

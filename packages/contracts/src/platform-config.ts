@@ -34,7 +34,7 @@ export const PLATFORM_CONFIG_DEFAULTS = {
 /** Litestream release the helper installs when the host has none (sha256 pinned in the helper). */
 export const LITESTREAM_VERSION = '0.3.13';
 
-export type PlatformConfigSection = 'backups' | 'email' | 'alerts' | 'assistant';
+export type PlatformConfigSection = 'backups' | 'email' | 'sms' | 'alerts' | 'assistant';
 
 /**
  * The only environment keys the dashboard can change, per section. The assistant is optional: it
@@ -50,7 +50,20 @@ export const PLATFORM_CONFIG_SECTIONS = {
 		'SKIFF_SMTP_FROM',
 		'SKIFF_SMTP_SECURE',
 	],
-	alerts: ['SKIFF_ALERT_WEBHOOK', 'SKIFF_ALERT_EMAIL'],
+	/** Twilio, for SMS alerts. `FROM` is a number, a Messaging Service SID or an alphanumeric sender ID. */
+	sms: ['SKIFF_TWILIO_ACCOUNT_SID', 'SKIFF_TWILIO_AUTH_TOKEN', 'SKIFF_TWILIO_FROM'],
+	alerts: [
+		'SKIFF_ALERT_WEBHOOK',
+		'SKIFF_ALERT_EMAIL',
+		'SKIFF_ALERT_SMS',
+		// Chat and push channels (packages/core/src/notify-chat.ts).
+		'SKIFF_ALERT_DISCORD_WEBHOOK',
+		'SKIFF_ALERT_SLACK_WEBHOOK',
+		'SKIFF_ALERT_TELEGRAM_BOT_TOKEN',
+		'SKIFF_ALERT_TELEGRAM_CHAT_ID',
+		'SKIFF_ALERT_NTFY_URL',
+		'SKIFF_ALERT_NTFY_TOKEN',
+	],
 	assistant: [
 		'SKIFF_ASSISTANT_PROVIDER',
 		'SKIFF_ASSISTANT_BASE_URL',
@@ -65,6 +78,12 @@ export type PlatformConfigKey = (typeof PLATFORM_CONFIG_SECTIONS)[PlatformConfig
 export const PLATFORM_CONFIG_SECRET_KEYS: ReadonlySet<string> = new Set([
 	'R2_SECRET_ACCESS_KEY',
 	'SKIFF_SMTP_PASSWORD',
+	'SKIFF_TWILIO_AUTH_TOKEN',
+	// Anyone holding a Discord/Slack webhook URL can post to the channel: treat it as a credential.
+	'SKIFF_ALERT_DISCORD_WEBHOOK',
+	'SKIFF_ALERT_SLACK_WEBHOOK',
+	'SKIFF_ALERT_TELEGRAM_BOT_TOKEN',
+	'SKIFF_ALERT_NTFY_TOKEN',
 	'SKIFF_ASSISTANT_API_KEY',
 ]);
 
@@ -72,12 +91,26 @@ export const PLATFORM_CONFIG_SECRET_KEYS: ReadonlySet<string> = new Set([
 export const PLATFORM_CONFIG_REQUIRED: Record<PlatformConfigSection, readonly PlatformConfigKey[]> = {
 	backups: ['R2_ACCOUNT_ID', 'R2_BUCKET', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'],
 	email: ['SKIFF_SMTP_HOST', 'SKIFF_SMTP_PORT', 'SKIFF_SMTP_FROM'],
+	sms: ['SKIFF_TWILIO_ACCOUNT_SID', 'SKIFF_TWILIO_AUTH_TOKEN', 'SKIFF_TWILIO_FROM'],
 	alerts: [],
 	assistant: ['SKIFF_ASSISTANT_BASE_URL', 'SKIFF_ASSISTANT_MODEL'],
 };
 
 const HOSTNAME = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/i;
 const EMAIL = /^[^\s@<>"]{1,64}@[a-z0-9.-]{1,253}\.[a-z]{2,}$/i;
+/** E.164: `+`, country code, subscriber number; 15 digits at most. */
+export const E164 = /^\+[1-9]\d{6,14}$/;
+/** At most this many SMS alert recipients: every alert is billed once per number. */
+export const MAX_SMS_RECIPIENTS = 5;
+
+/** `SKIFF_ALERT_SMS` is a comma-separated list of E.164 numbers. */
+export function parseSmsRecipients(value: string | undefined): string[] {
+	return (value ?? '')
+		.split(',')
+		.map((number) => number.trim())
+		.filter(Boolean);
+}
+
 /** Printable, single line, no characters that systemd or the shell readers would reinterpret oddly. */
 const PRINTABLE = /^[\x20-\x7e]*$/;
 
@@ -128,8 +161,51 @@ export function validatePlatformConfigValue(key: PlatformConfigKey, value: strin
 			return value.length <= 2048 && PRINTABLE.test(value) && validUrl(value, ['https:', 'http:'])
 				? null
 				: 'must be an http(s) URL without credentials';
+		case 'SKIFF_ALERT_DISCORD_WEBHOOK':
+			return /^https:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/api\/(?:v\d{1,2}\/)?webhooks\/\d{5,25}\/[A-Za-z0-9_-]{20,100}(?:\?thread_id=\d{5,25})?$/.test(
+				value,
+			)
+				? null
+				: 'must be a Discord webhook URL, e.g. https://discord.com/api/webhooks/<id>/<token>';
+		case 'SKIFF_ALERT_SLACK_WEBHOOK':
+			return value.length <= 2048 && PRINTABLE.test(value) && validUrl(value, ['https:'])
+				? null
+				: 'must be an https:// incoming-webhook URL without credentials';
+		case 'SKIFF_ALERT_TELEGRAM_BOT_TOKEN':
+			return /^\d{5,20}:[A-Za-z0-9_-]{30,64}$/.test(value) ? null : 'must be a bot token from @BotFather, e.g. 123456:ABC…';
+		case 'SKIFF_ALERT_TELEGRAM_CHAT_ID':
+			return /^(?:-?\d{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31})$/.test(value)
+				? null
+				: 'must be a numeric chat id (groups start with -) or a @channelname';
+		case 'SKIFF_ALERT_NTFY_URL': {
+			if (value.length > 2048 || !PRINTABLE.test(value) || !validUrl(value, ['https:', 'http:']))
+				return 'must be an http(s) URL without credentials';
+			const url = new URL(value);
+			const topic = url.pathname.split('/').filter(Boolean).pop() ?? '';
+			return !url.search && !url.hash && /^[A-Za-z0-9_-]{1,64}$/.test(topic)
+				? null
+				: 'must be a topic URL, e.g. https://ntfy.sh/my-skiff-alerts';
+		}
+		case 'SKIFF_ALERT_NTFY_TOKEN':
+			return /^[A-Za-z0-9_-]{8,128}$/.test(value) ? null : 'must be an ntfy access token, e.g. tk_…';
 		case 'SKIFF_ALERT_EMAIL':
 			return EMAIL.test(value) ? null : 'must be an email address';
+		case 'SKIFF_ALERT_SMS': {
+			const numbers = parseSmsRecipients(value);
+			if (numbers.length === 0) return 'must list at least one phone number';
+			if (numbers.length > MAX_SMS_RECIPIENTS) return `must list at most ${MAX_SMS_RECIPIENTS} phone numbers`;
+			const bad = numbers.find((number) => !E164.test(number));
+			if (bad) return `${bad} is not an international number, e.g. +447700900123`;
+			return new Set(numbers).size === numbers.length ? null : 'must not list a number twice';
+		}
+		case 'SKIFF_TWILIO_ACCOUNT_SID':
+			return /^AC[0-9a-f]{32}$/i.test(value) ? null : 'must be the Account SID: AC followed by 32 hex characters';
+		case 'SKIFF_TWILIO_AUTH_TOKEN':
+			return /^[A-Za-z0-9]{32}$/.test(value) ? null : 'must be the 32-character Auth Token';
+		case 'SKIFF_TWILIO_FROM':
+			return E164.test(value) || /^MG[0-9a-f]{32}$/i.test(value) || /^(?=.*[A-Za-z])[A-Za-z0-9 ]{1,11}$/.test(value)
+				? null
+				: 'must be a Twilio number (+447700900123), a Messaging Service SID (MG…) or a sender ID of up to 11 letters and digits';
 		case 'SKIFF_ASSISTANT_PROVIDER':
 			return ['openai', 'openai-compatible', 'openrouter', 'ollama'].includes(value)
 				? null
@@ -173,6 +249,11 @@ export type PlatformConfigRequest = RequestBase &
 		/** Start the restore drill now. */
 		| { action: 'restore-drill' }
 		/**
+		 * Create the Web Push VAPID key pair in skiff.env if it is missing (D108), then restart the
+		 * control plane. Never replaces a valid pair: that would orphan every subscribed device.
+		 */
+		| { action: 'push-keys' }
+		/**
 		 * Install (and start) or remove the optional ClickHouse telemetry store (D101). Removing
 		 * keeps the stored telemetry unless `purgeData`.
 		 */
@@ -207,6 +288,8 @@ export function parsePlatformConfigRequest(
 	switch (input.action) {
 		case 'restore-drill':
 			return { ok: true, request: { ...base, action: 'restore-drill' } };
+		case 'push-keys':
+			return { ok: true, request: { ...base, action: 'push-keys' } };
 		case 'backups':
 			if (typeof input.enabled !== 'boolean') return { ok: false, error: 'enabled must be a boolean' };
 			return { ok: true, request: { ...base, action: 'backups', enabled: input.enabled } };

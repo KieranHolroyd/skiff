@@ -39,7 +39,15 @@ export function errorResponse(error: unknown): Response {
 		);
 	if (error instanceof CoreError)
 		return json(
-			{ error: error.code, message: error.message, ...(('suggestions' in error && Array.isArray(error.suggestions)) ? { suggestions: error.suggestions } : {}) },
+			{
+				error: error.code,
+				message: error.message,
+				...(('suggestions' in error && Array.isArray(error.suggestions)) ? { suggestions: error.suggestions } : {}),
+				// A core ValidationError carries zod issues; surface them like a request-body 422.
+				...(('issues' in error && Array.isArray(error.issues) && error.issues.length)
+					? { issues: (error.issues as Array<{ path?: unknown; message?: unknown }>).map((issue) => ({ path: issue.path ?? [], message: String(issue.message ?? '') })) }
+					: {}),
+			},
 			error.status,
 		);
 	if (error instanceof Response) return error;

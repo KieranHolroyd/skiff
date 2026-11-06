@@ -1,5 +1,8 @@
 <script lang="ts">
+	import { enhance } from '$app/forms';
 	import { resolve } from '$app/paths';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
+	import { toast } from 'svelte-sonner';
 	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
 	import BellRingIcon from '@lucide/svelte/icons/bell-ring';
 	import CheckIcon from '@lucide/svelte/icons/check';
@@ -21,6 +24,7 @@
 	import * as Avatar from '#lib/components/ui/avatar/index.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
+	import { Input } from '#lib/components/ui/input/index.js';
 	import { Progress } from '#lib/components/ui/progress/index.js';
 	import type { Tone } from '#lib/status.js';
 	import Panel from '../_lib/Panel.svelte';
@@ -42,6 +46,18 @@
 	);
 
 	const orgMark = $derived(initials(data.org.name));
+
+	// --- rename (owners and admins) ---------------------------------------------------------------
+
+	let renaming = $state(false);
+	let saving = $state(false);
+	let nameDraft = $state('');
+	let slugDraft = $state('');
+	function startRename() {
+		nameDraft = data.org.name;
+		slugDraft = data.org.slug ?? '';
+		renaming = true;
+	}
 
 	// --- platform setup (owners) ----------------------------------------------------------------
 
@@ -134,22 +150,87 @@
 				class="flex size-14 shrink-0 items-center justify-center rounded-xl bg-brand text-lg font-semibold tracking-tight text-brand-foreground shadow-sm ring-4 ring-brand/10"
 				aria-hidden="true">{orgMark}</span
 			>
-			<div class="min-w-0 flex-1 space-y-1">
-				<h3 id="org-name" class="truncate text-xl font-semibold tracking-tight">
-					{data.org.name}
-				</h3>
-				<p class="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
-					<span class="font-mono text-xs">{data.org.slug ?? 'no slug'}</span>
-					<span aria-hidden="true">·</span>
-					<span>You are {data.role === 'admin' || data.role === 'owner' ? 'an' : 'a'}</span>
-					<Badge variant={roleBadge(data.role)} class="capitalize">{data.role}</Badge>
-					{#if data.platformAdmin}
-						<Badge variant="outline" title="Manages nodes and installs Skiff updates"
-							><ServerCogIcon />Platform admin</Badge
+			{#if renaming}
+				<form
+					method="POST"
+					action="?/rename"
+					class="flex min-w-0 flex-1 flex-wrap items-end gap-2"
+					use:enhance={() => {
+						saving = true;
+						return async ({ result, update }) => {
+							await update({ reset: false });
+							saving = false;
+							if (result.type === 'success') {
+								renaming = false;
+								toast.success('Organisation renamed');
+							} else if (result.type === 'failure')
+								toast.error(
+									String(
+										(result.data as { message?: unknown } | undefined)?.message ??
+											'Could not rename'
+									)
+								);
+						};
+					}}
+				>
+					<label class="grid min-w-48 flex-1 gap-1 text-xs text-muted-foreground">
+						Name
+						<Input
+							name="name"
+							required
+							maxlength={64}
+							bind:value={nameDraft}
+							aria-label="Organisation name"
+						/>
+					</label>
+					<label class="grid min-w-40 gap-1 text-xs text-muted-foreground">
+						Slug
+						<Input
+							name="slug"
+							required
+							minlength={2}
+							maxlength={48}
+							pattern="[a-z0-9]+(-[a-z0-9]+)*"
+							class="font-mono"
+							bind:value={slugDraft}
+							aria-label="Organisation slug"
+						/>
+					</label>
+					<div class="flex gap-2">
+						<Button type="submit" size="sm" disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
+						<Button type="button" size="sm" variant="ghost" onclick={() => (renaming = false)}
+							>Cancel</Button
 						>
-					{/if}
-				</p>
-			</div>
+					</div>
+				</form>
+			{:else}
+				<div class="min-w-0 flex-1 space-y-1">
+					<h3 id="org-name" class="flex items-center gap-2 text-xl font-semibold tracking-tight">
+						<span class="truncate">{data.org.name}</span>
+						{#if data.canRename}
+							<Button
+								variant="ghost"
+								size="icon-sm"
+								class="text-muted-foreground"
+								title="Rename organisation"
+								aria-label="Rename organisation"
+								onclick={startRename}><PencilIcon class="size-3.5" /></Button
+							>
+						{/if}
+					</h3>
+					<p class="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+						<span class="font-mono text-xs">{data.org.slug ?? 'no slug'}</span>
+						<span aria-hidden="true">·</span>
+						<span>You are {data.role === 'admin' || data.role === 'owner' ? 'an' : 'a'}</span>
+						<Badge variant={roleBadge(data.role)} class="capitalize">{data.role}</Badge>
+						{#if data.platformAdmin}
+							<Badge variant="outline" title="Manages nodes and installs Skiff updates"
+								><ServerCogIcon />Platform admin</Badge
+							>
+						{/if}
+					</p>
+				</div>
+			{/if}
 		</div>
 		<dl class="relative grid border-t text-sm sm:grid-cols-3 sm:divide-x">
 			<div class="space-y-1 px-5 py-3.5">

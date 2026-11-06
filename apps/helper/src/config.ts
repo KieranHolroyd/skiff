@@ -25,6 +25,8 @@ export interface HelperConfig {
 	releaseDirs: string[];
 	/** Absolute bun used for the default `bun run start` process command. */
 	bunPath: string;
+	/** Root of the pinned workerd installations: `<workerdDir>/<version>/workerd` (FN1). */
+	workerdDir: string;
 	systemctlPath: string;
 	/** Absolute journalctl used to drain workload stdout/stderr for the agent. */
 	journalctlPath: string;
@@ -160,6 +162,7 @@ export function loadHelperConfig(env: Env = process.env): HelperConfig {
 		stateDir: absolute(env, 'SKIFF_HELPER_STATE_DIR', '/var/lib/skiff-workloads'),
 		releaseDirs: releaseDirs(optional(env, 'SKIFF_HELPER_RELEASE_DIRS', DEFAULT_RELEASE_DIRS.join(','))),
 		bunPath: absolute(env, 'SKIFF_HELPER_BUN_PATH', '/usr/local/bin/bun'),
+		workerdDir: absolute(env, 'SKIFF_HELPER_WORKERD_DIR', '/usr/lib/skiff/workerd'),
 		systemctlPath: absolute(env, 'SKIFF_HELPER_SYSTEMCTL', '/usr/bin/systemctl'),
 		journalctlPath: absolute(env, 'SKIFF_HELPER_JOURNALCTL', '/usr/bin/journalctl'),
 		podmanPath: absolute(env, 'SKIFF_HELPER_PODMAN', '/usr/bin/podman'),

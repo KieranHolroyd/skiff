@@ -5,6 +5,7 @@ import {
 	storageAttachments,
 	storageBuckets,
 	storageInstances,
+	serviceEndpoints,
 	storageKeys,
 	workloads,
 } from '@skiff/db';
@@ -17,7 +18,6 @@ import {
 	STORAGE_USER_KEY_PREFIX,
 	bucketCreateSchema,
 	bucketUpdateSchema,
-	limits,
 	orgNetworkName,
 	requirePermission,
 	storageAlias,
@@ -329,7 +329,7 @@ export class StorageService {
 		const now = this.ctx.now();
 		this.ctx.db
 			.update(storageInstances)
-			.set({ deletedAt: now, purgeAt: now + limits.trashDays * DAY_MS, status: 'stopped', updatedAt: now })
+			.set({ deletedAt: now, purgeAt: now + this.ctx.policies.trashMs(), status: 'stopped', updatedAt: now })
 			.where(eq(storageInstances.id, row.id))
 			.run();
 		this.ctx.audit.record({
@@ -801,7 +801,7 @@ export class StorageService {
 		this.assertGrants(row, input.grants);
 		if (!row.public) {
 			const pinned = this.ctx.workloads.attachmentNode(project.id);
-			if (pinned && pinned !== row.nodeId)
+			if (!this.crossNodeAllowed(project) && pinned && pinned !== row.nodeId)
 				throw new ValidationError(
 					`"${project.slug}" already uses a database or private storage on another node. Private storage must share that node; make "${row.name}" public to use it from anywhere.`,
 				);
@@ -921,8 +921,14 @@ export class StorageService {
 		return nodeIds[0] ?? null;
 	}
 
+	/** Process apps may reach private storage on another node through a service endpoint (C2). */
+	private crossNodeAllowed(project: ProjectRow): boolean {
+		return featureEnabled(this.ctx.config, 'SERVICE_ENDPOINTS') && project.runtime !== 'container';
+	}
+
 	/** Problem message when a project's explicit placement can't reach private storage on `nodeId`. */
 	placementConflict(project: ProjectRow, nodeId: string): string | null {
+		if (this.crossNodeAllowed(project)) return null;
 		if (project.placement === 'auto' || project.placement === nodeId) return null;
 		if (project.placement === 'edge' && this.ctx.workloads.edgeNode() === nodeId) return null;
 		const node = this.ctx.db.select({ name: nodes.name }).from(nodes).where(eq(nodes.id, nodeId)).get();
@@ -1308,7 +1314,7 @@ export class StorageService {
 	}
 
 	/** Instances above 85% of their storage budget, for the maintenance alert pass. */
-	alertCandidates(): Array<{ row: StorageRow; ratio: number }> {
+	alertCandidates(threshold = 0.85): Array<{ row: StorageRow; ratio: number }> {
 		return this.ctx.db
 			.select()
 			.from(storageInstances)
@@ -1316,7 +1322,7 @@ export class StorageService {
 			.all()
 			.flatMap((row) => {
 				const ratio = (row.usedBytes ?? 0) / (row.storageMb * 1024 * 1024);
-				return ratio >= 0.85 ? [{ row, ratio }] : [];
+				return ratio >= threshold ? [{ row, ratio }] : [];
 			});
 	}
 
@@ -1603,7 +1609,22 @@ export class StorageService {
 						: `http://127.0.0.1:${storage.hostPort}`;
 				return [{ storage, attachment, grants, endpoint }];
 			}
-			// Another node: only public instances are reachable, through the edge (S5).
+			// Another node: a private instance is reachable through the consumer's loopback endpoint
+			// (C2); a public one still uses its edge route (S5).
+			if (runtime === 'process' && featureEnabled(this.ctx.config, 'SERVICE_ENDPOINTS')) {
+				const endpoint = this.ctx.db
+					.select({ localPort: serviceEndpoints.localPort })
+					.from(serviceEndpoints)
+					.where(
+						and(
+							eq(serviceEndpoints.consumerNodeId, nodeId),
+							eq(serviceEndpoints.serviceKind, 'storage'),
+							eq(serviceEndpoints.serviceId, storage.id),
+						),
+					)
+					.get();
+				if (endpoint) return [{ storage, attachment, grants, endpoint: `http://127.0.0.1:${endpoint.localPort}` }];
+			}
 			const publicUrl = this.publicUrl(storage);
 			return publicUrl ? [{ storage, attachment, grants, endpoint: publicUrl }] : [];
 		});

@@ -11,9 +11,6 @@ import { projectOwnedTables } from '../projects.ts';
 import type { DomainRow } from '../domains.ts';
 import type { ActionDefinition, ItemResult, OperationParams, PlannedItem, RunContext, StoredItem } from './types.ts';
 
-const DAY_MS = 86_400_000;
-/** Deleted deployments and expired redemptions are kept this long for history (matches maintenance). */
-const HISTORY_MS = 30 * DAY_MS;
 const ACTIVE_WORKLOAD = "('pending','starting','running')";
 /** Tables cleaned up under `project_rows`, plus share links (their redemptions go with them). */
 const ORPHAN_TABLES = [...projectOwnedTables, 'share_links'] as const;
@@ -144,7 +141,7 @@ const categories: Category[] = [
 	{
 		id: 'share_redemptions',
 		async *scan(run, scope) {
-			const cutoff = run.ctx.now() - HISTORY_MS;
+			const cutoff = run.ctx.now() - run.ctx.policies.deletedHistoryMs();
 			// Redemptions carry no org id; scope them through their link (orphans only at platform scope).
 			const orphans = scope.orgId
 				? []
@@ -196,7 +193,7 @@ const categories: Category[] = [
 	{
 		id: 'deployments',
 		async *scan(run, scope) {
-			const cutoff = run.ctx.now() - HISTORY_MS;
+			const cutoff = run.ctx.now() - run.ctx.policies.deletedHistoryMs();
 			const rows = run.ctx.sqlite
 				.query<{ id: string; short_id: string; slug: string | null }, Array<string | number>>(
 					`SELECT d.id, d.short_id, p.slug FROM deployments d LEFT JOIN projects p ON p.id = d.project_id

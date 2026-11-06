@@ -2,6 +2,7 @@
 	import DetailList from '#lib/components/skiff/DetailList.svelte';
 	import { resolve } from '$app/paths';
 	import type { NodeView } from '@skiff/core';
+	import type { NodeRole } from '@skiff/contracts';
 	import { NODE_STORAGE_DEFAULTS, compareSemver, parseSemver } from '@skiff/contracts';
 	import { invalidateAll } from '$app/navigation';
 	import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
@@ -38,6 +39,7 @@
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
+	import { Textarea } from '#lib/components/ui/textarea/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
 	import { Progress } from '#lib/components/ui/progress/index.js';
 	import EmptyState from '../_lib/EmptyState.svelte';
@@ -68,6 +70,11 @@
 	let editSliceMemory = $state(1024);
 	let editCpuWeight = $state(200);
 	let editCanBuild = $state(false);
+	let editZone = $state('default');
+	let editRoles = $state<NodeRole[]>([]);
+	let editLabels = $state('');
+	let editLan = $state('');
+	let editCpuBudget = $state('');
 	let editDataDir = $state('');
 	let editBuildDir = $state('');
 	const storageChanging = $derived(
@@ -83,6 +90,13 @@
 		editSliceMemory = node.sliceMemoryMb;
 		editCpuWeight = node.sliceCpuWeight;
 		editCanBuild = node.canBuild;
+		editZone = node.zone;
+		editRoles = [...node.roles];
+		editLabels = Object.entries(node.labels)
+			.map(([key, value]) => `${key}=${value}`)
+			.join('\n');
+		editLan = node.lanEndpoint ?? '';
+		editCpuBudget = node.cpuBudgetMillis === null ? '' : String(node.cpuBudgetMillis);
 		editDataDir = node.storage.dataDir ?? '';
 		editBuildDir = node.storage.buildDir ?? '';
 		editOpen = true;
@@ -263,7 +277,7 @@
 <div class="space-y-6">
 	<PageHeader
 		target="page.nodes"
-		eyebrow="Platform"
+		eyebrow="Infrastructure"
 		title="Nodes"
 		description="Edge and worker machines running the Skiff agent. Agents pull desired state; the control plane never pushes. App workloads are admitted against each node's workload slice, and a Builder node runs git builds."
 	>
@@ -321,6 +335,12 @@
 								<Card.Title class="flex flex-wrap items-center gap-2">
 									{node.name}
 									<Badge variant="secondary" class="capitalize">{node.mode}</Badge>
+									<Badge variant="outline" class="font-mono text-[11px]">{node.zone}</Badge>
+									{#if node.networkMode === 'skiff'}
+										<Badge variant="outline" class="font-mono text-[11px]">
+											{node.privateAddress ?? 'overlay'}
+										</Badge>
+									{/if}
 									{#if node.canBuild}
 										<Badge variant="brand" class="gap-1">
 											<HammerIcon class="size-3" />Builder
@@ -331,6 +351,15 @@
 								<Card.Description class="truncate font-mono text-xs" title={node.id}>
 									{node.id}
 								</Card.Description>
+								{#if node.networkMode === 'skiff' && node.wireguardStatus}
+									<p class="text-xs text-muted-foreground">
+										{node.wireguardStatus.peers.length} overlay peer
+										{node.wireguardStatus.peers.length === 1 ? '' : 's'}
+										{#if node.wireguardStatus.peers[0]?.latestHandshakeAt}
+											· last handshake {formatDateTime(node.wireguardStatus.peers[0]!.latestHandshakeAt)}
+										{/if}
+									</p>
+								{/if}
 							</div>
 						</div>
 						<Card.Action>
@@ -501,6 +530,7 @@
 									<div class="space-y-1 rounded-md border px-2.5 py-2 text-xs">
 										<div class="flex flex-wrap items-center gap-1.5">
 											<span class="font-medium">{volume.name}</span>
+											<Badge variant="outline" class="font-mono text-[10px]">{volume.class}</Badge>
 											{#if volume.isDefault}<Badge variant="info">Default</Badge>{/if}
 											{#if volume.remote}<Badge variant="outline">Network</Badge>{/if}
 											{#if volume.status !== 'ready'}<StatusBadge status={volume.status} />{/if}
@@ -599,7 +629,8 @@
 		<Alert.Root>
 			<InfoIcon />
 			<Alert.Description>
-				An agent is marked offline after 30 seconds without a heartbeat and alerts after 2 minutes.
+				An agent is marked offline after 30 seconds without a heartbeat and alerts after {data.policies.nodeAlertMinutes}
+				{data.policies.nodeAlertMinutes === 1 ? 'minute' : 'minutes'} (Settings → Policies).
 				Draining stops new placements but keeps existing sites and workloads serving. App workloads
 				run in <code class="font-mono">skiff-workloads.slice</code>. Any node can be a Builder: its
 				<code class="font-mono">skiff-builder.service</code> claims one git build at a time and idles
@@ -618,6 +649,30 @@
 		action="?/createToken"
 		submitLabel="Generate join command"
 	>
+		<Field.Field>
+			<Field.Label>Network</Field.Label>
+			<div class="space-y-2">
+				<label class="flex items-start gap-2 text-sm">
+					<input type="radio" name="networkMode" value="skiff" checked class="mt-1 size-4 accent-brand" />
+					<span>
+						<span class="font-medium">Skiff network (recommended)</span>
+						<span class="block text-xs text-muted-foreground">
+							The node generates its key locally and dials out; no inbound ports, no IP planning.
+						</span>
+					</span>
+				</label>
+				<label class="flex items-start gap-2 text-sm">
+					<input type="radio" name="networkMode" value="external" class="mt-1 size-4 accent-brand" />
+					<span>
+						<span class="font-medium">Existing private network</span>
+						<span class="block text-xs text-muted-foreground">
+							Use an address the edge already reaches (Tailscale, VPC or LAN); host-provisioned.
+						</span>
+					</span>
+				</label>
+			</div>
+		</Field.Field>
+
 		<ol class="space-y-3 text-sm">
 			{#each ['Generate a join command. It works once and expires after one hour.', 'Run it on the new machine, where skiff-agent is installed. It registers the agent with this control plane.', 'The node appears on this page after its first heartbeat, usually within seconds.'] as step, i (i)}
 				<li class="flex gap-3">
@@ -670,6 +725,83 @@
 						{editing.mode === 'edge'
 							? 'Informational on the edge.'
 							: 'host:port the edge proxies to, usually the WireGuard address.'}
+					</Field.Description>
+				</Field.Field>
+			</div>
+
+			<div class="grid gap-4 sm:grid-cols-2">
+				<Field.Field>
+					<Field.Label for="node-zone">Zone</Field.Label>
+					<Input id="node-zone" name="zone" bind:value={editZone} placeholder="home" maxlength={32} />
+					<Field.Description>
+						The failure domain: nodes in one zone share power, uplink and provider fate.
+					</Field.Description>
+				</Field.Field>
+				<Field.Field>
+					<Field.Label for="node-lan-endpoint">LAN endpoint</Field.Label>
+					<Input
+						id="node-lan-endpoint"
+						name="lanEndpoint"
+						bind:value={editLan}
+						placeholder="192.168.1.20:51820"
+						class="font-mono text-sm"
+					/>
+					<Field.Description>
+						Optional private address inside this zone; used for direct peering in C1.
+					</Field.Description>
+				</Field.Field>
+			</div>
+
+			<Field.Field>
+				<Field.Label>Roles</Field.Label>
+				<div class="flex flex-wrap gap-x-5 gap-y-2">
+					{#each ['ingress', 'control', 'compute', 'data', 'build'] as const as role (role)}
+						<label class="flex items-center gap-2 text-sm">
+							<input
+								type="checkbox"
+								name="roles"
+								value={role}
+								bind:group={editRoles}
+								class="size-4 accent-brand"
+							/>
+							{role}
+						</label>
+					{/each}
+				</div>
+				<Field.Description>
+					What this node may run. Removing a role is refused while a workload, database or
+					storage instance still uses it.
+				</Field.Description>
+			</Field.Field>
+
+			<div class="grid gap-4 sm:grid-cols-2">
+				<Field.Field>
+					<Field.Label for="node-labels">Labels</Field.Label>
+					<Textarea
+						id="node-labels"
+						name="labels"
+						bind:value={editLabels}
+						rows={3}
+						placeholder={'tier=critical\nowner=media'}
+						class="font-mono text-sm"
+					/>
+					<Field.Description>
+						One key=value per line. Placement constraints can match them; skiff.io/ is reserved.
+					</Field.Description>
+				</Field.Field>
+				<Field.Field>
+					<Field.Label for="node-cpu-budget">CPU budget (millis)</Field.Label>
+					<Input
+						id="node-cpu-budget"
+						name="cpuBudgetMillis"
+						type="number"
+						min="100"
+						max="1000000"
+						bind:value={editCpuBudget}
+						placeholder="No explicit cap"
+					/>
+					<Field.Description>
+						Optional reservation ceiling for this node's workloads. Blank leaves it uncapped.
 					</Field.Description>
 				</Field.Field>
 			</div>

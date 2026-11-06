@@ -12,10 +12,10 @@
 	import { roleBadge } from './_lib/roles.js';
 	import {
 		GROUP_LABELS,
+		GROUP_ORDER,
 		sectionForPath,
 		visibleSections,
-		type Section,
-		type SectionGroup
+		type Section
 	} from './_lib/sections.js';
 
 	let { data, children } = $props();
@@ -29,13 +29,11 @@
 	);
 
 	const groups = $derived(
-		(['you', 'organisation', 'platform'] as SectionGroup[])
-			.map((group) => ({
-				id: group,
-				label: GROUP_LABELS[group],
-				items: sections.filter((entry) => entry.group === group)
-			}))
-			.filter((group) => group.items.length > 0)
+		GROUP_ORDER.map((group) => ({
+			id: group,
+			label: GROUP_LABELS[group],
+			items: sections.filter((entry) => entry.group === group)
+		})).filter((group) => group.items.length > 0)
 	);
 
 	const current = $derived(sectionForPath(page.url.pathname, sections));

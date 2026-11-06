@@ -365,3 +365,210 @@ describe('node updates from the dashboard (D99)', () => {
 		expect(() => fleet.nodes.requestUpdate(admin, 'nod_missing')).toThrow();
 	});
 });
+
+describe('cluster topology settings', () => {
+	test('a joined worker defaults to the default zone, worker roles and no labels', () => {
+		const fresh = joinNode('cluster-defaults');
+		const view = core.nodes.get(fresh.nodeId);
+		expect(view.zone).toBe('default');
+		expect(view.roles).toEqual(['compute', 'data']);
+		expect(view.labels).toEqual({});
+		expect(view.derivedLabels).toEqual({});
+		expect(view.hardware).toBeNull();
+	});
+
+	test('edits zone, roles, labels, LAN endpoint and CPU budget', () => {
+		const fresh = joinNode('cluster-settings');
+		const updated = core.nodes.update(admin, fresh.nodeId, {
+			zone: 'cloud-b',
+			roles: ['compute', 'data', 'build'],
+			labels: { tier: 'critical', owner: 'media' },
+			lanEndpoint: '192.168.1.20:51820',
+			cpuBudgetMillis: 8000,
+		});
+		expect(updated).toMatchObject({
+			zone: 'cloud-b',
+			roles: ['compute', 'data', 'build'],
+			labels: { tier: 'critical', owner: 'media' },
+			lanEndpoint: '192.168.1.20:51820',
+			cpuBudgetMillis: 8000,
+		});
+	});
+
+	test('refuses reserved skiff.io labels and bad zones', () => {
+		const fresh = joinNode('cluster-validation');
+		expect(() => core.nodes.update(admin, fresh.nodeId, { labels: { 'skiff.io/arch': 'arm64' } })).toThrow(/reserved/);
+		expect(() => core.nodes.update(admin, fresh.nodeId, { zone: 'Cloud B' })).toThrow();
+	});
+
+	test('refuses dropping a role while a database runs there', () => {
+		const fresh = joinNode('cluster-role-guard');
+		const now = Date.now();
+		opened.sqlite.run(
+			`INSERT INTO databases (id, org_id, name, engine, version, node_id, host_port, memory_mb, owner_secret, monitor_secret, created_by, created_at, updated_at)
+			 VALUES ('db_role', 'org_1', 'role-guard', 'postgres', '16', ?, 15432, 256, 'owner', 'monitor', 'user_1', ?, ?)`,
+			[fresh.nodeId, now, now],
+		);
+		expect(() => core.nodes.update(admin, fresh.nodeId, { roles: ['compute'] })).toThrow(/still runs 1 database/);
+		opened.sqlite.run(`DELETE FROM databases WHERE id = 'db_role'`);
+		expect(core.nodes.update(admin, fresh.nodeId, { roles: ['compute'] }).roles).toEqual(['compute']);
+	});
+
+	test('stores hardware facts and derives skiff.io labels', () => {
+		const fresh = joinNode('cluster-hardware');
+		core.nodes.heartbeat(fresh.token, {
+			nodeId: fresh.nodeId,
+			agentVersion: '0.1.0',
+			actualStateVersion: 1,
+			status: 'online',
+			caddyOk: true,
+			releases: [],
+			hardware: {
+				arch: 'x64',
+				cpuModel: 'AMD Ryzen 9 7950X',
+				cores: 16,
+				threads: 32,
+				memoryBytes: 64 * 1024 ** 3,
+				virtualization: 'kvm',
+				gpus: [{ name: 'NVIDIA RTX 4090', memoryMiB: 24576 }],
+			},
+		});
+		const view = core.nodes.get(fresh.nodeId);
+		expect(view.hardware).toMatchObject({ arch: 'x64', cores: 16, virtualization: 'kvm' });
+		expect(view.derivedLabels).toMatchObject({
+			'skiff.io/arch': 'x64',
+			'skiff.io/virt': 'kvm',
+			'skiff.io/gpu': 'nvidia',
+			'skiff.io/gpu-count': '1',
+			'skiff.io/memory-gb': '64',
+		});
+		expect(view.hardwareAt).not.toBeNull();
+		expect(view.hardwareError).toBeNull();
+	});
+
+	test('a bad hardware block does not clear the last good one', () => {
+		const fresh = joinNode('cluster-hardware-bad');
+		core.nodes.heartbeat(fresh.token, {
+			nodeId: fresh.nodeId,
+			agentVersion: '0.1.0',
+			actualStateVersion: 1,
+			status: 'online',
+			caddyOk: true,
+			releases: [],
+			hardware: { arch: 'arm64', cores: 8 },
+		});
+		core.nodes.heartbeat(fresh.token, {
+			nodeId: fresh.nodeId,
+			agentVersion: '0.1.0',
+			actualStateVersion: 1,
+			status: 'online',
+			caddyOk: true,
+			releases: [],
+			hardware: { cores: -1 } as never,
+		});
+		const view = core.nodes.get(fresh.nodeId);
+		expect(view.hardware?.arch).toBe('arm64');
+		expect(view.hardwareError).toMatch(/greater than or equal to 1|Too small/);
+	});
+});
+
+describe('managed overlay join (C1)', () => {
+	const key = `${'A'.repeat(43)}=`;
+
+	test('allocates an address and returns the peer state', async () => {
+		const token = core.nodes.createJoinToken(admin, 'managed-1').token;
+		const joined = core.nodes.join({
+			token,
+			name: 'managed-1',
+			networkMode: 'skiff',
+			wireguardPublicKey: key,
+		});
+		expect(joined.wireguard).toMatchObject({
+			mode: 'skiff',
+			address: '10.88.1.1',
+			cidr: '10.88.0.0/22',
+			listenPort: 51820,
+		});
+		const view = core.nodes.get(joined.nodeId);
+		expect(view).toMatchObject({
+			networkMode: 'skiff',
+			privateAddress: '10.88.1.1',
+			wgPublicKey: key,
+		});
+		expect(view.publicAddress).toBe('10.88.1.1:8080');
+		const state = await core.nodes.desiredState(joined.token);
+		expect(state.wireguard).toMatchObject({ address: '10.88.1.1', mode: 'skiff' });
+
+		core.nodes.heartbeat(joined.token, {
+			nodeId: joined.nodeId,
+			agentVersion: '0.1.0',
+			actualStateVersion: 1,
+			status: 'online',
+			caddyOk: true,
+			releases: [],
+			wireguard: {
+				interface: 'wg0',
+				peers: [{ publicKey: key, endpoint: '203.0.113.10:51820', latestHandshakeAt: new Date(clock).toISOString(), rxBytes: 1, txBytes: 2 }],
+			},
+		});
+		const withStatus = core.nodes.get(joined.nodeId);
+		expect(withStatus.wireguardStatus?.peers[0]).toMatchObject({ endpoint: '203.0.113.10:51820', rxBytes: 1 });
+		expect(withStatus.wireguardStatusAt).not.toBeNull();
+	});
+
+	test('a second managed node gets the next address', () => {
+		const token = core.nodes.createJoinToken(admin, 'managed-2').token;
+		const joined = core.nodes.join({
+			token,
+			name: 'managed-2',
+			networkMode: 'skiff',
+			wireguardPublicKey: `${'B'.repeat(43)}=`,
+		});
+		expect(joined.wireguard?.address).toBe('10.88.1.2');
+	});
+
+	test('refuses a managed join without a public key', () => {
+		const token = core.nodes.createJoinToken(admin, 'managed-bad').token;
+		expect(() => core.nodes.join({ token, name: 'managed-bad', networkMode: 'skiff' })).toThrow(/public key/);
+	});
+});
+
+describe('service endpoints in desired state (C2)', () => {
+	test('a consumer receives its loopback endpoint with the provider overlay address', async () => {
+		const consumer = joinNode('endpoint-consumer');
+		const provider = joinNode('endpoint-provider');
+		const now = Date.now();
+		opened.sqlite.run(`UPDATE nodes SET private_address = '10.88.1.9' WHERE id = ?`, [provider.nodeId]);
+		opened.sqlite.run(
+			`INSERT INTO databases (id, org_id, name, engine, version, node_id, host_port, memory_mb, owner_secret, monitor_secret, created_by, created_at, updated_at)
+			 VALUES ('db_test', 'org_1', 'endpoint-db', 'postgres', '16', ?, 15432, 256, 'owner', 'monitor', 'user_1', ?, ?)`,
+			[provider.nodeId, now, now],
+		);
+		opened.sqlite.run(
+			`INSERT INTO service_endpoints (id, consumer_node_id, service_kind, service_id, local_port, upstream_node_id, upstream_port, created_at, updated_at)
+			 VALUES ('sep_test', ?, 'database', 'db_test', 21000, ?, 15432, ?, ?)`,
+			[consumer.nodeId, provider.nodeId, now, now],
+		);
+		const state = await core.nodes.desiredState(consumer.token);
+		expect(state.serviceEndpoints).toEqual([
+			{
+				id: 'sep_test',
+				kind: 'database',
+				serviceId: 'db_test',
+				localPort: 21000,
+				upstream: { nodeId: provider.nodeId, address: '10.88.1.9', port: 15432 },
+				tlsFingerprint: null,
+			},
+		]);
+		const providerState = await core.nodes.desiredState(provider.token);
+		expect(providerState.serviceProviders).toEqual([
+			{
+				id: 'svp_sep_test',
+				listenAddress: '10.88.1.9',
+				listenPort: 15432,
+				targetPort: 15432,
+				allowedClientFingerprints: [],
+			},
+		]);
+	});
+});

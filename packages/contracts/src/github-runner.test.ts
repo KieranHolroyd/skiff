@@ -29,11 +29,17 @@ describe('worker workload spec', () => {
 		expect(spec.runner).toBeUndefined();
 	});
 
-	test('replicas need a worker', () => {
-		expect(workloadSpecSchema.safeParse({ runtime: 'container', image: 'x', replicas: 2 }).success).toBe(false);
+	test('replicas need a stateless workload', () => {
+		// C4: stateless HTTP workloads may scale; a persistent data directory still pins one copy.
+		expect(workloadSpecSchema.safeParse({ runtime: 'container', image: 'x', replicas: 2 }).success).toBe(true);
 		expect(
-			workloadSpecSchema.safeParse({ runtime: 'container', image: 'x', replicas: 2, ingress: 'none' }).success,
-		).toBe(true);
+			workloadSpecSchema.safeParse({
+				runtime: 'container',
+				image: 'x',
+				replicas: 2,
+				data: { sizeMb: 128 },
+			}).success,
+		).toBe(false);
 	});
 
 	test('a runner must be a container worker without a data dir', () => {

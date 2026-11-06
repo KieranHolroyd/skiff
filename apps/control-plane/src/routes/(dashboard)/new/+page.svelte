@@ -2,16 +2,14 @@
 	import { resolve } from '$app/paths';
 	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
-	import BoxesIcon from '@lucide/svelte/icons/boxes';
 	import CheckIcon from '@lucide/svelte/icons/check';
-	import CpuIcon from '@lucide/svelte/icons/cpu';
-	import LayersIcon from '@lucide/svelte/icons/layers';
 	import LayoutTemplateIcon from '@lucide/svelte/icons/layout-template';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import * as InputGroup from '#lib/components/ui/input-group/index.js';
 	import EmptyState from '../_lib/EmptyState.svelte';
 	import PageHeader from '../_lib/PageHeader.svelte';
+	import { runtimeInfo, type RuntimeTier } from '../_lib/runtime.js';
 	import TemplateTile from './_lib/TemplateTile.svelte';
 	import { categoryLabels } from './_lib/icons.js';
 	import type { PageProps } from './$types';
@@ -38,26 +36,16 @@
 	/** Every template run creates the same four things (D92); the plan fills in the details. */
 	const creates = ['Project', 'Secrets', 'Workload', 'First deployment'];
 
-	const blanks = [
-		{
-			runtime: 'static',
-			title: 'Static site',
-			description: 'Files served by Caddy from an immutable release.',
-			icon: LayersIcon
-		},
-		{
-			runtime: 'process',
-			title: 'Process app',
-			description: 'A Bun or Node command in a sandboxed systemd unit.',
-			icon: CpuIcon
-		},
-		{
-			runtime: 'container',
-			title: 'Container',
-			description: 'An OCI image in a rootless container.',
-			icon: BoxesIcon
-		}
-	] as const;
+	/** Project runtimes; functions are their own product under /functions (D110). */
+	const tiers: RuntimeTier[] = ['static', 'process', 'container'];
+	const blanks = $derived(
+		tiers.map((runtime) => ({
+			runtime,
+			title: runtimeInfo(runtime).label,
+			description: runtimeInfo(runtime).description,
+			icon: runtimeInfo(runtime).icon
+		}))
+	);
 
 	function blankHref(runtime: string): string {
 		return `${resolve('/(dashboard)/projects')}?new=1&runtime=${runtime}`;

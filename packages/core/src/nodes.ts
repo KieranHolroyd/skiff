@@ -12,6 +12,9 @@ import {
 	releases,
 	slugRedirects,
 	storageInstances,
+	serviceEndpoints,
+	nodeCertificates,
+	workloadReplicas,
 	workloads,
 	type nodes as nodesTable,
 } from '@skiff/db';
@@ -21,10 +24,28 @@ import {
 	compareSemver,
 	contentUrl,
 	parseSemver,
+	nodeHardwareSchema,
+	nodeLabelsSchema,
+	nodeRoleSchema,
 	nodeStorageStatusSchema,
 	nodeUpdateSchema,
+	nodeZoneSchema,
+	workloadReplicaId,
 	workloadSpecSchema,
 	type DesiredState,
+	type NodeHardware,
+	type NodeNetworkMode,
+	type ServiceEndpoint,
+	type ServiceProvider,
+	type NodeIdentityCertificate,
+	type NodeRole,
+	type WireguardState,
+	DEFAULT_OVERLAY_CIDR,
+	DEFAULT_WG_MTU,
+	DEFAULT_WG_PORT,
+	wireguardPublicKeySchema,
+	wireguardStatusSchema,
+	type WireguardStatus,
 	type NodeStorage,
 	type NodeStorageStatus,
 	type Heartbeat,
@@ -32,17 +53,23 @@ import {
 	type NodeUpdateTask,
 	type Principal,
 	type RouteSpec,
+	type WorkloadSpec,
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, CoreError, NotFoundError, UnauthorizedError, ValidationError } from './errors.ts';
+import { effectiveRuntime } from './runtime-tier.ts';
+import { upstreamFor } from './workloads.ts';
+import { allocateOverlayAddress, buildWireguardState, type OverlayNode } from './overlay.ts';
 import { siteKeyFor } from './config.ts';
 import { newId, randomToken, sha256Hex, parseJson } from './util.ts';
 import type { ParsedConfig } from '@skiff/site-config';
 
 const JOIN_TTL_MS = 60 * 60 * 1000;
-/** An agent is offline after 30 s without a heartbeat; alerts fire at 2 min (DESIGN §9). */
+/**
+ * An agent is offline after 30 s without a heartbeat (DESIGN §9). The alert delay is a platform
+ * policy (`nodeAlertMinutes`, Settings → Policies).
+ */
 export const OFFLINE_AFTER_MS = 30_000;
-export const ALERT_AFTER_MS = 120_000;
 
 export interface UnhealthyNode {
 	nodeId: string;
@@ -72,6 +99,33 @@ export interface NodeView {
 	storage: NodeStorage & { status: NodeStorageStatus | null };
 	/** Volume new managed instances use when they name none (D74). */
 	defaultVolumeId: string | null;
+	/** Failure domain (CLUSTERING §3.2). */
+	zone: string;
+	/** What the node may run; derived from mode/can_build when roles_json is null. */
+	roles: NodeRole[];
+	/** Operator labels. */
+	labels: Record<string, string>;
+	/** Operator labels plus derived `skiff.io/*` facts. */
+	derivedLabels: Record<string, string>;
+	/** Hardware facts plus the labels derived from them. */
+	hardware: NodeHardware | null;
+	hardwareAt: string | null;
+	hardwareError: string | null;
+	/** LAN address for direct peering inside one zone (C1). */
+	lanEndpoint: string | null;
+	/** CPU reservation budget in millis; null means no explicit cap. */
+	cpuBudgetMillis: number | null;
+	/** Managed overlay address (C1); null on external nodes. */
+	privateAddress: string | null;
+	networkMode: NodeNetworkMode;
+	/** Public key only; the private key never leaves the node. */
+	wgPublicKey: string | null;
+	wgEndpoint: string | null;
+	wgListenPort: number | null;
+	wireguardStatus: WireguardStatus | null;
+	wireguardStatusAt: string | null;
+	certificateFingerprint: string | null;
+	certificateExpiresAt: string | null;
 	/** Capabilities from the last heartbeat (`nodeCapabilities`); empty for older agents. */
 	capabilities: string[];
 	/** Outstanding or failed dashboard update (D99); null when none. */
@@ -95,6 +149,9 @@ export class NodeService {
 	constructor(private readonly ctx: CoreContext) {}
 
 	view(row: typeof nodesTable.$inferSelect): NodeView {
+		const hardware = hardwareFor(row.hardwareJson);
+		const labels = labelsFor(row.labelsJson);
+		const certificate = this.ctx.db.select().from(nodeCertificates).where(eq(nodeCertificates.nodeId, row.id)).get();
 		return {
 			id: row.id,
 			name: row.name,
@@ -114,6 +171,24 @@ export class NodeService {
 				status: storageStatus(row.storageStatusJson),
 			},
 			defaultVolumeId: row.defaultVolumeId,
+			zone: row.zone,
+			roles: rolesFor(row),
+			labels,
+			derivedLabels: { ...labels, ...derivedLabelsFor(hardware) },
+			hardware,
+			hardwareAt: row.hardwareAt ? new Date(row.hardwareAt).toISOString() : null,
+			hardwareError: row.hardwareError,
+			lanEndpoint: row.lanEndpoint,
+			cpuBudgetMillis: row.cpuBudgetMillis,
+			privateAddress: row.privateAddress,
+			networkMode: row.networkMode,
+			wgPublicKey: row.wgPublicKey,
+			wgEndpoint: row.wgEndpoint,
+			wgListenPort: row.wgListenPort,
+			wireguardStatus: wireguardStatusFor(row.wgStatusJson),
+			wireguardStatusAt: row.wgStatusAt ? new Date(row.wgStatusAt).toISOString() : null,
+			certificateFingerprint: certificate?.serial ?? null,
+			certificateExpiresAt: certificate ? new Date(certificate.expiresAt).toISOString() : null,
 			capabilities: capabilities(row.capabilitiesJson),
 			update: row.updateVersion
 				? {
@@ -294,11 +369,19 @@ export class NodeService {
 	 * `skif agent join` consumes a one-time token and receives the node's long-lived token.
 	 * The first node becomes the edge; later nodes are workers.
 	 */
-	join(input: { token: string; name: string; publicAddress?: string; version?: string }): {
+	join(input: {
+		token: string;
+		name: string;
+		publicAddress?: string;
+		version?: string;
+		networkMode?: 'skiff' | 'external';
+		wireguardPublicKey?: string;
+	}): {
 		nodeId: string;
 		token: string;
 		controlUrl: string;
 		mode: 'edge' | 'worker';
+		wireguard?: WireguardState;
 	} {
 		const tokenHash = sha256Hex(input.token);
 		const join = this.ctx.sqlite
@@ -313,19 +396,44 @@ export class NodeService {
 		const nodeId = newId('nod_');
 		const nodeToken = randomToken(32);
 		const now = this.ctx.now();
+		const managed = input.networkMode === 'skiff';
+		if (managed) {
+			const key = input.wireguardPublicKey;
+			if (!key || !wireguardPublicKeySchema.safeParse(key).success)
+				throw new ValidationError('A managed overlay join needs the node\'s WireGuard public key.');
+		}
+		const used = new Set(
+			this.ctx.sqlite
+				.query<{ address: string }, []>('SELECT private_address AS address FROM nodes WHERE private_address IS NOT NULL')
+				.all()
+				.map((row) => row.address),
+		);
+		const privateAddress = managed ? allocateOverlayAddress(this.ctx.cluster.get().overlay.cidr, used) : null;
+		if (managed && !privateAddress)
+			throw new ConflictError('The overlay CIDR has no free address. Widen it before adding another node.');
+		const publicAddress = input.publicAddress ?? (managed && privateAddress ? `${privateAddress}:8080` : null);
 		this.ctx.sqlite.transaction(() => {
 			this.ctx.sqlite.run(
-				'INSERT INTO nodes (id, name, mode, status, public_address, version, token_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+				`INSERT INTO nodes (
+					id, name, mode, status, public_address, version, token_hash, created_at, updated_at,
+					private_address, private_cidr, wg_public_key, network_mode, wg_endpoint, wg_listen_port
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				[
 					nodeId,
 					input.name,
 					mode,
 					'online',
-					input.publicAddress ?? null,
+					publicAddress,
 					input.version ?? null,
 					sha256Hex(nodeToken),
 					now,
 					now,
+					privateAddress,
+					managed ? this.ctx.cluster.get().overlay.cidr : null,
+					managed ? input.wireguardPublicKey ?? null : null,
+					managed ? 'skiff' : 'external',
+					managed ? input.publicAddress ?? null : null,
+					managed ? this.ctx.cluster.get().overlay.listenPort : null,
 				],
 			);
 			this.ctx.sqlite.run('UPDATE node_join_tokens SET used_at = ?, used_by_node_id = ? WHERE id = ?', [now, nodeId, join.id]);
@@ -338,7 +446,20 @@ export class NodeService {
 			result: 'ok',
 		});
 		this.bump();
-		return { nodeId, token: nodeToken, controlUrl: this.ctx.config.platformOrigin, mode };
+		return {
+			nodeId,
+			token: nodeToken,
+			controlUrl: this.ctx.config.platformOrigin,
+			mode,
+			...(managed
+				? {
+						wireguard: (() => {
+							const cfg = this.ctx.cluster.get().overlay;
+							return buildWireguardState(nodeId, this.overlayNodes(), cfg.cidr, cfg);
+						})(),
+					}
+				: {}),
+		};
 	}
 
 	authenticate(token: string): typeof nodesTable.$inferSelect {
@@ -351,6 +472,7 @@ export class NodeService {
 		const node = this.authenticate(token);
 		if (node.id !== input.nodeId) throw new UnauthorizedError('Node id does not match token');
 		const now = this.ctx.now();
+		this.storeCertificate(node.id, input.nodeCertificate, now);
 		this.ctx.db
 			.update(nodes)
 			.set({
@@ -359,6 +481,8 @@ export class NodeService {
 				agentVersion: input.agentVersion,
 				// An agent that predates capabilities declares none, so work it would ignore is refused.
 				capabilitiesJson: JSON.stringify(input.capabilities ?? []),
+				...hardwarePatch(input.hardware, now),
+				...wireguardStatusPatch(input.wireguard, now),
 				...this.settleUpdate(node, input.agentVersion, input.nodeUpdateResult),
 				lastHeartbeatAt: now,
 				statsJson: input.stats ? JSON.stringify(input.stats) : node.statsJson,
@@ -522,6 +646,11 @@ export class NodeService {
 	 */
 	update(principal: Principal, nodeId: string, input: NodeUpdate): NodeView {
 		this.assertPlatformAdmin(principal);
+		const reservedLabel = Object.keys(input.labels ?? {}).find((key) => key.startsWith('skiff.io/'));
+		if (reservedLabel)
+			throw new ValidationError(
+				`Label "${reservedLabel}" uses skiff.io/, which is reserved for derived hardware facts.`,
+			);
 		const parsed = nodeUpdateSchema.safeParse(input);
 		if (!parsed.success)
 			throw new ValidationError(parsed.error.issues.map((issue) => issue.message).join('; '));
@@ -549,6 +678,26 @@ export class NodeService {
 		if (patch.sliceCpuWeight !== undefined && patch.sliceCpuWeight !== node.sliceCpuWeight)
 			changes.sliceCpuWeight = patch.sliceCpuWeight;
 		if (patch.canBuild !== undefined && patch.canBuild !== node.canBuild) changes.canBuild = patch.canBuild;
+		if (patch.zone !== undefined && patch.zone !== node.zone) changes.zone = patch.zone;
+		if (patch.roles !== undefined) {
+			const next = [...new Set(patch.roles)] as NodeRole[];
+			const removed = rolesFor(node).filter((role) => !next.includes(role));
+			if (removed.length) this.assertRolesRemovable(node, removed);
+			if (JSON.stringify(next) !== node.rolesJson) changes.rolesJson = JSON.stringify(next);
+		}
+		if (patch.labels !== undefined) {
+			const next = patch.labels;
+			if (JSON.stringify(next) !== JSON.stringify(labelsFor(node.labelsJson)))
+				changes.labelsJson = JSON.stringify(next);
+		}
+		if (patch.lanEndpoint !== undefined) {
+			const next = patch.lanEndpoint || null;
+			if (next !== node.lanEndpoint) changes.lanEndpoint = next;
+		}
+		if (patch.cpuBudgetMillis !== undefined) {
+			const next = patch.cpuBudgetMillis ?? null;
+			if (next !== node.cpuBudgetMillis) changes.cpuBudgetMillis = next;
+		}
 		if (patch.defaultVolumeId !== undefined && patch.defaultVolumeId !== node.defaultVolumeId) {
 			if (patch.defaultVolumeId === null) changes.defaultVolumeId = null;
 			else {
@@ -586,6 +735,39 @@ export class NodeService {
 		// Address, slice and storage changes all reach agents through desired state.
 		this.bump();
 		return this.view({ ...node, ...changes, updatedAt: now });
+	}
+
+	/** Refuse dropping a role while resources placed under it still run on the node. */
+	private assertRolesRemovable(node: typeof nodesTable.$inferSelect, removed: NodeRole[]): void {
+		const blockers: string[] = [];
+		if ((removed.includes('ingress') || removed.includes('control')) && node.mode === 'edge')
+			blockers.push('it is the edge and terminates ingress');
+		if (removed.includes('compute')) {
+			const running = this.ctx.db
+				.select({ id: workloads.id })
+				.from(workloads)
+				.where(eq(workloads.nodeId, node.id))
+				.all();
+			if (running.length) blockers.push(`${running.length} app workload(s)`);
+		}
+		if (removed.includes('data')) {
+			const dbs = this.ctx.db
+				.select({ id: databases.id })
+				.from(databases)
+				.where(and(eq(databases.nodeId, node.id), isNull(databases.deletedAt)))
+				.all();
+			const stores = this.ctx.db
+				.select({ id: storageInstances.id })
+				.from(storageInstances)
+				.where(and(eq(storageInstances.nodeId, node.id), isNull(storageInstances.deletedAt)))
+				.all();
+			if (dbs.length) blockers.push(`${dbs.length} database(s)`);
+			if (stores.length) blockers.push(`${stores.length} storage instance(s)`);
+		}
+		if (blockers.length)
+			throw new ConflictError(
+				`"${node.name}" still runs ${blockers.join(' and ')}. Move or delete them before removing a role.`,
+			);
 	}
 
 	/**
@@ -702,6 +884,138 @@ export class NodeService {
 		this.ctx.projects.bump();
 	}
 
+	/** Provider-side overlay listeners for services this node hosts (C2). */
+	private serviceProvidersForNode(nodeId: string): ServiceProvider[] {
+		const node = this.ctx.db.select().from(nodes).where(eq(nodes.id, nodeId)).get();
+		if (!node?.privateAddress) return [];
+		const rows = this.ctx.db
+			.select()
+			.from(serviceEndpoints)
+			.where(eq(serviceEndpoints.upstreamNodeId, nodeId))
+			.all();
+		if (rows.length === 0) return [];
+		return rows.flatMap((row) => {
+			const targetPort =
+				row.serviceKind === 'database'
+					? this.ctx.db
+							.select({ port: databases.hostPort })
+							.from(databases)
+							.where(eq(databases.id, row.serviceId))
+							.get()?.port
+					: this.ctx.db
+							.select({ port: storageInstances.hostPort })
+							.from(storageInstances)
+							.where(eq(storageInstances.id, row.serviceId))
+							.get()?.port;
+			if (!targetPort) return [];
+			const consumerCert = this.ctx.db
+				.select({ serial: nodeCertificates.serial })
+				.from(nodeCertificates)
+				.where(eq(nodeCertificates.nodeId, row.consumerNodeId))
+				.get();
+			return [
+				{
+					id: `svp_${row.id}`,
+					listenAddress: node.privateAddress!,
+					listenPort: row.upstreamPort,
+					targetPort,
+					allowedClientFingerprints: consumerCert ? [consumerCert.serial] : [],
+				},
+			];
+		});
+	}
+
+	/** Consumer-side loopback endpoints for this node's remote attachments (C2). */
+	private serviceEndpointsForNode(nodeId: string): ServiceEndpoint[] {
+		const rows = this.ctx.db
+			.select()
+			.from(serviceEndpoints)
+			.where(eq(serviceEndpoints.consumerNodeId, nodeId))
+			.all();
+		if (rows.length === 0) return [];
+		const nodesById = new Map(this.ctx.db.select().from(nodes).all().map((node) => [node.id, node]));
+		return rows
+			.map((row) => {
+				const upstream = nodesById.get(row.upstreamNodeId);
+				return {
+					id: row.id,
+					kind: row.serviceKind,
+					serviceId: row.serviceId,
+					localPort: row.localPort,
+					upstream: {
+						nodeId: row.upstreamNodeId,
+						address: upstream?.privateAddress ?? null,
+						port: row.upstreamPort,
+					},
+					tlsFingerprint:
+						this.ctx.db
+							.select({ serial: nodeCertificates.serial })
+							.from(nodeCertificates)
+							.where(eq(nodeCertificates.nodeId, row.upstreamNodeId))
+							.get()?.serial ?? null,
+				};
+			})
+			.sort((a, b) => a.localPort - b.localPort);
+	}
+
+	/** Upsert the public node certificate; the private key never reaches this process. */
+	private storeCertificate(nodeId: string, certificate: NodeIdentityCertificate | undefined, now: number): void {
+		if (!certificate) return;
+		const expiresAt = Date.parse(certificate.expiresAt);
+		if (!Number.isFinite(expiresAt)) return;
+		const existing = this.ctx.db
+			.select({ nodeId: nodeCertificates.nodeId })
+			.from(nodeCertificates)
+			.where(eq(nodeCertificates.nodeId, nodeId))
+			.get();
+		if (existing) {
+			this.ctx.db
+				.update(nodeCertificates)
+				.set({
+					serial: certificate.fingerprint,
+					certPem: certificate.certPem,
+					issuedAt: now,
+					expiresAt,
+					revokedAt: null,
+				})
+				.where(eq(nodeCertificates.nodeId, nodeId))
+				.run();
+		} else {
+			this.ctx.db
+				.insert(nodeCertificates)
+				.values({
+					nodeId,
+					serial: certificate.fingerprint,
+					certPem: certificate.certPem,
+					caSerial: null,
+					issuedAt: now,
+					expiresAt,
+					revokedAt: null,
+				})
+				.run();
+		}
+	}
+
+	/** Full rows as the pure peer-graph builder needs them. */
+	private overlayNodes(): OverlayNode[] {
+		return this.ctx.db
+			.select()
+			.from(nodes)
+			.all()
+			.map((row) => ({
+				id: row.id,
+				name: row.name,
+				zone: row.zone,
+				roles: rolesFor(row),
+				networkMode: row.networkMode,
+				privateAddress: row.privateAddress,
+				wgPublicKey: row.wgPublicKey,
+				publicAddress: row.publicAddress,
+				wgEndpoint: row.wgEndpoint,
+				lanEndpoint: row.lanEndpoint,
+			}));
+	}
+
 	/**
 	 * Everything this node must converge to: releases, production and preview routes, redirects,
 	 * revocations. Built fresh on every pull and cached by the agent.
@@ -726,8 +1040,18 @@ export class NodeService {
 				.all()
 				.flatMap((row) => (row.nodeId ? [[row.projectId, row.nodeId] as const] : [])),
 		);
-		const targetOf = (project: { id: string; runtime: string; placement: string }): string | null =>
-			(project.runtime !== 'static' ? workloadNodeByProject.get(project.id) : undefined) ??
+		const replicaNodesByProject = new Map<string, string[]>();
+		for (const replica of this.ctx.db
+			.select({ projectId: workloadReplicas.projectId, nodeId: workloadReplicas.nodeId })
+			.from(workloadReplicas)
+			.all()) {
+			const list = replicaNodesByProject.get(replica.projectId) ?? [];
+			list.push(replica.nodeId);
+			replicaNodesByProject.set(replica.projectId, list);
+		}
+
+		const targetOf = (project: { id: string; runtime: string; runtimeName?: string | null; placement: string }): string | null =>
+			(effectiveRuntime(project) !== 'static' ? workloadNodeByProject.get(project.id) : undefined) ??
 			(project.placement === 'edge' || project.placement === 'auto' ? edgeId : project.placement);
 
 		const projectRows = this.ctx.db
@@ -759,11 +1083,13 @@ export class NodeService {
 			const target = targetOf(project) ?? node.id;
 			const local = target === node.id;
 			const workload = workloadByProject.get(project.id);
+			// Parse the project's saved spec once: the worker test and a function route both need it.
+			const spec = workloadSpecOf(project);
 			// Workers (plan 21) have no route at all: no preview URL, no environment host. Their
 			// release is app code or a template manifest and must never be served as a static site;
 			// a process worker on this node still needs the release itself.
-			if (isWorkerProject(project)) {
-				if (local && project.runtime === 'process') {
+			if (isWorkerProject(project, spec)) {
+				if (local && effectiveRuntime(project) === 'process') {
 					for (const deployment of this.ctx.db
 						.select({ releaseId: deployments.releaseId })
 						.from(deployments)
@@ -781,7 +1107,7 @@ export class NodeService {
 			}
 			// Apps proxy to the workload on their node; the edge reaches a worker's Caddy over WireGuard.
 			const upstream =
-				project.runtime !== 'static' && local
+				effectiveRuntime(project) !== 'static' && local
 					? (workload?.upstream ?? null)
 					: local
 						? null
@@ -796,6 +1122,44 @@ export class NodeService {
 				if (!release) continue;
 				if (local) releaseShas.add(release.sha256);
 				const config = this.configFor(deployment.configSnapshotId);
+				// A function's assets are part of *this deployment's* snapshot (rollback restores it),
+				// and they live in the release, so only the node holding the release serves them. The
+				// edge has no release and proxies here like any other worker-placed site (D110).
+				const deploymentSpec = workloadSpecOf({ workloadJson: deployment.workloadJson });
+				// A function dials its own socket (phase 4). Replica 0 keeps the workload id, so a
+				// single-host function uses `<workload-id>.sock`, matching the helper's socket unit.
+				// Read from this deployment's snapshot, so a rollback restores its own upstream.
+				const functionUpstream =
+					local && workload && deploymentSpec?.runtime === 'function'
+						? upstreamFor(workload.id, deploymentSpec)
+						: null;
+				const functionRoute =
+					local && deploymentSpec?.runtime === 'function'
+						? {
+								function: {
+									assetsDirectory: deploymentSpec.function?.assets?.directory ?? null,
+									runWorkerFirst: deploymentSpec.function?.assets?.runWorkerFirst ?? [],
+									// Phase 4: a stateless function with `replicas > 1` gets one socket per
+									// replica, in order, and the node's Caddy balances across them. Omitted
+									// for a single host, so that route is byte-identical to phase 1.
+									...(workload && deploymentSpec.replicas > 1
+										? {
+												upstreams: Array.from({ length: deploymentSpec.replicas }, (_, index) =>
+													upstreamFor(workloadReplicaId(workload.id, index), deploymentSpec),
+												),
+											}
+										: {}),
+								},
+							}
+						: {};
+				const replicaNodes = replicaNodesByProject.get(project.id) ?? [];
+				const replicaUpstreams =
+					!local && replicaNodes.length > 1
+						? replicaNodes
+								.map((nodeId) => nodeById.get(nodeId)?.publicAddress)
+								.filter((address): address is string => Boolean(address))
+								.map((address) => `http://${address}`)
+						: [];
 				const base = {
 					projectId: project.id,
 					slug: project.slug,
@@ -807,7 +1171,14 @@ export class NodeService {
 					notFound: config.config.notFound,
 					redirects: config.redirects,
 					headers: config.headers,
-					upstream,
+					upstream: functionUpstream ?? upstream,
+					...(replicaUpstreams.length > 1
+						? {
+							upstreams: replicaUpstreams,
+							...(deploymentSpec?.healthPath ? { healthPath: deploymentSpec.healthPath } : {}),
+						}
+						: {}),
+					...functionRoute,
 				} satisfies Omit<RouteSpec, 'host' | 'access' | 'accessMode'>;
 				baseByDeployment.set(deployment.id, base);
 
@@ -970,6 +1341,11 @@ export class NodeService {
 			storageRoutes: this.ctx.storage.routesForNode(node.id, isEdge, (id) => nodeById.get(id)?.publicAddress ?? null),
 			storagePurges: this.ctx.storage.purgesForNode(node.id),
 			domains: this.ctx.domains.desiredForProjects(servedProjectIds),
+			serviceEndpoints: this.serviceEndpointsForNode(node.id),
+			serviceProviders: this.serviceProvidersForNode(node.id),
+			...(node.networkMode === 'external'
+				? {}
+				: { wireguard: buildWireguardState(node.id, this.overlayNodes(), this.ctx.cluster.get().overlay.cidr, this.ctx.cluster.get().overlay) }),
 		};
 	}
 
@@ -990,14 +1366,92 @@ function storageStatus(json: string | null): NodeStorageStatus | null {
 	return parsed.success ? parsed.data : null;
 }
 
-/** A project whose current spec is a worker (`ingress: "none"`, plan 21): it gets no route. */
-function isWorkerProject(project: { runtime: string; workloadJson: string | null }): boolean {
-	if (project.runtime === 'static' || !project.workloadJson) return false;
+/** The project's saved workload spec, or null when it has none (or it does not parse). */
+function workloadSpecOf(project: { workloadJson: string | null }): WorkloadSpec | null {
+	if (!project.workloadJson) return null;
 	const spec = workloadSpecSchema.safeParse(parseJson<unknown>(project.workloadJson, null));
-	return spec.success && spec.data.ingress === 'none';
+	return spec.success ? spec.data : null;
+}
+
+/** A project whose current spec is a worker (`ingress: "none"`, plan 21): it gets no route. */
+function isWorkerProject(
+	project: { runtime: string; runtimeName?: string | null },
+	spec: WorkloadSpec | null,
+): boolean {
+	if (effectiveRuntime(project) === 'static') return false;
+	return spec?.ingress === 'none';
 }
 
 function capabilities(json: string | null): string[] {
 	const parsed = parseJson<unknown>(json, []);
 	return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === 'string') : [];
+}
+
+const RESERVED_LABEL_PREFIX = 'skiff.io/';
+
+/** Operator-set roles, or the mode/can_build derivation older rows rely on. */
+function rolesFor(row: typeof nodesTable.$inferSelect): NodeRole[] {
+	const stored = parseJson<unknown>(row.rolesJson, null);
+	if (Array.isArray(stored)) {
+		const roles = [...new Set(stored.filter((value): value is NodeRole => nodeRoleSchema.safeParse(value).success))];
+		if (roles.length > 0) return roles;
+	}
+	const base: NodeRole[] = row.mode === 'edge' ? ['ingress', 'control', 'compute', 'data'] : ['compute', 'data'];
+	if (row.canBuild) base.push('build');
+	return base;
+}
+
+function labelsFor(raw: string | null): Record<string, string> {
+	const stored = parseJson<unknown>(raw, null);
+	if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return {};
+	const labels: Record<string, string> = {};
+	for (const [key, value] of Object.entries(stored)) {
+		if (key.startsWith(RESERVED_LABEL_PREFIX) || typeof value !== 'string') continue;
+		labels[key] = value;
+	}
+	return labels;
+}
+
+function hardwareFor(raw: string | null): NodeHardware | null {
+	const parsed = nodeHardwareSchema.safeParse(parseJson<unknown>(raw, null));
+	return parsed.success ? parsed.data : null;
+}
+
+/** `skiff.io/*` labels derived from the hardware report; never operator-written. */
+export function derivedLabelsFor(hardware: NodeHardware | null): Record<string, string> {
+	if (!hardware) return {};
+	const labels: Record<string, string> = {};
+	if (hardware.arch) labels['skiff.io/arch'] = hardware.arch;
+	if (hardware.virtualization) labels['skiff.io/virt'] = hardware.virtualization;
+	if (hardware.gpus?.length) {
+		labels['skiff.io/gpu'] = hardware.gpus.some((gpu) => /nvidia/i.test(gpu.name ?? '') || /10de/i.test(gpu.pciId ?? ''))
+			? 'nvidia'
+			: 'other';
+		labels['skiff.io/gpu-count'] = String(hardware.gpus.length);
+	}
+	if (hardware.memoryBytes !== undefined)
+		labels['skiff.io/memory-gb'] = String(Math.max(1, Math.round(hardware.memoryBytes / 1024 ** 3)));
+	if (hardware.cpuModel) labels['skiff.io/cpu-model'] = hardware.cpuModel.replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 63);
+	return labels;
+}
+
+/** Validate and store a heartbeat's hardware block; a bad report never clears the last good one. */
+function hardwarePatch(hardware: NodeHardware | undefined, now: number): Partial<typeof nodesTable.$inferInsert> {
+	if (!hardware) return {};
+	const parsed = nodeHardwareSchema.safeParse(hardware);
+	if (!parsed.success)
+		return { hardwareError: parsed.error.issues[0]?.message ?? 'Invalid hardware report', hardwareAt: now };
+	return { hardwareJson: JSON.stringify(parsed.data), hardwareAt: now, hardwareError: null };
+}
+
+function wireguardStatusFor(raw: string | null): WireguardStatus | null {
+	const parsed = wireguardStatusSchema.safeParse(parseJson<unknown>(raw, null));
+	return parsed.success ? parsed.data : null;
+}
+
+function wireguardStatusPatch(status: WireguardStatus | undefined, now: number): Partial<typeof nodesTable.$inferInsert> {
+	if (!status) return {};
+	const parsed = wireguardStatusSchema.safeParse(status);
+	if (!parsed.success) return {};
+	return { wgStatusJson: JSON.stringify(parsed.data), wgStatusAt: now };
 }

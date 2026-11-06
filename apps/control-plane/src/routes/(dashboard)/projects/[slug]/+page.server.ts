@@ -1,5 +1,5 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { CoreError, entriesFromZip } from '@skiff/core';
+import { CoreError, entriesFromZip, isFunctionTier } from '@skiff/core';
 import {
 	accessModes,
 	appVolumeAttachSchema,
@@ -7,6 +7,7 @@ import {
 	appVolumeDetachSchema,
 	databaseAttachSchema,
 	hasPermission,
+	placementSpecSchema,
 	storageAttachSchema,
 	storageAttachmentUpdateSchema,
 	workloadSpecSchema,
@@ -34,7 +35,14 @@ import {
 	toFormFailure
 } from '../../_lib/errors.js';
 import { grantsFromForm } from '../../storage/_lib/forms.server.js';
+import {
+	FUNCTION_DEFAULT_TAB,
+	functionTabFromProjectTab
+} from '../../functions/_lib/function-tabs.js';
 import type { Actions, PageServerLoad } from './$types';
+
+const FUNCTION_SPEC_MESSAGE =
+	"A function's runtime comes from its bundle's skiff-function.json. Change it there and deploy again.";
 
 /** Run a read that a viewer may not be allowed to make without taking the page down. */
 function safely<T>(read: () => T, fallback: T): T {
@@ -75,6 +83,14 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const principal = locals.principal!;
 	try {
 		const project = await core.projects.get(principal, params.slug);
+		// Functions have their own console (D110); old project links land in the matching section.
+		if (project.runtime === 'function') {
+			const tab = functionTabFromProjectTab(url.searchParams.get('tab'));
+			redirect(
+				307,
+				`/functions/${encodeURIComponent(project.slug)}${tab === FUNCTION_DEFAULT_TAB ? '' : `?tab=${tab}`}`
+			);
+		}
 		const row = core.projects.requireRow(principal, params.slug);
 		const trafficRange = parseTrafficRange(url.searchParams.get('range'));
 		const traffic = await core.metrics.trafficForProject(principal, params.slug, {
@@ -270,8 +286,20 @@ export const actions: Actions = {
 		const name = formString(data, 'name');
 		const slug = formString(data, 'slug');
 		const placement = formString(data, 'placement');
+		const placementSpecText = formString(data, 'placementSpec');
 
 		const fieldErrors: Record<string, string> = {};
+		let placementSpec: ReturnType<typeof placementSpecSchema.parse> | null = null;
+		if (placementSpecText) {
+			try {
+				placementSpec = placementSpecSchema.parse(JSON.parse(placementSpecText));
+			} catch (error) {
+				fieldErrors.placementSpec =
+					error instanceof Error
+						? `Placement constraints: ${error.message}`
+						: 'Invalid placement constraints.';
+			}
+		}
 		if (!name) fieldErrors.name = 'Give the project a name.';
 		else if (name.length > 120) fieldErrors.name = 'Keep the name to 120 characters or fewer.';
 		if (slug && !/^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])$/.test(slug)) {
@@ -288,7 +316,8 @@ export const actions: Actions = {
 			await core.projects.update(principal, project.slug, {
 				name,
 				...(renamed ? { slug } : {}),
-				...(placement ? { placement } : {})
+				...(placement ? { placement } : {}),
+				placementSpec: placementSpecText ? placementSpec : null
 			});
 			if (renamed) redirect(303, `/projects/${slug}`);
 			return { success: 'Project details saved. Agent routes converge within seconds.' };
@@ -794,6 +823,7 @@ export const actions: Actions = {
 		const project = core.projects.requireRow(principal, params.slug);
 		if (project.runtime === 'static')
 			return fail(400, { message: 'Static projects have no workload to scale.' });
+		if (isFunctionTier(project)) return fail(400, { message: FUNCTION_SPEC_MESSAGE });
 		const existing = safely(() => core.workloads.projectSpec(project), null);
 		if (!existing)
 			return fail(400, {
@@ -840,6 +870,8 @@ export const actions: Actions = {
 				message:
 					'Static projects serve files and have no workload. Create a project with runtime "process" or "container" to run an app.'
 			});
+		// The manifest is a function's spec (FN8); a process-shaped form must never overwrite it.
+		if (isFunctionTier(project)) return fail(400, { message: FUNCTION_SPEC_MESSAGE });
 
 		const command = formString(data, 'command');
 		const image = formString(data, 'image');
@@ -921,6 +953,8 @@ export const actions: Actions = {
 		}
 		try {
 			const project = core.projects.requireRow(principal, params.slug);
+			// Replacing a function's secret refs here would drop ones its bindings need (FN8).
+			if (isFunctionTier(project)) return fail(400, { message: FUNCTION_SPEC_MESSAGE });
 			const workload = await core.workloads.setVariables(principal, project, parsed.data);
 			return {
 				success: workload

@@ -23,6 +23,9 @@ import {
 	operationStatuses,
 	volumeAdoptSchema,
 	volumeUpdateSchema,
+	shareCreateSchema,
+	shareUpdateSchema,
+	shareGrantsSchema,
 	type ItemStatus,
 	type ItemVerdict,
 	type OperationKind,
@@ -124,6 +127,11 @@ const api: RequestHandler = async (event) => {
 			if (action === 'move' && method === 'POST') {
 				const input = await readJson(request, serviceMoveSchema);
 				return core.moves.moveApp(principal, slug, input);
+			}
+			if (action === 'function' && segments.length === 3) {
+				if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
+				const view = core.functions.view(principal, core.projects.requireRow(principal, slug));
+				return view ?? json({ error: 'not_found' }, 404);
 			}
 			if (action === 'logs' && method === 'GET') {
 				const project = core.projects.requireRow(principal, slug);
@@ -268,6 +276,40 @@ const api: RequestHandler = async (event) => {
 					promote: input.promote,
 					message: input.message,
 				});
+			}
+			return json({ error: 'not_found' }, 404);
+		}
+
+		// --- cluster shares (platform admin; CLUSTERING §5.2, C3) ----------------
+		if (segments[0] === 'shares') {
+			if (segments.length === 1) {
+				if (method === 'GET') return { shares: core.shares.list(principal) };
+				if (method === 'POST') return json(core.shares.create(principal, await readJson(request, shareCreateSchema)), 201);
+				return json({ error: 'method_not_allowed' }, 405);
+			}
+			const name = segments[1]!;
+			if (segments.length === 2) {
+				if (method === 'GET') return core.shares.get(principal, name);
+				if (method === 'PATCH' || method === 'PUT')
+					return core.shares.update(principal, name, await readJson(request, shareUpdateSchema));
+				if (method === 'DELETE') return core.shares.remove(principal, name);
+				return json({ error: 'method_not_allowed' }, 405);
+			}
+			if (segments.length === 3 && segments[2] === 'grants' && method === 'PUT')
+				return core.shares.setGrants(principal, name, await readJson(request, shareGrantsSchema));
+			return json({ error: 'not_found' }, 404);
+		}
+
+		// --- topology (platform admin; CLUSTERING §3.6, C0) --------------------
+		if (segments[0] === 'topology') {
+			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
+			if (segments.length === 1) return core.topology.view(principal);
+			if (segments.length === 2 && segments[1] === 'blast-radius') {
+				const node = event.url.searchParams.get('node');
+				const zone = event.url.searchParams.get('zone');
+				if (!node && !zone)
+					return json({ error: 'validation', message: 'Pass ?node=<id> or ?zone=<name>.' }, 422);
+				return core.topology.blastRadius(principal, node ? { kind: 'node', id: node } : { kind: 'zone', id: zone! });
 			}
 			return json({ error: 'not_found' }, 404);
 		}

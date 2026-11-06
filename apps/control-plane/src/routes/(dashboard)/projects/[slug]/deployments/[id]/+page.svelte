@@ -7,7 +7,6 @@
 	import ActivityIcon from '@lucide/svelte/icons/activity';
 	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
-	import BoxesIcon from '@lucide/svelte/icons/boxes';
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import CpuIcon from '@lucide/svelte/icons/cpu';
 	import FileCogIcon from '@lucide/svelte/icons/file-cog';
@@ -34,6 +33,8 @@
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import EmptyState from '../../../../_lib/EmptyState.svelte';
+	import { runtimeIcon } from '../../../../_lib/runtime.js';
+	import { formatIdleStop } from '../../../../_lib/function-view.js';
 	import Panel from '../../../../_lib/Panel.svelte';
 	import RowMenu from '../../../../_lib/RowMenu.svelte';
 	import TrafficDashboard from '../../../../_lib/TrafficDashboard.svelte';
@@ -391,10 +392,35 @@
 				{#if spec}
 					<Panel
 						title="Runtime spec"
-						icon={deployment.runtime === 'container' ? BoxesIcon : CpuIcon}
+						icon={runtimeIcon(deployment.runtime)}
 						description="Snapshot taken at deploy time. Promote or roll back restores this spec with the code."
 					>
 						<DetailList>
+							{#if spec.function}
+								{@const fn = spec.function}
+								<dt>Entry module</dt>
+								<dd class="truncate font-mono text-xs" title={fn.main}>
+									{fn.main}
+									<span class="text-muted-foreground">· {fn.moduleCount} modules</span>
+								</dd>
+								<dt>Compatibility</dt>
+								<dd class="font-mono text-xs">
+									{fn.compatibilityDate}{fn.compatibilityFlags.length
+										? ` · ${fn.compatibilityFlags.join(', ')}`
+										: ''}
+								</dd>
+								<dt>Bindings</dt>
+								<dd
+									class="truncate font-mono text-xs"
+									title={fn.bindings.map((b) => b.name).join(', ')}
+								>
+									{fn.bindings.length ? fn.bindings.map((b) => b.name).join(', ') : 'none'}
+								</dd>
+								<dt>Idle stop</dt>
+								<dd class="text-xs">{formatIdleStop(fn.idleStopSeconds)}</dd>
+								<dt>workerd</dt>
+								<dd class="font-mono text-xs">{fn.workerdVersion}</dd>
+							{/if}
 							{#if spec.image}
 								<dt>Image</dt>
 								<dd><CopyValue value={spec.image} label="image" /></dd>
@@ -405,12 +431,14 @@
 									{spec.command.join(' ')}
 								</dd>
 							{/if}
-							<dt>Ingress</dt>
-							<dd class="text-xs">
-								{#if spec.ingress === 'none'}Worker (no route){:else}HTTP on port
-									<span class="font-mono">{spec.port}</span>{/if}
-							</dd>
-							{#if spec.ingress !== 'none'}
+							{#if !spec.function}
+								<dt>Ingress</dt>
+								<dd class="text-xs">
+									{#if spec.ingress === 'none'}Worker (no route){:else}HTTP on port
+										<span class="font-mono">{spec.port}</span>{/if}
+								</dd>
+							{/if}
+							{#if spec.ingress !== 'none' && !spec.function}
 								<dt>Health check</dt>
 								<dd class="font-mono text-xs">{spec.healthPath}</dd>
 							{/if}

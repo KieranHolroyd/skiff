@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import { SLUG_PATTERN } from './slugs.ts';
 import { nodeStoragePathSchema } from './storage.ts';
+import type { VolumeClass } from './cluster.ts';
 
 /**
  * Node volumes (docs/VOLUMES.md, D72–D80). A volume is the mounted endpoint of a disk, pool,
@@ -110,6 +111,9 @@ export const volumeUpdateSchema = z
 	.object({
 		name: volumeNameSchema.optional(),
 		default: z.boolean().optional(),
+		/** Override the derived class; null clears it. A reason is required while it is set. */
+		classOverride: z.enum(['fast', 'bulk', 'remote']).nullable().optional(),
+		classOverrideReason: z.string().trim().max(200).nullable().optional(),
 	})
 	.refine((input) => Object.keys(input).length > 0, 'Nothing to update.');
 export type VolumeUpdate = z.infer<typeof volumeUpdateSchema>;
@@ -133,6 +137,10 @@ export interface VolumeView {
 	mountPath: string;
 	fsType: string;
 	remote: boolean;
+	/** Effective class: the override when set, otherwise the derived value (CLUSTERING §3.3). */
+	class: VolumeClass;
+	classOverride: 'fast' | 'bulk' | 'remote' | null;
+	classOverrideReason: string | null;
 	status: VolumeStatus;
 	message: string | null;
 	sizeBytes: number | null;

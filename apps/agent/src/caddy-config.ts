@@ -6,6 +6,7 @@ import {
 	type SiteCompileInput,
 	type TlsOptions,
 } from '@skiff/site-config';
+import { compileFunctionRoute } from './function-routing.ts';
 import { normalizeHost } from './verify.ts';
 
 /**
@@ -34,6 +35,12 @@ type DesiredDomain = DesiredState['domains'][number];
 interface HttpServerConfig {
 	routes: CaddyRoute[];
 	[key: string]: unknown;
+}
+
+/** A compiled site input paired with the desired route it came from (function routing needs both). */
+interface SiteEntry {
+	site: SiteCompileInput;
+	route: RouteSpec;
 }
 
 function isSafeProjectId(projectId: string): boolean {
@@ -87,6 +94,8 @@ export function toSiteCompileInput(
 		headers: route.headers,
 		loginUrl: route.access.loginUrl,
 		upstream: route.upstream,
+		...(route.upstreams?.length ? { upstreams: route.upstreams } : {}),
+		...(route.healthPath ? { healthPath: route.healthPath } : {}),
 	};
 }
 
@@ -237,9 +246,13 @@ function caddySocketAddress(socketPath: string): string {
  * applied with a single POST /load (SPIKES §4).
  */
 export function buildCaddyConfig(options: CompileAgentConfigOptions): Record<string, unknown> {
-	const sites = options.state.routes.map((route) =>
-		toSiteCompileInput(route, { ...options, contentDomain: options.state.contentDomain }),
-	);
+	const entries: SiteEntry[] = [];
+	const toEntry = (route: RouteSpec): SiteCompileInput => {
+		const site = toSiteCompileInput(route, { ...options, contentDomain: options.state.contentDomain });
+		entries.push({ site, route });
+		return site;
+	};
+	const sites = options.state.routes.map(toEntry);
 	const siteHosts = new Set(options.state.routes.map((route) => normalizeHost(route.host)));
 
 	// A verified custom host serves exactly the project's production route: same release, site
@@ -253,11 +266,10 @@ export function buildCaddyConfig(options: CompileAgentConfigOptions): Record<str
 		if (!production) continue;
 		siteHosts.add(host);
 		sites.push(
-			toSiteCompileInput(
+			toEntry(
 				// The clone is by definition the production route: `production: true` keeps serving
 				// from the project symlink even though the custom host is not `<slug>.<contentDomain>`.
 				{ ...production, host: domain.host, production: true },
-				{ ...options, contentDomain: options.state.contentDomain },
 			),
 		);
 	}
@@ -276,6 +288,23 @@ export function buildCaddyConfig(options: CompileAgentConfigOptions): Record<str
 		| undefined;
 	const server = apps?.http.servers.content;
 	if (!server) throw new Error('site-config compiler did not produce an HTTP server config');
+
+	// Functions (D110): swap the compiled static/worker route for assets-first routing with the
+	// workerd host as the fallback. Custom-domain clones are in `entries` too, so they inherit the
+	// production route's `function` spec with only their host changed.
+	const functionRoutes = new Map<string, CaddyRoute>();
+	for (const { site, route } of entries) {
+		if (!route.function) continue;
+		functionRoutes.set(
+			`site:${site.projectId}:${site.deploymentId ?? site.host}:${site.host}`,
+			compileFunctionRoute(site, route.function),
+		);
+	}
+	if (functionRoutes.size > 0) {
+		server.routes = server.routes.map((route) =>
+			(typeof route['@id'] === 'string' ? functionRoutes.get(route['@id']) : undefined) ?? route,
+		);
+	}
 
 	const redirects = options.state.hostRedirects
 		.filter((redirect) => !siteHosts.has(normalizeHost(redirect.host)))

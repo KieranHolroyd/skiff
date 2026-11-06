@@ -54,6 +54,9 @@
 		onselect?: (tab: DatabaseTab) => void;
 	} = $props();
 
+	/** Settings → Policies trash period; the layout loads it. */
+	const trashDays = $derived<number>(page.data.policies?.trashDays ?? 7);
+
 	const studioOn = $derived(studioEnabled ?? page.data.studioEnabled === true);
 
 	const base = $derived(resolve('/(dashboard)/databases/[name]', { name: db.name }));
@@ -139,7 +142,7 @@
 			description:
 				db.attachments.length > 0
 					? `It is attached to ${db.attachments.map((item) => item.projectSlug).join(', ')}. Detach it first; the delete will be refused until then.`
-					: 'The container stops and the database moves to the trash for 7 days. Its data stays on the node, so a restore is lossless.',
+					: `The container stops and the database moves to the trash for ${trashDays} days. Its data stays on the node, so a restore is lossless.`,
 			confirmLabel: 'Move to trash',
 			tone: 'danger',
 			typeToConfirm: db.name,

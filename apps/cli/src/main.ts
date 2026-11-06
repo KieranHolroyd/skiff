@@ -25,6 +25,7 @@ import { rollbackCommand } from './commands/rollback.ts';
 import { statusCommand } from './commands/status.ts';
 import { usageCommand } from './commands/usage.ts';
 import { upgradeCommand } from './commands/upgrade.ts';
+import { wranglerCommand } from './commands/wrangler.ts';
 import { PROFILE_ENV, setProfileOverride } from './config.ts';
 
 const invokedAs = 'skif';
@@ -55,6 +56,7 @@ const commands: Record<string, (argv: string[]) => Promise<void>> = {
 	volume: volumeCommand,
 	volumes: volumeCommand,
 	upgrade: upgradeCommand,
+	wrangler: wranglerCommand,
 };
 
 const help = `${invokedAs} ${pkg.version} — deploy to your own Skiff cloud
@@ -66,7 +68,8 @@ Commands:
   logout [--all]                             Forget the API key (settings are kept)
   config [list|get|set|unset|path]           Inspect or change persistent settings
   profile [list|add|use|remove|show|current] Manage profiles for multiple deployments
-  deploy [dir] [options]                     Zip and deploy a directory
+  deploy [dir] [options]                     Zip and deploy a directory (wrangler-aware)
+  wrangler <args…>                           Run wrangler locally (installs it if needed)
   status [project]                           Fleet health, or one project's status
   usage [project]                            Usage and quota percentages (showback)
   projects                                   List projects

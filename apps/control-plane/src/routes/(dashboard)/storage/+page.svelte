@@ -241,7 +241,7 @@
 <div class="space-y-6">
 	<PageHeader
 		target="page.storage"
-		eyebrow="Operate"
+		eyebrow="Workloads"
 		title="Storage"
 		description="Managed S3-compatible object storage (RustFS). Attach an instance to a process or container project and it receives an endpoint and its own scoped access key at start-up."
 	>
@@ -302,7 +302,7 @@
 				<EmptyState
 					icon={Trash2Icon}
 					title="The trash is empty"
-					description="Deleted storage instances stay here for 7 days with their buckets intact, then they are permanently deleted."
+					description={`Deleted storage instances stay here for ${data.policies.trashDays} days with their buckets intact, then they are permanently deleted.`}
 				/>
 			{:else}
 				<EmptyState
@@ -332,7 +332,7 @@
 				</InputGroup.Root>
 				<p class="text-sm text-muted-foreground">
 					{#if trashView}
-						{rows.length} in the trash · purged after 7 days
+						{rows.length} in the trash · purged after {data.policies.trashDays} days
 					{:else}
 						{rows.length}
 						{rows.length === 1 ? 'instance' : 'instances'}

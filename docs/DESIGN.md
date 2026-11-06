@@ -20,13 +20,13 @@ decision log with rationale, and [ROADMAP.md](./ROADMAP.md) for v1/v2 scope.
 - Multi-user ready (orgs, RBAC) even though it's single-user today.
 - Personal infrastructure now, **engineered to become an open-source product** (semver, signed
   releases, safe migrations, clean-VM installer).
+- Survive the loss of any node, the edge included, with each resource's redundancy chosen as an
+  HA level, and put each service on hardware that suits it (D107, [CLUSTERING.md](./CLUSTERING.md)).
 
-**Non-goals (v1)**
-- Server-side builds from git (v2).
-- Process apps and containers (tiers 2 and 3, v2, but designed for now).
-- Custom domains (v2).
-- Surviving a full VPS outage (accepted single point of failure; mitigated by fast restore).
-- Importing metrics from external Prometheus (export only).
+**Non-goals**
+- Kubernetes, a continuously rebalancing scheduler, or a distributed filesystem. Redundancy lives
+  in the data services (CLUSTERING.md §1).
+- A multi-writer control plane. There is one active control plane, with warm standbys (D5).
 
 ---
 
@@ -34,9 +34,9 @@ decision log with rationale, and [ROADMAP.md](./ROADMAP.md) for v1/v2 scope.
 
 | Term | Meaning |
 |---|---|
-| **Control plane** | The SvelteKit/Bun app: dashboard, REST API, MCP server, auth, SQLite, and the ClickHouse telemetry store beside it. Exactly one per install. |
+| **Control plane** | The SvelteKit/Bun app: dashboard, REST API, MCP server, auth, SQLite, and the ClickHouse telemetry store beside it. One active per install, with optional warm standbys (D107). |
 | **Node** | A machine running a **node agent**. It belongs to exactly one control plane. |
-| **Edge node** | The node with the public IP that terminates all TLS and ingress (the VPS). |
+| **Edge node** | The node that terminates TLS and public ingress (the VPS). Today one node holds the role (D98); several ingress nodes are planned (CLUSTERING.md §7). |
 | **Node agent** | A Bun-compiled binary on each node. It reconciles desired state: releases on disk, Caddy routes, runtime units. |
 | **Runtime driver** | The agent's backend for running workloads: `systemd` (v1) and `docker` (v2, optional). |
 | **Org** | Tenant boundary. Every project belongs to one. |
@@ -83,6 +83,9 @@ decision log with rationale, and [ROADMAP.md](./ROADMAP.md) for v1/v2 scope.
 **Single-node mode:** control plane, agent and Caddy on one machine. The agent talks to the control
 plane over a unix socket with the same protocol, and there's no WireGuard. You can have separate
 installs on separate machines, each fully independent with no federation.
+
+**Clusters:** zones, node roles, hardware-aware placement, the private overlay, shared drives and
+high availability are planned in [CLUSTERING.md](./CLUSTERING.md).
 
 ### 3.2 Components & tech
 
@@ -144,7 +147,8 @@ Every runtime tier can be placed on **any node, the edge included** (D41). The e
 static sites.
 
 - **Placement values:** `edge`, a node name/id, or `auto`. The control plane resolves `auto` once, at
-  deploy time, and records the node on the deployment, so a running app never moves on its own.
+  deploy time, and records the node on the deployment, so a running app never moves on its own
+  unless an explicit move (D97) or its HA policy (D107) moves it.
   - Static: `auto` → edge (local `file_server`, no WireGuard hop).
   - Process/container: `auto` → the online, non-draining node with the most free workload-slice
     budget, preferring workers. Falls back to the edge when no worker can admit it.
@@ -300,6 +304,7 @@ create_upload → presigned PUT ─┼─► Upload session ─► finalize ─�
 | Access | `set_access`, `create_share_link`, `list_share_links`, `revoke_share_link` |
 | Observability | `get_status`, `get_metrics`, `get_logs`, `get_audit_log` |
 | Dashboards (D101) | `describe_telemetry`, `query_telemetry`, `list_dashboards`, `get_dashboard`, `create_dashboard` (templates + panel drafts, auto-layout, data preview), `add_dashboard_panels`, `update_dashboard_panel`, `remove_dashboard_panels`, `update_dashboard`, `delete_dashboard` (elicitation) |
+| Alerts (D109) | `list_alerts`, `get_alert_rule`, `create_alert_rule` (outage templates, preview), `update_alert_rule`, `silence_alerts`, `acknowledge_alert`, `get_alert_history`, `delete_alert_rule` (elicitation) |
 | Platform | `list_nodes` (read-only) |
 
 All tools carry `readOnlyHint` / `destructiveHint` / `idempotentHint`. Responses include URLs and next steps.
@@ -409,7 +414,7 @@ domains; `skif logout --all` removes the file and every profile. `SKIFF_URL`, `S
   (Import from external Prometheus is a designed interface, not built.)
 - Tier-2 apps (v2) get `OTEL_EXPORTER_OTLP_ENDPOINT` injected, pointing at their local agent.
 - **Dashboard views:** fleet overview, per-project traffic, errors and resources with deploy markers, audit log, live logs.
-- **Alerts:** `Notifier` interface, email (SES SMTP) + generic webhook (ntfy, Discord, Home Assistant).
+- **Alerts:** `Notifier` interface, email (SES SMTP) + generic webhook (Home Assistant; Discord/Slack URLs are detected) + chat channels with native payloads (Discord, Slack, Telegram, ntfy). User-defined metric alert rules over the ClickHouse telemetry (D109, [ALERTS.md](./ALERTS.md)) use the same notifiers.
   Defaults:
   - node offline > 2 min
   - disk > 85%
@@ -426,7 +431,7 @@ domains; `skif logout --all` removes the file and every profile. `SKIFF_URL`, `S
 | Homelab offline | Homelab-placed projects unreachable | Edge Caddy health-checks and serves a branded 503 + `Retry-After`. Alert after 2 min. Optional static mirror to edge (per project, opt-in). Edge-placed sites and apps keep serving. |
 | Edge app exhausts memory | That app is OOM-killed and restarted | Contained by its own `MemoryMax` and `skiff-workloads.slice`. The control plane, Caddy and other sites are unaffected. Alert on restart loops. |
 | Control plane crash | Dashboard/API/MCP down | All sites keep serving (agents use cached desired state). systemd restarts it. |
-| VPS lost | Everything down | **Accepted single point of failure for v1.** Restore to a fresh VPS in under 15 min. |
+| VPS lost | Everything on it down | Today: restore to a fresh VPS in under 15 min (OPS.md §5.3). With a second ingress node and a control-plane standby (CLUSTERING.md), ingress and the control plane fail over and only L0 resources on the VPS are down. |
 | R2 unreachable | New deploys fail | Existing sites unaffected (node-local cache). |
 
 ---

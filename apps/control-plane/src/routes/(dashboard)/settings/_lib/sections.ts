@@ -3,6 +3,7 @@ import BellRingIcon from '@lucide/svelte/icons/bell-ring';
 import Building2Icon from '@lucide/svelte/icons/building-2';
 import ChartColumnIcon from '@lucide/svelte/icons/chart-column';
 import ChartLineIcon from '@lucide/svelte/icons/chart-line';
+import ClockIcon from '@lucide/svelte/icons/clock';
 import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
 import DatabaseBackupIcon from '@lucide/svelte/icons/database-backup';
 import GlobeIcon from '@lucide/svelte/icons/globe';
@@ -11,13 +12,15 @@ import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 import SparklesIcon from '@lucide/svelte/icons/sparkles';
 import UserRoundIcon from '@lucide/svelte/icons/user-round';
 import UsersIcon from '@lucide/svelte/icons/users';
+import NetworkIcon from '@lucide/svelte/icons/network';
 import WrenchIcon from '@lucide/svelte/icons/wrench';
 import type { Permission } from '@skiff/contracts';
 
 /**
  * Every Settings section, grouped by who it belongs to: you, the organisation you are signed in
- * to, or the platform (this Skiff install). The layout's navigation and each page's header both
- * read from here, so a section's name and one-line summary live in one place.
+ * to, or this Skiff install. Install-wide sections are split into the platform's own config,
+ * observability, and operations (backups, upkeep, upgrades). The layout's navigation and each
+ * page's header both read from here, so a section's name and one-line summary live in one place.
  */
 
 export type SectionId =
@@ -28,15 +31,18 @@ export type SectionId =
 	| 'usage'
 	| 'backup-targets'
 	| 'domains'
+	| 'policies'
 	| 'backups'
 	| 'notifications'
 	| 'assistant'
 	| 'telemetry'
 	| 'metrics'
+	| 'high-availability'
+	| 'clustering'
 	| 'maintenance'
 	| 'updates';
 
-export type SectionGroup = 'you' | 'organisation' | 'platform';
+export type SectionGroup = 'you' | 'organisation' | 'platform' | 'observability' | 'operations';
 
 export type SectionHref =
 	| '/(dashboard)/settings'
@@ -46,11 +52,14 @@ export type SectionHref =
 	| '/(dashboard)/settings/usage'
 	| '/(dashboard)/settings/backup-targets'
 	| '/(dashboard)/settings/domains'
+	| '/(dashboard)/settings/policies'
 	| '/(dashboard)/settings/backups'
 	| '/(dashboard)/settings/notifications'
 	| '/(dashboard)/settings/assistant'
 	| '/(dashboard)/settings/telemetry'
 	| '/(dashboard)/settings/metrics'
+	| '/(dashboard)/settings/high-availability'
+	| '/(dashboard)/settings/clustering'
 	| '/(dashboard)/settings/maintenance'
 	| '/(dashboard)/settings/updates';
 
@@ -141,8 +150,19 @@ export const SECTIONS: Section[] = [
 		ownerOnly: true
 	},
 	{
-		id: 'backups',
+		id: 'policies',
 		group: 'platform',
+		label: 'Policies',
+		summary:
+			'How long deleted things and history are kept, defaults for new resources, and assistant limits.',
+		href: '/(dashboard)/settings/policies',
+		path: '/settings/policies',
+		icon: ClockIcon,
+		ownerOnly: true
+	},
+	{
+		id: 'backups',
+		group: 'operations',
 		label: 'Backups',
 		summary: 'Continuous off-site backup of the platform database, and what a full restore needs.',
 		href: '/(dashboard)/settings/backups',
@@ -154,7 +174,8 @@ export const SECTIONS: Section[] = [
 		id: 'notifications',
 		group: 'platform',
 		label: 'Notifications',
-		summary: 'Outbound email for sign-in links and invitations, and where alerts are sent.',
+		summary:
+			'Set up the channels Skiff sends through: email, SMS, chat, push and the alert recipients.',
 		href: '/(dashboard)/settings/notifications',
 		path: '/settings/notifications',
 		icon: BellRingIcon,
@@ -172,7 +193,7 @@ export const SECTIONS: Section[] = [
 	},
 	{
 		id: 'telemetry',
-		group: 'platform',
+		group: 'observability',
 		label: 'Telemetry',
 		summary:
 			'The optional ClickHouse store behind traffic charts and dashboards. Off by default to keep the install light.',
@@ -183,7 +204,7 @@ export const SECTIONS: Section[] = [
 	},
 	{
 		id: 'metrics',
-		group: 'platform',
+		group: 'observability',
 		label: 'Metrics',
 		summary: 'What /metrics exports for Prometheus and Grafana, and how much work a scrape may do.',
 		href: '/(dashboard)/settings/metrics',
@@ -192,8 +213,28 @@ export const SECTIONS: Section[] = [
 		ownerOnly: true
 	},
 	{
-		id: 'maintenance',
+		id: 'clustering',
 		group: 'platform',
+		label: 'Clustering',
+		summary: 'Overlay addressing, endpoint ports, replica and failover limits, and share mounts.',
+		href: '/(dashboard)/settings/clustering',
+		path: '/settings/clustering',
+		icon: NetworkIcon,
+		platformAdmin: true
+	},
+	{
+		id: 'high-availability',
+		group: 'platform',
+		label: 'High availability',
+		summary: 'Ingress driver, failover hold-downs and ingress-node readiness.',
+		href: '/(dashboard)/settings/high-availability',
+		path: '/settings/high-availability',
+		icon: NetworkIcon,
+		platformAdmin: true
+	},
+	{
+		id: 'maintenance',
+		group: 'operations',
 		label: 'Maintenance',
 		summary: 'Reclaim space from old releases and trash, and review every bulk operation.',
 		href: '/(dashboard)/settings/maintenance',
@@ -203,7 +244,7 @@ export const SECTIONS: Section[] = [
 	},
 	{
 		id: 'updates',
-		group: 'platform',
+		group: 'operations',
 		label: 'Updates',
 		summary: 'The Skiff version running here, and safe one-click upgrades with automatic rollback.',
 		href: '/(dashboard)/settings/updates',
@@ -216,8 +257,19 @@ export const SECTIONS: Section[] = [
 export const GROUP_LABELS: Record<SectionGroup, string> = {
 	you: 'You',
 	organisation: 'Organisation',
-	platform: 'Platform'
+	platform: 'Platform',
+	observability: 'Observability',
+	operations: 'Operations'
 };
+
+/** Navigation order; a group with no visible sections is hidden. */
+export const GROUP_ORDER: SectionGroup[] = [
+	'you',
+	'organisation',
+	'platform',
+	'observability',
+	'operations'
+];
 
 export function section(id: SectionId): Section {
 	return SECTIONS.find((entry) => entry.id === id)!;

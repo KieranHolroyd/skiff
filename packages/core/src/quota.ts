@@ -332,9 +332,10 @@ export class QuotaService {
 
 	/** Effective retention count: project override, org quota, or the platform default. */
 	retention(orgId: string, projectId?: string | null): number {
-		if (!this.enforced()) return limits.retainedDeployments;
+		const fallback = this.ctx.policies.get().retainedDeployments;
+		if (!this.enforced()) return fallback;
 		const quota = this.effective(orgId, projectId);
-		return quota.retainedDeployments >= 0 ? quota.retainedDeployments : limits.retainedDeployments;
+		return quota.retainedDeployments >= 0 ? quota.retainedDeployments : fallback;
 	}
 
 	assertCanCreateDeployment(_orgId: string): void {

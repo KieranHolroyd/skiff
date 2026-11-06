@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import type { MetricBucket } from '@skiff/contracts';
+import type { AnalyticsEvent, FunctionTailEvent, MetricBucket } from '@skiff/contracts';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -453,6 +453,30 @@ describe.skipIf(!hasClickHouse)('TelemetryStore', () => {
 		await store.open();
 		await expect(store.runQuery(`INSERT INTO traffic_1m (host, bucket) VALUES ('x', now())`, { asReader: true })).rejects.toThrow();
 	});
+
+	test('ingests Analytics Engine datapoints with millisecond timestamps', async () => {
+		await store.open();
+		// The table is a plain MergeTree: every datapoint is a row, so a re-sent batch appends.
+		await store.ingestAnalytics([
+			{
+				ts: START + 123,
+				projectId: 'proj_1',
+				workloadId: 'wl_1',
+				dataset: 'web_events',
+				blobs: ['/pricing', 'GET'],
+				doubles: [-1.5, 2],
+				indexes: ['proj_1'],
+			},
+		]);
+		const result = await store.runQuery(
+			`SELECT toUnixTimestamp64Milli(ts) AS ts_ms, project_id, workload_id, dataset, blobs, doubles, indexes
+			FROM ${store.database}.function_analytics`,
+			{ asReader: false },
+		);
+		expect(result.data).toEqual([
+			[START + 123, 'proj_1', 'wl_1', 'web_events', ['/pricing', 'GET'], [-1.5, 2], ['proj_1']],
+		]);
+	});
 });
 
 /** A fetch that fails the way an unreachable server does. */
@@ -587,5 +611,271 @@ describe('TelemetryStore without a server', () => {
 		expect(await unconfigured.ready()).toBe(false);
 		expect(unconfigured.installed).toBe(false);
 		expect(unconfigured.error?.message).toContain('not installed');
+	});
+});
+
+// --- Analytics Engine ingestion ----------------------------------------------------------------
+
+interface ClickHouseCall {
+	/** The statement: `query` for an INSERT body, else the POSTed SQL. */
+	statement: string;
+	/** `?query=` when the call carries rows in the body. */
+	query: string | null;
+	body: string;
+}
+
+/** A fake ClickHouse HTTP endpoint injected through `ClickHouseConfig.fetch`. */
+function fakeClickHouse() {
+	const calls: ClickHouseCall[] = [];
+	let mode: 'ok' | 'down' | 'error' = 'ok';
+	const handler = (async (input: string | URL | Request, init: RequestInit = {}) => {
+		const url = new URL(String(input));
+		const query = url.searchParams.get('query');
+		const body = String(init.body ?? '');
+		calls.push({ statement: query ?? body, query, body });
+		if (mode === 'down') throw new TypeError('fetch failed');
+		if (mode === 'error') return new Response('Code: 62. DB::Exception: Syntax error', { status: 400 });
+		return new Response('', { status: 200 });
+	}) as typeof fetch;
+	return {
+		calls,
+		fetch: handler,
+		setMode: (next: 'ok' | 'down' | 'error') => {
+			mode = next;
+		},
+	};
+}
+
+function makeStore(fake: ReturnType<typeof fakeClickHouse>): TelemetryStore {
+	return new TelemetryStore({
+		clickhouse: { url: 'http://clickhouse.test', user: 'skiff', password: 'secret', database: 'skiff', fetch: fake.fetch },
+		tableTtl: false,
+	});
+}
+
+function makeAnalyticsEvent(ts: number, overrides: Partial<AnalyticsEvent> = {}): AnalyticsEvent {
+	return {
+		ts,
+		projectId: 'prj_1',
+		workloadId: 'wl_1',
+		dataset: 'web_events',
+		blobs: ['/pricing'],
+		doubles: [1],
+		indexes: [],
+		...overrides,
+	};
+}
+
+describe('TelemetryStore analytics ingestion (injected client)', () => {
+	test('creates the function_analytics table alongside the existing tables', async () => {
+		const fake = fakeClickHouse();
+		const store = makeStore(fake);
+		await store.open();
+		expect(store.available).toBe(true);
+
+		const ddl = fake.calls.filter((call) => call.statement.trimStart().startsWith('CREATE TABLE'));
+		expect(ddl).toHaveLength(8);
+
+		const analytics = fake.calls.find((call) => call.statement.includes('.function_analytics'))!;
+		expect(analytics.statement).toContain('ts DateTime64(3)');
+		expect(analytics.statement).toContain('project_id LowCardinality(String)');
+		expect(analytics.statement).toContain('workload_id String');
+		expect(analytics.statement).toContain('dataset LowCardinality(String)');
+		expect(analytics.statement).toContain('blobs Array(String)');
+		expect(analytics.statement).toContain('doubles Array(Float64)');
+		expect(analytics.statement).toContain('indexes Array(String)');
+		expect(analytics.statement).toContain('ENGINE = MergeTree');
+		expect(analytics.statement).toContain('ORDER BY (project_id, dataset, ts)');
+		expect(analytics.statement).toContain('TTL toDateTime(ts) + INTERVAL 90 DAY');
+	});
+
+	test('inserts events as JSONEachRow with ClickHouse column names', async () => {
+		const fake = fakeClickHouse();
+		const store = makeStore(fake);
+		await store.open();
+
+		await store.ingestAnalytics([
+			makeAnalyticsEvent(Date.parse('2026-11-06T12:00:00.123Z'), {
+				blobs: ['/pricing', 'GET'],
+				doubles: [-1.5, 2],
+				indexes: ['proj'],
+			}),
+		]);
+
+		const insert = fake.calls.find(
+			(call) => call.query === 'INSERT INTO skiff.function_analytics FORMAT JSONEachRow',
+		);
+		expect(insert).toBeDefined();
+		const rows = insert!.body.split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+		expect(rows).toEqual([
+			{
+				ts: '2026-11-06 12:00:00.123',
+				project_id: 'prj_1',
+				workload_id: 'wl_1',
+				dataset: 'web_events',
+				blobs: ['/pricing', 'GET'],
+				doubles: [-1.5, 2],
+				indexes: ['proj'],
+			},
+		]);
+	});
+
+	test('chunks a large batch into 5,000-row inserts', async () => {
+		const fake = fakeClickHouse();
+		const store = makeStore(fake);
+		await store.open();
+
+		await store.ingestAnalytics(Array.from({ length: 12_001 }, (_, index) => makeAnalyticsEvent(index)));
+		const inserts = fake.calls.filter((call) => call.query?.startsWith('INSERT INTO skiff.function_analytics'));
+		expect(inserts.map((call) => call.body.split('\n').length)).toEqual([5_000, 5_000, 2_001]);
+	});
+
+	test('does not insert anything when the event list is empty', async () => {
+		const fake = fakeClickHouse();
+		const store = makeStore(fake);
+		await store.open();
+
+		await store.ingestAnalytics([]);
+		expect(fake.calls.some((call) => call.query?.includes('function_analytics'))).toBe(false);
+	});
+
+	test('is fail-open when ClickHouse is unreachable', async () => {
+		const fake = fakeClickHouse();
+		const store = makeStore(fake);
+		await store.open();
+		fake.setMode('down');
+
+		await expect(store.ingestAnalytics([makeAnalyticsEvent(1)])).resolves.toBeUndefined();
+		expect(store.available).toBe(false);
+		expect(store.error?.message).toContain('unreachable');
+	});
+
+	test('is fail-open when the insert itself is rejected', async () => {
+		const fake = fakeClickHouse();
+		const store = makeStore(fake);
+		await store.open();
+		fake.setMode('error');
+
+		await expect(store.ingestAnalytics([makeAnalyticsEvent(1)])).resolves.toBeUndefined();
+		// A query error is reported, not treated as the server going away.
+		expect(store.available).toBe(true);
+		expect(store.error?.message).toContain('Syntax error');
+	});
+});
+
+// --- Tail-worker ingestion ----------------------------------------------------------------------
+
+function makeTailEvent(ts: number, overrides: Partial<FunctionTailEvent> = {}): FunctionTailEvent {
+	return {
+		ts,
+		projectId: 'prj_1',
+		workloadId: 'wl_1',
+		scriptName: 'my-worker',
+		outcome: 'ok',
+		logs: [{ level: 'log', message: 'hello' }],
+		exceptions: [{ name: 'Error', message: 'boom' }],
+		request: { method: 'GET', url: 'https://example.com/page', status: 200 },
+		...overrides,
+	};
+}
+
+describe('TelemetryStore tail ingestion (injected client)', () => {
+	test('creates the function_tail_events table with the documented schema', async () => {
+		const fake = fakeClickHouse();
+		const store = makeStore(fake);
+		await store.open();
+
+		const ddl = fake.calls.find((call) => call.statement.includes('.function_tail_events'))!;
+		expect(ddl).toBeDefined();
+		expect(ddl.statement).toContain('ts DateTime64(3)');
+		expect(ddl.statement).toContain('project_id LowCardinality(String)');
+		expect(ddl.statement).toContain('workload_id String');
+		expect(ddl.statement).toContain('script_name String');
+		expect(ddl.statement).toContain('outcome LowCardinality(String)');
+		expect(ddl.statement).toContain('logs_json String');
+		expect(ddl.statement).toContain('exceptions_json String');
+		expect(ddl.statement).toContain('request_json String');
+		expect(ddl.statement).toContain('ENGINE = MergeTree');
+		expect(ddl.statement).toContain('ORDER BY (project_id, ts)');
+		expect(ddl.statement).toContain('TTL toDateTime(ts) + INTERVAL 30 DAY');
+	});
+
+	test('inserts tails as JSONEachRow with the structured parts as JSON strings', async () => {
+		const fake = fakeClickHouse();
+		const store = makeStore(fake);
+		await store.open();
+
+		await store.ingestTails([
+			makeTailEvent(Date.parse('2026-11-06T12:00:00.123Z'), {
+				logs: [
+					{ level: 'log', message: 'hello' },
+					{ level: 'error', message: 'bad' },
+				],
+				exceptions: [{ name: 'TypeError', message: 'x is not a function' }],
+				request: null,
+			}),
+		]);
+
+		const insert = fake.calls.find(
+			(call) => call.query === 'INSERT INTO skiff.function_tail_events FORMAT JSONEachRow',
+		);
+		expect(insert).toBeDefined();
+		const rows = insert!.body.split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+		expect(rows).toEqual([
+			{
+				ts: '2026-11-06 12:00:00.123',
+				project_id: 'prj_1',
+				workload_id: 'wl_1',
+				script_name: 'my-worker',
+				outcome: 'ok',
+				logs_json: JSON.stringify([
+					{ level: 'log', message: 'hello' },
+					{ level: 'error', message: 'bad' },
+				]),
+				exceptions_json: JSON.stringify([{ name: 'TypeError', message: 'x is not a function' }]),
+				request_json: 'null',
+			},
+		]);
+	});
+
+	test('chunks a large batch into 2,000-row inserts', async () => {
+		const fake = fakeClickHouse();
+		const store = makeStore(fake);
+		await store.open();
+
+		await store.ingestTails(Array.from({ length: 4_500 }, (_, index) => makeTailEvent(index)));
+		const inserts = fake.calls.filter((call) => call.query?.startsWith('INSERT INTO skiff.function_tail_events'));
+		expect(inserts.map((call) => call.body.split('\n').length)).toEqual([2_000, 2_000, 500]);
+	});
+
+	test('does not insert anything when the tail list is empty', async () => {
+		const fake = fakeClickHouse();
+		const store = makeStore(fake);
+		await store.open();
+
+		await store.ingestTails([]);
+		expect(fake.calls.some((call) => call.query?.includes('function_tail_events'))).toBe(false);
+	});
+
+	test('is fail-open when ClickHouse is unreachable', async () => {
+		const fake = fakeClickHouse();
+		const store = makeStore(fake);
+		await store.open();
+		fake.setMode('down');
+
+		await expect(store.ingestTails([makeTailEvent(1)])).resolves.toBeUndefined();
+		expect(store.available).toBe(false);
+		expect(store.error?.message).toContain('unreachable');
+	});
+
+	test('is fail-open when the insert itself is rejected', async () => {
+		const fake = fakeClickHouse();
+		const store = makeStore(fake);
+		await store.open();
+		fake.setMode('error');
+
+		await expect(store.ingestTails([makeTailEvent(1)])).resolves.toBeUndefined();
+		expect(store.available).toBe(true);
+		expect(store.error?.message).toContain('Syntax error');
 	});
 });

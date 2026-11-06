@@ -12,6 +12,7 @@ import {
 describe('feature registry', () => {
 	test('registers every known flag with a description and area', () => {
 		expect(FEATURE_FLAG_NAMES).toEqual([
+			'FUNCTIONS',
 			'BACKUPS_RESTORE',
 			'PITR',
 			'OBJECT_BROWSER',
@@ -19,6 +20,8 @@ describe('feature registry', () => {
 			'DB_STUDIO',
 			'DB_TLS',
 			'ORG_NETWORKS',
+			'MULTI_NODE_REPLICAS',
+			'SERVICE_ENDPOINTS',
 			'APP_VOLUMES',
 			'JOBS',
 			'PREVIEW_DATA',
@@ -50,6 +53,8 @@ describe('feature registry', () => {
 			'PITR',
 			'DB_TLS',
 			'ORG_NETWORKS',
+			'MULTI_NODE_REPLICAS',
+			'SERVICE_ENDPOINTS',
 			'APP_VOLUMES',
 			'JOBS',
 			'PREVIEW_DATA',

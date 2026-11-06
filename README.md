@@ -107,6 +107,9 @@ npm install -g @skiffy/skiff                    # or: bun add -g / npx @skiffy/s
 
 skif login --url https://control.example.com    # approve the CLI in your browser
 skif deploy ./dist                              # zip, upload, promote
+# Functions: a project with wrangler.jsonc is bundled by Wrangler automatically
+skif deploy .                                   # runs `wrangler deploy --dry-run` on the client
+skif wrangler dev                               # local Workers runtime, same as production
 skif status my-site
 skif rollback my-site                           # production back one deployment
 ```
@@ -303,8 +306,10 @@ The full checklist is in [`docs/ROADMAP.md`](docs/ROADMAP.md). The headlines:
 - **v2:** process apps and containers in installer and release builds, env and secrets UI, git
   builds with GitHub webhooks, custom domains with Cloudflare auto-records, pluggable object
   stores (Garage, MinIO, replication).
-- **Later:** backup ingress via Cloudflare Tunnel, custom roles UI, templates and scaffolding for
-  agents.
+- **Clustering & HA:** hardware-aware placement, zones and roles, a private overlay, shared
+  drives, multi-ingress, a control-plane standby and database replicas
+  ([`docs/CLUSTERING.md`](docs/CLUSTERING.md)).
+- **Later:** custom roles UI, templates and scaffolding for agents.
 
 Competitive research and the proposed build order are in
 [`docs/FEATURE-RESEARCH.md`](docs/FEATURE-RESEARCH.md).

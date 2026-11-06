@@ -1,5 +1,5 @@
 import { promises as fs } from 'node:fs';
-import type { MetricBucket, TelemetryBatch } from '@skiff/contracts';
+import type { AnalyticsEvent, FunctionTailEvent, MetricBucket, TelemetryBatch } from '@skiff/contracts';
 import { normalizeHost } from './verify.ts';
 
 /**
@@ -13,6 +13,17 @@ const PATH_LIMIT = 100;
 const REFERRER_LIMIT = 50;
 const MAX_ACTIVE_BUCKETS = 2_000;
 const MAX_PENDING_BUCKETS = 5_000;
+/**
+ * Analytics Engine datapoints waiting for the next POST. One agent serves every function on the
+ * node, so this buffer is the only back-pressure between a chatty Worker and a control-plane
+ * outage; past the cap the oldest events are dropped rather than growing memory (fail-open).
+ */
+const MAX_PENDING_ANALYTICS = 5_000;
+/**
+ * Tail-worker items waiting for the next POST. The telemetry batch caps `tails` at 2,000, so there
+ * is no point buffering more: past the cap the oldest items are dropped (fail-open).
+ */
+const MAX_PENDING_TAILS = 2_000;
 const TOP_LIMIT = 10;
 const READ_CHUNK = 64 * 1024;
 const MAX_CARRY = 1024 * 1024;
@@ -362,6 +373,12 @@ export class TelemetryClient {
 	private readonly options: TelemetryClientOptions;
 	private readonly aggregator: AccessLogAggregator;
 	private readonly tailer: AccessLogTailer;
+	/** Analytics Engine datapoints from function bindings, waiting for the next POST. */
+	private readonly analytics: AnalyticsEvent[] = [];
+	private analyticsDropped = 0;
+	/** Tail-worker items from function invocations, waiting for the next POST. */
+	private readonly tails: FunctionTailEvent[] = [];
+	private tailsDropped = 0;
 	private flushFailures = 0;
 	private batchesSent = 0;
 	private bucketsSent = 0;
@@ -373,12 +390,21 @@ export class TelemetryClient {
 		this.tailer = new AccessLogTailer(options.accessLogPath, this.aggregator);
 	}
 
-	get stats(): { flushFailures: number; batchesSent: number; bucketsSent: number; dropped: number } {
+	get stats(): {
+		flushFailures: number;
+		batchesSent: number;
+		bucketsSent: number;
+		dropped: number;
+		analyticsDropped: number;
+		tailsDropped: number;
+	} {
 		return {
 			flushFailures: this.flushFailures,
 			batchesSent: this.batchesSent,
 			bucketsSent: this.bucketsSent,
 			dropped: this.aggregator.dropped,
+			analyticsDropped: this.analyticsDropped,
+			tailsDropped: this.tailsDropped,
 		};
 	}
 
@@ -397,20 +423,47 @@ export class TelemetryClient {
 		await this.tailer.poll();
 	}
 
+	/**
+	 * Buffer one Analytics Engine datapoint (from the loopback sink) for the next telemetry POST.
+	 * Synchronous and never throws: the sink's `record` callback runs inside an HTTP handler and a
+	 * full buffer must drop the oldest event, not fail the write.
+	 */
+	recordAnalytics(event: AnalyticsEvent): void {
+		this.analytics.push(event);
+		this.trimAnalytics();
+	}
+
+	/**
+	 * Buffer one tail-worker item (from the loopback sink) for the next telemetry POST. Synchronous
+	 * and never throws: the sink's `record` callback runs inside an HTTP handler and a full buffer
+	 * must drop the oldest item, not fail the write.
+	 */
+	recordTail(event: FunctionTailEvent): void {
+		this.tails.push(event);
+		this.trimTails();
+	}
+
 	/** Aggregate completed minutes and POST them. Throws only after retaining the batch. */
 	async flush(force = false): Promise<void> {
 		if (!this.started) return;
 		this.aggregator.flushReady(force);
 		for (;;) {
 			const batch = this.aggregator.takePending();
-			if (batch.length === 0) return;
+			const analytics = this.analytics.splice(0, this.analytics.length);
+			const tails = this.tails.splice(0, this.tails.length);
+			// Analytics-only and tail-only flushes must still reach the control plane.
+			if (batch.length === 0 && analytics.length === 0 && tails.length === 0) return;
 			try {
-				await this.post(batch);
+				await this.post(batch, analytics, tails);
 				this.batchesSent += 1;
 				this.bucketsSent += batch.length;
 			} catch (error) {
 				this.flushFailures += 1;
 				this.aggregator.requeue(batch);
+				this.analytics.unshift(...analytics);
+				this.trimAnalytics();
+				this.tails.unshift(...tails);
+				this.trimTails();
 				throw error;
 			}
 		}
@@ -428,7 +481,31 @@ export class TelemetryClient {
 		await this.tailer.close();
 	}
 
-	private async post(buckets: MetricBucket[]): Promise<void> {
-		await postTelemetryBatch(this.options, { buckets });
+	private async post(
+		buckets: MetricBucket[],
+		analytics: AnalyticsEvent[],
+		tails: FunctionTailEvent[],
+	): Promise<void> {
+		await postTelemetryBatch(this.options, {
+			buckets,
+			...(analytics.length > 0 ? { analytics } : {}),
+			...(tails.length > 0 ? { tails } : {}),
+		});
+	}
+
+	/** Keep the analytics buffer bounded by dropping the oldest events. */
+	private trimAnalytics(): void {
+		if (this.analytics.length <= MAX_PENDING_ANALYTICS) return;
+		const overflow = this.analytics.length - MAX_PENDING_ANALYTICS;
+		this.analytics.splice(0, overflow);
+		this.analyticsDropped += overflow;
+	}
+
+	/** Keep the tail buffer bounded by dropping the oldest items. */
+	private trimTails(): void {
+		if (this.tails.length <= MAX_PENDING_TAILS) return;
+		const overflow = this.tails.length - MAX_PENDING_TAILS;
+		this.tails.splice(0, overflow);
+		this.tailsDropped += overflow;
 	}
 }

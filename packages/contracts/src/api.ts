@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import { accessModes, runtimes } from './model.ts';
 import { nodeStoragePathSchema } from './storage.ts';
+import { nodeLabelsSchema, nodeRoleSchema, nodeZoneSchema, placementSpecSchema } from './cluster.ts';
 
 const slug = z.string().min(3).max(40);
 export const projectCreateSchema = z.object({
@@ -8,6 +9,8 @@ export const projectCreateSchema = z.object({
 	slug: slug.optional(),
 	runtime: z.enum(runtimes).default('static'),
 	placement: z.string().min(1).max(64).default('edge'),
+	/** Constraint spec; null keeps the shorthand above (CLUSTERING §3.4). */
+	placementSpec: placementSpecSchema.optional(),
 	productionAccess: z.enum(accessModes).default('public'),
 	previewAccess: z.enum(accessModes).default('platform'),
 });
@@ -16,6 +19,7 @@ export type ProjectCreate = z.infer<typeof projectCreateSchema>;
 export const projectUpdateSchema = z.object({
 	name: z.string().min(1).max(120).optional(),
 	placement: z.string().min(1).max(64).optional(),
+	placementSpec: placementSpecSchema.nullable().optional(),
 	productionAccess: z.enum(accessModes).optional(),
 	previewAccess: z.enum(accessModes).optional(),
 	pinned: z.boolean().optional(),
@@ -144,6 +148,16 @@ export const nodeUpdateSchema = z
 		buildDir: nodeStoragePathSchema.nullable().optional(),
 		/** Volume new managed instances on this node use when they name none (D74). */
 		defaultVolumeId: z.string().max(100).nullable().optional(),
+		/** Failure domain (CLUSTERING §3.2). */
+		zone: nodeZoneSchema.optional(),
+		/** What this node may run; removing a role in use is refused. */
+		roles: z.array(nodeRoleSchema).min(1).max(5).optional(),
+		/** Operator placement labels; `skiff.io/*` is reserved. */
+		labels: nodeLabelsSchema.optional(),
+		/** LAN address for direct peering inside one zone (C1). */
+		lanEndpoint: z.string().trim().max(253).nullable().optional(),
+		/** CPU reservation budget in millis; null removes it. */
+		cpuBudgetMillis: z.number().int().min(100).max(1_000_000).nullable().optional(),
 	})
 	.strict();
 export type NodeUpdate = z.infer<typeof nodeUpdateSchema>;

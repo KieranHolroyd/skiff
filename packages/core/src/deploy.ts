@@ -2,6 +2,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { deployments, projects, releases } from '@skiff/db';
 import { parseManifest } from './artifact.ts';
 import {
+	FUNCTION_MANIFEST_FILE,
 	requirePermission,
 	type DeployFiles,
 	type DeploySite,
@@ -11,6 +12,7 @@ import type { CoreContext } from './context.ts';
 import { NotFoundError, ValidationError } from './errors.ts';
 import type { DeploymentView } from './deployments.ts';
 import type { ProjectRow } from './projects.ts';
+import { isFunctionTier } from './runtime-tier.ts';
 
 export interface DeployResult extends DeploymentView {
 	projectCreated: boolean;
@@ -32,13 +34,16 @@ export class DeployService {
 			.from(projects)
 			.where(and(eq(projects.orgId, principal.orgId), eq(projects.slug, input.name), isNull(projects.deletedAt)))
 			.get() as ProjectRow | undefined;
+		// A bundle with the function manifest creates a function project (D110). `projects.create`
+		// enforces the feature flag itself, so the check is not duplicated here.
+		const functionBundle = input.files?.some((file) => file.path === FUNCTION_MANIFEST_FILE) ?? false;
 		let projectCreated = false;
 		if (!project) {
 			requirePermission(principal, 'project:create');
 			const view = await this.ctx.projects.create(principal, {
 				name: input.name,
 				slug: input.name,
-				runtime: 'static',
+				runtime: functionBundle ? 'function' : 'static',
 				placement: 'edge',
 				productionAccess: 'public',
 				previewAccess: 'platform',
@@ -55,7 +60,10 @@ export class DeployService {
 					promote: input.promote,
 					environment: input.environment,
 				});
-		return { ...view, projectCreated, hint: input.spa === false ? undefined : this.spaHint(view.id) };
+		// A function serves its assets through workerd; SPA routing is a static-site suggestion only.
+		const hint =
+			input.spa === false || isFunctionTier(project) ? undefined : this.spaHint(view.id);
+		return { ...view, projectCreated, hint };
 	}
 
 	private spaHint(deploymentId: string): string | undefined {

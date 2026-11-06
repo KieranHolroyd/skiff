@@ -65,6 +65,25 @@ describe('projects', () => {
 		const project = await core.projects.create(principal, { name: 'My Cool Site' } as never);
 		expect(project.slug).toBe('my-cool-site');
 	});
+
+	test('stores and clears a placement constraint spec', async () => {
+		const project = await core.projects.create(principal, {
+			name: 'Constrained app',
+			slug: 'constrained-app',
+			runtime: 'process',
+			placement: 'auto',
+			placementSpec: { zone: 'home', labels: { tier: 'critical' } },
+			productionAccess: 'public',
+			previewAccess: 'platform',
+		});
+		expect(project.placementSpec).toEqual({ zone: 'home', labels: { tier: 'critical' } });
+		const updated = await core.projects.update(principal, project.slug, {
+			placementSpec: { zone: ['cloud-a', 'cloud-b'], volumeClass: 'fast' },
+		});
+		expect(updated.placementSpec).toEqual({ zone: ['cloud-a', 'cloud-b'], volumeClass: 'fast' });
+		const cleared = await core.projects.update(principal, project.slug, { placementSpec: null });
+		expect(cleared.placementSpec).toBeNull();
+	});
 });
 
 describe('deploy pipeline', () => {

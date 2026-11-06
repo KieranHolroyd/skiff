@@ -81,9 +81,12 @@ export function parseArgs(argv: string[], spec: FlagSpec): ParsedArgs {
 			const equals = raw.indexOf('=');
 			const namePart = equals === -1 ? raw : raw.slice(0, equals);
 			const inlineValue = equals === -1 ? undefined : raw.slice(equals + 1);
-			const negated = namePart.startsWith('no-');
+			// A flag may be declared under its literal name ("no-wrangler") alongside a different
+			// flag it looks like a negation of ("wrangler"), so the literal name wins.
+			const literal = spec[namePart];
+			const negated = literal === undefined && namePart.startsWith('no-');
 			const name = negated ? namePart.slice(3) : namePart;
-			const def = spec[name];
+			const def = literal ?? spec[name];
 			if (!def) throw new UsageError(`Unknown option --${namePart}.`);
 
 			if (def.type === 'boolean') {

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { promises as fs } from 'node:fs';
+import { constants as fsConstants, promises as fs } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import {
 	DEFAULT_VOLUMES_FILE,
@@ -20,6 +20,7 @@ import {
 	renderContainerEnvFile,
 	renderContainerUnit,
 	renderEnvFile,
+	renderFunctionUnit,
 	renderKeyValueConfig,
 	renderNetworkUnit,
 	renderPoolerConfig,
@@ -46,10 +47,13 @@ import {
 	assertId,
 	assertRelativePath,
 	databaseAlias,
+	functionNeedsDurableStorage,
 	workloadNetworkName,
 	type DatabaseEngine,
 	type WorkloadActivation,
 	type WorkloadDesired,
+	type WorkloadFunction,
+	type WorkloadFunctionFiles,
 	type WorkloadStatus,
 } from './validate.ts';
 import {
@@ -172,6 +176,11 @@ export interface SystemdDriverOptions {
 	releaseDirs: string[];
 	/** Absolute bun binary used for the default process command. */
 	bunPath: string;
+	/**
+	 * Root of the pinned workerd installations: `<workerdDir>/<version>/workerd` (FN1). Defaults to
+	 * the production path so tests and older callers keep working; `main.ts` passes the config value.
+	 */
+	workerdDir?: string;
 	systemctlPath?: string;
 	journalctlPath?: string;
 	/** Absolute podman binary used by the fixed database dump/restore verbs. */
@@ -213,6 +222,7 @@ export class SystemdDriver {
 	private readonly volumeRegistryOverride: VolumeRegistry | null;
 	private readonly releaseDirs: string[];
 	private readonly bunPath: string;
+	private readonly workerdDir: string;
 	private readonly systemctlPath: string;
 	private readonly journalctlPath: string;
 	private readonly podmanPath: string;
@@ -238,6 +248,7 @@ export class SystemdDriver {
 			throw new ValidationError('releaseDirs must contain at least one directory');
 		this.releaseDirs = options.releaseDirs.map((dir) => assertAbsolutePath(dir, 'releaseDir'));
 		this.bunPath = assertAbsolutePath(options.bunPath, 'bunPath');
+		this.workerdDir = assertAbsolutePath(options.workerdDir ?? '/usr/lib/skiff/workerd', 'workerdDir');
 		this.systemctlPath = assertAbsolutePath(options.systemctlPath ?? '/usr/bin/systemctl', 'systemctlPath');
 		this.journalctlPath = assertAbsolutePath(
 			options.journalctlPath ?? '/usr/bin/journalctl',
@@ -406,19 +417,35 @@ export class SystemdDriver {
 	async apply(
 		workload: WorkloadDesired,
 		activation: WorkloadActivation,
+		functionFiles?: WorkloadFunctionFiles,
 	): Promise<HelperWorkloadStatus> {
 		assertId(workload.id, 'workload.id');
 		if (activation.workloadId !== workload.id)
 			throw new ValidationError('activation.workloadId does not match workload.id');
 		if (activation.activationVersion !== workload.activationVersion)
 			throw new ValidationError('activation.activationVersion does not match the desired workload');
+		if (workload.runtime !== 'function' && functionFiles !== undefined)
+			throw new ValidationError('function files are only valid for a function workload');
 
-		// Resolve everything that can fail before writing a secret to disk.
+		// Resolve everything that can fail before writing a secret or a unit to disk.
 		let releaseDir: string | null = null;
 		let command: string[] | null = null;
+		let workerdPath: string | null = null;
+		let modulePaths: string[] = [];
 		if (workload.runtime === 'process') {
 			releaseDir = await this.resolveRelease(workload.release!);
 			command = workload.command ?? (await this.defaultCommand(releaseDir));
+		} else if (workload.runtime === 'function') {
+			const fn = workload.function;
+			if (!fn) throw new ValidationError('Function workloads need workload.function');
+			if (!functionFiles)
+				throw new ValidationError('Function workloads need request.function.config and request.function.shim');
+			if (!workload.release) throw new ValidationError('Function workloads need a release');
+			// Resolve the release, every module and the pinned binary before writing anything: a
+			// missing piece fails closed instead of leaving a half-installed host behind.
+			releaseDir = await this.resolveRelease(workload.release);
+			modulePaths = await this.verifyFunctionModules(fn, releaseDir);
+			workerdPath = await this.resolveWorkerd(fn.workerdVersion);
 		} else if (!workload.image) {
 			throw new ValidationError(
 				'Container workloads need an image; the control plane must include workload.image',
@@ -504,6 +531,76 @@ export class SystemdDriver {
 			if (workload.socketActivation) {
 				await this.systemctl(['restart', socketUnitName(workload.id)]);
 			}
+		} else if (workload.runtime === 'function') {
+			// The config and shim are helper-owned copies of the agent's rendered files. They live
+			// beside the env file and are passed as systemd credentials, never as a path from the
+			// wire. Only the helper ever writes here, 0600, atomically.
+			const functionDir = join(workloadRuntimeDir, 'function');
+			await fs.mkdir(functionDir, { recursive: true, mode: 0o700 });
+			await fs.chmod(functionDir, 0o700).catch(() => undefined);
+			const configPath = join(functionDir, 'config.capnp');
+			const shimPath = join(functionDir, 'shim.mjs');
+			await this.writeAtomic(configPath, functionFiles!.config, 0o600);
+			await this.writeAtomic(shimPath, functionFiles!.shim, 0o600);
+			// Binding-service modules: one credential each, named exactly as the rendered config
+			// embeds them. Names were validated (lower-case, no separators) by the request parser,
+			// so `join` cannot escape `functionDir`; sort for a deterministic unit file.
+			const extraFiles: Array<{ name: string; path: string }> = [];
+			const extra = functionFiles!.files ?? {};
+			for (const name of Object.keys(extra).sort()) {
+				const path = join(functionDir, name);
+				await this.writeAtomic(path, extra[name]!, 0o600);
+				extraFiles.push({ name, path });
+			}
+
+			// A function is socket-activated exactly like a process app: same socket path shape.
+			// Functions are per-desired-state-id (`<id>`, `<id>-r<n>`), so replicas and the
+			// phase-4 route/agent probe agree on the socket. Process apps keep the project socket.
+			const socketPath = join(this.runtimeDir, `${workload.id}.sock`);
+			const long = Buffer.byteLength(socketPath);
+			if (long > 100) throw new ValidationError(`Unix socket path is too long (${long} bytes)`);
+			await fs.mkdir(dirname(socketPath), { recursive: true, mode: 0o755 });
+
+			changed =
+				(await this.writeIfChanged(
+					paths.service,
+					renderFunctionUnit({
+						workload,
+						releaseDir: releaseDir!,
+						envFile,
+						secrets: secretFiles,
+						volumeMounts,
+						configPath,
+						shimPath,
+						workerdPath: workerdPath!,
+						modulePaths,
+						files: extraFiles,
+						durableStorage: functionNeedsDurableStorage(workload.function!),
+					}),
+					0o644,
+				)) || changed;
+			// A function never shares an id with a container or a pooler sidecar.
+			changed = (await this.removeIfExists(paths.container)) || changed;
+			changed = (await this.removeIfExists(paths.pooler)) || changed;
+			changed =
+				(await this.writeIfChanged(
+					paths.socket,
+					renderSocketUnit({
+						workload,
+						socketPath,
+						socketMode: this.socketMode,
+						socketGroup: this.socketGroup,
+					}),
+					0o644,
+				)) || changed;
+
+			if (changed) await this.daemonReload();
+			// Mirror the process branch: the socket owns activation, so a stale service enable would
+			// start workerd without the inherited listener.
+			await this.systemctl(['disable', serviceUnitName(workload.id)], { allowFailure: true });
+			await this.systemctl(['enable', socketUnitName(workload.id)]);
+			await this.systemctl(['restart', serviceUnitName(workload.id)]);
+			await this.systemctl(['restart', socketUnitName(workload.id)]);
 		} else {
 			const image = workload.image!;
 			// Each org gets its own network; write it first so Quadlet can resolve it. A workload
@@ -1605,6 +1702,28 @@ END $$;`];
 		await fs.rm(join(this.runtimeDir, id), { recursive: true, force: true });
 	}
 
+	/**
+	 * Stop one workload's service (FN4 scale to zero). The `.socket` unit is deliberately left
+	 * alone and keeps listening — `RemoveOnStop=yes` is on the socket, not the service — so the next
+	 * connection cold-starts the host through socket activation. Idempotent: stopping a stopped or
+	 * absent unit is success.
+	 */
+	async stop(id: string): Promise<void> {
+		assertId(id, 'workload id');
+		await this.systemctl(['stop', serviceUnitName(id)], { allowFailure: true });
+	}
+
+	/**
+	 * Restart a socket-activated workload the same way `apply` does: the service first, then the
+	 * socket that owns the inherited listener (FN5 runaway watchdog). Idempotent: `systemctl
+	 * restart` starts an inactive unit rather than failing.
+	 */
+	async restart(id: string): Promise<void> {
+		assertId(id, 'workload id');
+		await this.systemctl(['restart', serviceUnitName(id)]);
+		await this.systemctl(['restart', socketUnitName(id)]);
+	}
+
 	/** Actual service state, mapped onto the workload status vocabulary. */
 	async status(id: string): Promise<HelperWorkloadStatus> {
 		assertId(id, 'workload id');
@@ -1765,6 +1884,52 @@ END $$;`];
 			files.push({ name, path });
 		}
 		return files.sort((a, b) => a.name.localeCompare(b.name));
+	}
+
+	/**
+	 * Every module in the resolved function spec must be a regular file inside the release. The
+	 * names are validated relative paths (no `..`, no absolute form), so `join` cannot escape.
+	 * Fail closed: a host that starts with a missing module would serve a half-broken bundle.
+	 */
+	private async verifyFunctionModules(fn: WorkloadFunction, releaseDir: string): Promise<string[]> {
+		const paths: string[] = [];
+		for (const module of fn.modules) {
+			const path = join(releaseDir, module.name);
+			let stat: Awaited<ReturnType<typeof fs.stat>>;
+			try {
+				stat = await fs.stat(path);
+			} catch {
+				throw new ValidationError(
+					`Function module ${module.name} is missing from release ${releaseDir}; refusing to start`,
+				);
+			}
+			if (!stat.isFile())
+				throw new ValidationError(
+					`Function module ${module.name} is not a regular file in release ${releaseDir}; refusing to start`,
+				);
+			paths.push(path);
+		}
+		return paths;
+	}
+
+	/**
+	 * The pinned workerd binary for one function (FN1). There is no fetch and no fallback: the
+	 * version is part of the resolved spec, the installer shipped the binary, and a missing one is a
+	 * validation error naming both the version and the path the node expected.
+	 */
+	private async resolveWorkerd(version: string): Promise<string> {
+		if (!/^\d+\.\d+\.\d+$/.test(version))
+			throw new ValidationError('workload.function.workerdVersion must match <major>.<minor>.<patch>');
+		const directory = assertAbsolutePath(join(this.workerdDir, version), 'workerd directory');
+		const binary = join(directory, 'workerd');
+		try {
+			await fs.access(binary, fsConstants.X_OK);
+		} catch {
+			throw new ValidationError(
+				`workerd ${version} is not installed at ${binary}; the node must ship that pinned build`,
+			);
+		}
+		return binary;
 	}
 
 	/** Find the release in any configured root; the agent and helper use different data dirs. */

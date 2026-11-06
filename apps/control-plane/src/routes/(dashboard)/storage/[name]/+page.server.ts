@@ -73,8 +73,28 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		}
 	}
 
+	let replicas: Awaited<ReturnType<typeof core.storageReplication.list>> = [];
+	try {
+		replicas = core.storageReplication.list(principal, params.name);
+	} catch {
+		replicas = [];
+	}
+	let replicaTargets: Array<{ name: string; nodeId: string }> = [];
+	if (storageCan(principal).update) {
+		try {
+			replicaTargets = core.storage
+				.list(principal)
+				.filter((item) => item.name !== storage.name && !item.public && item.nodeId !== storage.nodeId)
+				.map((item) => ({ name: item.name, nodeId: item.nodeId }));
+		} catch {
+			replicaTargets = [];
+		}
+	}
+
 	return {
 		storage,
+		replicas,
+		replicaTargets,
 		moveTargets,
 		metrics,
 		telemetryAvailable: (await core.ctx.telemetry?.ready()) ?? false,
@@ -99,6 +119,28 @@ function accessFrom(raw: string): BucketAccess | null {
 }
 
 export const actions: Actions = {
+	addReplica: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		try {
+			core.storageReplication.add(principal, params.name, { target: formString(data, 'target') });
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+		return { success: 'Replication rule registered. RustFS applies it on the next converge.' };
+	},
+
+	removeReplica: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		try {
+			core.storageReplication.remove(principal, params.name, formString(data, 'id'));
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+		return { success: 'Replication rule removed.' };
+	},
+
 	credentials: async ({ locals, params }) => {
 		const principal = locals.principal!;
 		try {
@@ -384,7 +426,7 @@ export const actions: Actions = {
 			return fail(failStatus(caught), toFormFailure(caught));
 		}
 		return {
-			success: `“${params.name}” moved to the trash. Its data stays on the node for 7 days.`
+			success: `“${params.name}” moved to the trash. Its data stays on the node for ${core.policies.get().trashDays} days.`
 		};
 	},
 

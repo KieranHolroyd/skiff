@@ -10,9 +10,12 @@ import {
 	type ProjectCreate,
 	type ProjectUpdate,
 	limits,
+	placementSpecSchema,
 } from '@skiff/contracts';
+import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, NotFoundError, ValidationError } from './errors.ts';
+import { effectiveRuntime, storedRuntime, type TierRuntime } from './runtime-tier.ts';
 import { hashPassword } from './util.ts';
 
 export interface ProjectRow {
@@ -21,7 +24,11 @@ export interface ProjectRow {
 	slug: string;
 	name: string;
 	runtime: 'static' | 'process' | 'container';
+	/** Effective tier including `function` (D110); null on rows created before migration 0039. */
+	runtimeName?: TierRuntime | null;
 	placement: string;
+	/** Persisted constraint spec (CLUSTERING §3.4); null keeps the shorthand. */
+	placementJson?: string | null;
 	productionDeploymentId: string | null;
 	productionAccess: 'public' | 'password' | 'platform';
 	previewAccess: 'public' | 'password' | 'platform';
@@ -40,6 +47,7 @@ export interface ProjectView {
 	name: string;
 	runtime: string;
 	placement: string;
+	placementSpec: import('@skiff/contracts').PlacementSpec | null;
 	productionDeploymentId: string | null;
 	productionUrl: string;
 	previewPattern: string;
@@ -101,8 +109,9 @@ export class ProjectService {
 			id: row.id,
 			slug: row.slug,
 			name: row.name,
-			runtime: row.runtime,
+			runtime: effectiveRuntime(row),
 			placement: row.placement,
+			placementSpec: parsePlacementSpec(row.placementJson),
 			productionDeploymentId: row.productionDeploymentId,
 			productionUrl: contentUrl(this.ctx.config.platformOrigin, productionHost),
 			previewPattern: contentUrl(this.ctx.config.platformOrigin, `${row.slug}--<id>.${this.contentDomain}`),
@@ -116,6 +125,10 @@ export class ProjectService {
 
 	async create(principal: Principal, input: ProjectCreate): Promise<ProjectView> {
 		requirePermission(principal, 'project:create');
+		// Functions are off by default (D110): a platform without the pinned workerd release must
+		// refuse the tier rather than accept a project it can never run.
+		if (input.runtime === 'function' && !featureEnabled(this.ctx.config, 'FUNCTIONS'))
+			throw new ValidationError('Functions are not enabled on this platform (SKIFF_FEATURE_FUNCTIONS).');
 		const name = input.name?.trim() || input.slug || 'Untitled project';
 		const slug = input.slug ?? this.deriveSlug(name);
 		const taken = this.takenSlugs();
@@ -131,8 +144,10 @@ export class ProjectService {
 			orgId: principal.orgId,
 			slug,
 			name,
-			runtime: input.runtime,
+			runtime: storedRuntime(input.runtime),
+			runtimeName: input.runtime,
 			placement: input.placement,
+			placementJson: input.placementSpec ? JSON.stringify(input.placementSpec) : null,
 			productionDeploymentId: null,
 			productionAccess: input.productionAccess,
 			previewAccess: input.previewAccess,
@@ -207,6 +222,8 @@ export class ProjectService {
 		const patch: Partial<ProjectRow> = { updatedAt: now };
 		if (input.name !== undefined) patch.name = input.name.trim();
 		if (input.placement !== undefined) patch.placement = input.placement;
+		if (input.placementSpec !== undefined)
+			patch.placementJson = input.placementSpec ? JSON.stringify(input.placementSpec) : null;
 		if (input.productionAccess !== undefined) patch.productionAccess = input.productionAccess;
 		if (input.previewAccess !== undefined) patch.previewAccess = input.previewAccess;
 
@@ -286,7 +303,7 @@ export class ProjectService {
 					.update(projects)
 					// Keep the production pointer so a restore brings the site straight back (D29);
 					// desired state and site access already skip deleted projects.
-					.set({ deletedAt: now, purgeAt: now + limits.trashDays * 86_400_000, updatedAt: now })
+					.set({ deletedAt: now, purgeAt: now + this.ctx.policies.trashMs(), updatedAt: now })
 					.where(eq(projects.id, row.id))
 					.run();
 				// A queued or running git build must not land a deployment in a deleted project.
@@ -439,4 +456,18 @@ export class ProjectService {
 			.get();
 		return Number(row?.value ?? 1);
 	}
+}
+
+function parsePlacementSpec(raw: string | null | undefined): import('@skiff/contracts').PlacementSpec | null {
+	if (!raw) return null;
+	try {
+		return requirePlacementSpec(raw);
+	} catch {
+		return null;
+	}
+}
+
+function requirePlacementSpec(raw: string): import('@skiff/contracts').PlacementSpec {
+	const parsed = JSON.parse(raw) as unknown;
+	return placementSpecSchema.parse(parsed);
 }

@@ -26,6 +26,11 @@ export interface HookVerdict {
 	reason?: string;
 	/** Longer diagnostics (journal tail). */
 	detail?: string;
+	/** `protocol` only: the hooks this release implements (absent: just `canary`). */
+	hooks?: string[];
+	/** `prepare`/`converge` only: steps that changed the host, and steps that failed. */
+	changed?: string[];
+	warnings?: string[];
 }
 
 export interface CanaryInput {
@@ -77,7 +82,7 @@ export function prepareScratch(input: Pick<CanaryInput, 'scratch' | 'dbPath'>, r
 /** Environment for the copy: same config, but no outbound side effects and its own paths. */
 export function canaryEnvironment(base: Map<string, string>, input: { scratch: string; unit: string }): Map<string, string> {
 	const env = new Map(base);
-	for (const key of [...env.keys()]) if (/^(SKIFF_SMTP_|SKIFF_ALERT_|R2_|SKIFF_R2_)/.test(key)) env.delete(key);
+	for (const key of [...env.keys()]) if (/^(SKIFF_SMTP_|SKIFF_ALERT_|SKIFF_TWILIO_|R2_|SKIFF_R2_)/.test(key)) env.delete(key);
 	env.set('SKIFF_OBJECT_STORE', 'local');
 	env.set('SKIFF_DAILY_BACKUPS', '0');
 	env.set('SKIFF_DATA_DIR', join(input.scratch, 'data'));

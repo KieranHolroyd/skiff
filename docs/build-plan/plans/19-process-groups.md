@@ -14,7 +14,7 @@ restart policy.
 
 ## Non-goals
 
-- Multi-node scheduling or autoscaling across nodes.
+- Autoscaling. Multi-node placement of process groups follows [CLUSTERING.md](../../CLUSTERING.md) §8.
 - Per-process releases; all processes share the release.
 - A general supervisor API (systemd is the supervisor).
 - Horizontal autoscaling; manual replicas on one node only.

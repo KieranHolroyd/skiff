@@ -15,6 +15,7 @@
 	import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
 	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
+	import LayersIcon from '@lucide/svelte/icons/layers';
 	import MemoryStickIcon from '@lucide/svelte/icons/memory-stick';
 	import FileIcon from '@lucide/svelte/icons/file';
 	import LockIcon from '@lucide/svelte/icons/lock';
@@ -344,7 +345,7 @@
 			description:
 				st.attachments.length > 0
 					? `It is attached to ${st.attachments.map((item) => item.projectSlug).join(', ')}. Detach it first; the delete will be refused until then.`
-					: 'The container stops, the public route goes and the instance moves to the trash for 7 days. Its buckets stay on the node, so a restore is lossless.',
+					: `The container stops, the public route goes and the instance moves to the trash for ${data.policies.trashDays} days. Its buckets stay on the node, so a restore is lossless.`,
 			confirmLabel: 'Move to trash',
 			tone: 'danger',
 			typeToConfirm: st.name,
@@ -409,6 +410,56 @@
 	{#if tab === 'overview'}
 		<!-- Overview ------------------------------------------------------------------------------ -->
 		<StatStrip label="Storage summary" stats={kpis} />
+
+		<Panel
+			title="Replication"
+			icon={LayersIcon}
+			description="Passive bucket targets on other nodes. The source stays active; promotion is manual."
+		>
+			{#if data.replicas.length === 0}
+				<p class="text-sm text-muted-foreground">No replication target. A target must be a private instance on another node.</p>
+			{:else}
+				<div class="space-y-2">
+					{#each data.replicas as replica (replica.id)}
+						<div class="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm">
+							<div class="flex items-center gap-2">
+								<span class="font-medium">{replica.targetName ?? replica.targetId}</span>
+								<StatusBadge status={replica.status} />
+								{#if replica.lagSeconds !== null}
+									<span class="text-xs text-muted-foreground">{replica.lagSeconds}s lag</span>
+								{/if}
+							</div>
+							<Button
+								variant="ghost"
+								size="xs"
+								onclick={() =>
+									askConfirm({
+										title: `Remove replication to ${replica.targetName ?? replica.targetId}?`,
+										description: 'The rule is removed; the target instance and its objects stay.',
+										confirmLabel: 'Remove target',
+										tone: 'danger',
+										action: '?/removeReplica',
+										fields: { id: replica.id }
+									})}
+								>
+								<TrashIcon class="size-3.5" />
+								</Button>
+						</div>
+					{/each}
+				</div>
+			{/if}
+			{#if data.replicaTargets.length > 0}
+				<form method="POST" action="?/addReplica" class="mt-3 flex flex-wrap items-end gap-2">
+					<label class="text-xs text-muted-foreground" for="replica-target">Add target</label>
+					<select id="replica-target" name="target" class="h-8 rounded-md border bg-background px-2 text-sm" required>
+						{#each data.replicaTargets as target (target.name)}
+							<option value={target.name}>{target.name}</option>
+						{/each}
+					</select>
+					<Button type="submit" size="sm" variant="outline"><PlusIcon />Add target</Button>
+				</form>
+			{/if}
+		</Panel>
 
 		<div class="grid items-start gap-5 xl:grid-cols-5">
 			<Panel
@@ -951,10 +1002,10 @@
 						In the trash. Restore brings it back with its buckets, or delete it permanently now.
 					{:else if st.attachments.length > 0}
 						Detach it from {st.attachments.map((item) => item.projectSlug).join(', ')} first. Deleted
-						storage stays in the trash for 7 days with its data intact.
+						storage stays in the trash for {data.policies.trashDays} days with its data intact.
 					{:else}
 						Deleting stops the container, removes the public route and moves the instance to the
-						trash for 7 days. Its buckets stay on the node until it is purged.
+						trash for {data.policies.trashDays} days. Its buckets stay on the node until it is purged.
 					{/if}
 				{/snippet}
 				{#if deleted}

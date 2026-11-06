@@ -64,6 +64,11 @@ export const init: ServerInit = async () => {
 			void core.maintenance.run().catch((error) => console.error('[maintenance]', error));
 		}, 60_000);
 		global.__skiffMaintenance.unref?.();
+		// Metric alert rules (docs/ALERTS.md): each rule has its own interval (≥ 1 min); this
+		// tick only picks up the ones that are due, so a rule runs at most ~20 s late.
+		setInterval(() => {
+			void core.alerts.evaluateDue().catch((error) => console.error('[alerts]', error));
+		}, 20_000).unref?.();
 		// Pick up mass operations whose runner died with the previous process (docs/OPERATIONS.md §2.2).
 		setTimeout(() => {
 			try {

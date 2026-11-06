@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { building } from '$app/env';
-import { parseFeatureFlags, retiredFeatureFlagsSet } from '@skiff/contracts';
+import { parseFeatureFlags, parseSmsRecipients, retiredFeatureFlagsSet } from '@skiff/contracts';
 import { isSharedDomain } from './domains';
 import { loadLocalSettings } from './local-settings';
 
@@ -104,6 +104,17 @@ export const storageGatewayPort = Number(env.SKIFF_STORAGE_GATEWAY_PORT) || unde
 export const storageGatewayUrl = env.SKIFF_STORAGE_GATEWAY_URL?.replace(/\/+$/, '') || undefined;
 export const webhookUrl = env.SKIFF_ALERT_WEBHOOK;
 export const alertEmail = env.SKIFF_ALERT_EMAIL;
+
+/** Twilio (Settings → Notifications → SMS); SMS alerts need both this and `alertSms`. */
+export const twilio =
+	env.SKIFF_TWILIO_ACCOUNT_SID && env.SKIFF_TWILIO_AUTH_TOKEN && env.SKIFF_TWILIO_FROM
+		? {
+				accountSid: env.SKIFF_TWILIO_ACCOUNT_SID,
+				authToken: env.SKIFF_TWILIO_AUTH_TOKEN,
+				from: env.SKIFF_TWILIO_FROM
+			}
+		: undefined;
+export const alertSms = parseSmsRecipients(env.SKIFF_ALERT_SMS);
 
 /**
  * The installer's one-time setup token (docs/OPS.md §2.1, D102). Unset in development: the control

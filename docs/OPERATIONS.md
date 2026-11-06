@@ -147,8 +147,8 @@ help and the MCP tool list are generated from it. **Adding a future mass action 
 `ActionDefinition`, with no new routes, tables or UI plumbing.**
 
 The runner is in-process in the control plane: a small loop that claims `queued`/`applying`
-operations with a heartbeat. A single control plane is the v1 model (D5/D24), and the heartbeat
-claim keeps a second instance safe.
+operations with a heartbeat. Only the active control plane runs it (D5; standbys skip background
+work, D107), and the heartbeat claim keeps a second instance safe.
 
 ### 2.5 Progress events
 

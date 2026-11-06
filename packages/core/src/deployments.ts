@@ -13,6 +13,7 @@ import type { FileEntry } from './artifact.ts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, NotFoundError } from './errors.ts';
 import type { PreparedRelease } from './releases.ts';
+import { effectiveRuntime, storedRuntime } from './runtime-tier.ts';
 import { newId, parseJson, shortId } from './util.ts';
 import type { ParsedConfig } from '@skiff/site-config';
 import type { ProjectRow } from './projects.ts';
@@ -73,6 +74,20 @@ export interface DeploymentDetailView extends DeploymentView {
 		replicas: number;
 		ingress: WorkloadIngress;
 		healthPath: string;
+		/**
+		 * Functions (D110): what the deploy resolved. Binding names and kinds only; a text or JSON
+		 * binding's value is config, but the detail view has no need to repeat it.
+		 */
+		function: {
+			main: string;
+			moduleCount: number;
+			compatibilityDate: string;
+			compatibilityFlags: string[];
+			bindings: Array<{ name: string; type: string }>;
+			crons: string[];
+			idleStopSeconds: number;
+			workerdVersion: string;
+		} | null;
 	} | null;
 	config: {
 		envNames: string[];
@@ -104,6 +119,9 @@ export class DeploymentService {
 		options: DeploymentOptions & { precompress?: boolean } = {},
 	): Promise<DeploymentView> {
 		requirePermission(principal, 'deployment:create');
+		// Functions validate their manifest and persist the resolved spec before the release is stored
+		// (D110). No-op for every other bundle.
+		await this.ctx.functions.applyBundle(principal, project, entries);
 		let prepared = await this.ctx.releases.prepare(principal, entries, { precompress: options.precompress });
 		// Release GC runs concurrently and may have removed a reused release row while we awaited.
 		// Re-check synchronously right before `create` (also synchronous) so nothing can slip between.
@@ -131,8 +149,8 @@ export class DeploymentService {
 			idShort = shortId();
 		}
 		const environment = this.resolveEnvironment(project, options.environment);
-		const workload =
-			project.runtime === 'static' ? null : this.ctx.workloads.plan(principal, project);
+		const runtime = effectiveRuntime(project);
+		const workload = runtime === 'static' ? null : this.ctx.workloads.plan(principal, project);
 		const nodeId = workload?.nodeId ?? this.nodeForPlacement(project.placement);
 		// `promote` moves the pointer for the deployment's own environment. Only production also
 		// moves the project-level pointer; non-production environments never touch it.
@@ -146,7 +164,8 @@ export class DeploymentService {
 			configSnapshotId: prepared.snapshotId,
 			shortId: idShort,
 			environmentId: environment.id,
-			runtime: project.runtime,
+			runtime: storedRuntime(runtime),
+			runtimeName: runtime,
 			workloadJson: workload ? JSON.stringify(workload.spec) : null,
 			status: 'active',
 			previewHost: `${project.slug}--${idShort}.${this.contentDomain()}`,
@@ -221,7 +240,7 @@ export class DeploymentService {
 			projectId: project.id,
 			projectSlug: project.slug,
 			status: row.status,
-			runtime: row.runtime,
+			runtime: effectiveRuntime(row),
 			release: {
 				sha256: release?.sha256 ?? '',
 				sizeBytes: release?.sizeBytes ?? 0,
@@ -344,6 +363,21 @@ export class DeploymentService {
 					replicas: parsedSpec.data.replicas,
 					ingress: parsedSpec.data.ingress,
 					healthPath: parsedSpec.data.healthPath,
+					function: parsedSpec.data.function
+						? {
+								main: parsedSpec.data.function.main,
+								moduleCount: parsedSpec.data.function.modules.length,
+								compatibilityDate: parsedSpec.data.function.compatibilityDate,
+								compatibilityFlags: parsedSpec.data.function.compatibilityFlags,
+								bindings: parsedSpec.data.function.bindings.map((binding) => ({
+									name: binding.name,
+									type: binding.type,
+								})),
+								crons: parsedSpec.data.function.triggers.crons,
+								idleStopSeconds: parsedSpec.data.function.idleStopSeconds,
+								workerdVersion: parsedSpec.data.function.workerdVersion,
+							}
+						: null,
 				}
 			: null;
 

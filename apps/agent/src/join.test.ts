@@ -94,7 +94,12 @@ describe('joinNode', () => {
 		const joined = await joinNode(options, fakeFetch);
 
 		expect(requestUrl).toBe('https://cloud.example.com/api/agent/join');
-		expect(requestBody).toEqual({ token: TOKEN, name: 'edge-1', version: '2.0.0' });
+		expect(requestBody).toEqual({
+			token: TOKEN,
+			name: 'edge-1',
+			version: '2.0.0',
+			networkMode: 'external',
+		});
 		expect(joined.nodeId).toBe('nod_1');
 		expect(joined.mode).toBe('edge');
 

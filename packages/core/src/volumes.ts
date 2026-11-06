@@ -188,6 +188,15 @@ export class VolumeService {
 		const row = this.requireOnNode(nodeId, name);
 		const now = this.ctx.now();
 		const changes: Partial<typeof nodeVolumes.$inferInsert> = { updatedAt: now };
+		if (input.classOverride !== undefined || input.classOverrideReason !== undefined) {
+			const override = input.classOverride === undefined ? row.classOverride : input.classOverride;
+			const reason = input.classOverrideReason === undefined ? row.classOverrideReason : input.classOverrideReason;
+			if (override && !reason)
+				throw new ValidationError('A volume class override needs a reason; it is shown next to the derived class.');
+			if (override !== undefined) changes.classOverride = override;
+			if (input.classOverrideReason !== undefined) changes.classOverrideReason = input.classOverrideReason;
+			else if (override === null) changes.classOverrideReason = null;
+		}
 		if (input.name !== undefined && input.name !== row.name) {
 			const clash = this.ctx.db
 				.select()
@@ -304,6 +313,7 @@ export class VolumeService {
 						sizeBytes: mount.sizeBytes,
 						freeBytes: mount.freeBytes,
 						fsType: mount.fsType,
+						class: deriveVolumeClass(mount),
 						statsAt: now,
 						updatedAt: now,
 					})
@@ -399,6 +409,9 @@ export class VolumeService {
 			mountPath: row.mountPath,
 			fsType: row.fsType,
 			remote: row.remote,
+			class: (row.classOverride ?? row.class) as VolumeView['class'],
+			classOverride: row.classOverride,
+			classOverrideReason: row.classOverrideReason,
 			status: row.status as VolumeStatus,
 			message: row.message,
 			sizeBytes: row.sizeBytes,
@@ -434,4 +447,11 @@ function parseInventory(json: string | null): VolumeInventory | null {
 	if (!json) return null;
 	const parsed = volumeInventorySchema.safeParse(parseJson(json, null));
 	return parsed.success ? parsed.data : null;
+}
+
+/** A conservative class from what the inventory knows; hardware/rotation refines it in C0. */
+function deriveVolumeClass(mount: { remote: boolean; kind: string; device?: string | null; sourceKey: string }): 'fast' | 'remote' | 'unknown' {
+	if (mount.remote || mount.kind === 'nfs' || mount.kind === 'cifs') return 'remote';
+	if (/nvme/i.test(mount.device ?? '') || /nvme/i.test(mount.sourceKey)) return 'fast';
+	return 'unknown';
 }

@@ -79,7 +79,14 @@ function release(sha256 = SHA): ReleaseSpec {
 }
 
 class FakeHelper implements HelperApi {
-	applied = new Map<string, { workload: WorkloadDesired; activation: WorkloadActivation }>();
+	applied = new Map<
+		string,
+		{
+			workload: WorkloadDesired;
+			activation: WorkloadActivation;
+			function?: { config: string; shim: string; files?: Record<string, string> };
+		}
+	>();
 	removed: string[] = [];
 	purged: string[] = [];
 	failPurge = new Set<string>();
@@ -98,6 +105,7 @@ class FakeHelper implements HelperApi {
 	async apply(input: {
 		workload: WorkloadDesired;
 		activation: WorkloadActivation;
+		function?: { config: string; shim: string; files?: Record<string, string> };
 	}): Promise<HelperWorkloadStatus> {
 		if (this.failApply.has(input.workload.id)) throw new Error('systemctl restart failed');
 		this.applyCalls.push(input.workload.id);
@@ -109,6 +117,11 @@ class FakeHelper implements HelperApi {
 		this.removed.push(id);
 		this.applied.delete(id);
 	}
+
+	// Scale-to-zero and the watchdog live in function-scheduler.ts; this fake only has to satisfy
+	// the shared HelperApi surface.
+	async stop(): Promise<void> {}
+	async restart(): Promise<void> {}
 
 	async purge(id: string): Promise<void> {
 		if (this.failPurge.has(id)) throw new Error('rm: device busy');
@@ -160,6 +173,10 @@ class FakeReleases {
 		if (this.cached.has(spec.sha256)) return false;
 		this.cached.add(spec.sha256);
 		return true;
+	}
+
+	releasePath(sha256: string): string {
+		return `/data/releases/${sha256}`;
 	}
 }
 
@@ -387,6 +404,169 @@ describe('WorkloadRuntime.converge', () => {
 
 		await second.converge(state([], 3));
 		expect(helper.removed).toEqual(['app']);
+	});
+});
+
+/** A minimal phase-1 function manifest: one ESM module, one text module, no bindings yet. */
+function functionSpec(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+	return {
+		main: 'index.js',
+		modules: [
+			{ name: 'index.js', type: 'esm', sha256: SHA },
+			{ name: 'theme.css', type: 'text', sha256: SHA },
+		],
+		compatibilityDate: '2026-10-01',
+		compatibilityFlags: ['nodejs_compat'],
+		bindings: [{ name: 'GREETING', type: 'text', value: 'hello' }],
+		triggers: { crons: [] },
+		assets: { directory: 'public', runWorkerFirst: ['/api/*'] },
+		idleStopSeconds: 300,
+		workerdVersion: '1.20261106.1',
+		...overrides,
+	};
+}
+
+function functionWorkload(overrides: Record<string, unknown> = {}): WorkloadDesired {
+	return workload('fn', {
+		runtime: 'function',
+		upstream: 'unix//run/skiff-workloads/fn.sock',
+		function: functionSpec(),
+		...overrides,
+	});
+}
+
+describe('functions (phase 1)', () => {
+	test('applies a function workload with a rendered workerd config and shim', async () => {
+		const f = fixture();
+		f.activations.set('fn', activationFor('fn'));
+
+		await f.runtime.converge(state([functionWorkload()]));
+
+		expect(f.releases.downloads).toEqual([SHA]);
+		expect(f.helper.applyCalls).toEqual(['fn']);
+		const applied = f.helper.applied.get('fn')!;
+		expect(applied.function?.config.length).toBeGreaterThan(0);
+		expect(applied.function?.shim.length).toBeGreaterThan(0);
+		// PLAN.md embed names: the helper writes credentials under exactly these names.
+		expect(applied.function?.config).toContain('function-shim');
+		expect(applied.function?.config).toContain('module-0');
+		expect(applied.function?.shim).toContain('./index.js');
+		expect(f.runtime.currentReports()).toEqual([{ id: 'fn', status: 'running', restarts: 0 }]);
+	});
+
+	test('a process workload sends no function field', async () => {
+		const f = fixture();
+		f.activations.set('app', activationFor('app'));
+
+		await f.runtime.converge(state([workload('app')]));
+
+		expect(f.helper.applied.get('app')).not.toHaveProperty('function');
+		expect(f.releases.downloads).toEqual([SHA]);
+	});
+
+	test('a function workload without a release fails clearly and sends nothing', async () => {
+		const f = fixture();
+		f.activations.set('fn', activationFor('fn'));
+
+		await f.runtime.converge(state([functionWorkload({ release: null })]));
+
+		expect(f.helper.applyCalls).toEqual([]);
+		expect(f.activationCalls).toEqual([]);
+		expect(f.errors.join('\n')).toContain('a function workload needs a release');
+		expect(f.runtime.currentReports()).toEqual([{ id: 'fn', status: 'failed', restarts: 0 }]);
+	});
+
+	test('a function spec change re-renders and re-applies the host', async () => {
+		const f = fixture();
+		f.activations.set('fn', activationFor('fn'));
+		await f.runtime.converge(state([functionWorkload()]));
+
+		// Bindings and assets live only in the rendered config, not in the activation hash.
+		const changed = functionWorkload({
+			function: functionSpec({
+				bindings: [{ name: 'GREETING', type: 'text', value: 'goodbye' }],
+				assets: { directory: 'public', runWorkerFirst: ['/api/*', '/admin/*'] },
+			}),
+		});
+		await f.runtime.converge(state([changed], 2));
+		expect(f.helper.applyCalls).toEqual(['fn', 'fn']);
+		expect(f.helper.applied.get('fn')?.function?.config).toContain('goodbye');
+	});
+
+	test('a Hyperdrive binding renders its credentials from the activation env', async () => {
+		const f = fixture();
+		const activation = activationFor('fn');
+		activation.env = {
+			...activation.env,
+			DATABASE_POOL_HOST: '127.0.0.1',
+			DATABASE_POOL_PORT: '16432',
+			DATABASE_USER: 'app',
+			DATABASE_PASSWORD: 'super-secret',
+			DATABASE_NAME: 'app_db',
+		};
+		f.activations.set('fn', activation);
+
+		await f.runtime.converge(
+			state([
+				functionWorkload({
+					function: functionSpec({
+						bindings: [{ name: 'DB', type: 'hyperdrive', database: 'app-db', envPrefix: 'DATABASE' }],
+					}),
+				}),
+			]),
+		);
+
+		const config = f.helper.applied.get('fn')?.function?.config ?? '';
+		expect(config).toContain('( name = "hyperdrive-0",');
+		expect(config).toContain('external = ( address = "127.0.0.1:16432", tcp = () ) )');
+		expect(config).toContain('password = "super-secret"');
+		// The helper receives the activation env untouched; the credentials are in the config the
+		// helper writes as a 0600 credential, never in the desired state.
+		expect(f.helper.applied.get('fn')?.activation.env.DATABASE_PASSWORD).toBe('super-secret');
+		// A Hyperdrive-only function stays stateless: no disk service in the config.
+		expect(config).not.toContain('do-storage');
+	});
+
+	test('the fingerprint covers the function spec but not absent ones', () => {
+		const base = functionWorkload();
+		const changed = functionWorkload({
+			function: functionSpec({ compatibilityFlags: ['nodejs_compat', 'disable_workers_ai'] }),
+		});
+		expect(workloadFingerprint(base)).not.toBe(workloadFingerprint(changed));
+		expect(workloadFingerprint(base)).toContain('"function"');
+		expect(workloadFingerprint(workload('app'))).not.toContain('"function"');
+	});
+
+	test('a function is probed over its socket, not a loopback port', async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = [];
+		const fakeFetch = (async (url: string | URL | Request, init?: RequestInit) => {
+			calls.push({ url: String(url), init: init ?? {} });
+			return new Response('ok', { status: 200 });
+		}) as unknown as typeof fetch;
+
+		expect(
+			await probeWorkloadHealth(functionWorkload(), '/run/skiff-workloads', new AbortController().signal, fakeFetch),
+		).toBe(true);
+		expect(calls).toHaveLength(1);
+		expect(calls[0]!.url).toBe('http://localhost/health');
+		// Phase 4: the socket is named after the desired-state id (the workload id), not projectId.
+		expect((calls[0]!.init as { unix?: string }).unix).toBe('/run/skiff-workloads/fn.sock');
+	});
+
+	test('a function replica is probed over its own socket', async () => {
+		const calls: Array<{ url: string; init: RequestInit }> = [];
+		const fakeFetch = (async (url: string | URL | Request, init?: RequestInit) => {
+			calls.push({ url: String(url), init: init ?? {} });
+			return new Response('ok', { status: 200 });
+		}) as unknown as typeof fetch;
+
+		const replica = functionWorkload({ id: 'fn-r1', replica: { index: 1 } });
+		expect(await probeWorkloadHealth(replica, '/run/skiff-workloads', new AbortController().signal, fakeFetch)).toBe(
+			true,
+		);
+		expect(calls).toHaveLength(1);
+		expect(calls[0]!.url).toBe('http://localhost/health');
+		expect((calls[0]!.init as { unix?: string }).unix).toBe('/run/skiff-workloads/fn-r1.sock');
 	});
 });
 

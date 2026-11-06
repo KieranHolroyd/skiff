@@ -1,5 +1,5 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { CoreError } from '@skiff/core';
+import { CoreError, isFunctionTier } from '@skiff/core';
 import { hasPermission, type WorkloadView } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
 import { parseTrafficRange, trafficRangeHref, trafficRanges } from '#lib/server/traffic-range.js';
@@ -24,6 +24,12 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		if (caught instanceof CoreError) error(caught.status, caught.message);
 		throw caught;
 	}
+	// Functions have their own console (D110).
+	if (isFunctionTier(row))
+		redirect(
+			307,
+			`/functions/${encodeURIComponent(params.slug)}/deployments/${encodeURIComponent(deployment.id)}`
+		);
 	// Short-id links are canonicalised so tabs and range links share one URL.
 	if (params.id !== deployment.id)
 		redirect(

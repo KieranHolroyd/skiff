@@ -11,6 +11,8 @@ import type {
 	WorkloadStatus,
 } from '@skiff/contracts';
 import type { DatabaseTarget, DatabaseTargetSource } from './database-stats.ts';
+import { renderWorkerdConfigParts } from './function-config.ts';
+import { renderFunctionShim } from './function-shim.ts';
 import type { StorageTarget, StorageTargetSource } from './storage-admin.ts';
 import type { HelperApi, HelperWorkloadStatus } from './helper-client.ts';
 import type { ReleaseManager } from './releases.ts';
@@ -55,7 +57,7 @@ export type WorkloadLog = (level: WorkloadLogLevel, message: string) => void;
 
 export interface WorkloadRuntimeOptions {
 	helper: HelperApi;
-	releases: Pick<ReleaseManager, 'ensureRelease' | 'hasRelease'>;
+	releases: Pick<ReleaseManager, 'ensureRelease' | 'hasRelease' | 'releasePath'>;
 	/** Just-in-time activation fetch; must call the node-authenticated endpoint. */
 	fetchActivation: (id: string, signal: AbortSignal) => Promise<WorkloadActivation>;
 	/** Node workload-slice memory budget, e.g. 1024 for the default 1 GiB edge slice. */
@@ -198,11 +200,13 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 						return;
 					}
 					this.reports.set(id, reportFromStatus(actual));
-					// A unit that systemd reports as down gets a retry from the reconcile loop even
-					// when the desired version has not changed.
+					// A function configured to scale to zero is stopped on purpose: the socket keeps
+					// listening and the next request cold-starts it, so this is steady state, not an
+					// outage to retry. A failed unit still gets the normal retry.
 					if (
 						(actual.status === 'failed' || actual.status === 'stopped') &&
-						!this.pendingFailure
+						!this.pendingFailure &&
+						!(actual.status === 'stopped' && isIdleStoppable(this.desiredById.get(id)))
 					) {
 						this.scheduleRetry();
 					}
@@ -555,6 +559,14 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 		let restarts = previous?.restarts ?? 0;
 
 		try {
+			// A function is rendered from its spec and release, so refuse an incomplete desired
+			// state before fetching activation or sending half a request to the helper.
+			if (workload.runtime === 'function') {
+				if (!workload.function)
+					throw new Error('a function workload needs a resolved function spec');
+				if (!workload.release) throw new Error('a function workload needs a release');
+			}
+
 			await this.ensureRelease(workload, releaseSpecs, signal);
 
 			if (previous && previous.fingerprint === fingerprint && previous.activationVersion === workload.activationVersion) {
@@ -578,6 +590,12 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 					this.reports.set(id, reportFromStatus(status));
 					return;
 				}
+				if (status.status === 'stopped' && isIdleStoppable(workload)) {
+					// Scale-to-zero: the socket unit is still listening; do not restart the host
+					// just because it is idle. A new request starts it through socket activation.
+					this.reports.set(id, reportFromStatus(status));
+					return;
+				}
 				// Stopped or failed: fall through and apply again. A crash loop or an operator
 				// `systemctl stop` must recover on the next retry without a new deployment.
 			}
@@ -595,6 +613,12 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 			const applied = await this.helper.apply({
 				workload: withOptionalSpec(workload),
 				activation: helperActivation,
+				// Only a function gets the rendered workerd config and shim (FN2); every other
+				// runtime keeps the original two-field body. The activation env is only used for
+				// bindings whose config must carry credentials (Hyperdrive).
+				...(workload.runtime === 'function'
+					? { function: this.renderFunction(workload, activation.env) }
+					: {}),
 			});
 			this.holdMonitor(workload, monitor, databaseSetup?.extensions ?? []);
 			this.holdStorageAdmin(workload, storageAdmin);
@@ -642,13 +666,41 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 		}
 	}
 
+	/**
+	 * FN2: a function is a process workload whose unit runs the pinned workerd binary. The helper
+	 * writes `config` and `shim` beside the workload and embeds them as `function-config` and
+	 * `function-shim`; the modules are embedded from the release directory under `module-<i>`
+	 * (PLAN.md). Phase-2 binding services add extra embedded modules (`files`) under their own
+	 * credential names. Rendering is pure, so an unchanged desired state is caught by the
+	 * fingerprint before this runs; the activation env only feeds bindings that embed credentials
+	 * (Hyperdrive), never the phase-1 output.
+	 */
+	private renderFunction(
+		workload: WorkloadDesired,
+		env: Record<string, string>,
+	): { config: string; shim: string; files?: Record<string, string> } {
+		const spec = workload.function;
+		if (!spec || !workload.release)
+			throw new Error('a function workload needs a resolved function spec and a release');
+		const releaseDir = this.releases.releasePath(workload.release);
+		const rendered = renderWorkerdConfigParts({ workload, releaseDir, env });
+		return {
+			config: rendered.config,
+			shim: renderFunctionShim({ main: spec.main }),
+			// Binding-service modules are omitted entirely when empty, so phase-1 requests keep
+			// their original two-field `function` body.
+			...(Object.keys(rendered.files).length > 0 ? { files: rendered.files } : {}),
+		};
+	}
+
 	private async ensureRelease(
 		workload: WorkloadDesired,
 		releaseSpecs: Map<string, ReleaseSpec>,
 		signal: AbortSignal,
 	): Promise<void> {
-		// Container workloads pull an image; only process workloads run from a release directory.
-		if (workload.runtime !== 'process' || !workload.release) return;
+		// Container workloads pull an image; process and function workloads run from a release
+		// directory (a function's config embeds its modules from there).
+		if (workload.runtime === 'container' || !workload.release) return;
 		if (await this.releases.hasRelease(workload.release)) return;
 		const spec = releaseSpecs.get(workload.release);
 		if (!spec)
@@ -773,20 +825,26 @@ export async function probeWorkloadHealth(
 	workload: WorkloadDesired,
 	socketDir: string,
 	signal: AbortSignal,
+	// Injection point for tests: the default is the global fetch, which does not accept `unix:`.
+	fetcher: typeof fetch = fetch,
 ): Promise<boolean> {
 	// Workers (plan 21) listen on nothing; the caller only probes a unit systemd reports active.
 	if (workload.ingress === 'none') return true;
 	if (workload.database) return probeDatabasePort(workload.port, signal, { engine: workload.database.engine });
 	const healthPath = workload.objectStorage ? STORAGE_HEALTH_PATH : workload.healthPath;
+	// A function host is socket-activated like a process app, but its socket is named after the
+	// desired-state id: the workload id for replica 0, `<id>-r<n>` for the rest (phase 4). A process
+	// app keeps the project socket the helper has always created.
+	const socketName = workload.runtime === 'function' ? workload.id : workload.projectId;
 	const socketPath =
-		workload.runtime === 'process' && workload.socketActivation
-			? `${socketDir}/${workload.projectId}.sock`
+		(workload.runtime === 'process' || workload.runtime === 'function') && workload.socketActivation
+			? `${socketDir}/${socketName}.sock`
 			: null;
 	const url = socketPath
 		? `http://localhost${healthPath}`
 		: `http://127.0.0.1:${workload.port}${healthPath}`;
 	try {
-		const response = await fetch(url, {
+		const response = await fetcher(url, {
 			method: 'GET',
 			redirect: 'manual',
 			headers: { 'user-agent': 'skiff-agent-health' },
@@ -941,6 +999,11 @@ function reportFromStatus(status: HelperWorkloadStatus): WorkloadRuntimeReport {
  * contract hashes env/secrets/command/image/port, so resource or health changes must be part of
  * the agent's own diff or they would never restart the unit.
  */
+/** True when this workload is a function that stops itself when idle (phase 3, FN4). */
+function isIdleStoppable(workload: WorkloadDesired | undefined): boolean {
+	return workload?.runtime === 'function' && (workload.function?.idleStopSeconds ?? 0) > 0;
+}
+
 export function workloadFingerprint(workload: WorkloadDesired): string {
 	return JSON.stringify({
 		id: workload.id,
@@ -973,6 +1036,9 @@ export function workloadFingerprint(workload: WorkloadDesired): string {
 		...(workload.objectStorage
 			? { objectStorage: { engine: workload.objectStorage.engine, version: workload.objectStorage.version } }
 			: {}),
+		// A function's bindings, compatibility date and assets are part of the rendered workerd
+		// config, so a change must re-render and restart the host.
+		...(workload.function ? { function: workload.function } : {}),
 		env: Object.entries(workload.env).sort(([a], [b]) => a.localeCompare(b)),
 		secrets: workload.secrets
 			.map((secret) => ({ name: secret.name, delivery: secret.delivery, version: secret.version ?? null }))

@@ -24,7 +24,17 @@ import {
 	type RestoreDrillStatus
 } from '@skiff/contracts';
 import type { DomainSettings } from '@skiff/contracts';
-import { EmailNotifier, R2ObjectStore, SmtpEmailTransport, WebhookNotifier } from '@skiff/core';
+import {
+	EmailNotifier,
+	R2ObjectStore,
+	SmsNotifier,
+	SmtpEmailTransport,
+	TwilioSmsTransport,
+	chatNotifier,
+	webhookNotifierFor,
+	type ChatChannel,
+	type TwilioOptions
+} from '@skiff/core';
 import { localRestartPending, localSettingsEnabled, saveLocalSettings } from './local-settings';
 import { canManagePlatform } from './self-update';
 
@@ -122,6 +132,7 @@ type RequestBody =
 	  }
 	| { action: 'backups'; enabled: boolean }
 	| { action: 'restore-drill' }
+	| { action: 'push-keys' }
 	| { action: 'telemetry'; enabled: boolean; purgeData: boolean }
 	| ({ action: 'domains'; cloudflareToken?: string } & DomainSettings);
 
@@ -173,13 +184,25 @@ export function currentSection(section: PlatformConfigSection): SectionView {
 				)
 			: section === 'email'
 				? Boolean(env.SKIFF_SMTP_HOST)
-				: section === 'assistant'
+				: section === 'sms'
 					? Boolean(
-							env.SKIFF_ASSISTANT_BASE_URL &&
+							env.SKIFF_TWILIO_ACCOUNT_SID && env.SKIFF_TWILIO_AUTH_TOKEN && env.SKIFF_TWILIO_FROM
+						)
+					: section === 'assistant'
+						? Boolean(
+								env.SKIFF_ASSISTANT_BASE_URL &&
 								env.SKIFF_ASSISTANT_MODEL &&
 								env.SKIFF_ASSISTANT_DISABLED !== '1'
-						)
-					: Boolean(env.SKIFF_ALERT_WEBHOOK || env.SKIFF_ALERT_EMAIL);
+							)
+						: Boolean(
+								env.SKIFF_ALERT_WEBHOOK ||
+									env.SKIFF_ALERT_EMAIL ||
+									env.SKIFF_ALERT_SMS ||
+									env.SKIFF_ALERT_DISCORD_WEBHOOK ||
+									env.SKIFF_ALERT_SLACK_WEBHOOK ||
+									(env.SKIFF_ALERT_TELEGRAM_BOT_TOKEN && env.SKIFF_ALERT_TELEGRAM_CHAT_ID) ||
+									env.SKIFF_ALERT_NTFY_URL
+							);
 	return { values, secretsSet, configured };
 }
 
@@ -477,13 +500,72 @@ export async function testWebhook(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
 	try {
 		await withTimeout(
-			new WebhookNotifier(url).notify({
+			webhookNotifierFor(url).notify({
 				key: 'test',
 				title: 'Test alert',
 				detail: 'This is a test alert from Skiff. Real alerts look like this.',
 				severity: 'info'
 			}),
 			10_000
+		);
+		return { ok: true };
+	} catch (error) {
+		return { ok: false, error: errorMessage(error).slice(0, 300) };
+	}
+}
+
+/**
+ * Send one test alert through a chat channel built from env-shaped `values` (the new settings,
+ * with blank secrets already filled from the running ones).
+ */
+export async function testChatChannel(
+	channel: ChatChannel,
+	values: Record<string, string | undefined>,
+	sentBy: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+	try {
+		const notifier = chatNotifier(channel, values);
+		if (!notifier) return { ok: false, error: 'the channel is not fully configured' };
+		await withTimeout(
+			notifier.notify({
+				key: 'test',
+				title: 'Test alert',
+				detail: `This is a test alert from Skiff, sent by ${sentBy}. Real alerts look like this.`,
+				severity: 'info'
+			}),
+			15_000
+		);
+		return { ok: true };
+	} catch (error) {
+		return { ok: false, error: errorMessage(error).slice(0, 300) };
+	}
+}
+
+/** Checks the credentials against Twilio's account endpoint: free, and nothing is sent. */
+export async function testTwilio(
+	options: TwilioOptions
+): Promise<{ ok: true; account: string } | { ok: false; error: string }> {
+	try {
+		const account = await withTimeout(new TwilioSmsTransport(options).verify(), 15_000);
+		return { ok: true, account: account.friendlyName };
+	} catch (error) {
+		return { ok: false, error: errorMessage(error).slice(0, 300) };
+	}
+}
+
+/** Sends one real (billed) test SMS to each number. */
+export async function testSms(
+	options: TwilioOptions,
+	to: string[]
+): Promise<{ ok: true } | { ok: false; error: string }> {
+	try {
+		await withTimeout(
+			new SmsNotifier(new TwilioSmsTransport(options), to).notify({
+				title: 'Test alert',
+				detail: 'Skiff can text you. Real alerts look like this.',
+				severity: 'info'
+			}),
+			20_000
 		);
 		return { ok: true };
 	} catch (error) {

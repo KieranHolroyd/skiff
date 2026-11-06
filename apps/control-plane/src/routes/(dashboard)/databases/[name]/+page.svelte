@@ -463,6 +463,57 @@
 		<!-- Overview ------------------------------------------------------------------------------ -->
 		<StatStrip label="Database summary" stats={overviewStats} />
 
+		<Panel
+			title="Replicas"
+			icon={LayersIcon}
+			description="Copies on other nodes. C7 records intent; streaming is enabled per engine."
+		>
+			{#if data.replicas.length === 0}
+				<p class="text-sm text-muted-foreground">No replicas. A replica must run on another node with an overlay address.</p>
+			{:else}
+				<div class="space-y-2">
+					{#each data.replicas as replica (replica.id)}
+						<div class="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm">
+							<div class="flex items-center gap-2">
+								<span class="font-medium">{replica.nodeName ?? replica.nodeId}</span>
+								<Badge variant="outline" class="font-mono text-[10px]">{replica.zone ?? 'zone?'}</Badge>
+								<StatusBadge status={replica.status} />
+								{#if replica.lagSeconds !== null}
+									<span class="text-xs text-muted-foreground">{replica.lagSeconds}s lag</span>
+								{/if}
+							</div>
+							<Button
+								variant="ghost"
+								size="xs"
+								onclick={() =>
+									askConfirm({
+										title: `Remove the replica on ${replica.nodeName ?? replica.nodeId}?`,
+										description: 'The control-plane intent is removed; the node stops the copy on its next converge.',
+										confirmLabel: 'Remove replica',
+										tone: 'danger',
+										action: '?/removeReplica',
+										fields: { id: replica.id }
+									})}
+								>
+								<TrashIcon class="size-3.5" />
+								</Button>
+						</div>
+					{/each}
+				</div>
+			{/if}
+			{#if data.replicaTargets.length > 0}
+				<form method="POST" action="?/addReplica" class="mt-3 flex flex-wrap items-end gap-2">
+					<label class="text-xs text-muted-foreground" for="replica-node">Add on</label>
+					<select id="replica-node" name="node" class="h-8 rounded-md border bg-background px-2 text-sm" required>
+						{#each data.replicaTargets as node (node.nodeId)}
+							<option value={node.nodeId}>{node.name}</option>
+						{/each}
+					</select>
+					<Button type="submit" size="sm" variant="outline"><PlusIcon />Add replica</Button>
+				</form>
+			{/if}
+		</Panel>
+
 		<div class="grid items-start gap-5 xl:grid-cols-5">
 			<Panel
 				title="Connection"
@@ -1332,9 +1383,9 @@
 						In the trash. Restore brings it back with its data, or delete it permanently now.
 					{:else if db.attachments.length > 0}
 						Detach it from {db.attachments.map((item) => item.projectSlug).join(', ')} first. Deleted
-						databases stay in the trash for 7 days with their data intact.
+						databases stay in the trash for {data.policies.trashDays} days with their data intact.
 					{:else}
-						Deleting stops the container and moves the database to the trash for 7 days. Its data
+						Deleting stops the container and moves the database to the trash for {data.policies.trashDays} days. Its data
 						stays on the node until it is purged.
 					{/if}
 				{/snippet}
@@ -1366,7 +1417,7 @@
 								description:
 									db.attachments.length > 0
 										? `It is attached to ${db.attachments.map((item) => item.projectSlug).join(', ')}. Detach it first; the delete will be refused until then.`
-										: 'The container stops and the database moves to the trash for 7 days. Its data stays on the node, so a restore is lossless.',
+										: `The container stops and the database moves to the trash for ${data.policies.trashDays} days. Its data stays on the node, so a restore is lossless.`,
 								confirmLabel: 'Move to trash',
 								tone: 'danger',
 								typeToConfirm: db.name,

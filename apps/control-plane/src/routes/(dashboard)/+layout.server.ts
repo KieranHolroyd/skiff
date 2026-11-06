@@ -1,7 +1,7 @@
 import { error, redirect } from '@sveltejs/kit';
 import { hasPermission } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
-import { contentDomain, platformOrigin, sharedDomain } from '#lib/server/config.js';
+import { contentDomain, features, platformOrigin, sharedDomain } from '#lib/server/config.js';
 import { availableUpdate, canManagePlatform } from '#lib/server/self-update.js';
 import { assistantStatus } from '#lib/server/assistant/config.js';
 import type { LayoutServerLoad } from './$types';
@@ -48,6 +48,12 @@ export const load: LayoutServerLoad = ({ locals, url, cookies }) => {
 			slug: org?.slug ?? null
 		},
 		role: principal.role,
+		/** Platform policies the UI quotes in copy (Settings → Policies). */
+		policies: (({ trashDays, logRetentionDays, nodeAlertMinutes }) => ({
+			trashDays,
+			logRetentionDays,
+			nodeAlertMinutes
+		}))(core.policies.get()),
 		permissions: [...principal.permissions].sort(),
 		can: {
 			createProject: hasPermission(principal, 'project:create'),
@@ -76,6 +82,8 @@ export const load: LayoutServerLoad = ({ locals, url, cookies }) => {
 			hostname: platformHostname
 		},
 		contentDomain,
+		/** Opt-in tiers the shell offers (docs/OPS.md §2.5). Functions stay hidden until switched on. */
+		features: { functions: features.FUNCTIONS },
 		/** Optional in-dashboard assistant; hidden until an owner configures a provider. */
 		assistant: assistantStatus(),
 		/** shadcn sidebar persists its collapsed state in this cookie. */

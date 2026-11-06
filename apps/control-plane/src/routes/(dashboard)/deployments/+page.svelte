@@ -2,8 +2,6 @@
 	import { tick } from 'svelte';
 	import { resolve } from '$app/paths';
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
-	import BoxesIcon from '@lucide/svelte/icons/boxes';
-	import CpuIcon from '@lucide/svelte/icons/cpu';
 	import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
 	import LayersIcon from '@lucide/svelte/icons/layers';
 	import PinIcon from '@lucide/svelte/icons/pin';
@@ -20,6 +18,7 @@
 	import * as ToggleGroup from '#lib/components/ui/toggle-group/index.js';
 	import EmptyState from '../_lib/EmptyState.svelte';
 	import PageHeader from '../_lib/PageHeader.svelte';
+	import { runtimeIcon } from '../_lib/runtime.js';
 	import { displayUrl, formatBytes, formatDateTime, shortSha } from '../_lib/format.js';
 	import type { PageProps } from './$types';
 
@@ -131,7 +130,7 @@
 <div class="space-y-6">
 	<PageHeader
 		target="page.deployments"
-		eyebrow="Operate"
+		eyebrow="Workloads"
 		title="Deployments"
 		description="Every deployment has an immutable preview URL. Only the production pointer moves on promote or rollback."
 	/>
@@ -249,14 +248,21 @@
 {#snippet deploymentCell(deployment: Row)}
 	<div class="flex flex-wrap items-center gap-1.5">
 		<a
-			href={resolve('/(dashboard)/projects/[slug]', { slug: deployment.projectSlug })}
+			href={deployment.runtime === 'function'
+				? resolve('/(dashboard)/functions/[slug]', { slug: deployment.projectSlug })
+				: resolve('/(dashboard)/projects/[slug]', { slug: deployment.projectSlug })}
 			class="font-medium underline-offset-4 hover:underline">{deployment.projectSlug}</a
 		>
 		<a
-			href={resolve('/(dashboard)/projects/[slug]/deployments/[id]', {
-				slug: deployment.projectSlug,
-				id: deployment.id
-			})}
+			href={deployment.runtime === 'function'
+				? resolve('/(dashboard)/functions/[slug]/deployments/[id]', {
+						slug: deployment.projectSlug,
+						id: deployment.id
+					})
+				: resolve('/(dashboard)/projects/[slug]/deployments/[id]', {
+						slug: deployment.projectSlug,
+						id: deployment.id
+					})}
 			class="font-mono text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
 			>{deployment.shortId}</a
 		>
@@ -270,15 +276,12 @@
 			>
 		{/if}
 		{#if deployment.runtime !== 'static'}
+			{@const RuntimeIcon = runtimeIcon(deployment.runtime)}
 			<span
 				class="inline-flex items-center gap-1 text-xs text-muted-foreground"
 				title="{deployment.runtime} runtime"
 			>
-				{#if deployment.runtime === 'container'}
-					<BoxesIcon class="size-3" />
-				{:else}
-					<CpuIcon class="size-3" />
-				{/if}
+				<RuntimeIcon class="size-3" />
 				<span class="capitalize">{deployment.runtime}</span>
 			</span>
 		{/if}

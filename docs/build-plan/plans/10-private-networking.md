@@ -1,5 +1,10 @@
 # 10 — Cross-node private networking
 
+> **Superseded in part (2026-11-06):** [CLUSTERING.md](../../CLUSTERING.md) §4.3 replaces "inject
+> the remote private IP" with loopback service endpoints on the consumer node (L4 + mTLS over the
+> overlay), so a failover changes an upstream instead of an app's environment. Address allocation,
+> the firewall verb and the acceptance criteria below still apply.
+
 **Priority:** P1 · **Effort:** M–L · **Lane:** C · **Wave:** 2
 **Depends on:** 03 TLS, 04 isolation, F1 contracts
 **Blocks:** 12 preview data (multi-node), any multi-node stateful app

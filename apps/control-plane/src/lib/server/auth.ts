@@ -15,7 +15,7 @@ import { readMembership } from '@skiff/core';
 import { getRequestEvent } from '$app/server';
 import * as z from 'zod';
 import { allowDcr, authSecret, contentDomain, github, mcpResource, openSignup, platformOrigin } from './config';
-import { sendInviteEmail, sendMagicLinkEmail } from './email';
+import { MAGIC_LINK_TTL_SECONDS, sendInviteEmail, sendMagicLinkEmail } from './email';
 import {
 	enforceOwnerSecondFactor,
 	markSessionSecondFactor,
@@ -298,6 +298,7 @@ export const auth = betterAuth({
 			rateLimit: { enabled: true, timeWindow: API_KEY_RATE_WINDOW_MS, maxRequests: API_KEY_RATE_MAX },
 		}),
 		magicLink({
+			expiresIn: MAGIC_LINK_TTL_SECONDS,
 			sendMagicLink: async ({ email, url }) => {
 				await sendMagicLinkEmail(email, url);
 			},

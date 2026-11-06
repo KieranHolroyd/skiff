@@ -31,7 +31,8 @@ import {
 	type SelfUpdateOutcome,
 	type SelfUpdateStatus,
 } from '../../packages/contracts/src/self-update.ts';
-import { readEnvFile } from '../install/env-file.ts';
+import { readEnvFile, writeEnvFile } from '../install/env-file.ts';
+import { ensureVapidKeys } from '../../packages/contracts/src/vapid.ts';
 import { TRIGGER_PATH_UNIT, triggerUnits, updateCommandScript } from './units.ts';
 import { runCanary, type HookVerdict } from '../release/canary.ts';
 import { RESULT_PREFIX } from '../release/hooks.ts';
@@ -498,6 +499,25 @@ async function ensureTelemetryStore(): Promise<void> {
 	}
 }
 
+/**
+ * Web Push alerts (D108) need a VAPID key pair in skiff.env. Hosts installed before push existed
+ * get one here, on any updater run; an update then restarts the control plane with it. Never
+ * replaces a valid pair (that would orphan every subscribed device). Any problem is a warning.
+ */
+function ensurePushKeys(): void {
+	if (!existsSync(ENV_FILE) || flag('--dry-run')) return;
+	try {
+		const env = readEnvFile(ENV_FILE);
+		if (!ensureVapidKeys(env)) return;
+		writeEnvFile(ENV_FILE, env);
+		run(['chown', 'root:skiff', ENV_FILE], { quiet: true, allowFailure: true });
+		run(['chmod', '0640', ENV_FILE], { quiet: true, allowFailure: true });
+		host.log('generated the Web Push (VAPID) key pair; push alerts start with the next control-plane restart');
+	} catch (error) {
+		host.warn(`could not add the Web Push keys: ${(error as Error).message}`);
+	}
+}
+
 /** Keep /usr/local/sbin/skiff-update-self pointing at stage-0 with the source fallback. */
 function ensureUpdateCommand(): void {
 	const body = updateCommandScript({ optDir: layout.optDir, bunBin: layout.bunBin, updaterDir: layout.updaterDir });
@@ -750,6 +770,12 @@ const host: Host = {
 			log: (message) => appendLog('info', message),
 			start: false,
 		});
+	},
+	// Releases with the `converge` hook keep ClickHouse current themselves (scripts/release/converge.ts).
+	async legacyHostSetup() {
+		if (!clickhouseInstalled(SYSTEMD_DIR)) return;
+		reportStatus({ message: 'Updating the telemetry store (ClickHouse)' });
+		await ensureTelemetryStore();
 	},
 	ensureCaddy(release) {
 		return ensureCaddy({
@@ -1016,6 +1042,7 @@ async function main(): Promise<number> {
 	} catch (error) {
 		host.warn(`could not install the dashboard trigger units: ${(error as Error).message}`);
 	}
+	ensurePushKeys();
 
 	if (command === 'check') {
 		const result: CheckResult = await updater.check({
@@ -1100,10 +1127,6 @@ async function main(): Promise<number> {
 		signals.on('exit', () => {
 			if (status?.running) finish('error', `The updater exited unexpectedly. Check journalctl -u skiff-update-self.`);
 		});
-		if (!dryRun && clickhouseInstalled(SYSTEMD_DIR)) {
-			reportStatus({ message: 'Updating the telemetry store (ClickHouse)' });
-			await ensureTelemetryStore();
-		}
 		const publicCheck = flag('--no-public-check') ? 'skip' : flag('--require-public') ? 'require' : 'auto';
 		let result: UpdateResult;
 		try {

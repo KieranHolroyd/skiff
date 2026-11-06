@@ -6,12 +6,9 @@
 	import { SvelteSet } from 'svelte/reactivity';
 	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
-	import BoxesIcon from '@lucide/svelte/icons/boxes';
 	import CopyIcon from '@lucide/svelte/icons/copy';
-	import CpuIcon from '@lucide/svelte/icons/cpu';
 	import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
 	import LayoutTemplateIcon from '@lucide/svelte/icons/layout-template';
-	import LayersIcon from '@lucide/svelte/icons/layers';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import SearchIcon from '@lucide/svelte/icons/search';
@@ -39,6 +36,7 @@
 	import ProjectMark from '../_lib/ProjectMark.svelte';
 	import RowMenu from '../_lib/RowMenu.svelte';
 	import { formatDate } from '../_lib/format.js';
+	import { runtimeIcon } from '../_lib/runtime.js';
 	import BulkBar from '../_lib/operations/BulkBar.svelte';
 	import BulkConfirmDialog from '../_lib/operations/BulkConfirmDialog.svelte';
 	import BulkProgress from '../_lib/operations/BulkProgress.svelte';
@@ -82,6 +80,10 @@
 
 	const trashView = $derived(data.view === 'trash');
 	const rows = $derived(trashView ? data.trash : data.projects);
+
+	function openCreate() {
+		createOpen = true;
+	}
 	/** Rows as the table shows them (searched and sorted); selection ranges follow this order. */
 	let ordered = $state<Row[]>([]);
 
@@ -282,10 +284,6 @@
 
 	// --- row helpers ---------------------------------------------------------------------------
 
-	function runtimeIcon(value: string) {
-		return value === 'container' ? BoxesIcon : value === 'process' ? CpuIcon : LayersIcon;
-	}
-
 	async function copy(text: string) {
 		await navigator.clipboard.writeText(text);
 		toast.success('Copied to the clipboard.');
@@ -294,7 +292,7 @@
 	function confirmDelete(project: { name: string; slug: string }) {
 		askConfirm({
 			title: `Delete ${project.name}?`,
-			description: `The project moves to the trash and is kept for 7 days. ${project.slug}.${data.contentDomain} stops serving.`,
+			description: `The project moves to the trash and is kept for ${data.policies.trashDays} days. ${project.slug}.${data.contentDomain} stops serving.`,
 			confirmLabel: 'Move to trash',
 			tone: 'danger',
 			action: '?/delete',
@@ -320,7 +318,7 @@
 <div class="space-y-6">
 	<PageHeader
 		target="page.projects"
-		eyebrow="Operate"
+		eyebrow="Workloads"
 		title="Projects"
 		description="A project owns one global slug, its deployments, environments and production pointer. Projects can serve static files, run a process app, run a container, or run a background worker such as a CI runner pool."
 	>
@@ -331,7 +329,7 @@
 					From template
 				</Button>
 			{/if}
-			<Button onclick={() => (createOpen = true)}>
+			<Button onclick={openCreate}>
 				<PlusIcon />
 				New project
 			</Button>
@@ -358,7 +356,7 @@
 			<EmptyState
 				icon={Trash2Icon}
 				title="The trash is empty"
-				description="Deleted projects stay here for 7 days, then they are permanently deleted."
+				description={`Deleted projects stay here for ${data.policies.trashDays} days, then they are permanently deleted.`}
 			/>
 		{:else}
 			<EmptyState
@@ -367,7 +365,7 @@
 				description="Create one here, or ask your agent to deploy a site — the first deploy creates the project automatically."
 			>
 				{#if data.can.createProject}
-					<Button onclick={() => (createOpen = true)}><PlusIcon />Create a project</Button>
+					<Button onclick={openCreate}><PlusIcon />Create a project</Button>
 					{#if data.templates.length > 0}
 						<Button variant="outline" href={resolve('/(dashboard)/new')}>
 							<LayoutTemplateIcon />Browse templates
@@ -394,7 +392,7 @@
 			</InputGroup.Root>
 			<p class="text-sm text-muted-foreground">
 				{#if trashView}
-					{rows.length} in the trash · purged after 7 days
+					{rows.length} in the trash · purged after {data.policies.trashDays} days
 				{:else}
 					{rows.length}
 					{rows.length === 1 ? 'project' : 'projects'} in {data.org.name}

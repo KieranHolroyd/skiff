@@ -339,6 +339,51 @@ describe('status', () => {
 	});
 });
 
+describe('stop and restart', () => {
+	test('stops only the service, leaving the socket unit listening', async () => {
+		const f = await fixture();
+		await f.driver.stop('wld_abc123');
+		expect(f.runner.calls).toEqual([
+			['/usr/bin/systemctl', 'stop', 'skiff-workload-wld_abc123.service'],
+		]);
+		// The listener survives: nothing touches the .socket unit (RemoveOnStop=yes is on it).
+		expect(f.runner.calls.some((argv) => argv.includes('skiff-workload-wld_abc123.socket'))).toBe(false);
+	});
+
+	test('stop is idempotent, even when systemd no longer knows the unit', async () => {
+		const f = await fixture();
+		await f.driver.stop('wld_abc123');
+		f.runner.fail.stop = { code: 1, stdout: '', stderr: 'Unit skiff-workload-wld_abc123.service not loaded.\n' };
+		await expect(f.driver.stop('wld_abc123')).resolves.toBeUndefined();
+		expect(f.runner.count('stop')).toBe(2);
+	});
+
+	test('restarts the service and then the socket, exactly like apply', async () => {
+		const f = await fixture();
+		await f.driver.restart('wld_abc123');
+		expect(f.runner.calls).toEqual([
+			['/usr/bin/systemctl', 'restart', 'skiff-workload-wld_abc123.service'],
+			['/usr/bin/systemctl', 'restart', 'skiff-workload-wld_abc123.socket'],
+		]);
+		// Idempotent: repeating the fixed pair is the same request.
+		await f.driver.restart('wld_abc123');
+		expect(f.runner.count('restart')).toBe(4);
+	});
+
+	test('a failed restart surfaces the systemctl error', async () => {
+		const f = await fixture();
+		f.runner.fail.restart = { code: 1, stdout: '', stderr: 'Unit skiff-workload-wld_abc123.service not found.\n' };
+		await expect(f.driver.restart('wld_abc123')).rejects.toThrow(/systemctl restart failed/);
+	});
+
+	test('rejects invalid ids before touching systemd', async () => {
+		const f = await fixture();
+		await expect(f.driver.stop('../etc')).rejects.toThrow(/id must match/);
+		await expect(f.driver.restart('a b')).rejects.toThrow(/id must match/);
+		expect(f.runner.calls).toEqual([]);
+	});
+});
+
 const DB_ID = 'db_0123456789abcdef0123456789abcdef';
 
 function database(overrides: Record<string, unknown> = {}): WorkloadDesired {

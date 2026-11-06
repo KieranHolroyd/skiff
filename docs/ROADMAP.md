@@ -142,7 +142,8 @@
 - [x] Query builder (datasets, measures, group-by, filters, auto interval) scoped to the caller's projects/databases/storage; admin-only SQL with Grafana-style macros as the read-only `skiff_reader`
 - [x] Grafana-style UI: 24-column grid, time/refresh pickers, variables, panel editor, Explore, starter templates
 - [ ] Shared templates: the UI's "new from template" uses `dashboardTemplates` from @skiff/contracts (one source with the agent tools)
-- [ ] Alert rules on panels (threshold + duration → existing email/webhook notifiers)
+- [x] Alert rules (D109, [ALERTS.md](./ALERTS.md)): builder/SQL query + threshold + `for`/keep-firing/no-data, per-series state, grouped notifications through the existing notifiers, silences, acks, history, outage templates, "Create alert" on panels, MCP tools
+- [ ] Draw firing periods as annotations on dashboard time series; per-org notification channels
 - [ ] Dashboard links and drill-downs (panel → project/database page, click a host to filter)
 - [ ] Annotations: deploys, promotions and rollbacks drawn on time series
 - [ ] Public/read-only share links for a dashboard (reuse share-link machinery)
@@ -169,8 +170,21 @@
 - [ ] P4: native NFS/CIFS creation with sealed credentials; migration between volumes (D77, D79); multi-drive RustFS
 - [ ] Volume snapshots/backups, quota per volume, SMART health, instance move UI
 
+## Clustering & HA ([CLUSTERING.md](./CLUSTERING.md), D107)
+- [ ] C0: hardware report and derived labels, zones/roles/labels, volume classes, constraint placement with explained refusals, CPU budget, Topology page and blast radius
+- [ ] C1: Skiff-managed overlay (plan 23) generalised to hubs + LAN mesh; `private_address`; peer health
+- [ ] C2: node CA + mTLS, loopback service endpoints (`caddy-l4` or Bun forwarder), cross-node database/storage attachments
+- [ ] C3: cluster shares (NFS/SMB) mounted on demand, `backing: share`, blast-radius inheritance
+- [ ] C4: HTTP replicas across nodes, spread, health-checked load balancing, rolling deploys, drain, opt-in failover, singletons with run leases
+- [ ] C5: every ingress node a full edge, `dns-failover` driver, distributed certificates
+- [ ] C6: control-plane warm standby, Litestream follow, lease + epoch fencing, manual promote
+- [ ] C7: Postgres streaming replicas, read URLs, lag, manual promote/switchover, replica-based moves
+- [ ] C8: automatic failover (control plane, Postgres), self-fencing, failover drills, chaos harness
+- [ ] C9: RustFS bucket replication, Litestream for SQLite apps, app-volume snapshot shipping, Skiff-served NFS
+- [ ] C10: MongoDB replica sets, Valkey/Redis and MySQL/MariaDB replicas
+- [ ] Ingress drivers `cloudflare-lb` and `cloudflare-tunnel` (homelab as an ingress behind CGNAT)
+
 ## Later / maybe
-- Backup ingress (Cloudflare Tunnel from the homelab + DNS failover)
 - Importing external Prometheus datasources
 - Custom roles UI
 - Templates/scaffolding tool for agents

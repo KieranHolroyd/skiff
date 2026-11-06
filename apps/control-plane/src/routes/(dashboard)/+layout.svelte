@@ -2,7 +2,9 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { QueryClientProvider } from '@tanstack/svelte-query';
+	import { browser } from '$app/env';
+	import { QueryClientProvider, createQuery } from '@tanstack/svelte-query';
+	import BellIcon from '@lucide/svelte/icons/bell';
 	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
 	import ChartAreaIcon from '@lucide/svelte/icons/chart-area';
 	import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
@@ -11,6 +13,8 @@
 	import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
 	import GlobeIcon from '@lucide/svelte/icons/globe';
 	import LayoutDashboardIcon from '@lucide/svelte/icons/layout-dashboard';
+	import NetworkIcon from '@lucide/svelte/icons/network';
+	import Share2Icon from '@lucide/svelte/icons/share-2';
 	import LogOutIcon from '@lucide/svelte/icons/log-out';
 	import RocketIcon from '@lucide/svelte/icons/rocket';
 	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
@@ -18,6 +22,7 @@
 	import SettingsIcon from '@lucide/svelte/icons/settings';
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
 	import UserRoundIcon from '@lucide/svelte/icons/user-round';
+	import ZapIcon from '@lucide/svelte/icons/zap';
 	import AssistantLauncher from '#lib/assistant/AssistantLauncher.svelte';
 	import AssistantTour from '#lib/assistant/AssistantTour.svelte';
 	import { authClient } from '#lib/auth-client.js';
@@ -32,49 +37,75 @@
 	import * as Sidebar from '#lib/components/ui/sidebar/index.js';
 	import { createDashboardQueryClient } from '#lib/query.js';
 	import type { LayoutProps } from './$types';
+	import { getOverview, keys as alertKeys } from './alerts/_lib/api.js';
 
 	let { data, children }: LayoutProps = $props();
 
 	/** Client-side reads (tails, polled status, lazily loaded files); see `#lib/query`. */
 	const queryClient = createDashboardQueryClient();
 
+	/** Firing alerts for the sidebar badge; shares the Alerts page's cached overview. */
+	const alertsOverview = createQuery(
+		() => ({
+			queryKey: alertKeys.overview,
+			queryFn: ({ signal }) => getOverview(signal),
+			enabled: browser && data.permissions.includes('metrics:read'),
+			refetchInterval: 60_000,
+			retry: false
+		}),
+		() => queryClient
+	);
+	const firing = $derived(alertsOverview.data?.counts.firing ?? 0);
+
 	type NavItem = {
 		label: string;
 		href:
 			| '/(dashboard)/overview'
+			| '/(dashboard)/topology'
 			| '/(dashboard)/dashboards'
+			| '/(dashboard)/alerts'
 			| '/(dashboard)/projects'
+			| '/(dashboard)/functions'
 			| '/(dashboard)/databases'
 			| '/(dashboard)/storage'
+			| '/(dashboard)/shares'
 			| '/(dashboard)/deployments'
 			| '/(dashboard)/nodes'
 			| '/(dashboard)/audit'
 			| '/(dashboard)/settings';
 		path: string;
 		icon: typeof LayoutDashboardIcon;
+		/** Hidden unless this layout feature is on. */
+		feature?: keyof LayoutProps['data']['features'];
 	};
 
-	const groups: Array<{ label: string; items: NavItem[] }> = [
+	/** Sidebar groups; the first is unlabelled so Overview sits on its own at the top. */
+	const groups: Array<{ label?: string; items: NavItem[] }> = [
 		{
-			label: 'Operate',
 			items: [
 				{
 					label: 'Overview',
 					href: '/(dashboard)/overview',
 					path: '/overview',
 					icon: LayoutDashboardIcon
-				},
-				{
-					label: 'Dashboards',
-					href: '/(dashboard)/dashboards',
-					path: '/dashboards',
-					icon: ChartAreaIcon
-				},
+				}
+			]
+		},
+		{
+			label: 'Workloads',
+			items: [
 				{
 					label: 'Projects',
 					href: '/(dashboard)/projects',
 					path: '/projects',
 					icon: FolderKanbanIcon
+				},
+				{
+					label: 'Functions',
+					href: '/(dashboard)/functions',
+					path: '/functions',
+					icon: ZapIcon,
+					feature: 'functions'
 				},
 				{
 					label: 'Databases',
@@ -89,6 +120,12 @@
 					icon: CylinderIcon
 				},
 				{
+					label: 'Shares',
+					href: '/(dashboard)/shares',
+					path: '/shares',
+					icon: Share2Icon
+				},
+				{
 					label: 'Deployments',
 					href: '/(dashboard)/deployments',
 					path: '/deployments',
@@ -97,9 +134,27 @@
 			]
 		},
 		{
-			label: 'Platform',
+			label: 'Observe',
+			items: [
+				{
+					label: 'Dashboards',
+					href: '/(dashboard)/dashboards',
+					path: '/dashboards',
+					icon: ChartAreaIcon
+				},
+				{ label: 'Alerts', href: '/(dashboard)/alerts', path: '/alerts', icon: BellIcon }
+			]
+		},
+		{
+			label: 'Infrastructure',
 			items: [
 				{ label: 'Nodes', href: '/(dashboard)/nodes', path: '/nodes', icon: ServerIcon },
+				{ label: 'Topology', href: '/(dashboard)/topology', path: '/topology', icon: NetworkIcon }
+			]
+		},
+		{
+			label: 'Admin',
+			items: [
 				{ label: 'Audit log', href: '/(dashboard)/audit', path: '/audit', icon: ScrollTextIcon },
 				{ label: 'Settings', href: '/(dashboard)/settings', path: '/settings', icon: SettingsIcon }
 			]
@@ -110,10 +165,15 @@
 
 	let signingOut = $state(false);
 
-	function isActive(path: string): boolean {
+	function isActive(item: NavItem): boolean {
 		const current = page.url.pathname;
-		if (path === '/projects' && (current === '/new' || current.startsWith('/new/'))) return true;
-		return current === path || current.startsWith(`${path}/`);
+		if (item.path === '/projects' && (current === '/new' || current.startsWith('/new/')))
+			return true;
+		return current === item.path || current.startsWith(`${item.path}/`);
+	}
+
+	function visible(item: NavItem): boolean {
+		return !item.feature || data.features[item.feature];
 	}
 
 	/** Path segments whose label is not just the capitalised segment. */
@@ -140,9 +200,17 @@
 		const out: { label: string; route?: CrumbRoute; mono?: boolean }[] = [];
 		if (top) out.push({ label: top.label, route: segments.length > 1 ? top.href : undefined });
 		const isProject =
-			top?.path === '/projects' || top?.path === '/databases' || top?.path === '/storage';
-		for (const raw of segments.slice(1)) {
+			top?.path === '/projects' ||
+			top?.path === '/functions' ||
+			top?.path === '/databases' ||
+			top?.path === '/storage';
+		for (const [index, raw] of segments.slice(1).entries()) {
 			const segment = decodeURIComponent(raw);
+			// `/functions/new` is a page, not a function called "new".
+			if (index === 0 && segment === 'new' && top?.path === '/functions') {
+				out.push({ label: 'New' });
+				continue;
+			}
 			out.push({
 				label: isProject
 					? segment
@@ -212,12 +280,14 @@
 		</Sidebar.Header>
 
 		<Sidebar.Content>
-			{#each groups as group (group.label)}
+			{#each groups as group (group.label ?? '')}
 				<Sidebar.Group>
-					<Sidebar.GroupLabel>{group.label}</Sidebar.GroupLabel>
+					{#if group.label}
+						<Sidebar.GroupLabel>{group.label}</Sidebar.GroupLabel>
+					{/if}
 					<Sidebar.Menu>
-						{#each group.items as item (item.href)}
-							{@const active = isActive(item.path)}
+						{#each group.items.filter(visible) as item (item.label)}
+							{@const active = isActive(item)}
 							<Sidebar.MenuItem>
 								<Sidebar.MenuButton
 									isActive={active}
@@ -236,6 +306,14 @@
 										</a>
 									{/snippet}
 								</Sidebar.MenuButton>
+								{#if item.path === '/alerts' && firing > 0}
+									<Sidebar.MenuBadge
+										class="bg-destructive/10 text-destructive"
+										title={`${firing} firing`}
+									>
+										{firing}<span class="sr-only"> firing alerts</span>
+									</Sidebar.MenuBadge>
+								{/if}
 								{#if item.path === '/settings'}
 									{#await data.updateAvailable then update}
 										{#if update}

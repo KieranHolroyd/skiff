@@ -12,12 +12,13 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | Method | Path | Permission | Notes |
 |---|---|---|---|
 | GET | `/whoami` | — | user, org, role, effective permissions |
+| GET | `/install/node.sh` | — | public POSIX installer: takes `--token` and `--name`, requires the signed agent/helper bundle, joins a managed-overlay node |
 | GET | `/status` | `project:read` | fleet + deployment summary |
 | GET | `/metrics[/<section>[/<name>]]` | `metrics:read` (+ section read) | Prometheus text for the caller's org; sections `usage`, `apps`, `traffic`, `databases`, `storage`, `volumes`, `platform` (platform admin). Same as `/metrics/...` on the platform origin, which also serves an unauthenticated fleet summary at `/metrics`. docs/METRICS.md |
 | GET | `/projects` | `project:read` | `?trash=1` lists the trash (with `deletedAt`, `purgeAt`) |
-| POST | `/projects` | `project:create` | `{ name?, slug?, runtime?, placement?, productionAccess?, previewAccess? }` |
+| POST | `/projects` | `project:create` | `{ name?, slug?, runtime?, placement?, placementSpec?, productionAccess?, previewAccess? }`; `placementSpec` is the constraint spec (node, zone, roles, labels, volumeClass, volumeId, spread, near) |
 | GET | `/projects/:slug` | `project:read` | |
-| PATCH | `/projects/:slug` | `project:update` | rename via `slug` (old slug 301s 30 days) |
+| PATCH | `/projects/:slug` | `project:update` | rename via `slug` (old slug 301s 30 days); `placementSpec` (null clears) |
 | DELETE | `/projects/:slug` | `project:delete` | soft delete, restorable 7 days |
 | POST | `/projects/:slug/restore` | `project:update` | re-checks the project quota |
 | GET | `/operations/actions` | — | mass actions the caller can run (docs/OPERATIONS.md) |
@@ -47,16 +48,31 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | GET | `/databases/:name/move` | `database:read` | `{ move: DatabaseMoveView \| null }`: phase (`quiescing`, `dumping`, `restoring`, `purging`, `done`, `failed`), outcome (`moved`, `rolled_back`), source/target, attached projects, error |
 | GET | `/nodes` | platform admin | any surface (session, API key, MCP) of a platform-admin user |
 | GET | `/nodes/capacity` | platform admin | workload-slice budget per node (`sliceMemoryMb`, reserved, free) |
-| PATCH | `/nodes/:id` | platform admin **session** | any of `{ name, publicAddress (host[:port] or null), sliceMemoryMb (32–65536, ≥ reserved), sliceCpuWeight (1–10000), canBuild, dataDir, buildDir, defaultVolumeId }`; agents apply it on their next pull. `dataDir`/`buildDir` (absolute paths, `null` = default) move node storage (D48); progress is in `storage.status` on the node. `defaultVolumeId` (or `null`) picks the volume new managed instances use (D74) |
+| PATCH | `/nodes/:id` | platform admin **session** | any of `{ name, publicAddress (host[:port] or null), sliceMemoryMb (32–65536, ≥ reserved), sliceCpuWeight (1–10000), canBuild, dataDir, buildDir, defaultVolumeId, zone, roles, labels, lanEndpoint, cpuBudgetMillis }`; agents apply it on their next pull. `zone` is the failure domain; `roles` is the set the node may run (removing a role in use is 409); `labels` are operator `key=value` pairs (`skiff.io/*` reserved); `cpuBudgetMillis` is the CPU admission ceiling (null = uncapped). `dataDir`/`buildDir` (absolute paths, `null` = default) move node storage (D48); progress is in `storage.status` on the node. `defaultVolumeId` (or `null`) picks the volume new managed instances use (D74) |
 | DELETE | `/nodes/:id` | platform admin **session** | removes a worker node: its token is revoked, its volume registrations and studio sessions are dropped, and builds it claimed are requeued (`{ ok, requeuedBuilds }`). History keeps the node id. 409 for the edge node, or while projects are placed on it or workloads, databases, storage instances or app volumes still live there. Nothing on the machine changes; uninstall the agent there |
 | POST | `/nodes/:id/builder` | platform admin **session** | `{ builder: boolean }`; lets the node claim git builds |
 | POST | `/nodes/join-token` | platform admin **session** | single-use, 1 h; 403 for API keys / OAuth tokens |
 | POST | `/nodes/:id/drain` \| `/resume` | platform admin **session** | |
 | POST | `/nodes/:id/rotate-token` | platform admin **session** | |
 | POST | `/nodes/:id/edge` | platform admin **session** | makes this online node the edge; the old edge becomes a worker (D98). 409 while `SKIFF_EDGE_NODE_ID` is set, for a node that is not online, or when the old edge hosts apps or data but has no public address |
+| GET | `/storage/:name/replicas` | `storage:read` | bucket replication targets and status (C9) |
+| POST | `/storage/:name/replicas` | `storage:update` | `{ target }`; another node, private target |
+| DELETE | `/storage/:name/replicas/:id` | `storage:update` | remove the replication intent |
+| GET | `/databases/:name/replicas` | `database:read` | managed replicas with node, status and lag (C7) |
+| POST | `/databases/:name/replicas` | `database:update` | `{ node, mode?: async\|sync, volume? }`; another online node with an overlay address |
+| DELETE | `/databases/:name/replicas/:id` | `database:update` | remove the replica intent |
+| GET | `/shares` | platform admin | cluster share registry (C3) |
+| POST | `/shares` | platform admin **session** | `{ name, protocol: nfs\|smb, server, exportPath, zone?, readOnly?, credentialsRef? }` |
+| GET/PATCH/DELETE | `/shares/:name` | platform admin **session** | read, update or remove a share |
+| PUT | `/shares/:name/grants` | platform admin **session** | `{ grants: [{ orgId, mode: ro\|rw, pathPrefix? }] }`; replaces the set |
+| GET | `/cluster/config` | platform admin | cluster tunables: overlay, endpoints, replicas, database/storage limits, lease, failover, shares |
+| PATCH | `/cluster/config` | platform admin **session** | section patches; unknown keys rejected; endpoint port range must have min < max |
+| GET | `/ingress/status` | platform admin | ingress driver, hold-down policy and ingress-node readiness (C5) |
+| GET | `/topology` | platform admin | zones, nodes, roles, labels, hardware, volumes and placement counts (C0) |
+| GET | `/topology/blast-radius?node=<id>` or `?zone=<name>` | platform admin | what an outage of that node or zone would take down: items and summary counts (C0) |
 | GET | `/nodes/:id/volumes` | platform admin | `{ volumes: VolumeView[], inventory: { generatedAt, mounts, devices } \| null }`. `mounts` is what the node reports (stable `sourceKey`, mount path, fs type, size/free, `remote`); `devices` is the free/used block-device list for the provisioning wizard (D72) |
 | POST | `/nodes/:id/volumes` | platform admin **session** | `{ name, sourceKey, default? }` adopts a mount from the latest inventory; no formatting or mounting happens (P0). 409 when the mount is not reported right now, the name/source is taken, or the node has not sent an inventory yet |
-| PATCH | `/nodes/:id/volumes/:name` | platform admin **session** | `{ name?, default? }`; `default: true` makes it the node default, `false` clears it |
+| PATCH | `/nodes/:id/volumes/:name` | platform admin **session** | `{ name?, default?, classOverride?, classOverrideReason? }`; `default: true` makes it the node default, `false` clears it; `classOverride` is `fast`, `bulk`, `remote` or `null` and needs a reason |
 | DELETE | `/nodes/:id/volumes/:name` | platform admin **session** | removes the registration only; the mount stays. 409 while storage/database instances still live on it (D74) |
 | GET | `/audit` | `project:read` | `?limit&action&resource` |
 | GET | `/secrets` | `secret:read-metadata` | values never returned |
@@ -67,6 +83,7 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | PATCH/DELETE | `/projects/:slug/environments/:env` | `project:update` | rename/access or remove (production is built in) |
 | POST | `/projects/:slug/environments/:env/promote` | `deployment:promote` | `{ deploymentId }`; moves only that environment's pointer (production also re-points a process/container workload) |
 | GET/PUT/DELETE | `/projects/:slug/workload` | `deployment:read` / `project:update` | tier 2/3 runtime spec for the project |
+| GET | `/projects/:slug/function` | `deployment:read` | Functions view (D110): main module, compatibility date/flags, resolved bindings (no secret values), assets and `run_worker_first`, idle stop and the pinned workerd version. 404 when the project is not a function. A deploy of a bundle containing `skiff-function.json` validates it against the org; unsupported binding types and cron triggers fail with the phase that will serve them |
 | GET | `/projects/:slug/runners` | `deployment:read` | GitHub Actions runner pool as GitHub reports it (`null` for other projects); `error` is set when GitHub cannot be reached (docs/RUNNERS.md) |
 | GET | `/templates` | `project:read` | first-party app templates and their form fields (plan 21) |
 | GET | `/templates/:id` | `project:read` | one template |
@@ -222,13 +239,15 @@ key for the REST API. Codes expire after five minutes and are stored hashed.
 ## Agent protocol (`/api/agent`)
 
 Machine-authenticated with a node bearer token; no cookies. `POST /api/agent/join` consumes a
-single-use join token and returns the node's long-lived token.
+single-use join token and returns the node's long-lived token. A managed overlay join adds
+`{ networkMode: "skiff", wireguardPublicKey }` and receives a `wireguard` block (address, CIDR, MTU,
+listen port and peer list); an external/BYO join omits both and keeps `publicAddress`.
 
 - `GET /api/agent/desired-state` — desired-state JSON; ETag `"v<version>"`; `?wait=<seconds>` long-polls
   (server cap 25). The agent sends `wait=8` to stay under Bun's default 10 s idle timeout
   (`CONNECTION_IDLE_TIMEOUT`), and re-pulls without `If-None-Match` after a failed converge so
   expired presigned release URLs are reissued. The token is checked before the wait.
-- `POST /api/agent/heartbeat` — stats + actual state version every ~10 s, plus `storage` (what `skiff-storage.service` last applied).
+- `POST /api/agent/heartbeat` — stats + actual state version every ~10 s, plus `storage` (what `skiff-storage.service` last applied) and, on a managed overlay node, `wireguard` peer health (public keys, endpoints, handshake times and byte counters).
 - `GET /api/agent/storage` — `{ dataDir, buildDir }` for the node's root `skiff-storage.service`, which re-reads the paths here instead of trusting the agent (D48).
 - `POST /api/agent/telemetry` — pre-aggregated 1-minute access buckets (never raw requests), plus
   `databases` / `databaseSnapshots` and `objectStorage` / `objectStorageBuckets` samples. Database
@@ -281,6 +300,32 @@ Saved dashboards and the query endpoint behind them. Types and zod schemas are i
 
 Agents get the same capabilities as MCP tools (DESIGN §6.3): `create_dashboard` takes a template and/or
 panel drafts and lays them out, so an agent never deals with grid positions.
+
+## Alerts
+
+Metric alert rules ([ALERTS.md](./ALERTS.md), D109). Types and zod schemas are in
+`packages/contracts/src/alerts.ts`. Reads need `metrics:read`; rule writes need an org owner or
+admin (or a platform admin); acknowledging and silencing also allow deployers.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/alerts` | `metrics:read` | `AlertsOverview`: active series (firing/pending/nodata), counts, channels, telemetry availability, the caller's abilities |
+| GET | `/alerts/rules` | `metrics:read` | Rules with state, per-state counts and health |
+| POST | `/alerts/rules` | owner/admin | `AlertRuleInput` → 201 `{ rule }`. Builder queries need exactly one metric; SQL is platform-admin only |
+| GET | `/alerts/rules/:id` | `metrics:read` | Rule plus its series (`instances`) |
+| PUT | `/alerts/rules/:id` | owner/admin | Partial update with the `version` it was based on (stale → 409). Changing the query or pausing resets its series |
+| DELETE | `/alerts/rules/:id` | owner/admin | Deletes its series and silences; history stays |
+| POST | `/alerts/rules/:id/evaluate` | owner/admin | Evaluate now (state changes and notifications apply) |
+| POST | `/alerts/rules/:id/test` | owner/admin | Send a test notification → `{ delivery: { channel: 'ok' \| error } }` |
+| POST | `/alerts/rules/:id/ack` | owner/admin/deployer | `{ fingerprint, acknowledged? }`: stop repeats until the series resolves |
+| POST | `/alerts/preview` | `metrics:read` | `{ rule?, ruleId? }` → `AlertPreview`: series, values and which breach now; saves nothing |
+| GET | `/alerts/silences?expired=1` | `metrics:read` | Active and upcoming silences (plus the last 30 days' expired) |
+| POST | `/alerts/silences` | owner/admin/deployer | `{ ruleId?, matchers?, startsAt?, endsAt? \| durationMinutes, comment? }` → 201 |
+| DELETE | `/alerts/silences/:id` | owner/admin/deployer | End a silence now |
+| GET | `/alerts/system` | platform admin | Built-in alert kinds with on/off, channels, thresholds, last fired; channel status |
+| PUT | `/alerts/system` | platform owner | `{ routing?: { <kind>: { enabled, channels } }, policies?: { diskAlertPercent?, … } }` |
+| POST | `/alerts/channels/test` | platform owner | `{ channel? }`: test one channel or all → `{ delivery }` |
+| GET | `/alerts/history?rule=&kind=&before=&limit=` | `metrics:read` | Events newest first: `state`, `notification` (with per-channel `delivery`), `error`, `ack`, `silence`, and `system` (platform admins) |
 
 ## Objects (local store only)
 

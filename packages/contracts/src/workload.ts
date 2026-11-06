@@ -2,18 +2,24 @@ import * as z from 'zod';
 import { databaseExtensionAllowlist, databaseMonitorSchema, workloadDatabaseSchema } from './database.ts';
 import { storageAdminSchema, workloadObjectStorageSchema } from './object-storage.ts';
 import { githubRunnerSchema } from './github-runner.ts';
+import {
+	FUNCTION_STATEFUL_REPLICA_MESSAGE,
+	functionBindingIsStateful,
+	functionRuntimeSpecSchema,
+} from './function.ts';
 
 /**
- * Tier 2 (process) and tier 3 (container) workloads (DESIGN §3.4, §3.4.1, D41).
+ * Tier 2 (process), tier 3 (container) and tier 4 (function) workloads (DESIGN §3.4, §3.4.1, D41,
+ * D110).
  *
  * A workload is the runtime half of a deployment: the same immutable release can be served
- * statically or executed by a sandboxed systemd unit (process) or a rootless Quadlet (container).
- * The spec below is what the control plane validates and admits; the agent renders it into
- * systemd/Quadlet through the privileged helper. Nothing here is shell: the helper takes structured
- * fields and never interpolates a command line.
+ * statically or executed by a sandboxed systemd unit (process), a rootless Quadlet (container) or
+ * a pinned workerd process (function). The spec below is what the control plane validates and
+ * admits; the agent renders it into systemd/Quadlet through the privileged helper. Nothing here is
+ * shell: the helper takes structured fields and never interpolates a command line.
  */
 
-export const workloadRuntimes = ['process', 'container'] as const;
+export const workloadRuntimes = ['process', 'container', 'function'] as const;
 
 /**
  * `http` workloads listen on `port`, get a Caddy route and an HTTP health probe. `none` is a
@@ -23,7 +29,10 @@ export const workloadRuntimes = ['process', 'container'] as const;
 export const workloadIngresses = ['http', 'none'] as const;
 export type WorkloadIngress = (typeof workloadIngresses)[number];
 
-/** Replicas run on the workload's one node; more than one is allowed for workers only (D90). */
+/**
+ * Replicas run on the workload's one node. More than one is allowed for workers and for stateless
+ * functions (phase 4); a function with any stateful binding stays a single host (FN11).
+ */
 export const MAX_WORKLOAD_REPLICAS = 20;
 export type WorkloadRuntime = (typeof workloadRuntimes)[number];
 
@@ -82,13 +91,46 @@ export const workloadSpecSchema = z
 		replicas: z.number().int().min(1).max(MAX_WORKLOAD_REPLICAS).default(1),
 		/** GitHub Actions runner profile (plan 21); container workers only. */
 		runner: githubRunnerSchema.optional(),
+		/**
+		 * Functions only (D110): the resolved manifest. The control plane validates a bundle into
+		 * this; the agent renders a workerd config from it and the helper starts the pinned binary.
+		 */
+		function: functionRuntimeSpecSchema.optional(),
 	})
 	.superRefine((spec, ctx) => {
-		if (spec.replicas > 1 && spec.ingress !== 'none')
+		if (spec.runtime === 'function' && !spec.function)
+			ctx.addIssue({ code: 'custom', path: ['function'], message: 'Function workloads need a resolved function spec.' });
+		if (spec.function && spec.runtime !== 'function')
+			ctx.addIssue({ code: 'custom', path: ['runtime'], message: 'A function spec needs runtime "function".' });
+		if (spec.runtime === 'function') {
+			if (spec.image)
+				ctx.addIssue({ code: 'custom', path: ['image'], message: 'Function workloads cannot set an image.' });
+			if (spec.command)
+				ctx.addIssue({ code: 'custom', path: ['command'], message: 'Function workloads cannot set a command.' });
+			if (spec.runner)
+				ctx.addIssue({ code: 'custom', path: ['runner'], message: 'Runners cannot be functions.' });
+			if (spec.data)
+				ctx.addIssue({
+					code: 'custom',
+					path: ['data'],
+					message: 'Functions keep state in Durable Objects, not a data directory (phase 2).',
+				});
+			if (spec.ingress !== 'http')
+				ctx.addIssue({ code: 'custom', path: ['ingress'], message: 'Functions need HTTP ingress.' });
+			if (spec.replicas > 1 && spec.function?.bindings.some((binding) => functionBindingIsStateful(binding.type)))
+				ctx.addIssue({
+					code: 'custom',
+					path: ['replicas'],
+					message: FUNCTION_STATEFUL_REPLICA_MESSAGE,
+				});
+		}
+		// Several copies are valid for stateless HTTP workloads (C4); a data directory still pins
+		// the workload to one node and one writer.
+		if (spec.replicas > 1 && spec.ingress !== 'none' && spec.data)
 			ctx.addIssue({
 				code: 'custom',
 				path: ['replicas'],
-				message: 'Only workers (ingress "none") can run more than one replica.',
+				message: 'A workload with a persistent data directory cannot run more than one replica.',
 			});
 		if (spec.runner && spec.runtime !== 'container')
 			ctx.addIssue({ code: 'custom', path: ['runner'], message: 'Runners use the container runtime.' });
@@ -343,6 +385,11 @@ export const workloadDesiredSchema = z.object({
 	 * `Pull=newer` from it; the agent re-applies a replica that exited so it gets a fresh JIT config.
 	 */
 	runner: z.object({ provider: z.literal('github') }).optional(),
+	/**
+	 * Functions only (D110): the resolved manifest and the pinned workerd build. The agent renders
+	 * a workerd config from it; the helper writes that config and starts the binary.
+	 */
+	function: functionRuntimeSpecSchema.optional(),
 	/**
 	 * Which copy this is when the spec asks for replicas; replica 0 keeps the workload id and the
 	 * others are `<id>-r<index>`. The count is deliberately absent so scaling never restarts a copy.

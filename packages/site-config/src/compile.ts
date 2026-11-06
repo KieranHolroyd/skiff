@@ -30,6 +30,10 @@ export interface SiteCompileInput {
 	immutablePaths?: string[];
 	/** Worker upstream (edge only); when present the edge proxies instead of serving files. */
 	upstream?: string | null;
+	/** Several worker upstreams for a multi-node replica set (C4). */
+	upstreams?: string[];
+	/** Health path for active checks across those upstreams. */
+	healthPath?: string;
 }
 
 const SECURITY_HEADERS = {
@@ -229,14 +233,21 @@ export function compileSiteRoute(input: SiteCompileInput): CaddyRoute {
 	// Site `_headers` come after the defaults so they can override cache policy for a path.
 	for (const rule of input.headers) routes.push(headersRoute(rule, protectedSite));
 
-	if (input.upstream) {
+	const upstreams = input.upstreams?.length ? input.upstreams : input.upstream ? [input.upstream] : [];
+	if (upstreams.length > 0) {
 		// Homelab/worker placement: the edge terminates TLS and proxies over WireGuard. If the
 		// worker is unreachable, serve a branded 503 with Retry-After instead of a bare error.
 		routes.push({
 			handle: [
 				{
 					handler: 'reverse_proxy',
-					upstreams: [{ dial: input.upstream.replace(/^https?:\/\//, '') }],
+					upstreams: upstreams.map((upstream) => ({ dial: upstream.replace(/^https?:\/\//, '') })),
+					...(input.upstreams && input.upstreams.length > 1
+						? {
+							lb_policy: 'least_conn',
+							...(input.healthPath ? { health_uri: input.healthPath, health_interval: '5s', fail_duration: '30s' } : {}),
+						}
+						: {}),
 					headers: { request: { set: { 'X-Forwarded-Host': ['{http.request.host}'] } } },
 					handle_response: [
 						{

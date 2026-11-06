@@ -4,6 +4,7 @@ import { json } from '#lib/server/api.js';
 import { assistantStatus } from '#lib/server/assistant/config.js';
 import { runAssistant } from '#lib/server/assistant/orchestrator.js';
 import { allowAssistantTurn } from '#lib/server/assistant/rate-limit.js';
+import { core } from '#lib/server/core.js';
 import type { AssistantEvent } from '@skiff/contracts';
 import type { RequestHandler } from './$types';
 
@@ -35,7 +36,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			503
 		);
 
-	const limit = allowAssistantTurn(principal.userId);
+	const limit = allowAssistantTurn(principal.userId, core.policies.get().assistantTurnsPerMinute);
 	if (!limit.ok)
 		return json(
 			{

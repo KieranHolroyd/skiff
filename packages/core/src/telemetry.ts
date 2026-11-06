@@ -1,6 +1,8 @@
 import type {
+	AnalyticsEvent,
 	DatabaseMetricBucket,
 	DatabaseMetricPoint,
+	FunctionTailEvent,
 	MetricBucket,
 	StorageMetricBucket,
 	StorageMetricPoint,
@@ -182,6 +184,33 @@ export interface ScrapeSamples {
 	storage: ScrapeSampleRow[];
 }
 
+export interface FunctionInvocationQuery {
+	projectId: string;
+	from: TimeInput;
+	to: TimeInput;
+	/** 1–200, default 50. */
+	limit?: number;
+	/** Epoch ms: only items strictly older, for paging backwards. */
+	before?: number;
+	outcome?: string;
+}
+
+/** One tail-worker item as the console shows it; request carries no headers, cookies or bodies. */
+export interface FunctionInvocationRow {
+	at: string;
+	workloadId: string;
+	scriptName: string;
+	outcome: string;
+	logs: Array<{ level: string; message: string }>;
+	exceptions: Array<{ name: string; message: string }>;
+	request: { method: string; url: string; status?: number } | null;
+}
+
+export interface FunctionInvocationSummary {
+	total: number;
+	byOutcome: Record<string, number>;
+}
+
 export interface TrafficReportQuery extends TelemetryQuery {
 	/** How many path/referrer entries to return (default 10). */
 	topLimit?: number;
@@ -294,6 +323,60 @@ const trafficTableSql = (database: string, table: string, ttl: string, partition
 	TTL bucket + ${ttl}
 	COMMENT 'HTTP traffic per host, pre-aggregated by the edge agents'`;
 
+/**
+ * Analytics Engine datapoints written by function bindings (docs/FUNCTIONS.md §4.5, D101).
+ *
+ * Plain MergeTree, not ReplacingMergeTree: every `writeDataPoint` is a distinct event, so there is
+ * no series+bucket key to replace. `ts` keeps millisecond precision (the worker's write time as
+ * stamped by the node) and the 90-day TTL is independent of the traffic retention settings.
+ */
+const analyticsTableSql = (database: string): string => `
+	CREATE TABLE IF NOT EXISTS ${database}.function_analytics (
+		ts DateTime64(3) COMMENT 'Datapoint time (UTC, milliseconds)',
+		project_id LowCardinality(String) COMMENT 'Owning project (prj_...), stamped by the node',
+		workload_id String COMMENT 'Owning workload (wl_...), stamped by the node',
+		dataset LowCardinality(String) COMMENT 'Analytics Engine dataset name',
+		blobs Array(String) COMMENT 'Up to 20 blob values (16 KiB each)',
+		doubles Array(Float64) COMMENT 'Up to 20 numeric values',
+		indexes Array(String) COMMENT 'Up to 20 index values (1 KiB each)'
+	) ENGINE = MergeTree
+	ORDER BY (project_id, dataset, ts)
+	TTL toDateTime(ts) + INTERVAL 90 DAY
+	COMMENT 'Analytics Engine datapoints written by function bindings'`;
+
+/** Rows per INSERT: ClickHouse's HTTP interface is happiest with bounded JSONEachRow bodies. */
+const ANALYTICS_INSERT_BATCH = 5_000;
+/** Hard per-call cap so one malformed telemetry batch cannot pin an unbounded amount of memory. */
+const ANALYTICS_MAX_EVENTS = 50_000;
+
+/**
+ * Tail-worker items from function invocations (docs/FUNCTIONS.md §4.5, phase 3).
+ *
+ * One row per delivered TailItem, with the structured parts stored as JSON strings: the payload is
+ * for the log viewer, not for ClickHouse aggregates, and keeping it opaque keeps the schema stable
+ * as the tail item grows. The 30-day TTL matches the other function telemetry tables' intent
+ * (raw invocation detail is short-lived) and is independent of the traffic retention settings.
+ */
+const tailEventsTableSql = (database: string): string => `
+	CREATE TABLE IF NOT EXISTS ${database}.function_tail_events (
+		ts DateTime64(3) COMMENT 'Tail item time (UTC, milliseconds)',
+		project_id LowCardinality(String) COMMENT 'Owning project (prj_...), stamped by the node',
+		workload_id String COMMENT 'Owning workload (wl_...), stamped by the node',
+		script_name String COMMENT 'Script name reported by workerd',
+		outcome LowCardinality(String) COMMENT 'Invocation outcome (ok, exception, ...)',
+		logs_json String COMMENT 'JSON array of {level, message} log entries',
+		exceptions_json String COMMENT 'JSON array of {name, message} exceptions',
+		request_json String COMMENT 'JSON {method, url, status?}; never headers, cookies or bodies'
+	) ENGINE = MergeTree
+	ORDER BY (project_id, ts)
+	TTL toDateTime(ts) + INTERVAL 30 DAY
+	COMMENT 'Structured tail-worker items from function invocations'`;
+
+/** The contract caps one telemetry batch at 2,000 tails; insert in chunks of that size. */
+const TAILS_INSERT_BATCH = 2_000;
+/** Hard per-call cap, for the same reason as `ANALYTICS_MAX_EVENTS`. */
+const TAILS_MAX_EVENTS = 20_000;
+
 /** Merge a summed map down to its `TOP_N` largest entries. */
 const topMap = (expression: string): string =>
 	`mapFromArrays(
@@ -366,6 +449,11 @@ export function chDateTime(ms: number): string {
 	return new Date(Math.floor(ms / 1000) * 1000).toISOString().slice(0, 19).replace('T', ' ');
 }
 
+/** `DateTime64(3)` text with millisecond precision (`date_time_input_format=best_effort`). */
+export function chDateTime64(ms: number): string {
+	return new Date(ms).toISOString().slice(0, 23).replace('T', ' ');
+}
+
 function floorToMinute(ms: number): number {
 	return Math.floor(ms / MINUTE_MS) * MINUTE_MS;
 }
@@ -380,6 +468,11 @@ function toDouble(value: number | undefined): number {
 	return value !== undefined && Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
+/** Analytics doubles are signed (deltas, temperatures): only non-finite values are coerced. */
+function toAnalyticsDouble(value: number): number {
+	return Number.isFinite(value) ? value : 0;
+}
+
 function readNumber(value: unknown): number {
 	if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
 	if (typeof value === 'bigint') return Number(value);
@@ -392,6 +485,24 @@ function readNumber(value: unknown): number {
 
 function readString(value: unknown): string {
 	return typeof value === 'string' ? value : value == null ? '' : String(value);
+}
+
+function parseJsonArray<T>(value: unknown): T[] {
+	try {
+		const parsed: unknown = JSON.parse(readString(value) || '[]');
+		return Array.isArray(parsed) ? (parsed as T[]) : [];
+	} catch {
+		return [];
+	}
+}
+
+function parseJsonObject<T>(value: unknown): T | null {
+	try {
+		const parsed: unknown = JSON.parse(readString(value) || 'null');
+		return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as T) : null;
+	} catch {
+		return null;
+	}
 }
 
 function countMap(entries: ReadonlyArray<{ count: number } & Record<string, unknown>> | undefined, key: string): Record<string, number> {
@@ -893,6 +1004,135 @@ export class TelemetryStore {
 		});
 	}
 
+	/**
+	 * Analytics Engine datapoints written by function bindings (docs/FUNCTIONS.md §4.5, D101).
+	 * Insert-only and fail-open like every other method: a ClickHouse outage loses telemetry, never
+	 * a deploy or a function request. Rows go in bounded batches; the contract caps a telemetry
+	 * batch at 5,000 events, and a larger hand-fed array is still chunked rather than refused.
+	 */
+	async ingestAnalytics(events: AnalyticsEvent[]): Promise<void> {
+		await this.#guarded('ingestAnalytics', undefined, async () => {
+			if (events.length === 0) return undefined;
+			const rows = events.slice(0, ANALYTICS_MAX_EVENTS).map((event) => ({
+				ts: chDateTime64(event.ts),
+				project_id: event.projectId,
+				workload_id: event.workloadId,
+				dataset: event.dataset,
+				blobs: [...event.blobs],
+				doubles: event.doubles.map(toAnalyticsDouble),
+				indexes: [...event.indexes],
+			}));
+			await this.#serialize(async () => {
+				for (let offset = 0; offset < rows.length; offset += ANALYTICS_INSERT_BATCH) {
+					await this.#write().insert(
+						`${this.database}.function_analytics`,
+						rows.slice(offset, offset + ANALYTICS_INSERT_BATCH),
+					);
+				}
+			});
+			return undefined;
+		});
+	}
+
+	/**
+	 * Tail-worker items from function invocations (docs/FUNCTIONS.md §4.5, phase 3). Insert-only and
+	 * fail-open like every other method. `logs`, `exceptions` and `request` are stored as JSON
+	 * strings; a ClickHouse outage loses telemetry, never a function request or a deploy.
+	 */
+	async ingestTails(events: FunctionTailEvent[]): Promise<void> {
+		await this.#guarded('ingestTails', undefined, async () => {
+			if (events.length === 0) return undefined;
+			const rows = events.slice(0, TAILS_MAX_EVENTS).map((event) => ({
+				ts: chDateTime64(event.ts),
+				project_id: event.projectId,
+				workload_id: event.workloadId,
+				script_name: event.scriptName,
+				outcome: event.outcome,
+				logs_json: JSON.stringify(event.logs),
+				exceptions_json: JSON.stringify(event.exceptions),
+				request_json: JSON.stringify(event.request),
+			}));
+			await this.#serialize(async () => {
+				for (let offset = 0; offset < rows.length; offset += TAILS_INSERT_BATCH) {
+					await this.#write().insert(
+						`${this.database}.function_tail_events`,
+						rows.slice(offset, offset + TAILS_INSERT_BATCH),
+					);
+				}
+			});
+			return undefined;
+		});
+	}
+
+	/**
+	 * Recent tail-worker items for one function, newest first (the console's Invocations view).
+	 * `before` pages backwards by timestamp; `outcome` filters to one outcome (`ok`, `exception`…).
+	 * Returns [] when telemetry is down, like every read here.
+	 */
+	async functionInvocations(input: FunctionInvocationQuery): Promise<FunctionInvocationRow[]> {
+		return this.#guarded('functionInvocations', [], async () => {
+			const limit = Math.max(1, Math.min(200, Math.floor(input.limit ?? 50)));
+			const filters = ['project_id = {project:String}', 'ts >= {from:DateTime64(3)}', 'ts <= {to:DateTime64(3)}'];
+			const params: ClickHouseParams = {
+				project: input.projectId,
+				from: chDateTime64(toEpochMs(input.from)),
+				to: chDateTime64(toEpochMs(input.to)),
+			};
+			if (input.before !== undefined) {
+				filters.push('ts < {before:DateTime64(3)}');
+				params.before = chDateTime64(input.before);
+			}
+			if (input.outcome) {
+				filters.push('outcome = {outcome:String}');
+				params.outcome = input.outcome;
+			}
+			const rows = await this.#read(
+				`SELECT toUnixTimestamp64Milli(ts) AS ts_ms, workload_id, script_name, outcome, logs_json,
+					exceptions_json, request_json
+				FROM ${this.database}.function_tail_events
+				WHERE ${filters.join(' AND ')}
+				ORDER BY ts DESC
+				LIMIT ${limit}`,
+				params,
+			);
+			return rows.map((row) => ({
+				at: isoFromMs(readNumber(row['ts_ms'])),
+				workloadId: readString(row['workload_id']),
+				scriptName: readString(row['script_name']),
+				outcome: readString(row['outcome']) || 'unknown',
+				logs: parseJsonArray<{ level: string; message: string }>(row['logs_json']),
+				exceptions: parseJsonArray<{ name: string; message: string }>(row['exceptions_json']),
+				request: parseJsonObject<{ method: string; url: string; status?: number }>(row['request_json']),
+			}));
+		});
+	}
+
+	/** Invocation counts by outcome for one function over a window (the console's headline). */
+	async functionInvocationSummary(input: Omit<FunctionInvocationQuery, 'limit' | 'before' | 'outcome'>): Promise<FunctionInvocationSummary> {
+		const empty: FunctionInvocationSummary = { total: 0, byOutcome: {} };
+		return this.#guarded('functionInvocationSummary', empty, async () => {
+			const rows = await this.#read(
+				`SELECT outcome, count() AS n
+				FROM ${this.database}.function_tail_events
+				WHERE project_id = {project:String} AND ts >= {from:DateTime64(3)} AND ts <= {to:DateTime64(3)}
+				GROUP BY outcome`,
+				{
+					project: input.projectId,
+					from: chDateTime64(toEpochMs(input.from)),
+					to: chDateTime64(toEpochMs(input.to)),
+				},
+			);
+			const byOutcome: Record<string, number> = {};
+			let total = 0;
+			for (const row of rows) {
+				const n = readNumber(row['n']);
+				byOutcome[readString(row['outcome']) || 'unknown'] = n;
+				total += n;
+			}
+			return { total, byOutcome };
+		});
+	}
+
 	/** Newest sample per database since `sinceMs` (alerts and `/metrics`). */
 	async latestDatabaseMetrics(sinceMs: number): Promise<DatabaseLatestSample[]> {
 		return this.#guarded('latestDatabaseMetrics', [], async () => {
@@ -1289,6 +1529,10 @@ export class TelemetryStore {
 			await client.exec(dbMetricsTableSql(db, 'db_metrics_1h', hourTtl, 'toYYYYMM(bucket)'));
 			await client.exec(storageMetricsTableSql(db, 'storage_metrics_1m', rawTtl, 'toYYYYMMDD(bucket)'));
 			await client.exec(storageMetricsTableSql(db, 'storage_metrics_1h', hourTtl, 'toYYYYMM(bucket)'));
+			// Analytics Engine datapoints (docs/FUNCTIONS.md §4.5): raw events, its own 90-day TTL.
+			await client.exec(analyticsTableSql(db));
+			// Tail-worker items (phase 3): structured invocation logs, independent 30-day TTL.
+			await client.exec(tailEventsTableSql(db));
 			// Hourly views for dashboard SQL: every hour in retention, rolled or not.
 			await client.exec(
 				hourlyViewSql(db, 'traffic_hourly', 'traffic', 'host', [

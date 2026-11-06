@@ -25,6 +25,7 @@ Usage:
   skiff-platform-config apply-request     apply the pending dashboard request (run by systemd)
   skiff-platform-config backups on|off    turn Litestream → R2 and the monthly restore drill on or off
   skiff-platform-config drill             start the restore drill now
+  skiff-platform-config push-keys         add the Web Push (VAPID) keys if missing and restart the control plane
   skiff-platform-config telemetry on|off [--purge]  install or remove the ClickHouse telemetry store
   skiff-platform-config domains --platform-host <host|ip> [--content-domain <domain>]
                         [--acme-email <email> [--cloudflare-token-file <path>]]
@@ -197,6 +198,7 @@ async function main(): Promise<number> {
 	else if (command === 'backups' && (arg === 'on' || arg === 'off'))
 		status = await helper.apply({ ...base, action: 'backups', enabled: arg === 'on' });
 	else if (command === 'drill') status = await helper.apply({ ...base, action: 'restore-drill' });
+	else if (command === 'push-keys') status = await helper.apply({ ...base, action: 'push-keys' });
 	else if (command === 'telemetry' && (arg === 'on' || arg === 'off'))
 		status = await helper.apply({
 			...base,

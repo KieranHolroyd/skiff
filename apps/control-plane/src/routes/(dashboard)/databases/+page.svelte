@@ -235,7 +235,7 @@
 <div class="space-y-6">
 	<PageHeader
 		target="page.databases"
-		eyebrow="Operate"
+		eyebrow="Workloads"
 		title="Databases"
 		description="Managed PostgreSQL, MySQL, MariaDB, MongoDB, Valkey and Redis that run next to your apps. Attach a database to a process or container project and it receives a connection URL at start-up."
 	>
@@ -299,7 +299,7 @@
 				<EmptyState
 					icon={Trash2Icon}
 					title="The trash is empty"
-					description="Deleted databases stay here for 7 days with their data intact, then they are permanently deleted."
+					description={`Deleted databases stay here for ${data.policies.trashDays} days with their data intact, then they are permanently deleted.`}
 				/>
 			{:else}
 				<EmptyState
@@ -329,7 +329,7 @@
 				</InputGroup.Root>
 				<p class="text-sm text-muted-foreground">
 					{#if trashView}
-						{rows.length} in the trash · purged after 7 days
+						{rows.length} in the trash · purged after {data.policies.trashDays} days
 					{:else}
 						{rows.length}
 						{rows.length === 1 ? 'database' : 'databases'}

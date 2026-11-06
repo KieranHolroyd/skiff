@@ -5,13 +5,9 @@ import { join } from 'node:path';
 import { backupRuns, deployments, orgQuotas, shareLinks, shareRedemptions } from '@skiff/db';
 import { operationLimits } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
-import { ALERT_AFTER_MS } from './nodes.ts';
 
 const DAY_MS = 86_400_000;
 const MINUTE_MS = 60_000;
-/** Certificates closer than this to expiry alert (DESIGN §8); closer than the second, critically. */
-export const CERT_WARN_MS = 14 * DAY_MS;
-export const CERT_CRITICAL_MS = 3 * DAY_MS;
 /** How long after a promote the 5xx comparison keeps running (DESIGN §8 "5xx spike after promote"). */
 export const PROMOTE_WATCH_MS = 30 * MINUTE_MS;
 /** Thresholds: enough traffic to judge, a real error rate, and clearly worse than before. */
@@ -61,6 +57,8 @@ export class MaintenanceService {
 		const uploadsExpired = this.ctx.uploads.expireStale();
 		const logsPruned = this.ctx.logs.prune(this.ctx.now());
 		const stale = this.ctx.nodes.markStale();
+		// Multi-node replicas on a failed or draining node move to healthy workers (C4).
+		this.ctx.workloads.rebalanceReplicas();
 		const alertsFired: string[] = [];
 
 		// Evaluate every unhealthy node on every sweep, not only at the moment it flips offline
@@ -77,7 +75,7 @@ export class MaintenanceService {
 				this.caddyDownSince.set(node.nodeId, since);
 				offlineForMs = now - since;
 			}
-			if (offlineForMs === null || offlineForMs < ALERT_AFTER_MS) continue;
+			if (offlineForMs === null || offlineForMs < this.ctx.policies.nodeAlertMs()) continue;
 			const key = `node_offline:${node.nodeId}`;
 			alertsFired.push(key);
 			await this.notify({
@@ -108,12 +106,12 @@ export class MaintenanceService {
 				alertsFired.push(...(await this.certAlerts(node, stats.certs)));
 				if (stats.diskUsedBytes && stats.diskTotalBytes) {
 					const used = stats.diskUsedBytes / stats.diskTotalBytes;
-					if (used > 0.85) {
+					if (used * 100 > this.ctx.policies.get().diskAlertPercent) {
 						const key = `disk:${node.id}`;
 						alertsFired.push(key);
 						await this.notify({
 							key,
-							title: 'Disk usage above 85%',
+							title: `Disk usage above ${this.ctx.policies.get().diskAlertPercent}%`,
 							detail: `Node ${node.id} is at ${(used * 100).toFixed(1)}% disk usage.`,
 							severity: 'warning',
 						});
@@ -198,8 +196,8 @@ export class MaintenanceService {
 			const notAfter = Date.parse(cert.notAfter);
 			if (!Number.isFinite(notAfter)) continue;
 			const remaining = notAfter - now;
-			if (remaining >= CERT_WARN_MS) continue;
-			const critical = remaining < CERT_CRITICAL_MS;
+			if (remaining >= this.ctx.policies.certWarnMs()) continue;
+			const critical = remaining < this.ctx.policies.certCriticalMs();
 			const key = `cert:${critical ? 'critical' : 'warning'}:${cert.host}:${cert.notAfter}`;
 			if (this.alertSeen(key)) continue;
 			const days = remaining / DAY_MS;
@@ -286,7 +284,7 @@ export class MaintenanceService {
 
 	/** Delete old soft-deleted deployments and orphaned rows. */
 	cleanupRows(): void {
-		const cutoff = this.ctx.now() - 30 * 86_400_000;
+		const cutoff = this.ctx.now() - this.ctx.policies.deletedHistoryMs();
 		this.ctx.db.delete(deployments).where(lt(deployments.deletedAt, cutoff)).run();
 		this.ctx.db.delete(shareRedemptions).where(lt(shareRedemptions.expiresAt, cutoff)).run();
 		this.ctx.db.delete(shareLinks).where(lt(shareLinks.revokedAt, cutoff)).run();
@@ -295,12 +293,13 @@ export class MaintenanceService {
 	/** Managed databases near their storage budget or connection limit (D57). */
 	private async databaseAlerts(): Promise<string[]> {
 		const fired: string[] = [];
-		for (const { row, ratio } of this.ctx.databases.alertCandidates()) {
+		const policies = this.ctx.policies.get();
+		for (const { row, ratio } of this.ctx.databases.alertCandidates(policies.databaseStorageAlertPercent / 100)) {
 			const key = `database_storage:${row.id}`;
 			fired.push(key);
 			await this.notify({
 				key,
-				title: 'Database storage above 85%',
+				title: `Database storage above ${policies.databaseStorageAlertPercent}%`,
 				detail: `Database ${row.name} uses ${(ratio * 100).toFixed(1)}% of its ${row.storageMb} MB storage budget.`,
 				severity: ratio >= 0.95 ? 'critical' : 'warning',
 			});
@@ -310,23 +309,23 @@ export class MaintenanceService {
 		for (const sample of samples) {
 			if (!sample.up || sample.maxConnections <= 0) continue;
 			const ratio = sample.connectionsTotal / sample.maxConnections;
-			if (ratio < 0.9) continue;
+			if (ratio * 100 < policies.databaseConnectionsAlertPercent) continue;
 			const key = `database_connections:${sample.databaseId}`;
 			fired.push(key);
 			await this.notify({
 				key,
-				title: 'Database connections above 90%',
+				title: `Database connections above ${policies.databaseConnectionsAlertPercent}%`,
 				detail: `Database ${sample.databaseId} has ${sample.connectionsTotal} of ${sample.maxConnections} connections in use.`,
 				severity: 'warning',
 			});
 		}
 		for (const sample of samples) {
-			if (!sample.up || !sample.poolerUp || sample.poolSaturation < 0.9) continue;
+			if (!sample.up || !sample.poolerUp || sample.poolSaturation * 100 < policies.poolSaturationAlertPercent) continue;
 			const key = `database_pool_saturation:${sample.databaseId}`;
 			fired.push(key);
 			await this.notify({
 				key,
-				title: 'Database pool above 90% saturation',
+				title: `Database pool above ${policies.poolSaturationAlertPercent}% saturation`,
 				detail: `Database ${sample.databaseId}'s PgBouncer pool is ${(sample.poolSaturation * 100).toFixed(1)}% full (${sample.poolActive} active, ${sample.poolWaiting} waiting). Use the direct URL or raise the pool size.`,
 				severity: sample.poolSaturation >= 0.95 ? 'critical' : 'warning',
 			});
@@ -337,12 +336,13 @@ export class MaintenanceService {
 	/** Managed object storage near its storage budget (S7). */
 	private async storageAlerts(): Promise<string[]> {
 		const fired: string[] = [];
-		for (const { row, ratio } of this.ctx.storage.alertCandidates()) {
+		const percent = this.ctx.policies.get().storageAlertPercent;
+		for (const { row, ratio } of this.ctx.storage.alertCandidates(percent / 100)) {
 			const key = `storage_usage:${row.id}`;
 			fired.push(key);
 			await this.notify({
 				key,
-				title: 'Object storage above 85%',
+				title: `Object storage above ${percent}%`,
 				detail: `Storage ${row.name} uses ${(ratio * 100).toFixed(1)}% of its ${row.storageMb} MB budget.`,
 				severity: ratio >= 0.95 ? 'critical' : 'warning',
 			});
@@ -389,22 +389,19 @@ export class MaintenanceService {
 	}
 
 	private async notify(alert: { key: string; title: string; detail: string; severity: 'info' | 'warning' | 'critical' }): Promise<void> {
+		// A kind turned off in Alerts → System alerts sends nothing and starts no cooldown.
+		if (!this.ctx.alerts.systemRoute(alert.key)) return;
 		const last = this.ctx.sqlite
 			.query<{ last_fired_at: number | null }, [string]>('SELECT last_fired_at FROM alert_state WHERE key = ?')
 			.get(alert.key);
-		const cooldown = 30 * 60_000;
+		const cooldown = this.ctx.policies.get().systemAlertRepeatMinutes * 60_000;
 		if (last?.last_fired_at && this.ctx.now() - last.last_fired_at < cooldown) return;
 		this.ctx.sqlite.run(
 			'INSERT INTO alert_state (key, last_fired_at, last_value) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET last_fired_at = excluded.last_fired_at, last_value = excluded.last_value',
 			[alert.key, this.ctx.now(), alert.detail],
 		);
-		for (const notifier of this.ctx.notifiers) {
-			try {
-				await notifier.notify(alert);
-			} catch (error) {
-				console.error(`[alerts] ${notifier.name} failed:`, error);
-			}
-		}
+		// Routed per kind and recorded in the Alerts history (docs/ALERTS.md).
+		await this.ctx.alerts.deliverSystem(alert);
 	}
 }
 

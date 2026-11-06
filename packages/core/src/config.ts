@@ -15,9 +15,26 @@ export interface EmailTransport {
 	send(message: EmailMessage): Promise<void>;
 }
 
+/**
+ * What a notifier receives. `status`, `url` and `labels` are set by metric alert rules
+ * (docs/ALERTS.md); system alerts leave them out, and a notifier may ignore them.
+ */
+export interface AlertMessage {
+	key: string;
+	title: string;
+	detail: string;
+	severity: 'info' | 'warning' | 'critical';
+	/** `resolved` arrives with severity `info`. Absent means firing. */
+	status?: 'firing' | 'resolved';
+	/** Deep link to the alert in the dashboard. */
+	url?: string;
+	/** Series labels, e.g. `{ host: 'shop.example.com' }`. */
+	labels?: Record<string, string>;
+}
+
 export interface Notifier {
 	name: string;
-	notify(alert: { key: string; title: string; detail: string; severity: 'info' | 'warning' | 'critical' }): Promise<void>;
+	notify(alert: AlertMessage): Promise<void>;
 }
 
 export interface CoreConfig {

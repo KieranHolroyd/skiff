@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import ActivityIcon from '@lucide/svelte/icons/activity';
 	import ArchiveIcon from '@lucide/svelte/icons/archive';
@@ -37,6 +38,9 @@
 		active: StorageTab | 'objects' | 'logs';
 		onselect?: (tab: StorageTab) => void;
 	} = $props();
+
+	/** Settings → Policies trash period; the layout loads it. */
+	const trashDays = $derived<number>(page.data.policies?.trashDays ?? 7);
 
 	const base = $derived(resolve('/(dashboard)/storage/[name]', { name: st.name }));
 	const deleted = $derived(st.deletedAt !== null);
@@ -93,7 +97,7 @@
 			description:
 				st.attachments.length > 0
 					? `It is attached to ${st.attachments.map((item) => item.projectSlug).join(', ')}. Detach it first; the delete will be refused until then.`
-					: 'The container stops, the public route goes and the instance moves to the trash for 7 days. Its buckets stay on the node, so a restore is lossless.',
+					: `The container stops, the public route goes and the instance moves to the trash for ${trashDays} days. Its buckets stay on the node, so a restore is lossless.`,
 			confirmLabel: 'Move to trash',
 			tone: 'danger',
 			typeToConfirm: st.name,

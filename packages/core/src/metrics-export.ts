@@ -243,7 +243,7 @@ export class MetricsExporter {
 
 		const info = this.ctx.sqlite
 			.query<{ id: string; name: string; runtime: string; placement: string; created_at: number }, string[]>(
-				`SELECT id, name, runtime, placement, created_at FROM projects WHERE id IN (${inList})`,
+				`SELECT id, name, COALESCE(runtime_name, runtime) AS runtime, placement, created_at FROM projects WHERE id IN (${inList})`,
 			)
 			.all(...ids);
 		for (const row of info) {
@@ -294,7 +294,7 @@ export class MetricsExporter {
 
 		const workloads = this.ctx.sqlite
 			.query<{ project_id: string; runtime: string; status: string; memory_mb: number; cpus: number }, string[]>(
-				`SELECT project_id, runtime, status, memory_mb, cpus FROM workloads WHERE project_id IN (${inList})`,
+				`SELECT project_id, COALESCE(runtime_name, runtime) AS runtime, status, memory_mb, cpus FROM workloads WHERE project_id IN (${inList})`,
 			)
 			.all(...ids);
 		for (const row of workloads) {

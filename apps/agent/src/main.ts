@@ -10,9 +10,11 @@ import {
 	type NodeStudioDesired,
 	type NodeStatus,
 	type VolumeInventory,
+	type WireguardStatus,
 	type WorkloadActivation,
 } from '@skiff/contracts';
 import type { TlsOptions } from '@skiff/site-config';
+import { startAnalyticsSink, type AnalyticsSink } from './analytics-sink.ts';
 import { CaddyAdmin } from './caddy.ts';
 import { CertProbe, certProbeTargets, tlsCertReader } from './certs.ts';
 import { buildCaddyConfig, isProductionRoute, tlsSubjects } from './caddy-config.ts';
@@ -26,11 +28,15 @@ import { NodeUpdateRunner } from './node-update.ts';
 import { DatabasePoolerRestartRunner } from './database-pooler-restarts.ts';
 import { DatabaseRotationRunner } from './database-rotations.ts';
 import { DATABASE_STATS_INTERVAL_MS, DatabaseStatsSampler } from './database-stats.ts';
+import { FunctionScheduler } from './function-scheduler.ts';
 import { HelperClient } from './helper-client.ts';
 import { formatEnv, JOIN_USAGE, joinNode, nodeFilePath, parseJoinArgs } from './join.ts';
 import { WorkloadLogDrain } from './log-drain.ts';
 import { ReleaseManager } from './releases.ts';
 import { databaseTlsHeartbeat, WorkloadRuntime, workloadHeartbeat } from './runtime.ts';
+import { HardwareCollector } from './hardware.ts';
+import { ServiceForwarder } from './endpoints.ts';
+import { NodeCertificateManager } from './node-cert.ts';
 import { StatsCollector } from './stats.ts';
 import { StorageReconciler, STORAGE_RECONCILE_INTERVAL_MS } from './storage-admin.ts';
 import { StorageRequester } from './storage.ts';
@@ -80,6 +86,11 @@ class AgentRuntime {
 	private readonly releases: ReleaseManager;
 	private readonly caddy: CaddyAdmin;
 	private readonly stats: StatsCollector;
+	private readonly hardware: HardwareCollector;
+	private readonly serviceForwarder: ServiceForwarder;
+	private readonly nodeCertificate: NodeCertificateManager;
+	private wireguardStatus: WireguardStatus | null = null;
+	private wireguardStatusAt = 0;
 	private readonly certs: CertProbe | null;
 	private readonly helper: HelperClient;
 	private readonly workloads: WorkloadRuntime;
@@ -95,6 +106,7 @@ class AgentRuntime {
 	private readonly databasePoolerRestarts: DatabasePoolerRestartRunner;
 	private readonly storageAdmin: StorageReconciler;
 	private readonly storageStats: StorageStatsSampler;
+	private readonly functions: FunctionScheduler;
 
 	private desired: DesiredState | null = null;
 	private desiredEtag: string | null = null;
@@ -119,6 +131,8 @@ class AgentRuntime {
 
 	private telemetry: TelemetryClient | null = null;
 	private telemetryStartWarned = false;
+	/** Loopback sink function hosts POST Analytics Engine datapoints to (docs/FUNCTIONS.md §4.5). */
+	private analyticsSink: AnalyticsSink | null = null;
 	private heartbeatWasFailing = false;
 	private pullBeforeConverge = false;
 	private volumeInventory: VolumeInventory | null = null;
@@ -136,6 +150,12 @@ class AgentRuntime {
 		this.releases = new ReleaseManager(config.dataDir);
 		this.caddy = new CaddyAdmin(config.caddyAdminSocket);
 		this.stats = new StatsCollector(config.dataDir);
+		this.hardware = new HardwareCollector();
+		this.nodeCertificate = new NodeCertificateManager(config.dataDir, config.nodeId);
+		this.serviceForwarder = new ServiceForwarder({
+			log: (level, message) => log(level, message),
+			...(this.nodeCertificate.ensure() ? { certificate: this.nodeCertificate.ensure()! } : {}),
+		});
 		this.certs = config.certProbe
 			? new CertProbe(
 					() =>
@@ -202,6 +222,15 @@ class AgentRuntime {
 		// root key and user secrets stay in the workload runtime's memory (S4).
 		this.storageAdmin = new StorageReconciler({ source: this.workloads, log });
 		this.storageStats = new StorageStatsSampler({ source: this.workloads, log });
+		// Scale to zero, the runaway watchdog and cron all run on the node (FN4, FN5, FN9).
+		this.functions = new FunctionScheduler({
+			helper: this.helper,
+			socketDir: config.workloadSocketDir,
+			statePath: join(config.dataDir, 'function-cron-state.json'),
+			// Without the access log there is no request signal; never idle-stop a serving host.
+			activityEnabled: Boolean(config.caddyAccessLog),
+			log,
+		});
 	}
 
 	async run(): Promise<void> {
@@ -252,8 +281,32 @@ class AgentRuntime {
 				nodeToken: this.config.nodeToken,
 				nodeId: this.config.nodeId,
 				accessLogPath: this.config.caddyAccessLog,
-				resolveProject: (host) => this.projectByHost.get(normalizeHost(host)) ?? null,
+				// Access-log aggregation is the request signal scale-to-zero measures (FN4). Resolve
+				// first, then record activity, so telemetry behaviour itself is unchanged.
+				resolveProject: (host) => {
+					const projectId = this.projectByHost.get(normalizeHost(host)) ?? null;
+					if (projectId) this.functions.noteActivity(projectId);
+					return projectId;
+				},
 			});
+		}
+
+		// Function hosts POST Analytics Engine datapoints and tail events here over an `external`
+		// service. The sink is independent of the access-log tail (a binding writes even with no
+		// Caddy log configured) and a bind failure is logged, not fatal: telemetry must never keep
+		// the agent from booting.
+		try {
+			this.analyticsSink = startAnalyticsSink({
+				port: this.config.functionAnalyticsPort,
+				record: (event) => this.telemetry?.recordAnalytics(event),
+				recordTail: (event) => this.telemetry?.recordTail(event),
+				log,
+			});
+		} catch (error) {
+			log(
+				'warn',
+				`Analytics Engine sink unavailable on 127.0.0.1:${this.config.functionAnalyticsPort}: ${errorText(error)}`,
+			);
 		}
 
 		// Bun's process typings only augment `memoryPressure`; the Node signal overloads still work
@@ -277,6 +330,7 @@ class AgentRuntime {
 			this.nodeUpdateLoop(),
 			this.storageAdminLoop(),
 			this.storageStatsLoop(),
+			this.functions.run(() => this.desired, this.shutdownController.signal),
 		];
 		if (this.config.logDrain)
 			this.loops.push(this.logDrain.run(() => this.desired, this.shutdownController.signal));
@@ -290,9 +344,13 @@ class AgentRuntime {
 		log('info', 'Shutting down');
 		this.shutdownController.abort();
 		await Promise.allSettled(this.loops);
+		// Stop the sink before the telemetry client so its last flush carries any buffered events.
+		this.analyticsSink?.stop();
+		this.analyticsSink = null;
 		await this.telemetry?.stop().catch(() => undefined);
 		await this.studioUpdates;
 		if (this.studioFront) (await this.studioFront.catch(() => null))?.stop();
+		this.serviceForwarder.close();
 		this.server?.stop(true);
 		this.server = null;
 		await fs.rm(this.config.agentSocket, { force: true }).catch(() => undefined);
@@ -536,6 +594,22 @@ class AgentRuntime {
 			log('error', `Volume registry sync failed: ${errorText(error)}`);
 		}
 
+		// Consumer loopback endpoints and provider overlay listeners (C2). Harmless when empty.
+		try {
+			this.serviceForwarder.converge(state.serviceEndpoints, state.serviceProviders);
+		} catch (error) {
+			log('error', `Service endpoint converge failed: ${errorText(error)}`);
+		}
+
+		// The overlay must be up before a workload tries a cross-node service endpoint (C1).
+		if (state.wireguard) {
+			try {
+				await this.helper.wireguardApply(state.wireguard);
+			} catch (error) {
+				log('error', `WireGuard apply failed: ${errorText(error)}`);
+			}
+		}
+
 		// Tier 2/3 workloads converge before Caddy loads their upstreams. A helper outage or a
 		// broken workload must never take static serving down, so failures are logged inside the
 		// runtime and this call is defensive as well.
@@ -743,6 +817,16 @@ class AgentRuntime {
 	private async sendHeartbeat(requestedStatus: NodeStatus): Promise<boolean> {
 		await this.checkCaddy();
 		const stats = await this.stats.collect();
+		const hardware = await this.hardware.collect();
+		const nodeCertificate = this.nodeCertificate.ensure();
+		if (this.desired?.wireguard && Date.now() - this.wireguardStatusAt > 30_000) {
+			try {
+				this.wireguardStatus = await this.helper.wireguardStatus();
+				this.wireguardStatusAt = Date.now();
+			} catch {
+				// A helper that predates the overlay simply reports no peer health.
+			}
+		}
 		// Cached; refreshed in the background at most every ~6 h (cert-expiry alert, DESIGN §8).
 		const certs = this.certs?.current() ?? [];
 		if (certs.length > 0) stats.certs = certs;
@@ -779,6 +863,9 @@ class AgentRuntime {
 			caddyOk: this.caddyOk,
 			capabilities: [...nodeCapabilities],
 			stats,
+			...(hardware ? { hardware } : {}),
+			...(nodeCertificate ? { nodeCertificate } : {}),
+			...(this.desired?.wireguard && this.wireguardStatus ? { wireguard: this.wireguardStatus } : {}),
 			releases: this.releases.listReleases(),
 			...(storage ? { storage } : {}),
 			...(reports.length > 0 ? { workloads: workloadHeartbeat(reports) } : {}),
@@ -1141,6 +1228,11 @@ async function runJoinCli(args: string[]): Promise<void> {
 		return;
 	}
 	const options = parseJoinArgs(args);
+	if (options.networkMode === 'skiff' && !options.wireguardPublicKey) {
+		// The private key stays on the node: the helper generates it and returns only the public key.
+		const helper = new HelperClient(process.env.SKIFF_HELPER_SOCKET?.trim() || '/run/skiff-helper/helper.sock');
+		options.wireguardPublicKey = (await helper.wireguardKeygen()).publicKey;
+	}
 	const joined = await joinNode(options);
 	process.stdout.write(formatEnv(joined));
 	// Keep stdout machine-readable for `> /etc/skiff/agent.env`.

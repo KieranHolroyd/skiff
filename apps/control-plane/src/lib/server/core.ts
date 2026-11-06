@@ -4,15 +4,19 @@ import {
 	EmailNotifier,
 	LocalObjectStore,
 	R2ObjectStore,
+	SmsNotifier,
 	SmtpEmailTransport,
 	TelemetryStore,
-	WebhookNotifier,
+	TwilioSmsTransport,
+	chatNotifiersFromEnv,
+	webhookNotifierFor,
 	clickhouseFromEnv,
 	createCore,
 	type Notifier
 } from '@skiff/core';
 import {
 	alertEmail,
+	alertSms,
 	clickhouseEnv,
 	dataDir,
 	edgeNodeId,
@@ -26,11 +30,13 @@ import {
 	r2,
 	siteCookieSecret,
 	smtp,
+	twilio,
 	webhookUrl,
 	features
 } from './config';
 import { db, sqlite } from './db';
 import { platformVersion } from './version';
+import { pushNotifier } from './push';
 import { updateSource } from './self-update';
 
 const objectStore =
@@ -41,7 +47,14 @@ const objectStore =
 const emailTransport = smtp ? new SmtpEmailTransport(smtp) : new ConsoleEmailTransport();
 const notifiers: Notifier[] = [];
 if (alertEmail) notifiers.push(new EmailNotifier(emailTransport, alertEmail));
-if (webhookUrl) notifiers.push(new WebhookNotifier(webhookUrl));
+if (webhookUrl) notifiers.push(webhookNotifierFor(webhookUrl));
+// Discord, Slack, Telegram, ntfy (Settings → Notifications).
+notifiers.push(...chatNotifiersFromEnv(process.env));
+if (twilio && alertSms.length)
+	notifiers.push(new SmsNotifier(new TwilioSmsTransport(twilio), alertSms));
+
+// Web Push to the installed dashboard app (Settings → Notifications, D108).
+if (pushNotifier) notifiers.push(pushNotifier);
 
 /** The single service layer shared by the dashboard, REST API, MCP server and CLI (DESIGN §3.2). */
 export const core = createCore({

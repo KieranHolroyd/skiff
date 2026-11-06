@@ -2,6 +2,9 @@ import { loadHelperConfig } from './config.ts';
 import { startHelperServer, type RunningHelper } from './server.ts';
 import { spawnRunner, SystemdDriver } from './systemd.ts';
 import { NodeUpdater } from './node-update.ts';
+import { WireguardManager } from './wireguard.ts';
+import { NetworkManager } from './network.ts';
+import { ShareMounter } from './shares.ts';
 
 /**
  * `skiff-helper`: the only privileged Skiff process (D26). It listens on a root-owned,
@@ -30,6 +33,7 @@ export async function runHelper(): Promise<void> {
 		runtimeDir: config.runtimeDir,
 		stateDir: config.stateDir,
 		releaseDirs: config.releaseDirs,
+		workerdDir: config.workerdDir,
 		bunPath: config.bunPath,
 		systemctlPath: config.systemctlPath,
 		journalctlPath: config.journalctlPath,
@@ -67,7 +71,8 @@ export async function runHelper(): Promise<void> {
 		currentVersion: config.version,
 		log: (level, message) => log(level, `node update: ${message}`),
 	});
-	helper = await startHelperServer(config, driver, { nodeUpdate });
+	const wireguard = new WireguardManager({ firewall: new NetworkManager() });
+	helper = await startHelperServer(config, driver, { nodeUpdate, wireguard, shares: new ShareMounter() });
 	if (stopping) await helper.stop();
 	log('info', `Listening on unix/${config.socketPath} (units ${config.unitDir})`);
 

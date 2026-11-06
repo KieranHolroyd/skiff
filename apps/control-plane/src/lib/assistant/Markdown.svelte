@@ -4,6 +4,7 @@
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import ExternalLinkIcon from '@lucide/svelte/icons/external-link';
 	import { copyText } from '#lib/assistant/clipboard.js';
+	import HighlightedCode from '#lib/highlight/HighlightedCode.svelte';
 	import { parseMarkdown, type Inline } from '#lib/assistant/markdown.js';
 
 	/**
@@ -88,9 +89,12 @@
 						</button>
 					{/if}
 				</div>
-				<pre class="max-h-80 overflow-auto p-2.5 font-mono text-xs leading-relaxed"><code
-						>{block.text}</code
-					></pre>
+				<HighlightedCode
+					code={block.text}
+					lang={block.lang}
+					plain={streaming && block.open}
+					class="max-h-80 overflow-auto p-2.5 font-mono text-xs leading-relaxed"
+				/>
 			</div>
 		{:else if block.type === 'list'}
 			{#if block.ordered}

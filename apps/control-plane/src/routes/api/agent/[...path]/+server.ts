@@ -146,11 +146,18 @@ const handler: RequestHandler = async (event) => {
 				});
 			const result =
 				batch.buckets.length > 0 ? await core.ctx.telemetry.ingest(batch.buckets) : { inserted: 0 };
+			// Analytics Engine datapoints from function bindings (docs/FUNCTIONS.md §4.5). The store's
+			// ingest is fail-open, so a ClickHouse hiccup cannot fail the node's telemetry path.
+			if (batch.analytics.length > 0) await core.ctx.telemetry.ingestAnalytics(batch.analytics);
+			// Tail-worker items (phase 3) take the same fail-open route.
+			if (batch.tails.length > 0) await core.ctx.telemetry.ingestTails(batch.tails);
 			return {
 				ok: true,
 				stored: result.inserted,
 				databasesStored: databases.stored,
-				storageStored: storage.stored
+				storageStored: storage.stored,
+				analyticsStored: batch.analytics.length,
+				tailsStored: batch.tails.length
 			};
 		}
 

@@ -1,7 +1,13 @@
 import { fail } from '@sveltejs/kit';
-import { PLATFORM_CONFIG_SECTIONS } from '@skiff/contracts';
+import { PLATFORM_CONFIG_SECTIONS, parseSmsRecipients } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
-import { currentSection, testSmtp, testWebhook } from '#lib/server/platform-config.js';
+import {
+	currentSection,
+	testSms,
+	testSmtp,
+	testTwilio,
+	testWebhook
+} from '#lib/server/platform-config.js';
 import { formBoolean, formRawString, formString } from '../../_lib/errors.js';
 import {
 	collect,
@@ -11,13 +17,20 @@ import {
 	requireOwnerPage
 } from '../_platform.server.js';
 import type { Actions, PageServerLoad } from './$types';
+import { chatActions, chatChannelsState } from './_chat.server.js';
+import { pushActions, pushState } from './_push.server.js';
 
 export const load: PageServerLoad = ({ locals }) => {
 	requireOwnerPage(locals);
 	return {
 		...configState(),
 		email: currentSection('email'),
+		sms: currentSection('sms'),
 		alerts: currentSection('alerts'),
+		/** Discord, Slack, Telegram, ntfy (see _chat.server.ts). */
+		chatChannels: chatChannelsState(),
+		/** Web Push to the installed dashboard app (see _push.server.ts). */
+		push: pushState(locals.principal!.userId),
 		adminEmail: locals.user?.email ?? null,
 		/** Alerts go nowhere until a channel is configured; the journal is the only record. */
 		alertChannels: core.ctx.notifiers.map((notifier) => notifier.name)
@@ -75,7 +88,53 @@ function smtpOptions(set: Record<string, string>) {
 	};
 }
 
+function smsFields(data: FormData) {
+	return collect([
+		{
+			field: 'accountSid',
+			key: 'SKIFF_TWILIO_ACCOUNT_SID',
+			value: formString(data, 'accountSid'),
+			required: true,
+			label: 'Account SID'
+		},
+		{
+			field: 'authToken',
+			key: 'SKIFF_TWILIO_AUTH_TOKEN',
+			value: formString(data, 'authToken'),
+			secret: true,
+			required: true,
+			label: 'Auth Token'
+		},
+		{
+			field: 'from',
+			key: 'SKIFF_TWILIO_FROM',
+			value: formString(data, 'from'),
+			required: true,
+			label: 'Send from'
+		}
+	]);
+}
+
+/** Submitted values over the running ones; a blank Auth Token field keeps the saved token. */
+function twilioOptions(set: Record<string, string> = {}) {
+	return {
+		accountSid: set.SKIFF_TWILIO_ACCOUNT_SID ?? process.env.SKIFF_TWILIO_ACCOUNT_SID ?? '',
+		authToken: set.SKIFF_TWILIO_AUTH_TOKEN ?? process.env.SKIFF_TWILIO_AUTH_TOKEN ?? '',
+		from: set.SKIFF_TWILIO_FROM ?? process.env.SKIFF_TWILIO_FROM ?? ''
+	};
+}
+
+const twilioConfigured = () =>
+	Boolean(
+		process.env.SKIFF_TWILIO_ACCOUNT_SID &&
+		process.env.SKIFF_TWILIO_AUTH_TOKEN &&
+		process.env.SKIFF_TWILIO_FROM
+	);
+
 export const actions: Actions = {
+	...chatActions,
+	...pushActions,
+
 	saveEmail: async ({ request, locals }) => {
 		requireOwnerPage(locals);
 		const data = await request.formData();
@@ -126,6 +185,38 @@ export const actions: Actions = {
 		return { success: `Test email sent to ${to}.` };
 	},
 
+	saveSms: async ({ request, locals }) => {
+		requireOwnerPage(locals);
+		const data = await request.formData();
+		const { set, unset, fieldErrors } = smsFields(data);
+		if (Object.keys(fieldErrors).length) return fieldFailure(fieldErrors);
+		// Checked against Twilio's account endpoint, which costs nothing; the first SMS is sent when
+		// you add a number under Alerts.
+		const result = await testTwilio(twilioOptions(set));
+		if (!result.ok)
+			return fail(400, {
+				message: `Not saved — Twilio rejected these credentials: ${result.error}`,
+				fieldErrors: { authToken: 'Check the Account SID and Auth Token.' }
+			});
+		return queueConfig(
+			locals,
+			{ action: 'configure', section: 'sms', set, unset },
+			`Twilio account${result.account ? ` “${result.account}”` : ''} verified. Saving — the dashboard restarts for a few seconds.`
+		);
+	},
+
+	removeSms: async ({ locals }) =>
+		queueConfig(
+			locals,
+			{
+				action: 'configure',
+				section: 'sms',
+				set: {},
+				unset: [...PLATFORM_CONFIG_SECTIONS.sms]
+			},
+			'Removing the Twilio settings.'
+		),
+
 	saveAlerts: async ({ request, locals }) => {
 		requireOwnerPage(locals);
 		const data = await request.formData();
@@ -141,6 +232,13 @@ export const actions: Actions = {
 				key: 'SKIFF_ALERT_EMAIL',
 				value: formString(data, 'email'),
 				label: 'Alert email'
+			},
+			{
+				field: 'sms',
+				key: 'SKIFF_ALERT_SMS',
+				// Normalise "+44 7700 900123, +1…" to the stored form before validating.
+				value: parseSmsRecipients(formString(data, 'sms').replace(/[\s()-]/g, '')).join(','),
+				label: 'SMS numbers'
 			}
 		]);
 		if (Object.keys(fieldErrors).length) return fieldFailure(fieldErrors);
@@ -149,6 +247,24 @@ export const actions: Actions = {
 				message: 'Set up outbound email first; alert emails are sent through it.',
 				fieldErrors: { email: 'Email is not configured.' }
 			});
+		if (set.SKIFF_ALERT_SMS && !twilioConfigured())
+			return fail(400, {
+				message: 'Set up Twilio first; SMS alerts are sent through it.',
+				fieldErrors: { sms: 'SMS is not configured.' }
+			});
+		if (set.SKIFF_ALERT_SMS) {
+			// Only numbers that are new get a (billed) test message.
+			const known = new Set(parseSmsRecipients(process.env.SKIFF_ALERT_SMS));
+			const added = parseSmsRecipients(set.SKIFF_ALERT_SMS).filter((n) => !known.has(n));
+			if (added.length) {
+				const result = await testSms(twilioOptions(), added);
+				if (!result.ok)
+					return fail(400, {
+						message: `Not saved — the test SMS failed: ${result.error}`,
+						fieldErrors: { sms: 'Twilio could not text this number.' }
+					});
+			}
+		}
 		if (set.SKIFF_ALERT_WEBHOOK && set.SKIFF_ALERT_WEBHOOK !== process.env.SKIFF_ALERT_WEBHOOK) {
 			const result = await testWebhook(set.SKIFF_ALERT_WEBHOOK);
 			if (!result.ok)
@@ -184,7 +300,7 @@ export const actions: Actions = {
 		if (failures.length)
 			return fail(502, { message: `Test alert failed — ${failures.join('; ')}` });
 		return {
-			success: `Test alert sent via ${core.ctx.notifiers.map((n) => n.name).join(' and ')}.`
+			success: `Test alert sent via ${new Intl.ListFormat('en').format(core.ctx.notifiers.map((n) => n.name))}.`
 		};
 	}
 };

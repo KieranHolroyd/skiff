@@ -1,6 +1,6 @@
 import { fail } from '@sveltejs/kit';
 import type { NodeView } from '@skiff/core';
-import type { NodeCapacityView, NodeVolumesView } from '@skiff/contracts';
+import type { NodeCapacityView, NodeRole, NodeVolumesView } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
 import {
 	failStatus,
@@ -48,15 +48,19 @@ export const load: PageServerLoad = ({ locals }) => {
 };
 
 export const actions: Actions = {
-	createToken: async ({ locals }) => {
+	createToken: async ({ request, locals }) => {
 		const principal = locals.principal!;
+		const data = await request.formData();
+		const managed = formString(data, 'networkMode') !== 'external';
 		try {
 			// The first node to join becomes the edge; later ones are workers and need an address
 			// the edge can proxy to (see /nodes/vpn for the WireGuard walkthrough).
 			const hasEdge = core.nodes.list(principal).some((node) => node.mode === 'edge');
 			const token = core.nodes.createJoinToken(principal, hasEdge ? undefined : 'edge');
 			const command = hasEdge
-				? `sudo skiff-agent join ${core.ctx.config.platformOrigin} --token ${token.token} --name <name> --public-address <tunnel-ip>:<port>`
+				? managed
+					? `curl -fsSL ${core.ctx.config.platformOrigin}/install/node.sh | sudo sh -s -- --token ${token.token} --name <name>`
+					: `sudo skiff-agent join ${core.ctx.config.platformOrigin} --token ${token.token} --name <name> --public-address <tunnel-ip>:<port>`
 				: `sudo skiff-agent join ${core.ctx.config.platformOrigin} --token ${token.token} --name edge`;
 			return {
 				success: 'Join token created. It is single-use and expires in one hour.',
@@ -144,6 +148,20 @@ export const actions: Actions = {
 		const sliceCpuWeight = formOptionalPositiveInt(data, 'sliceCpuWeight');
 		if (sliceMemoryMb === null) return fail(400, { message: 'Slice memory must be a whole number of MB.' });
 		if (sliceCpuWeight === null) return fail(400, { message: 'CPU weight must be a whole number.' });
+		const roles = data.getAll('roles').map(String).filter(Boolean) as NodeRole[];
+		if (roles.length === 0) return fail(400, { message: 'A node needs at least one role.' });
+		const cpuBudgetRaw = formString(data, 'cpuBudgetMillis');
+		const cpuBudgetMillis = cpuBudgetRaw ? Number(cpuBudgetRaw) : null;
+		if (cpuBudgetRaw && (!Number.isInteger(cpuBudgetMillis) || (cpuBudgetMillis ?? 0) <= 0))
+			return fail(400, { message: 'CPU budget must be a positive whole number of millis.' });
+		const labels: Record<string, string> = {};
+		for (const line of formString(data, 'labels').split(/\n/)) {
+			const trimmed = line.trim();
+			if (!trimmed) continue;
+			const at = trimmed.indexOf('=');
+			if (at <= 0) return fail(400, { message: `Label "${trimmed}" needs the form key=value.` });
+			labels[trimmed.slice(0, at).trim()] = trimmed.slice(at + 1).trim();
+		}
 
 		try {
 			core.nodes.update(principal, nodeId, {
@@ -152,6 +170,11 @@ export const actions: Actions = {
 				sliceMemoryMb,
 				sliceCpuWeight,
 				canBuild: formBoolean(data, 'canBuild'),
+				zone: formString(data, 'zone') || 'default',
+				roles,
+				labels,
+				lanEndpoint: formString(data, 'lanEndpoint') || null,
+				cpuBudgetMillis,
 				// Blank restores the install default.
 				dataDir: formString(data, 'dataDir') || null,
 				buildDir: formString(data, 'buildDir') || null

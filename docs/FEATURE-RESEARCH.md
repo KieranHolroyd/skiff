@@ -59,7 +59,7 @@ Skiff runs Litestream to R2 with roughly one-second RPO, a monthly restore drill
 
 Platform and content live on separate registrable domains, preview and production cookies are host-only and HMAC-signed, protected sites use `forward_auth` to the local agent, Caddy's admin API is a unix socket, and deployed content is untrusted ([Skiff README](https://github.com/KieranHolroyd/skiff/blob/main/README.md)). That is exactly the boundary agent platforms struggle with: Vercel warns that MCP grants the client the user's access and that prompt injection can exfiltrate logs; Cloudflare sells a gateway and DLP layer to contain it ([Vercel MCP](https://vercel.com/docs/agent-resources/vercel-mcp), [Cloudflare](https://developers.cloudflare.com/changelog/post/2026-09-24-mcp-portals-ga)). Extend the same logic to tool output: site content, logs, and `_headers` are data, never instructions; cross-project reads are capped by default; every agent action is attributable. Do not add a second execution path — a shell, a sandbox, or Code Mode's `execute` — that bypasses the one-service-layer guarantee.
 
-**What to protect, concretely.** Keep one control plane per install and refuse active-active. Keep the agent protocol backward-compatible for one minor version. Keep every surface on `packages/core` so MCP can never exceed the UI. Keep the tool catalog small and task-shaped rather than mirroring every REST endpoint. Keep deployed content off the platform domain. Keep the baseline under 250 MB by refusing bundled observability, a container daemon, and a message queue.
+**What to protect, concretely.** Keep one active control plane per install, with warm standbys for HA (D107, [CLUSTERING.md](./CLUSTERING.md)). Keep the agent protocol backward-compatible for one minor version. Keep every surface on `packages/core` so MCP can never exceed the UI. Keep the tool catalog small and task-shaped rather than mirroring every REST endpoint. Keep deployed content off the platform domain. Keep the baseline under 250 MB by refusing bundled observability, a container daemon, and a message queue.
 
 ## The market converges on releases, previews, and governance
 
@@ -165,7 +165,7 @@ Every item below would erase the footprint advantage, create a second security m
 
 | Do not build | Why not | Closest alternative |
 |---|---|---|
-| Kubernetes, Swarm, HPA, general scheduler | Contradicts the no-Kubernetes, tiny-footprint design | Node labels, manual placement, vertical resize, workload-slice admission |
+| Kubernetes, Swarm, HPA, general scheduler | Contradicts the no-Kubernetes, tiny-footprint design | Hardware-aware placement once at deploy time, node labels and zones, multi-node replicas, opt-in failover (CLUSTERING.md) |
 | Global anycast CDN or WAF/bot engine | One node cannot absorb volumetric DDoS; an edge network is a different company | CDN presets, Caddy rate limits, CrowdSec, Cloudflare/Bunny/Fastly |
 | Full APM, trace storage, log warehouse | Export beats build; Railway and Coolify both defer to external tools | OTLP/Prometheus export, short hot window, log drains |
 | Billing, payments, metered SaaS pricing | Self-hosted has no bill; quotas and showback are the useful translation | Quotas, budgets, chargeback CSV |
@@ -177,7 +177,6 @@ Every item below would erase the footprint advantage, create a second security m
 | Terraform before OpenAPI and config-as-code | Permanent compatibility surface; the Vercel and Cloudflare providers show the cost | `skiff plan/apply`, generated SDK |
 | In-page comments and screenshot diffs | Large product bet requiring a toolbar, DOM anchoring, storage, and fan-out | PR comment, per-deployment share link |
 | Template marketplace or hosted registry | Supply-chain and availability risk for a self-hosted product | First-party templates plus `gh:owner/repo` sources |
-| Multi-node active-active control plane | Conflicts with one control plane and SQLite; no comparable self-hosted product ships it | Warm standby, Litestream replica, DNS failover, edge mirror |
 | SAML, SCIM, custom roles, legal hold in year one | Consistently enterprise-only and demand-gated | OIDC SSO, built-in roles, project guests |
 
 ### Open questions and research gaps

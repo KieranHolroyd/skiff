@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { FUNCTION_ANALYTICS_PORT } from '@skiff/contracts';
 import { BUILD_VERSION } from './build-version.ts';
 
 /**
@@ -64,10 +65,16 @@ export interface AgentConfig {
 	helperSocket: string;
 	/** Node workload-slice memory budget applied to `skiff-workloads.slice`. */
 	workloadSliceMb: number;
-	/** Directory where socket-activated workloads expose `<projectId>.sock`. */
+	/** Directory where socket-activated workloads expose `<id>.sock` (functions) or `<projectId>.sock` (process apps). */
 	workloadSocketDir: string;
 	/** How long to wait for `healthPath` before reporting a workload as starting. */
 	workloadHealthTimeoutMs: number;
+	/**
+	 * Loopback port the Analytics Engine sink serves function writes on (fixed by the rendered config).
+	 * Function hosts render it as an `external` service; the agent batches what arrives into its
+	 * telemetry POST (docs/FUNCTIONS.md §4.5).
+	 */
+	functionAnalyticsPort: number;
 	/** Drain workload stdout/stderr from the helper into the control plane. */
 	logDrain: boolean;
 	/** How often the agent asks the helper for new journal lines. */
@@ -323,6 +330,9 @@ export function loadConfig(env: Env = process.env): AgentConfig {
 			1_000,
 			600_000,
 		),
+		// Fixed: the agent renders the same port into every function's Analytics Engine sink, so
+		// an environment override here would silently diverge from that config.
+		functionAnalyticsPort: FUNCTION_ANALYTICS_PORT,
 		logDrain: parseBooleanValue(env.SKIFF_LOG_DRAIN) ?? true,
 		logDrainIntervalMs: parseIntegerEnv(env, 'SKIFF_LOG_DRAIN_INTERVAL_MS', 2_000, 500, 60_000),
 	};

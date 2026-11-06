@@ -35,6 +35,33 @@ export const nodes = sqliteTable(
 		sliceCpuWeight: integer('slice_cpu_weight').notNull().default(200),
 		/** This node is allowed to claim git build jobs (D3: the homelab Builder). */
 		canBuild: integer('can_build', { mode: 'boolean' }).notNull().default(false),
+		/** Failure domain: nodes in one zone share power, uplink and provider fate (CLUSTERING §3.2). */
+		zone: text('zone').notNull().default('default'),
+		/** Operator-set roles; NULL keeps the derivation from mode/can_build for older rows. */
+		rolesJson: text('roles_json'),
+		/** Operator labels for placement constraints (`owner=media`); never `skiff.io/*`. */
+		labelsJson: text('labels_json'),
+		/** Last hardware fact block (`NodeHardware`, CLUSTERING §3.1). */
+		hardwareJson: text('hardware_json'),
+		hardwareAt: integer('hardware_at'),
+		/** Last parse/collection failure, surfaced on the node page; null when healthy. */
+		hardwareError: text('hardware_error'),
+		/** LAN address for direct peering inside one zone (C1). */
+		lanEndpoint: text('lan_endpoint'),
+		/** CPU reservation budget in millis; null means no explicit cap (CLUSTERING §3.4). */
+		cpuBudgetMillis: integer('cpu_budget_millis'),
+		/** Managed overlay address (C1); null on external and pre-C1 nodes. */
+		privateAddress: text('private_address'),
+		privateCidr: text('private_cidr'),
+		/** The node's WireGuard public key; the private key never leaves the node. */
+		wgPublicKey: text('wg_public_key'),
+		/** `skiff` managed, `external` host-provisioned/BYO, `edge` legacy edge interface. */
+		networkMode: text('network_mode', { enum: ['skiff', 'external', 'edge'] }).notNull().default('external'),
+		wgEndpoint: text('wg_endpoint'),
+		wgListenPort: integer('wg_listen_port'),
+		/** Last `wg show` peer health reported by the agent (public data only). */
+		wgStatusJson: text('wg_status_json'),
+		wgStatusAt: integer('wg_status_at'),
 		/** Requested agent data/release-cache directory; null keeps the install default (D48). */
 		storageDataDir: text('storage_data_dir'),
 		/** Requested Builder scratch directory; null keeps the install default (D48). */
@@ -59,6 +86,159 @@ export const nodes = sqliteTable(
 		updatedAt: integer('updated_at').notNull().$defaultFn(now),
 	},
 	(t) => [index('nodes_status_idx').on(t.status)],
+);
+
+/** Public node certificates issued by the per-install CA (C2); private keys stay on the node. */
+export const nodeCertificates = sqliteTable('node_certificates', {
+	nodeId: text('node_id').primaryKey(),
+	serial: text('serial').notNull(),
+	certPem: text('cert_pem').notNull(),
+	caSerial: text('ca_serial'),
+	issuedAt: integer('issued_at').notNull(),
+	expiresAt: integer('expires_at').notNull(),
+	revokedAt: integer('revoked_at'),
+});
+
+/** A consumer-side loopback port for one remote database or storage instance (C2). */
+export const serviceEndpoints = sqliteTable(
+	'service_endpoints',
+	{
+		id: text('id').primaryKey(),
+		consumerNodeId: text('consumer_node_id').notNull(),
+		serviceKind: text('service_kind', { enum: ['database', 'storage'] }).notNull(),
+		serviceId: text('service_id').notNull(),
+		localPort: integer('local_port').notNull(),
+		upstreamNodeId: text('upstream_node_id').notNull(),
+		upstreamPort: integer('upstream_port').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [
+		uniqueIndex('service_endpoints_consumer_port_idx').on(t.consumerNodeId, t.localPort),
+		uniqueIndex('service_endpoints_pair_idx').on(t.consumerNodeId, t.serviceKind, t.serviceId),
+		index('service_endpoints_upstream_idx').on(t.upstreamNodeId),
+	],
+);
+
+/** Platform-level network filesystem definitions (C3); credentials are an opaque reference. */
+export const shares = sqliteTable(
+	'shares',
+	{
+		id: text('id').primaryKey(),
+		name: text('name').notNull(),
+		protocol: text('protocol', { enum: ['nfs', 'smb'] }).notNull(),
+		server: text('server').notNull(),
+		exportPath: text('export_path').notNull(),
+		zone: text('zone').notNull().default('default'),
+		readOnly: integer('read_only', { mode: 'boolean' }).notNull().default(true),
+		credentialsRef: text('credentials_ref'),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [uniqueIndex('shares_name_idx').on(t.name)],
+);
+
+export const shareGrants = sqliteTable(
+	'share_grants',
+	{
+		shareId: text('share_id').notNull(),
+		orgId: text('org_id').notNull(),
+		mode: text('mode', { enum: ['ro', 'rw'] }).notNull().default('ro'),
+		pathPrefix: text('path_prefix').notNull().default(''),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+	},
+	(t) => [primaryKey({ columns: [t.shareId, t.orgId] }), index('share_grants_org_idx').on(t.orgId)],
+);
+
+/** One spread copy of a workload (C4); the base workload keeps its single-node expansion. */
+export const workloadReplicas = sqliteTable(
+	'workload_replicas',
+	{
+		id: text('id').primaryKey(),
+		workloadId: text('workload_id').notNull(),
+		projectId: text('project_id').notNull(),
+		nodeId: text('node_id').notNull(),
+		replicaIndex: integer('replica_index').notNull(),
+		status: text('status', { enum: ['pending', 'starting', 'running', 'failed', 'stopped'] })
+			.notNull()
+			.default('pending'),
+		placementReason: text('placement_reason'),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [
+		uniqueIndex('workload_replicas_index_idx').on(t.workloadId, t.replicaIndex),
+		index('workload_replicas_node_idx').on(t.nodeId),
+		index('workload_replicas_project_idx').on(t.projectId),
+	],
+);
+
+/** Managed database replicas (C7); the `databases` row remains the primary. */
+export const databaseReplicas = sqliteTable(
+	'database_replicas',
+	{
+		id: text('id').primaryKey(),
+		databaseId: text('database_id').notNull(),
+		nodeId: text('node_id').notNull(),
+		status: text('status', { enum: ['pending', 'streaming', 'lagging', 'lost', 'failed', 'stopped'] })
+			.notNull()
+			.default('pending'),
+		replayLsn: text('replay_lsn'),
+		lagBytes: integer('lag_bytes'),
+		lagSeconds: real('lag_seconds'),
+		slot: text('slot'),
+		primaryGeneration: integer('primary_generation').notNull().default(0),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [
+		uniqueIndex('database_replicas_pair_idx').on(t.databaseId, t.nodeId),
+		index('database_replicas_node_idx').on(t.nodeId),
+	],
+);
+
+/** Failover attempts (C7/C8); append-only history with measured outcome. */
+export const databaseFailovers = sqliteTable(
+	'database_failovers',
+	{
+		id: text('id').primaryKey(),
+		databaseId: text('database_id').notNull(),
+		fromNodeId: text('from_node_id'),
+		toNodeId: text('to_node_id').notNull(),
+		generation: integer('generation').notNull(),
+		status: text('status', { enum: ['pending', 'promoting', 'completed', 'failed', 'rolled-back'] })
+			.notNull()
+			.default('pending'),
+		reason: text('reason'),
+		startedAt: integer('started_at').notNull(),
+		finishedAt: integer('finished_at'),
+	},
+	(t) => [index('database_failovers_database_idx').on(t.databaseId, t.startedAt)],
+);
+
+/** Bucket replication from a source storage instance to a passive target (C9). */
+export const storageReplication = sqliteTable(
+	'storage_replication',
+	{
+		id: text('id').primaryKey(),
+		sourceId: text('source_id').notNull(),
+		targetId: text('target_id').notNull(),
+		mode: text('mode', { enum: ['bucket'] }).notNull().default('bucket'),
+		status: text('status', {
+			enum: ['pending', 'linking', 'syncing', 'protected', 'lagging', 'failed', 'stopped'],
+		})
+			.notNull()
+			.default('pending'),
+		lastSyncAt: integer('last_sync_at'),
+		lagSeconds: real('lag_seconds'),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [
+		uniqueIndex('storage_replication_pair_idx').on(t.sourceId, t.targetId),
+		index('storage_replication_target_idx').on(t.targetId),
+	],
 );
 
 export const nodeJoinTokens = sqliteTable(
@@ -96,6 +276,11 @@ export const nodeVolumes = sqliteTable(
 		/** Comma-separated mount options as last observed; display and re-mount hints only. */
 		options: text('options').notNull().default(''),
 		remote: integer('remote', { mode: 'boolean' }).notNull().default(false),
+		/** Derived volume class (CLUSTERING §3.3): fast, bulk, remote or unknown. */
+		class: text('class', { enum: ['fast', 'bulk', 'remote', 'unknown'] }).notNull().default('unknown'),
+		/** Operator override; `class` stays the derived value for drift detection. */
+		classOverride: text('class_override', { enum: ['fast', 'bulk', 'remote'] }),
+		classOverrideReason: text('class_override_reason'),
 		/** Provisioning plan/steps (`VolumeStack`); null for an adopted mount. */
 		stackJson: text('stack_json'),
 		status: text('status', { enum: ['pending', 'ready', 'missing', 'failed', 'removing'] })
@@ -233,8 +418,15 @@ export const projects = sqliteTable(
 		runtime: text('runtime', { enum: ['static', 'process', 'container'] })
 			.notNull()
 			.default('static'),
+		/**
+		 * Effective tier, including the fourth one (D110): a function stores `runtime = "process"`
+		 * here as `"function"` so the legacy CHECK keeps accepting the row. NULL on pre-0039 rows.
+		 */
+		runtimeName: text('runtime_name', { enum: ['static', 'process', 'container', 'function'] }),
 		/** `edge`, `auto`, or a specific node id. */
 		placement: text('placement').notNull().default('edge'),
+		/** Optional constraint spec (`PlacementSpec`); the shorthand above still wins when null. */
+		placementJson: text('placement_json'),
 		productionDeploymentId: text('production_deployment_id'),
 		productionAccess: text('production_access', { enum: ['public', 'password', 'platform'] })
 			.notNull()
@@ -348,6 +540,8 @@ export const deployments = sqliteTable(
 		runtime: text('runtime', { enum: ['static', 'process', 'container'] })
 			.notNull()
 			.default('static'),
+		/** Effective tier including `function` (D110); NULL on pre-0039 rows. */
+		runtimeName: text('runtime_name', { enum: ['static', 'process', 'container', 'function'] }),
 		/** Runtime spec snapshot; rollback restores code and config (D17). */
 		workloadJson: text('workload_json'),
 		status: text('status', { enum: ['pending', 'active', 'inactive', 'failed', 'deleted'] })
@@ -470,6 +664,8 @@ export const workloads = sqliteTable(
 		deploymentId: text('deployment_id').notNull(),
 		nodeId: text('node_id'),
 		runtime: text('runtime', { enum: ['process', 'container'] }).notNull(),
+		/** Effective tier including `function` (D110); NULL on pre-0039 rows. */
+		runtimeName: text('runtime_name', { enum: ['static', 'process', 'container', 'function'] }),
 		status: text('status', { enum: ['pending', 'starting', 'running', 'failed', 'stopped'] })
 			.notNull()
 			.default('pending'),

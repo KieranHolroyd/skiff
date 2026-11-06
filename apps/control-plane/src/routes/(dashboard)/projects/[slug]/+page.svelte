@@ -38,6 +38,7 @@
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
+	import { Textarea } from '#lib/components/ui/textarea/index.js';
 	import * as Item from '#lib/components/ui/item/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
 	import * as Table from '#lib/components/ui/table/index.js';
@@ -111,6 +112,7 @@
 	let projectName = $state('');
 	let projectSlug = $state('');
 	let placement = $state('edge');
+	let placementSpecText = $state('');
 
 	// Move a running app to another node (D97). Node choices come from capacity (platform admins).
 	let moveOpen = $state(false);
@@ -224,6 +226,9 @@
 		projectName = data.project.name;
 		projectSlug = data.project.slug;
 		placement = data.project.placement;
+		placementSpecText = data.project.placementSpec
+			? JSON.stringify(data.project.placementSpec, null, 2)
+			: '';
 		projectOpen = true;
 	}
 
@@ -284,7 +289,7 @@
 	function deleteProject() {
 		askConfirm({
 			title: `Delete ${data.project.name}?`,
-			description: `The project moves to the trash and is kept for 7 days. ${displayUrl(data.project.productionUrl)} and every preview stop serving.`,
+			description: `The project moves to the trash and is kept for ${data.policies.trashDays} days. ${displayUrl(data.project.productionUrl)} and every preview stop serving.`,
 			confirmLabel: 'Delete project',
 			tone: 'danger',
 			typeToConfirm: data.project.slug,
@@ -940,8 +945,8 @@
 							<Card.Header>
 								<Card.Title class="text-destructive">Danger zone</Card.Title>
 								<Card.Description>
-									Deleting moves the project to the trash for 7 days. Its production site and every
-									preview stop serving immediately.
+									Deleting moves the project to the trash for {data.policies.trashDays} days. Its production
+									site and every preview stop serving immediately.
 								</Card.Description>
 								<Card.Action class="self-center">
 									<Button variant="destructive" onclick={deleteProject}
@@ -1201,6 +1206,24 @@
 							>
 						{/each}
 					</div>
+				{/if}
+			</Field.Field>
+			<Field.Field>
+				<Field.Label for="edit-placement-spec">Placement constraints (JSON)</Field.Label>
+				<Textarea
+					id="edit-placement-spec"
+					name="placementSpec"
+					bind:value={placementSpecText}
+					rows={5}
+					placeholder={'{\n  "zone": "home",\n  "labels": { "tier": "critical" }\n}'}
+					class="font-mono text-xs"
+				/>
+				<Field.Description>
+					Optional hard constraints: node, zone, roles, labels, volumeClass, volumeId, spread and
+					near. They are applied once at deploy time; leave blank for none.
+				</Field.Description>
+				{#if result?.fieldErrors?.placementSpec}
+					<Field.Error>{result.fieldErrors.placementSpec}</Field.Error>
 				{/if}
 			</Field.Field>
 			<Field.Field>

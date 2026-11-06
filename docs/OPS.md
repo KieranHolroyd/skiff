@@ -5,7 +5,7 @@ stuck or failed update, restore, backups, monitoring, the monthly restore drill,
 rotation.
 
 Design context: [DESIGN.md](./DESIGN.md) §10–§12, [DECISIONS.md](./DECISIONS.md)
-D24 (the VPS is an accepted single point of failure), D25 (R2 is canonical), D28
+D107 (clustering and HA, [CLUSTERING.md](./CLUSTERING.md)), D25 (object store), D28
 (product-grade releases) and D37 (unix socket behind Caddy).
 
 ---
@@ -152,7 +152,15 @@ account-wide key. Presigned uploads use the same credentials through the control
 | `SKIFF_VERSION` | latest GitHub release | Installer: pin a version. |
 | `SKIFF_REPO` | `kieranholroyd/private-cloud-deploys` | Installer: repo used for "latest" and cosign identity. |
 | `SKIFF_PUBLIC_HOST` | detected (`hostname -I`) | Installer (`--public-address`): this server's IPv4 for an install without a dashboard domain. Used for `http://<ip>` and `<ip>.sslip.io`. |
-| `SKIFF_ALERT_WEBHOOK` | unset | `skiff-alert` (backup/drill `OnFailure=`): webhook URL; SMTP settings are reused for email. |
+| `SKIFF_ALERT_WEBHOOK` | unset | `skiff-alert` (backup/drill `OnFailure=`): webhook URL; SMTP settings are reused for email. Receives `{title, message, severity, key}`, except that a Discord or Slack URL gets that service's own payload. |
+| `SKIFF_ALERT_DISCORD_WEBHOOK` | unset | Discord channel webhook (`https://discord.com/api/webhooks/<id>/<token>`). Alerts are sent as embeds coloured by severity, with mentions disabled. Secret. |
+| `SKIFF_ALERT_SLACK_WEBHOOK` | unset | Slack incoming-webhook URL, or any Slack-compatible one (Mattermost, Rocket.Chat). Only `text` is sent. Secret. |
+| `SKIFF_ALERT_TELEGRAM_BOT_TOKEN` / `SKIFF_ALERT_TELEGRAM_CHAT_ID` | unset | Telegram bot token (from @BotFather; secret) and the chat, group (`-100…`) or `@channel` it posts to. Both are needed. |
+| `SKIFF_ALERT_NTFY_URL` / `SKIFF_ALERT_NTFY_TOKEN` | unset | ntfy topic URL (ntfy.sh or self-hosted), published as JSON with priority 3–5 by severity. The token is optional (`tk_…`, secret) and is for protected topics. |
+| `SKIFF_ALERT_SMS` | unset | Comma-separated E.164 numbers (at most 5) that get alerts by SMS through Twilio. Sent only when `SKIFF_TWILIO_*` is set too. Each new number is sent a test SMS before it is saved. |
+| `SKIFF_TWILIO_ACCOUNT_SID` / `SKIFF_TWILIO_AUTH_TOKEN` / `SKIFF_TWILIO_FROM` | unset | Twilio credentials for SMS alerts (Settings → Notifications → SMS), checked against Twilio's account endpoint before they are saved (no message is sent). `FROM` takes a Twilio number, a Messaging Service SID (`MG…`) or an alphanumeric sender ID. Each text is folded to GSM-7 and capped at 2 segments. |
+| `SKIFF_VAPID_PUBLIC_KEY` / `SKIFF_VAPID_PRIVATE_KEY` | generated | Web Push (VAPID, P-256, base64url) key pair for push alerts to the dashboard installed as an app (Settings → Notifications → Push notifications, D108). The installer generates it, and any `skiff-update-self` run adds it to hosts that lack it; `sudo skiff-platform-config push-keys` (or **Set up push** on that page) does the same and restarts the control plane. Never rotated automatically: a new pair orphans every subscribed device. Private key is a secret. |
+| `SKIFF_VAPID_SUBJECT` | platform origin | Optional `mailto:` or `https:` contact sent to push services in the VAPID token. Defaults to the dashboard origin over HTTPS, else `mailto:skiff@<content domain>`. |
 
 > **Not yet implemented:** the installer builds from the source tarball and does not consume the
 > signed release bundle, so there is no `SKIFF_RELEASE_URL` / minisign / cosign verification at
@@ -182,6 +190,8 @@ the default below, so a typo cannot turn a destructive feature on. Change a flag
 | `SKIFF_FEATURE_DB_STUDIO` | **on** | databases | Native database studio (D96): the Studio tab, `/api/v1/databases/:name/studio` and the session-only studio calls. Permission-gated (`database:console`; writes also need `database:update`). Set `0` as a kill switch: the tab and routes disappear and desired state stops listing studio sessions. |
 | `SKIFF_FEATURE_DB_TLS` | off | databases | TLS-only managed database connections (`sslmode=require`). |
 | `SKIFF_FEATURE_ORG_NETWORKS` | off | networking | Private per-org networks connecting workloads and databases. |
+| `SKIFF_FEATURE_SERVICE_ENDPOINTS` | off | networking | Cross-node database attachments through consumer loopback endpoints (CLUSTERING.md C2). |
+| `SKIFF_FEATURE_MULTI_NODE_REPLICAS` | off | workloads | Spread HTTP workload replicas across nodes behind a load-balanced route (CLUSTERING.md C4). |
 | `SKIFF_FEATURE_APP_VOLUMES` | off | workloads | Persistent application volumes attached to deployed workloads. |
 | `SKIFF_FEATURE_JOBS` | off | automation | Scheduled one-off and cron jobs. |
 | `SKIFF_FEATURE_PREVIEW_DATA` | off | automation | Clone database and bucket data into previews (can copy production data). |
@@ -495,9 +505,10 @@ control-plane units `Wants=` it but do not require it.
   `max_bytes_to_read` 20 GiB and `max_threads` 2. `readonly` cannot be changed. Reads use
   `final=1`, so ReplacingMergeTree tables are deduplicated without writing `FINAL`.
 
-**Install and updates.** The installer runs it as its own step. On existing installs,
-`skiff-update-self` installs it on the next update (control-plane hosts only: those with
-`/etc/skiff/skiff.env`), before the new release starts. Each run is idempotent. It downloads the
+**Install and updates.** The installer runs it as its own step. On existing installs, the
+release's `converge` hook (§4.1, *Host convergence*) keeps it current on every update, using the
+pin and config of the release being installed (control-plane hosts only: those with
+`/etc/skiff/skiff.env`). A rollback never moves it to an older pin. Each run is idempotent. It downloads the
 archive only when the pinned binary is missing, verifies the sha512, and checks that the binary
 runs. It then rewrites the config and unit only when they changed, restarts only on a change, and
 waits up to 60 s for `/ping`. If a new version does not come up, the previous unit is put back.
@@ -787,6 +798,40 @@ Logs: the page, `/var/lib/skiff-update/update.log`, and `journalctl -u skiff-upd
 6. **Keep or revert.** On success, releases other than `current` and `previous` are pruned, as
    are superseded snapshots, and the release's own stage-0 updater is qualified (below).
 
+**Host convergence: the release installs everything outside itself.** A release directory only
+holds code. The units, the helper binary, host commands, workerd and the telemetry store live
+outside it, and the release that changes them must be the one that installs them. Stage-0 is the
+*previous* release's updater, so it cannot render them: its templates are one release behind.
+Each release therefore ships two more hooks in
+[`scripts/release/hooks.ts`](../scripts/release/hooks.ts)
+([`converge.ts`](../scripts/release/converge.ts)), run with the release's own Bun:
+
+- `prepare`, after staging and before the canary: additive `skiff.env` defaults the release needs
+  to boot (today the Web Push key pair). The running release keeps serving with them.
+- `converge`, after `current` moves and before the primary, helper and agent restart on the new
+  release: the control-plane, standby and guard units, the dashboard update and platform-config
+  triggers, `/usr/local/sbin/skiff-update-self`, the studio unit, the helper binary, unit and env,
+  and, on hosts with an agent, `skiff-agent.service`, the builder and storage units, the
+  `skiff-builder`/`skiff-storage` links and the pinned workerd. Then the `skif`/`skiff` and
+  `skiff-restore`/`-drill`/`-alert`/`-recovery-kit` commands, the backup units (refreshed only
+  where the installer added them; Litestream restarts if its unit changed) and an installed
+  ClickHouse. Each step is idempotent and only writes what differs.
+
+Every update run also converges the release that is serving before it looks for a newer one, so
+drift is repaired and an up-to-date host still picks up a missed change. A rollback or revert runs
+the *target* release's `converge` with `--mode rollback`, which puts its own units back but never
+moves ClickHouse to an older pin. A failed step is a warning in the log and never fails the
+update. Stage-0's built-in helper install is the fallback when the hook fails or the release
+predates it (its `protocol` hook does not list `converge`). Those releases also get stage-0's ClickHouse upkeep. The
+first update to a release with the hook is driven by an older stage-0 that knows nothing about
+it, so that release's host side converges on the next `skiff-update-self` run or **Update** click,
+even one that finds nothing newer. To converge by hand:
+
+```sh
+sudo /opt/skiff/current/runtime/bun /opt/skiff/current/repo/scripts/release/hooks.ts converge \
+  --release "$(readlink -f /opt/skiff/current)"
+```
+
 **Releases with migrations are fenced.** Two releases may share the SQLite file only if the old
 one understands the schema. When the new release ships migrations the database has not applied,
 the old release is stopped first (a few seconds of downtime, as before), a sealed upgrade bundle
@@ -841,11 +886,11 @@ release left it. `rollback` takes a fresh snapshot, then swaps `current` and `pr
 
 Exit codes: `0` updated or nothing to do, `1` nothing changed or rolled back (old release
 serving), `2` the old release did not come back healthy (look at
-`journalctl -u skiff-control-plane` now). The updater writes the control-plane units
-(`skiff-control-plane.service`, `skiff-control-plane-standby.service`, `skiff-update-guard.service`)
-itself on the first zero-downtime update, from the same template as the installer
-([`scripts/systemd/control-plane.ts`](../scripts/systemd/control-plane.ts)); other unit
-changes still go through `install.sh --upgrade`. Private repositories need `SKIFF_GITHUB_TOKEN`
+`journalctl -u skiff-control-plane` now). Units and host commands come from the same templates
+as the installer ([`scripts/systemd/`](../scripts/systemd), [`scripts/install/commands.ts`](../scripts/install/commands.ts)),
+written by the release's `converge` hook (*Host convergence* above), so `install.sh --upgrade` is
+only needed for what the installer alone does: OS packages, users, Caddy's admin-socket drop-in
+and turning backups on. Private repositories need `SKIFF_GITHUB_TOKEN`
 or `/etc/skiff/github.token` (`0600`).
 
 ### 4.1.1 Recovering a stuck or failed update
@@ -975,6 +1020,11 @@ Requirements on the node: `skiff-helper` running as root, outbound HTTPS to `git
 `objects.githubusercontent.com`, and an agent new enough to update itself. The helper refuses a
 downgrade and refuses a control-plane host (`/opt/skiff/current` is a release symlink there).
 Sites and workloads keep running; the node shows offline only while its agent restarts.
+
+A node update replaces only the two binaries. Unlike a control-plane update (§4.1, *Host
+convergence*), it does not rewrite the worker's systemd units (agent, builder, storage, studio,
+helper) or install a new workerd pin. A release that changes those needs the worker's setup
+re-run by hand until the helper learns to converge.
 
 **Rolling back a node by hand.** The previous binaries are kept next to the new ones:
 
@@ -1262,19 +1312,24 @@ It works like the update button. The control plane can't write `/etc/skiff`, so:
    must write, read and delete a probe object (`skiff/healthcheck/…`); SMTP must send a test email to
    you; a new webhook must accept a test alert.
 2. It writes `/var/lib/skiff/platform-config/request.json` (`0600 skiff`). The audit log records the
-   request as `platform.config` / `platform.backups` / `platform.restoreDrill` with key names only,
+   request as `platform.config` / `platform.backups` / `platform.restoreDrill` / `platform.pushKeys` with key names only,
    never values.
 3. `skiff-platform-config.path` (root) starts `skiff-platform-config.service`, which runs
    `skiff-platform-config apply-request`. The helper claims the request (no symlinks or FIFOs,
    regular files only, at most 64 KiB, deleted once read) and validates it again with the same rules
    (`packages/contracts/src/platform-config.ts`). Only these keys can ever be written:
    `R2_ACCOUNT_ID R2_BUCKET R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_ENDPOINT`,
-   `SKIFF_SMTP_HOST/PORT/USER/PASSWORD/FROM/SECURE`, `SKIFF_ALERT_WEBHOOK SKIFF_ALERT_EMAIL`, and
+   `SKIFF_SMTP_HOST/PORT/USER/PASSWORD/FROM/SECURE`, `SKIFF_TWILIO_ACCOUNT_SID/AUTH_TOKEN/FROM`,
+   `SKIFF_ALERT_WEBHOOK SKIFF_ALERT_EMAIL SKIFF_ALERT_SMS`,
+   `SKIFF_ALERT_DISCORD_WEBHOOK SKIFF_ALERT_SLACK_WEBHOOK SKIFF_ALERT_TELEGRAM_BOT_TOKEN/CHAT_ID SKIFF_ALERT_NTFY_URL/TOKEN`, and
    (Settings → Assistant, optional) `SKIFF_ASSISTANT_PROVIDER/BASE_URL/MODEL/API_KEY`. Values are pattern-checked (single line; nothing that could change the meaning of
    `litestream.yml`, which expands `${VAR}` before parsing).
 4. It saves the old file as `skiff.env.previous`, writes the new one (`root:skiff 0640`), and
    restarts the control plane. If the control plane is not healthy within 60 s, it restores
    `skiff.env.previous`, restarts again and reports `reverted`.
+   A `push-keys` request (Settings → Notifications → **Set up push**, D108) writes nothing but a
+   missing `SKIFF_VAPID_PUBLIC_KEY`/`SKIFF_VAPID_PRIVATE_KEY` pair, generated by the helper itself;
+   an existing valid pair is never replaced.
 5. Saving R2 credentials also turns backups on. If `/usr/local/bin/litestream` is missing, the helper
    installs Litestream v0.3.13 from GitHub, checked against a **pinned sha256** (amd64/arm64;
    `scripts/platform-config/helper.ts`). It then writes `litestream.yml` (only when missing or
@@ -1296,6 +1351,7 @@ work from the shell:
 ```sh
 sudo skiff-platform-config backups on    # or off
 sudo skiff-platform-config drill
+sudo skiff-platform-config push-keys   # Web Push keys, if this host has none
 sudo skiff-platform-config status
 journalctl -u skiff-platform-config
 ```
@@ -1461,11 +1517,20 @@ sudo skiff-recovery-kit import <file> [--restore-env] [--force]
 | Failed backup or restore drill | page | Run §5.2 / §8.3; do not assume the backup is good. |
 | Litestream restart loop | warn | Check R2 credentials/endpoint and bucket permissions. |
 
-Wire email (SES SMTP) and/or a webhook (ntfy, Discord, Home Assistant) through the
-`Notifier` interface. `skiff-restore-drill.service` and `skiff-litestream.service` ship with
-`OnFailure=skiff-alert@%n.service`, which sends the alert through `SKIFF_ALERT_WEBHOOK` and/or
+Wire email (SES SMTP), a generic webhook (Home Assistant, anything that takes JSON) and/or the chat
+channels (Discord, Slack, Telegram, ntfy; Settings → Notifications → Chat & push channels) through the
+`Notifier` interface (`packages/core/src/notify.ts`, `notify-chat.ts`). Each chat channel is sent a test
+alert before it is saved, and every request times out after 10 s so a dead endpoint cannot stall the
+maintenance loop. `skiff-restore-drill.service` and `skiff-litestream.service` ship with
+`OnFailure=skiff-alert@%n.service`, which sends the alert through `SKIFF_ALERT_WEBHOOK`, the chat channels and/or
 SMTP directly (it works with the control plane down) and includes the drill's
 `status.json` reason. Settings → Backups shows the latest drill result and unit states.
+
+Each built-in alert can be turned off, routed to particular channels and given its own threshold
+on Alerts → System alerts (thresholds above are the defaults). Beyond these built-in alerts, org owners can define **metric alert rules** over the ClickHouse
+telemetry (site down, error rate, latency, database/storage down, traffic stopped) on the Alerts
+page; they use the same notifiers and show in one history with the system alerts. See
+[ALERTS.md](./ALERTS.md).
 
 Quick checks:
 
@@ -1527,12 +1592,12 @@ service stop and a scratch directory under `/var/lib/skiff/drill`.
 
 ---
 
-## 9. Single point of failure (accepted)
+## 9. Single point of failure (today)
 
-Per D24, the VPS is an accepted single point of failure in v1. There is no automatic
-ingress failover, no second control plane, and no synchronously replicated SQLite.
+Until the HA work in [CLUSTERING.md](./CLUSTERING.md) ships (D107), a one-VPS install has no
+automatic ingress failover, no second control plane, and no replicated SQLite beyond Litestream.
 
-Consequences:
+Consequences today:
 
 - **VPS lost** → control plane, Caddy ingress and edge-placed sites are down. Homelab
   nodes keep their cached state but have no public ingress. Recovery is the §5.3 runbook,
@@ -1544,8 +1609,9 @@ Consequences:
   edge-placed projects keep serving.
 
 Keep DNS TTLs low enough that repointing the A/AAAA records to a replacement VPS is
-minutes, not hours. Cloudflare Tunnel backup ingress and DNS failover are future work
-(ROADMAP, "Later / maybe").
+minutes, not hours. Multi-ingress (DNS failover, Cloudflare Load Balancing or Tunnel), a
+control-plane standby and database replicas are planned in CLUSTERING.md §6–§9 (ROADMAP,
+"Clustering & HA").
 
 ---
 

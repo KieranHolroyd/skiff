@@ -44,6 +44,8 @@ export interface DatabaseEngineCapabilities {
 	console: boolean;
 	/** The major-version upgrade planner (`skif db upgrade`). */
 	upgradePlan: boolean;
+	/** C7 replication mode; absent means none. */
+	replication?: 'streaming' | 'native-cluster';
 }
 
 export interface DatabaseEngineInfo {
@@ -89,6 +91,7 @@ export interface DatabaseEngineInfo {
 }
 
 const ALL_CAPABILITIES: DatabaseEngineCapabilities = {
+	replication: 'streaming',
 	pooler: true,
 	extensions: true,
 	tls: true,
@@ -160,7 +163,7 @@ export const databaseEngineRegistry: Record<DatabaseEngine, DatabaseEngineInfo> 
 		reservedNames: ['root', 'mysql', 'sys', 'information-schema', 'performance-schema', 'skiff-studio-ro'],
 		containerEnv: { user: 'MYSQL_USER', password: 'MYSQL_PASSWORD', database: 'MYSQL_DATABASE' },
 		inPlaceUpgrade: 'forward',
-		capabilities: { ...CORE_CAPABILITIES, backups: true },
+		capabilities: { ...CORE_CAPABILITIES, backups: true, replication: 'streaming' },
 	},
 	mariadb: {
 		engine: 'mariadb',
@@ -180,7 +183,7 @@ export const databaseEngineRegistry: Record<DatabaseEngine, DatabaseEngineInfo> 
 		reservedNames: ['root', 'mysql', 'sys', 'healthcheck', 'information-schema', 'performance-schema', 'skiff-studio-ro'],
 		containerEnv: { user: 'MARIADB_USER', password: 'MARIADB_PASSWORD', database: 'MARIADB_DATABASE' },
 		inPlaceUpgrade: 'forward',
-		capabilities: { ...CORE_CAPABILITIES, backups: true },
+		capabilities: { ...CORE_CAPABILITIES, backups: true, replication: 'streaming' },
 	},
 	mongodb: {
 		engine: 'mongodb',
@@ -205,7 +208,7 @@ export const databaseEngineRegistry: Record<DatabaseEngine, DatabaseEngineInfo> 
 			database: 'MONGO_INITDB_DATABASE',
 		},
 		inPlaceUpgrade: 'never',
-		capabilities: { ...CORE_CAPABILITIES, backups: true },
+		capabilities: { ...CORE_CAPABILITIES, backups: true, replication: 'native-cluster' },
 	},
 	valkey: {
 		engine: 'valkey',
@@ -225,7 +228,7 @@ export const databaseEngineRegistry: Record<DatabaseEngine, DatabaseEngineInfo> 
 		reservedNames: ['default', 'skiff-studio-ro'],
 		containerEnv: { user: 'VALKEY_USER', password: 'VALKEY_PASSWORD', database: null },
 		inPlaceUpgrade: 'forward',
-		capabilities: CORE_CAPABILITIES,
+		capabilities: { ...CORE_CAPABILITIES, replication: 'streaming' },
 	},
 	redis: {
 		engine: 'redis',
@@ -245,7 +248,7 @@ export const databaseEngineRegistry: Record<DatabaseEngine, DatabaseEngineInfo> 
 		reservedNames: ['default', 'skiff-studio-ro'],
 		containerEnv: { user: 'REDIS_USER', password: 'REDIS_PASSWORD', database: null },
 		inPlaceUpgrade: 'forward',
-		capabilities: CORE_CAPABILITIES,
+		capabilities: { ...CORE_CAPABILITIES, replication: 'streaming' },
 	},
 };
 

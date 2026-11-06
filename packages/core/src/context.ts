@@ -7,6 +7,7 @@ import type { UsageService } from './usage.ts';
 import type { ObjectStore } from './object-store.ts';
 import type { TelemetryStore } from './telemetry.ts';
 import type { MetricsExporter } from './metrics-export.ts';
+import type { PlatformPolicyService } from './platform-policies.ts';
 import type { ProjectService } from './projects.ts';
 import type { ReleaseService } from './releases.ts';
 import type { DeploymentService } from './deployments.ts';
@@ -32,7 +33,16 @@ import type { ServiceActionsService } from './service-actions.ts';
 import type { BackupTargetService } from './backup-targets.ts';
 import type { UpgradeService } from './upgrades.ts';
 import type { GithubRunnerService } from './github-runners.ts';
+import type { FunctionService } from './functions.ts';
 import type { TemplateService } from './templates.ts';
+import type { AlertService } from './alerts.ts';
+import type { TopologyService } from './topology.ts';
+import type { ServiceEndpointService } from './service-endpoints.ts';
+import type { ShareService } from './shares.ts';
+import type { DatabaseReplicaService } from './database-replica-service.ts';
+import type { StorageReplicationService } from './storage-replication-service.ts';
+import type { IngressHaService } from './ingress-ha.ts';
+import type { ClusterConfigService } from './cluster-config-service.ts';
 
 /**
  * Shared dependency object. Service instances are attached after construction (in `createCore`)
@@ -49,6 +59,8 @@ export interface CoreContext {
 	telemetry?: TelemetryStore;
 	/** Prometheus `/metrics` renderer and its settings (docs/METRICS.md). */
 	metricsExport: MetricsExporter;
+	/** Retention, alert thresholds and defaults the owner sets in Settings → Policies. */
+	policies: PlatformPolicyService;
 	notifiers: Notifier[];
 	now(): number;
 	projects: ProjectService;
@@ -77,4 +89,22 @@ export interface CoreContext {
 	upgrades: UpgradeService;
 	githubRunners: GithubRunnerService;
 	templates: TemplateService;
+	/** Metric alert rules (docs/ALERTS.md). */
+	alerts: AlertService;
+	/** Fleet topology and blast radius (CLUSTERING §3.6, C0). */
+	topology: TopologyService;
+	/** Cross-node service endpoints (CLUSTERING §4.3, C2). */
+	endpoints: ServiceEndpointService;
+	/** Cluster shares (CLUSTERING §5.2, C3). */
+	shares: ShareService;
+	/** Managed database replicas (CLUSTERING §9.2, C7). */
+	databaseReplicas: DatabaseReplicaService;
+	/** Bucket replication (CLUSTERING §10.2, C9). */
+	storageReplication: StorageReplicationService;
+	/** Ingress HA status (CLUSTERING §7, C5). */
+	ingress: IngressHaService;
+	/** Cluster tunables (CLUSTERING). */
+	cluster: ClusterConfigService;
+	/** Functions: Workers-compatible workloads on workerd (D110). */
+	functions: FunctionService;
 }

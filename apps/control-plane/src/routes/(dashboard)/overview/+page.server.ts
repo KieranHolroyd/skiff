@@ -43,7 +43,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const now = Date.now();
 
 	const status: StatusSummary | null = attempt(() => core.metrics.status(principal), null);
-	const projects = core.projects.list(principal);
+	const everything = core.projects.list(principal);
+	// Functions are their own product (D110); the Projects card and counts leave them out.
+	const projects = everything.filter((project) => project.runtime !== 'function');
 
 	const trafficRange = parseTrafficRange(url.searchParams.get('range'));
 	const traffic = await core.metrics.trafficOverview(principal, {
@@ -90,8 +92,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	const deployments: DeploymentView[] = [];
 	const builds: BuildView[] = [];
-	let buildsReadable = projects.length === 0;
-	for (const project of projects.slice(0, 40)) {
+	let buildsReadable = everything.length === 0;
+	for (const project of everything.slice(0, 40)) {
 		const row = attempt(() => core.projects.requireRow(principal, project.slug), null);
 		if (!row) continue;
 		deployments.push(...attempt(() => core.deployments.list(principal, row, { limit: 5 }), []));

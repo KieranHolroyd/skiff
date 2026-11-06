@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { page } from '$app/state';
 	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 	import PlugIcon from '@lucide/svelte/icons/plug';
 	import PlusIcon from '@lucide/svelte/icons/plus';
@@ -39,6 +40,9 @@
 		can: { manageVolumes: boolean };
 	} = $props();
 
+	/** Settings → Policies trash period; the layout loads it. */
+	const trashDays = $derived<number>(page.data.policies?.trashDays ?? 7);
+
 	let createOpen = $state(false);
 	let attachOpen = $state(false);
 	let attaching = $state<AppVolumeView | null>(null);
@@ -70,8 +74,7 @@
 	function remove(volume: AppVolumeView) {
 		askConfirm({
 			title: `Delete ${volume.name}?`,
-			description:
-				'Its data is kept for 7 days after deletion, but it cannot be restored from the dashboard.',
+			description: `Its data is kept for ${trashDays} days after deletion, but it cannot be restored from the dashboard.`,
 			confirmLabel: 'Delete volume',
 			tone: 'danger',
 			action: '?/deleteVolume',

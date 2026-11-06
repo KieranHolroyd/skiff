@@ -375,3 +375,33 @@ describe('domains', () => {
 		expect(host.probed).toEqual([]);
 	});
 });
+
+describe('push-keys', () => {
+	test('adds a VAPID pair once, keeps it on a second request, and restarts each time', async () => {
+		const host = fakeHost();
+		request({ action: 'push-keys' });
+		const first = await new PlatformConfigHelper(layout, host).applyRequestFile();
+		expect(first?.outcome).toBe('applied');
+		expect(first?.changed).toEqual(['SKIFF_VAPID_PUBLIC_KEY', 'SKIFF_VAPID_PRIVATE_KEY']);
+		const env = readEnvFile(layout.envFile);
+		const publicKey = env.get('SKIFF_VAPID_PUBLIC_KEY');
+		expect(publicKey).toMatch(/^[A-Za-z0-9_-]{87}$/);
+		expect(env.get('BETTER_AUTH_SECRET')).toBe('keep-me');
+
+		request({ action: 'push-keys' });
+		const second = await new PlatformConfigHelper(layout, host).applyRequestFile();
+		expect(second?.outcome).toBe('applied');
+		expect(second?.changed).toEqual([]);
+		expect(readEnvFile(layout.envFile).get('SKIFF_VAPID_PUBLIC_KEY')).toBe(publicKey);
+		expect(host.commands.filter((cmd) => cmd.join(' ') === 'systemctl restart skiff-control-plane.service')).toHaveLength(2);
+	});
+
+	test('removes the new keys again when the control plane does not come back', async () => {
+		const host = fakeHost();
+		host.healthy = Array(60).fill(false);
+		request({ action: 'push-keys' });
+		const status = await new PlatformConfigHelper(layout, host).applyRequestFile();
+		expect(status?.outcome).toBe('reverted');
+		expect(readEnvFile(layout.envFile).has('SKIFF_VAPID_PUBLIC_KEY')).toBe(false);
+	});
+});

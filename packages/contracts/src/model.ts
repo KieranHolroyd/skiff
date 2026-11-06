@@ -21,7 +21,7 @@ export const limits = {
 export const accessModes = ['public', 'password', 'platform'] as const;
 export type AccessMode = (typeof accessModes)[number];
 
-export const runtimes = ['static', 'process', 'container'] as const;
+export const runtimes = ['static', 'process', 'container', 'function'] as const;
 export type Runtime = (typeof runtimes)[number];
 
 export const deploymentStatuses = ['pending', 'active', 'inactive', 'failed', 'deleted'] as const;

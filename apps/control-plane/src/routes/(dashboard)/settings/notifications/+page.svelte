@@ -1,6 +1,8 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import BellRingIcon from '@lucide/svelte/icons/bell-ring';
 	import MailIcon from '@lucide/svelte/icons/mail';
+	import MessageSquareTextIcon from '@lucide/svelte/icons/message-square-text';
 	import SendIcon from '@lucide/svelte/icons/send';
 	import SettingsIcon from '@lucide/svelte/icons/settings-2';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
@@ -18,6 +20,8 @@
 	import EmptyState from '../../_lib/EmptyState.svelte';
 	import Panel from '../../_lib/Panel.svelte';
 	import ConfigProgress from '../ConfigProgress.svelte';
+	import ChatChannels from './ChatChannels.svelte';
+	import PushChannel from './PushChannel.svelte';
 	import type { PageProps } from './$types';
 	import SettingsHeader from '../_lib/SettingsHeader.svelte';
 
@@ -27,6 +31,7 @@
 	);
 
 	let emailOpen = $state(false);
+	let smsOpen = $state(false);
 	let alertsOpen = $state(false);
 	let testing = $state<'email' | 'alert' | null>(null);
 
@@ -36,6 +41,14 @@
 	const email = $derived(data.email.values);
 	const alerts = $derived(data.alerts.values);
 	const passwordSaved = $derived(data.email.secretsSet.includes('SKIFF_SMTP_PASSWORD'));
+	const sms = $derived(data.sms.values);
+	const authTokenSaved = $derived(data.sms.secretsSet.includes('SKIFF_TWILIO_AUTH_TOKEN'));
+	const smsNumbers = $derived(
+		(alerts.SKIFF_ALERT_SMS ?? '')
+			.split(',')
+			.map((n) => n.trim())
+			.filter(Boolean)
+	);
 
 	async function test(kind: 'email' | 'alert') {
 		testing = kind;
@@ -54,6 +67,18 @@
 		});
 	}
 
+	function removeSms() {
+		askConfirm({
+			title: 'Remove the Twilio settings?',
+			description: smsNumbers.length
+				? 'SMS alerts stop. The numbers stay listed under Alerts and start receiving texts again if you set Twilio up later.'
+				: 'Skiff stops being able to send SMS.',
+			confirmLabel: 'Remove',
+			tone: 'danger',
+			action: '?/removeSms'
+		});
+	}
+
 	function clearAlerts() {
 		askConfirm({
 			title: 'Turn off alerts?',
@@ -62,15 +87,10 @@
 			confirmLabel: 'Turn off alerts',
 			tone: 'danger',
 			action: '?/saveAlerts',
-			fields: { webhook: '', email: '' }
+			fields: { webhook: '', email: '', sms: '' }
 		});
 	}
 
-	const alertList = [
-		'A node stops sending heartbeats for 2 minutes',
-		'A server’s disk is more than 85% full',
-		'Litestream stops backing up, or a restore drill fails'
-	];
 </script>
 
 <svelte:head><title>Notifications · Settings · Skiff</title></svelte:head>
@@ -84,7 +104,7 @@
 		inFlight={data.inFlight}
 		availability={data.availability}
 		restartPending={data.restartPending}
-		sections={['email', 'alerts']}
+		sections={['email', 'sms', 'alerts', 'push-keys']}
 	/>
 
 	<Panel
@@ -159,9 +179,69 @@
 	</Panel>
 
 	<Panel
-		title="Alerts"
+		title="SMS"
+		icon={MessageSquareTextIcon}
+		description="Text alerts through your own Twilio account. Each alert is one or two SMS segments per number, billed by Twilio."
+	>
+		{#snippet actions()}
+			<StatusBadge
+				status={data.sms.configured ? 'active' : 'unverified'}
+				label={data.sms.configured ? 'Configured' : 'Not set up'}
+			/>
+		{/snippet}
+		{#if data.sms.configured}
+			<dl class="grid gap-x-8 gap-y-4 text-sm sm:grid-cols-3">
+				<div class="space-y-1">
+					<dt class="text-xs text-muted-foreground">Provider</dt>
+					<dd class="text-sm">Twilio</dd>
+				</div>
+				<div class="space-y-1">
+					<dt class="text-xs text-muted-foreground">Account SID</dt>
+					<dd class="font-mono text-sm break-all">{sms.SKIFF_TWILIO_ACCOUNT_SID}</dd>
+				</div>
+				<div class="space-y-1">
+					<dt class="text-xs text-muted-foreground">Sends from</dt>
+					<dd class="font-mono text-sm break-all">{sms.SKIFF_TWILIO_FROM}</dd>
+				</div>
+			</dl>
+		{:else}
+			<EmptyState
+				icon={MessageSquareTextIcon}
+				compact
+				title="SMS is not set up"
+				description="Connect a Twilio account, then add phone numbers under Alerts."
+			>
+				{#if canEdit}
+					<Button onclick={() => (smsOpen = true)} disabled={!ready}
+						><MessageSquareTextIcon />Set up SMS</Button
+					>
+				{/if}
+			</EmptyState>
+		{/if}
+		{#snippet footer()}
+			{#if data.sms.configured}
+				<div class="flex w-full flex-wrap items-center gap-2">
+					{#if canEdit}
+						<Button variant="outline" size="sm" onclick={() => (smsOpen = true)} disabled={!ready}
+							><SettingsIcon />Edit</Button
+						>
+						<span class="flex-1"></span>
+						<Button variant="ghost-danger" size="sm" onclick={removeSms} disabled={!ready}
+							>Remove</Button
+						>
+					{/if}
+				</div>
+			{:else}
+				Find the Account SID and Auth Token on your Twilio Console dashboard. Send from a Twilio
+				number, a Messaging Service, or (where carriers allow it, e.g. the UK) a sender name.
+			{/if}
+		{/snippet}
+	</Panel>
+
+	<Panel
+		title="Alert recipients"
 		icon={BellRingIcon}
-		description="Where Skiff tells you something needs attention."
+		description="The email address, webhook and phone numbers alerts are delivered to."
 	>
 		{#snippet actions()}
 			<StatusBadge
@@ -183,14 +263,37 @@
 					</dt>
 					<dd class="text-sm break-all">{alerts.SKIFF_ALERT_EMAIL ?? '—'}</dd>
 				</div>
+				<div class="space-y-1">
+					<dt class="flex items-center gap-1.5 text-xs text-muted-foreground">
+						<MessageSquareTextIcon class="size-3.5" />SMS
+					</dt>
+					<dd class="font-mono text-sm break-all">
+						{smsNumbers.length ? smsNumbers.join(', ') : '—'}
+					</dd>
+				</div>
 			</dl>
-			<div class="space-y-2">
-				<p class="text-xs font-medium text-muted-foreground">You’re alerted when</p>
-				<ul class="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-					{#each alertList as item (item)}<li>{item}</li>{/each}
-				</ul>
+			<div class="space-y-2 text-sm text-muted-foreground">
+				<p class="text-xs font-medium">What triggers an alert</p>
+				<p>
+					Built-in alerts (node offline, disk, certificates, backups, database and storage limits)
+					and your own metric rules are managed on the Alerts page: turn each on or off, pick its
+					channels and set its thresholds there.
+				</p>
+				<div class="flex flex-wrap gap-2 pt-1">
+					<Button size="sm" variant="outline" href={`${resolve('/(dashboard)/alerts')}?tab=system`}>System alerts</Button>
+					<Button size="sm" variant="outline" href={`${resolve('/(dashboard)/alerts')}?tab=rules`}>Alert rules</Button>
+					<Button size="sm" variant="ghost" href={`${resolve('/(dashboard)/alerts')}?tab=channels`}>Channel status</Button>
+				</div>
 			</div>
 		</div>
+		{#if smsNumbers.length && !data.sms.configured}
+			<Alert.Root variant="warning" class="mt-4">
+				<TriangleAlertIcon />
+				<Alert.Description
+					>SMS numbers are listed but Twilio is not set up, so no texts are sent.</Alert.Description
+				>
+			</Alert.Root>
+		{/if}
 		{#if !data.alerts.configured}
 			<Alert.Root variant="warning" class="mt-4">
 				<TriangleAlertIcon />
@@ -231,6 +334,10 @@
 			</div>
 		{/snippet}
 	</Panel>
+
+	<ChatChannels channels={data.chatChannels} {canEdit} {ready} {fieldErrors} />
+
+	<PushChannel push={data.push} {ready} />
 </div>
 
 <FormDialog
@@ -330,7 +437,7 @@
 	bind:open={alertsOpen}
 	icon={BellRingIcon}
 	title="Alert channels"
-	description="Use either or both. A new webhook is sent a test alert before it is saved."
+	description="Use any combination. A new webhook or phone number is sent a test alert before it is saved."
 	action="?/saveAlerts"
 	submitLabel="Save"
 	size="lg"
@@ -370,6 +477,89 @@
 			{#if fieldErrors.email}<Field.Error>{fieldErrors.email}</Field.Error>
 			{:else if !data.email.configured}<Field.Description
 					>Set up outbound email first.</Field.Description
+				>{/if}
+		</Field.Field>
+		<Field.Field data-invalid={fieldErrors.sms ? true : undefined}>
+			<Field.Label for="alert-sms">Text alerts to</Field.Label>
+			<Input
+				id="alert-sms"
+				name="sms"
+				type="text"
+				inputmode="tel"
+				autocomplete="tel"
+				spellcheck={false}
+				class="font-mono"
+				value={smsNumbers.join(', ')}
+				placeholder="+447700900123"
+				disabled={!data.sms.configured}
+				aria-invalid={fieldErrors.sms ? 'true' : undefined}
+			/>
+			{#if fieldErrors.sms}<Field.Error>{fieldErrors.sms}</Field.Error>
+			{:else if !data.sms.configured}<Field.Description>Set up SMS first.</Field.Description>
+			{:else}<Field.Description
+					>International format, up to 5 numbers separated by commas. Each new number is sent a test
+					SMS.</Field.Description
+				>{/if}
+		</Field.Field>
+	</Field.Group>
+</FormDialog>
+
+<FormDialog
+	bind:open={smsOpen}
+	icon={MessageSquareTextIcon}
+	title={data.sms.configured ? 'Edit SMS' : 'Set up SMS'}
+	description="Skiff checks these credentials with Twilio before saving them. Nothing is sent and nothing is billed until you add a number under Alerts."
+	action="?/saveSms"
+	submitLabel="Verify and save"
+	size="lg"
+>
+	<Field.Group>
+		<Field.Field data-invalid={fieldErrors.accountSid ? true : undefined}>
+			<Field.Label for="twilio-sid">Account SID</Field.Label>
+			<Input
+				id="twilio-sid"
+				name="accountSid"
+				required
+				autocomplete="off"
+				spellcheck={false}
+				class="font-mono"
+				value={sms.SKIFF_TWILIO_ACCOUNT_SID ?? ''}
+				placeholder="AC…"
+				aria-invalid={fieldErrors.accountSid ? 'true' : undefined}
+			/>
+			{#if fieldErrors.accountSid}<Field.Error>{fieldErrors.accountSid}</Field.Error>{/if}
+		</Field.Field>
+		<Field.Field data-invalid={fieldErrors.authToken ? true : undefined}>
+			<Field.Label for="twilio-token">Auth Token</Field.Label>
+			<Input
+				id="twilio-token"
+				name="authToken"
+				type="password"
+				autocomplete="new-password"
+				class="font-mono"
+				required={!authTokenSaved}
+				placeholder={authTokenSaved ? 'Saved — leave blank to keep' : ''}
+				aria-invalid={fieldErrors.authToken ? 'true' : undefined}
+			/>
+			{#if fieldErrors.authToken}<Field.Error>{fieldErrors.authToken}</Field.Error>{/if}
+		</Field.Field>
+		<Field.Field data-invalid={fieldErrors.from ? true : undefined}>
+			<Field.Label for="twilio-from">Send from</Field.Label>
+			<Input
+				id="twilio-from"
+				name="from"
+				required
+				autocomplete="off"
+				spellcheck={false}
+				class="font-mono"
+				value={sms.SKIFF_TWILIO_FROM ?? ''}
+				placeholder="+447700900000"
+				aria-invalid={fieldErrors.from ? 'true' : undefined}
+			/>
+			{#if fieldErrors.from}<Field.Error>{fieldErrors.from}</Field.Error>
+			{:else}<Field.Description
+					>A Twilio phone number, a Messaging Service SID (<code>MG…</code>), or a sender name of up
+					to 11 letters and digits where your recipients' carriers support it.</Field.Description
 				>{/if}
 		</Field.Field>
 	</Field.Group>

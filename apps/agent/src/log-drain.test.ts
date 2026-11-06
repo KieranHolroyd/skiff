@@ -56,6 +56,9 @@ class FakeHelper implements HelperApi {
 		return { id: 'wld_1', status: 'running', restarts: 0 };
 	}
 	async remove(): Promise<void> {}
+	// Not exercised by the log drain; only present to implement the shared HelperApi.
+	async stop(): Promise<void> {}
+	async restart(): Promise<void> {}
 	async purge(): Promise<void> {}
 	async dumpDatabase(): Promise<never> {
 		throw new Error('dumpDatabase not used in this test');

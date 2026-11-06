@@ -96,6 +96,19 @@ describe('compileSiteRoute', () => {
 		expect(json).toContain('Strict-Transport-Security');
 	});
 
+	test('multi-node replicas list every upstream in one reverse_proxy', () => {
+		const route = compileSiteRoute({
+			...base,
+			upstreams: ['10.88.1.2:8080', '10.88.1.3:8080'],
+			healthPath: '/health',
+		});
+		const json = JSON.stringify(route);
+		expect(json).toContain('"dial":"10.88.1.2:8080"');
+		expect(json).toContain('"dial":"10.88.1.3:8080"');
+		expect(json).toContain('"health_uri":"/health"');
+		expect(json).toContain('"lb_policy":"least_conn"');
+	});
+
 	test('protected sites forward_auth to the agent and set noindex/private', () => {
 		const route = compileSiteRoute({ ...base, accessMode: 'platform' });
 		const json = JSON.stringify(route);

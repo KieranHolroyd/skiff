@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { page } from '$app/state';
 	import type { OperationActionId } from '@skiff/contracts';
 	import Notice from '#lib/components/skiff/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
@@ -13,6 +14,9 @@
 	/** The confirm dialog for a bulk action, built from the server's plan. */
 	let { controller, contentDomain }: { controller: BulkController; contentDomain: string } =
 		$props();
+
+	/** Settings → Policies trash period; the layout loads it. */
+	const trashDays = $derived<number>(page.data.policies?.trashDays ?? 7);
 
 	const PREVIEW = 10;
 
@@ -35,13 +39,12 @@
 	const expected = $derived(String(ready.length));
 	const blockedByTyping = $derived(needsTyping && typed.trim() !== expected);
 
-	const descriptions: Partial<Record<OperationActionId, string>> = {
-		'project.delete':
-			'They move to the trash and are kept for 7 days. You can restore them until then.',
+	const descriptions: Partial<Record<OperationActionId, string>> = $derived({
+		'project.delete': `They move to the trash and are kept for ${trashDays} days. You can restore them until then.`,
 		'project.restore': 'They come back with their deployments and settings.',
 		'project.purge':
 			'This permanently deletes them with their deployments, releases and domains. It cannot be undone.'
-	};
+	});
 	const description = $derived(
 		info
 			? (descriptions[info.id] ??

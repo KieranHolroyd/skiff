@@ -49,6 +49,12 @@ import {
 	panelQuerySchema,
 	panelSizes,
 	vizTypes,
+	alertMatcherSchema,
+	alertRuleInputSchema,
+	alertRuleTemplate,
+	alertRuleTemplates,
+	type AlertInstanceView,
+	type AlertRuleSummary,
 	type DashboardPanel,
 	type DashboardView,
 	type DatabaseMetricPoint,
@@ -464,7 +470,7 @@ function buildServer(
 		{
 			title: 'Delete project',
 			description:
-				'Soft-delete a project (stops serving immediately; restorable for 7 days). Requires confirmation.',
+				'Soft-delete a project (stops serving immediately; restorable for the trash period, 7 days by default). Requires confirmation.',
 			inputSchema: z.object({ project: z.string().describe('Project slug') }),
 			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
 			scopeChallenge: requires('project:delete'),
@@ -478,7 +484,7 @@ function buildServer(
 						ok: true,
 						project,
 						restorable: true,
-						restoreBefore: new Date(Date.now() + limits.trashDays * 86_400_000).toISOString(),
+						restoreBefore: new Date(Date.now() + core.policies.trashMs()).toISOString(),
 					};
 				});
 			if (era === 'legacy')
@@ -504,7 +510,7 @@ function buildServer(
 				return inputRequired({
 					inputRequests: {
 						[key]: inputRequired.elicit({
-							message: `Delete project "${project}"? It stops serving immediately and can be restored for 7 days.`,
+							message: `Delete project "${project}"? It stops serving immediately and can be restored for ${core.policies.get().trashDays} days.`,
 							requestedSchema: schema,
 						}),
 					},
@@ -517,7 +523,7 @@ function buildServer(
 					ok: true,
 					project,
 					restorable: true,
-					restoreBefore: new Date(Date.now() + limits.trashDays * 86_400_000).toISOString(),
+					restoreBefore: new Date(Date.now() + core.policies.trashMs()).toISOString(),
 				};
 			});
 		},
@@ -550,7 +556,7 @@ function buildServer(
 		{
 			title: 'Delete several projects',
 			description:
-				`Soft-delete up to ${operationLimits.mcpTargets} projects at once (each stops serving immediately; restorable for 7 days with restore_projects). ` +
+				`Soft-delete up to ${operationLimits.mcpTargets} projects at once (each stops serving immediately; restorable with restore_projects for the trash period, 7 days by default). ` +
 				'The user confirms the exact list. Prefer this over repeated delete_project calls.',
 			inputSchema: z.object({ projects: projectListSchema }),
 			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
@@ -568,7 +574,7 @@ function buildServer(
 					const done = await core.operations.wait(principal, created.id, 20_000);
 					return {
 						...operationResult(done),
-						restoreBefore: new Date(Date.now() + limits.trashDays * 86_400_000).toISOString()
+						restoreBefore: new Date(Date.now() + core.policies.trashMs()).toISOString()
 					};
 				});
 			if (era === 'legacy') {
@@ -610,7 +616,7 @@ function buildServer(
 						const done = await core.operations.wait(principal, planned.id, 20_000);
 						return {
 							...operationResult(done),
-							restoreBefore: new Date(Date.now() + limits.trashDays * 86_400_000).toISOString(),
+							restoreBefore: new Date(Date.now() + core.policies.trashMs()).toISOString(),
 						};
 					});
 			}
@@ -642,7 +648,7 @@ function buildServer(
 				`Delete ${ok.length} project${ok.length === 1 ? '' : 's'}: ${ok.map((item) => item.label).join(', ')}?`,
 				live.length ? `${live.length} ${live.length === 1 ? 'is' : 'are'} serving production: ${live.join(', ')}.` : '',
 				skipped.length ? `Skipped: ${skipped.map((item) => `${item.label} (${item.reason})`).join(', ')}.` : '',
-				'They stop serving immediately and can be restored for 7 days.',
+				`They stop serving immediately and can be restored for ${core.policies.get().trashDays} days.`,
 			]
 				.filter(Boolean)
 				.join(' ');
@@ -916,6 +922,23 @@ function buildServer(
 			run(() => {
 				const row = core.projects.requireRow(principal, project);
 				return { workload: core.workloads.get(principal, row), spec: core.workloads.projectSpec(row) };
+			}),
+	);
+
+	tool(
+		'get_function',
+		{
+			title: 'Get function',
+			description:
+				'Get a Functions project (D110): main module, compatibility date/flags, resolved bindings (names, not secret values), assets and run_worker_first, idle stop and the pinned workerd version. Returns `function: null` for a project that is not a function.',
+			inputSchema: z.object({ project: z.string() }),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('deployment:read'),
+		},
+		async ({ project }) =>
+			run(() => {
+				const row = core.projects.requireRow(principal, project);
+				return { function: core.functions.view(principal, row) };
 			}),
 	);
 
@@ -1420,7 +1443,7 @@ function buildServer(
 		{
 			title: 'Delete database',
 			description:
-				'Soft-delete a database: its container stops, the data stays on the node and it can be restored for 7 days. ' +
+				'Soft-delete a database: its container stops, the data stays on the node and it can be restored for the trash period (7 days by default). ' +
 				'Refused while projects are attached (detach_database first). Requires confirmation. Permanent deletion is dashboard/CLI only.',
 			inputSchema: z.object({ database: z.string().describe('Database name') }),
 			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
@@ -1479,7 +1502,7 @@ function buildServer(
 						[key]: inputRequired.elicit({
 							message:
 								`Delete database "${database}"? Its container stops now; the data stays on node ` +
-								`"${view.nodeName ?? view.nodeId}" and it can be restored for 7 days.`,
+								`"${view.nodeName ?? view.nodeId}" and it can be restored for ${core.policies.get().trashDays} days.`,
 							requestedSchema: schema,
 						}),
 					},
@@ -1746,7 +1769,7 @@ function buildServer(
 			title: 'Delete object storage',
 			description:
 				'Soft-delete an object storage instance: its container and public endpoint stop, the data stays on the node and it can be ' +
-				'restored for 7 days. Refused while projects are attached (detach_storage first). Requires confirmation. ' +
+				'restored for the trash period (7 days by default). Refused while projects are attached (detach_storage first). Requires confirmation. ' +
 				'Permanent deletion is dashboard/CLI only.',
 			inputSchema: z.object({ storage: z.string().describe('Storage instance name') }),
 			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
@@ -1806,7 +1829,7 @@ function buildServer(
 						[key]: inputRequired.elicit({
 							message:
 								`Delete storage "${storage}" (${buckets})? Its container${view.public ? ' and public endpoint' : ''} stop now; ` +
-								`the data stays on node "${view.nodeName ?? view.nodeId}" and it can be restored for 7 days.`,
+								`the data stays on node "${view.nodeName ?? view.nodeId}" and it can be restored for ${core.policies.get().trashDays} days.`,
 							requestedSchema: schema,
 						}),
 					},
@@ -2297,6 +2320,262 @@ function buildServer(
 		},
 	);
 
+	// --- metric alert rules (docs/ALERTS.md) ---------------------------------------------------
+
+	const alertRuleRef = z.string().min(1).describe('Alert rule id (alr_…) or exact name');
+	const alertRuleSummary = (rule: AlertRuleSummary) => ({
+		id: rule.id,
+		name: rule.name,
+		url: core.alerts.url(rule.id),
+		enabled: rule.enabled,
+		severity: rule.severity,
+		state: rule.state,
+		counts: rule.counts,
+		health: rule.health,
+		...(rule.lastError ? { lastError: rule.lastError } : {}),
+		query: rule.query,
+		condition: rule.condition,
+		windowSeconds: rule.windowSeconds,
+		forSeconds: rule.forSeconds,
+		noData: rule.noData,
+		channels: rule.channels.length ? rule.channels : 'all',
+		lastEvaluatedAt: rule.lastEvaluatedAt,
+	});
+	const alertInstance = (instance: AlertInstanceView) => ({
+		rule: instance.ruleName,
+		ruleId: instance.ruleId,
+		state: instance.state,
+		severity: instance.severity,
+		labels: instance.labels,
+		...(Object.keys(instance.labelNames).length ? { names: instance.labelNames } : {}),
+		value: instance.value,
+		since: instance.activeSince ?? instance.since,
+		fingerprint: instance.fingerprint,
+		...(instance.acknowledgedBy ? { acknowledgedBy: instance.acknowledgedByName ?? instance.acknowledgedBy } : {}),
+		...(instance.silencedBy ? { silenced: true } : {}),
+	});
+	const ALERT_RULE_HELP =
+		'A rule runs one builder query over a trailing window and compares one value per series (one series per groupBy combination) with a threshold. ' +
+		'query: {mode:"builder", builder:{dataset, metrics:[exactly one {field, agg}], groupBy?:[dimension], filters?}} (see describe_telemetry); percentunit values are 0–1, so a 5% error rate is threshold 0.05. ' +
+		'noData: ok (quiet is fine), nodata (alert as "no data"), alerting (missing data means down: use for up/traffic outage rules), keep. ' +
+		'channels: platform notifier names from list_alerts (empty = all).';
+
+	tool(
+		'list_alerts',
+		{
+			title: 'List alerts',
+			description:
+				'What is alerting right now (firing, pending and no-data series with values and since when), every metric alert rule with its state and health, the notification channels rules can use, and the outage templates create_alert_rule accepts.',
+			inputSchema: z.object({}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('metrics:read'),
+		},
+		async () =>
+			run(async () => {
+				const overview = await core.alerts.overview(principal);
+				return {
+					url: core.alerts.url(),
+					telemetryAvailable: overview.telemetryAvailable,
+					...(overview.telemetryError ? { telemetryError: overview.telemetryError } : {}),
+					counts: overview.counts,
+					active: overview.active.map(alertInstance),
+					rules: core.alerts.listRules(principal).map(alertRuleSummary),
+					channels: overview.channels.map((channel) => channel.name),
+					templates: alertRuleTemplates.map(({ id, title, description }) => ({ id, title, description })),
+					canEdit: overview.canEdit,
+					canSilence: overview.canSilence,
+				};
+			}),
+	);
+
+	tool(
+		'get_alert_rule',
+		{
+			title: 'Get alert rule',
+			description: 'One alert rule: its full definition, every series with its state and value, and its recent history (state changes, notifications and who they reached).',
+			inputSchema: z.object({ rule: alertRuleRef, history: z.number().int().min(0).max(100).default(20) }),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('metrics:read'),
+		},
+		async ({ rule, history }) =>
+			run(() => {
+				const view = core.alerts.resolveRule(principal, rule);
+				return {
+					...alertRuleSummary(view),
+					description: view.description,
+					keepFiringSeconds: view.keepFiringSeconds,
+					intervalSeconds: view.intervalSeconds,
+					repeatMinutes: view.repeatMinutes,
+					notifyOnResolve: view.notifyOnResolve,
+					emails: view.emails,
+					runbook: view.runbook,
+					version: view.version,
+					series: view.instances.map(alertInstance),
+					history: history
+						? core.alerts.history(principal, { ruleId: view.id, limit: history }).map(({ kind, at, title, detail, delivery }) => ({ kind, at, title, detail, ...(delivery ? { delivery } : {}) }))
+						: [],
+				};
+			}),
+	);
+
+	tool(
+		'create_alert_rule',
+		{
+			title: 'Create alert rule',
+			description:
+				`Create a metric alert rule (org owners/admins). Start from a template id (site_down, high_error_rate, slow_responses, traffic_stopped, database_down, pooler_down, database_connections, database_deadlocks, storage_down) and override fields, or give the full rule. ${ALERT_RULE_HELP} ` +
+				'The result includes a preview: the series the rule sees right now and which would breach.',
+			inputSchema: z.object({
+				template: z.enum(alertRuleTemplates.map((template) => template.id) as [string, ...string[]]).optional(),
+				rule: alertRuleInputSchema.partial().default({}).describe('Rule fields; with a template, only the ones to change'),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('metrics:read'),
+		},
+		async ({ template, rule }) =>
+			run(async () => {
+				const base = template ? alertRuleTemplate(template)?.rule : undefined;
+				const overrides = Object.fromEntries(Object.entries(rule as Record<string, unknown>).filter(([, value]) => value !== undefined));
+				const created = core.alerts.createRule(principal, { ...(base ?? {}), ...overrides });
+				let preview: unknown = null;
+				try {
+					const result = await core.alerts.preview(principal, { ruleId: created.id });
+					preview = result.series.slice(0, 20).map(({ labels, value, met }) => ({ labels, value, breaching: met }));
+				} catch (error) {
+					preview = { error: (error as Error).message };
+				}
+				return { created: alertRuleSummary(created), preview };
+			}),
+	);
+
+	tool(
+		'update_alert_rule',
+		{
+			title: 'Update alert rule',
+			description: `Change an alert rule: only the fields given change. Pause or resume with {enabled:false|true}. ${ALERT_RULE_HELP}`,
+			inputSchema: z.object({
+				rule: alertRuleRef,
+				changes: alertRuleInputSchema.partial().describe('Fields to change'),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('metrics:read'),
+		},
+		async ({ rule, changes }) =>
+			run(() => {
+				const current = core.alerts.resolveRule(principal, rule);
+				// The tool schema is `.partial()` over fields with defaults; pass only what the caller named.
+				const raw = (changes ?? {}) as Record<string, unknown>;
+				const patch = Object.fromEntries(Object.entries(raw).filter(([, value]) => value !== undefined));
+				return { updated: alertRuleSummary(core.alerts.updateRule(principal, current.id, { ...patch, version: current.version })) };
+			}),
+	);
+
+	tool(
+		'silence_alerts',
+		{
+			title: 'Silence alerts',
+			description:
+				'Mute notifications for a while (a maintenance window, or an alert someone is already handling). Scope it to one rule and/or label matchers (e.g. {label:"host", value:"shop.example.com"}); with no rule it mutes every rule in the org. States still update; notifications resume when it ends.',
+			inputSchema: z.object({
+				rule: alertRuleRef.optional(),
+				matchers: z.array(alertMatcherSchema).max(10).default([]),
+				durationMinutes: z.number().int().min(1).max(60 * 24 * 90),
+				comment: z.string().max(500).default(''),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('metrics:read'),
+		},
+		async ({ rule, matchers, durationMinutes, comment }) =>
+			run(() => {
+				const ruleId = rule ? core.alerts.resolveRule(principal, rule).id : null;
+				return { silence: core.alerts.createSilence(principal, { ruleId, matchers, durationMinutes, comment }) };
+			}),
+	);
+
+	tool(
+		'acknowledge_alert',
+		{
+			title: 'Acknowledge alert',
+			description: 'Acknowledge a firing series so repeat notifications stop until it resolves (fingerprint from list_alerts or get_alert_rule). acknowledged:false undoes it.',
+			inputSchema: z.object({ rule: alertRuleRef, fingerprint: z.string().min(1), acknowledged: z.boolean().default(true) }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('metrics:read'),
+		},
+		async ({ rule, fingerprint, acknowledged }) =>
+			run(() => {
+				const view = core.alerts.acknowledge(principal, core.alerts.resolveRule(principal, rule).id, fingerprint, acknowledged);
+				return { series: view.instances.filter((instance) => instance.fingerprint === fingerprint).map(alertInstance) };
+			}),
+	);
+
+	tool(
+		'get_alert_history',
+		{
+			title: 'Get alert history',
+			description: 'Recent alert events, newest first: state changes, notifications (with per-channel delivery results), rule errors, silences, acknowledgements and (platform admins) built-in system alerts such as node offline or certificate expiry.',
+			inputSchema: z.object({
+				rule: alertRuleRef.optional(),
+				kinds: z.array(z.enum(['state', 'notification', 'error', 'system', 'ack', 'silence'])).default([]),
+				limit: z.number().int().min(1).max(200).default(50),
+				before: z.string().datetime().optional(),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('metrics:read'),
+		},
+		async ({ rule, kinds, limit, before }) =>
+			run(() => ({
+				events: core.alerts
+					.history(principal, { ruleId: rule ? core.alerts.resolveRule(principal, rule).id : undefined, kinds, limit, before })
+					.map(({ kind, at, ruleName, title, detail, labels, delivery, severity }) => ({ kind, at, rule: ruleName, severity, title, detail, labels, ...(delivery ? { delivery } : {}) })),
+			})),
+	);
+
+	tool(
+		'delete_alert_rule',
+		{
+			title: 'Delete alert rule',
+			description: 'Delete an alert rule permanently, with its series and silences (history is kept). To stop it temporarily, update_alert_rule with enabled:false instead. Requires confirmation.',
+			inputSchema: z.object({ rule: alertRuleRef }),
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+			scopeChallenge: requires('metrics:read'),
+		},
+		async ({ rule }, ctx) => {
+			const remove = () =>
+				run(() => {
+					const target = core.alerts.resolveRule(principal, rule);
+					core.alerts.deleteRule(principal, target.id);
+					return { ok: true, deleted: { id: target.id, name: target.name } };
+				});
+			if (era === 'assistant') return remove();
+			if (era === 'legacy')
+				return {
+					isError: true,
+					...text(`Deleting "${rule}" needs your confirmation, which this MCP client can't show. Delete it from the Skiff dashboard (Alerts → Rules).`),
+				};
+			const key = `confirm_delete_alert_rule:${rule}`;
+			const schema = z.object({ confirm: z.boolean() });
+			const prompted = verifyConfirmation(ctx.mcpReq.requestState(), principal, 'delete_alert_rule', rule);
+			const answer = prompted ? acceptedContent(ctx.mcpReq.inputResponses, key, schema) : undefined;
+			const responded = prompted && ctx.mcpReq.inputResponses?.[key] !== undefined;
+			if (responded && answer?.confirm !== true) {
+				const cancelled = text(`Cancelled: alert rule "${rule}" was not deleted (the user did not confirm).`);
+				declined.add(cancelled);
+				return cancelled;
+			}
+			if (answer?.confirm !== true)
+				return inputRequired({
+					inputRequests: {
+						[key]: inputRequired.elicit({
+							message: `Delete alert rule "${rule}"? It stops alerting for everyone in the org; this cannot be undone.`,
+							requestedSchema: schema,
+						}),
+					},
+					requestState: mintConfirmation(principal, 'delete_alert_rule', rule),
+				});
+			return remove();
+		},
+	);
+
 	tool(
 		'get_logs',
 		{
@@ -2405,7 +2684,7 @@ function buildServer(
 						`- Files: ${limits.files}`,
 						`- One file: ${limits.fileBytes} bytes`,
 						`- Inline MCP deploy: ${limits.inlineBytes} bytes`,
-						`- Retained deployments per project: ${limits.retainedDeployments} (plus pinned)`,
+						`- Retained deployments per project: ${core.policies.get().retainedDeployments} by default (plus pinned; org and app quotas can override)`,
 					].join('\n'),
 				},
 			],
@@ -2453,7 +2732,7 @@ function buildServer(
 						'',
 						'`get_database` shows status, the largest tables and a last-hour summary (size vs storage budget, connections vs max_connections, commits/min, cache hit ratio).',
 						'',
-						'`delete_database` is a confirmed soft delete (restorable for 7 days) and is refused while projects are attached; `detach_database` first. Permanent deletion is dashboard/CLI only.',
+						'`delete_database` is a confirmed soft delete (restorable for the trash period, 7 days by default) and is refused while projects are attached; `detach_database` first. Permanent deletion is dashboard/CLI only.',
 					].join('\n'),
 				},
 			],
@@ -2481,7 +2760,7 @@ function buildServer(
 						'',
 						'Keys are never returned over MCP: apps get them injected, and humans can reveal the root key from the dashboard or `skif storage credentials`.',
 						'',
-						'`delete_storage` is a confirmed soft delete (restorable for 7 days) and is refused while projects are attached; `detach_storage` first. Deleting non-empty buckets and permanent deletion are dashboard/CLI only.',
+						'`delete_storage` is a confirmed soft delete (restorable for the trash period, 7 days by default) and is refused while projects are attached; `detach_storage` first. Deleting non-empty buckets and permanent deletion are dashboard/CLI only.',
 					].join('\n'),
 				},
 			],

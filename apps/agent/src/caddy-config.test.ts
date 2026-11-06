@@ -521,3 +521,197 @@ describe('per-deployment roots, worker routes and logging', () => {
 		expect(config().logging).toBeUndefined();
 	});
 });
+
+describe('function routes (D110)', () => {
+	const FUNCTION_UPSTREAM = 'unix//run/skiff-workloads/prj_public.sock';
+
+	/** A state whose production (`prj_public`) or protected (`prj_secret`) route is a function. */
+	function functionState(
+		options: {
+			assetsDirectory?: string | null;
+			runWorkerFirst?: string[];
+			protectedRoute?: boolean;
+			/** Phase 4: replica sockets for a scaled stateless function. */
+			upstreams?: string[];
+		} = {},
+	): DesiredState {
+		const value = state();
+		const index = options.protectedRoute ? 1 : 0;
+		const route = value.routes[index]!;
+		value.routes[index] = {
+			...route,
+			upstream: `unix//run/skiff-workloads/${route.projectId}.sock`,
+			function: {
+				assetsDirectory: options.assetsDirectory === undefined ? 'public' : options.assetsDirectory,
+				runWorkerFirst: options.runWorkerFirst ?? [],
+				...(options.upstreams ? { upstreams: options.upstreams } : {}),
+			},
+		};
+		return value;
+	}
+
+	function siteRoute(compiled: Json, host: string): Json {
+		const route = routes(compiled).find((candidate) =>
+			JSON.stringify(candidate.match ?? null).includes(`"${host}"`),
+		);
+		expect(route).toBeDefined();
+		return route!;
+	}
+
+	/** The routes inside the site's `subroute`, in evaluation order. */
+	function innerRoutes(route: Json): Json[] {
+		const outer = (route.handle as Json[])[0]!;
+		expect(outer.handler).toBe('subroute');
+		return outer.routes as Json[];
+	}
+
+	function handlerNames(route: Json): string[] {
+		return innerRoutes(route).map((inner) => String((inner.handle as Json[])[0]!.handler));
+	}
+
+	test('assets come first and the function is the fallback', () => {
+		const compiled = config(functionState({ runWorkerFirst: ['/api/*'] }));
+		const route = siteRoute(compiled, 'public.example.com');
+
+		expect(route['@id']).toBe('site:prj_public:dep_1:public.example.com');
+		expect(route.terminal).toBe(true);
+		expect(handlerNames(route)).toEqual(['headers', 'reverse_proxy', 'file_server', 'reverse_proxy']);
+
+		const headers = (innerRoutes(route)[0]!.handle as Json[])[0]!;
+		const set = (headers.response as Json).set as Json;
+		expect(set['Strict-Transport-Security']).toEqual(['max-age=63072000; includeSubDomains']);
+		expect(set['X-Content-Type-Options']).toEqual(['nosniff']);
+		expect(set['Referrer-Policy']).toEqual(['strict-origin-when-cross-origin']);
+		// Public: no noindex/private cache directives.
+		expect(set['X-Robots-Tag']).toBeUndefined();
+		expect(set['Cache-Control']).toBeUndefined();
+
+		// run_worker_first: a simple glob uses the cheap `path` matcher.
+		expect((innerRoutes(route)[1]!.match as Json[])[0]).toEqual({ path: ['/api/*'] });
+
+		const files = innerRoutes(route)[2]!;
+		expect((files.match as Json[])[0]).toEqual({
+			file: {
+				root: '/data/sites/prj_public/public',
+				try_files: ['{http.request.uri.path}', '{http.request.uri.path}/index.html'],
+				try_policy: 'first_exist',
+			},
+		});
+		expect((files.handle as Json[])[0]).toEqual({
+			handler: 'file_server',
+			root: '/data/sites/prj_public/public',
+			precompressed: { br: {}, gzip: {} },
+			precompressed_order: ['br', 'gzip'],
+		});
+
+		const proxy = (innerRoutes(route)[3]!.handle as Json[])[0]!;
+		expect((proxy.upstreams as Json[])[0]!.dial).toBe(FUNCTION_UPSTREAM);
+		expect(proxy.headers).toEqual({
+			request: {
+				set: {
+					'X-Skiff-Internal': ['0'],
+					'X-Forwarded-Host': ['{http.request.host}'],
+				},
+			},
+		});
+		expect(proxy.transport).toEqual({ protocol: 'http', response_header_timeout: '60s' });
+		expect(JSON.stringify(proxy.handle_response)).toContain('"status_code":503');
+	});
+
+	test('without an assets directory only the function proxy remains', () => {
+		const compiled = config(functionState({ assetsDirectory: null, runWorkerFirst: ['/api/*'] }));
+		const route = siteRoute(compiled, 'public.example.com');
+		expect(handlerNames(route)).toEqual(['headers', 'reverse_proxy']);
+
+		const proxy = (innerRoutes(route)[1]!.handle as Json[])[0]!;
+		expect((proxy.upstreams as Json[])[0]!.dial).toBe(FUNCTION_UPSTREAM);
+		expect(((proxy.headers as Json).request as Json).set).toMatchObject({ 'X-Skiff-Internal': ['0'] });
+	});
+
+	test('a protected function route authenticates before anything is served', () => {
+		const compiled = config(functionState({ protectedRoute: true, runWorkerFirst: ['/api/*'] }));
+		const route = siteRoute(compiled, 'secret.example.com');
+		expect(handlerNames(route)).toEqual([
+			'reverse_proxy',
+			'headers',
+			'static_response',
+			'headers',
+			'reverse_proxy',
+			'file_server',
+			'reverse_proxy',
+		]);
+
+		const auth = (innerRoutes(route)[0]!.handle as Json[])[0]!;
+		expect((auth.upstreams as Json[])[0]!.dial).toBe('unix//run/skiff-agent/agent.sock');
+		expect((auth.rewrite as Json).uri).toBe('/_skiff/verify');
+		expect((auth.headers as Json).request).toEqual({
+			set: { 'X-Forwarded-Uri': ['{http.request.uri}'], 'X-Skiff-Project': ['{http.request.host}'] },
+		});
+
+		const set = (((innerRoutes(route)[1]!.handle as Json[])[0]!.response as Json).set as Json);
+		expect(set['X-Robots-Tag']).toEqual(['noindex']);
+		expect(set['Cache-Control']).toEqual(['private']);
+		// The `_redirects` rule precedes the custom `_headers` rule, as on the static tier.
+		expect(innerRoutes(route)[2]!.match).toEqual([{ path: ['/old'] }]);
+		expect(
+			((innerRoutes(route)[3]!.handle as Json[])[0]!.response as Json).set,
+		).toEqual({ 'X-Test': ['yes'] });
+		// Production follows the project symlink, previews their own release.
+		expect(String(JSON.stringify(innerRoutes(route)[5]!.match))).toContain('/data/sites/prj_secret/public');
+	});
+
+	test('exclusion-only globs run the worker everywhere except those paths', () => {
+		const compiled = config(functionState({ runWorkerFirst: ['!/assets/*'] }));
+		const route = siteRoute(compiled, 'public.example.com');
+		expect(handlerNames(route)).toEqual(['headers', 'reverse_proxy', 'file_server', 'reverse_proxy']);
+		expect((innerRoutes(route)[1]!.match as Json[])[0]).toEqual({
+			not: [{ path: ['/assets/*'] }],
+		});
+	});
+
+	test('a function route with a custom-domain clone keeps its routing', () => {
+		const value = functionState({ runWorkerFirst: ['/api/*'] });
+		value.domains = [{ host: 'app.customer.test', projectId: 'prj_public', kind: 'custom', redirectTo: null }];
+		const compiled = config(value);
+		const clone = siteRoute(compiled, 'app.customer.test');
+		expect(clone['@id']).toBe('site:prj_public:dep_1:app.customer.test');
+		expect(handlerNames(clone)).toEqual(['headers', 'reverse_proxy', 'file_server', 'reverse_proxy']);
+		const proxy = (innerRoutes(clone)[3]!.handle as Json[])[0]!;
+		expect(((proxy.headers as Json).request as Json).set).toMatchObject({ 'X-Skiff-Internal': ['0'] });
+		expect(String(JSON.stringify(innerRoutes(clone)[2]!.match))).toContain('/data/sites/prj_public/public');
+	});
+
+	test('a scaled stateless function proxies to every replica socket in order', () => {
+		const replicas = [
+			'unix//run/skiff-workloads/wld_public.sock',
+			'unix//run/skiff-workloads/wld_public-r1.sock',
+			'unix//run/skiff-workloads/wld_public-r2.sock',
+		];
+		const compiled = config(functionState({ runWorkerFirst: ['/api/*'], upstreams: replicas }));
+		const route = siteRoute(compiled, 'public.example.com');
+		expect(handlerNames(route)).toEqual(['headers', 'reverse_proxy', 'file_server', 'reverse_proxy']);
+
+		// One reverse_proxy, in list order, on the worker-first hop and the fallback alike.
+		const proxies = collectHandlers(route).filter((handler) => handler.handler === 'reverse_proxy');
+		expect(proxies).toHaveLength(2);
+		for (const proxy of proxies) {
+			expect(proxy.upstreams).toEqual(replicas.map((dial) => ({ dial })));
+			expect(((proxy.headers as Json).request as Json).set).toMatchObject({ 'X-Skiff-Internal': ['0'] });
+			expect((proxy.transport as Json).response_header_timeout).toBe('60s');
+			expect(JSON.stringify(proxy.handle_response)).toContain('"status_code":503');
+		}
+	});
+
+	test('a non-function route is unchanged and every route id stays unique', () => {
+		const plain = config();
+		const withFunction = config(functionState({ runWorkerFirst: ['/api/*'] }));
+		expect(siteRoute(withFunction, 'secret.example.com')).toEqual(siteRoute(plain, 'secret.example.com'));
+
+		const content = server(withFunction);
+		const ids = [
+			...(content.routes as Json[]).map((route) => route['@id']),
+			...((content.errors as Json).routes as Json[]).map((route) => route['@id']),
+		].filter((id): id is string => typeof id === 'string');
+		expect(new Set(ids).size).toBe(ids.length);
+	});
+});

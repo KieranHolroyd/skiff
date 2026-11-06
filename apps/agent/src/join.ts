@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { BUILD_VERSION } from './build-version.ts';
-import { nodeJoinSchema, type NodeJoin } from '@skiff/contracts';
+import { nodeJoinSchema, wireguardPublicKeySchema, wireguardStateSchema, type NodeJoin, type WireguardState } from '@skiff/contracts';
 import { atomicWriteFile } from './state.ts';
 
 /**
@@ -8,7 +8,7 @@ import { atomicWriteFile } from './state.ts';
  * identity, writes `${dataDir}/node.json` and prints the systemd EnvironmentFile lines.
  */
 
-export const JOIN_USAGE = `Usage: skiff-agent join <controlUrl> --token <joinToken> --name <name> [--data-dir <dir>] [--public-address <address>]`;
+export const JOIN_USAGE = `Usage: skiff-agent join <controlUrl> --token <joinToken> --name <name> [--data-dir <dir>] [--public-address <address>] [--network-mode skiff|external] [--wireguard-public-key <key>]`;
 
 export class JoinError extends Error {
 	constructor(message: string) {
@@ -24,6 +24,8 @@ export interface JoinOptions {
 	dataDir: string;
 	version: string;
 	publicAddress?: string;
+	networkMode?: 'skiff' | 'external';
+	wireguardPublicKey?: string;
 }
 
 export interface JoinedNode {
@@ -31,6 +33,7 @@ export interface JoinedNode {
 	nodeId: string;
 	token: string;
 	mode: 'edge' | 'worker';
+	wireguard?: WireguardState;
 	joinedAt: string;
 }
 
@@ -66,6 +69,8 @@ export function parseJoinArgs(args: string[], env: Env = process.env): JoinOptio
 	let token: string | undefined;
 	let name: string | undefined;
 	let publicAddress: string | undefined;
+	let networkMode: 'skiff' | 'external' = 'external';
+	let wireguardPublicKey: string | undefined;
 	let dataDir = env.SKIFF_DATA_DIR?.trim() || '/var/lib/skiff-agent';
 
 	for (let index = 0; index < args.length; index++) {
@@ -73,13 +78,24 @@ export function parseJoinArgs(args: string[], env: Env = process.env): JoinOptio
 		const equals = arg.indexOf('=');
 		const flag = equals > 0 ? arg.slice(0, equals) : arg;
 
-		if (flag === '--token' || flag === '--name' || flag === '--data-dir' || flag === '--public-address') {
+		if (
+			flag === '--token' ||
+			flag === '--name' ||
+			flag === '--data-dir' ||
+			flag === '--public-address' ||
+			flag === '--network-mode' ||
+			flag === '--wireguard-public-key'
+		) {
 			const value = equals > 0 ? arg.slice(equals + 1) : takeValue(args, index, flag);
 			if (equals < 0) index += 1;
 			if (!value) throw new JoinError(`${flag} requires a value\n${JOIN_USAGE}`);
 			if (flag === '--token') token = value;
 			else if (flag === '--name') name = value;
 			else if (flag === '--data-dir') dataDir = value;
+			else if (flag === '--network-mode') {
+				if (value !== 'skiff' && value !== 'external') throw new JoinError('--network-mode must be skiff or external');
+				networkMode = value;
+			} else if (flag === '--wireguard-public-key') wireguardPublicKey = value;
 			else publicAddress = value;
 			continue;
 		}
@@ -96,6 +112,8 @@ export function parseJoinArgs(args: string[], env: Env = process.env): JoinOptio
 	if (name.length > 120) throw new JoinError('--name must be at most 120 characters');
 	if (publicAddress && publicAddress.length > 253)
 		throw new JoinError('--public-address must be at most 253 characters');
+	if (wireguardPublicKey && !wireguardPublicKeySchema.safeParse(wireguardPublicKey).success)
+		throw new JoinError('--wireguard-public-key must be a base64 WireGuard public key');
 
 	return {
 		controlUrl: normalizeControlUrl(positionals[0]!),
@@ -104,6 +122,7 @@ export function parseJoinArgs(args: string[], env: Env = process.env): JoinOptio
 		dataDir: dataDir.replace(/\/+$/, '') || '/',
 		version: env.SKIFF_AGENT_VERSION?.trim() || BUILD_VERSION,
 		...(publicAddress ? { publicAddress } : {}),
+		...(networkMode === 'skiff' ? { networkMode, ...(wireguardPublicKey ? { wireguardPublicKey } : {}) } : {}),
 	};
 }
 
@@ -113,7 +132,11 @@ export async function joinNode(options: JoinOptions, fetchImpl: FetchLike = fetc
 		token: options.token,
 		name: options.name,
 		version: options.version,
+		networkMode: options.networkMode ?? 'external',
 		...(options.publicAddress ? { publicAddress: options.publicAddress } : {}),
+		...(options.networkMode === 'skiff' && options.wireguardPublicKey
+			? { wireguardPublicKey: options.wireguardPublicKey }
+			: {}),
 	};
 	const parsedBody = nodeJoinSchema.safeParse(body);
 	if (!parsedBody.success)
@@ -159,11 +182,13 @@ export async function joinNode(options: JoinOptions, fetchImpl: FetchLike = fetc
 			? normalizeControlUrl(record.controlUrl)
 			: options.controlUrl;
 
+	const wireguard = wireguardStateSchema.safeParse(record.wireguard);
 	const joined: JoinedNode = {
 		controlUrl,
 		nodeId: record.nodeId,
 		token: record.token,
 		mode,
+		...(wireguard.success ? { wireguard: wireguard.data } : {}),
 		joinedAt: new Date().toISOString(),
 	};
 

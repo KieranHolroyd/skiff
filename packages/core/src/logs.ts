@@ -25,7 +25,6 @@ const LOG_LIMIT = 2_000_000;
 const LOG_TAIL = 8_000;
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 2_000;
-const RETENTION_MS = 7 * 86_400_000;
 /** A global ceiling on drained rows; age is the primary policy, this bounds a chatty week. */
 const MAX_ROWS = 500_000;
 const LEVEL_ORDER: LogLevel[] = ['debug', 'info', 'warn', 'error'];
@@ -375,7 +374,7 @@ export class LogService {
 	}
 
 	/** Delete drained rows older than the retention window, then trim the global ceiling. */
-	prune(now = this.ctx.now(), retentionMs = RETENTION_MS): number {
+	prune(now = this.ctx.now(), retentionMs = this.ctx.policies.logRetentionMs()): number {
 		const expired = this.ctx.sqlite.run('DELETE FROM log_events WHERE ts < ?', [
 			now - retentionMs,
 		]);

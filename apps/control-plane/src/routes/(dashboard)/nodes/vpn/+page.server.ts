@@ -1,6 +1,7 @@
 import { fail } from '@sveltejs/kit';
 import type { NodeView } from '@skiff/core';
 import { core } from '#lib/server/core.js';
+import { updateSource } from '#lib/server/self-update.js';
 import { platformVersion } from '#lib/server/version.js';
 import { failStatus, formString, toFormFailure } from '../../_lib/errors.js';
 import type { Actions, PageServerLoad } from './$types';
@@ -41,7 +42,9 @@ export const load: PageServerLoad = ({ locals }) => {
 		platformOrigin,
 		platformHost,
 		contentDomain: core.ctx.config.contentDomain,
-		platformVersion
+		platformVersion,
+		/** The repository this install tracks (a fork, if it was installed from one). */
+		sourceRepo: updateSource().repo
 	};
 };
 

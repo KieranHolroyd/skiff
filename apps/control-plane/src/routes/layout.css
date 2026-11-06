@@ -201,3 +201,12 @@
 		padding-right: var(--skiff-assistant-width, 440px);
 	}
 }
+
+/* Read-only syntax highlighting (#lib/highlight): tokens carry both theme colours; uncoloured
+   text inherits the surrounding foreground. */
+.hl span {
+	color: var(--hl-light);
+}
+.dark .hl span {
+	color: var(--hl-dark);
+}

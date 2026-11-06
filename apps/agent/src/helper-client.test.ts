@@ -20,7 +20,7 @@ async function socketPath(): Promise<string> {
 	return join(dir, 'helper.sock');
 }
 
-function workload() {
+function workload(overrides: Record<string, unknown> = {}) {
 	return workloadDesiredSchema.parse({
 		id: 'wld_abc123',
 		projectId: 'prj_abc123',
@@ -39,7 +39,23 @@ function workload() {
 		env: {},
 		secrets: [],
 		dataSizeMb: null,
+		...overrides,
 	});
+}
+
+/** A minimal resolved function manifest (phase 1, one ESM module, no assets). */
+function functionSpec() {
+	return {
+		main: 'index.js',
+		modules: [{ name: 'index.js', type: 'esm', sha256: SHA }],
+		compatibilityDate: '2026-10-01',
+		compatibilityFlags: [],
+		bindings: [],
+		triggers: { crons: [] },
+		assets: null,
+		idleStopSeconds: 300,
+		workerdVersion: '1.20261106.1',
+	};
 }
 
 function activation() {
@@ -70,6 +86,10 @@ describe('HelperClient', () => {
 						workload: { id: 'wld_abc123', status: 'running', restarts: 1, memoryBytes: 1024 },
 					});
 				if (url.pathname === '/v1/workloads/wld_abc123' && request.method === 'DELETE')
+					return Response.json({ ok: true });
+				if (url.pathname === '/v1/workloads/wld_abc123/stop' && request.method === 'POST')
+					return Response.json({ ok: true });
+				if (url.pathname === '/v1/workloads/wld_abc123/restart' && request.method === 'POST')
 					return Response.json({ ok: true });
 				if (url.pathname === '/v1/workloads/db_abc/purge' && request.method === 'POST')
 					return Response.json({ ok: true, purged: 'db_abc' });
@@ -106,6 +126,10 @@ describe('HelperClient', () => {
 		});
 
 		expect((await client.status('wld_abc123')).status).toBe('failed');
+		await client.stop('wld_abc123');
+		expect(requests.at(-1)).toEqual({ method: 'POST', path: '/v1/workloads/wld_abc123/stop', body: null });
+		await client.restart('wld_abc123');
+		expect(requests.at(-1)).toEqual({ method: 'POST', path: '/v1/workloads/wld_abc123/restart', body: null });
 		await client.remove('wld_abc123');
 		expect(requests.at(-1)).toEqual({ method: 'DELETE', path: '/v1/workloads/wld_abc123', body: null });
 
@@ -134,5 +158,50 @@ describe('HelperClient', () => {
 		const client = new HelperClient(join(tmpdir(), 'skiff-missing-helper-socket.sock'));
 		await expect(client.health()).rejects.toThrow(HelperError);
 		await expect(client.health()).rejects.toThrow(/helper unavailable/);
+	});
+
+	test('posts the rendered workerd config and shim only for function workloads', async () => {
+		const path = await socketPath();
+		const bodies: Array<Record<string, unknown>> = [];
+		const server = Bun.serve({
+			unix: path,
+			async fetch(request) {
+				const text = request.method === 'POST' ? await request.text() : '';
+				if (text) bodies.push(JSON.parse(text) as Record<string, unknown>);
+				return Response.json({ ok: true, workload: { id: 'wld_abc123', status: 'running', restarts: 0 } });
+			},
+		});
+		servers.push(server);
+		const client = new HelperClient(path, { apply: 1_000 });
+
+		await client.apply({
+			workload: workload({ runtime: 'function', function: functionSpec() }),
+			activation: activation(),
+			function: {
+				config: 'const config :Workerd.Config = ();',
+				shim: 'export default { fetch() {} };',
+				files: { 'binding-kv': 'export default {};' },
+			},
+		});
+		expect(bodies.at(-1)).toMatchObject({
+			function: {
+				config: 'const config :Workerd.Config = ();',
+				shim: 'export default { fetch() {} };',
+				files: { 'binding-kv': 'export default {};' },
+			},
+		});
+
+		// Without extra modules the function body stays exactly two fields.
+		await client.apply({
+			workload: workload({ runtime: 'function', function: functionSpec() }),
+			activation: activation(),
+			function: { config: 'const config :Workerd.Config = ();', shim: 'export default { fetch() {} };' },
+		});
+		expect(bodies.at(-1)?.function).not.toHaveProperty('files');
+
+		// A process app keeps the original two-field body: the helper rejects `function` elsewhere.
+		await client.apply({ workload: workload(), activation: activation() });
+		expect(bodies.at(-1)).not.toHaveProperty('function');
+		expect(Object.keys(bodies.at(-1)!).sort()).toEqual(['activation', 'workload']);
 	});
 });

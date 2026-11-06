@@ -21,8 +21,6 @@ import { assistantTools, parseArgs, providerTools, resultSummary, toolFor } from
  * which re-submits the approval through `/api/v1/assistant/confirm`.
  */
 
-const MAX_ROUNDS = 12;
-const MAX_TOOL_CALLS = 24;
 const MAX_TARGETS = 50;
 const MAX_ARGS_PREVIEW = 600;
 const MAX_DETAIL = 4_000;
@@ -107,8 +105,10 @@ async function runAgent(
 	let text = '';
 	let toolCalls = 0;
 	let stoppedForConfirmation = false;
+	// Per-turn budgets are platform policies (Settings → Policies), read once per turn.
+	const { assistantMaxRounds, assistantMaxToolCalls } = core.policies.get();
 
-	for (let round = 0; round < MAX_ROUNDS; round += 1) {
+	for (let round = 0; round < assistantMaxRounds; round += 1) {
 		const result = await streamChat(config, {
 			model: definition.model ?? config.model,
 			messages,
@@ -132,7 +132,7 @@ async function runAgent(
 		});
 
 		for (const call of result.toolCalls) {
-			if (toolCalls >= MAX_TOOL_CALLS) {
+			if (toolCalls >= assistantMaxToolCalls) {
 				messages.push({
 					role: 'tool',
 					tool_call_id: call.id,

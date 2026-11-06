@@ -143,8 +143,9 @@ default because it would shadow real AWS credentials.
 (default `S3`) and read-write grants on its ready buckets. Attaching restarts the app with the
 scoped key at its next activation; no redeploy is needed.
 
-**Placement (S5).** Attachments to a **private** instance are same-node only, enforced at deploy
-time as for databases. Attachments to a **public** instance work from any node through the public
+**Placement (S5).** Attachments to a **private** instance are same-node today, enforced at deploy
+time as for databases, until cross-node service endpoints ship
+([CLUSTERING.md](./CLUSTERING.md) §4.3). Attachments to a **public** instance work from any node through the public
 URL. That is the first cross-node managed resource, and it's safe because the traffic is
 TLS-authenticated S3, not a raw database port.
 

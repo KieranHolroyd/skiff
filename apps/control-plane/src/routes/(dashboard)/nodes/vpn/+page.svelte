@@ -129,11 +129,11 @@ uname -m && ssh root@${edgeIp} uname -m
 scp root@${edgeIp}:/opt/skiff/current/agent/skiff-agent /tmp/skiff-agent
 sudo install -m 0755 /tmp/skiff-agent /opt/skiff/current/agent/skiff-agent && rm /tmp/skiff-agent`);
 
-	const binaryFromSource = `curl -fsSL https://bun.sh/install | bash
-git clone https://github.com/KieranHolroyd/skiff.git && cd skiff
+	const binaryFromSource = $derived(`curl -fsSL https://bun.sh/install | bash
+git clone https://github.com/${data.sourceRepo}.git && cd skiff
 ~/.bun/bin/bun install --frozen-lockfile
 ~/.bun/bin/bun run --cwd apps/agent build
-sudo install -m 0755 apps/agent/dist/skiff-agent /opt/skiff/current/agent/skiff-agent`;
+sudo install -m 0755 apps/agent/dist/skiff-agent /opt/skiff/current/agent/skiff-agent`);
 
 	const agentEnv = $derived(`sudo tee /etc/skiff/skiff.env >/dev/null <<'EOF'
 NODE_ENV=production

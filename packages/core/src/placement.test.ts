@@ -96,3 +96,92 @@ describe('resolvePlacement', () => {
 		expect(decision.ok).toBe(false);
 	});
 });
+
+describe('placement spec', () => {
+	const edge = node({ id: 'nod_edge', name: 'edge', mode: 'edge', zone: 'cloud-a', roles: ['ingress', 'control', 'compute', 'data'], labels: { 'skiff.io/arch': 'arm64' } });
+	const cloud = node({ id: 'nod_cloud', name: 'cloud-b', zone: 'cloud-b', roles: ['compute', 'data'], labels: { tier: 'critical' }, volumeClasses: ['fast'] });
+	const home = node({ id: 'nod_home', name: 'home', zone: 'home', roles: ['compute', 'data', 'build'], labels: { tier: 'bulk' }, volumeClasses: ['bulk', 'remote'], sliceMemoryMb: 4096 });
+
+	const base = {
+		runtime: 'process' as const,
+		requested: 'auto',
+		memoryMb: 128,
+		edgeNodeId: edge.id,
+		candidates: [edge, cloud, home],
+	};
+
+	test('restricts to a zone', () => {
+		const decision = resolvePlacement({ ...base, spec: { zone: 'home' } });
+		expect(decision).toMatchObject({ ok: true, nodeId: home.id });
+	});
+
+	test('requires every requested role', () => {
+		const decision = resolvePlacement({ ...base, spec: { roles: ['build'] } });
+		expect(decision).toMatchObject({ ok: true, nodeId: home.id });
+	});
+
+	test('matches labels including derived facts', () => {
+		expect(resolvePlacement({ ...base, spec: { labels: { tier: 'critical' } } })).toMatchObject({ ok: true, nodeId: cloud.id });
+		expect(resolvePlacement({ ...base, spec: { labels: { 'skiff.io/arch': 'arm64' } } })).toMatchObject({ ok: true, nodeId: edge.id });
+	});
+
+	test('requires a volume class', () => {
+		expect(resolvePlacement({ ...base, spec: { volumeClass: 'fast' } })).toMatchObject({ ok: true, nodeId: cloud.id });
+	});
+
+	test('spread zones rejects a zone that already holds a replica', () => {
+		expect(resolvePlacement({ ...base, spec: { spread: 'zone' }, replicaZones: ['cloud-b'] })).toMatchObject({
+			ok: true,
+			nodeId: home.id,
+		});
+	});
+
+	test('near is a locality preference, not a hard filter', () => {
+		expect(resolvePlacement({ ...base, spec: { near: 'db_1' }, nearNodeIds: [cloud.id] })).toMatchObject({
+			ok: true,
+			nodeId: cloud.id,
+		});
+	});
+
+	test('names the first failing constraint per node', () => {
+		const decision = resolvePlacement({ ...base, spec: { zone: 'nowhere' } });
+		expect(decision.ok).toBe(false);
+		if (!decision.ok) {
+			expect(decision.message).toContain('matches the placement constraints');
+			expect(decision.rejections?.map((row) => row.reason)).toContain('zone cloud-a is not nowhere');
+		}
+	});
+});
+
+describe('CPU admission', () => {
+	const edge = node({ id: 'nod_edge', name: 'edge', mode: 'edge', cpuBudgetMillis: 2000, reservedCpuMillis: 0 });
+	const cloud = node({ id: 'nod_cloud', name: 'cloud', cpuBudgetMillis: 2000, reservedCpuMillis: 1500 });
+	const free = node({ id: 'nod_free', name: 'free', cpuBudgetMillis: null });
+	const base = {
+		runtime: 'process' as const,
+		requested: 'auto',
+		memoryMb: 128,
+		edgeNodeId: edge.id,
+		candidates: [edge, cloud, free],
+	};
+
+	test('refuses when the CPU reservation would exceed the node budget', () => {
+		const decision = resolvePlacement({ ...base, spec: { node: cloud.id }, cpuMillis: 1000 });
+		expect(decision.ok).toBe(false);
+		if (!decision.ok) expect(decision.message).toContain('CPU budget');
+	});
+
+	test('admits when the request fits', () => {
+		expect(resolvePlacement({ ...base, spec: { node: cloud.id }, cpuMillis: 500 })).toMatchObject({
+			ok: true,
+			nodeId: cloud.id,
+		});
+	});
+
+	test('an uncapped node ignores CPU admission', () => {
+		expect(resolvePlacement({ ...base, spec: { node: free.id }, cpuMillis: 9000 })).toMatchObject({
+			ok: true,
+			nodeId: free.id,
+		});
+	});
+});

@@ -14,11 +14,14 @@ import {
 	ValidationError,
 	type WorkloadActivation,
 	type WorkloadDesired,
+	type WorkloadFunctionFiles,
 } from './validate.ts';
 import type { HelperLogResult, HelperWorkloadStatus, LogReadOptions } from './systemd.ts';
 import { parseStudioPrincipalRequest, STUDIO_PRINCIPAL_USER } from './studio-principal.ts';
 import type { HelperInventory, VerifyResult } from './volumes.ts';
 import { NodeUpdateError, parseNodeUpdateRequest, type NodeUpdateRequest, type NodeUpdateResult } from './node-update.ts';
+import type { WireguardStatus } from './wireguard.ts';
+import type { ShareMount, ShareMountStatus } from './shares.ts';
 
 /**
  * The helper's entire network surface is a fixed set of verbs (slice, apply, status, remove, logs,
@@ -29,9 +32,17 @@ import { NodeUpdateError, parseNodeUpdateRequest, type NodeUpdateRequest, type N
 
 export interface HelperRuntime {
 	ensureSlice(options: { memoryMb: number; cpuWeight?: number }): Promise<void>;
-	apply(workload: WorkloadDesired, activation: WorkloadActivation): Promise<HelperWorkloadStatus>;
+	apply(
+		workload: WorkloadDesired,
+		activation: WorkloadActivation,
+		functionFiles?: WorkloadFunctionFiles,
+	): Promise<HelperWorkloadStatus>;
 	remove(id: string): Promise<void>;
 	status(id: string): Promise<HelperWorkloadStatus>;
+	/** Stop one workload's service; the `.socket` unit keeps listening (FN4). Idempotent. */
+	stop(id: string): Promise<void>;
+	/** Restart a socket-activated workload's service, then its socket (FN5). Idempotent. */
+	restart(id: string): Promise<void>;
 	logs(id: string, options?: LogReadOptions): Promise<HelperLogResult>;
 	/** Remove a purged database's or storage instance's unit and `<stateDir>/<id>` data dir (D59, S8). */
 	purge(id: string): Promise<void>;
@@ -81,11 +92,21 @@ export interface HelperRuntime {
 	verifyVolume(input: { mountPath: string; sourceKey: string }): Promise<VerifyResult>;
 }
 
+export interface WireguardApi {
+	keygen(): Promise<{ publicKey: string }>;
+	apply(state: unknown): Promise<{ peers: number }>;
+	status(): Promise<WireguardStatus>;
+}
+
 export interface HandlerOptions {
 	version: string;
 	maxBodyBytes?: number;
 	/** The signed-release installer behind `POST /v1/node/update` (D99); absent = 404. */
 	nodeUpdate?: { update(request: NodeUpdateRequest): Promise<NodeUpdateResult> };
+	/** Managed overlay verbs (C1); absent on a helper that predates the overlay. */
+	wireguard?: WireguardApi;
+	/** Share mount verbs (C3); absent on a helper that predates cluster shares. */
+	shares?: { mount(share: ShareMount): Promise<ShareMountStatus>; unmount(id: string): Promise<{ id: string; mounted: false }> };
 }
 
 class BodyTooLargeError extends Error {}
@@ -126,6 +147,40 @@ export function createHandler(
 				return json({ ok: true, ...(await options.nodeUpdate.update(input)) });
 			}
 
+			// --- managed overlay (C1): keygen, apply, status; no shell and no passthrough ----
+			if (path.startsWith('/v1/wireguard/')) {
+				if (!options.wireguard) return json({ error: 'wireguard is not available on this helper' }, 404);
+				if (path === '/v1/wireguard/keygen') {
+					if (method !== 'POST') return methodNotAllowed('POST');
+					assertNoVerbInput({ search: url.search, body: await readText(request, maxBodyBytes) });
+					return json({ ok: true, ...(await options.wireguard.keygen()) });
+				}
+				if (path === '/v1/wireguard/apply') {
+					if (method !== 'POST') return methodNotAllowed('POST');
+					const body = assertRecord(await readJson(request, maxBodyBytes), 'request');
+					if (!('state' in body)) throw new ValidationError('state is required');
+					return json({ ok: true, ...(await options.wireguard.apply(body.state)) });
+				}
+				if (path === '/v1/wireguard/status') {
+					if (method !== 'GET') return methodNotAllowed('GET');
+					return json({ ok: true, ...(await options.wireguard.status()) });
+				}
+				return json({ error: 'not_found' }, 404);
+			}
+
+			// --- cluster share mounts (C3): fixed mount/unmount, no shell ---------------------
+			if (path === '/v1/shares/mount' || path === '/v1/shares/unmount') {
+				if (method !== 'POST') return methodNotAllowed('POST');
+				if (!options.shares) return json({ error: 'shares are not available on this helper' }, 404);
+				const body = assertRecord(await readJson(request, maxBodyBytes), 'request');
+				if (path === '/v1/shares/mount') {
+					const share = assertRecord(body.share, 'share') as unknown as ShareMount;
+					return json({ ok: true, share: await options.shares.mount(share) });
+				}
+				const id = assertString(body.id, 'id', { max: 100 });
+				return json({ ok: true, ...(await options.shares.unmount(id)) });
+			}
+
 			// --- native database studio (plan 22): start/stop one fixed unit, nothing else -----
 			if (path === '/v1/studio/start' || path === '/v1/studio/stop') {
 				if (method !== 'POST') return methodNotAllowed('POST');
@@ -159,8 +214,12 @@ export function createHandler(
 
 			if (path === '/v1/workloads') {
 				if (method !== 'POST') return methodNotAllowed('POST');
-				const { workload, activation } = parseApplyRequest(await readJson(request, maxBodyBytes));
-				const status = await runtime.apply(workload, activation);
+				const {
+					workload,
+					activation,
+					function: functionFiles,
+				} = parseApplyRequest(await readJson(request, maxBodyBytes));
+				const status = await runtime.apply(workload, activation, functionFiles);
 				return json({ ok: true, workload: status });
 			}
 
@@ -180,6 +239,20 @@ export function createHandler(
 					return json({ ok: true });
 				}
 				return methodNotAllowed('GET, DELETE');
+			}
+
+			// --- scale to zero and the runaway watchdog (FN4, FN5): fixed-unit lifecycle verbs ---
+			const lifecycleMatch = /^\/v1\/workloads\/([^/]+)\/(stop|restart)$/.exec(path);
+			if (lifecycleMatch) {
+				if (method !== 'POST') return methodNotAllowed('POST');
+				const id = decodeWorkloadId(lifecycleMatch[1]!);
+				assertNoVerbInput({ search: url.search, body: await readText(request, maxBodyBytes) });
+				if (lifecycleMatch[2] === 'stop') {
+					await runtime.stop(id);
+					return json({ ok: true, stopped: id });
+				}
+				await runtime.restart(id);
+				return json({ ok: true, restarted: id });
 			}
 
 			const dumpMatch = /^\/v1\/workloads\/([^/]+)\/dump$/.exec(path);
@@ -360,7 +433,7 @@ export interface RunningHelper {
 export async function startHelperServer(
 	config: HelperConfig,
 	runtime: HelperRuntime,
-	extras: Pick<HandlerOptions, 'nodeUpdate'> = {},
+	extras: Pick<HandlerOptions, 'nodeUpdate' | 'wireguard' | 'shares'> = {},
 ): Promise<RunningHelper> {
 	const directory = dirname(config.socketPath);
 	const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
@@ -429,6 +502,16 @@ async function readJson(request: Request, maxBodyBytes: number): Promise<unknown
 		return JSON.parse(text) as unknown;
 	} catch {
 		throw new ValidationError('Request body must be valid JSON');
+	}
+}
+
+/** One workload id from a path segment: valid URL encoding and a fixed, helper-checked shape. */
+function decodeWorkloadId(raw: string): string {
+	try {
+		return assertId(decodeURIComponent(raw), 'workload id');
+	} catch (error) {
+		if (error instanceof ValidationError) throw error;
+		throw new ValidationError('workload id is not valid URL encoding');
 	}
 }
 

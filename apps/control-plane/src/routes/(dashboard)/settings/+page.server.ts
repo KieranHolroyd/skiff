@@ -1,7 +1,10 @@
+import { fail } from '@sveltejs/kit';
 import { destructivePermissions, statements, type Permission } from '@skiff/contracts';
+import { renameOrganization } from '@skiff/core';
 import { core } from '#lib/server/core.js';
+import { failStatus, formString, toFormFailure } from '../_lib/errors.js';
 import { RESOURCE_LABELS } from './_lib/resources.js';
-import type { PageServerLoad } from './$types';
+import type { Actions, PageServerLoad } from './$types';
 
 function iso(value: unknown): string | null {
 	if (value instanceof Date) return value.toISOString();
@@ -61,6 +64,31 @@ export const load: PageServerLoad = ({ locals }) => {
 		access,
 		heldCount: principal.permissions.size,
 		totalCount: access.reduce((sum, group) => sum + group.actions.length, 0),
-		platformAdmin: principal.platformAdmin === true
+		platformAdmin: principal.platformAdmin === true,
+		/** Owners and admins may rename the org (Better Auth grants both `organization:update`). */
+		canRename:
+			principal.kind === 'user' && (principal.role === 'owner' || principal.role === 'admin')
 	};
+};
+
+export const actions: Actions = {
+	rename: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const input = { name: formString(data, 'name'), slug: formString(data, 'slug') };
+		try {
+			const saved = renameOrganization(core.ctx.sqlite, principal, input);
+			core.ctx.audit.record({
+				principal,
+				action: 'org.rename',
+				resource: 'organization',
+				resourceId: principal.orgId,
+				args: saved,
+				result: 'ok'
+			});
+			return { success: 'Organisation renamed.' };
+		} catch (cause) {
+			return fail(failStatus(cause), toFormFailure(cause));
+		}
+	}
 };

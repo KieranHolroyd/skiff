@@ -1,5 +1,8 @@
 import * as z from 'zod';
 import { nodeStudioDesiredSchema } from './database-studio.ts';
+import { nodeHardwareSchema } from './cluster.ts';
+import { wireguardStateSchema, wireguardStatusSchema } from './overlay.ts';
+import { nodeIdentityCertificateSchema, serviceEndpointSchema, serviceProviderSchema } from './endpoint.ts';
 import { databaseStudioPrincipalResultSchema, databaseStudioPrincipalTaskSchema } from './database-studio-principal.ts';
 import { accessModes, deploymentStatuses, nodeStatuses, runtimes } from './model.ts';
 import { domainKinds } from './domain.ts';
@@ -71,6 +74,28 @@ export const routeSpecSchema = z.object({
 	})).default([]),
 	/** When set, the edge proxies to a worker node instead of serving from local disk. */
 	upstream: z.string().nullable().default(null),
+	/** Several healthy worker upstreams for a multi-node replica set (C4). */
+	upstreams: z.array(z.string()).max(20).optional(),
+	/** Health path used by Caddy's active checks across replicas. */
+	healthPath: z.string().max(200).optional(),
+	/**
+	 * Functions only (D110): static assets are served first from the release, with the workerd
+	 * host as the fallback (and the target for `runWorkerFirst` globs). Present only on the node
+	 * that holds the release; the edge proxies here like any other worker-placed site.
+	 */
+	function: z
+		.object({
+			assetsDirectory: z.string().nullable().default(null),
+			runWorkerFirst: z.array(z.string()).default([]),
+			/**
+			 * Phase 4: every replica socket for this route, in order, when a stateless function
+			 * runs `replicas > 1`. Caddy load-balances across them. Absent for a single host, whose
+			 * `upstream` above is the one target; the edge route never carries `function` and keeps
+			 * using `upstream` as before.
+			 */
+			upstreams: z.array(z.string()).optional(),
+		})
+		.optional(),
 	/**
 	 * True for the `<slug>.<contentDomain>` route that follows the production pointer. Production
 	 * is served through a per-project symlink (promote = symlink swap); previews are rooted
@@ -150,6 +175,12 @@ export const desiredStateSchema = z.object({
 	 * requested is outstanding for this node; the helper verifies the release signature itself.
 	 */
 	nodeUpdate: nodeUpdateTaskSchema.nullable().default(null),
+	/** Managed overlay state for this node (C1); absent on external/pre-C1 nodes. */
+	wireguard: wireguardStateSchema.optional(),
+	/** Consumer-side loopback endpoints for attached remote services (C2). */
+	serviceEndpoints: z.array(serviceEndpointSchema).default([]),
+	/** Provider-side overlay listeners for services this node hosts (C2). */
+	serviceProviders: z.array(serviceProviderSchema).default([]),
 	/** Public storage endpoints this node serves (S3): byte-for-byte proxies, not sites. */
 	storageRoutes: z.array(storageRouteSchema).default([]),
 	/** Purged storage instances whose data dir this node must delete, then report (S8). */
@@ -170,8 +201,9 @@ export type DesiredState = z.infer<typeof desiredStateSchema>;
  * out desired-state work an older agent would drop without a word.
  * - `studio-principal`: applies `databaseStudioPrincipals` (plan 22 track G).
  * - `node-update`: installs `nodeUpdate` through the helper's signed-release verb (D99).
+ * - `functions`: renders and runs `runtime: "function"` workloads (D110).
  */
-export const nodeCapabilities = ['studio-principal', 'node-update'] as const;
+export const nodeCapabilities = ['studio-principal', 'node-update', 'functions'] as const;
 export type NodeCapability = (typeof nodeCapabilities)[number];
 
 export const heartbeatSchema = z.object({
@@ -202,6 +234,12 @@ export const heartbeatSchema = z.object({
 		certs: z.array(z.object({ host: z.string().max(253), notAfter: z.string().max(40) })).max(50),
 	}).partial().optional(),
 	releases: z.array(z.object({ sha256: z.string(), sizeBytes: z.number().int().nonnegative() })).default([]),
+	/** Hardware facts, refreshed at start-up and hourly (CLUSTERING §3.1). */
+	hardware: nodeHardwareSchema.optional(),
+	/** Latest WireGuard peer health, when this node runs a managed overlay (C1). */
+	wireguard: wireguardStatusSchema.optional(),
+	/** Public node certificate for C2 mTLS; the private key never leaves the node. */
+	nodeCertificate: nodeIdentityCertificateSchema.optional(),
 	/** What the node's storage service last applied (D48). */
 	storage: nodeStorageStatusSchema.optional(),
 	/** Mounts and free block devices the node reports for the volume wizard (D72, D80). */
@@ -279,6 +317,48 @@ export const metricBucketSchema = z.object({
 });
 export type MetricBucket = z.infer<typeof metricBucketSchema>;
 
+/**
+ * One Analytics Engine datapoint from a function (docs/FUNCTIONS.md §4.5). `blobs`/`doubles`/
+ * `indexes` are the Workers API arrays; the binding's dataset and the owning project/workload are
+ * attached by the node so the dashboard can group without trusting the worker.
+ */
+export const analyticsEventSchema = z.object({
+	ts: z.number().int().nonnegative(),
+	projectId: z.string().max(100),
+	workloadId: z.string().max(100),
+	dataset: z.string().min(1).max(100),
+	blobs: z.array(z.string().max(16_384)).max(20).default([]),
+	doubles: z.array(z.number()).max(20).default([]),
+	indexes: z.array(z.string().max(1024)).max(20).default([]),
+});
+export type AnalyticsEvent = z.infer<typeof analyticsEventSchema>;
+
+/** One tail-worker item for one function invocation (docs/FUNCTIONS.md §4.5, phase 3). */
+export const functionTailEventSchema = z.object({
+	ts: z.number().int().nonnegative(),
+	projectId: z.string().max(100),
+	workloadId: z.string().max(100),
+	scriptName: z.string().max(200).default(''),
+	outcome: z.string().max(64).default('unknown'),
+	logs: z
+		.array(z.object({ level: z.string().max(16), message: z.string().max(4_096) }))
+		.max(50)
+		.default([]),
+	exceptions: z
+		.array(z.object({ name: z.string().max(200), message: z.string().max(4_096) }))
+		.max(20)
+		.default([]),
+	request: z
+		.object({
+			method: z.string().max(16),
+			url: z.string().max(2_048),
+			status: z.number().int().nonnegative().optional(),
+		})
+		.nullable()
+		.default(null),
+});
+export type FunctionTailEvent = z.infer<typeof functionTailEventSchema>;
+
 export const telemetryBatchSchema = z.object({
 	nodeId: z.string(),
 	buckets: z.array(metricBucketSchema).max(5000).default([]),
@@ -290,6 +370,10 @@ export const telemetryBatchSchema = z.object({
 	objectStorage: z.array(storageMetricBucketSchema).max(5000).default([]),
 	/** Latest per-bucket usage per storage instance. */
 	objectStorageBuckets: z.array(storageBucketSnapshotSchema).max(200).default([]),
+	/** Analytics Engine datapoints written by function bindings (phase 2). */
+	analytics: z.array(analyticsEventSchema).max(5000).default([]),
+	/** Structured tail-worker items from function invocations (phase 3). */
+	tails: z.array(functionTailEventSchema).max(2000).default([]),
 });
 export type TelemetryBatch = z.infer<typeof telemetryBatchSchema>;
 
@@ -304,6 +388,10 @@ export const nodeJoinSchema = z.object({
 	name: z.string().min(1).max(120),
 	publicAddress: z.string().max(253).optional(),
 	version: z.string().max(64).optional(),
+	/** `skiff` asks the control plane for a managed overlay address. */
+	networkMode: z.enum(['skiff', 'external']).default('external'),
+	/** Public key generated by the node's helper; the private key never travels. */
+	wireguardPublicKey: z.string().trim().regex(/^[A-Za-z0-9+/]{43}=$/).optional(),
 });
 export type NodeJoin = z.infer<typeof nodeJoinSchema>;
 

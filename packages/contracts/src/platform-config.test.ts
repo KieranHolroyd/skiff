@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
 	applyPlatformConfig,
 	parsePlatformConfigRequest,
+	parseSmsRecipients,
 	validatePlatformConfigValue,
 	type PlatformConfigRequest,
 } from './platform-config.ts';
@@ -83,6 +84,42 @@ describe('validatePlatformConfigValue', () => {
 		expect(validatePlatformConfigValue('SKIFF_ALERT_WEBHOOK', 'https://user:pw@hooks.example')).not.toBeNull();
 		expect(validatePlatformConfigValue('SKIFF_ALERT_WEBHOOK', 'file:///etc/passwd')).not.toBeNull();
 		expect(validatePlatformConfigValue('SKIFF_ALERT_EMAIL', 'ops@example.com')).toBeNull();
+	});
+
+	test('validates Twilio settings and SMS recipients', () => {
+		const sid = `AC${'0123456789abcdef'.repeat(2)}`;
+		expect(validatePlatformConfigValue('SKIFF_TWILIO_ACCOUNT_SID', sid)).toBeNull();
+		expect(validatePlatformConfigValue('SKIFF_TWILIO_ACCOUNT_SID', `SK${'0'.repeat(32)}`)).not.toBeNull();
+		expect(validatePlatformConfigValue('SKIFF_TWILIO_AUTH_TOKEN', 'f'.repeat(32))).toBeNull();
+		expect(validatePlatformConfigValue('SKIFF_TWILIO_AUTH_TOKEN', 'short')).not.toBeNull();
+		expect(validatePlatformConfigValue('SKIFF_TWILIO_FROM', '+447700900123')).toBeNull();
+		expect(validatePlatformConfigValue('SKIFF_TWILIO_FROM', `MG${'a'.repeat(32)}`)).toBeNull();
+		expect(validatePlatformConfigValue('SKIFF_TWILIO_FROM', 'Skiff')).toBeNull();
+		expect(validatePlatformConfigValue('SKIFF_TWILIO_FROM', 'SkiffAlertsX1')).not.toBeNull(); // > 11 chars
+		expect(validatePlatformConfigValue('SKIFF_TWILIO_FROM', '12345')).not.toBeNull(); // needs a letter
+		expect(validatePlatformConfigValue('SKIFF_TWILIO_FROM', '07700900123')).not.toBeNull();
+
+		expect(validatePlatformConfigValue('SKIFF_ALERT_SMS', '+447700900123')).toBeNull();
+		expect(validatePlatformConfigValue('SKIFF_ALERT_SMS', '+447700900123, +15005550006')).toBeNull();
+		expect(validatePlatformConfigValue('SKIFF_ALERT_SMS', '07700900123')).toContain('07700900123');
+		expect(validatePlatformConfigValue('SKIFF_ALERT_SMS', '+447700900123,+447700900123')).not.toBeNull();
+		expect(validatePlatformConfigValue('SKIFF_ALERT_SMS', ' , ')).not.toBeNull();
+		const six = Array.from({ length: 6 }, (_, i) => `+4477009001${i}0`).join(',');
+		expect(validatePlatformConfigValue('SKIFF_ALERT_SMS', six)).not.toBeNull();
+		expect(parseSmsRecipients(' +447700900123 ,,+15005550006 ')).toEqual(['+447700900123', '+15005550006']);
+	});
+
+	test('the sms section is all-or-nothing', () => {
+		const env = new Map<string, string>();
+		const parsed = parsePlatformConfigRequest({
+			...base,
+			action: 'configure',
+			section: 'sms',
+			set: { SKIFF_TWILIO_FROM: 'Skiff' },
+		});
+		if (!parsed.ok || parsed.request.action !== 'configure') throw new Error('expected a configure request');
+		const request = parsed.request;
+		expect(() => applyPlatformConfig(env, request)).toThrow(/incomplete sms settings/);
 	});
 });
 

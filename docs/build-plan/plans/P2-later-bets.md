@@ -7,10 +7,8 @@ numbered plan when demand is proven and the P0/P1 layer is boring.
 
 ## P2.1 Read replicas and HA
 
-**Why:** Render, Fly, Supabase, and Northflank offer read replicas/HA. **Why not yet:** it multiplies
-the operational promise before backups and pooling are stable. **Shape:** a streaming replica on a
-second node, a read-only URL, lag metrics, and a manual promote; automatic failover is a separate,
-much larger project. **Depends on:** 01, 03, 04, 10. **Effort:** L.
+Promoted to [CLUSTERING.md](../../CLUSTERING.md) (D107): Postgres replicas, read URLs, lag,
+manual promote and switchover are phase C7, and automatic failover is C8 (§9).
 
 ## P2.2 Database branching/clone as a resource
 
@@ -65,7 +63,8 @@ If per-database PgBouncer sidecars consume too much memory at density, replace t
 node-level pooler with per-database pools. Measure first; keep the per-DB path for isolation.
 **Depends on:** 03. **Effort:** M.
 
-## P2.10 Reserved: multi-node workload scheduling
+## P2.10 Multi-node workload placement
 
-Not a goal. Keep manual placement, vertical resize, and single-node replicas. Revisit only if a
-design partner needs active-active, which conflicts with one control plane + SQLite.
+Promoted to [CLUSTERING.md](../../CLUSTERING.md) (D107): hardware-aware placement (H0), multi-node
+replicas with health-checked load balancing and opt-in failover (H4). It stays a one-shot
+placement at deploy time, not a continuously rebalancing scheduler.

@@ -134,8 +134,21 @@ class FakeHost implements Host {
 	/** Reason the next failing canary reports (overridable to simulate updater-caused failures). */
 	canaryReason = 'migration 0003 failed';
 	/** The release-owned canary hook: the real prepareScratch, with chown recorded instead of run. */
-	releaseHook = async (_release: string, hook: string, args: string[]): Promise<HookOutcome> => {
+	/** What the release's `protocol` hook advertises (default: a release from before `converge`). */
+	hooks = ['canary'];
+	/** `converge` hook outcome for releases that advertise it. */
+	convergeMode: 'ok' | 'error' = 'ok';
+	legacySetups = 0;
+	legacyHostSetup = async () => void this.legacySetups++;
+	releaseHook = async (release: string, hook: string, args: string[]): Promise<HookOutcome> => {
 		if (this.hookMode === 'absent') return { kind: 'absent' };
+		if (hook === 'protocol') return { kind: 'verdict', verdict: { protocol: 1, ok: true, step: 'protocol', hooks: this.hooks } };
+		if (hook === 'prepare' || hook === 'converge') {
+			const mode = args.includes('--mode') ? ` ${args[args.indexOf('--mode') + 1]}` : '';
+			this.calls.push(`hook ${hook} ${basename(release)}${mode}`);
+			if (hook === 'converge' && this.convergeMode === 'error') return { kind: 'error', reason: 'converge hook exited 70 without a verdict' };
+			return { kind: 'verdict', verdict: { protocol: 1, ok: true, step: hook, changed: ['helper'], warnings: [] } };
+		}
 		this.calls.push(`hook ${hook}`);
 		if (this.hookMode === 'error') return { kind: 'error', reason: 'canary hook timed out after 240s' };
 		const scratch = args[args.indexOf('--scratch') + 1]!;
@@ -995,5 +1008,72 @@ describe('signed release artifacts', () => {
 		host.qualifyUpdater = async () => ({ ok: true });
 		expect((await updater.update()).status).toBe('updated');
 		expect(basename(readLink(join(layout.updaterDir, 'current'))!)).toBe('2.1.0+abc123');
+	});
+});
+
+describe('host convergence (release-owned units)', () => {
+	const NEW_RELEASE = '20261103120001-aaaaaaaaaaaa';
+
+	test('a release with hooks prepares before its canary and converges before its services restart', async () => {
+		const bg = new BlueGreenHost();
+		bg.running = basename(original);
+		bg.hooks = ['canary', 'prepare', 'converge'];
+		const result = await new Updater(layout, bg).update();
+		expect(result.status).toBe('updated');
+		// The serving release is converged first, then the new one is prepared before it boots.
+		expect(bg.calls.slice(0, 2)).toEqual([`hook prepare ${basename(original)}`, `hook converge ${basename(original)} update`]);
+		const prepare = bg.calls.indexOf(`hook prepare ${NEW_RELEASE}`);
+		expect(prepare).toBeGreaterThan(1);
+		expect(prepare).toBeLessThan(bg.calls.indexOf('hook canary'));
+		// Commit: the new release's units are written before the primary restarts on it.
+		const converge = bg.calls.indexOf(`hook converge ${NEW_RELEASE} update`);
+		const primaryRestart = bg.calls.lastIndexOf(`start ${CONTROL_PLANE}`);
+		expect(converge).toBeGreaterThan(bg.calls.indexOf(`start ${STANDBY}`));
+		expect(converge).toBeLessThan(primaryRestart);
+		// The release owns the helper: stage-0's own copy is never rendered over it.
+		expect(bg.calls).not.toContain('ensure-helper');
+		expect(bg.legacySetups).toBe(0);
+	});
+
+	test('a release without the hook gets the built-in helper install and legacy host setup', async () => {
+		const result = await new Updater(layout, host).update();
+		expect(result.status).toBe('updated');
+		expect(host.calls).toContain('ensure-helper');
+		expect(host.calls.some((call) => call.startsWith('hook converge'))).toBe(false);
+		expect(host.legacySetups).toBe(1);
+	});
+
+	test('a converge hook that fails falls back to the built-in helper install and still updates', async () => {
+		host.hooks = ['canary', 'prepare', 'converge'];
+		host.convergeMode = 'error';
+		const result = await new Updater(layout, host).update();
+		expect(result.status).toBe('updated');
+		expect(host.calls).toContain(`hook converge ${NEW_RELEASE} update`);
+		expect(host.calls).toContain('ensure-helper');
+		expect(host.logs.some((line) => line.includes('converge hook failed'))).toBe(true);
+	});
+
+	test('rollback converges the previous release without moving data stores backwards', async () => {
+		host.hooks = ['canary', 'prepare', 'converge'];
+		const updater = new Updater(layout, host);
+		await updater.update();
+		host.calls = [];
+		expect((await updater.rollback()).status).toBe('rolled-back');
+		expect(host.calls).toContain(`hook converge ${basename(original)} rollback`);
+		expect(host.calls.indexOf(`hook converge ${basename(original)} rollback`)).toBeLessThan(host.calls.indexOf(`start ${CONTROL_PLANE}`));
+	});
+
+	test('an update that finds nothing newer still converges the serving release', async () => {
+		host.hooks = ['canary', 'prepare', 'converge'];
+		host.version = '0.1.0';
+		expect((await new Updater(layout, host).update()).status).toBe('up-to-date');
+		expect(host.calls).toEqual([`hook prepare ${basename(original)}`, `hook converge ${basename(original)} update`]);
+	});
+
+	test('a dry run converges nothing', async () => {
+		host.hooks = ['canary', 'prepare', 'converge'];
+		expect((await new Updater(layout, host).update({ dryRun: true })).status).toBe('dry-run');
+		expect(host.calls).toEqual([]);
+		expect(host.legacySetups).toBe(0);
 	});
 });

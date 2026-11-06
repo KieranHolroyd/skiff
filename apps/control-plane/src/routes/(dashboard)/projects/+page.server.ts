@@ -9,6 +9,9 @@ export const load: PageServerLoad = ({ locals, url }) => {
 	// Old links opened a template dialog here; templates now have their own pages.
 	const template = url.searchParams.get('template');
 	if (template !== null) redirect(307, template ? `/new/${encodeURIComponent(template)}` : '/new');
+	// Functions are their own product (D110): list and create them under /functions.
+	if (url.searchParams.get('runtime') === 'function')
+		redirect(307, url.searchParams.get('new') === '1' ? '/functions/new' : '/functions');
 	const view =
 		url.searchParams.get('view') === 'trash' ? ('trash' as const) : ('projects' as const);
 	let capacity: Awaited<ReturnType<typeof core.workloads.capacity>> = [];
@@ -42,8 +45,10 @@ export const load: PageServerLoad = ({ locals, url }) => {
 	return {
 		view,
 		templates,
-		projects: core.projects.list(principal),
-		trash: core.projects.list(principal, { onlyDeleted: true }),
+		projects: core.projects.list(principal).filter((project) => project.runtime !== 'function'),
+		trash: core.projects
+			.list(principal, { onlyDeleted: true })
+			.filter((project) => project.runtime !== 'function'),
 		capacity,
 		actions,
 		activeBulk
@@ -79,6 +84,8 @@ export const actions: Actions = {
 		}
 		if (!(runtimes as readonly string[]).includes(values.runtime)) {
 			fieldErrors.runtime = 'Choose a valid runtime.';
+		} else if (values.runtime === 'function') {
+			fieldErrors.runtime = 'Create functions from Functions → New function.';
 		}
 		if (!values.placement) fieldErrors.placement = 'Choose a placement.';
 
@@ -117,7 +124,7 @@ export const actions: Actions = {
 		}
 
 		return {
-			success: `“${slug}” moved to the trash. It is kept for 7 days before permanent deletion.`
+			success: `“${slug}” moved to the trash. It is kept for ${core.policies.get().trashDays} days before permanent deletion.`
 		};
 	},
 

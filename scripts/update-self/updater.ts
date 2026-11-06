@@ -209,6 +209,11 @@ export interface Host {
 	 * binary cannot be validated or Caddy does not come back (after restoring the old binary).
 	 */
 	ensureCaddy?(release: string): boolean;
+	/**
+	 * Host setup stage-0 does itself when the serving release predates the `converge` hook (today:
+	 * keep an installed telemetry store current). Releases with the hook own all of it.
+	 */
+	legacyHostSetup?(): Promise<void>;
 	isActive(unit: string): Promise<boolean>;
 	/** systemd NRestarts (automatic restarts since the last manual start). */
 	restartCount(unit: string): Promise<number>;
@@ -388,6 +393,8 @@ const DEFAULTS = {
 	bakeMs: 60_000,
 	bakeEveryMs: 1_000,
 	hookTimeoutMs: 240_000,
+	/** `converge` may download a ClickHouse or workerd pin (hundreds of MB). */
+	convergeTimeoutMs: 900_000,
 };
 
 /** The release could not be judged (hook crashed, timed out, gave no verdict). Never blocklists. */
@@ -402,11 +409,86 @@ interface VerifiedRelease {
 
 export class Updater {
 	private snapshotKeep = 3;
+	private readonly hookCache = new Map<string, Set<string>>();
 
 	constructor(
 		private readonly layout: Layout,
 		private readonly host: Host,
 	) {}
+
+	// ------------------------------------------------------- host convergence
+
+	/** Hooks `release` implements, from its `protocol` hook (cached; none when it has no hooks). */
+	async releaseHooks(release: string): Promise<Set<string>> {
+		const cached = this.hookCache.get(release);
+		if (cached) return cached;
+		let hooks = new Set<string>();
+		if (this.host.releaseHook) {
+			const outcome = await this.host.releaseHook(release, 'protocol', [], 60_000);
+			if (outcome.kind === 'verdict') hooks = new Set(Array.isArray(outcome.verdict.hooks) ? outcome.verdict.hooks : ['canary']);
+		}
+		this.hookCache.set(release, hooks);
+		return hooks;
+	}
+
+	/**
+	 * Whether `release` installs its own units, helper and host commands (`converge` hook). When
+	 * it does, the stage-0 updater must not render them from its own, possibly older, templates.
+	 */
+	async releaseOwnsHost(release: string): Promise<boolean> {
+		return (await this.releaseHooks(release)).has('converge');
+	}
+
+	/**
+	 * Additive skiff.env defaults `release` needs before it first boots (canary, standby). The
+	 * running release keeps serving with them, so the hook only ever adds settings.
+	 */
+	private async prepareHost(release: string): Promise<void> {
+		if (!(await this.releaseHooks(release)).has('prepare')) return;
+		await this.runHostHook(release, 'prepare', ['--release', release]);
+	}
+
+	/**
+	 * Make everything outside the release (units, the helper binary, host commands, workerd, the
+	 * telemetry store) match `release`, with that release's own code, before its services restart.
+	 * A release without the hook (or one whose hook fails) gets the built-in helper install.
+	 * `rollback` never moves version-pinned data stores backwards.
+	 */
+	private async convergeHost(release: string, mode: 'update' | 'rollback'): Promise<void> {
+		if ((await this.releaseOwnsHost(release)) && (await this.runHostHook(release, 'converge', ['--release', release, '--mode', mode]))) return;
+		this.host.ensureHelper(release);
+	}
+
+	/** Run a host hook; true when it reported. Its failed steps are warnings, never fatal. */
+	private async runHostHook(release: string, hook: 'prepare' | 'converge', args: string[]): Promise<boolean> {
+		const { host } = this;
+		try {
+			const outcome = await host.releaseHook!(release, hook, args, DEFAULTS.convergeTimeoutMs);
+			if (outcome.kind !== 'verdict') {
+				host.warn(`${basename(release)}'s ${hook} hook ${outcome.kind === 'error' ? `failed: ${outcome.reason}` : 'is missing'}`);
+				return false;
+			}
+			const { changed = [], warnings = [] } = outcome.verdict;
+			for (const warning of warnings) host.warn(`${hook}: ${warning}`);
+			host.log(changed.length ? `${hook}: updated ${changed.join(', ')}` : `${hook}: host already matches ${basename(release)}`);
+			return true;
+		} catch (error) {
+			host.warn(`${basename(release)}'s ${hook} hook failed: ${message(error)}`);
+			return false;
+		}
+	}
+
+	/**
+	 * Bring the host in line with the release that is serving now. Run at the start of an update,
+	 * so a release committed by an older stage-0 (which knew nothing of `converge`) still gets its
+	 * units. False when the release predates host hooks: the caller keeps its legacy setup.
+	 */
+	async syncHost(): Promise<boolean> {
+		const current = readLink(this.layout.currentLink);
+		if (!current || !(await this.releaseOwnsHost(current))) return false;
+		await this.prepareHost(current);
+		return this.runHostHook(current, 'converge', ['--release', current, '--mode', 'update']);
+	}
 
 	// ---------------------------------------------------------------- update
 
@@ -417,6 +499,9 @@ export class Updater {
 			const { host, layout } = this;
 			const current = readLink(layout.currentLink);
 			if (!current) throw new UpdateError(`No active release at ${layout.currentLink}. Run the installer first.`);
+			// Heal drift, and finish the host side of a release an older stage-0 committed without
+			// knowing about `converge`. Every update run does it, even one that finds nothing newer.
+			if (!options.dryRun && !(await this.syncHost())) await host.legacyHostSetup?.();
 			const currentMeta = readMeta(current);
 			const repo = options.repo ?? currentMeta.repo ?? DEFAULT_REPO;
 			const ref = options.ref ?? trackedRef(currentMeta) ?? DEFAULT_REF;
@@ -512,6 +597,9 @@ export class Updater {
 				);
 			}
 			for (const warning of stagedPreflight.warnings) host.warn(`preflight: ${warning}`);
+
+			// Settings the new release needs before it first boots (the canary reads skiff.env too).
+			await this.prepareHost(release);
 
 			// 2. Boot it in isolation against a copy of the live database, judged by its own hook.
 			if (options.canary !== false) {
@@ -863,8 +951,9 @@ export class Updater {
 			host.log(`${layout.currentLink} -> ${release}`);
 			this.backfillCaddy(current, release);
 
-			// The helper binary lives outside releases; install this release's copy before restart.
-			host.ensureHelper(release);
+			// Units, the helper binary and host commands live outside releases; the release installs
+			// its own before its services restart.
+			await this.convergeHost(release, 'update');
 			await host.start(CONTROL_PLANE);
 			await host.restart(HELPER);
 			host.ensureCaddy?.(release);
@@ -1005,7 +1094,7 @@ export class Updater {
 			setLink(layout.currentLink, release);
 			host.log(`${layout.currentLink} -> ${release}`);
 			this.backfillCaddy(current, release);
-			host.ensureHelper(release);
+			await this.convergeHost(release, 'update');
 			await this.restartPrimaryBehindStandby();
 			const primary = await host.probe!('primary', healthTimeout);
 			if (!primary.ok) return await fail('commit', `the primary did not come up on the new release: ${primary.reason}`);
@@ -1089,8 +1178,10 @@ export class Updater {
 					setLink(layout.previousLink, sw.previousBefore);
 				else rmSync(layout.previousLink, { force: true });
 				host.log(`${layout.currentLink} -> ${sw.from}`);
+				await this.convergeHost(sw.from, 'rollback');
+			} else {
+				host.ensureHelper(sw.from);
 			}
-			host.ensureHelper(sw.from);
 			if (sw.mode === 'overlap') {
 				if (stage === 'standby') {
 					// Traffic never moved; the primary never stopped.
@@ -1284,7 +1375,7 @@ export class Updater {
 				setLink(layout.currentLink, previous);
 				setLink(layout.previousLink, current);
 				host.log(`${layout.currentLink} -> ${previous}`);
-				host.ensureHelper(previous);
+				await this.convergeHost(previous, 'rollback');
 				await host.start(CONTROL_PLANE);
 				await host.restart(HELPER);
 				host.ensureCaddy?.(previous);
@@ -1392,7 +1483,7 @@ export class Updater {
 			if (sw.previousBefore && existsSync(sw.previousBefore) && sw.previousBefore !== sw.from)
 				setLink(layout.previousLink, sw.previousBefore);
 			else rmSync(layout.previousLink, { force: true });
-			host.ensureHelper(sw.from);
+			await this.convergeHost(sw.from, 'rollback');
 			await host.start(CONTROL_PLANE);
 			await host.restart(HELPER);
 			host.ensureCaddy?.(sw.from);
@@ -1452,7 +1543,7 @@ export class Updater {
 				return;
 			}
 			if (readLink(layout.currentLink) === sw.to) {
-				host.ensureHelper(sw.to);
+				await this.convergeHost(sw.to, sw.kind === 'rollback' ? 'rollback' : 'update');
 				if (!(await host.isActive(CONTROL_PLANE))) await host.start(CONTROL_PLANE);
 				await host.restart(HELPER).catch(() => undefined);
 				host.ensureCaddy?.(sw.to);

@@ -41,6 +41,8 @@ import { TRIGGER_PATH_UNIT, triggerUnits, updateCommandScript } from '../update-
 import { controlPlaneUnits, DEFAULT_CONTROL_PLANE_PATHS, GUARD_UNIT } from '../systemd/control-plane.ts';
 import { CONFIG_COMMAND, CONFIG_PATH_UNIT, CONFIG_SERVICE_UNIT, ensurePlatformConfigUnits } from '../platform-config/units.ts';
 import { readEnvFile, writeEnvFile } from './env-file.ts';
+import { ensureVapidKeys } from '../../packages/contracts/src/vapid.ts';
+import { ensureWorkerd, pinnedWorkerdVersion, workerdArch } from './workerd.ts';
 import { checkDns, digLookup, dnsTargets, parseServerAddresses, resolverLookup, type DnsResult } from './dns-check.ts';
 import {
 	CONTROL_SOCKET,
@@ -53,6 +55,8 @@ import { BUILDER_UNIT, ensureBuilder, linkAgentCommands } from '../systemd/build
 import { HELPER_UNIT, ensureHelper } from '../systemd/helper.ts';
 import { ensureStorageUnits, STORAGE_PATH_UNIT } from '../systemd/storage.ts';
 import { STUDIO_UNIT, studioUnit } from '../systemd/studio.ts';
+import { agentUnit, CADDY_ACCESS_LOG, detectCaddyAdminSocket } from '../systemd/agent.ts';
+import { CLI_COMMANDS, ensureHostCommands, RELEASE_COMMANDS } from './commands.ts';
 import { CLICKHOUSE_UNIT, clickhouseInstalled, ensureClickHouse, removeClickHouseUnit } from '../systemd/clickhouse.ts';
 import {
 	createUpgradeSnapshotBundle,
@@ -70,10 +74,8 @@ const SYSTEMD_DIR = process.env.SKIFF_SYSTEMD_DIR ?? '/etc/systemd/system';
 const BUN_BIN = process.env.SKIFF_BUN_BIN ?? join(OPT_DIR, 'runtime', 'bin', 'bun');
 const ENV_FILE = join(ETC_DIR, 'skiff.env');
 const AGENT_ENV_FILE = join(ETC_DIR, 'agent.env');
-const CADDY_ACCESS_LOG = '/var/log/caddy/skiff-access.log';
 const MASTER_KEY_FILE = join(ETC_DIR, 'master.key');
 const SETUP_TOKEN_FILE = join(ETC_DIR, 'setup-token');
-const CLI_COMMANDS = ['/usr/local/bin/skif', '/usr/local/bin/skiff'];
 
 /** The platform version is the repository-root VERSION file (semver); skiff-update-self compares it. */
 function sourceVersion(): string {
@@ -590,7 +592,7 @@ function installPodman(): void {
 	else if (missing.length) log(color.yellow(`warning: not available on this release: ${missing.join(', ')}`));
 }
 
-function preflight(): void {
+async function preflight(): Promise<void> {
 	step('Preflight');
 	if (process.platform !== 'linux') fail('Skiff installs on Linux only.');
 	if (process.getuid?.() !== 0) fail('Run the installer as root (curl … | sudo sh).');
@@ -611,6 +613,31 @@ function preflight(): void {
 
 	installPrerequisites();
 
+	if (!options.noAgent) {
+		// Functions run on a pinned workerd binary (docs/FUNCTIONS.md FN1). Install it now, outside
+		// the runtime, so a function host never fetches its runtime while serving. A download
+		// failure is a warning: the FUNCTIONS flag is off by default and the operator can install
+		// the same pin later.
+		const workerdArchitecture = workerdArch(process.arch);
+		if (!workerdArchitecture) fail(`Unsupported architecture for workerd: ${process.arch}`);
+		try {
+			const version = pinnedWorkerdVersion(SOURCE);
+			await ensureWorkerd({
+				version,
+				arch: workerdArchitecture,
+				dryRun: options.dryRun,
+				log,
+			});
+			log(`workerd ${version} ready in /usr/lib/skiff/workerd`);
+		} catch (error) {
+			log(
+				color.yellow(
+					`warning: could not install the pinned workerd binary (${error instanceof Error ? error.message : String(error)}); ` +
+						'Functions stay unavailable until it is installed',
+				),
+			);
+		}
+	}
 	if (!options.noAgent) {
 		if (!capture('sh', ['-c', 'command -v podman']))
 			log(
@@ -715,6 +742,8 @@ function writeSecrets(): Map<string, string> {
 	env.set('BETTER_AUTH_SECRET', existing.get('BETTER_AUTH_SECRET') ?? base64(48));
 	env.set('SKIFF_SITE_COOKIE_SECRET', existing.get('SKIFF_SITE_COOKIE_SECRET') ?? base64(32));
 	env.set('SKIFF_OBJECT_STORE_SECRET', existing.get('SKIFF_OBJECT_STORE_SECRET') ?? base64(32));
+	// Web Push alerts (D108): kept across re-runs, since a new pair orphans every subscribed device.
+	if (ensureVapidKeys(env)) log('generated the Web Push (VAPID) key pair');
 	env.set('SKIFF_DAILY_BACKUPS', '1');
 	// Remembered so a later re-run/upgrade keeps them without repeating the flags.
 	if (options.tls) env.set('SKIFF_ACME_EMAIL', options.acmeEmail);
@@ -832,60 +861,7 @@ function writeUnits(release: string): void {
 		envFile: ENV_FILE,
 		masterKeyFile: MASTER_KEY_FILE,
 	});
-	const agent = `[Unit]
-Description=Skiff node agent
-After=network-online.target caddy.service
-Wants=network-online.target
-ConditionPathExists=${AGENT_ENV_FILE}
-StartLimitIntervalSec=60
-StartLimitBurst=5
-
-[Service]
-Type=simple
-User=skiff
-Group=skiff
-SupplementaryGroups=caddy
-UMask=0007
-WorkingDirectory=${OPT_DIR}/current/agent
-EnvironmentFile=${ENV_FILE}
-EnvironmentFile=-${AGENT_ENV_FILE}
-Environment=SKIFF_AGENT_SOCKET=${RUN_DIR}/agent.sock
-Environment=SKIFF_CADDY_ADMIN_SOCKET=${detectCaddyAdminSocket()}
-Environment=SKIFF_CADDY_ACCESS_LOG=${CADDY_ACCESS_LOG}
-ExecStart=${OPT_DIR}/current/agent/skiff-agent
-Restart=on-failure
-RestartSec=2
-TimeoutStopSec=20
-KillSignal=SIGTERM
-LimitNOFILE=65535
-TasksMax=128
-MemoryMax=192M
-NoNewPrivileges=yes
-PrivateTmp=yes
-PrivateDevices=yes
-ProtectSystem=strict
-ProtectHome=yes
-ProtectClock=yes
-ProtectHostname=yes
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectKernelLogs=yes
-ProtectControlGroups=yes
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
-RestrictNamespaces=yes
-RestrictRealtime=yes
-RestrictSUIDSGID=yes
-LockPersonality=yes
-SystemCallArchitectures=native
-SystemCallFilter=@system-service io_uring_setup io_uring_enter io_uring_register
-SystemCallErrorNumber=EPERM
-CapabilityBoundingSet=
-AmbientCapabilities=
-ReadWritePaths=${VAR_DIR} ${RUN_DIR}
-
-[Install]
-WantedBy=multi-user.target
-`;
+	const agent = agentUnit({ optDir: OPT_DIR, etcDir: ETC_DIR, varDir: VAR_DIR, runDir: RUN_DIR });
 	if (options.dryRun) {
 		log(`would write ${Object.keys(controlUnits).join(', ')}, skiff-agent.service and ${STUDIO_UNIT}`);
 		return;
@@ -917,14 +893,6 @@ WantedBy=multi-user.target
 		run: (cmd) => void run(cmd[0]!, cmd.slice(1), { allowFailure: true }),
 		log,
 	});
-}
-
-function detectCaddyAdminSocket(): string {
-	const candidates = ['/var/lib/caddy/admin.sock', '/run/caddy/admin.sock', '/etc/caddy/admin.sock'];
-	for (const candidate of candidates) if (existsSync(candidate)) return candidate;
-	const caddyfile = capture('sh', ['-c', 'grep -E "^[[:space:]]*admin[[:space:]]+" /etc/caddy/Caddyfile | head -1']) ?? '';
-	const match = /admin\s+unix\/(\/[^\s]+)/.exec(caddyfile);
-	return match?.[1] ?? '/var/lib/caddy/admin.sock';
 }
 
 /**
@@ -999,59 +967,11 @@ function installCliCommands(): void {
 		log(`would install ${CLI_COMMANDS.join(', ')}`);
 		return;
 	}
-	const script = `#!/bin/sh
-# Installed by the Skiff installer: the skif CLI from the active Skiff release.
-for release in ${OPT_DIR}/current ${OPT_DIR}/previous; do
-	if [ -f "$release/cli/skif.js" ]; then
-		exec ${BUN_BIN} "$release/cli/skif.js" "$@"
-	fi
-done
-echo "skif: no release under ${OPT_DIR} ships the CLI; re-run the installer" >&2
-exit 1
-`;
-	for (const path of CLI_COMMANDS) {
-		mkdirSync(dirname(path), { recursive: true });
-		writeFileSync(`${path}.tmp`, script, { mode: 0o755 });
-		chmodSync(`${path}.tmp`, 0o755);
-		renameSync(`${path}.tmp`, path);
-		log(`installed ${path}`);
-	}
+	ensureHostCommands({ optDir: OPT_DIR, bunBin: BUN_BIN }, { log });
 }
 
-/** Host commands that always run a script from the active release (falling back to `previous`). */
-const RELEASE_COMMANDS: Array<{ path: string; script: string; runner: 'sh' | 'bun' }> = [
-	{ path: '/usr/local/sbin/skiff-restore', script: 'repo/scripts/restore.sh', runner: 'sh' },
-	{ path: '/usr/local/sbin/skiff-restore-drill', script: 'repo/scripts/skiff-restore-drill.sh', runner: 'sh' },
-	{ path: '/usr/local/sbin/skiff-alert', script: 'repo/scripts/skiff-alert.ts', runner: 'bun' },
-	{ path: '/usr/local/sbin/skiff-recovery-kit', script: 'repo/scripts/recovery-kit.ts', runner: 'bun' },
-];
 const BACKUP_UNITS = ['skiff-litestream.service', 'skiff-restore-drill.service', 'skiff-restore-drill.timer', 'skiff-alert@.service'];
 const LITESTREAM_CONFIG = join(ETC_DIR, 'litestream.yml');
-
-function installReleaseCommands(): void {
-	if (options.dryRun) {
-		log(`would install ${RELEASE_COMMANDS.map((c) => c.path).join(', ')}`);
-		return;
-	}
-	for (const command of RELEASE_COMMANDS) {
-		const exec = command.runner === 'sh' ? `/bin/sh "$release/${command.script}"` : `${BUN_BIN} "$release/${command.script}"`;
-		const script = `#!/bin/sh
-# Installed by the Skiff installer: runs ${command.script} from the active Skiff release.
-for release in ${OPT_DIR}/current ${OPT_DIR}/previous; do
-	if [ -f "$release/${command.script}" ]; then
-		exec ${exec} "$@"
-	fi
-done
-echo "${basename(command.path)}: no release under ${OPT_DIR} ships ${command.script}; re-run the installer" >&2
-exit 1
-`;
-		mkdirSync(dirname(command.path), { recursive: true });
-		writeFileSync(`${command.path}.tmp`, script, { mode: 0o755 });
-		chmodSync(`${command.path}.tmp`, 0o755);
-		renameSync(`${command.path}.tmp`, command.path);
-		log(`installed ${command.path}`);
-	}
-}
 
 /**
  * Backups (DESIGN §10): Litestream → R2 plus the monthly restore drill, both alerting through
@@ -1403,7 +1323,7 @@ function snapshotDatabase(dbPath: string, destination: string): void {
 async function install(): Promise<void> {
 	if (!options.upgrade) await promptOptions();
 	resolveDomains();
-	preflight();
+	await preflight();
 	if (!options.upgrade) await verifyDns();
 	ensureUsersAndDirs();
 	const env = writeSecrets();
@@ -1444,8 +1364,8 @@ async function install(): Promise<void> {
 		release = buildRelease(env);
 		switchCurrent(release);
 		installUpdateCommand();
+		// skif/skiff plus the operator scripts (skiff-restore, skiff-alert, …).
 		installCliCommands();
-		installReleaseCommands();
 		writeUnits(release);
 		await installClickHouse();
 		startServices();

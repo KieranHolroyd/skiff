@@ -4,8 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { eq } from 'drizzle-orm';
 import { createDb, nodes } from '@skiff/db';
+import { workloadReplicaId, workloadSpecSchema } from '@skiff/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
+import { upstreamFor } from './workloads.ts';
 import { LocalObjectStore } from './object-store.ts';
 import type { Core } from './index.ts';
 
@@ -245,3 +247,30 @@ describe('tier 2 workloads', () => {
 function workoutId(state: Awaited<ReturnType<Core['nodes']['desiredState']>>): string {
 	return state.workloads[0]!.id;
 }
+
+describe('workload upstreams', () => {
+	const fnSpec = workloadSpecSchema.parse({
+		runtime: 'function',
+		function: {
+			main: 'index.js',
+			modules: [{ name: 'index.js', type: 'esm', sha256: 'a'.repeat(64) }],
+			compatibilityDate: '2026-10-01',
+			compatibilityFlags: [],
+			bindings: [],
+			triggers: { crons: [] },
+			assets: null,
+			idleStopSeconds: 300,
+			workerdVersion: '1.20261106.1',
+		},
+	});
+
+	test('a function socket is named after the desired-state id, one per replica', () => {
+		expect(upstreamFor(workloadReplicaId('wld_1', 0), fnSpec)).toBe('unix//run/skiff-workloads/wld_1.sock');
+		expect(upstreamFor(workloadReplicaId('wld_1', 2), fnSpec)).toBe('unix//run/skiff-workloads/wld_1-r2.sock');
+	});
+
+	test('a process socket keeps the project id it has always used', () => {
+		const processSpec = workloadSpecSchema.parse({ runtime: 'process', command: ['bun', 'run', 'start'] });
+		expect(upstreamFor('prj_1', processSpec)).toBe('unix//run/skiff-workloads/prj_1.sock');
+	});
+});

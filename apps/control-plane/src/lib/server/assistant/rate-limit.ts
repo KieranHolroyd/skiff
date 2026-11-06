@@ -5,13 +5,16 @@
  */
 
 const WINDOW_MS = 60_000;
-const MAX_PER_WINDOW = 12;
 const buckets = new Map<string, number[]>();
 
-export function allowAssistantTurn(key: string): { ok: true } | { ok: false; retryAfter: number } {
+/** `maxPerMinute` is the `assistantTurnsPerMinute` platform policy (Settings → Policies). */
+export function allowAssistantTurn(
+	key: string,
+	maxPerMinute: number
+): { ok: true } | { ok: false; retryAfter: number } {
 	const now = Date.now();
 	const recent = (buckets.get(key) ?? []).filter((at) => now - at < WINDOW_MS);
-	if (recent.length >= MAX_PER_WINDOW) {
+	if (recent.length >= maxPerMinute) {
 		const oldest = recent[0] ?? now;
 		return { ok: false, retryAfter: Math.max(1, Math.ceil((WINDOW_MS - (now - oldest)) / 1000)) };
 	}

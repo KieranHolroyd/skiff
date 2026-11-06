@@ -36,13 +36,9 @@ export type AppVolumeRow = typeof appVolumes.$inferSelect;
 export type AppVolumeAttachmentRow = typeof appVolumeAttachments.$inferSelect;
 
 const MB = 1024 * 1024;
-const DAY_MS = 86_400_000;
 /** Disk admission reserves at most this share of the free space. */
 export const DISK_ADMISSION_NUMERATOR = 9;
 export const DISK_ADMISSION_DENOMINATOR = 10;
-/** Soft-deleted volumes keep their data for seven days. */
-export const APP_VOLUME_TRASH_DAYS = 7;
-
 export interface DiskAdmissionInput {
 	/** The new volume's quota, in megabytes. */
 	requestMb: number;
@@ -318,10 +314,10 @@ export class AppVolumeService {
 			.get();
 		if (attached)
 			throw new ConflictError(
-				`Volume "${name}" is still attached. Detach it before deleting; its data is kept for ${APP_VOLUME_TRASH_DAYS} days.`,
+				`Volume "${name}" is still attached. Detach it before deleting; its data is kept for ${this.ctx.policies.get().trashDays} days.`,
 			);
 		const now = this.ctx.now();
-		const purgeAt = now + APP_VOLUME_TRASH_DAYS * DAY_MS;
+		const purgeAt = now + this.ctx.policies.trashMs();
 		this.ctx.db
 			.update(appVolumes)
 			.set({ deletedAt: now, purgeAt, status: 'deleting', updatedAt: now })

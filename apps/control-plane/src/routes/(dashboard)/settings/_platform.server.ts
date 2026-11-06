@@ -119,7 +119,9 @@ export function queueConfig(locals: App.Locals, body: Body, success: string) {
 					? 'platform.telemetry'
 					: body.action === 'domains'
 						? 'platform.domains'
-						: 'platform.restoreDrill';
+						: body.action === 'push-keys'
+							? 'platform.pushKeys'
+							: 'platform.restoreDrill';
 	try {
 		const requestId = submitConfigRequest(principal, body);
 		core.ctx.audit.record({

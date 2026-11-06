@@ -59,6 +59,16 @@ describe('parseArgs', () => {
 		expect(() => parseArgs(['--no-project'], spec)).toThrow('only valid for boolean');
 	});
 
+	test('a literal no- flag wins over negating another flag', () => {
+		const deploySpec = {
+			wrangler: { type: 'string' },
+			'no-wrangler': { type: 'boolean' },
+		} satisfies FlagSpec;
+		const args = parseArgs(['--no-wrangler', '--wrangler', 'wrangler.jsonc'], deploySpec);
+		expect(args.boolean('no-wrangler')).toBe(true);
+		expect(args.string('wrangler')).toBe('wrangler.jsonc');
+	});
+
 	test('collects every value of a multiple string flag', () => {
 		const multi = { bucket: { type: 'string', short: 'b', multiple: true }, project: { type: 'string' } } as const;
 		const args = parseArgs(['--bucket', 'a', '-b', 'b:read', '--bucket=c', '--project', 'x', '--project', 'y'], multi);

@@ -9,8 +9,17 @@
  *
  *   protocol                       print the protocol version and supported hooks
  *   canary --release R --scratch S --db D [--env-file F] [--master-key K] [--origin O]
+ *   prepare --release R            additive skiff.env defaults, before the release first boots
+ *   converge --release R [--mode update|rollback]
+ *                                  units, helper, host commands, workerd, ClickHouse: make the
+ *                                  host match R (scripts/release/converge.ts)
+ *
+ * `prepare` and `converge` always report ok:true; failed steps are listed in `warnings`.
  */
 import { HOOK_PROTOCOL, runCanary, type HookVerdict } from './canary.ts';
+
+/** Hooks this release implements, advertised by `protocol` so stage-0 only calls what exists. */
+export const HOOKS = ['canary', 'prepare', 'converge'] as const;
 
 export const RESULT_PREFIX = 'SKIFF_HOOK_RESULT ';
 
@@ -29,7 +38,7 @@ function option(argv: string[], name: string, fallback?: string): string {
 async function main(argv: string[]): Promise<number> {
 	const hook = argv.shift();
 	if (hook === 'protocol') {
-		emit({ protocol: HOOK_PROTOCOL, ok: true, step: 'protocol', hooks: ['canary'] });
+		emit({ protocol: HOOK_PROTOCOL, ok: true, step: 'protocol', hooks: [...HOOKS] });
 		return 0;
 	}
 	if (hook === 'canary') {
@@ -43,6 +52,18 @@ async function main(argv: string[]): Promise<number> {
 			origin: option(argv, '--origin', '') || null,
 		});
 		emit(verdict);
+		return 0;
+	}
+	if (hook === 'prepare' || hook === 'converge') {
+		const release = option(argv, '--release');
+		const log = (message: string) => console.log(message);
+		const mode = option(argv, '--mode', 'update');
+		if (mode !== 'update' && mode !== 'rollback') throw new Error(`--mode must be update or rollback (got ${mode})`);
+		// Loaded on demand so the canary never depends on the host-setup modules.
+		const { convergeHost, prepareHost } = await import('./converge.ts');
+		const report = hook === 'prepare' ? await prepareHost({ release, log }) : await convergeHost({ release, mode, log });
+		for (const warning of report.warnings) console.error(`warning: ${warning}`);
+		emit({ protocol: HOOK_PROTOCOL, ok: true, step: hook, changed: report.changed, warnings: report.warnings });
 		return 0;
 	}
 	console.error(`skiff-release: unknown hook ${hook ?? '(none)'}`);
