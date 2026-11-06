@@ -339,6 +339,19 @@ export interface ProcessUnitOptions {
 	volumeMounts?: UnitVolumeMount[];
 }
 
+/**
+ * Tie a socket-activated service to its own `.socket`. Without `Requires=`, `systemctl restart
+ * <service>` (apply, the watchdog, `Restart=on-failure`) starts the service alone: it gets no
+ * listening fd (workerd exits with "--socket-fd=http=3: File descriptor is not open"), and the
+ * socket then refuses to start because its service is already active. With it, starting the
+ * service brings the socket up first, and restarting the socket restarts the service with the fd.
+ * Stopping the service (scale to zero) leaves the socket listening.
+ */
+function socketDependencyLines(id: string): string[] {
+	const socket = socketUnitName(id);
+	return [`Requires=${socket}`, `After=${socket}`];
+}
+
 export function renderProcessUnit(options: ProcessUnitOptions): string {
 	const { workload } = options;
 	const lines: string[] = [];
@@ -348,6 +361,7 @@ export function renderProcessUnit(options: ProcessUnitOptions): string {
 	lines.push('Documentation=https://github.com/kieranholroyd/private-cloud-deploys/blob/main/docs/DESIGN.md');
 	lines.push('After=network-online.target');
 	lines.push('Wants=network-online.target');
+	if (workload.socketActivation) lines.push(...socketDependencyLines(workload.id));
 	lines.push('StartLimitIntervalSec=60');
 	lines.push('StartLimitBurst=10');
 	lines.push('');
@@ -466,6 +480,8 @@ export function renderFunctionUnit(options: FunctionUnitOptions): string {
 	lines.push('Documentation=https://github.com/kieranholroyd/private-cloud-deploys/blob/main/docs/DESIGN.md');
 	lines.push('After=network-online.target');
 	lines.push('Wants=network-online.target');
+	// workerd is always socket-activated: without the inherited fd it exits at once.
+	lines.push(...socketDependencyLines(workload.id));
 	lines.push('StartLimitIntervalSec=60');
 	lines.push('StartLimitBurst=10');
 	lines.push('');

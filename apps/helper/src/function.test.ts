@@ -470,6 +470,9 @@ describe('renderFunctionUnit', () => {
 		const lines = unit.split('\n');
 
 		expect(lines).toContain(`ExecStart=${workerdPath} serve %d/function-config --socket-fd http=3`);
+		// Without these a plain `systemctl restart` starts workerd with no fd 3 and it exits.
+		expect(lines).toContain(`Requires=skiff-workload-${workload.id}.socket`);
+		expect(lines).toContain(`After=skiff-workload-${workload.id}.socket`);
 		expect(lines).toContain(`LoadCredential=function-config:${configPath}`);
 		expect(lines).toContain(`LoadCredential=function-shim:${shimPath}`);
 		expect(lines).toContain(

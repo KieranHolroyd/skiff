@@ -105,6 +105,20 @@ describe('process unit', () => {
 		expect(unit).toContain('ExecStart="/opt/app/server"');
 		expect(unit).toContain('[Install]');
 		expect(unit).toContain('WantedBy=multi-user.target');
+		expect(unit).not.toContain('Requires=skiff-workload-');
+	});
+
+	test('a socket-activated service requires and orders after its own socket', () => {
+		const unit = renderProcessUnit({
+			workload: workload({ socketActivation: true }),
+			releaseDir: '/srv/skiff/releases/' + SHA,
+			envFile: '/run/skiff-workloads/wld_abc123/env',
+			secrets: [],
+			command: ['/opt/app/server'],
+			envNames: [],
+		});
+		expect(unit).toContain('Requires=skiff-workload-wld_abc123.socket');
+		expect(unit).toContain('After=skiff-workload-wld_abc123.socket');
 	});
 
 	test('file secrets go through LoadCredential and NAME_FILE', () => {
