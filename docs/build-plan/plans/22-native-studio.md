@@ -10,10 +10,10 @@ registry, the shipped DBGate studio (06-database-studio.md) for its session mode
 `apps/control-plane/src/routes/(dashboard)/databases/[name]/studio/**`,
 `apps/control-plane/src/lib/studio/**` (new), `packages/core/src/databases.ts` (console section)
 
-> **Status (6 Nov 2026):** Phases 1 and 2 (plugins) are built behind `SKIFF_FEATURE_DB_STUDIO`
-> (default off). All four plugins pass the conformance suite against real containers. Next:
-> the Phase 2 UI tracks (E, F), then track G (read-only principals) and Phase 3. See "Phase 1 as
-> built" and "Phase 2 plugins as built".
+> **Status (6 Nov 2026):** Phases 1 and 2 (plugins and UI) are built behind
+> `SKIFF_FEATURE_DB_STUDIO` (default off). Every plugin passes the conformance suite against real
+> containers. The UI is checked against mocked studio calls, not yet end to end on a node. Next:
+> track G (read-only principals), a live run on a node, then Phase 3 cutover.
 
 ## Goal
 
@@ -496,6 +496,28 @@ one session.
   `postgresHealthProbe` in `tests/e2e/lib/containers.ts` can hang without a timeout.
 - **Unix socket paths over about 104 bytes fail on macOS.** Production uses
   `/run/skiff/studio.sock`.
+
+## Phase 2 UI as built (6 Nov 2026)
+
+Monaco is the editor (user's choice). It is dynamically imported on the studio route only.
+Everything lives under `apps/control-plane/src/lib/studio/`; the contracts between the pieces
+are in `ui-types.ts`.
+
+| Track | What | Where |
+|---|---|---|
+| E | The route page is thin. Shell: session header (badge, expiry, enable writes, close), lazy filterable object tree with keyboard navigation, tab strip saved per database. `StudioGrid`: virtualised on both axes, resizable columns, cell editors by kind that keep `$t` tags, cell inspector, pending-changes tray building `RowChange`s with originals, conflict marking. Relational workspace: filter builder, multi-column sort, cursor paging, editing, structure (columns, indexes, FK links, DDL) | `shell/`, `grid/`, `workspaces/RelationalWorkspace.svelte` |
+| F | `StudioEditor` (Monaco: `pgsql`/`mysql`, `json` with a Mongo command schema, a Monarch `skiff-redis`), lazy completion from `tree`/`describe` with alias resolution, run-selection, error markers. `QueryTab`: one result tab per statement, Stop, Explain plan tree, CSV/JSON export, max-rows; IndexedDB history (last 200, no results stored) | `editor/`, `query/`, `completion.ts`, `history.ts` |
+| G | Document workspace: EJSON filter, sort, table/JSON views, top-level `$set` edits with originals, insert, delete, indexes, sampled schema with type shares, "Partially applied" notice. Key-value workspace: MATCH/TYPE key list with "Load more", inline string/TTL edits, add key, per-type key detail (string/hash/list/set/zset/stream) with in-key edits, full-value load, console | `workspaces/DocumentWorkspace.svelte`, `workspaces/KeyValueWorkspace.svelte`, `document/`, `keyvalue/` |
+
+Integration changes:
+
+- `StudioGridProps` gained `sort`/`onsort`, and `onrowactivate`, which clicking a row number
+  calls. It opens a key's detail.
+- The new-query shortcut is ⌘/Ctrl+Alt+N, because browsers keep ⌘/Ctrl+Shift+N for a private
+  window.
+
+Not yet verified: a live session through agent and studio process with real data, Stop and
+abort against a real query, IndexedDB in a browser, and the light/dark editor theme switch.
 
 ## Implementation order
 
