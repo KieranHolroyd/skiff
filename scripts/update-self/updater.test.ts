@@ -121,7 +121,7 @@ class FakeHost implements Host {
 	warn = (text: string) => void this.logs.push(`WARN ${text}`);
 	now = () => new Date((this.clock += 1000));
 	sleep = async () => {};
-	resolveCommit = async () => this.commit;
+	resolveCommit: Host['resolveCommit'] = async () => this.commit;
 	readVersionFile = async () => this.version;
 	phase = (phase: string) => void this.phases.push(phase);
 	fetchSource = async (_repo: string, _commit: string, dest: string) => writeRepo(dest, this.migrations);
@@ -936,7 +936,27 @@ describe('signed release artifacts', () => {
 		const result = await new Updater(layout, host).update();
 		expect(result).toMatchObject({ status: 'updated', version: '0.2.0' });
 		expect(host.calls).not.toContain('build');
-		expect(readMeta(readLink(layout.currentLink)!)).toMatchObject({ source: 'artifact', ref: 'v0.2.0', commit: NEW, status: 'active' });
+		expect(readMeta(readLink(layout.currentLink)!)).toMatchObject({ source: 'artifact', ref: 'main', tag: 'v0.2.0', commit: NEW, status: 'active' });
+	});
+
+	test('a source build after an artifact install tracks the branch, not the installed tag', async () => {
+		publish();
+		expect((await new Updater(layout, host).update()).status).toBe('updated');
+		const asked: string[] = [];
+		host.resolveCommit = async (_repo: string, ref: string) => (asked.push(ref), NEWER);
+		host.version = '0.3.0\n';
+		const result = await new Updater(layout, host).update({ source: 'source' });
+		expect(asked).toEqual(['main']);
+		expect(result).toMatchObject({ status: 'updated', version: '0.3.0', fromVersion: '0.2.0' });
+	});
+
+	test('a legacy artifact meta that recorded the tag as its ref falls back to the default branch', async () => {
+		writeFileSync(join(original, 'meta.json'), JSON.stringify({ commit: OLD, version: '0.1.0', source: 'artifact', ref: 'v0.1.0', repo: 'owner/skiff' }));
+		const asked: string[] = [];
+		host.resolveCommit = async (_repo: string, ref: string) => (asked.push(ref), NEW);
+		const check = await new Updater(layout, host).check({ source: 'source' });
+		expect(asked).toEqual(['main']);
+		expect(check).toMatchObject({ ref: 'main', version: '0.2.0', available: true });
 	});
 
 	test('a manifest signed by an untrusted key is refused and not held against the release', async () => {

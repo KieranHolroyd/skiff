@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { BUILD_VERSION } from './build-version.ts';
 import { assertAbsolutePath } from './validate.ts';
 
 /**
@@ -47,6 +48,13 @@ export interface HelperConfig {
 	controlSocketGroup: string | null;
 	/** Advertised helper version. */
 	version: string;
+	/** Binaries the `node/update` verb replaces (D99). */
+	nodeUpdate: {
+		agentBinary: string;
+		helperBinary: string;
+		releaseLink: string;
+		workDir: string;
+	};
 	/** Root-owned control socket directory. */
 	socketDirMode: number;
 }
@@ -143,8 +151,6 @@ export function loadHelperConfig(env: Env = process.env): HelperConfig {
 	if (socketPath.startsWith(`${runtimeDir}/`))
 		throw new HelperConfigError('SKIFF_HELPER_SOCKET must not live inside the workload runtime dir');
 
-	let version = optional(env, 'SKIFF_HELPER_VERSION', '0.1.0').trim();
-	if (!version) version = '0.1.0';
 
 	return {
 		socketPath,
@@ -174,7 +180,14 @@ export function loadHelperConfig(env: Env = process.env): HelperConfig {
 			optional(env, 'SKIFF_HELPER_CONTROL_SOCKET_GROUP', 'skiff'),
 			'SKIFF_HELPER_CONTROL_SOCKET_GROUP',
 		),
-		version,
+		// Embedded at build time, never configurable: it must name the binary that is running (D99).
+		version: BUILD_VERSION,
+		nodeUpdate: {
+			agentBinary: absolute(env, 'SKIFF_HELPER_AGENT_BINARY', '/opt/skiff/current/agent/skiff-agent'),
+			helperBinary: absolute(env, 'SKIFF_HELPER_SELF_BINARY', '/opt/skiff/helper/skiff-helper'),
+			releaseLink: absolute(env, 'SKIFF_HELPER_RELEASE_LINK', '/opt/skiff/current'),
+			workDir: absolute(env, 'SKIFF_HELPER_UPDATE_DIR', '/var/lib/skiff-helper/node-update'),
+		},
 		socketDirMode: 0o750,
 	};
 }

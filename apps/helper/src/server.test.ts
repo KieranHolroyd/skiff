@@ -541,7 +541,7 @@ describe('helper HTTP surface', () => {
 			expect((await fs.stat(config.socketPath)).mode & 0o777).toBe(0o660);
 			const response = await fetch('http://localhost/healthz', { unix: config.socketPath });
 			expect(response.status).toBe(200);
-			expect(await response.json()).toEqual({ ok: true, version: '0.1.0' });
+			expect(await response.json()).toEqual({ ok: true, version: config.version });
 		} finally {
 			await helper.stop();
 		}

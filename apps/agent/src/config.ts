@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { BUILD_VERSION } from './build-version.ts';
 
 /**
  * Agent runtime configuration. Everything comes from the process environment so the compiled
@@ -280,7 +281,8 @@ export function loadConfig(env: Env = process.env): AgentConfig {
 		dataDir,
 		storageStateFile: optional(env, 'SKIFF_STORAGE_STATE_FILE', '/etc/skiff/storage.json'),
 		storageRequestFile: optional(env, 'SKIFF_STORAGE_REQUEST_FILE', '/run/skiff/storage.request'),
-		agentVersion: optional(env, 'SKIFF_AGENT_VERSION', '0.1.0'),
+		// Embedded at build time, never from env: an env file outlives the binary it described (D99).
+		agentVersion: BUILD_VERSION,
 		caddyAdminSocket: optional(env, 'SKIFF_CADDY_ADMIN_SOCKET', '/var/lib/caddy/admin.sock'),
 		caddyListen,
 		agentSocket: optional(env, 'SKIFF_AGENT_SOCKET', '/run/skiff-agent/agent.sock'),

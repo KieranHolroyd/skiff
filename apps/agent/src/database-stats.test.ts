@@ -96,6 +96,7 @@ class FakePostgres {
 
 	connector = (options: SqlConnectOptions): SqlClient => {
 		this.connects.push(options);
+		let adminQueries = 0;
 		return {
 			query: async (text: string, params: unknown[] = []) => {
 				if (this.refuse.has(options.username))
@@ -103,6 +104,9 @@ class FakePostgres {
 				this.queries.push({ user: options.username, text, params });
 				if (options.database === 'pgbouncer') {
 					if (this.failPooler) throw new Error('pooler admin is down');
+					// Like PgBouncer with Bun's client: a second command on one admin connection is
+					// rejected (Bun sends a Flush the admin console does not accept).
+					if (++adminQueries > 1) throw new Error('unsupported packet type for admin console: 72');
 					if (text === POOLER_POOLS_SQL) return this.poolRows;
 					if (text === POOLER_STATS_SQL) return this.poolStatsRows;
 					return [];

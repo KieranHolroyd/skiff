@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { BUILD_VERSION } from './build-version.ts';
 import { HelperConfigError, loadHelperConfig } from './config.ts';
 
 describe('loadHelperConfig', () => {
@@ -32,7 +33,6 @@ describe('loadHelperConfig', () => {
 			SKIFF_HELPER_WORKLOAD_SOCKET_GROUP: 'caddy',
 			SKIFF_HELPER_CONTROL_SOCKET_MODE: '0600',
 			SKIFF_HELPER_CONTROL_SOCKET_GROUP: 'skiff-agent',
-			SKIFF_HELPER_VERSION: '9.9.9',
 			SKIFF_HELPER_APPARMOR_PROFILE: 'unconfined',
 		});
 		expect(config.socketPath).toBe('/run/custom/helper.sock');
@@ -42,7 +42,7 @@ describe('loadHelperConfig', () => {
 		expect(config.workloadSocketGroup).toBe('caddy');
 		expect(config.controlSocketMode).toBe('0600');
 		expect(config.controlSocketGroup).toBe('skiff-agent');
-		expect(config.version).toBe('9.9.9');
+		expect(config.version).toBe(BUILD_VERSION);
 		expect(config.apparmorProfile).toBe('unconfined');
 	});
 

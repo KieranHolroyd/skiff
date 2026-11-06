@@ -46,6 +46,11 @@ export interface ReleaseManifest {
 	hookProtocol: number;
 	/** Keyed by platform, e.g. `linux-amd64`. */
 	artifacts: Record<string, ManifestArtifact>;
+	/**
+	 * Worker bundles (`skiff-node-<v>-<platform>.tar.gz`: `skiff-agent` + `skiff-helper` only), keyed
+	 * by platform, for dashboard node updates (D99). Absent from releases that predate them.
+	 */
+	nodeArtifacts?: Record<string, ManifestArtifact>;
 }
 
 export class SignatureError extends Error {}

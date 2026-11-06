@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { BUILD_VERSION } from './build-version.ts';
 import { nodeJoinSchema, type NodeJoin } from '@skiff/contracts';
 import { atomicWriteFile } from './state.ts';
 
@@ -101,7 +102,7 @@ export function parseJoinArgs(args: string[], env: Env = process.env): JoinOptio
 		token,
 		name,
 		dataDir: dataDir.replace(/\/+$/, '') || '/',
-		version: env.SKIFF_AGENT_VERSION?.trim() || '0.1.0',
+		version: env.SKIFF_AGENT_VERSION?.trim() || BUILD_VERSION,
 		...(publicAddress ? { publicAddress } : {}),
 	};
 }

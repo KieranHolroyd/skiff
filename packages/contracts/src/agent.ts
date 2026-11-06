@@ -81,6 +81,16 @@ export const routeSpecSchema = z.object({
 });
 export type RouteSpec = z.infer<typeof routeSpecSchema>;
 
+/** A requested agent/helper update (D99): `generation` changes on every request, including retries. */
+export const nodeUpdateTaskSchema = z.object({
+	generation: z.number().int().positive(),
+	/** Semantic version of the signed release to install, without the `v`. */
+	version: z.string().regex(/^\d+\.\d+\.\d+$/),
+	/** GitHub repository the signed release is published in (`owner/name`). */
+	repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/),
+});
+export type NodeUpdateTask = z.infer<typeof nodeUpdateTaskSchema>;
+
 export const desiredStateSchema = z.object({
 	version: z.number().int(),
 	nodeId: z.string(),
@@ -135,6 +145,11 @@ export const desiredStateSchema = z.object({
 	studio: nodeStudioDesiredSchema.nullable().default(null),
 	/** Internal gateway route the control plane uses to reach the node's studio front (D96). */
 	databaseGateway: storageGatewaySchema.default({ listen: null, routes: [] }),
+	/**
+	 * Install this signed release's agent and helper (D99). Present while an update an operator
+	 * requested is outstanding for this node; the helper verifies the release signature itself.
+	 */
+	nodeUpdate: nodeUpdateTaskSchema.nullable().default(null),
 	/** Public storage endpoints this node serves (S3): byte-for-byte proxies, not sites. */
 	storageRoutes: z.array(storageRouteSchema).default([]),
 	/** Purged storage instances whose data dir this node must delete, then report (S8). */
@@ -154,8 +169,9 @@ export type DesiredState = z.infer<typeof desiredStateSchema>;
  * Capabilities an agent build declares in its heartbeat. Add one whenever the control plane hands
  * out desired-state work an older agent would drop without a word.
  * - `studio-principal`: applies `databaseStudioPrincipals` (plan 22 track G).
+ * - `node-update`: installs `nodeUpdate` through the helper's signed-release verb (D99).
  */
-export const nodeCapabilities = ['studio-principal'] as const;
+export const nodeCapabilities = ['studio-principal', 'node-update'] as const;
 export type NodeCapability = (typeof nodeCapabilities)[number];
 
 export const heartbeatSchema = z.object({
@@ -211,6 +227,14 @@ export const heartbeatSchema = z.object({
 	databaseCredentialResults: z.array(databaseCredentialResultSchema).max(50).optional(),
 	/** Outcomes of `databaseStudioPrincipals` since the last heartbeat. */
 	databaseStudioPrincipalResults: z.array(databaseStudioPrincipalResultSchema).max(50).optional(),
+	/**
+	 * A `nodeUpdate` generation that failed. Success needs no report: the restarted agent's
+	 * `agentVersion` is the proof (D99).
+	 */
+	nodeUpdateResult: z.object({
+		generation: z.number().int().positive(),
+		error: z.string().max(2_000),
+	}).optional(),
 	/** Database ids whose pooler restart the node completed. */
 	databasePoolerRestarted: z.array(z.string()).max(50).optional(),
 	/**

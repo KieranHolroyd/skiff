@@ -35,7 +35,10 @@ export interface CoreConfig {
 	objectStoreSecret: string;
 	/** Prevents duplicate deploys of the same artifact within one project. */
 	dedupeWindowSeconds?: number;
+	/** Agent version nodes should run: the control plane's own release version (D99). */
 	desiredAgentVersion?: string;
+	/** GitHub repository signed releases are published in (`owner/name`), for node updates (D99). */
+	releaseRepo?: string;
 	email?: EmailTransport;
 	notifiers?: Notifier[];
 	/** Injected clock for tests. */
@@ -97,6 +100,7 @@ export function coreConfigFromEnv(overrides: Partial<CoreConfig> & Pick<CoreConf
 		siteCookieSecret,
 		objectStoreSecret,
 		desiredAgentVersion: overrides.desiredAgentVersion ?? env.SKIFF_AGENT_VERSION ?? '0.1.0',
+		releaseRepo: overrides.releaseRepo ?? env.SKIFF_REPO ?? 'KieranHolroyd/skiff',
 		edgeNodeId: overrides.edgeNodeId ?? env.SKIFF_EDGE_NODE_ID,
 		storageGatewayPort:
 			overrides.storageGatewayPort ?? positiveInteger(env.SKIFF_STORAGE_GATEWAY_PORT, 8081),

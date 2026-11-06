@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { BUILD_VERSION } from './build-version.ts';
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -27,7 +28,7 @@ describe('loadConfig', () => {
 		const config = loadConfig({ ...base });
 		expect(config.controlUrl).toBe('https://cloud.example.com');
 		expect(config.dataDir).toBe('/var/lib/skiff-agent');
-		expect(config.agentVersion).toBe('0.1.0');
+		expect(config.agentVersion).toBe(BUILD_VERSION);
 		expect(config.caddyAdminSocket).toBe('/var/lib/caddy/admin.sock');
 		expect(config.caddyListen).toEqual([':443', ':80']);
 		expect(config.agentSocket).toBe('/run/skiff-agent/agent.sock');

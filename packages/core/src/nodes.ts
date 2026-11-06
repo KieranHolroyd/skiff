@@ -18,7 +18,9 @@ import {
 import {
 	canAdministerPlatform,
 	canViewPlatform,
+	compareSemver,
 	contentUrl,
+	parseSemver,
 	nodeStorageStatusSchema,
 	nodeUpdateSchema,
 	workloadSpecSchema,
@@ -27,6 +29,7 @@ import {
 	type NodeStorageStatus,
 	type Heartbeat,
 	type NodeUpdate,
+	type NodeUpdateTask,
 	type Principal,
 	type RouteSpec,
 } from '@skiff/contracts';
@@ -69,8 +72,23 @@ export interface NodeView {
 	storage: NodeStorage & { status: NodeStorageStatus | null };
 	/** Volume new managed instances use when they name none (D74). */
 	defaultVolumeId: string | null;
+	/** Capabilities from the last heartbeat (`nodeCapabilities`); empty for older agents. */
+	capabilities: string[];
+	/** Outstanding or failed dashboard update (D99); null when none. */
+	update: NodeUpdateView | null;
 	createdAt: string;
 }
+
+export interface NodeUpdateView {
+	version: string;
+	requestedAt: string | null;
+	/** `pending` until the agent reports `version`; `failed` once the node reported an error. */
+	status: 'pending' | 'failed';
+	error: string | null;
+}
+
+/** A requested node update counts as stale (shown as "no response") after this long. */
+export const NODE_UPDATE_STALE_MS = 15 * 60 * 1000;
 
 /** Desired-state reconciliation for nodes (DESIGN §3.3, D23). Agents pull; the control plane never pushes. */
 export class NodeService {
@@ -96,8 +114,120 @@ export class NodeService {
 				status: storageStatus(row.storageStatusJson),
 			},
 			defaultVolumeId: row.defaultVolumeId,
+			capabilities: capabilities(row.capabilitiesJson),
+			update: row.updateVersion
+				? {
+						version: row.updateVersion,
+						requestedAt: row.updateRequestedAt ? new Date(row.updateRequestedAt).toISOString() : null,
+						status: row.updateFailedGeneration >= row.updateGeneration ? 'failed' : 'pending',
+						error: row.updateError,
+					}
+				: null,
 			createdAt: new Date(row.createdAt).toISOString(),
 		};
+	}
+
+	/**
+	 * Ask a node to install the control plane's own signed release (D99). This only records desired
+	 * state: the agent picks it up on its next pull and hands the version to the helper's fixed
+	 * `node/update` verb, which verifies the release signature before it replaces anything. Asking
+	 * again after a failure is a retry (a new generation).
+	 */
+	requestUpdate(principal: Principal, nodeId: string): NodeView {
+		this.assertPlatformAdmin(principal);
+		const node = this.ctx.db.select().from(nodes).where(eq(nodes.id, nodeId)).get();
+		if (!node) throw new NotFoundError('Node');
+		const target = parseSemver(this.ctx.config.desiredAgentVersion)?.version;
+		if (!target)
+			throw new ConflictError(
+				`The control plane's version (${this.ctx.config.desiredAgentVersion ?? 'unknown'}) is not a release version, so there is no signed release to install.`,
+			);
+		const running = parseSemver(node.agentVersion);
+		if (running && compareSemver(running, target) >= 0)
+			throw new ConflictError(`"${node.name}" already runs ${running.version}.`);
+		if (!capabilities(node.capabilitiesJson).includes('node-update'))
+			throw new ConflictError(
+				`"${node.name}" runs an agent (${node.agentVersion ?? 'unknown version'}) that cannot update itself yet. Update it by hand once (docs/OPS.md "Updating worker nodes"); later updates work from here.`,
+			);
+		const now = this.ctx.now();
+		const generation = node.updateGeneration + 1;
+		this.ctx.db
+			.update(nodes)
+			.set({
+				updateVersion: target,
+				updateGeneration: generation,
+				updateRequestedAt: now,
+				updateError: null,
+				updatedAt: now,
+			})
+			.where(eq(nodes.id, nodeId))
+			.run();
+		this.ctx.audit.record({
+			principal,
+			action: 'node.update_agent',
+			resource: 'node',
+			resourceId: nodeId,
+			args: { from: node.agentVersion, to: target, generation },
+			result: 'ok',
+		});
+		this.bump();
+		return this.view({
+			...node,
+			updateVersion: target,
+			updateGeneration: generation,
+			updateRequestedAt: now,
+			updateError: null,
+			updatedAt: now,
+		});
+	}
+
+	/** The update this node should run now, or null (none requested, done, or already failed). */
+	private updateTaskFor(node: typeof nodesTable.$inferSelect): NodeUpdateTask | null {
+		if (!node.updateVersion || node.updateFailedGeneration >= node.updateGeneration) return null;
+		return {
+			generation: node.updateGeneration,
+			version: node.updateVersion,
+			repo: this.ctx.config.releaseRepo ?? 'KieranHolroyd/skiff',
+		};
+	}
+
+	/**
+	 * Settle an outstanding update from a heartbeat: the reported version proves success; a failure
+	 * report for the current generation stops the task until an operator retries.
+	 */
+	private settleUpdate(
+		node: typeof nodesTable.$inferSelect,
+		agentVersion: string,
+		result: Heartbeat['nodeUpdateResult'],
+	): Partial<typeof nodesTable.$inferInsert> {
+		if (!node.updateVersion) return {};
+		const running = parseSemver(agentVersion);
+		if (running && compareSemver(running, node.updateVersion) >= 0) {
+			this.ctx.audit.record({
+				action: 'node.update_agent.done',
+				resource: 'node',
+				resourceId: node.id,
+				args: { version: running.version, generation: node.updateGeneration },
+				result: 'ok',
+			});
+			return { updateVersion: null, updateError: null, updateRequestedAt: null };
+		}
+		if (
+			result &&
+			result.generation === node.updateGeneration &&
+			node.updateFailedGeneration < node.updateGeneration
+		) {
+			this.ctx.audit.record({
+				action: 'node.update_agent.done',
+				resource: 'node',
+				resourceId: node.id,
+				args: { version: node.updateVersion, generation: result.generation },
+				result: 'error',
+				error: result.error,
+			});
+			return { updateFailedGeneration: result.generation, updateError: result.error };
+		}
+		return {};
 	}
 
 	/**
@@ -229,6 +359,7 @@ export class NodeService {
 				agentVersion: input.agentVersion,
 				// An agent that predates capabilities declares none, so work it would ignore is refused.
 				capabilitiesJson: JSON.stringify(input.capabilities ?? []),
+				...this.settleUpdate(node, input.agentVersion, input.nodeUpdateResult),
 				lastHeartbeatAt: now,
 				statsJson: input.stats ? JSON.stringify(input.stats) : node.statsJson,
 				storageStatusJson: input.storage ? JSON.stringify(input.storage) : node.storageStatusJson,
@@ -808,6 +939,7 @@ export class NodeService {
 			version: this.stateVersion(),
 			nodeId: node.id,
 			agentVersion: this.ctx.config.desiredAgentVersion ?? '0.1.0',
+			nodeUpdate: this.updateTaskFor(node),
 			generatedAt: new Date(now).toISOString(),
 			contentDomain: this.ctx.config.contentDomain,
 			platformOrigin: this.ctx.config.platformOrigin,
@@ -863,4 +995,9 @@ function isWorkerProject(project: { runtime: string; workloadJson: string | null
 	if (project.runtime === 'static' || !project.workloadJson) return false;
 	const spec = workloadSpecSchema.safeParse(parseJson<unknown>(project.workloadJson, null));
 	return spec.success && spec.data.ingress === 'none';
+}
+
+function capabilities(json: string | null): string[] {
+	const parsed = parseJson<unknown>(json, []);
+	return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === 'string') : [];
 }

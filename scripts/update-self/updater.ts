@@ -234,7 +234,10 @@ export interface ReleaseMeta {
 	builtAt?: string;
 	source?: string;
 	repo?: string;
+	/** The branch/ref source builds track. Never a release tag (see `tag`). */
 	ref?: string;
+	/** The signed release tag an artifact install came from. */
+	tag?: string;
 	commit?: string;
 	status?: 'staged' | 'active' | 'failed';
 	activatedAt?: string;
@@ -416,7 +419,7 @@ export class Updater {
 			if (!current) throw new UpdateError(`No active release at ${layout.currentLink}. Run the installer first.`);
 			const currentMeta = readMeta(current);
 			const repo = options.repo ?? currentMeta.repo ?? DEFAULT_REPO;
-			const ref = options.ref ?? currentMeta.ref ?? DEFAULT_REF;
+			const ref = options.ref ?? trackedRef(currentMeta) ?? DEFAULT_REF;
 
 			host.log(`updater ${UPDATER_IDENTITY}`);
 			host.log(`current release ${basename(current)} (${currentMeta.version ?? 'unknown version'}, ${short(currentMeta.commit) || 'unknown commit'})`);
@@ -486,7 +489,7 @@ export class Updater {
 
 			// 1. Stage next to the running release. Nothing serving is touched until this succeeds.
 			try {
-				if (published) await this.stageArtifact(release, { repo, version, published });
+				if (published) await this.stageArtifact(release, { repo, ref, version, published });
 				else await this.stage(release, { repo, ref, commit, version });
 			} catch (error) {
 				const reason = message(error);
@@ -550,7 +553,7 @@ export class Updater {
 		const current = readLink(this.layout.currentLink);
 		const currentMeta = current ? readMeta(current) : {};
 		const repo = options.repo ?? currentMeta.repo ?? DEFAULT_REPO;
-		const ref = options.ref ?? currentMeta.ref ?? DEFAULT_REF;
+		const ref = options.ref ?? trackedRef(currentMeta) ?? DEFAULT_REF;
 		const { published, ...resolved } = await this.resolveTarget(repo, ref, currentMeta, options);
 		const failed = this.readState().failedCommits[resolved.commit];
 		return {
@@ -654,7 +657,7 @@ export class Updater {
 	/** Download the signed artifact, check size and sha256 against the manifest, unpack. */
 	private async stageArtifact(
 		release: string,
-		input: { repo: string; version: string; published: VerifiedRelease },
+		input: { repo: string; ref: string; version: string; published: VerifiedRelease },
 	): Promise<void> {
 		const { host, layout } = this;
 		const { published } = input;
@@ -685,7 +688,8 @@ export class Updater {
 				builtAt: published.manifest.createdAt,
 				source: 'artifact',
 				repo: input.repo,
-				ref: published.tag,
+				ref: input.ref,
+				tag: published.tag,
 				commit: published.manifest.commit,
 				status: 'staged',
 			});
@@ -1738,6 +1742,16 @@ function writeAtomic(path: string, body: string): void {
 	const tmp = `${path}.tmp-${process.pid}`;
 	writeFileSync(tmp, body, { mode: 0o600 });
 	renameSync(tmp, path);
+}
+
+/**
+ * The ref a source build should track for this release. Artifact installs before `tag` existed
+ * recorded the release tag (`v0.7.11`) as `ref`; building that tag only ever finds the running
+ * version, so those fall back to the default branch.
+ */
+export function trackedRef(meta: ReleaseMeta): string | undefined {
+	if (meta.source === 'artifact' && !meta.tag) return undefined;
+	return meta.ref;
 }
 
 export function readMeta(release: string): ReleaseMeta {

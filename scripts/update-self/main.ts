@@ -904,9 +904,9 @@ function preflight(): void {
 	if (!existsSync(layout.bunBin)) throw new UpdateError(`Bun not found at ${layout.bunBin}.`);
 }
 
-function describe(path: string | undefined, meta: { commit?: string; builtAt?: string; ref?: string; status?: string }) {
+function describe(path: string | undefined, meta: { commit?: string; builtAt?: string; ref?: string; tag?: string; status?: string }) {
 	if (!path) return dim('none');
-	const parts = [meta.commit ? meta.commit.slice(0, 12) : 'unknown commit', meta.ref, meta.builtAt && `built ${meta.builtAt}`];
+	const parts = [meta.commit ? meta.commit.slice(0, 12) : 'unknown commit', meta.tag ?? meta.ref, meta.builtAt && `built ${meta.builtAt}`];
 	return `${path.split('/').pop()} ${dim(`(${parts.filter(Boolean).join(', ')})`)}`;
 }
 

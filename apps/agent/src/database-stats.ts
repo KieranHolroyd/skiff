@@ -480,36 +480,42 @@ export class DatabaseStatsSampler {
 	 */
 	private async samplePooler(target: DatabaseTarget): Promise<DatabasePoolMetrics> {
 		if (!target.pooler) return { ...EMPTY_POOL };
-		let client: SqlClient | null = null;
+		const password = target.pooler.password;
+		let metrics: DatabasePoolMetrics;
 		try {
-			client = this.connect({
-				hostname: '127.0.0.1',
-				port: target.pooler.port,
-				username: target.pooler.username,
-				password: target.pooler.password,
-				database: 'pgbouncer',
-				// The sidecar mirrors the database's TLS mode for client connections.
-				...tlsOptions(target),
-			});
-			const pools = await client.query(POOLER_POOLS_SQL);
-			let metrics = parsePoolerPools(pools);
-			try {
-				metrics = parsePoolerStats(await client.query(POOLER_STATS_SQL), metrics);
-			} catch (error) {
-				this.log(
-					'warn',
-					`Database ${target.id}: pooler stats failed: ${scrub(errorText(error), [target.pooler.password])}`,
-				);
-			}
-			return metrics;
+			metrics = parsePoolerPools(await this.poolerCommand(target, POOLER_POOLS_SQL));
 		} catch (error) {
-			this.log(
-				'warn',
-				`Database ${target.id}: pooler sample failed: ${scrub(errorText(error), [target.pooler.password])}`,
-			);
+			this.log('warn', `Database ${target.id}: pooler sample failed: ${scrub(errorText(error), [password])}`);
 			return { ...EMPTY_POOL };
+		}
+		try {
+			metrics = parsePoolerStats(await this.poolerCommand(target, POOLER_STATS_SQL), metrics);
+		} catch (error) {
+			this.log('warn', `Database ${target.id}: pooler stats failed: ${scrub(errorText(error), [password])}`);
+		}
+		return metrics;
+	}
+
+	/**
+	 * One admin-console command on its own connection. Bun's client sends a Flush before a second
+	 * query on a connection, and PgBouncer's admin console rejects it ("unsupported packet type
+	 * for admin console: 72"), so connections are never reused here.
+	 */
+	private async poolerCommand(target: DatabaseTarget, command: string): Promise<Array<Record<string, unknown>>> {
+		const pooler = target.pooler!;
+		const client = this.connect({
+			hostname: '127.0.0.1',
+			port: pooler.port,
+			username: pooler.username,
+			password: pooler.password,
+			database: 'pgbouncer',
+			// The sidecar mirrors the database's TLS mode for client connections.
+			...tlsOptions(target),
+		});
+		try {
+			return await client.query(command);
 		} finally {
-			await client?.close().catch(() => undefined);
+			await client.close().catch(() => undefined);
 		}
 	}
 

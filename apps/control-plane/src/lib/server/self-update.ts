@@ -80,13 +80,21 @@ export function updateSource(): UpdateSource {
 		const meta = JSON.parse(readFileSync(paths.releaseMeta, 'utf8')) as {
 			repo?: unknown;
 			ref?: unknown;
+			tag?: unknown;
+			source?: unknown;
 		};
+		// Older artifact installs recorded the release tag as `ref`; a source build of that tag
+		// only finds the running version. Same rule as the updater's `trackedRef`.
+		const legacyArtifact = meta.source === 'artifact' && meta.tag === undefined;
 		const repo =
 			typeof meta.repo === 'string' && /^[\w.-]+\/[\w.-]+$/.test(meta.repo)
 				? meta.repo
 				: DEFAULT_REPO;
 		const ref =
-			typeof meta.ref === 'string' && /^[\w./-]+$/.test(meta.ref) && !meta.ref.includes('..')
+			!legacyArtifact &&
+			typeof meta.ref === 'string' &&
+			/^[\w./-]+$/.test(meta.ref) &&
+			!meta.ref.includes('..')
 				? meta.ref
 				: DEFAULT_REF;
 		return { repo, ref };

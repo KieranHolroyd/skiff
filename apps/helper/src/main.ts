@@ -1,6 +1,7 @@
 import { loadHelperConfig } from './config.ts';
 import { startHelperServer, type RunningHelper } from './server.ts';
 import { spawnRunner, SystemdDriver } from './systemd.ts';
+import { NodeUpdater } from './node-update.ts';
 
 /**
  * `skiff-helper`: the only privileged Skiff process (D26). It listens on a root-owned,
@@ -61,7 +62,12 @@ export async function runHelper(): Promise<void> {
 	signals.once('SIGTERM', () => void stop());
 	signals.once('SIGINT', () => void stop());
 
-	helper = await startHelperServer(config, driver);
+	const nodeUpdate = new NodeUpdater({
+		paths: config.nodeUpdate,
+		currentVersion: config.version,
+		log: (level, message) => log(level, `node update: ${message}`),
+	});
+	helper = await startHelperServer(config, driver, { nodeUpdate });
 	if (stopping) await helper.stop();
 	log('info', `Listening on unix/${config.socketPath} (units ${config.unitDir})`);
 

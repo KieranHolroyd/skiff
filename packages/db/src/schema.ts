@@ -47,6 +47,14 @@ export const nodes = sqliteTable(
 		volumeInventoryJson: text('volume_inventory_json'),
 		/** Capabilities from the last heartbeat (JSON array); `[]` for agents that predate them. */
 		capabilitiesJson: text('capabilities_json'),
+		/** Outstanding dashboard update target (D99); NULL when none is pending. */
+		updateVersion: text('update_version'),
+		/** Bumped on every update request, so a retry is a new task. */
+		updateGeneration: integer('update_generation').notNull().default(0),
+		updateRequestedAt: integer('update_requested_at'),
+		/** The generation the agent reported as failed; equal to `updateGeneration` means failed. */
+		updateFailedGeneration: integer('update_failed_generation').notNull().default(0),
+		updateError: text('update_error'),
 		createdAt: integer('created_at').notNull().$defaultFn(now),
 		updatedAt: integer('updated_at').notNull().$defaultFn(now),
 	},

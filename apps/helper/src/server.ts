@@ -18,6 +18,7 @@ import {
 import type { HelperLogResult, HelperWorkloadStatus, LogReadOptions } from './systemd.ts';
 import { parseStudioPrincipalRequest, STUDIO_PRINCIPAL_USER } from './studio-principal.ts';
 import type { HelperInventory, VerifyResult } from './volumes.ts';
+import { NodeUpdateError, parseNodeUpdateRequest, type NodeUpdateRequest, type NodeUpdateResult } from './node-update.ts';
 
 /**
  * The helper's entire network surface is a fixed set of verbs (slice, apply, status, remove, logs,
@@ -83,6 +84,8 @@ export interface HelperRuntime {
 export interface HandlerOptions {
 	version: string;
 	maxBodyBytes?: number;
+	/** The signed-release installer behind `POST /v1/node/update` (D99); absent = 404. */
+	nodeUpdate?: { update(request: NodeUpdateRequest): Promise<NodeUpdateResult> };
 }
 
 class BodyTooLargeError extends Error {}
@@ -113,6 +116,14 @@ export function createHandler(
 				const cpuWeight = body.cpuWeight === undefined ? 200 : assertCpuWeight(body.cpuWeight, 'cpuWeight');
 				await runtime.ensureSlice({ memoryMb, cpuWeight });
 				return json({ ok: true, memoryMb, cpuWeight });
+			}
+
+			// --- node update (D99): install a signed release's agent + helper, nothing else ------
+			if (path === '/v1/node/update' && options.nodeUpdate) {
+				if (method !== 'POST') return methodNotAllowed('POST');
+				if (url.search) throw new ValidationError('node update takes no query parameters');
+				const input = parseNodeUpdateRequest(await readJson(request, maxBodyBytes));
+				return json({ ok: true, ...(await options.nodeUpdate.update(input)) });
 			}
 
 			// --- native database studio (plan 22): start/stop one fixed unit, nothing else -----
@@ -332,6 +343,7 @@ export function createHandler(
 		} catch (error) {
 			if (error instanceof BodyTooLargeError) return json({ error: error.message }, 413);
 			if (error instanceof ValidationError) return json({ error: error.message }, 400);
+			if (error instanceof NodeUpdateError) return json({ error: error.message }, 409);
 			// Never include request bodies or secret values here; runtime errors name units only.
 			return json({ error: error instanceof Error ? error.message : 'internal helper error' }, 500);
 		}
@@ -348,6 +360,7 @@ export interface RunningHelper {
 export async function startHelperServer(
 	config: HelperConfig,
 	runtime: HelperRuntime,
+	extras: Pick<HandlerOptions, 'nodeUpdate'> = {},
 ): Promise<RunningHelper> {
 	const directory = dirname(config.socketPath);
 	const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
@@ -368,7 +381,7 @@ export async function startHelperServer(
 
 	const server = Bun.serve({
 		unix: config.socketPath,
-		fetch: createHandler(runtime, { version: config.version }),
+		fetch: createHandler(runtime, { version: config.version, ...extras }),
 	});
 	await fs.chmod(config.socketPath, Number.parseInt(config.controlSocketMode, 8));
 	if (isRoot && groupId !== null) await fs.chown(config.socketPath, 0, groupId);
