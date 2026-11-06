@@ -2,8 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import {
 	BuildValidationError,
 	directRunArgs,
+	gitAuthEnv,
 	redactSecret,
-	repoUrlWithToken,
+	validateGitRef,
 	safeRelativeDir,
 	systemdRunArgs,
 	unitName,
@@ -93,13 +94,40 @@ describe('systemd argv', () => {
 	});
 });
 
-describe('clone url credentials', () => {
-	test('adds a token to https only', () => {
-		expect(repoUrlWithToken('https://github.com/acme/app.git', 'tok en')).toBe(
-			'https://x-access-token:tok%20en@github.com/acme/app.git',
+describe('clone credentials', () => {
+	const hosts = ['github.com'];
+	const header = `Authorization: Basic ${Buffer.from('x-access-token:tok en').toString('base64')}`;
+
+	test('scopes the token to an allowed https host, through the environment only', () => {
+		expect(gitAuthEnv('https://github.com/acme/app.git', 'tok en', hosts)).toEqual({
+			GIT_CONFIG_COUNT: '1',
+			GIT_CONFIG_KEY_0: 'http.https://github.com/.extraHeader',
+			GIT_CONFIG_VALUE_0: header,
+		});
+		expect(gitAuthEnv('https://GitHub.com/acme/app.git', 'tok en', hosts).GIT_CONFIG_KEY_0).toBe(
+			'http.https://github.com/.extraHeader',
 		);
-		expect(repoUrlWithToken('git@github.com:acme/app.git', 'tok')).toBe('git@github.com:acme/app.git');
-		expect(repoUrlWithToken('https://github.com/acme/app.git', null)).toBe('https://github.com/acme/app.git');
+	});
+
+	test('never sends the token to another host, scheme or a URL with its own credentials', () => {
+		expect(gitAuthEnv('https://attacker.example/x.git', 'tok', hosts)).toEqual({});
+		expect(gitAuthEnv('https://github.com.attacker.example/x.git', 'tok', hosts)).toEqual({});
+		expect(gitAuthEnv('https://github.com:8443/x.git', 'tok', hosts)).toEqual({});
+		expect(gitAuthEnv('http://github.com/x.git', 'tok', hosts)).toEqual({});
+		expect(gitAuthEnv('git@github.com:acme/app.git', 'tok', hosts)).toEqual({});
+		expect(gitAuthEnv('https://me:pw@github.com/x.git', 'tok', hosts)).toEqual({});
+		expect(gitAuthEnv('https://github.com/acme/app.git', null, hosts)).toEqual({});
+		expect(gitAuthEnv('https://git.corp:8443/x.git', 'tok', ['git.corp:8443']).GIT_CONFIG_KEY_0).toBe(
+			'http.https://git.corp:8443/.extraHeader',
+		);
+	});
+
+	test('rejects refs git would read as options', () => {
+		expect(validateGitRef('main')).toBe('main');
+		expect(validateGitRef('feature/x-1')).toBe('feature/x-1');
+		expect(() => validateGitRef('--upload-pack=touch /tmp/x')).toThrow(BuildValidationError);
+		expect(() => validateGitRef('main x')).toThrow(BuildValidationError);
+		expect(() => validateGitRef('')).toThrow(BuildValidationError);
 	});
 
 	test('redacts a token from git output', () => {

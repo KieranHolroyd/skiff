@@ -14,6 +14,7 @@ import {
 	parseCommand,
 } from './commands.ts';
 import { clientOptions, connectionUrl, mongodbPlugin, prepareChange } from './index.ts';
+import { assertCollectionName, commandStatement, defaultIndexName, planMongoAlter } from './structure.ts';
 
 function refusedReadOnly(input: string): boolean {
 	try {
@@ -280,6 +281,91 @@ describe('apply preparation and connection', () => {
 			cancel: 'kill-op',
 			explain: true,
 			schemas: false,
+			structure: [
+				'create-collection',
+				'rename',
+				'drop',
+				'truncate',
+				'drop-column',
+				'rename-column',
+				'create-index',
+				'drop-index',
+			],
 		});
+	});
+});
+
+describe('structure edits', () => {
+	const coll = { path: ['people'], kind: 'collection' as const };
+	const code = (fn: () => unknown): string | null => {
+		try {
+			fn();
+			return null;
+		} catch (error) {
+			return error instanceof StudioError ? error.code : 'other';
+		}
+	};
+
+	test('renders one command per change', () => {
+		const statement = (change: Parameters<typeof planMongoAlter>[0]) =>
+			commandStatement(planMongoAlter(change, 'app').command);
+		expect(statement({ op: 'create-collection', parent: [], name: 'x' })).toBe('{"create":"x"}');
+		expect(statement({ op: 'rename', object: coll, name: 'humans' })).toBe(
+			'{"renameCollection":"app.people","to":"app.humans","dropTarget":false}',
+		);
+		expect(planMongoAlter({ op: 'rename', object: coll, name: 'humans' }, 'app').on).toBe('admin');
+		expect(statement({ op: 'drop', object: { path: ['v'], kind: 'view' }, cascade: false })).toBe('{"drop":"v"}');
+		expect(statement({ op: 'truncate', object: coll })).toBe('{"delete":"people","deletes":[{"q":{},"limit":0}]}');
+		expect(statement({ op: 'drop-column', object: coll, column: 'a.b' })).toBe(
+			'{"update":"people","updates":[{"q":{"a.b":{"$exists":true}},"u":{"$unset":{"a.b":""}},"multi":true}]}',
+		);
+		expect(statement({ op: 'rename-column', object: coll, column: 'a', name: 'b' })).toBe(
+			'{"update":"people","updates":[{"q":{"a":{"$exists":true}},"u":{"$rename":{"a":"b"}},"multi":true}]}',
+		);
+		expect(
+			statement({
+				op: 'create-index',
+				object: coll,
+				columns: [
+					{ name: 'f', dir: 'asc' },
+					{ name: 'g', dir: 'desc' },
+				],
+				unique: true,
+			}),
+		).toBe('{"createIndexes":"people","indexes":[{"key":{"f":1,"g":-1},"name":"f_1_g_-1","unique":true}]}');
+		expect(statement({ op: 'drop-index', object: coll, name: 'f_1' })).toBe('{"dropIndexes":"people","index":"f_1"}');
+	});
+
+	test('default index names follow MongoDB', () => {
+		expect(defaultIndexName([{ name: 'a.b', dir: 'asc' }])).toBe('a.b_1');
+		expect(defaultIndexName([{ name: 'x', dir: 'desc' }, { name: 'y', dir: 'asc' }])).toBe('x_-1_y_1');
+	});
+
+	test('refuses unsafe names and paths', () => {
+		for (const name of ['', 'a$b', 'system.users', 'a\0b', '.x', 'x.', 'x'.repeat(260)])
+			expect(code(() => assertCollectionName(name, 'app')), JSON.stringify(name)).toBe('bad_request');
+		expect(code(() => assertCollectionName('orders.archive', 'app'))).toBeNull();
+		expect(code(() => planMongoAlter({ op: 'drop-column', object: coll, column: '_id' }, 'app'))).toBe('bad_request');
+		expect(code(() => planMongoAlter({ op: 'drop-column', object: coll, column: '$where' }, 'app'))).toBe('bad_request');
+		expect(code(() => planMongoAlter({ op: 'drop-column', object: coll, column: 'a..b' }, 'app'))).toBe('bad_request');
+		expect(code(() => planMongoAlter({ op: 'rename-column', object: coll, column: 'a', name: '_id' }, 'app'))).toBe(
+			'bad_request',
+		);
+		expect(code(() => planMongoAlter({ op: 'rename-column', object: coll, column: 'a', name: 'a.b' }, 'app'))).toBe(
+			'bad_request',
+		);
+		expect(code(() => planMongoAlter({ op: 'drop-index', object: coll, name: '_id_' }, 'app'))).toBe('bad_request');
+		expect(code(() => planMongoAlter({ op: 'create-collection', parent: ['x'], name: 'y' }, 'app'))).toBe('bad_request');
+		expect(code(() => planMongoAlter({ op: 'drop', object: { path: ['a', 'b'], kind: 'collection' }, cascade: false }, 'app'))).toBe(
+			'not_found',
+		);
+		expect(
+			code(() =>
+				planMongoAlter(
+					{ op: 'add-column', object: coll, column: { name: 'a', type: 'int', nullable: true, identity: false } },
+					'app',
+				),
+			),
+		).toBe('unsupported');
 	});
 });

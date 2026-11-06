@@ -4,8 +4,12 @@ import { getMigrations } from 'better-auth/db/migration';
 import type { RequestEvent } from '@sveltejs/kit';
 import type { Handle, ServerInit } from '@sveltejs/kit/hooks';
 import { auth, backfillApiKeyRateLimits, ensurePlatformAdmin } from '#lib/server/auth.js';
-import { platformOrigin } from '#lib/server/config.js';
+import { contentDomain, platformOrigin } from '#lib/server/config.js';
+import { reconcilePlatformDomains } from '@skiff/core';
 import { checkCsrf } from '#lib/server/csrf.js';
+import { sqlite } from '#lib/server/db.js';
+import { needsSetup, setupUrl } from '#lib/server/setup.js';
+import { currentSetupToken } from '#lib/server/setup-token.js';
 import { core } from '#lib/server/core.js';
 import { isDevContentHost, serveDevContent } from '#lib/server/dev-content.js';
 import { principalFromRequest, principalFromSession } from '#lib/server/principal.js';
@@ -25,6 +29,26 @@ export const init: ServerInit = async () => {
 	if (lifted > 0) console.info(`[auth] raised rate limit on ${lifted} API key(s)`);
 	const promoted = ensurePlatformAdmin();
 	if (promoted) console.info(`[auth] made the bootstrap user ${promoted} the platform admin`);
+	// A fresh install: say where to finish setup on every boot until an owner exists, so the link
+	// is always one `journalctl -u skiff-control-plane | grep setup` away (D102).
+	if (needsSetup(sqlite)) {
+		const { token, file } = currentSetupToken();
+		console.info(`[setup] No owner account yet. Finish setup at ${setupUrl(platformOrigin, token)} (token: ${file})`);
+	}
+
+	// Settings → Domains restarts us with new domains: move stored hosts and re-push routes (D105).
+	try {
+		const domains = reconcilePlatformDomains(sqlite, { platformOrigin, contentDomain });
+		if (domains.changed)
+			console.info(
+				`[domains] now ${platformOrigin}, sites at *.${contentDomain}` +
+					(domains.previousContentDomain !== contentDomain
+						? ` (moved ${domains.previews} preview and ${domains.storage} storage host(s) from ${domains.previousContentDomain})`
+						: ''),
+			);
+	} catch (error) {
+		console.error('[domains] could not reconcile stored hosts:', error);
+	}
 
 	// A standby (zero-downtime update slot, or the updater's canary) serves requests only. The
 	// primary keeps owning background work, so nothing runs twice while both are up.

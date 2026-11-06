@@ -1,4 +1,4 @@
-import { ASSISTANT_AGENTS, type AssistantStatus } from '@skiff/contracts';
+import type { AssistantStatus } from '@skiff/contracts';
 
 /**
  * Settings → Assistant (docs/ASSISTANT.md). The assistant is optional and off until an owner
@@ -11,11 +11,7 @@ export interface AssistantRuntimeConfig {
 	provider: 'openai' | 'openai-compatible' | 'openrouter' | 'ollama';
 	baseUrl: string;
 	model: string;
-	/** A cheaper/faster model for the routing decision; falls back to `model`. */
-	routerModel: string;
 	apiKey?: string;
-	/** How many specialists a single turn may use (1–4). */
-	maxAgents: number;
 }
 
 const DEFAULT_BASE_URL: Record<AssistantRuntimeConfig['provider'], string> = {
@@ -42,14 +38,11 @@ export function assistantConfig(): AssistantRuntimeConfig | null {
 	);
 	const model = process.env.SKIFF_ASSISTANT_MODEL;
 	if (!baseUrl || !model) return null;
-	const max = Number(process.env.SKIFF_ASSISTANT_MAX_AGENTS ?? 3);
 	return {
 		provider,
 		baseUrl,
 		model,
-		routerModel: process.env.SKIFF_ASSISTANT_ROUTER_MODEL ?? model,
-		apiKey: process.env.SKIFF_ASSISTANT_API_KEY || undefined,
-		maxAgents: Number.isInteger(max) ? Math.min(4, Math.max(1, max)) : 3
+		apiKey: process.env.SKIFF_ASSISTANT_API_KEY || undefined
 	};
 }
 
@@ -62,9 +55,7 @@ export function assistantStatus(): AssistantStatus {
 		enabled: config !== null,
 		configured: config !== null,
 		provider: config?.provider ?? null,
-		model: config?.model ?? null,
-		agents: ASSISTANT_AGENTS.map((agent) => ({ ...agent, enabled: true })),
-		maxAgents: config?.maxAgents ?? 3
+		model: config?.model ?? null
 	};
 }
 
@@ -95,9 +86,7 @@ export async function testProvider(
 			headers: providerHeaders({
 				...config,
 				provider: 'openai-compatible',
-				model: config.model ?? '',
-				routerModel: '',
-				maxAgents: 1
+				model: config.model ?? ''
 			}),
 			signal
 		});
@@ -116,9 +105,7 @@ export async function testProvider(
 				headers: providerHeaders({
 					...config,
 					provider: 'openai-compatible',
-					model: config.model,
-					routerModel: '',
-					maxAgents: 1
+					model: config.model
 				}),
 				body: JSON.stringify({
 					model: config.model,

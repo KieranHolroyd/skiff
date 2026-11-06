@@ -1,7 +1,7 @@
 # @skiff/control-plane
 
 The Skiff control plane: dashboard, REST API v1, MCP server (OAuth 2.1), Better Auth, and the
-SQLite/DuckDB state stores. It runs on Bun behind Caddy over a unix socket.
+SQLite state store and the ClickHouse telemetry store. It runs on Bun behind Caddy over a unix socket.
 
 See the root [`README.md`](../../README.md) for the architecture and the full dev quickstart, and
 [`docs/API.md`](../../docs/API.md) for the HTTP surface.
@@ -16,11 +16,15 @@ bun run test     # unit tests only (e2e files are run explicitly)
 bun run create-user you@example.com "Your Name" [--password …] [--org <slug> --role <role>]
 ```
 
+A fresh database (without `SKIFF_DEV_PASSWORD_LOGIN`/`SKIFF_OPEN_SIGNUP`) sends `/login` to the
+setup wizard at `/setup`; the dev server logs the link (`[setup] … /setup?token=…`) on start and
+keeps the token in `$SKIFF_DATA_DIR/setup-token` (D102).
+
 `create-user` writes straight to `$SKIFF_DATA_DIR/skiff.db` (default `.data`), bypassing the
-invite-only gate. Use it to bootstrap an owner or for local development. Start the server once
+invite-only gate. Use it for local development or to recover an install whose owner is locked out. Start the server once
 first so the auth tables exist. The password is prompted for (hidden) unless `--password` is
-given; piped stdin also works. Password sign-in needs `SKIFF_DEV_PASSWORD_LOGIN=1`; otherwise
-sign in with a magic link and add a passkey.
+given; piped stdin also works. Sign in with that email and password; owners then add a passkey or
+authenticator app (`SKIFF_DEV_PASSWORD_LOGIN=1` skips that for local development).
 
 ## End-to-end tests
 

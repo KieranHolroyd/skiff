@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { onDestroy, untrack } from 'svelte';
 	import BracesIcon from '@lucide/svelte/icons/braces';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
+	import { toast } from 'svelte-sonner';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import type {
@@ -27,6 +29,10 @@
 	import AddRowForm from './AddRowForm.svelte';
 	import { deleteKey, isKeyType, ROW_KEY, setKeyTtl } from './changes.js';
 	import StringValueEditor from './StringValueEditor.svelte';
+	import { canAlter } from '../structure/changes.js';
+	import NameDialog from '../structure/NameDialog.svelte';
+	import { AlterReview } from '../structure/review.svelte.js';
+	import ReviewDialog from '../structure/ReviewDialog.svelte';
 	import { formatBytes, formatTtl, parseTtl, ttlFromCell, ttlInput } from './ttl.js';
 
 	/**
@@ -46,7 +52,8 @@
 		name,
 		confirmer,
 		ondeleted,
-		onchanged
+		onchanged,
+		onrenamed
 	}: {
 		database: string;
 		info: StudioInfo;
@@ -59,6 +66,8 @@
 		ondeleted?: () => void;
 		/** The key changed (value, TTL); a key list can refresh. */
 		onchanged?: () => void;
+		/** The key now has this name (RENAME); the caller reopens it under the new name. */
+		onrenamed?: (name: string) => void;
 	} = $props();
 
 	const PAGE = 200;
@@ -154,6 +163,24 @@
 		} finally {
 			deleting = false;
 		}
+	}
+
+	// --- rename ---------------------------------------------------------------------------------
+
+	const review = new AlterReview(() => database);
+	const canRename = $derived(canWrite && canAlter(info, 'rename'));
+	let renaming = $state(false);
+
+	async function renameKey(next: string) {
+		const done = await review.start({
+			title: `Rename key ${name}`,
+			description: 'The rename is refused if a key with the new name already exists. The TTL stays.',
+			changes: [{ op: 'rename', object, name: next }],
+			confirmLabel: 'Rename'
+		});
+		if (!done) return;
+		toast.success(`Renamed ${name} to ${next}.`);
+		onrenamed?.(next);
 	}
 
 	// --- contents ------------------------------------------------------------------------------
@@ -335,6 +362,12 @@
 				<Button variant="ghost" size="icon-sm" aria-label="Reload key" onclick={refresh} disabled={loading}>
 					{#if loading}<Spinner />{:else}<RefreshCwIcon />{/if}
 				</Button>
+				{#if canRename}
+					<Button variant="outline" size="sm" onclick={() => (renaming = true)}>
+						<PencilIcon />
+						Rename
+					</Button>
+				{/if}
 				{#if canWrite}
 					<Button variant="outline" size="sm" class="text-destructive" onclick={removeKey} disabled={deleting}>
 						{#if deleting}<Spinner />{:else}<Trash2Icon />{/if}
@@ -481,3 +514,6 @@
 		{/if}
 	</Dialog.Content>
 </Dialog.Root>
+
+<NameDialog bind:open={renaming} title="Rename key {name}" label="New name" initial={name} onsubmit={(next) => void renameKey(next)} />
+<ReviewDialog {review} />

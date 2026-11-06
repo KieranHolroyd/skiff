@@ -185,6 +185,29 @@ describe('studio process', () => {
 		expect(events[3]).toMatchObject({ t: 'error', code: 'read_only' });
 	});
 
+	test('alter runs on a write session and is refused on a read-only one', async () => {
+		const { put, op } = await start();
+		await put(testActivation(SESSION, { readOnly: false }));
+		const dry = await op('alter', { change: { op: 'truncate', object: { path: ['public', 'items'], kind: 'table' } }, dryRun: true });
+		expect(dry.status).toBe(200);
+		expect(await dry.json()).toEqual({ statements: ['TRUNCATE public.items'], applied: false });
+		const created = await op('alter', {
+			change: { op: 'create-table', parent: ['public'], name: 'scratch', columns: [{ name: 'id', type: 'integer' }] },
+		});
+		expect(await created.json()).toMatchObject({ applied: true });
+		const tree = (await (await op('tree', { path: ['public'] })).json()) as { nodes: Array<{ name: string }> };
+		expect(tree.nodes.map((node) => node.name)).toContain('scratch');
+		const unsupported = await op('alter', {
+			change: { op: 'drop-index', object: { path: ['public', 'items'], kind: 'table' }, name: 'items_pkey' },
+		});
+		expect(unsupported.status).toBe(422);
+
+		await put(testActivation(OTHER, { readOnly: true }));
+		const refused = await op('alter', { change: { op: 'truncate', object: { path: ['public', 'items'], kind: 'table' } }, dryRun: true }, OTHER);
+		expect(refused.status).toBe(403);
+		expect(await refused.json()).toMatchObject({ error: { code: 'read_only' } });
+	});
+
 	test('errors that are not StudioErrors become engine_error without a stack', async () => {
 		const fake = trackedFake({
 			onConnect() {

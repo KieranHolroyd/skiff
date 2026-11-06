@@ -7,7 +7,7 @@ import { createDb } from '@skiff/db';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
-import { TelemetryStore } from './telemetry.ts';
+import { disposeTelemetryStore, hasClickHouse, testTelemetryStore } from './test-clickhouse.ts';
 import type { Core } from './index.ts';
 
 const MINUTE = 60_000;
@@ -36,7 +36,7 @@ const core: Core = createCore({
 const owner = buildPrincipal({ kind: 'user', userId: 'user_1', orgId: 'org_1', role: 'owner', platformAdmin: true });
 const viewer = buildPrincipal({ kind: 'user', userId: 'user_2', orgId: 'org_1', role: 'viewer' });
 const file = (path: string, content: string) => ({ path, content, encoding: 'utf8' as const });
-const telemetry = new TelemetryStore({ path: ':memory:' });
+const telemetry = testTelemetryStore();
 
 beforeAll(async () => {
 	await telemetry.open();
@@ -52,7 +52,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-	await telemetry.close();
+	await disposeTelemetryStore(telemetry);
 	opened.sqlite.close();
 	rmSync(dir, { recursive: true, force: true });
 });
@@ -119,7 +119,7 @@ describe('deployment detail', () => {
 		expect(() => core.deployments.detail(owner, row(), 'dep_missing')).toThrow();
 	});
 
-	test('traffic is read per host and refuses hosts the deployment does not serve', async () => {
+	test.skipIf(!hasClickHouse)('traffic is read per host and refuses hosts the deployment does not serve', async () => {
 		const preview = await deploy('v3', false);
 		const host = `detail--${preview.shortId}.sites.test`;
 		await telemetry.ingest([1, 2, 3].map((n) => bucket(host, clock - n * MINUTE, 10)));
@@ -139,7 +139,7 @@ describe('deployment detail', () => {
 		).rejects.toThrow('does not serve');
 	});
 
-	test('a read-only viewer sees the detail and its traffic', async () => {
+	test.skipIf(!hasClickHouse)('a read-only viewer sees the detail and its traffic', async () => {
 		const live = core.deployments.list(viewer, row()).find((item) => item.isProduction)!;
 		expect(core.deployments.detail(viewer, row(), live.id).serving[0]!.host).toBe('detail.sites.test');
 		const window = { from: clock - 10 * MINUTE, to: clock, interval: '1m' as const };

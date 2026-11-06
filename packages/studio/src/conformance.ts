@@ -11,7 +11,7 @@ import { describe, expect, test } from 'bun:test';
 import { DEFAULT_STUDIO_LIMITS } from '@skiff/contracts';
 import type { StudioPlugin, StudioSession, StudioTarget } from './driver.ts';
 import { limitEvents } from './limits.ts';
-import type { Cell, ObjectRef, RowChange, StudioEvent } from './protocol.ts';
+import { StudioError, type Cell, type ObjectRef, type RowChange, type SchemaChange, type StudioEvent } from './protocol.ts';
 
 export interface ConformanceFixture {
 	/** The standard fixture object (table, collection or key group) holding `rowCount` rows. */
@@ -31,6 +31,12 @@ export interface ConformanceFixture {
 	readOnlyEscapes: string[];
 	/** Optional: re-seed between destructive tests. */
 	reset?: () => Promise<void>;
+	/**
+	 * Engines that create objects through `alter` (relational tables, Mongo collections): a
+	 * change creating a scratch object directly under the tree root or a schema. The suite
+	 * creates it, renames it, and drops it again.
+	 */
+	scratchCreate?: Extract<SchemaChange, { op: 'create-table' | 'create-collection' }>;
 }
 
 export interface ConformanceOptions {
@@ -223,6 +229,80 @@ export function describeConformance(options: ConformanceOptions): void {
 				}
 				expect(applyRefused || !description.editable).toBe(true);
 			} finally {
+				await session.close();
+			}
+		});
+
+		test('alter is refused on a read-only session, dry runs included', async () => {
+			const caps = plugin.capabilities(options.target.engine, options.target.version);
+			if (caps.structure.length === 0) return;
+			const session = await open(true);
+			try {
+				for (const dryRun of [true, false]) {
+					let code: string | null = null;
+					try {
+						await session.alter?.({ op: 'truncate', object: fixture.object }, { dryRun }, signal());
+					} catch (error) {
+						code = error instanceof StudioError ? error.code : 'other';
+					}
+					expect(code, `dryRun=${dryRun}`).toBe('read_only');
+				}
+				const count = rowsOf(
+					await collect(session.run(fixture.selectAllInput, { maxRows: 100_000, timeoutMs: 30_000 }, signal())),
+				).length;
+				expect(count).toBe(fixture.rowCount);
+			} finally {
+				await session.close();
+			}
+		});
+
+		test('an alter dry run reports statements and changes nothing', async () => {
+			const caps = plugin.capabilities(options.target.engine, options.target.version);
+			if (!caps.structure.includes('truncate')) return;
+			const session = await open(false);
+			try {
+				expect(typeof session.alter).toBe('function');
+				const result = await session.alter!({ op: 'truncate', object: fixture.object }, { dryRun: true }, signal());
+				expect(result.applied).toBe(false);
+				expect(result.statements.length).toBeGreaterThan(0);
+				const count = rowsOf(
+					await collect(session.run(fixture.selectAllInput, { maxRows: 100_000, timeoutMs: 30_000 }, signal())),
+				).length;
+				expect(count).toBe(fixture.rowCount);
+			} finally {
+				await session.close();
+			}
+		});
+
+		test('alter creates, renames and drops a scratch object', async () => {
+			const create = fixture.scratchCreate;
+			if (!create) return;
+			const session = await open(false);
+			const renamed = `${create.name}_renamed`;
+			const kind = create.op === 'create-table' ? 'table' : 'collection';
+			const names = async () =>
+				(await session.tree(create.parent, signal())).filter((node) => node.kind === kind).map((node) => node.name);
+			try {
+				const created = await session.alter!(create, { dryRun: false }, signal());
+				expect(created.applied).toBe(true);
+				expect(await names()).toContain(create.name);
+				const original: ObjectRef = { path: [...create.parent, create.name], kind };
+				await session.alter!({ op: 'rename', object: original, name: renamed }, { dryRun: false }, signal());
+				const now = await names();
+				expect(now).toContain(renamed);
+				expect(now).not.toContain(create.name);
+				await session.alter!(
+					{ op: 'drop', object: { path: [...create.parent, renamed], kind }, cascade: false },
+					{ dryRun: false },
+					signal(),
+				);
+				expect(await names()).not.toContain(renamed);
+			} finally {
+				// Leave nothing behind if an assertion failed half way.
+				for (const name of [create.name, renamed])
+					await session
+						.alter?.({ op: 'drop', object: { path: [...create.parent, name], kind }, cascade: false }, { dryRun: false }, signal())
+						.catch(() => undefined);
 				await session.close();
 			}
 		});

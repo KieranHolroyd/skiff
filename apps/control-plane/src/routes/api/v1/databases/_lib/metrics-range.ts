@@ -4,7 +4,7 @@ import { ValidationError } from '@skiff/core';
  * Query parameters for `GET /api/v1/databases/:name/metrics` (docs/DATABASES.md §5).
  *
  * Defaults to the last hour at 1-minute buckets. Without an explicit `interval`, ranges longer
- * than 48 hours use hourly rollups, which is what the DuckDB store keeps past two days. An
+ * than 48 hours use hourly rollups, which is what the ClickHouse store keeps past two days. An
  * explicit `1m` over more than 48 hours is rejected rather than silently returning a partial
  * series.
  */

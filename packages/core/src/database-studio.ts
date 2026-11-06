@@ -35,6 +35,13 @@ export type DatabaseStudioActivity =
 			updated: number;
 			deleted: number;
 			applied: number;
+	  }
+	| {
+			op: 'alter';
+			/** The object the structure edit acts on (or creates), as its tree path. */
+			object: readonly string[];
+			/** The schema change kind (`add-column`, `drop`, …); never column types or values. */
+			change: string;
 	  };
 
 export interface DatabaseStudioEndpoint {
@@ -366,6 +373,17 @@ export class DatabaseStudioService {
 				resource: 'database',
 				resourceId: row.id,
 				args: { name, fingerprint: entry.fingerprint, readOnly: entry.readOnly },
+				result: 'ok',
+			});
+			return;
+		}
+		if (entry.op === 'alter') {
+			this.ctx.audit.record({
+				principal,
+				action: 'database.studio.alter',
+				resource: 'database',
+				resourceId: row.id,
+				args: { name, object: entry.object.join('.').slice(0, 200), change: entry.change.slice(0, 40) },
 				result: 'ok',
 			});
 			return;

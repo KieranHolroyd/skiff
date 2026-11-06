@@ -8,13 +8,13 @@ Reference for the public edge as configured on 2026-11-03.
 | Address | `178.104.255.136` |
 | OS | Ubuntu 26.04.1 LTS |
 | Access | SSH as `root`, key only |
-| DNS | Cloudflare, zones `kieran.dev` and `kierancloud.dev` |
-| Domains | Platform `kieran.dev` · content `kierancloud.dev` |
+| DNS | Cloudflare, zones `example.com` and `examplecloud.com` |
+| Domains | Platform `example.com` · content `examplecloud.com` |
 
 Cloudflare records are **proxied (orange cloud)**. TLS still terminates at Caddy; the zones
-must be **Full (strict)** for origin validation. `kierancloud.dev` is zone-wide Full (strict);
-`kieran.dev` stays Flexible for unrelated services and uses a Configuration Rule that sets
-`control.kieran.dev` to Full (strict). Visitors reach Caddy through Cloudflare, so the real
+must be **Full (strict)** for origin validation. `examplecloud.com` is zone-wide Full (strict);
+`example.com` stays Flexible for unrelated services and uses a Configuration Rule that sets
+`control.example.com` to Full (strict). Visitors reach Caddy through Cloudflare, so the real
 client IP is in `CF-Connecting-IP`.
 
 ## Caddy
@@ -52,16 +52,16 @@ ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force --a
 }
 
 # Content domain: wildcard cert covers the apex and one label (D14).
-kierancloud.dev, *.kierancloud.dev {
+examplecloud.com, *.examplecloud.com {
 	import tls_cloudflare
 	encode zstd gzip
-	@apex host kierancloud.dev
+	@apex host examplecloud.com
 	respond @apex "Skiff edge is up. Nothing is deployed here yet." 200
 	respond "Not found" 404
 }
 
 # Platform: control plane (SvelteKit/Bun).
-control.kieran.dev {
+control.example.com {
 	import tls_cloudflare
 	encode zstd gzip
 	reverse_proxy unix//run/skiff/control.sock
@@ -76,32 +76,32 @@ the `skiff` supplementary group (to read release artifacts) and sets the admin s
 
 | Name | Type | Value | Proxy |
 |---|---|---|---|
-| `kierancloud.dev` | A | `178.104.255.136` | Proxied |
-| `*.kierancloud.dev` | A | `178.104.255.136` | Proxied |
-| `control.kieran.dev` | A | `178.104.255.136` | Proxied |
+| `examplecloud.com` | A | `178.104.255.136` | Proxied |
+| `*.examplecloud.com` | A | `178.104.255.136` | Proxied |
+| `control.example.com` | A | `178.104.255.136` | Proxied |
 
 Certificates are issued by Let's Encrypt over **ACME DNS-01** and renewed by Caddy.
-`kierancloud.dev`, `*.kierancloud.dev`, and `control.kieran.dev` are separate certificates;
+`examplecloud.com`, `*.examplecloud.com`, and `control.example.com` are separate certificates;
 the wildcard covers exactly one label.
 
 ## Upstreams
 
-- `control.kieran.dev` → `unix//run/skiff/control.sock` (adapter-bun on the control-plane socket).
+- `control.example.com` → `unix//run/skiff/control.sock` (adapter-bun on the control-plane socket).
   The installer rewrites the bootstrap Caddyfile to this upstream; the agent then owns the full
   config via the admin API.
-- Content apex → placeholder `200`; any `<slug>.kierancloud.dev` → `404` until the agent
+- Content apex → placeholder `200`; any `<slug>.examplecloud.com` → `404` until the agent
   adds a route.
 
 ## Checks
 
 ```sh
-dig +short A kierancloud.dev @1.1.1.1
-dig +short A control.kieran.dev @1.1.1.1
+dig +short A examplecloud.com @1.1.1.1
+dig +short A control.example.com @1.1.1.1
 
-curl -sSI https://kierancloud.dev | head
-curl -sS  -o /dev/null -w '%{http_code}\n' https://anything.kierancloud.dev
-curl -sS  -o /dev/null -w '%{http_code}\n' https://control.kieran.dev
+curl -sSI https://examplecloud.com | head
+curl -sS  -o /dev/null -w '%{http_code}\n' https://anything.examplecloud.com
+curl -sS  -o /dev/null -w '%{http_code}\n' https://control.example.com
 
-openssl s_client -connect 178.104.255.136:443 -servername kierancloud.dev </dev/null 2>/dev/null \
+openssl s_client -connect 178.104.255.136:443 -servername examplecloud.com </dev/null 2>/dev/null \
   | openssl x509 -noout -subject -ext subjectAltName
 ```

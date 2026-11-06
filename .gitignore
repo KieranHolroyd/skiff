@@ -15,3 +15,8 @@ spikes/**/tmp/
 
 # local data
 .data*/
+
+# security audits (sensitive; keep local)
+reports/security/
+**/[Ss]ecurity[-_ ][Aa]udit*
+**/security-audits/

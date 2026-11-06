@@ -23,5 +23,12 @@ describeConformance({
 		slowInput: 'sleep 10000',
 		writeInput: 'delete from items',
 		readOnlyEscapes: ['delete from items; select count'],
+		scratchCreate: {
+			op: 'create-table',
+			parent: ['public'],
+			name: 'conformance_scratch',
+			columns: [{ name: 'id', type: 'integer', nullable: false, identity: false }],
+			primaryKey: ['id'],
+		},
 	},
 });

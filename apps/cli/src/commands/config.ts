@@ -22,8 +22,8 @@ profile; use \`skif profile list\` to see them and \`--profile <name>\` to choos
 one. SKIFF_CONFIG_DIR and XDG_CONFIG_HOME change the file location.
 
 Settings:
-  url            Control-plane URL, e.g. https://control.kieran.dev  (SKIFF_URL)
-  contentDomain  Domain deployed sites use, e.g. kierancloud.dev     (SKIFF_CONTENT_DOMAIN)
+  url            Control-plane URL, e.g. https://control.example.com  (SKIFF_URL)
+  contentDomain  Domain deployed sites use, e.g. examplecloud.com     (SKIFF_CONTENT_DOMAIN)
   token          API key; prefer \`skif login\`, which verifies it     (SKIFF_TOKEN)
 
 Commands:

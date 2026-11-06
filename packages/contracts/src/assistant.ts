@@ -10,48 +10,6 @@ import * as z from "zod";
  * Nothing here is enabled until an owner configures a model provider in Settings → Assistant.
  */
 
-/** Specialist agents the lead can hand a turn to. Keep in sync with the server prompts. */
-export const ASSISTANT_AGENTS = [
-  {
-    id: "guide",
-    label: "Guide",
-    description:
-      "Explains the dashboard, answers “where do I click?” and points at the right element.",
-  },
-  {
-    id: "projects",
-    label: "Projects",
-    description:
-      "Projects, releases, environments, workloads, access and share links.",
-  },
-  {
-    id: "data",
-    label: "Data",
-    description:
-      "Managed Postgres databases, object storage, buckets and attachments.",
-  },
-  {
-    id: "platform",
-    label: "Platform",
-    description:
-      "Fleet health, nodes, capacity, metrics, logs, audit and mass operations.",
-  },
-] as const;
-
-export type AssistantAgentId = (typeof ASSISTANT_AGENTS)[number]["id"];
-export const assistantAgentIds = ASSISTANT_AGENTS.map((agent) => agent.id) as [
-  AssistantAgentId,
-  ...AssistantAgentId[],
-];
-
-/** The lead agent is not selectable; it greets, routes and synthesises. */
-export type AssistantSpeaker = AssistantAgentId | "lead";
-
-export const assistantAgentLabel = (id: AssistantSpeaker): string =>
-  id === "lead"
-    ? "Skiff"
-    : (ASSISTANT_AGENTS.find((agent) => agent.id === id)?.label ?? id);
-
 // --- page context ---------------------------------------------------------
 
 /**
@@ -71,6 +29,7 @@ export const assistantPageTargetSchema = z.object({
 });
 
 export const assistantPageContextSchema = z.object({
+  /** Empty when the user turned page context off in the panel; then nothing below is sent. */
   path: z.string().max(500),
   title: z.string().max(200).optional(),
   /** Project slug when the user is on a project page. */
@@ -124,54 +83,40 @@ export type AssistantEvent =
   | {
       type: "run.started";
       runId: string;
-      agents: AssistantAgentId[];
-      note?: string;
-    }
-  | {
-      type: "agent.started";
-      runId: string;
-      agent: AssistantSpeaker;
-      label: string;
-    }
-  | {
-      type: "agent.finished";
-      runId: string;
-      agent: AssistantSpeaker;
-      label: string;
     }
   | {
       type: "text.delta";
       runId: string;
-      agent: AssistantSpeaker;
       text: string;
     }
   | {
       type: "tool.started";
       runId: string;
-      agent: AssistantSpeaker;
       callId: string;
       tool: string;
       title: string;
+      /** Compact, truncated JSON of the arguments (file bodies summarised) for the step list. */
+      args?: string;
     }
   | {
       type: "tool.finished";
       runId: string;
-      agent: AssistantSpeaker;
       callId: string;
       tool: string;
       ok: boolean;
       summary: string;
+      /** A longer excerpt of the result for the expandable step (≤ 4,000 chars). */
+      detail?: string;
+      durationMs?: number;
     }
   | {
       type: "ui.guide";
       runId: string;
-      agent: AssistantSpeaker;
       guide: AssistantGuide;
     }
   | {
       type: "confirmation.required";
       runId: string;
-      agent: AssistantSpeaker;
       token: string;
       tool: string;
       title: string;
@@ -181,7 +126,7 @@ export type AssistantEvent =
   | {
       type: "run.finished";
       runId: string;
-      agents: AssistantAgentId[];
+      durationMs?: number;
     }
   | {
       type: "error";
@@ -195,35 +140,24 @@ export interface AssistantStatus {
   configured: boolean;
   provider: string | null;
   model: string | null;
-  /** The base URL is not secret, but only shown to users who can see the settings page. */
-  agents: ReadonlyArray<{
-    id: AssistantAgentId;
-    label: string;
-    description: string;
-    enabled: boolean;
-  }>;
-  maxAgents: number;
 }
 
-/** Owner-editable details for one specialist (Settings → Assistant → Agents). */
+/**
+ * Owner-editable details of the assistant (Settings → Assistant → Instructions and tools). There
+ * is one agent: it sees every MCP tool the caller may use unless the owner narrows the list.
+ */
 export interface AssistantAgentDetail {
-  id: AssistantAgentId;
-  /** Defaults to ASSISTANT_AGENTS.label. */
-  label: string;
-  /** The one-line routing description the lead sees. */
-  description: string;
-  /** The specialist's full system prompt. */
+  /** The full system prompt. */
   instructions: string;
-  enabled: boolean;
   /** Optional model override; null uses SKIFF_ASSISTANT_MODEL. */
   model: string | null;
-  /** MCP tool names this agent may call. */
-  tools: string[];
-  /** True when an owner has changed this agent from its defaults. */
+  /** MCP tool names the assistant may call; null means every tool in the catalog. */
+  tools: string[] | null;
+  /** True when an owner has changed the assistant from its defaults. */
   customized: boolean;
 }
 
-/** A tool the owner can give an agent. */
+/** A tool the owner can give the assistant. */
 export interface AssistantToolInfo {
   name: string;
   title: string;

@@ -13,6 +13,7 @@
  */
 import type { DatabaseEngine, DatabaseStudioActivation, StudioLimits } from '@skiff/contracts';
 import type {
+	AlterResult,
 	ApplyResult,
 	BrowseQuery,
 	Cell,
@@ -20,6 +21,7 @@ import type {
 	ObjectDescription,
 	ObjectRef,
 	RowChange,
+	SchemaChange,
 	StudioCapabilities,
 	StudioEvent,
 	TreeNode,
@@ -61,6 +63,13 @@ export interface StudioSession {
 	apply(object: ObjectRef, changes: RowChange[], signal: AbortSignal): Promise<ApplyResult>;
 	/** The full value of one cell that `browse`/`run` returned as `truncated`. */
 	value?(object: ObjectRef, key: Record<string, Cell>, column: string, signal: AbortSignal): Promise<Cell>;
+	/**
+	 * One structure edit (`capabilities.structure` lists the ops it accepts; anything else is
+	 * `unsupported`). Read-only sessions refuse with `read_only`. With `dryRun`, return the
+	 * statements without running them. A plugin runs the statements in one transaction where
+	 * the engine allows DDL in one, and drops any cached description of the objects it touched.
+	 */
+	alter?(change: SchemaChange, options: { dryRun: boolean }, signal: AbortSignal): Promise<AlterResult>;
 	close(): Promise<void>;
 }
 

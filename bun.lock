@@ -46,7 +46,6 @@
         "@better-auth/mcp": "1.7.15",
         "@better-auth/oauth-provider": "1.7.15",
         "@better-auth/passkey": "1.7.15",
-        "@duckdb/node-api": "2.0.0-r.1",
         "@modelcontextprotocol/server": "2.4.0",
         "@skiff/contracts": "workspace:*",
         "@skiff/core": "workspace:*",
@@ -112,7 +111,6 @@
       "name": "@skiff/core",
       "version": "0.1.0",
       "dependencies": {
-        "@duckdb/node-api": "2.0.0-r.1",
         "@skiff/contracts": "workspace:*",
         "@skiff/db": "workspace:*",
         "@skiff/site-config": "workspace:*",

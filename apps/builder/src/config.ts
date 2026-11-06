@@ -6,7 +6,8 @@
  *   SKIFF_NODE_TOKEN    token for a node marked `can_build`
  *   SKIFF_BUILD_DIR     scratch root for clones and artifacts
  *
- * Optional: `SKIFF_GIT_TOKEN` for private HTTPS repositories (never logged), and
+ * Optional: `SKIFF_GIT_TOKEN` for private HTTPS repositories (never logged), sent only to the
+ * hosts in `SKIFF_GIT_TOKEN_HOSTS` (comma-separated, default `github.com`), and
  * `SKIFF_BUILDER_SYSTEMD=false` to force direct execution on a development workstation.
  *
  * On a node, `skiff-builder.service` runs `skiff-agent builder` with the agent's own
@@ -22,8 +23,13 @@ export interface BuilderConfig {
 	controlUrl: string;
 	nodeToken: string;
 	buildDir: string;
-	/** Used as the password in an HTTPS clone URL when set. */
+	/**
+	 * Credential for private HTTPS repositories. It is handed to `git clone` as an HTTP header in
+	 * the clone's environment, never in the URL or `.git/config`, and only for `gitTokenHosts`.
+	 */
 	gitToken: string | null;
+	/** Hosts (`host` or `host:port`) the git token may be sent to. */
+	gitTokenHosts: string[];
 	pollMs: number;
 	/** Run each build in a transient systemd unit; false uses a direct child process. */
 	systemd: boolean;
@@ -69,6 +75,21 @@ function truthy(value: string | undefined): boolean | null {
 	throw new ConfigError('SKIFF_BUILDER_SYSTEMD must be true or false');
 }
 
+/** Default: the token is for GitHub, and a repo URL elsewhere must never receive it. */
+export const DEFAULT_GIT_TOKEN_HOSTS = ['github.com'];
+
+function gitTokenHosts(value: string | undefined): string[] {
+	if (value === undefined || !value.trim()) return DEFAULT_GIT_TOKEN_HOSTS;
+	const hosts = value
+		.split(',')
+		.map((host) => host.trim().toLowerCase())
+		.filter(Boolean);
+	for (const host of hosts)
+		if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/.test(host))
+			throw new ConfigError(`SKIFF_GIT_TOKEN_HOSTS has an invalid host "${host}"`);
+	return hosts;
+}
+
 export function loadConfig(env: Env = process.env): BuilderConfig {
 	const controlUrl = required(env, 'SKIFF_CONTROL_URL').replace(/\/+$/, '');
 	let parsed: URL;
@@ -98,6 +119,7 @@ export function loadConfig(env: Env = process.env): BuilderConfig {
 		nodeToken: required(env, 'SKIFF_NODE_TOKEN'),
 		buildDir: required(env, 'SKIFF_BUILD_DIR'),
 		gitToken: env.SKIFF_GIT_TOKEN?.trim() || null,
+		gitTokenHosts: gitTokenHosts(env.SKIFF_GIT_TOKEN_HOSTS),
 		pollMs: positiveInt(env, 'SKIFF_BUILDER_POLL_MS', 5_000),
 		systemd,
 		timeoutSeconds: positiveInt(env, 'SKIFF_BUILDER_TIMEOUT_SECONDS', 600),

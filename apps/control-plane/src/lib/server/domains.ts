@@ -1,6 +1,6 @@
 /**
  * Shared-domain detection (DESIGN §5, D19). Deployed content is same-site with the dashboard when
- * the two hostnames share a registrable domain, e.g. `control.kieran.dev` + `kieran.dev`, or
+ * the two hostnames share a registrable domain, e.g. `control.example.com` + `example.com`, or
  * `cloud.example.com` + `sites.example.com`. Either case needs the persistent warning.
  */
 

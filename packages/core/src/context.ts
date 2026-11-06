@@ -6,6 +6,7 @@ import type { QuotaService } from './quota.ts';
 import type { UsageService } from './usage.ts';
 import type { ObjectStore } from './object-store.ts';
 import type { TelemetryStore } from './telemetry.ts';
+import type { MetricsExporter } from './metrics-export.ts';
 import type { ProjectService } from './projects.ts';
 import type { ReleaseService } from './releases.ts';
 import type { DeploymentService } from './deployments.ts';
@@ -46,6 +47,8 @@ export interface CoreContext {
 	quota: QuotaService;
 	usage: UsageService;
 	telemetry?: TelemetryStore;
+	/** Prometheus `/metrics` renderer and its settings (docs/METRICS.md). */
+	metricsExport: MetricsExporter;
 	notifiers: Notifier[];
 	now(): number;
 	projects: ProjectService;

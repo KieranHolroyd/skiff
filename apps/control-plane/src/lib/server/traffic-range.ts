@@ -2,7 +2,7 @@ import type { TelemetryInterval } from '@skiff/core';
 
 /**
  * Dashboard traffic ranges. Minute buckets for the last day, hourly buckets for longer
- * windows (the DuckDB store keeps 1-minute rows for 48 h and hourly rollups for 90 days).
+ * windows (the ClickHouse store keeps 1-minute rows for 48 h and hourly rollups for 90 days).
  */
 export const trafficRanges = [
 	{
@@ -63,13 +63,13 @@ const HOUR_MS = 3_600_000;
 export const TRAFFIC_REPORTING_LAG_MINUTES = 2;
 
 /**
- * Parse `?range=`, falling back to the last 24 hours. Timestamps are bucket-aligned and the range
+ * Parse `?range=`, falling back to the last hour. Timestamps are bucket-aligned and the range
  * ends on the newest minute every agent has reported.
  */
 export function parseTrafficRange(raw: string | null, now = Date.now()): TrafficRange {
 	const preset =
 		trafficRanges.find((item) => item.key === raw) ??
-		trafficRanges.find((item) => item.key === '24h') ??
+		trafficRanges.find((item) => item.key === '1h') ??
 		trafficRanges[0]!;
 	const step = preset.interval === '1h' ? HOUR_MS : MINUTE_MS;
 	// `to` is the start of the last reported minute; the window ends when that minute does.

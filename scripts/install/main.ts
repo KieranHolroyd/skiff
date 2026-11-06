@@ -14,11 +14,14 @@
  *   --dry-run                 print the plan; change nothing
  *   --upgrade                 reuse /etc/skiff + data, build a new release
  *   --uninstall [--purge]     stop/remove units (purge also deletes data/config)
- *   --platform-host <host>    dashboard/API host (default control.kieran.dev)
- *   --content-domain <domain> sites domain (default kierancloud.dev)
- *   --acme-email <email>      ACME account email (required for TLS)
- *   --admin-email <email>     first-owner email; the installer prints a one-time magic link
- *   --cloudflare-token-file   Caddy DNS-01 token file (default /etc/caddy/cloudflare.token)
+ *   --platform-host <host>    dashboard/API domain; blank serves the dashboard at http://<server-ip>
+ *   --content-domain <domain> sites domain; blank uses the temporary <server-ip>.sslip.io (HTTP)
+ *   --acme-email <email>      ACME account email; turns on HTTPS (needs real domains)
+ *   --public-address <ipv4>   this server's address for IP-only installs (default: detected)
+ *   --admin-email <email>     prefills the owner email in the setup wizard (optional)
+ *   --cloudflare-token-file   optional Caddy DNS-01 token file, used only if it exists
+ *                             (default /etc/caddy/cloudflare.token)
+ *   --skip-dns-check          do not check that the domains resolve before installing
  *   --github-client-id/--github-client-secret
  *   --smtp-host/--smtp-port/--smtp-user/--smtp-password/--smtp-from
  *   --object-store local|r2   storage backend (default local)
@@ -29,6 +32,7 @@
 import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
+import { confirm } from './confirm.ts';
 import { randomBytes } from 'node:crypto';
 import { SELF_UPDATE_DEFAULTS } from '../../packages/contracts/src/self-update.ts';
 import { parseSemver } from '../../packages/contracts/src/semver.ts';
@@ -36,10 +40,19 @@ import { TRIGGER_PATH_UNIT, triggerUnits, updateCommandScript } from '../update-
 import { controlPlaneUnits, DEFAULT_CONTROL_PLANE_PATHS, GUARD_UNIT } from '../systemd/control-plane.ts';
 import { CONFIG_COMMAND, CONFIG_PATH_UNIT, CONFIG_SERVICE_UNIT, ensurePlatformConfigUnits } from '../platform-config/units.ts';
 import { readEnvFile, writeEnvFile } from './env-file.ts';
+import { checkDns, digLookup, dnsTargets, parseServerAddresses, resolverLookup, type DnsResult } from './dns-check.ts';
+import {
+	CONTROL_SOCKET,
+	isDomainName,
+	isIpv4,
+	isTemporaryContentDomain,
+	temporaryContentDomain,
+} from '../../packages/contracts/src/platform-domains.ts';
 import { BUILDER_UNIT, ensureBuilder, linkAgentCommands } from '../systemd/builder.ts';
 import { HELPER_UNIT, ensureHelper } from '../systemd/helper.ts';
 import { ensureStorageUnits, STORAGE_PATH_UNIT } from '../systemd/storage.ts';
 import { STUDIO_UNIT, studioUnit } from '../systemd/studio.ts';
+import { CLICKHOUSE_UNIT, clickhouseInstalled, ensureClickHouse, removeClickHouseUnit } from '../systemd/clickhouse.ts';
 import {
 	createUpgradeSnapshotBundle,
 	pruneUpgradeSnapshotBundles,
@@ -113,14 +126,24 @@ interface Options {
 	platformHost: string;
 	contentDomain: string;
 	acmeEmail: string;
+	/** HTTPS through Let's Encrypt; decided by resolveDomains() (D105). */
+	tls: boolean;
+	/** Server IPv4 for IP-only installs (--public-address / SKIFF_PUBLIC_HOST, else detected). */
+	publicAddress: string;
 	adminEmail: string;
 	cloudflareTokenFile: string;
+	skipDnsCheck: boolean;
 	githubClientId?: string;
 	githubClientSecret?: string;
 	smtp?: { host: string; port: number; user: string; password: string; from: string };
 	objectStore: 'local' | 'r2';
 	r2?: { accountId: string; bucket: string; accessKeyId: string; secretAccessKey: string };
 	noAgent: boolean;
+	/**
+	 * Install the optional ClickHouse telemetry store (D101). Undefined: ask (interactive), else no.
+	 * A host that already has it keeps it either way unless --no-clickhouse.
+	 */
+	clickhouse?: boolean;
 	version: string;
 }
 
@@ -177,16 +200,24 @@ const options: Options = {
 	purge: has('--purge'),
 	platformHost: value(
 		'--platform-host',
-		process.env.SKIFF_PLATFORM_HOST ?? existingHost('SKIFF_PLATFORM_ORIGIN') ?? 'control.kieran.dev',
+		process.env.SKIFF_PLATFORM_HOST ?? existingHost('SKIFF_PLATFORM_ORIGIN') ?? '',
 	),
-	contentDomain: setting('--content-domain', ['SKIFF_CONTENT_DOMAIN'], 'kierancloud.dev'),
+	contentDomain: setting('--content-domain', ['SKIFF_CONTENT_DOMAIN'], ''),
 	acmeEmail: setting('--acme-email', ['SKIFF_ACME_EMAIL']),
+	tls: false,
+	publicAddress: value('--public-address', process.env.SKIFF_PUBLIC_HOST ?? ''),
 	adminEmail: value('--admin-email', process.env.SKIFF_ADMIN_EMAIL ?? ''),
 	cloudflareTokenFile: setting('--cloudflare-token-file', ['SKIFF_CLOUDFLARE_TOKEN_FILE'], '/etc/caddy/cloudflare.token'),
+	skipDnsCheck: has('--skip-dns-check'),
 	githubClientId: setting('--github-client-id', ['GITHUB_CLIENT_ID']) || undefined,
 	githubClientSecret: setting('--github-client-secret', ['GITHUB_CLIENT_SECRET']) || undefined,
 	objectStore: (setting('--object-store', ['SKIFF_OBJECT_STORE'], 'local') as 'local' | 'r2') || 'local',
 	noAgent: has('--no-agent'),
+	clickhouse: has('--no-clickhouse')
+		? false
+		: has('--clickhouse') || process.env.SKIFF_INSTALL_CLICKHOUSE === '1'
+			? true
+			: undefined,
 	version: value('--version', process.env.SKIFF_VERSION ?? sourceVersion()),
 };
 if (options.objectStore !== 'local' && options.objectStore !== 'r2') {
@@ -219,9 +250,19 @@ async function ask(question: string, fallback = ''): Promise<string> {
 	const answer = (await rl.question(`${question}${fallback ? color.dim(` [${fallback}]`) : ''}: `)).trim();
 	return answer || fallback;
 }
-async function askSecret(question: string): Promise<string> {
-	if (!rl) return '';
-	return (await rl.question(`${question}: `)).trim();
+
+/** An interactive Yes / No toggle (scripts/install/confirm.ts); `fallback` when not interactive. */
+async function askYesNo(question: string, fallback: boolean): Promise<boolean> {
+	if (!rl) return fallback;
+	rl.pause(); // the toggle reads raw keypresses from the same terminal
+	try {
+		return await confirm(question, fallback, { input: process.stdin, output: process.stdout, ask });
+	} catch (error) {
+		console.error(color.red(`\n${(error as Error).message}`));
+		process.exit(130);
+	} finally {
+		rl.resume();
+	}
 }
 
 function run(
@@ -289,22 +330,135 @@ function validDomain(value: string): boolean {
 async function promptOptions(): Promise<void> {
 	if (!interactive) return;
 	step('Configuration');
-	options.platformHost = await ask('Platform host (dashboard/API/MCP)', options.platformHost);
-	options.contentDomain = await ask('Content domain for deployed sites', options.contentDomain);
-	options.acmeEmail = await ask('ACME email for Let\'s Encrypt', options.acmeEmail);
-	options.adminEmail = await ask('First owner email (magic link)', options.adminEmail);
-	if (!existsSync(options.cloudflareTokenFile)) {
-		const token = await askSecret(
-			`Cloudflare DNS token (will be written to ${options.cloudflareTokenFile})`,
+	const address = serverAddress();
+	log(color.dim('Domains are optional: leave them blank to start on the IP address and add them later in Settings → Domains.'));
+	options.platformHost = await ask(
+		`Dashboard domain ${color.dim(`(blank: http://${address ?? '<server-ip>'})`)}`,
+		options.platformHost,
+	);
+	options.contentDomain = await ask(
+		`Domain for deployed sites ${color.dim(`(blank: ${address ? temporaryContentDomain(address) : '<ip>.sslip.io'})`)}`,
+		options.contentDomain,
+	);
+	if (isDomainName(options.platformHost) && (!options.contentDomain || !isTemporaryContentDomain(options.contentDomain)))
+		options.acmeEmail = await ask(`Let's Encrypt email for HTTPS ${color.dim('(blank: HTTP only)')}`, options.acmeEmail);
+	options.adminEmail = await ask('Owner email (prefills the setup wizard; optional)', options.adminEmail);
+	if (options.clickhouse === undefined && !clickhouseInstalled(SYSTEMD_DIR)) {
+		log(
+			color.dim(
+				'Traffic charts and custom dashboards need the optional ClickHouse telemetry store: a ~240 MB\n' +
+					'download and ~300–800 MB of RAM. Skip it to keep the install light; you can add it any time\n' +
+					'from Settings → Telemetry.',
+			),
 		);
-		if (token) {
-			options.cloudflareTokenFile = join(ETC_DIR, 'cloudflare.token');
-			if (!options.dryRun) {
-				mkdirSync(dirname(options.cloudflareTokenFile), { recursive: true });
-				writeFileSync(options.cloudflareTokenFile, `${token}\n`, { mode: 0o640 });
-				run('chown', ['root:caddy', options.cloudflareTokenFile], { allowFailure: true });
-			}
+		options.clickhouse = await askYesNo('Install the ClickHouse telemetry store now?', false);
+	}
+}
+
+/** The DNS-01 token file, only when one is actually there; the agent refuses to start on a missing path. */
+function cloudflareTokenFile(): string {
+	return options.cloudflareTokenFile && existsSync(options.cloudflareTokenFile) ? options.cloudflareTokenFile : '';
+}
+
+function dnsLine(result: DnsResult): string {
+	const addresses = result.addresses.join(', ');
+	if (result.status === 'ok') return `${color.green('✓')} ${result.display} → ${addresses}`;
+	if (result.status === 'elsewhere')
+		return `${color.yellow('!')} ${result.display} → ${addresses} ${color.dim('(not this server; fine if proxied, e.g. Cloudflare)')}`;
+	return `${color.red('✗')} ${result.display} ${color.dim('does not resolve yet')}`;
+}
+
+/**
+ * DNS is the operator's job; the installer only checks it. Missing records are not fatal: in an
+ * interactive run the operator can re-check as often as needed while records propagate, instead
+ * of restarting the install.
+ */
+async function verifyDns(): Promise<void> {
+	step('DNS');
+	if (options.skipDnsCheck) {
+		log('skipped (--skip-dns-check); assuming the records exist');
+		return;
+	}
+	// An IP and the temporary sslip.io domain need no records.
+	const realPlatform = !isIpv4(options.platformHost);
+	const realContent = !isTemporaryContentDomain(options.contentDomain);
+	if (!realPlatform && !realContent) {
+		log('nothing to check: the dashboard is on the IP address and sites use sslip.io');
+		return;
+	}
+	const serverAddresses = parseServerAddresses(capture('hostname', ['-I']) ?? '');
+	const hasDig = Boolean(capture('sh', ['-c', 'command -v dig']));
+	const lookup = hasDig ? digLookup((cmd) => capture(cmd[0]!, cmd.slice(1))) : resolverLookup();
+	const target = serverAddresses.find((address) => !address.includes(':')) ?? serverAddresses[0] ?? "<this server's IP>";
+	log(color.dim(`querying public resolvers via ${hasDig ? 'dig' : 'the built-in resolver'}`));
+	for (;;) {
+		const targets = dnsTargets(options.platformHost, options.contentDomain).filter((target) =>
+			target.name === options.platformHost ? realPlatform : realContent,
+		);
+		const results = await checkDns(targets, lookup, serverAddresses);
+		for (const result of results) log(dnsLine(result));
+		const missing = results.filter((result) => result.status === 'missing');
+		if (!missing.length) return;
+		log(color.yellow(`Create A (or AAAA) records pointing at ${target}:`));
+		for (const result of missing) log(`  ${result.display}`);
+		if (!rl) {
+			log(color.yellow('warning: continuing anyway; HTTPS certificates will not issue until these names resolve'));
+			return;
 		}
+		const answer = (await ask('[r]e-check, [c]ontinue anyway, or [q]uit', 'r')).toLowerCase();
+		if (answer.startsWith('c')) return;
+		if (answer.startsWith('q')) fail('Stopped before installing anything. Re-run once DNS is set up.');
+	}
+}
+
+/** This server's IPv4 for an IP-only install: --public-address, else a public, else any interface address. */
+function serverAddress(): string | null {
+	if (options.publicAddress) return options.publicAddress;
+	const output = capture('hostname', ['-I']) ?? '';
+	const ipv4 = (list: string[]) => list.find((address) => isIpv4(address)) ?? null;
+	return ipv4(parseServerAddresses(output)) ?? ipv4(output.split(/\s+/).filter((address) => !address.startsWith('127.')));
+}
+
+/**
+ * Fill in what was left blank (D105): no dashboard domain → the server's IP; no content domain →
+ * `<ip>.sslip.io`. HTTPS only with an ACME email and real domains for both; everything else is
+ * plain HTTP until Settings → Domains changes it.
+ */
+function resolveDomains(): void {
+	options.platformHost = options.platformHost.trim().toLowerCase();
+	options.contentDomain = options.contentDomain.trim().toLowerCase();
+	if (options.publicAddress && !isIpv4(options.publicAddress)) fail(`--public-address must be an IPv4 address (got "${options.publicAddress}").`);
+	const address = serverAddress();
+	if (!options.platformHost) {
+		if (!address) fail("Could not detect this server's IPv4 address. Pass --public-address <ip> or --platform-host <domain>.");
+		options.platformHost = address;
+		log(`no dashboard domain: serving it at http://${address}`);
+	}
+	if (!options.contentDomain) {
+		const ip = isIpv4(options.platformHost) ? options.platformHost : address;
+		if (!ip) fail("Could not detect this server's IPv4 address for the temporary sites domain. Pass --content-domain or --public-address.");
+		options.contentDomain = temporaryContentDomain(ip);
+		log(`no sites domain: using the temporary ${options.contentDomain} (resolves to ${ip}; HTTP only)`);
+	}
+	const realDomains =
+		isDomainName(options.platformHost) &&
+		!isTemporaryContentDomain(options.platformHost) &&
+		isDomainName(options.contentDomain) &&
+		!isTemporaryContentDomain(options.contentDomain);
+	if (!options.acmeEmail && options.upgrade) {
+		// Older installs kept the ACME email only in agent.env.
+		try {
+			options.acmeEmail = readEnvFile(AGENT_ENV_FILE).get('SKIFF_ACME_EMAIL') ?? '';
+		} catch {
+			/* no agent */
+		}
+	}
+	options.tls = realDomains && Boolean(options.acmeEmail);
+	if (options.acmeEmail && !realDomains) {
+		log(color.yellow('warning: ignoring the ACME email: HTTPS needs real domains for the dashboard and sites (not an IP or sslip.io)'));
+		options.acmeEmail = '';
+	} else if (realDomains && !options.tls) {
+		log(color.yellow('warning: no ACME email, so this install serves plain HTTP. Add HTTPS later in Settings → Domains.'));
 	}
 }
 
@@ -344,21 +498,22 @@ function preflight(): void {
 	}
 	const caddyBin = capture('sh', ['-c', 'command -v caddy'])!;
 	const modules = capture(caddyBin, ['list-modules']) ?? '';
-	if (!modules.includes('dns.providers.cloudflare'))
-		fail(`Caddy at ${caddyBin} has no caddy-dns/cloudflare module. Install the Skiff Caddy build first.`);
+	if (!modules.includes('dns.providers.cloudflare')) {
+		// Only the wildcard HTTPS certificate needs DNS-01; HTTP installs work with any Caddy.
+		if (options.tls) fail(`Caddy at ${caddyBin} has no caddy-dns/cloudflare module. Install the Skiff Caddy build first.`);
+		log(color.yellow(`warning: Caddy at ${caddyBin} has no caddy-dns/cloudflare module; install the Skiff Caddy build before turning on HTTPS`));
+	}
 	log(`caddy ${capture(caddyBin, ['version']) ?? 'unknown'}`);
 
 	if (options.objectStore === 'r2') {
 		const missing = Object.entries(options.r2 ?? {}).filter(([, v]) => !v).map(([k]) => k);
 		if (missing.length) fail(`R2 selected but missing: ${missing.join(', ')}`);
 	}
-	if (!validDomain(options.platformHost)) fail(`Invalid platform host "${options.platformHost}".`);
-	if (!validDomain(options.contentDomain)) fail(`Invalid content domain "${options.contentDomain}".`);
-	if (!options.acmeEmail) {
-		if (options.yes) fail('--acme-email is required for TLS.');
-		options.acmeEmail = 'admin@' + options.contentDomain;
-		log(color.yellow(`warning: no ACME email; using ${options.acmeEmail}`));
-	}
+	if (!isDomainName(options.platformHost) && !isIpv4(options.platformHost) && !validDomain(options.platformHost))
+		fail(`Invalid platform host "${options.platformHost}" (a domain or an IPv4 address).`);
+	if (!isDomainName(options.contentDomain)) fail(`Invalid content domain "${options.contentDomain}".`);
+	if (options.platformHost === options.contentDomain) fail('The dashboard and sites need different domains.');
+	log(`${options.tls ? 'https' : 'http'}://${options.platformHost}, sites at *.${options.contentDomain}`);
 
 	const disk = Bun.spawnSync({ cmd: ['df', '-Pk', '/'], stdout: 'pipe' });
 	const line = new TextDecoder().decode(disk.stdout).split('\n')[1] ?? '';
@@ -421,7 +576,7 @@ function writeSecrets(): Map<string, string> {
 
 	const env = new Map(existing);
 	env.set('NODE_ENV', 'production');
-	env.set('SKIFF_PLATFORM_ORIGIN', `https://${options.platformHost}`);
+	env.set('SKIFF_PLATFORM_ORIGIN', `${options.tls ? 'https' : 'http'}://${options.platformHost}`);
 	env.set('SKIFF_CONTENT_DOMAIN', options.contentDomain);
 	env.set('SKIFF_DATA_DIR', join(VAR_DIR, 'data'));
 	env.set('SKIFF_OBJECT_STORE', options.objectStore);
@@ -432,8 +587,10 @@ function writeSecrets(): Map<string, string> {
 	env.set('SKIFF_OBJECT_STORE_SECRET', existing.get('SKIFF_OBJECT_STORE_SECRET') ?? base64(32));
 	env.set('SKIFF_DAILY_BACKUPS', '1');
 	// Remembered so a later re-run/upgrade keeps them without repeating the flags.
-	if (options.acmeEmail) env.set('SKIFF_ACME_EMAIL', options.acmeEmail);
-	env.set('SKIFF_CLOUDFLARE_TOKEN_FILE', options.cloudflareTokenFile);
+	if (options.tls) env.set('SKIFF_ACME_EMAIL', options.acmeEmail);
+	else env.delete('SKIFF_ACME_EMAIL');
+	if (cloudflareTokenFile()) env.set('SKIFF_CLOUDFLARE_TOKEN_FILE', cloudflareTokenFile());
+	else env.delete('SKIFF_CLOUDFLARE_TOKEN_FILE');
 	if (options.smtp) {
 		env.set('SKIFF_SMTP_HOST', options.smtp.host);
 		env.set('SKIFF_SMTP_PORT', String(options.smtp.port));
@@ -459,8 +616,13 @@ function writeSecrets(): Map<string, string> {
 		run('chown', ['root:skiff', ENV_FILE], { allowFailure: true });
 		run('chmod', ['0640', ENV_FILE], { allowFailure: true });
 	}
-	if (!existsSync(SETUP_TOKEN_FILE) && !options.dryRun) {
-		writeFileSync(SETUP_TOKEN_FILE, `${randomBytes(32).toString('base64url')}\n`, { mode: 0o600 });
+	if (!options.dryRun) {
+		if (!existsSync(SETUP_TOKEN_FILE))
+			writeFileSync(SETUP_TOKEN_FILE, `${randomBytes(32).toString('base64url')}\n`, { mode: 0o640 });
+		// The control plane (user skiff) reads it to verify the setup link (D102). Installs before
+		// 0.6.x wrote it root 0600, so fix the mode on every run.
+		run('chown', ['root:skiff', SETUP_TOKEN_FILE], { allowFailure: true });
+		run('chmod', ['0640', SETUP_TOKEN_FILE], { allowFailure: true });
 	}
 	return env;
 }
@@ -811,6 +973,40 @@ function installBackups(env: Map<string, string>): void {
 	log(`Litestream replicating ${env.get('SKIFF_DATA_DIR')}/skiff.db to ${env.get('R2_BUCKET')}/skiff/sqlite`);
 }
 
+/**
+ * The optional telemetry store (D101, docs/OPS.md §3.6): a loopback-only ClickHouse, installed only
+ * when asked for (prompt, --clickhouse) or already present (kept current on --upgrade). Started
+ * before the control plane so its SKIFF_CLICKHOUSE_* settings are in skiff.env when it boots. A
+ * failed download or start is a warning, never an install failure.
+ */
+async function installClickHouse(): Promise<void> {
+	const installed = clickhouseInstalled(SYSTEMD_DIR);
+	const wanted = options.clickhouse ?? installed;
+	if (!wanted) {
+		log(
+			color.dim(
+				installed
+					? 'telemetry store: left as is (--no-clickhouse); remove it from Settings → Telemetry'
+					: 'telemetry store: skipped (optional). Install it later from Settings → Telemetry, or re-run with --upgrade --clickhouse',
+			),
+		);
+		return;
+	}
+	step('Telemetry store (ClickHouse)');
+	const result = await ensureClickHouse({
+		envFile: ENV_FILE,
+		systemdDir: SYSTEMD_DIR,
+		installRoot: join(OPT_DIR, 'clickhouse'),
+		dataDir: join(VAR_DIR, 'clickhouse'),
+		configDir: join(ETC_DIR, 'clickhouse'),
+		dryRun: options.dryRun,
+		run: (cmd) => void run(cmd[0]!, cmd.slice(1)),
+		capture: (cmd) => capture(cmd[0]!, cmd.slice(1)),
+		log: (message) => log(message.startsWith('warning:') ? color.yellow(message) : message),
+	});
+	if (result.ok && !options.dryRun) log(`${CLICKHOUSE_UNIT} is serving on 127.0.0.1:18123`);
+}
+
 function waitFor(label: string, check: () => boolean, timeoutMs = 60_000): void {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
@@ -931,9 +1127,10 @@ function bootstrapNode(env: Map<string, string>, release: string): void {
 	}
 	const platformOrigin = env.get('SKIFF_PLATFORM_ORIGIN')!;
 	const platformHost = new URL(platformOrigin).host;
+	const proto = platformOrigin.startsWith('https:') ? 'https' : 'http';
 	waitFor(
 		'control plane HTTP',
-		() => (capture('curl', ['-fsS', '--unix-socket', join(RUN_DIR, 'control.sock'), '-H', `Host: ${platformHost}`, '-H', 'X-Forwarded-Proto: https', '-H', `X-Forwarded-Host: ${platformHost}`, 'http://localhost/api/setup/status']) ?? '').includes('needsSetup'),
+		() => (capture('curl', ['-fsS', '--unix-socket', join(RUN_DIR, 'control.sock'), '-H', `Host: ${platformHost}`, '-H', `X-Forwarded-Proto: ${proto}`, '-H', `X-Forwarded-Host: ${platformHost}`, 'http://localhost/api/setup/status']) ?? '').includes('needsSetup'),
 		60_000,
 	);
 	const script = join(release, 'repo', 'scripts', 'install', 'bootstrap-node.ts');
@@ -949,8 +1146,11 @@ function bootstrapNode(env: Map<string, string>, release: string): void {
 			SKIFF_AGENT_ENV_FILE: AGENT_ENV_FILE,
 			SKIFF_PLATFORM_HOST: platformHost,
 			SKIFF_PLATFORM_UPSTREAM: `unix/${join(RUN_DIR, 'control.sock')}`,
-			SKIFF_ACME_EMAIL: options.acmeEmail,
-			SKIFF_CLOUDFLARE_API_TOKEN_FILE: options.cloudflareTokenFile,
+			// TLS follows the ACME email in bootstrap-node.ts; HTTP installs pass none.
+			SKIFF_ACME_EMAIL: options.tls ? options.acmeEmail : '',
+			SKIFF_CLOUDFLARE_API_TOKEN_FILE: options.tls ? cloudflareTokenFile() : '',
+			// The edge agent reaches the control plane on its socket, not through Caddy (D105).
+			SKIFF_CONTROL_SOCKET: CONTROL_SOCKET,
 			SKIFF_CADDY_ADMIN_SOCKET: detectCaddyAdminSocket(),
 		},
 	});
@@ -980,53 +1180,47 @@ function publicHealth(env: Map<string, string>): void {
 	log(`${origin} is responding`);
 }
 
-function requestMagicLink(env: Map<string, string>): void {
+/**
+ * First-run setup (D102): while no owner exists, print the one-time setup link. The wizard at
+ * `/setup` creates the owner, so this never depends on email or on scraping the journal.
+ */
+function printSetupLink(env: Map<string, string>): void {
 	if (options.dryRun) return;
-	if (!options.adminEmail) return;
-	step('First owner');
 	const origin = env.get('SKIFF_PLATFORM_ORIGIN')!;
-	const result = Bun.spawnSync({
-		cmd: [
-			'curl',
-			'-fsS',
-			'--unix-socket',
-			join(RUN_DIR, 'control.sock'),
-			'-H',
-			`Host: ${new URL(origin).host}`,
-			'-H',
-			'X-Forwarded-Proto: https',
-			'-H',
-			`X-Forwarded-Host: ${new URL(origin).host}`,
-			'-H',
-			`Origin: ${origin}`,
-			'-H',
-			'content-type: application/json',
-			'-X',
-			'POST',
-			'--data',
-			JSON.stringify({ email: options.adminEmail, callbackURL: `${origin}/overview` }),
-			'http://localhost/api/auth/sign-in/magic-link',
-		],
-		stdout: 'pipe',
-		stderr: 'pipe',
-	});
-	if (result.exitCode !== 0) {
-		log(color.yellow('could not request a magic link automatically; open /login and request one'));
+	const status = capture('curl', [
+		'-fsS',
+		'--max-time',
+		'10',
+		'--unix-socket',
+		join(RUN_DIR, 'control.sock'),
+		'-H',
+		`Host: ${new URL(origin).host}`,
+		'http://localhost/api/setup/status',
+	]);
+	let needsSetup: boolean | undefined;
+	try {
+		needsSetup = (JSON.parse(status ?? '') as { needsSetup?: unknown }).needsSetup === true;
+	} catch {
+		needsSetup = undefined;
+	}
+	if (needsSetup === false) return; // an owner already exists: nothing to set up
+	step('Finish setup');
+	let token = '';
+	try {
+		token = readFileSync(SETUP_TOKEN_FILE, 'utf8').trim();
+	} catch {
+		// Reported below.
+	}
+	if (!token) {
+		log(color.yellow(`no setup token in ${SETUP_TOKEN_FILE}; find the link with: journalctl -u skiff-control-plane | grep setup`));
 		return;
 	}
-	if (options.smtp) {
-		console.log(`\n${color.green('Sign-in email sent to')} ${options.adminEmail}`);
-		return;
-	}
-	Bun.sleepSync(1000);
-	const journal = capture('journalctl', ['-u', 'skiff-control-plane', '-n', '200', '--no-pager']) ?? '';
-	const link = [...journal.matchAll(/https:\/\/[^\s]+\/api\/auth\/magic-link\/verify[^\s]+/g)].at(-1)?.[0];
-	if (!link) {
-		log(color.yellow('magic link not found in the journal; request one from /login'));
-		return;
-	}
-	console.log(`\n${color.green('One-time sign-in link (also in journalctl -u skiff-control-plane):')}`);
-	console.log(link);
+	const url = new URL('/setup', origin);
+	url.searchParams.set('token', token);
+	if (options.adminEmail) url.searchParams.set('email', options.adminEmail);
+	console.log(`\nOpen this link to create the owner account (works once, until an owner exists):`);
+	console.log(color.bold(url.toString()));
+	console.log(color.dim(`Lost it? sudo cat ${SETUP_TOKEN_FILE}, or journalctl -u skiff-control-plane | grep setup`));
 }
 
 /** Atomically point `link` at `target` (or remove it when `target` is null). */
@@ -1078,7 +1272,9 @@ function snapshotDatabase(dbPath: string, destination: string): void {
 
 async function install(): Promise<void> {
 	if (!options.upgrade) await promptOptions();
+	resolveDomains();
 	preflight();
+	if (!options.upgrade) await verifyDns();
 	ensureUsersAndDirs();
 	const env = writeSecrets();
 	const previousRelease = existsSync(join(OPT_DIR, 'current'))
@@ -1121,6 +1317,7 @@ async function install(): Promise<void> {
 		installCliCommands();
 		installReleaseCommands();
 		writeUnits(release);
+		await installClickHouse();
 		startServices();
 		installBackups(env);
 		bootstrapNode(env, release);
@@ -1128,7 +1325,7 @@ async function install(): Promise<void> {
 			// Wait for the agent to reconcile and Caddy to serve the platform route.
 			publicHealth(env);
 		}
-		requestMagicLink(env);
+		printSetupLink(env);
 		if (!options.dryRun && snapshotBundle) {
 			retireUpgradeSnapshotBundles(join(VAR_DIR, 'backups'), snapshotBundle);
 			pruneUpgradeSnapshotBundles(join(VAR_DIR, 'backups'), { keep: 3, protect: [snapshotBundle] });
@@ -1157,7 +1354,7 @@ async function offerRecoveryKit(): Promise<void> {
 	}
 	step('Recovery kit');
 	log('The master key encrypts every secret; without it a restore cannot decrypt them.');
-	if (!/^y/i.test(await ask('Export a passphrase-encrypted recovery kit now? (y/n)', 'y'))) {
+	if (!(await askYesNo('Export a passphrase-encrypted recovery kit now?', true))) {
 		log(`Skipped. Later: ${later}`);
 		return;
 	}
@@ -1180,6 +1377,8 @@ function uninstall(): void {
 		run('systemctl', ['disable', '--now', `${service}.service`], { allowFailure: true });
 		rmSync(join(SYSTEMD_DIR, `${service}.service`), { force: true });
 	}
+	// Its data (/var/lib/skiff/clickhouse) and binary (/opt/skiff/clickhouse) go only with --purge.
+	removeClickHouseUnit({ systemdDir: SYSTEMD_DIR, run: (cmd) => void run(cmd[0]!, cmd.slice(1), { allowFailure: true }) });
 	for (const unit of BACKUP_UNITS) {
 		if (!unit.includes('@')) run('systemctl', ['disable', '--now', unit], { allowFailure: true });
 		rmSync(join(SYSTEMD_DIR, unit), { force: true });

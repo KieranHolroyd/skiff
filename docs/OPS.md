@@ -34,8 +34,12 @@ D24 (the VPS is an accepted single point of failure), D25 (R2 is canonical), D28
 | `/etc/skiff/litestream.yml` | `root:skiff 0640` | R2 replication config. |
 | `/etc/caddy/Caddyfile` | `root:caddy 0640` | Caddy bootstrap/wizard-managed config. |
 | `/etc/caddy/cloudflare.token` | `root:caddy 0640` | DNS-01 token, read with `{file./etc/caddy/cloudflare.token}`. |
+| `/etc/skiff/cloudflare.token` | `root:skiff 0640` | DNS-01 token saved from **Settings → Domains** (read by the edge agent). |
 | `/var/lib/skiff` | `skiff:skiff 0751` | Data root; other-traverse lets Caddy reach its own subdirectory without listing Skiff data. |
 | `/var/lib/skiff/data/skiff.db` | `skiff:skiff 0640` | SQLite (platform state). |
+| `/var/lib/skiff/clickhouse` | `skiff-clickhouse:skiff-clickhouse 0750` | Hot telemetry (ClickHouse data). Not backed up; see §3.6. |
+| `/opt/skiff/clickhouse/<version>/clickhouse` | `root:root 0755` | ClickHouse server binary (pinned, sha512-verified); the previous version is kept until the new one serves. |
+| `/etc/skiff/clickhouse/{config,users}.xml` | `root:skiff-clickhouse 0640` | Generated ClickHouse config; rewritten on every install/update (§3.6). |
 | `/var/lib/skiff/backups` | `skiff:skiff 0750` | Pre-upgrade / pre-restore snapshots. |
 | `/var/lib/skiff/drill` | `skiff:skiff 0750` | Restore-drill scratch dirs + `status.json`. |
 | `/var/lib/caddy` | `caddy:caddy 0700` | Caddy data/config/certificates; not readable by the control plane. |
@@ -68,11 +72,10 @@ root:skiff`.
 | Variable | Default | Secret | Meaning |
 |---|---|---|---|
 | `NODE_ENV` | `production` | no | Must be `production` on a real install. |
-| `SKIFF_PLATFORM_ORIGIN` | bootstrap `http://<ip>` | no | Canonical platform origin, e.g. `https://control.kieran.dev`. Used for auth, MCP audience, CSRF. The wizard replaces the bootstrap value. |
-| `SKIFF_CONTENT_DOMAIN` | empty | no | Wildcard content zone, e.g. `kierancloud.dev`. |
-| `SKIFF_DATA_DIR` | `/var/lib/skiff/data` | no | SQLite/DuckDB directory. |
-| `SKIFF_SETUP_MODE` | `1` until the wizard completes | no | Serves only the setup flow on `:80`. |
-| `SKIFF_SETUP_TOKEN_FILE` | `/etc/skiff/setup-token` | no | File containing the one-time setup token. |
+| `SKIFF_PLATFORM_ORIGIN` | `http://<server-ip>` without a domain | no | Canonical platform origin, e.g. `https://control.example.com` or `http://203.0.113.7`. Used for auth, MCP audience, CSRF, cookies and passkeys. Change it in **Settings → Domains** (§3.7), never by hand alone: the edge agent's `agent.env` must change with it. |
+| `SKIFF_CONTENT_DOMAIN` | `<ip-with-dashes>.sslip.io` without a domain | no | Wildcard content zone, e.g. `examplecloud.com`; sites are `<slug>.<domain>`. Changed with the platform origin in **Settings → Domains**; stored preview/storage hosts follow on the next boot (D105). |
+| `SKIFF_DATA_DIR` | `/var/lib/skiff/data` | no | SQLite database and local object store. |
+| `SKIFF_SETUP_TOKEN_FILE` | `/etc/skiff/setup-token` (production) | no | File containing the one-time setup token for `/setup` (D102). Must be readable by `skiff`; when it is missing or unreadable the control plane generates `$SKIFF_DATA_DIR/setup-token` instead and logs the link on every boot until an owner exists. |
 | `SKIFF_AGENT_SOCKET` | `/run/skiff/agent.sock` | no | Agent unix socket (`forward_auth` and local control-plane calls). |
 | `SKIFF_CADDY_ADMIN_SOCKET` | `/var/lib/caddy/admin.sock` | no | Caddy admin unix socket. |
 | `SKIFF_AGENT_VERSION` | empty | no | Optional desired agent version; normally set by the control plane. |
@@ -80,6 +83,7 @@ root:skiff`.
 | `SKIFF_UPDATE_METHOD` | `auto` | no | Initial choice on Settings → Updates: `auto`, `download` or `build`. Security-sensitive hosts can default it to `build`; the CLI still accepts `--source`. |
 | `SKIFF_EDGE_NODE_ID` | empty | no | Node identity for single-node mode. |
 | `SKIFF_CONTROL_URL` | — | no | Agent only (`/etc/skiff/agent.env`): control-plane origin, `http(s)://…`. |
+| `SKIFF_CONTROL_SOCKET` | `/run/skiff/control.sock` on the control-plane host | no | Agent only: send control-plane requests to this unix socket instead of through Caddy (D105). Set for the edge agent by the installer and by Settings → Domains; leave unset on worker nodes. |
 | `SKIFF_NODE_ID` | — | no | Agent only: node id from `skiff-agent join`. |
 | `SKIFF_NODE_TOKEN` | — | **yes** | Agent only: bearer token from the single-use join token. |
 | `SKIFF_CADDY_LISTEN` | `:443,:80` | no | Agent only: listeners Caddy should bind. |
@@ -88,9 +92,9 @@ root:skiff`.
 | `SKIFF_LOG_DRAIN` | `1` | no | Agent only: drain workload stdout/stderr through the helper into the control plane for the dashboard's live Logs tab. `0` disables the drain. |
 | `SKIFF_LOG_DRAIN_INTERVAL_MS` | `2000` | no | Agent only: how often the log drain asks the helper for new journal lines (500–60000 ms). |
 | `SKIFF_MCP_ALLOW_DCR` | `1` | no | Keep legacy Dynamic Client Registration alongside CIMD. |
-| `SKIFF_OPEN_SIGNUP` | unset | no | `1` allows open sign-up. Production is invite-only (D10); the first user is always allowed so setup can create the owner. |
-| `SKIFF_DEV_PASSWORD_LOGIN` | unset | no | Development only; refused in production. |
-| `SKIFF_OWNER_2FA` | `1` (`0` only in dev password mode) | no | Org owners must prove a passkey or authenticator code per session before using the dashboard/API (D10). GitHub and magic-link sign-ins are single-factor. |
+| `SKIFF_OPEN_SIGNUP` | unset | no | `1` allows open sign-up (the first user becomes platform admin). Production is invite-only (D10): the owner is created by the setup wizard, and no sign-up method works before that (D102). |
+| `SKIFF_DEV_PASSWORD_LOGIN` | unset | no | Development only; refused in production. Opens sign-up (including public email+password sign-up) and turns off the owner second factor for headless tests. Password sign-in itself is always on (D103). |
+| `SKIFF_OWNER_2FA` | `1` (`0` only in dev password mode) | no | Org owners must prove a passkey or authenticator code per session before using the dashboard/API (D10). Password, GitHub and magic-link sign-ins are single-factor. |
 | `SKIFF_ACME_EMAIL` | empty | no | Agent only: ACME account email. Enables TLS/DNS-01 when set. |
 | `SKIFF_CLOUDFLARE_API_TOKEN` | empty | **yes** | Agent only: scoped DNS token for `caddy-dns/cloudflare` (Zone.DNS edit on the content zone). |
 | `SKIFF_ACME_CA` | Let's Encrypt | no | Agent only: ACME directory URL (use the staging URL while testing). |
@@ -147,7 +151,7 @@ account-wide key. Presigned uploads use the same credentials through the control
 | `SKIFF_BUN` | bundled Bun | Override runtime for the fingerprint/migration helpers. |
 | `SKIFF_VERSION` | latest GitHub release | Installer: pin a version. |
 | `SKIFF_REPO` | `kieranholroyd/private-cloud-deploys` | Installer: repo used for "latest" and cosign identity. |
-| `SKIFF_PUBLIC_HOST` | auto-detected | Installer: host printed in the setup URL. |
+| `SKIFF_PUBLIC_HOST` | detected (`hostname -I`) | Installer (`--public-address`): this server's IPv4 for an install without a dashboard domain. Used for `http://<ip>` and `<ip>.sslip.io`. |
 | `SKIFF_ALERT_WEBHOOK` | unset | `skiff-alert` (backup/drill `OnFailure=`): webhook URL; SMTP settings are reused for email. |
 
 > **Not yet implemented:** the installer builds from the source tarball and does not consume the
@@ -252,6 +256,23 @@ restarted by the installer/updater. Existing container units are re-rendered on 
 so after a helper upgrade use **Restart** on each managed service (or redeploy an app) to pick up
 unit changes.
 
+### 2.7 Telemetry store (ClickHouse)
+
+Installing the optional store (§3.6) adds any of these that are missing to `skiff.env` (passwords
+are 32 random bytes, base64url); removing it deletes them again. Without them telemetry reports
+"not installed". Existing values are never overwritten, so you can rotate a
+password by editing it and running `sudo skiff-update-self`, which regenerates
+`/etc/skiff/clickhouse/users.xml` from these values and restarts ClickHouse (§3.6).
+
+| Variable | Default | Secret | Meaning |
+|---|---|---|---|
+| `SKIFF_CLICKHOUSE_URL` | `http://127.0.0.1:18123` | no | ClickHouse HTTP endpoint (loopback only). |
+| `SKIFF_CLICKHOUSE_DATABASE` | `skiff` | no | Database the control plane creates and writes. |
+| `SKIFF_CLICKHOUSE_USER` | `skiff` | no | Writer: all privileges on the telemetry database only. |
+| `SKIFF_CLICKHOUSE_PASSWORD` | generated | yes | Writer password (stored in `users.xml` as SHA-256 only). |
+| `SKIFF_CLICKHOUSE_READER_USER` | `skiff_reader` | no | Read-only user for ad-hoc SQL from the dashboard. |
+| `SKIFF_CLICKHOUSE_READER_PASSWORD` | generated | yes | Reader password. |
+
 ---
 
 ## 3. Install
@@ -295,12 +316,29 @@ curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/skiff/main/install.sh
   --admin-email owner@example.com
 ```
 
+Without domains (dashboard at `http://<server-ip>`, sites at `*.<ip-with-dashes>.sslip.io`, plain
+HTTP; add domains and HTTPS later in **Settings → Domains**, §3.7):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/skiff/main/install.sh | sudo env SKIFF_YES=1 sh
+```
+
+Pass `--public-address <ipv4>` when the detected address is wrong (for example behind NAT).
+
 Private repo: add `SKIFF_GITHUB_TOKEN=…`. Pin a ref with `SKIFF_REF=v1.2.3`. Use an existing
 checkout with `SKIFF_SOURCE_DIR=/path/to/skiff`.
 
 ### 3.3 What the Bun installer does
 
 1. **Preflight** — OS/arch/systemd, Caddy + DNS module, Caddy admin socket, disk, domains.
+   Then a **DNS check** (fresh installs only): it resolves the platform host, the content apex and
+   a random `*.<content domain>` name against public resolvers (`dig @1.1.1.1` when installed,
+   Bun's resolver otherwise). It shows each name as resolving to this server, resolving elsewhere
+   (normal behind a Cloudflare proxy), or not resolving. If records are missing, an interactive
+   run offers **re-check / continue anyway / quit**, so you can wait for propagation without
+   restarting. `--yes` warns and continues; `--skip-dns-check` skips it. The installer never
+   asks for a DNS API token. A `--cloudflare-token-file` (default
+   `/etc/caddy/cloudflare.token`) is used for DNS-01 only if that file already exists.
 2. **Users/dirs** — `skiff` user (member of `caddy`), `/opt/skiff`, `/var/lib/skiff`,
    `/etc/skiff`, `/run/skiff` (2770 root:caddy).
 3. **Secrets** — generates `/etc/skiff/master.key` (0400), `BETTER_AUTH_SECRET`,
@@ -309,21 +347,32 @@ checkout with `SKIFF_SOURCE_DIR=/path/to/skiff`.
    `vite build` (adapter-bun), and `bun build --compile` for the agent and the privileged helper.
 5. **Activate** — atomically switches `/opt/skiff/current` to the new release and installs the
    release's helper binary at `/opt/skiff/helper/skiff-helper`.
-6. **Services** — writes hardened units (control plane, agent, helper), fixes Caddy's admin socket
+6. **Telemetry store (optional)** — only when asked for: right after the domain questions the
+   installer shows a Yes / No toggle (default **No**), or pass `--clickhouse` / `--no-clickhouse`
+   (`--yes` means no). When chosen it installs and starts `skiff-clickhouse.service` (§3.6) before
+   the control plane, so its `SKIFF_CLICKHOUSE_*` settings are in place when it boots. A failed
+   download or start prints a warning and the install carries on. `--upgrade` keeps an installed
+   store current and never adds one unless `--clickhouse` is given.
+7. **Services** — writes hardened units (control plane, agent, helper), fixes Caddy's admin socket
    mode (`0660`, group `caddy`), adds the `skiff` supplementary group to Caddy so it can read
    release artifacts, starts the helper, then the control plane.
-7. **Caddy bootstrap fix** — points the platform vhost at `unix//run/skiff/control.sock`, then the
+8. **Caddy bootstrap fix** — points the platform vhost at `unix//run/skiff/control.sock`, then the
    agent takes over the whole Caddy config (platform + content routes) via the admin API.
-8. **Node enrolment** — creates the edge node (or reuses it), rotates its token, writes
+9. **Node enrolment** — creates the edge node (or reuses it), rotates its token, writes
    `/etc/skiff/agent.env`, bumps the desired-state watermark, and starts the agent.
    It also installs `skiff-builder.service` and the `skiff-build` account. The Builder idles until
    you give the node the Builder role (**Nodes → Edit node**). It then claims one git build at a
    time and runs it with `systemd-run` as `skiff-build`: 2 GB, 200% CPU, 10 minutes, writable
    checkout only, no access to Skiff state or the node token (D47). Workers get the same unit from
    the WireGuard guide. Builds use the toolchains on the node (Skiff's Bun is on `PATH`; install
-   Node or anything else the build command needs).
-9. **Health** — waits for the public platform URL, then prints a one-time magic-link sign-in URL.
-   With SMTP configured it is emailed instead.
+   Node or anything else the build command needs). For private repositories set `SKIFF_GIT_TOKEN`
+   in `/etc/skiff/agent.env`. It is sent only to the hosts in `SKIFF_GIT_TOKEN_HOSTS`
+   (comma-separated, default `github.com`), as a header in the clone's environment, never in the
+   remote URL, so the build can't read it from `.git/config`. This needs git 2.31 or later. `.git`
+   directories and the build's scratch `HOME` are never included in the artifact.
+10. **Health** — waits for the public platform URL, then, while no owner exists, prints the
+   one-time setup link (`https://<platform>/setup?token=…`, §3.5). `--admin-email` only prefills
+   the wizard's email field.
 
 The installer is idempotent; re-running builds a new release and rolls back the symlink if the
 health check fails. `--dry-run` prints the plan, `--uninstall [--purge]` removes services/data.
@@ -337,13 +386,206 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://anything.example.com/
 ls -l /run/skiff /var/lib/caddy/admin.sock   # sockets 0660, group caddy
 ```
 
-The first magic link creates the owner (the database hook only allows the first user; afterwards
-the platform is invite-only). Create an API key in **Settings → API keys** for `skif`.
+Then open the setup link (§3.5) to create the owner. Create an API key in **Settings → API keys**
+for `skif`.
 
 The installer also puts `skif` and `skiff` in `/usr/local/bin`. They run the CLI bundled with the
 active release (`/opt/skiff/current/cli/skif.js`) on Skiff's own Bun, so the host needs no Node.js
 and the CLI upgrades and rolls back with the platform. Sign in with `skif login --url
 https://control.example.com`. On other machines install it from npm (`npm i -g @skiffy/skiff`).
+
+### 3.5 First-run setup
+
+A fresh install has no users, and nothing can create one except the setup wizard (D102). Password,
+magic-link, GitHub and passkey sign-up are refused until it has run, so whoever finds the URL first
+cannot claim the instance.
+
+1. Open the link the installer printed: `https://<platform>/setup?token=…`. Lost it? Run
+   `sudo cat /etc/skiff/setup-token` (paste it into `/setup`) or
+   `journalctl -u skiff-control-plane | grep setup`. The control plane logs the full link on every
+   boot until an owner exists.
+2. **Check** lists what the install looks like: HTTPS, whether this browser can make a passkey
+   here, email (SMTP or server log), storage and enrolled nodes. Warnings don't block setup.
+3. **Account**: your name, email, a password (12+ characters, D103) and the organisation name.
+   This creates the owner (platform admin and organisation owner) in one transaction and signs you
+   in.
+4. **Secure**: owners need a second factor on top of the password. Add a passkey, or an
+   authenticator app when passkeys can't work (plain HTTP, an IP address instead of the platform
+   host, or an unsupported browser). Adding the app asks for the password again.
+5. **Finish**: optionally add an authenticator app as a backup to the passkey (it also issues
+   backup codes), then follow the links to email, backups, members and API keys.
+
+Setup must run on the platform origin (`SKIFF_PLATFORM_ORIGIN`): sign-in cookies, CSRF checks and
+passkeys are bound to it. Opening `/setup` on another host (for example the server's IP) shows a
+link to the right address. Once an owner exists the token is dead: `/setup` sends visitors to
+`/login`.
+
+**Signing in later.** Use your email and password, then your passkey or authenticator code (the
+login page asks for the code straight after the password when an app is set up). A passkey alone
+also works on HTTPS. "Forgot your password" sends a magic link; with no SMTP configured it is
+written to the control-plane log (`journalctl -u skiff-control-plane | grep magic-link`). Anyone
+can add or change a password under **Settings → Account**; changing it signs out every other
+device. There is no public password sign-up: invitees accept with a magic link (or GitHub), then
+set a password.
+
+**Recovering an install whose owner can't sign in** (lost passkey, authenticator and backup codes):
+add another owner straight to the database with `create-user`, then sign in as them with that
+email and password and enrol a new factor. On installer-built releases the script is in the release's source copy:
+
+```sh
+cd /opt/skiff/current/repo/apps/control-plane
+sudo -u skiff env SKIFF_DATA_DIR=/var/lib/skiff/data /opt/skiff/runtime/bin/bun scripts/create-user.ts \
+  you@example.com "Your Name" --org <org-slug> --role owner --platform-admin
+```
+
+The script prompts for the password (12+ characters).
+
+### 3.6 Telemetry store (ClickHouse, optional)
+
+Traffic, database and storage telemetry (48 h of 1-minute rollups, 90 d of 1-hour rollups) lives
+in a small ClickHouse server on the control-plane host. Daily Parquet partitions still go to R2
+(§6).
+
+**It is optional and off by default (D101)**, because it is the heaviest piece of a Skiff host
+(~240 MB download, ~750 MB on disk, 300–800 MB of RAM). Without it everything else works; traffic
+charts, the database/storage stats tabs and Dashboards say the store is not installed. Ways to
+add or remove it:
+
+- **Settings → Telemetry** (platform owner): *Install ClickHouse*, *Remove* (keeps the data for a
+  reinstall) or *Remove and delete data*. The control plane drops a request for the root helper
+  (§4.3, action `telemetry`), which installs or removes it and restarts the control plane.
+- **CLI on the server:** `sudo skiff-platform-config telemetry on`, `… telemetry off`, or
+  `… telemetry off --purge`.
+- **Installer:** the Yes / No prompt after the domain questions, or `--clickhouse` (§3.3).
+
+`skiff-update-self` only maintains an installed store (version bumps, config); it never installs
+one. If an installed ClickHouse is down, the dashboard says so and nothing else is affected: the
+control-plane units `Wants=` it but do not require it.
+
+| | |
+|---|---|
+| Unit | `skiff-clickhouse.service`, user `skiff-clickhouse` (system user, no login, no home) |
+| Version | ClickHouse 26.8.34.13 LTS, the official static build, pinned with its sha512 in `scripts/systemd/clickhouse.ts` |
+| Listens | HTTP on `127.0.0.1:18123` only. No native TCP (`9000` belongs to object storage), MySQL, PostgreSQL, interserver or gRPC ports |
+| Files | binary `/opt/skiff/clickhouse/<version>/clickhouse`, config `/etc/skiff/clickhouse/config.xml` + `users.xml`, data `/var/lib/skiff/clickhouse` |
+| Logs | stderr at `warning` level, so `journalctl -u skiff-clickhouse`. System log tables (`query_log`, `part_log`, `trace_log`, `metric_log`, `text_log`, …) are disabled |
+| Memory | `max_server_memory_usage` 768 MiB under the unit's `MemoryMax=1G`; writer queries 512 MiB, reader queries 256 MiB; mark cache 64 MiB, no uncompressed cache |
+| CPU | 2 threads per query, 20 concurrent queries, 2 merge threads; `CPUWeight=50`/`IOWeight=50` so workloads win under contention |
+| Disk | The binary is about 750 MB. An upgrade needs about 1.3 GB free under `/opt/skiff` while it downloads (218 MB archive) and extracts |
+
+**Users** (`users.xml`; there is no `default` user, and both users can only connect from
+`127.0.0.1`/`::1`):
+
+- `skiff` (writer): all privileges on database `skiff`, `SELECT` on `system.parts`, `disks`,
+  `merges`, `mutations`, `metrics` and `asynchronous_metrics`, temporary tables, and nothing else.
+  It cannot manage users.
+- `skiff_reader` (dashboard SQL): `SELECT` on `skiff.*` only, profile `readonly` with
+  `readonly=2`. It can set per-query output settings (for example
+  `output_format_json_quote_64bit_integers`), but profile constraints cap
+  `max_execution_time` 30 s, `max_memory_usage` 256 MiB, `max_result_rows` 100 000 (results
+  past that are cut off, `result_overflow_mode=break`), `max_rows_to_read` 500 M,
+  `max_bytes_to_read` 20 GiB and `max_threads` 2. `readonly` cannot be changed. Reads use
+  `final=1`, so ReplacingMergeTree tables are deduplicated without writing `FINAL`.
+
+**Install and updates.** The installer runs it as its own step. On existing installs,
+`skiff-update-self` installs it on the next update (control-plane hosts only: those with
+`/etc/skiff/skiff.env`), before the new release starts. Each run is idempotent. It downloads the
+archive only when the pinned binary is missing, verifies the sha512, and checks that the binary
+runs. It then rewrites the config and unit only when they changed, restarts only on a change, and
+waits up to 60 s for `/ping`. If a new version does not come up, the previous unit is put back.
+Older version directories are deleted only once the new one serves. Every failure (no network,
+hash mismatch, low disk, server not answering) is a warning: neither the install nor the update
+fails because of it.
+
+Because `/etc/skiff` is `0750 root:skiff`, the server never reads it: systemd passes
+`config.xml` and `users.xml` in as credentials (`LoadCredential=`), and the server runs with
+`--config-file=%d/config.xml`. Edit nothing in `/etc/skiff/clickhouse` by hand; the next run
+overwrites it.
+
+```sh
+systemctl status skiff-clickhouse --no-pager
+journalctl -u skiff-clickhouse -n 100
+curl -s 127.0.0.1:18123/ping                      # Ok.
+
+# Query as the reader (the password is in /etc/skiff/skiff.env)
+P=$(sudo sed -n 's/^SKIFF_CLICKHOUSE_READER_PASSWORD=//p' /etc/skiff/skiff.env)
+curl -s --user "skiff_reader:$P" 'http://127.0.0.1:18123/?query=SELECT+1'
+
+# Disk used per table needs the writer (only it may read system.parts)
+W=$(sudo sed -n 's/^SKIFF_CLICKHOUSE_PASSWORD=//p' /etc/skiff/skiff.env)
+curl -s --user "skiff:$W" http://127.0.0.1:18123/ \
+  --data-binary "SELECT table, formatReadableSize(sum(bytes_on_disk)) FROM system.parts WHERE database = 'skiff' AND active GROUP BY table"
+```
+
+**Reset.** Hot telemetry is not backed up and can be rebuilt from nothing: deleting it loses only
+the last 90 days of charts (older data is in the R2 Parquet archive, if R2 is configured). The
+control plane recreates its tables on the next start.
+
+```sh
+sudo systemctl stop skiff-control-plane skiff-clickhouse
+sudo rm -rf /var/lib/skiff/clickhouse
+sudo skiff-platform-config telemetry on        # recreates the directory and starts ClickHouse
+# or, without updating: sudo install -d -m 0750 -o skiff-clickhouse -g skiff-clickhouse /var/lib/skiff/clickhouse
+#   && sudo systemctl start skiff-clickhouse skiff-control-plane
+```
+
+**Local development.** `bun run dev:clickhouse` runs the same config against
+`apps/control-plane/.data/clickhouse` with the dev passwords `skiff-dev` / `skiff-dev-reader`.
+The dev control plane connects to it without any env vars once that directory exists, and runs
+without telemetry otherwise, like a default host. It needs `clickhouse`
+on `PATH` (`brew install --cask clickhouse`, or `curl https://clickhouse.com/ | sh`).
+`--background` detaches (log and pid in that directory), `--stop` stops it and `--reset` deletes
+the dev data.
+
+### 3.7 Domains (Settings → Domains)
+
+Domains are optional at install time (D105). Without them:
+
+- the dashboard, API and MCP are at `http://<server-ip>`;
+- sites are at `http://<slug>.<ip-with-dashes>.sslip.io`. [sslip.io](https://sslip.io) is a public
+  wildcard DNS service that answers `anything.203-0-113-7.sslip.io` with `203.0.113.7`, so no
+  records are needed. Some routers block DNS answers with private addresses ("rebinding
+  protection"); on a LAN, use your own domain instead;
+- everything is plain HTTP. Owners sign in with a password and an authenticator app (passkeys need
+  HTTPS). Password-protected sites and share links need HTTPS and do not work yet.
+
+**Settings → Domains** (owner-only, like §4.3) changes the dashboard address, the sites domain and
+HTTPS later:
+
+1. Create the records first: an A record for the dashboard host and a wildcard `*.<domain>` A
+   record, both pointing at the server. **Check DNS** looks them up on public resolvers.
+2. HTTPS needs real domains for both, a Let's Encrypt email, and a Cloudflare API token with
+   **Zone → DNS → Edit** on the sites domain (the wildcard certificate is issued over DNS-01).
+3. **Apply** refuses a dashboard name that does not resolve (nobody could reach the dashboard
+   afterwards), asks for confirmation when it resolves elsewhere (fine behind a proxy), and, when
+   the dashboard address changes, requires the owner to have an authenticator app: passkeys are
+   bound to the address they were made on and stop working after the move.
+4. `skiff-platform-config` rewrites `skiff.env` and the edge agent's `agent.env` together, saves
+   the token to `/etc/skiff/cloudflare.token`, restarts the control plane and the agent, and waits
+   for the new address to answer through Caddy on this host (90 s, or 4 min with HTTPS while the
+   certificate is issued). If it doesn't, both files go back and both services restart on the old
+   address (`reverted`).
+5. On boot the control plane rewrites stored preview and storage hostnames to the new sites domain
+   and bumps desired state, so every node pulls the new routes. Custom domains are unaffected.
+
+After a dashboard move, everyone signs in again at the new address (sessions are per host), passkeys
+must be added again, and `skif login --url <new>` / MCP clients need re-authorising. API keys keep
+working. The edge agent reaches the control plane on `/run/skiff/control.sock`
+(`SKIFF_CONTROL_SOCKET`), so it never depends on the old or new public name while it switches.
+
+**Worker nodes** keep the control URL they joined with. After moving the dashboard, set
+`SKIFF_CONTROL_URL=<new origin>` in each worker's `/etc/skiff/agent.env` and run
+`sudo systemctl restart skiff-agent`.
+
+**Recovering from a bad change** (for example DNS removed later): on the server,
+
+```sh
+sudo skiff-platform-config domains --platform-host <server-ip>             # back to http://<ip> + sslip.io
+sudo skiff-platform-config domains --platform-host control.example.com --content-domain example.com \
+  --acme-email ops@example.com --cloudflare-token-file /path/to/token      # or straight to HTTPS
+```
+
+It runs the same apply-and-verify-or-revert flow as the dashboard.
 
 ## 4. Upgrade
 
@@ -758,7 +1000,9 @@ sudo skiff-uninstall --purge --yes   # remove local state too (R2 is never touch
 ```
 
 The default keeps `/var/lib/skiff`, `/etc/skiff` and `/etc/caddy/Caddyfile` so a
-reinstall can reuse the database and master key. `--purge` also removes the system users.
+reinstall can reuse the database and master key. `skiff-clickhouse.service` is stopped and
+removed; its data (`/var/lib/skiff/clickhouse`) and binary (`/opt/skiff/clickhouse`) stay unless
+you purge. `--purge` also removes the system users.
 Backups and releases in R2 survive both modes by design.
 
 **Retiring a worker node.** Move or delete what it hosts (projects placed on it, app workloads,
@@ -988,7 +1232,9 @@ a data directory written by an older major, and never let an image tag change pe
 running a drill, downloading a database snapshot), **Settings → Notifications** (SMTP for
 sign-in links, invites and email alerts, plus the alert webhook and alert email address) and
 **Settings → Assistant** (the optional in-dashboard chat's OpenAI-compatible endpoint) change
-`/etc/skiff/skiff.env` without SSH.
+`/etc/skiff/skiff.env` without SSH. **Settings → Domains** (§3.7) also rewrites the edge agent's
+`/etc/skiff/agent.env` and restarts the agent, and verifies the new address before keeping it. **Settings → Telemetry** installs or removes the optional
+ClickHouse store (§3.6) the same way; installing takes a few minutes (a ~240 MB download).
 
 These tabs are **owner-only**: you must be a platform admin (§6.2 of DESIGN, the admin-plugin role)
 *and* the owner of the org you're signed in to, in your own dashboard session. Org admins, platform
@@ -1009,8 +1255,7 @@ It works like the update button. The control plane can't write `/etc/skiff`, so:
    (`packages/contracts/src/platform-config.ts`). Only these keys can ever be written:
    `R2_ACCOUNT_ID R2_BUCKET R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_ENDPOINT`,
    `SKIFF_SMTP_HOST/PORT/USER/PASSWORD/FROM/SECURE`, `SKIFF_ALERT_WEBHOOK SKIFF_ALERT_EMAIL`, and
-   (Settings → Assistant, optional) `SKIFF_ASSISTANT_PROVIDER/BASE_URL/MODEL/ROUTER_MODEL/API_KEY/
-   MAX_AGENTS`. Values are pattern-checked (single line; nothing that could change the meaning of
+   (Settings → Assistant, optional) `SKIFF_ASSISTANT_PROVIDER/BASE_URL/MODEL/API_KEY`. Values are pattern-checked (single line; nothing that could change the meaning of
    `litestream.yml`, which expands `${VAR}` before parsing).
 4. It saves the old file as `skiff.env.previous`, writes the new one (`root:skiff 0640`), and
    restarts the control plane. If the control plane is not healthy within 60 s, it restores
@@ -1108,7 +1353,7 @@ curl -sS --unix-socket /run/skiff/control.sock http://localhost/ -o /dev/null -w
 ### 5.4 What restore does not do
 
 - It does not restore release artifacts; R2 is canonical and agents cache them.
-- It does not restore hot DuckDB telemetry (by design); cold Parquet remains in R2.
+- It does not restore hot ClickHouse telemetry (by design); cold Parquet remains in R2.
 - It does not restore Caddy certificate files; they are re-issued.
 - It does not touch R2; backups are never deleted by restore or uninstall.
 
@@ -1120,7 +1365,7 @@ curl -sS --unix-socket /run/skiff/control.sock http://localhost/ -o /dev/null -w
 |---|---|---|---|
 | SQLite | Litestream → R2 (`skiff-litestream.service`) | WAL sync ~1 s; snapshot every 24 h; 30-day retention | ≤ ~1 s |
 | Release artifacts | Canonical in R2 (`SKIFF_R2_ARTIFACT_PREFIX`) | Lifecycle per project; last 10 + pinned in DB | n/a |
-| Telemetry | Daily Parquet partitions in R2 (`SKIFF_R2_PARQUET_PREFIX`) | 48 h 1-minute + 90 d 1-hour in DuckDB; Parquet long-lived | 24 h |
+| Telemetry | Daily Parquet partitions in R2 (`SKIFF_R2_PARQUET_PREFIX`) | 48 h 1-minute + 90 d 1-hour in ClickHouse (not backed up, §3.6); Parquet long-lived | 24 h |
 | Master key | Recovery kit: `age`-encrypted with a passphrase, shown once at install | Offline; re-export on rotation | n/a |
 | Config/secrets | Offline encrypted copy of `/etc/skiff/skiff.env` + recovery kit | On change | n/a |
 | Caddy config/token | `/etc/caddy/Caddyfile`, Cloudflare token | On change | n/a |
@@ -1294,7 +1539,7 @@ minutes, not hours. Cloudflare Tunnel backup ingress and DNS failover are future
 | Directive | Why |
 |---|---|
 | `ProtectSystem=strict` | `/usr`, `/boot`, `/etc`, `/opt` become read-only. The only writable paths are explicit `ReadWritePaths=`; a compromised Bun process cannot persist in `/usr` or edit its own units. |
-| `ReadWritePaths=` | Least-privilege allowlist: control plane `/var/lib/skiff` + `/run/skiff`; agent adds `/srv/skiff`; Caddy only its data dir; drill its scratch dir. |
+| `ReadWritePaths=` | Least-privilege allowlist: control plane `/var/lib/skiff` + `/run/skiff`; agent adds `/srv/skiff`; Caddy only its data dir; ClickHouse only `/var/lib/skiff/clickhouse`; drill its scratch dir. |
 | `NoNewPrivileges=yes` | No setuid escalation from a compromised service. v1 needs no runtime root (D26). |
 | `PrivateTmp=yes` | Private `/tmp` and `/var/tmp`, so services cannot signal or poison each other through shared temp files. The drill's scratch lives under `/var/lib/skiff`, not `/tmp`. |
 | `PrivateDevices=yes` | No raw device access. Caddy binds 80/443 with `CAP_NET_BIND_SERVICE`, not root. |
@@ -1305,12 +1550,12 @@ minutes, not hours. Cloudflare Tunnel backup ingress and DNS failover are future
 | `RestrictSUIDSGID=yes` | Files created by the service cannot gain setuid/setgid bits. |
 | `LockPersonality=yes`, `SystemCallArchitectures=native` | No 32-bit ABI or personality switching. |
 | `SystemCallFilter=@system-service + io_uring` | Removes privileged/mount/obsolete syscalls. Bun needs the io_uring syscalls on some kernels; they are explicitly allowed. If a future Bun release adds a syscall, add it here rather than dropping the filter. |
-| `MemoryMax=` | Control plane 1 GB (room to buffer a full 500 MiB artifact upload), agent 192 MB, Caddy 256 MB, Litestream 256 MB, drill 1 GB. Bounds a runaway DuckDB/Bun/Caddy process on a 4 GB VPS. |
+| `MemoryMax=` | Control plane 1 GB (room to buffer a full 500 MiB artifact upload), agent 192 MB, Caddy 256 MB, ClickHouse 1 GB (its own `max_server_memory_usage` stops it at 768 MiB first), Litestream 256 MB, drill 1 GB. Bounds a runaway Bun/ClickHouse/Caddy process on a 4 GB VPS. |
 | `TasksMax=`, `LimitNOFILE=` | Prevents fork/descriptor exhaustion. |
-| `LoadCredential=master-key:…` | The master key is placed in the service's credential directory (`%d`), not the environment, and is not readable by other services. `/etc/skiff/master.key` stays `0400 root`. |
-| `CapabilityBoundingSet=` (empty) | Control plane, agent, Litestream and drill have no capabilities. Only Caddy keeps `CAP_NET_BIND_SERVICE`. |
+| `LoadCredential=master-key:…` | The master key is placed in the service's credential directory (`%d`), not the environment, and is not readable by other services. `/etc/skiff/master.key` stays `0400 root`. ClickHouse gets its `config.xml`/`users.xml` the same way, so `skiff-clickhouse` never needs to traverse `/etc/skiff`. |
+| `CapabilityBoundingSet=` (empty) | Control plane, agent, ClickHouse, Litestream and drill have no capabilities (ClickHouse logs that it lacks `CAP_SYS_NICE`/`CAP_IPC_LOCK`/`CAP_NET_ADMIN`; it works without them). Only Caddy keeps `CAP_NET_BIND_SERVICE`. |
 | `skiff-builder.service` | Root, because only root can start a transient unit as another user. It keeps only `CAP_CHOWN`/`CAP_DAC_*`/`CAP_FOWNER` (hand a checkout to `skiff-build`, then read and delete it). Each build unit runs as `skiff-build` with `NoNewPrivileges`, `ProtectSystem=strict`, `ReadWritePaths=` its checkout, `InaccessiblePaths=` for `/etc/skiff`, `/var/lib/skiff`, `/run/skiff`, `/srv/skiff` and `/run/skiff-workloads`, no capabilities, and `TasksMax=1024`. The build gets only `HOME`, `PATH` and `CI`, never the daemon's environment. |
-| `ProtectProc=invisible` (control plane) | Hides other processes. `ProcSubset=pid` is deliberately not set because Bun/DuckDB read `/proc/cpuinfo` and `/proc/meminfo`; the agent also needs `/proc` for node metrics. |
+| `ProtectProc=invisible` (control plane, ClickHouse) | Hides other processes. `ProcSubset=pid` is deliberately not set because Bun and ClickHouse read `/proc/cpuinfo` and `/proc/meminfo`; the agent also needs `/proc` for node metrics. |
 | Setgid `/run/skiff` | The alternative to a root socket helper: socket ownership is controlled by directory group inheritance, and no service joins another's primary group. |
 
 Caddy's admin API is never on TCP `:2019` (D7). It is reachable only at
@@ -1326,6 +1571,7 @@ Review drift with:
 systemd-analyze security skiff-control-plane.service
 systemd-analyze security skiff-agent.service
 systemd-analyze security skiff-builder.service
+systemd-analyze security skiff-clickhouse.service
 systemd-analyze security caddy.service
 ```
 
@@ -1398,6 +1644,7 @@ the control plane.
 | Caddy can't reach the control plane | `ls -l /run/skiff`, `namei -l /run/skiff/control.sock` | `/run/skiff` must be `2770 root:caddy`; control plane needs `SupplementaryGroups=caddy`. |
 | Agent can't use Caddy admin | `ls -l /var/lib/caddy/admin.sock` | Socket must be `0660` and group `caddy`; agent needs that supplementary group. Never expose `:2019` as a workaround. |
 | Litestream exits immediately | `journalctl -u skiff-litestream` | Missing/incorrect `SKIFF_R2_*`; endpoint must be the R2 S3 URL, region `auto`. |
+| Telemetry unavailable | `systemctl status skiff-clickhouse`, `curl -s 127.0.0.1:18123/ping`, `journalctl -u skiff-clickhouse -n 100` | Re-run `sudo skiff-platform-config telemetry on` (it repairs and restarts ClickHouse and prints why it could not). Not installed at all is normal: install it from Settings → Telemetry. `Authentication failed` in the control-plane log means `users.xml` and `skiff.env` disagree; the same command regenerates `users.xml`. |
 | Restore says "no snapshots" | R2 prefix/lifecycle, credentials | Check `SKIFF_R2_SQLITE_PREFIX`; confirm objects exist; run a drill. |
 | Update stuck at **Test boot** / canary | `skiff-update-self status`, `journalctl -u skiff-update-self -n 200` | Stop the unit, `skiff-update-self recover`, retry. Installs older than 0.6.7 need one `update --no-canary` bootstrap: [§4.1.1](#411-recovering-a-stuck-or-failed-update). |
 | `skiff-recover.sh` download returns 404 | `gh release list --repo KieranHolroyd/skiff` | `/releases/latest` can resolve to a CLI release; pin the platform tag instead: [§4.1.1](#411-recovering-a-stuck-or-failed-update). |
@@ -1418,16 +1665,17 @@ internet while debugging.
   `systemd/`); the installer is the only writer of `/etc/systemd/system/skiff-*.service`.
 - The release bundle includes the matching Bun runtime, a production-only hoisted
   `node_modules` tree (adapter-bun externalises dependencies), migrations, ops scripts,
-  `litestream.yml` and units, so a `curl | sh` install is self-contained. The DuckDB
-  native binding is selected for the tarball's architecture in CI.
+  `litestream.yml` and units, so a `curl | sh` install is self-contained. ClickHouse is not
+  in the bundle: the installer/updater downloads the pinned official build from GitHub (§3.6).
 - Litestream is installed separately (`/usr/local/bin/litestream`); the installer detects
   it and enables replication only when R2 is configured. It is not compiled by the release
   workflow.
 - Bun `1.4.4`, Caddy `2.11.8` and `caddy-dns/cloudflare` `v0.2.4` are pinned in the release
   workflow. Bump them together and re-run the drill.
-- The browser setup wizard and the `skif admin keys rotate` command are product surfaces
-  described by DESIGN §12 and §11.2; this delivery defines their contracts (setup token,
-  `setup-complete`, credential path) but does not implement them.
+- The `skif admin keys rotate` command is a product surface described by DESIGN §11.2; this
+  delivery defines its contract (credential path) but does not implement it. The setup wizard
+  (DESIGN §12) is implemented for the owner account and instance checks (§3.5, D102); domains,
+  Cloudflare, R2 and SMTP are still configured by the installer and Settings.
 - `BETTER_AUTH_SECRET` can be regenerated on a fresh-VPS restore at the cost of invalidating
   sessions; the master key cannot, so the recovery kit and an encrypted env copy are part of
   the backup policy.

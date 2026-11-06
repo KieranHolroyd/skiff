@@ -44,6 +44,29 @@ export function closeTab(state: TabsState, id: string): TabsState {
 	return { ...state, tabs, active };
 }
 
+/** A renamed object keeps its tab (and its place), under the new path. */
+export function renameObjectTab(state: TabsState, from: readonly string[], node: TreeNode): TabsState {
+	const oldId = objectTabId(from);
+	const newId = objectTabId(node.path);
+	if (!state.tabs.some((tab) => tab.id === oldId)) return state;
+	// A tab already open at the new path would be a duplicate: keep the renamed one.
+	const tabs = state.tabs
+		.filter((tab) => tab.id !== newId || newId === oldId)
+		.map((tab): StudioTab => (tab.id === oldId ? { id: newId, type: 'object', node } : tab));
+	return { ...state, tabs, active: state.active === oldId || state.active === newId ? newId : state.active };
+}
+
+/** Close the tabs of a dropped object and of anything inside it (a dropped schema). */
+export function closeObjectTabs(state: TabsState, path: readonly string[]): TabsState {
+	let next = state;
+	for (const tab of state.tabs) {
+		if (tab.type !== 'object') continue;
+		const inside = path.length <= tab.node.path.length && path.every((part, index) => tab.node.path[index] === part);
+		if (inside) next = closeTab(next, tab.id);
+	}
+	return next;
+}
+
 export function focusTab(state: TabsState, id: string): TabsState {
 	return state.tabs.some((tab) => tab.id === id) ? { ...state, active: id } : state;
 }

@@ -126,14 +126,14 @@ describe('ApiClient', () => {
 							id: 'dep_1',
 							shortId: 'abc123',
 							status: 'active',
-							url: 'https://demo.kierancloud.dev',
-							previewUrl: 'https://demo--abc123.kierancloud.dev',
+							url: 'https://demo.examplecloud.com',
+							previewUrl: 'https://demo--abc123.examplecloud.com',
 							message: 'first deploy',
 						},
 						project: {
 							slug: 'demo',
 							name: 'Demo',
-							productionUrl: 'https://demo.kierancloud.dev',
+							productionUrl: 'https://demo.examplecloud.com',
 							productionDeploymentId: 'dep_1',
 						},
 						promoted: true,
@@ -159,8 +159,8 @@ describe('ApiClient', () => {
 
 				const outcome = await client.finalizeUpload('upl_1', { project: 'demo', promote: false });
 				expect(outcome.deployment?.id).toBe('dep_1');
-				expect(outcome.previewUrl).toBe('https://demo--abc123.kierancloud.dev');
-				expect(outcome.productionUrl).toBe('https://demo.kierancloud.dev');
+				expect(outcome.previewUrl).toBe('https://demo--abc123.examplecloud.com');
+				expect(outcome.productionUrl).toBe('https://demo.examplecloud.com');
 				expect(outcome.promoted).toBe(true);
 				expect(outcome.nextSteps).toEqual(['Roll back with skif rollback demo']);
 

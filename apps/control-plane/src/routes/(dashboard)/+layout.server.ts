@@ -3,7 +3,7 @@ import { hasPermission } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
 import { contentDomain, platformOrigin, sharedDomain } from '#lib/server/config.js';
 import { availableUpdate, canManagePlatform } from '#lib/server/self-update.js';
-import { assistantStatusWithAgents } from '#lib/server/assistant/settings.js';
+import { assistantStatus } from '#lib/server/assistant/config.js';
 import type { LayoutServerLoad } from './$types';
 
 /**
@@ -77,7 +77,7 @@ export const load: LayoutServerLoad = ({ locals, url, cookies }) => {
 		},
 		contentDomain,
 		/** Optional in-dashboard assistant; hidden until an owner configures a provider. */
-		assistant: assistantStatusWithAgents(),
+		assistant: assistantStatus(),
 		/** shadcn sidebar persists its collapsed state in this cookie. */
 		sidebarOpen: cookies.get('sidebar_state') !== 'false',
 		/** Shared-domain mode is warned about persistently (DESIGN §5, D19). */

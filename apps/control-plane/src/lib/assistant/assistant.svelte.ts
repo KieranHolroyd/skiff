@@ -1,49 +1,91 @@
-import {
-	assistantAgentLabel,
-	type AssistantChatRequest,
-	type AssistantConfirmation,
-	type AssistantEvent,
-	type AssistantGuide,
-	type AssistantPageContext,
-	type AssistantSpeaker
+import type {
+	AssistantChatRequest,
+	AssistantConfirmation,
+	AssistantEvent,
+	AssistantGuide,
+	AssistantPageContext
 } from '@skiff/contracts';
 
 /**
- * Chat state for the dashboard assistant. The panel is mounted once in the dashboard layout, so a
- * conversation survives client-side navigation (but not a full reload). Streamed events update the
- * message for the agent that produced them, which is what makes the multi-agent turn legible.
+ * Chat state for the dashboard assistant (docs/ASSISTANT.md).
+ *
+ * Conversations are kept per signed-in user in this browser's localStorage, so they survive
+ * navigation and reloads. Nothing is stored on the server beyond the audit trail. Each turn groups
+ * the user's message with the assistant's reply; tool steps and confirmation cards are attached to
+ * that reply, so scrolling back shows exactly what happened in that turn.
  */
 
-export interface AssistantMessage {
-	id: string;
-	role: 'user' | 'assistant';
-	speaker?: AssistantSpeaker;
-	content: string;
-	error?: boolean;
-}
+export type StepStatus = 'running' | 'ok' | 'error' | 'cancelled';
 
-export interface ToolActivity {
+export interface ToolStep {
 	callId: string;
-	agent: AssistantSpeaker;
 	tool: string;
 	title: string;
-	status: 'running' | 'ok' | 'error';
+	status: StepStatus;
+	args?: string;
 	summary?: string;
+	detail?: string;
+	durationMs?: number;
+	startedAt: number;
 }
 
-export interface PendingConfirmation extends AssistantConfirmation {
-	status: 'pending' | 'running' | 'done' | 'error' | 'denied';
+export type ConfirmationStatus = 'pending' | 'running' | 'done' | 'error' | 'denied' | 'expired';
+
+export interface ConfirmationCard extends AssistantConfirmation {
+	status: ConfirmationStatus;
+	createdAt: number;
 	result?: string;
 	error?: string;
 }
+
+export type MessageState = 'streaming' | 'done' | 'stopped' | 'error';
+
+export interface AssistantMessage {
+	id: string;
+	turnId: string;
+	role: 'user' | 'assistant';
+	content: string;
+	createdAt: number;
+	state?: MessageState;
+	steps?: ToolStep[];
+	confirmations?: ConfirmationCard[];
+	/** Whole-turn duration, on the last reply of a turn. */
+	durationMs?: number;
+	/** The page the user was on when they asked. */
+	page?: string;
+}
+
+export interface Conversation {
+	id: string;
+	title: string;
+	createdAt: number;
+	updatedAt: number;
+	pinned?: boolean;
+	draft?: string;
+	messages: AssistantMessage[];
+}
+
+export interface AssistantPrefs {
+	wide: boolean;
+	docked: boolean;
+	includePage: boolean;
+}
+
+const STORAGE_VERSION = 1;
+const MAX_CONVERSATIONS = 40;
+const MAX_MESSAGES = 200;
+const MAX_HISTORY = 20;
+const MAX_HISTORY_CHARS = 12_000;
+const CONFIRM_TTL_MS = 10 * 60_000;
+export const MAX_MESSAGE_CHARS = 8_000;
 
 function id(prefix: string): string {
 	return `${prefix}_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
 }
 
 function parseEvent(block: string): AssistantEvent | null {
-	const lines = block.split(/\r?\n/);
-	const data = lines
+	const data = block
+		.split(/\r?\n/)
 		.filter((line) => line.startsWith('data:'))
 		.map((line) => line.slice(5).trim())
 		.join('\n');
@@ -55,104 +97,382 @@ function parseEvent(block: string): AssistantEvent | null {
 	}
 }
 
+function titleFrom(text: string): string {
+	const line = text.replace(/\s+/g, ' ').trim();
+	return line.length > 60 ? `${line.slice(0, 57)}…` : line || 'New conversation';
+}
+
+function readStorage<T>(key: string): T | null {
+	try {
+		const raw = localStorage.getItem(key);
+		return raw ? (JSON.parse(raw) as T) : null;
+	} catch {
+		return null;
+	}
+}
+
+/** Bring a stored conversation back to a consistent idle state (a reload can interrupt a run). */
+function revive(conversation: Conversation): Conversation {
+	const now = Date.now();
+	for (const message of conversation.messages) {
+		if (message.state === 'streaming') message.state = 'stopped';
+		for (const step of message.steps ?? [])
+			if (step.status === 'running') step.status = 'cancelled';
+		for (const card of message.confirmations ?? []) {
+			if (card.status === 'running') card.status = 'error';
+			if (card.status === 'pending' && now - card.createdAt > CONFIRM_TTL_MS)
+				card.status = 'expired';
+		}
+	}
+	return conversation;
+}
+
+/** What the model sees of a past reply: its text plus what happened to any action it proposed. */
+function historyContent(message: AssistantMessage): string {
+	let text = message.content.trim();
+	for (const card of message.confirmations ?? []) {
+		const outcome =
+			card.status === 'done'
+				? `the user confirmed it and it completed: ${(card.result ?? 'Done.').replace(/\s+/g, ' ').slice(0, 400)}`
+				: card.status === 'denied'
+					? 'the user cancelled it; nothing changed'
+					: card.status === 'error'
+						? `the user confirmed it but it failed: ${(card.error ?? '').slice(0, 300)}`
+						: card.status === 'expired'
+							? 'the confirmation expired; nothing changed'
+							: 'still waiting for the user to confirm or cancel';
+		text += `\n\n[Proposed action "${card.title}": ${outcome}]`;
+	}
+	if (message.state === 'stopped') text += '\n\n[The user stopped this reply early.]';
+	return text.slice(0, MAX_HISTORY_CHARS);
+}
+
 class AssistantChatState {
 	open = $state(false);
+	view = $state<'chat' | 'history'>('chat');
 	status = $state<'idle' | 'sending'>('idle');
-	messages = $state<AssistantMessage[]>([]);
-	activities = $state<ToolActivity[]>([]);
-	activeAgents = $state<string[]>([]);
+	conversations = $state<Conversation[]>([]);
+	activeId = $state<string | null>(null);
 	tour = $state<AssistantGuide | null>(null);
-	confirmation = $state<PendingConfirmation | null>(null);
-	error = $state<string | null>(null);
+	/** A reply finished while the panel was closed. */
+	unread = $state(false);
+	/** The user message being edited in the composer (its turn is replaced on send). */
+	editingTurn = $state<string | null>(null);
+	prefs = $state<AssistantPrefs>({ wide: false, docked: false, includePage: true });
 
+	private userId: string | null = null;
 	private controller: AbortController | null = null;
 	private runId: string | null = null;
-	private currentMessages = new Map<AssistantSpeaker, string>();
+	private turnId: string | null = null;
+	/** The reply being streamed for the current turn. */
+	private replyId: string | null = null;
+	private saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+	readonly active = $derived(this.conversations.find((item) => item.id === this.activeId) ?? null);
+	readonly messages = $derived(this.active?.messages ?? []);
+	readonly sending = $derived(this.status === 'sending');
+
+	// --- persistence -------------------------------------------------------------------------
+
+	private get key(): string {
+		return `skiff.assistant.v${STORAGE_VERSION}.${this.userId ?? 'anon'}`;
+	}
+
+	/** Load this user's conversations and panel preferences. Safe to call more than once. */
+	init(userId: string): void {
+		if (typeof window === 'undefined' || this.userId === userId) return;
+		this.userId = userId;
+		const stored = readStorage<{ conversations?: Conversation[]; activeId?: string }>(this.key);
+		this.conversations = (stored?.conversations ?? [])
+			.filter((c) => Array.isArray(c?.messages))
+			.map(revive);
+		this.activeId = this.conversations.some((c) => c.id === stored?.activeId)
+			? (stored?.activeId ?? null)
+			: null;
+		const prefs = readStorage<Partial<AssistantPrefs>>('skiff.assistant.prefs');
+		if (prefs) this.prefs = { ...this.prefs, ...prefs };
+		window.addEventListener('storage', (event) => {
+			// Another tab changed the history: pick it up unless this tab is mid-run.
+			if (event.key !== this.key || this.sending) return;
+			const next = readStorage<{ conversations?: Conversation[] }>(this.key);
+			if (next?.conversations) this.conversations = next.conversations.map(revive);
+		});
+		window.addEventListener('pagehide', () => this.flush());
+	}
+
+	persist(): void {
+		if (typeof window === 'undefined' || !this.userId) return;
+		// Throttle, not debounce: a long stream still saves every 400 ms.
+		if (this.saveTimer) return;
+		this.saveTimer = setTimeout(() => this.flush(), 400);
+	}
+
+	flush(): void {
+		if (this.saveTimer) clearTimeout(this.saveTimer);
+		this.saveTimer = null;
+		if (!this.userId) return;
+		const sorted = [...this.conversations]
+			.filter((c) => c.messages.length > 0 || c.draft)
+			.sort(
+				(a, b) => Number(b.pinned ?? false) - Number(a.pinned ?? false) || b.updatedAt - a.updatedAt
+			);
+		let keep = sorted.slice(0, MAX_CONVERSATIONS);
+		for (let attempt = 0; attempt < 6; attempt += 1) {
+			try {
+				const payload = JSON.stringify({
+					conversations: $state.snapshot(keep).map((c) => ({
+						...c,
+						messages: c.messages.slice(-MAX_MESSAGES).map((m) => ({
+							...m,
+							steps: m.steps?.map((step) => ({ ...step, detail: step.detail?.slice(0, 1_500) }))
+						}))
+					})),
+					activeId: this.activeId
+				});
+				localStorage.setItem(this.key, payload);
+				return;
+			} catch {
+				// Quota: drop the oldest unpinned conversations and try again.
+				const unpinned = keep.filter((c) => !c.pinned);
+				if (unpinned.length === 0) return;
+				const drop = new Set(
+					unpinned.slice(-Math.max(1, Math.ceil(unpinned.length / 4))).map((c) => c.id)
+				);
+				keep = keep.filter((c) => !drop.has(c.id));
+			}
+		}
+	}
+
+	setPref<K extends keyof AssistantPrefs>(key: K, value: AssistantPrefs[K]): void {
+		this.prefs[key] = value;
+		try {
+			localStorage.setItem('skiff.assistant.prefs', JSON.stringify(this.prefs));
+		} catch {
+			// per-browser convenience only
+		}
+	}
+
+	// --- panel and conversations --------------------------------------------------------------
 
 	toggle(): void {
-		this.open = !this.open;
+		if (this.open) this.close();
+		else this.show();
+	}
+
+	show(): void {
+		this.open = true;
+		this.unread = false;
 	}
 
 	close(): void {
 		this.open = false;
 	}
 
-	reset(): void {
-		this.controller?.abort();
-		this.controller = null;
-		this.runId = null;
-		this.status = 'idle';
-		this.messages = [];
-		this.activities = [];
-		this.activeAgents = [];
-		this.tour = null;
-		this.confirmation = null;
-		this.error = null;
-		this.currentMessages.clear();
+	private ensureConversation(): Conversation {
+		if (this.active) return this.active;
+		const conversation: Conversation = {
+			id: id('chat'),
+			title: 'New conversation',
+			createdAt: Date.now(),
+			updatedAt: Date.now(),
+			messages: []
+		};
+		this.conversations.unshift(conversation);
+		this.activeId = conversation.id;
+		return this.conversations[0]!;
 	}
 
-	stop(): void {
-		this.controller?.abort();
-		this.controller = null;
-		this.status = 'idle';
-		this.activeAgents = [];
+	/** Start a fresh conversation (the current one stays in history). */
+	newConversation(): void {
+		if (this.sending) this.stop();
+		this.activeId = null;
+		this.editingTurn = null;
+		this.view = 'chat';
+		this.persist();
+	}
+
+	select(conversationId: string): void {
+		if (this.sending) this.stop();
+		this.activeId = conversationId;
+		this.editingTurn = null;
+		this.view = 'chat';
+		this.persist();
+	}
+
+	rename(conversationId: string, title: string): void {
+		const conversation = this.conversations.find((c) => c.id === conversationId);
+		if (!conversation || !title.trim()) return;
+		conversation.title = title.trim().slice(0, 120);
+		this.persist();
+	}
+
+	togglePin(conversationId: string): void {
+		const conversation = this.conversations.find((c) => c.id === conversationId);
+		if (!conversation) return;
+		conversation.pinned = !conversation.pinned;
+		this.persist();
+	}
+
+	remove(conversationId: string): void {
+		if (this.activeId === conversationId) {
+			if (this.sending) this.stop();
+			this.activeId = null;
+		}
+		this.conversations = this.conversations.filter((c) => c.id !== conversationId);
+		this.persist();
+	}
+
+	clearAll(): void {
+		if (this.sending) this.stop();
+		this.conversations = this.conversations.filter((c) => c.pinned);
+		this.activeId = null;
+		this.persist();
+	}
+
+	/** Clear the current conversation's messages but keep it as the active thread. */
+	clearActive(): void {
+		if (this.sending) this.stop();
+		if (this.active) {
+			this.active.messages = [];
+			this.active.title = 'New conversation';
+		}
+		this.editingTurn = null;
+		this.persist();
+	}
+
+	setDraft(text: string): void {
+		const conversation = this.active;
+		if (conversation) {
+			if ((conversation.draft ?? '') === text) return;
+			conversation.draft = text;
+		} else {
+			if (!text) return;
+			this.ensureConversation().draft = text;
+		}
+		this.persist();
 	}
 
 	dismissTour(): void {
 		this.tour = null;
 		// Return to the conversation that produced the tour.
-		this.open = true;
+		this.show();
 	}
 
-	private messageFor(speaker: AssistantSpeaker): AssistantMessage {
-		const existing = this.currentMessages.get(speaker);
-		if (existing) {
-			const found = this.messages.find((message) => message.id === existing);
+	exportMarkdown(): string {
+		const conversation = this.active;
+		if (!conversation) return '';
+		const lines = [`# ${conversation.title}`, '', `_Exported ${new Date().toISOString()}_`, ''];
+		for (const message of conversation.messages) {
+			const who = message.role === 'user' ? 'You' : 'Skiff';
+			lines.push(
+				`## ${who} · ${new Date(message.createdAt).toLocaleString()}`,
+				'',
+				message.content.trim(),
+				''
+			);
+			for (const step of message.steps ?? [])
+				lines.push(
+					`- tool \`${step.tool}\` (${step.status})${step.summary ? `: ${step.summary}` : ''}`
+				);
+			for (const card of message.confirmations ?? [])
+				lines.push(`- action "${card.title}": ${card.status}`);
+			if (message.steps?.length || message.confirmations?.length) lines.push('');
+		}
+		return lines.join('\n');
+	}
+
+	// --- running a turn -----------------------------------------------------------------------
+
+	stop(): void {
+		this.controller?.abort();
+		this.controller = null;
+		this.finishTurn('stopped');
+	}
+
+	private finishTurn(state: MessageState, durationMs?: number): void {
+		const conversation = this.active;
+		if (conversation && this.turnId) {
+			const replies = conversation.messages.filter(
+				(m) => m.turnId === this.turnId && m.role === 'assistant'
+			);
+			for (const message of replies) {
+				if (message.state === 'streaming')
+					message.state = state === 'done' && !message.content ? 'done' : state;
+				for (const step of message.steps ?? [])
+					if (step.status === 'running') step.status = 'cancelled';
+			}
+			// Drop empty placeholders an aborted run left behind.
+			conversation.messages = conversation.messages.filter(
+				(m) =>
+					!(
+						m.turnId === this.turnId &&
+						m.role === 'assistant' &&
+						!m.content &&
+						!m.steps?.length &&
+						!m.confirmations?.length &&
+						m.state !== 'error'
+					)
+			);
+			const last = conversation.messages.findLast(
+				(m) => m.turnId === this.turnId && m.role === 'assistant'
+			);
+			if (last && durationMs !== undefined) last.durationMs = durationMs;
+			conversation.updatedAt = Date.now();
+		}
+		this.status = 'idle';
+		this.replyId = null;
+		if (!this.open && state === 'done') this.unread = true;
+		this.persist();
+	}
+
+	/** The current turn's reply, created on first use. */
+	private reply(): AssistantMessage {
+		const conversation = this.active!;
+		if (this.replyId) {
+			const found = conversation.messages.find((message) => message.id === this.replyId);
 			if (found) return found;
 		}
-		const message: AssistantMessage = {
+		conversation.messages.push({
 			id: id('msg'),
+			turnId: this.turnId!,
 			role: 'assistant',
-			speaker,
-			content: ''
-		};
-		this.messages.push(message);
-		this.currentMessages.set(speaker, message.id);
-		return this.messages[this.messages.length - 1]!;
+			content: '',
+			createdAt: Date.now(),
+			state: 'streaming'
+		});
+		const message = conversation.messages[conversation.messages.length - 1]!;
+		this.replyId = message.id;
+		return message;
 	}
 
 	private handle(event: AssistantEvent): void {
 		switch (event.type) {
 			case 'run.started':
-				this.activeAgents = event.agents.map((agent) => assistantAgentLabel(agent));
+				// Show the "Thinking…" placeholder straight away.
+				this.reply();
 				break;
-			case 'agent.started':
-				if (this.currentMessages.has(event.agent)) return;
-				this.messageFor(event.agent);
-				this.activeAgents = [...new Set([...this.activeAgents, event.label])];
+			case 'text.delta':
+				this.reply().content += event.text;
 				break;
-			case 'agent.finished':
-				this.activeAgents = this.activeAgents.filter((label) => label !== event.label);
-				break;
-			case 'text.delta': {
-				const message = this.messageFor(event.agent);
-				message.content += event.text;
-				break;
-			}
-			case 'tool.started':
-				this.activities.push({
+			case 'tool.started': {
+				const message = this.reply();
+				(message.steps ??= []).push({
 					callId: event.callId,
-					agent: event.agent,
 					tool: event.tool,
 					title: event.title,
-					status: 'running'
+					args: event.args,
+					status: 'running',
+					startedAt: Date.now()
 				});
 				break;
+			}
 			case 'tool.finished': {
-				const activity = this.activities.find((item) => item.callId === event.callId);
-				if (activity) {
-					activity.status = event.ok ? 'ok' : 'error';
-					activity.summary = event.summary;
+				const step = this.reply().steps?.find((item) => item.callId === event.callId);
+				if (step) {
+					step.status = event.ok ? 'ok' : 'error';
+					step.summary = event.summary;
+					step.detail = event.detail;
+					step.durationMs = event.durationMs ?? Date.now() - step.startedAt;
 				}
 				break;
 			}
@@ -161,40 +481,89 @@ class AssistantChatState {
 				// The tour needs the page, so step out of the panel.
 				this.open = false;
 				break;
-			case 'confirmation.required':
-				this.confirmation = {
+			case 'confirmation.required': {
+				const message = this.reply();
+				(message.confirmations ??= []).push({
 					token: event.token,
 					tool: event.tool,
 					title: event.title,
 					summary: event.summary,
 					args: event.args,
-					status: 'pending'
-				};
+					status: 'pending',
+					createdAt: Date.now()
+				});
+				// The proposal replaces the running step for the same call.
+				const running = message.steps?.findLast(
+					(step) => step.tool === event.tool && step.status === 'running'
+				);
+				if (running) {
+					running.status = 'ok';
+					running.summary = 'Waiting for your confirmation.';
+					running.durationMs = Date.now() - running.startedAt;
+				}
 				break;
+			}
 			case 'error':
-				this.error = event.message;
+				this.errorReply(event.message);
 				break;
 			case 'run.finished':
-				this.status = 'idle';
-				this.activeAgents = [];
+				this.finishTurn('done', event.durationMs);
 				break;
 		}
+		this.persist();
 	}
 
-	async send(text: string, context: AssistantPageContext): Promise<void> {
-		const message = text.trim();
-		if (!message || this.status === 'sending') return;
-		const history = this.messages
-			.filter((item) => !item.error && item.content.trim())
-			.map((item) => ({ role: item.role, content: item.content }))
-			.slice(-20);
-		this.messages.push({ id: id('msg'), role: 'user', content: message });
-		this.activities = [];
-		this.activeAgents = [];
-		this.error = null;
-		this.confirmation = null;
-		this.currentMessages.clear();
+	/**
+	 * Send a message. With `editingTurn` set (or `replaceTurn`), the conversation is cut back to
+	 * just before that turn first, so edits and regenerations replace the old answer.
+	 */
+	async send(
+		text: string,
+		context: AssistantPageContext,
+		options: { replaceTurn?: string } = {}
+	): Promise<void> {
+		const message = text.trim().slice(0, MAX_MESSAGE_CHARS);
+		if (!message || this.sending) return;
+		const conversation = this.ensureConversation();
+		const replaceTurn = options.replaceTurn ?? this.editingTurn;
+		this.editingTurn = null;
+		if (replaceTurn) {
+			const index = conversation.messages.findIndex((m) => m.turnId === replaceTurn);
+			if (index >= 0) conversation.messages = conversation.messages.slice(0, index);
+		}
+
+		const history = conversation.messages
+			.filter(
+				(item) => item.state !== 'error' && (item.content.trim() || item.confirmations?.length)
+			)
+			.map((item) => ({
+				role: item.role,
+				content: item.role === 'user' ? item.content : historyContent(item)
+			}))
+			.slice(-MAX_HISTORY);
+
+		const turnId = id('turn');
+		conversation.messages.push({
+			id: id('msg'),
+			turnId,
+			role: 'user',
+			content: message,
+			createdAt: Date.now(),
+			page: context.path || undefined
+		});
+		if (
+			conversation.messages.filter((m) => m.role === 'user').length === 1 ||
+			conversation.title === 'New conversation'
+		)
+			conversation.title = titleFrom(message);
+		conversation.draft = '';
+		conversation.updatedAt = Date.now();
+
+		this.turnId = turnId;
+		this.runId = null;
+		this.replyId = null;
 		this.status = 'sending';
+		this.persist();
 
 		const controller = new AbortController();
 		this.controller = controller;
@@ -216,48 +585,93 @@ class AssistantChatState {
 			const reader = response.body.getReader();
 			const decoder = new TextDecoder();
 			let buffer = '';
+			let finished = false;
+			const dispatch = (event: AssistantEvent | null) => {
+				if (!event || this.controller !== controller) return;
+				if (event.type === 'run.started') this.runId = event.runId;
+				else if (
+					this.runId &&
+					'runId' in event &&
+					event.runId !== this.runId &&
+					event.runId !== 'run_failed'
+				)
+					return;
+				if (event.type === 'run.finished') finished = true;
+				this.handle(event);
+			};
 			while (true) {
 				const { done, value } = await reader.read();
 				if (done) break;
 				buffer += decoder.decode(value, { stream: true });
-				const events = buffer.split(/\r?\n\r?\n/);
-				buffer = events.pop() ?? '';
-				for (const block of events) {
-					const event = parseEvent(block);
-					if (!event) continue;
-					if (event.type === 'run.started') this.runId = event.runId;
-					else if (this.runId && 'runId' in event && event.runId !== this.runId) continue;
-					this.handle(event);
-				}
+				const blocks = buffer.split(/\r?\n\r?\n/);
+				buffer = blocks.pop() ?? '';
+				for (const block of blocks) dispatch(parseEvent(block));
 			}
-			const last = parseEvent(buffer);
-			if (last && (!('runId' in last) || last.runId === this.runId)) this.handle(last);
+			dispatch(parseEvent(buffer));
+			if (!finished && this.controller === controller) {
+				// The stream ended without a terminal event (connection dropped, server restart).
+				this.fail('The connection to the assistant closed before the reply finished.');
+			}
 		} catch (error) {
 			if (controller.signal.aborted) return;
-			this.error = error instanceof Error ? error.message : String(error);
-			this.messages.push({
-				id: id('msg'),
-				role: 'assistant',
-				speaker: 'lead',
-				content: this.error,
-				error: true
-			});
+			this.fail(error instanceof Error ? error.message : String(error));
 		} finally {
-			if (this.controller === controller) this.controller = null;
-			this.status = 'idle';
-			this.activeAgents = [];
+			if (this.controller === controller) {
+				this.controller = null;
+				if (this.sending) this.finishTurn('done');
+			}
 		}
 	}
 
-	async confirm(): Promise<void> {
-		const pending = this.confirmation;
-		if (!pending || pending.status !== 'pending') return;
-		pending.status = 'running';
+	private fail(text: string): void {
+		this.errorReply(text);
+		this.finishTurn('error');
+	}
+
+	/**
+	 * Show an error. An empty reply becomes the error; a reply that already has text or steps keeps
+	 * them and the error follows as its own message.
+	 */
+	private errorReply(text: string): void {
+		let message = this.reply();
+		if (message.content || message.steps?.length || message.confirmations?.length) {
+			if (message.state === 'streaming') message.state = 'stopped';
+			this.replyId = null;
+			message = this.reply();
+		}
+		message.content = message.content ? `${message.content}\n\n${text}` : text;
+		message.state = 'error';
+	}
+
+	/** The user message that opened a turn. */
+	turnPrompt(turnId: string): AssistantMessage | undefined {
+		return this.messages.find((m) => m.turnId === turnId && m.role === 'user');
+	}
+
+	/** Re-run a turn (regenerate an answer, or retry one that failed). */
+	retry(turnId: string, context: AssistantPageContext): void {
+		const prompt = this.turnPrompt(turnId);
+		if (prompt) void this.send(prompt.content, context, { replaceTurn: turnId });
+	}
+
+	/** The newest user message, for up-arrow editing. */
+	lastPrompt(): AssistantMessage | undefined {
+		return this.messages.findLast((m) => m.role === 'user');
+	}
+
+	async confirm(card: ConfirmationCard): Promise<void> {
+		if (card.status !== 'pending') return;
+		if (Date.now() - card.createdAt > CONFIRM_TTL_MS) {
+			card.status = 'expired';
+			this.persist();
+			return;
+		}
+		card.status = 'running';
 		try {
 			const response = await fetch('/api/v1/assistant/confirm', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ token: pending.token })
+				body: JSON.stringify({ token: card.token })
 			});
 			const body = (await response.json().catch(() => null)) as {
 				ok?: boolean;
@@ -265,29 +679,23 @@ class AssistantChatState {
 				message?: string;
 			} | null;
 			if (!response.ok || body?.ok !== true) {
-				pending.status = 'error';
-				pending.error = body?.message ?? `The action failed (${response.status}).`;
-				return;
+				card.status = 'error';
+				card.error = body?.message ?? body?.text ?? `The action failed (${response.status}).`;
+			} else {
+				card.status = 'done';
+				card.result = body.text ?? 'Done.';
 			}
-			pending.status = 'done';
-			pending.result = body.text ?? 'Done.';
-			this.activities.push({
-				callId: id('confirm'),
-				agent: 'lead',
-				tool: pending.tool,
-				title: pending.title,
-				status: 'ok',
-				summary: pending.result.split('\n')[0]?.slice(0, 220)
-			});
 		} catch (error) {
-			pending.status = 'error';
-			pending.error = error instanceof Error ? error.message : String(error);
+			card.status = 'error';
+			card.error = error instanceof Error ? error.message : String(error);
 		}
+		this.persist();
 	}
 
-	deny(): void {
-		if (!this.confirmation) return;
-		this.confirmation.status = 'denied';
+	deny(card: ConfirmationCard): void {
+		if (card.status !== 'pending') return;
+		card.status = 'denied';
+		this.persist();
 	}
 }
 

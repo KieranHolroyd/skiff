@@ -6,17 +6,20 @@
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import Columns3Icon from '@lucide/svelte/icons/columns-3';
 	import ListFilterIcon from '@lucide/svelte/icons/list-filter';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import TableIcon from '@lucide/svelte/icons/table';
+	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import XIcon from '@lucide/svelte/icons/x';
 	import type {
 		BrowseQuery,
 		Cell,
 		Column,
 		ObjectRef,
-		RowChange
+		RowChange,
+		SchemaChangeInput
 	} from '@skiff/studio/protocol';
 	import Notice from '#lib/components/skiff/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
@@ -41,6 +44,12 @@
 	import { getStudioShell } from '../shell/context.js';
 	import StudioErrorNotice from '../shell/StudioErrorNotice.svelte';
 	import { formatBytes } from '../shell/tree.js';
+	import { canAlter } from '../structure/changes.js';
+	import ColumnDialog from '../structure/ColumnDialog.svelte';
+	import IndexDialog from '../structure/IndexDialog.svelte';
+	import ObjectActions from '../structure/ObjectActions.svelte';
+	import { AlterReview } from '../structure/review.svelte.js';
+	import ReviewDialog from '../structure/ReviewDialog.svelte';
 	import type { WorkspaceProps } from '../ui-types.js';
 
 	/**
@@ -262,6 +271,65 @@
 		const opened = await shell.openPath(path);
 		if (!opened) toast.info(`${path.join('.')} isn't in the object tree.`);
 	}
+
+	// --- structure edits ------------------------------------------------------------------------
+
+	const review = new AlterReview(() => database);
+	/** Column and index edits apply to tables, not views. */
+	const isTable = $derived(object.kind === 'table');
+	const can = $derived({
+		addColumn: isTable && canAlter(info, 'add-column'),
+		editColumn: isTable && (canAlter(info, 'alter-column') || canAlter(info, 'rename-column')),
+		dropColumn: isTable && canAlter(info, 'drop-column'),
+		createIndex: isTable && canAlter(info, 'create-index'),
+		dropIndex: isTable && canAlter(info, 'drop-index')
+	});
+	const columnActions = $derived(can.editColumn || can.dropColumn);
+	let columnDialog = $state(false);
+	let editingColumn = $state<Column | null>(null);
+	let indexDialog = $state(false);
+
+	/** Review and run `changes`; then re-read the structure and the rows on screen. */
+	async function alter(title: string, changes: SchemaChangeInput[], confirmLabel: string, done: string) {
+		const results = await review.start({ title, changes, confirmLabel });
+		if (!results) return;
+		if (results.length === changes.length) toast.success(done);
+		void describe.refetch();
+		firstPage();
+		shell?.structureChanged({ kind: 'changed' });
+	}
+
+	function addColumn() {
+		editingColumn = null;
+		columnDialog = true;
+	}
+
+	function editColumn(column: Column) {
+		editingColumn = column;
+		columnDialog = true;
+	}
+
+	function columnChanges(changes: SchemaChangeInput[]) {
+		const column = editingColumn;
+		if (!column) {
+			const added = changes[0]?.op === 'add-column' ? changes[0].column.name : 'the column';
+			return void alter(`Add column ${added}`, changes, 'Add column', `Added ${added}.`);
+		}
+		void alter(`Change column ${column.name}`, changes, 'Apply', `Changed ${column.name}.`);
+	}
+
+	function dropColumn(column: Column) {
+		void alter(
+			`Drop column ${column.name}`,
+			[{ op: 'drop-column', object: ref, column: column.name }],
+			'Drop column',
+			`Dropped ${column.name}.`
+		);
+	}
+
+	function dropIndex(name: string) {
+		void alter(`Drop index ${name}`, [{ op: 'drop-index', object: ref, name }], 'Drop index', `Dropped ${name}.`);
+	}
 </script>
 
 <Tabs.Root bind:value={tab} class="flex min-h-0 flex-1 flex-col gap-0">
@@ -280,6 +348,7 @@
 			<Button size="xs" variant="ghost" onclick={queryThis} disabled={!onquery}>
 				<SquareTerminalIcon />Query this table
 			</Button>
+			<ObjectActions {database} {info} {object} ontruncated={firstPage} />
 		</div>
 	</div>
 
@@ -484,9 +553,14 @@
 				{/if}
 
 				<section aria-labelledby="columns-{object.path.join('.')}" class="space-y-2">
-					<h3 id="columns-{object.path.join('.')}" class="text-sm font-medium">
-						Columns <span class="text-muted-foreground">{description.columns.length}</span>
-					</h3>
+					<div class="flex items-center gap-2">
+						<h3 id="columns-{object.path.join('.')}" class="text-sm font-medium">
+							Columns <span class="text-muted-foreground">{description.columns.length}</span>
+						</h3>
+						{#if can.addColumn}
+							<Button size="xs" variant="outline" class="ml-auto" onclick={addColumn}><PlusIcon />Add column</Button>
+						{/if}
+					</div>
 					<div class="overflow-hidden rounded-md border">
 						<Table.Root class="text-xs">
 							<Table.Header>
@@ -494,8 +568,10 @@
 									<Table.Head>Name</Table.Head>
 									<Table.Head>Type</Table.Head>
 									<Table.Head>Nullable</Table.Head>
+									<Table.Head>Default</Table.Head>
 									<Table.Head>Key</Table.Head>
 									<Table.Head>Editable</Table.Head>
+									{#if columnActions}<Table.Head><span class="sr-only">Actions</span></Table.Head>{/if}
 								</Table.Row>
 							</Table.Header>
 							<Table.Body>
@@ -504,6 +580,9 @@
 										<Table.Cell class="font-mono font-medium">{column.name}</Table.Cell>
 										<Table.Cell class="font-mono text-muted-foreground">{column.nativeType}</Table.Cell>
 										<Table.Cell>{column.nullable === false ? 'No' : 'Yes'}</Table.Cell>
+										<Table.Cell class="max-w-48 truncate font-mono text-muted-foreground" title={column.default ?? undefined}
+											>{column.default ?? ''}</Table.Cell
+										>
 										<Table.Cell>
 											{#if description.primaryKey?.includes(column.name)}
 												<Badge variant="warning">primary</Badge>
@@ -512,6 +591,26 @@
 											{/if}
 										</Table.Cell>
 										<Table.Cell>{column.editable === false ? 'No' : 'Yes'}</Table.Cell>
+										{#if columnActions}
+											<Table.Cell class="w-px py-0 whitespace-nowrap">
+												{#if can.editColumn}
+													<Button size="icon-xs" variant="ghost" aria-label="Edit column {column.name}" title="Edit column" onclick={() => editColumn(column)}
+														><PencilIcon /></Button
+													>
+												{/if}
+												{#if can.dropColumn}
+													<Button
+														size="icon-xs"
+														variant="ghost"
+														class="text-destructive"
+														aria-label="Drop column {column.name}"
+														title="Drop column"
+														disabled={description.columns.length === 1}
+														onclick={() => dropColumn(column)}><Trash2Icon /></Button
+													>
+												{/if}
+											</Table.Cell>
+										{/if}
 									</Table.Row>
 								{/each}
 							</Table.Body>
@@ -520,9 +619,14 @@
 				</section>
 
 				<section aria-labelledby="indexes-{object.path.join('.')}" class="space-y-2">
-					<h3 id="indexes-{object.path.join('.')}" class="text-sm font-medium">
-						Indexes <span class="text-muted-foreground">{description.indexes.length}</span>
-					</h3>
+					<div class="flex items-center gap-2">
+						<h3 id="indexes-{object.path.join('.')}" class="text-sm font-medium">
+							Indexes <span class="text-muted-foreground">{description.indexes.length}</span>
+						</h3>
+						{#if can.createIndex}
+							<Button size="xs" variant="outline" class="ml-auto" onclick={() => (indexDialog = true)}><PlusIcon />Create index</Button>
+						{/if}
+					</div>
 					{#if description.indexes.length === 0}
 						<p class="text-xs text-muted-foreground">No indexes.</p>
 					{:else}
@@ -534,6 +638,7 @@
 										<Table.Head>Columns</Table.Head>
 										<Table.Head>Unique</Table.Head>
 										<Table.Head>Definition</Table.Head>
+										{#if can.dropIndex}<Table.Head><span class="sr-only">Actions</span></Table.Head>{/if}
 									</Table.Row>
 								</Table.Header>
 								<Table.Body>
@@ -545,6 +650,18 @@
 											<Table.Cell class="max-w-md truncate font-mono text-muted-foreground" title={index.definition}
 												>{index.definition ?? ''}</Table.Cell
 											>
+											{#if can.dropIndex}
+												<Table.Cell class="w-px py-0">
+													<Button
+														size="icon-xs"
+														variant="ghost"
+														class="text-destructive"
+														aria-label="Drop index {index.name}"
+														title="Drop index"
+														onclick={() => dropIndex(index.name)}><Trash2Icon /></Button
+													>
+												</Table.Cell>
+											{/if}
 										</Table.Row>
 									{/each}
 								</Table.Body>
@@ -606,3 +723,14 @@
 		{/if}
 	</Tabs.Content>
 </Tabs.Root>
+
+{#if description}
+	<ColumnDialog bind:open={columnDialog} object={ref} dialect={info.capabilities.dialect} column={editingColumn} onsubmit={columnChanges} />
+	<IndexDialog
+		bind:open={indexDialog}
+		object={ref}
+		fields={description.columns.map((column) => column.name)}
+		onsubmit={(change) => void alter('Create index', [change], 'Create index', 'Created the index.')}
+	/>
+{/if}
+<ReviewDialog {review} />

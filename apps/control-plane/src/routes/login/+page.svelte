@@ -1,8 +1,11 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import FingerprintIcon from '@lucide/svelte/icons/fingerprint';
-	import MailIcon from '@lucide/svelte/icons/mail';
+	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
+	import LogInIcon from '@lucide/svelte/icons/log-in';
+	import SmartphoneIcon from '@lucide/svelte/icons/smartphone';
 	import { authClient } from '#lib/auth-client.js';
 	import AuthShell from '#lib/components/skiff/AuthShell.svelte';
 	import GitHubMark from '#lib/components/skiff/GitHubMark.svelte';
@@ -15,9 +18,19 @@
 	let { data }: PageProps = $props();
 	let email = $state('');
 	let password = $state('');
+	let code = $state('');
 	let error = $state('');
 	let notice = $state('');
 	let pending = $state(false);
+	/** After a password sign-in for an account with an authenticator app (D10, D103). */
+	let step = $state<'credentials' | 'code'>('credentials');
+	let useBackup = $state(false);
+	/** Passkeys need a secure context (HTTPS or localhost); hide the button where they can't work. */
+	let passkeys = $state(true);
+
+	onMount(() => {
+		passkeys = window.isSecureContext && 'PublicKeyCredential' in window;
+	});
 
 	/** `redirect` lets a protected site send the visitor back after sign-in. */
 	// svelte-ignore state_referenced_locally
@@ -29,21 +42,48 @@
 		window.location.href = next ?? destination;
 	}
 
+	function reset() {
+		error = '';
+		notice = '';
+	}
+
 	async function signInWithPassword(event: SubmitEvent) {
 		event.preventDefault();
 		pending = true;
-		error = '';
-		notice = '';
+		reset();
 		const { data: result, error: err } = await authClient.signIn.email({ email, password });
 		pending = false;
-		if (err) error = err.message ?? 'Sign-in failed';
+		if (err) {
+			error =
+				err.status === 401 || err.code === 'INVALID_EMAIL_OR_PASSWORD'
+					? 'That email and password don’t match. No password yet? Use a sign-in link below.'
+					: (err.message ?? 'Sign-in failed');
+			return;
+		}
+		if ((result as { twoFactorRedirect?: boolean } | null)?.twoFactorRedirect) {
+			step = 'code';
+			password = '';
+			return;
+		}
+		continueTo(result);
+	}
+
+	async function verifyCode(event: SubmitEvent) {
+		event.preventDefault();
+		pending = true;
+		reset();
+		const value = useBackup ? code.trim() : code.replace(/[\s-]/g, '');
+		const { data: result, error: err } = useBackup
+			? await authClient.twoFactor.verifyBackupCode({ code: value })
+			: await authClient.twoFactor.verifyTotp({ code: value });
+		pending = false;
+		if (err) error = err.message ?? 'That code didn’t work.';
 		else continueTo(result);
 	}
 
 	async function signInWithPasskey() {
 		pending = true;
-		error = '';
-		notice = '';
+		reset();
 		const { data: result, error: err } = await authClient.signIn.passkey();
 		pending = false;
 		if (err) error = err.message ?? 'Passkey sign-in failed';
@@ -52,8 +92,7 @@
 
 	async function signInWithGitHub() {
 		pending = true;
-		error = '';
-		notice = '';
+		reset();
 		const { error: err } = await authClient.signIn.social({
 			provider: 'github',
 			callbackURL: destination
@@ -62,15 +101,20 @@
 		if (err) error = err.message ?? 'GitHub sign-in failed';
 	}
 
-	async function sendMagicLink(event: SubmitEvent) {
-		event.preventDefault();
+	async function sendMagicLink() {
+		reset();
+		if (!email) {
+			error = 'Enter your email address first.';
+			return;
+		}
 		pending = true;
-		error = '';
-		notice = '';
 		const { error: err } = await authClient.signIn.magicLink({ email, callbackURL: destination });
 		pending = false;
 		if (err) error = err.message ?? 'Could not send the link';
-		else notice = 'Check your email for a sign-in link.';
+		else
+			notice = data.emailToLog
+				? 'Sign-in link created. Email isn’t set up on this server, so it is in the server log: journalctl -u skiff-control-plane | grep magic-link'
+				: 'Check your email for a sign-in link.';
 	}
 </script>
 
@@ -80,64 +124,66 @@
 
 <AuthShell
 	eyebrow="Invite only"
-	title="Sign in to Skiff"
-	description="Use a passkey or GitHub. No account? Ask an organisation owner for an invitation."
+	title={step === 'code' ? 'Enter your code' : 'Sign in to Skiff'}
+	description={step === 'code'
+		? useBackup
+			? 'Use one of the backup codes you saved when you set up the authenticator app.'
+			: 'Open your authenticator app and enter the 6-digit code for Skiff.'
+		: 'No account? Ask an organisation owner for an invitation.'}
 >
-	<div class="space-y-3">
-		<Button size="lg" class="h-10 w-full" disabled={pending} onclick={signInWithPasskey}>
-			<FingerprintIcon aria-hidden="true" />
-			Sign in with a passkey
-		</Button>
-		<Button
-			size="lg"
-			variant="outline"
-			class="h-10 w-full"
-			disabled={pending}
-			onclick={signInWithGitHub}
-		>
-			<GitHubMark />
-			Continue with GitHub
-		</Button>
-	</div>
-
-	<div class="my-6 flex items-center gap-3" aria-hidden="true">
-		<span class="h-px flex-1 bg-border"></span>
-		<span class="text-xs font-medium text-muted-foreground">or email</span>
-		<span class="h-px flex-1 bg-border"></span>
-	</div>
-
-	<form class="space-y-3" onsubmit={sendMagicLink}>
-		<Field.Field>
-			<Field.Label for="magic-email">Email address</Field.Label>
-			<Input
-				id="magic-email"
-				type="email"
-				autocomplete="email"
-				placeholder="you@example.com"
-				class="h-10"
-				bind:value={email}
-				required
-			/>
-		</Field.Field>
-		<Button type="submit" variant="secondary" size="lg" class="h-10 w-full" disabled={pending}>
-			<MailIcon aria-hidden="true" />
-			Email me a sign-in link
-		</Button>
-	</form>
-
-	{#if data.devPasswordLogin}
-		<form
-			class="mt-6 space-y-3 rounded-xl border border-dashed border-warning/50 bg-warning/5 p-4"
-			onsubmit={signInWithPassword}
-		>
-			<p class="text-xs font-medium text-warning">Development sign-in</p>
+	{#if step === 'code'}
+		<form class="space-y-3" onsubmit={verifyCode}>
 			<Field.Field>
-				<Field.Label for="email">Email</Field.Label>
+				<Field.Label for="code">{useBackup ? 'Backup code' : 'Authenticator code'}</Field.Label>
+				<Input
+					id="code"
+					bind:value={code}
+					inputmode={useBackup ? 'text' : 'numeric'}
+					autocomplete="one-time-code"
+					placeholder={useBackup ? '' : '123 456'}
+					class="h-10 font-mono tracking-widest"
+					required
+				/>
+			</Field.Field>
+			<Button type="submit" size="lg" class="h-10 w-full" disabled={pending}>
+				{#if useBackup}<KeyRoundIcon aria-hidden="true" />{:else}<SmartphoneIcon
+						aria-hidden="true"
+					/>{/if}
+				Verify
+			</Button>
+		</form>
+		<div class="mt-3 flex justify-between text-xs text-muted-foreground">
+			<button
+				type="button"
+				class="underline-offset-4 hover:underline"
+				onclick={() => {
+					useBackup = !useBackup;
+					code = '';
+					reset();
+				}}
+			>
+				{useBackup ? 'Use the authenticator app' : 'Lost your device? Use a backup code'}
+			</button>
+			<button
+				type="button"
+				class="underline-offset-4 hover:underline"
+				onclick={() => {
+					step = 'credentials';
+					code = '';
+					reset();
+				}}>Back</button
+			>
+		</div>
+	{:else}
+		<form class="space-y-3" onsubmit={signInWithPassword}>
+			<Field.Field>
+				<Field.Label for="email">Email address</Field.Label>
 				<Input
 					id="email"
 					type="email"
 					autocomplete="username"
-					class="bg-card"
+					placeholder="you@example.com"
+					class="h-10"
 					bind:value={email}
 					required
 				/>
@@ -148,21 +194,66 @@
 					id="password"
 					type="password"
 					autocomplete="current-password"
-					class="bg-card"
+					class="h-10"
 					bind:value={password}
 					required
 				/>
 			</Field.Field>
-			<Button type="submit" class="w-full" disabled={pending}>Sign in</Button>
-			<p class="text-xs text-muted-foreground">Disabled in production.</p>
+			<Button type="submit" size="lg" class="h-10 w-full" disabled={pending}>
+				<LogInIcon aria-hidden="true" />
+				Sign in
+			</Button>
+			<button
+				type="button"
+				class="text-xs text-muted-foreground underline-offset-4 hover:underline"
+				disabled={pending}
+				onclick={sendMagicLink}
+			>
+				Forgot your password, or don’t have one? Email me a sign-in link
+			</button>
 		</form>
+
+		{#if passkeys || data.github}
+			<div class="my-6 flex items-center gap-3" aria-hidden="true">
+				<span class="h-px flex-1 bg-border"></span>
+				<span class="text-xs font-medium text-muted-foreground">or</span>
+				<span class="h-px flex-1 bg-border"></span>
+			</div>
+			<div class="space-y-3">
+				{#if passkeys}
+					<Button
+						size="lg"
+						variant="outline"
+						class="h-10 w-full"
+						disabled={pending}
+						onclick={signInWithPasskey}
+					>
+						<FingerprintIcon aria-hidden="true" />
+						Sign in with a passkey
+					</Button>
+				{/if}
+				{#if data.github}
+					<Button
+						size="lg"
+						variant="outline"
+						class="h-10 w-full"
+						disabled={pending}
+						onclick={signInWithGitHub}
+					>
+						<GitHubMark />
+						Continue with GitHub
+					</Button>
+				{/if}
+			</div>
+		{/if}
 	{/if}
 
 	{#if error}<Alert.Root variant="destructive" class="mt-5"
 			><CircleAlertIcon /><Alert.Description>{error}</Alert.Description></Alert.Root
 		>{/if}
 	{#if notice}<Alert.Root variant="success" class="mt-5"
-			><CircleCheckIcon /><Alert.Description>{notice}</Alert.Description></Alert.Root
+			><CircleCheckIcon /><Alert.Description class="break-words">{notice}</Alert.Description
+			></Alert.Root
 		>{/if}
 
 	{#snippet footer()}

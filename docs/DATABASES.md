@@ -368,14 +368,35 @@ replaced D60's per-database sidecar studio, which was deleted at the cutover.
     per database can be open at once.
   - **Reserved name:** `skiff-studio-ro` (the database identifier `skiff_studio_ro`) is reserved
     on every engine.
+- **Structure editing.** Write sessions can change structure from the workspace, through the
+  typed `alter` op rather than free text. Each change runs as a dry run first and shows the
+  exact statements for review; destructive changes (drop, truncate, drop column/field, drop
+  index) also ask for the object's name. What each engine supports is listed in its
+  `capabilities.structure`, and the UI shows only those controls:
+
+  | Engine | Changes |
+  |---|---|
+  | Postgres | create schema; create/rename/drop/truncate tables (drop also for views, materialized views, foreign tables and schemas, optionally `CASCADE`); add, drop, rename and alter columns (type with `USING col::type`, nullability, default); create/drop indexes |
+  | MySQL, MariaDB | the same, minus create schema; `MODIFY COLUMN` keeps the column's existing default, `AUTO_INCREMENT`, `ON UPDATE` and comment. DDL commits on its own here, so a failed step reports which earlier steps already ran |
+  | MongoDB | create/rename/drop/truncate collections (drop also for views); rename or remove a field in every document; create/drop indexes |
+  | Valkey, Redis | rename a key (`RENAMENX`, so an existing key is never overwritten) and delete it (`UNLINK`) |
+
+  Column types must be plain type names (`varchar(255)`, `numeric(10,2)`, `integer[]`,
+  `enum('a','b')`), and default expressions a keyword or a niladic call (`now()`,
+  `CURRENT_TIMESTAMP(6)`); literals are quoted by the plugin. Anything else goes through the
+  query editor. Postgres runs a change in one transaction. Read-only sessions refuse `alter`
+  at the proxy, in the studio process and in each plugin, and the read-only principal cannot
+  run DDL either.
 - **Limits** (enforced in the studio process): 1,000 rows per result by default (up to 10,000),
   16 MiB per response (then `truncated: true`), a 30 s statement timeout, one run at a time per
   session, and 8 sessions per node. Results stream as NDJSON and are never buffered past one
   batch; closing the tab or pressing Stop cancels the query on the database.
 - **Audit.** Lifecycle keeps the `database.console.*` names: `database.console.open`,
   `database.console.close` (with a reason) and `database.console.expired` (expired or idle).
-  Editor runs are `database.studio.run` and grid edits `database.studio.write`; both record a
-  statement fingerprint and counts only, never SQL text or values.
+  Editor runs are `database.studio.run`, grid edits `database.studio.write`, and applied
+  structure changes `database.studio.alter` (the object path and the change kind, such as
+  `add-column`). None of them record SQL text, column types or values; runs record a statement
+  fingerprint and writes record counts. Dry runs are not audited.
 
 Surfaces: `GET/POST/DELETE /api/v1/databases/:name/studio` (the caller's session), the
 session-only `/databases/:name/studio/api/:op` calls the workspace makes (not part of the public

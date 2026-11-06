@@ -172,6 +172,44 @@ describe('studio proxy: refusals', () => {
 		expect(activity).toHaveLength(0);
 	});
 
+	test('alter in a read-only session is refused without dialling, dry runs included', async () => {
+		const { deps, dials, activity } = setup();
+		for (const dryRun of [true, false]) {
+			const response = await call(deps, 'alter', {
+				change: { op: 'drop', object: { path: ['public', 'users'], kind: 'table' } },
+				dryRun
+			});
+			expect(response.status).toBe(403);
+			expect(await errorCode(response)).toBe('read_only');
+		}
+		expect(dials).toHaveLength(0);
+		expect(activity).toHaveLength(0);
+	});
+
+	test('alter refuses a column type that could smuggle SQL', async () => {
+		const { deps, dials } = setup({ endpoint: { readOnly: false } });
+		for (const type of ['int; drop table users', 'text --', "enum('a';')"]) {
+			const response = await call(deps, 'alter', {
+				change: {
+					op: 'add-column',
+					object: { path: ['public', 'users'], kind: 'table' },
+					column: { name: 'x', type }
+				}
+			});
+			expect(response.status).toBe(400);
+			expect(await errorCode(response)).toBe('bad_request');
+		}
+		const response = await call(deps, 'alter', {
+			change: {
+				op: 'add-column',
+				object: { path: ['public', 'users'], kind: 'table' },
+				column: { name: 'x', type: 'text', default: { expression: 'now()); drop table users; --' } }
+			}
+		});
+		expect(response.status).toBe(400);
+		expect(dials).toHaveLength(0);
+	});
+
 	test('core errors map onto protocol codes', async () => {
 		const coreError = (status: number, message: string) =>
 			Object.assign(new Error(message), { name: 'CoreError', status });
@@ -360,6 +398,50 @@ describe('studio proxy: audit', () => {
 		expect(activity).toEqual([
 			{ op: 'apply', object, inserted: 1, updated: 1, deleted: 1, applied: 3 }
 		]);
+	});
+
+	test('an applied alter records the object and the change kind only', async () => {
+		const { deps, dials, activity } = setup({
+			endpoint: { readOnly: false },
+			upstream: () =>
+				Response.json({ statements: ['ALTER TABLE "public"."users" ADD COLUMN "secret_col" text'], applied: true })
+		});
+		const response = await call(deps, 'alter', {
+			change: {
+				op: 'add-column',
+				object: { path: ['public', 'users'], kind: 'table' },
+				column: { name: 'secret_col', type: 'text', default: { literal: 'secret@example.com' } }
+			}
+		});
+		expect(response.status).toBe(200);
+		expect(JSON.parse(String(dials[0]?.init.body))).toMatchObject({ dryRun: false });
+		expect(activity).toEqual([{ op: 'alter', object: ['public', 'users'], change: 'add-column' }]);
+		expect(JSON.stringify(activity)).not.toContain('secret@example.com');
+	});
+
+	test('a dry-run or failed alter is not audited', async () => {
+		const dry = setup({
+			endpoint: { readOnly: false },
+			upstream: () => Response.json({ statements: ['TRUNCATE "public"."users"'], applied: false })
+		});
+		const response = await call(dry.deps, 'alter', {
+			change: { op: 'truncate', object: { path: ['public', 'users'], kind: 'table' } },
+			dryRun: true
+		});
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ statements: ['TRUNCATE "public"."users"'], applied: false });
+		expect(dry.activity).toHaveLength(0);
+
+		const failed = setup({
+			endpoint: { readOnly: false },
+			upstream: () =>
+				Response.json({ error: { code: 'engine_error', message: 'no such table' } }, { status: 500 })
+		});
+		const refused = await call(failed.deps, 'alter', {
+			change: { op: 'truncate', object: { path: ['public', 'users'], kind: 'table' } }
+		});
+		expect(refused.status).toBe(500);
+		expect(failed.activity).toHaveLength(0);
 	});
 
 	test('a refused apply is not recorded as a write', async () => {

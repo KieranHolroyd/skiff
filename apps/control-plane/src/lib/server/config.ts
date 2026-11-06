@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { building } from '$app/env';
 import { parseFeatureFlags, retiredFeatureFlagsSet } from '@skiff/contracts';
 import { isSharedDomain } from './domains';
@@ -24,7 +25,7 @@ export const platformOrigin = required('SKIFF_PLATFORM_ORIGIN', 'http://localhos
 	''
 );
 
-/** Domain deployed sites are served from (D34: `kierancloud.dev`). */
+/** Domain deployed sites are served from (D34: `examplecloud.com`). */
 export const contentDomain = required('SKIFF_CONTENT_DOMAIN', 'localhost');
 
 /**
@@ -50,9 +51,9 @@ export const authSecret = required(
 );
 
 /**
- * Email+password sign-in is NOT part of Skiff's auth design (passkeys + GitHub only, D10).
- * It exists solely so local development and automated tests can sign in headlessly.
- * Refused in production.
+ * Development/test mode: open sign-up (including public email+password sign-up) and no owner
+ * second factor, so local development and the e2e suites can sign in headlessly. Password sign-in
+ * itself is always available (D103). Refused in production.
  */
 export const devPasswordLogin = env.SKIFF_DEV_PASSWORD_LOGIN === '1';
 if (devPasswordLogin && env.NODE_ENV === 'production')
@@ -104,6 +105,14 @@ export const storageGatewayUrl = env.SKIFF_STORAGE_GATEWAY_URL?.replace(/\/+$/, 
 export const webhookUrl = env.SKIFF_ALERT_WEBHOOK;
 export const alertEmail = env.SKIFF_ALERT_EMAIL;
 
+/**
+ * The installer's one-time setup token (docs/OPS.md §2.1, D102). Unset in development: the control
+ * plane then keeps its own token in the data directory (see setup.ts).
+ */
+export const setupTokenFile =
+	env.SKIFF_SETUP_TOKEN_FILE ??
+	(env.NODE_ENV === 'production' ? '/etc/skiff/setup-token' : undefined);
+
 /** Escape hatch for local development; production is invite-only (D10). */
 export const openSignup = env.SKIFF_OPEN_SIGNUP === '1' || devPasswordLogin;
 
@@ -129,3 +138,24 @@ export const r2 =
 				endpoint: env.R2_ENDPOINT
 			}
 		: undefined;
+
+/**
+ * The optional ClickHouse telemetry store (D101, docs/OPS.md §3.6). Installing it (installer
+ * prompt, or Settings → Telemetry) writes these to skiff.env; without them telemetry reports "not
+ * installed". A dev server uses `bun run dev:clickhouse` (127.0.0.1:18123, fixed dev passwords)
+ * once that has created `.data/clickhouse`, so a plain dev server stays as light as a default host.
+ */
+const devClickHouse =
+	env.NODE_ENV !== 'production' &&
+	!env.SKIFF_CLICKHOUSE_URL &&
+	existsSync(join(dataDir, 'clickhouse'));
+export const clickhouseEnv: Record<string, string | undefined> = devClickHouse
+	? {
+			SKIFF_CLICKHOUSE_URL: 'http://127.0.0.1:18123',
+			SKIFF_CLICKHOUSE_USER: 'skiff',
+			SKIFF_CLICKHOUSE_PASSWORD: 'skiff-dev',
+			SKIFF_CLICKHOUSE_READER_USER: 'skiff_reader',
+			SKIFF_CLICKHOUSE_READER_PASSWORD: 'skiff-dev-reader',
+			SKIFF_CLICKHOUSE_DATABASE: 'skiff'
+		}
+	: env;

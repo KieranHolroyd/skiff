@@ -4,6 +4,7 @@
 	import { page } from '$app/state';
 	import { QueryClientProvider } from '@tanstack/svelte-query';
 	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
+	import ChartAreaIcon from '@lucide/svelte/icons/chart-area';
 	import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
 	import CylinderIcon from '@lucide/svelte/icons/cylinder';
 	import DatabaseIcon from '@lucide/svelte/icons/database';
@@ -41,6 +42,7 @@
 		label: string;
 		href:
 			| '/(dashboard)/overview'
+			| '/(dashboard)/dashboards'
 			| '/(dashboard)/projects'
 			| '/(dashboard)/databases'
 			| '/(dashboard)/storage'
@@ -61,6 +63,12 @@
 					href: '/(dashboard)/overview',
 					path: '/overview',
 					icon: LayoutDashboardIcon
+				},
+				{
+					label: 'Dashboards',
+					href: '/(dashboard)/dashboards',
+					path: '/dashboards',
+					icon: ChartAreaIcon
 				},
 				{
 					label: 'Projects',
@@ -142,6 +150,15 @@
 						segment.charAt(0).toUpperCase() + segment.slice(1).replace(/-/g, ' ')),
 				mono: isProject
 			});
+		}
+		// A page whose URL carries an id (e.g. /dashboards/dsh_…) names its last crumb; `null`
+		// (not found) shows the raw id instead of a capitalised one.
+		const data = page.data as { crumbLabel?: string | null };
+		if ('crumbLabel' in data && out.length > 1) {
+			const raw = decodeURIComponent(segments.at(-1)!);
+			out[out.length - 1] = data.crumbLabel
+				? { label: data.crumbLabel }
+				: { label: raw, mono: true };
 		}
 		return out;
 	});
@@ -370,7 +387,7 @@
 	</Sidebar.Inset>
 
 	{#if data.assistant.enabled}
-		<AssistantLauncher status={data.assistant} />
+		<AssistantLauncher status={data.assistant} userId={data.user.id} />
 		<AssistantTour />
 	{/if}
 </Sidebar.Provider>

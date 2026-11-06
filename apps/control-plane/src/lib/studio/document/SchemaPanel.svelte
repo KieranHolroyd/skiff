@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { onDestroy } from 'svelte';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
+	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import type { Cell, Column } from '@skiff/studio/protocol';
 	import Notice from '#lib/components/skiff/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
@@ -21,7 +23,22 @@
 	 * sample runs as one read-only aggregate through `run` (`describe` lists the types but not
 	 * their shares).
 	 */
-	let { database, collection }: { database: string; collection: string } = $props();
+	let {
+		database,
+		collection,
+		canRename = false,
+		canRemove = false,
+		onfieldaction
+	}: {
+		database: string;
+		collection: string;
+		/** Structure edits on a write session: rename a field, or remove it, in every document. */
+		canRename?: boolean;
+		canRemove?: boolean;
+		onfieldaction?: (action: 'rename' | 'remove', field: string) => void;
+	} = $props();
+
+	const fieldActions = $derived((canRename || canRemove) && onfieldaction !== undefined);
 
 	let summary = $state.raw<SchemaSummary | null>(null);
 	let error = $state<string | null>(null);
@@ -105,6 +122,7 @@
 						<th scope="col" class="px-3 py-2 font-medium">Field</th>
 						<th scope="col" class="w-40 px-3 py-2 font-medium">In documents</th>
 						<th scope="col" class="px-3 py-2 font-medium">Types</th>
+						{#if fieldActions}<th scope="col"><span class="sr-only">Actions</span></th>{/if}
 					</tr>
 				</thead>
 				<tbody>
@@ -142,6 +160,31 @@
 									{/if}
 								</div>
 							</td>
+							{#if fieldActions}
+								<td class="w-px px-2 py-1 whitespace-nowrap">
+									{#if field.name !== '_id' && !field.name.includes('.')}
+										{#if canRename}
+											<Button
+												size="icon-xs"
+												variant="ghost"
+												aria-label="Rename field {field.name}"
+												title="Rename in every document"
+												onclick={() => onfieldaction?.('rename', field.name)}><PencilIcon /></Button
+											>
+										{/if}
+										{#if canRemove}
+											<Button
+												size="icon-xs"
+												variant="ghost"
+												class="text-destructive"
+												aria-label="Remove field {field.name}"
+												title="Remove from every document"
+												onclick={() => onfieldaction?.('remove', field.name)}><Trash2Icon /></Button
+											>
+										{/if}
+									{/if}
+								</td>
+							{/if}
 						</tr>
 					{/each}
 				</tbody>

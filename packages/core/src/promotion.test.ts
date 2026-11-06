@@ -9,7 +9,7 @@ import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { isPromoteSpike } from './maintenance.ts';
 import { LocalObjectStore } from './object-store.ts';
-import { TelemetryStore } from './telemetry.ts';
+import { disposeTelemetryStore, hasClickHouse, testTelemetryStore } from './test-clickhouse.ts';
 import { migrations } from '../../db/src/migrations.ts';
 import type { Core } from './index.ts';
 
@@ -42,7 +42,7 @@ const core: Core = createCore({
 
 const owner = buildPrincipal({ kind: 'user', userId: 'user_1', orgId: 'org_1', role: 'owner', platformAdmin: true });
 const file = (path: string, content: string) => ({ path, content, encoding: 'utf8' as const });
-const telemetry = new TelemetryStore({ path: ':memory:' });
+const telemetry = testTelemetryStore();
 
 beforeAll(async () => {
 	await telemetry.open();
@@ -50,7 +50,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-	await telemetry.close();
+	await disposeTelemetryStore(telemetry);
 	opened.sqlite.close();
 	rmSync(dir, { recursive: true, force: true });
 });
@@ -199,7 +199,7 @@ describe('5xx spike after promote', () => {
 		expect(isPromoteSpike({ requests: 0, status5xx: 0 }, { requests: 50, status5xx: 50 })).not.toBeNull();
 	});
 
-	test('alerts once when production starts failing after a promote', async () => {
+	test.skipIf(!hasClickHouse)('alerts once when production starts failing after a promote', async () => {
 		clock = Math.ceil(clock / MINUTE) * MINUTE + 10 * MINUTE;
 		await project('spiky');
 		const host = 'spiky.sites.test';
@@ -221,7 +221,7 @@ describe('5xx spike after promote', () => {
 		expect((await core.maintenance.run()).alertsFired).not.toContain(key);
 	});
 
-	test('stays quiet when errors were already as bad before the promote', async () => {
+	test.skipIf(!hasClickHouse)('stays quiet when errors were already as bad before the promote', async () => {
 		await project('steady');
 		const host = 'steady.sites.test';
 		await telemetry.ingest([1, 2, 3].map((n) => bucket(host, clock - n * MINUTE, 40, 10)));

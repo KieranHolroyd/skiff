@@ -133,7 +133,7 @@ export class MaintenanceService {
 		alertsFired.push(...(await this.promoteSpikeAlerts()));
 
 		let telemetry: MaintenanceReport['telemetry'];
-		if (this.ctx.telemetry?.available) {
+		if (this.ctx.telemetry && (await this.ctx.telemetry.ready())) {
 			try {
 				const rolledUp = await this.ctx.telemetry.rollupHourly();
 				const archivedDay = await this.archiveTelemetry();
@@ -160,7 +160,7 @@ export class MaintenanceService {
 	 */
 	private async archiveTelemetry(): Promise<string | undefined> {
 		const telemetry = this.ctx.telemetry;
-		if (!telemetry?.available || !telemetry.archiveEnabled) return undefined;
+		if (!telemetry || !(await telemetry.ready()) || !telemetry.archiveEnabled) return undefined;
 		const todayStart = Math.floor(this.ctx.now() / DAY_MS) * DAY_MS;
 		const day = new Date(todayStart - DAY_MS).toISOString().slice(0, 10);
 		const done = this.ctx.sqlite
@@ -224,7 +224,7 @@ export class MaintenanceService {
 	 */
 	private async promoteSpikeAlerts(): Promise<string[]> {
 		const telemetry = this.ctx.telemetry;
-		if (!telemetry?.available) return [];
+		if (!telemetry || !(await telemetry.ready())) return [];
 		const now = this.ctx.now();
 		const fired: string[] = [];
 		for (const deployment of this.ctx.deployments.recentlyPromoted(now - PROMOTE_WATCH_MS)) {
@@ -305,7 +305,7 @@ export class MaintenanceService {
 				severity: ratio >= 0.95 ? 'critical' : 'warning',
 			});
 		}
-		if (!this.ctx.telemetry?.available) return fired;
+		if (!this.ctx.telemetry || !(await this.ctx.telemetry.ready())) return fired;
 		const samples = await this.ctx.telemetry.latestDatabaseMetrics(this.ctx.now() - 5 * 60_000);
 		for (const sample of samples) {
 			if (!sample.up || sample.maxConnections <= 0) continue;

@@ -28,6 +28,21 @@ export function userHasSecondFactor(userId: string): boolean {
 	}
 }
 
+/** Whether the user has a password (a Better Auth `credential` account with a hash). */
+export function userHasPassword(userId: string): boolean {
+	try {
+		return Boolean(
+			sqlite
+				.query<{ id: string }, [string]>(
+					"SELECT id FROM account WHERE userId = ? AND providerId = 'credential' AND password IS NOT NULL LIMIT 1"
+				)
+				.get(userId)
+		);
+	} catch {
+		return false;
+	}
+}
+
 export function userIsOwner(userId: string): boolean {
 	return readMembership(sqlite, userId)?.role === 'owner';
 }
@@ -54,6 +69,14 @@ export function userHasPasskey(userId: string): boolean {
 export function markSessionSecondFactor(sessionId: string, factor: SecondFactor): void {
 	sqlite.run('UPDATE session SET secondFactor = ? WHERE id = ?', [factor, sessionId]);
 	failures.delete(sessionId);
+}
+
+/**
+ * Changing a password signs every session out and issues a new one (auth.ts). Carry the factor
+ * the old session proved over to it, so an owner isn't challenged again straight away.
+ */
+export function carrySecondFactorToToken(token: string, factor: string): void {
+	sqlite.run('UPDATE session SET secondFactor = ? WHERE token = ?', [factor, token]);
 }
 
 /** Failed codes per unproven session; in memory is enough (a restart only resets the budget). */

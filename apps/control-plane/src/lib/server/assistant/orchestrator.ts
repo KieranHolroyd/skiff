@@ -1,41 +1,31 @@
 import { randomUUID } from 'node:crypto';
 import {
-	type AssistantAgentId,
 	type AssistantChatRequest,
 	type AssistantEvent,
 	type AssistantGuide,
-	type AssistantSpeaker,
 	type Principal
 } from '@skiff/contracts';
 import { core } from '../core';
-import { LEAD_SYSTEM, ROUTER_SYSTEM, SYNTHESIS_SYSTEM } from './agents';
+import { PANEL_FORMAT } from './agents';
 import { assistantConfig, type AssistantRuntimeConfig } from './config';
 import { mintConfirmation, verifyConfirmation } from './confirm';
 import { streamChat, type ProviderMessage } from './provider';
-import { effectiveAgents, type EffectiveAgent } from './settings';
-import {
-	assistantTools,
-	parseArgs,
-	providerTools,
-	resultSummary,
-	toolFor,
-	type AssistantTool
-} from './tools';
+import { effectiveAgent, type EffectiveAgent } from './settings';
+import { assistantTools, parseArgs, providerTools, resultSummary, toolFor } from './tools';
 
 /**
- * Multi-agent execution (docs/ASSISTANT.md):
- *
- *   1. The lead routes to 1–3 specialists from a compact description of the turn.
- *   2. Each specialist runs its own tool loop against the MCP catalog.
- *   3. If more than one answered, the lead synthesises one reply.
+ * One agent per turn (docs/ASSISTANT.md): the assistant runs a single tool loop against every MCP
+ * tool the user may call (or the owner's allowlist), streaming text and tool steps as it goes.
  *
  * Destructive tool calls are never executed inline: they are signed and handed to the chat UI,
  * which re-submits the approval through `/api/v1/assistant/confirm`.
  */
 
-const MAX_ROUNDS = 8;
-const MAX_TOOL_CALLS = 16;
+const MAX_ROUNDS = 12;
+const MAX_TOOL_CALLS = 24;
 const MAX_TARGETS = 50;
+const MAX_ARGS_PREVIEW = 600;
+const MAX_DETAIL = 4_000;
 
 export interface RunOptions {
 	principal: Principal;
@@ -44,16 +34,10 @@ export interface RunOptions {
 	emit: (event: AssistantEvent) => void;
 }
 
-interface AgentAnswer {
-	agent: AssistantAgentId;
-	label: string;
-	text: string;
-	guides: AssistantGuide[];
-	needsConfirmation: boolean;
-}
-
 function pageSummary(request: AssistantChatRequest): string {
 	const context = request.context;
+	if (!context.path)
+		return 'The user turned page context off: you cannot see their current page. Answer from tools; a guide_user tour may still navigate by dashboard path.';
 	const targets = context.targets.slice(0, MAX_TARGETS);
 	const lines = [
 		`Current page: ${context.path}${context.title ? ` — ${context.title}` : ''}`,
@@ -77,108 +61,22 @@ function historyMessages(request: AssistantChatRequest): ProviderMessage[] {
 	return request.history.map((message) => ({ role: message.role, content: message.content }));
 }
 
-/** Deterministic fallback when the router model is unavailable or returns junk. */
-function fallbackAgents(message: string): AssistantAgentId[] {
-	const text = message.toLowerCase();
-	const picked = new Set<AssistantAgentId>();
-	const match = (agent: AssistantAgentId, words: string[]) => {
-		if (words.some((word) => text.includes(word))) picked.add(agent);
-	};
-	match('data', ['database', 'postgres', 'sql', 'bucket', 'storage', 's3', 'rustfs', 'attach']);
-	match('platform', [
-		'node',
-		'fleet',
-		'capacity',
-		'audit',
-		'metric',
-		'traffic',
-		'log',
-		'down',
-		'offline',
-		'slow',
-		'error rate'
-	]);
-	match('projects', [
-		'deploy',
-		'release',
-		'rollback',
-		'promote',
-		'environment',
-		'share link',
-		'access',
-		'project',
-		'workload',
-		'build'
-	]);
-	match('guide', ['where', 'how do i', 'click', 'page', 'find', 'navigate', 'what is', 'help']);
-	if (picked.size === 0) picked.add('guide');
-	return [...picked].slice(0, 2);
+/** Arguments for the step list: file bodies summarised, long strings clipped, never megabytes. */
+function argsPreview(args: Record<string, unknown>): string | undefined {
+	const keys = Object.keys(args);
+	if (keys.length === 0) return undefined;
+	const compact = JSON.stringify(args, (key, value: unknown) => {
+		if (key === 'files' && Array.isArray(value)) return `[${value.length} file(s)]`;
+		if (typeof value === 'string' && value.length > 160) return `${value.slice(0, 160)}…`;
+		return value;
+	});
+	if (!compact) return undefined;
+	return compact.length > MAX_ARGS_PREVIEW ? `${compact.slice(0, MAX_ARGS_PREVIEW)}…` : compact;
 }
 
-async function routeAgents(
-	config: AssistantRuntimeConfig,
-	request: AssistantChatRequest,
-	signal: AbortSignal,
-	agents: Record<AssistantAgentId, EffectiveAgent>
-): Promise<{ agents: AssistantAgentId[]; note?: string }> {
-	const roster = Object.values(agents)
-		.filter((agent) => agent.enabled)
-		.map((agent) => `- ${agent.id}: ${agent.brief}`)
-		.join('\n');
-	const prompt = [
-		pageSummary(request),
-		'',
-		'Conversation so far:',
-		...request.history
-			.slice(-8)
-			.map((message) => `${message.role}: ${message.content.slice(0, 800)}`),
-		`user: ${request.message}`
-	].join('\n');
-
-	try {
-		const result = await streamChat(config, {
-			model: config.routerModel,
-			temperature: 0,
-			maxTokens: 200,
-			signal,
-			messages: [
-				{ role: 'system', content: `${ROUTER_SYSTEM}\n\nAgents:\n${roster}` },
-				{ role: 'user', content: prompt }
-			]
-		});
-		const raw = result.text.trim().replace(/^```(?:json)?\s*|\s*```$/g, '');
-		const start = raw.indexOf('{');
-		const end = raw.lastIndexOf('}');
-		if (start < 0 || end <= start) throw new Error('router returned no JSON');
-		const parsed = JSON.parse(raw.slice(start, end + 1)) as { agents?: unknown; reason?: unknown };
-		const ids = Array.isArray(parsed.agents)
-			? parsed.agents
-					.filter(
-						(id): id is AssistantAgentId =>
-							typeof id === 'string' && id in agents && agents[id as AssistantAgentId].enabled
-					)
-					.slice(0, config.maxAgents)
-			: [];
-		if (ids.length === 0) throw new Error('router chose no agent');
-		return {
-			agents: [...new Set(ids)],
-			note: typeof parsed.reason === 'string' ? parsed.reason.slice(0, 200) : undefined
-		};
-	} catch (error) {
-		if (signal.aborted) throw error;
-		const enabled = new Set(
-			Object.values(agents)
-				.filter((agent) => agent.enabled)
-				.map((agent) => agent.id)
-		);
-		const picked = fallbackAgents(request.message)
-			.filter((id) => enabled.has(id))
-			.slice(0, config.maxAgents);
-		return {
-			agents: picked,
-			note: 'Routed from keywords because the router model was unavailable.'
-		};
-	}
+function resultDetail(text: string): string {
+	const trimmed = text.trim();
+	return trimmed.length > MAX_DETAIL ? `${trimmed.slice(0, MAX_DETAIL)}\n…` : trimmed;
 }
 
 function confirmationSummary(args: Record<string, unknown>): string {
@@ -191,19 +89,16 @@ async function runAgent(
 	definition: EffectiveAgent,
 	principal: Principal,
 	request: AssistantChatRequest,
-	allTools: AssistantTool[],
 	signal: AbortSignal,
 	emit: (event: AssistantEvent) => void,
 	runId: string
-): Promise<AgentAnswer> {
-	const allowed = new Set(definition.tools);
-	const tools = allTools.filter((tool) => allowed.has(tool.name));
-	const speaker: AssistantSpeaker = definition.id;
-	const label = definition.label;
-	emit({ type: 'agent.started', runId, agent: speaker, label });
+): Promise<void> {
+	const allTools = assistantTools(principal);
+	const allowed = definition.tools ? new Set(definition.tools) : null;
+	const tools = allowed ? allTools.filter((tool) => allowed.has(tool.name)) : allTools;
 
 	const messages: ProviderMessage[] = [
-		{ role: 'system', content: definition.system },
+		{ role: 'system', content: `${definition.system}\n\n${PANEL_FORMAT}` },
 		...historyMessages(request),
 		{ role: 'user', content: `${pageSummary(request)}\n\nUser request:\n${request.message}` }
 	];
@@ -221,7 +116,7 @@ async function runAgent(
 			signal,
 			onText: (delta) => {
 				text += delta;
-				emit({ type: 'text.delta', runId, agent: speaker, text: delta });
+				emit({ type: 'text.delta', runId, text: delta });
 			}
 		});
 		if (result.toolCalls.length === 0) break;
@@ -247,13 +142,14 @@ async function runAgent(
 			}
 			toolCalls += 1;
 			const tool = toolFor(tools, call.name);
+			const parsed = parseArgs(call.arguments);
 			emit({
 				type: 'tool.started',
 				runId,
-				agent: speaker,
 				callId: call.id,
 				tool: call.name,
-				title: tool?.title ?? call.name
+				title: tool?.title ?? call.name,
+				args: parsed.ok ? argsPreview(parsed.args) : undefined
 			});
 
 			if (!tool) {
@@ -262,7 +158,6 @@ async function runAgent(
 				emit({
 					type: 'tool.finished',
 					runId,
-					agent: speaker,
 					callId: call.id,
 					tool: call.name,
 					ok: false,
@@ -271,13 +166,11 @@ async function runAgent(
 				continue;
 			}
 
-			const parsed = parseArgs(call.arguments);
 			if (!parsed.ok) {
 				messages.push({ role: 'tool', tool_call_id: call.id, content: parsed.error });
 				emit({
 					type: 'tool.finished',
 					runId,
-					agent: speaker,
 					callId: call.id,
 					tool: call.name,
 					ok: false,
@@ -291,7 +184,6 @@ async function runAgent(
 				emit({
 					type: 'confirmation.required',
 					runId,
-					agent: speaker,
 					token,
 					tool: tool.name,
 					title: tool.title,
@@ -309,12 +201,13 @@ async function runAgent(
 			}
 
 			let outcome: { ok: boolean; text: string };
+			const startedAt = Date.now();
 			try {
 				const result = await tool.run(parsed.args);
 				outcome = { ok: result.ok, text: result.text };
 				if (result.guide) {
 					guides.push(result.guide);
-					emit({ type: 'ui.guide', runId, agent: speaker, guide: result.guide });
+					emit({ type: 'ui.guide', runId, guide: result.guide });
 				}
 			} catch (error) {
 				outcome = {
@@ -326,11 +219,12 @@ async function runAgent(
 			emit({
 				type: 'tool.finished',
 				runId,
-				agent: speaker,
 				callId: call.id,
 				tool: call.name,
 				ok: outcome.ok,
-				summary: resultSummary(outcome.text, outcome.ok)
+				summary: resultSummary(outcome.text, outcome.ok),
+				detail: resultDetail(outcome.text),
+				durationMs: Date.now() - startedAt
 			});
 		}
 		if (stoppedForConfirmation) break;
@@ -343,75 +237,8 @@ async function runAgent(
 			: guides.length > 0
 				? 'I have highlighted it on the page.'
 				: 'Done.';
-		emit({ type: 'text.delta', runId, agent: speaker, text });
+		emit({ type: 'text.delta', runId, text });
 	}
-
-	emit({ type: 'agent.finished', runId, agent: speaker, label });
-	return {
-		agent: definition.id,
-		label,
-		text,
-		guides,
-		needsConfirmation: stoppedForConfirmation
-	};
-}
-
-async function runLead(
-	config: AssistantRuntimeConfig,
-	request: AssistantChatRequest,
-	signal: AbortSignal,
-	emit: (event: AssistantEvent) => void,
-	runId: string
-): Promise<string> {
-	const speaker: AssistantSpeaker = 'lead';
-	emit({ type: 'agent.started', runId, agent: speaker, label: 'Skiff' });
-	let text = '';
-	await streamChat(config, {
-		messages: [
-			{ role: 'system', content: LEAD_SYSTEM },
-			...historyMessages(request),
-			{ role: 'user', content: `${pageSummary(request)}\n\nUser request:\n${request.message}` }
-		],
-		signal,
-		onText: (delta) => {
-			text += delta;
-			emit({ type: 'text.delta', runId, agent: speaker, text: delta });
-		}
-	});
-	emit({ type: 'agent.finished', runId, agent: speaker, label: 'Skiff' });
-	return text;
-}
-
-async function synthesise(
-	config: AssistantRuntimeConfig,
-	request: AssistantChatRequest,
-	answers: AgentAnswer[],
-	signal: AbortSignal,
-	emit: (event: AssistantEvent) => void,
-	runId: string
-): Promise<string> {
-	const speaker: AssistantSpeaker = 'lead';
-	emit({ type: 'agent.started', runId, agent: speaker, label: 'Skiff' });
-	const findings = answers
-		.map((answer) => `## ${answer.label}\n${answer.text.trim() || '(no text; it used tools)'}`)
-		.join('\n\n');
-	let text = '';
-	await streamChat(config, {
-		messages: [
-			{ role: 'system', content: SYNTHESIS_SYSTEM },
-			{
-				role: 'user',
-				content: `${pageSummary(request)}\n\nUser request:\n${request.message}\n\nSpecialist findings:\n${findings}`
-			}
-		],
-		signal,
-		onText: (delta) => {
-			text += delta;
-			emit({ type: 'text.delta', runId, agent: speaker, text: delta });
-		}
-	});
-	emit({ type: 'agent.finished', runId, agent: speaker, label: 'Skiff' });
-	return text;
 }
 
 export async function runAssistant(options: RunOptions): Promise<void> {
@@ -419,60 +246,26 @@ export async function runAssistant(options: RunOptions): Promise<void> {
 	if (!config) throw new Error('The assistant is not configured.');
 	const { principal, request, signal, emit } = options;
 	const runId = `run_${randomUUID().replace(/-/g, '').slice(0, 20)}`;
+	const startedAt = Date.now();
 
 	try {
-		const agents = effectiveAgents();
-		const route = await routeAgents(config, request, signal, agents);
-		emit({ type: 'run.started', runId, agents: route.agents, note: route.note });
+		emit({ type: 'run.started', runId });
 
 		try {
 			core.audit.record({
 				principal,
 				action: 'assistant.chat',
 				resource: 'assistant',
-				args: { agents: route.agents, chars: request.message.length, page: request.context.path },
+				args: { chars: request.message.length, page: request.context.path },
 				result: 'ok'
 			});
 		} catch (error) {
 			console.error('[assistant] audit failed:', error);
 		}
 
-		const allTools = assistantTools(principal);
-		const answers: AgentAnswer[] = [];
-		let confirmationPending = false;
-		for (const id of route.agents) {
-			const definition = agents[id];
-			if (!definition?.enabled) continue;
-			const answer = await runAgent(
-				config,
-				definition,
-				principal,
-				request,
-				allTools,
-				signal,
-				emit,
-				runId
-			);
-			answers.push(answer);
-			if (signal.aborted) return;
-			// A pending confirmation pauses the turn: the next message carries the result.
-			if (answer.needsConfirmation) {
-				confirmationPending = true;
-				break;
-			}
-		}
-
-		const useful = answers.filter((answer) => answer.text.trim() !== '');
-		if (!confirmationPending) {
-			if (route.agents.length === 1 && useful.length === 1) {
-				// The specialist already streamed the final answer.
-			} else if (useful.length > 1) {
-				await synthesise(config, request, useful, signal, emit, runId);
-			} else if (useful.length === 0) {
-				await runLead(config, request, signal, emit, runId);
-			}
-		}
-		emit({ type: 'run.finished', runId, agents: route.agents });
+		await runAgent(config, effectiveAgent(), principal, request, signal, emit, runId);
+		if (signal.aborted) return;
+		emit({ type: 'run.finished', runId, durationMs: Date.now() - startedAt });
 	} catch (error) {
 		if (signal.aborted) return;
 		emit({
@@ -480,7 +273,7 @@ export async function runAssistant(options: RunOptions): Promise<void> {
 			runId,
 			message: error instanceof Error ? error.message : String(error)
 		});
-		emit({ type: 'run.finished', runId, agents: [] });
+		emit({ type: 'run.finished', runId, durationMs: Date.now() - startedAt });
 	}
 }
 

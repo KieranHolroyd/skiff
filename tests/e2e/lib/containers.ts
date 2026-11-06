@@ -246,7 +246,8 @@ export class ContainerRuntime {
 	/** Best-effort teardown. Never throws: cleanup runs on the failure path too. */
 	async cleanup(): Promise<void> {
 		for (const name of [...this.containers].reverse()) {
-			await this.exec(['rm', '-f', name], { check: false, timeoutMs: 60_000 }).catch(() => undefined);
+			// `-v`: engine images declare VOLUMEs, whose anonymous volumes otherwise leak per run.
+			await this.exec(['rm', '-fv', name], { check: false, timeoutMs: 60_000 }).catch(() => undefined);
 		}
 		for (const network of [...this.networks].reverse()) {
 			await this.exec(['network', 'rm', network], { check: false, timeoutMs: 60_000 }).catch(() => undefined);

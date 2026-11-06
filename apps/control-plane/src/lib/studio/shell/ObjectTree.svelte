@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { tick, type Component } from 'svelte';
+	import { tick, type Component, type Snippet } from 'svelte';
 	import BracesIcon from '@lucide/svelte/icons/braces';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import DatabaseIcon from '@lucide/svelte/icons/database';
@@ -29,6 +29,7 @@
 		activePath = null,
 		onopen,
 		onreopen,
+		actions,
 		filterInput = $bindable(null)
 	}: {
 		tree: StudioTree;
@@ -37,6 +38,8 @@
 		activePath?: string | null;
 		onopen: (node: TreeNode) => void;
 		onreopen?: () => void;
+		/** Extra header buttons beside Refresh (e.g. "New table"). */
+		actions?: Snippet;
 		filterInput?: HTMLInputElement | null;
 	} = $props();
 
@@ -181,6 +184,7 @@
 		>
 			<RefreshCwIcon class={tree.loading ? 'animate-spin' : ''} />
 		</Button>
+		{@render actions?.()}
 	</div>
 
 	<div class="min-h-0 flex-1 overflow-auto p-1 text-sm">

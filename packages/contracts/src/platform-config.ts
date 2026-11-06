@@ -14,6 +14,8 @@
  * change the meaning of the env file or of `litestream.yml`, which expands `${VAR}` before parsing).
  */
 
+import { validCloudflareToken, validateDomainSettings, type DomainSettings } from './platform-domains.ts';
+
 export const PLATFORM_CONFIG_DEFAULTS = {
 	/** Written by the control plane (skiff-owned directory). */
 	requestFile: '/var/lib/skiff/platform-config/request.json',
@@ -53,9 +55,7 @@ export const PLATFORM_CONFIG_SECTIONS = {
 		'SKIFF_ASSISTANT_PROVIDER',
 		'SKIFF_ASSISTANT_BASE_URL',
 		'SKIFF_ASSISTANT_MODEL',
-		'SKIFF_ASSISTANT_ROUTER_MODEL',
 		'SKIFF_ASSISTANT_API_KEY',
-		'SKIFF_ASSISTANT_MAX_AGENTS',
 	],
 } as const satisfies Record<PlatformConfigSection, readonly string[]>;
 
@@ -140,7 +140,6 @@ export function validatePlatformConfigValue(key: PlatformConfigKey, value: strin
 			return /\/$/.test(value) ? 'must not end with a slash' : null;
 		}
 		case 'SKIFF_ASSISTANT_MODEL':
-		case 'SKIFF_ASSISTANT_ROUTER_MODEL':
 			return /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,199}$/.test(value)
 				? null
 				: 'must be a model id (letters, digits, . _ : / -)';
@@ -148,12 +147,6 @@ export function validatePlatformConfigValue(key: PlatformConfigKey, value: strin
 			return PRINTABLE.test(value) && value.length >= 8 && value.length <= 512
 				? null
 				: 'must be printable ASCII, 8–512 characters';
-		case 'SKIFF_ASSISTANT_MAX_AGENTS': {
-			const count = Number(value);
-			return /^[1-4]$/.test(value) && Number.isInteger(count)
-				? null
-				: 'must be a whole number from 1 to 4';
-		}
 	}
 }
 
@@ -179,6 +172,17 @@ export type PlatformConfigRequest = RequestBase &
 		| { action: 'backups'; enabled: boolean }
 		/** Start the restore drill now. */
 		| { action: 'restore-drill' }
+		/**
+		 * Install (and start) or remove the optional ClickHouse telemetry store (D101). Removing
+		 * keeps the stored telemetry unless `purgeData`.
+		 */
+		| { action: 'telemetry'; enabled: boolean; purgeData: boolean }
+		/**
+		 * Change the dashboard host, the content domain and HTTPS (D105). Rewrites skiff.env and the
+		 * edge agent's agent.env, restarts both, and reverts if the new address does not answer.
+		 * `cloudflareToken`, when given, replaces the DNS-01 token; omitted keeps the current one.
+		 */
+		| ({ action: 'domains'; cloudflareToken?: string } & DomainSettings)
 	);
 
 export type PlatformConfigAction = PlatformConfigRequest['action'];
@@ -206,6 +210,25 @@ export function parsePlatformConfigRequest(
 		case 'backups':
 			if (typeof input.enabled !== 'boolean') return { ok: false, error: 'enabled must be a boolean' };
 			return { ok: true, request: { ...base, action: 'backups', enabled: input.enabled } };
+		case 'telemetry': {
+			if (typeof input.enabled !== 'boolean') return { ok: false, error: 'enabled must be a boolean' };
+			const purgeData = input.purgeData ?? false;
+			if (typeof purgeData !== 'boolean') return { ok: false, error: 'purgeData must be a boolean' };
+			if (input.enabled && purgeData) return { ok: false, error: 'purgeData only applies when removing' };
+			return { ok: true, request: { ...base, action: 'telemetry', enabled: input.enabled, purgeData } };
+		}
+		case 'domains': {
+			const token = input.cloudflareToken;
+			if (token !== undefined && (typeof token !== 'string' || !validCloudflareToken(token)))
+				return { ok: false, error: 'cloudflareToken is not a valid token' };
+			// Whether a token already exists on the host is the helper's to check; here only the shape.
+			const settings = validateDomainSettings(input, true);
+			if (!settings.ok) return { ok: false, error: `${settings.field}: ${settings.message}` };
+			return {
+				ok: true,
+				request: { ...base, action: 'domains', ...settings.value, ...(token ? { cloudflareToken: token } : {}) },
+			};
+		}
 		case 'configure': {
 			const section = input.section as PlatformConfigSection;
 			if (!SECTIONS.includes(section)) return { ok: false, error: 'unknown section' };

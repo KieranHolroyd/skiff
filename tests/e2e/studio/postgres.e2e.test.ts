@@ -21,7 +21,7 @@ import { DEFAULT_STUDIO_LIMITS } from '../../../packages/contracts/src/database-
 import { collect, describeConformance, rowsOf } from '../../../packages/studio/src/conformance.ts';
 import type { StudioSession, StudioTarget } from '../../../packages/studio/src/driver.ts';
 import { postgresPlugin } from '../../../packages/studio/src/plugins/postgres/index.ts';
-import type { Cell, ObjectRef, StudioEvent } from '../../../packages/studio/src/protocol.ts';
+import { schemaChangeSchema, type Cell, type ObjectRef, type SchemaChangeInput, type StudioEvent } from '../../../packages/studio/src/protocol.ts';
 import { ContainerRuntime, detectEngine, freePort, postgresHealthProbe, waitFor } from '../lib/containers.ts';
 
 const ROW_COUNT = 250;
@@ -114,6 +114,13 @@ if (process.env.SKIFF_E2E_STUDIO !== '1') {
 				'SELECT 1; /* ; */ DELETE FROM studio_items',
 			],
 			reset: () => seedItems(port),
+			scratchCreate: {
+				op: 'create-table' as const,
+				parent: ['public'],
+				name: 'studio_scratch',
+				columns: [{ name: 'id', type: 'integer', nullable: false, identity: true }],
+				primaryKey: ['id'],
+			},
 		};
 		describeConformance({ name: `postgres ${version} (owner, read-only sessions)`, plugin: postgresPlugin, target: owner, fixture });
 		describeConformance({
@@ -544,6 +551,96 @@ function describeEngineTests(version: string, port: number, owner: StudioTarget,
 				expect(JSON.stringify(plan?.plan)).toContain('Actual Rows');
 				// ANALYZE ran the DELETE inside a transaction that was rolled back.
 				expect(rowsOf(await collect(session.run('SELECT count(*)::int FROM studio_items', runOpts, signal())))).toEqual([[ROW_COUNT]]);
+			});
+		});
+
+		test('alter: schemas, tables, columns and indexes, each in one transaction', async () => {
+			await withSession(false, async (session) => {
+				const alter = (input: SchemaChangeInput, dryRun = false) =>
+					session.alter!(schemaChangeSchema.parse(input), { dryRun }, signal());
+				const table: ObjectRef = { path: ['studio_alter', 'orders'], kind: 'table' };
+				const columnOf = async (name: string) => (await session.describe(table, signal())).columns.find((c) => c.name === name);
+				try {
+					expect((await alter({ op: 'create-schema', name: 'studio_alter' })).applied).toBe(true);
+					await alter({
+						op: 'create-table',
+						parent: ['studio_alter'],
+						name: 'orders',
+						columns: [
+							{ name: 'id', type: 'bigint', nullable: false, identity: true },
+							{ name: 'Note', type: 'character varying(20)', default: { literal: "it's" } },
+							{ name: 'at', type: 'timestamp with time zone', nullable: false, default: { expression: 'now()' } },
+						],
+						primaryKey: ['id'],
+					});
+					await collect(session.run("INSERT INTO studio_alter.orders DEFAULT VALUES; INSERT INTO studio_alter.orders (\"Note\") VALUES ('42')", runOpts, signal()));
+					const created = await session.describe(table, signal());
+					expect(created.primaryKey).toEqual(['id']);
+					expect(created.columns.find((c) => c.name === 'Note')?.default).toBe("'it''s'::character varying");
+					expect(created.columns.find((c) => c.name === 'at')?.default).toBe('now()');
+
+					// A dry run plans the statements and changes nothing.
+					const planned = await alter({ op: 'add-column', object: table, column: { name: 'qty', type: 'integer' } }, true);
+					expect(planned).toEqual({ statements: ['ALTER TABLE "studio_alter"."orders" ADD COLUMN "qty" integer'], applied: false });
+					expect(await columnOf('qty')).toBeUndefined();
+
+					await alter({ op: 'add-column', object: table, column: { name: 'qty', type: 'integer', nullable: false, default: { literal: 0 } } });
+					expect(await columnOf('qty')).toMatchObject({ nativeType: 'integer', nullable: false, default: '0' });
+					await alter({ op: 'alter-column', object: table, column: 'qty', type: 'bigint', nullable: true, default: null });
+					expect(await columnOf('qty')).toMatchObject({ nativeType: 'bigint', nullable: true, default: null });
+					// TYPE … USING converts existing text to the new type; dropping the text default in
+					// the same statement lets the type change go through.
+					await collect(session.run(`UPDATE studio_alter.orders SET "Note" = '7' WHERE "Note" = 'it''s'`, runOpts, signal()));
+					await alter({ op: 'alter-column', object: table, column: 'Note', type: 'integer', default: null });
+					expect((await columnOf('Note'))?.nativeType).toBe('integer');
+					await alter({ op: 'rename-column', object: table, column: 'qty', name: 'quantity' });
+					expect(await columnOf('quantity')).toBeDefined();
+					await alter({ op: 'drop-column', object: table, column: 'quantity' });
+					expect(await columnOf('quantity')).toBeUndefined();
+
+					await alter({ op: 'create-index', object: table, columns: [{ name: 'at', dir: 'desc' }], unique: false });
+					const indexed = await session.describe(table, signal());
+					expect(indexed.indexes.find((i) => i.name === 'orders_at_idx')?.definition).toContain('DESC');
+					await alter({ op: 'drop-index', object: table, name: 'orders_at_idx' });
+					expect((await session.describe(table, signal())).indexes.map((i) => i.name)).not.toContain('orders_at_idx');
+					// The primary key's index goes with its constraint.
+					await alter({ op: 'drop-index', object: table, name: 'orders_pkey' });
+					expect((await session.describe(table, signal())).primaryKey).toBeNull();
+					await expect(alter({ op: 'drop-index', object: table, name: 'nope' })).rejects.toMatchObject({ code: 'not_found' });
+
+					// A failing statement leaves nothing half done, and the session stays usable.
+					await expect(alter({ op: 'add-column', object: table, column: { name: 'at', type: 'text' } })).rejects.toMatchObject({
+						code: 'engine_error',
+					});
+					await alter({ op: 'truncate', object: table });
+					expect(rowsOf(await collect(session.run('SELECT count(*)::int FROM studio_alter.orders', runOpts, signal())))).toEqual([[0]]);
+
+					// A plain drop refuses while the schema has a table; CASCADE takes both.
+					await expect(alter({ op: 'drop', object: { path: ['studio_alter'], kind: 'schema' } })).rejects.toMatchObject({
+						code: 'engine_error',
+					});
+					await alter({ op: 'drop', object: { path: ['studio_alter'], kind: 'schema' }, cascade: true });
+					expect((await session.tree([], signal())).map((n) => n.name)).not.toContain('studio_alter');
+				} finally {
+					await collect(session.run('DROP SCHEMA IF EXISTS studio_alter CASCADE', runOpts, signal()));
+				}
+			});
+		});
+
+		test('alter: views drop and rename as views; a read-only session refuses', async () => {
+			await withSession(false, async (session) => {
+				await collect(session.run('CREATE VIEW public.studio_alter_view AS SELECT 1 AS one', runOpts, signal()));
+				const view: ObjectRef = { path: ['public', 'studio_alter_view'], kind: 'view' };
+				const renamed = await session.alter!({ op: 'rename', object: view, name: 'studio_alter_view2' }, { dryRun: false }, signal());
+				expect(renamed.statements).toEqual(['ALTER VIEW "public"."studio_alter_view" RENAME TO "studio_alter_view2"']);
+				await expect(session.alter!({ op: 'truncate', object: { ...view, path: ['public', 'studio_alter_view2'] } }, { dryRun: true }, signal())).rejects.toMatchObject({
+					code: 'unsupported',
+				});
+				const dropped = await session.alter!({ op: 'drop', object: { path: ['public', 'studio_alter_view2'], kind: 'view' }, cascade: false }, { dryRun: false }, signal());
+				expect(dropped.statements).toEqual(['DROP VIEW "public"."studio_alter_view2"']);
+			});
+			await withSession(true, async (session) => {
+				await expect(session.alter!({ op: 'create-schema', name: 'nope' }, { dryRun: true }, signal())).rejects.toMatchObject({ code: 'read_only' });
 			});
 		});
 	});

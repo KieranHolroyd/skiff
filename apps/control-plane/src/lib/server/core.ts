@@ -7,11 +7,13 @@ import {
 	SmtpEmailTransport,
 	TelemetryStore,
 	WebhookNotifier,
+	clickhouseFromEnv,
 	createCore,
-	type Notifier,
+	type Notifier
 } from '@skiff/core';
 import {
 	alertEmail,
+	clickhouseEnv,
 	dataDir,
 	edgeNodeId,
 	masterKey,
@@ -25,7 +27,7 @@ import {
 	siteCookieSecret,
 	smtp,
 	webhookUrl,
-	features,
+	features
 } from './config';
 import { db, sqlite } from './db';
 import { platformVersion } from './version';
@@ -62,29 +64,25 @@ export const core = createCore({
 		storageGatewayUrl,
 		notifiers,
 		email: emailTransport,
-		features,
-	},
+		features
+	}
 });
 
 export { objectStore };
 
 /**
- * DuckDB telemetry (DESIGN §8). Opened lazily and fail-open: if the native binding cannot load,
- * the platform keeps serving and telemetry simply reports unavailable.
+ * ClickHouse telemetry (DESIGN §8, D101), over HTTP to the local `skiff-clickhouse` server.
+ * Fail-open: if ClickHouse is down or unconfigured, the platform keeps serving, telemetry
+ * reports unavailable, and the store reconnects by itself once the server answers. A
+ * zero-downtime standby shares the server with the primary, so it needs no special case.
  */
 export const telemetry = new TelemetryStore({
-	path: `${dataDir}/telemetry.duckdb`,
-	memoryLimitMb: 256,
-	threads: 2,
+	...clickhouseFromEnv(clickhouseEnv),
 	objectStore,
-	onError: (error) => console.error('[telemetry]', error),
-	// DuckDB allows one process per file. A zero-downtime standby must leave it to the primary,
-	// or the primary restarted behind the standby finds the file locked.
-	disabledReason: process.env.SKIFF_STANDBY === '1' ? 'this is a standby serving an update' : undefined,
+	onError: (error) => console.error('[telemetry]', error.message)
 });
 core.ctx.telemetry = telemetry;
-// Never load the DuckDB native addon while SvelteKit analyses the build.
-if (!building && process.env.SKIFF_STANDBY !== '1') {
+// Never connect while SvelteKit analyses the build.
+if (!building) {
 	void telemetry.open().catch((error) => console.error('[telemetry] open failed:', error));
 }
-

@@ -20,7 +20,7 @@
 	import { Spinner } from '#lib/components/ui/spinner/index.js';
 	import { Switch } from '#lib/components/ui/switch/index.js';
 	import { Textarea } from '#lib/components/ui/textarea/index.js';
-	import type { AssistantAgentId, AssistantModelInfo } from '@skiff/contracts';
+	import type { AssistantModelInfo } from '@skiff/contracts';
 	import EmptyState from '../../_lib/EmptyState.svelte';
 	import Panel from '../../_lib/Panel.svelte';
 	import ConfigProgress from '../ConfigProgress.svelte';
@@ -73,22 +73,25 @@
 				baseUrl = 'https://openrouter.ai/api/v1';
 			// OpenRouter ids are namespaced (`vendor/model`). Clear a bare id from another provider.
 			if (model && !model.includes('/')) model = '';
-			if (routerModel && !routerModel.includes('/')) routerModel = '';
 		} else if (baseUrl === 'https://openrouter.ai/api/v1') {
 			baseUrl = 'https://api.openai.com/v1';
 		}
 	});
 
-	// Agent details (owner-only)
+	// Instructions and tools (owner-only)
 	let agentOpen = $state(false);
-	let editId = $state<AssistantAgentId>('guide');
-	let editEnabled = $state(true);
-	let editLabel = $state('');
-	let editBrief = $state('');
 	let editInstructions = $state('');
 	let editModel = $state('');
+	let editAllTools = $state(true);
 	let editTools = $state<string[]>([]);
 	let toolFilter = $state('');
+
+	const catalogNames = $derived(new Set(data.catalog.map((tool) => tool.name)));
+	const toolCount = $derived(
+		data.agent.tools
+			? data.agent.tools.filter((name) => catalogNames.has(name)).length
+			: data.catalog.length
+	);
 
 	const filteredCatalog = $derived.by(() => {
 		const query = toolFilter.trim().toLowerCase();
@@ -101,30 +104,24 @@
 		);
 	});
 
-	function editAgent(id: AssistantAgentId) {
-		const agent = data.agents.find((item) => item.id === id);
-		if (!agent) return;
-		editId = id;
-		editEnabled = agent.enabled;
-		editLabel = agent.label;
-		editBrief = agent.description;
-		editInstructions = agent.instructions;
-		editModel = agent.model ?? '';
-		const catalogNames = new Set(data.catalog.map((tool) => tool.name));
-		editTools = agent.tools.filter((name) => catalogNames.has(name));
+	function editAgent() {
+		editInstructions = data.agent.instructions;
+		editModel = data.agent.model ?? '';
+		editAllTools = data.agent.tools === null;
+		editTools = (data.agent.tools ?? data.catalog.map((tool) => tool.name)).filter((name) =>
+			catalogNames.has(name)
+		);
 		toolFilter = '';
 		agentOpen = true;
 	}
 
-	function resetAgent(id: AssistantAgentId) {
-		const agent = data.agents.find((item) => item.id === id);
+	function resetAgent() {
 		askConfirm({
-			title: `Reset ${agent?.label ?? 'this agent'}?`,
+			title: 'Reset the assistant?',
 			description:
-				'Its name, routing description, instructions, model override and tool list return to the built-in defaults. Other agents are untouched.',
-			confirmLabel: 'Reset agent',
-			action: '?/resetAgent',
-			fields: { agent: id }
+				'Its instructions, model override and tool list return to the built-in defaults: every tool you can use.',
+			confirmLabel: 'Reset',
+			action: '?/resetAgent'
 		});
 	}
 
@@ -136,7 +133,6 @@
 	let provider = $state('');
 	let baseUrl = $state('');
 	let model = $state('');
-	let routerModel = $state('');
 	let initialized = $state(false);
 
 	$effect(() => {
@@ -145,7 +141,6 @@
 		provider = values.SKIFF_ASSISTANT_PROVIDER ?? 'openai-compatible';
 		baseUrl = values.SKIFF_ASSISTANT_BASE_URL ?? '';
 		model = values.SKIFF_ASSISTANT_MODEL ?? '';
-		routerModel = values.SKIFF_ASSISTANT_ROUTER_MODEL ?? '';
 	});
 
 	$effect(() => {
@@ -220,16 +215,6 @@
 					<dd class="font-mono text-sm">{values.SKIFF_ASSISTANT_MODEL ?? '—'}</dd>
 				</div>
 				<div class="space-y-1">
-					<dt class="text-xs text-muted-foreground">Router model</dt>
-					<dd class="font-mono text-sm">
-						{values.SKIFF_ASSISTANT_ROUTER_MODEL ?? 'same as model'}
-					</dd>
-				</div>
-				<div class="space-y-1">
-					<dt class="text-xs text-muted-foreground">Agents per turn</dt>
-					<dd class="text-sm">up to {values.SKIFF_ASSISTANT_MAX_AGENTS ?? '3'}</dd>
-				</div>
-				<div class="space-y-1">
 					<dt class="text-xs text-muted-foreground">API key</dt>
 					<dd class="flex items-center gap-1.5 text-sm">
 						<KeyRoundIcon class="size-3.5 text-muted-foreground" />
@@ -276,41 +261,36 @@
 	</Panel>
 
 	<Panel
-		title="Agent details"
+		title="Instructions and tools"
 		icon={BotIcon}
-		description="Each specialist's name, routing description, instructions, model and tools. Only the owner can change these."
+		description="One assistant answers every question with the MCP tools the signed-in user may call. Only the owner can change its instructions, model or tools."
 	>
-		<div class="space-y-2">
-			{#each data.agents as agent (agent.id)}
-				<div class="flex flex-wrap items-start justify-between gap-3 rounded-lg border p-3">
-					<div class="min-w-0 flex-1 space-y-1">
-						<div class="flex flex-wrap items-center gap-2">
-							<p class="font-medium">{agent.label}</p>
-							<Badge variant={agent.enabled ? 'secondary' : 'outline'}>
-								{agent.enabled ? 'Enabled' : 'Disabled'}
-							</Badge>
-							{#if agent.customized}
-								<Badge variant="outline">Customized</Badge>
-							{/if}
-							{#if agent.model}
-								<Badge variant="outline" class="font-mono">{agent.model}</Badge>
-							{/if}
-						</div>
-						<p class="text-sm text-muted-foreground">{agent.description}</p>
-						<p class="font-mono text-xs text-muted-foreground">
-							{agent.id} · {agent.tools.length} tools
-						</p>
-					</div>
-					<div class="flex shrink-0 items-center gap-1">
-						<Button variant="outline" size="sm" onclick={() => editAgent(agent.id)}>
-							<SettingsIcon />Edit
-						</Button>
-						{#if agent.customized}
-							<Button variant="ghost" size="sm" onclick={() => resetAgent(agent.id)}>Reset</Button>
-						{/if}
-					</div>
+		<div class="flex flex-wrap items-start justify-between gap-3 rounded-lg border p-3">
+			<div class="min-w-0 flex-1 space-y-1">
+				<div class="flex flex-wrap items-center gap-2">
+					<p class="font-medium">Skiff assistant</p>
+					{#if data.agent.customized}
+						<Badge variant="outline">Customized</Badge>
+					{/if}
+					{#if data.agent.model}
+						<Badge variant="outline" class="font-mono">{data.agent.model}</Badge>
+					{/if}
 				</div>
-			{/each}
+				<p class="text-sm text-muted-foreground">
+					{data.agent.tools === null
+						? `All ${toolCount} tools`
+						: `${toolCount} of ${data.catalog.length} tools`} · {data.agent.instructions.length.toLocaleString()}
+					characters of instructions
+				</p>
+			</div>
+			<div class="flex shrink-0 items-center gap-1">
+				<Button variant="outline" size="sm" onclick={editAgent}>
+					<SettingsIcon />Edit
+				</Button>
+				{#if data.agent.customized}
+					<Button variant="ghost" size="sm" onclick={resetAgent}>Reset</Button>
+				{/if}
+			</div>
 		</div>
 		<div class="mt-4 space-y-2">
 			<Alert.Root>
@@ -383,50 +363,34 @@
 				>{/if}
 		</Field.Field>
 
-		<div class="grid gap-4 sm:grid-cols-2">
-			<Field.Field data-invalid={fieldErrors.model ? true : undefined}>
-				<div class="flex items-center justify-between gap-2">
-					<Field.Label for={provider === 'openrouter' ? undefined : 'assistant-model'}
-						>Model</Field.Label
-					>
-					{#if provider === 'openrouter'}
-						<Button
-							type="button"
-							variant="ghost"
-							size="xs"
-							onclick={() => loadOpenRouterModels(true)}
-							disabled={modelsLoading}
-						>
-							{#if modelsLoading}<Spinner />{:else}Refresh list{/if}
-						</Button>
-					{/if}
-				</div>
+		<Field.Field data-invalid={fieldErrors.model ? true : undefined}>
+			<div class="flex items-center justify-between gap-2">
+				<Field.Label for={provider === 'openrouter' ? undefined : 'assistant-model'}
+					>Model</Field.Label
+				>
 				{#if provider === 'openrouter'}
-					{#if modelsLoading && !modelsLoaded}
-						<div class="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
-							<Spinner />Loading OpenRouter's tool-capable models…
-						</div>
-					{:else if modelsError}
-						<Alert.Root variant="destructive">
-							<TriangleAlertIcon />
-							<Alert.Title>Could not load OpenRouter models</Alert.Title>
-							<Alert.Description>{modelsError}</Alert.Description>
-						</Alert.Root>
-						<Input
-							id="assistant-model"
-							name="model"
-							required
-							autocomplete="off"
-							spellcheck={false}
-							class="font-mono"
-							bind:value={model}
-							placeholder="Enter a model id manually, e.g. openai/gpt-4.1-mini"
-							aria-invalid={fieldErrors.model ? 'true' : undefined}
-						/>
-					{:else}
-						<ModelPicker models={openRouterModels} bind:value={model} name="model" />
-					{/if}
-				{:else}
+					<Button
+						type="button"
+						variant="ghost"
+						size="xs"
+						onclick={() => loadOpenRouterModels(true)}
+						disabled={modelsLoading}
+					>
+						{#if modelsLoading}<Spinner />{:else}Refresh list{/if}
+					</Button>
+				{/if}
+			</div>
+			{#if provider === 'openrouter'}
+				{#if modelsLoading && !modelsLoaded}
+					<div class="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
+						<Spinner />Loading OpenRouter's tool-capable models…
+					</div>
+				{:else if modelsError}
+					<Alert.Root variant="destructive">
+						<TriangleAlertIcon />
+						<Alert.Title>Could not load OpenRouter models</Alert.Title>
+						<Alert.Description>{modelsError}</Alert.Description>
+					</Alert.Root>
 					<Input
 						id="assistant-model"
 						name="model"
@@ -435,44 +399,30 @@
 						spellcheck={false}
 						class="font-mono"
 						bind:value={model}
-						placeholder="gpt-4.1-mini"
+						placeholder="Enter a model id manually, e.g. openai/gpt-4.1-mini"
 						aria-invalid={fieldErrors.model ? 'true' : undefined}
 					/>
-				{/if}
-				{#if fieldErrors.model}<Field.Error>{fieldErrors.model}</Field.Error>
-				{:else if provider === 'openrouter' && !modelsError}<Field.Description
-						>Only models that advertise tool calling are listed.</Field.Description
-					>{/if}
-			</Field.Field>
-			<Field.Field data-invalid={fieldErrors.routerModel ? true : undefined}>
-				<Field.Label for={provider === 'openrouter' ? undefined : 'assistant-router-model'}
-					>Router model (optional)</Field.Label
-				>
-				{#if provider === 'openrouter' && modelsLoaded && !modelsError}
-					<ModelPicker
-						models={openRouterModels}
-						bind:value={routerModel}
-						name="routerModel"
-						allowEmpty
-					/>
 				{:else}
-					<Input
-						id="assistant-router-model"
-						name="routerModel"
-						autocomplete="off"
-						spellcheck={false}
-						class="font-mono"
-						bind:value={routerModel}
-						placeholder="Same as the main model"
-						aria-invalid={fieldErrors.routerModel ? 'true' : undefined}
-					/>
+					<ModelPicker models={openRouterModels} bind:value={model} name="model" />
 				{/if}
-				{#if fieldErrors.routerModel}<Field.Error>{fieldErrors.routerModel}</Field.Error>
-				{:else}<Field.Description
-						>A small, fast model is enough for routing. Leave empty to reuse the main model.</Field.Description
-					>{/if}
-			</Field.Field>
-		</div>
+			{:else}
+				<Input
+					id="assistant-model"
+					name="model"
+					required
+					autocomplete="off"
+					spellcheck={false}
+					class="font-mono"
+					bind:value={model}
+					placeholder="gpt-4.1-mini"
+					aria-invalid={fieldErrors.model ? 'true' : undefined}
+				/>
+			{/if}
+			{#if fieldErrors.model}<Field.Error>{fieldErrors.model}</Field.Error>
+			{:else if provider === 'openrouter' && !modelsError}<Field.Description
+					>Only models that advertise tool calling are listed.</Field.Description
+				>{/if}
+		</Field.Field>
 
 		<Field.Field data-invalid={fieldErrors.apiKey ? true : undefined}>
 			<Field.Label for="assistant-api-key">API key</Field.Label>
@@ -489,94 +439,43 @@
 					>Stored write-only on the server. It is never sent back to this browser or to the model.</Field.Description
 				>{/if}
 		</Field.Field>
-
-		<Field.Field data-invalid={fieldErrors.maxAgents ? true : undefined}>
-			<Field.Label for="assistant-max-agents">Agents per turn</Field.Label>
-			<NativeSelect.Root
-				id="assistant-max-agents"
-				name="maxAgents"
-				value={values.SKIFF_ASSISTANT_MAX_AGENTS ?? '3'}
-			>
-				<NativeSelect.Option value="1">1 — fastest</NativeSelect.Option>
-				<NativeSelect.Option value="2">2</NativeSelect.Option>
-				<NativeSelect.Option value="3">3 — balanced</NativeSelect.Option>
-				<NativeSelect.Option value="4">4 — most thorough</NativeSelect.Option>
-			</NativeSelect.Root>
-			{#if fieldErrors.maxAgents}<Field.Error>{fieldErrors.maxAgents}</Field.Error>
-			{:else}<Field.Description
-					>How many specialists one question may use. More agents means more model calls.</Field.Description
-				>{/if}
-		</Field.Field>
 	</Field.Group>
 </FormDialog>
 
 <FormDialog
 	bind:open={agentOpen}
 	icon={BotIcon}
-	title={editLabel ? `Edit ${editLabel}` : 'Edit agent'}
-	description="Details apply to the next assistant turn. Disabled agents are not offered by the lead's router."
+	title="Edit the assistant"
+	description="Changes apply to the next assistant turn."
 	action="?/saveAgent"
-	submitLabel="Save agent"
+	submitLabel="Save"
 	size="lg"
 >
-	<input type="hidden" name="agent" value={editId} />
-	<input type="hidden" name="enabled" value={editEnabled ? '1' : ''} />
+	<input type="hidden" name="allTools" value={editAllTools ? '1' : ''} />
+	{#if !editAllTools}
+		{#each editTools as name (name)}
+			<input type="hidden" name="tools" value={name} />
+		{/each}
+	{/if}
 	<Field.Group>
-		<Field.Field orientation="horizontal" class="gap-2">
-			<Switch id="agent-enabled" bind:checked={editEnabled} />
-			<Field.Label for="agent-enabled" class="font-normal">Enabled</Field.Label>
-			<Field.Description
-				>Turn off to keep the details but stop routing to this agent.</Field.Description
-			>
-		</Field.Field>
-
-		<div class="grid gap-4 sm:grid-cols-2">
-			<Field.Field>
-				<Field.Label for="agent-label">Name</Field.Label>
-				<Input
-					id="agent-label"
-					name="label"
-					required
-					maxlength={40}
-					bind:value={editLabel}
-					autocomplete="off"
-				/>
-				<Field.Description>Shown in the chat transcript.</Field.Description>
-			</Field.Field>
-			<Field.Field>
-				<Field.Label for={provider === 'openrouter' ? undefined : 'agent-model'}
-					>Model override</Field.Label
-				>
-				{#if provider === 'openrouter' && modelsLoaded && !modelsError}
-					<ModelPicker models={openRouterModels} bind:value={editModel} name="model" allowEmpty />
-				{:else}
-					<Input
-						id="agent-model"
-						name="model"
-						class="font-mono"
-						bind:value={editModel}
-						autocomplete="off"
-						spellcheck={false}
-						placeholder="Use the platform model"
-					/>
-					<Field.Description>Leave blank to use the main assistant model.</Field.Description>
-				{/if}
-			</Field.Field>
-		</div>
-
 		<Field.Field>
-			<Field.Label for="agent-brief">Routing description</Field.Label>
-			<Input
-				id="agent-brief"
-				name="brief"
-				required
-				maxlength={240}
-				bind:value={editBrief}
-				autocomplete="off"
-			/>
-			<Field.Description>
-				The one line the lead sees when deciding whether to use this agent.
-			</Field.Description>
+			<Field.Label for={provider === 'openrouter' ? undefined : 'agent-model'}
+				>Model override</Field.Label
+			>
+			{#if provider === 'openrouter' && modelsLoaded && !modelsError}
+				<ModelPicker models={openRouterModels} bind:value={editModel} name="model" allowEmpty />
+			{:else}
+				<Input
+					id="agent-model"
+					name="model"
+					class="font-mono"
+					bind:value={editModel}
+					autocomplete="off"
+					spellcheck={false}
+					placeholder="Use the platform model"
+				/>
+				<Field.Description>Leave blank to use the main assistant model.</Field.Description>
+			{/if}
 		</Field.Field>
 
 		<Field.Field>
@@ -584,77 +483,75 @@
 			<Textarea
 				id="agent-instructions"
 				name="instructions"
-				rows={10}
-				class="max-h-80 min-h-40 font-mono text-xs"
+				rows={12}
+				class="max-h-96 min-h-48 font-mono text-xs"
 				bind:value={editInstructions}
 			/>
 			<Field.Description>
-				The specialist's full system prompt. Keep the safety rules; make the domain guidance
-				specific.
+				The assistant's full system prompt. Keep the safety rules; add guidance specific to your
+				platform.
 			</Field.Description>
 		</Field.Field>
 
-		<Field.Field>
-			<div class="flex flex-wrap items-center justify-between gap-2">
-				<Field.Label>Tools</Field.Label>
-				<div class="flex items-center gap-1">
-					<Button
-						type="button"
-						variant="outline"
-						size="xs"
-						onclick={() => (editTools = data.catalog.map((tool) => tool.name))}
-					>
-						All
-					</Button>
-					<Button type="button" variant="outline" size="xs" onclick={() => (editTools = [])}>
-						None
-					</Button>
-					<Button
-						type="button"
-						variant="outline"
-						size="xs"
-						onclick={() => {
-							const defaults = data.agents.find((agent) => agent.id === editId);
-							const catalogNames = new Set(data.catalog.map((tool) => tool.name));
-							editTools = (defaults?.tools ?? []).filter((name: string) => catalogNames.has(name));
-						}}
-					>
-						Defaults
-					</Button>
-				</div>
-			</div>
-			<Input
-				bind:value={toolFilter}
-				placeholder="Filter by name, title or description…"
-				autocomplete="off"
-				class="mt-1"
-			/>
-			<div class="mt-2 max-h-64 overflow-y-auto rounded-lg border p-2">
-				{#each filteredCatalog as tool (tool.name)}
-					<label class="flex cursor-pointer items-start gap-2 rounded-md p-1.5 hover:bg-muted">
-						<input
-							type="checkbox"
-							name="tools"
-							value={tool.name}
-							bind:group={editTools}
-							class="mt-0.5 size-4 shrink-0 accent-brand"
-						/>
-						<span class="min-w-0 flex-1">
-							<span class="text-sm font-medium">{tool.title}</span>
-							<span class="ml-1 font-mono text-xs text-muted-foreground">{tool.name}</span>
-							{#if tool.destructive}
-								<Badge variant="outline" class="ml-1 align-middle">confirm</Badge>
-							{/if}
-							<span class="block text-xs text-muted-foreground">{tool.description}</span>
-						</span>
-					</label>
-				{:else}
-					<p class="p-2 text-sm text-muted-foreground">No tools match that filter.</p>
-				{/each}
-			</div>
-			<Field.Description>
-				{editTools.length} selected. Destructive tools are still held for an explicit Confirm in the chat.
-			</Field.Description>
+		<Field.Field orientation="horizontal" class="gap-2">
+			<Switch id="agent-all-tools" bind:checked={editAllTools} />
+			<Field.Label for="agent-all-tools" class="font-normal">Every tool</Field.Label>
+			<Field.Description
+				>Offer every MCP tool the signed-in user may call, including tools added later.</Field.Description
+			>
 		</Field.Field>
+
+		{#if !editAllTools}
+			<Field.Field>
+				<div class="flex flex-wrap items-center justify-between gap-2">
+					<Field.Label>Tools</Field.Label>
+					<div class="flex items-center gap-1">
+						<Button
+							type="button"
+							variant="outline"
+							size="xs"
+							onclick={() => (editTools = data.catalog.map((tool) => tool.name))}
+						>
+							All
+						</Button>
+						<Button type="button" variant="outline" size="xs" onclick={() => (editTools = [])}>
+							None
+						</Button>
+					</div>
+				</div>
+				<Input
+					bind:value={toolFilter}
+					placeholder="Filter by name, title or description…"
+					autocomplete="off"
+					class="mt-1"
+				/>
+				<div class="mt-2 max-h-64 overflow-y-auto rounded-lg border p-2">
+					{#each filteredCatalog as tool (tool.name)}
+						<label class="flex cursor-pointer items-start gap-2 rounded-md p-1.5 hover:bg-muted">
+							<input
+								type="checkbox"
+								value={tool.name}
+								bind:group={editTools}
+								class="mt-0.5 size-4 shrink-0 accent-brand"
+							/>
+							<span class="min-w-0 flex-1">
+								<span class="text-sm font-medium">{tool.title}</span>
+								<span class="ml-1 font-mono text-xs text-muted-foreground">{tool.name}</span>
+								{#if tool.destructive}
+									<Badge variant="outline" class="ml-1 align-middle">confirm</Badge>
+								{/if}
+								<span class="block text-xs text-muted-foreground">{tool.description}</span>
+							</span>
+						</label>
+					{:else}
+						<p class="p-2 text-sm text-muted-foreground">No tools match that filter.</p>
+					{/each}
+				</div>
+				<Field.Description>
+					{editTools.length} of {data.catalog.length} selected. Destructive tools are still held for an
+					explicit Confirm in the chat.
+				</Field.Description>
+			</Field.Field>
+		{/if}
 	</Field.Group>
 </FormDialog>

@@ -13,7 +13,7 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 |---|---|---|---|
 | GET | `/whoami` | — | user, org, role, effective permissions |
 | GET | `/status` | `project:read` | fleet + deployment summary |
-| GET | `/metrics` | — | Prometheus text (also at `/metrics`) |
+| GET | `/metrics[/<section>[/<name>]]` | `metrics:read` (+ section read) | Prometheus text for the caller's org; sections `usage`, `apps`, `traffic`, `databases`, `storage`, `volumes`, `platform` (platform admin). Same as `/metrics/...` on the platform origin, which also serves an unauthenticated fleet summary at `/metrics`. docs/METRICS.md |
 | GET | `/projects` | `project:read` | `?trash=1` lists the trash (with `deletedAt`, `purgeAt`) |
 | POST | `/projects` | `project:create` | `{ name?, slug?, runtime?, placement?, productionAccess?, previewAccess? }` |
 | GET | `/projects/:slug` | `project:read` | |
@@ -264,6 +264,24 @@ Quotas bound org and project resources; usage is read-only showback (no billing)
 | PUT/PATCH | `/quotas?project=<slug>` | platform admin | Replace org quota fields or project overrides (`-1` unlimited; project `null` inherits) |
 | DELETE | `/quotas?project=<slug>` | platform admin | Remove project overrides |
 
+## Observability dashboards (D101)
+
+Saved dashboards and the query endpoint behind them. Types and zod schemas are in
+`packages/contracts/src/observability.ts`. Every route needs `metrics:read`.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/observability/schema` | `metrics:read` | Datasets, measures and dimensions; ClickHouse tables (SQL users only); id → name maps; `available`/`error` |
+| POST | `/observability/query` | `metrics:read` | `{ query, range: {from, to}, maxDataPoints?, variables? }` → `QueryResult`. Builder queries are scoped to the caller's projects, databases and storage; `mode: "sql"` is platform-admin only (403 otherwise), runs as the read-only reader, and returns ClickHouse's message as a 400 on a bad query. 503 while ClickHouse is down |
+| GET | `/observability/dashboards` | `metrics:read` | Org dashboards (summaries) |
+| POST | `/observability/dashboards` | `metrics:read` | `{ title, description?, tags?, spec? }` → 201. Non-admins cannot add SQL queries |
+| GET | `/observability/dashboards/:id` | `metrics:read` | Full dashboard with its spec |
+| PUT | `/observability/dashboards/:id` | author, org owner/admin | Partial update; must send the `version` it was based on (stale → 409) |
+| DELETE | `/observability/dashboards/:id` | author, org owner/admin | |
+
+Agents get the same capabilities as MCP tools (DESIGN §6.3): `create_dashboard` takes a template and/or
+panel drafts and lays them out, so an agent never deals with grid positions.
+
 ## Objects (local store only)
 
 With `SKIFF_OBJECT_STORE=local`, presigned URLs point at `/api/objects/<key>?exp=&sig=` and are
@@ -286,7 +304,7 @@ too, with the user's normal permissions. One message is at most 8,000 characters
 
 | Method | Path | Permission | Notes |
 |---|---|---|---|
-| GET | `/assistant/status` | signed in | `{ enabled, configured, provider, model, agents, maxAgents }`; never the API key |
+| GET | `/assistant/status` | signed in | `{ enabled, configured, provider, model }`; never the API key |
 | GET | `/assistant/models?provider=openrouter` | owner | OpenRouter's catalogue, filtered to models that support tools; `?refresh=1` bypasses the 10-minute cache. Owner-only, like Settings → Assistant |
-| POST | `/assistant/chat` | `project:read` | `{ message, history?, context: { path, title?, project?, targets? } }` → SSE of `run.started`, `agent.started`, `text.delta`, `tool.started`, `tool.finished`, `ui.guide`, `confirmation.required`, `agent.finished`, `run.finished`, `error` |
+| POST | `/assistant/chat` | `project:read` | `{ message, history?, context: { path, title?, project?, targets? } }` → SSE of `run.started`, `text.delta`, `tool.started`, `tool.finished`, `ui.guide`, `confirmation.required`, `run.finished`, `error` |
 | POST | `/assistant/confirm` | `project:read` | `{ token }` from a `confirmation.required` event; runs exactly the approved destructive tool, bound to the user, org, tool and arguments (10 min) |

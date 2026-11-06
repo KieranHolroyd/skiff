@@ -1,8 +1,11 @@
+import ActivityIcon from '@lucide/svelte/icons/activity';
 import BellRingIcon from '@lucide/svelte/icons/bell-ring';
 import Building2Icon from '@lucide/svelte/icons/building-2';
 import ChartColumnIcon from '@lucide/svelte/icons/chart-column';
+import ChartLineIcon from '@lucide/svelte/icons/chart-line';
 import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
 import DatabaseBackupIcon from '@lucide/svelte/icons/database-backup';
+import GlobeIcon from '@lucide/svelte/icons/globe';
 import HardDriveUploadIcon from '@lucide/svelte/icons/hard-drive-upload';
 import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 import SparklesIcon from '@lucide/svelte/icons/sparkles';
@@ -24,9 +27,12 @@ export type SectionId =
 	| 'members'
 	| 'usage'
 	| 'backup-targets'
+	| 'domains'
 	| 'backups'
 	| 'notifications'
 	| 'assistant'
+	| 'telemetry'
+	| 'metrics'
 	| 'maintenance'
 	| 'updates';
 
@@ -39,9 +45,12 @@ export type SectionHref =
 	| '/(dashboard)/settings/members'
 	| '/(dashboard)/settings/usage'
 	| '/(dashboard)/settings/backup-targets'
+	| '/(dashboard)/settings/domains'
 	| '/(dashboard)/settings/backups'
 	| '/(dashboard)/settings/notifications'
 	| '/(dashboard)/settings/assistant'
+	| '/(dashboard)/settings/telemetry'
+	| '/(dashboard)/settings/metrics'
 	| '/(dashboard)/settings/maintenance'
 	| '/(dashboard)/settings/updates';
 
@@ -122,6 +131,16 @@ export const SECTIONS: Section[] = [
 		anyPermission: ['database:read']
 	},
 	{
+		id: 'domains',
+		group: 'platform',
+		label: 'Domains',
+		summary: 'The dashboard address, the domain sites are served under, and HTTPS.',
+		href: '/(dashboard)/settings/domains',
+		path: '/settings/domains',
+		icon: GlobeIcon,
+		ownerOnly: true
+	},
+	{
 		id: 'backups',
 		group: 'platform',
 		label: 'Backups',
@@ -149,6 +168,27 @@ export const SECTIONS: Section[] = [
 		href: '/(dashboard)/settings/assistant',
 		path: '/settings/assistant',
 		icon: SparklesIcon,
+		ownerOnly: true
+	},
+	{
+		id: 'telemetry',
+		group: 'platform',
+		label: 'Telemetry',
+		summary:
+			'The optional ClickHouse store behind traffic charts and dashboards. Off by default to keep the install light.',
+		href: '/(dashboard)/settings/telemetry',
+		path: '/settings/telemetry',
+		icon: ActivityIcon,
+		ownerOnly: true
+	},
+	{
+		id: 'metrics',
+		group: 'platform',
+		label: 'Metrics',
+		summary: 'What /metrics exports for Prometheus and Grafana, and how much work a scrape may do.',
+		href: '/(dashboard)/settings/metrics',
+		path: '/settings/metrics',
+		icon: ChartLineIcon,
 		ownerOnly: true
 	},
 	{

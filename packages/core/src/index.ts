@@ -15,6 +15,8 @@ import { DeployService } from './deploy.ts';
 import { MaintenanceService } from './maintenance.ts';
 import { SecretService } from './secrets.ts';
 import { MetricsService } from './metrics.ts';
+import { MetricsExporter } from './metrics-export.ts';
+import { ObservabilityService } from './observability.ts';
 import { WorkloadService } from './workloads.ts';
 import { DatabaseService } from './databases.ts';
 import { DatabaseStudioService } from './database-studio.ts';
@@ -54,6 +56,10 @@ export * from './deploy.ts';
 export * from './maintenance.ts';
 export * from './secrets.ts';
 export * from './metrics.ts';
+export * from './metrics-export.ts';
+export * from './observability.ts';
+export * from './observability-query.ts';
+export * from './clickhouse.ts';
 export * from './placement.ts';
 export * from './workloads.ts';
 export * from './github-runners.ts';
@@ -61,6 +67,7 @@ export * from './templates.ts';
 export * from './databases.ts';
 export * from './database-studio.ts';
 export * from './storage-instances.ts';
+export * from './domain-reconcile.ts';
 export * from './volumes.ts';
 export * from './app-volumes.ts';
 export * from './service-moves.ts';
@@ -99,6 +106,8 @@ export interface Core {
 	maintenance: MaintenanceService;
 	secrets: SecretService;
 	metrics: MetricsService;
+	metricsExport: MetricsExporter;
+	observability: ObservabilityService;
 	workloads: WorkloadService;
 	databases: DatabaseService;
 	databaseStudio: DatabaseStudioService;
@@ -175,6 +184,8 @@ export function createCore(options: CoreOptions): Core {
 	const maintenance = new MaintenanceService(ctx);
 	const secrets = ctx.secrets;
 	const metrics = new MetricsService(ctx, options.version);
+	ctx.metricsExport = new MetricsExporter(ctx, () => metrics.platformLines());
+	const observability = new ObservabilityService(ctx);
 
 	return {
 		ctx,
@@ -188,6 +199,8 @@ export function createCore(options: CoreOptions): Core {
 		maintenance,
 		secrets,
 		metrics,
+		metricsExport: ctx.metricsExport,
+		observability,
 		workloads: ctx.workloads,
 		databases: ctx.databases,
 		databaseStudio: ctx.databaseStudio,

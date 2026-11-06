@@ -50,6 +50,7 @@ import { ensureHelper } from '../systemd/helper.ts';
 import { ensureCaddy } from '../systemd/caddy.ts';
 import { ensureStorageUnits } from '../systemd/storage.ts';
 import { ensureStudioUnit } from '../systemd/studio.ts';
+import { clickhouseInstalled, ensureClickHouse } from '../systemd/clickhouse.ts';
 import { R2ObjectStore } from '../../packages/core/src/object-store.ts';
 import { listUpgradeSnapshotBundles } from '../../packages/core/src/upgrade-plan.ts';
 import {
@@ -469,6 +470,31 @@ function ensureTriggerUnits(): void {
 			run: (cmd) => void run(cmd, { quiet: true, allowFailure: true }),
 			log: (message) => host.log(message),
 		});
+	}
+}
+
+/**
+ * Keep the optional telemetry store (D101) current on hosts that installed it (installer prompt or
+ * Settings → Telemetry): a pinned-version bump or config change lands with the release. Hosts
+ * without it are left alone; an update never installs ClickHouse. Any problem is a warning.
+ */
+async function ensureTelemetryStore(): Promise<void> {
+	if (!existsSync(ENV_FILE) || !clickhouseInstalled(SYSTEMD_DIR)) return;
+	try {
+		const result = await ensureClickHouse({
+			envFile: ENV_FILE,
+			systemdDir: SYSTEMD_DIR,
+			installRoot: join(layout.optDir, 'clickhouse'),
+			run: (cmd) => void run(cmd, { quiet: true }),
+			capture: (cmd) => {
+				const result = run(cmd, { quiet: true, allowFailure: true });
+				return result.code === 0 ? result.stdout : null;
+			},
+			log: (message) => (message.startsWith('warning:') ? undefined : host.log(message)),
+		});
+		if (result.warning) host.warn(`telemetry store: ${result.warning}`);
+	} catch (error) {
+		host.warn(`telemetry store: ${(error as Error).message}`);
 	}
 }
 
@@ -1074,6 +1100,10 @@ async function main(): Promise<number> {
 		signals.on('exit', () => {
 			if (status?.running) finish('error', `The updater exited unexpectedly. Check journalctl -u skiff-update-self.`);
 		});
+		if (!dryRun && clickhouseInstalled(SYSTEMD_DIR)) {
+			reportStatus({ message: 'Updating the telemetry store (ClickHouse)' });
+			await ensureTelemetryStore();
+		}
 		const publicCheck = flag('--no-public-check') ? 'skip' : flag('--require-public') ? 'require' : 'auto';
 		let result: UpdateResult;
 		try {

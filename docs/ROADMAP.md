@@ -44,7 +44,8 @@
 - [x] `skif` CLI (npm `skif`, commands `skif` + `skiff`): login, deploy (presigned), status
 
 **Ops**
-- [x] Agent telemetry: pre-aggregated access buckets → DuckDB; rollups + Parquet to R2 (OTLP wire export remains)
+- [x] Agent telemetry: pre-aggregated access buckets → ClickHouse (DuckDB until D101); rollups + Parquet to R2 (OTLP wire export remains)
+- [x] Observability dashboards (D101): see [Observability & dashboards](#observability--dashboards-d101-opsmd-36)
 - [x] Dashboard: fleet, projects, deployments, traffic/errors, audit log (live logs arrive with v2 runtime)
 - [x] Prometheus `/metrics` on control plane and agents (optional OTLP exporter remains)
 - [x] Alerts: email (SES SMTP) + webhook; node offline > 2 min, disk > 85%, backup/drill failure (`OnFailure=` → `skiff-alert`)
@@ -56,7 +57,8 @@
 - [x] CI: signed releases (control plane, agent, prebuilt Caddy)
 - [x] `install.sh` (builds from the source tarball on the host; snapshots the DB and keeps existing settings on re-run)
 - [ ] Installer consumes and verifies the signed release bundle with a pinned key (today the signed artifacts are published but not used at install time)
-- [ ] Browser setup wizard (first-user sign-up and `/api/setup/status` are backend-complete)
+- [x] Browser setup wizard: token-gated owner creation, instance checks, passkey or authenticator enrolment (D102; domains/Cloudflare/R2/SMTP stay in the installer and Settings)
+- [x] Optional domains: IP + sslip.io installs over HTTP, and Settings → Domains to add or change domains and HTTPS with verify-or-revert (D105)
 - [ ] Self-update with snapshot, migrations, health check, auto-rollback (installer upgrade path + rollback exist; in-process updater pending)
 
 ## v2
@@ -86,7 +88,7 @@
 - [x] Postgres 16/17 as tier-3 containers: create, resize, soft delete, restore, purge (D55, D59, D61)
 - [x] Attach to projects with `<PREFIX>_URL` injected at activation; same-node placement (D56)
 - [x] Sealed credentials, reveal for humans only (`database:credentials`, D58)
-- [x] Stats: agent sampler → telemetry batch → DuckDB `db_metrics_1m/1h`, table snapshot, `/metrics`, size/connection alerts (D57)
+- [x] Stats: agent sampler → telemetry batch → ClickHouse `db_metrics_1m/1h`, table snapshot, `/metrics`, size/connection alerts (D57)
 - [x] REST, MCP, CLI (`skif db`), dashboard list/detail/charts/attach
 - [ ] End-to-end on a Debian 13 node: Quadlet `.container`/`.network` from `/etc/containers/systemd`, installer installs/checks Podman ≥ 5 with netavark
 - [ ] Per-org Podman networks (today every container on a node shares `skiff-workloads`; databases still need a password)
@@ -100,6 +102,7 @@
 - [ ] TLS in transit with a per-node CA and `sslmode=require` URLs
 - [x] On-demand studio: `database:console`, read-only default, write mode with `database:update`, audited and idle-stopped (D60's sidecar, replaced by D96)
 - [x] Native table editor and query history: per-engine studio plugins in the on-demand `skiff-studio` process, grid edits with conflict checks, read-only principal, browser query history; the D60 sidecar removed (plan 22, D96)
+- [x] Structure editing in the studio: typed `alter` op with dry-run review for tables, columns, indexes, collections, fields and keys on all six engines (plan 22, DATABASES.md §14)
 - [ ] Database metrics in the Parquet archive; bulk actions and prune for databases; `restore_database` over MCP
 - [x] More engines: MySQL, MariaDB, MongoDB, Valkey and Redis with create/attach/credentials/rotation/studio/logs; logical backups for MySQL, MariaDB and MongoDB (D95)
 - [ ] Engine parity: metrics samplers, TLS, named credentials and backups for Valkey/Redis (RDB), ClickHouse as a seventh engine
@@ -111,7 +114,7 @@
 - [x] Attachments with scoped `SKF*` IAM users and `<PREFIX>_*` env injected at activation (D66)
 - [x] Sealed root credentials, reveal for humans only (`storage:credentials`, D67); console off (D63)
 - [x] Public endpoints on `<name>--s3.<contentDomain>` as byte-for-byte SigV4-only Caddy routes (D64)
-- [x] Stats: agent sampler → telemetry → DuckDB `storage_metrics_1m/1h`, bucket snapshots, `/metrics`, disk alert (D68)
+- [x] Stats: agent sampler → telemetry → ClickHouse `storage_metrics_1m/1h`, bucket snapshots, `/metrics`, disk alert (D68)
 - [x] REST, MCP, CLI (`skif storage`), dashboard list/detail/charts/buckets/attach
 - [x] Explicit restart control: dashboard, REST (`POST /storage/:name/restart`), `skif storage restart`, MCP `restart_storage` (D82)
 - [x] RustFS logs: agent journal drain → `service_log_events`, live dashboard tail, `GET /storage/:name/logs`, `skif storage logs --follow`, MCP `get_storage_logs`
@@ -124,6 +127,37 @@
 - [ ] Human access keys with bucket grants and rotation in the dashboard
 - [ ] Per-bucket quotas, lifecycle rules, CORS, custom domains for public instances, Garage as a second engine
 - [ ] Bulk actions and prune for storage; `S3ObjectStore` replication target (D71)
+
+## Observability & dashboards (D101, [OPS.md §3.6](./OPS.md))
+**Telemetry store**
+- [x] ClickHouse replaces embedded DuckDB: HTTP client (no native addon), ReplacingMergeTree tables, `*_hourly` views, same retention/rollups/Parquet archive
+- [x] Optional and off by default: Settings → Telemetry install/remove (root helper action `telemetry`), installer Yes/No prompt after the domains (`--clickhouse`), updater only maintains an installed store
+- [x] Calm "not installed" states on traffic, database and storage pages; owners get a link to Settings → Telemetry
+- [ ] Measure idle/peak RSS on a 4 GB Linux VPS and tune `max_server_memory_usage`, caches and merge pools from real numbers
+- [ ] Run the installer/updater/helper ClickHouse paths in the systemd e2e harness (OrbStack container) in CI
+- [ ] Query the R2 Parquet archive from dashboards (`s3()` table function) for ranges past 90 days
+
+**Dashboards**
+- [x] Saved, org-scoped, versioned dashboards; REST `/api/v1/observability/*` (API.md)
+- [x] Query builder (datasets, measures, group-by, filters, auto interval) scoped to the caller's projects/databases/storage; admin-only SQL with Grafana-style macros as the read-only `skiff_reader`
+- [x] Grafana-style UI: 24-column grid, time/refresh pickers, variables, panel editor, Explore, starter templates
+- [ ] Shared templates: the UI's "new from template" uses `dashboardTemplates` from @skiff/contracts (one source with the agent tools)
+- [ ] Alert rules on panels (threshold + duration → existing email/webhook notifiers)
+- [ ] Dashboard links and drill-downs (panel → project/database page, click a host to filter)
+- [ ] Annotations: deploys, promotions and rollbacks drawn on time series
+- [ ] Public/read-only share links for a dashboard (reuse share-link machinery)
+- [ ] Grafana JSON import for simple panels
+
+**Agents (MCP + dashboard assistant)**
+- [x] Tools: `describe_telemetry`, `query_telemetry`, `list_dashboards`, `get_dashboard`, `create_dashboard`, `add_dashboard_panels`, `update_dashboard_panel`, `remove_dashboard_panels`, `update_dashboard`, `delete_dashboard` (DESIGN §6.3)
+- [x] One-call creation: templates (`traffic`, `databases`, `storage`) plus panel drafts `{title, viz, query, unit, size}`; panels are laid out automatically, so agents never place grid cells
+- [x] Every query is checked against the catalog before saving (errors name the panel), and results include a link plus a per-panel data preview
+- [x] Dashboards and panels addressable by id or exact title; read-modify-write with one automatic retry on a version conflict
+- [x] The assistant's Platform agent has the tools and a build recipe; the router sends "make me a dashboard" there; `delete_dashboard` needs a click (chat) or elicitation (MCP)
+- [ ] `suggest_dashboard`: propose panels for a project/database from what it actually reports (no hand-written queries at all)
+- [ ] Natural-language panel edits in the panel editor ("show this per host", "make it p95") through the assistant
+- [ ] MCP resource `skiff://dashboards/{id}` and a prompt template for "build a dashboard for …"
+- [ ] Per-panel `explain` tool: summarise what a panel shows over a range (trends, spikes) for incident triage
 
 ## Node volumes ([VOLUMES.md](./VOLUMES.md))
 - [x] P0: `node_volumes`, per-instance `volume_id`, node default, inventory heartbeat, adopt an existing mount, fail-closed mount verification (D72, D74, D76, D78)

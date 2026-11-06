@@ -1,7 +1,14 @@
 import { fail } from '@sveltejs/kit';
 import { getAuthenticatorName } from '@better-auth/passkey';
 import { auth } from '#lib/server/auth.js';
-import { enforceOwnerSecondFactor, userHasTotp } from '#lib/server/second-factor.js';
+import {
+	carrySecondFactorToToken,
+	enforceOwnerSecondFactor,
+	userHasPassword,
+	userHasTotp
+} from '#lib/server/second-factor.js';
+import { passwordProblem } from '#lib/server/setup.js';
+import { formPassword } from '#lib/server/totp-enrolment.js';
 import {
 	authErrorMessage,
 	providerLabel,
@@ -35,7 +42,8 @@ export const load: PageServerLoad = async ({ locals, request }) => {
 	let accountsError: string | null = null;
 	try {
 		const listed = await auth.api.listUserAccounts({ headers: request.headers });
-		accounts = listed.map((account) => ({
+		// The password has its own card; this list is for external providers.
+		accounts = listed.filter((account) => account.providerId !== 'credential').map((account) => ({
 			id: account.id,
 			provider: providerLabel(account.providerId),
 			providerId: account.providerId,
@@ -89,6 +97,7 @@ export const load: PageServerLoad = async ({ locals, request }) => {
 		accountsError,
 		passkeys,
 		passkeysError,
+		hasPassword: userHasPassword(user.id),
 		twoFactor: {
 			totpEnabled: userHasTotp(user.id),
 			/** How this session proved a second factor, if it did. */
@@ -157,11 +166,50 @@ export const actions: Actions = {
 		return { success: 'All other sessions have been signed out.' };
 	},
 
+	/** Add a password to an account that signs in with a passkey, GitHub or email link (D103). */
+	setPassword: async ({ request, locals }) => {
+		const data = await request.formData();
+		const newPassword = String(data.get('newPassword') ?? '');
+		const problem = passwordProblem(newPassword, String(data.get('confirmPassword') ?? ''));
+		if (problem) return fail(400, { message: problem, fieldErrors: { newPassword: problem } });
+		if (userHasPassword(locals.user!.id))
+			return fail(400, { message: 'You already have a password. Change it instead.' });
+		try {
+			await auth.api.setPassword({ body: { newPassword }, headers: request.headers });
+		} catch (error) {
+			return fail(400, { message: authErrorMessage(error) });
+		}
+		return { success: 'Password set. You can now sign in with your email and password.' };
+	},
+
+	/** Change the password; every other session is signed out. */
+	changePassword: async ({ request, locals }) => {
+		const data = await request.formData();
+		const currentPassword = String(data.get('currentPassword') ?? '');
+		const newPassword = String(data.get('newPassword') ?? '');
+		if (!currentPassword)
+			return fail(400, { message: 'Enter your current password.', fieldErrors: { currentPassword: 'Required.' } });
+		const problem = passwordProblem(newPassword, String(data.get('confirmPassword') ?? ''));
+		if (problem) return fail(400, { message: problem, fieldErrors: { newPassword: problem } });
+		const factor = (locals.session as { secondFactor?: string | null } | undefined)?.secondFactor;
+		try {
+			const result = await auth.api.changePassword({
+				body: { currentPassword, newPassword, revokeOtherSessions: true },
+				headers: request.headers
+			});
+			if (result.token && factor) carrySecondFactorToToken(result.token, factor);
+		} catch (error) {
+			return fail(400, { message: authErrorMessage(error), fieldErrors: { currentPassword: 'Check this.' } });
+		}
+		return { success: 'Password changed. Other devices were signed out.' };
+	},
+
 	disableTotp: async ({ request, locals }) => {
 		const user = locals.user!;
 		if (!userHasTotp(user.id)) return fail(400, { message: 'No authenticator app is set up.' });
+		const password = formPassword(await request.formData());
 		try {
-			await auth.api.disableTwoFactor({ body: {}, headers: request.headers });
+			await auth.api.disableTwoFactor({ body: password ? { password } : {}, headers: request.headers });
 		} catch (error) {
 			return fail(400, { message: authErrorMessage(error) });
 		}

@@ -5,7 +5,8 @@ import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ObjectStore } from './object-store.ts';
-import { TelemetryStore } from './telemetry.ts';
+import { TelemetryStore, type TelemetryOptions } from './telemetry.ts';
+import { disposeTelemetryStore, hasClickHouse, testTelemetryStore } from './test-clickhouse.ts';
 
 const MINUTE = 60_000;
 const HOUR = 3_600_000;
@@ -36,15 +37,22 @@ function pointsAt(points: { host: string; bucket: string }[], host: string, at: 
 	return points.findIndex((p) => p.host === host && Date.parse(p.bucket) === at);
 }
 
-describe('TelemetryStore', () => {
+describe.skipIf(!hasClickHouse)('TelemetryStore', () => {
 	let store: TelemetryStore;
 
+	/** Replace the suite's store with one built from `options` (fresh database). */
+	async function swap(options: Partial<TelemetryOptions>): Promise<TelemetryStore> {
+		await disposeTelemetryStore(store);
+		store = testTelemetryStore(options);
+		return store;
+	}
+
 	beforeEach(() => {
-		store = new TelemetryStore({ path: ':memory:' });
+		store = testTelemetryStore();
 	});
 
 	afterEach(async () => {
-		await store.close();
+		await disposeTelemetryStore(store);
 	});
 
 	test('ingests 1-minute buckets and queries them back', async () => {
@@ -151,7 +159,7 @@ describe('TelemetryStore', () => {
 	});
 
 	test('rollupHourly is idempotent and powers long-range queries', async () => {
-		store = new TelemetryStore({ path: ':memory:', now: () => NOW });
+		await swap({ now: () => NOW });
 		await store.open();
 		await store.ingest([
 			makeBucket('a.test', START - 7 * HOUR, { requests: 5, bytes: 500 }),
@@ -168,10 +176,10 @@ describe('TelemetryStore', () => {
 		const second = await store.rollupHourly(START - 8 * HOUR, NOW);
 		expect(second).toBe(2);
 
-		// Drop the raw rows so the next assertion can only be satisfied by metrics_1h.
+		// Drop the raw rows so the next assertion can only be satisfied by traffic_1h.
 		expect(await store.prune({ rawHours: 1, hourlyDays: 90 })).toEqual({ raw: 3, hourly: 0 });
 
-		// A range over 7 days switches to metrics_1h automatically.
+		// A range over 7 days switches to traffic_1h automatically.
 		const points = await store.query({
 			from: START - 8 * DAY,
 			to: NOW,
@@ -187,14 +195,14 @@ describe('TelemetryStore', () => {
 
 	test('the default rollup never rewrites an hour that pruning has started to eat', async () => {
 		let now = Date.parse('2026-11-05T12:00:00Z');
-		store = new TelemetryStore({ path: ':memory:', now: () => now });
+		await swap({ now: () => now });
 		await store.open();
 		// A full hour of traffic, 47 h ago: 60 minutes × 10 requests.
 		const hour = now - 47 * HOUR;
 		await store.ingest(Array.from({ length: 60 }, (_, i) => makeBucket('a.test', hour + i * MINUTE)));
 		expect(await store.rollupHourly()).toBe(1);
 
-		// 90 minutes later the first half of that hour has been pruned from metrics_1m.
+		// 90 minutes later the first half of that hour has been pruned from traffic_1m.
 		now += 90 * MINUTE;
 		await store.prune();
 		await store.rollupHourly();
@@ -206,7 +214,7 @@ describe('TelemetryStore', () => {
 	});
 
 	test('hourly queries read rolled-up hours beyond 48 h and live minutes for the open hour', async () => {
-		store = new TelemetryStore({ path: ':memory:', now: () => NOW });
+		await swap({ now: () => NOW });
 		await store.open();
 		const old = NOW - 72 * HOUR;
 		await store.ingest([makeBucket('a.test', old, { requests: 5 })]);
@@ -220,7 +228,7 @@ describe('TelemetryStore', () => {
 	});
 
 	test('prune drops raw and hourly data past their retention windows', async () => {
-		store = new TelemetryStore({ path: ':memory:', now: () => NOW });
+		await swap({ now: () => NOW });
 		await store.open();
 		const old = NOW - 100 * HOUR;
 		const recent = NOW - 2 * HOUR;
@@ -292,7 +300,7 @@ describe('TelemetryStore', () => {
 	});
 
 	test('getPrometheusMetrics renders the last hour', async () => {
-		store = new TelemetryStore({ path: ':memory:', now: () => START + 30 * MINUTE });
+		await swap({ now: () => START + 30 * MINUTE });
 		await store.open();
 		await store.ingest([
 			makeBucket('a.test', START, { requests: 10, status5xx: 2, bytes: 1_500 }),
@@ -305,6 +313,28 @@ describe('TelemetryStore', () => {
 		expect(text).toContain('skiff_http_errors_total{class="5xx"} 2');
 		expect(text).toContain('skiff_bytes_total 1500');
 		expect(text).not.toContain('host="b.test"');
+	});
+
+	test('scrapeSamples sums the last hour per project, filtered to the ids asked for', async () => {
+		await swap({ now: () => START + 30 * MINUTE });
+		await store.open();
+		await store.ingest([
+			makeBucket('a.test', START, { projectId: 'proj_a', requests: 10, status2xx: 8, status5xx: 2, bytes: 1_500, durationP95Ms: 40 }),
+			makeBucket('a2.test', START + MINUTE, { projectId: 'proj_a', requests: 30, status2xx: 30, status5xx: 0, bytes: 500, durationP95Ms: 20 }),
+			makeBucket('b.test', START + MINUTE, { projectId: 'proj_b', requests: 3 }),
+		]);
+
+		const samples = await store.scrapeSamples({ projectIds: ['proj_a'], databaseIds: [], storageIds: [] });
+		expect(samples.traffic).toHaveLength(1);
+		expect(samples.traffic[0]).toMatchObject({ projectId: 'proj_a', requests: 40, status2xx: 38, status5xx: 2, bytes: 2_000 });
+		// Request-weighted: (40 * 10 + 20 * 30) / 40.
+		expect(samples.traffic[0]?.durationP95Ms).toBe(25);
+		expect(await store.scrapeSamples({ projectIds: [], databaseIds: [], storageIds: [] })).toEqual({
+			traffic: [],
+			databases: [],
+			databaseCounters: [],
+			storage: [],
+		});
 	});
 
 	test('report aggregates totals, series, breakdowns and top paths for a project', async () => {
@@ -406,45 +436,68 @@ describe('TelemetryStore', () => {
 		expect(none.topPaths).toEqual([]);
 	});
 
-	test('falls back to a no-op store when DuckDB cannot load', async () => {
+	test('hourly SQL views cover rolled-up hours and the open hour', async () => {
+		await swap({ now: () => NOW });
+		await store.open();
+		const old = NOW - 5 * HOUR;
+		await store.ingest([makeBucket('a.test', old, { requests: 5 }), makeBucket('a.test', NOW - MINUTE, { requests: 3 })]);
+		await store.rollupHourly(old - HOUR, NOW);
+		const result = await store.runQuery('SELECT sum(requests) AS n, count() AS hours FROM traffic_hourly', { asReader: true });
+		expect(result.data[0]).toEqual([8, 2]);
+		const tables = await store.tables();
+		expect(tables.map((table) => table.name)).toContain('traffic_hourly');
+		expect(tables.find((table) => table.name === 'traffic_1m')?.columns.map((column) => column.name)).not.toContain('version');
+	});
+
+	test('ad-hoc reader queries cannot write', async () => {
+		await store.open();
+		await expect(store.runQuery(`INSERT INTO traffic_1m (host, bucket) VALUES ('x', now())`, { asReader: true })).rejects.toThrow();
+	});
+});
+
+/** A fetch that fails the way an unreachable server does. */
+const refused: typeof fetch = Object.assign(async () => {
+	throw new TypeError('Unable to connect. Is the computer able to access the url?');
+}, { preconnect: () => undefined });
+
+describe('TelemetryStore without a server', () => {
+	test('falls back to a no-op store when ClickHouse is unreachable', async () => {
 		const errors: Error[] = [];
-		store = new TelemetryStore({
-			path: ':memory:',
-			loadDuckDb: async () => {
-				throw new Error('native bindings missing');
-			},
+		const store = new TelemetryStore({
+			clickhouse: { url: 'http://127.0.0.1:1', user: 'skiff', password: '', fetch: refused },
 			onError: (error) => errors.push(error),
 		});
 
 		await store.open();
 		expect(store.available).toBe(false);
-		expect(store.error?.message).toContain('DuckDB');
-		expect(store.error?.message).toContain('native bindings missing');
+		expect(store.error?.message).toContain('ClickHouse');
+		expect(store.error?.message).toContain('unreachable');
 		expect(errors).toHaveLength(1);
 
 		expect(await store.ingest([makeBucket('a.test', START)])).toEqual({ inserted: 0 });
 		expect(await store.query({ from: START, to: START + HOUR, interval: '1m' })).toEqual([]);
 		expect(await store.rollupHourly()).toBe(0);
 		expect(await store.prune()).toEqual({ raw: 0, hourly: 0 });
-		expect(await store.exportParquet({ from: START, to: START + HOUR, dir: '/nonexistent' })).toEqual({
-			files: [],
-			bytes: 0,
-		});
+		expect(await store.exportParquet({ from: START, to: START + HOUR, dir: '/nonexistent' })).toEqual({ files: [], bytes: 0 });
 		expect(await store.getPrometheusMetrics()).toBe('');
+		await expect(store.runQuery('SELECT 1', { asReader: true })).rejects.toThrow('unreachable');
 	});
 
 	test('retries a failed open once the retry window passes', async () => {
 		let now = START;
 		let attempts = 0;
-		store = new TelemetryStore({
-			path: ':memory:',
+		const flaky: typeof fetch = Object.assign(
+			async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+				attempts += 1;
+				if (attempts === 1) throw new TypeError('Connection refused');
+				return new Response('', { status: 200 });
+			},
+			{ preconnect: () => undefined },
+		);
+		const store = new TelemetryStore({
+			clickhouse: { url: 'http://127.0.0.1:1', user: 'skiff', password: '', fetch: flaky },
 			now: () => now,
 			openRetryMs: 30_000,
-			loadDuckDb: async () => {
-				attempts += 1;
-				if (attempts === 1) throw new Error('Could not set lock on file');
-				return import('@duckdb/node-api');
-			},
 		});
 
 		await store.open();
@@ -456,23 +509,83 @@ describe('TelemetryStore', () => {
 		expect(await store.ingest([makeBucket('a.test', START)])).toEqual({ inserted: 1 });
 		expect(store.available).toBe(true);
 		expect(store.error).toBeNull();
-		expect(attempts).toBe(2);
 	});
 
-	test('a disabled store never loads DuckDB', async () => {
-		let loaded = false;
-		store = new TelemetryStore({
-			path: ':memory:',
-			disabledReason: 'standby',
-			loadDuckDb: async () => {
-				loaded = true;
-				return import('@duckdb/node-api');
+	test('a store whose server goes away reconnects after the window', async () => {
+		let now = START;
+		let down = false;
+		const fetcher: typeof fetch = Object.assign(
+			async () => {
+				if (down) throw new TypeError('Connection refused');
+				return new Response('', { status: 200 });
 			},
+			{ preconnect: () => undefined },
+		);
+		const store = new TelemetryStore({
+			clickhouse: { url: 'http://127.0.0.1:1', user: 'skiff', password: '', fetch: fetcher },
+			now: () => now,
+			openRetryMs: 30_000,
 		});
-		await store.open();
+		expect(await store.ready()).toBe(true);
+		down = true;
 		expect(await store.ingest([makeBucket('a.test', START)])).toEqual({ inserted: 0 });
-		expect(loaded).toBe(false);
 		expect(store.available).toBe(false);
-		expect(store.error?.message).toContain('standby');
+		down = false;
+		expect(await store.ready()).toBe(false);
+		now += 30_000;
+		expect(await store.ready()).toBe(true);
+	});
+
+	test('a cancelled or slow query never marks the store unavailable', async () => {
+		// Answers DDL at once; holds ad-hoc queries until their signal aborts (like a slow ClickHouse).
+		const fetcher: typeof fetch = Object.assign(
+			async (_input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+				if (String(init?.body).includes('CREATE')) return new Response('', { status: 200 });
+				return new Promise<Response>((_, reject) => {
+					const fail = () => reject(init?.signal?.reason ?? new DOMException('aborted', 'AbortError'));
+					if (init?.signal?.aborted) fail();
+					else init?.signal?.addEventListener('abort', fail);
+				});
+			},
+			{ preconnect: () => undefined },
+		);
+		const store = new TelemetryStore({
+			clickhouse: { url: 'http://127.0.0.1:1', user: 'skiff', password: '', fetch: fetcher, timeoutMs: 50 },
+		});
+		expect(await store.ready()).toBe(true);
+
+		const controller = new AbortController();
+		const pending = store.runQuery('SELECT 1', { asReader: true, signal: controller.signal });
+		controller.abort();
+		await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+		expect(store.available).toBe(true);
+
+		await expect(store.runQuery('SELECT sleep(3)', { asReader: true })).rejects.toThrow('was stopped');
+		expect(store.available).toBe(true);
+	});
+
+	test('a disabled or unconfigured store never connects', async () => {
+		let called = false;
+		const spy: typeof fetch = Object.assign(
+			async () => {
+				called = true;
+				return new Response('', { status: 200 });
+			},
+			{ preconnect: () => undefined },
+		);
+		const disabled = new TelemetryStore({
+			clickhouse: { url: 'http://127.0.0.1:1', user: 'skiff', password: '', fetch: spy },
+			disabledReason: 'standby',
+		});
+		await disabled.open();
+		expect(await disabled.ingest([makeBucket('a.test', START)])).toEqual({ inserted: 0 });
+		expect(called).toBe(false);
+		expect(disabled.available).toBe(false);
+		expect(disabled.error?.message).toContain('standby');
+
+		const unconfigured = new TelemetryStore({});
+		expect(await unconfigured.ready()).toBe(false);
+		expect(unconfigured.installed).toBe(false);
+		expect(unconfigured.error?.message).toContain('not installed');
 	});
 });

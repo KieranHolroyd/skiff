@@ -428,6 +428,14 @@ describe('native database studio sessions', () => {
 			deleted: 0,
 			applied: 1,
 		});
+		core.databaseStudio.recordActivity(owner, 'studio-db', {
+			op: 'alter',
+			object: ['public', 'orders'],
+			change: 'add-column',
+		});
+		expect(auditArgs('database.studio.alter')).toEqual([
+			{ name: 'studio-db', object: 'public.orders', change: 'add-column' },
+		]);
 		expect(() =>
 			core.databaseStudio.recordActivity(owner, 'studio-db', { op: 'run', fingerprint: input, readOnly: true }),
 		).toThrow(/fingerprint/);

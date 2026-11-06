@@ -240,6 +240,15 @@ export async function runStudioProcess(options: StudioProcessOptions = {}): Prom
 						headers: JSON_HEADERS,
 					});
 				}
+				case 'alter': {
+					const body = parsed.data as StudioRequest<'alter'>;
+					// A second layer: plugins refuse too, and the read-only principal cannot run DDL.
+					if (entry.activation.readOnly) throw new StudioError('read_only', 'The session is read-only.');
+					if (!session.alter) throw new StudioError('unsupported', 'This engine cannot edit structure.');
+					return Response.json(await session.alter(body.change, { dryRun: body.dryRun }, signal), {
+						headers: JSON_HEADERS,
+					});
+				}
 				case 'value': {
 					const body = parsed.data as StudioRequest<'value'>;
 					if (!session.value) throw new StudioError('unsupported', 'This engine cannot load full values.');

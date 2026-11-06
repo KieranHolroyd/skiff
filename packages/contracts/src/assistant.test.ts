@@ -74,7 +74,7 @@ describe("assistant platform settings", () => {
     );
   });
 
-  test("validates the provider, URL, model and agent count", () => {
+  test("validates the provider, URL and model", () => {
     expect(
       validatePlatformConfigValue(
         "SKIFF_ASSISTANT_BASE_URL",
@@ -99,12 +99,6 @@ describe("assistant platform settings", () => {
     expect(
       validatePlatformConfigValue("SKIFF_ASSISTANT_MODEL", "bad model!"),
     ).toContain("model id");
-    expect(validatePlatformConfigValue("SKIFF_ASSISTANT_MAX_AGENTS", "4")).toBe(
-      null,
-    );
-    expect(
-      validatePlatformConfigValue("SKIFF_ASSISTANT_MAX_AGENTS", "9"),
-    ).toContain("1 to 4");
   });
 
   test("a configure request cannot write a key outside the section", () => {

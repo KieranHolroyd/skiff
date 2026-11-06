@@ -1,4 +1,5 @@
 <script lang="ts">
+	import TelemetryOff from '../../_lib/TelemetryOff.svelte';
 	/* Bucket links are the resolved objects route plus `?bucket=`. */
 	/* eslint svelte/no-navigation-without-resolve: ['error', { ignoreLinks: true, ignoreGoto: true }] */
 	import { goto, replaceState } from '$app/navigation';
@@ -786,10 +787,11 @@
 		</div>
 
 		{#if !data.telemetryAvailable}
-			<EmptyState
-				icon={ActivityIcon}
-				title="Telemetry is not running"
-				description="DuckDB is unavailable on this control plane, so storage samples cannot be stored or charted. The instance itself is unaffected."
+			<TelemetryOff
+				installed={data.telemetryInstalled}
+				reason={data.telemetryReason}
+				subject="Storage stats"
+				unaffected="The instance itself is unaffected."
 			/>
 		{:else if data.metrics.length === 0}
 			<EmptyState

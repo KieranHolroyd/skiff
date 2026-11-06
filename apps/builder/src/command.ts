@@ -121,19 +121,39 @@ export function directRunArgs(command: string): string[] {
 }
 
 /**
- * Add a token to an HTTPS clone URL without touching SSH/`git://` URLs (a token can't help there).
- * The token is redacted from logs separately.
+ * Git environment that authenticates one HTTPS clone with the node's token, or `{}` when the
+ * token must not be used for this URL.
+ *
+ * The token travels as an `Authorization` header scoped by git to `https://<host>/`, set through
+ * `GIT_CONFIG_*` variables in the clone process's environment only. That keeps it out of the
+ * argv (`ps`), the remote URL and therefore `.git/config`, which the unprivileged build reads and
+ * an `outputDir: "."` build would otherwise publish. Only hosts the operator listed get it, so a
+ * project member cannot point `repoUrl` at their own server and collect the token. Git also
+ * drops a host-scoped header when a redirect leaves that host.
  */
-export function repoUrlWithToken(repoUrl: string, token: string | null): string {
-	if (!token || !repoUrl.startsWith('https://')) return repoUrl;
+export function gitAuthEnv(repoUrl: string, token: string | null, allowedHosts: readonly string[]): Record<string, string> {
+	if (!token) return {};
+	let url: URL;
 	try {
-		const url = new URL(repoUrl);
-		url.username = 'x-access-token';
-		url.password = token;
-		return url.toString();
+		url = new URL(repoUrl);
 	} catch {
-		return repoUrl;
+		return {};
 	}
+	if (url.protocol !== 'https:' || url.username || url.password) return {};
+	const host = url.host.toLowerCase();
+	if (!allowedHosts.map((allowed) => allowed.toLowerCase()).includes(host)) return {};
+	const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
+	return {
+		GIT_CONFIG_COUNT: '1',
+		GIT_CONFIG_KEY_0: `http.https://${host}/.extraHeader`,
+		GIT_CONFIG_VALUE_0: `Authorization: Basic ${basic}`,
+	};
+}
+
+/** A ref that starts with `-` would be parsed by git as an option. */
+export function validateGitRef(ref: string): string {
+	if (!ref || ref.startsWith('-') || /[\0\s]/.test(ref)) throw new BuildValidationError(`Invalid git ref "${ref.slice(0, 100)}"`);
+	return ref;
 }
 
 /** Remove credentials from git output before it is streamed to the control plane. */

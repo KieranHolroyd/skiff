@@ -1,5 +1,10 @@
 import type { RequestHandler } from './$types';
-import { heartbeatSchema, nodeJoinSchema, STUDIO_TOKEN_HEADER, telemetryBatchSchema } from '@skiff/contracts';
+import {
+	heartbeatSchema,
+	nodeJoinSchema,
+	STUDIO_TOKEN_HEADER,
+	telemetryBatchSchema
+} from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
 import { json, readJson, route } from '#lib/server/api.js';
 
@@ -35,7 +40,9 @@ const handler: RequestHandler = async (event) => {
 			core.nodes.authenticate(token);
 			const current = core.nodes.stateVersion();
 			const etag = `"v${current}"`;
-			const clientVersion = Number(request.headers.get('if-none-match')?.replace(/[^0-9]/g, '') ?? 0);
+			const clientVersion = Number(
+				request.headers.get('if-none-match')?.replace(/[^0-9]/g, '') ?? 0
+			);
 			const wait = Math.min(Number(url.searchParams.get('wait') ?? 0), 25);
 			if (clientVersion === current && wait > 0) {
 				const deadline = Date.now() + wait * 1000;
@@ -47,7 +54,7 @@ const handler: RequestHandler = async (event) => {
 			if (clientVersion === core.nodes.stateVersion())
 				return new Response(null, {
 					status: 304,
-					headers: { etag: `"v${core.nodes.stateVersion()}"`, 'cache-control': 'no-store' },
+					headers: { etag: `"v${core.nodes.stateVersion()}"`, 'cache-control': 'no-store' }
 				});
 			const state = await core.nodes.desiredState(token);
 			return json(state, 200, { etag: `"v${state.version}"`, 'cache-control': 'no-store' });
@@ -117,14 +124,34 @@ const handler: RequestHandler = async (event) => {
 			// The token authenticates the node; the payload must not claim another one.
 			const node = core.nodes.authenticate(token);
 			if (node.id !== batch.nodeId) return json({ error: 'node_mismatch' }, 403);
-			// Database and object-storage sizes and snapshots land in SQLite even when DuckDB is
+			// Database and object-storage sizes and snapshots land in SQLite even when ClickHouse is
 			// disabled (D57, S7).
-			const databases = await core.databases.ingestTelemetry(node.id, batch.databases, batch.databaseSnapshots);
-			const storage = await core.storage.ingestTelemetry(node.id, batch.objectStorage, batch.objectStorageBuckets);
-			if (!core.ctx.telemetry?.available)
-				return json({ ok: true, stored: 0, databasesStored: 0, storageStored: 0, detail: 'telemetry disabled' });
-			const result = batch.buckets.length > 0 ? await core.ctx.telemetry.ingest(batch.buckets) : { inserted: 0 };
-			return { ok: true, stored: result.inserted, databasesStored: databases.stored, storageStored: storage.stored };
+			const databases = await core.databases.ingestTelemetry(
+				node.id,
+				batch.databases,
+				batch.databaseSnapshots
+			);
+			const storage = await core.storage.ingestTelemetry(
+				node.id,
+				batch.objectStorage,
+				batch.objectStorageBuckets
+			);
+			if (!core.ctx.telemetry || !(await core.ctx.telemetry.ready()))
+				return json({
+					ok: true,
+					stored: 0,
+					databasesStored: 0,
+					storageStored: 0,
+					detail: 'telemetry disabled'
+				});
+			const result =
+				batch.buckets.length > 0 ? await core.ctx.telemetry.ingest(batch.buckets) : { inserted: 0 };
+			return {
+				ok: true,
+				stored: result.inserted,
+				databasesStored: databases.stored,
+				storageStored: storage.stored
+			};
 		}
 
 		return json({ error: 'not_found', action }, 404);

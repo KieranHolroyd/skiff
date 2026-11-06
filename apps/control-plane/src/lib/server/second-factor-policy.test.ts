@@ -32,12 +32,12 @@ describe('secondFactorState', () => {
 
 describe('isExemptBeforeSecondFactor', () => {
 	test('the challenge page, auth API, sign-in, assets and machine endpoints stay reachable', () => {
-		for (const path of ['/two-factor', '/api/auth/get-session', '/login', '/_app/immutable/x.js', '/mcp', '/api/agent/heartbeat'])
+		for (const path of ['/two-factor', '/setup', '/api/auth/get-session', '/login', '/_app/immutable/x.js', '/mcp', '/api/agent/heartbeat'])
 			expect(isExemptBeforeSecondFactor(path)).toBe(true);
 	});
 
 	test('dashboard, REST, consent and CLI approval are gated', () => {
-		for (const path of ['/overview', '/settings', '/settings/account', '/api/v1/projects', '/consent', '/cli/login', '/two-factorx', '/_skiff/site-login'])
+		for (const path of ['/overview', '/settings', '/settings/account', '/api/v1/projects', '/consent', '/cli/login', '/two-factorx', '/setupx', '/_skiff/site-login'])
 			expect(isExemptBeforeSecondFactor(path)).toBe(false);
 	});
 });

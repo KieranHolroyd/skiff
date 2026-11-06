@@ -1,5 +1,6 @@
-import { betterAuth } from 'better-auth';
-import { APIError, createAuthMiddleware, getSessionFromCtx } from 'better-auth/api';
+import { betterAuth, type BetterAuthPlugin } from 'better-auth';
+import { APIError, createAuthEndpoint, createAuthMiddleware, getSessionFromCtx } from 'better-auth/api';
+import { setSessionCookie } from 'better-auth/cookies';
 import { admin, jwt, magicLink, organization, twoFactor } from 'better-auth/plugins';
 import { passkey } from '@better-auth/passkey';
 import { apiKey } from '@better-auth/api-key';
@@ -12,7 +13,8 @@ import { fetchClientMetadataResource } from '@better-auth/cimd/node';
 import { allPermissions, roles, statements, type Permission, type Role } from '@skiff/contracts';
 import { readMembership } from '@skiff/core';
 import { getRequestEvent } from '$app/server';
-import { allowDcr, authSecret, contentDomain, devPasswordLogin, github, mcpResource, openSignup, platformOrigin } from './config';
+import * as z from 'zod';
+import { allowDcr, authSecret, contentDomain, github, mcpResource, openSignup, platformOrigin } from './config';
 import { sendInviteEmail, sendMagicLinkEmail } from './email';
 import {
 	enforceOwnerSecondFactor,
@@ -25,9 +27,12 @@ import {
 } from './second-factor';
 import { OAUTH_AUTHORIZE_PATH, authPathAllowedBeforeSecondFactor, factorProvedBy } from './second-factor-policy';
 import { sqlite } from './db';
+import { MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH, SetupAlreadyCompleteError, claimInstance, parseClaimInput } from './setup';
+import { isValidSetupToken } from './setup-token';
 
 /**
- * Better Auth: passkeys + GitHub, invite-only, 2FA for owners (D10); organizations with the
+ * Better Auth: passwords, passkeys, GitHub and magic links (D103), invite-only, 2FA for owners
+ * (D10); organizations with the
  * same RBAC statements the API/MCP/CLI use (D9); API keys and MCP OAuth 2.1 (D11).
  */
 const ac = createAccessControl({
@@ -85,6 +90,50 @@ export function userHasOrgPermission(userId: string, permission: Permission): bo
 	return membership ? (roles[membership.role] as readonly Permission[]).includes(permission) : false;
 }
 
+/**
+ * First-run setup (D102, setup.ts). Server-only: never on the HTTP router, so only the `/setup`
+ * wizard's form action can call it, and it checks the setup token again itself. Creates the owner,
+ * their organisation and membership atomically, then signs them in with an ordinary Better Auth
+ * session. That session has proved no second factor, so the owner policy sends it straight to
+ * enrolment, which the wizard walks through next.
+ */
+const claimSetupBody = z.object({
+	token: z.string().optional(),
+	name: z.string(),
+	email: z.string(),
+	organizationName: z.string(),
+	password: z.string(),
+});
+
+const skiffSetup = {
+	id: 'skiff-setup',
+	endpoints: {
+		claimSetup: createAuthEndpoint.serverOnly({ method: 'POST', body: claimSetupBody }, async (ctx) => {
+			const body = ctx.body;
+			if (!isValidSetupToken(body.token))
+				throw new APIError('FORBIDDEN', { message: 'The setup link is not valid. Open the link the installer printed.' });
+			const parsed = parseClaimInput(body);
+			if (!parsed.ok) throw new APIError('BAD_REQUEST', { message: parsed.message });
+			// Hash before the transaction: scrypt is async, the claim itself must not be.
+			const { password, ...owner } = parsed.value;
+			const passwordHash = await ctx.context.password.hash(password);
+			let userId: string;
+			try {
+				({ userId } = claimInstance(sqlite, { ...owner, passwordHash }));
+			} catch (error) {
+				if (error instanceof SetupAlreadyCompleteError) throw new APIError('CONFLICT', { message: error.message });
+				throw error;
+			}
+			const user = await ctx.context.internalAdapter.findUserById(userId);
+			if (!user) throw new APIError('INTERNAL_SERVER_ERROR', { message: 'The owner account was not saved.' });
+			const session = await ctx.context.internalAdapter.createSession(userId);
+			if (!session) throw new APIError('INTERNAL_SERVER_ERROR', { message: 'Could not start a session.' });
+			await setSessionCookie(ctx, { session, user });
+			return ctx.json({ userId });
+		}),
+	},
+} satisfies BetterAuthPlugin;
+
 const API_KEY_RATE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const API_KEY_RATE_MAX = 100_000;
 
@@ -95,7 +144,16 @@ export const auth = betterAuth({
 	baseURL: platformOrigin,
 	secret: authSecret,
 	database: sqlite,
-	emailAndPassword: { enabled: devPasswordLogin },
+	// Passwords work everywhere, including plain-HTTP or IP-only installs where passkeys can't (D103).
+	// Public password sign-up stays off outside open-signup dev servers: an invitee could otherwise
+	// be beaten to their invitation by anyone who knows their address. Passwords are set by the setup
+	// wizard or from Settings → Account by a signed-in user.
+	emailAndPassword: {
+		enabled: true,
+		disableSignUp: !openSignup,
+		minPasswordLength: MIN_PASSWORD_LENGTH,
+		maxPasswordLength: MAX_PASSWORD_LENGTH,
+	},
 	socialProviders: github
 		? { github: { clientId: github.clientId, clientSecret: github.clientSecret } }
 		: {},
@@ -110,12 +168,19 @@ export const auth = betterAuth({
 	databaseHooks: {
 		user: {
 			create: {
-				// Invite-only (D10), with the very first user allowed so the setup wizard can create
-				// the owner. Invitations are Better Auth organization invitations by email.
+				// Invite-only (D10). The owner is created by the setup wizard (D102, `claimSetup`
+				// above), never by whoever signs up first: until setup is done, sign-up is refused.
+				// Invitations are Better Auth organization invitations by email.
 				before: async (user) => {
 					const count = sqlite.query<{ count: number }, []>('SELECT count(*) AS count FROM user').get();
-					// The bootstrap user is the platform admin (admin plugin role, DESIGN §6.2).
-					if ((count?.count ?? 0) === 0) return { data: { ...user, role: 'admin' } };
+					if ((count?.count ?? 0) === 0) {
+						if (!openSignup)
+							throw new APIError('FORBIDDEN', {
+								message: 'Skiff is not set up yet. Open the setup link the installer printed.',
+							});
+						// Dev/open-signup installs: the first user is the platform admin (DESIGN §6.2).
+						return { data: { ...user, role: 'admin' } };
+					}
 					if (openSignup) return;
 					const invited = sqlite
 						.query<{ id: string }, [string, string]>(
@@ -223,7 +288,8 @@ export const auth = betterAuth({
 		}),
 		admin(),
 		passkey({ rpID: platformHost, rpName: 'Skiff', origin: platformOrigin }),
-		// Skiff accounts have no password (D10), so TOTP enrolment must not ask for one.
+		// Accounts without a password (passkey/GitHub/magic link) enrol TOTP without one; accounts with
+		// a password must re-enter it to add or remove the app (Better Auth's rule, D103).
 		twoFactor({ issuer: 'Skiff', allowPasswordless: true }),
 		apiKey({
 			defaultPrefix: 'skif_',
@@ -236,6 +302,8 @@ export const auth = betterAuth({
 				await sendMagicLinkEmail(email, url);
 			},
 		}),
+		skiffSetup,
+		// Must stay last: it copies Set-Cookie from server-side calls onto the SvelteKit response.
 		sveltekitCookies(getRequestEvent),
 	],
 });

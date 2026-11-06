@@ -1,6 +1,6 @@
 import type { RequestHandler } from './$types';
 import * as z from 'zod';
-import { ValidationError } from '@skiff/core';
+import { MetricsExporter, PROMETHEUS_CONTENT_TYPE, ValidationError } from '@skiff/core';
 import {
 	projectCreateSchema,
 	projectUpdateSchema,
@@ -66,10 +66,11 @@ const api: RequestHandler = async (event) => {
 		}
 
 		// --- metrics ----------------------------------------------------------
-		if (segments[0] === 'metrics' && segments.length === 1) {
+		if (segments[0] === 'metrics') {
 			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
-			return new Response(await core.metrics.prometheus(), {
-				headers: { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' },
+			// Same renderer as `/metrics`, scoped to the caller's org (docs/METRICS.md).
+			return new Response(await core.metricsExport.render(principal, MetricsExporter.scopeFromPath(segments.slice(1))), {
+				headers: { 'content-type': PROMETHEUS_CONTENT_TYPE, 'cache-control': 'no-store' },
 			});
 		}
 

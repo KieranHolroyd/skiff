@@ -2,10 +2,13 @@
 	import { browser } from '$app/env';
 	import { untrack } from 'svelte';
 	import { createQuery } from '@tanstack/svelte-query';
+	import PlusIcon from '@lucide/svelte/icons/plus';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
+	import { toast } from 'svelte-sonner';
 	import type { DatabaseStudioPrincipalState } from '@skiff/contracts';
-	import type { TreeNode } from '@skiff/studio/protocol';
+	import type { SchemaChangeInput, StudioInfo, TreeNode } from '@skiff/studio/protocol';
 	import { Button } from '#lib/components/ui/button/index.js';
+	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import { Kbd } from '#lib/components/ui/kbd/index.js';
 	import { Spinner } from '#lib/components/ui/spinner/index.js';
 	import { studioCall } from '../client.js';
@@ -13,20 +16,27 @@
 	import DocumentWorkspace from '../workspaces/DocumentWorkspace.svelte';
 	import KeyValueWorkspace from '../workspaces/KeyValueWorkspace.svelte';
 	import RelationalWorkspace from '../workspaces/RelationalWorkspace.svelte';
+	import { canAlter } from '../structure/changes.js';
+	import CreateTableDialog from '../structure/CreateTableDialog.svelte';
+	import NameDialog from '../structure/NameDialog.svelte';
+	import { AlterReview } from '../structure/review.svelte.js';
+	import ReviewDialog from '../structure/ReviewDialog.svelte';
 	import { closeSession, confirmEnableWrites, openReadOnly } from './actions.js';
-	import { setStudioShell } from './context.js';
+	import { setStudioShell, type StructureEvent } from './context.js';
 	import ObjectTree from './ObjectTree.svelte';
 	import PreparingAccess from './PreparingAccess.svelte';
 	import StudioErrorNotice from './StudioErrorNotice.svelte';
 	import StudioHeader from './StudioHeader.svelte';
 	import TabStrip from './TabStrip.svelte';
 	import {
+		closeObjectTabs,
 		closeTab,
 		emptyTabs,
 		focusTab,
 		loadTabs,
 		openObjectTab,
 		openQueryTab,
+		renameObjectTab,
 		saveTabs,
 		tabDomId,
 		tabPanelDomId,
@@ -109,6 +119,18 @@
 		tabs = openQueryTab(tabs, input);
 	}
 
+	// --- structure edits -------------------------------------------------------------------------
+
+	async function structureChanged(event: StructureEvent) {
+		if (event.kind === 'renamed') tabs = renameObjectTab(tabs, event.from, event.to);
+		else if (event.kind === 'dropped') tabs = closeObjectTabs(tabs, event.path);
+		await tree.refresh();
+		if (event.kind === 'created') {
+			const node = await tree.reveal(event.path);
+			if (node?.browsable) openObject(node);
+		}
+	}
+
 	setStudioShell({
 		async openPath(path) {
 			const node = await tree.reveal(path);
@@ -116,8 +138,38 @@
 			openObject(node);
 			return true;
 		},
-		reopen: openReadOnly
+		reopen: openReadOnly,
+		structureChanged: (event) => void structureChanged(event)
 	});
+
+	const review = new AlterReview(() => name);
+	let creatingTable = $state(false);
+	let creatingSchema = $state(false);
+	let creatingCollection = $state(false);
+
+	/** Schemas loaded at the tree root, for the new table's schema choice. */
+	const schemaNames = $derived(
+		(tree.roots ?? []).filter((item) => item.node.kind === 'schema').map((item) => item.node.name)
+	);
+	/** Start a new table in the schema of the object in front, when there is one. */
+	const activeSchema = $derived(
+		activeTab?.type === 'object' && activeTab.node.path.length > 1 ? (activeTab.node.path[0] ?? null) : null
+	);
+
+	async function create(change: SchemaChangeInput, what: string, path: string[], nodeKind: TreeNode['kind']) {
+		const done = await review.start({ title: `Create ${what}`, changes: [change], confirmLabel: 'Create' });
+		if (!done) return;
+		toast.success(`Created ${path.join('.')}.`);
+		void structureChanged({ kind: 'created', path, nodeKind });
+	}
+
+	function creatable(studio: StudioInfo) {
+		return {
+			table: canAlter(studio, 'create-table'),
+			schema: canAlter(studio, 'create-schema') && studio.capabilities.schemas,
+			collection: canAlter(studio, 'create-collection')
+		};
+	}
 
 	// --- shortcuts -----------------------------------------------------------------------------
 
@@ -211,6 +263,7 @@
 		<StudioErrorNotice error={info.error} onretry={() => info.refetch()} />
 	{:else if info.data}
 		{@const studio = info.data}
+		{@const can = creatable(studio)}
 		<div class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card md:flex-row">
 			<div
 				class="h-56 shrink-0 border-b md:h-auto md:w-(--tree-w) md:border-b-0"
@@ -223,7 +276,32 @@
 					onopen={openObject}
 					onreopen={openReadOnly}
 					bind:filterInput
-				/>
+				>
+					{#snippet actions()}
+						{#if can.table || can.schema || can.collection}
+							<DropdownMenu.Root>
+								<DropdownMenu.Trigger>
+									{#snippet child({ props })}
+										<Button {...props} variant="ghost" size="icon-sm" aria-label="New object" title="New object">
+											<PlusIcon />
+										</Button>
+									{/snippet}
+								</DropdownMenu.Trigger>
+								<DropdownMenu.Content align="end">
+									{#if can.table}
+										<DropdownMenu.Item onSelect={() => (creatingTable = true)}>New table…</DropdownMenu.Item>
+									{/if}
+									{#if can.schema}
+										<DropdownMenu.Item onSelect={() => (creatingSchema = true)}>New schema…</DropdownMenu.Item>
+									{/if}
+									{#if can.collection}
+										<DropdownMenu.Item onSelect={() => (creatingCollection = true)}>New collection…</DropdownMenu.Item>
+									{/if}
+								</DropdownMenu.Content>
+							</DropdownMenu.Root>
+						{/if}
+					{/snippet}
+				</ObjectTree>
 			</div>
 			<!-- A focusable separator is a widget (WAI-ARIA window splitter). -->
 			<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
@@ -293,5 +371,32 @@
 				{/each}
 			</section>
 		</div>
+
+		<CreateTableDialog
+			bind:open={creatingTable}
+			dialect={studio.capabilities.dialect}
+			schemas={studio.capabilities.schemas ? schemaNames : []}
+			schema={activeSchema}
+			onsubmit={(change) => {
+				if (change.op !== 'create-table') return;
+				const path = [...(change.parent ?? []), change.name];
+				void create(change, `table ${path.join('.')}`, path, 'table');
+			}}
+		/>
+		<NameDialog
+			bind:open={creatingSchema}
+			title="New schema"
+			submitLabel="Review"
+			onsubmit={(schema) => void create({ op: 'create-schema', name: schema }, `schema ${schema}`, [schema], 'schema')}
+		/>
+		<NameDialog
+			bind:open={creatingCollection}
+			title="New collection"
+			description="MongoDB also creates a collection the first time a document is inserted into it."
+			submitLabel="Review"
+			onsubmit={(collection) =>
+				void create({ op: 'create-collection', name: collection }, `collection ${collection}`, [collection], 'collection')}
+		/>
+		<ReviewDialog {review} />
 	{/if}
 </div>

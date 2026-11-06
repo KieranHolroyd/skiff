@@ -41,6 +41,16 @@ import {
 	storageCreateSchema,
 	storageObjectKeySchema,
 	workloadSpecSchema,
+	dashboardTemplateIds,
+	dashboardTemplates,
+	dashboardVariableSchema,
+	panelDraftSchema,
+	panelOptionsSchema,
+	panelQuerySchema,
+	panelSizes,
+	vizTypes,
+	type DashboardPanel,
+	type DashboardView,
 	type DatabaseMetricPoint,
 	type DatabaseView,
 	type StorageGrant,
@@ -1937,7 +1947,7 @@ function buildServer(
 		{
 			title: 'Get traffic metrics',
 			description:
-				'Aggregated request metrics for your org\'s projects from DuckDB (1m or 1h buckets), optionally filtered by project or host.',
+				'Aggregated request metrics for your org\'s projects from the ClickHouse telemetry store (1m or 1h buckets), optionally filtered by project or host.',
 			inputSchema: z.object({
 				project: z.string().optional().describe('Project slug'),
 				host: z.string().optional(),
@@ -1951,7 +1961,7 @@ function buildServer(
 		async ({ project, host, from, to, interval }) =>
 			run(async () => {
 				requirePermission(principal, 'metrics:read');
-				if (!core.ctx.telemetry?.available)
+				if (!core.ctx.telemetry || !(await core.ctx.telemetry.ready()))
 					return { points: [], note: 'Telemetry is not enabled on this install.' };
 				// Telemetry is global; only this org's projects are visible to this principal.
 				const projectId = project ? core.projects.requireRow(principal, project).id : undefined;
@@ -1966,6 +1976,325 @@ function buildServer(
 				});
 				return { points: points.filter((point) => point.projectId !== null && orgProjects.has(point.projectId)) };
 			}),
+	);
+
+	// --- observability dashboards (D101) ------------------------------------
+	const sizeName = (w: number) =>
+		({ 6: 'quarter', 8: 'third', 12: 'half', 16: 'two-thirds', 24: 'full' })[w] ?? `${w}/24 columns`;
+	const panelSummary = (panel: DashboardPanel) => ({
+		id: panel.id,
+		title: panel.title,
+		viz: panel.viz,
+		size: sizeName(panel.gridPos.w),
+		height: panel.gridPos.h,
+		unit: panel.options.unit,
+		...(panel.query ? { query: panel.query } : {}),
+		...(panel.viz === 'text' ? { text: panel.options.text } : {}),
+	});
+	const dashboardResult = (dashboard: DashboardView) => ({
+		id: dashboard.id,
+		title: dashboard.title,
+		url: core.observability.url(dashboard.id),
+		version: dashboard.version,
+		description: dashboard.description,
+		tags: dashboard.tags,
+		time: dashboard.spec.time,
+		refresh: dashboard.spec.refresh,
+		variables: dashboard.spec.variables,
+		panels: dashboard.spec.panels.map(panelSummary),
+		canEdit: dashboard.canEdit,
+	});
+	/** Builder spec reminder shared by the write tools' descriptions. */
+	const PANEL_HELP =
+		'A panel is {title, viz, query, unit?, size?}. viz: timeseries | bar | stat | gauge | bargauge | table | pie | text. ' +
+		'query (builder, works for everyone): {mode:"builder", builder:{dataset, metrics:[{field, agg}], groupBy?:[dimension], filters?:[{field, op, value}], timeSeries?: true, interval?: "auto", limit?}}. ' +
+		'Datasets, measures (with their aggregations) and dimensions come from describe_telemetry; derived measures take agg "value", counters sum|rate|avg|max|min, gauges avg|max|min|last. ' +
+		'Use timeSeries:false with groupBy for tables, bar gauges and pies; stats and gauges reduce a series. Filter values may be "$variable". ' +
+		'size: quarter | third | half | two-thirds | full (defaults by viz); panels are laid out automatically. unit: short, bytes, ms, percent (0–100), percentunit (0–1), reqps, bytesps.';
+	const lastRanges = { '15m': 0.25, '1h': 1, '6h': 6, '24h': 24, '7d': 168, '30d': 720, '90d': 2160 } as const;
+	const dashboardRef = z.string().min(1).describe('Dashboard id (dsh_…) or exact title');
+
+	tool(
+		'describe_telemetry',
+		{
+			title: 'Describe telemetry',
+			description:
+				'What dashboards can chart: whether the optional ClickHouse store is installed and running, the builder datasets with their measures (kind, unit, aggregations) and dimensions, display names for project/database/storage ids, retention, starter templates, and (platform admins) the raw ClickHouse tables for SQL. Call this before building panels.',
+			inputSchema: z.object({}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('metrics:read'),
+		},
+		async () =>
+			run(async () => {
+				const schema = await core.observability.schema(principal);
+				return {
+					installed: schema.installed,
+					available: schema.available,
+					...(schema.error ? { error: schema.error } : {}),
+					...(schema.installed
+						? {}
+						: { note: 'The telemetry store is not installed. Dashboards can still be created and edited; panels show data once a platform owner installs it in Settings → Telemetry.' }),
+					canUseSql: schema.canUseSql,
+					retention: schema.retention,
+					aggregations: { counter: ['sum', 'rate', 'avg', 'max', 'min', 'count'], gauge: ['avg', 'max', 'min', 'last'], derived: ['value'] },
+					datasets: schema.datasets,
+					names: schema.names,
+					templates: Object.values(dashboardTemplates).map(({ id, title, description }) => ({ id, title, description })),
+					...(schema.canUseSql
+						? {
+								tables: schema.tables.map(({ name, rows, columns }) => ({ name, rows, columns: columns.map((column) => `${column.name} ${column.type}`) })),
+								sqlMacros: ['$__timeFilter(bucket)', '$__timeInterval(bucket)', '$__fromTime', '$__toTime', '$__interval_s', '$variable'],
+							}
+						: {}),
+				};
+			}),
+	);
+
+	tool(
+		'query_telemetry',
+		{
+			title: 'Query telemetry',
+			description:
+				'Run one panel query and return its rows, to answer a question or to check a panel before adding it. Builder queries are scoped to what you can see; SQL is platform-admin only (read-only, 30 s limit). ' +
+				'Time columns are epoch milliseconds. Example: {"query":{"mode":"builder","builder":{"dataset":"traffic","metrics":[{"field":"requests","agg":"rate"}],"groupBy":["host"]}},"last":"6h"}.',
+			inputSchema: z.object({
+				query: panelQuerySchema,
+				last: z.enum(Object.keys(lastRanges) as [keyof typeof lastRanges, ...Array<keyof typeof lastRanges>]).default('24h').describe('Range ending now (ignored when from/to are given)'),
+				from: z.string().datetime().optional(),
+				to: z.string().datetime().optional(),
+				variables: z.record(z.string(), z.union([z.string(), z.array(z.string())])).default({}),
+				maxRows: z.number().int().min(1).max(500).default(50).describe('Rows returned to you (the query may produce more)'),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('metrics:read'),
+		},
+		async ({ query, last, from, to, variables, maxRows }) =>
+			run(async () => {
+				const end = to ? Date.parse(to) : Date.now();
+				const start = from ? Date.parse(from) : end - lastRanges[last] * 3_600_000;
+				const result = await core.observability.query(principal, {
+					query,
+					range: { from: new Date(start).toISOString(), to: new Date(end).toISOString() },
+					maxDataPoints: 120,
+					variables,
+				});
+				return {
+					columns: result.columns.map(({ name, type, kind }) => ({ name, type, kind })),
+					rows: result.rows.slice(0, maxRows),
+					totalRows: result.rows.length,
+					...(result.rows.length > maxRows ? { note: `Showing ${maxRows} of ${result.rows.length} rows.` } : {}),
+					intervalSeconds: result.intervalSeconds,
+					...(result.notice ? { notice: result.notice } : {}),
+					sql: result.sql,
+				};
+			}),
+	);
+
+	tool(
+		'list_dashboards',
+		{
+			title: 'List dashboards',
+			description: 'Saved observability dashboards in your org, newest first, with links.',
+			inputSchema: z.object({ q: z.string().max(100).optional().describe('Filter by title or tag') }),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('metrics:read'),
+		},
+		async ({ q }) =>
+			run(() => {
+				const needle = q?.trim().toLowerCase();
+				return {
+					dashboards: core.observability
+						.list(principal)
+						.filter((item) => !needle || item.title.toLowerCase().includes(needle) || item.tags.some((tag) => tag.toLowerCase().includes(needle)))
+						.map((item) => ({
+							id: item.id,
+							title: item.title,
+							url: core.observability.url(item.id),
+							tags: item.tags,
+							panels: item.panelCount,
+							updatedAt: item.updatedAt,
+							by: item.createdByName,
+							canEdit: item.canEdit,
+						})),
+				};
+			}),
+	);
+
+	tool(
+		'get_dashboard',
+		{
+			title: 'Get dashboard',
+			description: 'One dashboard with its panels (id, title, viz, size, query), variables and default time range.',
+			inputSchema: z.object({ dashboard: dashboardRef }),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('metrics:read'),
+		},
+		async ({ dashboard }) => run(() => dashboardResult(core.observability.resolve(principal, dashboard))),
+	);
+
+	tool(
+		'create_dashboard',
+		{
+			title: 'Create dashboard',
+			description:
+				`Create a dashboard in one call: start from a template ("traffic", "databases", "storage"), pass panel drafts, or both (template panels first). ${PANEL_HELP} ` +
+				'Every query is checked against the catalog before anything is saved. Returns the link and, when telemetry is running, how many rows each panel has right now.',
+			inputSchema: z.object({
+				title: z.string().max(120).optional().describe('Defaults to the template title'),
+				description: z.string().max(1_000).optional(),
+				tags: z.array(z.string().max(40)).max(10).optional(),
+				template: z.enum(dashboardTemplateIds).optional(),
+				panels: z.array(panelDraftSchema).max(40).optional(),
+				variables: z.array(dashboardVariableSchema).max(20).optional().describe('e.g. {name:"host", kind:"query", query:{mode:"builder", builder:{dataset:"traffic", groupBy:["host"], timeSeries:false}}, multi:true, includeAll:true, current:["$__all"]}'),
+				time: z.object({ from: z.string(), to: z.string() }).optional().describe('Default range, e.g. {from:"now-24h", to:"now"}'),
+				refresh: z.enum(['10s', '30s', '1m', '5m', '15m', '1h']).nullable().optional(),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('metrics:read'),
+		},
+		async (input) =>
+			run(async () => {
+				const dashboard = core.observability.createFromDrafts(principal, input as never);
+				const preview = await core.observability.preview(principal, dashboard.spec.panels);
+				return { ...dashboardResult(dashboard), ...(preview ? { preview } : { note: 'Telemetry is not running, so panels were not previewed.' }) };
+			}),
+	);
+
+	tool(
+		'add_dashboard_panels',
+		{
+			title: 'Add dashboard panels',
+			description: `Append panels to a dashboard, placed below the existing ones automatically. ${PANEL_HELP}`,
+			inputSchema: z.object({ dashboard: dashboardRef, panels: z.array(panelDraftSchema).min(1).max(40) }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('metrics:read'),
+		},
+		async ({ dashboard, panels }) =>
+			run(async () => {
+				const result = core.observability.addPanels(principal, dashboard, panels as never);
+				const preview = await core.observability.preview(principal, result.added);
+				return {
+					dashboard: { id: result.dashboard.id, title: result.dashboard.title, url: core.observability.url(result.dashboard.id), version: result.dashboard.version },
+					added: result.added.map(panelSummary),
+					...(preview ? { preview } : {}),
+				};
+			}),
+	);
+
+	tool(
+		'update_dashboard_panel',
+		{
+			title: 'Update dashboard panel',
+			description: 'Change one panel (by id or exact title): title, viz, query, unit, size, height, text or options. Only the fields you pass change.',
+			inputSchema: z.object({
+				dashboard: dashboardRef,
+				panel: z.string().min(1).describe('Panel id or exact title'),
+				title: z.string().max(200).optional(),
+				description: z.string().max(2_000).optional(),
+				viz: z.enum(vizTypes).optional(),
+				query: panelQuerySchema.optional(),
+				unit: z.string().max(32).optional(),
+				size: z.enum(panelSizes).optional(),
+				height: z.number().int().min(2).max(40).optional(),
+				text: z.string().max(20_000).optional(),
+				options: panelOptionsSchema.optional(),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('metrics:read'),
+		},
+		async ({ dashboard, panel, ...patch }) =>
+			run(async () => {
+				const updated = core.observability.updatePanel(principal, dashboard, panel, patch as never);
+				const changed = updated.spec.panels.find((item) => item.id === panel || item.title === (patch.title ?? panel)) ?? null;
+				const preview = changed ? await core.observability.preview(principal, [changed]) : null;
+				return {
+					dashboard: { id: updated.id, url: core.observability.url(updated.id), version: updated.version },
+					panel: changed ? panelSummary(changed) : null,
+					...(preview ? { preview } : {}),
+				};
+			}),
+	);
+
+	tool(
+		'remove_dashboard_panels',
+		{
+			title: 'Remove dashboard panels',
+			description: 'Remove panels (by id or exact title) from a dashboard. The rest keep their places.',
+			inputSchema: z.object({ dashboard: dashboardRef, panels: z.array(z.string().min(1)).min(1).max(100) }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('metrics:read'),
+		},
+		async ({ dashboard, panels }) =>
+			run(() => {
+				const result = core.observability.removePanels(principal, dashboard, panels);
+				return { dashboard: { id: result.dashboard.id, url: core.observability.url(result.dashboard.id), version: result.dashboard.version }, removed: result.removed };
+			}),
+	);
+
+	tool(
+		'update_dashboard',
+		{
+			title: 'Update dashboard',
+			description: 'Change dashboard settings: title, description, tags, default time range, auto refresh or the variable list (replaces it). Panels are changed with the panel tools.',
+			inputSchema: z.object({
+				dashboard: dashboardRef,
+				title: z.string().trim().min(1).max(120).optional(),
+				description: z.string().max(1_000).optional(),
+				tags: z.array(z.string().max(40)).max(10).optional(),
+				time: z.object({ from: z.string(), to: z.string() }).optional(),
+				refresh: z.enum(['10s', '30s', '1m', '5m', '15m', '1h']).nullable().optional(),
+				variables: z.array(dashboardVariableSchema).max(20).optional(),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('metrics:read'),
+		},
+		async ({ dashboard, ...patch }) => run(() => dashboardResult(core.observability.updateSettings(principal, dashboard, patch as never))),
+	);
+
+	tool(
+		'delete_dashboard',
+		{
+			title: 'Delete dashboard',
+			description: 'Delete a dashboard permanently (its panels and layout; the telemetry itself is untouched). Requires confirmation.',
+			inputSchema: z.object({ dashboard: dashboardRef }),
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+			scopeChallenge: requires('metrics:read'),
+		},
+		async ({ dashboard }, ctx) => {
+			const remove = () =>
+				run(() => {
+					const target = core.observability.resolve(principal, dashboard);
+					core.observability.delete(principal, target.id);
+					return { ok: true, deleted: { id: target.id, title: target.title } };
+				});
+			if (era === 'assistant') return remove();
+			if (era === 'legacy')
+				return {
+					isError: true,
+					...text(`Deleting "${dashboard}" needs your confirmation, which this MCP client can't show. Delete it from the Skiff dashboard (Dashboards → ${dashboard}).`),
+				};
+			const key = `confirm_delete_dashboard:${dashboard}`;
+			const schema = z.object({ confirm: z.boolean() });
+			const prompted = verifyConfirmation(ctx.mcpReq.requestState(), principal, 'delete_dashboard', dashboard);
+			const answer = prompted ? acceptedContent(ctx.mcpReq.inputResponses, key, schema) : undefined;
+			const responded = prompted && ctx.mcpReq.inputResponses?.[key] !== undefined;
+			if (responded && answer?.confirm !== true) {
+				const cancelled = text(`Cancelled: dashboard "${dashboard}" was not deleted (the user did not confirm).`);
+				declined.add(cancelled);
+				return cancelled;
+			}
+			if (answer?.confirm !== true)
+				return inputRequired({
+					inputRequests: {
+						[key]: inputRequired.elicit({
+							message: `Delete dashboard "${dashboard}"? Its panels and layout are removed for everyone in the org; this cannot be undone.`,
+							requestedSchema: schema,
+						}),
+					},
+					requestState: mintConfirmation(principal, 'delete_dashboard', dashboard),
+				});
+			return remove();
+		},
 	);
 
 	tool(

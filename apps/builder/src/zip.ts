@@ -10,7 +10,12 @@ export interface ZipDirectoryOptions {
 	/** Per-file uncompressed size cap. */
 	maxFileBytes?: number;
 	maxFiles?: number;
+	/** Absolute paths (files or directories) to leave out. */
+	exclude?: readonly string[];
 }
+
+/** Directory names never shipped from a build: git metadata can hold history and credentials. */
+const EXCLUDED_DIRECTORY_NAMES = new Set(['.git']);
 
 export interface ZippedDirectory {
 	zip: Uint8Array;
@@ -30,6 +35,7 @@ export async function zipDirectory(root: string, options: ZipDirectoryOptions = 
 	const rootStat = await stat(root).catch(() => null);
 	if (!rootStat?.isDirectory()) throw new BuildValidationError(`outputDir "${root}" is not a directory`);
 
+	const excluded = new Set(options.exclude ?? []);
 	const files: Record<string, Uint8Array> = {};
 	let fileCount = 0;
 	let sizeBytes = 0;
@@ -40,9 +46,11 @@ export async function zipDirectory(root: string, options: ZipDirectoryOptions = 
 		for (const entry of entries) {
 			if (entry.name === '.DS_Store') continue;
 			const full = join(directory, entry.name);
+			if (excluded.has(full)) continue;
 			// Never follow a symlink: an output directory must not reach outside itself.
 			if (entry.isSymbolicLink()) continue;
 			if (entry.isDirectory()) {
+				if (EXCLUDED_DIRECTORY_NAMES.has(entry.name)) continue;
 				await walk(full);
 				continue;
 			}

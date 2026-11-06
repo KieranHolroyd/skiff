@@ -9,11 +9,14 @@ Options:
   --upgrade                   Reuse /etc/skiff and data, build and activate a new release.
   --uninstall                 Stop and remove the Skiff units (keeps data/config).
   --purge                     With --uninstall, also delete /opt/skiff, /var/lib/skiff, /etc/skiff.
-  --platform-host <host>      Dashboard/API/MCP host (default control.kieran.dev).
-  --content-domain <domain>   Domain for deployed sites (default kierancloud.dev).
-  --acme-email <email>        ACME account email (required for TLS).
-  --admin-email <email>       First-owner email; prints a one-time magic link.
-  --cloudflare-token-file     Caddy DNS-01 token file (default /etc/caddy/cloudflare.token).
+  --platform-host <host>      Dashboard/API/MCP domain. Blank: http://<server-ip>.
+  --content-domain <domain>   Domain for deployed sites. Blank: <server-ip>.sslip.io (HTTP).
+  --acme-email <email>        ACME account email; turns on HTTPS (needs real domains).
+  --public-address <ipv4>     This server's IPv4 for IP-only installs (default: detected).
+  --admin-email <email>       Prefills the owner email in the setup wizard (optional).
+  --cloudflare-token-file     Optional Caddy DNS-01 token file, used only if it exists
+                              (default /etc/caddy/cloudflare.token). Not prompted for.
+  --skip-dns-check            Skip checking that the domains resolve before installing.
   --github-client-id <id>     Optional GitHub OAuth app.
   --github-client-secret <s>  Optional GitHub OAuth secret.
   --smtp-host <host>          Optional SMTP host (SES).
@@ -27,6 +30,10 @@ Options:
   --r2-access-key-id <id>     R2 access key.
   --r2-secret-access-key <s>  R2 secret.
   --no-agent                  Install the control plane only.
+  --clickhouse                Also install the optional ClickHouse telemetry store (traffic
+                              charts, dashboards; ~240 MB download, ~300–800 MB RAM).
+                              Asked interactively; off with --yes. Also SKIFF_INSTALL_CLICKHOUSE=1.
+  --no-clickhouse             Skip it without asking (an installed one is left in place).
   --version <label>           Release label (default: the repository VERSION file).
 
 Bootstrap environment:

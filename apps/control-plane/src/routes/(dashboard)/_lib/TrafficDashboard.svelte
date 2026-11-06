@@ -2,7 +2,6 @@
 	import type { TrafficReport } from '@skiff/core';
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
 	import ChartNoAxesCombinedIcon from '@lucide/svelte/icons/chart-no-axes-combined';
-	import DatabaseIcon from '@lucide/svelte/icons/database';
 	import GlobeIcon from '@lucide/svelte/icons/globe';
 	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 	import TimerIcon from '@lucide/svelte/icons/timer';
@@ -13,6 +12,7 @@
 	import * as Table from '#lib/components/ui/table/index.js';
 	import EmptyState from './EmptyState.svelte';
 	import Panel from './Panel.svelte';
+	import TelemetryOff from './TelemetryOff.svelte';
 	import TrafficChart from './TrafficChart.svelte';
 	import { formatBytes } from './format.js';
 
@@ -35,7 +35,13 @@
 		projectNames = {},
 		variant = 'project'
 	}: {
-		traffic: { permitted: boolean; available: boolean; report: TrafficReport };
+		traffic: {
+			permitted: boolean;
+			available: boolean;
+			report: TrafficReport;
+			reason?: string;
+			installed?: boolean;
+		};
 		range: {
 			key: string;
 			label: string;
@@ -141,7 +147,7 @@
 		<div>
 			<p class="text-xs font-medium text-muted-foreground">Traffic · last {range.label}</p>
 			<p class="text-sm text-muted-foreground">
-				Aggregated from DuckDB request buckets reported by the edge agents.
+				Aggregated from request buckets the edge agents report to ClickHouse.
 			</p>
 		</div>
 		<div class="flex items-center gap-1 rounded-lg border bg-muted/30 p-1">
@@ -165,10 +171,11 @@
 			description="This account does not have the metrics:read permission, so request stats are hidden."
 		/>
 	{:else if !traffic.available}
-		<EmptyState
-			icon={DatabaseIcon}
-			title="Traffic telemetry is not running"
-			description="DuckDB is unavailable on this control plane, so request buckets cannot be stored or charted. Deploys are unaffected."
+		<TelemetryOff
+			installed={traffic.installed}
+			reason={traffic.reason}
+			subject="Request history"
+			unaffected="Sites and deploys are unaffected."
 		/>
 	{:else if totals.requests === 0}
 		<EmptyState

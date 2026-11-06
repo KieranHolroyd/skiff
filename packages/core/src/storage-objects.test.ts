@@ -7,6 +7,7 @@ import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import type { Core } from './index.ts';
+import { shareDownloadHeaders } from './storage-objects.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'skiff-objects-'));
 const opened = createDb({ path: ':memory:' });
@@ -207,6 +208,24 @@ describe('storage object browser', () => {
 		).rejects.toThrow(/public instance/);
 	});
 
+	test('presigned uploads need write permission, downloads only read', async () => {
+		await expect(
+			core.storageObjects.presign(viewer, storageName, 'uploads', { key: 'x.html', method: 'PUT', expiresIn: 60 }),
+		).rejects.toThrow();
+		const read = await core.storageObjects.presign(viewer, storageName, 'uploads', {
+			key: 'x.txt',
+			method: 'GET',
+			expiresIn: 60,
+		});
+		expect(read.method).toBe('GET');
+		const write = await core.storageObjects.presign(agent, storageName, 'uploads', {
+			key: 'x.txt',
+			method: 'PUT',
+			expiresIn: 60,
+		});
+		expect(write.method).toBe('PUT');
+	});
+
 	test('stores bucket config and enforces object lock immutability', () => {
 		const bucket = core.storage.createBucket(owner, storageName, {
 			name: 'configured',
@@ -268,6 +287,8 @@ describe('storage object browser', () => {
 		const token = link.url.split('/').at(-1)!;
 		const response = await core.storageObjects.redeem(token, new Request(`https://control.test/share/storage/${token}`));
 		expect(await response.text()).toBe('hello object');
+		expect(response.headers.get('content-disposition')).toStartWith('attachment; filename="hello.txt"');
+		expect(response.headers.get('content-security-policy')).toStartWith('sandbox;');
 		await expect(
 			core.storageObjects.redeem(token, new Request(`https://control.test/share/storage/${token}`)),
 		).rejects.toThrow(/download limit/);
@@ -293,5 +314,33 @@ describe('storage object browser', () => {
 			core.storageObjects.redeem(token, new Request(`https://control.test/share/storage/${token}`)),
 		).rejects.toThrow(/expired or was revoked/);
 		clock -= 61_000;
+	});
+});
+
+describe('share link download headers', () => {
+	test('never let an uploaded document render on the platform origin', () => {
+		const headers = shareDownloadHeaders(
+			'pages/évil "x".html',
+			new Headers({
+				'content-type': 'text/html; charset=utf-8',
+				'content-length': '42',
+				etag: '"abc"',
+				'set-cookie': 'a=b',
+				'access-control-allow-origin': '*',
+			}),
+		);
+		expect(headers.get('content-disposition')).toBe(
+			`attachment; filename="_vil _x_.html"; filename*=UTF-8''${encodeURIComponent('évil "x".html')}`,
+		);
+		expect(headers.get('content-security-policy')).toBe("sandbox; default-src 'none'; frame-ancestors 'none'");
+		expect(headers.get('x-content-type-options')).toBe('nosniff');
+		expect(headers.get('content-length')).toBe('42');
+		expect(headers.get('etag')).toBe('"abc"');
+		expect(headers.get('set-cookie')).toBeNull();
+		expect(headers.get('access-control-allow-origin')).toBeNull();
+	});
+
+	test('defaults a missing content type to octet-stream', () => {
+		expect(shareDownloadHeaders('k', new Headers()).get('content-type')).toBe('application/octet-stream');
 	});
 });

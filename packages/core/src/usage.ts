@@ -267,7 +267,7 @@ export class UsageService {
 	/** Approximate 30-day egress from the traffic store; unavailable telemetry is zero, not an error. */
 	private async egressBytes(orgId: string, projectId: string | null): Promise<number> {
 		const telemetry = this.ctx.telemetry;
-		if (!telemetry?.available) return 0;
+		if (!telemetry || !(await telemetry.ready())) return 0;
 		const to = this.ctx.now();
 		const from = to - DAYS * DAY_MS;
 		try {

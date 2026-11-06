@@ -3,6 +3,9 @@
 	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import FilePlusIcon from '@lucide/svelte/icons/file-plus';
+	import PlusIcon from '@lucide/svelte/icons/plus';
+	import Trash2Icon from '@lucide/svelte/icons/trash-2';
+	import { toast } from 'svelte-sonner';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import type {
@@ -11,7 +14,8 @@
 		Column,
 		ObjectDescription,
 		ObjectRef,
-		RowChange
+		RowChange,
+		SchemaChangeInput
 	} from '@skiff/studio/protocol';
 	import Notice from '#lib/components/skiff/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
@@ -52,6 +56,12 @@
 	} from '../document/pager.js';
 	import ResultNotice from '../document/ResultNotice.svelte';
 	import SchemaPanel from '../document/SchemaPanel.svelte';
+	import { canAlter } from '../structure/changes.js';
+	import IndexDialog from '../structure/IndexDialog.svelte';
+	import NameDialog from '../structure/NameDialog.svelte';
+	import ObjectActions from '../structure/ObjectActions.svelte';
+	import { affectedText, AlterReview } from '../structure/review.svelte.js';
+	import ReviewDialog from '../structure/ReviewDialog.svelte';
 
 	/**
 	 * MongoDB collection (or view) workspace, plan 22 Phase 2 UI track G.
@@ -256,6 +266,60 @@
 	// --- apply ---------------------------------------------------------------------------------
 
 	const confirmer = new Confirmer();
+
+	// --- structure edits -------------------------------------------------------------------------
+
+	const review = new AlterReview(() => database);
+	const isCollection = $derived(object.kind === 'collection');
+	const can = $derived({
+		createIndex: isCollection && canAlter(info, 'create-index'),
+		dropIndex: isCollection && canAlter(info, 'drop-index'),
+		renameField: isCollection && canAlter(info, 'rename-column'),
+		removeField: isCollection && canAlter(info, 'drop-column')
+	});
+	let indexDialog = $state(false);
+	let renamingField = $state('');
+	let renameFieldOpen = $state(false);
+	/** Bumped after a field edit, so the schema sample runs again. */
+	let schemaVersion = $state(0);
+
+	async function alter(title: string, change: SchemaChangeInput, confirmLabel: string, done: (affected: string) => string) {
+		const results = await review.start({ title, changes: [change], confirmLabel });
+		if (!results) return false;
+		toast.success(done(affectedText(results, 'document')));
+		void describe(ref);
+		void load();
+		return true;
+	}
+
+	function dropIndex(name: string) {
+		void alter(`Drop index ${name}`, { op: 'drop-index', object: ref, name }, 'Drop index', () => `Dropped ${name}.`);
+	}
+
+	async function fieldAction(action: 'rename' | 'remove', field: string) {
+		if (action === 'rename') {
+			renamingField = field;
+			renameFieldOpen = true;
+			return;
+		}
+		const done = await alter(
+			`Remove field ${field} from every document`,
+			{ op: 'drop-column', object: ref, column: field },
+			'Remove field',
+			(affected) => `Removed ${field}${affected}.`
+		);
+		if (done) schemaVersion += 1;
+	}
+
+	async function renameField(field: string, name: string) {
+		const done = await alter(
+			`Rename field ${field} to ${name} in every document`,
+			{ op: 'rename-column', object: ref, column: field, name },
+			'Rename field',
+			(affected) => `Renamed ${field} to ${name}${affected}.`
+		);
+		if (done) schemaVersion += 1;
+	}
 	let applySummary = $state<ApplySummary | null>(null);
 	let applyError = $state<string | null>(null);
 
@@ -447,6 +511,16 @@
 					<SquareTerminalIcon />
 					Query this collection
 				</Button>
+				<ObjectActions
+					{database}
+					{info}
+					{object}
+					unit="document"
+					ontruncated={() => {
+						void describe(ref);
+						void load();
+					}}
+				/>
 			</div>
 		</div>
 
@@ -599,6 +673,13 @@
 		</Tabs.Content>
 
 		<Tabs.Content value="indexes" class="min-h-0 flex-1 overflow-auto">
+			{#if description && can.createIndex}
+				<div class="mb-2 flex">
+					<Button size="sm" variant="outline" class="ml-auto" onclick={() => (indexDialog = true)}>
+						<PlusIcon />Create index
+					</Button>
+				</div>
+			{/if}
 			{#if !description}
 				<p class="p-2 text-sm text-muted-foreground">{describeError ? '' : 'Loading…'}</p>
 			{:else if description.indexes.length === 0}
@@ -615,6 +696,7 @@
 								<th scope="col" class="px-3 py-2 font-medium">Keys</th>
 								<th scope="col" class="px-3 py-2 font-medium">Unique</th>
 								<th scope="col" class="px-3 py-2 font-medium">Definition</th>
+								{#if can.dropIndex}<th scope="col"><span class="sr-only">Actions</span></th>{/if}
 							</tr>
 						</thead>
 						<tbody>
@@ -632,6 +714,20 @@
 									<td class="px-3 py-2"
 										><code class="font-mono text-xs break-all">{index.definition ?? ''}</code></td
 									>
+									{#if can.dropIndex}
+										<td class="w-px px-2 py-1">
+											{#if index.name !== '_id_'}
+												<Button
+													size="icon-xs"
+													variant="ghost"
+													class="text-destructive"
+													aria-label="Drop index {index.name}"
+													title="Drop index"
+													onclick={() => dropIndex(index.name)}><Trash2Icon /></Button
+												>
+											{/if}
+										</td>
+									{/if}
 								</tr>
 							{/each}
 						</tbody>
@@ -648,7 +744,15 @@
 
 		<Tabs.Content value="schema" class="min-h-0 flex-1 overflow-auto">
 			{#if tab === 'schema'}
-				<SchemaPanel {database} {collection} />
+				{#key schemaVersion}
+					<SchemaPanel
+						{database}
+						{collection}
+						canRename={can.renameField}
+						canRemove={can.removeField}
+						onfieldaction={fieldAction}
+					/>
+				{/key}
 			{/if}
 		</Tabs.Content>
 	</Tabs.Root>
@@ -683,3 +787,21 @@
 </DocumentEditorDialog>
 
 <ConfirmDialog {confirmer} />
+
+{#if description}
+	<IndexDialog
+		bind:open={indexDialog}
+		object={ref}
+		fields={fieldNames}
+		onsubmit={(change) => void alter('Create index', change, 'Create index', () => 'Created the index.')}
+	/>
+{/if}
+<NameDialog
+	bind:open={renameFieldOpen}
+	title="Rename field {renamingField}"
+	description="Every document that has the field gets the new name ($rename)."
+	label="New name"
+	initial={renamingField}
+	onsubmit={(name) => void renameField(renamingField, name)}
+/>
+<ReviewDialog {review} />

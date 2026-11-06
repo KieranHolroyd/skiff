@@ -3,7 +3,7 @@
  * host goes through `Host`, so the flow is testable without root or systemd.
  */
 import { createHash } from 'node:crypto';
-import { closeSync, constants, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import {
 	LITESTREAM_VERSION,
@@ -14,9 +14,19 @@ import {
 	type PlatformConfigRequest,
 	type PlatformConfigStatus,
 } from '../../packages/contracts/src/platform-config.ts';
+import {
+	CLOUDFLARE_TOKEN_FILE,
+	applyEnvChanges,
+	controlPlaneEnvChanges,
+	edgeAgentEnvChanges,
+	platformOriginFor,
+	validateDomainSettings,
+} from '../../packages/contracts/src/platform-domains.ts';
 import { readEnvFile, writeEnvFile } from '../install/env-file.ts';
+import { CLICKHOUSE_PATHS, clickhouseInstalled, ensureClickHouse, uninstallClickHouse } from '../systemd/clickhouse.ts';
 
 export const CONTROL_PLANE = 'skiff-control-plane.service';
+export const AGENT = 'skiff-agent.service';
 export const LITESTREAM_UNIT = 'skiff-litestream.service';
 export const DRILL_SERVICE = 'skiff-restore-drill.service';
 export const DRILL_TIMER = 'skiff-restore-drill.timer';
@@ -57,6 +67,12 @@ export interface Layout {
 	litestreamConfig: string;
 	drillDir: string;
 	requestFile: string;
+	/** The optional telemetry store (D101); defaults to CLICKHOUSE_PATHS.dataDir. */
+	clickhouseDataDir?: string;
+	/** The edge agent's env (D105 domain changes rewrite it); absent on control-plane-only installs. */
+	agentEnvFile?: string;
+	/** Where a Cloudflare DNS-01 token from the dashboard is written (root:skiff 0640). */
+	cloudflareTokenFile?: string;
 }
 
 export interface RunResult {
@@ -72,6 +88,11 @@ export interface Host {
 	download(url: string): Promise<Uint8Array>;
 	/** The control plane answers on its unix socket. */
 	controlPlaneHealthy(): Promise<boolean>;
+	/**
+	 * The platform answers at `origin` through Caddy on this host (resolved to loopback, so it
+	 * does not depend on public DNS; with HTTPS the certificate must be valid).
+	 */
+	platformAnswers(origin: string): Promise<boolean>;
 	writeStatus(status: PlatformConfigStatus): void;
 	/** Files the helper writes into /etc/skiff are root:skiff 0640. */
 	chownRootSkiff(path: string): void;
@@ -208,6 +229,10 @@ export class PlatformConfigHelper {
 					return request.enabled ? await this.enableBackupsFlow() : this.disableBackupsFlow();
 				case 'restore-drill':
 					return this.startDrill();
+				case 'telemetry':
+					return request.enabled ? await this.installTelemetryFlow() : await this.removeTelemetryFlow(request.purgeData);
+				case 'domains':
+					return await this.domains(request);
 			}
 		} catch (error) {
 			return this.finish('error', (error as Error).message);
@@ -271,6 +296,97 @@ export class PlatformConfigHelper {
 		);
 	}
 
+	// ---------------------------------------------------------------- domains
+
+	/**
+	 * Change the dashboard host, the content domain and HTTPS (D105). Both env files are rewritten
+	 * together, both services restart, and the new address must answer through Caddy on this host
+	 * (with a valid certificate when HTTPS is on) or everything is put back.
+	 */
+	private async domains(request: Extract<PlatformConfigRequest, { action: 'domains' }>): Promise<PlatformConfigStatus> {
+		const { envFile } = this.layout;
+		const agentEnvFile = this.layout.agentEnvFile && existsSync(this.layout.agentEnvFile) ? this.layout.agentEnvFile : null;
+		const controlBefore = readEnvFile(envFile);
+		const tokenFile =
+			[controlBefore.get('SKIFF_CLOUDFLARE_TOKEN_FILE'), this.layout.cloudflareTokenFile ?? CLOUDFLARE_TOKEN_FILE].find(
+				(path): path is string => Boolean(path),
+			)!;
+		const tokenExists = existsSync(tokenFile);
+		const settings = validateDomainSettings(request, Boolean(request.cloudflareToken) || tokenExists);
+		if (!settings.ok) return this.finish('rejected', settings.message);
+		const next = settings.value;
+		const keepToken = request.cloudflareToken || tokenExists ? tokenFile : null;
+
+		const control = new Map(controlBefore);
+		const changed = applyEnvChanges(control, controlPlaneEnvChanges(next, keepToken));
+		const agentBefore = agentEnvFile ? readEnvFile(agentEnvFile) : null;
+		const agent = agentBefore ? new Map(agentBefore) : null;
+		if (agent) changed.push(...applyEnvChanges(agent, edgeAgentEnvChanges(next, keepToken)).map((key) => `agent:${key}`));
+		const tokenBefore = tokenExists ? readFileSync(tokenFile, 'utf8').trim() : null;
+		const tokenChanged = Boolean(request.cloudflareToken) && request.cloudflareToken !== tokenBefore;
+		if (tokenChanged) changed.push('cloudflare-token');
+		if (changed.length === 0) return this.finish('unchanged', 'Nothing changed; the domains already match.', []);
+
+		const oldOrigin = controlBefore.get('SKIFF_PLATFORM_ORIGIN') ?? '';
+		const newOrigin = platformOriginFor(next);
+		const backups: Array<[string, string]> = [[envFile, `${envFile}.previous`]];
+		if (agentEnvFile) backups.push([agentEnvFile, `${agentEnvFile}.previous`]);
+		if (tokenChanged && tokenBefore !== null) backups.push([tokenFile, `${tokenFile}.previous`]);
+		for (const [file, copy] of backups) copyFileSync(file, copy);
+		this.host.chownRootSkiff(`${envFile}.previous`);
+
+		if (tokenChanged) {
+			mkdirSync(dirname(tokenFile), { recursive: true });
+			writeFileSync(`${tokenFile}.tmp`, `${request.cloudflareToken}
+`, { mode: 0o640 });
+			renameSync(`${tokenFile}.tmp`, tokenFile);
+			// The agent (user skiff) reads it and hands it to Caddy.
+			this.host.chownRootSkiff(tokenFile);
+		}
+		writeEnvFile(envFile, control);
+		this.host.chownRootSkiff(envFile);
+		if (agentEnvFile && agent) writeEnvFile(agentEnvFile, agent);
+		this.host.log(`domains: ${oldOrigin || '(none)'} → ${newOrigin}, content ${next.contentDomain}`);
+
+		this.progress({ phase: 'restarting', message: `Moving the platform to ${newOrigin}`, changed });
+		const verified = (await this.restartControlPlane()) && (await this.restartAgentAndVerify(newOrigin, next.tls, Boolean(agentEnvFile)));
+		if (verified)
+			return this.finish(
+				'applied',
+				`Skiff is now at ${newOrigin} and sites at *.${next.contentDomain}. Sign in again at the new address.`,
+				changed,
+			);
+
+		this.host.log(`domains: ${newOrigin} did not answer; reverting`);
+		this.progress({ phase: 'restarting', message: `${newOrigin} did not answer; restoring the previous domains` });
+		for (const [file, copy] of backups) renameSync(copy, file);
+		if (tokenChanged && tokenBefore === null) rmSync(tokenFile, { force: true });
+		const recovered = (await this.restartControlPlane()) && (await this.restartAgentAndVerify(oldOrigin, oldOrigin.startsWith('https:'), Boolean(agentEnvFile)));
+		const why = next.tls
+			? `${newOrigin} did not answer with a valid certificate. Check that the DNS records point at this server and that the Cloudflare token can edit DNS for ${next.contentDomain}.`
+			: `${newOrigin} did not answer. Check that the name points at this server.`;
+		return this.finish(
+			recovered ? 'reverted' : 'error',
+			recovered
+				? `${why} The previous domains were restored.`
+				: `${why} The previous domains were restored, but ${oldOrigin} is not answering either. Check journalctl -u ${CONTROL_PLANE} -u ${AGENT}.`,
+			changed,
+		);
+	}
+
+	/** Restart the edge agent (it reconfigures Caddy) and wait for `origin` to answer through Caddy. */
+	private async restartAgentAndVerify(origin: string, tls: boolean, hasAgent: boolean): Promise<boolean> {
+		if (!hasAgent) return true; // control-plane-only install: no Caddy on this host to check
+		this.host.run(['systemctl', 'restart', AGENT], { allowFailure: true });
+		// Certificates can take a couple of minutes to issue over DNS-01.
+		const deadline = tls ? 240_000 : 90_000;
+		for (let waited = 0; waited < deadline; waited += 3_000) {
+			await this.host.sleep(3_000);
+			if (await this.host.platformAnswers(origin)) return true;
+		}
+		return false;
+	}
+
 	private async restartControlPlane(): Promise<boolean> {
 		this.host.run(['systemctl', 'restart', CONTROL_PLANE], { allowFailure: true });
 		for (let waited = 0; waited < 60_000; waited += 1_000) {
@@ -282,6 +398,59 @@ export class PlatformConfigHelper {
 			}
 		}
 		return false;
+	}
+
+	// -------------------------------------------------------------- telemetry
+
+	private clickhousePaths() {
+		const { layout } = this;
+		return {
+			envFile: layout.envFile,
+			systemdDir: layout.systemdDir,
+			installRoot: join(layout.optDir, 'clickhouse'),
+			configDir: join(dirname(layout.envFile), 'clickhouse'),
+			dataDir: layout.clickhouseDataDir ?? CLICKHOUSE_PATHS.dataDir,
+		};
+	}
+
+	/** Download, configure and start ClickHouse, then restart the control plane to pick it up. */
+	private async installTelemetryFlow(): Promise<PlatformConfigStatus> {
+		const { host } = this;
+		this.progress({ phase: 'installing', message: 'Downloading and starting ClickHouse (about 240 MB; this can take a few minutes)' });
+		const result = await ensureClickHouse({
+			...this.clickhousePaths(),
+			run: (cmd) => void host.run(cmd),
+			capture: (cmd) => {
+				const out = host.run(cmd, { allowFailure: true });
+				return out.code === 0 ? out.stdout : null;
+			},
+			sleep: (ms) => host.sleep(ms),
+			log: (message) => host.log(message),
+		});
+		if (!result.ok) return this.finish('error', `ClickHouse could not be installed: ${result.warning ?? 'it did not start'}. See journalctl -u skiff-clickhouse.`);
+		this.progress({ phase: 'restarting', message: 'Restarting the control plane to connect to ClickHouse' });
+		if (await this.restartControlPlane())
+			return this.finish('applied', 'The telemetry store is installed. Traffic charts and dashboards fill in as agents report (about a minute).', result.envAdded);
+		return this.finish('error', 'ClickHouse is running, but the control plane did not come back after the restart. Check journalctl -u skiff-control-plane.', result.envAdded);
+	}
+
+	/** Stop and remove ClickHouse (data only when asked), then restart the control plane without it. */
+	private async removeTelemetryFlow(purgeData: boolean): Promise<PlatformConfigStatus> {
+		const paths = this.clickhousePaths();
+		const envHas = [...readEnvFile(paths.envFile).keys()].some((key) => key.startsWith('SKIFF_CLICKHOUSE_'));
+		if (!clickhouseInstalled(paths.systemdDir) && !envHas && !purgeData)
+			return this.finish('unchanged', 'The telemetry store is not installed.');
+		this.progress({ phase: 'applying', message: purgeData ? 'Removing ClickHouse and its data' : 'Removing ClickHouse' });
+		const removed = uninstallClickHouse({
+			...paths,
+			purgeData,
+			run: (cmd) => void this.host.run(cmd, { allowFailure: true }),
+			log: (message) => this.host.log(message),
+		});
+		this.progress({ phase: 'restarting', message: 'Restarting the control plane' });
+		const kept = purgeData ? '' : ` Stored telemetry is kept in ${paths.dataDir} for a reinstall.`;
+		if (await this.restartControlPlane()) return this.finish('applied', `The telemetry store is removed.${kept}`, removed);
+		return this.finish('error', 'ClickHouse is removed, but the control plane did not come back after the restart. Check journalctl -u skiff-control-plane.', removed);
 	}
 
 	// ---------------------------------------------------------------- backups

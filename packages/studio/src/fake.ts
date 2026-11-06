@@ -9,12 +9,16 @@
  *   sleep <ms>                 waits, honouring abort (for cancel tests)
  *   delete from items          a write (refused in read-only sessions)
  *   fail                       an engine error
+ *
+ * `alter` supports `create-table`, `rename` and `drop` for extra (empty) tables in `public`, and
+ * `truncate` of `items`; its statements are pseudo-SQL for review.
  */
 import { databaseEngines, type DatabaseEngine } from '@skiff/contracts';
 import { bigintCell, cellToParam, datetimeCell, decimalCell, jsonCell } from './cells.ts';
 import type { RunOptions, SessionOptions, StudioPlugin, StudioSession, StudioTarget } from './driver.ts';
 import {
 	StudioError,
+	type AlterResult,
 	type ApplyResult,
 	type BrowseQuery,
 	type Cell,
@@ -22,6 +26,7 @@ import {
 	type ObjectDescription,
 	type ObjectRef,
 	type RowChange,
+	type SchemaChange,
 	type StudioCapabilities,
 	type StudioEvent,
 	type TreeNode,
@@ -64,6 +69,7 @@ const CAPABILITIES: StudioCapabilities = {
 	cancel: 'native',
 	explain: true,
 	schemas: true,
+	structure: ['create-table', 'rename', 'drop', 'truncate'],
 };
 
 export interface FakePluginOptions {
@@ -89,6 +95,8 @@ export const fakePlugin: StudioPlugin = createFakePlugin();
 
 class FakeSession implements StudioSession {
 	private readonly rows = seed();
+	/** Tables made through `alter` (always empty). */
+	private readonly extra = new Set<string>();
 	private closed = false;
 
 	constructor(private readonly options: SessionOptions) {}
@@ -114,6 +122,9 @@ class FakeSession implements StudioSession {
 					browsable: true,
 					detail: { rows: this.rows.size },
 				},
+				...[...this.extra].sort().map(
+					(name): TreeNode => ({ path: ['public', name], name, kind: 'table', hasChildren: false, browsable: false }),
+				),
 			];
 		return [];
 	}
@@ -238,6 +249,49 @@ class FakeSession implements StudioSession {
 		this.rows.clear();
 		for (const [id, row] of draft) this.rows.set(id, row);
 		return { applied: changes.length, conflicts: [] };
+	}
+
+	async alter(change: SchemaChange, options: { dryRun: boolean }): Promise<AlterResult> {
+		this.assertOpen();
+		if (this.options.readOnly) throw new StudioError('read_only', 'The session is read-only.');
+		const extraName = (path: readonly string[]): string => {
+			const [schema, name] = path;
+			if (schema !== 'public' || !name || !this.extra.has(name))
+				throw new StudioError('not_found', `No table ${path.join('.')}.`);
+			return name;
+		};
+		const taken = (name: string) => name === 'items' || name === 'item_names' || this.extra.has(name);
+		switch (change.op) {
+			case 'create-table': {
+				if (change.parent.join('.') !== 'public') throw new StudioError('bad_request', 'Tables go in public.');
+				if (taken(change.name)) throw new StudioError('conflict', `${change.name} already exists.`);
+				const statement = `CREATE TABLE public.${change.name} (${change.columns.map((c) => `${c.name} ${c.type}`).join(', ')})`;
+				if (!options.dryRun) this.extra.add(change.name);
+				return { statements: [statement], applied: !options.dryRun };
+			}
+			case 'rename': {
+				const from = extraName(change.object.path);
+				if (taken(change.name)) throw new StudioError('conflict', `${change.name} already exists.`);
+				if (!options.dryRun) {
+					this.extra.delete(from);
+					this.extra.add(change.name);
+				}
+				return { statements: [`ALTER TABLE public.${from} RENAME TO ${change.name}`], applied: !options.dryRun };
+			}
+			case 'drop': {
+				const name = extraName(change.object.path);
+				if (!options.dryRun) this.extra.delete(name);
+				return { statements: [`DROP TABLE public.${name}`], applied: !options.dryRun };
+			}
+			case 'truncate': {
+				if (this.resolve(change.object) !== 'items') throw new StudioError('unsupported', 'Views cannot be truncated.');
+				const affected = this.rows.size;
+				if (!options.dryRun) this.rows.clear();
+				return { statements: ['TRUNCATE public.items'], applied: !options.dryRun, ...(options.dryRun ? {} : { affected }) };
+			}
+			default:
+				throw new StudioError('unsupported', `The fake engine cannot ${change.op}.`);
+		}
 	}
 
 	async value(object: ObjectRef, key: Record<string, Cell>, column: string): Promise<Cell> {

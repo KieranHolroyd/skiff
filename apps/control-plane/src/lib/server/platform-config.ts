@@ -23,6 +23,7 @@ import {
 	type Principal,
 	type RestoreDrillStatus
 } from '@skiff/contracts';
+import type { DomainSettings } from '@skiff/contracts';
 import { EmailNotifier, R2ObjectStore, SmtpEmailTransport, WebhookNotifier } from '@skiff/core';
 import { localRestartPending, localSettingsEnabled, saveLocalSettings } from './local-settings';
 import { canManagePlatform } from './self-update';
@@ -120,7 +121,9 @@ type RequestBody =
 			unset: string[];
 	  }
 	| { action: 'backups'; enabled: boolean }
-	| { action: 'restore-drill' };
+	| { action: 'restore-drill' }
+	| { action: 'telemetry'; enabled: boolean; purgeData: boolean }
+	| ({ action: 'domains'; cloudflareToken?: string } & DomainSettings);
 
 /** Validate (same rules as the helper) and queue a request. Returns its id. Throws on bad input. */
 export function submitConfigRequest(principal: Principal, body: RequestBody): string {

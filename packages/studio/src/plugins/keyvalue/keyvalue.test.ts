@@ -6,6 +6,7 @@ import { decodeCursor, encodeCursor, type BrowseCursor } from './cursor.ts';
 import { flagsFor, gateCommand, parseCommandInfo } from './gate.ts';
 import { clientUrl, collapseGroup, globEscape, groupKeys, keyvaluePlugin, matchesFilters } from './index.ts';
 import { shapeReply } from './shape.ts';
+import { commandLine, quoteArg } from './structure.ts';
 import { argText, tokenize, TokenizeError } from './tokenize.ts';
 
 describe('tokenize', () => {
@@ -340,6 +341,7 @@ describe('helpers', () => {
 			cancel: 'none',
 			explain: false,
 			schemas: true,
+			structure: ['rename', 'drop'],
 		});
 	});
 
@@ -366,3 +368,13 @@ describe('helpers', () => {
 function argvOf(line: string): string[] {
 	return tokenize(line).map(argText);
 }
+
+describe('structure edits', () => {
+	test('command lines quote every argument and round-trip through the tokenizer', () => {
+		expect(commandLine('RENAMENX', ['a', 'b'])).toBe('RENAMENX "a" "b"');
+		expect(quoteArg('say "hi"\\')).toBe('"say \\"hi\\"\\\\"');
+		expect(quoteArg('a\nb\tc\u0001')).toBe('"a\\nb\\tc\\x01"');
+		for (const key of ['user:1', 'with space', 'quote"back\\slash', 'line\nbreak', 'ctl\u0007', 'é ü'])
+			expect(tokenize(commandLine('UNLINK', [key]))).toEqual(['UNLINK', key]);
+	});
+});

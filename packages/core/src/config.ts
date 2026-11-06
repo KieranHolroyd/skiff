@@ -22,9 +22,9 @@ export interface Notifier {
 
 export interface CoreConfig {
 	dataDir: string;
-	/** Platform origin, e.g. `https://control.kieran.dev`. */
+	/** Platform origin, e.g. `https://control.example.com`. */
 	platformOrigin: string;
-	/** Content domain, e.g. `kierancloud.dev`. */
+	/** Content domain, e.g. `examplecloud.com`. */
 	contentDomain: string;
 	objectStore: ObjectStore;
 	/** 32-byte master key for envelope encryption (systemd-creds in production). */

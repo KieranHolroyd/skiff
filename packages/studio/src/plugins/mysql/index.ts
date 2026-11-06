@@ -8,6 +8,7 @@
 import type { DatabaseEngine } from '@skiff/contracts';
 import type { StudioPlugin } from '../../driver.ts';
 import type { StudioCapabilities } from '../../protocol.ts';
+import { MYSQL_STRUCTURE } from './ddl.ts';
 import { MysqlSession } from './session.ts';
 
 export const mysqlPlugin: StudioPlugin = {
@@ -22,6 +23,7 @@ export const mysqlPlugin: StudioPlugin = {
 			cancel: 'kill-connection',
 			explain: true,
 			schemas: false,
+			structure: [...MYSQL_STRUCTURE],
 		};
 	},
 	connect: (target, options) => MysqlSession.open(target, options),

@@ -52,7 +52,7 @@
 
 - **Yours.** One Debian/Ubuntu VPS, your domain, your object store. No per-seat pricing, no
   vendor lock-in, and if the control plane goes down, your sites keep serving.
-- **Small.** Bun, SQLite, DuckDB and Caddy. There's no Kubernetes, no Docker requirement and no
+- **Small.** Bun, SQLite and Caddy (plus an optional small ClickHouse for telemetry). There's no Kubernetes, no Docker requirement and no
   external database, so the whole platform fits on a small VPS.
 - **Immutable by default.** Every deploy is a content-addressed release with its own preview URL.
   Promote and rollback only move a pointer and swap a symlink, so they finish almost instantly
@@ -73,12 +73,12 @@
 |---|---|
 | **Deploy** | Inline uploads (≤ 5 MB) or presigned R2 uploads; `_redirects`, `_headers` and `skiff.json` compiled to Caddy routes; precompressed `br`/`gzip`; SPA mode; preview URLs; promote, rollback and retention GC |
 | **Access** | Public, password-protected or platform-login sites via `forward_auth`; share links with limits and instant revocation |
-| **Accounts** | Passkeys, GitHub, magic links, TOTP 2FA (owners must prove a passkey or TOTP each session), orgs, member invites, roles, API keys |
+| **Accounts** | Email + password, passkeys, GitHub, magic links, TOTP 2FA (owners must prove a passkey or TOTP each session), first-run setup wizard, orgs, member invites, roles, API keys |
 | **Fleet** | Node agents with desired-state reconciliation, an on-disk release cache and heartbeats; wildcard TLS via DNS-01; a branded 503 with `Retry-After` when a node is down |
 | **Observe** | Dashboard for fleet, projects, deployments, traffic, errors, logs and the audit log; `/metrics` on the control plane and agents; alerts for offline nodes, disk, certs, backups and 5xx spikes after a promote |
 | **Recover** | Litestream → R2, scripted restore, monthly drill, age-encrypted recovery kit, atomic release switch with automatic rollback |
 | **Managed services** | Postgres 16/17 databases and RustFS S3-compatible object storage as tier-3 containers: attachments with scoped credentials, Railway-style env suggestions from `.env`/code, one-click linking, usage charts, soft delete and restore, human-only credential reveal, scheduled/verified backups and restore-to-new, PgBouncer pooling, an extension allowlist with slow queries, a native database studio with a data grid and query editor for every engine (read-only by default, write mode with `database:update`), and staged credential rotation ([DATABASES.md](./docs/DATABASES.md), [OBJECT-STORAGE.md](./docs/OBJECT-STORAGE.md)) |
-| **Assistant** | Optional in-dashboard chat over the same MCP tools, a team of four specialist agents, click-to-confirm destructive actions, and a guided tour that navigates and spotlights elements ([ASSISTANT.md](./docs/ASSISTANT.md)) |
+| **Assistant** | Optional in-dashboard chat over the same MCP tools, one agent with every tool, click-to-confirm destructive actions, and a guided tour that navigates and spotlights elements ([ASSISTANT.md](./docs/ASSISTANT.md)) |
 | **v2 preview** | Sandboxed systemd process apps, Podman Quadlet containers, git builds on a builder node, custom domains with TXT verification, named environments, per-node workload budgets |
 
 ## Quick start
@@ -152,7 +152,7 @@ as `mcp.<tool>`, including calls denied for missing scope.
 If you want help *inside* the dashboard, an owner can point Skiff at an OpenAI-compatible endpoint
 (OpenAI, OpenRouter, vLLM, LM Studio or a local Ollama; OpenRouter gets a searchable, tool-capable model picker) in **Settings → Assistant**. The chat panel
 uses the same MCP tool catalog, so it can answer questions about the current page and the whole
-platform, with four specialist agents and a lead that routes and synthesises. Its `guide_user` tool
+platform in one pass. Its `guide_user` tool
 can move you to the right page and spotlight the element it is talking about.
 
 Nothing is enabled until it is configured. Destructive calls are held for an explicit Confirm in
@@ -170,7 +170,7 @@ Internet ──► Caddy (TLS, wildcard cert via DNS-01)
                 ▼
           control plane (Bun, unix socket behind Caddy)
             dashboard · REST · MCP (OAuth 2.1) · Better Auth
-            SQLite (state) · DuckDB (telemetry) · R2 (artifacts)
+            SQLite (state) · ClickHouse (telemetry) · R2 (artifacts)
                 ▲
                 │ desired-state long-poll + heartbeats (node token)
           node agent ──► Caddy admin API (unix socket only)
@@ -180,7 +180,7 @@ Skiff is a Bun monorepo:
 
 | Package | What it is |
 |---|---|
-| [`apps/control-plane`](apps/control-plane) | SvelteKit app: dashboard, REST API, MCP server, auth, SQLite + DuckDB |
+| [`apps/control-plane`](apps/control-plane) | SvelteKit app: dashboard, REST API, MCP server, auth, SQLite + ClickHouse |
 | [`apps/agent`](apps/agent) | Node agent: desired-state reconciliation, Caddy admin API, release cache, `forward_auth` |
 | [`apps/cli`](apps/cli) | `skif` / `skiff`: login, deploy, status, promote, rollback, logs ([npm](https://www.npmjs.com/package/@skiffy/skiff)) |
 | [`apps/helper`](apps/helper) | Privileged runtime helper: renders systemd units and drives workloads over a root-only socket |
@@ -231,12 +231,18 @@ SKIFF_ASSISTANT_API_KEY=sk-...
 
 ## Development
 
-You need Bun ≥ 1.4, a Caddy binary for the agent, and optionally Docker or R2.
+You need Bun ≥ 1.4, a Caddy binary for the agent, optionally ClickHouse for telemetry and
+dashboards (`brew install --cask clickhouse`), and optionally Docker or R2.
 
 ```sh
 bun install
 
-# control plane, with dev password sign-in
+# telemetry store on 127.0.0.1:18123 (the dev control plane finds it without env vars;
+# telemetry tests use it too). Stop with --stop.
+bun run dev:clickhouse --background
+
+# control plane, with dev password sign-in (without the flag, a fresh .data opens the
+# setup wizard: the server logs the /setup?token=… link on start)
 cd apps/control-plane
 SKIFF_DEV_PASSWORD_LOGIN=1 SKIFF_DATA_DIR=.data bun run dev
 

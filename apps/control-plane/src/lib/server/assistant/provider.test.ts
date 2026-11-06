@@ -5,9 +5,7 @@ import { testProvider, type AssistantRuntimeConfig } from './config';
 const config: AssistantRuntimeConfig = {
 	provider: 'openai-compatible',
 	baseUrl: '',
-	model: 'test-model',
-	routerModel: 'test-router',
-	maxAgents: 2
+	model: 'test-model'
 };
 
 function sse(events: string[]): Response {

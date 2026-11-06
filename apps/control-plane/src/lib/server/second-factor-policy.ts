@@ -47,7 +47,8 @@ export function secondFactorState(input: {
  * Better Auth (gated endpoint-by-endpoint by `authPathAllowedBeforeSecondFactor`), sign-in, assets,
  * and bearer-authenticated machine endpoints that never use the session.
  */
-const EXEMPT_EXACT = new Set(['/two-factor', '/login', '/favicon.ico', '/favicon.svg', '/robots.txt', '/mcp']);
+// `/setup` walks a brand-new owner through enrolment itself (D102).
+const EXEMPT_EXACT = new Set(['/two-factor', '/login', '/setup', '/favicon.ico', '/favicon.svg', '/robots.txt', '/mcp']);
 const EXEMPT_PREFIXES = ['/two-factor/', '/api/auth/', '/_app/', '/.well-known/', '/api/agent/', '/api/objects/'];
 
 export function isExemptBeforeSecondFactor(pathname: string): boolean {

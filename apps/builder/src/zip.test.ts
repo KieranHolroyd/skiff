@@ -43,4 +43,24 @@ describe('zipDirectory', () => {
 	test('rejects a missing directory', async () => {
 		await expect(zipDirectory(join(root, 'does-not-exist'))).rejects.toThrow(/not a directory/);
 	});
+
+	test('never ships .git (at any depth) or excluded paths such as the build HOME', async () => {
+		const dir = fixture();
+		mkdirSync(join(dir, '.git'), { recursive: true });
+		writeFileSync(join(dir, '.git', 'config'), '[remote "origin"]\n\turl = https://x-access-token:secret@github.com/a/b');
+		mkdirSync(join(dir, 'vendor', 'lib', '.git'), { recursive: true });
+		writeFileSync(join(dir, 'vendor', 'lib', '.git', 'HEAD'), 'ref: refs/heads/main');
+		writeFileSync(join(dir, 'vendor', 'lib', 'index.js'), 'x');
+		mkdirSync(join(dir, '.home', '.cache'), { recursive: true });
+		writeFileSync(join(dir, '.home', '.cache', 'token'), 'secret');
+		mkdirSync(join(dir, '.well-known'), { recursive: true });
+		writeFileSync(join(dir, '.well-known', 'security.txt'), 'Contact: x');
+		const result = await zipDirectory(dir, { exclude: [join(dir, '.home')] });
+		expect(Object.keys(unzipSync(result.zip)).sort()).toEqual([
+			'.well-known/security.txt',
+			'assets/app.js',
+			'index.html',
+			'vendor/lib/index.js',
+		]);
+	});
 });

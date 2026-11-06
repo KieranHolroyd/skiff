@@ -35,6 +35,28 @@ function formatLimit(bytes: number): string {
 	return bytes >= 1024 * 1024 ? `${Math.floor(bytes / 1024 / 1024)} MB` : `${bytes} bytes`;
 }
 
+/**
+ * Response headers for a redeemed GET share link. These links are served from the platform origin,
+ * and the stored content type is whatever the uploader chose. An uploaded HTML or SVG file must
+ * never render there as a document: it would run with the viewer's dashboard session. So every
+ * redemption is a sandboxed attachment, and only a fixed set of upstream headers is passed on.
+ */
+export function shareDownloadHeaders(key: string, upstream: Headers): Headers {
+	const headers = new Headers();
+	for (const name of ['content-type', 'content-length', 'etag', 'last-modified']) {
+		const value = upstream.get(name);
+		if (value) headers.set(name, value);
+	}
+	if (!headers.has('content-type')) headers.set('content-type', 'application/octet-stream');
+	const filename = key.split('/').pop() || 'download';
+	const ascii = filename.replace(/[^\x20-\x7e]|["\\]/g, '_');
+	headers.set('content-disposition', `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+	headers.set('content-security-policy', "sandbox; default-src 'none'; frame-ancestors 'none'");
+	headers.set('x-content-type-options', 'nosniff');
+	headers.set('cache-control', 'private, no-store');
+	return headers;
+}
+
 export class StorageObjectsService {
 	constructor(private readonly ctx: CoreContext) {}
 
@@ -220,7 +242,8 @@ export class StorageObjectsService {
 
 	/** Presigned browser URL; only public instances have a reachable endpoint (D64). */
 	async presign(principal: Principal, name: string, bucket: string, input: StoragePresign): Promise<{ url: string; method: 'GET' | 'PUT'; expiresIn: number }> {
-		requirePermission(principal, 'storage:read');
+		// A PUT URL is signed with the root key and lets its holder write: it needs write permission.
+		requirePermission(principal, input.method === 'PUT' ? 'storage:update' : 'storage:read');
 		const row = this.ctx.storage.requireRow(principal, name);
 		this.bucket(row, bucket);
 		if (!row.public || !row.publicHost)
@@ -359,10 +382,7 @@ export class StorageObjectsService {
 		const client = this.client(row);
 		if (method === 'GET') {
 			const response = await client.getObject(link.bucket, link.key);
-			const headers = new Headers(response.headers);
-			headers.set('x-content-type-options', 'nosniff');
-			headers.set('cache-control', 'private, no-store');
-			return new Response(response.body, { status: response.status, headers });
+			return new Response(response.body, { status: response.status, headers: shareDownloadHeaders(link.key, response.headers) });
 		}
 		const declared = Number(request.headers.get('content-length') ?? '');
 		const max = this.limit();

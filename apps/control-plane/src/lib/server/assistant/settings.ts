@@ -1,56 +1,37 @@
-import {
-	ASSISTANT_AGENTS,
-	type AssistantAgentDetail,
-	type AssistantAgentId,
-	type AssistantStatus,
-	type Principal
-} from '@skiff/contracts';
+import type { AssistantAgentDetail, Principal } from '@skiff/contracts';
 import { core } from '../core';
 import { sqlite } from '../db';
-import { AGENTS, type AgentDefinition } from './agents';
-import { assistantStatus } from './config';
+import { ASSISTANT_SYSTEM } from './agents';
 
 /**
- * Owner-editable agent details (Settings → Assistant → Agents). Provider credentials stay in the
- * environment (write-only, managed by `skiff-platform-config`); prompts, labels and tool allowlists
- * are ordinary settings and live in the `settings` table under one JSON key.
+ * Owner-editable assistant details (Settings → Assistant → Instructions and tools). Provider
+ * credentials stay in the environment (write-only, managed by `skiff-platform-config`); the prompt,
+ * model override and tool allowlist are ordinary settings in the `settings` table under one key.
  *
  * Reads are lenient: a malformed row falls back to the built-in defaults rather than breaking the
  * dashboard. Writes are strict and audited.
  */
 
-const SETTINGS_KEY = 'assistant.agents.v1';
-const MAX_LABEL = 40;
-const MAX_BRIEF = 240;
-const MAX_INSTRUCTIONS = 8_000;
-const MAX_TOOLS = 100;
+const SETTINGS_KEY = 'assistant.agent.v1';
+const MAX_INSTRUCTIONS = 12_000;
+const MAX_TOOLS = 200;
 const MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/;
 const TOOL = /^[a-z][a-z0-9_]{0,60}$/;
-const AGENT_IDS = new Set<string>(ASSISTANT_AGENTS.map((agent) => agent.id));
 
 export interface AgentOverride {
-	enabled: boolean;
-	label: string;
-	brief: string;
 	system: string;
 	model: string | null;
-	tools: string[];
+	/** `null` offers every tool the caller may use. */
+	tools: string[] | null;
 }
-
-type AgentOverrides = Partial<Record<AssistantAgentId, AgentOverride>>;
 
 /** The merged shape the orchestrator runs. */
-export interface EffectiveAgent extends AgentDefinition {
-	label: string;
-	enabled: boolean;
+export interface EffectiveAgent {
+	system: string;
 	/** `null` uses the platform model. */
 	model: string | null;
-}
-
-function oneLine(value: string, max: number): string | null {
-	const trimmed = value.trim();
-	if (!trimmed || trimmed.length > max || /[\r\n\0]/.test(trimmed)) return null;
-	return trimmed;
+	/** `null` offers every tool the caller may use. */
+	tools: string[] | null;
 }
 
 function cleanTools(value: unknown): string[] | null {
@@ -66,125 +47,73 @@ function cleanTools(value: unknown): string[] | null {
 function cleanOverride(value: unknown): AgentOverride | null {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
 	const input = value as Record<string, unknown>;
-	const label = typeof input.label === 'string' ? oneLine(input.label, MAX_LABEL) : null;
-	const brief = typeof input.brief === 'string' ? oneLine(input.brief, MAX_BRIEF) : null;
 	const system =
-		typeof input.system === 'string' && input.system.trim().length <= MAX_INSTRUCTIONS
+		typeof input.system === 'string' &&
+		input.system.trim() &&
+		input.system.trim().length <= MAX_INSTRUCTIONS
 			? input.system.trim()
 			: null;
-	if (!label || !brief || !system || typeof input.enabled !== 'boolean') return null;
-	const tools = cleanTools(input.tools);
-	if (!tools) return null;
+	if (!system) return null;
+	let tools: string[] | null = null;
+	if (input.tools !== null && input.tools !== undefined) {
+		tools = cleanTools(input.tools);
+		if (!tools) return null;
+	}
 	let model: string | null = null;
 	if (typeof input.model === 'string' && input.model.trim()) {
 		if (!MODEL.test(input.model.trim())) return null;
 		model = input.model.trim();
 	}
-	return { enabled: input.enabled, label, brief, system, model, tools };
+	return { system, model, tools };
 }
 
-function readOverrides(): AgentOverrides {
+function readOverride(): AgentOverride | null {
 	try {
 		const row = sqlite
 			.query<{ value: string }, [string]>('SELECT value FROM settings WHERE key = ?')
 			.get(SETTINGS_KEY);
-		if (!row?.value) return {};
-		const raw = JSON.parse(row.value) as unknown;
-		if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
-		const overrides: AgentOverrides = {};
-		for (const [id, value] of Object.entries(raw)) {
-			if (!AGENT_IDS.has(id)) continue;
-			const clean = cleanOverride(value);
-			if (clean) overrides[id as AssistantAgentId] = clean;
-		}
-		return overrides;
+		if (!row?.value) return null;
+		return cleanOverride(JSON.parse(row.value) as unknown);
 	} catch {
-		return {};
+		return null;
 	}
 }
 
-function writeOverrides(
-	principal: Principal,
-	overrides: AgentOverrides,
-	auditAction: string
-): void {
-	sqlite.run(
-		`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-		 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-		[SETTINGS_KEY, JSON.stringify(overrides), Date.now()]
-	);
+function audit(principal: Principal, action: string): void {
 	try {
-		core.audit.record({
-			principal,
-			action: auditAction,
-			resource: 'assistant',
-			args: { agents: Object.keys(overrides).sort() },
-			result: 'ok'
-		});
+		core.audit.record({ principal, action, resource: 'assistant', args: {}, result: 'ok' });
 	} catch (error) {
 		console.error('[assistant] audit failed:', error);
 	}
 }
 
-/** Merge built-in defaults with the owner's overrides. */
-export function effectiveAgentList(): EffectiveAgent[] {
-	const overrides = readOverrides();
-	return ASSISTANT_AGENTS.map((meta) => {
-		const base = AGENTS[meta.id];
-		const override = overrides[meta.id];
-		return {
-			...base,
-			label: override?.label ?? meta.label,
-			brief: override?.brief ?? base.brief,
-			system: override?.system ?? base.system,
-			tools: override?.tools ?? base.tools,
-			enabled: override?.enabled ?? true,
-			model: override?.model ?? null
-		};
-	});
-}
-
-export function effectiveAgents(): Record<AssistantAgentId, EffectiveAgent> {
-	const out = {} as Record<AssistantAgentId, EffectiveAgent>;
-	for (const agent of effectiveAgentList()) out[agent.id] = agent;
-	return out;
-}
-
-/** The dashboard layout and status endpoint need the owner-edited labels too. */
-export function assistantStatusWithAgents(): AssistantStatus {
+/** Built-in defaults merged with the owner's override. */
+export function effectiveAgent(): EffectiveAgent {
+	const override = readOverride();
 	return {
-		...assistantStatus(),
-		agents: effectiveAgentList().map((agent) => ({
-			id: agent.id,
-			label: agent.label,
-			description: agent.brief,
-			enabled: agent.enabled
-		}))
+		system: override?.system ?? ASSISTANT_SYSTEM,
+		model: override?.model ?? null,
+		tools: override?.tools ?? null
 	};
 }
 
-/** Owner view of one agent, including whether it still matches the defaults. */
-export function agentDetails(): AssistantAgentDetail[] {
-	const overrides = readOverrides();
-	return effectiveAgentList().map((agent) => ({
-		id: agent.id,
-		label: agent.label,
-		description: agent.brief,
+/** Owner view of the assistant, including whether it still matches the defaults. */
+export function agentDetail(): AssistantAgentDetail {
+	const override = readOverride();
+	const agent = effectiveAgent();
+	return {
 		instructions: agent.system,
-		enabled: agent.enabled,
 		model: agent.model,
 		tools: agent.tools,
-		customized: Boolean(overrides[agent.id])
-	}));
+		customized: override !== null
+	};
 }
 
 export type AgentDetailInput = {
-	enabled: boolean;
-	label: string;
-	brief: string;
 	system: string;
 	model: string;
-	tools: string[];
+	/** `null` offers every tool. */
+	tools: string[] | null;
 };
 
 /** Strict validation used by the save action. */
@@ -192,43 +121,37 @@ export function validateAgentDetail(
 	input: AgentDetailInput,
 	allowedTools: ReadonlySet<string>
 ): { ok: true; value: AgentOverride } | { ok: false; error: string } {
-	const label = oneLine(input.label, MAX_LABEL);
-	if (!label) return { ok: false, error: `Name must be 1–${MAX_LABEL} characters on one line.` };
-	const brief = oneLine(input.brief, MAX_BRIEF);
-	if (!brief)
-		return { ok: false, error: `Description must be 1–${MAX_BRIEF} characters on one line.` };
 	const system = input.system.trim();
 	if (!system || system.length > MAX_INSTRUCTIONS)
 		return { ok: false, error: `Instructions must be 1–${MAX_INSTRUCTIONS} characters.` };
 	const model = input.model.trim();
 	if (model && !MODEL.test(model))
 		return { ok: false, error: 'Model must be a model id (letters, digits, . _ : / -).' };
-	const tools = cleanTools(input.tools);
-	if (!tools) return { ok: false, error: `Choose at most ${MAX_TOOLS} valid tools.` };
-	const unknown = tools.filter((tool) => !allowedTools.has(tool));
-	if (unknown.length)
-		return {
-			ok: false,
-			error: `Unknown tool${unknown.length === 1 ? '' : 's'}: ${unknown.join(', ')}.`
-		};
-	return {
-		ok: true,
-		value: { enabled: input.enabled, label, brief, system, model: model || null, tools }
-	};
+	let tools: string[] | null = null;
+	if (input.tools !== null) {
+		tools = cleanTools(input.tools);
+		if (!tools) return { ok: false, error: `Choose at most ${MAX_TOOLS} valid tools.` };
+		if (tools.length === 0) return { ok: false, error: 'Choose at least one tool.' };
+		const unknown = tools.filter((tool) => !allowedTools.has(tool));
+		if (unknown.length)
+			return {
+				ok: false,
+				error: `Unknown tool${unknown.length === 1 ? '' : 's'}: ${unknown.join(', ')}.`
+			};
+	}
+	return { ok: true, value: { system, model: model || null, tools } };
 }
 
-export function saveAgentDetail(
-	principal: Principal,
-	id: AssistantAgentId,
-	value: AgentOverride
-): void {
-	const overrides = readOverrides();
-	overrides[id] = value;
-	writeOverrides(principal, overrides, 'platform.assistantAgent');
+export function saveAgentDetail(principal: Principal, value: AgentOverride): void {
+	sqlite.run(
+		`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+		[SETTINGS_KEY, JSON.stringify(value), Date.now()]
+	);
+	audit(principal, 'platform.assistantAgent');
 }
 
-export function resetAgentDetail(principal: Principal, id: AssistantAgentId): void {
-	const overrides = readOverrides();
-	delete overrides[id];
-	writeOverrides(principal, overrides, 'platform.assistantAgentReset');
+export function resetAgentDetail(principal: Principal): void {
+	sqlite.run('DELETE FROM settings WHERE key = ?', [SETTINGS_KEY]);
+	audit(principal, 'platform.assistantAgentReset');
 }

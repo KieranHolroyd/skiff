@@ -261,7 +261,7 @@ export const heartbeatSchema = z.object({
 });
 export type Heartbeat = z.infer<typeof heartbeatSchema>;
 
-/** Pre-aggregated 1-minute access buckets; raw requests never reach DuckDB (DESIGN §8). */
+/** Pre-aggregated 1-minute access buckets; raw requests never reach the telemetry store (DESIGN §8). */
 export const metricBucketSchema = z.object({
 	host: z.string(),
 	projectId: z.string().nullable().optional(),

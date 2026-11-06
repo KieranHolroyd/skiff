@@ -239,8 +239,12 @@ every change; the node's agent converges it over the S3 and RustFS admin APIs an
   re-asserts all buckets, so out-of-band edits are repaired.
 - **Share links** are signed server-side with the instance root key. Public GET/PUT links go
   straight to S3; a limit or a private instance goes through `/share/storage/<token>`, which
-  enforces the GET download count atomically. Only a hash of the token is stored; a key is never
-  returned. All creation and configuration changes are audited.
+  enforces the GET download count atomically. That route is on the platform origin, so it always
+  answers as a sandboxed attachment (`content-disposition: attachment`, CSP `sandbox`), and only
+  the content type, length, etag and last-modified headers pass through. An uploaded HTML or SVG
+  file never renders as a document next to the dashboard session. Only a hash of the token is
+  stored; a key is never returned. All creation and configuration changes are audited.
+  Presigning a PUT URL needs `storage:update`, the same permission as minting a PUT share link.
 
 New bucket-configuration and share mutations are gated by `SKIFF_FEATURE_OBJECT_BROWSER`.
 

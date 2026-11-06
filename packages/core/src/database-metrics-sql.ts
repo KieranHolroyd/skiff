@@ -1,9 +1,10 @@
 /**
- * DuckDB SQL for managed-database time series (docs/DATABASES.md §5, D57). Kept apart from the
- * traffic SQL in `telemetry.ts`; the store owns connections and serialization.
+ * ClickHouse SQL for managed-database time series (docs/DATABASES.md §5, D57, D101). Kept apart
+ * from the traffic SQL in `telemetry.ts`; the store owns the client and serialization.
  *
- * Gauges are DOUBLE so hourly rows can hold averages (`up` becomes availability); counters are
- * per-minute deltas and sum cleanly.
+ * Gauges are Float64 so hourly rows can hold averages (`up` becomes availability); counters are
+ * per-minute deltas and sum cleanly. Tables are ReplacingMergeTree keyed by (database_id, bucket):
+ * a re-sent minute replaces the earlier row once read with `final = 1`.
  */
 
 export const DB_GAUGES = [
@@ -37,90 +38,97 @@ export const DB_COUNTERS = [
 ] as const;
 
 /** Size and memory take the max over a bucket; other gauges average. */
-const MAX_GAUGES = new Set(['size_bytes', 'memory_bytes', 'max_connections']);
+export const DB_MAX_GAUGES = new Set<string>(['size_bytes', 'memory_bytes', 'max_connections']);
 
 export const DB_COLUMNS = ['database_id', 'bucket', ...DB_GAUGES.map(([c]) => c), ...DB_COUNTERS.map(([c]) => c)];
 
-export const dbMetricsTableSql = (table: string): string => `
-	CREATE TABLE IF NOT EXISTS ${table} (
-		database_id VARCHAR NOT NULL,
-		bucket TIMESTAMPTZ NOT NULL,
-		${DB_GAUGES.map(([c]) => `${c} DOUBLE NOT NULL`).join(',\n\t\t')},
-		${DB_COUNTERS.map(([c]) => `${c} UBIGINT NOT NULL`).join(',\n\t\t')}
-	)`;
+const GAUGE_COMMENTS: Record<string, string> = {
+	up: '1 when the database answered its sample (hourly: availability 0-1)',
+	size_bytes: 'Database size on disk, bytes',
+	connections_active: 'Active backend connections',
+	connections_idle: 'Idle backend connections',
+	connections_total: 'Open backend connections',
+	max_connections: 'Configured max_connections',
+	memory_bytes: 'Container memory use, bytes',
+	pooler_up: '1 when the PgBouncer admin console answered',
+	pool_active: 'PgBouncer connections in use',
+	pool_idle: 'Idle PgBouncer server connections',
+	pool_waiting: 'Clients waiting for a PgBouncer server connection',
+	pool_saturation: 'Share of max_client_conn in use (0-1)',
+	pool_avg_wait_ms: 'Average PgBouncer wait, milliseconds',
+};
 
-/** Additive column upgrades for databases created by an earlier release. */
-export function dbMetricsColumnUpgrades(table: string): string[] {
-	return DB_GAUGES.map(
-		([column]) => `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${column} DOUBLE DEFAULT 0`,
-	);
-}
+export const dbMetricsTableSql = (database: string, table: string, ttl: string, partition: string): string => `
+	CREATE TABLE IF NOT EXISTS ${database}.${table} (
+		database_id LowCardinality(String) COMMENT 'Managed database id (dbs_...)',
+		bucket DateTime('UTC') COMMENT 'Bucket start (UTC)',
+		${DB_GAUGES.map(([c]) => `${c} Float64 COMMENT '${GAUGE_COMMENTS[c] ?? ''}'`).join(',\n\t\t')},
+		${DB_COUNTERS.map(([c]) => `${c} UInt64 COMMENT 'pg_stat_database ${c} delta in the bucket'`).join(',\n\t\t')},
+		version UInt64 COMMENT 'Ingest time (ms); the newest row per key wins'
+	) ENGINE = ReplacingMergeTree(version)
+	PARTITION BY ${partition}
+	ORDER BY (database_id, bucket)
+	TTL bucket + ${ttl}
+	COMMENT 'Managed database samples'`;
 
 /** Aggregates for one bucket of rows, used by the rollup and by hourly queries. */
 export function dbAggregateSelect(): string {
-	const gauges = DB_GAUGES.map(([c]) => (MAX_GAUGES.has(c) ? `max(${c}) AS ${c}` : `avg(${c}) AS ${c}`));
-	const counters = DB_COUNTERS.map(([c]) => `CAST(sum(${c}) AS UBIGINT) AS ${c}`);
+	const gauges = DB_GAUGES.map(([c]) => (DB_MAX_GAUGES.has(c) ? `max(${c}) AS ${c}` : `avg(${c}) AS ${c}`));
+	const counters = DB_COUNTERS.map(([c]) => `sum(${c}) AS ${c}`);
 	return [...gauges, ...counters].join(', ');
 }
 
-export const DB_ROLLUP_DELETE_SQL = `
-	DELETE FROM db_metrics_1h USING (
-		SELECT DISTINCT database_id, date_trunc('hour', bucket) AS bucket
-		FROM db_metrics_1m
-		WHERE bucket >= CAST(? AS TIMESTAMPTZ)
-			AND bucket < date_trunc('hour', CAST(? AS TIMESTAMPTZ))
-	) s
-	WHERE db_metrics_1h.database_id = s.database_id AND db_metrics_1h.bucket = s.bucket`;
+/** Recompute closed hours (`{from}` ≤ bucket < hour of `{to}`) into db_metrics_1h. */
+export const dbRollupSql = (database: string): string => `
+	INSERT INTO ${database}.db_metrics_1h (${DB_COLUMNS.join(', ')}, version)
+	SELECT database_id, toStartOfHour(bucket) AS hour, ${dbAggregateSelect()}, {version:UInt64}
+	FROM ${database}.db_metrics_1m
+	WHERE bucket >= {from:DateTime('UTC')} AND bucket < toStartOfHour({to:DateTime('UTC')})
+	GROUP BY database_id, hour`;
 
-export const DB_ROLLUP_INSERT_SQL = `
-	INSERT INTO db_metrics_1h (${DB_COLUMNS.join(', ')})
-	SELECT database_id, date_trunc('hour', bucket) AS bucket, ${dbAggregateSelect()}
-	FROM db_metrics_1m
-	WHERE bucket >= CAST(? AS TIMESTAMPTZ)
-		AND bucket < date_trunc('hour', CAST(? AS TIMESTAMPTZ))
-	GROUP BY database_id, date_trunc('hour', bucket)`;
+const ALL_DB_COLUMNS = [...DB_GAUGES, ...DB_COUNTERS].map(([c]) => c);
 
 /** Minute or hour series for one database; hours not rolled up yet fall back to minute rows. */
-export function dbSeriesSql(interval: '1m' | '1h'): string {
+export function dbSeriesSql(database: string, interval: '1m' | '1h'): string {
 	if (interval === '1m')
 		return `
-			SELECT epoch_ms(bucket) AS bucket_ms, ${[...DB_GAUGES, ...DB_COUNTERS].map(([c]) => `CAST(${c} AS DOUBLE) AS ${c}`).join(', ')}
-			FROM db_metrics_1m
-			WHERE database_id = ? AND bucket >= CAST(? AS TIMESTAMPTZ) AND bucket <= CAST(? AS TIMESTAMPTZ)
+			SELECT toUnixTimestamp(bucket) * 1000 AS bucket_ms, ${ALL_DB_COLUMNS.map((c) => `toFloat64(${c}) AS ${c}`).join(', ')}
+			FROM ${database}.db_metrics_1m
+			WHERE database_id = {id:String} AND bucket >= {from:DateTime('UTC')} AND bucket <= {to:DateTime('UTC')}
 			ORDER BY bucket ASC`;
 	return `
-		SELECT epoch_ms(date_trunc('hour', bucket)) AS bucket_ms,
-			${dbAggregateSelect().replace(/AS UBIGINT/g, 'AS DOUBLE')}
+		SELECT toUnixTimestamp(toStartOfHour(bucket)) * 1000 AS bucket_ms,
+			${dbAggregateSelect()}
 		FROM (
-			SELECT * FROM db_metrics_1h
-			WHERE database_id = ? AND bucket >= date_trunc('hour', CAST(? AS TIMESTAMPTZ)) AND bucket <= CAST(? AS TIMESTAMPTZ)
+			SELECT ${['bucket', ...ALL_DB_COLUMNS].join(', ')} FROM ${database}.db_metrics_1h
+			WHERE database_id = {id:String} AND bucket >= toStartOfHour({from:DateTime('UTC')}) AND bucket <= {to:DateTime('UTC')}
 			UNION ALL
-			SELECT * FROM db_metrics_1m m
-			WHERE database_id = ? AND bucket >= CAST(? AS TIMESTAMPTZ) AND bucket <= CAST(? AS TIMESTAMPTZ)
-				AND NOT EXISTS (
-					SELECT 1 FROM db_metrics_1h h
-					WHERE h.database_id = m.database_id AND h.bucket = date_trunc('hour', m.bucket)
+			SELECT ${['bucket', ...ALL_DB_COLUMNS].join(', ')} FROM ${database}.db_metrics_1m
+			WHERE database_id = {id:String} AND bucket >= {from:DateTime('UTC')} AND bucket <= {to:DateTime('UTC')}
+				AND (database_id, toStartOfHour(bucket)) NOT IN (
+					SELECT database_id, bucket FROM ${database}.db_metrics_1h
+					WHERE database_id = {id:String} AND bucket >= toStartOfHour({from:DateTime('UTC')}) AND bucket <= {to:DateTime('UTC')}
 				)
 		)
-		GROUP BY date_trunc('hour', bucket)
+		GROUP BY bucket_ms
 		ORDER BY bucket_ms ASC`;
 }
 
 /** Newest minute sample per database since a cutoff (alerts, `/metrics`). */
-export const DB_LATEST_SQL = `
+export const dbLatestSql = (database: string): string => `
 	SELECT database_id,
-		arg_max(up, bucket) AS up,
-		arg_max(size_bytes, bucket) AS size_bytes,
-		arg_max(connections_total, bucket) AS connections_total,
-		arg_max(max_connections, bucket) AS max_connections,
-		arg_max(memory_bytes, bucket) AS memory_bytes,
-		arg_max(pooler_up, bucket) AS pooler_up,
-		arg_max(pool_active, bucket) AS pool_active,
-		arg_max(pool_idle, bucket) AS pool_idle,
-		arg_max(pool_waiting, bucket) AS pool_waiting,
-		arg_max(pool_saturation, bucket) AS pool_saturation,
-		arg_max(pool_avg_wait_ms, bucket) AS pool_avg_wait_ms
-	FROM db_metrics_1m
-	WHERE bucket >= CAST(? AS TIMESTAMPTZ)
+		argMax(up, bucket) AS up,
+		argMax(size_bytes, bucket) AS size_bytes,
+		argMax(connections_total, bucket) AS connections_total,
+		argMax(max_connections, bucket) AS max_connections,
+		argMax(memory_bytes, bucket) AS memory_bytes,
+		argMax(pooler_up, bucket) AS pooler_up,
+		argMax(pool_active, bucket) AS pool_active,
+		argMax(pool_idle, bucket) AS pool_idle,
+		argMax(pool_waiting, bucket) AS pool_waiting,
+		argMax(pool_saturation, bucket) AS pool_saturation,
+		argMax(pool_avg_wait_ms, bucket) AS pool_avg_wait_ms
+	FROM ${database}.db_metrics_1m
+	WHERE bucket >= {since:DateTime('UTC')}
 	GROUP BY database_id
 	ORDER BY database_id`;

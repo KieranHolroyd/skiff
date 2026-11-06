@@ -1244,7 +1244,7 @@ export class StorageService {
 
 	/**
 	 * Telemetry from a node (S7). Samples for instances not placed on that node are dropped; the
-	 * latest totals and per-bucket usage go to SQLite, the time series to DuckDB.
+	 * latest totals and per-bucket usage go to SQLite, the time series to ClickHouse.
 	 */
 	async ingestTelemetry(
 		nodeId: string,

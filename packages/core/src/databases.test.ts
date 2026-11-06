@@ -7,7 +7,7 @@ import { databaseAlias, DEFAULT_FEATURES, orgNetworkName } from '@skiff/contract
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
-import { TelemetryStore } from './telemetry.ts';
+import { disposeTelemetryStore, hasClickHouse, testTelemetryStore } from './test-clickhouse.ts';
 import type { Core } from './index.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'skiff-databases-'));
@@ -32,7 +32,7 @@ const core: Core = createCore({
 		features: { ...DEFAULT_FEATURES, ORG_NETWORKS: true },
 	},
 });
-const telemetry = new TelemetryStore({ path: ':memory:', now: () => clock });
+const telemetry = testTelemetryStore({ now: () => clock });
 core.ctx.telemetry = telemetry;
 
 const owner = buildPrincipal({ kind: 'user', userId: 'user_1', orgId: 'org_1', role: 'owner', platformAdmin: true });
@@ -48,7 +48,7 @@ const deployerAgent = buildPrincipal({
 const file = (path: string, content: string) => ({ path, content, encoding: 'utf8' as const });
 
 afterAll(async () => {
-	await telemetry.close();
+	await disposeTelemetryStore(telemetry);
 	opened.sqlite.close();
 	rmSync(dir, { recursive: true, force: true });
 });
@@ -527,7 +527,7 @@ describe('managed databases', () => {
 		expect(core.databases.get(owner, 'main-db').status).toBe('running');
 	});
 
-	test('telemetry from the owning node lands in DuckDB and SQLite', async () => {
+	test.skipIf(!hasClickHouse)('telemetry from the owning node lands in ClickHouse and SQLite', async () => {
 		const db = core.databases.get(owner, 'main-db');
 		const sample = (minute: number, extra: Record<string, number> = {}) => ({
 			databaseId: db.id,

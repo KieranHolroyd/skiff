@@ -227,6 +227,13 @@ if (process.env.SKIFF_E2E_STUDIO !== '1') {
 				`/*!50000 DELETE FROM ${TABLE} */`,
 			],
 			reset: () => reset(instance),
+			scratchCreate: {
+				op: 'create-table' as const,
+				parent: [],
+				name: 'conformance_scratch',
+				columns: [{ name: 'id', type: 'int', nullable: false, identity: true }],
+				primaryKey: ['id'],
+			},
 		};
 
 		describeConformance({ name: `${label} (owner, read-only session)`, plugin: mysqlPlugin, target: target(instance, OWNER), fixture });
@@ -275,7 +282,171 @@ if (process.env.SKIFF_E2E_STUDIO !== '1') {
 					cancel: 'kill-connection',
 					explain: true,
 					schemas: false,
+					structure: [
+						'create-table',
+						'rename',
+						'drop',
+						'truncate',
+						'add-column',
+						'drop-column',
+						'rename-column',
+						'alter-column',
+						'create-index',
+						'drop-index',
+					],
 				});
+			});
+
+			test('alter: column changes keep what MODIFY would otherwise drop', async () => {
+				const PROBE = 'alter_probe';
+				const object = { path: [PROBE], kind: 'table' as const };
+				const root = admin(instance);
+				const columnInfo = async (name: string) => {
+					const [rows] = await root.query<RowDataPacket[]>(
+						`SELECT COLUMN_TYPE AS type, IS_NULLABLE AS nullable, COLUMN_DEFAULT AS def, EXTRA AS extra,
+							COLUMN_COMMENT AS comment, COLLATION_NAME AS collation
+						FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'app' AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+						[PROBE, name],
+					);
+					return rows[0] as { type: string; nullable: string; def: string | null; extra: string; comment: string; collation: string | null } | undefined;
+				};
+				await root.query(`DROP TABLE IF EXISTS ${PROBE}`);
+				await root.query(`CREATE TABLE ${PROBE} (
+					id INT AUTO_INCREMENT PRIMARY KEY,
+					label VARCHAR(20) COLLATE utf8mb4_bin NOT NULL DEFAULT 'it''s \\\\ ok' COMMENT 'the label',
+					touched TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+					token VARCHAR(36) DEFAULT (uuid()),
+					meta JSON
+				)`);
+				try {
+					await withSession(false, async (session) => {
+						const alter = (change: Parameters<NonNullable<StudioSession['alter']>>[0], dryRun = false) =>
+							session.alter!(change, { dryRun }, signal());
+
+						// A dry run renders the statement and changes nothing.
+						const dry = await alter({ op: 'alter-column', object, column: 'label', nullable: true }, true);
+						expect(dry.applied).toBe(false);
+						expect(dry.statements[0]).toContain('MODIFY COLUMN');
+						expect((await columnInfo('label'))?.nullable).toBe('NO');
+
+						const label = await columnInfo('label');
+						await alter({ op: 'alter-column', object, column: 'label', nullable: true });
+						expect(await columnInfo('label')).toEqual({ ...label!, nullable: 'YES' });
+
+						const touched = await columnInfo('touched');
+						await alter({ op: 'alter-column', object, column: 'touched', nullable: true });
+						const after = await columnInfo('touched');
+						expect(after?.nullable).toBe('YES');
+						expect(after?.extra.toLowerCase()).toContain('on update');
+						expect(after?.def).toBe(touched?.def ?? null);
+
+						const token = await columnInfo('token');
+						await alter({ op: 'alter-column', object, column: 'token', type: 'varchar(64)' });
+						expect(await columnInfo('token')).toMatchObject({ type: 'varchar(64)', def: token?.def ?? null });
+
+						await alter({ op: 'alter-column', object, column: 'id', type: 'bigint' });
+						expect((await columnInfo('id'))?.extra.toLowerCase()).toContain('auto_increment');
+
+						await alter({ op: 'alter-column', object, column: 'label', default: null });
+						const defaultOf = async (name: string) =>
+							(await session.describe(object, signal())).columns.find((c) => c.name === name)?.default;
+						// MariaDB prints a dropped default on a nullable column as NULL; describe maps both to null.
+						expect(await defaultOf('label')).toBeNull();
+						await alter({ op: 'alter-column', object, column: 'label', default: { literal: "o'k" } });
+						expect(await defaultOf('label')).toBe("'o''k'");
+						await alter({ op: 'alter-column', object, column: 'touched', default: null });
+						expect((await columnInfo('touched'))?.extra.toLowerCase()).toContain('on update');
+						await alter({ op: 'alter-column', object, column: 'touched', default: { expression: 'CURRENT_TIMESTAMP(3)' } });
+						// MySQL stores the parenthesised form as now(3); either way a MODIFY must keep it.
+						expect((await defaultOf('touched'))?.toLowerCase()).toMatch(/^(?:current_timestamp|now)\(3\)/);
+						await alter({ op: 'alter-column', object, column: 'touched', nullable: false });
+						expect((await defaultOf('touched'))?.toLowerCase()).toMatch(/^(?:current_timestamp|now)\(3\)/);
+						expect((await columnInfo('touched'))?.extra.toLowerCase()).toContain('on update');
+						await alter({ op: 'alter-column', object, column: 'token', default: { expression: 'uuid()' } });
+						expect((await defaultOf('token'))?.toLowerCase()).toContain('uuid()');
+
+						// MariaDB's JSON is a LONGTEXT with a CHECK; MODIFY must keep the check.
+						await alter({ op: 'alter-column', object, column: 'meta', nullable: false });
+						await expect(root.query(`INSERT INTO ${PROBE} (meta) VALUES ('not json')`)).rejects.toThrow();
+
+						await alter({ op: 'add-column', object, column: { name: 'qty', type: 'int unsigned', nullable: false, default: { literal: 3 }, identity: false } });
+						await alter({ op: 'rename-column', object, column: 'qty', name: 'quantity' });
+						expect((await columnInfo('quantity'))?.def).toBe('3');
+						const index = await alter({ op: 'create-index', object, columns: [{ name: 'quantity', dir: 'desc' }, { name: 'label', dir: 'asc' }], unique: false });
+						expect(index.statements[0]).toContain('`alter_probe_quantity_label_idx`');
+						expect((await session.describe(object, signal())).indexes.map((i) => i.name)).toContain('alter_probe_quantity_label_idx');
+						await alter({ op: 'drop-index', object, name: 'alter_probe_quantity_label_idx' });
+						await alter({ op: 'drop-column', object, column: 'quantity' });
+						expect(await columnInfo('quantity')).toBeUndefined();
+
+						await root.query(`INSERT INTO ${PROBE} (meta) VALUES ('{}'), ('[]')`);
+						await alter({ op: 'truncate', object });
+						const [count] = await root.query<RowDataPacket[]>(`SELECT COUNT(*) AS n FROM ${PROBE}`);
+						expect(Number(count[0]?.n)).toBe(0);
+
+						// Engine errors come back as studio errors; generated columns are refused before running.
+						await expect(alter({ op: 'drop-column', object, column: 'missing' })).rejects.toBeInstanceOf(StudioError);
+						await root.query(`ALTER TABLE ${PROBE} ADD COLUMN gen VARCHAR(40) AS (concat(label, '!')) VIRTUAL`);
+						await expect(alter({ op: 'alter-column', object, column: 'gen', nullable: false })).rejects.toMatchObject({
+							code: 'bad_request',
+						});
+					});
+					await withSession(true, async (session) => {
+						await expect(session.alter!({ op: 'drop', object, cascade: false }, { dryRun: true }, signal())).rejects.toMatchObject({
+							code: 'read_only',
+						});
+					});
+				} finally {
+					await root.query(`DROP TABLE IF EXISTS ${PROBE}`);
+				}
+			});
+
+			test('alter: aborting a DDL stuck on a lock cancels it and the session recovers', async () => {
+				const root = admin(instance);
+				await root.query('DROP TABLE IF EXISTS alter_locked, alter_locked2');
+				await root.query('CREATE TABLE alter_locked (id INT PRIMARY KEY)');
+				const holder = await createConnection(rootOptions(instance));
+				try {
+					await holder.query('LOCK TABLES alter_locked WRITE');
+					await withSession(false, async (session) => {
+						const abort = new AbortController();
+						const started = performance.now();
+						setTimeout(() => abort.abort(), 500);
+						await expect(
+							session.alter!({ op: 'rename', object: { path: ['alter_locked'], kind: 'table' }, name: 'alter_locked2' }, { dryRun: false }, abort.signal),
+						).rejects.toMatchObject({ code: 'cancelled' });
+						expect(performance.now() - started).toBeLessThan(3_000);
+						await holder.query('UNLOCK TABLES');
+						expect(await tables()).toContain('alter_locked');
+						// The killed run connection is replaced on the next call.
+						await session.alter!({ op: 'truncate', object: { path: ['alter_locked'], kind: 'table' } }, { dryRun: false }, signal());
+					});
+				} finally {
+					await holder.end().catch(() => undefined);
+					await root.query('DROP TABLE IF EXISTS alter_locked, alter_locked2');
+				}
+			});
+
+			test('alter: views rename and drop as views', async () => {
+				const root = admin(instance);
+				await root.query(`DROP VIEW IF EXISTS alter_view, alter_view2`);
+				try {
+					await withSession(false, async (session) => {
+						// Created by the owner: a view defined by root needs SYSTEM_USER to rename on MySQL 9.
+						const created = await run(session, `CREATE VIEW alter_view AS SELECT id FROM ${TABLE}`);
+						expect(created.some((event) => event.t === 'error')).toBe(false);
+						await session.alter!({ op: 'rename', object: { path: ['alter_view'], kind: 'view' }, name: 'alter_view2' }, { dryRun: false }, signal());
+						const drop = await session.alter!(
+							{ op: 'drop', object: { path: ['alter_view2'], kind: 'view' }, cascade: false },
+							{ dryRun: false },
+							signal(),
+						);
+						expect(drop.statements).toEqual(['DROP VIEW `alter_view2`']);
+						expect(await tables()).not.toContain('alter_view2');
+					});
+				} finally {
+					await root.query(`DROP VIEW IF EXISTS alter_view, alter_view2`);
+				}
 			});
 
 			test('tree lists tables and views at the root, with estimates', async () => {

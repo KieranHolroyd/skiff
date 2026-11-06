@@ -168,6 +168,7 @@ if (process.env.SKIFF_E2E_STUDIO !== '1') {
 			'{"eval":"1"}',
 		],
 		reset: () => reset(instance),
+		scratchCreate: { op: 'create-collection' as const, parent: [], name: 'conformance_scratch' },
 	});
 
 	for (const instance of instances) {
@@ -439,6 +440,70 @@ if (process.env.SKIFF_E2E_STUDIO !== '1') {
 				expect(refused instanceof StudioError && refused.code).toBe('unsupported');
 			} finally {
 				await session.close();
+			}
+		});
+
+		test('alter edits fields, indexes and contents of a collection', async () => {
+			const name = 'alter_scratch';
+			const object = { path: [name], kind: 'collection' as const };
+			const app = admins.get(instance.name)!.db('app');
+			await app.collection(name).drop().catch(() => undefined);
+			await app.collection(name).insertMany([
+				{ _id: 1 as never, a: 1, nested: { x: 1 } },
+				{ _id: 2 as never, a: 2 },
+				{ _id: 3 as never, b: 3 },
+			]);
+			const session = await open(false);
+			const alter = (change: Parameters<NonNullable<StudioSession['alter']>>[0], dryRun = false) =>
+				session.alter!(change, { dryRun }, signal());
+			const code = async (work: Promise<unknown>) => {
+				try {
+					await work;
+					return null;
+				} catch (error) {
+					return error instanceof StudioError ? error.code : 'other';
+				}
+			};
+			try {
+				// Dry run: the statement, nothing changed.
+				const dry = await alter({ op: 'rename-column', object, column: 'a', name: 'alpha' }, true);
+				expect(dry).toEqual({
+					statements: [`{"update":"${name}","updates":[{"q":{"a":{"$exists":true}},"u":{"$rename":{"a":"alpha"}},"multi":true}]}`],
+					applied: false,
+				});
+				expect(await app.collection(name).countDocuments({ a: { $exists: true } })).toBe(2);
+
+				expect(await alter({ op: 'rename-column', object, column: 'a', name: 'alpha' })).toMatchObject({ applied: true, affected: 2 });
+				expect(await app.collection(name).countDocuments({ alpha: { $exists: true } })).toBe(2);
+				expect(await alter({ op: 'drop-column', object, column: 'nested.x' })).toMatchObject({ applied: true, affected: 1 });
+				expect(await app.collection(name).findOne({ _id: 1 as never })).toEqual({ _id: 1, alpha: 1, nested: {} } as never);
+				expect(await code(alter({ op: 'drop-column', object, column: '_id' }))).toBe('bad_request');
+
+				await alter({ op: 'create-index', object, columns: [{ name: 'alpha', dir: 'desc' }], unique: true });
+				let indexes = (await session.describe(object, signal())).indexes.map((index) => index.name);
+				expect(indexes).toContain('alpha_-1');
+				expect(await code(alter({ op: 'create-index', object, columns: [{ name: 'b', dir: 'asc' }], unique: false, name: 'alpha_-1' }))).toBe(
+					'conflict',
+				);
+				await alter({ op: 'drop-index', object, name: 'alpha_-1' });
+				indexes = (await session.describe(object, signal())).indexes.map((index) => index.name);
+				expect(indexes).toEqual(['_id_']);
+				expect(await code(alter({ op: 'drop-index', object, name: '_id_' }))).toBe('bad_request');
+				expect(await code(alter({ op: 'drop-index', object, name: 'nope' }))).toBe('not_found');
+
+				// Views refuse content edits; a missing collection is not found.
+				expect(await code(alter({ op: 'truncate', object: { path: [VIEW], kind: 'view' } }, true))).toBe('unsupported');
+				expect(await code(alter({ op: 'truncate', object: { path: ['missing'], kind: 'collection' } }, true))).toBe('not_found');
+				// Renaming onto an existing collection never drops it.
+				expect(await code(alter({ op: 'rename', object, name: COLLECTION }))).toBe('conflict');
+				expect(await code(alter({ op: 'create-collection', parent: [], name: COLLECTION }))).toBe('conflict');
+				expect(await code(alter({ op: 'create-collection', parent: [], name: 'system.x' }))).toBe('bad_request');
+
+				expect(await alter({ op: 'truncate', object })).toMatchObject({ applied: true, affected: 3 });
+				expect(await app.collection(name).countDocuments()).toBe(0);
+			} finally {
+				await session.close();
+				await app.collection(name).drop().catch(() => undefined);
 			}
 		});
 

@@ -34,6 +34,8 @@ const platformUpstream = required('SKIFF_PLATFORM_UPSTREAM');
 const acmeEmail = env.SKIFF_ACME_EMAIL ?? '';
 const cloudflareTokenFile = env.SKIFF_CLOUDFLARE_API_TOKEN_FILE ?? '';
 const caddyAdminSocket = env.SKIFF_CADDY_ADMIN_SOCKET ?? '/var/lib/caddy/admin.sock';
+/** D105: the edge agent reaches the control plane on its socket instead of through Caddy. */
+const controlSocket = env.SKIFF_CONTROL_SOCKET ?? '';
 
 mkdirSync(dirname(agentEnvFile), { recursive: true });
 const { db, sqlite } = createDb({ path: `${dataDir}/skiff.db` });
@@ -81,6 +83,7 @@ if (existing) {
 
 const agentEnv = [
 	`SKIFF_CONTROL_URL=${platformOrigin}`,
+	...(controlSocket ? [`SKIFF_CONTROL_SOCKET=${controlSocket}`] : []),
 	`SKIFF_NODE_ID=${nodeId}`,
 	`SKIFF_NODE_TOKEN=${token}`,
 	`SKIFF_NODE_MODE=${mode}`,

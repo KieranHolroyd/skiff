@@ -256,8 +256,8 @@ describe('normalizePlatformUrl', () => {
 
 describe('normalizeContentDomain', () => {
 	test('accepts bare hosts, URLs and localhost', () => {
-		expect(normalizeContentDomain('kierancloud.dev')).toBe('kierancloud.dev');
-		expect(normalizeContentDomain(' https://KieranCloud.dev/ ')).toBe('kierancloud.dev');
+		expect(normalizeContentDomain('examplecloud.com')).toBe('examplecloud.com');
+		expect(normalizeContentDomain(' https://ExampleCloud.com/ ')).toBe('examplecloud.com');
 		expect(normalizeContentDomain('localhost')).toBe('localhost');
 		expect(normalizeContentDomain('sites.example.com.')).toBe('sites.example.com');
 	});

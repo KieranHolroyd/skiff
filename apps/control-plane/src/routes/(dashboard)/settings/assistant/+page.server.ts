@@ -1,12 +1,7 @@
 import { fail } from '@sveltejs/kit';
+import { PLATFORM_CONFIG_SECTIONS, type PlatformConfigKey } from '@skiff/contracts';
 import {
-	ASSISTANT_AGENTS,
-	PLATFORM_CONFIG_SECTIONS,
-	type AssistantAgentId,
-	type PlatformConfigKey
-} from '@skiff/contracts';
-import {
-	agentDetails,
+	agentDetail,
 	resetAgentDetail,
 	saveAgentDetail,
 	validateAgentDetail
@@ -35,7 +30,7 @@ export const load: PageServerLoad = ({ locals }) => {
 	return {
 		...configState(),
 		assistant: currentSection('assistant'),
-		agents: agentDetails(),
+		agent: agentDetail(),
 		catalog: assistantTools(principal)
 			.map(({ name, title, description, destructive }) => ({
 				name,
@@ -71,46 +66,25 @@ function fields(data: FormData) {
 			label: 'Model'
 		},
 		{
-			field: 'routerModel',
-			key: 'SKIFF_ASSISTANT_ROUTER_MODEL',
-			value: formString(data, 'routerModel'),
-			label: 'Router model'
-		},
-		{
 			field: 'apiKey',
 			key: 'SKIFF_ASSISTANT_API_KEY',
 			value: formRawString(data, 'apiKey'),
 			secret: true,
 			label: 'API key'
-		},
-		{
-			field: 'maxAgents',
-			key: 'SKIFF_ASSISTANT_MAX_AGENTS',
-			value: formString(data, 'maxAgents') || '3',
-			required: true,
-			label: 'Maximum agents'
 		}
 	]);
 }
-
-const AGENTS_FOR_RESET = ASSISTANT_AGENTS.map((agent) => ({ id: agent.id, label: agent.label }));
 
 export const actions: Actions = {
 	saveAgent: async ({ request, locals }) => {
 		const principal = requireOwnerPage(locals);
 		const data = await request.formData();
-		const id = formString(data, 'agent') as AssistantAgentId;
-		if (!ASSISTANT_AGENTS.some((agent) => agent.id === id))
-			return fail(400, { message: 'Unknown agent.' });
-		const tools = data
-			.getAll('tools')
-			.filter((value): value is string => typeof value === 'string');
+		const tools = formBoolean(data, 'allTools')
+			? null
+			: data.getAll('tools').filter((value): value is string => typeof value === 'string');
 		const allowedTools = new Set(assistantTools(principal).map((tool) => tool.name));
 		const result = validateAgentDetail(
 			{
-				enabled: formBoolean(data, 'enabled'),
-				label: formString(data, 'label'),
-				brief: formString(data, 'brief'),
 				system: formString(data, 'instructions'),
 				model: formString(data, 'model'),
 				tools
@@ -118,20 +92,14 @@ export const actions: Actions = {
 			allowedTools
 		);
 		if (!result.ok) return fail(400, { message: result.error });
-		saveAgentDetail(principal, id, result.value);
-		return {
-			success: `${result.value.label} saved. The next assistant turn uses the new details.`
-		};
+		saveAgentDetail(principal, result.value);
+		return { success: 'Assistant saved. The next turn uses the new details.' };
 	},
 
-	resetAgent: async ({ request, locals }) => {
+	resetAgent: async ({ locals }) => {
 		const principal = requireOwnerPage(locals);
-		const data = await request.formData();
-		const id = formString(data, 'agent') as AssistantAgentId;
-		const agent = AGENTS_FOR_RESET.find((item) => item.id === id);
-		if (!agent) return fail(400, { message: 'Unknown agent.' });
-		resetAgentDetail(principal, id);
-		return { success: `${agent.label} reset to its built-in details.` };
+		resetAgentDetail(principal);
+		return { success: 'Assistant reset to its built-in details.' };
 	},
 
 	save: async ({ request, locals }) => {

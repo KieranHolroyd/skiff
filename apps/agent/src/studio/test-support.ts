@@ -52,6 +52,7 @@ export function trackedFake(options: FakePluginOptions = {}) {
 					return session.run(input, runOptions, signal);
 				},
 				apply: (object, changes, signal) => session.apply(object, changes, signal),
+				...(session.alter ? { alter: session.alter.bind(session) } : {}),
 				close: () => session.close(),
 			};
 		},

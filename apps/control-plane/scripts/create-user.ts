@@ -5,8 +5,8 @@
  *   bun run create-user <email> [name] [--password …] [--org slug --role admin] [--platform-admin]
  *
  * - The password is prompted for (hidden, confirmed) unless `--password` is given. When stdin is
- *   not a terminal, the first line of stdin is used. Password sign-in only works when the server
- *   runs with SKIFF_DEV_PASSWORD_LOGIN=1; otherwise sign in with a magic link, then add a passkey.
+ *   not a terminal, the first line of stdin is used. Sign in with that email and password (D103);
+ *   owners then enrol a passkey or authenticator app.
  * - The first user in the database is the bootstrap user: platform admin (admin plugin role, which
  *   manages nodes) and owner of a personal org created on first sign-in. Later users need `--org`
  *   (or an invitation) to join an org; `--platform-admin` also grants the platform role.
@@ -93,7 +93,7 @@ if (values.org) {
 }
 
 const password = values.password ?? (await promptPassword());
-if (password.length < 8) fail('password must be at least 8 characters');
+if (password.length < 12) fail('password must be at least 12 characters');
 
 const auth = betterAuth({
 	database: sqlite,
@@ -126,7 +126,7 @@ if (organization) console.log(`  member of ${organization.name || organization.s
 else if (isFirstUser) console.log('  a personal org (owner) is created on first sign-in');
 else console.log('  not in any org yet: invite them from the dashboard or re-run with --org');
 if (platformAdmin) console.log('  platform admin (can manage nodes)');
-console.log('  password sign-in requires SKIFF_DEV_PASSWORD_LOGIN=1; magic links always work');
+console.log('  sign in with this email and password (owners then add a passkey or authenticator app)');
 sqlite.close();
 
 /** Hidden, confirmed prompt on a terminal; first line of stdin otherwise. */
@@ -137,7 +137,7 @@ async function promptPassword(): Promise<string> {
 		return Buffer.concat(chunks).toString('utf8').split(/\r?\n/, 1)[0] ?? '';
 	}
 	const first = await readHidden('Password: ');
-	if (first.length < 8) fail('password must be at least 8 characters');
+	if (first.length < 12) fail('password must be at least 12 characters');
 	if ((await readHidden('Confirm password: ')) !== first) fail('passwords do not match');
 	return first;
 }

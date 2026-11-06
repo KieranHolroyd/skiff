@@ -1,10 +1,14 @@
 import {
 	NDJSON_CONTENT_TYPE,
 	StudioError,
+	alterResultSchema,
 	applyResultSchema,
+	schemaChangeTarget,
 	studioOps,
 	studioRequestSchemas,
 	type ObjectRef,
+	type SchemaChange,
+	type SchemaChangeOp,
 	type StudioOp
 } from '@skiff/studio/protocol';
 import { STUDIO_SESSION_HEADER, STUDIO_TOKEN_HEADER, type Principal } from '@skiff/contracts';
@@ -40,7 +44,8 @@ export type StudioActivity =
 			updated: number;
 			deleted: number;
 			applied: number;
-	  };
+	  }
+	| { op: 'alter'; object: string[]; change: SchemaChangeOp };
 
 export interface StudioProxyDeps {
 	/** False when `DB_STUDIO` is off; every call is then a 404. */
@@ -204,11 +209,13 @@ async function proxy(deps: StudioProxyDeps, call: StudioProxyCall): Promise<Resp
 
 	const endpoint = deps.studio.endpoint(principal, name);
 
-	if (op === 'apply' && endpoint.readOnly)
+	if ((op === 'apply' || op === 'alter') && endpoint.readOnly)
 		return studioErrorResponse(
 			new StudioError(
 				'read_only',
-				'This studio session is read-only. Enable writes to apply changes.'
+				op === 'alter'
+					? 'This studio session is read-only. Enable writes to change structure.'
+					: 'This studio session is read-only. Enable writes to apply changes.'
 			)
 		);
 
@@ -275,6 +282,33 @@ async function proxy(deps: StudioProxyDeps, call: StudioProxyCall): Promise<Resp
 				// The write already happened on the node; still answer the browser.
 				console.error(
 					'[studio] apply audit failed:',
+					caught instanceof Error ? caught.name : caught
+				);
+			}
+		}
+		return new Response(text, { status: upstream.status, headers: responseHeaders(upstream) });
+	}
+
+	if (op === 'alter' && upstream.status === 200) {
+		const text = await upstream.text();
+		let applied = false;
+		try {
+			const checked = alterResultSchema.safeParse(JSON.parse(text));
+			applied = checked.success && checked.data.applied;
+		} catch {
+			// Not JSON: pass it through; the client reports it.
+		}
+		if (applied) {
+			const { change } = parsed.data as { change: SchemaChange };
+			try {
+				deps.studio.recordActivity(principal, name, {
+					op: 'alter',
+					object: schemaChangeTarget(change),
+					change: change.op
+				});
+			} catch (caught) {
+				console.error(
+					'[studio] alter audit failed:',
 					caught instanceof Error ? caught.name : caught
 				);
 			}

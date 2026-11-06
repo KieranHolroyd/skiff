@@ -46,6 +46,21 @@ jobs:
   test:
     name: Test and type-check
     runs-on: ubuntu-latest
+    # Telemetry tests run against a real ClickHouse (D101); packages/core/src/test-clickhouse.ts.
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:26.8
+        env:
+          CLICKHOUSE_PASSWORD: ci
+        ports:
+          - 18123:8123
+        options: >-
+          --health-cmd "clickhouse-client --password ci -q 'SELECT 1'"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      SKIFF_TEST_CLICKHOUSE_URL: http://127.0.0.1:18123
+      SKIFF_TEST_CLICKHOUSE_USER: default
+      SKIFF_TEST_CLICKHOUSE_PASSWORD: ci
     steps:
       - uses: actions/checkout@v4
         with:

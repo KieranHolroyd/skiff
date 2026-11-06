@@ -33,7 +33,8 @@ It covers all six D95 engines: Postgres, MySQL, MariaDB, MongoDB, Valkey and Red
 
 ## Non-goals (v1)
 
-- ERD diagrams, a visual schema designer, and ALTER TABLE forms. DDL runs through the SQL editor.
+- ERD diagrams and a visual schema designer. (ALTER TABLE forms were a v1 non-goal; they shipped
+  later as structure editing, see "Structure editing as built".)
 - Bulk import, and dump/restore. Plan 17 covers portability.
 - Transactions held open across several editor runs. Each run is one implicit transaction.
 - Redis/Valkey Cluster or Sentinel. Skiff runs single nodes, and Bun's client has no cluster
@@ -554,6 +555,28 @@ the owner. Write sessions still use the owner.
   `docker exec` on all six engines (`SKIFF_E2E_STUDIO_RO_MATRIX=1` covers all 12 versions). The
   plugin, connected as the principal with no session flags, reads and has every write refused, and
   Valkey/Redis keep the user across a restart only through the config line. It needs Bun 1.4.4.
+
+## Structure editing as built (6 Nov 2026)
+
+Write sessions can now edit structure on every engine, not only rows.
+
+- **Protocol:** a new op, `alter { change: SchemaChange, dryRun }`, answers
+  `{ statements, applied, affected? }`. `SchemaChange` is a typed union: `create-schema`,
+  `create-table`, `create-collection`, `rename`, `drop` (optionally `cascade`), `truncate`,
+  `add-column`, `drop-column`, `rename-column`, `alter-column`, `create-index` and `drop-index`.
+  `capabilities.structure` lists what a plugin accepts. It defaults to `[]`, so an older node
+  shows no controls. The op is not idempotent, so the agent front never retries it.
+- **Free text stays in `run`.** Names are quoted by the plugin. Column types and default
+  expressions must match `COLUMN_TYPE_PATTERN` and `DEFAULT_EXPRESSION_PATTERN`, which are
+  checked at every hop. Literal defaults are quoted per dialect. So `alter` cannot become an
+  unfingerprinted SQL channel.
+- **Read-only:** refused by the proxy (dry runs too), the studio process and the plugin, on top of
+  the read-only principal.
+- **Audit:** `database.studio.alter { name, object, change }`, written only for an applied
+  change.
+- **Columns** in `describe` gain `default` (the engine's own text, for display only).
+- **UI:** every action is a dry run, then a review of the statements, then the apply.
+  Destructive actions ask for the name. Tree and describe queries refresh afterwards.
 
 ## Implementation order
 

@@ -2763,7 +2763,7 @@ export class DatabaseService {
 
 	/**
 	 * Telemetry from a node (D57). Samples for databases not placed on that node are dropped, the
-	 * latest size and table snapshot go to SQLite, and the time series goes to DuckDB.
+	 * latest size and table snapshot go to SQLite, and the time series goes to ClickHouse.
 	 */
 	async ingestTelemetry(
 		nodeId: string,

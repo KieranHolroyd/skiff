@@ -34,7 +34,7 @@ decision log with rationale, and [ROADMAP.md](./ROADMAP.md) for v1/v2 scope.
 
 | Term | Meaning |
 |---|---|
-| **Control plane** | The SvelteKit/Bun app: dashboard, REST API, MCP server, auth, SQLite + DuckDB. Exactly one per install. |
+| **Control plane** | The SvelteKit/Bun app: dashboard, REST API, MCP server, auth, SQLite, and the ClickHouse telemetry store beside it. Exactly one per install. |
 | **Node** | A machine running a **node agent**. It belongs to exactly one control plane. |
 | **Edge node** | The node with the public IP that terminates all TLS and ingress (the VPS). |
 | **Node agent** | A Bun-compiled binary on each node. It reconciles desired state: releases on disk, Caddy routes, runtime units. |
@@ -68,7 +68,7 @@ decision log with rationale, and [ROADMAP.md](./ROADMAP.md) for v1/v2 scope.
 │ Caddy (custom build + caddy-dns/cloudflare)  ← admin API on unix socket only           │
 │   *.contentDomain  ─► local sites/apps     or ─► homelab over WireGuard                │
 │   cloud./api./mcp.platformDomain ─► control plane                                      │
-│ Control plane (SvelteKit on Bun): UI · REST · MCP · Better Auth · SQLite · DuckDB      │
+│ Control plane (SvelteKit on Bun): UI · REST · MCP · Better Auth · SQLite · ClickHouse  │
 │ Node agent (bun --compile) · [v2: edge-placed tier-2/3 apps in skiff-workloads.slice]  │
 │ WireGuard (wg0) ◄─────────────────────────────┐                                        │
 └───────────────────────────────────────────────┼────────────────────────────────────────┘
@@ -88,7 +88,7 @@ installs on separate machines, each fully independent with no federation.
 
 | Component | Tech | Runs as | Approx. RSS |
 |---|---|---|---|
-| Control plane | SvelteKit 3 (`@sveltejs/adapter-bun`, listening on a unix socket behind Caddy with `PROTOCOL_HEADER`/`HOST_HEADER`), shadcn-svelte (nova preset), Better Auth, Drizzle + SQLite, DuckDB | `skiff-cp` (unprivileged) | 80–150 MB target (spike: 92 idle / ~160 MB under load on macOS) |
+| Control plane | SvelteKit 3 (`@sveltejs/adapter-bun`, listening on a unix socket behind Caddy with `PROTOCOL_HEADER`/`HOST_HEADER`), shadcn-svelte (nova preset), Better Auth, Drizzle + SQLite, ClickHouse (HTTP) | `skiff-cp` (unprivileged) | 80–150 MB target (spike: 92 idle / ~160 MB under load on macOS) |
 | Node agent | Bun, `bun build --compile` single binary | `skiff-agent` (unprivileged) | 30–50 MB |
 | Proxy | Caddy (prebuilt with `caddy-dns/cloudflare`), driven only via admin API on a unix socket | `caddy` | 30–50 MB |
 | Privileged helper (v2) | Bun binary; fixed verbs over a root-only unix socket; renders unit files from validated specs. Installed on every node that runs apps, edge included | root | small |
@@ -235,9 +235,10 @@ create_upload → presigned PUT ─┼─► Upload session ─► finalize ─�
 ### 6.1 Auth (Better Auth)
 - Plugins: `organization` (with access control), `admin`, `passkey`, `twoFactor`, `apiKey`,
   MCP/OAuth provider, `magicLink` (invites/recovery).
-- Sign-in: passkeys + GitHub OAuth. No passwords. Invite only. 2FA required for owners: an owner's session
+- Sign-in: email + password (D103), passkeys, GitHub OAuth and magic links. Invite only (no public password
+  sign-up). 2FA required for owners: an owner's session
   must prove a second factor (passkey sign-in, or a TOTP/backup code verified in that session) before it can use
-  the dashboard or API. GitHub and magic-link sign-ins count as single-factor. An unverified session can't enrol a
+  the dashboard or API. Password, GitHub and magic-link sign-ins count as single-factor. An unverified session can't enrol a
   new factor when one already exists, so a hijacked GitHub account or mailbox can't add its own.
 
 ### 6.2 RBAC
@@ -298,6 +299,7 @@ create_upload → presigned PUT ─┼─► Upload session ─► finalize ─�
 | Deploying | `create_upload`, `deploy_files`, `finalize_upload`, `list_deployments`, `get_deployment`, `promote_deployment`, `rollback` |
 | Access | `set_access`, `create_share_link`, `list_share_links`, `revoke_share_link` |
 | Observability | `get_status`, `get_metrics`, `get_logs`, `get_audit_log` |
+| Dashboards (D101) | `describe_telemetry`, `query_telemetry`, `list_dashboards`, `get_dashboard`, `create_dashboard` (templates + panel drafts, auto-layout, data preview), `add_dashboard_panels`, `update_dashboard_panel`, `remove_dashboard_panels`, `update_dashboard`, `delete_dashboard` (elicitation) |
 | Platform | `list_nodes` (read-only) |
 
 All tools carry `readOnlyHint` / `destructiveHint` / `idempotentHint`. Responses include URLs and next steps.
@@ -317,8 +319,8 @@ SvelteKit's built-in CSRF check is disabled because it would block the OAuth tok
 `$XDG_CONFIG_HOME/skiff`, else `~/.config/skiff`), mode 0600. Settings are grouped into named
 **profiles**, one per deployment, so a single machine can talk to production, staging and a
 local dev server without environment-variable juggling:
-- `profiles.<name>.url` — control-plane origin, e.g. `https://control.kieran.dev`.
-- `profiles.<name>.contentDomain` — domain deployed sites use, e.g. `kierancloud.dev`; used to
+- `profiles.<name>.url` — control-plane origin, e.g. `https://control.example.com`.
+- `profiles.<name>.contentDomain` — domain deployed sites use, e.g. `examplecloud.com`; used to
   build preview URLs when the API does not return one.
 - `profiles.<name>.token` — API key.
 - `activeProfile` — the profile used when none is selected explicitly.
@@ -376,19 +378,30 @@ domains; `skif logout --all` removes the file and every profile. `SKIFF_URL`, `S
 
 ## 8. Observability
 
-- **Stores:** SQLite holds platform state. **DuckDB** holds telemetry (`memory_limit='256MB'`,
-  `threads=2` on the VPS).
+- **Stores:** SQLite holds platform state. A small local **ClickHouse** server (`skiff-clickhouse.service`,
+  HTTP on 127.0.0.1:18123, ~768 MiB cap, D101) holds telemetry. It is **optional and off by default** to
+  keep the base install light; an owner adds it from Settings → Telemetry or at the installer's prompt. The control plane reaches it with `fetch`,
+  so no native addon can fail to load, and the zero-downtime standby shares it with the primary.
 - **OTel-conformant.** Agents emit OTLP with semantic conventions (`service.name` = project slug,
-  `deployment.id`, `host.name`, `http.*`). The control plane runs an **OTLP/HTTP receiver** that writes into DuckDB.
+  `deployment.id`, `host.name`, `http.*`). The control plane runs an **OTLP/HTTP receiver** that writes into ClickHouse.
   The OTel Collector binary is not run.
-- **The agent sends pre-aggregated 1-minute buckets only.** DuckDB's RSS grows with the amount of hot data, regardless of
-  `memory_limit` (see SPIKES.md), so raw requests never enter DuckDB.
+- **The agent sends pre-aggregated 1-minute buckets only.** Raw requests never reach the telemetry store; it stays
+  small and its memory bounded.
+- **Tables** (database `skiff`): `traffic_1m/1h`, `db_metrics_1m/1h`, `storage_metrics_1m/1h` (ReplacingMergeTree,
+  keyed by series + bucket, newest ingest wins, read with `final = 1`), plus `*_hourly` views that join rolled-up hours
+  with not-yet-rolled minutes.
+- **Dashboards (D101).** Users build Grafana-style dashboards (`/dashboards`): a 24-column panel grid, time range and
+  refresh pickers, variables, and time series, stat, gauge, bar gauge, table, pie and text panels. A panel query is a
+  **builder** spec (dataset + measures + group-by + filters), compiled by the control plane with the caller's project,
+  database and storage scope ANDed in, or **SQL** with Grafana-style macros (`$__timeFilter(bucket)`, `$__timeInterval(bucket)`,
+  `$var`). SQL runs as the read-only `skiff_reader` with time, memory and row limits, and only for platform admins,
+  because it reads every org's rows. REST: `/api/v1/observability/*` (API.md).
 - **Collection (agent, about every 10 s):**
   - Node: CPU/mem/disk/net from `/proc`.
   - Per app: cgroup v2 stats.
   - Per site: Caddy JSON access logs aggregated into 1-minute buckets (requests, status classes, bytes, p50/p95, top paths and referrers). IPs are hashed.
-- **Retention:** 1-minute buckets for 48 h, 1-hour for 90 days in DuckDB, then **daily Parquet partitions to R2**
-  (still queryable from DuckDB).
+- **Retention:** 1-minute buckets for 48 h, 1-hour for 90 days in ClickHouse (explicit prune, with table TTLs as a
+  backstop), then **daily Parquet partitions to R2** (queryable with ClickHouse's `s3()` table function).
 - **Logs:**
   - App logs go to journald and are queried on demand through the agent, with live tail over SSE.
   - Raw Caddy logs are kept 7 days, compressed.
@@ -424,7 +437,7 @@ domains; `skif logout --all` removes the file and every profile. `SKIFF_URL`, `S
 |---|---|
 | SQLite | **Litestream** → R2 (continuous) |
 | Release artifacts | Canonical in **R2**, cached on nodes |
-| Telemetry | Hot DuckDB not backed up. Cold Parquet in R2. |
+| Telemetry | Hot ClickHouse not backed up. Cold Parquet in R2. |
 | Master key | **Recovery kit**: `age`-encrypted with a passphrase, shown once at install |
 | Certs | Re-issued on restore |
 
@@ -454,13 +467,19 @@ domains; `skif logout --all` removes the file and every profile. `SKIFF_URL`, `S
 
 - **CI (GitHub Actions)** builds a versioned release: control-plane bundle, agent binary, prebuilt
   Caddy (with `caddy-dns/cloudflare`). Everything is **signed** (minisign or cosign).
-- **Bootstrap:** `curl -fsSL <url>/install.sh | sh` → a one-time setup URL → browser wizard:
-  1. Platform and content domains (warns on shared mode).
-  2. Cloudflare token, used to create the wildcard records and the SES DKIM/SPF/DMARC records.
-  3. R2 credentials.
-  4. SES SMTP (flags the SES sandbox).
-  5. First admin with a passkey.
-  6. Recovery kit.
+- **Bootstrap:** `curl -fsSL <url>/install.sh | sh` → a one-time setup URL → browser wizard (D102).
+  The installer collects domains, R2 and SMTP, checks the domains resolve (re-checkable while
+  records propagate) and offers the recovery kit; it never asks for a DNS token. Domains are
+  optional: without them the dashboard is at `http://<ip>` and sites at `<ip>.sslip.io`, and
+  Settings → Domains adds or changes them (and HTTPS) later (D105).
+  The wizard (`/setup`, token-gated) then:
+  1. Checks the instance: HTTPS, passkey support on this origin, email mode, storage, nodes,
+     shared-domain mode.
+  2. Creates the owner (platform admin + organisation owner) atomically and signs them in.
+  3. Sets the owner's password (D103), then enrols a passkey, or an authenticator app when passkeys
+     can't work here (plain HTTP, an IP address).
+  4. Offers an authenticator backup and links to email, backups, members and API keys.
+  No sign-up path works before an owner exists.
 - **Join a node:** `skiff-agent join https://cloud.<platformDomain> --token <single-use, 1h> --name <name>`.
 - **Self-update:**
   1. Verify the signature.

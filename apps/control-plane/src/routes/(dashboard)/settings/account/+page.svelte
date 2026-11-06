@@ -3,6 +3,7 @@
 	import { onMount } from 'svelte';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import FingerprintIcon from '@lucide/svelte/icons/fingerprint';
+	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import LaptopIcon from '@lucide/svelte/icons/laptop';
 	import LinkIcon from '@lucide/svelte/icons/link';
 	import MonitorSmartphoneIcon from '@lucide/svelte/icons/monitor-smartphone';
@@ -43,6 +44,8 @@
 	const otherSessions = $derived(data.sessions.filter((session) => !session.current));
 
 	let profileOpen = $state(false);
+	let passwordOpen = $state(false);
+	let removeTotpOpen = $state(false);
 	let passkeyOpen = $state(false);
 	let passkeyName = $state('');
 	let passkeyPending = $state(false);
@@ -108,6 +111,11 @@
 	}
 
 	function disableTotp() {
+		// With a password, Better Auth wants it re-entered before removing the app.
+		if (data.hasPassword) {
+			removeTotpOpen = true;
+			return;
+		}
 		askConfirm({
 			title: 'Remove the authenticator app?',
 			description: data.twoFactor.requiredForRole
@@ -272,12 +280,31 @@
 	<Card.Root>
 		<Card.Header>
 			<Card.Title class="flex items-center gap-2">
+				<KeyRoundIcon class="size-4 text-muted-foreground" />Password
+				<Badge variant={data.hasPassword ? 'success' : 'neutral'}>{data.hasPassword ? 'set' : 'not set'}</Badge>
+			</Card.Title>
+			<Card.Description>
+				Sign in with {data.user.email} and a password. Works anywhere, including over plain HTTP
+				where passkeys can’t.{#if data.twoFactor.requiredForRole}
+					Owners still need a passkey or authenticator code each session.{/if}
+			</Card.Description>
+			<Card.Action>
+				<Button size="sm" variant="outline" onclick={() => (passwordOpen = true)}>
+					{data.hasPassword ? 'Change password' : 'Set password'}
+				</Button>
+			</Card.Action>
+		</Card.Header>
+	</Card.Root>
+
+	<Card.Root>
+		<Card.Header>
+			<Card.Title class="flex items-center gap-2">
 				<ShieldCheckIcon class="size-4 text-muted-foreground" />Two-factor authentication
 				{#if data.twoFactor.requiredForRole}<Badge variant="info">required for owners</Badge>{/if}
 			</Card.Title>
 			<Card.Description>
 				A passkey counts as a second factor. An authenticator app adds one-time codes for when you
-				sign in with GitHub or an email link.
+				sign in with a password, GitHub or an email link.
 			</Card.Description>
 			<Card.Action>
 				{#if data.twoFactor.totpEnabled}
@@ -436,6 +463,77 @@
 			aria-invalid={result?.fieldErrors?.name ? 'true' : undefined}
 		/>
 		{#if result?.fieldErrors?.name}<Field.Error>{result.fieldErrors.name}</Field.Error>{/if}
+	</Field.Field>
+</FormDialog>
+
+<FormDialog
+	bind:open={passwordOpen}
+	icon={KeyRoundIcon}
+	title={data.hasPassword ? 'Change password' : 'Set a password'}
+	description={data.hasPassword
+		? 'Every other device is signed out.'
+		: 'At least 12 characters. A password manager helps.'}
+	action={data.hasPassword ? '?/changePassword' : '?/setPassword'}
+	submitLabel={data.hasPassword ? 'Change password' : 'Set password'}
+	size="sm"
+>
+	<input type="email" name="username" autocomplete="username" value={data.user.email} hidden />
+	{#if data.hasPassword}
+		<Field.Field data-invalid={result?.fieldErrors?.currentPassword ? true : undefined}>
+			<Field.Label for="current-password">Current password</Field.Label>
+			<Input
+				id="current-password"
+				name="currentPassword"
+				type="password"
+				autocomplete="current-password"
+				required
+				aria-invalid={result?.fieldErrors?.currentPassword ? 'true' : undefined}
+			/>
+		</Field.Field>
+	{/if}
+	<Field.Field data-invalid={result?.fieldErrors?.newPassword ? true : undefined}>
+		<Field.Label for="new-password">New password</Field.Label>
+		<Input
+			id="new-password"
+			name="newPassword"
+			type="password"
+			autocomplete="new-password"
+			minlength={12}
+			maxlength={128}
+			required
+			aria-invalid={result?.fieldErrors?.newPassword ? 'true' : undefined}
+		/>
+		{#if result?.fieldErrors?.newPassword}<Field.Error>{result.fieldErrors.newPassword}</Field.Error>{/if}
+	</Field.Field>
+	<Field.Field>
+		<Field.Label for="confirm-password">Confirm new password</Field.Label>
+		<Input
+			id="confirm-password"
+			name="confirmPassword"
+			type="password"
+			autocomplete="new-password"
+			minlength={12}
+			maxlength={128}
+			required
+		/>
+	</Field.Field>
+</FormDialog>
+
+<FormDialog
+	bind:open={removeTotpOpen}
+	icon={ShieldCheckIcon}
+	title="Remove the authenticator app?"
+	description={data.twoFactor.requiredForRole
+		? 'Codes from the app stop working. As an owner you will need a passkey (or to set up an app again) in your next session.'
+		: 'Codes from the app stop working, and the backup codes are discarded.'}
+	action="?/disableTotp"
+	submitLabel="Remove app"
+	submitVariant="destructive"
+	size="sm"
+>
+	<Field.Field>
+		<Field.Label for="remove-totp-password">Your password</Field.Label>
+		<Input id="remove-totp-password" name="password" type="password" autocomplete="current-password" required />
 	</Field.Field>
 </FormDialog>
 

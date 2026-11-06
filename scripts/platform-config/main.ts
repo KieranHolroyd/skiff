@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * skiff-platform-config: apply platform settings requested from the dashboard (backups, email,
- * alerts), or manage backups from the command line. Runs as root. See docs/OPS.md §4.3.
+ * alerts, domains), or manage backups from the command line. Runs as root. See docs/OPS.md §4.3.
  *
  * Installed as /usr/local/sbin/skiff-platform-config, which runs this file from the *current*
  * release. `skiff-platform-config install` (or any `sudo skiff-update-self` run) creates the
@@ -13,6 +13,7 @@ import {
 	PLATFORM_CONFIG_DEFAULTS,
 	type PlatformConfigStatus,
 } from '../../packages/contracts/src/platform-config.ts';
+import { temporaryContentDomain, isIpv4 } from '../../packages/contracts/src/platform-domains.ts';
 import { readEnvFile } from '../install/env-file.ts';
 import { PlatformConfigHelper, type Host, type Layout, type RunResult } from './helper.ts';
 import { ensurePlatformConfigUnits } from './units.ts';
@@ -24,6 +25,12 @@ Usage:
   skiff-platform-config apply-request     apply the pending dashboard request (run by systemd)
   skiff-platform-config backups on|off    turn Litestream → R2 and the monthly restore drill on or off
   skiff-platform-config drill             start the restore drill now
+  skiff-platform-config telemetry on|off [--purge]  install or remove the ClickHouse telemetry store
+  skiff-platform-config domains --platform-host <host|ip> [--content-domain <domain>]
+                        [--acme-email <email> [--cloudflare-token-file <path>]]
+                                          change the dashboard/site domains (HTTPS with --acme-email).
+                                          Without --content-domain an IP host gets <ip>.sslip.io.
+                                          The way back if a domain change left the dashboard unreachable.
   skiff-platform-config status            print the last result as JSON
 `;
 
@@ -43,6 +50,8 @@ const layout: Layout = {
 	litestreamConfig: join(ETC_DIR, 'litestream.yml'),
 	drillDir: process.env.SKIFF_RESTORE_DRILL_DIR ?? '/var/lib/skiff/drill',
 	requestFile: process.env.SKIFF_CONFIG_REQUEST_FILE ?? PLATFORM_CONFIG_DEFAULTS.requestFile,
+	agentEnvFile: join(ETC_DIR, 'agent.env'),
+	cloudflareTokenFile: join(ETC_DIR, 'cloudflare.token'),
 };
 
 function run(cmd: string[], options: { allowFailure?: boolean } = {}): RunResult {
@@ -94,14 +103,40 @@ async function controlPlaneHealthy(): Promise<boolean> {
 		/* keep localhost */
 	}
 	try {
+		const proto = origin.startsWith('https:') ? 'https' : 'http';
 		const response = await fetch('http://localhost/api/setup/status', {
 			unix: join(RUN_DIR, 'control.sock'),
-			headers: { Host: host, 'X-Forwarded-Proto': 'https', 'X-Forwarded-Host': host },
+			headers: { Host: host, 'X-Forwarded-Proto': proto, 'X-Forwarded-Host': host },
 			signal: AbortSignal.timeout(3_000),
 		});
 		if (response.status !== 200) return false;
 		const body = (await response.json()) as { needsSetup?: unknown };
 		return typeof body.needsSetup === 'boolean';
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Through Caddy on this host: `--resolve` pins the name to loopback, so this proves Caddy routes
+ * the new host to the control plane (and, with HTTPS, holds a valid certificate for it) without
+ * waiting on public DNS caches.
+ */
+async function platformAnswers(origin: string): Promise<boolean> {
+	let url: URL;
+	try {
+		url = new URL('/api/setup/status', origin);
+	} catch {
+		return false;
+	}
+	const port = url.port || (url.protocol === 'https:' ? '443' : '80');
+	const result = run(
+		['curl', '-fsS', '--max-time', '10', '--resolve', `${url.hostname}:${port}:127.0.0.1`, url.toString()],
+		{ allowFailure: true },
+	);
+	if (result.code !== 0) return false;
+	try {
+		return typeof (JSON.parse(result.stdout) as { needsSetup?: unknown }).needsSetup === 'boolean';
 	} catch {
 		return false;
 	}
@@ -119,6 +154,7 @@ const host: Host = {
 	sleep: (ms) => Bun.sleep(ms),
 	download,
 	controlPlaneHealthy,
+	platformAnswers,
 	writeStatus,
 	chownRootSkiff,
 };
@@ -150,7 +186,7 @@ async function main(): Promise<number> {
 			run: (cmd) => void run(cmd, { allowFailure: true }),
 			log: host.log,
 		});
-		host.log('ready: Settings → Backups and Settings → Notifications can now change this host');
+		host.log('ready: Settings → Backups, Notifications and Domains can now change this host');
 		return 0;
 	}
 
@@ -161,7 +197,34 @@ async function main(): Promise<number> {
 	else if (command === 'backups' && (arg === 'on' || arg === 'off'))
 		status = await helper.apply({ ...base, action: 'backups', enabled: arg === 'on' });
 	else if (command === 'drill') status = await helper.apply({ ...base, action: 'restore-drill' });
-	else {
+	else if (command === 'telemetry' && (arg === 'on' || arg === 'off'))
+		status = await helper.apply({
+			...base,
+			action: 'telemetry',
+			enabled: arg === 'on',
+			purgeData: arg === 'off' && process.argv.includes('--purge'),
+		});
+	else if (command === 'domains') {
+		const flag = (name: string) => {
+			const index = process.argv.indexOf(name);
+			return index > 0 ? (process.argv[index + 1] ?? '') : '';
+		};
+		const platformHost = flag('--platform-host').trim().toLowerCase();
+		const acmeEmail = flag('--acme-email').trim();
+		const tokenFile = flag('--cloudflare-token-file');
+		let contentDomain = flag('--content-domain').trim().toLowerCase();
+		if (!contentDomain && isIpv4(platformHost)) contentDomain = temporaryContentDomain(platformHost);
+		const cloudflareToken = tokenFile ? readFileSync(tokenFile, 'utf8').trim() : undefined;
+		status = await helper.apply({
+			...base,
+			action: 'domains',
+			platformHost,
+			contentDomain,
+			tls: Boolean(acmeEmail),
+			acmeEmail,
+			...(cloudflareToken ? { cloudflareToken } : {}),
+		});
+	} else {
 		console.error(`skiff-platform-config: unknown command ${command}\n\n${USAGE}`);
 		return 64;
 	}

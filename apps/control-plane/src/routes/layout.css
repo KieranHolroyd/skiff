@@ -194,3 +194,10 @@
 	outline-offset: 2px;
 	border-radius: var(--radius-sm);
 }
+
+/* Dashboard assistant docked beside the page (lib/assistant/AssistantPanel.svelte). */
+@media (min-width: 1024px) {
+	html.skiff-assistant-docked body {
+		padding-right: var(--skiff-assistant-width, 440px);
+	}
+}

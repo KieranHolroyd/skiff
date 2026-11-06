@@ -17,6 +17,7 @@ import { CaddyAdmin } from './caddy.ts';
 import { CertProbe, certProbeTargets, tlsCertReader } from './certs.ts';
 import { buildCaddyConfig, isProductionRoute, tlsSubjects } from './caddy-config.ts';
 import { loadConfig, type AgentConfig } from './config.ts';
+import { controlSocketFetch } from './control-socket.ts';
 import { DatabaseBackupRunner } from './database-backups.ts';
 import { DatabasePitrRunner } from './database-pitr.ts';
 import { DatabaseCredentialRunner } from './database-credentials.ts';
@@ -1148,6 +1149,8 @@ async function runJoinCli(args: string[]): Promise<void> {
 
 async function main(): Promise<void> {
 	const config = loadConfig();
+	// Edge node: reach the control plane on its socket, never through our own Caddy (D105).
+	if (config.controlSocket) globalThis.fetch = controlSocketFetch(globalThis.fetch, config.controlUrl, config.controlSocket);
 	const runtime = new AgentRuntime(config);
 	await runtime.run();
 }

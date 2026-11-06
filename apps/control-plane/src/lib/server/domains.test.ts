@@ -3,14 +3,14 @@ import { isSharedDomain, registrableDomain } from './domains';
 
 describe('isSharedDomain', () => {
 	test('two registrable domains are separate', () => {
-		expect(isSharedDomain('control.kieran.dev', 'kierancloud.dev')).toBe(false);
+		expect(isSharedDomain('control.example.com', 'examplecloud.com')).toBe(false);
 		expect(isSharedDomain('cloud.example.co.uk', 'sites.other.co.uk')).toBe(false);
 	});
 
 	test('same or nested domains are shared, in both directions', () => {
-		expect(isSharedDomain('kieran.dev', 'kieran.dev')).toBe(true);
-		expect(isSharedDomain('control.kieran.dev', 'kieran.dev')).toBe(true);
-		expect(isSharedDomain('kieran.dev', 'sites.kieran.dev')).toBe(true);
+		expect(isSharedDomain('example.com', 'example.com')).toBe(true);
+		expect(isSharedDomain('control.example.com', 'example.com')).toBe(true);
+		expect(isSharedDomain('example.com', 'sites.example.com')).toBe(true);
 	});
 
 	test('siblings under one registrable domain are shared', () => {

@@ -4,10 +4,12 @@ import { platformOrigin } from '#lib/server/config.js';
 import {
 	enforceOwnerSecondFactor,
 	userHasPasskey,
+	userHasPassword,
 	userHasSecondFactor,
 	userHasTotp
 } from '#lib/server/second-factor.js';
 import { continueTo, secondFactorState } from '#lib/server/second-factor-policy.js';
+import { formPassword, startTotpEnrolment, totpCode, verifyTotpCode } from '#lib/server/totp-enrolment.js';
 import { authErrorMessage } from '#lib/server/user-settings.js';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -42,13 +44,10 @@ export const load: PageServerLoad = ({ locals, url }) => {
 		email: locals.user.email,
 		hasPasskey: userHasPasskey(userId),
 		hasTotp: userHasTotp(userId),
+		hasPassword: userHasPassword(userId),
 		redirect: next
 	};
 };
-
-function code(data: FormData): string {
-	return String(data.get('code') ?? '').replace(/[\s-]/g, '');
-}
 
 export const actions: Actions = {
 	/** Begin authenticator-app enrolment: returns the otpauth URI and one-time backup codes. */
@@ -56,26 +55,17 @@ export const actions: Actions = {
 		if (!locals.user) return fail(401, { message: 'Sign in first.' });
 		if (userHasTotp(locals.user.id))
 			return fail(400, { message: 'An authenticator app is already set up for this account.' });
-		try {
-			const result = await auth.api.enableTwoFactor({ body: { issuer: 'Skiff' }, headers: request.headers });
-			if (!('totpURI' in result) || !result.totpURI)
-				return fail(500, { message: 'Could not start authenticator setup.' });
-			const secret = new URL(result.totpURI).searchParams.get('secret') ?? '';
-			return { totpURI: result.totpURI, secret, backupCodes: result.backupCodes ?? [] };
-		} catch (error) {
-			return fail(400, { message: authErrorMessage(error) });
-		}
+		const started = await startTotpEnrolment(request.headers, formPassword(await request.formData()));
+		if (!started.ok) return fail(400, { message: started.message });
+		return started.value;
 	},
 
 	/** Verify an authenticator code: finishes enrolment, or answers the challenge. */
 	verifyTotp: async ({ request, url }) => {
-		const value = code(await request.formData());
-		if (!/^\d{6}$/.test(value)) return fail(400, { message: 'Enter the 6-digit code from your app.', step: 'verify' });
-		try {
-			await auth.api.verifyTOTP({ body: { code: value }, headers: request.headers });
-		} catch (error) {
-			return fail(400, { message: authErrorMessage(error), step: 'verify' });
-		}
+		const value = totpCode(await request.formData());
+		if (!value) return fail(400, { message: 'Enter the 6-digit code from your app.', step: 'verify' });
+		const verified = await verifyTotpCode(request.headers, value);
+		if (!verified.ok) return fail(400, { message: verified.message, step: 'verify' });
 		redirect(303, continueTo(url.searchParams.get('redirect'), platformOrigin));
 	},
 

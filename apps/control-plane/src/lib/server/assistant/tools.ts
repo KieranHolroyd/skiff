@@ -8,6 +8,7 @@ import {
 } from '@skiff/contracts';
 import { skiffToolDefinitions, type SkiffToolDefinition } from '../mcp';
 import { GUIDE_TOOL } from './constants';
+import { needsConfirmation, validateToolArgs } from './confirm-policy';
 import type { ProviderTool } from './provider';
 
 /**
@@ -20,6 +21,10 @@ export interface AssistantTool {
 	name: string;
 	title: string;
 	description: string;
+	/**
+	 * The chat must stop and ask the user before this tool runs. True for every MCP tool annotated
+	 * `destructiveHint` and for every tool in `CONFIRM_TOOLS` (./confirm-policy.ts).
+	 */
 	destructive: boolean;
 	schema: z.ZodType;
 	run: (
@@ -89,7 +94,14 @@ const WRITE_PERMISSION: Record<string, Permission> = {
 	update_bucket_config: 'storage:update',
 	attach_storage: 'storage:update',
 	detach_storage: 'storage:update',
-	delete_storage: 'storage:delete'
+	delete_storage: 'storage:delete',
+	// Dashboards (D101) are an org resource behind metrics:read; there is no separate write scope.
+	create_dashboard: 'metrics:read',
+	add_dashboard_panels: 'metrics:read',
+	update_dashboard_panel: 'metrics:read',
+	remove_dashboard_panels: 'metrics:read',
+	update_dashboard: 'metrics:read',
+	delete_dashboard: 'metrics:read'
 };
 
 /** Every permitted MCP tool, plus the UI guide, for one signed-in user. */
@@ -102,10 +114,13 @@ export function assistantTools(principal: Principal): AssistantTool[] {
 		name: definition.name,
 		title: definition.config.title ?? definition.name.replaceAll('_', ' '),
 		description: definition.config.description ?? '',
-		destructive: definition.config.annotations?.destructiveHint === true,
+		destructive: needsConfirmation(definition.name, definition.config.annotations),
 		schema: definition.config.inputSchema ?? z.object({}),
 		run: async (args) => {
-			const result = await definition.handler(args);
+			// Model output is untrusted: hold it to the same schema the MCP transport enforces.
+			const parsed = validateToolArgs(definition.name, definition.config.inputSchema, args);
+			if (!parsed.ok) return { ok: false, text: parsed.error };
+			const result = await definition.handler(parsed.args);
 			const text = textResult(result);
 			const isError = (result as { isError?: boolean })?.isError === true;
 			return { ok: !isError, text: text.slice(0, 40_000) };

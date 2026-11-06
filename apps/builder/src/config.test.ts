@@ -26,4 +26,15 @@ describe('builder config', () => {
 			ConfigError,
 		);
 	});
+
+	test('sends the git token only to listed hosts, github.com by default', () => {
+		const config = { ...base, SKIFF_BUILDER_SYSTEMD: 'true', SKIFF_BUILDER_USER: 'skiff-build' };
+		expect(loadConfig(config).gitTokenHosts).toEqual(['github.com']);
+		expect(loadConfig({ ...config, SKIFF_GIT_TOKEN_HOSTS: 'GitHub.com, git.corp:8443' }).gitTokenHosts).toEqual([
+			'github.com',
+			'git.corp:8443',
+		]);
+		expect(() => loadConfig({ ...config, SKIFF_GIT_TOKEN_HOSTS: 'https://github.com' })).toThrow(ConfigError);
+		expect(() => loadConfig({ ...config, SKIFF_GIT_TOKEN_HOSTS: 'evil/.com' })).toThrow(ConfigError);
+	});
 });

@@ -19,6 +19,7 @@ import type { DatabaseEngine } from '@skiff/contracts';
 import type { RunOptions, SessionOptions, StudioPlugin, StudioSession, StudioTarget } from '../../driver.ts';
 import {
 	StudioError,
+	type AlterResult,
 	type ApplyResult,
 	type BrowseQuery,
 	type Cell,
@@ -27,6 +28,7 @@ import {
 	type ObjectDescription,
 	type ObjectRef,
 	type RowChange,
+	type SchemaChange,
 	type StudioCapabilities,
 	type StudioEvent,
 	type TreeNode,
@@ -45,6 +47,7 @@ import {
 	parseCommand,
 	type ParsedCommand,
 } from './commands.ts';
+import { MONGO_STRUCTURE, commandStatement, planMongoAlter } from './structure.ts';
 
 type Document = BSON.Document;
 
@@ -55,6 +58,7 @@ const CAPABILITIES: StudioCapabilities = {
 	cancel: 'kill-op',
 	explain: true,
 	schemas: false,
+	structure: [...MONGO_STRUCTURE],
 };
 
 /** Documents per `rows` event and per cursor batch. */
@@ -82,7 +86,7 @@ export const mongodbPlugin: StudioPlugin = {
 			await client.close().catch(() => undefined);
 			throw new StudioError('engine_error', `Could not connect to MongoDB: ${messageOf(error)}`);
 		}
-		return new MongoSession(client, client.db(target.database), options);
+		return new MongoSession(client, client.db(target.database), options, target.database);
 	},
 };
 
@@ -134,6 +138,7 @@ class MongoSession implements StudioSession {
 		private readonly client: MongoClient,
 		private readonly db: Db,
 		private readonly options: SessionOptions,
+		private readonly databaseName: string,
 	) {}
 
 	// ------------------------------------------------------------ tree and describe
@@ -594,6 +599,55 @@ class MongoSession implements StudioSession {
 		return { applied, conflicts: [] };
 	}
 
+	// ------------------------------------------------------------ structure
+
+	/**
+	 * One structure edit as one server command (see `structure.ts`). The object it acts on is
+	 * looked up first, so a missing collection is `not_found` and a view refuses field, index
+	 * and truncate edits, dry runs included.
+	 */
+	async alter(change: SchemaChange, options: { dryRun: boolean }, signal: AbortSignal): Promise<AlterResult> {
+		if (this.options.readOnly) throw new StudioError('read_only', 'The session is read-only.');
+		if (!(CAPABILITIES.structure as readonly string[]).includes(change.op))
+			throw new StudioError('unsupported', `MongoDB cannot ${change.op}.`);
+		const plan = planMongoAlter(change, this.databaseName);
+		const statements = [commandStatement(plan.command)];
+		const op = this.op(signal);
+		if (plan.existing !== null) {
+			const info = await this.collectionInfo({ path: [plan.existing], kind: 'collection' }, op);
+			if (plan.collectionOnly && info.type === 'view')
+				throw new StudioError('unsupported', `${plan.existing} is a view; only collections can be changed this way.`);
+		}
+		// `create` succeeds silently when an identical collection exists (MongoDB 7+), so a
+		// name clash is checked here; `renameCollection` refuses one itself (dropTarget false).
+		if (change.op === 'create-collection') {
+			const [clash] = await this.guard(op, () =>
+				this.db
+					.listCollections({ name: change.name }, { nameOnly: true, authorizedCollections: true, maxTimeMS: this.left(op), comment: op.comment })
+					.toArray(),
+			);
+			if (clash) throw new StudioError('conflict', `A collection named ${change.name} already exists.`);
+		}
+		if (options.dryRun) return { statements, applied: false };
+		const target = plan.on === 'admin' ? this.client.db('admin') : this.db;
+		// Known failures become specific codes inside the race; the rest (timeouts, kills)
+		// go through `guard`'s own mapping.
+		const reply = await this.guard(op, () =>
+			target
+				.command({ ...plan.command, maxTimeMS: this.left(op), comment: op.comment })
+				.catch((error: unknown) => {
+					throw alterError(error, change) ?? error;
+				}),
+		);
+		const writeErrors = Array.isArray(reply.writeErrors) ? (reply.writeErrors as Document[]) : [];
+		if (writeErrors.length > 0) {
+			const first = writeErrors[0]!;
+			throw new StudioError('engine_error', `${String(first.errmsg ?? 'The write failed')} (after ${toNumber(reply.nModified) ?? 0} document(s) were changed).`);
+		}
+		const affected = plan.affected === null ? undefined : toNumber(reply[plan.affected]);
+		return { statements, applied: true, ...(affected === undefined ? {} : { affected }) };
+	}
+
 	// ------------------------------------------------------------ value and close
 
 	async value(object: ObjectRef, key: Record<string, Cell>, column: string, signal: AbortSignal): Promise<Cell> {
@@ -786,6 +840,23 @@ function withoutKeys(doc: Document, keys: string[]): Document {
 function positive(value: unknown): number | undefined {
 	const n = toNumber(value);
 	return n !== undefined && Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
+}
+
+/** Specific codes for the server errors a structure edit expects; null for anything else. */
+function alterError(error: unknown, change: SchemaChange): StudioError | null {
+	const code = errorCode(error);
+	const name = (error as { codeName?: unknown })?.codeName;
+	if (code === 48 || name === 'NamespaceExists') {
+		const target = change.op === 'rename' || change.op === 'create-collection' ? change.name : 'that';
+		return new StudioError('conflict', `A collection named ${target} already exists.`);
+	}
+	if (code === 26 || name === 'NamespaceNotFound' || code === 27 || name === 'IndexNotFound')
+		return new StudioError('not_found', messageOf(error));
+	if (code === 85 || code === 86 || name === 'IndexOptionsConflict' || name === 'IndexKeySpecsConflict')
+		return new StudioError('conflict', messageOf(error));
+	if (code === 11000) return new StudioError('conflict', `The unique index cannot be built: ${messageOf(error)}`);
+	if (code === 73 || name === 'InvalidNamespace') return new StudioError('bad_request', messageOf(error));
+	return null;
 }
 
 function toNumber(value: unknown): number | undefined {

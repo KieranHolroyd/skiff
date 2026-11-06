@@ -13,15 +13,52 @@ The assistant cannot do more than the signed-in user, and every action is audite
 - **A chat surface over the MCP catalog.** `skiffToolDefinitions()` captures the exact tool
   definitions the remote MCP server registers, and the assistant calls those handlers. Tool names,
   schemas, validation, permissions and results are the same on both surfaces.
-- **A small multi-agent team.** A lead routes each turn to one to four specialists: Guide,
-  Projects, Data and Platform. Each specialist has a domain prompt and a subset of the tools. If
-  more than one answers, the lead synthesises one reply. `SKIFF_ASSISTANT_MAX_AGENTS` caps the
-  fan-out (default 3).
-- **A UI channel.** Besides the MCP tools, every agent gets `guide_user`. The browser sends a
+- **One agent with every tool.** Each turn runs a single tool loop with one system prompt that
+  covers dashboard help, projects, data and the platform, and every MCP tool the signed-in user may
+  call. A question that spans areas is answered in one pass; there is no routing step and no
+  merging of partial answers. An owner can narrow the tool list (see below).
+- **A UI channel.** Besides the MCP tools, the assistant gets `guide_user`. The browser sends a
   compact outline of the current page (`data-skiff-target` ids plus headings, buttons, links, tabs
-  and inputs with CSS selectors). The agent can navigate to a path and spotlight an element, one
+  and inputs with CSS selectors). The assistant can navigate to a path and spotlight an element, one
   step at a time.
 - **Optional.** No provider means no launcher and the chat endpoint answers `503`.
+
+## The chat panel
+
+The panel is a non-modal side panel (⌘I), so the dashboard stays usable while it is open. From the
+⋯ menu it can go **wide** (640 px) or **dock** beside the page on screens 1024 px and wider; docking
+narrows the page instead of covering it.
+
+- **Conversations persist** per user in this browser's `localStorage` (40 at most, pinned ones are
+  kept first). The history view searches, pins, renames and deletes them; the empty state offers the
+  three most recent. Nothing about the conversation is stored on the server beyond the audit trail.
+  Drafts are kept per conversation.
+- **Markdown replies.** `markdown.ts` parses a safe subset (paragraphs, lists, code fences with a
+  copy button, tables, quotes, bold/italic/inline code, links) into tokens that Svelte renders as
+  elements. There is no `{@html}` on this path. Links are limited to relative dashboard paths (which
+  navigate in place) and `http(s)` URLs (new tab, `noopener`). The assistant is told this subset
+  in `PANEL_FORMAT`, which is appended to the prompt, an owner-edited one included.
+- **Each turn shows its own work.** Tool steps attach to the reply that made them: a running
+  line while it works, then a collapsible list with status, duration, the arguments (file bodies
+  summarised) and a result excerpt. Confirmation cards attach to the reply that proposed them, show
+  the arguments as fields, and stay in the scrollback with their outcome.
+- **Recovery.** Stop keeps the partial reply. Regenerate re-runs the latest turn; Edit (or ↑ on an
+  empty composer) loads a message back into the composer and replaces that turn and everything after
+  it. A failed turn shows the reason inline with Try again. A dropped stream is reported, not left
+  spinning.
+- **Composer.** Autosizing; Enter sends, Shift+Enter adds a newline, IME composition is respected;
+  you can type the next message while a reply streams. `/` opens commands (`/new`, `/history`,
+  `/retry`, `/clear`, `/export`, `/status`, `/tour`, `/help`). `@` autocompletes projects, databases
+  and storage instances from the user's own `GET /api/v1/{projects,databases,storage}` and inserts
+  `@name`, which the assistant resolves with tools.
+- **Page context is visible and optional.** A chip under the composer shows which page is shared.
+  Turning it off sends an empty `path` and no outline; the assistant is told it cannot see the page.
+- **Outcomes reach the model.** When history is sent, each past reply carries a line saying what
+  happened to its proposed action (confirmed and the result, cancelled, failed or expired) and
+  whether the user stopped it early. After an action completes, **Ask Skiff to follow up** sends a
+  verification message.
+- Also: copy on every message, timestamps, turn duration, a jump-to-latest pill when you have scrolled up, an unread dot on the launcher when a
+  reply finishes while the panel is closed, and Export as Markdown.
 
 ## Setup
 
@@ -48,9 +85,7 @@ The same settings can be set in the environment on a host that is not managed by
 SKIFF_ASSISTANT_PROVIDER=openai-compatible  # openai | openai-compatible | openrouter | ollama
 SKIFF_ASSISTANT_BASE_URL=https://api.openai.com/v1
 SKIFF_ASSISTANT_MODEL=gpt-4.1-mini
-SKIFF_ASSISTANT_ROUTER_MODEL=gpt-4.1-nano   # optional; defaults to MODEL
 SKIFF_ASSISTANT_API_KEY=sk-...
-SKIFF_ASSISTANT_MAX_AGENTS=3                # 1–4
 SKIFF_ASSISTANT_DISABLED=1                  # emergency off switch
 ```
 
@@ -61,44 +96,38 @@ server they go to `.data/platform-settings.json` and apply after a restart.
 The API key is write-only: it is never sent back to the browser, and a blank field in the form
 keeps the saved one.
 
-### Agent details (owner only)
+### Instructions and tools (owner only)
 
-Below the provider panel, **Agent details** edits each specialist: display name, the one-line
-description the lead uses for routing, the full system prompt, an optional model override, and the
-exact MCP tools it may call. Agents can also be disabled without losing their details, and each can
-be reset to the built-in defaults.
+Below the provider panel, **Instructions and tools** edits the assistant: the full system prompt,
+an optional model override, and which MCP tools it may call. **Every tool** is the default and
+includes tools added in later releases; turning it off picks an exact allowlist. **Reset** returns
+everything to the built-in defaults.
 
-These values live in the `settings` table under one JSON key (`assistant.agents.v1`), not in the
+These values live in the `settings` table under one JSON key (`assistant.agent.v1`), not in the
 environment or a release file, so a change applies to the next turn without restarting the control
 plane. Reads are lenient (a malformed row falls back to defaults); writes are validated against the
 current tool catalog and audited as `platform.assistantAgent` (and
-`platform.assistantAgentReset`). Only the owner can see or change this page; non-owners only receive
-the display labels needed to render the chat.
+`platform.assistantAgentReset`). Only the owner can see or change this page.
 
 ## A turn
 
 ```
-browser ── POST /api/v1/assistant/chat ──► lead router (1 model call)
-                                              │
-                    ┌─────────────────────────┼─────────────────────────┐
-                    ▼                         ▼                         ▼
-              Guide agent               Projects agent             Data agent …
-           (tools + guide_user)          (tools only)              (tools only)
-                    │                         │                         │
-                    └───────────── text, tool activity, UI events ─────► SSE
-                                              │
-                                   if >1 answer: lead synthesis
+browser ── POST /api/v1/assistant/chat ──► assistant (system prompt + page outline + history)
+                                              │   ▲
+                                    tool calls│   │results (MCP handlers, guide_user)
+                                              ▼   │
+                                          tool loop ── text, tool activity, UI events ──► SSE
 ```
 
-1. The router sees the page outline, the last eight messages and the user message, and returns
-   `{"agents":["projects","platform"],"reason":"…"}`. If the router model fails, a deterministic
-   keyword fallback picks agents so the turn still works.
-2. Each specialist runs its own tool loop (at most 8 model rounds and 16 tool calls). Tool results
-   are truncated before they go back into context; logs and site content are treated as data.
-3. The lead synthesises when more than one specialist answered. A single answer streams directly.
-4. The stream is Server-Sent Events: `run.started`, `agent.started`, `text.delta`,
-   `tool.started`, `tool.finished`, `ui.guide`, `confirmation.required`, `agent.finished`,
-   `run.finished`, `error`. The contract is `packages/contracts/src/assistant.ts`.
+1. The assistant sees its system prompt, the history, the page outline and the user message, with
+   every tool it may call (or the owner's allowlist).
+2. It runs one tool loop: at most 12 model rounds and 24 tool calls. Tool results are truncated
+   before they go back into context; logs and site content are treated as data. The reply streams
+   as it is written.
+3. The stream is Server-Sent Events: `run.started`, `text.delta`, `tool.started` (with an
+   argument preview), `tool.finished` (summary, a ≤4,000-character result excerpt and
+   `durationMs`), `ui.guide`, `confirmation.required`, `run.finished` (with `durationMs`), `error`.
+   The contract is `packages/contracts/src/assistant.ts`.
 
 The browser can cancel a run; `request.signal` aborts the upstream provider request.
 
@@ -106,19 +135,24 @@ The browser can cancel a run; `request.signal` aborts the upstream provider requ
 
 - **Same service layer.** Tools call `packages/core`; RBAC is checked there. A viewer cannot deploy
   because the tool exists; they get the same `ForbiddenError` the dashboard would.
-- **Destructive actions need a click.** The runner never executes a tool annotated
-  `destructiveHint: true`. It mints a short-lived HMAC token bound to the user, org, tool and exact
+- **Destructive and production-changing actions need a click.** The runner never executes a tool
+  annotated `destructiveHint: true`, or one in the server-side `CONFIRM_TOOLS` list
+  (`assistant/confirm-policy.ts`): access changes, share links, presigned URLs, deploy, promote and
+  rollback, workload changes, credential rotation, restores and restarts. The model reads
+  untrusted text (logs, page content, rows), so an injected instruction must not be able to publish
+  a site or mint a link on its own. Arguments are parsed with the tool's schema before anything
+  runs. It mints a short-lived HMAC token bound to the user, org, tool and exact
   arguments, and the chat shows a Confirm/Cancel card. `/api/v1/assistant/confirm` verifies the
   token and then runs the tool through the normal handler. The token expires in 10 minutes.
 - **Audit.** The tool wrapper records `assistant.<tool>` with args (inline file bodies summarised,
-  never stored) and the result. The turn itself records `assistant.chat` with the agents and page,
-  not the full message.
+  never stored) and the result. The turn itself records `assistant.chat` with the message length and
+  page, not the full message.
 - **No credentials.** Database and storage credentials are not MCP tools; the model never receives
   them. Tool output can still contain project names, URLs and log lines, so point the base URL at a
   provider you trust.
 - **Bounded input.** One message is at most 8,000 characters, history is at most 30 messages, the
   page outline is at most 120 targets, and a user gets 12 turns a minute.
-- **Prompt injection.** Tool output and page text are labelled as data in every agent prompt. The
+- **Prompt injection.** Tool output and page text are labelled as data in the prompt. The
   assistant has no shell and no arbitrary HTTP tool; the only non-MCP tool drives the UI tour.
 
 ## Guided tours
@@ -146,7 +180,6 @@ works on pages that have not been annotated.
 |---|---|
 | No launcher, `503 assistant_not_configured` | Base URL or model is missing, or `SKIFF_ASSISTANT_DISABLED=1` |
 | "The model provider answered 401/404" | Wrong key, wrong base URL, or the model id is not served there |
-| "Routed from keywords…" | The router model failed; the turn still ran with a heuristic |
 | "The model provider timed out" | No response within 120 s |
 | A tour step says the element is not on the page | The page changed, the element is hidden, or the user lacks access |
 | Destructive card never appears | The action was not marked destructive; check the tool annotations |
@@ -157,11 +190,13 @@ works on pages that have not been annotated.
 |---|---|
 | `packages/contracts/src/assistant.ts` | Page outline, chat request, tour, event and status types |
 | `apps/control-plane/src/lib/server/mcp.ts` | `skiffToolDefinitions()` captures the MCP catalog |
-| `apps/control-plane/src/lib/server/assistant/agents.ts` | Prompts and per-agent tool allowlists |
-| `apps/control-plane/src/lib/server/assistant/orchestrator.ts` | Routing, tool loops, synthesis, confirmations |
+| `apps/control-plane/src/lib/server/assistant/agents.ts` | The system prompt and `PANEL_FORMAT` |
+| `apps/control-plane/src/lib/server/assistant/orchestrator.ts` | The tool loop and confirmations |
 | `apps/control-plane/src/lib/server/assistant/provider.ts` | OpenAI-compatible streaming client |
 | `apps/control-plane/src/lib/server/assistant/openrouter.ts` | OpenRouter catalogue (tool-capable models, prices) for the picker |
-| `apps/control-plane/src/lib/server/assistant/settings.ts` | Owner-edited agent details in the `settings` table |
+| `apps/control-plane/src/lib/server/assistant/settings.ts` | Owner-edited instructions, model and tool allowlist in the `settings` table |
 | `apps/control-plane/src/routes/api/v1/assistant/*` | Status, chat stream and confirm endpoints |
-| `apps/control-plane/src/lib/assistant/*` | Chat state, page outline, panel, launcher, tour and the OpenRouter model picker |
+| `apps/control-plane/src/lib/assistant/assistant.svelte.ts` | Chat state, persisted conversations, turns, regenerate/edit, confirmations |
+| `apps/control-plane/src/lib/assistant/markdown.ts`, `Markdown.svelte` | Safe Markdown subset for replies |
+| `apps/control-plane/src/lib/assistant/*.svelte` | Panel, composer (slash commands, mentions), messages, tool steps, confirmation cards, history, launcher, tour, model picker |
 | `apps/control-plane/src/routes/(dashboard)/settings/assistant` | Owner-only setup |

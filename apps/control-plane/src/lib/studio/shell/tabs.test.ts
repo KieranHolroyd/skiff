@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import type { TreeNode } from '@skiff/studio/protocol';
 import {
+	closeObjectTabs,
 	closeTab,
+	renameObjectTab,
 	emptyTabs,
 	loadTabs,
 	openObjectTab,
@@ -69,5 +71,30 @@ describe('tabs', () => {
 		expect(loadTabs(throwing, 'app')).toEqual(emptyTabs());
 		expect(() => saveTabs(throwing, 'app', emptyTabs())).not.toThrow();
 		expect(loadTabs(undefined, 'app')).toEqual(emptyTabs());
+	});
+});
+
+describe('structure edits', () => {
+	test('a renamed object keeps its tab, place and focus', () => {
+		let state = openObjectTab(emptyTabs(), users);
+		state = openObjectTab(state, orders);
+		state = openQueryTab(state);
+		state = { ...state, active: 'o:["public","users"]' };
+		const renamed = { ...users, path: ['public', 'people'], name: 'people' };
+		state = renameObjectTab(state, users.path, renamed);
+		expect(state.tabs.map((tab) => tab.id)).toEqual(['o:["public","people"]', 'o:["public","orders"]', 'q:1']);
+		expect(state.active).toBe('o:["public","people"]');
+	});
+	test('renaming an object without a tab changes nothing', () => {
+		const state = openObjectTab(emptyTabs(), orders);
+		expect(renameObjectTab(state, users.path, users)).toBe(state);
+	});
+	test('dropping a schema closes every tab inside it', () => {
+		let state = openObjectTab(emptyTabs(), users);
+		state = openObjectTab(state, orders);
+		state = openObjectTab(state, { ...users, path: ['audit', 'log'], name: 'log' });
+		state = closeObjectTabs(state, ['public']);
+		expect(state.tabs.map((tab) => tab.id)).toEqual(['o:["audit","log"]']);
+		expect(state.active).toBe('o:["audit","log"]');
 	});
 });

@@ -7,7 +7,7 @@ import { DEFAULT_FEATURES, environmentSlugSchema, orgNetworkName, storageAlias, 
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
-import { TelemetryStore } from './telemetry.ts';
+import { disposeTelemetryStore, hasClickHouse, testTelemetryStore } from './test-clickhouse.ts';
 import type { Core } from './index.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'skiff-storage-'));
@@ -32,7 +32,7 @@ const core: Core = createCore({
 		features: { ...DEFAULT_FEATURES, ORG_NETWORKS: true },
 	},
 });
-const telemetry = new TelemetryStore({ path: ':memory:', now: () => clock });
+const telemetry = testTelemetryStore({ now: () => clock });
 core.ctx.telemetry = telemetry;
 
 const owner = buildPrincipal({ kind: 'user', userId: 'user_1', orgId: 'org_1', role: 'owner', platformAdmin: true });
@@ -58,7 +58,7 @@ const heartbeat = (token: string, nodeId: string, extra: Record<string, unknown>
 	});
 
 afterAll(async () => {
-	await telemetry.close();
+	await disposeTelemetryStore(telemetry);
 	opened.sqlite.close();
 	rmSync(dir, { recursive: true, force: true });
 });
@@ -422,7 +422,7 @@ describe('managed object storage', () => {
 		expect(core.storage.createBucket(owner, 'media', { name: 'logs' }).state).toBe('ready');
 	});
 
-	test('heartbeats drive status and telemetry lands in DuckDB and SQLite', async () => {
+	test.skipIf(!hasClickHouse)('heartbeats drive status and telemetry lands in ClickHouse and SQLite', async () => {
 		const media = core.storage.get(owner, 'media');
 		heartbeat(edgeToken, edgeId, { workloads: [{ id: media.id, status: 'running', restarts: 0 }] });
 		expect(core.storage.get(owner, 'media').status).toBe('running');

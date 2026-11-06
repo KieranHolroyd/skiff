@@ -5,6 +5,7 @@ import type { CoreContext } from './context.ts';
 import { ValidationError } from './errors.ts';
 import { requirePermission } from '@skiff/contracts';
 import {
+	TELEMETRY_NOT_INSTALLED,
 	emptyTrafficReport,
 	type TelemetryInterval,
 	type TimeInput,
@@ -25,11 +26,19 @@ export interface TrafficWindow {
 	interval: TelemetryInterval;
 }
 
-/** Dashboard payload: `available` separates "DuckDB is off" from "quiet period". */
+/** Dashboard payload: `available` separates "ClickHouse is down" from "quiet period". */
 export interface TrafficView {
 	permitted: boolean;
 	available: boolean;
 	report: TrafficReport;
+	/** Why telemetry is unavailable, when it is not. */
+	reason?: string;
+	/** False when the optional telemetry store is not installed (a normal state, D101). */
+	installed?: boolean;
+}
+
+function unavailableReason(telemetry: { error: Error | null } | undefined): string {
+	return telemetry?.error?.message ?? TELEMETRY_NOT_INSTALLED;
 }
 
 export class MetricsService {
@@ -76,7 +85,7 @@ export class MetricsService {
 	}
 
 	/**
-	 * DuckDB traffic for one project (every environment host), scoped by RBAC. Returns a
+	 * ClickHouse traffic for one project (every environment host), scoped by RBAC. Returns a
 	 * `permitted: false` payload instead of throwing so a read-only token without metrics
 	 * visibility can still open the project page.
 	 */
@@ -90,8 +99,8 @@ export class MetricsService {
 		requirePermission(principal, 'project:read');
 		const project = this.ctx.projects.requireRow(principal, projectSlug);
 		const telemetry = this.ctx.telemetry;
-		if (!telemetry?.available) {
-			return { permitted: true, available: false, report: emptyTrafficReport() };
+		if (!telemetry || !(await telemetry.ready())) {
+			return { permitted: true, available: false, report: emptyTrafficReport(), reason: unavailableReason(telemetry), installed: telemetry?.installed ?? false };
 		}
 		const report = await telemetry.report({ ...window, projectId: project.id });
 		return { permitted: true, available: true, report };
@@ -118,8 +127,8 @@ export class MetricsService {
 		const hosts = [deployment.previewHost, ...deployment.serving.map((item) => item.host)];
 		if (!hosts.includes(host)) throw new ValidationError('That host does not serve this deployment.');
 		const telemetry = this.ctx.telemetry;
-		if (!telemetry?.available) {
-			return { permitted: true, available: false, report: emptyTrafficReport() };
+		if (!telemetry || !(await telemetry.ready())) {
+			return { permitted: true, available: false, report: emptyTrafficReport(), reason: unavailableReason(telemetry), installed: telemetry?.installed ?? false };
 		}
 		const report = await telemetry.report({ ...window, host });
 		return { permitted: true, available: true, report };
@@ -132,8 +141,8 @@ export class MetricsService {
 		}
 		requirePermission(principal, 'project:read');
 		const telemetry = this.ctx.telemetry;
-		if (!telemetry?.available) {
-			return { permitted: true, available: false, report: emptyTrafficReport() };
+		if (!telemetry || !(await telemetry.ready())) {
+			return { permitted: true, available: false, report: emptyTrafficReport(), reason: unavailableReason(telemetry), installed: telemetry?.installed ?? false };
 		}
 		const projectIds = this.ctx.projects
 			.list(principal, { includeDeleted: true })
@@ -145,27 +154,37 @@ export class MetricsService {
 		return { permitted: true, available: true, report };
 	}
 
-	/** Prometheus text exposition (DESIGN §8: export only, no external scraper required). */
+	/**
+	 * Unauthenticated fleet summary on `GET /metrics` (DESIGN §8: export only). Kept for callers
+	 * that predate the scoped exporter; `MetricsExporter.render` is the full surface.
+	 */
 	async prometheus(): Promise<string> {
+		return this.ctx.metricsExport.render(undefined, { section: 'all' });
+	}
+
+	/** The fleet counters that open every platform exposition. */
+	platformLines(): string[] {
 		const summary = this.rawSummary();
-		const lines = [
+		return [
 			'# HELP skiff_nodes_total Nodes known to the control plane.',
 			'# TYPE skiff_nodes_total gauge',
 			`skiff_nodes_total ${summary.nodes}`,
-			'skiff_nodes_online ' + summary.online,
-			'skiff_projects_total ' + summary.projects,
-			'skiff_deployments_active ' + summary.activeDeployments,
-			'skiff_storage_bytes ' + summary.storageBytes,
-			'skiff_agent_desired_version_info{version="' + escape(summary.agentVersion) + '"} 1',
+			'# HELP skiff_nodes_online Nodes currently online.',
+			'# TYPE skiff_nodes_online gauge',
+			`skiff_nodes_online ${summary.online}`,
+			'# HELP skiff_projects_total Projects (apps), excluding the trash.',
+			'# TYPE skiff_projects_total gauge',
+			`skiff_projects_total ${summary.projects}`,
+			'# HELP skiff_deployments_active Active deployments.',
+			'# TYPE skiff_deployments_active gauge',
+			`skiff_deployments_active ${summary.activeDeployments}`,
+			'# HELP skiff_storage_bytes Release artifact bytes across every org.',
+			'# TYPE skiff_storage_bytes gauge',
+			`skiff_storage_bytes ${summary.storageBytes}`,
+			'# HELP skiff_agent_desired_version_info Agent version the control plane wants nodes on.',
+			'# TYPE skiff_agent_desired_version_info gauge',
+			`skiff_agent_desired_version_info{version="${escape(summary.agentVersion)}"} 1`,
 		];
-		if (this.ctx.telemetry?.available) {
-			try {
-				lines.push(await this.ctx.telemetry.getPrometheusMetrics());
-			} catch (error) {
-				console.error('[metrics] telemetry exposition failed:', error);
-			}
-		}
-		return `${lines.join('\n')}\n`;
 	}
 
 	private rawSummary() {

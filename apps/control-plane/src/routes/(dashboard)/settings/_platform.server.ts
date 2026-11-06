@@ -48,6 +48,17 @@ export function queueConfig(locals: App.Locals, body: Body, success: string) {
 	if (!principal || !canConfigurePlatform(principal))
 		return fail(403, { message: OWNER_ONLY_MESSAGE });
 	const availability = configAvailability();
+	if (availability === 'local' && body.action === 'telemetry')
+		return fail(409, {
+			message: body.enabled
+				? 'On a dev server, run `bun run dev:clickhouse --background`, then restart the dev server.'
+				: 'On a dev server, run `bun run dev:clickhouse --stop` (and --reset to delete its data).'
+		});
+	if (availability === 'local' && body.action === 'domains')
+		return fail(409, {
+			message:
+				'A dev server takes its domains from SKIFF_PLATFORM_ORIGIN and SKIFF_CONTENT_DOMAIN. Change them there and restart it.'
+		});
 	if (availability === 'local') {
 		// Dev server: no root helper; save to .data/platform-settings.json (see local-settings.ts).
 		try {
@@ -88,13 +99,27 @@ export function queueConfig(locals: App.Locals, body: Body, success: string) {
 			? { section: body.section, set: Object.keys(body.set), unset: body.unset }
 			: body.action === 'backups'
 				? { enabled: body.enabled }
-				: {};
+				: body.action === 'telemetry'
+					? { enabled: body.enabled, purgeData: body.purgeData }
+					: body.action === 'domains'
+						? {
+								platformHost: body.platformHost,
+								contentDomain: body.contentDomain,
+								tls: body.tls,
+								// Never the token itself.
+								cloudflareToken: body.cloudflareToken ? 'replaced' : 'kept'
+							}
+						: {};
 	const action =
 		body.action === 'configure'
 			? 'platform.config'
 			: body.action === 'backups'
 				? 'platform.backups'
-				: 'platform.restoreDrill';
+				: body.action === 'telemetry'
+					? 'platform.telemetry'
+					: body.action === 'domains'
+						? 'platform.domains'
+						: 'platform.restoreDrill';
 	try {
 		const requestId = submitConfigRequest(principal, body);
 		core.ctx.audit.record({

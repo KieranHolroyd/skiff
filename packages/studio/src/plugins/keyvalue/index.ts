@@ -23,6 +23,7 @@ import { bytesCell, cellToParam, jsonCell, textCell } from '../../cells.ts';
 import type { RunOptions, SessionOptions, StudioPlugin, StudioSession, StudioTarget } from '../../driver.ts';
 import {
 	StudioError,
+	type AlterResult,
 	type ApplyResult,
 	type BrowseQuery,
 	type Cell,
@@ -30,6 +31,7 @@ import {
 	type ObjectDescription,
 	type ObjectRef,
 	type RowChange,
+	type SchemaChange,
 	type StudioCapabilities,
 	type StudioEvent,
 	type TreeNode,
@@ -37,6 +39,7 @@ import {
 } from '../../protocol.ts';
 import { decodeCursor, encodeCursor, MAX_CURSOR_CHARS, type BrowseCursor } from './cursor.ts';
 import { flagsFor, gateCommand, parseCommandInfo, type CommandSpec } from './gate.ts';
+import { KEYVALUE_STRUCTURE, commandLine } from './structure.ts';
 import { jsonSafe, shapeReply } from './shape.ts';
 import { argText, tokenize, TokenizeError, type CommandArg } from './tokenize.ts';
 
@@ -52,6 +55,7 @@ const CAPABILITIES: StudioCapabilities = {
 	cancel: 'none',
 	explain: false,
 	schemas: true,
+	structure: [...KEYVALUE_STRUCTURE],
 };
 
 const DELIMITER = ':';
@@ -1010,6 +1014,48 @@ class KeyValueSession implements StudioSession {
 				}
 			});
 			return { conflicts, commands };
+		});
+	}
+
+	// ------------------------------------------------------------ structure
+
+	/**
+	 * Rename (`RENAMENX`, never overwriting) or delete (`UNLINK`) one key. Both check the key
+	 * exists first, dry runs included, and run alone on the primary client like `apply`.
+	 */
+	async alter(change: SchemaChange, options: { dryRun: boolean }, signal: AbortSignal): Promise<AlterResult> {
+		this.assertOpen();
+		if (this.options.readOnly) throw new StudioError('read_only', 'The session is read-only.');
+		if (change.op !== 'rename' && change.op !== 'drop')
+			throw new StudioError('unsupported', `Valkey and Redis keys cannot ${change.op}.`);
+		const scope = this.resolve(change.object);
+		if (scope.kind !== 'key')
+			throw new StudioError('unsupported', 'Only single keys can be renamed or deleted; groups are just name prefixes.');
+		const key = scope.key;
+		if (change.op === 'rename') {
+			if (change.name === key) throw new StudioError('bad_request', 'The new name is the same as the old one.');
+			if (change.name.length > PATH_SEGMENT_MAX)
+				throw new StudioError('bad_request', `A key name the studio can open is at most ${PATH_SEGMENT_MAX} characters.`);
+		}
+		const [command, args] = change.op === 'rename' ? ['RENAMENX', [key, change.name]] : ['UNLINK', [key]];
+		const statements = [commandLine(command, args)];
+		return this.gate.write(async () => {
+			if (signal.aborted) throw cancelled();
+			if (String(await this.p('TYPE', [key])) === 'none')
+				throw new StudioError('not_found', `The key ${key} no longer exists.`);
+			if (options.dryRun) return { statements, applied: false };
+			let reply: unknown;
+			try {
+				reply = await this.p(command, args);
+			} catch (error) {
+				if (/no such key/i.test(message(error))) throw new StudioError('not_found', `The key ${key} no longer exists.`);
+				throw new StudioError('engine_error', message(error));
+			}
+			if (change.op === 'rename' && Number(reply) === 0)
+				throw new StudioError('conflict', `A key named ${change.name} already exists.`);
+			if (change.op === 'drop' && Number(reply) === 0)
+				throw new StudioError('not_found', `The key ${key} no longer exists.`);
+			return { statements, applied: true };
 		});
 	}
 

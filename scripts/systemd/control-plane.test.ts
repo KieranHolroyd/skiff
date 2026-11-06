@@ -35,7 +35,15 @@ describe('control-plane units', () => {
 		expect(guard).toContain(`Before=${PRIMARY_UNIT} ${STANDBY_UNIT} skiff-litestream.service`);
 		expect(guard).toContain('DefaultDependencies=no');
 		expect(guard).toContain('ExecStart=-/usr/local/sbin/skiff-update-self recover --boot');
-		expect(units[PRIMARY_UNIT]).toContain(`After=network-online.target caddy.service ${GUARD_UNIT}`);
+		expect(units[PRIMARY_UNIT]).toContain(`After=network-online.target caddy.service ${GUARD_UNIT} skiff-clickhouse.service`);
+	});
+
+	test('both slots start after ClickHouse but only want it, never require it', () => {
+		for (const unit of [units[PRIMARY_UNIT]!, units[STANDBY_UNIT]!]) {
+			expect(unit).toContain('Wants=network-online.target skiff-clickhouse.service');
+			expect(unit).toMatch(/^After=.* skiff-clickhouse\.service$/m);
+			expect(unit).not.toMatch(/^(Requires|BindsTo|Requisite)=/m);
+		}
 	});
 
 	test('ensureControlPlaneUnits writes only on change and enables the guard', () => {

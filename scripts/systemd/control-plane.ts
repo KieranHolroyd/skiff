@@ -13,11 +13,15 @@
  * bake it restarts the primary on the new release and points control.sock back. The standby is
  * never enabled, so a reboot always comes up on the primary and `current`.
  *
+ * Both want (never require) skiff-clickhouse.service, the hot telemetry store: they start after it
+ * when it is installed and boot fine without it (telemetry then reports unavailable).
+ *
  * The standby runs with SKIFF_STANDBY=1: no maintenance loop, no operation resume. Exactly one
  * process (the primary) owns background work at any time.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { CLICKHOUSE_UNIT } from './clickhouse.ts';
 
 export const PRIMARY_UNIT = 'skiff-control-plane.service';
 export const STANDBY_UNIT = 'skiff-control-plane-standby.service';
@@ -63,8 +67,8 @@ function serviceBody(input: {
 	const root = `${paths.optDir}/${input.slot}`;
 	return `[Unit]
 Description=${input.description}
-After=network-online.target caddy.service ${GUARD_UNIT}
-Wants=network-online.target
+After=network-online.target caddy.service ${GUARD_UNIT} ${CLICKHOUSE_UNIT}
+Wants=network-online.target ${CLICKHOUSE_UNIT}
 StartLimitIntervalSec=60
 StartLimitBurst=5
 

@@ -13,6 +13,11 @@ import { BUILD_VERSION } from './build-version.ts';
 export interface AgentConfig {
 	/** Control-plane origin, no trailing slash. */
 	controlUrl: string;
+	/**
+	 * Edge node only: the control plane's unix socket. Requests for `controlUrl` go there instead
+	 * of through Caddy (control-socket.ts, D105).
+	 */
+	controlSocket: string | null;
 	/** Bearer token issued by `skiff-agent join`. */
 	nodeToken: string;
 	/** Stable id of this node (`nod_…`). */
@@ -46,7 +51,7 @@ export interface AgentConfig {
 	cloudflareApiToken: string | null;
 	/** Overrides the content domain from desired state. */
 	contentDomain: string | null;
-	/** Platform dashboard/API/MCP host served by Caddy (e.g. control.kieran.dev). */
+	/** Platform dashboard/API/MCP host served by Caddy (e.g. control.example.com). */
 	platformHost: string | null;
 	/** Control-plane upstream, usually a unix socket. */
 	platformUpstream: string;
@@ -274,8 +279,13 @@ export function loadConfig(env: Env = process.env): AgentConfig {
 	if (!/^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$/.test(cookieName))
 		throw new ConfigError('SKIFF_SITE_COOKIE_COOKIE_NAME is not a valid cookie name');
 
+	const controlSocket = optionalValue(env, 'SKIFF_CONTROL_SOCKET');
+	if (controlSocket && !controlSocket.startsWith('/'))
+		throw new ConfigError('SKIFF_CONTROL_SOCKET must be an absolute path');
+
 	return {
 		controlUrl,
+		controlSocket,
 		nodeToken,
 		nodeId,
 		dataDir,

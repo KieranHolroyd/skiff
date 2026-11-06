@@ -23,6 +23,9 @@ interface FakeHost extends Host {
 	healthy: boolean[];
 	units: Record<string, string>;
 	downloadBytes: Uint8Array;
+	/** Scripted answers for platformAnswers (default true), and the origins it was asked about. */
+	answers: boolean[];
+	probed: string[];
 }
 
 function fakeHost(): FakeHost {
@@ -32,6 +35,8 @@ function fakeHost(): FakeHost {
 		healthy: [],
 		units: {},
 		downloadBytes: new Uint8Array(),
+		answers: [],
+		probed: [],
 		run(cmd) {
 			host.commands.push(cmd);
 			const joined = cmd.join(' ');
@@ -46,6 +51,10 @@ function fakeHost(): FakeHost {
 		sleep: async () => {},
 		download: async () => host.downloadBytes,
 		controlPlaneHealthy: async () => host.healthy.shift() ?? true,
+		platformAnswers: async (origin) => {
+			host.probed.push(origin);
+			return host.answers.shift() ?? true;
+		},
 		writeStatus: (status) => void host.statuses.push(status),
 		chownRootSkiff() {},
 	};
@@ -212,4 +221,157 @@ test('litestreamAsset maps machine names', () => {
 	expect(litestreamAsset('x86_64')?.arch).toBe('amd64');
 	expect(litestreamAsset('aarch64')?.url).toContain('linux-arm64.tar.gz');
 	expect(litestreamAsset('riscv64')).toBeNull();
+});
+
+describe('telemetry store (D101)', () => {
+	beforeEach(() => {
+		// Never let a test touch the real /opt/skiff or /var/lib/skiff.
+		layout.optDir = join(root, 'opt');
+		layout.clickhouseDataDir = join(root, 'clickhouse-data');
+		mkdirSync(join(layout.optDir, 'clickhouse', '26.8.34.13'), { recursive: true });
+		mkdirSync(layout.clickhouseDataDir, { recursive: true });
+	});
+
+	test('removing it strips only the ClickHouse settings, keeps data and restarts the control plane', async () => {
+		writeFileSync(
+			layout.envFile,
+			'# keep this comment\nNODE_ENV=production\nSKIFF_CLICKHOUSE_URL=http://127.0.0.1:18123\nSKIFF_CLICKHOUSE_PASSWORD=x\nBETTER_AUTH_SECRET=keep-me\n',
+		);
+		writeFileSync(join(layout.systemdDir, 'skiff-clickhouse.service'), '[Unit]\n');
+		const host = fakeHost();
+		const status = await new PlatformConfigHelper(layout, host).apply({
+			id: 'req_0123456789',
+			requestedAt: new Date().toISOString(),
+			by: 'user_1',
+			action: 'telemetry',
+			enabled: false,
+			purgeData: false,
+		});
+		expect(status.outcome).toBe('applied');
+		expect(status.changed).toEqual(['SKIFF_CLICKHOUSE_URL', 'SKIFF_CLICKHOUSE_PASSWORD']);
+		expect(readFileSync(layout.envFile, 'utf8')).toBe('# keep this comment\nNODE_ENV=production\nBETTER_AUTH_SECRET=keep-me\n');
+		expect(existsSync(join(layout.systemdDir, 'skiff-clickhouse.service'))).toBe(false);
+		expect(existsSync(join(layout.optDir, 'clickhouse'))).toBe(false);
+		expect(existsSync(layout.clickhouseDataDir!)).toBe(true);
+		expect(host.commands).toContainEqual(['systemctl', 'disable', '--now', 'skiff-clickhouse.service']);
+		expect(host.commands).toContainEqual(['systemctl', 'restart', 'skiff-control-plane.service']);
+	});
+
+	test('purge deletes the stored telemetry; removing nothing is a no-op', async () => {
+		const host = fakeHost();
+		const helper = new PlatformConfigHelper(layout, host);
+		const base = { id: 'req_0123456789', requestedAt: new Date().toISOString(), by: 'user_1', action: 'telemetry' as const, enabled: false };
+		expect((await helper.apply({ ...base, purgeData: false })).outcome).toBe('unchanged');
+		expect(host.commands).toEqual([]);
+		expect((await helper.apply({ ...base, purgeData: true })).outcome).toBe('applied');
+		expect(existsSync(layout.clickhouseDataDir!)).toBe(false);
+	});
+
+	// Off Linux ensureClickHouse refuses before any download; on Linux it would fetch for real.
+	test.skipIf(process.platform === 'linux')('a failed install reports why and leaves the control plane alone', async () => {
+		const host = fakeHost();
+		const status = await new PlatformConfigHelper(layout, host).apply({
+			id: 'req_0123456789',
+			requestedAt: new Date().toISOString(),
+			by: 'user_1',
+			action: 'telemetry',
+			enabled: true,
+			purgeData: false,
+		});
+		expect(status.outcome).toBe('error');
+		expect(status.message).toContain('could not be installed');
+		expect(host.commands.some((cmd) => cmd.includes('skiff-control-plane.service'))).toBe(false);
+	});
+});
+
+describe('domains', () => {
+	const httpsTarget = { platformHost: 'control.example.com', contentDomain: 'example.dev', tls: true, acmeEmail: 'ops@example.com' };
+	const agentEnv = [
+		'SKIFF_CONTROL_URL=http://203.0.113.7',
+		'SKIFF_NODE_TOKEN=node-secret',
+		'SKIFF_CONTENT_DOMAIN=203-0-113-7.sslip.io',
+		'SKIFF_PLATFORM_HOST=203.0.113.7',
+		'SKIFF_TLS=0',
+		'',
+	].join('\n');
+
+	beforeEach(() => {
+		layout = { ...layout, agentEnvFile: join(root, 'etc', 'agent.env'), cloudflareTokenFile: join(root, 'etc', 'cloudflare.token') };
+		writeFileSync(
+			layout.envFile,
+			'NODE_ENV=production\nBETTER_AUTH_SECRET=keep-me\nSKIFF_PLATFORM_ORIGIN=http://203.0.113.7\nSKIFF_CONTENT_DOMAIN=203-0-113-7.sslip.io\n',
+		);
+		writeFileSync(layout.agentEnvFile!, agentEnv);
+	});
+
+	test('moves an IP install to HTTPS domains: both env files, the token, both restarts, verified', async () => {
+		const host = fakeHost();
+		request({ action: 'domains', ...httpsTarget, cloudflareToken: 'cf'.repeat(20) });
+		const status = await new PlatformConfigHelper(layout, host).applyRequestFile();
+		expect(status?.outcome).toBe('applied');
+		const control = readEnvFile(layout.envFile);
+		expect(control.get('SKIFF_PLATFORM_ORIGIN')).toBe('https://control.example.com');
+		expect(control.get('SKIFF_CONTENT_DOMAIN')).toBe('example.dev');
+		expect(control.get('SKIFF_ACME_EMAIL')).toBe('ops@example.com');
+		expect(control.get('BETTER_AUTH_SECRET')).toBe('keep-me');
+		const agent = readEnvFile(layout.agentEnvFile!);
+		expect(agent.get('SKIFF_CONTROL_URL')).toBe('https://control.example.com');
+		expect(agent.get('SKIFF_CONTROL_SOCKET')).toBe('/run/skiff/control.sock');
+		expect(agent.get('SKIFF_PLATFORM_HOST')).toBe('control.example.com');
+		expect(agent.get('SKIFF_TLS')).toBe('1');
+		expect(agent.get('SKIFF_CLOUDFLARE_API_TOKEN_FILE')).toBe(layout.cloudflareTokenFile);
+		expect(agent.get('SKIFF_NODE_TOKEN')).toBe('node-secret');
+		expect(readFileSync(layout.cloudflareTokenFile!, 'utf8').trim()).toBe('cf'.repeat(20));
+		expect(host.commands).toContainEqual(['systemctl', 'restart', 'skiff-control-plane.service']);
+		expect(host.commands).toContainEqual(['systemctl', 'restart', 'skiff-agent.service']);
+		expect(host.probed.at(-1)).toBe('https://control.example.com');
+		expect(status?.message).toContain('https://control.example.com');
+	});
+
+	test('HTTPS without any Cloudflare token is rejected before anything changes', async () => {
+		const host = fakeHost();
+		const before = readFileSync(layout.envFile, 'utf8');
+		request({ action: 'domains', ...httpsTarget });
+		const status = await new PlatformConfigHelper(layout, host).applyRequestFile();
+		expect(status?.outcome).toBe('rejected');
+		expect(status?.message).toContain('Cloudflare');
+		expect(readFileSync(layout.envFile, 'utf8')).toBe(before);
+		expect(host.commands.some((cmd) => cmd[0] === 'systemctl')).toBe(false);
+	});
+
+	test('reverts both files and removes a new token when the new address never answers', async () => {
+		const host = fakeHost();
+		// The new address fails for the whole HTTPS window, then the old one answers.
+		host.answers = [...Array(80).fill(false), true];
+		const controlBefore = readFileSync(layout.envFile, 'utf8');
+		request({ action: 'domains', ...httpsTarget, cloudflareToken: 'cf'.repeat(20) });
+		const status = await new PlatformConfigHelper(layout, host).applyRequestFile();
+		expect(status?.outcome).toBe('reverted');
+		expect(status?.message).toContain('previous domains were restored');
+		expect(readFileSync(layout.envFile, 'utf8')).toBe(controlBefore);
+		expect(readFileSync(layout.agentEnvFile!, 'utf8')).toBe(agentEnv);
+		expect(existsSync(layout.cloudflareTokenFile!)).toBe(false);
+		expect(host.probed.at(-1)).toBe('http://203.0.113.7');
+	});
+
+	test('the same domains again change nothing and restart nothing', async () => {
+		const host = fakeHost();
+		request({ action: 'domains', platformHost: '203.0.113.7', contentDomain: '203-0-113-7.sslip.io', tls: false, acmeEmail: '' });
+		// The agent env lacks SKIFF_CONTROL_SOCKET at first, so the first run writes it.
+		expect((await new PlatformConfigHelper(layout, host).applyRequestFile())?.outcome).toBe('applied');
+		const second = fakeHost();
+		request({ action: 'domains', platformHost: '203.0.113.7', contentDomain: '203-0-113-7.sslip.io', tls: false, acmeEmail: '' });
+		expect((await new PlatformConfigHelper(layout, second).applyRequestFile())?.outcome).toBe('unchanged');
+		expect(second.commands.some((cmd) => cmd[0] === 'systemctl')).toBe(false);
+	});
+
+	test('a control-plane-only install updates skiff.env and skips the Caddy check', async () => {
+		rmSync(layout.agentEnvFile!);
+		const host = fakeHost();
+		request({ action: 'domains', platformHost: 'control.example.com', contentDomain: 'example.dev', tls: false, acmeEmail: '' });
+		const status = await new PlatformConfigHelper(layout, host).applyRequestFile();
+		expect(status?.outcome).toBe('applied');
+		expect(readEnvFile(layout.envFile).get('SKIFF_PLATFORM_ORIGIN')).toBe('http://control.example.com');
+		expect(host.probed).toEqual([]);
+	});
 });

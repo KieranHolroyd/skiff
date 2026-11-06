@@ -45,13 +45,13 @@ export interface ConfigKeyInfo {
 export const CONFIG_KEYS: Record<ConfigKey, ConfigKeyInfo> = {
 	url: {
 		key: 'url',
-		description: 'Control-plane URL, e.g. https://control.kieran.dev',
+		description: 'Control-plane URL, e.g. https://control.example.com',
 		secret: false,
 		env: URL_ENV,
 	},
 	contentDomain: {
 		key: 'contentDomain',
-		description: 'Domain deployed sites are served from, e.g. kierancloud.dev',
+		description: 'Domain deployed sites are served from, e.g. examplecloud.com',
 		secret: false,
 		env: CONTENT_DOMAIN_ENV,
 	},
@@ -257,7 +257,7 @@ export function platformOrigin(url: string): string {
 }
 
 /**
- * Accept `kierancloud.dev`, `https://kierancloud.dev/` and `localhost`; reject
+ * Accept `examplecloud.com`, `https://examplecloud.com/` and `localhost`; reject
  * anything that is not a bare hostname (no paths, ports, wildcards or spaces).
  */
 export function normalizeContentDomain(raw: string): string {
@@ -273,13 +273,13 @@ export function normalizeContentDomain(raw: string): string {
 	value = value.replace(/\.$/, '');
 	if (!value || /[\s/@:*\\]/.test(value))
 		throw new ConfigError(
-			`"${raw}" is not a valid domain. Use a bare hostname such as kierancloud.dev.`,
+			`"${raw}" is not a valid domain. Use a bare hostname such as examplecloud.com.`,
 		);
 	const label = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 	const labels = value.split('.');
 	if (labels.length > 127 || value.length > 253 || !labels.every((part) => label.test(part)))
 		throw new ConfigError(
-			`"${raw}" is not a valid domain. Use a bare hostname such as kierancloud.dev.`,
+			`"${raw}" is not a valid domain. Use a bare hostname such as examplecloud.com.`,
 		);
 	return value;
 }

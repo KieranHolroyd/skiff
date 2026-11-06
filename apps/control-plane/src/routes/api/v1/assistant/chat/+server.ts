@@ -13,7 +13,7 @@ const HEARTBEAT_MS = 15_000;
  * One assistant turn, streamed as Server-Sent Events (docs/ASSISTANT.md). The browser keeps a
  * normal `fetch` stream so it can cancel the run; `request.signal` aborts the upstream model calls.
  *
- * Events are the `AssistantEvent` union: run/agent boundaries, text deltas, tool activity, guided
+ * Events are the `AssistantEvent` union: run boundaries, text deltas, tool activity, guided
  * tours, pending destructive confirmations, errors and the terminal `run.finished`.
  */
 export const POST: RequestHandler = async ({ locals, request }) => {

@@ -30,6 +30,8 @@
 	import AddKeyDialog from '../keyvalue/AddKeyDialog.svelte';
 	import { KEY_TYPES, withoutColumns } from '../keyvalue/changes.js';
 	import KeyDetail from '../keyvalue/KeyDetail.svelte';
+	import { getStudioShell } from '../shell/context.js';
+	import { renamedNode } from '../structure/changes.js';
 	import {
 		defaultPattern,
 		EXPIRES_COLUMN,
@@ -62,6 +64,7 @@
 	const prefix = $derived(groupPrefix(object));
 	const PAGE = 200;
 	const confirmer = new Confirmer();
+	const shell = getStudioShell();
 
 	// --- key list ------------------------------------------------------------------------------
 
@@ -302,6 +305,7 @@
 					name={keyName(object)}
 					{confirmer}
 					ondeleted={() => (deleted = true)}
+					onrenamed={(next) => shell?.structureChanged({ kind: 'renamed', from: object.path, to: renamedNode(object, next) })}
 				/>
 			</div>
 		{/if}
@@ -446,6 +450,10 @@
 					name={openKey}
 					{confirmer}
 					onchanged={() => (keyChanged = true)}
+					onrenamed={(next) => {
+						keyChanged = true;
+						openKey = next;
+					}}
 					ondeleted={() => {
 						keyChanged = true;
 						closeDetail(false);

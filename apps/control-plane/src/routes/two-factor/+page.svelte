@@ -55,7 +55,7 @@
 	);
 	const intro = $derived(
 		data.mode === 'challenge'
-			? 'Owners verify a second factor in every new session. Use your passkey or the code from your authenticator app.'
+			? 'Owners verify a second factor in every new session (a password, GitHub or email link is only the first). Use your passkey or the code from your authenticator app.'
 			: data.mode === 'enrol'
 				? 'Organisation owners need a second factor. Add a passkey (recommended) or an authenticator app to continue.'
 				: 'Add time-based codes from an app like 1Password, Bitwarden or Google Authenticator.'
@@ -235,8 +235,23 @@
 				<form
 					method="POST"
 					action="?/startTotp&setup=1&redirect={encodeURIComponent(data.redirect)}"
+					class="space-y-3"
 					use:enhance={submitting}
 				>
+					{#if data.hasPassword}
+						<Field.Field>
+							<Field.Label for="totp-password">Your password</Field.Label>
+							<Input
+								id="totp-password"
+								name="password"
+								type="password"
+								autocomplete="current-password"
+								class="h-10"
+								required
+							/>
+							<Field.Description>Confirms it’s you before adding the app.</Field.Description>
+						</Field.Field>
+					{/if}
 					<Button
 						type="submit"
 						variant={data.mode === 'enrol' ? 'outline' : 'default'}

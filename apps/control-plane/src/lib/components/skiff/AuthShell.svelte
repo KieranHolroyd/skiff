@@ -9,23 +9,30 @@
 		title,
 		description,
 		children,
-		footer
+		footer,
+		header,
+		wide = false
 	}: {
 		eyebrow?: string;
 		title: string;
 		description?: Snippet | string;
 		children: Snippet;
 		footer?: Snippet;
+		/** Rendered above the card title (the setup wizard's progress). */
+		header?: Snippet;
+		/** A wider card for multi-step flows. */
+		wide?: boolean;
 	} = $props();
 </script>
 
 <div
 	class="flex min-h-svh flex-col items-center justify-center gap-6 bg-muted p-6 md:p-10 dark:bg-background"
 >
-	<div class="flex w-full max-w-sm flex-col gap-6">
+	<div class={['flex w-full flex-col gap-6', wide ? 'max-w-lg' : 'max-w-sm']}>
 		<Logo class="self-center" />
 		<Card.Root>
 			<Card.Header class="text-center">
+				{#if header}{@render header()}{/if}
 				{#if eyebrow}<p class="text-xs font-medium text-brand">{eyebrow}</p>{/if}
 				<Card.Title class="text-xl text-balance">{title}</Card.Title>
 				{#if typeof description === 'string'}

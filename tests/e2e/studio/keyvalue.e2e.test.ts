@@ -304,6 +304,73 @@ if (!enabled || !engine) {
 				}
 			});
 
+			test('alter renames a key (never overwriting) and deletes it', async () => {
+				const session = await open(false);
+				const raw = await bootstrap(server);
+				const keyRef = (name: string): ObjectRef => ({ path: ['0', name], kind: 'key' });
+				const code = async (work: Promise<unknown>) => {
+					try {
+						await work;
+						return null;
+					} catch (error) {
+						return error instanceof StudioError ? error.code : 'other';
+					}
+				};
+				try {
+					await raw.send('DEL', ['alter:a', 'alter:b', 'alter:taken']);
+					await raw.send('HSET', ['alter:a', 'f', 'v']);
+					await raw.send('PEXPIRE', ['alter:a', '600000']);
+					await raw.send('SET', ['alter:taken', 'keep']);
+
+					const dry = await session.alter!({ op: 'rename', object: keyRef('alter:a'), name: 'alter:b' }, { dryRun: true }, signal());
+					expect(dry).toEqual({ statements: ['RENAMENX "alter:a" "alter:b"'], applied: false });
+					expect(Number(await raw.send('EXISTS', ['alter:a']))).toBe(1);
+
+					expect(await code(session.alter!({ op: 'rename', object: keyRef('alter:a'), name: 'alter:taken' }, { dryRun: false }, signal()))).toBe(
+						'conflict',
+					);
+					expect(await raw.send('GET', ['alter:taken'])).toBe('keep');
+
+					expect(
+						await session.alter!({ op: 'rename', object: keyRef('alter:a'), name: 'alter:b' }, { dryRun: false }, signal()),
+					).toEqual({ statements: ['RENAMENX "alter:a" "alter:b"'], applied: true });
+					expect(Number(await raw.send('EXISTS', ['alter:a']))).toBe(0);
+					expect(await raw.send('HGET', ['alter:b', 'f'])).toBe('v');
+					// RENAMENX keeps the TTL.
+					expect(Number(await raw.send('PTTL', ['alter:b']))).toBeGreaterThan(0);
+
+					expect(await code(session.alter!({ op: 'rename', object: keyRef('alter:a'), name: 'alter:c' }, { dryRun: true }, signal()))).toBe(
+						'not_found',
+					);
+					expect(
+						await code(
+							session.alter!({ op: 'drop', object: { path: ['0', 'alter:'], kind: 'key-group' }, cascade: false }, { dryRun: true }, signal()),
+						),
+					).toBe('unsupported');
+					expect(await code(session.alter!({ op: 'truncate', object: keyRef('alter:b') }, { dryRun: true }, signal()))).toBe('unsupported');
+
+					expect(
+						await session.alter!({ op: 'drop', object: keyRef('alter:b'), cascade: false }, { dryRun: false }, signal()),
+					).toEqual({ statements: ['UNLINK "alter:b"'], applied: true });
+					expect(Number(await raw.send('EXISTS', ['alter:b']))).toBe(0);
+
+					// The read-only principal is refused before anything is sent.
+					const readOnly = await open(true, reader);
+					try {
+						expect(
+							await code(readOnly.alter!({ op: 'drop', object: keyRef('alter:taken'), cascade: false }, { dryRun: true }, signal())),
+						).toBe('read_only');
+					} finally {
+						await readOnly.close();
+					}
+					expect(await raw.send('GET', ['alter:taken'])).toBe('keep');
+				} finally {
+					await raw.send('DEL', ['alter:a', 'alter:b', 'alter:taken']);
+					raw.close();
+					await session.close();
+				}
+			});
+
 			test('a string value edit keeps the TTL; a stale original conflicts and the batch is all-or-nothing', async () => {
 				const session = await open(false);
 				const raw = await bootstrap(server);

@@ -6,6 +6,7 @@
   "scripts": {
     "check": "bun run --filter '*' check",
     "check:migrations": "bun scripts/check-migrations.ts",
+    "dev:clickhouse": "bun scripts/dev/clickhouse.ts",
     "test": "bun test",
     "prepare": "git config core.hooksPath .githooks 2>/dev/null || true",
     "version:show": "bun scripts/version.ts show",

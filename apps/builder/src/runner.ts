@@ -6,12 +6,13 @@ import type { ControlClient } from './client.ts';
 import {
 	BuildValidationError,
 	directRunArgs,
+	gitAuthEnv,
 	redactSecret,
-	repoUrlWithToken,
 	safeRelativeDir,
 	systemdRunArgs,
 	unitName,
 	validateBuildCommand,
+	validateGitRef,
 } from './command.ts';
 import { zipDirectory } from './zip.ts';
 
@@ -256,7 +257,10 @@ export class JobRunner {
 				outputDir === '.' ? workDir : join(workDir, outputDir),
 				'outputDir',
 			);
-			const zipped = await zipDirectory(outputPath);
+			// Never ship the repository metadata or the build's scratch HOME as site content.
+			const zipped = await zipDirectory(outputPath, {
+				exclude: buildEnv.HOME ? [await realpath(buildEnv.HOME).catch(() => buildEnv.HOME!)] : [],
+			});
 			const upload = await fetch(job.uploadUrl, {
 				method: 'PUT',
 				headers: { 'content-type': 'application/zip' },
@@ -301,10 +305,13 @@ export class JobRunner {
 
 	/** Branch/tag clone first; a commit SHA (which `--branch` rejects) falls back to fetch + checkout. */
 	private async clone(job: BuildJob, dir: string): Promise<void> {
-		const url = repoUrlWithToken(job.repoUrl, this.config.gitToken);
-		const env = { GIT_TERMINAL_PROMPT: '0' };
+		const ref = validateGitRef(job.ref);
+		const url = job.repoUrl;
+		// The token (when this host may have it) lives only in this process environment: never in
+		// the URL, so never in `.git/config`, which the build user can read.
+		const env = { GIT_TERMINAL_PROMPT: '0', ...gitAuthEnv(url, this.config.gitToken, this.config.gitTokenHosts) };
 		const direct = await capture(
-			['git', 'clone', '--depth', '1', '--single-branch', '--branch', job.ref, url, dir],
+			['git', 'clone', '--depth', '1', '--single-branch', '--branch', ref, '--', url, dir],
 			{ cwd: this.config.buildDir, env },
 		);
 		if (direct.code === 0) return;
@@ -314,7 +321,7 @@ export class JobRunner {
 		const steps: string[][] = [
 			['git', 'init'],
 			['git', 'remote', 'add', 'origin', url],
-			['git', 'fetch', '--depth', '1', 'origin', job.ref],
+			['git', 'fetch', '--depth', '1', 'origin', ref],
 			['git', 'checkout', '--detach', 'FETCH_HEAD'],
 		];
 		for (const step of steps) {

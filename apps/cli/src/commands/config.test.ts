@@ -53,8 +53,8 @@ function childEnv(): Record<string, string | undefined> {
 
 describe('skif config', () => {
 	test('sets settings, then reports them as JSON', () => {
-		expect(run('config', 'set', 'url', 'control.kieran.dev').code).toBe(0);
-		expect(run('config', 'set', 'content-domain', 'kierancloud.dev').code).toBe(0);
+		expect(run('config', 'set', 'url', 'control.example.com').code).toBe(0);
+		expect(run('config', 'set', 'content-domain', 'examplecloud.com').code).toBe(0);
 		expect(run('config', 'set', 'token', 'sk_test_123456789').code).toBe(0);
 
 		const listed = run('config', 'list', '--json');
@@ -65,27 +65,27 @@ describe('skif config', () => {
 		};
 		expect(payload.stored).toBe(true);
 		const setting = (key: string) => payload.settings.find((candidate) => candidate.key === key);
-		expect(setting('url')).toMatchObject({ value: 'https://control.kieran.dev', source: 'config' });
-		expect(setting('contentDomain')).toMatchObject({ value: 'kierancloud.dev', source: 'config' });
+		expect(setting('url')).toMatchObject({ value: 'https://control.example.com', source: 'config' });
+		expect(setting('contentDomain')).toMatchObject({ value: 'examplecloud.com', source: 'config' });
 		// list masks the key.
 		expect(setting('token')?.value).not.toBe('sk_test_123456789');
 		expect(setting('token')?.secret).toBe(true);
 	});
 
 	test('get prints a value only and unset removes it', () => {
-		run('config', 'set', 'contentDomain', 'kierancloud.dev');
+		run('config', 'set', 'contentDomain', 'examplecloud.com');
 
 		const got = run('config', 'get', 'sites-domain');
 		expect(got.code).toBe(0);
-		expect(got.stdout).toBe('kierancloud.dev');
+		expect(got.stdout).toBe('examplecloud.com');
 
 		expect(run('config', 'unset', 'contentDomain').code).toBe(0);
 		expect(run('config', 'get', 'contentDomain').stdout).toBe('');
 	});
 
 	test('logout keeps url and contentDomain, and logout --all removes them', () => {
-		run('config', 'set', 'url', 'control.kieran.dev');
-		run('config', 'set', 'contentDomain', 'kierancloud.dev');
+		run('config', 'set', 'url', 'control.example.com');
+		run('config', 'set', 'contentDomain', 'examplecloud.com');
 		run('config', 'set', 'token', 'sk_test_123456789');
 
 		const logout = run('logout', '--json');
@@ -99,8 +99,8 @@ describe('skif config', () => {
 			settings: Array<{ key: string; value?: string }>;
 		};
 		const setting = (key: string) => listed.settings.find((candidate) => candidate.key === key);
-		expect(setting('url')?.value).toBe('https://control.kieran.dev');
-		expect(setting('contentDomain')?.value).toBe('kierancloud.dev');
+		expect(setting('url')?.value).toBe('https://control.example.com');
+		expect(setting('contentDomain')?.value).toBe('examplecloud.com');
 		expect(setting('token')?.value).toBeUndefined();
 
 		expect(run('logout', '--all').code).toBe(0);

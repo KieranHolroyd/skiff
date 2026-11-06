@@ -25,6 +25,7 @@ import type { Connection as CoreConnectionType } from 'mysql2';
 import type { RunOptions, SessionOptions, StudioSession, StudioTarget } from '../../driver.ts';
 import {
 	StudioError,
+	type AlterResult,
 	type ApplyResult,
 	type BrowseQuery,
 	type Cell,
@@ -33,6 +34,7 @@ import {
 	type ObjectDescription,
 	type ObjectRef,
 	type RowChange,
+	type SchemaChange,
 	type StudioErrorCode,
 	type StudioEvent,
 	type TreeNode,
@@ -59,6 +61,7 @@ import {
 	type TableMeta,
 } from './sql.ts';
 import { encodeCell, fieldMapping, jsonCheckColumn, schemaKind, type FieldInfo } from './types.ts';
+import { currentDefaultSql, renderAlter, type CurrentColumn } from './ddl.ts';
 
 /** Rows per `rows` event (protocol maximum). */
 const BATCH_ROWS = 500;
@@ -264,6 +267,7 @@ interface CachedTable {
 export class MysqlSession implements StudioSession {
 	private readonly dialect: Dialect;
 	private readonly readOnly: boolean;
+	private readonly statementTimeoutMs: number;
 	private readonly pool: Pool;
 	private run$: Connection | null;
 	private closed = false;
@@ -279,6 +283,7 @@ export class MysqlSession implements StudioSession {
 	) {
 		this.dialect = target.engine === 'mariadb' ? 'mariadb' : 'mysql';
 		this.readOnly = options.readOnly;
+		this.statementTimeoutMs = options.limits.statementTimeoutMs;
 		this.run$ = runConnection;
 		this.pool = createPool({ ...connectionOptions, connectionLimit: 1, maxIdle: 1, idleTimeout: 60_000, enableKeepAlive: true });
 		this.pool.on('connection', (connection) => {
@@ -356,9 +361,10 @@ export class MysqlSession implements StudioSession {
 				columnType: string;
 				nullable: string;
 				extra: string | null;
+				defaultValue: string | null;
 			}>(
 				`SELECT COLUMN_NAME AS name, DATA_TYPE AS dataType, COLUMN_TYPE AS columnType,
-					IS_NULLABLE AS nullable, EXTRA AS extra
+					IS_NULLABLE AS nullable, EXTRA AS extra, COLUMN_DEFAULT AS defaultValue
 				FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION`,
 				[db, name],
 			),
@@ -393,6 +399,26 @@ export class MysqlSession implements StudioSession {
 		const keyed = primaryKey.length > 0 ? primaryKey : null;
 		const uniqueColumns = new Set(
 			statistics.filter((row) => Number(row.nonUnique) === 0 && row.index !== 'PRIMARY' && row.column).map((row) => row.column),
+		);
+		const defaults = new Map(
+			columns.map((row) => [
+				row.name,
+				currentDefaultSql(
+					{
+						name: row.name,
+						dataType: row.dataType,
+						columnType: row.columnType,
+						nullable: row.nullable === 'YES',
+						default: row.defaultValue,
+						extra: row.extra ?? '',
+						comment: '',
+						collation: null,
+						generation: null,
+						json: false,
+					},
+					this.dialect,
+				),
+			]),
 		);
 		const metas: ColumnMeta[] = columns.map((row) => {
 			const extra = (row.extra ?? '').toLowerCase();
@@ -456,6 +482,7 @@ export class MysqlSession implements StudioSession {
 					nullable: meta.nullable,
 					key: keyed?.includes(meta.name) ? 'primary' : uniqueColumns.has(meta.name) ? 'unique' : null,
 					editable: !meta.generated && !meta.autoIncrement,
+					default: defaults.get(meta.name) ?? null,
 				}),
 			),
 			primaryKey: table.primaryKey,
@@ -924,6 +951,135 @@ export class MysqlSession implements StudioSession {
 			if (healthy) pooled.release();
 			else pooled.connection.destroy();
 		}
+	}
+
+	// ------------------------------------------------------------ alter
+
+	/**
+	 * One structure edit. DDL commits implicitly in MySQL and MariaDB, so the statements run one
+	 * by one on the run connection (a long ALTER never blocks browsing), each under the session
+	 * timeout; abort or timeout kills the connection, which the server rolls the DDL back on.
+	 */
+	async alter(change: SchemaChange, options: { dryRun: boolean }, signal: AbortSignal): Promise<AlterResult> {
+		this.assertOpen(signal);
+		if (this.readOnly) throw new StudioError('read_only', 'The session is read-only.');
+		const current = change.op === 'alter-column' ? await this.currentColumn(change.object, change.column) : null;
+		const statements = renderAlter(change, this.dialect, current);
+		if (options.dryRun) return { statements, applied: false };
+
+		const previous = this.runLock;
+		let release = () => {};
+		this.runLock = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		await Promise.race([previous, Bun.sleep(RUN_LOCK_WAIT_MS)]);
+		try {
+			for (const [index, sql] of statements.entries()) {
+				try {
+					if (signal.aborted) throw new StudioError('cancelled', 'The change was cancelled.');
+					await this.ddl(await this.runConnection(), sql, signal);
+				} catch (error) {
+					const failure = toStudio(error, this.readOnly);
+					if (index === 0) throw failure;
+					throw new StudioError(
+						failure.code,
+						`${failure.message} These statements had already run and stay applied: ${statements.slice(0, index).join('; ')}`,
+					);
+				}
+			}
+			return { statements, applied: true };
+		} finally {
+			this.tables.clear();
+			release();
+		}
+	}
+
+	/**
+	 * Run one DDL statement; abort or the session timeout kills the run connection. The error is
+	 * only reported once the kill landed, so "cancelled" means the server stopped the statement
+	 * (a statement waiting on a metadata lock would otherwise still run when the lock frees).
+	 */
+	private async ddl(connection: Connection, sql: string, signal: AbortSignal): Promise<void> {
+		let stopped: StudioError | null = null;
+		let killed = () => {};
+		// Settles once a stop's kill has landed. The query itself may never settle after a kill
+		// (the socket is paused, then destroyed), so the race below does not wait for it.
+		const afterKill = new Promise<'stopped'>((resolve) => {
+			killed = () => resolve('stopped');
+		});
+		const stop = (error: StudioError) => {
+			if (stopped) return;
+			stopped = error;
+			void this.kill(connection).finally(killed);
+		};
+		const onAbort = () => stop(new StudioError('cancelled', 'The change was cancelled.'));
+		signal.addEventListener('abort', onAbort, { once: true });
+		const timer = setTimeout(
+			() => stop(new StudioError('timeout', `The change did not finish within ${formatSeconds(this.statementTimeoutMs)} and was stopped.`)),
+			this.statementTimeoutMs,
+		);
+		const query = connection.query(sql).then(() => 'done' as const);
+		// A rejection after the race was decided must not surface as unhandled.
+		query.catch(() => undefined);
+		try {
+			if ((await Promise.race([query, afterKill])) === 'stopped') throw stopped;
+		} catch (error) {
+			if (stopped) {
+				await afterKill;
+				throw stopped;
+			}
+			// A failed DDL leaves the connection usable; a dropped one is replaced on the next call.
+			if ((error as MysqlError).fatal) this.discard(connection);
+			throw error;
+		} finally {
+			clearTimeout(timer);
+			signal.removeEventListener('abort', onAbort);
+		}
+	}
+
+	private async currentColumn(object: ObjectRef, name: string): Promise<CurrentColumn> {
+		const [table] = object.path;
+		if (object.path.length !== 1 || table === undefined || object.kind !== 'table')
+			throw new StudioError('bad_request', `Changing a column needs a table, not ${object.kind} ${object.path.join('.')}.`);
+		const db = this.target.database;
+		const [row] = await this.select<{
+			dataType: string;
+			columnType: string;
+			nullable: string;
+			defaultValue: string | null;
+			extra: string | null;
+			comment: string | null;
+			collation: string | null;
+			generation: string | null;
+		}>(
+			`SELECT DATA_TYPE AS dataType, COLUMN_TYPE AS columnType, IS_NULLABLE AS nullable,
+				COLUMN_DEFAULT AS defaultValue, EXTRA AS extra, COLUMN_COMMENT AS comment,
+				COLLATION_NAME AS collation, GENERATION_EXPRESSION AS generation
+			FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+			[db, table, name],
+		);
+		if (!row) throw new StudioError('not_found', `No column ${name} in ${table}.`);
+		let json = row.dataType.toLowerCase() === 'json';
+		if (this.dialect === 'mariadb' && !json) {
+			const checks = await this.select<{ clause: string }>(
+				`SELECT CHECK_CLAUSE AS clause FROM information_schema.CHECK_CONSTRAINTS
+				WHERE CONSTRAINT_SCHEMA = ? AND TABLE_NAME = ?`,
+				[db, table],
+			);
+			json = checks.some((check) => jsonCheckColumn(check.clause) === name);
+		}
+		return {
+			name,
+			dataType: row.dataType,
+			columnType: row.columnType,
+			nullable: row.nullable === 'YES',
+			default: row.defaultValue,
+			extra: row.extra ?? '',
+			comment: row.comment ?? '',
+			collation: row.collation,
+			generation: row.generation,
+			json,
+		};
 	}
 
 	async value(object: ObjectRef, key: Record<string, Cell>, column: string, signal: AbortSignal): Promise<Cell> {

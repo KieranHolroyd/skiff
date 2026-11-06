@@ -26,6 +26,7 @@ import { bytesCell, CELL_PREVIEW_BYTES, textCell } from '../../cells.ts';
 import type { RunOptions, SessionOptions, StudioPlugin, StudioSession, StudioTarget } from '../../driver.ts';
 import {
 	StudioError,
+	type AlterResult,
 	type ApplyResult,
 	type BrowseQuery,
 	type Cell,
@@ -34,6 +35,7 @@ import {
 	type ObjectDescription,
 	type ObjectRef,
 	type RowChange,
+	type SchemaChange,
 	type StudioCapabilities,
 	type StudioErrorCode,
 	type StudioEvent,
@@ -54,6 +56,7 @@ import {
 	type RawConstraint,
 	type RawIndex,
 } from './catalog.ts';
+import { renderAlter, type AlterContext } from './ddl.ts';
 import { isStreamable, splitStatements, transactionEffect, type SqlStatement } from './split.ts';
 import {
 	buildBrowse,
@@ -79,7 +82,29 @@ const CAPABILITIES: StudioCapabilities = {
 	cancel: 'native',
 	explain: true,
 	schemas: true,
+	structure: [
+		'create-schema',
+		'create-table',
+		'rename',
+		'drop',
+		'truncate',
+		'add-column',
+		'drop-column',
+		'rename-column',
+		'alter-column',
+		'create-index',
+		'drop-index',
+	],
 };
+
+/** The index `$3` on relation `$1.$2`, and the constraint that owns it (if any). */
+const INDEX_OWNER_SQL = `SELECT i.relname::text AS name, con.conname::text AS constraint
+FROM pg_catalog.pg_index ix
+JOIN pg_catalog.pg_class i ON i.oid = ix.indexrelid
+JOIN pg_catalog.pg_class t ON t.oid = ix.indrelid
+JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
+LEFT JOIN pg_catalog.pg_constraint con ON con.conindid = i.oid AND con.conrelid = t.oid AND con.contype IN ('p', 'u', 'x')
+WHERE n.nspname = $1::text AND t.relname = $2::text AND i.relname = $3::text`;
 
 /** Rows per FETCH and per `rows` event. */
 const BATCH = 500;
@@ -356,6 +381,8 @@ class PostgresSession implements StudioSession {
 				nullable: !raw.not_null,
 				key,
 				editable: tableKind && !computed,
+				// A generated column's expression is not a default.
+				default: raw.generated ? null : raw.default_expr,
 			};
 		});
 
@@ -913,6 +940,54 @@ class PostgresSession implements StudioSession {
 			signal,
 		);
 		return rows.length > 0;
+	}
+
+	// ------------------------------------------------------------ alter
+
+	async alter(change: SchemaChange, options: { dryRun: boolean }, signal: AbortSignal): Promise<AlterResult> {
+		this.assertOpen();
+		if (this.options.readOnly) throw new StudioError('read_only', 'The session is read-only.');
+		let statements: string[];
+		try {
+			statements = renderAlter(change, await this.alterContext(change, signal));
+		} catch (error) {
+			throw asStudioError(error, signal);
+		}
+		if (options.dryRun) return { statements, applied: false };
+		let conn: ReservedSQL;
+		try {
+			conn = await this.sql.reserve({ signal });
+		} catch (error) {
+			throw asStudioError(error, signal);
+		}
+		try {
+			await exec(conn.unsafe('BEGIN'), signal);
+			await exec(conn.unsafe(`SET LOCAL statement_timeout = ${this.options.limits.statementTimeoutMs}`), signal);
+			for (const statement of statements) await exec(conn.unsafe(statement), signal);
+			await exec(conn.unsafe('COMMIT'), signal);
+			return { statements, applied: true };
+		} catch (error) {
+			await exec(conn.unsafe('ROLLBACK')).catch(() => undefined);
+			throw asStudioError(error, signal);
+		} finally {
+			// Even a failed DDL may have committed nothing but changed what describe should show.
+			this.tables.clear();
+			await conn.release();
+		}
+	}
+
+	/** What `renderAlter` needs from the catalog for this change. */
+	private async alterContext(change: SchemaChange, signal: AbortSignal): Promise<AlterContext> {
+		if (!('object' in change) || change.object.path.length !== 2) return { relkind: null };
+		const [schema, name] = change.object.path as [string, string];
+		const [relation] = (await exec(this.sql.unsafe(RELATION_SQL, [schema, name]), signal)) as { relkind: string }[];
+		if (!relation) throw new StudioError('not_found', `No table or view ${schema}.${name}.`);
+		if (change.op !== 'drop-index') return { relkind: relation.relkind };
+		const [index] = (await exec(this.sql.unsafe(INDEX_OWNER_SQL, [schema, name, change.name]), signal)) as {
+			constraint: string | null;
+		}[];
+		if (!index) throw new StudioError('not_found', `No index ${change.name} on ${schema}.${name}.`);
+		return { relkind: relation.relkind, indexConstraint: index.constraint };
 	}
 
 	// ------------------------------------------------------------ lifecycle

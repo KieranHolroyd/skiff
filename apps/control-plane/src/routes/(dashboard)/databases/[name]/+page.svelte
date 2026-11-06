@@ -1,4 +1,5 @@
 <script lang="ts">
+	import TelemetryOff from '../../_lib/TelemetryOff.svelte';
 	/* eslint svelte/no-navigation-without-resolve: ['error', { ignoreLinks: true }] */
 	import { enhance, type SubmitFunction } from '$app/forms';
 	import { goto, replaceState } from '$app/navigation';
@@ -734,10 +735,11 @@
 		</div>
 
 		{#if !data.telemetryAvailable}
-			<EmptyState
-				icon={ActivityIcon}
-				title="Telemetry is not running"
-				description="DuckDB is unavailable on this control plane, so database samples cannot be stored or charted. The database itself is unaffected."
+			<TelemetryOff
+				installed={data.telemetryInstalled}
+				reason={data.telemetryReason}
+				subject="Database stats"
+				unaffected="The database itself is unaffected."
 			/>
 		{:else if data.metrics.length === 0}
 			<EmptyState
