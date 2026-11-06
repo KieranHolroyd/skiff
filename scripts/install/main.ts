@@ -18,6 +18,7 @@
  *   --content-domain <domain> sites domain; blank uses the temporary <server-ip>.sslip.io (HTTP)
  *   --acme-email <email>      ACME account email; turns on HTTPS (needs real domains)
  *   --public-address <ipv4>   this server's address for IP-only installs (default: detected)
+ *   --skip-deps               don't install Caddy or Podman (they must already be there)
  *   --admin-email <email>     prefills the owner email in the setup wizard (optional)
  *   --cloudflare-token-file   optional Caddy DNS-01 token file, used only if it exists
  *                             (default /etc/caddy/cloudflare.token)
@@ -133,6 +134,8 @@ interface Options {
 	adminEmail: string;
 	cloudflareTokenFile: string;
 	skipDnsCheck: boolean;
+	/** Leave package installation (Caddy, Podman) to the operator. */
+	skipDeps: boolean;
 	githubClientId?: string;
 	githubClientSecret?: string;
 	smtp?: { host: string; port: number; user: string; password: string; from: string };
@@ -209,6 +212,7 @@ const options: Options = {
 	adminEmail: value('--admin-email', process.env.SKIFF_ADMIN_EMAIL ?? ''),
 	cloudflareTokenFile: setting('--cloudflare-token-file', ['SKIFF_CLOUDFLARE_TOKEN_FILE'], '/etc/caddy/cloudflare.token'),
 	skipDnsCheck: has('--skip-dns-check'),
+	skipDeps: has('--skip-deps') || process.env.SKIFF_SKIP_DEPS === '1',
 	githubClientId: setting('--github-client-id', ['GITHUB_CLIENT_ID']) || undefined,
 	githubClientSecret: setting('--github-client-secret', ['GITHUB_CLIENT_SECRET']) || undefined,
 	objectStore: (setting('--object-store', ['SKIFF_OBJECT_STORE'], 'local') as 'local' | 'r2') || 'local',
@@ -462,6 +466,107 @@ function resolveDomains(): void {
 	}
 }
 
+const CADDY_DNS_MODULE = 'github.com/caddy-dns/cloudflare';
+const PODMAN_PACKAGES = ['podman', 'uidmap', 'passt', 'netavark', 'aardvark-dns'];
+const CADDYFILE = '/etc/caddy/Caddyfile';
+
+function hasCommand(command: string): boolean {
+	return Boolean(capture('sh', ['-c', `command -v ${command}`]));
+}
+
+let aptUpdated = false;
+function aptInstall(packages: string[]): boolean {
+	const env = { DEBIAN_FRONTEND: 'noninteractive' };
+	if (!aptUpdated) {
+		run('apt-get', ['update', '-q'], { env });
+		aptUpdated = true;
+	}
+	return run('apt-get', ['install', '-y', '-q', '--no-install-recommends', ...packages], { env, allowFailure: true }).code === 0;
+}
+
+/**
+ * Install what Skiff runs on before setting it up: Caddy (with the DNS-01 module HTTPS needs) and,
+ * for the agent, Podman for managed databases and object storage. Debian/Ubuntu only (checked
+ * above). `--skip-deps` leaves packages to the operator; the checks below still report gaps.
+ */
+function installPrerequisites(): void {
+	if (options.skipDeps) {
+		log('skipping package installation (--skip-deps)');
+		return;
+	}
+	const missingCaddy = !hasCommand('caddy');
+	const missingPodman = !options.noAgent && PODMAN_PACKAGES.some((name) => !capture('dpkg-query', ['-W', '-f=${Status}', name])?.includes('install ok installed'));
+	if (!missingCaddy && !missingPodman) return;
+	if (options.dryRun) {
+		if (missingCaddy) log(`would install Caddy from the official apt repository and add ${CADDY_DNS_MODULE}`);
+		if (missingPodman) log(`would install ${PODMAN_PACKAGES.join(' ')}`);
+		return;
+	}
+	step('Prerequisites');
+	if (missingCaddy) installCaddy();
+	if (missingPodman) installPodman();
+}
+
+function installCaddy(): void {
+	log('installing Caddy (official apt repository)');
+	if (!aptInstall(['debian-keyring', 'debian-archive-keyring', 'apt-transport-https', 'ca-certificates', 'curl', 'gnupg']))
+		fail('Could not install the packages needed to add the Caddy repository (see the apt output above).');
+	const keyring = '/usr/share/keyrings/caddy-stable-archive-keyring.gpg';
+	const list = '/etc/apt/sources.list.d/caddy-stable.list';
+	run('sh', ['-c', `curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --batch --yes --dearmor -o ${keyring}`]);
+	run('sh', ['-c', `curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' > ${list}`]);
+	run('chmod', ['o+r', keyring, list]);
+	aptUpdated = false;
+	if (!aptInstall(['caddy'])) fail('Could not install Caddy (see the apt output above).');
+
+	// The package's Caddyfile serves a welcome page with the admin API on TCP. Skiff wants the admin
+	// API on a unix socket only (the agent pushes the real config through it).
+	const stock = existsSync(CADDYFILE) ? readFileSync(CADDYFILE, 'utf8') : '';
+	if (!stock.includes('admin unix/')) {
+		if (stock) writeFileSync(`${CADDYFILE}.dist`, stock);
+		writeFileSync(
+			CADDYFILE,
+			[
+				'# Bootstrap config written by the Skiff installer. The Skiff agent replaces it at runtime',
+				'# through the admin socket below; this only serves until the agent starts.',
+				'{',
+				'\tadmin unix//var/lib/caddy/admin.sock|0660',
+				'}',
+				'',
+				':80 {',
+				'\trespond "Skiff is starting." 503',
+				'}',
+				'',
+			].join('\n'),
+		);
+	}
+	run('systemctl', ['enable', 'caddy'], { allowFailure: true });
+	run('systemctl', ['restart', 'caddy'], { allowFailure: true });
+
+	// Wildcard HTTPS for sites needs DNS-01. HTTP installs work without it, so a failed download
+	// (the module comes from caddyserver.com's build service) is a warning, not a stop.
+	const modules = capture('caddy', ['list-modules']) ?? '';
+	if (!modules.includes('dns.providers.cloudflare')) {
+		log(`adding ${CADDY_DNS_MODULE} to Caddy`);
+		if (run('caddy', ['add-package', CADDY_DNS_MODULE], { allowFailure: true }).code === 0) {
+			// Keep apt from replacing the custom build on upgrade.
+			run('apt-mark', ['hold', 'caddy'], { allowFailure: true });
+			run('systemctl', ['restart', 'caddy'], { allowFailure: true });
+		} else
+			log(color.yellow(`warning: could not add ${CADDY_DNS_MODULE}; HTTPS for sites needs it (retry: sudo caddy add-package ${CADDY_DNS_MODULE})`));
+	}
+	log(`caddy ${capture('caddy', ['version']) ?? 'installed'}`);
+}
+
+function installPodman(): void {
+	log(`installing ${PODMAN_PACKAGES.join(' ')}`);
+	if (aptInstall(PODMAN_PACKAGES)) return;
+	// Older releases lack some of these (for example passt or netavark); install what exists.
+	const missing = PODMAN_PACKAGES.filter((name) => !aptInstall([name]));
+	if (missing.includes('podman')) log(color.yellow('warning: could not install podman; managed databases and object storage cannot start'));
+	else if (missing.length) log(color.yellow(`warning: not available on this release: ${missing.join(', ')}`));
+}
+
 function preflight(): void {
 	step('Preflight');
 	if (process.platform !== 'linux') fail('Skiff installs on Linux only.');
@@ -480,6 +585,8 @@ function preflight(): void {
 	const arch = process.arch;
 	if (!['x64', 'arm64'].includes(arch)) fail(`Unsupported architecture ${arch}.`);
 	log(`${arch}, bun ${Bun.version}`);
+
+	installPrerequisites();
 
 	if (!options.noAgent) {
 		if (!capture('sh', ['-c', 'command -v podman']))

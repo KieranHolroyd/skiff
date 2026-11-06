@@ -280,14 +280,21 @@ password by editing it and running `sudo skiff-update-self`, which regenerates
 ### 3.1 Prerequisites
 
 - Debian 13 or Ubuntu 24.04+ on x86_64/aarch64, systemd, root access.
-- Ports 80/443 free, DNS for the platform and content domains pointing at this machine.
-- **Caddy 2.7+ with `caddy-dns/cloudflare`** already installed. The installer verifies the
-  module and fails with a clear message if it is missing. Caddy is driven only through its
-  admin unix socket; the installer fixes the socket mode and group access.
-- **Podman for managed services.** Managed Postgres and RustFS run as rootful Quadlet containers,
-  so a node that hosts them needs `podman`, `netavark`, `aardvark-dns` and `uidmap`:
-  `apt-get install podman uidmap passt netavark aardvark-dns`. The installer warns when Podman or
-  its systemd generator is missing; everything else works without it.
+- Ports 80/443 free. Domains are optional (§3.7); when you use them, point their DNS at this machine.
+- **Caddy and Podman are installed for you** (skip with `--skip-deps` / `SKIFF_SKIP_DEPS=1` if you
+  manage packages yourself):
+  - **Caddy**, when `caddy` is not on `PATH`: from the official Caddy apt repository
+    (`dl.cloudsmith.io/public/caddy/stable`, verified by apt), then `caddy add-package
+    github.com/caddy-dns/cloudflare` (built by caddyserver.com) for the wildcard HTTPS certificate,
+    and `apt-mark hold caddy` so upgrades keep the module. The package's Caddyfile is kept as
+    `Caddyfile.dist` and replaced with a bootstrap that puts the admin API on
+    `unix//var/lib/caddy/admin.sock|0660` (never TCP); the agent pushes the real config through it.
+    If the module download fails the install continues (HTTP works); HTTPS needs it later. An
+    existing Caddy is used as is: HTTPS installs need it built with `caddy-dns/cloudflare`.
+  - **Podman** (agent installs only): `podman uidmap passt netavark aardvark-dns`. Managed
+    Postgres and RustFS run as rootful Quadlet containers (Podman 4.4+). On releases that lack a
+    package the installer installs the rest and warns.
+
 - **Port 53 for Podman DNS.** A DNS daemon such as BIND must not listen on `0.0.0.0:53`: Podman's
   per-network DNS (aardvark-dns) binds the bridge gateway (for example `10.89.0.1:53`) and fails
   every container start with `Address already in use`. Bind only the host's real addresses in
@@ -330,7 +337,8 @@ checkout with `SKIFF_SOURCE_DIR=/path/to/skiff`.
 
 ### 3.3 What the Bun installer does
 
-1. **Preflight** — OS/arch/systemd, Caddy + DNS module, Caddy admin socket, disk, domains.
+1. **Preflight** — OS/arch/systemd, then installs missing prerequisites (Caddy, Podman; §3.1),
+   then checks Caddy + DNS module, the Caddy admin socket, disk and domains.
    Then a **DNS check** (fresh installs only): it resolves the platform host, the content apex and
    a random `*.<content domain>` name against public resolvers (`dig @1.1.1.1` when installed,
    Bun's resolver otherwise). It shows each name as resolving to this server, resolving elsewhere
@@ -673,6 +681,13 @@ to see what is released and what is pending. To skip the hook, use `git commit -
 `SKIFF_NO_VERSION_BUMP=1`. The hook compares against your local `origin/main`, so `git fetch`
 before a batch. The build bakes `VERSION` in, so the dashboard always shows the version
 of the code that is actually running.
+
+The same hooks path has a `pre-push` hook that runs a GitGuardian secret scan
+(`ggshield secret scan pre-push`) over the commits being pushed and blocks the push if it finds
+a secret. Set it up once with `brew install ggshield` (or `pipx install ggshield`) and
+`ggshield auth login`. Without ggshield installed the hook warns and lets the push through. To
+skip it, use `git push --no-verify` or `SKIFF_NO_SECRET_SCAN=1`. If a finding is a false
+positive, `ggshield secret ignore --last-found` records it in `.gitguardian.yaml`.
 
 **Releases are built and signed in CI, never on the host.** Every push to `main` whose `VERSION`
 has no release yet runs [`.github/workflows/publish.yml`](../.github/workflows/publish.yml):

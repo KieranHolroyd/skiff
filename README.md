@@ -289,6 +289,11 @@ domains and the agent's activation protocol.
 `VERSION` holds the platform version. A pre-commit hook bumps the patch number, and minor or major
 releases use `bun run version:minor` / `bun run version:major`.
 
+### Secret scanning
+
+A pre-push hook scans outgoing commits with GitGuardian. Install it with `brew install ggshield`,
+then run `ggshield auth login` once. See [`docs/OPS.md`](docs/OPS.md) for the skip switches.
+
 ## Roadmap
 
 The full checklist is in [`docs/ROADMAP.md`](docs/ROADMAP.md). The headlines:

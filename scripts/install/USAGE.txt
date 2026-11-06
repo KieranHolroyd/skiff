@@ -13,6 +13,7 @@ Options:
   --content-domain <domain>   Domain for deployed sites. Blank: <server-ip>.sslip.io (HTTP).
   --acme-email <email>        ACME account email; turns on HTTPS (needs real domains).
   --public-address <ipv4>     This server's IPv4 for IP-only installs (default: detected).
+  --skip-deps                 Don't install Caddy or Podman (they must already be installed).
   --admin-email <email>       Prefills the owner email in the setup wizard (optional).
   --cloudflare-token-file     Optional Caddy DNS-01 token file, used only if it exists
                               (default /etc/caddy/cloudflare.token). Not prompted for.

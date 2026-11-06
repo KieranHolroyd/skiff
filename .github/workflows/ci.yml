@@ -226,4 +226,4 @@ jobs:
       - name: Check installer and ops scripts
         # Each script's shebang selects its dialect: install.sh and the POSIX
         # helpers as sh, scripts/pitr-drill.sh as bash.
-        run: shellcheck install.sh scripts/*.sh
+        run: shellcheck install.sh scripts/*.sh .githooks/*

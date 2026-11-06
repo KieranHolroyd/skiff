@@ -1,0 +1,15 @@
+#!/bin/sh
+# GitGuardian secret scan of the commits being pushed (ggshield secret scan pre-push).
+# Setup: `brew install ggshield` (or `pipx install ggshield`), then `ggshield auth login`.
+# Skip once with `git push --no-verify`, or set SKIFF_NO_SECRET_SCAN=1.
+if [ "${SKIFF_NO_SECRET_SCAN:-}" = "1" ]; then
+	echo "pre-push: SKIFF_NO_SECRET_SCAN=1; skipping the GitGuardian secret scan" >&2
+	exit 0
+fi
+if ! command -v ggshield >/dev/null 2>&1; then
+	echo "pre-push: ggshield not found; skipping the GitGuardian secret scan" >&2
+	echo "pre-push: install it with 'brew install ggshield' and run 'ggshield auth login'" >&2
+	exit 0
+fi
+# git passes the remote name and URL as arguments and the refs on stdin; exec keeps both.
+exec ggshield secret scan pre-push "$@"
