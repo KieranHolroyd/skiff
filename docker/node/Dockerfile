@@ -7,7 +7,7 @@
 # Both binaries are cross-compiled from the build platform, so a multi-arch
 # build does not run a compiler under QEMU.
 
-ARG BUN_VERSION=1.4.0
+ARG BUN_VERSION=1.4.4
 ARG CADDY_VERSION=2.11.7
 ARG CADDY_DNS_CLOUDFLARE_VERSION=v0.2.4
 
@@ -33,7 +33,10 @@ RUN case "$TARGETARCH" in \
       arm64) goarch=arm64 ;; \
       *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
     esac && \
-    CGO_ENABLED=0 GOOS=linux GOARCH=$goarch \
+    # The builder image sets XCADDY_SETCAP=1, which stamps cap_net_bind_service on the binary.
+    # Under compose's cap_drop: ALL + no-new-privileges the kernel then refuses to exec it
+    # ("Operation not permitted"). Caddy listens on :8080, so it needs no capability.
+    CGO_ENABLED=0 GOOS=linux GOARCH=$goarch XCADDY_SETCAP=0 \
       xcaddy build v${CADDY_VERSION} \
         --with github.com/caddy-dns/cloudflare@${CADDY_DNS_CLOUDFLARE_VERSION} \
         --output /out/caddy

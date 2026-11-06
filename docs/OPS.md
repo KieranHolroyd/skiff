@@ -1321,7 +1321,7 @@ internet while debugging.
 - Litestream is installed separately (`/usr/local/bin/litestream`); the installer detects
   it and enables replication only when R2 is configured. It is not compiled by the release
   workflow.
-- Bun `1.4.0`, Caddy `2.11.8` and `caddy-dns/cloudflare` `v0.2.4` are pinned in the release
+- Bun `1.4.4`, Caddy `2.11.8` and `caddy-dns/cloudflare` `v0.2.4` are pinned in the release
   workflow. Bump them together and re-run the drill.
 - The browser setup wizard and the `skif admin keys rotate` command are product surfaces
   described by DESIGN §12 and §11.2; this delivery defines their contracts (setup token,

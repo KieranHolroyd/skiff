@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  BUN_VERSION: '1.4.0'
+  BUN_VERSION: '1.4.4'
   CADDY_VERSION: '2.11.8'
   CADDY_DNS_CLOUDFLARE_VERSION: 'v0.2.4'
   XCADDY_VERSION: 'v0.4.7'

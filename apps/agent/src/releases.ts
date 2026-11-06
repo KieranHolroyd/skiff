@@ -27,7 +27,8 @@ const PROJECT_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 /**
  * Stream a response body to disk with bounded memory, stopping as soon as it exceeds `maxBytes`.
  * Deliberately not `Bun.write(path, response)`: on Bun 1.4.0 that never resolves (or creates the
- * file) for large bodies, which hung the reconcile loop on an 86 MB release.
+ * file) for large bodies, which hung the reconcile loop on an 86 MB release. The release pin is now
+ * 1.4.4; keep this workaround until that bug is re-verified as fixed on 1.4.4.
  */
 export async function downloadToFile(
 	response: Response,

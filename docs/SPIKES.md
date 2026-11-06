@@ -3,6 +3,8 @@
 Environment: macOS arm64, Bun 1.4.0. RSS figures are from macOS and must be re-measured on Debian 13,
 where they are typically lower.
 
+> **Note (2026-11-06):** the release pin moved to Bun 1.4.4 for plan 22 (Bun.SQL `cancel()` and column metadata); the RSS figures below were measured on 1.4.0.
+
 | # | Spike | Result | Where |
 |---|---|---|---|
 | 1 | DuckDB under Bun | ✅ Works | `spikes/duckdb` |

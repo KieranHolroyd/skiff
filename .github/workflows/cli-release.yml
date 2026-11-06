@@ -36,7 +36,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  BUN_VERSION: '1.4.0'
+  BUN_VERSION: '1.4.4'
   # Must match "name" in apps/cli/package.json. `npm pack` names a scoped tarball
   # `<scope>-<name>-<version>.tgz`.
   PACKAGE: '@skiffy/skiff'
