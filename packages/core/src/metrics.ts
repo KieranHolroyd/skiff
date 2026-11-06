@@ -2,6 +2,7 @@ import { and, eq, isNull, ne, sql } from 'drizzle-orm';
 import { deployments, nodes, projects, releases } from '@skiff/db';
 import type { Principal } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
+import { ValidationError } from './errors.ts';
 import { requirePermission } from '@skiff/contracts';
 import {
 	emptyTrafficReport,
@@ -93,6 +94,34 @@ export class MetricsService {
 			return { permitted: true, available: false, report: emptyTrafficReport() };
 		}
 		const report = await telemetry.report({ ...window, projectId: project.id });
+		return { permitted: true, available: true, report };
+	}
+
+	/**
+	 * Traffic for one deployment, read at its preview host or at an environment host it serves
+	 * now. Any other host is refused, so the host-only filter cannot reach another project. The
+	 * query filters by host alone: an agent tags a bucket with its project only while the host is
+	 * in its routes, so a project filter would drop a deleted preview's traffic.
+	 */
+	async trafficForDeployment(
+		principal: Principal,
+		projectSlug: string,
+		deploymentId: string,
+		host: string,
+		window: TrafficWindow,
+	): Promise<TrafficView> {
+		const empty = { permitted: false, available: false, report: emptyTrafficReport() } as const;
+		if (!principal.permissions.has('metrics:read')) return { ...empty };
+		requirePermission(principal, 'project:read');
+		const project = this.ctx.projects.requireRow(principal, projectSlug);
+		const deployment = this.ctx.deployments.detail(principal, project, deploymentId);
+		const hosts = [deployment.previewHost, ...deployment.serving.map((item) => item.host)];
+		if (!hosts.includes(host)) throw new ValidationError('That host does not serve this deployment.');
+		const telemetry = this.ctx.telemetry;
+		if (!telemetry?.available) {
+			return { permitted: true, available: false, report: emptyTrafficReport() };
+		}
+		const report = await telemetry.report({ ...window, host });
 		return { permitted: true, available: true, report };
 	}
 

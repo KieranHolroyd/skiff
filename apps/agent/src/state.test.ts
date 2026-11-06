@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { desiredStateSchema, type DesiredState } from '@skiff/contracts';
-import { atomicWriteFile, DesiredStateStore, desiredStateEtag } from './state.ts';
+import { atomicWriteFile, DesiredStateStore, desiredStateEtag, desiredStateRequest } from './state.ts';
 
 const directories: string[] = [];
 
@@ -80,5 +80,23 @@ describe('desired-state cache', () => {
 		await atomicWriteFile(path, 'first');
 		await atomicWriteFile(path, 'second');
 		expect(await fs.readFile(path, 'utf8')).toBe('second');
+	});
+});
+
+describe('desiredStateRequest', () => {
+	const base = { etag: '"v39"', force: false, longPollSeconds: 8 };
+
+	test('the first pull of a run ignores the cache a previous agent build wrote', () => {
+		// That cache may lack fields the old build stripped; a 304 would hide them for good.
+		expect(desiredStateRequest({ ...base, pulledThisRun: false })).toEqual({ ifNoneMatch: null, waitSeconds: 0 });
+	});
+
+	test('later pulls revalidate and long-poll', () => {
+		expect(desiredStateRequest({ ...base, pulledThisRun: true })).toEqual({ ifNoneMatch: '"v39"', waitSeconds: 8 });
+	});
+
+	test('a forced pull, or one with nothing cached, always fetches a fresh copy', () => {
+		expect(desiredStateRequest({ ...base, force: true, pulledThisRun: true })).toEqual({ ifNoneMatch: null, waitSeconds: 0 });
+		expect(desiredStateRequest({ ...base, etag: null, pulledThisRun: true })).toEqual({ ifNoneMatch: null, waitSeconds: 0 });
 	});
 });

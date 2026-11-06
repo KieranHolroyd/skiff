@@ -33,7 +33,7 @@ import { StatsCollector } from './stats.ts';
 import { StorageReconciler, STORAGE_RECONCILE_INTERVAL_MS } from './storage-admin.ts';
 import { StorageRequester } from './storage.ts';
 import { StorageStatsSampler, STORAGE_STATS_INTERVAL_MS } from './storage-stats.ts';
-import { DesiredStateStore, desiredStateEtag } from './state.ts';
+import { DesiredStateStore, desiredStateEtag, desiredStateRequest } from './state.ts';
 import { postTelemetryBatch, TelemetryClient } from './telemetry.ts';
 import { handleSiteRequest, normalizeHost, UsedTokenCache } from './verify.ts';
 import type { StudioFront } from './studio/front.ts';
@@ -95,6 +95,8 @@ class AgentRuntime {
 
 	private desired: DesiredState | null = null;
 	private desiredEtag: string | null = null;
+	/** Whether this process has pulled a full desired state yet; see `desiredStateRequest`. */
+	private desiredPulledThisRun = false;
 	private convergedVersion: number | null = null;
 	private actualStateVersion = 0;
 	private projectByHost = new Map<string, string>();
@@ -377,8 +379,13 @@ class AgentRuntime {
 			authorization: `Bearer ${this.config.nodeToken}`,
 			accept: 'application/json',
 		};
-		const etag = this.desiredEtag ?? (this.desired ? desiredStateEtag(this.desired) : null);
-		if (etag && !force) headers['if-none-match'] = etag;
+		const request = desiredStateRequest({
+			etag: this.desiredEtag ?? (this.desired ? desiredStateEtag(this.desired) : null),
+			force,
+			pulledThisRun: this.desiredPulledThisRun,
+			longPollSeconds: LONG_POLL_SECONDS,
+		});
+		if (request.ifNoneMatch) headers['if-none-match'] = request.ifNoneMatch;
 
 		const timeout = AbortSignal.timeout(LONG_POLL_TIMEOUT_MS);
 		const signal = AbortSignal.any([this.shutdownController.signal, timeout]);
@@ -386,7 +393,7 @@ class AgentRuntime {
 		let response: Response;
 		try {
 			response = await fetch(
-				`${this.config.controlUrl}/api/agent/desired-state?wait=${force ? 0 : LONG_POLL_SECONDS}`,
+				`${this.config.controlUrl}/api/agent/desired-state?wait=${request.waitSeconds}`,
 				{ headers, signal },
 			);
 		} catch (error) {
@@ -412,8 +419,13 @@ class AgentRuntime {
 		}
 
 		const etagHeader = response.headers.get('etag') ?? desiredStateEtag(state);
+		// Same version as the cache but different content: the cache lost fields this build applies.
+		const content = (value: DesiredState) => JSON.stringify({ ...value, generatedAt: '' });
+		if (!this.desiredPulledThisRun && this.desired && content(this.desired) !== content(state))
+			this.convergedVersion = null;
 		this.desired = state;
 		this.desiredEtag = etagHeader;
+		this.desiredPulledThisRun = true;
 		this.applyStudio(state.studio);
 		try {
 			await this.store.write(state, etagHeader);

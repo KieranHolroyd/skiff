@@ -10,6 +10,7 @@
 	import DatabaseIcon from '@lucide/svelte/icons/database';
 	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
 	import FolderTreeIcon from '@lucide/svelte/icons/folder-tree';
+	import InfoIcon from '@lucide/svelte/icons/info';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import LinkIcon from '@lucide/svelte/icons/link-2';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
@@ -116,12 +117,15 @@
 	let moveNode = $state('');
 	const workloadNode = $derived(
 		data.workload?.nodeId
-			? (data.capacity.find((item) => item.nodeId === data.workload?.nodeId)?.name ?? data.workload.nodeId)
+			? (data.capacity.find((item) => item.nodeId === data.workload?.nodeId)?.name ??
+					data.workload.nodeId)
 			: null
 	);
 	const moveTargets = $derived(
 		data.workload?.nodeId
-			? data.capacity.filter((item) => item.nodeId !== data.workload?.nodeId && item.status === 'online')
+			? data.capacity.filter(
+					(item) => item.nodeId !== data.workload?.nodeId && item.status === 'online'
+				)
 			: []
 	);
 
@@ -606,7 +610,14 @@
 									<Table.Row class={deployment.isProduction ? 'bg-brand/5 hover:bg-brand/5' : ''}>
 										<Table.Cell class="pl-4 whitespace-normal">
 											<div class="flex flex-wrap items-center gap-1.5">
-												<span class="font-mono text-sm font-medium">{deployment.shortId}</span>
+												<a
+													href={resolve('/(dashboard)/projects/[slug]/deployments/[id]', {
+														slug: data.project.slug,
+														id: deployment.id
+													})}
+													class="font-mono text-sm font-medium underline-offset-4 hover:underline"
+													>{deployment.shortId}</a
+												>
 												<StatusBadge status={deployment.status} />
 												{#if deployment.isProduction}<Badge variant="brand">production</Badge>{/if}
 												{#if !deployment.isProduction}
@@ -666,6 +677,17 @@
 													</Button>
 												{/if}
 												<RowMenu label="Actions for {deployment.shortId}">
+													<DropdownMenu.Item
+														onSelect={() =>
+															goto(
+																resolve('/(dashboard)/projects/[slug]/deployments/[id]', {
+																	slug: data.project.slug,
+																	id: deployment.id
+																})
+															)}
+													>
+														<InfoIcon />View details
+													</DropdownMenu.Item>
 													<DropdownMenu.Item onSelect={() => openDeploymentLog(deployment.id)}>
 														<ScrollTextIcon />Tail logs
 													</DropdownMenu.Item>
@@ -1194,9 +1216,10 @@
 					{/each}
 				</NativeSelect.Root>
 				<Field.Description>
-					<code class="font-mono">auto</code> resolves once at deploy time and is recorded on the deployment,
-					so a running app never moves by itself. Changing placement here does not move an existing workload;
-					it applies to the next deployment. Use <strong>Move</strong> on the Details card to move it now.
+					<code class="font-mono">auto</code> resolves once at deploy time and is recorded on the
+					deployment, so a running app never moves by itself. Changing placement here does not move
+					an existing workload; it applies to the next deployment. Use <strong>Move</strong> on the Details
+					card to move it now.
 				</Field.Description>
 			</Field.Field>
 		</Field.Group>
@@ -1208,7 +1231,8 @@
 		bind:open={moveOpen}
 		icon={ArrowLeftRightIcon}
 		title="Move {data.project.name} to another node"
-		description="{workloadNode ?? 'The current node'} stops the app and the target starts the same deployment, so expect a short gap. Its placement is set to the target so later deploys stay there."
+		description="{workloadNode ??
+			'The current node'} stops the app and the target starts the same deployment, so expect a short gap. Its placement is set to the target so later deploys stay there."
 		action="?/move"
 		submitLabel="Move app"
 	>

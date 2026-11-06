@@ -38,6 +38,26 @@ export function desiredStateEtag(state: DesiredState): string {
 	return `"v${state.version}"`;
 }
 
+/**
+ * How to ask for desired state. Only revalidate (If-None-Match plus a long-poll) a copy this
+ * process pulled itself: the cache on disk was parsed by whichever agent build wrote it, which
+ * strips fields that build did not know (Zod drops unknown keys). The ETag is only the version,
+ * so revalidating that cache would 304, and a newly installed agent would never see work its
+ * predecessor dropped (it hung read-only studio principals until the next unrelated change).
+ * `force` asks for a fresh copy too, for newly presigned release URLs after a failed converge.
+ */
+export function desiredStateRequest(input: {
+	etag: string | null;
+	force: boolean;
+	pulledThisRun: boolean;
+	longPollSeconds: number;
+}): { ifNoneMatch: string | null; waitSeconds: number } {
+	const revalidate = input.etag !== null && !input.force && input.pulledThisRun;
+	return revalidate
+		? { ifNoneMatch: input.etag, waitSeconds: input.longPollSeconds }
+		: { ifNoneMatch: null, waitSeconds: 0 };
+}
+
 export class DesiredStateStore {
 	readonly statePath: string;
 	readonly etagPath: string;

@@ -68,6 +68,27 @@ CLI. For repositories, use **Builds** instead.
   preview URL proxies to it. Environment pointers do not run separate copies; promoting to
   production moves the workload back to that release.
 
+### Deployment page
+
+Each deployment has its own page at `/projects/<slug>/deployments/<id>` (a short id redirects to the
+full one), laid out like a database: header, facts, actions and `?tab=` sections. Open it from the
+short id in a project's **Deployments** table, **View details** in its row menu, or the org-wide
+**Deployments** list.
+
+- **Overview**: status, release size and file count, resources (or static) and age; the hosts
+  serving it (each environment whose pointer names it, plus the permanent preview URL); the git
+  build that produced it; the runtime spec snapshot; who created it and when it was activated and
+  last promoted; and the config snapshot's variable and secret **names** (never values), redirects
+  and header rules.
+- **Metrics**: traffic from the telemetry store for one host at a time, either an environment host
+  it serves or its preview host. An environment host serves whichever deployment its pointer
+  names, so a range can include traffic from before the promote. Custom domains are not counted.
+- **Logs**: the live log panel scoped to this deployment's runtime output and its build log. The
+  build toggle is disabled for uploads that did not come from git.
+- **Files**: the Source viewer pinned to this release.
+- Actions: open preview, **Promote** (active, non-production only), copy URL or id, pin/unpin, and
+  delete (not offered for production; deleting returns to the project).
+
 ### Builds
 
 - **Git source**: repository, branch, root dir, build command, output dir, `enabled` toggle and an

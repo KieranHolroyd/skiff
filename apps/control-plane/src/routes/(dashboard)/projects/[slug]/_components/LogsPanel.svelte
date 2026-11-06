@@ -42,7 +42,8 @@
 		canRead,
 		source = $bindable<Source>('runtime'),
 		buildId = $bindable(''),
-		deploymentId = $bindable('')
+		deploymentId = $bindable(''),
+		single = false
 	}: {
 		project: ProjectView;
 		deployments: DeploymentView[];
@@ -54,6 +55,8 @@
 		source?: Source;
 		buildId?: string;
 		deploymentId?: string;
+		/** Scoped to one deployment and its build (the deployment page): no pickers. */
+		single?: boolean;
 	} = $props();
 
 	let events = $state<LogEventView[]>([]);
@@ -425,27 +428,35 @@
 					aria-label="Log source"
 				>
 					<ToggleGroup.Item value="runtime"><RocketIcon />Runtime</ToggleGroup.Item>
-					<ToggleGroup.Item value="build"><HammerIcon />Build</ToggleGroup.Item>
+					<ToggleGroup.Item
+						value="build"
+						disabled={single && builds.length === 0}
+						title={single && builds.length === 0
+							? 'This deployment was uploaded, not built from git.'
+							: undefined}><HammerIcon />Build</ToggleGroup.Item
+					>
 				</ToggleGroup.Root>
 
 				{#if source === 'runtime'}
-					<label class="sr-only" for="log-deployment">Deployment</label>
-					<NativeSelect.Root
-						id="log-deployment"
-						size="sm"
-						class="w-auto font-mono text-xs"
-						bind:value={deploymentId}
-					>
-						{#each deployments as deployment (deployment.id)}
-							<NativeSelect.Option value={deployment.id}>
-								{deployment.shortId}{deployment.isProduction
-									? ' · production'
-									: ` · ${deployment.environmentSlug}`}{deployment.id === workloadDeploymentId
-									? ' · running'
-									: ''}
-							</NativeSelect.Option>
-						{/each}
-					</NativeSelect.Root>
+					{#if !single}
+						<label class="sr-only" for="log-deployment">Deployment</label>
+						<NativeSelect.Root
+							id="log-deployment"
+							size="sm"
+							class="w-auto font-mono text-xs"
+							bind:value={deploymentId}
+						>
+							{#each deployments as deployment (deployment.id)}
+								<NativeSelect.Option value={deployment.id}>
+									{deployment.shortId}{deployment.isProduction
+										? ' · production'
+										: ` · ${deployment.environmentSlug}`}{deployment.id === workloadDeploymentId
+										? ' · running'
+										: ''}
+								</NativeSelect.Option>
+							{/each}
+						</NativeSelect.Root>
+					{/if}
 					{#if activeDeployment}
 						<a
 							href={activeDeployment.previewUrl}
@@ -457,19 +468,27 @@
 						</a>
 					{/if}
 				{:else}
-					<label class="sr-only" for="log-build">Build</label>
-					<NativeSelect.Root
-						id="log-build"
-						size="sm"
-						class="w-auto font-mono text-xs"
-						bind:value={buildId}
-					>
-						{#each builds as build (build.id)}
-							<NativeSelect.Option value={build.id}>
-								{shortId(build.id)} · {build.ref}{build.status === 'building' ? ' · building' : ''}
-							</NativeSelect.Option>
-						{/each}
-					</NativeSelect.Root>
+					{#if single}
+						<span class="font-mono text-xs">
+							{activeBuild ? `${shortId(activeBuild.id)} · ${activeBuild.ref}` : 'No git build'}
+						</span>
+					{:else}
+						<label class="sr-only" for="log-build">Build</label>
+						<NativeSelect.Root
+							id="log-build"
+							size="sm"
+							class="w-auto font-mono text-xs"
+							bind:value={buildId}
+						>
+							{#each builds as build (build.id)}
+								<NativeSelect.Option value={build.id}>
+									{shortId(build.id)} · {build.ref}{build.status === 'building'
+										? ' · building'
+										: ''}
+								</NativeSelect.Option>
+							{/each}
+						</NativeSelect.Root>
+					{/if}
 					{#if activeBuild}
 						<span class="hidden font-mono text-xs text-muted-foreground sm:block">
 							{activeBuild.commitSha ? shortSha(activeBuild.commitSha) : 'no commit'} · {duration(

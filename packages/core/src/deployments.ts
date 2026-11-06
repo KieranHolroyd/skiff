@@ -1,6 +1,14 @@
 import { and, desc, eq, inArray, isNotNull, lte, ne } from 'drizzle-orm';
-import { configSnapshots, deployments, environments, projects, releases } from '@skiff/db';
-import { contentUrl, requirePermission, type Principal } from '@skiff/contracts';
+import { builds, configSnapshots, deployments, environments, nodes, projects, releases } from '@skiff/db';
+import {
+	contentUrl,
+	hasPermission,
+	requirePermission,
+	workloadSpecSchema,
+	type BuildView,
+	type Principal,
+	type WorkloadIngress,
+} from '@skiff/contracts';
 import type { FileEntry } from './artifact.ts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, NotFoundError } from './errors.ts';
@@ -32,6 +40,50 @@ export interface DeploymentView {
 	message: string | null;
 	createdAt: string;
 	activatedAt: string | null;
+}
+
+/** A host serving a deployment right now, besides its own immutable preview host. */
+export interface DeploymentHostView {
+	host: string;
+	url: string;
+	environmentSlug: string;
+	environmentName: string;
+	isProduction: boolean;
+}
+
+/**
+ * Everything the deployment detail page shows about one deployment. Env and secret values never
+ * appear here: only the names captured in the snapshot.
+ */
+export interface DeploymentDetailView extends DeploymentView {
+	previewHost: string;
+	/** Environment hosts whose pointer is this deployment. Empty when only the preview serves it. */
+	serving: DeploymentHostView[];
+	node: { id: string; name: string } | null;
+	createdBy: { id: string; name: string | null; email: string | null };
+	/** When this deployment last became production; null if it never did. */
+	promotedAt: string | null;
+	/** Runtime spec snapshot for process/container deployments (rollback restores it, D17). */
+	spec: {
+		command: string[] | null;
+		image: string | null;
+		port: number;
+		memoryMb: number;
+		cpus: number;
+		replicas: number;
+		ingress: WorkloadIngress;
+		healthPath: string;
+	} | null;
+	config: {
+		envNames: string[];
+		secretNames: string[];
+		redirects: number;
+		headerRules: number;
+		spa: boolean;
+		cleanUrls: boolean;
+	};
+	/** The git build that produced this deployment; null for CLI/API uploads or without `build:read`. */
+	build: BuildView | null;
 }
 
 type DeploymentOptions = { promote?: boolean; message?: string; environment?: string };
@@ -229,6 +281,119 @@ export class DeploymentService {
 				.get();
 		if (!row || row.status === 'deleted') throw new NotFoundError('Deployment');
 		return this.view(row, project);
+	}
+
+	/** One deployment with its snapshot, provenance and the hosts serving it (the detail page). */
+	detail(principal: Principal, project: ProjectRow, idOrShort: string): DeploymentDetailView {
+		const view = this.get(principal, project, idOrShort);
+		const row = this.ctx.db.select().from(deployments).where(eq(deployments.id, view.id)).get()!;
+
+		const serving: DeploymentHostView[] = this.ctx.db
+			.select()
+			.from(environments)
+			.where(and(eq(environments.projectId, project.id), eq(environments.deploymentId, row.id)))
+			.all()
+			.map((environment) => {
+				const host = this.ctx.environments.hostFor(project, environment);
+				return {
+					host,
+					url: contentUrl(this.ctx.config.platformOrigin, host),
+					environmentSlug: environment.slug,
+					environmentName: environment.name,
+					isProduction: environment.isProduction,
+				};
+			});
+		// Legacy projects keep the production pointer on the project row only.
+		if (view.isProduction && !serving.some((item) => item.isProduction)) {
+			const host = `${project.slug}.${this.contentDomain()}`;
+			serving.unshift({
+				host,
+				url: contentUrl(this.ctx.config.platformOrigin, host),
+				environmentSlug: 'production',
+				environmentName: 'Production',
+				isProduction: true,
+			});
+		}
+
+		const node = row.nodeId
+			? (this.ctx.db.select({ id: nodes.id, name: nodes.name }).from(nodes).where(eq(nodes.id, row.nodeId)).get() ?? {
+					id: row.nodeId,
+					name: row.nodeId,
+				})
+			: null;
+
+		let creator: { name: string | null; email: string | null } | null = null;
+		try {
+			creator = this.ctx.sqlite
+				.query<{ name: string | null; email: string | null }, [string]>('SELECT name, email FROM user WHERE id = ?')
+				.get(row.createdBy);
+		} catch {
+			// Auth tables live outside the core schema; a bare test database has none.
+		}
+
+		const parsedSpec = row.workloadJson
+			? workloadSpecSchema.safeParse(parseJson<unknown>(row.workloadJson, null))
+			: null;
+		const spec = parsedSpec?.success
+			? {
+					command: parsedSpec.data.command ?? null,
+					image: parsedSpec.data.image ?? null,
+					port: parsedSpec.data.port,
+					memoryMb: parsedSpec.data.memoryMb,
+					cpus: parsedSpec.data.cpus,
+					replicas: parsedSpec.data.replicas,
+					ingress: parsedSpec.data.ingress,
+					healthPath: parsedSpec.data.healthPath,
+				}
+			: null;
+
+		const snapshot = this.ctx.db
+			.select()
+			.from(configSnapshots)
+			.where(eq(configSnapshots.id, row.configSnapshotId))
+			.get();
+		const site = parseSnapshot(snapshot?.siteConfigJson);
+		const env = parseJson<Record<string, unknown>>(snapshot?.envJson, {});
+		const secretRefs = parseJson<Array<{ name?: unknown }>>(snapshot?.secretRefsJson, []);
+		// The runtime spec carries its own env/secret refs; prefer whichever the deploy recorded.
+		const envNames = new Set([
+			...Object.keys(env),
+			...(parsedSpec?.success ? Object.keys(parsedSpec.data.env) : []),
+		]);
+		const secretNames = new Set([
+			...secretRefs.map((ref) => (typeof ref.name === 'string' ? ref.name : '')).filter(Boolean),
+			...(parsedSpec?.success ? parsedSpec.data.secrets.map((ref) => ref.name) : []),
+		]);
+
+		let build: BuildView | null = null;
+		if (hasPermission(principal, 'build:read')) {
+			const buildRow = this.ctx.db
+				.select({ id: builds.id })
+				.from(builds)
+				.where(and(eq(builds.projectId, project.id), eq(builds.deploymentId, row.id)))
+				.orderBy(desc(builds.createdAt))
+				.get();
+			if (buildRow) build = this.ctx.builds.get(principal, project, buildRow.id);
+		}
+
+		return {
+			...view,
+			previewHost: row.previewHost,
+			serving,
+			node,
+			createdBy: { id: row.createdBy, name: creator?.name ?? null, email: creator?.email ?? null },
+			promotedAt: row.promotedAt ? new Date(row.promotedAt).toISOString() : null,
+			spec,
+			config: {
+				envNames: [...envNames].sort(),
+				secretNames: [...secretNames].sort(),
+				redirects: site.redirects.length,
+				headerRules: site.headers.length,
+				spa: site.config.spa,
+				cleanUrls: site.config.cleanUrls,
+			},
+			build,
+		};
 	}
 
 	/**

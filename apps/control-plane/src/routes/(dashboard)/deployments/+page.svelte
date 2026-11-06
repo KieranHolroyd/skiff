@@ -252,7 +252,14 @@
 			href={resolve('/(dashboard)/projects/[slug]', { slug: deployment.projectSlug })}
 			class="font-medium underline-offset-4 hover:underline">{deployment.projectSlug}</a
 		>
-		<span class="font-mono text-xs text-muted-foreground">{deployment.shortId}</span>
+		<a
+			href={resolve('/(dashboard)/projects/[slug]/deployments/[id]', {
+				slug: deployment.projectSlug,
+				id: deployment.id
+			})}
+			class="font-mono text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+			>{deployment.shortId}</a
+		>
 		{#if deployment.isProduction}
 			<Badge variant="brand">production</Badge>
 		{:else}
