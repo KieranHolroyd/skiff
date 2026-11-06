@@ -25,7 +25,7 @@ import {
 } from '@skiff/contracts';
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
-import { CoreError, NotFoundError, ValidationError } from './errors.ts';
+import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { resolvePlacement, type PlacementCandidate } from './placement.ts';
 import { parseJson, newId, sha256Hex } from './util.ts';
 import { nodeDiskFreeBytes } from './app-volumes.ts';
@@ -82,6 +82,10 @@ export class WorkloadService {
 		if (project.runtime === 'static')
 			throw new ValidationError(
 				`Project "${project.slug}" is static. Create it with runtime "process" or "container" to run a workload.`,
+			);
+		if (this.ctx.moves.quiescedProjectIds().has(project.id))
+			throw new ConflictError(
+				`"${project.slug}" is stopped while a database it uses moves to another node. Deploy again once the move finishes.`,
 			);
 		// A project with attached databases or private storage runs next to them (D56, S5).
 		const pinned = this.attachmentNode(project.id);
@@ -341,6 +345,8 @@ export class WorkloadService {
 			.where(and(eq(workloads.nodeId, nodeId), isNull(projects.deletedAt), eq(deployments.status, 'active')))
 			.all();
 
+		// Apps whose database is moving stay listed but stopped, so the agent keeps their state (D97).
+		const quiesced = this.ctx.moves.quiescedProjectIds();
 		return rows.flatMap(({ workload, project, deployment }) => {
 			const spec = this.specOf(project, workload);
 			const release = this.ctx.db
@@ -358,7 +364,7 @@ export class WorkloadService {
 				deploymentId: deployment.id,
 				...(isolated ? { orgId: project.orgId, networkName: orgNetworkName(project.orgId) } : {}),
 				runtime: workload.runtime,
-				status: workload.status,
+				status: quiesced.has(project.id) ? 'stopped' : workload.status,
 				release: release?.sha256 ?? null,
 				...(spec.command ? { command: spec.command } : {}),
 				...(spec.image ? { image: spec.image } : {}),

@@ -149,30 +149,46 @@ export class BuildService {
 			.from(builds)
 			.where(and(eq(builds.status, 'building'), lt(builds.claimedAt, now - CLAIM_TTL_MS)))
 			.all();
-		for (const row of stale) {
-			const message = `[builder] claim expired after ${Math.round(CLAIM_TTL_MS / 60_000)}m; requeued`;
-			const log = this.appendText(row, `${message}\n`);
-			this.ctx.logs.appendSystem({
-				orgId: row.orgId,
-				projectId: row.projectId,
-				buildId: row.id,
-				level: 'warn',
-				message,
-			});
-			this.ctx.db
-				.update(builds)
-				.set({
-					status: 'queued',
-					nodeId: null,
-					claimedAt: null,
-					startedAt: null,
-					finishedAt: null,
-					...log,
-				})
-				.where(and(eq(builds.id, row.id), eq(builds.status, 'building')))
-				.run();
-		}
+		for (const row of stale)
+			this.requeue(row, `[builder] claim expired after ${Math.round(CLAIM_TTL_MS / 60_000)}m; requeued`);
 		return stale.length;
+	}
+
+	/**
+	 * Return every build a node holds to the queue, without waiting for the claim TTL. Used when
+	 * the node is removed: its Builder can no longer report, so another Builder should take over.
+	 */
+	releaseNodeClaims(nodeId: string): number {
+		const held = this.ctx.db
+			.select()
+			.from(builds)
+			.where(and(eq(builds.status, 'building'), eq(builds.nodeId, nodeId)))
+			.all();
+		for (const row of held) this.requeue(row, '[builder] the claiming node was removed; requeued');
+		return held.length;
+	}
+
+	private requeue(row: BuildRow, message: string): void {
+		const log = this.appendText(row, `${message}\n`);
+		this.ctx.logs.appendSystem({
+			orgId: row.orgId,
+			projectId: row.projectId,
+			buildId: row.id,
+			level: 'warn',
+			message,
+		});
+		this.ctx.db
+			.update(builds)
+			.set({
+				status: 'queued',
+				nodeId: null,
+				claimedAt: null,
+				startedAt: null,
+				finishedAt: null,
+				...log,
+			})
+			.where(and(eq(builds.id, row.id), eq(builds.status, 'building')))
+			.run();
 	}
 
 	/**

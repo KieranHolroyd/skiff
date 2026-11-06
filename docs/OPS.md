@@ -683,6 +683,23 @@ The default keeps `/var/lib/skiff`, `/etc/skiff` and `/etc/caddy/Caddyfile` so a
 reinstall can reuse the database and master key. `--purge` also removes the system users.
 Backups and releases in R2 survive both modes by design.
 
+**Retiring a worker node.** Move or delete what it hosts (projects placed on it, app workloads,
+databases, storage instances, app volumes). Apps move from the project's **Details → Move**, and
+databases and storage instances from **Settings/Resources → Move**, which takes their attached
+apps along (D97). Storage moves empty (objects are not copied), and app volumes cannot move yet.
+Then use **Nodes → ⋯ → Remove node** (or
+`DELETE /api/v1/nodes/:id`). The token is revoked immediately, volume registrations go, and any
+build it had claimed is requeued for another Builder. The edge node cannot be removed. Removal
+does not touch the machine: run `sudo skiff-uninstall` there (or `docker compose down -v` for the
+container node), otherwise the agent keeps serving its last config and logs `Unknown node token`.
+
+**Changing the edge node.** **Nodes → ⋯ → Make this the edge** (or `POST /api/v1/nodes/:id/edge`)
+hands the role to another online node (D98); the old edge becomes a worker and keeps its apps and
+databases (give it a public address first if it hosts any). Skiff only swaps the roles. If the new
+edge is a different machine: point DNS for the platform and content domains at it, give its
+`agent.env` the edge settings (`SKIFF_TLS`, ACME/Cloudflare, `SKIFF_PLATFORM_HOST` and an upstream
+that reaches the control plane), restart its agent, and only then retire the old edge.
+
 ### 4.2.1 Moving node storage to another disk
 
 **Nodes → Edit node → Storage** sets where a node keeps its release cache and agent state (what

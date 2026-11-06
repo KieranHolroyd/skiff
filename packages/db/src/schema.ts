@@ -766,6 +766,8 @@ export const storageInstances = sqliteTable(
 		purgeAt: integer('purge_at'),
 		/** Set when the purge was handed to the node; the row goes once the node reports it (S8). */
 		purgeRequestedAt: integer('purge_requested_at'),
+		/** Node still holding this instance's old data after a move (D97); purged, then cleared. */
+		purgeNodeId: text('purge_node_id'),
 	},
 	(t) => [
 		uniqueIndex('storage_instances_org_name_idx').on(t.orgId, t.name),
@@ -773,6 +775,7 @@ export const storageInstances = sqliteTable(
 		uniqueIndex('storage_instances_public_host_idx').on(t.publicHost),
 		index('storage_instances_node_idx').on(t.nodeId),
 		index('storage_instances_deleted_idx').on(t.deletedAt),
+		index('storage_instances_purge_node_idx').on(t.purgeNodeId),
 	],
 );
 
@@ -1367,6 +1370,51 @@ export const databaseStudioSessions = sqliteTable(
 	],
 );
 
+/**
+ * A managed database moving to another node (D97). The database row is re-pointed at the target
+ * once the final dump is in the ObjectStore; this row keeps the source placement for rollback and
+ * names the node whose copy still has to be purged.
+ */
+export const databaseMoves = sqliteTable(
+	'database_moves',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		databaseId: text('database_id').notNull(),
+		sourceNodeId: text('source_node_id').notNull(),
+		targetNodeId: text('target_node_id').notNull(),
+		sourceHostPort: integer('source_host_port').notNull(),
+		sourcePoolerPort: integer('source_pooler_port'),
+		sourceVolumeId: text('source_volume_id'),
+		targetVolumeId: text('target_volume_id'),
+		/** `dump` (final backup of a running database), `latest-backup` or `empty` (for one that cannot run). */
+		dataSource: text('data_source', { enum: ['dump', 'latest-backup', 'empty'] })
+			.notNull()
+			.default('dump'),
+		phase: text('phase', { enum: ['quiescing', 'dumping', 'restoring', 'purging', 'done', 'failed'] })
+			.notNull()
+			.default('quiescing'),
+		outcome: text('outcome', { enum: ['moved', 'rolled_back'] }),
+		backupId: text('backup_id'),
+		/** Attached projects stopped for the move and re-pointed at the target with it. */
+		projectIdsJson: text('project_ids_json').notNull().default('[]'),
+		backupWasEnabled: integer('backup_was_enabled', { mode: 'boolean' }).notNull().default(false),
+		/** Desired-state version that stops the attached apps; the dump waits until the source applied it. */
+		quiesceVersion: integer('quiesce_version').notNull().default(0),
+		/** Node whose copy is purged in the `purging` phase: the source after a move, the target after a rollback. */
+		purgeNodeId: text('purge_node_id'),
+		error: text('error'),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+		finishedAt: integer('finished_at'),
+	},
+	(t) => [
+		index('database_moves_database_idx').on(t.databaseId, t.phase),
+		index('database_moves_phase_idx').on(t.phase),
+	],
+);
+
 /** Every table worth exporting, for tooling and tests. */
 export const schema = {
 	nodes,
@@ -1401,6 +1449,7 @@ export const schema = {
 	scheduledTasks,
 	githubRunnerRegistrations,
 	databaseStudioSessions,
+	databaseMoves,
 };
 
 export { primaryKey };

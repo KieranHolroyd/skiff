@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
+	import ArrowLeftRightIcon from '@lucide/svelte/icons/arrow-left-right';
 	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
 	import CopyIcon from '@lucide/svelte/icons/copy';
@@ -109,6 +110,20 @@
 	let projectName = $state('');
 	let projectSlug = $state('');
 	let placement = $state('edge');
+
+	// Move a running app to another node (D97). Node choices come from capacity (platform admins).
+	let moveOpen = $state(false);
+	let moveNode = $state('');
+	const workloadNode = $derived(
+		data.workload?.nodeId
+			? (data.capacity.find((item) => item.nodeId === data.workload?.nodeId)?.name ?? data.workload.nodeId)
+			: null
+	);
+	const moveTargets = $derived(
+		data.workload?.nodeId
+			? data.capacity.filter((item) => item.nodeId !== data.workload?.nodeId && item.status === 'online')
+			: []
+	);
 
 	const placementOptions = $derived([
 		{ value: 'edge', label: 'Edge node' },
@@ -847,6 +862,18 @@
 					<Card.Root>
 						<Card.Header>
 							<Card.Title>Details</Card.Title>
+							{#if data.can.update && data.project.runtime !== 'static' && moveTargets.length > 0}
+								<Card.Action>
+									<Button
+										variant="outline"
+										size="sm"
+										onclick={() => {
+											moveNode = moveTargets[0]?.nodeId ?? '';
+											moveOpen = true;
+										}}><ArrowLeftRightIcon />Move</Button
+									>
+								</Card.Action>
+							{/if}
 						</Card.Header>
 						<Card.Content>
 							<DetailList>
@@ -861,7 +888,9 @@
 									{#if data.workload}
 										<span class="capitalize">{data.workload.status}</span>
 										<span class="text-muted-foreground">
-											· {data.workload.memoryMb} MB · {data.workload.cpus} vCPU</span
+											· {data.workload.memoryMb} MB · {data.workload.cpus} vCPU{workloadNode
+												? ` · on ${workloadNode}`
+												: ''}</span
 										>
 									{:else}
 										<span class="text-muted-foreground">not running</span>
@@ -1167,7 +1196,35 @@
 				<Field.Description>
 					<code class="font-mono">auto</code> resolves once at deploy time and is recorded on the deployment,
 					so a running app never moves by itself. Changing placement here does not move an existing workload;
-					it applies to the next deployment.
+					it applies to the next deployment. Use <strong>Move</strong> on the Details card to move it now.
+				</Field.Description>
+			</Field.Field>
+		</Field.Group>
+	</FormDialog>
+{/if}
+
+{#if data.can.update && moveTargets.length > 0}
+	<FormDialog
+		bind:open={moveOpen}
+		icon={ArrowLeftRightIcon}
+		title="Move {data.project.name} to another node"
+		description="{workloadNode ?? 'The current node'} stops the app and the target starts the same deployment, so expect a short gap. Its placement is set to the target so later deploys stay there."
+		action="?/move"
+		submitLabel="Move app"
+	>
+		<Field.Group>
+			<Field.Field>
+				<Field.Label for="move-node">Target node</Field.Label>
+				<NativeSelect.Root id="move-node" name="node" bind:value={moveNode} class="w-full">
+					{#each moveTargets as node (node.nodeId)}
+						<NativeSelect.Option value={node.nodeId}>
+							{node.name} ({node.mode}) · {node.freeMemoryMb} MB free
+						</NativeSelect.Option>
+					{/each}
+				</NativeSelect.Root>
+				<Field.Description>
+					Apps with an attached database or private storage move with that database instead. App
+					volumes and a persistent data directory stay on the node, so those apps cannot move yet.
 				</Field.Description>
 			</Field.Field>
 		</Field.Group>

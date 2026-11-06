@@ -19,6 +19,7 @@ import type { DatabaseStudioService } from './database-studio.ts';
 import type { StorageService } from './storage-instances.ts';
 import type { VolumeService } from './volumes.ts';
 import type { AppVolumeService } from './app-volumes.ts';
+import type { ServiceMoveService } from './service-moves.ts';
 import type { StorageObjectsService } from './storage-objects.ts';
 import type { DomainService } from './domains.ts';
 import type { BuildService } from './builds.ts';
@@ -61,6 +62,7 @@ export interface CoreContext {
 	storageObjects: StorageObjectsService;
 	volumes: VolumeService;
 	appVolumes: AppVolumeService;
+	moves: ServiceMoveService;
 	domains: DomainService;
 	builds: BuildService;
 	logs: LogService;

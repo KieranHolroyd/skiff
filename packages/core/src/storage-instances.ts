@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNotNull, isNull, lte } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, lte, ne, or } from 'drizzle-orm';
 import {
 	nodes,
 	projects,
@@ -1082,10 +1082,15 @@ export class StorageService {
 			.select({ id: storageInstances.id })
 			.from(storageInstances)
 			.where(
-				and(
-					eq(storageInstances.nodeId, nodeId),
-					isNotNull(storageInstances.deletedAt),
-					isNotNull(storageInstances.purgeRequestedAt),
+				or(
+					and(
+						eq(storageInstances.nodeId, nodeId),
+						isNotNull(storageInstances.deletedAt),
+						isNotNull(storageInstances.purgeRequestedAt),
+					),
+					// The old copy a move left here (D97). The instance is no longer listed on this
+					// node, so the agent's "never purge what is listed" guard still holds.
+					and(eq(storageInstances.purgeNodeId, nodeId), ne(storageInstances.nodeId, nodeId)),
 				),
 			)
 			.all()
@@ -1145,6 +1150,23 @@ export class StorageService {
 	applyPurged(nodeId: string, ids: string[]): void {
 		for (const id of ids) {
 			const row = this.rowById(id);
+			if (row && row.purgeNodeId === nodeId && row.nodeId !== nodeId) {
+				// A moved instance's old copy is gone; the instance itself lives on elsewhere.
+				this.ctx.db
+					.update(storageInstances)
+					.set({ purgeNodeId: null, updatedAt: this.ctx.now() })
+					.where(eq(storageInstances.id, id))
+					.run();
+				this.ctx.audit.record({
+					orgId: row.orgId,
+					action: 'storage.move-purged',
+					resource: 'storage',
+					resourceId: id,
+					args: { name: row.name, nodeId },
+					result: 'ok',
+				});
+				continue;
+			}
 			if (!row || row.nodeId !== nodeId || !row.deletedAt || !row.purgeRequestedAt) continue;
 			this.ctx.sqlite.transaction(() => {
 				this.ctx.db.delete(storageAttachments).where(eq(storageAttachments.storageId, id)).run();
@@ -1353,7 +1375,7 @@ export class StorageService {
 			);
 	}
 
-	private allocatePort(nodeId: string): number {
+	allocatePort(nodeId: string): number {
 		const used = new Set(
 			this.ctx.db
 				.select({ port: storageInstances.hostPort })

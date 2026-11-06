@@ -27,6 +27,7 @@ ownership, and agent protocol.
 | 19 | [Process groups](19-process-groups.md) | P1 | 2 | C | F1, 08, 09 | 14 |
 | 20 | [Agent data tools](20-agent-data-tools.md) | P1 | 3 | E | 01, 02, 03, 04, 11, 12, 16 | — |
 | 22 | [Native database studio](22-native-studio.md) | P1 | 3 | E | 03, 04, D95 | 20 (query path) |
+| 23 | [One-command worker nodes](23-one-click-nodes.md) | P1 | — | N | signed artifacts, join flow | — |
 | P2 | [Later bets](P2-later-bets.md) | P2 | 4+ | — | varies | — |
 
 ## Start order for a new agent

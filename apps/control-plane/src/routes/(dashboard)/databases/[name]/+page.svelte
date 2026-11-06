@@ -472,6 +472,35 @@
 	// --- settings ------------------------------------------------------------------------------
 
 	let resizeOpen = $state(false);
+	let moveOpen = $state(false);
+	let moveNode = $state('');
+	/** Newest good backup: what a database that cannot be dumped can be moved from. */
+	const latestBackup = $derived(
+		data.backups
+			.filter((item) => item.status === 'ok')
+			.sort((a, b) => Date.parse(b.finishedAt ?? b.startedAt) - Date.parse(a.finishedAt ?? a.startedAt))[0] ??
+			null
+	);
+	/** Running databases with backups move by a final dump; anything else needs an explicit source. */
+	const moveSources = $derived(
+		caps.backups && db.status === 'running'
+			? (['dump'] as const)
+			: caps.backups
+				? latestBackup
+					? (['latest-backup', 'empty'] as const)
+					: (['empty'] as const)
+				: (['empty'] as const)
+	);
+	let moveFrom = $state<'dump' | 'latest-backup' | 'empty'>('dump');
+	const moveTarget = $derived(data.moveTargets.find((node) => node.nodeId === moveNode));
+	/** A failed or rolled-back move stays visible for a day, then the audit log has it. */
+	const moveProblem = $derived(
+		data.move &&
+			(data.move.phase === 'failed' || data.move.outcome === 'rolled_back') &&
+			Date.now() - Date.parse(data.move.updatedAt) < 86_400_000
+			? data.move
+			: null
+	);
 
 	function setPooler(next: boolean) {
 		if (next === db.pooler.enabled) return;
@@ -513,6 +542,14 @@
 				{db.version} image and initialises the cluster; the first start can take a minute.
 				<Button variant="link" size="sm" class="h-auto p-0" onclick={dismissCreated}>Dismiss</Button
 				>
+			</Notice>
+		{/if}
+		{#if moveProblem}
+			<Notice tone="danger">
+				Moving to {moveProblem.target.name ?? moveProblem.target.nodeId} failed{moveProblem.outcome ===
+				'rolled_back'
+					? `; it is back on ${moveProblem.source.name ?? moveProblem.source.nodeId}`
+					: ''}. {moveProblem.error}
 			</Notice>
 		{/if}
 		{#if db.message}
@@ -1332,6 +1369,19 @@
 			>
 				{#snippet actions()}
 					{#if editable}
+						{#if data.moveTargets.length > 0}
+							<Button
+								variant="outline"
+								size="sm"
+								onclick={() => {
+									moveNode = data.moveTargets[0]?.nodeId ?? '';
+									moveFrom = moveSources[0];
+									moveOpen = true;
+								}}
+							>
+								<ArrowLeftRightIcon />Move
+							</Button>
+						{/if}
 						<Button variant="outline" size="sm" onclick={() => (resizeOpen = true)}>
 							<PencilIcon />Resize
 						</Button>
@@ -1771,4 +1821,89 @@
 			</Field.Field>
 		</Field.Group>
 	</FormDialog>
+
+	{#if data.moveTargets.length > 0}
+		<FormDialog
+			bind:open={moveOpen}
+			icon={ArrowLeftRightIcon}
+			title="Move {db.name} to another node"
+			description={moveFrom === 'dump'
+				? `Attached apps stop, a final backup is taken on ${nodeLabel}, and the target restores it with the same name, credentials and connection variables. The old copy is deleted only after the restore succeeds; a failed restore puts it back on ${nodeLabel}.`
+				: `${db.name} is ${db.status === 'running' ? 'an engine without backups' : db.status}, so there is nothing to dump. It keeps its name, credentials and connection variables; the copy on ${nodeLabel} is deleted once the target is up.`}
+			action="?/move"
+			submitLabel="Move database"
+		>
+			<input type="hidden" name="from" value={moveFrom} />
+			<Field.Group>
+				{#if moveSources.length > 1 || moveSources[0] !== 'dump'}
+					<Field.Field>
+						<Field.Label>Data on the target</Field.Label>
+						<div class="space-y-2">
+							{#each moveSources as option (option)}
+								<label class="flex items-start gap-2 text-sm">
+									<input
+										type="radio"
+										name="from-choice"
+										value={option}
+										checked={moveFrom === option}
+										onchange={() => (moveFrom = option)}
+										class="mt-1"
+									/>
+									<span>
+										{#if option === 'latest-backup' && latestBackup}
+											<span class="font-medium">Restore the latest backup</span>
+											<span class="block text-xs text-muted-foreground">
+												Taken {formatDateTime(latestBackup.finishedAt ?? latestBackup.startedAt)}. Anything
+												written after it is lost.
+											</span>
+										{:else}
+											<span class="font-medium">Start empty</span>
+											<span class="block text-xs text-muted-foreground">
+												A fresh {db.engineLabel} instance. The current data is discarded.
+											</span>
+										{/if}
+									</span>
+								</label>
+							{/each}
+						</div>
+					</Field.Field>
+				{/if}
+				<Field.Field>
+					<Field.Label for="move-node">Target node</Field.Label>
+					<NativeSelect.Root id="move-node" name="node" bind:value={moveNode} class="w-full">
+						{#each data.moveTargets as node (node.nodeId)}
+							<NativeSelect.Option value={node.nodeId}>
+								{node.name} · {node.freeMemoryMb} MB free
+							</NativeSelect.Option>
+						{/each}
+					</NativeSelect.Root>
+					<Field.Description>
+						Needs {db.memoryMb} MB for the database{db.attachments.length > 0
+							? ` plus the memory of ${db.attachments.map((item) => item.projectSlug).join(', ')}`
+							: ''}. Data goes to the target's default volume.
+					</Field.Description>
+				</Field.Field>
+				{#if moveTarget && moveTarget.freeMemoryMb < db.memoryMb}
+					<Notice tone="danger">{moveTarget.name} does not have {db.memoryMb} MB free.</Notice>
+				{/if}
+				{#if moveFrom === 'dump'}
+					<Notice tone="warning">
+						{db.attachments.length > 0
+							? `${db.attachments.map((item) => item.projectSlug).join(', ')} and the database are`
+							: 'The database is'} unavailable until the restore finishes: roughly the time a backup
+						plus a restore of {db.name} takes.
+					</Notice>
+				{:else}
+					<label class="flex items-start gap-2 text-sm">
+						<Checkbox name="acknowledge" value="on" class="mt-0.5" />
+						<span>
+							{moveFrom === 'empty'
+								? `I understand ${db.name} starts empty and its current data is deleted.`
+								: 'I understand writes after the latest backup are lost.'}
+						</span>
+					</label>
+				{/if}
+			</Field.Group>
+		</FormDialog>
+	{/if}
 {/if}

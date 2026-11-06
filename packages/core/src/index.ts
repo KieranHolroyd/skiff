@@ -21,6 +21,7 @@ import { DatabaseStudioService } from './database-studio.ts';
 import { StorageService } from './storage-instances.ts';
 import { VolumeService } from './volumes.ts';
 import { AppVolumeService } from './app-volumes.ts';
+import { ServiceMoveService } from './service-moves.ts';
 import { StorageObjectsService } from './storage-objects.ts';
 import { DomainService } from './domains.ts';
 import { BuildService } from './builds.ts';
@@ -62,6 +63,7 @@ export * from './database-studio.ts';
 export * from './storage-instances.ts';
 export * from './volumes.ts';
 export * from './app-volumes.ts';
+export * from './service-moves.ts';
 export * from './storage-objects.ts';
 export * from './storage-s3.ts';
 export * from './domains.ts';
@@ -103,6 +105,7 @@ export interface Core {
 	storage: StorageService;
 	volumes: VolumeService;
 	appVolumes: AppVolumeService;
+	moves: ServiceMoveService;
 	storageObjects: StorageObjectsService;
 	domains: DomainService;
 	builds: BuildService;
@@ -150,6 +153,7 @@ export function createCore(options: CoreOptions): Core {
 	ctx.storage = new StorageService(ctx);
 	ctx.volumes = new VolumeService(ctx);
 	ctx.appVolumes = new AppVolumeService(ctx);
+	ctx.moves = new ServiceMoveService(ctx);
 	ctx.storageObjects = new StorageObjectsService(ctx);
 	ctx.domains = new DomainService(ctx);
 	ctx.logs = new LogService(ctx);
@@ -190,6 +194,7 @@ export function createCore(options: CoreOptions): Core {
 		storage: ctx.storage,
 		volumes: ctx.volumes,
 		appVolumes: ctx.appVolumes,
+		moves: ctx.moves,
 		storageObjects: ctx.storageObjects,
 		domains: ctx.domains,
 		builds: ctx.builds,

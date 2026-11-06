@@ -155,3 +155,125 @@ describe('node settings', () => {
 		expect(() => core.nodes.update(member, worker.nodeId, { name: 'nope' })).toThrow(/Platform admin/);
 	});
 });
+
+describe('node removal', () => {
+	const now = Date.now();
+	const edgeId = core.nodes.list(admin).find((node) => node.mode === 'edge')!.id;
+
+	test('refuses the edge node', () => {
+		expect(() => core.nodes.remove(admin, edgeId)).toThrow(/edge node/);
+	});
+
+	test('needs a platform admin and an existing node', () => {
+		const spare = joinNode('spare');
+		expect(() => core.nodes.remove(member, spare.nodeId)).toThrow(/Platform admin/);
+		expect(() => core.nodes.remove(admin, 'nod_missing')).toThrow(/Node/);
+		core.nodes.remove(admin, spare.nodeId);
+	});
+
+	test('refuses while projects are placed on it or workloads run there', () => {
+		const busy = joinNode('busy');
+		opened.sqlite.run(
+			`INSERT INTO projects (id, org_id, slug, name, runtime, placement, created_by, created_at, updated_at)
+			 VALUES ('prj_pin', 'org_1', 'pinned-app', 'Pinned app', 'process', ?, 'user_1', ?, ?)`,
+			[busy.nodeId, now, now],
+		);
+		expect(() => core.nodes.remove(admin, busy.nodeId)).toThrow(/projects placed on it \("Pinned app"\)/);
+
+		opened.sqlite.run(`UPDATE projects SET placement = 'auto' WHERE id = 'prj_pin'`);
+		opened.sqlite.run(
+			`INSERT INTO workloads (id, org_id, project_id, deployment_id, node_id, runtime, status, spec_json, memory_mb, created_at, updated_at)
+			 VALUES ('wl_pin', 'org_1', 'prj_pin', 'dep_pin', ?, 'process', 'running', '{}', 128, ?, ?)`,
+			[busy.nodeId, now, now],
+		);
+		expect(() => core.nodes.remove(admin, busy.nodeId)).toThrow(/app workloads \("Pinned app"\)/);
+		expect(core.nodes.get(busy.nodeId).name).toBe('busy');
+
+		// A deleted project's leftover workload no longer pins the node.
+		opened.sqlite.run(`UPDATE projects SET deleted_at = ? WHERE id = 'prj_pin'`, [now]);
+		expect(core.nodes.removalBlockers(busy.nodeId)).toEqual([]);
+		core.nodes.remove(admin, busy.nodeId);
+	});
+
+	test('revokes the token, drops volume registrations and requeues claimed builds', async () => {
+		const gone = joinNode('retiring');
+		opened.sqlite.run(
+			`INSERT INTO node_volumes (id, node_id, name, kind, source_key, mount_path, fs_type, status, created_by, created_at, updated_at)
+			 VALUES ('vol_gone', ?, 'data', 'filesystem', 'uuid:gone', '/mnt/data', 'ext4', 'ready', 'user_1', ?, ?)`,
+			[gone.nodeId, now, now],
+		);
+		opened.sqlite.run(
+			`INSERT INTO builds (id, org_id, project_id, git_source_id, status, ref, node_id, created_by, created_at, claimed_at)
+			 VALUES ('bld_gone', 'org_1', 'prj_x', 'gs_x', 'building', 'main', ?, 'user_1', ?, ?)`,
+			[gone.nodeId, now, now],
+		);
+		const before = core.nodes.stateVersion();
+
+		expect(core.nodes.remove(admin, gone.nodeId)).toEqual({ ok: true, requeuedBuilds: 1 });
+
+		expect(() => core.nodes.get(gone.nodeId)).toThrow(/Node/);
+		expect(() => core.nodes.authenticate(gone.token)).toThrow(/Unknown node token/);
+		await expect(core.nodes.desiredState(gone.token)).rejects.toThrow(/Unknown node token/);
+		expect(opened.sqlite.query(`SELECT count(*) AS n FROM node_volumes WHERE node_id = ?`).get(gone.nodeId)).toEqual({ n: 0 });
+		expect(opened.sqlite.query(`SELECT status, node_id AS nodeId FROM builds WHERE id = 'bld_gone'`).get()).toEqual({
+			status: 'queued',
+			nodeId: null,
+		});
+		expect(core.nodes.stateVersion()).toBeGreaterThan(before);
+		expect(core.audit.list({ principal: admin, limit: 5, action: 'node.remove' }).map((entry) => entry.resourceId)).toContain(gone.nodeId);
+	});
+});
+
+describe('changing the edge node', () => {
+	const beat = (node: { nodeId: string; token: string }) =>
+		core.nodes.heartbeat(node.token, {
+			nodeId: node.nodeId,
+			agentVersion: '0.1.0',
+			actualStateVersion: 1,
+			status: 'online',
+			caddyOk: true,
+			releases: [],
+		});
+
+	test('swaps the roles, so the new edge serves every site and the old one becomes a worker', async () => {
+		const oldEdge = core.nodes.list(admin).find((node) => node.mode === 'edge')!;
+		const next = joinNode('next-edge');
+		beat(next);
+		const before = core.nodes.stateVersion();
+
+		expect(() => core.nodes.setEdge(member, next.nodeId)).toThrow(/Platform admin/);
+		expect(core.nodes.setEdge(admin, next.nodeId)).toMatchObject({ id: next.nodeId, mode: 'edge' });
+		expect(core.nodes.get(oldEdge.id).mode).toBe('worker');
+		expect(core.nodes.list(admin).filter((node) => node.mode === 'edge').map((node) => node.id)).toEqual([next.nodeId]);
+		expect(core.nodes.stateVersion()).toBeGreaterThan(before);
+		expect(core.workloads.edgeNode()).toBe(next.nodeId);
+		expect(core.audit.list({ principal: admin, limit: 5, action: 'node.set_edge' }).map((entry) => entry.resourceId)).toContain(
+			next.nodeId,
+		);
+		// The old edge can now be removed like any worker.
+		expect(() => core.nodes.remove(admin, next.nodeId)).toThrow(/edge node/);
+		expect(core.nodes.removalBlockers(oldEdge.id)).toEqual([]);
+	});
+
+	test('refuses the current edge, offline nodes and an old edge whose apps would become unreachable', () => {
+		const edge = core.nodes.list(admin).find((node) => node.mode === 'edge')!;
+		expect(() => core.nodes.setEdge(admin, edge.id)).toThrow(/already the edge/);
+		const quiet = joinNode('quiet');
+		opened.sqlite.run(`UPDATE nodes SET status = 'offline' WHERE id = ?`, [quiet.nodeId]);
+		expect(() => core.nodes.setEdge(admin, quiet.nodeId)).toThrow(/offline/);
+
+		// An app pinned to the current edge, which has no address the new edge could proxy to.
+		const now = Date.now();
+		opened.sqlite.run(
+			`INSERT INTO projects (id, org_id, slug, name, runtime, placement, created_by, created_at, updated_at)
+			 VALUES ('prj_edgepin', 'org_1', 'edge-pinned', 'Edge pinned', 'process', ?, 'user_1', ?, ?)`,
+			[edge.id, now, now],
+		);
+		const candidate = joinNode('candidate');
+		beat(candidate);
+		expect(() => core.nodes.setEdge(admin, candidate.nodeId)).toThrow(/no address the new edge could proxy to/);
+		core.nodes.update(admin, edge.id, { publicAddress: '10.88.0.9:8080' });
+		expect(core.nodes.setEdge(admin, candidate.nodeId).mode).toBe('edge');
+		opened.sqlite.run(`UPDATE projects SET deleted_at = ? WHERE id = 'prj_edgepin'`, [now]);
+	});
+});

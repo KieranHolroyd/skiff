@@ -983,6 +983,9 @@ END $$;`];
 				'--clean',
 				'--if-exists',
 				'--no-owner',
+				// GRANTs to named credentials would fail on a fresh instance where those roles do not
+				// exist yet; the agent re-grants every credential after a restore or move (D97).
+				'--no-acl',
 				'--exit-on-error',
 				'-U',
 				env.user,

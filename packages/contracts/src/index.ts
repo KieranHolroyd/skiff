@@ -13,6 +13,7 @@ export * from './env.ts';
 export * from './database.ts';
 export * from './database-studio.ts';
 export * from './database-backup.ts';
+export * from './service-move.ts';
 export * from './database-pitr.ts';
 export * from './services.ts';
 export * from './object-storage.ts';

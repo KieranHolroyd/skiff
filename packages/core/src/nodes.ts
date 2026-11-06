@@ -1,5 +1,8 @@
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import {
+	appVolumes,
+	databaseStudioSessions,
+	databases,
 	deployments,
 	environments,
 	nodeJoinTokens,
@@ -8,6 +11,7 @@ import {
 	projects,
 	releases,
 	slugRedirects,
+	storageInstances,
 	workloads,
 	type nodes as nodesTable,
 } from '@skiff/db';
@@ -27,7 +31,7 @@ import {
 	type RouteSpec,
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
-import { CoreError, NotFoundError, UnauthorizedError, ValidationError } from './errors.ts';
+import { ConflictError, CoreError, NotFoundError, UnauthorizedError, ValidationError } from './errors.ts';
 import { siteKeyFor } from './config.ts';
 import { newId, randomToken, sha256Hex, parseJson } from './util.ts';
 import type { ParsedConfig } from '@skiff/site-config';
@@ -248,13 +252,18 @@ export class NodeService {
 		if (input.databasePoolerRestarted?.length)
 			this.ctx.databases.applyPoolerRestarted(node.id, input.databasePoolerRestarted);
 		if (input.databaseTls?.length) this.ctx.databases.applyTlsReport(node.id, input.databaseTls);
-		if (input.purgedDatabases?.length) this.ctx.databases.applyPurged(node.id, input.purgedDatabases);
+		if (input.purgedDatabases?.length) {
+			this.ctx.databases.applyPurged(node.id, input.purgedDatabases);
+			this.ctx.moves.onPurged(node.id, input.purgedDatabases);
+		}
 		if (input.purgedStorage?.length) this.ctx.storage.applyPurged(node.id, input.purgedStorage);
 		if (input.storageBucketDeletions?.length)
 			this.ctx.storage.applyBucketDeletions(node.id, input.storageBucketDeletions);
 		if (input.storageBucketConfigs?.length)
 			this.ctx.storage.applyBucketConfigReports(node.id, input.storageBucketConfigs);
 		if (input.volumes) this.ctx.volumes.applyInventory(node.id, input.volumes);
+		// A database move waits for its source to stop the attached apps before dumping (D97).
+		this.ctx.moves.onHeartbeat(node.id, input.actualStateVersion, (input.workloads ?? []).map((item) => item.id));
 		return { ok: true, desiredStateVersion: this.stateVersion() };
 	}
 
@@ -324,6 +333,52 @@ export class NodeService {
 			result: 'ok',
 		});
 		return this.view({ ...node, canBuild: builder });
+	}
+
+	/**
+	 * Hand the edge role to another node (D98). The roles swap: the target terminates ingress and
+	 * serves every static site, the old edge becomes a worker that keeps what was admitted to it.
+	 * Everything follows from desired state, so both agents converge on their next pull. Outside
+	 * Skiff the operator still points DNS at the new edge and gives it TLS settings; that is why the
+	 * dashboard asks for a typed confirmation.
+	 */
+	setEdge(principal: Principal, nodeId: string): NodeView {
+		this.assertPlatformAdmin(principal);
+		if (this.ctx.config.edgeNodeId)
+			throw new ConflictError(
+				'SKIFF_EDGE_NODE_ID pins the edge in the control plane environment. Change it there and restart the control plane.',
+			);
+		const target = this.ctx.db.select().from(nodes).where(eq(nodes.id, nodeId)).get();
+		if (!target) throw new NotFoundError('Node');
+		if (target.mode === 'edge') throw new ConflictError(`"${target.name}" is already the edge node.`);
+		if (target.status !== 'online')
+			throw new ConflictError(`"${target.name}" is ${target.status}; only an online node can take over ingress.`);
+		const previous = this.ctx.db.select().from(nodes).where(eq(nodes.mode, 'edge')).get();
+		// The new edge proxies to whatever stays on the old one, so it needs an address to reach it.
+		if (previous && !previous.publicAddress) {
+			const blockers = this.removalBlockers(previous.id);
+			if (blockers.length)
+				throw new ConflictError(
+					`"${previous.name}" still hosts ${blockers.join('; ')}, and has no address the new edge could proxy to. Give it one (Edit node) or move them first.`,
+				);
+		}
+
+		const now = this.ctx.now();
+		this.ctx.db.transaction(() => {
+			if (previous)
+				this.ctx.db.update(nodes).set({ mode: 'worker', updatedAt: now }).where(eq(nodes.id, previous.id)).run();
+			this.ctx.db.update(nodes).set({ mode: 'edge', updatedAt: now }).where(eq(nodes.id, nodeId)).run();
+		});
+		this.ctx.audit.record({
+			principal,
+			action: 'node.set_edge',
+			resource: 'node',
+			resourceId: nodeId,
+			args: { name: target.name, previous: previous ? { id: previous.id, name: previous.name } : null },
+			result: 'ok',
+		});
+		this.bump();
+		return this.view({ ...target, mode: 'edge', updatedAt: now });
 	}
 
 	/**
@@ -417,6 +472,93 @@ export class NodeService {
 		this.ctx.db.update(nodes).set({ tokenHash: sha256Hex(token), updatedAt: this.ctx.now() }).where(eq(nodes.id, nodeId)).run();
 		this.ctx.audit.record({ principal, action: 'node.rotate_token', resource: 'node', resourceId: nodeId, result: 'ok' });
 		return { token };
+	}
+
+	/**
+	 * What still lives on a node and so blocks removing it. Removal never moves or deletes data:
+	 * the operator relocates or deletes these first, exactly as volume removal works (D74).
+	 * Soft-deleted rows do not count; their purge simply never runs once the node is gone.
+	 */
+	removalBlockers(nodeId: string): string[] {
+		const names = (rows: Array<{ name: string }>) => rows.map((row) => `"${row.name}"`);
+		const blockers: string[] = [];
+		const placed = this.ctx.db
+			.select({ name: projects.name })
+			.from(projects)
+			.where(and(eq(projects.placement, nodeId), isNull(projects.deletedAt)))
+			.all();
+		if (placed.length) blockers.push(`projects placed on it (${names(placed).join(', ')})`);
+		const running = this.ctx.db
+			.select({ name: projects.name })
+			.from(workloads)
+			.innerJoin(projects, eq(projects.id, workloads.projectId))
+			.where(and(eq(workloads.nodeId, nodeId), isNull(projects.deletedAt)))
+			.all();
+		if (running.length) blockers.push(`app workloads (${names(running).join(', ')})`);
+		const dbs = this.ctx.db
+			.select({ name: databases.name })
+			.from(databases)
+			.where(and(eq(databases.nodeId, nodeId), isNull(databases.deletedAt)))
+			.all();
+		if (dbs.length) blockers.push(`databases (${names(dbs).join(', ')})`);
+		const stores = this.ctx.db
+			.select({ name: storageInstances.name })
+			.from(storageInstances)
+			.where(and(eq(storageInstances.nodeId, nodeId), isNull(storageInstances.deletedAt)))
+			.all();
+		if (stores.length) blockers.push(`storage instances (${names(stores).join(', ')})`);
+		const volumes = this.ctx.db
+			.select({ name: appVolumes.name })
+			.from(appVolumes)
+			.where(and(eq(appVolumes.nodeId, nodeId), isNull(appVolumes.deletedAt)))
+			.all();
+		if (volumes.length) blockers.push(`app volumes (${names(volumes).join(', ')})`);
+		const moving = this.ctx.moves.nodeBlockers(nodeId);
+		if (moving.length) blockers.push(`database moves in progress (${moving.join(', ')})`);
+		return blockers;
+	}
+
+	/**
+	 * Forget a worker node: its token stops working at once, its volume registrations and studio
+	 * sessions go, and builds it had claimed return to the queue. History (deployments, builds,
+	 * logs, audit) keeps the node id. The edge cannot be removed — it terminates ingress — and a
+	 * node that still hosts anything is refused with the list of what to move first. Nothing on
+	 * the machine itself changes; the operator uninstalls the agent there.
+	 */
+	remove(principal: Principal, nodeId: string): { ok: true; requeuedBuilds: number } {
+		this.assertPlatformAdmin(principal);
+		const node = this.ctx.db.select().from(nodes).where(eq(nodes.id, nodeId)).get();
+		if (!node) throw new NotFoundError('Node');
+		if (node.mode === 'edge' || this.ctx.config.edgeNodeId === nodeId)
+			throw new ConflictError(
+				`"${node.name}" is the edge node. It terminates ingress for every site, so it cannot be removed.`,
+			);
+		const blockers = this.removalBlockers(nodeId);
+		if (blockers.length)
+			throw new ConflictError(
+				`"${node.name}" still hosts ${blockers.join('; ')}. Move or delete them first.`,
+			);
+
+		let requeuedBuilds = 0;
+		this.ctx.db.transaction(() => {
+			requeuedBuilds = this.ctx.builds.releaseNodeClaims(nodeId);
+			this.ctx.db.delete(databaseStudioSessions).where(eq(databaseStudioSessions.nodeId, nodeId)).run();
+			this.ctx.db.delete(nodeVolumes).where(eq(nodeVolumes.nodeId, nodeId)).run();
+			this.ctx.db.delete(nodes).where(eq(nodes.id, nodeId)).run();
+			// A removed node can never confirm a purge an earlier move left for it.
+			this.ctx.moves.forgetNode(nodeId);
+		});
+		this.ctx.audit.record({
+			principal,
+			action: 'node.remove',
+			resource: 'node',
+			resourceId: nodeId,
+			args: { name: node.name, mode: node.mode, publicAddress: node.publicAddress, requeuedBuilds },
+			result: 'ok',
+		});
+		// The edge drops any proxy routes that pointed at this node on its next pull.
+		this.bump();
+		return { ok: true, requeuedBuilds };
 	}
 
 	stateVersion(): number {
@@ -653,7 +795,6 @@ export class NodeService {
 		// production pointer are candidates; staging-only projects must not serve them.
 		const servedProjectIds = productionProjectIds;
 
-
 		// The DBGate (D60) and native studio (plan 22) routes share one internal gateway listener.
 		const publicAddressOf = (id: string) => nodeById.get(id)?.publicAddress ?? null;
 		const consoleGateway = this.ctx.databases.gatewayForNode(node.id, isEdge, publicAddressOf);
@@ -686,7 +827,10 @@ export class NodeService {
 			hostRedirects,
 			workloads: workloadRows,
 			volumes: this.ctx.volumes.desiredForNode(node.id),
-			databasePurges: this.ctx.databases.purgesForNode(node.id),
+			// Trashed databases plus the old copy a finished (or rolled-back) move left here.
+			databasePurges: [
+				...new Set([...this.ctx.databases.purgesForNode(node.id), ...this.ctx.moves.purgesForNode(node.id)]),
+			].sort(),
 			databaseBackupTasks: await this.ctx.databases.backupTasksForNode(node.id),
 			databasePitrTasks: await this.ctx.databases.pitrTasksForNode(node.id),
 			databaseRotations: this.ctx.databases.rotationTasksForNode(node.id),

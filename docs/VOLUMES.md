@@ -56,9 +56,12 @@ Resolution order when a workload starts:
 2. the node's `default_volume_id`;
 3. the helper's state directory (today's behaviour).
 
-Volumes are per node and managed instances never move between nodes (D41). An instance can be
-moved to another volume on the same node as a follow-up (stop → copy → re-point → start, the D48
-pattern). A volume that still holds instances cannot be removed.
+Volumes are per node. A managed database can move to another node (D97): a final dump on the
+source is restored onto the target's chosen (or default) volume, and the old copy is purged once
+the restore succeeds. A storage instance can move too, but only empty (its objects are not copied
+yet). An instance can be moved to
+another volume on the same node as a follow-up (stop → copy → re-point → start, the D48 pattern).
+A volume that still holds instances cannot be removed.
 
 ## 3. Adding a drive: inventory → plan → confirm → apply → verify
 

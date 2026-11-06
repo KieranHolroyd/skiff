@@ -42,6 +42,8 @@
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
+	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
+	import ArrowLeftRightIcon from '@lucide/svelte/icons/arrow-left-right';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as InputGroup from '#lib/components/ui/input-group/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
@@ -332,6 +334,8 @@
 	// --- settings and danger zone ----------------------------------------------------------------
 
 	let resizeOpen = $state(false);
+	let moveOpen = $state(false);
+	let moveNode = $state('');
 
 	function deleteStorage() {
 		askConfirm({
@@ -902,6 +906,18 @@
 			>
 				{#snippet actions()}
 					{#if can.update && !deleted}
+						{#if data.moveTargets.length > 0}
+							<Button
+								variant="outline"
+								size="sm"
+								onclick={() => {
+									moveNode = data.moveTargets[0]?.nodeId ?? '';
+									moveOpen = true;
+								}}
+							>
+								<ArrowLeftRightIcon />Move
+							</Button>
+						{/if}
 						<Button variant="outline" size="sm" onclick={() => (resizeOpen = true)}>
 							<PencilIcon />Resize
 						</Button>
@@ -1246,6 +1262,39 @@
 				</Field.Description>
 				{#if errors.storageMb}<Field.Error>{errors.storageMb}</Field.Error>{/if}
 			</Field.Field>
+		</Field.Group>
+	</FormDialog>
+{/if}
+
+{#if can.update && !deleted && data.moveTargets.length > 0}
+	<FormDialog
+		bind:open={moveOpen}
+		icon={ArrowLeftRightIcon}
+		title="Move {st.name} to another node"
+		description="Skiff cannot copy objects between nodes yet, so {st.name} starts empty on the target. Its buckets, access keys and attached apps' credentials come back unchanged; the copy on {nodeLabel} is deleted."
+		action="?/move"
+		submitLabel="Move storage"
+	>
+		<Field.Group>
+			<Field.Field>
+				<Field.Label for="move-node">Target node</Field.Label>
+				<NativeSelect.Root id="move-node" name="node" bind:value={moveNode} class="w-full">
+					{#each data.moveTargets as node (node.nodeId)}
+						<NativeSelect.Option value={node.nodeId}>
+							{node.name} · {node.freeMemoryMb} MB free
+						</NativeSelect.Option>
+					{/each}
+				</NativeSelect.Root>
+				<Field.Description>
+					{st.public
+						? 'Apps reach public storage from any node, so none of them move.'
+						: 'Attached apps move with it unless another service they use stays behind.'}
+				</Field.Description>
+			</Field.Field>
+			<label class="flex items-start gap-2 text-sm">
+				<Checkbox name="acknowledge" value="on" class="mt-0.5" />
+				<span>I understand the objects in {st.name} are not copied and are deleted with the old copy.</span>
+			</label>
 		</Field.Group>
 	</FormDialog>
 {/if}

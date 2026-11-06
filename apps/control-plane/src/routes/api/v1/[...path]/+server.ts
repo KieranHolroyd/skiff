@@ -12,6 +12,7 @@ import {
 	finalizeUploadSchema,
 	domainCreateSchema,
 	nodeUpdateSchema,
+	serviceMoveSchema,
 	logLevels,
 	logSources,
 	itemStatuses,
@@ -118,6 +119,10 @@ const api: RequestHandler = async (event) => {
 			}
 			if (action === 'rollback' && method === 'POST') {
 				return core.deployments.rollback(principal, core.projects.requireRow(principal, slug));
+			}
+			if (action === 'move' && method === 'POST') {
+				const input = await readJson(request, serviceMoveSchema);
+				return core.moves.moveApp(principal, slug, input);
 			}
 			if (action === 'logs' && method === 'GET') {
 				const project = core.projects.requireRow(principal, slug);
@@ -276,6 +281,7 @@ const api: RequestHandler = async (event) => {
 			const nodeId = segments[1]!;
 			if (segments.length === 2 && method === 'PATCH')
 				return core.nodes.update(principal, nodeId, await readJson(request, nodeUpdateSchema));
+			if (segments.length === 2 && method === 'DELETE') return core.nodes.remove(principal, nodeId);
 			// --- node volumes (docs/VOLUMES.md, D72) ---------------------------
 			if (segments[2] === 'volumes') {
 				if (segments.length === 3 && method === 'GET') return core.volumes.list(principal, nodeId);
@@ -301,6 +307,7 @@ const api: RequestHandler = async (event) => {
 				return core.nodes.setDraining(principal, nodeId, false);
 			if (segments[2] === 'rotate-token' && method === 'POST')
 				return core.nodes.rotateToken(principal, nodeId);
+			if (segments[2] === 'edge' && method === 'POST') return core.nodes.setEdge(principal, nodeId);
 			return json({ error: 'not_found' }, 404);
 		}
 

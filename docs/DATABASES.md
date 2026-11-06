@@ -154,6 +154,23 @@ connections above 90% of `max_connections`, pool saturation above 90%).
   state lists the id under `databasePurges`; the agent calls the helper's fixed `purge` verb, which
   removes only `<stateDir>/<id>`, then reports it, and the control plane deletes the row.
 
+- **Move to another node** (D97, `POST /databases/:name/move { node, volume? }`, dashboard
+  Settings → Resources → Move): engines with backups only, and not while PITR is on. The move
+  stops attached apps (`quiescing`), takes a final backup on the source once it has applied the
+  stop (`dumping`), re-points the row at the target with fresh ports so it restores into an empty
+  instance (`restoring`), then moves the attached apps, re-grants named credentials and purges the
+  source copy (`purging` → `done`). Name, credentials and connection variables are unchanged; the
+  host port may differ. A failed dump gives up with nothing changed; a failed restore puts the
+  database back on the untouched source and purges the target's partial copy. Apps with app
+  volumes or a persistent data dir block the move. An app that also uses another database or
+  private storage on the old node still follows; the response warns that it cannot reach (or
+  deploy against) that service until it moves too. Downtime is roughly one backup
+  plus one restore. `GET /databases/:name/move` shows the latest move.
+  A database that cannot be dumped (failed, stopped, or its node offline) moves with an explicit
+  `from`: `latest-backup` restores its newest good backup (later writes are lost) and `empty`
+  starts it fresh (its data is discarded). Valkey and Redis have no backups, so they can only move
+  `empty`. The dashboard asks for a confirmation for either.
+
 **Data location.** By default the data dir lives under the helper's state root. A database can
 instead be placed on a node volume (`volume` on create, or the node's default volume); its data
 then lives at `<mount>/skiff/<id>` (D74, D78), and the node refuses to start it when the mount is

@@ -371,6 +371,21 @@ export const actions: Actions = {
 		return { success: 'Production pointer moved. Traffic switches on the next reconcile.' };
 	},
 
+	move: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const node = formString(data, 'node');
+		if (!node) return fail(400, { message: 'Choose a node to move to.' });
+		try {
+			const moved = core.moves.moveApp(principal, params.slug, { node });
+			return {
+				success: `Moving to ${moved.to.name ?? node}. ${moved.from.name ?? 'The old node'} stops the app and ${moved.to.name ?? 'the target'} starts it on its next reconcile.`
+			};
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
 	rollback: async ({ locals, params }) => {
 		const principal = locals.principal!;
 		try {

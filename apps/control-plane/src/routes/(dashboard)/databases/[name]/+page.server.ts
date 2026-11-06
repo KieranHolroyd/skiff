@@ -9,6 +9,8 @@ import {
 	hasPermission,
 	type DatabaseConsoleView,
 	type DatabaseMetricPoint,
+	type DatabaseMoveView,
+	type NodeCapacityView,
 	type DatabaseView,
 	type Principal
 } from '@skiff/contracts';
@@ -69,8 +71,29 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		}
 	}
 
+	// Moving between nodes (D97). Node choices come from capacity, which only platform admins can
+	// read, so the move dialog is theirs; the latest move's progress is shown to everyone.
+	let move: DatabaseMoveView | null = null;
+	try {
+		move = core.moves.latestForDatabase(principal, params.name);
+	} catch {
+		move = null;
+	}
+	let moveTargets: NodeCapacityView[] = [];
+	if (dbCan.update && !database.deletedAt) {
+		try {
+			moveTargets = core.workloads
+				.capacity(principal)
+				.filter((node) => node.nodeId !== database.nodeId && node.status === 'online');
+		} catch {
+			moveTargets = [];
+		}
+	}
+
 	return {
 		database,
+		move,
+		moveTargets,
 		backups: core.databases.listBackups(principal, params.name, { includeDeleted: true }),
 		metrics,
 		telemetryAvailable: core.ctx.telemetry?.available ?? false,
@@ -313,6 +336,35 @@ export const actions: Actions = {
 		try {
 			await core.databases.deleteBackup(principal, params.name, backupId);
 			return { success: `Deleted backup ${backupId}.` };
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	move: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const node = formString(data, 'node');
+		if (!node) return fail(400, { message: 'Choose a node to move to.' });
+		const from = formString(data, 'from');
+		const source = from === 'latest-backup' || from === 'empty' ? from : 'dump';
+		if (source !== 'dump' && formString(data, 'acknowledge') !== 'on')
+			return fail(400, {
+				message:
+					source === 'empty'
+						? 'Confirm that the database starts empty and its current data is discarded.'
+						: 'Confirm that writes after the latest backup are lost.'
+			});
+		try {
+			const move = core.moves.moveDatabase(principal, params.name, { node, from: source });
+			const warnings = move.warnings?.length ? ` ${move.warnings.join(' ')}` : '';
+			return {
+				success: `Moving to ${move.target.name ?? node}. ${
+					move.projects.length
+						? `${move.projects.join(', ')} stop${move.projects.length === 1 ? 's' : ''} until the restore finishes.`
+						: 'The database is unavailable until the restore finishes.'
+				}${warnings}`
+			};
 		} catch (caught) {
 			return fail(failStatus(caught), toFormFailure(caught));
 		}

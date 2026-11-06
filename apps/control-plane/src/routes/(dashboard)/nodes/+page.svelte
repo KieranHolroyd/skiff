@@ -16,6 +16,8 @@
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import ServerIcon from '@lucide/svelte/icons/server';
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
+	import SignpostIcon from '@lucide/svelte/icons/signpost';
+	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import { toast } from 'svelte-sonner';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
@@ -156,6 +158,32 @@
 		});
 	}
 
+	function makeEdge(node: { id: string; name: string }) {
+		const current = data.denied ? undefined : data.nodes.find((item) => item.mode === 'edge');
+		askConfirm({
+			title: `Make ${node.name} the edge node?`,
+			description: `${node.name} takes over ingress and serves every static site${current ? `; ${current.name} becomes a worker and keeps the apps and databases already on it` : ''}. Skiff changes the roles only: if ${node.name} is a different machine, point DNS for the platform and content domains at it and give its agent the TLS settings an edge needs (docs/OPS.md).`,
+			confirmLabel: 'Make edge',
+			tone: 'danger',
+			typeToConfirm: node.name,
+			action: '?/setEdge',
+			fields: { nodeId: node.id }
+		});
+	}
+
+	function removeNode(node: { id: string; name: string }) {
+		askConfirm({
+			title: `Remove ${node.name} from Skiff?`,
+			description:
+				'Its token is revoked at once, its volume registrations are dropped and any builds it claimed go back to the queue. Projects, workloads, databases, storage instances or app volumes still on it block the removal. Nothing on the machine is deleted; uninstall the agent there afterwards.',
+			confirmLabel: 'Remove node',
+			tone: 'danger',
+			typeToConfirm: node.name,
+			action: '?/removeNode',
+			fields: { nodeId: node.id }
+		});
+	}
+
 	function setBuilder(node: { id: string; name: string; canBuild: boolean }) {
 		askConfirm({
 			title: node.canBuild
@@ -284,6 +312,16 @@
 								<DropdownMenu.Item variant="destructive" onSelect={() => rotate(node)}>
 									<RefreshCwIcon />Rotate token
 								</DropdownMenu.Item>
+								{#if node.mode !== 'edge' && node.status === 'online'}
+									<DropdownMenu.Item onSelect={() => makeEdge(node)}>
+										<SignpostIcon />Make this the edge
+									</DropdownMenu.Item>
+								{/if}
+								{#if node.mode !== 'edge'}
+									<DropdownMenu.Item variant="destructive" onSelect={() => removeNode(node)}>
+										<Trash2Icon />Remove node
+									</DropdownMenu.Item>
+								{/if}
 							</RowMenu>
 						</Card.Action>
 					</Card.Header>

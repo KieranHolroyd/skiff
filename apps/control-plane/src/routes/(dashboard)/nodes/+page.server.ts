@@ -181,6 +181,41 @@ export const actions: Actions = {
 		};
 	},
 
+	setEdge: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const nodeId = formString(data, 'nodeId');
+		if (!nodeId) return fail(400, { message: 'Missing node id.' });
+		try {
+			const node = core.nodes.setEdge(principal, nodeId);
+			return {
+				success: `${node.name} is now the edge node. Static sites move to it on the next pull; point DNS at it if it is a different machine.`
+			};
+		} catch (error) {
+			return fail(failStatus(error), toFormFailure(error));
+		}
+	},
+
+	removeNode: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const nodeId = formString(data, 'nodeId');
+		if (!nodeId) return fail(400, { message: 'Missing node id.' });
+
+		try {
+			const { requeuedBuilds } = core.nodes.remove(principal, nodeId);
+			const builds =
+				requeuedBuilds > 0
+					? ` ${requeuedBuilds} build${requeuedBuilds === 1 ? '' : 's'} it had claimed went back to the queue.`
+					: '';
+			return {
+				success: `Node removed and its token revoked.${builds} Uninstall the agent on the machine to stop it.`
+			};
+		} catch (error) {
+			return fail(failStatus(error), toFormFailure(error));
+		}
+	},
+
 	rotateToken: async ({ request, locals }) => {
 		const principal = locals.principal!;
 		const data = await request.formData();

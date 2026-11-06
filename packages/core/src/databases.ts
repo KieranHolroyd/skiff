@@ -316,6 +316,7 @@ export class DatabaseService {
 		requirePermission(principal, 'database:update');
 		const patch = databaseUpdateSchema.parse(raw);
 		const row = this.requireRow(principal, name);
+		this.ctx.moves.assertNotMoving(row);
 		const info = databaseEngineRegistry[row.engine];
 		const projectId = this.attachmentsOf(row.id)[0]?.projectId;
 		if (patch.storageMb !== undefined || patch.memoryMb !== undefined)
@@ -394,6 +395,7 @@ export class DatabaseService {
 		requirePermission(principal, 'database:update');
 		const input = databaseUpgradeSchema.parse(raw);
 		const row = this.requireRow(principal, name);
+		this.ctx.moves.assertNotMoving(row);
 		const info = databaseEngineRegistry[row.engine];
 		this.requireCapability(row, 'upgradePlan', 'The upgrade planner');
 		if (!info.versions.includes(input.targetVersion))
@@ -521,6 +523,7 @@ export class DatabaseService {
 	/** Soft delete (D59): the container stops, the data dir stays on the node for `trashDays`. */	delete(principal: Principal, name: string): DatabaseView {
 		requirePermission(principal, 'database:delete');
 		const row = this.requireRow(principal, name);
+		this.ctx.moves.assertNotMoving(row);
 		const attached = this.attachmentsOf(row.id);
 		if (attached.length > 0)
 			throw new ConflictError(
@@ -814,6 +817,7 @@ export class DatabaseService {
 		requirePermission(principal, 'database:update');
 		const input = databaseRestartSchema.parse(raw);
 		const row = this.requireRow(principal, name);
+		this.ctx.moves.assertNotMoving(row);
 		const now = this.ctx.now();
 		if (input.target === 'pooler') {
 			if (!row.poolerEnabled || row.poolerPort === null)
@@ -1262,6 +1266,7 @@ export class DatabaseService {
 	/** Checks shared by the DBGate and native studios (plan 22) before a session may open. */
 	assertStudioOpenable(row: DatabaseRow): void {
 		this.requireCapability(row, 'console', 'The database studio');
+		this.ctx.moves.assertNotMoving(row);
 		if (row.deletedAt)
 			throw new ConflictError(`Database "${row.name}" is in the trash. Restore it before opening the studio.`);
 		if (row.status !== 'running')
@@ -1316,6 +1321,7 @@ export class DatabaseService {
 		requirePermission(principal, 'database:update');
 		const input = databaseRotateSchema.parse(raw);
 		const db = this.requireRow(principal, name);
+		this.ctx.moves.assertNotMoving(db);
 		this.requireCapability(db, 'rotation', 'Credential rotation');
 		if (input.role === 'monitor') this.requireCapability(db, 'metrics', 'The monitor role');
 		const pending = this.ctx.db
@@ -1494,6 +1500,7 @@ export class DatabaseService {
 		requirePermission(principal, 'database:update');
 		const input = databaseCredentialCreateSchema.parse(raw ?? {}) as DatabaseCredentialCreate;
 		const db = this.requireRow(principal, name);
+		this.ctx.moves.assertNotMoving(db);
 		this.requireCapability(db, 'namedCredentials', 'Named credentials');
 		if (input.role !== 'app' && input.role !== 'readonly' && input.role !== 'backup')
 			throw new ValidationError('Only app, readonly and backup credentials can be created.');
@@ -1833,6 +1840,7 @@ export class DatabaseService {
 		requirePermission(principal, 'database:update');
 		const input = databaseBackupCreateSchema.parse(raw);
 		const db = this.requireRow(principal, name);
+		this.ctx.moves.assertNotMoving(db);
 		this.requireCapability(db, 'backups', 'Backups');
 		const pending = this.ctx.db
 			.select({ id: databaseBackups.id })
@@ -2149,6 +2157,8 @@ export class DatabaseService {
 					result: ok ? 'ok' : 'error',
 					...(ok ? {} : { error: result.error ?? 'Backup failed on the node.' }),
 				});
+				// A move's final dump advances the move (D97).
+				this.ctx.moves.onBackupResult(backup.backup.id, ok, ok ? null : result.error ?? 'Backup failed on the node.');
 				changed = true;
 				continue;
 			}
@@ -2166,6 +2176,11 @@ export class DatabaseService {
 				.get();
 			if (!backup) continue;
 			const ok = result.status === 'ok';
+			// A moving database finishes (or rolls back) its move instead of the restore-to-new path.
+			if (this.ctx.moves.onRestoreResult(db, ok, ok ? null : result.error ?? 'Restore failed on the node.')) {
+				changed = true;
+				continue;
+			}
 			this.ctx.db
 				.update(databases)
 				.set({
@@ -2279,6 +2294,7 @@ export class DatabaseService {
 		this.requirePitrFeature();
 		const input = databasePitrPolicySchema.parse(raw);
 		const row = this.requireRow(principal, name);
+		this.ctx.moves.assertNotMoving(row);
 		this.requireCapability(row, 'pitr', 'Point-in-time recovery');
 		const now = this.ctx.now();
 		const existing = this.ctx.db
@@ -2776,6 +2792,10 @@ export class DatabaseService {
 				`Project "${project.slug}" is static; only process or container projects can use a database.`,
 			);
 		const row = this.requireRow(principal, input.database);
+		this.ctx.moves.assertNotMoving(row);
+		// A project already stopped for another database's move cannot pick up a new pin mid-move.
+		if (this.ctx.moves.quiescedProjectIds().has(project.id))
+			throw new ConflictError(`"${project.slug}" is stopped while a database it uses moves. Wait for that to finish.`);
 		const envPrefix = input.envPrefix ?? databaseEngineRegistry[row.engine].defaultEnvPrefix;
 		const current = this.attachmentsForProject(project.id);
 		if (current.some((item) => item.databaseId === row.id))
@@ -3307,28 +3327,31 @@ export class DatabaseService {
 			);
 	}
 
-	private allocatePort(nodeId: string): number {
-		const used = new Set(
-			this.ctx.db
+	/** Free host port on a node; ports a database move may roll back to stay reserved (D97). */
+	allocatePort(nodeId: string): number {
+		const used = new Set([
+			...this.ctx.db
 				.select({ port: databases.hostPort })
 				.from(databases)
 				.where(eq(databases.nodeId, nodeId))
 				.all()
 				.map((row) => row.port),
-		);
+			...this.ctx.moves.reservedPorts(nodeId).host,
+		]);
 		for (let port = DATABASE_PORT_MIN; port <= DATABASE_PORT_MAX; port++) if (!used.has(port)) return port;
 		throw new ValidationError('This node has no free database ports left.');
 	}
 
-	private allocatePoolerPort(nodeId: string): number {
-		const used = new Set(
-			this.ctx.db
+	allocatePoolerPort(nodeId: string): number {
+		const used = new Set([
+			...this.ctx.db
 				.select({ port: databases.poolerPort })
 				.from(databases)
 				.where(and(eq(databases.nodeId, nodeId), isNotNull(databases.poolerPort)))
 				.all()
 				.flatMap((row) => (row.port === null ? [] : [row.port])),
-		);
+			...this.ctx.moves.reservedPorts(nodeId).pooler,
+		]);
 		for (let port = DATABASE_POOLER_PORT_MIN; port <= DATABASE_POOLER_PORT_MAX; port++)
 			if (!used.has(port)) return port;
 		throw new ValidationError('This node has no free database pooler ports left.');
@@ -3646,7 +3669,7 @@ function toRotationView(row: typeof databaseRotations.$inferSelect): DatabaseRot
 	};
 }
 
-function backupObjectKey(orgId: string, databaseId: string, backupId: string): string {
+export function backupObjectKey(orgId: string, databaseId: string, backupId: string): string {
 	return `${BACKUP_OBJECT_PREFIX}/${orgId}/${databaseId}/${backupId}.dump`;
 }
 

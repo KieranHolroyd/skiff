@@ -10,6 +10,7 @@ import {
 	storageEngineRegistry,
 	storageUpdateSchema,
 	type BucketAccess,
+	type NodeCapacityView,
 	type Principal,
 	type StorageMetricPoint,
 	type StorageView
@@ -60,8 +61,21 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		}
 	}
 
+	// Moving between nodes (D97): node choices come from capacity, which only platform admins read.
+	let moveTargets: NodeCapacityView[] = [];
+	if (hasPermission(principal, 'storage:update') && !storage.deletedAt) {
+		try {
+			moveTargets = core.workloads
+				.capacity(principal)
+				.filter((node) => node.nodeId !== storage.nodeId && node.status === 'online');
+		} catch {
+			moveTargets = [];
+		}
+	}
+
 	return {
 		storage,
+		moveTargets,
 		metrics,
 		telemetryAvailable: core.ctx.telemetry?.available ?? false,
 		range,
@@ -88,6 +102,25 @@ export const actions: Actions = {
 		try {
 			const credentials = core.storage.credentials(principal, params.name);
 			return { credentials };
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	move: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const node = formString(data, 'node');
+		if (!node) return fail(400, { message: 'Choose a node to move to.' });
+		if (!formBoolean(data, 'acknowledge'))
+			return fail(400, { message: 'Confirm that the objects are not copied to the new node.' });
+		try {
+			const moved = core.moves.moveStorage(principal, params.name, { node, from: 'empty' });
+			const followed = moved.projects.length ? ` ${moved.projects.join(', ')} moved with it.` : '';
+			const warnings = moved.warnings.length ? ` ${moved.warnings.join(' ')}` : '';
+			return {
+				success: `Moved to ${moved.to.name ?? node}; it starts empty with its buckets and keys.${followed}${warnings}`
+			};
 		} catch (caught) {
 			return fail(failStatus(caught), toFormFailure(caught));
 		}
