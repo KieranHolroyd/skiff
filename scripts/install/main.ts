@@ -39,6 +39,7 @@ import { readEnvFile, writeEnvFile } from './env-file.ts';
 import { BUILDER_UNIT, ensureBuilder, linkAgentCommands } from '../systemd/builder.ts';
 import { HELPER_UNIT, ensureHelper } from '../systemd/helper.ts';
 import { ensureStorageUnits, STORAGE_PATH_UNIT } from '../systemd/storage.ts';
+import { STUDIO_UNIT, studioUnit } from '../systemd/studio.ts';
 import {
 	createUpgradeSnapshotBundle,
 	pruneUpgradeSnapshotBundles,
@@ -594,11 +595,14 @@ ReadWritePaths=${VAR_DIR} ${RUN_DIR}
 WantedBy=multi-user.target
 `;
 	if (options.dryRun) {
-		log(`would write ${Object.keys(controlUnits).join(', ')} and skiff-agent.service`);
+		log(`would write ${Object.keys(controlUnits).join(', ')}, skiff-agent.service and ${STUDIO_UNIT}`);
 		return;
 	}
 	for (const [name, body] of Object.entries(controlUnits)) writeFileSync(join(SYSTEMD_DIR, name), body);
 	writeFileSync(join(SYSTEMD_DIR, 'skiff-agent.service'), agent);
+	// The on-demand database studio (plan 22): installed beside the agent, never enabled. The
+	// agent starts it through the helper; it exits by itself when idle.
+	writeFileSync(join(SYSTEMD_DIR, STUDIO_UNIT), studioUnit({ optDir: OPT_DIR, runDir: RUN_DIR, socketGroup: 'caddy' }));
 	// The privileged runtime helper ships in the active release so a `current` swap upgrades it.
 	ensureHelper({
 		systemdDir: SYSTEMD_DIR,
@@ -856,6 +860,8 @@ function startServices(): void {
 	if (!options.noAgent && existsSync(AGENT_ENV_FILE)) {
 		run('systemctl', ['enable', 'skiff-agent.service']);
 		run('systemctl', ['restart', 'skiff-agent.service']);
+		// A running studio moves to the new binary; a stopped one stays stopped.
+		run('systemctl', ['try-restart', STUDIO_UNIT], { allowFailure: true });
 		waitFor('agent socket', () => existsSync(join(RUN_DIR, 'agent.sock')), 90_000);
 	}
 	if (!options.noAgent) {
@@ -1054,8 +1060,11 @@ function rollback(previous: string | null, snapshot: string | null, previousLink
 		console.error(color.yellow(`restored ${previous}`));
 	}
 	Bun.spawnSync({ cmd: ['systemctl', 'start', 'skiff-control-plane.service'], stdout: 'ignore', stderr: 'ignore' });
-	if (!options.noAgent && existsSync(AGENT_ENV_FILE))
+	if (!options.noAgent && existsSync(AGENT_ENV_FILE)) {
+		// The restored release's agent may predate `skiff-agent studio`; it restarts the studio on demand.
+		Bun.spawnSync({ cmd: ['systemctl', 'stop', STUDIO_UNIT], stdout: 'ignore', stderr: 'ignore' });
 		Bun.spawnSync({ cmd: ['systemctl', 'start', 'skiff-agent.service'], stdout: 'ignore', stderr: 'ignore' });
+	}
 }
 
 /** Consistent SQLite snapshot without requiring the sqlite3 CLI. */

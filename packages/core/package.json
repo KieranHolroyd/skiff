@@ -13,6 +13,7 @@
 	"dependencies": {
 		"@duckdb/node-api": "2.0.0-r.1",
 		"@skiff/contracts": "workspace:*",
+		"@skiff/studio": "workspace:*",
 		"@skiff/db": "workspace:*",
 		"@skiff/site-config": "workspace:*",
 		"aws4fetch": "^1.0.20",

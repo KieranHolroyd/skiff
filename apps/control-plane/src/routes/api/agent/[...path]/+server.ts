@@ -1,5 +1,5 @@
 import type { RequestHandler } from './$types';
-import { heartbeatSchema, nodeJoinSchema, telemetryBatchSchema } from '@skiff/contracts';
+import { heartbeatSchema, nodeJoinSchema, STUDIO_TOKEN_HEADER, telemetryBatchSchema } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
 import { json, readJson, route } from '#lib/server/api.js';
 
@@ -97,6 +97,17 @@ const handler: RequestHandler = async (event) => {
 			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
 			const node = core.nodes.authenticate(token);
 			return core.databases.consoleActivation(node.id, consoleTask[1]!);
+		}
+
+		const studioSession = /^database-studio\/([^/]+)$/.exec(action);
+		if (studioSession) {
+			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
+			// The node bearer says which node is asking; the session token proves this request came
+			// through a browser session the control plane minted (plan 22).
+			const studioToken = request.headers.get(STUDIO_TOKEN_HEADER)?.trim();
+			if (!studioToken) return json({ error: 'unauthorized' }, 401);
+			const node = core.nodes.authenticate(token);
+			return core.databaseStudio.activation(node.id, studioSession[1]!, studioToken);
 		}
 
 		if (action === 'telemetry') {

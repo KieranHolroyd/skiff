@@ -49,6 +49,7 @@ import { ensureBuilder, linkAgentCommands } from '../systemd/builder.ts';
 import { ensureHelper } from '../systemd/helper.ts';
 import { ensureCaddy } from '../systemd/caddy.ts';
 import { ensureStorageUnits } from '../systemd/storage.ts';
+import { ensureStudioUnit } from '../systemd/studio.ts';
 import { R2ObjectStore } from '../../packages/core/src/object-store.ts';
 import { listUpgradeSnapshotBundles } from '../../packages/core/src/upgrade-plan.ts';
 import {
@@ -433,6 +434,16 @@ function ensureTriggerUnits(): void {
 		run: (cmd) => void run(cmd, { quiet: true, allowFailure: true }),
 		log: (message) => host.log(message),
 	});
+	// The on-demand database studio (plan 22) sits beside the agent unit on every host, like the
+	// installer puts it. Never enabled: the agent starts it through the helper when needed.
+	ensureStudioUnit({
+		systemdDir: SYSTEMD_DIR,
+		optDir: layout.optDir,
+		runDir: RUN_DIR,
+		socketGroup: 'caddy',
+		run: (cmd) => void run(cmd, { quiet: true, allowFailure: true }),
+		log: (message) => host.log(message),
+	});
 	// Hosts installed before D47 get the Builder unit; it idles until the node has the role. This
 	// updater's own release was built from source with the builder subcommand, so mark it too (a
 	// release assembled by an older updater lacks the link).
@@ -701,6 +712,9 @@ const host: Host = {
 	},
 	async restart(unit) {
 		run(['systemctl', 'restart', unit]);
+	},
+	async tryRestart(unit) {
+		run(['systemctl', 'try-restart', unit], { allowFailure: true });
 	},
 	ensureHelper(release) {
 		ensureHelper({

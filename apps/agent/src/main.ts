@@ -6,6 +6,7 @@ import {
 	workloadActivationSchema,
 	type DesiredState,
 	type Heartbeat,
+	type NodeStudioDesired,
 	type NodeStatus,
 	type VolumeInventory,
 	type WorkloadActivation,
@@ -34,6 +35,7 @@ import { StorageStatsSampler, STORAGE_STATS_INTERVAL_MS } from './storage-stats.
 import { DesiredStateStore, desiredStateEtag } from './state.ts';
 import { postTelemetryBatch, TelemetryClient } from './telemetry.ts';
 import { handleSiteRequest, normalizeHost, UsedTokenCache } from './verify.ts';
+import type { StudioFront } from './studio/front.ts';
 
 const HEARTBEAT_INTERVAL_MS = 10_000;
 // Bun's default idle timeout on the control plane is 10 s (adapter-bun CONNECTION_IDLE_TIMEOUT),
@@ -115,6 +117,9 @@ class AgentRuntime {
 	private pullBeforeConverge = false;
 	private volumeInventory: VolumeInventory | null = null;
 	private volumeInventoryAt = 0;
+	/** Native studio front (plan 22), loaded only once desired state first enables it. */
+	private studioFront: Promise<StudioFront> | null = null;
+	private studioUpdates: Promise<void> = Promise.resolve();
 
 	private readonly reconcileBackoff = new Backoff(1_000, 30_000);
 	private readonly heartbeatBackoff = new Backoff(5_000, 60_000);
@@ -221,6 +226,7 @@ class AgentRuntime {
 			} else {
 				this.desired = cached.state;
 				this.desiredEtag = cached.etag;
+				this.applyStudio(cached.state.studio);
 				log('info', `Loaded cached desired state v${cached.state.version}`);
 			}
 		}
@@ -273,6 +279,8 @@ class AgentRuntime {
 		this.shutdownController.abort();
 		await Promise.allSettled(this.loops);
 		await this.telemetry?.stop().catch(() => undefined);
+		await this.studioUpdates;
+		if (this.studioFront) (await this.studioFront.catch(() => null))?.stop();
 		this.server?.stop(true);
 		this.server = null;
 		await fs.rm(this.config.agentSocket, { force: true }).catch(() => undefined);
@@ -406,6 +414,7 @@ class AgentRuntime {
 		const etagHeader = response.headers.get('etag') ?? desiredStateEtag(state);
 		this.desired = state;
 		this.desiredEtag = etagHeader;
+		this.applyStudio(state.studio);
 		try {
 			await this.store.write(state, etagHeader);
 		} catch (error) {
@@ -414,6 +423,30 @@ class AgentRuntime {
 		}
 		log('info', `Pulled desired state v${state.version} (${state.routes.length} routes)`);
 		return true;
+	}
+
+	/**
+	 * Point the studio front at the desired port and live sessions. Updates are serialised and
+	 * never block convergence; the front module is imported only once a studio is enabled.
+	 */
+	private applyStudio(desired: NodeStudioDesired | null): void {
+		if (!desired && !this.studioFront) return;
+		this.studioFront ??= import('./studio/front.ts').then(
+			({ StudioFront, controlPlaneActivationFetcher }) =>
+				new StudioFront({
+					fetchActivation: controlPlaneActivationFetcher({
+						controlUrl: this.config.controlUrl,
+						nodeToken: this.config.nodeToken,
+						signal: this.shutdownController.signal,
+					}),
+					helper: this.helper,
+					log,
+				}),
+		);
+		const front = this.studioFront;
+		this.studioUpdates = this.studioUpdates
+			.then(async () => (await front).update(desired))
+			.catch((error: unknown) => log('error', `Studio front update failed: ${errorText(error)}`));
 	}
 
 	/**
@@ -1092,7 +1125,15 @@ if (import.meta.main) {
 	const subcommand = (name: string) => (process.argv[2] === name ? 2 : process.argv[1] === name ? 1 : -1);
 	const joinIndex = subcommand('join');
 	const storageIndex = subcommand('storage');
-	if (storageIndex >= 0) {
+	if (subcommand('studio') >= 0) {
+		// The native database studio process (plan 22), run by skiff-studio.service in its own
+		// cgroup. It reads no agent config and never sees the node token.
+		const { runStudioProcess } = await import('./studio/process.ts');
+		await runStudioProcess().catch((error: unknown) => {
+			console.error(`[skiff-agent studio] fatal: ${errorText(error)}`);
+			process.exit(1);
+		});
+	} else if (storageIndex >= 0) {
 		// Root-only node storage moves (D48), run by skiff-storage.service.
 		const { runStorageCli } = await import('./storage-apply.ts');
 		process.exitCode = await runStorageCli(process.argv.slice(storageIndex + 1));

@@ -2,7 +2,8 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SystemdDriver, type CommandRunner, type RunResult } from './systemd.ts';
+import { createHandler } from './server.ts';
+import { STUDIO_UNIT, SystemdDriver, type CommandRunner, type RunResult } from './systemd.ts';
 import { consoleServiceName, consoleUnitName } from './units.ts';
 import { databaseTlsPaths } from './tls.ts';
 import { parseWorkload, type WorkloadActivation, type WorkloadDesired } from './validate.ts';
@@ -17,8 +18,13 @@ class FakeRunner implements CommandRunner {
 	/** `podman network inspect` output; empty means the container is not attached yet. */
 	network = '';
 
+	/** Result for `systemctl <verb> …`, keyed by verb, instead of success. */
+	fail: Record<string, RunResult> = {};
+
 	async run(argv: string[]): Promise<RunResult> {
 		this.calls.push(argv);
+		const failure = argv[0]?.endsWith('systemctl') ? this.fail[argv[1] ?? ''] : undefined;
+		if (failure) return failure;
 		if (argv[1] === 'show') return { code: 0, stdout: this.show, stderr: '' };
 		if (argv[0]?.includes('journalctl')) return { code: 0, stdout: this.journal, stderr: '' };
 		if (argv[1] === 'network' && argv[2] === 'inspect') return { code: 0, stdout: this.network, stderr: '' };
@@ -913,5 +919,46 @@ describe('app volumes (plan 07)', () => {
 		// The helper never creates the path under the (empty) mountpoint or the root disk.
 		await expect(fs.stat('/mnt/data/skiff/apps/prj_abc123/av_1')).rejects.toThrow();
 		await expect(fs.stat(join(f.unitDir, 'skiff-workload-wld_abc123.service'))).rejects.toThrow();
+	});
+});
+
+describe('studio process', () => {
+	test('start and stop run systemctl on the fixed unit name and nothing else', async () => {
+		const f = await fixture();
+		const handle = createHandler(f.driver, { version: '0.1.0' });
+		const started = await handle(new Request('http://localhost/v1/studio/start', { method: 'POST' }));
+		expect(started.status).toBe(200);
+		const stopped = await handle(new Request('http://localhost/v1/studio/stop', { method: 'POST' }));
+		expect(stopped.status).toBe(200);
+		expect(STUDIO_UNIT).toBe('skiff-studio.service');
+		expect(f.runner.calls).toEqual([
+			['/usr/bin/systemctl', 'start', 'skiff-studio.service'],
+			['/usr/bin/systemctl', 'stop', 'skiff-studio.service'],
+		]);
+	});
+
+	test('a failed start surfaces the systemctl message', async () => {
+		const f = await fixture();
+		f.runner.fail.start = {
+			code: 1,
+			stdout: '',
+			stderr: 'Job for skiff-studio.service failed because the control process exited with error code.\n',
+		};
+		const handle = createHandler(f.driver, { version: '0.1.0' });
+		const response = await handle(new Request('http://localhost/v1/studio/start', { method: 'POST' }));
+		expect(response.status).toBe(500);
+		expect(await response.json()).toEqual({
+			error: 'systemctl start failed (1): Job for skiff-studio.service failed because the control process exited with error code.',
+		});
+	});
+
+	test('a refused request never reaches systemctl', async () => {
+		const f = await fixture();
+		const handle = createHandler(f.driver, { version: '0.1.0' });
+		const response = await handle(
+			new Request('http://localhost/v1/studio/start', { method: 'POST', body: '{"unit":"sshd.service"}' }),
+		);
+		expect(response.status).toBe(400);
+		expect(f.runner.calls).toEqual([]);
 	});
 });

@@ -60,6 +60,7 @@ skiff-litestream.service
 skiff-builder.service
 skiff-storage.path
 skiff-storage.service
+skiff-studio.service
 skiff-agent.service
 skiff-control-plane.service
 skiff-caddy.service

@@ -12,6 +12,7 @@
 	"dependencies": {
 		"@skiff/builder": "workspace:*",
 		"@skiff/contracts": "workspace:*",
+		"@skiff/studio": "workspace:*",
 		"@skiff/site-config": "workspace:*",
 		"aws4fetch": "^1.0.20"
 	},

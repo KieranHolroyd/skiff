@@ -7,6 +7,7 @@ import {
 	assertId,
 	assertManagedId,
 	assertMemoryMb,
+	assertNoVerbInput,
 	assertRecord,
 	assertString,
 	parseApplyRequest,
@@ -21,9 +22,9 @@ import type { HelperInventory, VerifyResult } from './volumes.ts';
 
 /**
  * The helper's entire network surface is a fixed set of verbs (slice, apply, status, remove, logs,
- * purge, dump/restore, rotation, credentials, PITR and the database studio) plus `/healthz` on a
- * root-owned, group-restricted unix socket. There is no passthrough, no command parameter and no
- * shell. Malformed input is a 400, never a best-effort attempt.
+ * purge, dump/restore, rotation, credentials, PITR, the DBGate console and the studio process)
+ * plus `/healthz` on a root-owned, group-restricted unix socket. There is no passthrough, no
+ * command parameter and no shell. Malformed input is a 400, never a best-effort attempt.
  */
 
 export interface HelperRuntime {
@@ -52,6 +53,10 @@ export interface HelperRuntime {
 	startConsole(workload: WorkloadDesired, activation: WorkloadConsoleActivation): Promise<void>;
 	/** Stop a studio sidecar and remove its generated unit/env file. */
 	stopConsole(id: string): Promise<void>;
+	/** `systemctl start skiff-studio.service` (plan 22). The unit name is fixed; no arguments. */
+	startStudio(): Promise<void>;
+	/** `systemctl stop skiff-studio.service`. */
+	stopStudio(): Promise<void>;
 	/** Restore a custom-format dump into a managed database. */
 	restoreDatabase(id: string, body: ReadableStream<Uint8Array> | null): Promise<void>;
 	/** Write the 0400 pgBackRest config for PITR (docs/PITR.md). */
@@ -111,6 +116,15 @@ export function createHandler(
 				const cpuWeight = body.cpuWeight === undefined ? 200 : assertCpuWeight(body.cpuWeight, 'cpuWeight');
 				await runtime.ensureSlice({ memoryMb, cpuWeight });
 				return json({ ok: true, memoryMb, cpuWeight });
+			}
+
+			// --- native database studio (plan 22): start/stop one fixed unit, nothing else -----
+			if (path === '/v1/studio/start' || path === '/v1/studio/stop') {
+				if (method !== 'POST') return methodNotAllowed('POST');
+				assertNoVerbInput({ search: url.search, body: await readText(request, maxBodyBytes) });
+				if (path === '/v1/studio/start') await runtime.startStudio();
+				else await runtime.stopStudio();
+				return json({ ok: true });
 			}
 
 			// --- volumes (D72, D76): read-only inventory and mount verification -----------------
@@ -400,13 +414,18 @@ async function resolveGroupId(name: string): Promise<number | null> {
 	return null;
 }
 
-async function readJson(request: Request, maxBodyBytes: number): Promise<unknown> {
+async function readText(request: Request, maxBodyBytes: number): Promise<string> {
 	const declared = Number(request.headers.get('content-length') ?? '0');
 	if (Number.isFinite(declared) && declared > maxBodyBytes)
 		throw new BodyTooLargeError(`Request body exceeds ${maxBodyBytes} bytes`);
 	const text = await request.text();
 	if (Buffer.byteLength(text) > maxBodyBytes)
 		throw new BodyTooLargeError(`Request body exceeds ${maxBodyBytes} bytes`);
+	return text;
+}
+
+async function readJson(request: Request, maxBodyBytes: number): Promise<unknown> {
+	const text = await readText(request, maxBodyBytes);
 	if (!text.trim()) throw new ValidationError('Request body is required');
 	try {
 		return JSON.parse(text) as unknown;

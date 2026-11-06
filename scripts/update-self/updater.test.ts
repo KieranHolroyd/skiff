@@ -9,6 +9,7 @@ import {
 	CONTROL_PLANE,
 	LITESTREAM,
 	STANDBY,
+	STUDIO,
 	type Host,
 	type HookOutcome,
 	type Layout,
@@ -171,6 +172,10 @@ class FakeHost implements Host {
 		await this.stop(unit);
 		await this.start(unit);
 	};
+	tryRestart = async (unit: string) => {
+		this.calls.push(`try-restart ${unit}`);
+		if (this.active.get(unit)) await this.restart(unit);
+	};
 	isActive = async (unit: string) => this.active.get(unit) ?? false;
 	restartCount = async () => 0;
 	ensureHelper = (_release: string) => void this.calls.push('ensure-helper');
@@ -190,7 +195,8 @@ class FakeHost implements Host {
 	};
 	backupTarget = async () => ({ ok: !this.backupUnreachable, kind: 'local', ...(this.backupUnreachable ? { error: 'connection refused' } : {}) });
 	publicHealthy = async () => this.publicUp;
-	agentEnrolled = () => false;
+	enrolled = false;
+	agentEnrolled = () => this.enrolled;
 	chownToSkiff = (path: string) => {
 		if (!path.includes('update-canary')) return;
 		for (const dir of ['data', join('data', 'objects')]) if (existsSync(join(path, dir))) this.canaryChowned.push(dir);
@@ -327,6 +333,31 @@ describe('update', () => {
 		expect(last).toMatchObject({ kind: 'update', from: original, to: current });
 		expect(existsSync(last.snapshot!)).toBe(true);
 		expect(host.critical).toBe(0);
+	});
+
+	test('an active studio follows the agent onto the new binary; a stopped one stays stopped', async () => {
+		host.enrolled = true;
+		host.active.set(STUDIO, true);
+		const updater = new Updater(layout, host);
+		await updater.update({ withAgent: true });
+		const agentRestart = host.calls.lastIndexOf('start skiff-agent.service');
+		expect(agentRestart).toBeGreaterThanOrEqual(0);
+		expect(host.calls.indexOf(`try-restart ${STUDIO}`)).toBeGreaterThan(agentRestart);
+		expect(host.calls.slice(agentRestart)).toContain(`start ${STUDIO}`);
+
+		// A rollback stops it: the restored agent may predate `skiff-agent studio`.
+		host.calls = [];
+		await updater.rollback({ withAgent: true });
+		expect(host.calls).toContain(`stop ${STUDIO}`);
+		expect(host.calls).not.toContain(`start ${STUDIO}`);
+		expect(host.active.get(STUDIO)).toBe(false);
+	});
+
+	test('a stopped studio is never started by an update', async () => {
+		host.enrolled = true;
+		await new Updater(layout, host).update({ withAgent: true });
+		expect(host.calls).toContain(`try-restart ${STUDIO}`);
+		expect(host.calls).not.toContain(`start ${STUDIO}`);
 	});
 
 	test('a failed Caddy upgrade reverts the release and keeps the old one serving', async () => {

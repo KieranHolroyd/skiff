@@ -64,6 +64,13 @@ export const FEATURE_FLAGS = {
 		area: 'databases',
 		description: 'Open an on-demand DBGate studio for a managed database (D60).'
 	},
+	DB_STUDIO: {
+		name: 'DB_STUDIO',
+		// Plan 22 foundation: off until the engine plugins and read-only principals ship.
+		default: false,
+		area: 'databases',
+		description: 'Open the native database studio (plugins in an on-demand studio process, plan 22).'
+	},
 	DB_TLS: {
 		name: 'DB_TLS',
 		default: false,

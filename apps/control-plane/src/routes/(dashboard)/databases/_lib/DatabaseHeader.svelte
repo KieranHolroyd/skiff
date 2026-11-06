@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import ActivityIcon from '@lucide/svelte/icons/activity';
 	import ArchiveIcon from '@lucide/svelte/icons/archive';
 	import CloudUploadIcon from '@lucide/svelte/icons/cloud-upload';
@@ -37,6 +38,7 @@
 		can,
 		active,
 		backups,
+		nativeStudio,
 		onselect
 	}: {
 		db: DatabaseView;
@@ -44,10 +46,18 @@
 		active: DatabaseTab | 'logs';
 		/** Backups count for the tab badge, when the page has it. */
 		backups?: number;
+		/**
+		 * `DB_STUDIO` is on: the Studio tab opens the native workspace route instead of the DBGate
+		 * section. Defaults to the `nativeStudio` the `[name]` layout loads.
+		 */
+		nativeStudio?: boolean;
 		onselect?: (tab: DatabaseTab) => void;
 	} = $props();
 
+	const native = $derived(nativeStudio ?? page.data.nativeStudio === true);
+
 	const base = $derived(resolve('/(dashboard)/databases/[name]', { name: db.name }));
+	const studioHref = $derived(resolve('/(dashboard)/databases/[name]/studio', { name: db.name }));
 	const deleted = $derived(db.deletedAt !== null);
 	const nodeLabel = $derived(db.nodeName ?? db.nodeId);
 	/** Actions live on the detail route, so the header works from every sub-route. */
@@ -70,12 +80,17 @@
 						}
 					]
 				: []),
-			...(can.console && caps.console
+			...(can.console && (caps.console || native)
 				? [{ id: 'studio', label: 'Studio', icon: SquareTerminalIcon }]
 				: []),
 			{ id: 'settings', label: 'Settings', icon: Settings2Icon }
 		]
-			.map((item) => ({ ...item, href: tabHref(base, item.id, DATABASE_DEFAULT_TAB), local: true }))
+			.map((item) =>
+				item.id === 'studio' && native
+					? // The native studio is its own full-height route, not an in-page section.
+						{ ...item, href: studioHref, local: false }
+					: { ...item, href: tabHref(base, item.id, DATABASE_DEFAULT_TAB), local: true }
+			)
 			.concat([
 				{
 					id: 'logs',

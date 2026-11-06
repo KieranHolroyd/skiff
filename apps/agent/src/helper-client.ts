@@ -89,6 +89,14 @@ export interface HelperApi {
 	pitrStatus(id: string): Promise<HelperPitrStatus>;
 }
 
+/** The native studio process's fixed verbs (plan 22). Kept apart from `HelperApi` so test fakes need not grow. */
+export interface HelperStudioApi {
+	/** `systemctl start skiff-studio.service`; no arguments. */
+	studioStart(): Promise<void>;
+	/** `systemctl stop skiff-studio.service`; no arguments. */
+	studioStop(): Promise<void>;
+}
+
 export interface HelperPitrStatus {
 	configured: boolean;
 	stanza: string;
@@ -114,9 +122,11 @@ const VOLUME_TIMEOUT_MS = 10_000;
 const LOG_TIMEOUT_MS = 8_000;
 /** The first console start pulls the DBGate image; the helper queues the restart itself. */
 const CONSOLE_TIMEOUT_MS = 120_000;
+/** Starting or stopping the studio unit is a local systemctl call. */
+const STUDIO_TIMEOUT_MS = 30_000;
 const STATUSES: readonly WorkloadStatus[] = ['pending', 'starting', 'running', 'failed', 'stopped'];
 
-export class HelperClient implements HelperApi {
+export class HelperClient implements HelperApi, HelperStudioApi {
 	constructor(
 		readonly socketPath: string,
 		private readonly timeouts: { health?: number; apply?: number } = {},
@@ -196,6 +206,14 @@ export class HelperClient implements HelperApi {
 			undefined,
 			CONSOLE_TIMEOUT_MS,
 		);
+	}
+
+	async studioStart(): Promise<void> {
+		await this.request('POST', '/v1/studio/start', undefined, STUDIO_TIMEOUT_MS);
+	}
+
+	async studioStop(): Promise<void> {
+		await this.request('POST', '/v1/studio/stop', undefined, STUDIO_TIMEOUT_MS);
 	}
 
 	async rotateDatabaseRole(id: string, role: 'owner' | 'monitor', password: string): Promise<void> {

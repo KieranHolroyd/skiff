@@ -84,6 +84,12 @@ import {
  * without root or systemd.
  */
 
+/**
+ * The on-demand database studio process (plan 22). A static unit the installer and updater ship
+ * beside the agent unit; the helper only ever starts or stops it, by this fixed name.
+ */
+export const STUDIO_UNIT = 'skiff-studio.service';
+
 export interface RunResult {
 	code: number;
 	stdout: string;
@@ -682,6 +688,20 @@ export class SystemdDriver {
 		await this.removeIfExists(paths.console);
 		await this.removeIfExists(join(this.runtimeDir, id, 'console.env'));
 		await this.daemonReload();
+	}
+
+	/**
+	 * Start the studio process for the agent. Blocking (not `--no-block`): a Type=simple unit is
+	 * started once its process is exec'd, so a missing unit or a start-limit hit comes back as the
+	 * systemctl error instead of a silent queued job.
+	 */
+	async startStudio(): Promise<void> {
+		await this.systemctl(['start', STUDIO_UNIT]);
+	}
+
+	/** Stop the studio process. It normally exits by itself when idle. */
+	async stopStudio(): Promise<void> {
+		await this.systemctl(['stop', STUDIO_UNIT]);
 	}
 
 	/**

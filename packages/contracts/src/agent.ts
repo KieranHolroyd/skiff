@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { nodeStudioDesiredSchema } from './database-studio.ts';
 import { accessModes, deploymentStatuses, nodeStatuses, runtimes } from './model.ts';
 import { domainKinds } from './domain.ts';
 import { workloadDesiredSchema, workloadStatuses } from './workload.ts';
@@ -131,6 +132,8 @@ export const desiredStateSchema = z.object({
 	volumes: z.array(nodeVolumeDesiredSchema).default([]),
 	/** Internal S3 gateway routes the control plane uses to manage object contents (D81). */
 	storageGateway: storageGatewaySchema.default({ listen: null, routes: [] }),
+	/** Native studio front (plan 22): listen port and live session ids, or null when off. */
+	studio: nodeStudioDesiredSchema.nullable().default(null),
 	/** Internal gateway routes the control plane uses to reach on-demand database studios (D60). */
 	databaseGateway: storageGatewaySchema.default({ listen: null, routes: [] }),
 	/** Public storage endpoints this node serves (S3): byte-for-byte proxies, not sites. */

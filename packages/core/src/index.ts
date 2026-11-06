@@ -17,6 +17,7 @@ import { SecretService } from './secrets.ts';
 import { MetricsService } from './metrics.ts';
 import { WorkloadService } from './workloads.ts';
 import { DatabaseService } from './databases.ts';
+import { DatabaseStudioService } from './database-studio.ts';
 import { StorageService } from './storage-instances.ts';
 import { VolumeService } from './volumes.ts';
 import { AppVolumeService } from './app-volumes.ts';
@@ -57,6 +58,7 @@ export * from './workloads.ts';
 export * from './github-runners.ts';
 export * from './templates.ts';
 export * from './databases.ts';
+export * from './database-studio.ts';
 export * from './storage-instances.ts';
 export * from './volumes.ts';
 export * from './app-volumes.ts';
@@ -97,6 +99,7 @@ export interface Core {
 	metrics: MetricsService;
 	workloads: WorkloadService;
 	databases: DatabaseService;
+	databaseStudio: DatabaseStudioService;
 	storage: StorageService;
 	volumes: VolumeService;
 	appVolumes: AppVolumeService;
@@ -143,6 +146,7 @@ export function createCore(options: CoreOptions): Core {
 	ctx.secrets = new SecretService(ctx);
 	ctx.workloads = new WorkloadService(ctx);
 	ctx.databases = new DatabaseService(ctx);
+	ctx.databaseStudio = new DatabaseStudioService(ctx);
 	ctx.storage = new StorageService(ctx);
 	ctx.volumes = new VolumeService(ctx);
 	ctx.appVolumes = new AppVolumeService(ctx);
@@ -182,6 +186,7 @@ export function createCore(options: CoreOptions): Core {
 		metrics,
 		workloads: ctx.workloads,
 		databases: ctx.databases,
+		databaseStudio: ctx.databaseStudio,
 		storage: ctx.storage,
 		volumes: ctx.volumes,
 		appVolumes: ctx.appVolumes,

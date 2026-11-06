@@ -65,6 +65,7 @@
 		"@duckdb/node-api": "2.0.0-r.1",
 		"@modelcontextprotocol/server": "2.4.0",
 		"@skiff/contracts": "workspace:*",
+		"@skiff/studio": "workspace:*",
 		"@skiff/core": "workspace:*",
 		"@skiff/db": "workspace:*",
 		"@skiff/site-config": "workspace:*",

@@ -854,3 +854,12 @@ export function parseConsoleActivation(value: unknown): WorkloadConsoleActivatio
 	}
 	return parsed;
 }
+
+/**
+ * The studio verbs (`POST /v1/studio/start|stop`, plan 22) take nothing: the unit name is fixed in
+ * the helper. Any query string or body, even `{}`, is refused rather than ignored.
+ */
+export function assertNoVerbInput(input: { search: string; body: string }): void {
+	if (input.search !== '') throw new ValidationError('This verb takes no query parameters');
+	if (input.body !== '') throw new ValidationError('This verb takes no request body');
+}

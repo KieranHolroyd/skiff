@@ -108,6 +108,18 @@ class FakeRuntime implements HelperRuntime {
 		this.calls.push(`console-stop:${id}`);
 	}
 
+	failStudio = false;
+
+	async startStudio(): Promise<void> {
+		if (this.failStudio)
+			throw new Error('systemctl start failed (5): Failed to start skiff-studio.service: Unit skiff-studio.service not found.');
+		this.calls.push('studio-start');
+	}
+
+	async stopStudio(): Promise<void> {
+		this.calls.push('studio-stop');
+	}
+
 	async pitrConfigure(id: string, repo: unknown): Promise<{ stanza: string; configPath: string }> {
 		this.calls.push(`pitr-configure:${id}`);
 		return { stanza: id, configPath: `/run/skiff-workloads/${id}/pgbackrest.conf` };
@@ -363,6 +375,50 @@ describe('helper HTTP surface', () => {
 		);
 		expect(stopped.status).toBe(200);
 		expect(runtime.calls).toContain(`console-stop:${id}`);
+	});
+
+	test('starts and stops the studio process with no input', async () => {
+		const runtime = new FakeRuntime();
+		const started = await handler(runtime)(new Request('http://localhost/v1/studio/start', { method: 'POST' }));
+		expect(started.status).toBe(200);
+		expect(await started.json()).toEqual({ ok: true });
+		const stopped = await handler(runtime)(new Request('http://localhost/v1/studio/stop', { method: 'POST' }));
+		expect(stopped.status).toBe(200);
+		expect(await stopped.json()).toEqual({ ok: true });
+		expect(runtime.calls).toEqual(['studio-start', 'studio-stop']);
+	});
+
+	test('the studio verbs refuse any body, query string or method other than POST', async () => {
+		const runtime = new FakeRuntime();
+		for (const verb of ['start', 'stop']) {
+			const url = `http://localhost/v1/studio/${verb}`;
+			for (const request of [
+				post(`/v1/studio/${verb}`, {}),
+				post(`/v1/studio/${verb}`, { unit: 'sshd.service' }),
+				new Request(url, { method: 'POST', body: ' ' }),
+				new Request(`${url}?unit=sshd.service`, { method: 'POST' }),
+			]) {
+				const response = await handler(runtime)(request);
+				expect(response.status).toBe(400);
+				expect(((await response.json()) as { error: string }).error).toMatch(/takes no/);
+			}
+			const get = await handler(runtime)(new Request(url));
+			expect(get.status).toBe(405);
+			expect(get.headers.get('allow')).toBe('POST');
+		}
+		const nested = await handler(runtime)(new Request('http://localhost/v1/studio/start/sshd', { method: 'POST' }));
+		expect(nested.status).toBe(404);
+		expect(runtime.calls).toEqual([]);
+	});
+
+	test('a failed studio start returns the systemctl error', async () => {
+		const runtime = new FakeRuntime();
+		runtime.failStudio = true;
+		const response = await handler(runtime)(new Request('http://localhost/v1/studio/start', { method: 'POST' }));
+		expect(response.status).toBe(500);
+		expect(await response.json()).toEqual({
+			error: 'systemctl start failed (5): Failed to start skiff-studio.service: Unit skiff-studio.service not found.',
+		});
 	});
 
 	test('rejects a console start for a non-database or mismatched workload', async () => {

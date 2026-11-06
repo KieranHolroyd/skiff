@@ -545,6 +545,7 @@ export class DatabaseService {
 			})
 			.where(eq(databases.id, row.id))
 			.run();
+		this.ctx.databaseStudio.closeForDatabase(row.id, 'deleted', principal);
 		// A backup queued before the delete can no longer run; fail it rather than leaving a task
 		// pending forever on a node that no longer receives the database.
 		this.ctx.db
@@ -920,13 +921,7 @@ export class DatabaseService {
 		const input = databaseConsoleOpenSchema.parse(raw);
 		if (input.readOnly === false) requirePermission(principal, 'database:update');
 		const row = this.requireRow(principal, name, { includeDeleted: true });
-		this.requireCapability(row, 'console', 'The database studio');
-		if (row.deletedAt)
-			throw new ConflictError(`Database "${name}" is in the trash. Restore it before opening the studio.`);
-		if (row.status !== 'running')
-			throw new ConflictError(
-				`Database "${name}" is ${row.status}. Start it and wait until it is running before opening the studio.`,
-			);
+		this.assertStudioOpenable(row);
 
 		const now = this.ctx.now();
 		const ttlMs = input.ttlMinutes * 60_000;
@@ -1262,6 +1257,39 @@ export class DatabaseService {
 		routes.sort((a, b) => a.host.localeCompare(b.host));
 		const port = this.ctx.config.databaseGatewayPort ?? 8082;
 		return { listen: isEdge ? `127.0.0.1:${port}` : null, routes };
+	}
+
+	/** Checks shared by the DBGate and native studios (plan 22) before a session may open. */
+	assertStudioOpenable(row: DatabaseRow): void {
+		this.requireCapability(row, 'console', 'The database studio');
+		if (row.deletedAt)
+			throw new ConflictError(`Database "${row.name}" is in the trash. Restore it before opening the studio.`);
+		if (row.status !== 'running')
+			throw new ConflictError(
+				`Database "${row.name}" is ${row.status}. Start it and wait until it is running before opening the studio.`,
+			);
+	}
+
+	/**
+	 * Owner connection facts for a native studio activation (plan 22), built the same way as
+	 * `credentials()`. It opens the owner secret, so only the node-authenticated activation calls it.
+	 */
+	studioConnection(row: DatabaseRow): {
+		hostPort: number;
+		user: string;
+		database: string;
+		ownerPassword: string;
+		tls: { caPem: string | null } | null;
+	} {
+		const user = databaseIdentifier(row.name);
+		const tls = this.tlsState(row);
+		return {
+			hostPort: row.hostPort,
+			user,
+			database: databaseUrlDatabase(row.engine, user),
+			ownerPassword: this.ctx.secrets.open(row.orgId, row.ownerSecret),
+			tls: tls.enabled ? { caPem: tls.caPem } : null,
+		};
 	}
 
 	// ---------------------------------------------------------------- credential rotation

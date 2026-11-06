@@ -1,5 +1,5 @@
 import type { DatabasePitrRepoConfig, FeatureFlags, FeatureName } from '@skiff/contracts';
-import { FEATURE_FLAGS, parseFeatureFlags } from '@skiff/contracts';
+import { FEATURE_FLAGS, parseFeatureFlags, STUDIO_DEFAULT_PORT } from '@skiff/contracts';
 import type { ObjectStore } from './object-store.ts';
 import { hmac } from './util.ts';
 
@@ -52,6 +52,11 @@ export interface CoreConfig {
 	 * on-demand studio on any node through it (D60), mirroring the S3 gateway (D82).
 	 */
 	databaseGatewayPort?: number;
+	/**
+	 * Loopback port of every node's native studio front (plan 22). One fixed port per node, so the
+	 * gateway needs one route per node rather than one per session.
+	 */
+	studioPort?: number;
 	/** Largest object a single dashboard/API upload may send, in bytes (default 100 MiB). */
 	storageObjectMaxBytes?: number;
 	/** Injected S3 transport for tests; production uses the global fetch. */
@@ -91,6 +96,7 @@ export function coreConfigFromEnv(overrides: Partial<CoreConfig> & Pick<CoreConf
 			overrides.storageGatewayPort ?? positiveInteger(env.SKIFF_STORAGE_GATEWAY_PORT, 8081),
 		databaseGatewayPort:
 			overrides.databaseGatewayPort ?? positiveInteger(env.SKIFF_DATABASE_GATEWAY_PORT, 8082),
+		studioPort: overrides.studioPort ?? positiveInteger(env.SKIFF_STUDIO_PORT, STUDIO_DEFAULT_PORT),
 		storageObjectMaxBytes:
 			overrides.storageObjectMaxBytes ?? positiveInteger(env.SKIFF_STORAGE_OBJECT_MAX_BYTES, 104_857_600),
 		features: overrides.features ?? parseFeatureFlags(env),

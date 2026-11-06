@@ -15,6 +15,7 @@ import type { AccessService } from './access.ts';
 import type { SecretService } from './secrets.ts';
 import type { WorkloadService } from './workloads.ts';
 import type { DatabaseService } from './databases.ts';
+import type { DatabaseStudioService } from './database-studio.ts';
 import type { StorageService } from './storage-instances.ts';
 import type { VolumeService } from './volumes.ts';
 import type { AppVolumeService } from './app-volumes.ts';
@@ -55,6 +56,7 @@ export interface CoreContext {
 	secrets: SecretService;
 	workloads: WorkloadService;
 	databases: DatabaseService;
+	databaseStudio: DatabaseStudioService;
 	storage: StorageService;
 	storageObjects: StorageObjectsService;
 	volumes: VolumeService;

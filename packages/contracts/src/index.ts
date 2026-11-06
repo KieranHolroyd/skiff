@@ -11,6 +11,7 @@ export * from './api.ts';
 export * from './workload.ts';
 export * from './env.ts';
 export * from './database.ts';
+export * from './database-studio.ts';
 export * from './database-backup.ts';
 export * from './database-pitr.ts';
 export * from './services.ts';

@@ -1339,6 +1339,34 @@ export const githubRunnerRegistrations = sqliteTable(
 	],
 );
 
+/**
+ * Native database studio sessions (plan 22, D96). One open row per (database, user); the token is
+ * sealed with the org key and only opened for the session's own endpoint and the node activation.
+ */
+export const databaseStudioSessions = sqliteTable(
+	'database_studio_sessions',
+	{
+		id: text('id').primaryKey(),
+		databaseId: text('database_id').notNull(),
+		orgId: text('org_id').notNull(),
+		nodeId: text('node_id').notNull(),
+		userId: text('user_id').notNull(),
+		tokenSealed: text('token_sealed').notNull(),
+		readOnly: integer('read_only', { mode: 'boolean' }).notNull().default(true),
+		expiresAt: integer('expires_at').notNull(),
+		idleMs: integer('idle_ms').notNull(),
+		lastUsedAt: integer('last_used_at').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		closedAt: integer('closed_at'),
+		/** `closed`, `mode-change`, `expired`, `idle` or `deleted`. */
+		closeReason: text('close_reason'),
+	},
+	(t) => [
+		index('database_studio_sessions_user_idx').on(t.databaseId, t.userId),
+		index('database_studio_sessions_node_idx').on(t.nodeId),
+	],
+);
+
 /** Every table worth exporting, for tooling and tests. */
 export const schema = {
 	nodes,
@@ -1372,6 +1400,7 @@ export const schema = {
 	databasePitrTasks,
 	scheduledTasks,
 	githubRunnerRegistrations,
+	databaseStudioSessions,
 };
 
 export { primaryKey };

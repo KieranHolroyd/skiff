@@ -68,6 +68,7 @@ import {
 import type { HookVerdict } from '../release/canary.ts';
 import type { Probe } from '../release/health.ts';
 import { PRIMARY_UNIT, STANDBY_UNIT } from '../systemd/control-plane.ts';
+import { STUDIO_UNIT } from '../systemd/studio.ts';
 import { SignatureError, verifyManifest, type ManifestArtifact, type ReleaseManifest } from './signing.ts';
 import { HOOK_PROTOCOL_MIN, UPDATER_IDENTITY } from './version.ts';
 import type { KeyObject } from 'node:crypto';
@@ -75,6 +76,8 @@ import type { KeyObject } from 'node:crypto';
 export const CONTROL_PLANE = PRIMARY_UNIT;
 export const STANDBY = STANDBY_UNIT;
 export const AGENT = 'skiff-agent.service';
+/** The on-demand database studio (plan 22). Never enabled; it follows the agent's binary. */
+export const STUDIO = STUDIO_UNIT;
 export const HELPER = 'skiff-helper.service';
 export const LITESTREAM = 'skiff-litestream.service';
 export const DEFAULT_REPO = 'KieranHolroyd/skiff';
@@ -196,6 +199,8 @@ export interface Host {
 	start(unit: string): Promise<void>;
 	stop(unit: string): Promise<void>;
 	restart(unit: string): Promise<void>;
+	/** `systemctl try-restart`: restart only if active; never throws (the unit may not exist yet). */
+	tryRestart?(unit: string): Promise<void>;
 	/** Install/refresh skiff-helper from `release` (older hosts may lack the unit). */
 	ensureHelper(release: string): void;
 	/**
@@ -859,7 +864,7 @@ export class Updater {
 			await host.start(CONTROL_PLANE);
 			await host.restart(HELPER);
 			host.ensureCaddy?.(release);
-			if (withAgent && host.agentEnrolled()) await host.restart(AGENT);
+			await this.restartAgent(withAgent, 'follow');
 
 			host.phase('verifying', 'Waiting for the new release to prove it is healthy');
 			const problem = await this.verifyLive({
@@ -1008,7 +1013,7 @@ export class Updater {
 			rmSync(layout.standbyLink, { force: true });
 			await host.restart(HELPER);
 			host.ensureCaddy?.(release);
-			if (withAgent && host.agentEnrolled()) await host.restart(AGENT);
+			await this.restartAgent(withAgent, 'follow');
 			const settled = await this.verifyLive({
 				requirePublic: input.requirePublic,
 				withAgent,
@@ -1109,7 +1114,7 @@ export class Updater {
 			rmSync(layout.standbyLink, { force: true });
 			await host.restart(HELPER).catch(() => undefined);
 			host.ensureCaddy?.(sw.from);
-			if (sw.withAgent && host.agentEnrolled()) await host.restart(AGENT);
+			await this.restartAgent(sw.withAgent, 'stop');
 			const problem = await this.verifyLive({ requirePublic: false, withAgent: sw.withAgent });
 			const state = this.readState();
 			delete state.inProgress;
@@ -1279,7 +1284,7 @@ export class Updater {
 				await host.start(CONTROL_PLANE);
 				await host.restart(HELPER);
 				host.ensureCaddy?.(previous);
-				if (withAgent && host.agentEnrolled()) await host.restart(AGENT);
+				await this.restartAgent(withAgent, 'stop');
 				const problem = await this.verifyLive({
 					requirePublic: false,
 					withAgent,
@@ -1359,6 +1364,20 @@ export class Updater {
 		return null;
 	}
 
+	/**
+	 * Restart the agent on `current`. The studio runs the same binary from its own unit: after an
+	 * update a running studio follows (`try-restart`, so a stopped one stays stopped); after a
+	 * rollback it is stopped, because the restored agent may predate `skiff-agent studio` and starts
+	 * it on demand anyway.
+	 */
+	private async restartAgent(withAgent: boolean, studio: 'follow' | 'stop'): Promise<void> {
+		const { host } = this;
+		if (!withAgent || !host.agentEnrolled()) return;
+		await host.restart(AGENT);
+		if (studio === 'follow') await host.tryRestart?.(STUDIO);
+		else await host.stop(STUDIO).catch(() => undefined);
+	}
+
 	/** Undo a switch: database as `from` left it, links as they were, `from` running. */
 	private async revert(sw: Switch): Promise<boolean> {
 		const { host, layout } = this;
@@ -1373,7 +1392,7 @@ export class Updater {
 			await host.start(CONTROL_PLANE);
 			await host.restart(HELPER);
 			host.ensureCaddy?.(sw.from);
-			if (sw.withAgent && host.agentEnrolled()) await host.restart(AGENT);
+			await this.restartAgent(sw.withAgent, 'stop');
 			const problem = await this.verifyLive({ requirePublic: false, withAgent: sw.withAgent });
 			const state = this.readState();
 			delete state.inProgress;

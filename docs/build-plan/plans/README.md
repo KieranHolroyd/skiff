@@ -26,6 +26,7 @@ ownership, and agent protocol.
 | 18 | [OpenAPI and Terraform](18-openapi-terraform.md) | P1 | 3 | D | 11 | — |
 | 19 | [Process groups](19-process-groups.md) | P1 | 2 | C | F1, 08, 09 | 14 |
 | 20 | [Agent data tools](20-agent-data-tools.md) | P1 | 3 | E | 01, 02, 03, 04, 11, 12, 16 | — |
+| 22 | [Native database studio](22-native-studio.md) | P1 | 3 | E | 03, 04, D95 | 20 (query path) |
 | P2 | [Later bets](P2-later-bets.md) | P2 | 4+ | — | varies | — |
 
 ## Start order for a new agent

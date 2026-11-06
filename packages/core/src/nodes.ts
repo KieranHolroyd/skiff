@@ -653,6 +653,21 @@ export class NodeService {
 		// production pointer are candidates; staging-only projects must not serve them.
 		const servedProjectIds = productionProjectIds;
 
+
+		// The DBGate (D60) and native studio (plan 22) routes share one internal gateway listener.
+		const publicAddressOf = (id: string) => nodeById.get(id)?.publicAddress ?? null;
+		const consoleGateway = this.ctx.databases.gatewayForNode(node.id, isEdge, publicAddressOf);
+		const gatewayRoutes = new Map<string, { host: string; upstream: string }>();
+		for (const item of [
+			...consoleGateway.routes,
+			...this.ctx.databaseStudio.gatewayRoutes(node.id, isEdge, publicAddressOf),
+		])
+			if (!gatewayRoutes.has(item.host)) gatewayRoutes.set(item.host, item);
+		const databaseGateway = {
+			listen: consoleGateway.listen,
+			routes: [...gatewayRoutes.values()].sort((a, b) => a.host.localeCompare(b.host)),
+		};
+
 		return {
 			version: this.stateVersion(),
 			nodeId: node.id,
@@ -679,7 +694,8 @@ export class NodeService {
 			databasePoolerRestarts: this.ctx.databases.poolerRestartTasksForNode(node.id),
 			databaseConsoles: this.ctx.databases.consoleTasksForNode(node.id),
 			storageGateway: this.ctx.storage.gatewayForNode(node.id, isEdge, (id) => nodeById.get(id)?.publicAddress ?? null),
-			databaseGateway: this.ctx.databases.gatewayForNode(node.id, isEdge, (id) => nodeById.get(id)?.publicAddress ?? null),
+			studio: this.ctx.databaseStudio.desiredForNode(node.id),
+			databaseGateway,
 			storageRoutes: this.ctx.storage.routesForNode(node.id, isEdge, (id) => nodeById.get(id)?.publicAddress ?? null),
 			storagePurges: this.ctx.storage.purgesForNode(node.id),
 			domains: this.ctx.domains.desiredForProjects(servedProjectIds),
