@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHandler } from './server.ts';
 import { STUDIO_UNIT, SystemdDriver, type CommandRunner, type RunResult } from './systemd.ts';
-import { consoleServiceName, consoleUnitName } from './units.ts';
 import { databaseTlsPaths } from './tls.ts';
 import { parseWorkload, type WorkloadActivation, type WorkloadDesired } from './validate.ts';
 
@@ -17,6 +16,8 @@ class FakeRunner implements CommandRunner {
 	journal = '';
 	/** `podman network inspect` output; empty means the container is not attached yet. */
 	network = '';
+	/** `podman ps --all --format {{.Names}}` output, one name per line. */
+	containers = '';
 
 	/** Result for `systemctl <verb> …`, keyed by verb, instead of success. */
 	fail: Record<string, RunResult> = {};
@@ -28,6 +29,7 @@ class FakeRunner implements CommandRunner {
 		if (argv[1] === 'show') return { code: 0, stdout: this.show, stderr: '' };
 		if (argv[0]?.includes('journalctl')) return { code: 0, stdout: this.journal, stderr: '' };
 		if (argv[1] === 'network' && argv[2] === 'inspect') return { code: 0, stdout: this.network, stderr: '' };
+		if (argv[0]?.endsWith('podman') && argv[1] === 'ps') return { code: 0, stdout: this.containers, stderr: '' };
 		return { code: 0, stdout: '', stderr: '' };
 	}
 
@@ -601,146 +603,70 @@ function storageActivation(): WorkloadActivation {
 	};
 }
 
-describe('database console', () => {
+describe('leftover D60 studio console cleanup (D96)', () => {
 	const DB_ID = 'db_0123456789abcdef0123456789abcdef';
+	const OTHER_ID = 'db_fedcba9876543210fedcba9876543210';
 
-	function consoleDatabase(): WorkloadDesired {
-		return parseWorkload({
-			...workload(),
-			id: DB_ID,
-			projectId: DB_ID,
-			projectSlug: 'orders',
-			deploymentId: DB_ID,
-			runtime: 'container',
-			release: null,
-			image: 'docker.io/library/postgres:17-alpine',
-			upstream: '127.0.0.1:15432',
-			port: 15432,
-			memoryMb: 512,
-			cpus: 0.5,
-			healthPath: '/',
-			socketActivation: false,
-			env: { POSTGRES_USER: 'orders' },
-			database: { engine: 'postgres', version: '17' },
-		});
+	async function leaveConsole(f: Fixture, id: string): Promise<void> {
+		await fs.mkdir(f.quadletDir, { recursive: true });
+		await fs.writeFile(join(f.quadletDir, `skiff-workload-${id}-console.container`), '[Container]\n');
+		await fs.mkdir(join(f.runtimeDir, id), { recursive: true });
+		await fs.writeFile(join(f.runtimeDir, id, 'env'), 'POSTGRES_USER=orders\n');
+		await fs.writeFile(join(f.runtimeDir, id, 'console.env'), 'PASSWORD=x\n', { mode: 0o600 });
 	}
 
-	function consoleActivation(overrides: Record<string, unknown> = {}) {
-		return {
-			databaseId: DB_ID,
-			port: 17432,
-			webRoot: '/databases/orders/studio/proxy',
-			readOnly: true,
-			authUser: 'skiff',
-			authPassword: 'session-password-1234',
-			tls: true,
-			...overrides,
-		};
-	}
-
-	async function writeDatabaseEnv(f: Fixture): Promise<void> {
-		const dir = join(f.runtimeDir, DB_ID);
-		await fs.mkdir(dir, { recursive: true });
-		await fs.writeFile(
-			join(dir, 'env'),
-			'POSTGRES_USER=orders\nPOSTGRES_PASSWORD=owner-secret\nPOSTGRES_DB=orders\n',
-			{ mode: 0o400 },
-		);
-	}
-
-	test('writes a 0600 console env and unit, then starts only the sidecar', async () => {
+	test('stops, disables and removes leftover units, containers and env files', async () => {
 		const f = await fixture();
-		await writeDatabaseEnv(f);
-		await f.driver.startConsole(consoleDatabase(), consoleActivation());
+		await leaveConsole(f, DB_ID);
+		// A pooler sidecar and a non-database unit with a similar name must survive.
+		await fs.writeFile(join(f.quadletDir, `skiff-workload-${DB_ID}-pool.container`), '[Container]\n');
+		await fs.writeFile(join(f.quadletDir, 'skiff-workload-wld_abc123-console.container'), '[Container]\n');
+		f.runner.containers = `skiff-workload-${DB_ID}-console\nskiff-workload-${OTHER_ID}-console\nunrelated-console\n`;
 
-		const envFile = join(f.runtimeDir, DB_ID, 'console.env');
-		const stat = await fs.stat(envFile);
-		expect(stat.mode & 0o777).toBe(0o600);
-		const env = await fs.readFile(envFile, 'utf8');
-		expect(env).toContain('PASSWORD=session-password-1234');
-		expect(env).toContain('LOGIN=skiff');
-		expect(env).toContain('sslmode=require');
-		expect(env).toContain('READONLY_skiff=1');
+		expect(await f.driver.removeLegacyConsoles()).toEqual([DB_ID, OTHER_ID]);
 
-		const unit = await fs.readFile(join(f.quadletDir, consoleUnitName(DB_ID)), 'utf8');
-		expect(unit).toContain('PublishPort=127.0.0.1:17432:3000');
-		expect(unit).toContain(`EnvironmentFile=${envFile}`);
-		expect(unit).toContain('Restart=no');
-
-		expect(f.runner.calls).toContainEqual([
-			'/usr/bin/systemctl',
-			'daemon-reload',
-		]);
-		expect(f.runner.calls).toContainEqual([
-			'/usr/bin/systemctl',
-			'enable',
-			consoleServiceName(DB_ID),
-		]);
-		expect(f.runner.calls).toContainEqual([
-			'/usr/bin/systemctl',
-			'restart',
-			'--no-block',
-			consoleServiceName(DB_ID),
-		]);
-		// Opening a studio must never bounce Postgres.
-		expect(
-			f.runner.calls.some(
-				(argv) => argv[1] === 'restart' && argv.includes(`skiff-workload-${DB_ID}.service`),
-			),
-		).toBe(false);
-	});
-
-	test('rejects a console start for a different database', async () => {
-		const f = await fixture();
-		await writeDatabaseEnv(f);
-		await expect(
-			f.driver.startConsole(consoleDatabase(), consoleActivation({ databaseId: 'db_other' })),
-		).rejects.toThrow(/does not match/);
-	});
-
-	test('stops and removes the sidecar without touching the database unit', async () => {
-		const f = await fixture();
-		await writeDatabaseEnv(f);
-		await f.driver.startConsole(consoleDatabase(), consoleActivation());
-		f.runner.calls = [];
-
-		await f.driver.stopConsole(DB_ID);
 		expect(f.runner.calls).toContainEqual([
 			'/usr/bin/systemctl',
 			'disable',
 			'--now',
-			consoleServiceName(DB_ID),
+			`skiff-workload-${DB_ID}-console.service`,
 		]);
-		expect(f.runner.calls).toContainEqual(['/usr/bin/systemctl', 'daemon-reload']);
-		await expect(fs.stat(join(f.quadletDir, consoleUnitName(DB_ID)))).rejects.toThrow();
+		expect(f.runner.count('daemon-reload')).toBe(1);
+		expect(f.runner.calls).toContainEqual(['/usr/bin/podman', 'rm', '--force', `skiff-workload-${DB_ID}-console`]);
+		expect(f.runner.calls).toContainEqual(['/usr/bin/podman', 'rm', '--force', `skiff-workload-${OTHER_ID}-console`]);
+		expect(f.runner.calls.some((argv) => argv.includes('unrelated-console'))).toBe(false);
+
+		await expect(fs.stat(join(f.quadletDir, `skiff-workload-${DB_ID}-console.container`))).rejects.toThrow();
 		await expect(fs.stat(join(f.runtimeDir, DB_ID, 'console.env'))).rejects.toThrow();
-		expect(
-			f.runner.calls.some(
-				(argv) => argv[1] === 'restart' && argv.includes(`skiff-workload-${DB_ID}.service`),
-			),
-		).toBe(false);
+		// The database itself is untouched: its own env file stays and it is never restarted.
+		expect(await fs.readFile(join(f.runtimeDir, DB_ID, 'env'), 'utf8')).toContain('POSTGRES_USER');
+		await fs.stat(join(f.quadletDir, `skiff-workload-${DB_ID}-pool.container`));
+		await fs.stat(join(f.quadletDir, 'skiff-workload-wld_abc123-console.container'));
+		expect(f.runner.calls.some((argv) => argv[1] === 'restart')).toBe(false);
 	});
 
-	test('remove disables and deletes a leftover console unit', async () => {
+	test('is a no-op without leftovers, and never reloads systemd', async () => {
 		const f = await fixture();
-		await writeDatabaseEnv(f);
-		await f.driver.startConsole(consoleDatabase(), consoleActivation());
+		expect(await f.driver.removeLegacyConsoles()).toEqual([]);
+		expect(f.runner.count('daemon-reload')).toBe(0);
+		expect(f.runner.count('disable')).toBe(0);
+	});
+
+	test('is idempotent: a second run finds nothing', async () => {
+		const f = await fixture();
+		await leaveConsole(f, DB_ID);
+		expect(await f.driver.removeLegacyConsoles()).toEqual([DB_ID]);
 		f.runner.calls = [];
-
-		await f.driver.remove(DB_ID);
-		expect(f.runner.calls).toContainEqual([
-			'/usr/bin/systemctl',
-			'disable',
-			'--now',
-			consoleServiceName(DB_ID),
-		]);
-		await expect(fs.stat(join(f.quadletDir, consoleUnitName(DB_ID)))).rejects.toThrow();
-		await expect(fs.stat(join(f.runtimeDir, DB_ID))).rejects.toThrow();
+		expect(await f.driver.removeLegacyConsoles()).toEqual([]);
+		expect(f.runner.count('daemon-reload')).toBe(0);
 	});
 
-	test('refuses a non-database id before writing anything', async () => {
+	test('a failing systemctl or podman does not stop the cleanup', async () => {
 		const f = await fixture();
-		await expect(f.driver.stopConsole('wld_abc123')).rejects.toThrow(/db_/);
+		await leaveConsole(f, DB_ID);
+		f.runner.fail.disable = { code: 1, stdout: '', stderr: 'Unit not loaded' };
+		expect(await f.driver.removeLegacyConsoles()).toEqual([DB_ID]);
+		await expect(fs.stat(join(f.quadletDir, `skiff-workload-${DB_ID}-console.container`))).rejects.toThrow();
 	});
 });
 

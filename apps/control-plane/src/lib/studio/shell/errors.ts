@@ -36,6 +36,14 @@ export function describeStudioError(caught: unknown): StudioErrorInfo {
 				reopen: false
 			};
 		case 'conflict':
+			// The read-only principal is not ready yet (plan 22 track G); not an edit conflict.
+			if (/read-only access/i.test(message))
+				return {
+					code: caught.code,
+					title: 'Preparing read-only access',
+					message,
+					reopen: false
+				};
 			return {
 				code: caught.code,
 				title: 'Changed since you loaded it',

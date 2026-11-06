@@ -180,10 +180,10 @@ missing (D76). See [VOLUMES.md](./VOLUMES.md).
 
 | Surface | What |
 |---|---|
-| REST | `GET/POST /api/v1/databases`, `GET/PATCH/DELETE /api/v1/databases/:name`, `POST …/:name/restore`, `GET …/:name/credentials`, `GET …/:name/metrics`, `GET …/:name/logs`, `GET/POST …/:name/backups`, `GET/DELETE …/:name/backups/:id`, `POST …/:name/backups/:id/restore`, `GET/PATCH …/:name/backup-policy`, `GET/POST …/:name/rotate`, `POST …/:name/restart`, `GET/POST/DELETE …/:name/console`, `/databases/:name/studio/proxy/*`, `GET/POST /api/v1/projects/:slug/databases`, `DELETE …/databases/:name` |
+| REST | `GET/POST /api/v1/databases`, `GET/PATCH/DELETE /api/v1/databases/:name`, `POST …/:name/restore`, `GET …/:name/credentials`, `GET …/:name/metrics`, `GET …/:name/logs`, `GET/POST …/:name/backups`, `GET/DELETE …/:name/backups/:id`, `POST …/:name/backups/:id/restore`, `GET/PATCH …/:name/backup-policy`, `GET/POST …/:name/rotate`, `POST …/:name/restart`, `GET/POST/DELETE …/:name/studio`, `GET/POST /api/v1/projects/:slug/databases`, `DELETE …/databases/:name` |
 | MCP | `list_databases`, `get_database`, `create_database`, `attach_database`, `detach_database`, `delete_database` (confirmed, soft), `list_database_backups`, `backup_database`, `restore_database`, `set_database_backup_policy`, `rotate_database_credentials`, `restart_database`, `get_database_logs` |
 | CLI | `skif db list\|create\|info\|attach\|detach\|delete\|restore\|credentials\|logs\|backups\|backup\|backup-delete\|restore-backup\|backup-policy\|rotate\|restart` |
-| Dashboard | Databases list + create, detail (status, connection, pooler, attached projects, charts, tables, extensions/slow queries, backups/restore, rotate, restart, logs), **Studio** tab (embedded DBGate, read-only by default), attach from a project |
+| Dashboard | Databases list + create, detail (status, connection, pooler, attached projects, charts, tables, extensions/slow queries, backups/restore, rotate, restart, logs), **Studio** tab (native studio, read-only by default), attach from a project |
 
 ## 8. Backups and restore (D83)
 
@@ -319,45 +319,58 @@ tail at `/databases/:name/logs` (pause, level filter, search, download, clear vi
 <name> [--follow]`, and the MCP `get_database_logs` tool. Reading needs `logs:read` plus
 `database:read`; the API route resolves the database through the normal service permission check.
 
-## 14. Database studio (D60)
+## 14. Database studio (D96)
 
-Each managed database has an on-demand **DBGate 7.3.4** studio, pinned by digest and rendered by
-the helper. It is a short-lived sidecar on the database's node, enabled by default behind
-`SKIFF_FEATURE_DB_CONSOLE` (set `0` to hide it).
+Each managed database has a native, built-in studio at `/databases/<name>/studio`: an object
+tree, a data grid with filter/sort/paging and inline edits, and a query editor. Each engine is a
+`@skiff/studio` plugin (Postgres, MySQL/MariaDB, MongoDB, Valkey/Redis) with declared
+capabilities; the workspace reads the capabilities and never branches on the engine name. It is on
+by default behind `SKIFF_FEATURE_DB_STUDIO` (set `0` to hide the Studio tab and the route). It
+replaced D60's per-database sidecar studio, which was deleted at the cutover.
 
-- **Open/close are lifecycle tasks, not a database apply.** The control plane sends
-  `databaseConsoles` start/stop tasks and the helper starts or stops the studio unit. The Postgres
-  workload is never re-applied, so opening or closing a studio never restarts the database.
-- **Reachability.** DBGate publishes only on `127.0.0.1:<port>` and reaches Postgres at
-  `db-<id>:5432` on the workload network. The node's internal Caddy gateway exposes
-  `db-<label>.console.internal` on `127.0.0.1:<SKIFF_DATABASE_GATEWAY_PORT>` (default `8082`),
-  and the platform proxies `/databases/<name>/studio/proxy/*` to it. The platform session is the
-  outer authentication; DBGate also requires HTTP Basic.
-- **Per-session password.** The basic-auth password is generated for each session, sealed with the
-  org key, and injected by the proxy as the `Authorization` header. It never reaches the browser,
-  desired state, heartbeats or logs; the browser only holds the platform session cookie.
-- **Read-only by default.** `database:console` is required to open or inspect a studio, and is
-  never a default agent scope. Write mode requires `database:update`, is confirmed in the UI, and
-  is not a change to the database role.
-- **TTL and idle stop.** A session expires after 60 minutes (configurable 5–480) and stops after
-  15 minutes idle (configurable 5–240). Expiry is enforced in the control plane; the node still
-  stops the container when the stop task arrives.
-- **Audit.** Only lifecycle actions are audited: `database.console.open`, `database.console.close`
-  and `database.console.expired`. Proxied SQL and result rows are never logged.
+- **Sessions.** Opening creates a per-user session (several people can have a studio open on the
+  same database). The control plane mints a sealed token and lists the live session ids for the
+  database's node in desired state; the token itself never appears there. A session expires after
+  60 minutes (configurable 5–480) and closes after 15 minutes idle (configurable 5–240); the
+  maintenance sweep closes lapsed sessions. Deleting, moving or changing the mode of a database
+  closes its open sessions.
+- **Where queries run.** On the database's node, `skiff-studio.service` runs the agent binary's
+  `studio` entrypoint in its own cgroup (`MemoryMax=256M`), on a unix socket only
+  (`/run/skiff/studio.sock`) and with no node token. The helper starts it on demand through its
+  fixed `POST /v1/studio/start` verb, and it exits after 5 idle minutes; a node that never opens a
+  studio never runs it. The unit has no `[Install]` section, so nothing starts it at boot.
+- **Reachability.** The agent fronts the studio process on one loopback port per node
+  (`SKIFF_STUDIO_PORT`, default `8083`). The control plane reaches it only through the node's
+  internal Caddy gateway (D82), on host `n-<label>.studio.internal` at
+  `127.0.0.1:<SKIFF_DATABASE_GATEWAY_PORT>` (default `8082`); the edge forwards a worker's host
+  over WireGuard. The agent front pulls each session's activation from
+  `GET /api/agent/database-studio/:id` with the session token, so there is still no
+  control-plane-to-agent command channel, and databases stay loopback-only (D56).
+- **Permissions.** `database:console` is required to open or use a studio, and is never a default
+  agent scope. Only interactive user sessions can use it: an API key cannot reuse a user's
+  session. Write sessions also need `database:update`, are confirmed in the UI, and are
+  re-checked on every call, so losing the role locks the user out mid-session.
+- **Read-only by credential.** Read-only sessions connect as a per-database `skiff_studio_ro`
+  principal (Postgres `pg_read_all_data`; MySQL/MariaDB `SELECT, SHOW VIEW`; Mongo `read`;
+  Valkey/Redis a read-only ACL), so the database itself refuses writes. Session flags are a second
+  layer: read-only transactions on SQL engines and a command check on Valkey/Redis. Write sessions
+  use the owner credential.
+- **Limits** (enforced in the studio process): 1,000 rows per result by default (up to 10,000),
+  16 MiB per response (then `truncated: true`), a 30 s statement timeout, one run at a time per
+  session, and 8 sessions per node. Results stream as NDJSON and are never buffered past one
+  batch; closing the tab or pressing Stop cancels the query on the database.
+- **Audit.** Lifecycle keeps the `database.console.*` names: `database.console.open`,
+  `database.console.close` (with a reason) and `database.console.expired` (expired or idle).
+  Editor runs are `database.studio.run` and grid edits `database.studio.write`; both record a
+  statement fingerprint and counts only, never SQL text or values.
 
-Surfaces: `GET/POST/DELETE /api/v1/databases/:name/console`,
-`/databases/:name/studio/proxy/*` (the embedded DBGate path), and the **Studio** tab on the
-database detail page.
-
-The DBGate Community image is GPL-3.0 and runs as a separate container; Skiff links no DBGate code.
-The image is pinned by digest in `apps/helper/src/units.ts` and gets no automatic updates, so bump
-that digest to pick up DBGate security fixes. Query history and saved scripts live on the
-container's tmpfs and do not survive a session; a native table editor and persistent query history
-remain follow-ups (D60).
+Surfaces: `GET/POST/DELETE /api/v1/databases/:name/studio` (the caller's session), the
+session-only `/databases/:name/studio/api/:op` calls the workspace makes (not part of the public
+API), and the **Studio** tab on the database pages. Query history lives in the browser
+(IndexedDB, last 200 runs per database).
 
 ## 15. Follow-ups (on the roadmap)
 
-- Native table editor and query history beyond the embedded DBGate studio (D60).
 - Cross-node access via a node private address; bulk prune for databases; fully automated PITR
   drills (see [PITR.md](./PITR.md) for the current foundation and remaining gaps).
 - Engine parity (§17): metrics samplers, TLS and named credentials for the newer engines, Valkey/Redis
@@ -413,7 +426,7 @@ panels:
 | Capability | Postgres | MySQL | MariaDB | MongoDB | Valkey | Redis |
 |---|---|---|---|---|---|---|
 | Owner password rotation | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Studio (DBGate) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Studio (native, D96) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Logical backups + restore into a new database | ✓ `pg_dump -Fc` | ✓ `mysqldump` | ✓ `mariadb-dump` | ✓ `mongodump --archive --gzip` | – | – |
 | Pooler, extensions, metrics/tables/slow queries, TLS, PITR, named credentials, upgrade planner | ✓ | – | – | – | – | – |
 
@@ -472,6 +485,5 @@ release rolled back with `--keep-db` reads the old column and sees every databas
 **Verified.** Every engine and version above was exercised against the real images with Docker
 standing in for Podman (`podman exec` and `docker exec` share a CLI): the rendered server flags and
 env under a read-only root with no capabilities, the agent probe, and the helper's own dump,
-restore-into-a-new-database, rotation and verification verbs. The DBGate studio env for the new
-engines follows DBGate's documented connection variables but has not yet been opened in a browser
-against a real node.
+restore-into-a-new-database, rotation and verification verbs. Each engine's studio plugin passes the
+studio conformance suite against the same images (plan 22).

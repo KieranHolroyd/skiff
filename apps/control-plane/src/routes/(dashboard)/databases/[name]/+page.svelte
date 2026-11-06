@@ -4,7 +4,6 @@
 	import { goto, replaceState } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { onDestroy } from 'svelte';
 	import ActivityIcon from '@lucide/svelte/icons/activity';
 	import ArchiveIcon from '@lucide/svelte/icons/archive';
 	import ArrowLeftRightIcon from '@lucide/svelte/icons/arrow-left-right';
@@ -14,11 +13,9 @@
 	import GaugeIcon from '@lucide/svelte/icons/gauge';
 	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
-	import ExternalLinkIcon from '@lucide/svelte/icons/external-link';
 	import EyeOffIcon from '@lucide/svelte/icons/eye-off';
 	import LayersIcon from '@lucide/svelte/icons/layers';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
-	import PlayIcon from '@lucide/svelte/icons/play';
 	import PlugIcon from '@lucide/svelte/icons/plug';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import PuzzleIcon from '@lucide/svelte/icons/puzzle';
@@ -26,8 +23,6 @@
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import SlidersHorizontalIcon from '@lucide/svelte/icons/sliders-horizontal';
-	import SquareIcon from '@lucide/svelte/icons/square';
-	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import TableIcon from '@lucide/svelte/icons/table';
 	import TerminalIcon from '@lucide/svelte/icons/terminal';
 	import TimerIcon from '@lucide/svelte/icons/timer';
@@ -41,7 +36,6 @@
 		databaseExtensionCatalog,
 		databaseExtensionCategories,
 		databaseExtensionCategoryLabels,
-		type DatabaseConsoleView,
 		type DatabaseCredentials
 	} from '@skiff/contracts';
 	import { notify, runAction } from '#lib/actions.js';
@@ -77,7 +71,6 @@
 	import StorageMeter from '../_lib/StorageMeter.svelte';
 	import { databaseChart, databaseTotals, storagePercent } from '../_lib/database-series.js';
 	import { DATABASE_DEFAULT_TAB, DATABASE_TABS, type DatabaseTab } from '../_lib/database-tabs.js';
-	import { studioFrameUrl, studioPath } from './_lib/studio.js';
 	import type { PageProps } from './$types';
 
 	interface DatabaseFormResult {
@@ -112,8 +105,7 @@
 	/** A section the engine lacks (a stale `?tab=` link) falls back to the overview. */
 	const shown = $derived<DatabaseTab>(
 		((tab === 'metrics' || tab === 'insights') && !caps.metrics) ||
-			(tab === 'backups' && !caps.backups) ||
-			(tab === 'studio' && !caps.console)
+			(tab === 'backups' && !caps.backups)
 			? 'overview'
 			: tab
 	);
@@ -243,97 +235,6 @@
 		SNIPPETS.filter((item) => credentials?.connectionSnippets[item.key] !== undefined)
 	);
 	const activeSnippet = $derived(snippets.find((item) => item.key === snippet) ?? snippets[0]);
-
-	// --- studio --------------------------------------------------------------------------------
-
-	// Polled snapshots win until page data changes (an action's invalidateAll), then page data wins.
-	let polled = $state<DatabaseConsoleView | null>(null);
-	let polledFor = $state<DatabaseConsoleView | null>(null);
-	const live = $derived(data.console !== polledFor ? data.console : (polled ?? data.console));
-	let frameLoaded = $state(false);
-	let slowStart = $state(false);
-	let pollTimer: ReturnType<typeof setInterval> | null = null;
-
-	const consolePath = $derived(studioFrameUrl(live?.path || studioPath(db.name)));
-	const frameKey = $derived(`${consolePath}:${live?.readOnly}:${live?.status}`);
-
-	$effect(() => {
-		if (tab === 'studio' && live?.status === 'starting') startPolling();
-		else stopPolling();
-	});
-
-	// A new target or mode means a new DBGate page: show the overlay until it loads.
-	$effect(() => {
-		if (frameKey) frameLoaded = false;
-	});
-
-	$effect(() => {
-		if (frameLoaded || live?.status !== 'running') {
-			slowStart = false;
-			return;
-		}
-		const timer = setTimeout(() => (slowStart = true), 10_000);
-		return () => clearTimeout(timer);
-	});
-
-	onDestroy(stopPolling);
-
-	function stopPolling() {
-		if (pollTimer) {
-			clearInterval(pollTimer);
-			pollTimer = null;
-		}
-	}
-
-	function startPolling() {
-		if (pollTimer) return;
-		pollTimer = setInterval(() => void pollConsole(), 2000);
-	}
-
-	async function pollConsole() {
-		try {
-			const response = await fetch(`/api/v1/databases/${encodeURIComponent(db.name)}/console`, {
-				headers: { accept: 'application/json' },
-				cache: 'no-store'
-			});
-			if (!response.ok) return;
-			const body = (await response.json()) as { console?: DatabaseConsoleView };
-			if (!body.console) return;
-			polledFor = data.console;
-			polled = body.console;
-			if (body.console.status !== 'starting') stopPolling();
-		} catch {
-			// The next tick may reach the control plane; keep polling until it settles.
-		}
-	}
-
-	function openStudio(readOnly: boolean) {
-		void runAction('?/studio-open', { readOnly: readOnly ? '1' : '0' });
-	}
-
-	function openReadWrite() {
-		askConfirm({
-			title: `Open a read-write studio for ${db.name}?`,
-			description:
-				'DBGate connects with the owner role and no read-only flag. Every statement you run is applied to the live database, including DELETE and DROP. Switch back to read-only when you are done.',
-			confirmLabel: 'Open read-write',
-			tone: 'danger',
-			action: '?/studio-open',
-			fields: { readOnly: '0' }
-		});
-	}
-
-	function switchMode() {
-		if (live?.readOnly) {
-			openReadWrite();
-			return;
-		}
-		void runAction('?/studio-open', { readOnly: '1' });
-	}
-
-	function closeStudio() {
-		void runAction('?/studio-close');
-	}
 
 	// --- attachments ---------------------------------------------------------------------------
 
@@ -1241,124 +1142,20 @@
 			{#snippet footer()}
 				<span class="flex flex-wrap items-center gap-2">
 					<TerminalIcon class="size-3.5" />
-					Run SQL, browse and edit rows, import/export data, or explore the schema as an ERD.
-					{#if data.dbCan.console}
-						<Button variant="link" size="sm" class="h-auto p-0" onclick={() => setTab('studio')}>
+					Run queries, and browse and edit rows, in the database studio.
+					{#if data.dbCan.console && data.studioEnabled && caps.console}
+						<Button
+							variant="link"
+							size="sm"
+							class="h-auto p-0"
+							href={resolve('/(dashboard)/databases/[name]/studio', { name: db.name })}
+						>
 							Open studio
 						</Button>
 					{/if}
 				</span>
 			{/snippet}
 		</Panel>
-	{:else if shown === 'studio'}
-		<!-- Studio --------------------------------------------------------------------------------- -->
-		{#if !can.console}
-			<Notice tone="warning" title="Studio access required">
-				Opening the database studio needs <code class="font-mono">database:console</code>. Ask an
-				owner if you need it.
-			</Notice>
-		{:else if !data.consoleEnabled}
-			<Notice tone="warning" title="Database studio is turned off">
-				An operator disabled <code class="font-mono">DB_CONSOLE</code> on this control plane. The rest
-				of the database page is unaffected.
-			</Notice>
-		{:else if !live || live.status === 'stopped' || live.status === 'failed'}
-			<Panel
-				title="Database studio"
-				icon={SquareTerminalIcon}
-				description="An on-demand DBGate session on {nodeLabel}. Nothing runs until you open it, and it stops itself when idle."
-			>
-				{#if live?.status === 'failed' && live.error}
-					<Notice tone="danger" title="The studio did not start" class="mb-4">
-						{live.error}
-					</Notice>
-				{/if}
-				<EmptyState
-					icon={SquareTerminalIcon}
-					title={live?.status === 'failed' ? 'Studio failed to start' : 'Open the database studio'}
-					description={`Run SQL in a private editor, browse tables, edit rows, import and export data, and explore the schema as an ERD. The session expires after ${live?.idleMinutes ?? 15} idle minutes.`}
-				>
-					<Button onclick={() => openStudio(true)}>
-						<PlayIcon />Open read-only studio
-					</Button>
-					{#if can.update}
-						<Button variant="outline" onclick={openReadWrite}>
-							<SquareTerminalIcon />Open read-write studio
-						</Button>
-					{/if}
-				</EmptyState>
-			</Panel>
-		{:else if live.status === 'starting'}
-			<Panel
-				title="Database studio"
-				icon={SquareTerminalIcon}
-				description="The node pulls and boots DBGate, then the studio opens in place."
-			>
-				<div class="flex flex-col items-center gap-4 py-10">
-					<Spinner class="size-6" />
-					<p class="text-sm text-muted-foreground">
-						Starting DBGate on <span class="font-mono">{nodeLabel}</span>…
-					</p>
-					<Button variant="outline" onclick={closeStudio}><SquareIcon />Stop</Button>
-				</div>
-			</Panel>
-		{:else}
-			<div class="space-y-3">
-				<div class="flex flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2">
-					<StatusBadge status="running" />
-					<Badge variant={live.readOnly ? 'secondary' : 'warning'}>
-						{live.readOnly ? 'Read-only' : 'Read-write'}
-					</Badge>
-					{#if live.expiresAt}
-						<span class="text-xs text-muted-foreground">
-							Expires
-							<time datetime={live.expiresAt}>{formatDateTime(live.expiresAt)}</time>
-						</span>
-					{/if}
-					<div class="ml-auto flex flex-wrap items-center gap-2">
-						<Button variant="outline" size="sm" href={consolePath} target="_blank" rel="noreferrer">
-							<ExternalLinkIcon />Open in new tab
-						</Button>
-						{#if live.readOnly}
-							{#if can.update}
-								<Button variant="outline" size="sm" onclick={switchMode}>
-									<ArrowLeftRightIcon />Switch to read-write
-								</Button>
-							{/if}
-						{:else}
-							<Button variant="outline" size="sm" onclick={switchMode}>
-								<ArrowLeftRightIcon />Switch to read-only
-							</Button>
-						{/if}
-						<Button variant="outline" size="sm" onclick={closeStudio}>
-							<SquareIcon />Stop
-						</Button>
-					</div>
-				</div>
-
-				<div class="relative">
-					{#if !frameLoaded}
-						<div
-							class="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-md border bg-background/90"
-						>
-							<Spinner class="size-6" />
-							<p class="text-sm text-muted-foreground">Loading the studio…</p>
-							{#if slowStart}
-								<p class="text-xs text-muted-foreground">
-									Still loading — the first start downloads and boots DBGate, so give it a moment.
-								</p>
-							{/if}
-						</div>
-					{/if}
-					<iframe
-						src={consolePath}
-						title="Database studio for {db.name}"
-						class="h-[calc(100vh-22rem)] min-h-[560px] w-full rounded-md border bg-background"
-						onload={() => (frameLoaded = true)}
-					></iframe>
-				</div>
-			</div>
-		{/if}
 	{:else if shown === 'settings'}
 		<!-- Settings ------------------------------------------------------------------------------ -->
 		<div class="grid items-start gap-5 xl:grid-cols-2">

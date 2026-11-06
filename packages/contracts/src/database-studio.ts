@@ -14,6 +14,7 @@ import {
 	DATABASE_CONSOLE_MIN_TTL_MINUTES,
 	databaseEngines,
 } from './database.ts';
+import type { DatabaseStudioPrincipalState } from './database-studio-principal.ts';
 
 /** Loopback port the agent's studio front listens on, on every node. */
 export const STUDIO_DEFAULT_PORT = 8083;
@@ -77,6 +78,13 @@ export interface DatabaseStudioView {
 	lastUsedAt: string | null;
 	/** Dashboard path of the studio workspace. */
 	path: string;
+	/**
+	 * What the session's connection waits on (track G). A write session uses the owner and is
+	 * always `ready`; a read-only one waits for the database's `skiff_studio_ro` principal.
+	 */
+	principal: DatabaseStudioPrincipalState;
+	/** Why the principal failed, when `principal` is `failed`. Never a credential. */
+	principalError: string | null;
 }
 
 /**

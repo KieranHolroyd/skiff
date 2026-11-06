@@ -124,8 +124,6 @@ class FakeHelper implements HelperApi {
 	async rotateDatabaseRole(): Promise<void> {}
 	async applyDatabaseCredential(): Promise<void> {}
 	async restartPooler(): Promise<void> {}
-	async startConsole(): Promise<void> {}
-	async stopConsole(): Promise<void> {}
 	async pitrConfigure(): Promise<never> {
 		throw new Error('pitrConfigure not used in this test');
 	}

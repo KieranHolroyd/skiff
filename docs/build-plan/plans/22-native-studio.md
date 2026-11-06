@@ -4,16 +4,17 @@
 **Depends on:** 03 TLS (agent dials with the helper CA), 04 named credentials, D95 engine
 registry, the shipped DBGate studio (06-database-studio.md) for its session model
 **Blocks:** 20 `query_database` (shares the Postgres plugin and the read-only path)
-**Supersedes:** D60's choice of DBGate (proposed D96 below)
+**Supersedes:** D60's choice of DBGate (D96 below)
 **Primary files:** `packages/studio/**` (new), `apps/agent/src/studio/**` (new),
 `scripts/systemd/skiff-studio.service` (new), `apps/helper/src/{server,validate}.ts` (studio verbs),
 `apps/control-plane/src/routes/(dashboard)/databases/[name]/studio/**`,
 `apps/control-plane/src/lib/studio/**` (new), `packages/core/src/databases.ts` (console section)
 
-> **Status (6 Nov 2026):** Phases 1 and 2 (plugins and UI) are built behind
-> `SKIFF_FEATURE_DB_STUDIO` (default off). Every plugin passes the conformance suite against real
-> containers. The UI is checked against mocked studio calls, not yet end to end on a node. Next:
-> track G (read-only principals), a live run on a node, then Phase 3 cutover.
+> **Status (6 Nov 2026):** Phases 1 and 2 (plugins and UI) are built, and the **Phase 3 cutover is
+> done**: `SKIFF_FEATURE_DB_STUDIO` defaults on (kept as a kill switch), D96 is recorded, and
+> DBGate is deleted outright rather than kept behind its flag for a release (the user's call).
+> Every plugin passes the conformance suite against real containers. Still open: a live end-to-end
+> run on a node (S5) and plan 20's `query_database` (Phase 3 step 5).
 
 ## Goal
 
@@ -375,7 +376,7 @@ for Redis commands. Completion providers are fed from `tree`/`describe`.
   workspace reads `capabilities` and never branches on the engine name.
 - **Query history** is per database, in IndexedDB, holding the last 200 runs.
 
-## Proposed decision (to add as D96 on acceptance)
+## Decision (recorded as D96 at the cutover)
 
 > **D96: The database studio is native: per-engine plugins in an on-demand
 > `skiff-studio` process, fronted by the agent.** Supersedes D60's DBGate choice. Each engine is
@@ -576,19 +577,25 @@ A seventh, smaller track (G) owns the helper `credentials/studio-readonly` verb 
 engines (`apps/helper/src/{systemd,validate,server}.ts`) and its tests. It is needed before
 Phase 3.
 
-**Phase 3: cutover (serial).**
+**Phase 3: cutover (serial). Done 6 Nov 2026, except step 5.**
 
 1. Wire read-only sessions to the G principal, and run a security pass over the conformance
-   read-only cases.
-2. Turn `SKIFF_FEATURE_DB_STUDIO` on by default and turn the DBGate flag off. Run on prod for
-   one release.
-3. Delete DBGate: the image pin, renderers, helper console verbs, agent readiness probe, port
-   allocator, iframe, framing exception, and per-database gateway routes. Migration 0030 drops
-   `console_port`, its unique index and `console_secret`.
-4. Docs: D96 in DECISIONS; DATABASES.md §14; API.md; OPS.md (studio port, limits, flag);
-   ROADMAP (close "Native table editor"); mark 06-database-studio.md as superseded.
+   read-only cases. *(Track G, migration 0032, built in parallel with the cutover.)*
+2. **Done.** Turn `SKIFF_FEATURE_DB_STUDIO` on by default, kept as a kill switch. The DBGate flag is
+   removed rather than turned off; a leftover `SKIFF_FEATURE_DB_CONSOLE` is ignored with a startup
+   warning. There was no prod release with both studios.
+3. **Done.** Delete DBGate: the image pin, renderers, helper console verbs and their validation, the
+   agent console runner, port allocator, `databaseConsoles` desired state, iframe, framing
+   exception, `/api/v1/databases/:name/console` and per-database gateway routes. Migration 0033
+   (not 0030; those numbers were taken) drops every `console_*` column and the port index, as a
+   reviewed destructive migration. Heartbeats still accept `databaseConsoleResults` from 0.7.x
+   agents and ignore them. The helper removes leftover console units, containers and env files
+   once at start.
+4. **Done.** Docs: D96 in DECISIONS (D60 marked superseded); DATABASES.md §14; API.md; OPS.md (studio
+   unit, port, flag, DBGate removal); ROADMAP ("Native table editor" closed); README; plan 06
+   marked superseded.
 5. Plan 20's `query_database`: implement it on the Postgres plugin's read-only `run`, with a
-   fingerprint audit and the `database:query` scope, and no new query engine.
+   fingerprint audit and the `database:query` scope, and no new query engine. *(Open.)*
 
 ## Acceptance criteria
 

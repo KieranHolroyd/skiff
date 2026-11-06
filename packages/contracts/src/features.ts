@@ -57,19 +57,13 @@ export const FEATURE_FLAGS = {
 		area: 'databases',
 		description: 'Run a PgBouncer sidecar and publish the pooled connection port for a database.'
 	},
-	DB_CONSOLE: {
-		name: 'DB_CONSOLE',
-		// On-demand, permission-gated and read-only by default, so it is safe to ship enabled.
-		default: true,
-		area: 'databases',
-		description: 'Open an on-demand DBGate studio for a managed database (D60).'
-	},
 	DB_STUDIO: {
 		name: 'DB_STUDIO',
-		// Plan 22 foundation: off until the engine plugins and read-only principals ship.
-		default: false,
+		// Plan 22 / D96: the native studio replaced the D60 console. Default on; kept as a kill switch.
+		default: true,
 		area: 'databases',
-		description: 'Open the native database studio (plugins in an on-demand studio process, plan 22).'
+		description:
+			'Open the native database studio (per-engine plugins in the on-demand skiff-studio process, D96). Set 0 to hide it.'
 	},
 	DB_TLS: {
 		name: 'DB_TLS',
@@ -166,6 +160,23 @@ export function parseFeatureFlagValue(value: string | undefined): boolean | unde
 	if (TRUE_VALUES.has(normalized)) return true;
 	if (FALSE_VALUES.has(normalized)) return false;
 	return undefined;
+}
+
+/**
+ * Flags that existed in an earlier release and were removed. Setting one is harmless: it is
+ * ignored like any unknown `SKIFF_FEATURE_*`, and `retiredFeatureFlagsSet` lets startup warn.
+ */
+export const RETIRED_FEATURE_FLAGS: Readonly<Record<string, string>> = Object.freeze({
+	DB_CONSOLE: 'The D60 studio console was replaced by the native studio (D96); use SKIFF_FEATURE_DB_STUDIO.'
+});
+
+/** Retired flags that are still set in `env`, with the reason each was removed. */
+export function retiredFeatureFlagsSet(
+	env: Record<string, string | undefined> = process.env
+): { name: string; env: string; reason: string }[] {
+	return Object.entries(RETIRED_FEATURE_FLAGS)
+		.filter(([name]) => env[`${FEATURE_ENV_PREFIX}${name}`] !== undefined)
+		.map(([name, reason]) => ({ name, env: `${FEATURE_ENV_PREFIX}${name}`, reason }));
 }
 
 /**

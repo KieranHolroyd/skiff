@@ -98,8 +98,8 @@
 - [x] Bulk actions: restart all services/databases/storage and back up all databases
 - [x] Database container logs: drained journal, `GET /databases/:name/logs`, dashboard tail, `skif db logs`, MCP `get_database_logs`
 - [ ] TLS in transit with a per-node CA and `sslmode=require` URLs
-- [x] On-demand DBGate 7.3.4 studio: loopback sidecar, internal gateway + platform proxy, `database:console`, read-only default, write mode with `database:update`, audited and idle-stopped (D60)
-- [ ] Native table editor and query history beyond the embedded studio
+- [x] On-demand studio: `database:console`, read-only default, write mode with `database:update`, audited and idle-stopped (D60's sidecar, replaced by D96)
+- [x] Native table editor and query history: per-engine studio plugins in the on-demand `skiff-studio` process, grid edits with conflict checks, read-only principal, browser query history; the D60 sidecar removed (plan 22, D96)
 - [ ] Database metrics in the Parquet archive; bulk actions and prune for databases; `restore_database` over MCP
 - [x] More engines: MySQL, MariaDB, MongoDB, Valkey and Redis with create/attach/credentials/rotation/studio/logs; logical backups for MySQL, MariaDB and MongoDB (D95)
 - [ ] Engine parity: metrics samplers, TLS, named credentials and backups for Valkey/Redis (RDB), ClickHouse as a seventh engine

@@ -2,6 +2,7 @@ import { and, desc, eq, isNull } from 'drizzle-orm';
 import { databases, databaseStudioSessions } from '@skiff/db';
 import {
 	DATABASE_CONSOLE_DEFAULT_IDLE_MINUTES,
+	DATABASE_STUDIO_READONLY_USER,
 	DEFAULT_STUDIO_LIMITS,
 	STUDIO_DEFAULT_PORT,
 	STUDIO_PROTOCOL_VERSION,
@@ -18,6 +19,7 @@ import {
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
 import type { DatabaseRow } from './databases.ts';
+import { DatabaseStudioPrincipals } from './database-studio-principal.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { randomBytes, randomToken, safeEqual, sha256Hex } from './util.ts';
 
@@ -93,10 +95,15 @@ function iso(ms: number): string {
 /**
  * Native database studio sessions (plan 22, D96). The control plane owns who may open what; the
  * node's agent front pulls the activation with the session token and never sees a credential in
- * desired state. Lifecycle audit keeps the DBGate `database.console.*` names.
+ * desired state. Lifecycle audit keeps the `database.console.*` names from D60.
  */
 export class DatabaseStudioService {
-	constructor(private readonly ctx: CoreContext) {}
+	/** The per-database `skiff_studio_ro` account read-only sessions connect as (track G). */
+	readonly principals: DatabaseStudioPrincipals;
+
+	constructor(private readonly ctx: CoreContext) {
+		this.principals = new DatabaseStudioPrincipals(ctx);
+	}
 
 	/** The caller's own session, or an inactive view. Never carries the token. */
 	view(principal: Principal, name: string): DatabaseStudioView {
@@ -118,6 +125,9 @@ export class DatabaseStudioService {
 		if (!input.readOnly) requirePermission(principal, 'database:update');
 		const row = this.ctx.databases.requireRow(principal, name, { includeDeleted: true });
 		this.ctx.databases.assertStudioOpenable(row);
+		// A read-only session connects as the database's own read-only account, never the owner.
+		// Opening one starts it (or retries a failed one); the view says `preparing` until then.
+		if (input.readOnly) this.principals.ensure(row.id, 'open');
 
 		const now = this.ctx.now();
 		const expiresAt = now + input.ttlMinutes * 60_000;
@@ -209,6 +219,16 @@ export class DatabaseStudioService {
 		}
 		// A role change after opening must not keep a writable session usable.
 		if (!session.readOnly) requirePermission(principal, 'database:update');
+		// Read-only never falls back to the owner: wait for the principal instead.
+		if (session.readOnly) {
+			const principalStatus = this.principals.status(row);
+			if (principalStatus.state === 'failed')
+				throw new ConflictError(
+					`Read-only access could not be prepared: ${principalStatus.error ?? 'unknown error'} Open the studio again to retry.`,
+				);
+			if (principalStatus.state !== 'ready')
+				throw new ConflictError('Preparing read-only access… The studio connects once the node confirms it.');
+		}
 		if (now - session.lastUsedAt >= TOUCH_INTERVAL_MS)
 			this.ctx.db
 				.update(databaseStudioSessions)
@@ -251,6 +271,17 @@ export class DatabaseStudioService {
 		if (this.lapsed(session, this.ctx.now())) throw new ConflictError('The database studio session has expired.');
 
 		const connection = this.ctx.databases.studioConnection(row);
+		// Read-only sessions connect as the database's `skiff_studio_ro` principal, so the database
+		// itself refuses their writes; the plugin's session flags are a second layer. They never
+		// fall back to the owner. Write sessions use the owner.
+		let user = connection.user;
+		let password = connection.ownerPassword;
+		if (session.readOnly) {
+			const readOnlyPassword = this.principals.readyPassword(row);
+			if (readOnlyPassword === null) throw new ConflictError('Preparing read-only access…');
+			user = DATABASE_STUDIO_READONLY_USER;
+			password = readOnlyPassword;
+		}
 		return {
 			v: STUDIO_PROTOCOL_VERSION,
 			sessionId: session.id,
@@ -260,11 +291,8 @@ export class DatabaseStudioService {
 			host: '127.0.0.1',
 			port: connection.hostPort,
 			database: connection.database,
-			user: connection.user,
-			// INTERIM: every session connects as the owner until the read-only principal ships
-			// (plan 22 Phase 3, helper `credentials/studio-readonly`). Read-only is enforced only
-			// by the studio's session flags until then.
-			password: connection.ownerPassword,
+			user,
+			password,
 			tls: connection.tls,
 			readOnly: session.readOnly,
 			limits: DEFAULT_STUDIO_LIMITS,
@@ -452,6 +480,10 @@ export class DatabaseStudioService {
 	private toView(row: DatabaseRow, session: DatabaseStudioSessionRow | undefined): DatabaseStudioView {
 		const now = this.ctx.now();
 		const active = session !== undefined && session.closedAt === null && this.lapsed(session, now) === null;
+		// Fresh: `open` may have just started the principal on the row the caller holds.
+		const current = this.ctx.db.select().from(databases).where(eq(databases.id, row.id)).get() ?? row;
+		const principalStatus =
+			active && !session.readOnly ? { state: 'ready' as const, error: null } : this.principals.status(current);
 		return {
 			sessionId: active ? session.id : null,
 			active,
@@ -462,6 +494,8 @@ export class DatabaseStudioService {
 				: DATABASE_CONSOLE_DEFAULT_IDLE_MINUTES,
 			lastUsedAt: session ? iso(session.lastUsedAt) : null,
 			path: `/databases/${encodeURIComponent(row.name)}/studio`,
+			principal: principalStatus.state,
+			principalError: principalStatus.error,
 		};
 	}
 }

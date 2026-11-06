@@ -47,7 +47,6 @@ export class MaintenanceService {
 		this.ctx.databases.requestExpiredPurges();
 		this.ctx.databases.tickBackups();
 		this.ctx.databases.tickPitr();
-		this.ctx.databases.tickConsoles();
 		// Database moves whose node never answered roll back or give up (D97).
 		this.ctx.moves.tick();
 		this.ctx.databaseStudio.tick();

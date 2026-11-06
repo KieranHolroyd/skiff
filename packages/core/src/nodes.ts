@@ -227,6 +227,8 @@ export class NodeService {
 				// Draining is an operator decision; the agent's liveness report must not undo it.
 				status: node.status === 'draining' ? 'draining' : input.status,
 				agentVersion: input.agentVersion,
+				// An agent that predates capabilities declares none, so work it would ignore is refused.
+				capabilitiesJson: JSON.stringify(input.capabilities ?? []),
 				lastHeartbeatAt: now,
 				statsJson: input.stats ? JSON.stringify(input.stats) : node.statsJson,
 				storageStatusJson: input.storage ? JSON.stringify(input.storage) : node.storageStatusJson,
@@ -247,8 +249,8 @@ export class NodeService {
 			this.ctx.databases.applyRotationResults(node.id, input.databaseRotationResults);
 		if (input.databaseCredentialResults?.length)
 			this.ctx.databases.applyCredentialResults(node.id, input.databaseCredentialResults);
-		if (input.databaseConsoleResults?.length)
-			this.ctx.databases.applyConsoleResults(node.id, input.databaseConsoleResults);
+		if (input.databaseStudioPrincipalResults?.length)
+			this.ctx.databaseStudio.principals.applyResults(node.id, input.databaseStudioPrincipalResults);
 		if (input.databasePoolerRestarted?.length)
 			this.ctx.databases.applyPoolerRestarted(node.id, input.databasePoolerRestarted);
 		if (input.databaseTls?.length) this.ctx.databases.applyTlsReport(node.id, input.databaseTls);
@@ -795,18 +797,11 @@ export class NodeService {
 		// production pointer are candidates; staging-only projects must not serve them.
 		const servedProjectIds = productionProjectIds;
 
-		// The DBGate (D60) and native studio (plan 22) routes share one internal gateway listener.
+		// The native studio (D96) routes ride one internal gateway listener on the edge's loopback.
 		const publicAddressOf = (id: string) => nodeById.get(id)?.publicAddress ?? null;
-		const consoleGateway = this.ctx.databases.gatewayForNode(node.id, isEdge, publicAddressOf);
-		const gatewayRoutes = new Map<string, { host: string; upstream: string }>();
-		for (const item of [
-			...consoleGateway.routes,
-			...this.ctx.databaseStudio.gatewayRoutes(node.id, isEdge, publicAddressOf),
-		])
-			if (!gatewayRoutes.has(item.host)) gatewayRoutes.set(item.host, item);
 		const databaseGateway = {
-			listen: consoleGateway.listen,
-			routes: [...gatewayRoutes.values()].sort((a, b) => a.host.localeCompare(b.host)),
+			listen: isEdge ? `127.0.0.1:${this.ctx.config.databaseGatewayPort ?? 8082}` : null,
+			routes: this.ctx.databaseStudio.gatewayRoutes(node.id, isEdge, publicAddressOf),
 		};
 
 		return {
@@ -835,8 +830,8 @@ export class NodeService {
 			databasePitrTasks: await this.ctx.databases.pitrTasksForNode(node.id),
 			databaseRotations: this.ctx.databases.rotationTasksForNode(node.id),
 			databaseCredentialTasks: this.ctx.databases.credentialTasksForNode(node.id),
+			databaseStudioPrincipals: this.ctx.databaseStudio.principals.tasksForNode(node.id),
 			databasePoolerRestarts: this.ctx.databases.poolerRestartTasksForNode(node.id),
-			databaseConsoles: this.ctx.databases.consoleTasksForNode(node.id),
 			storageGateway: this.ctx.storage.gatewayForNode(node.id, isEdge, (id) => nodeById.get(id)?.publicAddress ?? null),
 			studio: this.ctx.databaseStudio.desiredForNode(node.id),
 			databaseGateway,

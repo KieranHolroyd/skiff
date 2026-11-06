@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import {
 	desiredStateSchema,
 	heartbeatSchema,
+	nodeCapabilities,
 	workloadActivationSchema,
 	type DesiredState,
 	type Heartbeat,
@@ -17,9 +18,9 @@ import { CertProbe, certProbeTargets, tlsCertReader } from './certs.ts';
 import { buildCaddyConfig, isProductionRoute, tlsSubjects } from './caddy-config.ts';
 import { loadConfig, type AgentConfig } from './config.ts';
 import { DatabaseBackupRunner } from './database-backups.ts';
-import { DatabaseConsoleRunner } from './database-consoles.ts';
 import { DatabasePitrRunner } from './database-pitr.ts';
 import { DatabaseCredentialRunner } from './database-credentials.ts';
+import { StudioPrincipalRunner } from './studio/principal.ts';
 import { DatabasePoolerRestartRunner } from './database-pooler-restarts.ts';
 import { DatabaseRotationRunner } from './database-rotations.ts';
 import { DATABASE_STATS_INTERVAL_MS, DatabaseStatsSampler } from './database-stats.ts';
@@ -87,8 +88,8 @@ class AgentRuntime {
 	private readonly databasePitr: DatabasePitrRunner;
 	private readonly databaseRotations: DatabaseRotationRunner;
 	private readonly databaseCredentials: DatabaseCredentialRunner;
+	private readonly studioPrincipals: StudioPrincipalRunner;
 	private readonly databasePoolerRestarts: DatabasePoolerRestartRunner;
-	private readonly databaseConsoles: DatabaseConsoleRunner;
 	private readonly storageAdmin: StorageReconciler;
 	private readonly storageStats: StorageStatsSampler;
 
@@ -179,13 +180,13 @@ class AgentRuntime {
 			helper: this.helper,
 			log,
 		});
-		this.databasePoolerRestarts = new DatabasePoolerRestartRunner({ helper: this.helper, log });
-		this.databaseConsoles = new DatabaseConsoleRunner({
+		this.studioPrincipals = new StudioPrincipalRunner({
 			controlUrl: config.controlUrl,
 			nodeToken: config.nodeToken,
 			helper: this.helper,
 			log,
 		});
+		this.databasePoolerRestarts = new DatabasePoolerRestartRunner({ helper: this.helper, log });
 		// Buckets and scoped keys are desired state converged over the loopback S3/admin API; the
 		// root key and user secrets stay in the workload runtime's memory (S4).
 		this.storageAdmin = new StorageReconciler({ source: this.workloads, log });
@@ -262,7 +263,6 @@ class AgentRuntime {
 			this.databaseRotationLoop(),
 			this.databaseCredentialLoop(),
 			this.databasePoolerRestartLoop(),
-			this.databaseConsoleLoop(),
 			this.storageAdminLoop(),
 			this.storageStatsLoop(),
 		];
@@ -643,20 +643,6 @@ class AgentRuntime {
 		}
 	}
 
-	private async databaseConsoleLoop(): Promise<void> {
-		while (this.running) {
-			await sleep(5_000, this.shutdownController.signal).catch(() => undefined);
-			if (!this.running) break;
-			const state = this.desired;
-			if (!state || state.databaseConsoles.length === 0) continue;
-			try {
-				await this.databaseConsoles.runOnce(state, this.shutdownController.signal);
-			} catch (error) {
-				log('warn', `Database console task failed: ${errorText(error)}`);
-			}
-		}
-	}
-
 	private async databaseRotationLoop(): Promise<void> {
 		while (this.running) {
 			await sleep(5_000, this.shutdownController.signal).catch(() => undefined);
@@ -681,6 +667,12 @@ class AgentRuntime {
 				await this.databaseCredentials.runOnce(state, this.shutdownController.signal);
 			} catch (error) {
 				log('warn', `Database credential task failed: ${errorText(error)}`);
+			}
+			// Read-only studio principals (plan 22 track G) ride the same loop.
+			try {
+				await this.studioPrincipals.runOnce(state, this.shutdownController.signal);
+			} catch (error) {
+				log('warn', `Studio principal task failed: ${errorText(error)}`);
 			}
 		}
 	}
@@ -728,8 +720,8 @@ class AgentRuntime {
 		const pitrResults = this.databasePitr.pendingResults();
 		const rotationResults = this.databaseRotations.pendingResults();
 		const credentialResults = this.databaseCredentials.pendingResults();
+		const studioPrincipalResults = this.studioPrincipals.pendingResults();
 		const poolerRestarted = this.databasePoolerRestarts.pending();
-		const consoleResults = this.databaseConsoles.pendingResults().slice(0, 50);
 		const databaseTls = databaseTlsHeartbeat(reports);
 		// Bucket deletions and config convergence are reported once, capped by the heartbeat schema.
 		const storageBucketDeletions = this.storageAdmin.pendingBucketDeletions().slice(0, 500);
@@ -747,6 +739,7 @@ class AgentRuntime {
 			actualStateVersion: this.actualStateVersion,
 			status: requestedStatus === 'draining' ? 'draining' : this.caddyOk ? 'online' : 'offline',
 			caddyOk: this.caddyOk,
+			capabilities: [...nodeCapabilities],
 			stats,
 			releases: this.releases.listReleases(),
 			...(storage ? { storage } : {}),
@@ -755,8 +748,8 @@ class AgentRuntime {
 			...(pitrResults.length > 0 ? { databasePitrResults: pitrResults } : {}),
 			...(rotationResults.length > 0 ? { databaseRotationResults: rotationResults } : {}),
 			...(credentialResults.length > 0 ? { databaseCredentialResults: credentialResults } : {}),
+			...(studioPrincipalResults.length > 0 ? { databaseStudioPrincipalResults: studioPrincipalResults } : {}),
 			...(poolerRestarted.length > 0 ? { databasePoolerRestarted: poolerRestarted } : {}),
-			...(consoleResults.length > 0 ? { databaseConsoleResults: consoleResults } : {}),
 			...(databaseTls.length > 0 ? { databaseTls } : {}),
 			...(purgedDatabases.length > 0 ? { purgedDatabases } : {}),
 			...(purgedStorage.length > 0 ? { purgedStorage } : {}),
@@ -788,8 +781,8 @@ class AgentRuntime {
 		this.databasePitr.acknowledge(pitrResults.map((result) => result.taskId));
 		this.databaseRotations.acknowledge(rotationResults.map((result) => result.taskId));
 		this.databaseCredentials.acknowledge(credentialResults.map((result) => result.taskId));
+		this.studioPrincipals.acknowledge(studioPrincipalResults);
 		this.databasePoolerRestarts.acknowledge(poolerRestarted);
-		this.databaseConsoles.acknowledge(consoleResults);
 		this.workloads.acknowledgePurgedDatabases(purgedDatabases);
 		this.workloads.acknowledgePurgedStorage(purgedStorage);
 		this.storageAdmin.acknowledgeBucketDeletions(storageBucketDeletions);

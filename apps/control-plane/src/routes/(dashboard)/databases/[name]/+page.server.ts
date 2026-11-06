@@ -1,13 +1,11 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { CoreError, featureEnabled } from '@skiff/core';
+import { CoreError } from '@skiff/core';
 import {
 	databaseAttachSchema,
-	databaseConsoleOpenSchema,
 	databaseEngineRegistry,
 	databasePublicUrlUpdateSchema,
 	databaseUpdateSchema,
 	hasPermission,
-	type DatabaseConsoleView,
 	type DatabaseMetricPoint,
 	type DatabaseMoveView,
 	type NodeCapacityView,
@@ -22,6 +20,9 @@ import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const principal = locals.principal!;
+	// The studio used to be an in-page section (D60); old links land on its own route (D96).
+	if (url.searchParams.get('tab') === 'studio')
+		redirect(307, `/databases/${encodeURIComponent(params.name)}/studio`);
 	let database;
 	try {
 		database = core.databases.get(principal, params.name, { includeDeleted: true });
@@ -47,16 +48,6 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	);
 
 	const dbCan = databaseCan(principal);
-	const consoleEnabled = featureEnabled(core.ctx.config, 'DB_CONSOLE');
-	let databaseConsole: DatabaseConsoleView | null = null;
-	if (dbCan.console && consoleEnabled) {
-		try {
-			databaseConsole = core.databases.console(principal, params.name);
-		} catch {
-			// A missing or failed console must not take down the rest of the page.
-			databaseConsole = null;
-		}
-	}
 
 	const attached = new Set(database.attachments.map((item) => item.projectSlug));
 	let projects: Array<{ slug: string; name: string; runtime: string }> = [];
@@ -102,9 +93,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		rangeLinks,
 		projects,
 		engine: databaseEngineRegistry[database.engine],
-		dbCan,
-		consoleEnabled,
-		console: databaseConsole
+		dbCan
 	};
 };
 
@@ -121,30 +110,6 @@ export const actions: Actions = {
 		} catch (caught) {
 			return fail(failStatus(caught), toFormFailure(caught));
 		}
-	},
-
-	'studio-open': async ({ request, locals, params }) => {
-		const principal = locals.principal!;
-		const data = await request.formData();
-		// The form omits `readOnly` for the safe default; `readOnly=0` opts in to writes.
-		const readOnly = formString(data, 'readOnly') !== '0';
-		const parsed = databaseConsoleOpenSchema.safeParse({ readOnly });
-		if (!parsed.success) {
-			return fail(400, {
-				message: parsed.error.issues[0]?.message ?? 'Could not open the studio.',
-				fieldErrors: fieldErrorsFrom(parsed.error.issues)
-			});
-		}
-		try {
-			core.databases.openConsole(principal, params.name, parsed.data);
-		} catch (caught) {
-			return fail(failStatus(caught), toFormFailure(caught));
-		}
-		return {
-			success: readOnly
-				? 'Studio starting in read-only mode. It opens as soon as DBGate is ready.'
-				: 'Studio starting in read-write mode. Writes are enabled for this session only.'
-		};
 	},
 
 	'public-url': async ({ locals, params }) => {
@@ -186,16 +151,6 @@ export const actions: Actions = {
 			return fail(failStatus(caught), toFormFailure(caught));
 		}
 		return { success: 'Public URL cleared.' };
-	},
-
-	'studio-close': async ({ locals, params }) => {
-		const principal = locals.principal!;
-		try {
-			core.databases.closeConsole(principal, params.name);
-		} catch (caught) {
-			return fail(failStatus(caught), toFormFailure(caught));
-		}
-		return { success: 'Studio stopped.' };
 	},
 
 	update: async ({ request, locals, params }) => {

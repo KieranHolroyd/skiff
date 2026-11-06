@@ -161,6 +161,8 @@ export interface ContainerSpec {
 	env?: Record<string, string>;
 	command?: string[];
 	labels?: Record<string, string>;
+	/** `[hostPath, containerPath]` bind mounts, read-only. */
+	volumes?: Array<[string, string]>;
 }
 
 export class ContainerRuntime {
@@ -209,6 +211,7 @@ export class ContainerRuntime {
 		for (const [hostPort, containerPort] of spec.ports)
 			args.push('-p', `127.0.0.1:${hostPort}:${containerPort}`);
 		for (const [key, value] of Object.entries(spec.labels ?? {})) args.push('--label', `${key}=${value}`);
+		for (const [hostPath, containerPath] of spec.volumes ?? []) args.push('-v', `${hostPath}:${containerPath}:ro`);
 		args.push(spec.image, ...(spec.command ?? []));
 		await this.exec(args);
 		this.containers.push(spec.name);

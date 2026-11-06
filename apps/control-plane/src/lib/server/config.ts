@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { building } from '$app/env';
-import { parseFeatureFlags } from '@skiff/contracts';
+import { parseFeatureFlags, retiredFeatureFlagsSet } from '@skiff/contracts';
 import { isSharedDomain } from './domains';
 import { loadLocalSettings } from './local-settings';
 
@@ -93,6 +93,14 @@ export const masterKey: Uint8Array = masterKeySource
 if (masterKey.byteLength !== 32) throw new Error('SKIFF_MASTER_KEY must be 32 bytes (base64).');
 
 export const edgeNodeId = env.SKIFF_EDGE_NODE_ID || undefined;
+
+/**
+ * Where the control plane reaches the edge's internal S3 gateway (D82). Defaults to
+ * `http://127.0.0.1:8081`; `SKIFF_STORAGE_GATEWAY_URL` is for a dev control plane that does not share
+ * a host with the edge Caddy (point it at a node's Caddy listener).
+ */
+export const storageGatewayPort = Number(env.SKIFF_STORAGE_GATEWAY_PORT) || undefined;
+export const storageGatewayUrl = env.SKIFF_STORAGE_GATEWAY_URL?.replace(/\/+$/, '') || undefined;
 export const agentVersion = env.SKIFF_AGENT_VERSION ?? '0.1.0';
 export const webhookUrl = env.SKIFF_ALERT_WEBHOOK;
 export const alertEmail = env.SKIFF_ALERT_EMAIL;
@@ -105,6 +113,12 @@ export const openSignup = env.SKIFF_OPEN_SIGNUP === '1' || devPasswordLogin;
  * values are exposed by `/api/setup/status`; secrets are never involved.
  */
 export const features = parseFeatureFlags(env);
+
+// A retired flag (for example SKIFF_FEATURE_DB_CONSOLE after D96) is ignored; say so once.
+if (!building) {
+	for (const flag of retiredFeatureFlagsSet(env))
+		console.warn(`[config] ${flag.env} is no longer used and is ignored. ${flag.reason}`);
+}
 
 export const r2 =
 	objectStoreKind === 'r2'

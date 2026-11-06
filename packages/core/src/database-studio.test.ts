@@ -40,6 +40,11 @@ const core: Core = createCore({
 	},
 });
 
+// These tests are about sessions: stand in for a node that confirms every read-only principal at
+// once (track G has its own tests in database-studio-principal.test.ts).
+opened.sqlite.run(`CREATE TRIGGER test_principal_ready AFTER UPDATE OF studio_ro_generation ON databases
+	BEGIN UPDATE databases SET studio_ro_ready_generation = NEW.studio_ro_generation WHERE id = NEW.id; END`);
+
 const owner = buildPrincipal({ kind: 'user', userId: 'user_1', orgId: 'org_1', role: 'owner', platformAdmin: true });
 const viewer = buildPrincipal({ kind: 'user', userId: 'user_2', orgId: 'org_1', role: 'viewer' });
 // May use the studio but not write through it.
@@ -121,6 +126,8 @@ describe('native database studio sessions', () => {
 			idleMinutes: 15,
 			lastUsedAt: null,
 			path: '/databases/studio-db/studio',
+			principal: 'ready',
+			principalError: null,
 		});
 
 		const first = core.databaseStudio.open(owner, 'studio-db');
@@ -234,6 +241,7 @@ describe('native database studio sessions', () => {
 		const activation = core.databaseStudio.activation(edgeId, sessionId, token);
 		expect(databaseStudioActivationSchema.parse(activation)).toEqual(activation);
 		const credentials = core.databases.credentials(owner, 'studio-db');
+		const readOnly = core.databaseStudio.principals.activation(edgeId, databaseId);
 		expect(activation).toEqual({
 			v: 1,
 			sessionId,
@@ -243,8 +251,9 @@ describe('native database studio sessions', () => {
 			host: '127.0.0.1',
 			port: credentials.port,
 			database: 'studio_db',
-			user: 'studio_db',
-			password: credentials.password,
+			// A read-only session connects as the read-only principal, never the owner.
+			user: 'skiff_studio_ro',
+			password: readOnly.password,
 			tls: null,
 			readOnly: true,
 			limits: DEFAULT_STUDIO_LIMITS,
@@ -263,6 +272,7 @@ describe('native database studio sessions', () => {
 		expect(state.studio).toEqual({ port: 8083, sessions: [sessionId] });
 		expect(JSON.stringify(state)).not.toContain(token);
 		expect(JSON.stringify(state)).not.toContain(credentials.password);
+		expect(JSON.stringify(state)).not.toContain(readOnly.password);
 
 		clock = Date.parse(view.expiresAt!) + 1;
 		expect(failure(() => core.databaseStudio.activation(edgeId, sessionId, token))).toMatchObject({ status: 409, message: expect.stringMatching(/expired/) });
@@ -285,7 +295,7 @@ describe('native database studio sessions', () => {
 		expect(core.databaseStudio.activation(edgeId, cache.sessionId, cache.token)).toMatchObject({
 			engine: 'valkey',
 			database: '0',
-			user: 'cache_db',
+			user: 'skiff_studio_ro',
 		});
 		core.databaseStudio.open(owner, 'docs-db');
 		const docs = core.databaseStudio.endpoint(owner, 'docs-db');
@@ -338,12 +348,8 @@ describe('native database studio sessions', () => {
 		});
 		expect(workerState.studio).toEqual({ port: 8083, sessions: [far.sessionId!] });
 
-		// The DBGate console routes keep working beside the studio routes.
-		core.databases.openConsole(owner, 'remote-db');
-		const merged = (await core.nodes.desiredState(worker.token)).databaseGateway.routes.map((route) => route.host);
-		expect(merged).toHaveLength(2);
-		expect(merged).toEqual([...merged].sort());
-		core.databases.closeConsole(owner, 'remote-db');
+		// D96: desired state no longer carries D60 console tasks.
+		expect('databaseConsoles' in workerState).toBe(false);
 
 		withFlag(false, () => {
 			expect(core.databaseStudio.desiredForNode(edgeId)).toBeNull();

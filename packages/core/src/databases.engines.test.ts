@@ -107,7 +107,8 @@ describe('database engines', () => {
 
 		const valkey = state.workloads.find((workload) => workload.projectSlug === 'shop-cache')!;
 		expect(valkey).toMatchObject({ image: 'docker.io/valkey/valkey:9.1-alpine', env: { VALKEY_USER: 'shop_cache' } });
-		expect(Object.keys(core.workloads.activation(edgeId, valkey.id).env)).toEqual(['VALKEY_PASSWORD']);
+		// Plus the read-only studio principal, which the helper renders into the generated ACL (track G).
+		expect(Object.keys(core.workloads.activation(edgeId, valkey.id).env)).toEqual(['VALKEY_PASSWORD', 'SKIFF_STUDIO_RO_PASSWORD']);
 		const mongo = state.workloads.find((workload) => workload.projectSlug === 'shop-docs')!;
 		expect(mongo.env).toEqual({ MONGO_INITDB_ROOT_USERNAME: 'shop_docs', MONGO_INITDB_DATABASE: 'shop_docs' });
 		expect(JSON.stringify(state)).not.toContain(core.databases.credentials(owner, 'shop-sql').password);

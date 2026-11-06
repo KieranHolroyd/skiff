@@ -770,13 +770,6 @@ export class ServiceMoveService {
 						row.dataSource === 'empty'
 							? `Moving to ${targetName}: starting empty.`
 							: `Moving to ${targetName}: restoring ${row.dataSource === 'latest-backup' ? 'its latest backup' : 'the final backup'}.`,
-					consoleRequested: false,
-					consoleStatus: 'stopped',
-					consolePort: null,
-					consoleSecret: null,
-					consoleExpiresAt: null,
-					consoleError: null,
-					consoleGeneration: db.consoleGeneration + 1,
 					updatedAt: now,
 				})
 				.where(eq(databases.id, db.id))

@@ -5,7 +5,8 @@ import {
 	FEATURE_FLAG_NAMES,
 	featureEnvKey,
 	parseFeatureFlagValue,
-	parseFeatureFlags
+	parseFeatureFlags,
+	retiredFeatureFlagsSet
 } from './features.ts';
 
 describe('feature registry', () => {
@@ -15,7 +16,6 @@ describe('feature registry', () => {
 			'PITR',
 			'OBJECT_BROWSER',
 			'POOLER',
-			'DB_CONSOLE',
 			'DB_STUDIO',
 			'DB_TLS',
 			'ORG_NETWORKS',
@@ -41,8 +41,7 @@ describe('feature registry', () => {
 		expect(DEFAULT_FEATURES.BACKUPS_RESTORE).toBe(true);
 		expect(DEFAULT_FEATURES.OBJECT_BROWSER).toBe(true);
 		expect(DEFAULT_FEATURES.POOLER).toBe(true);
-		expect(DEFAULT_FEATURES.DB_CONSOLE).toBe(true);
-		expect(DEFAULT_FEATURES.DB_STUDIO).toBe(false);
+		expect(DEFAULT_FEATURES.DB_STUDIO).toBe(true);
 		expect(DEFAULT_FEATURES.QUOTAS).toBe(true);
 	});
 
@@ -143,5 +142,20 @@ describe('parseFeatureFlags', () => {
 		} as Record<string, string>);
 		expect(flags).toEqual(DEFAULT_FEATURES);
 		expect('NOT_REGISTERED' in flags).toBe(false);
+	});
+
+	test('a retired flag (DB_CONSOLE) is ignored, never an error', () => {
+		const flags = parseFeatureFlags({ SKIFF_FEATURE_DB_CONSOLE: '1' });
+		expect(flags).toEqual(DEFAULT_FEATURES);
+		expect('DB_CONSOLE' in flags).toBe(false);
+	});
+});
+
+describe('retiredFeatureFlagsSet', () => {
+	test('reports retired flags that are still set so startup can warn', () => {
+		expect(retiredFeatureFlagsSet({})).toEqual([]);
+		const set = retiredFeatureFlagsSet({ SKIFF_FEATURE_DB_CONSOLE: '0' });
+		expect(set.map((flag) => flag.env)).toEqual(['SKIFF_FEATURE_DB_CONSOLE']);
+		expect(set[0]?.reason).toContain('DB_STUDIO');
 	});
 });

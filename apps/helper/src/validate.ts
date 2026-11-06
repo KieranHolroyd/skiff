@@ -389,20 +389,6 @@ export interface WorkloadActivation {
 	files: Record<string, string>;
 }
 
-/**
- * Node-authenticated start body for a database studio (D60). It deliberately does not extend
- * `WorkloadActivation`: a console is a separate sidecar and never re-applies Postgres.
- */
-export interface WorkloadConsoleActivation {
-	databaseId: string;
-	port: number;
-	webRoot: string;
-	readOnly: boolean;
-	authUser: string;
-	authPassword: string;
-	tls?: boolean;
-}
-
 export function assertRecord(value: unknown, label: string): Record<string, unknown> {
 	if (typeof value !== 'object' || value === null || Array.isArray(value))
 		throw new ValidationError(`${label} must be an object`);
@@ -797,62 +783,6 @@ export function parseApplyRequest(value: unknown): {
 	const workload = parseWorkload(record.workload);
 	const activation = parseActivation(record.activation, workload);
 	return { workload, activation };
-}
-
-/** Parse the helper's fixed console start body: `{ workload, activation }`. */
-export function parseConsoleStartRequest(value: unknown): {
-	workload: WorkloadDesired;
-	activation: WorkloadConsoleActivation;
-} {
-	const record = assertRecord(value, 'request');
-	const workload = parseWorkload(record.workload);
-	const activation = parseConsoleActivation(record.activation);
-	if (workload.id !== activation.databaseId)
-		throw new ValidationError('activation.databaseId does not match workload.id');
-	if (!workload.database) throw new ValidationError('A studio console needs a database workload');
-	return { workload, activation };
-}
-
-/** Validate the console activation. Unknown keys are refused like every other helper body. */
-export function parseConsoleActivation(value: unknown): WorkloadConsoleActivation {
-	const record = assertRecord(value, 'activation');
-	const allowed = new Set([
-		'databaseId',
-		'port',
-		'webRoot',
-		'readOnly',
-		'authUser',
-		'authPassword',
-		'tls',
-	]);
-	for (const key of Object.keys(record)) {
-		if (!allowed.has(key)) throw new ValidationError(`activation.${key} is not supported`);
-	}
-	const databaseId = assertDatabaseId(record.databaseId, 'activation.databaseId');
-	const port = assertPort(record.port, 'activation.port');
-	const webRoot = assertHealthPath(record.webRoot, 'activation.webRoot');
-	if (webRoot.length > 200)
-		throw new ValidationError('activation.webRoot must be at most 200 characters');
-	if (typeof record.readOnly !== 'boolean')
-		throw new ValidationError('activation.readOnly must be a boolean');
-	const authUser = assertString(record.authUser, 'activation.authUser', { max: 64 });
-	const authPassword = assertString(record.authPassword, 'activation.authPassword', {
-		min: 16,
-		max: 200,
-	});
-	const parsed: WorkloadConsoleActivation = {
-		databaseId,
-		port,
-		webRoot,
-		readOnly: record.readOnly,
-		authUser,
-		authPassword,
-	};
-	if (record.tls !== undefined) {
-		if (typeof record.tls !== 'boolean') throw new ValidationError('activation.tls must be a boolean');
-		parsed.tls = record.tls;
-	}
-	return parsed;
 }
 
 /**

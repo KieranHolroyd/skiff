@@ -76,7 +76,6 @@ export const handle: Handle = async ({ event, resolve }) => {
 	if (!event.locals.principal && isAuthenticatedApi(event.url.pathname))
 		return withFrameProtection(
 			Response.json({ error: 'unauthorized', message: 'Sign in or send a valid API key.' }, { status: 401 }),
-			event.url.pathname,
 		);
 
 	// Owner second factor (D10, second-factor-policy.ts): an owner's session must have proved a
@@ -89,11 +88,11 @@ export const handle: Handle = async ({ event, resolve }) => {
 			sessionFactor: (session.session as { secondFactor?: string | null }).secondFactor,
 			hasFactor: event.locals.principal.role === 'owner' && userHasSecondFactor(session.user.id),
 		});
-		if (state !== 'satisfied') return withFrameProtection(secondFactorRequired(event), event.url.pathname);
+		if (state !== 'satisfied') return withFrameProtection(secondFactorRequired(event));
 	}
 
 	const response = await svelteKitHandler({ event, resolve, auth, building });
-	return withFrameProtection(response, event.url.pathname);
+	return withFrameProtection(response);
 };
 
 /** `/api/v1/**` except the endpoints that authenticate themselves (CLI code exchange). */
@@ -123,45 +122,31 @@ function secondFactorRequired(event: RequestEvent): Response {
 }
 
 /**
- * Nothing on the platform origin is meant to be framed, except the on-demand database studio proxy.
- * This stops clickjacking of the consent and CLI-approval pages (an attacker-registered client could
- * otherwise frame a pre-ticked consent) while letting the same origin embed DBGate.
+ * Nothing on the platform origin is meant to be framed. This stops clickjacking of the consent and
+ * CLI-approval pages (an attacker-registered client could otherwise frame a pre-ticked consent).
+ * The native database studio (D96) is a normal page, so it needs no exception.
  */
-const STUDIO_PROXY = /^\/databases\/[^/]+\/studio\/proxy(?:\/|$)/;
-
-function withFrameProtection(response: Response, pathname: string): Response {
+function withFrameProtection(response: Response): Response {
 	try {
-		applyFrameHeaders(response.headers, pathname);
+		applyFrameHeaders(response.headers);
 		return response;
 	} catch {
 		// Immutable headers (e.g. a proxied fetch response): copy once so the headers can be set.
 		const copy = new Response(response.body, response);
-		applyFrameHeaders(copy.headers, pathname);
+		applyFrameHeaders(copy.headers);
 		return copy;
 	}
 }
 
-function applyFrameHeaders(headers: Headers, pathname: string): void {
-	const studio = STUDIO_PROXY.test(pathname);
+function applyFrameHeaders(headers: Headers): void {
 	const csp = headers.get('content-security-policy');
 	// A route that explicitly allows same-origin framing (the dashboard's PDF preview) keeps it.
 	const selfFramed = /frame-ancestors\s+'self'\s*(?:;|$)/i.test(csp ?? '');
-	headers.set('x-frame-options', studio || selfFramed ? 'SAMEORIGIN' : 'DENY');
-	if (studio) {
-		headers.set('content-security-policy', withFrameAncestors(csp, "'self'"));
-	} else if (!csp?.includes('frame-ancestors')) {
+	headers.set('x-frame-options', selfFramed ? 'SAMEORIGIN' : 'DENY');
+	if (!csp?.includes('frame-ancestors')) {
 		headers.set(
 			'content-security-policy',
 			csp ? `${csp}; frame-ancestors 'none'` : "frame-ancestors 'none'",
 		);
 	}
-}
-
-/** Add or replace `frame-ancestors` in an existing CSP without duplicating the directive. */
-function withFrameAncestors(csp: string | null, value: string): string {
-	const directive = `frame-ancestors ${value}`;
-	if (!csp) return directive;
-	return /frame-ancestors\b[^;]*/i.test(csp)
-		? csp.replace(/frame-ancestors\b[^;]*/i, directive)
-		: `${csp}; ${directive}`;
 }

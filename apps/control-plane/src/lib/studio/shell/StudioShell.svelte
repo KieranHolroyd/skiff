@@ -3,6 +3,7 @@
 	import { untrack } from 'svelte';
 	import { createQuery } from '@tanstack/svelte-query';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
+	import type { DatabaseStudioPrincipalState } from '@skiff/contracts';
 	import type { TreeNode } from '@skiff/studio/protocol';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Kbd } from '#lib/components/ui/kbd/index.js';
@@ -15,6 +16,7 @@
 	import { closeSession, confirmEnableWrites, openReadOnly } from './actions.js';
 	import { setStudioShell } from './context.js';
 	import ObjectTree from './ObjectTree.svelte';
+	import PreparingAccess from './PreparingAccess.svelte';
 	import StudioErrorNotice from './StudioErrorNotice.svelte';
 	import StudioHeader from './StudioHeader.svelte';
 	import TabStrip from './TabStrip.svelte';
@@ -45,7 +47,9 @@
 		sessionId,
 		readOnly,
 		expiresAt,
-		canWrite
+		canWrite,
+		principal = 'ready',
+		principalError = null
 	}: {
 		database: string;
 		engine: string;
@@ -55,6 +59,9 @@
 		readOnly: boolean;
 		expiresAt: string | null;
 		canWrite: boolean;
+		/** A read-only session waits for the database's read-only account (track G). */
+		principal?: DatabaseStudioPrincipalState;
+		principalError?: string | null;
 	} = $props();
 
 	// Fixed for this component's life: the route remounts it per session.
@@ -63,7 +70,8 @@
 	const info = createQuery(() => ({
 		queryKey: ['studio-info', name, sessionId, readOnly],
 		queryFn: ({ signal }) => studioCall(name, 'info', {}, signal),
-		enabled: browser,
+		// Nothing to connect to until the read-only principal is ready.
+		enabled: browser && principal === 'ready',
 		staleTime: Infinity,
 		retry: false
 	}));
@@ -193,7 +201,9 @@
 		onnewquery={() => newQuery()}
 	/>
 
-	{#if info.isPending}
+	{#if principal !== 'ready'}
+		<PreparingAccess {nodeLabel} state={principal} error={principalError} onretry={openReadOnly} />
+	{:else if info.isPending}
 		<div class="flex items-center gap-2 py-10 text-sm text-muted-foreground" role="status">
 			<Spinner class="size-4" />Connecting to the studio on {nodeLabel}…
 		</div>

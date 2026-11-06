@@ -11,8 +11,8 @@ import { databaseCan, fieldErrorsFrom } from '../../_lib/forms.server.js';
 import type { Actions, PageServerLoad } from './$types';
 
 /**
- * The native database studio workspace (plan 22). Behind `DB_STUDIO`; with the flag off the route
- * does not exist and the DBGate studio on the detail page is unchanged.
+ * The native database studio workspace (plan 22, D96). `DB_STUDIO` defaults on and is kept as a
+ * kill switch: with the flag off the route does not exist and the Studio tab is hidden.
  */
 
 function requireEnabled() {
@@ -47,8 +47,7 @@ export const load: PageServerLoad = ({ locals, params }) => {
 		/** Enabling writes needs `database:update` on top of `database:console`. */
 		canWrite: dbCan.update,
 		studio,
-		studioError,
-		nativeStudio: true
+		studioError
 	};
 };
 

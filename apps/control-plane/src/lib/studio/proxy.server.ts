@@ -49,7 +49,7 @@ export interface StudioProxyDeps {
 		endpoint(principal: Principal, name: string): StudioEndpoint;
 		recordActivity(principal: Principal, name: string, activity: StudioActivity): void;
 	};
-	/** Loopback port of the edge's internal gateway (the one the DBGate proxy dials). */
+	/** Loopback port of the edge's internal database gateway (`SKIFF_DATABASE_GATEWAY_PORT`). */
 	gatewayPort: () => number;
 	fingerprint: (input: string) => string;
 	fetch?: typeof fetch;
@@ -172,7 +172,7 @@ async function proxy(deps: StudioProxyDeps, call: StudioProxyCall): Promise<Resp
 		);
 	if (!principal)
 		return studioErrorResponse(new StudioError('unauthorized', 'Sign in to use the studio.'));
-	// The studio is a human surface (D60): an API key must never reuse a user's open session.
+	// The studio is a human surface (D96): an API key must never reuse a user's open session.
 	if (principal.kind !== 'user')
 		return studioErrorResponse(
 			new StudioError('forbidden', 'The database studio needs an interactive user session.')
@@ -222,7 +222,7 @@ async function proxy(deps: StudioProxyDeps, call: StudioProxyCall): Promise<Resp
 	}
 
 	const headers = new Headers({
-		// Bun's fetch honours an explicit Host, which the gateway routes on (as the DBGate proxy does).
+		// Bun's fetch honours an explicit Host, which the gateway routes on.
 		host: endpoint.host,
 		'content-type': 'application/json',
 		// Never let the gateway compress: the body is forwarded untouched.

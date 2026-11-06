@@ -65,6 +65,17 @@ export async function runHelper(): Promise<void> {
 	if (stopping) await helper.stop();
 	log('info', `Listening on unix/${config.socketPath} (units ${config.unitDir})`);
 
+	// D96 retired the D60 studio console; clear any console sidecar a node kept from before the upgrade. Best
+	// effort and off the request path: a failure is logged and retried on the next helper start.
+	void driver
+		.removeLegacyConsoles()
+		.then((ids) => {
+			if (ids.length > 0) log('info', `Removed leftover studio console sidecars (D60): ${ids.join(', ')}`);
+		})
+		.catch((error: unknown) =>
+			log('warn', `Could not remove leftover studio console sidecars (D60): ${error instanceof Error ? error.message : String(error)}`),
+		);
+
 	// Keep the process alive until a signal resolves the stop promise.
 	await stopped;
 }

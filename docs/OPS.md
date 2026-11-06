@@ -100,7 +100,9 @@ root:skiff`.
 | `HOST_HEADER` | `x-forwarded-host` | no | Trust Caddy's forwarded host, set by the unit. |
 | `BODY_SIZE_LIMIT` | `520M` | no | adapter-bun request body cap, set by the unit. Its 512 KB default would reject artifact uploads with a bare 413; 520M covers the 500 MiB artifact limit, which the upload route enforces. |
 | `SKIFF_STORAGE_GATEWAY_PORT` | `8081` | no | Loopback port of the edge's internal S3 gateway (D82). The agent listens on `127.0.0.1:<port>`; the control plane connects there to browse bucket contents. Must match on both processes. |
-| `SKIFF_DATABASE_GATEWAY_PORT` | `8082` | no | Loopback port of the edge's internal database gateway (D60). The agent listens on `127.0.0.1:<port>` and routes `db-<label>.console.internal` to the database studio; the control plane connects there for `/databases/:name/studio/proxy/*`. Must match on both processes. |
+| `SKIFF_STORAGE_GATEWAY_URL` | — | no | Dev only: full URL of the S3 gateway, overriding `http://127.0.0.1:$SKIFF_STORAGE_GATEWAY_PORT`. Use it when the control plane is not on the edge host, pointing at a node's Caddy listener (e.g. `http://192.168.0.9:8080`); that node must hold the instance or be the edge. |
+| `SKIFF_DATABASE_GATEWAY_PORT` | `8082` | no | Loopback port of the edge's internal database gateway (D82, D96). The agent listens on `127.0.0.1:<port>` and routes each node's `n-<label>.studio.internal` host to that node's studio front; the control plane connects there for the studio's `/databases/:name/studio/api/*` calls. Must match on both processes. |
+| `SKIFF_STUDIO_PORT` | `8083` | no | Loopback port of the agent's studio front on every node (D96). The gateway routes studio hosts to `127.0.0.1:<port>`; the front forwards to `skiff-studio.service` over `/run/skiff/studio.sock`. Must match on the control plane and every agent. |
 | `SKIFF_STORAGE_OBJECT_MAX_BYTES` | `104857600` | no | Largest single object uploaded through the dashboard/API (100 MiB). Larger files need a presigned upload (public instances) or `skif storage objects put`. |
 
 ### 2.2 Secrets
@@ -173,7 +175,7 @@ the default below, so a typo cannot turn a destructive feature on. Change a flag
 | `SKIFF_FEATURE_PITR` | off | backups | Point-in-time recovery (WAL archiving and replay) for managed databases. |
 | `SKIFF_FEATURE_OBJECT_BROWSER` | off | storage | Browse, upload, download and delete objects in managed buckets. |
 | `SKIFF_FEATURE_POOLER` | off | databases | PgBouncer sidecar and pooled connection port for a managed database. |
-| `SKIFF_FEATURE_DB_CONSOLE` | **on** | databases | On-demand DBGate studio for managed databases (D60). It stays permission-gated and read-only unless the caller has `database:update`; set `0` to hide the Studio tab and API. |
+| `SKIFF_FEATURE_DB_STUDIO` | **on** | databases | Native database studio (D96): the Studio tab, `/api/v1/databases/:name/studio` and the session-only studio calls. Permission-gated (`database:console`; writes also need `database:update`). Set `0` as a kill switch: the tab and routes disappear and desired state stops listing studio sessions. |
 | `SKIFF_FEATURE_DB_TLS` | off | databases | TLS-only managed database connections (`sslmode=require`). |
 | `SKIFF_FEATURE_ORG_NETWORKS` | off | networking | Private per-org networks connecting workloads and databases. |
 | `SKIFF_FEATURE_APP_VOLUMES` | off | workloads | Persistent application volumes attached to deployed workloads. |
@@ -184,6 +186,10 @@ the default below, so a typo cannot turn a destructive feature on. Change a flag
 | `SKIFF_FEATURE_UPGRADE_ROLLBACK` | off | platform | Reserved for dashboard-triggered automatic rollback after `/readyz` fails. The CLI updater rollback path is the tested default. |
 | `SKIFF_FEATURE_BLUEPRINTS` | off | automation | Plan and apply `skiff.yaml` blueprints, including `--prune`. |
 | `SKIFF_FEATURE_MEDIA` | off | storage | Image/video uploads, transforms and delivery. |
+
+`SKIFF_FEATURE_DB_CONSOLE` (the DBGate studio, D60) is retired. It is ignored if still set, and
+the control plane logs a warning at startup; remove it from `skiff.env`. An unknown
+`SKIFF_FEATURE_*` is never an error.
 
 Rollout order is dev → single-node test → Debian 13 node → installer default. Never enable a
 destructive feature by default in the release that introduces it, and never enable
@@ -218,9 +224,28 @@ desired state or SQLite.
 | `SKIFF_HELPER_WORKLOAD_SOCKET_GROUP` | `caddy` | Group for socket-activated workload sockets. |
 | `SKIFF_HELPER_APPARMOR_PROFILE` | `auto` | `auto` sets `apparmor=unconfined` on containers only when `kernel.apparmor_restrict_unprivileged_unconfined=1` (Ubuntu 26.04 and newer kernels stack the container profile, which denies a process signalling its own children, so Postgres cannot start). `none` keeps the runtime default; any other value is passed as the profile name. |
 
-The database studio image is fixed by the helper (DBGate 7.3.4, pinned by digest); it is not
-configurable through `helper.env`, desired state or the control plane. Update it by shipping a new
-helper release.
+#### Database studio unit (D96)
+
+`skiff-studio.service` runs the native database studio's query engine: the agent binary's
+`studio` entrypoint (`/opt/skiff/current/agent/skiff-agent studio`) as `skiff`, in its own
+cgroup (`MemoryMax=256M`, separate from the agent's 192 MB) and listening only on
+`/run/skiff/studio.sock`. It holds no node token. The unit is installed by the installer and
+updater but has no `[Install]` section: nothing starts it at boot, and `systemctl enable`
+refuses it. The agent asks the helper to start it (`POST /v1/studio/start`) when a studio session
+arrives for that node, and the process exits after 5 idle minutes. The agent fronts it on
+`127.0.0.1:$SKIFF_STUDIO_PORT` (default `8083`), which only the internal database gateway
+reaches. An agent update runs `systemctl try-restart skiff-studio.service`, so a running studio
+moves to the new binary and a stopped one stays stopped. Logs are in
+`journalctl -u skiff-studio`.
+
+**DBGate removal.** The DBGate sidecar (D60) and its pinned image are gone. A node upgraded while
+a DBGate session was open can keep a `skiff-workload-<db>-console.container` Quadlet, its
+container and a `console.env` under the workload runtime directory. The helper removes these
+once, at start: it stops and disables each leftover unit, deletes its file, force-removes any
+matching container and deletes the env file, then runs `daemon-reload` only if a unit file was
+removed. It logs the database ids it cleaned up. The step is idempotent and best effort, so a
+failure is logged and retried on the next helper start. The DBGate image is not deleted; remove it
+with `podman image prune` if you need the space.
 
 A helper update is installed from the active release at `/opt/skiff/helper/skiff-helper` and
 restarted by the installer/updater. Existing container units are re-rendered on their next apply,
@@ -756,6 +781,13 @@ bun run check:migrations
 It fails on a non-sequential/duplicate prefix or on a modified/renamed/deleted existing
 migration. It prints `DROP TABLE`, `DROP COLUMN` and `ALTER COLUMN TYPE` for manual review; run
 with `--strict` to make those fail. CI runs it as its own step on every PR and push.
+
+A destructive migration that passed review is listed, with its decision, in
+`REVIEWED_DESTRUCTIVE_MIGRATIONS` (`scripts/check-migrations.ts`); its statements print as notes
+and `--strict` does not fail on them. The only one so far is
+`0033_drop_database_console.sql` (D96), which drops the retired DBGate `console_*` columns from
+`databases`. A release that has applied it cannot be rolled back with `--keep-db` to a release
+that still reads those columns; restore the pre-update snapshot instead.
 
 **Pre-update snapshot**
 

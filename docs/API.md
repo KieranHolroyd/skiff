@@ -88,7 +88,12 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 Org-owned PostgreSQL run as tier-3 containers ([DATABASES.md](./DATABASES.md), D55–D61). Names
 follow slug rules and are unique per org. Responses carry a `DatabaseView` (status, node, limits,
 `sizeBytes`, `attachments`, the latest top-50 `tables` snapshot, `deletedAt`/`purgeAt`) and never
-contain credentials, except `/credentials`, `/public-url` and the embedded studio proxy.
+contain credentials, except `/credentials` and `/public-url`.
+
+The studio workspace's own calls (`POST /databases/:name/studio/api/:op` for `tree`, `describe`,
+`browse`, `run`, `explain`, `apply` and `value`) are dashboard-only: they need the platform session
+cookie and an open studio session, refuse API keys, and are not part of the public API. Their
+wire protocol is versioned in `packages/studio/src/protocol.ts` and may change between releases.
 
 | Method | Path | Permission | Notes |
 |---|---|---|---|
@@ -112,10 +117,9 @@ contain credentials, except `/credentials`, `/public-url` and the embedded studi
 | GET/PATCH | `/databases/:name/backup-policy` | `database:read` / `database:update` | `{ enabled, schedule (five-field UTC cron), retentionDays }` |
 | GET/POST | `/databases/:name/rotate` | `database:read` / `database:credentials` + `database:update` | `{ role: owner\|monitor }` → `202 { rotation }`; the node applies ALTER ROLE before the secret swaps |
 | POST | `/databases/:name/restart` | `database:update` | `{ target: "database"\|"pooler" }` → `202 { database, target }`; database restarts the container and pooler, pooler restarts only PgBouncer |
-| GET | `/databases/:name/console` | `database:read` + `database:console` | the on-demand DBGate studio session → `{ console }`; interactive users only |
-| POST | `/databases/:name/console` | `database:console` (+ `database:update` when `readOnly: false`) | `{ readOnly? (default true), ttlMinutes? (5–480, default 60), idleMinutes? (5–240, default 15) }` → `201 { console }`; opening is a node task and never restarts Postgres |
-| DELETE | `/databases/:name/console` | `database:console` | stops the session now → `{ console }` |
-| ANY | `/databases/:name/studio/proxy/*` | `database:console` + active session | same-origin proxy for the embedded DBGate studio; injects the per-session Basic auth and never caches |
+| GET | `/databases/:name/studio` | `database:console` | the caller's native studio session (D96) → `{ studio: { sessionId, active, readOnly, expiresAt, idleMinutes, lastUsedAt, path, principal, principalError } }`; interactive users only, never the token |
+| POST | `/databases/:name/studio` | `database:console` (+ `database:update` when `readOnly: false`) | `{ readOnly? (default true), ttlMinutes? (5–480, default 60), idleMinutes? (5–240, default 15) }` → `201 { studio }`; opens or extends the caller's session; never restarts the database. A read-only session connects as the database's read-only principal (`principal` says when it is `ready`) |
+| DELETE | `/databases/:name/studio` | `database:console` | closes the caller's session now → `{ studio }` |
 | POST | `/services/restart` | `database:update` and/or `storage:update` by scope | `{ scope: "all"\|"databases"\|"storage", databases?, storage? }` → `202 { restarted, skipped }` |
 | POST | `/services/backup-databases` | `database:update` | queues a backup for every live database → `202 { queued, skipped }` |
 | GET | `/projects/:slug/databases` | `database:read` | `{ attachments }` with the env names each one injects |

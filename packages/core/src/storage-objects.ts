@@ -40,7 +40,8 @@ export class StorageObjectsService {
 
 	private client(row: StorageRow): S3Client {
 		return new S3Client({
-			endpoint: `http://127.0.0.1:${this.ctx.config.storageGatewayPort ?? 8081}`,
+			endpoint:
+				this.ctx.config.storageGatewayUrl ?? `http://127.0.0.1:${this.ctx.config.storageGatewayPort ?? 8081}`,
 			host: storageGatewayHost(row.id),
 			accessKeyId: row.rootAccessKey,
 			secretAccessKey: this.ctx.secrets.open(row.orgId, row.rootSecret),

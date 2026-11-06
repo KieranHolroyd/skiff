@@ -15,6 +15,14 @@ describe('describeStudioError', () => {
 		expect(conflict.reopen).toBe(false);
 	});
 
+	test('a read-only session waiting for its principal is not an edit conflict', () => {
+		const info = describeStudioError(
+			new StudioCallError('conflict', 'Preparing read-only access… The studio connects once the node confirms it.', 409)
+		);
+		expect(info.title).toBe('Preparing read-only access');
+		expect(info.message).not.toContain('reload the rows');
+	});
+
 	test('falls back to the error message', () => {
 		expect(describeStudioError(new Error('boom'))).toMatchObject({ code: 'internal', message: 'boom' });
 	});

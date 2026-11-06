@@ -45,6 +45,8 @@ export const nodes = sqliteTable(
 		defaultVolumeId: text('default_volume_id'),
 		/** Latest raw volume inventory (`VolumeInventory`), for the adopt/provision wizard. */
 		volumeInventoryJson: text('volume_inventory_json'),
+		/** Capabilities from the last heartbeat (JSON array); `[]` for agents that predate them. */
+		capabilitiesJson: text('capabilities_json'),
 		createdAt: integer('created_at').notNull().$defaultFn(now),
 		updatedAt: integer('updated_at').notNull().$defaultFn(now),
 	},
@@ -505,26 +507,6 @@ export const databases = sqliteTable(
 		/** PgBouncer sidecar (docs/DATABASES.md §11); null port when disabled. */
 		poolerEnabled: integer('pooler_enabled', { mode: 'boolean' }).notNull().default(false),
 		poolerPort: integer('pooler_port'),
-		/**
-		 * On-demand database studio (D60). `consoleSecret` is the DBGate basic-auth password sealed
-		 * with the org data key; it never appears in a view or desired state.
-		 */
-		consoleStatus: text('console_status', {
-			enum: ['stopped', 'starting', 'running', 'failed']
-		})
-			.notNull()
-			.default('stopped'),
-		consoleRequested: integer('console_requested', { mode: 'boolean' }).notNull().default(false),
-		consolePort: integer('console_port'),
-		consoleSecret: text('console_secret'),
-		consoleReadOnly: integer('console_read_only', { mode: 'boolean' }).notNull().default(true),
-		consoleExpiresAt: integer('console_expires_at'),
-		consoleIdleMs: integer('console_idle_ms').notNull().default(900_000),
-		consoleLastUsedAt: integer('console_last_used_at'),
-		/** Bumped on open/close; the node applies the latest generation and reports it back. */
-		consoleGeneration: integer('console_generation').notNull().default(0),
-		consoleAppliedGeneration: integer('console_applied_generation').notNull().default(0),
-		consoleError: text('console_error'),
 		/** Bumped by an explicit restart so the agent re-applies the unit without a config change. */
 		restartGeneration: integer('restart_generation').notNull().default(0),
 		/** Set while a pooler-only restart is waiting for the node to acknowledge it. */
@@ -570,6 +552,14 @@ export const databases = sqliteTable(
 		publicUrlSealed: text('public_url_sealed'),
 		publicUrlUpdatedAt: integer('public_url_updated_at'),
 		publicUrlUpdatedBy: text('public_url_updated_by'),
+		/** Read-only studio principal password (plan 22 track G), sealed with the org data key. */
+		studioRoSecret: text('studio_ro_secret'),
+		/** Bumped when the principal must be (re)applied on the node. */
+		studioRoGeneration: integer('studio_ro_generation').notNull().default(0),
+		/** The generation the node last confirmed; ready when it equals `studioRoGeneration`. */
+		studioRoReadyGeneration: integer('studio_ro_ready_generation').notNull().default(0),
+		/** Why the current generation failed on the node; never a credential. */
+		studioRoError: text('studio_ro_error'),
 	},
 	(t) => [
 		uniqueIndex('databases_org_name_idx').on(t.orgId, t.name),

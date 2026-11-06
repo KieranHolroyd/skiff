@@ -92,11 +92,12 @@ const handler: RequestHandler = async (event) => {
 			return core.databases.credentialActivation(node.id, credential[1]!);
 		}
 
-		const consoleTask = /^database-consoles\/([^/]+)$/.exec(action);
-		if (consoleTask) {
+		// The read-only studio principal's password (plan 22 track G); never in desired state.
+		const studioPrincipal = /^database-studio-principal\/([^/]+)$/.exec(action);
+		if (studioPrincipal) {
 			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
 			const node = core.nodes.authenticate(token);
-			return core.databases.consoleActivation(node.id, consoleTask[1]!);
+			return core.databaseStudio.principals.activation(node.id, studioPrincipal[1]!);
 		}
 
 		const studioSession = /^database-studio\/([^/]+)$/.exec(action);

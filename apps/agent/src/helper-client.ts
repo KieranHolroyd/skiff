@@ -1,6 +1,5 @@
 import {
 	volumeInventorySchema,
-	type DatabaseConsoleActivation,
 	type NodeVolumeDesired,
 	type VolumeInventory,
 	type WorkloadActivation,
@@ -69,10 +68,6 @@ export interface HelperApi {
 	): Promise<void>;
 	/** Restart only the PgBouncer sidecar. */
 	restartPooler(id: string): Promise<void>;
-	/** Start/replace the on-demand DBGate studio sidecar (D60). */
-	startConsole(workload: WorkloadDesired, activation: DatabaseConsoleActivation): Promise<void>;
-	/** Stop the on-demand DBGate studio sidecar. */
-	stopConsole(id: string): Promise<void>;
 	/** Write the 0400 pgBackRest config for PITR (docs/PITR.md). */
 	pitrConfigure(
 		id: string,
@@ -95,6 +90,12 @@ export interface HelperStudioApi {
 	studioStart(): Promise<void>;
 	/** `systemctl stop skiff-studio.service`; no arguments. */
 	studioStop(): Promise<void>;
+}
+
+/** The read-only studio principal verb (plan 22 track G). Apart from `HelperApi` so test fakes need not grow. */
+export interface HelperStudioPrincipalApi {
+	/** Create or update `skiff_studio_ro` in a managed database; the helper picks the engine. */
+	ensureStudioPrincipal(id: string, user: string, password: string): Promise<void>;
 }
 
 export interface HelperPitrStatus {
@@ -120,13 +121,11 @@ const PURGE_TIMEOUT_MS = 300_000;
 const STATUS_TIMEOUT_MS = 2_000;
 const VOLUME_TIMEOUT_MS = 10_000;
 const LOG_TIMEOUT_MS = 8_000;
-/** The first console start pulls the DBGate image; the helper queues the restart itself. */
-const CONSOLE_TIMEOUT_MS = 120_000;
 /** Starting or stopping the studio unit is a local systemctl call. */
 const STUDIO_TIMEOUT_MS = 30_000;
 const STATUSES: readonly WorkloadStatus[] = ['pending', 'starting', 'running', 'failed', 'stopped'];
 
-export class HelperClient implements HelperApi, HelperStudioApi {
+export class HelperClient implements HelperApi, HelperStudioApi, HelperStudioPrincipalApi {
 	constructor(
 		readonly socketPath: string,
 		private readonly timeouts: { health?: number; apply?: number } = {},
@@ -187,33 +186,17 @@ export class HelperClient implements HelperApi, HelperStudioApi {
 		);
 	}
 
-	async startConsole(
-		workload: WorkloadDesired,
-		activation: DatabaseConsoleActivation,
-	): Promise<void> {
-		await this.request(
-			'POST',
-			`/v1/workloads/${encodeURIComponent(workload.id)}/console/start`,
-			{ workload, activation },
-			CONSOLE_TIMEOUT_MS,
-		);
-	}
-
-	async stopConsole(id: string): Promise<void> {
-		await this.request(
-			'POST',
-			`/v1/workloads/${encodeURIComponent(id)}/console/stop`,
-			undefined,
-			CONSOLE_TIMEOUT_MS,
-		);
-	}
-
 	async studioStart(): Promise<void> {
 		await this.request('POST', '/v1/studio/start', undefined, STUDIO_TIMEOUT_MS);
 	}
 
 	async studioStop(): Promise<void> {
 		await this.request('POST', '/v1/studio/stop', undefined, STUDIO_TIMEOUT_MS);
+	}
+
+	async ensureStudioPrincipal(id: string, user: string, password: string): Promise<void> {
+		// Two podman execs (apply, then a login check), each bounded by the helper.
+		await this.request('POST', `/v1/workloads/${encodeURIComponent(id)}/studio-principal`, { user, password }, 150_000);
 	}
 
 	async rotateDatabaseRole(id: string, role: 'owner' | 'monitor', password: string): Promise<void> {

@@ -13,14 +13,10 @@ import {
 } from './volumes.ts';
 import {
 	DATABASE_PGDATA,
-	consoleServiceName,
-	consoleUnitName,
 	containerUnitName,
 	networkUnitName,
 	poolerServiceName,
 	poolerUnitName,
-	renderConsoleEnv,
-	renderConsoleUnit,
 	renderContainerEnvFile,
 	renderContainerUnit,
 	renderEnvFile,
@@ -48,13 +44,11 @@ import {
 	assertMemoryMb,
 	assertCpuWeight,
 	assertId,
-	assertPort,
 	assertRelativePath,
 	databaseAlias,
 	workloadNetworkName,
 	type DatabaseEngine,
 	type WorkloadActivation,
-	type WorkloadConsoleActivation,
 	type WorkloadDesired,
 	type WorkloadStatus,
 } from './validate.ts';
@@ -76,6 +70,14 @@ import {
 	type DatabaseTlsGenerator,
 	type DatabaseTlsState,
 } from './tls.ts';
+import {
+	applyStudioPrincipal,
+	assertStudioPrincipalPassword,
+	containerExec,
+	keyValueStudioPassword,
+	takeStudioPrincipalEnv,
+	withKeyValueStudioUser,
+} from './studio-principal.ts';
 
 /**
  * systemd is the primary runtime driver. This module owns *all* privileges: it writes unit files,
@@ -199,7 +201,6 @@ interface UnitPaths {
 	socket: string;
 	container: string;
 	pooler: string;
-	console: string;
 }
 
 export class SystemdDriver {
@@ -258,7 +259,6 @@ export class SystemdDriver {
 			socket: join(this.unitDir, socketUnitName(id)),
 			container: join(this.quadletDir, containerUnitName(id)),
 			pooler: join(this.quadletDir, poolerUnitName(id)),
-			console: join(this.quadletDir, consoleUnitName(id)),
 		};
 	}
 
@@ -436,6 +436,8 @@ export class SystemdDriver {
 
 		const envFile = join(workloadRuntimeDir, 'env');
 		const env = { ...workload.env, ...activation.env };
+		// The studio principal's password (track G) goes only into the Valkey/Redis server config.
+		const studioPassword = takeStudioPrincipalEnv(env);
 		// The database profile pins its data inside the /data mount; never the image's VOLUME. Each
 		// engine's fixed settings win over anything on the wire (D61).
 		if (workload.database) Object.assign(env, databaseFixedEnv(workload.database.engine, env));
@@ -524,7 +526,7 @@ export class SystemdDriver {
 				await this.chown(dataDir, owner.uid, owner.gid);
 			}
 			const tls = await this.databaseTlsFor(workload);
-			const serverConfigPath = await this.writeKeyValueConfig(workload, env, workloadRuntimeDir);
+			const serverConfigPath = await this.writeKeyValueConfig(workload, env, workloadRuntimeDir, studioPassword);
 			if (serverConfigPath) changed = serverConfigPath.changed || changed;
 			const container = renderContainerUnit({
 				workload,
@@ -625,69 +627,44 @@ export class SystemdDriver {
 	}
 
 	/**
-	 * Start (or replace) an on-demand DBGate studio sidecar (D60). The Postgres container is never
-	 * re-applied or restarted: the console is a separate Quadlet on the same network. Credentials
-	 * come from the database's own helper-written env file; the session password only reaches the
-	 * 0600 console env file.
+	 * One-off cleanup after the D60 studio console was retired (D96 supersedes D60). A node
+	 * upgraded while a console session was open can keep its sidecar Quadlet (`[Install]`-ed, so
+	 * it would come back on reboot), its container and its 0600 `console.env`. Runs at helper
+	 * start; each step is idempotent and best effort, and `daemon-reload` only runs if a unit file
+	 * went away. Returns the database ids whose leftovers were removed.
 	 */
-	async startConsole(
-		workload: WorkloadDesired,
-		activation: WorkloadConsoleActivation,
-	): Promise<void> {
-		const id = assertDatabaseId(workload.id, 'database id');
-		if (!workload.database)
-			throw new ValidationError('A studio console needs a database workload');
-		if (activation.databaseId !== id)
-			throw new ValidationError('activation.databaseId does not match workload.id');
-		const port = assertPort(activation.port, 'console port');
-		const env = await this.readDatabaseEnv(id);
+	async removeLegacyConsoles(): Promise<string[]> {
+		const ids = new Set<string>();
+		let unitRemoved = false;
+		for (const name of await fs.readdir(this.quadletDir).catch(() => [] as string[])) {
+			const id = LEGACY_CONSOLE_UNIT.exec(name)?.[1];
+			if (!id || !isDatabaseId(id)) continue;
+			await this.systemctl(['disable', '--now', `skiff-workload-${id}-console.service`], {
+				allowFailure: true,
+			});
+			unitRemoved = (await this.removeIfExists(join(this.quadletDir, name))) || unitRemoved;
+			ids.add(id);
+		}
+		if (unitRemoved) await this.daemonReload();
 
-		const runtimeDir = join(this.runtimeDir, id);
-		await fs.mkdir(runtimeDir, { recursive: true, mode: 0o700 });
-		await fs.chmod(runtimeDir, 0o700).catch(() => undefined);
-		const envFile = join(runtimeDir, 'console.env');
-		await this.writeAtomic(
-			envFile,
-			renderConsoleEnv({
-				id,
-				database: env,
-				engine: env.engine,
-				webRoot: activation.webRoot,
-				authUser: activation.authUser,
-				authPassword: activation.authPassword,
-				readOnly: activation.readOnly,
-				...(activation.tls ? { tls: true } : {}),
-			}),
-			0o600,
-		);
+		// A container can outlive its unit (for example after a failed stop); remove it by name.
+		const listed = await this.runner
+			.run([this.podmanPath, 'ps', '--all', '--format', '{{.Names}}', '--filter', 'name=-console$'])
+			.catch(() => null);
+		if (listed?.code === 0) {
+			for (const container of listed.stdout.split('\n').map((line) => line.trim())) {
+				const id = LEGACY_CONSOLE_CONTAINER.exec(container)?.[1];
+				if (!id || !isDatabaseId(id)) continue;
+				await this.runner.run([this.podmanPath, 'rm', '--force', container]).catch(() => null);
+				ids.add(id);
+			}
+		}
 
-		const paths = this.unitPaths(id);
-		await this.writeIfChanged(
-			paths.console,
-			renderConsoleUnit({
-				workload,
-				envFile,
-				port,
-				apparmorProfile: this.apparmorProfile,
-			}),
-			0o644,
-		);
-		await this.daemonReload();
-		// The unit may be disabled after a previous stop; enabling is best effort because the
-		// start below is explicit and does not depend on it.
-		await this.systemctl(['enable', consoleServiceName(id)], { allowFailure: true });
-		// The first start pulls the image under TimeoutStartSec=120; queue it like a database.
-		await this.systemctl(['restart', '--no-block', consoleServiceName(id)]);
-	}
-
-	/** Stop a studio sidecar and remove its generated unit and env file. Never touches Postgres. */
-	async stopConsole(id: string): Promise<void> {
-		assertDatabaseId(id, 'database id');
-		await this.systemctl(['disable', '--now', consoleServiceName(id)], { allowFailure: true });
-		const paths = this.unitPaths(id);
-		await this.removeIfExists(paths.console);
-		await this.removeIfExists(join(this.runtimeDir, id, 'console.env'));
-		await this.daemonReload();
+		for (const entry of await fs.readdir(this.runtimeDir).catch(() => [] as string[])) {
+			if (!isDatabaseId(entry)) continue;
+			if (await this.removeIfExists(join(this.runtimeDir, entry, 'console.env'))) ids.add(entry);
+		}
+		return [...ids].sort();
 	}
 
 	/**
@@ -702,6 +679,25 @@ export class SystemdDriver {
 	/** Stop the studio process. It normally exits by itself when idle. */
 	async stopStudio(): Promise<void> {
 		await this.systemctl(['stop', STUDIO_UNIT]);
+	}
+
+	/**
+	 * Fixed read-only studio principal verb (plan 22 track G): create or update `skiff_studio_ro`
+	 * with read rights only, then log in as it. The engine and owner come from the helper's own env
+	 * file; the statements are fixed (`studio-principal.ts`). Valkey/Redis also get the user written
+	 * into the generated server config, so it survives a restart without one now.
+	 */
+	async ensureStudioPrincipal(id: string, password: string): Promise<void> {
+		assertDatabaseId(id, 'database id');
+		assertStudioPrincipalPassword(password);
+		const env = await this.readDatabaseEnv(id);
+		await applyStudioPrincipal(containerExec([this.podmanPath], `skiff-workload-${id}`), env, password);
+		if (env.engine !== 'valkey' && env.engine !== 'redis') return;
+		const path = join(this.runtimeDir, id, 'server.conf');
+		const current = await fs.readFile(path, 'utf8').catch(() => null);
+		if (current === null) throw new ValidationError(`Database ${id} has no generated server config; start it first.`);
+		await this.writeIfChanged(path, withKeyValueStudioUser(current, password), 0o600);
+		await this.chown(path, DATABASE_ENGINES[env.engine].uid, DATABASE_ENGINES[env.engine].gid).catch(() => undefined);
 	}
 
 	/**
@@ -1297,16 +1293,22 @@ END $$;`];
 		workload: WorkloadDesired,
 		env: Record<string, string>,
 		workloadRuntimeDir: string,
+		studioPassword: string | null = null,
 	): Promise<{ path: string; changed: boolean } | null> {
 		const engine = workload.database?.engine;
 		if (engine !== 'valkey' && engine !== 'redis') return null;
 		const info = DATABASE_ENGINES[engine];
 		const path = join(workloadRuntimeDir, 'server.conf');
-		const content = renderKeyValueConfig({
+		let content = renderKeyValueConfig({
 			user: env[info.env.user] ?? '',
 			password: env[info.env.password] ?? '',
 			memoryMb: workload.memoryMb,
 		});
+		// The read-only studio principal (track G): from the activation, else kept from the current
+		// config (an activation fetched before the principal existed must not drop it).
+		const studio =
+			studioPassword ?? keyValueStudioPassword(await fs.readFile(path, 'utf8').catch(() => ''));
+		if (studio) content = withKeyValueStudioUser(content, studio);
 		const changed = await this.writeIfChanged(path, content, 0o600);
 		await this.chown(path, info.uid, info.gid).catch(() => undefined);
 		return { path, changed };
@@ -1594,10 +1596,9 @@ END $$;`];
 		await this.systemctl(['disable', '--now', serviceUnitName(id)], { allowFailure: true });
 		await this.systemctl(['disable', '--now', socketUnitName(id)], { allowFailure: true });
 		await this.systemctl(['disable', '--now', poolerServiceName(id)], { allowFailure: true });
-		await this.systemctl(['disable', '--now', consoleServiceName(id)], { allowFailure: true });
 
 		let changed = false;
-		for (const path of [paths.service, paths.socket, paths.container, paths.pooler, paths.console]) {
+		for (const path of [paths.service, paths.socket, paths.container, paths.pooler]) {
 			changed = (await this.removeIfExists(path)) || changed;
 		}
 		if (changed) await this.daemonReload();
@@ -1881,6 +1882,19 @@ END $$;`];
 				return false;
 			throw error;
 		}
+	}
+}
+
+/** Names the retired D60 studio console used; only `removeLegacyConsoles` still matches them. */
+const LEGACY_CONSOLE_UNIT = /^skiff-workload-(db_[A-Za-z0-9_-]+)-console\.container$/;
+const LEGACY_CONSOLE_CONTAINER = /^skiff-workload-(db_[A-Za-z0-9_-]+)-console$/;
+
+function isDatabaseId(value: string): boolean {
+	try {
+		assertDatabaseId(value);
+		return true;
+	} catch {
+		return false;
 	}
 }
 

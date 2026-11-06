@@ -454,7 +454,7 @@ describe('per-deployment roots, worker routes and logging', () => {
 		const value = state();
 		value.databaseGateway = {
 			listen: '127.0.0.1:8082',
-			routes: [{ host: 'db-orders.console.internal', upstream: '127.0.0.1:17432' }],
+			routes: [{ host: 'n-edge1.studio.internal', upstream: '127.0.0.1:8083' }],
 		};
 		const compiled = config(value);
 		const apps = compiled.apps as Json;
@@ -464,16 +464,16 @@ describe('per-deployment roots, worker routes and logging', () => {
 		expect(gateway.automatic_https).toEqual({ disable: true });
 		const gatewayRoutes = gateway.routes as Json[];
 		expect(gatewayRoutes.map((route) => route['@id'])).toEqual([
-			'gateway:db-orders.console.internal',
+			'gateway:n-edge1.studio.internal',
 		]);
 		const proxy = collectHandlers(gatewayRoutes[0]).find(
 			(handler) => handler.handler === 'reverse_proxy',
 		)!;
-		expect((proxy.upstreams as Json[])[0]!.dial).toBe('127.0.0.1:17432');
-		// The public content server must never expose a console host.
+		expect((proxy.upstreams as Json[])[0]!.dial).toBe('127.0.0.1:8083');
+		// The public content server must never expose a studio host.
 		expect(
 			routes(compiled).some((route) =>
-				JSON.stringify(route.match ?? null).includes('console.internal'),
+				JSON.stringify(route.match ?? null).includes('studio.internal'),
 			),
 		).toBe(false);
 	});
@@ -482,13 +482,13 @@ describe('per-deployment roots, worker routes and logging', () => {
 		const value = state();
 		value.databaseGateway = {
 			listen: null,
-			routes: [{ host: 'db-orders.console.internal', upstream: '127.0.0.1:17432' }],
+			routes: [{ host: 'n-edge1.studio.internal', upstream: '127.0.0.1:8083' }],
 		};
 		const compiled = config(value);
 		const apps = compiled.apps as Json;
 		const servers = (apps.http as Json).servers as Json;
 		expect(servers.database_gateway).toBeUndefined();
-		expect(routes(compiled)[0]!['@id']).toBe('gateway:db-orders.console.internal');
+		expect(routes(compiled)[0]!['@id']).toBe('gateway:n-edge1.studio.internal');
 	});
 
 	test('refuses a non-loopback database studio gateway listener', () => {

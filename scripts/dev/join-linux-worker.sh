@@ -173,6 +173,9 @@ runuser -u skiff -- env NODE_ENV=development SKIFF_AGENT_INSECURE_HTTP=1 \
 	/opt/skiff/current/agent/skiff-agent join "$CONTROL" \
 	--token "$TOKEN" --name "$NAME" --public-address "$LAN_IP:8080" --data-dir /var/lib/skiff/agent \
 	> /etc/skiff/agent.env.new
+# Join echoes the control plane's own origin, which is http://localhost:5173 on a dev server:
+# keep the URL this box actually reached instead.
+sed -i "s#^SKIFF_CONTROL_URL=.*#SKIFF_CONTROL_URL=$CONTROL#" /etc/skiff/agent.env.new
 mv /etc/skiff/agent.env.new /etc/skiff/agent.env
 chown root:skiff /etc/skiff/agent.env && chmod 0640 /etc/skiff/agent.env
 

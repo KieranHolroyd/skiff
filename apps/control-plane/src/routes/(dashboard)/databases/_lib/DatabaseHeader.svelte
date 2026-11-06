@@ -38,23 +38,23 @@
 		can,
 		active,
 		backups,
-		nativeStudio,
+		studioEnabled,
 		onselect
 	}: {
 		db: DatabaseView;
 		can: Can;
-		active: DatabaseTab | 'logs';
+		active: DatabaseTab | 'studio' | 'logs';
 		/** Backups count for the tab badge, when the page has it. */
 		backups?: number;
 		/**
-		 * `DB_STUDIO` is on: the Studio tab opens the native workspace route instead of the DBGate
-		 * section. Defaults to the `nativeStudio` the `[name]` layout loads.
+		 * `DB_STUDIO` is on (the default, D96). The Studio tab links to the native workspace route.
+		 * Defaults to the `studioEnabled` the `[name]` layout loads.
 		 */
-		nativeStudio?: boolean;
+		studioEnabled?: boolean;
 		onselect?: (tab: DatabaseTab) => void;
 	} = $props();
 
-	const native = $derived(nativeStudio ?? page.data.nativeStudio === true);
+	const studioOn = $derived(studioEnabled ?? page.data.studioEnabled === true);
 
 	const base = $derived(resolve('/(dashboard)/databases/[name]', { name: db.name }));
 	const studioHref = $derived(resolve('/(dashboard)/databases/[name]/studio', { name: db.name }));
@@ -80,14 +80,14 @@
 						}
 					]
 				: []),
-			...(can.console && (caps.console || native)
+			...(can.console && caps.console && studioOn
 				? [{ id: 'studio', label: 'Studio', icon: SquareTerminalIcon }]
 				: []),
 			{ id: 'settings', label: 'Settings', icon: Settings2Icon }
 		]
 			.map((item) =>
-				item.id === 'studio' && native
-					? // The native studio is its own full-height route, not an in-page section.
+				item.id === 'studio'
+					? // The studio is its own full-height route, not an in-page section.
 						{ ...item, href: studioHref, local: false }
 					: { ...item, href: tabHref(base, item.id, DATABASE_DEFAULT_TAB), local: true }
 			)

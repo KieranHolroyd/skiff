@@ -309,8 +309,8 @@ export function buildCaddyConfig(options: CompileAgentConfigOptions): Record<str
 		server.routes = [...gatewayRoutes, ...server.routes];
 	}
 
-	// On-demand database studios use the same internal-gateway pattern (D60): a loopback listener
-	// on the edge, or host routes on the WireGuard-only server for a worker.
+	// The native database studio (D96) uses the same internal-gateway pattern: one route per node's
+	// studio front, on a loopback listener on the edge or the WireGuard-only server on a worker.
 	const databaseGateway = options.state.databaseGateway;
 	const databaseGatewayRoutes = databaseGateway.routes.map((route) =>
 		compileProxyRoute(`gateway:${route.host}`, route.host, route.upstream),

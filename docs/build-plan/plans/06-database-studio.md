@@ -1,5 +1,10 @@
 # Database Studio (D60 implementation)
 
+> **Superseded by [plan 22](./22-native-studio.md) / D96 (6 Nov 2026).** The DBGate studio described
+> here was deleted at the native studio cutover: the image pin, helper `console/start|stop` verbs,
+> `databaseConsoles` tasks, iframe proxy and framing exception, and the `console_*` columns
+> (migration 0033). The helper removes leftover console sidecars once at start. Kept as history.
+
 Status: implemented, 2026-11-05. Supersedes the "pgweb or Adminer" note in D60 with **DBGate 7.3.4**, because the
 request is a full DBMS surface (SQL editor, table browser, row editing, import/export, ERD), and
 DBGate is the only open-source option that supports a subpath (`WEB_ROOT`), basic auth and

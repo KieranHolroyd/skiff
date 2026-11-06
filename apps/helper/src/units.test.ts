@@ -4,8 +4,6 @@ import {
 	quoteSystemdArg,
 	renderContainerEnvFile,
 	renderContainerUnit,
-	renderConsoleEnv,
-	renderConsoleUnit,
 	renderDatabaseUnit,
 	renderEnvFile,
 	renderStorageUnit,
@@ -19,8 +17,6 @@ import {
 	renderProcessUnit,
 	renderSliceUnit,
 	renderSocketUnit,
-	consoleServiceName,
-	consoleUnitName,
 	serviceUnitName,
 	socketUnitName,
 } from './units.ts';
@@ -448,137 +444,6 @@ describe('database pooler unit', () => {
 	});
 });
 
-describe('database console unit', () => {
-	const DB_ID = 'db_0123456789abcdef0123456789abcdef';
-
-	function database(): WorkloadDesired {
-		return parseWorkload({
-			...workload(),
-			id: DB_ID,
-			projectId: DB_ID,
-			projectSlug: 'orders',
-			deploymentId: DB_ID,
-			runtime: 'container',
-			release: null,
-			image: 'docker.io/library/postgres:17-alpine',
-			port: 15432,
-			memoryMb: 512,
-			cpus: 0.5,
-			healthPath: '/',
-			socketActivation: false,
-			env: { POSTGRES_USER: 'orders' },
-			database: { engine: 'postgres', version: '17' },
-		});
-	}
-
-	test('names the sidecar unit after the database', () => {
-		expect(consoleUnitName('db_1')).toBe('skiff-workload-db_1-console.container');
-		expect(consoleServiceName('db_1')).toBe('skiff-workload-db_1-console.service');
-	});
-
-	test('renders the single-connection env with encoded credentials', () => {
-		const env = renderConsoleEnv({
-			id: DB_ID,
-			database: { user: 'orders', password: 'p@ss:w/rd?', database: 'orders' },
-			webRoot: '/databases/orders/studio/proxy/',
-			authUser: 'skiff',
-			authPassword: 'session-password-1234',
-			readOnly: true,
-			tls: true,
-		});
-		const values = new Map(
-			env
-				.trimEnd()
-				.split('\n')
-				.map((line) => {
-					const eq = line.indexOf('=');
-					return [line.slice(0, eq), line.slice(eq + 1)] as const;
-				}),
-		);
-		expect(values.get('CONNECTIONS')).toBe('skiff');
-		expect(values.get('LABEL_skiff')).toBe('orders');
-		expect(values.get('URL_skiff')).toBe(
-			'postgres://orders:p%40ss%3Aw%2Frd%3F@db-0123456789abcdef0123456789abcdef:5432/orders?sslmode=require',
-		);
-		expect(values.get('ENGINE_skiff')).toBe('postgres@dbgate-plugin-postgres');
-		expect(values.get('SINGLE_CONNECTION')).toBe('skiff');
-		expect(values.get('SINGLE_DATABASE')).toBe('orders');
-		expect(values.get('WEB_ROOT')).toBe('/databases/orders/studio/proxy');
-		expect(values.get('LOGIN')).toBe('skiff');
-		expect(values.get('PASSWORD')).toBe('session-password-1234');
-		expect(values.get('BASIC_AUTH')).toBe('1');
-		expect(values.get('PORT')).toBe('3000');
-		expect(values.get('SHELL_CONNECTION')).toBe('0');
-		expect(values.get('SHELL_SCRIPTING')).toBe('0');
-		expect(values.get('READONLY_skiff')).toBe('1');
-	});
-
-	test('omits TLS and read-only flags when they are off', () => {
-		const env = renderConsoleEnv({
-			id: DB_ID,
-			database: { user: 'orders', password: 'secret', database: 'orders' },
-			webRoot: '/studio',
-			authUser: 'skiff',
-			authPassword: 'session-password-1234',
-			readOnly: false,
-		});
-		expect(env).not.toContain('sslmode=require');
-		expect(env).not.toContain('READONLY_skiff');
-	});
-
-	test('refuses values a container env file cannot carry', () => {
-		expect(() =>
-			renderConsoleEnv({
-				id: DB_ID,
-				database: { user: 'orders', password: 'secret', database: 'orders' },
-				webRoot: '/studio\nproxy',
-				authUser: 'skiff',
-				authPassword: 'session-password-1234',
-				readOnly: false,
-			}),
-		).toThrow(/line break/);
-	});
-
-	test('renders a loopback-only hardened sidecar on the database network', () => {
-		const unit = renderConsoleUnit({
-			workload: database(),
-			envFile: `/run/skiff-workloads/${DB_ID}/console.env`,
-			port: 17432,
-			apparmorProfile: 'unconfined',
-		});
-		for (const expected of [
-			`ContainerName=skiff-workload-${DB_ID}-console`,
-			'Image=docker.io/dbgate/dbgate:7.3.4@sha256:ac3df611',
-			'PublishPort=127.0.0.1:17432:3000',
-			'Network=skiff-workloads.network',
-			'NetworkAlias=db-0123456789abcdef0123456789abcdef-console',
-			`EnvironmentFile=/run/skiff-workloads/${DB_ID}/console.env`,
-			'Tmpfs=/root/.dbgate:rw,size=64m',
-			'Tmpfs=/tmp:rw,size=64m',
-			'DropCapability=all',
-			'NoNewPrivileges=true',
-			'ReadOnly=true',
-			'PodmanArgs=--security-opt apparmor=unconfined',
-			'Restart=no',
-			'TimeoutStartSec=300',
-			'TimeoutStopSec=30',
-			'MemoryMax=256M',
-			'CPUQuota=100%',
-			'Slice=skiff-workloads.slice',
-			'WantedBy=default.target',
-		]) {
-			expect(unit).toContain(expected);
-		}
-		expect(unit.match(/^PublishPort=/gm)).toHaveLength(1);
-	});
-
-	test('refuses a workload without a database profile', () => {
-		expect(() =>
-			renderConsoleUnit({ workload: workload(), envFile: '/run/console.env', port: 17432 }),
-		).toThrow(/database/);
-	});
-});
-
 describe('storage unit', () => {
 	const ST_ID = 'st_fedcba9876543210fedcba9876543210';
 	function storage(overrides: Record<string, unknown> = {}): WorkloadDesired {
@@ -887,21 +752,5 @@ describe('engine database units (D95)', () => {
 		expect(config).toContain('appendonly yes');
 		expect(() => renderKeyValueConfig({ user: 'orders', password: 'bad pass\nuser x on', memoryMb: 256 })).toThrow();
 		expect(() => renderKeyValueConfig({ user: 'a b', password: 'p'.repeat(32), memoryMb: 256 })).toThrow();
-	});
-
-	test('the studio env uses each engine\'s DBGate driver', () => {
-		const base = { id: DB_ID, webRoot: '/databases/orders/studio/proxy/', authUser: 'skiff', authPassword: 'x'.repeat(24), readOnly: true };
-		const creds = { user: 'orders', password: 'secret', database: 'orders' };
-		const mysql = renderConsoleEnv({ ...base, engine: 'mysql', database: creds });
-		expect(mysql).toContain('ENGINE_skiff=mysql@dbgate-plugin-mysql');
-		expect(mysql).toContain('SERVER_skiff=db-0123456789abcdef0123456789abcdef');
-		expect(mysql).toContain('PORT_skiff=3306');
-		expect(mysql).toContain('SINGLE_DATABASE=orders');
-		const mongo = renderConsoleEnv({ ...base, engine: 'mongodb', database: creds });
-		expect(mongo).toContain('URL_skiff=mongodb://orders:secret@db-0123456789abcdef0123456789abcdef:27017/orders?authSource=admin');
-		const valkey = renderConsoleEnv({ ...base, engine: 'valkey', database: { ...creds, database: '' } });
-		expect(valkey).toContain('ENGINE_skiff=redis@dbgate-plugin-redis');
-		expect(valkey).not.toContain('SINGLE_DATABASE');
-		expect(valkey).toContain('LABEL_skiff=orders');
 	});
 });

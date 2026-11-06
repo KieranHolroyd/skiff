@@ -20,7 +20,7 @@
 </svelte:head>
 
 <div class="space-y-4">
-	<DatabaseHeader {db} {can} active="studio" nativeStudio />
+	<DatabaseHeader {db} {can} active="studio" />
 
 	{#if !can.console}
 		<Notice tone="warning" title="Studio access required">
@@ -51,6 +51,8 @@
 				readOnly={session.readOnly}
 				expiresAt={session.expiresAt}
 				canWrite={data.canWrite}
+				principal={session.principal}
+				principalError={session.principalError}
 			/>
 		{/key}
 	{/if}

@@ -53,12 +53,26 @@ export interface MigrationCheckInput {
 export interface MigrationCheckOptions {
 	/** Treat destructive statements as errors instead of warnings. */
 	strict?: boolean;
+	/** Migrations whose destructive statements were reviewed; defaults to the repo's list. */
+	reviewed?: Readonly<Record<string, string>>;
 }
+
+/**
+ * Destructive migrations that passed review, with the decision that allows them. Their statements
+ * are reported as notes rather than warnings, and `--strict` does not fail on them. Add an entry
+ * only with the migration's decision record (docs/OPS.md §4.2.2).
+ */
+export const REVIEWED_DESTRUCTIVE_MIGRATIONS: Readonly<Record<string, string>> = Object.freeze({
+	'0033_drop_database_console.sql':
+		'D96: drops the retired D60 studio console columns; nothing reads them after the cutover.'
+});
 
 export interface MigrationCheckResult {
 	ok: boolean;
 	errors: string[];
 	warnings: string[];
+	/** Destructive statements in reviewed migrations, with the reason; never errors. */
+	notes: string[];
 	migrations: MigrationEntry[];
 	destructive: DestructiveStatement[];
 }
@@ -104,6 +118,8 @@ export function checkMigrations(
 ): MigrationCheckResult {
 	const errors: string[] = [];
 	const warnings: string[] = [];
+	const notes: string[] = [];
+	const reviewed = options.reviewed ?? REVIEWED_DESTRUCTIVE_MIGRATIONS;
 	const migrations: MigrationEntry[] = [];
 	const seen = new Map<number, string>();
 
@@ -164,6 +180,13 @@ export function checkMigrations(
 		destructive.push(...findDestructiveStatements(name, sql));
 	}
 	for (const statement of destructive) {
+		const reason = reviewed[statement.file];
+		if (reason) {
+			notes.push(
+				`${MIGRATIONS_DIR}/${statement.file}:${statement.line}: ${statement.statement} (reviewed: ${reason})`
+			);
+			continue;
+		}
 		const message = `${MIGRATIONS_DIR}/${statement.file}:${statement.line}: ${statement.statement} needs manual review (additive migrations only)`;
 		if (options.strict) errors.push(message);
 		else warnings.push(message);
@@ -173,6 +196,7 @@ export function checkMigrations(
 		ok: errors.length === 0,
 		errors,
 		warnings,
+		notes,
 		migrations,
 		destructive
 	};
@@ -238,6 +262,7 @@ function main(): void {
 	console.log(
 		`check-migrations: ${result.migrations.length} migration(s), compared with ${baseRef}`
 	);
+	for (const note of result.notes) console.log(`note: ${note}`);
 	for (const warning of result.warnings) console.warn(`warning: ${warning}`);
 	for (const error of result.errors) console.error(`error: ${error}`);
 	if (!result.ok) {

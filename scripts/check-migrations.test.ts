@@ -121,6 +121,20 @@ describe('destructive statements', () => {
 		expect(strict.ok).toBe(false);
 		expect(strict.errors.join('\n')).toContain('DROP TABLE needs manual review');
 	});
+
+	test('a reviewed migration is a note, even in strict mode', () => {
+		const input = {
+			names: ['0001_init.sql', '0002_drop.sql'],
+			contents: { '0001_init.sql': 'DROP TABLE old;', '0002_drop.sql': 'ALTER TABLE t DROP COLUMN c;' }
+		};
+		const result = checkMigrations(input, { strict: true, reviewed: { '0002_drop.sql': 'D1: reviewed' } });
+		expect(result.notes).toEqual([
+			'packages/db/migrations/0002_drop.sql:1: DROP COLUMN (reviewed: D1: reviewed)'
+		]);
+		// Only the unreviewed file fails.
+		expect(result.errors).toHaveLength(1);
+		expect(result.errors[0]).toContain('0001_init.sql');
+	});
 });
 
 describe('repository migrations', () => {
@@ -128,6 +142,8 @@ describe('repository migrations', () => {
 		const result = checkMigrations(readMigrations(`${import.meta.dir}/..`));
 		expect(result.errors).toEqual([]);
 		expect(result.warnings).toEqual([]);
+		// Every destructive statement in the stream is a reviewed exception.
+		expect(result.notes.every((note) => note.includes('(reviewed: '))).toBe(true);
 		expect(result.migrations[0]?.prefix).toBe(1);
 	});
 });

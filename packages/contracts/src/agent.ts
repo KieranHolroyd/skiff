@@ -1,5 +1,6 @@
 import * as z from 'zod';
 import { nodeStudioDesiredSchema } from './database-studio.ts';
+import { databaseStudioPrincipalResultSchema, databaseStudioPrincipalTaskSchema } from './database-studio-principal.ts';
 import { accessModes, deploymentStatuses, nodeStatuses, runtimes } from './model.ts';
 import { domainKinds } from './domain.ts';
 import { workloadDesiredSchema, workloadStatuses } from './workload.ts';
@@ -7,8 +8,6 @@ import { databaseMetricBucketSchema, databaseSnapshotSchema } from './database.t
 import { databaseBackupResultSchema, databaseBackupTaskSchema } from './database-backup.ts';
 import { databasePitrResultSchema, databasePitrTaskSchema } from './database-pitr.ts';
 import {
-	databaseConsoleResultSchema,
-	databaseConsoleTaskSchema,
 	databaseCredentialResultSchema,
 	databaseCredentialTaskSchema,
 	databaseRotationResultSchema,
@@ -124,17 +123,17 @@ export const desiredStateSchema = z.object({
 	databaseRotations: z.array(databaseRotationTaskSchema).default([]),
 	/** Named database credentials to grant or revoke (plan 04b). */
 	databaseCredentialTasks: z.array(databaseCredentialTaskSchema).default([]),
+	/** Read-only studio principals to (re)apply, by generation (plan 22 track G). Never the password. */
+	databaseStudioPrincipals: z.array(databaseStudioPrincipalTaskSchema).default([]),
 	/** Database ids whose PgBouncer sidecar must be restarted (docs/DATABASES.md §11). */
 	databasePoolerRestarts: z.array(z.string()).default([]),
-	/** On-demand database studio start/stop tasks (D60). */
-	databaseConsoles: z.array(databaseConsoleTaskSchema).default([]),
 	/** Registered volumes this node must know about, for volume-backed data dirs (D74). */
 	volumes: z.array(nodeVolumeDesiredSchema).default([]),
 	/** Internal S3 gateway routes the control plane uses to manage object contents (D81). */
 	storageGateway: storageGatewaySchema.default({ listen: null, routes: [] }),
 	/** Native studio front (plan 22): listen port and live session ids, or null when off. */
 	studio: nodeStudioDesiredSchema.nullable().default(null),
-	/** Internal gateway routes the control plane uses to reach on-demand database studios (D60). */
+	/** Internal gateway route the control plane uses to reach the node's studio front (D96). */
 	databaseGateway: storageGatewaySchema.default({ listen: null, routes: [] }),
 	/** Public storage endpoints this node serves (S3): byte-for-byte proxies, not sites. */
 	storageRoutes: z.array(storageRouteSchema).default([]),
@@ -151,12 +150,25 @@ export const desiredStateSchema = z.object({
 });
 export type DesiredState = z.infer<typeof desiredStateSchema>;
 
+/**
+ * Capabilities an agent build declares in its heartbeat. Add one whenever the control plane hands
+ * out desired-state work an older agent would drop without a word.
+ * - `studio-principal`: applies `databaseStudioPrincipals` (plan 22 track G).
+ */
+export const nodeCapabilities = ['studio-principal'] as const;
+export type NodeCapability = (typeof nodeCapabilities)[number];
+
 export const heartbeatSchema = z.object({
 	nodeId: z.string(),
 	agentVersion: z.string(),
 	actualStateVersion: z.number().int().nonnegative(),
 	status: z.enum(nodeStatuses),
 	caddyOk: z.boolean(),
+	/**
+	 * What this agent build can do (`nodeCapabilities`). Lets the control plane refuse work an older
+	 * agent would silently ignore instead of waiting on it. Absent from agents that predate it.
+	 */
+	capabilities: z.array(z.string().min(1).max(64)).max(32).optional(),
 	stats: z.object({
 		cpuPercent: z.number().nonnegative(),
 		memoryBytes: z.number().int().nonnegative(),
@@ -197,10 +209,15 @@ export const heartbeatSchema = z.object({
 	databaseRotationResults: z.array(databaseRotationResultSchema).max(50).optional(),
 	/** Outcomes of `databaseCredentialTasks` since the last heartbeat. */
 	databaseCredentialResults: z.array(databaseCredentialResultSchema).max(50).optional(),
+	/** Outcomes of `databaseStudioPrincipals` since the last heartbeat. */
+	databaseStudioPrincipalResults: z.array(databaseStudioPrincipalResultSchema).max(50).optional(),
 	/** Database ids whose pooler restart the node completed. */
 	databasePoolerRestarted: z.array(z.string()).max(50).optional(),
-	/** Outcomes of `databaseConsoles` start/stop tasks (D60). */
-	databaseConsoleResults: z.array(databaseConsoleResultSchema).max(50).optional(),
+	/**
+	 * Retired with the D60 studio console (D96). 0.7.x agents may still send console results;
+	 * they are accepted and ignored. Remove once no 0.7.x agents remain.
+	 */
+	databaseConsoleResults: z.array(z.unknown()).max(50).optional(),
 	/** TLS state derived from the helper's certificate files (CA PEM is public, never a key). */
 	databaseTls: z
 		.array(

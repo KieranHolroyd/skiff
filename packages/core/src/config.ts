@@ -48,6 +48,12 @@ export interface CoreConfig {
 	 */
 	storageGatewayPort?: number;
 	/**
+	 * Full URL of the S3 gateway, overriding `http://127.0.0.1:<storageGatewayPort>`. For a dev
+	 * control plane that does not share a host with the edge Caddy: point it at a node's Caddy
+	 * listener (e.g. `http://192.168.0.9:8080`), which routes `s3-<id>.storage.internal` itself.
+	 */
+	storageGatewayUrl?: string;
+	/**
 	 * Loopback port of the edge's internal database gateway (Caddy). The control plane reaches an
 	 * on-demand studio on any node through it (D60), mirroring the S3 gateway (D82).
 	 */
@@ -94,6 +100,7 @@ export function coreConfigFromEnv(overrides: Partial<CoreConfig> & Pick<CoreConf
 		edgeNodeId: overrides.edgeNodeId ?? env.SKIFF_EDGE_NODE_ID,
 		storageGatewayPort:
 			overrides.storageGatewayPort ?? positiveInteger(env.SKIFF_STORAGE_GATEWAY_PORT, 8081),
+		storageGatewayUrl: overrides.storageGatewayUrl ?? (env.SKIFF_STORAGE_GATEWAY_URL?.replace(/\/+$/, '') || undefined),
 		databaseGatewayPort:
 			overrides.databaseGatewayPort ?? positiveInteger(env.SKIFF_DATABASE_GATEWAY_PORT, 8082),
 		studioPort: overrides.studioPort ?? positiveInteger(env.SKIFF_STUDIO_PORT, STUDIO_DEFAULT_PORT),
