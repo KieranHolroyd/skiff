@@ -203,7 +203,10 @@ Unique across the platform; a second org claiming a verified domain gets 409.
   both until the new one verifies, then retires the old key after 7 days.
 - **Cloudflare.** When the domain sits in the platform's Cloudflare zone, or the org supplies a
   zone-scoped token, Skiff creates the records itself (grey, `comment: skiff-email`). Otherwise the
-  dashboard and `get_email_domain` show them to copy. The Cloudflare client widens from
+  dashboard and `get_email_domain` show them to copy. The setup guide's **Set up for me** button
+  (`publishDomain`) writes them on demand when the zone is covered, for a domain added with
+  automatic records off or before the token was saved; unlike the quiet publish in `checkDomain`,
+  Cloudflare errors reach the user. The Cloudflare client widens from
   `CNAME | A` to `CNAME | A | TXT | MX` (`packages/core/src/domains.ts`).
 
 ### 4.2 Records per domain

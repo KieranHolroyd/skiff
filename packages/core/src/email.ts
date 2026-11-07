@@ -580,24 +580,58 @@ export class EmailService {
 		return this.toDomainView(await this.runCheck(this.ctx.db.select().from(emailDomains).where(eq(emailDomains.id, row.id)).get()!));
 	}
 
-	/** Create the domain's records through Cloudflare when its zone is ours. Never overwrites SPF/DMARC. */
-	private async publishDomainRecords(row: EmailDomainRow): Promise<void> {
-		if (!this.cloudflare || !this.inZone(row.name)) return;
+	/**
+	 * Create the domain's records through Cloudflare when its zone is ours. Never overwrites
+	 * SPF/DMARC. Returns the purposes written this time (records already in place are skipped).
+	 */
+	private async publishDomainRecords(row: EmailDomainRow): Promise<string[]> {
+		if (!this.cloudflare || !this.inZone(row.name)) return [];
 		const managed = parseJson<Record<string, string>>(row.managedJson, {});
+		const written: string[] = [];
 		const dkim = this.expectedRecords(row).find((record) => record.purpose === 'dkim')!;
+		const dkimFound = (await this.txtValues(dkim.name)).some((value) => value.replace(/\s+/g, '').includes(`p=${row.dkimPublic}`));
 		const dkimId = await this.upsertRecord({ type: 'TXT', name: dkim.name, content: dkim.value });
-		if (dkimId) managed.dkim = dkimId;
+		if (dkimId) {
+			managed.dkim = dkimId;
+			if (!dkimFound) written.push('dkim');
+		}
 		const existingSpf = await this.txtValues(row.name).then((values) => values.find((value) => /^v=spf1(\s|$)/i.test(value)) ?? null);
 		if (!existingSpf) {
 			const id = await this.upsertRecord({ type: 'TXT', name: row.name, content: mergeSpf(null, spfInclude(this.mailDomain())) });
-			if (id) managed.spf = id;
+			if (id) {
+				managed.spf = id;
+				written.push('spf');
+			}
 		}
 		const dmarc = await this.txtValues(`_dmarc.${row.name}`);
 		if (!dmarc.some((value) => /^v=DMARC1/i.test(value))) {
 			const id = await this.upsertRecord({ type: 'TXT', name: `_dmarc.${row.name}`, content: suggestedDmarc(row.name) });
-			if (id) managed.dmarc = id;
+			if (id) {
+				managed.dmarc = id;
+				written.push('dmarc');
+			}
 		}
 		this.ctx.db.update(emailDomains).set({ managedJson: JSON.stringify(managed) }).where(eq(emailDomains.id, row.id)).run();
+		return written;
+	}
+
+	/** Whether Skiff can write this domain's records itself: a Cloudflare token for the zone it sits in. */
+	managesDns(name: string): boolean {
+		return this.inZone(name.trim().toLowerCase());
+	}
+
+	/**
+	 * "Set up for me": write the domain's records through Cloudflare now, then re-check. Unlike the
+	 * quiet publish in `checkDomain`, Cloudflare errors reach the caller.
+	 */
+	async publishDomain(principal: Principal, name: string): Promise<{ domain: EmailDomainView; written: string[] }> {
+		requirePermission(principal, 'email:update');
+		const row = this.domainRow(principal, name);
+		if (!this.inZone(row.name))
+			throw new ValidationError(`${row.name} isn't in the Cloudflare zone Skiff manages; add its records at your DNS host.`);
+		const written = await this.publishDomainRecords(row);
+		this.ctx.audit.record({ principal, action: 'email.domain.publish', resource: 'email', resourceId: row.id, args: { name: row.name, written }, result: 'ok' });
+		return { domain: this.toDomainView(await this.runCheck(this.domainRow(principal, name))), written };
 	}
 
 	private async txtValues(name: string): Promise<string[]> {

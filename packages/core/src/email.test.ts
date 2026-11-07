@@ -169,6 +169,19 @@ describe('domains', () => {
 		expect(txt.get('_dmarc.app.skiff.test')).toEqual(['v=DMARC1; p=none; rua=mailto:dmarc@app.skiff.test']);
 	});
 
+	test('"set up for me" writes the records of a domain added without them', async () => {
+		const added = await core.email.createDomain(admin, { name: 'later.skiff.test', autoDns: false });
+		expect(added.status).toBe('pending');
+		expect(core.email.managesDns('later.skiff.test')).toBe(true);
+		const { domain, written } = await core.email.publishDomain(admin, 'later.skiff.test');
+		expect(written).toEqual(['dkim', 'spf', 'dmarc']);
+		expect(domain.status).toBe('verified');
+		expect((await core.email.publishDomain(admin, 'later.skiff.test')).written).toEqual([]);
+		expect(core.email.managesDns('example.com')).toBe(false);
+		await expect(core.email.publishDomain(tenant, 'example.com')).rejects.toThrow(/Cloudflare zone/);
+		await expect(core.email.publishDomain(viewer, 'example.com')).rejects.toThrow();
+	});
+
 	test('one org per domain; the platform names are reserved; viewers cannot add domains', async () => {
 		await expect(core.email.createDomain(admin, { name: 'example.com' })).rejects.toThrow(/another organisation/);
 		await expect(core.email.createDomain(admin, { name: 'bounces.skiff.test' })).rejects.toThrow(/platform/);

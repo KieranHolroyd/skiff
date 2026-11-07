@@ -15,6 +15,7 @@
 	import SendIcon from '@lucide/svelte/icons/send';
 	import SettingsIcon from '@lucide/svelte/icons/settings';
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
+	import WandSparklesIcon from '@lucide/svelte/icons/wand-sparkles';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { EMAIL_SANDBOX_LIMITS, emailEnvNames } from '@skiff/contracts';
 	import { runAction } from '#lib/actions.js';
@@ -106,6 +107,13 @@
 		checkingDomain = true;
 		await runAction('?/check', { name });
 		checkingDomain = false;
+	}
+
+	let settingUp = $state(false);
+	async function setupDomain(name: string) {
+		settingUp = true;
+		await runAction('?/setup', { name });
+		settingUp = false;
 	}
 
 	async function recheck() {
@@ -402,15 +410,27 @@
 												>{domain.name}</a
 											>
 											{#if area.can.update}
-												<Button
-													size="sm"
-													variant="outline"
-													onclick={() => checkDomain(domain.name)}
-													disabled={checkingDomain}
-												>
-													{#if checkingDomain}<Spinner />{:else}<RefreshCwIcon />{/if}
-													Check DNS now
-												</Button>
+												<div class="flex flex-wrap items-center gap-2">
+													{#if data.pendingAutoDns}
+														<Button
+															size="sm"
+															onclick={() => setupDomain(domain.name)}
+															disabled={settingUp || checkingDomain}
+														>
+															{#if settingUp}<Spinner />{:else}<WandSparklesIcon />{/if}
+															Set up for me
+														</Button>
+													{/if}
+													<Button
+														size="sm"
+														variant="outline"
+														onclick={() => checkDomain(domain.name)}
+														disabled={checkingDomain || settingUp}
+													>
+														{#if checkingDomain}<Spinner />{:else}<RefreshCwIcon />{/if}
+														Check DNS now
+													</Button>
+												</div>
 											{/if}
 										</div>
 										<ul class="divide-y">
@@ -455,6 +475,14 @@
 											{/each}
 										</ul>
 									</div>
+									{#if data.pendingAutoDns && area.can.update}
+										<p class="text-xs text-muted-foreground">
+											{domain.name} is in the Cloudflare zone Skiff has a token for, so
+											<span class="font-medium text-foreground">Set up for me</span> creates the DKIM record,
+											plus SPF and DMARC where the domain has none. Existing SPF and DMARC records are never
+											overwritten.
+										</p>
+									{/if}
 									<p class="text-xs text-muted-foreground">
 										New records usually show up within a few minutes, sometimes up to an hour. Skiff also
 										re-checks every domain daily.

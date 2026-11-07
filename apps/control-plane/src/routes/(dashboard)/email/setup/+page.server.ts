@@ -52,6 +52,8 @@ export const load: PageServerLoad = ({ locals }) => {
 			sending: domain.sending
 		})),
 		pending,
+		/** A Cloudflare token covers the pending domain's zone, so "Set up for me" can write its records. */
+		pendingAutoDns: pending ? core.email.managesDns(pending.name) : false,
 		delivered,
 		appSent: sentFromApp(recent),
 		credentials,
@@ -62,7 +64,27 @@ export const load: PageServerLoad = ({ locals }) => {
 	};
 };
 
+const PURPOSE: Record<string, string> = { dkim: 'DKIM', spf: 'SPF', dmarc: 'DMARC' };
+
 export const actions: Actions = {
+	setup: async ({ request, locals }) => {
+		const name = formString(await request.formData(), 'name');
+		if (!name) return fail(400, { message: 'A domain name is required.' });
+		try {
+			const { domain, written } = await core.email.publishDomain(locals.principal!, name);
+			const what = written.length
+				? `Created the ${written.map((purpose) => PURPOSE[purpose] ?? purpose).join(', ')} records in Cloudflare.`
+				: 'The records were already in Cloudflare.';
+			return {
+				success:
+					domain.status === 'verified'
+						? `${what} ${domain.name} is verified.`
+						: `${what} DNS can take a few minutes to update; Skiff keeps checking.`
+			};
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
 	check: async ({ request, locals }) => {
 		const name = formString(await request.formData(), 'name');
 		if (!name) return fail(400, { message: 'A domain name is required.' });
