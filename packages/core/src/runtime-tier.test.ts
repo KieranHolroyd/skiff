@@ -62,7 +62,7 @@ const resolvedFunction = {
 	compatibilityDate: '2026-01-01',
 	compatibilityFlags: [],
 	bindings: [],
-	triggers: { crons: [] },
+	triggers: { crons: [], queues: [] },
 	assets: { directory: 'public', runWorkerFirst: ['/api/*'] },
 	idleStopSeconds: 300,
 	workerdVersion: WORKERD_PINNED_VERSION,
@@ -81,7 +81,7 @@ const functionBundle = () => [
 			compatibilityDate: '2026-01-01',
 			compatibilityFlags: [],
 			bindings: [],
-			triggers: { crons: [] },
+			triggers: { crons: [], queues: [] },
 			assets: { directory: 'public', runWorkerFirst: ['/api/*'] },
 			idleStopSeconds: 300,
 			memoryMb: 128,
@@ -350,6 +350,6 @@ describe('the fourth runtime tier, end to end', () => {
 					bindings: [{ name: 'ROOM', type: 'durable_object', className: 'Room', uniqueKey: 'prj_room' }],
 				},
 			}),
-		).toThrow(/Functions with stateful bindings \(durable_object, kv, cache, queue, d1\) run one host/);
+		).toThrow(/Functions with stateful bindings \(durable_object, kv, cache, d1\) run one host/);
 	});
 });

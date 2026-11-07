@@ -107,8 +107,8 @@ npm install -g @skiffy/skiff                    # or: bun add -g / npx @skiffy/s
 
 skif login --url https://control.example.com    # approve the CLI in your browser
 skif deploy ./dist                              # zip, upload, promote
-# Functions: a project with wrangler.jsonc is bundled by Wrangler automatically
-skif deploy .                                   # runs `wrangler deploy --dry-run` on the client
+# Functions: a project with wrangler.jsonc is bundled by Skiff's own pinned bundler
+skif deploy .                                   # no Wrangler install needed to deploy
 skif wrangler dev                               # local Workers runtime, same as production
 skif status my-site
 skif rollback my-site                           # production back one deployment

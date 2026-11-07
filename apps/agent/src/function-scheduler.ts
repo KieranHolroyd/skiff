@@ -17,7 +17,8 @@ import { atomicWriteFile } from './state.ts';
  *
  * Three duties, all local — no control-plane round trip:
  *
- * - **Scale to zero**: a function host that has served nothing for `idleStopSeconds` is stopped.
+ * - **Scale to zero**: a function host, or a socket-activated process app with `idleStopSeconds`
+ *   (D121), that has served nothing for `idleStopSeconds` is stopped.
  *   The socket unit keeps listening (`RemoveOnStop=yes` is on the socket, not the service), so the
  *   next request cold-starts the host through socket activation. `0` means always on.
  * - **Runaway watchdog**: every `watchdogIntervalMs` each running host is probed at
@@ -66,6 +67,12 @@ const CRON_TIMEOUT_MS = 60_000;
 const CRON_STATE_VERSION = 1;
 
 type FunctionWorkload = WorkloadDesired & { function: FunctionRuntimeSpec };
+
+/** A unit the idle sweep may stop: a function host, or a process app that scales to zero (D121). */
+interface IdleTarget {
+	workload: WorkloadDesired;
+	idleStopSeconds: number;
+}
 
 interface CronCursor {
 	workloadId: string;
@@ -167,14 +174,26 @@ export class FunctionScheduler {
 			functions.push(workload as FunctionWorkload);
 		}
 
-		const statuses = await this.readStatuses(functions);
-		await this.sweepIdle(functions, statuses, now);
+		// Process apps that scale to zero (D121) share the idle sweep, never the watchdog or cron:
+		// those are workerd-specific (the shim's `/__skiff/*` routes).
+		const idleTargets: IdleTarget[] = functions.map((workload) => ({
+			workload,
+			idleStopSeconds: workload.function.idleStopSeconds,
+		}));
+		for (const workload of state.workloads) {
+			if (workload.runtime !== 'process' || !workload.idleStopSeconds) continue;
+			if (workload.status === 'stopped' || !workload.socketActivation) continue;
+			idleTargets.push({ workload, idleStopSeconds: workload.idleStopSeconds });
+		}
+
+		const statuses = await this.readStatuses(idleTargets.map((target) => target.workload));
+		await this.sweepIdle(idleTargets, statuses, now);
 		await this.runWatchdog(functions, statuses, now, signal);
 		await this.runCron(functions, now, signal);
 	}
 
 	/** Helper state per workload; a failure is logged and leaves the workload "unknown". */
-	private async readStatuses(workloads: FunctionWorkload[]): Promise<Map<string, WorkloadStatus>> {
+	private async readStatuses(workloads: WorkloadDesired[]): Promise<Map<string, WorkloadStatus>> {
 		const statuses = new Map<string, WorkloadStatus>();
 		for (const workload of workloads) {
 			try {
@@ -193,13 +212,13 @@ export class FunctionScheduler {
 	 * transition (a restart or an apply) resets the timer: the host just started working again.
 	 */
 	private async sweepIdle(
-		workloads: FunctionWorkload[],
+		targets: IdleTarget[],
 		statuses: Map<string, WorkloadStatus>,
 		now: number,
 	): Promise<void> {
 		const liveIds = new Set<string>();
 		const liveProjects = new Set<string>();
-		for (const workload of workloads) {
+		for (const { workload, idleStopSeconds } of targets) {
 			liveIds.add(workload.id);
 			liveProjects.add(workload.projectId);
 			const status = statuses.get(workload.id) ?? null;
@@ -214,7 +233,6 @@ export class FunctionScheduler {
 			if (!this.lastActivityByProject.has(workload.projectId))
 				this.lastActivityByProject.set(workload.projectId, now);
 
-			const idleStopSeconds = workload.function.idleStopSeconds;
 			if (!this.activityEnabled || idleStopSeconds <= 0) continue;
 			if (status !== 'running') continue;
 			const lastActivity = this.lastActivityByProject.get(workload.projectId)!;
@@ -225,9 +243,9 @@ export class FunctionScheduler {
 				// The watchdog in this same pass must not probe the host we just stopped.
 				statuses.set(workload.id, 'stopped');
 				this.previousStatus.set(workload.id, 'stopped');
-				this.log('info', `Function ${workload.id} stopped after ${Math.round(idleMs / 1_000)}s idle`);
+				this.log('info', `${idleLabel(workload)} ${workload.id} stopped after ${Math.round(idleMs / 1_000)}s idle`);
 			} catch (error) {
-				this.log('warn', `Function ${workload.id} idle stop failed: ${errorText(error)}`);
+				this.log('warn', `${idleLabel(workload)} ${workload.id} idle stop failed: ${errorText(error)}`);
 			}
 		}
 
@@ -445,6 +463,10 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 		const timer = setTimeout(finish, ms);
 		signal.addEventListener('abort', finish, { once: true });
 	});
+}
+
+function idleLabel(workload: WorkloadDesired): string {
+	return workload.runtime === 'function' ? 'Function' : 'Process app';
 }
 
 function errorText(error: unknown): string {

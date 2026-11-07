@@ -83,7 +83,7 @@ export const load: LayoutServerLoad = ({ locals, url, cookies }) => {
 		},
 		contentDomain,
 		/** Opt-in tiers the shell offers (docs/OPS.md §2.5). Functions stay hidden until switched on. */
-		features: { functions: features.FUNCTIONS },
+		features: { functions: features.FUNCTIONS, brokers: features.BROKERS },
 		/** Optional in-dashboard assistant; hidden until an owner configures a provider. */
 		assistant: assistantStatus(),
 		/** shadcn sidebar persists its collapsed state in this cookie. */

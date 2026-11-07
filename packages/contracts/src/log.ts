@@ -51,7 +51,7 @@ export interface LogQueryResult {
 }
 
 /** Managed-service logs (RustFS, Postgres) use the same level/stream vocabulary. */
-export const serviceLogKinds = ['storage', 'database'] as const;
+export const serviceLogKinds = ['storage', 'database', 'broker'] as const;
 export type ServiceLogKind = (typeof serviceLogKinds)[number];
 
 export interface ServiceLogEvent {

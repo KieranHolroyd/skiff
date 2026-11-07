@@ -790,7 +790,7 @@ describe.skipIf(!WORKERD_BIN)('rendered configs compile with workerd', () => {
 		{ name: 'HTTP_CACHE', type: 'cache' },
 		{ name: 'BUCKET', type: 'r2', storage: 'media', bucket: 'uploads', envPrefix: 'MEDIA' },
 		{ name: 'SQL', type: 'd1', database: 'main', namespaceId: 'prj_1-SQL' },
-		{ name: 'JOBS', type: 'queue', queue: 'jobs', producer: true, namespaceId: 'prj_1-JOBS' },
+		{ name: 'JOBS', type: 'queue', queue: 'jobs', producer: true, broker: 'events', envPrefix: 'NATS' },
 		{ name: 'EVENTS', type: 'analytics_engine', dataset: 'events' },
 		{ name: 'ASSETS', type: 'assets' },
 	];
@@ -801,6 +801,9 @@ describe.skipIf(!WORKERD_BIN)('rendered configs compile with workerd', () => {
 		MEDIA_SECRET_ACCESS_KEY: 'secret',
 		MEDIA_REGION: 'us-east-1',
 		MEDIA_FORCE_PATH_STYLE: 'true',
+		NATS_PORT: '14222',
+		NATS_USER: 'events',
+		NATS_PASSWORD: 'secret',
 	};
 
 	async function compiles(bindings: unknown[]): Promise<void> {

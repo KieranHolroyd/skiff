@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, gt, inArray, sql } from 'drizzle-orm';
-import { builds, databases, logEvents, projects, serviceLogEvents, storageInstances, workloads } from '@skiff/db';
+import { brokerLogEvents, brokers, builds, databases, logEvents, projects, serviceLogEvents, storageInstances, workloads } from '@skiff/db';
 import {
 	levelForBuildLine,
 	parseLogLine,
@@ -150,7 +150,23 @@ export class LogService {
 			? undefined
 			: this.ctx.db.select().from(databases).where(eq(databases.id, batch.workloadId)).get();
 		const service = storage ?? database;
-		if (!service) return 0;
+		if (!service) {
+			// Brokers keep their own log table (0048); the service checks node ownership.
+			if (!this.ctx.brokers.isBrokerId(batch.workloadId)) return 0;
+			return this.ctx.brokers.appendRuntimeLogs(
+				nodeId,
+				batch.workloadId,
+				batch.lines.map((line) => {
+					const parsed = parseLogLine(line.message);
+					return {
+						stream: line.stream,
+						level: parsed.level ?? line.level,
+						message: sanitize(parsed.message),
+						ts: Number.isFinite(line.ts) ? Math.max(0, Number(line.ts)) : parsed.ts ?? this.ctx.now(),
+					};
+				}),
+			);
+		}
 		if (service.nodeId !== nodeId)
 			throw new CoreError('forbidden', 'This service is placed on another node.', 403);
 		if (batch.lines.length === 0) return 0;
@@ -183,11 +199,27 @@ export class LogService {
 		level?: LogLevel;
 		message: string;
 	}): void {
+		if (input.kind === 'broker') {
+			this.ctx.db
+				.insert(brokerLogEvents)
+				.values({
+					orgId: input.orgId,
+					brokerId: input.serviceId,
+					nodeId: input.nodeId ?? null,
+					source: 'system',
+					stream: 'system',
+					level: input.level ?? 'info',
+					message: sanitize(input.message),
+					ts: this.ctx.now(),
+				})
+				.run();
+			return;
+		}
 		this.ctx.db
 			.insert(serviceLogEvents)
 			.values({
 				orgId: input.orgId,
-				kind: input.kind,
+				kind: input.kind as Exclude<ServiceLogKind, 'broker'>,
 				serviceId: input.serviceId,
 				nodeId: input.nodeId ?? null,
 				source: 'system',
@@ -207,6 +239,7 @@ export class LogService {
 		input: ServiceLogQuery = {},
 	): ServiceLogQueryResult {
 		requirePermission(principal, 'logs:read');
+		if (kind === 'broker') return this.queryBroker(principal, serviceId, input);
 		const orgId =
 			kind === 'storage'
 				? this.ctx.db
@@ -268,6 +301,58 @@ export class LogService {
 					ts: row.ts,
 					kind: row.kind,
 					serviceId: row.serviceId,
+					source: row.source,
+					stream: row.stream,
+					...present(row.source, row.level, row.message),
+				}),
+			),
+			cursor: rows.at(-1)?.seq ?? after ?? 0,
+			hasMore,
+		};
+	}
+
+	/** `queryService` for a broker: the same cursor and filters over `broker_log_events` (0048). */
+	private queryBroker(principal: Principal, brokerId: string, input: ServiceLogQuery): ServiceLogQueryResult {
+		const owner = this.ctx.db.select({ orgId: brokers.orgId }).from(brokers).where(eq(brokers.id, brokerId)).get();
+		if (!owner || owner.orgId !== principal.orgId) throw new CoreError('not_found', 'Service not found.', 404);
+		const requested = Number(input.limit ?? DEFAULT_LIMIT);
+		const limit = Number.isFinite(requested)
+			? Math.max(1, Math.min(Math.floor(requested), MAX_LIMIT))
+			: DEFAULT_LIMIT;
+		const conditions = [eq(brokerLogEvents.orgId, principal.orgId), eq(brokerLogEvents.brokerId, brokerId)];
+		if (input.level) {
+			const index = LEVEL_ORDER.indexOf(input.level);
+			conditions.push(inArray(brokerLogEvents.level, LEVEL_ORDER.slice(Math.max(0, index))));
+		}
+		const q = input.q?.trim();
+		if (q) conditions.push(sql`instr(lower(${brokerLogEvents.message}), lower(${q.slice(0, 200)})) > 0`);
+		const after = input.after;
+		let rows =
+			after !== undefined
+				? this.ctx.db
+						.select()
+						.from(brokerLogEvents)
+						.where(and(...conditions, gt(brokerLogEvents.seq, after)))
+						.orderBy(asc(brokerLogEvents.seq))
+						.limit(limit + 1)
+						.all()
+				: this.ctx.db
+						.select()
+						.from(brokerLogEvents)
+						.where(and(...conditions))
+						.orderBy(desc(brokerLogEvents.seq))
+						.limit(limit + 1)
+						.all()
+						.reverse();
+		const hasMore = rows.length > limit;
+		if (hasMore) rows = after !== undefined ? rows.slice(0, limit) : rows.slice(1);
+		return {
+			events: rows.map(
+				(row): ServiceLogEvent => ({
+					seq: row.seq,
+					ts: row.ts,
+					kind: 'broker',
+					serviceId: row.brokerId,
 					source: row.source,
 					stream: row.stream,
 					...present(row.source, row.level, row.message),
@@ -389,7 +474,19 @@ export class LogService {
 			'DELETE FROM service_log_events WHERE seq IN (SELECT seq FROM service_log_events ORDER BY seq DESC LIMIT -1 OFFSET ?)',
 			[MAX_ROWS],
 		);
-		return expired.changes + overflow.changes + expiredService.changes + overflowService.changes;
+		const expiredBroker = this.ctx.sqlite.run('DELETE FROM broker_log_events WHERE ts < ?', [now - retentionMs]);
+		const overflowBroker = this.ctx.sqlite.run(
+			'DELETE FROM broker_log_events WHERE seq IN (SELECT seq FROM broker_log_events ORDER BY seq DESC LIMIT -1 OFFSET ?)',
+			[MAX_ROWS],
+		);
+		return (
+			expired.changes +
+			overflow.changes +
+			expiredService.changes +
+			overflowService.changes +
+			expiredBroker.changes +
+			overflowBroker.changes
+		);
 	}
 }
 

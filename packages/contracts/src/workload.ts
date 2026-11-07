@@ -1,10 +1,13 @@
 import * as z from 'zod';
 import { databaseExtensionAllowlist, databaseMonitorSchema, workloadDatabaseSchema } from './database.ts';
 import { storageAdminSchema, workloadObjectStorageSchema } from './object-storage.ts';
+import { workloadBrokerSchema } from './broker.ts';
 import { githubRunnerSchema } from './github-runner.ts';
 import {
+	FUNCTION_PYTHON_MIN_MEMORY_MB,
 	FUNCTION_STATEFUL_REPLICA_MESSAGE,
 	functionBindingIsStateful,
+	functionIsPython,
 	functionRuntimeSpecSchema,
 } from './function.ts';
 
@@ -35,6 +38,40 @@ export type WorkloadIngress = (typeof workloadIngresses)[number];
  */
 export const MAX_WORKLOAD_REPLICAS = 20;
 export type WorkloadRuntime = (typeof workloadRuntimes)[number];
+
+/** Upper bound for a process app's idle stop (D121), the same day-long cap functions use. */
+export const PROCESS_MAX_IDLE_STOP_SECONDS = 86_400;
+
+/**
+ * Why a spec cannot scale to zero, or null when it can (D121). Scale to zero needs a socket that
+ * keeps listening while the unit is stopped, so it is only for socket-activated HTTP process apps
+ * with one copy (process replicas share the project socket). Functions use their manifest field.
+ */
+export function processIdleStopIssue(spec: {
+	runtime: WorkloadRuntime;
+	socketActivation: boolean;
+	ingress: WorkloadIngress;
+	replicas: number;
+}): { path: string; message: string } | null {
+	if (spec.runtime !== 'process')
+		return {
+			path: 'idleStopSeconds',
+			message:
+				spec.runtime === 'function'
+					? 'Functions set idle stop in their manifest (skiff.idleStopSeconds in wrangler.jsonc).'
+					: 'Idle stop is for process apps; containers are always on.',
+		};
+	if (spec.ingress !== 'http')
+		return { path: 'idleStopSeconds', message: 'Workers have no requests to wake them; idle stop needs HTTP ingress.' };
+	if (!spec.socketActivation)
+		return {
+			path: 'socketActivation',
+			message: 'Idle stop needs socket activation: the socket keeps listening and starts the app on the next request.',
+		};
+	if (spec.replicas > 1)
+		return { path: 'replicas', message: 'Idle stop needs a single replica (replicas share one socket).' };
+	return null;
+}
 
 /** `env` injects `NAME=value`; `file` writes a 0400 file and points `NAME_FILE` at it. */
 export const secretDeliveryModes = ['env', 'file'] as const;
@@ -77,6 +114,13 @@ export const workloadSpecSchema = z
 		healthPath: z.string().startsWith('/').max(512).default('/'),
 		/** Process only: pass the listen socket with `LISTEN_FDS` (systemd socket activation). */
 		socketActivation: z.boolean().default(true),
+		/**
+		 * Process only (D121): stop the unit after this many seconds without a request; the socket
+		 * keeps listening and the next request cold-starts it. Needs socket activation, so the app
+		 * must adopt the inherited listener (fd 3). Absent or `0` means always on. Functions set
+		 * the same thing on their manifest (`function.idleStopSeconds`, FN4).
+		 */
+		idleStopSeconds: z.number().int().min(0).max(PROCESS_MAX_IDLE_STOP_SECONDS).optional(),
 		/** Plain (readable) environment variables captured in the config snapshot. */
 		env: workloadEnvSchema,
 		/** Write-only secret references, resolved at activation. Values never live in the spec. */
@@ -117,6 +161,12 @@ export const workloadSpecSchema = z
 				});
 			if (spec.ingress !== 'http')
 				ctx.addIssue({ code: 'custom', path: ['ingress'], message: 'Functions need HTTP ingress.' });
+			if (spec.function && functionIsPython(spec.function) && spec.memoryMb < FUNCTION_PYTHON_MIN_MEMORY_MB)
+				ctx.addIssue({
+					code: 'custom',
+					path: ['memoryMb'],
+					message: `A Python function needs at least ${FUNCTION_PYTHON_MIN_MEMORY_MB} MB (Pyodide is about 230 MB resident).`,
+				});
 			if (spec.replicas > 1 && spec.function?.bindings.some((binding) => functionBindingIsStateful(binding.type)))
 				ctx.addIssue({
 					code: 'custom',
@@ -140,6 +190,10 @@ export const workloadSpecSchema = z
 			ctx.addIssue({ code: 'custom', path: ['data'], message: 'Runners are ephemeral and cannot keep a data directory.' });
 		if (spec.runtime === 'process' && spec.image)
 			ctx.addIssue({ code: 'custom', path: ['image'], message: 'Process workloads cannot set an image.' });
+		if ((spec.idleStopSeconds ?? 0) > 0) {
+			const issue = processIdleStopIssue(spec);
+			if (issue) ctx.addIssue({ code: 'custom', path: [issue.path], message: issue.message });
+		}
 		if (spec.runtime === 'container' && spec.command)
 			ctx.addIssue({ code: 'custom', path: ['command'], message: 'Container workloads cannot set a command.' });
 		if (spec.runtime === 'container' && !spec.image)
@@ -353,6 +407,11 @@ export const workloadDesiredSchema = z.object({
 	port: z.number().int().positive(),
 	healthPath: z.string(),
 	socketActivation: z.boolean(),
+	/**
+	 * Process apps that scale to zero (D121): the agent stops the unit after this many idle
+	 * seconds and leaves the socket listening. Omitted when off, so other desired state is unchanged.
+	 */
+	idleStopSeconds: z.number().int().positive().optional(),
 	/** Hash of the public spec + secret refs; a change tells the agent to re-fetch activation. */
 	activationVersion: z.string().length(64),
 	/** Public env vars only; secret values arrive through the activation endpoint. */
@@ -367,6 +426,8 @@ export const workloadDesiredSchema = z.object({
 	pooler: z.object({ port: z.number().int().positive() }).optional(),
 	/** Managed object storage profile (S1); buckets and scoped users are converged by the agent. */
 	objectStorage: workloadObjectStorageSchema.optional(),
+	/** Managed queue broker profile (D111); the helper derives image, user, config and mounts. */
+	broker: workloadBrokerSchema.optional(),
 	/**
 	 * Managed services only: the node volume the data dir lives on (D74). The helper resolves the
 	 * mount path from its own registry and fails the start if it is not mounted (D76).

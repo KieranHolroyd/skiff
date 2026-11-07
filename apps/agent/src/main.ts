@@ -1,9 +1,12 @@
-import { promises as fs } from 'node:fs';
+import { existsSync, promises as fs, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
 	desiredStateSchema,
 	heartbeatSchema,
 	nodeCapabilities,
+	FUNCTIONS_PYTHON_CAPABILITY,
+	WORKERD_INSTALL_DIR,
+	WORKERD_PINNED_VERSION,
 	workloadActivationSchema,
 	type DesiredState,
 	type Heartbeat,
@@ -29,6 +32,7 @@ import { DatabasePoolerRestartRunner } from './database-pooler-restarts.ts';
 import { DatabaseRotationRunner } from './database-rotations.ts';
 import { DATABASE_STATS_INTERVAL_MS, DatabaseStatsSampler } from './database-stats.ts';
 import { FunctionScheduler } from './function-scheduler.ts';
+import { FunctionQueueConsumers } from './function-queues.ts';
 import { HelperClient } from './helper-client.ts';
 import { formatEnv, JOIN_USAGE, joinNode, nodeFilePath, parseJoinArgs } from './join.ts';
 import { WorkloadLogDrain } from './log-drain.ts';
@@ -107,6 +111,7 @@ class AgentRuntime {
 	private readonly storageAdmin: StorageReconciler;
 	private readonly storageStats: StorageStatsSampler;
 	private readonly functions: FunctionScheduler;
+	private readonly functionQueues: FunctionQueueConsumers;
 
 	private desired: DesiredState | null = null;
 	private desiredEtag: string | null = null;
@@ -231,6 +236,13 @@ class AgentRuntime {
 			activityEnabled: Boolean(config.caddyAccessLog),
 			log,
 		});
+		// Function queues on managed brokers (D112): pull batches and deliver them to the shim.
+		this.functionQueues = new FunctionQueueConsumers({
+			socketDir: config.workloadSocketDir,
+			fetchActivation: (id, signal) => this.fetchWorkloadActivation(id, signal),
+			noteActivity: (projectId) => this.functions.noteActivity(projectId),
+			log,
+		});
 	}
 
 	async run(): Promise<void> {
@@ -331,6 +343,7 @@ class AgentRuntime {
 			this.storageAdminLoop(),
 			this.storageStatsLoop(),
 			this.functions.run(() => this.desired, this.shutdownController.signal),
+			this.functionQueues.run(() => this.desired, this.shutdownController.signal),
 		];
 		if (this.config.logDrain)
 			this.loops.push(this.logDrain.run(() => this.desired, this.shutdownController.signal));
@@ -836,6 +849,7 @@ class AgentRuntime {
 		// Purged data dirs (D59, S8); cleared only once the control plane accepts this heartbeat.
 		const purgedDatabases = this.workloads.pendingPurgedDatabases();
 		const purgedStorage = this.workloads.pendingPurgedStorage();
+		const purgedBrokers = this.workloads.pendingPurgedBrokers();
 		const volumeInventory = await this.volumeInventoryForHeartbeat();
 		const backupResults = this.databaseBackups.pendingResults();
 		const pitrResults = this.databasePitr.pendingResults();
@@ -861,7 +875,7 @@ class AgentRuntime {
 			actualStateVersion: this.actualStateVersion,
 			status: requestedStatus === 'draining' ? 'draining' : this.caddyOk ? 'online' : 'offline',
 			caddyOk: this.caddyOk,
-			capabilities: [...nodeCapabilities],
+			capabilities: advertisedCapabilities(),
 			stats,
 			...(hardware ? { hardware } : {}),
 			...(nodeCertificate ? { nodeCertificate } : {}),
@@ -879,6 +893,7 @@ class AgentRuntime {
 			...(databaseTls.length > 0 ? { databaseTls } : {}),
 			...(purgedDatabases.length > 0 ? { purgedDatabases } : {}),
 			...(purgedStorage.length > 0 ? { purgedStorage } : {}),
+			...(purgedBrokers.length > 0 ? { purgedBrokers } : {}),
 			...(storageBucketDeletions.length > 0 ? { storageBucketDeletions } : {}),
 			...(storageBucketConfigs.length > 0 ? { storageBucketConfigs } : {}),
 			...(volumeInventory ? { volumes: volumeInventory } : {}),
@@ -912,6 +927,7 @@ class AgentRuntime {
 		await this.nodeUpdate.acknowledge(nodeUpdateResult);
 		this.workloads.acknowledgePurgedDatabases(purgedDatabases);
 		this.workloads.acknowledgePurgedStorage(purgedStorage);
+		this.workloads.acknowledgePurgedBrokers(purgedBrokers);
 		this.storageAdmin.acknowledgeBucketDeletions(storageBucketDeletions);
 		this.storageAdmin.acknowledgeBucketConfigs(storageBucketConfigs);
 		return true;
@@ -1283,4 +1299,21 @@ if (import.meta.main) {
 			process.exitCode = 1;
 		});
 	}
+}
+
+/**
+ * The static capabilities plus `functions-python` when the warmed Pyodide cache for the pinned
+ * workerd is on disk (D121). Checked on every heartbeat, so installing the cache later takes effect
+ * without restarting the agent.
+ */
+export function advertisedCapabilities(
+	pyodideDir: string = process.env.SKIFF_PYODIDE_CACHE_DIR ?? `${WORKERD_INSTALL_DIR}/${WORKERD_PINNED_VERSION}/pyodide`,
+): string[] {
+	let python = false;
+	try {
+		python = existsSync(pyodideDir) && readdirSync(pyodideDir).some((name) => name.endsWith('.capnp.bin'));
+	} catch {
+		python = false;
+	}
+	return python ? [...nodeCapabilities, FUNCTIONS_PYTHON_CAPABILITY] : [...nodeCapabilities];
 }

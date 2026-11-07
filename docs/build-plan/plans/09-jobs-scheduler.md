@@ -18,7 +18,7 @@ policy, logs, and history, running the same immutable release in the same sandbo
 
 ## Non-goals
 
-- A general workflow/DAG engine, queues, or event-driven choreography.
+- A general workflow/DAG engine or event-driven choreography. Queues are managed brokers (D111).
 - Multi-step pipelines with branching (that is a later workflow product, if ever).
 - Running arbitrary host commands; jobs run the release's command in the workload sandbox.
 - Replacing the Builder's build queue.

@@ -1,0 +1,10 @@
+{
+	// A Python Worker on Skiff Functions (D121). `skif deploy` runs the build command, then ships
+	// src/*.py and the vendored python_modules/.
+	"name": "python-function",
+	"main": "src/entry.py",
+	"compatibility_date": "2026-10-01",
+	"build": { "command": "uv run pywrangler sync" },
+	"vars": { "GREETING": "hello from Python" },
+	"triggers": { "crons": ["*/15 * * * *"] }
+}

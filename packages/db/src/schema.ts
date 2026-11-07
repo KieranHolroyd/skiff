@@ -1036,6 +1036,89 @@ export const storageShareLinks = sqliteTable(
 	],
 );
 
+/**
+ * Managed queue brokers (docs/BROKERS.md, D111). One broker server per row, run as a tier-3
+ * container on `nodeId`. `engine` is unconstrained (0048); the contracts registry validates it.
+ */
+export const brokers = sqliteTable(
+	'brokers',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		name: text('name').notNull(),
+		// Mirrors `brokerEngines` in @skiff/contracts.
+		engine: text('engine', { enum: ['nats'] }).notNull().default('nats'),
+		version: text('version').notNull(),
+		nodeId: text('node_id').notNull(),
+		hostPort: integer('host_port').notNull(),
+		memoryMb: integer('memory_mb').notNull(),
+		cpus: real('cpus').notNull().default(0.5),
+		/** Persistent message store cap (JetStream file store), in MB. */
+		storageMb: integer('storage_mb').notNull().default(2_048),
+		/** Node volume holding the data dir; null keeps the helper state dir (D74). */
+		volumeId: text('volume_id'),
+		/** Bumped by an explicit restart; folded into the activation version. */
+		restartGeneration: integer('restart_generation').notNull().default(0),
+		status: text('status', { enum: ['pending', 'starting', 'running', 'failed', 'stopped'] })
+			.notNull()
+			.default('pending'),
+		message: text('message'),
+		/** The single client user's password, sealed with the org data key. */
+		ownerSecret: text('owner_secret').notNull(),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+		deletedAt: integer('deleted_at'),
+		purgeAt: integer('purge_at'),
+		/** Set when the purge was handed to the node; the row goes once the node reports it (D59). */
+		purgeRequestedAt: integer('purge_requested_at'),
+	},
+	(t) => [
+		uniqueIndex('brokers_org_name_idx').on(t.orgId, t.name),
+		uniqueIndex('brokers_node_port_idx').on(t.nodeId, t.hostPort),
+		index('brokers_node_idx').on(t.nodeId),
+		index('brokers_deleted_idx').on(t.deletedAt),
+	],
+);
+
+export const brokerAttachments = sqliteTable(
+	'broker_attachments',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		brokerId: text('broker_id').notNull(),
+		projectId: text('project_id').notNull(),
+		envPrefix: text('env_prefix').notNull().default('NATS'),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+	},
+	(t) => [
+		uniqueIndex('broker_attachments_pair_idx').on(t.brokerId, t.projectId),
+		uniqueIndex('broker_attachments_prefix_idx').on(t.projectId, t.envPrefix),
+		index('broker_attachments_project_idx').on(t.projectId),
+	],
+);
+
+/** Broker runtime logs; the same shape as `service_log_events`, whose `kind` CHECK predates brokers. */
+export const brokerLogEvents = sqliteTable(
+	'broker_log_events',
+	{
+		seq: integer('seq').primaryKey({ autoIncrement: true }),
+		orgId: text('org_id').notNull(),
+		brokerId: text('broker_id').notNull(),
+		nodeId: text('node_id'),
+		source: text('source', { enum: ['runtime', 'system'] }).notNull().default('runtime'),
+		stream: text('stream', { enum: ['stdout', 'stderr', 'system'] }).notNull().default('stdout'),
+		level: text('level', { enum: ['debug', 'info', 'warn', 'error'] }).notNull().default('info'),
+		message: text('message').notNull(),
+		ts: integer('ts').notNull(),
+	},
+	(t) => [
+		index('broker_log_events_broker_seq_idx').on(t.brokerId, t.seq),
+		index('broker_log_events_ts_idx').on(t.ts),
+	],
+);
+
 export const storageAttachments = sqliteTable(
 	'storage_attachments',
 	{

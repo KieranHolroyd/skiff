@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
-import { databaseCapabilities } from '@skiff/contracts';
+import { databaseCapabilities, functionIsPython } from '@skiff/contracts';
 import type {
+	BrokerEngine,
 	DatabaseEngine,
 	DatabaseMonitor,
 	DesiredState,
@@ -13,6 +14,7 @@ import type {
 import type { DatabaseTarget, DatabaseTargetSource } from './database-stats.ts';
 import { renderWorkerdConfigParts } from './function-config.ts';
 import { renderFunctionShim } from './function-shim.ts';
+import { renderPythonFunctionShim } from './function-shim-python.ts';
 import type { StorageTarget, StorageTargetSource } from './storage-admin.ts';
 import type { HelperApi, HelperWorkloadStatus } from './helper-client.ts';
 import type { ReleaseManager } from './releases.ts';
@@ -141,6 +143,8 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 	private storages = new Map<string, WorkloadDesired>();
 	/** Purged storage ids not yet acknowledged by a heartbeat. */
 	private readonly purgedStoragePending = new Set<string>();
+	/** Purged broker ids not yet acknowledged by a heartbeat (D111). */
+	private readonly purgedBrokerPending = new Set<string>();
 	private retryAt = 0;
 	private pendingFailure = false;
 	/** Desired workloads from the last converge, for the runner recycler (plan 21). */
@@ -330,6 +334,16 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 		if (held && held.activationVersion === activationVersion) held.monitor.ownerPassword = null;
 	}
 
+	/** Purged broker ids for the next heartbeat's `purgedBrokers`. */
+	pendingPurgedBrokers(): string[] {
+		return [...this.purgedBrokerPending].sort();
+	}
+
+	/** Call only after the control plane accepted a heartbeat that carried these ids. */
+	acknowledgePurgedBrokers(ids: readonly string[]): void {
+		for (const id of ids) this.purgedBrokerPending.delete(id);
+	}
+
 	/** Purged database ids for the next heartbeat's `purgedDatabases`. */
 	pendingPurgedDatabases(): string[] {
 		return [...this.purgedPending].sort();
@@ -389,7 +403,8 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 
 		const databasePurgeFailed = await this.purgeManaged('database', state.databasePurges ?? [], listedIds, signal);
 		const storagePurgeFailed = await this.purgeManaged('storage', state.storagePurges ?? [], listedIds, signal);
-		const purgeFailed = databasePurgeFailed || storagePurgeFailed;
+		const brokerPurgeFailed = await this.purgeManaged('broker', state.brokerPurges ?? [], listedIds, signal);
+		const purgeFailed = databasePurgeFailed || storagePurgeFailed || brokerPurgeFailed;
 
 		if (desired.length === 0) {
 			if (purgeFailed) this.scheduleRetry();
@@ -438,17 +453,18 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 	}
 
 	/**
-	 * Hand `databasePurges` / `storagePurges` to the helper (D59, S8). An id that is still listed as
+	 * Hand `databasePurges` / `storagePurges` / `brokerPurges` to the helper (D59, S8, D111). An id that is still listed as
 	 * a workload is never purged, whatever the purge list says; an id already purged and awaiting
 	 * its heartbeat is not purged twice. Returns true when a purge failed and needs a retry.
 	 */
 	private async purgeManaged(
-		kind: 'database' | 'storage',
+		kind: 'database' | 'storage' | 'broker',
 		ids: readonly string[],
 		listedIds: ReadonlySet<string>,
 		signal: AbortSignal,
 	): Promise<boolean> {
-		const pending = kind === 'database' ? this.purgedPending : this.purgedStoragePending;
+		const pending =
+			kind === 'database' ? this.purgedPending : kind === 'storage' ? this.purgedStoragePending : this.purgedBrokerPending;
 		let failed = false;
 		for (const id of new Set(ids)) {
 			if (signal.aborted) return true;
@@ -653,7 +669,7 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 			} else if (workload.ingress !== 'none') {
 				this.log(
 					'warn',
-					`Workload ${id} (${workload.projectSlug}) did not answer ${workload.database ? `on 127.0.0.1:${workload.port}` : workload.objectStorage ? STORAGE_HEALTH_PATH : workload.healthPath} yet; reporting starting`,
+					`Workload ${id} (${workload.projectSlug}) did not answer ${workload.database || workload.broker ? `on 127.0.0.1:${workload.port}` : workload.objectStorage ? STORAGE_HEALTH_PATH : workload.healthPath} yet; reporting starting`,
 				);
 			}
 		} catch (error) {
@@ -686,7 +702,8 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 		const rendered = renderWorkerdConfigParts({ workload, releaseDir, env });
 		return {
 			config: rendered.config,
-			shim: renderFunctionShim({ main: spec.main }),
+			// A Python Worker gets the binding-based shim in a Worker of its own (D121).
+			shim: functionIsPython(spec) ? renderPythonFunctionShim() : renderFunctionShim({ main: spec.main }),
 			// Binding-service modules are omitted entirely when empty, so phase-1 requests keep
 			// their original two-field `function` body.
 			...(Object.keys(rendered.files).length > 0 ? { files: rendered.files } : {}),
@@ -831,6 +848,8 @@ export async function probeWorkloadHealth(
 	// Workers (plan 21) listen on nothing; the caller only probes a unit systemd reports active.
 	if (workload.ingress === 'none') return true;
 	if (workload.database) return probeDatabasePort(workload.port, signal, { engine: workload.database.engine });
+	if (workload.broker)
+		return probeDatabasePort(workload.port, signal, { handshake: brokerProbeHandshake(workload.broker.engine) });
 	const healthPath = workload.objectStorage ? STORAGE_HEALTH_PATH : workload.healthPath;
 	// A function host is socket-activated like a process app, but its socket is named after the
 	// desired-state id: the workload id for replica 0, `<id>-r<n>` for the rest (phase 4). A process
@@ -878,7 +897,7 @@ const RESP_PING = new TextEncoder().encode('PING\r\n');
  * Per-engine handshake: what the probe sends after connecting (null: the server speaks first) and
  * whether the first bytes it gets back come from the real server, not Podman's port forwarder.
  */
-interface ProbeHandshake {
+export interface ProbeHandshake {
 	send: Uint8Array | null;
 	accept(data: Uint8Array): boolean;
 }
@@ -917,6 +936,17 @@ export function probeHandshake(engine: DatabaseEngine): ProbeHandshake {
 }
 
 /**
+ * Broker handshake (D111). A NATS server greets every connection with `INFO {…}` before the client
+ * says anything; Podman's forwarder accepts the TCP connect but never sends that line.
+ */
+export function brokerProbeHandshake(engine: BrokerEngine): ProbeHandshake {
+	switch (engine) {
+		case 'nats':
+			return { send: null, accept: (data) => new TextDecoder().decode(data.subarray(0, 5)) === 'INFO ' };
+	}
+}
+
+/**
  * TCP health probe for a database on `127.0.0.1:<port>`. A bare connect can succeed against a
  * port forwarder before the server is up, so the probe performs the engine's smallest handshake
  * (Postgres `SSLRequest`, the MySQL greeting, MongoDB `hello`, RESP `PING`) and waits for an answer
@@ -925,12 +955,20 @@ export function probeHandshake(engine: DatabaseEngine): ProbeHandshake {
 export function probeDatabasePort(
 	port: number,
 	signal: AbortSignal,
-	options: { engine?: DatabaseEngine; postgres?: boolean; timeoutMs?: number; hostname?: string } = {},
+	options: {
+		engine?: DatabaseEngine;
+		/** An explicit handshake (brokers); wins over `engine`. */
+		handshake?: ProbeHandshake;
+		postgres?: boolean;
+		timeoutMs?: number;
+		hostname?: string;
+	} = {},
 ): Promise<boolean> {
 	if (signal.aborted) return Promise.resolve(false);
 	// `postgres: false` (older callers) means "a bare TCP connect is enough".
 	const handshake =
-		options.postgres === false && !options.engine ? null : probeHandshake(options.engine ?? 'postgres');
+		options.handshake ??
+		(options.postgres === false && !options.engine ? null : probeHandshake(options.engine ?? 'postgres'));
 	return new Promise<boolean>((resolve) => {
 		let settled = false;
 		let socket: { end(): void } | null = null;
@@ -999,9 +1037,13 @@ function reportFromStatus(status: HelperWorkloadStatus): WorkloadRuntimeReport {
  * contract hashes env/secrets/command/image/port, so resource or health changes must be part of
  * the agent's own diff or they would never restart the unit.
  */
-/** True when this workload is a function that stops itself when idle (phase 3, FN4). */
-function isIdleStoppable(workload: WorkloadDesired | undefined): boolean {
-	return workload?.runtime === 'function' && (workload.function?.idleStopSeconds ?? 0) > 0;
+/**
+ * True when this workload is stopped on purpose when idle: a function host (phase 3, FN4) or a
+ * socket-activated process app with `idleStopSeconds` (D121). Its socket keeps listening.
+ */
+export function isIdleStoppable(workload: WorkloadDesired | undefined): boolean {
+	if (workload?.runtime === 'function') return (workload.function?.idleStopSeconds ?? 0) > 0;
+	return workload?.runtime === 'process' && workload.socketActivation && (workload.idleStopSeconds ?? 0) > 0;
 }
 
 export function workloadFingerprint(workload: WorkloadDesired): string {
@@ -1036,6 +1078,8 @@ export function workloadFingerprint(workload: WorkloadDesired): string {
 		...(workload.objectStorage
 			? { objectStorage: { engine: workload.objectStorage.engine, version: workload.objectStorage.version } }
 			: {}),
+		// Only present for brokers; the store cap is written into the rendered config.
+		...(workload.broker ? { broker: workload.broker } : {}),
 		// A function's bindings, compatibility date and assets are part of the rendered workerd
 		// config, so a change must re-render and restart the host.
 		...(workload.function ? { function: workload.function } : {}),
@@ -1060,6 +1104,7 @@ export function withOptionalSpec(workload: WorkloadDesired): WorkloadDesired {
 		image?: string;
 		database?: WorkloadDesired['database'];
 		objectStorage?: WorkloadDesired['objectStorage'];
+		broker?: WorkloadDesired['broker'];
 	} = {};
 	if (Array.isArray(candidate.command) && candidate.command.every((arg) => typeof arg === 'string'))
 		extras.command = candidate.command as string[];
@@ -1077,6 +1122,13 @@ export function withOptionalSpec(workload: WorkloadDesired): WorkloadDesired {
 			engine: workload.objectStorage.engine,
 			version: workload.objectStorage.version,
 		} as WorkloadDesired['objectStorage'];
+	// The helper derives image, user, config and mounts from the broker profile (D111).
+	if (workload.broker)
+		extras.broker = {
+			engine: workload.broker.engine,
+			version: workload.broker.version,
+			storageMb: workload.broker.storageMb,
+		};
 	return Object.keys(extras).length === 0 ? workload : { ...workload, ...extras };
 }
 

@@ -495,6 +495,7 @@ export class NodeService {
 			this.ctx.workloads.applyHeartbeat(node.id, input.workloads);
 			this.ctx.databases.applyHeartbeat(node.id, input.workloads);
 			this.ctx.storage.applyHeartbeat(node.id, input.workloads);
+			this.ctx.brokers.applyHeartbeat(node.id, input.workloads);
 		}
 		if (input.databaseBackupResults?.length)
 			this.ctx.databases.applyBackupResults(node.id, input.databaseBackupResults);
@@ -514,6 +515,7 @@ export class NodeService {
 			this.ctx.moves.onPurged(node.id, input.purgedDatabases);
 		}
 		if (input.purgedStorage?.length) this.ctx.storage.applyPurged(node.id, input.purgedStorage);
+		if (input.purgedBrokers?.length) this.ctx.brokers.applyPurged(node.id, input.purgedBrokers);
 		if (input.storageBucketDeletions?.length)
 			this.ctx.storage.applyBucketDeletions(node.id, input.storageBucketDeletions);
 		if (input.storageBucketConfigs?.length)
@@ -1294,6 +1296,7 @@ export class NodeService {
 			...this.ctx.workloads.desiredForNode(node.id),
 			...this.ctx.databases.desiredForNode(node.id),
 			...this.ctx.storage.desiredForNode(node.id),
+			...this.ctx.brokers.desiredForNode(node.id),
 		];
 		// Custom domains always clone the production route (stream B), so only projects with a
 		// production pointer are candidates; staging-only projects must not serve them.
@@ -1340,6 +1343,7 @@ export class NodeService {
 			databaseGateway,
 			storageRoutes: this.ctx.storage.routesForNode(node.id, isEdge, (id) => nodeById.get(id)?.publicAddress ?? null),
 			storagePurges: this.ctx.storage.purgesForNode(node.id),
+			brokerPurges: this.ctx.brokers.purgesForNode(node.id),
 			domains: this.ctx.domains.desiredForProjects(servedProjectIds),
 			serviceEndpoints: this.serviceEndpointsForNode(node.id),
 			serviceProviders: this.serviceProvidersForNode(node.id),

@@ -32,6 +32,7 @@ export * from './service-move.ts';
 export * from './database-pitr.ts';
 export * from './services.ts';
 export * from './object-storage.ts';
+export * from './broker.ts';
 export * from './build.ts';
 export * from './log.ts';
 export * from './log-parse.ts';

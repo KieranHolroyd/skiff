@@ -1,49 +1,68 @@
+import { and, eq, isNull } from 'drizzle-orm';
+import { brokerAttachments, brokers } from '@skiff/db';
 import type { FunctionRuntimeBinding } from '@skiff/contracts';
+import type { CoreContext } from '../context.ts';
+import { ValidationError } from '../errors.ts';
+import type { ProjectRow } from '../projects.ts';
 import type { BindingResolver } from './types.ts';
 
-/** `functionRuntimeBindingSchema`'s `namespaceId` maximum. */
-const MAX_NAMESPACE_ID = 128;
-
-/** Keep namespace ids inside the runtime schema's `[A-Za-z0-9._-]` alphabet. */
-function namespaceId(value: string): string {
-	const filtered = value
-		.replace(/[^A-Za-z0-9._-]+/g, '-')
-		.replace(/-+/g, '-')
-		.replace(/^-+|-+$/g, '');
-	if (filtered.length <= MAX_NAMESPACE_ID) return filtered;
-	// A binding name and a queue name may each be 100 characters, so the derived id can exceed the
-	// schema's limit. Truncating alone could make two long bindings collide; keep a stable digest
-	// of the full id in the last eight characters.
-	let hash = 0;
-	for (let index = 0; index < filtered.length; index += 1) {
-		hash = (Math.imul(31, hash) + filtered.charCodeAt(index)) | 0;
+/**
+ * The managed broker a queue lives on, and the project's attachment prefix for it (D112).
+ *
+ * `name` names a broker; omitted, the project's only attached broker is used. The attachment is
+ * what puts `<PREFIX>_PORT/_USER/_PASSWORD` in the function's activation env, which both the
+ * producer service in workerd and the agent's consumer read, so a queue without one is refused
+ * at deploy time rather than failing on the node.
+ */
+export function resolveQueueBroker(
+	core: CoreContext,
+	project: ProjectRow,
+	name: string | undefined,
+	label: string,
+): { broker: string; envPrefix: string } {
+	const attached = core.db
+		.select({ broker: brokers.name, envPrefix: brokerAttachments.envPrefix })
+		.from(brokerAttachments)
+		.innerJoin(brokers, eq(brokers.id, brokerAttachments.brokerId))
+		.where(and(eq(brokerAttachments.projectId, project.id), isNull(brokers.deletedAt)))
+		.all();
+	if (name) {
+		const match = attached.find((item) => item.broker === name);
+		if (match) return match;
+		const exists = core.db
+			.select({ id: brokers.id })
+			.from(brokers)
+			.where(and(eq(brokers.orgId, project.orgId), eq(brokers.name, name), isNull(brokers.deletedAt)))
+			.get();
+		throw new ValidationError(
+			exists
+				? `${label}: attach broker "${name}" to "${project.slug}" before using it for queues (skif broker attach ${name} --project ${project.slug}).`
+				: `${label}: broker "${name}" does not exist in this organisation. Create it with skif broker create ${name} --project ${project.slug}.`,
+		);
 	}
-	const suffix = (hash >>> 0).toString(16).padStart(8, '0');
-	return `${filtered.slice(0, MAX_NAMESPACE_ID - suffix.length - 1)}-${suffix}`;
+	if (attached.length === 1) return attached[0]!;
+	throw new ValidationError(
+		attached.length === 0
+			? `${label}: queues run on a managed broker. Create and attach one (skif broker create <name> --project ${project.slug}) and deploy again.`
+			: `${label}: "${project.slug}" has ${attached.length} brokers attached (${attached.map((item) => item.broker).join(', ')}); name one with skiff.brokers in wrangler config.`,
+	);
 }
 
 /**
- * Resolve a queue binding to its stable queue id (docs/FUNCTIONS.md §4.5, §4.10, FN10).
- *
- * Queues are per-binding node-local state, not a shared resource, so there is nothing to look up:
- * the id is derived from the project's immutable id, the binding name and the queue name. A project
- * rename cannot move queued messages, and two bindings in one project never share a queue. The
- * binding's `queue` (what `batch.queue` reports to the consumer) falls back to the binding name for
- * a hand-written spec that omits it.
+ * Resolve a queue producer binding (docs/FUNCTIONS.md §4.5, D112). The queue is a JetStream stream
+ * on the broker, shared by every project attached to it, so a producer in one function and a
+ * consumer in another meet on the same queue name.
  */
 export const resolveQueueBinding: BindingResolver = (context, binding) => {
-	if (binding.type !== 'queue') {
-		throw new Error(
-			`Queue resolver received binding "${binding.name}" of type "${binding.type}", not "queue".`,
-		);
-	}
-	const queue = binding.queue || binding.name;
+	if (binding.type !== 'queue')
+		throw new Error(`Queue resolver received binding "${binding.name}" of type "${binding.type}", not "queue".`);
+	const { broker, envPrefix } = resolveQueueBroker(context.core, context.project, binding.broker, `Binding ${binding.name}`);
 	return {
 		name: binding.name,
 		type: 'queue',
-		queue,
-		// The contract defaults a queue binding to a producer; carry the resolved value through.
+		queue: binding.queue,
 		producer: binding.producer ?? true,
-		namespaceId: namespaceId(`${context.project.id}-${binding.name}-${queue}`),
+		broker,
+		envPrefix,
 	} satisfies FunctionRuntimeBinding;
 };

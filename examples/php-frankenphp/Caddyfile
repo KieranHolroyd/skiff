@@ -1,0 +1,23 @@
+# FrankenPHP config for a Skiff process app (D121).
+#
+# Skiff's own Caddy terminates TLS and proxies to this app over the workload's unix socket, so this
+# server speaks plain HTTP, never manages certificates and has no admin endpoint.
+{
+	admin off
+	auto_https off
+	persist_config off
+	# The release directory is read-only (ProtectSystem=strict); systemd gives the unit a private,
+	# writable state directory and exports its path.
+	storage file_system {$STATE_DIRECTORY:/tmp}/caddy
+	frankenphp
+}
+
+http:// {
+	# Socket activation: systemd passes the listener as fd 3 (Caddy 2.9+), so the app can be stopped
+	# when idle and is started again by the next request.
+	bind fd/3
+
+	root * public
+	encode zstd gzip
+	php_server
+}

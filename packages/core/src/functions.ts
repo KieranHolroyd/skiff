@@ -4,6 +4,10 @@ import {
 	FUNCTION_DEFAULT_IDLE_STOP_SECONDS,
 	FUNCTION_DEFAULT_COMPATIBILITY_DATE,
 	FUNCTION_DEFAULT_MEMORY_MB,
+	FUNCTION_PYTHON_COMPAT_FLAG,
+	FUNCTION_PYTHON_DEFAULT_MEMORY_MB,
+	FUNCTION_PYTHON_MIN_MEMORY_MB,
+	functionIsPython,
 	FUNCTION_HEALTH_PATH,
 	FUNCTION_MANIFEST_FILE,
 	WORKERD_PINNED_VERSION,
@@ -15,7 +19,9 @@ import {
 	workloadSpecSchema,
 	type FunctionManifest,
 	type FunctionModule,
+	type FunctionQueueConsumer,
 	type FunctionRuntimeBinding,
+	type FunctionRuntimeQueueConsumer,
 	type FunctionRuntimeSpec,
 	type FunctionView,
 	type Principal,
@@ -31,8 +37,9 @@ import type {
 	FunctionInvocationSummary,
 	TimeInput,
 } from './telemetry.ts';
-import { ValidationError } from './errors.ts';
+import { ConflictError, ValidationError } from './errors.ts';
 import { bindingResolver } from './function-bindings/index.ts';
+import { resolveQueueBroker } from './function-bindings/queue.ts';
 import type { ProjectRow } from './projects.ts';
 import { effectiveRuntime } from './runtime-tier.ts';
 import { parseCron } from './cron.ts';
@@ -109,18 +116,31 @@ export class FunctionService {
 		// Cron triggers ride desired state and fire on the node (FN9). Validate every expression here,
 		// at deploy time: a bad schedule must fail the deploy, not silently never run.
 		for (const cron of manifest.triggers.crons) parseCron(cron);
+		const queues = this.resolveQueueConsumers(project, manifest.triggers.queues ?? []);
 
 		// A deploy must not silently scale a function back to one host: the project's configured
 		// replica count is orthogonal to the bundle (phase 4). The contract refine refuses a newly
 		// added stateful binding under >1 replica.
 		const configuredReplicas = this.ctx.workloads.projectSpec(project)?.replicas ?? 1;
+		// Python Workers (D121) need workerd's `python_workers` flag; add it rather than make every
+		// bundle repeat it, and give the heavier Pyodide host a larger default reservation.
+		const python = functionIsPython(manifest);
+		const compatibilityFlags =
+			python && !manifest.compatibilityFlags.includes(FUNCTION_PYTHON_COMPAT_FLAG)
+				? [...manifest.compatibilityFlags, FUNCTION_PYTHON_COMPAT_FLAG]
+				: manifest.compatibilityFlags;
+		const memoryMb = manifest.memoryMb ?? (python ? FUNCTION_PYTHON_DEFAULT_MEMORY_MB : FUNCTION_DEFAULT_MEMORY_MB);
+		if (python && memoryMb < FUNCTION_PYTHON_MIN_MEMORY_MB)
+			throw new ValidationError(
+				`A Python function needs at least ${FUNCTION_PYTHON_MIN_MEMORY_MB} MB: Pyodide alone is about 230 MB resident (skiff.memoryMb).`,
+			);
 		const resolved = functionRuntimeSpecSchema.parse({
 			main: manifest.main,
 			modules: manifest.modules,
 			compatibilityDate: manifest.compatibilityDate,
-			compatibilityFlags: manifest.compatibilityFlags,
+			compatibilityFlags,
 			bindings,
-			triggers: manifest.triggers,
+			triggers: { crons: manifest.triggers.crons, queues },
 			assets: manifest.assets ?? null,
 			idleStopSeconds: manifest.idleStopSeconds ?? FUNCTION_DEFAULT_IDLE_STOP_SECONDS,
 			workerdVersion: WORKERD_PINNED_VERSION,
@@ -128,7 +148,7 @@ export class FunctionService {
 		const spec = workloadSpecSchema.parse({
 			runtime: 'function',
 			function: resolved,
-			memoryMb: manifest.memoryMb ?? FUNCTION_DEFAULT_MEMORY_MB,
+			memoryMb,
 			cpus: manifest.cpus ?? 1,
 			port: 3000,
 			healthPath: FUNCTION_HEALTH_PATH,
@@ -152,6 +172,45 @@ export class FunctionService {
 		// plan later in the same deploy sees the spec just persisted.
 		project.workloadJson = workloadJson;
 		this.ctx.projects.bump(project.orgId);
+		return resolved;
+	}
+
+	/**
+	 * Resolve `triggers.queues` against the project's broker attachments (D112) and enforce one
+	 * consumer per queue per broker, as on Cloudflare: two consumers on a work-queue stream would
+	 * silently split its messages.
+	 */
+	private resolveQueueConsumers(project: ProjectRow, consumers: FunctionQueueConsumer[]): FunctionRuntimeQueueConsumer[] {
+		const seen = new Set<string>();
+		const resolved = consumers.map((consumer) => {
+			const { broker, envPrefix } = resolveQueueBroker(this.ctx, project, consumer.broker, `Queue consumer ${consumer.queue}`);
+			const key = `${broker}\n${consumer.queue}`;
+			if (seen.has(key)) throw new ValidationError(`Queue ${consumer.queue} on broker ${broker} is consumed twice.`);
+			seen.add(key);
+			if (consumer.deadLetterQueue === consumer.queue)
+				throw new ValidationError(`Queue ${consumer.queue}: the dead-letter queue must be a different queue.`);
+			return { ...consumer, broker, envPrefix };
+		});
+		if (resolved.length === 0) return resolved;
+		const others = this.ctx.db
+			.select({ slug: projects.slug, workloadJson: projects.workloadJson })
+			.from(projects)
+			.where(and(eq(projects.orgId, project.orgId), isNull(projects.deletedAt)))
+			.all()
+			.filter((row) => row.slug !== project.slug);
+		for (const other of others) {
+			const spec = parseJson<{ function?: { triggers?: { queues?: Array<{ broker?: string; queue?: string }> } } } | null>(
+				other.workloadJson,
+				null,
+			);
+			for (const theirs of spec?.function?.triggers?.queues ?? []) {
+				const clash = resolved.find((mine) => mine.broker === theirs.broker && mine.queue === theirs.queue);
+				if (clash)
+					throw new ConflictError(
+						`Queue ${clash.queue} on broker ${clash.broker} already has a consumer: "${other.slug}". A queue has one consumer; remove it there first.`,
+					);
+			}
+		}
 		return resolved;
 	}
 
@@ -228,7 +287,7 @@ export class FunctionService {
 					compatibilityDate: FUNCTION_DEFAULT_COMPATIBILITY_DATE,
 					compatibilityFlags: [],
 					bindings: secretNames.map((name) => ({ name, type: 'secret' })),
-					triggers: { crons: [] },
+					triggers: { crons: [], queues: [] },
 					assets: assetsDir ? { directory: assetsDir, runWorkerFirst: [] } : null,
 					idleStopSeconds: FUNCTION_DEFAULT_IDLE_STOP_SECONDS,
 					workerdVersion: WORKERD_PINNED_VERSION,
@@ -291,7 +350,10 @@ export class FunctionService {
 				type: binding.type,
 				summary: functionBindingSummary(binding),
 			})),
-			triggers: { crons: spec.triggers.crons },
+			triggers: {
+				crons: spec.triggers.crons,
+				queues: (spec.triggers.queues ?? []).map((consumer) => ({ queue: consumer.queue, broker: consumer.broker })),
+			},
 			assets: spec.assets,
 			idleStopSeconds: spec.idleStopSeconds,
 			workerdVersion: spec.workerdVersion,

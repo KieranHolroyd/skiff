@@ -571,7 +571,7 @@ published port for containers. Today's `:443,:80` default binds every interface;
 without an ingress role to its overlay address. Each ingress carries the full route table and dials
 the workload node directly: no extra hop, no shared pool, no sticky routing (§8.6).
 
-**Timeouts and streaming.** `dial_timeout 5s`, `response_header_timeout 60s`, `keepalive 30s`.
+**Timeouts and streaming.** `dial_timeout 5s`, `response_header_timeout 5m` (long AI requests), `keepalive 30s`.
 WebSockets upgrade through both proxies; SSE needs `flush_interval -1` on both hops, set by the
 route renderer for a route the site config marks as streaming. Bodies stream end to end and are
 never spooled to disk; the cap is the site's `request_body` limit (100 MB through Cloudflare). Each

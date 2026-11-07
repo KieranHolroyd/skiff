@@ -14,7 +14,7 @@ limiter, and queue backend without hand-rolling a container.
 ## Non-goals
 
 - A Redis Cluster or Sentinel HA deployment.
-- A queue product or workflow engine.
+- A workflow engine. Durable queues are managed brokers (D111, docs/BROKERS.md), not Valkey.
 - Public exposure by default.
 - Replacing Postgres for durable data.
 

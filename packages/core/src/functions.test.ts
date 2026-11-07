@@ -52,7 +52,7 @@ function manifest(overrides: Record<string, unknown> = {}): Record<string, unkno
 		compatibilityDate: '2026-10-01',
 		compatibilityFlags: ['nodejs_compat'],
 		bindings: [],
-		triggers: { crons: [] },
+		triggers: { crons: [], queues: [] },
 		...overrides,
 	};
 }
@@ -133,7 +133,7 @@ describe('phase 1 functions', () => {
 			moduleCount: 1,
 			compatibilityDate: '2026-10-01',
 			compatibilityFlags: ['nodejs_compat'],
-			triggers: { crons: [] },
+			triggers: { crons: [], queues: [] },
 			assets: { directory: 'public', runWorkerFirst: ['/api/*'] },
 			idleStopSeconds: 300,
 			workerdVersion: '1.20261106.1',
@@ -217,12 +217,12 @@ describe('phase 1 functions', () => {
 		await core.uploads.deployInline(principal, project, bundle({ triggers: { crons } }));
 
 		const view = core.functions.view(principal, project);
-		expect(view?.triggers).toEqual({ crons });
+		expect(view?.triggers).toEqual({ crons, queues: [] });
 
 		const state = await core.nodes.desiredState(nodeToken);
 		const workload = state.workloads.find((item) => item.projectSlug === 'fn-cron');
 		expect(workload).toBeDefined();
-		expect(workload?.function?.triggers).toEqual({ crons });
+		expect(workload?.function?.triggers).toEqual({ crons, queues: [] });
 	});
 
 
@@ -482,7 +482,8 @@ describe('phase 1 functions', () => {
 		).rejects.toThrow('Binding SITE: an assets binding needs the manifest');
 	});
 
-	test('deploys D1, queues, assets and Analytics Engine and carries them into desired state', async () => {
+	// Queues need a managed broker (D112); function-queues.test.ts covers them.
+	test('deploys D1, assets and Analytics Engine and carries them into desired state', async () => {
 		const project = await createFunctionProject('fn-rest');
 		await core.uploads.deployInline(
 			principal,
@@ -490,7 +491,6 @@ describe('phase 1 functions', () => {
 			bundle({
 				bindings: [
 					{ name: 'DB', type: 'd1', database: 'app-db' },
-					{ name: 'JOBS', type: 'queue', queue: 'jobs' },
 					{ name: 'EVENTS', type: 'analytics_engine', dataset: 'events' },
 					{ name: 'SITE', type: 'assets' },
 				],
@@ -500,7 +500,6 @@ describe('phase 1 functions', () => {
 		const view = core.functions.view(principal, project);
 		expect(view?.bindings.map((binding) => binding.type)).toEqual([
 			'd1',
-			'queue',
 			'analytics_engine',
 			'assets',
 		]);
@@ -508,7 +507,6 @@ describe('phase 1 functions', () => {
 		const workload = state.workloads.find((item) => item.projectSlug === 'fn-rest');
 		expect(workload?.function?.bindings.map((binding) => binding.type)).toEqual([
 			'd1',
-			'queue',
 			'analytics_engine',
 			'assets',
 		]);

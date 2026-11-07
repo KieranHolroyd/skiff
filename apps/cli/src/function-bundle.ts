@@ -1,28 +1,32 @@
 /**
- * Build a Skiff function bundle from a wrangler project (docs/FUNCTIONS.md §4.3, FN8).
+ * Build a Skiff function bundle from a wrangler project (docs/FUNCTIONS.md §4.3, FN8, D113).
  *
- * Wrangler does the bundling (`deploy --dry-run --outdir`); this module copies the emitted
- * modules into a fresh directory, generates the internal `skiff-function.json` manifest, and
- * copies the configured assets directory. The manifest never touches the user's project.
+ * Skiff's own bundler (`worker-bundler.ts`, esbuild pinned in the CLI) compiles the Worker; this
+ * module writes the modules into a fresh directory, generates the internal `skiff-function.json`
+ * manifest, and copies the configured assets directory. The manifest never touches the user's
+ * project, and Wrangler is never run: the wrangler config is only read.
  *
  * The control plane validates and never bundles (D2), so the manifest is generated here and
  * uploaded alongside the modules.
  */
 import { createHash } from 'node:crypto';
-import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, extname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { CliError } from './errors.ts';
 import { formatBytes } from './output.ts';
 import { CLI_LIMITS } from './zip.ts';
+import { readWranglerConfig, type WranglerConfig } from './wrangler.ts';
+import { bundlePythonWorker, isPythonMain, readPythonBuildSettings } from './python-bundler.ts';
 import {
-	readWranglerConfig,
-	wranglerCommandLine,
-	type WranglerConfig,
-	type WranglerInvoker,
-} from './wrangler.ts';
+	BUNDLER_DISPLAY,
+	bundleWorker,
+	readBuildSettings,
+	type BuildCommandRunner,
+	type WorkerModuleType,
+} from './worker-bundler.ts';
 
-export type FunctionModuleType = 'esm' | 'cjs' | 'text' | 'data' | 'wasm';
+export type FunctionModuleType = WorkerModuleType;
 
 export interface FunctionModuleEntry {
 	name: string;
@@ -32,6 +36,17 @@ export interface FunctionModuleEntry {
 
 /** A manifest binding. The control plane validates the exact shape per `type`. */
 export type ManifestBinding = { name: string; type: string } & Record<string, unknown>;
+
+/** One `triggers.queues` entry (Wrangler `queues.consumers`, D112). */
+export interface QueueConsumerEntry {
+	queue: string;
+	broker?: string;
+	maxBatchSize?: number;
+	maxBatchTimeout?: number;
+	maxRetries?: number;
+	retryDelay?: number;
+	deadLetterQueue?: string;
+}
 
 export interface FunctionAssets {
 	directory: string;
@@ -45,7 +60,7 @@ export interface FunctionManifest {
 	compatibilityDate: string;
 	compatibilityFlags: string[];
 	bindings: ManifestBinding[];
-	triggers: { crons: string[] };
+	triggers: { crons: string[]; queues: QueueConsumerEntry[] };
 	assets?: FunctionAssets;
 	idleStopSeconds?: number;
 	memoryMb?: number;
@@ -68,8 +83,9 @@ export interface BuiltFunctionBundle {
 
 export interface BuildFunctionBundleOptions {
 	config: WranglerConfig;
-	invoker: WranglerInvoker;
 	log?: (message: string) => void;
+	/** Injected runner for the config's `build.command` (tests). */
+	runBuildCommand?: BuildCommandRunner;
 	/** Project-scoped secret names, auto-bound so users do not declare them twice. */
 	projectSecrets?: string[];
 }
@@ -96,14 +112,9 @@ const UNSUPPORTED_BINDINGS = [
 
 const ASSET_EXCLUDES = new Set(['.git', 'node_modules', '.DS_Store']);
 
-interface EmittedModule {
-	absolutePath: string;
-	relativePath: string;
-	type: FunctionModuleType;
-}
-
 /**
- * Run wrangler's dry-run bundler and assemble a deployable directory with a manifest.
+ * Bundle the Worker with Skiff's pinned bundler and assemble a deployable directory with a
+ * manifest.
  * On success the caller owns the temporary directory and must call `cleanup()`.
  */
 export async function buildFunctionBundle(
@@ -121,11 +132,21 @@ export async function buildFunctionBundle(
 	const triggers = recordOf(config.triggers, label, 'triggers');
 	const crons = stringList(triggers?.crons, label, 'triggers.crons');
 	const skiff = parseSkiffSettings(config.skiff, label);
+	const queueConsumers = mapQueueConsumers(config, label, skiff.brokers);
 	const { bindings, assets } = mapWranglerBindings(config, {
 		label,
 		workerName,
 		projectSecrets: options.projectSecrets,
 	});
+
+	// A `.py` main is a Python Worker (D121): no esbuild, just its sources and python_modules/.
+	const python = isPythonMain(config);
+	const buildSettings = python
+		? null
+		: readBuildSettings(config, options.config.path, {
+				date: compatibilityDate,
+				flags: compatibilityFlags,
+			});
 
 	const tempDir = await mkdtemp(join(tmpdir(), 'skiff-fn-'));
 	const cleanup = async (): Promise<void> => {
@@ -133,50 +154,29 @@ export async function buildFunctionBundle(
 	};
 
 	try {
-		const outdir = join(tempDir, 'out');
 		const bundleDir = join(tempDir, 'bundle');
-		await mkdir(outdir, { recursive: true });
 		await mkdir(bundleDir, { recursive: true });
 
-		const args = ['deploy', '--dry-run', '--outdir', outdir, '--config', options.config.path];
-		options.log?.('Bundling with wrangler...');
-		let code: number;
-		try {
-			code = await options.invoker(args);
-		} catch (error) {
-			if (error instanceof CliError) throw error;
-			throw new CliError(`Could not run ${wranglerCommandLine(options.invoker, args)}: ${messageOf(error)}`, {
-				code: 'wrangler_failed',
-				cause: error,
-			});
-		}
-		if (code !== 0)
-			throw new CliError(
-				`wrangler failed (exit ${code}): ${wranglerCommandLine(options.invoker, args)}`,
-				{ code: 'wrangler_failed' },
-			);
-
-		const emitted = await scanEmitted(outdir);
-		if (emitted.length === 0)
-			throw new CliError(
-				`${label}: wrangler produced no output modules. Check that "main" points at your Worker entrypoint.`,
-				{ code: 'wrangler_bundle' },
-			);
-		const main = selectMain(config.main, emitted, label);
+		options.log?.(python ? 'Collecting the Python Worker...' : `Bundling with the ${BUNDLER_DISPLAY}...`);
+		const worker = buildSettings
+			? await bundleWorker(buildSettings, { log: options.log, runCommand: options.runBuildCommand })
+			: await bundlePythonWorker(readPythonBuildSettings(config, options.config.path), {
+					log: options.log,
+					runCommand: options.runBuildCommand,
+				});
+		const main = worker.main;
 
 		const modules: FunctionModuleEntry[] = [];
-		for (const module of emitted) {
-			const destination = join(bundleDir, ...module.relativePath.split('/'));
+		for (const module of worker.modules) {
+			const destination = join(bundleDir, ...module.name.split('/'));
 			await mkdir(dirname(destination), { recursive: true });
-			const data = await readFile(module.absolutePath);
-			await writeFile(destination, data);
-			modules.push({ name: module.relativePath, type: module.type, sha256: sha256(data) });
+			await writeFile(destination, module.data);
+			modules.push({ name: module.name, type: module.type, sha256: sha256(module.data) });
 		}
-		modules.sort((a, b) => a.name.localeCompare(b.name));
 
 		let assetCount = 0;
 		let assetBytes = 0;
-		let warnings: string[] = [];
+		const warnings: string[] = [...worker.warnings];
 		if (assets) {
 			// Wrangler resolves `main` and `assets.directory` relative to the config file, so do the
 			// same even when `--wrangler <path>` points outside the deployed directory.
@@ -185,7 +185,7 @@ export async function buildFunctionBundle(
 			const copied = await copyAssets(source, destination, assets.directory);
 			assetCount = copied.files;
 			assetBytes = copied.bytes;
-			warnings = copied.warnings;
+			warnings.push(...copied.warnings);
 			options.log?.(`Assets: ${assetCount} files (${formatBytes(assetBytes)}) from ${assets.directory}.`);
 		}
 
@@ -196,7 +196,7 @@ export async function buildFunctionBundle(
 			compatibilityDate,
 			compatibilityFlags,
 			bindings,
-			triggers: { crons },
+			triggers: { crons, queues: queueConsumers },
 			...(assets ? { assets } : {}),
 			...(skiff.idleStopSeconds !== undefined ? { idleStopSeconds: skiff.idleStopSeconds } : {}),
 			...(skiff.memoryMb !== undefined ? { memoryMb: skiff.memoryMb } : {}),
@@ -313,10 +313,14 @@ export function mapWranglerBindings(
 	const queues = recordOf(config.queues, label, 'queues');
 	for (const value of arrayOf(queues?.producers, label, 'queues.producers')) {
 		const entry = entryOf(value, label, 'queues.producers');
+		const queue = requiredField(entry, 'queue', label, 'queues.producers');
 		add({
 			name: requiredField(entry, 'binding', label, 'queues.producers'),
 			type: 'queue',
-			queue: requiredField(entry, 'queue', label, 'queues.producers'),
+			queue,
+			// Queues live on a managed broker (D112); `skiff.brokers` names it per queue, otherwise the
+			// project's only attached broker is used.
+			...(skiff.brokers[queue] ? { broker: skiff.brokers[queue] } : {}),
 		});
 	}
 
@@ -375,6 +379,8 @@ export function mapWranglerBindings(
 
 interface SkiffSettings {
 	storage: Record<string, string>;
+	/** Queue name → managed broker name (D112). */
+	brokers: Record<string, string>;
 	hyperdrive: Record<string, string>;
 	secrets: string[];
 	bindings: unknown[];
@@ -391,6 +397,7 @@ export function parseSkiffSettings(value: unknown, label: string): SkiffSettings
 	const record = recordOf(value, label, 'skiff') ?? {};
 	return {
 		storage: stringMap(record.storage, label, 'skiff.storage'),
+		brokers: stringMap(record.brokers, label, 'skiff.brokers'),
 		hyperdrive: stringMap(record.hyperdrive, label, 'skiff.hyperdrive'),
 		secrets: stringList(record.secrets, label, 'skiff.secrets'),
 		bindings: arrayOf(record.bindings, label, 'skiff.bindings'),
@@ -398,90 +405,6 @@ export function parseSkiffSettings(value: unknown, label: string): SkiffSettings
 		memoryMb: numberField(record.memoryMb, label, 'skiff.memoryMb'),
 		cpus: numberField(record.cpus, label, 'skiff.cpus'),
 	};
-}
-
-async function scanEmitted(root: string): Promise<EmittedModule[]> {
-	const modules: EmittedModule[] = [];
-	const walk = async (dir: string, relativeDir: string): Promise<void> => {
-		let entries;
-		try {
-			entries = await readdir(dir, { withFileTypes: true });
-		} catch (error) {
-			throw new CliError(`Could not read wrangler output ${dir}: ${messageOf(error)}`, {
-				code: 'wrangler_bundle',
-				cause: error,
-			});
-		}
-		entries.sort((a, b) => a.name.localeCompare(b.name));
-		for (const entry of entries) {
-			if (entry.isSymbolicLink()) continue;
-			const relativePath = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
-			if (entry.isDirectory()) {
-				await walk(join(dir, entry.name), relativePath);
-				continue;
-			}
-			if (!entry.isFile() || entry.name.endsWith('.map')) continue;
-			modules.push({
-				absolutePath: join(dir, entry.name),
-				relativePath,
-				type: moduleType(entry.name),
-			});
-		}
-	};
-	await walk(root, '');
-	return modules.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
-}
-
-function moduleType(name: string): FunctionModuleType {
-	switch (extname(name).toLowerCase()) {
-		case '.js':
-		case '.mjs':
-			return 'esm';
-		case '.cjs':
-			return 'cjs';
-		case '.wasm':
-			return 'wasm';
-		default:
-			return 'text';
-	}
-}
-
-/**
- * The main module is wrangler's `main` basename when it matches an emitted module (a `.ts`
- * entry emits `index.js`, so extensions are compared without their suffix), otherwise the
- * single emitted JavaScript module. Ambiguity is an error.
- */
-function selectMain(value: unknown, modules: EmittedModule[], label: string): string {
-	const candidates = modules.filter((module) => module.type === 'esm' || module.type === 'cjs');
-	if (value !== undefined) {
-		const main = requiredString(value, label, '"main" must be a non-empty string.');
-		const wanted = basename(main.replaceAll('\\', '/'));
-		const wantedStem = stripExtension(wanted);
-		const matches = candidates.filter((module) => {
-			const name = basename(module.relativePath);
-			return name === wanted || stripExtension(name) === wantedStem;
-		});
-		if (matches.length === 1) return matches[0]!.relativePath;
-		if (matches.length > 1)
-			throw new CliError(
-				`${label}: "main" (${main}) matches more than one wrangler output: ${matches
-					.map((module) => module.relativePath)
-					.join(', ')}.`,
-				{ code: 'wrangler_bundle' },
-			);
-	}
-	if (candidates.length === 1) return candidates[0]!.relativePath;
-	if (candidates.length === 0)
-		throw new CliError(
-			`${label}: wrangler produced no JavaScript entry module. Check that "main" points at your Worker entrypoint.`,
-			{ code: 'wrangler_bundle' },
-		);
-	throw new CliError(
-		`${label}: could not tell which wrangler output is the main module (${candidates
-			.map((module) => module.relativePath)
-			.join(', ')}). Set "main" in ${label}.`,
-		{ code: 'wrangler_bundle' },
-	);
 }
 
 function normalizeAssetDirectory(value: string, label: string): string {
@@ -589,11 +512,6 @@ function sha256(data: Uint8Array): string {
 	return createHash('sha256').update(data).digest('hex');
 }
 
-function stripExtension(name: string): string {
-	const extension = extname(name);
-	return extension ? name.slice(0, -extension.length) : name;
-}
-
 function recordOf(value: unknown, label: string, what: string): Record<string, unknown> | null {
 	if (value === undefined || value === null) return null;
 	if (typeof value !== 'object' || Array.isArray(value))
@@ -684,6 +602,42 @@ function numberField(value: unknown, label: string, what: string): number | unde
 	if (typeof value !== 'number' || !Number.isFinite(value))
 		throw new CliError(`${label}: ${what} must be a number.`, { code: 'wrangler_config' });
 	return value;
+}
+
+/**
+ * Wrangler `queues.consumers` → `triggers.queues` (D112). Cloudflare's names map one to one;
+ * `max_concurrency` and `visibility_timeout_ms` have no Skiff equivalent and are refused rather
+ * than silently ignored.
+ */
+export function mapQueueConsumers(
+	config: Record<string, unknown>,
+	label: string,
+	brokers: Record<string, string>,
+): QueueConsumerEntry[] {
+	const queues = recordOf(config.queues, label, 'queues');
+	return arrayOf(queues?.consumers, label, 'queues.consumers').map((value) => {
+		const entry = entryOf(value, label, 'queues.consumers');
+		for (const key of ['max_concurrency', 'visibility_timeout_ms'])
+			if (entry[key] !== undefined)
+				throw new CliError(`${label}: queues.consumers.${key} is not supported by Skiff queues; remove it.`, {
+					code: 'unsupported_binding',
+				});
+		const queue = requiredField(entry, 'queue', label, 'queues.consumers');
+		const number = (key: string) => numberField(entry[key], label, `queues.consumers.${key}`);
+		const consumer: QueueConsumerEntry = { queue };
+		if (brokers[queue]) consumer.broker = brokers[queue];
+		const maxBatchSize = number('max_batch_size');
+		if (maxBatchSize !== undefined) consumer.maxBatchSize = maxBatchSize;
+		const maxBatchTimeout = number('max_batch_timeout');
+		if (maxBatchTimeout !== undefined) consumer.maxBatchTimeout = maxBatchTimeout;
+		const maxRetries = number('max_retries');
+		if (maxRetries !== undefined) consumer.maxRetries = maxRetries;
+		const retryDelay = number('retry_delay');
+		if (retryDelay !== undefined) consumer.retryDelay = retryDelay;
+		const deadLetterQueue = optionalField(entry, 'dead_letter_queue', label, 'queues.consumers');
+		if (deadLetterQueue) consumer.deadLetterQueue = deadLetterQueue;
+		return consumer;
+	});
 }
 
 function messageOf(error: unknown): string {

@@ -22,6 +22,7 @@ import {
 	renderEnvFile,
 	renderFunctionUnit,
 	renderKeyValueConfig,
+	renderNatsConfig,
 	renderNetworkUnit,
 	renderPoolerConfig,
 	renderPoolerUnit,
@@ -35,6 +36,7 @@ import {
 	type UnitVolumeMount,
 } from './units.ts';
 import {
+	BROKER_ENGINES,
 	DATABASE_ENGINES,
 	STORAGE_ENGINES,
 	STORAGE_ENV,
@@ -360,11 +362,7 @@ export class SystemdDriver {
 		if (mounts.length === 0) return [];
 		const registry = await this.registry();
 		const verified = new Set<string>();
-		const owner = workload.database
-			? DATABASE_ENGINES[workload.database.engine]
-			: workload.objectStorage
-				? STORAGE_ENGINES[workload.objectStorage.engine]
-				: null;
+		const owner = managedOwner(workload);
 		const out: UnitVolumeMount[] = [];
 		for (const mount of mounts) {
 			let base: string;
@@ -470,6 +468,9 @@ export class SystemdDriver {
 		if (workload.database) Object.assign(env, databaseFixedEnv(workload.database.engine, env));
 		// The storage profile's fixed settings win over anything on the wire (S1).
 		if (workload.objectStorage) Object.assign(env, STORAGE_ENV);
+		// The broker's user and password go only into its server config, never the container env (D111).
+		const brokerAuth = workload.broker ? takeBrokerAuth(env) : null;
+		if (workload.broker) Object.assign(env, brokerFixedEnv(workload.memoryMb));
 		// systemd and Podman parse env files differently; each driver gets its own format.
 		const envText = workload.runtime === 'container' ? renderContainerEnvFile(env) : renderEnvFile(env);
 		await this.writeAtomic(envFile, envText, 0o400);
@@ -610,11 +611,7 @@ export class SystemdDriver {
 			const dataDir = await this.resolveDataDir(workload);
 			if (workload.volumeId) await fs.mkdir(dirname(dataDir), { recursive: true, mode: 0o755 });
 			await fs.mkdir(dataDir, { recursive: true, mode: 0o700 });
-			const owner = workload.database
-				? DATABASE_ENGINES[workload.database.engine]
-				: workload.objectStorage
-					? STORAGE_ENGINES[workload.objectStorage.engine]
-					: null;
+			const owner = managedOwner(workload);
 			if (owner) {
 				// chown follows symlinks; the data dir must be a real directory under stateDir.
 				if (!(await fs.lstat(dataDir)).isDirectory())
@@ -623,7 +620,9 @@ export class SystemdDriver {
 				await this.chown(dataDir, owner.uid, owner.gid);
 			}
 			const tls = await this.databaseTlsFor(workload);
-			const serverConfigPath = await this.writeKeyValueConfig(workload, env, workloadRuntimeDir, studioPassword);
+			const serverConfigPath = brokerAuth
+				? await this.writeBrokerConfig(workload, brokerAuth, workloadRuntimeDir)
+				: await this.writeKeyValueConfig(workload, env, workloadRuntimeDir, studioPassword);
 			if (serverConfigPath) changed = serverConfigPath.changed || changed;
 			const container = renderContainerUnit({
 				workload,
@@ -1383,6 +1382,30 @@ END $$;`];
 	}
 
 	/**
+	 * A broker reads its user, password and store caps from a helper-written config: 0600, owned by
+	 * the container's uid, beside the env file (D111).
+	 */
+	private async writeBrokerConfig(
+		workload: WorkloadDesired,
+		auth: { user: string; password: string },
+		workloadRuntimeDir: string,
+	): Promise<{ path: string; changed: boolean }> {
+		const broker = workload.broker!;
+		const info = BROKER_ENGINES[broker.engine];
+		const path = join(workloadRuntimeDir, 'broker.conf');
+		const content = renderNatsConfig({
+			id: workload.id,
+			user: auth.user,
+			password: auth.password,
+			memoryMb: workload.memoryMb,
+			storageMb: broker.storageMb,
+		});
+		const changed = await this.writeIfChanged(path, content, 0o600);
+		await this.chown(path, info.uid, info.gid).catch(() => undefined);
+		return { path, changed };
+	}
+
+	/**
 	 * Valkey/Redis read their ACL user from a helper-written config (the images take no credential
 	 * env). It is 0600, owned by the container's uid, beside the env file. Other engines: null.
 	 */
@@ -2126,6 +2149,36 @@ const MONGO_TOOL_CONFIG = '/tmp/skiff-mongo-tool.yaml';
 /** Connection flags shared by `mongodump`/`mongorestore` (the password comes from `--config`). */
 function mongoToolArgs(user: string): string[] {
 	return ['--host', '127.0.0.1', '--username', user, '--authenticationDatabase', 'admin', `--config=${MONGO_TOOL_CONFIG}`];
+}
+
+/** The uid/gid a managed service's data dir and config belong to; null for an app workload. */
+function managedOwner(workload: WorkloadDesired): { uid: number; gid: number } | null {
+	if (workload.database) return DATABASE_ENGINES[workload.database.engine];
+	if (workload.objectStorage) return STORAGE_ENGINES[workload.objectStorage.engine];
+	if (workload.broker) return BROKER_ENGINES[workload.broker.engine];
+	return null;
+}
+
+/** Activation env names that carry the broker's credentials (set by the control plane, D111). */
+export const BROKER_USER_ENV = 'SKIFF_BROKER_USER';
+export const BROKER_PASSWORD_ENV = 'SKIFF_BROKER_PASSWORD';
+
+/** Remove the broker's credentials from the container env and return them for its config. */
+export function takeBrokerAuth(env: Record<string, string>): { user: string; password: string } {
+	const user = env[BROKER_USER_ENV] ?? '';
+	const password = env[BROKER_PASSWORD_ENV] ?? '';
+	delete env[BROKER_USER_ENV];
+	delete env[BROKER_PASSWORD_ENV];
+	if (!user || !password) throw new ValidationError('A broker needs its user and password in the activation');
+	return { user, password };
+}
+
+/**
+ * Fixed broker env: Go's soft memory limit at 80% of the unit's `MemoryMax`, so the server collects
+ * garbage before the cgroup OOM-kills it.
+ */
+export function brokerFixedEnv(memoryMb: number): Record<string, string> {
+	return { GOMEMLIMIT: `${Math.max(32, Math.floor(memoryMb * 0.8))}MiB` };
 }
 
 /**

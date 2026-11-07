@@ -418,7 +418,7 @@ function functionSpec(overrides: Record<string, unknown> = {}): Record<string, u
 		compatibilityDate: '2026-10-01',
 		compatibilityFlags: ['nodejs_compat'],
 		bindings: [{ name: 'GREETING', type: 'text', value: 'hello' }],
-		triggers: { crons: [] },
+		triggers: { crons: [], queues: [] },
 		assets: { directory: 'public', runWorkerFirst: ['/api/*'] },
 		idleStopSeconds: 300,
 		workerdVersion: '1.20261106.1',

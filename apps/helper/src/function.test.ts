@@ -291,7 +291,7 @@ describe('parseWorkload: phase-2 binding shapes', () => {
 				bindings: [
 					{ name: 'BUCKET', type: 'r2', envPrefix: 'STORAGE_MEDIA' },
 					{ name: 'DB', type: 'd1', namespaceId: 'prj_1-DB' },
-					{ name: 'JOBS', type: 'queue', namespaceId: 'prj_1-JOBS' },
+					{ name: 'JOBS', type: 'queue', envPrefix: 'NATS' },
 					{ name: 'EVENTS', type: 'analytics_engine', dataset: 'events' },
 					{ name: 'ASSETS', type: 'assets' },
 				],
@@ -300,14 +300,15 @@ describe('parseWorkload: phase-2 binding shapes', () => {
 		expect(workload.function?.bindings).toEqual([
 			{ name: 'BUCKET', type: 'r2', envPrefix: 'STORAGE_MEDIA' },
 			{ name: 'DB', type: 'd1', namespaceId: 'prj_1-DB' },
-			{ name: 'JOBS', type: 'queue', namespaceId: 'prj_1-JOBS' },
+			{ name: 'JOBS', type: 'queue', envPrefix: 'NATS' },
 			{ name: 'EVENTS', type: 'analytics_engine' },
 			{ name: 'ASSETS', type: 'assets' },
 		]);
-		// D1 and queues keep SQLite state on do-storage, like the agent renderers say.
+		// D1 keeps SQLite state on do-storage; queues live on the managed broker (D112).
 		expect(functionNeedsDurableStorage(workload.function!)).toBe(true);
 		for (const binding of [
 			{ name: 'BUCKET', type: 'r2', envPrefix: 'STORAGE_MEDIA' },
+			{ name: 'JOBS', type: 'queue', envPrefix: 'NATS' },
 			{ name: 'EVENTS', type: 'analytics_engine', dataset: 'events' },
 			{ name: 'ASSETS', type: 'assets' },
 		]) {
@@ -331,7 +332,7 @@ describe('parseWorkload: phase-2 binding shapes', () => {
 			{ name: 'CACHE', type: 'kv', namespaceId: 'has space' },
 			{ name: 'BUCKET', type: 'r2' },
 			{ name: 'DB', type: 'd1' },
-			{ name: 'JOBS', type: 'queue', namespaceId: 'bad id' },
+			{ name: 'JOBS', type: 'queue', envPrefix: 'lower' },
 		];
 		for (const binding of bad) {
 			expect(() =>

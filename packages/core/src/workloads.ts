@@ -6,6 +6,9 @@ import {
 	githubRunnerTarget,
 	orgNetworkName,
 	parseWorkloadReplicaId,
+	processIdleStopIssue,
+	functionIsPython,
+	FUNCTIONS_PYTHON_CAPABILITY,
 	requirePermission,
 	workloadEnvIssues,
 	workloadReplicaId,
@@ -106,10 +109,14 @@ export class WorkloadService {
 		// With C2 endpoints enabled, a process app may run elsewhere: the consumer gets a loopback
 		// endpoint and the provider listens on the overlay. Private storage still pins for now.
 		const crossNode = featureEnabled(this.ctx.config, 'SERVICE_ENDPOINTS') && runtime === 'process';
-		const pinned = crossNode ? null : this.attachmentNode(project.id);
+		// Brokers have no cross-node endpoint yet (D111), so an attached broker pins even then.
+		const pinned = crossNode ? this.ctx.brokers.requiredNode(project.id) : this.attachmentNode(project.id);
 		if (pinned) {
-			const conflict =
-				this.ctx.databases.placementConflict(project, pinned) ?? this.ctx.storage.placementConflict(project, pinned);
+			const conflict = crossNode
+				? this.ctx.brokers.placementConflict(project, pinned)
+				: (this.ctx.databases.placementConflict(project, pinned) ??
+					this.ctx.storage.placementConflict(project, pinned) ??
+					this.ctx.brokers.placementConflict(project, pinned));
 			if (conflict) throw new ValidationError(conflict);
 		}
 		const placementSpec = placementSpecFor(project);
@@ -154,7 +161,7 @@ export class WorkloadService {
 			if (!decision.ok) throw new ValidationError(decision.message, decision.rejections?.length ? decision.rejections : decision.freeByNode);
 		}
 		if (crossNode) this.ctx.endpoints.reconcile(project.id, decision.nodeId);
-		if (runtime === 'function') this.assertFunctionTarget(decision.nodeId);
+		if (runtime === 'function') this.assertFunctionTarget(decision.nodeId, Boolean(spec.function && functionIsPython(spec.function)));
 		const current = this.ctx.db
 			.select({ memoryMb: workloads.memoryMb })
 			.from(workloads)
@@ -287,15 +294,21 @@ export class WorkloadService {
 	 * A function runs on workerd, which only an agent that advertised `functions` in its heartbeat
 	 * can render (D110). Refuse the deploy instead of leaving the app pending forever.
 	 */
-	private assertFunctionTarget(nodeId: string): void {
+	private assertFunctionTarget(nodeId: string, python = false): void {
 		const node = this.ctx.db
 			.select({ name: nodes.name, capabilitiesJson: nodes.capabilitiesJson })
 			.from(nodes)
 			.where(eq(nodes.id, nodeId))
 			.get();
-		if (!node || !nodeCapabilities(node.capabilitiesJson).includes('functions'))
+		const capabilities = nodeCapabilities(node?.capabilitiesJson ?? null);
+		if (!node || !capabilities.includes('functions'))
 			throw new ValidationError(
 				`Node "${node?.name ?? nodeId}" does not support functions; update the node's agent first.`,
+			);
+		// A Python host loads Pyodide from the node's warmed cache, never from the internet (D121).
+		if (python && !capabilities.includes(FUNCTIONS_PYTHON_CAPABILITY))
+			throw new ValidationError(
+				`Node "${node.name}" cannot run Python functions yet: its Pyodide cache is not installed. Run \`sudo bun /opt/skiff/current/repo/scripts/install/pyodide.ts\` on the node (or upgrade it), then deploy again.`,
 			);
 	}
 
@@ -405,6 +418,7 @@ export class WorkloadService {
 		const reservedCpu = this.reservedCpuByNode();
 		const databaseCounts = this.ctx.databases.countByNode();
 		const storageCounts = this.ctx.storage.countByNode();
+		const brokerCounts = this.ctx.brokers.countByNode();
 		return this.ctx.db
 			.select()
 			.from(nodes)
@@ -423,7 +437,8 @@ export class WorkloadService {
 					workloadCount:
 						(this.countByNode().get(node.id) ?? 0) +
 						(databaseCounts.get(node.id) ?? 0) +
-						(storageCounts.get(node.id) ?? 0),
+						(storageCounts.get(node.id) ?? 0) +
+						(brokerCounts.get(node.id) ?? 0),
 					diskFreeBytes: nodeDiskFreeBytes(stats),
 					diskTotalBytes:
 						typeof total === 'number' && Number.isFinite(total) ? Math.max(0, Math.floor(total)) : null,
@@ -489,6 +504,11 @@ export class WorkloadService {
 				port: spec.port,
 				healthPath: spec.healthPath,
 				socketActivation: worker ? false : spec.socketActivation,
+				// Scale to zero for process apps (D121); only sent when it applies, so every other
+				// workload's desired state is byte-for-byte what it was.
+				...(spec.idleStopSeconds && processIdleStopIssue(spec) === null
+					? { idleStopSeconds: spec.idleStopSeconds }
+					: {}),
 				activationVersion: activationVersion(spec, this.attachmentsVersion(project.id, workload.nodeId, spec.runtime, project.orgId, spec)),
 				env: spec.env,
 				secrets: spec.secrets,
@@ -597,14 +617,16 @@ export class WorkloadService {
 	activation(nodeId: string, desiredId: string): WorkloadActivation {
 		if (this.ctx.databases.isDatabaseId(desiredId)) return this.ctx.databases.activation(nodeId, desiredId);
 		if (this.ctx.storage.isStorageId(desiredId)) return this.ctx.storage.activation(nodeId, desiredId);
+		if (this.ctx.brokers.isBrokerId(desiredId)) return this.ctx.brokers.activation(nodeId, desiredId);
 		const { workloadId, replica } = parseWorkloadReplicaId(desiredId);
 		const row = this.ctx.db.select().from(workloads).where(eq(workloads.id, workloadId)).get();
 		if (!row) throw new NotFoundError('Workload');
 		if (row.nodeId !== nodeId) throw new CoreError('forbidden', 'This workload is placed on another node.', 403);
 		const spec = this.specOf(this.requireProject(row.projectId), row);
 		if (replica >= spec.replicas) throw new NotFoundError('Workload replica');
-		// Attached database and storage connection values sit under the spec's own env and secrets (D56, S4).
+		// Attached database, storage and broker connection values sit under the spec's own env and secrets (D56, S4, D111).
 		const env: Record<string, string> = {
+			...this.ctx.brokers.consumerEnv(row.projectId, row.nodeId, spec.runtime),
 			...this.ctx.storage.consumerEnv(row.projectId, row.nodeId, spec.runtime),
 			...this.ctx.databases.consumerEnv(row.projectId, row.nodeId, spec.runtime),
 			...spec.env,
@@ -715,20 +737,22 @@ export class WorkloadService {
 	}
 
 	/**
-	 * The node a project must run on because of its attached databases and private storage, or
-	 * null when nothing pins it. Throws when they live on different nodes.
+	 * The node a project must run on because of its attached databases, private storage and
+	 * brokers, or null when nothing pins it. Throws when they live on different nodes.
 	 */
 	attachmentNode(projectId: string): string | null {
 		const nodeIds = [
 			...new Set(
-				[this.ctx.databases.requiredNode(projectId), this.ctx.storage.requiredNode(projectId)].filter(
-					(id): id is string => id !== null,
-				),
+				[
+					this.ctx.databases.requiredNode(projectId),
+					this.ctx.storage.requiredNode(projectId),
+					this.ctx.brokers.requiredNode(projectId),
+				].filter((id): id is string => id !== null),
 			),
 		];
 		if (nodeIds.length > 1)
 			throw new ValidationError(
-				'Attached databases and private storage live on different nodes; detach one, or make the storage public.',
+				'Attached databases, private storage and brokers live on different nodes; detach one, or make the storage public.',
 			);
 		return nodeIds[0] ?? null;
 	}
@@ -749,6 +773,7 @@ export class WorkloadService {
 		return [
 			this.ctx.databases.consumerVersion(projectId, nodeId, runtime),
 			this.ctx.storage.consumerVersion(projectId, nodeId, runtime),
+			this.ctx.brokers.consumerVersion(projectId, nodeId, runtime),
 			this.ctx.appVolumes.projectVersion(projectId),
 			this.secretsVersion(orgId, projectId, spec),
 		]
@@ -896,6 +921,8 @@ export class WorkloadService {
 		for (const [nodeId, total] of this.ctx.databases.reservedByNode())
 			reserved.set(nodeId, (reserved.get(nodeId) ?? 0) + total);
 		for (const [nodeId, total] of this.ctx.storage.reservedByNode())
+			reserved.set(nodeId, (reserved.get(nodeId) ?? 0) + total);
+		for (const [nodeId, total] of this.ctx.brokers.reservedByNode())
 			reserved.set(nodeId, (reserved.get(nodeId) ?? 0) + total);
 		return reserved;
 	}

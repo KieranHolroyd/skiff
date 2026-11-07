@@ -11,15 +11,16 @@ Implemented on the node and in the control plane:
   (`packages/core/src/functions.ts`); the helper's socket-activated workerd unit and pinned-binary
   preflight; the agent's Cap'n Proto config, shim and assets-first Caddy route; `GET
   /projects/:slug/function` and the `get_function` MCP tool. `skif deploy` detects
-  `wrangler.jsonc`/`wrangler.json`, installs Wrangler when missing, runs
-  `wrangler deploy --dry-run`, generates the internal `skiff-function.json` itself and creates the
-  project as `runtime: "function"`; users only keep their Wrangler file. `skif wrangler …` passes
-  commands through to the installed Wrangler.
+  `wrangler.jsonc`/`wrangler.json`, bundles `main` with Skiff's own bundler (esbuild pinned in the
+  CLI, [D113](./DECISIONS.md); Wrangler is never run), generates the internal
+  `skiff-function.json` itself and creates the project as `runtime: "function"`; users only keep
+  their Wrangler file. `skif wrangler …` passes commands through to Wrangler for local development.
 - **Phase 2 (bindings):** Durable Objects on the host's `do-storage` disk service (SQL enabled),
   Hyperdrive through the attached database's loopback port, KV and D1 backed by Durable Object
   storage, Cache with a per-host size cap, R2 signing path-style S3 requests to the attached
   RustFS instance, Analytics Engine writing through an extension module to the node's telemetry
-  batch, queues (producer binding plus a Durable Object broker delivering to the shim), and
+  batch, queues (a producer binding that publishes to a managed NATS broker, with the agent
+  delivering batches to the shim, D112), and
   `env.ASSETS` served from the release's assets directory.
 - **Phase 3 (economics and triggers):** cron on the node with a persisted cursor; idle hosts stop
   and cold-start through socket activation; the watchdog restarts after three missed probes; tail
@@ -30,7 +31,8 @@ Implemented on the node and in the control plane:
 
 Still not built: Durable Object/KV/cache/D1 SQLite snapshot backups and restore, cross-node service
 bindings, workerd cluster mode and multi-node stateful failover, multi-node stateless placement,
-Workflows, Worker Loader and Python Workers, and R2 multipart uploads (single-part is implemented).
+Workflows, Worker Loader, and R2 multipart uploads (single-part is implemented). Python Workers,
+Wasm languages and scale-to-zero process apps for every other language are in §4.13 (D121).
 `skiff-update-self` does not install a newly pinned workerd yet; the installer does, so a host that
 updates across a workerd pin bump needs the installer (or a manual install under
 `/usr/lib/skiff/workerd/<version>/`). `SKIFF_FEATURE_FUNCTIONS` is on by default; set it to `0` to disable the tier (existing function
@@ -84,7 +86,7 @@ adds no new trust tier to Skiff, as long as the process boundary between project
 | **workerd** (`cloudflare/workerd`) | Apache-2.0 | The Workers runtime: V8 isolates, Web-standard APIs, Node compat, capability bindings, Durable Objects on local SQLite, tail workers, Worker Loader, Workflows engine hook | Production at Cloudflare. Releases are daily and the version is a date (`v1.20261106.1`). Prebuilt binaries ship on npm. | **Yes, the core.** |
 | **workerd cluster mode** (`Config.cluster`, `--experimental`) | Apache-2.0 | Durable Objects spread across instances. A bucket holds instance leases and ownership records claimed by conditional write, and the epoch bumps on takeover. Committed writes are captured as LTX. Peers authenticate with an HMAC key and send traffic **unencrypted** (private network required). `workerd deploy` publishes named deployments into the bucket. | First commit 2026-10-29. `workerd deploy` landed 2026-11-05. Experimental. | **Later (phase 4)**, behind a spike. |
 | **Miniflare** (`workers-sdk/packages/miniflare`) | Apache-2.0 | Simulators for KV, R2, D1, Queues, Workflows, Cache, assets, dispatch namespaces, Analytics Engine and more. Each is a **Worker running inside workerd**, built on Miniflare's own Durable Object base with SQLite and a blob store (`src/workers/kv/namespace.worker.ts`, `queues/broker.worker.ts`, `d1/database.worker.ts`) | A dev tool, and "not a hardened sandbox" | **As reference and source** for binding services, not as the server. |
-| **Wrangler** | Apache-2.0 | The `wrangler.jsonc` config schema. `wrangler deploy --dry-run --outdir` bundles without deploying. `wrangler dev` gives users a local runtime that is the same as Skiff's. | Stable | **Yes, as the user's bundler and dev loop.** |
+| **Wrangler** | Apache-2.0 | The `wrangler.jsonc` config schema. `wrangler dev` gives users a local runtime that is the same as Skiff's. | Stable | **Yes, for the config schema and the local dev loop.** Not for deploy bundling: Skiff's own pinned bundler does that (D113). |
 | **celld** (`denoland/celld`, Deno) | Apache-2.0 | A self-hosted, distributed Workers and Durable Objects daemon: one SQLite database per object, LTX replication to a bucket, signed peer HTTP, cron, KV, D1, R2, Queues, Workflows | v0.6 beta. Announced 2026-08-05. "Not safe for hostile multi-tenant workloads yet". Pull requests disabled. **Being merged into workerd** (Cloudflare blog, 2026-10-09). | **Reference only.** Its future as a separate repo is unannounced. |
 | workers-rs, Python Workers (Pyodide), `@cloudflare/containers`, `@cloudflare/sandbox`, `agents` | MIT or Apache-2.0 | Client SDKs. They work wherever their underlying bindings work. | Varies | User-side libraries. Rust/Wasm and `agents` work once Durable Objects do. |
 | Pingora, Cap'n Web, Cap'n Proto | Apache-2.0 / MIT | A proxy framework, an RPC protocol, and the serialisation format behind workerd's config | Stable | No. Caddy remains the proxy (D7). |
@@ -135,7 +137,7 @@ These were checked against primary sources (§9). Each one constrains a decision
 | 6. Control plane never reaches node loopback | Binding services run on the node, inside the function's own workerd process. |
 | 7. ≤ 250 MB edge baseline | Off by default. Socket activation means **zero resident cost while idle** (FN4). |
 | 8. No Kubernetes, no Docker | systemd only. workerd's Docker container engine is never configured. |
-| D2. The control plane never builds | The user's machine or a Builder bundles with `wrangler` or esbuild. The control plane validates a manifest. |
+| D2. The control plane never builds | The user's machine or a Builder bundles with Skiff's own bundler (pinned esbuild, D113). The control plane validates a manifest. |
 | D6. Bun everywhere, Caddy the only exception | **Amended**: workerd becomes the second non-Bun component (FN1). |
 
 What users get that they can't get from Skiff today:
@@ -213,9 +215,24 @@ client ─▶ Cloudflare ─▶ ingress Caddy ──(static asset hit? serve it)
 
 ### 4.3 The bundle and its manifest (FN8)
 
-`skif deploy` detects `wrangler.jsonc` or `wrangler.json` (installing Wrangler when it is missing),
-runs `wrangler deploy --dry-run --outdir <tmp>`, copies the emitted modules and assets, and generates
-`skiff-function.json` itself — the user never writes or commits that file. A bundle without the
+`skif deploy` detects `wrangler.jsonc` or `wrangler.json`, bundles `main` with Skiff's own bundler
+(`apps/cli/src/worker-bundler.ts`), copies the bundled modules and assets, and generates
+`skiff-function.json` itself — the user never writes or commits that file.
+
+The bundler runs esbuild as a library, pinned to an exact version in the CLI's `package.json`, so
+the bundle only changes when Skiff ships a release (D113). Wrangler is never run on the deploy path;
+only its config file is read. It follows the parts of Wrangler's bundling that decide whether a
+Worker runs: ESM output named after `main`, `workerd`/`worker`/`browser` export conditions,
+`keep_names` on by default, `process.env.NODE_ENV` set to `"production"`, `cloudflare:*` imports left
+to the runtime, and Wrangler's module rules (`.txt`/`.html`/`.sql` as Text, `.bin` as Data, `.wasm`
+as CompiledWasm, plus the config's `rules`), each split into a `<sha1>-<basename>` module. It honours
+`define`, `alias`, `minify`, `keep_names`, `tsconfig`, `jsx_factory`, `jsx_fragment` and runs
+`build.command` first. With `nodejs_compat` (or a compatibility date from 2026-08-04, when workerd
+turns it on by default), Node built-ins stay external as `node:` imports for the pinned workerd to
+provide; there is no unenv polyfill layer, so a built-in workerd lacks fails at runtime rather than
+being stubbed. It refuses service-worker syntax, `no_bundle`, `find_additional_modules`, the legacy
+`node_compat` option with a message. A `.py` `main` skips esbuild entirely: it is a Python Worker
+(§4.13). A bundle without the
 manifest is still accepted when it is an already-built Worker (`skif deploy ./dist`, or a raw API
 upload): the previous deployment's spec supplies compatibility/bindings/assets, and a first deploy
 gets conservative defaults plus the project's own secrets. The control plane receives modules plus
@@ -276,7 +293,7 @@ start; see §4.7.
 | Cache API | 2 | A node-local cache binding service with a size cap | Without it, behaviour falls back to always-miss, as celld's does |
 | Tail Workers and logs | 1 / 3 | Phase 1: structured JSON logs to journald, into the existing log view. Phase 3: `tails` to a Skiff tail service that sends OTLP to the receiver (D16). | |
 | Cron triggers | 3 | See FN9 | |
-| Queues | 3 | A node-local broker Durable Object (from Miniflare's `queues/broker.worker.ts`). The shim delivers `queue()` batches to consumers. | At-least-once, retries, a dead-letter queue |
+| Queues | 3 | A JetStream stream per queue on the project's **managed broker** (docs/BROKERS.md, D112). The producer service publishes over an `external` TCP service at the broker's loopback port; the agent pulls batches and POSTs them to the shim's `/__skiff/queue`, which returns per-message ack/retry verdicts. | At-least-once; `max_batch_size`, `max_batch_timeout`, `max_retries`, `retry_delay`, delays and a dead-letter queue; one consumer per queue; producers and consumers may be different functions on the same broker |
 | Workflows | 4 | workerd's `workflowsEngine` designator plus Miniflare's engine | After Durable Objects are durable across nodes |
 | Worker Loader (Dynamic Workers) | 5 | workerd's `workerLoader` binding, opt-in, `globalOutbound: null` by default | See §4.11 |
 | Containers, Workers AI, Vectorize, Browser Rendering, Email, Images | — | Not offered. Images can map to plan 15's image transforms later. | Rejected with a clear error at deploy time |
@@ -312,7 +329,7 @@ Open-source workerd enforces no limits, so Skiff sets them outside it:
 |---|---|
 | Memory | cgroup `MemoryMax` = `memoryMb`. V8 heap via `v8Flags = ["--max-old-space-size=<memoryMb·0.75>"]`. An OOM kills the host, and systemd restarts it on the next connection. |
 | CPU share | `CPUQuota` (from `cpus`) and `CPUWeight` in the workloads slice |
-| Wall clock | Caddy `response_header_timeout` per route (default 60 s), plus a shim-side `AbortSignal` timeout for `scheduled` and `queue` |
+| Wall clock | Caddy `response_header_timeout` per route (5 min, sized for long AI calls), plus a shim-side `AbortSignal` timeout for `scheduled` and `queue` |
 | Request body | The existing site `request_body` limit |
 | Runaway CPU | The agent probes the shim's internal `/__skiff/health` on the host socket every 5 s. Three missed probes restart the host and log a `function_watchdog` line. (The proposal's "while the cgroup is at its CPU quota" gate is not implemented yet.) **Honest limit: one busy request stalls its project's host until the watchdog fires.** |
 | Concurrency | One event loop per host. Throughput scales with `replicas`; same-node prefork over the shared listening socket is spike S6. |
@@ -346,11 +363,11 @@ process apps as well. It is not a Functions-only feature.
 
 ### 4.9 State, placement and HA (FN11)
 
-- **Phases 1–3: node-local state.** Durable Object, KV, D1 and queue data lives at
+- **Phases 1–3: node-local state.** Durable Object, KV and D1 data lives at
   `<volume>/skiff/fn-<workload-id>/`. The rules a running app follows apply: it never changes node
   on its own, and moving it is stop → copy → start (D97). Backups take SQLite snapshots through
   the D83 backup path to the platform `ObjectStore`, with restore to a new project.
-- **Stateless functions** (no Durable Object, KV, D1 or queue bindings) can run `replicas > 1`
+- **Stateless functions** (no Durable Object, KV or D1 bindings) can run `replicas > 1`
   across nodes as soon as CLUSTERING §8.2 multi-node replicas land, because they have no state to
   place.
 - **Phase 4: workerd cluster mode.** Each stateful project's replicas form **their own cluster**:
@@ -379,16 +396,32 @@ process apps as well. It is not a Functions-only feature.
   Delivery is one run per occurrence per project, from the node that owns the workload, with no
   control-plane round trip. Phase 4 moves this to a cluster run lease (CLUSTERING §8.4)
   for multi-node functions.
-- **Queues**: the broker Durable Object delivers batches through the shim's `/__skiff/queue`.
+- **Queues** (D112): `triggers.queues` (Wrangler `queues.consumers`) rides desired state. For each
+  consumer the agent holds a connection to the project's managed broker, pulls up to
+  `maxBatchSize` messages (waiting at most `maxBatchTimeout` for the batch to fill) from the
+  queue's durable JetStream consumer, and `POST`s them to the shim's internal `/__skiff/queue` on
+  the host socket, which socket-activates an idle-stopped host and counts as activity. The shim
+  gives `queue()` Cloudflare's `ack()`/`retry()`/`ackAll()`/`retryAll()` and returns a verdict per
+  message: a handler that returns acks what it did not retry, one that throws retries what it did
+  not ack. Retries wait `retryDelay` (or 1 s doubling to 60 s); after `maxRetries` a message goes to
+  `deadLetterQueue` or is dropped with a warning. Delayed sends carry `Skiff-Not-Before` and are
+  held back with a timed NAK, which does not count as an attempt. Only replica 0 consumes.
+  Producer bindings publish from inside workerd (`packages/function-bindings/src/queue.js` over
+  the shared `nats.js` client), and `send()` resolves once JetStream has stored the message. Queue
+  data lives in the broker, so queue bindings no longer pin a function to one host or need its
+  durable-storage directory. Messages sent with the default `v8` content type still reach the
+  consumer base64-encoded; use `contentType: "json"` or `"text"` (or the `queues_json_messages`
+  flag).
 - **Alarms**: native to Durable Objects.
 
 ### 4.11 Surfaces
 
-- **CLI**: `skif deploy` detects `wrangler.jsonc`/`wrangler.json`, installs Wrangler as a project
-  dev dependency when it is missing (or uses an ephemeral runner when there is no package.json),
-  bundles with `wrangler deploy --dry-run`, generates the internal manifest, and creates the project
-  as `runtime: "function"`. `skif wrangler …` passes any Wrangler command through (`dev`, `tail`,
-  `types`, …). Local development is plain Wrangler. Logs use `skif logs`; a cron invoke command is
+- **CLI**: `skif deploy` detects `wrangler.jsonc`/`wrangler.json`, bundles with Skiff's own pinned
+  bundler (§4.3, D113), generates the internal manifest, and creates the project as
+  `runtime: "function"`. Deploying needs no Wrangler install. `skif wrangler …` passes any Wrangler
+  command through (`dev`, `tail`, `types`, …), installing Wrangler as a project dev dependency when
+  it is missing (or using an ephemeral runner when there is no package.json). Local development is
+  plain Wrangler. Logs use `skif logs`; a cron invoke command is
   not built yet.
 - **MCP**: `deploy_site` accepts function bundles, alongside `get_function` and
   `list_function_invocations`. As with every other surface, MCP tools return no secrets.
@@ -410,6 +443,72 @@ process apps as well. It is not a Functions-only feature.
   working, so a bump never breaks a deployed function.
 - Old versions stay on disk while any workload references them, which keeps rollback exact.
 
+### 4.13 Other languages (D121)
+
+Three routes, chosen by what the code is:
+
+| Language | Route | How it runs |
+|---|---|---|
+| JavaScript, TypeScript | Function | The bundler (D113) and the JS shim, as above |
+| Rust (workers-rs), Go (TinyGo), C/C++, Zig | Function | A JS entry imports a `.wasm` file; the bundler emits it as a `CompiledWasm` module (`wasm` in the manifest) |
+| Python | Function | Python Workers on the pinned workerd's Pyodide (below) |
+| PHP | Process app | FrankenPHP on an inherited socket, scaling to zero (below) |
+| Ruby, Python (WSGI/ASGI), Node, Go, anything else | Process app | Any server that listens on fd 3 (Puma, Gunicorn `--bind fd://3`, Uvicorn `--fd 3`, `server.listen({ fd: 3 })`), scaling to zero |
+
+**Python Workers.** A wrangler config whose `main` ends in `.py` is a Python Worker. `skif deploy`
+runs `build.command` (normally `uv run pywrangler sync`, which vendors `pyproject.toml` dependencies,
+the `workers` SDK included, into `python_modules/`), then ships every `.py` file under the entry's
+directory, named relative to it, plus every file under `python_modules/` (`.py` as `python` modules,
+everything else as data). Bytecode caches and `*.dist-info` are left out; the 512-module cap applies.
+The control plane adds the `python_workers` flag and reserves 384 MB unless `skiff.memoryMb` says
+otherwise (at least 256). A bundle cannot mix Python and JavaScript modules.
+
+A JavaScript module cannot import a Python one, so a Python host is two Workers in one workerd:
+
+```
+socket ─▶ skiff-shim (JS, the function-shim credential)
+            │  /__skiff/health            answered here, never wakes Python
+            │  public request             env.USER.fetch(request)
+            │  /__skiff/scheduled         env.USER.scheduled({ cron, scheduledTime })  → 204 / 500
+            │  /__skiff/queue             env.USER.queue(name, messages) → per-message verdicts
+            ▼ USER service binding
+          main (Python: entry module first, the manifest's bindings, DOs, tail)
+```
+
+`scheduled()` and `queue()` on a service binding deliver real events with Cloudflare's semantics
+(explicit `ack()`/`retry()`, `ackAll()`, `retryAll()`, a thrown handler retries), but workerd only
+exposes them under `service_binding_extra_handlers`, an experimental flag. The agent sets it on the
+shim Worker only and the helper adds `--experimental` to Python hosts only. Calling those methods
+without the flag dispatches them as RPC with the wrong argument shapes, which is why it is not
+optional. Everything the agent sees (health, internal routes, the queue result body) is the same as
+for a JavaScript host.
+
+Pyodide is not part of the workerd binary: workerd downloads a bundle per compatibility-date era
+(0.26 before 2026-06-10, the CPython 3.14 build after; ~36 MB together). The installer starts the
+pinned workerd once per era with a probe Worker and a scratch cache, then moves the bundles to
+`/usr/lib/skiff/workerd/<version>/pyodide` (`scripts/install/pyodide.ts`, `--no-python` skips it);
+convergence does the same after a pin bump on nodes that had a cache. Python hosts get
+`--pyodide-bundle-disk-cache-dir` pointing there, read-only. The agent adds `functions-python` to its
+heartbeat only while a bundle is present, and placement refuses a Python function on any other node,
+so a host never fetches its runtime at cold start.
+
+**Process apps that scale to zero.** `WorkloadSpec.idleStopSeconds` (process runtime, socket
+activation on, HTTP ingress, one replica; 0 or absent is always on) reaches the node as
+`WorkloadDesired.idleStopSeconds`. The function scheduler's idle sweep covers these units too: the
+same access-log activity signal, the same "first sight and restarts reset the timer" rules, and
+`helper.stop` of the service while the `.socket` keeps listening. The watchdog and cron stay
+workerd-only. The runtime treats such a stopped unit as steady state. The app must adopt the
+inherited listener; Bun cannot yet, so Bun apps keep socket activation off and stay always on.
+
+**PHP.** FrankenPHP is PHP embedded in Caddy, and Caddy listens on an inherited fd with
+`bind fd/3`, so a PHP app is a process app whose command is `frankenphp run --config Caddyfile`
+(`examples/php-frankenphp`). The static Linux build is ~175 MB, over the 25 MB release per-file
+limit, so it is installed on the node like workerd: pinned version and SHA-256 digests in
+`scripts/install/frankenphp.ts`, opt-in with `--with-php` (or that script on an installed node),
+linked at `/usr/local/bin/frankenphp` (on every process unit's `PATH`), and refreshed by convergence
+only on nodes that already have it. Checked with FrankenPHP 1.13.2 (Caddy 2.11.7): it serves on the
+passed socket only, opens no TCP port, and exits 0 on `SIGTERM`.
+
 ---
 
 ## 5. Phased plan
@@ -421,7 +520,7 @@ process apps as well. It is not a Functions-only feature.
 | **2. Bindings** | Durable data | Durable Objects on a volume; R2 → RustFS; Hyperdrive → PgBouncer; KV; D1; Analytics Engine → ClickHouse; Cache; SQLite backups and restore | L | A chat-room Durable Object with hibernating WebSockets survives a host restart; an R2 put/get round-trips to RustFS; a D1 backup restores to a new project |
 | **3. Triggers and economics** | Lambda-style | Cron timers; queues; scale to zero with idle stop; the runaway watchdog; tail workers → OTLP; cross-project service bindings | M | A cron fires exactly once per occurrence across agent restarts; an idle function holds 0 MB; cold-start p50 is within the S2 target |
 | **4. HA** | Survive node loss | Multi-node stateless replicas; workerd cluster mode per stateful project; Workflows | L | The CLUSTERING §11 failure matrix rows for functions pass, including killing the owner of a Durable Object |
-| **5. Later bets** | — | Worker Loader for user code and the assistant's code mode; Python Workers; a gVisor tier; `workers-rs` examples | — | Each needs its own FN or D decision |
+| **5. Later bets** | — | Worker Loader for user code and the assistant's code mode; a gVisor tier; Python memory snapshots for faster cold starts. Python Workers and Wasm languages shipped as D121 (§4.13). | — | Each needs its own FN or D decision |
 
 ### 5.1 Spikes
 
@@ -449,7 +548,7 @@ process apps as well. It is not a Functions-only feature.
 | FN5 | **Limits come from outside workerd**: cgroup memory and CPU, the V8 heap flag, Caddy timeouts and an agent watchdog. Per-request CPU limits are documented as unsupported. | The open-source server ships null limit enforcers | Patching workerd's limit enforcer (a fork to maintain) |
 | FN6 | **The trust model equals the process tier.** Org members may run code. Hostile multi-tenant use is unsupported until a gVisor or microVM tier exists for all runtimes. | Functions are strictly less powerful than process apps | Marketing functions as a hostile-code sandbox |
 | FN7 | **Default-deny private egress**: workerd `network` `allow=["public"]` plus systemd IP filtering. Private targets exist only as declared `external` bindings. | SSRF into the overlay and loopback is the main new risk | Relying on either layer alone |
-| FN8 | **`wrangler.jsonc` is the source config.** Clients bundle; Skiff maps bindings by name and validates a `skiff-function.json` manifest. Unsupported bindings fail the deploy. | Code ports both ways, `wrangler dev` is the local loop, and D2 holds | A Skiff-only config format; building on the control plane; silently dropping bindings |
+| FN8 | **`wrangler.jsonc` is the source config.** Clients bundle with Skiff's own pinned bundler (D113); Skiff maps bindings by name and validates a `skiff-function.json` manifest. Unsupported bindings fail the deploy. | Code ports both ways, `wrangler dev` is the local loop, and D2 holds | A Skiff-only config format; building on the control plane; silently dropping bindings; running the user's Wrangler to bundle |
 | FN9 | **Cron fires on the node** through a systemd timer and an internal shim route. Phase 4 adds run leases. | Pull, not push (invariant 1). No control plane in the trigger path. | The control-plane scheduler pushing invocations |
 | FN10 | **Binding services run inside the function's own host**, ported from Miniflare where possible (Apache-2.0 notices kept). R2 maps to RustFS, Hyperdrive to PgBouncer, Analytics Engine to ClickHouse. | No new daemon. Tenant data stays in the tenant's sandbox. Reuses managed services. | A node-wide binding daemon; a control-plane KV |
 | FN11 | **Stateful functions are single-node until workerd cluster mode passes S8.** Each project is then its own cluster on its own bucket prefix, over `wg0`, with Skiff-rendered configs. The shared `workerd deploy` catalog is not used. | Adopts upstream's design rather than inventing one. Upstream's authority model is wrong for tenants. | A Skiff-built Durable Object router; running celld alongside workerd |
@@ -468,8 +567,12 @@ process apps as well. It is not a Functions-only feature.
   celld does.
 - **Memory budget.** If S2 shows a host above about 40 MB idle-resident, scale to zero becomes
   essential rather than nice to have, and the default `memoryMb` may rise.
-- **Python Workers.** They are supported by workerd with the `python_workers` flag, but Pyodide
-  cold starts are heavy. Defer until phase 5.
+- **Python Workers (D121).** Measured on workerd 1.20261106.1: an idle Pyodide host is ~230 MB
+  resident (a JS host ~30 MB) and a cold start from the warmed cache is ~1.2 s, so the default
+  reservation is 384 MB and scale to zero matters more. `--experimental` is on for Python hosts
+  only, for `service_binding_extra_handlers`; if upstream renames or graduates that flag the shim
+  Worker's flag list is the one place to change. Memory snapshots (`--python-load-snapshot`) would
+  cut the cold start and are not used yet.
 - **Licensing.** workerd, Miniflare and celld are Apache-2.0, and Skiff is MIT. Shipping the
   binary and ported code needs `NOTICE` and licence files in the release; that is not a blocker.
 - **Open decisions:** whether the cluster bucket may be a managed RustFS instance (D71 tension);

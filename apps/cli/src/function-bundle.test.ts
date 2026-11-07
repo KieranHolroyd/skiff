@@ -1,15 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
 	buildFunctionBundle,
+	mapQueueConsumers,
 	mapWranglerBindings,
 	type BuiltFunctionBundle,
 	type ManifestBinding,
 } from './function-bundle.ts';
-import type { WranglerInvoker } from './wrangler.ts';
 
 let dir = '';
 const built: BuiltFunctionBundle[] = [];
@@ -21,6 +21,7 @@ beforeEach(async () => {
 	await writeFile(join(dir, 'public', 'index.html'), '<h1>Hello</h1>');
 	await writeFile(join(dir, 'public', 'nested', 'app.js'), 'console.log("asset")');
 	await writeFile(join(dir, 'public', '.DS_Store'), 'junk');
+	await writeFile(join(dir, 'src', 'index.ts'), WORKER_SOURCE);
 });
 
 afterEach(async () => {
@@ -28,28 +29,14 @@ afterEach(async () => {
 	await rm(dir, { recursive: true, force: true });
 });
 
-function fakeInvoker(
-	files: Record<string, string | Uint8Array>,
-	calls: string[][],
-	code = 0,
-): WranglerInvoker {
-	const invoke = (async (args: string[]) => {
-		calls.push(args);
-		if (code !== 0) return code;
-		const outdir = args[args.indexOf('--outdir') + 1]!;
-		for (const [name, data] of Object.entries(files)) {
-			const path = join(outdir, ...name.split('/'));
-			await mkdir(dirname(path), { recursive: true });
-			await writeFile(path, data);
-		}
-		return 0;
-	}) as WranglerInvoker;
-	return Object.assign(invoke, {
-		command: '/virtual/wrangler',
-		display: '/virtual/wrangler',
-		ephemeral: false,
-		installed: true,
-	});
+const WORKER_SOURCE = 'export default { fetch(): Response { return new Response("ok"); } };\n';
+
+async function writeSource(files: Record<string, string | Uint8Array>): Promise<void> {
+	for (const [name, data] of Object.entries(files)) {
+		const path = join(dir, ...name.split('/'));
+		await mkdir(join(path, '..'), { recursive: true });
+		await writeFile(path, data);
+	}
 }
 
 async function build(
@@ -58,19 +45,23 @@ async function build(
 		files?: Record<string, string | Uint8Array>;
 		projectSecrets?: string[];
 		raw?: string;
-		code?: number;
+		buildCommands?: Array<{ command: string; cwd: string }>;
+		buildExitCode?: number;
 	} = {},
-): Promise<{ bundle: BuiltFunctionBundle; calls: string[][] }> {
+): Promise<{ bundle: BuiltFunctionBundle }> {
 	const configPath = join(dir, 'wrangler.jsonc');
 	await writeFile(configPath, options.raw ?? JSON.stringify(config, null, 2));
-	const calls: string[][] = [];
+	if (options.files) await writeSource(options.files);
 	const bundle = await buildFunctionBundle({
 		config: { path: configPath, format: 'jsonc' },
-		invoker: fakeInvoker(options.files ?? { 'index.js': 'export default { fetch() {} }' }, calls, options.code),
 		projectSecrets: options.projectSecrets,
+		runBuildCommand: async (command, cwd) => {
+			options.buildCommands?.push({ command, cwd });
+			return options.buildExitCode ?? 0;
+		},
 	});
 	built.push(bundle);
-	return { bundle, calls };
+	return { bundle };
 }
 
 function byName(bindings: ManifestBinding[]): Map<string, ManifestBinding> {
@@ -84,9 +75,9 @@ const baseConfig = {
 };
 
 describe('buildFunctionBundle', () => {
-	test('runs wrangler dry-run, copies modules, hashes them and writes the manifest outside the source', async () => {
-		const js = 'export default { fetch() { return new Response("hi") } }';
-		const { bundle, calls } = await build(
+	test('bundles main with the pinned bundler, splits rule modules out and writes the manifest outside the source', async () => {
+		const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
+		const { bundle } = await build(
 			{
 				...baseConfig,
 				compatibility_flags: ['nodejs_compat'],
@@ -94,36 +85,53 @@ describe('buildFunctionBundle', () => {
 			},
 			{
 				files: {
-					'index.js': js,
-					'chunk.mjs': 'export const chunk = 1;',
-					'legacy.cjs': 'module.exports = {};',
-					'mod.wasm': new Uint8Array([0, 97, 115, 109]),
-					'notes.txt': 'hello',
-					'page.html': '<p>hi</p>',
-					'index.js.map': '{"version":3}',
+					'src/index.ts': [
+						'import { helper } from "./helper";',
+						'import notes from "./notes.txt";',
+						'import page from "./page.html";',
+						'import blob from "./blob.bin";',
+						'import mod from "./mod.wasm";',
+						'import { Buffer } from "node:buffer";',
+						'import { EventEmitter } from "events";',
+						'import { DurableObject } from "cloudflare:workers";',
+						'export class Room extends DurableObject {}',
+						'export default { fetch(): Response { return new Response(helper() + notes + page + String(blob) + String(mod) + Buffer.from("x") + String(EventEmitter)); } };',
+					].join('\n'),
+					'src/helper.ts': 'export const helper = (): string => "hi";\n',
+					'src/notes.txt': 'hello',
+					'src/page.html': '<p>hi</p>',
+					'src/blob.bin': new Uint8Array([1, 2, 3]),
+					'src/mod.wasm': wasm,
 				},
 			},
 		);
-
-		expect(calls).toHaveLength(1);
-		expect(calls[0]!.slice(0, 2)).toEqual(['deploy', '--dry-run']);
-		expect(calls[0]![calls[0]!.indexOf('--config') + 1]).toBe(join(dir, 'wrangler.jsonc'));
 
 		expect(bundle.manifest.version).toBe(1);
 		expect(bundle.manifest.main).toBe('index.js');
 		expect(bundle.manifest.compatibilityDate).toBe('2026-10-01');
 		expect(bundle.manifest.compatibilityFlags).toEqual(['nodejs_compat']);
-		expect(bundle.manifest.triggers).toEqual({ crons: ['*/5 * * * *'] });
-		expect(bundle.manifest.modules.map((module) => [module.name, module.type])).toEqual([
-			['chunk.mjs', 'esm'],
-			['index.js', 'esm'],
-			['legacy.cjs', 'cjs'],
-			['mod.wasm', 'wasm'],
-			['notes.txt', 'text'],
-			['page.html', 'text'],
-		]);
+		expect(bundle.manifest.triggers).toEqual({ crons: ['*/5 * * * *'], queues: [] });
+		const sha1 = (data: string | Uint8Array): string => createHash('sha1').update(data).digest('hex');
+		const types = new Map(bundle.manifest.modules.map((module) => [module.name, module.type]));
+		expect(types).toEqual(
+			new Map([
+				['index.js', 'esm'],
+				[`${sha1('hello')}-notes.txt`, 'text'],
+				[`${sha1('<p>hi</p>')}-page.html`, 'text'],
+				[`${sha1(new Uint8Array([1, 2, 3]))}-blob.bin`, 'data'],
+				[`${sha1(wasm)}-mod.wasm`, 'wasm'],
+			]),
+		);
+
+		const code = await readFile(join(bundle.dir, 'index.js'), 'utf8');
+		expect(code).toContain('"hi"');
+		expect(code).toContain(`from "./${sha1('hello')}-notes.txt"`);
+		expect(code).toContain('from "node:buffer"');
+		expect(code).toContain('from "node:events"');
+		expect(code).toContain('from "cloudflare:workers"');
+		expect(code).toMatch(/export\s*\{[^}]*Room/);
 		const indexModule = bundle.manifest.modules.find((module) => module.name === 'index.js')!;
-		expect(indexModule.sha256).toBe(createHash('sha256').update(js).digest('hex'));
+		expect(indexModule.sha256).toBe(createHash('sha256').update(code).digest('hex'));
 		expect(bundle.manifest.assets).toBeUndefined();
 
 		const manifestOnDisk = JSON.parse(
@@ -131,7 +139,8 @@ describe('buildFunctionBundle', () => {
 		) as unknown;
 		expect(manifestOnDisk).toEqual(bundle.manifest);
 		await expect(stat(join(dir, 'skiff-function.json'))).rejects.toThrow();
-		expect(await readFile(join(bundle.dir, 'mod.wasm'))).toEqual(Buffer.from([0, 97, 115, 109]));
+		await expect(stat(join(dir, '.skiff-bundle'))).rejects.toThrow();
+		expect(await readFile(join(bundle.dir, `${sha1(wasm)}-mod.wasm`))).toEqual(Buffer.from(wasm));
 	});
 
 	test('maps every supported wrangler binding, assets, secrets and skiff overrides', async () => {
@@ -200,7 +209,7 @@ describe('buildFunctionBundle', () => {
 		expect(bindings.get('EXTRA_KEY')).toEqual({ name: 'EXTRA_KEY', type: 'secret' });
 
 		expect(bundle.manifest.assets).toEqual({ directory: 'public', runWorkerFirst: ['/api/*'] });
-		expect(bundle.manifest.triggers).toEqual({ crons: ['0 * * * *'] });
+		expect(bundle.manifest.triggers).toEqual({ crons: ['0 * * * *'], queues: [] });
 		expect(bundle.manifest.idleStopSeconds).toBe(60);
 		expect(bundle.manifest.memoryMb).toBe(256);
 		expect(bundle.manifest.cpus).toBe(0.5);
@@ -237,33 +246,80 @@ describe('buildFunctionBundle', () => {
 		).rejects.toThrow('compatibility_date is required');
 	});
 
-	test('selects a single emitted module when main does not name one', async () => {
-		const { bundle } = await build(
-			{ compatibility_date: '2026-10-01' },
-			{ files: { 'worker.js': 'export default {}' } },
-		);
-		expect(bundle.manifest.main).toBe('worker.js');
+	test('requires main', async () => {
+		await expect(build({ compatibility_date: '2026-10-01' })).rejects.toThrow('"main" is required');
 	});
 
-	test('uses main to pick between chunks and errors when it is ambiguous', async () => {
+	test('names the output after the entrypoint', async () => {
 		const { bundle } = await build(
-			{ main: 'src/api.ts', compatibility_date: '2026-10-01' },
-			{ files: { 'api.js': 'export default {}', 'chunk-1.js': 'export const x = 1;' } },
+			{ main: 'src/api.mjs', compatibility_date: '2026-10-01' },
+			{ files: { 'src/api.mjs': 'export default { fetch() { return new Response("api") } }' } },
 		);
 		expect(bundle.manifest.main).toBe('api.js');
-
-		await expect(
-			build(
-				{ compatibility_date: '2026-10-01' },
-				{ files: { 'a.js': 'export default {}', 'b.js': 'export default {}' } },
-			),
-		).rejects.toThrow('could not tell which wrangler output is the main module');
+		expect(bundle.manifest.modules.map((module) => module.name)).toEqual(['api.js']);
 	});
 
-	test('reports a wrangler failure with its command', async () => {
+	test('reports bundling errors with file positions', async () => {
 		await expect(
-			build({ ...baseConfig }, { code: 2 }),
-		).rejects.toThrow('/virtual/wrangler deploy --dry-run');
+			build(baseConfig, { files: { 'src/index.ts': 'import { x } from "./missing";\nexport default { x };\n' } }),
+		).rejects.toThrow(/src\/index\.ts:1:\d+: Could not resolve "\.\/missing"/);
+	});
+
+	test('points at nodejs_compat when a Node built-in is imported without it', async () => {
+		// From 2026-08-04 workerd implies nodejs_compat, so only an older date can lack it.
+		await expect(
+			build({ ...baseConfig, compatibility_date: '2026-06-01' }, {
+				files: { 'src/index.ts': 'import { readFile } from "node:fs/promises";\nexport default { readFile };\n' },
+			}),
+		).rejects.toThrow('"compatibility_flags": ["nodejs_compat"]');
+	});
+
+	test('refuses service-worker syntax', async () => {
+		await expect(
+			build(baseConfig, {
+				files: { 'src/index.ts': 'addEventListener("fetch", () => {});\n' },
+			}),
+		).rejects.toThrow('Service-worker syntax');
+	});
+
+	test('honours define, minify and custom module rules', async () => {
+		const { bundle } = await build(
+			{
+				...baseConfig,
+				define: { __VERSION__: '"1.2.3"' },
+				minify: true,
+				rules: [{ type: 'Text', globs: ['**/*.md'] }],
+			},
+			{
+				files: {
+					'src/index.ts': 'import readme from "./README.md";\ndeclare const __VERSION__: string;\nexport default { fetch() { return new Response(__VERSION__ + readme); } };\n',
+					'src/README.md': '# hi',
+				},
+			},
+		);
+		const code = await readFile(join(bundle.dir, 'index.js'), 'utf8');
+		expect(code).toContain('"1.2.3"');
+		expect(code).not.toContain('__VERSION__');
+		const readme = bundle.manifest.modules.find((module) => module.name.endsWith('-README.md'));
+		expect(readme?.type).toBe('text');
+	});
+
+	test('runs build.command before bundling and stops when it fails', async () => {
+		const commands: Array<{ command: string; cwd: string }> = [];
+		await build({ ...baseConfig, build: { command: 'npm run build', cwd: 'src' } }, { buildCommands: commands });
+		expect(commands).toEqual([{ command: 'npm run build', cwd: join(dir, 'src') }]);
+
+		await expect(
+			build({ ...baseConfig, build: { command: 'false' } }, { buildExitCode: 3 }),
+		).rejects.toThrow('The custom build command failed (exit 3): false');
+	});
+
+	test('refuses Wrangler options it cannot honour', async () => {
+		await expect(build({ ...baseConfig, no_bundle: true })).rejects.toThrow('"no_bundle" is not supported');
+		await expect(build({ ...baseConfig, node_compat: true })).rejects.toThrow('"node_compat" is the retired');
+		await expect(
+			build({ ...baseConfig, rules: [{ type: 'PythonModule', globs: ['**/*.py'] }] }),
+		).rejects.toThrow('Python module rules are not needed');
 	});
 
 	test('reports a missing or empty assets directory', async () => {
@@ -339,5 +395,33 @@ describe('mapWranglerBindings', () => {
 			{ label: 'wrangler.jsonc' },
 		);
 		expect(bindings).toEqual([{ name: 'API_KEY', type: 'secret' }]);
+	});
+});
+
+describe('queues on managed brokers (D112)', () => {
+	test('producers and consumers map from wrangler, with skiff.brokers naming the broker', () => {
+		const config = {
+			queues: {
+				producers: [{ binding: 'JOBS', queue: 'jobs' }, { binding: 'MAIL', queue: 'mail' }],
+				consumers: [
+					{ queue: 'jobs', max_batch_size: 25, max_batch_timeout: 2, max_retries: 5, retry_delay: 30, dead_letter_queue: 'jobs-dlq' },
+					{ queue: 'mail' },
+				],
+			},
+			skiff: { brokers: { jobs: 'events' } },
+		};
+		const { bindings } = mapWranglerBindings(config, { label: 'wrangler.jsonc', workerName: 'w', projectSecrets: [] });
+		expect(bindings.find((item) => item.name === 'JOBS')).toEqual({ name: 'JOBS', type: 'queue', queue: 'jobs', broker: 'events' });
+		expect(bindings.find((item) => item.name === 'MAIL')).toEqual({ name: 'MAIL', type: 'queue', queue: 'mail' });
+		expect(mapQueueConsumers(config, 'wrangler.jsonc', { jobs: 'events' })).toEqual([
+			{ queue: 'jobs', broker: 'events', maxBatchSize: 25, maxBatchTimeout: 2, maxRetries: 5, retryDelay: 30, deadLetterQueue: 'jobs-dlq' },
+			{ queue: 'mail' },
+		]);
+	});
+
+	test('consumer settings Skiff cannot honour are refused, not ignored', () => {
+		expect(() => mapQueueConsumers({ queues: { consumers: [{ queue: 'jobs', max_concurrency: 4 }] } }, 'w', {})).toThrow(
+			/max_concurrency is not supported/,
+		);
 	});
 });

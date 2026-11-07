@@ -13,6 +13,7 @@ describe('feature registry', () => {
 	test('registers every known flag with a description and area', () => {
 		expect(FEATURE_FLAG_NAMES).toEqual([
 			'FUNCTIONS',
+			'BROKERS',
 			'BACKUPS_RESTORE',
 			'PITR',
 			'OBJECT_BROWSER',

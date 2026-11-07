@@ -1,0 +1,13 @@
+{
+	"runtime": "process",
+	"command": ["frankenphp", "run", "--config", "Caddyfile"],
+	"memoryMb": 128,
+	"cpus": 1,
+	"healthPath": "/",
+	"socketActivation": true,
+	"idleStopSeconds": 300,
+	"env": {
+		"XDG_CONFIG_HOME": "/tmp/config",
+		"XDG_DATA_HOME": "/tmp/data"
+	}
+}

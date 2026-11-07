@@ -28,6 +28,7 @@ ownership, and agent protocol.
 | 20 | [Agent data tools](20-agent-data-tools.md) | P1 | 3 | E | 01, 02, 03, 04, 11, 12, 16 | — |
 | 22 | [Native database studio](22-native-studio.md) | P1 | 3 | E | 03, 04, D95 | 20 (query path) |
 | 23 | [One-command worker nodes](23-one-click-nodes.md) | P1 | — | N | signed artifacts, join flow | — |
+| 24 | [Email (self-hosted SES)](24-email.md) | P1 | — | N | signed artifacts, platform-config helper, D110 (E2) | — |
 | P2 | [Later bets](P2-later-bets.md) | P2 | 4+ | — | varies | — |
 
 ## Start order for a new agent

@@ -12,6 +12,7 @@
 	import DatabaseIcon from '@lucide/svelte/icons/database';
 	import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
 	import GlobeIcon from '@lucide/svelte/icons/globe';
+	import InboxIcon from '@lucide/svelte/icons/inbox';
 	import LayoutDashboardIcon from '@lucide/svelte/icons/layout-dashboard';
 	import NetworkIcon from '@lucide/svelte/icons/network';
 	import Share2Icon from '@lucide/svelte/icons/share-2';
@@ -68,6 +69,7 @@
 			| '/(dashboard)/functions'
 			| '/(dashboard)/databases'
 			| '/(dashboard)/storage'
+			| '/(dashboard)/brokers'
 			| '/(dashboard)/shares'
 			| '/(dashboard)/deployments'
 			| '/(dashboard)/nodes'
@@ -118,6 +120,13 @@
 					href: '/(dashboard)/storage',
 					path: '/storage',
 					icon: CylinderIcon
+				},
+				{
+					label: 'Queues',
+					href: '/(dashboard)/brokers',
+					path: '/brokers',
+					icon: InboxIcon,
+					feature: 'brokers'
 				},
 				{
 					label: 'Shares',
@@ -203,7 +212,8 @@
 			top?.path === '/projects' ||
 			top?.path === '/functions' ||
 			top?.path === '/databases' ||
-			top?.path === '/storage';
+			top?.path === '/storage' ||
+			top?.path === '/brokers';
 		for (const [index, raw] of segments.slice(1).entries()) {
 			const segment = decodeURIComponent(raw);
 			// `/functions/new` is a page, not a function called "new".

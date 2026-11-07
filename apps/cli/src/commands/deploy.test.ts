@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { inflateRawSync } from 'node:zlib';
 import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ApiError, CliError } from '../errors.ts';
 import type { FinalizeOutcome, ProjectCreateInput, ProjectView, SecretView } from '../api.ts';
-import { ensureWrangler, type WranglerInvoker } from '../wrangler.ts';
 import { deployCommand, type DeployClient } from './deploy.ts';
 
 let dir = '';
@@ -78,27 +78,7 @@ function fakeClient(state: FakeState): DeployClient {
 	};
 }
 
-function fakeWrangler(
-	files: Record<string, string>,
-	calls: string[][] = [],
-): typeof ensureWrangler {
-	return async () => {
-		const invoke = (async (args: string[]) => {
-			calls.push(args);
-			const outdir = args[args.indexOf('--outdir') + 1]!;
-			for (const [name, contents] of Object.entries(files)) {
-				await writeFile(join(outdir, name), contents);
-			}
-			return 0;
-		}) as WranglerInvoker;
-		return Object.assign(invoke, {
-			command: 'wrangler',
-			display: 'wrangler',
-			ephemeral: false,
-			installed: true,
-		});
-	};
-}
+const WORKER = 'export default { fetch() { return new Response("ok"); } };\n';
 
 function emptyState(overrides: Partial<FakeState> = {}): FakeState {
 	return {
@@ -126,7 +106,7 @@ async function projectDir(files: Record<string, string> = {}): Promise<string> {
 }
 
 describe('skif deploy with a wrangler project', () => {
-	test('creates a function project, bundles with wrangler and uploads the generated manifest', async () => {
+	test('creates a function project, bundles with the pinned bundler and uploads the generated manifest', async () => {
 		const project = await projectDir({
 			'wrangler.jsonc': `{
 				// A Functions project
@@ -137,6 +117,8 @@ describe('skif deploy with a wrangler project', () => {
 				"assets": { "directory": "public", "run_worker_first": ["/api/*"], },
 			}`,
 			'public/index.html': '<h1>Hello</h1>',
+			'src/index.ts': 'import mod from "./mod.wasm";\nexport default { fetch() { return new Response(String(mod)); } };\n',
+			'src/mod.wasm': 'wasm',
 		});
 
 		const state = emptyState({
@@ -145,12 +127,10 @@ describe('skif deploy with a wrangler project', () => {
 				{ id: 'sec_2', name: 'ORG_KEY', projectId: null, type: 'secret', version: 1 },
 			],
 		});
-		const calls: string[][] = [];
 		const logs: string[] = [];
 
 		await deployCommand([project, '--project', 'demo-fn', '--message', 'first function'], {
 			client: fakeClient(state),
-			ensureWrangler: fakeWrangler({ 'index.js': 'export default { fetch() {} }', 'chunk.wasm': 'wasm' }, calls),
 			log: (message) => logs.push(message),
 		});
 
@@ -162,17 +142,15 @@ describe('skif deploy with a wrangler project', () => {
 			previewAccess: 'platform',
 		});
 		expect(state.listSecretsCalls).toBe(1);
-		expect(calls).toHaveLength(1);
-		expect(calls[0]![calls[0]!.indexOf('--config') + 1]).toBe(join(project, 'wrangler.jsonc'));
+		expect(logs.some((line) => line.startsWith('Bundling with the skiff bundler (esbuild '))).toBe(true);
 
 		expect(state.uploads).toHaveLength(1);
 		const entries = readZip(state.uploads[0]!);
-		expect([...entries.keys()]).toEqual([
-			'chunk.wasm',
-			'index.js',
-			'public/index.html',
-			'skiff-function.json',
-		]);
+		const wasmModule = `${createHash('sha1').update('wasm').digest('hex')}-mod.wasm`;
+		expect([...entries.keys()].sort()).toEqual(
+			[wasmModule, 'index.js', 'public/index.html', 'skiff-function.json'].sort(),
+		);
+		expect(entries.get('index.js')).toContain(`from "./${wasmModule}"`);
 		const manifest = JSON.parse(entries.get('skiff-function.json')!) as {
 			version: number;
 			main: string;
@@ -207,6 +185,7 @@ describe('skif deploy with a wrangler project', () => {
 				compatibility_date: '2026-10-01',
 			}),
 			'index.html': '<h1>Hello</h1>',
+			'src/index.ts': WORKER,
 		});
 		const state = emptyState({
 			project: { id: 'prj_1', slug: 'demo-fn', runtime: 'static' },
@@ -215,7 +194,6 @@ describe('skif deploy with a wrangler project', () => {
 		await expect(
 			deployCommand([project, '--project', 'demo-fn'], {
 				client: fakeClient(state),
-				ensureWrangler: fakeWrangler({ 'index.js': 'export default {}' }),
 				log: () => {},
 			}),
 		).rejects.toThrow('uses runtime "static"');
@@ -230,6 +208,7 @@ describe('skif deploy with a wrangler project', () => {
 				main: 'src/index.ts',
 				compatibility_date: '2026-10-01',
 			}),
+			'src/index.ts': WORKER,
 		});
 		const state = emptyState({
 			project: { id: 'prj_1', slug: 'demo-fn', runtime: 'function' },
@@ -237,7 +216,6 @@ describe('skif deploy with a wrangler project', () => {
 
 		await deployCommand([project, '--project', 'demo-fn', '--no-promote'], {
 			client: fakeClient(state),
-			ensureWrangler: fakeWrangler({ 'index.js': 'export default {}' }),
 			log: () => {},
 		});
 
@@ -247,7 +225,7 @@ describe('skif deploy with a wrangler project', () => {
 		expect(readZip(state.uploads[0]!).has('skiff-function.json')).toBe(true);
 	});
 
-	test('static deploy is unchanged and never touches wrangler', async () => {
+	test('static deploy is unchanged', async () => {
 		const project = await projectDir({
 			'index.html': '<h1>Static</h1>',
 			'skiff.json': '{"cleanUrls":true}',
@@ -256,9 +234,6 @@ describe('skif deploy with a wrangler project', () => {
 
 		await deployCommand([project, '--project', 'demo-site', '--spa'], {
 			client: fakeClient(state),
-			ensureWrangler: async () => {
-				throw new Error('wrangler must not be used for a static deploy');
-			},
 			log: () => {},
 		});
 
@@ -276,18 +251,12 @@ describe('skif deploy with a wrangler project', () => {
 			'index.html': '<h1>Static</h1>',
 		});
 		const state = emptyState();
-		let ensureCalled = false;
 
 		await deployCommand([project, '--project', 'demo-site', '--no-wrangler'], {
 			client: fakeClient(state),
-			ensureWrangler: async () => {
-				ensureCalled = true;
-				return fakeWrangler({})(dir, {});
-			},
 			log: () => {},
 		});
 
-		expect(ensureCalled).toBe(false);
 		expect(state.created).toHaveLength(1);
 		expect(state.created[0]!.runtime).toBeUndefined();
 		const entries = readZip(state.uploads[0]!);
@@ -302,12 +271,12 @@ describe('skif deploy with a wrangler project', () => {
 				main: 'src/index.ts',
 				compatibility_date: '2026-10-01',
 			}),
+			'src/index.ts': WORKER,
 		});
 		const state = emptyState();
 
 		await deployCommand([project, '--project', 'demo-fn', '--wrangler', join(project, 'custom.jsonc')], {
 			client: fakeClient(state),
-			ensureWrangler: fakeWrangler({ 'index.js': 'export default {}' }),
 			log: () => {},
 		});
 
@@ -322,6 +291,7 @@ describe('skif deploy with a wrangler project', () => {
 				main: 'src/index.ts',
 				compatibility_date: '2026-10-01',
 			}),
+			'src/index.ts': WORKER,
 		});
 		const state = emptyState({
 			project: { id: 'prj_1', slug: 'demo-fn', runtime: 'function' },
@@ -331,7 +301,6 @@ describe('skif deploy with a wrangler project', () => {
 
 		await deployCommand([project, '--project', 'demo-fn'], {
 			client: fakeClient(state),
-			ensureWrangler: fakeWrangler({ 'index.js': 'export default {}' }),
 			log: (message) => logs.push(message),
 		});
 

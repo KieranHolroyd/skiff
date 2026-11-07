@@ -51,7 +51,7 @@ function functionSpec() {
 		compatibilityDate: '2026-10-01',
 		compatibilityFlags: [],
 		bindings: [],
-		triggers: { crons: [] },
+		triggers: { crons: [], queues: [] },
 		assets: null,
 		idleStopSeconds: 300,
 		workerdVersion: '1.20261106.1',

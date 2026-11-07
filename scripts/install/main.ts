@@ -28,6 +28,9 @@
  *   --object-store local|r2   storage backend (default local)
  *   --r2-account-id/--r2-bucket/--r2-access-key-id/--r2-secret-access-key
  *   --no-agent                install the control plane only
+ *   --no-python               skip warming the Pyodide cache Python functions need (D121; ~36 MB)
+ *   --with-php                install the pinned FrankenPHP runtime for PHP process apps (D121;
+ *                             ~175 MB; or SKIFF_INSTALL_PHP=1)
  *   --version <label>         release label (default: the repository VERSION file)
  */
 import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -43,6 +46,8 @@ import { CONFIG_COMMAND, CONFIG_PATH_UNIT, CONFIG_SERVICE_UNIT, ensurePlatformCo
 import { readEnvFile, writeEnvFile } from './env-file.ts';
 import { ensureVapidKeys } from '../../packages/contracts/src/vapid.ts';
 import { ensureWorkerd, pinnedWorkerdVersion, workerdArch } from './workerd.ts';
+import { ensureFrankenphp, frankenphpArch, FRANKENPHP_LINK, FRANKENPHP_PINNED_VERSION } from './frankenphp.ts';
+import { pythonBundleEras, warmPyodideCache } from './pyodide.ts';
 import { checkDns, digLookup, dnsTargets, parseServerAddresses, resolverLookup, type DnsResult } from './dns-check.ts';
 import {
 	CONTROL_SOCKET,
@@ -144,6 +149,10 @@ interface Options {
 	objectStore: 'local' | 'r2';
 	r2?: { accountId: string; bucket: string; accessKeyId: string; secretAccessKey: string };
 	noAgent: boolean;
+	/** Install the pinned FrankenPHP binary for PHP process apps (D121). Opt-in: it is large. */
+	withPhp: boolean;
+	/** Skip the Pyodide cache for Python functions (D121). */
+	noPython: boolean;
 	/**
 	 * Install the optional ClickHouse telemetry store (D101). Undefined: ask (interactive), else no.
 	 * A host that already has it keeps it either way unless --no-clickhouse.
@@ -219,6 +228,8 @@ const options: Options = {
 	githubClientSecret: setting('--github-client-secret', ['GITHUB_CLIENT_SECRET']) || undefined,
 	objectStore: (setting('--object-store', ['SKIFF_OBJECT_STORE'], 'local') as 'local' | 'r2') || 'local',
 	noAgent: has('--no-agent'),
+	withPhp: has('--with-php') || process.env.SKIFF_INSTALL_PHP === '1',
+	noPython: has('--no-python') || process.env.SKIFF_NO_PYTHON === '1',
 	clickhouse: has('--no-clickhouse')
 		? false
 		: has('--clickhouse') || process.env.SKIFF_INSTALL_CLICKHOUSE === '1'
@@ -629,6 +640,27 @@ async function preflight(): Promise<void> {
 				log,
 			});
 			log(`workerd ${version} ready in /usr/lib/skiff/workerd`);
+			// Python functions load Pyodide from a read-only cache next to the binary (D121); the
+			// agent advertises `functions-python` only once it is there.
+			if (!options.noPython) {
+				try {
+					const result = await warmPyodideCache({
+						workerdPath: join('/usr/lib/skiff/workerd', version, 'workerd'),
+						cacheDir: join('/usr/lib/skiff/workerd', version, 'pyodide'),
+						eras: await pythonBundleEras(SOURCE),
+						dryRun: options.dryRun,
+						log,
+					});
+					if (result !== 'would-warm') log(`Pyodide cache ${result} for workerd ${version}`);
+				} catch (error) {
+					log(
+						color.yellow(
+							`warning: could not warm the Pyodide cache (${error instanceof Error ? error.message : String(error)}); ` +
+								'Python functions stay unavailable on this node until `bun scripts/install/pyodide.ts` succeeds',
+						),
+					);
+				}
+			}
 		} catch (error) {
 			log(
 				color.yellow(
@@ -636,6 +668,22 @@ async function preflight(): Promise<void> {
 						'Functions stay unavailable until it is installed',
 				),
 			);
+		}
+		// PHP apps are process apps on a pinned FrankenPHP (D121). Opt-in; a failure is a warning,
+		// since only PHP apps need it and `bun scripts/install/frankenphp.ts` adds it later.
+		const phpArch = frankenphpArch(process.arch);
+		if (options.withPhp && phpArch) {
+			try {
+				const result = await ensureFrankenphp({ arch: phpArch, dryRun: options.dryRun, log });
+				log(`FrankenPHP ${FRANKENPHP_PINNED_VERSION} ${result === 'would-install' ? 'would be installed' : 'ready'} at ${FRANKENPHP_LINK}`);
+			} catch (error) {
+				log(
+					color.yellow(
+						`warning: could not install FrankenPHP (${error instanceof Error ? error.message : String(error)}); ` +
+							'PHP apps cannot start on this node until it is installed',
+					),
+				);
+			}
 		}
 	}
 	if (!options.noAgent) {

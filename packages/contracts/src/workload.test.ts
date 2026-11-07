@@ -190,9 +190,11 @@ describe('function replicas (phase 4)', () => {
 			'r2',
 			'analytics_engine',
 			'assets',
+			// D112: queue messages live in the managed broker, not on the host.
+			'queue',
 		];
 		for (const type of stateless) expect(functionBindingIsStateful(type), type).toBe(false);
-		expect([...FUNCTION_STATEFUL_BINDING_TYPES]).toEqual(['durable_object', 'kv', 'cache', 'queue', 'd1']);
+		expect([...FUNCTION_STATEFUL_BINDING_TYPES]).toEqual(['durable_object', 'kv', 'cache', 'd1']);
 		for (const type of FUNCTION_STATEFUL_BINDING_TYPES) expect(functionBindingIsStateful(type), type).toBe(true);
 	});
 

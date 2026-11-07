@@ -136,7 +136,7 @@ describe('replica upstreams (phase 4)', () => {
 				},
 			},
 		});
-		expect(proxy.transport).toEqual({ protocol: 'http', response_header_timeout: '60s' });
+		expect(proxy.transport).toEqual({ protocol: 'http', response_header_timeout: '5m' });
 		expect(JSON.stringify(proxy.handle_response)).toContain('"status_code":503');
 		expect(JSON.stringify(proxy.handle_response)).toContain('Retry-After');
 	});

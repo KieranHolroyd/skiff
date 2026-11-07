@@ -128,6 +128,37 @@
 - [ ] Per-bucket quotas, lifecycle rules, CORS, custom domains for public instances, Garage as a second engine
 - [ ] Bulk actions and prune for storage; `S3ObjectStore` replication target (D71)
 
+## Managed queue brokers ([BROKERS.md](./BROKERS.md), D111)
+- [x] NATS 2.12/2.11 with JetStream as a tier-3 container: create, resize, forward-only upgrade, restart, soft delete, restore, purge
+- [x] Helper-owned profile: own registry, `mq_` ids, helper-written config (single ACL user, capped stores), `GOMEMLIMIT`, loopback-only port
+- [x] Agent: `brokers` capability, NATS `INFO` health probe, `brokerPurges`/`purgedBrokers`
+- [x] Attachments inject `<PREFIX>_URL/_HOST/_PORT/_USER/_PASSWORD` (default `NATS`) and pin the app's node
+- [x] REST, MCP (`list/get/create/update/restart/attach/detach_broker`, `get_broker_logs`), CLI (`skif broker`), dashboard Queues pages, logs
+- [ ] End-to-end on a Debian 13 node: NATS under Quadlet with a read-only root as uid 4222, JetStream publish/consume through an attached app
+- [x] Function queues on brokers (D112): JetStream-backed `queue` bindings and `triggers.queues` consumers, agent delivery with per-message verdicts, retries, delays and dead-letter queues; replaces the node-local Durable Object broker
+- [ ] Queue view: streams, backlog and dead letters per broker in the dashboard; a `skif broker queues` command
+- [ ] RabbitMQ as the second engine (registry entry + helper profile; AMQP probe; management UI off)
+- [ ] Metrics sampler (`/varz`, `/jsz` on a loopback monitor port) → ClickHouse, stream/consumer listing in the dashboard, store-full alert
+- [ ] Per-attachment users with subject permissions; cross-node endpoints (C2); backups (stream snapshots); bulk actions and prune; project-page attach panel
+
+## Languages ([FUNCTIONS.md §4.13](./FUNCTIONS.md), D121)
+- [x] WebAssembly languages on functions (Rust/workers-rs, Go/TinyGo, C/C++, Zig): a JS entry importing `.wasm`, bundled as `CompiledWasm`
+- [x] Python Workers on the pinned workerd: `.py` main, `python_modules/` vendoring, `skiff-shim` Worker over a `USER` binding (`fetch`, cron and queue events), 384 MB default
+- [x] Pyodide cache warmed by the installer and convergence; `functions-python` capability gates placement
+- [x] Process apps scale to zero (`idleStopSeconds`, socket activation, dashboard field)
+- [x] PHP via FrankenPHP on an inherited socket: pinned, digest-checked, opt-in `--with-php`; `examples/php-frankenphp`
+- [ ] Verify on a Linux node under the helper sandbox: a FrankenPHP process app through its idle stop and cold start, and a Python function host
+- [ ] Python memory snapshots (`--python-load-snapshot`) to cut the ~1.2 s cold start
+- [ ] `skif` command for the workload spec (command, memory, idle stop); today it is the dashboard or `PUT /projects/:slug/workload`
+- [ ] A socket adapter for servers that cannot adopt fd 3 (Bun today), so they can scale to zero too
+
+## Email ([EMAIL.md](./EMAIL.md), proposed D114–D120)
+- [ ] E0 spike: KumoMTA on Debian 13 (2 vCPU / 4 GB) RSS, Lua → agent policy socket, DKIM/SPF/DMARC pass at Gmail and Outlook from the prod IP, inbound + DSN/ARF parsing (Postfix fallback)
+- [ ] E1: `mail` role, MTA install + preflight (port 25, FCrDNS, blocklists), platform DNS, domains with DKIM + Cloudflare TXT/MX, outbox + REST send, SMTP submission, credentials + attach env, suppression, sandbox/limits/auto-pause, events, alerts, REST/MCP/CLI/dashboard
+- [ ] E2: inbound routes (function `email()` handler synchronous in `DATA`, webhook, bucket), `send_email` binding, tenant webhooks, address identities
+- [ ] E3: custom MAIL FROM, ed25519, MTA-STS/TLS-RPT, DMARC reports, smarthost relay (SES BYODKIM), rspamd, templates, tracking, hosted unsubscribe
+- [ ] E4: several mail nodes, weighted MX, spool handover
+
 ## Observability & dashboards (D101, [OPS.md §3.6](./OPS.md))
 **Telemetry store**
 - [x] ClickHouse replaces embedded DuckDB: HTTP client (no native addon), ReplacingMergeTree tables, `*_hourly` views, same retention/rollups/Parquet archive

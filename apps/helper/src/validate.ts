@@ -14,7 +14,7 @@ export const WORKLOAD_RUNTIMES = ['process', 'container', 'function'] as const;
 export type WorkloadRuntime = (typeof WORKLOAD_RUNTIMES)[number];
 
 /** Module kinds workerd's `Worker.modules` union can load (docs/FUNCTIONS.md §4.3). */
-export const FUNCTION_MODULE_TYPES = ['esm', 'cjs', 'text', 'data', 'wasm'] as const;
+export const FUNCTION_MODULE_TYPES = ['esm', 'cjs', 'text', 'data', 'wasm', 'python'] as const;
 export type FunctionModuleType = (typeof FUNCTION_MODULE_TYPES)[number];
 
 /**
@@ -45,7 +45,7 @@ export type FunctionBindingType = (typeof FUNCTION_BINDING_TYPES)[number];
  * The helper only needs this to know whether the unit must expose the state directory (FN11).
  * Must match the agent renderers that set `requiresDurableStorage` (function-bindings/*.ts).
  */
-export const DURABLE_FUNCTION_BINDING_TYPES = ['durable_object', 'kv', 'cache', 'd1', 'queue'] as const;
+export const DURABLE_FUNCTION_BINDING_TYPES = ['durable_object', 'kv', 'cache', 'd1'] as const;
 
 export const WORKLOAD_STATUSES = ['pending', 'starting', 'running', 'failed', 'stopped'] as const;
 export type WorkloadStatus = (typeof WORKLOAD_STATUSES)[number];
@@ -234,6 +234,11 @@ export interface WorkloadDesired {
 	 * The agent's bucket/user desired state is accepted on the wire but never reaches a unit.
 	 */
 	objectStorage?: WorkloadObjectStorage;
+	/**
+	 * Managed queue broker profile (D111). Like `database`, only `engine`, `version` and the store
+	 * cap matter: image, user, mounts, config and container port come from `BROKER_ENGINES`.
+	 */
+	broker?: WorkloadBroker;
 	/** Node volume for the data dir (D74); resolved and verified against the helper's registry. */
 	volumeId?: string;
 	/** App volumes mounted into this workload (plan 07); ids and mount points only, never paths. */
@@ -494,13 +499,79 @@ export function assertStorageId(value: unknown, label = 'storage id'): string {
 	return id;
 }
 
-/** A managed-service id (`db_` or `st_`): the only ids whose data dir `purge` may delete. */
+/**
+ * The helper's own copy of the queue-broker registry (D111, same reasoning as D61): a wider
+ * contract must not widen what the privileged helper will run. NATS runs as a static binary, so
+ * the uid is ours to pick; the data dir and config are chowned to it.
+ */
+export const BROKER_ENGINES = {
+	nats: {
+		versions: ['2.11', '2.12'],
+		uid: 4222,
+		gid: 4222,
+		containerPort: 4222,
+		image: (version: string) => `docker.io/library/nats:${version}-alpine`,
+	},
+} as const satisfies Record<
+	string,
+	{ versions: readonly string[]; uid: number; gid: number; containerPort: number; image: (version: string) => string }
+>;
+export type BrokerEngine = keyof typeof BROKER_ENGINES;
+
+export interface WorkloadBroker {
+	engine: BrokerEngine;
+	version: string;
+	/** Persistent store cap in MB, written into the engine's config. */
+	storageMb: number;
+}
+
+/** Workload ids of brokers carry this prefix; `purge` accepts them too. */
+export const BROKER_ID_PREFIX = 'mq_';
+
+/** The image the helper runs for a broker profile. */
+export function brokerImage(broker: WorkloadBroker): string {
+	return BROKER_ENGINES[broker.engine].image(broker.version);
+}
+
+/** `mq-<hex>`: DNS alias on the workload's org network; same derivation as the contract. */
+export function brokerAlias(id: string): string {
+	return `mq-${id.replace(/^mq_/, '').toLowerCase().replace(/[^a-z0-9-]/g, '')}`;
+}
+
+export function parseBroker(value: unknown, label = 'workload.broker'): WorkloadBroker {
+	const record = assertRecord(value, label);
+	const engine = record.engine;
+	if (typeof engine !== 'string' || !Object.hasOwn(BROKER_ENGINES, engine))
+		throw new ValidationError(`${label}.engine must be one of ${Object.keys(BROKER_ENGINES).join(', ')}`);
+	const info = BROKER_ENGINES[engine as BrokerEngine];
+	const version = record.version;
+	if (typeof version !== 'string' || !(info.versions as readonly string[]).includes(version))
+		throw new ValidationError(`${label}.version must be one of ${info.versions.join(', ')}`);
+	for (const key of Object.keys(record)) {
+		if (key !== 'engine' && key !== 'version' && key !== 'storageMb')
+			throw new ValidationError(`${label}.${key} is not supported`);
+	}
+	const storageMb = assertInteger(record.storageMb, `${label}.storageMb`, 256, 1_048_576);
+	return { engine: engine as BrokerEngine, version, storageMb };
+}
+
+/** `mq_` ids only. */
+export function assertBrokerId(value: unknown, label = 'broker id'): string {
+	const id = assertId(value, label);
+	if (!id.startsWith(BROKER_ID_PREFIX) || id.length === BROKER_ID_PREFIX.length)
+		throw new ValidationError(`${label} must start with "${BROKER_ID_PREFIX}"`);
+	return id;
+}
+
+/** A managed-service id (`db_`, `st_` or `mq_`): the only ids whose data dir `purge` may delete. */
 export function assertManagedId(value: unknown, label = 'managed id'): string {
 	const id = assertId(value, label);
-	for (const prefix of [DATABASE_ID_PREFIX, STORAGE_ID_PREFIX]) {
+	for (const prefix of [DATABASE_ID_PREFIX, STORAGE_ID_PREFIX, BROKER_ID_PREFIX]) {
 		if (id.startsWith(prefix) && id.length > prefix.length) return id;
 	}
-	throw new ValidationError(`${label} must start with "${DATABASE_ID_PREFIX}" or "${STORAGE_ID_PREFIX}"`);
+	throw new ValidationError(
+		`${label} must start with "${DATABASE_ID_PREFIX}", "${STORAGE_ID_PREFIX}" or "${BROKER_ID_PREFIX}"`,
+	);
 }
 
 export interface WorkloadActivation {
@@ -828,8 +899,13 @@ export function parseWorkloadFunction(value: unknown, label = 'workload.function
 				break;
 			case 'kv':
 			case 'd1':
-			case 'queue':
 				parsed.namespaceId = assertFunctionKey(binding.namespaceId, `${bindingLabel}.namespaceId`);
+				break;
+			case 'queue':
+				// D112: queues live on a managed broker; only the attachment prefix reaches the unit.
+				// A pre-D112 spec has none, and the agent refuses to render it before it gets here.
+				if (binding.envPrefix !== undefined)
+					parsed.envPrefix = assertFunctionEnvPrefix(binding.envPrefix, `${bindingLabel}.envPrefix`);
 				break;
 			default:
 				break;
@@ -933,7 +1009,7 @@ export function parseWorkload(value: unknown): WorkloadDesired {
 		// Functions are HTTP-only and run the pinned binary, never an image or a command.
 		if (record.ingress !== undefined)
 			throw new ValidationError('Function workloads must have HTTP ingress; workload.ingress must be omitted');
-		for (const key of ['image', 'command', 'database', 'objectStorage', 'runner', 'pooler', 'volumeId'] as const) {
+		for (const key of ['image', 'command', 'database', 'objectStorage', 'broker', 'runner', 'pooler', 'volumeId'] as const) {
 			if (record[key] !== undefined)
 				throw new ValidationError(`Function workloads cannot set workload.${key}`);
 		}
@@ -948,6 +1024,9 @@ export function parseWorkload(value: unknown): WorkloadDesired {
 		record.objectStorage === undefined ? undefined : parseObjectStorage(record.objectStorage);
 	if (database && objectStorage)
 		throw new ValidationError('A workload cannot have both a database and an objectStorage profile');
+	const broker = record.broker === undefined ? undefined : parseBroker(record.broker);
+	if (broker && (database || objectStorage))
+		throw new ValidationError('A workload cannot have a broker profile together with another managed profile');
 	const id = assertId(record.id, 'workload.id');
 	const orgId = record.orgId === undefined ? undefined : assertId(record.orgId, 'workload.orgId');
 	const networkName =
@@ -977,6 +1056,17 @@ export function parseWorkload(value: unknown): WorkloadDesired {
 			throw new ValidationError('Database workloads cannot mount file secrets');
 	} else if (id.startsWith(DATABASE_ID_PREFIX)) {
 		throw new ValidationError(`workload.id prefix "${DATABASE_ID_PREFIX}" is reserved for databases`);
+	}
+	if (broker) {
+		if (runtime !== 'container') throw new ValidationError('Broker workloads must use the container runtime');
+		const expected = brokerImage(broker);
+		if (image !== expected)
+			throw new ValidationError(`workload.image must be ${expected} for ${broker.engine} ${broker.version}`);
+		assertBrokerId(id, 'workload.id');
+		if (secrets.some((secret) => secret.delivery === 'file'))
+			throw new ValidationError('Broker workloads cannot mount file secrets');
+	} else if (id.startsWith(BROKER_ID_PREFIX)) {
+		throw new ValidationError(`workload.id prefix "${BROKER_ID_PREFIX}" is reserved for queue brokers`);
 	}
 
 	const dataSizeMb =
@@ -1017,9 +1107,10 @@ export function parseWorkload(value: unknown): WorkloadDesired {
 		workload.pooler = { port: assertPort(pooler.port, 'workload.pooler.port') };
 	}
 	if (objectStorage) workload.objectStorage = objectStorage;
+	if (broker) workload.broker = broker;
 	if (record.ingress !== undefined) {
 		if (record.ingress !== 'none') throw new ValidationError('workload.ingress must be "none" when present');
-		if (database || objectStorage) throw new ValidationError('Managed services cannot be workers');
+		if (database || objectStorage || broker) throw new ValidationError('Managed services cannot be workers');
 		workload.ingress = 'none';
 	}
 	if (record.runner !== undefined) {
@@ -1035,8 +1126,8 @@ export function parseWorkload(value: unknown): WorkloadDesired {
 	const volumeId = record.volumeId === undefined ? undefined : assertId(record.volumeId, 'workload.volumeId');
 	if (volumeId) {
 		// Volumes hold managed-service data (D74); an app workload never mounts one.
-		if (!database && !objectStorage)
-			throw new ValidationError('workload.volumeId is only valid for a database or objectStorage workload');
+		if (!database && !objectStorage && !broker)
+			throw new ValidationError('workload.volumeId is only valid for a database, objectStorage or broker workload');
 		workload.volumeId = volumeId;
 	}
 	return workload;

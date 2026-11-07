@@ -45,6 +45,56 @@ export const FUNCTION_DEFAULT_COMPATIBILITY_DATE = '2026-10-01';
 export const FUNCTION_DEFAULT_MEMORY_MB = 128;
 /** Scale to zero after five idle minutes; 0 means always on (FN4). */
 export const FUNCTION_DEFAULT_IDLE_STOP_SECONDS = 300;
+/**
+ * Python Workers (D121). A function whose `main` is a Python module runs on workerd's Pyodide
+ * runtime: the `python_workers` flag is required (the control plane adds it), and the Skiff shim
+ * becomes a separate JavaScript Worker that reaches the Python one over a service binding.
+ */
+export const FUNCTION_PYTHON_COMPAT_FLAG = 'python_workers';
+/**
+ * The shim delivers cron and queue work to a Python host with `Fetcher.scheduled()`/`queue()`, which
+ * workerd only exposes under this experimental flag (the host runs with `--experimental`).
+ */
+export const FUNCTION_PYTHON_SHIM_COMPAT_FLAG = 'service_binding_extra_handlers';
+/** An idle Pyodide host is ~230 MB resident; a JavaScript host is ~30 MB (measured, workerd 1.20261106.1). */
+export const FUNCTION_PYTHON_DEFAULT_MEMORY_MB = 384;
+export const FUNCTION_PYTHON_MIN_MEMORY_MB = 256;
+/**
+ * Compatibility dates workerd switches Pyodide bundles at. The installer warms the node's bundle
+ * cache once per era so a Python host never downloads its runtime while serving.
+ */
+export const FUNCTION_PYTHON_BUNDLE_ERAS = ['2024-12-01', '2025-06-01', WORKERD_MAX_COMPATIBILITY_DATE] as const;
+
+/**
+ * Heartbeat capability an agent adds only when the Pyodide bundle cache for the pinned workerd is
+ * on disk (`<workerd dir>/<version>/pyodide`). Python functions are placed only on such nodes, so a
+ * host never downloads its runtime at cold start (D121).
+ */
+export const FUNCTIONS_PYTHON_CAPABILITY = 'functions-python';
+/** Root of the pinned workerd installs on a node (FN1); the helper and installer use the same path. */
+export const WORKERD_INSTALL_DIR = '/usr/lib/skiff/workerd';
+
+/** True when the function's entry module is Python (D121). */
+export function functionIsPython(spec: { main: string; modules: Array<{ name: string; type: FunctionModuleType }> }): boolean {
+	return spec.modules.some((module) => module.name === spec.main && module.type === 'python');
+}
+
+/**
+ * Why these modules cannot form one Worker, or null. A Python entry loads JavaScript files as data
+ * (vendored packages ship a few), and a JavaScript entry cannot import a Python module.
+ */
+export function functionModuleMixProblem(spec: {
+	main: string;
+	modules: Array<{ name: string; type: FunctionModuleType }>;
+}): string | null {
+	const python = functionIsPython(spec);
+	if (python && spec.modules.some((module) => module.type === 'esm' || module.type === 'cjs'))
+		return 'A Python Worker cannot include JavaScript modules; ship JavaScript files as data.';
+	if (!python && spec.modules.some((module) => module.type === 'python'))
+		return 'Python modules need a Python entry module (`main` ending in .py).';
+	return null;
+}
+
 export const FUNCTION_MAX_MODULES = 512;
 export const FUNCTION_MAX_BINDINGS = 64;
 export const FUNCTION_MAX_COMPATIBILITY_FLAGS = 32;
@@ -56,8 +106,11 @@ const compatibilityDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 const compatibilityFlagPattern = /^[a-z0-9][a-z0-9_-]*$/;
 export const workerdVersionPattern = /^\d+\.\d+\.\d+$/;
 
-/** Module kinds workerd's `Worker.modules` union can load (docs/FUNCTIONS.md §4.3). */
-export const functionModuleTypes = ['esm', 'cjs', 'text', 'data', 'wasm'] as const;
+/**
+ * Module kinds workerd's `Worker.modules` union can load (docs/FUNCTIONS.md §4.3). `python` is a
+ * `pythonModule` (Python Workers on Pyodide, D121); it only appears in a bundle whose `main` is one.
+ */
+export const functionModuleTypes = ['esm', 'cjs', 'text', 'data', 'wasm', 'python'] as const;
 export type FunctionModuleType = (typeof functionModuleTypes)[number];
 
 /**
@@ -109,7 +162,6 @@ export const FUNCTION_STATEFUL_BINDING_TYPES = [
 	'durable_object',
 	'kv',
 	'cache',
-	'queue',
 	'd1',
 ] as const;
 export type FunctionStatefulBindingType = (typeof FUNCTION_STATEFUL_BINDING_TYPES)[number];
@@ -126,7 +178,7 @@ export function functionBindingIsStateful(type: FunctionBindingType): boolean {
  * asks for replicas. Kept here so docs, control plane and tests quote the same sentence.
  */
 export const FUNCTION_STATEFUL_REPLICA_MESSAGE =
-	'Functions with stateful bindings (durable_object, kv, cache, queue, d1) run one host until workerd cluster mode lands (phase 4).';
+	'Functions with stateful bindings (durable_object, kv, cache, d1) run one host until workerd cluster mode lands (phase 4).';
 
 /** The phase that first serves each binding (docs/FUNCTIONS.md §4.5). */
 export const FUNCTION_BINDING_PHASE: Readonly<Record<FunctionBindingType, number>> = Object.freeze({
@@ -230,10 +282,26 @@ const analyticsEngineBindingSchema = z.object({
 	type: z.literal('analytics_engine'),
 	dataset: z.string().min(1).max(100).optional(),
 });
+/**
+ * Queue names follow Cloudflare's rule (lowercase letters, digits and hyphens, at most 63), which
+ * also makes them valid JetStream stream and subject tokens on the managed broker (D112).
+ */
+export const functionQueueNameSchema = z
+	.string()
+	.min(1)
+	.max(63)
+	.regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/, 'Queue names are lowercase letters, digits and hyphens (at most 63).');
+/** A managed broker (docs/BROKERS.md) by name; omitted means the project's only attached broker. */
+const queueBrokerNameSchema = z
+	.string()
+	.min(3)
+	.max(40)
+	.regex(/^[a-z0-9][a-z0-9-]*$/, 'Broker names are lowercase letters, digits and hyphens.');
 const queueBindingSchema = z.object({
 	type: z.literal('queue'),
-	queue: z.string().min(1).max(100),
+	queue: functionQueueNameSchema,
 	producer: z.boolean().default(true),
+	broker: queueBrokerNameSchema.optional(),
 });
 const cacheBindingSchema = z.object({ type: z.literal('cache') });
 const assetsBindingSchema = z.object({ type: z.literal('assets') });
@@ -309,10 +377,19 @@ export const functionRuntimeBindingSchema = z.discriminatedUnion('type', [
 		/** Stable node-local D1 database id, derived from the project and binding. */
 		namespaceId: z.string().min(1).max(128).regex(/^[A-Za-z0-9._-]+$/),
 	}),
-	queueBindingSchema.extend({
+	z.object({
+		type: z.literal('queue'),
 		name: bindingName,
-		/** Stable queue id, derived from the project and binding. */
-		namespaceId: z.string().min(1).max(128).regex(/^[A-Za-z0-9._-]+$/),
+		// Lenient on purpose: specs stored before D112 still parse, so one old deployment can never
+		// make a node reject its whole desired state. The renderer refuses what it cannot serve.
+		queue: z.string().min(1).max(100),
+		producer: z.boolean().default(true),
+		/** The managed broker that holds the queue (D112). Absent only on pre-D112 specs. */
+		broker: z.string().min(1).max(40).optional(),
+		/** Prefix of the broker attachment's activation env (`<prefix>_PORT`, `_USER`, …). */
+		envPrefix: z.string().min(1).max(64).regex(/^[A-Z][A-Z0-9_]*$/).optional(),
+		/** Pre-D112 node-local queue id; ignored. */
+		namespaceId: z.string().min(1).max(128).regex(/^[A-Za-z0-9._-]+$/).optional(),
 	}),
 	analyticsEngineBindingSchema.extend({
 		name: bindingName,
@@ -344,11 +421,50 @@ export const functionAssetsSchema = z.object({
 });
 export type FunctionAssets = z.infer<typeof functionAssetsSchema>;
 
+/** Wrangler's `queues.consumers` defaults (Cloudflare Queues). */
+export const FUNCTION_QUEUE_DEFAULTS = Object.freeze({ maxBatchSize: 10, maxBatchTimeout: 5, maxRetries: 3 });
+export const FUNCTION_MAX_QUEUE_CONSUMERS = 8;
+
+/**
+ * One queue this function consumes (Wrangler `queues.consumers`, D112). The agent pulls batches
+ * from the broker and hands them to the user's `queue()` handler through the shim. A queue has at
+ * most one consumer per broker, as on Cloudflare.
+ */
+export const functionQueueConsumerSchema = z.object({
+	queue: functionQueueNameSchema,
+	broker: queueBrokerNameSchema.optional(),
+	/** Messages per batch, 1–100. */
+	maxBatchSize: z.number().int().min(1).max(100).default(FUNCTION_QUEUE_DEFAULTS.maxBatchSize),
+	/** Seconds to wait for a full batch before delivering a partial one, 0–60. */
+	maxBatchTimeout: z.number().int().min(0).max(60).default(FUNCTION_QUEUE_DEFAULTS.maxBatchTimeout),
+	/** Deliveries after the first before a message is dead-lettered (or dropped), 0–100. */
+	maxRetries: z.number().int().min(0).max(100).default(FUNCTION_QUEUE_DEFAULTS.maxRetries),
+	/** Fixed seconds before a retry; omitted means exponential backoff (1 s doubling to 60 s). */
+	retryDelay: z.number().int().min(0).max(43_200).optional(),
+	/** Queue on the same broker that receives messages which ran out of retries. */
+	deadLetterQueue: functionQueueNameSchema.optional(),
+});
+export type FunctionQueueConsumer = z.infer<typeof functionQueueConsumerSchema>;
+
+/** A consumer resolved against the project's broker attachment (stored in the workload spec). */
+export const functionRuntimeQueueConsumerSchema = functionQueueConsumerSchema.extend({
+	broker: z.string().min(1).max(40),
+	envPrefix: z.string().min(1).max(64).regex(/^[A-Z][A-Z0-9_]*$/),
+});
+export type FunctionRuntimeQueueConsumer = z.infer<typeof functionRuntimeQueueConsumerSchema>;
+
 export const functionTriggersSchema = z.object({
 	/** Five-field UTC cron expressions; validated by the shared parser in core. */
 	crons: z.array(z.string().min(1).max(120)).max(FUNCTION_MAX_CRONS).default([]),
+	queues: z.array(functionQueueConsumerSchema).max(FUNCTION_MAX_QUEUE_CONSUMERS).default([]),
 });
 export type FunctionTriggers = z.infer<typeof functionTriggersSchema>;
+
+export const functionRuntimeTriggersSchema = z.object({
+	crons: z.array(z.string().min(1).max(120)).max(FUNCTION_MAX_CRONS).default([]),
+	queues: z.array(functionRuntimeQueueConsumerSchema).max(FUNCTION_MAX_QUEUE_CONSUMERS).default([]),
+});
+export type FunctionRuntimeTriggers = z.infer<typeof functionRuntimeTriggersSchema>;
 
 /**
  * `skiff-function.json`: what the user's bundler writes next to the modules (FN8). The control
@@ -368,7 +484,7 @@ export const functionManifestSchema = z
 			.max(FUNCTION_MAX_COMPATIBILITY_FLAGS)
 			.default([]),
 		bindings: z.array(functionBindingSchema).max(FUNCTION_MAX_BINDINGS).default([]),
-		triggers: functionTriggersSchema.default({ crons: [] }),
+		triggers: functionTriggersSchema.default({ crons: [], queues: [] }),
 		assets: functionAssetsSchema.optional(),
 		/** Overrides the default 300 s idle stop; 0 keeps the host always on. */
 		idleStopSeconds: z.number().int().min(0).max(86_400).optional(),
@@ -390,8 +506,10 @@ export const functionManifestSchema = z
 		if (!names.has(manifest.main))
 			ctx.addIssue({ code: 'custom', path: ['main'], message: '`main` must name one of the modules.' });
 		const main = manifest.modules.find((module) => module.name === manifest.main);
-		if (main && main.type !== 'esm' && main.type !== 'cjs')
-			ctx.addIssue({ code: 'custom', path: ['main'], message: '`main` must be an esm or cjs module.' });
+		if (main && main.type !== 'esm' && main.type !== 'cjs' && main.type !== 'python')
+			ctx.addIssue({ code: 'custom', path: ['main'], message: '`main` must be an esm, cjs or python module.' });
+		const mixProblem = functionModuleMixProblem(manifest);
+		if (mixProblem) ctx.addIssue({ code: 'custom', path: ['modules'], message: mixProblem });
 		const bindingNames = new Set<string>();
 		for (const [index, binding] of manifest.bindings.entries()) {
 			if (bindingNames.has(binding.name))
@@ -415,7 +533,7 @@ export const functionRuntimeSpecSchema = z
 		compatibilityDate: z.string().regex(compatibilityDatePattern),
 		compatibilityFlags: z.array(z.string().min(1).max(64)).max(FUNCTION_MAX_COMPATIBILITY_FLAGS).default([]),
 		bindings: z.array(functionRuntimeBindingSchema).max(FUNCTION_MAX_BINDINGS).default([]),
-		triggers: functionTriggersSchema.default({ crons: [] }),
+		triggers: functionRuntimeTriggersSchema.default({ crons: [], queues: [] }),
 		assets: functionAssetsSchema.nullable().default(null),
 		idleStopSeconds: z.number().int().min(0).max(86_400).default(FUNCTION_DEFAULT_IDLE_STOP_SECONDS),
 		/** The pinned workerd build the node must run (FN1). */
@@ -432,6 +550,14 @@ export const functionRuntimeSpecSchema = z
 		}
 		if (!names.has(spec.main))
 			ctx.addIssue({ code: 'custom', path: ['main'], message: '`main` must name one of the modules.' });
+		const mixProblem = functionModuleMixProblem(spec);
+		if (mixProblem) ctx.addIssue({ code: 'custom', path: ['modules'], message: mixProblem });
+		if (functionIsPython(spec) && !spec.compatibilityFlags.includes(FUNCTION_PYTHON_COMPAT_FLAG))
+			ctx.addIssue({
+				code: 'custom',
+				path: ['compatibilityFlags'],
+				message: `A Python Worker needs the ${FUNCTION_PYTHON_COMPAT_FLAG} compatibility flag.`,
+			});
 		const bindingNames = new Set<string>();
 		for (const [index, binding] of spec.bindings.entries()) {
 			if (bindingNames.has(binding.name))
@@ -503,7 +629,7 @@ export function functionBindingSummary(binding: FunctionRuntimeBinding): string 
 		case 'd1':
 			return `D1 database ${binding.database}`;
 		case 'queue':
-			return `queue ${binding.queue}`;
+			return binding.broker ? `queue ${binding.queue} on broker ${binding.broker}` : `queue ${binding.queue}`;
 		case 'analytics_engine':
 			return `Analytics Engine ${binding.dataset}`;
 		case 'assets':
@@ -528,7 +654,10 @@ export const functionViewSchema = z.object({
 			summary: z.string(),
 		}),
 	),
-	triggers: z.object({ crons: z.array(z.string()) }),
+	triggers: z.object({
+		crons: z.array(z.string()),
+		queues: z.array(z.object({ queue: z.string(), broker: z.string() })).default([]),
+	}),
 	assets: functionAssetsSchema.nullable(),
 	idleStopSeconds: z.number().int().nonnegative(),
 	workerdVersion: z.string(),

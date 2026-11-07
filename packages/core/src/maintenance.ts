@@ -48,6 +48,7 @@ export class MaintenanceService {
 		this.ctx.databaseStudio.tick();
 		await this.ctx.databases.pruneBackups();
 		this.ctx.storage.requestExpiredPurges();
+		this.ctx.brokers.requestExpiredPurges();
 		// Cheap, certain cleanup runs every sweep; prune is the on-demand deep backstop.
 		this.cleanupRows();
 		this.ctx.releases.gcSnapshots(operationLimits.pruneGraceMs);

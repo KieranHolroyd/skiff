@@ -19,10 +19,13 @@
   },
   "files": ["dist", "README.md", "LICENSE"],
   "scripts": {
-    "build": "bun build src/main.ts --target=node --outfile dist/skif.js",
+    "build": "bun build src/main.ts --target=node --external esbuild --outfile dist/skif.js",
     "check": "tsc -p . --noEmit",
     "test": "bun test",
     "prepack": "bun run build"
+  },
+  "dependencies": {
+    "esbuild": "0.28.2"
   },
   "engines": { "node": ">=20" },
   "publishConfig": { "access": "public", "provenance": true }

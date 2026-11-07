@@ -8,6 +8,7 @@ import { ApiError, CliError, UsageError } from './errors.ts';
 import { configCommand } from './commands/config.ts';
 import { dbCommand } from './commands/db.ts';
 import { storageCommand } from './commands/storage.ts';
+import { brokerCommand } from './commands/broker.ts';
 import { backupTargetCommand } from './commands/backup-target.ts';
 import { volumeCommand } from './commands/volume.ts';
 import { deployCommand } from './commands/deploy.ts';
@@ -51,6 +52,9 @@ const commands: Record<string, (argv: string[]) => Promise<void>> = {
 	databases: dbCommand,
 	storage: storageCommand,
 	s3: storageCommand,
+	broker: brokerCommand,
+	brokers: brokerCommand,
+	queue: brokerCommand,
 	'backup-target': backupTargetCommand,
 	backupTargets: backupTargetCommand,
 	volume: volumeCommand,
@@ -85,6 +89,7 @@ Commands:
   db [list|create|info|attach|detach|…]      Managed PostgreSQL databases (\`skif db --help\`)
   upgrade <plan|apply|rollback>              Preflight, install or roll back the platform
   storage [list|create|info|buckets|…]       Managed S3-compatible object storage (\`skif storage --help\`)
+  broker [list|create|info|attach|…]         Managed queue brokers, NATS with JetStream (\`skif broker --help\`)
   backup-target [list|add|test|remove]       Where backups are written (\`skif backup-target --help\`)
   volume [list|create|attach|detach|delete]  Persistent app volumes (\`skif volume --help\`)
 

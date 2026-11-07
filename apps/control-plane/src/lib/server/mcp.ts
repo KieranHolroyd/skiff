@@ -16,6 +16,9 @@ import {
 	bucketCreateSchema,
 	bucketUpdateSchema,
 	bucketNameSchema,
+	brokerAttachSchema,
+	brokerCreateSchema,
+	brokerUpdateSchema,
 	databaseAttachSchema,
 	databaseBackupCreateSchema,
 	databaseBackupPolicySchema,
@@ -1520,6 +1523,168 @@ function buildServer(
 				};
 			});
 		},
+	);
+
+	// --- managed queue brokers (docs/BROKERS.md, D111; no credentials, delete or purge over MCP) ----
+	const brokerNote =
+		'Attached apps get <PREFIX>_URL, _HOST, _PORT, _USER and _PASSWORD injected at activation (PREFIX defaults to NATS, ' +
+		'so NATS_URL is what most NATS clients read); never hard-code credentials. JetStream is on: use streams and durable ' +
+		"consumers for work queues. An app must run on the broker's node: placement `auto` handles that.";
+
+	tool(
+		'list_brokers',
+		{
+			title: 'List queue brokers',
+			description: 'List managed queue brokers (NATS with JetStream) in the org with status, node, limits and attached projects.',
+			inputSchema: z.object({
+				includeDeleted: z.boolean().default(false).describe('Also list brokers in the trash'),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('broker:read'),
+		},
+		async ({ includeDeleted }) => run(() => ({ brokers: core.brokers.list(principal, { includeDeleted }) })),
+	);
+
+	tool(
+		'get_broker',
+		{
+			title: 'Get queue broker',
+			description: 'Get one managed queue broker: status, node, engine/version, limits, internal hosts and attachments. Never includes credentials.',
+			inputSchema: z.object({ broker: z.string().describe('Broker name') }),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('broker:read'),
+		},
+		async ({ broker }) => run(() => core.brokers.get(principal, broker, { includeDeleted: true })),
+	);
+
+	tool(
+		'get_broker_logs',
+		{
+			title: 'Get queue broker logs',
+			description:
+				'Return recent container log lines for a managed broker. Use `after` as a cursor to poll for new lines; `level` and `q` filter server-side.',
+			inputSchema: z.object({
+				broker: z.string().describe('Broker name'),
+				after: z.number().int().nonnegative().optional().describe('Return lines after this cursor'),
+				limit: z.number().int().min(1).max(2000).default(200),
+				level: z.enum(['debug', 'info', 'warn', 'error']).optional(),
+				q: z.string().max(200).optional(),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('broker:read', 'logs:read'),
+		},
+		async ({ broker, after, limit, level, q }) =>
+			run(() => {
+				const row = core.brokers.requireRow(principal, broker, { includeDeleted: true });
+				return core.logs.queryService(principal, 'broker', row.id, {
+					...(after !== undefined ? { after } : {}),
+					limit,
+					...(level ? { level } : {}),
+					...(q ? { q } : {}),
+				});
+			}),
+	);
+
+	tool(
+		'create_broker',
+		{
+			title: 'Create queue broker',
+			description:
+				'Create a managed queue broker. `engine` is nats (2.12 or 2.11) with JetStream on; `storageMb` caps the persistent ' +
+				'message store. Pass `project` to attach it in the same call; the broker is then placed on that project\'s node. ' +
+				brokerNote,
+			inputSchema: brokerCreateSchema,
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requiresWith(['broker:create'], (args) => (args.project ? ['project:update'] : [])),
+		},
+		async (input) =>
+			run(() => {
+				const view = core.brokers.create(principal, input);
+				const attached = view.attachments[0];
+				return {
+					broker: view,
+					nextSteps: [
+						attached
+							? `"${attached.projectSlug}" receives ${attached.envNames.join(', ')} at its next activation (a running app restarts on its own).`
+							: `Attach it to an app with attach_broker({ project, broker: "${view.name}" }).`,
+						`The broker starts on node "${view.nodeName ?? view.nodeId}"; follow it with get_broker.`,
+					],
+				};
+			}),
+	);
+
+	tool(
+		'update_broker',
+		{
+			title: 'Update queue broker',
+			description:
+				'Resize a broker (memory, CPU, message-store cap) or move it to a newer listed version in place. Downgrades are refused. ' +
+				'The broker restarts on its node; JetStream data is kept.',
+			inputSchema: brokerUpdateSchema.extend({ broker: z.string().describe('Broker name') }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('broker:update'),
+		},
+		async ({ broker, ...patch }) => run(() => ({ broker: core.brokers.update(principal, broker, patch) })),
+	);
+
+	tool(
+		'restart_broker',
+		{
+			title: 'Restart queue broker',
+			description: 'Restart the broker container. Connected clients reconnect; JetStream data is kept.',
+			inputSchema: z.object({ broker: z.string().describe('Broker name') }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('broker:update'),
+		},
+		async ({ broker }) =>
+			run(() => ({
+				broker: core.brokers.restart(principal, broker),
+				nextSteps: ['The broker restarts on its node; follow get_broker until it is running again.'],
+			})),
+	);
+
+	tool(
+		'attach_broker',
+		{
+			title: 'Attach queue broker',
+			description:
+				`Connect a queue broker to a process, container or function project (functions use it for queue bindings and consumers, D112). ${brokerNote} ` +
+				'Attaching re-activates (restarts) a running app; no redeploy is needed if it already runs on the broker node.',
+			inputSchema: brokerAttachSchema.extend({ project: z.string().describe('Project slug') }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('broker:update', 'project:update'),
+		},
+		async ({ project, ...input }) =>
+			run(() => {
+				const result = core.brokers.attach(principal, core.projects.requireRow(principal, project), input);
+				return {
+					...result,
+					nextSteps: [
+						`Read ${result.attachment.envPrefix}_URL in the app; it is injected at activation.`,
+						...(result.warning ? [result.warning] : []),
+					],
+				};
+			}),
+	);
+
+	tool(
+		'detach_broker',
+		{
+			title: 'Detach queue broker',
+			description:
+				'Disconnect a broker from a project. The app restarts without its <PREFIX>_* variables; the broker and its streams are untouched.',
+			inputSchema: z.object({
+				project: z.string().describe('Project slug'),
+				broker: z.string().describe('Broker name'),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+			scopeChallenge: requires('broker:update', 'project:update'),
+		},
+		async ({ project, broker }) =>
+			run(() => {
+				core.brokers.detach(principal, core.projects.requireRow(principal, project), broker);
+				return { ok: true, project, broker };
+			}),
 	);
 
 	// --- managed object storage (docs/OBJECT-STORAGE.md; no key reveal, bucket force-delete or purge over MCP) ----

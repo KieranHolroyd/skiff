@@ -82,7 +82,7 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | GET/POST | `/projects/:slug/environments` | `project:read` / `project:update` | list or create a named environment |
 | PATCH/DELETE | `/projects/:slug/environments/:env` | `project:update` | rename/access or remove (production is built in) |
 | POST | `/projects/:slug/environments/:env/promote` | `deployment:promote` | `{ deploymentId }`; moves only that environment's pointer (production also re-points a process/container workload) |
-| GET/PUT/DELETE | `/projects/:slug/workload` | `deployment:read` / `project:update` | tier 2/3 runtime spec for the project |
+| GET/PUT/DELETE | `/projects/:slug/workload` | `deployment:read` / `project:update` | tier 2/3 runtime spec for the project. `idleStopSeconds` (process only; needs `socketActivation`, HTTP ingress and one replica; 0 or absent = always on) scales the app to zero after that many seconds without a request (D121) |
 | GET | `/projects/:slug/function` | `deployment:read` | Functions view (D110): main module, compatibility date/flags, resolved bindings (no secret values), assets and `run_worker_first`, idle stop and the pinned workerd version. 404 when the project is not a function. A deploy of a bundle containing `skiff-function.json` validates it against the org; unsupported binding types and cron triggers fail with the phase that will serve them |
 | GET | `/projects/:slug/runners` | `deployment:read` | GitHub Actions runner pool as GitHub reports it (`null` for other projects); `error` is set when GitHub cannot be reached (docs/RUNNERS.md) |
 | GET | `/templates` | `project:read` | first-party app templates and their form fields (plan 21) |
@@ -226,6 +226,27 @@ keys intact, and `get_storage_logs` pages the container log stream. There is **n
 (type the name, or `--yes`), `credentials <name> [--prefix AWS]` (prints the root key as env
 lines; `--json` prints everything), `metrics <name> [--since 1h | --from … --to …] [--interval
 1m|1h]`. All accept `--json`; `skif s3` is an alias.
+
+## Managed queue brokers
+
+Docs: [BROKERS.md](./BROKERS.md) (D111). A broker is an org resource, like a database: one NATS
+server (JetStream on) per broker, placed once and reachable only on its node.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/brokers` | `broker:read` | `?includeDeleted=1` adds the trash → `{ brokers: BrokerView[] }` |
+| POST | `/brokers` | `broker:create` (+ `project:update` with `project`) | `{ name, engine? (nats), version? (2.12\|2.11), placement? (auto\|edge\|node id), memoryMb? (≥64, default 256), cpus? (default 0.5), storageMb? (message-store cap, default 2048), volume?, project?, envPrefix? (default NATS) }` → `201 { broker }`. Only nodes whose agent advertises the `brokers` capability are candidates; `project` places it on that project's node. 422 when `SKIFF_FEATURE_BROKERS=0` |
+| GET | `/brokers/:name` | `broker:read` | `?includeDeleted=1` to read a trashed one → `{ broker }` |
+| PATCH | `/brokers/:name` | `broker:update` | any of `{ memoryMb, cpus, storageMb, version }`; more memory re-checks admission and the memory quota; `version` only moves forward (409 on a downgrade) → `{ broker }` |
+| DELETE | `/brokers/:name` | `broker:delete` | soft delete, restorable for the trash period; 409 while projects are attached → `{ broker }` |
+| DELETE | `/brokers/:name?purge=1` | `broker:delete` | trashed brokers only: the node removes the data, then the rows go → `{ ok: true }` |
+| POST | `/brokers/:name/restore` | `broker:delete` | re-checks admission; 409 once a purge was requested → `{ broker }` |
+| POST | `/brokers/:name/restart` | `broker:update` | restarts the container (streams are kept) → `202 { broker }` |
+| GET | `/brokers/:name/credentials` | `broker:credentials`, interactive **session** | `{ credentials: { username, password, url, host, port, connectionSnippets, note } }`; `cache-control: no-store`; audited. API keys and MCP get 403 |
+| GET | `/brokers/:name/logs` | `logs:read` (+ `broker:read`) | `?after&limit&level&q` → the same page shape as `/storage/:name/logs`, `kind: "broker"` |
+| GET | `/projects/:slug/brokers` | `broker:read` | `{ attachments: [{ brokerName, envPrefix, envNames, … }] }` |
+| POST | `/projects/:slug/brokers` | `broker:update` + `project:update` | `{ broker, envPrefix? }` → `201 { attachment, warning }`; the app gets `<PREFIX>_URL/_HOST/_PORT/_USER/_PASSWORD` at activation and is placed on the broker's node at its next deploy. 409 for a duplicate prefix; 422 for static projects or services on another node (function projects attach brokers for their queues, D112) |
+| DELETE | `/projects/:slug/brokers/:name` | `broker:update` + `project:update` | detach; the app restarts without the variables |
 
 ## CLI browser login (`/cli/login`, `/api/v1/cli/token`)
 

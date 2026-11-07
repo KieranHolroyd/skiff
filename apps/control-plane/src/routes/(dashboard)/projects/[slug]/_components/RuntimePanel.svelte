@@ -47,6 +47,7 @@
 	let cpus = $state('1');
 	let healthPath = $state('/');
 	let socketActivation = $state(true);
+	let idleStopSeconds = $state('0');
 	let dataEnabled = $state(false);
 	let dataSizeMb = $state('256');
 
@@ -76,6 +77,7 @@
 		cpus = String(spec?.cpus ?? 1);
 		healthPath = spec?.healthPath ?? '/';
 		socketActivation = spec?.socketActivation ?? true;
+		idleStopSeconds = String(spec?.idleStopSeconds ?? 0);
 		dataEnabled = Boolean(spec?.data);
 		dataSizeMb = String(spec?.data?.sizeMb ?? 256);
 		editOpen = true;
@@ -221,6 +223,10 @@
 								</dd>
 								<dt>Socket activation</dt>
 								<dd class="text-sm">{spec.socketActivation ? 'enabled' : 'disabled'}</dd>
+								<dt>Scale to zero</dt>
+								<dd class="text-sm">
+									{spec.idleStopSeconds ? `after ${spec.idleStopSeconds}s idle` : 'always on'}
+								</dd>
 							{:else}
 								<dt>Image</dt>
 								<dd class="truncate font-mono text-xs" title={spec.image ?? ''}>
@@ -366,6 +372,23 @@
 					<Field.Label for="workload-socket" class="font-normal">
 						Pass the listen socket with socket activation (recommended)
 					</Field.Label>
+				</Field.Field>
+				<Field.Field>
+					<Field.Label for="workload-idle-stop">Scale to zero after (seconds idle)</Field.Label>
+					<Input
+						id="workload-idle-stop"
+						name="idleStopSeconds"
+						type="number"
+						min="0"
+						max="86400"
+						bind:value={idleStopSeconds}
+						disabled={!socketActivation}
+					/>
+					<Field.Description>
+						0 keeps the app always on. Otherwise the app is stopped after this long without a request
+						and the next request starts it again. Needs socket activation, and the app must listen on
+						the inherited socket (fd 3), as FrankenPHP, Gunicorn, Puma or Node can.
+					</Field.Description>
 				</Field.Field>
 			{:else}
 				<Field.Field>

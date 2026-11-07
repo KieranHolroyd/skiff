@@ -97,9 +97,32 @@ async function deliverQueue(request, env, ctx) {
 		return json({ error: "the queue batch body is not valid JSON" }, 400);
 	}
 	if (!Array.isArray(messages)) return json({ error: "the queue batch body must be a JSON array of messages" }, 400);
-	const batch = { queue: request.headers.get(QUEUE_HEADER) ?? "", messages };
-	await user.queue(batch, env, ctx);
-	return new Response(null, { status: 204 });
+	// Cloudflare's per-message verdicts: an explicit ack()/retry() wins; otherwise a handler that
+	// returns acks the batch and one that throws retries it. The agent applies the results.
+	const verdicts = new Map();
+	const decide = (id, outcome, options) => {
+		const delay = Number(options?.delaySeconds);
+		verdicts.set(id, Number.isFinite(delay) && delay >= 0 ? { id, outcome, delaySeconds: delay } : { id, outcome });
+	};
+	const wrapped = messages.map((message) => ({
+		...message,
+		ack() { decide(message.id, "ack"); },
+		retry(options) { decide(message.id, "retry", options); },
+	}));
+	const batch = {
+		queue: request.headers.get(QUEUE_HEADER) ?? "",
+		messages: wrapped,
+		ackAll() { for (const message of messages) decide(message.id, "ack"); },
+		retryAll(options) { for (const message of messages) decide(message.id, "retry", options); },
+	};
+	let failure = null;
+	try {
+		await user.queue(batch, env, ctx);
+	} catch (error) {
+		failure = error instanceof Error ? error.message : String(error);
+	}
+	const results = messages.map((message) => verdicts.get(message.id) ?? { id: message.id, outcome: failure === null ? "ack" : "retry" });
+	return json(failure === null ? { results } : { results, error: failure }, 200);
 }
 
 async function handleFetch(request, env, ctx) {

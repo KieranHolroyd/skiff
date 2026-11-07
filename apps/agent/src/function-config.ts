@@ -1,5 +1,8 @@
 import {
 	FUNCTION_BINDING_PHASE,
+	FUNCTION_DEFAULT_COMPATIBILITY_DATE,
+	FUNCTION_PYTHON_SHIM_COMPAT_FLAG,
+	functionIsPython,
 	type FunctionModule,
 	type FunctionRuntimeBinding,
 	type FunctionRuntimeSpec,
@@ -44,6 +47,8 @@ export interface RenderedWorkerdConfig {
 
 /** Module name (and credential/embed name) of the generated shim. Fixed contract with the helper. */
 const SHIM_MODULE_NAME = 'function-shim';
+/** The shim's own Worker on a Python host (D121); the user's Worker stays `main`. */
+const PYTHON_SHIM_SERVICE = 'skiff-shim';
 
 /** `Worker.modules` union member for each manifest module type (workerd.capnp). */
 const MODULE_KINDS: Record<FunctionModule['type'], string> = {
@@ -52,6 +57,7 @@ const MODULE_KINDS: Record<FunctionModule['type'], string> = {
 	text: 'text',
 	data: 'data',
 	wasm: 'wasm',
+	python: 'pythonModule',
 };
 
 /**
@@ -102,13 +108,21 @@ export function renderWorkerdConfigParts(input: RenderWorkerdConfigInput): Rende
 	// The embed names come from the exported helper so the config and the helper's
 	// `LoadCredential=module-<i>:…` lines can never drift apart.
 	const embedNames = functionModuleEmbedNames(spec.modules);
-	const moduleLines = [
-		`          ( name = ${capnpText(SHIM_MODULE_NAME)}, esModule = embed ${capnpText(SHIM_MODULE_NAME)} ),`,
-		...spec.modules.map(
-			(module, index) =>
-				`          ( name = ${capnpText(module.name)}, ${moduleKind(module)} = embed ${capnpText(embedNames[index]!)} ),`,
-		),
-	];
+	const userModuleLine = (module: FunctionModule, index: number): string =>
+		`          ( name = ${capnpText(module.name)}, ${moduleKind(module)} = embed ${capnpText(embedNames[index]!)} ),`;
+	// A Python Worker (D121) cannot import the JavaScript shim, and workerd treats its first module
+	// as the entry point. The user's Worker keeps the name `main` (binding renderers point at it),
+	// lists the entry module first, and the shim becomes its own Worker in front of it.
+	const python = functionIsPython(spec);
+	const moduleLines = python
+		? [
+				...spec.modules.flatMap((module, index) => (module.name === spec.main ? [userModuleLine(module, index)] : [])),
+				...spec.modules.flatMap((module, index) => (module.name === spec.main ? [] : [userModuleLine(module, index)])),
+			]
+		: [
+				`          ( name = ${capnpText(SHIM_MODULE_NAME)}, esModule = embed ${capnpText(SHIM_MODULE_NAME)} ),`,
+				...spec.modules.map(userModuleLine),
+			];
 
 	const flags =
 		spec.compatibilityFlags.length === 0
@@ -160,6 +174,23 @@ export function renderWorkerdConfigParts(input: RenderWorkerdConfigInput): Rende
 			bindings,
 			'      ) )',
 		].join('\n'),
+		// Python hosts: the socket's Worker is the shim, which forwards requests with
+		// `env.USER.fetch()` and cron/queue work with `scheduled()`/`queue()` (an experimental
+		// Fetcher API, hence the flag and `--experimental` on the helper's command line).
+		...(python
+			? [
+					[
+						`    ( name = ${capnpText(PYTHON_SHIM_SERVICE)},`,
+						'      worker = (',
+						`        modules = [ ( name = ${capnpText(SHIM_MODULE_NAME)}, esModule = embed ${capnpText(SHIM_MODULE_NAME)} ) ],`,
+						`        compatibilityDate = ${capnpText(FUNCTION_DEFAULT_COMPATIBILITY_DATE)},`,
+						`        compatibilityFlags = [ ${capnpText(FUNCTION_PYTHON_SHIM_COMPAT_FLAG)} ],`,
+						'        globalOutbound = "internet",',
+						'        bindings = [ ( name = "USER", service = "main" ) ],',
+						'      ) )',
+					].join('\n'),
+				]
+			: []),
 	];
 
 	const header = [
@@ -189,7 +220,7 @@ export function renderWorkerdConfigParts(input: RenderWorkerdConfigInput): Rende
 					'  ],',
 				]
 			: []),
-		'  sockets = [ ( name = "http", http = (), service = "main" ) ],',
+		`  sockets = [ ( name = "http", http = (), service = ${capnpText(python ? PYTHON_SHIM_SERVICE : 'main')} ) ],`,
 		// A Cap'n Proto `const` declaration ends with `;`; without it workerd reports a parse error
 		// at end of file and the host never starts.
 		');',

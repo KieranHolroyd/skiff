@@ -185,6 +185,8 @@ export const desiredStateSchema = z.object({
 	storageRoutes: z.array(storageRouteSchema).default([]),
 	/** Purged storage instances whose data dir this node must delete, then report (S8). */
 	storagePurges: z.array(z.string()).default([]),
+	/** Purged queue brokers whose data dir this node must delete, then report (D111). */
+	brokerPurges: z.array(z.string()).default([]),
 	/** Custom domains this node serves; TLS is on-demand and authorized by the control plane. */
 	domains: z.array(z.object({
 		host: z.string(),
@@ -202,8 +204,9 @@ export type DesiredState = z.infer<typeof desiredStateSchema>;
  * - `studio-principal`: applies `databaseStudioPrincipals` (plan 22 track G).
  * - `node-update`: installs `nodeUpdate` through the helper's signed-release verb (D99).
  * - `functions`: renders and runs `runtime: "function"` workloads (D110).
+ * - `brokers`: runs `broker` workloads with the helper's fixed profile and purges `brokerPurges` (D111).
  */
-export const nodeCapabilities = ['studio-principal', 'node-update', 'functions'] as const;
+export const nodeCapabilities = ['studio-principal', 'node-update', 'functions', 'brokers'] as const;
 export type NodeCapability = (typeof nodeCapabilities)[number];
 
 export const heartbeatSchema = z.object({
@@ -255,6 +258,8 @@ export const heartbeatSchema = z.object({
 	purgedDatabases: z.array(z.string()).optional(),
 	/** Storage instance ids whose data dir was deleted after a `storagePurges` entry (S8). */
 	purgedStorage: z.array(z.string()).optional(),
+	/** Broker ids whose data dir was deleted after a `brokerPurges` entry (D111). */
+	purgedBrokers: z.array(z.string()).optional(),
 	/** Outcomes of `databaseBackupTasks` since the last heartbeat. */
 	databaseBackupResults: z.array(databaseBackupResultSchema).max(50).optional(),
 	/** Outcomes of `databasePitrTasks` since the last heartbeat. */

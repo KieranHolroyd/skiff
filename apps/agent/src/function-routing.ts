@@ -237,7 +237,7 @@ function proxyHandler(upstreams: readonly string[]): CaddyHandler {
 				},
 			},
 		},
-		transport: { protocol: 'http', response_header_timeout: '60s' },
+		transport: { protocol: 'http', response_header_timeout: '5m' },
 		handle_response: [
 			{
 				match: { status_code: [502, 503, 504] },

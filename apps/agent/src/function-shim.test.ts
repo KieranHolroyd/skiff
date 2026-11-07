@@ -107,7 +107,7 @@ describe('renderFunctionShim', () => {
 		expect(shim).toContain('messages = await request.json();');
 		expect(shim).toContain('return json({ error: "the queue batch body is not valid JSON" }, 400);');
 		expect(shim).toContain('if (!Array.isArray(messages))');
-		expect(shim).toContain('const batch = { queue: request.headers.get(QUEUE_HEADER) ?? "", messages };');
+		expect(shim).toContain('queue: request.headers.get(QUEUE_HEADER) ?? "",');
 		expect(shim).toContain('await user.queue(batch, env, ctx);');
 		expect(fetchHandler(shim)).toContain('if (path === QUEUE_PATH) {');
 		expect(fetchHandler(shim)).toContain('return deliverQueue(request, env, ctx);');
@@ -165,5 +165,60 @@ describe('renderFunctionShim', () => {
 	test('is deterministic', () => {
 		expect(render()).toBe(render());
 		expect(render('src/index.js')).toBe(render('src/index.js'));
+	});
+});
+
+/** Run the rendered shim for real against a user module (Bun can import it like workerd would). */
+describe('queue verdicts (D112)', () => {
+	async function deliver(userSource: string, messages: unknown[]) {
+		const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+		const { tmpdir } = await import('node:os');
+		const { join } = await import('node:path');
+		const dir = await mkdtemp(join(tmpdir(), 'skiff-shim-'));
+		try {
+			await writeFile(join(dir, 'user.js'), userSource);
+			await writeFile(join(dir, 'shim.js'), renderFunctionShim({ main: 'user.js' }));
+			const shim = (await import(join(dir, 'shim.js'))).default as { fetch: (r: Request, e: unknown, c: unknown) => Promise<Response> };
+			const response = await shim.fetch(
+				new Request('http://localhost/__skiff/queue', {
+					method: 'POST',
+					headers: { [FUNCTION_INTERNAL_HEADER]: FUNCTION_INTERNAL_VALUE, 'x-skiff-queue': 'jobs' },
+					body: JSON.stringify(messages),
+				}),
+				{},
+				{},
+			);
+			return { status: response.status, body: (await response.json()) as { results: unknown[]; error?: string } };
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	}
+	const batch = [
+		{ id: 'a', timestamp: 1, attempts: 1, contentType: 'json', body: { n: 1 } },
+		{ id: 'b', timestamp: 1, attempts: 1, contentType: 'json', body: { n: 2 } },
+	];
+
+	test('a handler that returns acks every message it did not retry', async () => {
+		const result = await deliver(
+			'export default { async queue(batch) { if (batch.queue !== "jobs") throw new Error("queue"); batch.messages[1].retry({ delaySeconds: 30 }); } };',
+			batch,
+		);
+		expect(result).toEqual({
+			status: 200,
+			body: { results: [{ id: 'a', outcome: 'ack' }, { id: 'b', outcome: 'retry', delaySeconds: 30 }] },
+		});
+	});
+
+	test('a handler that throws retries every message it did not ack, and reports why', async () => {
+		const result = await deliver('export default { async queue(batch) { batch.messages[0].ack(); throw new Error("boom"); } };', batch);
+		expect(result.body).toEqual({ results: [{ id: 'a', outcome: 'ack' }, { id: 'b', outcome: 'retry' }], error: 'boom' });
+	});
+
+	test('retryAll and ackAll apply to the whole batch', async () => {
+		const result = await deliver('export default { async queue(batch) { batch.retryAll({ delaySeconds: 5 }); } };', batch);
+		expect(result.body.results).toEqual([
+			{ id: 'a', outcome: 'retry', delaySeconds: 5 },
+			{ id: 'b', outcome: 'retry', delaySeconds: 5 },
+		]);
 	});
 });

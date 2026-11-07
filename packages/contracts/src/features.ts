@@ -15,6 +15,7 @@ export type FeatureArea =
 	| 'databases'
 	| 'networking'
 	| 'platform'
+	| 'queues'
 	| 'storage'
 	| 'workloads';
 
@@ -38,6 +39,14 @@ export const FEATURE_FLAGS = {
 		area: 'workloads',
 		description:
 			'Deploy Workers-compatible functions on the pinned workerd runtime (docs/FUNCTIONS.md).'
+	},
+	BROKERS: {
+		name: 'BROKERS',
+		// D111: managed queue brokers. Purely additive (nothing runs until someone creates a broker),
+		// so it ships on; set SKIFF_FEATURE_BROKERS=0 to hide the surfaces and refuse new brokers.
+		default: true,
+		area: 'queues',
+		description: 'Create managed queue brokers (NATS with JetStream) and attach them to apps (docs/BROKERS.md).'
 	},
 	BACKUPS_RESTORE: {
 		name: 'BACKUPS_RESTORE',

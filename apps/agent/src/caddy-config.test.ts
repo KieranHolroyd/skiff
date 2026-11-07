@@ -614,7 +614,7 @@ describe('function routes (D110)', () => {
 				},
 			},
 		});
-		expect(proxy.transport).toEqual({ protocol: 'http', response_header_timeout: '60s' });
+		expect(proxy.transport).toEqual({ protocol: 'http', response_header_timeout: '5m' });
 		expect(JSON.stringify(proxy.handle_response)).toContain('"status_code":503');
 	});
 
@@ -697,7 +697,7 @@ describe('function routes (D110)', () => {
 		for (const proxy of proxies) {
 			expect(proxy.upstreams).toEqual(replicas.map((dial) => ({ dial })));
 			expect(((proxy.headers as Json).request as Json).set).toMatchObject({ 'X-Skiff-Internal': ['0'] });
-			expect((proxy.transport as Json).response_header_timeout).toBe('60s');
+			expect((proxy.transport as Json).response_header_timeout).toBe('5m');
 			expect(JSON.stringify(proxy.handle_response)).toContain('"status_code":503');
 		}
 	});

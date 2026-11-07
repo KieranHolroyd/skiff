@@ -119,6 +119,29 @@ function functionWorkload(
 	});
 }
 
+function processApp(options: { idleStopSeconds?: number; status?: 'running' | 'stopped' } = {}): WorkloadDesired {
+	return workloadDesiredSchema.parse({
+		id: 'wld_proc',
+		projectId: 'prj_proc',
+		projectSlug: 'process-app',
+		deploymentId: 'dep_proc',
+		runtime: 'process',
+		status: options.status ?? 'running',
+		release: SHA,
+		upstream: 'unix//run/skiff-workloads/prj_proc.sock',
+		memoryMb: 256,
+		cpus: 1,
+		port: 3000,
+		healthPath: '/health',
+		socketActivation: true,
+		...(options.idleStopSeconds ? { idleStopSeconds: options.idleStopSeconds } : {}),
+		activationVersion: 'b'.repeat(64),
+		env: {},
+		secrets: [],
+		dataSizeMb: null,
+	});
+}
+
 /** The scheduler only reads `workloads`; a full desired state is irrelevant to these tests. */
 function stateWith(workloads: WorkloadDesired[]): DesiredState {
 	return { version: 1, workloads } as unknown as DesiredState;
@@ -265,27 +288,9 @@ describe('scale to zero (FN4)', () => {
 		expect(made.helper.stops).toEqual([]);
 	});
 
-	test('ignores every tier that is not a function', async () => {
+	test('ignores process apps that do not scale to zero', async () => {
 		const made = make();
-		const processWorkload = workloadDesiredSchema.parse({
-			id: 'wld_proc',
-			projectId: 'prj_proc',
-			projectSlug: 'process-app',
-			deploymentId: 'dep_proc',
-			runtime: 'process',
-			status: 'running',
-			release: SHA,
-			upstream: 'unix//run/skiff-workloads/prj_proc.sock',
-			memoryMb: 256,
-			cpus: 1,
-			port: 3000,
-			healthPath: '/health',
-			socketActivation: true,
-			activationVersion: 'b'.repeat(64),
-			env: {},
-			secrets: [],
-			dataSizeMb: null,
-		});
+		const processWorkload = processApp();
 		const state = stateWith([processWorkload, functionWorkload({ idleStopSeconds: 0 })]);
 		await made.scheduler.tick(state, signal);
 		made.clock.advance(10 * 60 * MINUTE);
@@ -303,6 +308,59 @@ describe('scale to zero (FN4)', () => {
 			made.scheduler.tick(stateWith([functionWorkload({ idleStopSeconds: 1 })]), signal),
 		).resolves.toBeUndefined();
 		expect(made.logs.some((entry) => entry.message.includes('idle stop failed'))).toBe(true);
+		expect(made.helper.stops).toEqual([]);
+	});
+});
+
+describe('process apps that scale to zero (D121)', () => {
+	test('stops a process app after idleStopSeconds and never probes or crons it', async () => {
+		const probed: string[] = [];
+		const fetched = fakeFetch();
+		const made = make({
+			fetch: fetched.fetcher,
+			probeHealth: async (workload) => {
+				probed.push(workload.id);
+				return false;
+			},
+			watchdogMisses: 1,
+		});
+		const state = stateWith([processApp({ idleStopSeconds: 120 })]);
+		await made.scheduler.tick(state, signal);
+		made.clock.advance(119_000);
+		await made.scheduler.tick(state, signal);
+		expect(made.helper.stops).toEqual([]);
+
+		made.clock.advance(1_000);
+		await made.scheduler.tick(state, signal);
+		expect(made.helper.stops).toEqual(['wld_proc']);
+		expect(made.logs).toContainEqual({ level: 'info', message: 'Process app wld_proc stopped after 120s idle' });
+		// The watchdog and cron are workerd-only: a process app is never probed, restarted or POSTed to.
+		expect(probed).toEqual([]);
+		expect(made.helper.restarts).toEqual([]);
+		expect(fetched.calls).toEqual([]);
+	});
+
+	test('a request to the project resets the timer', async () => {
+		const made = make();
+		const state = stateWith([processApp({ idleStopSeconds: 120 })]);
+		await made.scheduler.tick(state, signal);
+		made.clock.advance(100_000);
+		made.scheduler.noteActivity('prj_proc', made.clock.now());
+		made.clock.advance(100_000);
+		await made.scheduler.tick(state, signal);
+		expect(made.helper.stops).toEqual([]);
+		made.clock.advance(20_000);
+		await made.scheduler.tick(state, signal);
+		expect(made.helper.stops).toEqual(['wld_proc']);
+	});
+
+	test('a quiesced (desired stopped) process app is left alone', async () => {
+		const made = make();
+		const state = stateWith([processApp({ idleStopSeconds: 60, status: 'stopped' })]);
+		await made.scheduler.tick(state, signal);
+		made.clock.advance(10 * MINUTE);
+		await made.scheduler.tick(state, signal);
+		expect(made.helper.statusCalls).not.toContain('wld_proc');
 		expect(made.helper.stops).toEqual([]);
 	});
 });

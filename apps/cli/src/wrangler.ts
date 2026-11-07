@@ -1,10 +1,10 @@
 /**
- * Wrangler discovery, JSONC parsing and installation.
+ * Wrangler config discovery, JSONC parsing, and the `skif wrangler` passthrough.
  *
- * Functions deploys are wrangler-first (docs/FUNCTIONS.md §4.3, §4.11): a project with a
- * `wrangler.jsonc` (or `wrangler.json`) is enough. This module finds that file, parses it
- * without a dependency, finds or installs the wrangler CLI, and hands the rest of the CLI an
- * invoker that runs wrangler with inherited stdio.
+ * A Functions project is one with a `wrangler.jsonc` (or `wrangler.json`) (docs/FUNCTIONS.md
+ * §4.3, §4.11). This module finds that file and parses it without a dependency. Deploys never run
+ * Wrangler: Skiff's own bundler compiles the Worker (`worker-bundler.ts`, D113). The install and
+ * invoker helpers below serve only `skif wrangler …`, the local dev loop.
  *
  * The CLI runs on Node 20 (package.json `engines`) and is also exercised under Bun, so
  * everything here uses `node:child_process` and `node:fs` and takes injectable runners for

@@ -29,7 +29,7 @@ Start with MySQL only if WordPress demand is real. **Depends on:** 08's registry
 
 **Why:** R2 supports object-create/delete → Queues; RustFS emits to webhook/Kafka/MQTT/Postgres/
 NATS/Redis. **Shape:** a `storage_events` consumer with at-least-once delivery, idempotency, retries,
-and a dead-letter view; trigger a job/webhook. Do not build a queue product. **Depends on:** 02, 09.
+and a dead-letter view; trigger a job/webhook, or publish to a managed broker (D111). **Depends on:** 02, 09.
 **Effort:** M.
 
 ## P2.5 Log drains and archives
@@ -54,7 +54,7 @@ route. **Depends on:** 02, 15. **Effort:** M.
 ## P2.8 Auth/realtime/search/queue as stacks
 
 **Why:** Supabase/Appwrite bundle these. **Shape:** curated stacks (Supabase-lite, Centrifugo,
-Meilisearch, RabbitMQ), not native products. **Rule:** do not build a second permission model.
+Meilisearch), not native products. Queues are native brokers since D111; RabbitMQ lands as a broker engine, not a stack. **Rule:** do not build a second permission model.
 **Depends on:** 14. **Effort:** S per stack.
 
 ## P2.9 Reserved: node-level pooler

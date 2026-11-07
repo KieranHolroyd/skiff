@@ -268,6 +268,45 @@ export async function convergeHost(input: ConvergeInput): Promise<ConvergeReport
 				return result === 'installed';
 			});
 		}
+		// Python functions need the Pyodide cache for *this* workerd pin (D121). Only a node that
+		// had it for some pin follows a bump, so `--no-python` installs stay without it.
+		const pyodideModule = join(release, 'repo', 'scripts', 'install', 'pyodide.ts');
+		if (existsSync(pyodideModule) && existsSync(workerdModule)) {
+			await step(report, 'pyodide', async () => {
+				const { pinnedWorkerdVersion, WORKERD_DEST } = await import(workerdModule);
+				const { pyodideBundles, pythonBundleEras, warmPyodideCache } = await import(pyodideModule);
+				const root: string = WORKERD_DEST;
+				const hadCache = (runner.capture(['ls', root]) ?? '')
+					.split('\n')
+					.some((version: string) => version !== '' && pyodideBundles(join(root, version, 'pyodide')).length > 0);
+				if (!hadCache) return false;
+				const version = pinnedWorkerdVersion(join(release, 'repo'));
+				const result = await warmPyodideCache({
+					workerdPath: join(root, version, 'workerd'),
+					cacheDir: join(root, version, 'pyodide'),
+					eras: await pythonBundleEras(join(release, 'repo')),
+					log,
+				});
+				return result === 'warmed';
+			});
+		}
+		// PHP process apps run on a pinned FrankenPHP (D121). It is opt-in, so only a node that
+		// already has Skiff's install (the PATH link into /usr/lib/skiff/frankenphp) follows a pin
+		// bump; nothing is downloaded on a node that never asked for PHP.
+		const frankenphpModule = join(release, 'repo', 'scripts', 'install', 'frankenphp.ts');
+		if (existsSync(frankenphpModule)) {
+			await step(report, 'frankenphp', async () => {
+				const { ensureFrankenphp, frankenphpArch, FRANKENPHP_DEST, FRANKENPHP_LINK, FRANKENPHP_PINNED_VERSION } =
+					await import(frankenphpModule);
+				const current = runner.capture(['readlink', FRANKENPHP_LINK]);
+				if (!current?.startsWith(`${FRANKENPHP_DEST}/`)) return false;
+				const arch = frankenphpArch(process.arch);
+				if (!arch) throw new Error(`no FrankenPHP build for ${process.arch}`);
+				const result = await ensureFrankenphp({ arch, log });
+				if (result === 'installed') log(`installed FrankenPHP ${FRANKENPHP_PINNED_VERSION}`);
+				return result === 'installed';
+			});
+		}
 	}
 
 	if (controlPlaneHost) {

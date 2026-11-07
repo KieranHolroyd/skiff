@@ -35,6 +35,13 @@ import type {
 	StorageUpdateInput,
 	StorageView,
 } from './object-storage.ts';
+import type {
+	BrokerAttachmentView,
+	BrokerCreateInput,
+	BrokerCredentials,
+	BrokerUpdateInput,
+	BrokerView,
+} from './brokers.ts';
 import type { OperationItemView, OperationView } from './operations.ts';
 import type { AppVolumeView } from './volumes.ts';
 
@@ -971,6 +978,111 @@ export class ApiClient {
 		return this.request('PATCH', `/api/v1/databases/${encodeURIComponent(name)}/backup-policy`, { body: input });
 	}
 
+	// ---------------------------------------------------------------- queue brokers (D111)
+
+	async listBrokers(options: { includeDeleted?: boolean } = {}): Promise<{ brokers: BrokerView[]; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/brokers${options.includeDeleted ? '?includeDeleted=1' : ''}`);
+		return { brokers: ((asArray(asRecord(raw)?.brokers) ?? []) as BrokerView[]).map(withAttachments), raw };
+	}
+
+	async getBroker(name: string, options: { includeDeleted?: boolean } = {}): Promise<{ broker: BrokerView; raw: unknown }> {
+		const raw = await this.request(
+			'GET',
+			`/api/v1/brokers/${encodeURIComponent(name)}${options.includeDeleted ? '?includeDeleted=1' : ''}`,
+		);
+		return { broker: brokerFrom(raw), raw };
+	}
+
+	async createBroker(input: BrokerCreateInput): Promise<{ broker: BrokerView; raw: unknown }> {
+		const raw = await this.request('POST', '/api/v1/brokers', { body: input });
+		return { broker: brokerFrom(raw), raw };
+	}
+
+	async updateBroker(name: string, input: BrokerUpdateInput): Promise<{ broker: BrokerView; raw: unknown }> {
+		const raw = await this.request('PATCH', `/api/v1/brokers/${encodeURIComponent(name)}`, { body: input });
+		return { broker: brokerFrom(raw), raw };
+	}
+
+	async deleteBroker(name: string): Promise<{ broker: BrokerView; raw: unknown }> {
+		const raw = await this.request('DELETE', `/api/v1/brokers/${encodeURIComponent(name)}`);
+		return { broker: brokerFrom(raw), raw };
+	}
+
+	async purgeBroker(name: string): Promise<unknown> {
+		return this.request('DELETE', `/api/v1/brokers/${encodeURIComponent(name)}?purge=1`);
+	}
+
+	async restoreBroker(name: string): Promise<{ broker: BrokerView; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/brokers/${encodeURIComponent(name)}/restore`, { body: {} });
+		return { broker: brokerFrom(raw), raw };
+	}
+
+	async restartBroker(name: string): Promise<{ broker: BrokerView; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/brokers/${encodeURIComponent(name)}/restart`, { body: {} });
+		return { broker: brokerFrom(raw), raw };
+	}
+
+	async brokerCredentials(name: string): Promise<{ credentials: BrokerCredentials; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/brokers/${encodeURIComponent(name)}/credentials`);
+		const credentials = asRecord(asRecord(raw)?.credentials);
+		if (!credentials || typeof credentials.url !== 'string')
+			throw new CliError('The platform returned an unexpected credentials response.', { code: 'protocol' });
+		return { credentials: credentials as unknown as BrokerCredentials, raw };
+	}
+
+	async attachBroker(
+		project: string,
+		input: { broker: string; envPrefix?: string },
+	): Promise<{ attachment: BrokerAttachmentView; warning: string | null; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/projects/${encodeURIComponent(project)}/brokers`, { body: input });
+		const record = asRecord(raw);
+		const attachment = asRecord(record?.attachment);
+		if (!attachment || typeof attachment.brokerName !== 'string')
+			throw new CliError('The platform returned an unexpected attachment response.', { code: 'protocol', details: raw });
+		return {
+			attachment: attachment as unknown as BrokerAttachmentView,
+			warning: typeof record?.warning === 'string' ? record.warning : null,
+			raw,
+		};
+	}
+
+	async detachBroker(project: string, name: string): Promise<unknown> {
+		return this.request(
+			'DELETE',
+			`/api/v1/projects/${encodeURIComponent(project)}/brokers/${encodeURIComponent(name)}`,
+		);
+	}
+
+	async brokerLogs(
+		name: string,
+		options: { after?: number; limit?: number; level?: string; q?: string } = {},
+	): Promise<{
+		events: Array<{ seq: number; ts: number; level: string; stream: string; message: string }>;
+		cursor: number;
+		hasMore: boolean;
+		raw: unknown;
+	}> {
+		const params = new URLSearchParams();
+		if (options.after !== undefined) params.set('after', String(options.after));
+		if (options.limit !== undefined) params.set('limit', String(options.limit));
+		if (options.level) params.set('level', options.level);
+		if (options.q) params.set('q', options.q);
+		const query = params.size > 0 ? `?${params.toString()}` : '';
+		const raw = await this.request('GET', `/api/v1/brokers/${encodeURIComponent(name)}/logs${query}`);
+		const record = asRecord(raw);
+		const events = (asArray(record?.events) ?? []).map((value) => {
+			const event = asRecord(value) ?? {};
+			return {
+				seq: numberValue(event.seq) ?? 0,
+				ts: numberValue(event.ts) ?? 0,
+				level: stringValue(event.level) ?? 'info',
+				stream: stringValue(event.stream) ?? 'stdout',
+				message: stringValue(event.message) ?? '',
+			};
+		});
+		return { events, cursor: numberValue(record?.cursor) ?? 0, hasMore: record?.hasMore === true, raw };
+	}
+
 	async databaseCredentials(name: string): Promise<{ credentials: DatabaseCredentials; raw: unknown }> {
 		const raw = await this.request('GET', `/api/v1/databases/${encodeURIComponent(name)}/credentials`);
 		const credentials = asRecord(asRecord(raw)?.credentials);
@@ -1438,6 +1550,17 @@ function operationFrom(raw: unknown): OperationView {
 }
 
 /** Database endpoints wrap the view in `{ database }`. */
+function brokerFrom(raw: unknown): BrokerView {
+	const view = asRecord(asRecord(raw)?.broker);
+	if (!view || typeof view.name !== 'string')
+		throw new CliError('The platform returned an unexpected broker response.', { code: 'protocol', details: raw });
+	return withAttachments(view as unknown as BrokerView);
+}
+
+function withAttachments(view: BrokerView): BrokerView {
+	return { ...view, attachments: (asArray(view.attachments) ?? []) as BrokerAttachmentView[] };
+}
+
 function databaseFrom(raw: unknown): DatabaseView {
 	const view = asRecord(asRecord(raw)?.database);
 	if (!view || typeof view.name !== 'string')

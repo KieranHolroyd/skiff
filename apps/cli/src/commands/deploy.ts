@@ -8,7 +8,6 @@ import {
 	type BuiltFunctionBundle,
 } from '../function-bundle.ts';
 import {
-	ensureWrangler,
 	findWranglerConfig,
 	resolveWranglerConfig,
 	type WranglerConfig,
@@ -36,7 +35,6 @@ export type DeployClient = Pick<
 export interface DeployCommandDeps {
 	client?: DeployClient;
 	log?: (message: string) => void;
-	ensureWrangler?: typeof ensureWrangler;
 }
 
 const flags: FlagSpec = {
@@ -58,9 +56,9 @@ const usage = `Usage: skif deploy [dir] [options]
 Zip a directory and deploy it to Skiff.
 
 If the directory contains wrangler.jsonc (or wrangler.json), Skiff treats it as a Functions
-project (docs/FUNCTIONS.md): wrangler is installed locally when missing, the Worker is bundled
-with \`wrangler deploy --dry-run\`, and the generated bundle is deployed. Otherwise the directory
-is deployed as a static site, exactly as before.
+project (docs/FUNCTIONS.md): the Worker named by "main" is bundled with Skiff's own bundler
+(esbuild, pinned in this CLI; Wrangler is not needed), and the generated bundle is deployed.
+Otherwise the directory is deployed as a static site, exactly as before.
 
 Options:
   -p, --project <slug>   Target project (default: derived from --name or the directory)
@@ -71,12 +69,11 @@ Options:
       --no-create        Fail if the project does not exist
       --wrangler <path>  Use this wrangler config instead of auto-detecting one
       --no-wrangler      Deploy the plain directory even if a wrangler config exists
-      --wrangler-bin <path>  Use this wrangler binary instead of installing/finding one
       --json             Print the finalize response as JSON
   -h, --help             Show this help
 
 Sign in first with \`skif login\` (opens the browser), or set SKIFF_URL and SKIFF_TOKEN in CI.
-Run wrangler locally with \`skif wrangler dev\`.`;
+Run the Worker locally with \`skif wrangler dev\` (installs Wrangler for local development only).`;
 
 export async function deployCommand(
 	argv: string[],
@@ -105,10 +102,10 @@ export async function deployCommand(
 	const wranglerBin = args.string('wrangler-bin');
 	const wranglerFlag = args.string('wrangler');
 
-	if (noWrangler && (wranglerFlag || wranglerBin))
-		throw new CliError('--no-wrangler cannot be combined with --wrangler or --wrangler-bin.', {
-			code: 'usage',
-		});
+	if (noWrangler && wranglerFlag)
+		throw new CliError('--no-wrangler cannot be combined with --wrangler.', { code: 'usage' });
+	if (wranglerBin)
+		log('Note: --wrangler-bin is ignored; skif deploy bundles with its own pinned bundler, not Wrangler.');
 
 	let wranglerConfig: WranglerConfig | null = null;
 	if (wranglerFlag) {
@@ -119,10 +116,6 @@ export async function deployCommand(
 	}
 	if (wranglerConfig)
 		log(`Detected ${wranglerConfig.path}; deploying as a function.`);
-	if (!wranglerConfig && wranglerBin)
-		throw new CliError('--wrangler-bin requires a wrangler config (or --wrangler <path>).', {
-			code: 'usage',
-		});
 
 	const client = deps.client ?? (await authenticatedClient());
 	let project = await findProject(client, slug);
@@ -173,14 +166,9 @@ export async function deployCommand(
 	try {
 		let sourceDir = dir;
 		if (wranglerConfig) {
-			const invoker = await (deps.ensureWrangler ?? ensureWrangler)(dir, {
-				binary: wranglerBin,
-				log,
-			});
 			const projectSecrets = await projectSecretNames(client, project, log);
 			bundle = await buildFunctionBundle({
 				config: wranglerConfig,
-				invoker,
 				log,
 				projectSecrets,
 			});

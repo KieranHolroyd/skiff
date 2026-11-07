@@ -19,6 +19,7 @@ import type { WorkloadService } from './workloads.ts';
 import type { DatabaseService } from './databases.ts';
 import type { DatabaseStudioService } from './database-studio.ts';
 import type { StorageService } from './storage-instances.ts';
+import type { BrokerService } from './brokers.ts';
 import type { VolumeService } from './volumes.ts';
 import type { AppVolumeService } from './app-volumes.ts';
 import type { ServiceMoveService } from './service-moves.ts';
@@ -74,6 +75,8 @@ export interface CoreContext {
 	databases: DatabaseService;
 	databaseStudio: DatabaseStudioService;
 	storage: StorageService;
+	/** Managed queue brokers (D111). */
+	brokers: BrokerService;
 	storageObjects: StorageObjectsService;
 	volumes: VolumeService;
 	appVolumes: AppVolumeService;

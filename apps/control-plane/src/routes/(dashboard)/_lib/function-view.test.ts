@@ -48,7 +48,7 @@ describe('binding matrix', () => {
 			.filter((row) => row.stateful)
 			.map((row) => row.type)
 			.sort();
-		expect(stateful).toEqual(['cache', 'd1', 'durable_object', 'kv', 'queue']);
+		expect(stateful).toEqual(['cache', 'd1', 'durable_object', 'kv']);
 	});
 });
 

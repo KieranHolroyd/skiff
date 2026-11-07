@@ -835,6 +835,8 @@ export const actions: Actions = {
 			ingress,
 			replicas: ingress === 'none' ? numberField(data, 'replicas', existing.replicas) : 1
 		};
+		// A worker has no requests to wake it, so becoming one turns scale to zero off (D121).
+		if (ingress === 'none') delete input.idleStopSeconds;
 		if (existing.runner) {
 			const labels = formString(data, 'labels')
 				.split(/[\s,]+/)
@@ -891,6 +893,9 @@ export const actions: Actions = {
 		if (project.runtime === 'process') {
 			if (command) input.command = commandArgs(command);
 			input.socketActivation = formBoolean(data, 'socketActivation');
+			// Scale to zero (D121) needs the socket; without it the field is dropped, not refused.
+			const idleStopSeconds = numberField(data, 'idleStopSeconds', 0);
+			if (input.socketActivation && idleStopSeconds > 0) input.idleStopSeconds = idleStopSeconds;
 		} else {
 			input.image = image;
 		}
