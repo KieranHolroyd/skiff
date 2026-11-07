@@ -7,6 +7,7 @@ import {
 	environments,
 	nodeJoinTokens,
 	nodeVolumes,
+	shareMounts,
 	nodes,
 	projects,
 	releases,
@@ -534,6 +535,8 @@ export class NodeService {
 		if (input.storageReplication?.length)
 			this.ctx.storageReplication.applyReports(node.id, input.storageReplication);
 		if (input.volumes) this.ctx.volumes.applyInventory(node.id, input.volumes);
+		// Share mount state, then link any mounted share waiting to become a volume (VOLUMES §5).
+		this.ctx.shares.applyNodeReport(node.id, input.shareMounts, input.unmountedShares);
 		// Custom domains go `active` once an edge reports serving their certificate.
 		if (input.stats?.certs?.length) {
 			try {
@@ -887,6 +890,8 @@ export class NodeService {
 			requeuedBuilds = this.ctx.builds.releaseNodeClaims(nodeId);
 			this.ctx.db.delete(databaseStudioSessions).where(eq(databaseStudioSessions.nodeId, nodeId)).run();
 			this.ctx.db.delete(nodeVolumes).where(eq(nodeVolumes.nodeId, nodeId)).run();
+			// Share mounts on it are forgotten with it; the share definitions stay.
+			this.ctx.db.delete(shareMounts).where(eq(shareMounts.nodeId, nodeId)).run();
 			this.ctx.db.delete(nodes).where(eq(nodes.id, nodeId)).run();
 			// A removed node can never confirm a purge an earlier move left for it.
 			this.ctx.moves.forgetNode(nodeId);
@@ -1408,6 +1413,8 @@ export class NodeService {
 			placeholders,
 			workloads: workloadRows,
 			volumes: this.ctx.volumes.desiredForNode(node.id),
+			shareMounts: this.ctx.shares.mountsForNode(node.id),
+			shareUnmounts: this.ctx.shares.unmountsForNode(node.id),
 			// App-volume usage, purges and snapshot/restore tasks (docs/VOLUMES.md §14).
 			appVolumes: this.ctx.appVolumes.lifecycle.volumesForNode(node.id),
 			appVolumePurges: this.ctx.appVolumes.lifecycle.purgesForNode(node.id),

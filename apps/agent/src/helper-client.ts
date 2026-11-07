@@ -16,6 +16,7 @@ import {
 } from '@skiff/contracts';
 import type { HelperNodeUpdateApi } from './node-update.ts';
 import type { HelperMailApi } from './mail-bridge.ts';
+import type { HelperShareApi } from './share-mounts.ts';
 import type { HelperJobApi, HelperJobStatus } from './jobs.ts';
 
 /**
@@ -175,6 +176,8 @@ const STATUS_TIMEOUT_MS = 2_000;
 /** `systemctl stop` waits for the unit's TimeoutStopSec; a restart is the same plus a start. */
 const LIFECYCLE_TIMEOUT_MS = 120_000;
 const VOLUME_TIMEOUT_MS = 10_000;
+/** A mount against an unreachable server waits for the kernel's own timeouts. */
+const SHARE_MOUNT_TIMEOUT_MS = 90_000;
 const LOG_TIMEOUT_MS = 8_000;
 /** Starting or stopping the studio unit is a local systemctl call. */
 const STUDIO_TIMEOUT_MS = 30_000;
@@ -190,7 +193,14 @@ const APP_VOLUME_STREAM_TIMEOUT_MS = 6 * 60 * 60_000;
 const STATUSES: readonly WorkloadStatus[] = ['pending', 'starting', 'running', 'failed', 'stopped'];
 
 export class HelperClient
-	implements HelperApi, HelperStudioApi, HelperStudioPrincipalApi, HelperNodeUpdateApi, HelperMailApi, HelperAppVolumeApi
+	implements
+		HelperApi,
+		HelperStudioApi,
+		HelperStudioPrincipalApi,
+		HelperNodeUpdateApi,
+		HelperMailApi,
+		HelperAppVolumeApi,
+		HelperShareApi
 {
 	constructor(
 		readonly socketPath: string,
@@ -465,6 +475,40 @@ export class HelperClient
 	async volumes(signal?: AbortSignal): Promise<VolumeInventory> {
 		const body = await this.request('GET', '/v1/volumes', undefined, VOLUME_TIMEOUT_MS, signal);
 		return volumeInventorySchema.parse(asRecord(body).inventory);
+	}
+
+	/** Which shares are mounted at `/mnt/skiff-shares/<id>` (docs/VOLUMES.md §5). No credentials. */
+	async shareStatus(ids: string[], signal?: AbortSignal): Promise<Array<{ id: string; mounted: boolean }>> {
+		const body = asRecord(await this.request('POST', '/v1/shares/status', { ids }, VOLUME_TIMEOUT_MS, signal));
+		const shares = Array.isArray(body.shares) ? body.shares : [];
+		return shares.map((item) => {
+			const record = asRecord(item);
+			return { id: String(record.id), mounted: record.mounted === true };
+		});
+	}
+
+	/** Mount one share. SMB credentials pass through to the helper for this call only. */
+	async mountShare(
+		share: Parameters<HelperShareApi['mountShare']>[0],
+		signal?: AbortSignal,
+	): Promise<{ id: string; mounted: boolean; error: string | null }> {
+		const body = asRecord(await this.request('POST', '/v1/shares/mount', { share }, SHARE_MOUNT_TIMEOUT_MS, signal));
+		const record = asRecord(body.share);
+		return {
+			id: String(record.id),
+			mounted: record.mounted === true,
+			error: typeof record.error === 'string' ? record.error : null,
+		};
+	}
+
+	/** Unmount one share; a busy mount is reported as still mounted, never forced. */
+	async unmountShare(id: string, signal?: AbortSignal): Promise<{ id: string; mounted: boolean; error: string | null }> {
+		const body = asRecord(await this.request('POST', '/v1/shares/unmount', { id }, SHARE_MOUNT_TIMEOUT_MS, signal));
+		return {
+			id: String(body.id ?? id),
+			mounted: body.mounted === true,
+			error: typeof body.error === 'string' ? body.error : null,
+		};
 	}
 
 	/** Replace the helper's volume registry from desired state (D74). */

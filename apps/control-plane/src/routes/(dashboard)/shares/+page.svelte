@@ -1,7 +1,10 @@
 <script lang="ts">
-	import type { ShareView } from '@skiff/contracts';
+	import type { ShareMountView, ShareView } from '@skiff/contracts';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
+	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
+	import LinkIcon from '@lucide/svelte/icons/link';
+	import ServerIcon from '@lucide/svelte/icons/server';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
@@ -12,27 +15,97 @@
 	import { Textarea } from '#lib/components/ui/textarea/index.js';
 	import EmptyState from '../_lib/EmptyState.svelte';
 	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
+	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
 	import PageHeader from '../_lib/PageHeader.svelte';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import { toast } from 'svelte-sonner';
+	import type { Tone } from '#lib/status.js';
 	import type { PageProps } from './$types';
 
-	let { data, form }: PageProps = $props();
-	let addOpen = $state(false);
-	let grantsOpen = $state(false);
-	let grantShare = $state<ShareView | null>(null);
-	let grantText = $state('');
+	let { data }: PageProps = $props();
 
-	const result = $derived(form as { success?: string; message?: string } | null);
-	$effect(() => {
-		if (result?.success) toast.success(result.success);
-		else if (result?.message) toast.error(result.message);
-	});
+	// Add share
+	let addOpen = $state(false);
+	let protocol = $state<'nfs' | 'smb'>('nfs');
+
+	// Per-share dialogs
+	let grantsOpen = $state(false);
+	let credentialsOpen = $state(false);
+	let mountOpen = $state(false);
+	let linkOpen = $state(false);
+	let active = $state<ShareView | null>(null);
+	let activeMount = $state<ShareMountView | null>(null);
+	let grantText = $state('');
+	let mountLink = $state(true);
+
+	const mountTones: Record<ShareMountView['status'], Tone> = {
+		pending: 'info',
+		mounted: 'success',
+		failed: 'danger',
+		unmounting: 'warning',
+	};
 
 	function openGrants(share: ShareView) {
-		grantShare = share;
+		active = share;
 		grantText = share.grants.map((grant) => [grant.orgId, grant.mode, grant.pathPrefix].filter(Boolean).join(' ')).join('\n');
 		grantsOpen = true;
+	}
+
+	function openCredentials(share: ShareView) {
+		active = share;
+		credentialsOpen = true;
+	}
+
+	function openMount(share: ShareView) {
+		active = share;
+		mountLink = !share.readOnly;
+		mountOpen = true;
+	}
+
+	function openLink(share: ShareView, mount: ShareMountView) {
+		active = share;
+		activeMount = mount;
+		linkOpen = true;
+	}
+
+	/** Nodes this share is not mounted on yet. */
+	function mountTargets(share: ShareView) {
+		const taken = new Set(share.mounts.map((mount) => mount.nodeId));
+		return data.nodes.filter((node) => !taken.has(node.id));
+	}
+
+	function unmount(share: ShareView, mount: ShareMountView) {
+		askConfirm({
+			title: `Unmount “${share.name}” from ${mount.nodeName ?? mount.nodeId}?`,
+			description: mount.volume
+				? `Volume “${mount.volume.name}” is removed from Skiff first; that is refused while a database, storage instance or app volume is placed on it. Files on the server are untouched.`
+				: 'The node unmounts the share. Files on the server are untouched.',
+			confirmLabel: 'Unmount',
+			tone: 'danger',
+			action: '?/unmount',
+			fields: { name: share.name, node: mount.nodeId },
+		});
+	}
+
+	function unlink(share: ShareView, mount: ShareMountView) {
+		askConfirm({
+			title: `Stop using “${share.name}” as a Skiff volume?`,
+			description: `Volume “${mount.volume?.name}” is removed from Skiff; refused while anything is placed on it. The share stays mounted.`,
+			confirmLabel: 'Unlink volume',
+			tone: 'danger',
+			action: '?/unlink',
+			fields: { name: share.name, node: mount.nodeId },
+		});
+	}
+
+	function remove(share: ShareView) {
+		askConfirm({
+			title: `Remove share “${share.name}”?`,
+			description: 'The registry entry, its credentials and grants are removed. The server export is untouched.',
+			confirmLabel: 'Remove share',
+			tone: 'danger',
+			action: '?/remove',
+			fields: { name: share.name },
+		});
 	}
 </script>
 
@@ -40,7 +113,7 @@
 
 <PageHeader
 	title="Network shares"
-	description="Platform-level NFS and SMB filesystems, with the orgs allowed to mount them. Looking for a link that lets someone view a protected site? Share links live on each project's Share links tab."
+	description="NFS and SMB filesystems: define the share once, mount it on the nodes that need it, and link a mount to Skiff as a volume so databases, storage and app volumes can live on it. Looking for a link that lets someone view a protected site? Share links live on each project's Share links tab."
 	target="network-shares.header"
 >
 	<Button size="sm" onclick={() => (addOpen = true)}><PlusIcon />Add network share</Button>
@@ -56,65 +129,91 @@
 	<EmptyState
 		icon={HardDriveIcon}
 		title="No network shares yet"
-		description="Register an NFS or SMB export once, then grant it to organisations."
+		description="Add an NFS export or SMB share, mount it on a node, and Skiff can keep data on it."
 	>
 		<Button size="sm" onclick={() => (addOpen = true)}><PlusIcon />Add network share</Button>
 	</EmptyState>
 {:else}
-	<Card.Root>
-		<Card.Content class="overflow-x-auto">
-			<table class="w-full text-sm">
-				<thead class="text-left text-xs uppercase tracking-wide text-muted-foreground">
-					<tr class="border-b">
-						<th class="px-2 py-2">Share</th>
-						<th class="px-2 py-2">Server / export</th>
-						<th class="px-2 py-2">Zone</th>
-						<th class="px-2 py-2">Mode</th>
-						<th class="px-2 py-2">Grants</th>
-						<th class="px-2 py-2"></th>
-					</tr>
-				</thead>
-				<tbody>
-					{#each data.shares as share (share.id)}
-						<tr class="border-b last:border-0 align-top">
-							<td class="px-2 py-3">
-								<div class="font-medium">{share.name}</div>
-								<Badge variant="outline" class="font-mono text-[10px]">{share.protocol}</Badge>
-							</td>
-							<td class="px-2 py-3 font-mono text-xs">{share.server}:{share.exportPath}</td>
-							<td class="px-2 py-3 font-mono text-xs">{share.zone}</td>
-							<td class="px-2 py-3">{share.readOnly ? 'read-only' : 'read-write'}</td>
-							<td class="px-2 py-3 text-xs">
-								{#if share.grants.length === 0}
-									<span class="text-muted-foreground">none</span>
-								{:else}
-									{share.grants.map((grant) => `${grant.orgId} (${grant.mode})`).join(', ')}
+	<div class="grid gap-4">
+		{#each data.shares as share (share.id)}
+			<Card.Root>
+				<Card.Header class="flex flex-row flex-wrap items-start justify-between gap-3">
+					<div class="min-w-0 space-y-1">
+						<Card.Title class="flex flex-wrap items-center gap-2">
+							{share.name}
+							<Badge variant="outline" class="font-mono text-[10px] uppercase">{share.protocol}</Badge>
+							<Badge variant="outline">{share.readOnly ? 'read-only' : 'read-write'}</Badge>
+							{#if share.zone !== 'default'}<Badge variant="outline" class="font-mono text-[10px]">{share.zone}</Badge>{/if}
+						</Card.Title>
+						<Card.Description class="break-all font-mono text-xs">
+							{share.protocol === 'smb' ? `//${share.server}${share.exportPath}` : `${share.server}:${share.exportPath}`}
+							{#if share.protocol === 'smb'}
+								<span class="font-sans">
+									· {share.hasCredentials ? `as ${share.username ?? 'stored user'}` : 'no credentials'}
+								</span>
+							{/if}
+						</Card.Description>
+					</div>
+					<div class="flex flex-wrap gap-1">
+						<Button size="xs" onclick={() => openMount(share)} disabled={mountTargets(share).length === 0}>
+							<ServerIcon class="size-3.5" />Mount on node
+						</Button>
+						{#if share.protocol === 'smb'}
+							<Button variant="ghost" size="xs" onclick={() => openCredentials(share)}>
+								<KeyRoundIcon class="size-3.5" />Credentials
+							</Button>
+						{/if}
+						<Button variant="ghost" size="xs" onclick={() => openGrants(share)}>Grants</Button>
+						<Button variant="ghost" size="xs" aria-label="Remove share" onclick={() => remove(share)}>
+							<Trash2Icon class="size-3.5" />
+						</Button>
+					</div>
+				</Card.Header>
+				<Card.Content class="space-y-2">
+					{#if share.mounts.length === 0}
+						<p class="text-sm text-muted-foreground">Not mounted anywhere yet.</p>
+					{:else}
+						{#each share.mounts as mount (mount.id)}
+							<div class="flex flex-wrap items-start justify-between gap-2 rounded-md border px-3 py-2 text-sm">
+								<div class="min-w-0 space-y-1">
+									<div class="flex flex-wrap items-center gap-2">
+										<span class="font-medium">{mount.nodeName ?? mount.nodeId}</span>
+										<StatusBadge status={mount.status} tone={mountTones[mount.status]} />
+										{#if mount.volume}
+											<Badge variant="info"><LinkIcon class="size-3" />Volume {mount.volume.name}</Badge>
+										{:else if mount.volumeName && mount.status !== 'unmounting'}
+											<Badge variant="outline">Links as {mount.volumeName} once mounted</Badge>
+										{/if}
+									</div>
+									<div class="font-mono text-xs text-muted-foreground">{mount.mountPath}</div>
+									{#if mount.message}
+										<div class="text-xs text-destructive">{mount.message}</div>
+									{/if}
+								</div>
+								{#if mount.status !== 'unmounting'}
+									<div class="flex flex-wrap gap-1">
+										{#if mount.volume}
+											<Button variant="ghost" size="xs" onclick={() => unlink(share, mount)}>Unlink volume</Button>
+										{:else if !mount.volumeName && !share.readOnly}
+											<Button variant="outline" size="xs" onclick={() => openLink(share, mount)}>
+												<LinkIcon class="size-3.5" />Link to Skiff
+											</Button>
+										{/if}
+										<Button variant="ghost" size="xs" onclick={() => unmount(share, mount)}>Unmount</Button>
+									</div>
 								{/if}
-							</td>
-							<td class="px-2 py-3 text-right">
-								<Button variant="ghost" size="xs" onclick={() => openGrants(share)}>Grants</Button>
-								<Button
-									variant="ghost"
-									size="xs"
-									onclick={() =>
-									askConfirm({
-										title: `Remove share “${share.name}”?`,
-										description: 'The registry entry and its grants are removed. The server export is untouched.',
-										confirmLabel: 'Remove share',
-										tone: 'danger',
-										action: '?/remove',
-										fields: { name: share.name },
-									})}
-								>
-									<Trash2Icon class="size-3.5" />
-								</Button>
-							</td>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
-		</Card.Content>
-	</Card.Root>
+							</div>
+						{/each}
+					{/if}
+					{#if share.grants.length > 0}
+						<p class="text-xs text-muted-foreground">
+							Grants: {share.grants.map((grant) => `${grant.orgId} (${grant.mode})`).join(', ')}
+						</p>
+					{/if}
+				</Card.Content>
+			</Card.Root>
+		{/each}
+	</div>
 {/if}
 
 {#if !data.denied}
@@ -122,7 +221,7 @@
 		bind:open={addOpen}
 		icon={HardDriveIcon}
 		title="Add a network share"
-		description="Register the export now; attaching it to app volumes comes next."
+		description="Define the export once. Mount it on a node next; a read-write share can then become a Skiff volume."
 		action="?/create"
 		submitLabel="Create share"
 	>
@@ -131,48 +230,178 @@
 				<Field.Field>
 					<Field.Label for="share-name">Name</Field.Label>
 					<Input id="share-name" name="name" required maxlength={40} placeholder="media" class="font-mono text-sm" />
+					<Field.Description>Also the mount directory: /mnt/skiff-shares/&lt;name&gt;.</Field.Description>
 				</Field.Field>
 				<Field.Field>
 					<Field.Label for="share-protocol">Protocol</Field.Label>
-					<NativeSelect.Root id="share-protocol" name="protocol" class="w-full">
+					<NativeSelect.Root id="share-protocol" name="protocol" class="w-full" bind:value={protocol}>
 						<NativeSelect.Option value="nfs">NFS</NativeSelect.Option>
-						<NativeSelect.Option value="smb">SMB</NativeSelect.Option>
+						<NativeSelect.Option value="smb">SMB / CIFS</NativeSelect.Option>
 					</NativeSelect.Root>
 				</Field.Field>
 			</div>
 			<div class="grid gap-4 sm:grid-cols-2">
 				<Field.Field>
 					<Field.Label for="share-server">Server</Field.Label>
-					<Input id="share-server" name="server" required placeholder="10.0.0.5" class="font-mono text-sm" />
+					<Input id="share-server" name="server" required placeholder={protocol === 'smb' ? 'nas.local' : '10.0.0.5'} class="font-mono text-sm" />
 				</Field.Field>
 				<Field.Field>
-					<Field.Label for="share-export">Export path</Field.Label>
-					<Input id="share-export" name="exportPath" required placeholder="/mnt/media" class="font-mono text-sm" />
+					<Field.Label for="share-export">{protocol === 'smb' ? 'Share' : 'Export path'}</Field.Label>
+					<Input
+						id="share-export"
+						name="exportPath"
+						required
+						placeholder={protocol === 'smb' ? '/media' : '/mnt/user/media'}
+						class="font-mono text-sm"
+					/>
+					<Field.Description>
+						{protocol === 'smb' ? 'The share name with a leading slash; a subfolder may follow.' : 'The absolute path the server exports.'}
+					</Field.Description>
 				</Field.Field>
 			</div>
+			{#if protocol === 'smb'}
+				<div class="grid gap-4 sm:grid-cols-3">
+					<Field.Field>
+						<Field.Label for="share-username">Username</Field.Label>
+						<Input id="share-username" name="username" required autocomplete="off" />
+					</Field.Field>
+					<Field.Field>
+						<Field.Label for="share-password">Password</Field.Label>
+						<Input id="share-password" name="password" type="password" required autocomplete="new-password" />
+					</Field.Field>
+					<Field.Field>
+						<Field.Label for="share-domain">Domain</Field.Label>
+						<Input id="share-domain" name="domain" placeholder="optional" autocomplete="off" />
+					</Field.Field>
+				</div>
+				<p class="text-xs text-muted-foreground">
+					Sealed with the platform key. Nodes fetch them only to mount; they never appear in the dashboard, logs or audit.
+				</p>
+			{/if}
 			<div class="grid gap-4 sm:grid-cols-2">
 				<Field.Field>
 					<Field.Label for="share-zone">Zone</Field.Label>
 					<Input id="share-zone" name="zone" placeholder="home" maxlength={32} />
 				</Field.Field>
 				<Field.Field orientation="horizontal" class="gap-2 pt-6">
-					<input type="checkbox" id="share-readonly" name="readOnly" value="1" checked class="size-4 accent-brand" />
-					<Field.Label for="share-readonly" class="font-normal">Read-only by default</Field.Label>
+					<input type="checkbox" id="share-readonly" name="readOnly" value="1" class="size-4 accent-brand" />
+					<Field.Label for="share-readonly" class="font-normal">Mount read-only</Field.Label>
 				</Field.Field>
 			</div>
+			<p class="text-xs text-muted-foreground">
+				Nodes need {protocol === 'smb' ? 'cifs-utils' : 'nfs-common (or nfs-utils)'} installed. Network volumes trade
+				latency and locking guarantees for capacity; Skiff does not back up what lives on a share.
+			</p>
 		</Field.Group>
 	</FormDialog>
 
-	{#if grantShare}
+	{#if active}
+		<FormDialog
+			bind:open={mountOpen}
+			icon={ServerIcon}
+			title="Mount {active.name}"
+			description="The node's helper mounts it at /mnt/skiff-shares/{active.name} and keeps it mounted across restarts."
+			action="?/mount"
+			submitLabel="Mount"
+		>
+			<input type="hidden" name="name" value={active.name} />
+			<Field.Group>
+				<Field.Field>
+					<Field.Label for="mount-node">Node</Field.Label>
+					<NativeSelect.Root id="mount-node" name="node" class="w-full" required>
+						{#each mountTargets(active) as node (node.id)}
+							<NativeSelect.Option value={node.id}>{node.name} ({node.status})</NativeSelect.Option>
+						{/each}
+					</NativeSelect.Root>
+				</Field.Field>
+				<Field.Field orientation="horizontal" class="gap-2">
+					<input
+						type="checkbox"
+						id="mount-link"
+						name="link"
+						value="1"
+						bind:checked={mountLink}
+						disabled={active.readOnly}
+						class="size-4 accent-brand"
+					/>
+					<Field.Label for="mount-link" class="font-normal">
+						Link to Skiff as a volume once mounted
+						{#if active.readOnly}<span class="text-muted-foreground">(needs a read-write share)</span>{/if}
+					</Field.Label>
+				</Field.Field>
+				{#if mountLink && !active.readOnly}
+					<div class="grid gap-4 sm:grid-cols-2">
+						<Field.Field>
+							<Field.Label for="mount-volume">Volume name</Field.Label>
+							<Input id="mount-volume" name="volumeName" value={active.name} maxlength={40} class="font-mono text-sm" />
+						</Field.Field>
+						<Field.Field orientation="horizontal" class="gap-2 pt-6">
+							<input type="checkbox" id="mount-default" name="defaultVolume" value="1" class="size-4 accent-brand" />
+							<Field.Label for="mount-default" class="font-normal">Default for new instances on this node</Field.Label>
+						</Field.Field>
+					</div>
+				{/if}
+			</Field.Group>
+		</FormDialog>
+
+		{#if activeMount}
+			<FormDialog
+				bind:open={linkOpen}
+				icon={LinkIcon}
+				title="Link {active.name} to Skiff"
+				description="Registers the mount on {activeMount.nodeName ?? activeMount.nodeId} as a node volume. Databases, storage instances and app volumes can then be placed on it."
+				action="?/link"
+				submitLabel="Link volume"
+			>
+				<input type="hidden" name="name" value={active.name} />
+				<input type="hidden" name="node" value={activeMount.nodeId} />
+				<div class="grid gap-4 sm:grid-cols-2">
+					<Field.Field>
+						<Field.Label for="link-volume">Volume name</Field.Label>
+						<Input id="link-volume" name="volumeName" value={active.name} maxlength={40} class="font-mono text-sm" />
+					</Field.Field>
+					<Field.Field orientation="horizontal" class="gap-2 pt-6">
+						<input type="checkbox" id="link-default" name="defaultVolume" value="1" class="size-4 accent-brand" />
+						<Field.Label for="link-default" class="font-normal">Default for new instances on this node</Field.Label>
+					</Field.Field>
+				</div>
+			</FormDialog>
+		{/if}
+
+		<FormDialog
+			bind:open={credentialsOpen}
+			icon={KeyRoundIcon}
+			title="Credentials for {active.name}"
+			description="Replaces the stored SMB username and password. Working mounts keep their session; failed mounts retry with these at once."
+			action="?/credentials"
+			submitLabel="Save credentials"
+		>
+			<input type="hidden" name="name" value={active.name} />
+			<div class="grid gap-4 sm:grid-cols-3">
+				<Field.Field>
+					<Field.Label for="cred-username">Username</Field.Label>
+					<Input id="cred-username" name="username" required value={active.username ?? ''} autocomplete="off" />
+				</Field.Field>
+				<Field.Field>
+					<Field.Label for="cred-password">Password</Field.Label>
+					<Input id="cred-password" name="password" type="password" required autocomplete="new-password" />
+				</Field.Field>
+				<Field.Field>
+					<Field.Label for="cred-domain">Domain</Field.Label>
+					<Input id="cred-domain" name="domain" placeholder="optional" autocomplete="off" />
+				</Field.Field>
+			</div>
+		</FormDialog>
+
 		<FormDialog
 			bind:open={grantsOpen}
 			icon={HardDriveIcon}
-			title="Grants for {grantShare.name}"
+			title="Grants for {active.name}"
 			description="One per line: org id, mode (ro or rw), optional path prefix."
 			action="?/grants"
 			submitLabel="Save grants"
 		>
-			<input type="hidden" name="name" value={grantShare.name} />
+			<input type="hidden" name="name" value={active.name} />
 			<Field.Field>
 				<Field.Label for="share-grants">Grants</Field.Label>
 				<Textarea id="share-grants" name="grants" bind:value={grantText} rows={6} class="font-mono text-xs" placeholder={'org_123 ro media/\norg_456 rw'} />

@@ -26,6 +26,8 @@ import {
 	shareCreateSchema,
 	shareUpdateSchema,
 	shareGrantsSchema,
+	shareMountCreateSchema,
+	shareMountLinkSchema,
 	type ItemStatus,
 	type ItemVerdict,
 	type OperationKind,
@@ -297,6 +299,25 @@ const api: RequestHandler = async (event) => {
 			}
 			if (segments.length === 3 && segments[2] === 'grants' && method === 'PUT')
 				return core.shares.setGrants(principal, name, await readJson(request, shareGrantsSchema));
+			// Mounts (docs/VOLUMES.md §5): POST /shares/:name/mounts, DELETE /shares/:name/mounts/:node,
+			// PUT|DELETE /shares/:name/mounts/:node/volume to link or unlink it as a node volume.
+			if (segments[2] === 'mounts') {
+				if (segments.length === 3) {
+					if (method === 'POST')
+						return json(core.shares.mount(principal, name, await readJson(request, shareMountCreateSchema)), 201);
+					return json({ error: 'method_not_allowed' }, 405);
+				}
+				const node = segments[3]!;
+				if (segments.length === 4) {
+					if (method === 'DELETE') return core.shares.unmount(principal, name, node);
+					return json({ error: 'method_not_allowed' }, 405);
+				}
+				if (segments.length === 5 && segments[4] === 'volume') {
+					if (method === 'PUT') return core.shares.link(principal, name, node, await readJson(request, shareMountLinkSchema));
+					if (method === 'DELETE') return core.shares.unlink(principal, name, node);
+					return json({ error: 'method_not_allowed' }, 405);
+				}
+			}
 			return json({ error: 'not_found' }, 404);
 		}
 

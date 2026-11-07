@@ -1,5 +1,5 @@
 import { and, eq } from 'drizzle-orm';
-import { databases, nodeVolumes, nodes, storageInstances } from '@skiff/db';
+import { appVolumes, databases, nodeVolumes, nodes, shareMounts, storageInstances } from '@skiff/db';
 import {
 	VOLUME_ID_PREFIX,
 	canAdministerPlatform,
@@ -102,6 +102,32 @@ export class VolumeService {
 	adopt(principal: Principal, nodeId: string, raw: VolumeAdopt): VolumeView {
 		this.assertPlatformAdmin(principal, 'write');
 		const input = volumeAdoptSchema.parse(raw);
+		const row = this.adoptMount({
+			nodeId,
+			name: input.name,
+			sourceKey: input.sourceKey,
+			makeDefault: input.default,
+			createdBy: principal.userId,
+			principal,
+		});
+		return this.toView(row, this.requireNode(nodeId));
+	}
+
+	/**
+	 * Register a mount the node reports as a volume. Shared by `adopt` and by share mounts, which
+	 * link themselves once the node reports them (docs/VOLUMES.md §5); callers check permissions.
+	 */
+	adoptMount(input: {
+		nodeId: string;
+		name: string;
+		sourceKey: string;
+		makeDefault: boolean;
+		createdBy: string;
+		principal?: Principal;
+		/** Extra audit arguments (e.g. the share the mount came from). */
+		auditArgs?: Record<string, unknown>;
+	}): VolumeRow {
+		const { nodeId } = input;
 		const node = this.requireNode(nodeId);
 		const inventory = parseInventory(node.volumeInventoryJson);
 		if (!inventory)
@@ -132,7 +158,7 @@ export class VolumeService {
 
 		const now = this.ctx.now();
 		const id = newId(VOLUME_ID_PREFIX);
-		const makeDefault = input.default || node.defaultVolumeId === null;
+		const makeDefault = input.makeDefault || node.defaultVolumeId === null;
 		this.ctx.db.transaction(() => {
 			this.ctx.db
 				.insert(nodeVolumes)
@@ -146,12 +172,13 @@ export class VolumeService {
 					fsType: entry.fsType,
 					options: '',
 					remote: entry.remote || isRemoteVolumeKind(entry.kind),
+					class: deriveVolumeClass(entry),
 					status: 'ready',
 					message: null,
 					sizeBytes: entry.sizeBytes,
 					freeBytes: entry.freeBytes,
 					statsAt: now,
-					createdBy: principal.userId,
+					createdBy: input.createdBy,
 					createdAt: now,
 					updatedAt: now,
 				})
@@ -160,7 +187,7 @@ export class VolumeService {
 				this.ctx.db.update(nodes).set({ defaultVolumeId: id, updatedAt: now }).where(eq(nodes.id, nodeId)).run();
 		});
 		this.ctx.audit.record({
-			principal,
+			principal: input.principal,
 			action: 'volume.adopt',
 			resource: 'volume',
 			resourceId: id,
@@ -172,12 +199,13 @@ export class VolumeService {
 				kind: entry.kind,
 				remote: entry.remote,
 				default: makeDefault,
+				...input.auditArgs,
 			},
 			result: 'ok',
 		});
 		// Agents must pull the new desired-state volume list to write their registry (D74).
 		this.ctx.nodes.bump();
-		return this.toView(this.requireRow(id), this.requireNode(nodeId));
+		return this.requireRow(id);
 	}
 
 	/** Rename a volume or make it (or stop it being) the node's default. */
@@ -231,14 +259,16 @@ export class VolumeService {
 		this.assertPlatformAdmin(principal, 'write');
 		const node = this.requireNode(nodeId);
 		const row = this.requireOnNode(nodeId, name);
-		const onVolume = this.instancesOf(row.id);
-		if (onVolume.storage.length > 0 || onVolume.databases.length > 0)
-			throw new ConflictError(
-				`Volume "${name}" still holds ${[...onVolume.storage, ...onVolume.databases].join(', ')}. Move or delete them first.`,
-			);
+		this.assertRemovable(row);
 		const now = this.ctx.now();
 		this.ctx.db.transaction(() => {
 			this.ctx.db.delete(nodeVolumes).where(eq(nodeVolumes.id, row.id)).run();
+			// A share mount linked to this volume stays mounted but must not re-link itself.
+			this.ctx.db
+				.update(shareMounts)
+				.set({ volumeId: null, volumeName: null, volumeDefault: false, updatedAt: now })
+				.where(eq(shareMounts.volumeId, row.id))
+				.run();
 			if (node.defaultVolumeId === row.id)
 				this.ctx.db.update(nodes).set({ defaultVolumeId: null, updatedAt: now }).where(eq(nodes.id, nodeId)).run();
 		});
@@ -252,6 +282,21 @@ export class VolumeService {
 		});
 		this.ctx.nodes.bump();
 		return { ok: true };
+	}
+
+	/** Refuse removing a volume anything still lives on: managed instances or app volumes. */
+	assertRemovable(row: VolumeRow): void {
+		const onVolume = this.instancesOf(row.id);
+		const apps = this.ctx.db
+			.select({ name: appVolumes.name })
+			.from(appVolumes)
+			.where(eq(appVolumes.nodeVolumeId, row.id))
+			.all()
+			.map((item) => `app volume ${item.name}`)
+			.sort();
+		const holders = [...onVolume.storage, ...onVolume.databases, ...apps];
+		if (holders.length > 0)
+			throw new ConflictError(`Volume "${row.name}" still holds ${holders.join(', ')}. Move or delete them first.`);
 	}
 
 	// ---------------------------------------------------------------- node reports

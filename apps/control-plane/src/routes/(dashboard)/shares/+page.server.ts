@@ -1,15 +1,18 @@
 import { fail } from '@sveltejs/kit';
 import type { ShareGrant, ShareView } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
-import { failStatus, formBoolean, formString, toFormFailure } from '../_lib/errors.js';
+import { failStatus, formBoolean, formRawString, formString, toFormFailure } from '../_lib/errors.js';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = ({ locals }) => {
 	const principal = locals.principal!;
 	try {
-		return { shares: core.shares.list(principal), denied: false };
+		const shares = core.shares.list(principal);
+		// Mount targets: every enrolled node. The server refuses one whose agent cannot mount yet.
+		const nodes = core.nodes.list(principal).map((node) => ({ id: node.id, name: node.name, status: node.status }));
+		return { shares, nodes, denied: false };
 	} catch {
-		return { shares: [] as ShareView[], denied: true };
+		return { shares: [] as ShareView[], nodes: [] as Array<{ id: string; name: string; status: string }>, denied: true };
 	}
 };
 
@@ -29,6 +32,14 @@ function parseGrants(value: string): ShareGrant[] {
 	return grants;
 }
 
+/** SMB credentials from a form, or undefined when the username is blank. */
+function formCredentials(data: FormData): { username: string; password: string; domain?: string } | undefined {
+	const username = formString(data, 'username');
+	if (!username) return undefined;
+	const domain = formString(data, 'domain');
+	return { username, password: formRawString(data, 'password'), ...(domain ? { domain } : {}) };
+}
+
 export const actions: Actions = {
 	create: async ({ request, locals }) => {
 		const principal = locals.principal!;
@@ -36,6 +47,9 @@ export const actions: Actions = {
 		const name = formString(data, 'name');
 		const protocol = formString(data, 'protocol');
 		if (protocol !== 'nfs' && protocol !== 'smb') return fail(400, { message: 'Choose NFS or SMB.' });
+		const credentials = protocol === 'smb' ? formCredentials(data) : undefined;
+		if (protocol === 'smb' && !credentials)
+			return fail(400, { message: 'SMB shares need a username and password to mount.' });
 		try {
 			core.shares.create(principal, {
 				name,
@@ -44,11 +58,12 @@ export const actions: Actions = {
 				exportPath: formString(data, 'exportPath'),
 				zone: formString(data, 'zone') || 'default',
 				readOnly: formBoolean(data, 'readOnly'),
+				...(credentials ? { credentials } : {}),
 			});
 		} catch (error) {
 			return fail(failStatus(error), toFormFailure(error));
 		}
-		return { success: `Share “${name}” created.` };
+		return { success: `Share “${name}” created. Mount it on a node to use it.` };
 	},
 
 	remove: async ({ request, locals }) => {
@@ -73,5 +88,82 @@ export const actions: Actions = {
 			return fail(failStatus(error), toFormFailure(error));
 		}
 		return { success: `Grants for “${name}” saved.` };
+	},
+
+	credentials: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const name = formString(data, 'name');
+		const credentials = formCredentials(data);
+		if (!credentials) return fail(400, { message: 'Enter the SMB username and password.' });
+		try {
+			core.shares.update(principal, name, { credentials });
+		} catch (error) {
+			return fail(failStatus(error), toFormFailure(error));
+		}
+		return { success: `Credentials for “${name}” saved. Failed mounts retry with them now.` };
+	},
+
+	mount: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const name = formString(data, 'name');
+		const node = formString(data, 'node');
+		if (!node) return fail(400, { message: 'Pick a node to mount the share on.' });
+		const link = formBoolean(data, 'link');
+		try {
+			core.shares.mount(principal, name, {
+				node,
+				volumeName: link ? formString(data, 'volumeName') || name : null,
+				defaultVolume: link && formBoolean(data, 'defaultVolume'),
+			});
+		} catch (error) {
+			return fail(failStatus(error), toFormFailure(error));
+		}
+		return {
+			success: link
+				? `Mounting “${name}”. It becomes a Skiff volume as soon as the node reports the mount.`
+				: `Mounting “${name}” on the node.`,
+		};
+	},
+
+	unmount: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const name = formString(data, 'name');
+		try {
+			core.shares.unmount(principal, name, formString(data, 'node'));
+		} catch (error) {
+			return fail(failStatus(error), toFormFailure(error));
+		}
+		return { success: `Unmounting “${name}”.` };
+	},
+
+	link: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const name = formString(data, 'name');
+		const volumeName = formString(data, 'volumeName') || name;
+		try {
+			core.shares.link(principal, name, formString(data, 'node'), {
+				volumeName,
+				defaultVolume: formBoolean(data, 'defaultVolume'),
+			});
+		} catch (error) {
+			return fail(failStatus(error), toFormFailure(error));
+		}
+		return { success: `“${name}” will be linked as volume “${volumeName}”.` };
+	},
+
+	unlink: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const name = formString(data, 'name');
+		try {
+			core.shares.unlink(principal, name, formString(data, 'node'));
+		} catch (error) {
+			return fail(failStatus(error), toFormFailure(error));
+		}
+		return { success: `“${name}” is no longer a Skiff volume. The share stays mounted.` };
 	},
 };

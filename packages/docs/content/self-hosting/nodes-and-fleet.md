@@ -178,6 +178,24 @@ The flow has a few limits you may notice:
 
 Message bodies are cut to 16 KiB in a peek. A test request to a function can carry up to 1 MiB of body, and the response is cut at 256 KiB.
 
+## Network shares
+
+A NAS or file server can give a node more storage. Skiff mounts an NFS export or SMB share on the nodes you choose and then registers each mount as a node volume. Databases, storage instances and app volumes can be placed on that volume, the same as a local disk.
+
+1. Install the mount tools on each node that will mount the share: `nfs-common` (Debian and Ubuntu) or `nfs-utils` for NFS, and `cifs-utils` for SMB.
+2. Go to **Network shares → Add network share**. Enter the server and the export path. For SMB, enter the share name with a leading slash, such as `/media`, and a username and password. Leave **Mount read-only** off if Skiff should keep data on the share.
+3. Select **Mount on node** and pick the node. Keep **Link to Skiff as a volume once mounted** on.
+
+The node mounts the share at `/mnt/skiff-shares/<share name>`. About a minute later the mount shows **Volume `<name>`**, and the volume is listed under that node on the **Nodes** page. If you mounted without linking, select **Link to Skiff** on the mount later.
+
+- **Credentials.** SMB passwords are encrypted. The node fetches them only to mount and they are never shown again. To change them, select **Credentials**. A mount that failed retries straight away with the new ones.
+- **Failures.** A mount that fails shows the error on the mount, for example missing mount tools, a refused login, or a server the node cannot reach. Skiff retries after 5 s, 15 s and 45 s, then every 5 minutes. After a reboot the agent mounts the share again. Apps and databases on the volume do not start until it is mounted, so they never write to the node's own disk instead.
+- **Unmount.** Select **Unmount** on the mount. Skiff removes the volume first, and refuses while anything is still placed on it. It never forces an unmount and never deletes files on the share.
+- **Changes.** You cannot change a share's server, export or read-only setting, or delete it, while it is mounted on any node.
+
+> [!WARNING]
+> A network volume is slower than a local disk, and file locking depends on the server. Skiff does not back up what is stored on a share. Prefer local disks for databases. Export paths with spaces or `$` are not supported yet.
+
 ## Draining and removing nodes
 
 Every action on a node is in the **Actions** menu on the **Nodes** page. Each one needs a platform admin.

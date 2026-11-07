@@ -200,6 +200,14 @@ const handler: RequestHandler = async (event) => {
 			return core.databases.pitrActivation(node.id, pitrTask[1]!);
 		}
 
+		// SMB credentials for one share mount (docs/VOLUMES.md §5); never in desired state.
+		const shareCredential = /^share-mounts\/([^/]+)\/credentials$/.exec(action);
+		if (shareCredential) {
+			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
+			const node = core.nodes.authenticate(token);
+			return json(core.shares.credentialsFor(node.id, shareCredential[1]!), 200, { 'cache-control': 'no-store' });
+		}
+
 		const credential = /^database-credentials\/([^/]+)$/.exec(action);
 		if (credential) {
 			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);

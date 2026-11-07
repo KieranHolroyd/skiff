@@ -129,7 +129,11 @@ export interface HandlerOptions {
 	/** Managed overlay verbs (C1); absent on a helper that predates the overlay. */
 	wireguard?: WireguardApi;
 	/** Share mount verbs (C3); absent on a helper that predates cluster shares. */
-	shares?: { mount(share: ShareMount): Promise<ShareMountStatus>; unmount(id: string): Promise<{ id: string; mounted: false }> };
+	shares?: {
+		mount(share: ShareMount): Promise<ShareMountStatus>;
+		unmount(id: string): Promise<{ id: string; mounted: boolean; error: string | null }>;
+		status(ids: string[]): Promise<ShareMountStatus[]>;
+	};
 	/** Container console verbs (D127); absent on a helper that predates them. */
 	containers?: ContainerConsole;
 	/** App-volume usage, purge, snapshot and restore (docs/VOLUMES.md §14); absent = 404. */
@@ -198,10 +202,15 @@ export function createHandler(
 			}
 
 			// --- cluster share mounts (C3): fixed mount/unmount, no shell ---------------------
-			if (path === '/v1/shares/mount' || path === '/v1/shares/unmount') {
+			if (path === '/v1/shares/mount' || path === '/v1/shares/unmount' || path === '/v1/shares/status') {
 				if (method !== 'POST') return methodNotAllowed('POST');
 				if (!options.shares) return json({ error: 'shares are not available on this helper' }, 404);
 				const body = assertRecord(await readJson(request, maxBodyBytes), 'request');
+				if (path === '/v1/shares/status') {
+					if (!Array.isArray(body.ids) || body.ids.length > 100) throw new ValidationError('ids must be an array of at most 100');
+					const ids = body.ids.map((id, index) => assertString(id, `ids[${index}]`, { max: 100 }));
+					return json({ ok: true, shares: await options.shares.status(ids) });
+				}
 				if (path === '/v1/shares/mount') {
 					const share = assertRecord(body.share, 'share') as unknown as ShareMount;
 					return json({ ok: true, share: await options.shares.mount(share) });

@@ -72,9 +72,12 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | DELETE | `/databases/:name/replicas/:id` | `database:update` | 202; stops it, its node purges the copy and the primary drops the slot, then the row goes |
 | POST | `/databases/:name/replicas/:id/promote` | `database:update` | `{ confirm: true, acceptDataLoss? }` + `If-Match: <primaryGeneration>` (412 when stale); 202 with the failover (fencing → promoting → repointing → completed). Never MCP |
 | GET | `/shares` | platform admin | cluster share registry (C3) |
-| POST | `/shares` | platform admin **session** | `{ name, protocol: nfs\|smb, server, exportPath, zone?, readOnly?, credentialsRef? }` |
-| GET/PATCH/DELETE | `/shares/:name` | platform admin **session** | read, update or remove a share |
+| POST | `/shares` | platform admin **session** | `{ name, protocol: nfs\|smb, server, exportPath, zone?, readOnly?, credentials?: { username, password, domain? } }`; SMB credentials are sealed and never returned |
+| GET/PATCH/DELETE | `/shares/:name` | platform admin **session** | read (with `mounts`), update or remove a share; server/export/mode changes and delete are refused while mounted; `credentials` rotates |
 | PUT | `/shares/:name/grants` | platform admin **session** | `{ grants: [{ orgId, mode: ro\|rw, pathPrefix? }] }`; replaces the set |
+| POST | `/shares/:name/mounts` | platform admin **session** | `{ node, volumeName?, defaultVolume? }`: mount at `/mnt/skiff-shares/<name>` on that node and link it as a node volume once mounted (`volumeName: null` = plain mount; VOLUMES §5) |
+| DELETE | `/shares/:name/mounts/:node` | platform admin **session** | unregister the linked volume (refused while used), then unmount |
+| PUT/DELETE | `/shares/:name/mounts/:node/volume` | platform admin **session** | `{ volumeName, defaultVolume? }` links a mount as a node volume; DELETE unlinks it (stays mounted) |
 | GET | `/cluster/config` | platform admin | cluster tunables: overlay, endpoints, replicas, database/storage limits, lease, failover, shares |
 | PATCH | `/cluster/config` | platform admin **session** | section patches; unknown keys rejected; endpoint port range must have min < max |
 | GET | `/ingress/status` | platform admin | ingress driver, hold-down policy and ingress-node readiness (C5) |

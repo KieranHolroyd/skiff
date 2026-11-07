@@ -106,6 +106,37 @@ shell string.
 
 ## 5. Network mounts (first-class)
 
+**Built (D143, 2026-11-07):** Network shares (`/shares`) → *Mount on node* → the node's helper
+mounts the share at `/mnt/skiff-shares/<share>` → once the heartbeat inventory reports it there
+with the expected source key (`nfs:<server>:<export>` / `cifs:<server>/<share>`), a read-write
+mount is adopted as a `remote` node volume (named after the share unless renamed; *Link to Skiff*
+does it later for a mount created without linking). From then on it is an ordinary node volume:
+pick it when creating a database, storage instance or app volume, or make it the node default.
+
+| Step | Where |
+|---|---|
+| Define | `POST /api/v1/shares` (`credentials: { username, password, domain? }` for SMB, sealed with the platform key) |
+| Mount | `POST /api/v1/shares/:name/mounts` `{ node, volumeName?, defaultVolume? }`; `volumeName: null` mounts without linking |
+| Link / unlink | `PUT` / `DELETE /api/v1/shares/:name/mounts/:node/volume` |
+| Unmount | `DELETE /api/v1/shares/:name/mounts/:node` — unregisters the volume first (refused while anything is placed on it), then the node unmounts and confirms |
+| Node | Desired state `shareMounts` / `shareUnmounts`, heartbeat `shareMounts` / `unmountedShares`, agent capability `share-mounts`; SMB credentials from `GET /api/agent/share-mounts/:id/credentials` per mount call |
+
+The helper uses fixed options — NFS `hard,proto=tcp,noatime,nosuid,nodev`; SMB
+`vers=3.0,noatime,nosuid,nodev,mfsymlinks,file_mode=0770,dir_mode=0770` with a `0600` credentials file
+in `/run/skiff-shares` that exists only for the mount call — plus `ro`/`rw` from the share. The
+agent re-checks every 15 s and retries failures at 5 s, 15 s, 45 s, then every 5 minutes; rotating
+credentials retries at once. Unmount never forces and cleanup is a plain `rmdir` of an unmounted,
+empty directory, so a busy mount can never reach the share's files. A share's server, export or
+mode cannot change, and it cannot be deleted, while it is mounted anywhere. Nodes need
+`nfs-common`/`nfs-utils` or `cifs-utils`; a missing helper program is named in the mount error.
+
+Not yet: the systemd mount units and automount below (the agent remounts after a reboot instead,
+and workloads on the volume fail closed until then), CIFS `uid`/`gid` per container user (chown of
+`<mount>/skiff/<id>` needs a server that honours it), the transport probes and `degraded` state of
+CLUSTERING §5.2, and export paths with spaces or `$` (they cannot form a source key).
+
+The original design, of which the above is the first slice:
+
 - Credentials (SMB password, NFS with a custom sec) are sealed with the org key, written to a
   `0400` root file only at apply time, and never appear in desired state, logs or the dashboard.
 - Mount units use `_netdev,nofail,x-systemd.automount` and a bounded `x-systemd.device-timeout`, so
@@ -202,7 +233,7 @@ replication is not used for a local move. Databases use their own safe stop/copy
 | **P1** | Guided local format (GPT + ext4/xfs) through plan/apply; mount units by UUID; dashboard wizard. |
 | **P2** | LVM and mdadm provisioning; array/pool health in heartbeats. |
 | **P3** | ZFS pools/datasets; LUKS2 with keyfile/TPM2. |
-| **P4** | Native NFS/CIFS creation with sealed credentials; migration between volumes; multi-drive RustFS (erasure coding) as a separate decision. |
+| **P4** | **Done:** NFS/CIFS mounts from the share registry with sealed credentials, linked as node volumes (§5, D143). **Open:** systemd mount units/automount, migration between volumes; multi-drive RustFS (erasure coding) as a separate decision. |
 
 P0 is intentionally usable: an operator mounts a disk with their normal tools (fstab/systemd),
 Skiff adopts it, and an S3 instance can be created on it. Every later phase adds provisioning, not

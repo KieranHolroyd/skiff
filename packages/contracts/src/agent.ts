@@ -38,6 +38,7 @@ import {
 import { storageReplicationReportSchema } from './storage-replication.ts';
 import { nodeStorageSchema, nodeStorageStatusSchema } from './storage.ts';
 import { nodeVolumeDesiredSchema, volumeInventorySchema } from './volume.ts';
+import { shareMountDesiredSchema, shareMountReportSchema, shareUnmountDesiredSchema } from './share.ts';
 import {
 	appVolumeNodeRefSchema,
 	appVolumeTaskResultSchema,
@@ -204,6 +205,10 @@ export const desiredStateSchema = z.object({
 	databaseReplicaPromotions: z.array(databaseReplicaPromotionTaskSchema).default([]),
 	/** Registered volumes this node must know about, for volume-backed data dirs (D74). */
 	volumes: z.array(nodeVolumeDesiredSchema).default([]),
+	/** Network shares this node keeps mounted under `/mnt/skiff-shares` (docs/VOLUMES.md §5). */
+	shareMounts: z.array(shareMountDesiredSchema).default([]),
+	/** Share mounts to remove; the node unmounts and reports `unmountedShares`. */
+	shareUnmounts: z.array(shareUnmountDesiredSchema).default([]),
 	/** Live app volumes placed on this node; the agent measures their usage (docs/VOLUMES.md §14). */
 	appVolumes: z.array(appVolumeNodeRefSchema).default([]),
 	/** Trashed app volumes past their retention window: delete the directory, then report. */
@@ -268,6 +273,7 @@ export type DesiredState = z.infer<typeof desiredStateSchema>;
  * - `jobs`: leases job runs and starts them as transient units through the helper (plan 09).
  * - `database-replicas`: runs Postgres replica workloads, serves their link sockets, applies
  *   `databaseReplication` and `databaseReplicaPromotions` (docs/CLUSTERING.md §9.2, C7).
+ * - `share-mounts`: mounts `shareMounts`, unmounts `shareUnmounts` and reports both.
  */
 export const nodeCapabilities = [
 	'studio-principal',
@@ -280,6 +286,7 @@ export const nodeCapabilities = [
 	'app-volumes',
 	'jobs',
 	'database-replicas',
+	'share-mounts',
 ] as const;
 export type NodeCapability = (typeof nodeCapabilities)[number];
 
@@ -326,6 +333,10 @@ export const heartbeatSchema = z.object({
 	storage: nodeStorageStatusSchema.optional(),
 	/** Mounts and free block devices the node reports for the volume wizard (D72, D80). */
 	volumes: volumeInventorySchema.optional(),
+	/** The node's view of every desired share mount, each heartbeat. */
+	shareMounts: z.array(shareMountReportSchema).max(200).optional(),
+	/** Share mount ids from `shareUnmounts` that are now unmounted. */
+	unmountedShares: z.array(z.string().max(100)).max(200).optional(),
 	/** Actual workload state, so the fleet view reflects restart loops and OOM kills (DESIGN §9). */
 	workloads: z.array(z.object({
 		id: z.string(),

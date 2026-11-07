@@ -1,31 +1,61 @@
-import { eq } from 'drizzle-orm';
-import { shareGrants, shares } from '@skiff/db';
+import { and, eq, inArray, or } from 'drizzle-orm';
+import { nodeVolumes, nodes, shareGrants, shareMounts, shares } from '@skiff/db';
 import {
 	canAdministerPlatform,
 	canViewPlatform,
 	shareCreateSchema,
+	shareCredentialsSchema,
 	shareGrantsSchema,
+	shareMountCreateSchema,
+	shareMountLinkSchema,
+	shareMountPath,
+	shareSourceKey,
 	shareUpdateSchema,
+	volumeInventorySchema,
 	type Principal,
 	type ShareCreate,
+	type ShareCredentials,
 	type ShareGrants,
+	type ShareMountCreate,
+	type ShareMountCredentials,
+	type ShareMountDesired,
+	type ShareMountLink,
+	type ShareMountReport,
+	type ShareMountView,
+	type ShareUnmountDesired,
 	type ShareUpdate,
 	type ShareView,
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
-import { newId } from './util.ts';
+import { newId, parseJson } from './util.ts';
 
 type ShareRow = typeof shares.$inferSelect;
+type MountRow = typeof shareMounts.$inferSelect;
+type NodeRow = typeof nodes.$inferSelect;
+
+/** Agent capability that mounts `shareMounts` (contracts `nodeCapabilities`). */
+export const SHARE_MOUNT_CAPABILITY = 'share-mounts';
+/** Shares have no org; their SMB credentials are sealed with the platform key. */
+const PLATFORM_KEY_ORG = 'platform';
 
 /**
- * Cluster shares (docs/CLUSTERING.md §5.2, phase C3).
+ * Cluster shares (docs/CLUSTERING.md §5.2, docs/VOLUMES.md §5).
  *
- * This is the registry: protocol, server/export, failure-domain zone and org grants. Mounting is
- * the agent/helper's job and is additive; the control plane never handles a mount secret value.
+ * The registry holds protocol, server/export, failure-domain zone, org grants and sealed SMB
+ * credentials. A **mount** asks one node's helper to mount the share at
+ * `/mnt/skiff-shares/<name>`; the node reports the result in its heartbeat. A mount can be
+ * **linked** to Skiff: once the node's volume inventory shows the share's source key at that path,
+ * it is adopted as a node volume, so managed databases, storage instances and app volumes can be
+ * placed on it and the helper verifies it before every start (D76).
+ *
+ * Credentials never enter desired state: the node fetches them for one mount call through the
+ * node-authenticated credential endpoint, and neither values nor usernames reach audit arguments.
  */
 export class ShareService {
 	constructor(private readonly ctx: CoreContext) {}
+
+	// ---------------------------------------------------------------- registry
 
 	list(principal: Principal): ShareView[] {
 		this.assertRead(principal);
@@ -57,6 +87,9 @@ export class ShareService {
 			zone: input.zone,
 			readOnly: input.readOnly,
 			credentialsRef: input.credentialsRef ?? null,
+			credentialsSealed: input.credentials ? this.sealCredentials(input.credentials) : null,
+			credentialsUsername: input.credentials?.username ?? null,
+			generation: 1,
 			createdBy: principal.userId,
 			createdAt: now,
 			updatedAt: now,
@@ -67,7 +100,15 @@ export class ShareService {
 			action: 'share.create',
 			resource: 'share',
 			resourceId: row.id,
-			args: { name: row.name, protocol: row.protocol, server: row.server, exportPath: row.exportPath, zone: row.zone },
+			args: {
+				name: row.name,
+				protocol: row.protocol,
+				server: row.server,
+				exportPath: row.exportPath,
+				zone: row.zone,
+				readOnly: row.readOnly,
+				credentials: Boolean(row.credentialsSealed),
+			},
 			result: 'ok',
 		});
 		return this.view(row);
@@ -77,6 +118,19 @@ export class ShareService {
 		this.assertWrite(principal);
 		const input = shareUpdateSchema.parse(raw);
 		const row = this.requireRow(name);
+		const definitionChange =
+			(input.server !== undefined && input.server !== row.server) ||
+			(input.exportPath !== undefined && input.exportPath !== row.exportPath) ||
+			(input.readOnly !== undefined && input.readOnly !== row.readOnly);
+		if (definitionChange) {
+			const mounted = this.mountRows(row.id);
+			if (mounted.length > 0)
+				throw new ConflictError(
+					`Share "${name}" is mounted on ${this.nodeNames(mounted).join(', ')}. Unmount it before changing the server, export or mode.`,
+				);
+		}
+		if (input.credentials && row.protocol !== 'smb')
+			throw new ValidationError('NFS shares do not take a username or password.');
 		const now = this.ctx.now();
 		const changes: Partial<ShareRow> = { updatedAt: now };
 		if (input.server !== undefined) changes.server = input.server;
@@ -84,21 +138,34 @@ export class ShareService {
 		if (input.zone !== undefined) changes.zone = input.zone;
 		if (input.readOnly !== undefined) changes.readOnly = input.readOnly;
 		if (input.credentialsRef !== undefined) changes.credentialsRef = input.credentialsRef;
+		if (input.credentials !== undefined) {
+			changes.credentialsSealed = input.credentials ? this.sealCredentials(input.credentials) : null;
+			changes.credentialsUsername = input.credentials?.username ?? null;
+			// Failed mounts retry at once with the new credentials; a working mount is left alone.
+			changes.generation = row.generation + 1;
+		}
 		this.ctx.db.update(shares).set(changes).where(eq(shares.id, row.id)).run();
+		const { credentials, ...auditInput } = input;
 		this.ctx.audit.record({
 			principal,
-			action: 'share.update',
+			action: input.credentials !== undefined ? 'share.credential.rotate' : 'share.update',
 			resource: 'share',
 			resourceId: row.id,
-			args: { name, ...input },
+			args: { name, ...auditInput, ...(credentials !== undefined ? { credentials: credentials ? 'replaced' : 'cleared' } : {}) },
 			result: 'ok',
 		});
+		if (changes.generation !== undefined) this.ctx.nodes.bump();
 		return this.view({ ...row, ...changes });
 	}
 
 	remove(principal: Principal, name: string): { ok: true } {
 		this.assertWrite(principal);
 		const row = this.requireRow(name);
+		const mounted = this.mountRows(row.id);
+		if (mounted.length > 0)
+			throw new ConflictError(
+				`Share "${name}" is still mounted on ${this.nodeNames(mounted).join(', ')}. Unmount it first.`,
+			);
 		this.ctx.db.transaction(() => {
 			this.ctx.db.delete(shareGrants).where(eq(shareGrants.shareId, row.id)).run();
 			this.ctx.db.delete(shares).where(eq(shares.id, row.id)).run();
@@ -114,7 +181,7 @@ export class ShareService {
 		return { ok: true };
 	}
 
-	/** Replace every org grant for a share. Credentials are still only an opaque reference. */
+	/** Replace every org grant for a share. */
 	setGrants(principal: Principal, name: string, raw: ShareGrants): ShareView {
 		this.assertWrite(principal);
 		const input = shareGrantsSchema.parse(raw);
@@ -145,6 +212,383 @@ export class ShareService {
 		return this.view(row);
 	}
 
+	// ---------------------------------------------------------------- mounts
+
+	/**
+	 * Mount a share on a node. The node's helper mounts it at `/mnt/skiff-shares/<name>` on its
+	 * next pull; with a `volumeName` (default: the share name) it is linked as a node volume as soon
+	 * as the node reports the mount.
+	 */
+	mount(principal: Principal, name: string, raw: ShareMountCreate): ShareView {
+		this.assertWrite(principal);
+		const input = shareMountCreateSchema.parse(raw);
+		const share = this.requireRow(name);
+		const node = this.resolveNode(input.node);
+		if (!parseJson<string[]>(node.capabilitiesJson, []).includes(SHARE_MOUNT_CAPABILITY))
+			throw new ConflictError(
+				`${node.name} runs an agent that cannot mount network shares yet. Update the node, then retry.`,
+			);
+		if (share.protocol === 'smb' && !share.credentialsSealed)
+			throw new ValidationError(`Share "${name}" needs an SMB username and password before it can be mounted.`);
+		const existing = this.mountRow(share.id, node.id);
+		if (existing)
+			throw new ConflictError(
+				existing.status === 'unmounting'
+					? `Share "${name}" is still being unmounted from ${node.name}. Wait for it to finish.`
+					: `Share "${name}" is already mounted on ${node.name}.`,
+			);
+		const volumeName = input.volumeName === undefined ? share.name : input.volumeName;
+		if (volumeName) this.assertLinkable(share, node, volumeName);
+		const now = this.ctx.now();
+		const row: MountRow = {
+			id: newId('shm_'),
+			shareId: share.id,
+			nodeId: node.id,
+			status: 'pending',
+			message: null,
+			volumeName,
+			volumeDefault: volumeName ? input.defaultVolume : false,
+			volumeId: null,
+			mountedAt: null,
+			createdBy: principal.userId,
+			createdAt: now,
+			updatedAt: now,
+		};
+		this.ctx.db.insert(shareMounts).values(row).run();
+		this.ctx.audit.record({
+			principal,
+			action: 'share.mount',
+			resource: 'share',
+			resourceId: share.id,
+			args: { name, nodeId: node.id, node: node.name, mountPath: shareMountPath(share.name), volumeName },
+			result: 'ok',
+		});
+		this.ctx.nodes.bump();
+		return this.view(share);
+	}
+
+	/**
+	 * Unmount a share from a node. A linked volume is unregistered first, which is refused while
+	 * anything lives on it; the mount row stays `unmounting` until the node confirms.
+	 */
+	unmount(principal: Principal, name: string, nodeRef: string): ShareView {
+		this.assertWrite(principal);
+		const share = this.requireRow(name);
+		const node = this.resolveNode(nodeRef);
+		const row = this.mountRow(share.id, node.id);
+		if (!row) throw new NotFoundError(`Mount of "${name}" on ${node.name}`);
+		if (row.status === 'unmounting') return this.view(share);
+		// Unregistering refuses (and changes nothing) while anything is placed on the volume.
+		this.unregisterVolume(row, principal);
+		this.ctx.db
+			.update(shareMounts)
+			.set({ status: 'unmounting', message: null, volumeName: null, volumeId: null, volumeDefault: false, updatedAt: this.ctx.now() })
+			.where(eq(shareMounts.id, row.id))
+			.run();
+		this.ctx.audit.record({
+			principal,
+			action: 'share.unmount',
+			resource: 'share',
+			resourceId: share.id,
+			args: { name, nodeId: node.id, node: node.name },
+			result: 'ok',
+		});
+		this.ctx.nodes.bump();
+		return this.view(share);
+	}
+
+	/** Link an existing mount to Skiff as a node volume (now if the node reports it, else on its next report). */
+	link(principal: Principal, name: string, nodeRef: string, raw: ShareMountLink): ShareView {
+		this.assertWrite(principal);
+		const input = shareMountLinkSchema.parse(raw);
+		const share = this.requireRow(name);
+		const node = this.resolveNode(nodeRef);
+		const row = this.mountRow(share.id, node.id);
+		if (!row || row.status === 'unmounting') throw new NotFoundError(`Mount of "${name}" on ${node.name}`);
+		if (row.volumeId && this.ctx.volumes.byId(row.volumeId))
+			throw new ConflictError(`Share "${name}" on ${node.name} is already linked as a volume.`);
+		this.assertLinkable(share, node, input.volumeName);
+		this.ctx.db
+			.update(shareMounts)
+			.set({ volumeName: input.volumeName, volumeDefault: input.defaultVolume, volumeId: null, message: null, updatedAt: this.ctx.now() })
+			.where(eq(shareMounts.id, row.id))
+			.run();
+		this.ctx.audit.record({
+			principal,
+			action: 'share.link',
+			resource: 'share',
+			resourceId: share.id,
+			args: { name, nodeId: node.id, volumeName: input.volumeName, default: input.defaultVolume },
+			result: 'ok',
+		});
+		this.linkPending(node.id, principal);
+		return this.view(share);
+	}
+
+	/** Stop using a mount as a Skiff volume; the share stays mounted. */
+	unlink(principal: Principal, name: string, nodeRef: string): ShareView {
+		this.assertWrite(principal);
+		const share = this.requireRow(name);
+		const node = this.resolveNode(nodeRef);
+		const row = this.mountRow(share.id, node.id);
+		if (!row) throw new NotFoundError(`Mount of "${name}" on ${node.name}`);
+		this.unregisterVolume(row, principal);
+		this.ctx.db
+			.update(shareMounts)
+			.set({ volumeName: null, volumeId: null, volumeDefault: false, updatedAt: this.ctx.now() })
+			.where(eq(shareMounts.id, row.id))
+			.run();
+		this.ctx.audit.record({
+			principal,
+			action: 'share.unlink',
+			resource: 'share',
+			resourceId: share.id,
+			args: { name, nodeId: node.id },
+			result: 'ok',
+		});
+		return this.view(share);
+	}
+
+	// ---------------------------------------------------------------- node protocol
+
+	/** Desired share mounts for a node. Carries no credential, only whether to fetch one. */
+	mountsForNode(nodeId: string): ShareMountDesired[] {
+		return this.ctx.db
+			.select({ mount: shareMounts, share: shares })
+			.from(shareMounts)
+			.innerJoin(shares, eq(shares.id, shareMounts.shareId))
+			.where(and(eq(shareMounts.nodeId, nodeId), inArray(shareMounts.status, ['pending', 'mounted', 'failed'])))
+			.all()
+			.map(({ mount, share }) => ({
+				id: mount.id,
+				name: share.name,
+				protocol: share.protocol,
+				server: share.server,
+				exportPath: share.exportPath,
+				readOnly: share.readOnly,
+				credentials: share.protocol === 'smb',
+				generation: String(share.generation),
+			}))
+			.sort((a, b) => a.name.localeCompare(b.name));
+	}
+
+	unmountsForNode(nodeId: string): ShareUnmountDesired[] {
+		return this.ctx.db
+			.select({ id: shareMounts.id, name: shares.name })
+			.from(shareMounts)
+			.innerJoin(shares, eq(shares.id, shareMounts.shareId))
+			.where(and(eq(shareMounts.nodeId, nodeId), eq(shareMounts.status, 'unmounting')))
+			.all()
+			.sort((a, b) => a.name.localeCompare(b.name));
+	}
+
+	/** SMB credentials for one mount, for the node that holds it. Audited without the values. */
+	credentialsFor(nodeId: string, mountId: string): ShareMountCredentials {
+		const row = this.ctx.db.select().from(shareMounts).where(eq(shareMounts.id, mountId)).get();
+		if (!row || row.nodeId !== nodeId || row.status === 'unmounting') throw new NotFoundError('Share mount');
+		const share = this.ctx.db.select().from(shares).where(eq(shares.id, row.shareId)).get();
+		if (!share?.credentialsSealed) throw new NotFoundError('Share credentials');
+		const credentials = shareCredentialsSchema.parse(
+			JSON.parse(this.ctx.secrets.open(PLATFORM_KEY_ORG, share.credentialsSealed)),
+		);
+		this.ctx.audit.record({
+			action: 'share.credential.use',
+			resource: 'share',
+			resourceId: share.id,
+			args: { name: share.name, nodeId, mountId },
+			result: 'ok',
+		});
+		return { id: row.id, username: credentials.username, password: credentials.password, domain: credentials.domain ?? null };
+	}
+
+	/**
+	 * Apply a heartbeat: mount status per desired mount, unmount confirmations, then link any
+	 * mounted share that is waiting to become a volume.
+	 */
+	applyNodeReport(nodeId: string, reports: ShareMountReport[] | undefined, unmounted: string[] | undefined): void {
+		const now = this.ctx.now();
+		if (reports?.length) {
+			const rows = new Map(
+				this.ctx.db
+					.select()
+					.from(shareMounts)
+					.where(eq(shareMounts.nodeId, nodeId))
+					.all()
+					.map((row) => [row.id, row]),
+			);
+			for (const report of reports) {
+				const row = rows.get(report.id);
+				if (!row || row.status === 'unmounting') continue;
+				const status = report.mounted ? 'mounted' : report.error ? 'failed' : 'pending';
+				const message = report.mounted ? null : (report.error?.slice(0, 1_000) ?? null);
+				if (status === row.status && message === row.message) continue;
+				this.ctx.db
+					.update(shareMounts)
+					.set({ status, message, mountedAt: report.mounted ? (row.mountedAt ?? now) : null, updatedAt: now })
+					.where(eq(shareMounts.id, row.id))
+					.run();
+				if (status === 'failed' && row.status !== 'failed')
+					this.ctx.audit.record({
+						action: 'share.mount.fail',
+						resource: 'share',
+						resourceId: row.shareId,
+						args: { nodeId, mountId: row.id, error: message },
+						result: 'error',
+						error: message ?? undefined,
+					});
+			}
+		}
+		if (unmounted?.length)
+			this.ctx.db
+				.delete(shareMounts)
+				.where(and(eq(shareMounts.nodeId, nodeId), eq(shareMounts.status, 'unmounting'), inArray(shareMounts.id, unmounted)))
+				.run();
+		this.linkPending(nodeId);
+	}
+
+	// ---------------------------------------------------------------- internals
+
+	/** Adopt mounted shares with a requested volume name whose mount the node's inventory shows. */
+	private linkPending(nodeId: string, principal?: Principal): void {
+		const pending = this.ctx.db
+			.select({ mount: shareMounts, share: shares })
+			.from(shareMounts)
+			.innerJoin(shares, eq(shares.id, shareMounts.shareId))
+			.where(and(eq(shareMounts.nodeId, nodeId), eq(shareMounts.status, 'mounted')))
+			.all()
+			.filter(({ mount }) => mount.volumeName && !mount.volumeId);
+		if (pending.length === 0) return;
+		const node = this.ctx.db.select().from(nodes).where(eq(nodes.id, nodeId)).get();
+		const inventory = volumeInventorySchema.safeParse(parseJson(node?.volumeInventoryJson ?? null, null));
+		if (!node || !inventory.success) return;
+		for (const { mount, share } of pending) {
+			const sourceKey = shareSourceKey(share);
+			const mountPath = shareMountPath(share.name);
+			const entry = inventory.data.mounts.find((item) => item.sourceKey === sourceKey);
+			// Not in this inventory yet (it refreshes about once a minute): try again next heartbeat.
+			if (!entry) continue;
+			let volumeId: string | null = null;
+			let message: string | null = null;
+			if (entry.mountPath !== mountPath) {
+				message = `The node also mounts ${sourceKey} at ${entry.mountPath}; unmount that copy so Skiff can link ${mountPath}.`;
+			} else {
+				try {
+					volumeId = this.ctx.volumes.adoptMount({
+						nodeId,
+						name: mount.volumeName!,
+						sourceKey,
+						makeDefault: mount.volumeDefault,
+						createdBy: mount.createdBy,
+						principal,
+						auditArgs: { share: share.name },
+					}).id;
+				} catch (error) {
+					message = `Could not link as volume "${mount.volumeName}": ${error instanceof Error ? error.message : String(error)}`;
+				}
+			}
+			if (message === mount.message && volumeId === null) continue;
+			this.ctx.db
+				.update(shareMounts)
+				.set({ volumeId, message, updatedAt: this.ctx.now() })
+				.where(eq(shareMounts.id, mount.id))
+				.run();
+		}
+	}
+
+	/** Remove the node volume a mount is linked to, refusing while anything is placed on it. */
+	private unregisterVolume(row: MountRow, principal: Principal): void {
+		if (!row.volumeId) return;
+		const volume = this.ctx.volumes.byId(row.volumeId);
+		if (!volume) return;
+		this.ctx.volumes.remove(principal, volume.nodeId, volume.name);
+	}
+
+	private assertLinkable(share: ShareRow, node: NodeRow, volumeName: string): void {
+		if (share.readOnly)
+			throw new ValidationError(
+				`Share "${share.name}" is read-only, so Skiff cannot keep data on it. Make the share read-write, or mount it without linking.`,
+			);
+		const clash = this.ctx.db
+			.select({ id: nodeVolumes.id })
+			.from(nodeVolumes)
+			.where(and(eq(nodeVolumes.nodeId, node.id), eq(nodeVolumes.name, volumeName)))
+			.get();
+		if (clash) throw new ConflictError(`Volume "${volumeName}" already exists on ${node.name}. Pick another name.`);
+	}
+
+	private sealCredentials(raw: ShareCredentials): string {
+		const credentials = shareCredentialsSchema.parse(raw);
+		return this.ctx.secrets.seal(PLATFORM_KEY_ORG, JSON.stringify(credentials));
+	}
+
+	private resolveNode(ref: string): NodeRow {
+		const row = this.ctx.db
+			.select()
+			.from(nodes)
+			.where(or(eq(nodes.id, ref), eq(nodes.name, ref)))
+			.get();
+		if (!row) throw new NotFoundError(`Node "${ref}"`);
+		return row;
+	}
+
+	private mountRow(shareId: string, nodeId: string): MountRow | null {
+		return (
+			this.ctx.db
+				.select()
+				.from(shareMounts)
+				.where(and(eq(shareMounts.shareId, shareId), eq(shareMounts.nodeId, nodeId)))
+				.get() ?? null
+		);
+	}
+
+	private mountRows(shareId: string): MountRow[] {
+		return this.ctx.db.select().from(shareMounts).where(eq(shareMounts.shareId, shareId)).all();
+	}
+
+	private nodeNames(rows: MountRow[]): string[] {
+		const ids = rows.map((row) => row.nodeId);
+		const names = new Map(
+			this.ctx.db
+				.select({ id: nodes.id, name: nodes.name })
+				.from(nodes)
+				.where(inArray(nodes.id, ids))
+				.all()
+				.map((node) => [node.id, node.name]),
+		);
+		return ids.map((id) => names.get(id) ?? id).sort();
+	}
+
+	private mountViews(share: ShareRow): ShareMountView[] {
+		const rows = this.mountRows(share.id);
+		if (rows.length === 0) return [];
+		const nodeNames = new Map(
+			this.ctx.db
+				.select({ id: nodes.id, name: nodes.name })
+				.from(nodes)
+				.where(inArray(nodes.id, rows.map((row) => row.nodeId)))
+				.all()
+				.map((node) => [node.id, node.name]),
+		);
+		return rows
+			.map((row) => {
+				const volume = row.volumeId ? this.ctx.volumes.byId(row.volumeId) : null;
+				return {
+					id: row.id,
+					nodeId: row.nodeId,
+					nodeName: nodeNames.get(row.nodeId) ?? null,
+					mountPath: shareMountPath(share.name),
+					status: row.status,
+					message: row.message,
+					volumeName: volume?.name ?? row.volumeName,
+					volume: volume ? { id: volume.id, name: volume.name, status: volume.status } : null,
+					mountedAt: row.mountedAt ? new Date(row.mountedAt).toISOString() : null,
+					createdAt: new Date(row.createdAt).toISOString(),
+					updatedAt: new Date(row.updatedAt).toISOString(),
+				};
+			})
+			.sort((a, b) => (a.nodeName ?? a.nodeId).localeCompare(b.nodeName ?? b.nodeId));
+	}
+
 	private view(row: ShareRow): ShareView {
 		const grants = this.ctx.db
 			.select()
@@ -161,7 +605,10 @@ export class ShareService {
 			zone: row.zone,
 			readOnly: row.readOnly,
 			credentialsRef: row.credentialsRef,
+			hasCredentials: Boolean(row.credentialsSealed),
+			username: row.credentialsUsername,
 			grants,
+			mounts: this.mountViews(row),
 			createdAt: new Date(row.createdAt).toISOString(),
 			updatedAt: new Date(row.updatedAt).toISOString(),
 		};

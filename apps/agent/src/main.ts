@@ -27,6 +27,7 @@ import { loadConfig, type AgentConfig } from './config.ts';
 import { controlSocketFetch } from './control-socket.ts';
 import { DatabaseBackupRunner } from './database-backups.ts';
 import { AppVolumeRunner } from './app-volumes.ts';
+import { ShareMountRunner } from './share-mounts.ts';
 import { DatabasePitrRunner } from './database-pitr.ts';
 import { DatabaseCredentialRunner } from './database-credentials.ts';
 import { StudioPrincipalRunner } from './studio/principal.ts';
@@ -118,6 +119,8 @@ class AgentRuntime {
 	private readonly databaseBackups: DatabaseBackupRunner;
 	/** App-volume usage, purges, snapshots and restores (docs/VOLUMES.md §14). */
 	private readonly appVolumes: AppVolumeRunner;
+	/** Network share mounts under /mnt/skiff-shares (docs/VOLUMES.md §5). */
+	private readonly shareMounts: ShareMountRunner;
 	private readonly databasePitr: DatabasePitrRunner;
 	private readonly databaseRotations: DatabaseRotationRunner;
 	private readonly databaseCredentials: DatabaseCredentialRunner;
@@ -230,6 +233,12 @@ class AgentRuntime {
 		this.databaseStats = new DatabaseStatsSampler({ source: this.workloads, log });
 		this.databaseBackups = new DatabaseBackupRunner({ helper: this.helper, log });
 		this.appVolumes = new AppVolumeRunner({ helper: this.helper, log });
+		this.shareMounts = new ShareMountRunner({
+			controlUrl: config.controlUrl,
+			nodeToken: config.nodeToken,
+			helper: this.helper,
+			log,
+		});
 		this.databasePitr = new DatabasePitrRunner({
 			controlUrl: config.controlUrl,
 			nodeToken: config.nodeToken,
@@ -429,6 +438,7 @@ class AgentRuntime {
 			this.databaseStatsLoop(),
 			this.databaseBackupLoop(),
 			this.appVolumeLoop(),
+			this.shareMountLoop(),
 			this.databasePitrLoop(),
 			this.databaseRotationLoop(),
 			this.databaseCredentialLoop(),
@@ -724,6 +734,9 @@ class AgentRuntime {
 				await this.releases.activate(route.projectId, route.release);
 		}
 
+		// Shares first: a volume linked to a share must be mounted before a workload on it starts.
+		await this.convergeShareMounts(state);
+
 		// The helper needs the registered volumes before it can resolve a volume-backed data dir
 		// (D74). A failure is logged; affected workloads then fail closed at start (D76).
 		try {
@@ -851,6 +864,27 @@ class AgentRuntime {
 			} catch (error) {
 				log('warn', `Database backup task failed: ${errorText(error)}`);
 			}
+		}
+	}
+
+	/** Mount missing shares and unmount removed ones; a change refreshes the volume inventory. */
+	private async convergeShareMounts(state: DesiredState): Promise<void> {
+		try {
+			// Share linking keys off the inventory, so re-read it on the next heartbeat.
+			if (await this.shareMounts.runOnce(state, this.shutdownController.signal)) this.volumeInventoryAt = 0;
+		} catch (error) {
+			log('error', `Share mount converge failed: ${errorText(error)}`);
+		}
+	}
+
+	/** Re-check share mounts between reconciles: retries failures and notices a dropped mount. */
+	private async shareMountLoop(): Promise<void> {
+		while (this.running) {
+			await sleep(15_000, this.shutdownController.signal).catch(() => undefined);
+			if (!this.running) break;
+			const state = this.desired;
+			if (!state || (state.shareMounts.length === 0 && state.shareUnmounts.length === 0)) continue;
+			await this.convergeShareMounts(state);
 		}
 	}
 
@@ -1019,6 +1053,7 @@ class AgentRuntime {
 		const purgedStorage = this.workloads.pendingPurgedStorage();
 		const purgedBrokers = this.workloads.pendingPurgedBrokers();
 		const appVolumeReport = this.appVolumes.pending();
+		const shareMountReport = this.shareMounts.report();
 		const volumeInventory = await this.volumeInventoryForHeartbeat();
 		const backupResults = this.databaseBackups.pendingResults();
 		const pitrResults = this.databasePitr.pendingResults();
@@ -1078,6 +1113,8 @@ class AgentRuntime {
 			...(storageRootKeys.length > 0 ? { storageRootKeys } : {}),
 			...(storageReplication.length > 0 ? { storageReplication } : {}),
 			...(volumeInventory ? { volumes: volumeInventory } : {}),
+			...(shareMountReport.shareMounts.length > 0 ? { shareMounts: shareMountReport.shareMounts } : {}),
+			...(shareMountReport.unmountedShares.length > 0 ? { unmountedShares: shareMountReport.unmountedShares } : {}),
 		};
 
 		const parsed = heartbeatSchema.safeParse(body);
@@ -1111,6 +1148,7 @@ class AgentRuntime {
 		this.workloads.acknowledgePurgedStorage(purgedStorage);
 		this.workloads.acknowledgePurgedBrokers(purgedBrokers);
 		this.appVolumes.acknowledge(appVolumeReport);
+		this.shareMounts.acknowledgeUnmounted(shareMountReport.unmountedShares);
 		this.storageAdmin.acknowledgeBucketDeletions(storageBucketDeletions);
 		this.storageAdmin.acknowledgeBucketConfigs(storageBucketConfigs);
 		this.storageAdmin.acknowledgeRootKeyReports(storageRootKeys);

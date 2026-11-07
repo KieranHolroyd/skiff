@@ -240,5 +240,5 @@ The page is for status. Only the `direct` driver, which is today's single edge, 
 > - Rolling deploys, and a drain that moves every app off a node.
 > - Mirrored node disks.
 > - Bucket replication to another node.
-> - Storage shares mounted on several nodes.
+> - One share used by apps on several nodes at once. Each node mounts a share as its own volume. See [network shares](/self-hosting/nodes-and-fleet#network-shares).
 > - Replicas for engines other than Postgres.

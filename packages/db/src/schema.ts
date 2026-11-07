@@ -132,11 +132,38 @@ export const shares = sqliteTable(
 		zone: text('zone').notNull().default('default'),
 		readOnly: integer('read_only', { mode: 'boolean' }).notNull().default(true),
 		credentialsRef: text('credentials_ref'),
+		/** Sealed (platform key) JSON `{ username, password, domain? }` for SMB; never returned. */
+		credentialsSealed: text('credentials_sealed'),
+		/** The SMB username, kept in clear for display. */
+		credentialsUsername: text('credentials_username'),
+		/** Bumped on a definition or credential change so nodes remount (0067). */
+		generation: integer('generation').notNull().default(1),
 		createdBy: text('created_by').notNull(),
 		createdAt: integer('created_at').notNull().$defaultFn(now),
 		updatedAt: integer('updated_at').notNull().$defaultFn(now),
 	},
 	(t) => [uniqueIndex('shares_name_idx').on(t.name)],
+);
+
+/** Where a share is mounted, and the node volume the mount is linked to (0067). */
+export const shareMounts = sqliteTable(
+	'share_mounts',
+	{
+		id: text('id').primaryKey(),
+		shareId: text('share_id').notNull(),
+		nodeId: text('node_id').notNull(),
+		status: text('status', { enum: ['pending', 'mounted', 'failed', 'unmounting'] }).notNull().default('pending'),
+		message: text('message'),
+		/** Link as a node volume with this name once mounted; null = a plain mount. */
+		volumeName: text('volume_name'),
+		volumeDefault: integer('volume_default', { mode: 'boolean' }).notNull().default(false),
+		volumeId: text('volume_id'),
+		mountedAt: integer('mounted_at'),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [uniqueIndex('share_mounts_share_node_idx').on(t.shareId, t.nodeId), index('share_mounts_node_idx').on(t.nodeId)],
 );
 
 export const shareGrants = sqliteTable(
