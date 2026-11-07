@@ -111,7 +111,7 @@ describe('node tasks', () => {
 		expect(core.nodeTasks.hasPending(nodeId)).toBe(true);
 
 		const lease = core.nodeTasks.lease(nodeId);
-		expect(lease.tasks).toEqual([{ id: task.id, targetId: brokerId, kind: 'broker.queue.send', input: task.input }]);
+		expect(lease.tasks).toEqual([{ id: task.id, targetId: brokerId, kind: 'broker.queue.send', input: { queue: 'jobs', body: '{"hello":1}', contentType: 'json', count: 3 } }]);
 		// A second lease in the same window gets nothing.
 		expect(core.nodeTasks.lease(nodeId).tasks).toEqual([]);
 		expect(core.nodeTasks.get(owner, task.id).status).toBe('running');
