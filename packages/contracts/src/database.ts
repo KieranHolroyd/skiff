@@ -129,7 +129,7 @@ export const databaseEngineRegistry: Record<DatabaseEngine, DatabaseEngineInfo> 
 		label: 'PostgreSQL',
 		family: 'relational',
 		description: 'The default. Extensions, pooling, PITR and full metrics.',
-		versions: ['17', '16'],
+		versions: ['18', '17', '16'],
 		defaultVersion: '17',
 		containerPort: 5432,
 		scheme: 'postgres',
@@ -593,7 +593,7 @@ export const databaseExtensionCatalog: Record<DatabaseExtension, DatabaseExtensi
 	pgvector: {
 		sqlName: 'vector',
 		category: 'external',
-		description: 'Vector embeddings with HNSW/IVFFlat indexes. Needs an image that ships it.',
+		description: 'Vector embeddings with HNSW/IVFFlat indexes. Shipped by the Postgres 18 image; 16 and 17 lack it.',
 		bundled: false,
 	},
 	postgis: {
@@ -1323,11 +1323,25 @@ function engineSnippets(engine: Exclude<DatabaseEngine, 'postgres'>, input: Data
 	}
 }
 
+/**
+ * The pgvector build of the official Postgres image, pinned for Postgres 18 and later (D124).
+ * 16 and 17 stay on the alpine image: moving a cluster from musl to glibc changes collation
+ * order under existing text indexes. The helper has its own copy.
+ */
+export const POSTGRES_PGVECTOR_IMAGE_TAG = '0.8.7-pg18-trixie';
+
+/** Postgres image for a major version: alpine for 16/17, the pgvector (Debian) image from 18. */
+export function postgresImage(version: string): string {
+	return Number(version) >= 18
+		? `docker.io/pgvector/pgvector:${POSTGRES_PGVECTOR_IMAGE_TAG}`
+		: `docker.io/library/postgres:${version}-alpine`;
+}
+
 /** OCI image for an engine version. The helper has its own copy and rejects any mismatch (D61). */
 export function databaseImage(engine: DatabaseEngine, version: string): string {
 	switch (engine) {
 		case 'postgres':
-			return `docker.io/library/postgres:${version}-alpine`;
+			return postgresImage(version);
 		case 'mysql':
 			return `docker.io/library/mysql:${version}`;
 		case 'mariadb':

@@ -221,7 +221,12 @@ pinned `postgres:{16,17}-alpine` image ships (observability such as `pg_stat_sta
 `fuzzystrmatch`; types such as `citext`, `hstore`, `ltree`, `isn`; `btree_gin`/`btree_gist`/`bloom`
 indexing; `pgcrypto`, `uuid-ossp`, `tablefunc`, `earthdistance`; trigger helpers such as
 `moddatetime` and `tcn`), plus `pg_cron`, `pgvector` and
-`postgis`, which the stock image does not ship yet.
+`postgis`, which the stock image does not ship yet. **Postgres 18** runs the pgvector build of the
+official image (`pgvector/pgvector:0.8.7-pg18-trixie`, Debian) instead, so `pgvector` works there
+(D124). It runs as the same uid 70 as the alpine image (the entrypoint maps the unknown uid with
+nss_wrapper), so data dirs, PITR files and restores keep one owner. 16 and 17 stay on alpine:
+moving an existing cluster from musl to glibc would change collation order under its text
+indexes, so getting pgvector on an older database is a dump/restore into a new 18 database.
 
 Excluded on purpose: anything that reaches outside the container (`dblink`, `postgres_fdw`,
 `file_fdw`, `adminpack`), procedural languages (the image ships `plperl`/`pltcl` control files

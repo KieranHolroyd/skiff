@@ -131,6 +131,12 @@ describe('database engines (D95)', () => {
 		}
 	});
 
+	test('Postgres 18 runs the pgvector image; 16 and 17 stay on alpine (D124)', () => {
+		expect(databaseImage('postgres', '17')).toBe('docker.io/library/postgres:17-alpine');
+		expect(databaseImage('postgres', '18')).toBe('docker.io/pgvector/pgvector:0.8.7-pg18-trixie');
+		expect(databaseEngineRegistry.postgres.defaultVersion).toBe('17');
+	});
+
 	test('URLs carry the engine query and the fixed Valkey database', () => {
 		expect(
 			databaseConnectionUrl({

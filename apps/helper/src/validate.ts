@@ -273,12 +273,19 @@ export interface WorkloadDesired {
  */
 export const DATABASE_ENGINES = {
 	postgres: {
-		versions: ['16', '17'],
-		/** The official image's `postgres` user and group. */
+		versions: ['16', '17', '18'],
+		/**
+		 * The alpine image's `postgres` user and group. 18 runs the Debian pgvector image (D124) under
+		 * the same uid: its entrypoint maps an unknown uid with nss_wrapper, so data dirs, PITR files
+		 * and restores keep one owner across versions.
+		 */
 		uid: 70,
 		gid: 70,
 		containerPort: 5432,
-		image: (version: string) => `docker.io/library/postgres:${version}-alpine`,
+		image: (version: string) =>
+			Number(version) >= 18
+				? 'docker.io/pgvector/pgvector:0.8.7-pg18-trixie'
+				: `docker.io/library/postgres:${version}-alpine`,
 		env: { user: 'POSTGRES_USER', password: 'POSTGRES_PASSWORD', database: 'POSTGRES_DB' },
 		cli: 'psql',
 	},

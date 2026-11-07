@@ -271,6 +271,7 @@ describe('database profile', () => {
 		expect(databaseAlias(DB_ID)).toBe('db-0123456789abcdef0123456789abcdef');
 		expect(databaseAlias('db_a_B-c')).toBe('db-ab-c');
 		expect(databaseImage({ engine: 'postgres', version: '16' })).toBe('docker.io/library/postgres:16-alpine');
+		expect(databaseImage({ engine: 'postgres', version: '18' })).toBe('docker.io/pgvector/pgvector:0.8.7-pg18-trixie');
 	});
 });
 
