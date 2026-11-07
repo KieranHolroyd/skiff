@@ -10,6 +10,7 @@ import { assistantTools } from '#lib/server/assistant/tools.js';
 import { testProvider } from '#lib/server/assistant/config.js';
 import { currentSection } from '#lib/server/platform-config.js';
 import { formBoolean, formRawString, formString } from '../../_lib/errors.js';
+import { policyState, savePolicies } from '../_lib/policies.server.js';
 import {
 	collect,
 	configState,
@@ -29,6 +30,7 @@ export const load: PageServerLoad = ({ locals }) => {
 	const principal = requireOwnerPage(locals);
 	return {
 		...configState(),
+		...policyState(),
 		assistant: currentSection('assistant'),
 		agent: agentDetail(),
 		catalog: assistantTools(principal)
@@ -76,6 +78,8 @@ function fields(data: FormData) {
 }
 
 export const actions: Actions = {
+	savePolicies,
+
 	saveAgent: async ({ request, locals }) => {
 		const principal = requireOwnerPage(locals);
 		const data = await request.formData();

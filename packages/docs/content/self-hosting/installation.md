@@ -80,9 +80,12 @@ HTTPS needs two things:
 
 Without both, the installer serves plain HTTP and says so.
 
-Sites use a wildcard certificate for `*.<content domain>`. Let's Encrypt issues wildcards only through the DNS-01 challenge, so the content domain's DNS must be hosted on Cloudflare. Create an API token with this single permission:
+Sites use a wildcard certificate for `*.<content domain>`. Let's Encrypt issues wildcards only through the DNS-01 challenge, so the content domain's DNS must be hosted on Cloudflare. Create an API token with these permissions, limited to the zone of your content domain:
 
-- **Zone → DNS → Edit**, limited to the zone of your content domain.
+- **Zone → Zone → Read**, so Skiff can look the zone up by name.
+- **Zone → DNS → Edit**, for the DNS-01 challenge and the records Skiff creates.
+
+[This link](https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22zone%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22dns%22%2C%22type%22%3A%22edit%22%7D%5D&accountId=*&zoneId=all&name=Skiff+DNS) opens Cloudflare's token form with both permissions filled in. Set **Zone Resources** to your content domain's zone before you create the token. **Settings → Domains** shows the same link next to the token field.
 
 Give the token to Skiff in one of two ways:
 

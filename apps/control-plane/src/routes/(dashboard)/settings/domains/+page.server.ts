@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { fail, isActionFailure } from '@sveltejs/kit';
 import {
+	cloudflareTokenCreateUrl,
 	domainSettingsFromEnv,
 	isIpv4,
 	isTemporaryContentDomain,
@@ -54,6 +55,10 @@ export const load: PageServerLoad = ({ locals }) => {
 			temporaryContent: isTemporaryContentDomain(settings.contentDomain)
 		},
 		cloudflareTokenSaved: cloudflareTokenSaved(),
+		/** Cloudflare token form pre-filled with Zone Read + DNS Edit. */
+		cloudflareTokenUrl: cloudflareTokenCreateUrl({
+			name: isTemporaryContentDomain(settings.contentDomain) ? 'Skiff DNS' : `Skiff DNS (${settings.contentDomain})`
+		}),
 		/** Changing the dashboard host breaks passkeys (they are bound to it), so owners need TOTP first. */
 		needsAuthenticator: enforceOwnerSecondFactor && !userHasTotp(locals.user!.id),
 		serverAddress: address,

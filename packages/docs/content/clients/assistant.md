@@ -104,7 +104,7 @@ sequenceDiagram
 
 It can also use one tool of its own, `guide_user`, to show a guided tour. A tour has up to eight steps. Each step can navigate to a dashboard path first, then spotlight an element by its `data-skiff-target` id or a CSS selector, with a short title and body. Ask it "where do I…" and it will usually point at the element rather than describe where it is.
 
-Each turn runs at most 12 model rounds and 24 tool calls by default. Both limits are set in **Settings → Policies**.
+Each turn runs at most 12 model rounds and 24 tool calls by default. Both limits are set in **Settings → Assistant → Turn limits**.
 
 ## Confirmations
 
@@ -153,11 +153,11 @@ The provider sees all of this, so choose one you trust. A model that runs on the
 | Message length | 8,000 characters |
 | History sent per turn | Up to 30 messages, 12,000 characters each |
 | Page elements sent to the model | 50 |
-| Model rounds per turn | 12 by default (1 to 50, Settings → Policies) |
-| Tool calls per turn | 24 by default (1 to 200, Settings → Policies) |
+| Model rounds per turn | 12 by default (1 to 50, Settings → Assistant) |
+| Tool calls per turn | 24 by default (1 to 200, Settings → Assistant) |
 | Tool result given to the model | 40,000 characters |
 | Result excerpt in a tool step | 4,000 characters |
-| Chat turns per user per minute | 12 by default (1 to 120, Settings → Policies) |
+| Chat turns per user per minute | 12 by default (1 to 120, Settings → Assistant) |
 | Provider request timeout | 120 seconds |
 | Confirmation lifetime | 10 minutes |
 | Saved conversations per browser | 40 |

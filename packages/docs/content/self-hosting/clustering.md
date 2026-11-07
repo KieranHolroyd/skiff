@@ -31,7 +31,7 @@ flowchart LR
 
 ### A worker node goes offline
 
-An agent that stops sending heartbeats is marked **offline** after 30 seconds. An alert follows after the delay set in **Settings → Policies**.
+An agent that stops sending heartbeats is marked **offline** after 30 seconds. An alert follows after the delay set in **Alerts → System alerts**.
 
 - **Single-copy apps and functions** on that node stop answering. They are not moved automatically. Bring the node back, or move the app (see [moving services](#move-services)).
 - **Multi-copy apps** keep answering from their other copies. The edge stops sending requests to a copy that fails. If [automatic failover](#automatic-failover) is on, the copies on that node are started on healthy nodes once it has been silent for 2 minutes. If it is off, they stay where they are until the node returns or you drain it.
@@ -164,7 +164,7 @@ For **databases** with replicas, the controller decides. When the primary's node
 
 With `SKIFF_FEATURE_DB_AUTO_PROMOTE=1` as well, the controller promotes that replica itself, in the same steps as a [manual promotion](/data/databases#promote-a-replica): the old primary leaves its node's configuration (it stops when the node next checks in), the replica is promoted and the database moves to its node. Leave it off on a two-node fleet, and anywhere a node can be cut off from the control plane while its apps keep running: Skiff cannot stop a primary on a node it cannot reach, so apps on that node could keep writing to the old primary.
 
-For **ingress**, with the `dns-failover` or `cloudflare-lb` driver, the controller keeps the set of ingress nodes that should be in DNS. A node is withdrawn after twice the withdraw hold-down in **Settings → Policies** (at least 2 minutes) without heartbeats, and added back after the re-add hold-down, at most once every 10 minutes. A node withdrawn twice in 30 minutes stays out for 30 minutes. Skiff does not change DNS records itself: each withdrawal or re-add is a **Failover** alert and a history entry telling you which record to change.
+For **ingress**, with the `dns-failover` or `cloudflare-lb` driver, the controller keeps the set of ingress nodes that should be in DNS. A node is withdrawn after twice the withdraw hold-down in **Settings → High availability** (at least 2 minutes) without heartbeats, and added back after the re-add hold-down, at most once every 10 minutes. A node withdrawn twice in 30 minutes stays out for 30 minutes. Skiff does not change DNS records itself: each withdrawal or re-add is a **Failover** alert and a history entry telling you which record to change.
 
 Every move writes one `ha.failover` entry to the audit log, with the source and target node, and raises a **Failover** system alert (see [alerts](/observe/alerts)). The state and the last 50 actions are on **Settings → High availability**, and from the CLI, REST and MCP:
 
@@ -221,7 +221,7 @@ These are the keys that code reads today:
 - the failover controller: whether automatic failover is on, who holds the lease and at which epoch, when it last ran, and its limits
 - every node, how long since its last heartbeat, how many replica copies it holds, and when they would move
 - databases with replicas, whether the primary is lost, and the replica a promotion would use
-- the ingress driver, which is set in **Settings → Policies**, the withdraw and re-add hold-downs, and every node with the ingress role, whether it is ready and whether it is in the DNS record set
+- the ingress driver and the withdraw and re-add hold-downs, which are set on this page, and every node with the ingress role, whether it is ready and whether it is in the DNS record set
 - the failover history: every move, ingress withdrawal or re-add, database decision and lease change, newest first
 
 **Settings → Clustering** shows a short summary of the same state above the JSON editor.

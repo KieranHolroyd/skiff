@@ -114,7 +114,7 @@ async function runAgent(
 	let text = '';
 	let toolCalls = 0;
 	let stoppedForConfirmation = false;
-	// Per-turn budgets are platform policies (Settings → Policies), read once per turn.
+	// Per-turn budgets are platform policies (Settings → Assistant → Turn limits), read once per turn.
 	const { assistantMaxRounds, assistantMaxToolCalls } = core.policies.get();
 
 	for (let round = 0; round < assistantMaxRounds; round += 1) {

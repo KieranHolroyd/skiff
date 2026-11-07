@@ -100,7 +100,7 @@ root:skiff`.
 | `SKIFF_DEV_PASSWORD_LOGIN` | unset | no | Development only; refused in production. Opens sign-up (including public email+password sign-up) and turns off the owner second factor for headless tests. Password sign-in itself is always on (D103). |
 | `SKIFF_OWNER_2FA` | `1` (`0` only in dev password mode) | no | Org owners must prove a passkey or authenticator code per session before using the dashboard/API (D10). Password, GitHub and magic-link sign-ins are single-factor. |
 | `SKIFF_ACME_EMAIL` | empty | no | Agent only: ACME account email. Enables TLS/DNS-01 when set. |
-| `SKIFF_CLOUDFLARE_API_TOKEN` | empty | **yes** | Agent only: scoped DNS token for `caddy-dns/cloudflare` (Zone.DNS edit on the content zone). |
+| `SKIFF_CLOUDFLARE_API_TOKEN` | empty | **yes** | Agent only: scoped DNS token for `caddy-dns/cloudflare` (Zone.Zone read + Zone.DNS edit on the content zone). |
 | `SKIFF_ACME_CA` | Let's Encrypt | no | Agent only: ACME directory URL (use the staging URL while testing). |
 | `SKIFF_TLS` | auto | no | Agent only: `1` forces TLS, `0` disables it (dev). Defaults to enabled when `SKIFF_ACME_EMAIL` is set. |
 | `SOCKET_PATH` | `/run/skiff/control.sock` | no | adapter-bun unix socket (D37), set by the unit. |
@@ -670,7 +670,8 @@ HTTPS later:
 1. Create the records first: an A record for the dashboard host and a wildcard `*.<domain>` A
    record, both pointing at the server. **Check DNS** looks them up on public resolvers.
 2. HTTPS needs real domains for both, a Let's Encrypt email, and a Cloudflare API token with
-   **Zone → DNS → Edit** on the sites domain (the wildcard certificate is issued over DNS-01).
+   **Zone → Zone → Read** and **Zone → DNS → Edit** on the sites domain (the page links to a
+   pre-filled Cloudflare token form) (the wildcard certificate is issued over DNS-01).
 3. **Apply** refuses a dashboard name that does not resolve (nobody could reach the dashboard
    afterwards), asks for confirmation when it resolves elsewhere (fine behind a proxy), and, when
    the dashboard address changes, requires the owner to have an authenticator app: passkeys are

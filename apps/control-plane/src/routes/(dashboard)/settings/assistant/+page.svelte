@@ -24,6 +24,7 @@
 	import EmptyState from '../../_lib/EmptyState.svelte';
 	import Panel from '../../_lib/Panel.svelte';
 	import ConfigProgress from '../ConfigProgress.svelte';
+	import PolicyPanel from '../_lib/PolicyPanel.svelte';
 	import type { PageProps } from './$types';
 	import SettingsHeader from '../_lib/SettingsHeader.svelte';
 
@@ -314,6 +315,14 @@
 			</Alert.Root>
 		</div>
 	</Panel>
+
+	<PolicyPanel group="assistant" policies={data.policies} defaults={data.policyDefaults} {form}>
+		{#if !data.assistant.configured}
+			<p class="mb-5 text-sm text-muted-foreground">
+				The assistant is not set up yet. These caps apply once it is.
+			</p>
+		{/if}
+	</PolicyPanel>
 </div>
 
 <FormDialog

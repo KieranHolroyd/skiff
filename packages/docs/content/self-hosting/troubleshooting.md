@@ -74,7 +74,7 @@ so if the dashboard is unreachable, check `systemctl status caddy` as well.
 ## A node is offline in the dashboard
 
 An agent counts as offline after 30 seconds without a heartbeat. The dashboard and `skif status`
-then show it as offline, and the node alert fires after the delay set in Settings → Policies. A node
+then show it as offline, and the node alert fires after the delay set in Alerts → System alerts. A node
 in **draining** is deliberately not taking new work, so it is not a fault.
 
 On the node, check the agent first:
@@ -143,8 +143,9 @@ ls -l /etc/skiff/cloudflare.token
   `sudo caddy add-package github.com/caddy-dns/cloudflare` and `sudo systemctl restart caddy`, or
   update to a signed release with `sudo skiff-update-self`, which installs a Caddy build that has
   it. Without the module, DNS-01 cannot run at all.
-- **Authentication or permission errors from Cloudflare.** The token must have **Zone → DNS → Edit**
-  on the sites domain. Save a new token in **Settings → Domains**, which writes
+- **Authentication or permission errors from Cloudflare.** The token must have **Zone → Zone → Read**
+  and **Zone → DNS → Edit** on the sites domain. The **Create one in Cloudflare** link in
+  Settings → Domains opens the token form with both filled in. Save a new token in **Settings → Domains**, which writes
   `/etc/skiff/cloudflare.token`. Then run `sudo systemctl reload caddy`.
 - **Wildcard DNS is wrong.** The wildcard certificate needs an A record for `*.<domain>` that points
   at the server. Use **Check DNS** in Settings → Domains, or run `dig +short whatever.example.com`

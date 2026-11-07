@@ -133,7 +133,7 @@ browser ── POST /api/v1/assistant/chat ──► assistant (system prompt + 
 1. The assistant sees its system prompt, the history, the page outline and the user message, with
    every tool it may call (or the owner's allowlist).
 2. It runs one tool loop: at most 12 model rounds and 24 tool calls by default, set in
-   Settings → Policies (`assistantMaxRounds`, 1–50; `assistantMaxToolCalls`, 1–200). A
+   Settings → Assistant → Turn limits (`assistantMaxRounds`, 1–50; `assistantMaxToolCalls`, 1–200). A
    `search_tools` call spends one round. Tool results are truncated
    before they go back into context; logs and site content are treated as data. The reply streams
    as it is written.

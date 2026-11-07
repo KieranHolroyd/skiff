@@ -5,7 +5,8 @@ import { ingressDrivers } from './ingress.ts';
 /**
  * Platform policies: retention windows, alert thresholds, defaults for new resources and assistant
  * cost caps. Platform-wide, stored as one JSON row in the `settings` table under
- * `PLATFORM_POLICIES_KEY`, and changed by the owner in Settings → Policies. Every field has a
+ * `PLATFORM_POLICIES_KEY`, and changed by the owner on the Settings page each group belongs to
+ * (apps/control-plane/src/routes/(dashboard)/settings/_lib/policy-groups.ts). Every field has a
  * default (the value that used to be hardcoded), so a missing or stale row still parses, and every
  * reader picks a change up on its next run without a restart.
  */

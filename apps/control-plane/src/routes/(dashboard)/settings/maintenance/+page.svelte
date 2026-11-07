@@ -42,7 +42,8 @@
 	<Panel
 		title="History"
 		icon={HistoryIcon}
-		description="Recent mass actions and prune runs. Finished operations are kept for 90 days."
+		description="Recent mass actions and prune runs. Finished operations are kept for {data.policies
+			.operationHistoryDays} days (Settings → Policies)."
 		count={data.history.length}
 		flush
 	>

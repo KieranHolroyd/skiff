@@ -161,3 +161,38 @@ export function applyEnvChanges(env: Map<string, string>, changes: EnvChanges): 
 export function validCloudflareToken(token: string): boolean {
 	return /^[A-Za-z0-9_-]{20,200}$/.test(token);
 }
+
+export interface CloudflareTokenPermission {
+	/** Cloudflare's short permission-group key, e.g. `dns` or `zone`. */
+	key: string;
+	type: 'read' | 'edit';
+}
+
+/** What Skiff's DNS token needs: find the zone by name, then edit its records (DNS-01, app and email records). */
+export const CLOUDFLARE_DNS_TOKEN_PERMISSIONS: readonly CloudflareTokenPermission[] = [
+	{ key: 'zone', type: 'read' },
+	{ key: 'dns', type: 'edit' },
+];
+
+export interface CloudflareTokenLinkOptions {
+	/** Pre-filled token name. */
+	name?: string;
+	permissions?: readonly CloudflareTokenPermission[];
+}
+
+/**
+ * Link to Cloudflare's "create API token" form with the name and permissions pre-filled
+ * (Cloudflare "API token template URLs"). The user still picks the zone and confirms; the form
+ * opens on all zones, so the UI should tell them to narrow it. Unknown keys are dropped by
+ * Cloudflare without notice.
+ */
+export function cloudflareTokenCreateUrl(options: CloudflareTokenLinkOptions = {}): string {
+	const permissions = options.permissions ?? CLOUDFLARE_DNS_TOKEN_PERMISSIONS;
+	const params = new URLSearchParams({
+		permissionGroupKeys: JSON.stringify(permissions.map(({ key, type }) => ({ key, type }))),
+		accountId: '*',
+		zoneId: 'all',
+		name: options.name ?? 'Skiff DNS',
+	});
+	return `https://dash.cloudflare.com/profile/api-tokens?${params.toString()}`;
+}

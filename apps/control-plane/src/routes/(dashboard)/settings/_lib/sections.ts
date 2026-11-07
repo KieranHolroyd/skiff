@@ -182,8 +182,7 @@ export const SECTIONS: Section[] = [
 		id: 'policies',
 		group: 'platform',
 		label: 'Policies',
-		summary:
-			'How long deleted things and history are kept, defaults for new resources, and assistant limits.',
+		summary: 'How long deleted things and history are kept, and defaults for new databases.',
 		href: '/(dashboard)/settings/policies',
 		path: '/settings/policies',
 		icon: ClockIcon,
@@ -225,7 +224,7 @@ export const SECTIONS: Section[] = [
 		id: 'assistant',
 		group: 'platform',
 		label: 'Assistant',
-		summary: 'An optional chat panel over the same tools your agents use.',
+		summary: 'An optional chat panel over the same tools your agents use, and its turn limits.',
 		href: '/(dashboard)/settings/assistant',
 		path: '/settings/assistant',
 		icon: SparklesIcon,

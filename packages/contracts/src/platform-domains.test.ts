@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { parsePlatformConfigRequest } from './platform-config.ts';
 import {
 	applyEnvChanges,
+	cloudflareTokenCreateUrl,
 	controlPlaneEnvChanges,
 	domainSettingsFromEnv,
 	edgeAgentEnvChanges,
@@ -122,5 +123,25 @@ describe('the domains request', () => {
 		});
 		const withToken = parsePlatformConfigRequest({ ...base, ...https, cloudflareToken: 'a'.repeat(40) });
 		expect(withToken).toMatchObject({ ok: true, request: { cloudflareToken: 'a'.repeat(40) } });
+	});
+});
+
+describe('cloudflareTokenCreateUrl', () => {
+	test('pre-fills zone read and DNS edit on the user token form', () => {
+		const url = new URL(cloudflareTokenCreateUrl({ name: 'Skiff DNS (example.dev)' }));
+		expect(url.origin + url.pathname).toBe('https://dash.cloudflare.com/profile/api-tokens');
+		expect(JSON.parse(url.searchParams.get('permissionGroupKeys')!)).toEqual([
+			{ key: 'zone', type: 'read' },
+			{ key: 'dns', type: 'edit' },
+		]);
+		expect(url.searchParams.get('accountId')).toBe('*');
+		expect(url.searchParams.get('zoneId')).toBe('all');
+		expect(url.searchParams.get('name')).toBe('Skiff DNS (example.dev)');
+	});
+
+	test('permissions and name are configurable', () => {
+		const url = new URL(cloudflareTokenCreateUrl({ permissions: [{ key: 'dns', type: 'read' }] }));
+		expect(JSON.parse(url.searchParams.get('permissionGroupKeys')!)).toEqual([{ key: 'dns', type: 'read' }]);
+		expect(url.searchParams.get('name')).toBe('Skiff DNS');
 	});
 });

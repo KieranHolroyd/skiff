@@ -630,7 +630,7 @@
 			<InfoIcon />
 			<Alert.Description>
 				An agent is marked offline after 30 seconds without a heartbeat and alerts after {data.policies.nodeAlertMinutes}
-				{data.policies.nodeAlertMinutes === 1 ? 'minute' : 'minutes'} (Settings → Policies).
+				{data.policies.nodeAlertMinutes === 1 ? 'minute' : 'minutes'} (Alerts → System alerts).
 				Draining stops new placements but keeps existing sites and workloads serving. App workloads
 				run in <code class="font-mono">skiff-workloads.slice</code>. Any node can be a Builder: its
 				<code class="font-mono">skiff-builder.service</code> claims one git build at a time and idles

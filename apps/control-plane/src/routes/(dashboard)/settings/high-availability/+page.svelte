@@ -2,7 +2,6 @@
 	import ActivityIcon from '@lucide/svelte/icons/activity';
 	import DatabaseIcon from '@lucide/svelte/icons/database';
 	import HistoryIcon from '@lucide/svelte/icons/history';
-	import NetworkIcon from '@lucide/svelte/icons/network';
 	import ServerIcon from '@lucide/svelte/icons/server';
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import type { FailoverEventView, FailoverStatusView } from '@skiff/contracts';
@@ -18,10 +17,11 @@
 	import EmptyState from '../../_lib/EmptyState.svelte';
 	import Panel from '../../_lib/Panel.svelte';
 	import { formatDateTime, formatRelative } from '../../_lib/format.js';
+	import PolicyPanel from '../_lib/PolicyPanel.svelte';
 	import SettingsHeader from '../_lib/SettingsHeader.svelte';
 	import type { PageProps } from './$types';
 
-	let { data }: PageProps = $props();
+	let { data, form }: PageProps = $props();
 
 	// The controller ticks every few seconds; refresh the view while the page is open.
 	const live = createQuery(() => ({
@@ -201,10 +201,10 @@
 		</Panel>
 	{/if}
 
-	<Panel title="Ingress" icon={NetworkIcon} description="The driver and hold-downs. No driver changes DNS yet: a withdrawal or re-add is a step you take by hand.">
-		<div class="grid gap-4 sm:grid-cols-3">
+	<PolicyPanel group="ingress" policies={data.policies} defaults={data.policyDefaults} {form}>
+		<div class="mb-5 grid gap-4 sm:grid-cols-3">
 			<div class="rounded-lg border p-3">
-				<p class="text-xs text-muted-foreground">Driver</p>
+				<p class="text-xs text-muted-foreground">Driver in use</p>
 				<p class="font-mono text-sm">{data.status.driver}</p>
 				<p class="mt-1 text-xs text-muted-foreground">
 					{failover.ingress.rotates ? 'The controller tracks the record set.' : 'No record set to rotate.'}
@@ -213,7 +213,7 @@
 			<div class="rounded-lg border p-3">
 				<p class="text-xs text-muted-foreground">Withdraw after</p>
 				<p class="text-sm">{seconds(failover.policy.ingressHoldDownSeconds)}</p>
-				<p class="mt-1 text-xs text-muted-foreground">Twice the policy value ({data.status.policy.holdDownSeconds}s), at least 120 s</p>
+				<p class="mt-1 text-xs text-muted-foreground">Twice the hold-down ({data.status.policy.holdDownSeconds}s), at least 120 s</p>
 			</div>
 			<div class="rounded-lg border p-3">
 				<p class="text-xs text-muted-foreground">Re-add after</p>
@@ -221,10 +221,7 @@
 				<p class="mt-1 text-xs text-muted-foreground">At most once per 10 min; withdrawn twice in 30 min pins it out</p>
 			</div>
 		</div>
-		<div class="mt-4">
-			<Button variant="outline" size="sm" href={resolve('/(dashboard)/settings/policies')}>Edit ingress policy</Button>
-		</div>
-	</Panel>
+	</PolicyPanel>
 
 	<Panel title="Ingress nodes" icon={ActivityIcon} description="Every node holding the ingress role, with readiness and its place in the record set.">
 		{#if data.status.nodes.length === 0}

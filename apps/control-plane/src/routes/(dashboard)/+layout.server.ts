@@ -48,11 +48,12 @@ export const load: LayoutServerLoad = ({ locals, url, cookies }) => {
 			slug: org?.slug ?? null
 		},
 		role: principal.role,
-		/** Platform policies the UI quotes in copy (Settings → Policies). */
-		policies: (({ trashDays, logRetentionDays, nodeAlertMinutes }) => ({
+		/** Platform policies the UI quotes in copy (Settings → Policies, Alerts → System alerts). */
+		policies: (({ trashDays, logRetentionDays, nodeAlertMinutes, operationHistoryDays }) => ({
 			trashDays,
 			logRetentionDays,
-			nodeAlertMinutes
+			nodeAlertMinutes,
+			operationHistoryDays
 		}))(core.policies.get()),
 		permissions: [...principal.permissions].sort(),
 		can: {

@@ -7,7 +7,7 @@
 const WINDOW_MS = 60_000;
 const buckets = new Map<string, number[]>();
 
-/** `maxPerMinute` is the `assistantTurnsPerMinute` platform policy (Settings → Policies). */
+/** `maxPerMinute` is the `assistantTurnsPerMinute` platform policy (Settings → Assistant → Turn limits). */
 export function allowAssistantTurn(
 	key: string,
 	maxPerMinute: number

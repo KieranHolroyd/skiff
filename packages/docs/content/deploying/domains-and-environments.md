@@ -121,7 +121,7 @@ Select **Remove** on the domain, or send `DELETE /api/v1/domains/{id}`. The host
 
 - **Dashboard address**: the hostname you use to reach the dashboard and API. It can be a domain (with an A record to the server) or the server's IP address.
 - **Content domain**: the domain under which projects are served. Projects become `<project>.<content-domain>`.
-- **HTTPS with Let's Encrypt**: needs a real domain for both the dashboard and the content domain, a contact email, and a Cloudflare DNS token with Zone → DNS → Edit on the content domain. The token is needed because the wildcard certificate for projects is issued with a DNS challenge.
+- **HTTPS with Let's Encrypt**: needs a real domain for both the dashboard and the content domain, a contact email, and a Cloudflare DNS token with Zone → Zone → Read and Zone → DNS → Edit on the content domain (the **Create one in Cloudflare** link pre-fills both). The token is needed because the wildcard certificate for projects is issued with a DNS challenge.
 
 If you have no domains, the dashboard is served at `http://<server-ip>` and projects at a temporary wildcard address, such as `my-site.1-2-3-4.sslip.io`. That address works over HTTP only.
 

@@ -67,7 +67,7 @@ export interface CoreContext {
 	telemetry?: TelemetryStore;
 	/** Prometheus `/metrics` renderer and its settings (docs/METRICS.md). */
 	metricsExport: MetricsExporter;
-	/** Retention, alert thresholds and defaults the owner sets in Settings → Policies. */
+	/** Retention, alert thresholds, ingress, assistant caps and defaults the owner sets in Settings. */
 	policies: PlatformPolicyService;
 	notifiers: Notifier[];
 	now(): number;

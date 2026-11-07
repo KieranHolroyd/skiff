@@ -13,8 +13,9 @@ import { CoreError, ValidationError } from './errors.ts';
 const DAY_MS = 86_400_000;
 
 /**
- * Platform policies (Settings → Policies): retention, alert thresholds, new-database defaults and
- * assistant caps. One JSON row in `settings`, cached in memory and re-read after every save, so the
+ * Platform policies: retention and new-database defaults (Settings → Policies), alert thresholds
+ * (Alerts → System alerts), ingress (Settings → High availability) and assistant caps
+ * (Settings → Assistant). One JSON row in `settings`, cached in memory and re-read after every save, so the
  * maintenance loop, the scheduler and each request see a change on their next run.
  */
 export class PlatformPolicyService {

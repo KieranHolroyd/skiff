@@ -3,6 +3,7 @@
 	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
+	import ExternalLinkIcon from '@lucide/svelte/icons/external-link';
 	import GlobeIcon from '@lucide/svelte/icons/globe';
 	import InfoIcon from '@lucide/svelte/icons/info';
 	import LockIcon from '@lucide/svelte/icons/lock';
@@ -258,6 +259,16 @@
 								aria-invalid={errors.cloudflareToken ? 'true' : undefined}
 								required={!data.cloudflareTokenSaved}
 							/>
+							<Field.Description>
+								<a
+									href={data.cloudflareTokenUrl}
+									target="_blank"
+									rel="noopener noreferrer"
+									class="inline-flex items-center gap-1 font-medium underline underline-offset-4"
+									>Create one in Cloudflare<ExternalLinkIcon class="size-3" /></a
+								>. Permissions are filled in; set Zone Resources to {contentDomain.trim() || 'your sites domain'}’s
+								zone.
+							</Field.Description>
 							{#if errors.cloudflareToken}<Field.Error>{errors.cloudflareToken}</Field.Error>{/if}
 						</Field.Field>
 					</div>
