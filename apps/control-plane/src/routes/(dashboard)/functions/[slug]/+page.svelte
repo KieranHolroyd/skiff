@@ -622,6 +622,8 @@
 				workload={data.workload}
 				capacity={data.capacity}
 				cronNext={data.cronNext}
+				eventSources={data.eventSources}
+				fieldErrors={result?.fieldErrors}
 				can={{ manageWorkload: data.can.update, viewCapacity: data.can.viewCapacity }}
 			/>
 		</div>

@@ -22,10 +22,13 @@
 	import ClockIcon from '@lucide/svelte/icons/clock';
 	import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
 	import GlobeIcon from '@lucide/svelte/icons/globe';
+	import InboxIcon from '@lucide/svelte/icons/inbox';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import TableIcon from '@lucide/svelte/icons/table-2';
 	import ZapIcon from '@lucide/svelte/icons/zap';
+	import FunctionEventSources from './FunctionEventSources.svelte';
 	import FunctionQuickstart from './FunctionQuickstart.svelte';
+	import type { FunctionEventSourcesData } from './event-sources.server.js';
 	import { formatDateTime, formatRelative, shortId } from '../../_lib/format.js';
 	import {
 		COMPATIBILITY_LAG_WARN_DAYS,
@@ -52,6 +55,8 @@
 		workload,
 		capacity,
 		cronNext,
+		eventSources,
+		fieldErrors,
 		can
 	}: {
 		project: ProjectView;
@@ -61,6 +66,9 @@
 		capacity: NodeCapacityView[];
 		/** Next fire time per cron expression, computed on the server (UTC). */
 		cronNext: Record<string, string | null>;
+		/** Event rules publishing into the queues this function consumes (D122). */
+		eventSources: FunctionEventSourcesData;
+		fieldErrors?: Record<string, string>;
 		can: { manageWorkload: boolean; viewCapacity: boolean };
 	} = $props();
 
@@ -326,7 +334,9 @@
 					</Card.Title>
 					<Card.Description>
 						Requests arrive at the function's URL, previews and custom domains. Cron runs on the
-						node that owns the function, in UTC.
+						node that owns the function, in UTC; queue batches arrive in <code
+							class="font-mono text-xs">queue()</code
+						>.
 					</Card.Description>
 				</Card.Header>
 				<Card.Content class="space-y-3 py-4">
@@ -364,6 +374,23 @@
 							and export <code class="font-mono">scheduled()</code>; each schedule fires once per
 							occurrence from the function's node.
 						</p>
+					{/each}
+					{#each view.triggers.queues as consumer (`${consumer.broker}/${consumer.queue}`)}
+						{@const sourceCount = eventSources.rules.filter(
+							(rule) => rule.broker === consumer.broker && rule.queue === consumer.queue
+						).length}
+						<div class="flex items-start gap-2.5">
+							<InboxIcon class="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+							<div class="min-w-0 text-sm">
+								<p>
+									Queue <span class="font-mono text-xs font-medium">{consumer.queue}</span>
+								</p>
+								<p class="text-xs text-muted-foreground">
+									on {consumer.broker}{#if sourceCount > 0}
+										· {sourceCount} event {sourceCount === 1 ? 'source' : 'sources'}{/if}
+								</p>
+							</div>
+						</div>
 					{/each}
 				</Card.Content>
 			</Card.Root>
@@ -405,6 +432,8 @@
 			</Card.Root>
 		</div>
 	{/if}
+
+	<FunctionEventSources slug={project.slug} data={eventSources} {fieldErrors} />
 
 	<Collapsible.Root bind:open={matrixOpen}>
 		<Card.Root class="gap-0 py-0">

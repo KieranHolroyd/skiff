@@ -15,7 +15,6 @@
 	import GlobeIcon from '@lucide/svelte/icons/globe';
 	import InboxIcon from '@lucide/svelte/icons/inbox';
 	import MailIcon from '@lucide/svelte/icons/mail';
-	import WebhookIcon from '@lucide/svelte/icons/webhook';
 	import LayoutDashboardIcon from '@lucide/svelte/icons/layout-dashboard';
 	import NetworkIcon from '@lucide/svelte/icons/network';
 	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
@@ -77,7 +76,6 @@
 			| '/(dashboard)/databases'
 			| '/(dashboard)/storage'
 			| '/(dashboard)/brokers'
-			| '/(dashboard)/events'
 			| '/(dashboard)/email'
 			| '/(dashboard)/shares'
 			| '/(dashboard)/deployments'
@@ -136,13 +134,6 @@
 					href: '/(dashboard)/brokers',
 					path: '/brokers',
 					icon: InboxIcon,
-					feature: 'brokers'
-				},
-				{
-					label: 'Events',
-					href: '/(dashboard)/events',
-					path: '/events',
-					icon: WebhookIcon,
 					feature: 'brokers'
 				},
 				{

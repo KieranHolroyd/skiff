@@ -26,6 +26,13 @@ import { failStatus, formRawString, formString, toFormFailure } from '../../_lib
 import { actions as projectActions } from '../../projects/[slug]/+page.server.js';
 import { nodeTaskAction } from '#lib/server/node-tasks.js';
 import { parseHeaderLines } from '../_lib/test-request.js';
+import {
+	createEventSource,
+	deleteEventSource,
+	loadEventSources,
+	testEventSource,
+	toggleEventSource
+} from '../_lib/event-sources.server.js';
 import type { Actions, PageServerLoad } from './$types';
 
 /** Run a read the viewer may not be allowed to make without taking the page down. */
@@ -142,6 +149,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const siteSessions = hasPermission(principal, 'shareLink:read')
 		? safely(() => core.access.listSessions(principal, row), [])
 		: [];
+	// Event sources (D122): platform events published into the queues this function consumes.
+	const eventSources = loadEventSources(principal, row, view);
 
 	return {
 		project,
@@ -165,6 +174,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		invocationSummary,
 		invocations,
 		siteSessions,
+		eventSources,
 		maxReplicas: MAX_WORKLOAD_REPLICAS,
 		can: {
 			update: hasPermission(principal, 'project:update'),
@@ -337,12 +347,17 @@ export const actions: Actions = {
 		const body = formRawString(data, 'body');
 		const method = formString(data, 'method') || 'GET';
 		return nodeTaskAction(principal, () =>
-			core.nodeTasks.functionTask(principal, requireFunction(principal, params.slug), 'function.invoke', {
-				method,
-				path: formString(data, 'path') || '/',
-				headers,
-				...(body && method !== 'GET' && method !== 'HEAD' ? { body } : {})
-			})
+			core.nodeTasks.functionTask(
+				principal,
+				requireFunction(principal, params.slug),
+				'function.invoke',
+				{
+					method,
+					path: formString(data, 'path') || '/',
+					headers,
+					...(body && method !== 'GET' && method !== 'HEAD' ? { body } : {})
+				}
+			)
 		);
 	},
 
@@ -351,7 +366,12 @@ export const actions: Actions = {
 		const principal = locals.principal!;
 		const cron = formRawString(await request.formData(), 'cron');
 		return nodeTaskAction(principal, () =>
-			core.nodeTasks.functionTask(principal, requireFunction(principal, params.slug), 'function.scheduled', { cron })
+			core.nodeTasks.functionTask(
+				principal,
+				requireFunction(principal, params.slug),
+				'function.scheduled',
+				{ cron }
+			)
 		);
 	},
 
@@ -361,8 +381,11 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const queue = formString(data, 'queue');
 		const row = requireFunction(principal, params.slug);
-		const consumer = core.functions.view(principal, row)?.triggers.queues.find((item) => item.queue === queue);
-		if (!consumer) return fail(400, { message: `${params.slug} does not consume a queue called ${queue}.` });
+		const consumer = core.functions
+			.view(principal, row)
+			?.triggers.queues.find((item) => item.queue === queue);
+		if (!consumer)
+			return fail(400, { message: `${params.slug} does not consume a queue called ${queue}.` });
 		const count = formString(data, 'count');
 		return nodeTaskAction(
 			principal,
@@ -378,6 +401,41 @@ export const actions: Actions = {
 		);
 	},
 
+	// --- event sources: rules that publish platform events into this function's queues (D122) ---
+
+	createEventSource: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		try {
+			return await createEventSource(principal, requireFunction(principal, params.slug), request);
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+	testEventSource: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		try {
+			return await testEventSource(principal, requireFunction(principal, params.slug), request);
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+	toggleEventSource: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		try {
+			return await toggleEventSource(principal, requireFunction(principal, params.slug), request);
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+	deleteEventSource: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		try {
+			return await deleteEventSource(principal, requireFunction(principal, params.slug), request);
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
 	/** Move the function to the trash; it is purged after the platform's trash period. */
 	delete: async ({ locals, params }) => {
 		const principal = locals.principal!;
@@ -390,4 +448,3 @@ export const actions: Actions = {
 		redirect(303, '/functions?deleted=1');
 	}
 };
-

@@ -3174,7 +3174,7 @@ function buildServer(
 					isError: true,
 					...text(
 						`Deleting event rule ${id} needs your confirmation, which this MCP client can't show. ` +
-							`Ask the user to delete it from the Skiff dashboard: ${core.ctx.config.platformOrigin}/events`,
+							`Ask the user to remove it in the Skiff dashboard, under Event sources on the consuming function's Bindings & triggers tab (${core.ctx.config.platformOrigin}/functions).`,
 					),
 				};
 			const key = `confirm_delete_event_rule:${id}`;

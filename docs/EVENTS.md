@@ -134,13 +134,18 @@ RustFS sends bucket events through a webhook target, and the spike on 1.0.4 deci
 
 ## 6. Surfaces
 
-- **Dashboard:** **Events** in the sidebar (next to Queues, behind `SKIFF_FEATURE_BROKERS`). The
-  Rules tab lists each rule: what it watches, its events, the target queue, and 24-hour counts with
-  the last error. A row menu sends a test event, enables or disables the rule, or deletes it. The
-  Deliveries tab shows the newest 100 deliveries with each message body and refreshes every 5 s
-  while open. The create dialog changes its fields with the source (instance, bucket and key
-  filters for storage; project, database or alert rule otherwise) and shows the `wrangler.jsonc`
-  consumer line to copy.
+- **Dashboard:** no page of its own. Events reach a function only through a queue it consumes, so
+  rules are set up as **Event sources** on the function's **Bindings & triggers** tab (behind
+  `SKIFF_FEATURE_BROKERS`). The card lists the rules that publish into the function's consumer
+  queues, plus rules on a broker attached to it whose queue no function consumes yet (flagged
+  "not consumed", so a source set up before the consumer is deployed stays visible), with their
+  events, target queue and 24-hour counts with the last error. A row menu sends a test event,
+  pauses or resumes the rule, or removes it. **Recent deliveries** below shows the newest 25 for
+  those rules with each message body. "Add event source" changes its fields with the source
+  (instance, bucket and key filters for storage; project, database or alert rule otherwise) and
+  targets one of the function's consumer queues, or a new queue on an attached broker together
+  with the `wrangler.jsonc` consumer line to copy. Every check still lives in `core.events`; the
+  console only refuses to act on a rule that doesn't deliver to the function it is open on.
 - **REST:** see [API.md](./API.md#event-notifications).
 - **MCP and the assistant:** `list_event_rules`, `get_event_rule` (with its 20 newest deliveries),
   `create_event_rule` (returns next steps for wiring the consumer), `update_event_rule`,
@@ -176,8 +181,8 @@ export default {
 
 ## 7. Not yet
 
-- Editing a rule's events or key filters in the dashboard (the API, MCP and CLI can; the page
-  only enables, disables, tests and deletes).
+- Editing a rule's events or key filters in the dashboard (the API, MCP and CLI can; the
+  function console only pauses, resumes, tests and removes).
 - More sources: function errors, node health, certificate renewals, storage replication lag.
 - Queues on a broker in another org, and cross-node brokers (BROKERS §7, C2).
 - An end-to-end run on a real node: RustFS → webhook → outbox → NATS → workerd.
