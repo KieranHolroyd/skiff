@@ -143,3 +143,23 @@ describe('formatting', () => {
 		expect(() => parseDuration('0h', '--since')).toThrow(UsageError);
 	});
 });
+
+describe('root key and named key formatting', () => {
+	test('rootKeyLabel shows a staged rotation and a rollback', async () => {
+		const { rootKeyLabel } = await import('./object-storage.ts');
+		const base = { accessKeyId: 'SKRA', pendingAccessKeyId: null, rotationStartedAt: null, error: null, rotatedAt: null };
+		expect(rootKeyLabel({ ...base, status: 'current' })).toBe('SKRA');
+		expect(rootKeyLabel({ ...base, status: 'rotating', pendingAccessKeyId: 'SKRB' })).toBe('SKRA → SKRB (rotating)');
+		expect(rootKeyLabel({ ...base, status: 'failed', error: 'refused' })).toBe('SKRA (last rotation rolled back: refused)');
+	});
+
+	test('parseExpiry takes durations and future ISO times', async () => {
+		const { parseExpiry } = await import('./commands/storage.ts');
+		const now = Date.parse('2026-11-07T10:00:00Z');
+		expect(parseExpiry('30d', now)).toBe('2026-12-07T10:00:00.000Z');
+		expect(parseExpiry('12h', now)).toBe('2026-11-07T22:00:00.000Z');
+		expect(parseExpiry('2027-01-01T00:00:00Z', now)).toBe('2027-01-01T00:00:00.000Z');
+		expect(() => parseExpiry('2020-01-01', now)).toThrow(/future/);
+		expect(() => parseExpiry('soon', now)).toThrow(/not a time/);
+	});
+});

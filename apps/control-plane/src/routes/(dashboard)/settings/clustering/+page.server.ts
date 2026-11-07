@@ -5,8 +5,8 @@ import { requireOwnerPage } from '../_platform.server.js';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = ({ locals }) => {
-	requireOwnerPage(locals);
-	return { config: core.cluster.get() };
+	const principal = requireOwnerPage(locals);
+	return { config: core.cluster.get(), failover: core.failover.status(principal) };
 };
 
 export const actions: Actions = {

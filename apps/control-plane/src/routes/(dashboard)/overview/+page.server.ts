@@ -4,6 +4,7 @@ import type { PageServerLoad } from './$types';
 import { core } from '#lib/server/core.js';
 import { trafficRanges, parseTrafficRange, trafficRangeHref } from '#lib/server/traffic-range.js';
 import { buildAttention } from './attention.js';
+import { summariseResources } from './resources.js';
 
 /** One row of the activity feed: a deployment or a git build. */
 export type ActivityItem =
@@ -182,6 +183,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		projectNames,
 		nodes,
 		nodesDenied,
+		resources: nodesDenied ? null : summariseResources(nodes, now),
 		capacity,
 		domains: domains
 			? {

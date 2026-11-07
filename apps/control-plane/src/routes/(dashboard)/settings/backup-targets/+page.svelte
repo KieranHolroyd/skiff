@@ -60,9 +60,10 @@
 		askConfirm({
 			title: `Remove ${target.name}?`,
 			description:
-				target === effective
-					? 'New backups fall back to the next target in line (the platform default, then the built-in object store). Backups already written there are not deleted.'
-					: 'Backups already written there are not deleted; Skiff just stops using it.',
+				(target === effective
+					? 'New backups fall back to the next target in line (the platform default, then the built-in object store). '
+					: 'Skiff stops using it. ') +
+				'A target that still holds backups cannot be removed: restores and retention read each backup from the target it was written to. Delete those backups first, or let them expire.',
 			confirmLabel: 'Remove target',
 			tone: 'danger',
 			action: '?/remove',

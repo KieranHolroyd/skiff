@@ -1,6 +1,17 @@
 # 11 — Stack blueprints: `skiff.yaml` with plan/apply
 
 **Priority:** P1 · **Effort:** M · **Lane:** D · **Wave:** 2–3
+**Status:** v1 implemented 2026-11-07 behind `SKIFF_FEATURE_BLUEPRINTS` (design: docs/OPERATIONS.md §12).
+Built: file `skiff.blueprint.yaml|yml|json` naming a *stack* (`name:`) with `projects`
+(environments, domains, workload settings), `databases`, `storage` (+ buckets), `brokers` and
+`attachments`; strict validation with paths; plan as a `blueprint.apply` operation with a stable
+`planHash`; idempotent apply that stops at the first failure (no compensation; re-plan lists what
+is left); opt-in prune with typed confirmation; `blueprints` stack table (0071); REST
+`/api/v1/blueprints/{validate,plan,apply}`; CLI `skif blueprint validate|plan|apply`; MCP
+`plan_stack`/`apply_stack`/`get_task`; dashboard `/new/blueprint`. Differs from the design below:
+one stack spans several projects (not `project:` + `services:`), REST is under `/blueprints`, not
+`/projects/:slug/blueprint`. Not built: jobs, volumes, previews, static `path` uploads, env per
+environment, drift badge, `export`, JSON Schema, `--lenient`, compensation.
 **Depends on:** F1 contracts, 08 Valkey, 09 jobs, 13 extensions (soft: 07 volumes)
 **Blocks:** 12 preview data, 14 stacks, 18 OpenAPI/Terraform
 **Primary files:** `packages/contracts/src/blueprint.ts`, `packages/core/src/blueprints.ts`,

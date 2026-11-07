@@ -3,7 +3,7 @@ import { CoreError, entriesFromZip } from '@skiff/core';
 import { accessModes, hasPermission, type NodeCapacityView } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
 import { features } from '#lib/server/config.js';
-import { failStatus, formString, toFormFailure } from '../../_lib/errors.js';
+import { failStatus, formRawString, formString, toFormFailure } from '../../_lib/errors.js';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = ({ locals }) => {
@@ -51,6 +51,11 @@ export const actions: Actions = {
 			fieldErrors.productionAccess = 'Choose a valid access mode.';
 		if (!(accessModes as readonly string[]).includes(values.previewAccess))
 			fieldErrors.previewAccess = 'Choose a valid access mode.';
+		const password = formRawString(data, 'password');
+		const wantsPassword =
+			values.productionAccess === 'password' || values.previewAccess === 'password';
+		if (wantsPassword && password.length < 8)
+			fieldErrors.password = 'Use at least 8 characters for password mode.';
 		if (hasBundle && !bundle.name.toLowerCase().endsWith('.zip'))
 			fieldErrors.bundle = 'Upload the bundle as a .zip archive.';
 
@@ -74,7 +79,8 @@ export const actions: Actions = {
 				runtime: 'function',
 				placement: values.placement,
 				productionAccess: values.productionAccess as (typeof accessModes)[number],
-				previewAccess: values.previewAccess as (typeof accessModes)[number]
+				previewAccess: values.previewAccess as (typeof accessModes)[number],
+				...(wantsPassword ? { password } : {})
 			});
 			slug = project.slug;
 		} catch (caught) {

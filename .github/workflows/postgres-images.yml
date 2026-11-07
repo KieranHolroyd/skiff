@@ -1,0 +1,81 @@
+name: Postgres images
+
+# Skiff-built Postgres variant images (D126, docs/DATABASES.md §9). Each tag is immutable: a
+# published `<major>-<variant>-<revision>` is never rebuilt over. Changing the Dockerfile or its
+# base means bumping REVISION here, `SKIFF_POSTGRES_IMAGE_REVISION` in packages/contracts and the
+# helper's copy in apps/helper/src/validate.ts, in the same commit.
+
+on:
+  pull_request:
+    paths:
+      - 'docker/postgres/**'
+      - '.github/workflows/postgres-images.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'docker/postgres/**'
+      - '.github/workflows/postgres-images.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MAJOR: '18'
+  REVISION: '1'
+
+jobs:
+  image:
+    name: skiff-postgres ${{ matrix.variant }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [postgis, pg_cron]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image name and tag
+        run: |
+          echo "IMAGE=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/skiff-postgres" >> "$GITHUB_ENV"
+          echo "TAG=${MAJOR}-${{ matrix.variant }}-${REVISION}" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse to overwrite a published tag
+        id: published
+        if: github.event_name != 'pull_request'
+        run: |
+          if docker buildx imagetools inspect "$IMAGE:$TAG" >/dev/null 2>&1; then
+            echo "$IMAGE:$TAG is already published; bump REVISION to publish a change."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/build-push-action@v6
+        if: steps.published.outputs.exists != 'true'
+        with:
+          context: docker/postgres
+          file: docker/postgres/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            VARIANT=${{ matrix.variant }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ env.IMAGE }}:${{ env.TAG }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=postgres-${{ matrix.variant }}
+          cache-to: type=gha,mode=max,scope=postgres-${{ matrix.variant }}

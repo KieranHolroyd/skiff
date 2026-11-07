@@ -42,6 +42,7 @@ describe('custom-host access', () => {
 			placement: 'edge',
 			productionAccess: 'password',
 			previewAccess: 'platform',
+			password: 'blog-password',
 		});
 		const project = core.projects.requireRow(principal, 'blog');
 		const deployment = await core.uploads.deployInline(

@@ -43,6 +43,29 @@ export interface ShareLinkView {
 	createdAt: string;
 }
 
+/**
+ * A live visitor session started from one of the project's share links. Password and platform
+ * sign-ins are stateless cookies and are not listed; "sign out everyone" ends those too.
+ */
+export interface SiteSessionView {
+	id: string;
+	kind: 'share';
+	shareLinkId: string;
+	/** The link's internal note, to tell links apart. */
+	note: string | null;
+	host: string;
+	/** Signed-in address of the visitor, for links restricted to `allowedEmails`. */
+	email: string | null;
+	startedAt: string;
+	expiresAt: string;
+}
+
+/** Which access scope a content host belongs to, and so which password guards it. */
+export type AccessScope =
+	| { kind: 'production' }
+	| { kind: 'previews' }
+	| { kind: 'environment'; environmentId: string };
+
 export interface SiteVisit {
 	host: string;
 	project: ProjectRow;
@@ -64,6 +87,8 @@ export interface ContentRoute {
 	production: boolean;
 	/** Access mode the agent applies to this exact host. */
 	access: AccessMode;
+	/** The scope whose access mode (and password) applies to this host. */
+	scope: AccessScope;
 }
 
 export class AccessService {
@@ -175,17 +200,112 @@ export class AccessService {
 		});
 	}
 
+	/**
+	 * Live share-link sessions for a project, newest first (at most 500). Sessions that expired, were
+	 * revoked, belong to a revoked link or predate the last "sign out everyone" are left out.
+	 */
+	listSessions(principal: Principal, project: ProjectRow): SiteSessionView[] {
+		requirePermission(principal, 'shareLink:read');
+		if (project.orgId !== principal.orgId) throw new NotFoundError('Project');
+		const epoch = this.epochOf(project.id);
+		const productionHost = `${project.slug}.${this.ctx.config.contentDomain}`;
+		return this.ctx.sqlite
+			.query<
+				{
+					id: string;
+					shareLinkId: string;
+					note: string | null;
+					previewHost: string | null;
+					email: string | null;
+					redeemedAt: number;
+					expiresAt: number;
+				},
+				[string, string, number, number]
+			>(
+				`SELECT r.id AS id, r.share_link_id AS shareLinkId, l.note AS note, d.preview_host AS previewHost,
+				        r.email AS email, r.redeemed_at AS redeemedAt, r.expires_at AS expiresAt
+				 FROM share_redemptions r
+				 JOIN share_links l ON l.id = r.share_link_id
+				 LEFT JOIN deployments d ON d.id = l.deployment_id
+				 WHERE l.project_id = ? AND l.org_id = ? AND l.revoked_at IS NULL
+				   AND r.revoked_at IS NULL AND r.expires_at > ? AND r.site_epoch = ?
+				 ORDER BY r.redeemed_at DESC, r.id DESC
+				 LIMIT 500`,
+			)
+			.all(project.id, project.orgId, this.ctx.now(), epoch)
+			.map((row) => ({
+				id: row.id,
+				kind: 'share' as const,
+				shareLinkId: row.shareLinkId,
+				note: row.note,
+				host: row.previewHost ?? productionHost,
+				email: row.email,
+				startedAt: new Date(row.redeemedAt).toISOString(),
+				expiresAt: new Date(row.expiresAt).toISOString(),
+			}));
+	}
+
+	/** End one share-link session. The agents refuse its cookie once they pull the revocation. */
 	async revokeSession(principal: Principal, project: ProjectRow, sessionId: string): Promise<void> {
 		requirePermission(principal, 'shareLink:revoke');
 		if (project.orgId !== principal.orgId) throw new NotFoundError('Session');
 		// Only sessions redeemed from this project's share links can be revoked through it.
 		const result = this.ctx.sqlite.run(
 			`UPDATE share_redemptions SET revoked_at = ?
-			 WHERE id = ? AND share_link_id IN (SELECT id FROM share_links WHERE project_id = ? AND org_id = ?)`,
+			 WHERE id = ? AND revoked_at IS NULL
+			   AND share_link_id IN (SELECT id FROM share_links WHERE project_id = ? AND org_id = ?)`,
 			[this.ctx.now(), sessionId, project.id, project.orgId],
 		);
 		if (result.changes === 0) throw new NotFoundError('Session');
 		this.ctx.projects.bump(project.orgId);
+		this.ctx.audit.record({
+			principal,
+			action: 'site_session.revoke',
+			resource: 'project',
+			resourceId: project.id,
+			args: { project: project.slug, sessionId },
+			result: 'ok',
+		});
+	}
+
+	/**
+	 * Sign out every visitor of a project: password, platform and share-link sessions on every scope.
+	 * Bumps the project's session epoch, which rotates its site key, so the agents stop accepting any
+	 * cookie or callback token signed before now as soon as they pull the new state. Share links
+	 * themselves keep working; revoke a link to stop it starting new sessions.
+	 */
+	async signOutEveryone(principal: Principal, project: ProjectRow): Promise<{ epoch: number; signedOutAt: string; shareSessions: number }> {
+		requirePermission(principal, 'project:update');
+		if (project.orgId !== principal.orgId) throw new NotFoundError('Project');
+		const shareSessions = this.listSessions(principal, project).length;
+		let epoch = 0;
+		await this.ctx.audit.wrap(
+			{ principal, action: 'site_session.sign_out_all', resource: 'project', resourceId: project.id, args: { project: project.slug } },
+			() => {
+				this.ctx.sqlite.run('UPDATE projects SET site_session_epoch = site_session_epoch + 1, updated_at = ? WHERE id = ?', [
+					this.ctx.now(),
+					project.id,
+				]);
+				epoch = this.epochOf(project.id);
+				this.ctx.projects.bump(project.orgId);
+			},
+		);
+		return { epoch, signedOutAt: new Date(this.ctx.now()).toISOString(), shareSessions };
+	}
+
+	/** The project's current site key; changes whenever everyone is signed out. */
+	siteKeyFor(project: Pick<ProjectRow, 'id'>): string {
+		return siteKeyFor(this.ctx.config.siteCookieSecret, project.id, this.epochOf(project.id));
+	}
+
+	private epochOf(projectId: string): number {
+		return (
+			this.ctx.db
+				.select({ epoch: projects.siteSessionEpoch })
+				.from(projects)
+				.where(eq(projects.id, projectId))
+				.get()?.epoch ?? 0
+		);
 	}
 
 	/** Resolve a content hostname to the project + deployment it serves. */
@@ -217,6 +337,7 @@ export class AccessService {
 					deploymentId: owner.productionDeploymentId,
 					production: true,
 					access: owner.productionAccess,
+					scope: { kind: 'production' },
 				};
 			return null;
 		}
@@ -233,6 +354,7 @@ export class AccessService {
 					deploymentId: deployment.id,
 					production: false,
 					access: project.previewAccess,
+					scope: { kind: 'previews' },
 				};
 		}
 		const suffix = `.${this.ctx.config.contentDomain}`;
@@ -254,6 +376,7 @@ export class AccessService {
 				deploymentId: bare.productionDeploymentId,
 				production: true,
 				access: bare.productionAccess,
+				scope: { kind: 'production' },
 			};
 
 		const separator = label.lastIndexOf('--');
@@ -272,6 +395,9 @@ export class AccessService {
 						deploymentId: environment.deploymentId,
 						production: true,
 						access: environment.isProduction ? project.productionAccess : environment.access,
+						scope: environment.isProduction
+							? { kind: 'production' }
+							: { kind: 'environment', environmentId: environment.id },
 					};
 			}
 		}
@@ -305,12 +431,15 @@ export class AccessService {
 		return this.mint(resolved.project, host, principal.userId, 'platform', 60 * 60, undefined, resolved.deploymentId);
 	}
 
-	/** Password mode: verified on the control plane, then bound to the host. */
+	/**
+	 * Password mode: verified on the control plane against the password of the scope that serves
+	 * this host (production, previews or a named environment), then bound to the host. A host whose
+	 * scope is not in password mode never accepts a password, whatever another scope uses.
+	 */
 	passwordAccess(host: string, password: string): SiteVisit {
 		const resolved = this.resolveHost(host);
 		if (!resolved) throw new NotFoundError('Site');
-		const row = this.ctx.db.select().from(projects).where(eq(projects.id, resolved.project.id)).get();
-		if (!verifyPassword(password, row?.accessSecretHash))
+		if (resolved.access !== 'password' || !verifyPassword(password, this.passwordHashFor(resolved)))
 			throw new CoreError('invalid_password', 'Incorrect password', 403);
 		return this.mint(
 			resolved.project,
@@ -321,6 +450,24 @@ export class AccessService {
 			undefined,
 			resolved.deploymentId,
 		);
+	}
+
+	private passwordHashFor(route: ContentRoute): string | null {
+		const scope = route.scope;
+		if (scope.kind === 'environment')
+			return (
+				this.ctx.db
+					.select({ hash: environments.passwordHash })
+					.from(environments)
+					.where(and(eq(environments.id, scope.environmentId), eq(environments.projectId, route.project.id)))
+					.get()?.hash ?? null
+			);
+		const row = this.ctx.db
+			.select({ production: projects.productionPasswordHash, previews: projects.previewPasswordHash })
+			.from(projects)
+			.where(eq(projects.id, route.project.id))
+			.get();
+		return (scope.kind === 'production' ? row?.production : row?.previews) ?? null;
 	}
 
 	/**
@@ -359,6 +506,7 @@ export class AccessService {
 
 		const redemptionId = `red_${crypto.randomUUID().replace(/-/g, '')}`;
 		const expiresAt = now + link.sessionTtlSeconds * 1000;
+		const epoch = this.epochOf(link.projectId);
 		const changed = this.ctx.sqlite.transaction(() => {
 			const result = this.ctx.sqlite.run(
 				'UPDATE share_links SET redemptions = redemptions + 1 WHERE id = ? AND (max_redemptions IS NULL OR redemptions < max_redemptions)',
@@ -366,8 +514,8 @@ export class AccessService {
 			);
 			if (result.changes === 0) return false;
 			this.ctx.sqlite.run(
-				'INSERT INTO share_redemptions (id, share_link_id, visitor_hash, email, redeemed_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
-				[redemptionId, link.id, visitorHash, request.email ?? null, now, expiresAt],
+				'INSERT INTO share_redemptions (id, share_link_id, visitor_hash, email, redeemed_at, expires_at, site_epoch) VALUES (?, ?, ?, ?, ?, ?, ?)',
+				[redemptionId, link.id, visitorHash, request.email ?? null, now, expiresAt, epoch],
 			);
 			return true;
 		})();
@@ -406,7 +554,7 @@ export class AccessService {
 		sessionId?: string,
 		deploymentId?: string,
 	): SiteVisit {
-		const siteKey = siteKeyFor(this.ctx.config.siteCookieSecret, project.id);
+		const siteKey = this.siteKeyFor(project);
 		const now = Math.floor(this.ctx.now() / 1000);
 		const sessionExp = now + ttlSeconds;
 		const claims = {
@@ -432,7 +580,7 @@ export class AccessService {
 	verifySiteToken(projectId: string, token: string): AccessTokenClaims | null {
 		const project = this.ctx.db.select().from(projects).where(eq(projects.id, projectId)).get();
 		if (!project) return null;
-		return verifyAccessToken(siteKeyFor(this.ctx.config.siteCookieSecret, project.id), token);
+		return verifyAccessToken(this.siteKeyFor(project), token);
 	}
 
 	/**

@@ -17,6 +17,7 @@
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
+	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
 	import { Progress } from '#lib/components/ui/progress/index.js';
 	import EmptyState from '../../../_lib/EmptyState.svelte';
 	import { formatDateTime, shortId } from '../../../_lib/format.js';
@@ -41,6 +42,7 @@
 	let editOpen = $state(false);
 
 	let command = $state('');
+	let engine = $state<'bun' | 'node'>('bun');
 	let image = $state('');
 	let port = $state('3000');
 	let memoryMb = $state('256');
@@ -50,6 +52,21 @@
 	let idleStopSeconds = $state('0');
 	let dataEnabled = $state(false);
 	let dataSizeMb = $state('256');
+
+	/**
+	 * What a blank Command runs (D125). Node.js apps run the package.json `start` script through a
+	 * shell on the node, so the activated socket reaches the app (npm and `node --run` drop it).
+	 */
+	const BUN_DEFAULT = 'bun run start';
+	const NODE_DEFAULT_LABEL = 'the package.json start script';
+	const specEngine = $derived(spec?.engine === 'node' ? 'node' : 'bun');
+
+	/** Switching engine swaps a command that is still the other engine's default. */
+	function onEngineChange() {
+		const current = command.trim();
+		if (engine === 'node' && current === BUN_DEFAULT) command = '';
+		else if (engine === 'bun' && current === '') command = BUN_DEFAULT;
+	}
 
 	const node = $derived(
 		workload?.nodeId ? capacity.find((item) => item.nodeId === workload?.nodeId) : undefined
@@ -70,7 +87,9 @@
 	);
 
 	function openEditor() {
-		command = spec?.command?.join(' ') ?? (project.runtime === 'process' ? 'bun run start' : '');
+		engine = spec?.engine === 'node' ? 'node' : 'bun';
+		command =
+			spec?.command?.join(' ') ?? (project.runtime === 'process' && engine === 'bun' ? BUN_DEFAULT : '');
 		image = spec?.image ?? '';
 		port = String(spec?.port ?? 3000);
 		memoryMb = String(spec?.memoryMb ?? 256);
@@ -217,9 +236,11 @@
 					{#if spec}
 						<DetailList>
 							{#if project.runtime === 'process'}
+								<dt>Engine</dt>
+								<dd class="text-sm">{specEngine === 'node' ? 'Node.js' : 'Bun'}</dd>
 								<dt>Command</dt>
 								<dd class="truncate font-mono text-xs" title={spec.command?.join(' ') ?? ''}>
-									{spec.command?.join(' ') ?? 'bun run start'}
+									{spec.command?.join(' ') ?? (specEngine === 'node' ? NODE_DEFAULT_LABEL : BUN_DEFAULT)}
 								</dd>
 								<dt>Socket activation</dt>
 								<dd class="text-sm">{spec.socketActivation ? 'enabled' : 'disabled'}</dd>
@@ -349,17 +370,46 @@
 
 			{#if project.runtime === 'process'}
 				<Field.Field>
+					<Field.Label for="workload-engine">Engine</Field.Label>
+					<NativeSelect.Root
+						id="workload-engine"
+						name="engine"
+						class="w-full"
+						bind:value={engine}
+						onchange={onEngineChange}
+					>
+						<NativeSelect.Option value="bun">Bun</NativeSelect.Option>
+						<NativeSelect.Option value="node">Node.js (pinned LTS)</NativeSelect.Option>
+					</NativeSelect.Root>
+					<Field.Description>
+						{#if engine === 'node'}
+							Runs on the node's pinned Node.js. With socket activation on, the first
+							<code class="font-mono">server.listen()</code> is moved onto the passed socket, so
+							Express, Fastify, Next.js and the like work unchanged and can scale to zero.
+						{:else}
+							Runs on Skiff's Bun. Bun cannot adopt the passed socket yet, so turn socket activation
+							off and listen on <code class="font-mono">PORT</code>.
+						{/if}
+					</Field.Description>
+				</Field.Field>
+				<Field.Field>
 					<Field.Label for="workload-command">Command</Field.Label>
 					<Input
 						id="workload-command"
 						name="command"
 						bind:value={command}
-						placeholder="bun run start"
+						placeholder={engine === 'node' ? 'node server.js' : BUN_DEFAULT}
 						class="font-mono text-sm"
 					/>
 					<Field.Description>
-						Split on spaces and run without a shell; quotes are not interpreted. Leave blank to use
-						<code class="font-mono">bun run start</code>.
+						Split on spaces and run without a shell; quotes are not interpreted.
+						{#if engine === 'node'}
+							Leave blank to run {NODE_DEFAULT_LABEL}. With socket activation, run the server
+							directly rather than through <code class="font-mono">npm start</code> or
+							<code class="font-mono">node --run</code>: they start the app without the socket.
+						{:else}
+							Leave blank to use <code class="font-mono">{BUN_DEFAULT}</code>.
+						{/if}
 					</Field.Description>
 				</Field.Field>
 				<Field.Field orientation="horizontal" class="gap-2">
@@ -387,7 +437,7 @@
 					<Field.Description>
 						0 keeps the app always on. Otherwise the app is stopped after this long without a request
 						and the next request starts it again. Needs socket activation, and the app must listen on
-						the inherited socket (fd 3), as FrankenPHP, Gunicorn, Puma or Node can.
+						the inherited socket (fd 3), as Node.js apps, FrankenPHP, Gunicorn or Puma do.
 					</Field.Description>
 				</Field.Field>
 			{:else}

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import { brokerLogEvents, brokers, builds, databases, logEvents, projects, serviceLogEvents, storageInstances, workloads } from '@skiff/db';
 import {
 	levelForBuildLine,
@@ -20,6 +20,7 @@ import {
 import type { CoreContext } from './context.ts';
 import { CoreError } from './errors.ts';
 import type { ProjectRow } from './projects.ts';
+import { JOB_LOG_LINES_MAX } from './jobs.ts';
 
 const LOG_LIMIT = 2_000_000;
 const LOG_TAIL = 8_000;
@@ -90,6 +91,8 @@ export class LogService {
 
 	/** Runtime journal output drained by an agent, one batch per workload. */
 	appendRuntime(nodeId: string, batch: RuntimeLogBatch): number {
+		// A job run's output (plan 09) is stored under its run, never mixed into the app's stream.
+		if (batch.jobRunId) return this.appendJobRun(nodeId, batch.jobRunId, batch);
 		// Replicas (plan 21) drain under `<id>-r<n>` and belong to the workload `<id>`.
 		const { workloadId, replica } = parseWorkloadReplicaId(batch.workloadId);
 		const workload = this.ctx.db
@@ -133,6 +136,58 @@ export class LogService {
 			};
 		});
 		this.ctx.db.insert(logEvents).values(rows).run();
+		return rows.length;
+	}
+
+	/**
+	 * One job run's output. The node must hold the run under the same workload id; a run the node
+	 * does not own is a 403, an unknown one an empty drain. Each run keeps its first
+	 * `JOB_LOG_LINES_MAX` lines and one notice that the rest was dropped.
+	 */
+	private appendJobRun(nodeId: string, runId: string, batch: RuntimeLogBatch): number {
+		const run = this.ctx.jobs.runForLogs(nodeId, runId, batch.workloadId);
+		if (!run) {
+			const known = this.ctx.sqlite.query<{ n: number }, [string]>('SELECT 1 AS n FROM job_runs WHERE id = ?').get(runId);
+			if (known) throw new CoreError('forbidden', 'This job run belongs to another node.', 403);
+			return 0;
+		}
+		if (batch.lines.length === 0) return 0;
+		const stored =
+			this.ctx.sqlite.query<{ n: number }, [string]>('SELECT COUNT(*) AS n FROM log_events WHERE job_run_id = ?').get(runId)?.n ?? 0;
+		if (stored > JOB_LOG_LINES_MAX) return 0;
+		const now = this.ctx.now();
+		const room = JOB_LOG_LINES_MAX - stored;
+		const rows: Array<typeof logEvents.$inferInsert> = batch.lines.slice(0, Math.max(0, room)).map((line) => {
+			const parsed = parseLogLine(line.message);
+			return {
+				orgId: run.orgId,
+				projectId: run.projectId,
+				deploymentId: run.deploymentId,
+				buildId: null,
+				nodeId,
+				jobRunId: runId,
+				source: 'runtime' as const,
+				stream: line.stream,
+				level: parsed.level ?? line.level,
+				message: sanitize(parsed.message),
+				ts: Number.isFinite(line.ts) ? Math.max(0, Number(line.ts)) : parsed.ts ?? now,
+			};
+		});
+		if (batch.lines.length > room)
+			rows.push({
+				orgId: run.orgId,
+				projectId: run.projectId,
+				deploymentId: run.deploymentId,
+				buildId: null,
+				nodeId,
+				jobRunId: runId,
+				source: 'system',
+				stream: 'system',
+				level: 'warn',
+				message: `Output truncated: a run keeps its first ${JOB_LOG_LINES_MAX} lines.`,
+				ts: now,
+			});
+		if (rows.length > 0) this.ctx.db.insert(logEvents).values(rows).run();
 		return rows.length;
 	}
 
@@ -407,6 +462,8 @@ export class LogService {
 		const conditions = [
 			eq(logEvents.orgId, principal.orgId),
 			eq(logEvents.projectId, project.id),
+			// Job output (plan 09) is read per run; the app's own stream leaves it out.
+			input.jobRunId ? eq(logEvents.jobRunId, input.jobRunId) : isNull(logEvents.jobRunId),
 		];
 		// A build view includes lifecycle breadcrumbs (claim recovery, cancellation) alongside the
 		// Builder's own stdout/stderr; the row is still scoped by buildId below.

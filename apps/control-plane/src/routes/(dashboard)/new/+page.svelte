@@ -4,6 +4,7 @@
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import LayoutTemplateIcon from '@lucide/svelte/icons/layout-template';
+	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import * as InputGroup from '#lib/components/ui/input-group/index.js';
@@ -221,6 +222,33 @@
 			</ul>
 		{/if}
 	</section>
+
+	{#if data.blueprints}
+		<section aria-labelledby="blueprint-heading">
+			<a
+				href={resolve('/(dashboard)/new/blueprint')}
+				class="group flex items-start gap-3 rounded-xl border p-4 transition-all hover:border-foreground/20 hover:bg-card hover:shadow-xs focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+			>
+				<span
+					class="flex size-8 shrink-0 items-center justify-center rounded-lg border bg-background text-muted-foreground transition-colors group-hover:text-foreground"
+				>
+					<ScrollTextIcon class="size-4" />
+				</span>
+				<span class="min-w-0 flex-1 space-y-0.5">
+					<span id="blueprint-heading" class="flex items-center gap-1 text-sm font-medium">
+						Apply a blueprint
+						<ArrowRightIcon
+							class="size-3.5 opacity-0 transition-all group-hover:translate-x-0.5 group-hover:opacity-100"
+						/>
+					</span>
+					<span class="block text-xs text-pretty text-muted-foreground"
+						>Paste one file that declares projects, databases, storage, brokers and attachments;
+						review the plan, then apply it.</span
+					>
+				</span>
+			</a>
+		</section>
+	{/if}
 
 	{#if data.can.createProject}
 		<section class="space-y-4" aria-labelledby="blank-heading">

@@ -17,6 +17,14 @@ The assistant cannot do more than the signed-in user, and every action is audite
   covers dashboard help, projects, data and the platform, and every MCP tool the signed-in user may
   call. A question that spans areas is answered in one pass; there is no routing step and no
   merging of partial answers. An owner can narrow the tool list (see below).
+- **Tool search.** The catalog is well over a hundred tools, so when a turn has more than 40 the
+  model starts with a core set of reads (`whoami`, docs, projects, deployments, logs, status,
+  databases, storage, nodes, `guide_user`) plus `search_tools`. The prompt lists every other tool
+  by name only; `search_tools` takes keywords or `select:name1,name2` and loads the matches, which
+  are callable from the next model round of the same turn. A call to a tool that was never loaded
+  is not run: it is loaded and the model is told to call it again with the schema. This only saves
+  context; it is not a permission boundary (the catalog is already filtered to what the caller may
+  use). An owner allowlist of 40 tools or fewer is offered whole, with no search tool.
 - **A UI channel.** Besides the MCP tools, the assistant gets `guide_user`. The browser sends a
   compact outline of the current page (`data-skiff-target` ids plus headings, buttons, links, tabs
   and inputs with CSS selectors). The assistant can navigate to a path and spotlight an element, one
@@ -57,6 +65,9 @@ narrows the page instead of covering it.
   happened to its proposed action (confirmed and the result, cancelled, failed or expired) and
   whether the user stopped it early. After an action completes, **Ask Skiff to follow up** sends a
   verification message.
+- **Contextual questions.** A firing or no-data series on Alerts has **Ask AI**, which opens the
+  panel with the rule, series, value and duration already written out and asks the assistant to
+  explain the cause and next steps. It respects the page-context preference.
 - Also: copy on every message, timestamps, turn duration, a jump-to-latest pill when you have scrolled up, an unread dot on the launcher when a
   reply finishes while the panel is closed, and Export as Markdown.
 
@@ -121,7 +132,9 @@ browser ── POST /api/v1/assistant/chat ──► assistant (system prompt + 
 
 1. The assistant sees its system prompt, the history, the page outline and the user message, with
    every tool it may call (or the owner's allowlist).
-2. It runs one tool loop: at most 12 model rounds and 24 tool calls. Tool results are truncated
+2. It runs one tool loop: at most 12 model rounds and 24 tool calls by default, set in
+   Settings → Policies (`assistantMaxRounds`, 1–50; `assistantMaxToolCalls`, 1–200). A
+   `search_tools` call spends one round. Tool results are truncated
    before they go back into context; logs and site content are treated as data. The reply streams
    as it is written.
 3. The stream is Server-Sent Events: `run.started`, `text.delta`, `tool.started` (with an
@@ -153,7 +166,8 @@ The browser can cancel a run; `request.signal` aborts the upstream provider requ
 - **Bounded input.** One message is at most 8,000 characters, history is at most 30 messages, the
   page outline is at most 120 targets, and a user gets 12 turns a minute.
 - **Prompt injection.** Tool output and page text are labelled as data in the prompt. The
-  assistant has no shell and no arbitrary HTTP tool; the only non-MCP tool drives the UI tour.
+  assistant has no shell and no arbitrary HTTP tool; the only non-MCP tools drive the UI tour and
+  load deferred MCP tools (`search_tools`).
 
 ## Guided tours
 
@@ -192,6 +206,7 @@ works on pages that have not been annotated.
 | `apps/control-plane/src/lib/server/mcp.ts` | `skiffToolDefinitions()` captures the MCP catalog |
 | `apps/control-plane/src/lib/server/assistant/agents.ts` | The system prompt and `PANEL_FORMAT` |
 | `apps/control-plane/src/lib/server/assistant/orchestrator.ts` | The tool loop and confirmations |
+| `apps/control-plane/src/lib/server/assistant/tool-search.ts` | Deferred tool loading: core set, `search_tools`, ranking |
 | `apps/control-plane/src/lib/server/assistant/provider.ts` | OpenAI-compatible streaming client |
 | `apps/control-plane/src/lib/server/assistant/openrouter.ts` | OpenRouter catalogue (tool-capable models, prices) for the picker |
 | `apps/control-plane/src/lib/server/assistant/settings.ts` | Owner-edited instructions, model and tool allowlist in the `settings` table |

@@ -5,6 +5,8 @@ import {
 	appVolumeAttachSchema,
 	appVolumeCreateSchema,
 	appVolumeDetachSchema,
+	appVolumeRestoreSchema,
+	appVolumeSnapshotCreateSchema,
 	databaseAttachSchema,
 	hasPermission,
 	placementSpecSchema,
@@ -92,6 +94,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			);
 		}
 		const row = core.projects.requireRow(principal, params.slug);
+		const consoleOn = project.runtime === 'container' && core.containerConsole.enabled();
 		const trafficRange = parseTrafficRange(url.searchParams.get('range'));
 		const traffic = await core.metrics.trafficForProject(principal, params.slug, {
 			from: trafficRange.from,
@@ -106,9 +109,11 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		);
 		const deployments = core.deployments.list(principal, row, { limit: 100 });
 		let shareLinks: Awaited<ReturnType<typeof core.access.listShareLinks>> = [];
+		let siteSessions: ReturnType<typeof core.access.listSessions> = [];
 		if (hasPermission(principal, 'shareLink:read')) {
 			try {
 				shareLinks = core.access.listShareLinks(principal, row);
+				siteSessions = core.access.listSessions(principal, row);
 			} catch {
 				// The project can still be inspected without share-link visibility.
 			}
@@ -189,6 +194,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			trafficLinks,
 			deployments,
 			shareLinks,
+			siteSessions,
 			environments,
 			domains,
 			builds,
@@ -205,6 +211,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			storageBuckets,
 			appVolumesEnabled,
 			appVolumes,
+			// Jobs (plan 09): the tab hides unless SKIFF_FEATURE_JOBS is on.
+			jobsEnabled: core.jobs.enabled(),
 			can: {
 				update: hasPermission(principal, 'project:update'),
 				deleteProject: hasPermission(principal, 'project:delete'),
@@ -223,8 +231,14 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 				createDomain: hasPermission(principal, 'domain:create'),
 				deleteDomain: hasPermission(principal, 'domain:delete'),
 				createSecret: hasPermission(principal, 'secret:create'),
+				updateSecret: hasPermission(principal, 'secret:update'),
 				deleteSecret: hasPermission(principal, 'secret:delete'),
 				manageWorkload: hasPermission(principal, 'project:update'),
+				// Container console (D127): only for container projects while the feature is on.
+				inspectContainer: consoleOn && hasPermission(principal, 'container:inspect'),
+				containerFiles: consoleOn && principal.kind === 'user' && hasPermission(principal, 'container:files'),
+				containerExec: consoleOn && principal.kind === 'user' && hasPermission(principal, 'container:exec'),
+				restartContainer: consoleOn && hasPermission(principal, 'project:update'),
 				viewCapacity: principal.platformAdmin === true,
 				readDatabases: hasPermission(principal, 'database:read'),
 				createDatabase: hasPermission(principal, 'database:create'),
@@ -257,7 +271,8 @@ export const actions: Actions = {
 			fieldErrors.scope = 'Choose production or previews.';
 		if (!(accessModes as readonly string[]).includes(mode))
 			fieldErrors.mode = 'Choose a valid access mode.';
-		if (mode === 'password' && password.length < 8) {
+		// A blank password keeps the scope's current one; core refuses it when there is none.
+		if (mode === 'password' && password.length > 0 && password.length < 8) {
 			fieldErrors.password = 'Use at least 8 characters for password mode.';
 		}
 		if (Object.keys(fieldErrors).length > 0) {
@@ -269,7 +284,7 @@ export const actions: Actions = {
 			await core.projects.setAccess(principal, project.slug, {
 				scope: scope as 'production' | 'previews',
 				mode: mode as (typeof accessModes)[number],
-				password: mode === 'password' ? password : undefined
+				password: mode === 'password' && password ? password : undefined
 			});
 		} catch (caught) {
 			return fail(failStatus(caught), toFormFailure(caught));
@@ -527,6 +542,34 @@ export const actions: Actions = {
 		return { success: 'Share link revoked. Sessions are pushed to agents within seconds.' };
 	},
 
+	revokeSiteSession: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const id = formString(data, 'sessionId');
+		if (!id) return fail(400, { message: 'Missing session id.' });
+
+		try {
+			const project = core.projects.requireRow(principal, params.slug);
+			await core.access.revokeSession(principal, project, id);
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+
+		return { success: 'Session revoked. Agents refuse its cookie within seconds.' };
+	},
+
+	signOutVisitors: async ({ locals, params }) => {
+		const principal = locals.principal!;
+		try {
+			const project = core.projects.requireRow(principal, params.slug);
+			await core.access.signOutEveryone(principal, project);
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+
+		return { success: 'Everyone is signed out. Visitors have to sign in again within seconds.' };
+	},
+
 	// --- Environments (D13) -------------------------------------------------
 
 	createEnvironment: async ({ request, locals, params }) => {
@@ -535,6 +578,7 @@ export const actions: Actions = {
 		const name = formString(data, 'name');
 		const slug = formString(data, 'slug');
 		const access = accessMode(formString(data, 'access') || 'platform');
+		const password = formRawString(data, 'password');
 
 		if (!name)
 			return fail(400, {
@@ -546,13 +590,19 @@ export const actions: Actions = {
 				message: 'Choose a valid access mode.',
 				fieldErrors: { access: 'Invalid access mode.' }
 			});
+		if (access === 'password' && password.length < 8)
+			return fail(400, {
+				message: 'Use at least 8 characters for password mode.',
+				fieldErrors: { password: 'At least 8 characters.' }
+			});
 
 		try {
 			const project = core.projects.requireRow(principal, params.slug);
 			const environment = core.environments.create(principal, project, {
 				name,
 				slug: slug || undefined,
-				access
+				access,
+				...(access === 'password' ? { password } : {})
 			});
 			return { success: `Environment "${environment.name}" created at ${environment.host}.` };
 		} catch (caught) {
@@ -566,8 +616,14 @@ export const actions: Actions = {
 		const environmentSlug = formString(data, 'environmentSlug');
 		const name = formString(data, 'name');
 		const access = accessMode(formString(data, 'access') || 'platform');
+		const password = formRawString(data, 'password');
 
 		if (!environmentSlug) return fail(400, { message: 'Missing environment.' });
+		if (access === 'password' && password.length > 0 && password.length < 8)
+			return fail(400, {
+				message: 'Use at least 8 characters for password mode.',
+				fieldErrors: { password: 'At least 8 characters.' }
+			});
 		if (!name)
 			return fail(400, {
 				message: 'Give the environment a name.',
@@ -583,7 +639,8 @@ export const actions: Actions = {
 			const project = core.projects.requireRow(principal, params.slug);
 			const environment = core.environments.update(principal, project, environmentSlug, {
 				name,
-				access
+				access,
+				...(access === 'password' && password ? { password } : {})
 			});
 			return { success: `Environment "${environment.name}" updated.` };
 		} catch (caught) {
@@ -892,6 +949,8 @@ export const actions: Actions = {
 		};
 		if (project.runtime === 'process') {
 			if (command) input.command = commandArgs(command);
+			// Bun stays implicit (no field), so a Bun spec saves exactly as it did before engines (D125).
+			if (formString(data, 'engine') === 'node') input.engine = 'node';
 			input.socketActivation = formBoolean(data, 'socketActivation');
 			// Scale to zero (D121) needs the socket; without it the field is dropped, not refused.
 			const idleStopSeconds = numberField(data, 'idleStopSeconds', 0);
@@ -927,6 +986,16 @@ export const actions: Actions = {
 			success:
 				'Runtime configuration saved. A deployed workload picks it up on the next reconcile; otherwise it applies at the next deployment.'
 		};
+	},
+
+	restartContainer: async ({ locals, params }) => {
+		const principal = locals.principal!;
+		try {
+			core.containerConsole.restart(principal, params.slug);
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+		return { success: 'Restart requested. The node restarts the container on its next reconcile.' };
 	},
 
 	removeWorkload: async ({ locals, params }) => {
@@ -1160,6 +1229,74 @@ export const actions: Actions = {
 			return {
 				success: `Volume "${volumeName}" deleted. Its data is kept until ${new Date(result.purgeAt).toISOString().slice(0, 10)}.`
 			};
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	snapshotVolume: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const volumeName = formString(data, 'volume');
+		const label = formOptionalString(data, 'label');
+		const parsed = appVolumeSnapshotCreateSchema.safeParse({
+			...(label ? { label } : {}),
+			// The checkbox is "copy without pausing"; quiescing is the default.
+			quiesce: !formBoolean(data, 'live')
+		});
+		if (!parsed.success)
+			return fail(400, {
+				message: parsed.error.issues[0]?.message ?? 'Check the snapshot settings.',
+				fieldErrors: fieldErrorsFrom(parsed.error.issues)
+			});
+		try {
+			const project = core.projects.requireRow(principal, params.slug);
+			const snapshot = core.appVolumes.lifecycle.createSnapshot(principal, project, volumeName, parsed.data);
+			return {
+				success: `Snapshot of "${volumeName}" queued to ${snapshot.target?.name ?? 'the platform object store'}.${
+					snapshot.quiesce ? '' : ' The app is not paused, so the copy may be inconsistent.'
+				}`
+			};
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	restoreVolumeSnapshot: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const volumeName = formString(data, 'volume');
+		const snapshotId = formString(data, 'snapshotId');
+		const sizeMb = formOptionalString(data, 'sizeMb');
+		const parsed = appVolumeRestoreSchema.safeParse({
+			name: formString(data, 'name'),
+			...(sizeMb ? { sizeMb: numberField(data, 'sizeMb', 0) } : {})
+		});
+		if (!parsed.success)
+			return fail(400, {
+				message: parsed.error.issues[0]?.message ?? 'Check the new volume name.',
+				fieldErrors: fieldErrorsFrom(parsed.error.issues)
+			});
+		try {
+			const project = core.projects.requireRow(principal, params.slug);
+			const volume = core.appVolumes.lifecycle.restore(principal, project, volumeName, snapshotId, parsed.data);
+			return {
+				success: `Restoring into new volume "${volume.name}". Mount it once the restore finishes.`
+			};
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	deleteVolumeSnapshot: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const volumeName = formString(data, 'volume');
+		const snapshotId = formString(data, 'snapshotId');
+		try {
+			const project = core.projects.requireRow(principal, params.slug);
+			await core.appVolumes.lifecycle.deleteSnapshot(principal, project, volumeName, snapshotId);
+			return { success: `Snapshot ${snapshotId} deleted.` };
 		} catch (caught) {
 			return fail(failStatus(caught), toFormFailure(caught));
 		}

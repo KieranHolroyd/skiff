@@ -5,6 +5,7 @@ import type {
 	AssistantGuide,
 	AssistantPageContext
 } from '@skiff/contracts';
+import { collectPageContext } from './page-context.js';
 
 /**
  * Chat state for the dashboard assistant (docs/ASSISTANT.md).
@@ -266,6 +267,23 @@ class AssistantChatState {
 
 	close(): void {
 		this.open = false;
+	}
+
+	/**
+	 * Open the panel and ask about something the user pointed at (a firing alert, a failed
+	 * deploy). A reply still streaming is stopped first: the contextual action is the new request,
+	 * so it starts its own conversation instead of joining (and sending the history of) whatever
+	 * was open.
+	 */
+	ask(prompt: string): void {
+		const text = prompt.trim();
+		if (!text) return;
+		if (this.sending) this.stop();
+		this.activeId = null;
+		this.editingTurn = null;
+		this.view = 'chat';
+		this.show();
+		void this.send(text, this.prefs.includePage ? collectPageContext() : { path: '', targets: [] });
 	}
 
 	private ensureConversation(): Conversation {

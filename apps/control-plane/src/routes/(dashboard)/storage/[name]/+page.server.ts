@@ -8,10 +8,12 @@ import {
 	storageAttachSchema,
 	storageAttachmentUpdateSchema,
 	storageEngineRegistry,
+	storageKeyCreateSchema,
 	storageUpdateSchema,
 	type BucketAccess,
 	type NodeCapacityView,
 	type Principal,
+	type StorageKeyView,
 	type StorageMetricPoint,
 	type StorageView
 } from '@skiff/contracts';
@@ -79,6 +81,16 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	} catch {
 		replicas = [];
 	}
+	// Named keys (no secrets): metadata for the Keys section; reveal is a separate audited action.
+	// Attachment keys are listed by core too, but they belong to (and show under) their project.
+	let keys: StorageKeyView[] = [];
+	try {
+		keys = core.storage
+			.listKeys(principal, params.name)
+			.filter((key) => !key.name.startsWith('attachment-'));
+	} catch {
+		keys = [];
+	}
 	let replicaTargets: Array<{ name: string; nodeId: string }> = [];
 	if (storageCan(principal).update) {
 		try {
@@ -95,6 +107,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		storage,
 		replicas,
 		replicaTargets,
+		keys,
 		moveTargets,
 		metrics,
 		telemetryAvailable: (await core.ctx.telemetry?.ready()) ?? false,
@@ -127,7 +140,10 @@ export const actions: Actions = {
 		} catch (caught) {
 			return fail(failStatus(caught), toFormFailure(caught));
 		}
-		return { success: 'Replication rule registered. RustFS applies it on the next converge.' };
+		return {
+			success:
+				"Replication added. The target's buckets are created, then the source's node copies every object; the first full pass marks it protected."
+		};
 	},
 
 	removeReplica: async ({ request, locals, params }) => {
@@ -149,6 +165,88 @@ export const actions: Actions = {
 		} catch (caught) {
 			return fail(failStatus(caught), toFormFailure(caught));
 		}
+	},
+
+	createKey: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const expires = formString(data, 'expiresAt').trim();
+		let expiresAt: string | undefined;
+		if (expires) {
+			const parsedDate = Date.parse(expires.length === 10 ? `${expires}T23:59:59Z` : expires);
+			if (!Number.isFinite(parsedDate))
+				return fail(400, {
+					message: 'Expiry must be a date.',
+					fieldErrors: { expiresAt: 'Not a date.' }
+				});
+			expiresAt = new Date(parsedDate).toISOString();
+		}
+		const purpose = formString(data, 'purpose').trim();
+		const parsed = storageKeyCreateSchema.safeParse({
+			name: formString(data, 'name').trim().toLowerCase(),
+			grants: grantsFromForm(data),
+			...(purpose ? { purpose } : {}),
+			...(expiresAt ? { expiresAt } : {})
+		});
+		if (!parsed.success) {
+			return fail(400, {
+				message: parsed.error.issues[0]?.message ?? 'Check the key.',
+				fieldErrors: fieldErrorsFrom(parsed.error.issues)
+			});
+		}
+		try {
+			const key = core.storage.createKey(principal, params.name, parsed.data);
+			return {
+				success: `Key “${key.name}” created (${key.accessKeyId}). The node adds it within a minute; reveal it to copy the secret.`
+			};
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	/** Audited; the secret only travels in this response, never in page data. */
+	revealKey: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const id = formString(await request.formData(), 'id');
+		try {
+			return { revealedKey: core.storage.revealKey(principal, params.name, id) };
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	revokeKey: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const id = formString(await request.formData(), 'id');
+		try {
+			const key = core.storage.revokeKey(principal, params.name, id);
+			return { success: `Key “${key.name}” revoked. The node removes it within a minute.` };
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	rotateRoot: async ({ locals, params }) => {
+		const principal = locals.principal!;
+		try {
+			core.storage.rotateRootKey(principal, params.name);
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+		return {
+			success:
+				'Root key rotation started. RustFS restarts with the new key; once the node confirms it, the old key stops working.'
+		};
+	},
+
+	cancelRootRotation: async ({ locals, params }) => {
+		const principal = locals.principal!;
+		try {
+			core.storage.cancelRootKeyRotation(principal, params.name);
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+		return { success: 'Rotation cancelled. RustFS restarts with the current root key.' };
 	},
 
 	move: async ({ request, locals, params }) => {

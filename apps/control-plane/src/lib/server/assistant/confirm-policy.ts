@@ -22,14 +22,40 @@ export const CONFIRM_TOOLS: ReadonlySet<string> = new Set([
 	'deploy_to_environment',
 	'set_workload',
 	'rotate_database_credentials',
+	// A named credential's rotation restarts the apps that connect with it; a new one widens access.
+	'create_database_credential',
+	'rotate_database_credential',
 	'restore_database',
+	// Restarts the database on another image; a restore creates a database from production WAL.
+	'set_database_pitr',
+	'restore_database_to_time',
 	'restart_database',
+	// A replica reserves memory on its node, and attached apps restart once it streams (C7).
+	'create_database_replica',
+	// Restarts the database, and a version move is one-way.
+	'update_database',
 	'restart_services',
 	'restart_storage',
+	// Container console (D127): every replica restarts and requests fail meanwhile.
+	'restart_container',
+	// A new storage key widens access to buckets.
+	'create_storage_key',
 	'update_bucket_config',
 	'create_backup_target',
 	// Real mail to real people can't be recalled (docs/EMAIL.md §9).
-	'send_email'
+	'send_email',
+	// A sandbox recipient gets a verification email from Skiff: a third party, so a click first.
+	'add_email_address',
+	// Node tasks (D124) run production code: a consumer handles the message, the function the request.
+	'send_queue_message',
+	'redrive_queue',
+	'invoke_function',
+	'run_function_cron',
+	// Jobs (plan 09) run production code against production data.
+	'run_job',
+	'run_command',
+	// A log drain copies every log line out of Skiff, to a URL the model chose (DESIGN §8).
+	'create_log_drain'
 ]);
 
 export function needsConfirmation(

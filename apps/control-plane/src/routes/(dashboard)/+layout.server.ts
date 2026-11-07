@@ -70,6 +70,7 @@ export const load: LayoutServerLoad = ({ locals, url, cookies }) => {
 			createDomain: hasPermission(principal, 'domain:create'),
 			deleteDomain: hasPermission(principal, 'domain:delete'),
 			createSecret: hasPermission(principal, 'secret:create'),
+			updateSecret: hasPermission(principal, 'secret:update'),
 			deleteSecret: hasPermission(principal, 'secret:delete'),
 			manageWorkload: hasPermission(principal, 'project:update'),
 			manageNodes: principal.platformAdmin === true,

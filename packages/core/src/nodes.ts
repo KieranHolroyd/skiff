@@ -496,7 +496,12 @@ export class NodeService {
 			this.ctx.databases.applyHeartbeat(node.id, input.workloads);
 			this.ctx.storage.applyHeartbeat(node.id, input.workloads);
 			this.ctx.brokers.applyHeartbeat(node.id, input.workloads);
+			this.ctx.databaseReplicas.applyWorkloadReports(node.id, input.workloads);
 		}
+		if (input.databaseReplication?.length)
+			this.ctx.databaseReplicas.applyReplicationReports(node.id, input.databaseReplication);
+		if (input.databaseReplicaPromotionResults?.length)
+			this.ctx.databaseReplicas.applyPromotionResults(node.id, input.databaseReplicaPromotionResults);
 		if (input.databaseBackupResults?.length)
 			this.ctx.databases.applyBackupResults(node.id, input.databaseBackupResults);
 		if (input.databasePitrResults?.length)
@@ -513,16 +518,34 @@ export class NodeService {
 		if (input.purgedDatabases?.length) {
 			this.ctx.databases.applyPurged(node.id, input.purgedDatabases);
 			this.ctx.moves.onPurged(node.id, input.purgedDatabases);
+			this.ctx.databaseReplicas.applyPurged(node.id, input.purgedDatabases);
 		}
 		if (input.purgedStorage?.length) this.ctx.storage.applyPurged(node.id, input.purgedStorage);
 		if (input.purgedBrokers?.length) this.ctx.brokers.applyPurged(node.id, input.purgedBrokers);
+		if (input.appVolumeUsage?.length) this.ctx.appVolumes.lifecycle.applyUsage(node.id, input.appVolumeUsage);
+		if (input.appVolumeTaskResults?.length)
+			this.ctx.appVolumes.lifecycle.applyTaskResults(node.id, input.appVolumeTaskResults);
+		if (input.purgedAppVolumes?.length) this.ctx.appVolumes.lifecycle.applyPurged(node.id, input.purgedAppVolumes);
 		if (input.storageBucketDeletions?.length)
 			this.ctx.storage.applyBucketDeletions(node.id, input.storageBucketDeletions);
 		if (input.storageBucketConfigs?.length)
 			this.ctx.storage.applyBucketConfigReports(node.id, input.storageBucketConfigs);
+		if (input.storageRootKeys?.length) this.ctx.storage.applyRootKeyReports(node.id, input.storageRootKeys);
+		if (input.storageReplication?.length)
+			this.ctx.storageReplication.applyReports(node.id, input.storageReplication);
 		if (input.volumes) this.ctx.volumes.applyInventory(node.id, input.volumes);
+		// Custom domains go `active` once an edge reports serving their certificate.
+		if (input.stats?.certs?.length) {
+			try {
+				this.ctx.domains.applyServedCertificates(input.stats.certs);
+			} catch (cause) {
+				console.error('[nodes] could not apply certificate report:', cause);
+			}
+		}
 		// A database move waits for its source to stop the attached apps before dumping (D97).
 		this.ctx.moves.onHeartbeat(node.id, input.actualStateVersion, (input.workloads ?? []).map((item) => item.id));
+		// A replica promotion waits for the old primary's node to stop it (C7, §9.3).
+		this.ctx.databaseReplicas.onHeartbeat(node.id, input.actualStateVersion, (input.workloads ?? []).map((item) => item.id));
 		return { ok: true, desiredStateVersion: this.stateVersion() };
 	}
 
@@ -832,6 +855,9 @@ export class NodeService {
 		if (volumes.length) blockers.push(`app volumes (${names(volumes).join(', ')})`);
 		const moving = this.ctx.moves.nodeBlockers(nodeId);
 		if (moving.length) blockers.push(`database moves in progress (${moving.join(', ')})`);
+		// A live read replica must be removed first; one already being removed is forgotten (C7).
+		const replicaCount = this.ctx.databaseReplicas.liveCountOnNode(nodeId);
+		if (replicaCount) blockers.push(`database replicas (${replicaCount}; remove them first)`);
 		return blockers;
 	}
 
@@ -864,6 +890,7 @@ export class NodeService {
 			this.ctx.db.delete(nodes).where(eq(nodes.id, nodeId)).run();
 			// A removed node can never confirm a purge an earlier move left for it.
 			this.ctx.moves.forgetNode(nodeId);
+			this.ctx.databaseReplicas.forgetNode(nodeId);
 		});
 		this.ctx.audit.record({
 			principal,
@@ -886,8 +913,13 @@ export class NodeService {
 		this.ctx.projects.bump();
 	}
 
-	/** Provider-side overlay listeners for services this node hosts (C2). */
-	private serviceProvidersForNode(nodeId: string): ServiceProvider[] {
+	/**
+	 * Provider-side overlay listeners for services this node hosts (C2), plus the listeners read
+	 * replicas on other nodes stream through (C7). The agent keeps one listener per port, so every
+	 * consumer of a port is merged into that listener's allowlist: emitting one provider per
+	 * consumer used to leave all but the last consumer node refused.
+	 */
+	serviceProvidersForNode(nodeId: string): ServiceProvider[] {
 		const node = this.ctx.db.select().from(nodes).where(eq(nodes.id, nodeId)).get();
 		if (!node?.privateAddress) return [];
 		const rows = this.ctx.db
@@ -895,36 +927,49 @@ export class NodeService {
 			.from(serviceEndpoints)
 			.where(eq(serviceEndpoints.upstreamNodeId, nodeId))
 			.all();
-		if (rows.length === 0) return [];
-		return rows.flatMap((row) => {
+		const byPort = new Map<number, ServiceProvider>();
+		const add = (provider: ServiceProvider): void => {
+			const current = byPort.get(provider.listenPort);
+			if (!current) {
+				byPort.set(provider.listenPort, { ...provider, allowedClientFingerprints: [...provider.allowedClientFingerprints] });
+				return;
+			}
+			// Two services can never share a host port on one node, so the target agrees.
+			for (const fingerprint of provider.allowedClientFingerprints)
+				if (!current.allowedClientFingerprints.includes(fingerprint)) current.allowedClientFingerprints.push(fingerprint);
+		};
+		for (const row of rows) {
 			const targetPort =
 				row.serviceKind === 'database'
-					? this.ctx.db
+					? (this.ctx.databaseReplicas.servicePort(row.serviceId) ??
+						this.ctx.db
 							.select({ port: databases.hostPort })
 							.from(databases)
 							.where(eq(databases.id, row.serviceId))
-							.get()?.port
+							.get()?.port)
 					: this.ctx.db
 							.select({ port: storageInstances.hostPort })
 							.from(storageInstances)
 							.where(eq(storageInstances.id, row.serviceId))
 							.get()?.port;
-			if (!targetPort) return [];
+			if (!targetPort) continue;
 			const consumerCert = this.ctx.db
 				.select({ serial: nodeCertificates.serial })
 				.from(nodeCertificates)
 				.where(eq(nodeCertificates.nodeId, row.consumerNodeId))
 				.get();
-			return [
-				{
-					id: `svp_${row.id}`,
-					listenAddress: node.privateAddress!,
-					listenPort: row.upstreamPort,
-					targetPort,
-					allowedClientFingerprints: consumerCert ? [consumerCert.serial] : [],
-				},
-			];
-		});
+			add({
+				id: `svp_${row.id}`.slice(0, 100),
+				listenAddress: node.privateAddress,
+				listenPort: row.upstreamPort,
+				targetPort,
+				allowedClientFingerprints: consumerCert ? [consumerCert.serial] : [],
+			});
+		}
+		for (const provider of this.ctx.databaseReplicas.providersForNode(nodeId, node.privateAddress)) add(provider);
+		return [...byPort.values()]
+			.map((provider) => ({ ...provider, allowedClientFingerprints: [...provider.allowedClientFingerprints].sort() }))
+			.sort((a, b) => a.listenPort - b.listenPort);
 	}
 
 	/** Consumer-side loopback endpoints for this node's remote attachments (C2). */
@@ -1081,6 +1126,8 @@ export class NodeService {
 				.map((row) => [row.projectId, row]),
 		);
 
+		/** Projects that serve HTTP at all (everything but workers); candidates for a default page. */
+		const siteProjectIds = new Set<string>();
 		for (const project of projectRows) {
 			const target = targetOf(project) ?? node.id;
 			const local = target === node.id;
@@ -1107,6 +1154,7 @@ export class NodeService {
 				}
 				continue;
 			}
+			siteProjectIds.add(project.id);
 			// Apps proxy to the workload on their node; the edge reaches a worker's Caddy over WireGuard.
 			const upstream =
 				effectiveRuntime(project) !== 'static' && local
@@ -1177,7 +1225,12 @@ export class NodeService {
 					...(replicaUpstreams.length > 1
 						? {
 							upstreams: replicaUpstreams,
-							...(deploymentSpec?.healthPath ? { healthPath: deploymentSpec.healthPath } : {}),
+							...(deploymentSpec?.healthPath
+								? {
+										healthPath: deploymentSpec.healthPath,
+										healthIntervalSeconds: this.ctx.cluster.get().replicas.healthIntervalSeconds,
+									}
+								: {}),
 						}
 						: {}),
 					...functionRoute,
@@ -1193,7 +1246,7 @@ export class NodeService {
 					accessMode: previewAccessMode,
 					access: {
 						mode: previewAccessMode,
-						siteKey: siteKeyFor(this.ctx.config.siteCookieSecret, project.id),
+						siteKey: siteKeyFor(this.ctx.config.siteCookieSecret, project.id, project.siteSessionEpoch),
 						loginUrl: `${this.ctx.config.platformOrigin}/_skiff/site-login?project=${project.id}`,
 					},
 				});
@@ -1233,6 +1286,7 @@ export class NodeService {
 					slug: 'production',
 					isProduction: true,
 					access: project.productionAccess,
+					passwordHash: null,
 					deploymentId: project.productionDeploymentId,
 					createdAt: project.createdAt,
 					updatedAt: project.updatedAt,
@@ -1253,13 +1307,32 @@ export class NodeService {
 					accessMode,
 					access: {
 						mode: accessMode,
-						siteKey: siteKeyFor(this.ctx.config.siteCookieSecret, project.id),
+						siteKey: siteKeyFor(this.ctx.config.siteCookieSecret, project.id, project.siteSessionEpoch),
 						loginUrl: `${this.ctx.config.platformOrigin}/_skiff/site-login?project=${project.id}`,
 					},
 				});
 				if (environment.isProduction) productionProjectIds.add(project.id);
 			}
 		}
+
+		// A project created in the dashboard and never deployed gets a default page at its production
+		// host instead of "No site here". Only the edge answers public traffic, and only while there is
+		// no production pointer at all: a pointer whose release is missing is a fault, not a new project.
+		const placeholders = isEdge
+			? projectRows
+					.filter(
+						(project) =>
+							siteProjectIds.has(project.id) &&
+							!productionProjectIds.has(project.id) &&
+							!project.productionDeploymentId &&
+							!(environmentsByProject.get(project.id) ?? []).some((row) => row.isProduction && row.deploymentId),
+					)
+					.map((project) => ({
+						host: `${project.slug}.${this.ctx.config.contentDomain}`,
+						projectId: project.id,
+						dashboardUrl: `${this.ctx.config.platformOrigin.replace(/\/+$/, '')}/projects/${project.slug}`,
+					}))
+			: [];
 
 		const releaseRows = this.ctx.db.select().from(releases).all().filter((row) => releaseShas.has(row.sha256));
 		const releaseSpecs = await Promise.all(
@@ -1295,6 +1368,8 @@ export class NodeService {
 		const workloadRows = [
 			...this.ctx.workloads.desiredForNode(node.id),
 			...this.ctx.databases.desiredForNode(node.id),
+			// Postgres read replicas are their own database-profile workloads (C7).
+			...this.ctx.databaseReplicas.desiredForNode(node.id),
 			...this.ctx.storage.desiredForNode(node.id),
 			...this.ctx.brokers.desiredForNode(node.id),
 		];
@@ -1306,7 +1381,11 @@ export class NodeService {
 		const publicAddressOf = (id: string) => nodeById.get(id)?.publicAddress ?? null;
 		const databaseGateway = {
 			listen: isEdge ? `127.0.0.1:${this.ctx.config.databaseGatewayPort ?? 8082}` : null,
-			routes: this.ctx.databaseStudio.gatewayRoutes(node.id, isEdge, publicAddressOf),
+			routes: [
+				...this.ctx.databaseStudio.gatewayRoutes(node.id, isEdge, publicAddressOf),
+				// Container console fronts (D127) share the internal gateway with `console.internal` hosts.
+				...this.ctx.containerConsole.gatewayRoutes(node.id, isEdge, publicAddressOf),
+			],
 		};
 
 		return {
@@ -1326,11 +1405,21 @@ export class NodeService {
 			// 30 days), not for a fixed window.
 			revocations: this.ctx.access.revocations(),
 			hostRedirects,
+			placeholders,
 			workloads: workloadRows,
 			volumes: this.ctx.volumes.desiredForNode(node.id),
+			// App-volume usage, purges and snapshot/restore tasks (docs/VOLUMES.md §14).
+			appVolumes: this.ctx.appVolumes.lifecycle.volumesForNode(node.id),
+			appVolumePurges: this.ctx.appVolumes.lifecycle.purgesForNode(node.id),
+			appVolumeTasks: await this.ctx.appVolumes.lifecycle.tasksForNode(node.id),
 			// Trashed databases plus the old copy a finished (or rolled-back) move left here.
 			databasePurges: [
-				...new Set([...this.ctx.databases.purgesForNode(node.id), ...this.ctx.moves.purgesForNode(node.id)]),
+				...new Set([
+					...this.ctx.databases.purgesForNode(node.id),
+					...this.ctx.moves.purgesForNode(node.id),
+					// Removed replicas, promotion leftovers and fenced old primaries (C7).
+					...this.ctx.databaseReplicas.purgesForNode(node.id),
+				]),
 			].sort(),
 			databaseBackupTasks: await this.ctx.databases.backupTasksForNode(node.id),
 			databasePitrTasks: await this.ctx.databases.pitrTasksForNode(node.id),
@@ -1338,9 +1427,13 @@ export class NodeService {
 			databaseCredentialTasks: this.ctx.databases.credentialTasksForNode(node.id),
 			databaseStudioPrincipals: this.ctx.databaseStudio.principals.tasksForNode(node.id),
 			databasePoolerRestarts: this.ctx.databases.poolerRestartTasksForNode(node.id),
+			databaseReplication: this.ctx.databaseReplicas.replicationTasksForNode(node.id),
+			databaseReplicaLinks: this.ctx.databaseReplicas.linksForNode(node.id),
+			databaseReplicaPromotions: this.ctx.databaseReplicas.promotionsForNode(node.id),
 			storageGateway: this.ctx.storage.gatewayForNode(node.id, isEdge, (id) => nodeById.get(id)?.publicAddress ?? null),
 			studio: this.ctx.databaseStudio.desiredForNode(node.id),
 			databaseGateway,
+			containerConsole: this.ctx.containerConsole.desiredForNode(node),
 			storageRoutes: this.ctx.storage.routesForNode(node.id, isEdge, (id) => nodeById.get(id)?.publicAddress ?? null),
 			storagePurges: this.ctx.storage.purgesForNode(node.id),
 			brokerPurges: this.ctx.brokers.purgesForNode(node.id),

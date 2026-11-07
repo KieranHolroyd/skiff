@@ -6,6 +6,8 @@
 	import ArrowLeftRightIcon from '@lucide/svelte/icons/arrow-left-right';
 	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
+	import BoxIcon from '@lucide/svelte/icons/box';
+	import ClockIcon from '@lucide/svelte/icons/clock';
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import DatabaseIcon from '@lucide/svelte/icons/database';
 	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
@@ -21,6 +23,7 @@
 	import RocketIcon from '@lucide/svelte/icons/rocket';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
+	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import TrashIcon from '@lucide/svelte/icons/trash';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import UploadIcon from '@lucide/svelte/icons/upload';
@@ -50,10 +53,14 @@
 	import RowMenu from '../../_lib/RowMenu.svelte';
 	import TrafficDashboard from '../../_lib/TrafficDashboard.svelte';
 	import BuildsPanel from './_components/BuildsPanel.svelte';
+	import ContainerFiles from './_components/ContainerFiles.svelte';
+	import ContainerPanel from './_components/ContainerPanel.svelte';
+	import ContainerShell from './_components/ContainerShell.svelte';
 	import DatabasesCard from './_components/DatabasesCard.svelte';
 	import DomainsPanel from './_components/DomainsPanel.svelte';
 	import EnvironmentsPanel from './_components/EnvironmentsPanel.svelte';
 	import LogsPanel from './_components/LogsPanel.svelte';
+	import JobsPanel from './_components/JobsPanel.svelte';
 	import {
 		PROJECT_TABS,
 		readProjectTab,
@@ -95,6 +102,19 @@
 	let logBuildId = $state(page.url.searchParams.get('build') ?? '');
 	let logDeploymentId = $state(page.url.searchParams.get('deployment') ?? '');
 
+	// Container console (D127): one replica choice shared by Overview, Shell and Files.
+	let containerReplica = $state<number | null>(null);
+	let filesPath = $state(page.url.searchParams.get('path') ?? '/');
+	let filesKey = $state(0);
+	function openContainer(next: 'shell' | 'files' | 'logs', path?: string) {
+		if (next === 'files' && path) {
+			filesPath = path;
+			filesKey += 1;
+		}
+		if (next === 'logs') logSource = 'runtime';
+		setTab(next);
+	}
+
 	// Deploy dialog
 	let deployOpen = $state(false);
 	let deployEnvironment = $state('production');
@@ -113,6 +133,12 @@
 	let accessOpen = $state(false);
 	let accessScope = $state<'production' | 'previews'>('production');
 	let accessMode = $state('public');
+	/** Re-saving password mode on a scope that already has a password may leave the field blank. */
+	const accessKeepsPassword = $derived(
+		accessScope === 'production'
+			? data.project.productionAccess === 'password' && data.project.productionPasswordSet
+			: data.project.previewAccess === 'password' && data.project.previewPasswordSet
+	);
 
 	// Project details dialog
 	let projectOpen = $state(false);
@@ -262,6 +288,29 @@
 			tone: 'danger',
 			action: '?/deleteDeployment',
 			fields: { deploymentId: deployment.id }
+		});
+	}
+
+	function revokeSiteSession(id: string) {
+		askConfirm({
+			title: 'End this visitor session?',
+			description:
+				'The visitor loses access within seconds. The share link keeps working, so revoke the link too if they should not come back.',
+			confirmLabel: 'End session',
+			tone: 'danger',
+			action: '?/revokeSiteSession',
+			fields: { sessionId: id }
+		});
+	}
+
+	function signOutVisitors() {
+		askConfirm({
+			title: `Sign out every visitor of ${data.project.name}?`,
+			description:
+				'Password, platform and share-link sessions end on production, previews and every environment within seconds. Visitors have to sign in again; share links keep working.',
+			confirmLabel: 'Sign out everyone',
+			tone: 'danger',
+			action: '?/signOutVisitors'
 		});
 	}
 
@@ -419,7 +468,47 @@
 	</Card.Root>
 
 	<div class="min-w-0">
-		{#if tab === 'traffic'}
+		{#if (tab === 'container' || tab === 'shell' || tab === 'files') && data.project.runtime !== 'container'}
+			<EmptyState
+				icon={BoxIcon}
+				title="Only container projects have a console"
+				description="Inspect, file browsing and shells are for projects with runtime “container”. This project runs as {data.project.runtime}."
+			/>
+		{:else if tab === 'container'}
+			{#if data.can.inspectContainer}
+				<ContainerPanel
+					slug={data.project.slug}
+					cpus={data.workload?.cpus ?? null}
+					bind:replica={containerReplica}
+					can={{
+						restart: data.can.restartContainer,
+						files: data.can.containerFiles,
+						exec: data.can.containerExec
+					}}
+					onOpen={openContainer}
+				/>
+			{:else}
+				<EmptyState icon={BoxIcon} title="No access" description="Inspecting containers needs the container:inspect permission." />
+			{/if}
+		{:else if tab === 'shell'}
+			{#if data.can.containerExec}
+				<ContainerShell slug={data.project.slug} bind:replica={containerReplica} />
+			{:else}
+				<EmptyState
+					icon={SquareTerminalIcon}
+					title="No access"
+					description="Opening a shell needs the container:exec permission and a signed-in person (API keys and MCP clients cannot)."
+				/>
+			{/if}
+		{:else if tab === 'files'}
+			{#if data.can.containerFiles}
+				{#key filesKey}
+					<ContainerFiles slug={data.project.slug} bind:replica={containerReplica} initialPath={filesPath} />
+				{/key}
+			{:else}
+				<EmptyState icon={FolderTreeIcon} title="No access" description="Browsing container files needs the container:files permission." />
+			{/if}
+		{:else if tab === 'traffic'}
 			<TrafficDashboard
 				traffic={data.traffic}
 				range={data.trafficRange}
@@ -548,9 +637,34 @@
 				can={{
 					edit: data.can.manageWorkload,
 					createSecret: data.can.createSecret,
+					updateSecret: data.can.updateSecret,
 					deleteSecret: data.can.deleteSecret
 				}}
 			/>
+		{:else if tab === 'jobs'}
+			{#if !data.jobsEnabled}
+				<EmptyState
+					icon={ClockIcon}
+					title="Jobs are not enabled"
+					description="A platform admin turns jobs on with SKIFF_FEATURE_JOBS=1."
+				/>
+			{:else if data.project.runtime === 'static'}
+				<EmptyState
+					icon={ClockIcon}
+					title="Jobs run on apps"
+					description="A job is a command run in a process or container app's sandbox, on a schedule or by hand. A static site has no process to run it in."
+				/>
+			{:else}
+				<JobsPanel
+					slug={data.project.slug}
+					deployed={Boolean(data.workload)}
+					can={{
+						manage: data.can.update && data.can.createDeployment,
+						run: data.can.createDeployment,
+						readLogs: data.can.readLogs
+					}}
+				/>
+			{/if}
 		{:else if tab === 'runtime'}
 			{#if data.project.runtime !== 'static' && data.workloadSpec}
 				<div class="mb-5">
@@ -861,6 +975,53 @@
 								</Item.Root>
 							{/each}
 						</Item.Group>
+						<div class="mt-4 space-y-2">
+							<div class="flex items-center justify-between gap-3">
+								<div class="min-w-0">
+									<p class="text-sm font-medium">Visitor sessions</p>
+									<p class="text-xs text-muted-foreground">
+										{data.siteSessions.length === 0
+											? 'No live share-link sessions.'
+											: `${data.siteSessions.length} live share-link ${data.siteSessions.length === 1 ? 'session' : 'sessions'}.`}
+										Password and platform sign-ins are not listed.
+									</p>
+								</div>
+								{#if data.can.update}
+									<Button variant="outline" size="sm" onclick={signOutVisitors}
+										>Sign out everyone</Button
+									>
+								{/if}
+							</div>
+							{#if data.siteSessions.length > 0}
+								<ul class="divide-y rounded-lg border">
+									{#each data.siteSessions.slice(0, 20) as session (session.id)}
+										<li class="flex items-center justify-between gap-3 px-3 py-2">
+											<div class="min-w-0">
+												<p class="truncate text-sm">
+													{session.email ?? session.note ?? 'Share-link visitor'}
+												</p>
+												<p class="truncate font-mono text-xs text-muted-foreground">
+													{session.host} · until
+													<time datetime={session.expiresAt}>{formatDateTime(session.expiresAt)}</time>
+												</p>
+											</div>
+											{#if data.can.revokeShare}
+												<Button
+													variant="ghost-danger"
+													size="sm"
+													onclick={() => revokeSiteSession(session.id)}>End</Button
+												>
+											{/if}
+										</li>
+									{/each}
+								</ul>
+								{#if data.siteSessions.length > 20}
+									<p class="text-xs text-muted-foreground">
+										Showing the 20 newest. Sign out everyone to end them all.
+									</p>
+								{/if}
+							{/if}
+						</div>
 					</Card.Content>
 					<Card.Footer class="text-xs text-muted-foreground">
 						Protected sites set <code class="mx-1 font-mono">X-Robots-Tag: noindex</code> and never receive
@@ -1122,18 +1283,25 @@
 			</Field.Field>
 			{#if accessMode === 'password'}
 				<Field.Field data-invalid={result?.fieldErrors?.password ? true : undefined}>
-					<Field.Label for="access-password">Project password</Field.Label>
+					<Field.Label for="access-password"
+						>{accessScope === 'production' ? 'Production' : 'Preview'} password</Field.Label
+					>
 					<Input
 						id="access-password"
 						name="password"
 						type="password"
 						autocomplete="new-password"
 						minlength={8}
-						required
+						required={!accessKeepsPassword}
+						placeholder={accessKeepsPassword ? 'Unchanged' : undefined}
 						aria-invalid={result?.fieldErrors?.password ? 'true' : undefined}
 					/>
 					<Field.Description
-						>At least 8 characters. One secret for the whole project.</Field.Description
+						>{accessKeepsPassword
+							? 'Leave blank to keep the current password. '
+							: 'At least 8 characters. '}Only {accessScope === 'production'
+							? 'production'
+							: 'previews'} use it; the other scope keeps its own.</Field.Description
 					>
 					{#if result?.fieldErrors?.password}<Field.Error>{result.fieldErrors.password}</Field.Error
 						>{/if}

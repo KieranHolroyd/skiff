@@ -9,6 +9,8 @@ import {
 	processIdleStopIssue,
 	functionIsPython,
 	FUNCTIONS_PYTHON_CAPABILITY,
+	BUN_DEFAULT_COMMAND,
+	PROCESS_NODE_CAPABILITY,
 	requirePermission,
 	workloadEnvIssues,
 	workloadReplicaId,
@@ -39,6 +41,21 @@ import { nodeDiskFreeBytes } from './app-volumes.ts';
 import type { ProjectRow } from './projects.ts';
 
 export type WorkloadRow = typeof workloads.$inferSelect;
+
+/** One spread replica copy as the failover controller sees it (CLUSTERING §8.3). */
+export interface ReplicaCopy {
+	id: string;
+	workloadId: string;
+	projectId: string;
+	orgId: string;
+	projectSlug: string;
+	nodeId: string;
+	replicaIndex: number;
+	status: string;
+	/** HTTP copies move before workers (§8.3 step 3). */
+	ingress: 'http' | 'none';
+	updatedAt: number;
+}
 
 const ACTIVE_STATUSES: WorkloadStatus[] = ['pending', 'starting', 'running'];
 
@@ -90,11 +107,13 @@ export class WorkloadService {
 	plan(principal: Principal, project: ProjectRow, input?: Partial<WorkloadSpec>): ResolvedWorkload {
 		requirePermission(principal, 'deployment:create');
 		const runtime = effectiveRuntime(project);
-		const spec = workloadSpecSchema.parse({
-			...(this.projectSpec(project) ?? this.defaultSpec(project)),
-			...input,
-			runtime: runtime === 'static' ? (input?.runtime ?? 'process') : runtime,
-		});
+		const spec = withEngineCommand(
+			workloadSpecSchema.parse({
+				...(this.projectSpec(project) ?? this.defaultSpec(project)),
+				...input,
+				runtime: runtime === 'static' ? (input?.runtime ?? 'process') : runtime,
+			}),
+		);
 		if (runtime === 'static')
 			throw new ValidationError(
 				`Project "${project.slug}" is static. Create it with runtime "process", "container" or "function" to run a workload.`,
@@ -162,6 +181,9 @@ export class WorkloadService {
 		}
 		if (crossNode) this.ctx.endpoints.reconcile(project.id, decision.nodeId);
 		if (runtime === 'function') this.assertFunctionTarget(decision.nodeId, Boolean(spec.function && functionIsPython(spec.function)));
+		if (spec.runtime === 'process' && spec.engine === 'node')
+			for (const nodeId of new Set([decision.nodeId, ...(replicas ?? []).map((replica) => replica.nodeId)]))
+				this.assertNodeEngineTarget(nodeId);
 		const current = this.ctx.db
 			.select({ memoryMb: workloads.memoryMb })
 			.from(workloads)
@@ -234,7 +256,9 @@ export class WorkloadService {
 	async setVariables(principal: Principal, project: ProjectRow, input: WorkloadVariables): Promise<WorkloadView | null> {
 		requirePermission(principal, 'project:update');
 		const variables = workloadVariablesSchema.parse(input);
-		if (variables.newSecrets.length > 0) requirePermission(principal, 'secret:create');
+		// Adding a name needs `secret:create`, a new value for a live one `secret:update`; all are
+		// checked before anything is written.
+		for (const secret of variables.newSecrets) this.ctx.secrets.requireWrite(principal, { name: secret.name, projectId: project.id });
 		const runtime = effectiveRuntime(project);
 		if (runtime === 'static')
 			throw new ValidationError(`Project "${project.slug}" is static and has no environment variables.`);
@@ -310,6 +334,22 @@ export class WorkloadService {
 			throw new ValidationError(
 				`Node "${node.name}" cannot run Python functions yet: its Pyodide cache is not installed. Run \`sudo bun /opt/skiff/current/repo/scripts/install/pyodide.ts\` on the node (or upgrade it), then deploy again.`,
 			);
+	}
+
+	/**
+	 * A Node.js process app runs on the node's pinned Node (D125), which the agent advertises as
+	 * `process-node`. Refuse the deploy instead of crash-looping a unit with no `node` on its PATH.
+	 */
+	private assertNodeEngineTarget(nodeId: string): void {
+		const node = this.ctx.db
+			.select({ name: nodes.name, capabilitiesJson: nodes.capabilitiesJson })
+			.from(nodes)
+			.where(eq(nodes.id, nodeId))
+			.get();
+		if (node && nodeCapabilities(node.capabilitiesJson).includes(PROCESS_NODE_CAPABILITY)) return;
+		throw new ValidationError(
+			`Node "${node?.name ?? nodeId}" cannot run Node.js apps yet: its pinned Node.js is not installed. Run \`sudo bun /opt/skiff/current/repo/scripts/install/node.ts\` on the node (or upgrade it), then deploy again.`,
+		);
 	}
 
 	/** Re-point the workload at an existing deployment (promote/rollback); placement is preserved. */
@@ -494,6 +534,8 @@ export class WorkloadService {
 				status: quiesced.has(project.id) ? 'stopped' : 'running',
 				release: release?.sha256 ?? null,
 				...(spec.command ? { command: spec.command } : {}),
+				// Node apps only (D125): every Bun workload's desired state stays byte-for-byte the same.
+				...(spec.runtime === 'process' && spec.engine === 'node' ? { engine: 'node' as const } : {}),
 				...(spec.image ? { image: spec.image } : {}),
 				// A function owns a socket per replica (phase 4). Replica 0 keeps the workload id, so
 				// a single-host function dials `<workload-id>.sock`, matching the helper's socket unit.
@@ -549,68 +591,99 @@ export class WorkloadService {
 		});
 	}
 
-	/** Move replicas off offline/draining nodes onto healthy workers (C4). */
-	rebalanceReplicas(): number {
-		if (!featureEnabled(this.ctx.config, 'MULTI_NODE_REPLICAS')) return 0;
-		const rows = this.ctx.db.select().from(workloadReplicas).all();
-		if (rows.length === 0) return 0;
-		const statuses = new Map(this.ctx.db.select().from(nodes).all().map((node) => [node.id, node.status]));
-		const byWorkload = new Map<string, typeof rows>();
-		for (const row of rows) {
-			const list = byWorkload.get(row.workloadId) ?? [];
-			list.push(row);
-			byWorkload.set(row.workloadId, list);
-		}
-		let moved = 0;
-		for (const [workloadId, copies] of byWorkload) {
-			const bad = copies.filter((row) => statuses.get(row.nodeId) !== 'online');
-			if (bad.length === 0) continue;
-			const workload = this.ctx.db.select().from(workloads).where(eq(workloads.id, workloadId)).get();
-			if (!workload) continue;
-			const project = this.requireProject(workload.projectId);
-			const spec = this.specOf(project, workload);
-			const keep = new Set(copies.filter((row) => !bad.includes(row)).map((row) => row.nodeId));
-			const candidates = this.candidates()
-				.filter((candidate) => candidate.status === 'online' && candidate.mode !== 'edge' && !keep.has(candidate.id))
-				.map((candidate) => ({
-					id: candidate.id,
-					name: candidate.name,
-					zone: candidate.zone ?? 'default',
-					status: candidate.status,
-					freeMemoryMb: candidate.sliceMemoryMb - candidate.reservedMemoryMb,
-				}));
-			const planned = planReplicas({
-				count: bad.length,
-				memoryMb: spec.memoryMb,
-				spread: this.ctx.cluster.get().replicas.spread,
-				candidates,
-			});
-			if (!planned.ok) continue;
-			const now = this.ctx.now();
-			planned.plan.assignments.forEach((assignment, index) => {
-				const row = bad[index];
-				if (!row) return;
-				this.ctx.db
-					.update(workloadReplicas)
-					.set({
-						nodeId: assignment.nodeId,
-						status: 'pending',
-						placementReason: 'failover',
-						updatedAt: now,
-					})
-					.where(eq(workloadReplicas.id, row.id))
-					.run();
-				if (row.replicaIndex === 0)
-					this.ctx.db
-						.update(workloads)
-						.set({ nodeId: assignment.nodeId, status: 'pending', updatedAt: now })
-						.where(eq(workloads.id, workloadId))
-						.run();
-				moved += 1;
-			});
-			this.ctx.projects.bump(project.orgId);
-		}
-		return moved;
+	/**
+	 * Every spread replica copy, for the failover controller (docs/CLUSTERING.md §8.3). Empty when
+	 * multi-node replicas are off, because then no copy has a node of its own to lose.
+	 */
+	replicaCopies(): ReplicaCopy[] {
+		if (!featureEnabled(this.ctx.config, 'MULTI_NODE_REPLICAS')) return [];
+		const rows = this.ctx.db
+			.select({ replica: workloadReplicas, workload: workloads, project: projects })
+			.from(workloadReplicas)
+			.innerJoin(workloads, eq(workloads.id, workloadReplicas.workloadId))
+			.innerJoin(projects, eq(projects.id, workloadReplicas.projectId))
+			.all();
+		return rows.map(({ replica, workload, project }) => ({
+			id: replica.id,
+			workloadId: replica.workloadId,
+			projectId: replica.projectId,
+			orgId: project.orgId,
+			projectSlug: project.slug,
+			nodeId: replica.nodeId,
+			replicaIndex: replica.replicaIndex,
+			status: replica.status,
+			ingress: this.specOf(project as ProjectRow, workload).ingress === 'none' ? 'none' : 'http',
+			updatedAt: replica.updatedAt,
+		}));
+	}
+
+	/**
+	 * Admission for moving one copy (§8.2 steps 1–4): an online non-edge node with room, not one
+	 * that already holds a copy of this workload (nor its zone under `spread: zone`), and not in
+	 * `exclude` (the controller's flapping and rate-limit filter). Writes nothing.
+	 */
+	planReplicaMove(
+		replicaId: string,
+		exclude: ReadonlySet<string> = new Set(),
+	): { ok: true; nodeId: string; nodeName: string } | { ok: false; message: string } {
+		const row = this.ctx.db.select().from(workloadReplicas).where(eq(workloadReplicas.id, replicaId)).get();
+		if (!row) return { ok: false, message: 'The copy no longer exists.' };
+		const workload = this.ctx.db.select().from(workloads).where(eq(workloads.id, row.workloadId)).get();
+		if (!workload) return { ok: false, message: 'The workload no longer exists.' };
+		const spec = this.specOf(this.requireProject(workload.projectId), workload);
+		const siblings = this.ctx.db
+			.select()
+			.from(workloadReplicas)
+			.where(eq(workloadReplicas.workloadId, row.workloadId))
+			.all()
+			.filter((other) => other.id !== row.id);
+		const all = this.candidates();
+		const zoneOf = new Map(all.map((candidate) => [candidate.id, candidate.zone ?? 'default']));
+		const spread = this.ctx.cluster.get().replicas.spread;
+		const keptNodes = new Set(siblings.map((other) => other.nodeId));
+		const keptZones = new Set(siblings.map((other) => zoneOf.get(other.nodeId) ?? 'default'));
+		const candidates = all
+			.filter((candidate) => candidate.mode !== 'edge' && candidate.id !== row.nodeId && !exclude.has(candidate.id))
+			.filter((candidate) => !keptNodes.has(candidate.id))
+			.filter((candidate) => spread !== 'zone' || !keptZones.has(candidate.zone ?? 'default'))
+			.map((candidate) => ({
+				id: candidate.id,
+				name: candidate.name,
+				zone: candidate.zone ?? 'default',
+				status: candidate.status,
+				freeMemoryMb: candidate.sliceMemoryMb - candidate.reservedMemoryMb,
+			}));
+		if (candidates.length === 0)
+			return { ok: false, message: 'placement_blocked: no other online node can take this copy.' };
+		const planned = planReplicas({ count: 1, memoryMb: spec.memoryMb, spread, candidates });
+		if (!planned.ok) return { ok: false, message: `placement_blocked: ${planned.message}` };
+		const target = planned.plan.assignments[0]!;
+		return { ok: true, nodeId: target.nodeId, nodeName: candidates.find((c) => c.id === target.nodeId)?.name ?? target.nodeId };
+	}
+
+	/**
+	 * Re-place one copy (§8.3 step 6): the row keeps its index, records why it moved and goes
+	 * `pending` until the new node reports it. Desired state for both nodes and the ingress
+	 * upstreams follow from the bump. The caller (the failover controller) holds the lease.
+	 */
+	moveReplica(replicaId: string, nodeId: string, reason: 'failover' | 'drain'): void {
+		const row = this.ctx.db.select().from(workloadReplicas).where(eq(workloadReplicas.id, replicaId)).get();
+		if (!row) throw new NotFoundError('Workload replica');
+		const workload = this.ctx.db.select().from(workloads).where(eq(workloads.id, row.workloadId)).get();
+		if (!workload) throw new NotFoundError('Workload');
+		const now = this.ctx.now();
+		this.ctx.db
+			.update(workloadReplicas)
+			.set({ nodeId, status: 'pending', placementReason: reason, updatedAt: now })
+			.where(eq(workloadReplicas.id, row.id))
+			.run();
+		if (row.replicaIndex === 0)
+			this.ctx.db
+				.update(workloads)
+				.set({ nodeId, status: 'pending', updatedAt: now })
+				.where(eq(workloads.id, workload.id))
+				.run();
+		this.ctx.projects.bump(this.requireProject(workload.projectId).orgId);
 	}
 
 	/**
@@ -618,13 +691,31 @@ export class WorkloadService {
 	 * is never cached on disk by the agent.
 	 */
 	activation(nodeId: string, desiredId: string): WorkloadActivation {
+		// Read replicas (`db_dbr_…`) carry the database prefix too, so route them first (C7).
+		if (this.ctx.databaseReplicas.isReplicaWorkloadId(desiredId))
+			return this.ctx.databaseReplicas.activation(nodeId, desiredId);
 		if (this.ctx.databases.isDatabaseId(desiredId)) return this.ctx.databases.activation(nodeId, desiredId);
 		if (this.ctx.storage.isStorageId(desiredId)) return this.ctx.storage.activation(nodeId, desiredId);
 		if (this.ctx.brokers.isBrokerId(desiredId)) return this.ctx.brokers.activation(nodeId, desiredId);
 		const { workloadId, replica } = parseWorkloadReplicaId(desiredId);
 		const row = this.ctx.db.select().from(workloads).where(eq(workloads.id, workloadId)).get();
 		if (!row) throw new NotFoundError('Workload');
-		if (row.nodeId !== nodeId) throw new CoreError('forbidden', 'This workload is placed on another node.', 403);
+		// A spread copy (C4) lives on its own node; a copy re-placed by failover keeps its index.
+		const spreadCopy =
+			row.nodeId !== nodeId &&
+			this.ctx.db
+				.select({ id: workloadReplicas.id })
+				.from(workloadReplicas)
+				.where(
+					and(
+						eq(workloadReplicas.workloadId, workloadId),
+						eq(workloadReplicas.replicaIndex, replica),
+						eq(workloadReplicas.nodeId, nodeId),
+					),
+				)
+				.get();
+		if (row.nodeId !== nodeId && !spreadCopy)
+			throw new CoreError('forbidden', 'This workload is placed on another node.', 403);
 		const spec = this.specOf(this.requireProject(row.projectId), row);
 		if (replica >= spec.replicas) throw new NotFoundError('Workload replica');
 		// Attached database, storage and broker connection values sit under the spec's own env and secrets (D56, S4, D111).
@@ -683,6 +774,7 @@ export class WorkloadService {
 
 	/** Apply the agent's actual-state report from a heartbeat. */
 	applyHeartbeat(nodeId: string, reports: Array<{ id: string; status: WorkloadStatus; restarts: number }>): void {
+		this.applyReplicaReports(nodeId, reports);
 		for (const report of aggregateReplicaReports(reports)) {
 			const row = this.ctx.db.select().from(workloads).where(eq(workloads.id, report.id)).get();
 			if (!row || row.nodeId !== nodeId) continue;
@@ -697,6 +789,29 @@ export class WorkloadService {
 					updatedAt: this.ctx.now(),
 				})
 				.where(eq(workloads.id, row.id))
+				.run();
+		}
+	}
+
+	/**
+	 * Per-copy status for spread replicas (C4): the failover controller completes a move when the
+	 * copy reports `running` from its new node. Only rows placed on the reporting node change.
+	 */
+	private applyReplicaReports(nodeId: string, reports: Array<{ id: string; status: WorkloadStatus; restarts: number }>): void {
+		if (!featureEnabled(this.ctx.config, 'MULTI_NODE_REPLICAS')) return;
+		const rows = this.ctx.db.select().from(workloadReplicas).where(eq(workloadReplicas.nodeId, nodeId)).all();
+		if (rows.length === 0) return;
+		const byCopy = new Map(rows.map((row) => [workloadReplicaId(row.workloadId, row.replicaIndex), row]));
+		const now = this.ctx.now();
+		for (const report of reports) {
+			const row = byCopy.get(report.id);
+			if (!row) continue;
+			const status = report.status === 'running' && report.restarts >= 5 ? 'failed' : report.status;
+			if (status === row.status) continue;
+			this.ctx.db
+				.update(workloadReplicas)
+				.set({ status, updatedAt: now })
+				.where(eq(workloadReplicas.id, row.id))
 				.run();
 		}
 	}
@@ -781,9 +896,21 @@ export class WorkloadService {
 			this.ctx.email.consumerVersion(projectId),
 			this.ctx.appVolumes.projectVersion(projectId),
 			this.secretsVersion(orgId, projectId, spec),
+			this.restartVersion(projectId),
 		]
 			.filter(Boolean)
 			.join(':');
+	}
+
+	/** A console restart (D127) bumps this; zero adds nothing, so existing hashes stay put. */
+	private restartVersion(projectId: string): string {
+		const generation =
+			this.ctx.db
+				.select({ generation: workloads.restartGeneration })
+				.from(workloads)
+				.where(eq(workloads.projectId, projectId))
+				.get()?.generation ?? 0;
+		return generation > 0 ? `restart:${generation}` : '';
 	}
 
 	private secretsVersion(orgId: string, projectId: string, spec: WorkloadSpec): string {
@@ -1032,4 +1159,19 @@ function placementSpecFor(project: ProjectRow): import('@skiff/contracts').Place
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * Clear the Bun default from a Node.js process app (D125), so the node runs its package.json
+ * `start` script instead. A spec still carrying `bun run start` (the starting value of a new
+ * process project, or one saved before the engine was switched) gets no command; any other
+ * explicit command is the user's and is left alone.
+ */
+export function withEngineCommand(spec: WorkloadSpec): WorkloadSpec {
+	if (spec.runtime !== 'process' || spec.engine !== 'node' || !spec.command) return spec;
+	const bun = BUN_DEFAULT_COMMAND;
+	const isBunDefault = spec.command.length === bun.length && spec.command.every((arg, index) => arg === bun[index]);
+	if (!isBunDefault) return spec;
+	const { command: _bun, ...rest } = spec;
+	return rest as WorkloadSpec;
 }

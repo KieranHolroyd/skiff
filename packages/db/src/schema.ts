@@ -189,6 +189,21 @@ export const databaseReplicas = sqliteTable(
 		lagSeconds: real('lag_seconds'),
 		slot: text('slot'),
 		primaryGeneration: integer('primary_generation').notNull().default(0),
+		/** Loopback port the replica publishes on its node (0069). */
+		hostPort: integer('host_port'),
+		volumeId: text('volume_id'),
+		mode: text('mode', { enum: ['async', 'sync'] }).notNull().default('async'),
+		/** Last problem the primary or the replica node reported. */
+		message: text('message'),
+		sentLsn: text('sent_lsn'),
+		/** When the primary last reported this replica's slot. */
+		reportedAt: integer('reported_at'),
+		/** Delete requested: the replica stops, its node purges the data dir, the primary drops the slot. */
+		removingAt: integer('removing_at'),
+		/** The replica's node confirmed the data dir is gone. */
+		purgedAt: integer('purged_at'),
+		/** Re-add a fresh replica on the same node once this one is purged (after a promotion). */
+		rebuildOnPurge: integer('rebuild_on_purge', { mode: 'boolean' }).notNull().default(false),
 		createdAt: integer('created_at').notNull().$defaultFn(now),
 		updatedAt: integer('updated_at').notNull().$defaultFn(now),
 	},
@@ -213,8 +228,67 @@ export const databaseFailovers = sqliteTable(
 		reason: text('reason'),
 		startedAt: integer('started_at').notNull(),
 		finishedAt: integer('finished_at'),
+		/** The replica being promoted (0069). */
+		replicaId: text('replica_id'),
+		/** State version the fence was issued at; the old node confirms at or after it. */
+		fenceVersion: integer('fence_version'),
+		fencedAt: integer('fenced_at'),
+		promotedAt: integer('promoted_at'),
+		/** The old primary's data dir was deleted on its node. */
+		oldPurgedAt: integer('old_purged_at'),
+		/** The promoted replica's leftover directory was deleted. */
+		replicaPurgedAt: integer('replica_purged_at'),
+		message: text('message'),
 	},
-	(t) => [index('database_failovers_database_idx').on(t.databaseId, t.startedAt)],
+	(t) => [
+		index('database_failovers_database_idx').on(t.databaseId, t.startedAt),
+		index('database_failovers_status_idx').on(t.status),
+	],
+);
+
+/** Replication role password and apply state per primary (C7, 0069). */
+export const databaseReplication = sqliteTable('database_replication', {
+	databaseId: text('database_id').primaryKey(),
+	secretSealed: text('secret_sealed').notNull(),
+	appliedVersion: text('applied_version'),
+	appliedAt: integer('applied_at'),
+	error: text('error'),
+	createdAt: integer('created_at').notNull().$defaultFn(now),
+	updatedAt: integer('updated_at').notNull().$defaultFn(now),
+});
+
+/** Failover controller history (C8, migration 0060); see `@skiff/contracts` FailoverEventView. */
+export const failoverEvents = sqliteTable(
+	'failover_events',
+	{
+		id: text('id').primaryKey(),
+		kind: text('kind', { enum: ['replica', 'ingress', 'database', 'lease'] }).notNull(),
+		status: text('status', {
+			enum: ['queued', 'in-progress', 'completed', 'failed', 'blocked', 'expired', 'cancelled', 'manual'],
+		}).notNull(),
+		stage: text('stage', { enum: ['detect', 'decide', 'fence', 'promote', 'repoint', 'heal', 'complete'] })
+			.notNull()
+			.default('detect'),
+		subjectId: text('subject_id').notNull(),
+		subjectName: text('subject_name'),
+		orgId: text('org_id'),
+		fromNodeId: text('from_node_id'),
+		toNodeId: text('to_node_id'),
+		reason: text('reason').notNull().default(''),
+		epoch: integer('epoch').notNull().default(0),
+		/** Database failovers: the primary generation the promotion moves to. */
+		generation: integer('generation'),
+		detectedAt: integer('detected_at').notNull(),
+		/** When the controller wrote the change; rate limits and the completion timeout count from it. */
+		appliedAt: integer('applied_at'),
+		updatedAt: integer('updated_at').notNull(),
+		finishedAt: integer('finished_at'),
+	},
+	(t) => [
+		index('failover_events_status_idx').on(t.status, t.updatedAt),
+		index('failover_events_subject_idx').on(t.kind, t.subjectId, t.fromNodeId),
+		index('failover_events_detected_idx').on(t.detectedAt),
+	],
 );
 
 /** Bucket replication from a source storage instance to a passive target (C9). */
@@ -232,6 +306,18 @@ export const storageReplication = sqliteTable(
 			.default('pending'),
 		lastSyncAt: integer('last_sync_at'),
 		lagSeconds: real('lag_seconds'),
+		/** Scoped key the runner uses on the peer instance (0059); the secret is sealed. */
+		accessKeyId: text('access_key_id'),
+		secretSealed: text('secret_sealed'),
+		lastError: text('last_error'),
+		lastAttemptAt: integer('last_attempt_at'),
+		/** First pass that finished with nothing pending; RPO is unbounded before it. */
+		initialSyncAt: integer('initial_sync_at'),
+		pendingObjects: integer('pending_objects'),
+		objectsCopied: integer('objects_copied').notNull().default(0),
+		bytesCopied: integer('bytes_copied').notNull().default(0),
+		/** Latest per-bucket report from the runner. */
+		bucketsJson: text('buckets_json'),
 		createdAt: integer('created_at').notNull().$defaultFn(now),
 		updatedAt: integer('updated_at').notNull().$defaultFn(now),
 	},
@@ -320,6 +406,8 @@ export const appVolumes = sqliteTable(
 		sizeMb: integer('size_mb').notNull(),
 		/** Latest helper usage sample; null until the node reports one. */
 		usedBytes: integer('used_bytes'),
+		/** When the node measured `usedBytes` (epoch ms). */
+		usedAt: integer('used_at'),
 		/** Last attached mount path, for display; attachments carry the authoritative value. */
 		mountPath: text('mount_path').notNull().default(''),
 		status: text('status', { enum: ['pending', 'ready', 'missing', 'failed', 'deleting'] })
@@ -333,6 +421,10 @@ export const appVolumes = sqliteTable(
 		deletedAt: integer('deleted_at'),
 		/** Soft-deleted volumes keep their data until this point (seven days). */
 		purgeAt: integer('purge_at'),
+		/** Set once the trash window is over: the node deletes the directory, then the row goes. */
+		purgeRequestedAt: integer('purge_requested_at'),
+		/** Snapshot being restored into this (new) volume; null once the restore settled. */
+		restoreSnapshotId: text('restore_snapshot_id'),
 	},
 	(t) => [
 		uniqueIndex('app_volumes_project_name_idx').on(t.projectId, t.name),
@@ -382,6 +474,17 @@ export const appVolumeSnapshots = sqliteTable(
 		createdAt: integer('created_at').notNull().$defaultFn(now),
 		expiresAt: integer('expires_at'),
 		restoreVerifiedAt: integer('restore_verified_at'),
+		label: text('label'),
+		/** How the node made the copy: `reflink`, `paused`, `idle` or `live`; null until it ran. */
+		method: text('method'),
+		/** Whether the writer was paused for a consistent copy. */
+		quiesce: integer('quiesce', { mode: 'boolean' }).notNull().default(true),
+		createdBy: text('created_by'),
+		finishedAt: integer('finished_at'),
+		/** Name of the target when the snapshot was queued, kept after the target is deleted. */
+		targetName: text('target_name'),
+		/** Location snapshot (`BackupLocationSnapshot`) of where the archive was written; no credentials. */
+		locationJson: text('location_json'),
 	},
 	(t) => [
 		index('app_volume_snapshots_volume_idx').on(t.volumeId, t.createdAt),
@@ -434,8 +537,20 @@ export const projects = sqliteTable(
 		previewAccess: text('preview_access', { enum: ['public', 'password', 'platform'] })
 			.notNull()
 			.default('platform'),
-		/** Hashed access password for `password` mode (scrypt). Never returned by the API. */
+		/**
+		 * Legacy shared password hash (one per project, both scopes). Superseded by the per-scope
+		 * hashes below (0054); no longer read or written, kept because migrations are additive.
+		 */
 		accessSecretHash: text('access_secret_hash'),
+		/** Hashed password (scrypt) for production in `password` mode. Never returned by the API. */
+		productionPasswordHash: text('production_password_hash'),
+		/** Hashed password (scrypt) for previews in `password` mode. Never returned by the API. */
+		previewPasswordHash: text('preview_password_hash'),
+		/**
+		 * Visitor-session epoch. "Sign out everyone" bumps it, which rotates the project's site key, so
+		 * every cookie and callback token signed with the old key stops verifying on the agents.
+		 */
+		siteSessionEpoch: integer('site_session_epoch').notNull().default(0),
 		/** Last parsed site config, used to compile routes before a deployment exists. */
 		siteConfigJson: text('site_config_json'),
 		/** Tier 2/3 runtime spec applied to new deployments (validated by @skiff/contracts). */
@@ -599,6 +714,8 @@ export const shareRedemptions = sqliteTable(
 		redeemedAt: integer('redeemed_at').notNull().$defaultFn(now),
 		expiresAt: integer('expires_at').notNull(),
 		revokedAt: integer('revoked_at'),
+		/** The project's `site_session_epoch` when this session was minted; older epochs are signed out. */
+		siteEpoch: integer('site_epoch').notNull().default(0),
 	},
 	(t) => [index('redemptions_link_idx').on(t.shareLinkId)],
 );
@@ -640,6 +757,11 @@ export const environments = sqliteTable(
 		access: text('access', { enum: ['public', 'password', 'platform'] })
 			.notNull()
 			.default('platform'),
+		/**
+		 * Hashed password (scrypt) when `access` is `password`. Never returned by the API. Unused for
+		 * the production environment, which follows the project's production password.
+		 */
+		passwordHash: text('password_hash'),
 		/** Deployment served at `<slug>--<env>.<contentDomain>`; production uses the project pointer. */
 		deploymentId: text('deployment_id'),
 		createdAt: integer('created_at').notNull().$defaultFn(now),
@@ -675,6 +797,8 @@ export const workloads = sqliteTable(
 		cpus: integer('cpus').notNull().default(1),
 		upstream: text('upstream'),
 		message: text('message'),
+		/** Bumped by a console restart (D127); folded into the activation version. */
+		restartGeneration: integer('restart_generation').notNull().default(0),
 		createdAt: integer('created_at').notNull().$defaultFn(now),
 		updatedAt: integer('updated_at').notNull().$defaultFn(now),
 	},
@@ -697,10 +821,12 @@ export const databases = sqliteTable(
 		name: text('name').notNull(),
 		// Mirrors `databaseEngines` in @skiff/contracts. Stored in `engine_name` (0028): the original
 		// `engine` column has a Postgres-only CHECK and is left at its default.
-		engine: text('engine_name', { enum: ['postgres', 'mysql', 'mariadb', 'mongodb', 'valkey', 'redis'] })
+		engine: text('engine_name', { enum: ['postgres', 'mysql', 'mariadb', 'mongodb', 'valkey', 'redis', 'clickhouse'] })
 			.notNull()
 			.default('postgres'),
 		version: text('version').notNull(),
+		/** Image variant chosen at create (D126); mirrors `databaseVariants` in @skiff/contracts. */
+		variant: text('variant', { enum: ['standard', 'postgis', 'pg_cron'] }).notNull().default('standard'),
 		nodeId: text('node_id').notNull(),
 		hostPort: integer('host_port').notNull(),
 		memoryMb: integer('memory_mb').notNull(),
@@ -713,6 +839,8 @@ export const databases = sqliteTable(
 		poolerPort: integer('pooler_port'),
 		/** Bumped by an explicit restart so the agent re-applies the unit without a config change. */
 		restartGeneration: integer('restart_generation').notNull().default(0),
+		/** Counts replica promotions (C7, 0069); replicas follow the generation they were created under. */
+		primaryGeneration: integer('primary_generation').notNull().default(0),
 		/** Set while a pooler-only restart is waiting for the node to acknowledge it. */
 		poolerRestartRequestedAt: integer('pooler_restart_requested_at'),
 		status: text('status', { enum: ['pending', 'starting', 'running', 'failed', 'stopped'] })
@@ -794,8 +922,8 @@ export const databaseAttachments = sqliteTable(
 );
 
 /**
- * Managed database backups (docs/DATABASES.md §9). The dump itself lives in the platform
- * `ObjectStore`; this row is only the index/metadata. `sha256` is computed by the node while it
+ * Managed database backups (docs/DATABASES.md §8). The dump itself lives on the backup target
+ * recorded in `targetId`/`locationJson`; this row is only the index/metadata. `sha256` is computed by the node while it
  * uploads, so a corrupt artifact is rejected before it is ever offered for restore.
  */
 export const databaseBackups = sqliteTable(
@@ -820,10 +948,19 @@ export const databaseBackups = sqliteTable(
 		startedAt: integer('started_at'),
 		finishedAt: integer('finished_at'),
 		expiresAt: integer('expires_at'),
+		/**
+		 * Where the artifact was written (0053). Restore, retention and purge use this record, never
+		 * the target that applies now. Null `targetId` is the platform object store; a null
+		 * `locationJson` is a legacy row and falls back to the current resolution.
+		 */
+		targetId: text('target_id'),
+		targetName: text('target_name'),
+		locationJson: text('location_json'),
 	},
 	(t) => [
 		index('database_backups_database_idx').on(t.databaseId, t.createdAt),
 		index('database_backups_status_idx').on(t.status),
+		index('database_backups_target_idx').on(t.targetId, t.status),
 		index('database_backups_expires_idx').on(t.expiresAt),
 	],
 );
@@ -962,6 +1099,12 @@ export const storageInstances = sqliteTable(
 		purgeRequestedAt: integer('purge_requested_at'),
 		/** Node still holding this instance's old data after a move (D97); purged, then cleared. */
 		purgeNodeId: text('purge_node_id'),
+		/** Staged root-key rotation (0059): activated with this pair until the node confirms it. */
+		rootPendingAccessKey: text('root_pending_access_key'),
+		rootPendingSecret: text('root_pending_secret'),
+		rootRotationStartedAt: integer('root_rotation_started_at'),
+		rootRotationError: text('root_rotation_error'),
+		rootRotatedAt: integer('root_rotated_at'),
 	},
 	(t) => [
 		uniqueIndex('storage_instances_org_name_idx').on(t.orgId, t.name),
@@ -1258,12 +1401,80 @@ export const logEvents = sqliteTable(
 			.default('info'),
 		message: text('message').notNull(),
 		ts: integer('ts').notNull(),
+		/** Set for a job run's output (0061); NULL for app, build and system lines. */
+		jobRunId: text('job_run_id'),
 	},
 	(t) => [
 		index('log_events_project_seq_idx').on(t.projectId, t.seq),
 		index('log_events_deployment_seq_idx').on(t.deploymentId, t.seq),
 		index('log_events_build_seq_idx').on(t.buildId, t.seq),
 		index('log_events_ts_idx').on(t.ts),
+		index('log_events_job_run_seq_idx').on(t.jobRunId, t.seq),
+	],
+);
+
+/**
+ * Jobs (plan 09, 0061): a named command on a process/container project, optionally on a
+ * five-field UTC cron. `nextRunAt` is the next fire; NULL without a schedule or while paused.
+ */
+export const jobs = sqliteTable(
+	'jobs',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		projectId: text('project_id').notNull(),
+		name: text('name').notNull(),
+		commandJson: text('command_json').notNull(),
+		schedule: text('schedule'),
+		timeoutSeconds: integer('timeout_seconds').notNull(),
+		concurrency: text('concurrency', { enum: ['forbid', 'allow', 'replace'] }).notNull().default('forbid'),
+		maxRetries: integer('max_retries').notNull().default(0),
+		enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+		nextRunAt: integer('next_run_at'),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [uniqueIndex('jobs_project_name_idx').on(t.projectId, t.name), index('jobs_due_idx').on(t.nextRunAt)],
+);
+
+/** One execution of a job, or a one-off command (`jobId` NULL). Leased by the project's node. */
+export const jobRuns = sqliteTable(
+	'job_runs',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		projectId: text('project_id').notNull(),
+		jobId: text('job_id'),
+		jobName: text('job_name'),
+		trigger: text('trigger', { enum: ['schedule', 'manual', 'retry'] }).notNull(),
+		attempt: integer('attempt').notNull().default(1),
+		retryOf: text('retry_of'),
+		status: text('status', {
+			enum: ['queued', 'running', 'succeeded', 'failed', 'timeout', 'cancelled', 'skipped'],
+		})
+			.notNull()
+			.default('queued'),
+		commandJson: text('command_json').notNull(),
+		timeoutSeconds: integer('timeout_seconds').notNull(),
+		nodeId: text('node_id'),
+		workloadId: text('workload_id'),
+		deploymentId: text('deployment_id'),
+		exitCode: integer('exit_code'),
+		error: text('error'),
+		cancelRequested: integer('cancel_requested', { mode: 'boolean' }).notNull().default(false),
+		leasedUntil: integer('leased_until').notNull().default(0),
+		createdBy: text('created_by'),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		runAt: integer('run_at').notNull(),
+		startedAt: integer('started_at'),
+		finishedAt: integer('finished_at'),
+	},
+	(t) => [
+		index('job_runs_lease_idx').on(t.nodeId, t.status, t.runAt),
+		index('job_runs_job_idx').on(t.jobId, t.createdAt),
+		index('job_runs_project_idx').on(t.projectId, t.createdAt),
+		index('job_runs_status_idx').on(t.status, t.runAt),
 	],
 );
 
@@ -1389,6 +1600,33 @@ export const operationItems = sqliteTable(
 		primaryKey({ columns: [t.operationId, t.seq] }),
 		index('operation_items_status_idx').on(t.operationId, t.status),
 	],
+);
+
+/**
+ * Blueprint stacks an org has applied (plan 11, 0071). `managedJson` lists the resource keys the
+ * stack created or adopted; only those can be pruned. The plan and its progress live in a
+ * `blueprint.apply` operation.
+ */
+export const blueprints = sqliteTable(
+	'blueprints',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		name: text('name').notNull(),
+		/** The last document that applied cleanly, normalised; null until one did. */
+		documentJson: text('document_json'),
+		documentHash: text('document_hash'),
+		/** `string[]` of resource keys (`projects.shop-web`, `databases.shop-db`). */
+		managedJson: text('managed_json').notNull().default('[]'),
+		lastOperationId: text('last_operation_id'),
+		lastStatus: text('last_status'),
+		appliedPlanHash: text('applied_plan_hash'),
+		appliedAt: integer('applied_at'),
+		appliedBy: text('applied_by'),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [uniqueIndex('blueprints_org_name_idx').on(t.orgId, t.name)],
 );
 
 export const orgQuotas = sqliteTable('org_quotas', {
@@ -1570,6 +1808,10 @@ export const databasePitr = sqliteTable(
 		lastRestoreDatabaseId: text('last_restore_database_id'),
 		verifiedAt: integer('verified_at'),
 		error: text('error'),
+		/** Recoverable window reported by the node's status task (0070); epoch ms. */
+		recoverableFromAt: integer('recoverable_from_at'),
+		recoverableToAt: integer('recoverable_to_at'),
+		windowCheckedAt: integer('window_checked_at'),
 		createdAt: integer('created_at').notNull().$defaultFn(now),
 		updatedAt: integer('updated_at').notNull().$defaultFn(now),
 	},
@@ -1750,8 +1992,38 @@ export const emailAddresses = sqliteTable(
 		verifiedAt: integer('verified_at'),
 		createdBy: text('created_by').notNull(),
 		createdAt: integer('created_at').notNull().$defaultFn(now),
+		/** When the last verification link went out; it expires a day later (migration 0066). */
+		sentAt: integer('sent_at'),
+		/** Verification mails sent for the current token. */
+		sendCount: integer('send_count').notNull().default(0),
 	},
 	(t) => [uniqueIndex('email_addresses_org_address_idx').on(t.orgId, t.address)],
+);
+
+/** An org owner's request to leave the sandbox; a platform admin decides (EMAIL.md §7.3, migration 0066). */
+export const emailAccessRequests = sqliteTable(
+	'email_access_requests',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		status: text('status', { enum: ['pending', 'approved', 'denied'] }).notNull().default('pending'),
+		useCase: text('use_case').notNull(),
+		expectedDailyVolume: integer('expected_daily_volume').notNull(),
+		website: text('website'),
+		requestedBy: text('requested_by').notNull(),
+		requesterEmail: text('requester_email'),
+		decidedBy: text('decided_by'),
+		decidedAt: integer('decided_at'),
+		decisionNote: text('decision_note'),
+		grantedPerDay: integer('granted_per_day'),
+		grantedPerSecond: integer('granted_per_second'),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [
+		index('email_access_requests_org_idx').on(t.orgId, t.createdAt),
+		index('email_access_requests_status_idx').on(t.status, t.createdAt),
+	],
 );
 
 /** SMTP/API credentials; `envPrefix` marks a project attachment (EMAIL.md §5.4). */
@@ -1861,6 +2133,8 @@ export const schema = {
 	gitSources,
 	builds,
 	logEvents,
+	jobs,
+	jobRuns,
 	auditLog,
 	orgQuotas,
 	projectQuotas,

@@ -157,11 +157,24 @@ attachments hash, so attach, detach or grant changes restart the app without a r
 - The **root key** is sealed with the org key. `GET /api/v1/storage/:name/credentials` reveals the
   endpoint and root key to humans with `storage:credentials` (never pre-ticked for agents; every
   read audited), for tools like `rclone`, `aws s3` or a desktop S3 client.
-- **MCP never returns keys**, as in D58. Agents attach instances to apps instead.
-- Attachment keys aren't revealable; they belong to the app. Extra named keys for humans (with
-  their own bucket grants) are a follow-up that reuses the attachment-key machinery.
-- Rotation: generate a new pair, let the agent create it, re-activate consumers, then delete the
-  old pair. This is easier than with Postgres because keys are independent IAM users.
+- **MCP never returns keys**, as in D58. Agents attach instances to apps instead; MCP can list,
+  create and revoke named keys (§11) but never reveal one.
+- Attachment keys aren't revealable; they belong to the app. They are listed with the named keys
+  (§11), but reveal and revoke refuse them: detaching is what revokes an attachment's key, and
+  detach + attach rotates it. Named keys (§11) cover humans and outside services.
+- **Root key rotation is staged.** RustFS reads its root pair from the environment only (the admin
+  API cannot change it), so `POST /api/v1/storage/:name/rotate-root` (`storage:credentials`) seals a
+  pending pair (`root_pending_*`) and the instance's activation switches to it, which restarts the
+  container. The agent's reconciler proves the key with its first call of every round (ListBuckets
+  over loopback) and reports `storageRootKeys` on the heartbeat: `accepted` on success, `rejected`
+  after three consecutive auth failures (401/403) spread over at least two minutes, so the old
+  container's refusals right after the new activation do not count. `accepted` for the pending key
+  promotes it; promotion changes no activation input, so nothing restarts again. `rejected`, no
+  confirmation within 10 minutes (`ROOT_ROTATION_TIMEOUT_MS`, checked on the heartbeat), or
+  `DELETE …/rotate-root` rolls back to the current pair (one more restart). Until promotion, humans
+  still read the current key. Scoped keys, buckets and objects are untouched, and attached apps never
+  see the root key, so none of them restart. Audited as `storage.root-key.rotate`, `.rotated`,
+  `.rollback` and `.cancel`.
 
 ## 6. Observability (S7)
 
@@ -216,9 +229,9 @@ and refuses to run if it is gone (D76). See [VOLUMES.md](./VOLUMES.md).
 | Surface | What |
 |---|---|
 | Permissions | New `storage` resource: `create`, `read`, `update`, `delete`, `credentials`. Deployer gets everything except `delete`; viewer gets `read`; agents get the deployer set minus `credentials`. |
-| REST | `GET/POST /api/v1/storage`, `GET/PATCH/DELETE /api/v1/storage/:name`, `POST …/:name/restore`, `GET …/:name/credentials`, `GET …/:name/metrics`, `GET/POST …/:name/buckets`, `PATCH/DELETE …/:name/buckets/:bucket`, `GET/PATCH …/:name/buckets/:bucket/config`, `POST …/:name/buckets/:bucket/sign`, `GET/POST /api/v1/projects/:slug/storage`, `PATCH/DELETE …/storage/:name`; object endpoints under `…/:name/objects` (list, item GET/HEAD/PUT/DELETE, bulk delete, folder, presign) |
-| MCP | `list_storage`, `get_storage`, `create_storage`, `create_bucket`, `get_bucket_config`, `update_bucket_config`, `attach_storage`, `detach_storage`, `delete_storage` (confirmed, soft), `list_objects`, `presign_object`, `create_object_folder`, `restart_storage`, `get_storage_logs`. No bucket force-delete, object delete, key reveal or purge. |
-| CLI | `skif storage list\|create\|info\|update\|restart\|delete\|restore\|credentials`, `skif storage bucket list\|create\|config\|update\|delete`, `skif storage attach\|detach`, `skif storage objects ls\|get\|put\|rm\|mkdir\|presign\|share` |
+| REST | `GET/POST /api/v1/storage`, `GET/PATCH/DELETE /api/v1/storage/:name`, `POST …/:name/restore`, `GET …/:name/credentials`, `POST/DELETE …/:name/rotate-root`, `GET/POST …/:name/keys`, `DELETE …/:name/keys/:id`, `POST …/:name/keys/:id/reveal`, `POST …/:name/move`, `GET/POST …/:name/replicas`, `DELETE …/:name/replicas/:id`, `GET …/:name/metrics`, `GET/POST …/:name/buckets`, `PATCH/DELETE …/:name/buckets/:bucket`, `GET/PATCH …/:name/buckets/:bucket/config`, `POST …/:name/buckets/:bucket/sign`, `GET/POST /api/v1/projects/:slug/storage`, `PATCH/DELETE …/storage/:name`; object endpoints under `…/:name/objects` (list, item GET/HEAD/PUT/DELETE, bulk delete, folder, presign) |
+| MCP | `list_storage`, `get_storage`, `create_storage`, `create_bucket`, `get_bucket_config`, `update_bucket_config`, `attach_storage`, `detach_storage`, `delete_storage` (confirmed, soft), `list_objects`, `presign_object`, `create_object_folder`, `restart_storage`, `get_storage_logs`, `list_storage_keys`, `create_storage_key`, `revoke_storage_key` (confirmed). No bucket force-delete, object delete, key reveal, root rotation or purge. |
+| CLI | `skif storage list\|create\|info\|update\|restart\|delete\|restore\|credentials\|rotate-root [--cancel]\|move --node`, `skif storage keys list\|create\|reveal\|revoke`, `skif storage bucket list\|create\|config\|update\|delete`, `skif storage attach\|detach`, `skif storage objects ls\|get\|put\|rm\|mkdir\|presign\|share` |
 | Dashboard | Storage list + create, detail (status, endpoint, public toggle, buckets, per-bucket settings, attached projects, charts), attach from a project with bucket grants, and an object browser (folder navigation, upload, download, delete, signed share links) |
 
 ### Bucket configuration
@@ -280,7 +293,7 @@ and report per-item skips.
   any endpoint) can point at a managed instance. It's allowed as a **replication target only**:
   canonical platform artifacts can't live on a workload whose own deploys need those artifacts.
   This covers part of the roadmap's "Garage/MinIO" item.
-- Human access keys with bucket grants; key rotation in the dashboard; per-bucket quotas; lifecycle
+- Per-bucket quotas; lifecycle
   rules (expire after N days); CORS config per bucket; custom domains for public instances; Garage
   as a second engine; bulk actions and prune for storage; share-link revocation and view history in
   the dashboard (the API records and counts, but no UI to revoke yet).
@@ -306,3 +319,55 @@ internal gateway are unchanged.
 nullable column; pre-existing attachments keep their current key and secret. Named keys are new
 rows, so turning the feature off leaves existing data untouched. Reverting the release is a
 snapshot/rollback, never a destructive migration.
+
+## 12. Bucket replication
+
+A replication rule (`storage_replication`, created with `POST /api/v1/storage/:name/replicas`)
+copies every bucket of a source instance to a private **passive target** instance on another node.
+RustFS's own bucket replication is not used: its remote target is dialled from inside the source
+container, which cannot reach a private instance on another node (D56). One node's agent copies the
+objects instead ([CLUSTERING.md](./CLUSTERING.md) §10.2):
+
+- **Runner.** The source's node pushes, unless the target is on the edge, whose gateway listens on
+  loopback only; then the edge pulls from the source's worker gateway. Both on edge nodes is refused.
+- **Keys.** The runner reads or writes its local instance over loopback with that instance's root
+  key. The peer is reached through its node's internal gateway (D82): the request goes to
+  `http://<peer node address>`, is SigV4-signed for `s3-<id>.storage.internal` and sends that as
+  `Host`, with a key minted for the rule (`storage_replication.access_key_id`/`secret_sealed`), never
+  the peer's root key. The peer gets that key as an ordinary scoped user (`objectStorage.users`):
+  read on a source peer, read-write on a target peer, granted on the replicated buckets only (at most
+  20). The runner receives the secret in its activation (`storageAdmin.replication`); adding or
+  removing a link moves `keysVersion`, so neither container restarts.
+- **Buckets.** The target's copy of each source bucket is created as an ordinary bucket row
+  (`createdBy: system:replication`, private, same versioning), so the target node converges it like
+  any other. A bucket created on the source later joins on the next progress report. A bucket deleted
+  on the target is left alone.
+- **Passes.** Every `storage.syncIntervalMinutes` (cluster config, default 15) the runner walks both
+  listings in UTF-8 key order. It copies an object when it is missing on the target, its size
+  differs, its ETag differs (compared only when neither side has a multipart ETag), or otherwise the
+  source is newer. Objects up to 16 MiB are one GET and PUT; larger ones are a multipart upload fed by
+  16 MiB ranged GETs pinned with `If-Match` to the source ETag, so an overwrite during the copy aborts
+  it rather than mixing versions. Content type, `cache-control`, `content-disposition`,
+  `content-encoding`, `content-language`, `expires` and `x-amz-meta-*` are carried. Object bytes are
+  sent with a signed payload hash.
+- **Deletes.** Objects only on the target are deleted, but only after that bucket's source listing
+  completed without an error: a failed or partial listing never looks like an empty bucket. Turn
+  versioning on for the target's buckets to keep replicated deletes and overwrites recoverable.
+- **Resume.** Progress is checkpointed to `<agent data dir>/storage-replication.json` (the pass start,
+  finished buckets, and the last source key handled in the current bucket), at least every 500
+  objects or 30 s, so a restarted agent continues mid-bucket with `start-after`. A failed pass retries
+  after 1, 2, 4 … minutes, capped at the interval.
+- **Status.** The heartbeat's `storageReplication` carries, per link, the pass status, the start of
+  the last pass that finished with every bucket in sync, objects and bytes copied since the previous
+  report (the control plane keeps the totals), objects still failing, an error and per-bucket detail.
+  The rule is `syncing` until the first complete pass (`initial_sync_at`), then `protected` while that
+  pass is no older than two intervals, `lagging` once it is, and `failed` while the runner reports an
+  error with no complete pass inside that window. Reports from a node that does not run the link are
+  dropped.
+
+What it is not: no RustFS replication queue, so the RPO is the interval plus the pass time, not a
+streaming lag; no promotion (the target is passive and failover is manual); no IAM, bucket
+configuration or row replication (those live in the control plane); and, like any replica, not a
+backup: a delete on the source is a delete on the target within one pass. Rules created before
+migration 0059 get their key minted by the maintenance sweep (`backfillKeys`).
+

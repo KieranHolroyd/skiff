@@ -31,7 +31,7 @@ const core: Core = createCore({
 		objectStoreSecret: 'object-secret-123',
 		desiredAgentVersion: '0.1.0',
 		now: () => clock,
-		features: { ...DEFAULT_FEATURES, FUNCTIONS: true },
+		features: { ...DEFAULT_FEATURES, FUNCTIONS: true, MULTI_NODE_REPLICAS: false },
 	},
 });
 

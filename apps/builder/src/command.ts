@@ -150,6 +150,49 @@ export function gitAuthEnv(repoUrl: string, token: string | null, allowedHosts: 
 	};
 }
 
+/** `ssh://…` or the scp-like `user@host:path` form; everything else never sees the deploy key. */
+export function isSshRepoUrl(repoUrl: string): boolean {
+	return /^ssh:\/\//i.test(repoUrl) || /^[A-Za-z0-9._-]+@[^/:\s]+:/.test(repoUrl);
+}
+
+/**
+ * Git environment that clones an SSH URL with the node's deploy key, or `{}` for any other URL or
+ * when no key is configured.
+ *
+ * `GIT_SSH_COMMAND` goes through a shell, so both paths were checked against a plain path
+ * alphabet in `loadConfig` and are single-quoted here. The key stays a root-owned file the daemon
+ * reads; the build (which never inherits this environment) runs as an account that cannot. With
+ * no pinned `known_hosts` file the first connection to a host records its key (`accept-new`), and
+ * a changed key afterwards fails the clone.
+ */
+export function gitSshEnv(
+	repoUrl: string,
+	ssh: { keyPath: string | null; knownHostsPath: string | null; fallbackKnownHostsPath: string },
+): Record<string, string> {
+	if (!ssh.keyPath || !isSshRepoUrl(repoUrl)) return {};
+	const knownHosts = ssh.knownHostsPath ?? ssh.fallbackKnownHostsPath;
+	for (const path of [ssh.keyPath, knownHosts]) assertShellSafePath(path);
+	return {
+		GIT_SSH_COMMAND: [
+			'ssh',
+			`-i '${ssh.keyPath}'`,
+			'-o IdentitiesOnly=yes',
+			'-o BatchMode=yes',
+			`-o StrictHostKeyChecking=${ssh.knownHostsPath ? 'yes' : 'accept-new'}`,
+			`-o UserKnownHostsFile='${knownHosts}'`,
+		].join(' '),
+	};
+}
+
+/** An absolute path made only of characters that need no quoting in a shell word. */
+export function isShellSafePath(path: string): boolean {
+	return /^\/[A-Za-z0-9._/@+-]+$/.test(path) && !path.split('/').includes('..');
+}
+
+function assertShellSafePath(path: string): void {
+	if (!isShellSafePath(path)) throw new BuildValidationError(`Unsafe SSH path "${path.slice(0, 200)}"`);
+}
+
 /** A ref that starts with `-` would be parsed by git as an option. */
 export function validateGitRef(ref: string): string {
 	if (!ref || ref.startsWith('-') || /[\0\s]/.test(ref)) throw new BuildValidationError(`Invalid git ref "${ref.slice(0, 100)}"`);

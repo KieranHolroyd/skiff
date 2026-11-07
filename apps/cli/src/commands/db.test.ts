@@ -175,6 +175,74 @@ describe('skif db', () => {
 		expect(JSON.parse(json.stdout)).toEqual({ credentials });
 	});
 
+	const named = {
+		id: 'dbc_1',
+		databaseId: 'db_1',
+		role: 'readonly',
+		username: 'skiff_readonly_ab12cd34',
+		purpose: 'BI',
+		status: 'ready',
+		lastUsedAt: null,
+		expiresAt: null,
+		createdAt: '2026-11-04T10:00:00.000Z',
+		revokedAt: null,
+	};
+
+	test('credentials list and create talk to the named-credential routes', async () => {
+		const seen = serve({
+			'GET /api/v1/databases/main/credentials/named': { credentials: [named] },
+			'POST /api/v1/databases/main/credentials/named': { credential: { ...named, status: 'pending' } },
+		});
+		const list = await cli('db', 'credentials', 'list', 'main');
+		expect(list.code).toBe(0);
+		expect(list.stdout).toContain('skiff_readonly_ab12cd34');
+		expect(list.stdout).toContain('readonly');
+		const created = await cli('db', 'credentials', 'create', 'main', '--role', 'readonly', '--purpose', 'BI');
+		expect(created.code).toBe(0);
+		expect(seen[1]).toEqual({
+			method: 'POST',
+			path: '/api/v1/databases/main/credentials/named',
+			body: { role: 'readonly', purpose: 'BI' },
+		});
+		expect(created.stdout).toContain('--credential dbc_1');
+		const bad = await cli('db', 'credentials', 'create', 'main', '--role', 'owner');
+		expect(bad.code).not.toBe(0);
+		expect(bad.stderr).toContain('--role must be one of app, readonly, backup');
+	});
+
+	test('credentials rotate, revoke (with --yes) and reveal', async () => {
+		const seen = serve({
+			'POST /api/v1/databases/main/credentials/named/dbc_1/rotate': { credential: { ...named, status: 'pending' } },
+			'DELETE /api/v1/databases/main/credentials/named/dbc_1': { credential: { ...named, status: 'revoking' } },
+			'GET /api/v1/databases/main/credentials/named/dbc_1': { credential: { ...named, password: 'pw-123' } },
+		});
+		expect((await cli('db', 'credentials', 'rotate', 'main', 'dbc_1')).code).toBe(0);
+		const refused = await cli('db', 'credentials', 'revoke', 'main', 'dbc_1');
+		expect(refused.code).not.toBe(0);
+		expect(seen.some((item) => item.method === 'DELETE')).toBe(false);
+		expect((await cli('db', 'credentials', 'revoke', 'main', 'dbc_1', '--yes')).code).toBe(0);
+		const revealed = await cli('db', 'credentials', 'reveal', 'main', 'dbc_1');
+		expect(revealed.stdout).toBe('pw-123\n');
+		expect(seen.map((item) => `${item.method} ${item.path}`)).toEqual([
+			'POST /api/v1/databases/main/credentials/named/dbc_1/rotate',
+			'DELETE /api/v1/databases/main/credentials/named/dbc_1',
+			'GET /api/v1/databases/main/credentials/named/dbc_1',
+		]);
+	});
+
+	test('attach --credential sends the credential reference', async () => {
+		const seen = serve({
+			'POST /api/v1/projects/reports/databases': {
+				attachment: { ...attachment('reports'), credentialId: 'dbc_1', credentialRole: 'readonly' },
+				warning: null,
+			},
+		});
+		const result = await cli('db', 'attach', 'main', '--project', 'reports', '--credential', 'readonly');
+		expect(result.code).toBe(0);
+		expect(seen[0]!.body).toEqual({ database: 'main', credential: 'readonly' });
+		expect(result.stdout).toContain('connecting as the readonly credential');
+	});
+
 	test('info shows status, node, size vs budget, attachments and top tables', async () => {
 		const seen = serve({
 			'GET /api/v1/databases/main': {
@@ -255,6 +323,50 @@ describe('skif db', () => {
 		expect(result.code).toBe(1);
 		expect(result.stderr).toContain('not in the trash');
 		expect(seen.some((item) => item.method === 'DELETE')).toBe(false);
+	});
+
+	test('update sends only the flags given as a PATCH', async () => {
+		const seen = serve({ 'PATCH /api/v1/databases/main': { database: view({ memoryMb: 512, storageMb: 20_480 }) } });
+		const result = await cli('db', 'update', 'main', '--memory', '512M', '--storage', '20G', '--no-pooler');
+		expect(result.code).toBe(0);
+		expect(seen).toEqual([
+			{ method: 'PATCH', path: '/api/v1/databases/main', body: { memoryMb: 512, storageMb: 20_480, pooler: false } },
+		]);
+		expect(result.stdout).toContain('Updated "main" (PostgreSQL 17).');
+		expect(result.stdout).toContain('It restarts on node homelab with the change.');
+	});
+
+	test('update --extension adds to the enabled list instead of replacing it', async () => {
+		const seen = serve({
+			'GET /api/v1/databases/main': { database: view({ extensions: ['pg_trgm'] }) },
+			'PATCH /api/v1/databases/main': { database: view({ extensions: ['pg_trgm', 'citext'] }) },
+		});
+		const result = await cli('db', 'update', 'main', '--extension', 'citext', '--extension', 'pg_trgm');
+		expect(result.code).toBe(0);
+		expect(seen.at(-1)).toEqual({
+			method: 'PATCH',
+			path: '/api/v1/databases/main',
+			body: { extensions: ['pg_trgm', 'citext'] },
+		});
+	});
+
+	test('update --version asks first: off a terminal it needs --yes', async () => {
+		const seen = serve({ 'PATCH /api/v1/databases/main': { database: view({ engine: 'mysql', engineLabel: 'MySQL', version: '9.7' }) } });
+		const refused = await cli('db', 'update', 'main', '--version', '9.7');
+		expect(refused.code).toBe(1);
+		expect(refused.stderr).toContain('Refusing to change the version without confirmation.');
+		expect(seen).toHaveLength(0);
+		const confirmed = await cli('db', 'update', 'main', '--version', '9.7', '--yes', '--json');
+		expect(confirmed.code).toBe(0);
+		expect(seen).toEqual([{ method: 'PATCH', path: '/api/v1/databases/main', body: { version: '9.7' } }]);
+	});
+
+	test('update with nothing to change fails before calling the server', async () => {
+		const seen = serve({});
+		const result = await cli('db', 'update', 'main');
+		expect(result.code).toBe(1);
+		expect(result.stderr).toContain('Nothing to update.');
+		expect(seen).toHaveLength(0);
 	});
 
 	test('server errors surface as JSON with --json', async () => {

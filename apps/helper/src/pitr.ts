@@ -1,21 +1,27 @@
 import { ValidationError } from './validate.ts';
 
 /**
- * pgBackRest data path for PITR (docs/PITR.md). Pure renderers and validators only; the
+ * pgBackRest data path for PITR (docs/PITR.md). Pure renderers, parsers and validators only; the
  * `SystemdDriver` runs the fixed podman argv. Nothing here accepts a shell string.
  *
- * The Postgres container performs WAL archiving, which means the pinned Postgres image used for
- * PITR-enabled databases must ship the `pgbackrest` binary. The stock `postgres:*-alpine` image
- * does not; this is an explicit image requirement, not a silent fallback to logical dumps.
+ * Everything runs the same image: a PITR-enabled database runs the Skiff-built Postgres image that
+ * ships pgBackRest (`docker/postgres-pitr`, `postgresPitrImage`). Postgres itself runs
+ * `archive-push` from `archive_command`; base backups, `info` and `pg_stat_archiver` reads are
+ * `podman exec` into that running container (pgBackRest must share the host with Postgres and talks
+ * to it over the Unix socket); a restore runs one-shot containers of the same image against the
+ * target's data dir. pgBackRest therefore always writes and reads its repository with one version.
  */
 
-/** Community pgBackRest image pinned by digest; the helper chooses it, never the wire. */
-export const PITR_PGBACKREST_IMAGE =
-	'docker.io/woblerr/pgbackrest:2.59.3@sha256:299eae66d34553ebabe5245365fbcc81acd5c6dc911f5cfcd8a855797e35a08e';
-
-/** Absolute path inside the Postgres container; the helper writes the 0400 host file. */
-export const PITR_CONTAINER_CONFIG_PATH = '/etc/pgbackrest/pgbackrest.conf';
-export const PITR_CONTAINER_PGPASS_PATH = '/etc/pgbackrest/pgpass';
+/** Container paths. The helper mounts the per-database config directory here read-only. */
+export const PITR_CONTAINER_CONFIG_DIR = '/etc/pgbackrest';
+export const PITR_CONTAINER_CONFIG_PATH = `${PITR_CONTAINER_CONFIG_DIR}/pgbackrest.conf`;
+export const PITR_CONTAINER_PGPASS_PATH = `${PITR_CONTAINER_CONFIG_DIR}/pgpass`;
+/** Async archive-push/get queue. On the data volume (the root is read-only), beside `pgdata`. */
+export const PITR_SPOOL_PATH = '/data/pgbackrest-spool';
+/** The image's socket directory; the unit mounts a tmpfs there. */
+export const PITR_PG_SOCKET_PATH = '/var/run/postgresql';
+export const PITR_PGDATA = '/data/pgdata';
+export const PITR_CONFIG_DIRNAME = 'pgbackrest';
 export const PITR_CONFIG_FILENAME = 'pgbackrest.conf';
 export const PITR_PGPASS_FILENAME = 'pgpass';
 export const PITR_ARCHIVE_TIMEOUT_SECONDS = 60;
@@ -24,6 +30,17 @@ export const PITR_FULL_SCHEDULE = '0 2 * * 0';
 export const PITR_DIFF_SCHEDULE = '0 2 * * 1-6';
 export const PITR_RETENTION_FULL = 4;
 export const PITR_RETENTION_DIFF = 7;
+/**
+ * PITR containers run an init process as PID 1. pgBackRest's async archive-push/archive-get
+ * forks a background process and exits; that orphan is reparented to PID 1. Were PID 1 the
+ * postmaster, any non-zero exit of the orphan (a stanza not created yet, an S3 blip) is an
+ * "untracked child process" to Postgres, which then kills every backend and runs crash recovery
+ * (reproduced on the 18-1 image under Docker; gone with `--init`).
+ */
+export const PITR_NEEDS_INIT = true;
+
+/** A temporary superuser the restore creates to rename the owner role, then drops. */
+export const PITR_RESTORE_ROLE = 'skiff_pitr_restore';
 
 export interface PitrRepoConfig {
 	kind: 's3';
@@ -41,6 +58,8 @@ const BUCKET_PATTERN = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
 const REGION_PATTERN = /^[a-z0-9-]{1,63}$/;
 const PREFIX_PATTERN = /^[A-Za-z0-9._/-]*$/;
 const ACCESS_KEY_PATTERN = /^[^\s\r\n]{3,128}$/;
+const IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,62}$/;
+const PASSWORD_PATTERN = /^[A-Za-z0-9_-]{16,200}$/;
 
 export function validatePitrStanza(value: unknown, label = 'pitr.stanza'): string {
 	if (typeof value !== 'string' || !PITR_STANZA_PATTERN.test(value))
@@ -81,12 +100,14 @@ export function parsePitrRepo(value: unknown, label = 'pitr.repo'): PitrRepoConf
 		try {
 			url = new URL(endpoint);
 		} catch {
-			throw new ValidationError(`${label}.endpoint must be an http(s) URL`);
+			throw new ValidationError(`${label}.endpoint must be an https URL`);
 		}
-		if (url.protocol !== 'https:' && url.protocol !== 'http:')
-			throw new ValidationError(`${label}.endpoint must use http or https`);
+		// pgBackRest speaks TLS to S3 only; a plain-HTTP endpoint could never archive a segment.
+		if (url.protocol !== 'https:') throw new ValidationError(`${label}.endpoint must use https (pgBackRest has no plain-HTTP S3 client)`);
 		if (url.username || url.password)
 			throw new ValidationError(`${label}.endpoint must not embed credentials`);
+		if ((url.pathname !== '/' && url.pathname !== '') || url.search || url.hash)
+			throw new ValidationError(`${label}.endpoint must be a bare origin (put the path in pathPrefix)`);
 	}
 
 	const rawPrefix = record.pathPrefix === undefined ? '' : record.pathPrefix;
@@ -94,7 +115,7 @@ export function parsePitrRepo(value: unknown, label = 'pitr.repo'): PitrRepoConf
 	const pathPrefix = rawPrefix.trim().replace(/^\/+|\/+$/g, '');
 	if (!PREFIX_PATTERN.test(pathPrefix))
 		throw new ValidationError(`${label}.pathPrefix contains unsupported characters`);
-	if (pathPrefix.split('/').some((part) => part === '.' || part === '..' || part === ''))
+	if (pathPrefix && pathPrefix.split('/').some((part) => part === '.' || part === '..' || part === ''))
 		throw new ValidationError(`${label}.pathPrefix must be normalized`);
 
 	if (typeof record.forcePathStyle !== 'boolean')
@@ -118,6 +139,16 @@ export function parsePitrRepo(value: unknown, label = 'pitr.repo'): PitrRepoConf
 }
 
 /**
+ * The endpoint host and (non-default) port pgBackRest connects to. AWS S3 has no default in
+ * pgBackRest, so a null endpoint becomes the regional AWS host.
+ */
+export function pitrRepoEndpoint(repo: Pick<PitrRepoConfig, 'endpoint' | 'region'>): { host: string; port: number | null } {
+	if (!repo.endpoint) return { host: `s3.${repo.region}.amazonaws.com`, port: null };
+	const url = new URL(repo.endpoint);
+	return { host: url.hostname, port: url.port ? Number(url.port) : null };
+}
+
+/**
  * A restore target cannot be in the future or outside the repository retention window. The helper
  * checks this again even though the control plane validated it: the privileged side trusts no
  * value it did not parse itself.
@@ -136,6 +167,17 @@ export function validatePitrTargetTime(
 	return value;
 }
 
+/**
+ * `--target` for `restore --type=time`. pgBackRest picks the backup set to restore from by parsing
+ * this value itself, and its parser only understands `YYYY-MM-DD HH:MM:SS[.mmm][+/-TZ]`; an ISO
+ * `T…Z` string silently falls back to the latest backup, which is newer than an older target and
+ * makes recovery fail. Postgres accepts the same string for `recovery_target_time`.
+ */
+export function formatPitrTarget(epochMs: number): string {
+	const iso = new Date(epochMs).toISOString(); // 2026-11-05T09:30:00.000Z
+	return `${iso.slice(0, 10)} ${iso.slice(11, 23)}+00`;
+}
+
 export type PitrBaseBackupType = 'full' | 'diff' | 'incr';
 
 export function parsePitrBackupType(value: unknown): PitrBaseBackupType {
@@ -147,52 +189,58 @@ export function parsePitrBackupType(value: unknown): PitrBaseBackupType {
 export interface PgBackRestConfigOptions {
 	stanza: string;
 	repo: PitrRepoConfig;
-	/** Absolute path inside the sidecar/Postgres container. */
-	pg1Path: string;
-	/** DNS alias of the database container on the workload network, when the sidecar needs it. */
-	pg1Host?: string | null;
-	pg1Port?: number;
-	pg1User?: string | null;
+	/** The database owner: a superuser that pgBackRest connects as over the Unix socket. */
+	pg1User: string;
 }
 
 /**
  * pgBackRest INI. `repo1-path` is scoped by stanza so databases cannot read each other's WAL.
+ * Postgres is reached over the container's Unix socket (pgBackRest must run beside Postgres), the
+ * async spool lives on the data volume because the root filesystem is read-only, and file logging
+ * is off so a busy archive cannot fill the 64 MB `/tmp`: warnings reach the journal via stderr.
  * `repo1-cipher-type=none` is deliberate: the repository lives in an encrypted-at-rest bucket and
  * the control plane does not hold a second key that a restore runbook would have to recover.
  */
 export function renderPgBackRestConfig(options: PgBackRestConfigOptions): string {
 	const { repo } = options;
+	validatePitrStanza(options.stanza);
+	if (!IDENTIFIER_PATTERN.test(options.pg1User)) throw new ValidationError('pitr pg1-user must be a plain identifier');
 	const repoPath = [repo.pathPrefix, options.stanza].filter(Boolean).join('/');
+	const endpoint = pitrRepoEndpoint(repo);
 	const lines = [
+		'# Generated by skiff-helper (docs/PITR.md). Do not edit; changes are overwritten.',
 		'[global]',
 		'repo1-type=s3',
 		`repo1-s3-bucket=${repo.bucket}`,
-		...(repo.endpoint ? [`repo1-s3-endpoint=${repo.endpoint}`] : []),
+		`repo1-s3-endpoint=${endpoint.host}`,
+		...(endpoint.port ? [`repo1-storage-port=${endpoint.port}`] : []),
 		`repo1-s3-region=${repo.region}`,
 		`repo1-s3-key=${repo.accessKeyId}`,
 		`repo1-s3-key-secret=${repo.secretAccessKey}`,
-		...(repo.forcePathStyle ? ['repo1-s3-uri-style=path'] : []),
+		`repo1-s3-uri-style=${repo.forcePathStyle ? 'path' : 'host'}`,
 		`repo1-path=/${repoPath}`,
+		'repo1-retention-full-type=count',
 		`repo1-retention-full=${PITR_RETENTION_FULL}`,
 		`repo1-retention-diff=${PITR_RETENTION_DIFF}`,
 		'repo1-cipher-type=none',
 		'archive-async=y',
-		'archive-push-queue-max=1gb',
+		// Past this, pgBackRest drops queued WAL rather than fill the data volume; the archive then
+		// reports failing and the next full backup restores a continuous window (docs/PITR.md).
+		'archive-push-queue-max=1GiB',
+		`spool-path=${PITR_SPOOL_PATH}`,
 		'compress-type=zst',
 		'compress-level=3',
 		'process-max=2',
-		'log-level-console=info',
-		'log-level-file=detail',
-		'log-path=/tmp/pgbackrest-log',
+		'start-fast=y',
+		'log-level-console=warn',
+		'log-level-stderr=warn',
+		'log-level-file=off',
 		'lock-path=/tmp/pgbackrest-lock',
 		'',
 		`[${options.stanza}]`,
-		`pg1-path=${options.pg1Path}`,
-		// A sidecar reaches Postgres over the shared container network. The archive-push run in the
-		// Postgres container does not use these keys.
-		...(options.pg1Host ? [`pg1-host=${options.pg1Host}`] : []),
-		...(options.pg1Host ? [`pg1-port=${options.pg1Port ?? 5432}`] : []),
-		...(options.pg1User ? [`pg1-user=${options.pg1User}`] : []),
+		`pg1-path=${PITR_PGDATA}`,
+		`pg1-socket-path=${PITR_PG_SOCKET_PATH}`,
+		`pg1-user=${options.pg1User}`,
 		'',
 	];
 	return lines.join('\n');
@@ -204,9 +252,13 @@ export function renderPgPass(user: string, password: string, host = '*', port = 
 	return `${escape(host)}:${escape(port)}:${escape(database)}:${escape(user)}:${escape(password)}\n`;
 }
 
-/** pgBackRest config path for one managed workload; always inside the 0700 runtime dir. */
+/**
+ * The per-database config directory, always inside the 0700 runtime dir. The directory (not the
+ * files) is bind-mounted, so an atomic rewrite of the config is visible to the running container
+ * without a restart.
+ */
 export function pitrPaths(runtimeDir: string, id: string): { dir: string; config: string; pgpass: string } {
-	const dir = `${runtimeDir}/${id}`;
+	const dir = `${runtimeDir}/${id}/${PITR_CONFIG_DIRNAME}`;
 	return {
 		dir,
 		config: `${dir}/${PITR_CONFIG_FILENAME}`,
@@ -214,44 +266,340 @@ export function pitrPaths(runtimeDir: string, id: string): { dir: string; config
 	};
 }
 
-export interface PitrPodmanOptions {
-	podmanPath: string;
-	image?: string;
-	workloadId: string;
-	dataDir: string;
-	configPath: string;
-	pgpassPath: string;
-	/** Join the workload network for a base backup, which needs the Postgres connection. */
-	network?: boolean;
-	args: string[];
+/** The database's own container, where base backups and status reads run. */
+export function pitrContainerName(id: string): string {
+	return `skiff-workload-${id}`;
+}
+
+/** The one-shot containers a restore runs against the target's data dir. */
+export function pitrRestoreContainerName(targetId: string): string {
+	return `skiff-pitr-restore-${targetId}`;
+}
+export function pitrRecoveryContainerName(targetId: string): string {
+	return `skiff-pitr-recover-${targetId}`;
 }
 
 /**
- * Fixed argv for a one-shot pgBackRest sidecar. The data volume is the only writable mount; config
- * and `.pgpass` are read-only. `--userns=keep-id` is not used because the Postgres data dir is
- * chowned to uid 70 before the container starts.
+ * `podman exec` of pgBackRest inside the running database container. `PGPASSFILE` covers a
+ * pg_hba that asks for a password on the socket; the image's initdb trusts it.
  */
-export function renderPitrPodmanArgs(options: PitrPodmanOptions): string[] {
-	const args = [
+export function renderPitrExecArgs(options: { podmanPath: string; workloadId: string; args: string[] }): string[] {
+	return [
+		options.podmanPath,
+		'exec',
+		'--env',
+		`PGPASSFILE=${PITR_CONTAINER_PGPASS_PATH}`,
+		pitrContainerName(options.workloadId),
+		'pgbackrest',
+		`--config=${PITR_CONTAINER_CONFIG_PATH}`,
+		...options.args,
+	];
+}
+
+/** pgBackRest base backup argv (stanza-create first: it is idempotent and checks the cluster). */
+export function renderPitrBackupArgs(stanza: string, type: PitrBaseBackupType): string[][] {
+	return [
+		[`--stanza=${stanza}`, 'stanza-create'],
+		[`--stanza=${stanza}`, `--type=${type}`, 'backup'],
+	];
+}
+
+/** Archive health: the archiver's own counters, as `archived|failed` epoch ms (0 = never). */
+export const PITR_ARCHIVER_SQL =
+	"SELECT coalesce((extract(epoch FROM last_archived_time) * 1000)::bigint, 0) || '|' || coalesce((extract(epoch FROM last_failed_time) * 1000)::bigint, 0) FROM pg_stat_archiver";
+
+export function renderPitrArchiverArgs(options: { podmanPath: string; workloadId: string; user: string; database: string }): string[] {
+	return [
+		options.podmanPath,
+		'exec',
+		pitrContainerName(options.workloadId),
+		'psql',
+		'-h',
+		PITR_PG_SOCKET_PATH,
+		'-X',
+		'-tA',
+		'-U',
+		options.user,
+		'-d',
+		options.database,
+		'-c',
+		PITR_ARCHIVER_SQL,
+	];
+}
+
+export interface PitrOneShotOptions {
+	podmanPath: string;
+	image: string;
+	targetId: string;
+	/** Host data dir of the NEW database, mounted at /data. */
+	targetDataDir: string;
+	/** Host config directory of the SOURCE database (its stanza and repository). */
+	configDir: string;
+}
+
+/**
+ * Shared flags of the restore's one-shot containers: the engine uid, a read-only root, the
+ * target's data dir and the source's config dir. The config dir is also mounted by the running
+ * source, so it is relabelled shared (`z`); the target's data dir is private to this step.
+ */
+function oneShotMounts(options: PitrOneShotOptions): string[] {
+	return [
+		'--user',
+		'70:70',
+		'--read-only',
+		'--tmpfs',
+		'/tmp:rw,size=64m',
+		'--volume',
+		`${options.targetDataDir}:/data:Z`,
+		'--volume',
+		`${options.configDir}:${PITR_CONTAINER_CONFIG_DIR}:ro,z`,
+	];
+}
+
+/** `pgbackrest restore --type=time` into the empty target data dir. */
+export function renderPitrRestoreArgs(options: PitrOneShotOptions & { stanza: string; targetTime: number }): string[] {
+	return [
 		options.podmanPath,
 		'run',
 		'--rm',
 		'--name',
-		`skiff-pitr-${options.workloadId}`,
-		'--user',
-		'70:70',
-		'--volume',
-		`${options.dataDir}:/data:Z`,
-		'--volume',
-		`${options.configPath}:${PITR_CONTAINER_CONFIG_PATH}:ro,Z`,
-		'--volume',
-		`${options.pgpassPath}:${PITR_CONTAINER_PGPASS_PATH}:ro,Z`,
-		'--env',
-		'PGPASSFILE=/etc/pgbackrest/pgpass',
+		pitrRestoreContainerName(options.targetId),
+		...oneShotMounts(options),
+		'--entrypoint',
+		'/usr/local/bin/pgbackrest',
+		options.image,
+		`--config=${PITR_CONTAINER_CONFIG_PATH}`,
+		`--stanza=${options.stanza}`,
+		`--pg1-path=${PITR_PGDATA}`,
+		'--type=time',
+		`--target=${formatPitrTarget(options.targetTime)}`,
+		'--target-action=promote',
+		'restore',
 	];
-	if (options.network) args.push('--network', 'skiff-workloads');
-	args.push(options.image ?? PITR_PGBACKREST_IMAGE, 'pgbackrest');
-	args.push(`--config=${PITR_CONTAINER_CONFIG_PATH}`);
-	args.push(...options.args);
-	return args;
+}
+
+/**
+ * Replay WAL to the target in a detached one-shot Postgres (the image's entrypoint, so nss_wrapper
+ * maps uid 70). TCP is off; `archive_mode` is off so the restored cluster never pushes WAL into
+ * the source's stanza. `restore_command` (written by pgBackRest) reads the repository through the
+ * same mounted config. The helper waits for promotion, then stops it cleanly. `--init` for the
+ * same reason as `RunInit=true` on the database unit (`PITR_NEEDS_INIT`).
+ */
+export function renderPitrRecoveryArgs(options: PitrOneShotOptions): string[] {
+	return [
+		options.podmanPath,
+		'run',
+		'--detach',
+		'--init',
+		'--name',
+		pitrRecoveryContainerName(options.targetId),
+		...oneShotMounts(options),
+		'--tmpfs',
+		`${PITR_PG_SOCKET_PATH}:rw,size=8m,mode=1777`,
+		'--env',
+		`PGDATA=${PITR_PGDATA}`,
+		'--entrypoint',
+		'/usr/local/bin/docker-entrypoint.sh',
+		options.image,
+		'postgres',
+		'-c',
+		'listen_addresses=',
+		'-c',
+		'archive_mode=off',
+	];
+}
+
+/** `psql` over the recovery container's socket; SQL arrives on stdin or as a fixed `-c`. */
+export function renderPitrRecoveryPsqlArgs(options: {
+	podmanPath: string;
+	targetId: string;
+	user: string;
+	command?: string;
+}): string[] {
+	return [
+		options.podmanPath,
+		'exec',
+		...(options.command ? [] : ['-i']),
+		pitrRecoveryContainerName(options.targetId),
+		'psql',
+		'-h',
+		PITR_PG_SOCKET_PATH,
+		'-X',
+		'-v',
+		'ON_ERROR_STOP=1',
+		'-tA',
+		'-U',
+		options.user,
+		'-d',
+		'postgres',
+		...(options.command ? ['-c', options.command] : []),
+	];
+}
+
+export interface PitrRenameInput {
+	/** The source's owner role and database, carried over by the physical restore. */
+	sourceUser: string;
+	sourceDatabase: string;
+	/** The new database's own credentials (its env file). */
+	targetUser: string;
+	targetDatabase: string;
+	targetPassword: string;
+}
+
+/**
+ * A physical restore brings the SOURCE's owner role, password and database name. The new database
+ * was created with its own; make the cluster match them. Three steps because the connected session
+ * user cannot be renamed: (1) as the source owner create a temporary superuser, (2) as that role
+ * rename the owner and its database, set the target's password and clear the recovery settings
+ * pgBackRest wrote to postgresql.auto.conf, (3) as the renamed owner drop the temporary role.
+ * Every value is validated first, so nothing can break out of a quoted identifier or literal.
+ */
+export function renderPitrRenameSql(input: PitrRenameInput): Array<{ user: string; sql: string }> {
+	for (const [label, value] of [
+		['source user', input.sourceUser],
+		['source database', input.sourceDatabase],
+		['target user', input.targetUser],
+		['target database', input.targetDatabase],
+	] as const)
+		if (!IDENTIFIER_PATTERN.test(value)) throw new ValidationError(`pitr ${label} must be a plain identifier`);
+	if (!PASSWORD_PATTERN.test(input.targetPassword))
+		throw new ValidationError('pitr target password must be base64url (16–200 characters)');
+	if (input.targetUser === PITR_RESTORE_ROLE || input.sourceUser === PITR_RESTORE_ROLE)
+		throw new ValidationError(`${PITR_RESTORE_ROLE} is reserved`);
+	const ident = (value: string) => `"${value}"`;
+	const rename: string[] = [];
+	if (input.sourceUser !== input.targetUser)
+		rename.push(`ALTER ROLE ${ident(input.sourceUser)} RENAME TO ${ident(input.targetUser)};`);
+	rename.push(`ALTER ROLE ${ident(input.targetUser)} WITH PASSWORD '${input.targetPassword}';`);
+	if (input.sourceDatabase !== input.targetDatabase)
+		rename.push(`ALTER DATABASE ${ident(input.sourceDatabase)} RENAME TO ${ident(input.targetDatabase)};`);
+	rename.push(
+		'ALTER SYSTEM RESET restore_command;',
+		'ALTER SYSTEM RESET recovery_target_time;',
+		'ALTER SYSTEM RESET recovery_target_action;',
+	);
+	return [
+		{ user: input.sourceUser, sql: `CREATE ROLE ${ident(PITR_RESTORE_ROLE)} WITH LOGIN SUPERUSER;\n` },
+		{ user: PITR_RESTORE_ROLE, sql: `${rename.join('\n')}\n` },
+		{ user: input.targetUser, sql: `DROP ROLE ${ident(PITR_RESTORE_ROLE)};\n` },
+	];
+}
+
+// ------------------------------------------------------------------ recoverable window
+
+export interface PgBackRestInfoSummary {
+	/** pgBackRest's stanza status: 0 ok, 2 no valid backups; anything else is a repository problem. */
+	statusCode: number | null;
+	statusMessage: string | null;
+	backupCount: number;
+	/** Stop time (epoch ms) of the oldest retained backup: the earliest consistent restore point. */
+	oldestBackupStopAt: number | null;
+	newestBackupStopAt: number | null;
+	newestBackupType: PitrBaseBackupType | null;
+}
+
+/** Parse `pgbackrest info --output=json` for one stanza. Unknown shapes yield an empty summary. */
+export function parsePgBackRestInfo(stdout: string, stanza: string): PgBackRestInfoSummary {
+	const empty: PgBackRestInfoSummary = {
+		statusCode: null,
+		statusMessage: null,
+		backupCount: 0,
+		oldestBackupStopAt: null,
+		newestBackupStopAt: null,
+		newestBackupType: null,
+	};
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(stdout);
+	} catch {
+		return empty;
+	}
+	if (!Array.isArray(parsed)) return empty;
+	const entry = parsed.find(
+		(item): item is Record<string, unknown> =>
+			typeof item === 'object' && item !== null && (item as Record<string, unknown>).name === stanza,
+	);
+	if (!entry) return empty;
+	const status = (entry.status ?? {}) as Record<string, unknown>;
+	const backups = (Array.isArray(entry.backup) ? entry.backup : [])
+		.map((backup) => {
+			const record = (backup ?? {}) as Record<string, unknown>;
+			const timestamp = (record.timestamp ?? {}) as Record<string, unknown>;
+			const stop = typeof timestamp.stop === 'number' ? timestamp.stop * 1000 : null;
+			const type = record.type === 'full' || record.type === 'diff' || record.type === 'incr' ? record.type : null;
+			return { stop, type };
+		})
+		.filter((backup): backup is { stop: number; type: PitrBaseBackupType | null } => backup.stop !== null)
+		.sort((a, b) => a.stop - b.stop);
+	return {
+		statusCode: typeof status.code === 'number' ? status.code : null,
+		statusMessage: typeof status.message === 'string' ? status.message : null,
+		backupCount: backups.length,
+		oldestBackupStopAt: backups[0]?.stop ?? null,
+		newestBackupStopAt: backups.at(-1)?.stop ?? null,
+		newestBackupType: backups.at(-1)?.type ?? null,
+	};
+}
+
+export interface PitrArchiverStats {
+	lastArchivedAt: number | null;
+	lastFailedAt: number | null;
+}
+
+/** Parse `PITR_ARCHIVER_SQL` output (`archived|failed`, 0 meaning never). */
+export function parseArchiverStats(stdout: string): PitrArchiverStats | null {
+	const match = /^(\d+)\|(\d+)$/.exec(stdout.trim());
+	if (!match) return null;
+	const archived = Number(match[1]);
+	const failed = Number(match[2]);
+	return { lastArchivedAt: archived > 0 ? archived : null, lastFailedAt: failed > 0 ? failed : null };
+}
+
+export interface PitrWindow {
+	/** Earliest restorable instant (epoch ms), or null when the repository holds no backup yet. */
+	recoverableFrom: number | null;
+	/** Latest restorable instant: the last archived WAL, never earlier than the newest backup. */
+	recoverableTo: number | null;
+	archiveStatus: 'ok' | 'failing' | 'unknown';
+}
+
+/**
+ * The recoverable window. A time restore needs a backup that finished before the target and every
+ * WAL segment from that backup to the target: the window opens at the oldest retained backup's
+ * stop and closes at the archiver's last success (pgBackRest's `backup` waits for its own WAL, so
+ * the newest backup's stop is always covered). The archive is `failing` when its last failure is
+ * newer than its last success; a failing archive still reports the window up to the last success.
+ */
+export function computePitrWindow(info: PgBackRestInfoSummary, archiver: PitrArchiverStats | null): PitrWindow {
+	let archiveStatus: PitrWindow['archiveStatus'] = 'unknown';
+	if (archiver) {
+		if (archiver.lastFailedAt !== null && archiver.lastFailedAt >= (archiver.lastArchivedAt ?? 0)) archiveStatus = 'failing';
+		else if (archiver.lastArchivedAt !== null) archiveStatus = 'ok';
+	}
+	if (info.oldestBackupStopAt === null || info.newestBackupStopAt === null)
+		return { recoverableFrom: null, recoverableTo: null, archiveStatus };
+	const archivedTo = archiver?.lastArchivedAt ?? null;
+	return {
+		recoverableFrom: info.oldestBackupStopAt,
+		recoverableTo: Math.max(info.newestBackupStopAt, archivedTo ?? 0),
+		archiveStatus,
+	};
+}
+
+/** What `pitr/status` returns: repository and archive state, never a credential. */
+export interface HelperPitrStatus {
+	configured: boolean;
+	stanza: string;
+	/** Read back from the generated config; `endpoint` is the bare host pgBackRest connects to. */
+	repo: { bucket: string | null; region: string | null; endpoint: string | null; path: string | null };
+	archiveStatus: PitrWindow['archiveStatus'];
+	recoverableFrom: number | null;
+	recoverableTo: number | null;
+	backupCount: number;
+	newestBackupAt: number | null;
+	newestBackupType: PitrBaseBackupType | null;
+	lastArchivedAt: number | null;
+	lastFailedAt: number | null;
+	/** pgBackRest's stanza status message when it reports a repository problem. */
+	repoMessage: string | null;
 }

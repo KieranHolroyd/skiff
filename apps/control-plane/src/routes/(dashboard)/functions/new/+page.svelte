@@ -203,6 +203,27 @@ skif deploy            # creates the function if it does not exist`;
 								/>
 							</Field.Field>
 						</div>
+						{#if productionAccess === 'password' || previewAccess === 'password'}
+							<Field.Field data-invalid={result?.fieldErrors?.password ? true : undefined}>
+								<Field.Label for="fn-access-password">Site password</Field.Label>
+								<Input
+									id="fn-access-password"
+									name="password"
+									type="password"
+									autocomplete="new-password"
+									minlength={8}
+									required
+									aria-invalid={result?.fieldErrors?.password ? 'true' : undefined}
+								/>
+								<Field.Description>
+									At least 8 characters. Each password-protected scope gets its own copy; change
+									either one later from the function's Settings tab.
+								</Field.Description>
+								{#if result?.fieldErrors?.password}<Field.Error
+										>{result.fieldErrors.password}</Field.Error
+									>{/if}
+							</Field.Field>
+						{/if}
 					</Field.Group>
 				</Card.Content>
 

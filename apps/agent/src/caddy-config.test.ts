@@ -112,6 +112,28 @@ describe('buildCaddyConfig', () => {
 		expect(compiled.at(-1)!['@id']).toBe('catch-all');
 	});
 
+	test('serves a default page at a never-deployed project, but never over a real route', () => {
+		const value = state();
+		value.placeholders = [
+			{ host: 'fresh.example.com', projectId: 'prj_fresh', dashboardUrl: 'https://cloud.example.com/projects/fresh' },
+			// A stale entry for a host that already has a site route must not shadow it.
+			{ host: 'public.example.com', projectId: 'prj_public' },
+		];
+		const compiled = routes(config(value));
+		const placeholders = compiled.filter((route) => String(route['@id']).startsWith('awaiting-deploy:'));
+		expect(placeholders.map((route) => route['@id'])).toEqual(['awaiting-deploy:fresh.example.com']);
+		const index = compiled.indexOf(placeholders[0]!);
+		expect(index).toBeLessThan(compiled.findIndex((route) => route['@id'] === 'content-placeholder'));
+		const responses = collectHandlers(placeholders[0]).filter((handler) => handler.handler === 'static_response');
+		expect(responses.map((response) => response.status_code)).toEqual([200, 200]);
+		expect(String(responses[0]!.body)).toContain('Nothing deployed yet');
+		expect(String(responses[0]!.body)).toContain('href="https://cloud.example.com/projects/fresh"');
+	});
+
+	test('older control planes send no placeholders', () => {
+		expect(routes(config()).some((route) => String(route['@id']).startsWith('awaiting-deploy:'))).toBe(false);
+	});
+
 	test('adapts a public route to a static file_server', () => {
 		const route = routes(config()).find((candidate) => String(candidate['@id']).startsWith('site:prj_public:'));
 		expect(route).toBeDefined();
@@ -368,6 +390,21 @@ describe('per-deployment roots, worker routes and logging', () => {
 		expect(customDomainIssuers({ email: 'ops@example.com', subjects: [], ca: 'https://acme.test/dir' })).toEqual([
 			{ module: 'acme', email: 'ops@example.com', ca: 'https://acme.test/dir' },
 		]);
+	});
+
+	test('replicated routes carry the cluster health-check interval to Caddy', () => {
+		const value = state();
+		value.routes[0] = {
+			...value.routes[0]!,
+			upstreams: ['http://10.88.1.2:8080', 'http://10.88.1.3:8080'],
+			healthPath: '/healthz',
+			healthIntervalSeconds: 12,
+		};
+		const json = JSON.stringify(config(value));
+		expect(json).toContain('"active":{"uri":"/healthz","interval":"12s"}');
+		// An older control plane sends no interval: the agent keeps the 5 s default.
+		delete value.routes[0]!.healthIntervalSeconds;
+		expect(JSON.stringify(config(value))).toContain('"active":{"uri":"/healthz","interval":"5s"}');
 	});
 
 	test('domain helpers tolerate missing origins and production routes', () => {

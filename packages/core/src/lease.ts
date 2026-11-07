@@ -1,3 +1,4 @@
+import type { Database } from 'bun:sqlite';
 import { leasePolicySchema, type LeasePolicy, type LeaseRecord } from '@skiff/contracts';
 
 /**
@@ -94,5 +95,73 @@ export class MemoryLeaseStore implements LeaseStore {
 		if (expectedVersion !== (this.current ? version : null)) return false;
 		this.current = { record: { ...record }, version: version + 1 };
 		return true;
+	}
+}
+
+/**
+ * A lease kept in the control plane's own SQLite `settings` table, with the CAS done by a
+ * conditional `UPDATE … WHERE value = <what was read>`.
+ *
+ * It does not replace the object-store lease of §6.3 (two hosts never share one SQLite file); it
+ * fences the processes that share this database — a restarted primary and the one it replaced, or
+ * the update slot — so exactly one of them runs the failover controller. `holdsSync` is the check a
+ * write makes inside its own transaction, so a deposed holder's write cannot land.
+ */
+export class SqliteLeaseStore implements LeaseStore {
+	constructor(
+		private readonly sqlite: Database,
+		private readonly key: string,
+		private readonly clock: () => number = Date.now,
+	) {}
+
+	readSync(): (LeaseVersioned & { raw: string }) | null {
+		const row = this.sqlite
+			.query<{ value: string }, [string]>('SELECT value FROM settings WHERE key = ?')
+			.get(this.key);
+		if (!row) return null;
+		try {
+			const parsed = JSON.parse(row.value) as { version?: unknown; record?: LeaseRecord };
+			if (typeof parsed.version !== 'number' || !parsed.record) return null;
+			return { version: parsed.version, record: parsed.record, raw: row.value };
+		} catch {
+			return null;
+		}
+	}
+
+	async read(): Promise<LeaseVersioned | null> {
+		const current = this.readSync();
+		return current ? { version: current.version, record: { ...current.record } } : null;
+	}
+
+	async compareAndSwap(expectedVersion: number | null, record: LeaseRecord): Promise<boolean> {
+		const now = this.clock();
+		if (expectedVersion === null) {
+			const result = this.sqlite.run('INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', [
+				this.key,
+				JSON.stringify({ version: 1, record }),
+				now,
+			]);
+			return result.changes === 1;
+		}
+		const current = this.readSync();
+		if (!current || current.version !== expectedVersion) return false;
+		const result = this.sqlite.run('UPDATE settings SET value = ?, updated_at = ? WHERE key = ? AND value = ?', [
+			JSON.stringify({ version: expectedVersion + 1, record }),
+			now,
+			this.key,
+			current.raw,
+		]);
+		return result.changes === 1;
+	}
+
+	/** True while `holderId` holds an unexpired lease at `epoch`; the fencing check for a write. */
+	holdsSync(holderId: string, epoch: number, now: number): boolean {
+		const current = this.readSync();
+		return (
+			current !== null &&
+			current.record.holderNodeId === holderId &&
+			current.record.epoch === epoch &&
+			current.record.expiresAt > now
+		);
 	}
 }

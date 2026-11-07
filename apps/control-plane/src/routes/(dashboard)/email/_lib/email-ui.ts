@@ -41,7 +41,7 @@ export const ORG_STATE_COPY: Record<EmailOrgState, { label: string; tone: Tone; 
 			label: 'Sandbox',
 			tone: 'warning',
 			summary:
-				'Mail can only go to your own verified domains and verified addresses. A platform admin moves the organisation out of the sandbox.'
+				'Mail can only go to your own verified domains and verified sandbox recipients. Request production access to send to anyone; a platform admin reviews it.'
 		},
 		active: {
 			label: 'Active',

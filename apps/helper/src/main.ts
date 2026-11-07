@@ -5,6 +5,10 @@ import { NodeUpdater } from './node-update.ts';
 import { WireguardManager } from './wireguard.ts';
 import { NetworkManager } from './network.ts';
 import { ShareMounter } from './shares.ts';
+import { ContainerConsole } from './container-console.ts';
+import { DEFAULT_SUBID_FILES } from './userns.ts';
+import { JobDriver } from './jobs.ts';
+import { dirname, join } from 'node:path';
 
 /**
  * `skiff-helper`: the only privileged Skiff process (D26). It listens on a root-owned,
@@ -32,19 +36,23 @@ export async function runHelper(): Promise<void> {
 		quadletDir: config.quadletDir,
 		runtimeDir: config.runtimeDir,
 		stateDir: config.stateDir,
+		replicationDir: config.replicationDir,
 		releaseDirs: config.releaseDirs,
 		workerdDir: config.workerdDir,
 		bunPath: config.bunPath,
+		nodePath: config.nodePath,
 		systemctlPath: config.systemctlPath,
 		journalctlPath: config.journalctlPath,
 		podmanPath: config.podmanPath,
 		opensslPath: config.opensslPath,
 		apparmorProfile: config.apparmorProfile,
+		containerSubids: DEFAULT_SUBID_FILES,
 		socketMode: config.workloadSocketMode,
 		socketGroup: config.workloadSocketGroup,
 	});
 
 	let helper: RunningHelper | null = null;
+	let containers: ContainerConsole | null = null;
 	let stopping = false;
 	let resolveStop: (() => void) | null = null;
 	const stopped = new Promise<void>((resolve) => {
@@ -56,6 +64,7 @@ export async function runHelper(): Promise<void> {
 		resolveStop?.();
 		log('info', 'Shutting down');
 		// Workloads stay running: the agent owns their lifecycle, the helper only renders them.
+		await containers?.closeAll().catch(() => undefined);
 		await helper?.stop().catch(() => undefined);
 		helper = null;
 	};
@@ -72,7 +81,35 @@ export async function runHelper(): Promise<void> {
 		log: (level, message) => log(level, `node update: ${message}`),
 	});
 	const wireguard = new WireguardManager({ firewall: new NetworkManager() });
-	helper = await startHelperServer(config, driver, { nodeUpdate, wireguard, shares: new ShareMounter() });
+	containers = new ContainerConsole({
+		podmanPath: config.podmanPath,
+		systemctlPath: config.systemctlPath,
+		quadletDir: config.quadletDir,
+		runner: spawnRunner(),
+		log: (level, message) => log(level, `container console: ${message}`),
+	});
+	helper = await startHelperServer(config, driver, {
+		nodeUpdate,
+		wireguard,
+		shares: new ShareMounter(),
+		containers,
+		appVolumes: driver.appVolumeData({ log: (level, message) => log(level, `app volumes: ${message}`) }),
+		// Job runs (plan 09): systemd-run sits beside systemctl on every supported distribution.
+		jobs: new JobDriver({
+			runner: spawnRunner(),
+			runtimeDir: config.runtimeDir,
+			releaseDirs: config.releaseDirs,
+			bunPath: config.bunPath,
+			nodePath: config.nodePath,
+			systemdRunPath: join(dirname(config.systemctlPath), 'systemd-run'),
+			systemctlPath: config.systemctlPath,
+			journalctlPath: config.journalctlPath,
+			podmanPath: config.podmanPath,
+			apparmorProfile: config.apparmorProfile,
+			resolveAppVolumeMounts: (workload) => driver.resolveAppVolumeMounts(workload),
+			resolveDataDir: (workload) => driver.resolveDataDir(workload),
+		}),
+	});
 	if (stopping) await helper.stop();
 	log('info', `Listening on unix/${config.socketPath} (units ${config.unitDir})`);
 

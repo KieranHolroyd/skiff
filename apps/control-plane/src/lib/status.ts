@@ -29,6 +29,15 @@ const tones: Record<string, Tone> = {
 	deleted: 'neutral',
 	cancelled: 'neutral',
 	stopped: 'neutral',
+	// Read replicas and their promotions (docs/CLUSTERING.md §9.2–9.3).
+	streaming: 'success',
+	lagging: 'warning',
+	lost: 'danger',
+	removing: 'neutral',
+	fencing: 'warning',
+	promoting: 'warning',
+	repointing: 'warning',
+	completed: 'success',
 	production: 'brand'
 };
 

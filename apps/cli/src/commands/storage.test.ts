@@ -430,3 +430,132 @@ describe('skif storage buckets', () => {
 		expect(seen[0]?.path).toBe('/api/v1/storage/media/buckets/uploads');
 	});
 });
+
+describe('skif storage keys, rotate-root and move', () => {
+	function key(overrides: Record<string, unknown> = {}) {
+		return {
+			id: 'stk_1',
+			storageId: 'st_1',
+			name: 'backup-tool',
+			accessKeyId: 'SKFKEYKEYKEYKEYKEYKE',
+			grants: [{ bucket: 'uploads', mode: 'read' }],
+			purpose: 'offsite copy',
+			status: 'active',
+			lastUsedAt: null,
+			expiresAt: null,
+			createdAt: '2026-11-05T10:00:00.000Z',
+			revokedAt: null,
+			...overrides,
+		};
+	}
+
+	test('keys create sends grants, purpose and an expiry; the secret is not printed', async () => {
+		const seen = serve({ 'POST /api/v1/storage/media/keys': { key: key() } });
+		const result = await cli(
+			'storage', 'keys', 'create', 'media', 'backup-tool',
+			'--bucket', 'uploads:read', '--purpose', 'offsite copy', '--expires', '2099-01-01T00:00:00Z',
+		);
+		expect(result.code).toBe(0);
+		expect(seen[0]).toEqual({
+			method: 'POST',
+			path: '/api/v1/storage/media/keys',
+			body: {
+				name: 'backup-tool',
+				grants: [{ bucket: 'uploads', mode: 'read' }],
+				purpose: 'offsite copy',
+				expiresAt: '2099-01-01T00:00:00.000Z',
+			},
+		});
+		expect(result.stdout).toContain('Created key "backup-tool" (stk_1, SKFKEYKEYKEYKEYKEYKE)');
+		expect(result.stdout).toContain('skif storage keys reveal media stk_1');
+	});
+
+	test('keys create without --bucket is refused locally', async () => {
+		const seen = serve({});
+		const result = await cli('storage', 'keys', 'create', 'media', 'backup-tool');
+		expect(result.code).toBe(1);
+		expect(result.stderr).toContain('Name the buckets');
+		expect(seen).toHaveLength(0);
+	});
+
+	test('keys list prints a table; keys <storage> lists too', async () => {
+		serve({ 'GET /api/v1/storage/media/keys': { keys: [key(), key({ id: 'stk_2', name: 'old', status: 'revoked' })] } });
+		const result = await cli('storage', 'keys', 'media');
+		expect(result.code).toBe(0);
+		expect(result.stdout).toContain('backup-tool');
+		expect(result.stdout).toContain('uploads:read');
+		expect(result.stdout).toContain('revoked');
+	});
+
+	test('keys reveal prints env lines with the instance endpoint', async () => {
+		const seen = serve({
+			'POST /api/v1/storage/media/keys/stk_1/reveal': { key: { ...key(), secretAccessKey: 'the-secret' } },
+			'GET /api/v1/storage/media': { storage: view() },
+		});
+		const result = await cli('storage', 'keys', 'reveal', 'media', 'stk_1');
+		expect(result.code).toBe(0);
+		expect(seen[0]).toMatchObject({ method: 'POST', path: '/api/v1/storage/media/keys/stk_1/reveal' });
+		expect(result.stdout.trim().split('\n')).toEqual([
+			'AWS_ENDPOINT_URL=http://127.0.0.1:19000',
+			'AWS_ACCESS_KEY_ID=SKFKEYKEYKEYKEYKEYKE',
+			'AWS_SECRET_ACCESS_KEY=the-secret',
+			'AWS_REGION=us-east-1',
+			'AWS_FORCE_PATH_STYLE=true',
+		]);
+	});
+
+	test('keys revoke needs --yes without a terminal', async () => {
+		const seen = serve({ 'DELETE /api/v1/storage/media/keys/stk_1': { key: key({ status: 'revoked' }) } });
+		const refused = await cli('storage', 'keys', 'revoke', 'media', 'stk_1');
+		expect(refused.code).not.toBe(0);
+		expect(seen).toHaveLength(0);
+		const result = await cli('storage', 'keys', 'revoke', 'media', 'stk_1', '--yes');
+		expect(result.code).toBe(0);
+		expect(seen[0]).toMatchObject({ method: 'DELETE', path: '/api/v1/storage/media/keys/stk_1' });
+		expect(result.stdout).toContain('Revoked key "backup-tool"');
+	});
+
+	test('rotate-root stages a key and --cancel abandons it', async () => {
+		const rotating = {
+			accessKeyId: 'SKROLDOLDOLDOLDOLDOL',
+			status: 'rotating',
+			pendingAccessKeyId: 'SKRNEWNEWNEWNEWNEWNE',
+			rotationStartedAt: '2026-11-07T10:00:00.000Z',
+			error: null,
+			rotatedAt: null,
+		};
+		const seen = serve({
+			'POST /api/v1/storage/media/rotate-root': { storage: view({ rootKey: rotating }) },
+			'DELETE /api/v1/storage/media/rotate-root': { storage: view({ rootKey: { ...rotating, status: 'current', pendingAccessKeyId: null } }) },
+		});
+		const result = await cli('storage', 'rotate-root', 'media', '--yes');
+		expect(result.code).toBe(0);
+		expect(seen[0]).toMatchObject({ method: 'POST', path: '/api/v1/storage/media/rotate-root' });
+		expect(result.stdout).toContain('SKROLDOLDOLDOLDOLDOL → SKRNEWNEWNEWNEWNEWNE (rotating');
+		const cancel = await cli('storage', 'rotate-root', 'media', '--cancel');
+		expect(cancel.code).toBe(0);
+		expect(seen[1]).toMatchObject({ method: 'DELETE', path: '/api/v1/storage/media/rotate-root' });
+		expect(cancel.stdout).toContain('Cancelled the root key rotation of "media"');
+	});
+
+	test('move always sends from: "empty" and needs --node', async () => {
+		const seen = serve({
+			'GET /api/v1/storage/media': { storage: view() },
+			'POST /api/v1/storage/media/move': {
+				storage: 'media',
+				from: { nodeId: 'node_home', name: 'homelab' },
+				to: { nodeId: 'node_2', name: 'worker-2' },
+				projects: ['api'],
+				warnings: [],
+			},
+		});
+		const missing = await cli('storage', 'move', 'media');
+		expect(missing.code).toBe(1);
+		expect(missing.stderr).toContain('--node');
+		const result = await cli('storage', 'move', 'media', '--node', 'node_2', '--yes');
+		expect(result.code).toBe(0);
+		expect(seen.at(-1)).toEqual({ method: 'POST', path: '/api/v1/storage/media/move', body: { node: 'node_2', from: 'empty' } });
+		expect(result.stdout).toContain('Moving "media" from homelab to worker-2, empty.');
+		expect(result.stdout).toContain('Attached apps move with it: api.');
+	});
+});

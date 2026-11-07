@@ -1,4 +1,9 @@
 import {
+	databaseReplicationSlotStatusSchema,
+	type DatabaseReplicationSlotStatus,
+	appVolumeSnapshotMethods,
+	type AppVolumeNodeRef,
+	type AppVolumeSnapshotMethod,
 	volumeInventorySchema,
 	type WireguardState,
 	type WireguardStatus,
@@ -11,6 +16,7 @@ import {
 } from '@skiff/contracts';
 import type { HelperNodeUpdateApi } from './node-update.ts';
 import type { HelperMailApi } from './mail-bridge.ts';
+import type { HelperJobApi, HelperJobStatus } from './jobs.ts';
 
 /**
  * Client for the privileged helper's fixed verbs. The agent is unprivileged (D26): this is its
@@ -82,6 +88,13 @@ export interface HelperApi {
 	): Promise<void>;
 	/** Restart only the PgBouncer sidecar. */
 	restartPooler(id: string): Promise<void>;
+	/**
+	 * Streaming replication (docs/CLUSTERING.md §9.2, C7): keep a primary's role, `pg_hba` rule and
+	 * exactly `slots` (empty tears down); sample its slots; promote a replica and hand it over.
+	 */
+	replicationConfigure(id: string, input: { slots: string[]; password: string | null }): Promise<void>;
+	replicationStatus(id: string): Promise<DatabaseReplicationSlotStatus[]>;
+	replicaPromote(replicaId: string, databaseId: string): Promise<{ lsn: string | null }>;
 	/** Write the 0400 pgBackRest config for PITR (docs/PITR.md). */
 	pitrConfigure(
 		id: string,
@@ -112,11 +125,37 @@ export interface HelperStudioPrincipalApi {
 	ensureStudioPrincipal(id: string, user: string, password: string): Promise<void>;
 }
 
+/** App-volume data verbs (docs/VOLUMES.md §14). Apart from `HelperApi` so test fakes need not grow. */
+export interface HelperAppVolumeApi {
+	/** Allocated bytes per volume (`du -B1`); null with an error for one the helper could not read. */
+	appVolumeUsage(
+		volumes: AppVolumeNodeRef[],
+		signal?: AbortSignal,
+	): Promise<Array<{ id: string; usedBytes: number | null; error?: string }>>;
+	/** Delete a trashed volume's directory. Idempotent. */
+	purgeAppVolume(volume: AppVolumeNodeRef, signal?: AbortSignal): Promise<void>;
+	/** Start a snapshot; the helper pauses `writers` while it copies and streams a gzip tar. */
+	snapshotAppVolume(
+		input: { volume: AppVolumeNodeRef; snapshotId: string; quiesce: boolean; writers: string[] },
+		signal?: AbortSignal,
+	): Promise<{ method: AppVolumeSnapshotMethod; body: ReadableStream<Uint8Array> }>;
+	/** Stream a snapshot archive into a new, empty volume; the helper empties it again on failure. */
+	restoreAppVolume(volume: AppVolumeNodeRef, body: ReadableStream<Uint8Array>, signal?: AbortSignal): Promise<void>;
+}
+
 export interface HelperPitrStatus {
 	configured: boolean;
 	stanza: string;
 	repo: { bucket: string | null; region: string | null; endpoint: string | null; path: string | null };
 	archiveStatus: 'ok' | 'failing' | 'unknown';
+	/** The recoverable window (epoch ms) and repository state; null/0 from older helpers. */
+	recoverableFrom: number | null;
+	recoverableTo: number | null;
+	backupCount: number;
+	newestBackupAt: number | null;
+	newestBackupType: 'full' | 'diff' | 'incr' | null;
+	lastArchivedAt: number | null;
+	repoMessage: string | null;
 }
 
 export class HelperError extends Error {
@@ -143,9 +182,16 @@ const STUDIO_TIMEOUT_MS = 30_000;
 const NODE_UPDATE_TIMEOUT_MS = 11 * 60_000;
 /** Kernel WireGuard apply is a handful of local commands. */
 const WIREGUARD_TIMEOUT_MS = 30_000;
+/** `du` over every app volume on the node. */
+const APP_VOLUME_USAGE_TIMEOUT_MS = 5 * 60_000;
+const APP_VOLUME_PURGE_TIMEOUT_MS = 10 * 60_000;
+/** Whole snapshot or restore stream; the helper bounds a paused copy at 15 minutes itself. */
+const APP_VOLUME_STREAM_TIMEOUT_MS = 6 * 60 * 60_000;
 const STATUSES: readonly WorkloadStatus[] = ['pending', 'starting', 'running', 'failed', 'stopped'];
 
-export class HelperClient implements HelperApi, HelperStudioApi, HelperStudioPrincipalApi, HelperNodeUpdateApi, HelperMailApi {
+export class HelperClient
+	implements HelperApi, HelperStudioApi, HelperStudioPrincipalApi, HelperNodeUpdateApi, HelperMailApi, HelperAppVolumeApi
+{
 	constructor(
 		readonly socketPath: string,
 		private readonly timeouts: { health?: number; apply?: number } = {},
@@ -210,6 +256,31 @@ export class HelperClient implements HelperApi, HelperStudioApi, HelperStudioPri
 			undefined,
 			30_000,
 		);
+	}
+
+	async replicationConfigure(id: string, input: { slots: string[]; password: string | null }): Promise<void> {
+		await this.request('POST', `/v1/workloads/${encodeURIComponent(id)}/replication/configure`, input, 60_000);
+	}
+
+	async replicationStatus(id: string): Promise<DatabaseReplicationSlotStatus[]> {
+		const body = (await this.request(
+			'GET',
+			`/v1/workloads/${encodeURIComponent(id)}/replication/status`,
+			undefined,
+			30_000,
+		)) as { slots?: unknown };
+		return databaseReplicationSlotStatusSchema.array().max(32).parse(body.slots ?? []);
+	}
+
+	async replicaPromote(replicaId: string, databaseId: string): Promise<{ lsn: string | null }> {
+		// pg_ctl promote waits up to 60 s, then a checkpoint and a clean stop.
+		const body = (await this.request(
+			'POST',
+			`/v1/workloads/${encodeURIComponent(replicaId)}/replica/promote`,
+			{ databaseId },
+			240_000,
+		)) as { lsn?: unknown };
+		return { lsn: typeof body.lsn === 'string' ? body.lsn : null };
 	}
 
 	async studioStart(): Promise<void> {
@@ -359,7 +430,8 @@ export class HelperClient implements HelperApi, HelperStudioApi, HelperStudioPri
 			'GET',
 			`/v1/workloads/${encodeURIComponent(id)}/pitr/status`,
 			undefined,
-			30_000,
+			// `pgbackrest info` lists the repository over S3.
+			120_000,
 		);
 		const record = asRecord(body);
 		const repo = asRecord(record.repo);
@@ -376,6 +448,16 @@ export class HelperClient implements HelperApi, HelperStudioApi, HelperStudioPri
 				record.archiveStatus === 'ok' || record.archiveStatus === 'failing'
 					? record.archiveStatus
 					: 'unknown',
+			recoverableFrom: epochOrNull(record.recoverableFrom),
+			recoverableTo: epochOrNull(record.recoverableTo),
+			backupCount: typeof record.backupCount === 'number' && record.backupCount >= 0 ? Math.floor(record.backupCount) : 0,
+			newestBackupAt: epochOrNull(record.newestBackupAt),
+			newestBackupType:
+				record.newestBackupType === 'full' || record.newestBackupType === 'diff' || record.newestBackupType === 'incr'
+					? record.newestBackupType
+					: null,
+			lastArchivedAt: epochOrNull(record.lastArchivedAt),
+			repoMessage: typeof record.repoMessage === 'string' ? record.repoMessage.slice(0, 500) : null,
 		};
 	}
 
@@ -408,6 +490,72 @@ export class HelperClient implements HelperApi, HelperStudioApi, HelperStudioPri
 			ok: record.ok === true,
 			message: typeof record.message === 'string' ? record.message : null,
 		};
+	}
+
+	async appVolumeUsage(
+		volumes: AppVolumeNodeRef[],
+		signal?: AbortSignal,
+	): Promise<Array<{ id: string; usedBytes: number | null; error?: string }>> {
+		const body = await this.request('POST', '/v1/app-volumes/usage', { volumes }, APP_VOLUME_USAGE_TIMEOUT_MS, signal);
+		const usage = asRecord(body).usage;
+		if (!Array.isArray(usage)) throw new HelperError('helper app-volume usage is not a list');
+		return usage.map((item) => {
+			const record = asRecord(item);
+			if (typeof record.id !== 'string') throw new HelperError('helper app-volume usage entry has no id');
+			const used = record.usedBytes;
+			return {
+				id: record.id,
+				usedBytes: typeof used === 'number' && Number.isSafeInteger(used) && used >= 0 ? used : null,
+				...(typeof record.error === 'string' ? { error: record.error } : {}),
+			};
+		});
+	}
+
+	async purgeAppVolume(volume: AppVolumeNodeRef, signal?: AbortSignal): Promise<void> {
+		await this.request('POST', '/v1/app-volumes/purge', { volume }, APP_VOLUME_PURGE_TIMEOUT_MS, signal);
+	}
+
+	async snapshotAppVolume(
+		input: { volume: AppVolumeNodeRef; snapshotId: string; quiesce: boolean; writers: string[] },
+		signal?: AbortSignal,
+	): Promise<{ method: AppVolumeSnapshotMethod; body: ReadableStream<Uint8Array> }> {
+		const timeout = AbortSignal.timeout(APP_VOLUME_STREAM_TIMEOUT_MS);
+		const response = await fetch('http://localhost/v1/app-volumes/snapshot', {
+			method: 'POST',
+			unix: this.socketPath,
+			signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify(input),
+		});
+		if (!response.ok) {
+			const text = await response.text().catch(() => '');
+			throw new HelperError(`helper snapshot ${input.volume.id} -> ${response.status}${text ? `: ${text.slice(0, 500)}` : ''}`);
+		}
+		if (!response.body) throw new HelperError(`helper snapshot ${input.volume.id} returned no body`);
+		const method = response.headers.get('x-skiff-snapshot-method');
+		if (!method || !(appVolumeSnapshotMethods as readonly string[]).includes(method)) {
+			await response.body.cancel().catch(() => undefined);
+			throw new HelperError(`helper snapshot ${input.volume.id} did not say how it copied (${method ?? 'no header'})`);
+		}
+		return { method: method as AppVolumeSnapshotMethod, body: response.body };
+	}
+
+	async restoreAppVolume(volume: AppVolumeNodeRef, body: ReadableStream<Uint8Array>, signal?: AbortSignal): Promise<void> {
+		const query = new URLSearchParams({ id: volume.id, projectId: volume.projectId, backing: volume.backing });
+		if (volume.nodeVolumeId) query.set('nodeVolumeId', volume.nodeVolumeId);
+		const timeout = AbortSignal.timeout(APP_VOLUME_STREAM_TIMEOUT_MS);
+		const response = await fetch(`http://localhost/v1/app-volumes/restore?${query}`, {
+			method: 'POST',
+			unix: this.socketPath,
+			signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+			headers: { 'content-type': 'application/gzip' },
+			body: body as never,
+			duplex: 'half',
+		} as RequestInit & { duplex: 'half' });
+		if (!response.ok) {
+			const text = await response.text().catch(() => '');
+			throw new HelperError(`helper restore ${volume.id} -> ${response.status}${text ? `: ${text.slice(0, 500)}` : ''}`);
+		}
 	}
 
 	async status(id: string): Promise<HelperWorkloadStatus> {
@@ -460,6 +608,65 @@ export class HelperClient implements HelperApi, HelperStudioApi, HelperStudioPri
 		);
 	}
 
+	// --- job runs (plan 09): one transient unit per run --------------------------------------
+
+	async startJob(input: Parameters<HelperJobApi['startJob']>[0]): Promise<HelperJobStatus> {
+		const body = await this.request('POST', '/v1/jobs', input, this.timeouts.apply ?? APPLY_TIMEOUT_MS);
+		return parseJobStatus(asRecord(body).job);
+	}
+
+	async jobStatus(runId: string, timeoutSeconds?: number): Promise<HelperJobStatus> {
+		const query = timeoutSeconds === undefined ? '' : `?timeout=${timeoutSeconds}`;
+		const body = await this.request('GET', `/v1/jobs/${encodeURIComponent(runId)}${query}`, undefined, LOG_TIMEOUT_MS);
+		return parseJobStatus(asRecord(body).job);
+	}
+
+	async jobLogs(runId: string, options: LogReadOptions = {}): Promise<HelperLogResult> {
+		const params = new URLSearchParams({ lines: String(options.lines ?? 200) });
+		if (options.cursor) params.set('cursor', options.cursor);
+		const body = await this.request('GET', `/v1/jobs/${encodeURIComponent(runId)}/logs?${params.toString()}`, undefined, LOG_TIMEOUT_MS);
+		const record = asRecord(body);
+		const entries = Array.isArray(record.entries) ? record.entries : [];
+		return {
+			entries: entries.map((value) => parseLogEntry(value)),
+			nextCursor: typeof record.nextCursor === 'string' ? record.nextCursor : null,
+		};
+	}
+
+	async stopJob(runId: string, force = false): Promise<void> {
+		await this.request('POST', `/v1/jobs/${encodeURIComponent(runId)}/stop`, force ? { force: true } : undefined, LIFECYCLE_TIMEOUT_MS);
+	}
+
+	async removeJob(runId: string): Promise<void> {
+		await this.request('DELETE', `/v1/jobs/${encodeURIComponent(runId)}`, undefined, LIFECYCLE_TIMEOUT_MS);
+	}
+
+	/**
+	 * One container-console call (D127), passed through untouched so streams (shell output, file
+	 * downloads) are never buffered here. Only `/v1/containers/…` paths; the caller sets timeouts.
+	 */
+	async containerConsole(
+		path: string,
+		init: { method?: string; body?: string | Uint8Array | ReadableStream<Uint8Array> | null; contentType?: string; lastEventId?: string; signal?: AbortSignal } = {},
+	): Promise<Response> {
+		if (!path.startsWith('/v1/containers/')) throw new HelperError('not a container console path');
+		try {
+			return await fetch(`http://localhost${path}`, {
+				method: init.method ?? 'GET',
+				unix: this.socketPath,
+				...(init.signal ? { signal: init.signal } : {}),
+				headers: {
+					...(init.contentType ? { 'content-type': init.contentType } : {}),
+					...(init.lastEventId ? { 'last-event-id': init.lastEventId } : {}),
+				},
+				...(init.body === undefined ? {} : { body: init.body }),
+			});
+		} catch (error) {
+			const detail = error instanceof Error ? error.message : String(error);
+			throw new HelperError(`helper unavailable on ${this.socketPath}: ${detail}`);
+		}
+	}
+
 	private async request(
 		method: string,
 		path: string,
@@ -501,6 +708,24 @@ export class HelperClient implements HelperApi, HelperStudioApi, HelperStudioPri
 		}
 		return payload;
 	}
+}
+
+const JOB_OUTCOMES: readonly HelperJobStatus['outcome'][] = ['running', 'succeeded', 'failed', 'timeout', 'killed', 'not-found'];
+
+function parseJobStatus(value: unknown): HelperJobStatus {
+	const record = asRecord(value);
+	if (typeof record.runId !== 'string') throw new HelperError('helper job status is missing runId');
+	if (typeof record.outcome !== 'string' || !JOB_OUTCOMES.includes(record.outcome as HelperJobStatus['outcome']))
+		throw new HelperError(`helper job status is invalid: ${String(record.outcome)}`);
+	const int = (field: unknown) => (typeof field === 'number' && Number.isInteger(field) ? field : null);
+	return {
+		runId: record.runId,
+		outcome: record.outcome as HelperJobStatus['outcome'],
+		exitCode: int(record.exitCode),
+		signal: int(record.signal),
+		startedAt: int(record.startedAt),
+		finishedAt: int(record.finishedAt),
+	};
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -553,4 +778,9 @@ function asOptionalRecord(value: unknown): Record<string, unknown> | null {
 	return typeof value === 'object' && value !== null && !Array.isArray(value)
 		? (value as Record<string, unknown>)
 		: null;
+}
+
+/** A positive integer epoch-ms value from the helper, or null. */
+function epochOrNull(value: unknown): number | null {
+	return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null;
 }

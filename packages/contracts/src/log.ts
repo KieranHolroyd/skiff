@@ -41,6 +41,11 @@ export interface LogQuery {
 	level?: LogLevel;
 	/** Case-insensitive substring match. */
 	q?: string;
+	/**
+	 * One job run's output (plan 09). Without it, project queries leave job output out: it is
+	 * shown per run, not mixed into the app's own stream.
+	 */
+	jobRunId?: string;
 }
 
 export interface LogQueryResult {
@@ -94,6 +99,8 @@ export const runtimeLogBatchSchema = z.object({
 	workloadId: z.string().min(3).max(128),
 	/** Journald cursor after this batch, so an agent restart can resume without duplicates. */
 	cursor: z.string().max(512).optional(),
+	/** Output of one job run (plan 09) on this workload's node, not the app itself. */
+	jobRunId: z.string().min(1).max(64).optional(),
 	lines: z.array(runtimeLogLineSchema).max(500),
 });
 export type RuntimeLogBatch = z.infer<typeof runtimeLogBatchSchema>;

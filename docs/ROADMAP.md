@@ -66,6 +66,7 @@
 - [ ] `skiff-workloads.slice` budget per node, deploy-time admission, runtime-aware `auto` placement
 - [ ] Env vars & secrets UI/API/MCP (design already in place)
 - [ ] Tier 3 containers (Podman Quadlet)
+- [x] Container console for container projects: live overview and processes, read-only file browser, interactive shell, restart (permission-gated and audited; `CONTAINER_CONSOLE` kill switch)
 - [ ] Git builds on the homelab Builder + GitHub webhooks
 - [ ] Custom domains (TXT verify, on-demand TLS, Cloudflare auto-records, apex↔www)
 - [ ] `ObjectStore`: local fs, Garage/MinIO, multi-target replication
@@ -105,7 +106,9 @@
 - [x] Structure editing in the studio: typed `alter` op with dry-run review for tables, columns, indexes, collections, fields and keys on all six engines (plan 22, DATABASES.md §14)
 - [ ] Database metrics in the Parquet archive; bulk actions and prune for databases; `restore_database` over MCP
 - [x] More engines: MySQL, MariaDB, MongoDB, Valkey and Redis with create/attach/credentials/rotation/studio/logs; logical backups for MySQL, MariaDB and MongoDB (D95)
-- [ ] Engine parity: metrics samplers, TLS, named credentials and backups for Valkey/Redis (RDB), ClickHouse as a seventh engine
+- [x] ClickHouse as a seventh engine (26.8/26.3 LTS): create/attach/credentials/live owner rotation/logs over the HTTP interface (DATABASES.md §17)
+- [x] Backups for every engine: Valkey/Redis RDB snapshots restored as the AOF base, ClickHouse native `BACKUP`/`RESTORE` archives (DATABASES.md §17)
+- [ ] Engine parity: metrics samplers, TLS and named credentials for Valkey/Redis; studio plugin for ClickHouse
 - [ ] Cross-node access via a node private address; PITR (pgBackRest/WAL-G)
 
 ## Managed object storage ([OBJECT-STORAGE.md](./OBJECT-STORAGE.md))
@@ -147,10 +150,12 @@
 - [x] Pyodide cache warmed by the installer and convergence; `functions-python` capability gates placement
 - [x] Process apps scale to zero (`idleStopSeconds`, socket activation, dashboard field)
 - [x] PHP via FrankenPHP on an inherited socket: pinned, digest-checked, opt-in `--with-php`; `examples/php-frankenphp`
+- [x] Node.js process apps (D125): `engine: "node"`, pinned LTS installed by default (`--no-node`), `process-node` placement gate, start script under `sh`, fd-3 preload so unchanged servers scale to zero; dashboard engine picker; `examples/node-http`
+- [ ] Verify a Node.js app under the helper sandbox on a Linux node through idle stop and cold start (the preload and start-script path are checked in a Linux container, not yet under systemd)
 - [ ] Verify on a Linux node under the helper sandbox: a FrankenPHP process app through its idle stop and cold start, and a Python function host
 - [ ] Python memory snapshots (`--python-load-snapshot`) to cut the ~1.2 s cold start
 - [ ] `skif` command for the workload spec (command, memory, idle stop); today it is the dashboard or `PUT /projects/:slug/workload`
-- [ ] A socket adapter for servers that cannot adopt fd 3 (Bun today), so they can scale to zero too
+- [ ] A socket adapter for servers that cannot adopt fd 3 (Bun today), so they can scale to zero too (Node.js has one, D125)
 
 ## Email ([EMAIL.md](./EMAIL.md), D114–D120)
 - [x] E0 spike: `smtp-server` STARTTLS/465/AUTH, `mailauth` DKIM and `mailparser` under Bun 1.4; port 25 egress from the prod IP (SPIKES.md §6); KumoMTA dropped for Skiff's own MTA (D115)

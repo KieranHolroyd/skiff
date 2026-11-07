@@ -304,6 +304,22 @@
 					Staging usually uses platform login so only members of this organisation can open it.
 				</Field.Description>
 			</Field.Field>
+			{#if createAccess === 'password'}
+				<Field.Field>
+					<Field.Label for="env-password">Environment password</Field.Label>
+					<Input
+						id="env-password"
+						name="password"
+						type="password"
+						autocomplete="new-password"
+						minlength={8}
+						required
+					/>
+					<Field.Description
+						>At least 8 characters. Only this environment uses it.</Field.Description
+					>
+				</Field.Field>
+			{/if}
 		</Field.Group>
 	</FormDialog>
 
@@ -325,6 +341,26 @@
 				<Field.Label for="env-edit-access">Access</Field.Label>
 				<AccessSelect id="env-edit-access" name="access" bind:value={editAccess} />
 			</Field.Field>
+			{#if editAccess === 'password'}
+				{@const keep = editing?.access === 'password' && editing.passwordSet}
+				<Field.Field>
+					<Field.Label for="env-edit-password">Environment password</Field.Label>
+					<Input
+						id="env-edit-password"
+						name="password"
+						type="password"
+						autocomplete="new-password"
+						minlength={8}
+						required={!keep}
+						placeholder={keep ? 'Unchanged' : undefined}
+					/>
+					<Field.Description
+						>{keep
+							? 'Leave blank to keep the current password.'
+							: 'At least 8 characters. Only this environment uses it.'}</Field.Description
+					>
+				</Field.Field>
+			{/if}
 		</Field.Group>
 	</FormDialog>
 {/if}

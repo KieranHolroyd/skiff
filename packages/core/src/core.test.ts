@@ -137,6 +137,25 @@ describe('deploy pipeline', () => {
 		expect(state.routes.every((route) => route.upstream === null)).toBe(true);
 	});
 
+	test('never-deployed projects get a default page on the edge until their first deploy', async () => {
+		const placeholderHosts = async () => (await core.nodes.desiredState(edgeToken)).placeholders.map((entry) => entry.host);
+		const before = await core.nodes.desiredState(edgeToken);
+		expect(before.placeholders).toContainEqual({
+			host: 'my-cool-site.sites.test',
+			projectId: core.projects.requireRow(principal, 'my-cool-site').id,
+			dashboardUrl: 'https://control.test/projects/my-cool-site',
+		});
+		// Every runtime that serves HTTP gets one; a deployed project never does.
+		expect(await placeholderHosts()).toContain('constrained-app.sites.test');
+		expect(await placeholderHosts()).not.toContain('blog.sites.test');
+
+		await core.uploads.deployInline(principal, core.projects.requireRow(principal, 'my-cool-site'), [
+			file('index.html', '<h1>First deploy</h1>'),
+		]);
+		expect(await placeholderHosts()).not.toContain('my-cool-site.sites.test');
+		expect((await core.nodes.desiredState(edgeToken)).routes.some((route) => route.host === 'my-cool-site.sites.test')).toBe(true);
+	});
+
 	test('homelab placement: edge proxies to the worker, the worker serves locally', async () => {
 		const token = core.nodes.createJoinToken(principal, 'homelab').token;
 		const worker = core.nodes.join({

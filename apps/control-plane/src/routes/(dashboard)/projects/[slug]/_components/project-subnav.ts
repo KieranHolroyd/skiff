@@ -1,6 +1,10 @@
 import { resolve } from '$app/paths';
 import ActivityIcon from '@lucide/svelte/icons/activity';
+import BoxIcon from '@lucide/svelte/icons/box';
+import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
+import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 import ChartNoAxesCombinedIcon from '@lucide/svelte/icons/chart-no-axes-combined';
+import ClockIcon from '@lucide/svelte/icons/clock';
 import CpuIcon from '@lucide/svelte/icons/cpu';
 import DatabaseIcon from '@lucide/svelte/icons/database';
 import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
@@ -20,7 +24,7 @@ import { readProjectTab, shareState, type ProjectTab } from './project-nav.js';
 
 /** The slice of a project page's data the sidebar reads. */
 export interface ProjectSubnavData {
-	project: { slug: string; name: string };
+	project: { slug: string; name: string; runtime?: string };
 	deployments: unknown[];
 	environments: unknown[];
 	builds: Array<{ status: string }>;
@@ -30,6 +34,10 @@ export interface ProjectSubnavData {
 	storageAttachments: unknown[];
 	workloadSpec: { env: Record<string, unknown>; secrets: unknown[] } | null;
 	shareLinks: Parameters<typeof shareState>[0][];
+	/** SKIFF_FEATURE_JOBS (plan 09). */
+	jobsEnabled?: boolean;
+	/** Container console permissions (D127); absent means none. */
+	can?: { inspectContainer?: boolean; containerFiles?: boolean; containerExec?: boolean };
 }
 
 export const projectSubnavKey = (slug: string) => `project:${slug}`;
@@ -40,6 +48,8 @@ export function projectSubnav(data: ProjectSubnavData, url: RouteUrl): Subnav {
 		(build) => build.status === 'building' || build.status === 'queued'
 	).length;
 	const live = runningBuilds > 0 ? 'Build in progress' : undefined;
+	// Container projects get the console sections (D127); Logs moves in beside them.
+	const container = data.project.runtime === 'container';
 	const item = (id: ProjectTab, label: string, icon: SubnavIcon, count?: number) => ({
 		id,
 		label,
@@ -56,14 +66,34 @@ export function projectSubnav(data: ProjectSubnavData, url: RouteUrl): Subnav {
 		back: { href: resolve('/(dashboard)/projects'), label: 'Projects' },
 		active: readProjectTab(url.searchParams.get('tab')),
 		groups: [
-			{
-				id: 'monitor',
-				label: 'Monitor',
-				items: [
-					item('traffic', 'Traffic', ChartNoAxesCombinedIcon),
-					{ ...item('logs', 'Logs', ScrollTextIcon), live }
-				]
-			},
+			...(container
+				? [
+						{
+							id: 'monitor',
+							label: 'Monitor',
+							items: [item('traffic', 'Traffic', ChartNoAxesCombinedIcon)]
+						},
+						{
+							id: 'container',
+							label: 'Container',
+							items: [
+								...(data.can?.inspectContainer ? [item('container', 'Overview', BoxIcon)] : []),
+								{ ...item('logs', 'Logs', ScrollTextIcon), live },
+								...(data.can?.containerExec ? [item('shell', 'Shell', SquareTerminalIcon)] : []),
+								...(data.can?.containerFiles ? [item('files', 'Files', FolderOpenIcon)] : [])
+							]
+						}
+					]
+				: [
+						{
+							id: 'monitor',
+							label: 'Monitor',
+							items: [
+								item('traffic', 'Traffic', ChartNoAxesCombinedIcon),
+								{ ...item('logs', 'Logs', ScrollTextIcon), live }
+							]
+						}
+					]),
 			{
 				id: 'ship',
 				label: 'Ship',
@@ -71,6 +101,10 @@ export function projectSubnav(data: ProjectSubnavData, url: RouteUrl): Subnav {
 					item('deployments', 'Deployments', RocketIcon, data.deployments.length),
 					item('environments', 'Environments', LayersIcon, data.environments.length),
 					{ ...item('builds', 'Builds', GitBranchIcon, data.builds.length), live },
+					// Jobs (plan 09) run in an app's sandbox; a static site has none.
+					...(data.jobsEnabled === true && (data.project.runtime === 'process' || data.project.runtime === 'container')
+						? [item('jobs', 'Jobs', ClockIcon)]
+						: []),
 					item('source', 'Source', FolderTreeIcon)
 				]
 			},

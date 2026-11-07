@@ -39,6 +39,45 @@ export type WorkloadIngress = (typeof workloadIngresses)[number];
 export const MAX_WORKLOAD_REPLICAS = 20;
 export type WorkloadRuntime = (typeof workloadRuntimes)[number];
 
+/**
+ * The JavaScript runtime a process app runs on (D125). `bun` is Skiff's own and the default;
+ * `node` is the pinned Node.js LTS the installer puts on every node. Absent means `bun`, so a spec
+ * saved before engines existed hashes (and restarts) exactly as it did.
+ */
+export const processEngines = ['bun', 'node'] as const;
+export type ProcessEngine = (typeof processEngines)[number];
+
+/**
+ * Bun's default argv for a process spec with no `command`. A Node.js app with no command runs its
+ * package.json `start` script through `/bin/sh -c` on the node instead (D125): `npm start` and
+ * `node --run start` spawn the script with every non-stdio fd closed, which loses the activated
+ * socket, while a shell passes it on.
+ */
+export const BUN_DEFAULT_COMMAND: readonly string[] = ['bun', 'run', 'start'];
+
+/** Script launchers that close fd 3 before the app starts (checked on Linux, Node 24 and 26). */
+const NODE_FD_CLOSING_LAUNCHERS = new Set(['npm', 'npx', 'pnpm', 'yarn', 'corepack']);
+
+/**
+ * Why a Node.js command cannot serve on the activated socket, or null (D125). Only matters with
+ * socket activation on; without it the app listens on `PORT` and any launcher works.
+ */
+export function nodeCommandIssue(spec: {
+	runtime: WorkloadRuntime;
+	engine?: ProcessEngine;
+	command?: string[];
+	socketActivation: boolean;
+}): string | null {
+	if (spec.runtime !== 'process' || spec.engine !== 'node' || !spec.socketActivation || !spec.command) return null;
+	const executable = spec.command[0]!.split('/').pop()!;
+	const viaRun = executable === 'node' && spec.command.includes('--run');
+	if (!viaRun && !NODE_FD_CLOSING_LAUNCHERS.has(executable)) return null;
+	return `${viaRun ? 'node --run' : executable} starts the app without the activated socket. Leave the command blank to run the package.json start script, run the server directly (node server.js), or turn socket activation off.`;
+}
+
+/** Heartbeat capability of a node whose pinned Node.js is installed (D125); placement needs it. */
+export const PROCESS_NODE_CAPABILITY = 'process-node';
+
 /** Upper bound for a process app's idle stop (D121), the same day-long cap functions use. */
 export const PROCESS_MAX_IDLE_STOP_SECONDS = 86_400;
 
@@ -103,6 +142,12 @@ export const workloadSpecSchema = z
 		 * with a validation error naming the field.
 		 */
 		command: z.array(z.string().min(1).max(1024)).min(1).max(64).optional(),
+		/**
+		 * Process only (D125): `bun` (absent) or `node`. Node apps with no command run their
+		 * package.json `start` script, land only on nodes with the pinned Node.js, and adopt the
+		 * activated socket without code changes, so they can scale to zero.
+		 */
+		engine: z.enum(processEngines).optional(),
 		/** Container: OCI image reference. Mutually exclusive with `command`. */
 		image: z.string().min(1).max(512).optional(),
 		/** Port the app listens on; the agent binds it and Caddy proxies locally. */
@@ -190,6 +235,10 @@ export const workloadSpecSchema = z
 			ctx.addIssue({ code: 'custom', path: ['data'], message: 'Runners are ephemeral and cannot keep a data directory.' });
 		if (spec.runtime === 'process' && spec.image)
 			ctx.addIssue({ code: 'custom', path: ['image'], message: 'Process workloads cannot set an image.' });
+		if (spec.engine && spec.runtime !== 'process')
+			ctx.addIssue({ code: 'custom', path: ['engine'], message: 'Only process apps choose a JavaScript engine.' });
+		const nodeIssue = nodeCommandIssue(spec);
+		if (nodeIssue) ctx.addIssue({ code: 'custom', path: ['command'], message: nodeIssue });
 		if ((spec.idleStopSeconds ?? 0) > 0) {
 			const issue = processIdleStopIssue(spec);
 			if (issue) ctx.addIssue({ code: 'custom', path: [issue.path], message: issue.message });
@@ -397,8 +446,10 @@ export const workloadDesiredSchema = z.object({
 	status: z.enum(workloadStatuses),
 	/** Content-addressed release the unit runs from; null for a pure image container. */
 	release: z.string().length(64).nullable(),
-	/** Process workloads: fixed argv. Absent means the agent's default (`bun run start`). */
+	/** Process workloads: fixed argv. Absent means the helper's default for `engine`. */
 	command: z.array(z.string().min(1).max(1024)).min(1).max(64).optional(),
+	/** Process workloads on Node.js (D125). Omitted for Bun, so their desired state is unchanged. */
+	engine: z.literal('node').optional(),
 	/** Container workloads: the OCI image to run. */
 	image: z.string().min(1).max(512).optional(),
 	upstream: z.string(),

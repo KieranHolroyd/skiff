@@ -127,6 +127,20 @@ describe('studioCall', () => {
 		expect(caught).toMatchObject({ code: 'studio_unavailable', status: 503 });
 	});
 
+	test('an empty 200 is a retryable studio error, not a JSON parse TypeError', async () => {
+		mockFetch(() => new Response(null, { status: 200 }));
+		const caught = await studioCall('app-db', 'info', {}).catch((error: unknown) => error);
+		expect(caught).toBeInstanceOf(StudioCallError);
+		expect(caught).toMatchObject({ code: 'studio_unavailable', status: 200 });
+	});
+
+	test('a malformed JSON body is a typed internal error', async () => {
+		mockFetch(() => new Response('<html>oops</html>', { status: 200 }));
+		const caught = await studioCall('app-db', 'info', {}).catch((error: unknown) => error);
+		expect(caught).toBeInstanceOf(StudioCallError);
+		expect(caught).toMatchObject({ code: 'internal', status: 200 });
+	});
+
 	test('a network failure is a network error', async () => {
 		mockFetch(() => {
 			throw new TypeError('Failed to fetch');

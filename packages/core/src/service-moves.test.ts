@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDb } from '@skiff/db';
-import type { Heartbeat } from '@skiff/contracts';
+import { DEFAULT_FEATURES, type Heartbeat } from '@skiff/contracts';
 import { buildPrincipal } from './orgs.ts';
 import { createCore } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
@@ -27,6 +27,8 @@ const core: Core = createCore({
 		siteCookieSecret: 'site-cookie-secret-123',
 		objectStoreSecret: 'object-secret-123',
 		desiredAgentVersion: '0.1.0',
+		// Moves cover the pinned path: process apps follow their database and storage.
+		features: { ...DEFAULT_FEATURES, SERVICE_ENDPOINTS: false },
 		now: () => clock,
 	},
 });
@@ -282,9 +284,10 @@ describe('moving a database', () => {
 		expect(core.moves.latestForDatabase(owner, 'orders')?.error).toMatch(/did not stop/);
 	});
 
-	test('refuses engines without backups, PITR, and apps with other pins', async () => {
-		core.databases.create(owner, { name: 'cache', engine: 'valkey', placement: alpha.nodeId });
-		expect(() => core.moves.moveDatabase(owner, 'cache', { node: beta.nodeId })).toThrow(/no backups.*from: "empty"/);
+	test('refuses PITR databases and apps with other pins', async () => {
+		// Every engine has native backups now (Valkey included), so none is refused for lacking them.
+		const cache = core.databases.create(owner, { name: 'cache', engine: 'valkey', placement: alpha.nodeId });
+		expect(cache.capabilities.backups).toBe(true);
 
 		const other = core.databases.create(owner, { name: 'ledger', placement: beta.nodeId });
 		core.databases.applyHeartbeat(beta.nodeId, [{ id: other.id, status: 'running', restarts: 0 }]);
@@ -371,14 +374,13 @@ describe('moving a database that cannot run', () => {
 	});
 });
 
-test('an engine without backups can move empty, even while running', () => {
+test('a running database refuses an empty move and points at a final dump', () => {
 	const cache = core.databases.get(owner, 'cache');
 	core.databases.applyHeartbeat(alpha.nodeId, [{ id: cache.id, status: 'running', restarts: 0 }]);
-	expect(core.moves.moveDatabase(owner, 'cache', { node: beta.nodeId, from: 'empty' })).toMatchObject({
-		from: 'empty',
-		phase: 'purging',
-	});
-	expect(core.databases.get(owner, 'cache').nodeId).toBe(beta.nodeId);
+	expect(() => core.moves.moveDatabase(owner, 'cache', { node: beta.nodeId, from: 'empty' })).toThrow(
+		/final dump keeps every write/,
+	);
+	expect(core.databases.get(owner, 'cache').nodeId).toBe(alpha.nodeId);
 });
 
 describe('an app using a database and private storage on the old node', () => {

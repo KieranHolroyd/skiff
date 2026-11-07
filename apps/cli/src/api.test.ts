@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { ApiClient } from './api.ts';
-import { ApiError } from './errors.ts';
+import { ApiError, CliError } from './errors.ts';
 
 const token = 'sk_test_123';
 
@@ -451,6 +451,134 @@ describe('ApiClient operations', () => {
 				const client = new ApiClient({ baseUrl: baseUrl(server), token });
 				const { projects } = await client.listProjects({ trash: true });
 				expect(projects[0]?.purgeAt).toBe('2026-11-08T00:00:00Z');
+			},
+		);
+	});
+});
+
+describe('ApiClient node tasks (D124)', () => {
+	const task = (overrides: Record<string, unknown> = {}) => ({
+		id: 'nt_1',
+		kind: 'broker.queue.send',
+		status: 'succeeded',
+		target: { type: 'broker', name: 'mq', nodeId: 'node_1' },
+		input: {},
+		result: { stream: 'SKIFF_Q_jobs', sent: 1, seqs: [4], durationMs: 2, state: null },
+		error: null,
+		createdAt: '2026-11-07T10:00:00.000Z',
+		startedAt: null,
+		finishedAt: null,
+		...overrides,
+	});
+
+	test('a 200 answers with the result; the request waits 20s and sends the body', async () => {
+		let seen: { url: string; method: string; body: unknown } | undefined;
+		await withServer(
+			async (request) => {
+				seen = { url: request.url, method: request.method, body: await request.json() };
+				return Response.json({ task: task() });
+			},
+			async (server) => {
+				const client = new ApiClient({ baseUrl: baseUrl(server), token });
+				const { result, task: view } = await client.brokerQueueSend('mq', 'jobs', { body: '{}', count: 2 });
+				expect(result.seqs).toEqual([4]);
+				expect(view.status).toBe('succeeded');
+				expect(seen?.method).toBe('POST');
+				expect(seen?.url).toBe(`${baseUrl(server)}/api/v1/brokers/mq/queues/jobs/messages?wait=20`);
+				expect(seen?.body).toEqual({ body: '{}', count: 2 });
+			},
+		);
+	});
+
+	test('peek keeps its own query and adds wait', async () => {
+		let url = '';
+		await withServer(
+			(request) => {
+				url = request.url;
+				return Response.json({ task: task({ result: { stream: 'S', messages: [], total: 0, firstSeq: 0, lastSeq: 0, nextSeq: null } }) });
+			},
+			async (server) => {
+				await new ApiClient({ baseUrl: baseUrl(server), token }).brokerStreamPeek('mq', 'SKIFF_Q_jobs', { limit: 5, from: 10 });
+				expect(url).toBe(`${baseUrl(server)}/api/v1/brokers/mq/streams/SKIFF_Q_jobs/messages?limit=5&from=10&wait=20`);
+			},
+		);
+	});
+
+	test('a 202 is polled at /node-tasks/:id until it finishes', async () => {
+		const paths: string[] = [];
+		let polls = 0;
+		await withServer(
+			(request) => {
+				const url = new URL(request.url);
+				paths.push(`${request.method} ${url.pathname}${url.search}`);
+				if (request.method === 'POST')
+					return Response.json({ task: task({ status: 'pending', result: null }) }, { status: 202, headers: { location: '/api/v1/node-tasks/nt_1' } });
+				polls++;
+				return Response.json({
+					task: polls < 2 ? task({ status: 'running', result: null }) : task({ kind: 'function.scheduled', result: { status: 200, error: null, durationMs: 5, coldStart: true } }),
+				});
+			},
+			async (server) => {
+				const client = new ApiClient({ baseUrl: baseUrl(server), token });
+				const { result } = await client.functionScheduled('api', '* * * * *');
+				expect(result).toEqual({ status: 200, error: null, durationMs: 5, coldStart: true });
+				expect(paths).toEqual([
+					'POST /api/v1/projects/api/function/scheduled?wait=20',
+					'GET /api/v1/node-tasks/nt_1?wait=20',
+					'GET /api/v1/node-tasks/nt_1?wait=20',
+				]);
+			},
+		);
+	});
+
+	test('a 502 node_task_failed becomes a CliError with the node message', async () => {
+		await withServer(
+			() =>
+				Response.json(
+					{ error: 'node_task_failed', message: 'stream not found', task: task({ status: 'failed', error: 'stream not found', result: null }) },
+					{ status: 502 },
+				),
+			async (server) => {
+				const client = new ApiClient({ baseUrl: baseUrl(server), token });
+				const error = await client.brokerStreamPurge('mq', 'NOPE').catch((caught: unknown) => caught);
+				expect(error).toBeInstanceOf(CliError);
+				expect(error).not.toBeInstanceOf(ApiError);
+				expect((error as CliError).message).toBe('stream not found');
+				expect((error as CliError).code).toBe('node_task_failed');
+			},
+		);
+	});
+
+	test('a task that fails while polled throws its error; other errors stay ApiErrors', async () => {
+		await withServer(
+			(request) =>
+				request.method === 'POST'
+					? Response.json({ task: task({ status: 'pending', result: null }) }, { status: 202 })
+					: Response.json({ task: task({ status: 'failed', error: 'Node node_1 did not pick up the task.', result: null }) }),
+			async (server) => {
+				const client = new ApiClient({ baseUrl: baseUrl(server), token });
+				await expect(client.brokerQueueCreate('mq', 'jobs')).rejects.toThrow('Node node_1 did not pick up the task.');
+			},
+		);
+		await withServer(
+			() => Response.json({ error: 'not_found', message: 'No broker "mq".' }, { status: 404 }),
+			async (server) => {
+				const client = new ApiClient({ baseUrl: baseUrl(server), token });
+				const error = await client.brokerStreamDelete('mq', 'S').catch((caught: unknown) => caught);
+				expect(error).toBeInstanceOf(ApiError);
+				expect((error as ApiError).status).toBe(404);
+			},
+		);
+	});
+
+	test('gives up after nodeTaskWaitMs with the task id', async () => {
+		await withServer(
+			() => Response.json({ task: task({ status: 'running', result: null }) }, { status: 202 }),
+			async (server) => {
+				const client = new ApiClient({ baseUrl: baseUrl(server), token, nodeTaskWaitMs: 0 });
+				const error = await client.functionInvoke('api', { path: '/' }).catch((caught: unknown) => caught);
+				expect((error as CliError).code).toBe('node_task_timeout');
+				expect((error as CliError).message).toContain('task nt_1 (running)');
 			},
 		);
 	});

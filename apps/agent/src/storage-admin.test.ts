@@ -18,6 +18,7 @@ const admin: StorageAdmin = {
 	port: 19000,
 	keysVersion: 'a'.repeat(64),
 	users: {},
+	replication: {},
 };
 
 const lifecycle: BucketLifecycleRule[] = [
@@ -187,6 +188,7 @@ function desired(overrides: Partial<WorkloadObjectStorage['buckets'][number]> = 
 		users: [],
 		deleteBuckets: [],
 		keysVersion: 'b'.repeat(64),
+		replication: [],
 	};
 }
 
@@ -313,5 +315,63 @@ describe('storage bucket configuration convergence', () => {
 
 	test('object lock without versioning is rejected by the contract before reaching the agent', () => {
 		expect(() => bucketCreateSchema.parse({ name: 'uploads', objectLock })).toThrow(/requires versioning/);
+	});
+});
+
+describe('root key reports (staged rotation)', () => {
+	const refused = () => {
+		throw new StorageApiError('GET / -> 403 InvalidAccessKeyId', 403, 'InvalidAccessKeyId');
+	};
+
+	test('a working root key is reported accepted once per key', async () => {
+		const api = new FakeApi();
+		let current = target(api);
+		const reconciler = new StorageReconciler({ source: { storageTargets: () => [current] }, apiFor: () => api, now: () => 1_000 });
+		await reconciler.reconcile();
+		const first = reconciler.pendingRootKeyReports();
+		expect(first).toEqual([{ storageId: 'st_1', accessKeyId: 'SKRROOT', result: 'accepted', message: null }]);
+		reconciler.acknowledgeRootKeyReports(first);
+		await reconciler.reconcile();
+		expect(reconciler.pendingRootKeyReports()).toEqual([]);
+
+		// A new activation with a staged key is proved again.
+		current = target(api, { activationVersion: 'v2', admin: { ...admin, rootAccessKeyId: 'SKRNEW' } });
+		await reconciler.reconcile();
+		expect(reconciler.pendingRootKeyReports()).toMatchObject([{ accessKeyId: 'SKRNEW', result: 'accepted' }]);
+	});
+
+	test('rejected only after three auth failures spread over two minutes', async () => {
+		const api = new FakeApi();
+		api.listBuckets = async () => refused();
+		let clock = 0;
+		const reconciler = new StorageReconciler({ source: { storageTargets: () => [target(api)] }, apiFor: () => api, now: () => clock });
+		// Three quick failures right after a restart are not enough.
+		for (let i = 0; i < 3; i++) await reconciler.reconcile();
+		expect(reconciler.pendingRootKeyReports()).toEqual([]);
+		clock += 2 * 60_000;
+		await reconciler.reconcile();
+		const [report] = reconciler.pendingRootKeyReports();
+		expect(report).toMatchObject({ storageId: 'st_1', accessKeyId: 'SKRROOT', result: 'rejected' });
+		expect(report!.message).toContain('InvalidAccessKeyId');
+	});
+
+	test('connection errors neither count nor reset the streak', async () => {
+		const api = new FakeApi();
+		let clock = 0;
+		let mode: 'auth' | 'down' = 'auth';
+		api.listBuckets = async () => {
+			if (mode === 'down') throw new TypeError('connect ECONNREFUSED 127.0.0.1:19000');
+			return refused();
+		};
+		const reconciler = new StorageReconciler({ source: { storageTargets: () => [target(api)] }, apiFor: () => api, now: () => clock });
+		await reconciler.reconcile();
+		await reconciler.reconcile();
+		mode = 'down';
+		clock += 3 * 60_000;
+		await reconciler.reconcile();
+		expect(reconciler.pendingRootKeyReports()).toEqual([]);
+		mode = 'auth';
+		await reconciler.reconcile();
+		expect(reconciler.pendingRootKeyReports()).toMatchObject([{ result: 'rejected' }]);
 	});
 });

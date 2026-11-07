@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { loadHelperConfig } from './config.ts';
 import { createHandler, startHelperServer, type HelperRuntime } from './server.ts';
 import type { HelperWorkloadStatus } from './systemd.ts';
+import type { HelperPitrStatus } from './pitr.ts';
 import type { WorkloadActivation, WorkloadDesired } from './validate.ts';
 
 const SHA = 'a'.repeat(64);
@@ -140,18 +141,21 @@ class FakeRuntime implements HelperRuntime {
 		return { targetDatabaseId: String(input.targetDatabaseId), targetTime: Number(input.targetTime), verified: true };
 	}
 
-	async pitrStatus(id: string): Promise<{
-		configured: boolean;
-		stanza: string;
-		repo: { bucket: string | null; region: string | null; endpoint: string | null; path: string | null };
-		archiveStatus: 'ok' | 'failing' | 'unknown';
-	}> {
+	async pitrStatus(id: string): Promise<HelperPitrStatus> {
 		this.calls.push(`pitr-status:${id}`);
 		return {
 			configured: false,
 			stanza: id,
 			repo: { bucket: null, region: null, endpoint: null, path: null },
 			archiveStatus: 'unknown',
+			recoverableFrom: null,
+			recoverableTo: null,
+			backupCount: 0,
+			newestBackupAt: null,
+			newestBackupType: null,
+			lastArchivedAt: null,
+			lastFailedAt: null,
+			repoMessage: null,
 		};
 	}
 

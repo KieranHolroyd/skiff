@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { SMS_MAX_LENGTH, SmsNotifier, TwilioSmsTransport, smsBody } from './notify.ts';
+import { SMS_MAX_LENGTH, SmsNotifier, TwilioSmsTransport, WebhookNotifier, smsBody } from './notify.ts';
+import { webhookNotifierFor } from './notify-chat.ts';
+import { signWebhookBody, verifyWebhookSignature } from './webhook-signature.ts';
 
 const SID = `AC${'a'.repeat(32)}`;
 const TOKEN = 'b'.repeat(32);
@@ -97,5 +99,68 @@ describe('SmsNotifier', () => {
 			'+15005550001: invalid number',
 		);
 		expect(sent).toEqual(['+447700900123', '+447700900456']);
+	});
+});
+
+describe('WebhookNotifier', () => {
+	const alert = {
+		key: 'alert_rule:r1',
+		title: 'Site down',
+		detail: 'shop.example.com: 62.5% 5xx',
+		severity: 'critical' as const,
+		status: 'firing' as const,
+		url: 'https://control.test/alerts/rules/r1',
+		labels: { host: 'shop.example.com' },
+	};
+
+	test('keeps the original four fields and adds status, url and labels', async () => {
+		const { fetch, calls } = stubFetch(() => new Response('ok'));
+		await new WebhookNotifier('https://hooks.test/in', { fetch }).notify(alert);
+		const body = JSON.parse(String(calls[0]!.init.body));
+		expect(body).toEqual({
+			title: 'Skiff: Site down',
+			message: 'shop.example.com: 62.5% 5xx',
+			severity: 'critical',
+			key: 'alert_rule:r1',
+			status: 'firing',
+			url: 'https://control.test/alerts/rules/r1',
+			labels: { host: 'shop.example.com' },
+		});
+		// Unsigned without a secret.
+		expect((calls[0]!.init.headers as Record<string, string>)['x-skiff-signature']).toBeUndefined();
+	});
+
+	test('defaults: firing, no url, no labels', async () => {
+		const { fetch, calls } = stubFetch(() => new Response('ok'));
+		await new WebhookNotifier('https://hooks.test/in', { fetch }).notify({ key: 'disk:n1', title: 'Disk', detail: 'd', severity: 'warning' });
+		const body = JSON.parse(String(calls[0]!.init.body));
+		expect(body.status).toBe('firing');
+		expect(body.url).toBeNull();
+		expect(body.labels).toEqual({});
+	});
+
+	test('signs the exact body with HMAC-SHA256 when a secret is set', async () => {
+		const { fetch, calls } = stubFetch(() => new Response('ok'));
+		const now = 1_790_000_000_000;
+		await new WebhookNotifier('https://hooks.test/in', { fetch, secret: 'whsec_test_0123456789', now: () => now }).notify({ ...alert, status: 'resolved', severity: 'info' });
+		const body = String(calls[0]!.init.body);
+		const header = (calls[0]!.init.headers as Record<string, string>)['x-skiff-signature'];
+		expect(header).toBe(signWebhookBody('whsec_test_0123456789', body, now / 1000));
+		expect(verifyWebhookSignature('whsec_test_0123456789', body, header, { nowMs: now })).toBe(true);
+		expect(verifyWebhookSignature('wrong-secret-0123456789', body, header, { nowMs: now })).toBe(false);
+		expect(verifyWebhookSignature('whsec_test_0123456789', `${body} `, header, { nowMs: now })).toBe(false);
+		// Replays outside the tolerance fail.
+		expect(verifyWebhookSignature('whsec_test_0123456789', body, header, { nowMs: now + 10 * 60_000 })).toBe(false);
+	});
+
+	test('webhookNotifierFor passes the secret to the generic notifier only', async () => {
+		const { fetch, calls } = stubFetch(() => new Response('ok'));
+		await webhookNotifierFor('https://hooks.test/in', { secret: 'whsec_test_0123456789', fetch }).notify(alert);
+		expect((calls[0]!.init.headers as Record<string, string>)['x-skiff-signature']).toMatch(/^t=\d+,v1=[0-9a-f]{64}$/);
+	});
+
+	test('a non-2xx answer is an error', async () => {
+		const { fetch } = stubFetch(() => new Response('nope', { status: 500 }));
+		await expect(new WebhookNotifier('https://hooks.test/in', { fetch }).notify(alert)).rejects.toThrow('Webhook returned 500');
 	});
 });

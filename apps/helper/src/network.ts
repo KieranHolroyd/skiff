@@ -11,11 +11,26 @@ import { defaultRunner, type CommandRunner } from './wireguard.ts';
  * host's own filter table.
  */
 
+/** One TCP port, or an inclusive `[from, to]` range. */
+export type OverlayPort = number | readonly [number, number];
+
+/**
+ * Provider listeners another node dials over the overlay (docs/CLUSTERING.md §4.3): the agent
+ * listens on the overlay address with the service's own host port, for cross-node database and
+ * private-storage attachments and for read replicas streaming from their primary (C7). Each
+ * listener requires a pinned client certificate, so opening the range on the overlay interface
+ * exposes nothing without one. Mirrors `DATABASE_PORT_MIN/MAX` and `STORAGE_PORT_MIN/MAX`.
+ */
+export const OVERLAY_PROVIDER_PORTS: readonly OverlayPort[] = [
+	[15432, 16431],
+	[19000, 19999],
+];
+
 export interface NetworkPaths {
 	interface: string;
 	wireguardPort: number;
-	/** TCP ports reachable over the overlay; C1 is Caddy 8080. */
-	overlayTcpPorts: number[];
+	/** TCP ports reachable over the overlay: Caddy 8080 plus the provider listener ranges. */
+	overlayTcpPorts: OverlayPort[];
 	nftPath: string;
 	ufwPath: string;
 	firewallCmdPath: string;
@@ -25,7 +40,7 @@ export interface NetworkPaths {
 export const DEFAULT_NETWORK_PATHS: NetworkPaths = {
 	interface: 'wg0',
 	wireguardPort: 51820,
-	overlayTcpPorts: [8080],
+	overlayTcpPorts: [8080, ...OVERLAY_PROVIDER_PORTS],
 	nftPath: 'nft',
 	ufwPath: 'ufw',
 	firewallCmdPath: 'firewall-cmd',
@@ -50,7 +65,7 @@ export class NetworkManager {
 			await this.expect([this.paths.ufwPath, 'allow', `${this.paths.wireguardPort}/udp`], 'ufw allow wireguard');
 			for (const port of this.paths.overlayTcpPorts)
 				await this.expect(
-					[this.paths.ufwPath, 'allow', 'in', 'on', this.paths.interface, 'to', 'any', 'port', String(port), 'proto', 'tcp'],
+					[this.paths.ufwPath, 'allow', 'in', 'on', this.paths.interface, 'to', 'any', 'port', portSpec(port, ':'), 'proto', 'tcp'],
 					'ufw allow overlay',
 				);
 			return { backend: 'ufw', opened: 1 + this.paths.overlayTcpPorts.length };
@@ -82,7 +97,7 @@ export class NetworkManager {
 	/** Ruleset rendered for review and for `nft -f`; no shell interpolation. */
 	renderNftables(): string {
 		const accept = this.paths.overlayTcpPorts
-			.map((port) => `\t\tiifname "${this.paths.interface}" tcp dport ${port} accept`)
+			.map((port) => `\t\tiifname "${this.paths.interface}" tcp dport ${portSpec(port, '-')} accept`)
 			.join('\n');
 		return `table inet skiff {
 \tchain input {
@@ -98,4 +113,16 @@ ${accept}
 		const result = await this.runner(argv);
 		if (result.code !== 0) throw new Error(`${label} failed: ${result.stderr.trim() || result.stdout.trim()}`);
 	}
+}
+
+/** `8080`, or `15432:16431` (ufw) / `15432-16431` (nftables) for a range. Validated, never free text. */
+function portSpec(port: OverlayPort, separator: ':' | '-'): string {
+	const valid = (value: number) => Number.isInteger(value) && value >= 1 && value <= 65_535;
+	if (typeof port === 'number') {
+		if (!valid(port)) throw new Error(`invalid overlay port ${port}`);
+		return String(port);
+	}
+	const [from, to] = port;
+	if (!valid(from) || !valid(to) || from > to) throw new Error(`invalid overlay port range ${from}-${to}`);
+	return `${from}${separator}${to}`;
 }

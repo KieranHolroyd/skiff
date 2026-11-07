@@ -5,7 +5,7 @@ import type { RequestEvent } from '@sveltejs/kit';
 import type { Handle, ServerInit } from '@sveltejs/kit/hooks';
 import { auth, backfillApiKeyRateLimits, ensurePlatformAdmin } from '#lib/server/auth.js';
 import { contentDomain, platformOrigin } from '#lib/server/config.js';
-import { reconcilePlatformDomains } from '@skiff/core';
+import { featureEnabled, reconcilePlatformDomains, startFailoverLoop } from '@skiff/core';
 import { checkCsrf } from '#lib/server/csrf.js';
 import { sqlite } from '#lib/server/db.js';
 import { needsSetup, setupUrl } from '#lib/server/setup.js';
@@ -64,11 +64,41 @@ export const init: ServerInit = async () => {
 			void core.maintenance.run().catch((error) => console.error('[maintenance]', error));
 		}, 60_000);
 		global.__skiffMaintenance.unref?.();
+		// The failover controller (docs/CLUSTERING.md §8.3): ticks every `controlPlane.renewSeconds`
+		// under its lease, so only one primary ever moves copies or starts a database failover.
+		// A standby returned above and never takes the lease. Errors are logged at most once a minute.
+		let lastFailoverError = 0;
+		// Read-replica promotion (C7) as the controller's automatic database path. Opt-in on top of
+		// `failover.enabled`: without the object-store lease a partitioned primary is not self-fenced
+		// (docs/CLUSTERING.md §9.3). Without it a lost primary is a manual event and an alert.
+		if (featureEnabled(core.ctx.config, 'DB_AUTO_PROMOTE'))
+			core.failover.registerDatabaseHandler(core.databaseReplicas.failoverHandler());
+		startFailoverLoop(core.failover, {
+			onError: (error) => {
+				if (Date.now() - lastFailoverError < 60_000) return;
+				lastFailoverError = Date.now();
+				console.error('[failover]', error);
+			},
+		});
 		// Metric alert rules (docs/ALERTS.md): each rule has its own interval (≥ 1 min); this
 		// tick only picks up the ones that are due, so a rule runs at most ~20 s late.
 		setInterval(() => {
 			void core.alerts.evaluateDue().catch((error) => console.error('[alerts]', error));
 		}, 20_000).unref?.();
+		// Jobs (plan 09): fire due crons every 10 s so a run starts close to its minute; the
+		// 60 s maintenance sweep also fires them, and a conditional update keeps each fire single.
+		setInterval(() => {
+			try {
+				core.jobs.scheduleDue();
+			} catch (error) {
+				console.error('[jobs]', error);
+			}
+		}, 10_000).unref?.();
+		// Log drains (DESIGN §8): ship new lines every 5 s. A drain is leased while it is delivered
+		// and a tick that is still running skips the next, so a slow receiver never overlaps itself.
+		setInterval(() => {
+			void core.logDrains.deliverDue().catch((error) => console.error('[log-drains]', error));
+		}, 5_000).unref?.();
 		// Pick up mass operations whose runner died with the previous process (docs/OPERATIONS.md §2.2).
 		setTimeout(() => {
 			try {

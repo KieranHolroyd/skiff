@@ -3,10 +3,23 @@ import {
 	brokerMetricsSummary,
 	brokerMetricsTable,
 	brokerQueuesTable,
+	checkMessageBody,
 	formatAge,
+	formatPeekedBody,
+	formatSeqs,
+	parseCount,
+	parseDelaySeconds,
+	peekReport,
+	peekedHeaderLines,
+	queueOfStream,
+	queueStreamName,
+	resolveStream,
+	sendSummary,
+	trimFinalNewline,
 	type BrokerMetricPoint,
 	type BrokerQueuesView,
 } from './brokers.ts';
+import type { PeekedMessage } from './node-tasks.ts';
 
 function point(bucket: string, overrides: Partial<BrokerMetricPoint> = {}): BrokerMetricPoint {
 	return {
@@ -130,5 +143,114 @@ describe('brokerQueuesTable', () => {
 		expect(lines[2]).toContain('5m');
 		expect(lines[3]).toContain('└ skiff-consumer');
 		expect(lines[4]).toMatch(/^EVENTS\s+limits\s+0\s/);
+	});
+});
+
+describe('queue tools (D124)', () => {
+	const message = (overrides: Partial<PeekedMessage> = {}): PeekedMessage => ({
+		seq: 7,
+		subject: 'skiff.q.jobs',
+		time: '2026-11-07T10:00:00.000Z',
+		size: 13,
+		headers: { 'Skiff-Content-Type': 'json', 'Skiff-Attempts': '2', 'Nats-Msg-Id': 'nt_1', 'X-Trace': 'abc' },
+		encoding: 'utf8',
+		body: '{"hello":"world"}',
+		truncated: false,
+		...overrides,
+	});
+
+	test('a queue maps to SKIFF_Q_<queue>; --stream is taken as is', () => {
+		expect(queueStreamName('jobs')).toBe('SKIFF_Q_jobs');
+		expect(queueOfStream('SKIFF_Q_jobs')).toBe('jobs');
+		expect(queueOfStream('EVENTS')).toBeNull();
+		expect(resolveStream('jobs', undefined)).toEqual({ stream: 'SKIFF_Q_jobs', label: 'queue jobs (SKIFF_Q_jobs)' });
+		expect(resolveStream(undefined, 'EVENTS')).toEqual({ stream: 'EVENTS', label: 'stream EVENTS' });
+	});
+
+	test('resolveStream refuses both, neither, bad queue names and bad stream names', () => {
+		expect(() => resolveStream('jobs', 'EVENTS')).toThrow('not both');
+		expect(() => resolveStream(undefined, undefined)).toThrow('Name a queue');
+		expect(() => resolveStream('Jobs', undefined)).toThrow('--stream');
+		expect(() => resolveStream(undefined, 'a.b')).toThrow('dots');
+		expect(() => resolveStream(undefined, 'a b')).toThrow('spaces');
+	});
+
+	test('formatSeqs folds runs', () => {
+		expect(formatSeqs([17])).toBe('17');
+		expect(formatSeqs([20, 19, 18, 17])).toBe('17–20');
+		expect(formatSeqs([3, 5, 6, 7, 9, 10])).toBe('3, 5–7, 9, 10');
+		expect(formatSeqs([])).toBe('');
+	});
+
+	test('parseDelaySeconds takes seconds or s/m/h, at most 12h', () => {
+		expect(parseDelaySeconds('30')).toBe(30);
+		expect(parseDelaySeconds('30s')).toBe(30);
+		expect(parseDelaySeconds('5m')).toBe(300);
+		expect(parseDelaySeconds('12h')).toBe(43_200);
+		expect(() => parseDelaySeconds('13h')).toThrow('at most 12h');
+		expect(() => parseDelaySeconds('soon')).toThrow('--delay');
+	});
+
+	test('parseCount checks the range', () => {
+		expect(parseCount('5', '--count', 1, 100)).toBe(5);
+		expect(() => parseCount('0', '--count', 1, 100)).toThrow('--count must be a whole number from 1 to 100.');
+		expect(() => parseCount('2.5', '--count', 1, 100)).toThrow('--count');
+		expect(() => parseCount('101', '--count', 1, 100)).toThrow('--count');
+	});
+
+	test('checkMessageBody wants JSON unless the body is text', () => {
+		expect(() => checkMessageBody('{"a":1}', 'json')).not.toThrow();
+		expect(() => checkMessageBody('"hi"', 'json')).not.toThrow();
+		expect(() => checkMessageBody('hello', 'json')).toThrow('--text');
+		expect(() => checkMessageBody('hello', 'text')).not.toThrow();
+		expect(trimFinalNewline('hi\n')).toBe('hi');
+		expect(trimFinalNewline('hi\n\n')).toBe('hi\n');
+		expect(trimFinalNewline('hi\r\n')).toBe('hi');
+	});
+
+	test('sendSummary names the queue, sequences, time and delay', () => {
+		const text = sendSummary(
+			{ stream: 'SKIFF_Q_jobs', sent: 3, seqs: [4, 5, 6], durationMs: 3.4, state: { stream: 'SKIFF_Q_jobs', messages: 6, bytes: 2048, firstAt: null, lastAt: null } },
+			30,
+		);
+		expect(text).toBe('Sent 3 messages to queue jobs (seq 4–6) in 3 ms.\nConsumers see them after 30s.\nSKIFF_Q_jobs now holds 6 messages (2.0 KiB).');
+		expect(sendSummary({ stream: 'EVENTS', sent: 1, seqs: [9], durationMs: 1200, state: null })).toBe(
+			'Sent 1 message to stream EVENTS (seq 9) in 1.20 s.',
+		);
+	});
+
+	test('bodies: JSON pretty-printed, text and cut bodies as they are, binary noted', () => {
+		expect(formatPeekedBody(message())).toBe('{\n  "hello": "world"\n}');
+		expect(formatPeekedBody(message({ headers: { 'Skiff-Content-Type': 'text' }, body: '{"a":1}' }))).toBe('{"a":1}');
+		expect(formatPeekedBody(message({ body: '{"hel', truncated: true, size: 40_000 }))).toBe('{"hel\n… (cut; 39 KiB in all)');
+		expect(formatPeekedBody(message({ encoding: 'base64', body: 'AAEC', size: 3 }))).toBe('<binary, 3 B, base64> AAEC');
+		expect(formatPeekedBody(message({ body: '' }))).toBe('<empty>');
+	});
+
+	test('peekedHeaderLines puts Skiff headers on one line and lists the rest', () => {
+		expect(peekedHeaderLines(message())).toEqual(['json · attempts 2 · id nt_1', 'X-Trace: abc']);
+		expect(peekedHeaderLines(message({ headers: {} }))).toEqual([]);
+	});
+
+	test('peekReport lists messages and the next page', () => {
+		const text = peekReport(
+			{ stream: 'SKIFF_Q_jobs', messages: [message()], total: 30, firstSeq: 7, lastSeq: 36, nextSeq: 8 },
+			(seq) => `skif broker peek mq jobs --from ${seq}`,
+		);
+		const lines = text.split('\n');
+		expect(lines[0]).toBe('jobs (SKIFF_Q_jobs): 30 messages held, seq 7–36. Showing 1.');
+		expect(lines[2]).toBe('#7  2026-11-07 10:00:00Z  13 B');
+		expect(lines[3]).toBe('    json · attempts 2 · id nt_1');
+		expect(lines[5]).toBe('    {');
+		expect(text).toContain('    "hello": "world"');
+		expect(lines.at(-1)).toBe('More: skif broker peek mq jobs --from 8');
+		expect(peekReport({ stream: 'EVENTS', messages: [], total: 0, firstSeq: 0, lastSeq: 0, nextSeq: null })).toBe('EVENTS is empty.');
+	});
+
+	test('peekReport shows the subject for app streams', () => {
+		const text = peekReport({ stream: 'EVENTS', messages: [message({ subject: 'events.created', headers: {} })], total: 1, firstSeq: 7, lastSeq: 7, nextSeq: null });
+		expect(text).toContain('EVENTS: 1 message held, seq 7. Showing 1.');
+		expect(text).toContain('#7  2026-11-07 10:00:00Z  13 B  events.created');
+		expect(text).not.toContain('More:');
 	});
 });

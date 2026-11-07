@@ -19,9 +19,10 @@
  * The standby runs with SKIFF_STANDBY=1: no maintenance loop, no operation resume. Exactly one
  * process (the primary) owns background work at any time.
  */
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CLICKHOUSE_UNIT } from './clickhouse.ts';
+import { credentialDirective, sealedPathFor } from '../install/master-key.ts';
 
 export const PRIMARY_UNIT = 'skiff-control-plane.service';
 export const STANDBY_UNIT = 'skiff-control-plane-standby.service';
@@ -32,6 +33,11 @@ export interface ControlPlanePaths {
 	runDir: string;
 	varDir: string;
 	envFile: string;
+	/**
+	 * The plaintext path (`/etc/skiff/master.key`). The unit body always names it; when the key
+	 * is sealed (`master.key.cred` beside it) a drop-in switches the unit to
+	 * `LoadCredentialEncrypted=` (see `ensureMasterKeyDropIns`).
+	 */
 	masterKeyFile: string;
 	/** Command run at boot by the guard (stage-0 updater). */
 	updateCommand: string;
@@ -180,6 +186,52 @@ export interface EnsureControlPlaneUnitsInput {
 	dryRun?: boolean;
 }
 
+/** Drop-in file name, under `<unit>.d/`, for both control-plane slots. */
+export const MASTER_KEY_DROP_IN = 'skiff-master-key.conf';
+
+/**
+ * Drop-in that swaps the plaintext credential for the sealed one. A drop-in rather than the unit
+ * body because a stage-0 updater from before sealing rewrites the body with its own template;
+ * the drop-in survives that. The empty `LoadCredential=` clears the body's plaintext entry.
+ */
+export function masterKeyDropIn(sealedPath: string): string {
+	return `# Installed by Skiff: the master key is sealed with systemd-creds (docs/OPS.md §1, §10).
+[Service]
+LoadCredential=
+${credentialDirective({ kind: 'sealed', path: sealedPath })}
+`;
+}
+
+/**
+ * Write the drop-ins when the key is sealed, remove them when it is not. Returns the files that
+ * changed; the caller runs `systemctl daemon-reload`.
+ */
+export function ensureMasterKeyDropIns(input: {
+	systemdDir: string;
+	masterKeyFile: string;
+	dryRun?: boolean;
+	exists?: (path: string) => boolean;
+}): string[] {
+	const exists = input.exists ?? existsSync;
+	const sealed = sealedPathFor(input.masterKeyFile);
+	const body = exists(sealed) ? masterKeyDropIn(sealed) : null;
+	const changed: string[] = [];
+	for (const unit of [PRIMARY_UNIT, STANDBY_UNIT]) {
+		const dir = join(input.systemdDir, `${unit}.d`);
+		const path = join(dir, MASTER_KEY_DROP_IN);
+		const current = existsSync(path) ? readFileSync(path, 'utf8') : null;
+		if (current === body) continue;
+		changed.push(path);
+		if (input.dryRun) continue;
+		if (body === null) rmSync(path, { force: true });
+		else {
+			mkdirSync(dir, { recursive: true });
+			writeFileSync(path, body, { mode: 0o644 });
+		}
+	}
+	return changed;
+}
+
 /** Write the units if they differ. Returns true when anything changed (daemon-reload ran). */
 export function ensureControlPlaneUnits(input: EnsureControlPlaneUnitsInput): boolean {
 	const changed: string[] = [];
@@ -189,6 +241,12 @@ export function ensureControlPlaneUnits(input: EnsureControlPlaneUnitsInput): bo
 		changed.push(name);
 		if (!input.dryRun) writeFileSync(path, body, { mode: 0o644 });
 	}
+	const dropIns = ensureMasterKeyDropIns({
+		systemdDir: input.systemdDir,
+		masterKeyFile: (input.paths ?? DEFAULT_CONTROL_PLANE_PATHS).masterKeyFile,
+		dryRun: input.dryRun,
+	});
+	changed.push(...dropIns.map((path) => path.slice(input.systemdDir.length + 1)));
 	if (!changed.length) return false;
 	if (input.dryRun) {
 		input.log(`would write ${changed.join(', ')}`);

@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
+	import Notice from '#lib/components/skiff/Notice.svelte';
 	import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
 	import MailIcon from '@lucide/svelte/icons/mail';
 	import TagIcon from '@lucide/svelte/icons/tag';
@@ -46,6 +48,13 @@
 			>
 		{/snippet}
 	</ServiceHeader>
+
+	{#if page.url.searchParams.get('sent') === '1'}
+		<Notice tone="success" title="Accepted for delivery">
+			The mail node picks it up within a few seconds. This page shows each recipient's status as delivery
+			events arrive; reload to refresh.
+		</Notice>
+	{/if}
 
 	<div class="grid items-start gap-5 xl:grid-cols-5">
 		<Panel title="Message" icon={MailIcon} class="xl:col-span-2">

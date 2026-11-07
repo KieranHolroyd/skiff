@@ -9,6 +9,7 @@
  *   bun run dev:clickhouse --status        is it answering?
  *   bun run dev:clickhouse --reset         delete the dev telemetry data first
  *   --port <n>                             HTTP port (default 18123)
+ *   --memory <MiB>                         memory ceiling (default SKIFF_CLICKHOUSE_MEMORY_MB, else 768)
  *
  * Data lives in apps/control-plane/.data/clickhouse (gitignored by `.data*\/`).
  */
@@ -18,10 +19,13 @@ import {
 	CLICKHOUSE_DATABASE,
 	CLICKHOUSE_ENV,
 	CLICKHOUSE_HTTP_PORT,
+	CLICKHOUSE_MEMORY_ENV,
 	CLICKHOUSE_READER,
 	CLICKHOUSE_WRITER,
 	clickhouseConfigXml,
+	clickhouseMemory,
 	clickhouseUsersXml,
+	parseClickHouseMemoryMb,
 } from '../systemd/clickhouse.ts';
 
 export const DEV_WRITER_PASSWORD = 'skiff-dev';
@@ -43,6 +47,8 @@ const logFile = join(home, 'server.log');
 const pidFile = join(home, 'server.pid');
 const port = Number(option('--port') ?? CLICKHOUSE_HTTP_PORT);
 const url = `http://127.0.0.1:${port}`;
+const sizing = parseClickHouseMemoryMb(option('--memory') ?? process.env[CLICKHOUSE_MEMORY_ENV]);
+const memory = clickhouseMemory(sizing.mb);
 
 function envLines(): string {
 	return [
@@ -141,7 +147,8 @@ async function main(): Promise<number> {
 		console.log(`deleted ${dataDir}`);
 	}
 	mkdirSync(dataDir, { recursive: true });
-	writeFileSync(configFile, clickhouseConfigXml({ dataDir, httpPort: port }));
+	if (sizing.warning) console.warn(`warning: ${sizing.warning}`);
+	writeFileSync(configFile, clickhouseConfigXml({ dataDir, httpPort: port, memory }));
 	writeFileSync(
 		usersFile,
 		clickhouseUsersXml({
@@ -149,6 +156,7 @@ async function main(): Promise<number> {
 			readerPassword: DEV_READER_PASSWORD,
 			// packages/core/src/test-clickhouse.ts: one throwaway database per test store.
 			extraWriterDatabases: ['skiff_test*'],
+			memory,
 		}),
 	);
 
@@ -176,7 +184,7 @@ async function main(): Promise<number> {
 		return 0;
 	}
 
-	console.log(`starting dev ClickHouse on ${url} (data ${dataDir})`);
+	console.log(`starting dev ClickHouse on ${url} (data ${dataDir}, ${sizing.mb} MiB ceiling)`);
 	const child = Bun.spawn({ cmd, cwd: home, env, stdin: 'inherit', stdout: 'inherit', stderr: 'inherit' });
 	writeFileSync(pidFile, `${child.pid}\n`);
 	// Bun's typings narrow process.on to its own events; the signals work at runtime.

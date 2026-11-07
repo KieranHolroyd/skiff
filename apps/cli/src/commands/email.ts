@@ -9,6 +9,8 @@ import {
 	emailCredentialSecretDetails,
 	emailCredentialTable,
 	emailDomainDetails,
+	emailAccessRequestDetails,
+	emailAddressTable,
 	emailDomainTable,
 	emailEnvNames,
 	emailMessageDetails,
@@ -19,8 +21,10 @@ import {
 	emailSuppressionTable,
 	failingRecords,
 	parseAddressList,
+	parseDailyVolume,
 	parseTags,
 	takeNewMessages,
+	type EmailAccessRequestInput,
 	type EmailCredentialCreateInput,
 	type EmailDomainCreateInput,
 	type EmailSendInput,
@@ -47,6 +51,11 @@ Commands:
   suppressions list                Addresses Skiff won't send to (--address to look one up)
   suppressions add <address>       Suppress an address (--reason manual|unsubscribe)
   suppressions rm <address>        Allow sending to an address again
+  addresses list                   Sandbox recipients: single addresses you may send to while in the sandbox
+  addresses add <address>          Email the address a confirmation link (again: a fresh link for a pending one)
+  addresses rm <address>           Remove a sandbox recipient
+  request-access                   Ask a platform admin to move the org out of the sandbox
+                                   (--use-case, --volume, --website); without flags, show the last request
   credentials list                 SMTP credentials (passwords are never shown again)
   credentials create <name>        Create an SMTP credential (--project <slug>, --from <domain>…)
   credentials revoke <id>          Revoke a credential; apps using it stop sending
@@ -70,6 +79,11 @@ Log options:
       --status <status>            Only messages in this state (accepted, delivered, deferred, bounced, …)
   -f, --follow                     Poll every few seconds and print new messages and status changes
 
+Request-access options:
+      --use-case <text>            What you send and to whom (at least 20 characters)
+      --volume <n>                 Messages you expect to send a day (10k and 2m work too)
+      --website <url>              Your website, if you have one
+
 Options:
   -p, --project <slug>             The project (attach, detach, credentials create)
       --prefix <PREFIX>            Env prefix for attach/detach (default SMTP)
@@ -77,13 +91,16 @@ Options:
       --json                       JSON output
   -h, --help                       Show this help
 
-New organisations start in the sandbox: they can only send to their own verified domains and
-addresses, 200 messages a day. A platform admin activates the org for wider sending.
+New organisations start in the sandbox: they can only send to their own verified domains and to
+sandbox recipients whose owners confirmed a link, 200 messages a day. An org owner or admin asks
+to leave it with \`skif email request-access\`; a platform admin reviews the request.
 
 Examples:
   skif email domains add example.com             # prints the DKIM, SPF and DMARC records
   skif email domains check example.com
   skif email send --from hi@example.com --to you@example.com --subject Hello --text "It works"
+  skif email addresses add me@gmail.com          # a test inbox you can read, while in the sandbox
+  skif email request-access --volume 500 --use-case "Password resets and receipts for our customers"
   skif email attach --project api                # api receives SMTP_HOST, SMTP_USER, …
   skif email log --follow`;
 
@@ -119,6 +136,12 @@ const credentialCreateFlags: FlagSpec = {
 	project: { type: 'string', short: 'p' },
 	from: { type: 'string', multiple: true },
 };
+const requestAccessFlags: FlagSpec = {
+	...baseFlags,
+	'use-case': { type: 'string' },
+	volume: { type: 'string' },
+	website: { type: 'string' },
+};
 const attachFlags: FlagSpec = { ...baseFlags, project: { type: 'string', short: 'p' }, prefix: { type: 'string' } };
 
 /** How often `skif email log --follow` polls. */
@@ -147,6 +170,16 @@ const suppressionCommands: Record<string, Handler> = {
 	delete: removeSuppression,
 };
 
+const addressCommands: Record<string, Handler> = {
+	list: listAddresses,
+	ls: listAddresses,
+	add: addAddress,
+	resend: addAddress,
+	rm: removeAddress,
+	remove: removeAddress,
+	delete: removeAddress,
+};
+
 const credentialCommands: Record<string, Handler> = {
 	list: listCredentials,
 	ls: listCredentials,
@@ -165,6 +198,9 @@ const subcommands: Record<string, Handler> = {
 	logs: emailLog,
 	suppressions: group('suppressions', suppressionCommands, listSuppressions),
 	suppression: group('suppressions', suppressionCommands, listSuppressions),
+	addresses: group('addresses', addressCommands, listAddresses),
+	address: group('addresses', addressCommands, listAddresses),
+	'request-access': requestAccess,
 	credentials: group('credentials', credentialCommands, listCredentials),
 	creds: group('credentials', credentialCommands, listCredentials),
 	attach: attachEmail,
@@ -484,6 +520,96 @@ async function removeSuppression(argv: string[]): Promise<void> {
 		return;
 	}
 	console.log(`Removed ${address} from the suppression list. If it bounces again it is suppressed again.`);
+}
+
+// --------------------------------------------------------------------- sandbox recipients (§4.3)
+
+async function listAddresses(argv: string[]): Promise<void> {
+	const args = parse(argv, baseFlags, 'Usage: skif email addresses list [--json]', 0);
+	if (!args) return;
+	const client = await authenticatedClient();
+	const { addresses, raw } = await client.listEmailAddresses();
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	if (addresses.length === 0) {
+		console.log('No sandbox recipients yet. Add a mailbox you can read with `skif email addresses add <address>`.');
+		return;
+	}
+	console.log(emailAddressTable(addresses));
+}
+
+async function addAddress(argv: string[]): Promise<void> {
+	const parsed = parseNamed(argv, baseFlags, 'addresses add', 'address');
+	if (!parsed) return;
+	const { args, name } = parsed;
+	const client = await authenticatedClient();
+	const { address, raw } = await client.addEmailAddress(name);
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	if (address.status === 'verified') {
+		console.log(`${address.address} is already verified: the sandbox accepts mail to it.`);
+		return;
+	}
+	console.log(
+		`Sent a confirmation link to ${address.address}${address.expiresAt ? ` (expires ${address.expiresAt})` : ''}. ` +
+			'Mail to it is refused until its owner opens the link and confirms.',
+	);
+}
+
+async function removeAddress(argv: string[]): Promise<void> {
+	const parsed = parseNamed(argv, baseFlags, 'addresses rm', 'address');
+	if (!parsed) return;
+	const { args, name: address } = parsed;
+	const client = await authenticatedClient();
+	const raw = await client.removeEmailAddress(address);
+	if (args.boolean('json')) {
+		printJson(raw ?? { ok: true });
+		return;
+	}
+	console.log(`Removed ${address}. While the org is in the sandbox, mail to it is refused again.`);
+}
+
+// ------------------------------------------------------------------- production access (§7.3)
+
+async function requestAccess(argv: string[]): Promise<void> {
+	const args = parse(
+		argv,
+		requestAccessFlags,
+		'Usage: skif email request-access [--use-case <text> --volume <n> [--website <url>]] [--json]',
+		0,
+	);
+	if (!args) return;
+	const useCase = args.string('use-case');
+	const volume = args.string('volume');
+	const website = args.string('website');
+	const client = await authenticatedClient();
+	if (useCase === undefined && volume === undefined && website === undefined) {
+		const { request, raw } = await client.getEmailAccessRequest();
+		if (args.boolean('json')) {
+			printJson(raw);
+			return;
+		}
+		if (!request) {
+			console.log('No production access request yet. Ask with `skif email request-access --use-case "…" --volume <per day>`.');
+			return;
+		}
+		console.log(emailAccessRequestDetails(request));
+		return;
+	}
+	if (!useCase?.trim()) throw new UsageError('--use-case is required: what you send, and to whom.');
+	const input: EmailAccessRequestInput = { useCase: useCase.trim(), expectedDailyVolume: parseDailyVolume(volume) };
+	if (website?.trim()) input.website = website.trim();
+	const { request, raw } = await client.requestEmailAccess(input);
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	console.log(`Requested production access (${request.id}). A platform admin reviews it; you get an email with the answer.`);
+	console.log('Check on it with `skif email request-access`.');
 }
 
 // ------------------------------------------------------------------------------------- credentials

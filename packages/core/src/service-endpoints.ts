@@ -2,9 +2,11 @@ import { and, eq, isNull } from 'drizzle-orm';
 import {
 	databaseAttachments,
 	databases,
+	projects,
 	serviceEndpoints,
 	storageAttachments,
 	storageInstances,
+	workloads,
 } from '@skiff/db';
 import type { ExistingEndpoint, EndpointService as PlannedService } from './endpoints.ts';
 import { planServiceEndpoints } from './endpoints.ts';
@@ -21,10 +23,17 @@ import type { CoreContext } from './context.ts';
 export class ServiceEndpointService {
 	constructor(private readonly ctx: CoreContext) {}
 
-	reconcile(projectId: string, consumerNodeId: string): { created: number; updated: number; removed: number } {
+	/**
+	 * Re-plan one consumer node's endpoints. Rows are per node and shared by every project placed
+	 * there, so the plan covers all of them plus `projectId` (which may be about to move here):
+	 * planning one project alone would delete the endpoints its neighbours use.
+	 */
+	reconcile(projectId: string | null, consumerNodeId: string): { created: number; updated: number; removed: number } {
 		if (!featureEnabled(this.ctx.config, 'SERVICE_ENDPOINTS'))
 			return { created: 0, updated: 0, removed: 0 };
-		const services = this.servicesForProject(projectId);
+		const projectIds = new Set(this.projectsOnNode(consumerNodeId));
+		if (projectId) projectIds.add(projectId);
+		const services = [...projectIds].flatMap((id) => this.servicesForProject(id));
 		const existingRows = this.ctx.db
 			.select()
 			.from(serviceEndpoints)
@@ -95,6 +104,41 @@ export class ServiceEndpointService {
 		return { created, updated, removed };
 	}
 
+	/**
+	 * Re-plan every node that consumes a database: after a replica is added, removed or starts or
+	 * stops serving reads, and after a promotion moved the primary (C7).
+	 */
+	reconcileForDatabase(databaseId: string): void {
+		if (!featureEnabled(this.ctx.config, 'SERVICE_ENDPOINTS')) return;
+		const consumerNodes = new Set<string>();
+		for (const row of this.ctx.db
+			.select({ nodeId: workloads.nodeId })
+			.from(databaseAttachments)
+			.innerJoin(workloads, eq(workloads.projectId, databaseAttachments.projectId))
+			.where(eq(databaseAttachments.databaseId, databaseId))
+			.all())
+			if (row.nodeId) consumerNodes.add(row.nodeId);
+		const replicaIds = this.ctx.databaseReplicas.rowsFor(databaseId).map((row) => row.id);
+		for (const row of this.ctx.db
+			.select({ nodeId: serviceEndpoints.consumerNodeId, serviceId: serviceEndpoints.serviceId })
+			.from(serviceEndpoints)
+			.where(eq(serviceEndpoints.serviceKind, 'database'))
+			.all())
+			if (row.serviceId === databaseId || replicaIds.includes(row.serviceId)) consumerNodes.add(row.nodeId);
+		for (const nodeId of consumerNodes) this.reconcile(null, nodeId);
+	}
+
+	/** Live projects whose workload is placed on a node. */
+	private projectsOnNode(nodeId: string): string[] {
+		return this.ctx.db
+			.select({ projectId: workloads.projectId })
+			.from(workloads)
+			.innerJoin(projects, eq(projects.id, workloads.projectId))
+			.where(and(eq(workloads.nodeId, nodeId), isNull(projects.deletedAt)))
+			.all()
+			.map((row) => row.projectId);
+	}
+
 	/** Live remote attachments that need an endpoint. Same-node services are excluded by the planner. */
 	private servicesForProject(projectId: string): PlannedService[] {
 		const databasesOnProject = this.ctx.db
@@ -103,12 +147,21 @@ export class ServiceEndpointService {
 			.innerJoin(databases, eq(databases.id, databaseAttachments.databaseId))
 			.where(and(eq(databaseAttachments.projectId, projectId), isNull(databases.deletedAt)))
 			.all()
-			.map((row) => ({
-				kind: 'database' as const,
-				serviceId: row.id,
-				upstreamNodeId: row.nodeId,
-				upstreamPort: row.port,
-			}));
+			.flatMap((row) => [
+				{
+					kind: 'database' as const,
+					serviceId: row.id,
+					upstreamNodeId: row.nodeId,
+					upstreamPort: row.port,
+				},
+				// Each read replica gets its own endpoint, keyed by the replica id (C7).
+				...this.ctx.databaseReplicas.endpointServicesFor(row.id).map((replica) => ({
+					kind: 'database' as const,
+					serviceId: replica.serviceId,
+					upstreamNodeId: replica.nodeId,
+					upstreamPort: replica.port,
+				})),
+			]);
 		const storageOnProject = this.ctx.db
 			.select({
 				id: storageInstances.id,

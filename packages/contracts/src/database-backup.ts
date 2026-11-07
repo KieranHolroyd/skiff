@@ -2,8 +2,8 @@ import * as z from 'zod';
 import { databaseEngines, databaseNameSchema, type DatabaseEngine } from './database.ts';
 
 /**
- * Managed database backups (docs/DATABASES.md §9). A backup is a `pg_dump -Fc` artifact written
- * to the platform `ObjectStore`. Dumps execute on the database's node (the control plane never
+ * Managed database backups (docs/DATABASES.md §8). A backup is the engine's native dump (for
+ * Postgres a `pg_dump -Fc` artifact) written to the org's backup target. Dumps execute on the database's node (the control plane never
  * reaches node loopback); the agent streams the dump straight to a presigned URL and reports the
  * result on its next heartbeat.
  */
@@ -20,10 +20,17 @@ export const databaseBackupFormats = [
 	'mysqldump-sql',
 	'mariadb-dump-sql',
 	'mongodump-archive-gzip',
+	'valkey-rdb',
+	'redis-rdb',
+	'clickhouse-backup-zip',
 ] as const;
 export type DatabaseBackupFormat = (typeof databaseBackupFormats)[number];
 
-/** The dump format an engine's backups use; null when the engine has no backups. */
+/**
+ * The dump format an engine's backups use; null when the engine has no backups. Valkey/Redis use
+ * the server's own RDB snapshot (`--rdb`), restored as the AOF base of the new instance; ClickHouse
+ * uses its native `BACKUP DATABASE … TO File('….zip')` archive.
+ */
 export function databaseBackupFormat(engine: DatabaseEngine): DatabaseBackupFormat | null {
 	switch (engine) {
 		case 'postgres':
@@ -35,8 +42,11 @@ export function databaseBackupFormat(engine: DatabaseEngine): DatabaseBackupForm
 		case 'mongodb':
 			return 'mongodump-archive-gzip';
 		case 'valkey':
+			return 'valkey-rdb';
 		case 'redis':
-			return null;
+			return 'redis-rdb';
+		case 'clickhouse':
+			return 'clickhouse-backup-zip';
 	}
 }
 
@@ -102,6 +112,22 @@ export interface DatabaseBackupView {
 	startedAt: string;
 	finishedAt: string | null;
 	expiresAt: string | null;
+	/** Where the artifact was written. Restore and retention always use this, never the current target. */
+	target: DatabaseBackupLocation;
+}
+
+/** The backup target and exact object location recorded when a backup was taken. */
+export interface DatabaseBackupLocation {
+	/** Backup target id; null for the platform object store (no target was configured). */
+	id: string | null;
+	/** Target name when the backup was taken. */
+	name: string;
+	kind: 'platform' | 'local' | 's3';
+	/** Exact object location, e.g. `s3://bucket/prefix/key (https://endpoint)` or `file:///dir/key`. */
+	location: string;
+	/** False when the recorded target was deleted: Skiff can no longer reach the object. */
+	available: boolean;
+	unavailableReason: string | null;
 }
 
 export interface DatabaseBackupSummary {

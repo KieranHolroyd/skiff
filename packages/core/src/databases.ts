@@ -22,6 +22,7 @@ import {
 	PITR_FULL_SCHEDULE,
 	PITR_RETENTION_DIFF,
 	PITR_RETENTION_FULL,
+	PITR_STATUS_INTERVAL_MS,
 	DATABASE_POOLER_PORT_MAX,
 	DATABASE_POOLER_PORT_MIN,
 	databaseAlias,
@@ -31,6 +32,9 @@ import {
 	databaseConnectionSnippets,
 	databaseConnectionUrl,
 	databaseCreateSchema,
+	databaseVariantExtensionError,
+	databaseVariantRegistry,
+	databaseVariantSupported,
 	databaseCredentialCreateSchema,
 	databaseCapabilities,
 	databaseEngineRegistry,
@@ -50,8 +54,11 @@ import {
 	orgNetworkName,
 	databaseUpgradeSchema,
 	pitrStanzaFor,
+	pitrUnsupportedReason,
+	postgresPitrImage,
 	requirePermission,
 	validatePitrTargetTime,
+	validatePitrTargetInWindow,
 	type DatabaseAttach,
 	type DatabaseAttachmentView,
 	type DatabaseBackupResult,
@@ -62,6 +69,7 @@ import {
 	type DatabaseCredentialActivation,
 	type DatabaseCredentialCreate,
 	type DatabaseCredentialResult,
+	type DatabaseCredentialRole,
 	type DatabaseCredentialTask,
 	type DatabaseCredentialView,
 	type DatabaseCredentials,
@@ -95,6 +103,7 @@ import {
 } from '@skiff/contracts';
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
+import { requireCredentialReveal } from './credential-reveal.ts';
 import { nextCronTime } from './cron.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { resolvePlacement } from './placement.ts';
@@ -125,7 +134,13 @@ interface ResolvedAttachment {
 	scheme: string;
 	row: DatabaseRow;
 	poolerPort: number | null;
+	/** Sealed password the app connects with: the owner's, or its named credential's. */
+	secretSealed: string;
+	/** Set when the attachment connects as a named (non-owner) credential. */
+	credential: { id: string; role: DatabaseCredentialRole } | null;
 }
+
+type CredentialRow = typeof databaseCredentials.$inferSelect;
 
 /**
  * Managed databases (docs/DATABASES.md, D55–D61). A database is an org resource that runs as a
@@ -180,6 +195,12 @@ export class DatabaseService {
 		const info = databaseEngineRegistry[input.engine];
 		const version = input.version ?? info.defaultVersion;
 		const memoryMb = input.memoryMb ?? info.defaultMemoryMb;
+		// A variant exists for its extension (D126): create it on first start without being asked.
+		const variantExtension = databaseVariantRegistry[input.variant].extension;
+		const extensions =
+			variantExtension && !input.extensions.includes(variantExtension)
+				? [...input.extensions, variantExtension]
+				: input.extensions;
 		if (input.engine === 'postgres' && input.name.startsWith('pg-'))
 			throw new ValidationError('Database names cannot start with "pg-" (Postgres reserves pg_ roles).');
 		// Features the engine lacks are off, whatever the schema defaulted (docs/DATABASES.md §17).
@@ -261,13 +282,14 @@ export class DatabaseService {
 					name: input.name,
 					engine: input.engine,
 					version,
+					variant: input.variant,
 					nodeId: decision.nodeId,
 					hostPort,
 					memoryMb,
 					cpus: input.cpus,
 					storageMb: input.storageMb,
 					volumeId: volume?.id ?? null,
-					extensionsJson: JSON.stringify(input.extensions),
+					extensionsJson: JSON.stringify(extensions),
 					poolerEnabled: pooler,
 					poolerPort,
 					status: 'pending',
@@ -295,6 +317,7 @@ export class DatabaseService {
 				name: input.name,
 				engine: input.engine,
 				version,
+				...(input.variant !== 'standard' ? { variant: input.variant } : {}),
 				nodeId: decision.nodeId,
 				memoryMb,
 				...(volume ? { volume: volume.name } : {}),
@@ -302,8 +325,9 @@ export class DatabaseService {
 			},
 			result: 'ok',
 		});
-		// The read-only studio principal (plan 22 track G); the node applies it once running.
-		this.ctx.databaseStudio.principals.ensure(id, 'create');
+		// The read-only studio principal (plan 22 track G); the node applies it once running. Engines
+		// without a studio (ClickHouse) have no principal, and their helper verb refuses one.
+		if (info.capabilities.console) this.ctx.databaseStudio.principals.ensure(id, 'create');
 		this.ctx.projects.bump(principal.orgId);
 		return this.toView(this.requireRow(principal, input.name));
 	}
@@ -328,6 +352,10 @@ export class DatabaseService {
 		if (patch.version !== undefined && patch.version !== row.version) {
 			if (!info.versions.includes(patch.version))
 				throw new ValidationError(`${info.label} versions: ${info.versions.join(', ')}.`);
+			if (!databaseVariantSupported(row.engine, patch.version, row.variant))
+				throw new ValidationError(
+					`The ${databaseVariantRegistry[row.variant].label} variant has no ${info.label} ${patch.version} image.`,
+				);
 			if (row.engine === 'postgres' && isPostgresMajorChange(row.version, patch.version))
 				throw new ConflictError(
 					`PostgreSQL ${row.version} → ${patch.version} is a major-version upgrade. ` +
@@ -354,6 +382,8 @@ export class DatabaseService {
 			throw new ValidationError(`Connection pooling is only available for PostgreSQL, not ${info.label}.`);
 		if (extensions && extensions.length > 0 && !info.capabilities.extensions)
 			throw new ValidationError(`Extensions are only available for PostgreSQL, not ${info.label}.`);
+		const extensionError = extensions ? databaseVariantExtensionError(row.variant, extensions) : null;
+		if (extensionError) throw new ValidationError(extensionError);
 		const poolerEnabled = pooler ?? row.poolerEnabled;
 		const poolerPort =
 			pooler === false
@@ -405,12 +435,17 @@ export class DatabaseService {
 			throw new ValidationError(`Cannot compare PostgreSQL version "${row.version}" with "${input.targetVersion}".`);
 		if (fromMajor === toMajor)
 			throw new ValidationError(
-				`${row.version} → ${input.targetVersion} is not a major change; use \`skif db update\` for a maintenance update.`
+				`"${name}" already runs PostgreSQL ${fromMajor}, so there is no major upgrade to plan. Skiff runs one image per ` +
+					`PostgreSQL major and has no separate minor-update step; use \`skif db update ${name}\` to change memory, ` +
+					`CPUs, storage, pooling or extensions.`
 			);
 
 		const blockers: string[] = [];
 		const warnings: string[] = [];
 		if (row.pendingRestoreId) blockers.push('A backup restore is running on this database.');
+		// A replica cannot stream across a major version (docs/CLUSTERING.md §9.2).
+		if (this.ctx.databaseReplicas.hasReplicas(row.id))
+			blockers.push('Remove its read replicas first; a replica cannot follow a primary of another major version.');
 		const busy = this.ctx.db
 			.select({ id: databaseBackups.id })
 			.from(databaseBackups)
@@ -419,6 +454,10 @@ export class DatabaseService {
 		if (busy) blockers.push('Wait for the in-flight backup to finish.');
 		if (row.status !== 'running' && row.status !== 'stopped')
 			blockers.push(`The database is ${row.status}; start it and verify it is healthy first.`);
+		if (!databaseVariantSupported(row.engine, input.targetVersion, row.variant))
+			blockers.push(
+				`The ${databaseVariantRegistry[row.variant].label} variant has no PostgreSQL ${input.targetVersion} image yet.`,
+			);
 		const attachments = this.attachmentsOf(row.id);
 		if (attachments.length > 0)
 			warnings.push(
@@ -637,8 +676,9 @@ export class DatabaseService {
 		return due.length;
 	}
 
+	/** The owner URL and password (D58): dashboard or CLI API key, never MCP. Audited. */
 	credentials(principal: Principal, name: string): DatabaseCredentials {
-		requirePermission(principal, 'database:credentials');
+		requireCredentialReveal(principal, 'database:credentials');
 		const row = this.requireRow(principal, name);
 		const user = databaseIdentifier(row.name);
 		const pass = this.ctx.secrets.open(row.orgId, row.ownerSecret);
@@ -1203,6 +1243,12 @@ export class DatabaseService {
 		if (credential.role === 'owner' || credential.role === 'monitor')
 			throw new ValidationError('The built-in owner and monitor credentials cannot be revoked here.');
 		if (credential.status === 'revoked') return toCredentialView(credential);
+		// Revoking a credential an app connects with would lock that app out at its next start.
+		const users = this.attachmentsUsing(credential.id);
+		if (users.length > 0)
+			throw new ConflictError(
+				`${users.join(', ')} ${users.length === 1 ? 'connects' : 'connect'} as this credential. Detach ${users.length === 1 ? 'it' : 'them'} first.`,
+			);
 		const now = this.ctx.now();
 		this.ctx.db
 			.update(databaseCredentials)
@@ -1222,14 +1268,13 @@ export class DatabaseService {
 	}
 
 	/**
-	 * Reveal a named credential. This is an interactive action: an MCP/API-key principal never
-	 * receives the secret, and the read is audited. Step-up is enforced by the surface (the
-	 * dashboard action re-authenticates before calling this service).
+	 * Reveal one credential's password, gated exactly like the owner URL (D58): the dashboard
+	 * session or the CLI's API key with `database:credentials`, never MCP. Every read is audited.
 	 */
 	revealCredential(principal: Principal, name: string, credentialId: string): DatabaseCredentialView & { password: string } {
-		requirePermission(principal, 'database:credentials');
-		if (principal.kind !== 'user')
-			throw new CoreError('forbidden', 'Credential reveal needs an interactive user session.', 403);
+		requireCredentialReveal(principal, 'database:credentials');
+		if (principal.kind === 'system')
+			throw new CoreError('forbidden', 'Credential reveal needs a user session or API key.', 403);
 		const db = this.requireRow(principal, name);
 		const credential = this.requireCredential(db.id, credentialId);
 		if (credential.status !== 'ready' || credential.revokedAt !== null)
@@ -1383,6 +1428,48 @@ export class DatabaseService {
 		return row;
 	}
 
+	/**
+	 * The named credential an attachment should connect as: an id, or a role when exactly one ready
+	 * credential has it. Only ready app/readonly/backup credentials qualify.
+	 */
+	private attachableCredential(db: DatabaseRow, ref: string): CredentialRow {
+		this.requireCapability(db, 'namedCredentials', 'Named credentials');
+		const live = this.credentialsOf(db.id).filter(
+			(item) => namedCredential(item) !== null && item.status !== 'revoked' && item.status !== 'revoking',
+		);
+		let credential: CredentialRow | undefined;
+		if (ref === 'app' || ref === 'readonly' || ref === 'backup') {
+			const matches = live.filter((item) => item.role === ref && item.status === 'ready');
+			if (matches.length === 0)
+				throw new NotFoundError(`A ready ${ref} credential on "${db.name}"`);
+			if (matches.length > 1)
+				throw new ValidationError(
+					`"${db.name}" has ${matches.length} ready ${ref} credentials; pass the credential id instead.`,
+				);
+			credential = matches[0];
+		} else {
+			credential = live.find((item) => item.id === ref);
+			if (!credential) throw new NotFoundError(`Credential "${ref}" on "${db.name}"`);
+		}
+		if (!credential || credential.status !== 'ready' || !credential.secretSealed)
+			throw new ConflictError('That credential is not ready yet. Wait for the node to provision it.');
+		if (credential.expiresAt !== null && credential.expiresAt <= this.ctx.now())
+			throw new ConflictError('That credential has expired.');
+		return credential;
+	}
+
+	/** Slugs of live projects whose attachment connects as this credential. */
+	private attachmentsUsing(credentialId: string): string[] {
+		return this.ctx.db
+			.select({ slug: projects.slug })
+			.from(databaseAttachments)
+			.innerJoin(projects, eq(projects.id, databaseAttachments.projectId))
+			.where(and(eq(databaseAttachments.credentialId, credentialId), isNull(projects.deletedAt)))
+			.all()
+			.map((row) => row.slug)
+			.sort();
+	}
+
 	// ---------------------------------------------------------------- backups
 
 	/** Backup policy and last known result for one database. */
@@ -1488,6 +1575,7 @@ export class DatabaseService {
 				kind: 'manual',
 				status: 'pending',
 				objectKey: backupObjectKey(db.orgId, db.id, id),
+				...this.ctx.backupTargets.placementFor(db.orgId),
 				pinned: input.pinned,
 				createdBy: principal.userId,
 				createdAt: now,
@@ -1525,16 +1613,26 @@ export class DatabaseService {
 			throw new ConflictError('Wait for the backup to finish before deleting it.');
 		if (db.pendingRestoreId === backup.id)
 			throw new ConflictError('This backup is being restored into a database right now.');
-		const resolved = this.ctx.backupTargets.storeFor(db.orgId);
-		this.ctx.backupTargets.assertDeleteAllowed(resolved.target);
-		await resolved.store.delete(backup.objectKey).catch(() => undefined);
+		// The object is deleted from the target it was written to, not the one that applies now. When
+		// that target was deleted the object cannot be reached: drop the row and say where it was left.
+		const recorded = this.ctx.backupTargets.openRecorded(backup);
+		if (recorded.available) {
+			if (recorded.target) this.ctx.backupTargets.assertDeleteAllowed(recorded.target);
+			await recorded.store.delete(backup.objectKey).catch(() => undefined);
+		}
 		this.ctx.db.delete(databaseBackups).where(eq(databaseBackups.id, backup.id)).run();
 		this.ctx.audit.record({
 			principal,
 			action: 'database.backup-delete',
 			resource: 'database',
 			resourceId: db.id,
-			args: { name, backupId },
+			args: {
+				name,
+				backupId,
+				targetId: recorded.location.id,
+				location: recorded.location.location,
+				objectDeleted: recorded.available,
+			},
 			result: 'ok',
 		});
 		this.ctx.projects.bump(principal.orgId);
@@ -1556,11 +1654,14 @@ export class DatabaseService {
 		if (!backup) throw new NotFoundError('Backup');
 		if (backup.status !== 'ok')
 			throw new ConflictError(`Backup "${backupId}" is ${backup.status}; only a completed backup can be restored.`);
+		// Fail before creating anything when the recorded target is gone.
+		this.ctx.backupTargets.requireRecorded(backup);
 		const input = databaseRestoreSchema.parse(raw);
 		const created = this.create(principal, {
 			name: input.name,
 			engine: source.engine,
 			version: source.version,
+			variant: source.variant,
 			placement: input.placement,
 			...(input.memoryMb !== undefined ? { memoryMb: input.memoryMb } : {}),
 			...(input.cpus !== undefined ? { cpus: input.cpus } : {}),
@@ -1656,6 +1757,7 @@ export class DatabaseService {
 						kind: 'scheduled',
 						status: 'pending',
 						objectKey: backupObjectKey(db.orgId, db.id, id),
+						...this.ctx.backupTargets.placementFor(db.orgId),
 						createdBy: 'system',
 						createdAt: now,
 						expiresAt: now + db.backupRetentionDays * DAY_MS,
@@ -1692,6 +1794,8 @@ export class DatabaseService {
 	 */
 	async backupTasksForNode(nodeId: string): Promise<DatabaseBackupTask[]> {
 		const tasks: DatabaseBackupTask[] = [];
+		// Work whose recorded target was deleted can never run; fail it instead of leaving it pending.
+		const unreachable: DatabaseBackupResult[] = [];
 		const backups = this.ctx.db
 			.select({ backup: databaseBackups, db: databases })
 			.from(databaseBackups)
@@ -1699,7 +1803,13 @@ export class DatabaseService {
 			.where(and(eq(databases.nodeId, nodeId), eq(databaseBackups.status, 'pending'), isNull(databases.deletedAt)))
 			.all();
 		for (const { backup, db } of backups) {
-			const { store } = this.ctx.backupTargets.storeFor(db.orgId);
+			// The target recorded when the backup was queued, even if the default changed since.
+			const recorded = this.ctx.backupTargets.openRecorded(backup);
+			if (!recorded.available) {
+				unreachable.push({ taskId: backup.id, action: 'backup', databaseId: db.id, backupId: null, status: 'failed', error: recorded.reason });
+				continue;
+			}
+			const { store } = recorded;
 			tasks.push({
 				id: backup.id,
 				action: 'backup',
@@ -1724,7 +1834,19 @@ export class DatabaseService {
 				.where(eq(databaseBackups.id, db.pendingRestoreId!))
 				.get();
 			if (!backup) continue;
-			const { store } = this.ctx.backupTargets.storeFor(db.orgId);
+			const recorded = this.ctx.backupTargets.openRecorded(backup);
+			if (!recorded.available) {
+				unreachable.push({
+					taskId: `restore:${db.id}`,
+					action: 'restore',
+					databaseId: db.id,
+					backupId: backup.id,
+					status: 'failed',
+					error: recorded.reason,
+				});
+				continue;
+			}
+			const { store } = recorded;
 			tasks.push({
 				id: `restore:${db.id}`,
 				action: 'restore',
@@ -1737,6 +1859,7 @@ export class DatabaseService {
 				format: databaseBackupFormat(db.engine) ?? 'pg_dump-custom',
 			});
 		}
+		if (unreachable.length > 0) this.applyBackupResults(nodeId, unreachable);
 		return tasks;
 	}
 
@@ -1854,7 +1977,11 @@ export class DatabaseService {
 		if (changed) this.ctx.projects.bump();
 	}
 
-	/** Retention sweep; never deletes a pinned backup or the newest good backup of a database. */
+	/**
+	 * Retention sweep; never deletes a pinned backup or the newest good backup of a database. Each
+	 * object is deleted from the target it was recorded on. A backup whose target was deleted, or
+	 * sits on a write-only target, is skipped: its row is the only record of where the object is.
+	 */
 	async pruneBackups(now = this.ctx.now()): Promise<number> {
 		const candidates = this.ctx.db
 			.select({ backup: databaseBackups, db: databases })
@@ -1870,18 +1997,23 @@ export class DatabaseService {
 			)
 			.all();
 		let removed = 0;
+		const newestRestorable = new Map<string, string | null>();
 		for (const { backup, db } of candidates) {
-			const newest = this.ctx.db
-				.select({ id: databaseBackups.id })
-				.from(databaseBackups)
-				.where(and(eq(databaseBackups.databaseId, db.id), eq(databaseBackups.status, 'ok')))
-				.orderBy(desc(databaseBackups.createdAt))
-				.limit(1)
-				.get();
-			if (newest?.id === backup.id) continue;
-			const resolved = this.ctx.backupTargets.storeFor(db.orgId);
-			if (resolved.target.writeOnly) continue;
-			await resolved.store.delete(backup.objectKey).catch(() => undefined);
+			if (!newestRestorable.has(db.id)) {
+				// The newest ok backup Skiff can still reach; an unreachable newer one does not count.
+				const good = this.ctx.db
+					.select()
+					.from(databaseBackups)
+					.where(and(eq(databaseBackups.databaseId, db.id), eq(databaseBackups.status, 'ok')))
+					.orderBy(desc(databaseBackups.createdAt))
+					.all();
+				const newest = good.find((row) => this.ctx.backupTargets.describeRecorded(row).available);
+				newestRestorable.set(db.id, newest?.id ?? null);
+			}
+			if (newestRestorable.get(db.id) === backup.id) continue;
+			const recorded = this.ctx.backupTargets.openRecorded(backup);
+			if (!recorded.available || recorded.writeOnly) continue;
+			await recorded.store.delete(backup.objectKey).catch(() => undefined);
 			this.ctx.db.delete(databaseBackups).where(eq(databaseBackups.id, backup.id)).run();
 			removed += 1;
 		}
@@ -1924,6 +2056,9 @@ export class DatabaseService {
 			lastRestoreDatabaseId: state?.lastRestoreDatabaseId ?? null,
 			verifiedAt: toIso(state?.verifiedAt),
 			error: state?.error ?? null,
+			recoverableFrom: toIso(state?.recoverableFromAt),
+			recoverableTo: toIso(state?.recoverableToAt),
+			windowCheckedAt: toIso(state?.windowCheckedAt),
 		};
 	}
 
@@ -1935,6 +2070,14 @@ export class DatabaseService {
 		const row = this.requireRow(principal, name);
 		this.ctx.moves.assertNotMoving(row);
 		this.requireCapability(row, 'pitr', 'Point-in-time recovery');
+		if (input.enabled) {
+			// Only the standard Postgres 18 image has a pgBackRest build (docs/PITR.md).
+			const unsupported = pitrUnsupportedReason(row.engine, row.version, row.variant);
+			if (unsupported) throw new ValidationError(unsupported);
+			// The PITR image and WAL archive are not wired for replicas yet (docs/CLUSTERING.md §9.2).
+			if (this.ctx.databaseReplicas.hasReplicas(row.id))
+				throw new ValidationError(`"${row.name}" has read replicas; remove them before turning point-in-time recovery on.`);
+		}
 		const now = this.ctx.now();
 		const existing = this.ctx.db
 			.select()
@@ -1981,12 +2124,29 @@ export class DatabaseService {
 				})
 				.run();
 		}
+		// Backups and status checks need the PITR container; once it is off they can only fail.
+		if (!input.enabled)
+			this.ctx.db
+				.update(databasePitrTasks)
+				.set({ status: 'failed', finishedAt: now, error: 'Point-in-time recovery was turned off.' })
+				.where(
+					and(
+						eq(databasePitrTasks.databaseId, row.id),
+						inArray(databasePitrTasks.action, ['basebackup', 'status']),
+						eq(databasePitrTasks.status, 'pending'),
+					),
+				)
+				.run();
+		// A window needs a base backup: take the first full one now instead of waiting for Sunday.
+		// The node runs it once the database is back up on the PITR image.
+		const firstBackup =
+			input.enabled && !existing?.enabled ? this.queuePitrBaseBackup(row, 'full', now, principal.userId) : null;
 		this.ctx.audit.record({
 			principal,
 			action: 'database.pitr-policy',
 			resource: 'database',
 			resourceId: row.id,
-			args: { name, enabled: input.enabled },
+			args: { name, enabled: input.enabled, ...(firstBackup ? { firstBackupTaskId: firstBackup } : {}) },
 			result: 'ok',
 		});
 		this.ctx.projects.bump(principal.orgId);
@@ -2000,33 +2160,9 @@ export class DatabaseService {
 		const input = databasePitrBackupSchema.parse(raw);
 		const row = this.requireRow(principal, name);
 		const state = this.requirePitrEnabled(row);
-		const busy = this.ctx.db
-			.select({ id: databasePitrTasks.id })
-			.from(databasePitrTasks)
-			.where(
-				and(
-					eq(databasePitrTasks.databaseId, row.id),
-					eq(databasePitrTasks.action, 'basebackup'),
-					inArray(databasePitrTasks.status, ['pending', 'running']),
-				),
-			)
-			.get();
-		if (busy) throw new ConflictError(`A PITR base backup for "${name}" is already queued.`);
 		const now = this.ctx.now();
-		const id = newId('pitr_');
-		this.ctx.db
-			.insert(databasePitrTasks)
-			.values({
-				id,
-				orgId: row.orgId,
-				databaseId: row.id,
-				action: 'basebackup',
-				status: 'pending',
-				baseBackupType: input.type,
-				createdBy: principal.userId,
-				createdAt: now,
-			})
-			.run();
+		const id = this.queuePitrBaseBackup(row, input.type, now, principal.userId);
+		if (!id) throw new ConflictError(`A PITR base backup for "${name}" is already queued.`);
 		this.ctx.db
 			.update(databasePitr)
 			.set({ status: 'pending', error: null, updatedAt: now })
@@ -2065,12 +2201,16 @@ export class DatabaseService {
 		const source = this.requireRow(principal, sourceName);
 		const state = this.requirePitrEnabled(source);
 		const targetTime = Date.parse(input.targetTime);
-		const check = validatePitrTargetTime(targetTime, this.ctx.now(), PITR_RETENTION_DAYS);
+		const now = this.ctx.now();
+		const check = validatePitrTargetTime(targetTime, now, PITR_RETENTION_DAYS);
 		if (!check.ok) throw new ValidationError(check.message);
+		const inWindow = validatePitrTargetInWindow(targetTime, this.pitrRestorableWindow(state, now));
+		if (!inWindow.ok) throw new ValidationError(inWindow.message);
 		const target = this.create(principal, {
 			name: input.name,
 			engine: source.engine,
 			version: source.version,
+			variant: source.variant,
 			placement: source.nodeId,
 			...(input.memoryMb !== undefined ? { memoryMb: input.memoryMb } : {}),
 			...(input.cpus !== undefined ? { cpus: input.cpus } : {}),
@@ -2079,7 +2219,6 @@ export class DatabaseService {
 			extensions: parseJson<string[]>(source.extensionsJson, []) as DatabaseCreate['extensions'],
 			pooler: source.poolerEnabled,
 		});
-		const now = this.ctx.now();
 		const id = newId('pitr_');
 		this.ctx.sqlite.transaction(() => {
 			this.ctx.db
@@ -2224,6 +2363,8 @@ export class DatabaseService {
 					})
 					.where(eq(databasePitr.databaseId, row.db.id))
 					.run();
+				// Refresh the window now rather than at the next 15-minute check.
+				if (ok) this.queuePitrStatus(row.db, now);
 			} else if (row.task.action === 'restore') {
 				const targetId = row.task.targetDatabaseId;
 				this.ctx.db
@@ -2258,11 +2399,26 @@ export class DatabaseService {
 					}
 				}
 			} else {
+				const window = ok ? result.window : undefined;
+				const archiveStatus = ok ? (result.archiveStatus ?? 'unknown') : 'unknown';
+				const problem = !ok
+					? (result.error ?? 'PITR status check failed on the node.')
+					: (window?.repoMessage ??
+						(archiveStatus === 'failing' ? 'WAL archiving is failing; new writes are not recoverable yet.' : null));
 				this.ctx.db
 					.update(databasePitr)
 					.set({
-						archiveStatus: result.archiveStatus ?? 'unknown',
+						archiveStatus,
 						archiveAt: now,
+						...(window
+							? {
+									recoverableFromAt: window.recoverableFrom,
+									recoverableToAt: window.recoverableTo,
+									windowCheckedAt: now,
+								}
+							: {}),
+						// A status check never clears a base-backup or restore failure; it records its own.
+						...(problem ? { error: problem } : {}),
 						updatedAt: now,
 					})
 					.where(eq(databasePitr.databaseId, row.db.id))
@@ -2285,11 +2441,25 @@ export class DatabaseService {
 	/**
 	 * Maintenance sweep: enqueue due full/diff backups through the F4 scheduler, then claim the
 	 * pitr kind only and turn each claim into a node task. `kind + key` prevents duplicate slots.
+	 * Every enabled database also gets a `status` task every `PITR_STATUS_INTERVAL_MS`: it reports
+	 * the recoverable window and rewrites the node's tmpfs config after a reboot.
 	 */
 	tickPitr(now = this.ctx.now()): number {
 		if (!featureEnabled(this.ctx.config, 'PITR')) return 0;
 		const rows = this.ctx.db.select().from(databasePitr).where(eq(databasePitr.enabled, true)).all();
+		let statusQueued = 0;
 		for (const row of rows) {
+			const lastStatus = this.ctx.db
+				.select({ createdAt: databasePitrTasks.createdAt })
+				.from(databasePitrTasks)
+				.where(and(eq(databasePitrTasks.databaseId, row.databaseId), eq(databasePitrTasks.action, 'status')))
+				.orderBy(desc(databasePitrTasks.createdAt))
+				.limit(1)
+				.get();
+			if (!lastStatus || now - lastStatus.createdAt >= PITR_STATUS_INTERVAL_MS) {
+				const db = this.ctx.db.select().from(databases).where(eq(databases.id, row.databaseId)).get();
+				if (db && !db.deletedAt && this.activePitr(db) && this.queuePitrStatus(db, now)) statusQueued += 1;
+			}
 			for (const [type, dueAt, schedule] of [
 				['full', row.nextFullAt, PITR_FULL_SCHEDULE],
 				['diff', row.nextDiffAt, PITR_DIFF_SCHEDULE],
@@ -2327,42 +2497,18 @@ export class DatabaseService {
 					this.ctx.scheduler.complete(claimed.id, JSON.stringify({ skipped: 'database-gone' }));
 					continue;
 				}
-				const busy = this.ctx.db
-					.select({ id: databasePitrTasks.id })
-					.from(databasePitrTasks)
-					.where(
-						and(
-							eq(databasePitrTasks.databaseId, db.id),
-							eq(databasePitrTasks.action, 'basebackup'),
-							inArray(databasePitrTasks.status, ['pending', 'running']),
-						),
-					)
-					.get();
-				if (busy) {
+				if (!this.queuePitrBaseBackup(db, type, now)) {
 					this.ctx.scheduler.complete(claimed.id, JSON.stringify({ skipped: 'busy' }));
 					continue;
 				}
-				this.ctx.db
-					.insert(databasePitrTasks)
-					.values({
-						id: newId('pitr_'),
-						orgId: db.orgId,
-						databaseId: db.id,
-						action: 'basebackup',
-						status: 'pending',
-						baseBackupType: type,
-						createdBy: 'system',
-						createdAt: now,
-					})
-					.run();
 				this.ctx.scheduler.complete(claimed.id, JSON.stringify({ task: 'queued' }));
 				queued += 1;
 			} catch (error) {
 				this.ctx.scheduler.fail(claimed.id, error instanceof Error ? error.message : String(error));
 			}
 		}
-		if (queued > 0) this.ctx.projects.bump();
-		return queued;
+		if (queued + statusQueued > 0) this.ctx.projects.bump();
+		return queued + statusQueued;
 	}
 
 	private requirePitrFeature(): void {
@@ -2379,6 +2525,103 @@ export class DatabaseService {
 		if (!repo) throw new ValidationError(this.pitrRepoMissingMessage());
 		const { accessKeyId: _accessKeyId, secretAccessKey: _secretAccessKey, ...view } = repo;
 		return view;
+	}
+
+	/**
+	 * The window a restore may target. The node's last status check bounds it; while that check
+	 * found a healthy archive, WAL keeps landing every `archive_timeout`, so the upper bound moves
+	 * with the clock (minus two archive timeouts of slack). A failing or unknown archive keeps it at
+	 * the last archived segment.
+	 */
+	private pitrRestorableWindow(
+		state: typeof databasePitr.$inferSelect,
+		now: number,
+	): { recoverableFrom: number | null; recoverableTo: number | null } {
+		const from = state.recoverableFromAt ?? null;
+		const to = state.recoverableToAt ?? null;
+		if (from === null || to === null) return { recoverableFrom: null, recoverableTo: null };
+		const live = state.archiveStatus === 'ok' ? now - 2 * PITR_ARCHIVE_TIMEOUT_SECONDS * 1000 : to;
+		return { recoverableFrom: from, recoverableTo: Math.max(to, live) };
+	}
+
+	/**
+	 * The PITR row that shapes this database's workload: archiving on (and the PITR image) only
+	 * while the flag is on, the policy is enabled and the engine/version/variant has a pgBackRest
+	 * build. Desired state and activation must agree, so both read it here.
+	 */
+	private activePitr(row: DatabaseRow): typeof databasePitr.$inferSelect | undefined {
+		if (!databaseCapabilities(row.engine).pitr || !featureEnabled(this.ctx.config, 'PITR')) return undefined;
+		if (pitrUnsupportedReason(row.engine, row.version, row.variant) !== null) return undefined;
+		return this.ctx.db
+			.select()
+			.from(databasePitr)
+			.where(and(eq(databasePitr.databaseId, row.id), eq(databasePitr.enabled, true)))
+			.get();
+	}
+
+	/** Queue a `status` task unless one is already waiting (window refresh, config rewrite). */
+	private queuePitrStatus(db: { id: string; orgId: string }, now: number, createdBy = 'system'): boolean {
+		const waiting = this.ctx.db
+			.select({ id: databasePitrTasks.id })
+			.from(databasePitrTasks)
+			.where(
+				and(
+					eq(databasePitrTasks.databaseId, db.id),
+					eq(databasePitrTasks.action, 'status'),
+					inArray(databasePitrTasks.status, ['pending', 'running']),
+				),
+			)
+			.get();
+		if (waiting) return false;
+		this.ctx.db
+			.insert(databasePitrTasks)
+			.values({
+				id: newId('pitr_'),
+				orgId: db.orgId,
+				databaseId: db.id,
+				action: 'status',
+				status: 'pending',
+				createdBy,
+				createdAt: now,
+			})
+			.run();
+		return true;
+	}
+
+	/** Queue a base backup unless one is already waiting. Returns the new task id, or null. */
+	private queuePitrBaseBackup(
+		db: { id: string; orgId: string },
+		type: 'full' | 'diff' | 'incr',
+		now: number,
+		createdBy = 'system',
+	): string | null {
+		const busy = this.ctx.db
+			.select({ id: databasePitrTasks.id })
+			.from(databasePitrTasks)
+			.where(
+				and(
+					eq(databasePitrTasks.databaseId, db.id),
+					eq(databasePitrTasks.action, 'basebackup'),
+					inArray(databasePitrTasks.status, ['pending', 'running']),
+				),
+			)
+			.get();
+		if (busy) return null;
+		const id = newId('pitr_');
+		this.ctx.db
+			.insert(databasePitrTasks)
+			.values({
+				id,
+				orgId: db.orgId,
+				databaseId: db.id,
+				action: 'basebackup',
+				status: 'pending',
+				baseBackupType: type,
+				createdBy,
+				createdAt: now,
+			})
+			.run();
+		return id;
 	}
 
 	private requirePitrEnabled(row: DatabaseRow): typeof databasePitr.$inferSelect {
@@ -2410,6 +2653,7 @@ export class DatabaseService {
 			startedAt: new Date(row.startedAt ?? row.createdAt).toISOString(),
 			finishedAt: row.finishedAt ? new Date(row.finishedAt).toISOString() : null,
 			expiresAt: row.expiresAt ? new Date(row.expiresAt).toISOString() : null,
+			target: this.ctx.backupTargets.describeRecorded(row),
 		};
 	}
 
@@ -2457,14 +2701,20 @@ export class DatabaseService {
 			);
 		const placementProblem = this.placementConflict(project, row.nodeId);
 		if (placementProblem) throw new ValidationError(placementProblem);
+		const credential = input.credential ? this.attachableCredential(row, input.credential) : null;
 
-		this.insertAttachment(principal, row.id, project, envPrefix);
+		this.insertAttachment(principal, row.id, project, envPrefix, credential?.id);
 		this.ctx.audit.record({
 			principal,
 			action: 'database.attach',
 			resource: 'database',
 			resourceId: row.id,
-			args: { name: row.name, project: project.slug, envPrefix },
+			args: {
+				name: row.name,
+				project: project.slug,
+				envPrefix,
+				...(credential ? { credentialId: credential.id, role: credential.role } : {}),
+			},
 			result: 'ok',
 		});
 		this.ctx.projects.bump(principal.orgId);
@@ -2532,7 +2782,7 @@ export class DatabaseService {
 	consumerEnv(projectId: string, nodeId: string | null, runtime: WorkloadRuntime): Record<string, string> {
 		const env: Record<string, string> = {};
 		for (const item of this.resolveForConsumer(projectId, nodeId, runtime)) {
-			const pass = this.ctx.secrets.open(item.row.orgId, item.row.ownerSecret);
+			const pass = this.ctx.secrets.open(item.row.orgId, item.secretSealed);
 			const tls = this.tlsState(item.row);
 			const info = databaseEngineRegistry[item.row.engine];
 			const direct = databaseConnectionUrl({
@@ -2572,6 +2822,27 @@ export class DatabaseService {
 				env[`${item.prefix}_POOL_HOST`] = poolHost;
 				env[`${item.prefix}_POOL_PORT`] = String(poolPort);
 			}
+			// Read replicas (C7): only while one the app can reach is streaming or lagging. They are
+			// physical copies, so the same user and password work; reads may trail by the lag.
+			const reads = this.ctx.databaseReplicas.readTargets(item.row, nodeId!, runtime);
+			if (reads.length > 0) {
+				const urls = reads.map((target) =>
+					databaseConnectionUrl({
+						scheme: item.scheme,
+						user: item.user,
+						pass,
+						host: target.host,
+						port: target.port,
+						database: item.databaseName,
+						sslmode: tls.mode,
+						query: info.urlQuery,
+					}),
+				);
+				env[`${item.prefix}_READ_URL`] = urls[0]!;
+				env[`${item.prefix}_READ_URLS`] = urls.join(',');
+				env[`${item.prefix}_READ_HOST`] = reads[0]!.host;
+				env[`${item.prefix}_READ_PORT`] = String(reads[0]!.port);
+			}
 		}
 		return env;
 	}
@@ -2579,6 +2850,11 @@ export class DatabaseService {
 	/**
 	 * Stable fingerprint of a consumer's attachments (no secret values), folded into its activation
 	 * version so attach/detach re-activates the app. Empty string when nothing applies.
+	 *
+	 * The password the app connects with is part of it as a hash of its sealed value (D86): once a
+	 * rotation is confirmed and the live secret swaps, the version changes and the node restarts the
+	 * app with the new password. An owner attachment adds it only after its first owner rotation,
+	 * so upgrading Skiff never restarts apps whose password has not changed.
 	 */
 	consumerVersion(projectId: string, nodeId: string | null, runtime: WorkloadRuntime): string {
 		const tls = this.tlsEnabled();
@@ -2589,29 +2865,53 @@ export class DatabaseService {
 			port: item.port,
 			poolerPort: item.poolerPort,
 			tls,
+			// A replica starting or stopping to serve reads changes `<P>_READ_*` (C7).
+			...(() => {
+				const reads = this.ctx.databaseReplicas.readTargets(item.row, nodeId!, runtime);
+				return reads.length > 0 ? { reads: reads.map((target) => `${target.replicaId}@${target.host}:${target.port}`) } : {};
+			})(),
+			...(item.credential
+				? { credential: item.credential.id, secret: sha256Hex(item.secretSealed) }
+				: this.ownerRotated(item.databaseId)
+					? { secret: sha256Hex(item.secretSealed) }
+					: {}),
 		}));
 		return items.length === 0 ? '' : sha256Hex(JSON.stringify(items));
+	}
+
+	/** True once an owner rotation has been confirmed for this database. */
+	private ownerRotated(databaseId: string): boolean {
+		return (
+			this.ctx.db
+				.select({ id: databaseRotations.id })
+				.from(databaseRotations)
+				.where(
+					and(
+						eq(databaseRotations.databaseId, databaseId),
+						eq(databaseRotations.role, 'owner'),
+						eq(databaseRotations.status, 'ok'),
+					),
+				)
+				.get() !== undefined
+		);
 	}
 
 	// ---------------------------------------------------------------- node protocol
 
 	/** Live databases placed on a node, as container workloads with the database profile. */
 	desiredForNode(nodeId: string): WorkloadDesired[] {
+		// A primary fenced for a replica promotion must stop on its node (docs/CLUSTERING.md §9.3).
+		const fenced = this.ctx.databaseReplicas.fencedDatabaseIds();
 		return this.ctx.db
 			.select()
 			.from(databases)
 			.where(and(eq(databases.nodeId, nodeId), isNull(databases.deletedAt)))
 			.all()
+			.filter((row) => !fenced.has(row.id))
 			.map((row) => {
 				const capabilities = databaseCapabilities(row.engine);
 				const env = databaseContainerEnv(row);
-				const pitr = capabilities.pitr && featureEnabled(this.ctx.config, 'PITR')
-					? this.ctx.db
-							.select()
-							.from(databasePitr)
-							.where(and(eq(databasePitr.databaseId, row.id), eq(databasePitr.enabled, true)))
-							.get()
-					: undefined;
+				const pitr = this.activePitr(row);
 				const tls = capabilities.tls && this.tlsEnabled();
 				const isolated = featureEnabled(this.ctx.config, 'ORG_NETWORKS');
 				return {
@@ -2625,7 +2925,8 @@ export class DatabaseService {
 					// `stopped` back would make the agent remove the unit and never start it again.
 					status: 'running' as const,
 					release: null,
-					image: databaseImage(row.engine, row.version),
+					// WAL archiving needs pgBackRest inside the Postgres container (docs/PITR.md).
+					image: pitr ? postgresPitrImage(row.version) : databaseImage(row.engine, row.version, row.variant),
 					upstream: `127.0.0.1:${row.hostPort}`,
 					memoryMb: row.memoryMb,
 					cpus: row.cpus,
@@ -2640,6 +2941,8 @@ export class DatabaseService {
 					database: {
 						engine: row.engine,
 						version: row.version,
+						// Only non-standard variants are sent, so older helpers keep every other database.
+						...(row.variant !== 'standard' ? { variant: row.variant } : {}),
 						...(pitr
 							? {
 									pitr: {
@@ -2677,13 +2980,7 @@ export class DatabaseService {
 		const ownerPassword = this.ctx.secrets.open(row.orgId, row.ownerSecret);
 		const info = databaseEngineRegistry[row.engine];
 		const env = databaseContainerEnv(row);
-		const pitr = info.capabilities.pitr && featureEnabled(this.ctx.config, 'PITR')
-			? this.ctx.db
-					.select()
-					.from(databasePitr)
-					.where(and(eq(databasePitr.databaseId, row.id), eq(databasePitr.enabled, true)))
-					.get()
-			: undefined;
+		const pitr = this.activePitr(row);
 		return {
 			workloadId: row.id,
 			activationVersion: databaseActivationVersion(
@@ -2728,6 +3025,9 @@ export class DatabaseService {
 						.run();
 				continue;
 			}
+			// A PITR restore target runs as an empty database until the restore replaces its data:
+			// its status belongs to the restore result, not to this heartbeat (docs/PITR.md).
+			if (this.pitrRestoreHolds(row.id)) continue;
 			this.ctx.db
 				.update(databases)
 				.set({
@@ -2740,20 +3040,31 @@ export class DatabaseService {
 		}
 	}
 
+	/**
+	 * True while the newest PITR restore into this database is unfinished, or after it failed (the
+	 * node may have started an empty cluster in its place). A successful restore releases it.
+	 */
+	private pitrRestoreHolds(databaseId: string): boolean {
+		const latest = this.ctx.db
+			.select({ status: databasePitrTasks.status })
+			.from(databasePitrTasks)
+			.where(and(eq(databasePitrTasks.targetDatabaseId, databaseId), eq(databasePitrTasks.action, 'restore')))
+			.orderBy(desc(databasePitrTasks.createdAt))
+			.limit(1)
+			.get();
+		return latest !== undefined && latest.status !== 'ok';
+	}
+
 	/** The node deleted these data dirs; drop the rows (D59). */
 	applyPurged(nodeId: string, ids: string[]): void {
 		for (const id of ids) {
 			const row = this.rowById(id);
 			if (!row || row.nodeId !== nodeId || !row.deletedAt || !row.purgeRequestedAt) continue;
-			const backups = this.ctx.db
-				.select({ key: databaseBackups.objectKey })
-				.from(databaseBackups)
-				.where(eq(databaseBackups.databaseId, id))
-				.all();
+			const backups = this.ctx.db.select().from(databaseBackups).where(eq(databaseBackups.databaseId, id)).all();
 			for (const backup of backups) {
-				const resolved = this.ctx.backupTargets.storeFor(row.orgId);
-				if (!resolved.target.writeOnly)
-					void resolved.store.delete(backup.key).catch(() => undefined);
+				const recorded = this.ctx.backupTargets.openRecorded(backup);
+				if (recorded.available && !recorded.writeOnly)
+					void recorded.store.delete(backup.objectKey).catch(() => undefined);
 			}
 			this.ctx.sqlite.transaction(() => {
 				this.ctx.db.delete(databaseAttachments).where(eq(databaseAttachments.databaseId, id)).run();
@@ -2761,6 +3072,8 @@ export class DatabaseService {
 				this.ctx.db.delete(databaseBackups).where(eq(databaseBackups.databaseId, id)).run();
 				this.ctx.db.delete(databases).where(eq(databases.id, id)).run();
 			})();
+			// Its replicas have nothing left to follow; their nodes purge them next (C7).
+			this.ctx.databaseReplicas.onDatabasePurged(id);
 			this.ctx.audit.record({
 				orgId: row.orgId,
 				action: 'database.purged',
@@ -2858,7 +3171,11 @@ export class DatabaseService {
 				 WHERE deleted_at IS NULL AND status IN (?, ?, ?) GROUP BY node_id`,
 			)
 			.all(...(ACTIVE as [string, string, string]));
-		return new Map(rows.map((row) => [row.nodeId, row.total ?? 0]));
+		const reserved = new Map(rows.map((row) => [row.nodeId, row.total ?? 0]));
+		// A read replica reserves its database's memory on its own node (C7).
+		for (const [nodeId, total] of this.ctx.databaseReplicas.reservedByNode())
+			reserved.set(nodeId, (reserved.get(nodeId) ?? 0) + total);
+		return reserved;
 	}
 
 	countByNode(): Map<string, number> {
@@ -2962,6 +3279,8 @@ export class DatabaseService {
 				.all()
 				.map((row) => row.port),
 			...this.ctx.moves.reservedPorts(nodeId).host,
+			// Read replicas publish from the same range on their node (C7).
+			...this.ctx.databaseReplicas.hostPortsOnNode(nodeId),
 		]);
 		for (let port = DATABASE_PORT_MIN; port <= DATABASE_PORT_MAX; port++) if (!used.has(port)) return port;
 		throw new ValidationError('This node has no free database ports left.');
@@ -2982,8 +3301,14 @@ export class DatabaseService {
 		throw new ValidationError('This node has no free database pooler ports left.');
 	}
 
-	private insertAttachment(principal: Principal, databaseId: string, project: ProjectRow, envPrefix: string): void {
-		const credential = this.ensureBuiltInCredential(databaseId, 'owner');
+	private insertAttachment(
+		principal: Principal,
+		databaseId: string,
+		project: ProjectRow,
+		envPrefix: string,
+		credentialId?: string,
+	): void {
+		const credential = credentialId ? { id: credentialId } : this.ensureBuiltInCredential(databaseId, 'owner');
 		this.ctx.db
 			.insert(databaseAttachments)
 			.values({
@@ -3088,44 +3413,58 @@ export class DatabaseService {
 
 	private attachmentViews(filter: ReturnType<typeof eq>): DatabaseAttachmentView[] {
 		return this.ctx.db
-			.select({ attachment: databaseAttachments, db: databases, project: projects })
+			.select({ attachment: databaseAttachments, db: databases, project: projects, credential: databaseCredentials })
 			.from(databaseAttachments)
 			.innerJoin(databases, eq(databases.id, databaseAttachments.databaseId))
 			.innerJoin(projects, eq(projects.id, databaseAttachments.projectId))
+			.leftJoin(databaseCredentials, eq(databaseCredentials.id, databaseAttachments.credentialId))
 			.where(and(filter, isNull(projects.deletedAt)))
 			.all()
-			.map(({ attachment, db, project }) => ({
-				databaseId: db.id,
-				databaseName: db.name,
-				projectId: project.id,
-				projectSlug: project.slug,
-				envPrefix: attachment.envPrefix,
-				envNames: databaseEnvNames(attachment.envPrefix, {
-					pooler: db.poolerEnabled && db.poolerPort !== null,
-					tls: this.tlsEnabled() && databaseCapabilities(db.engine).tls,
-					engine: db.engine,
-				}),
-				createdAt: new Date(attachment.createdAt).toISOString(),
-			}))
+			.map(({ attachment, db, project, credential }) => {
+				const named = namedCredential(credential);
+				return {
+					databaseId: db.id,
+					databaseName: db.name,
+					projectId: project.id,
+					projectSlug: project.slug,
+					envPrefix: attachment.envPrefix,
+					envNames: databaseEnvNames(attachment.envPrefix, {
+						// PgBouncer's userlist carries only the owner, so a named credential gets no pool URL.
+						pooler: !named && db.poolerEnabled && db.poolerPort !== null,
+						tls: this.tlsEnabled() && databaseCapabilities(db.engine).tls,
+						engine: db.engine,
+						replicas: this.ctx.databaseReplicas.hasReplicas(db.id),
+					}),
+					credentialId: named?.id ?? null,
+					credentialRole: named?.role ?? null,
+					createdAt: new Date(attachment.createdAt).toISOString(),
+				};
+			})
 			.sort((a, b) => a.projectSlug.localeCompare(b.projectSlug) || a.databaseName.localeCompare(b.databaseName));
 	}
 
-	private liveAttachmentRows(projectId: string): Array<{ db: DatabaseRow; prefix: string }> {
+	private liveAttachmentRows(
+		projectId: string,
+	): Array<{ db: DatabaseRow; prefix: string; credential: CredentialRow | null }> {
 		return this.ctx.db
-			.select({ attachment: databaseAttachments, db: databases })
+			.select({ attachment: databaseAttachments, db: databases, credential: databaseCredentials })
 			.from(databaseAttachments)
 			.innerJoin(databases, eq(databases.id, databaseAttachments.databaseId))
+			.leftJoin(databaseCredentials, eq(databaseCredentials.id, databaseAttachments.credentialId))
 			.where(and(eq(databaseAttachments.projectId, projectId), isNull(databases.deletedAt)))
 			.all()
-			.map(({ attachment, db }) => ({ db, prefix: attachment.envPrefix }))
+			.map(({ attachment, db, credential }) => ({ db, prefix: attachment.envPrefix, credential: namedCredential(credential) }))
 			.sort((a, b) => a.prefix.localeCompare(b.prefix));
 	}
 
 	private resolveForConsumer(projectId: string, nodeId: string | null, runtime: WorkloadRuntime): ResolvedAttachment[] {
 		if (!nodeId) return [];
-		return this.liveAttachmentRows(projectId).flatMap(({ db, prefix }) => {
+		return this.liveAttachmentRows(projectId).flatMap(({ db, prefix, credential }) => {
 			const info = databaseEngineRegistry[db.engine];
-			const user = databaseIdentifier(db.name);
+			// A named credential keeps its last confirmed secret while a rotation is in flight; one
+			// that never got a secret (or was revoked underneath) yields no env rather than a bad URL.
+			if (credential && (!credential.secretSealed || credential.status === 'revoked')) return [];
+			const user = credential ? credential.username : databaseIdentifier(db.name);
 			const container = runtime === 'container';
 			const sameNode = db.nodeId === nodeId;
 			const endpoint = sameNode
@@ -3148,11 +3487,15 @@ export class DatabaseService {
 				host: sameNode ? (container ? databaseAlias(db.id) : '127.0.0.1') : '127.0.0.1',
 				port: sameNode ? (container ? info.containerPort : db.hostPort) : endpoint!.localPort,
 				user,
-				databaseName: databaseUrlDatabase(db.engine, user),
+				// The database itself is always named after the owner, whoever connects to it.
+				databaseName: databaseUrlDatabase(db.engine, databaseIdentifier(db.name)),
 				scheme: info.scheme,
 				row: db,
+				// PgBouncer's userlist carries only the owner, so a named credential connects directly.
 				poolerPort:
-					sameNode && db.poolerEnabled && info.capabilities.pooler ? db.poolerPort : null,
+					sameNode && !credential && db.poolerEnabled && info.capabilities.pooler ? db.poolerPort : null,
+				secretSealed: credential ? credential.secretSealed! : db.ownerSecret,
+				credential: credential ? { id: credential.id, role: credential.role } : null,
 			}];
 		});
 	}
@@ -3185,10 +3528,13 @@ export class DatabaseService {
 			engineLabel: info.label,
 			capabilities: info.capabilities,
 			version: row.version,
+			variant: row.variant,
 			status: row.status,
 			message: row.message,
 			nodeId: row.nodeId,
 			nodeName: node?.name ?? null,
+			primaryGeneration: row.primaryGeneration,
+			replicaCount: this.ctx.databaseReplicas.rowsFor(row.id).filter((replica) => !replica.removingAt).length,
 			memoryMb: row.memoryMb,
 			cpus: row.cpus,
 			storageMb: row.storageMb,
@@ -3250,6 +3596,12 @@ function connectionUrl(scheme: string, user: string, pass: string, host: string,
 	return `${scheme}://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${host}:${port}/${encodeURIComponent(db)}`;
 }
 
+/** The credential row when it is a named (app/readonly/backup) one; null for owner, monitor or none. */
+function namedCredential(row: CredentialRow | null | undefined): CredentialRow | null {
+	if (!row || row.role === 'owner' || row.role === 'monitor') return null;
+	return row;
+}
+
 function toCredentialView(row: typeof databaseCredentials.$inferSelect): DatabaseCredentialView {
 	return {
 		id: row.id,
@@ -3294,6 +3646,8 @@ function databaseActivationVersion(
 			profile: 4,
 			engine: row.engine,
 			version: row.version,
+			// Omitted for `standard` so adding the column restarts no existing database (D126).
+			...(row.variant !== 'standard' ? { variant: row.variant } : {}),
 			port: row.hostPort,
 			poolerPort: row.poolerPort,
 			restartGeneration: row.restartGeneration,

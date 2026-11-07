@@ -288,6 +288,61 @@ describe('the fourth runtime tier, end to end', () => {
 		expect(route.upstream).toBe(`unix//run/skiff-workloads/${processProject.id}.sock`);
 	});
 
+	test('a process or container app on a worker is proxied by the edge to the worker Caddy', async () => {
+		// The edge has no copy of a worker app: its route points at the worker's WireGuard address,
+		// and the worker's own route is what Caddy dials locally (the socket or loopback port).
+		const processProject = await project('process-remote', 'process', worker.nodeId);
+		const processRow = core.projects.requireRow(principal, 'process-remote');
+		core.workloads.setSpec(principal, processRow, {
+			runtime: 'process',
+			command: ['bun', 'run', 'start'],
+			memoryMb: 256,
+			cpus: 1,
+			port: 3000,
+			healthPath: '/',
+			socketActivation: true,
+			env: {},
+			secrets: [],
+		});
+		await core.uploads.deployInline(principal, core.projects.requireRow(principal, 'process-remote'), [file('index.js', 'x')], {
+			promote: true,
+		});
+
+		const edgeProcess = (await core.nodes.desiredState(edge.token)).routes.find(
+			(item) => item.projectId === processRow.id,
+		)!;
+		expect(edgeProcess.upstream).toBe('http://10.0.0.5:8080');
+		const workerProcess = (await core.nodes.desiredState(worker.token)).routes.find(
+			(item) => item.projectId === processRow.id,
+		)!;
+		expect(workerProcess.upstream).toBe(`unix//run/skiff-workloads/${processRow.id}.sock`);
+
+		const containerProject = await project('container-remote', 'container', worker.nodeId);
+		const containerRow = core.projects.requireRow(principal, 'container-remote');
+		core.workloads.setSpec(principal, containerRow, {
+			runtime: 'container',
+			image: 'docker.io/library/nginx:1.27',
+			memoryMb: 256,
+			cpus: 1,
+			port: 8080,
+			healthPath: '/',
+			env: {},
+			secrets: [],
+		});
+		await core.uploads.deployInline(principal, core.projects.requireRow(principal, 'container-remote'), [file('index.html', 'x')], {
+			promote: true,
+		});
+
+		const edgeContainer = (await core.nodes.desiredState(edge.token)).routes.find(
+			(item) => item.projectId === containerRow.id,
+		)!;
+		expect(edgeContainer.upstream).toBe('http://10.0.0.5:8080');
+		const workerContainer = (await core.nodes.desiredState(worker.token)).routes.find(
+			(item) => item.projectId === containerRow.id,
+		)!;
+		expect(workerContainer.upstream).toBe('127.0.0.1:8080');
+	});
+
 	test('a binding change restarts the host', async () => {
 		const fn = core.projects.requireRow(principal, 'fn-app');
 		const before = core.workloads.desiredForNode(edge.nodeId).find((item) => item.projectId === fn.id)!;

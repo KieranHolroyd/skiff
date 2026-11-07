@@ -64,7 +64,11 @@ async function project(slug: string, runtime: 'static' | 'process' | 'container'
 }
 
 function staging(slug: string, access: 'public' | 'password' | 'platform' = 'platform') {
-	core.environments.create(owner, core.projects.requireRow(owner, slug), { name: 'Staging', access });
+	core.environments.create(owner, core.projects.requireRow(owner, slug), {
+		name: 'Staging',
+		access,
+		...(access === 'password' ? { password: 'staging-password' } : {}),
+	});
 	return core.environments.requireRow(core.projects.requireRow(owner, slug), 'staging');
 }
 

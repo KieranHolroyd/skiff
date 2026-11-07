@@ -2,6 +2,7 @@ import { resolve } from '$app/paths';
 import ActivityIcon from '@lucide/svelte/icons/activity';
 import CableIcon from '@lucide/svelte/icons/cable';
 import DatabaseIcon from '@lucide/svelte/icons/database';
+import FlaskConicalIcon from '@lucide/svelte/icons/flask-conical';
 import FolderTreeIcon from '@lucide/svelte/icons/folder-tree';
 import GlobeIcon from '@lucide/svelte/icons/globe';
 import KeyRoundIcon from '@lucide/svelte/icons/key-round';
@@ -19,6 +20,7 @@ export const functionSubnavKey = (slug: string) => `function:${slug}`;
 const SECTIONS: Array<{ id: FunctionTab; label: string; icon: SubnavIcon }> = [
 	{ id: 'overview', label: 'Overview', icon: LayoutDashboardIcon },
 	{ id: 'invocations', label: 'Invocations', icon: ActivityIcon },
+	{ id: 'test', label: 'Test', icon: FlaskConicalIcon },
 	{ id: 'deployments', label: 'Deployments', icon: RocketIcon },
 	{ id: 'bindings', label: 'Bindings & triggers', icon: CableIcon },
 	{ id: 'data', label: 'Data', icon: DatabaseIcon },

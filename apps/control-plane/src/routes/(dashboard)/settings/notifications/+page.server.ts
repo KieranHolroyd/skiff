@@ -228,6 +228,13 @@ export const actions: Actions = {
 				label: 'Webhook URL'
 			},
 			{
+				field: 'webhookSecret',
+				key: 'SKIFF_ALERT_WEBHOOK_SECRET',
+				value: formString(data, 'webhookSecret'),
+				secret: true,
+				label: 'Signing secret'
+			},
+			{
 				field: 'email',
 				key: 'SKIFF_ALERT_EMAIL',
 				value: formString(data, 'email'),
@@ -242,6 +249,11 @@ export const actions: Actions = {
 			}
 		]);
 		if (Object.keys(fieldErrors).length) return fieldFailure(fieldErrors);
+		// The signing secret is write-only: blank keeps it, the checkbox (or removing the URL) drops it.
+		if (formBoolean(data, 'removeWebhookSecret') || unset.includes('SKIFF_ALERT_WEBHOOK')) {
+			delete set.SKIFF_ALERT_WEBHOOK_SECRET;
+			if (process.env.SKIFF_ALERT_WEBHOOK_SECRET) unset.push('SKIFF_ALERT_WEBHOOK_SECRET');
+		}
 		if (set.SKIFF_ALERT_EMAIL && !process.env.SKIFF_SMTP_HOST)
 			return fail(400, {
 				message: 'Set up outbound email first; alert emails are sent through it.',
@@ -266,7 +278,12 @@ export const actions: Actions = {
 			}
 		}
 		if (set.SKIFF_ALERT_WEBHOOK && set.SKIFF_ALERT_WEBHOOK !== process.env.SKIFF_ALERT_WEBHOOK) {
-			const result = await testWebhook(set.SKIFF_ALERT_WEBHOOK);
+			const result = await testWebhook(
+				set.SKIFF_ALERT_WEBHOOK,
+				unset.includes('SKIFF_ALERT_WEBHOOK_SECRET')
+					? undefined
+					: (set.SKIFF_ALERT_WEBHOOK_SECRET ?? process.env.SKIFF_ALERT_WEBHOOK_SECRET)
+			);
 			if (!result.ok)
 				return fail(400, {
 					message: `Not saved — the test alert to the webhook failed: ${result.error}`,

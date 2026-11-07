@@ -81,11 +81,11 @@ GitHub ◀── generate-jitconfig ── control plane ── activation (JIT 
 
 ## Limits in this version
 
-- **No Docker inside jobs.** Runners are unprivileged, rootless containers with every capability
-  dropped and `NoNewPrivileges`. `docker build`, `container:` jobs and `services:` do not work, and
-  neither does `sudo`. Use actions that install toolchains into the workspace (`setup-node`,
-  `setup-bun`, `setup-go`, …). An opt-in rootless Podman socket is the reserved follow-up (plan 21
-  §Later).
+- **No Docker inside jobs.** Runners are unprivileged containers in a user namespace of their own,
+  with every capability dropped and `NoNewPrivileges`. `docker build`, `container:` jobs and
+  `services:` do not work, and neither does `sudo`. Use actions that install toolchains into the
+  workspace (`setup-node`, `setup-bun`, `setup-go`, …). An opt-in rootless Podman socket is the
+  reserved follow-up (plan 21 §Later).
 - **github.com only.** GitHub Enterprise Server is not supported yet.
 - **Fixed pool.** Runners do not scale to zero on demand. Scale manually on the Worker card.
 - **Public repositories.** GitHub advises against self-hosted runners on public repositories: a pull

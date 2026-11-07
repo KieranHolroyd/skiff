@@ -242,6 +242,31 @@ describe('tier 2 workloads', () => {
 		).rejects.toMatchObject({ code: 'validation' });
 		expect(count()).toBe(0);
 	});
+
+	test('a new value for a live secret needs secret:update; a new name secret:create', async () => {
+		const app = core.projects.requireRow(principal, 'app');
+		const granted = (permissions: string[]) =>
+			buildPrincipal({ kind: 'apiKey', userId: 'user_1', orgId: 'org_1', role: 'owner', granted: ['project:read', 'project:update', 'secret:read-metadata', ...permissions] });
+		const createOnly = granted(['secret:create']);
+		const updateOnly = granted(['secret:update']);
+		const variables = (newSecrets: Array<{ name: string; value: string }>) => ({
+			env: { NODE_ENV: 'production' },
+			secrets: [{ name: 'STRIPE_KEY', delivery: 'env' as const }, ...newSecrets.filter((item) => item.name !== 'STRIPE_KEY').map((item) => ({ name: item.name, delivery: 'env' as const }))],
+			newSecrets,
+		});
+		// STRIPE_KEY is live in this project: rotating it is an update, and refusing the batch
+		// writes neither secret.
+		await expect(
+			core.workloads.setVariables(createOnly, app, variables([{ name: 'NEW_ONE', value: 'a' }, { name: 'STRIPE_KEY', value: 'sk_three' }])),
+		).rejects.toMatchObject({ permission: 'secret:update' });
+		expect(core.secrets.latest('org_1', app.id, 'NEW_ONE')).toBeNull();
+		expect(core.secrets.getValue('org_1', 'STRIPE_KEY', undefined, app.id)?.value).toBe('sk_two');
+		await expect(core.workloads.setVariables(updateOnly, app, variables([{ name: 'NEW_ONE', value: 'a' }]))).rejects.toMatchObject({
+			permission: 'secret:create',
+		});
+		await core.workloads.setVariables(updateOnly, core.projects.requireRow(principal, 'app'), variables([{ name: 'STRIPE_KEY', value: 'sk_three' }]));
+		expect(core.secrets.getValue('org_1', 'STRIPE_KEY', undefined, app.id)?.value).toBe('sk_three');
+	});
 });
 
 function workoutId(state: Awaited<ReturnType<Core['nodes']['desiredState']>>): string {

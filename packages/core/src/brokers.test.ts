@@ -313,13 +313,28 @@ describe('queue brokers', () => {
 		);
 	});
 
-	test('credentials are interactive-only and audited', () => {
+	test('credentials go to sessions and API keys with broker:credentials, never MCP, and are audited', () => {
 		const credentials = core.brokers.credentials(owner, 'jobs');
 		expect(credentials.url).toMatch(/^nats:\/\/jobs:[^@]+@127\.0\.0\.1:\d+$/);
 		expect(credentials.connectionSnippets['nats.js']).toContain('NATS_URL');
 		expect(credentials.note).toContain('unencrypted');
-		expect(() => core.brokers.credentials(agent, 'jobs')).toThrow(/interactive user session/);
-		expect(core.audit.list({ orgId: 'org_1' }).some((row) => row.action === 'broker.credentials')).toBe(true);
+		// MCP never receives the secret, even with the permission granted.
+		expect(() => core.brokers.credentials(agent, 'jobs')).toThrow(/never returned over MCP/);
+		// The CLI authenticates with an API key: it reads credentials only when the key holds the permission.
+		const cliKey = buildPrincipal({ kind: 'apiKey', userId: 'user_1', orgId: 'org_1', role: 'owner', keyId: 'key_cli' });
+		expect(core.brokers.credentials(cliKey, 'jobs').password).toBe(credentials.password);
+		const narrowKey = buildPrincipal({
+			kind: 'apiKey',
+			userId: 'user_1',
+			orgId: 'org_1',
+			role: 'owner',
+			keyId: 'key_narrow',
+			granted: ['broker:read'],
+		});
+		expect(() => core.brokers.credentials(narrowKey, 'jobs')).toThrow(/broker:credentials/);
+		const reads = core.audit.list({ orgId: 'org_1', action: 'broker.credentials' });
+		expect(reads.length).toBe(2);
+		expect(JSON.stringify(reads)).not.toContain(credentials.password);
 	});
 
 	test('updates admit memory and only move versions forward', () => {

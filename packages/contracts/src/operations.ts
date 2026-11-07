@@ -142,7 +142,12 @@ export const pruneCategoryInfo: readonly PruneCategoryInfo[] = [
 
 export const bulkActionIds = ['project.delete', 'project.restore', 'project.purge'] as const;
 export type BulkActionId = (typeof bulkActionIds)[number];
-export const operationActionIds = [...bulkActionIds, 'prune'] as const;
+/**
+ * `blueprint.apply` runs a blueprint plan (plan 11) as a bulk operation: one item per resource
+ * step, in dependency order. It is created by the blueprint service (`POST /blueprints/plan`),
+ * never by `POST /operations`, because its plan carries the document.
+ */
+export const operationActionIds = [...bulkActionIds, 'prune', 'blueprint.apply'] as const;
 export type OperationActionId = (typeof operationActionIds)[number];
 
 export interface OperationActionInfo {
@@ -205,6 +210,19 @@ export const operationActions: Record<OperationActionId, OperationActionInfo> = 
 		appliesTo: 'none',
 		surfaces: { mcp: false, apiKey: true },
 	},
+	'blueprint.apply': {
+		id: 'blueprint.apply',
+		kind: 'bulk',
+		label: 'Apply a blueprint',
+		verb: 'Apply',
+		permission: 'project:update',
+		// A plan may update live resources, and a pruning plan deletes them.
+		destructive: true,
+		reversible: false,
+		appliesTo: 'none',
+		// Agents may apply a reviewed, non-pruning plan with confirmation; pruning is refused for MCP.
+		surfaces: { mcp: true, apiKey: true },
+	},
 };
 
 export const isOperationAction = (value: string): value is OperationActionId =>
@@ -225,6 +243,8 @@ export type OperationCreate = z.input<typeof operationCreateSchema>;
 export const operationApplySchema = z.object({
 	/** Prune: only apply these planned categories. */
 	categories: z.array(z.enum(pruneCategories)).optional(),
+	/** `blueprint.apply`: the stack name typed back, required when the plan prunes. */
+	confirm: z.string().max(40).optional(),
 });
 
 export interface OperationSummary {

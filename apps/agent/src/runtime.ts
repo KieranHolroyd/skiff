@@ -152,6 +152,11 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 	private desiredById = new Map<string, WorkloadDesired>();
 	/** Runner replicas whose container exited after a job and need a fresh JIT config. */
 	private readonly recycleDue = new Set<string>();
+	/**
+	 * Workloads another runner owns for now (a read replica being promoted, C7): left exactly as
+	 * they are, neither re-applied nor restarted, until released or gone from desired state.
+	 */
+	private readonly held = new Set<string>();
 	/** When each runner was last applied; a just-queued `--no-block` start can still read inactive. */
 	private readonly runnerAppliedAt = new Map<string, number>();
 	private recycling: Promise<void> | null = null;
@@ -369,6 +374,14 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 	}
 
 	/** Call only after the control plane accepted a heartbeat that carried these ids. */
+	hold(id: string): void {
+		this.held.add(id);
+	}
+
+	release(id: string): void {
+		this.held.delete(id);
+	}
+
 	acknowledgePurgedDatabases(ids: readonly string[]): void {
 		for (const id of ids) this.purgedPending.delete(id);
 	}
@@ -461,6 +474,7 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 		);
 		for (const workload of desired) {
 			if (signal.aborted) break;
+			if (this.held.has(workload.id)) continue;
 			await this.applyOne(workload, releaseSpecs, signal);
 		}
 
@@ -571,6 +585,8 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 	private async recoverMonitor(workload: WorkloadDesired, signal: AbortSignal): Promise<void> {
 		// Only engines with the stats sampler carry monitor credentials (D57).
 		if (!workload.database || !databaseCapabilities(workload.database.engine).metrics) return;
+		// A read replica has no sampler credentials (C7): nothing to recover.
+		if (workload.database.replica) return;
 		const held = this.monitors.get(workload.id);
 		if (held && held.activationVersion === workload.activationVersion) return;
 		try {
@@ -912,6 +928,9 @@ const MONGODB_HELLO = new Uint8Array([
 /** RESP inline `PING`. Without credentials Valkey/Redis answer `-NOAUTH`, which still proves it is up. */
 const RESP_PING = new TextEncoder().encode('PING\r\n');
 
+/** ClickHouse's unauthenticated HTTP liveness endpoint; the server answers `200 Ok.`. */
+const CLICKHOUSE_PING = new TextEncoder().encode('GET /ping HTTP/1.0\r\nHost: localhost\r\n\r\n');
+
 /**
  * Per-engine handshake: what the probe sends after connecting (null: the server speaks first) and
  * whether the first bytes it gets back come from the real server, not Podman's port forwarder.
@@ -951,6 +970,13 @@ export function probeHandshake(engine: DatabaseEngine): ProbeHandshake {
 				},
 			};
 		}
+		case 'clickhouse':
+			// Only a running server sends a status line. During the entrypoint's first-start init the
+			// server listens on its own loopback only, so the probe stays down until it is done.
+			return {
+				send: CLICKHOUSE_PING,
+				accept: (data) => /^HTTP\/1\.[01] 200 /.test(new TextDecoder().decode(data.subarray(0, 16))),
+			};
 	}
 }
 
@@ -968,7 +994,8 @@ export function brokerProbeHandshake(engine: BrokerEngine): ProbeHandshake {
 /**
  * TCP health probe for a database on `127.0.0.1:<port>`. A bare connect can succeed against a
  * port forwarder before the server is up, so the probe performs the engine's smallest handshake
- * (Postgres `SSLRequest`, the MySQL greeting, MongoDB `hello`, RESP `PING`) and waits for an answer
+ * (Postgres `SSLRequest`, the MySQL greeting, MongoDB `hello`, RESP `PING`, ClickHouse `GET /ping`)
+ * and waits for an answer
  * only the server itself gives. No credentials are ever sent.
  */
 export function probeDatabasePort(
@@ -1079,6 +1106,8 @@ export function workloadFingerprint(workload: WorkloadDesired): string {
 		dataSizeMb: workload.dataSizeMb,
 		// Worker and runner profiles change the unit; only present when set (no restart on upgrade).
 		...(workload.ingress ? { ingress: workload.ingress } : {}),
+		// Node.js apps (D125) get a different default command and the fd-3 preload.
+		...(workload.engine ? { engine: workload.engine } : {}),
 		...(workload.runner ? { runner: workload.runner.provider } : {}),
 		// A volume move must re-render the unit and restart the container (D74).
 		...(workload.volumeId ? { volumeId: workload.volumeId } : {}),
@@ -1088,6 +1117,7 @@ export function workloadFingerprint(workload: WorkloadDesired): string {
 					database: {
 						engine: workload.database.engine,
 						version: workload.database.version,
+						...(workload.database.variant ? { variant: workload.database.variant } : {}),
 						...(workload.database.tls ? { tls: true } : {}),
 					},
 				}
@@ -1129,12 +1159,26 @@ export function withOptionalSpec(workload: WorkloadDesired): WorkloadDesired {
 		extras.command = candidate.command as string[];
 	if (typeof candidate.image === 'string') extras.image = candidate.image;
 	// The helper derives image, user and mounts from this profile (D61).
-	const database = candidate.database as { engine?: unknown; version?: unknown } | undefined;
+	const database = candidate.database as { engine?: unknown; version?: unknown; variant?: unknown } | undefined;
 	if (database && typeof database.engine === 'string' && typeof database.version === 'string')
 		extras.database = {
 			engine: database.engine as NonNullable<WorkloadDesired['database']>['engine'],
 			version: database.version,
+			// Skiff-built Postgres image variants (D126); absent means the engine's own image.
+			...(database.variant === 'postgis' || database.variant === 'pg_cron' ? { variant: database.variant } : {}),
 			...((candidate.database as { tls?: unknown } | undefined)?.tls === true ? { tls: true } : {}),
+			// Point-in-time recovery (docs/PITR.md): without it the helper renders no WAL archiving.
+			// The helper validates the stanza and timeout.
+			...(() => {
+				const pitr = (candidate.database as { pitr?: { stanza?: unknown; archiveTimeoutSeconds?: unknown } }).pitr;
+				return pitr && typeof pitr.stanza === 'string' && typeof pitr.archiveTimeoutSeconds === 'number'
+					? { pitr: { stanza: pitr.stanza, archiveTimeoutSeconds: pitr.archiveTimeoutSeconds } }
+					: {};
+			})(),
+			// A read replica's standby slot (C7); the helper validates the name.
+			...(typeof (candidate.database as { replica?: { slot?: unknown } } | undefined)?.replica?.slot === 'string'
+				? { replica: { slot: (candidate.database as { replica: { slot: string } }).replica.slot } }
+				: {}),
 		};
 	if (workload.objectStorage)
 		extras.objectStorage = {

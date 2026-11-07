@@ -36,6 +36,23 @@ import {
 	type UnitSecretFile,
 	type UnitVolumeMount,
 } from './units.ts';
+import { NODE_LISTEN_CREDENTIAL, NODE_LISTEN_SOURCE } from './node-listen.ts';
+import {
+	REPLICATION_STATUS_SQL,
+	assertPrimaryDatabaseId,
+	assertReplicaWorkloadId,
+	parseReplicationPassword,
+	parseReplicationStatus,
+	parseSlots,
+	renderPromoteArgs,
+	renderReplicaStartScript,
+	renderReplicationConfigureSql,
+	renderReplicationTeardownSql,
+	withReplicationHba,
+	type ReplicationSlotStatus,
+} from './replication.ts';
+import { ensureContainerSubids, type SubidFiles } from './userns.ts';
+import { AppVolumeData, type AppVolumeDataOptions } from './app-volumes.ts';
 import {
 	BROKER_ENGINES,
 	DATABASE_ENGINES,
@@ -46,11 +63,13 @@ import {
 	assertDatabaseId,
 	assertManagedId,
 	assertMemoryMb,
+	assertCommand,
 	assertCpuWeight,
 	assertId,
 	assertRelativePath,
 	databaseAlias,
 	functionNeedsDurableStorage,
+	postgresPitrImage,
 	workloadNetworkName,
 	type DatabaseEngine,
 	type WorkloadActivation,
@@ -60,14 +79,29 @@ import {
 	type WorkloadStatus,
 } from './validate.ts';
 import {
+	computePitrWindow,
+	parseArchiverStats,
+	parsePgBackRestInfo,
 	parsePitrBackupType,
 	parsePitrRepo,
+	pitrContainerName,
 	pitrPaths,
+	pitrRecoveryContainerName,
+	pitrRestoreContainerName,
 	pitrStanzaFor,
 	renderPgBackRestConfig,
 	renderPgPass,
-	renderPitrPodmanArgs,
+	renderPitrArchiverArgs,
+	renderPitrBackupArgs,
+	renderPitrExecArgs,
+	renderPitrRecoveryArgs,
+	renderPitrRecoveryPsqlArgs,
+	renderPitrRenameSql,
+	renderPitrRestoreArgs,
 	validatePitrTargetTime,
+	type HelperPitrStatus,
+	type PitrBaseBackupType,
+	type PitrWindow,
 } from './pitr.ts';
 import {
 	databaseTlsPaths,
@@ -85,6 +119,31 @@ import {
 	takeStudioPrincipalEnv,
 	withKeyValueStudioUser,
 } from './studio-principal.ts';
+import {
+	CLICKHOUSE_CONFIG_DIR,
+	CLICKHOUSE_CONFIG_DIRNAME,
+	CLICKHOUSE_CONFIG_FILE,
+	CLICKHOUSE_USERS_FILE,
+	renderClickHouseServerConfig,
+	renderClickHouseUsers,
+} from './clickhouse-config.ts';
+import {
+	clickhouseBackupQuery,
+	clickhouseClientArgv,
+	clickhouseRestoreQuery,
+	DUMP_STAGING_DIRNAME,
+	isStaleStagingFile,
+	KEY_VALUE_AOF_BASE,
+	KEY_VALUE_AOF_DIRNAME,
+	KEY_VALUE_AOF_MANIFEST,
+	keyValueAofManifest,
+	keyValueCheckRdbArgv,
+	keyValuePingArgv,
+	keyValueRdbDumpArgv,
+	keyValueReplyFailed,
+	stagingFileName,
+	type KeyValueEngine,
+} from './database-dumps.ts';
 
 /**
  * systemd is the primary runtime driver. This module owns *all* privileges: it writes unit files,
@@ -105,16 +164,38 @@ export interface RunResult {
 	stderr: string;
 }
 
-export interface CommandRunner {
-	run(argv: string[]): Promise<RunResult>;
+export interface CommandRunOptions {
+	/**
+	 * Extra environment for the child, merged over the helper's own. This is how a secret reaches
+	 * `podman exec -e NAME` without ever appearing in argv.
+	 */
+	env?: Record<string, string>;
+	/**
+	 * Written to the child's stdin, which is otherwise closed. How SQL that carries a password
+	 * reaches `podman exec -i … psql` without ever appearing in argv.
+	 */
+	stdin?: string;
 }
 
-/** Default runner: argv only, stdin closed, no shell. */
+export interface CommandRunner {
+	run(argv: string[], options?: CommandRunOptions): Promise<RunResult>;
+}
+
+/** Default runner: argv only, stdin closed unless `options.stdin` is given, no shell. */
 export function spawnRunner(): CommandRunner {
 	return {
-		async run(argv: string[]): Promise<RunResult> {
+		async run(argv: string[], options: CommandRunOptions = {}): Promise<RunResult> {
 			if (argv.length === 0) throw new Error('Refusing to run an empty command');
-			const child = Bun.spawn(argv, { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' });
+			const child = Bun.spawn(argv, {
+				stdin: options.stdin !== undefined ? 'pipe' : 'ignore',
+				stdout: 'pipe',
+				stderr: 'pipe',
+				...(options.env ? { env: { ...process.env, ...options.env } } : {}),
+			});
+			if (options.stdin !== undefined && child.stdin && typeof child.stdin !== 'number') {
+				child.stdin.write(options.stdin);
+				await child.stdin.end();
+			}
 			const [stdout, stderr, code] = await Promise.all([
 				new Response(child.stdout).text(),
 				new Response(child.stderr).text(),
@@ -179,6 +260,8 @@ export interface SystemdDriverOptions {
 	releaseDirs: string[];
 	/** Absolute bun binary used for the default process command. */
 	bunPath: string;
+	/** Absolute node; its directory leads PATH for a Node.js app's start script (D125). */
+	nodePath?: string;
 	/**
 	 * Root of the pinned workerd installations: `<workerdDir>/<version>/workerd` (FN1). Defaults to
 	 * the production path so tests and older callers keep working; `main.ts` passes the config value.
@@ -192,6 +275,11 @@ export interface SystemdDriverOptions {
 	opensslPath?: string;
 	/** AppArmor profile for container workloads; null keeps the runtime default. */
 	apparmorProfile?: string | null;
+	/**
+	 * /etc/subuid and /etc/subgid, given the `containers` range before an app container starts
+	 * (its Quadlet sets `UserNS=auto`, see userns.ts). Null (tests) leaves the host files alone.
+	 */
+	containerSubids?: SubidFiles | null;
 	/** Injectable certificate generator for tests; defaults to the fixed openssl argv sequence. */
 	databaseTlsGenerator?: DatabaseTlsGenerator;
 	socketMode?: string;
@@ -201,6 +289,13 @@ export interface SystemdDriverOptions {
 	 * and to a no-op otherwise, so tests (and dev) run unprivileged.
 	 */
 	chown?: (path: string, uid: number, gid: number) => Promise<void>;
+	/** Delay between readiness polls after a Valkey/Redis restore restarts the unit (tests: 0). */
+	restorePollMs?: number;
+	/**
+	 * The agent's replica link root (C7): `<dir>/<replica id>/.s.PGSQL.5432` is the socket the
+	 * agent serves; the helper mounts that one directory into the replica container, read-only.
+	 */
+	replicationDir?: string;
 }
 
 export function defaultChown(): (path: string, uid: number, gid: number) => Promise<void> {
@@ -225,19 +320,29 @@ export class SystemdDriver {
 	private readonly volumeRegistryOverride: VolumeRegistry | null;
 	private readonly releaseDirs: string[];
 	private readonly bunPath: string;
+	private readonly nodePath: string;
 	private readonly workerdDir: string;
 	private readonly systemctlPath: string;
 	private readonly journalctlPath: string;
 	private readonly podmanPath: string;
 	private readonly opensslPath: string;
 	private readonly apparmorProfile: string | null;
+	private readonly containerSubids: SubidFiles | null;
 	private readonly databaseTlsGenerator: DatabaseTlsGenerator;
 	private readonly socketMode: string;
 	private readonly socketGroup: string | null;
 	private readonly chown: (path: string, uid: number, gid: number) => Promise<void>;
+	private readonly restorePollMs: number;
+	private readonly replicationDir: string;
+	/**
+	 * Databases a PITR restore is writing into. `apply` refuses them until the restore ends, so the
+	 * agent's reconcile cannot restart a target whose data dir is being replaced.
+	 */
+	private readonly pitrRestoring = new Set<string>();
 
 	constructor(options: SystemdDriverOptions) {
 		this.runner = options.runner;
+		this.restorePollMs = options.restorePollMs ?? 1_000;
 		this.unitDir = assertAbsolutePath(options.unitDir, 'unitDir');
 		this.quadletDir = assertAbsolutePath(options.quadletDir ?? options.unitDir, 'quadletDir');
 		this.runtimeDir = assertAbsolutePath(options.runtimeDir, 'runtimeDir');
@@ -251,6 +356,7 @@ export class SystemdDriver {
 			throw new ValidationError('releaseDirs must contain at least one directory');
 		this.releaseDirs = options.releaseDirs.map((dir) => assertAbsolutePath(dir, 'releaseDir'));
 		this.bunPath = assertAbsolutePath(options.bunPath, 'bunPath');
+		this.nodePath = assertAbsolutePath(options.nodePath ?? '/usr/local/bin/node', 'nodePath');
 		this.workerdDir = assertAbsolutePath(options.workerdDir ?? '/usr/lib/skiff/workerd', 'workerdDir');
 		this.systemctlPath = assertAbsolutePath(options.systemctlPath ?? '/usr/bin/systemctl', 'systemctlPath');
 		this.journalctlPath = assertAbsolutePath(
@@ -260,10 +366,15 @@ export class SystemdDriver {
 		this.podmanPath = assertAbsolutePath(options.podmanPath ?? '/usr/bin/podman', 'podmanPath');
 		this.opensslPath = assertAbsolutePath(options.opensslPath ?? '/usr/bin/openssl', 'opensslPath');
 		this.apparmorProfile = options.apparmorProfile ?? null;
+		this.containerSubids = options.containerSubids ?? null;
 		this.databaseTlsGenerator = options.databaseTlsGenerator ?? generateDatabaseTls;
 		this.socketMode = validateSocketMode(options.socketMode ?? '0666');
 		this.socketGroup = options.socketGroup ?? null;
 		this.chown = options.chown ?? defaultChown();
+		this.replicationDir = assertAbsolutePath(
+			options.replicationDir ?? '/var/lib/skiff/agent/replication',
+			'replicationDir',
+		);
 	}
 
 	unitPaths(id: string): UnitPaths {
@@ -327,6 +438,17 @@ export class SystemdDriver {
 
 	private async registry(): Promise<VolumeRegistry> {
 		return this.volumeRegistryOverride ?? readVolumeRegistry(this.volumeRegistryFile);
+	}
+
+	/** App-volume data verbs (docs/VOLUMES.md §14), resolving paths exactly like the mounts below. */
+	appVolumeData(options: Pick<AppVolumeDataOptions, 'log' | 'maxPauseMs'> = {}): AppVolumeData {
+		return new AppVolumeData({
+			stateDir: this.stateDir,
+			registry: () => this.registry(),
+			runner: this.runner,
+			systemctlPath: this.systemctlPath,
+			...options,
+		});
 	}
 
 	/**
@@ -425,6 +547,10 @@ export class SystemdDriver {
 			throw new ValidationError('activation.activationVersion does not match the desired workload');
 		if (workload.runtime !== 'function' && functionFiles !== undefined)
 			throw new ValidationError('function files are only valid for a function workload');
+		if (this.pitrRestoring.has(workload.id))
+			throw new ValidationError(
+				`A point-in-time restore into ${workload.id} is in progress; the helper starts it when the restore ends.`,
+			);
 
 		// Resolve everything that can fail before writing a secret or a unit to disk.
 		let releaseDir: string | null = null;
@@ -433,7 +559,7 @@ export class SystemdDriver {
 		let modulePaths: string[] = [];
 		if (workload.runtime === 'process') {
 			releaseDir = await this.resolveRelease(workload.release!);
-			command = workload.command ?? (await this.defaultCommand(releaseDir));
+			command = workload.command ?? (await this.defaultCommand(releaseDir, workload.engine ?? 'bun'));
 		} else if (workload.runtime === 'function') {
 			const fn = workload.function;
 			if (!fn) throw new ValidationError('Function workloads need workload.function');
@@ -472,6 +598,16 @@ export class SystemdDriver {
 		// The broker's user and password go only into its server config, never the container env (D111).
 		const brokerAuth = workload.broker ? takeBrokerAuth(env) : null;
 		if (workload.broker) Object.assign(env, brokerFixedEnv(workload.memoryMb));
+		// A socket-activated Node app gets the fd-3 preload (D125). Its own NODE_OPTIONS moves from
+		// the env file into the unit, after the preload, because the env file would override it.
+		let nodeListen: { path: string; userNodeOptions?: string } | undefined;
+		if (workload.runtime === 'process' && workload.engine === 'node' && workload.socketActivation) {
+			const userNodeOptions = env.NODE_OPTIONS;
+			delete env.NODE_OPTIONS;
+			const path = join(workloadRuntimeDir, NODE_LISTEN_CREDENTIAL);
+			await this.writeAtomic(path, NODE_LISTEN_SOURCE, 0o600);
+			nodeListen = { path, ...(userNodeOptions ? { userNodeOptions } : {}) };
+		}
 		// systemd and Podman parse env files differently; each driver gets its own format.
 		const envText = workload.runtime === 'container' ? renderContainerEnvFile(env) : renderEnvFile(env);
 		await this.writeAtomic(envFile, envText, 0o400);
@@ -498,6 +634,7 @@ export class SystemdDriver {
 				command: command!,
 				envNames: Object.keys(env),
 				volumeMounts,
+				...(nodeListen ? { nodeListen } : {}),
 			});
 			changed = (await this.writeIfChanged(paths.service, service, 0o644)) || changed;
 
@@ -621,22 +758,30 @@ export class SystemdDriver {
 				await this.chown(dataDir, owner.uid, owner.gid);
 			}
 			const tls = await this.databaseTlsFor(workload);
+			// The pgBackRest config directory is a bind-mount source, so it must exist before the
+			// unit starts; `pitr/configure` fills it (docs/PITR.md).
+			const pitrConfigDir = workload.database?.pitr ? await this.ensurePitrConfigDir(workload.id) : null;
 			const serverConfigPath = brokerAuth
 				? await this.writeBrokerConfig(workload, brokerAuth, workloadRuntimeDir)
 				: await this.writeKeyValueConfig(workload, env, workloadRuntimeDir, studioPassword);
 			if (serverConfigPath) changed = serverConfigPath.changed || changed;
+			// App containers run in their own user namespace; Podman needs the id range first.
+			if (this.containerSubids && !workload.database && !workload.objectStorage && !workload.broker)
+				await ensureContainerSubids(this.containerSubids);
+			// A read replica (C7) needs its start script and the agent's link directory first.
+			const replica = workload.database?.replica ? await this.prepareReplica(workload.id, workloadRuntimeDir) : null;
+			if (replica) changed = replica.changed || changed;
 			const container = renderContainerUnit({
 				workload,
 				image,
 				envFile,
 				dataDir,
 				secretsDir: Object.keys(activation.files).length > 0 ? secretsDir : null,
-				...(workload.database?.pitr
+				...(workload.database?.pitr && pitrConfigDir
 					? {
 							pitr: {
 								stanza: workload.database.pitr.stanza,
-								configPath: pitrPaths(this.runtimeDir, workload.id).config,
-								pgpassPath: pitrPaths(this.runtimeDir, workload.id).pgpass,
+								configDir: pitrConfigDir,
 								archiveTimeoutSeconds: workload.database.pitr.archiveTimeoutSeconds,
 							},
 						}
@@ -645,6 +790,7 @@ export class SystemdDriver {
 				serverConfigPath: serverConfigPath?.path ?? null,
 				volumeMounts,
 				apparmorProfile: this.apparmorProfile,
+				...(replica ? { replica: replica.paths } : {}),
 			});
 			changed = (await this.writeIfChanged(paths.container, container, 0o644)) || changed;
 			changed = (await this.removeIfExists(paths.service)) || changed;
@@ -718,6 +864,141 @@ export class SystemdDriver {
 	}
 
 	/** Restart only the PgBouncer sidecar, leaving Postgres and its connections untouched. */
+	/**
+	 * A replica's start script and link directory (C7). The script is fixed text; the link directory
+	 * is the agent's, so a missing one is created owned like its parent (the agent's replication
+	 * root) for the agent to bind its socket in. Nothing here comes from the wire but the id.
+	 */
+	private async prepareReplica(
+		id: string,
+		workloadRuntimeDir: string,
+	): Promise<{ paths: { linkDir: string; scriptPath: string }; changed: boolean }> {
+		assertReplicaWorkloadId(id, 'workload.id');
+		const root = await fs.stat(this.replicationDir).catch(() => null);
+		if (!root?.isDirectory())
+			throw new ValidationError(
+				`The agent's replica link directory ${this.replicationDir} does not exist yet; refusing to start ${id}.`,
+			);
+		const linkDir = join(this.replicationDir, id);
+		const existing = await fs.lstat(linkDir).catch(() => null);
+		if (existing && (!existing.isDirectory() || existing.isSymbolicLink()))
+			throw new ValidationError(`${linkDir} is not a directory; refusing to start ${id}.`);
+		if (!existing) {
+			await fs.mkdir(linkDir, { mode: 0o755 });
+			await this.chown(linkDir, root.uid, root.gid).catch(() => undefined);
+		}
+		const scriptPath = join(workloadRuntimeDir, 'replica-start.sh');
+		const changed = await this.writeIfChanged(scriptPath, renderReplicaStartScript(), 0o755);
+		return { paths: { linkDir, scriptPath }, changed };
+	}
+
+	/**
+	 * Configure a primary for streaming (docs/CLUSTERING.md §9.2): the managed `pg_hba` rule, the
+	 * `skiff_repl` role, WAL retention and exactly `slots`. An empty list tears everything down.
+	 * Idempotent; the SQL goes over stdin and the owner password through the environment.
+	 */
+	async replicationConfigure(id: string, raw: { slots?: unknown; password?: unknown }): Promise<{ slots: string[] }> {
+		const databaseId = assertPrimaryDatabaseId(id);
+		const slots = parseSlots(raw.slots ?? []);
+		const password = parseReplicationPassword(raw.password, slots);
+		const env = await this.readPostgresEnv(databaseId);
+		const hbaPath = join(await this.dataDirFor(databaseId), 'pgdata', 'pg_hba.conf');
+		const hba = await fs.readFile(hbaPath, 'utf8').catch(() => null);
+		if (hba === null) throw new ValidationError(`Database ${databaseId} has no pg_hba.conf yet; start it first.`);
+		const next = withReplicationHba(hba, slots.length > 0);
+		if (next !== hba) {
+			const info = await fs.stat(hbaPath);
+			await this.writeAtomic(hbaPath, next, 0o600);
+			await this.chown(hbaPath, info.uid, info.gid).catch(() => undefined);
+		}
+		const sql = password ? renderReplicationConfigureSql(password, slots) : renderReplicationTeardownSql();
+		const result = await this.runner.run(this.psqlArgs(databaseId, env, ['-v', 'ON_ERROR_STOP=1']), {
+			env: { PGPASSWORD: env.password },
+			stdin: sql,
+		});
+		if (result.code !== 0)
+			throw new Error(`replication configure failed (${result.code}): ${result.stderr.trim().slice(0, 500) || 'no detail'}`);
+		return { slots };
+	}
+
+	/** Every Skiff slot on a primary, joined to its walsender, as one JSON query. */
+	async replicationStatus(id: string): Promise<{ slots: ReplicationSlotStatus[] }> {
+		const databaseId = assertPrimaryDatabaseId(id);
+		const env = await this.readPostgresEnv(databaseId);
+		const result = await this.runner.run(this.psqlArgs(databaseId, env, ['-tA', '-c', REPLICATION_STATUS_SQL]), {
+			env: { PGPASSWORD: env.password },
+		});
+		if (result.code !== 0)
+			throw new Error(`replication status failed (${result.code}): ${result.stderr.trim().slice(0, 500) || 'no detail'}`);
+		return { slots: parseReplicationStatus(result.stdout) };
+	}
+
+	/**
+	 * Promote a replica in place and hand its data dir to the database's own id (§9.3). Refuses
+	 * before touching anything when the target directory exists; then `pg_ctl promote`, waits for
+	 * `pg_is_in_recovery() = false`, checkpoints, stops the replica unit, drops the standby marker
+	 * and renames `<root>/<replica id>` to `<root>/<database id>` on the same filesystem. Re-running
+	 * it after a partial run finishes the hand-over.
+	 */
+	async replicaPromote(replicaId: string, raw: { databaseId?: unknown }): Promise<{ databaseId: string; lsn: string | null }> {
+		const id = assertReplicaWorkloadId(replicaId);
+		const databaseId = assertPrimaryDatabaseId(raw.databaseId, 'databaseId');
+		const source = await this.dataDirFor(id);
+		const target = join(dirname(source), databaseId);
+		const sourceExists = await fs.lstat(source).then((stat) => stat.isDirectory()).catch(() => false);
+		const targetExists = await fs.lstat(target).then(() => true).catch(() => false);
+		// A previous run already handed the directory over: report success again.
+		if (!sourceExists && targetExists) return { databaseId, lsn: null };
+		if (!sourceExists) throw new ValidationError(`Replica ${id} has no data directory on this node.`);
+		if (targetExists)
+			throw new ValidationError(`${target} already exists; refusing to promote ${id} over another copy of ${databaseId}.`);
+		const env = await this.readPostgresEnv(id);
+		const query = async (sql: string) => {
+			const result = await this.runner.run(this.psqlArgs(id, env, ['-tA', '-c', sql]), { env: { PGPASSWORD: env.password } });
+			return result.code === 0 ? result.stdout.trim() : null;
+		};
+		let recovering = await query('SELECT pg_is_in_recovery()');
+		if (recovering === null) throw new Error(`Replica ${id} is not answering; it must be running to be promoted.`);
+		if (recovering === 't') {
+			const promoted = await this.runner.run(renderPromoteArgs(this.podmanPath, id));
+			if (promoted.code !== 0)
+				throw new Error(`pg_ctl promote failed (${promoted.code}): ${promoted.stderr.trim().slice(0, 500) || 'no detail'}`);
+			for (let attempt = 0; attempt < 30 && recovering !== 'f'; attempt += 1) {
+				recovering = await query('SELECT pg_is_in_recovery()');
+				if (recovering !== 'f') await new Promise((resolve) => setTimeout(resolve, this.restorePollMs));
+			}
+			if (recovering !== 'f') throw new Error(`Replica ${id} was still in recovery 30 s after pg_ctl promote.`);
+		}
+		const lsn = await query('SELECT pg_current_wal_lsn()::text');
+		await query('CHECKPOINT');
+		await this.systemctl(['stop', serviceUnitName(id)]);
+		for (const marker of ['standby.signal', 'recovery.signal'])
+			await fs.rm(join(source, 'pgdata', marker), { force: true });
+		await fs.rename(source, target);
+		return { databaseId, lsn: lsn && /^[0-9A-F]{1,8}\/[0-9A-F]{1,8}$/i.test(lsn) ? lsn : null };
+	}
+
+	/** `podman exec` psql as the database owner over the container's loopback; no secret in argv. */
+	private psqlArgs(id: string, env: { user: string; database: string }, extra: string[]): string[] {
+		return [
+			this.podmanPath,
+			'exec',
+			'-i',
+			'-e',
+			'PGPASSWORD',
+			`skiff-workload-${id}`,
+			'psql',
+			'-X',
+			'-h',
+			'127.0.0.1',
+			'-U',
+			env.user,
+			'-d',
+			env.database,
+			...extra,
+		];
+	}
+
 	async restartPooler(id: string): Promise<void> {
 		assertDatabaseId(id, 'database id');
 		await this.systemctl(['restart', '--no-block', poolerServiceName(id)]);
@@ -1158,9 +1439,11 @@ END $$;`];
 	}
 
 	/**
-	 * Write the pgBackRest repository config and `.pgpass` for one database (docs/PITR.md). Both
-	 * files are 0400 under `/run/skiff-workloads/<id>/`; credentials never enter desired state.
-	 * Writing them also restarts the database unit so `archive_command` becomes usable.
+	 * Write the pgBackRest repository config and `.pgpass` for one database (docs/PITR.md) into its
+	 * config directory, `/run/skiff-workloads/<id>/pgbackrest/`: 0400 files owned by the engine uid;
+	 * credentials never enter desired state. The unit mounts the directory, so the running
+	 * container sees a rewrite at once and nothing restarts. `/run` is a tmpfs: the agent calls
+	 * this before every PITR task, which is what puts the files back after a reboot.
 	 */
 	async pitrConfigure(id: string, rawRepo: unknown): Promise<{ stanza: string; configPath: string }> {
 		assertDatabaseId(id, 'database id');
@@ -1168,75 +1451,69 @@ END $$;`];
 		const env = await this.readPostgresEnv(id);
 		const stanza = pitrStanzaFor(id);
 		const paths = pitrPaths(this.runtimeDir, id);
-		await fs.mkdir(paths.dir, { recursive: true, mode: 0o700 });
-		await fs.chmod(paths.dir, 0o700).catch(() => undefined);
-		const config = renderPgBackRestConfig({
-			stanza,
-			repo,
-			pg1Path: DATABASE_PGDATA,
-			pg1Host: databaseAlias(id),
-			pg1Port: DATABASE_ENGINES.postgres.containerPort,
-			pg1User: env.user,
-		});
-		const pgpass = renderPgPass(env.user, env.password, databaseAlias(id), '5432');
-		// Podman may have created a directory at a bind-mount source before the file existed.
-		for (const path of [paths.config, paths.pgpass]) {
+		await this.ensurePitrConfigDir(id);
+		const files: Array<[string, string]> = [
+			[paths.config, renderPgBackRestConfig({ stanza, repo, pg1User: env.user })],
+			// pgBackRest and psql reach Postgres over the container's Unix socket.
+			[paths.pgpass, renderPgPass(env.user, env.password)],
+		];
+		for (const [path, content] of files) {
+			// Podman may once have created a directory at a bind-mount source (pre-0070 layout).
 			const stat = await fs.lstat(path).catch(() => null);
-			if (stat?.isDirectory()) await fs.rm(path, { recursive: true, force: true });
+			if (stat && !stat.isFile()) await fs.rm(path, { recursive: true, force: true });
+			await this.writeIfChanged(path, content, 0o400);
+			// Postgres (archive-push) and the restore containers run as uid 70: keep 0400, hand over.
+			await this.chown(path, DATABASE_ENGINES.postgres.uid, DATABASE_ENGINES.postgres.gid);
 		}
-		await this.writeAtomic(paths.config, config, 0o400);
-		await this.writeAtomic(paths.pgpass, pgpass, 0o400);
-		// The Postgres container and the sidecar run as uid/gid 70; a root-owned 0400 file would be
-		// unreadable to both. Keep the mode 0400 but hand ownership to the engine user.
-		await this.chown(paths.config, DATABASE_ENGINES.postgres.uid, DATABASE_ENGINES.postgres.gid);
-		await this.chown(paths.pgpass, DATABASE_ENGINES.postgres.uid, DATABASE_ENGINES.postgres.gid);
-		await this.systemctl(['restart', '--no-block', serviceUnitName(id)], { allowFailure: true });
 		return { stanza, configPath: paths.config };
 	}
 
-	/** Create the stanza if needed, then run a full or differential pgBackRest base backup. */
-	async pitrBaseBackup(
-		id: string,
-		rawType: unknown,
-	): Promise<{ stanza: string; type: 'full' | 'diff' | 'incr' }> {
+	/**
+	 * `stanza-create` (idempotent) then a full, differential or incremental base backup, both run by
+	 * `podman exec` inside the database's own container: pgBackRest must share the host with
+	 * Postgres and talks to it over the Unix socket.
+	 */
+	async pitrBaseBackup(id: string, rawType: unknown): Promise<{ stanza: string; type: PitrBaseBackupType }> {
 		assertDatabaseId(id, 'database id');
 		const type = parsePitrBackupType(rawType);
 		const stanza = pitrStanzaFor(id);
-		const paths = await this.requirePitrConfig(id);
-		const dataDir = await this.dataDirFor(id);
-		const run = (args: string[], network: boolean) =>
-			this.runner.run(
-				renderPitrPodmanArgs({
-					podmanPath: this.podmanPath,
-					workloadId: id,
-					dataDir,
-					configPath: paths.config,
-					pgpassPath: paths.pgpass,
-					network,
-					args: [`--stanza=${stanza}`, ...args],
-				}),
-			);
-		const created = await run(['stanza-create'], true);
-		if (created.code !== 0) throw new Error(`pgbackrest stanza-create failed (${created.code}): ${created.stderr.trim().slice(0, 500)}`);
-		const backup = await run(['backup', `--type=${type}`], true);
-		if (backup.code !== 0) throw new Error(`pgbackrest backup failed (${backup.code}): ${backup.stderr.trim().slice(0, 500)}`);
+		await this.requirePitrConfig(id);
+		for (const args of renderPitrBackupArgs(stanza, type)) {
+			const result = await this.runner.run(renderPitrExecArgs({ podmanPath: this.podmanPath, workloadId: id, args }));
+			if (result.code !== 0)
+				throw new Error(`pgbackrest ${args.at(-1)} failed (${result.code}): ${commandDetail(result)}`);
+		}
 		return { stanza, type };
 	}
 
-	/** Archive/repository status for one database. Never returns repository credentials. */
-	async pitrStatus(id: string): Promise<{
-		configured: boolean;
-		stanza: string;
-		repo: { bucket: string | null; region: string | null; endpoint: string | null; path: string | null };
-		archiveStatus: 'ok' | 'failing' | 'unknown';
-	}> {
+	/**
+	 * Repository and archive state for one database, never its credentials: pgBackRest's `info`
+	 * (the retained backups) and Postgres' own `pg_stat_archiver`, reduced to the recoverable
+	 * window (`computePitrWindow`). Runs inside the database's container like a backup.
+	 */
+	async pitrStatus(id: string): Promise<HelperPitrStatus> {
 		assertDatabaseId(id, 'database id');
 		const stanza = pitrStanzaFor(id);
 		const paths = pitrPaths(this.runtimeDir, id);
-		const configured = await fs.lstat(paths.config).then((stat) => stat.isFile()).catch(() => false);
-		if (!configured) {
-			return { configured: false, stanza, repo: { bucket: null, region: null, endpoint: null, path: null }, archiveStatus: 'unknown' };
-		}
+		const configured = await fs
+			.lstat(paths.config)
+			.then((stat) => stat.isFile())
+			.catch(() => false);
+		const empty: HelperPitrStatus = {
+			configured: false,
+			stanza,
+			repo: { bucket: null, region: null, endpoint: null, path: null },
+			archiveStatus: 'unknown',
+			recoverableFrom: null,
+			recoverableTo: null,
+			backupCount: 0,
+			newestBackupAt: null,
+			newestBackupType: null,
+			lastArchivedAt: null,
+			lastFailedAt: null,
+			repoMessage: null,
+		};
+		if (!configured) return empty;
 		const text = await fs.readFile(paths.config, 'utf8');
 		const value = (key: string) => {
 			const line = text.split('\n').find((entry) => entry.startsWith(`${key}=`));
@@ -1248,36 +1525,52 @@ END $$;`];
 			endpoint: value('repo1-s3-endpoint'),
 			path: value('repo1-path'),
 		};
-		const dataDir = await this.dataDirFor(id);
+		const env = await this.readPostgresEnv(id);
 		const info = await this.runner.run(
-			renderPitrPodmanArgs({
+			renderPitrExecArgs({
 				podmanPath: this.podmanPath,
 				workloadId: id,
-				dataDir,
-				configPath: paths.config,
-				pgpassPath: paths.pgpass,
-				args: [`--stanza=${stanza}`, 'info', '--output=json'],
+				args: [`--stanza=${stanza}`, '--output=json', 'info'],
 			}),
 		);
-		let archiveStatus: 'ok' | 'failing' | 'unknown' = 'unknown';
-		if (info.code === 0) {
-			try {
-				const parsed = JSON.parse(info.stdout) as Array<{ archive?: Array<{ status?: string }> }>;
-				const statuses = parsed.flatMap((entry) => entry.archive ?? []).map((entry) => entry.status);
-				if (statuses.length > 0) archiveStatus = statuses.every((status) => status === 'ok') ? 'ok' : 'failing';
-			} catch {
-				archiveStatus = 'unknown';
-			}
-		} else if (/archive|error/i.test(info.stderr)) {
-			archiveStatus = 'failing';
-		}
-		return { configured: true, stanza, repo, archiveStatus };
+		if (info.code !== 0) throw new Error(`pgbackrest info failed (${info.code}): ${commandDetail(info)}`);
+		const summary = parsePgBackRestInfo(info.stdout, stanza);
+		const archiverRun = await this.runner.run(
+			renderPitrArchiverArgs({ podmanPath: this.podmanPath, workloadId: id, user: env.user, database: env.database }),
+		);
+		const archiver = archiverRun.code === 0 ? parseArchiverStats(archiverRun.stdout) : null;
+		const window: PitrWindow = computePitrWindow(summary, archiver);
+		return {
+			configured: true,
+			stanza,
+			repo,
+			archiveStatus: window.archiveStatus,
+			recoverableFrom: window.recoverableFrom,
+			recoverableTo: window.recoverableTo,
+			backupCount: summary.backupCount,
+			newestBackupAt: summary.newestBackupStopAt,
+			newestBackupType: summary.newestBackupType,
+			lastArchivedAt: archiver?.lastArchivedAt ?? null,
+			lastFailedAt: archiver?.lastFailedAt ?? null,
+			// 0 is ok and 2 is "no valid backups" (before the first backup); anything else is a
+			// repository problem worth showing.
+			repoMessage:
+				summary.statusCode !== null && summary.statusCode !== 0 && summary.statusCode !== 2
+					? (summary.statusMessage ?? `pgBackRest status ${summary.statusCode}`)
+					: null,
+		};
 	}
 
 	/**
-	 * Restore one stanza to a timestamp into a NEW database's data dir (docs/PITR.md). The target
-	 * unit is stopped, its cluster is replaced from the repository, the container is started and a
-	 * canary query must answer before the helper reports success.
+	 * Restore the source's stanza to a timestamp into a NEW database (docs/PITR.md §Restore). The
+	 * target must already be applied (env file, data dir, unit). Steps, all fixed argv:
+	 *
+	 * 1. stop the target and empty its data dir; `apply` refuses it until the restore ends;
+	 * 2. `pgbackrest restore --type=time` in a one-shot container of the source's PITR image;
+	 * 3. a detached one-shot Postgres replays WAL to the target and promotes;
+	 * 4. rename the source's owner role and database to the target's and set the target's
+	 *    password (`renderPitrRenameSql`, SQL over stdin), then stop it cleanly;
+	 * 5. start the target unit and prove a password login as the target's owner answers.
 	 */
 	async pitrRestore(
 		id: string,
@@ -1289,57 +1582,133 @@ END $$;`];
 			throw new ValidationError('A PITR restore must target a different database; in-place restore is not supported.');
 		const targetTime = validatePitrTargetTime(input.targetTime, Date.now());
 		const stanza = pitrStanzaFor(id);
-		const paths = await this.requirePitrConfig(id);
-		const targetDir = await this.dataDirFor(targetDatabaseId);
+		await this.requirePitrConfig(id);
+		const configDir = pitrPaths(this.runtimeDir, id).dir;
+		const sourceDir = await this.dataDirFor(id);
+		// The one-shots must run the pgBackRest that wrote the repository: the source's PITR image,
+		// chosen from the source cluster's own major version, never from the wire.
+		const pgVersion = (await fs.readFile(join(sourceDir, 'pgdata', 'PG_VERSION'), 'utf8').catch(() => '')).trim();
+		if (!/^\d{1,3}$/.test(pgVersion))
+			throw new ValidationError(`Database ${id} has no readable PG_VERSION; a restore needs the source on this node.`);
+		const image = postgresPitrImage(pgVersion);
+		const sourceEnv = await this.readPostgresEnv(id);
 		const targetEnv = await this.readPostgresEnv(targetDatabaseId);
+		// Validate the rename before anything is destroyed.
+		const renameSteps = renderPitrRenameSql({
+			sourceUser: sourceEnv.user,
+			sourceDatabase: sourceEnv.database,
+			targetUser: targetEnv.user,
+			targetDatabase: targetEnv.database,
+			targetPassword: targetEnv.password,
+		});
+		const targetDir = await this.dataDirFor(targetDatabaseId);
+		const scrub = (text: string) => text.split(targetEnv.password).join('***');
+		const oneShot = { podmanPath: this.podmanPath, image, targetId: targetDatabaseId, targetDataDir: targetDir, configDir };
+		const recovery = pitrRecoveryContainerName(targetDatabaseId);
+		const removeOneShots = async () => {
+			for (const name of [pitrRestoreContainerName(targetDatabaseId), recovery])
+				await this.runner.run([this.podmanPath, 'rm', '--force', '--ignore', name]).catch(() => undefined);
+		};
 
-		await this.systemctl(['stop', serviceUnitName(targetDatabaseId)], { allowFailure: true });
-		await fs.rm(targetDir, { recursive: true, force: true });
-		await fs.mkdir(targetDir, { recursive: true, mode: 0o700 });
-		await fs.chmod(targetDir, 0o700).catch(() => undefined);
-		await this.chown(targetDir, DATABASE_ENGINES.postgres.uid, DATABASE_ENGINES.postgres.gid).catch(() => undefined);
+		this.pitrRestoring.add(targetDatabaseId);
+		try {
+			await this.systemctl(['stop', serviceUnitName(targetDatabaseId)], { allowFailure: true });
+			await removeOneShots();
+			const existing = await fs.lstat(targetDir).catch(() => null);
+			if (existing && !existing.isDirectory()) throw new ValidationError(`${targetDir} is not a directory`);
+			await fs.rm(targetDir, { recursive: true, force: true });
+			// pgBackRest restores into an existing, empty PGDATA; the spool sits beside it.
+			for (const dir of [targetDir, join(targetDir, 'pgdata'), join(targetDir, 'pgbackrest-spool')]) {
+				await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+				await fs.chmod(dir, 0o700);
+				await this.chown(dir, DATABASE_ENGINES.postgres.uid, DATABASE_ENGINES.postgres.gid);
+			}
 
-		const restore = await this.runner.run(
-			renderPitrPodmanArgs({
-				podmanPath: this.podmanPath,
-				workloadId: id,
-				dataDir: targetDir,
-				configPath: paths.config,
-				pgpassPath: paths.pgpass,
-				args: [
-					`--stanza=${stanza}`,
-					'--pg1-path=/data/pgdata',
-					'--type=time',
-					`--target=${new Date(targetTime).toISOString()}`,
-					'--target-action=promote',
-					'restore',
-				],
-			}),
-		);
-		if (restore.code !== 0)
-			throw new Error(`pgbackrest restore failed (${restore.code}): ${restore.stderr.trim().slice(0, 500)}`);
+			const restore = await this.runner.run(renderPitrRestoreArgs({ ...oneShot, stanza, targetTime }));
+			if (restore.code !== 0)
+				throw new Error(`pgbackrest restore failed (${restore.code}): ${commandDetail(restore)}`);
 
-		await this.systemctl(['start', serviceUnitName(targetDatabaseId)], { allowFailure: true });
-		for (let attempt = 0; attempt < 60; attempt += 1) {
-			const verify = await this.runner.run([
-				this.podmanPath,
-				'exec',
-				'-e',
-				'PGPASSWORD',
-				`skiff-workload-${targetDatabaseId}`,
-				'psql',
-				'-tAc',
-				'SELECT 1',
-				'-U',
-				targetEnv.user,
-				'-d',
-				targetEnv.database,
-			]);
-			if (verify.code === 0 && verify.stdout.trim() === '1')
-				return { targetDatabaseId, targetTime, verified: true };
-			await new Promise((resolve) => setTimeout(resolve, 1_000));
+			const started = await this.runner.run(renderPitrRecoveryArgs(oneShot));
+			if (started.code !== 0)
+				throw new Error(`Could not start the recovery container (${started.code}): ${commandDetail(started)}`);
+			await this.waitForPitrPromotion(targetDatabaseId, sourceEnv.user);
+
+			for (const step of renameSteps) {
+				const result = await this.runner.run(
+					renderPitrRecoveryPsqlArgs({ podmanPath: this.podmanPath, targetId: targetDatabaseId, user: step.user }),
+					{ stdin: step.sql },
+				);
+				if (result.code !== 0)
+					throw new Error(`Could not hand the restored cluster to ${targetEnv.user} (${result.code}): ${scrub(commandDetail(result))}`);
+			}
+			const stopped = await this.runner.run([this.podmanPath, 'stop', '--time', '120', recovery]);
+			if (stopped.code !== 0)
+				throw new Error(`The recovery container did not stop cleanly (${stopped.code}): ${commandDetail(stopped)}`);
+		} finally {
+			await removeOneShots();
+			this.pitrRestoring.delete(targetDatabaseId);
 		}
-		throw new Error('The restored database did not answer the canary query within 60 seconds.');
+
+		await this.systemctl(['start', serviceUnitName(targetDatabaseId)]);
+		for (let attempt = 0; attempt < PITR_CANARY_ATTEMPTS; attempt += 1) {
+			// A password login over TCP as the target's owner: proves the rename and the new password.
+			const verify = await this.runner.run(
+				[
+					this.podmanPath,
+					'exec',
+					'-e',
+					'PGPASSWORD',
+					pitrContainerName(targetDatabaseId),
+					'psql',
+					'-h',
+					'127.0.0.1',
+					'-X',
+					'-tAc',
+					'SELECT 1',
+					'-U',
+					targetEnv.user,
+					'-d',
+					targetEnv.database,
+				],
+				{ env: { PGPASSWORD: targetEnv.password } },
+			);
+			if (verify.code === 0 && verify.stdout.trim() === '1') return { targetDatabaseId, targetTime, verified: true };
+			await Bun.sleep(this.restorePollMs);
+		}
+		throw new Error(`The restored database did not answer the canary query within ${PITR_CANARY_ATTEMPTS} attempts.`);
+	}
+
+	/**
+	 * Poll the recovery container until Postgres has replayed to the target and promoted. Recovery
+	 * that cannot reach the target (WAL missing, target past the archive) makes Postgres exit; the
+	 * container's last log lines are the error.
+	 */
+	private async waitForPitrPromotion(targetId: string, user: string): Promise<void> {
+		const name = pitrRecoveryContainerName(targetId);
+		for (let attempt = 0; attempt < PITR_RECOVERY_ATTEMPTS; attempt += 1) {
+			const probe = await this.runner.run(
+				renderPitrRecoveryPsqlArgs({ podmanPath: this.podmanPath, targetId, user, command: 'SELECT pg_is_in_recovery()' }),
+			);
+			if (probe.code === 0 && probe.stdout.trim() === 'f') return;
+			const state = await this.runner.run([this.podmanPath, 'inspect', '--format', '{{.State.Running}}', name]);
+			if (state.code !== 0 || state.stdout.trim() !== 'true') {
+				const logs = await this.runner.run([this.podmanPath, 'logs', '--tail', '20', name]).catch(() => null);
+				const detail = logs ? (logs.stderr.trim() || logs.stdout.trim()).slice(-800) : '';
+				throw new Error(`Recovery stopped before reaching the target time${detail ? `: ${detail}` : '.'}`);
+			}
+			await Bun.sleep(this.restorePollMs);
+		}
+		throw new Error('Recovery did not reach the target time in time; the restore was abandoned.');
+	}
+
+	/** The per-database pgBackRest config directory: a real 0700 directory owned by uid 70. */
+	private async ensurePitrConfigDir(id: string): Promise<string> {
+		const { dir } = pitrPaths(this.runtimeDir, id);
+		await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+		if (!(await fs.lstat(dir)).isDirectory()) throw new ValidationError(`${dir} is not a directory`);
+		await fs.chmod(dir, 0o700);
+		await this.chown(dir, DATABASE_ENGINES.postgres.uid, DATABASE_ENGINES.postgres.gid);
+		return dir;
 	}
 
 	private async requirePitrConfig(id: string): Promise<{ config: string; pgpass: string }> {
@@ -1436,6 +1805,7 @@ END $$;`];
 		studioPassword: string | null = null,
 	): Promise<{ path: string; changed: boolean } | null> {
 		const engine = workload.database?.engine;
+		if (engine === 'clickhouse') return this.writeClickHouseConfig(workload, env, workloadRuntimeDir);
 		if (engine !== 'valkey' && engine !== 'redis') return null;
 		const info = DATABASE_ENGINES[engine];
 		const path = join(workloadRuntimeDir, 'server.conf');
@@ -1455,6 +1825,31 @@ END $$;`];
 	}
 
 	/**
+	 * ClickHouse reads a helper-written standalone config and users file (docs/DATABASES.md §17).
+	 * Both live in one 0700 directory owned by the image's uid, mounted read-only: a directory, so
+	 * a rotated users file (renamed into place) is visible to the server, which reloads it.
+	 */
+	private async writeClickHouseConfig(
+		workload: WorkloadDesired,
+		env: Record<string, string>,
+		workloadRuntimeDir: string,
+	): Promise<{ path: string; changed: boolean }> {
+		const info = DATABASE_ENGINES.clickhouse;
+		const dir = join(workloadRuntimeDir, CLICKHOUSE_CONFIG_DIRNAME);
+		await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+		if (!(await fs.lstat(dir)).isDirectory()) throw new ValidationError(`${dir} is not a directory`);
+		await fs.chmod(dir, 0o700);
+		await this.chown(dir, info.uid, info.gid).catch(() => undefined);
+		const config = renderClickHouseServerConfig({ memoryMb: workload.memoryMb });
+		const users = renderClickHouseUsers({ user: env[info.env.user] ?? '', password: env[info.env.password] ?? '' });
+		let changed = await this.writeIfChanged(join(dir, CLICKHOUSE_CONFIG_FILE), config, 0o600);
+		changed = (await this.writeIfChanged(join(dir, CLICKHOUSE_USERS_FILE), users, 0o600)) || changed;
+		for (const name of [CLICKHOUSE_CONFIG_FILE, CLICKHOUSE_USERS_FILE])
+			await this.chown(join(dir, name), info.uid, info.gid).catch(() => undefined);
+		return { path: dir, changed };
+	}
+
+	/**
 	 * Fixed dump verbs for MySQL/MariaDB (`mysqldump`/`mariadb-dump`, plain SQL of the one
 	 * database, consistent via `--single-transaction`) and MongoDB (`mongodump --archive --gzip`).
 	 * Like `pg_dump`, the dump goes to a 0400 staging file and passwords never reach argv: the SQL
@@ -1462,6 +1857,7 @@ END $$;`];
 	 * written into the container's tmpfs over stdin.
 	 */
 	private async dumpEngine(id: string, env: DatabaseEnv): Promise<{ path: string; sizeBytes: number; filename: string }> {
+		if (env.engine === 'valkey' || env.engine === 'redis' || env.engine === 'clickhouse') return this.dumpNative(id, env);
 		const runtimeDir = join(this.runtimeDir, id);
 		await fs.mkdir(runtimeDir, { recursive: true, mode: 0o700 });
 		const container = `skiff-workload-${id}`;
@@ -1533,6 +1929,8 @@ END $$;`];
 	 * restore always targets a new database with its own name.
 	 */
 	private async restoreEngine(id: string, env: DatabaseEnv, body: ReadableStream<Uint8Array>): Promise<void> {
+		if (env.engine === 'valkey' || env.engine === 'redis' || env.engine === 'clickhouse')
+			return this.restoreNative(id, env, body);
 		const container = `skiff-workload-${id}`;
 		let argv: string[];
 		let spawnEnv: Record<string, string | undefined> = process.env;
@@ -1590,6 +1988,158 @@ END $$;`];
 	}
 
 	/**
+	 * Native file dumps (docs/DATABASES.md §8): a Valkey/Redis RDB snapshot (`--rdb`, then
+	 * `check-rdb` over the whole file) or a ClickHouse `BACKUP DATABASE … TO File(…zip)`. The server
+	 * writes the file into the data dir's staging directory, so it is returned from there (0400)
+	 * instead of being copied into the runtime tmpfs; the server's cleanup timer removes it, and
+	 * anything a restart left behind is pruned before the next run.
+	 */
+	private async dumpNative(id: string, env: DatabaseEnv): Promise<{ path: string; sizeBytes: number; filename: string }> {
+		const staging = await this.prepareDumpStaging(id, env.engine);
+		const container = `skiff-workload-${id}`;
+		const extension = env.engine === 'clickhouse' ? 'zip' : 'rdb';
+		const file = stagingFileName('dump', randomUUID(), extension);
+		const path = join(staging, file);
+		try {
+			if (env.engine === 'clickhouse') {
+				const result = await this.runner.run(
+					clickhouseClientArgv({
+						podmanPath: this.podmanPath,
+						container,
+						user: env.user,
+						query: clickhouseBackupQuery(env.database, file),
+					}),
+					{ env: { CLICKHOUSE_PASSWORD: env.password } },
+				);
+				if (result.code !== 0)
+					throw new Error(`ClickHouse BACKUP failed (${result.code}): ${detailOf(result)}`);
+			} else {
+				const engine = env.engine as KeyValueEngine;
+				const dump = await this.runner.run(
+					keyValueRdbDumpArgv({ podmanPath: this.podmanPath, container, engine, user: env.user, file }),
+					{ env: { REDISCLI_AUTH: env.password } },
+				);
+				if (dump.code !== 0 || keyValueReplyFailed(dump.stdout))
+					throw new Error(`${engine}-cli --rdb failed (${dump.code}): ${detailOf(dump)}`);
+				const check = await this.runner.run(keyValueCheckRdbArgv({ podmanPath: this.podmanPath, container, engine, file }));
+				if (check.code !== 0)
+					throw new Error(`${engine}-check-rdb rejected the snapshot (${check.code}): ${detailOf(check)}`);
+			}
+			const info = await fs.lstat(path).catch(() => null);
+			if (!info?.isFile() || info.size === 0) throw new Error(`The ${env.engine} dump produced no file.`);
+			await fs.chmod(path, 0o400);
+			return { path, sizeBytes: info.size, filename: `${id}.${extension}` };
+		} catch (error) {
+			await fs.rm(path, { force: true }).catch(() => undefined);
+			throw error;
+		}
+	}
+
+	/**
+	 * Restore a native file dump into a new database. The body is staged in the target's data dir
+	 * first (owned by the engine's uid), then:
+	 *
+	 * - Valkey/Redis: `check-rdb` must accept it while the target still runs; the unit is stopped,
+	 *   the snapshot replaces the AOF as its base file (with a fresh manifest), and the unit is
+	 *   started. `PING` must answer `PONG`, which it only does once the dataset has loaded.
+	 * - ClickHouse: `RESTORE DATABASE skiff_backup AS <target>` into the running server, which
+	 *   verifies every part's checksum; the staging archive is removed either way.
+	 */
+	private async restoreNative(id: string, env: DatabaseEnv, body: ReadableStream<Uint8Array>): Promise<void> {
+		const staging = await this.prepareDumpStaging(id, env.engine);
+		const owner = DATABASE_ENGINES[env.engine];
+		const container = `skiff-workload-${id}`;
+		const extension = env.engine === 'clickhouse' ? 'zip' : 'rdb';
+		const file = stagingFileName('restore', randomUUID(), extension);
+		const path = join(staging, file);
+		try {
+			await Bun.write(path, new Response(body));
+			await fs.chmod(path, 0o600);
+			await this.chown(path, owner.uid, owner.gid).catch(() => undefined);
+			if ((await fs.stat(path)).size === 0) throw new ValidationError('The backup artifact is empty.');
+			if (env.engine === 'clickhouse') {
+				const result = await this.runner.run(
+					clickhouseClientArgv({
+						podmanPath: this.podmanPath,
+						container,
+						user: env.user,
+						query: clickhouseRestoreQuery(env.database, file),
+					}),
+					{ env: { CLICKHOUSE_PASSWORD: env.password } },
+				);
+				if (result.code !== 0)
+					throw new Error(`ClickHouse RESTORE failed (${result.code}): ${detailOf(result)}`);
+				const verify = await this.runner.run(
+					clickhouseClientArgv({
+						podmanPath: this.podmanPath,
+						container,
+						user: env.user,
+						query: `SELECT 'skiff-ok' FROM system.databases WHERE name = '${env.database}'`,
+					}),
+					{ env: { CLICKHOUSE_PASSWORD: env.password } },
+				);
+				if (verify.code !== 0 || verify.stdout.trim() !== 'skiff-ok')
+					throw new Error('The restored database did not answer the verification query.');
+				return;
+			}
+			const engine = env.engine as KeyValueEngine;
+			const check = await this.runner.run(keyValueCheckRdbArgv({ podmanPath: this.podmanPath, container, engine, file }));
+			if (check.code !== 0)
+				throw new Error(`${engine}-check-rdb rejected the backup (${check.code}): ${detailOf(check)}`);
+			const dataDir = dirname(staging);
+			const aofDir = join(dataDir, KEY_VALUE_AOF_DIRNAME);
+			await this.systemctl(['stop', serviceUnitName(id)]);
+			try {
+				await fs.rm(aofDir, { recursive: true, force: true });
+				await fs.rm(join(dataDir, 'dump.rdb'), { force: true });
+				await fs.mkdir(aofDir, { mode: 0o700 });
+				await fs.rename(path, join(aofDir, KEY_VALUE_AOF_BASE));
+				await fs.writeFile(join(aofDir, KEY_VALUE_AOF_MANIFEST), keyValueAofManifest(), { mode: 0o600 });
+				for (const target of [aofDir, join(aofDir, KEY_VALUE_AOF_BASE), join(aofDir, KEY_VALUE_AOF_MANIFEST)])
+					await this.chown(target, owner.uid, owner.gid).catch(() => undefined);
+			} finally {
+				// Start again even when the swap failed: the target must not be left stopped.
+				await this.systemctl(['start', serviceUnitName(id)], { allowFailure: true });
+			}
+			for (let attempt = 0; attempt < KEY_VALUE_RESTORE_ATTEMPTS; attempt += 1) {
+				const ping = await this.runner.run(
+					keyValuePingArgv({ podmanPath: this.podmanPath, container, engine, user: env.user }),
+					{ env: { REDISCLI_AUTH: env.password } },
+				);
+				if (ping.code === 0 && ping.stdout.trim() === 'PONG') return;
+				await Bun.sleep(this.restorePollMs);
+			}
+			throw new Error(
+				`The restored database did not answer PING within ${Math.round((KEY_VALUE_RESTORE_ATTEMPTS * this.restorePollMs) / 1000)} seconds.`,
+			);
+		} finally {
+			await fs.rm(path, { force: true }).catch(() => undefined);
+		}
+	}
+
+	/**
+	 * The `skiff-dumps` directory in a database's data dir, created 0700 for the engine's uid (the
+	 * server writes and reads the files), with stale leftovers from an interrupted run removed.
+	 */
+	private async prepareDumpStaging(id: string, engine: DatabaseEngine): Promise<string> {
+		const dataDir = await this.dataDirFor(id);
+		if (!(await fs.lstat(dataDir).catch(() => null))?.isDirectory())
+			throw new ValidationError(`Database ${id} has no data directory; start it first.`);
+		const staging = join(dataDir, DUMP_STAGING_DIRNAME);
+		await fs.mkdir(staging, { recursive: true, mode: 0o700 });
+		if (!(await fs.lstat(staging)).isDirectory()) throw new ValidationError(`${staging} is not a directory`);
+		await fs.chmod(staging, 0o700);
+		await this.chown(staging, DATABASE_ENGINES[engine].uid, DATABASE_ENGINES[engine].gid).catch(() => undefined);
+		const now = Date.now();
+		for (const name of await fs.readdir(staging).catch(() => [] as string[])) {
+			const info = await fs.lstat(join(staging, name)).catch(() => null);
+			if (info?.isFile() && isStaleStagingFile(name, info.mtimeMs, now))
+				await fs.rm(join(staging, name), { force: true }).catch(() => undefined);
+		}
+		return staging;
+	}
+
+	/**
 	 * Owner password rotation for engines other than Postgres (D86). The statements go over stdin,
 	 * never argv; a fresh login with the new password must then succeed.
 	 *
@@ -1598,8 +2148,12 @@ END $$;`];
 	 * - MongoDB: `changeUserPassword` on the owner, who lives in `admin`.
 	 * - Valkey/Redis: `ACL SETUSER … resetpass >new` live; the re-activation that follows a
 	 *   successful rotation rewrites the server config, so a restart keeps the new password.
+	 * - ClickHouse: the owner is a config user, so the helper rewrites `users.xml` with the new
+	 *   hash and the server reloads it within a few seconds; the re-activation that follows writes
+	 *   the same file from the new env.
 	 */
 	private async rotateEngineOwner(id: string, env: DatabaseEnv, newPassword: string): Promise<void> {
+		if (env.engine === 'clickhouse') return this.rotateClickHouseOwner(id, env, newPassword);
 		const container = `skiff-workload-${id}`;
 		let argv: string[];
 		let spawnEnv: Record<string, string | undefined> = process.env;
@@ -1644,6 +2198,21 @@ END $$;`];
 			throw new Error('The rotated credential did not pass the verification query.');
 	}
 
+	private async rotateClickHouseOwner(id: string, env: DatabaseEnv, newPassword: string): Promise<void> {
+		const info = DATABASE_ENGINES.clickhouse;
+		const path = join(this.runtimeDir, id, CLICKHOUSE_CONFIG_DIRNAME, CLICKHOUSE_USERS_FILE);
+		if (!(await fs.stat(path).catch(() => null)))
+			throw new ValidationError(`Database ${id} has no generated ClickHouse config; start it first.`);
+		await this.writeIfChanged(path, renderClickHouseUsers({ user: env.user, password: newPassword }), 0o600);
+		await this.chown(path, info.uid, info.gid).catch(() => undefined);
+		// The server polls its users file; give the reload a few seconds before giving up.
+		for (let attempt = 0; attempt < CLICKHOUSE_RELOAD_ATTEMPTS; attempt += 1) {
+			if (await this.verifyEngineLogin(id, env, newPassword)) return;
+			await Bun.sleep(CLICKHOUSE_RELOAD_DELAY_MS);
+		}
+		throw new Error('The rotated credential did not pass the verification query.');
+	}
+
 	/** A fresh owner login over TCP with `password`, answered by the engine's smallest query. */
 	private async verifyEngineLogin(id: string, env: DatabaseEnv, password: string): Promise<boolean> {
 		const container = `skiff-workload-${id}`;
@@ -1670,6 +2239,13 @@ END $$;`];
 				argv = [this.podmanPath, 'exec', '-e', 'REDISCLI_AUTH', container, DATABASE_ENGINES[env.engine].cli, '--no-auth-warning', '--user', env.user, 'PING'];
 				spawnEnv = { ...process.env, REDISCLI_AUTH: password };
 				expected = 'PONG';
+				break;
+			case 'clickhouse':
+				// clickhouse-client reads CLICKHOUSE_PASSWORD from its environment, overriding the
+				// container's (old) value; the native port is not published, only used in-container.
+				argv = [this.podmanPath, 'exec', '-e', 'CLICKHOUSE_PASSWORD', container, 'clickhouse-client', '--host', '127.0.0.1', '--user', env.user, '--query', "SELECT 'skiff-ok'"];
+				spawnEnv = { ...process.env, CLICKHOUSE_PASSWORD: password };
+				expected = 'skiff-ok';
 				break;
 			default:
 				return false;
@@ -1993,22 +2569,27 @@ END $$;`];
 
 	/**
 	 * The contract documents `bun run start` as the process default when the release ships a
-	 * package.json. We use the absolute bun path so the unit does not depend on PATH search.
+	 * package.json; we use the absolute bun path so the unit does not depend on PATH search. A
+	 * Node.js app (D125) runs its `start` script instead, see `nodeStartCommand`.
 	 */
-	private async defaultCommand(releaseDir: string): Promise<string[]> {
+	private async defaultCommand(releaseDir: string, engine: 'bun' | 'node'): Promise<string[]> {
 		const manifest = join(releaseDir, 'package.json');
+		const display = engine === 'node' ? 'the package.json start script' : '"bun run start"';
+		let text: string;
 		try {
 			const stat = await fs.stat(manifest);
 			if (!stat.isFile()) throw new ValidationError(`workload.command is required (${manifest} is not a file)`);
 			if (stat.size > 1_048_576)
 				throw new ValidationError(`workload.command is required (${manifest} is too large)`);
-			return [this.bunPath, 'run', 'start'];
+			if (engine === 'bun') return [this.bunPath, 'run', 'start'];
+			text = await fs.readFile(manifest, 'utf8');
 		} catch (error) {
 			if (error instanceof ValidationError) throw error;
 			throw new ValidationError(
-				`workload.command is required: ${releaseDir} has no package.json to derive "bun run start" from`,
+				`workload.command is required: ${releaseDir} has no package.json to derive ${display} from`,
 			);
 		}
+		return nodeStartCommand(text, releaseDir, dirname(this.nodePath));
 	}
 
 	/** Write a Quadlet network; returns true when systemd needs a daemon-reload. */
@@ -2163,6 +2744,18 @@ interface DatabaseEnv {
 	database: string;
 }
 
+/** ClickHouse polls its users file every couple of seconds; rotation waits up to ~15 s. */
+const CLICKHOUSE_RELOAD_ATTEMPTS = 15;
+const CLICKHOUSE_RELOAD_DELAY_MS = 1000;
+
+/** Valkey/Redis restores poll `PING` until the dataset has loaded (default ~10 minutes). */
+const KEY_VALUE_RESTORE_ATTEMPTS = 600;
+
+/** The useful part of a failed command's output, for an error message. */
+function detailOf(result: RunResult): string {
+	return (result.stderr.trim() || result.stdout.trim()).slice(0, 500) || 'no detail';
+}
+
 /** Inside the container's /tmp tmpfs; removed after every MongoDB tool run. */
 const MONGO_TOOL_CONFIG = '/tmp/skiff-mongo-tool.yaml';
 
@@ -2225,7 +2818,26 @@ export function databaseFixedEnv(engine: DatabaseEngine, env: Record<string, str
 		case 'valkey':
 		case 'redis':
 			return { SKIFF_DB_ENGINE: engine };
+		case 'clickhouse':
+			// The entrypoint reads the helper's standalone config and leaves users to it; the owner
+			// in CLICKHOUSE_USER/PASSWORD is what its first-start `CREATE DATABASE` logs in as.
+			return {
+				SKIFF_DB_ENGINE: engine,
+				CLICKHOUSE_CONFIG: `${CLICKHOUSE_CONFIG_DIR}/${CLICKHOUSE_CONFIG_FILE}`,
+				CLICKHOUSE_SKIP_USER_SETUP: '1',
+				CLICKHOUSE_WATCHDOG_ENABLE: '0',
+			};
 	}
+}
+
+/** Poll budget for WAL replay in a restore (× `restorePollMs`, 1 s by default: 90 minutes). */
+const PITR_RECOVERY_ATTEMPTS = 90 * 60;
+/** Poll budget for the restored target's first password login. */
+const PITR_CANARY_ATTEMPTS = 120;
+
+/** The useful part of a failed command's output, for an error message. */
+function commandDetail(result: RunResult): string {
+	return (result.stderr.trim() || result.stdout.trim() || 'no output').slice(0, 500);
 }
 
 function identifier(value: string): boolean {
@@ -2257,4 +2869,28 @@ function parseMemory(value: string | undefined): number | null {
 	if (!value) return null;
 	const parsed = Number.parseInt(value, 10);
 	return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+/**
+ * The default Node.js command (D125): the package.json `start` script under `/bin/sh -c`, with
+ * the release's `node_modules/.bin` and the pinned Node first on PATH, as `npm start` would set
+ * them. Not `npm start` or `node --run start`: both spawn the script with every non-stdio fd
+ * closed, so a socket-activated app never sees its listener. A shell passes fd 3 through.
+ */
+export function nodeStartCommand(packageJson: string, releaseDir: string, nodeBinDir: string): string[] {
+	let script: unknown;
+	try {
+		const parsed = JSON.parse(packageJson) as { scripts?: { start?: unknown } } | null;
+		script = parsed?.scripts?.start;
+	} catch {
+		throw new ValidationError('workload.command is required: package.json is not valid JSON');
+	}
+	if (typeof script !== 'string' || script.trim() === '')
+		throw new ValidationError(
+			'workload.command is required: package.json has no "start" script (add one, or set the command)',
+		);
+	const [start] = assertCommand([script], 'package.json scripts.start');
+	const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+	const path = `${shellQuote(join(releaseDir, 'node_modules', '.bin'))}:${shellQuote(nodeBinDir)}:"$PATH"`;
+	return ['/bin/sh', '-c', `PATH=${path}; export PATH; ${start}`];
 }

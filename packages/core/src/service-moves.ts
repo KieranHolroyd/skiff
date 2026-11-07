@@ -154,6 +154,7 @@ export class ServiceMoveService {
 			throw new ConflictError(
 				`"${db.name}" is running, so a final dump keeps every write. Move it without "from" (or with from: "dump") instead.`,
 			);
+		// The newest completed backup whose recorded target Skiff can still reach (0053).
 		const latest =
 			input.from === 'latest-backup'
 				? this.ctx.db
@@ -161,7 +162,8 @@ export class ServiceMoveService {
 						.from(databaseBackups)
 						.where(and(eq(databaseBackups.databaseId, db.id), eq(databaseBackups.status, 'ok')))
 						.orderBy(desc(databaseBackups.finishedAt))
-						.get()
+						.all()
+						.find((row) => this.ctx.backupTargets.describeRecorded(row).available)
 				: undefined;
 		if (input.from === 'latest-backup' && !latest)
 			throw new ConflictError(
@@ -434,6 +436,12 @@ export class ServiceMoveService {
 
 	private assertMovable(db: DatabaseRow, offline: boolean): void {
 		this.assertNotMoving(db);
+		// A move re-creates the primary from a dump; its replicas would follow nothing (C7). Promote
+		// a replica on the target instead, or remove them first.
+		if (this.ctx.databaseReplicas.hasReplicas(db.id))
+			throw new ConflictError(
+				`"${db.name}" has read replicas. Remove them first, or add a replica on the target node and promote it.`,
+			);
 		const purging = this.ctx.db
 			.select({ id: databaseMoves.id })
 			.from(databaseMoves)
@@ -699,6 +707,7 @@ export class ServiceMoveService {
 					kind: 'manual',
 					status: 'pending',
 					objectKey: backupObjectKey(db.orgId, db.id, backupId),
+					...this.ctx.backupTargets.placementFor(db.orgId),
 					createdBy: row.createdBy,
 					createdAt: now,
 					expiresAt: now + db.backupRetentionDays * DAY_MS,

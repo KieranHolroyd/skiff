@@ -5,13 +5,15 @@ import { databaseRestoreSchema } from './database-backup.ts';
 /**
  * Point-in-time recovery for managed databases (docs/PITR.md).
  *
- * The data path is pgBackRest on the database's node: a pinned sidecar image reads the Postgres
- * data volume, pushes WAL to an S3-compatible repository and writes weekly full / daily
- * differential base backups. Restores always create a NEW database; in-place is out of scope.
+ * The data path is pgBackRest on the database's node. A PITR-enabled Postgres 18 database runs the
+ * Skiff-built `skiff-postgres-pitr` image (`postgresPitrImage`), whose `archive_command` pushes WAL
+ * to an S3-compatible repository; weekly full / daily differential base backups and the status
+ * check run inside that container, and a restore runs one-shot containers of the same image.
+ * Restores always create a NEW database; in-place is out of scope.
  *
  * Repository credentials never enter desired state or a view. The agent fetches them from the
- * node-authenticated activation endpoint; the helper writes the pgBackRest config as a 0400 file
- * under `/run/skiff-workloads/<id>/`.
+ * node-authenticated activation endpoint; the helper writes the pgBackRest config as 0400 files
+ * under `/run/skiff-workloads/<id>/pgbackrest/`.
  */
 
 export const DATABASE_PITR_FORMAT = 'pgbackrest' as const;
@@ -26,6 +28,26 @@ export const PITR_ARCHIVE_TIMEOUT_SECONDS = 60;
 /** Full backups are kept ~4 weeks; differentials cover the rest of the window. */
 export const PITR_RETENTION_FULL = 4;
 export const PITR_RETENTION_DIFF = 7;
+/**
+ * How often the control plane queues a `status` task per PITR database. The task also rewrites
+ * the node's pgBackRest config, which lives on a tmpfs and is gone after a reboot.
+ */
+export const PITR_STATUS_INTERVAL_MS = 15 * 60_000;
+
+/** The recoverable window and repository state a node's `status` task reports. */
+export const databasePitrWindowSchema = z.object({
+	/** Earliest restorable instant (epoch ms): the oldest retained backup's stop time. */
+	recoverableFrom: z.number().int().nullable(),
+	/** Latest restorable instant (epoch ms): the last archived WAL segment. */
+	recoverableTo: z.number().int().nullable(),
+	backupCount: z.number().int().min(0),
+	newestBackupAt: z.number().int().nullable(),
+	newestBackupType: z.enum(pitrBaseBackupTypes).nullable(),
+	lastArchivedAt: z.number().int().nullable(),
+	/** pgBackRest's stanza message when it reports a repository problem. */
+	repoMessage: z.string().max(500).nullable(),
+});
+export type DatabasePitrWindow = z.infer<typeof databasePitrWindowSchema>;
 
 /** A credential-free repository description, safe for views and audit args. */
 export const databasePitrRepoViewSchema = z.object({
@@ -63,6 +85,13 @@ export const databasePitrStatusSchema = z.object({
 	lastRestoreDatabaseId: z.string().nullable(),
 	verifiedAt: z.string().nullable(),
 	error: z.string().nullable(),
+	/**
+	 * The window a restore can target, from the node's last status check (ISO). Null until the
+	 * first base backup has finished and been reported.
+	 */
+	recoverableFrom: z.string().nullable(),
+	recoverableTo: z.string().nullable(),
+	windowCheckedAt: z.string().nullable(),
 });
 export type DatabasePitrStatus = z.infer<typeof databasePitrStatusSchema>;
 
@@ -108,6 +137,8 @@ export const databasePitrResultSchema = z.object({
 	verified: z.boolean().optional(),
 	/** Archive health reported by the `status` verb. */
 	archiveStatus: z.enum(['ok', 'failing', 'unknown']).optional(),
+	/** `status` only: the recoverable window. Absent from older agents. */
+	window: databasePitrWindowSchema.optional(),
 	error: z.string().max(2000).optional(),
 });
 export type DatabasePitrResult = z.infer<typeof databasePitrResultSchema>;
@@ -140,6 +171,8 @@ export type DatabasePitrRestore = z.input<typeof databasePitrRestoreSchema>;
 /**
  * Validate a restore timestamp against the wall clock and the retention window. A future time or
  * one older than the repository retention cannot be replayed; reject before creating a database.
+ * When the node has reported a recoverable window, `validatePitrTargetInWindow` is the stricter
+ * check.
  */
 export function validatePitrTargetTime(
 	targetTime: number,
@@ -162,4 +195,31 @@ export function validatePitrTargetTime(
 /** pgBackRest stanza names are derived from the database id and never come from the wire. */
 export function pitrStanzaFor(databaseId: string): string {
 	return databaseId.replace(/[^A-Za-z0-9_-]/g, '_');
+}
+
+/**
+ * Validate a restore timestamp against the recoverable window the node last reported. The window
+ * opens at the oldest retained backup and closes at the last archived WAL; a target outside it
+ * cannot be replayed (pgBackRest would pick no backup, or recovery would stop short).
+ */
+export function validatePitrTargetInWindow(
+	targetTime: number,
+	window: { recoverableFrom: number | null; recoverableTo: number | null },
+): { ok: true } | { ok: false; message: string } {
+	if (window.recoverableFrom === null || window.recoverableTo === null)
+		return {
+			ok: false,
+			message: 'There is nothing to restore yet: no base backup has been reported for this database.',
+		};
+	if (targetTime < window.recoverableFrom)
+		return {
+			ok: false,
+			message: `The restore target is before the earliest recoverable point (${new Date(window.recoverableFrom).toISOString()}).`,
+		};
+	if (targetTime > window.recoverableTo)
+		return {
+			ok: false,
+			message: `The restore target is after the latest archived WAL (${new Date(window.recoverableTo).toISOString()}); pick an earlier time or wait for the archive to catch up.`,
+		};
+	return { ok: true };
 }

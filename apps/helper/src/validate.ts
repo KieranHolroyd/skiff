@@ -220,6 +220,8 @@ export interface WorkloadDesired {
 	 * fails with a clear message naming `image`.
 	 */
 	command?: string[];
+	/** Process apps on the node's pinned Node.js (D125); absent means Bun. */
+	engine?: 'node';
 	image?: string;
 	/**
 	 * Managed database profile (D55, D61). When present the helper renders a fixed unit: the image,
@@ -343,6 +345,17 @@ export const DATABASE_ENGINES = {
 		env: { user: 'REDIS_USER', password: 'REDIS_PASSWORD', database: null },
 		cli: 'redis-cli',
 	},
+	clickhouse: {
+		versions: ['26.3', '26.8'],
+		/** The image's `clickhouse` user and group (101 in both the Ubuntu and Alpine images). */
+		uid: 101,
+		gid: 101,
+		/** HTTP; native TCP 9000 is reachable on the org network but not published. */
+		containerPort: 8123,
+		image: (version: string) => `docker.io/clickhouse/clickhouse-server:${version}`,
+		env: { user: 'CLICKHOUSE_USER', password: 'CLICKHOUSE_PASSWORD', database: 'CLICKHOUSE_DB' },
+		cli: 'clickhouse-client',
+	},
 } as const satisfies Record<
 	string,
 	{
@@ -357,20 +370,65 @@ export const DATABASE_ENGINES = {
 >;
 export type DatabaseEngine = keyof typeof DATABASE_ENGINES;
 
+/**
+ * Skiff-built Postgres image variants (D126): the pinned pgvector image plus PostGIS or pg_cron,
+ * built from `docker/postgres/Dockerfile`. Same uid, entrypoint and lockdown as the base image.
+ * The contract has its own copy (`SKIFF_POSTGRES_IMAGE`); a mismatch is rejected like any image.
+ */
+export const POSTGRES_VARIANTS = {
+	postgis: { versions: ['18'] },
+	pg_cron: { versions: ['18'] },
+} as const;
+export type PostgresVariant = keyof typeof POSTGRES_VARIANTS;
+const SKIFF_POSTGRES_IMAGE = 'ghcr.io/kieranholroyd/skiff-postgres';
+const SKIFF_POSTGRES_IMAGE_REVISION = '1';
+
+/**
+ * The Postgres image a PITR-enabled database runs (docs/PITR.md): the pinned pgvector image plus
+ * pgBackRest, built from `docker/postgres-pitr/Dockerfile` and published by
+ * `.github/workflows/postgres-pitr-image.yml`. Postgres runs `archive_command` in its own
+ * container, so only this image can archive WAL; 16/17 (alpine) and the D126 variants have no
+ * PITR build yet. The tag is immutable (the workflow never overwrites one); once published, the
+ * digest is pinned here and in the contract (`POSTGRES_PITR_IMAGE_DIGEST`). Same uid, entrypoint
+ * and lockdown as the base image.
+ */
+export const POSTGRES_PITR_VERSIONS = ['18'] as const;
+const POSTGRES_PITR_IMAGE = 'ghcr.io/kieranholroyd/skiff-postgres-pitr';
+const POSTGRES_PITR_IMAGE_REVISION = '1';
+const POSTGRES_PITR_IMAGE_DIGEST: string | null = null;
+
+/** The PITR image for a Postgres major version; the contract's `postgresPitrImage` must agree. */
+export function postgresPitrImage(version: string): string {
+	if (!(POSTGRES_PITR_VERSIONS as readonly string[]).includes(version))
+		throw new ValidationError(`PITR needs Postgres ${POSTGRES_PITR_VERSIONS.join(', ')}; ${version} has no pgBackRest image`);
+	const tag = `${POSTGRES_PITR_IMAGE}:${version}-${POSTGRES_PITR_IMAGE_REVISION}`;
+	return POSTGRES_PITR_IMAGE_DIGEST ? `${tag}@${POSTGRES_PITR_IMAGE_DIGEST}` : tag;
+}
+
 export interface WorkloadDatabase {
 	engine: DatabaseEngine;
 	version: string;
+	/** Skiff-built Postgres variant (D126); absent means the engine's own image. */
+	variant?: PostgresVariant;
 	/** WAL archiving for PITR (docs/PITR.md); omitted when the feature is off. */
 	pitr?: { stanza: string; archiveTimeoutSeconds: number };
 	/** Render Postgres with the helper-generated certificate (SKIFF_FEATURE_DB_TLS). */
 	tls?: boolean;
+	/** Streaming read replica (C7): the standby unit variant, streaming from this slot. */
+	replica?: { slot: string };
 }
 
 /** Workload ids of managed databases carry this prefix; `purge` accepts these and `st_` ids. */
 export const DATABASE_ID_PREFIX = 'db_';
+/** Read replicas of a database (C7): `db_dbr_<hex>`, still inside the database profile. */
+export const DATABASE_REPLICA_ID_PREFIX = 'db_dbr_';
 
 /** The image the helper runs for a database profile. */
 export function databaseImage(database: WorkloadDatabase): string {
+	// WAL archiving needs pgBackRest inside the Postgres container (docs/PITR.md).
+	if (database.pitr) return postgresPitrImage(database.version);
+	if (database.variant)
+		return `${SKIFF_POSTGRES_IMAGE}:${database.version}-${database.variant}-${SKIFF_POSTGRES_IMAGE_REVISION}`;
 	return DATABASE_ENGINES[database.engine].image(database.version);
 }
 
@@ -389,10 +447,19 @@ export function parseDatabase(value: unknown, label = 'workload.database'): Work
 	if (typeof version !== 'string' || !(info.versions as readonly string[]).includes(version))
 		throw new ValidationError(`${label}.version must be one of ${info.versions.join(', ')}`);
 	for (const key of Object.keys(record)) {
-		if (key !== 'engine' && key !== 'version' && key !== 'pitr' && key !== 'tls')
+		if (key !== 'engine' && key !== 'version' && key !== 'variant' && key !== 'pitr' && key !== 'tls' && key !== 'replica')
 			throw new ValidationError(`${label}.${key} is not supported`);
 	}
 	const parsed: WorkloadDatabase = { engine: engine as DatabaseEngine, version };
+	if (record.variant !== undefined) {
+		const variant = record.variant;
+		if (typeof variant !== 'string' || !Object.hasOwn(POSTGRES_VARIANTS, variant))
+			throw new ValidationError(`${label}.variant must be one of ${Object.keys(POSTGRES_VARIANTS).join(', ')}`);
+		const versions: readonly string[] = POSTGRES_VARIANTS[variant as PostgresVariant].versions;
+		if (engine !== 'postgres' || !versions.includes(version))
+			throw new ValidationError(`${label}.variant ${variant} is only supported for postgres ${versions.join(', ')}`);
+		parsed.variant = variant as PostgresVariant;
+	}
 	// WAL archiving and the helper-generated certificate are Postgres features (docs/DATABASES.md §17).
 	if (engine !== 'postgres' && (record.pitr !== undefined || record.tls === true))
 		throw new ValidationError(`${label}.pitr and ${label}.tls are only supported for postgres`);
@@ -412,10 +479,26 @@ export function parseDatabase(value: unknown, label = 'workload.database'): Work
 			if (key !== 'stanza' && key !== 'archiveTimeoutSeconds')
 				throw new ValidationError(`${label}.pitr.${key} is not supported`);
 		}
+		// Only the standard image has a pgBackRest build (docs/PITR.md).
+		if (parsed.variant || !(POSTGRES_PITR_VERSIONS as readonly string[]).includes(version))
+			throw new ValidationError(
+				`${label}.pitr is only supported for standard postgres ${POSTGRES_PITR_VERSIONS.join(', ')}`,
+			);
 	}
 	if (record.tls !== undefined) {
 		if (typeof record.tls !== 'boolean') throw new ValidationError(`${label}.tls must be a boolean`);
 		parsed.tls = record.tls;
+	}
+	if (record.replica !== undefined) {
+		// Streaming replicas are Postgres-only and never archive WAL themselves (docs/CLUSTERING.md §9.2).
+		if (engine !== 'postgres') throw new ValidationError(`${label}.replica is only supported for postgres`);
+		if (parsed.pitr) throw new ValidationError(`${label}.replica cannot be combined with ${label}.pitr`);
+		const replica = assertRecord(record.replica, `${label}.replica`);
+		for (const key of Object.keys(replica))
+			if (key !== 'slot') throw new ValidationError(`${label}.replica.${key} is not supported`);
+		if (typeof replica.slot !== 'string' || !/^skiff_[a-z0-9_]{1,56}$/.test(replica.slot))
+			throw new ValidationError(`${label}.replica.slot must match ^skiff_[a-z0-9_]{1,56}$`);
+		parsed.replica = { slot: replica.slot };
 	}
 	return parsed;
 }
@@ -1061,6 +1144,14 @@ export function parseWorkload(value: unknown): WorkloadDesired {
 		assertDatabaseId(id, 'workload.id');
 		if (secrets.some((secret) => secret.delivery === 'file'))
 			throw new ValidationError('Database workloads cannot mount file secrets');
+		// A replica id and the replica profile always come together, so a primary can never be
+		// rendered as a standby (or the reverse) by a mislabelled request.
+		if (Boolean(database.replica) !== id.startsWith(DATABASE_REPLICA_ID_PREFIX))
+			throw new ValidationError(
+				database.replica
+					? `Replica workloads need an id starting with "${DATABASE_REPLICA_ID_PREFIX}"`
+					: `workload.id prefix "${DATABASE_REPLICA_ID_PREFIX}" is reserved for database replicas`,
+			);
 	} else if (id.startsWith(DATABASE_ID_PREFIX)) {
 		throw new ValidationError(`workload.id prefix "${DATABASE_ID_PREFIX}" is reserved for databases`);
 	}
@@ -1103,6 +1194,11 @@ export function parseWorkload(value: unknown): WorkloadDesired {
 		dataSizeMb,
 	};
 	if (command) workload.command = command;
+	if (record.engine !== undefined) {
+		if (record.engine !== 'node') throw new ValidationError('workload.engine must be "node" when present');
+		if (runtime !== 'process') throw new ValidationError('Only process workloads may set workload.engine');
+		workload.engine = 'node';
+	}
 	if (image) workload.image = image;
 	if (workloadFunction) workload.function = workloadFunction;
 	if (database) workload.database = database;
@@ -1110,6 +1206,7 @@ export function parseWorkload(value: unknown): WorkloadDesired {
 		if (!database) throw new ValidationError('workload.pooler is only valid for a database workload');
 		if (database.engine !== 'postgres')
 			throw new ValidationError('workload.pooler is only valid for a postgres database');
+		if (database.replica) throw new ValidationError('A database replica has no pooler');
 		const pooler = assertRecord(record.pooler, 'workload.pooler');
 		workload.pooler = { port: assertPort(pooler.port, 'workload.pooler.port') };
 	}

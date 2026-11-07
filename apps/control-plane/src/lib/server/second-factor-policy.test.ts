@@ -40,6 +40,11 @@ describe('isExemptBeforeSecondFactor', () => {
 		for (const path of ['/overview', '/settings', '/settings/account', '/api/v1/projects', '/consent', '/cli/login', '/two-factorx', '/setupx', '/_skiff/site-login'])
 			expect(isExemptBeforeSecondFactor(path)).toBe(false);
 	});
+
+	test('the forgot- and reset-password pages are reachable from an unproven session', () => {
+		for (const path of ['/forgot-password', '/reset-password']) expect(isExemptBeforeSecondFactor(path)).toBe(true);
+		for (const path of ['/forgot-passwordx', '/reset-password/x']) expect(isExemptBeforeSecondFactor(path)).toBe(false);
+	});
 });
 
 describe('authPathAllowedBeforeSecondFactor', () => {
@@ -58,6 +63,23 @@ describe('authPathAllowedBeforeSecondFactor', () => {
 	test('everything that grants access or changes factors waits', () => {
 		for (const path of ['/api-key/create', '/organization/invite-member', '/oauth2/authorize', '/oauth2/continue', '/oauth2/consent', '/passkey/delete-passkey', '/two-factor/disable', '/two-factor/generate-backup-codes'])
 			expect(authPathAllowedBeforeSecondFactor(path, false)).toBe(false);
+	});
+});
+
+describe('password reset endpoints', () => {
+	test('requesting, following and using a reset link are always allowed', () => {
+		for (const path of ['/request-password-reset', '/reset-password', '/reset-password/abc123'])
+			for (const hasFactor of [true, false]) expect(authPathAllowedBeforeSecondFactor(path, hasFactor)).toBe(true);
+	});
+
+	test('a reset proves no factor, so it never satisfies the owner check', () => {
+		for (const path of ['/request-password-reset', '/reset-password', '/reset-password/abc123'])
+			expect(factorProvedBy(path)).toBeUndefined();
+	});
+
+	test('changing a password from a session still waits for the factor', () => {
+		expect(authPathAllowedBeforeSecondFactor('/change-password', true)).toBe(false);
+		expect(authPathAllowedBeforeSecondFactor('/set-password', false)).toBe(false);
 	});
 });
 

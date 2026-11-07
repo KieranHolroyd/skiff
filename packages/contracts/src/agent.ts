@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { nodeContainerConsoleDesiredSchema } from './container-console.ts';
 import { nodeStudioDesiredSchema } from './database-studio.ts';
 import { nodeHardwareSchema } from './cluster.ts';
 import { wireguardStateSchema, wireguardStatusSchema } from './overlay.ts';
@@ -13,6 +14,13 @@ import { brokerMetricBucketSchema, brokerQueueSnapshotSchema } from './broker.ts
 import { databaseBackupResultSchema, databaseBackupTaskSchema } from './database-backup.ts';
 import { databasePitrResultSchema, databasePitrTaskSchema } from './database-pitr.ts';
 import {
+	databaseReplicaLinkSchema,
+	databaseReplicaPromotionResultSchema,
+	databaseReplicaPromotionTaskSchema,
+	databaseReplicationReportSchema,
+	databaseReplicationTaskSchema,
+} from './database-replication.ts';
+import {
 	databaseCredentialResultSchema,
 	databaseCredentialTaskSchema,
 	databaseRotationResultSchema,
@@ -24,10 +32,18 @@ import {
 	storageBucketSnapshotSchema,
 	storageMetricBucketSchema,
 	storageGatewaySchema,
+	storageRootKeyReportSchema,
 	storageRouteSchema,
 } from './object-storage.ts';
+import { storageReplicationReportSchema } from './storage-replication.ts';
 import { nodeStorageSchema, nodeStorageStatusSchema } from './storage.ts';
 import { nodeVolumeDesiredSchema, volumeInventorySchema } from './volume.ts';
+import {
+	appVolumeNodeRefSchema,
+	appVolumeTaskResultSchema,
+	appVolumeTaskSchema,
+	appVolumeUsageSampleSchema,
+} from './app-volume.ts';
 
 /**
  * The agent protocol (DESIGN §3.3). The control plane stores desired state per node;
@@ -80,6 +96,8 @@ export const routeSpecSchema = z.object({
 	upstreams: z.array(z.string()).max(20).optional(),
 	/** Health path used by Caddy's active checks across replicas. */
 	healthPath: z.string().max(200).optional(),
+	/** Seconds between those active checks (`replicas.healthIntervalSeconds`); agents default to 5. */
+	healthIntervalSeconds: z.number().int().min(1).max(300).optional(),
 	/**
 	 * Functions only (D110): static assets are served first from the release, with the workerd
 	 * host as the fallback (and the target for `runWorkerFirst` globs). Present only on the node
@@ -148,6 +166,16 @@ export const desiredStateSchema = z.object({
 		host: z.string(),
 		to: z.string(),
 	})).default([]),
+	/**
+	 * Production hosts of live projects with nothing deployed yet. The edge answers them with a
+	 * default "nothing deployed yet" page until the first production deployment adds a real route.
+	 * `dashboardUrl` links the owner to the project; older control planes omit the list.
+	 */
+	placeholders: z.array(z.object({
+		host: z.string(),
+		projectId: z.string(),
+		dashboardUrl: z.string().url().optional(),
+	})).default([]),
 	/** Tier 2/3 workloads placed on this node (DESIGN §3.4.1), managed databases included. */
 	workloads: z.array(workloadDesiredSchema).default([]),
 	/** Purged databases whose data dir this node must delete, then report (D59). */
@@ -164,14 +192,35 @@ export const desiredStateSchema = z.object({
 	databaseStudioPrincipals: z.array(databaseStudioPrincipalTaskSchema).default([]),
 	/** Database ids whose PgBouncer sidecar must be restarted (docs/DATABASES.md §11). */
 	databasePoolerRestarts: z.array(z.string()).default([]),
+	/**
+	 * Streaming replication this node serves as a primary (docs/CLUSTERING.md §9.2, C7): keep the
+	 * `skiff_repl` role, its `pg_hba` rule and exactly these slots. The password is fetched from
+	 * `/api/agent/database-replication/:databaseId`, never carried here.
+	 */
+	databaseReplication: z.array(databaseReplicationTaskSchema).default([]),
+	/** Upstream sockets the agent serves for the replica workloads on this node (C7). */
+	databaseReplicaLinks: z.array(databaseReplicaLinkSchema).default([]),
+	/** Replicas on this node to promote and hand over to their database id (§9.3). */
+	databaseReplicaPromotions: z.array(databaseReplicaPromotionTaskSchema).default([]),
 	/** Registered volumes this node must know about, for volume-backed data dirs (D74). */
 	volumes: z.array(nodeVolumeDesiredSchema).default([]),
+	/** Live app volumes placed on this node; the agent measures their usage (docs/VOLUMES.md §14). */
+	appVolumes: z.array(appVolumeNodeRefSchema).default([]),
+	/** Trashed app volumes past their retention window: delete the directory, then report. */
+	appVolumePurges: z.array(appVolumeNodeRefSchema).default([]),
+	/** App-volume snapshots and restores this node must run. */
+	appVolumeTasks: z.array(appVolumeTaskSchema).default([]),
 	/** Internal S3 gateway routes the control plane uses to manage object contents (D81). */
 	storageGateway: storageGatewaySchema.default({ listen: null, routes: [] }),
 	/** Native studio front (plan 22): listen port and live session ids, or null when off. */
 	studio: nodeStudioDesiredSchema.nullable().default(null),
 	/** Internal gateway route the control plane uses to reach the node's studio front (D96). */
 	databaseGateway: storageGatewaySchema.default({ listen: null, routes: [] }),
+	/**
+	 * Container console front (D127): listen port, or null to stay closed. Its gateway routes ride
+	 * `databaseGateway` with `console.internal` hosts.
+	 */
+	containerConsole: nodeContainerConsoleDesiredSchema.nullable().default(null),
 	/**
 	 * Install this signed release's agent and helper (D99). Present while an update an operator
 	 * requested is outstanding for this node; the helper verifies the release signature itself.
@@ -213,9 +262,29 @@ export type DesiredState = z.infer<typeof desiredStateSchema>;
  * - `functions`: renders and runs `runtime: "function"` workloads (D110).
  * - `brokers`: runs `broker` workloads with the helper's fixed profile and purges `brokerPurges` (D111).
  * - `mail`: runs `skiff-mail` and bridges it to the control plane when `mail` is set (docs/EMAIL.md).
+ * - `node-tasks`: leases one-shot queue and function test tasks (`node-task.ts`, D124).
+ * - `container-console`: runs the console front for inspect, files and shells (D127).
+ * - `app-volumes`: measures `appVolumes`, runs `appVolumeTasks` and purges `appVolumePurges`.
+ * - `jobs`: leases job runs and starts them as transient units through the helper (plan 09).
+ * - `database-replicas`: runs Postgres replica workloads, serves their link sockets, applies
+ *   `databaseReplication` and `databaseReplicaPromotions` (docs/CLUSTERING.md §9.2, C7).
  */
-export const nodeCapabilities = ['studio-principal', 'node-update', 'functions', 'brokers', 'mail'] as const;
+export const nodeCapabilities = [
+	'studio-principal',
+	'node-update',
+	'functions',
+	'brokers',
+	'mail',
+	'node-tasks',
+	'container-console',
+	'app-volumes',
+	'jobs',
+	'database-replicas',
+] as const;
 export type NodeCapability = (typeof nodeCapabilities)[number];
+
+/** Most certificates one heartbeat reports (content apex + wildcard, platform host, custom domains). */
+export const HEARTBEAT_CERTS_MAX = 200;
 
 export const heartbeatSchema = z.object({
 	nodeId: z.string(),
@@ -241,8 +310,10 @@ export const heartbeatSchema = z.object({
 		/**
 		 * TLS certificates this node's Caddy serves, probed locally (DESIGN §8 "cert expiring < 14 d").
 		 * `host` is the SNI probed (`*.<contentDomain>` for the wildcard); `notAfter` is ISO 8601.
+		 * Custom domains are listed only when the certificate's names cover the host; that report is
+		 * what moves a verified domain to `active`.
 		 */
-		certs: z.array(z.object({ host: z.string().max(253), notAfter: z.string().max(40) })).max(50),
+		certs: z.array(z.object({ host: z.string().max(253), notAfter: z.string().max(40) })).max(HEARTBEAT_CERTS_MAX),
 	}).partial().optional(),
 	releases: z.array(z.object({ sha256: z.string(), sizeBytes: z.number().int().nonnegative() })).default([]),
 	/** Hardware facts, refreshed at start-up and hourly (CLUSTERING §3.1). */
@@ -268,6 +339,12 @@ export const heartbeatSchema = z.object({
 	purgedStorage: z.array(z.string()).optional(),
 	/** Broker ids whose data dir was deleted after a `brokerPurges` entry (D111). */
 	purgedBrokers: z.array(z.string()).optional(),
+	/** App volume ids whose directory was deleted after an `appVolumePurges` entry. */
+	purgedAppVolumes: z.array(z.string().max(100)).max(500).optional(),
+	/** Latest usage sample per app volume, sent after each measurement round. */
+	appVolumeUsage: z.array(appVolumeUsageSampleSchema).max(1_000).optional(),
+	/** Outcomes of `appVolumeTasks` since the last heartbeat. */
+	appVolumeTaskResults: z.array(appVolumeTaskResultSchema).max(50).optional(),
 	/** Outcomes of `databaseBackupTasks` since the last heartbeat. */
 	databaseBackupResults: z.array(databaseBackupResultSchema).max(50).optional(),
 	/** Outcomes of `databasePitrTasks` since the last heartbeat. */
@@ -288,6 +365,10 @@ export const heartbeatSchema = z.object({
 	}).optional(),
 	/** Database ids whose pooler restart the node completed. */
 	databasePoolerRestarted: z.array(z.string()).max(50).optional(),
+	/** Latest configure outcome and slot sample per `databaseReplication` task (C7). */
+	databaseReplication: z.array(databaseReplicationReportSchema).max(100).optional(),
+	/** Outcomes of `databaseReplicaPromotions` since the last heartbeat. */
+	databaseReplicaPromotionResults: z.array(databaseReplicaPromotionResultSchema).max(20).optional(),
 	/**
 	 * Retired with the D60 studio console (D96). 0.7.x agents may still send console results;
 	 * they are accepted and ignored. Remove once no 0.7.x agents remain.
@@ -309,6 +390,10 @@ export const heartbeatSchema = z.object({
 	storageBucketDeletions: z.array(storageBucketDeletionSchema).max(500).optional(),
 	/** Bucket configuration convergence outcomes since the last heartbeat. */
 	storageBucketConfigs: z.array(storageBucketConfigReportSchema).max(500).optional(),
+	/** Progress of the replication links this node runs (OBJECT-STORAGE.md §12). */
+	storageReplication: z.array(storageReplicationReportSchema).max(100).optional(),
+	/** Root keys the agent proved (or saw refused) since the last heartbeat (§5). */
+	storageRootKeys: z.array(storageRootKeyReportSchema).max(200).optional(),
 });
 export type Heartbeat = z.infer<typeof heartbeatSchema>;
 

@@ -1,0 +1,174 @@
+name: Postgres PITR image
+
+# The Postgres image a PITR-enabled database runs (docs/PITR.md): the pinned pgvector Postgres 18
+# image plus pgBackRest, built from docker/postgres-pitr. Published as
+# ghcr.io/<owner>/skiff-postgres-pitr:<major>-<revision> for linux/amd64 and linux/arm64.
+#
+# A published tag is immutable: this workflow refuses to push over one. Changing the Dockerfile,
+# its base digest or the pgBackRest version means bumping REVISION here,
+# `POSTGRES_PITR_IMAGE_REVISION` in packages/contracts/src/database.ts and the helper's copy in
+# apps/helper/src/validate.ts in the same commit, then pinning the digest this run prints
+# (`POSTGRES_PITR_IMAGE_DIGEST` in both files).
+
+on:
+  pull_request:
+    paths:
+      - 'docker/postgres-pitr/**'
+      - '.github/workflows/postgres-pitr-image.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'docker/postgres-pitr/**'
+      - '.github/workflows/postgres-pitr-image.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MAJOR: '18'
+  REVISION: '1'
+
+jobs:
+  image:
+    name: skiff-postgres-pitr
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image name and tag
+        run: |
+          echo "IMAGE=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/skiff-postgres-pitr" >> "$GITHUB_ENV"
+          echo "TAG=${MAJOR}-${REVISION}" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse to overwrite a published tag
+        id: published
+        if: github.event_name != 'pull_request'
+        run: |
+          if docker buildx imagetools inspect "$IMAGE:$TAG" >/dev/null 2>&1; then
+            echo "$IMAGE:$TAG is already published; bump REVISION to publish a change."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Build each architecture into the local daemon first so the smoke test runs the exact
+      # layers that get pushed (the push below reuses the same cache).
+      - name: Build amd64 for the smoke test
+        if: steps.published.outputs.exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/postgres-pitr
+          file: docker/postgres-pitr/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: skiff-postgres-pitr:smoke-amd64
+          cache-from: type=gha,scope=postgres-pitr
+          cache-to: type=gha,mode=max,scope=postgres-pitr
+
+      - name: Build arm64 for the smoke test
+        if: steps.published.outputs.exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/postgres-pitr
+          file: docker/postgres-pitr/Dockerfile
+          platforms: linux/arm64
+          load: true
+          tags: skiff-postgres-pitr:smoke-arm64
+          cache-from: type=gha,scope=postgres-pitr
+          cache-to: type=gha,mode=max,scope=postgres-pitr
+
+      - name: Smoke test (binary, Skiff's uid and read-only root, both architectures)
+        if: steps.published.outputs.exists != 'true'
+        run: |
+          set -eu
+          for arch in amd64 arm64; do
+            image="skiff-postgres-pitr:smoke-$arch"
+            # The rendered archive_command calls this absolute path; the helper runs uid 70 read-only.
+            docker run --rm --platform "linux/$arch" --user 70:70 --read-only --tmpfs /tmp \
+              --entrypoint /usr/local/bin/pgbackrest "$image" version
+            docker run --rm --platform "linux/$arch" --entrypoint postgres "$image" --version | grep -q 'PostgreSQL) 18\.'
+          done
+
+      - name: Smoke test (archive, backup and restore against a local repository)
+        if: steps.published.outputs.exists != 'true'
+        run: |
+          set -eu
+          image=skiff-postgres-pitr:smoke-amd64
+          work="$(mktemp -d)"
+          cat > "$work/pgbackrest.conf" <<'CONF'
+          [global]
+          repo1-type=posix
+          repo1-path=/var/lib/postgresql/repo
+          repo1-retention-full=1
+          start-fast=y
+          log-level-console=warn
+          log-level-file=off
+          lock-path=/tmp/pgbackrest-lock
+
+          [smoke]
+          pg1-path=/var/lib/postgresql/pgdata
+          pg1-socket-path=/var/run/postgresql
+          CONF
+          chmod 0644 "$work/pgbackrest.conf"
+          docker run -d --name pitr-smoke \
+            -e POSTGRES_PASSWORD=smoke -e PGDATA=/var/lib/postgresql/pgdata \
+            -v "$work/pgbackrest.conf:/etc/pgbackrest/pgbackrest.conf:ro" \
+            "$image" postgres -c wal_level=replica -c archive_mode=on -c archive_timeout=5 \
+            -c 'archive_command=/usr/local/bin/pgbackrest --stanza=smoke archive-push %p'
+          trap 'docker logs pitr-smoke | tail -50; docker rm -f pitr-smoke pitr-restore >/dev/null 2>&1 || true' EXIT
+          # Wait past the entrypoint's temporary init server for the real one.
+          for _ in $(seq 1 90); do
+            if docker logs pitr-smoke 2>&1 | grep -q 'PostgreSQL init process complete' &&
+              docker exec pitr-smoke pg_isready -U postgres -h /var/run/postgresql >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          as_pg() { docker exec -u postgres pitr-smoke "$@"; }
+          as_pg pgbackrest --stanza=smoke stanza-create
+          as_pg pgbackrest --stanza=smoke check
+          as_pg pgbackrest --stanza=smoke --type=full backup
+          as_pg psql -U postgres -h /var/run/postgresql -Xc 'CREATE TABLE canary AS SELECT 1 AS ok'
+          as_pg psql -U postgres -h /var/run/postgresql -Xc 'SELECT pg_switch_wal()'
+          sleep 10
+          as_pg pgbackrest --stanza=smoke --output=json info | grep -q '"type":"full"'
+          # Restore into a fresh PGDATA beside the original (the image's VOLUME, owned by postgres).
+          as_pg mkdir -m 0700 /var/lib/postgresql/restored
+          as_pg pgbackrest --stanza=smoke --pg1-path=/var/lib/postgresql/restored --type=default restore
+          test "$(as_pg cat /var/lib/postgresql/restored/PG_VERSION)" = "$MAJOR"
+          echo "archive, backup and restore OK"
+
+      - name: Publish (multi-arch)
+        id: push
+        if: steps.published.outputs.exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/postgres-pitr
+          file: docker/postgres-pitr/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ env.IMAGE }}:${{ env.TAG }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=postgres-pitr
+
+      - name: Print the digest to pin
+        if: steps.published.outputs.exists != 'true' && github.event_name != 'pull_request'
+        run: |
+          echo "### $IMAGE:$TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo "Pin \`${{ steps.push.outputs.digest }}\` as POSTGRES_PITR_IMAGE_DIGEST in packages/contracts/src/database.ts and apps/helper/src/validate.ts." >> "$GITHUB_STEP_SUMMARY"

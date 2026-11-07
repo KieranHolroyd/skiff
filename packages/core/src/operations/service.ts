@@ -27,7 +27,15 @@ import type { CoreContext } from '../context.ts';
 import { ConflictError, CoreError, ForbiddenError, NotFoundError, ValidationError } from '../errors.ts';
 import { buildPrincipal, readMembership } from '../orgs.ts';
 import { newId } from '../util.ts';
-import type { ActionDefinition, ItemResult, OperationParams, PlannedItem, RunContext, StoredItem } from './types.ts';
+import type {
+	ActionDefinition,
+	ItemResult,
+	OperationApplyInput,
+	OperationParams,
+	PlannedItem,
+	RunContext,
+	StoredItem,
+} from './types.ts';
 
 interface OperationRow {
 	id: string;
@@ -136,7 +144,15 @@ export class OperationService {
 
 	// --- lifecycle --------------------------------------------------------------------------
 
-	create(principal: Principal, input: OperationCreate, options: { idempotencyKey?: string } = {}): OperationView {
+	/**
+	 * Create an operation. `internal` carries parameters only core services may set (a blueprint
+	 * plan's document); REST and MCP never pass it, so an action that needs it refuses them.
+	 */
+	create(
+		principal: Principal,
+		input: OperationCreate,
+		options: { idempotencyKey?: string; internal?: Pick<OperationParams, 'blueprint'> } = {},
+	): OperationView {
 		const parsed = operationCreateSchema.parse(input);
 		const definition = this.definition(parsed.action);
 		this.checkSurface(principal, definition.info);
@@ -154,6 +170,7 @@ export class OperationService {
 			// Prune is always reviewed before it runs (docs/OPERATIONS.md §5.3).
 			if (parsed.stage === 'apply') throw new ValidationError('Prune must be planned first, then applied.');
 		}
+		if (options.internal?.blueprint) params.blueprint = options.internal.blueprint;
 		definition.authorize(principal, params);
 		const orgId = params.scope === 'platform' ? null : principal.orgId;
 		if (parsed.stage === 'apply') this.assertNoneApplying(orgId, definition.info.kind);
@@ -203,7 +220,7 @@ export class OperationService {
 	}
 
 	/** Apply a planned operation. Prune may narrow to some of the planned categories. */
-	apply(principal: Principal, id: string, input: { categories?: PruneCategory[] } = {}): OperationView {
+	apply(principal: Principal, id: string, input: OperationApplyInput = {}): OperationView {
 		const row = this.requireVisible(principal, id);
 		const definition = this.definition(row.action);
 		this.checkSurface(principal, definition.info);
@@ -212,6 +229,7 @@ export class OperationService {
 			throw new ConflictError('This plan has expired. Plan the operation again.');
 		if (row.status !== 'planned') throw new ConflictError(`Only a planned operation can be applied (it is ${row.status}).`);
 		definition.authorize(principal, this.params(row));
+		definition.beforeApply?.(this.ctx, principal, this.params(row), input);
 		this.assertNoneApplying(row.org_id, row.kind);
 
 		if (input.categories?.length) {
@@ -235,7 +253,11 @@ export class OperationService {
 			action: 'operation.apply',
 			resource: 'operation',
 			resourceId: id,
-			args: { action: row.action, ...(input.categories ? { categories: input.categories } : {}) },
+			args: {
+				action: row.action,
+				...(input.categories ? { categories: input.categories } : {}),
+				...(input.confirm !== undefined ? { confirmed: true } : {}),
+			},
 			result: 'ok',
 			operationId: id,
 		});
@@ -793,13 +815,23 @@ export class OperationService {
 			failed: row.failed,
 			summary,
 			actor: { type: row.actor_type, id: row.actor_id, clientId: row.client_id },
-			params: this.params(row),
+			params: publicParams(this.params(row)),
 			createdAt: new Date(row.created_at).toISOString(),
 			startedAt: iso(row.started_at),
 			finishedAt: iso(row.finished_at),
 			planExpiresAt: row.status === 'planned' ? iso(row.plan_expires_at) : null,
 		};
 	}
+}
+
+/** The parameters a view shows: internal ones (a blueprint's document) stay server-side. */
+function publicParams(params: OperationParams): OperationView['params'] {
+	const { targets, scope, categories } = params;
+	return {
+		...(targets ? { targets } : {}),
+		...(scope ? { scope } : {}),
+		...(categories ? { categories } : {}),
+	};
 }
 
 function storePrincipal(principal: Principal): StoredPrincipal {

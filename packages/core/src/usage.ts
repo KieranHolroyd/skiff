@@ -8,6 +8,8 @@ import {
 import {
 	quotaMetricUnitsByKey,
 	quotaPercent,
+	projectQuotaOverrideSchema,
+	quotaUpdateSchema,
 	quotaUsageMetricKeys,
 	resolveQuota,
 	requirePermission,
@@ -18,12 +20,22 @@ import {
 	type QuotaUsageMetricKey,
 	type QuotaUsageMetrics,
 	type QuotaUsageView,
+	type QuotaUpdate,
 	type Principal,
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
-import { NotFoundError } from './errors.ts';
+import { CoreError, NotFoundError } from './errors.ts';
 
 const DAY_MS = 86_400_000;
+
+/**
+ * Quota writes: any principal of a platform-admin user (dashboard, or the admin's API key from the
+ * CLI) or an internal system principal. MCP tokens carry no quota-write tool.
+ */
+function requireQuotaAdmin(principal: Principal): void {
+	if (principal.platformAdmin !== true && principal.kind !== 'system')
+		throw new CoreError('forbidden', 'Platform admin required to change quotas.', 403);
+}
 const CACHE_MS = 60_000;
 const DAYS = 30;
 
@@ -48,6 +60,7 @@ interface CacheEntry {
  */
 export class UsageService {
 	private readonly cache = new Map<string, CacheEntry>();
+	private readonly egressCache = new Map<string, { at: number; bytes: number }>();
 
 	constructor(private readonly ctx: CoreContext) {}
 
@@ -108,6 +121,60 @@ export class UsageService {
 			effective: resolveQuota(base, overrides),
 		};
 		return view;
+	}
+
+	/**
+	 * Change the org quota, or one project's overrides with `projectSlug` (docs/QUOTAS.md). Platform
+	 * admins only, on every surface; the project still resolves inside the caller's org. An org
+	 * update is a patch; a project update replaces that project's overrides.
+	 */
+	setQuotas(
+		principal: Principal,
+		input: QuotaUpdate | ProjectQuotaFields,
+		options: UsageOptions = {},
+	): ReturnType<UsageService['quotas']> {
+		requireQuotaAdmin(principal);
+		if (options.projectSlug) {
+			const project = this.project(principal, options.projectSlug);
+			const overrides = projectQuotaOverrideSchema.parse(input);
+			this.ctx.quota.setProject(principal.orgId, project.id, overrides);
+			this.ctx.audit.record({
+				principal,
+				action: 'quota.set',
+				resource: 'project',
+				resourceId: project.id,
+				args: { project: project.slug, ...overrides },
+				result: 'ok',
+			});
+			return this.quotas(principal, { projectSlug: project.slug });
+		}
+		const update = quotaUpdateSchema.parse(input);
+		this.ctx.quota.set(principal.orgId, update);
+		this.ctx.audit.record({
+			principal,
+			action: 'quota.set',
+			resource: 'org',
+			resourceId: principal.orgId,
+			args: update,
+			result: 'ok',
+		});
+		return this.quotas(principal);
+	}
+
+	/** Drop a project's overrides so it inherits the org quota again. Platform admins only. */
+	clearProjectQuotas(principal: Principal, projectSlug: string): { ok: true } {
+		requireQuotaAdmin(principal);
+		const project = this.project(principal, projectSlug);
+		this.ctx.quota.clearProject(principal.orgId, project.id);
+		this.ctx.audit.record({
+			principal,
+			action: 'quota.clear',
+			resource: 'project',
+			resourceId: project.id,
+			args: { project: project.slug },
+			result: 'ok',
+		});
+		return { ok: true };
 	}
 
 	/** Up to 30 daily points; the current day is included when a snapshot exists. */
@@ -230,7 +297,7 @@ export class UsageService {
 		const counts = this.ctx.quota.snapshotCounts(orgId, projectId);
 		const actual = this.ctx.quota.actualUsage(orgId, projectId);
 		const limits = this.limits(orgId, projectId);
-		const egress = await this.egressBytes(orgId, projectId);
+		const egress = await this.egressUsed(orgId, projectId);
 
 		const values: Record<QuotaUsageMetricKey, number> = {
 			projects: projectId ? 1 : counts.projects,
@@ -240,10 +307,11 @@ export class UsageService {
 			storageInstances: counts.storageInstances,
 			storageBytes: actual.storageBytes,
 			storageObjects: actual.storageObjects,
-			appVolumes: 0,
-			appVolumeBytes: 0,
-			jobs: 0,
-			jobRunsPerDay: 0,
+			appVolumes: counts.appVolumes,
+			// Reserved size, matching enforcement; `usedBytes` samples are on each volume's page.
+			appVolumeBytes: counts.appVolumeBytes,
+			jobs: counts.jobs,
+			jobRunsPerDay: counts.jobRunsPerDay,
 			buildsPerDay: counts.buildsPerDay,
 			previews: counts.previews,
 			workloadMemoryMb: counts.workloadMemoryMb,
@@ -264,17 +332,28 @@ export class UsageService {
 		return metrics;
 	}
 
-	/** Approximate 30-day egress from the traffic store; unavailable telemetry is zero, not an error. */
-	private async egressBytes(orgId: string, projectId: string | null): Promise<number> {
+	/**
+	 * Approximate 30-day egress (response bytes in the traffic store) for an org, or one project.
+	 * Cached for 60 seconds per scope, because the deploy-time quota check reads it too.
+	 * Unavailable telemetry is zero, not an error, so a store outage never blocks a deploy.
+	 */
+	async egressUsed(orgId: string, projectId: string | null): Promise<number> {
+		const key = `${orgId}:${projectId ?? ''}`;
+		const cached = this.egressCache.get(key);
+		if (cached && this.ctx.now() - cached.at < CACHE_MS) return cached.bytes;
+		const bytes = await this.queryEgress(orgId, projectId);
+		this.egressCache.set(key, { at: this.ctx.now(), bytes });
+		return bytes;
+	}
+
+	private async queryEgress(orgId: string, projectId: string | null): Promise<number> {
 		const telemetry = this.ctx.telemetry;
 		if (!telemetry || !(await telemetry.ready())) return 0;
 		const to = this.ctx.now();
 		const from = to - DAYS * DAY_MS;
 		try {
-			if (projectId) {
-				const report = await telemetry.report({ projectId, from, to, interval: '1h' });
-				return report.totals.bytes;
-			}
+			// Hourly buckets summed directly: the dashboard report would also run top-path queries.
+			if (projectId) return sumBytes(await telemetry.query({ projectId, from, to, interval: '1h' }));
 			const projectIds = this.ctx.db
 				.select({ id: projects.id })
 				.from(projects)
@@ -282,13 +361,16 @@ export class UsageService {
 				.all()
 				.map((row) => row.id);
 			if (projectIds.length === 0) return 0;
-			const report = await telemetry.report({ projectIds, from, to, interval: '1h' });
-			return report.totals.bytes;
+			return sumBytes(await telemetry.query({ projectIds, from, to, interval: '1h' }));
 		} catch (error) {
 			console.error('[usage] egress query failed:', error);
 			return 0;
 		}
 	}
+}
+
+function sumBytes(points: Array<{ bytes: number }>): number {
+	return points.reduce((total, point) => total + point.bytes, 0);
 }
 
 function warningsFor(metrics: QuotaUsageMetrics, limits: OrgQuota): QuotaUsageView['warnings'] {

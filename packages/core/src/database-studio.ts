@@ -319,8 +319,11 @@ export class DatabaseStudioService {
 	}
 
 	/**
-	 * One gateway route per node with a live session, mirroring `DatabaseService.gatewayForNode`:
+	 * One gateway route per node that hosts a database, mirroring `ContainerConsoleService`:
 	 * a node serves its own front on loopback, the edge proxies the rest to the node's address.
+	 * Routes come from placement, never from live sessions: opening a session bumps desired state,
+	 * so a session-derived route would not exist on the node yet when the browser's first call
+	 * arrives, and Caddy answers an unmatched route with an empty 200.
 	 */
 	gatewayRoutes(
 		nodeId: string,
@@ -328,7 +331,14 @@ export class DatabaseStudioService {
 		publicAddressOf: (nodeId: string) => string | null,
 	): Array<{ host: string; upstream: string }> {
 		if (!featureEnabled(this.ctx.config, 'DB_STUDIO')) return [];
-		const nodeIds = new Set(this.liveSessions().map((session) => session.nodeId));
+		const nodeIds = new Set(
+			this.ctx.db
+				.select({ nodeId: databases.nodeId })
+				.from(databases)
+				.where(isNull(databases.deletedAt))
+				.all()
+				.map((row) => row.nodeId),
+		);
 		const routes: Array<{ host: string; upstream: string }> = [];
 		for (const target of nodeIds) {
 			const host = databaseStudioHost(target);

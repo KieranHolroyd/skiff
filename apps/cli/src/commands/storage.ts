@@ -15,11 +15,15 @@ import {
 	parseGrants,
 	parseLifecycleRules,
 	parseObjectLock,
+	rootKeyLabel,
 	splitList,
 	storageDetails,
+	storageKeyEnv,
+	storageKeysTable,
 	storageTable,
 	usedVsBudget,
 	type BucketConfigInput,
+	type StorageKeyCreateInput,
 	type StorageCreateInput,
 	type StorageUpdateInput,
 } from '../object-storage.ts';
@@ -42,6 +46,9 @@ Commands:
   restore <name>                 Bring it back from the trash
   purge <name>                   Permanently delete a trashed instance and its objects
   credentials <name>             Print the root key as env lines (--json for everything)
+  rotate-root <name>             Replace the root key (RustFS restarts; --cancel abandons a rotation)
+  keys <command>                 list|create|reveal|revoke named keys (\`skif storage keys --help\`)
+  move <name> --node <id>        Move it to another node, empty (objects are not copied)
   metrics <name>                 Usage samples (--since 1h, or --from/--to; --interval 1m|1h)
   buckets <command>              list|create|update|delete buckets (\`skif storage buckets --help\`)
   objects <command>              Browse and manage bucket contents (\`skif storage objects --help\`)
@@ -83,6 +90,31 @@ Examples:
   skif storage create media --bucket uploads --project api --prefix AWS
   skif storage attach media --project worker --bucket uploads:read
   set -a; eval "$(skif storage credentials media)"; set +a; aws s3 ls`;
+
+const keysUsage = `Usage: skif storage keys <command> <storage> [key id] [options]
+
+Named keys are scoped to buckets, for a person or an outside service. Apps on Skiff get their own
+key with \`skif storage attach\` instead.
+
+Commands:
+  list <storage>                     List keys with grants, status and expiry (the default)
+  create <storage> <name>            Create a key (the secret is not printed; reveal it)
+  reveal <storage> <key id>          Print a key as env lines (audited; needs storage:credentials)
+  revoke <storage> <key id>          Revoke a key; the node removes it within a minute
+
+Options:
+  -b, --bucket <b>[:read|:read-write]
+                                     Grant a bucket (create; repeatable; read-write by default)
+      --purpose <text>               What the key is for (create)
+      --expires <time>               Expiry as an ISO time, or a duration from now: 30d, 12h (create)
+      --prefix <PREFIX>              Env prefix for reveal (default AWS)
+  -y, --yes                          Don't ask for confirmation (revoke)
+      --json                         JSON output
+  -h, --help                         Show this help
+
+Examples:
+  skif storage keys create media backup-tool --bucket uploads:read --expires 90d
+  skif storage keys reveal media stk_123 > .env`;
 
 const bucketsUsage = `Usage: skif storage buckets <command> <storage> [bucket] [options]
 
@@ -177,6 +209,24 @@ const bucketFlags: FlagSpec = {
 	yes: { type: 'boolean', short: 'y' },
 };
 
+const keysFlags: FlagSpec = {
+	...baseFlags,
+	bucket: { type: 'string', short: 'b', multiple: true },
+	purpose: { type: 'string' },
+	expires: { type: 'string' },
+	prefix: { type: 'string' },
+	yes: { type: 'boolean', short: 'y' },
+};
+
+const moveFlags: FlagSpec = {
+	...baseFlags,
+	node: { type: 'string' },
+	volume: { type: 'string' },
+	yes: { type: 'boolean', short: 'y' },
+};
+
+const rotateFlags: FlagSpec = { ...baseFlags, cancel: { type: 'boolean' }, yes: { type: 'boolean', short: 'y' } };
+
 const subcommands: Record<string, (argv: string[]) => Promise<void>> = {
 	list: listStorage,
 	ls: listStorage,
@@ -193,6 +243,10 @@ const subcommands: Record<string, (argv: string[]) => Promise<void>> = {
 	purge: purgeStorage,
 	credentials: showCredentials,
 	creds: showCredentials,
+	'rotate-root': rotateRootKey,
+	keys: keysCommand,
+	key: keysCommand,
+	move: moveStorage,
 	metrics: showMetrics,
 	buckets: bucketsCommand,
 	bucket: bucketsCommand,
@@ -530,6 +584,216 @@ async function showCredentials(argv: string[]): Promise<void> {
 	// Env lines alone on stdout, so `eval "$(skif storage credentials media)"` and `> .env` work.
 	console.log(credentialsEnv(credentials, prefix));
 	if (process.stderr.isTTY && credentials.note) process.stderr.write(`${credentials.note}\n`);
+}
+
+/**
+ * Stage a new root key (§5). RustFS restarts with it; the node proves it and the control plane
+ * promotes it, or rolls back to the current key. Scoped keys and attached apps are unaffected.
+ */
+async function rotateRootKey(argv: string[]): Promise<void> {
+	const parsed = parseNamed(argv, rotateFlags, 'rotate-root');
+	if (!parsed) return;
+	const { args, name } = parsed;
+	const client = await authenticatedClient();
+	if (args.boolean('cancel')) {
+		const { storage, raw } = await client.cancelStorageRootKeyRotation(name);
+		if (args.boolean('json')) {
+			printJson(raw);
+			return;
+		}
+		console.log(
+			`Cancelled the root key rotation of "${storage.name}". It restarts with its current key${storage.rootKey ? ` (${storage.rootKey.accessKeyId})` : ''}.`,
+		);
+		return;
+	}
+	const confirmed = await confirmOrRefuse(
+		`Rotate the root key of "${name}"? RustFS restarts (S3 requests fail briefly) and the current root key stops working ` +
+			'once the node confirms the new one. Attached apps and named keys are not affected. [y/N] ',
+		{
+			yes: args.boolean('yes'),
+			refusal: `Not confirmed: stdin is not a terminal, so there's no one to ask before rotating the root key of "${name}".`,
+		},
+	);
+	if (!confirmed) return cancelled();
+	const { storage, raw } = await client.rotateStorageRootKey(name);
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	console.log(
+		`Rotating the root key of "${storage.name}": ${storage.rootKey ? rootKeyLabel(storage.rootKey) : 'restarting with a new key'}.`,
+	);
+	console.log(
+		'The node restarts RustFS with the new key and confirms it, usually within a minute. If it cannot, the previous key ' +
+			'comes back within 10 minutes.',
+	);
+	const steps = [
+		`Follow it:  skif storage info ${storage.name}`,
+		`New key:    skif storage credentials ${storage.name}`,
+		`Undo:       skif storage rotate-root ${storage.name} --cancel`,
+	];
+	console.log(`\nNext steps:\n${indent(steps)}`);
+}
+
+/** Move an instance to another node, empty: buckets, keys and attachments come back, objects do not (D97). */
+async function moveStorage(argv: string[]): Promise<void> {
+	const parsed = parseNamed(argv, moveFlags, 'move');
+	if (!parsed) return;
+	const { args, name } = parsed;
+	const node = args.string('node');
+	if (!node) throw new UsageError(`Name the target node: skif storage move ${name} --node <node id>`);
+	const volume = args.string('volume');
+	const client = await authenticatedClient();
+	const { storage } = await client.getStorage(name);
+	const objects = storage.objects === null ? 'its objects' : `its ${plural(storage.objects, 'object')}`;
+	const confirmed = await confirmOrRefuse(
+		`Move "${name}" from ${nodeLabel(storage)} to ${node}? Skiff does not copy objects: the new instance starts empty with the ` +
+			`same buckets, keys and attachments, and ${objects} on ${nodeLabel(storage)} are deleted once it is up. ` +
+			`Copy what you need first. Type ${name} to confirm: `,
+		{
+			yes: args.boolean('yes'),
+			accept: (answer) => answer === name,
+			refusal: `Not confirmed: stdin is not a terminal, so there's no one to ask before moving "${name}". Pass --yes to move it empty.`,
+		},
+	);
+	if (!confirmed) return cancelled();
+	const { result, raw } = await client.moveStorage(name, { node, ...(volume ? { volume } : {}) });
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	const label = (ref: { nodeId: string; name: string | null }) => ref.name ?? ref.nodeId;
+	console.log(`Moving "${result.storage}" from ${label(result.from)} to ${label(result.to)}, empty.`);
+	if (result.projects.length > 0) console.log(`Attached apps move with it: ${result.projects.join(', ')}.`);
+	for (const warning of result.warnings) console.log(`Note: ${warning}`);
+	console.log(`Follow it: skif storage info ${result.storage}`);
+}
+
+// --- named keys ------------------------------------------------------------------------------
+
+const keySubcommands: Record<string, (argv: string[]) => Promise<void>> = {
+	list: listKeys,
+	ls: listKeys,
+	create: createKey,
+	reveal: revealKey,
+	revoke: revokeKey,
+	rm: revokeKey,
+};
+
+async function keysCommand(argv: string[]): Promise<void> {
+	const first = argv[0];
+	const handler = first ? keySubcommands[first] : undefined;
+	// `skif storage keys media` lists, like `skif storage keys list media`.
+	if (handler) await handler(argv.slice(1));
+	else await listKeys(argv);
+}
+
+function parseKeyArgs(argv: string[], command: string, second: string | null) {
+	const args = parseArgs(argv, keysFlags);
+	if (args.boolean('help')) {
+		console.log(keysUsage);
+		return null;
+	}
+	const line = `Usage: skif storage keys ${command} <storage>${second ? ` <${second}>` : ''}`;
+	rejectExtraPositionals(args, second ? 2 : 1, line);
+	const name = requirePositional(args, 0, `storage name.\n\n${line}`);
+	const value = second ? requirePositional(args, 1, `${second}.\n\n${line}`) : '';
+	return { args, name, value };
+}
+
+/** `--expires`: an ISO time, or a duration from now (`30d`, `12h`, `90m`, `2w`). */
+export function parseExpiry(value: string, now = Date.now()): string {
+	const duration = /^(\d+)\s*([mhdw])$/i.exec(value.trim());
+	if (duration) {
+		const units = { m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 } as const;
+		const unit = units[duration[2]!.toLowerCase() as keyof typeof units];
+		return new Date(now + Number(duration[1]) * unit).toISOString();
+	}
+	const parsed = Date.parse(value);
+	if (!Number.isFinite(parsed)) throw new UsageError(`--expires "${value}" is not a time or a duration like 30d.`);
+	if (parsed <= now) throw new UsageError('--expires must be in the future.');
+	return new Date(parsed).toISOString();
+}
+
+async function listKeys(argv: string[]): Promise<void> {
+	const parsed = parseKeyArgs(argv, 'list', null);
+	if (!parsed) return;
+	const { args, name } = parsed;
+	const client = await authenticatedClient();
+	const { keys, raw } = await client.listStorageKeys(name);
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	if (keys.length === 0) {
+		console.log(`No named keys on "${name}". Create one with \`skif storage keys create ${name} <name> --bucket <bucket>\`.`);
+		return;
+	}
+	console.log(storageKeysTable(keys));
+}
+
+async function createKey(argv: string[]): Promise<void> {
+	const parsed = parseKeyArgs(argv, 'create', 'key name');
+	if (!parsed) return;
+	const { args, name, value } = parsed;
+	const grants = parseGrants(args.strings('bucket'));
+	if (grants.length === 0)
+		throw new UsageError(`Name the buckets: skif storage keys create ${name} ${value} --bucket <b>[:read|:read-write] (repeatable).`);
+	const input: StorageKeyCreateInput = { name: value, grants };
+	const purpose = args.string('purpose');
+	if (purpose) input.purpose = purpose;
+	const expires = args.string('expires');
+	if (expires) input.expiresAt = parseExpiry(expires);
+	const client = await authenticatedClient();
+	const { key, raw } = await client.createStorageKey(name, input);
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	console.log(`Created key "${key.name}" (${key.id}, ${key.accessKeyId}) on "${name}" with ${grantsLabel(key.grants)}.`);
+	console.log('The node adds it within a minute.');
+	const steps = [`Secret:  skif storage keys reveal ${name} ${key.id}`, `Revoke:  skif storage keys revoke ${name} ${key.id}`];
+	console.log(`\nNext steps:\n${indent(steps)}`);
+}
+
+async function revealKey(argv: string[]): Promise<void> {
+	const parsed = parseKeyArgs(argv, 'reveal', 'key id');
+	if (!parsed) return;
+	const { args, name, value } = parsed;
+	const prefix = args.string('prefix') ?? 'AWS';
+	assertEnvPrefix(prefix);
+	const client = await authenticatedClient();
+	const { key, raw } = await client.revealStorageKey(name, value);
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	const { storage } = await client.getStorage(name);
+	// Env lines alone on stdout, so `> .env` and `eval` work.
+	console.log(storageKeyEnv(key, storage.publicUrl ?? storage.internalEndpoint.process, storage.region, prefix));
+	if (process.stderr.isTTY)
+		process.stderr.write(
+			`Key "${key.name}" (${grantsLabel(key.grants)}). ` +
+				`${storage.publicUrl ? 'Use path-style addressing.' : `Private: reachable on node ${nodeLabel(storage)} only.`}\n`,
+		);
+}
+
+async function revokeKey(argv: string[]): Promise<void> {
+	const parsed = parseKeyArgs(argv, 'revoke', 'key id');
+	if (!parsed) return;
+	const { args, name, value } = parsed;
+	const confirmed = await confirmOrRefuse(`Revoke key ${value} on "${name}"? Anything still signing with it is refused. [y/N] `, {
+		yes: args.boolean('yes'),
+		refusal: `Not confirmed: stdin is not a terminal, so there's no one to ask before revoking ${value}.`,
+	});
+	if (!confirmed) return cancelled();
+	const client = await authenticatedClient();
+	const { key, raw } = await client.revokeStorageKey(name, value);
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	console.log(`Revoked key "${key.name}" (${key.accessKeyId}). The node removes it within a minute.`);
 }
 
 async function showMetrics(argv: string[]): Promise<void> {

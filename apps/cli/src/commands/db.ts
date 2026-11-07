@@ -2,6 +2,7 @@ import { parseArgs, rejectExtraPositionals, requirePositional, type FlagSpec } f
 import { CliError, UsageError } from '../errors.ts';
 import {
 	DATABASE_ENGINES,
+	DATABASE_VARIANTS,
 	assertEnvPrefix,
 	databaseDetails,
 	databaseTable,
@@ -10,9 +11,13 @@ import {
 	parseCpus,
 	parseMegabytes,
 	type DatabaseCreateInput,
+	type DatabaseUpdateInput,
 } from '../databases.ts';
 import { formatBytes, formatTime, indent, printJson, renderTable } from '../output.ts';
 import { authenticatedClient } from './common.ts';
+import { credentialsCommand, credentialsUsage, isCredentialVerb } from './db-credentials.ts';
+import { pitrBackupCommand, pitrCommand, restoreToCommand } from './db-pitr.ts';
+import { replicaCommand } from './db-replicas.ts';
 import { confirmOrRefuse } from './run-operation.ts';
 
 /** Managed databases (docs/DATABASES.md). Every check lives on the server; this is a thin client. */
@@ -23,13 +28,17 @@ Commands:
   list                         List databases (the default); --all includes the trash
   create <name>                Create a database (PostgreSQL unless --engine says otherwise)
   info <name>                  Status, node, size vs budget, attached projects, top tables
-  attach <name> -p <project>   Connect a database to a project (injects <PREFIX>_URL, …)
+  update <name>                Resize, toggle the pooler, add extensions, or move to a newer --version
+  attach <name> -p <project>   Connect a database to a project (injects <PREFIX>_URL, …);
+                               --credential <id|role> connects as a named credential
   detach <name> -p <project>   Disconnect it; the app restarts without the variables
   delete <name>                Move it to the trash (restorable for 7 days)
   restore <name>               Bring it back from the trash
   purge <name>                 Permanently delete a trashed database and its data
   logs <name>                  Tail the database container journal (--follow to stream)
   credentials <name>           Print the connection URL (--json for user, password, host, port)
+  credentials list|create|rotate|revoke|reveal <name> …
+                               Named credentials (app, readonly, backup); see \`skif db credentials --help\`
   restart <name>|--all         Restart a database (and its pooler) or every database
   upgrade <name> --to <major>  Plan a PostgreSQL major upgrade; --apply queues a backup
   rotate <name>                Rotate the owner password (--monitor for the monitor role)
@@ -38,14 +47,22 @@ Commands:
   backup-delete <name> <id>    Delete one backup artifact
   restore-backup <name> <id>   Restore a backup into a new database (--as <new-name>)
   backup-policy <name>         Show or change the schedule and retention
+  pitr <name>                  Point-in-time recovery status; --enable / --disable (PostgreSQL 18)
+  pitr-backup <name>           Take a PITR base backup now (--type full|diff|incr)
+  restore-to <name>            Restore to a moment into a new database (--time <ISO> --as <new-name>)
+  replica list|add|remove|promote <name> …
+                               Postgres read replicas; see \`skif db replica --help\`
 
 Create options:
   -p, --project <slug>         Attach to this project right away (placed on its node)
-      --engine <engine>        postgres (default), mysql, mariadb, mongodb, valkey or redis
+      --engine <engine>        postgres (default), mysql, mariadb, mongodb, valkey, redis or
+                               clickhouse
       --prefix <PREFIX>        Env prefix for the attachment (default DATABASE; MONGODB for
-                               mongodb; REDIS for valkey and redis)
-      --version <version>      Engine version (postgres 17|16, mysql 8.4|9.7, mariadb 11.8|11.4,
-                               mongodb 8.0|9.0, valkey 9.1|8.1, redis 8.10|8.8)
+                               mongodb; REDIS for valkey and redis; CLICKHOUSE for clickhouse)
+      --version <version>      Engine version (postgres 18|17|16, mysql 8.4|9.7, mariadb 11.8|11.4,
+                               mongodb 8.0|9.0, valkey 9.1|8.1, redis 8.10|8.8, clickhouse 26.8|26.3)
+      --variant <variant>      Postgres image: standard (default), postgis or pg_cron (Postgres 18;
+                               adds that extension and keeps pgvector; fixed for the database's life)
       --placement <where>      auto (default), edge, or a node id
       --memory <size>          Memory limit, e.g. 256M or 1G (default 256M)
       --cpus <n>               CPU limit (default 1)
@@ -53,6 +70,16 @@ Create options:
       --[no-]pooler            PgBouncer sidecar (default on; postgres only; injects <PREFIX>_POOL_URL)
       --extension <name>       Enable an allowlisted extension, e.g. pg_trgm, uuid-ossp
                                (repeatable; postgres only)
+
+Update options:
+      --memory <size>, --cpus <n>, --storage <size>
+                               New limits; more memory re-checks the node's capacity
+      --[no-]pooler            Turn the PgBouncer sidecar on or off (postgres only)
+      --extension <name>       Enable another allowlisted extension (repeatable; postgres only;
+                               disabling never drops one)
+      --version <version>      Move forward in place: mysql, mariadb, valkey, redis and clickhouse.
+                               Asks first, since there is no way back. A PostgreSQL major goes
+                               through \`skif db upgrade\`; mongodb needs a backup and restore.
 
 Options:
   -y, --yes                    Don't ask for confirmation (required when stdin isn't a terminal)
@@ -66,7 +93,10 @@ database:credentials permission and every read is audited.
 Examples:
   skif db create main --project api
   skif db create cache --engine valkey --project api    # api receives REDIS_URL
+  skif db create events --engine clickhouse --project api  # api receives CLICKHOUSE_URL
   skif db attach main --project api --prefix DATABASE
+  skif db credentials create main --role readonly --purpose BI
+  skif db attach main --project reports --credential readonly
   psql "$(skif db credentials main)"     # on the node, or through ssh -L <port>:127.0.0.1:<port>`;
 
 const baseFlags: FlagSpec = {
@@ -82,6 +112,7 @@ const createFlags: FlagSpec = {
 	prefix: { type: 'string' },
 	engine: { type: 'string' },
 	version: { type: 'string' },
+	variant: { type: 'string' },
 	placement: { type: 'string' },
 	memory: { type: 'string' },
 	cpus: { type: 'string' },
@@ -94,6 +125,18 @@ const attachFlags: FlagSpec = {
 	...baseFlags,
 	project: { type: 'string', short: 'p' },
 	prefix: { type: 'string' },
+	credential: { type: 'string' },
+};
+
+const updateFlags: FlagSpec = {
+	...baseFlags,
+	yes: { type: 'boolean', short: 'y' },
+	version: { type: 'string' },
+	memory: { type: 'string' },
+	cpus: { type: 'string' },
+	storage: { type: 'string' },
+	pooler: { type: 'boolean' },
+	extension: { type: 'string', multiple: true },
 };
 
 const detachFlags: FlagSpec = { ...baseFlags, project: { type: 'string', short: 'p' } };
@@ -138,6 +181,7 @@ const subcommands: Record<string, (argv: string[]) => Promise<void>> = {
 	create: createDatabase,
 	info: showDatabase,
 	show: showDatabase,
+	update: updateDatabase,
 	attach: attachDatabase,
 	detach: detachDatabase,
 	delete: deleteDatabase,
@@ -152,6 +196,11 @@ const subcommands: Record<string, (argv: string[]) => Promise<void>> = {
 	'backup-delete': deleteBackup,
 	'restore-backup': restoreBackup,
 	'backup-policy': backupPolicy,
+	pitr: pitrCommand,
+	'pitr-backup': pitrBackupCommand,
+	'restore-to': restoreToCommand,
+	replica: replicaCommand,
+	replicas: replicaCommand,
 	restart: restartDatabase,
 	rotate: rotateCredentials,
 	upgrade: upgradeDatabase,
@@ -227,6 +276,12 @@ async function createDatabase(argv: string[]): Promise<void> {
 	if (prefix) input.envPrefix = prefix;
 	const version = args.string('version');
 	if (version) input.version = version;
+	const variant = args.string('variant');
+	if (variant !== undefined) {
+		if (!(DATABASE_VARIANTS as readonly string[]).includes(variant))
+			throw new UsageError(`--variant must be one of ${DATABASE_VARIANTS.join(', ')}.`);
+		input.variant = variant;
+	}
 	const placement = args.string('placement');
 	if (placement) input.placement = placement;
 	const memory = args.string('memory');
@@ -274,6 +329,51 @@ async function showDatabase(argv: string[]): Promise<void> {
 		console.log(`\nIn the trash. Restore with \`skif db restore ${database.name}\`; delete for good with \`skif db purge ${database.name}\`.`);
 }
 
+async function updateDatabase(argv: string[]): Promise<void> {
+	const parsed = parseNamed(argv, updateFlags, 'update');
+	if (!parsed) return;
+	const { args, name } = parsed;
+	const patch: DatabaseUpdateInput = {};
+	const memory = args.string('memory');
+	if (memory) patch.memoryMb = parseMegabytes(memory, '--memory');
+	const cpus = args.string('cpus');
+	if (cpus) patch.cpus = parseCpus(cpus);
+	const storage = args.string('storage');
+	if (storage) patch.storageMb = parseMegabytes(storage, '--storage');
+	if (args.has('pooler')) patch.pooler = args.boolean('pooler');
+	const version = args.string('version');
+	if (version) patch.version = version;
+	const added = args.strings('extension');
+	if (Object.keys(patch).length === 0 && added.length === 0)
+		throw new UsageError(
+			'Nothing to update. Pass --memory, --cpus, --storage, --pooler or --no-pooler, --extension or --version.',
+		);
+
+	const client = await authenticatedClient();
+	if (added.length > 0) {
+		// The server takes the full list; keep what is already enabled so a flag only ever adds.
+		const { database: current } = await client.getDatabase(name);
+		patch.extensions = [...new Set([...(current.extensions ?? []), ...added])];
+	}
+	if (version) {
+		const confirmed = await confirmOrRefuse(
+			`Move "${name}" to version ${version}? It restarts on the new image and cannot be moved back in place.`,
+			{ yes: args.boolean('yes'), refusal: 'Refusing to change the version without confirmation.' },
+		);
+		if (!confirmed) throw new UsageError('Cancelled.');
+	}
+	const { database, raw } = await client.updateDatabase(name, patch);
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	console.log(`Updated "${database.name}" (${engineLabel(database)}).`);
+	// Limits are not part of the activation (docs/DATABASES.md), so only the other fields restart it.
+	if (patch.version || patch.pooler !== undefined || patch.extensions)
+		console.log(`It restarts on node ${nodeLabel(database)} with the change. Follow it: skif db info ${database.name}`);
+	else console.log(`New limits apply the next time it restarts: skif db restart ${database.name}`);
+}
+
 async function attachDatabase(argv: string[]): Promise<void> {
 	const parsed = parseNamed(argv, attachFlags, 'attach');
 	if (!parsed) return;
@@ -281,16 +381,20 @@ async function attachDatabase(argv: string[]): Promise<void> {
 	const project = requireProject(args.string('project'), 'attach', name);
 	const prefix = args.string('prefix');
 	if (prefix !== undefined) assertEnvPrefix(prefix);
+	const credential = args.string('credential');
 	const client = await authenticatedClient();
 	const { attachment, warning, raw } = await client.attachDatabase(project, {
 		database: name,
 		...(prefix ? { envPrefix: prefix } : {}),
+		...(credential ? { credential } : {}),
 	});
 	if (args.boolean('json')) {
 		printJson(raw);
 		return;
 	}
-	console.log(`Attached "${attachment.databaseName}" to ${attachment.projectSlug} as ${attachment.envPrefix}.`);
+	console.log(
+		`Attached "${attachment.databaseName}" to ${attachment.projectSlug} as ${attachment.envPrefix}${attachment.credentialRole ? `, connecting as the ${attachment.credentialRole} credential` : ''}.`,
+	);
 	console.log(
 		`${attachment.projectSlug} receives ${attachment.envNames.join(', ')} at activation; a running app restarts on its own.`,
 	);
@@ -393,6 +497,11 @@ async function purgeDatabase(argv: string[]): Promise<void> {
 }
 
 async function showCredentials(argv: string[]): Promise<void> {
+	if (isCredentialVerb(argv)) return credentialsCommand(argv);
+	if (argv.includes('--help') || argv.includes('-h')) {
+		console.log(credentialsUsage);
+		return;
+	}
 	const parsed = parseNamed(argv, baseFlags, 'credentials');
 	if (!parsed) return;
 	const { args, name } = parsed;
@@ -566,7 +675,7 @@ async function listBackups(argv: string[]): Promise<void> {
 	}
 	console.log(
 		renderTable(
-			['ID', 'KIND', 'STATUS', 'SIZE', 'CREATED', 'VERIFIED', 'EXPIRES'],
+			['ID', 'KIND', 'STATUS', 'SIZE', 'CREATED', 'VERIFIED', 'EXPIRES', 'TARGET'],
 			backups.map((backup) => [
 				backup.id,
 				backup.kind,
@@ -575,9 +684,16 @@ async function listBackups(argv: string[]): Promise<void> {
 				formatTime(backup.finishedAt ?? backup.startedAt),
 				backup.verifiedAt ? formatTime(backup.verifiedAt) : 'no',
 				backup.expiresAt ? formatTime(backup.expiresAt) : 'never',
+				backup.target ? `${backup.target.name}${backup.target.available ? '' : ' (unavailable)'}` : '—',
 			]),
 		),
 	);
+	const unavailable = backups.filter((backup) => backup.target && !backup.target.available);
+	if (unavailable.length > 0)
+		console.log(
+			`\n${unavailable.length} backup${unavailable.length === 1 ? ' is' : 's are'} on a deleted backup target and cannot be restored. ` +
+				'Add a target with the same location to reconnect them; `--json` shows each location.',
+		);
 }
 
 async function createBackup(argv: string[]): Promise<void> {

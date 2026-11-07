@@ -69,8 +69,12 @@ and the blocklist check pass, and says which one failed.
 ### 3.1 Placement: the mail node
 
 The mail node is a platform setting (Settings → Email, `settings` key `email.node_id`), not a
-placement role: a platform admin picks one node whose agent advertises the `mail` capability and
-which has a public address. It runs the MTA and accepts SMTP on public
+placement role: a platform admin picks one node whose agent advertises the `mail` capability, and
+its public IPv4 (`email.ipv4`). That IP is its own setting because `nodes.public_address` is the
+WireGuard upstream the edge proxies to, which the edge itself never has. Left blank, Skiff uses a
+public IPv4 in the node's address, or for the edge the platform host's A record in the managed
+Cloudflare zone (its origin, even when proxied), and otherwise asks. It never takes it from public
+DNS (a proxied host answers with Cloudflare's IPs). Private, CGNAT and loopback ranges are refused. It runs the MTA and accepts SMTP on public
 **25** (inbound MX, bounces, complaint reports), **587** (submission, STARTTLS) and **465**
 (submission, implicit TLS). It must have a public IPv4 with a PTR record; IPv6 egress is off unless
 its own PTR checks out (Gmail is strict on IPv6).
@@ -219,9 +223,25 @@ adds SPF alignment and comes in phase 3.
 
 ### 4.3 Single addresses
 
-An **email address identity** (`email_addresses`) is verified by a link sent to it. It does not let
-an org send *from* the address (that needs the domain). It exists for the sandbox: an org in sandbox
-may only send to addresses at its own verified domains or to verified addresses (§7.3).
+An **email address identity** (`email_addresses`), shown to users as a *sandbox recipient*, is
+verified by a link sent to it. It does not let an org send *from* the address (that needs the
+domain). It exists for the sandbox: an org in sandbox may only send to addresses at its own verified
+domains or to verified addresses (§7.3).
+
+- **Adding** one (`email:update`) stores the lowercased address with the SHA-256 of a single-use
+  32-byte token and mails `<platform origin>/verify-email-address?token=…` through the **platform's
+  own SMTP** (D22, `SKIFF_SMTP_*`), never the org's mail node: the org isn't trusted yet. Without
+  platform SMTP the add is refused (`409 platform_mail_unavailable`); if the send fails nothing is
+  stored. Adding an address that is already verified changes nothing.
+- **The link** lasts 24 hours. Adding a pending address again sends a fresh link and voids the old
+  one, at most once a minute and 5 times per link lifetime (`sent_at`, `send_count`, migration 0066).
+  An org holds at most 50 addresses, 10 of them pending (`EMAIL_SANDBOX_ADDRESS_LIMITS`).
+- **The public page** shows the address and the org's name and asks for a click; only the POST
+  confirms, so mail scanners that fetch links can't. Confirming sets `verified_at`, clears the token
+  and bumps the pushed mail state so SMTP submissions see the address within seconds. Expired links
+  answer `410 link_expired`, used or unknown ones `404 invalid_link`.
+- **Removing** one makes sends to it refused again while the org is in sandbox; adding it back
+  needs a new confirmation. Every step is audited (`email.address.add|resend|verify|remove`).
 
 ---
 
@@ -407,6 +427,22 @@ Every org starts in **sandbox**: it may only send to its own verified domains an
 (default 10,000 a day, 10 a second). An org whose email a platform admin sets up (first domain or credential) starts `active`. The
 limits are org quota fields alongside the existing quotas (plan 16).
 
+**Production access requests** (`email_access_requests`, migration 0066) are how an org asks:
+
+- An org **owner or admin** (`email:update` and the role) submits a use case (20–2,000 characters),
+  the expected messages a day and optionally a website. Refused when the org is already `active`,
+  while it is `paused` (a platform admin resumes it first), or while another request is pending (one
+  pending request per org, a partial unique index). Every platform admin gets a notification that
+  links to `/email/requests`.
+- A **platform admin** (own dashboard session, `canAdministerPlatform`) approves or denies it.
+  Approving moves the org to `active` with the limits given (the active defaults otherwise) in one
+  transaction; denying needs a reason and leaves the org in sandbox, free to ask again. Moving an
+  org out by hand in Settings → Email answers its pending request as approved. The requester is
+  emailed the outcome (and the reason or note) through platform SMTP.
+- Requests are kept: the org sees its latest (`GET /email/access-request`), platform admins the
+  queue, pending first (`GET /email/access-requests`). Audited as
+  `email.access_request.create|approve|deny`.
+
 ---
 
 ## 8. Events, logs and webhooks (D120)
@@ -444,7 +480,9 @@ suppressions), `email:send`, `email:update` (domains, routes, webhooks, suppress
 default, never on MCP, D58). Platform-level controls (mail node, sandbox, pause, relay) are platform
 admin only.
 
-**REST** (`/api/v1/email/*`): `domains` (CRUD, `:name/check`, `:name/rotate-dkim`), `addresses`,
+**REST** (`/api/v1/email/*`): `domains` (CRUD, `:name/check`, `:name/rotate-dkim`), `addresses`
+(sandbox recipients: list, add or re-send, `DELETE :address`), `access-request` (the org's latest
+request, `POST` to ask), `access-requests` (platform admin queue, `?status`, `POST :id` to decide),
 `send`, `send-batch`, `messages` (list/search, `:id` with events), `suppressions`, `credentials`,
 `routes`, `webhooks`, and `projects/:slug/email` for attach/detach. Documented in API.md when built.
 
@@ -452,23 +490,43 @@ admin only.
 user exactly what to paste), `create_email_domain`, `check_email_domain`, `send_email` (requires
 human confirmation by elicitation and is refused while the org is in sandbox to non-verified
 recipients), `list_email_messages`, `get_email_message`, `list_email_suppressions`,
-`remove_email_suppression` (confirmed), and `list/create/delete_email_route`. There are no credential
-tools.
+`remove_email_suppression` (confirmed), `list_email_addresses`, `add_email_address` and
+`remove_email_address` (both confirmed: adding mails a third party), and
+`list/create/delete_email_route`. There are no credential tools, and none to request or decide
+production access; `get_email_status` points a sandboxed org at the request.
 
 **CLI:** `skif email domains add|list|check|rotate|rm`, `skif email send --from … --to … --subject …
 [--html file] [--text file]`, `skif email log [--follow]`, `skif email suppressions
-list|add|rm`, `skif email credentials create|list|revoke`, `skif email attach|detach`, `skif email
-routes …`, `skif email webhooks …`.
+list|add|rm`, `skif email addresses list|add|rm`, `skif email request-access --use-case …
+--volume … [--website …]` (no flags: show the latest request), `skif email credentials
+create|list|revoke`, `skif email attach|detach`, `skif email routes …`, `skif email webhooks …`.
 
 **Dashboard: Email.**
+- **Setup guide** (`/email/setup`): a seven-step checklist from a fresh install to an app sending
+  real mail, each step judged from live state. The steps: choose the mail node, point reverse DNS
+  at it (checked live from the control plane: PTR names the HELO host and that host resolves back,
+  preflight check 3), add a domain, publish its records (the first unverified domain's records
+  inline, with Check DNS now), send a test (done on the first `delivered`), connect an app (an SMTP
+  credential exists or mail arrived other than from the dashboard), and leave the sandbox.
+  Platform-admin steps say so and tell other members whom to ask. The "not set up" state and the
+  overview, while no domain is verified, link to it.
 - **Domains:** a records table with copy buttons and a live check per record, "Create in
   Cloudflare", DKIM rotation, and sending/receiving toggles.
 - **Activity:** message log with search by recipient, message id or tag, and a per-message event
   timeline.
+- **Sandbox** (`/email/sandbox`): the org's state; the production access request (form for owners
+  and admins, the pending request, or the last denial's reason); and the sandbox recipients with
+  add, resend and remove. The overview's Sending panel and the setup guide's last step link to it.
+- **Access requests** (`/email/requests`, platform admin, in the Platform group of the Email nav):
+  pending requests with their use case and volume, approve (with limits) or deny (with a reason),
+  and the decided history.
 - **Suppressions.**
 - **Routes.**
 - **Webhooks.**
 - **Sending:** credentials, attachments, the org's state, limits and bounce/complaint gauges.
+- **Send a test:** compose one message (from a verified sending domain, to, subject, text or
+  HTML) through `EmailService.send`, so limits, suppressions and the sandbox apply; it is tagged
+  `source=dashboard-test` and opens the message's timeline in Activity. Domain pages link to it.
 - **Settings → Email** (platform admin): §3.3.
 
 **Flag:** `SKIFF_FEATURE_EMAIL`, default on. Every Email page shows a calm "not set up" state with a

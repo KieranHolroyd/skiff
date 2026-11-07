@@ -12,7 +12,8 @@
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"lint": "prettier --check . && eslint .",
 		"format": "prettier --write .",
-		"create-user": "bun scripts/create-user.ts"
+		"create-user": "bun scripts/create-user.ts",
+		"reset-password": "bun scripts/reset-password.ts"
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
@@ -30,6 +31,9 @@
 		"@tanstack/svelte-table": "^9.3.1",
 		"@tanstack/svelte-virtual": "^3.13.52",
 		"@types/node": "^26",
+		"@xterm/addon-fit": "0.10.0",
+		"@xterm/addon-web-links": "0.11.0",
+		"@xterm/xterm": "5.5.0",
 		"bits-ui": "^2.20.0",
 		"cn": "^0.5.0",
 		"eslint": "^10.4.1",
@@ -68,6 +72,7 @@
 		"@skiff/studio": "workspace:*",
 		"@skiff/core": "workspace:*",
 		"@skiff/db": "workspace:*",
+		"@skiff/docs": "workspace:*",
 		"@skiff/site-config": "workspace:*",
 		"better-auth": "1.7.15",
 		"drizzle-orm": "^0.45.4",

@@ -66,7 +66,7 @@ export class ServiceActionsService {
 
 	/**
 	 * Queue a backup for every live database that does not already have one running. Engines
-	 * without backups (Valkey, Redis) are not candidates, so they are neither queued nor skipped.
+	 * without backups (none today; unknown engines from old rows) are neither queued nor skipped.
 	 */
 	backupAllDatabases(principal: Principal): DatabaseBackupAllResult {
 		requirePermission(principal, 'database:update');

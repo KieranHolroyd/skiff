@@ -151,6 +151,12 @@ Record the kernel, `podman --version` and `podman info` with the result.
 - **Privileged helper / systemd / Quadlet / netavark aliases are not automated.** The container
   lane cannot run the helper as root, install units, or prove user/mount ownership. That is the
   manual checklist above, and it remains the release gate for destructive managed-data flags.
+- **App-container user namespaces are not exercised here.** Project and runner units render
+  `UserNS=auto:size=65536` and use `:U` on `/data`, read-write volumes and the secret files; the
+  helper adds the `containers` range to `/etc/subuid` and `/etc/subgid` before the first start. A
+  live node must confirm that Podman accepts the unit, that `:U` re-owns an existing root-owned
+  `/data` on the first start, that `ro,Z,U` and `ro,Z` mounts are accepted, and that a read-only
+  reader can read what another workload wrote under the permissions it set.
 - **Control-plane REST/MCP routes are not in this lane.** `tests/rest.e2e.ts` and
   `tests/mcp-oauth.e2e.ts` cover surfaces; this harness calls the service-layer clients
   (`RustfsApi`, `S3Client`, Bun SQL) against real containers. A route/auth regression needs the

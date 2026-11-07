@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import {
+	emailAddressTable,
 	emailDomainTable,
 	emailRecordsTable,
 	emailStatusReport,
 	listFrom,
 	parseAddressList,
+	parseDailyVolume,
 	parseTags,
 	takeNewMessages,
 	viewFrom,
@@ -143,5 +145,36 @@ describe('skif email parsing', () => {
 		expect(takeNewMessages([message('em_2'), message('em_1')], seen)).toEqual([]);
 		const next = takeNewMessages([message('em_3'), message('em_2', 'delivered'), message('em_1')], seen);
 		expect(next.map((item) => `${item.id}:${item.status}`)).toEqual(['em_2:delivered', 'em_3:accepted']);
+	});
+});
+
+describe('skif email sandbox', () => {
+	test('--volume takes whole numbers and k/m shorthands', () => {
+		expect(parseDailyVolume('500')).toBe(500);
+		expect(parseDailyVolume('10,000')).toBe(10_000);
+		expect(parseDailyVolume('10k')).toBe(10_000);
+		expect(parseDailyVolume('1.5M')).toBe(1_500_000);
+		expect(() => parseDailyVolume(undefined)).toThrow('--volume is required');
+		expect(() => parseDailyVolume('0')).toThrow('between 1 and 10,000,000');
+		expect(() => parseDailyVolume('20m')).toThrow('between 1 and 10,000,000');
+		expect(() => parseDailyVolume('some')).toThrow('whole number');
+	});
+
+	test('a pending address whose link ran out shows as expired', () => {
+		const table = emailAddressTable(
+			[
+				{
+					id: 'ea_1',
+					address: 'me@gmail.com',
+					status: 'pending',
+					verifiedAt: null,
+					sentAt: '2026-11-06T10:00:00.000Z',
+					expiresAt: '2026-11-07T10:00:00.000Z',
+					createdAt: '2026-11-06T10:00:00.000Z',
+				},
+			],
+			Date.parse('2026-11-07T11:00:00.000Z'),
+		);
+		expect(table).toContain('link expired');
 	});
 });

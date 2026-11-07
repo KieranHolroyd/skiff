@@ -8,9 +8,12 @@
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import { toast } from 'svelte-sonner';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import BellOffIcon from '@lucide/svelte/icons/bell-off';
 	import CheckCheckIcon from '@lucide/svelte/icons/check-check';
+	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import UndoIcon from '@lucide/svelte/icons/undo-2';
+	import { assistant } from '#lib/assistant/assistant.svelte.js';
 	import DataTable, { type DataColumn } from '#lib/components/skiff/DataTable.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
@@ -21,7 +24,7 @@
 	import { formatValue } from '../../dashboards/_lib/units.js';
 	import { acknowledge, keys } from './api.js';
 	import Labels from './Labels.svelte';
-	import { activeFor, labelLine, SEVERITY_RANK, STATE_RANK } from './rules.js';
+	import { activeFor, alertAskPrompt, labelLine, SEVERITY_RANK, STATE_RANK } from './rules.js';
 	import SeverityBadge from './SeverityBadge.svelte';
 	import StateBadge from './StateBadge.svelte';
 
@@ -48,6 +51,9 @@
 
 	const queryClient = useQueryClient();
 	let busy = $state<string | null>(null);
+
+	/** The assistant is optional (Settings → Assistant); the action only exists when it is on. */
+	const assistantEnabled = $derived(page.data.assistant?.enabled === true);
 
 	const alerting = (row: AlertInstanceView) => row.state === 'firing' || row.state === 'nodata';
 
@@ -122,7 +128,7 @@
 			cell: sinceCell,
 			class: 'hidden text-xs text-muted-foreground lg:table-cell'
 		},
-		...(canSilence
+		...(canSilence || assistantEnabled
 			? [{ id: 'actions', header: '', srHeader: 'Actions', cell: actionsCell, class: 'w-0 pr-4' }]
 			: [])
 	]);
@@ -181,6 +187,17 @@
 {#snippet actionsCell(row: AlertInstanceView)}
 	{@const pending = busy === `${row.ruleId}:${row.fingerprint}`}
 	<span class="flex justify-end gap-1">
+		{#if assistantEnabled && alerting(row)}
+			<Button
+				variant="ghost"
+				size="sm"
+				title="Ask the assistant to explain this alert"
+				onclick={() => assistant.ask(alertAskPrompt(row, now, unitOf(row.ruleId)))}
+				aria-label="Ask AI about {row.ruleName}: {labelLine(row.labels, row.labelNames)}"
+			>
+				<SparklesIcon /><span class="hidden xl:inline">Ask AI</span>
+			</Button>
+		{/if}
 		{#if alerting(row) || row.acknowledgedBy}
 			<Button
 				variant="ghost"

@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import { unzipSync } from 'fflate';
 import { deployments, releases } from '@skiff/db';
 import { contentUrl } from '@skiff/contracts';
-import { hmac, safeEqual, siteKeyFor } from '@skiff/core';
+import { hmac, safeEqual } from '@skiff/core';
 import { compilePattern } from '@skiff/site-config';
 import type { RequestEvent } from '@sveltejs/kit';
 import { platformOrigin } from './config.js';
@@ -77,7 +77,7 @@ export async function serveDevContent(event: RequestEvent): Promise<Response> {
 	const route = core.access.resolveContentHost(host);
 	if (!route) return text(`Unknown host: ${host}`, 404);
 
-	const siteKey = siteKeyFor(core.ctx.config.siteCookieSecret, route.project.id);
+	const siteKey = core.access.siteKeyFor(route.project);
 	const now = Math.floor(Date.now() / 1000);
 
 	if (event.url.pathname === '/_skiff/callback')

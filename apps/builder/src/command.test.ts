@@ -3,6 +3,8 @@ import {
 	BuildValidationError,
 	directRunArgs,
 	gitAuthEnv,
+	gitSshEnv,
+	isSshRepoUrl,
 	redactSecret,
 	validateGitRef,
 	safeRelativeDir,
@@ -133,6 +135,39 @@ describe('clone credentials', () => {
 	test('redacts a token from git output', () => {
 		expect(redactSecret('fatal: https://x-access-token:secret@github.com/x failed secret', 'secret')).toBe(
 			'fatal: https://***@github.com/x failed ***',
+		);
+	});
+});
+
+describe('SSH deploy key', () => {
+	const ssh = { keyPath: '/etc/skiff/git-deploy-key', knownHostsPath: null, fallbackKnownHostsPath: '/var/lib/skiff-builder/known_hosts' };
+
+	test('recognises only SSH URL forms', () => {
+		expect(isSshRepoUrl('git@github.com:acme/app.git')).toBe(true);
+		expect(isSshRepoUrl('ssh://git@git.corp:2222/acme/app.git')).toBe(true);
+		expect(isSshRepoUrl('https://github.com/acme/app.git')).toBe(false);
+		expect(isSshRepoUrl('git://git.corp/acme/app.git')).toBe(false);
+		expect(isSshRepoUrl('https://me@github.com/x.git')).toBe(false);
+	});
+
+	test('passes the key through GIT_SSH_COMMAND for SSH URLs, recording hosts on first use', () => {
+		expect(gitSshEnv('git@github.com:acme/app.git', ssh)).toEqual({
+			GIT_SSH_COMMAND:
+				"ssh -i '/etc/skiff/git-deploy-key' -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile='/var/lib/skiff-builder/known_hosts'",
+		});
+	});
+
+	test('a pinned known_hosts file turns on strict host checking', () => {
+		const env = gitSshEnv('ssh://git@git.corp/acme/app.git', { ...ssh, knownHostsPath: '/etc/skiff/git-known-hosts' });
+		expect(env.GIT_SSH_COMMAND).toContain('-o StrictHostKeyChecking=yes');
+		expect(env.GIT_SSH_COMMAND).toContain("-o UserKnownHostsFile='/etc/skiff/git-known-hosts'");
+	});
+
+	test('never applies to other URLs or without a key, and refuses shell syntax in paths', () => {
+		expect(gitSshEnv('https://github.com/acme/app.git', ssh)).toEqual({});
+		expect(gitSshEnv('git@github.com:acme/app.git', { ...ssh, keyPath: null })).toEqual({});
+		expect(() => gitSshEnv('git@github.com:acme/app.git', { ...ssh, fallbackKnownHostsPath: "/tmp/b'; touch /x'" })).toThrow(
+			BuildValidationError,
 		);
 	});
 });

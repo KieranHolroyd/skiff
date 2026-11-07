@@ -14,6 +14,8 @@ export const RELEASE_COMMANDS: Array<{ path: string; script: string; runner: 'sh
 	{ path: '/usr/local/sbin/skiff-restore-drill', script: 'repo/scripts/skiff-restore-drill.sh', runner: 'sh' },
 	{ path: '/usr/local/sbin/skiff-alert', script: 'repo/scripts/skiff-alert.ts', runner: 'bun' },
 	{ path: '/usr/local/sbin/skiff-recovery-kit', script: 'repo/scripts/recovery-kit.ts', runner: 'bun' },
+	{ path: '/usr/local/sbin/skiff-rotate-master-key', script: 'repo/scripts/rotate-master-key.ts', runner: 'bun' },
+	{ path: '/usr/local/sbin/skiff-uninstall', script: 'repo/scripts/uninstall.sh', runner: 'sh' },
 ];
 
 export interface CommandPaths {

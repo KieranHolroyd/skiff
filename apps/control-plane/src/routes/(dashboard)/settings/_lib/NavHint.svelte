@@ -5,6 +5,7 @@
 		members: number | null;
 		invitations: number | null;
 		apiKeys: number | null;
+		connectedApps: number | null;
 		platform: {
 			availability: string | null;
 			email: boolean;
@@ -76,6 +77,8 @@
 	{/if}
 {:else if id === 'api-keys'}
 	{@render countHint(hints.apiKeys)}
+{:else if id === 'connected-apps'}
+	{@render countHint(hints.connectedApps)}
 {:else if id === 'notifications' && notifications}
 	{@render dotHint(notifications.tone, notifications.label)}
 {:else if id === 'assistant' && hints.platform?.assistant}

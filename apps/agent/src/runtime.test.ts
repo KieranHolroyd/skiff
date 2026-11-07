@@ -137,6 +137,13 @@ class FakeHelper implements HelperApi {
 	async rotateDatabaseRole(): Promise<void> {}
 	async applyDatabaseCredential(): Promise<void> {}
 	async restartPooler(): Promise<void> {}
+	async replicationConfigure(): Promise<void> {}
+	async replicationStatus(): Promise<[]> {
+		return [];
+	}
+	async replicaPromote(): Promise<never> {
+		throw new Error('replicaPromote not used in this test');
+	}
 	async pitrConfigure(): Promise<never> {
 		throw new Error('pitrConfigure not used in this test');
 	}
@@ -939,6 +946,16 @@ describe('database health probe', () => {
 		expect(new TextDecoder().decode(noauth.received[0]!)).toBe('PING\r\n');
 		const loading = listen(new TextEncoder().encode('-LOADING Valkey is loading the dataset in memory\r\n'));
 		expect(await probeDatabasePort(loading.port, signal, { engine: 'redis', timeoutMs: 500 })).toBe(false);
+	});
+
+	test('ClickHouse is healthy once GET /ping answers 200, and not on any other status', async () => {
+		const signal = new AbortController().signal;
+		const ok = listen(new TextEncoder().encode('HTTP/1.0 200 OK\r\nContent-Length: 4\r\n\r\nOk.\n'));
+		expect(await probeDatabasePort(ok.port, signal, { engine: 'clickhouse', timeoutMs: 500 })).toBe(true);
+		expect(new TextDecoder().decode(ok.received[0]!)).toStartWith('GET /ping HTTP/1.0\r\n');
+		const unavailable = listen(new TextEncoder().encode('HTTP/1.1 503 Service Unavailable\r\n\r\n'));
+		expect(await probeDatabasePort(unavailable.port, signal, { engine: 'clickhouse', timeoutMs: 500 })).toBe(false);
+		expect(await probeDatabasePort(listen(null).port, signal, { engine: 'clickhouse', timeoutMs: 200 })).toBe(false);
 	});
 });
 

@@ -9,7 +9,13 @@
 	import InboxIcon from '@lucide/svelte/icons/inbox';
 	import ListOrderedIcon from '@lucide/svelte/icons/list-ordered';
 	import MemoryStickIcon from '@lucide/svelte/icons/memory-stick';
+	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
+	import EraserIcon from '@lucide/svelte/icons/eraser';
+	import EyeIcon from '@lucide/svelte/icons/eye';
 	import EyeOffIcon from '@lucide/svelte/icons/eye-off';
+	import PlusIcon from '@lucide/svelte/icons/plus';
+	import SendIcon from '@lucide/svelte/icons/send';
+	import Undo2Icon from '@lucide/svelte/icons/undo-2';
 	import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import PlugIcon from '@lucide/svelte/icons/plug';
@@ -26,7 +32,9 @@
 	import Notice from '#lib/components/skiff/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
+	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
+	import { Textarea } from '#lib/components/ui/textarea/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as InputGroup from '#lib/components/ui/input-group/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
@@ -53,6 +61,7 @@
 	import { brokerChart, brokerTotals, streamAgeSeconds } from '../_lib/broker-series.js';
 	import { purgeCountdown } from '../../_lib/operations/copy.js';
 	import BrokerHeader from '../_lib/BrokerHeader.svelte';
+	import PeekSheet from '../_lib/PeekSheet.svelte';
 	import { brokerSubnavKey } from '../_lib/subnav.js';
 	import { useSubnavLocal } from '#lib/nav/subnav-local.svelte.js';
 	import { BROKER_DEFAULT_TAB, BROKER_TABS, type BrokerTab } from '../_lib/broker-tabs.js';
@@ -183,6 +192,68 @@
 
 	const streams = $derived(data.queues?.streams ?? []);
 	let expanded = $state<Record<string, boolean>>({});
+
+	// --- queue tools: run by the broker's node (D124) ---------------------------------------------
+
+	const running = $derived(broker.status === 'running' && !deleted);
+	const queueNames = $derived(streams.flatMap((stream) => (stream.queue ? [stream.queue] : [])));
+	let createQueueOpen = $state(false);
+	let sendOpen = $state(false);
+	let sendQueue = $state('');
+	let sendType = $state<'json' | 'text'>('json');
+	let sendBody = $state('{\n  "hello": "world"\n}');
+	let redriveOpen = $state(false);
+	let redriveFrom = $state('');
+	let redriveTo = $state('');
+	let peekStream = $state<string | null>(null);
+	const peekLabel = $derived(streams.find((stream) => stream.stream === peekStream)?.queue ?? null);
+
+	const sendBodyError = $derived.by(() => {
+		if (sendType !== 'json') return '';
+		try {
+			JSON.parse(sendBody);
+			return '';
+		} catch {
+			return 'Not valid JSON yet. Fix it, or send it as text.';
+		}
+	});
+
+	function openSend(queue = '') {
+		sendQueue = queue || queueNames[0] || '';
+		sendOpen = true;
+	}
+
+	function openRedrive(from: string) {
+		redriveFrom = from;
+		redriveTo = from.endsWith('-dlq') ? from.slice(0, -4) : (queueNames.find((name) => name !== from) ?? '');
+		redriveOpen = true;
+	}
+
+	function purge(stream: { stream: string; queue: string | null; messages: number }) {
+		askConfirm({
+			title: `Purge ${stream.queue ?? stream.stream}?`,
+			description: `Removes all ${count(stream.messages)} messages for good. The stream and its consumers stay, so producers and the consuming function keep working.`,
+			confirmLabel: 'Purge messages',
+			tone: 'danger',
+			typeToConfirm: stream.queue ?? stream.stream,
+			action: '?/purgeStream',
+			fields: { stream: stream.stream }
+		});
+	}
+
+	function removeStream(stream: { stream: string; queue: string | null }) {
+		askConfirm({
+			title: `Delete ${stream.stream}?`,
+			description: stream.queue
+				? 'The stream, its consumer and every message go. A producer or consumer that uses this queue creates an empty stream again on its next use.'
+				: 'The stream, its consumers and every message go. Apps that use it must create it again.',
+			confirmLabel: 'Delete stream',
+			tone: 'danger',
+			typeToConfirm: stream.queue ?? stream.stream,
+			action: '?/deleteStream',
+			fields: { stream: stream.stream }
+		});
+	}
 
 	// --- settings --------------------------------------------------------------------------------
 
@@ -392,9 +463,13 @@
 		>
 			{#snippet actions()}
 				{#if data.queues?.at}
-					<span class="text-xs text-muted-foreground" title={formatDateTime(data.queues.at)}
+					<span class="hidden text-xs text-muted-foreground sm:inline" title={formatDateTime(data.queues.at)}
 						>Listed {formatRelative(data.queues.at)}</span
 					>
+				{/if}
+				{#if can.update && running}
+					<Button variant="outline" size="sm" onclick={() => openSend()}><SendIcon />Send message</Button>
+					<Button variant="outline" size="sm" onclick={() => (createQueueOpen = true)}><PlusIcon />New queue</Button>
 				{/if}
 			{/snippet}
 			{#if !data.queues?.at}
@@ -430,7 +505,8 @@
 							<Table.Head class="text-right">Pending</Table.Head>
 							<Table.Head class="hidden text-right md:table-cell">Awaiting ack</Table.Head>
 							<Table.Head class="hidden text-right lg:table-cell">Redelivered</Table.Head>
-							<Table.Head class="pr-4 text-right">Oldest</Table.Head>
+							<Table.Head class="text-right">Oldest</Table.Head>
+							<Table.Head class="w-10 pr-4"><span class="sr-only">Actions</span></Table.Head>
 						</Table.Row>
 					</Table.Header>
 					<Table.Body>
@@ -471,7 +547,38 @@
 								<Table.Cell class="text-right font-mono text-xs tabular-nums">{count(stream.pending)}</Table.Cell>
 								<Table.Cell class="hidden text-right font-mono text-xs tabular-nums md:table-cell">{count(stream.ackPending)}</Table.Cell>
 								<Table.Cell class="hidden text-right font-mono text-xs tabular-nums lg:table-cell">{count(stream.redelivered)}</Table.Cell>
-								<Table.Cell class="pr-4 text-right font-mono text-xs tabular-nums">{oldest === null ? '—' : age(oldest)}</Table.Cell>
+								<Table.Cell class="text-right font-mono text-xs tabular-nums">{oldest === null ? '—' : age(oldest)}</Table.Cell>
+								<Table.Cell class="pr-4">
+									{#if can.update && running}
+										<DropdownMenu.Root>
+											<DropdownMenu.Trigger>
+												{#snippet child({ props })}
+													<Button {...props} variant="ghost" size="icon" class="size-7" aria-label="Actions for {stream.queue ?? stream.stream}">
+														<EllipsisIcon class="size-4" />
+													</Button>
+												{/snippet}
+											</DropdownMenu.Trigger>
+											<DropdownMenu.Content align="end" class="w-52">
+												<DropdownMenu.Item onSelect={() => (peekStream = stream.stream)}><EyeIcon />Peek messages</DropdownMenu.Item>
+												{#if stream.queue}
+													<DropdownMenu.Item onSelect={() => openSend(stream.queue ?? '')}><SendIcon />Send test message</DropdownMenu.Item>
+													<DropdownMenu.Item onSelect={() => openRedrive(stream.queue ?? '')} disabled={stream.messages === 0}>
+														<Undo2Icon />Move messages to…
+													</DropdownMenu.Item>
+												{/if}
+												{#if can.delete}
+													<DropdownMenu.Separator />
+													<DropdownMenu.Item variant="destructive" onSelect={() => purge(stream)} disabled={stream.messages === 0}>
+														<EraserIcon />Purge messages
+													</DropdownMenu.Item>
+													<DropdownMenu.Item variant="destructive" onSelect={() => removeStream(stream)}>
+														<TrashIcon />Delete stream
+													</DropdownMenu.Item>
+												{/if}
+											</DropdownMenu.Content>
+										</DropdownMenu.Root>
+									{/if}
+								</Table.Cell>
 							</Table.Row>
 							{#if open}
 								{#each stream.consumers as consumer (consumer.name)}
@@ -490,6 +597,7 @@
 										<Table.Cell class="text-right font-mono text-xs tabular-nums">{count(consumer.pending)}</Table.Cell>
 										<Table.Cell class="hidden text-right font-mono text-xs tabular-nums md:table-cell">{count(consumer.ackPending)}</Table.Cell>
 										<Table.Cell class="hidden text-right font-mono text-xs tabular-nums lg:table-cell">{count(consumer.redelivered)}</Table.Cell>
+										<Table.Cell></Table.Cell>
 										<Table.Cell class="pr-4"></Table.Cell>
 									</Table.Row>
 								{/each}
@@ -500,7 +608,8 @@
 			{/if}
 			{#snippet footer()}
 				Pending is what consumers have not been handed yet; awaiting ack was delivered and is still being
-				processed. Work-queue streams drop a message once it is acknowledged.
+				processed. Work-queue streams drop a message once it is acknowledged. Queue tools run on {nodeLabel},
+				so changes show here straight away; the rest of the listing refreshes once a minute.
 			{/snippet}
 		</Panel>
 	{:else if tab === 'metrics'}
@@ -833,5 +942,105 @@
 				{#if errors.storageMb}<Field.Error>{errors.storageMb}</Field.Error>{/if}
 			</Field.Field>
 		</div>
+	</FormDialog>
+{/if}
+
+<PeekSheet bind:stream={peekStream} label={peekLabel} canDelete={can.delete} />
+
+{#if can.update && running}
+	<FormDialog
+		bind:open={createQueueOpen}
+		icon={PlusIcon}
+		title="New queue"
+		description="Creates the queue's stream now instead of on first use: a work queue (SKIFF_Q_<name>) that a function consumes with a queue trigger and producers reach with a queue binding."
+		action="?/createQueue"
+		submitLabel="Create queue"
+	>
+		<Field.Field data-invalid={errors.queue ? true : undefined}>
+			<Field.Label for="queue-name">Queue name</Field.Label>
+			<Input
+				id="queue-name"
+				name="queue"
+				required
+				maxlength={63}
+				pattern="[a-z0-9]([a-z0-9-]*[a-z0-9])?"
+				placeholder="jobs"
+				spellcheck="false"
+				class="font-mono text-sm"
+			/>
+			<Field.Description>Lowercase letters, digits and hyphens, as on Cloudflare. Use it in wrangler.jsonc as <code class="font-mono">queues.producers[].queue</code>.</Field.Description>
+		</Field.Field>
+	</FormDialog>
+
+	<FormDialog
+		bind:open={sendOpen}
+		icon={SendIcon}
+		title="Send a test message"
+		description="Published on {nodeLabel} exactly as a queue binding's send() does, so the consuming function receives it like any other message."
+		action="?/sendMessage"
+		submitLabel="Send"
+		size="lg"
+	>
+		<Field.Group>
+			<div class="grid gap-4 sm:grid-cols-[1fr_auto]">
+				<Field.Field>
+					<Field.Label for="send-queue">Queue</Field.Label>
+					<Input id="send-queue" name="queue" bind:value={sendQueue} list="send-queue-names" required maxlength={63} spellcheck="false" class="font-mono text-sm" />
+					<datalist id="send-queue-names">
+						{#each queueNames as name (name)}<option value={name}></option>{/each}
+					</datalist>
+				</Field.Field>
+				<Field.Field>
+					<Field.Label for="send-type">Body type</Field.Label>
+					<NativeSelect.Root id="send-type" name="contentType" bind:value={sendType}>
+						<NativeSelect.Option value="json">JSON</NativeSelect.Option>
+						<NativeSelect.Option value="text">Text</NativeSelect.Option>
+					</NativeSelect.Root>
+				</Field.Field>
+			</div>
+			<Field.Field data-invalid={sendBodyError ? true : undefined}>
+				<Field.Label for="send-body">Body</Field.Label>
+				<Textarea id="send-body" name="body" bind:value={sendBody} rows={8} spellcheck="false" class="font-mono text-xs" />
+				{#if sendBodyError}<Field.Error>{sendBodyError}</Field.Error>{:else}<Field.Description>The consumer sees this as <code class="font-mono">message.body</code>{sendType === 'json' ? ', parsed' : ''}. At most 128 KiB.</Field.Description>{/if}
+			</Field.Field>
+			<div class="grid gap-4 sm:grid-cols-2">
+				<Field.Field>
+					<Field.Label for="send-delay">Delay</Field.Label>
+					<InputGroup.Root>
+						<InputGroup.Input id="send-delay" name="delaySeconds" type="number" min={0} max={43200} placeholder="0" class="font-mono text-sm" />
+						<InputGroup.Addon align="inline-end"><InputGroup.Text class="font-mono text-xs">s</InputGroup.Text></InputGroup.Addon>
+					</InputGroup.Root>
+				</Field.Field>
+				<Field.Field>
+					<Field.Label for="send-count">Copies</Field.Label>
+					<Input id="send-count" name="count" type="number" min={1} max={100} value="1" class="font-mono text-sm" />
+					<Field.Description>Up to 100, for a quick load test.</Field.Description>
+				</Field.Field>
+			</div>
+		</Field.Group>
+	</FormDialog>
+
+	<FormDialog
+		bind:open={redriveOpen}
+		icon={Undo2Icon}
+		title="Move messages out of {redriveFrom}"
+		description="Each message is republished to the target queue with its body and id, and its attempt count starts again; then it is removed from {redriveFrom}. Use it to retry a dead-letter queue once the consumer is fixed."
+		action="?/redrive"
+		submitLabel="Move messages"
+	>
+		<input type="hidden" name="from" value={redriveFrom} />
+		<Field.Group>
+			<Field.Field>
+				<Field.Label for="redrive-to">Move to</Field.Label>
+				<Input id="redrive-to" name="to" bind:value={redriveTo} list="redrive-queue-names" required maxlength={63} spellcheck="false" class="font-mono text-sm" />
+				<datalist id="redrive-queue-names">
+					{#each queueNames.filter((name) => name !== redriveFrom) as name (name)}<option value={name}></option>{/each}
+				</datalist>
+			</Field.Field>
+			<Field.Field>
+				<Field.Label for="redrive-limit">At most</Field.Label>
+				<Input id="redrive-limit" name="limit" type="number" min={1} max={1000} value="1000" class="font-mono text-sm" />
+			</Field.Field>
+		</Field.Group>
 	</FormDialog>
 {/if}

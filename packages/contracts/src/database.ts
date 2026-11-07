@@ -11,11 +11,11 @@ import type { VolumeSummary } from './volume.ts';
  * imports nothing from `workload.ts` so `workload.ts` can reference the engine enum.
  */
 
-export const databaseEngines = ['postgres', 'mysql', 'mariadb', 'mongodb', 'valkey', 'redis'] as const;
+export const databaseEngines = ['postgres', 'mysql', 'mariadb', 'mongodb', 'valkey', 'redis', 'clickhouse'] as const;
 export type DatabaseEngine = (typeof databaseEngines)[number];
 
 /** What kind of store an engine is; the dashboard groups engines by it. */
-export type DatabaseEngineFamily = 'relational' | 'document' | 'key-value';
+export type DatabaseEngineFamily = 'relational' | 'document' | 'key-value' | 'analytical';
 
 /**
  * Platform features an engine supports (docs/DATABASES.md §17). Everything outside this list
@@ -63,7 +63,8 @@ export interface DatabaseEngineInfo {
 	scheme: string;
 	/**
 	 * Path segment of the connection URL: `name` uses the database name, anything else is used
-	 * verbatim (Valkey/Redis select logical database `0`).
+	 * verbatim (Valkey/Redis select logical database `0`). ClickHouse clients read the URL path as
+	 * the default database.
 	 */
 	urlDatabase: 'name' | string;
 	/** Query string every connection URL carries (MongoDB authenticates against `admin`). */
@@ -228,7 +229,7 @@ export const databaseEngineRegistry: Record<DatabaseEngine, DatabaseEngineInfo> 
 		reservedNames: ['default', 'skiff-studio-ro'],
 		containerEnv: { user: 'VALKEY_USER', password: 'VALKEY_PASSWORD', database: null },
 		inPlaceUpgrade: 'forward',
-		capabilities: { ...CORE_CAPABILITIES, replication: 'streaming' },
+		capabilities: { ...CORE_CAPABILITIES, backups: true, replication: 'streaming' },
 	},
 	redis: {
 		engine: 'redis',
@@ -248,7 +249,32 @@ export const databaseEngineRegistry: Record<DatabaseEngine, DatabaseEngineInfo> 
 		reservedNames: ['default', 'skiff-studio-ro'],
 		containerEnv: { user: 'REDIS_USER', password: 'REDIS_PASSWORD', database: null },
 		inPlaceUpgrade: 'forward',
-		capabilities: { ...CORE_CAPABILITIES, replication: 'streaming' },
+		capabilities: { ...CORE_CAPABILITIES, backups: true, replication: 'streaming' },
+	},
+	clickhouse: {
+		engine: 'clickhouse',
+		label: 'ClickHouse',
+		family: 'analytical',
+		description: 'Column-oriented OLAP database for events, logs and analytics (LTS releases).',
+		versions: ['26.8', '26.3'],
+		defaultVersion: '26.8',
+		// The HTTP interface: what @clickhouse/client, clickhouse-connect and most tools speak, and
+		// the one whose URL every client parses. Native TCP (9000) is reachable on the org network only.
+		containerPort: 8123,
+		scheme: 'http',
+		urlDatabase: 'name',
+		urlQuery: null,
+		defaultEnvPrefix: 'CLICKHOUSE',
+		// The server's own caches and merge buffers need headroom; below 1 GB it OOMs under merges.
+		minMemoryMb: 1024,
+		defaultMemoryMb: 2048,
+		maxNameLength: 40,
+		reservedNames: ['default', 'system', 'information-schema', 'skiff-studio-ro'],
+		containerEnv: { user: 'CLICKHOUSE_USER', password: 'CLICKHOUSE_PASSWORD', database: 'CLICKHOUSE_DB' },
+		// A newer LTS reads the previous LTS's data dir in place; downgrades are refused.
+		inPlaceUpgrade: 'forward',
+		// Core lifecycle, live owner rotation and native BACKUP/RESTORE backups. No studio plugin yet.
+		capabilities: { ...CORE_CAPABILITIES, backups: true, console: false },
 	},
 };
 
@@ -256,6 +282,74 @@ export const databaseEngineRegistry: Record<DatabaseEngine, DatabaseEngineInfo> 
 export function databaseCapabilities(engine: string): DatabaseEngineCapabilities {
 	const info = (databaseEngineRegistry as Record<string, DatabaseEngineInfo | undefined>)[engine];
 	return info?.capabilities ?? { ...CORE_CAPABILITIES, rotation: false, console: false };
+}
+
+/**
+ * The image variant a database is created on (D126). `standard` is the engine's own image for
+ * the version. `postgis` and `pg_cron` are Skiff-built Postgres images layered on the pinned
+ * pgvector image, so each keeps pgvector and adds one extension. Variants do not combine, and a
+ * database keeps its variant for life: restores copy it and there is no in-place switch.
+ */
+export const databaseVariants = ['standard', 'postgis', 'pg_cron'] as const;
+export type DatabaseVariant = (typeof databaseVariants)[number];
+
+export interface DatabaseVariantInfo {
+	variant: DatabaseVariant;
+	label: string;
+	/** One line for the create form. */
+	description: string;
+	/** Postgres versions with an image for this variant; `null` means every engine and version. */
+	postgresVersions: readonly string[] | null;
+	/** The extension the image adds; created on first start and refused on other variants. */
+	extension: 'postgis' | 'pg_cron' | null;
+}
+
+export const databaseVariantRegistry: Record<DatabaseVariant, DatabaseVariantInfo> = {
+	standard: {
+		variant: 'standard',
+		label: 'Standard',
+		description: 'The engine image. Postgres 18 includes pgvector.',
+		postgresVersions: null,
+		extension: null,
+	},
+	postgis: {
+		variant: 'postgis',
+		label: 'PostGIS',
+		description: 'Postgres 18 with PostGIS 3 (and pgvector) for geospatial data.',
+		postgresVersions: ['18'],
+		extension: 'postgis',
+	},
+	pg_cron: {
+		variant: 'pg_cron',
+		label: 'pg_cron',
+		description: 'Postgres 18 with pg_cron (and pgvector) for scheduled SQL jobs.',
+		postgresVersions: ['18'],
+		extension: 'pg_cron',
+	},
+};
+
+/** Whether an engine version has an image for the variant. */
+export function databaseVariantSupported(engine: DatabaseEngine, version: string, variant: DatabaseVariant): boolean {
+	const versions = databaseVariantRegistry[variant].postgresVersions;
+	if (versions === null) return true;
+	return engine === 'postgres' && versions.includes(version);
+}
+
+/** Variants offered for an engine version, `standard` first. */
+export function databaseVariantsFor(engine: DatabaseEngine, version: string): DatabaseVariant[] {
+	return databaseVariants.filter((variant) => databaseVariantSupported(engine, version, variant));
+}
+
+/**
+ * Why a set of extensions does not fit a variant, or null. `postgis` and `pg_cron` ship only in
+ * their own variant's image, so asking for them elsewhere is refused instead of failing softly.
+ */
+export function databaseVariantExtensionError(variant: DatabaseVariant, extensions: readonly string[]): string | null {
+	for (const info of Object.values(databaseVariantRegistry)) {
+		if (!info.extension || info.variant === variant || !extensions.includes(info.extension)) continue;
+		return `The ${info.extension} extension ships only in the ${info.label} variant (variant "${info.variant}", Postgres ${info.postgresVersions?.join(', ')}), chosen when the database is created.`;
+	}
+	return null;
 }
 
 /**
@@ -587,7 +681,7 @@ export const databaseExtensionCatalog: Record<DatabaseExtension, DatabaseExtensi
 	pg_cron: {
 		sqlName: 'pg_cron',
 		category: 'external',
-		description: 'Cron-style scheduled SQL jobs. Needs a preload and an image that ships it.',
+		description: 'Cron-style scheduled SQL jobs. Needs the pg_cron variant (Postgres 18).',
 		bundled: false,
 	},
 	pgvector: {
@@ -599,7 +693,7 @@ export const databaseExtensionCatalog: Record<DatabaseExtension, DatabaseExtensi
 	postgis: {
 		sqlName: 'postgis',
 		category: 'external',
-		description: 'Geospatial types, functions and indexes. Needs an image that ships it.',
+		description: 'Geospatial types, functions and indexes. Needs the PostGIS variant (Postgres 18).',
 		bundled: false,
 	},
 };
@@ -652,6 +746,8 @@ export const databaseCreateSchema = z
 		name: databaseNameSchema,
 		engine: z.enum(databaseEngines).default('postgres'),
 		version: z.string().max(16).optional(),
+		/** Image variant (D126): `postgis` and `pg_cron` are Postgres 18 only. Fixed for life. */
+		variant: z.enum(databaseVariants).default('standard'),
 		/** `auto`, `edge`, or a node id. Resolved once at create time (D41). */
 		placement: z.string().min(1).max(64).default('auto'),
 		memoryMb: z.number().int().min(128).max(16_384).optional(),
@@ -703,6 +799,17 @@ export const databaseCreateSchema = z
 				path: ['extensions'],
 				message: `Extensions are only available for PostgreSQL.`,
 			});
+		const version = input.version ?? info.defaultVersion;
+		if (!databaseVariantSupported(input.engine, version, input.variant)) {
+			const variant = databaseVariantRegistry[input.variant];
+			ctx.addIssue({
+				code: 'custom',
+				path: ['variant'],
+				message: `The ${variant.label} variant needs PostgreSQL ${variant.postgresVersions?.join(', ')}.`,
+			});
+		}
+		const extensionError = databaseVariantExtensionError(input.variant, input.extensions);
+		if (extensionError) ctx.addIssue({ code: 'custom', path: ['extensions'], message: extensionError });
 	});
 export type DatabaseCreate = z.input<typeof databaseCreateSchema>;
 
@@ -771,8 +878,13 @@ export interface DatabaseUpgradePlan {
 
 export const databaseAttachSchema = z.object({
 	database: databaseNameSchema,
-	/** Defaults to the engine's prefix (`DATABASE`, `MONGODB`, `REDIS`). */
+	/** Defaults to the engine's prefix (`DATABASE`, `MONGODB`, `REDIS`, `CLICKHOUSE`). */
 	envPrefix: databaseEnvPrefixSchema.optional(),
+	/**
+	 * Connect as a named credential instead of the owner: its id (`dbc_…`), or a role
+	 * (`app`, `readonly`, `backup`) when exactly one ready credential has it. Postgres only.
+	 */
+	credential: z.string().min(1).max(100).optional(),
 });
 export type DatabaseAttach = z.input<typeof databaseAttachSchema>;
 
@@ -784,6 +896,9 @@ export interface DatabaseAttachmentView {
 	envPrefix: string;
 	/** Env var names the project receives at activation. */
 	envNames: string[];
+	/** The named credential the app connects as; null for the built-in owner. */
+	credentialId?: string | null;
+	credentialRole?: DatabaseCredentialRole | null;
 	createdAt: string;
 }
 
@@ -936,10 +1051,16 @@ export interface DatabaseView {
 	/** What this engine supports; surfaces hide the rest (docs/DATABASES.md §17). */
 	capabilities: DatabaseEngineCapabilities;
 	version: string;
+	/** Image variant chosen at create (D126). */
+	variant: DatabaseVariant;
 	status: DatabaseStatus;
 	message: string | null;
 	nodeId: string;
 	nodeName: string | null;
+	/** Promotions so far (C7); `POST …/replicas/:id/promote` takes it as `If-Match`. */
+	primaryGeneration: number;
+	/** Read replicas not being removed (docs/CLUSTERING.md §9.2). */
+	replicaCount: number;
 	memoryMb: number;
 	cpus: number;
 	storageMb: number;
@@ -994,7 +1115,7 @@ export interface DatabaseView {
  * decrypted by an explicit reveal. Skiff itself keeps Postgres loopback-only (D56).
  */
 /** Schemes a stored public URL may use; the service also checks it matches the engine. */
-export const DATABASE_PUBLIC_URL_PATTERN = /^(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?):\/\/[^\s]+$/i;
+export const DATABASE_PUBLIC_URL_PATTERN = /^(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?|https?|clickhouse):\/\/[^\s]+$/i;
 
 /** Public URL schemes that fit an engine. */
 export function databasePublicUrlSchemes(engine: DatabaseEngine): readonly string[] {
@@ -1009,6 +1130,8 @@ export function databasePublicUrlSchemes(engine: DatabaseEngine): readonly strin
 		case 'valkey':
 		case 'redis':
 			return ['redis', 'rediss'];
+		case 'clickhouse':
+			return ['http', 'https', 'clickhouse'];
 	}
 }
 
@@ -1019,7 +1142,7 @@ export const databasePublicUrlSchema = z
 	.max(4096)
 	.refine(
 		(value) => DATABASE_PUBLIC_URL_PATTERN.test(value),
-		'Use a postgres://, mysql://, mariadb://, mongodb://, mongodb+srv://, redis:// or rediss:// URL.'
+		'Use a postgres://, mysql://, mariadb://, mongodb://, mongodb+srv://, redis://, rediss://, http(s):// or clickhouse:// URL.'
 	);
 
 export const databasePublicUrlUpdateSchema = z.object({ url: databasePublicUrlSchema });
@@ -1063,6 +1186,11 @@ export interface DatabaseCredentials {
 export const workloadDatabaseSchema = z.object({
 	engine: z.enum(databaseEngines),
 	version: z.string().min(1).max(16),
+	/**
+	 * Skiff-built Postgres image variant (D126); absent means `standard`, so older helpers keep
+	 * accepting every database that does not use one.
+	 */
+	variant: z.enum(['postgis', 'pg_cron']).optional(),
 	/** Render Postgres with a helper-generated server certificate (SKIFF_FEATURE_DB_TLS). */
 	tls: z.boolean().optional(),
 	/**
@@ -1073,6 +1201,16 @@ export const workloadDatabaseSchema = z.object({
 		.object({
 			stanza: z.string().min(1).max(64),
 			archiveTimeoutSeconds: z.number().int().min(1).max(3600).default(60),
+		})
+		.optional(),
+	/**
+	 * Streaming read replica (docs/CLUSTERING.md §9.2, C7). Present only on a replica workload
+	 * (`db_dbr_<hex>`): the helper renders the standby variant of the Postgres unit, which runs
+	 * `pg_basebackup` through the agent's link socket on first start and then streams from `slot`.
+	 */
+	replica: z
+		.object({
+			slot: z.string().regex(/^skiff_[a-z0-9_]{1,56}$/),
 		})
 		.optional(),
 });
@@ -1188,7 +1326,7 @@ export function databaseAlias(id: string): string {
 
 /**
  * Engine identifier for a database name: `my-app` → `my_app` (Postgres roles, MySQL users and
- * databases, MongoDB databases and Valkey ACL users all accept it).
+ * databases, MongoDB databases, Valkey ACL users and ClickHouse users and databases all accept it).
  */
 export function databaseIdentifier(name: string): string {
 	return name.replace(/-/g, '_');
@@ -1197,13 +1335,15 @@ export function databaseIdentifier(name: string): string {
 /** Env var names a project receives for one attachment. */
 export function databaseEnvNames(
 	prefix: string,
-	options: { pooler?: boolean; tls?: boolean; engine?: DatabaseEngine } = {},
+	options: { pooler?: boolean; tls?: boolean; engine?: DatabaseEngine; replicas?: boolean } = {},
 ): string[] {
 	const names = ['URL', 'HOST', 'PORT', 'USER', 'PASSWORD', 'NAME'];
 	// MongoDB drivers and docs say "connection string URI"; most apps read `<PREFIX>_URI`.
 	if (options.engine === 'mongodb') names.push('URI');
 	if (options.tls) names.push('SSL_MODE', 'CA_CERT');
 	if (options.pooler) names.push('POOL_URL', 'POOL_HOST', 'POOL_PORT');
+	// Read replicas (C7): set only while a replica the app can reach is streaming or lagging.
+	if (options.replicas) names.push('READ_URL', 'READ_URLS', 'READ_HOST', 'READ_PORT');
 	return names.map((suffix) => `${prefix}_${suffix}`);
 }
 
@@ -1320,6 +1460,19 @@ function engineSnippets(engine: Exclude<DatabaseEngine, 'postgres'>, input: Data
 				go: `opt, _ := redis.ParseURL(os.Getenv("${prefix}_URL"))\nrdb := redis.NewClient(opt)`,
 			};
 		}
+		case 'clickhouse': {
+			// The HTTP interface answers queries at `/`; the URL path is only the client's default
+			// database, so curl gets it as `?database=` instead.
+			const parsed = new URL(url);
+			const auth = `${decodeURIComponent(parsed.username)}:${decodeURIComponent(parsed.password)}`;
+			const database = decodeURIComponent(parsed.pathname.replace(/^\//, ''));
+			return {
+				curl: `curl --user '${auth}' '${parsed.protocol}//${parsed.host}/?database=${encodeURIComponent(database)}' --data-binary 'SELECT version()'`,
+				clickhouseJs: `import { createClient } from '@clickhouse/client';\n\nexport const clickhouse = createClient({ url: process.env.${prefix}_URL });`,
+				python: `import os, clickhouse_connect\n\nclient = clickhouse_connect.get_client(dsn=os.environ['${prefix}_URL'])`,
+				go: `conn, err := clickhouse.Open(&clickhouse.Options{\n  Protocol: clickhouse.HTTP,\n  Addr:     []string{os.Getenv("${prefix}_HOST") + ":" + os.Getenv("${prefix}_PORT")},\n  Auth: clickhouse.Auth{\n    Database: os.Getenv("${prefix}_NAME"),\n    Username: os.Getenv("${prefix}_USER"),\n    Password: os.Getenv("${prefix}_PASSWORD"),\n  },\n})`,
+			};
+		}
 	}
 }
 
@@ -1330,18 +1483,63 @@ function engineSnippets(engine: Exclude<DatabaseEngine, 'postgres'>, input: Data
  */
 export const POSTGRES_PGVECTOR_IMAGE_TAG = '0.8.7-pg18-trixie';
 
-/** Postgres image for a major version: alpine for 16/17, the pgvector (Debian) image from 18. */
-export function postgresImage(version: string): string {
+/**
+ * Skiff-built Postgres variant images (D126), built from `docker/postgres/Dockerfile` on the pinned
+ * pgvector image and published by CI. Bump the revision whenever the Dockerfile or its base
+ * changes, so a published tag never moves. The helper has its own copy.
+ */
+export const SKIFF_POSTGRES_IMAGE = 'ghcr.io/kieranholroyd/skiff-postgres';
+export const SKIFF_POSTGRES_IMAGE_REVISION = '1';
+
+/**
+ * The Postgres image a PITR-enabled database runs (docs/PITR.md): the pinned pgvector image plus
+ * pgBackRest, built from `docker/postgres-pitr/Dockerfile` and published by
+ * `.github/workflows/postgres-pitr-image.yml` as `skiff-postgres-pitr:<major>-<revision>`.
+ * Postgres runs `archive_command` in its own container, so only this image can archive WAL. Only
+ * the standard 18 image has a build; 16/17 (alpine) and the D126 variants do not. A published tag
+ * is never overwritten: bump the revision (here, in the helper's copy in
+ * `apps/helper/src/validate.ts` and in the workflow) and pin the new digest in all three.
+ */
+export const POSTGRES_PITR_VERSIONS = ['18'] as const;
+export const POSTGRES_PITR_IMAGE = 'ghcr.io/kieranholroyd/skiff-postgres-pitr';
+export const POSTGRES_PITR_IMAGE_REVISION = '1';
+/** `sha256:…` once the tag is published; the helper's copy must match. */
+export const POSTGRES_PITR_IMAGE_DIGEST: string | null = null;
+
+/** Why PITR cannot run on this engine/version/variant, or null when it can. */
+export function pitrUnsupportedReason(engine: DatabaseEngine, version: string, variant: DatabaseVariant): string | null {
+	if (engine !== 'postgres') return 'Point-in-time recovery is only available for PostgreSQL.';
+	if (variant !== 'standard')
+		return `Point-in-time recovery is not available for the ${variant} image; it needs the standard PostgreSQL image.`;
+	if (!(POSTGRES_PITR_VERSIONS as readonly string[]).includes(version))
+		return `Point-in-time recovery needs PostgreSQL ${POSTGRES_PITR_VERSIONS.join(', ')}; ${version} has no pgBackRest image. Upgrade first.`;
+	return null;
+}
+
+/** The PITR image for a Postgres major version. The helper has its own copy and rejects a mismatch. */
+export function postgresPitrImage(version: string): string {
+	if (!(POSTGRES_PITR_VERSIONS as readonly string[]).includes(version))
+		throw new Error(`PITR needs Postgres ${POSTGRES_PITR_VERSIONS.join(', ')}; ${version} has no pgBackRest image`);
+	const tag = `${POSTGRES_PITR_IMAGE}:${version}-${POSTGRES_PITR_IMAGE_REVISION}`;
+	return POSTGRES_PITR_IMAGE_DIGEST ? `${tag}@${POSTGRES_PITR_IMAGE_DIGEST}` : tag;
+}
+
+/**
+ * Postgres image for a major version and variant: alpine for 16/17, the pgvector (Debian) image
+ * from 18, and a Skiff-built image for the `postgis` and `pg_cron` variants (D126).
+ */
+export function postgresImage(version: string, variant: DatabaseVariant = 'standard'): string {
+	if (variant !== 'standard') return `${SKIFF_POSTGRES_IMAGE}:${version}-${variant}-${SKIFF_POSTGRES_IMAGE_REVISION}`;
 	return Number(version) >= 18
 		? `docker.io/pgvector/pgvector:${POSTGRES_PGVECTOR_IMAGE_TAG}`
 		: `docker.io/library/postgres:${version}-alpine`;
 }
 
 /** OCI image for an engine version. The helper has its own copy and rejects any mismatch (D61). */
-export function databaseImage(engine: DatabaseEngine, version: string): string {
+export function databaseImage(engine: DatabaseEngine, version: string, variant: DatabaseVariant = 'standard'): string {
 	switch (engine) {
 		case 'postgres':
-			return postgresImage(version);
+			return postgresImage(version, variant);
 		case 'mysql':
 			return `docker.io/library/mysql:${version}`;
 		case 'mariadb':
@@ -1352,6 +1550,8 @@ export function databaseImage(engine: DatabaseEngine, version: string): string {
 			return `docker.io/valkey/valkey:${version}-alpine`;
 		case 'redis':
 			return `docker.io/library/redis:${version}-alpine`;
+		case 'clickhouse':
+			return `docker.io/clickhouse/clickhouse-server:${version}`;
 	}
 }
 

@@ -3,9 +3,8 @@
  *
  * Every flag is read once from the environment as `SKIFF_FEATURE_<NAME>` and resolved here. The
  * registry is the single source of truth: a flag that is not in it cannot be switched on.
- * Defaults are deliberately conservative. Features that destroy data, change connectivity or have
- * not passed a restore drill default to `false`. Flags are additive: leaving one unset must keep
- * the previous release's behaviour, and enabling one must be reversible without a migration.
+ * Every flag defaults on and acts as a kill switch: set `SKIFF_FEATURE_<NAME>=0` to turn a feature
+ * off. Turning one off must be reversible without a migration.
  */
 
 export type FeatureArea =
@@ -66,7 +65,7 @@ export const FEATURE_FLAGS = {
 	},
 	PITR: {
 		name: 'PITR',
-		default: false,
+		default: true,
 		area: 'backups',
 		description: 'Point-in-time recovery for managed databases (WAL archiving and replay).'
 	},
@@ -92,51 +91,60 @@ export const FEATURE_FLAGS = {
 		description:
 			'Open the native database studio (per-engine plugins in the on-demand skiff-studio process, D96). Set 0 to hide it.'
 	},
+	CONTAINER_CONSOLE: {
+		name: 'CONTAINER_CONSOLE',
+		// D127: inspect, read-only files and shells for project containers. A kill switch.
+		default: true,
+		area: 'workloads',
+		description:
+			'Container console for container projects: live stats and processes, a read-only file browser and an interactive shell (D127). Set 0 to hide it.'
+	},
 	DB_TLS: {
 		name: 'DB_TLS',
-		default: false,
+		default: true,
 		area: 'databases',
 		description: 'Accept TLS connections to managed databases and publish sslmode=require URLs.'
 	},
 	ORG_NETWORKS: {
 		name: 'ORG_NETWORKS',
-		default: false,
+		default: true,
 		area: 'networking',
 		description: 'Private per-org networks that connect workloads and databases across nodes.'
 	},
 	MULTI_NODE_REPLICAS: {
 		name: 'MULTI_NODE_REPLICAS',
-		default: false,
+		default: true,
 		area: 'workloads',
 		description: 'Spread HTTP workload replicas across nodes with a load-balanced route (CLUSTERING C4).'
 	},
 	SERVICE_ENDPOINTS: {
 		name: 'SERVICE_ENDPOINTS',
-		default: false,
+		default: true,
 		area: 'networking',
 		description: 'Cross-node database attachments through loopback service endpoints (CLUSTERING C2).'
 	},
 	APP_VOLUMES: {
 		name: 'APP_VOLUMES',
-		default: false,
+		default: true,
 		area: 'workloads',
 		description: 'Attach persistent application volumes to deployed workloads.'
 	},
 	JOBS: {
 		name: 'JOBS',
-		default: false,
+		// Plan 09: jobs run only on nodes whose agent advertises `jobs`; turning it off stops the scheduler.
+		default: true,
 		area: 'automation',
 		description: 'Scheduled one-off and cron jobs with concurrency and timeout limits.'
 	},
 	PREVIEW_DATA: {
 		name: 'PREVIEW_DATA',
-		default: false,
+		default: true,
 		area: 'automation',
 		description: 'Clone database and bucket data into preview environments (can copy production data).'
 	},
 	AGENT_DATA_WRITE: {
 		name: 'AGENT_DATA_WRITE',
-		default: false,
+		default: true,
 		area: 'agents',
 		description: 'Allow MCP/agent tools to mutate user data (writes, deletes) instead of read-only access.'
 	},
@@ -148,21 +156,31 @@ export const FEATURE_FLAGS = {
 	},
 	UPGRADE_ROLLBACK: {
 		name: 'UPGRADE_ROLLBACK',
-		default: false,
+		default: true,
 		area: 'platform',
 		description: 'Reserved for dashboard-triggered automatic rollback after /readyz fails; CLI rollback is the tested path.'
 	},
 	BLUEPRINTS: {
 		name: 'BLUEPRINTS',
-		default: false,
+		default: true,
 		area: 'automation',
-		description: 'Plan and apply skiff.yaml blueprints, including pruning resources they own.'
+		description: 'Plan and apply blueprint files (skiff.blueprint.yaml) that declare a stack, including pruning what they manage.'
 	},
 	MEDIA: {
 		name: 'MEDIA',
-		default: false,
+		default: true,
 		area: 'storage',
 		description: 'Image and video uploads, transforms and delivery through the platform.'
+	},
+	DB_AUTO_PROMOTE: {
+		name: 'DB_AUTO_PROMOTE',
+		// C7/C8: lets the failover controller (with `failover.enabled`) promote a Postgres read
+		// replica when its primary's node goes silent. Off until the object-store lease self-fences
+		// a partitioned primary (CLUSTERING §9.3): without it, a primary cut off from the control
+		// plane keeps accepting writes from apps on its own node. Manual promotion needs no flag.
+		default: true,
+		area: 'databases',
+		description: 'Let the failover controller promote a Postgres read replica automatically (CLUSTERING C8).'
 	}
 } as const satisfies Record<string, FeatureFlagDefinition>;
 

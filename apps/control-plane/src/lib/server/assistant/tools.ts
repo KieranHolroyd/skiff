@@ -69,6 +69,8 @@ const WRITE_PERMISSION: Record<string, Permission> = {
 	delete_project: 'project:delete',
 	delete_projects: 'project:delete',
 	restore_projects: 'project:update',
+	// Blueprints (plan 11): each step re-checks its own permission; this hides the tool from viewers.
+	apply_stack: 'project:update',
 	deploy_site: 'deployment:create',
 	deploy_files: 'deployment:create',
 	create_upload: 'deployment:create',
@@ -81,10 +83,15 @@ const WRITE_PERMISSION: Record<string, Permission> = {
 	set_access: 'project:update',
 	create_share_link: 'shareLink:create',
 	revoke_share_link: 'shareLink:revoke',
+	revoke_site_session: 'shareLink:revoke',
+	sign_out_all_visitors: 'project:update',
 	create_database: 'database:create',
 	attach_database: 'database:update',
 	detach_database: 'database:update',
 	delete_database: 'database:delete',
+	create_database_credential: 'database:credentials',
+	rotate_database_credential: 'database:credentials',
+	revoke_database_credential: 'database:credentials',
 	create_volume: 'project:update',
 	attach_volume: 'project:update',
 	detach_volume: 'project:update',
@@ -95,9 +102,28 @@ const WRITE_PERMISSION: Record<string, Permission> = {
 	attach_storage: 'storage:update',
 	detach_storage: 'storage:update',
 	delete_storage: 'storage:delete',
+	create_storage_key: 'storage:update',
+	revoke_storage_key: 'storage:update',
 	create_email_domain: 'email:update',
 	send_email: 'email:send',
 	remove_email_suppression: 'email:update',
+	add_email_address: 'email:update',
+	remove_email_address: 'email:update',
+	// Queue and function tools (D124); peek is a read but needs broker:update (bodies are data).
+	create_queue: 'broker:update',
+	send_queue_message: 'broker:update',
+	peek_queue_messages: 'broker:update',
+	redrive_queue: 'broker:update',
+	invoke_function: 'deployment:create',
+	run_function_cron: 'deployment:create',
+	// Jobs (plan 09): definitions are project config, runs are deploys of a kind.
+	create_job: 'project:update',
+	update_job: 'project:update',
+	pause_job: 'project:update',
+	delete_job: 'project:update',
+	run_job: 'deployment:create',
+	run_command: 'deployment:create',
+	cancel_job_run: 'deployment:create',
 	// Dashboards (D101) are an org resource behind metrics:read; there is no separate write scope.
 	create_dashboard: 'metrics:read',
 	add_dashboard_panels: 'metrics:read',
@@ -110,7 +136,11 @@ const WRITE_PERMISSION: Record<string, Permission> = {
 	update_alert_rule: 'metrics:read',
 	delete_alert_rule: 'metrics:read',
 	silence_alerts: 'metrics:read',
-	acknowledge_alert: 'metrics:read'
+	acknowledge_alert: 'metrics:read',
+	// Log drains (DESIGN §8): the service further limits writes to owners and admins.
+	create_log_drain: 'logs:read',
+	test_log_drain: 'logs:read',
+	delete_log_drain: 'logs:read'
 };
 
 /** Every permitted MCP tool, plus the UI guide, for one signed-in user. */

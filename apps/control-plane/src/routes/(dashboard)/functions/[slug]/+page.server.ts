@@ -24,6 +24,8 @@ import { features } from '#lib/server/config.js';
 import { parseTrafficRange, trafficRangeHref, trafficRanges } from '#lib/server/traffic-range.js';
 import { failStatus, formRawString, formString, toFormFailure } from '../../_lib/errors.js';
 import { actions as projectActions } from '../../projects/[slug]/+page.server.js';
+import { nodeTaskAction } from '#lib/server/node-tasks.js';
+import { parseHeaderLines } from '../_lib/test-request.js';
 import type { Actions, PageServerLoad } from './$types';
 
 /** Run a read the viewer may not be allowed to make without taking the page down. */
@@ -136,6 +138,10 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const invocations = core.functions
 		.invocations(principal, row, { from: now - 7 * 86_400_000, to: now, limit: 50 })
 		.catch(() => ({ available: false, rows: [] }));
+	// Share-link visitor sessions, ended one by one or all at once with "Sign out everyone".
+	const siteSessions = hasPermission(principal, 'shareLink:read')
+		? safely(() => core.access.listSessions(principal, row), [])
+		: [];
 
 	return {
 		project,
@@ -158,18 +164,23 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		storageBuckets,
 		invocationSummary,
 		invocations,
+		siteSessions,
 		maxReplicas: MAX_WORKLOAD_REPLICAS,
 		can: {
 			update: hasPermission(principal, 'project:update'),
 			delete: hasPermission(principal, 'project:delete'),
 			deploy: hasPermission(principal, 'deployment:create'),
+			/** Send test messages into the queues this function consumes (D124). */
+			sendQueue: hasPermission(principal, 'broker:update'),
 			promote: hasPermission(principal, 'deployment:promote'),
 			rollback: hasPermission(principal, 'deployment:rollback'),
 			deleteDeployment: hasPermission(principal, 'deployment:delete'),
+			revokeSession: hasPermission(principal, 'shareLink:revoke'),
 			readLogs: hasPermission(principal, 'logs:read'),
 			createDomain: hasPermission(principal, 'domain:create'),
 			deleteDomain: hasPermission(principal, 'domain:delete'),
 			createSecret: hasPermission(principal, 'secret:create'),
+			updateSecret: hasPermission(principal, 'secret:update'),
 			deleteSecret: hasPermission(principal, 'secret:delete'),
 			viewCapacity: principal.platformAdmin === true,
 			readDatabases: hasPermission(principal, 'database:read'),
@@ -204,6 +215,8 @@ export const actions: Actions = {
 	pin: reuse(projectActions.pin),
 	deleteDeployment: reuse(projectActions.deleteDeployment),
 	setAccess: reuse(projectActions.setAccess),
+	revokeSiteSession: reuse(projectActions.revokeSiteSession),
+	signOutVisitors: reuse(projectActions.signOutVisitors),
 	move: reuse(projectActions.move),
 	addDomain: reuse(projectActions.addDomain),
 	checkDomain: reuse(projectActions.checkDomain),
@@ -309,6 +322,62 @@ export const actions: Actions = {
 		}
 	},
 
+	// --- test tools: run on the function's node (D124) ------------------------------------------
+
+	/** One HTTP request to the live host, straight to its socket (no domain, Caddy or access rules). */
+	invoke: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		let headers: Record<string, string> = {};
+		try {
+			headers = parseHeaderLines(formRawString(data, 'headers'));
+		} catch (caught) {
+			return fail(400, { message: (caught as Error).message });
+		}
+		const body = formRawString(data, 'body');
+		const method = formString(data, 'method') || 'GET';
+		return nodeTaskAction(principal, () =>
+			core.nodeTasks.functionTask(principal, requireFunction(principal, params.slug), 'function.invoke', {
+				method,
+				path: formString(data, 'path') || '/',
+				headers,
+				...(body && method !== 'GET' && method !== 'HEAD' ? { body } : {})
+			})
+		);
+	},
+
+	/** Run `scheduled()` now for one cron, as the node's scheduler would at its next occurrence. */
+	runCron: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const cron = formRawString(await request.formData(), 'cron');
+		return nodeTaskAction(principal, () =>
+			core.nodeTasks.functionTask(principal, requireFunction(principal, params.slug), 'function.scheduled', { cron })
+		);
+	},
+
+	/** Publish a test message into a queue this function consumes, on that queue's broker. */
+	sendQueueMessage: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const queue = formString(data, 'queue');
+		const row = requireFunction(principal, params.slug);
+		const consumer = core.functions.view(principal, row)?.triggers.queues.find((item) => item.queue === queue);
+		if (!consumer) return fail(400, { message: `${params.slug} does not consume a queue called ${queue}.` });
+		const count = formString(data, 'count');
+		return nodeTaskAction(
+			principal,
+			() =>
+				core.nodeTasks.brokerTask(principal, consumer.broker, 'broker.queue.send', {
+					queue,
+					body: formRawString(data, 'body'),
+					contentType: formString(data, 'contentType') || 'json',
+					...(count ? { count: Number(count) } : {})
+				}),
+			(task) =>
+				`Sent ${task.result?.sent ?? 0} message${task.result?.sent === 1 ? '' : 's'} to ${queue}. The function receives ${task.result?.sent === 1 ? 'it' : 'them'} in its next batch; see Logs for the run.`
+		);
+	},
+
 	/** Move the function to the trash; it is purged after the platform's trash period. */
 	delete: async ({ locals, params }) => {
 		const principal = locals.principal!;
@@ -321,3 +390,4 @@ export const actions: Actions = {
 		redirect(303, '/functions?deleted=1');
 	}
 };
+

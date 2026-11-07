@@ -248,11 +248,18 @@ export function webhookFormat(url: string): 'discord' | 'slack' | 'generic' {
  * service's payload, because neither accepts the generic `{title, message, …}` body (Discord needs
  * `content`/`embeds`, Slack needs `text`).
  */
-export function webhookNotifierFor(url: string, options: ChatNotifierOptions = {}): Notifier {
+export function webhookNotifierFor(
+	url: string,
+	options: ChatNotifierOptions & {
+		/** `SKIFF_ALERT_WEBHOOK_SECRET`: signs the generic body. Discord and Slack ignore it. */
+		secret?: string;
+	} = {},
+): Notifier {
+	const { secret, ...chat } = options;
 	const format = webhookFormat(url);
-	if (format === 'discord') return new DiscordNotifier(url, { name: 'webhook', ...options });
-	if (format === 'slack') return new SlackNotifier(url, { name: 'webhook', ...options });
-	return new WebhookNotifier(url);
+	if (format === 'discord') return new DiscordNotifier(url, { name: 'webhook', ...chat });
+	if (format === 'slack') return new SlackNotifier(url, { name: 'webhook', ...chat });
+	return new WebhookNotifier(url, { ...(secret ? { secret } : {}), ...(chat.fetch ? { fetch: chat.fetch } : {}) });
 }
 
 /** Env keys per chat channel; they live in the `alerts` platform-config section. */

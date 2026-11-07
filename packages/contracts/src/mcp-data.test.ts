@@ -23,19 +23,19 @@ import {
 const token = 'c'.repeat(40);
 
 describe('MCP data tool schemas', () => {
-	test('plan_stack takes exactly one document source', () => {
+	test('plan_stack takes the document text and nothing else', () => {
 		expect(planStackInputSchema.safeParse({}).success).toBe(false);
-		expect(planStackInputSchema.safeParse({ blueprint: 'apiVersion: skiff/v1', path: 'skiff.yaml' }).success).toBe(false);
+		expect(planStackInputSchema.safeParse({ blueprint: '' }).success).toBe(false);
 		expect(planStackInputSchema.safeParse({ blueprint: 'apiVersion: skiff/v1' }).success).toBe(true);
-		expect(planStackInputSchema.safeParse({ path: 'skiff.yaml' }).success).toBe(true);
+		// No server-local paths and no pruning from an agent.
+		expect(planStackInputSchema.safeParse({ path: 'skiff.blueprint.yaml' }).success).toBe(false);
+		expect(planStackInputSchema.safeParse({ blueprint: 'apiVersion: skiff/v1', prune: true }).success).toBe(false);
 	});
 
-	test('apply_stack requires a plan hash and a confirmation token', () => {
-		expect(applyStackInputSchema.safeParse({ planHash: 'a'.repeat(64) }).success).toBe(false);
-		expect(
-			applyStackInputSchema.parse({ planHash: 'a'.repeat(64), confirmationToken: token, prune: true }),
-		).toMatchObject({ prune: true });
-		expect(applyStackInputSchema.safeParse({ planHash: 'short', confirmationToken: token }).success).toBe(false);
+	test('apply_stack takes a plan hash; confirmation is the elicitation, not an argument', () => {
+		expect(applyStackInputSchema.parse({ planHash: 'a'.repeat(64) })).toEqual({ planHash: 'a'.repeat(64) });
+		expect(applyStackInputSchema.safeParse({ planHash: 'short' }).success).toBe(false);
+		expect(applyStackInputSchema.safeParse({ planHash: 'a'.repeat(64), prune: true }).success).toBe(false);
 	});
 
 	test('get_data_health defaults to a project summary with no secrets', () => {

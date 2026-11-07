@@ -11,6 +11,7 @@ import {
 	chatNotifiersFromEnv,
 	webhookNotifierFor,
 	clickhouseFromEnv,
+	coreConfigFromEnv,
 	createCore,
 	type Notifier
 } from '@skiff/core';
@@ -32,6 +33,7 @@ import {
 	smtp,
 	twilio,
 	webhookUrl,
+	webhookSecret,
 	features
 } from './config';
 import { db, sqlite } from './db';
@@ -47,7 +49,7 @@ const objectStore =
 const emailTransport = smtp ? new SmtpEmailTransport(smtp) : new ConsoleEmailTransport();
 const notifiers: Notifier[] = [];
 if (alertEmail) notifiers.push(new EmailNotifier(emailTransport, alertEmail));
-if (webhookUrl) notifiers.push(webhookNotifierFor(webhookUrl));
+if (webhookUrl) notifiers.push(webhookNotifierFor(webhookUrl, { secret: webhookSecret }));
 // Discord, Slack, Telegram, ntfy (Settings → Notifications).
 notifiers.push(...chatNotifiersFromEnv(process.env));
 if (twilio && alertSms.length)
@@ -61,7 +63,10 @@ export const core = createCore({
 	db,
 	sqlite,
 	version: platformVersion,
-	config: {
+	// The values resolved in ./config win; everything else (studio and database gateway ports, the
+	// upload cap, the PITR repository, …) is read from the environment by the service layer itself
+	// (docs/OPS.md §2.1, §2.5.1), so a variable documented there always reaches the platform.
+	config: coreConfigFromEnv({
 		dataDir,
 		platformOrigin,
 		contentDomain,
@@ -78,7 +83,7 @@ export const core = createCore({
 		notifiers,
 		email: emailTransport,
 		features
-	}
+	})
 });
 
 export { objectStore };

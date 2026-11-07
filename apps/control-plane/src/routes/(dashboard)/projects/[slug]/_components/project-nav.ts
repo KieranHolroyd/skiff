@@ -1,10 +1,14 @@
 /** Every section of a project, in the order the navigation presents them. */
 export const PROJECT_TABS = [
 	'traffic',
+	'container',
 	'logs',
+	'shell',
+	'files',
 	'deployments',
 	'environments',
 	'builds',
+	'jobs',
 	'source',
 	'domains',
 	'data',
@@ -15,6 +19,9 @@ export const PROJECT_TABS = [
 ] as const;
 
 export type ProjectTab = (typeof PROJECT_TABS)[number];
+
+/** Sections only a container project has (D127); other runtimes fall back to the default. */
+export const CONTAINER_TABS: readonly ProjectTab[] = ['container', 'shell', 'files'];
 
 export const DEFAULT_PROJECT_TAB: ProjectTab = 'deployments';
 

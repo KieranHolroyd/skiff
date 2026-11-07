@@ -91,6 +91,11 @@ the wildcard covers exactly one label.
   config via the admin API.
 - Content apex → placeholder `200`; any `<slug>.examplecloud.com` → `404` until the agent
   adds a route.
+- A live project that has never been deployed (created in the dashboard, nothing pushed yet)
+  answers `200` at `<slug>.examplecloud.com` with a default "Nothing deployed yet" page that
+  shows `skiff deploy` and links to the project in the dashboard. The control plane lists these
+  hosts in the edge's desired state (`placeholders`); the first production deployment replaces
+  the page with the real route. Workers have no host and get no page.
 
 ## Checks
 

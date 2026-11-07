@@ -1,5 +1,5 @@
 import type { DatabasePitrRepoConfig, FeatureFlags, FeatureName } from '@skiff/contracts';
-import { FEATURE_FLAGS, parseFeatureFlags, STUDIO_DEFAULT_PORT } from '@skiff/contracts';
+import { CONTAINER_CONSOLE_DEFAULT_PORT, FEATURE_FLAGS, parseFeatureFlags, STUDIO_DEFAULT_PORT } from '@skiff/contracts';
 import type { ObjectStore } from './object-store.ts';
 import { hmac } from './util.ts';
 
@@ -83,6 +83,8 @@ export interface CoreConfig {
 	 * gateway needs one route per node rather than one per session.
 	 */
 	studioPort?: number;
+	/** Loopback port of each node's container console front (D127, `SKIFF_CONTAINER_CONSOLE_PORT`). */
+	containerConsolePort?: number;
 	/** Largest object a single dashboard/API upload may send, in bytes (default 100 MiB). */
 	storageObjectMaxBytes?: number;
 	/** Injected S3 transport for tests; production uses the global fetch. */
@@ -102,8 +104,15 @@ export interface CoreConfig {
 	pitrRepository?: DatabasePitrRepoConfig;
 }
 
-export function coreConfigFromEnv(overrides: Partial<CoreConfig> & Pick<CoreConfig, 'objectStore' | 'masterKey' | 'dataDir'>): CoreConfig {
-	const env = process.env;
+/**
+ * The service-layer config: `overrides` first, then `SKIFF_*` environment variables (docs/OPS.md §2),
+ * then defaults. The control plane builds its config through this, so every variable read here
+ * reaches the running platform; pass `env` to resolve against something other than `process.env`.
+ */
+export function coreConfigFromEnv(
+	overrides: Partial<CoreConfig> & Pick<CoreConfig, 'objectStore' | 'masterKey' | 'dataDir'>,
+	env: Record<string, string | undefined> = process.env,
+): CoreConfig {
 	const platformOrigin = (overrides.platformOrigin ?? env.SKIFF_PLATFORM_ORIGIN ?? 'http://localhost:5173').replace(/\/$/, '');
 	const contentDomain = overrides.contentDomain ?? env.SKIFF_CONTENT_DOMAIN ?? 'localhost';
 	const siteCookieSecret =
@@ -118,13 +127,16 @@ export function coreConfigFromEnv(overrides: Partial<CoreConfig> & Pick<CoreConf
 		objectStoreSecret,
 		desiredAgentVersion: overrides.desiredAgentVersion ?? env.SKIFF_AGENT_VERSION ?? '0.1.0',
 		releaseRepo: overrides.releaseRepo ?? env.SKIFF_REPO ?? 'KieranHolroyd/skiff',
-		edgeNodeId: overrides.edgeNodeId ?? env.SKIFF_EDGE_NODE_ID,
+		// The installer writes `SKIFF_EDGE_NODE_ID=` before enrolment; empty means unset.
+		edgeNodeId: overrides.edgeNodeId ?? (env.SKIFF_EDGE_NODE_ID || undefined),
 		storageGatewayPort:
 			overrides.storageGatewayPort ?? positiveInteger(env.SKIFF_STORAGE_GATEWAY_PORT, 8081),
 		storageGatewayUrl: overrides.storageGatewayUrl ?? (env.SKIFF_STORAGE_GATEWAY_URL?.replace(/\/+$/, '') || undefined),
 		databaseGatewayPort:
 			overrides.databaseGatewayPort ?? positiveInteger(env.SKIFF_DATABASE_GATEWAY_PORT, 8082),
 		studioPort: overrides.studioPort ?? positiveInteger(env.SKIFF_STUDIO_PORT, STUDIO_DEFAULT_PORT),
+		containerConsolePort:
+			overrides.containerConsolePort ?? positiveInteger(env.SKIFF_CONTAINER_CONSOLE_PORT, CONTAINER_CONSOLE_DEFAULT_PORT),
 		storageObjectMaxBytes:
 			overrides.storageObjectMaxBytes ?? positiveInteger(env.SKIFF_STORAGE_OBJECT_MAX_BYTES, 104_857_600),
 		features: overrides.features ?? parseFeatureFlags(env),
@@ -167,7 +179,13 @@ function positiveInteger(value: string | undefined, fallback: number): number {
 	return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-/** Per-project HMAC key for the agent's host-only cookie (never the platform session key). */
-export function siteKeyFor(secret: string, projectId: string): string {
-	return hmac(secret, `site-key:${projectId}`);
+/**
+ * Per-project HMAC key for the agent's host-only cookie (never the platform session key).
+ *
+ * `epoch` is the project's visitor-session epoch: "sign out everyone" bumps it, which rotates the
+ * key so every cookie and callback token signed under the old one stops verifying. Epoch 0 keeps
+ * the original derivation, so cookies issued before epochs existed stay valid.
+ */
+export function siteKeyFor(secret: string, projectId: string, epoch = 0): string {
+	return hmac(secret, epoch > 0 ? `site-key:${projectId}:${epoch}` : `site-key:${projectId}`);
 }

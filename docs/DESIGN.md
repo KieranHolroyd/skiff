@@ -67,7 +67,7 @@ decision log with rationale, and [ROADMAP.md](./ROADMAP.md) for v1/v2 scope.
 ┌──────────────────────────── VPS (edge node) ─ Debian 13, 2 vCPU / 4 GB / 40 GB ────────┐
 │ Caddy (custom build + caddy-dns/cloudflare)  ← admin API on unix socket only           │
 │   *.contentDomain  ─► local sites/apps     or ─► homelab over WireGuard                │
-│   cloud./api./mcp.platformDomain ─► control plane                                      │
+│   platformDomain (UI · /api · /mcp · /api/auth) ─► control plane                       │
 │ Control plane (SvelteKit on Bun): UI · REST · MCP · Better Auth · SQLite · ClickHouse  │
 │ Node agent (bun --compile) · [v2: edge-placed tier-2/3 apps in skiff-workloads.slice]  │
 │ WireGuard (wg0) ◄─────────────────────────────┐                                        │
@@ -128,7 +128,7 @@ identical permission checks. No surface can do something another can't.
 |---|---|---|---|
 | 1 Static | ✅ | Caddy `file_server` on `/srv/skiff/releases/<sha>` | Caddy container + volume |
 | 2 Process (Bun/Node SSR) | v2 | Sandboxed unit: `DynamicUser`, `ProtectSystem=strict`, `MemoryMax`, `CPUQuota`, optional socket activation | Sibling container, read-only artifact mount, cap-drop all |
-| 3 Container | v2 | Podman Quadlet (rootless, no daemon) | Native |
+| 3 Container | v2 | Podman Quadlet (rootful, per-container user namespace, no daemon) | Native |
 
 ```ts
 interface RuntimeDriver {
@@ -244,6 +244,10 @@ create_upload → presigned PUT ─┼─► Upload session ─► finalize ─�
   must prove a second factor (passkey sign-in, or a TOTP/backup code verified in that session) before it can use
   the dashboard or API. Password, GitHub and magic-link sign-ins count as single-factor. An unverified session can't enrol a
   new factor when one already exists, so a hijacked GitHub account or mailbox can't add its own.
+- Password reset by email (`/forgot-password`, needs SMTP): a 30-minute single-use link, throttled per
+  address (1/min, 5/h) and per IP. Using it signs out every session and voids other links but never signs
+  in, so owners still prove a factor afterwards. Without email an operator runs `scripts/reset-password.ts`
+  (OPS §3.5). Both are audited as `user.password_reset`.
 
 ### 6.2 RBAC
 - **Platform level** (`admin` plugin): `platform:admin` manages nodes, global settings, domains, Caddy.
@@ -273,7 +277,8 @@ create_upload → presigned PUT ─┼─► Upload session ─► finalize ─�
   owner org, enforced for others.
 
 ### 6.3 MCP
-- Remote MCP over **Streamable HTTP** at `mcp.<platformDomain>`, served by the control plane.
+- Remote MCP over **Streamable HTTP** at `/mcp` on the platform origin (`SKIFF_PLATFORM_ORIGIN`, e.g.
+  `https://control.example.com/mcp`), served by the control plane. There is no separate MCP host.
 - **OAuth 2.1** for interactive clients (Claude Code, Claude.ai). The consent screen lets you pick permissions.
   - Client identity: **CIMD** (Client ID Metadata Documents, the MCP 2026-07-28 mechanism), with legacy
     **DCR** also enabled for older clients (`SKIFF_MCP_ALLOW_DCR`).
@@ -291,21 +296,33 @@ create_upload → presigned PUT ─┼─► Upload session ─► finalize ─�
   scope denials and declined confirmations. File contents are recorded as count, size and paths only.
 - Delete confirmations carry a signed, 10-minute state token bound to the user, client, tool and target, so a
   client can't pre-fill the answer to skip the prompt.
-- MCP resources: `skiff://guides/deploying`, `skiff://guides/limits`, `skiff://guides/site-config`.
+- MCP resources (six guides): `skiff://guides/deploying`, `skiff://guides/limits`,
+  `skiff://guides/site-config`, `skiff://guides/databases`, `skiff://guides/storage` and
+  `skiff://guides/email` (only while the `EMAIL` feature is on).
 
-**v1 tools**
+**Tools by area.** The full catalogue (every tool with the permission it checks and whether it confirms)
+is the user doc `packages/docs/content/clients/mcp.md`; README "For agents" lists the tool names by
+area. The design rules per area:
 
-| Group | Tools |
+| Area | Shape |
 |---|---|
-| One-shot | `deploy_site({ name, files?, uploadId?, promote? })`: creates the project if missing, then deploys |
-| Projects | `list_projects`, `get_project`, `create_project`, `update_project`, `delete_project` |
-| Mass actions | `delete_projects` (≤25, one confirmation for the whole list), `restore_projects`, `get_operation` (D53; no purge or prune over MCP) |
-| Deploying | `create_upload`, `deploy_files`, `finalize_upload`, `list_deployments`, `get_deployment`, `promote_deployment`, `rollback` |
-| Access | `set_access`, `create_share_link`, `list_share_links`, `revoke_share_link` |
-| Observability | `get_status`, `get_metrics`, `get_logs`, `get_audit_log` |
-| Dashboards (D101) | `describe_telemetry`, `query_telemetry`, `list_dashboards`, `get_dashboard`, `create_dashboard` (templates + panel drafts, auto-layout, data preview), `add_dashboard_panels`, `update_dashboard_panel`, `remove_dashboard_panels`, `update_dashboard`, `delete_dashboard` (elicitation) |
-| Alerts (D109) | `list_alerts`, `get_alert_rule`, `create_alert_rule` (outage templates, preview), `update_alert_rule`, `silence_alerts`, `acknowledge_alert`, `get_alert_history`, `delete_alert_rule` (elicitation) |
-| Platform | `list_nodes` (read-only) |
+| Identity & docs | `whoami`; `search_docs` / `read_docs` over the docs shipped in the running build (no permission) |
+| One-shot deploy | `deploy_site({ name, files?, uploadId?, promote? })` creates the project if missing, then deploys (sites and function bundles) |
+| Projects & mass actions | CRUD plus `delete_projects` (≤25, one confirmation for the whole list), `restore_projects`, `get_operation` (D53; no purge or prune over MCP) |
+| Deploying, releases, environments | uploads, deployments, promote/rollback, named environments |
+| Workloads & functions | workload spec and node capacity; `invoke_function` / `run_function_cron` run as node tasks the target node leases (D124, the node-task row) |
+| Volumes | list, create, attach, detach |
+| Databases | lifecycle, logs, backups and backup targets, restore-to-new, credential rotation, named credentials (metadata only), attach/detach; no credential reveal over MCP |
+| Brokers, queues, events | broker lifecycle, metrics and logs; queue create/send/peek/redrive as node tasks followed with `get_node_task`; event rules and deliveries (D122) |
+| Storage | instances, buckets, objects (presign, folders), bucket config, attach/detach, soft delete |
+| Access | `set_access`, share links, site sessions and "sign out all visitors" |
+| Observe | status, metrics, logs, log drains (list, create, test, delete; no private-network drains), audit log with a date range and cursor paging |
+| Dashboards (D101) | telemetry schema/query, dashboard and panel CRUD (templates, auto-layout, data preview) |
+| Alerts (D109) | rules (outage templates, preview), silence, acknowledge, history |
+| Platform | `list_nodes` (read-only), `get_usage`, `get_quotas` |
+| Email | status, domains (create/check), `send_email` (confirmed), messages, suppressions, sandbox recipients (add/remove confirmed); offered only while the `EMAIL` feature is on |
+
+Every delete, plus `remove_email_suppression`, `add_email_address`, `remove_email_address` and `send_email`, confirms through elicitation.
 
 All tools carry `readOnlyHint` / `destructiveHint` / `idempotentHint`. Responses include URLs and next steps.
 
@@ -314,8 +331,10 @@ SvelteKit's built-in CSRF check is disabled because it would block the OAuth tok
 `src/lib/server/csrf.ts`:
 - Every non-GET/HEAD request must have `Origin` equal to the platform origin, or `Sec-Fetch-Site: same-origin`.
 - Exceptions are an exact allowlist of cookieless endpoints: `oauth2/token`, `register`, `revoke`, `introspect`, `/mcp`,
-  `/api/v1/cli/token` (PKCE-bound code) and `/_skiff/site-login`, plus the bearer/signature-only prefixes
-  `/api/agent/` and `/api/objects/` (prefixes end in `/` so they never match a sibling REST path).
+  `/api/v1/cli/token` (PKCE-bound code), `/api/domains/ask` (Caddy's on-demand TLS check) and
+  `/_skiff/site-login`, plus the bearer/signature/token-only prefixes `/api/agent/`, `/api/objects/`,
+  `/api/backup-targets/`, `/api/webhooks/` and `/share/storage/` (unguessable share token). Prefixes end in
+  `/` so they never match a sibling REST path.
 - The control plane sends `X-Frame-Options: DENY` and `frame-ancestors 'none'` so consent and CLI-approval pages
   can't be framed.
 
@@ -349,7 +368,13 @@ domains; `skif logout --all` removes the file and every profile. `SKIFF_URL`, `S
 
 ### 6.4 Protected sites
 - Access modes per project, set separately for production and previews: `public | password | platform`.
-  **Defaults: production `public`, previews `platform`.**
+  **Defaults: production `public`, previews `platform`.** Each named environment has its own mode too.
+- **One password per scope:** production and previews each keep their own scrypt hash on the project
+  (`production_password_hash`, `preview_password_hash`), and each named environment keeps one on its row.
+  The control plane checks a password only against the scope that serves the host, and a scope not in
+  `password` mode accepts none. Leaving password mode clears only that scope's hash; switching to it needs a
+  new password; re-saving it without one keeps the hash. A new environment that inherits password-protected
+  previews starts with a copy of the preview hash.
 - Flow: Caddy `forward_auth` goes to the **local node agent**, which verifies an **HMAC-signed, host-only
   cookie** statelessly (sub-ms, no DB). With no cookie, the visitor is redirected to the platform domain
   to log in or enter the password, then back to `/_skiff/callback?token=<one-time, 60s>`, where the agent sets a site-scoped cookie.
@@ -361,7 +386,14 @@ domains; `skif logout --all` removes the file and every profile. `SKIFF_URL`, `S
   - Options: `expiresAt`, `maxVisitors`, `maxRedemptions`, `sessionTtl`, `allowedEmails`, `note`.
   - A "visit" is a **redemption**, not a page load. Redemption is atomic on the control plane.
   - Revocation: the control plane pushes a revocation set (link and session IDs) to agents, which takes effect in seconds.
+    Live share sessions are listed per project (`GET /projects/:slug/sessions`) and can be ended one by one.
   - Per-link analytics come from the access logs.
+- **Sign out everyone:** each project has a `site_session_epoch` mixed into its site key
+  (`siteKeyFor(secret, projectId, epoch)`; epoch 0 keeps the original key). Bumping it rotates the key the
+  agents pull with the route, so every cookie and callback token signed before then stops verifying on every
+  scope, with no per-session state. Password and platform sessions are stateless and so are not listed; this is
+  the only way to end them early. Share redemptions record the epoch they were minted under so listings leave
+  out signed-out sessions. Share links themselves keep working.
 
 ---
 
@@ -408,8 +440,22 @@ domains; `skif logout --all` removes the file and every profile. `SKIFF_URL`, `S
 - **Retention:** 1-minute buckets for 48 h, 1-hour for 90 days in ClickHouse (explicit prune, with table TTLs as a
   backstop), then **daily Parquet partitions to R2** (queryable with ClickHouse's `s3()` table function).
 - **Logs:**
-  - App logs go to journald and are queried on demand through the agent, with live tail over SSE.
+  - App logs go to journald. The agent reads new entries through the helper and ships them to the control plane, which
+    stores build, runtime and system lines in `log_events` (managed services in `service_log_events` and
+    `broker_log_events`) and tails them over SSE by `seq`.
+  - **Log drains** forward those stored lines to an HTTPS webhook (NDJSON or a JSON array, signed with
+    `X-Skiff-Signature` like the alert webhook, [ALERTS.md](./ALERTS.md) §3) or an OTLP/HTTP logs receiver (JSON
+    encoding). A drain is org-wide or one project, filtered by source and minimum level, and is three cursors over
+    the tables' `seq`: the primary ships batches (up to 500 lines per table, about 1 MB) every 5 s, moves the cursors after a 2xx, backs
+    off 5 s → 5 min on failure and drops (and counts) a batch after 8 attempts or a 400/413/415/422. Delivery is at
+    least once; each line has a stable `id`. Header values and signing secrets are sealed with the org key. Drains
+    reach public addresses only, unless a platform admin allows private networks for one. Org owners and admins
+    manage them (Settings → Log drains, `/api/v1/log-drains`, `skif log-drain`, MCP `*_log_drain`); at most 10 per
+    org (`packages/core/src/log-drains.ts`, migration 0063).
   - Raw Caddy logs are kept 7 days, compressed.
+- **Audit log:** every mutating surface writes `audit_log` (DESIGN §6.3). Reads take a date range (`from`/`to`: a
+  date, ISO time or epoch ms) and page newest first with an opaque `(created_at, id)` cursor, at most 200 entries a
+  page, the same on REST (`nextCursor`), MCP `get_audit_log`, `skif audit` and the dashboard.
 - **Export:** Prometheus `/metrics` on the control plane and agents, plus an optional outbound OTLP exporter.
   (Import from external Prometheus is a designed interface, not built.)
 - Tier-2 apps (v2) get `OTEL_EXPORTER_OTLP_ENDPOINT` injected, pointing at their local agent.
@@ -485,14 +531,16 @@ domains; `skif logout --all` removes the file and every profile. `SKIFF_URL`, `S
      can't work here (plain HTTP, an IP address).
   4. Offers an authenticator backup and links to email, backups, members and API keys.
   No sign-up path works before an owner exists.
-- **Join a node:** `skiff-agent join https://cloud.<platformDomain> --token <single-use, 1h> --name <name>`.
+- **Join a node:** `skiff-agent join <platform origin, e.g. https://control.example.com> --token <single-use, 1h> --name <name>`.
 - **Self-update:**
   1. Verify the signature.
   2. Snapshot SQLite.
   3. Run forward-only Drizzle migrations.
   4. Atomic symlink swap and restart.
   5. Health check, with automatic rollback on failure.
-- Update policy: patch releases auto-apply in a maintenance window; minor and major updates notify you.
+- Update policy: nothing updates on its own, patch releases included. Settings → Updates shows platform
+  admins when a newer signed release exists, and an update runs only when someone starts it there or with
+  `skiff-update-self` on the host.
 
 ---
 

@@ -10,9 +10,10 @@ import {
 } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
 import { parseTrafficRange, trafficRangeHref, trafficRanges } from '#lib/server/traffic-range.js';
-import { failStatus, formString, toFormFailure } from '../../_lib/errors.js';
+import { failStatus, formRawString, formString, toFormFailure } from '../../_lib/errors.js';
 import { fieldErrorsFrom, optionalNumber } from '../../databases/_lib/forms.server.js';
 import { brokerCan } from '../_lib/forms.server.js';
+import { nodeTaskAction } from '#lib/server/node-tasks.js';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params, url }) => {
@@ -81,7 +82,114 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	};
 };
 
+/** A stream named in a form: a function queue maps to its `SKIFF_Q_<queue>` stream. */
+function streamField(data: FormData): string {
+	const stream = formString(data, 'stream');
+	if (stream) return stream;
+	const queue = formString(data, 'queue');
+	return queue ? `SKIFF_Q_${queue}` : '';
+}
+
+const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
+
 export const actions: Actions = {
+	// --- queue tools: run by the broker's node (D124) ---------------------------------------------
+
+	createQueue: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const queue = formString(await request.formData(), 'queue');
+		return nodeTaskAction(
+			principal,
+			() => core.nodeTasks.brokerTask(principal, params.name, 'broker.queue.create', { queue }),
+			(task) => (task.result?.created ? `Queue ${queue} created.` : `Queue ${queue} already exists.`)
+		);
+	},
+
+	sendMessage: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const delay = formString(data, 'delaySeconds');
+		const count = formString(data, 'count');
+		const queue = formString(data, 'queue');
+		return nodeTaskAction(
+			principal,
+			() =>
+				core.nodeTasks.brokerTask(principal, params.name, 'broker.queue.send', {
+					queue,
+					body: formRawString(data, 'body'),
+					contentType: formString(data, 'contentType') || 'json',
+					...(delay ? { delaySeconds: Number(delay) } : {}),
+					...(count ? { count: Number(count) } : {})
+				}),
+			(task) => `Sent ${plural(task.result?.sent ?? 0, 'message')} to ${queue}.`
+		);
+	},
+
+	peek: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const from = formString(data, 'fromSeq');
+		return nodeTaskAction(principal, () =>
+			core.nodeTasks.brokerTask(principal, params.name, 'broker.stream.peek', {
+				stream: streamField(data),
+				limit: Number(formString(data, 'limit') || 20),
+				...(from ? { fromSeq: Number(from) } : {})
+			})
+		);
+	},
+
+	deleteMessage: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		return nodeTaskAction(
+			principal,
+			() =>
+				core.nodeTasks.brokerTask(principal, params.name, 'broker.stream.deleteMessage', {
+					stream: streamField(data),
+					seq: Number(formString(data, 'seq'))
+				}),
+			(task) => (task.result?.deleted ? `Message ${task.result.seq} deleted.` : `Message ${task.result?.seq} was already gone.`)
+		);
+	},
+
+	purgeStream: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		return nodeTaskAction(
+			principal,
+			() => core.nodeTasks.brokerTask(principal, params.name, 'broker.stream.purge', { stream: streamField(data) }),
+			(task) => `Purged ${plural(task.result?.purged ?? 0, 'message')} from ${task.result?.stream}.`
+		);
+	},
+
+	deleteStream: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		return nodeTaskAction(
+			principal,
+			() => core.nodeTasks.brokerTask(principal, params.name, 'broker.stream.delete', { stream: streamField(data) }),
+			(task) => `${task.result?.stream} deleted.`
+		);
+	},
+
+	redrive: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const to = formString(data, 'to');
+		const limit = formString(data, 'limit');
+		return nodeTaskAction(
+			principal,
+			() =>
+				core.nodeTasks.brokerTask(principal, params.name, 'broker.queue.redrive', {
+					from: formString(data, 'from'),
+					to,
+					...(limit ? { limit: Number(limit) } : {})
+				}),
+			(task) =>
+				`Moved ${plural(task.result?.moved ?? 0, 'message')} to ${to}${task.result?.remaining ? `; ${task.result.remaining} still waiting` : ''}.`
+		);
+	},
+
 	/** Revealed on demand and audited; never part of page data (as D58). */
 	credentials: async ({ locals, params }) => {
 		const principal = locals.principal!;

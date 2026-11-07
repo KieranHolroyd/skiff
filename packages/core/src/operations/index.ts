@@ -1,4 +1,5 @@
 import type { CoreContext } from '../context.ts';
+import { blueprintApplyAction } from '../blueprints.ts';
 import { projectActions } from './project-actions.ts';
 import { pruneAction } from './prune.ts';
 import { OperationService } from './service.ts';
@@ -11,5 +12,6 @@ export function createOperationService(ctx: CoreContext): OperationService {
 	const service = new OperationService(ctx);
 	for (const definition of projectActions()) service.register(definition);
 	service.register(pruneAction);
+	service.register(blueprintApplyAction);
 	return service;
 }

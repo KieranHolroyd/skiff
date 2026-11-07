@@ -119,6 +119,10 @@ export class DeploymentService {
 		options: DeploymentOptions & { precompress?: boolean } = {},
 	): Promise<DeploymentView> {
 		requirePermission(principal, 'deployment:create');
+		// Quotas first, so a refused deploy stores nothing: over the egress quota new deploys pause
+		// (docs/QUOTAS.md), and a deploy that adds a preview needs room under `previews`.
+		await this.ctx.quota.assertCanCreateDeployment(project.orgId, project.id);
+		this.assertPreviewRoom(project, this.resolveEnvironment(project, options.environment), options.promote ?? true);
 		// Functions validate their manifest and persist the resolved spec before the release is stored
 		// (D110). No-op for every other bundle.
 		await this.ctx.functions.applyBundle(principal, project, entries);
@@ -156,6 +160,7 @@ export class DeploymentService {
 		// moves the project-level pointer; non-production environments never touch it.
 		const promote = options.promote ?? true;
 		const promoteProduction = promote && environment.isProduction;
+		this.assertPreviewRoom(project, environment, promote);
 		const row: typeof deployments.$inferInsert = {
 			id,
 			orgId: project.orgId,
@@ -277,6 +282,20 @@ export class DeploymentService {
 	}
 
 	/** `undefined`/`production` resolves to the built-in production environment. */
+	/**
+	 * A deploy adds a preview when it moves no pointer (`promote: false`), or when it moves a
+	 * non-production environment off a deployment that was never production. A production promote
+	 * adds none: the deployment it replaces is rollback history, bounded by retention instead.
+	 */
+	private assertPreviewRoom(project: ProjectRow, environment: EnvironmentRow, promote: boolean): void {
+		const addsPreview = !promote
+			? true
+			: !environment.isProduction &&
+				environment.deploymentId !== null &&
+				this.ctx.quota.becomesPreviewWhenUnpointed(environment.deploymentId, environment.id);
+		if (addsPreview) this.ctx.quota.assertCanCreatePreview(project.orgId, project.id);
+	}
+
 	private resolveEnvironment(project: ProjectRow, slug?: string): EnvironmentRow {
 		const production = this.ctx.environments.ensureProduction(project);
 		if (!slug || slug === production.slug) return production;

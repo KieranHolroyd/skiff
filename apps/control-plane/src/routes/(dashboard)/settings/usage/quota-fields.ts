@@ -22,12 +22,17 @@ const MB = 1024 ** 2;
 
 export const QUOTA_FIELDS: Record<QuotaField, QuotaFieldMeta> = {
 	projects: { label: 'Projects' },
-	previews: { label: 'Preview environments' },
+	previews: { label: 'Previews', hint: 'Deployments that serve no environment and were never live' },
 	buildsPerDay: { label: 'Builds', period: 'last 24 hours' },
 	retainedDeployments: { label: 'Kept deployments', hint: 'Per project; older ones are pruned' },
 	maxUploadBytes: { label: 'Largest upload', inputUnit: 'MB' },
 	workloadMemoryMb: { label: 'Reserved memory', hint: 'Workloads, databases and storage' },
-	egressBytes: { label: 'Egress', period: 'last 30 days', inputUnit: 'GB' },
+	egressBytes: {
+		label: 'Egress',
+		period: 'last 30 days',
+		hint: 'Approximate; over the limit, new deploys are refused',
+		inputUnit: 'GB'
+	},
 	jobs: { label: 'Jobs' },
 	jobRunsPerDay: { label: 'Job runs', period: 'last 24 hours' },
 	databases: { label: 'Databases' },
@@ -40,7 +45,7 @@ export const QUOTA_FIELDS: Record<QuotaField, QuotaFieldMeta> = {
 	},
 	storageObjects: { label: 'Objects' },
 	appVolumes: { label: 'Volumes' },
-	appVolumeBytes: { label: 'Volume space', inputUnit: 'GB' }
+	appVolumeBytes: { label: 'Volume space', hint: 'Configured volume sizes', inputUnit: 'GB' }
 };
 
 /** Multiplier from the form's unit to the stored value. */

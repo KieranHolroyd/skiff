@@ -31,6 +31,8 @@
  *   --no-python               skip warming the Pyodide cache Python functions need (D121; ~36 MB)
  *   --with-php                install the pinned FrankenPHP runtime for PHP process apps (D121;
  *                             ~175 MB; or SKIFF_INSTALL_PHP=1)
+ *   --no-node                 skip the pinned Node.js LTS for Node.js process apps (D125; ~190 MB;
+ *                             or SKIFF_NO_NODE=1)
  *   --version <label>         release label (default: the repository VERSION file)
  */
 import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -41,12 +43,13 @@ import { randomBytes } from 'node:crypto';
 import { SELF_UPDATE_DEFAULTS } from '../../packages/contracts/src/self-update.ts';
 import { parseSemver } from '../../packages/contracts/src/semver.ts';
 import { TRIGGER_PATH_UNIT, triggerUnits, updateCommandScript } from '../update-self/units.ts';
-import { controlPlaneUnits, DEFAULT_CONTROL_PLANE_PATHS, GUARD_UNIT } from '../systemd/control-plane.ts';
+import { controlPlaneUnits, DEFAULT_CONTROL_PLANE_PATHS, ensureMasterKeyDropIns, GUARD_UNIT, MASTER_KEY_DROP_IN, PRIMARY_UNIT, STANDBY_UNIT } from '../systemd/control-plane.ts';
 import { CONFIG_COMMAND, CONFIG_PATH_UNIT, CONFIG_SERVICE_UNIT, ensurePlatformConfigUnits } from '../platform-config/units.ts';
 import { readEnvFile, writeEnvFile } from './env-file.ts';
 import { ensureVapidKeys } from '../../packages/contracts/src/vapid.ts';
 import { ensureWorkerd, pinnedWorkerdVersion, workerdArch } from './workerd.ts';
 import { ensureFrankenphp, frankenphpArch, FRANKENPHP_LINK, FRANKENPHP_PINNED_VERSION } from './frankenphp.ts';
+import { ensureNode, nodeArch, NODE_OPT_OUT_MARKER, NODE_PINNED_VERSION } from './node.ts';
 import { pythonBundleEras, warmPyodideCache } from './pyodide.ts';
 import { checkDns, digLookup, dnsTargets, parseServerAddresses, resolverLookup, type DnsResult } from './dns-check.ts';
 import {
@@ -63,6 +66,7 @@ import { STUDIO_UNIT, studioUnit } from '../systemd/studio.ts';
 import { MAIL_UNIT, mailUnit } from '../systemd/mail.ts';
 import { agentUnit, CADDY_ACCESS_LOG, detectCaddyAdminSocket } from '../systemd/agent.ts';
 import { CLI_COMMANDS, ensureHostCommands, RELEASE_COMMANDS } from './commands.ts';
+import { ensureMasterKey, finishMasterKeyMigration, revertMasterKeyMigration, type EnsureMasterKeyResult } from './master-key.ts';
 import { CLICKHOUSE_UNIT, clickhouseInstalled, ensureClickHouse, removeClickHouseUnit } from '../systemd/clickhouse.ts';
 import {
 	createUpgradeSnapshotBundle,
@@ -154,6 +158,8 @@ interface Options {
 	withPhp: boolean;
 	/** Skip the Pyodide cache for Python functions (D121). */
 	noPython: boolean;
+	/** Skip the pinned Node.js for Node.js process apps (D125). */
+	noNode: boolean;
 	/**
 	 * Install the optional ClickHouse telemetry store (D101). Undefined: ask (interactive), else no.
 	 * A host that already has it keeps it either way unless --no-clickhouse.
@@ -231,6 +237,7 @@ const options: Options = {
 	noAgent: has('--no-agent'),
 	withPhp: has('--with-php') || process.env.SKIFF_INSTALL_PHP === '1',
 	noPython: has('--no-python') || process.env.SKIFF_NO_PYTHON === '1',
+	noNode: has('--no-node') || process.env.SKIFF_NO_NODE === '1',
 	clickhouse: has('--no-clickhouse')
 		? false
 		: has('--clickhouse') || process.env.SKIFF_INSTALL_CLICKHOUSE === '1'
@@ -670,6 +677,28 @@ async function preflight(): Promise<void> {
 				),
 			);
 		}
+		// Node.js process apps run on a pinned LTS (D125). On by default; a failure is a warning,
+		// since only Node apps need it and `bun scripts/install/node.ts` adds it later.
+		const jsArch = nodeArch(process.arch);
+		if (options.noNode) {
+			if (!options.dryRun) {
+				mkdirSync(dirname(NODE_OPT_OUT_MARKER), { recursive: true });
+				writeFileSync(NODE_OPT_OUT_MARKER, 'Node.js process apps were declined with --no-node (D125).\n');
+			}
+		} else if (jsArch) {
+			try {
+				if (!options.dryRun) rmSync(NODE_OPT_OUT_MARKER, { force: true });
+				const result = await ensureNode({ arch: jsArch, dryRun: options.dryRun, log });
+				log(`Node.js ${NODE_PINNED_VERSION} ${result === 'would-install' ? 'would be installed' : 'ready'} at /usr/local/bin/node`);
+			} catch (error) {
+				log(
+					color.yellow(
+						`warning: could not install Node.js (${error instanceof Error ? error.message : String(error)}); ` +
+							'Node.js apps cannot be placed on this node until `bun scripts/install/node.ts` succeeds',
+					),
+				);
+			}
+		}
 		// PHP apps are process apps on a pinned FrankenPHP (D121). Opt-in; a failure is a warning,
 		// since only PHP apps need it and `bun scripts/install/frankenphp.ts` adds it later.
 		const phpArch = frankenphpArch(process.arch);
@@ -771,14 +800,15 @@ function ensureUsersAndDirs(): void {
 	}
 }
 
+/** Set by writeSecrets: the key (for node enrolment) and whether this run sealed a plaintext one. */
+let masterKey: EnsureMasterKeyResult | null = null;
+
 function writeSecrets(): Map<string, string> {
 	step('Secrets and environment');
 	const existing = readEnvFile(ENV_FILE);
-	const master = existsSync(MASTER_KEY_FILE) ? readFileSync(MASTER_KEY_FILE, 'utf8').trim() : base64(32);
-	if (!options.dryRun) {
-		writeFileSync(MASTER_KEY_FILE, `${master}\n`, { mode: 0o400 });
-		run('chown', ['root:root', MASTER_KEY_FILE], { allowFailure: true });
-	}
+	// Sealed with systemd-creds (TPM2 + host key, or host key) when the host has it; an existing
+	// plaintext key is sealed in place and kept as master.key.pre-seal until the control plane starts.
+	masterKey = ensureMasterKey({ plainPath: MASTER_KEY_FILE, dryRun: options.dryRun, log });
 
 	const env = new Map(existing);
 	env.set('NODE_ENV', 'production');
@@ -793,7 +823,8 @@ function writeSecrets(): Map<string, string> {
 	env.set('SKIFF_OBJECT_STORE_SECRET', existing.get('SKIFF_OBJECT_STORE_SECRET') ?? base64(32));
 	// Web Push alerts (D108): kept across re-runs, since a new pair orphans every subscribed device.
 	if (ensureVapidKeys(env)) log('generated the Web Push (VAPID) key pair');
-	env.set('SKIFF_DAILY_BACKUPS', '1');
+	// Nothing reads it (backups are Litestream + per-database schedules); drop it from old installs.
+	env.delete('SKIFF_DAILY_BACKUPS');
 	// Remembered so a later re-run/upgrade keeps them without repeating the flags.
 	if (options.tls) env.set('SKIFF_ACME_EMAIL', options.acmeEmail);
 	else env.delete('SKIFF_ACME_EMAIL');
@@ -913,9 +944,13 @@ function writeUnits(release: string): void {
 	const agent = agentUnit({ optDir: OPT_DIR, etcDir: ETC_DIR, varDir: VAR_DIR, runDir: RUN_DIR });
 	if (options.dryRun) {
 		log(`would write ${Object.keys(controlUnits).join(', ')}, skiff-agent.service and ${STUDIO_UNIT}`);
+		if (masterKey?.store.kind === 'sealed' || masterKey?.action === 'seal-existing')
+			log(`would point both control-plane units at the sealed master key (${MASTER_KEY_DROP_IN} drop-ins)`);
 		return;
 	}
 	for (const [name, body] of Object.entries(controlUnits)) writeFileSync(join(SYSTEMD_DIR, name), body);
+	// LoadCredentialEncrypted= when the key is sealed (removed again if it is not).
+	ensureMasterKeyDropIns({ systemdDir: SYSTEMD_DIR, masterKeyFile: MASTER_KEY_FILE });
 	writeFileSync(join(SYSTEMD_DIR, 'skiff-agent.service'), agent);
 	// The on-demand database studio (plan 22): installed beside the agent, never enabled. The
 	// agent starts it through the helper; it exits by itself when idle.
@@ -1244,6 +1279,8 @@ function bootstrapNode(env: Map<string, string>, release: string): void {
 			SKIFF_CONTENT_DOMAIN: env.get('SKIFF_CONTENT_DOMAIN')!,
 			SKIFF_SITE_COOKIE_SECRET: env.get('SKIFF_SITE_COOKIE_SECRET')!,
 			SKIFF_OBJECT_STORE_SECRET: env.get('SKIFF_OBJECT_STORE_SECRET')!,
+			// The key itself: a sealed key has no plaintext file to read.
+			SKIFF_MASTER_KEY: masterKey?.key ?? '',
 			SKIFF_MASTER_KEY_FILE: MASTER_KEY_FILE,
 			SKIFF_AGENT_ENV_FILE: AGENT_ENV_FILE,
 			SKIFF_PLATFORM_HOST: platformHost,
@@ -1355,6 +1392,12 @@ function rollback(previous: string | null, snapshot: string | null, previousLink
 		relink(join(OPT_DIR, 'previous'), previousLink && previousLink !== previous ? previousLink : null);
 		console.error(color.yellow(`restored ${previous}`));
 	}
+	// A master key this run sealed goes back to the plaintext file the old setup used.
+	if (revertMasterKeyMigration(MASTER_KEY_FILE)) {
+		ensureMasterKeyDropIns({ systemdDir: SYSTEMD_DIR, masterKeyFile: MASTER_KEY_FILE });
+		Bun.spawnSync({ cmd: ['systemctl', 'daemon-reload'], stdout: 'ignore', stderr: 'ignore' });
+		console.error(color.yellow(`restored the plaintext master key ${MASTER_KEY_FILE}`));
+	}
 	Bun.spawnSync({ cmd: ['systemctl', 'start', 'skiff-control-plane.service'], stdout: 'ignore', stderr: 'ignore' });
 	if (!options.noAgent && existsSync(AGENT_ENV_FILE)) {
 		// The restored release's agent may predate `skiff-agent studio`; it restarts the studio on demand.
@@ -1421,6 +1464,11 @@ async function install(): Promise<void> {
 		writeUnits(release);
 		await installClickHouse();
 		startServices();
+		// The control plane served with the sealed key: the plaintext a migration kept can go.
+		if (!options.dryRun && masterKey?.key) {
+			const removed = finishMasterKeyMigration(MASTER_KEY_FILE, masterKey.key);
+			if (removed) log(`removed the plaintext master key backup ${removed}`);
+		}
 		installBackups(env);
 		bootstrapNode(env, release);
 		if (!options.noAgent) {
@@ -1481,6 +1529,7 @@ function uninstall(): void {
 		run('systemctl', ['disable', '--now', `${service}.service`], { allowFailure: true });
 		rmSync(join(SYSTEMD_DIR, `${service}.service`), { force: true });
 	}
+	for (const unit of [PRIMARY_UNIT, STANDBY_UNIT]) rmSync(join(SYSTEMD_DIR, `${unit}.d`, MASTER_KEY_DROP_IN), { force: true });
 	// Its data (/var/lib/skiff/clickhouse) and binary (/opt/skiff/clickhouse) go only with --purge.
 	removeClickHouseUnit({ systemdDir: SYSTEMD_DIR, run: (cmd) => void run(cmd[0]!, cmd.slice(1), { allowFailure: true }) });
 	for (const unit of BACKUP_UNITS) {

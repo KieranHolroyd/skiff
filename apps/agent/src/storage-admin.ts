@@ -15,6 +15,7 @@ import {
 	type StorageBucketConfigReport,
 	type StorageBucketDeletion,
 	type StorageGrant,
+	type StorageRootKeyReport,
 	type WorkloadObjectStorage,
 	type WorkloadStatus,
 } from '@skiff/contracts';
@@ -40,6 +41,13 @@ const FULL_REASSERT_MS = 15 * 60_000;
 /** A forced delete empties at most this many 1000-key pages per round, then continues next round. */
 const FORCE_DELETE_PAGES_PER_ROUND = 50;
 const REQUEST_TIMEOUT_MS = 30_000;
+/**
+ * A root key is reported `rejected` after this many consecutive authentication failures, spread
+ * over at least `ROOT_KEY_REJECT_MIN_MS`: right after a new activation the old server may still be
+ * running for a moment, and its refusals must not roll back a rotation that is about to work.
+ */
+export const ROOT_KEY_REJECT_FAILURES = 3;
+export const ROOT_KEY_REJECT_MIN_MS = 2 * 60_000;
 
 /** What the reconciler needs to know about one instance; provided by the workload runtime. */
 export interface StorageTarget {
@@ -523,6 +531,15 @@ interface InstanceState {
 	lastFullAt: number;
 }
 
+/** What the reconciler last proved about one instance's activation root key (§5). */
+interface RootKeyState {
+	accessKeyId: string;
+	failures: number;
+	firstFailureAt: number | null;
+	/** The outcome last queued for this key. */
+	reported: StorageRootKeyReport['result'] | null;
+}
+
 export class StorageReconciler {
 	private readonly source: StorageTargetSource;
 	private readonly apiFor: (target: StorageTarget) => StorageApi;
@@ -542,6 +559,9 @@ export class StorageReconciler {
 	 * `deleteBuckets` so each outcome is reported once and the bucket is not deleted twice.
 	 */
 	private readonly decided = new Set<string>();
+	private readonly rootKeys = new Map<string, RootKeyState>();
+	/** Root key outcomes waiting for a heartbeat, by storage id. */
+	private readonly rootKeyReports = new Map<string, StorageRootKeyReport>();
 	private running: Promise<void> | null = null;
 	private again = false;
 
@@ -572,6 +592,24 @@ export class StorageReconciler {
 	/** Call only after the control plane accepted a heartbeat that carried these reports. */
 	acknowledgeBucketConfigs(sent: readonly StorageBucketConfigReport[]): void {
 		for (const report of sent) this.configReports.delete(configReportKey(report));
+	}
+
+	/**
+	 * Root key outcomes for the next heartbeat's `storageRootKeys`: `accepted` once an admin call
+	 * signed with the activation's root key succeeded, `rejected` after repeated auth failures.
+	 * The control plane only acts on a report for a pending (rotating) key.
+	 */
+	pendingRootKeyReports(): StorageRootKeyReport[] {
+		return [...this.rootKeyReports.values()].map((report) => ({ ...report }));
+	}
+
+	/** Call only after the control plane accepted a heartbeat that carried these reports. */
+	acknowledgeRootKeyReports(sent: readonly StorageRootKeyReport[]): void {
+		for (const report of sent) {
+			const queued = this.rootKeyReports.get(report.storageId);
+			if (queued && queued.accessKeyId === report.accessKeyId && queued.result === report.result)
+				this.rootKeyReports.delete(report.storageId);
+		}
 	}
 
 	/**
@@ -616,6 +654,8 @@ export class StorageReconciler {
 		for (const key of [...this.reportedConfigs.keys()]) {
 			if (!ids.has(key.split('/')[0]!)) this.reportedConfigs.delete(key);
 		}
+		for (const id of [...this.rootKeys.keys()]) if (!ids.has(id)) this.rootKeys.delete(id);
+		for (const id of [...this.rootKeyReports.keys()]) if (!ids.has(id)) this.rootKeyReports.delete(id);
 		for (const target of targets) {
 			if (target.status !== 'running') continue;
 			try {
@@ -651,7 +691,15 @@ export class StorageReconciler {
 		const api = this.apiFor(target);
 		const state = this.stateFor(target);
 		const desired = target.desired;
-		const existing = new Set(await api.listBuckets());
+		let listed: string[];
+		try {
+			listed = await api.listBuckets();
+		} catch (error) {
+			this.noteRootKey(target, error);
+			throw error;
+		}
+		this.noteRootKey(target, null);
+		const existing = new Set(listed);
 
 		// 1. Desired buckets, their anonymous access and their configuration.
 		for (const bucket of desired.buckets) {
@@ -681,6 +729,43 @@ export class StorageReconciler {
 
 		// 3. Scoped keys.
 		await this.reconcileUsers(target, api, state);
+	}
+
+	/**
+	 * Track whether the activation's root key works against the running server. Only
+	 * authentication failures count towards `rejected`; a connection error (the server restarting)
+	 * neither counts nor resets the streak.
+	 */
+	private noteRootKey(target: StorageTarget, error: unknown): void {
+		const accessKeyId = target.admin.rootAccessKeyId;
+		let state = this.rootKeys.get(target.id);
+		if (!state || state.accessKeyId !== accessKeyId) {
+			state = { accessKeyId, failures: 0, firstFailureAt: null, reported: null };
+			this.rootKeys.set(target.id, state);
+		}
+		if (error === null) {
+			state.failures = 0;
+			state.firstFailureAt = null;
+			if (state.reported !== 'accepted') {
+				state.reported = 'accepted';
+				this.rootKeyReports.set(target.id, { storageId: target.id, accessKeyId, result: 'accepted', message: null });
+			}
+			return;
+		}
+		if (!isAuthError(error)) return;
+		const now = this.now();
+		state.failures += 1;
+		state.firstFailureAt ??= now;
+		if (
+			state.reported === null &&
+			state.failures >= ROOT_KEY_REJECT_FAILURES &&
+			now - state.firstFailureAt >= ROOT_KEY_REJECT_MIN_MS
+		) {
+			state.reported = 'rejected';
+			const message = scrub(errorText(error), target).slice(0, 500);
+			this.rootKeyReports.set(target.id, { storageId: target.id, accessKeyId, result: 'rejected', message });
+			this.log('error', `Storage ${target.id}: RustFS keeps refusing root key ${accessKeyId}: ${message}`);
+		}
 	}
 
 	/**
@@ -915,6 +1000,20 @@ function isMissingConfiguration(error: unknown): boolean {
 	);
 }
 
+/**
+ * RustFS refused the key or its signature. The reconciler's first call is ListBuckets with the
+ * root key, which no policy can deny, so any 401/403 there means the key itself is not accepted.
+ */
+export function isAuthError(error: unknown): boolean {
+	if (!(error instanceof StorageApiError)) return false;
+	return (
+		error.code === 'InvalidAccessKeyId' ||
+		error.code === 'SignatureDoesNotMatch' ||
+		error.status === 401 ||
+		error.status === 403
+	);
+}
+
 /** A 404/405/501 from an admin or S3 endpoint means this RustFS build lacks the feature. */
 export function isUnsupportedError(error: unknown): boolean {
 	if (!(error instanceof StorageApiError)) return false;
@@ -1098,7 +1197,11 @@ function nonNegative(value: number): number {
 /** Error text must never carry a key's secret. */
 export function scrub(message: string, target: Pick<StorageTarget, 'admin'>): string {
 	let scrubbed = message;
-	for (const secret of [target.admin.rootSecretAccessKey, ...Object.values(target.admin.users)]) {
+	for (const secret of [
+		target.admin.rootSecretAccessKey,
+		...Object.values(target.admin.users),
+		...Object.values(target.admin.replication ?? {}),
+	]) {
 		if (secret) scrubbed = scrubbed.split(secret).join('***');
 	}
 	return scrubbed;

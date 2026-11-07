@@ -9,9 +9,9 @@ import { backupStatus, type BackupStatus } from './_lib/backup-status.js';
 import type { LayoutServerLoad } from './$types';
 
 /**
- * Small, cheap facts for the settings navigation: counts beside Members and API keys, and a
- * status dot beside each platform section an owner is expected to set up. The backup check
- * shells out to systemd, so it is streamed rather than awaited.
+ * Small, cheap facts for the settings navigation: counts beside Members, API keys and Connected
+ * apps, and a status dot beside each platform section an owner is expected to set up. The backup
+ * check shells out to systemd, so it is streamed rather than awaited.
  */
 export const load: LayoutServerLoad = ({ locals }) => {
 	const principal = locals.principal!;
@@ -43,6 +43,10 @@ export const load: LayoutServerLoad = ({ locals }) => {
 			apiKeys: principal.permissions.has('apiKey:read')
 				? count('SELECT COUNT(*) AS n FROM apikey WHERE referenceId = ?', principal.userId)
 				: null,
+			connectedApps: count(
+				'SELECT COUNT(DISTINCT clientId) AS n FROM oauthConsent WHERE userId = ?',
+				principal.userId
+			),
 			platform: owner
 				? {
 						availability,

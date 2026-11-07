@@ -607,6 +607,8 @@ export function createUpgradeSnapshotBundle(input: UpgradeSnapshotInput): Upgrad
 			{ source: join(input.envDir, 'skiff.env'), destination: join(temporary, 'config', 'skiff.env') },
 			{ source: join(input.envDir, 'agent.env'), destination: join(temporary, 'config', 'agent.env') },
 			{ source: join(input.envDir, 'master.key'), destination: join(temporary, 'config', 'master.key'), mode: 0o400 },
+			// Sealed with systemd-creds (scripts/install/master-key.ts): opens only on this host.
+			{ source: join(input.envDir, 'master.key.cred'), destination: join(temporary, 'config', 'master.key.cred'), mode: 0o400 },
 			{ source: join(input.envDir, 'litestream.yml'), destination: join(temporary, 'config', 'litestream.yml') }
 		);
 	}

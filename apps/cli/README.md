@@ -47,6 +47,7 @@ skif deploy ./dist --project my-site --json
 | `open <project>` | Open the site in a browser |
 | `prune [--apply] [--plan <id>]` | Find and remove orphaned data (dry run by default) |
 | `operations [list\|show\|watch\|cancel]` | Inspect and follow bulk and prune operations |
+| `blueprint <validate\|plan\|apply> [file]` | Declare a stack in one file; `plan` shows the diff, `apply` runs it |
 | `db [list\|create\|info\|attach\|detach\|delete\|restore\|purge\|credentials]` | Managed PostgreSQL databases (see below) |
 | `storage [list\|create\|info\|update\|buckets\|attach\|grants\|detach\|delete\|restore\|purge\|credentials\|metrics]` | Managed S3-compatible object storage (see below) |
 

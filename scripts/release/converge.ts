@@ -296,6 +296,23 @@ export async function convergeHost(input: ConvergeInput): Promise<ConvergeReport
 				return result === 'warmed';
 			});
 		}
+		// Node.js process apps run on a pinned LTS (D125). It is on by default, so every agent host
+		// gets it (an older node on its first upgrade too) unless it was declined with --no-node or
+		// the operator's own /usr/local/bin/node is there; a pin bump follows on the rest.
+		const nodeModule = join(release, 'repo', 'scripts', 'install', 'node.ts');
+		if (existsSync(nodeModule)) {
+			await step(report, 'node', async () => {
+				const { ensureNode, nodeArch, hasSkiffNode, NODE_BIN_DIR, NODE_OPT_OUT_MARKER, NODE_PINNED_VERSION } =
+					await import(nodeModule);
+				if (existsSync(NODE_OPT_OUT_MARKER)) return false;
+				if (!hasSkiffNode() && existsSync(join(NODE_BIN_DIR, 'node'))) return false;
+				const arch = nodeArch(process.arch);
+				if (!arch) throw new Error(`no Node.js build for ${process.arch}`);
+				const result = await ensureNode({ arch, log });
+				if (result === 'installed') log(`installed Node.js ${NODE_PINNED_VERSION}`);
+				return result === 'installed';
+			});
+		}
 		// PHP process apps run on a pinned FrankenPHP (D121). It is opt-in, so only a node that
 		// already has Skiff's install (the PATH link into /usr/lib/skiff/frankenphp) follows a pin
 		// bump; nothing is downloaded on a node that never asked for PHP.

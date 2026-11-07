@@ -12,10 +12,13 @@ import {
 	clickhouseArch,
 	clickhouseAssetUrl,
 	clickhouseConfigXml,
+	clickhouseMemory,
 	clickhouseUnit,
 	clickhouseUsersXml,
 	ensureClickHouse,
 	ensureClickHouseEnv,
+	parseClickHouseMemoryMb,
+	restartClickHouse,
 	sha256Hex,
 	type EnsureClickHouseOptions,
 } from './clickhouse.ts';
@@ -439,5 +442,60 @@ describe('ensureClickHouse', () => {
 		expect(existsSync(join(h.dir, 'etc', 'skiff.env'))).toBe(false);
 		expect(h.calls).toEqual([]);
 		expect(h.downloads).toEqual([]);
+	});
+});
+
+describe('memory ceiling (SKIFF_CLICKHOUSE_MEMORY_MB)', () => {
+	const MIB = 1024 * 1024;
+
+	test('the default budget renders exactly the historical limits', () => {
+		expect(clickhouseMemory()).toEqual({ server: 768 * MIB, writerQuery: 512 * MIB, readerQuery: 256 * MIB, merges: 256 * MIB, unitMaxMiB: 1024 });
+		expect(clickhouseConfigXml()).toBe(clickhouseConfigXml({ memory: clickhouseMemory(768) }));
+		expect(directives(clickhouseUnit(), 'Service').get('MemoryMax')).toEqual(['1G']);
+	});
+
+	test('every limit scales with the ceiling', () => {
+		const memory = clickhouseMemory(1536);
+		const config = clickhouseConfigXml({ memory });
+		expect(tag(config, 'max_server_memory_usage')).toBe(String(1536 * MIB));
+		expect(tag(config, 'merges_mutations_memory_usage_soft_limit')).toBe(String(512 * MIB));
+		const users = clickhouseUsersXml({ writerPassword: 'w', readerPassword: 'r', memory });
+		expect(users).toContain(`<max_memory_usage>${1024 * MIB}</max_memory_usage>`);
+		expect(users).toContain(`<max_memory_usage><max>${512 * MIB}</max></max_memory_usage>`);
+		expect(directives(clickhouseUnit({ memory }), 'Service').get('MemoryMax')).toEqual(['2G']);
+		expect(directives(clickhouseUnit({ memory: clickhouseMemory(1000) }), 'Service').get('MemoryMax')).toEqual(['1334M']);
+	});
+
+	test('parses the env value, falling back to the default with a warning', () => {
+		expect(parseClickHouseMemoryMb(undefined)).toEqual({ mb: 768 });
+		expect(parseClickHouseMemoryMb(' 1024 ')).toEqual({ mb: 1024 });
+		for (const bad of ['128', '1e3', '1024MB', '-1', '999999'])
+			expect(parseClickHouseMemoryMb(bad)).toMatchObject({ mb: 768, warning: expect.stringContaining('SKIFF_CLICKHOUSE_MEMORY_MB') });
+	});
+
+	test('ensureClickHouse applies the env value and restarts only when it changes', async () => {
+		const h = harness('memory');
+		const envFile = h.options.envFile!;
+		expect((await ensureClickHouse(h.options)).changed).toBe(true);
+		writeFileSync(envFile, `${readFileSync(envFile, 'utf8')}SKIFF_CLICKHOUSE_MEMORY_MB=1536\n`);
+		h.calls.length = 0;
+		expect(await ensureClickHouse(h.options)).toMatchObject({ ok: true, changed: true });
+		expect(h.calls).toContain(`systemctl restart ${CLICKHOUSE_UNIT}`);
+		expect(readFileSync(join(h.dir, 'etc', 'clickhouse', 'config.xml'), 'utf8')).toContain(`<max_server_memory_usage>${1536 * MIB}</max_server_memory_usage>`);
+		expect(directives(readFileSync(join(h.dir, 'systemd', CLICKHOUSE_UNIT), 'utf8'), 'Service').get('MemoryMax')).toEqual(['2G']);
+		h.calls.length = 0;
+		expect((await ensureClickHouse(h.options)).changed).toBe(false);
+		expect(h.calls).toContain(`systemctl start ${CLICKHOUSE_UNIT}`);
+	});
+
+	test('restartClickHouse clears a failed unit, restarts it and waits for /ping', async () => {
+		const h = harness('restart');
+		expect(await restartClickHouse(h.options)).toMatchObject({ ok: false, warning: expect.stringContaining('not installed') });
+		await ensureClickHouse(h.options);
+		h.calls.length = 0;
+		expect(await restartClickHouse(h.options)).toEqual({ ok: true });
+		expect(h.calls).toEqual([`systemctl reset-failed ${CLICKHOUSE_UNIT}`, `systemctl restart ${CLICKHOUSE_UNIT}`]);
+		h.setPing(false);
+		expect((await restartClickHouse(h.options)).warning).toContain('/ping');
 	});
 });

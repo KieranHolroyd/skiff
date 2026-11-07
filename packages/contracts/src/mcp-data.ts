@@ -1,5 +1,11 @@
 import * as z from 'zod';
-import { blueprintApplyViewSchema, blueprintPlanViewSchema, blueprintProjectSchema } from './blueprint.ts';
+import {
+	BLUEPRINT_MAX_BYTES,
+	blueprintApplyViewSchema,
+	blueprintPlanHashSchema,
+	blueprintPlanViewSchema,
+	blueprintProjectSlugSchema as blueprintProjectSchema,
+} from './blueprint.ts';
 import { databaseBackupFormats, databaseBackupStatuses } from './database-backup.ts';
 import { databaseNameSchema } from './database.ts';
 import { bucketNameSchema, storageObjectKeySchema } from './object-storage.ts';
@@ -55,19 +61,12 @@ export const mcpJsonValueSchema: z.ZodType<McpJsonValue> = z.lazy(() =>
 // -------------------------------------------------------------------- plan_stack
 
 /**
- * Plan a blueprint. Supply exactly one of the YAML document or a server-local path; a path is
- * confined to the configured blueprint directory (the service, not the schema, enforces that).
+ * Plan a blueprint (plan 11): the document text, YAML or JSON. Read-only: it never changes
+ * anything, and the plan it returns expires after an hour. Pruning is not offered over MCP.
  */
-export const planStackInputSchema = z
-	.strictObject({
-		project: blueprintProjectSchema.optional(),
-		blueprint: z.string().min(1).max(1_000_000).optional(),
-		path: z.string().min(1).max(1000).optional(),
-	})
-	.superRefine((input, ctx) => {
-		if (Boolean(input.blueprint) === Boolean(input.path))
-			ctx.addIssue({ code: 'custom', message: 'Supply exactly one of `blueprint` or `path`.' });
-	});
+export const planStackInputSchema = z.strictObject({
+	blueprint: z.string().min(1).max(BLUEPRINT_MAX_BYTES),
+});
 export type PlanStackInput = z.infer<typeof planStackInputSchema>;
 
 export const planStackOutputSchema = blueprintPlanViewSchema;
@@ -75,13 +74,13 @@ export type PlanStackOutput = z.infer<typeof planStackOutputSchema>;
 
 // -------------------------------------------------------------------- apply_stack
 
-/** Apply a plan hash. The confirmation token is single-use and bound to the arguments hash. */
+/**
+ * Apply a plan by its hash. The user confirms in an elicitation whose signed request state is
+ * bound to `stack:<name>:<planHash>`, so the confirmed plan is the one that runs. A pruning plan
+ * is refused: deleting resources stays a human action (D29).
+ */
 export const applyStackInputSchema = z.strictObject({
-	project: blueprintProjectSchema.optional(),
-	planHash: z.string().regex(/^[a-f0-9]{64}$/, 'Use the plan hash returned by plan_stack.'),
-	/** Delete resources absent from the document; requires a second confirmation in the UI. */
-	prune: z.boolean().default(false),
-	confirmationToken: confirmationTokenSchema,
+	planHash: blueprintPlanHashSchema,
 });
 export type ApplyStackInput = z.infer<typeof applyStackInputSchema>;
 

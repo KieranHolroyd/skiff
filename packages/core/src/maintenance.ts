@@ -45,14 +45,28 @@ export class MaintenanceService {
 		this.ctx.databases.tickPitr();
 		// Database moves whose node never answered roll back or give up (D97).
 		this.ctx.moves.tick();
+		// Abandon a replica promotion whose fence the old primary's node never confirmed (C7).
+		this.ctx.databaseReplicas.tick();
 		this.ctx.databaseStudio.tick();
 		await this.ctx.databases.pruneBackups();
 		this.ctx.storage.requestExpiredPurges();
+		// Replication rules from before migration 0059 get their scoped key (OBJECT-STORAGE.md §12).
+		this.ctx.storageReplication.backfillKeys();
 		this.ctx.brokers.requestExpiredPurges();
+		// App volumes: trash purge, snapshot/restore timeouts, snapshots of purged volumes (VOLUMES.md §14).
+		await this.ctx.appVolumes.lifecycle.tick().catch((error: unknown) => console.error('[maintenance] app volumes:', error));
 		// Event deliveries nobody could publish for a day fail; old history goes (D122).
 		this.ctx.events.sweep();
+		// Queue and function tools: fail tasks no node ran, drop results after an hour (D124).
+		this.ctx.nodeTasks.sweep();
+		// Jobs (plan 09): fire due crons (the control plane also ticks every 10 s), then fail runs no
+		// node picked up or reported and trim each job to its newest runs.
+		this.ctx.jobs.scheduleDue();
+		this.ctx.jobs.sweep();
 		// Email: expire the outbox, trim the 30-day message log, re-check domains daily (docs/EMAIL.md).
 		await this.ctx.email.sweep().catch(() => undefined);
+		// Custom domains: re-check pending (and failed) ones so they verify, fail or recover unattended.
+		await this.ctx.domains.recheckDue().catch(() => undefined);
 		// Cheap, certain cleanup runs every sweep; prune is the on-demand deep backstop.
 		this.cleanupRows();
 		this.ctx.releases.gcSnapshots(operationLimits.pruneGraceMs);
@@ -62,8 +76,8 @@ export class MaintenanceService {
 		const uploadsExpired = this.ctx.uploads.expireStale();
 		const logsPruned = this.ctx.logs.prune(this.ctx.now());
 		const stale = this.ctx.nodes.markStale();
-		// Multi-node replicas on a failed or draining node move to healthy workers (C4).
-		this.ctx.workloads.rebalanceReplicas();
+		// Replica copies on a lost or draining node are moved by the failover controller's own loop
+		// (FailoverService.tick, every few seconds under its lease), not by this sweep.
 		const alertsFired: string[] = [];
 
 		// Evaluate every unhealthy node on every sweep, not only at the moment it flips offline
@@ -130,6 +144,7 @@ export class MaintenanceService {
 		alertsFired.push(...(await this.databaseAlerts()));
 		alertsFired.push(...(await this.storageAlerts()));
 		alertsFired.push(...(await this.brokerAlerts()));
+		alertsFired.push(...(await this.appVolumeAlerts()));
 		alertsFired.push(...(await this.quotaAlerts()));
 		// Daily trend points are idempotent: after the first sweep of a UTC day this is a no-op.
 		await this.ctx.usage.captureSnapshots();
@@ -367,6 +382,23 @@ export class MaintenanceService {
 				key,
 				title: `Queue broker store above ${percent}%`,
 				detail: `Broker ${row.name} uses ${(ratio * 100).toFixed(1)}% of its ${row.storageMb} MB message store. When it is full, publishes are refused: drain or purge streams, or raise the store size.`,
+				severity: ratio >= 0.95 ? 'critical' : 'warning',
+			});
+		}
+		return fired;
+	}
+
+	/** App volumes near their quota (docs/VOLUMES.md §14); routed with the object-storage usage kind. */
+	private async appVolumeAlerts(): Promise<string[]> {
+		const fired: string[] = [];
+		const percent = this.ctx.policies.get().storageAlertPercent;
+		for (const { row, ratio } of this.ctx.appVolumes.lifecycle.alertCandidates(percent / 100)) {
+			const key = `storage_usage:${row.id}`;
+			fired.push(key);
+			await this.notify({
+				key,
+				title: `App volume above ${percent}%`,
+				detail: `Volume ${row.name} (project ${row.projectId}) uses ${(ratio * 100).toFixed(1)}% of its ${row.sizeMb} MB quota. The quota is a reservation, not a filesystem limit, so the disk it shares can fill: delete data or grow the volume.`,
 				severity: ratio >= 0.95 ? 'critical' : 'warning',
 			});
 		}

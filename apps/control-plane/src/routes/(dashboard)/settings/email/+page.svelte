@@ -43,20 +43,21 @@
 	const settings = $derived(data.settings);
 	const hostnames = $derived(settings.hostnames);
 	const mailNode = $derived(data.mailNode);
-	const ip = $derived(mailNode?.publicAddress ?? null);
+	const ip = $derived(settings.ip);
 
 	/** Why a node can't be picked, or null when it can. */
 	function blocked(node: PageProps['data']['nodes'][number]): string | null {
 		if (!node.mail) return 'update its agent';
-		if (!node.publicAddress) return 'no public address';
 		return null;
 	}
 
 	let nodeId = $state('');
+	let ipInput = $state('');
 	let paused = $state(false);
 	let orgState = $state('sandbox');
 	$effect.pre(() => {
 		nodeId = data.settings.nodeId ?? '';
+		ipInput = data.settings.ip ?? '';
 		paused = data.settings.paused;
 		orgState = data.emailOrg?.state ?? 'sandbox';
 	});
@@ -113,7 +114,7 @@
 <Panel
 	title="Mail node"
 	icon={ServerIcon}
-	description="One node runs skiff-mail and sends every organisation's mail from its public address. Pick one whose IP has a clean reputation and can reach port 25."
+	description="One node runs skiff-mail and sends every organisation's mail from its public IPv4. Pick one whose IP has a clean reputation and can reach port 25."
 >
 	<form
 		method="POST"
@@ -143,22 +144,45 @@
 				{#each data.nodes as node (node.id)}
 					{@const reason = blocked(node)}
 					<NativeSelect.Option value={node.id} disabled={reason !== null}>
-						{node.name} · {node.publicAddress ?? 'no address'}{reason ? ` — ${reason}` : ''}
+						{node.name} · {node.mode}{reason ? ` — ${reason}` : ''}
 					</NativeSelect.Option>
 				{/each}
 			</NativeSelect.Root>
 		</Field.Field>
+		<Field.Field class="w-44">
+			<Field.Label for="mail-ip">Public IPv4</Field.Label>
+			<InputGroup.Root>
+				<InputGroup.Input
+					id="mail-ip"
+					name="ip"
+					bind:value={ipInput}
+					placeholder="203.0.113.10"
+					inputmode="decimal"
+					autocomplete="off"
+					class="font-mono"
+					disabled={!data.enabled}
+				/>
+			</InputGroup.Root>
+		</Field.Field>
 		<Button
 			type="submit"
-			disabled={!data.enabled || savingNode || !nodeId || nodeId === settings.nodeId}
+			disabled={!data.enabled ||
+				savingNode ||
+				!nodeId ||
+				(nodeId === settings.nodeId && ipInput.trim() === (settings.ip ?? ''))}
 		>
 			{#if savingNode}<Spinner />{/if}
-			{settings.nodeId ? 'Move mail node' : 'Use this node'}
+			{!settings.nodeId ? 'Use this node' : nodeId === settings.nodeId ? 'Save' : 'Move mail node'}
 		</Button>
 		{#if settings.nodeId}
 			<Button variant="outline" onclick={turnOff} disabled={!data.enabled}>Turn off</Button>
 		{/if}
 	</form>
+	<p class="mt-3 text-xs text-muted-foreground">
+		The IP the node sends from, the one its provider sets reverse DNS on. Left blank, Skiff uses a
+		public IPv4 in the node's address, or for the edge the platform host's record in the Cloudflare
+		zone, and asks when it finds neither.
+	</p>
 	{#if data.nodes.some((node) => !node.mail)}
 		<p class="mt-3 text-xs text-muted-foreground">
 			Greyed-out nodes run an agent without mail support. Update their agent from
@@ -217,8 +241,8 @@
 			</p>
 		{:else}
 			<p class="text-sm text-muted-foreground">
-				{mailNode?.name ?? 'The mail node'} has no IPv4 public address on record, so there is nothing
-				to point yet.
+				{mailNode?.name ?? 'The mail node'} has no public IPv4 set, so there is nothing to point yet.
+				Enter it under Mail node.
 			</p>
 		{/if}
 	</Panel>

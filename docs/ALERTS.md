@@ -112,7 +112,17 @@ as down. A normal series that has been missing for 24 hours is forgotten.
   while it stays there, and once when it recovers if `notifyOnResolve` is set.
 - **Payload.** Notifiers receive `{ key, title, detail, severity, status, url, labels }`. `status`
   is `firing` or `resolved`, and resolved messages have severity `info`. `url` links to the rule.
-  `key` is `alert_rule:<id>`, so a webhook receiver can deduplicate on it.
+  `key` is `alert_rule:<id>`, so a webhook receiver can deduplicate on it. The generic webhook
+  (`SKIFF_ALERT_WEBHOOK`) POSTs JSON `{ title, message, severity, key, status, url, labels }`:
+  `message` is the detail, and `title`/`message`/`severity`/`key` are the original fields, so
+  receivers written for them keep working. `url` is null only where no dashboard page exists.
+  A Discord or Slack URL there gets that service's own payload instead.
+- **Signature.** With `SKIFF_ALERT_WEBHOOK_SECRET` set (Settings → Notifications), each generic
+  webhook request carries `X-Skiff-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256(secret,
+  "<t>.<raw body>")>` (Stripe's scheme, `packages/core/src/webhook-signature.ts`). The timestamp
+  is inside the MAC, so a receiver that rejects a `t` older than five minutes also rejects replays.
+  Several `v1` values may appear during a rotation; any match is valid. Log drains (DESIGN §8) sign
+  their webhook batches the same way, each drain with its own secret.
 - **Delivery** is recorded per channel on the history event (`{ webhook: 'ok', sms: 'Twilio
   returned 400 …' }`). A failing channel never blocks the others, and each send has a 20 s timeout.
 - **Acknowledging** a firing series stops its repeats until it resolves. Org owners, admins and
@@ -144,7 +154,8 @@ plus up to one interval. For `site_down` that is about 3–5 minutes.
 
 - **Dashboard.** Alerts has tabs for Active, Rules, Silences and History, plus a page per rule
   with a chart and its threshold. Any builder panel on a dashboard has **Create alert…** in its
-  menu.
+  menu. Firing and no-data series have **Ask AI** when the assistant is configured: it opens the
+  panel with the rule, series, value and duration and asks it to explain the alert.
 - **REST.** `/api/v1/alerts/*` ([API.md](./API.md#alerts)).
 - **MCP and the assistant.** `list_alerts`, `get_alert_rule`, `create_alert_rule` (templates),
   `update_alert_rule`, `silence_alerts`, `acknowledge_alert`, `get_alert_history`, and

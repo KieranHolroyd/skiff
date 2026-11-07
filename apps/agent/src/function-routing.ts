@@ -222,8 +222,9 @@ export const FUNCTION_DIAL_RETRY = '30s';
 /**
  * The function host. `X-Skiff-Internal: 0` overwrites a client-supplied value so the shim's
  * `POST /__skiff/scheduled` and `/__skiff/queue` routes stay unreachable from the internet (FN9:
- * only the node's timer sends `1`). The response header timeout carries FN5's 60 s wall clock;
- * Caddy's default would cut long requests well before it.
+ * only the node's timer sends `1`). The 5-minute response header timeout is FN5's wall clock for
+ * `fetch` (docs/FUNCTIONS.md §4.7, sized for long AI calls); Caddy sets none by default, so a hung
+ * host would otherwise hold the request open indefinitely.
  *
  * Phase 4: `upstreams` holds one dial target per replica, in order, so Caddy balances a stateless
  * function over its hosts. One target renders exactly as the single-host route always has.

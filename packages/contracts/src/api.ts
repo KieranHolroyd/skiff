@@ -13,6 +13,8 @@ export const projectCreateSchema = z.object({
 	placementSpec: placementSpecSchema.optional(),
 	productionAccess: z.enum(accessModes).default('public'),
 	previewAccess: z.enum(accessModes).default('platform'),
+	/** Required when either scope is `password`; each such scope stores its own copy. */
+	password: z.string().min(8).max(200).optional(),
 });
 export type ProjectCreate = z.infer<typeof projectCreateSchema>;
 
@@ -92,6 +94,10 @@ export type FinalizeUpload = z.infer<typeof finalizeUploadSchema>;
 export const setAccessSchema = z.object({
 	scope: z.enum(['production', 'previews']).default('production'),
 	mode: z.enum(accessModes),
+	/**
+	 * This scope's password. Required to switch a scope to `password`; may be omitted when the scope
+	 * already has one, which keeps it. Each scope has its own password.
+	 */
 	password: z.string().min(8).max(200).optional(),
 });
 export type SetAccess = z.infer<typeof setAccessSchema>;

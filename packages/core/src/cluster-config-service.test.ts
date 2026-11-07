@@ -59,4 +59,20 @@ describe('cluster configuration', () => {
 	test('refuses an inverted endpoint range', () => {
 		expect(() => core.cluster.update(owner, { endpoints: { portMin: 22000, portMax: 21000 } })).toThrow(/min < max/);
 	});
+
+	test('only a platform admin reads it, and only their own session changes it', () => {
+		const member = buildPrincipal({ kind: 'user', userId: 'user_2', orgId: 'org_1', role: 'deployer' });
+		const orgOwner = buildPrincipal({ kind: 'user', userId: 'user_3', orgId: 'org_1', role: 'owner' });
+		const adminKey = buildPrincipal({ kind: 'apiKey', userId: 'user_1', orgId: 'org_1', role: 'owner', platformAdmin: true, keyId: 'key_1' });
+		const adminMcp = buildPrincipal({ kind: 'mcp', userId: 'user_1', orgId: 'org_1', role: 'owner', platformAdmin: true, clientId: 'client_1' });
+		const before = core.cluster.get();
+		for (const principal of [member, orgOwner, adminKey, adminMcp])
+			expect(() => core.cluster.update(principal, { replicas: { max: 2 } })).toThrow(/platform admin/);
+		expect(core.cluster.get()).toEqual(before);
+		expect(() => core.cluster.view(member)).toThrow(/platform admin/);
+		expect(() => core.cluster.view(orgOwner)).toThrow(/platform admin/);
+		expect(core.cluster.view(adminKey)).toEqual(before);
+		expect(core.cluster.view(owner)).toEqual(before);
+		expect(core.audit.list({ orgId: 'org_1' }).filter((entry) => entry.action === 'platform.cluster_config')).toHaveLength(1);
+	});
 });

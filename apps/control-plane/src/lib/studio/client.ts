@@ -102,7 +102,24 @@ export async function studioCall<Op extends StudioJsonOp>(
 	signal?: AbortSignal
 ): Promise<StudioResponses[Op]> {
 	const response = await post(databaseName, op, body, 'application/json', signal);
-	return (await response.json()) as StudioResponses[Op];
+	const text = await response.text();
+	// A proxy that answered before the node's gateway route existed hands back an empty 200.
+	// Never let that surface as a raw `Response.json()` TypeError in the UI.
+	if (text.trim() === '')
+		throw new StudioCallError(
+			'studio_unavailable',
+			'The database studio returned an empty answer. Try again in a moment.',
+			response.status
+		);
+	try {
+		return JSON.parse(text) as StudioResponses[Op];
+	} catch {
+		throw new StudioCallError(
+			'internal',
+			'The database studio sent a malformed answer.',
+			response.status
+		);
+	}
 }
 
 /**

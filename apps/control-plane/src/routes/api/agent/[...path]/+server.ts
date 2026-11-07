@@ -1,10 +1,14 @@
 import type { RequestHandler } from './$types';
 import {
 	agentEventAckSchema,
+	agentJobHeartbeatSchema,
+	agentJobResultSchema,
+	agentNodeTaskResultSchema,
 	heartbeatSchema,
 	mailEventsBatchSchema,
 	mailOutboxAckSchema,
 	nodeJoinSchema,
+	CONTAINER_CONSOLE_TOKEN_HEADER,
 	STUDIO_TOKEN_HEADER,
 	telemetryBatchSchema
 } from '@skiff/contracts';
@@ -95,6 +99,49 @@ const handler: RequestHandler = async (event) => {
 			return core.events.ack(node.id, input);
 		}
 
+		// Node tasks (D124): queue and function tools the target node runs once and reports.
+		if (action === 'tasks/lease') {
+			if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+			const node = core.nodes.authenticate(token);
+			const wait = Math.min(Math.max(Number(url.searchParams.get('wait') ?? 0) || 0, 0), 25);
+			const deadline = Date.now() + wait * 1000;
+			while (!core.nodeTasks.hasPending(node.id) && Date.now() < deadline && !request.signal.aborted)
+				await Bun.sleep(250);
+			return json(core.nodeTasks.lease(node.id), 200, { 'cache-control': 'no-store' });
+		}
+
+		if (action === 'tasks/result') {
+			if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+			const input = await readJson(request, agentNodeTaskResultSchema);
+			const node = core.nodes.authenticate(token);
+			return core.nodeTasks.complete(node.id, input);
+		}
+
+		// Jobs (plan 09): the project's node leases runs, reports the ones it holds and posts exits.
+		if (action === 'jobs/lease') {
+			if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+			const node = core.nodes.authenticate(token);
+			const wait = Math.min(Math.max(Number(url.searchParams.get('wait') ?? 0) || 0, 0), 25);
+			const deadline = Date.now() + wait * 1000;
+			while (!core.jobs.hasQueued(node.id) && Date.now() < deadline && !request.signal.aborted)
+				await Bun.sleep(250);
+			return json(core.jobs.lease(node.id), 200, { 'cache-control': 'no-store' });
+		}
+
+		if (action === 'jobs/heartbeat') {
+			if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+			const input = await readJson(request, agentJobHeartbeatSchema);
+			const node = core.nodes.authenticate(token);
+			return core.jobs.heartbeat(node.id, input);
+		}
+
+		if (action === 'jobs/result') {
+			if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+			const input = await readJson(request, agentJobResultSchema);
+			const node = core.nodes.authenticate(token);
+			return core.jobs.complete(node.id, input);
+		}
+
 		// Email (docs/EMAIL.md §3.5, D117): only the mail node's agent may call these. The state
 		// carries opened DKIM keys, so like an activation it is fetched, never put in desired state.
 		if (action === 'email/state') {
@@ -138,6 +185,14 @@ const handler: RequestHandler = async (event) => {
 			return core.databases.rotationActivation(node.id, rotation[1]!);
 		}
 
+		// The primary's `skiff_repl` password for one replication task (C7); never in desired state.
+		const replication = /^database-replication\/([^/]+)$/.exec(action);
+		if (replication) {
+			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
+			const node = core.nodes.authenticate(token);
+			return core.databaseReplicas.replicationActivation(node.id, replication[1]!);
+		}
+
 		const pitrTask = /^database-pitr\/([^/]+)$/.exec(action);
 		if (pitrTask) {
 			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
@@ -169,6 +224,16 @@ const handler: RequestHandler = async (event) => {
 			if (!studioToken) return json({ error: 'unauthorized' }, 401);
 			const node = core.nodes.authenticate(token);
 			return core.databaseStudio.activation(node.id, studioSession[1]!, studioToken);
+		}
+
+		// Container console (D127): the node bearer says which node is asking; the console token
+		// proves the call came through a dashboard request the control plane authorised.
+		if (action === 'container-console') {
+			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
+			const consoleToken = request.headers.get(CONTAINER_CONSOLE_TOKEN_HEADER)?.trim();
+			if (!consoleToken) return json({ error: 'unauthorized' }, 401);
+			const node = core.nodes.authenticate(token);
+			return core.containerConsole.activation(node.id, consoleToken);
 		}
 
 		if (action === 'telemetry') {

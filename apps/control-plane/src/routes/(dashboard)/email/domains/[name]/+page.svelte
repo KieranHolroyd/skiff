@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import CloudIcon from '@lucide/svelte/icons/cloud';
@@ -84,6 +85,14 @@
 				>Added <time datetime={domain.createdAt}>{formatDate(domain.createdAt)}</time></span
 			>
 		{/snippet}
+		{#if domain.status === 'verified' && domain.sending && data.emailArea.can.send}
+			<Button
+				variant="outline"
+				href={`${resolve('/(dashboard)/email/send')}?domain=${encodeURIComponent(domain.name)}`}
+			>
+				<SendIcon />Send a test
+			</Button>
+		{/if}
 		<Button variant="outline" onclick={check} disabled={checking}>
 			{#if checking}<Spinner />{:else}<RefreshCwIcon />{/if}
 			Check now

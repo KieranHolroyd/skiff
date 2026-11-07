@@ -29,7 +29,7 @@ const core: Core = createCore({
 		objectStoreSecret: 'object-secret-123',
 		desiredAgentVersion: '0.1.0',
 		now: () => clock,
-		features: { ...DEFAULT_FEATURES, ORG_NETWORKS: true },
+		features: { ...DEFAULT_FEATURES, ORG_NETWORKS: true, DB_TLS: false, SERVICE_ENDPOINTS: false },
 	},
 });
 const telemetry = testTelemetryStore({ now: () => clock });
@@ -106,6 +106,10 @@ describe('managed databases', () => {
 			/major-version upgrade.*skif db upgrade second --to 16 --plan/
 		);
 		expect(core.databases.get(owner, 'second').version).toBe('17');
+		// The same major has nothing to plan, and the message names a command that exists.
+		expect(() => core.databases.upgradeDatabase(owner, 'second', { targetVersion: '17' })).toThrow(
+			/already runs PostgreSQL 17.*skif db update second/
+		);
 
 		const plan = core.databases.upgradeDatabase(owner, 'second', { targetVersion: '16' });
 		expect(plan).toMatchObject({
@@ -309,6 +313,40 @@ describe('managed databases', () => {
 		core.databases.applyPurged(edgeId, [db.id]);
 	});
 
+	test('image variants (D126) pick the image, add their extension and survive a restore', async () => {
+		const db = core.databases.create(owner, { name: 'geo-db', memoryMb: 128, version: '18', variant: 'postgis' });
+		expect(db).toMatchObject({ variant: 'postgis', version: '18', extensions: ['postgis'] });
+		const state = await core.nodes.desiredState(edgeToken);
+		const workload = state.workloads.find((item) => item.projectSlug === 'geo-db')!;
+		expect(workload.image).toBe('ghcr.io/kieranholroyd/skiff-postgres:18-postgis-1');
+		expect(workload.database).toMatchObject({ engine: 'postgres', version: '18', variant: 'postgis' });
+		// Standard databases send no variant, so older helpers keep accepting them.
+		const main = state.workloads.find((item) => item.projectSlug === 'main-db')!;
+		expect(main.database && 'variant' in main.database).toBe(false);
+		expect(() => core.databases.update(owner, 'geo-db', { extensions: ['postgis', 'pg_cron'] })).toThrow(
+			/pg_cron variant/,
+		);
+		expect(() => core.databases.update(owner, 'main-db', { extensions: ['postgis'] })).toThrow(/PostGIS variant/);
+
+		const backup = core.databases.createBackup(owner, 'geo-db');
+		const task = (await core.nodes.desiredState(edgeToken)).databaseBackupTasks.find(
+			(item) => item.databaseId === db.id,
+		)!;
+		await store.put(task.objectKey, new TextEncoder().encode('dump'));
+		core.databases.applyBackupResults(edgeId, [
+			{ taskId: backup.id, action: 'backup', databaseId: db.id, backupId: null, status: 'ok', sizeBytes: 4, sha256: 'b'.repeat(64) },
+		]);
+		const restored = core.databases.restoreBackup(owner, 'geo-db', backup.id, { name: 'geo-restored' });
+		expect(restored).toMatchObject({ variant: 'postgis', version: '18' });
+
+		for (const name of ['geo-restored', 'geo-db']) {
+			const row = core.databases.get(owner, name);
+			core.databases.delete(owner, name);
+			core.databases.purgeNow(owner, name);
+			core.databases.applyPurged(edgeId, [row.id]);
+		}
+	});
+
 	test('queues a backup and records the node result', async () => {
 		const backup = core.databases.createBackup(owner, 'main-db');
 		expect(backup).toMatchObject({ status: 'pending', kind: 'manual', databaseName: 'main-db' });
@@ -376,6 +414,10 @@ describe('managed databases', () => {
 	test('credentials need database:credentials and are audited', () => {
 		expect(() => core.databases.credentials(viewer, 'main-db')).toThrow();
 		expect(() => core.databases.credentials(deployerAgent, 'main-db')).toThrow();
+		const mcpWithScope = buildPrincipal({ kind: 'mcp', userId: 'user_1', orgId: 'org_1', role: 'owner' });
+		expect(() => core.databases.credentials(mcpWithScope, 'main-db')).toThrow(/never returned over MCP/);
+		const cliKey = buildPrincipal({ kind: 'apiKey', userId: 'user_1', orgId: 'org_1', role: 'owner', keyId: 'key_cli' });
+		expect(core.databases.credentials(cliKey, 'main-db').username).toBe('main_db');
 		const creds = core.databases.credentials(owner, 'main-db');
 		expect(creds.url).toBe(`postgres://main_db:${encodeURIComponent(creds.password)}@127.0.0.1:15432/main_db`);
 		const audit = core.audit.list({ orgId: 'org_1', action: 'database.credentials' });
@@ -497,6 +539,108 @@ describe('managed databases', () => {
 		const env = core.workloads.activation(edgeId, entry.id).env;
 		expect(env.DATABASE_HOST).toBe(databaseAlias(db.id));
 		expect(env.DATABASE_PORT).toBe('5432');
+	});
+
+	test('a confirmed owner rotation re-activates attached process and container apps (D86)', async () => {
+		const consumers = async () =>
+			(await core.nodes.desiredState(edgeToken)).workloads.filter(
+				(w) => w.projectSlug === 'backend' || w.projectSlug === 'web',
+			);
+		const before = await consumers();
+		expect(before.map((w) => w.projectSlug).sort()).toEqual(['backend', 'web']);
+		const versions = (list: typeof before) => Object.fromEntries(list.map((w) => [w.projectSlug, w.activationVersion]));
+
+		// A monitor rotation changes nothing an app connects with.
+		const monitor = core.databases.rotateCredentials(owner, 'main-db', { role: 'monitor' });
+		core.databases.applyRotationResults(edgeId, [
+			{ taskId: monitor.id, databaseId: monitor.databaseId, role: 'monitor', status: 'ok' },
+		]);
+		expect(versions(await consumers())).toEqual(versions(before));
+
+		const rotation = core.databases.rotateCredentials(owner, 'main-db', { role: 'owner' });
+		const next = core.databases.rotationActivation(edgeId, rotation.id).password;
+		// Until the node confirms ALTER ROLE, apps keep their version and the old password.
+		expect(versions(await consumers())).toEqual(versions(before));
+		const backend = before.find((w) => w.projectSlug === 'backend')!;
+		expect(core.workloads.activation(edgeId, backend.id).env.DATABASE_PASSWORD).not.toBe(next);
+
+		core.databases.applyRotationResults(edgeId, [
+			{ taskId: rotation.id, databaseId: rotation.databaseId, role: 'owner', status: 'ok' },
+		]);
+		const after = await consumers();
+		for (const workload of after) {
+			expect(workload.activationVersion).not.toBe(versions(before)[workload.projectSlug]);
+			const activation = core.workloads.activation(edgeId, workload.id);
+			expect(activation.activationVersion).toBe(workload.activationVersion);
+			expect(activation.env.DATABASE_PASSWORD).toBe(next);
+			expect(activation.env.DATABASE_URL).toContain(encodeURIComponent(next));
+			expect(JSON.stringify(workload)).not.toContain(next);
+		}
+		// A failed rotation leaves the live secret, and so the apps, alone.
+		const failed = core.databases.rotateCredentials(owner, 'main-db', { role: 'owner' });
+		core.databases.applyRotationResults(edgeId, [
+			{ taskId: failed.id, databaseId: failed.databaseId, role: 'owner', status: 'failed', error: 'boom' },
+		]);
+		expect(versions(await consumers())).toEqual(versions(after));
+	});
+
+	test('apps can connect as a named credential, which rotates and revokes safely', async () => {
+		const cliKey = buildPrincipal({ kind: 'apiKey', userId: 'user_1', orgId: 'org_1', role: 'owner', keyId: 'key_cli' });
+		const mcpWithScope = buildPrincipal({ kind: 'mcp', userId: 'user_1', orgId: 'org_1', role: 'owner' });
+		const app = core.databases.createCredential(owner, 'main-db', { role: 'app', purpose: 'worker' });
+		await core.projects.create(owner, {
+			name: 'worker',
+			slug: 'worker',
+			runtime: 'process',
+			placement: 'auto',
+			productionAccess: 'public',
+			previewAccess: 'platform',
+		});
+		const project = () => core.projects.requireRow(owner, 'worker');
+		expect(() => core.databases.attach(owner, project(), { database: 'main-db', credential: app.id })).toThrow(
+			/not ready/,
+		);
+		const grant = core.databases.credentialActivation(edgeId, app.id).password!;
+		core.databases.applyCredentialResults(edgeId, [{ taskId: app.id, databaseId: app.databaseId, status: 'ok' }]);
+
+		const attached = core.databases.attach(owner, project(), { database: 'main-db', credential: 'app' });
+		expect(attached.attachment).toMatchObject({ credentialId: app.id, credentialRole: 'app' });
+		expect(attached.attachment.envNames).not.toContain('DATABASE_POOL_URL');
+		await core.uploads.deployInline(owner, project(), [file('index.js', 'x'), file('package.json', '{}')], {
+			promote: true,
+		});
+		const workload = async () =>
+			(await core.nodes.desiredState(edgeToken)).workloads.find((w) => w.projectSlug === 'worker')!;
+		const first = await workload();
+		const env = core.workloads.activation(edgeId, first.id).env;
+		expect(env.DATABASE_USER).toBe(app.username);
+		expect(env.DATABASE_PASSWORD).toBe(grant);
+		expect(env.DATABASE_NAME).toBe('main_db');
+		expect(env.DATABASE_URL).toContain(`${app.username}:`);
+		expect(env.DATABASE_URL).toEndWith('/main_db');
+		expect(env.DATABASE_POOL_URL).toBeUndefined();
+
+		// Rotation is staged like the owner's: the app keeps the old password until the node confirms.
+		core.databases.rotateNamedCredential(owner, 'main-db', app.id);
+		const rotated = core.databases.credentialActivation(edgeId, app.id).password!;
+		expect((await workload()).activationVersion).toBe(first.activationVersion);
+		expect(core.workloads.activation(edgeId, first.id).env.DATABASE_PASSWORD).toBe(grant);
+		core.databases.applyCredentialResults(edgeId, [{ taskId: app.id, databaseId: app.databaseId, status: 'ok' }]);
+		const second = await workload();
+		expect(second.activationVersion).not.toBe(first.activationVersion);
+		expect(core.workloads.activation(edgeId, second.id).env.DATABASE_PASSWORD).toBe(rotated);
+
+		// Reveal is gated like the owner URL: CLI keys yes, MCP never.
+		expect(core.databases.revealCredential(cliKey, 'main-db', app.id).password).toBe(rotated);
+		expect(() => core.databases.revealCredential(mcpWithScope, 'main-db', app.id)).toThrow(/never returned over MCP/);
+
+		expect(() => core.databases.revokeCredential(owner, 'main-db', app.id)).toThrow(/worker connects as this/);
+		core.databases.detach(owner, project(), 'main-db');
+		expect(core.databases.revokeCredential(owner, 'main-db', app.id).status).toBe('revoking');
+		core.databases.applyCredentialResults(edgeId, [{ taskId: app.id, databaseId: app.databaseId, status: 'ok' }]);
+		expect(() => core.databases.attach(owner, project(), { database: 'main-db', credential: app.id })).toThrow(
+			/not found/i,
+		);
 	});
 
 	test('explicit placement on another node is refused', async () => {

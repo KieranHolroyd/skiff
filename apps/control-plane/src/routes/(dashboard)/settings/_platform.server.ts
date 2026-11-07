@@ -54,6 +54,16 @@ export function queueConfig(locals: App.Locals, body: Body, success: string) {
 				? 'On a dev server, run `bun run dev:clickhouse --background`, then restart the dev server.'
 				: 'On a dev server, run `bun run dev:clickhouse --stop` (and --reset to delete its data).'
 		});
+	if (
+		availability === 'local' &&
+		(body.action === 'telemetry-memory' || body.action === 'telemetry-restart')
+	)
+		return fail(409, {
+			message:
+				body.action === 'telemetry-memory'
+					? `On a dev server, run \`bun run dev:clickhouse --stop\`, then \`bun run dev:clickhouse --background --memory ${body.memoryMb ?? 768}\`.`
+					: 'On a dev server, run `bun run dev:clickhouse --stop`, then `bun run dev:clickhouse --background`.'
+		});
 	if (availability === 'local' && body.action === 'domains')
 		return fail(409, {
 			message:
@@ -101,15 +111,17 @@ export function queueConfig(locals: App.Locals, body: Body, success: string) {
 				? { enabled: body.enabled }
 				: body.action === 'telemetry'
 					? { enabled: body.enabled, purgeData: body.purgeData }
-					: body.action === 'domains'
-						? {
-								platformHost: body.platformHost,
-								contentDomain: body.contentDomain,
-								tls: body.tls,
-								// Never the token itself.
-								cloudflareToken: body.cloudflareToken ? 'replaced' : 'kept'
-							}
-						: {};
+					: body.action === 'telemetry-memory'
+						? { memoryMb: body.memoryMb }
+						: body.action === 'domains'
+							? {
+									platformHost: body.platformHost,
+									contentDomain: body.contentDomain,
+									tls: body.tls,
+									// Never the token itself.
+									cloudflareToken: body.cloudflareToken ? 'replaced' : 'kept'
+								}
+							: {};
 	const action =
 		body.action === 'configure'
 			? 'platform.config'
@@ -117,11 +129,15 @@ export function queueConfig(locals: App.Locals, body: Body, success: string) {
 				? 'platform.backups'
 				: body.action === 'telemetry'
 					? 'platform.telemetry'
-					: body.action === 'domains'
-						? 'platform.domains'
-						: body.action === 'push-keys'
-							? 'platform.pushKeys'
-							: 'platform.restoreDrill';
+					: body.action === 'telemetry-memory'
+						? 'platform.telemetryMemory'
+						: body.action === 'telemetry-restart'
+							? 'platform.telemetryRestart'
+							: body.action === 'domains'
+								? 'platform.domains'
+								: body.action === 'push-keys'
+									? 'platform.pushKeys'
+									: 'platform.restoreDrill';
 	try {
 		const requestId = submitConfigRequest(principal, body);
 		core.ctx.audit.record({

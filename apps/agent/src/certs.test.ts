@@ -3,7 +3,8 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:tls';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CERT_PROBE_INTERVAL_MS, CertProbe, certProbeTargets, tlsCertReader } from './certs.ts';
+import { HEARTBEAT_CERTS_MAX } from '@skiff/contracts';
+import { CERT_NEW_HOST_RETRY_MS, CERT_PROBE_INTERVAL_MS, CertProbe, certProbeTargets, tlsCertReader } from './certs.ts';
 import { parseCertProbe } from './config.ts';
 
 describe('certProbeTargets', () => {
@@ -14,6 +15,16 @@ describe('certProbeTargets', () => {
 			{ host: 'control.test', servername: 'control.test' },
 		]);
 		expect(certProbeTargets(null, null)).toEqual([]);
+	});
+
+	test('adds custom domains with a name check, deduplicated and capped', () => {
+		expect(certProbeTargets('sites.test', null, ['App.Example.com.', 'app.example.com', 'sites.test'])).toEqual([
+			{ host: 'sites.test', servername: 'sites.test' },
+			{ host: '*.sites.test', servername: 'skiff-cert-probe.sites.test' },
+			{ host: 'app.example.com', servername: 'app.example.com', matchHost: true },
+		]);
+		const many = Array.from({ length: HEARTBEAT_CERTS_MAX + 20 }, (_, index) => `d${index}.example.com`);
+		expect(certProbeTargets('sites.test', 'control.test', many)).toHaveLength(HEARTBEAT_CERTS_MAX);
 	});
 });
 
@@ -45,6 +56,44 @@ describe('CertProbe', () => {
 		probe.current();
 		await Bun.sleep(0);
 		expect(reads).toBe(4);
+	});
+
+	test('a new custom domain is probed at once, with the name check, then every 2 minutes until it has a certificate', async () => {
+		let now = 1_000;
+		let hosts: string[] = [];
+		let issued = false;
+		const reads: Array<{ servername: string; matchHost: boolean }> = [];
+		const probe = new CertProbe(
+			() => certProbeTargets('sites.test', null, hosts),
+			async (servername, options) => {
+				reads.push({ servername, matchHost: options?.matchHost === true });
+				if (servername === 'app.example.com' && !issued) return null;
+				return new Date('2027-01-01T00:00:00Z');
+			},
+			() => now,
+		);
+		probe.current();
+		await Bun.sleep(0);
+		expect(reads).toHaveLength(2);
+
+		// The control plane sends a verified domain: the next heartbeat probes without waiting 6 h.
+		hosts = ['app.example.com'];
+		now += 60_000;
+		probe.current();
+		await Bun.sleep(0);
+		expect(reads.at(-1)).toEqual({ servername: 'app.example.com', matchHost: true });
+		expect(probe.current().map((cert) => cert.host)).toEqual(['sites.test', '*.sites.test']);
+		const count = reads.length;
+
+		now += CERT_NEW_HOST_RETRY_MS - 1;
+		probe.current();
+		await Bun.sleep(0);
+		expect(reads).toHaveLength(count);
+		issued = true;
+		now += 1;
+		probe.current();
+		await Bun.sleep(0);
+		expect(probe.current().map((cert) => cert.host)).toContain('app.example.com');
 	});
 
 	test('failures are non-fatal and keep the last good reading', async () => {
@@ -102,6 +151,38 @@ describe('tlsCertReader', () => {
 				const days = (notAfter!.getTime() - Date.now()) / 86_400_000;
 				expect(days).toBeGreaterThan(9);
 				expect(days).toBeLessThan(11);
+			} finally {
+				server.close();
+			}
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test.skipIf(!openssl)('with matchHost, only a certificate naming the host counts', async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'skiff-certs-'));
+		try {
+			const result = Bun.spawnSync([
+				openssl!,
+				'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '10',
+				'-subj', '/CN=app.example.com',
+				'-addext', 'subjectAltName=DNS:app.example.com',
+				'-keyout', join(dir, 'key.pem'),
+				'-out', join(dir, 'cert.pem'),
+			]);
+			expect(result.exitCode).toBe(0);
+			const server = createServer({
+				key: readFileSync(join(dir, 'key.pem')),
+				cert: readFileSync(join(dir, 'cert.pem')),
+			});
+			await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+			const port = (server.address() as { port: number }).port;
+			try {
+				const read = tlsCertReader({ host: '127.0.0.1', port });
+				expect(await read('app.example.com', { matchHost: true })).not.toBeNull();
+				// Caddy answering another name with this certificate is not "serving" that name.
+				expect(await read('other.example.com', { matchHost: true })).toBeNull();
+				expect(await read('other.example.com')).not.toBeNull();
 			} finally {
 				server.close();
 			}

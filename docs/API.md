@@ -28,7 +28,13 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | GET | `/operations/:id/stream` | same | SSE: `progress`, `items` (`id: <seq>`, resume with `Last-Event-ID`), `done`; `?until=done` follows an applied plan to the end |
 | POST | `/operations/:id/apply` | per action, planner only | from `planned`; `{ categories? }` narrows a prune |
 | POST | `/operations/:id/cancel` | creator or `project:delete` | stops after the current item |
-| POST | `/projects/:slug/access` | `project:update` | `{ scope: production\|previews, mode: public\|password\|platform, password? }` |
+| POST | `/blueprints/validate` | `project:read` | `{ document }` (YAML/JSON text or object) → `{ validation }`; no live state read. All blueprint routes need `SKIFF_FEATURE_BLUEPRINTS` (docs/OPERATIONS.md §12) |
+| POST | `/blueprints/plan` | `project:read` + every step's permission | `{ document, prune? }` → `{ plan }` (steps, `planHash`, `operationId`); stored as a planned `blueprint.apply` operation (1 h); problems → `422` with every issue's path |
+| POST | `/blueprints/apply` | planner only, each step's permission | `{ planHash, confirm? }` (`confirm` = stack name when the plan deletes) → `202 { run }`; `?wait=<s≤25>`; live state moved → `409`; same hash again returns the same run |
+| GET | `/blueprints/apply/:operationId` | creator or `project:read` | `{ run }` with every step's status |
+| GET | `/blueprints` | `project:read` | `{ stacks }`: managed keys, last status, applied hash |
+| GET | `/blueprints/:name` | `project:read` | `{ stack, lastRun }` |
+| POST | `/projects/:slug/access` | `project:update` | `{ scope: production\|previews, mode: public\|password\|platform, password? }`; each scope has its own password. `password` is required to switch a scope to `password` and may be omitted to keep the current one; leaving password mode clears only that scope's |
 | POST | `/projects/:slug/deploy` | `deployment:create` | inline files (`deploy_files`); the URL slug is the target (`project` in the body is optional and must match); `environment` selects a named environment. Process/container projects run one workload, so only the latest deployment is active |
 | GET | `/projects/:slug/deployments` | `deployment:read` | |
 | GET | `/projects/:slug/deployments/:id` | `deployment:read` | id or short id |
@@ -39,6 +45,9 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | GET | `/projects/:slug/shares` | `shareLink:read` | clear URL only on creation |
 | POST | `/projects/:slug/shares` | `shareLink:create` | expiry, caps, emails, note |
 | DELETE | `/projects/:slug/shares/:id` | `shareLink:revoke` | pushes revocation to agents |
+| GET | `/projects/:slug/sessions` | `shareLink:read` | live share-link sessions, newest first, max 500: `{ sessions: [{ id, kind: share, shareLinkId, note, host, email, startedAt, expiresAt }] }`. Password and platform sessions are stateless and not listed |
+| DELETE | `/projects/:slug/sessions` | `project:update` | sign out everyone: bumps the project's session epoch (rotates its site key), ending password, platform and share sessions on every scope → `{ ok, epoch, signedOutAt, shareSessions }`. Share links keep working |
+| DELETE | `/projects/:slug/sessions/:id` | `shareLink:revoke` | end one share-link session (`red_…`) → `{ ok, sessionId }` |
 | GET | `/projects/:slug/logs` | `logs:read` | `?after&limit&source&buildId&deploymentId&level&q`; ordered events plus a `cursor` for tailing |
 | POST | `/uploads` | `deployment:create` | `{ project, fileCount?, totalBytes? }` → presigned PUT |
 | POST | `/uploads/:id/finalize` | `deployment:create` | `{ project, uploadId?, promote?, message? }`; `uploadId` must match `:id`, and the upload must belong to `project` |
@@ -58,9 +67,10 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | GET | `/storage/:name/replicas` | `storage:read` | bucket replication targets and status (C9) |
 | POST | `/storage/:name/replicas` | `storage:update` | `{ target }`; another node, private target |
 | DELETE | `/storage/:name/replicas/:id` | `storage:update` | remove the replication intent |
-| GET | `/databases/:name/replicas` | `database:read` | managed replicas with node, status and lag (C7) |
-| POST | `/databases/:name/replicas` | `database:update` | `{ node, mode?: async\|sync, volume? }`; another online node with an overlay address |
-| DELETE | `/databases/:name/replicas/:id` | `database:update` | remove the replica intent |
+| GET | `/databases/:name/replicas` | `database:read` | `{ primaryGeneration, replicas, failovers }`: streaming replicas with node, status, LSN and lag, and the promotion history (C7) |
+| POST | `/databases/:name/replicas` | `database:update` | `{ node, mode?: async, volume? }` (201); Postgres only, `sync` refused; same node allowed (reads only), another node needs both on the overlay |
+| DELETE | `/databases/:name/replicas/:id` | `database:update` | 202; stops it, its node purges the copy and the primary drops the slot, then the row goes |
+| POST | `/databases/:name/replicas/:id/promote` | `database:update` | `{ confirm: true, acceptDataLoss? }` + `If-Match: <primaryGeneration>` (412 when stale); 202 with the failover (fencing → promoting → repointing → completed). Never MCP |
 | GET | `/shares` | platform admin | cluster share registry (C3) |
 | POST | `/shares` | platform admin **session** | `{ name, protocol: nfs\|smb, server, exportPath, zone?, readOnly?, credentialsRef? }` |
 | GET/PATCH/DELETE | `/shares/:name` | platform admin **session** | read, update or remove a share |
@@ -68,21 +78,37 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | GET | `/cluster/config` | platform admin | cluster tunables: overlay, endpoints, replicas, database/storage limits, lease, failover, shares |
 | PATCH | `/cluster/config` | platform admin **session** | section patches; unknown keys rejected; endpoint port range must have min < max |
 | GET | `/ingress/status` | platform admin | ingress driver, hold-down policy and ingress-node readiness (C5) |
+| GET | `/ha/status` | platform admin | the failover controller (`FailoverStatusView`): switch, lease epoch/holder, policy, per-node silence and copies, ingress record set, database promotion candidates, last 50 `failover_events` (C8) |
 | GET | `/topology` | platform admin | zones, nodes, roles, labels, hardware, volumes and placement counts (C0) |
 | GET | `/topology/blast-radius?node=<id>` or `?zone=<name>` | platform admin | what an outage of that node or zone would take down: items and summary counts (C0) |
 | GET | `/nodes/:id/volumes` | platform admin | `{ volumes: VolumeView[], inventory: { generatedAt, mounts, devices } \| null }`. `mounts` is what the node reports (stable `sourceKey`, mount path, fs type, size/free, `remote`); `devices` is the free/used block-device list for the provisioning wizard (D72) |
 | POST | `/nodes/:id/volumes` | platform admin **session** | `{ name, sourceKey, default? }` adopts a mount from the latest inventory; no formatting or mounting happens (P0). 409 when the mount is not reported right now, the name/source is taken, or the node has not sent an inventory yet |
 | PATCH | `/nodes/:id/volumes/:name` | platform admin **session** | `{ name?, default?, classOverride?, classOverrideReason? }`; `default: true` makes it the node default, `false` clears it; `classOverride` is `fast`, `bulk`, `remote` or `null` and needs a reason |
 | DELETE | `/nodes/:id/volumes/:name` | platform admin **session** | removes the registration only; the mount stays. 409 while storage/database instances still live on it (D74) |
-| GET | `/audit` | `project:read` | `?limit&action&resource` |
+| GET | `/audit` | `project:read` | `?limit&action&resource&from&to&cursor` → `{ entries, nextCursor }`; `from`/`to` are a date, ISO time or epoch ms (a date as `to` covers the whole UTC day); `cursor` is the previous `nextCursor`; ≤ 200 a page |
+| GET/POST | `/log-drains` | `logs:read` / org owner or admin | list `{ drains, canEdit }`, or create (`logDrainCreateSchema`) → `{ drain, signingSecret }` (webhook secret returned once); `allowPrivateNetwork` needs a platform admin **session** (DESIGN §8) |
+| GET/PATCH/DELETE | `/log-drains/:id` | `logs:read` / org owner or admin | read, update (`logDrainUpdateSchema`; `headers` replaces all, `null` clears; `rotateSigningSecret` → new secret once) or delete |
+| POST | `/log-drains/:id/test` | org owner or admin | send one test line → `{ result: { ok, status, message } }`; counters and cursors untouched |
 | GET | `/secrets` | `secret:read-metadata` | values never returned |
-| POST | `/secrets` | `secret:create` | `{ name, value, projectId?, type? }`; versions count per scope, a project secret shadows the org's (D88); `projectId` must be in the org |
+| POST | `/secrets` | `secret:create` (new name) / `secret:update` (new version of a live name) | `{ name, value, projectId?, type? }`; versions count per scope, a project secret shadows the org's (D88); `projectId` must be in the org. Audited as `secret.create` / `secret.update`, never with the value |
 | DELETE | `/secrets/:id` | `secret:delete` | |
 | POST | `/cli/token` | `apiKey:create` | exchange a one-time CLI login code + PKCE verifier for an API key |
 | GET/POST | `/projects/:slug/environments` | `project:read` / `project:update` | list or create a named environment |
-| PATCH/DELETE | `/projects/:slug/environments/:env` | `project:update` | rename/access or remove (production is built in) |
+| PATCH/DELETE | `/projects/:slug/environments/:env` | `project:update` | rename/access (`{ name?, access?, password? }`; the environment's own password, kept when omitted) or remove (production is built in) |
 | POST | `/projects/:slug/environments/:env/promote` | `deployment:promote` | `{ deploymentId }`; moves only that environment's pointer (production also re-points a process/container workload) |
 | GET/PUT/DELETE | `/projects/:slug/workload` | `deployment:read` / `project:update` | tier 2/3 runtime spec for the project. `idleStopSeconds` (process only; needs `socketActivation`, HTTP ingress and one replica; 0 or absent = always on) scales the app to zero after that many seconds without a request (D121) |
+| GET | `/projects/:slug/container/targets` | `container:inspect` | container projects (D127): one entry per replica, `{ replica, nodeId, nodeName, desiredId }`. Every console call takes `?replica=<n>` for a multi-copy workload |
+| GET | `/projects/:slug/container/inspect` | `container:inspect` | `{ targets, container }`: state, unit restarts, image and digest, entrypoint/command, env **names**, ports, networks, mounts, sandbox flags, raw counters (`stats`: CPU µs, memory/peak/limit, OOM kills, PIDs, net and block bytes, `sampledAt`; rates are the difference of two calls) and processes |
+| GET | `/projects/:slug/container/files?path=` | `container:files` | `{ listing }` of one directory, symlinks resolved inside the container, ≤ 2,000 entries (`truncated`). 403 for the secrets dir and tmpfs, 409 while the container is not running |
+| GET | `/projects/:slug/container/files/preview?path=` | `container:files` | `{ preview }`: text up to 1 MiB, else `content: null` with `reason` `binary` or `too-large`. Audited (`container.files.read`) |
+| GET | `/projects/:slug/container/files/download?path=` | `container:files` | the file's bytes as an attachment, no size cap. Audited (`container.files.download`) |
+| POST | `/projects/:slug/container/exec` | `container:exec` (people and API keys, never MCP) | `{ shell?: auto\|/bin/bash\|/bin/sh\|/bin/ash, user?: default\|root, cols?, rows? }` → `{ exec: { execId } }`. Audited (`container.exec.open`) |
+| GET | `/projects/:slug/container/exec/:execId/stream` | `container:exec` | SSE: `data` events carry base64 output with the byte offset as `id`; one `exit` event (`{ code }`) ends it. `Last-Event-ID` or `?after=` replays what the node still holds (256 KiB) |
+| POST | `/projects/:slug/container/exec/:execId/input` · `/resize` | `container:exec` | raw input bytes (≤ 64 KiB) · `{ cols, rows }`. A shell is bound to the person who opened it |
+| DELETE | `/projects/:slug/container/exec/:execId` | `container:exec` | hang up the shell and everything it started |
+| POST | `/projects/:slug/container/restart` | `project:update` | restart every replica through desired state (`{ ok, generation }`); open shells close |
+| POST | `/projects/:slug/function/invoke` | `deployment:create` | Test request (D124), run on the function's node straight to its host: `{ method? (default GET), path? (default /, not under /__skiff/), headers?, body? }` → the node-task answer above with result `{ status, statusText, headers: [name, value][], encoding, body (≤ 256 KiB), size, truncated, durationMs, coldStart }` |
+| POST | `/projects/:slug/function/scheduled` | `deployment:create` | `{ cron }` (one of the active deployment's crons) runs `scheduled()` now → result `{ status, error, durationMs, coldStart }` |
 | GET | `/projects/:slug/function` | `deployment:read` | Functions view (D110): main module, compatibility date/flags, resolved bindings (no secret values), assets and `run_worker_first`, idle stop and the pinned workerd version. 404 when the project is not a function. A deploy of a bundle containing `skiff-function.json` validates it against the org; unsupported binding types and cron triggers fail with the phase that will serve them |
 | GET | `/projects/:slug/runners` | `deployment:read` | GitHub Actions runner pool as GitHub reports it (`null` for other projects); `error` is set when GitHub cannot be reached (docs/RUNNERS.md) |
 | GET | `/templates` | `project:read` | first-party app templates and their form fields (plan 21) |
@@ -98,7 +124,7 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | GET | `/domains` | `domain:read` | `?project=<slug>` to scope |
 | POST | `/domains` | `domain:create` | `{ project, hostname, redirectWww? }`; returns the TXT record to create |
 | GET/DELETE | `/domains/:id` | `domain:read` / `domain:delete` | deleting also removes managed Cloudflare records |
-| POST | `/domains/:id/check` | `domain:read` | re-check TXT/address records and report drift |
+| POST | `/domains/:id/check` | `domain:read` | re-check TXT/address records and report drift. Status: `pending` → `verified` (TXT found) → `active` (an edge heartbeat reports a valid certificate); never-verified domains become `failed` 72 h after creation. The maintenance sweep re-checks pending domains every 10 min and failed ones every 6 h |
 
 ## Managed databases
 
@@ -117,7 +143,7 @@ wire protocol is versioned in `packages/studio/src/protocol.ts` and may change b
 | GET | `/databases` | `database:read` | `?includeDeleted=1` adds the trash → `{ databases }` |
 | POST | `/databases` | `database:create` (+ `project:update` with `project`) | `{ name, engine?, version? (16\|17), placement? (auto\|edge\|node id), memoryMb?, cpus?, storageMb?, volume?, project?, envPrefix?, extensions?, pooler? }` → `201 { database }`. Placement is resolved once; with `project` it follows the project's node and the attachment is created in the same call |
 | GET | `/databases/:name` | `database:read` | `?includeDeleted=1` to read a trashed one → `{ database }` |
-| PATCH | `/databases/:name` | `database:update` | any of `{ memoryMb, cpus, storageMb, extensions, pooler }`; more memory re-checks admission → `{ database }` |
+| PATCH | `/databases/:name` | `database:update` | any of `{ memoryMb, cpus, storageMb, version, extensions, pooler }`; more memory re-checks admission; `version` moves forward in place for engines that allow it (409 on a downgrade, a PostgreSQL major or MongoDB) → `{ database }` |
 | DELETE | `/databases/:name` | `database:delete` | soft delete, restorable 7 days; 409 while projects are attached → `{ database }` |
 | DELETE | `/databases/:name?purge=1` | `database:delete` | trashed databases only: the node removes the data, then the row goes → `{ ok: true }` |
 | POST | `/databases/:name/restore` | `database:delete` | re-checks admission; 409 once a purge was requested → `{ database }` |
@@ -132,6 +158,9 @@ wire protocol is versioned in `packages/studio/src/protocol.ts` and may change b
 | GET/DELETE | `/databases/:name/backups/:id` | `database:read` / `database:delete` | one artifact; delete removes the object first |
 | POST | `/databases/:name/backups/:id/restore` | `database:create` (+ `project:update` with `project`) | `{ name, placement?, memoryMb?, cpus?, storageMb?, volume?, project?, envPrefix? }` → `202 { database }`; restore always creates a new database and verifies it |
 | GET/PATCH | `/databases/:name/backup-policy` | `database:read` / `database:update` | `{ enabled, schedule (five-field UTC cron), retentionDays }` |
+| GET/PATCH | `/databases/:name/pitr` | `database:read` / `database:update` | `SKIFF_FEATURE_PITR` ([PITR.md](./PITR.md)). `{ pitr }` with archive health, last base backup and `recoverableFrom`/`recoverableTo`/`windowCheckedAt`; PATCH `{ enabled }` (PostgreSQL 18 standard only; enabling queues the first full base backup) |
+| POST | `/databases/:name/pitr/backups` | `database:update` | `{ type: full\|diff\|incr }` → `202 { task }`; 409 while one is queued |
+| POST | `/databases/:name/pitr/restore` | `database:create` | `{ name, targetTime (ISO with offset), memoryMb?, cpus?, storageMb?, volume? }` → `202 { database }` on the source's node; 400 outside the recoverable window |
 | GET/POST | `/databases/:name/rotate` | `database:read` / `database:credentials` + `database:update` | `{ role: owner\|monitor }` → `202 { rotation }`; the node applies ALTER ROLE before the secret swaps |
 | POST | `/databases/:name/restart` | `database:update` | `{ target: "database"\|"pooler" }` → `202 { database, target }`; database restarts the container and pooler, pooler restarts only PgBouncer |
 | GET | `/databases/:name/studio` | `database:console` | the caller's native studio session (D96) → `{ studio: { sessionId, active, readOnly, expiresAt, idleMinutes, lastUsedAt, path, principal, principalError } }`; interactive users only, never the token |
@@ -242,13 +271,32 @@ server (JetStream on) per broker, placed once and reachable only on its node.
 | DELETE | `/brokers/:name?purge=1` | `broker:delete` | trashed brokers only: the node removes the data, then the rows go → `{ ok: true }` |
 | POST | `/brokers/:name/restore` | `broker:delete` | re-checks admission; 409 once a purge was requested → `{ broker }` |
 | POST | `/brokers/:name/restart` | `broker:update` | restarts the container (streams are kept) → `202 { broker }` |
-| GET | `/brokers/:name/credentials` | `broker:credentials`, interactive **session** | `{ credentials: { username, password, url, host, port, connectionSnippets, note } }`; `cache-control: no-store`; audited. API keys and MCP get 403 |
+| GET | `/brokers/:name/credentials` | `broker:credentials` | `{ credentials: { username, password, url, host, port, connectionSnippets, note } }`; loopback URL on the broker's node; `cache-control: no-store`; every read is audited. Not available over MCP (as D58) |
 | GET | `/brokers/:name/logs` | `logs:read` (+ `broker:read`) | `?after&limit&level&q` → the same page shape as `/storage/:name/logs`, `kind: "broker"` |
 | GET | `/brokers/:name/metrics` | `broker:read` | `?from&to&interval` (as `/databases/:name/metrics`; default the last hour at `1m`, ranges over 48 h use `1h`) → `{ points: BrokerMetricPoint[], interval }`: connections, store used/budget, messages, pending, awaiting ack, redelivered, oldest message age, and per-bucket published / messages and bytes in and out / slow consumers. Empty without ClickHouse (D123) |
 | GET | `/brokers/:name/queues` | `broker:read` | the newest stream listing the node reported (once a minute, SQLite, so it works without ClickHouse) → `{ brokerId, name, at, truncated, streams: [{ stream, queue, subjects, storage, retention, messages, bytes, maxBytes, firstAt, lastAt, consumerCount, pending, ackPending, redelivered, consumers: [{ name, pending, ackPending, redelivered, waiting, lastDeliveredAt }] }] }`. `queue` is the function queue name for `SKIFF_Q_<queue>` streams, else null |
 | GET | `/projects/:slug/brokers` | `broker:read` | `{ attachments: [{ brokerName, envPrefix, envNames, … }] }` |
 | POST | `/projects/:slug/brokers` | `broker:update` + `project:update` | `{ broker, envPrefix? }` → `201 { attachment, warning }`; the app gets `<PREFIX>_URL/_HOST/_PORT/_USER/_PASSWORD` at activation and is placed on the broker's node at its next deploy. 409 for a duplicate prefix; 422 for static projects or services on another node (function projects attach brokers for their queues, D112) |
 | DELETE | `/projects/:slug/brokers/:name` | `broker:update` + `project:update` | detach; the app restarts without the variables |
+
+**Queue tools** (D124, [BROKERS.md §5.1](./BROKERS.md)) run on the broker's node. Each answers
+`200 { task }` once the node has run it, `502 { error: "node_task_failed", message, task }` when
+the node reports a failure, or `202 { task }` with a `location` to poll while it is still
+running. `?wait=<seconds>` (0–25, default 20) sets how long the call holds. 409 when the broker
+is not running, its node is offline, or its agent predates `node-tasks`.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| POST | `/brokers/:name/queues` | `broker:update` | `{ queue }` creates `SKIFF_Q_<queue>` → result `{ stream, created, state }` |
+| POST | `/brokers/:name/queues/:queue/messages` | `broker:update` | `{ body, contentType? (json\|text, default json), delaySeconds? (≤ 43,200), count? (1–100) }` → `{ stream, sent, seqs, durationMs, state }` |
+| POST | `/brokers/:name/queues/:queue/redrive` | `broker:update` | `{ to, limit? (≤ 1,000) }` moves messages from `:queue` into `to` → `{ moved, remaining, state, source }` |
+| GET | `/brokers/:name/streams/:stream/messages` | `broker:update` | `?limit (≤ 50, default 20)&from=<seq>` reads without consuming → `{ stream, messages: [{ seq, subject, time, size, headers, encoding (utf8\|base64), body, truncated }], total, firstSeq, lastSeq, nextSeq }` |
+| POST | `/brokers/:name/streams/:stream/purge` | `broker:delete` | → `{ stream, purged, state }` |
+| DELETE | `/brokers/:name/streams/:stream` | `broker:delete` | → `{ stream, deleted }` |
+| DELETE | `/brokers/:name/streams/:stream/messages/:seq` | `broker:delete` | → `{ stream, seq, deleted, state }` |
+| GET | `/node-tasks/:id` | `broker:read` or `deployment:read` (by target) | `?wait=<seconds>` → `{ task: { id, kind, status (pending\|running\|succeeded\|failed), target, input, result, error, createdAt, startedAt, finishedAt } }`; kept for an hour |
+
+Nodes use `POST /api/agent/tasks/lease?wait=<s>` and `POST /api/agent/tasks/result`.
 
 ## Event notifications
 
@@ -293,6 +341,13 @@ return 403 `feature_disabled`, and the MCP tools are not offered.
 | GET | `/email/suppressions` | `email:read` | `?limit (≤1000, default 100)&address` → `{ suppressions }` |
 | POST | `/email/suppressions` | `email:update` | `{ address, reason? (manual\|bounce\|complaint\|unsubscribe, default manual) }` → `201 { suppression }` |
 | DELETE | `/email/suppressions/:address` | `email:update` | takes the address off the list → `204` (404 when it is not on it) |
+| GET | `/email/addresses` | `email:read` | sandbox recipients (EMAIL.md §4.3) → `{ addresses: EmailSandboxAddressView[] }` (`status` pending\|verified, `verifiedAt`, `sentAt`, `expiresAt`) |
+| POST | `/email/addresses` | `email:update` | `{ address }` mails a 24 h single-use link through platform SMTP → `201 { address }`; again for a pending address sends a fresh link (429 under a minute or after 5 per link); a verified one → `200` unchanged. 409 `platform_mail_unavailable` without `SKIFF_SMTP_*`, 409 `quota_exceeded` over 50 addresses / 10 pending, 502 `platform_mail_failed` |
+| DELETE | `/email/addresses/:address` | `email:update` | → `204` (404 when unknown) |
+| GET | `/email/access-request` | `email:read` | the org's latest production access request → `{ request: EmailAccessRequestView \| null }` |
+| POST | `/email/access-request` | `email:update`, org owner/admin | `{ useCase (20–2000), expectedDailyVolume (1–10,000,000), website? (http/https URL) }` → `201 { request }`; 409 when active, paused or a request is pending; notifies platform admins |
+| GET | `/email/access-requests` | platform admin | `?status (pending\|approved\|denied)&limit (≤500, default 100)`, pending first → `{ requests }` |
+| POST | `/email/access-requests/:id` | platform admin **session** | `{ decision: 'approve', perDay?, perSecond?, note? }` moves the org to active (defaults 10,000/day, 10/s); `{ decision: 'deny', note }` keeps it in sandbox → `{ request }`; the requester is emailed. 409 when already decided |
 | GET | `/email/credentials` | `email:read` | `{ credentials: EmailCredentialView[] }` (never the password) |
 | POST | `/email/credentials` | `email:credentials`, not MCP | `{ name, project?, allowedFromDomains? }` → `201 { credential }` with `password` and `smtp` **once**; `cache-control: no-store`; audited |
 | DELETE | `/email/credentials/:id` | `email:credentials` | revoke → `204` |
@@ -302,8 +357,9 @@ return 403 `feature_disabled`, and the MCP tools are not offered.
 
 MCP has `get_email_status`, `list_email_domains`, `get_email_domain`, `create_email_domain`,
 `check_email_domain`, `send_email` (confirmed per message), `list_email_messages`,
-`get_email_message`, `list_email_suppressions` and `remove_email_suppression` (confirmed). It has no
-credential, settings or org-state tools.
+`get_email_message`, `list_email_suppressions`, `remove_email_suppression` (confirmed),
+`list_email_addresses`, `add_email_address` and `remove_email_address` (both confirmed). It has no
+credential, settings, org-state or access-request tools.
 
 ## CLI browser login (`/cli/login`, `/api/v1/cli/token`)
 
@@ -358,7 +414,7 @@ Quotas bound org and project resources; usage is read-only showback (no billing)
 |---|---|---|---|
 | GET | `/usage?project=<slug>&format=csv&history=1` | `project:read` | Current org/project usage, CSV export or daily points |
 | GET | `/quotas?project=<slug>` | `project:read` | Org quota, or a project's base/overrides/effective limits |
-| PUT/PATCH | `/quotas?project=<slug>` | platform admin | Replace org quota fields or project overrides (`-1` unlimited; project `null` inherits) |
+| PUT/PATCH | `/quotas?project=<slug>` | platform admin (checked in core, `UsageService.setQuotas`) | Patch org quota fields or replace project overrides (`-1` unlimited; project `null` inherits) |
 | DELETE | `/quotas?project=<slug>` | platform admin | Remove project overrides |
 
 ## Observability dashboards (D101)

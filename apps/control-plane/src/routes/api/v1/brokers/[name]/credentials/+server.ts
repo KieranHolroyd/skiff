@@ -4,8 +4,8 @@ import { json, route } from '#lib/server/api.js';
 import { requirePrincipal } from '#lib/server/principal.js';
 
 /**
- * Reveal the connection URL and password (as D58). Needs `broker:credentials` and an interactive
- * user session; every read is audited by core. MCP has no equivalent.
+ * Reveal the connection URL and password (as D58). Needs `broker:credentials` (a dashboard session
+ * or an API key holding it, as the CLI uses); every read is audited by core. MCP has no equivalent.
  */
 export const GET: RequestHandler = (event) =>
 	route(() => {

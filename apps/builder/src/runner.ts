@@ -7,6 +7,7 @@ import {
 	BuildValidationError,
 	directRunArgs,
 	gitAuthEnv,
+	gitSshEnv,
 	redactSecret,
 	safeRelativeDir,
 	systemdRunArgs,
@@ -309,7 +310,16 @@ export class JobRunner {
 		const url = job.repoUrl;
 		// The token (when this host may have it) lives only in this process environment: never in
 		// the URL, so never in `.git/config`, which the build user can read.
-		const env = { GIT_TERMINAL_PROMPT: '0', ...gitAuthEnv(url, this.config.gitToken, this.config.gitTokenHosts) };
+		// The SSH deploy key is likewise a root-owned file named only in this environment.
+		const env = {
+			GIT_TERMINAL_PROMPT: '0',
+			...gitAuthEnv(url, this.config.gitToken, this.config.gitTokenHosts),
+			...gitSshEnv(url, {
+				keyPath: this.config.gitSshKey,
+				knownHostsPath: this.config.gitSshKnownHosts,
+				fallbackKnownHostsPath: join(this.config.buildDir, 'known_hosts'),
+			}),
+		};
 		const direct = await capture(
 			['git', 'clone', '--depth', '1', '--single-branch', '--branch', ref, '--', url, dir],
 			{ cwd: this.config.buildDir, env },

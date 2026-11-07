@@ -2,12 +2,16 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb } from '@skiff/db';
+import { eq } from 'drizzle-orm';
+import { createDb, domains as domainsTable } from '@skiff/db';
 import { buildPrincipal } from './orgs.ts';
 import { createCore, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import {
+	DOMAIN_FAIL_AFTER_MS,
+	DOMAIN_RECHECK_FAILED_MS,
 	DomainService,
+	nextStatus,
 	HttpCloudflareClient,
 	cloudflareConfigFromEnv,
 	type CloudflareClient,
@@ -401,5 +405,129 @@ describe('custom domains', () => {
 		});
 		expect(view.status).toBe('pending');
 		expect(cloudflare.records.length).toBe(before);
+	});
+});
+
+describe('domain status lifecycle', () => {
+	const HOUR = 3_600_000;
+	const statusOf = (id: string) => service.get(principal, id).status;
+
+	test('a verified domain goes active once an edge reports its certificate, and back if it expires', async () => {
+		const view = await service.create(principal, { project: 'blog', hostname: 'live.example.com', redirectWww: false });
+		const project = core.projects.requireRow(principal, 'blog');
+
+		// A certificate report for a pending domain changes nothing: it is not routed yet.
+		service.applyServedCertificates([{ host: 'live.example.com', notAfter: new Date(clock + 60 * 86_400_000).toISOString() }]);
+		expect(statusOf(view.id)).toBe('pending');
+
+		dns.setTxt('_skiff.live.example.com', view.verification!.recordValue);
+		dns.setCname('live.example.com', 'blog.sites.test');
+		expect((await service.check(principal, view.id)).domain.status).toBe('verified');
+
+		// The content wildcard and unrelated hosts are ignored; the domain's own certificate activates it.
+		service.applyServedCertificates([
+			{ host: '*.sites.test', notAfter: new Date(clock + 60 * 86_400_000).toISOString() },
+			{ host: 'live.example.com', notAfter: new Date(clock + 60 * 86_400_000).toISOString() },
+		]);
+		expect(statusOf(view.id)).toBe('active');
+		expect(service.approve('live.example.com')).toBe(true);
+		expect(service.desiredForProjects([project.id]).map((entry) => entry.host)).toContain('live.example.com');
+
+		// A re-check keeps it active.
+		const recheck = await service.check(principal, view.id);
+		expect(recheck.domain.status).toBe('active');
+		expect(recheck.detail).toContain('serving over HTTPS');
+		expect(core.audit.list({ orgId: 'org_1', action: 'domain.status' }).some((entry) => entry.resourceId === view.id)).toBe(true);
+
+		// Its certificate expired and no node reports a current one: back to verified, still routed.
+		service.applyServedCertificates([{ host: 'live.example.com', notAfter: new Date(clock - 1000).toISOString() }]);
+		const demoted = service.get(principal, view.id);
+		expect(demoted.status).toBe('verified');
+		expect(demoted.lastError).toContain('expired');
+		expect(service.approve('live.example.com')).toBe(true);
+
+		// A renewed certificate activates it again and clears the note.
+		service.applyServedCertificates([{ host: 'LIVE.example.com.', notAfter: new Date(clock + 90 * 86_400_000).toISOString() }]);
+		expect(service.get(principal, view.id)).toMatchObject({ status: 'active', lastError: null });
+		await service.remove(principal, view.id);
+	});
+
+	test('the agent heartbeat carries the certificate signal', async () => {
+		const joined = core.nodes.join({ token: core.nodes.createJoinToken(principal, 'edge').token, name: 'edge-domains' });
+		const view = await core.domains.create(principal, { project: 'blog', hostname: 'beat.example.com', redirectWww: false });
+		core.ctx.db.update(domainsTable).set({ status: 'verified', verifiedAt: clock }).where(eq(domainsTable.id, view.id)).run();
+		core.nodes.heartbeat(joined.token, {
+			nodeId: joined.nodeId,
+			agentVersion: '0.1.0',
+			actualStateVersion: 1,
+			status: 'online',
+			caddyOk: true,
+			releases: [],
+			stats: { certs: [{ host: 'beat.example.com', notAfter: new Date(clock + 30 * 86_400_000).toISOString() }] },
+		});
+		expect(core.domains.get(principal, view.id).status).toBe('active');
+
+		// Another node reporting an expired copy does not demote it while this one serves a current one.
+		core.domains.applyServedCertificates([{ host: 'beat.example.com', notAfter: new Date(clock - 1000).toISOString() }]);
+		expect(core.domains.get(principal, view.id).status).toBe('active');
+		core.ctx.db.delete(domainsTable).where(eq(domainsTable.id, view.id)).run();
+	});
+
+	test('a domain that never verifies fails after the window, keeps being re-checked and recovers', async () => {
+		const view = await service.create(principal, { project: 'blog', hostname: 'late.example.com', redirectWww: false });
+		const lastChecked = () => service.get(principal, view.id).lastCheckedAt;
+
+		// The sweep checks a never-checked pending domain straight away, then every 10 minutes.
+		await service.recheckDue();
+		const first = lastChecked();
+		expect(first).not.toBeNull();
+		expect(statusOf(view.id)).toBe('pending');
+		clock += 5 * 60_000;
+		await service.recheckDue();
+		expect(lastChecked()).toBe(first);
+		clock += 6 * 60_000;
+		await service.recheckDue();
+		expect(lastChecked()).not.toBe(first);
+
+		// Past the window, a failing check marks it failed; it is not served.
+		clock += DOMAIN_FAIL_AFTER_MS;
+		await service.recheckDue();
+		const failed = service.get(principal, view.id);
+		expect(failed.status).toBe('failed');
+		expect(failed.lastError).toContain('has not verified within 72 hours');
+		expect(service.approve('late.example.com')).toBe(false);
+		const project = core.projects.requireRow(principal, 'blog');
+		expect(service.desiredForProjects([project.id]).map((entry) => entry.host)).not.toContain('late.example.com');
+
+		// Failed domains are re-checked every 6 hours; a manual check still works any time.
+		const failedAt = lastChecked();
+		clock += HOUR;
+		await service.recheckDue();
+		expect(lastChecked()).toBe(failedAt);
+		dns.setTxt('_skiff.late.example.com', view.verification!.recordValue);
+		clock += DOMAIN_RECHECK_FAILED_MS;
+		await service.recheckDue();
+		const recovered = service.get(principal, view.id);
+		expect(recovered.status).toBe('verified');
+		expect(recovered.verifiedAt).not.toBeNull();
+		expect(service.approve('late.example.com')).toBe(true);
+
+		// Once verified it never fails on a later missing TXT record (it may be removed after verifying).
+		dns.setTxt('_skiff.late.example.com', 'something-else');
+		clock += DOMAIN_FAIL_AFTER_MS;
+		const later = await service.check(principal, view.id);
+		expect(later.domain.status).toBe('verified');
+		expect(later.domain.lastError).toContain('does not contain');
+	});
+
+	test('nextStatus covers every transition', () => {
+		const base = { verifiedAt: null, createdAt: 0 };
+		expect(nextStatus({ ...base, status: 'pending' }, true, 1)).toBe('verified');
+		expect(nextStatus({ ...base, status: 'failed' }, true, DOMAIN_FAIL_AFTER_MS * 2)).toBe('verified');
+		expect(nextStatus({ ...base, status: 'pending' }, false, DOMAIN_FAIL_AFTER_MS - 1)).toBe('pending');
+		expect(nextStatus({ ...base, status: 'pending' }, false, DOMAIN_FAIL_AFTER_MS)).toBe('failed');
+		expect(nextStatus({ status: 'active', verifiedAt: 1, createdAt: 0 }, true, 2)).toBe('active');
+		expect(nextStatus({ status: 'active', verifiedAt: 1, createdAt: 0 }, false, DOMAIN_FAIL_AFTER_MS * 2)).toBe('active');
+		expect(nextStatus({ status: 'verified', verifiedAt: 1, createdAt: 0 }, false, DOMAIN_FAIL_AFTER_MS * 2)).toBe('verified');
 	});
 });

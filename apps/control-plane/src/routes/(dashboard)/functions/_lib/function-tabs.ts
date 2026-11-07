@@ -2,6 +2,7 @@
 export const FUNCTION_TABS = [
 	'overview',
 	'invocations',
+	'test',
 	'deployments',
 	'bindings',
 	'data',

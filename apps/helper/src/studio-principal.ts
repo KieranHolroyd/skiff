@@ -197,6 +197,9 @@ export function studioPrincipalPlan(owner: StudioPrincipalOwner, password: strin
 				verified: (stdout) => /^\(integer\) \d+$|^\d+$/.test(stdout.trim()),
 			};
 		}
+		case 'clickhouse':
+			// No studio plugin yet (the engine's `console` capability is off), so no principal.
+			throw new ValidationError('The read-only studio account is not available for clickhouse');
 	}
 }
 

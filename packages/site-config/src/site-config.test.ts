@@ -113,6 +113,17 @@ describe('compileSiteRoute', () => {
 		expect(json).not.toContain('health_uri');
 	});
 
+	test('the active health-check interval follows replicas.healthIntervalSeconds', () => {
+		const route = (healthIntervalSeconds?: number) =>
+			JSON.stringify(
+				compileSiteRoute({ ...base, upstreams: ['10.88.1.2:8080', '10.88.1.3:8080'], healthPath: '/health', healthIntervalSeconds }),
+			);
+		expect(route(15)).toContain('"active":{"uri":"/health","interval":"15s"}');
+		// Out of range (or absent, from an older control plane) is Caddy's documented 5 s.
+		expect(route(0)).toContain('"interval":"5s"');
+		expect(route(2.5)).toContain('"interval":"5s"');
+	});
+
 	test('protected sites forward_auth to the agent and set noindex/private', () => {
 		const route = compileSiteRoute({ ...base, accessMode: 'platform' });
 		const json = JSON.stringify(route);

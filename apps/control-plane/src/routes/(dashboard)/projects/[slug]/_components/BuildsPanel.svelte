@@ -420,7 +420,14 @@
 					class="font-mono text-sm"
 				/>
 				<Field.Description>
-					Public HTTPS, SSH or git URL. Private repositories need a Builder-side deploy key.
+					Public HTTPS, SSH or git URL. A private repository needs a credential on each Builder
+					node: <code class="font-mono text-xs">SKIFF_GIT_TOKEN</code> for HTTPS, or
+					<code class="font-mono text-xs">SKIFF_GIT_SSH_KEY</code> for SSH.
+					<a
+						class="underline underline-offset-2"
+						href="{resolve('/(dashboard)/docs/[...slug]', { slug: 'deploying/git-builds' })}#private-repositories"
+						>Private repositories</a
+					>
 				</Field.Description>
 			</Field.Field>
 			<div class="grid gap-4 sm:grid-cols-2">

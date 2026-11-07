@@ -424,12 +424,20 @@ process apps as well. It is not a Functions-only feature.
   `runtime: "function"`. Deploying needs no Wrangler install. `skif wrangler …` passes any Wrangler
   command through (`dev`, `tail`, `types`, …), installing Wrangler as a project dev dependency when
   it is missing (or using an ephemeral runner when there is no package.json). Local development is
-  plain Wrangler. Logs use `skif logs`; a cron invoke command is
-  not built yet.
-- **MCP**: `deploy_site` accepts function bundles, alongside `get_function` and
-  `list_function_invocations`. As with every other surface, MCP tools return no secrets.
+  plain Wrangler. Logs use `skif logs`. `skif function invoke <slug> [path]` (`-X`, `-H`, `-d`,
+  `-i`) sends a test request and `skif function cron <slug> '<cron>'` runs a cron now (D124).
+- **MCP**: `deploy_site` accepts function bundles, alongside `get_function`,
+  `list_function_invocations`, `invoke_function` and `run_function_cron` (the dashboard
+  assistant asks before both). As with every other surface, MCP tools return no secrets.
 - **Dashboard**: a Runtime card for functions showing compatibility date, bindings, cron,
-  cold-start and invocation charts (from ClickHouse), and idle-stop.
+  cold-start and invocation charts (from ClickHouse), and idle-stop. The **Test** tab sends a
+  request (method, path, headers, body) and shows the status, headers, body, duration and whether
+  it cold-started; runs any cron now; and drops a message into a queue the function consumes.
+- **Test tools (D124)** run on the function's node as node tasks (see BROKERS.md §5.1): the agent
+  sends the request straight to replica 0's host socket, so domains, Caddy and access rules are
+  skipped, paths under `/__skiff/` are refused and the internal header is stripped. A test request
+  socket-activates an idle-stopped host and counts as activity, but is not in Invocations (those
+  come from the access log). Both need `deployment:create`. Responses are cut at 256 KiB.
 - **Assistant (later, phase 5)**: the Worker Loader binding is a natural sandbox for the assistant's
   own code mode (D106). It could run generated JavaScript against Skiff's typed API with
   `globalOutbound: null`, the pattern Cloudflare's own MCP server uses. That is a separate,
@@ -456,7 +464,8 @@ Three routes, chosen by what the code is:
 | Rust (workers-rs), Go (TinyGo), C/C++, Zig | Function | A JS entry imports a `.wasm` file; the bundler emits it as a `CompiledWasm` module (`wasm` in the manifest) |
 | Python | Function | Python Workers on the pinned workerd's Pyodide (below) |
 | PHP | Process app | FrankenPHP on an inherited socket, scaling to zero (below) |
-| Ruby, Python (WSGI/ASGI), Node, Go, anything else | Process app | Any server that listens on fd 3 (Puma, Gunicorn `--bind fd://3`, Uvicorn `--fd 3`, `server.listen({ fd: 3 })`), scaling to zero |
+| Node.js servers (Express, Fastify, Next.js, …) | Process app, `engine: "node"` | The pinned Node.js LTS; the helper's preload moves `listen()` onto the inherited socket, so it scales to zero (below, D125) |
+| Ruby, Python (WSGI/ASGI), Go, anything else | Process app | Any server that listens on fd 3 (Puma, Gunicorn `--bind fd://3`, Uvicorn `--fd 3`, `server.listen({ fd: 3 })`), scaling to zero |
 
 **Python Workers.** A wrangler config whose `main` ends in `.py` is a Python Worker. `skif deploy`
 runs `build.command` (normally `uv run pywrangler sync`, which vendors `pyproject.toml` dependencies,
@@ -511,6 +520,28 @@ limit, so it is installed on the node like workerd: pinned version and SHA-256 d
 linked at `/usr/local/bin/frankenphp` (on every process unit's `PATH`), and refreshed by convergence
 only on nodes that already have it. Checked with FrankenPHP 1.13.2 (Caddy 2.11.7): it serves on the
 passed socket only, opens no TCP port, and exits 0 on `SIGTERM`.
+
+**Node.js (D125).** A process app with `engine: "node"` runs on the Node.js LTS the installer
+pins in `scripts/install/node.ts` (26.13.0, SHA-256 per architecture): the official tarball under
+`/usr/lib/skiff/node/<version>/`, with `node`, `npm` and `npx` linked into `/usr/local/bin`. It is
+installed by default (`--no-node` declines it), convergence adds it to agent hosts that lack it and
+follows pin bumps, and an operator's own `/usr/local/bin/node` is never replaced. The agent
+advertises `process-node` while the binary exists; placement refuses Node apps elsewhere.
+
+- **Command.** Blank runs the package.json `start` script as `/bin/sh -c`, with the release's
+  `node_modules/.bin` and the pinned Node first on `PATH`. Not `npm start` or `node --run start`:
+  both start the script with every non-stdio fd closed (checked on Linux and macOS), so the app
+  never sees its socket. The contract refuses those launchers (and `npx`, `pnpm`, `yarn`,
+  `corepack`) as a socket-activated Node command; with socket activation off any command works.
+- **Socket.** With socket activation on, the helper writes a CommonJS preload into the workload's
+  runtime directory, passes it as the `skiff-node-listen.cjs` credential and sets
+  `NODE_OPTIONS=--require=%d/skiff-node-listen.cjs <the app's own NODE_OPTIONS>` in the unit (the
+  app's value comes out of the env file, which would otherwise override it). The preload rewrites
+  the first TCP `listen()` of each process to `listen({ fd: 3 })` and clears `LISTEN_*`; a listen
+  on a path, fd or handle passes through, so an app that adopts fd 3 itself still works.
+  `LISTEN_PID` is ignored because the server is the shell's child. An unchanged Express or Next.js
+  server therefore serves on the project socket and can use `idleStopSeconds`.
+- `examples/node-http` is a dependency-free server with its workload spec.
 
 ---
 

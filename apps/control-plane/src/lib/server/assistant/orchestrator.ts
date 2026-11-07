@@ -11,11 +11,14 @@ import { assistantConfig, type AssistantRuntimeConfig } from './config';
 import { mintConfirmation, verifyConfirmation } from './confirm';
 import { streamChat, type ProviderMessage } from './provider';
 import { effectiveAgent, type EffectiveAgent } from './settings';
+import { createToolbox } from './tool-search';
 import { assistantTools, parseArgs, providerTools, resultSummary, toolFor } from './tools';
 
 /**
  * One agent per turn (docs/ASSISTANT.md): the assistant runs a single tool loop against every MCP
  * tool the user may call (or the owner's allowlist), streaming text and tool steps as it goes.
+ * Large catalogs are deferred: a core set plus `search_tools` is offered, and the model loads the
+ * rest by name or keyword (./tool-search.ts).
  *
  * Destructive tool calls are never executed inline: they are signed and handed to the chat UI,
  * which re-submits the approval through `/api/v1/assistant/confirm`.
@@ -94,13 +97,19 @@ async function runAgent(
 	const allTools = assistantTools(principal);
 	const allowed = definition.tools ? new Set(definition.tools) : null;
 	const tools = allowed ? allTools.filter((tool) => allowed.has(tool.name)) : allTools;
+	const toolbox = createToolbox(tools);
+	const toolLoading = toolbox.prompt();
 
 	const messages: ProviderMessage[] = [
-		{ role: 'system', content: `${definition.system}\n\n${PANEL_FORMAT}` },
+		{
+			role: 'system',
+			content: [definition.system, toolLoading, PANEL_FORMAT].filter(Boolean).join('\n\n')
+		},
 		...historyMessages(request),
 		{ role: 'user', content: `${pageSummary(request)}\n\nUser request:\n${request.message}` }
 	];
-	const providerToolList = providerTools(tools);
+	let providerToolList = providerTools(toolbox.offered());
+	let providerToolVersion = toolbox.version;
 	const guides: AssistantGuide[] = [];
 	let text = '';
 	let toolCalls = 0;
@@ -109,6 +118,10 @@ async function runAgent(
 	const { assistantMaxRounds, assistantMaxToolCalls } = core.policies.get();
 
 	for (let round = 0; round < assistantMaxRounds; round += 1) {
+		if (providerToolVersion !== toolbox.version) {
+			providerToolList = providerTools(toolbox.offered());
+			providerToolVersion = toolbox.version;
+		}
 		const result = await streamChat(config, {
 			model: definition.model ?? config.model,
 			messages,
@@ -141,7 +154,7 @@ async function runAgent(
 				continue;
 			}
 			toolCalls += 1;
-			const tool = toolFor(tools, call.name);
+			const tool = toolbox.find(call.name);
 			const parsed = parseArgs(call.arguments);
 			emit({
 				type: 'tool.started',
@@ -154,6 +167,23 @@ async function runAgent(
 
 			if (!tool) {
 				const message = `There is no tool named "${call.name}". Use one of the tools you were given.`;
+				messages.push({ role: 'tool', tool_call_id: call.id, content: message });
+				emit({
+					type: 'tool.finished',
+					runId,
+					callId: call.id,
+					tool: call.name,
+					ok: false,
+					summary: message
+				});
+				continue;
+			}
+
+			if (!toolbox.isLoaded(tool.name)) {
+				// Called by name without loading: the model has not seen the schema, so its arguments
+				// are a guess. Load it and let it retry rather than run (or confirm) a guessed call.
+				toolbox.load([tool.name]);
+				const message = `${tool.name} was not loaded, so its arguments were not checked. It is loaded now; call it again using its schema.`;
 				messages.push({ role: 'tool', tool_call_id: call.id, content: message });
 				emit({
 					type: 'tool.finished',

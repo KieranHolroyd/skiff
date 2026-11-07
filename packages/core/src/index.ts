@@ -25,15 +25,20 @@ import { ShareService } from './shares.ts';
 import { DatabaseReplicaService } from './database-replica-service.ts';
 import { StorageReplicationService } from './storage-replication-service.ts';
 import { IngressHaService } from './ingress-ha.ts';
+import { FailoverService } from './failover-service.ts';
 import { ClusterConfigService } from './cluster-config-service.ts';
 import { WorkloadService } from './workloads.ts';
 import { DatabaseService } from './databases.ts';
 import { DatabaseStudioService } from './database-studio.ts';
+import { ContainerConsoleService } from './container-console.ts';
 import { StorageService } from './storage-instances.ts';
 import { BrokerService } from './brokers.ts';
 import { EmailService, type EmailServiceOptions } from './email.ts';
 import { cloudflareConfigFromEnv, HttpCloudflareClient } from './domains.ts';
 import { EventService } from './events.ts';
+import { NodeTaskService } from './node-tasks.ts';
+import { JobService } from './jobs.ts';
+import { ConnectedAppService } from './connected-apps.ts';
 import { VolumeService } from './volumes.ts';
 import { AppVolumeService } from './app-volumes.ts';
 import { ServiceMoveService } from './service-moves.ts';
@@ -41,6 +46,7 @@ import { StorageObjectsService } from './storage-objects.ts';
 import { DomainService } from './domains.ts';
 import { BuildService } from './builds.ts';
 import { LogService } from './logs.ts';
+import { LogDrainService } from './log-drains.ts';
 import { EnvironmentService } from './environments.ts';
 import { SourceService } from './source.ts';
 import { createOperationService, type OperationService } from './operations/index.ts';
@@ -51,6 +57,7 @@ import { UpgradeService } from './upgrades.ts';
 import { GithubRunnerService } from './github-runners.ts';
 import { FunctionService } from './functions.ts';
 import { TemplateService } from './templates.ts';
+import { BlueprintService } from './blueprints.ts';
 
 export * from './config.ts';
 export * from './context.ts';
@@ -68,6 +75,7 @@ export * from './nodes.ts';
 export * from './access.ts';
 export * from './deploy.ts';
 export * from './maintenance.ts';
+export * from './failover-service.ts';
 export * from './secrets.ts';
 export * from './metrics.ts';
 export * from './metrics-export.ts';
@@ -84,13 +92,18 @@ export * from './github-runners.ts';
 export * from './templates.ts';
 export * from './databases.ts';
 export * from './database-studio.ts';
+export * from './container-console.ts';
 export * from './storage-instances.ts';
 export * from './brokers.ts';
 export * from './email.ts';
 export * from './events.ts';
+export * from './node-tasks.ts';
+export * from './jobs.ts';
+export * from './connected-apps.ts';
 export * from './domain-reconcile.ts';
 export * from './volumes.ts';
 export * from './app-volumes.ts';
+export * from './app-volume-lifecycle.ts';
 export * from './service-moves.ts';
 export * from './storage-objects.ts';
 export * from './storage-s3.ts';
@@ -108,7 +121,11 @@ export * from './scheduler.ts';
 export * from './usage.ts';
 export * from './service-actions.ts';
 export * from './backup-targets.ts';
+export * from './audit.ts';
+export * from './log-drains.ts';
+export * from './webhook-signature.ts';
 export * from './upgrades.ts';
+export * from './blueprints.ts';
 
 export interface CoreOptions {
 	db: SkiffDb;
@@ -138,9 +155,15 @@ export interface Core {
 	workloads: WorkloadService;
 	databases: DatabaseService;
 	databaseStudio: DatabaseStudioService;
+	containerConsole: ContainerConsoleService;
 	storage: StorageService;
 	brokers: BrokerService;
 	events: EventService;
+	nodeTasks: NodeTaskService;
+	/** App cron jobs and one-off commands (plan 09). */
+	jobs: JobService;
+	/** MCP/OAuth clients users have approved (Settings → Connected apps). */
+	connectedApps: ConnectedAppService;
 	volumes: VolumeService;
 	appVolumes: AppVolumeService;
 	moves: ServiceMoveService;
@@ -152,6 +175,7 @@ export interface Core {
 	source: SourceService;
 	audit: AuditService;
 	operations: OperationService;
+	blueprints: BlueprintService;
 	scheduler: SchedulerService;
 	serviceActions: ServiceActionsService;
 	backupTargets: BackupTargetService;
@@ -173,10 +197,14 @@ export interface Core {
 	storageReplication: StorageReplicationService;
 	/** Ingress HA status (CLUSTERING §7, C5). */
 	ingress: IngressHaService;
+	/** The failover controller (CLUSTERING §8.3, §9.3, C8). */
+	failover: FailoverService;
 	/** Cluster tunables (CLUSTERING). */
 	cluster: ClusterConfigService;
 	/** Email: Skiff's self-hosted SES (docs/EMAIL.md). */
 	email: EmailService;
+	/** Log drains: forward stored log lines to webhooks and OTLP receivers (DESIGN §8). */
+	logDrains: LogDrainService;
 }
 
 function defaultEmailOptions(): EmailServiceOptions {
@@ -216,10 +244,13 @@ export function createCore(options: CoreOptions): Core {
 	ctx.workloads = new WorkloadService(ctx);
 	ctx.databases = new DatabaseService(ctx);
 	ctx.databaseStudio = new DatabaseStudioService(ctx);
+	ctx.containerConsole = new ContainerConsoleService(ctx);
 	ctx.storage = new StorageService(ctx);
 	ctx.brokers = new BrokerService(ctx);
 	ctx.email = new EmailService(ctx, options.email ?? defaultEmailOptions());
 	ctx.events = new EventService(ctx);
+	ctx.nodeTasks = new NodeTaskService(ctx);
+	ctx.jobs = new JobService(ctx);
 	ctx.volumes = new VolumeService(ctx);
 	ctx.appVolumes = new AppVolumeService(ctx);
 	ctx.moves = new ServiceMoveService(ctx);
@@ -228,6 +259,7 @@ export function createCore(options: CoreOptions): Core {
 	ctx.logs = new LogService(ctx);
 	ctx.builds = new BuildService(ctx);
 	ctx.operations = createOperationService(ctx);
+	ctx.blueprints = new BlueprintService(ctx);
 	ctx.scheduler = new SchedulerService(ctx);
 	ctx.serviceActions = new ServiceActionsService(ctx);
 	ctx.backupTargets = new BackupTargetService(ctx);
@@ -245,6 +277,7 @@ export function createCore(options: CoreOptions): Core {
 	ctx.databaseReplicas = new DatabaseReplicaService(ctx);
 	ctx.storageReplication = new StorageReplicationService(ctx);
 	ctx.ingress = new IngressHaService(ctx);
+	ctx.failover = new FailoverService(ctx);
 	ctx.cluster = new ClusterConfigService(ctx);
 	const source = new SourceService(ctx);
 
@@ -275,10 +308,14 @@ export function createCore(options: CoreOptions): Core {
 		workloads: ctx.workloads,
 		databases: ctx.databases,
 		databaseStudio: ctx.databaseStudio,
+		containerConsole: ctx.containerConsole,
 		storage: ctx.storage,
 		brokers: ctx.brokers,
 		email: ctx.email,
 		events: ctx.events,
+		nodeTasks: ctx.nodeTasks,
+		jobs: ctx.jobs,
+		connectedApps: new ConnectedAppService(ctx),
 		volumes: ctx.volumes,
 		appVolumes: ctx.appVolumes,
 		moves: ctx.moves,
@@ -290,6 +327,7 @@ export function createCore(options: CoreOptions): Core {
 		source,
 		audit: ctx.audit,
 		operations: ctx.operations,
+		blueprints: ctx.blueprints,
 		scheduler: ctx.scheduler,
 		serviceActions: ctx.serviceActions,
 		backupTargets: ctx.backupTargets,
@@ -304,6 +342,8 @@ export function createCore(options: CoreOptions): Core {
 		databaseReplicas: ctx.databaseReplicas,
 		storageReplication: ctx.storageReplication,
 		ingress: ctx.ingress,
+		failover: ctx.failover,
 		cluster: ctx.cluster,
+		logDrains: new LogDrainService(ctx, options.version),
 	};
 }

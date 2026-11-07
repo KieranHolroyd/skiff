@@ -5,12 +5,14 @@ import {
 	heartbeatSchema,
 	nodeCapabilities,
 	FUNCTIONS_PYTHON_CAPABILITY,
+	PROCESS_NODE_CAPABILITY,
 	WORKERD_INSTALL_DIR,
 	WORKERD_PINNED_VERSION,
 	workloadActivationSchema,
 	type DesiredState,
 	type Heartbeat,
 	type NodeStudioDesired,
+	type NodeContainerConsoleDesired,
 	type NodeStatus,
 	type VolumeInventory,
 	type WireguardStatus,
@@ -24,17 +26,22 @@ import { buildCaddyConfig, isProductionRoute, tlsSubjects } from './caddy-config
 import { loadConfig, type AgentConfig } from './config.ts';
 import { controlSocketFetch } from './control-socket.ts';
 import { DatabaseBackupRunner } from './database-backups.ts';
+import { AppVolumeRunner } from './app-volumes.ts';
 import { DatabasePitrRunner } from './database-pitr.ts';
 import { DatabaseCredentialRunner } from './database-credentials.ts';
 import { StudioPrincipalRunner } from './studio/principal.ts';
 import { MailBridge } from './mail-bridge.ts';
 import { NodeUpdateRunner } from './node-update.ts';
 import { DatabasePoolerRestartRunner } from './database-pooler-restarts.ts';
+import { DatabaseReplicationRunner } from './database-replication.ts';
+import { ReplicaLinkForwarder } from './replica-links.ts';
 import { DatabaseRotationRunner } from './database-rotations.ts';
 import { DATABASE_STATS_INTERVAL_MS, DatabaseStatsSampler } from './database-stats.ts';
 import { FunctionScheduler } from './function-scheduler.ts';
 import { FunctionQueueConsumers } from './function-queues.ts';
 import { EventPublisher } from './event-publisher.ts';
+import { NodeTaskRunner } from './node-tasks.ts';
+import { JobRunner } from './jobs.ts';
 import { HelperClient } from './helper-client.ts';
 import { formatEnv, JOIN_USAGE, joinNode, nodeFilePath, parseJoinArgs } from './join.ts';
 import { WorkloadLogDrain } from './log-drain.ts';
@@ -47,11 +54,13 @@ import { StatsCollector } from './stats.ts';
 import { StorageReconciler, STORAGE_RECONCILE_INTERVAL_MS } from './storage-admin.ts';
 import { StorageRequester } from './storage.ts';
 import { StorageStatsSampler, STORAGE_STATS_INTERVAL_MS } from './storage-stats.ts';
+import { StorageReplicator } from './storage-replicator.ts';
 import { BROKER_STATS_INTERVAL_MS, BrokerStatsSampler } from './broker-stats.ts';
 import { DesiredStateStore, desiredStateEtag, desiredStateRequest } from './state.ts';
 import { postTelemetryBatch, TelemetryClient } from './telemetry.ts';
 import { handleSiteRequest, normalizeHost, UsedTokenCache } from './verify.ts';
 import type { StudioFront } from './studio/front.ts';
+import { ConsoleFront, controlPlaneConsoleActivationFetcher } from './console-front.ts';
 
 const HEARTBEAT_INTERVAL_MS = 10_000;
 // Bun's default idle timeout on the control plane is 10 s (adapter-bun CONNECTION_IDLE_TIMEOUT),
@@ -107,18 +116,28 @@ class AgentRuntime {
 	private readonly storage: StorageRequester;
 	private readonly databaseStats: DatabaseStatsSampler;
 	private readonly databaseBackups: DatabaseBackupRunner;
+	/** App-volume usage, purges, snapshots and restores (docs/VOLUMES.md §14). */
+	private readonly appVolumes: AppVolumeRunner;
 	private readonly databasePitr: DatabasePitrRunner;
 	private readonly databaseRotations: DatabaseRotationRunner;
 	private readonly databaseCredentials: DatabaseCredentialRunner;
 	private readonly studioPrincipals: StudioPrincipalRunner;
 	private readonly nodeUpdate: NodeUpdateRunner;
 	private readonly databasePoolerRestarts: DatabasePoolerRestartRunner;
+	/** Primary-side configure/sample and replica promotion (C7). */
+	private readonly databaseReplication: DatabaseReplicationRunner;
+	/** Unix sockets the replica containers stream through (C7). */
+	private readonly replicaLinks: ReplicaLinkForwarder;
 	private readonly storageAdmin: StorageReconciler;
 	private readonly storageStats: StorageStatsSampler;
+	private readonly storageReplicator: StorageReplicator;
 	private readonly brokerStats: BrokerStatsSampler;
 	private readonly functions: FunctionScheduler;
 	private readonly functionQueues: FunctionQueueConsumers;
 	private readonly eventPublisher: EventPublisher;
+	private readonly nodeTasks: NodeTaskRunner;
+	/** App cron jobs and one-off commands (plan 09). */
+	private readonly jobs: JobRunner;
 
 	private desired: DesiredState | null = null;
 	private desiredEtag: string | null = null;
@@ -152,6 +171,8 @@ class AgentRuntime {
 	/** Native studio front (plan 22), loaded only once desired state first enables it. */
 	private studioFront: Promise<StudioFront> | null = null;
 	private studioUpdates: Promise<void> = Promise.resolve();
+	/** Container console front (D127), created once desired state first opens it. */
+	private consoleFront: ConsoleFront | null = null;
 
 	private readonly reconcileBackoff = new Backoff(1_000, 30_000);
 	private readonly heartbeatBackoff = new Backoff(5_000, 60_000);
@@ -174,6 +195,8 @@ class AgentRuntime {
 						certProbeTargets(
 							this.desired ? this.contentDomain(this.desired) : config.contentDomain,
 							config.platformHost,
+							// Verified custom domains: a certificate here is what makes them `active`.
+							(this.desired?.domains ?? []).map((domain) => domain.host),
 						),
 					tlsCertReader(config.certProbe),
 				)
@@ -206,6 +229,7 @@ class AgentRuntime {
 		});
 		this.databaseStats = new DatabaseStatsSampler({ source: this.workloads, log });
 		this.databaseBackups = new DatabaseBackupRunner({ helper: this.helper, log });
+		this.appVolumes = new AppVolumeRunner({ helper: this.helper, log });
 		this.databasePitr = new DatabasePitrRunner({
 			controlUrl: config.controlUrl,
 			nodeToken: config.nodeToken,
@@ -231,6 +255,19 @@ class AgentRuntime {
 			log,
 		});
 		this.databasePoolerRestarts = new DatabasePoolerRestartRunner({ helper: this.helper, log });
+		this.databaseReplication = new DatabaseReplicationRunner({
+			controlUrl: config.controlUrl,
+			nodeToken: config.nodeToken,
+			helper: this.helper,
+			runtime: this.workloads,
+			log,
+		});
+		// Must equal the helper's SKIFF_HELPER_REPLICATION_DIR (the installer uses /var/lib/skiff/agent).
+		this.replicaLinks = new ReplicaLinkForwarder({
+			root: join(config.dataDir, 'replication'),
+			log: (level, message) => log(level, message),
+			...(this.nodeCertificate.ensure() ? { certificate: this.nodeCertificate.ensure()! } : {}),
+		});
 		this.nodeUpdate = new NodeUpdateRunner({
 			helper: this.helper,
 			currentVersion: config.agentVersion,
@@ -241,6 +278,13 @@ class AgentRuntime {
 		// root key and user secrets stay in the workload runtime's memory (S4).
 		this.storageAdmin = new StorageReconciler({ source: this.workloads, log });
 		this.storageStats = new StorageStatsSampler({ source: this.workloads, log });
+		// Bucket replication links this node runs (§12): copies objects to or from a peer instance
+		// through the peer node's gateway, with each link's scoped key. Progress rides the heartbeat.
+		this.storageReplicator = new StorageReplicator({
+			source: this.workloads,
+			statePath: join(config.dataDir, 'storage-replication.json'),
+			log,
+		});
 		// Broker samples (D123) over each broker's own client connection; the password is fetched
 		// from the activation on demand and kept only in the open connection.
 		this.brokerStats = new BrokerStatsSampler({
@@ -269,6 +313,25 @@ class AgentRuntime {
 			controlUrl: config.controlUrl,
 			nodeToken: config.nodeToken,
 			fetchActivation: (id, signal) => this.fetchWorkloadActivation(id, signal),
+			log,
+		});
+		// Queue and function tools (D124): run the control plane's one-shot tasks for this node.
+		this.nodeTasks = new NodeTaskRunner({
+			controlUrl: config.controlUrl,
+			nodeToken: config.nodeToken,
+			socketDir: config.workloadSocketDir,
+			fetchActivation: (id, signal) => this.fetchWorkloadActivation(id, signal),
+			workloadStatus: async (id) => (await this.helper.status(id)).status,
+			noteActivity: (projectId) => this.functions.noteActivity(projectId),
+			log,
+		});
+		// Job runs (plan 09): lease, start through the helper, watch, drain output, report.
+		this.jobs = new JobRunner({
+			controlUrl: config.controlUrl,
+			nodeToken: config.nodeToken,
+			helper: this.helper,
+			fetchActivation: (id, signal) => this.fetchWorkloadActivation(id, signal),
+			statePath: join(config.dataDir, 'jobs-state.json'),
 			log,
 		});
 	}
@@ -308,6 +371,7 @@ class AgentRuntime {
 				this.desired = cached.state;
 				this.desiredEtag = cached.etag;
 				this.applyStudio(cached.state.studio);
+				this.applyConsole(cached.state.containerConsole);
 				this.mail.apply(cached.state.mail);
 				log('info', `Loaded cached desired state v${cached.state.version}`);
 			}
@@ -364,17 +428,22 @@ class AgentRuntime {
 			this.telemetryLoop(),
 			this.databaseStatsLoop(),
 			this.databaseBackupLoop(),
+			this.appVolumeLoop(),
 			this.databasePitrLoop(),
 			this.databaseRotationLoop(),
 			this.databaseCredentialLoop(),
 			this.databasePoolerRestartLoop(),
+			this.databaseReplicationLoop(),
 			this.nodeUpdateLoop(),
 			this.storageAdminLoop(),
 			this.storageStatsLoop(),
+			this.storageReplicator.run(this.shutdownController.signal),
 			this.brokerStatsLoop(),
 			this.functions.run(() => this.desired, this.shutdownController.signal),
 			this.functionQueues.run(() => this.desired, this.shutdownController.signal),
 			this.eventPublisher.run(() => this.desired, this.shutdownController.signal),
+			this.nodeTasks.run(() => this.desired, this.shutdownController.signal),
+			this.jobs.run(() => this.desired, this.shutdownController.signal),
 		];
 		if (this.config.logDrain)
 			this.loops.push(this.logDrain.run(() => this.desired, this.shutdownController.signal));
@@ -395,8 +464,10 @@ class AgentRuntime {
 		await this.telemetry?.stop().catch(() => undefined);
 		await this.studioUpdates;
 		if (this.studioFront) (await this.studioFront.catch(() => null))?.stop();
+		this.consoleFront?.stop();
 		await this.mail.close();
 		this.serviceForwarder.close();
+		await this.replicaLinks.close();
 		this.server?.stop(true);
 		this.server = null;
 		await fs.rm(this.config.agentSocket, { force: true }).catch(() => undefined);
@@ -541,6 +612,7 @@ class AgentRuntime {
 		this.desiredEtag = etagHeader;
 		this.desiredPulledThisRun = true;
 		this.applyStudio(state.studio);
+		this.applyConsole(state.containerConsole);
 		this.mail.apply(state.mail);
 		try {
 			await this.store.write(state, etagHeader);
@@ -574,6 +646,25 @@ class AgentRuntime {
 		this.studioUpdates = this.studioUpdates
 			.then(async () => (await front).update(desired))
 			.catch((error: unknown) => log('error', `Studio front update failed: ${errorText(error)}`));
+	}
+
+	/** Open, move or close the container console front (D127). Never blocks convergence. */
+	private applyConsole(desired: NodeContainerConsoleDesired | null): void {
+		if (!desired && !this.consoleFront) return;
+		this.consoleFront ??= new ConsoleFront({
+			fetchActivation: controlPlaneConsoleActivationFetcher({
+				controlUrl: this.config.controlUrl,
+				nodeToken: this.config.nodeToken,
+				signal: this.shutdownController.signal,
+			}),
+			helper: this.helper,
+			log,
+		});
+		try {
+			this.consoleFront.update(desired);
+		} catch (error) {
+			log('error', `Container console front update failed: ${errorText(error)}`);
+		}
 	}
 
 	/**
@@ -646,6 +737,12 @@ class AgentRuntime {
 			this.serviceForwarder.converge(state.serviceEndpoints, state.serviceProviders);
 		} catch (error) {
 			log('error', `Service endpoint converge failed: ${errorText(error)}`);
+		}
+		// Replica link sockets before the replica workloads, whose units mount their directories (C7).
+		try {
+			await this.replicaLinks.converge(state.databaseReplicaLinks ?? []);
+		} catch (error) {
+			log('error', `Replica link converge failed: ${errorText(error)}`);
 		}
 
 		// The overlay must be up before a workload tries a cross-node service endpoint (C1).
@@ -757,6 +854,21 @@ class AgentRuntime {
 		}
 	}
 
+	/** App-volume work beside the reconcile loop; snapshots and restores run in the background. */
+	private async appVolumeLoop(): Promise<void> {
+		while (this.running) {
+			await sleep(5_000, this.shutdownController.signal).catch(() => undefined);
+			if (!this.running) break;
+			const state = this.desired;
+			if (!state) continue;
+			try {
+				await this.appVolumes.runOnce(state, this.shutdownController.signal);
+			} catch (error) {
+				log('warn', `App volume round failed: ${errorText(error)}`);
+			}
+		}
+	}
+
 	/** PITR tasks are additive to the logical backup loop and only exist when the flag is on. */
 	private async databasePitrLoop(): Promise<void> {
 		while (this.running) {
@@ -765,7 +877,14 @@ class AgentRuntime {
 			const state = this.desired;
 			if (!state || state.databasePitrTasks.length === 0) continue;
 			try {
-				await this.databasePitr.runOnce(state, this.shutdownController.signal);
+				// Ready = running on its current activation (the sampler's targets carry that check).
+				const ready = new Set(
+					this.workloads
+						.databaseTargets()
+						.filter((target) => target.status === 'running')
+						.map((target) => target.id),
+				);
+				await this.databasePitr.runOnce(state, (id) => ready.has(id), this.shutdownController.signal);
 			} catch (error) {
 				log('warn', `Database PITR task failed: ${errorText(error)}`);
 			}
@@ -797,6 +916,20 @@ class AgentRuntime {
 				await this.databasePoolerRestarts.runOnce(state, this.shutdownController.signal);
 			} catch (error) {
 				log('warn', `Database pooler restart failed: ${errorText(error)}`);
+			}
+		}
+	}
+
+	private async databaseReplicationLoop(): Promise<void> {
+		while (this.running) {
+			await sleep(5_000, this.shutdownController.signal).catch(() => undefined);
+			if (!this.running) break;
+			const state = this.desired;
+			if (!state) continue;
+			try {
+				await this.databaseReplication.runOnce(state, this.shutdownController.signal);
+			} catch (error) {
+				log('warn', `Database replication task failed: ${errorText(error)}`);
 			}
 		}
 	}
@@ -874,7 +1007,8 @@ class AgentRuntime {
 				// A helper that predates the overlay simply reports no peer health.
 			}
 		}
-		// Cached; refreshed in the background at most every ~6 h (cert-expiry alert, DESIGN §8).
+		// Cached; refreshed in the background at most every ~6 h (cert-expiry alert, DESIGN §8), and
+		// sooner for a custom domain that just arrived (its report moves the domain to `active`).
 		const certs = this.certs?.current() ?? [];
 		if (certs.length > 0) stats.certs = certs;
 		// Actual unit state, so restart loops and OOM kills show up in the fleet view.
@@ -884,6 +1018,7 @@ class AgentRuntime {
 		const purgedDatabases = this.workloads.pendingPurgedDatabases();
 		const purgedStorage = this.workloads.pendingPurgedStorage();
 		const purgedBrokers = this.workloads.pendingPurgedBrokers();
+		const appVolumeReport = this.appVolumes.pending();
 		const volumeInventory = await this.volumeInventoryForHeartbeat();
 		const backupResults = this.databaseBackups.pendingResults();
 		const pitrResults = this.databasePitr.pendingResults();
@@ -891,11 +1026,16 @@ class AgentRuntime {
 		const credentialResults = this.databaseCredentials.pendingResults();
 		const studioPrincipalResults = this.studioPrincipals.pendingResults();
 		const poolerRestarted = this.databasePoolerRestarts.pending();
+		const databaseReplication = this.databaseReplication.reports();
+		const promotionResults = this.databaseReplication.pendingPromotionResults();
 		const nodeUpdateResult = this.nodeUpdate.pendingResult();
 		const databaseTls = databaseTlsHeartbeat(reports);
 		// Bucket deletions and config convergence are reported once, capped by the heartbeat schema.
 		const storageBucketDeletions = this.storageAdmin.pendingBucketDeletions().slice(0, 500);
 		const storageBucketConfigs = this.storageAdmin.pendingBucketConfigs().slice(0, 500);
+		// Root keys proved or refused (staged rotation, §5) and replication progress (§12).
+		const storageRootKeys = this.storageAdmin.pendingRootKeyReports().slice(0, 200);
+		const storageReplication = this.storageReplicator.pendingReports();
 		// A storage move happens outside the agent's sandbox (D48); ask for it while it is due.
 		await this.storage
 			.reconcile(this.desired?.storage, storage)
@@ -923,13 +1063,20 @@ class AgentRuntime {
 			...(credentialResults.length > 0 ? { databaseCredentialResults: credentialResults } : {}),
 			...(studioPrincipalResults.length > 0 ? { databaseStudioPrincipalResults: studioPrincipalResults } : {}),
 			...(poolerRestarted.length > 0 ? { databasePoolerRestarted: poolerRestarted } : {}),
+			...(databaseReplication.length > 0 ? { databaseReplication } : {}),
+			...(promotionResults.length > 0 ? { databaseReplicaPromotionResults: promotionResults } : {}),
 			...(nodeUpdateResult ? { nodeUpdateResult } : {}),
 			...(databaseTls.length > 0 ? { databaseTls } : {}),
 			...(purgedDatabases.length > 0 ? { purgedDatabases } : {}),
 			...(purgedStorage.length > 0 ? { purgedStorage } : {}),
 			...(purgedBrokers.length > 0 ? { purgedBrokers } : {}),
+			...(appVolumeReport.purged.length > 0 ? { purgedAppVolumes: appVolumeReport.purged } : {}),
+			...(appVolumeReport.usage.length > 0 ? { appVolumeUsage: appVolumeReport.usage } : {}),
+			...(appVolumeReport.results.length > 0 ? { appVolumeTaskResults: appVolumeReport.results } : {}),
 			...(storageBucketDeletions.length > 0 ? { storageBucketDeletions } : {}),
 			...(storageBucketConfigs.length > 0 ? { storageBucketConfigs } : {}),
+			...(storageRootKeys.length > 0 ? { storageRootKeys } : {}),
+			...(storageReplication.length > 0 ? { storageReplication } : {}),
 			...(volumeInventory ? { volumes: volumeInventory } : {}),
 		};
 
@@ -958,12 +1105,16 @@ class AgentRuntime {
 		this.databaseCredentials.acknowledge(credentialResults.map((result) => result.taskId));
 		this.studioPrincipals.acknowledge(studioPrincipalResults);
 		this.databasePoolerRestarts.acknowledge(poolerRestarted);
+		this.databaseReplication.acknowledgePromotions(promotionResults.map((result) => result.failoverId));
 		await this.nodeUpdate.acknowledge(nodeUpdateResult);
 		this.workloads.acknowledgePurgedDatabases(purgedDatabases);
 		this.workloads.acknowledgePurgedStorage(purgedStorage);
 		this.workloads.acknowledgePurgedBrokers(purgedBrokers);
+		this.appVolumes.acknowledge(appVolumeReport);
 		this.storageAdmin.acknowledgeBucketDeletions(storageBucketDeletions);
 		this.storageAdmin.acknowledgeBucketConfigs(storageBucketConfigs);
+		this.storageAdmin.acknowledgeRootKeyReports(storageRootKeys);
+		this.storageReplicator.acknowledgeReports(storageReplication);
 		return true;
 	}
 
@@ -1378,11 +1529,12 @@ if (import.meta.main) {
 
 /**
  * The static capabilities plus `functions-python` when the warmed Pyodide cache for the pinned
- * workerd is on disk (D121). Checked on every heartbeat, so installing the cache later takes effect
+ * workerd is on disk (D121), and `process-node` when the node has Node.js (D125). Checked on every heartbeat, so installing the cache later takes effect
  * without restarting the agent.
  */
 export function advertisedCapabilities(
 	pyodideDir: string = process.env.SKIFF_PYODIDE_CACHE_DIR ?? `${WORKERD_INSTALL_DIR}/${WORKERD_PINNED_VERSION}/pyodide`,
+	nodeBinary: string = process.env.SKIFF_NODE_PATH ?? '/usr/local/bin/node',
 ): string[] {
 	let python = false;
 	try {
@@ -1390,5 +1542,9 @@ export function advertisedCapabilities(
 	} catch {
 		python = false;
 	}
-	return python ? [...nodeCapabilities, FUNCTIONS_PYTHON_CAPABILITY] : [...nodeCapabilities];
+	const capabilities: string[] = [...nodeCapabilities];
+	if (python) capabilities.push(FUNCTIONS_PYTHON_CAPABILITY);
+	// Node.js process apps (D125) need the pinned node the installer links onto every unit's PATH.
+	if (existsSync(nodeBinary)) capabilities.push(PROCESS_NODE_CAPABILITY);
+	return capabilities;
 }

@@ -1,3 +1,4 @@
+import { featureEnabled } from '@skiff/core';
 import { core } from '#lib/server/core.js';
 import type { PageServerLoad } from './$types';
 
@@ -9,5 +10,6 @@ export const load: PageServerLoad = ({ locals }) => {
 	} catch {
 		// No project:read; the catalog is simply hidden.
 	}
-	return { templates };
+	// Blueprints (plan 11) are offered once an operator turns them on.
+	return { templates, blueprints: featureEnabled(core.ctx.config, 'BLUEPRINTS') };
 };

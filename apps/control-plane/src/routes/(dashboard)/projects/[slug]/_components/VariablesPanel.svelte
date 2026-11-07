@@ -138,7 +138,8 @@
 		attachableStorage?: AttachableStorage[];
 		canAttachDatabase?: boolean;
 		canAttachStorage?: boolean;
-		can: { edit: boolean; createSecret: boolean; deleteSecret: boolean };
+		/** `updateSecret`: a new value for this project's own secret; `createSecret`: a new name. */
+		can: { edit: boolean; createSecret: boolean; updateSecret: boolean; deleteSecret: boolean };
 	} = $props();
 
 	/** The largest `.env` file accepted for import. */
@@ -1286,7 +1287,7 @@
 												{#if editError}<p class="mt-1 text-xs text-destructive">{editError}</p>{/if}
 											</Table.Cell>
 											<Table.Cell class="space-y-2 align-top">
-												{#if can.createSecret}
+												{#if resolved?.scope === 'project' ? can.updateSecret : can.createSecret}
 													<Input
 														bind:value={editing.value}
 														type="password"

@@ -39,7 +39,6 @@ export const load: PageServerLoad = ({ locals }) => {
 		name: node.name,
 		mode: node.mode,
 		status: node.status,
-		publicAddress: node.publicAddress,
 		agentVersion: node.agentVersion,
 		mail: node.capabilities.includes(MAIL_CAPABILITY)
 	}));
@@ -65,9 +64,14 @@ export const load: PageServerLoad = ({ locals }) => {
 export const actions: Actions = {
 	node: async ({ request, locals }) => {
 		const principal = requirePlatformAdmin(locals);
-		const nodeId = formString(await request.formData(), 'nodeId');
+		const data = await request.formData();
+		const nodeId = formString(data, 'nodeId');
+		const ip = formString(data, 'ip');
 		try {
-			const settings = await core.email.configure(principal, { nodeId: nodeId || null });
+			const settings = await core.email.configure(principal, {
+				nodeId: nodeId || null,
+				...(ip ? { ip } : {})
+			});
 			return {
 				success: settings.nodeId
 					? 'Mail node saved. Its agent starts skiff-mail on the next reconcile; publish the platform records below.'

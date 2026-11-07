@@ -78,7 +78,8 @@ export const actions: Actions = {
 		const id = string(await request.formData(), 'id');
 		try {
 			core.backupTargets.delete(principal, id);
-			return { success: 'Backup target deleted. Existing backups were not removed.' };
+			// Refused while backups were written to it; the CLI/REST `force` path is deliberate.
+			return { success: 'Backup target deleted. It held no backups.' };
 		} catch (cause) {
 			return fail(400, { message: (cause as Error).message });
 		}

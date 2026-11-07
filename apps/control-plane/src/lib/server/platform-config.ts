@@ -134,6 +134,8 @@ type RequestBody =
 	| { action: 'restore-drill' }
 	| { action: 'push-keys' }
 	| { action: 'telemetry'; enabled: boolean; purgeData: boolean }
+	| { action: 'telemetry-memory'; memoryMb: number | null }
+	| { action: 'telemetry-restart' }
 	| ({ action: 'domains'; cloudflareToken?: string } & DomainSettings);
 
 /** Validate (same rules as the helper) and queue a request. Returns its id. Throws on bad input. */
@@ -496,15 +498,21 @@ export async function testSmtp(
 }
 
 export async function testWebhook(
-	url: string
+	url: string,
+	secret?: string
 ): Promise<{ ok: true } | { ok: false; error: string }> {
 	try {
 		await withTimeout(
-			webhookNotifierFor(url).notify({
+			webhookNotifierFor(url, { secret }).notify({
 				key: 'test',
 				title: 'Test alert',
 				detail: 'This is a test alert from Skiff. Real alerts look like this.',
-				severity: 'info'
+				severity: 'info',
+				status: 'firing',
+				...(env.SKIFF_PLATFORM_ORIGIN
+					? { url: `${env.SKIFF_PLATFORM_ORIGIN.replace(/\/$/, '')}/alerts` }
+					: {}),
+				labels: {}
 			}),
 			10_000
 		);

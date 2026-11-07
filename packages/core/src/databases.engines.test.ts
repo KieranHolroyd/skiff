@@ -57,6 +57,7 @@ describe('database engines', () => {
 			['shop-docs', 'mongodb'],
 			['shop-cache', 'valkey'],
 			['shop-redis', 'redis'],
+			['shop-events', 'clickhouse'],
 		] as const) {
 			const info = databaseEngineRegistry[engine];
 			const db = core.databases.create(owner, { name, engine, memoryMb: info.minMemoryMb });
@@ -174,8 +175,6 @@ describe('database engines', () => {
 		);
 		expect(() => core.databases.rotateCredentials(owner, 'shop-sql', { role: 'monitor' })).toThrow(/monitor role/);
 		expect(() => core.databases.upgradeDatabase(owner, 'shop-sql', { targetVersion: '9.7' })).toThrow(/upgrade planner/);
-		expect(() => core.databases.createBackup(owner, 'shop-cache')).toThrow(/Backups is not available for Valkey/);
-		expect(() => core.databases.setBackupPolicy(owner, 'shop-redis', { enabled: true })).toThrow(/Backups/);
 		expect(() => core.databases.setPitrPolicy(owner, 'shop-docs', { enabled: true })).toThrow(/Point-in-time/);
 		expect(() =>
 			core.databases.setPublicUrl(owner, 'shop-cache', { url: 'postgres://user:pass@db.example.com:5432/x' }),
@@ -199,11 +198,121 @@ describe('database engines', () => {
 		expect(() => core.databases.update(owner, 'shop-cache', { version: '17' })).toThrow(/Valkey versions/);
 	});
 
-	test('bulk backups skip engines without backups instead of failing', () => {
+	test('bulk backups queue every engine, including the native-format ones', () => {
 		const result = core.serviceActions.backupAllDatabases(owner);
-		expect(result.queued).toContain('shop-maria');
-		expect(result.queued).not.toContain('shop-cache');
-		expect(result.skipped.map((item) => item.name)).not.toContain('shop-cache');
+		for (const name of ['shop-maria', 'shop-cache', 'shop-redis', 'shop-events']) expect(result.queued).toContain(name);
+		expect(core.databases.setBackupPolicy(owner, 'shop-redis', { schedule: '0 4 * * *' }).schedule).toBe('0 4 * * *');
+	});
+
+	test('Valkey, Redis and ClickHouse run the whole pipeline: dump task, result, restore into a new database, verify', async () => {
+		const formats = { 'shop-cache': 'valkey-rdb', 'shop-redis': 'redis-rdb', 'shop-events': 'clickhouse-backup-zip' } as const;
+		const state = await core.nodes.desiredState(edgeToken);
+		for (const [name, format] of Object.entries(formats)) {
+			const db = core.databases.get(owner, name);
+			const [backup] = core.databases.listBackups(owner, name);
+			expect(backup).toMatchObject({ status: 'pending', format });
+			const task = state.databaseBackupTasks?.find((item) => item.id === backup!.id);
+			expect(task).toMatchObject({ action: 'backup', databaseId: db.id, engine: db.engine, format });
+
+			core.databases.applyBackupResults(edgeId, [
+				{ taskId: backup!.id, action: 'backup', databaseId: db.id, backupId: null, status: 'ok', sizeBytes: 2048, sha256: 'a'.repeat(64) },
+			]);
+			expect(core.databases.getBackup(owner, name, backup!.id)).toMatchObject({ status: 'ok', sizeBytes: 2048 });
+			expect(core.databases.get(owner, name).backup.lastBackupStatus).toBe('ok');
+
+			const target = `${name}-copy`;
+			const restored = core.databases.restoreBackup(owner, name, backup!.id, {
+				name: target,
+				memoryMb: databaseEngineRegistry[db.engine].minMemoryMb,
+			});
+			expect(restored).toMatchObject({ engine: db.engine, version: db.version });
+			expect(restored.backup.pendingRestoreId).toBe(backup!.id);
+			const restoreTask = (await core.nodes.desiredState(edgeToken)).databaseBackupTasks?.find(
+				(item) => item.id === `restore:${restored.id}`,
+			);
+			expect(restoreTask).toMatchObject({ action: 'restore', engine: db.engine, backupId: backup!.id, format });
+
+			core.databases.applyBackupResults(edgeId, [
+				{ taskId: `restore:${restored.id}`, action: 'restore', databaseId: restored.id, backupId: backup!.id, status: 'ok' },
+			]);
+			const after = core.databases.get(owner, target);
+			expect(after.backup).toMatchObject({ pendingRestoreId: null, enabled: true });
+			expect(after.backup.lastVerifiedAt).not.toBeNull();
+			expect(core.databases.getBackup(owner, name, backup!.id)).toMatchObject({ restoredDatabaseId: restored.id });
+			expect(core.databases.getBackup(owner, name, backup!.id).verifiedAt).not.toBeNull();
+		}
+	});
+
+	test('a failed native restore leaves the new database empty and reports the node error', async () => {
+		const backup = core.databases.createBackup(owner, 'shop-cache');
+		const db = core.databases.get(owner, 'shop-cache');
+		core.databases.applyBackupResults(edgeId, [
+			{ taskId: backup.id, action: 'backup', databaseId: db.id, backupId: null, status: 'ok', sizeBytes: 10, sha256: 'b'.repeat(64) },
+		]);
+		const restored = core.databases.restoreBackup(owner, 'shop-cache', backup.id, { name: 'cache-bad', memoryMb: 128 });
+		core.databases.applyBackupResults(edgeId, [
+			{
+				taskId: `restore:${restored.id}`,
+				action: 'restore',
+				databaseId: restored.id,
+				backupId: backup.id,
+				status: 'failed',
+				error: 'valkey-check-rdb rejected the backup (1)',
+			},
+		]);
+		const after = core.databases.get(owner, 'cache-bad');
+		expect(after.backup.pendingRestoreId).toBeNull();
+		expect(after.message).toContain('valkey-check-rdb rejected');
+		expect(core.databases.getBackup(owner, 'shop-cache', backup.id).verifiedAt).toBeNull();
+	});
+
+	test('ClickHouse speaks HTTP, gets a CLICKHOUSE prefix, rotates its owner and has no studio account', async () => {
+		const state = await core.nodes.desiredState(edgeToken);
+		const events = state.workloads.find((workload) => workload.projectSlug === 'shop-events')!;
+		expect(events).toMatchObject({
+			image: 'docker.io/clickhouse/clickhouse-server:26.8',
+			database: { engine: 'clickhouse', version: '26.8' },
+			env: { CLICKHOUSE_USER: 'shop_events', CLICKHOUSE_DB: 'shop_events' },
+			memoryMb: 1024,
+		});
+		// No read-only studio principal: the engine has no studio yet.
+		expect(Object.keys(core.workloads.activation(edgeId, events.id).env)).toEqual(['CLICKHOUSE_PASSWORD']);
+
+		const credentials = core.databases.credentials(owner, 'shop-events');
+		expect(credentials.url).toMatch(/^http:\/\/shop_events:[^@]+@127\.0\.0\.1:\d+\/shop_events$/);
+		// The HTTP interface answers at `/`, so curl passes the database as a parameter.
+		expect(credentials.connectionSnippets.curl).toMatch(/'http:\/\/127\.0\.0\.1:\d+\/\?database=shop_events'/);
+		expect(credentials.connectionSnippets.clickhouseJs).toContain('process.env.CLICKHOUSE_URL');
+
+		const project = core.projects.requireRow(owner, 'shop');
+		const attached = core.databases.attach(owner, project, { database: 'shop-events' });
+		expect(attached.attachment.envPrefix).toBe('CLICKHOUSE');
+		const view = core.databases.get(owner, 'shop-events');
+		const env = core.databases.consumerEnv(project.id, edgeId, 'container');
+		expect(env.CLICKHOUSE_URL).toBe(
+			`http://shop_events:${encodeURIComponent(credentials.password)}@${databaseAlias(view.id)}:8123/shop_events`,
+		);
+		expect(env.CLICKHOUSE_NAME).toBe('shop_events');
+		expect(env.CLICKHOUSE_SSL_MODE).toBeUndefined();
+
+		expect(core.databases.listBackups(owner, 'shop-events')[0]?.format).toBe('clickhouse-backup-zip');
+		expect(() => core.databases.assertStudioOpenable(core.databases.requireRow(owner, 'shop-events'))).toThrow(
+			/studio is not available for ClickHouse/,
+		);
+		expect(() => core.databases.create(owner, { name: 'system', engine: 'clickhouse' })).toThrow(/reserved/);
+		expect(() => core.databases.create(owner, { name: 'tiny-events', engine: 'clickhouse', memoryMb: 512 })).toThrow(
+			/at least 1024 MB/,
+		);
+		expect(core.databases.setPublicUrl(owner, 'shop-events', { url: 'https://u:p@events.example.com:8443' }).configured).toBe(
+			true,
+		);
+		expect(core.databases.rotateCredentials(owner, 'shop-events', { role: 'owner' }).status).toBe('pending');
+	});
+
+	test('ClickHouse moves forward between LTS releases in place, never back', () => {
+		core.databases.create(owner, { name: 'old-events', engine: 'clickhouse', version: '26.3', memoryMb: 1024 });
+		expect(core.databases.update(owner, 'old-events', { version: '26.8' }).version).toBe('26.8');
+		expect(() => core.databases.update(owner, 'old-events', { version: '26.3' })).toThrow(/cannot be downgraded/);
 	});
 
 	test('the engine survives a round trip through SQLite', () => {

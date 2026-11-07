@@ -16,6 +16,8 @@ import {
 	fingerprint,
 	generatePassphrase,
 } from './recovery-kit.ts';
+import { fakeCredsBinary } from './install/fake-systemd-creds.ts';
+import { defaultCredsRunner, sealMasterKey, unsealMasterKey } from './install/master-key.ts';
 
 const WF = 10; // low scrypt work factor keeps tests fast; production uses 18
 
@@ -178,5 +180,65 @@ describe('CLI', () => {
 		writeFileSync(join(dir, 'pass'), 'correct horse battery staple\n');
 		writeFileSync(join(dir, 'b.age'), 'x');
 		expect(run('export', '--out', join(dir, 'b.age')).stderr).toContain('already exists');
+	});
+});
+
+describe('CLI with a key sealed by systemd-creds', () => {
+	const ORIGINAL = 'b3JpZ2luYWwta2V5';
+	function setup() {
+		const dir = mkdtempSync(join(tmpdir(), 'skiff-kit-sealed-'));
+		const hostA = fakeCredsBinary(mkdtempSync(join(tmpdir(), 'skiff-creds-a-')));
+		const hostB = fakeCredsBinary(mkdtempSync(join(tmpdir(), 'skiff-creds-b-')), { FAKE_CREDS_HOST: 'host-b' });
+		const sealed = join(dir, 'master.key.cred');
+		sealMasterKey(ORIGINAL, sealed, { tpm2: false, bin: hostA });
+		writeFileSync(join(dir, 'pass'), 'correct horse battery staple\n');
+		const run = (bin: string, ...args: string[]) =>
+			spawnSync(process.execPath, [join(import.meta.dir, 'recovery-kit.ts'), ...args, '--passphrase-file', join(dir, 'pass'), '--work-factor', String(WF)], {
+				env: { ...process.env, SKIFF_ETC_DIR: dir, SKIFF_SYSTEMD_CREDS: bin, SKIFF_RECOVERY_PASSPHRASE_FILE: '' },
+				encoding: 'utf8',
+			});
+		return { dir, sealed, hostA, hostB, run };
+	}
+
+	test('export reads the sealed key; import re-seals instead of writing a plaintext file', () => {
+		const { dir, sealed, hostA, run } = setup();
+		const kitPath = join(dir, 'kit.age');
+		const exported = run(hostA, 'export', '--out', kitPath);
+		expect(exported.status).toBe(0);
+		expect(exported.stdout).toContain(fingerprint(ORIGINAL));
+		expect(run(hostA, 'verify', kitPath).status).toBe(0);
+
+		// The host now holds another sealed key: refused without --force, re-sealed with it.
+		sealMasterKey('ZnJlc2gta2V5', sealed, { tpm2: false, bin: hostA });
+		expect(run(hostA, 'verify', kitPath).stderr).toContain('fingerprint is');
+		const refused = run(hostA, 'import', kitPath);
+		expect(refused.status).toBe(1);
+		expect(refused.stderr).toContain('--force');
+		const imported = run(hostA, 'import', kitPath, '--force');
+		expect(imported.status).toBe(0);
+		expect(imported.stdout).toContain(`Sealed the kit's key into ${sealed} (host)`);
+		expect(unsealMasterKey(sealed, defaultCredsRunner, hostA)).toBe(ORIGINAL);
+		expect(existsSync(join(dir, 'master.key'))).toBe(false);
+		expect(readdirSync(dir).some((name) => name.startsWith('master.key.cred.pre-recovery-'))).toBe(true);
+		expect(run(hostA, 'verify', kitPath).status).toBe(0);
+		expect(run(hostA, 'import', kitPath).stdout).toContain('already matches the kit');
+	});
+
+	test('a sealed key that no longer opens (rebuilt host) is replaced only with --force', () => {
+		const { dir, sealed, hostA, hostB, run } = setup();
+		const kitPath = join(dir, 'kit.age');
+		expect(run(hostA, 'export', '--out', kitPath).status).toBe(0);
+
+		const verify = run(hostB, 'verify', kitPath);
+		expect(verify.status).toBe(1);
+		expect(verify.stderr).toContain('cannot be read');
+		const refused = run(hostB, 'import', kitPath);
+		expect(refused.status).toBe(1);
+		expect(refused.stderr).toContain('--force');
+		expect(unsealMasterKey(sealed, defaultCredsRunner, hostA)).toBe(ORIGINAL);
+
+		expect(run(hostB, 'import', kitPath, '--force').status).toBe(0);
+		expect(unsealMasterKey(sealed, defaultCredsRunner, hostB)).toBe(ORIGINAL);
+		expect(run(hostB, 'verify', kitPath).status).toBe(0);
 	});
 });

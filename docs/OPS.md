@@ -27,9 +27,13 @@ D107 (clustering and HA, [CLUSTERING.md](./CLUSTERING.md)), D25 (object store), 
 | `/opt/skiff/releases/<version>/agent` | `root:root 0755` | `skiff-agent` compiled binary. |
 | `/opt/skiff/helper/skiff-helper` | `root:root 0755` | Privileged runtime helper installed from the active release (one binary, swapped by the updater). |
 | `/etc/skiff/helper.env` | `root:skiff 0640` | Helper environment (socket groups, release roots, AppArmor mode). |
-| `/opt/skiff/releases/<version>/caddy/caddy` | `root:root 0755` | Caddy 2.11.8 + `caddy-dns/cloudflare`; installed by the updater. |
+| `/opt/skiff/releases/<version>/caddy/caddy` | `root:root 0755` | Caddy 2.11.8 + `caddy-dns/cloudflare`, shipped in signed releases (source builds have none). The updater copies it over the binary the running Caddy unit executes (§4.1, *Caddy is part of the release*). |
+| `/usr/bin/caddy` (+ `.skiff-previous`) | `root:root 0755` | The binary the apt `caddy.service` runs. Installed by the official Caddy package; replaced by the release's Caddy on each signed update, with the previous copy kept beside it. |
+| `/etc/systemd/system/caddy.service.d/skiff-admin-socket.conf` | `root:root 0644` | Installer drop-in for the packaged unit: `SupplementaryGroups=skiff` (read release artifacts) and `chmod 0660` on the admin socket after start. |
 | `/etc/skiff/skiff.env` | `root:skiff 0640` | Runtime environment and secrets (see §2). |
-| `/etc/skiff/master.key` | `root:root 0400` | Master key, delivered via `LoadCredential=`, never sourced by shell. |
+| `/etc/skiff/master.key.cred` | `root:root 0400` | Master key sealed with `systemd-creds` (TPM2 + host key, or the host key alone), delivered via `LoadCredentialEncrypted=`. Opens only on this machine; the recovery kit (§6.2) is the copy that survives losing it. |
+| `/etc/skiff/master.key` | `root:root 0400` | Plaintext master key, delivered via `LoadCredential=`, never sourced by shell. Only on hosts without `systemd-creds` (systemd < 250), or briefly as `master.key.pre-seal` while an upgrade seals an existing key. |
+| `/etc/systemd/system/skiff-control-plane{,-standby}.service.d/skiff-master-key.conf` | `root:root 0644` | Present when the key is sealed: clears the unit's `LoadCredential=` and sets `LoadCredentialEncrypted=master-key:/etc/skiff/master.key.cred`. A drop-in so an older stage-0 updater that rewrites the unit body cannot undo it. |
 | `/etc/skiff/setup-token` | `root:skiff 0640` | Single-use setup URL token. |
 | `/etc/skiff/litestream.yml` | `root:skiff 0640` | R2 replication config. |
 | `/etc/caddy/Caddyfile` | `root:caddy 0640` | Caddy bootstrap/wizard-managed config. |
@@ -42,8 +46,8 @@ D107 (clustering and HA, [CLUSTERING.md](./CLUSTERING.md)), D25 (object store), 
 | `/etc/skiff/clickhouse/{config,users}.xml` | `root:skiff-clickhouse 0640` | Generated ClickHouse config; rewritten on every install/update (§3.6). |
 | `/var/lib/skiff/backups` | `skiff:skiff 0750` | Pre-upgrade / pre-restore snapshots. |
 | `/var/lib/skiff/drill` | `skiff:skiff 0750` | Restore-drill scratch dirs + `status.json`. |
-| `/var/lib/caddy` | `caddy:caddy 0700` | Caddy data/config/certificates; not readable by the control plane. |
-| `/srv/skiff/releases` | `skiff:skiff 0755` | Static release cache served by Caddy. |
+| `/var/lib/caddy` | `caddy:caddy` (package default) | Home of the packaged `caddy.service`: certificates and autosaved config under `.local/share/caddy` and `.config/caddy`. Skiff does not change its mode; the control plane never reads it. |
+| `/var/lib/skiff/agent` | `skiff:skiff 0750` | Edge agent state (`node.json`) and its release cache (`releases/<sha256>/`), served by Caddy through its `skiff` supplementary group. |
 | `/run/skiff` | `root:caddy 2770` (setgid) | Unix sockets only. |
 | `/run/skiff/control.sock` | `0660` | Control plane (Caddy reverse-proxies to it). |
 | `/run/skiff/agent.sock` | `0660` | Agent (`forward_auth` target for protected sites). |
@@ -105,8 +109,10 @@ root:skiff`.
 | `BODY_SIZE_LIMIT` | `520M` | no | adapter-bun request body cap, set by the unit. Its 512 KB default would reject artifact uploads with a bare 413; 520M covers the 500 MiB artifact limit, which the upload route enforces. |
 | `SKIFF_STORAGE_GATEWAY_PORT` | `8081` | no | Loopback port of the edge's internal S3 gateway (D82). The agent listens on `127.0.0.1:<port>`; the control plane connects there to browse bucket contents. Must match on both processes. |
 | `SKIFF_STORAGE_GATEWAY_URL` | — | no | Dev only: full URL of the S3 gateway, overriding `http://127.0.0.1:$SKIFF_STORAGE_GATEWAY_PORT`. Use it when the control plane is not on the edge host, pointing at a node's Caddy listener (e.g. `http://192.168.0.9:8080`); that node must hold the instance or be the edge. |
-| `SKIFF_DATABASE_GATEWAY_PORT` | `8082` | no | Loopback port of the edge's internal database gateway (D82, D96). The agent listens on `127.0.0.1:<port>` and routes each node's `n-<label>.studio.internal` host to that node's studio front; the control plane connects there for the studio's `/databases/:name/studio/api/*` calls. Must match on both processes. |
-| `SKIFF_STUDIO_PORT` | `8083` | no | Loopback port of the agent's studio front on every node (D96). The gateway routes studio hosts to `127.0.0.1:<port>`; the front forwards to `skiff-studio.service` over `/run/skiff/studio.sock`. Must match on the control plane and every agent. |
+| `SKIFF_DATABASE_GATEWAY_PORT` | `8082` | no | Loopback port of the edge's internal database gateway (D82, D96). The agent listens on `127.0.0.1:<port>` and routes each node's `n-<label>.studio.internal` host to that node's studio front; the control plane connects there for the studio's `/databases/:name/studio/api/*` calls. Set it on the control plane only: the edge agent gets the listen address in desired state. |
+| `SKIFF_STUDIO_PORT` | `8083` | no | Loopback port of the agent's studio front on every node (D96). The gateway routes studio hosts to `127.0.0.1:<port>`; the front forwards to `skiff-studio.service` over `/run/skiff/studio.sock`. Set it on the control plane only: every agent gets the port in desired state. |
+| `SKIFF_CONTAINER_CONSOLE_PORT` | `8084` | no | Loopback port of the agent's container console front on every node (D127). The internal gateway routes `n-<node>.console.internal` to it; the front checks the console token with the control plane and forwards to the helper's `/v1/containers/…` verbs. |
+| `SKIFF_CONTAINER_CONSOLE_PORT` | `8084` | no | Loopback port of the agent's container console front on every node. The gateway routes `n-<label>.console.internal` hosts to `127.0.0.1:<port>`; the front forwards the fixed container verbs to the helper over the helper socket. Set it on the control plane only: every agent gets the port in desired state. |
 | `SKIFF_STORAGE_OBJECT_MAX_BYTES` | `104857600` | no | Largest single object uploaded through the dashboard/API (100 MiB). Larger files need a presigned upload (public instances) or `skif storage objects put`. |
 
 ### 2.2 Secrets
@@ -116,7 +122,7 @@ root:skiff`.
 | `BETTER_AUTH_SECRET` | installer (48 random bytes, base64) | Better Auth signing/encryption key. Rotating it invalidates sessions. |
 | `SKIFF_SITE_COOKIE_SECRET` | installer (32 random bytes) | HMAC key for host-only protected-site cookies. |
 | `SKIFF_OBJECT_STORE_SECRET` | installer (32 random bytes) | Server-side encryption/derivation material for the object store layer. |
-| `/etc/skiff/master.key` | installer (32 random bytes, base64) | KEK for per-org data keys. Supplied to the control plane only as the `master-key` systemd credential (`SKIFF_MASTER_KEY_FILE=%d/master-key`). |
+| `/etc/skiff/master.key.cred` (or `master.key`) | installer (32 random bytes, base64) | KEK for per-org data keys and GitHub webhook secrets. Sealed with `systemd-creds encrypt --name=master-key` when the host has it (TPM2 without a PCR policy plus the host key `/var/lib/systemd/credential.secret`, else the host key alone), otherwise a root-only plaintext file. Either way the control plane reads it only as the `master-key` systemd credential (`SKIFF_MASTER_KEY_FILE=%d/master-key`). Rotate with `skiff-rotate-master-key` (§11). |
 | `R2_ACCESS_KEY_ID` | installer flag / wizard | R2 access key. |
 | `R2_SECRET_ACCESS_KEY` | installer flag / wizard | R2 secret key. |
 
@@ -149,8 +155,8 @@ account-wide key. Presigned uploads use the same credentials through the control
 | `SKIFF_LITESTREAM_CONFIG` | `/etc/skiff/litestream.yml` | Override for ops scripts. |
 | `SKIFF_APP_DIR` | `/opt/skiff/current/control-plane` | Bundled runtime/tools location. |
 | `SKIFF_BUN` | bundled Bun | Override runtime for the fingerprint/migration helpers. |
-| `SKIFF_VERSION` | latest GitHub release | Installer: pin a version. |
-| `SKIFF_REPO` | `kieranholroyd/private-cloud-deploys` | Installer: repo used for "latest" and cosign identity. |
+| `SKIFF_VERSION` | `VERSION` of the source being installed | Installer: the version recorded for the release. Pick what is built with `SKIFF_REF`. |
+| `SKIFF_REPO` | `KieranHolroyd/skiff` | Installer (`install.sh`): repo the source tarball is downloaded from; recorded in the release's `meta.json` so the self-updater follows the same repo. |
 | `SKIFF_PUBLIC_HOST` | detected (`hostname -I`) | Installer (`--public-address`): this server's IPv4 for an install without a dashboard domain. Used for `http://<ip>` and `<ip>.sslip.io`. |
 | `SKIFF_ALERT_WEBHOOK` | unset | `skiff-alert` (backup/drill `OnFailure=`): webhook URL; SMTP settings are reused for email. Receives `{title, message, severity, key}`, except that a Discord or Slack URL gets that service's own payload. |
 | `SKIFF_ALERT_DISCORD_WEBHOOK` | unset | Discord channel webhook (`https://discord.com/api/webhooks/<id>/<token>`). Alerts are sent as embeds coloured by severity, with mentions disabled. Secret. |
@@ -161,11 +167,13 @@ account-wide key. Presigned uploads use the same credentials through the control
 | `SKIFF_TWILIO_ACCOUNT_SID` / `SKIFF_TWILIO_AUTH_TOKEN` / `SKIFF_TWILIO_FROM` | unset | Twilio credentials for SMS alerts (Settings → Notifications → SMS), checked against Twilio's account endpoint before they are saved (no message is sent). `FROM` takes a Twilio number, a Messaging Service SID (`MG…`) or an alphanumeric sender ID. Each text is folded to GSM-7 and capped at 2 segments. |
 | `SKIFF_VAPID_PUBLIC_KEY` / `SKIFF_VAPID_PRIVATE_KEY` | generated | Web Push (VAPID, P-256, base64url) key pair for push alerts to the dashboard installed as an app (Settings → Notifications → Push notifications, D108). The installer generates it, and any `skiff-update-self` run adds it to hosts that lack it; `sudo skiff-platform-config push-keys` (or **Set up push** on that page) does the same and restarts the control plane. Never rotated automatically: a new pair orphans every subscribed device. Private key is a secret. |
 | `SKIFF_VAPID_SUBJECT` | platform origin | Optional `mailto:` or `https:` contact sent to push services in the VAPID token. Defaults to the dashboard origin over HTTPS, else `mailto:skiff@<content domain>`. |
+| `SKIFF_FORCE_OS` | `0` | Installer: override the Debian 13 check. |
+| `SKIFF_SYSTEMD_CREDS` | `systemd-creds` | Installer, `skiff-recovery-kit`, `skiff-rotate-master-key`: the `systemd-creds` binary used to seal and read the master key (tests point it at a fake). |
+| `SKIFF_MASTER_KEY_PATH` | `/etc/skiff/master.key` | `skiff-recovery-kit`, `skiff-rotate-master-key`: plaintext key path; the sealed store is the same path plus `.cred`. |
 
 > **Not yet implemented:** the installer builds from the source tarball and does not consume the
 > signed release bundle, so there is no `SKIFF_RELEASE_URL` / minisign / cosign verification at
 > install time yet. `litestream.yml` is always rewritten by the installer.
-| `SKIFF_FORCE_OS` | `0` | Installer: override the Debian 13 check. |
 
 Units also set `SOCKET_PATH=/run/skiff/control.sock`, `PROTOCOL_HEADER=x-forwarded-proto`
 and `HOST_HEADER=x-forwarded-host` (D37), `BODY_SIZE_LIMIT=520M` (so artifact uploads
@@ -174,58 +182,64 @@ are not capped at adapter-bun's 512 KB default), plus
 
 ### 2.5 Feature flags
 
-Risky features ship dark. Each flag is read once at startup from
+Every feature ships on and its flag is a kill switch. Each flag is read once at startup from
 `SKIFF_FEATURE_<NAME>` in `/etc/skiff/skiff.env`; the resolved booleans are exposed by
 `GET /api/setup/status` under `features` (never the raw environment). Accepted values are
 `1/true/on/yes` and `0/false/off/no`, case-insensitive. An unset **or malformed** value keeps
-the default below, so a typo cannot turn a destructive feature on. Change a flag, then restart
+the default below (on). Set `0` to turn a feature off, then restart
 `skiff-control-plane`.
 
 | Variable | Default | Area | Meaning |
 |---|---|---|---|
-| `SKIFF_FEATURE_BACKUPS_RESTORE` | off | backups | Create, restore and delete managed database backups. Requires a passing restore drill before enabling on new installs. |
-| `SKIFF_FEATURE_PITR` | off | backups | Point-in-time recovery (WAL archiving and replay) for managed databases. |
-| `SKIFF_FEATURE_OBJECT_BROWSER` | off | storage | Browse, upload, download and delete objects in managed buckets. |
-| `SKIFF_FEATURE_POOLER` | off | databases | PgBouncer sidecar and pooled connection port for a managed database. |
+| `SKIFF_FEATURE_BACKUPS_RESTORE` | **on** | backups | Create, restore and delete managed database backups (shipped; the default keeps existing behaviour). Today `0` only refuses changes to the platform backup target. |
+| `SKIFF_FEATURE_PITR` | **on** | backups | Point-in-time recovery (WAL archiving and replay) for managed databases. |
+| `SKIFF_FEATURE_OBJECT_BROWSER` | **on** | storage | Browse, upload, download and delete objects in managed buckets (shipped). Today `0` only refuses storage share links and new versioning/lifecycle settings. |
+| `SKIFF_FEATURE_POOLER` | **on** | databases | PgBouncer sidecar and pooled connection port for a managed database (shipped). The flag is registered but nothing is gated on it yet. |
 | `SKIFF_FEATURE_FUNCTIONS` | **on** | workloads | Functions: Workers-compatible workloads on the pinned workerd runtime (D110). Set `0` to refuse new function projects and deploys; already-deployed functions keep serving. |
+| `SKIFF_FEATURE_BROKERS` | **on** | queues | Managed queue brokers (NATS with JetStream, D111, [BROKERS.md](./BROKERS.md)). Nothing runs until someone creates a broker; set `0` to hide the surfaces and refuse new brokers. |
 | `SKIFF_FEATURE_DB_STUDIO` | **on** | databases | Native database studio (D96): the Studio tab, `/api/v1/databases/:name/studio` and the session-only studio calls. Permission-gated (`database:console`; writes also need `database:update`). Set `0` as a kill switch: the tab and routes disappear and desired state stops listing studio sessions. |
-| `SKIFF_FEATURE_DB_TLS` | off | databases | TLS-only managed database connections (`sslmode=require`). |
-| `SKIFF_FEATURE_ORG_NETWORKS` | off | networking | Private per-org networks connecting workloads and databases. |
-| `SKIFF_FEATURE_SERVICE_ENDPOINTS` | off | networking | Cross-node database attachments through consumer loopback endpoints (CLUSTERING.md C2). |
-| `SKIFF_FEATURE_MULTI_NODE_REPLICAS` | off | workloads | Spread HTTP workload replicas across nodes behind a load-balanced route (CLUSTERING.md C4). |
-| `SKIFF_FEATURE_APP_VOLUMES` | off | workloads | Persistent application volumes attached to deployed workloads. |
-| `SKIFF_FEATURE_JOBS` | off | automation | Scheduled one-off and cron jobs. |
-| `SKIFF_FEATURE_PREVIEW_DATA` | off | automation | Clone database and bucket data into previews (can copy production data). |
-| `SKIFF_FEATURE_AGENT_DATA_WRITE` | off | agents | Let MCP/agent tools mutate user data instead of read-only access. |
+| `SKIFF_FEATURE_CONTAINER_CONSOLE` | **on** | workloads | Container console for container projects (D127): the Overview, Shell and Files sections, `/projects/:slug/container/*` and the node console fronts. Permission-gated (`container:inspect`, `container:files`, `container:exec`). Set `0` as a kill switch: the sections disappear, tokens stop activating and desired state closes every front. |
+| `SKIFF_FEATURE_CONTAINER_CONSOLE` | **on** | workloads | Container console for container projects: Overview (state, live stats, processes, mounts, sandbox), a read-only file browser and an interactive shell. Permission-gated (`container:inspect`, `container:files`, `container:exec`; files and shells need a signed-in person) and audited. Set `0` as a kill switch: the project sections and routes disappear and desired state stops opening every node's console front. |
+| `SKIFF_FEATURE_DB_TLS` | **on** | databases | TLS-only managed database connections (`sslmode=require`). |
+| `SKIFF_FEATURE_ORG_NETWORKS` | **on** | networking | Private per-org networks connecting workloads and databases. |
+| `SKIFF_FEATURE_SERVICE_ENDPOINTS` | **on** | networking | Cross-node database attachments through consumer loopback endpoints (CLUSTERING.md C2). |
+| `SKIFF_FEATURE_MULTI_NODE_REPLICAS` | **on** | workloads | Spread HTTP workload replicas across nodes behind a load-balanced route (CLUSTERING.md C4). |
+| `SKIFF_FEATURE_DB_AUTO_PROMOTE` | off | databases | Let the failover controller (with `failover.enabled`) promote a Postgres read replica when its primary's node goes silent (CLUSTERING.md §9.3). Off until the object-store lease self-fences a partitioned primary. |
+| `SKIFF_FEATURE_APP_VOLUMES` | **on** | workloads | Persistent application volumes attached to deployed workloads. |
+| `SKIFF_FEATURE_JOBS` | **on** | automation | Scheduled one-off and cron jobs. |
+| `SKIFF_FEATURE_PREVIEW_DATA` | **on** | automation | Clone database and bucket data into previews (can copy production data). |
+| `SKIFF_FEATURE_AGENT_DATA_WRITE` | **on** | agents | Let MCP/agent tools mutate user data instead of read-only access. |
 | `SKIFF_FEATURE_QUOTAS` | **on** | platform | Enforce per-org project, storage and upload quotas. Set `0` only to lift limits temporarily. |
-| `SKIFF_FEATURE_UPGRADE_ROLLBACK` | off | platform | Reserved for dashboard-triggered automatic rollback after `/readyz` fails. The CLI updater rollback path is the tested default. |
-| `SKIFF_FEATURE_BLUEPRINTS` | off | automation | Plan and apply `skiff.yaml` blueprints, including `--prune`. |
-| `SKIFF_FEATURE_MEDIA` | off | storage | Image/video uploads, transforms and delivery. |
+| `SKIFF_FEATURE_UPGRADE_ROLLBACK` | **on** | platform | Reserved for dashboard-triggered automatic rollback after `/readyz` fails. The CLI updater rollback path is the tested default. |
+| `SKIFF_FEATURE_BLUEPRINTS` | **on** | automation | Plan and apply blueprint files (`skiff.blueprint.yaml`, OPERATIONS §12), including `--prune`. |
+| `SKIFF_FEATURE_MEDIA` | **on** | storage | Image/video uploads, transforms and delivery. |
 
 `SKIFF_FEATURE_DB_CONSOLE` (the DBGate studio, D60) is retired. It is ignored if still set, and
 the control plane logs a warning at startup; remove it from `skiff.env`. An unknown
 `SKIFF_FEATURE_*` is never an error.
 
-Rollout order is dev → single-node test → Debian 13 node → installer default. Never enable a
-destructive feature by default in the release that introduces it, and never enable
-`PREVIEW_DATA`, `AGENT_DATA_WRITE` or `BLUEPRINTS` on a host whose data you are not prepared to
-have copied, changed or pruned.
+Because every flag is on, set `SKIFF_FEATURE_PREVIEW_DATA=0`, `SKIFF_FEATURE_AGENT_DATA_WRITE=0`
+and `SKIFF_FEATURE_BLUEPRINTS=0` on a host whose data you are not prepared to have copied, changed
+or pruned. `DB_TLS` and `ORG_NETWORKS` change existing databases and workloads at the next
+reconcile (TLS URLs with `sslmode=require`, per-org Podman networks). `MULTI_NODE_REPLICAS` refuses a
+deploy whose replica count exceeds the eligible nodes under `node` spread, and while
+`SERVICE_ENDPOINTS` is on, process apps are not spread across nodes.
 
 ### 2.5.1 PITR repository
 
-`SKIFF_FEATURE_PITR` also reads the pgBackRest repository from the control-plane environment
+`SKIFF_FEATURE_PITR` (on by default) also reads the pgBackRest repository from the control-plane environment
 (see [PITR.md](./PITR.md)): `SKIFF_PITR_REPO_BUCKET`, `SKIFF_PITR_ACCESS_KEY_ID`,
 `SKIFF_PITR_SECRET_ACCESS_KEY`, optional `SKIFF_PITR_REPO_ENDPOINT`, `SKIFF_PITR_REPO_REGION`,
 `SKIFF_PITR_REPO_PREFIX` and `SKIFF_PITR_REPO_FORCE_PATH_STYLE`. An incomplete set fails closed;
 the credentials are handed to nodes through the authenticated activation endpoint, never through
-desired state or SQLite.
+desired state or SQLite. The endpoint must be `https://` (pgBackRest has no plain-HTTP S3 client).
+Leave the flag off until `scripts/pitr-drill.sh` passes on one of the install's Linux nodes, and
+publish and pin the `skiff-postgres-pitr` image first ([PITR.md](./PITR.md) §Enable it).
 
-> **Migration note for already-shipped surfaces.** Database backups/restores, credential
-> rotation, the object browser and the pooler are already shipped in this release. Their flags
-> are registered and default off, but the current code deliberately does **not** hide those
-> existing surfaces behind them. A later release that starts gating them must either default the
-> flag on for existing installs or call the behaviour change out in the release notes/upgrade
-> checklist; silently turning shipped functionality off would be a regression, not a rollout.
+> **Already-shipped surfaces.** Database backups/restores, the object browser and the pooler
+> shipped before their flags did, so those flags default **on** and act as kill switches. A
+> release that changes such a default must call it out in the release notes/upgrade checklist;
+> silently turning shipped functionality off would be a regression, not a rollout.
 
 ### 2.6 Privileged helper
 
@@ -238,6 +252,15 @@ desired state or SQLite.
 | `SKIFF_HELPER_CONTROL_SOCKET_GROUP` | `skiff` | Group allowed to connect to the helper socket. |
 | `SKIFF_HELPER_WORKLOAD_SOCKET_GROUP` | `caddy` | Group for socket-activated workload sockets. |
 | `SKIFF_HELPER_APPARMOR_PROFILE` | `auto` | `auto` sets `apparmor=unconfined` on containers only when `kernel.apparmor_restrict_unprivileged_unconfined=1` (Ubuntu 26.04 and newer kernels stack the container profile, which denies a process signalling its own children, so Postgres cannot start). `none` keeps the runtime default; any other value is passed as the profile name. |
+
+Project and runner containers render `UserNS=auto:size=65536`, so uid 0 inside the container is an
+unprivileged host uid. Before the first one starts, the helper appends
+`containers:2147483647:2147483648` to `/etc/subuid` and `/etc/subgid` unless a `containers` entry
+already exists; it refuses rather than overlap another account's range. Writable volumes
+(`/data`, read-write app volumes and the secret files) get `:U`, so Podman re-owns them to the
+container's mapped uid on each start; read-only volumes are never re-owned. Managed databases,
+object storage and brokers do not use a user namespace: their images run as fixed non-root uids
+and the helper owns their data directories with those uids.
 
 #### Database studio unit (D96)
 
@@ -267,6 +290,28 @@ restarted by the installer/updater. Existing container units are re-rendered on 
 so after a helper upgrade use **Restart** on each managed service (or redeploy an app) to pick up
 unit changes.
 
+#### Container console front
+
+Container projects' **Overview**, **Shell** and **Files** sections go through a front the agent
+serves itself, with no unit: while `SKIFF_FEATURE_CONTAINER_CONSOLE` is on, desired state lists a
+port and the agent listens on `127.0.0.1:$SKIFF_CONTAINER_CONSOLE_PORT` (default `8084`). It is
+reachable only through the existing internal gateway: the edge's `SKIFF_DATABASE_GATEWAY_PORT`
+listener routes a node's `n-<label>.console.internal` host to that node's front (D82/D96), so there
+is no new public port and nothing listens on the internet.
+
+There is no command channel. The control plane mints a five-minute HMAC token naming one workload,
+one user and the scopes that user holds, and adds it only on the gateway hop; the browser never
+sees it. On first use the agent redeems that token with
+`GET /api/agent/container-console` over its node bearer, which also proves the container is still
+placed on that node, and then forwards a fixed set of verbs to the helper's
+`/v1/containers/<workload>/…` routes over the helper socket. The helper runs shells as `podman
+exec` with a PTY inside the container's namespaces; it holds at most four shells per container and
+32 per node, closes one after 15 idle minutes or 8 hours, and keeps 256 KiB of output for a
+reconnecting viewer. Shell opens and closes and file reads and downloads are audited
+(`container.exec.*`, `container.files.*`); keystrokes, file contents and secret values are not.
+Nodes advertise the `container-console` capability, and the control plane refuses a node that does
+not.
+
 ### 2.7 Telemetry store (ClickHouse)
 
 Installing the optional store (§3.6) adds any of these that are missing to `skiff.env` (passwords
@@ -283,6 +328,7 @@ password by editing it and running `sudo skiff-update-self`, which regenerates
 | `SKIFF_CLICKHOUSE_PASSWORD` | generated | yes | Writer password (stored in `users.xml` as SHA-256 only). |
 | `SKIFF_CLICKHOUSE_READER_USER` | `skiff_reader` | no | Read-only user for ad-hoc SQL from the dashboard. |
 | `SKIFF_CLICKHOUSE_READER_PASSWORD` | generated | yes | Reader password. |
+| `SKIFF_CLICKHOUSE_MEMORY_MB` | unset (768) | no | Memory ceiling in MiB (`max_server_memory_usage`), 256–65536. Per-query limits, the merge budget and the unit's `MemoryMax` (4/3 of it) scale with it. Set it in Settings → Telemetry → Memory, which restarts ClickHouse and reverts if it does not come back. Never written by the installer. |
 
 ### 2.8 Email (`skiff-mail`, docs/EMAIL.md)
 
@@ -319,8 +365,10 @@ mail node (the unit sets the paths). None of them is secret: DKIM keys and crede
     If the module download fails the install continues (HTTP works); HTTPS needs it later. An
     existing Caddy is used as is: HTTPS installs need it built with `caddy-dns/cloudflare`.
   - **Podman** (agent installs only): `podman uidmap passt netavark aardvark-dns`. Managed
-    Postgres and RustFS run as rootful Quadlet containers (Podman 4.4+). On releases that lack a
-    package the installer installs the rest and warns.
+    Postgres and RustFS run as rootful Quadlet containers (Podman 4.4+). Project and runner
+    containers get a user namespace of their own, so the helper uses `uidmap` and adds a
+    `containers` range to `/etc/subuid` and `/etc/subgid` before the first app container. On
+    releases that lack a package the installer installs the rest and warns.
 
 - **Port 53 for Podman DNS.** A DNS daemon such as BIND must not listen on `0.0.0.0:53`: Podman's
   per-network DNS (aardvark-dns) binds the bridge gateway (for example `10.89.0.1:53`) and fails
@@ -376,8 +424,14 @@ checkout with `SKIFF_SOURCE_DIR=/path/to/skiff`.
    `/etc/caddy/cloudflare.token`) is used for DNS-01 only if that file already exists.
 2. **Users/dirs** — `skiff` user (member of `caddy`), `/opt/skiff`, `/var/lib/skiff`,
    `/etc/skiff`, `/run/skiff` (2770 root:caddy).
-3. **Secrets** — generates `/etc/skiff/master.key` (0400), `BETTER_AUTH_SECRET`,
-   `SKIFF_SITE_COOKIE_SECRET`, `SKIFF_OBJECT_STORE_SECRET`; preserves them on upgrade.
+3. **Secrets** — generates the master key, sealed with `systemd-creds` into
+   `/etc/skiff/master.key.cred` (0400) when the host has it, else `/etc/skiff/master.key` (0400),
+   plus `BETTER_AUTH_SECRET`, `SKIFF_SITE_COOKIE_SECRET`, `SKIFF_OBJECT_STORE_SECRET`; preserves
+   them on upgrade. An upgrade on a host with a plaintext key seals the same key, keeps the
+   plaintext as `master.key.pre-seal` until the control plane has started with the sealed one,
+   then destroys it; a failed install puts the plaintext back. `skiff-update-self` never seals
+   (it only keeps the drop-ins in step with the file it finds), so an older host keeps its
+   plaintext key until the installer is re-run on it.
 4. **Build** — copies the repo to a new immutable release, runs `bun install --frozen-lockfile`,
    `vite build` (adapter-bun), and `bun build --compile` for the agent and the privileged helper.
 5. **Activate** — atomically switches `/opt/skiff/current` to the new release and installs the
@@ -403,7 +457,10 @@ checkout with `SKIFF_SOURCE_DIR=/path/to/skiff`.
    Node or anything else the build command needs). For private repositories set `SKIFF_GIT_TOKEN`
    in `/etc/skiff/agent.env`. It is sent only to the hosts in `SKIFF_GIT_TOKEN_HOSTS`
    (comma-separated, default `github.com`), as a header in the clone's environment, never in the
-   remote URL, so the build can't read it from `.git/config`. This needs git 2.31 or later. `.git`
+   remote URL, so the build can't read it from `.git/config`. This needs git 2.31 or later. SSH
+   URLs use `SKIFF_GIT_SSH_KEY` (a root-only deploy key file) through `GIT_SSH_COMMAND` in the
+   clone's environment only; host keys are pinned by `SKIFF_GIT_SSH_KNOWN_HOSTS` or recorded on
+   first use in `/var/lib/skiff-builder/known_hosts`. `.git`
    directories and the build's scratch `HOME` are never included in the artifact.
 10. **Health** — waits for the public platform URL, then, while no owner exists, prints the
    one-time setup link (`https://<platform>/setup?token=…`, §3.5). `--admin-email` only prefills
@@ -457,11 +514,33 @@ link to the right address. Once an owner exists the token is dead: `/setup` send
 
 **Signing in later.** Use your email and password, then your passkey or authenticator code (the
 login page asks for the code straight after the password when an app is set up). A passkey alone
-also works on HTTPS. "Forgot your password" sends a magic link; with no SMTP configured it is
+also works on HTTPS. "Email me a sign-in link" sends a magic link; with no SMTP configured it is
 written to the control-plane log (`journalctl -u skiff-control-plane | grep magic-link`). Anyone
 can add or change a password under **Settings → Account**; changing it signs out every other
 device. There is no public password sign-up: invitees accept with a magic link (or GitHub), then
 set a password.
+
+**Forgotten passwords.** "Forgot password?" on the login page (`/forgot-password`) emails a
+single-use link that expires after 30 minutes. It needs SMTP: without it nothing is sent (reset
+links are never written to the log) and the page tells the user to ask the operator. The request
+answers the same whether or not the address has an account, and the mail is sent in the
+background so timing doesn't tell either. Limits: one email a minute and five an hour per address
+(in memory, reset by a restart), plus Better Auth's per-IP limits in production (3 requests a
+minute; 5 uses a minute of `/api/auth/reset-password`). Setting the new password at
+`/reset-password` signs out every session and voids the user's other reset links; it never signs
+in, so an owner proves a second factor at the next sign-in as usual. Passkeys and the
+authenticator app are untouched. Each reset is audited as `user.password_reset` in every
+organisation the user belongs to.
+
+Operators reset a password directly with `reset-password` (same effects, audited as the system),
+for installs without email or a user who can't receive it:
+
+```sh
+cd /opt/skiff/current/repo/apps/control-plane
+sudo -u skiff env SKIFF_DATA_DIR=/var/lib/skiff/data /opt/skiff/runtime/bin/bun scripts/reset-password.ts you@example.com
+```
+
+It prompts for the new password (12+ characters), or reads the first line of stdin.
 
 **Recovering an install whose owner can't sign in** (lost passkey, authenticator and backup codes):
 add another owner straight to the database with `create-user`, then sign in as them with that
@@ -504,7 +583,7 @@ control-plane units `Wants=` it but do not require it.
 | Listens | HTTP on `127.0.0.1:18123` only. No native TCP (`9000` belongs to object storage), MySQL, PostgreSQL, interserver or gRPC ports |
 | Files | binary `/opt/skiff/clickhouse/<version>/clickhouse`, config `/etc/skiff/clickhouse/config.xml` + `users.xml`, data `/var/lib/skiff/clickhouse` |
 | Logs | stderr at `warning` level, so `journalctl -u skiff-clickhouse`. System log tables (`query_log`, `part_log`, `trace_log`, `metric_log`, `text_log`, …) are disabled |
-| Memory | `max_server_memory_usage` 768 MiB under the unit's `MemoryMax=1G`; writer queries 512 MiB, reader queries 256 MiB; mark cache 64 MiB, no uncompressed cache |
+| Memory | `max_server_memory_usage` 768 MiB by default (`SKIFF_CLICKHOUSE_MEMORY_MB`) under the unit's `MemoryMax` at 4/3 of it (`1G`); writer queries 2/3 (512 MiB), reader queries and merges 1/3 (256 MiB); mark cache 64 MiB, no uncompressed cache. Past the ceiling every query and insert fails with `MEMORY_LIMIT_EXCEEDED` and the dashboard shows telemetry unavailable: raise it, or press Restart, in Settings → Telemetry |
 | CPU | 2 threads per query, 20 concurrent queries, 2 merge threads; `CPUWeight=50`/`IOWeight=50` so workloads win under contention |
 | Disk | The binary is about 750 MB. An upgrade needs about 1.3 GB free under `/opt/skiff` while it downloads (218 MB archive) and extracts |
 
@@ -517,7 +596,7 @@ control-plane units `Wants=` it but do not require it.
 - `skiff_reader` (dashboard SQL): `SELECT` on `skiff.*` only, profile `readonly` with
   `readonly=2`. It can set per-query output settings (for example
   `output_format_json_quote_64bit_integers`), but profile constraints cap
-  `max_execution_time` 30 s, `max_memory_usage` 256 MiB, `max_result_rows` 100 000 (results
+  `max_execution_time` 30 s, `max_memory_usage` 256 MiB (1/3 of the ceiling), `max_result_rows` 100 000 (results
   past that are cut off, `result_overflow_mode=break`), `max_rows_to_read` 500 M,
   `max_bytes_to_read` 20 GiB and `max_threads` 2. `readonly` cannot be changed. Reads use
   `final=1`, so ReplacingMergeTree tables are deduplicated without writing `FINAL`.
@@ -663,17 +742,20 @@ The installer is the updater. On an existing install it:
    (control SQLite, `.env`, `AGENT.env`, master key and platform settings), whenever `skiff.db`
    exists (with or without `--upgrade`). Settings not given as flags are kept from the existing
    `skiff.env`.
-2. Stops the control plane, agent and Caddy (sites are briefly unavailable on the edge;
-   homelab-placed projects with cached state keep serving).
-3. Downloads the source tarball, builds the release on the host, then atomically repoints
-   `/opt/skiff/current`. (Signature verification against the signed release bundle is not
-   wired into the installer yet.)
-4. Restarts Caddy, control plane and agent. Forward-only migrations run on control-plane
-   start; the explicit migrator is available for restores.
-5. Health-checks the unix socket. On failure it stops the control plane, restores the
-   pre-upgrade SQLite snapshot, repoints `current` at the previous release, restarts, and
-   exits non-zero. This matters because migrations are forward-only: code rollback alone
-   is not enough if the schema moved.
+2. Builds the new release on the host from the source tarball while the old one keeps
+   serving, then atomically repoints `/opt/skiff/current` (the outgoing release becomes
+   `previous`). Signature verification against the signed release bundle is not wired into the
+   installer yet.
+3. Rewrites the units and restarts the helper, then the control plane. Forward-only migrations
+   run on control-plane start; the explicit migrator is available for restores. The dashboard and
+   API are down for that restart. Caddy is not stopped: the installer only reloads it if the
+   bootstrap Caddyfile changed (or restarts it once to add the `skiff` group), so sites keep
+   serving.
+4. Restarts the agent (and a running studio or mail unit) on the new binary.
+5. Waits for `control.sock` and `/readyz`, then for the public platform URL. On failure it stops
+   the control plane and agent, restores the pre-upgrade SQLite snapshot, repoints `current` at
+   the previous release, starts them again, and exits non-zero. This matters because migrations
+   are forward-only: code rollback alone is not enough if the schema moved.
 
 Rollback manually if needed:
 
@@ -683,12 +765,15 @@ sudo ln -sfn /opt/skiff/releases/<previous-version> /opt/skiff/current
 sudo systemctl restart caddy skiff-control-plane skiff-agent
 ```
 
-The installer prunes release directories, keeping the active one and the previous target.
-A failed upgrade stays in `/var/lib/skiff/backups` for inspection.
+The installer does not prune release directories; the self-updater does, keeping `current` and
+`previous` after each successful update. The installer keeps the last three pre-upgrade bundles
+in `/var/lib/skiff/backups`; a failed upgrade's bundle stays there for inspection.
 
-Policy (D28): patch releases may auto-apply in a maintenance window; minor/major releases
-notify you first. Never upgrade across a database backup window without confirming
-Litestream is current.
+Policy: nothing updates on its own. The dashboard flags a newer version to platform admins (the
+shell badge and Settings → Updates, which says whether it is a patch, minor or major bump), and an
+admin applies it from Settings → Updates or with `skiff-update-self`. There is no scheduled or
+automatic install, for patch releases either. Never upgrade across a database backup window
+without confirming Litestream is current.
 
 ### 4.1 Self-update from GitHub
 
@@ -818,7 +903,8 @@ than a silent fallback to a source build.
 [`publish.yml`](../.github/workflows/publish.yml)) with `caddy-dns/cloudflare` and puts it at
 `caddy/caddy` in the release tarball. At commit the updater validates it (`caddy version` and
 `caddy list-modules`), installs it at the binary path the running unit executes, and restarts
-that unit. A stock `caddy.service` keeps its config and admin socket; the old binary is saved as
+that unit. On an installed host that is the packaged `caddy.service` running `/usr/bin/caddy`; it
+keeps its config and admin socket, and the old binary is saved as
 `<path>.skiff-previous` and restored if the restart or the post-update health checks fail. A
 host running `skiff-caddy.service` already resolves `/opt/skiff/current/caddy/caddy`, so only
 the restart is needed. On the first update to a Caddy-bearing release the updater adds the same
@@ -826,7 +912,9 @@ binary to `previous`, so a later rollback stays bootable. The release's Caddy is
 `caddy/caddy` is absent (an older artifact or a source ref that predates it). If the unit executes
 a package-managed path such as `/usr/bin/caddy`, the updater replaces that file (keeping
 `.skiff-previous`); a distro package upgrade can overwrite it, and the next Skiff update puts the
-release build back. Moving the host to `skiff-caddy.service` avoids that. As with the install
+release build back. The repository's hardened `skiff-caddy.service` (§10) runs
+`/opt/skiff/current/caddy/caddy` directly and avoids that, but neither the installer nor the
+updater installs it; an installed host runs the packaged `caddy.service`. As with the install
 method, the updater that *installs* this feature predates it, so Caddy is managed from the
 following run onward.
 
@@ -1145,11 +1233,22 @@ sudo skiff-uninstall                 # remove binaries/units; keep data + config
 sudo skiff-uninstall --purge --yes   # remove local state too (R2 is never touched)
 ```
 
-The default keeps `/var/lib/skiff`, `/etc/skiff` and `/etc/caddy/Caddyfile` so a
-reinstall can reuse the database and master key. `skiff-clickhouse.service` is stopped and
-removed; its data (`/var/lib/skiff/clickhouse`) and binary (`/opt/skiff/clickhouse`) stay unless
-you purge. `--purge` also removes the system users.
-Backups and releases in R2 survive both modes by design.
+`skiff-uninstall` (`scripts/uninstall.sh`) stops, disables and removes every Skiff unit: the
+control plane and its standby slot, the update guard and `skiff-update-self.{path,service}`, the
+agent, helper, builder, studio, storage, mail, Litestream, restore drill, alert and
+platform-config units, and ClickHouse, with their drop-ins (including the master key drop-ins).
+It removes the operator commands in `/usr/local/{bin,sbin}` (`skif`, `skiff-update-self`,
+`skiff-platform-config`, `skiff-restore`, `skiff-restore-drill`, `skiff-alert`,
+`skiff-recovery-kit`, `skiff-rotate-master-key`, `skiff-uninstall`) and `/opt/skiff`.
+
+The default keeps `/var/lib/skiff`, `/etc/skiff` (including the master key, sealed or not) and
+`/etc/caddy/Caddyfile` so a reinstall can reuse the database and master key. The ClickHouse data
+(`/var/lib/skiff/clickhouse`) and binary (`/opt/skiff/clickhouse`) also stay unless you purge.
+`--purge` also removes the system users (`skiff`, `skiff-build`, `skiff-clickhouse`, `caddy`),
+puts back the Caddyfile Skiff replaced (`Caddyfile.dist`, or `Caddyfile.pre-skiff` when the
+installer only patched an existing one) and reloads Caddy, and destroys the master key, so export a recovery kit (§6.2) first if the R2 backups should stay
+restorable. Containers and units the helper rendered for workloads are not removed; delete the
+apps first. Backups and releases in R2 survive both modes by design.
 
 **Retiring a worker node.** Move or delete what it hosts (projects placed on it, app workloads,
 databases, storage instances, app volumes). Apps move from the project's **Details → Move**, and
@@ -1316,7 +1415,8 @@ manifest.json          # versions, migration ids, sha256 per file, pinned flag
 db/control.db          # VACUUM INTO snapshot of the control SQLite
 config/skiff.env       # 0600/0400, includes APP_KEY/master key
 config/agent.env
-config/master.key
+config/master.key      # hosts with a plaintext key
+config/master.key.cred # hosts with a sealed key (opens only on this machine)
 config/platform-settings.json
 ```
 
@@ -1332,8 +1432,8 @@ Restoring a bundle is always a human decision:
 sudo systemctl stop skiff-control-plane
 sudo cp /var/lib/skiff/backups/upgrade-…/db/control.db /var/lib/skiff/data/skiff.db
 sudo chown skiff:skiff /var/lib/skiff/data/skiff.db
-# Only from the same point in time, and only if the master key changed:
-sudo cp /var/lib/skiff/backups/upgrade-…/config/master.key /etc/skiff/master.key
+# Only from the same point in time, and only if the master key changed (rotated since):
+sudo cp /var/lib/skiff/backups/upgrade-…/config/master.key.cred /etc/skiff/master.key.cred   # or master.key
 sudo systemctl start skiff-control-plane
 ```
 
@@ -1516,8 +1616,8 @@ curl -sS --unix-socket /run/skiff/control.sock http://localhost/ -o /dev/null -w
 | Data | Mechanism | Frequency / retention | RPO |
 |---|---|---|---|
 | SQLite | Litestream → R2 (`skiff-litestream.service`) | WAL sync ~1 s; snapshot every 24 h; 30-day retention | ≤ ~1 s |
-| Release artifacts | Canonical in R2 (`SKIFF_R2_ARTIFACT_PREFIX`) | Lifecycle per project; last 10 + pinned in DB | n/a |
-| Telemetry | Daily Parquet partitions in R2 (`SKIFF_R2_PARQUET_PREFIX`) | 48 h 1-minute + 90 d 1-hour in ClickHouse (not backed up, §3.6); Parquet long-lived | 24 h |
+| Release artifacts | Canonical in R2 (`releases/<sha256>.zip`, §2.3) | Lifecycle per project; last 10 + pinned in DB | n/a |
+| Telemetry | Daily Parquet partitions in R2 (`telemetry/day=YYYY-MM-DD/…`, §2.3) | 48 h 1-minute + 90 d 1-hour in ClickHouse (not backed up, §3.6); Parquet long-lived | 24 h |
 | Master key | Recovery kit: `age`-encrypted with a passphrase, shown once at install | Offline; re-export on rotation | n/a |
 | Config/secrets | Offline encrypted copy of `/etc/skiff/skiff.env` + recovery kit | On change | n/a |
 | Caddy config/token | `/etc/caddy/Caddyfile`, Cloudflare token | On change | n/a |
@@ -1571,6 +1671,14 @@ sudo skiff-recovery-kit import <file> [--restore-env] [--force]
   from the file. Re-export after every master-key rotation (§11).
 - `import` refuses to replace a different master key without `--force` and keeps any replaced
   file as `*.pre-recovery-<UTC>`.
+- A sealed key (`master.key.cred`) is read with `systemd-creds decrypt`, so `export` and
+  `verify` must run as root on the host that sealed it. `import` writes into the store the host
+  uses: on a sealed host it seals the kit's key again with this machine's TPM2/host key; on a
+  host with no key yet it writes `master.key`, which the next installer run seals. A sealed key
+  that no longer opens (rebuilt machine, TPM cleared, `/var/lib/systemd/credential.secret`
+  lost) counts as different: `import --force` replaces it.
+- The sealed file is useless off its machine. That is the point, and it is why the kit, not a
+  copy of `/etc/skiff`, is the backup of the master key.
 
 ---
 
@@ -1578,7 +1686,8 @@ sudo skiff-recovery-kit import <file> [--restore-env] [--force]
 
 ### 7.1 Signals
 
-- Control plane and agent expose Prometheus `/metrics`; OTLP export is optional.
+- Control plane and agent expose Prometheus `/metrics` (the control plane also serves
+  `/metrics/<area>`, docs/METRICS.md). There is no OTLP export.
 - `journalctl -u skiff-control-plane|skiff-agent|caddy|skiff-litestream`.
 - Workload stdout/stderr is drained to the dashboard's Logs tab (7-day retention, 500k-row ceiling)
   and `skif logs <project>` reads the same ordered events. Raw Caddy access logs stay on the node.
@@ -1701,31 +1810,40 @@ control-plane standby and database replicas are planned in CLUSTERING.md §6–�
 | Directive | Why |
 |---|---|
 | `ProtectSystem=strict` | `/usr`, `/boot`, `/etc`, `/opt` become read-only. The only writable paths are explicit `ReadWritePaths=`; a compromised Bun process cannot persist in `/usr` or edit its own units. |
-| `ReadWritePaths=` | Least-privilege allowlist: control plane `/var/lib/skiff` + `/run/skiff`; agent adds `/srv/skiff`; Caddy only its data dir; ClickHouse only `/var/lib/skiff/clickhouse`; drill its scratch dir. |
+| `ReadWritePaths=` | Least-privilege allowlist: control plane and agent `/var/lib/skiff` + `/run/skiff`; ClickHouse only `/var/lib/skiff/clickhouse`; Litestream `/var/lib/skiff`; drill `/var/lib/skiff` + `/run/skiff`; `skiff-caddy.service` (when adopted) only `/var/lib/skiff/caddy` + `/run/skiff`. |
 | `NoNewPrivileges=yes` | No setuid escalation from a compromised service. v1 needs no runtime root (D26). |
 | `PrivateTmp=yes` | Private `/tmp` and `/var/tmp`, so services cannot signal or poison each other through shared temp files. The drill's scratch lives under `/var/lib/skiff`, not `/tmp`. |
 | `PrivateDevices=yes` | No raw device access. Caddy binds 80/443 with `CAP_NET_BIND_SERVICE`, not root. |
 | `ProtectHome=yes` | Home directories are empty/inaccessible. |
 | `ProtectKernel*`, `ProtectClock`, `ProtectHostname`, `ProtectControlGroups` | Blocks kernel module loading, sysctl changes, clock/hostname tampering and cgroup escapes. |
-| `RestrictAddressFamilies=` | Control plane: `AF_UNIX AF_INET AF_INET6` (R2/SES/Cloudflare). Caddy: same. Agent: adds `AF_NETLINK` for interface stats. No packet sockets. |
+| `RestrictAddressFamilies=` | Control plane: `AF_UNIX AF_INET AF_INET6` (R2/SES/Cloudflare). `skiff-caddy.service`: same. Agent: adds `AF_NETLINK` for interface stats. No packet sockets. |
 | `RestrictNamespaces=yes` | No unprivileged namespace creation. |
 | `RestrictSUIDSGID=yes` | Files created by the service cannot gain setuid/setgid bits. |
 | `LockPersonality=yes`, `SystemCallArchitectures=native` | No 32-bit ABI or personality switching. |
 | `SystemCallFilter=@system-service + io_uring` | Removes privileged/mount/obsolete syscalls. Bun needs the io_uring syscalls on some kernels; they are explicitly allowed. If a future Bun release adds a syscall, add it here rather than dropping the filter. |
-| `MemoryMax=` | Control plane 1 GB (room to buffer a full 500 MiB artifact upload), agent 192 MB, Caddy 256 MB, ClickHouse 1 GB (its own `max_server_memory_usage` stops it at 768 MiB first), Litestream 256 MB, drill 1 GB. Bounds a runaway Bun/ClickHouse/Caddy process on a 4 GB VPS. |
+| `MemoryMax=` | Control plane 1 GB (room to buffer a full 500 MiB artifact upload), agent 192 MB, ClickHouse 1 GB by default, 4/3 of `SKIFF_CLICKHOUSE_MEMORY_MB` (its own `max_server_memory_usage` stops it at 768 MiB first), Litestream 256 MB, drill 1 GB, `skiff-caddy.service` 256 MB. Bounds a runaway Bun/ClickHouse process on a 4 GB VPS. |
 | `TasksMax=`, `LimitNOFILE=` | Prevents fork/descriptor exhaustion. |
-| `LoadCredential=master-key:…` | The master key is placed in the service's credential directory (`%d`), not the environment, and is not readable by other services. `/etc/skiff/master.key` stays `0400 root`. ClickHouse gets its `config.xml`/`users.xml` the same way, so `skiff-clickhouse` never needs to traverse `/etc/skiff`. |
-| `CapabilityBoundingSet=` (empty) | Control plane, agent, ClickHouse, Litestream and drill have no capabilities (ClickHouse logs that it lacks `CAP_SYS_NICE`/`CAP_IPC_LOCK`/`CAP_NET_ADMIN`; it works without them). Only Caddy keeps `CAP_NET_BIND_SERVICE`. |
+| `LoadCredentialEncrypted=master-key:…` / `LoadCredential=master-key:…` | The master key is placed in the service's credential directory (`%d`), not the environment, and is not readable by other services. When it is sealed (`/etc/skiff/master.key.cred`, §1), systemd decrypts it with the TPM2/host key only into that directory, so no plaintext copy exists on disk; the `skiff-master-key.conf` drop-in clears the unit body's `LoadCredential=` line (an empty assignment resets the list) and adds the encrypted one. Without `systemd-creds`, `/etc/skiff/master.key` stays `0400 root`. ClickHouse gets its `config.xml`/`users.xml` with `LoadCredential=`, so `skiff-clickhouse` never needs to traverse `/etc/skiff`. |
+| `CapabilityBoundingSet=` (empty) | Control plane, agent, ClickHouse, Litestream and drill have no capabilities (ClickHouse logs that it lacks `CAP_SYS_NICE`/`CAP_IPC_LOCK`/`CAP_NET_ADMIN`; it works without them). `skiff-caddy.service` keeps only `CAP_NET_BIND_SERVICE`. |
 | `skiff-builder.service` | Root, because only root can start a transient unit as another user. It keeps only `CAP_CHOWN`/`CAP_DAC_*`/`CAP_FOWNER` (hand a checkout to `skiff-build`, then read and delete it). Each build unit runs as `skiff-build` with `NoNewPrivileges`, `ProtectSystem=strict`, `ReadWritePaths=` its checkout, `InaccessiblePaths=` for `/etc/skiff`, `/var/lib/skiff`, `/run/skiff`, `/srv/skiff` and `/run/skiff-workloads`, no capabilities, and `TasksMax=1024`. The build gets only `HOME`, `PATH` and `CI`, never the daemon's environment. |
 | `ProtectProc=invisible` (control plane, ClickHouse) | Hides other processes. `ProcSubset=pid` is deliberately not set because Bun and ClickHouse read `/proc/cpuinfo` and `/proc/meminfo`; the agent also needs `/proc` for node metrics. |
 | Setgid `/run/skiff` | The alternative to a root socket helper: socket ownership is controlled by directory group inheritance, and no service joins another's primary group. |
 
-Caddy's admin API is never on TCP `:2019` (D7). It is reachable only at
-`/var/lib/caddy/admin.sock` with group `caddy`; the agent is the only consumer.
-The external edge as configured in [EDGE.md](./EDGE.md) uses
-`/var/lib/caddy/admin.sock`; if you adopt these units on that host, point
-`SKIFF_CADDY_ADMIN_SOCKET` and the unit at that path and grant `caddy` access
-instead of running Caddy as `caddy`.
+**Caddy runs as the packaged `caddy.service`.** The installer installs Caddy from the official apt
+repository and keeps the package's unit and its sandboxing, adding only the
+`skiff-admin-socket.conf` drop-in (`SupplementaryGroups=skiff`, `chmod 0660` on the admin socket).
+Caddy's admin API is never on TCP `:2019` (D7): the bootstrap Caddyfile puts it at
+`/var/lib/caddy/admin.sock` (mode `0660`, group `caddy`) and the agent is the only consumer
+(`SKIFF_CADDY_ADMIN_SOCKET`, detected by the installer and written into the agent unit).
+
+`scripts/systemd/skiff-caddy.service`, with the hand-maintained `skiff-agent.service` and
+`skiff-control-plane.service` beside it, is a hardened alternative that no installer or updater
+writes: Caddy as `caddy` in group `skiff-caddy`, the release's own binary
+(`/opt/skiff/current/caddy/caddy`), data under `/var/lib/skiff/caddy`, the admin socket at
+`/run/skiff/caddy-admin.sock`, config `/etc/caddy/skiff.Caddyfile`, and the directives in the
+table above. Its group, runtime-directory ownership, Caddyfile and admin socket all differ from an
+installed host, so adopting it is a manual migration this runbook does not cover. The updater
+prefers `skiff-caddy.service` when it exists; the installer-generated units use the `caddy` group.
 
 Review drift with:
 
@@ -1742,53 +1860,69 @@ systemd-analyze security caddy.service
 ## 11. Master key rotation
 
 The master key is a key-encryption key (KEK). It does **not** encrypt deployment data
-directly: each org has a data key (DEK), and the master key wraps those DEKs. Rotation
-therefore re-wraps a small number of DEKs; it does not re-encrypt every secret or release.
-Replacing `/etc/skiff/master.key` with a new random file **without re-wrapping** makes
-existing secrets undecryptable.
+directly: each org has a data key (DEK), and the master key wraps those DEKs
+(`org_keys.wrapped_key`) plus GitHub webhook secrets (`git_sources.webhook_secret`). Rotation
+therefore re-wraps a small number of values; it does not re-encrypt any secret, database,
+storage, broker, email or backup-target credential, or release. Replacing the key file with a
+new random one **without re-wrapping** makes every existing secret undecryptable: never do that
+by hand, use `skiff-rotate-master-key`.
 
 ### 11.1 Prepare
 
 1. Confirm the latest Litestream snapshot is current and a drill has passed recently.
-2. Take a manual snapshot: `sudo sqlite3 /var/lib/skiff/data/skiff.db ".backup '/var/lib/skiff/backups/pre-key-rotation.db'"`.
-3. Copy `/etc/skiff/master.key` (old) and `/etc/skiff/skiff.env` to offline recovery media.
-4. Announce a short maintenance window: control plane down; sites keep serving.
+2. Make sure you have a recovery kit for the **current** key (`sudo skiff-recovery-kit verify
+   <kit>`, §6.2). Older Litestream snapshots and pre-update bundles stay on the old key, and that
+   kit is how you open them later.
+3. Check the key opens everything, without changing anything:
+
+   ```sh
+   sudo skiff-rotate-master-key --dry-run
+   ```
+
+The control plane stops for a few seconds during the rotation; sites keep serving. The
+command refuses to run while a self-update (`skiff-update-self.service`) is running.
 
 ### 11.2 Rotate
 
-Use the control-plane admin operation (v1 owner/admin only). It must decrypt every org DEK
-with the old key and re-encrypt with the new one in a single transaction before the
-credential is swapped:
-
 ```sh
-sudo systemctl stop skiff-control-plane
-sudo skif admin keys rotate \
-  --old /etc/skiff/master.key \
-  --new /etc/skiff/master.key.new
+sudo skiff-rotate-master-key          # asks for confirmation (type "rotate"); --yes skips it
 ```
 
-If the admin command is not present in your build, **do not hand-edit the database or swap
-the file**. Defer rotation until the command is available; the operation must be atomic
-and re-wrap every DEK.
+`scripts/rotate-master-key.ts` works on whichever store the host uses (sealed
+`master.key.cred` or plaintext `master.key`, §1) and keeps it, in this order:
 
-Then install the new credential and restart:
+1. Proves the current key unwraps every row, and refuses otherwise.
+2. Snapshots the database to `/var/lib/skiff/backups/pre-key-rotation-<UTC>.db` (0600, still on
+   the old key).
+3. Generates the new key and stages it as `<store>.new` (sealed with `systemd-creds` when the
+   live key is), then reads it back.
+4. Stops both control-plane slots, since they hold the old key in memory.
+5. Re-wraps in one SQLite transaction, which re-opens every row with the new key before it
+   commits.
+6. Copies the live key to `<store>.old` and renames the staged key over the live one.
+7. Starts the control plane, waits for `/readyz` (`SKIFF_HEALTH_TIMEOUT`, default 90 s), reads
+   the key back the way the unit does and unwraps every row again.
+8. Destroys `<store>.old` only then. If step 6 or 7 fails, the database is re-wrapped back,
+   the old key is put back and the control plane restarted on it.
 
-```sh
-sudo install -m 0400 -o root -g root /etc/skiff/master.key.new /etc/skiff/master.key
-sudo rm -f /etc/skiff/master.key.new
-sudo systemctl start skiff-control-plane
-```
+Every crash point leaves a key on disk that opens the database. Running the command again
+finishes a rotation whose transaction committed (the staged key opens the database), or
+discards a staged key that never committed. If neither key opens the database it stops and
+points here: restore the key from the recovery kit (§6.2) or the snapshot from step 2.
 
-`LoadCredential=` reads the file at unit start, so no `daemon-reload` is required for a key
-change; a restart is.
+No `daemon-reload` is needed: the unit reads the credential at start.
 
 ### 11.3 Verify and re-export
 
 1. Open the dashboard and confirm an existing secret-backed deployment still activates.
-2. Create and read a throwaway secret (write-only API) to prove new writes work.
-3. Re-export the recovery kit with the new key and store it offline.
-4. Keep the old key offline for one rollback window; destroy it after a successful drill
-   and a few days of normal operation.
+2. Re-export the recovery kit now; the old kit no longer matches this host:
+   `sudo skiff-recovery-kit export --include-env`.
+3. Keep the previous kit (it holds the old key) until Litestream snapshots, the
+   `pre-key-rotation-*.db` snapshot and pre-update bundles from before the rotation have aged
+   out.
+4. Expect two derived values to change: storage instances with bucket event rules get a new
+   notification token and restart once on the next reconcile, and open container-console
+   sessions must reconnect.
 
 Rotating `BETTER_AUTH_SECRET` (sessions) or `SKIFF_SITE_COOKIE_SECRET` (protected-site
 cookies) is independent: replace the value in `/etc/skiff/skiff.env`, restart the control
@@ -1802,17 +1936,17 @@ the control plane.
 
 | Symptom | Check | Fix |
 |---|---|---|
-| Control plane won't start | `journalctl -u skiff-control-plane -n 100` | Usually missing `SKIFF_PLATFORM_ORIGIN`/`BETTER_AUTH_SECRET` in the env file, or `/etc/skiff/master.key` missing. |
+| Control plane won't start | `journalctl -u skiff-control-plane -n 100` | Usually missing `SKIFF_PLATFORM_ORIGIN`/`BETTER_AUTH_SECRET` in the env file, or the master key missing. A sealed key that no longer opens (`Failed to decrypt` in the journal, after a rebuild or TPM clear) needs `skiff-recovery-kit import <kit> --force` (§6.2). |
 | Caddy can't reach the control plane | `ls -l /run/skiff`, `namei -l /run/skiff/control.sock` | `/run/skiff` must be `2770 root:caddy`; control plane needs `SupplementaryGroups=caddy`. |
 | Agent can't use Caddy admin | `ls -l /var/lib/caddy/admin.sock` | Socket must be `0660` and group `caddy`; agent needs that supplementary group. Never expose `:2019` as a workaround. |
-| Litestream exits immediately | `journalctl -u skiff-litestream` | Missing/incorrect `SKIFF_R2_*`; endpoint must be the R2 S3 URL, region `auto`. |
+| Litestream exits immediately | `journalctl -u skiff-litestream` | Missing/incorrect `R2_*` in `skiff.env` (an old `litestream.yml` may still use `SKIFF_R2_*`); `R2_ENDPOINT` must be the R2 S3 URL, region `auto`. |
 | Telemetry unavailable | `systemctl status skiff-clickhouse`, `curl -s 127.0.0.1:18123/ping`, `journalctl -u skiff-clickhouse -n 100` | Re-run `sudo skiff-platform-config telemetry on` (it repairs and restarts ClickHouse and prints why it could not). Not installed at all is normal: install it from Settings → Telemetry. `Authentication failed` in the control-plane log means `users.xml` and `skiff.env` disagree; the same command regenerates `users.xml`. |
-| Restore says "no snapshots" | R2 prefix/lifecycle, credentials | Check `SKIFF_R2_SQLITE_PREFIX`; confirm objects exist; run a drill. |
+| Restore says "no snapshots" | R2 prefix/lifecycle, credentials | The replica path is `skiff/sqlite` in `/etc/skiff/litestream.yml`; confirm objects exist there; run a drill. |
 | Update stuck at **Test boot** / canary | `skiff-update-self status`, `journalctl -u skiff-update-self -n 200` | Stop the unit, `skiff-update-self recover`, retry. Installs older than 0.6.7 need one `update --no-canary` bootstrap: [§4.1.1](#411-recovering-a-stuck-or-failed-update). |
 | `skiff-recover.sh` download returns 404 | `gh release list --repo KieranHolroyd/skiff` | `/releases/latest` can resolve to a CLI release; pin the platform tag instead: [§4.1.1](#411-recovering-a-stuck-or-failed-update). |
 | Restore fails health check | Journal + `status` | The pre-restore snapshot was restored automatically; inspect the release/migrations. |
 | Drill fails with table differences | `diff` of `live.json` / `restored.json` | R2 lag, wrong bucket, or writes during a no-quiesce run. Re-run with quiescing. |
-| Disk > 85% | `du -sh /srv/skiff /var/lib/skiff /var/log` | GC releases, rotate journald, prune drill runs/backups. |
+| Disk > 85% | `du -sh /opt/skiff/releases /var/lib/skiff/* /var/log` | GC releases, rotate journald, prune drill runs/backups. |
 | `systemd-analyze security` score regressed | Unit diff | Reinstall the release units; local drop-ins may weaken sandboxing. |
 
 Emergency access: SSH is key-only; on the edge prefer SSH over WireGuard and keep a
@@ -1834,8 +1968,11 @@ internet while debugging.
   workflow.
 - Bun `1.4.4`, Caddy `2.11.8` and `caddy-dns/cloudflare` `v0.2.4` are pinned in the release
   workflow. Bump them together and re-run the drill.
-- The `skif admin keys rotate` command is a product surface described by DESIGN §11.2; this
-  delivery defines its contract (credential path) but does not implement it. The setup wizard
+- Master-key rotation is the host command `skiff-rotate-master-key` (§11), not a `skif` or API
+  surface: it needs root, stops the control plane, and works on the key file directly. The
+  master key is sealed with `systemd-creds` on systemd 250+ (Debian 13 ships 257); on a TPM2 host
+  without a PCR policy, so firmware and Secure Boot updates cannot lock the control plane out.
+  The setup wizard
   (DESIGN §12) is implemented for the owner account and instance checks (§3.5, D102); domains,
   Cloudflare, R2 and SMTP are still configured by the installer and Settings.
 - `BETTER_AUTH_SECRET` can be regenerated on a fresh-VPS restore at the cost of invalidating

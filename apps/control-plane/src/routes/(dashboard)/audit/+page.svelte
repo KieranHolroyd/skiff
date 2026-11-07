@@ -3,6 +3,7 @@
 	import { resolve } from '$app/paths';
 	import BotIcon from '@lucide/svelte/icons/bot';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import ChevronsLeftIcon from '@lucide/svelte/icons/chevrons-left';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
 	import SearchIcon from '@lucide/svelte/icons/search';
@@ -29,7 +30,23 @@
 	let limit = $derived(String(data.limit));
 	let selected = $state<Entry | null>(null);
 
-	const filtered = $derived(Boolean(data.action || data.resource || data.limit !== 50));
+	const filtered = $derived(
+		Boolean(data.action || data.resource || data.from || data.to || data.limit !== 50 || data.paged)
+	);
+	const narrowed = $derived(Boolean(data.action || data.resource || data.from || data.to));
+
+	/** The current filters as a query string, with or without a page cursor. */
+	function pageHref(cursor: string | null): string {
+		const params = new URLSearchParams();
+		if (data.action) params.set('action', data.action);
+		if (data.resource) params.set('resource', data.resource);
+		if (data.from) params.set('from', data.from);
+		if (data.to) params.set('to', data.to);
+		if (data.limit !== 50) params.set('limit', String(data.limit));
+		if (cursor) params.set('cursor', cursor);
+		const query = params.toString();
+		return `${resolve('/(dashboard)/audit')}${query ? `?${query}` : ''}`;
+	}
 
 	function prettyArgs(json: string | null): string | null {
 		if (!json) return null;
@@ -94,6 +111,32 @@
 				class="bg-card font-mono text-xs"
 			/>
 		</Field.Field>
+		<Field.Field class="w-40">
+			<Field.Label for="audit-from" class="text-xs font-medium text-muted-foreground"
+				>From (UTC)</Field.Label
+			>
+			<Input
+				id="audit-from"
+				name="from"
+				type="date"
+				value={data.from}
+				max={data.to || undefined}
+				class="bg-card font-mono text-xs"
+			/>
+		</Field.Field>
+		<Field.Field class="w-40">
+			<Field.Label for="audit-to" class="text-xs font-medium text-muted-foreground"
+				>To (UTC)</Field.Label
+			>
+			<Input
+				id="audit-to"
+				name="to"
+				type="date"
+				value={data.to}
+				min={data.from || undefined}
+				class="bg-card font-mono text-xs"
+			/>
+		</Field.Field>
 		<Field.Field class="w-28">
 			<Field.Label for="audit-limit" class="text-xs font-medium text-muted-foreground"
 				>Show</Field.Label
@@ -115,15 +158,21 @@
 		</div>
 	</form>
 
+	{#if data.problem}
+		<p class="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+			{data.problem}
+		</p>
+	{/if}
+
 	{#if data.entries.length === 0}
 		<EmptyState
 			icon={ScrollTextIcon}
 			title="No audit entries"
-			description={data.action || data.resource
+			description={narrowed || data.paged
 				? 'No entries match these filters. Try clearing them.'
 				: 'Deploys, promotes, access changes and API-key actions appear here as soon as they happen.'}
 		>
-			{#if data.action || data.resource}
+			{#if narrowed || data.paged}
 				<Button href={resolve('/(dashboard)/audit')} variant="outline" size="sm"
 					>Clear filters</Button
 				>
@@ -202,6 +251,29 @@
 				</Table.Body>
 			</Table.Root>
 		</div>
+		{#if data.paged || data.nextCursor}
+			<nav class="flex items-center justify-between gap-3" aria-label="Audit log pages">
+				<p class="text-xs text-muted-foreground">
+					{data.paged ? 'Older entries' : 'Newest entries'}, {data.entries.length} on this page
+				</p>
+				<div class="flex gap-2">
+					{#if data.paged}
+						<Button href={pageHref(null)} variant="outline" size="sm"
+							><ChevronsLeftIcon />Newest</Button
+						>
+					{/if}
+					{#if data.nextCursor}
+						<Button href={pageHref(data.nextCursor)} variant="outline" size="sm"
+							>Older<ChevronRightIcon /></Button
+						>
+					{:else}
+						<Button variant="outline" size="sm" disabled
+							>No older entries</Button
+						>
+					{/if}
+				</div>
+			</nav>
+		{/if}
 	{/if}
 </div>
 

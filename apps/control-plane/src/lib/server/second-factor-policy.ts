@@ -47,8 +47,19 @@ export function secondFactorState(input: {
  * Better Auth (gated endpoint-by-endpoint by `authPathAllowedBeforeSecondFactor`), sign-in, assets,
  * and bearer-authenticated machine endpoints that never use the session.
  */
-// `/setup` walks a brand-new owner through enrolment itself (D102).
-const EXEMPT_EXACT = new Set(['/two-factor', '/login', '/setup', '/favicon.ico', '/favicon.svg', '/robots.txt', '/mcp']);
+// `/setup` walks a brand-new owner through enrolment itself (D102). Password reset never signs in
+// (it signs every session out), so the owner still proves a factor at the next sign-in.
+const EXEMPT_EXACT = new Set([
+	'/two-factor',
+	'/login',
+	'/setup',
+	'/forgot-password',
+	'/reset-password',
+	'/favicon.ico',
+	'/favicon.svg',
+	'/robots.txt',
+	'/mcp',
+]);
 const EXEMPT_PREFIXES = ['/two-factor/', '/api/auth/', '/_app/', '/.well-known/', '/api/agent/', '/api/objects/'];
 
 export function isExemptBeforeSecondFactor(pathname: string): boolean {
@@ -64,6 +75,9 @@ const AUTH_ALWAYS = new Set([
 	'/two-factor/verify-totp',
 	'/two-factor/verify-backup-code',
 	'/magic-link/verify',
+	// Password reset: emails a link, or sets a new password and signs every session out.
+	'/request-password-reset',
+	'/reset-password',
 	'/ok',
 	'/error',
 	// Client-authenticated OAuth endpoints: they never act on the browser session.
@@ -77,7 +91,7 @@ const AUTH_ALWAYS = new Set([
 	'/oauth2/public-client-prelogin',
 	'/jwks',
 ]);
-const AUTH_ALWAYS_PREFIXES = ['/sign-in/', '/callback/', '/oauth2/callback/'];
+const AUTH_ALWAYS_PREFIXES = ['/sign-in/', '/callback/', '/oauth2/callback/', '/reset-password/'];
 /** Enrolment endpoints: only while the owner has no factor yet. */
 const AUTH_ENROL = new Set([
 	'/passkey/generate-register-options',

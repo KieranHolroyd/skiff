@@ -43,4 +43,18 @@ describe('service endpoint planning', () => {
 		const plan = planServiceEndpoints('nod_a', [db, { ...db, serviceId: 'db_2' }], []);
 		expect(plan.endpoints.map((endpoint) => endpoint.localPort)).toEqual([21_000, 21_001]);
 	});
+
+	test('a new service planned before a kept one never takes the kept port', () => {
+		// db_2 already owns 21000; db_new comes first in the list and must not be handed 21000.
+		const plan = planServiceEndpoints('nod_a', [{ ...db, serviceId: 'db_new' }, { ...db, serviceId: 'db_2' }], [
+			{ kind: 'database', serviceId: 'db_2', localPort: 21_000 },
+		]);
+		const ports = Object.fromEntries(plan.endpoints.map((endpoint) => [endpoint.serviceId, endpoint.localPort]));
+		expect(ports).toEqual({ db_new: 21_001, db_2: 21_000 });
+	});
+
+	test('two projects attached to one service share a single endpoint', () => {
+		const plan = planServiceEndpoints('nod_a', [db, { ...db }], []);
+		expect(plan.endpoints).toHaveLength(1);
+	});
 });

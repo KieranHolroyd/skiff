@@ -34,6 +34,8 @@ export interface SiteCompileInput {
 	upstreams?: string[];
 	/** Health path for active checks across those upstreams. */
 	healthPath?: string;
+	/** Seconds between active checks (cluster `replicas.healthIntervalSeconds`); 5 when absent. */
+	healthIntervalSeconds?: number;
 }
 
 const SECURITY_HEADERS = {
@@ -41,6 +43,11 @@ const SECURITY_HEADERS = {
 	'X-Content-Type-Options': ['nosniff'],
 	'Referrer-Policy': ['strict-origin-when-cross-origin'],
 };
+
+/** A whole number of seconds in 1–300; anything else (an older control plane) is Caddy's 5 s. */
+function healthInterval(seconds: number | undefined): number {
+	return seconds !== undefined && Number.isInteger(seconds) && seconds >= 1 && seconds <= 300 ? seconds : 5;
+}
 
 function headerHandler(set: Record<string, string[]>, extra?: Record<string, string[]>): CaddyHandler {
 	return { handler: 'headers', response: { set: { ...set, ...extra } } };
@@ -250,7 +257,7 @@ export function compileSiteRoute(input: SiteCompileInput): CaddyRoute {
 							...(input.healthPath
 								? {
 									health_checks: {
-										active: { uri: input.healthPath, interval: '5s' },
+										active: { uri: input.healthPath, interval: `${healthInterval(input.healthIntervalSeconds)}s` },
 										passive: { fail_duration: '30s' },
 									},
 								}
@@ -324,6 +331,20 @@ export function compileUnavailableRoute(host: string): CaddyRoute {
 		'@id': `unavailable:${host}`,
 		match: [{ host: [host] }],
 		handle: [errorPageHandler('unavailable', 503, { 'Retry-After': ['30'] })],
+	};
+}
+
+/**
+ * Default page for a project that exists but has never been deployed (created in the dashboard,
+ * nothing pushed yet). It answers `200` at the project's production host until the first
+ * production deployment replaces it, so a new project shows something better than "No site here".
+ */
+export function compileAwaitingDeployRoute(host: string, dashboardUrl?: string): CaddyRoute {
+	return {
+		'@id': `awaiting-deploy:${host}`,
+		match: [{ host: [host] }],
+		terminal: true,
+		handle: [errorPageHandler('awaiting-deploy', 200, {}, dashboardUrl ? { dashboardUrl } : {})],
 	};
 }
 

@@ -111,11 +111,56 @@ export interface StorageView {
 	region: string;
 	buckets: StorageBucketView[];
 	attachments: StorageAttachmentView[];
+	/** Root key state (no secret); absent from older control planes. */
+	rootKey?: StorageRootKeyState;
 	statsAt: string | null;
 	createdAt: string;
 	updatedAt: string;
 	deletedAt: string | null;
 	purgeAt: string | null;
+}
+
+export interface StorageRootKeyState {
+	accessKeyId: string;
+	status: 'current' | 'rotating' | 'failed';
+	pendingAccessKeyId: string | null;
+	rotationStartedAt: string | null;
+	error: string | null;
+	rotatedAt: string | null;
+}
+
+/** A named key (no secret). */
+export interface StorageKeyView {
+	id: string;
+	storageId: string;
+	name: string;
+	accessKeyId: string;
+	grants: StorageGrant[];
+	purpose: string | null;
+	status: 'active' | 'expired' | 'revoked';
+	lastUsedAt: string | null;
+	expiresAt: string | null;
+	createdAt: string;
+	revokedAt: string | null;
+}
+
+export interface StorageKeyReveal extends StorageKeyView {
+	secretAccessKey: string;
+}
+
+export interface StorageKeyCreateInput {
+	name: string;
+	grants: StorageGrant[];
+	purpose?: string;
+	expiresAt?: string;
+}
+
+export interface StorageMoveResult {
+	storage: string;
+	from: { nodeId: string; name: string | null };
+	to: { nodeId: string; name: string | null };
+	projects: string[];
+	warnings: string[];
 }
 
 export interface StorageCredentials {
@@ -278,6 +323,7 @@ export function storageDetails(view: StorageView): string {
 	field('Public', view.publicUrl ?? 'no (apps on its node only)');
 	field('Apps reach', `${view.internalEndpoint.process} (process), ${view.internalEndpoint.container} (container)`);
 	field('Region', `${view.region} (path-style addressing)`);
+	if (view.rootKey) field('Root key', rootKeyLabel(view.rootKey));
 	field('Created', formatTime(view.createdAt));
 	if (view.deletedAt) {
 		field('Deleted', formatTime(view.deletedAt));
@@ -305,6 +351,41 @@ export function storageDetails(view: StorageView): string {
 		);
 	}
 	return lines.join('\n');
+}
+
+/** `SKR… (current)`, `SKR… → SKR… (rotating since …)`, `SKR… (last rotation failed: …)`. */
+export function rootKeyLabel(state: StorageRootKeyState): string {
+	if (state.status === 'rotating')
+		return `${state.accessKeyId} → ${state.pendingAccessKeyId ?? '?'} (rotating${state.rotationStartedAt ? ` since ${formatTime(state.rotationStartedAt)}` : ''})`;
+	if (state.status === 'failed') return `${state.accessKeyId} (last rotation rolled back${state.error ? `: ${state.error}` : ''})`;
+	return `${state.accessKeyId}${state.rotatedAt ? ` (rotated ${formatTime(state.rotatedAt)})` : ''}`;
+}
+
+export function storageKeysTable(keys: StorageKeyView[]): string {
+	return renderTable(
+		['ID', 'NAME', 'ACCESS KEY', 'GRANTS', 'STATUS', 'EXPIRES', 'PURPOSE'],
+		keys.map((key) => [
+			key.id,
+			key.name,
+			key.accessKeyId,
+			grantsLabel(key.grants),
+			key.status,
+			key.expiresAt ? formatTime(key.expiresAt) : 'never',
+			truncate(key.purpose ?? '', 40),
+		]),
+	);
+}
+
+/** A revealed named key as dotenv lines, like `credentialsEnv` (endpoint from the instance). */
+export function storageKeyEnv(key: StorageKeyReveal, endpoint: string, region: string, prefix = 'AWS'): string {
+	const entries: Array<[string, string]> = [
+		['ENDPOINT_URL', endpoint],
+		['ACCESS_KEY_ID', key.accessKeyId],
+		['SECRET_ACCESS_KEY', key.secretAccessKey],
+		['REGION', region],
+		['FORCE_PATH_STYLE', 'true'],
+	];
+	return entries.map(([suffix, value]) => `${prefix}_${suffix}=${value}`).join('\n');
 }
 
 /**

@@ -29,7 +29,7 @@ const core: Core = createCore({
 		objectStoreSecret: 'object-secret-123',
 		desiredAgentVersion: '0.1.0',
 		now: () => clock,
-		features: { ...DEFAULT_FEATURES, ORG_NETWORKS: true },
+		features: { ...DEFAULT_FEATURES, ORG_NETWORKS: true, SERVICE_ENDPOINTS: false },
 	},
 });
 const telemetry = testTelemetryStore({ now: () => clock });
@@ -156,6 +156,10 @@ describe('managed object storage', () => {
 	test('credentials need storage:credentials and are audited', () => {
 		expect(() => core.storage.credentials(viewer, 'media')).toThrow();
 		expect(() => core.storage.credentials(agent, 'media')).toThrow();
+		const mcpWithScope = buildPrincipal({ kind: 'mcp', userId: 'user_1', orgId: 'org_1', role: 'owner' });
+		expect(() => core.storage.credentials(mcpWithScope, 'media')).toThrow(/never returned over MCP/);
+		const cliKey = buildPrincipal({ kind: 'apiKey', userId: 'user_1', orgId: 'org_1', role: 'owner', keyId: 'key_cli' });
+		expect(core.storage.credentials(cliKey, 'media').accessKeyId).toBeTruthy();
 		const creds = core.storage.credentials(owner, 'media');
 		expect(creds).toMatchObject({ endpoint: 'http://127.0.0.1:19000', publicEndpoint: null, region: 'us-east-1' });
 		const audit = core.audit.list({ orgId: 'org_1', action: 'storage.credentials' });
@@ -243,11 +247,16 @@ describe('managed object storage', () => {
 		});
 		expect(result.warning).toBeNull();
 		expect(result.attachment.accessKeyId).toMatch(/^SKF[A-Z2-7]{17}$/);
-		expect(
-			core.storage
-				.listKeys(owner, 'media')
-				.some((key) => key.accessKeyId === result.attachment.accessKeyId && key.name.startsWith('attachment-')),
-		).toBe(true);
+		const attachmentKey = core.storage
+			.listKeys(owner, 'media')
+			.find((key) => key.accessKeyId === result.attachment.accessKeyId && key.name.startsWith('attachment-'));
+		expect(attachmentKey).toBeTruthy();
+		// The project owns it: only a detach revokes it, and it is never revealed.
+		expect(() => core.storage.revokeKey(owner, 'media', attachmentKey!.id)).toThrow(/Detach the project/);
+		expect(() => core.storage.revealKey(owner, 'media', attachmentKey!.id)).toThrow(/receives it at activation/);
+		expect(() =>
+			core.storage.createKey(owner, 'media', { name: 'attachment-spoof', grants: [{ bucket: 'uploads' }] }),
+		).toThrow(/reserved/);
 		expect(result.attachment.envNames).toEqual([
 			'S3_ENDPOINT_URL',
 			'S3_ACCESS_KEY_ID',

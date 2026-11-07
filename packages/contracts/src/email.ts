@@ -17,6 +17,7 @@ export const EMAIL_CREDENTIAL_ID_PREFIX = 'ec_';
 export const EMAIL_ADDRESS_ID_PREFIX = 'ea_';
 export const EMAIL_WEBHOOK_ID_PREFIX = 'ew_';
 export const EMAIL_ROUTE_ID_PREFIX = 'er_';
+export const EMAIL_ACCESS_REQUEST_ID_PREFIX = 'ear_';
 
 /** SMTP usernames are `skf_<credential id hex>`; the prefix makes them easy to spot in logs. */
 export const EMAIL_USERNAME_PREFIX = 'skf_';
@@ -38,6 +39,19 @@ export const EMAIL_OUTBOX_TTL_SECONDS = 24 * 3600;
 /** Sandbox and default active limits (EMAIL.md §7.3). */
 export const EMAIL_SANDBOX_LIMITS = { perSecond: 1, perDay: 200 } as const;
 export const EMAIL_ACTIVE_DEFAULT_LIMITS = { perSecond: 10, perDay: 10_000 } as const;
+
+/**
+ * Sandbox recipients (EMAIL.md §4.3): a verification link lasts a day; it can be re-sent after a
+ * minute, at most `maxSends` times per link; an org holds at most `maxAddresses`, `maxPending` of
+ * them unverified at once. Verification mail goes through the platform's own SMTP (D22).
+ */
+export const EMAIL_SANDBOX_ADDRESS_LIMITS = {
+	linkTtlSeconds: 24 * 3600,
+	resendAfterSeconds: 60,
+	maxSends: 5,
+	maxAddresses: 50,
+	maxPending: 10,
+} as const;
 
 /** Auto-pause thresholds (EMAIL.md §7.2, D119). Rates are fractions, not percentages. */
 export const EMAIL_REPUTATION = {
@@ -217,7 +231,12 @@ export const emailOrgStateUpdateSchema = z
 
 /** Platform-admin email settings (EMAIL.md §3.3). */
 export const emailSettingsUpdateSchema = z
-	.object({ nodeId: z.string().min(1).max(64).nullable().optional(), paused: z.boolean().optional() })
+	.object({
+		nodeId: z.string().min(1).max(64).nullable().optional(),
+		/** The mail node's public IPv4; found automatically for the edge when left out. */
+		ip: z.string().trim().max(15).nullable().optional(),
+		paused: z.boolean().optional(),
+	})
 	.strict();
 
 export const emailSuppressionReasons = ['bounce', 'complaint', 'manual', 'unsubscribe'] as const;
@@ -727,6 +746,78 @@ export interface EmailOrgView {
 	complaintRate: number | null;
 	windowMessages: number;
 	pausedReason: string | null;
+}
+
+// --- sandbox recipients and production access (EMAIL.md §4.3, §7.3) -------------------------
+
+export const emailSandboxAddressCreateSchema = z.object({ address: emailAddressSchema }).strict();
+
+export type EmailSandboxAddressStatus = 'pending' | 'verified';
+
+/** A single address the org may send to while in the sandbox, once its owner clicked the link. */
+export interface EmailSandboxAddressView {
+	id: string;
+	address: string;
+	status: EmailSandboxAddressStatus;
+	verifiedAt: string | null;
+	/** When the last verification link went out (pending only). */
+	sentAt: string | null;
+	/** When that link stops working (pending only). */
+	expiresAt: string | null;
+	createdAt: string;
+}
+
+export const emailAccessRequestStatuses = ['pending', 'approved', 'denied'] as const;
+export type EmailAccessRequestStatus = (typeof emailAccessRequestStatuses)[number];
+
+/** An org owner asks to leave the sandbox. */
+export const emailAccessRequestCreateSchema = z
+	.object({
+		useCase: z
+			.string()
+			.trim()
+			.min(20, 'Describe what you send and to whom in at least 20 characters.')
+			.max(2000),
+		expectedDailyVolume: z.number().int().min(1).max(10_000_000),
+		website: z
+			.string()
+			.trim()
+			.max(500)
+			.url('A full URL, e.g. https://example.com.')
+			.refine((value) => /^https?:\/\//i.test(value), 'An http(s) URL.')
+			.optional(),
+	})
+	.strict();
+export type EmailAccessRequestCreate = z.input<typeof emailAccessRequestCreateSchema>;
+
+/** A platform admin's answer. Approving moves the org to `active` with these limits (defaults otherwise). */
+export const emailAccessRequestDecisionSchema = z
+	.object({
+		decision: z.enum(['approve', 'deny']),
+		note: z.string().trim().max(1000).optional(),
+		perDay: z.number().int().min(1).max(10_000_000).optional(),
+		perSecond: z.number().int().min(1).max(1000).optional(),
+	})
+	.strict();
+export type EmailAccessRequestDecision = z.input<typeof emailAccessRequestDecisionSchema>;
+
+export interface EmailAccessRequestView {
+	id: string;
+	orgId: string;
+	/** The organisation's display name, for the platform admin's queue. */
+	orgName: string | null;
+	status: EmailAccessRequestStatus;
+	useCase: string;
+	expectedDailyVolume: number;
+	website: string | null;
+	requestedBy: { id: string; email: string | null };
+	decidedBy: string | null;
+	decidedAt: string | null;
+	note: string | null;
+	/** Limits granted on approval. */
+	perDay: number | null;
+	perSecond: number | null;
+	createdAt: string;
 }
 
 /** Env names an email attachment injects (EMAIL.md §5.4). */

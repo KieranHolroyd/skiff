@@ -1,5 +1,6 @@
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import {
+	appVolumes,
 	builds,
 	databaseAttachments,
 	databases,
@@ -33,6 +34,15 @@ export type Quota = OrgQuota;
 
 const UNLIMITED: Quota = orgQuotaSchema.parse({});
 
+/** Metrics whose rows live in another service's tables (plan 09 jobs), counted through a hook. */
+export type QuotaCounterMetric = 'jobs' | 'jobRunsPerDay';
+
+/**
+ * Counts one metric for the quota check and the usage view. `projectId` is null for an org-wide
+ * count; `since` is the start of the rolling window (24 hours ago) for `jobRunsPerDay`.
+ */
+export type QuotaCounter = (scope: { orgId: string; projectId: string | null; since: number }) => number;
+
 interface CountableRow {
 	id: string;
 	storageMb: number;
@@ -50,10 +60,26 @@ interface CountableRow {
  * makes `get()` return unlimited, preserving the pre-plan behaviour.
  */
 export class QuotaService {
+	private readonly counters = new Map<QuotaCounterMetric, QuotaCounter>();
+
 	constructor(private readonly ctx: CoreContext) {}
 
 	private enforced(): boolean {
 		return featureEnabled(this.ctx.config, 'QUOTAS');
+	}
+
+	/**
+	 * Let the service that owns a metric's rows count them (the jobs service registers `jobs` and
+	 * `jobRunsPerDay`). Until one registers, usage is 0 and only a limit of 0 refuses.
+	 */
+	registerCounter(metric: QuotaCounterMetric, counter: QuotaCounter): void {
+		this.counters.set(metric, counter);
+	}
+
+	private counted(metric: QuotaCounterMetric, orgId: string, projectId: string | null): number {
+		const counter = this.counters.get(metric);
+		if (!counter) return 0;
+		return counter({ orgId, projectId, since: this.ctx.now() - DAY_MS });
 	}
 
 	// ---------------------------------------------------------------- reads
@@ -248,34 +274,71 @@ export class QuotaService {
 	// ---------------------------------------------------------------- volumes
 
 	/**
-	 * App volumes are a later wave. The method exists now so the contract is complete; when the
-	 * volume service lands it can call this without another quota change.
+	 * App volumes (plan 07) reserve their configured `sizeMb`, like databases: the quota counts
+	 * budgets, not the sampled `usedBytes`. Trashed volumes no longer count.
 	 */
 	assertCanCreateVolume(orgId: string, projectId: string | null | undefined, sizeMb = 0): void {
 		if (!this.enforced()) return;
 		const quota = this.effective(orgId, projectId);
-		this.assertLimit('App volumes', 'appVolumes', 1, quota.appVolumes, 'count');
-		this.assertLimit('App volume storage', 'appVolumeBytes', sizeMb * MB, quota.appVolumeBytes, 'bytes');
+		const countRows = this.volumeRows(orgId, this.metricScope(orgId, projectId, 'appVolumes'));
+		const byteRows = this.volumeRows(orgId, this.metricScope(orgId, projectId, 'appVolumeBytes'));
+		this.assertLimit('App volumes', 'appVolumes', countRows.length + 1, quota.appVolumes, 'count');
+		this.assertLimit(
+			'App volume storage',
+			'appVolumeBytes',
+			reservedVolumeBytes(byteRows) + sizeMb * MB,
+			quota.appVolumeBytes,
+			'bytes',
+		);
+	}
+
+	/** A resize only checks the growth: the volume's current size is already counted. */
+	assertCanResizeVolume(
+		orgId: string,
+		projectId: string | null | undefined,
+		currentMb: number,
+		nextMb: number,
+	): void {
+		if (!this.enforced() || nextMb <= currentMb) return;
+		const quota = this.effective(orgId, projectId);
+		const rows = this.volumeRows(orgId, this.metricScope(orgId, projectId, 'appVolumeBytes'));
+		const used = reservedVolumeBytes(rows) + (nextMb - currentMb) * MB;
+		this.assertLimit('App volume storage', 'appVolumeBytes', used, quota.appVolumeBytes, 'bytes');
 	}
 
 	// ---------------------------------------------------------------- jobs and previews
 
+	/** Job definitions (plan 09). Counted by the hook the jobs service registers. */
 	assertCanCreateJob(orgId: string, projectId: string | null | undefined): void {
 		if (!this.enforced()) return;
 		const quota = this.effective(orgId, projectId);
-		this.assertLimit('Jobs', 'jobs', 1, quota.jobs, 'count');
+		const used = this.counted('jobs', orgId, this.metricScope(orgId, projectId, 'jobs')) + 1;
+		this.assertLimit('Jobs', 'jobs', used, quota.jobs, 'count');
 	}
 
+	/**
+	 * One job run (scheduled or manual) in the rolling 24 hours. A scheduler that hits this should
+	 * record the run as skipped with the error message rather than retrying.
+	 */
 	assertCanRunJob(orgId: string, projectId: string | null | undefined): void {
 		if (!this.enforced()) return;
 		const quota = this.effective(orgId, projectId);
-		this.assertLimit('Job runs today', 'jobRunsPerDay', 1, quota.jobRunsPerDay, 'count');
+		const used = this.counted('jobRunsPerDay', orgId, this.metricScope(orgId, projectId, 'jobRunsPerDay')) + 1;
+		this.assertLimit('Job runs today', 'jobRunsPerDay', used, quota.jobRunsPerDay, 'count');
 	}
 
+	/**
+	 * One more concurrent preview: an active deployment that serves no environment and was never
+	 * production (see `previewCount`). The deployment service calls this only when a deploy adds one.
+	 */
 	assertCanCreatePreview(orgId: string, projectId: string | null | undefined): void {
 		if (!this.enforced()) return;
 		const quota = this.effective(orgId, projectId);
-		this.assertLimit('Previews', 'previews', this.previewCount(orgId, this.metricScope(orgId, projectId, 'previews')) + 1, quota.previews, 'count');
+		const used = this.previewCount(orgId, this.metricScope(orgId, projectId, 'previews')) + 1;
+		if (quota.previews < 0 || used <= quota.previews) return;
+		throw new QuotaError(
+			`Previews quota (previews) exceeded: ${used} used of ${quota.previews}. Delete or promote a preview deployment, or raise the quota.`,
+		);
 	}
 
 	assertCanCreateBuild(orgId: string, projectId: string | null | undefined): void {
@@ -291,6 +354,23 @@ export class QuotaService {
 			.where(and(...filters))
 			.get();
 		this.assertLimit('Builds today', 'buildsPerDay', (row?.count ?? 0) + 1, quota.buildsPerDay, 'count');
+	}
+
+	/**
+	 * Egress is approximate (the traffic store's 30-day byte total) and cannot be refused per
+	 * request without cutting live traffic. Over the quota, running sites keep serving and new
+	 * deploys are refused instead; rollback and promote stay available as the recovery path.
+	 * Unavailable telemetry reads as zero, so a store outage never blocks a deploy.
+	 */
+	async assertCanCreateDeployment(orgId: string, projectId: string | null | undefined): Promise<void> {
+		if (!this.enforced()) return;
+		const limit = this.effective(orgId, projectId).egressBytes;
+		if (limit < 0) return;
+		const used = await this.ctx.usage.egressUsed(orgId, this.metricScope(orgId, projectId, 'egressBytes'));
+		if (used <= limit) return;
+		throw new QuotaError(
+			`Egress quota (egressBytes) exceeded: ${formatBytes(used)} served in the last 30 days of ${formatBytes(limit)}. Running sites keep serving; new deploys are refused until the 30-day total drops under the quota or the quota is raised.`,
+		);
 	}
 
 	/** Egress is approximate and read from telemetry; callers pass the 30-day total. */
@@ -338,10 +418,6 @@ export class QuotaService {
 		return quota.retainedDeployments >= 0 ? quota.retainedDeployments : fallback;
 	}
 
-	assertCanCreateDeployment(_orgId: string): void {
-		// Deployment creation is bounded by upload/storage and retention, not a separate counter.
-	}
-
 	// ---------------------------------------------------------------- usage helpers (sync)
 
 	/** Actual (latest sampled) bytes for display; hard limits use the reserved values below. */
@@ -370,9 +446,14 @@ export class QuotaService {
 		previews: number;
 		workloadMemoryMb: number;
 		buildsPerDay: number;
+		appVolumes: number;
+		appVolumeBytes: number;
+		jobs: number;
+		jobRunsPerDay: number;
 	} {
 		const dbRows = this.databaseRows(orgId, projectId);
 		const stRows = this.storageRows(orgId, projectId);
+		const volumeRows = this.volumeRows(orgId, projectId);
 		const projectCount = this.ctx.db
 			.select({ count: sql<number>`count(*)` })
 			.from(projects)
@@ -397,6 +478,11 @@ export class QuotaService {
 			previews: this.previewCount(orgId, projectId),
 			workloadMemoryMb: this.reservedMemoryMb(orgId, projectId),
 			buildsPerDay: buildCount?.count ?? 0,
+			appVolumes: volumeRows.length,
+			// Reserved size, like databases: the value the hard limit checks.
+			appVolumeBytes: reservedVolumeBytes(volumeRows),
+			jobs: this.counted('jobs', orgId, projectId ?? null),
+			jobRunsPerDay: this.counted('jobRunsPerDay', orgId, projectId ?? null),
 		};
 	}
 
@@ -436,6 +522,17 @@ export class QuotaService {
 				sizeBytes: storageInstances.usedBytes,
 			})
 			.from(storageInstances)
+			.where(and(...filters))
+			.all();
+	}
+
+	/** Live (not trashed) app volumes; volumes are project-owned, so a project scope is direct. */
+	private volumeRows(orgId: string, projectId?: string | null): Array<{ sizeMb: number }> {
+		const filters = [eq(appVolumes.orgId, orgId), isNull(appVolumes.deletedAt)];
+		if (projectId) filters.push(eq(appVolumes.projectId, projectId));
+		return this.ctx.db
+			.select({ sizeMb: appVolumes.sizeMb })
+			.from(appVolumes)
 			.where(and(...filters))
 			.all();
 	}
@@ -505,25 +602,45 @@ export class QuotaService {
 		return (workloadMb?.total ?? 0) + dbMb + stMb + mqMb;
 	}
 
+	/**
+	 * Concurrent previews: active deployments of live projects that no environment points at and
+	 * that were never production. Every deployment has a preview URL (D13), but a past production
+	 * release is rollback history, bounded by `retainedDeployments`; counting it here would make a
+	 * normal promote-on-deploy refuse once the history filled up.
+	 */
 	private previewCount(orgId: string, projectId?: string | null): number {
-		const filters = [eq(deployments.orgId, orgId), eq(deployments.status, 'active')];
-		if (projectId) filters.push(eq(deployments.projectId, projectId));
-		const active = this.ctx.db
-			.select({ id: deployments.id })
-			.from(deployments)
-			.where(and(...filters))
-			.all();
-		if (active.length === 0) return 0;
-		const production = new Set(
-			this.ctx.db
-				.select({ id: projects.productionDeploymentId })
-				.from(projects)
-				.where(eq(projects.orgId, orgId))
-				.all()
-				.map((row) => row.id)
-				.filter((id): id is string => Boolean(id)),
-		);
-		return active.filter((row) => !production.has(row.id)).length;
+		const params: string[] = [orgId];
+		let projectFilter = '';
+		if (projectId) {
+			projectFilter = 'AND d.project_id = ?';
+			params.push(projectId);
+		}
+		const row = this.ctx.sqlite
+			.query<{ count: number }, string[]>(
+				`SELECT count(*) AS count FROM deployments d JOIN projects p ON p.id = d.project_id
+				 WHERE d.org_id = ? AND d.status = 'active' AND d.promoted_at IS NULL AND p.deleted_at IS NULL
+				   AND (p.production_deployment_id IS NULL OR p.production_deployment_id <> d.id)
+				   AND NOT EXISTS (SELECT 1 FROM environments e WHERE e.deployment_id = d.id)
+				   ${projectFilter}`,
+			)
+			.get(...params);
+		return row?.count ?? 0;
+	}
+
+	/**
+	 * True when moving `environmentId` off this deployment would turn it into a preview (the same
+	 * rule as `previewCount`, ignoring that one environment's pointer).
+	 */
+	becomesPreviewWhenUnpointed(deploymentId: string, environmentId: string): boolean {
+		const row = this.ctx.sqlite
+			.query<{ count: number }, [string, string]>(
+				`SELECT count(*) AS count FROM deployments d JOIN projects p ON p.id = d.project_id
+				 WHERE d.id = ? AND d.status = 'active' AND d.promoted_at IS NULL
+				   AND (p.production_deployment_id IS NULL OR p.production_deployment_id <> d.id)
+				   AND NOT EXISTS (SELECT 1 FROM environments e WHERE e.deployment_id = d.id AND e.id <> ?)`,
+			)
+			.get(deploymentId, environmentId);
+		return (row?.count ?? 0) > 0;
 	}
 
 	private assertLimit(
@@ -562,6 +679,10 @@ function rowToQuota(row: typeof orgQuotas.$inferSelect): Quota {
 		workloadMemoryMb: row.workloadMemoryMb ?? -1,
 		egressBytes: row.egressBytes ?? -1,
 	};
+}
+
+function reservedVolumeBytes(rows: Array<{ sizeMb: number }>): number {
+	return rows.reduce((total, row) => total + row.sizeMb * MB, 0);
 }
 
 function formatBytes(bytes: number): string {

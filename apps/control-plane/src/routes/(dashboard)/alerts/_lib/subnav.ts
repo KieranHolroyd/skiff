@@ -32,7 +32,7 @@ export function alertsSubnav(platformAdmin: boolean, url: RouteUrl, onRule: bool
 		depth: 1,
 		title: 'Alerts',
 		icon: BellIcon,
-		back: { href: resolve('/(dashboard)/overview'), label: 'Back', remember: true },
+		back: { href: resolve('/(dashboard)/overview'), label: 'Overview' },
 		active: onRule ? 'rules' : readAlertTab(url.searchParams.get('tab'), platformAdmin),
 		target: 'alerts.tab',
 		groups: [

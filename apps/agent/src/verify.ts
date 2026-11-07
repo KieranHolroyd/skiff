@@ -8,6 +8,10 @@ import type { DesiredState, RouteSpec } from '@skiff/contracts';
  * - the visitor cookie is `__skiff_s=<exp>.<hmac(host|exp)>` signed with the route's site key;
  * - the login callback carries a one-time, 60 s token minted by the control plane, also signed
  *   with the site key, which the agent exchanges for the host-only cookie exactly once.
+ *
+ * Revocation needs no extra state here either: a single share session is refused by id through
+ * `state.revocations`, and "sign out everyone" rotates the route's `siteKey` (the control plane
+ * bumps the project's session epoch), so every cookie and token signed with the old key fails.
  */
 
 /** Longest callback-token lifetime the agent accepts (60 s plus clock skew). */

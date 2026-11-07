@@ -32,6 +32,8 @@ function makeCore(): Core {
 	});
 }
 
+const admin = buildPrincipal({ kind: 'user', userId: 'user_admin', orgId: 'org_a', role: 'owner', platformAdmin: true });
+
 describe('platform policies', () => {
 	test('default to the values that used to be hardcoded', () => {
 		const core = makeCore();
@@ -42,7 +44,7 @@ describe('platform policies', () => {
 
 	test('an update merges, persists and is read by the services', () => {
 		const core = makeCore();
-		core.policies.update({ trashDays: 14, retainedDeployments: 3 });
+		core.policies.update(admin, { trashDays: 14, retainedDeployments: 3 });
 		expect(core.policies.get().trashDays).toBe(14);
 		expect(core.policies.get().logRetentionDays).toBe(7);
 		expect(core.ctx.quota.retention('org_a')).toBe(3);
@@ -54,11 +56,20 @@ describe('platform policies', () => {
 
 	test('rejects out-of-range values, unknown keys and an incoherent certificate pair', () => {
 		const core = makeCore();
-		expect(() => core.policies.update({ trashDays: 0 })).toThrow(ValidationError);
-		expect(() => core.policies.update({ nope: 1 })).toThrow(ValidationError);
-		expect(() => core.policies.update({ databaseBackupSchedule: 'every day' })).toThrow(ValidationError);
-		expect(() => core.policies.update({ certCriticalDays: 20 })).toThrow(ValidationError);
+		expect(() => core.policies.update(admin, { trashDays: 0 })).toThrow(ValidationError);
+		expect(() => core.policies.update(admin, { nope: 1 })).toThrow(ValidationError);
+		expect(() => core.policies.update(admin, { databaseBackupSchedule: 'every day' })).toThrow(ValidationError);
+		expect(() => core.policies.update(admin, { certCriticalDays: 20 })).toThrow(ValidationError);
 		expect(core.policies.get()).toEqual(PLATFORM_POLICY_DEFAULTS);
+	});
+
+	test('only a platform admin session changes them', () => {
+		const core = makeCore();
+		const orgOwner = buildPrincipal({ kind: 'user', userId: 'user_b', orgId: 'org_a', role: 'owner' });
+		const adminKey = buildPrincipal({ kind: 'apiKey', userId: 'user_admin', orgId: 'org_a', role: 'owner', platformAdmin: true });
+		for (const principal of [orgOwner, adminKey])
+			expect(() => core.policies.update(principal, { trashDays: 30 })).toThrow(/platform admin/);
+		expect(core.policies.get().trashDays).toBe(PLATFORM_POLICY_DEFAULTS.trashDays);
 	});
 
 	test('a bad stored field falls back to its default without losing the others', () => {

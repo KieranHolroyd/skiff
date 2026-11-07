@@ -14,8 +14,17 @@ import {
 import * as z from 'zod';
 import {
 	backupTargetCreateSchema,
+	jobCommandSchema,
+	jobConcurrencyPolicies,
+	jobCreateSchema,
+	jobRunDone,
+	jobTimeoutSchema,
+	jobUpdateSchema,
+	type JobRunView,
 	appVolumeAttachSchema,
 	appVolumeDetachSchema,
+	appVolumeRestoreSchema,
+	appVolumeSnapshotCreateSchema,
 	bucketCreateSchema,
 	bucketUpdateSchema,
 	bucketNameSchema,
@@ -28,10 +37,16 @@ import {
 	databaseAttachSchema,
 	databaseBackupCreateSchema,
 	databaseBackupPolicySchema,
+	databasePitrBackupSchema,
+	databasePitrPolicySchema,
+	databasePitrRestoreSchema,
 	databaseCreateSchema,
 	databaseRestartSchema,
+	databaseReplicaCreateSchema,
 	databaseRestoreSchema,
+	databaseUpdateSchema,
 	databaseRotateSchema,
+	databaseCredentialCreateSchema,
 	serviceRestartSchema,
 	deployFilesSchema,
 	deploySiteSchema,
@@ -47,9 +62,13 @@ import {
 	setAccessSchema,
 	shareLinkCreateSchema,
 	storageAttachSchema,
+	storageKeyCreateSchema,
 	storageCreateSchema,
 	storageObjectKeySchema,
 	workloadSpecSchema,
+	planStackInputSchema,
+	applyStackInputSchema,
+	getTaskInputSchema,
 	dashboardTemplateIds,
 	dashboardTemplates,
 	dashboardVariableSchema,
@@ -68,8 +87,20 @@ import {
 	type DashboardView,
 	type DatabaseMetricPoint,
 	type DatabaseView,
+	type DatabaseReplicaView,
+	type DatabaseCredentialView,
 	EMAIL_MAX_RECIPIENTS,
+	EMAIL_SANDBOX_ADDRESS_LIMITS,
 	emailEventKinds,
+	emailSandboxAddressCreateSchema,
+	type EmailSandboxAddressView,
+	functionQueueNameSchema,
+	functionRequestMethods,
+	jetStreamNameSchema,
+	nodeTaskLimits,
+	queueMessageContentTypes,
+	type NodeTaskResultMap,
+	type NodeTaskView,
 	emailSendSchema,
 	type EmailDomainView,
 	type FeatureName,
@@ -77,15 +108,23 @@ import {
 	type BrokerMetricPoint,
 	type StorageMetricPoint,
 	type StorageView,
+	type StorageKeyView,
 	type OperationView,
 	type Permission,
 	type Principal,
 	type Role,
+	logDrainFormats,
+	logDrainKinds,
+	logDrainLevels,
+	logDrainSources,
+	type LogDrainView,
 } from '@skiff/contracts';
-import { featureEnabled } from '@skiff/core';
+import { featureEnabled, parseAuditTime } from '@skiff/core';
 import { authSecret } from './config';
 import { core } from './core';
 import { principalFromMcp } from './principal';
+import { consoleJson } from './container-console';
+import { containerConsoleDeps } from './container-console-deps';
 
 /**
  * Skiff's MCP server (DESIGN §6.3, D11, D29, D35).
@@ -283,6 +322,107 @@ async function brokerLastHour(principal: Principal, name: string, storageMb: num
 	};
 }
 
+/** Seconds `get_node_task` may hold the call open, as the REST `?wait=` cap. */
+const NODE_TASK_MAX_WAIT_SECONDS = 25;
+
+/** `SKIFF_Q_<queue>` is the JetStream stream behind a function queue (D112). */
+const queueStream = (queue: string) => `SKIFF_Q_${queue}`;
+
+/**
+ * A node task (D124) as an agent sees it: id, status, the node's result once it has one, and
+ * what to do next. A task still pending/running after the wait points at `get_node_task`.
+ */
+/** A job run for an MCP reply: the run, its newest output once it finished, and what to do next. */
+function describeJobRun(principal: Principal, project: ReturnType<typeof core.projects.requireRow>, run: JobRunView) {
+	if (!jobRunDone(run.status))
+		return {
+			run,
+			nextSteps: [
+				`The run is ${run.status}. Call get_job_run with project "${project.slug}", runId "${run.id}" and waitSeconds up to ${NODE_TASK_MAX_WAIT_SECONDS} for the result; do not run it again, that would start a second run.`,
+			],
+		};
+	let output: string[] | undefined;
+	try {
+		output = core.jobs.runLogs(principal, project, run.id, { limit: 100 }).events.map((event) => `${event.stream === 'stderr' ? '[stderr] ' : ''}${event.message}`);
+	} catch {
+		// Without logs:read the run itself is still useful.
+	}
+	return { run, ...(output ? { output } : {}) };
+}
+
+function describeNodeTask(task: NodeTaskView) {
+	const base = { taskId: task.id, kind: task.kind, status: task.status, target: task.target };
+	if (task.status === 'failed')
+		return { ...base, error: task.error, nextSteps: ['The node reported a failure; fix the cause above and run the tool again.'] };
+	if (task.status !== 'succeeded' || task.result === null)
+		return {
+			...base,
+			nextSteps: [
+				`The node has not reported a result yet (${task.status}). Call get_node_task with id "${task.id}" and waitSeconds up to ${NODE_TASK_MAX_WAIT_SECONDS} to get it; do not re-run the tool, that would queue it twice.`,
+			],
+		};
+	return { ...base, result: task.result, nextSteps: nodeTaskNextSteps(task) };
+}
+
+function nodeTaskNextSteps(task: NodeTaskView): string[] {
+	const broker = task.target.name;
+	switch (task.kind) {
+		case 'broker.queue.create': {
+			const result = task.result as NodeTaskResultMap['broker.queue.create'];
+			return [
+				result.created ? `Created stream ${result.stream} on ${broker}.` : `Stream ${result.stream} already existed on ${broker}; nothing changed.`,
+				'Functions bind it with a queue producer/consumer of the same name (the broker must be attached to the function project). Send a test message with send_queue_message.',
+			];
+		}
+		case 'broker.queue.send': {
+			const result = task.result as NodeTaskResultMap['broker.queue.send'];
+			const input = task.input as { queue?: string };
+			return [
+				`Stored ${result.sent} message${result.sent === 1 ? '' : 's'} in ${result.stream} (seq ${result.seqs.slice(0, 10).join(', ')}${result.seqs.length > 10 ? ', …' : ''}). A consumer function attached to queue "${input.queue ?? ''}" receives ${result.sent === 1 ? 'it' : 'them'} like any other message.`,
+				`Call peek_queue_messages({ broker: "${broker}", queue: "${input.queue ?? ''}" }) to see messages still waiting (a work queue drops acknowledged ones), or get_broker_queues for counts and consumer backlog. Check the consumer's get_logs for its handling.`,
+			];
+		}
+		case 'broker.queue.redrive': {
+			const result = task.result as NodeTaskResultMap['broker.queue.redrive'];
+			const input = task.input as { from?: string; to?: string };
+			return [
+				`Moved ${result.moved} message${result.moved === 1 ? '' : 's'} from "${input.from ?? ''}" to "${input.to ?? ''}".`,
+				result.remaining > 0
+					? `${result.remaining} remain in "${input.from ?? ''}"; call redrive_queue again to move more.`
+					: `"${input.from ?? ''}" is empty now. Follow the consumer with get_broker_queues and get_logs.`,
+			];
+		}
+		case 'broker.stream.peek': {
+			const result = task.result as NodeTaskResultMap['broker.stream.peek'];
+			return [
+				`${result.messages.length} of ${result.total} message${result.total === 1 ? '' : 's'} held in ${result.stream} (seq ${result.firstSeq}–${result.lastSeq}). Peeking does not consume or acknowledge anything.`,
+				...(result.messages.some((message) => message.truncated) ? [`Bodies over ${nodeTaskLimits.peekBodyBytes / 1024} KiB are cut (truncated: true).`] : []),
+				...(result.messages.some((message) => message.encoding === 'base64') ? ['Bodies that are not UTF-8 are base64 (encoding: "base64").'] : []),
+				result.nextSeq !== null ? `More messages follow: call peek_queue_messages with fromSeq ${result.nextSeq}.` : 'That is the end of the stream.',
+			];
+		}
+		case 'function.invoke': {
+			const result = task.result as NodeTaskResultMap['function.invoke'];
+			return [
+				`${result.status} ${result.statusText} in ${Math.round(result.durationMs)} ms${result.coldStart ? ' (cold start: this request started the idle host)' : ''}.`,
+				...(result.truncated ? [`The response body was cut at ${nodeTaskLimits.responseBodyBytes / 1024} KiB of ${result.size} bytes.`] : []),
+				...(result.encoding === 'base64' ? ['The body is not UTF-8, so it is base64.'] : []),
+				...(result.status >= 500 ? [`Read the function's errors with get_logs({ project: "${task.target.name}", level: "error" }).`] : []),
+			];
+		}
+		case 'function.scheduled': {
+			const result = task.result as NodeTaskResultMap['function.scheduled'];
+			return [
+				result.error
+					? `The scheduled handler failed (${result.status}): ${result.error}. See get_logs({ project: "${task.target.name}" }).`
+					: `The scheduled handler finished in ${Math.round(result.durationMs)} ms${result.coldStart ? ' (cold start)' : ''}. Its console output is in get_logs({ project: "${task.target.name}" }).`,
+			];
+		}
+		default:
+			return ['Done.'];
+	}
+}
+
 /** `attach_storage` without grants: read-write on the instance's only bucket, else ask for grants. */
 function defaultStorageGrants(principal: Principal, name: string): StorageGrant[] {
 	const buckets = core.storage.get(principal, name).buckets.filter((bucket) => bucket.state === 'ready');
@@ -321,10 +461,14 @@ async function run(handler: () => Promise<unknown> | unknown) {
 /** Results the user declined in a confirmation prompt; audited as such rather than as success. */
 const declined = new WeakSet<object>();
 
-/** Inline file contents can be megabytes: keep paths and sizes, never bodies, in the audit log. */
+/** Inline file contents can be megabytes: keep paths and sizes, never bodies, in the audit log. Message and request bodies likewise. */
 function summarizeArgs(input: unknown): unknown {
 	if (!input || typeof input !== 'object') return input;
 	const out: Record<string, unknown> = { ...(input as Record<string, unknown>) };
+	// Queue messages and test requests (D124): sizes and header names only, as core's own audit.
+	if (typeof out.body === 'string') out.body = { bytes: out.body.length };
+	if (out.headers && typeof out.headers === 'object' && !Array.isArray(out.headers))
+		out.headers = Object.keys(out.headers as Record<string, unknown>);
 	if (Array.isArray(out.files)) {
 		const files = out.files as Array<{ path?: unknown; content?: unknown }>;
 		out.files = {
@@ -495,6 +639,75 @@ function buildServer(
 				permissions: [...principal.permissions].sort(),
 				platform: core.ctx.config.platformOrigin,
 			})),
+	);
+
+	// --- documentation ------------------------------------------------------
+	// The docs ship inside each build, so these always describe the running version. Imported
+	// lazily: the module inlines the Markdown through Vite, which plain `bun test` runs lack.
+	const docsDb = async () => (await import('./docs')).docsDatabase;
+
+	tool(
+		'search_docs',
+		{
+			title: 'Search Skiff docs',
+			description:
+				'Full-text search over the Skiff documentation for this platform version: how-to guides, concepts, CLI, REST and MCP reference, self-hosting and troubleshooting runbooks. Returns ranked sections with links and excerpts; read one in full with read_docs. Use it for "how do I…", "what does … mean" and "why does … happen" questions before guessing.',
+			inputSchema: z.object({
+				query: z.string().min(1).max(200).describe('What to look for, in plain words'),
+				limit: z.number().int().min(1).max(20).optional().describe('Results to return (default 8)'),
+				section: z
+					.string()
+					.max(60)
+					.optional()
+					.describe('Only search one docs section by title, e.g. "Self-hosting" or "Data services"'),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+		},
+		async ({ query, limit, section }) =>
+			run(async () => {
+				const db = await docsDb();
+				const results = await db.search(query, { limit, section });
+				const { version } = await db.info();
+				return {
+					version,
+					results,
+					hint: results.length
+						? 'Call read_docs with a result\'s slug (and anchor) for the full text.'
+						: 'No matches. Try fewer or different words, or call read_docs without a slug for the table of contents.',
+				};
+			}),
+	);
+
+	tool(
+		'read_docs',
+		{
+			title: 'Read Skiff docs',
+			description:
+				'Read a Skiff documentation page as Markdown, or just one section of it (pass the anchor from search_docs). Without a slug, returns the table of contents and index details.',
+			inputSchema: z.object({
+				slug: z
+					.string()
+					.max(120)
+					.optional()
+					.describe('Page slug, e.g. "deploying/static-sites"; omit for the table of contents'),
+				anchor: z.string().max(120).optional().describe('Section anchor on that page, e.g. "promote-and-roll-back"'),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+		},
+		async ({ slug, anchor }) =>
+			run(async () => {
+				const db = await docsDb();
+				if (!slug) return { ...(await db.info()), sections: db.outline() };
+				const page = await db.read(slug, anchor);
+				if (!page) {
+					throw new Error(
+						anchor
+							? `No section "${anchor}" on docs page "${slug}". Call read_docs with just the slug to list its sections.`
+							: `No docs page "${slug}". Call read_docs without a slug for the table of contents, or search_docs.`,
+					);
+				}
+				return page;
+			}),
 	);
 
 	// --- projects -----------------------------------------------------------
@@ -779,6 +992,161 @@ function buildServer(
 			}),
 	);
 
+	// --- blueprints (plan 11, docs/OPERATIONS.md §12) -------------------------
+	/** Operation status → the MCP task status `get_task` reports. */
+	const taskStatus = (status: OperationView['status']) =>
+		status === 'queued' || status === 'planning'
+			? ('queued' as const)
+			: status === 'planned'
+				? ('input_required' as const)
+				: status === 'applying'
+					? ('running' as const)
+					: status === 'succeeded'
+						? ('succeeded' as const)
+						: status === 'cancelled'
+							? ('cancelled' as const)
+							: status === 'expired'
+								? ('expired' as const)
+								: ('failed' as const);
+	const stackNextSteps = (run: { operationId: string; status: OperationView['status'] }) =>
+		isTerminalOperation(run.status) ? {} : { nextSteps: [`Still running. Call get_task with taskId "${run.operationId}" to follow it.`] };
+
+	tool(
+		'plan_stack',
+		{
+			title: 'Plan a blueprint',
+			description:
+				'Diff a Skiff blueprint (YAML or JSON, `apiVersion: skiff/v1`: projects, environments, domains, workload settings, databases, storage buckets, brokers and attachments) against live state. ' +
+				'Changes nothing. Returns every resource step (create, update, noop) with field-level changes and a planHash to pass to apply_stack within an hour. ' +
+				'Any problem (a missing permission or secret, an immutable field, a taken name) fails the plan with its resource path. Blueprints hold secret names, never values. Pruning is not available over MCP.',
+			inputSchema: planStackInputSchema,
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('project:read'),
+			feature: 'BLUEPRINTS',
+		},
+		async ({ blueprint }) =>
+			run(async () => {
+				const plan = await core.blueprints.plan(principal, { document: blueprint });
+				const pending = plan.summary.create + plan.summary.update;
+				return {
+					...plan,
+					nextSteps: pending
+						? [`Show the user this plan, then call apply_stack with planHash "${plan.planHash}" (it asks them to confirm).`]
+						: ['Everything is already up to date; there is nothing to apply.'],
+				};
+			}),
+	);
+
+	tool(
+		'apply_stack',
+		{
+			title: 'Apply a blueprint plan',
+			description:
+				'Apply a plan from plan_stack by its planHash. The user confirms the exact plan; live state is re-read first and a plan whose state moved is refused (plan again). ' +
+				'Steps run in order through the normal services; the first failure stops the run and later steps are skipped (nothing is rolled back). Plans that delete resources (prune) are refused here. Requires confirmation.',
+			inputSchema: applyStackInputSchema,
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+			scopeChallenge: requires('project:update'),
+			feature: 'BLUEPRINTS',
+		},
+		async ({ planHash }, ctx) => {
+			const applyNow = () =>
+				run(async () => {
+					const result = await core.blueprints.applyAndWait(principal, { planHash }, 20_000);
+					return { ...result, ...stackNextSteps(result) };
+				});
+			// The dashboard assistant gates destructive tools in the chat UI before they reach here.
+			if (era === 'assistant') return applyNow();
+			let plan: ReturnType<typeof core.blueprints.pendingPlan>;
+			try {
+				plan = core.blueprints.pendingPlan(principal, planHash);
+			} catch (error) {
+				return run(() => {
+					throw error;
+				});
+			}
+			if (!plan)
+				return {
+					isError: true,
+					...text('There is no pending plan with that hash (plans last an hour, apply once, and belong to whoever made them). Call plan_stack again.'),
+				};
+			if (plan.prune && plan.summary.delete > 0)
+				return {
+					isError: true,
+					...text('This plan deletes resources. Pruning is a human action: apply it from the Skiff dashboard (New → Blueprint) or with `skif blueprint apply --prune`.'),
+				};
+			if (era === 'legacy')
+				return {
+					isError: true,
+					...text(
+						`Applying blueprint "${plan.stack}" needs your confirmation, which this MCP client can't show. ` +
+							`Ask the user to apply it from the Skiff dashboard (${core.ctx.config.platformOrigin}/new/blueprint) or with \`skif blueprint apply\`.`,
+					),
+				};
+			const target = `stack:${plan.stack}:${planHash}`;
+			const key = 'confirm_apply_stack';
+			const schema = z.object({ confirm: z.boolean() });
+			// Only an answer to a prompt we issued (signed requestState bound to this stack and plan) counts.
+			const prompted = verifyConfirmation(ctx.mcpReq.requestState(), principal, 'apply_stack', target);
+			const answer = prompted ? acceptedContent(ctx.mcpReq.inputResponses, key, schema) : undefined;
+			const responded = prompted && ctx.mcpReq.inputResponses?.[key] !== undefined;
+			if (responded && answer?.confirm !== true) {
+				const cancelled = text(`Cancelled: blueprint "${plan.stack}" was not applied (the user did not confirm).`);
+				declined.add(cancelled);
+				return cancelled;
+			}
+			if (answer?.confirm === true) return applyNow();
+			const changing = plan.resources.filter((resource) => resource.action !== 'noop');
+			const listed = changing.slice(0, 12).map((resource) => `${resource.action} ${resource.key}`);
+			const message = [
+				`Apply blueprint "${plan.stack}"? ${plan.summary.create} to create, ${plan.summary.update} to update.`,
+				listed.length ? `${listed.join('; ')}${changing.length > listed.length ? `; and ${changing.length - listed.length} more` : ''}.` : '',
+				'Steps stop at the first failure; nothing is rolled back.',
+			]
+				.filter(Boolean)
+				.join(' ');
+			return inputRequired({
+				inputRequests: { [key]: inputRequired.elicit({ message, requestedSchema: schema }) },
+				requestState: mintConfirmation(principal, 'apply_stack', target),
+			});
+		},
+	);
+
+	tool(
+		'get_task',
+		{
+			title: 'Get a durable task',
+			description:
+				'Poll durable work by its taskId: a blueprint run started by apply_stack (taskId is the operation id) or any other operation. Returns its status, progress and, for blueprint runs, every resource step.',
+			inputSchema: getTaskInputSchema,
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('project:read'),
+		},
+		async ({ taskId }) =>
+			run(() => {
+				const operation = core.operations.get(principal, taskId);
+				const result =
+					operation.action === 'blueprint.apply' ? core.blueprints.applyView(principal, taskId) : operationResult(operation);
+				const failed = operation.status === 'failed' || operation.status === 'partial';
+				return {
+					id: operation.id,
+					tool: operation.action === 'blueprint.apply' ? 'apply_stack' : operation.action,
+					status: taskStatus(operation.status),
+					progress: operation.total > 0 ? Math.round((operation.done / operation.total) * 100) : null,
+					result,
+					error: failed ? ('error' in result && result.error ? result.error : `The operation ${operation.status}.`) : null,
+					approval: {
+						required: operation.status === 'planned',
+						requestState: null,
+						expiresAt: operation.planExpiresAt,
+					},
+					createdAt: operation.createdAt,
+					updatedAt: operation.finishedAt ?? operation.startedAt ?? operation.createdAt,
+					expiresAt: operation.planExpiresAt,
+				};
+			}),
+	);
+
 	// --- deploying ----------------------------------------------------------
 	tool(
 		'deploy_site',
@@ -1030,6 +1398,287 @@ function buildServer(
 			}),
 	);
 
+	// Test requests and cron runs on the function's own host (D124, docs/FUNCTIONS.md §4.11).
+	tool(
+		'invoke_function',
+		{
+			title: 'Invoke function',
+			description:
+				'Send one real HTTP request to a function\'s live production host on its node, bypassing domains, Caddy and access rules ' +
+				'(so private projects answer too). It runs the deployed code for real: a POST, PUT or DELETE has the same side effects as ' +
+				'production traffic (database writes, outgoing calls, queue messages). Only send what the user asked for. Paths under ' +
+				`/__skiff/ are refused; request bodies are at most ${nodeTaskLimits.requestBodyBytes / 1024 / 1024} MiB. The result is the ` +
+				`response status, headers and body (cut at ${nodeTaskLimits.responseBodyBytes / 1024} KiB), durationMs and coldStart ` +
+				`(true when the request woke an idle host). Waits up to ${nodeTaskLimits.waitMs / 1000} s, then returns a task id for get_node_task.`,
+			inputSchema: z.object({
+				project: z.string().describe('Function project slug'),
+				method: z.enum(functionRequestMethods).default('GET'),
+				path: z.string().max(4096).default('/').describe('Path and query, e.g. /api/users?limit=5'),
+				headers: z.record(z.string(), z.string()).default({}).describe('Request headers (at most 50)'),
+				body: z.string().max(nodeTaskLimits.requestBodyBytes).optional().describe('Request body; not for GET or HEAD'),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+			scopeChallenge: requires('deployment:create'),
+		},
+		async ({ project, ...input }) =>
+			run(async () => {
+				const row = core.projects.requireRow(principal, project);
+				return describeNodeTask(await core.nodeTasks.run(principal, core.nodeTasks.functionTask(principal, row, 'function.invoke', input)));
+			}),
+	);
+
+	tool(
+		'run_function_cron',
+		{
+			title: 'Run function cron now',
+			description:
+				'Run a function\'s scheduled() handler once now, as if one of its cron triggers fired; the handler sees `cron` as ' +
+				'controller.cron. `cron` must be one of the triggers.crons of the active deployment (get_function lists them). It runs the ' +
+				'production code for real, with its side effects. The result is the status, the handler\'s error if any, durationMs and coldStart.',
+			inputSchema: z.object({
+				project: z.string().describe('Function project slug'),
+				cron: z.string().min(1).max(120).describe('One of the function\'s cron expressions, e.g. */5 * * * *'),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+			scopeChallenge: requires('deployment:create'),
+		},
+		async ({ project, cron }) =>
+			run(async () => {
+				const row = core.projects.requireRow(principal, project);
+				return describeNodeTask(await core.nodeTasks.run(principal, core.nodeTasks.functionTask(principal, row, 'function.scheduled', { cron })));
+			}),
+	);
+
+	// --- jobs (plan 09, docs/SCHEDULER.md §Jobs): cron and one-off commands on a process/container app ---
+
+	const jobProject = z.string().describe('Process or container project slug');
+	const jobName = z.string().min(1).max(40).describe('Job name, unique in the project');
+	const jobWait = z
+		.number()
+		.int()
+		.min(0)
+		.max(NODE_TASK_MAX_WAIT_SECONDS)
+		.default(20)
+		.describe('Seconds to wait for the run to finish before returning it as queued/running');
+
+	tool(
+		'list_jobs',
+		{
+			feature: 'JOBS',
+			title: 'List jobs',
+			description:
+				'The cron and manual jobs of a process or container project: command (argv), schedule (five-field UTC cron, null = manual only), ' +
+				'timeout, concurrency policy, retries, enabled, next run and the last run.',
+			inputSchema: z.object({ project: jobProject }),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('project:read'),
+		},
+		async ({ project }) => run(() => ({ jobs: core.jobs.list(principal, core.projects.requireRow(principal, project)) })),
+	);
+
+	tool(
+		'create_job',
+		{
+			feature: 'JOBS',
+			title: 'Create job',
+			description:
+				'Define a job on a process or container project. `command` is an argv array run in the app\'s sandbox against its current release ' +
+				'(no shell: ["bun","scripts/tidy.ts","--days","30"], or ["sh","-c","…"] if you really need one). `schedule` is a five-field UTC ' +
+				'cron (minute hour day month weekday; no names or macros; day-of-month AND day-of-week must both match), or null for a job you run ' +
+				'by hand. concurrency: forbid (default; an overlapping run is recorded skipped), allow, or replace (cancels the running one). ' +
+				'maxRetries retries a failed or timed-out run with backoff (30 s, 1 min, 2 min, …).',
+			inputSchema: jobCreateSchema.extend({ project: jobProject }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('project:update'),
+		},
+		async ({ project, ...input }) => run(() => core.jobs.create(principal, core.projects.requireRow(principal, project), input)),
+	);
+
+	tool(
+		'update_job',
+		{
+			feature: 'JOBS',
+			title: 'Update job',
+			description:
+				'Change a job\'s command, schedule (null removes it; the job stays runnable by hand), timeoutSeconds, concurrency, maxRetries or enabled.',
+			inputSchema: z.object({
+				project: jobProject,
+				job: jobName,
+				command: jobCommandSchema.optional(),
+				schedule: jobCreateSchema.shape.schedule.unwrap().nullable().optional(),
+				timeoutSeconds: jobTimeoutSchema.optional(),
+				concurrency: z.enum(jobConcurrencyPolicies).optional(),
+				maxRetries: jobCreateSchema.shape.maxRetries.unwrap().optional(),
+				enabled: z.boolean().optional(),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('project:update'),
+		},
+		async ({ project, job, ...input }) =>
+			run(() => core.jobs.update(principal, core.projects.requireRow(principal, project), job, jobUpdateSchema.parse(input))),
+	);
+
+	tool(
+		'pause_job',
+		{
+			feature: 'JOBS',
+			title: 'Pause or resume job',
+			description:
+				'Pause a job\'s schedule (paused: true) or resume it (paused: false; it next fires at the first occurrence after now, missed ones are not replayed). ' +
+				'A paused job keeps its history and can still be run with run_job.',
+			inputSchema: z.object({ project: jobProject, job: jobName, paused: z.boolean().default(true) }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('project:update'),
+		},
+		async ({ project, job, paused }) =>
+			run(() => core.jobs.setEnabled(principal, core.projects.requireRow(principal, project), job, !paused)),
+	);
+
+	tool(
+		'run_job',
+		{
+			feature: 'JOBS',
+			title: 'Run job now',
+			description:
+				'Run a job once now, whatever its schedule or pause state, on the project\'s node with the app\'s env, secrets and volumes. It runs production ' +
+				'code for real. Waits up to waitSeconds for the exit and returns the run (status, exitCode, error) and its last output lines.',
+			inputSchema: z.object({ project: jobProject, job: jobName, waitSeconds: jobWait }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+			scopeChallenge: requires('deployment:create'),
+		},
+		async ({ project, job, waitSeconds }) =>
+			run(async () => {
+				const row = core.projects.requireRow(principal, project);
+				const started = core.jobs.run(principal, row, job);
+				return describeJobRun(principal, row, await core.jobs.wait(principal, row, started.id, waitSeconds * 1000));
+			}),
+	);
+
+	tool(
+		'run_command',
+		{
+			feature: 'JOBS',
+			title: 'Run one-off command',
+			description:
+				'Run one command once against the current release of a process or container app (a migration, a console script), in the app\'s sandbox ' +
+				'with its env, secrets and volumes; it is not saved as a job. `command` is an argv array, never a shell string. It runs against production ' +
+				'data for real. Waits up to waitSeconds and returns the run and its last output lines.',
+			inputSchema: z.object({
+				project: jobProject,
+				command: jobCommandSchema,
+				timeoutSeconds: jobTimeoutSchema.default(600),
+				waitSeconds: jobWait,
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+			scopeChallenge: requires('deployment:create'),
+		},
+		async ({ project, command, timeoutSeconds, waitSeconds }) =>
+			run(async () => {
+				const row = core.projects.requireRow(principal, project);
+				const started = core.jobs.runOneOff(principal, row, { command, timeoutSeconds });
+				return describeJobRun(principal, row, await core.jobs.wait(principal, row, started.id, waitSeconds * 1000));
+			}),
+	);
+
+	tool(
+		'get_job_runs',
+		{
+			feature: 'JOBS',
+			title: 'Get job runs',
+			description:
+				'Run history, newest first: one job\'s runs (job), only one-off commands (oneOff), or every run of the project. Each has trigger ' +
+				'(schedule/manual/retry), attempt, status (queued/running/succeeded/failed/timeout/cancelled/skipped), exitCode, error and timings.',
+			inputSchema: z.object({
+				project: jobProject,
+				job: jobName.optional(),
+				oneOff: z.boolean().default(false),
+				limit: z.number().int().min(1).max(200).default(20),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('project:read'),
+		},
+		async ({ project, job, oneOff, limit }) =>
+			run(() => ({ runs: core.jobs.runs(principal, core.projects.requireRow(principal, project), { ...(job ? { job } : {}), oneOff, limit }) })),
+	);
+
+	tool(
+		'get_job_run',
+		{
+			feature: 'JOBS',
+			title: 'Get job run',
+			description:
+				'One run with its last output lines (needs logs:read). waitSeconds holds the call until the run finishes, for a run that was still going.',
+			inputSchema: z.object({
+				project: jobProject,
+				runId: z.string().regex(/^jr_[a-f0-9]{32}$/).describe('Run id (jr_…)'),
+				waitSeconds: jobWait.default(0),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('project:read'),
+		},
+		async ({ project, runId, waitSeconds }) =>
+			run(async () => {
+				const row = core.projects.requireRow(principal, project);
+				return describeJobRun(principal, row, await core.jobs.wait(principal, row, runId, waitSeconds * 1000));
+			}),
+	);
+
+	tool(
+		'cancel_job_run',
+		{
+			feature: 'JOBS',
+			title: 'Cancel job run',
+			description: 'Cancel a queued run, or stop a running one (SIGTERM, then SIGKILL after 30 s; cancelRequested shows until the node confirms).',
+			inputSchema: z.object({ project: jobProject, runId: z.string().regex(/^jr_[a-f0-9]{32}$/).describe('Run id (jr_…)') }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('deployment:create'),
+		},
+		async ({ project, runId }) => run(() => core.jobs.cancelRun(principal, core.projects.requireRow(principal, project), runId)),
+	);
+
+	tool(
+		'delete_job',
+		{
+			feature: 'JOBS',
+			title: 'Delete job',
+			description: 'Delete a job with its run history and output; a run in progress is stopped. To stop it firing for a while, pause_job instead. Requires confirmation.',
+			inputSchema: z.object({ project: jobProject, job: jobName }),
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+			scopeChallenge: requires('project:update'),
+		},
+		async ({ project, job }, ctx) => {
+			const target = `${project}/${job}`;
+			const remove = () => run(() => core.jobs.remove(principal, core.projects.requireRow(principal, project), job));
+			if (era === 'assistant') return remove();
+			if (era === 'legacy')
+				return {
+					isError: true,
+					...text(`Deleting job "${job}" needs your confirmation, which this MCP client can't show. Delete it from the Skiff dashboard (${project} → Jobs).`),
+				};
+			const key = `confirm_delete_job:${target}`;
+			const schema = z.object({ confirm: z.boolean() });
+			const prompted = verifyConfirmation(ctx.mcpReq.requestState(), principal, 'delete_job', target);
+			const answer = prompted ? acceptedContent(ctx.mcpReq.inputResponses, key, schema) : undefined;
+			const responded = prompted && ctx.mcpReq.inputResponses?.[key] !== undefined;
+			if (responded && answer?.confirm !== true) {
+				const cancelled = text(`Cancelled: job "${job}" was not deleted (the user did not confirm).`);
+				declined.add(cancelled);
+				return cancelled;
+			}
+			if (answer?.confirm !== true)
+				return inputRequired({
+					inputRequests: {
+						[key]: inputRequired.elicit({
+							message: `Delete job "${job}" from ${project}? Its schedule, run history and output are removed; a run in progress is stopped.`,
+							requestedSchema: schema,
+						}),
+					},
+					requestState: mintConfirmation(principal, 'delete_job', target),
+				});
+			return remove();
+		},
+	);
+
 	tool(
 		'set_workload',
 		{
@@ -1159,10 +1808,88 @@ function buildServer(
 			}),
 	);
 
+	tool(
+		'list_volume_snapshots',
+		{
+			title: 'List app volume snapshots',
+			description:
+				'List the snapshots of one app volume, newest first: status, size, sha256 checksum, how the node copied it (`reflink`, `paused`, `idle` or `live`), the backup target it was written to and when a restore last verified it. ' +
+				'A trashed volume keeps its snapshots until it is purged.',
+			inputSchema: z.object({
+				project: z.string().describe('Project slug'),
+				volume: z.string().describe('Volume name'),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('project:read'),
+		},
+		async ({ project, volume }) =>
+			run(() => {
+				const row = core.projects.requireRow(principal, project);
+				return { project, volume, snapshots: core.appVolumes.lifecycle.listSnapshots(principal, row, volume) };
+			}),
+	);
+
+	tool(
+		'snapshot_volume',
+		{
+			title: 'Snapshot app volume',
+			description:
+				"Queue a snapshot of an app volume. Its node pauses the read-write writer (a cgroup freeze, not a restart) while it copies, then streams a gzip tar to the backup target that applies now (or `target`). " +
+				'`quiesce: false` copies without pausing and may be inconsistent. Agents should call this before a risky migration; follow it with list_volume_snapshots.',
+			inputSchema: appVolumeSnapshotCreateSchema.extend({
+				project: z.string().describe('Project slug'),
+				volume: z.string().describe('Volume name'),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('project:update'),
+		},
+		async ({ project, volume, ...input }) =>
+			run(() => {
+				const row = core.projects.requireRow(principal, project);
+				const snapshot = core.appVolumes.lifecycle.createSnapshot(principal, row, volume, input);
+				return {
+					snapshot,
+					nextSteps: [
+						...(snapshot.quiesce ? [] : ['quiesce is off: the copy may be inconsistent if the app writes while it runs.']),
+						'The volume\'s node picks the task up on its next pull; poll list_volume_snapshots until status is ok or failed.',
+					],
+				};
+			}),
+	);
+
+	tool(
+		'restore_volume',
+		{
+			title: 'Restore app volume snapshot',
+			description:
+				'Restore a completed snapshot into a NEW volume in the same project (never over the source), on the same backing and at least the same size. ' +
+				'Quotas and disk admission apply. The new volume cannot be attached until its node has extracted the archive and matched its checksum.',
+			inputSchema: appVolumeRestoreSchema.extend({
+				project: z.string().describe('Project slug'),
+				volume: z.string().describe('Source volume name'),
+				snapshotId: z.string().describe('Snapshot id (avs_…) from list_volume_snapshots'),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('project:update'),
+		},
+		async ({ project, volume, snapshotId, ...input }) =>
+			run(() => {
+				const row = core.projects.requireRow(principal, project);
+				const view = core.appVolumes.lifecycle.restore(principal, row, volume, snapshotId, input);
+				return {
+					volume: view,
+					nextSteps: [
+						`Poll list_volumes until "${view.name}" is ready (restoringFrom is null).`,
+						`Then attach it with attach_volume({ project: "${project}", volume: "${view.name}", mountPath: "/var/lib/app" }).`,
+					],
+				};
+			}),
+	);
+
 	// --- managed databases (docs/DATABASES.md; no credentials or purge over MCP, D58/D53) ----
 	const connectionNote =
 		'Attached apps get <PREFIX>_URL, _HOST, _PORT, _USER, _PASSWORD and _NAME injected at activation (PREFIX defaults to DATABASE; ' +
-		'MONGODB for MongoDB, which also gets _URI; REDIS for Valkey/Redis), ' +
+		'MONGODB for MongoDB, which also gets _URI; REDIS for Valkey/Redis; CLICKHOUSE for ClickHouse, whose URL is its HTTP interface), ' +
 		"so read the URL from the environment; never hard-code credentials. An app must run on the database's node: " +
 		"placement `auto` handles that, an explicit placement on another node is rejected.";
 
@@ -1233,8 +1960,9 @@ function buildServer(
 			title: 'Create database',
 			description:
 				'Create a managed database. `engine` is postgres (default; 17 or 16), mysql (8.4 or 9.7), mariadb (11.8 or 11.4), ' +
-				'mongodb (8.0 or 9.0), valkey (9.1 or 8.1, Redis-compatible) or redis (8.10 or 8.8). Pooling, extensions, metrics ' +
-				'and PITR are Postgres-only; MySQL, MariaDB and MongoDB also have backups. Pass `project` to attach it in the same call; ' +
+				'mongodb (8.0 or 9.0), valkey (9.1 or 8.1, Redis-compatible), redis (8.10 or 8.8) or clickhouse (26.8 or 26.3, ' +
+				'analytics; at least 1 GB memory, default 2 GB). Pooling, extensions, metrics and PITR are Postgres-only; every engine ' +
+				'has backups (its native dump format); ClickHouse has no studio yet. Pass `project` to attach it in the same call; ' +
 				`the database is then placed on that project's node. ${connectionNote}`,
 			inputSchema: databaseCreateSchema,
 			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
@@ -1264,8 +1992,8 @@ function buildServer(
 		{
 			title: 'List database backups',
 			description:
-				'List logical backups for one database with size, checksum, age and whether a restore has been verified. ' +
-				'Artifacts live in the platform object store; no credentials are returned.',
+				'List logical backups for one database with size, checksum, age, whether a restore has been verified and the target each was written to (`target.available` is false when that target was deleted). ' +
+				'Restores and retention always use the recorded target; no credentials are returned.',
 			inputSchema: z.object({ database: z.string().describe('Database name') }),
 			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 			scopeChallenge: requires('database:read'),
@@ -1326,7 +2054,7 @@ function buildServer(
 		{
 			title: 'Back up database',
 			description:
-				'Queue an on-demand `pg_dump -Fc` backup. The node streams it to the platform object store; follow it with ' +
+				'Queue an on-demand backup in the engine\'s native format (`pg_dump -Fc`, mysqldump, mongodump, an RDB snapshot or a ClickHouse BACKUP archive). The node streams it to the backup target that applies now, which the backup records; follow it with ' +
 				'list_database_backups. Agents should call this before a risky migration.',
 			inputSchema: databaseBackupCreateSchema.extend({ database: z.string().describe('Database name') }),
 			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
@@ -1348,7 +2076,7 @@ function buildServer(
 			title: 'Restore database backup',
 			description:
 				'Restore a backup into a brand-new database (never in place). The new instance gets new credentials and its node ' +
-				'runs `pg_restore` then a verification query. Requires a completed backup from list_database_backups.',
+				'restores the dump with the engine\'s own tool, then runs a verification query. Requires a completed backup from list_database_backups.',
 			inputSchema: databaseRestoreSchema.extend({
 				database: z.string().describe('Source database name'),
 				backupId: z.string().describe('Backup id'),
@@ -1382,6 +2110,91 @@ function buildServer(
 		},
 		async ({ database, ...input }) =>
 			run(() => ({ policy: core.databases.setBackupPolicy(principal, database, input) })),
+	);
+
+	// ---------------------------------------------------------------- point-in-time recovery (docs/PITR.md)
+
+	tool(
+		'get_database_pitr',
+		{
+			title: 'Get database PITR status',
+			description:
+				'Point-in-time recovery state for one PostgreSQL database: whether WAL archiving is on, archive health, the last ' +
+				'base backup and the recoverable window (`recoverableFrom` → `recoverableTo`, from the node\'s check every 15 minutes). ' +
+				'A restore target must fall inside that window. Offered while SKIFF_FEATURE_PITR is on; never returns repository credentials.',
+			inputSchema: z.object({ database: z.string().describe('Database name') }),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			feature: 'PITR',
+			scopeChallenge: requires('database:read'),
+		},
+		async ({ database }) => run(() => ({ pitr: core.databases.pitrStatus(principal, database) })),
+	);
+
+	tool(
+		'set_database_pitr',
+		{
+			title: 'Turn database PITR on or off',
+			description:
+				'Enable or disable point-in-time recovery for a PostgreSQL 18 database on the standard image (needs SKIFF_FEATURE_PITR ' +
+				'and a pgBackRest repository on the control plane). Enabling restarts the database on the PITR image and queues the ' +
+				'first full base backup; the recoverable window appears once the node reports it. Disabling stops WAL archiving.',
+			inputSchema: databasePitrPolicySchema.extend({ database: z.string().describe('Database name') }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+			feature: 'PITR',
+			scopeChallenge: requires('database:update'),
+		},
+		async ({ database, ...input }) =>
+			run(() => ({
+				pitr: core.databases.setPitrPolicy(principal, database, input),
+				nextSteps: input.enabled
+					? ['Poll get_database_pitr until lastBaseBackupAt and recoverableFrom are set before relying on a restore.']
+					: [],
+			})),
+	);
+
+	tool(
+		'backup_database_pitr',
+		{
+			title: 'Take a PITR base backup',
+			description:
+				'Queue a pgBackRest base backup (full, diff or incr; default full) for a database with PITR on. Weekly full and daily ' +
+				'differential backups already run on their own; take one before a risky change to shorten the WAL a restore must replay.',
+			inputSchema: databasePitrBackupSchema.extend({ database: z.string().describe('Database name') }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			feature: 'PITR',
+			scopeChallenge: requires('database:update'),
+		},
+		async ({ database, ...input }) =>
+			run(() => ({
+				task: core.databases.pitrBackup(principal, database, input),
+				nextSteps: ['The node runs it on its next pull; follow lastBaseBackupAt in get_database_pitr.'],
+			})),
+	);
+
+	tool(
+		'restore_database_to_time',
+		{
+			title: 'Restore database to a point in time',
+			description:
+				'Restore a PITR-enabled database to a moment (ISO 8601 with an offset or Z) into a brand-new database on the same node ' +
+				'(never in place). The time must be inside the recoverable window from get_database_pitr. The new database gets its own ' +
+				'credentials, stays pending until the node has replayed WAL and verified a login, and has scheduled dumps paused until then.',
+			inputSchema: databasePitrRestoreSchema.extend({ database: z.string().describe('Source database name') }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			feature: 'PITR',
+			scopeChallenge: requires('database:create'),
+		},
+		async ({ database, ...input }) =>
+			run(() => {
+				const view = core.databases.restoreToTimestamp(principal, database, input);
+				return {
+					database: view,
+					nextSteps: [
+						`Follow get_database("${view.name}") until it is running; get_database_pitr("${database}") shows verifiedAt.`,
+						`Compare rows, then attach_database({ project, database: "${view.name}" }).`,
+					],
+				};
+			}),
 	);
 
 	tool(
@@ -1436,6 +2249,28 @@ function buildServer(
 	);
 
 	tool(
+		'update_database',
+		{
+			title: 'Update database',
+			description:
+				'Resize a database (memory, CPU, storage budget), turn the PgBouncer pooler on or off, set the enabled ' +
+				'PostgreSQL extensions (the full list; removing one never drops it), or move MySQL, MariaDB, Valkey, Redis ' +
+				'or ClickHouse forward to a newer listed version in place. Downgrades, MongoDB version changes and ' +
+				'PostgreSQL major changes are refused; a Postgres major goes through the upgrade planner. A version, ' +
+				'pooler or extension change restarts the database on its node; memory and CPU limits apply at its next ' +
+				'restart (restart_database). The data is kept.',
+			inputSchema: z.object({ database: z.string().describe('Database name'), ...databaseUpdateSchema.shape }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('database:update'),
+		},
+		async ({ database, ...patch }) =>
+			run(() => ({
+				database: core.databases.update(principal, database, patch),
+				nextSteps: ['Follow get_database until it is running again; call restart_database to apply new limits now.'],
+			})),
+	);
+
+	tool(
 		'restart_database',
 		{
 			title: 'Restart database',
@@ -1461,6 +2296,109 @@ function buildServer(
 			}),
 	);
 
+	// --- read replicas (docs/CLUSTERING.md §9.2, C7). Promotion is dashboard/CLI/REST only. ---
+	tool(
+		'list_database_replicas',
+		{
+			title: 'List database replicas',
+			description:
+				'List the streaming read replicas of a Postgres database: node, status (pending, streaming, lagging, stopped, lost, failed), ' +
+				'replay LSN, lag in bytes and seconds, and the promotion history. Attached apps get <PREFIX>_READ_URL, _READ_URLS, ' +
+				'_READ_HOST and _READ_PORT while a replica they can reach is streaming or lagging; reads may trail the primary by the lag.',
+			inputSchema: z.object({ database: z.string().describe('Database name') }),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('database:read'),
+		},
+		async ({ database }) =>
+			run(() => ({
+				database,
+				primaryGeneration: core.databases.get(principal, database).primaryGeneration,
+				replicas: core.databaseReplicas.list(principal, database),
+				failovers: core.databaseReplicas.failovers(principal, database),
+			})),
+	);
+
+	tool(
+		'create_database_replica',
+		{
+			title: 'Add a database replica',
+			description:
+				'Add an asynchronous streaming read replica of a Postgres database on a node (another node for protection from node loss, ' +
+				'or the same node for read scaling only). It reserves the database\'s memory on that node, copies the primary with ' +
+				'pg_basebackup on first start, then streams. Attached apps restart once it streams, to pick up <PREFIX>_READ_URL. ' +
+				'Synchronous replicas are not available.',
+			inputSchema: databaseReplicaCreateSchema.extend({ database: z.string().describe('Database name') }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('database:update'),
+		},
+		async ({ database, ...input }) =>
+			run(() => ({
+				replica: core.databaseReplicas.add(principal, database, input),
+				nextSteps: ['Follow list_database_replicas until the replica is streaming; the first copy takes as long as pg_basebackup needs.'],
+			})),
+	);
+
+	tool(
+		'delete_database_replica',
+		{
+			title: 'Remove a database replica',
+			description:
+				'Remove a read replica: it stops, its node deletes its copy of the data and the primary drops its replication slot. ' +
+				'The primary and its data are untouched; apps lose <PREFIX>_READ_URL if it was their read target. Requires confirmation.',
+			inputSchema: z.object({
+				database: z.string().describe('Database name'),
+				replica: z.string().describe('Replica id (dbr_…)'),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+			scopeChallenge: requires('database:read', 'database:update'),
+		},
+		async ({ database, replica }, ctx) => {
+			const target = `${database}/${replica}`;
+			if (era === 'assistant') return run(() => ({ replica: core.databaseReplicas.remove(principal, database, replica) }));
+			if (era === 'legacy')
+				return {
+					isError: true,
+					...text(
+						`Removing replica ${replica} needs your confirmation, which this MCP client can't show. ` +
+							`Ask the user to remove it from the Skiff dashboard: ${core.ctx.config.platformOrigin}/databases/${encodeURIComponent(database)}`,
+					),
+				};
+			const key = `confirm_delete_database_replica:${target}`;
+			const schema = z.object({ confirm: z.boolean() });
+			const prompted = verifyConfirmation(ctx.mcpReq.requestState(), principal, 'delete_database_replica', target);
+			const answer = prompted ? acceptedContent(ctx.mcpReq.inputResponses, key, schema) : undefined;
+			const responded = prompted && ctx.mcpReq.inputResponses?.[key] !== undefined;
+			if (responded && answer?.confirm !== true) {
+				const cancelled = text(`Cancelled: replica ${replica} was not removed (the user did not confirm).`);
+				declined.add(cancelled);
+				return cancelled;
+			}
+			if (answer?.confirm !== true) {
+				let found: DatabaseReplicaView | undefined;
+				try {
+					found = core.databaseReplicas.list(principal, database).find((item) => item.id === replica);
+				} catch (error) {
+					return run(() => {
+						throw error;
+					});
+				}
+				if (!found) return { isError: true, ...text(`Database "${database}" has no replica ${replica}.`) };
+				return inputRequired({
+					inputRequests: {
+						[key]: inputRequired.elicit({
+							message:
+								`Remove the replica of "${database}" on node "${found.nodeName ?? found.nodeId}"? Its copy of the data is ` +
+								'deleted from that node; the primary is untouched.',
+							requestedSchema: schema,
+						}),
+					},
+					requestState: mintConfirmation(principal, 'delete_database_replica', target),
+				});
+			}
+			return run(() => ({ replica: core.databaseReplicas.remove(principal, database, replica) }));
+		},
+	);
+
 	tool(
 		'rotate_database_credentials',
 		{
@@ -1482,13 +2420,141 @@ function buildServer(
 			}),
 	);
 
+	// Named credentials (docs/DATABASES.md §16). Metadata only: a password is never returned over
+	// MCP; apps get theirs injected and humans reveal it from the dashboard or `skif db credentials`.
+	const credentialNote =
+		'No password is returned over MCP: apps attached with the credential get it injected, and humans reveal it from the dashboard or `skif db credentials reveal`.';
+	const credentialInput = z.object({
+		database: z.string().describe('Database name'),
+		credentialId: z.string().describe('Credential id (dbc_…) from list_database_credentials'),
+	});
+
+	tool(
+		'list_database_credentials',
+		{
+			title: 'List database credentials',
+			description:
+				'List a database\'s credentials: the built-in owner and monitor roles plus named app, readonly and backup roles, with status, purpose and expiry. ' +
+				credentialNote,
+			inputSchema: z.object({ database: z.string().describe('Database name') }),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('database:read'),
+		},
+		async ({ database }) => run(() => ({ credentials: core.databases.listCredentials(principal, database) })),
+	);
+
+	tool(
+		'create_database_credential',
+		{
+			title: 'Create database credential',
+			description:
+				'Create a named Postgres credential: app (read/write on tables), readonly (SELECT only) or backup (read for dumps). ' +
+				'The node provisions the role; it starts pending and is ready once the node confirms. ' +
+				'Use it from an app with attach_database and `credential`. ' +
+				credentialNote,
+			inputSchema: databaseCredentialCreateSchema.extend({ database: z.string().describe('Database name') }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('database:credentials', 'database:update'),
+		},
+		async ({ database, ...input }) =>
+			run(() => ({
+				credential: core.databases.createCredential(principal, database, input),
+				nextSteps: ['The node creates the role on its next pull; poll list_database_credentials until it is ready.'],
+			})),
+	);
+
+	tool(
+		'rotate_database_credential',
+		{
+			title: 'Rotate database credential',
+			description:
+				'Rotate a named (app, readonly or backup) credential\'s password. The node runs ALTER ROLE first; only then does the live ' +
+				'secret swap and apps attached with this credential restart with it. For the owner or monitor use rotate_database_credentials. ' +
+				credentialNote,
+			inputSchema: credentialInput,
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('database:credentials', 'database:update'),
+		},
+		async ({ database, credentialId }) =>
+			run(() => ({
+				credential: core.databases.rotateNamedCredential(principal, database, credentialId),
+				nextSteps: ['The node applies ALTER ROLE on its next pull; poll list_database_credentials until it is ready.'],
+			})),
+	);
+
+	tool(
+		'revoke_database_credential',
+		{
+			title: 'Revoke database credential',
+			description:
+				'Revoke a named (app, readonly or backup) credential: the node disables its login, so anything still using it is locked out. ' +
+				'Refused while an app is attached with it (detach_database first). Requires confirmation.',
+			inputSchema: credentialInput,
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+			scopeChallenge: requires('database:credentials', 'database:update'),
+		},
+		async ({ database, credentialId }, ctx) => {
+			const revoke = () =>
+				run(() => ({
+					credential: core.databases.revokeCredential(principal, database, credentialId),
+					nextSteps: ['The node disables the role on its next pull; it then shows as revoked.'],
+				}));
+			// The dashboard assistant gates destructive tools in the chat UI before they reach here.
+			if (era === 'assistant') return revoke();
+			if (era === 'legacy')
+				return {
+					isError: true,
+					...text(
+						`Revoking credential ${credentialId} needs your confirmation, which this MCP client can't show. ` +
+							`Ask the user to revoke it from the Skiff dashboard: ${core.ctx.config.platformOrigin}/databases/${encodeURIComponent(database)}`,
+					),
+				};
+			const target = `${database}/${credentialId}`;
+			const key = `confirm_revoke_database_credential:${target}`;
+			const schema = z.object({ confirm: z.boolean() });
+			// Only an answer to a prompt we issued (signed requestState bound to this target) counts.
+			const prompted = verifyConfirmation(ctx.mcpReq.requestState(), principal, 'revoke_database_credential', target);
+			const answer = prompted ? acceptedContent(ctx.mcpReq.inputResponses, key, schema) : undefined;
+			const responded = prompted && ctx.mcpReq.inputResponses?.[key] !== undefined;
+			if (responded && answer?.confirm !== true) {
+				const cancelled = text(`Cancelled: credential ${credentialId} was not revoked (the user did not confirm).`);
+				declined.add(cancelled);
+				return cancelled;
+			}
+			if (answer?.confirm === true) return revoke();
+			// Fail before prompting when the revoke can't be found.
+			let credential: DatabaseCredentialView | undefined;
+			try {
+				credential = core.databases.listCredentials(principal, database).find((item) => item.id === credentialId);
+			} catch (error) {
+				return run(() => {
+					throw error;
+				});
+			}
+			if (!credential) return { isError: true, ...text(`Credential ${credentialId} was not found on "${database}".`) };
+			return inputRequired({
+				inputRequests: {
+					[key]: inputRequired.elicit({
+						message:
+							`Revoke the ${credential.role} credential "${credential.username}" on "${database}"? ` +
+							'Anything still connecting with it is locked out.',
+						requestedSchema: schema,
+					}),
+				},
+				requestState: mintConfirmation(principal, 'revoke_database_credential', target),
+			});
+		},
+	);
+
 	tool(
 		'attach_database',
 		{
 			title: 'Attach database',
 			description:
 				`Connect a database to a process or container project. ${connectionNote} ` +
-				'Attaching re-activates (restarts) a running app; no redeploy is needed if it already runs on the database node.',
+				'Attaching re-activates (restarts) a running app; no redeploy is needed if it already runs on the database node. ' +
+				'Pass `credential` (an id from list_database_credentials, or app/readonly/backup when there is exactly one ready) to connect ' +
+				'as a named Postgres credential instead of the owner; such an attachment connects directly and gets no _POOL_* variables.',
 			inputSchema: databaseAttachSchema.extend({ project: z.string().describe('Project slug') }),
 			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
 			scopeChallenge: requires('database:update', 'project:update'),
@@ -1696,12 +2762,158 @@ function buildServer(
 			description:
 				'The newest JetStream stream listing for a managed broker (D123), refreshed about once a minute: per stream (function ' +
 				'queues are SKIFF_Q_<queue>) messages, bytes, consumers, pending, awaiting ack, redelivered and the oldest message time, ' +
-				'with each consumer\'s backlog. Works without the telemetry store.',
+				'with each consumer\'s backlog. Works without the telemetry store. To read message bodies use peek_queue_messages; ' +
+				'to create a queue, test it or move dead letters back use create_queue, send_queue_message and redrive_queue.',
 			inputSchema: z.object({ broker: z.string().describe('Broker name') }),
 			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 			scopeChallenge: requires('broker:read'),
 		},
 		async ({ broker }) => run(() => core.brokers.queues(principal, broker)),
+	);
+
+	// Queue tools run on the broker's node and answer within ~20 s (D124). Purging or deleting a
+	// stream and deleting a message stay off MCP, like broker delete/purge (D111): dashboard, CLI, REST.
+	const queueToolNote =
+		`The broker's node runs the task; the call waits up to ${nodeTaskLimits.waitMs / 1000} s and otherwise returns a task id for get_node_task. ` +
+		'The broker must be running on a current agent.';
+
+	tool(
+		'create_queue',
+		{
+			title: 'Create queue',
+			description:
+				'Create the JetStream work-queue stream (SKIFF_Q_<queue>) for a function queue on a managed broker, so producers can send ' +
+				'before a consumer is deployed. Idempotent: an existing queue is left as it is. ' +
+				queueToolNote,
+			inputSchema: z.object({
+				broker: z.string().describe('Broker name'),
+				queue: functionQueueNameSchema.describe('Queue name, as in the function\'s queue producer/consumer config'),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('broker:update'),
+		},
+		async ({ broker, queue }) =>
+			run(async () => describeNodeTask(await core.nodeTasks.run(principal, core.nodeTasks.brokerTask(principal, broker, 'broker.queue.create', { queue })))),
+	);
+
+	tool(
+		'send_queue_message',
+		{
+			title: 'Send queue message',
+			description:
+				'Publish a test message (or up to ' +
+				`${nodeTaskLimits.sendCount} copies) to a function queue on a managed broker. It is a real message: the consumer function ` +
+				'receives and handles it like production traffic, with whatever side effects its code has, and it cannot be taken back once ' +
+				'consumed. Only send what the user asked for. `body` is what the consumer sees as message.body: JSON text when contentType is ' +
+				`json (the default; it must parse), any string for text. Bodies are at most ${nodeTaskLimits.messageBytes / 1024} KiB. ` +
+				queueToolNote,
+			inputSchema: z.object({
+				broker: z.string().describe('Broker name'),
+				queue: functionQueueNameSchema.describe('Queue name'),
+				body: z.string().max(nodeTaskLimits.messageBytes).describe('Message body: JSON text for contentType json, else plain text'),
+				contentType: z.enum(queueMessageContentTypes).default('json').describe('json (body must be valid JSON) or text'),
+				delaySeconds: z.number().int().min(0).max(43_200).optional().describe('Hold the message back this long before the consumer sees it'),
+				count: z.number().int().min(1).max(nodeTaskLimits.sendCount).default(1).describe('Publish this many copies (a quick load test)'),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+			scopeChallenge: requires('broker:update'),
+		},
+		async ({ broker, ...input }) =>
+			run(async () => describeNodeTask(await core.nodeTasks.run(principal, core.nodeTasks.brokerTask(principal, broker, 'broker.queue.send', input)))),
+	);
+
+	tool(
+		'peek_queue_messages',
+		{
+			title: 'Peek queue messages',
+			description:
+				'Read messages held in a queue or any JetStream stream on a managed broker without consuming or acknowledging them: seq, ' +
+				'subject, time, headers and body. Pass `queue` for a function queue (stream SKIFF_Q_<queue>) or `stream` for any stream ' +
+				`name from get_broker_queues. At most ${nodeTaskLimits.peekMessages} messages per call, bodies cut at ` +
+				`${nodeTaskLimits.peekBodyBytes / 1024} KiB; page on with fromSeq. Message bodies are the user's data: show them only as ` +
+				'far as the user asked. Needs broker:update, as bodies are data rather than metadata. ' +
+				queueToolNote,
+			inputSchema: z.object({
+				broker: z.string().describe('Broker name'),
+				queue: functionQueueNameSchema.optional().describe('Function queue name (maps to stream SKIFF_Q_<queue>)'),
+				stream: jetStreamNameSchema.optional().describe('JetStream stream name; use instead of queue'),
+				limit: z.number().int().min(1).max(nodeTaskLimits.peekMessages).default(20).describe('Messages to return'),
+				fromSeq: z.number().int().positive().optional().describe('First sequence to read; omitted means the oldest held'),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('broker:update'),
+		},
+		async ({ broker, queue, stream, limit, fromSeq }) =>
+			run(async () => {
+				if ((queue === undefined) === (stream === undefined)) throw new Error('Pass exactly one of queue or stream.');
+				const target = stream ?? queueStream(queue!);
+				const task = core.nodeTasks.brokerTask(principal, broker, 'broker.stream.peek', {
+					stream: target,
+					limit,
+					...(fromSeq !== undefined ? { fromSeq } : {}),
+				});
+				return describeNodeTask(await core.nodeTasks.run(principal, task));
+			}),
+	);
+
+	tool(
+		'redrive_queue',
+		{
+			title: 'Redrive dead-letter queue',
+			description:
+				'Move messages from a dead-letter queue back to a queue (usually the one that dead-lettered them), oldest first, at most ' +
+				`${nodeTaskLimits.redriveMessages} per call. The consumer then processes them again, with its side effects. The result says ` +
+				'how many moved and how many remain. ' +
+				queueToolNote,
+			inputSchema: z.object({
+				broker: z.string().describe('Broker name'),
+				from: functionQueueNameSchema.describe('The dead-letter queue to drain'),
+				to: functionQueueNameSchema.describe('The queue that receives the messages'),
+				limit: z.number().int().min(1).max(nodeTaskLimits.redriveMessages).optional().describe(`Messages to move (default ${nodeTaskLimits.redriveMessages})`),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('broker:update'),
+		},
+		async ({ broker, from, to, limit }) =>
+			run(async () =>
+				describeNodeTask(
+					await core.nodeTasks.run(
+						principal,
+						core.nodeTasks.brokerTask(principal, broker, 'broker.queue.redrive', { from, to, ...(limit !== undefined ? { limit } : {}) }),
+					),
+				),
+			),
+	);
+
+	tool(
+		'get_node_task',
+		{
+			title: 'Get node task',
+			description:
+				'Follow a queue or function tool task (ntk_…) that had not finished when its tool returned: status pending, running, ' +
+				`succeeded or failed, with the result. waitSeconds (up to ${NODE_TASK_MAX_WAIT_SECONDS}) holds the call until it finishes. ` +
+				'Results are kept for an hour.',
+			inputSchema: z.object({
+				id: z.string().describe('Task id (ntk_…)'),
+				waitSeconds: z.number().int().min(0).max(NODE_TASK_MAX_WAIT_SECONDS).default(0).describe('Wait this long for the task to finish'),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			// The scope depends on the task: broker:read for queue tasks, deployment:read for function ones.
+			scopeChallenge: requiresWith([], (args) => {
+				try {
+					core.nodeTasks.get(principal, String(args.id ?? ''));
+					return [];
+				} catch (error) {
+					const permission = (error as { permission?: Permission }).permission;
+					return permission ? [permission] : [];
+				}
+			}),
+		},
+		async ({ id, waitSeconds }) =>
+			run(async () => {
+				const task = core.nodeTasks.get(principal, id);
+				return describeNodeTask(waitSeconds > 0 ? await core.nodeTasks.wait(principal, task, waitSeconds * 1000) : task);
+			}),
 	);
 
 	tool(
@@ -2377,12 +3589,119 @@ function buildServer(
 			}),
 	);
 
+	// Named keys (plan 04b): metadata only. A key's secret is revealed in the dashboard or with
+	// `skif storage keys reveal`, never over MCP (D67).
+	tool(
+		'list_storage_keys',
+		{
+			title: 'List storage keys',
+			description:
+				'List the named access keys of a storage instance: id, name, access key id, bucket grants, purpose, status ' +
+				'(active, expired, revoked), expiry and last use. Never includes secrets. Keys named attachment-<project>-… belong to a ' +
+				'project attachment and are revoked with detach_storage.',
+			inputSchema: z.object({ storage: z.string().describe('Storage instance name') }),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('storage:read'),
+		},
+		async ({ storage }) => run(() => ({ keys: core.storage.listKeys(principal, storage) })),
+	);
+
+	tool(
+		'create_storage_key',
+		{
+			title: 'Create storage key',
+			description:
+				'Create a named access key on a storage instance, scoped to some buckets ({ bucket, mode: "read" | "read-write" }), for a ' +
+				'person or an outside service. The node adds the RustFS user on its next round. The secret is not returned: a human ' +
+				'reveals it in the dashboard or with `skif storage keys reveal`. For an app on Skiff use attach_storage instead.',
+			inputSchema: storageKeyCreateSchema.extend({ storage: z.string().describe('Storage instance name') }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('storage:update'),
+		},
+		async ({ storage, ...input }) =>
+			run(() => ({
+				key: core.storage.createKey(principal, storage, input),
+				nextSteps: [
+					`Reveal the secret in the dashboard (${core.ctx.config.platformOrigin}/storage/${encodeURIComponent(storage)}) or with ` +
+						`\`skif storage keys reveal ${storage} <id>\`.`,
+				],
+			})),
+	);
+
+	tool(
+		'revoke_storage_key',
+		{
+			title: 'Revoke storage key',
+			description:
+				'Revoke a named storage key: the node removes its RustFS user, so anything still signing with it is refused. ' +
+				'Attachment keys are revoked with detach_storage. Requires confirmation.',
+			inputSchema: z.object({
+				storage: z.string().describe('Storage instance name'),
+				keyId: z.string().describe('Key id (stk_…) from list_storage_keys'),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+			scopeChallenge: requires('storage:update'),
+		},
+		async ({ storage, keyId }, ctx) => {
+			const revoke = () =>
+				run(() => ({
+					key: core.storage.revokeKey(principal, storage, keyId),
+					nextSteps: ['The node removes the RustFS user on its next round.'],
+				}));
+			// The dashboard assistant gates destructive tools in the chat UI before they reach here.
+			if (era === 'assistant') return revoke();
+			if (era === 'legacy')
+				return {
+					isError: true,
+					...text(
+						`Revoking storage key ${keyId} needs your confirmation, which this MCP client can't show. ` +
+							`Ask the user to revoke it from the Skiff dashboard: ${core.ctx.config.platformOrigin}/storage/${encodeURIComponent(storage)}`,
+					),
+				};
+			const target = `${storage}/${keyId}`;
+			const key = `confirm_revoke_storage_key:${target}`;
+			const schema = z.object({ confirm: z.boolean() });
+			// Only an answer to a prompt we issued (signed requestState bound to this target) counts.
+			const prompted = verifyConfirmation(ctx.mcpReq.requestState(), principal, 'revoke_storage_key', target);
+			const answer = prompted ? acceptedContent(ctx.mcpReq.inputResponses, key, schema) : undefined;
+			const responded = prompted && ctx.mcpReq.inputResponses?.[key] !== undefined;
+			if (responded && answer?.confirm !== true) {
+				const cancelled = text(`Cancelled: storage key ${keyId} was not revoked (the user did not confirm).`);
+				declined.add(cancelled);
+				return cancelled;
+			}
+			if (answer?.confirm === true) return revoke();
+			// Fail before prompting when the key can't be found.
+			let found: StorageKeyView | undefined;
+			try {
+				found = core.storage.listKeys(principal, storage).find((item) => item.id === keyId);
+			} catch (error) {
+				return run(() => {
+					throw error;
+				});
+			}
+			if (!found) return { isError: true, ...text(`Key ${keyId} was not found on "${storage}".`) };
+			if (found.status === 'revoked') return revoke();
+			return inputRequired({
+				inputRequests: {
+					[key]: inputRequired.elicit({
+						message: `Revoke storage key "${found.name}" (${found.accessKeyId}) on "${storage}"? Anything still using it is refused.`,
+						requestedSchema: schema,
+					}),
+				},
+				requestState: mintConfirmation(principal, 'revoke_storage_key', target),
+			});
+		},
+	);
+
 	// --- access -------------------------------------------------------------
 	tool(
 		'set_access',
 		{
 			title: 'Set access mode',
-			description: 'Set public/password/platform access for production or previews.',
+			description:
+				'Set public/password/platform access for production or previews. Each scope has its own password: ' +
+				'password mode needs `password` unless the scope already has one, and leaving password mode clears only that scope\'s.',
 			inputSchema: setAccessSchema.extend({ project: z.string() }),
 			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
 			scopeChallenge: requires('project:update'),
@@ -2432,6 +3751,98 @@ function buildServer(
 				await core.access.revokeShareLink(principal, core.projects.requireRow(principal, project), shareLinkId);
 				return { ok: true, shareLinkId };
 			}),
+	);
+
+	tool(
+		'list_site_sessions',
+		{
+			title: 'List visitor sessions',
+			description:
+				'List live visitor sessions started from a project\'s share links (id, link, host, email, expiry). ' +
+				'Password and platform sign-ins are stateless and not listed; sign_out_all_visitors ends those too.',
+			inputSchema: z.object({ project: z.string() }),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('shareLink:read'),
+		},
+		async ({ project }) =>
+			run(() => ({ sessions: core.access.listSessions(principal, core.projects.requireRow(principal, project)) })),
+	);
+
+	tool(
+		'revoke_site_session',
+		{
+			title: 'Revoke visitor session',
+			description:
+				'End one share-link visitor session (id red_… from list_site_sessions). The link keeps working. Takes effect within seconds.',
+			inputSchema: z.object({ project: z.string(), sessionId: z.string() }),
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+			scopeChallenge: requires('shareLink:revoke'),
+		},
+		async ({ project, sessionId }) =>
+			run(async () => {
+				await core.access.revokeSession(principal, core.projects.requireRow(principal, project), sessionId);
+				return { ok: true, sessionId };
+			}),
+	);
+
+	tool(
+		'sign_out_all_visitors',
+		{
+			title: 'Sign out all visitors',
+			description:
+				'Sign out every visitor of a protected project: password, platform and share-link sessions on production, ' +
+				'previews and environments. Visitors must sign in again; share links keep working. Requires confirmation.',
+			inputSchema: z.object({ project: z.string() }),
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+			scopeChallenge: requires('project:update'),
+		},
+		async ({ project }, ctx) => {
+			const signOut = () =>
+				run(async () => {
+					const result = await core.access.signOutEveryone(principal, core.projects.requireRow(principal, project));
+					return { ok: true, project, ...result };
+				});
+			if (era === 'assistant') return signOut();
+			if (era === 'legacy')
+				return {
+					isError: true,
+					...text(
+						`Signing out every visitor of "${project}" needs your confirmation, which this MCP client can't show. ` +
+							`Ask the user to do it from the project's Settings → Access card: ${core.ctx.config.platformOrigin}/projects/${encodeURIComponent(project)}?tab=settings`,
+					),
+				};
+			const key = `confirm_sign_out_all_visitors:${project}`;
+			const schema = z.object({ confirm: z.boolean() });
+			const prompted = verifyConfirmation(ctx.mcpReq.requestState(), principal, 'sign_out_all_visitors', project);
+			const answer = prompted ? acceptedContent(ctx.mcpReq.inputResponses, key, schema) : undefined;
+			const responded = prompted && ctx.mcpReq.inputResponses?.[key] !== undefined;
+			if (responded && answer?.confirm !== true) {
+				const cancelled = text(`Cancelled: visitors of "${project}" stay signed in (the user did not confirm).`);
+				declined.add(cancelled);
+				return cancelled;
+			}
+			if (answer?.confirm !== true) {
+				try {
+					core.projects.requireRow(principal, project);
+				} catch (error) {
+					return run(() => {
+						throw error;
+					});
+				}
+				return inputRequired({
+					inputRequests: {
+						[key]: inputRequired.elicit({
+							message:
+								`Sign out every visitor of "${project}"? Password, platform and share-link sessions end on every host ` +
+								'within seconds, and visitors have to sign in again. Share links keep working.',
+							requestedSchema: schema,
+						}),
+					},
+					requestState: mintConfirmation(principal, 'sign_out_all_visitors', project),
+				});
+			}
+			return signOut();
+		},
 	);
 
 	// --- observability ------------------------------------------------------
@@ -3096,23 +4507,255 @@ function buildServer(
 			}),
 	);
 
+	// --- container console (D127): read-only over MCP. No shell: an agent could run something
+	// irreversible, so command execution stays with people (dashboard, `skif container shell`).
+	const replicaInput = z
+		.number()
+		.int()
+		.min(0)
+		.optional()
+		.describe('Replica index for a multi-copy workload; omit for the first.');
+
+	tool(
+		'inspect_container',
+		{
+			title: 'Inspect container',
+			description:
+				'Live state of a container project on its node: status, restarts, last exit code, OOM kills, image and digest, entrypoint and command, ' +
+				'environment variable names (never values), ports, networks, mounts, sandbox flags, resource counters and the processes running inside. ' +
+				'`stats` holds raw counters (CPU microseconds, bytes); call twice a few seconds apart and divide the difference by the time between `sampledAt` values for rates.',
+			inputSchema: z.object({ project: z.string(), replica: replicaInput }),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('container:inspect'),
+			feature: 'CONTAINER_CONSOLE'
+		},
+		async (input) =>
+			run(() =>
+				consoleJson(containerConsoleDeps, principal, input.project, 'inspect', { replica: input.replica })
+			)
+	);
+
+	tool(
+		'list_container_files',
+		{
+			title: 'List container files',
+			description:
+				"One directory of a running container's filesystem (the image's root plus its volumes), symlinks resolved inside the container. " +
+				'Secret files and tmpfs mounts such as /tmp are refused. At most 2,000 entries (`truncated` says when there were more).',
+			inputSchema: z.object({
+				project: z.string(),
+				path: z.string().max(4096).optional().describe('Absolute path inside the container; default "/".'),
+				replica: replicaInput
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('container:files'),
+			feature: 'CONTAINER_CONSOLE'
+		},
+		async (input) =>
+			run(() =>
+				consoleJson(containerConsoleDeps, principal, input.project, 'files', {
+					path: input.path ?? '/',
+					replica: input.replica
+				})
+			)
+	);
+
+	tool(
+		'read_container_file',
+		{
+			title: 'Read container file',
+			description:
+				'A text file from a running container, up to 1 MiB. Binary or larger files come back with `content: null` and a `reason`; ' +
+				'download them from the dashboard or with `skif container cp`. Reads are audited.',
+			inputSchema: z.object({ project: z.string(), path: z.string().min(1).max(4096), replica: replicaInput }),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('container:files'),
+			feature: 'CONTAINER_CONSOLE'
+		},
+		async (input) =>
+			run(() =>
+				consoleJson(containerConsoleDeps, principal, input.project, 'files/preview', {
+					path: input.path,
+					replica: input.replica
+				})
+			)
+	);
+
+	tool(
+		'restart_container',
+		{
+			title: 'Restart container',
+			description:
+				'Restart every replica of a container project from the same image and configuration, through desired state. ' +
+				'Requests fail for the few seconds it takes to come back. Follow with inspect_container and get_logs.',
+			inputSchema: z.object({ project: z.string() }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('project:update'),
+			feature: 'CONTAINER_CONSOLE'
+		},
+		async (input) => run(() => consoleJson(containerConsoleDeps, principal, input.project, 'restart'))
+	);
+
 	tool(
 		'get_audit_log',
 		{
 			title: 'Get audit log',
-			description: 'Recent audit entries for the org: user, MCP client, tool, args (secrets redacted), result.',
+			description:
+				'Audit entries for the org, newest first: user, MCP client, tool, args (secrets redacted), result. ' +
+				'Narrow with `from`/`to` (a date like 2026-11-07, an ISO timestamp or epoch ms; a date as `to` covers that whole day, UTC). ' +
+				'When `nextCursor` is set there are older entries: call again with `cursor` set to it.',
 			inputSchema: z.object({
 				limit: z.number().int().min(1).max(200).default(50),
-				action: z.string().optional(),
-				resource: z.string().optional(),
+				action: z.string().optional().describe('Exact action, e.g. project.delete or mcp.deploy_site'),
+				resource: z.string().optional().describe('Exact resource type, e.g. project or log_drain'),
+				from: z.string().max(40).optional().describe('Oldest entry to include (inclusive)'),
+				to: z.string().max(40).optional().describe('Newest entry to include (inclusive)'),
+				cursor: z.string().max(200).optional().describe('nextCursor from the previous call'),
 			}),
 			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 			scopeChallenge: requires('project:read'),
 		},
-		async ({ limit, action, resource }) =>
-			run(() => ({
-				entries: core.audit.list({ principal, limit, action, resource }),
-			})),
+		async ({ limit, action, resource, from, to, cursor }) =>
+			run(() =>
+				core.audit.page({
+					principal,
+					limit,
+					action,
+					resource,
+					from: parseAuditTime(from, 'from'),
+					to: parseAuditTime(to, 'to'),
+					cursor: cursor ?? null,
+				}),
+			),
+	);
+
+	// --- log drains (DESIGN §8; private-network drains and edits are dashboard/REST/CLI only) ----
+	const drainSummary = (drain: LogDrainView) =>
+		`${drain.kind === 'otlp' ? 'OTLP' : 'webhook'} drain "${drain.name}" → ${drain.url} (${drain.project ? `project ${drain.project}` : 'every project in the org'})`;
+
+	tool(
+		'list_log_drains',
+		{
+			title: 'List log drains',
+			description:
+				'Log drains forward the org\'s log lines (build, runtime, system, managed services) to a webhook or an OTLP receiver. ' +
+				'Shows each drain\'s target (query-string values masked), filters, status (healthy, failing, pending, disabled) and delivery ' +
+				'counters, including dropped (dead-letter) lines and the last error. Header values and signing secrets are never shown.',
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('logs:read'),
+		},
+		async () => run(() => ({ drains: core.logDrains.list(principal), canEdit: core.logDrains.canEdit(principal) })),
+	);
+
+	tool(
+		'create_log_drain',
+		{
+			title: 'Create log drain',
+			description:
+				'Forward log lines to an external HTTPS endpoint from now on (earlier lines are not sent). `webhook` POSTs NDJSON ' +
+				'(or a JSON array) signed with X-Skiff-Signature; `otlp` POSTs OTLP/HTTP JSON to <url>/v1/logs (Grafana, Datadog, ' +
+				'Honeycomb, an OpenTelemetry Collector…). Put an API key in `headers`; values are stored sealed and never shown again. ' +
+				'Org owners and admins only; at most 10 per org. The webhook signing secret is in the answer once: hand it to the user.',
+			inputSchema: z.object({
+				name: z.string().min(1).max(64),
+				kind: z.enum(logDrainKinds),
+				url: z.string().min(1).max(2048).describe('https:// receiver URL'),
+				format: z.enum(logDrainFormats).optional().describe('Webhook only: ndjson (default) or json'),
+				project: z.string().optional().describe('Only this project (slug); omit for every project and managed services'),
+				sources: z.array(z.enum(logDrainSources)).max(4).default([]).describe('Empty forwards every source'),
+				minLevel: z.enum(logDrainLevels).optional().describe('Forward this level and above'),
+				headers: z.record(z.string(), z.string()).optional().describe('Sent with every request, e.g. { "Authorization": "Bearer …" }'),
+				enabled: z.boolean().default(true),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+			scopeChallenge: requires('logs:read'),
+		},
+		// The dashboard assistant asks for a click before this runs (CONFIRM_TOOLS): a drain copies logs out of Skiff.
+		async (input) =>
+			run(() => {
+				const result = core.logDrains.create(principal, input);
+				return {
+					...result,
+					nextSteps: [
+						`Check the receiver with test_log_drain({ id: "${result.drain.id}" }).`,
+						...(result.signingSecret
+							? [`Give the user the signing secret now; it is not shown again. Verify X-Skiff-Signature as HMAC-SHA256(secret, "<t>.<body>").`]
+							: []),
+					],
+				};
+			}),
+	);
+
+	tool(
+		'test_log_drain',
+		{
+			title: 'Test log drain',
+			description:
+				'Send one test line to a drain now and report what the receiver answered. Delivery counters and cursors are left alone.',
+			inputSchema: z.object({ id: z.string().describe('Drain id (ldr_…)') }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+			scopeChallenge: requires('logs:read'),
+		},
+		async ({ id }) => run(async () => ({ result: await core.logDrains.test(principal, id) })),
+	);
+
+	tool(
+		'delete_log_drain',
+		{
+			title: 'Delete log drain',
+			description:
+				'Delete a log drain: forwarding stops at once. Lines already sent stay with the receiver. To pause it instead, ' +
+				'disable it in the dashboard (Settings → Log drains) or with `skif log-drain update --disable`. Requires confirmation.',
+			inputSchema: z.object({ id: z.string().describe('Drain id (ldr_…)') }),
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+			scopeChallenge: requires('logs:read'),
+		},
+		async ({ id }, ctx) => {
+			const remove = () =>
+				run(() => {
+					core.logDrains.delete(principal, id);
+					return { ok: true, id };
+				});
+			if (era === 'assistant') return remove();
+			if (era === 'legacy')
+				return {
+					isError: true,
+					...text(
+						`Deleting log drain ${id} needs your confirmation, which this MCP client can't show. ` +
+							`Ask the user to delete it from the Skiff dashboard: ${core.ctx.config.platformOrigin}/settings/log-drains`,
+					),
+				};
+			const key = `confirm_delete_log_drain:${id}`;
+			const schema = z.object({ confirm: z.boolean() });
+			const prompted = verifyConfirmation(ctx.mcpReq.requestState(), principal, 'delete_log_drain', id);
+			const answer = prompted ? acceptedContent(ctx.mcpReq.inputResponses, key, schema) : undefined;
+			const responded = prompted && ctx.mcpReq.inputResponses?.[key] !== undefined;
+			if (responded && answer?.confirm !== true) {
+				const cancelled = text(`Cancelled: log drain ${id} was not deleted (the user did not confirm).`);
+				declined.add(cancelled);
+				return cancelled;
+			}
+			if (answer?.confirm !== true) {
+				let drain: LogDrainView;
+				try {
+					drain = core.logDrains.get(principal, id);
+				} catch (error) {
+					return run(() => {
+						throw error;
+					});
+				}
+				return inputRequired({
+					inputRequests: {
+						[key]: inputRequired.elicit({
+							message: `Delete the ${drainSummary(drain)}? Forwarding stops at once; this cannot be undone.`,
+							requestedSchema: schema,
+						}),
+					},
+					requestState: mintConfirmation(principal, 'delete_log_drain', id),
+				});
+			}
+			return remove();
+		},
 	);
 
 	tool(
@@ -3126,10 +4769,26 @@ function buildServer(
 		async () => run(() => ({ nodes: core.nodes.list(principal) })),
 	);
 
+	tool(
+		'get_ha_status',
+		{
+			title: 'Get HA status',
+			description:
+				'Read the failover controller (read-only): whether automatic failover is on, the controller lease (epoch, holder), ' +
+				'nodes and how long each has been silent, the ingress record set, databases whose primary is lost with the replica a ' +
+				'promotion would pick, and recent failover events (replica moves, ingress withdrawals, database decisions). ' +
+				'Requires a platform admin role. MCP never changes placement or promotes anything (CLUSTERING §12.4).',
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('project:read'),
+		},
+		async () => run(() => core.failover.status(principal)),
+	);
+
 	// --- email (docs/EMAIL.md §9; no credential, settings or org-state tools: D58, platform admin only) ----
 	const emailNote =
 		'Mail goes out from an address on one of the org\'s verified sending domains. A new org starts in the sandbox ' +
-		'(low limits, verified recipients only) until a platform admin moves it out. Recipients on the suppression list ' +
+		'(low limits, its own verified domains and verified sandbox recipients only) until an org owner or admin requests ' +
+		'production access and a platform admin approves it. Recipients on the suppression list ' +
 		'(hard bounces, complaints, manual entries) are dropped from a message, not reported as an error.';
 
 	/** What the user still has to add to DNS, phrased so an agent can relay it as-is. */
@@ -3205,8 +4864,25 @@ function buildServer(
 					nextSteps.push('Email is not set up yet: a platform admin chooses a mail node in the Skiff dashboard (Settings → Email). Until then nothing is delivered.');
 				if (settings.paused) nextSteps.push('A platform admin has paused all outgoing mail on this platform.');
 				if (org.state === 'paused') nextSteps.push(`This org's sending is paused: ${org.pausedReason ?? 'by a platform admin'}. Only a platform admin can resume it.`);
-				if (org.state === 'sandbox')
-					nextSteps.push(`The org is in the sandbox (${org.perSecond}/s, ${org.perDay}/day). Ask a platform admin to move it out for real traffic.`);
+				if (org.state === 'sandbox') {
+					nextSteps.push(
+						`The org is in the sandbox (${org.perSecond}/s, ${org.perDay}/day): mail goes only to its verified domains and to verified sandbox recipients (list_email_addresses, add_email_address).`,
+					);
+					let request: ReturnType<typeof core.email.accessRequest> = null;
+					try {
+						request = core.email.accessRequest(principal);
+					} catch {
+						// Unknown request state: the generic step below still applies.
+					}
+					if (request?.status === 'pending')
+						nextSteps.push(`Production access was requested at ${request.createdAt} and is waiting for a platform admin; the requester gets an email with the answer.`);
+					else
+						nextSteps.push(
+							(request?.status === 'denied' ? `The last production access request was denied${request.note ? ` (${request.note})` : ''}. ` : '') +
+								'For real traffic, an org owner or admin requests production access: Email → Sandbox in the Skiff dashboard, ' +
+								`\`skif email request-access --use-case "…" --volume <per day>\`, or POST ${core.ctx.config.platformOrigin}/api/v1/email/access-request. A platform admin reviews it.`,
+						);
+				}
 				if (!domains.some((entry) => entry.status === 'verified' && entry.sending))
 					nextSteps.push('No verified sending domain yet: add one with create_email_domain.');
 				return {
@@ -3514,6 +5190,177 @@ function buildServer(
 		},
 	);
 
+	// Sandbox recipients (docs/EMAIL.md §4.3): single addresses an org in the sandbox may send to once
+	// their owner clicked a link. Adding one mails a third party, so it is confirmed like a send.
+	const sandboxAddressNextSteps = (view: EmailSandboxAddressView): string[] =>
+		view.status === 'verified'
+			? [`${view.address} is verified: the sandbox accepts mail to it.`]
+			: [
+					`A verification link went to ${view.address}${view.expiresAt ? ` (it expires at ${view.expiresAt})` : ''}. ` +
+						'Mail to it is refused until its owner opens the link and confirms; ask the user to check that inbox, then call list_email_addresses.',
+				];
+	const sandboxAddressOf = (address: string): EmailSandboxAddressView | undefined => {
+		const wanted = address.trim().toLowerCase();
+		return core.email.listSandboxAddresses(principal).find((entry) => entry.address === wanted);
+	};
+
+	tool(
+		'list_email_addresses',
+		{
+			title: 'List email sandbox recipients',
+			description:
+				'Single addresses the org may send to while it is in the email sandbox, besides its own verified domains: ' +
+				'each is pending until its owner confirms the emailed link, then verified. Not needed once the org is active.',
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('email:read'),
+			feature: 'EMAIL',
+		},
+		async () =>
+			run(() => {
+				const org = core.email.orgView(principal);
+				return {
+					state: org.state,
+					addresses: core.email.listSandboxAddresses(principal),
+					limits: EMAIL_SANDBOX_ADDRESS_LIMITS,
+					...(org.state === 'sandbox' ? {} : { note: 'The org is out of the sandbox: it can send to any address; this list is not used.' }),
+				};
+			}),
+	);
+
+	tool(
+		'add_email_address',
+		{
+			title: 'Add email sandbox recipient',
+			description:
+				'Add a sandbox recipient: Skiff emails the address a single-use link (valid 24 hours), and mail to it is accepted once its owner confirms. ' +
+				'Calling it again for a pending address sends a fresh link (at most once a minute). Only add an address the user named, ' +
+				'ideally a mailbox they can read: the link goes to a real person. Requires confirmation.',
+			inputSchema: z.object({ address: z.string().describe('Bare address, e.g. ada@gmail.com') }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+			scopeChallenge: requires('email:read', 'email:update'),
+			feature: 'EMAIL',
+		},
+		async ({ address }, ctx) => {
+			const add = () =>
+				run(async () => {
+					const view = await core.email.addSandboxAddress(principal, { address });
+					return { address: view, nextSteps: sandboxAddressNextSteps(view) };
+				});
+			// The dashboard assistant asks for a click in the chat before this runs (CONFIRM_TOOLS).
+			if (era === 'assistant') return add();
+			if (era === 'legacy')
+				return {
+					isError: true,
+					...text(
+						`Emailing a verification link to ${address} needs your confirmation, which this MCP client can't show. ` +
+							'Ask the user to add it themselves in the Skiff dashboard (Email → Sandbox) or with `skif email addresses add`.',
+					),
+				};
+			const target = address.trim().toLowerCase();
+			const key = `confirm_add_email_address:${target}`;
+			const schema = z.object({ confirm: z.boolean() });
+			const prompted = verifyConfirmation(ctx.mcpReq.requestState(), principal, 'add_email_address', target);
+			const answer = prompted ? acceptedContent(ctx.mcpReq.inputResponses, key, schema) : undefined;
+			const responded = prompted && ctx.mcpReq.inputResponses?.[key] !== undefined;
+			if (responded && answer?.confirm !== true) {
+				const cancelled = text(`Cancelled: no verification link went to ${address} (the user did not confirm).`);
+				declined.add(cancelled);
+				return cancelled;
+			}
+			if (answer?.confirm !== true) {
+				const parsed = emailSandboxAddressCreateSchema.safeParse({ address });
+				if (!parsed.success) return { isError: true, ...text(`${address} is not a valid email address.`) };
+				let existing: EmailSandboxAddressView | undefined;
+				try {
+					existing = sandboxAddressOf(address);
+				} catch (error) {
+					return run(() => {
+						throw error;
+					});
+				}
+				// Already verified: nothing is mailed, so there is nothing to confirm.
+				if (existing?.status === 'verified') return add();
+				return inputRequired({
+					inputRequests: {
+						[key]: inputRequired.elicit({
+							message:
+								`Email a verification link to ${target}? ` +
+								(existing ? 'It replaces the link sent earlier. ' : '') +
+								'Once its owner confirms, this organisation can send test mail to it while in the sandbox.',
+							requestedSchema: schema,
+						}),
+					},
+					requestState: mintConfirmation(principal, 'add_email_address', target),
+				});
+			}
+			return add();
+		},
+	);
+
+	tool(
+		'remove_email_address',
+		{
+			title: 'Remove email sandbox recipient',
+			description:
+				'Remove a sandbox recipient. While the org is in the sandbox, sends to it are refused again, and adding it back needs a new ' +
+				'confirmation from its owner. Requires confirmation.',
+			inputSchema: z.object({ address: z.string().describe('The sandbox recipient to remove') }),
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+			scopeChallenge: requires('email:read', 'email:update'),
+			feature: 'EMAIL',
+		},
+		async ({ address }, ctx) => {
+			const remove = () =>
+				run(() => {
+					core.email.removeSandboxAddress(principal, address);
+					return { ok: true, address: address.trim().toLowerCase() };
+				});
+			if (era === 'assistant') return remove();
+			if (era === 'legacy')
+				return {
+					isError: true,
+					...text(
+						`Removing ${address} from the sandbox recipients needs your confirmation, which this MCP client can't show. ` +
+							`Ask the user to remove it themselves (DELETE ${core.ctx.config.platformOrigin}/api/v1/email/addresses/${encodeURIComponent(address)}).`,
+					),
+				};
+			const target = address.trim().toLowerCase();
+			const key = `confirm_remove_email_address:${target}`;
+			const schema = z.object({ confirm: z.boolean() });
+			const prompted = verifyConfirmation(ctx.mcpReq.requestState(), principal, 'remove_email_address', target);
+			const answer = prompted ? acceptedContent(ctx.mcpReq.inputResponses, key, schema) : undefined;
+			const responded = prompted && ctx.mcpReq.inputResponses?.[key] !== undefined;
+			if (responded && answer?.confirm !== true) {
+				const cancelled = text(`Cancelled: ${address} stays a sandbox recipient (the user did not confirm).`);
+				declined.add(cancelled);
+				return cancelled;
+			}
+			if (answer?.confirm !== true) {
+				let entry: EmailSandboxAddressView | undefined;
+				try {
+					entry = sandboxAddressOf(address);
+				} catch (error) {
+					return run(() => {
+						throw error;
+					});
+				}
+				if (!entry) return { isError: true, ...text(`${address} is not a sandbox recipient of this org.`) };
+				return inputRequired({
+					inputRequests: {
+						[key]: inputRequired.elicit({
+							message:
+								`Remove ${entry.address} from the sandbox recipients (${entry.status})? ` +
+								'While the organisation is in the sandbox, mail to it is refused again until its owner confirms a new link.',
+							requestedSchema: schema,
+						}),
+					},
+					requestState: mintConfirmation(principal, 'remove_email_address', target),
+				});
+			}
+			return remove();
+		},
+	);
+
 	// --- resources ----------------------------------------------------------
 	server.registerResource(
 		'deploying',
@@ -3591,9 +5438,9 @@ function buildServer(
 					text: [
 						'# Managed databases',
 						'',
-						'Skiff runs managed databases as org resources on one node: PostgreSQL (16/17, the default), MySQL (8.4/9.7), MariaDB (11.4/11.8), MongoDB (8.0/9.0), Valkey (8.1/9.1) and Redis (8.8/8.10). Create one with `create_database` (set `engine`); pass `project` to attach it to an app in the same call. Use Valkey for caches and queues (BullMQ, Sidekiq) unless the app needs Redis-only modules.',
+						'Skiff runs managed databases as org resources on one node: PostgreSQL (16/17, the default), MySQL (8.4/9.7), MariaDB (11.4/11.8), MongoDB (8.0/9.0), Valkey (8.1/9.1), Redis (8.8/8.10) and ClickHouse (26.3/26.8). Create one with `create_database` (set `engine`); pass `project` to attach it to an app in the same call. Use Valkey for caches and queues (BullMQ, Sidekiq) unless the app needs Redis-only modules, and ClickHouse for analytics, events and logs (it needs at least 1 GB of memory).',
 						'',
-						'An attached process or container project receives `<PREFIX>_URL`, `_HOST`, `_PORT`, `_USER`, `_PASSWORD` and `_NAME` at activation (`PREFIX` defaults to `DATABASE`, `MONGODB` for MongoDB (which also gets `MONGODB_URI`) and `REDIS` for Valkey/Redis, so read `DATABASE_URL`, `MONGODB_URI` or `REDIS_URL`). Use a different prefix per database when a project has several. Static projects cannot use databases.',
+						'An attached process or container project receives `<PREFIX>_URL`, `_HOST`, `_PORT`, `_USER`, `_PASSWORD` and `_NAME` at activation (`PREFIX` defaults to `DATABASE`, `MONGODB` for MongoDB (which also gets `MONGODB_URI`), `REDIS` for Valkey/Redis and `CLICKHOUSE` for ClickHouse, so read `DATABASE_URL`, `MONGODB_URI`, `REDIS_URL` or `CLICKHOUSE_URL`). Use a different prefix per database when a project has several. Static projects cannot use databases.',
 						'',
 						"Apps and their databases share a node in v1. A project with attachments is placed on the database's node at deploy time, so `auto` placement just works; an explicit placement on another node is rejected. If `attach_database` warns that the app runs elsewhere, redeploy it.",
 						'',
@@ -3627,7 +5474,7 @@ function buildServer(
 						'',
 						'Each attachment grants `read` or `read-write` per bucket. A private instance is reachable only from apps on its node, so a project attached to one is placed there at deploy time; a public instance (`https://<name>--s3.<domain>`) works from any node and from browsers (presigned URLs). A `public-read` bucket serves objects without a signature.',
 						'',
-						'Keys are never returned over MCP: apps get them injected, and humans can reveal the root key from the dashboard or `skif storage credentials`.',
+						'Keys are never returned over MCP: apps get them injected, and humans can reveal the root key from the dashboard or `skif storage credentials`. For a client outside Skiff (a backup tool, a CDN), `create_storage_key` makes a named key scoped to some buckets; a human reveals its secret with `skif storage keys reveal`. `list_storage_keys` and `revoke_storage_key` manage them.',
 						'',
 						'`delete_storage` is a confirmed soft delete (restorable for the trash period, 7 days by default) and is refused while projects are attached; `detach_storage` first. Deleting non-empty buckets and permanent deletion are dashboard/CLI only.',
 					].join('\n'),
@@ -3656,7 +5503,7 @@ function buildServer(
 							'',
 							'Apps send through SMTP or the REST API with credentials injected at activation (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_URL`, via `POST /api/v1/projects/:slug/email`). Credentials are never created or shown over MCP.',
 							'',
-							'New orgs start in the sandbox: low limits, verified recipients only. Hard bounces and complaints add addresses to the suppression list (`list_email_suppressions`), and suppressed recipients are dropped. High bounce or complaint rates pause the org. Only use `remove_email_suppression` (confirmed) when the user says the address is fixed.',
+							'New orgs start in the sandbox: low limits, their own verified domains and verified sandbox recipients only. To test with an inbox the user can read, `add_email_address` (confirmed) emails it a link its owner must click. Leaving the sandbox is a production access request an org owner or admin sends from the dashboard (Email → Sandbox) or `skif email request-access`; a platform admin decides. Hard bounces and complaints add addresses to the suppression list (`list_email_suppressions`), and suppressed recipients are dropped. High bounce or complaint rates pause the org. Only use `remove_email_suppression` (confirmed) when the user says the address is fixed.',
 						].join('\n'),
 					},
 				],

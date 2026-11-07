@@ -14,8 +14,17 @@ import { allPermissions, roles, statements, type Permission, type Role } from '@
 import { readMembership } from '@skiff/core';
 import { getRequestEvent } from '$app/server';
 import * as z from 'zod';
-import { allowDcr, authSecret, contentDomain, github, mcpResource, openSignup, platformOrigin } from './config';
-import { MAGIC_LINK_TTL_SECONDS, sendInviteEmail, sendMagicLinkEmail } from './email';
+import { allowDcr, authSecret, contentDomain, github, mcpResource, openSignup, platformOrigin, smtp } from './config';
+import { core } from './core';
+import { MAGIC_LINK_TTL_SECONDS, sendInviteEmail, sendMagicLinkEmail, sendPasswordResetEmail } from './email';
+import {
+	PASSWORD_RESET_TTL_SECONDS,
+	ResetThrottle,
+	deleteResetTokens,
+	discardResetToken,
+	hashRequestIp,
+	recordPasswordReset,
+} from './password-reset';
 import {
 	enforceOwnerSecondFactor,
 	markSessionSecondFactor,
@@ -140,6 +149,31 @@ const API_KEY_RATE_MAX = 100_000;
 const secure = platformOrigin.startsWith('https://');
 const platformHost = new URL(platformOrigin).hostname;
 
+/** At most one reset email a minute and five an hour per address (on top of Better Auth's per-IP limit). */
+const resetThrottle = new ResetThrottle({ perMinute: 1, perHour: 5 });
+
+/**
+ * Better Auth calls this only for an address that has an account, and waits for it before
+ * answering. So it returns at once and sends in the background: the response takes as long
+ * either way and never says whether the address exists. A link that is not sent (no SMTP, or the
+ * address is throttled) is deleted rather than left valid.
+ */
+async function sendResetPassword({ user, url, token }: { user: { id: string; email: string }; url: string; token: string }) {
+	void (async () => {
+		if (!smtp) {
+			discardResetToken(sqlite, token);
+			console.info(`[auth] password reset requested for user ${user.id}, but email is not set up: an operator can run scripts/reset-password.ts`);
+			return;
+		}
+		if (!resetThrottle.take(user.email)) {
+			discardResetToken(sqlite, token);
+			console.info(`[auth] password reset for user ${user.id} throttled (1 a minute, 5 an hour per address)`);
+			return;
+		}
+		await sendPasswordResetEmail(user.email, url, PASSWORD_RESET_TTL_SECONDS);
+	})().catch((error) => console.error('[auth] could not send a password reset email:', error));
+}
+
 export const auth = betterAuth({
 	baseURL: platformOrigin,
 	secret: authSecret,
@@ -153,6 +187,29 @@ export const auth = betterAuth({
 		disableSignUp: !openSignup,
 		minPasswordLength: MIN_PASSWORD_LENGTH,
 		maxPasswordLength: MAX_PASSWORD_LENGTH,
+		// Forgot password (password-reset.ts): a 30-minute, single-use link by email. Using it signs
+		// out every session and never signs in, so owners still prove a second factor afterwards.
+		sendResetPassword,
+		resetPasswordTokenExpiresIn: PASSWORD_RESET_TTL_SECONDS,
+		revokeSessionsOnPasswordReset: true,
+		onPasswordReset: async ({ user }, request) => {
+			// One link resets once; any other links sent before it stop working too.
+			deleteResetTokens(sqlite, user.id);
+			try {
+				recordPasswordReset(core.audit, sqlite, { userId: user.id, method: 'email', ipHash: hashRequestIp(request) });
+			} catch (error) {
+				console.error('[auth] could not audit a password reset:', error);
+			}
+		},
+	},
+	// Per IP, in production (Better Auth's default limiter). Request links: 3 a minute (its default,
+	// spelled out). Using a token: a handful a minute; tokens are 24 random characters anyway.
+	rateLimit: {
+		customRules: {
+			'/request-password-reset': { window: 60, max: 3 },
+			'/reset-password': { window: 60, max: 5 },
+			'/reset-password/*': { window: 60, max: 10 },
+		},
 	},
 	socialProviders: github
 		? { github: { clientId: github.clientId, clientSecret: github.clientSecret } }

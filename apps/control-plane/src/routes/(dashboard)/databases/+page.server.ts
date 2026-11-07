@@ -3,7 +3,9 @@ import {
 	databaseCreateSchema,
 	databaseEngineRegistry,
 	databaseEngines,
+	databaseVariants,
 	type DatabaseEngine,
+	type DatabaseVariant,
 	hasPermission,
 	type DatabaseView,
 	type NodeCapacityView
@@ -69,6 +71,7 @@ export const actions: Actions = {
 			name: formString(data, 'name'),
 			engine: formString(data, 'engine') || 'postgres',
 			version: formString(data, 'version'),
+			variant: formString(data, 'variant'),
 			placement: formString(data, 'placement') || 'auto',
 			memoryMb: formString(data, 'memoryMb'),
 			storageMb: formString(data, 'storageMb'),
@@ -83,6 +86,9 @@ export const actions: Actions = {
 			name: values.name,
 			engine,
 			version: values.version || undefined,
+			variant: (databaseVariants as readonly string[]).includes(values.variant)
+				? (values.variant as DatabaseVariant)
+				: undefined,
 			placement: values.placement,
 			memoryMb: optionalNumber(values.memoryMb),
 			storageMb: optionalNumber(values.storageMb),

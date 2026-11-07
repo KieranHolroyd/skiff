@@ -58,7 +58,8 @@ const alert = {
 
 const env = process.env;
 const notifiers: Array<{ name: string; notify: (a: typeof alert) => Promise<void> }> = [];
-if (env.SKIFF_ALERT_WEBHOOK) notifiers.push(webhookNotifierFor(env.SKIFF_ALERT_WEBHOOK));
+if (env.SKIFF_ALERT_WEBHOOK)
+	notifiers.push(webhookNotifierFor(env.SKIFF_ALERT_WEBHOOK, { secret: env.SKIFF_ALERT_WEBHOOK_SECRET || undefined }));
 notifiers.push(...chatNotifiersFromEnv(env));
 if (env.SKIFF_ALERT_EMAIL && env.SKIFF_SMTP_HOST) {
 	const transport = new SmtpEmailTransport({

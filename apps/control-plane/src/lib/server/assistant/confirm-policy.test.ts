@@ -14,6 +14,8 @@ describe('assistant confirmation policy', () => {
 			'promote_deployment',
 			'rollback',
 			'rotate_database_credentials',
+			'create_database_credential',
+			'rotate_database_credential',
 			'deploy_site'
 		])
 			expect(needsConfirmation(name, { destructiveHint: false })).toBe(true);

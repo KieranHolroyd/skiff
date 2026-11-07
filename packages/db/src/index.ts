@@ -25,6 +25,22 @@ export interface OpenOptions {
 export const migrationAliases: Readonly<Record<string, readonly string[]>> = {
 	// v2 shipped this as 0003 before the v2 backend migration took that number.
 	'0004_deployment_promoted_at.sql': ['0003_deployment_promoted_at.sql'],
+	// D126's variant migration first landed as 0053, before 0053_backup_locations took that
+	// number; it then sat at 0067 until the unreleased 0052–0066 range was packed gap-free.
+	// Every file below runs non-idempotent ALTERs, so an install (in practice a dev database)
+	// that applied an old id must not run the new one.
+	'0055_database_variant.sql': ['0053_database_variant.sql', '0067_database_variant.sql'],
+	'0056_workload_restart.sql': ['0054_workload_restart.sql', '0068_workload_restart.sql'],
+	'0057_storage_replication_runner.sql': ['0059_storage_replication_runner.sql'],
+	'0058_failover_events.sql': ['0060_failover_events.sql'],
+	'0059_jobs.sql': ['0061_jobs.sql'],
+	'0060_log_drains.sql': ['0063_log_drains.sql'],
+	'0061_app_volume_snapshots.sql': ['0064_app_volume_snapshots.sql'],
+	'0062_oauth_client_usage.sql': ['0065_oauth_client_usage.sql'],
+	'0063_email_sandbox_flows.sql': ['0066_email_sandbox_flows.sql'],
+	'0064_database_replica_streaming.sql': ['0069_database_replica_streaming.sql'],
+	'0065_database_pitr_window.sql': ['0070_database_pitr_window.sql'],
+	'0066_blueprints.sql': ['0071_blueprints.sql'],
 };
 
 /**

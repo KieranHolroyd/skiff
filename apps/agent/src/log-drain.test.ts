@@ -67,6 +67,13 @@ class FakeHelper implements HelperApi {
 	async rotateDatabaseRole(): Promise<void> {}
 	async applyDatabaseCredential(): Promise<void> {}
 	async restartPooler(): Promise<void> {}
+	async replicationConfigure(): Promise<void> {}
+	async replicationStatus(): Promise<[]> {
+		return [];
+	}
+	async replicaPromote(): Promise<never> {
+		throw new Error('replicaPromote not used in this test');
+	}
 	async pitrConfigure(): Promise<never> {
 		throw new Error('pitrConfigure not used in this test');
 	}

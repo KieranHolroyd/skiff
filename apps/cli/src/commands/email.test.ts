@@ -289,4 +289,89 @@ describe('skif email', () => {
 		expect(detached.code).toBe(0);
 		expect(seen[1]?.path).toBe('/api/v1/projects/api/email?envPrefix=MAIL');
 	});
+
+	test('addresses add posts the address; list and rm use the sandbox recipient routes', async () => {
+		const pending = {
+			id: 'ea_1',
+			address: 'me+test@gmail.com',
+			status: 'pending',
+			verifiedAt: null,
+			sentAt: '2026-11-07T10:00:00.000Z',
+			expiresAt: '2026-11-08T10:00:00.000Z',
+			createdAt: '2026-11-07T10:00:00.000Z',
+		};
+		const seen = serve({
+			'POST /api/v1/email/addresses': new Response(JSON.stringify({ address: pending }), { status: 201, headers: { 'content-type': 'application/json' } }),
+			'GET /api/v1/email/addresses': { addresses: [pending, { ...pending, id: 'ea_2', address: 'ok@gmail.com', status: 'verified', verifiedAt: '2026-11-07T11:00:00.000Z', sentAt: null, expiresAt: null }] },
+			'DELETE /api/v1/email/addresses/me%2Btest%40gmail.com': new Response(null, { status: 204 }),
+		});
+		const added = await cli('email', 'addresses', 'add', 'me+test@gmail.com');
+		expect(added.code).toBe(0);
+		expect(seen[0]).toEqual({ method: 'POST', path: '/api/v1/email/addresses', body: { address: 'me+test@gmail.com' } });
+		expect(added.stdout).toContain('Sent a confirmation link to me+test@gmail.com (expires 2026-11-08T10:00:00.000Z)');
+		const listed = await cli('email', 'addresses');
+		expect(listed.code).toBe(0);
+		expect(listed.stdout).toContain('ok@gmail.com');
+		expect(listed.stdout).toContain('verified');
+		expect(listed.stdout).toContain('LINK EXPIRES');
+		const removed = await cli('email', 'addresses', 'rm', 'me+test@gmail.com');
+		expect(removed.code).toBe(0);
+		expect(seen[2]).toEqual({ method: 'DELETE', path: '/api/v1/email/addresses/me%2Btest%40gmail.com', body: undefined });
+		expect(removed.stdout).toContain('Removed me+test@gmail.com.');
+	});
+
+	test('request-access validates its flags, posts the request, and shows the last one without flags', async () => {
+		const request = {
+			id: 'ear_1',
+			orgId: 'org_1',
+			orgName: 'Acme',
+			status: 'denied',
+			useCase: 'Password resets and receipts for our customers.',
+			expectedDailyVolume: 10_000,
+			website: 'https://acme.example',
+			requestedBy: { id: 'usr_1', email: 'ada@acme.example' },
+			decidedBy: 'usr_admin',
+			decidedAt: '2026-11-07T12:00:00.000Z',
+			note: 'DMARC still fails.',
+			perDay: null,
+			perSecond: null,
+			createdAt: '2026-11-07T10:00:00.000Z',
+		};
+		const seen = serve({
+			'GET /api/v1/email/access-request': { request },
+			'POST /api/v1/email/access-request': new Response(JSON.stringify({ request: { ...request, id: 'ear_2', status: 'pending', note: null, decidedAt: null } }), {
+				status: 201,
+				headers: { 'content-type': 'application/json' },
+			}),
+		});
+		const noVolume = await cli('email', 'request-access', '--use-case', 'Password resets for customers');
+		expect(noVolume.code).toBe(1);
+		expect(noVolume.stderr).toContain('--volume is required');
+		const badVolume = await cli('email', 'request-access', '--use-case', 'x', '--volume', 'lots');
+		expect(badVolume.code).toBe(1);
+		expect(badVolume.stderr).toContain('--volume must be a whole number');
+		expect(seen).toHaveLength(0);
+
+		const shown = await cli('email', 'request-access');
+		expect(shown.code).toBe(0);
+		expect(shown.stdout).toContain('denied');
+		expect(shown.stdout).toContain('Reason');
+		expect(shown.stdout).toContain('DMARC still fails.');
+
+		const asked = await cli('email', 'request-access', '--use-case', 'Password resets and receipts for our customers.', '--volume', '10k', '--website', 'https://acme.example');
+		expect(asked.code).toBe(0);
+		expect(seen[1]).toEqual({
+			method: 'POST',
+			path: '/api/v1/email/access-request',
+			body: { useCase: 'Password resets and receipts for our customers.', expectedDailyVolume: 10_000, website: 'https://acme.example' },
+		});
+		expect(asked.stdout).toContain('Requested production access (ear_2).');
+	});
+
+	test('request-access without a request yet says how to ask', async () => {
+		serve({ 'GET /api/v1/email/access-request': { request: null } });
+		const result = await cli('email', 'request-access');
+		expect(result.code).toBe(0);
+		expect(result.stdout).toContain('No production access request yet.');
+	});
 });

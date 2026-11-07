@@ -1,11 +1,18 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import CameraIcon from '@lucide/svelte/icons/camera';
 	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
+	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
+	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 	import PlugIcon from '@lucide/svelte/icons/plug';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import TrashIcon from '@lucide/svelte/icons/trash';
 	import UnplugIcon from '@lucide/svelte/icons/unplug';
-	import type { AppVolumeView } from '@skiff/contracts';
+	import {
+		APP_VOLUME_USAGE_WARN_PERCENT,
+		type AppVolumeSnapshotView,
+		type AppVolumeView
+	} from '@skiff/contracts';
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
 	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
@@ -52,6 +59,53 @@
 	let backing = $state<'state_dir' | 'node_volume'>('state_dir');
 	let nodeVolume = $state('');
 	let singleWriter = $state(true);
+	let snapshotOpen = $state(false);
+	let snapshotting = $state<AppVolumeView | null>(null);
+	let snapshotLive = $state(false);
+	let restoreOpen = $state(false);
+	let restoring = $state<{ volume: AppVolumeView; snapshot: AppVolumeSnapshotView } | null>(null);
+	let restoreName = $state('');
+
+	/** Snapshots shown per volume; the CLI and API list them all. */
+	const SNAPSHOTS_SHOWN = 5;
+
+	function openSnapshot(volume: AppVolumeView) {
+		snapshotting = volume;
+		snapshotLive = false;
+		snapshotOpen = true;
+	}
+
+	function openRestore(volume: AppVolumeView, snapshot: AppVolumeSnapshotView) {
+		restoring = { volume, snapshot };
+		restoreName = `${volume.name}-restored`.slice(0, 40);
+		restoreOpen = true;
+	}
+
+	function removeSnapshot(volume: AppVolumeView, snapshot: AppVolumeSnapshotView) {
+		askConfirm({
+			title: `Delete snapshot ${snapshot.label ?? snapshot.id}?`,
+			description: `The archive is deleted from ${snapshot.target?.name ?? 'the platform object store'}. This cannot be undone.`,
+			confirmLabel: 'Delete snapshot',
+			tone: 'danger',
+			action: '?/deleteVolumeSnapshot',
+			fields: { volume: volume.name, snapshotId: snapshot.id }
+		});
+	}
+
+	function snapshotSummary(snapshot: AppVolumeSnapshotView): string {
+		const parts = [formatDate(snapshot.createdAt)];
+		if (snapshot.sizeBytes !== null) parts.push(formatBytes(snapshot.sizeBytes));
+		if (snapshot.method) parts.push(methodLabel[snapshot.method]);
+		parts.push(snapshot.target?.name ?? 'platform store');
+		return parts.join(' · ');
+	}
+
+	const methodLabel: Record<NonNullable<AppVolumeSnapshotView['method']>, string> = {
+		reflink: 'paused briefly (reflink)',
+		paused: 'paused while copying',
+		idle: 'not in use',
+		live: 'live copy'
+	};
 
 	function openAttach(volume: AppVolumeView) {
 		attaching = volume;
@@ -136,7 +190,11 @@
 							<div>
 								<p class="flex flex-wrap items-center gap-2">
 									<span class="font-mono text-sm font-medium">{volume.name}</span>
-									<StatusBadge status={volume.status} />
+									{#if volume.restoringFrom}
+										<StatusBadge status="pending" label="restoring" />
+									{:else}
+										<StatusBadge status={volume.status} />
+									{/if}
 								</p>
 								<p class="text-xs text-muted-foreground">
 									{volume.backing === 'node_volume'
@@ -159,13 +217,19 @@
 								</div>
 								<Progress
 									value={usage.percent ?? 0}
-									class="h-1 {usage.percent !== null && usage.percent >= 85
+									class="h-1 {usage.percent !== null && usage.percent >= APP_VOLUME_USAGE_WARN_PERCENT
 										? '[&_[data-slot=progress-indicator]]:bg-destructive'
 										: usage.percent !== null && usage.percent >= 70
 											? '[&_[data-slot=progress-indicator]]:bg-warning'
 											: ''}"
 									aria-label="{volume.name}: {usage.percent ?? 0}% of its quota"
 								/>
+								{#if volume.nearQuota}
+									<p class="flex items-center gap-1 text-xs text-destructive">
+										<TriangleAlertIcon class="size-3" aria-hidden="true" />
+										Nearly full. Delete data or grow the volume.
+									</p>
+								{/if}
 							</div>
 
 							{#if volume.attachments.length === 0}
@@ -184,11 +248,64 @@
 									{/each}
 								</ul>
 							{/if}
+
+							{#if volume.snapshots.length > 0}
+								<div class="space-y-1">
+									<p class="text-xs font-medium">Snapshots</p>
+									<ul class="space-y-1">
+										{#each volume.snapshots.slice(0, SNAPSHOTS_SHOWN) as snapshot (snapshot.id)}
+											<li class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+												<CameraIcon class="size-3 text-muted-foreground" aria-hidden="true" />
+												<span class="font-medium">{snapshot.label ?? snapshot.id}</span>
+												<StatusBadge status={snapshot.status} />
+												<span class="text-muted-foreground">{snapshotSummary(snapshot)}</span>
+												{#if snapshot.restoreVerifiedAt}
+													<Badge variant="outline" class="font-normal">restore verified</Badge>
+												{/if}
+												{#if snapshot.error}
+													<span class="w-full text-destructive">{snapshot.error}</span>
+												{/if}
+												{#if can.manageVolumes && (snapshot.status === 'ok' || snapshot.status === 'failed')}
+													<span class="ml-auto flex gap-1">
+														{#if snapshot.status === 'ok'}
+															<Button
+																size="sm"
+																variant="ghost"
+																class="h-6 px-2 text-xs"
+																onclick={() => openRestore(volume, snapshot)}
+															>
+																<RotateCcwIcon />Restore…
+															</Button>
+														{/if}
+														<Button
+															size="sm"
+															variant="ghost"
+															class="h-6 px-2 text-xs"
+															aria-label="Delete snapshot {snapshot.label ?? snapshot.id}"
+															onclick={() => removeSnapshot(volume, snapshot)}
+														>
+															<TrashIcon />
+														</Button>
+													</span>
+												{/if}
+											</li>
+										{/each}
+									</ul>
+									{#if volume.snapshots.length > SNAPSHOTS_SHOWN}
+										<p class="text-xs text-muted-foreground">
+											{volume.snapshots.length - SNAPSHOTS_SHOWN} older — list them with
+											<code>skif volume snapshots {volume.name} --project {slug}</code>.
+										</p>
+									{/if}
+								</div>
+							{/if}
 						</div>
 						{#if can.manageVolumes}
 							<RowMenu label="Actions for {volume.name}">
 								<DropdownMenu.Item
-									disabled={volume.attachments.length > 0}
+									disabled={volume.attachments.length > 0 ||
+										volume.restoringFrom !== null ||
+										volume.status === 'failed'}
 									onSelect={() => openAttach(volume)}
 								>
 									<PlugIcon />Mount in {slug}…
@@ -198,10 +315,17 @@
 										<UnplugIcon />Unmount from {attachment.environment}
 									</DropdownMenu.Item>
 								{/each}
+								<DropdownMenu.Item
+									disabled={volume.restoringFrom !== null ||
+										volume.snapshots.some((item) => item.status === 'pending' || item.status === 'running')}
+									onSelect={() => openSnapshot(volume)}
+								>
+									<CameraIcon />Snapshot now…
+								</DropdownMenu.Item>
 								<DropdownMenu.Separator />
 								<DropdownMenu.Item
 									variant="destructive"
-									disabled={volume.attachments.length > 0}
+									disabled={volume.attachments.length > 0 || volume.restoringFrom !== null}
 									onSelect={() => remove(volume)}
 								>
 									<TrashIcon />Delete volume
@@ -334,6 +458,80 @@
 				<Field.Field orientation="horizontal">
 					<Checkbox id="volume-read-only" name="readOnly" value="1" bind:checked={readOnly} />
 					<Field.Label for="volume-read-only">Mount read-only</Field.Label>
+				</Field.Field>
+			</Field.Group>
+		</FormDialog>
+
+		<FormDialog
+			bind:open={snapshotOpen}
+			icon={CameraIcon}
+			title="Snapshot {snapshotting?.name ?? ''}"
+			description="The node pauses the app while it copies the volume (a moment on btrfs or XFS, the whole copy otherwise), then uploads it to your backup target."
+			action="?/snapshotVolume"
+			submitLabel="Take snapshot"
+		>
+			<input type="hidden" name="volume" value={snapshotting?.name ?? ''} />
+			<Field.Group>
+				<Field.Field data-invalid={fieldErrors.label ? true : undefined}>
+					<Field.Label for="snapshot-label">Label (optional)</Field.Label>
+					<Input
+						id="snapshot-label"
+						name="label"
+						maxlength={120}
+						placeholder="before the v2 migration"
+						aria-invalid={fieldErrors.label ? 'true' : undefined}
+					/>
+					{#if fieldErrors.label}<Field.Error>{fieldErrors.label}</Field.Error>{/if}
+				</Field.Field>
+				<Field.Field orientation="horizontal">
+					<Checkbox id="snapshot-live" name="live" value="1" bind:checked={snapshotLive} />
+					<Field.Label for="snapshot-live">Copy without pausing the app</Field.Label>
+					<Field.Description>
+						The copy may be inconsistent if the app writes while it runs.
+					</Field.Description>
+				</Field.Field>
+			</Field.Group>
+		</FormDialog>
+
+		<FormDialog
+			bind:open={restoreOpen}
+			icon={RotateCcwIcon}
+			title="Restore {restoring?.snapshot.label ?? restoring?.snapshot.id ?? ''}"
+			description="Restoring creates a new volume in {slug}; {restoring?.volume.name ?? 'the source'} is not touched. Mount the new volume once the restore finishes."
+			action="?/restoreVolumeSnapshot"
+			submitLabel="Restore into new volume"
+		>
+			<input type="hidden" name="volume" value={restoring?.volume.name ?? ''} />
+			<input type="hidden" name="snapshotId" value={restoring?.snapshot.id ?? ''} />
+			<Field.Group>
+				<Field.Field data-invalid={fieldErrors.name ? true : undefined}>
+					<Field.Label for="restore-name">New volume name</Field.Label>
+					<Input
+						id="restore-name"
+						name="name"
+						bind:value={restoreName}
+						required
+						maxlength={40}
+						autocapitalize="none"
+						spellcheck="false"
+						class="font-mono text-sm"
+						aria-invalid={fieldErrors.name ? 'true' : undefined}
+					/>
+					{#if fieldErrors.name}<Field.Error>{fieldErrors.name}</Field.Error>{/if}
+				</Field.Field>
+				<Field.Field data-invalid={fieldErrors.sizeMb ? true : undefined}>
+					<Field.Label for="restore-size">Quota (MB)</Field.Label>
+					<Input
+						id="restore-size"
+						name="sizeMb"
+						type="number"
+						min={restoring?.volume.sizeMb ?? 1}
+						max={1048576}
+						placeholder={String(restoring?.volume.sizeMb ?? '')}
+						aria-invalid={fieldErrors.sizeMb ? 'true' : undefined}
+					/>
+					<Field.Description>Defaults to the source's quota; it cannot be smaller.</Field.Description>
+					{#if fieldErrors.sizeMb}<Field.Error>{fieldErrors.sizeMb}</Field.Error>{/if}
 				</Field.Field>
 			</Field.Group>
 		</FormDialog>

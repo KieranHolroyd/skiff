@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import type { DesiredState, RouteSpec } from '@skiff/contracts';
 import {
+	compileAwaitingDeployRoute,
 	compileCaddyConfig,
 	type CaddyRoute,
 	type SiteCompileInput,
@@ -96,6 +97,7 @@ export function toSiteCompileInput(
 		upstream: route.upstream,
 		...(route.upstreams?.length ? { upstreams: route.upstreams } : {}),
 		...(route.healthPath ? { healthPath: route.healthPath } : {}),
+		...(route.healthPath && route.healthIntervalSeconds ? { healthIntervalSeconds: route.healthIntervalSeconds } : {}),
 	};
 }
 
@@ -313,9 +315,13 @@ export function buildCaddyConfig(options: CompileAgentConfigOptions): Record<str
 		.filter((domain): domain is DesiredDomain & { redirectTo: string } => Boolean(domain.redirectTo))
 		.filter((domain) => !siteHosts.has(normalizeHost(domain.host)))
 		.map((domain) => compileHostRedirect(domain.host, withScheme(domain.redirectTo)));
+	// Never-deployed projects get a default page at their production host; a real route always wins.
+	const placeholderRoutes = (options.state.placeholders ?? [])
+		.filter((placeholder) => !siteHosts.has(normalizeHost(placeholder.host)))
+		.map((placeholder) => compileAwaitingDeployRoute(normalizeHost(placeholder.host), placeholder.dashboardUrl));
 	// Public storage endpoints match on a dedicated host and never collide with site routes (S3).
 	const storageRoutes = options.state.storageRoutes.map(compileStorageRoute);
-	server.routes = [...storageRoutes, ...redirects, ...domainRedirects, ...server.routes];
+	server.routes = [...storageRoutes, ...redirects, ...domainRedirects, ...placeholderRoutes, ...server.routes];
 
 	// The control plane's object browser reaches instances through an internal gateway (D82).
 	// The edge gets a loopback listener; a worker puts its routes on the WireGuard-only server.

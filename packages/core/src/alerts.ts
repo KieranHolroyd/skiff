@@ -953,9 +953,11 @@ export class AlertService {
 	 * Deliver a built-in alert through its kind's routing and record it in the history. Returns
 	 * false when the kind is turned off (nothing sent, nothing recorded).
 	 */
-	async deliverSystem(alert: AlertMessage): Promise<boolean> {
-		const notifiers = this.systemRoute(alert.key);
+	async deliverSystem(input: AlertMessage): Promise<boolean> {
+		const notifiers = this.systemRoute(input.key);
 		if (!notifiers) return false;
+		// Webhook receivers get the documented `status` and a dashboard link on built-in alerts too.
+		const alert: AlertMessage = { ...input, status: input.status ?? 'firing', url: input.url ?? this.url() };
 		const delivery = await this.#send(notifiers, alert);
 		if (notifiers.length === 0) delivery.none = 'no notification channel is configured';
 		this.recordSystemAlert(alert, delivery);
@@ -1004,7 +1006,7 @@ export class AlertService {
 		const parsed = systemAlertsUpdateSchema.safeParse(input);
 		if (!parsed.success) throw new ValidationError('Invalid system alert settings.', parsed.error.issues);
 		// Policies validate their own ranges (and that critical < warning for certificates).
-		if (parsed.data.policies && Object.keys(parsed.data.policies).length) this.ctx.policies.update(parsed.data.policies);
+		if (parsed.data.policies && Object.keys(parsed.data.policies).length) this.ctx.policies.update(principal, parsed.data.policies);
 		if (parsed.data.routing) {
 			const merged: SystemAlertRouting = { ...this.#routing() };
 			for (const [kind, route] of Object.entries(parsed.data.routing)) if (route) merged[kind as SystemAlertKind] = route;

@@ -35,7 +35,7 @@
 	import { formatDate } from '../_lib/format.js';
 	import { purgeCountdown } from '../_lib/operations/copy.js';
 	import StorageMeter from './_lib/StorageMeter.svelte';
-	import { databaseEngines } from '@skiff/contracts';
+	import { databaseEngines, databaseVariantRegistry, databaseVariantsFor } from '@skiff/contracts';
 	import type { PageProps } from './$types';
 
 	interface CreateFormResult {
@@ -57,10 +57,15 @@
 		(databaseEngines as readonly string[]).includes(requestedEngine ?? '') ? requestedEngine! : 'postgres'
 	);
 	const engine = $derived(data.engines.find((item) => item.engine === engineId) ?? data.engines[0]!);
+	let versionId = $state('');
+	const selectedVersion = $derived(engine.versions.includes(versionId) ? versionId : engine.defaultVersion);
+	// Image variants (D126): only versions with a PostGIS / pg_cron image offer more than standard.
+	const variantChoices = $derived(databaseVariantsFor(engine.engine, selectedVersion));
 	const familyLabel: Record<string, string> = {
 		relational: 'SQL',
 		document: 'Document',
-		'key-value': 'Key-value'
+		'key-value': 'Key-value',
+		analytical: 'Analytics'
 	};
 
 	const trashView = $derived(data.view === 'trash');
@@ -420,6 +425,7 @@
 							name="version"
 							value={engine.defaultVersion}
 							class="w-full"
+							onchange={(event) => (versionId = event.currentTarget.value)}
 						>
 							{#each engine.versions as version (version)}
 								<NativeSelect.Option value={version}
@@ -431,7 +437,28 @@
 						</NativeSelect.Root>
 					{/key}
 					{#if errors.version}<Field.Error>{errors.version}</Field.Error>{/if}
+					{#if engine.engine === 'postgres' && variantChoices.length === 1}
+						<Field.Description>PostGIS and pg_cron images need PostgreSQL 18.</Field.Description>
+					{/if}
 				</Field.Field>
+				{#if variantChoices.length > 1}
+					<Field.Field data-invalid={errors.variant ? true : undefined}>
+						<Field.Label for="database-variant">Image</Field.Label>
+						{#key `${engine.engine}:${selectedVersion}`}
+							<NativeSelect.Root id="database-variant" name="variant" value="standard" class="w-full">
+								{#each variantChoices as variant (variant)}
+									<NativeSelect.Option value={variant}
+										>{databaseVariantRegistry[variant].label}</NativeSelect.Option
+									>
+								{/each}
+							</NativeSelect.Root>
+						{/key}
+						<Field.Description
+							>PostGIS and pg_cron each add their extension to pgvector. Fixed once created.</Field.Description
+						>
+						{#if errors.variant}<Field.Error>{errors.variant}</Field.Error>{/if}
+					</Field.Field>
+				{/if}
 				<Field.Field data-invalid={errors.placement ? true : undefined}>
 					<Field.Label for="database-placement">Placement</Field.Label>
 					<NativeSelect.Root
@@ -561,7 +588,11 @@
 				class="font-mono text-sm font-medium underline-offset-4 group-hover:underline"
 				>{database.name}</a
 			>
-			<p class="text-xs text-muted-foreground">{database.engineLabel} {database.version}</p>
+			<p class="text-xs text-muted-foreground">
+				{database.engineLabel}
+				{database.version}{#if database.variant !== 'standard'}
+					· {databaseVariantRegistry[database.variant].label}{/if}
+			</p>
 		</div>
 	</div>
 {/snippet}

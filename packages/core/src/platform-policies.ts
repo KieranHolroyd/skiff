@@ -1,12 +1,14 @@
 import {
 	PLATFORM_POLICIES_KEY,
+	canAdministerPlatform,
 	platformPoliciesMergedSchema,
 	platformPoliciesSchema,
 	platformPoliciesUpdateSchema,
 	type PlatformPolicies,
+	type Principal,
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
-import { ValidationError } from './errors.ts';
+import { CoreError, ValidationError } from './errors.ts';
 
 const DAY_MS = 86_400_000;
 
@@ -35,8 +37,13 @@ export class PlatformPolicyService {
 		return this.#cache;
 	}
 
-	/** Owner-only (the caller checks); validates, merges and persists. Returns the saved policies. */
-	update(input: unknown): PlatformPolicies {
+	/**
+	 * Platform admins' own session only (the dashboard also requires the org owner); validates,
+	 * merges and persists. Returns the saved policies.
+	 */
+	update(principal: Principal, input: unknown): PlatformPolicies {
+		if (!canAdministerPlatform(principal))
+			throw new CoreError('forbidden', 'Only a platform admin signed in to the dashboard can change platform policies.', 403);
 		const update = platformPoliciesUpdateSchema.safeParse(input);
 		if (!update.success) throw new ValidationError('Invalid platform policies.', update.error.issues);
 		const merged = platformPoliciesMergedSchema.safeParse({ ...this.get(), ...update.data });

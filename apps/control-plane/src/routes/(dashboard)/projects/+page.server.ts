@@ -1,7 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { accessModes, runtimes, type OperationView } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
-import { failStatus, formString, toFormFailure } from '../_lib/errors.js';
+import { failStatus, formRawString, formString, toFormFailure } from '../_lib/errors.js';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = ({ locals, url }) => {
@@ -32,7 +32,11 @@ export const load: PageServerLoad = ({ locals, url }) => {
 		activeBulk =
 			core.operations
 				.list(principal, { kind: 'bulk', status: 'applying', limit: 10 })
-				.find((operation) => operation.actor.id === principal.userId) ?? null;
+				// Blueprint runs are bulk operations too, but they are followed on /new/blueprint.
+				.find(
+					(operation) =>
+						operation.actor.id === principal.userId && operation.action !== 'blueprint.apply'
+				) ?? null;
 	} catch {
 		// History needs project:read; without it there is nothing to resume.
 	}
@@ -82,6 +86,11 @@ export const actions: Actions = {
 		if (!(accessModes as readonly string[]).includes(values.previewAccess)) {
 			fieldErrors.previewAccess = 'Choose a valid preview access mode.';
 		}
+		const password = formRawString(data, 'password');
+		const wantsPassword = values.productionAccess === 'password' || values.previewAccess === 'password';
+		if (wantsPassword && password.length < 8) {
+			fieldErrors.password = 'Use at least 8 characters for password mode.';
+		}
 		if (!(runtimes as readonly string[]).includes(values.runtime)) {
 			fieldErrors.runtime = 'Choose a valid runtime.';
 		} else if (values.runtime === 'function') {
@@ -101,7 +110,8 @@ export const actions: Actions = {
 				runtime: values.runtime as (typeof runtimes)[number],
 				placement: values.placement,
 				productionAccess: values.productionAccess as (typeof accessModes)[number],
-				previewAccess: values.previewAccess as (typeof accessModes)[number]
+				previewAccess: values.previewAccess as (typeof accessModes)[number],
+				...(wantsPassword ? { password } : {})
 			});
 		} catch (error) {
 			const failure = toFormFailure(error);

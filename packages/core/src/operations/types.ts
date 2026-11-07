@@ -6,6 +6,7 @@ import type {
 	PruneCategory,
 	PruneScope,
 } from '@skiff/contracts';
+import type { BlueprintOperationParams } from '../blueprints.ts';
 import type { CoreContext } from '../context.ts';
 
 /** Parameters stored with an operation (`params_json`). */
@@ -13,6 +14,18 @@ export interface OperationParams {
 	targets?: string[];
 	scope?: PruneScope;
 	categories?: PruneCategory[];
+	/**
+	 * `blueprint.apply` only: the normalised document and the plan it produced. Internal: set by
+	 * the blueprint service, never accepted from `POST /operations`, never shown in a view.
+	 */
+	blueprint?: BlueprintOperationParams;
+}
+
+/** What `OperationService.apply` passes to an action's `beforeApply` hook. */
+export interface OperationApplyInput {
+	categories?: PruneCategory[];
+	/** The stack name typed back to confirm a pruning blueprint plan. */
+	confirm?: string;
 }
 
 /** One item a plan produced. `data` is whatever `apply` needs, stored as JSON. */
@@ -60,6 +73,12 @@ export interface ActionDefinition {
 	plan(run: RunContext): AsyncIterable<PlannedItem>;
 	/** Idempotent; re-verifies the item still qualifies before changing anything. */
 	apply(run: RunContext, item: StoredItem): Promise<ItemResult>;
+	/**
+	 * Optional check when a reviewed plan is applied, after `authorize` and before the run is
+	 * claimed. Throw to refuse (a blueprint whose live state moved since the plan, a prune that was
+	 * not typed back). Never mutates.
+	 */
+	beforeApply?(ctx: CoreContext, principal: Principal, params: OperationParams, input: OperationApplyInput): void;
 	/** Optional hook after the last item (e.g. one desired-state bump, a GC pass). */
 	finish?(run: RunContext): Promise<void>;
 }

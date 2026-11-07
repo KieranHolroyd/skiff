@@ -23,6 +23,7 @@ export const systemAlertKinds = [
 	'broker_store',
 	'quota',
 	'telemetry',
+	'failover',
 ] as const;
 export type SystemAlertKind = (typeof systemAlertKinds)[number];
 
@@ -105,8 +106,8 @@ export const systemAlertCatalog: SystemAlertInfo[] = [
 	},
 	{
 		kind: 'storage_usage',
-		label: 'Object storage usage',
-		description: 'A storage instance passes a share of its storage budget.',
+		label: 'Storage usage',
+		description: 'A storage instance or an app volume passes a share of its storage budget or quota.',
 		severity: 'warning; critical at 95%',
 		thresholds: [{ key: 'storageAlertPercent', label: 'Above', unit: 'percent', min: 50, max: 99 }],
 	},
@@ -129,6 +130,14 @@ export const systemAlertCatalog: SystemAlertInfo[] = [
 		label: 'Alert rules cannot evaluate',
 		description: 'The telemetry store has been unavailable for 10 minutes, so metric alert rules cannot fire.',
 		severity: 'critical',
+		thresholds: [],
+	},
+	{
+		kind: 'failover',
+		label: 'Failover',
+		description:
+			'The failover controller moved replica copies or changed ingress rotation, could not (no target, queue expired), needs a human for a lost node or database primary, or lost its lease.',
+		severity: 'info when it acted; warning when blocked; critical for a lost primary or lease',
 		thresholds: [],
 	},
 ];

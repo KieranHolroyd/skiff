@@ -25,7 +25,7 @@ const core: Core = createCore({
 		objectStoreSecret: 'object-secret-123',
 		desiredAgentVersion: '0.1.0',
 		now: () => clock,
-		features: { ...DEFAULT_FEATURES, MULTI_NODE_REPLICAS: true },
+		features: { ...DEFAULT_FEATURES, MULTI_NODE_REPLICAS: true, SERVICE_ENDPOINTS: false },
 	},
 });
 const principal = buildPrincipal({ kind: 'user', userId: 'user_1', orgId: 'org_1', role: 'owner', platformAdmin: true });
@@ -58,9 +58,10 @@ describe('multi-node replica planning', () => {
 		expect(resolved.replicas!.map((replica) => replica.index)).toEqual([0, 1]);
 
 		core.workloads.record(core.projects.requireRow(principal, project.slug), 'dep_replicated', resolved);
+		// A draining node's copies move through the failover controller (failover off or on).
 		const failed = resolved.replicas![0]!.nodeId;
-		opened.sqlite.run(`UPDATE nodes SET status = 'offline' WHERE id = ?`, [failed]);
-		expect(core.workloads.rebalanceReplicas()).toBe(1);
+		opened.sqlite.run(`UPDATE nodes SET status = 'draining' WHERE id = ?`, [failed]);
+		expect((await core.failover.tick()).moved).toBe(1);
 		const rows = opened.sqlite
 			.query<{ nodeId: string }, []>('SELECT node_id AS nodeId FROM workload_replicas ORDER BY replica_index')
 			.all();

@@ -47,9 +47,21 @@
 			: { type: 'CNAME', value: `${project.slug}.${contentDomain}` }
 	);
 
-	const verifiedCount = $derived(
-		domains.filter((domain) => domain.status === 'verified' || domain.status === 'active').length
-	);
+	const activeCount = $derived(domains.filter((domain) => domain.status === 'active').length);
+
+	/** `verified` is a step on the way (the certificate is being issued), not the end state. */
+	const statusLabel: Record<DomainView['status'], string> = {
+		pending: 'pending',
+		verified: 'verified · issuing certificate',
+		active: 'active',
+		failed: 'failed'
+	};
+	const statusTone: Record<DomainView['status'], 'info' | 'success' | 'danger'> = {
+		pending: 'info',
+		verified: 'info',
+		active: 'success',
+		failed: 'danger'
+	};
 
 	async function check(domain: DomainView) {
 		if (checking.includes(domain.id)) return;
@@ -87,7 +99,8 @@
 			<div class="min-w-0">
 				<p class="text-sm font-medium">Custom domains</p>
 				<p class="text-xs text-muted-foreground">
-					{verifiedCount}/{domains.length} verified · a certificate is issued as soon as a domain verifies.
+					{activeCount}/{domains.length} serving over HTTPS · a certificate is issued as soon as a domain
+					verifies, and Skiff re-checks pending domains every 10 minutes.
 				</p>
 				<p class="text-xs text-muted-foreground">
 					Domains serve the production deployment; environment hosts are separate.
@@ -126,7 +139,11 @@
 									<span class="truncate">{domain.hostname}</span>
 									<ArrowUpRightIcon class="size-3.5 shrink-0 text-muted-foreground" />
 								</a>
-								<StatusBadge status={domain.status} />
+								<StatusBadge
+									status={domain.status}
+									label={statusLabel[domain.status]}
+									tone={statusTone[domain.status]}
+								/>
 								<Badge variant="outline" class="font-mono text-xs">{domain.kind}</Badge>
 								{#if domain.redirectWww}
 									<Badge variant="neutral" class="font-mono text-xs">www → apex</Badge>
@@ -170,17 +187,35 @@
 					</Card.Header>
 
 					<Card.Content class="space-y-4 py-4">
-						{#if domain.status === 'verified' || domain.status === 'active'}
+						{#if domain.status === 'active'}
 							<div
 								class="flex items-start gap-2 rounded-lg border border-success/30 bg-success/5 p-3"
 							>
 								<CheckIcon class="mt-0.5 size-4 shrink-0 text-success" />
 								<p class="text-xs text-muted-foreground">
+									Serving. <span class="font-mono">{domain.hostname}</span> is routed to this project
+									and the proxy has a valid certificate for it.
+								</p>
+							</div>
+						{:else if domain.status === 'verified'}
+							<div class="flex items-start gap-2 rounded-lg border border-info/30 bg-info/5 p-3">
+								<CheckIcon class="mt-0.5 size-4 shrink-0 text-info" />
+								<p class="text-xs text-muted-foreground">
 									Control is proven. Traffic for <span class="font-mono">{domain.hostname}</span> is routed
-									to this project, and its certificate is issued now if it does not already have one.
+									to this project and its certificate is being issued, which usually takes a minute or
+									two. The domain shows as active once the proxy serves it.
 								</p>
 							</div>
 						{:else}
+							{#if domain.status === 'failed'}
+								<Alert.Root variant="destructive" class="py-3">
+									<AlertCircleIcon />
+									<Alert.Description>
+										Verification failed: the TXT record was not found within 3 days, so this
+										domain is not served. Add the record below, then select Check DNS.
+									</Alert.Description>
+								</Alert.Root>
+							{/if}
 							<div class="grid gap-3 sm:grid-cols-2">
 								{#if domain.verification}
 									<div class="rounded-lg border bg-muted/25 p-3">

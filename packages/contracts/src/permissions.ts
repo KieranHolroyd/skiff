@@ -22,6 +22,8 @@ export const statements = {
 	email: ['read', 'send', 'update', 'delete', 'credentials'],
 	shareLink: ['create', 'read', 'revoke'],
 	logs: ['read'],
+	// Container console (D127): inspect a project's container, browse its files, open a shell.
+	container: ['inspect', 'files', 'exec'],
 	metrics: ['read'],
 	apiKey: ['create', 'read', 'revoke'],
 	member: ['invite', 'update-role', 'remove'],
@@ -55,10 +57,12 @@ export const roles = {
 		'email:read', 'email:send', 'email:update', 'email:credentials',
 		'shareLink:create', 'shareLink:read', 'shareLink:revoke',
 		'logs:read', 'metrics:read',
+		'container:inspect', 'container:files', 'container:exec',
 	),
 	viewer: pick(
 		'project:read', 'deployment:read', 'domain:read', 'secret:read-metadata',
 		'build:read', 'database:read', 'storage:read', 'broker:read', 'email:read', 'shareLink:read', 'logs:read', 'metrics:read',
+		'container:inspect',
 	),
 } as const satisfies Record<string, readonly Permission[]>;
 
@@ -76,7 +80,10 @@ export const defaultAgentScopes: readonly Permission[] = roles.deployer.filter(
 		permission !== 'storage:credentials' &&
 		permission !== 'broker:credentials' &&
 		permission !== 'email:credentials' &&
-		permission !== 'database:console',
+		permission !== 'database:console' &&
+		// A shell and file reads inside a container are a human surface too (D127).
+		permission !== 'container:files' &&
+		permission !== 'container:exec',
 );
 
 /** Permissions that are never pre-ticked and always require an explicit opt-in. */

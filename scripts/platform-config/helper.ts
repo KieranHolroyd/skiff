@@ -8,6 +8,8 @@ import { basename, dirname, join } from 'node:path';
 import {
 	LITESTREAM_VERSION,
 	PLATFORM_CONFIG_REQUIRED,
+	TELEMETRY_MEMORY_ENV,
+	TELEMETRY_MEMORY_MB,
 	applyPlatformConfig,
 	parsePlatformConfigRequest,
 	type PlatformConfigOutcome,
@@ -24,7 +26,7 @@ import {
 } from '../../packages/contracts/src/platform-domains.ts';
 import { VAPID_PRIVATE_KEY_ENV, VAPID_PUBLIC_KEY_ENV, ensureVapidKeys } from '../../packages/contracts/src/vapid.ts';
 import { readEnvFile, writeEnvFile } from '../install/env-file.ts';
-import { CLICKHOUSE_PATHS, clickhouseInstalled, ensureClickHouse, uninstallClickHouse } from '../systemd/clickhouse.ts';
+import { CLICKHOUSE_PATHS, clickhouseInstalled, ensureClickHouse, restartClickHouse, uninstallClickHouse } from '../systemd/clickhouse.ts';
 
 export const CONTROL_PLANE = 'skiff-control-plane.service';
 export const AGENT = 'skiff-agent.service';
@@ -232,6 +234,10 @@ export class PlatformConfigHelper {
 					return this.startDrill();
 				case 'telemetry':
 					return request.enabled ? await this.installTelemetryFlow() : await this.removeTelemetryFlow(request.purgeData);
+				case 'telemetry-memory':
+					return await this.telemetryMemoryFlow(request.memoryMb);
+				case 'telemetry-restart':
+					return await this.restartTelemetryFlow();
 				case 'domains':
 					return await this.domains(request);
 				case 'push-keys':
@@ -451,11 +457,9 @@ export class PlatformConfigHelper {
 		};
 	}
 
-	/** Download, configure and start ClickHouse, then restart the control plane to pick it up. */
-	private async installTelemetryFlow(): Promise<PlatformConfigStatus> {
+	private ensureClickHouse() {
 		const { host } = this;
-		this.progress({ phase: 'installing', message: 'Downloading and starting ClickHouse (about 240 MB; this can take a few minutes)' });
-		const result = await ensureClickHouse({
+		return ensureClickHouse({
 			...this.clickhousePaths(),
 			run: (cmd) => void host.run(cmd),
 			capture: (cmd) => {
@@ -465,11 +469,81 @@ export class PlatformConfigHelper {
 			sleep: (ms) => host.sleep(ms),
 			log: (message) => host.log(message),
 		});
+	}
+
+	/** Download, configure and start ClickHouse, then restart the control plane to pick it up. */
+	private async installTelemetryFlow(): Promise<PlatformConfigStatus> {
+		this.progress({ phase: 'installing', message: 'Downloading and starting ClickHouse (about 240 MB; this can take a few minutes)' });
+		const result = await this.ensureClickHouse();
 		if (!result.ok) return this.finish('error', `ClickHouse could not be installed: ${result.warning ?? 'it did not start'}. See journalctl -u skiff-clickhouse.`);
 		this.progress({ phase: 'restarting', message: 'Restarting the control plane to connect to ClickHouse' });
 		if (await this.restartControlPlane())
 			return this.finish('applied', 'The telemetry store is installed. Traffic charts and dashboards fill in as agents report (about a minute).', result.envAdded);
 		return this.finish('error', 'ClickHouse is running, but the control plane did not come back after the restart. Check journalctl -u skiff-control-plane.', result.envAdded);
+	}
+
+	/**
+	 * Write the memory ceiling to skiff.env, regenerate config.xml, users.xml and the unit, and
+	 * restart ClickHouse. If it does not answer, the previous env file is put back and applied again.
+	 * The control plane does not read this setting, so it is not restarted.
+	 */
+	private async telemetryMemoryFlow(memoryMb: number | null): Promise<PlatformConfigStatus> {
+		const paths = this.clickhousePaths();
+		if (!clickhouseInstalled(paths.systemdDir)) return this.finish('rejected', 'The telemetry store is not installed. Install it first.');
+		const { envFile } = paths;
+		const before = readEnvFile(envFile);
+		const current = before.get(TELEMETRY_MEMORY_ENV) ?? null;
+		const next = memoryMb === null ? null : String(memoryMb);
+		const label = `${memoryMb ?? TELEMETRY_MEMORY_MB.default} MiB${memoryMb === null ? ' (the default)' : ''}`;
+		const env = new Map(before);
+		if (next === null) env.delete(TELEMETRY_MEMORY_ENV);
+		else env.set(TELEMETRY_MEMORY_ENV, next);
+
+		const changed = current === next ? [] : [TELEMETRY_MEMORY_ENV];
+		const previous = `${envFile}.previous`;
+		if (changed.length) {
+			copyFileSync(envFile, previous);
+			this.host.chownRootSkiff(previous);
+			writeEnvFile(envFile, env);
+			this.host.chownRootSkiff(envFile);
+			this.host.log(`set ${TELEMETRY_MEMORY_ENV}=${next ?? '(default)'} in ${envFile}`);
+		}
+		this.progress({ phase: 'restarting', message: `Restarting ClickHouse with a ${label} memory ceiling`, changed });
+		// Applies whatever the env file says; restarts only when the generated files changed.
+		const result = await this.ensureClickHouse();
+		if (result.ok) {
+			const note = result.changed ? '' : ' Its configuration already matched, so it was not restarted.';
+			return this.finish(changed.length || result.changed ? 'applied' : 'unchanged', `ClickHouse now runs with a ${label} memory ceiling.${note}`, changed);
+		}
+		if (!changed.length) return this.finish('error', `ClickHouse did not come back: ${result.warning ?? 'it did not start'}.`, changed);
+
+		this.host.log(`ClickHouse did not come up with ${TELEMETRY_MEMORY_ENV}=${next ?? '(default)'}; reverting`);
+		this.progress({ phase: 'restarting', message: 'ClickHouse did not come back; restoring the previous memory ceiling' });
+		renameSync(previous, envFile);
+		const recovered = (await this.ensureClickHouse()).ok;
+		return this.finish(
+			recovered ? 'reverted' : 'error',
+			recovered
+				? `ClickHouse did not start with a ${label} ceiling (${result.warning ?? 'no answer'}), so the previous setting was restored.`
+				: `ClickHouse did not start with the new or the previous memory ceiling. Check journalctl -u skiff-clickhouse.`,
+			changed,
+		);
+	}
+
+	/** Restart ClickHouse as configured (e.g. after it ran out of memory or exhausted its restarts). */
+	private async restartTelemetryFlow(): Promise<PlatformConfigStatus> {
+		const paths = this.clickhousePaths();
+		if (!clickhouseInstalled(paths.systemdDir)) return this.finish('rejected', 'The telemetry store is not installed.');
+		this.progress({ phase: 'restarting', message: 'Restarting ClickHouse' });
+		const result = await restartClickHouse({
+			envFile: paths.envFile,
+			systemdDir: paths.systemdDir,
+			run: (cmd) => void this.host.run(cmd),
+			sleep: (ms) => this.host.sleep(ms),
+			log: (message) => this.host.log(message),
+		});
+		if (result.ok) return this.finish('applied', 'ClickHouse restarted and is answering.', []);
+		return this.finish('error', `ClickHouse did not come back: ${result.warning}.`, []);
 	}
 
 	/** Stop and remove ClickHouse (data only when asked), then restart the control plane without it. */

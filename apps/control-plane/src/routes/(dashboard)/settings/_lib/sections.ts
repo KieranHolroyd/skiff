@@ -9,11 +9,13 @@ import DatabaseBackupIcon from '@lucide/svelte/icons/database-backup';
 import GlobeIcon from '@lucide/svelte/icons/globe';
 import HardDriveUploadIcon from '@lucide/svelte/icons/hard-drive-upload';
 import KeyRoundIcon from '@lucide/svelte/icons/key-round';
+import LogsIcon from '@lucide/svelte/icons/logs';
 import MailIcon from '@lucide/svelte/icons/mail';
 import SparklesIcon from '@lucide/svelte/icons/sparkles';
 import UserRoundIcon from '@lucide/svelte/icons/user-round';
 import UsersIcon from '@lucide/svelte/icons/users';
 import NetworkIcon from '@lucide/svelte/icons/network';
+import PlugIcon from '@lucide/svelte/icons/plug';
 import WrenchIcon from '@lucide/svelte/icons/wrench';
 import type { Permission } from '@skiff/contracts';
 
@@ -27,10 +29,12 @@ import type { Permission } from '@skiff/contracts';
 export type SectionId =
 	| 'account'
 	| 'api-keys'
+	| 'connected-apps'
 	| 'general'
 	| 'members'
 	| 'usage'
 	| 'backup-targets'
+	| 'log-drains'
 	| 'domains'
 	| 'policies'
 	| 'backups'
@@ -50,9 +54,11 @@ export type SectionHref =
 	| '/(dashboard)/settings'
 	| '/(dashboard)/settings/account'
 	| '/(dashboard)/settings/api-keys'
+	| '/(dashboard)/settings/connected-apps'
 	| '/(dashboard)/settings/members'
 	| '/(dashboard)/settings/usage'
 	| '/(dashboard)/settings/backup-targets'
+	| '/(dashboard)/settings/log-drains'
 	| '/(dashboard)/settings/domains'
 	| '/(dashboard)/settings/policies'
 	| '/(dashboard)/settings/backups'
@@ -105,6 +111,16 @@ export const SECTIONS: Section[] = [
 		anyPermission: ['apiKey:read', 'apiKey:create']
 	},
 	{
+		id: 'connected-apps',
+		group: 'you',
+		label: 'Connected apps',
+		summary:
+			'The MCP clients and agents you have approved, what each may do, and when it last called.',
+		href: '/(dashboard)/settings/connected-apps',
+		path: '/settings/connected-apps',
+		icon: PlugIcon
+	},
+	{
 		id: 'general',
 		group: 'organisation',
 		label: 'General',
@@ -141,6 +157,16 @@ export const SECTIONS: Section[] = [
 		path: '/settings/backup-targets',
 		icon: HardDriveUploadIcon,
 		anyPermission: ['database:read']
+	},
+	{
+		id: 'log-drains',
+		group: 'organisation',
+		label: 'Log drains',
+		summary: 'Forward this organisation’s logs to a webhook or an OpenTelemetry (OTLP) receiver.',
+		href: '/(dashboard)/settings/log-drains',
+		path: '/settings/log-drains',
+		icon: LogsIcon,
+		anyPermission: ['logs:read']
 	},
 	{
 		id: 'domains',

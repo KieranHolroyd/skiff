@@ -27,7 +27,8 @@ const platformOrigin = required('SKIFF_PLATFORM_ORIGIN');
 const contentDomain = required('SKIFF_CONTENT_DOMAIN');
 const siteCookieSecret = required('SKIFF_SITE_COOKIE_SECRET');
 const objectStoreSecret = required('SKIFF_OBJECT_STORE_SECRET');
-const masterKeyFile = required('SKIFF_MASTER_KEY_FILE');
+// The installer passes the key itself when it is sealed with systemd-creds (no plaintext file).
+const masterKeyValue = env.SKIFF_MASTER_KEY || readFileSync(required('SKIFF_MASTER_KEY_FILE'), 'utf8');
 const agentEnvFile = required('SKIFF_AGENT_ENV_FILE');
 const platformHost = required('SKIFF_PLATFORM_HOST');
 const platformUpstream = required('SKIFF_PLATFORM_UPSTREAM');
@@ -48,7 +49,7 @@ const core = createCore({
 		platformOrigin,
 		contentDomain,
 		objectStore: new LocalObjectStore(`${dataDir}/objects`, platformOrigin, objectStoreSecret),
-		masterKey: Buffer.from(readFileSync(masterKeyFile, 'utf8').trim(), 'base64'),
+		masterKey: Buffer.from(masterKeyValue.trim(), 'base64'),
 		siteCookieSecret,
 		objectStoreSecret,
 		desiredAgentVersion: '0.1.0',

@@ -2,6 +2,7 @@ import {
 	METRICS_EXPORT_DEFAULTS,
 	METRICS_EXPORT_SETTINGS_KEY,
 	brokerStreamStatsSchema,
+	canAdministerPlatform,
 	canViewPlatform,
 	metricsExportSettingsSchema,
 	metricsExportSettingsUpdateSchema,
@@ -15,7 +16,7 @@ import {
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import { DB_COUNTERS } from './database-metrics-sql.ts';
-import { ForbiddenError, NotFoundError, UnauthorizedError, ValidationError } from './errors.ts';
+import { CoreError, ForbiddenError, NotFoundError, UnauthorizedError, ValidationError } from './errors.ts';
 import type { ScrapeSampleRow, ScrapeSamples } from './telemetry.ts';
 
 /**
@@ -98,8 +99,13 @@ export class MetricsExporter {
 		return parsed;
 	}
 
-	/** Owner-only (the caller checks); validates, merges, persists and drops every cached render. */
-	updateSettings(input: unknown): MetricsExportSettings {
+	/**
+	 * Platform admins' own session only (the dashboard also requires the org owner); validates,
+	 * merges, persists and drops every cached render.
+	 */
+	updateSettings(principal: Principal, input: unknown): MetricsExportSettings {
+		if (!canAdministerPlatform(principal))
+			throw new CoreError('forbidden', 'Only a platform admin signed in to the dashboard can change metrics export settings.', 403);
 		const update = metricsExportSettingsUpdateSchema.safeParse(input);
 		if (!update.success) throw new ValidationError('Invalid metrics export settings.', update.error.issues);
 		const current = this.settings();

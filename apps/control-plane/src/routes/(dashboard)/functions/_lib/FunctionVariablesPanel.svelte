@@ -38,7 +38,8 @@
 		view: FunctionView | null;
 		secrets: SecretView[];
 		fieldErrors?: Record<string, string>;
-		can: { createSecret: boolean; deleteSecret: boolean };
+		/** `updateSecret` rotates this function's own secret; `createSecret` adds a new name. */
+		can: { createSecret: boolean; updateSecret: boolean; deleteSecret: boolean };
 	} = $props();
 
 	const vars = $derived(
@@ -169,7 +170,7 @@
 									{formatRelative(secret.createdAt)}
 								</Table.Cell>
 								<Table.Cell class="pr-6 text-right whitespace-nowrap">
-									{#if can.createSecret && secret.projectId === project.id}
+									{#if can.updateSecret && secret.projectId === project.id}
 										<Button size="xs" variant="ghost" onclick={() => openAdd(secret.name)}
 											>Rotate</Button
 										>
@@ -222,7 +223,7 @@
 	</Card.Root>
 </div>
 
-{#if can.createSecret}
+{#if can.createSecret || can.updateSecret}
 	<FormDialog
 		bind:open={addOpen}
 		icon={KeyRoundIcon}

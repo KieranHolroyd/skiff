@@ -1,47 +1,76 @@
 import * as z from 'zod';
-import { appVolumeBackings, appVolumeMountPathProblem, appVolumeMountPathSchema } from './app-volume.ts';
+import { brokerEngineRegistry, brokerEngines, brokerEnvPrefixSchema, brokerNameSchema } from './broker.ts';
 import {
 	databaseEngineRegistry,
 	databaseEngines,
+	databaseEnvPrefixSchema,
 	databaseExtensionAllowlist,
 	databaseExtensionSchema,
+	databaseNameSchema,
+	databaseVariants,
 } from './database.ts';
-import { cronSchema } from './database-backup.ts';
-import { jobConcurrencyModes } from './job.ts';
-import { accessModes } from './model.ts';
-import { STORAGE_RESERVED_ENVIRONMENTS, bucketAccesses, bucketNameSchema, storageGrantModes } from './object-storage.ts';
-import { operationStatuses } from './operations.ts';
-import { previewPolicySchema } from './preview.ts';
+import {
+	STORAGE_RESERVED_ENVIRONMENTS,
+	bucketAccesses,
+	bucketNameSchema,
+	storageEnvPrefixSchema,
+	storageGrantModes,
+	storageNameSchema,
+} from './object-storage.ts';
+import { itemStatuses, operationStatuses } from './operations.ts';
 import { SLUG_PATTERN } from './slugs.ts';
 
 /**
- * `skiff.yaml` blueprints, version 1 (plan 11, docs/BLUEPRINTS.md).
+ * Blueprints, version 1 (plan 11, docs/OPERATIONS.md §12): one declarative file describes a
+ * *stack* — projects with their environments, domains and workload settings, plus the managed
+ * databases, object storage and queue brokers they use and the attachments between them.
  *
- * A blueprint is one declarative document for a project: services, databases, storage, jobs,
- * app volumes, domains, env, secret **references**, attachments and preview policy. `skiff plan`
- * diffs it; `skiff apply` runs the diff through the normal service layer. The schema is strict:
- * an unknown field is an error with a precise path, never a silent default.
+ * `plan` diffs the file against live state and never changes anything; `apply` runs that diff
+ * through the normal service layer as one operation, so permissions, quotas and audit entries are
+ * exactly what the same clicks in the dashboard would produce. A second apply of the same file is
+ * a no-op.
  *
- * It never contains secret values. `secrets:` names what the plan expects to resolve from the
- * project's secret store; a missing secret is a plan error. Plain `env:` values are visible
- * configuration and should not hold credentials.
+ * Map keys are the real resource names (`projects.shop-web` is the project with slug
+ * `shop-web`, `databases.shop-db` the database named `shop-db`), so a blueprint never invents
+ * names. Every object is strict: an unknown field is an error with its exact path.
+ *
+ * Blueprints never hold secret values. `secrets:` names references the workload resolves from the
+ * secret store at activation; a reference that does not resolve fails the plan, not the apply.
+ * Plain `env:` values are visible configuration and must not hold credentials.
  */
 
 export const BLUEPRINT_API_VERSION = 'skiff/v1';
 export const blueprintApiVersionSchema = z.literal(BLUEPRINT_API_VERSION);
 
-/** Resource keys are stable identities in the plan (`services.web`, `databases.main`). */
-export const blueprintResourceNameSchema = z
-	.string()
-	.trim()
-	.min(1)
-	.max(40)
-	.regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/, 'Use lowercase letters, digits and single hyphens.')
-	.refine((name) => !name.includes('--'), 'Double hyphens are not allowed.');
+/** File names the CLI looks for, in order, when no path is given. */
+export const BLUEPRINT_FILE_NAMES = ['skiff.blueprint.yaml', 'skiff.blueprint.yml', 'skiff.blueprint.json'] as const;
 
-export const blueprintProjectSchema = z
-	.string()
-	.regex(SLUG_PATTERN, 'Use a project slug (3–40 lowercase letters, digits and hyphens).');
+/** Largest blueprint text a surface accepts. */
+export const BLUEPRINT_MAX_BYTES = 512 * 1024;
+
+/** Stack names the REST routes use as path segments. */
+const RESERVED_STACK_NAMES = new Set(['plan', 'apply', 'validate', 'schema']);
+
+const slugShape = (label: string) =>
+	z
+		.string()
+		.min(3, `${label} names are 3–40 characters.`)
+		.max(40, `${label} names are 3–40 characters.`)
+		.regex(SLUG_PATTERN, 'Use lowercase letters, digits and single hyphens; start and end with a letter or digit.')
+		.refine((value) => !value.includes('--'), 'Double hyphens are not allowed.');
+
+/** The stack's identity in the org: what a later plan compares against and prunes from. */
+export const blueprintStackNameSchema = slugShape('Stack').refine(
+	(value) => !RESERVED_STACK_NAMES.has(value),
+	'This stack name is reserved.',
+);
+
+/** A project slug (`projects.<slug>`). Slugs are unique across the platform. */
+export const blueprintProjectSlugSchema = slugShape('Project');
+
+/** Access a blueprint can set. Password access needs a password, which never goes in a file. */
+export const blueprintAccessModes = ['public', 'platform'] as const;
+const accessSchema = z.enum(blueprintAccessModes);
 
 export const blueprintEnvironmentNameSchema = z
 	.string()
@@ -49,11 +78,9 @@ export const blueprintEnvironmentNameSchema = z
 	.min(1)
 	.max(30)
 	.regex(/^[a-z0-9](?:[a-z0-9-]{0,28}[a-z0-9])?$/, 'Environment names are 1–30 lowercase letters, digits and hyphens.')
-	.refine((value) => value === 'production' || !value.includes('--'), 'Environment names cannot contain "--".')
-	.refine(
-		(value) => value === 'production' || !STORAGE_RESERVED_ENVIRONMENTS.has(value),
-		'This environment name is reserved for storage endpoints.',
-	);
+	.refine((value) => !value.includes('--'), 'Environment names cannot contain "--".')
+	.refine((value) => value !== 'production', 'production is built in; set its access with `access.production`.')
+	.refine((value) => !STORAGE_RESERVED_ENVIRONMENTS.has(value), 'This environment name is reserved for storage endpoints.');
 
 export const blueprintEnvNameSchema = z
 	.string()
@@ -67,35 +94,6 @@ export const blueprintSecretNameSchema = z
 	.max(128)
 	.regex(/^[A-Z][A-Z0-9_]*$/, 'Secret names are UPPER_SNAKE_CASE.');
 
-export const blueprintEnvPrefixSchema = z
-	.string()
-	.min(1)
-	.max(64)
-	.regex(/^[A-Z][A-Z0-9_]*$/, 'Env prefixes are UPPER_SNAKE_CASE.')
-	.refine((value) => !value.endsWith('_'), 'Env prefixes must not end with "_".');
-
-/** Paths in a blueprint are relative to the file and cannot escape the project root. */
-export const blueprintRelativePathSchema = z
-	.string()
-	.trim()
-	.min(1)
-	.max(400)
-	.transform((value) => value.replace(/^\.\//, ''))
-	.refine((value) => value.length > 0, 'Use a path relative to skiff.yaml.')
-	.refine((value) => !value.startsWith('/'), 'Use a path relative to skiff.yaml.')
-	.refine(
-		(value) => !value.split('/').some((part) => part === '' || part === '.' || part === '..'),
-		'Paths cannot contain empty, "." or ".." segments.',
-	);
-
-const staticFileSchema = z
-	.string()
-	.trim()
-	.min(1)
-	.max(200)
-	.refine((value) => value.startsWith('/'), 'Use a URL path starting with "/".')
-	.refine((value) => !value.includes('..'), 'URL paths cannot contain "..".');
-
 export const blueprintHostSchema = z
 	.string()
 	.trim()
@@ -107,100 +105,96 @@ export const blueprintHostSchema = z
 		'Enter a hostname like app.example.com (no scheme, port or path).',
 	);
 
-// -------------------------------------------------------------------- volumes
-
-const volumeMountStringSchema = z
+const urlPathSchema = z
 	.string()
 	.trim()
-	.min(3)
-	.max(320)
-	.superRefine((value, ctx) => {
-		const parts = value.split(':');
-		if (parts.length < 2 || parts.length > 3) {
-			ctx.addIssue({ code: 'custom', message: 'Use "<volume>:</absolute/path>" or "<volume>:</absolute/path>:ro".' });
-			return;
-		}
-		const [volume, mountPath, mode] = parts;
-		if (!volume || !blueprintResourceNameSchema.safeParse(volume).success)
-			ctx.addIssue({ code: 'custom', message: 'The volume name before ":" is invalid.' });
-		if (mode !== undefined && mode !== 'ro')
-			ctx.addIssue({ code: 'custom', message: 'The optional mount mode is "ro".' });
-		const problem = appVolumeMountPathProblem(mountPath ?? '');
-		if (problem) ctx.addIssue({ code: 'custom', message: problem });
+	.min(1)
+	.max(512)
+	.refine((value) => value.startsWith('/'), 'Use a URL path starting with "/".');
+
+const argvSchema = z.array(z.string().min(1).max(1024)).min(1).max(64);
+
+// -------------------------------------------------------------------- projects
+
+export const blueprintProjectRuntimes = ['static', 'process', 'container', 'function'] as const;
+
+/**
+ * One project. Workload fields (`command` … `secrets`) are only for process and container
+ * projects; each one is managed only when it is present, so a field you leave out keeps whatever
+ * the dashboard or CLI set.
+ */
+export const blueprintProjectSchema = z
+	.strictObject({
+		/** Display name; defaults to the slug on create. */
+		name: z.string().trim().min(1).max(120).optional(),
+		/** Fixed for the project's life. */
+		runtime: z.enum(blueprintProjectRuntimes).default('static'),
+		/** `edge`, `auto` or a node id. */
+		placement: z.string().min(1).max(64).optional(),
+		access: z
+			.strictObject({
+				production: accessSchema.optional(),
+				previews: accessSchema.optional(),
+			})
+			.optional(),
+		environments: z.record(blueprintEnvironmentNameSchema, z.strictObject({ access: accessSchema.optional() })).default({}),
+		domains: z.array(blueprintHostSchema).max(50).default([]),
+		/** Process: argv run in the release (no shell). Container: overrides the image's command. */
+		command: argvSchema.optional(),
+		/** Container: OCI image reference (pin a digest or a version tag). */
+		image: z.string().min(1).max(512).optional(),
+		port: z.number().int().min(1).max(65_535).optional(),
+		healthPath: urlPathSchema.optional(),
+		memoryMb: z.number().int().min(32).max(8192).optional(),
+		cpus: z.number().positive().max(8).optional(),
+		replicas: z.number().int().min(1).max(20).optional(),
+		/** Plain, visible variables. The whole set is replaced when present. */
+		env: z.record(blueprintEnvNameSchema, z.string().max(16_384)).optional(),
+		/** Secret references the workload receives as env vars. The whole set is replaced when present. */
+		secrets: z.array(blueprintSecretNameSchema).max(128).optional(),
 	})
-	.transform((value) => {
-		const [volume = '', mountPath = '', mode] = value.split(':');
-		return { volume, mountPath, readOnly: mode === 'ro' };
+	.superRefine((project, ctx) => {
+		const workload = (['command', 'image', 'port', 'healthPath', 'memoryMb', 'cpus', 'replicas', 'env', 'secrets'] as const).filter(
+			(field) => project[field] !== undefined,
+		);
+		if ((project.runtime === 'static' || project.runtime === 'function') && workload.length > 0)
+			for (const field of workload)
+				ctx.addIssue({
+					code: 'custom',
+					path: [field],
+					message:
+						project.runtime === 'static'
+							? 'Static projects have no workload settings.'
+							: 'Function settings come from the function bundle, not the blueprint.',
+				});
+		if (project.image !== undefined && project.runtime !== 'container')
+			ctx.addIssue({ code: 'custom', path: ['image'], message: 'Only container projects take an image.' });
+		if (project.secrets && new Set(project.secrets).size !== project.secrets.length)
+			ctx.addIssue({ code: 'custom', path: ['secrets'], message: 'Each secret is referenced once.' });
+		if (project.env && project.secrets)
+			for (const name of project.secrets)
+				if (name in project.env)
+					ctx.addIssue({ code: 'custom', path: ['env', name], message: `${name} is also a secret reference.` });
+		if (new Set(project.domains).size !== project.domains.length)
+			ctx.addIssue({ code: 'custom', path: ['domains'], message: 'Each domain is listed once.' });
 	});
+export type BlueprintProject = z.infer<typeof blueprintProjectSchema>;
 
-const volumeMountObjectSchema = z.strictObject({
-	volume: blueprintResourceNameSchema,
-	mountPath: appVolumeMountPathSchema,
-	readOnly: z.boolean().default(false),
-});
+// -------------------------------------------------------------------- data services
 
-/** A service mount: `data:/var/lib/app` (compact) or `{ volume, mountPath, readOnly }`. */
-export const blueprintVolumeMountSchema = z.union([volumeMountStringSchema, volumeMountObjectSchema]);
-export type BlueprintVolumeMount = z.infer<typeof blueprintVolumeMountSchema>;
-
-// -------------------------------------------------------------------- services
-
-const serviceEnvSchema = z.record(blueprintEnvNameSchema, z.string().max(16_384)).default({});
-
-const serviceCommonShape = {
-	memoryMb: z.number().int().min(32).max(16_384).optional(),
-	cpus: z.number().positive().max(16).optional(),
-	volumes: z.array(blueprintVolumeMountSchema).max(20).default([]),
-	env: serviceEnvSchema,
-};
-
-const staticServiceSchema = z.strictObject({
-	type: z.literal('static'),
-	/** Build output directory, relative to skiff.yaml. */
-	path: blueprintRelativePathSchema,
-	spa: z.boolean().default(false),
-	cleanUrls: z.boolean().default(false),
-	trailingSlash: z.enum(['always', 'never', 'ignore']).default('ignore'),
-	notFound: staticFileSchema.optional(),
-});
-
-const processServiceSchema = z.strictObject({
-	type: z.literal('process'),
-	command: z.array(z.string().min(1).max(1024)).min(1).max(64),
-	port: z.number().int().min(1).max(65_535).default(3000),
-	healthPath: staticFileSchema.default('/'),
-	...serviceCommonShape,
-});
-
-const containerServiceSchema = z.strictObject({
-	type: z.literal('container'),
-	image: z.string().min(1).max(512),
-	/** Optional argv override; the image's entrypoint is used when omitted. */
-	command: z.array(z.string().min(1).max(1024)).min(1).max(64).optional(),
-	port: z.number().int().min(1).max(65_535).default(3000),
-	healthPath: staticFileSchema.default('/'),
-	...serviceCommonShape,
-});
-
-export const blueprintServiceSchema = z.discriminatedUnion('type', [
-	staticServiceSchema,
-	processServiceSchema,
-	containerServiceSchema,
-]);
-export type BlueprintService = z.infer<typeof blueprintServiceSchema>;
-
-// -------------------------------------------------------------------- data
-
+/** A managed database. Optional fields keep the platform default on create and stay unmanaged after. */
 export const blueprintDatabaseSchema = z
 	.strictObject({
 		engine: z.enum(databaseEngines).default('postgres'),
 		version: z.string().min(1).max(16).optional(),
+		/** Fixed for life (D126). */
+		variant: z.enum(databaseVariants).optional(),
 		memoryMb: z.number().int().min(128).max(16_384).optional(),
 		cpus: z.number().positive().max(8).optional(),
-		/** Storage budget in MB (applied as `storageMb` on the database). */
-		sizeMb: z.number().int().min(256).max(1_048_576).default(10_240),
-		extensions: z.array(databaseExtensionSchema).max(databaseExtensionAllowlist.length).default([]),
-		pooler: z.boolean().default(true),
+		storageMb: z.number().int().min(256).max(1_048_576).optional(),
+		/** Added on apply; removing one from the file never drops it from the database. */
+		extensions: z.array(databaseExtensionSchema).max(databaseExtensionAllowlist.length).optional(),
+		pooler: z.boolean().optional(),
 	})
 	.superRefine((input, ctx) => {
 		const info = databaseEngineRegistry[input.engine];
@@ -208,206 +202,183 @@ export const blueprintDatabaseSchema = z
 			ctx.addIssue({ code: 'custom', path: ['version'], message: `${info.label} versions: ${info.versions.join(', ')}.` });
 		if (input.memoryMb !== undefined && input.memoryMb < info.minMemoryMb)
 			ctx.addIssue({ code: 'custom', path: ['memoryMb'], message: `${info.label} needs at least ${info.minMemoryMb} MB.` });
-		if (input.extensions.length > 0 && !info.capabilities.extensions)
-			ctx.addIssue({ code: 'custom', path: ['extensions'], message: 'Extensions are only available for PostgreSQL.' });
+		if (input.extensions?.length && !info.capabilities.extensions)
+			ctx.addIssue({ code: 'custom', path: ['extensions'], message: `${info.label} has no extensions.` });
+		if (input.pooler && !info.capabilities.pooler)
+			ctx.addIssue({ code: 'custom', path: ['pooler'], message: `${info.label} has no connection pooler.` });
 	});
+export type BlueprintDatabase = z.infer<typeof blueprintDatabaseSchema>;
 
 export const blueprintBucketSchema = z.strictObject({
-	access: z.enum(bucketAccesses).default('private'),
-	versioning: z.boolean().default(false),
-	/** Per-bucket budget for alerts and quotas, in MB. */
-	quotaMb: z.number().int().min(1).max(10_485_760).optional(),
+	access: z.enum(bucketAccesses).optional(),
+	versioning: z.boolean().optional(),
+	/** Per-bucket quota in MB; `null` removes one. */
+	quotaMb: z.number().int().min(1).max(10_485_760).nullable().optional(),
 });
+export type BlueprintBucket = z.infer<typeof blueprintBucketSchema>;
 
 export const blueprintStorageSchema = z.strictObject({
-	public: z.boolean().default(false),
+	/** Serve the S3 API at `<name>--s3.<contentDomain>`. */
+	public: z.boolean().optional(),
 	memoryMb: z.number().int().min(128).max(16_384).optional(),
 	cpus: z.number().positive().max(8).optional(),
-	/** Storage instance budget, in MB. */
-	sizeMb: z.number().int().min(256).max(10_485_760).default(10_240),
+	storageMb: z.number().int().min(256).max(10_485_760).optional(),
 	buckets: z.record(bucketNameSchema, blueprintBucketSchema).default({}),
 });
+export type BlueprintStorage = z.infer<typeof blueprintStorageSchema>;
 
-export const blueprintJobSchema = z.strictObject({
-	schedule: cronSchema,
-	command: z.array(z.string().min(1).max(1024)).min(1).max(64),
-	timeoutSeconds: z.number().int().min(10).max(86_400).default(300),
-	concurrency: z.enum(jobConcurrencyModes).default('forbid'),
-	maxRetries: z.number().int().min(0).max(10).default(0),
-	memoryMb: z.number().int().min(32).max(8192).optional(),
-	cpus: z.number().positive().max(8).optional(),
-	enabled: z.boolean().default(true),
-	environment: blueprintEnvironmentNameSchema.default('production'),
-});
-
-export const blueprintVolumeSchema = z
+export const blueprintBrokerSchema = z
 	.strictObject({
-		sizeMb: z.number().int().min(1).max(1_048_576).default(1024),
-		backing: z.enum(appVolumeBackings).default('state_dir'),
-		nodeVolume: z.string().min(3).max(40).optional(),
-		singleWriter: z.boolean().default(true),
+		engine: z.enum(brokerEngines).default('nats'),
+		/** A newer listed version upgrades in place; a downgrade fails the plan. */
+		version: z.string().min(1).max(16).optional(),
+		memoryMb: z.number().int().min(64).max(16_384).optional(),
+		cpus: z.number().positive().max(8).optional(),
+		storageMb: z.number().int().min(256).max(1_048_576).optional(),
 	})
 	.superRefine((input, ctx) => {
-		if (input.backing === 'node_volume' && !input.nodeVolume)
-			ctx.addIssue({ code: 'custom', path: ['nodeVolume'], message: 'Choose the node volume that backs this volume.' });
-		if (input.backing === 'state_dir' && input.nodeVolume)
-			ctx.addIssue({ code: 'custom', path: ['nodeVolume'], message: 'A state-dir volume cannot name a node volume.' });
+		const info = brokerEngineRegistry[input.engine];
+		if (input.version && !info.versions.includes(input.version))
+			ctx.addIssue({ code: 'custom', path: ['version'], message: `${info.label} versions: ${info.versions.join(', ')}.` });
+		if (input.memoryMb !== undefined && input.memoryMb < info.minMemoryMb)
+			ctx.addIssue({ code: 'custom', path: ['memoryMb'], message: `${info.label} needs at least ${info.minMemoryMb} MB.` });
 	});
+export type BlueprintBroker = z.infer<typeof blueprintBrokerSchema>;
 
+/** Connect one project to one database, storage instance or broker; its env vars appear at activation. */
 export const blueprintAttachmentSchema = z
 	.strictObject({
-		/** Attach a managed database; mutually exclusive with `storage`. */
-		database: blueprintResourceNameSchema.optional(),
-		/** Attach a storage instance; mutually exclusive with `database`. */
-		storage: blueprintResourceNameSchema.optional(),
-		/** Env prefix applied to the attachment (`DATABASE_URL`, `S3_ENDPOINT_URL`, …). */
-		prefix: blueprintEnvPrefixSchema.optional(),
+		project: blueprintProjectSlugSchema,
+		database: databaseNameSchema.optional(),
+		storage: storageNameSchema.optional(),
+		broker: brokerNameSchema.optional(),
+		/** Env prefix (`DATABASE_URL`, `S3_ENDPOINT_URL`, `NATS_URL`); defaults to the engine's. */
+		prefix: z.string().optional(),
+		/** Storage only: which buckets the project's key may use. */
 		grants: z
-			.array(
-				z.strictObject({
-					bucket: bucketNameSchema,
-					mode: z.enum(storageGrantModes).default('read-write'),
-				}),
-			)
+			.array(z.strictObject({ bucket: bucketNameSchema, mode: z.enum(storageGrantModes).default('read-write') }))
 			.max(20)
-			.default([]),
+			.optional(),
 	})
 	.superRefine((input, ctx) => {
-		if (Boolean(input.database) === Boolean(input.storage))
-			ctx.addIssue({ code: 'custom', message: 'Exactly one of `database` or `storage` is required.' });
-		if (input.database && input.grants.length > 0)
-			ctx.addIssue({ code: 'custom', path: ['grants'], message: 'Database attachments do not take bucket grants.' });
-		if (input.storage && input.grants.length === 0)
+		const targets = [input.database, input.storage, input.broker].filter(Boolean);
+		if (targets.length !== 1)
+			ctx.addIssue({ code: 'custom', message: 'Name exactly one of `database`, `storage` or `broker`.' });
+		if (input.prefix !== undefined) {
+			const schema = input.storage ? storageEnvPrefixSchema : input.broker ? brokerEnvPrefixSchema : databaseEnvPrefixSchema;
+			const parsed = schema.safeParse(input.prefix);
+			if (!parsed.success)
+				ctx.addIssue({ code: 'custom', path: ['prefix'], message: parsed.error.issues[0]?.message ?? 'Invalid prefix.' });
+		}
+		if (input.grants !== undefined && !input.storage)
+			ctx.addIssue({ code: 'custom', path: ['grants'], message: 'Only storage attachments take bucket grants.' });
+		if (input.storage && !input.grants?.length)
 			ctx.addIssue({ code: 'custom', path: ['grants'], message: 'Grant at least one bucket for a storage attachment.' });
+		if (input.grants && new Set(input.grants.map((grant) => grant.bucket)).size !== input.grants.length)
+			ctx.addIssue({ code: 'custom', path: ['grants'], message: 'Each bucket may be granted once.' });
 	});
 export type BlueprintAttachment = z.infer<typeof blueprintAttachmentSchema>;
 
+/** Which managed service an attachment names. */
+export function attachmentTarget(attachment: BlueprintAttachment): { type: 'database' | 'storage' | 'broker'; name: string } {
+	if (attachment.database) return { type: 'database', name: attachment.database };
+	if (attachment.storage) return { type: 'storage', name: attachment.storage };
+	return { type: 'broker', name: attachment.broker ?? '' };
+}
+
 // -------------------------------------------------------------------- document
 
-const environmentConfigSchema = z.strictObject({
-	/** Access mode for this environment's production pointer. */
-	access: z.enum(accessModes).optional(),
-});
-
-const domainConfigSchema = z.strictObject({
-	host: blueprintHostSchema,
-	/** Service that answers this host; omitted uses the project's default service. */
-	service: blueprintResourceNameSchema.optional(),
-});
-
 /**
- * The v1 document. Every object is strict, so `unknown field` errors name the exact path. Cross
- * references are checked here so `plan` fails before it touches any service.
+ * The v1 document. Cross references are checked here, so a plan fails on a typo before it reads
+ * any live state.
  */
 export const blueprintSchema = z
 	.strictObject({
 		apiVersion: blueprintApiVersionSchema,
-		project: blueprintProjectSchema,
-		environments: z.record(blueprintEnvironmentNameSchema, environmentConfigSchema).default({}),
-		services: z.record(blueprintResourceNameSchema, blueprintServiceSchema).default({}),
-		databases: z.record(blueprintResourceNameSchema, blueprintDatabaseSchema).default({}),
-		storage: z.record(blueprintResourceNameSchema, blueprintStorageSchema).default({}),
-		jobs: z.record(blueprintResourceNameSchema, blueprintJobSchema).default({}),
-		volumes: z.record(blueprintResourceNameSchema, blueprintVolumeSchema).default({}),
-		domains: z.array(domainConfigSchema).max(100).default([]),
-		/** Plain, visible configuration per environment. Never secrets. */
-		env: z.record(blueprintEnvironmentNameSchema, z.record(blueprintEnvNameSchema, z.string().max(16_384))).default({}),
-		/** Secret **references** per environment; values resolve from the project secret store. */
-		secrets: z.record(blueprintEnvironmentNameSchema, z.array(blueprintSecretNameSchema).max(200)).default({}),
-		attachments: z.array(blueprintAttachmentSchema).max(100).default([]),
-		previews: previewPolicySchema.optional(),
+		name: blueprintStackNameSchema,
+		projects: z.record(blueprintProjectSlugSchema, blueprintProjectSchema).default({}),
+		databases: z.record(databaseNameSchema, blueprintDatabaseSchema).default({}),
+		storage: z.record(storageNameSchema, blueprintStorageSchema).default({}),
+		brokers: z.record(brokerNameSchema, blueprintBrokerSchema).default({}),
+		attachments: z.array(blueprintAttachmentSchema).max(200).default([]),
 	})
 	.superRefine((doc, ctx) => {
-		const environmentNames = new Set(['production', ...Object.keys(doc.environments)]);
-
-		for (const [serviceName, service] of Object.entries(doc.services)) {
-			const mounts = new Set<string>();
-			const serviceVolumes = service.type === 'static' ? [] : service.volumes;
-			serviceVolumes.forEach((mount, index) => {
-				if (!doc.volumes[mount.volume])
-					ctx.addIssue({
-						code: 'custom',
-						path: ['services', serviceName, 'volumes', index, 'volume'],
-						message: `Volume "${mount.volume}" is not declared.`,
-					});
-				if (mounts.has(mount.mountPath))
-					ctx.addIssue({
-						code: 'custom',
-						path: ['services', serviceName, 'volumes', index, 'mountPath'],
-						message: `Two volumes are mounted at ${mount.mountPath}.`,
-					});
-				mounts.add(mount.mountPath);
-			});
-		}
-
-		doc.domains.forEach((domain, index) => {
-			if (domain.service && !doc.services[domain.service])
+		for (const [name, database] of Object.entries(doc.databases))
+			if (database.engine === 'postgres' && name.startsWith('pg-'))
 				ctx.addIssue({
 					code: 'custom',
-					path: ['domains', index, 'service'],
-					message: `Service "${domain.service}" is not declared.`,
+					path: ['databases', name],
+					message: 'Postgres database names cannot start with "pg-".',
 				});
-		});
 
+		const pairs = new Set<string>();
+		const prefixes = new Set<string>();
 		doc.attachments.forEach((attachment, index) => {
-			if (attachment.database) {
-				if (!doc.databases[attachment.database])
-					ctx.addIssue({
-						code: 'custom',
-						path: ['attachments', index, 'database'],
-						message: `Database "${attachment.database}" is not declared.`,
-					});
-				return;
-			}
-			if (!attachment.storage) return;
-			const storage = doc.storage[attachment.storage];
-			if (!storage) {
+			const target = attachmentTarget(attachment);
+			if (!target.name) return;
+			const project = doc.projects[attachment.project];
+			if (!project)
 				ctx.addIssue({
 					code: 'custom',
-					path: ['attachments', index, 'storage'],
-					message: `Storage "${attachment.storage}" is not declared.`,
+					path: ['attachments', index, 'project'],
+					message: `Project "${attachment.project}" is not declared under projects.`,
 				});
-				return;
+			else if (project.runtime === 'static')
+				ctx.addIssue({
+					code: 'custom',
+					path: ['attachments', index, 'project'],
+					message: `Project "${attachment.project}" is static; only app projects use data services.`,
+				});
+			const declared =
+				target.type === 'database' ? doc.databases : target.type === 'storage' ? doc.storage : doc.brokers;
+			if (!declared[target.name])
+				ctx.addIssue({
+					code: 'custom',
+					path: ['attachments', index, target.type],
+					message: `${target.type === 'storage' ? 'Storage' : target.type === 'database' ? 'Database' : 'Broker'} "${target.name}" is not declared.`,
+				});
+			const pair = `${attachment.project}/${target.type}/${target.name}`;
+			if (pairs.has(pair))
+				ctx.addIssue({ code: 'custom', path: ['attachments', index], message: 'This attachment is listed twice.' });
+			pairs.add(pair);
+			const prefix = `${attachment.project}/${target.type}/${attachment.prefix ?? defaultAttachmentPrefix(doc, target)}`;
+			if (prefixes.has(prefix))
+				ctx.addIssue({
+					code: 'custom',
+					path: ['attachments', index, 'prefix'],
+					message: `"${attachment.project}" already uses this env prefix; set a different \`prefix\`.`,
+				});
+			prefixes.add(prefix);
+			if (target.type === 'storage') {
+				const storage = doc.storage[target.name];
+				attachment.grants?.forEach((grant, grantIndex) => {
+					if (storage && !storage.buckets[grant.bucket])
+						ctx.addIssue({
+							code: 'custom',
+							path: ['attachments', index, 'grants', grantIndex, 'bucket'],
+							message: `Bucket "${grant.bucket}" is not declared on storage "${target.name}".`,
+						});
+				});
 			}
-			attachment.grants.forEach((grant, grantIndex) => {
-				if (!storage.buckets[grant.bucket])
-					ctx.addIssue({
-						code: 'custom',
-						path: ['attachments', index, 'grants', grantIndex, 'bucket'],
-						message: `Bucket "${grant.bucket}" is not declared on storage "${attachment.storage}".`,
-					});
-			});
 		});
-
-		for (const [jobName, job] of Object.entries(doc.jobs)) {
-			if (!environmentNames.has(job.environment))
-				ctx.addIssue({
-					code: 'custom',
-					path: ['jobs', jobName, 'environment'],
-					message: `Environment "${job.environment}" is not declared.`,
-				});
-		}
-
-		for (const section of ['env', 'secrets'] as const) {
-			for (const environment of Object.keys(doc[section])) {
-				if (!environmentNames.has(environment))
-					ctx.addIssue({
-						code: 'custom',
-						path: [section, environment],
-						message: `Environment "${environment}" is not declared.`,
-					});
-			}
-		}
-
-		if (doc.previews?.enabled && doc.previews.data !== 'none' && Object.keys(doc.databases).length === 0)
-			ctx.addIssue({
-				code: 'custom',
-				path: ['previews', 'data'],
-				message: `Preview data mode "${doc.previews.data}" needs a database in the blueprint.`,
-			});
 	})
-	.describe('Strict skiff.yaml v1 document.');
+	.describe('Skiff blueprint v1 (skiff.blueprint.yaml).');
 export type Blueprint = z.infer<typeof blueprintSchema>;
+export type BlueprintInput = z.input<typeof blueprintSchema>;
+
+/** The env prefix an attachment gets when the file sets none. */
+export function defaultAttachmentPrefix(
+	doc: Pick<Blueprint, 'databases' | 'brokers'>,
+	target: { type: 'database' | 'storage' | 'broker'; name: string },
+): string {
+	if (target.type === 'storage') return 'S3';
+	if (target.type === 'broker') {
+		const engine = doc.brokers[target.name]?.engine ?? 'nats';
+		return brokerEngineRegistry[engine].defaultEnvPrefix;
+	}
+	const engine = doc.databases[target.name]?.engine ?? 'postgres';
+	return databaseEngineRegistry[engine].defaultEnvPrefix;
+}
 
 // -------------------------------------------------------------------- plan/apply
 
@@ -415,16 +386,12 @@ export const blueprintResourceKinds = [
 	'project',
 	'environment',
 	'service',
+	'domain',
 	'database',
 	'storage',
 	'bucket',
-	'job',
-	'volume',
-	'domain',
-	'env',
-	'secret',
+	'broker',
 	'attachment',
-	'preview',
 ] as const;
 export type BlueprintResourceKind = (typeof blueprintResourceKinds)[number];
 
@@ -439,13 +406,13 @@ export const blueprintChangeSchema = z.strictObject({
 });
 export type BlueprintChange = z.infer<typeof blueprintChangeSchema>;
 
-/** A stable-keyed resource in the plan graph (`services.web`, `databases.main`). */
+/** A stable-keyed resource in the plan (`projects.shop-web`, `databases.shop-db`). */
 export const blueprintResourceDiffSchema = z.strictObject({
-	key: z.string().min(1).max(200),
+	key: z.string().min(1).max(400),
 	kind: z.enum(blueprintResourceKinds),
 	action: z.enum(blueprintPlanActions),
 	changes: z.array(blueprintChangeSchema).max(200).default([]),
-	/** Human-readable reason for a delete or update (rename, drift, dependency). */
+	/** Why it is updated, deleted or adopted. */
 	reason: z.string().max(500).nullable(),
 });
 export type BlueprintResourceDiff = z.infer<typeof blueprintResourceDiffSchema>;
@@ -458,47 +425,87 @@ export const blueprintPlanSummarySchema = z.strictObject({
 });
 export type BlueprintPlanSummary = z.infer<typeof blueprintPlanSummarySchema>;
 
-export const blueprintCostEstimateSchema = z.strictObject({
-	monthlyUsd: z.number().nonnegative(),
-	currency: z.literal('USD'),
-});
+export const blueprintPlanHashSchema = z.string().regex(/^[a-f0-9]{64}$/, 'Use the 64-character plan hash from plan.');
 
 /**
- * `skiff plan` output. `planHash` is stable for the same document + live state; apply requires it
- * so a plan cannot be applied against a different resource set.
+ * `plan` output. `planHash` is stable for the same document and live state; apply takes it, and
+ * refuses when live state moved since, so what runs is always what was reviewed.
  */
 export const blueprintPlanViewSchema = z.strictObject({
-	planHash: z.string().regex(/^[a-f0-9]{64}$/, 'Use a 64-character lowercase hex plan hash.'),
-	project: z.string(),
-	projectAction: z.enum(['create', 'update', 'noop', 'delete']),
+	planHash: blueprintPlanHashSchema,
+	stack: z.string(),
+	/** `create` for a stack this org has never applied. */
+	stackAction: z.enum(['create', 'update', 'noop']),
+	/** The planned operation apply runs; it expires with the plan. */
+	operationId: z.string(),
+	prune: z.boolean(),
 	resources: z.array(blueprintResourceDiffSchema).max(1000),
 	summary: blueprintPlanSummarySchema,
 	warnings: z.array(z.string().max(1000)).max(200).default([]),
-	/** Advisory estimate only; showback never bills (plan 16). */
-	costEstimate: blueprintCostEstimateSchema.nullable().default(null),
 	generatedAt: z.string(),
+	expiresAt: z.string().nullable(),
 });
 export type BlueprintPlanView = z.infer<typeof blueprintPlanViewSchema>;
 
 export const blueprintAppliedResourceSchema = z.strictObject({
 	key: z.string(),
 	kind: z.enum(blueprintResourceKinds),
-	/** Resource id once materialised; null when the step only updated a document. */
-	id: z.string().nullable(),
+	action: z.enum(blueprintPlanActions),
+	status: z.enum(itemStatuses),
+	/** Why a step was skipped (`up to date`, `an earlier step failed`). */
+	reason: z.string().nullable(),
+	error: z.string().nullable(),
 });
+export type BlueprintAppliedResource = z.infer<typeof blueprintAppliedResourceSchema>;
 
-/** `skiff apply` output; the operation id resumes progress and carries SSE events. */
+/** `apply` output; follow `operationId` for progress (`/operations/:id/stream`). */
 export const blueprintApplyViewSchema = z.strictObject({
 	operationId: z.string().min(1).max(100),
-	planHash: z.string().regex(/^[a-f0-9]{64}$/),
+	planHash: blueprintPlanHashSchema,
+	stack: z.string(),
 	status: z.enum(operationStatuses),
-	projectId: z.string().nullable(),
+	done: z.number().int().nonnegative(),
+	total: z.number().int().nonnegative(),
 	resources: z.array(blueprintAppliedResourceSchema).max(1000).default([]),
-	previewUrl: z.string().nullable().default(null),
 	error: z.string().max(2000).nullable().default(null),
 	appliedAt: z.string().nullable().default(null),
 });
 export type BlueprintApplyView = z.infer<typeof blueprintApplyViewSchema>;
+
+/** A stack this org has applied: what it manages and how its last apply went. */
+export interface BlueprintStackView {
+	name: string;
+	/** Resource keys the stack created or adopted; only these can be pruned. */
+	managed: string[];
+	lastOperationId: string | null;
+	lastStatus: string | null;
+	/** The last document that applied cleanly, normalised; null until one did. */
+	document: Blueprint | null;
+	appliedPlanHash: string | null;
+	appliedAt: string | null;
+	appliedBy: string | null;
+	createdAt: string;
+	updatedAt: string;
+}
+
+/** `POST /blueprints/plan`: the file's text (YAML or JSON) or an already-parsed document. */
+export const blueprintPlanRequestSchema = z.strictObject({
+	document: z.union([z.string().min(1).max(BLUEPRINT_MAX_BYTES), z.record(z.string(), z.unknown())]),
+	/** Delete managed resources the file no longer lists. */
+	prune: z.boolean().default(false),
+});
+export type BlueprintPlanRequest = z.input<typeof blueprintPlanRequestSchema>;
+
+/** `POST /blueprints/validate`: parse and check a document without reading live state. */
+export const blueprintValidateRequestSchema = blueprintPlanRequestSchema.pick({ document: true });
+export type BlueprintValidateRequest = z.input<typeof blueprintValidateRequestSchema>;
+
+/** `POST /blueprints/apply`. A pruning plan also needs the stack name typed back. */
+export const blueprintApplyRequestSchema = z.strictObject({
+	planHash: blueprintPlanHashSchema,
+	confirm: z.string().max(40).optional(),
+});
+export type BlueprintApplyRequest = z.input<typeof blueprintApplyRequestSchema>;
 
 /**
  * Compose import (plan 14) resolves a subset of `docker-compose.yml` into a blueprint. The

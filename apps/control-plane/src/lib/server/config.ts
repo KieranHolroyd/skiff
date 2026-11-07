@@ -103,6 +103,8 @@ export const edgeNodeId = env.SKIFF_EDGE_NODE_ID || undefined;
 export const storageGatewayPort = Number(env.SKIFF_STORAGE_GATEWAY_PORT) || undefined;
 export const storageGatewayUrl = env.SKIFF_STORAGE_GATEWAY_URL?.replace(/\/+$/, '') || undefined;
 export const webhookUrl = env.SKIFF_ALERT_WEBHOOK;
+/** Optional: signs the generic alert webhook (`X-Skiff-Signature`, docs/ALERTS.md §3). */
+export const webhookSecret = env.SKIFF_ALERT_WEBHOOK_SECRET || undefined;
 export const alertEmail = env.SKIFF_ALERT_EMAIL;
 
 /** Twilio (Settings → Notifications → SMS); SMS alerts need both this and `alertSms`. */

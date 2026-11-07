@@ -8,6 +8,7 @@ as D49–D54. This doc covers:
 2. **Prune**: an on-demand sweep that finds and removes anything no live owner references
    (orphaned rows, releases, snapshots, objects, DNS records). You can run it from the CLI and the
    dashboard, and it reports live progress.
+3. **Blueprints** (§12): a declarative stack file whose plan is a `blueprint.apply` bulk operation.
 
 Both are built on one primitive, the **Operation**. Everything still goes through `packages/core`.
 REST, MCP, CLI and the dashboard stay thin surfaces (DESIGN §3).
@@ -418,6 +419,87 @@ Steps 1–5 are a feature and an additive migration, which means a **minor** bum
 | REST | `apps/control-plane/src/routes/api/v1/[...path]/+server.ts` (`operations` section) |
 | SSE | `apps/control-plane/src/routes/api/v1/operations/[id]/stream/+server.ts` |
 | MCP | `delete_projects`, `restore_projects`, `get_operation` in `apps/control-plane/src/lib/server/mcp.ts` |
+| Blueprints (§12) | `packages/core/src/blueprints.ts` (`BlueprintService`, `blueprintApplyAction`), contracts `blueprint.ts`, migration `0066_blueprints.sql`, REST `routes/api/v1/blueprints/**`, CLI `skif blueprint`, MCP `plan_stack`/`apply_stack`/`get_task`, dashboard `/new/blueprint` |
 | Dashboard | `routes/(dashboard)/_lib/operations/`, `projects/`, `settings/maintenance/` |
 | CLI | `apps/cli/src/commands/{projects,prune,operations,run-operation}.ts`, `apps/cli/src/{sse,follow,selectors,operations}.ts` |
 | Tests | `packages/core/src/operations.test.ts`, `apps/control-plane/tests/operations.e2e.ts`, MCP cases in `tests/mcp-oauth.e2e.ts`, CLI unit tests |
+
+---
+
+## 12. Blueprints (`blueprint.apply`)
+
+Status: **implemented, 2026-11-07** (plan 11, v1 subset; behind `SKIFF_FEATURE_BLUEPRINTS`, off by
+default). A blueprint is one declarative file (`skiff.blueprint.yaml|yml|json`, `apiVersion:
+skiff/v1`) describing a *stack*: projects (environments, domains, workload settings), managed
+databases, storage instances with buckets, brokers, and the attachments between them. Map keys are
+the real resource names; unset fields are unmanaged (platform default on create, untouched after).
+Secret references are names only. Contract: `packages/contracts/src/blueprint.ts`.
+
+### 12.1 Plan
+
+`BlueprintService.plan(principal, { document, prune })` parses (JSON when it starts with `{`, else
+`Bun.YAML`), validates strictly, then diffs every resource against live state into **steps** keyed by
+stable resource keys (`projects.web`, `projects.web.environments.staging`, `projects.web.service`,
+`projects.web.domains.<host>`, `databases.db`, `storage.st`, `storage.st.buckets.b`, `brokers.mq`,
+`attachments.<project>.<database|storage|broker>.<name>`). Order: projects → environments →
+databases → storage → buckets → brokers → workload settings → domains → attachments; with prune,
+deletes follow in reverse (attachments, domains, environments, buckets, brokers, storage, databases,
+projects; children of a deleted project or storage are not listed separately).
+
+Any problem fails the whole plan with its key: a missing permission for a non-noop step, a secret
+name that does not resolve, an immutable change (project runtime, database engine/variant, broker
+engine), a Postgres major change or any downgrade, a slug held by another org or a live rename
+redirect, a domain on another project or a platform host, a trashed resource, an env-prefix clash,
+or a prune target still attached outside the plan / a non-empty bucket. Plan never mutates.
+
+The plan is stored as a **planned `blueprint.apply` operation** (kind `bulk`, one target: the stack
+name; expires with the 1 h plan TTL). The document and steps live in the operation's internal
+params (`OperationParams.blueprint`), which `OperationView` strips and `POST /operations` cannot set
+(`authorize` refuses an operation without them). Each step becomes one item (`noop` → verdict
+`skip`, reason `up to date`). `planHash` = sha256 of the canonical `{stack, prune, documentHash,
+steps(key, kind, action, changes)}`, so it is stable for the same document and live state; reasons
+and timestamps are not part of it.
+
+### 12.2 Apply
+
+`apply(principal, { planHash, confirm? })` finds the caller's planned operation with that hash and
+calls `OperationService.apply`, whose new **`beforeApply` hook** re-checks the flag, each step's
+permission, refuses MCP principals for a pruning plan, requires `confirm === stack` when the plan
+deletes, and **recomputes the diff**: a different hash (live state moved) is a `409`. Identical
+sibling plans are cancelled, so resubmitting the hash returns the started run.
+
+Each item converges one resource through the normal service (re-reading live state; already equal
+→ `skipped: up to date`). The **first failure stops the run**: later items are `skipped: an earlier
+step failed`; nothing is rolled back (D51 semantics, `partial` is a valid outcome), and the next
+plan lists only what is left. New databases, private storage and brokers are placed next to the
+first project the file attaches them to (its attachment node, workload node, an already-created
+sibling service, else its placement), so D56 co-location holds without a compensating move.
+Workload settings are saved with `WorkloadService.setSpec` (no deploy).
+A blueprint run is a `bulk` operation, so it shares the one-applying-per-org rule (§2.2) with bulk
+project actions.
+
+The `finish` hook upserts the **stack record** (`blueprints` table, 0071): `managed_json` (keys the
+stack created or adopted; only these can ever be pruned), `last_operation_id`/`last_status`, and on
+a clean run the normalised document, its hash, `applied_plan_hash/at/by`. Without prune, managed
+keys missing from the file are kept and warned about; keys whose resource is gone drop out. An
+audit row `blueprint.apply` (resource `blueprint`) records the outcome; each step writes its normal
+audit row with the operation id.
+
+### 12.3 Surfaces
+
+- REST: `POST /blueprints/validate|plan|apply` (`?wait` on apply), `GET /blueprints/apply/:id`,
+  `GET /blueprints`, `GET /blueprints/:name` (docs/API.md).
+- CLI: `skif blueprint validate|plan|apply [file] [--prune] [--plan <hash>] [--confirm <stack>]
+  [--yes] [--json]`; apply follows the operation stream and exits 0/3/1 like bulk runs.
+- MCP: `plan_stack` (read-only, no prune), `apply_stack` (destructive; elicitation whose signed
+  request state is bound to `stack:<name>:<planHash>`; pruning plans refused), `get_task` (polls
+  any operation; blueprint runs return the per-step view). Assistant: `apply_stack` needs
+  `project:update` to be offered.
+- Dashboard: **New → Apply a blueprint** (`/new/blueprint`): paste or open a file, plan, review the
+  diff, type the stack name for deletes, apply, follow per-step progress over SSE.
+
+### 12.4 Not in v1
+
+Jobs, app volumes, previews, static uploads (`path`), drift badges, `export`, JSON Schema
+publishing, compensation on failure and Compose import (plan 14) are not implemented.
+

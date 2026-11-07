@@ -54,6 +54,8 @@ export const PLATFORM_CONFIG_SECTIONS = {
 	sms: ['SKIFF_TWILIO_ACCOUNT_SID', 'SKIFF_TWILIO_AUTH_TOKEN', 'SKIFF_TWILIO_FROM'],
 	alerts: [
 		'SKIFF_ALERT_WEBHOOK',
+		// Optional HMAC secret: the generic webhook then carries `X-Skiff-Signature`.
+		'SKIFF_ALERT_WEBHOOK_SECRET',
 		'SKIFF_ALERT_EMAIL',
 		'SKIFF_ALERT_SMS',
 		// Chat and push channels (packages/core/src/notify-chat.ts).
@@ -79,6 +81,7 @@ export const PLATFORM_CONFIG_SECRET_KEYS: ReadonlySet<string> = new Set([
 	'R2_SECRET_ACCESS_KEY',
 	'SKIFF_SMTP_PASSWORD',
 	'SKIFF_TWILIO_AUTH_TOKEN',
+	'SKIFF_ALERT_WEBHOOK_SECRET',
 	// Anyone holding a Discord/Slack webhook URL can post to the channel: treat it as a credential.
 	'SKIFF_ALERT_DISCORD_WEBHOOK',
 	'SKIFF_ALERT_SLACK_WEBHOOK',
@@ -161,6 +164,10 @@ export function validatePlatformConfigValue(key: PlatformConfigKey, value: strin
 			return value.length <= 2048 && PRINTABLE.test(value) && validUrl(value, ['https:', 'http:'])
 				? null
 				: 'must be an http(s) URL without credentials';
+		case 'SKIFF_ALERT_WEBHOOK_SECRET':
+			return /^[\x21-\x7e]{16,256}$/.test(value)
+				? null
+				: 'must be 16–256 printable characters with no spaces (e.g. openssl rand -hex 32)';
 		case 'SKIFF_ALERT_DISCORD_WEBHOOK':
 			return /^https:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/api\/(?:v\d{1,2}\/)?webhooks\/\d{5,25}\/[A-Za-z0-9_-]{20,100}(?:\?thread_id=\d{5,25})?$/.test(
 				value,
@@ -226,6 +233,22 @@ export function validatePlatformConfigValue(key: PlatformConfigKey, value: strin
 	}
 }
 
+/**
+ * ClickHouse's memory ceiling, `max_server_memory_usage` in MiB (`SKIFF_CLICKHOUSE_MEMORY_MB`).
+ * Per-query limits, the merge limit and the unit's MemoryMax (4/3 of it) are derived from it
+ * (scripts/systemd/clickhouse.ts). Below `min` the server spends its budget on caches and pools.
+ */
+export const TELEMETRY_MEMORY_MB = { default: 768, min: 256, max: 64 * 1024 } as const;
+export const TELEMETRY_MEMORY_ENV = 'SKIFF_CLICKHOUSE_MEMORY_MB';
+
+/** Null when `value` is an acceptable ceiling in MiB, otherwise why not. */
+export function validateTelemetryMemoryMb(value: unknown): string | null {
+	if (typeof value !== 'number' || !Number.isSafeInteger(value)) return 'must be a whole number of MiB';
+	if (value < TELEMETRY_MEMORY_MB.min || value > TELEMETRY_MEMORY_MB.max)
+		return `must be between ${TELEMETRY_MEMORY_MB.min} and ${TELEMETRY_MEMORY_MB.max} MiB`;
+	return null;
+}
+
 interface RequestBase {
 	/** Random id so the dashboard can match the status to its own request. */
 	id: string;
@@ -258,6 +281,13 @@ export type PlatformConfigRequest = RequestBase &
 		 * keeps the stored telemetry unless `purgeData`.
 		 */
 		| { action: 'telemetry'; enabled: boolean; purgeData: boolean }
+		/**
+		 * Set ClickHouse's memory ceiling (`SKIFF_CLICKHOUSE_MEMORY_MB`, MiB; null = the default),
+		 * regenerate its config and unit, and restart it. Reverts if it does not come back.
+		 */
+		| { action: 'telemetry-memory'; memoryMb: number | null }
+		/** Restart ClickHouse (clears a failed unit) and wait for it to answer. */
+		| { action: 'telemetry-restart' }
 		/**
 		 * Change the dashboard host, the content domain and HTTPS (D105). Rewrites skiff.env and the
 		 * edge agent's agent.env, restarts both, and reverts if the new address does not answer.
@@ -300,6 +330,16 @@ export function parsePlatformConfigRequest(
 			if (input.enabled && purgeData) return { ok: false, error: 'purgeData only applies when removing' };
 			return { ok: true, request: { ...base, action: 'telemetry', enabled: input.enabled, purgeData } };
 		}
+		case 'telemetry-memory': {
+			const memoryMb = input.memoryMb ?? null;
+			if (memoryMb !== null) {
+				const problem = validateTelemetryMemoryMb(memoryMb);
+				if (problem) return { ok: false, error: `memoryMb ${problem}` };
+			}
+			return { ok: true, request: { ...base, action: 'telemetry-memory', memoryMb: memoryMb as number | null } };
+		}
+		case 'telemetry-restart':
+			return { ok: true, request: { ...base, action: 'telemetry-restart' } };
 		case 'domains': {
 			const token = input.cloudflareToken;
 			if (token !== undefined && (typeof token !== 'string' || !validCloudflareToken(token)))

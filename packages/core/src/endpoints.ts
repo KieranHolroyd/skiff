@@ -43,9 +43,14 @@ export function planServiceEndpoints(
 	existing: ExistingEndpoint[],
 	range: { min: number; max: number } = endpointPortRange,
 ): EndpointPlan {
-	const wanted = services.filter((service) => service.upstreamNodeId !== consumerNodeId);
+	const wanted = dedupe(services.filter((service) => service.upstreamNodeId !== consumerNodeId));
 	const existingByKey = new Map(existing.map((item) => [`${item.kind}:${item.serviceId}`, item]));
-	const used = new Set<number>();
+	const wantedKeys = new Set(wanted.map((service) => `${service.kind}:${service.serviceId}`));
+	// Ports a kept endpoint already owns are taken before any new one is allocated, so a new
+	// service planned ahead of an existing one can never be handed that one's port.
+	const used = new Set<number>(
+		existing.filter((item) => wantedKeys.has(`${item.kind}:${item.serviceId}`)).map((item) => item.localPort),
+	);
 	const endpoints: ServiceEndpoint[] = [];
 
 	for (const service of wanted) {
@@ -67,15 +72,24 @@ export function planServiceEndpoints(
 		});
 	}
 
-	const wantedKeys = new Set(wanted.map((service) => `${service.kind}:${service.serviceId}`));
 	const removed = existing
 		.filter((item) => !wantedKeys.has(`${item.kind}:${item.serviceId}`))
 		.map((item) => `${item.kind}:${item.serviceId}`);
 	return { endpoints: endpoints.sort((a, b) => a.localPort - b.localPort), removed };
 }
 
+/** One endpoint per service: two projects on a node attached to one database share it. */
+function dedupe(services: EndpointService[]): EndpointService[] {
+	const seen = new Map<string, EndpointService>();
+	for (const service of services) {
+		const key = `${service.kind}:${service.serviceId}`;
+		if (!seen.has(key)) seen.set(key, service);
+	}
+	return [...seen.values()];
+}
+
 function allocatePort(used: Set<number>, range: { min: number; max: number }): number {
 	for (let port = range.min; port <= range.max; port++)
 		if (!used.has(port)) return port;
-	throw new Error('No free service endpoint port in 21000–21999.');
+	throw new Error(`No free service endpoint port in ${range.min}–${range.max}.`);
 }

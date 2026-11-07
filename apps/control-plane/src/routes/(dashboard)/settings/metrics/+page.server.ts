@@ -31,7 +31,7 @@ export const actions: Actions = {
 			sections: Object.fromEntries(metricsSections.map((section) => [section, formBoolean(data, `section.${section}`)]))
 		};
 		try {
-			const settings = core.metricsExport.updateSettings(update);
+			const settings = core.metricsExport.updateSettings(principal, update);
 			core.ctx.audit.record({ principal, action: 'platform.metrics', resource: 'platform', args: settings, result: 'ok' });
 			return { success: 'Saved. The next scrape uses the new settings.' };
 		} catch (cause) {

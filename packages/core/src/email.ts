@@ -1,8 +1,9 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { resolveMx, resolveTxt } from 'node:dns/promises';
-import { and, desc, eq, gte, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import MailComposer from 'nodemailer/lib/mail-composer';
 import {
+	emailAccessRequests,
 	emailAddresses,
 	emailCredentials,
 	emailDomains,
@@ -15,27 +16,34 @@ import {
 	projects,
 } from '@skiff/db';
 import {
+	EMAIL_ACCESS_REQUEST_ID_PREFIX,
 	EMAIL_ACTIVE_DEFAULT_LIMITS,
+	EMAIL_ADDRESS_ID_PREFIX,
 	EMAIL_CREDENTIAL_ID_PREFIX,
 	EMAIL_DOMAIN_ID_PREFIX,
 	EMAIL_MESSAGE_ID_PREFIX,
 	EMAIL_OUTBOX_TTL_SECONDS,
 	EMAIL_REPUTATION,
+	EMAIL_SANDBOX_ADDRESS_LIMITS,
 	EMAIL_SANDBOX_LIMITS,
 	EMAIL_USERNAME_PREFIX,
 	HARD_BOUNCE_CLASSES,
 	authorizeSend,
 	brokerEnvPrefixSchema,
 	canAdministerPlatform,
+	canViewPlatform,
 	dkimRecordName,
 	dkimRecordValue,
 	dkimSelector,
+	emailAccessRequestCreateSchema,
+	emailAccessRequestDecisionSchema,
 	emailCredentialCreateSchema,
 	emailDomainCreateSchema,
 	emailDomainUpdateSchema,
 	emailEnvNames,
 	emailSendBatchEnvelopeSchema,
 	emailOrgStateUpdateSchema,
+	emailSandboxAddressCreateSchema,
 	emailSendSchema,
 	emailSuppressionCreateSchema,
 	mailHostnames,
@@ -47,6 +55,8 @@ import {
 	spfInclude,
 	spfIncludes,
 	suggestedDmarc,
+	type EmailAccessRequestStatus,
+	type EmailAccessRequestView,
 	type EmailCredentialSecret,
 	type EmailCredentialView,
 	type EmailDnsRecord,
@@ -59,6 +69,7 @@ import {
 	type EmailOrgView,
 	type EmailPolicyOrg,
 	type EmailRecordCheck,
+	type EmailSandboxAddressView,
 	type EmailSend,
 	type EmailSendInput,
 	type EmailSendResult,
@@ -73,9 +84,9 @@ import {
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
 import type { CloudflareClient, CloudflareRecordInput } from './domains.ts';
-import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
+import { ConflictError, CoreError, NotFoundError, QuotaError, RateLimitError, ValidationError } from './errors.ts';
 import type { ProjectRow } from './projects.ts';
-import { hashPassword, newId, parseJson, randomToken } from './util.ts';
+import { hashPassword, newId, parseJson, randomToken, sha256Hex } from './util.ts';
 
 /**
  * Email: Skiff's self-hosted SES (docs/EMAIL.md, D114–D120).
@@ -87,6 +98,8 @@ import { hashPassword, newId, parseJson, randomToken } from './util.ts';
 
 export type EmailDomainRow = typeof emailDomains.$inferSelect;
 export type EmailCredentialRow = typeof emailCredentials.$inferSelect;
+type EmailAddressRow = typeof emailAddresses.$inferSelect;
+type EmailAccessRequestRow = typeof emailAccessRequests.$inferSelect;
 
 /** DNS lookups Email needs; tests inject a fake so they never touch the network. */
 export interface EmailDnsResolver {
@@ -95,6 +108,22 @@ export interface EmailDnsResolver {
 }
 
 export const nodeEmailDnsResolver: EmailDnsResolver = { resolveTxt, resolveMx };
+
+const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+
+/** A routable IPv4: not private, loopback, link-local, CGNAT (Tailscale), multicast or reserved. */
+export function isPublicIpv4(value: string): boolean {
+	const match = IPV4.exec(value);
+	if (!match) return false;
+	const [a, b] = match.slice(1, 3).map(Number) as [number, number];
+	if (match.slice(1).some((part) => Number(part) > 255)) return false;
+	if (a === 0 || a === 10 || a === 127 || a >= 224) return false;
+	if (a === 100 && b >= 64 && b <= 127) return false;
+	if (a === 169 && b === 254) return false;
+	if (a === 172 && b >= 16 && b <= 31) return false;
+	if (a === 192 && b === 168) return false;
+	return true;
+}
 
 export interface EmailServiceOptions {
 	dns?: EmailDnsResolver;
@@ -107,7 +136,7 @@ export interface EmailServiceOptions {
 
 /** The capability a node must advertise before it is made the mail node. */
 const MAIL_CAPABILITY = 'mail';
-const SETTINGS = { node: 'email.node_id', paused: 'email.paused', generation: 'email.generation' } as const;
+const SETTINGS = { node: 'email.node_id', ip: 'email.ipv4', paused: 'email.paused', generation: 'email.generation' } as const;
 const RETENTION_DAYS = 30;
 const DAY_MS = 86_400_000;
 /** A claimed outbox row the agent never acknowledged is handed out again after this. */
@@ -115,6 +144,8 @@ const CLAIM_TIMEOUT_MS = 60_000;
 /** Unverified records keep sending for this long before the domain pauses (EMAIL.md §4.1). */
 const FAILING_GRACE_MS = 72 * 3_600_000;
 const RECORD_COMMENT = 'skiff-email';
+/** The public page a sandbox recipient opens from the verification mail (EMAIL.md §4.3). */
+export const SANDBOX_VERIFY_PATH = '/verify-email-address';
 const DEFAULT_ENV_PREFIX = 'SMTP';
 
 /**
@@ -186,9 +217,18 @@ export class EmailService {
 		);
 	}
 
-	settings(): { nodeId: string | null; paused: boolean; generation: number; mailDomain: string; hostnames: MailHostnames } {
+	settings(): {
+		nodeId: string | null;
+		/** The mail node's public IPv4: what the A, SPF and PTR records name. */
+		ip: string | null;
+		paused: boolean;
+		generation: number;
+		mailDomain: string;
+		hostnames: MailHostnames;
+	} {
 		return {
 			nodeId: this.setting(SETTINGS.node),
+			ip: this.setting(SETTINGS.ip),
 			paused: this.setting(SETTINGS.paused) === '1',
 			generation: Number(this.setting(SETTINGS.generation) ?? 0),
 			mailDomain: this.mailDomain(),
@@ -207,34 +247,67 @@ export class EmailService {
 			throw new CoreError('feature_disabled', 'Email is turned off on this platform (SKIFF_FEATURE_EMAIL=0).', 403);
 	}
 
-	/** Choose (or clear) the mail node and the global pause. Platform admins only. */
-	async configure(principal: Principal, input: { nodeId?: string | null; paused?: boolean }): Promise<ReturnType<EmailService['settings']>> {
+	/**
+	 * Choose (or clear) the mail node, its sending IPv4 and the global pause. Platform admins only.
+	 * `nodes.public_address` is the WireGuard upstream the edge proxies to, so the edge never has
+	 * one; the sending IP is its own setting. Left out, it is kept for the same node or found as
+	 * `detectIp` explains; otherwise the admin has to enter it.
+	 */
+	async configure(
+		principal: Principal,
+		input: { nodeId?: string | null; ip?: string | null; paused?: boolean },
+	): Promise<ReturnType<EmailService['settings']>> {
 		if (!canAdministerPlatform(principal)) throw new CoreError('forbidden', 'Only a platform admin can configure email.', 403);
 		this.requireFeature();
-		if (input.nodeId !== undefined) {
-			if (input.nodeId !== null) {
-				const node = this.ctx.db.select().from(nodes).where(eq(nodes.id, input.nodeId)).get();
-				if (!node) throw new NotFoundError(`Node ${input.nodeId} not found.`);
-				const capabilities = parseJson<string[]>(node.capabilitiesJson, []);
-				if (!capabilities.includes(MAIL_CAPABILITY))
-					throw new ValidationError(`Node "${node.name}" runs an agent without mail support; update its agent first.`);
-				if (!node.publicAddress) throw new ValidationError(`Node "${node.name}" has no public address to send from.`);
-			}
-			this.setSetting(SETTINGS.node, input.nodeId);
+		const current = this.settings();
+		const nodeId = input.nodeId !== undefined ? input.nodeId : current.nodeId;
+		const touchesNode = input.nodeId !== undefined || input.ip !== undefined;
+		let ip: string | null = null;
+		if (touchesNode && nodeId !== null) {
+			const node = this.ctx.db.select().from(nodes).where(eq(nodes.id, nodeId)).get();
+			if (!node) throw new NotFoundError(`Node ${nodeId} not found.`);
+			const capabilities = parseJson<string[]>(node.capabilitiesJson, []);
+			if (!capabilities.includes(MAIL_CAPABILITY))
+				throw new ValidationError(`Node "${node.name}" runs an agent without mail support; update its agent first.`);
+			const given = input.ip?.trim() || null;
+			if (given && !isPublicIpv4(given))
+				throw new ValidationError(`${given} is not a public IPv4 address. Receivers check the PTR of a public IPv4.`);
+			ip = given ?? (nodeId === current.nodeId ? current.ip : null) ?? (await this.detectIp(node));
+			if (!ip)
+				throw new ValidationError(
+					`Couldn't find a public IPv4 for "${node.name}". Enter the IP it sends from (the one its provider sets the PTR on).`,
+				);
+		}
+		if (touchesNode) {
+			this.setSetting(SETTINGS.node, nodeId);
+			this.setSetting(SETTINGS.ip, ip);
 		}
 		if (input.paused !== undefined) this.setSetting(SETTINGS.paused, input.paused ? '1' : null);
 		this.bumpMail();
-		this.ctx.audit.record({ principal, action: 'email.configure', resource: 'email', resourceId: 'platform', args: input, result: 'ok' });
-		if (input.nodeId) await this.publishPlatformRecords().catch(() => undefined);
+		this.ctx.audit.record({ principal, action: 'email.configure', resource: 'email', resourceId: 'platform', args: { ...input, ip }, result: 'ok' });
+		if (touchesNode && nodeId) await this.publishPlatformRecords().catch(() => undefined);
 		return this.settings();
+	}
+
+	/**
+	 * The node's public IPv4 when Skiff can tell it without guessing: a public IPv4 in its address,
+	 * or for the edge, the zone's own A record for the platform host. Public DNS is not asked: a
+	 * proxied platform host resolves to Cloudflare's IPs, and the control-plane unit cannot read
+	 * interfaces (no AF_NETLINK).
+	 */
+	private async detectIp(node: { mode: string; publicAddress: string | null }): Promise<string | null> {
+		const host = node.publicAddress?.replace(/:\d+$/, '') ?? '';
+		if (isPublicIpv4(host)) return host;
+		const platformHost = new URL(this.ctx.config.platformOrigin).hostname;
+		if (node.mode !== 'edge' || !this.cloudflare || !this.inZone(platformHost)) return null;
+		const record = await this.cloudflare.findRecord(platformHost).catch(() => null);
+		return record?.type === 'A' && isPublicIpv4(record.content) ? record.content : null;
 	}
 
 	/** The platform records the mail node needs (EMAIL.md §3.3), as values to publish or show. */
 	platformRecords(): Array<{ type: 'A' | 'TXT' | 'MX'; name: string; value: string; priority?: number }> {
-		const { nodeId } = this.settings();
-		const names = this.hostnames();
-		const node = nodeId ? this.ctx.db.select().from(nodes).where(eq(nodes.id, nodeId)).get() : null;
-		const ip = node?.publicAddress && /^\d{1,3}(\.\d{1,3}){3}$/.test(node.publicAddress) ? node.publicAddress : null;
+		const { nodeId, ip: stored, hostnames: names } = this.settings();
+		const ip = nodeId ? stored : null;
 		const records: Array<{ type: 'A' | 'TXT' | 'MX'; name: string; value: string; priority?: number }> = [];
 		if (ip) {
 			for (const name of [names.helo, names.mx, names.submission]) records.push({ type: 'A', name, value: ip });
@@ -334,6 +407,8 @@ export class EmailService {
 			.run();
 		this.bumpMail();
 		this.ctx.audit.record({ principal, action: 'email.org.update', resource: 'email', resourceId: orgId, args: input, result: 'ok' });
+		// Moved out by hand: a request still waiting for an answer is answered by this.
+		if (movedOut) this.closePendingAccessRequest(principal, orgId, { perDay, perSecond });
 		return this.orgView({ ...principal, orgId, permissions: new Set([...principal.permissions, 'email:read']) });
 	}
 
@@ -818,7 +893,7 @@ export class EmailService {
 		const verifiedAddresses = this.ctx.db
 			.select({ address: emailAddresses.address })
 			.from(emailAddresses)
-			.where(and(eq(emailAddresses.orgId, orgId)))
+			.where(and(eq(emailAddresses.orgId, orgId), isNotNull(emailAddresses.verifiedAt)))
 			.all()
 			.map((row) => row.address);
 		return { orgId, state: org.state, perSecond: org.perSecond, perDay: org.perDay, sendingDomains, verifiedAddresses };
@@ -1078,6 +1153,423 @@ export class EmailService {
 		if (result.changes === 0) throw new NotFoundError(`${address} is not on the suppression list.`);
 		this.bumpMail();
 		this.ctx.audit.record({ principal, action: 'email.suppression.remove', resource: 'email', resourceId: normalizeAddress(address), args: {}, result: 'ok' });
+	}
+
+	// ------------------------------------------------------------------ sandbox recipients (EMAIL.md §4.3)
+
+	/** Display name of an org, for mail and the admin queue; null before the auth tables exist. */
+	private orgName(orgId: string): string | null {
+		try {
+			return this.ctx.sqlite.query<{ name: string }, [string]>('SELECT name FROM organization WHERE id = ?').get(orgId)?.name ?? null;
+		} catch {
+			return null;
+		}
+	}
+
+	private userEmail(userId: string): string | null {
+		try {
+			return this.ctx.sqlite.query<{ email: string | null }, [string]>('SELECT email FROM "user" WHERE id = ?').get(userId)?.email ?? null;
+		} catch {
+			return null;
+		}
+	}
+
+	/** Platform mail (D22), never the org's own mail node: the sandbox exists before the org is trusted. */
+	private platformMail(): NonNullable<CoreContext['config']['email']> {
+		const transport = this.ctx.config.email;
+		if (!transport)
+			throw new CoreError('platform_mail_unavailable', 'Skiff has no outgoing mail of its own configured (SKIFF_SMTP_*), so it cannot send the verification email.', 409);
+		return transport;
+	}
+
+	private addressView(row: EmailAddressRow): EmailSandboxAddressView {
+		const pending = row.verifiedAt === null;
+		return {
+			id: row.id,
+			address: row.address,
+			status: pending ? 'pending' : 'verified',
+			verifiedAt: iso(row.verifiedAt),
+			sentAt: pending ? iso(row.sentAt) : null,
+			expiresAt: pending && row.sentAt !== null ? iso(row.sentAt + EMAIL_SANDBOX_ADDRESS_LIMITS.linkTtlSeconds * 1000) : null,
+			createdAt: iso(row.createdAt)!,
+		};
+	}
+
+	private addressRow(orgId: string, address: string): EmailAddressRow | undefined {
+		return this.ctx.db
+			.select()
+			.from(emailAddresses)
+			.where(and(eq(emailAddresses.orgId, orgId), eq(emailAddresses.address, normalizeAddress(address))))
+			.get();
+	}
+
+	listSandboxAddresses(principal: Principal): EmailSandboxAddressView[] {
+		requirePermission(principal, 'email:read');
+		return this.ctx.db
+			.select()
+			.from(emailAddresses)
+			.where(eq(emailAddresses.orgId, principal.orgId))
+			.all()
+			.sort((a, b) => a.address.localeCompare(b.address))
+			.map((row) => this.addressView(row));
+	}
+
+	/**
+	 * Add a sandbox recipient and mail it a single-use verification link, or send a fresh link to one
+	 * still pending. A verified address is returned as it is. The link replaces any earlier one.
+	 */
+	async addSandboxAddress(principal: Principal, raw: unknown): Promise<EmailSandboxAddressView> {
+		requirePermission(principal, 'email:update');
+		this.requireFeature();
+		const { address: parsed } = emailSandboxAddressCreateSchema.parse(raw);
+		const address = normalizeAddress(parsed);
+		const limits = EMAIL_SANDBOX_ADDRESS_LIMITS;
+		const existing = this.addressRow(principal.orgId, address);
+		if (existing?.verifiedAt) return this.addressView(existing);
+		const transport = this.platformMail();
+		const now = this.ctx.now();
+		let sendCount = 1;
+		if (existing) {
+			if (existing.sentAt !== null && now - existing.sentAt < limits.resendAfterSeconds * 1000)
+				throw new RateLimitError(`A verification link went to ${address} less than a minute ago. Wait a minute before sending another.`);
+			const linkLive = existing.sentAt !== null && now - existing.sentAt < limits.linkTtlSeconds * 1000;
+			if (linkLive && existing.sendCount >= limits.maxSends)
+				throw new RateLimitError(
+					`${limits.maxSends} verification links already went to ${address} today. Ask its owner to check spam, or try again after ${iso(existing.sentAt! + limits.linkTtlSeconds * 1000)}.`,
+				);
+			sendCount = linkLive ? existing.sendCount + 1 : 1;
+		} else {
+			const rows = this.ctx.db
+				.select({ verifiedAt: emailAddresses.verifiedAt })
+				.from(emailAddresses)
+				.where(eq(emailAddresses.orgId, principal.orgId))
+				.all();
+			if (rows.length >= limits.maxAddresses)
+				throw new QuotaError(`An organisation can hold at most ${limits.maxAddresses} sandbox recipients. Remove one first, or request production access.`);
+			if (rows.filter((row) => row.verifiedAt === null).length >= limits.maxPending)
+				throw new QuotaError(`${limits.maxPending} addresses are already waiting for verification. Remove one that won't be confirmed first.`);
+		}
+
+		const token = randomToken(32);
+		const id = existing?.id ?? newId(EMAIL_ADDRESS_ID_PREFIX);
+		if (existing)
+			this.ctx.db.update(emailAddresses).set({ tokenHash: sha256Hex(token), sentAt: now, sendCount }).where(eq(emailAddresses.id, id)).run();
+		else
+			this.ctx.db
+				.insert(emailAddresses)
+				.values({ id, orgId: principal.orgId, address, tokenHash: sha256Hex(token), verifiedAt: null, createdBy: principal.userId, createdAt: now, sentAt: now, sendCount })
+				.run();
+
+		const orgName = this.orgName(principal.orgId) ?? 'An organisation';
+		const requester = this.userEmail(principal.userId);
+		const url = `${this.ctx.config.platformOrigin}${SANDBOX_VERIFY_PATH}?token=${encodeURIComponent(token)}`;
+		try {
+			await transport.send({
+				to: address,
+				subject: `Confirm ${address} to receive test email from ${orgName}`,
+				text: [
+					`${orgName}${requester ? ` (${requester})` : ''} is setting up email on Skiff and wants to send test messages to ${address}.`,
+					'While an organisation is in the sandbox it can only reach addresses whose owners confirmed them.',
+					'',
+					`To allow it, open this link and confirm:`,
+					url,
+					'',
+					`The link works once and expires in ${limits.linkTtlSeconds / 3600} hours. If you don't know ${orgName}, ignore this email: nothing is sent to you unless you confirm.`,
+				].join('\n'),
+			});
+		} catch (error) {
+			// Leave things as they were: no row for a new address, the previous link for an old one.
+			if (existing)
+				this.ctx.db
+					.update(emailAddresses)
+					.set({ tokenHash: existing.tokenHash, sentAt: existing.sentAt, sendCount: existing.sendCount })
+					.where(eq(emailAddresses.id, id))
+					.run();
+			else this.ctx.db.delete(emailAddresses).where(eq(emailAddresses.id, id)).run();
+			throw new CoreError('platform_mail_failed', `Could not send the verification email: ${error instanceof Error ? error.message : String(error)}`, 502);
+		}
+		this.ctx.audit.record({
+			principal,
+			action: existing ? 'email.address.resend' : 'email.address.add',
+			resource: 'email',
+			resourceId: address,
+			args: { sendCount },
+			result: 'ok',
+		});
+		return this.addressView(this.addressRow(principal.orgId, address)!);
+	}
+
+	private addressByToken(token: string): EmailAddressRow | undefined {
+		if (!token || token.length > 200) return undefined;
+		return this.ctx.db.select().from(emailAddresses).where(eq(emailAddresses.tokenHash, sha256Hex(token))).get();
+	}
+
+	/** What a verification link points at, without using it up (the public page shows it before the click). */
+	peekSandboxVerification(token: string): { address: string; orgName: string | null; expired: boolean } | null {
+		const row = this.addressByToken(token);
+		if (!row || row.verifiedAt !== null) return null;
+		const expired = row.sentAt === null || this.ctx.now() - row.sentAt >= EMAIL_SANDBOX_ADDRESS_LIMITS.linkTtlSeconds * 1000;
+		return { address: row.address, orgName: this.orgName(row.orgId), expired };
+	}
+
+	/**
+	 * The recipient confirmed: the address becomes a sandbox recipient and the link stops working.
+	 * Public (the token is the credential); a GET never calls this, so link scanners can't confirm.
+	 */
+	verifySandboxAddress(token: string): { address: string; orgName: string | null } {
+		const row = this.addressByToken(token);
+		if (!row || row.verifiedAt !== null) throw new CoreError('invalid_link', 'This link is not valid or was already used.', 404);
+		const now = this.ctx.now();
+		if (row.sentAt === null || now - row.sentAt >= EMAIL_SANDBOX_ADDRESS_LIMITS.linkTtlSeconds * 1000)
+			throw new CoreError('link_expired', 'This link has expired. Ask whoever added your address to send a new one.', 410);
+		const result = this.ctx.sqlite.run('UPDATE email_addresses SET verified_at = ?, token_hash = NULL WHERE id = ? AND verified_at IS NULL', [now, row.id]);
+		if (result.changes === 0) throw new CoreError('invalid_link', 'This link is not valid or was already used.', 404);
+		this.bumpMail();
+		this.ctx.audit.record({
+			principal: { kind: 'system', userId: 'system', orgId: row.orgId, role: 'owner', permissions: new Set() } as unknown as Principal,
+			action: 'email.address.verify',
+			resource: 'email',
+			resourceId: row.address,
+			result: 'ok',
+		});
+		return { address: row.address, orgName: this.orgName(row.orgId) };
+	}
+
+	removeSandboxAddress(principal: Principal, address: string): void {
+		requirePermission(principal, 'email:update');
+		const row = this.addressRow(principal.orgId, address);
+		if (!row) throw new NotFoundError(`Sandbox recipient ${address}`);
+		this.ctx.db.delete(emailAddresses).where(eq(emailAddresses.id, row.id)).run();
+		if (row.verifiedAt !== null) this.bumpMail();
+		this.ctx.audit.record({ principal, action: 'email.address.remove', resource: 'email', resourceId: row.address, args: {}, result: 'ok' });
+	}
+
+	// ------------------------------------------------------------------ production access (EMAIL.md §7.3)
+
+	private accessRequestView(row: EmailAccessRequestRow): EmailAccessRequestView {
+		return {
+			id: row.id,
+			orgId: row.orgId,
+			orgName: this.orgName(row.orgId),
+			status: row.status,
+			useCase: row.useCase,
+			expectedDailyVolume: row.expectedDailyVolume,
+			website: row.website,
+			requestedBy: { id: row.requestedBy, email: row.requesterEmail },
+			decidedBy: row.decidedBy,
+			decidedAt: iso(row.decidedAt),
+			note: row.decisionNote,
+			perDay: row.grantedPerDay,
+			perSecond: row.grantedPerSecond,
+			createdAt: iso(row.createdAt)!,
+		};
+	}
+
+	private pendingAccessRequest(orgId: string): EmailAccessRequestRow | undefined {
+		return this.ctx.db
+			.select()
+			.from(emailAccessRequests)
+			.where(and(eq(emailAccessRequests.orgId, orgId), eq(emailAccessRequests.status, 'pending')))
+			.get();
+	}
+
+	/** The org's latest request, whatever its outcome; null if it never asked. */
+	accessRequest(principal: Principal): EmailAccessRequestView | null {
+		requirePermission(principal, 'email:read');
+		const row = this.ctx.db
+			.select()
+			.from(emailAccessRequests)
+			.where(eq(emailAccessRequests.orgId, principal.orgId))
+			.orderBy(desc(emailAccessRequests.createdAt))
+			.limit(1)
+			.get();
+		return row ? this.accessRequestView(row) : null;
+	}
+
+	/** An org owner or admin asks a platform admin to move the org out of the sandbox. */
+	async requestProductionAccess(principal: Principal, raw: unknown): Promise<EmailAccessRequestView> {
+		requirePermission(principal, 'email:update');
+		if (principal.role !== 'owner' && principal.role !== 'admin')
+			throw new CoreError('forbidden', 'Only an organisation owner or admin can request production access.', 403);
+		this.requireFeature();
+		const input = emailAccessRequestCreateSchema.parse(raw);
+		const org = this.peekOrg(principal.orgId, principal);
+		if (org.state === 'active') throw new ConflictError('This organisation is already out of the sandbox.');
+		if (org.state === 'paused')
+			throw new ConflictError(`Sending is paused for this organisation (${org.pausedReason ?? 'by a platform admin'}). A platform admin has to resume it first.`);
+		const pending = this.pendingAccessRequest(principal.orgId);
+		if (pending) throw new ConflictError(`A request is already waiting for a platform admin (sent ${iso(pending.createdAt)}).`);
+		const now = this.ctx.now();
+		const row: EmailAccessRequestRow = {
+			id: newId(EMAIL_ACCESS_REQUEST_ID_PREFIX),
+			orgId: principal.orgId,
+			status: 'pending',
+			useCase: input.useCase,
+			expectedDailyVolume: input.expectedDailyVolume,
+			website: input.website ?? null,
+			requestedBy: principal.userId,
+			requesterEmail: this.userEmail(principal.userId),
+			decidedBy: null,
+			decidedAt: null,
+			decisionNote: null,
+			grantedPerDay: null,
+			grantedPerSecond: null,
+			createdAt: now,
+			updatedAt: now,
+		};
+		try {
+			this.ctx.db.insert(emailAccessRequests).values(row).run();
+		} catch (error) {
+			// Two submissions racing: the partial unique index keeps one pending request per org.
+			if (this.pendingAccessRequest(principal.orgId)) throw new ConflictError('A request is already waiting for a platform admin.');
+			throw error;
+		}
+		this.ctx.audit.record({
+			principal,
+			action: 'email.access_request.create',
+			resource: 'email',
+			resourceId: row.id,
+			args: { expectedDailyVolume: input.expectedDailyVolume, website: input.website ?? null },
+			result: 'ok',
+		});
+		const orgName = this.orgName(principal.orgId) ?? principal.orgId;
+		await this.notify({
+			key: `email.access_request.${row.id}`,
+			title: `Email production access requested for ${orgName}`,
+			detail: [
+				`${row.requesterEmail ?? principal.userId} asks to move ${orgName} out of the email sandbox, expecting about ${input.expectedDailyVolume.toLocaleString('en')} messages a day.`,
+				input.website ? `Website: ${input.website}` : null,
+				`Use case: ${input.useCase}`,
+				`Review it at ${this.ctx.config.platformOrigin}/email/requests`,
+			]
+				.filter(Boolean)
+				.join('\n\n'),
+			severity: 'info',
+		});
+		return this.accessRequestView(row);
+	}
+
+	/** The platform admin's queue, pending first, then the newest decisions. */
+	listAccessRequests(principal: Principal, options: { status?: EmailAccessRequestStatus; limit?: number } = {}): EmailAccessRequestView[] {
+		if (!canViewPlatform(principal)) throw new CoreError('forbidden', 'Only a platform admin can see production access requests.', 403);
+		const limit = Math.min(Math.max(options.limit ?? 100, 1), 500);
+		const rows = this.ctx.db
+			.select()
+			.from(emailAccessRequests)
+			.where(options.status ? eq(emailAccessRequests.status, options.status) : undefined)
+			.orderBy(desc(emailAccessRequests.createdAt))
+			.limit(limit)
+			.all();
+		const rank = (row: EmailAccessRequestRow) => (row.status === 'pending' ? 0 : 1);
+		return rows.sort((a, b) => rank(a) - rank(b) || b.createdAt - a.createdAt).map((row) => this.accessRequestView(row));
+	}
+
+	/**
+	 * Approve (the org becomes active with the limits given, else the active defaults) or deny (a
+	 * reason is required, and the org stays in the sandbox). The requester is told by email.
+	 */
+	async decideAccessRequest(principal: Principal, id: string, raw: unknown): Promise<EmailAccessRequestView> {
+		if (!canAdministerPlatform(principal)) throw new CoreError('forbidden', 'Only a platform admin can decide production access requests.', 403);
+		const input = emailAccessRequestDecisionSchema.parse(raw);
+		const row = this.ctx.db.select().from(emailAccessRequests).where(eq(emailAccessRequests.id, id)).get();
+		if (!row) throw new NotFoundError(`Access request ${id}`);
+		if (row.status !== 'pending') throw new ConflictError(`This request was already ${row.status}.`);
+		const note = input.note?.trim() || null;
+		const now = this.ctx.now();
+		let decided: EmailAccessRequestRow;
+		if (input.decision === 'deny') {
+			if (!note) throw new ValidationError('Say why the request is denied; the requester sees it.');
+			decided = { ...row, status: 'denied', decidedBy: principal.userId, decidedAt: now, decisionNote: note, updatedAt: now };
+			this.ctx.db.update(emailAccessRequests).set(decided).where(eq(emailAccessRequests.id, id)).run();
+		} else {
+			const org = this.orgRow(row.orgId);
+			if (org.state === 'paused')
+				throw new ConflictError('Sending is paused for this organisation; resume it in Settings → Email before approving.');
+			const perDay = input.perDay ?? (org.state === 'active' ? org.perDay : EMAIL_ACTIVE_DEFAULT_LIMITS.perDay);
+			const perSecond = input.perSecond ?? (org.state === 'active' ? org.perSecond : EMAIL_ACTIVE_DEFAULT_LIMITS.perSecond);
+			decided = {
+				...row,
+				status: 'approved',
+				decidedBy: principal.userId,
+				decidedAt: now,
+				decisionNote: note,
+				grantedPerDay: perDay,
+				grantedPerSecond: perSecond,
+				updatedAt: now,
+			};
+			this.ctx.sqlite.transaction(() => {
+				// Answered first, so setOrgState finds nothing pending to close.
+				this.ctx.db.update(emailAccessRequests).set(decided).where(eq(emailAccessRequests.id, id)).run();
+				this.setOrgState(principal, row.orgId, { state: 'active', perDay, perSecond });
+			})();
+		}
+		this.ctx.audit.record({
+			principal,
+			orgId: row.orgId,
+			action: `email.access_request.${decided.status === 'approved' ? 'approve' : 'deny'}`,
+			resource: 'email',
+			resourceId: id,
+			args: { note, perDay: decided.grantedPerDay, perSecond: decided.grantedPerSecond },
+			result: 'ok',
+		});
+		await this.tellRequester(decided);
+		return this.accessRequestView(decided);
+	}
+
+	/** setOrgState moved the org out by hand: answer its open request the same way. */
+	private closePendingAccessRequest(principal: Principal, orgId: string, limits: { perDay: number; perSecond: number }): void {
+		const pending = this.pendingAccessRequest(orgId);
+		if (!pending) return;
+		const now = this.ctx.now();
+		const decided: EmailAccessRequestRow = {
+			...pending,
+			status: 'approved',
+			decidedBy: principal.userId,
+			decidedAt: now,
+			decisionNote: null,
+			grantedPerDay: limits.perDay,
+			grantedPerSecond: limits.perSecond,
+			updatedAt: now,
+		};
+		this.ctx.db.update(emailAccessRequests).set(decided).where(eq(emailAccessRequests.id, pending.id)).run();
+		this.ctx.audit.record({ principal, orgId, action: 'email.access_request.approve', resource: 'email', resourceId: pending.id, args: limits, result: 'ok' });
+		void this.tellRequester(decided);
+	}
+
+	/** Best effort: a decision stands even if the mail to the requester can't go out. */
+	private async tellRequester(row: EmailAccessRequestRow): Promise<boolean> {
+		const to = row.requesterEmail ?? this.userEmail(row.requestedBy);
+		const transport = this.ctx.config.email;
+		if (!to || !transport) return false;
+		const orgName = this.orgName(row.orgId) ?? 'your organisation';
+		const link = `${this.ctx.config.platformOrigin}/email`;
+		const message =
+			row.status === 'approved'
+				? {
+						subject: `Email production access approved for ${orgName}`,
+						text: [
+							`A platform admin moved ${orgName} out of the email sandbox. You can now send to any recipient, up to ${(row.grantedPerDay ?? 0).toLocaleString('en')} messages a day and ${row.grantedPerSecond ?? 0} a second.`,
+							row.decisionNote ? `Note from the admin: ${row.decisionNote}` : null,
+							'Keep bounces and complaints low: sending pauses automatically if they climb.',
+							link,
+						],
+					}
+				: {
+						subject: `Email production access request for ${orgName} was declined`,
+						text: [
+							`A platform admin declined the request to move ${orgName} out of the email sandbox. It keeps sending to verified recipients only.`,
+							`Reason: ${row.decisionNote ?? 'none given'}`,
+							'You can send a new request from the Email area once this is addressed.',
+							link,
+						],
+					};
+		try {
+			await transport.send({ to, subject: message.subject, text: message.text.filter(Boolean).join('\n\n') });
+			return true;
+		} catch (error) {
+			console.error(`[email] could not tell ${to} about access request ${row.id}:`, error instanceof Error ? error.message : error);
+			return false;
+		}
 	}
 
 	// ------------------------------------------------------------------ the mail node

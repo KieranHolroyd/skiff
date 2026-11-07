@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import { SLUG_PATTERN } from './slugs.ts';
 import type { VolumeSummary } from './volume.ts';
+import { storageReplicationDesiredSchema } from './storage-replication.ts';
 
 /**
  * Managed object storage (docs/OBJECT-STORAGE.md, S1–S10).
@@ -377,11 +378,24 @@ export interface StorageView {
 	region: string;
 	buckets: StorageBucketView[];
 	attachments: StorageAttachmentView[];
+	/** Root key state; never the secret. `rotating` while a new pair waits for the node (§5). */
+	rootKey: StorageRootKeyState;
 	statsAt: string | null;
 	createdAt: string;
 	updatedAt: string;
 	deletedAt: string | null;
 	purgeAt: string | null;
+}
+
+export interface StorageRootKeyState {
+	accessKeyId: string;
+	status: 'current' | 'rotating' | 'failed';
+	/** The new key id while rotating. */
+	pendingAccessKeyId: string | null;
+	rotationStartedAt: string | null;
+	/** Why the last rotation was rolled back. */
+	error: string | null;
+	rotatedAt: string | null;
 }
 
 /** Root key for humans (S6). Every reveal is audited; MCP never returns it. */
@@ -443,6 +457,11 @@ export const workloadObjectStorageSchema = z.object({
 	 */
 	deleteBuckets: z.array(z.object({ name: bucketNameSchema, force: z.boolean().default(false) })).max(200).default([]),
 	keysVersion: z.string().length(64),
+	/**
+	 * Replication links this node runs for the instance (§12). Each link's scoped secret arrives in
+	 * `storageAdmin.replication`; `keysVersion` moves when a link is added or removed.
+	 */
+	replication: z.array(storageReplicationDesiredSchema).max(10).default([]),
 });
 export type WorkloadObjectStorage = z.infer<typeof workloadObjectStorageSchema>;
 
@@ -454,6 +473,8 @@ export const storageAdminSchema = z.object({
 	keysVersion: z.string().length(64),
 	/** Secret keys for `objectStorage.users`, by access key id. */
 	users: z.record(z.string(), z.string()).default({}),
+	/** Secret of each replication link's scoped key on the peer, by link id. */
+	replication: z.record(z.string(), z.string()).default({}),
 });
 export type StorageAdmin = z.infer<typeof storageAdminSchema>;
 
@@ -507,6 +528,18 @@ export interface StorageMetricPoint {
 }
 
 // -------------------------------------------------------------------- helpers
+
+/**
+ * Which root key the node's agent last proved against a running instance (§5, staged rotation).
+ * `accepted`: an admin call signed with `accessKeyId` succeeded; `rejected`: RustFS refused it.
+ */
+export const storageRootKeyReportSchema = z.object({
+	storageId: z.string().max(100),
+	accessKeyId: z.string().max(128),
+	result: z.enum(['accepted', 'rejected']),
+	message: z.string().max(500).nullable().default(null),
+});
+export type StorageRootKeyReport = z.infer<typeof storageRootKeyReportSchema>;
 
 /** Heartbeat report for one `deleteBuckets` entry. */
 export const storageBucketDeletionSchema = z.object({

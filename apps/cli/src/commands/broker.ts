@@ -1,18 +1,30 @@
+import { readFile } from 'node:fs/promises';
 import { parseArgs, rejectExtraPositionals, requirePositional, type FlagSpec } from '../args.ts';
 import { CliError, UsageError } from '../errors.ts';
 import {
 	BROKER_ENGINES,
+	assertQueueName,
 	brokerDetails,
 	brokerMetricsSummary,
 	brokerMetricsTable,
 	brokerQueuesTable,
 	brokerTable,
+	checkMessageBody,
+	parseCount,
+	parseDelaySeconds,
+	peekReport,
+	queueOfStream,
+	resolveStream,
+	sendSummary,
+	trimFinalNewline,
 	type BrokerCreateInput,
 	type BrokerUpdateInput,
 } from '../brokers.ts';
 import { assertEnvPrefix, parseCpus, parseMegabytes } from '../databases.ts';
+import { NODE_TASK_LIMITS } from '../node-tasks.ts';
 import { parseDuration } from '../object-storage.ts';
-import { formatTime, indent, plural, printJson } from '../output.ts';
+import { formatBytes, formatTime, indent, plural, printJson } from '../output.ts';
+import { readAllStdin } from '../prompt.ts';
 import { authenticatedClient } from './common.ts';
 import { confirmOrRefuse } from './run-operation.ts';
 
@@ -37,6 +49,21 @@ Commands:
   queues <name>                JetStream streams and consumers with their backlog
   credentials <name>           Print the connection URL (--json for user, password, host, port)
 
+Queue tools (run on the broker's node; <queue> is a function queue, stored as SKIFF_Q_<queue>):
+  queue-create <name> <queue>  Create a function queue's stream now instead of on first use
+  send <name> <queue> [body]   Publish a test message: body as an argument, --body, --file <path>,
+                               or piped on stdin; JSON unless --text (--delay 30s, --count 10)
+  peek <name> <queue>          Read messages without consuming them (--limit 20, --from <seq>)
+  redrive <name> <dlq> --to <queue>
+                               Move dead-lettered messages back into a queue (--limit <n>)
+  queue-purge <name> <queue>   Remove every message; the stream and its consumers stay
+  queue-rm <name> <queue>      Delete the stream and its messages (a function queue's stream
+                               comes back on its next use)
+  message-rm <name> <queue> <seq>
+                               Delete one message by sequence
+  peek, queue-purge, queue-rm and message-rm take --stream <stream> instead of <queue> for a
+  stream your app created itself (e.g. skif broker peek jobs --stream EVENTS).
+
 Create options:
   -p, --project <slug>         Attach to this project right away (placed on its node)
       --engine <engine>        nats (default)
@@ -50,7 +77,7 @@ Create options:
 
 Options:
   -y, --yes                    Don't ask for confirmation (required when stdin isn't a terminal)
-      --json                   JSON output
+      --json                   JSON output (queue tools print the task with its raw result)
   -h, --help                   Show this help
 
 Attached apps get <PREFIX>_URL, _HOST, _PORT, _USER and _PASSWORD at activation and must run on
@@ -60,7 +87,10 @@ permission and every read is audited.
 Examples:
   skif broker create jobs --project api          # api receives NATS_URL
   skif broker attach jobs --project worker
-  nats --server "$(skif broker credentials jobs)" stream ls   # on the node, or through ssh -L`;
+  nats --server "$(skif broker credentials jobs)" stream ls   # on the node, or through ssh -L
+  skif broker send jobs emails '{"to":"a@example.com"}' --count 5
+  skif broker peek jobs emails-dlq
+  skif broker redrive jobs emails-dlq --to emails`;
 
 const baseFlags: FlagSpec = {
 	json: { type: 'boolean' },
@@ -103,6 +133,19 @@ const logsFlags: FlagSpec = {
 	after: { type: 'string' },
 };
 
+const streamFlags: FlagSpec = { ...baseFlags, stream: { type: 'string' } };
+const streamConfirmFlags: FlagSpec = { ...confirmFlags, stream: { type: 'string' } };
+const sendFlags: FlagSpec = {
+	...baseFlags,
+	body: { type: 'string' },
+	file: { type: 'string' },
+	text: { type: 'boolean' },
+	delay: { type: 'string' },
+	count: { type: 'string' },
+};
+const peekFlags: FlagSpec = { ...streamFlags, limit: { type: 'string' }, from: { type: 'string' } };
+const redriveFlags: FlagSpec = { ...baseFlags, to: { type: 'string' }, limit: { type: 'string' } };
+
 const subcommands: Record<string, (argv: string[]) => Promise<void>> = {
 	list: listBrokers,
 	ls: listBrokers,
@@ -123,6 +166,14 @@ const subcommands: Record<string, (argv: string[]) => Promise<void>> = {
 	streams: showQueues,
 	credentials: showCredentials,
 	creds: showCredentials,
+	'queue-create': createQueue,
+	send: sendMessage,
+	publish: sendMessage,
+	peek: peekMessages,
+	redrive: redriveQueue,
+	'queue-purge': purgeStream,
+	'queue-rm': deleteStream,
+	'message-rm': deleteMessage,
 };
 
 export async function brokerCommand(argv: string[]): Promise<void> {
@@ -511,4 +562,227 @@ async function showQueues(argv: string[]): Promise<void> {
 	}
 	console.log(brokerQueuesTable(queues));
 	console.log(`\nListed ${formatTime(queues.at)}.${queues.truncated ? ` Only the first ${queues.streams.length} streams by name are shown.` : ''}`);
+}
+
+// --- queue tools (D124) -----------------------------------------------------
+
+/** Parse, handle --help, and return exactly `count` positionals (broker name first). */
+function parsePositionals(argv: string[], spec: FlagSpec, line: string, names: string[], optional = 0) {
+	const args = parseArgs(argv, spec);
+	if (args.boolean('help')) {
+		console.log(usage);
+		return null;
+	}
+	const full = `Usage: skif broker ${line}`;
+	rejectExtraPositionals(args, names.length + optional, full);
+	const values = names.map((name, index) => requirePositional(args, index, `${name}.\n\n${full}`));
+	return { args, values };
+}
+
+/** `<name> <queue>` or `<name> --stream <stream>`, for the commands that take either. */
+function parseStreamTarget(argv: string[], spec: FlagSpec, command: string, extra: string[] = []) {
+	const args = parseArgs(argv, spec);
+	if (args.boolean('help')) {
+		console.log(usage);
+		return null;
+	}
+	const rawStream = args.string('stream');
+	const withStream = rawStream !== undefined;
+	const tail = extra.map((name) => ` <${name}>`).join('');
+	const line = `Usage: skif broker ${command} <name> <queue>${tail}  (or <name>${tail} --stream <stream>)`;
+	const count = 1 + (withStream ? 0 : 1) + extra.length;
+	rejectExtraPositionals(args, count, line);
+	const name = requirePositional(args, 0, `broker name.\n\n${line}`);
+	const queue = withStream ? undefined : requirePositional(args, 1, `queue name (or pass --stream <stream>).\n\n${line}`);
+	const rest = extra.map((label, index) => requirePositional(args, 1 + (withStream ? 0 : 1) + index, `${label}.\n\n${line}`));
+	return { args, name, rest, ...resolveStream(queue, rawStream) };
+}
+
+function cancelled(): void {
+	console.error('Cancelled. Nothing was changed.');
+	process.exitCode = 1;
+}
+
+async function createQueue(argv: string[]): Promise<void> {
+	const parsed = parsePositionals(argv, baseFlags, 'queue-create <name> <queue>', ['broker name', 'queue name']);
+	if (!parsed) return;
+	const [name, queue] = parsed.values as [string, string];
+	assertQueueName(queue);
+	const client = await authenticatedClient();
+	const { result, raw } = await client.brokerQueueCreate(name, queue);
+	if (parsed.args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	console.log(
+		result.created
+			? `Created ${result.stream} on "${name}". Consumers and producers of queue ${queue} use it from now on.`
+			: `${result.stream} already exists on "${name}"; nothing changed.`,
+	);
+}
+
+/** The body from exactly one of: the argument, --body, --file, or stdin when it is piped. */
+async function messageBody(positional: string | undefined, args: ReturnType<typeof parseArgs>): Promise<string> {
+	const flag = args.string('body');
+	const file = args.string('file');
+	const given = [positional !== undefined, flag !== undefined, file !== undefined].filter(Boolean).length;
+	if (given > 1) throw new UsageError('Give the body once: as an argument, with --body, or with --file.');
+	if (positional !== undefined) return positional;
+	if (flag !== undefined) return flag;
+	if (file !== undefined) {
+		try {
+			return trimFinalNewline(file === '-' ? await readAllStdin() : await readFile(file, 'utf8'));
+		} catch (error) {
+			throw new UsageError(`Could not read --file ${file}: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+	if (!process.stdin.isTTY) {
+		const piped = trimFinalNewline(await readAllStdin());
+		if (piped !== '') return piped;
+	}
+	throw new UsageError('Give a message body: skif broker send <name> <queue> \'{"hello":"world"}\' (or --body, --file, or pipe it on stdin).');
+}
+
+async function sendMessage(argv: string[]): Promise<void> {
+	const parsed = parsePositionals(argv, sendFlags, 'send <name> <queue> [body]', ['broker name', 'queue name'], 1);
+	if (!parsed) return;
+	const { args } = parsed;
+	const [name, queue] = parsed.values as [string, string];
+	assertQueueName(queue);
+	const contentType = args.boolean('text') ? 'text' : 'json';
+	const delay = args.string('delay');
+	const delaySeconds = delay !== undefined ? parseDelaySeconds(delay) : undefined;
+	const countFlag = args.string('count');
+	const count = countFlag !== undefined ? parseCount(countFlag, '--count', 1, NODE_TASK_LIMITS.sendCount) : undefined;
+	const body = await messageBody(args.positionals[2], args);
+	checkMessageBody(body, contentType);
+	const client = await authenticatedClient();
+	const { result, raw } = await client.brokerQueueSend(name, queue, {
+		body,
+		contentType,
+		...(delaySeconds ? { delaySeconds } : {}),
+		...(count !== undefined ? { count } : {}),
+	});
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	console.log(sendSummary(result, delaySeconds));
+}
+
+async function peekMessages(argv: string[]): Promise<void> {
+	const parsed = parseStreamTarget(argv, peekFlags, 'peek');
+	if (!parsed) return;
+	const { args, name, stream } = parsed;
+	const limitFlag = args.string('limit');
+	const limit = limitFlag !== undefined ? parseCount(limitFlag, '--limit', 1, NODE_TASK_LIMITS.peekMessages) : undefined;
+	const fromFlag = args.string('from');
+	const from = fromFlag !== undefined ? parseCount(fromFlag, '--from', 1, Number.MAX_SAFE_INTEGER) : undefined;
+	const client = await authenticatedClient();
+	const { result, raw } = await client.brokerStreamPeek(name, stream, {
+		...(limit !== undefined ? { limit } : {}),
+		...(from !== undefined ? { from } : {}),
+	});
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	const queue = queueOfStream(stream);
+	const target = queue && args.string('stream') === undefined ? queue : `--stream ${stream}`;
+	console.log(
+		peekReport(result, (seq) => `skif broker peek ${name} ${target}${limit !== undefined ? ` --limit ${limit}` : ''} --from ${seq}`),
+	);
+}
+
+async function redriveQueue(argv: string[]): Promise<void> {
+	const parsed = parsePositionals(argv, redriveFlags, 'redrive <name> <dlq> --to <queue> [--limit <n>]', [
+		'broker name',
+		'dead-letter queue name',
+	]);
+	if (!parsed) return;
+	const { args } = parsed;
+	const [name, from] = parsed.values as [string, string];
+	const to = args.string('to');
+	if (!to) throw new UsageError(`Name the queue to move the messages to: skif broker redrive ${name} ${from} --to <queue>`);
+	assertQueueName(from, 'dead-letter queue');
+	assertQueueName(to);
+	if (from === to) throw new UsageError('--to must be a different queue from the dead-letter queue.');
+	const limitFlag = args.string('limit');
+	const limit = limitFlag !== undefined ? parseCount(limitFlag, '--limit', 1, NODE_TASK_LIMITS.redriveMessages) : undefined;
+	const client = await authenticatedClient();
+	const { result, raw } = await client.brokerQueueRedrive(name, from, { to, ...(limit !== undefined ? { limit } : {}) });
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	console.log(`Moved ${plural(result.moved, 'message')} from ${from} to ${to}.`);
+	if (result.remaining > 0)
+		console.log(`${plural(result.remaining, 'message')} still in ${from}. Run it again to move more.`);
+}
+
+async function purgeStream(argv: string[]): Promise<void> {
+	const parsed = parseStreamTarget(argv, streamConfirmFlags, 'queue-purge');
+	if (!parsed) return;
+	const { args, name, stream, label } = parsed;
+	const confirmed = await confirmOrRefuse(
+		`Remove every message from ${label} on broker "${name}"? The stream and its consumers stay. This cannot be undone. [y/N] `,
+		{
+			yes: args.boolean('yes'),
+			refusal: `Not confirmed: stdin is not a terminal, so there's no one to ask before purging ${stream}.`,
+		},
+	);
+	if (!confirmed) return cancelled();
+	const client = await authenticatedClient();
+	const { result, raw } = await client.brokerStreamPurge(name, stream);
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	console.log(`Purged ${plural(result.purged, 'message')} from ${result.stream}.`);
+}
+
+async function deleteStream(argv: string[]): Promise<void> {
+	const parsed = parseStreamTarget(argv, streamConfirmFlags, 'queue-rm');
+	if (!parsed) return;
+	const { args, name, stream, label } = parsed;
+	const comesBack = queueOfStream(stream) ? ' A function queue gets a new, empty stream on its next use.' : '';
+	const confirmed = await confirmOrRefuse(
+		`Delete ${label} on broker "${name}" with every message and consumer in it?${comesBack} This cannot be undone. [y/N] `,
+		{
+			yes: args.boolean('yes'),
+			refusal: `Not confirmed: stdin is not a terminal, so there's no one to ask before deleting ${stream}.`,
+		},
+	);
+	if (!confirmed) return cancelled();
+	const client = await authenticatedClient();
+	const { result, raw } = await client.brokerStreamDelete(name, stream);
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	console.log(result.deleted ? `Deleted ${result.stream} from "${name}".` : `${result.stream} was not on "${name}"; nothing changed.`);
+}
+
+async function deleteMessage(argv: string[]): Promise<void> {
+	const parsed = parseStreamTarget(argv, streamConfirmFlags, 'message-rm', ['seq']);
+	if (!parsed) return;
+	const { args, name, stream, label } = parsed;
+	const seq = parseCount(parsed.rest[0]!, '<seq>', 1, Number.MAX_SAFE_INTEGER);
+	const confirmed = await confirmOrRefuse(`Delete message #${seq} from ${label} on broker "${name}"? [y/N] `, {
+		yes: args.boolean('yes'),
+		refusal: `Not confirmed: stdin is not a terminal, so there's no one to ask before deleting message #${seq}.`,
+	});
+	if (!confirmed) return cancelled();
+	const client = await authenticatedClient();
+	const { result, raw } = await client.brokerStreamDeleteMessage(name, stream, seq);
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	if (!result.deleted) {
+		console.log(`Message #${seq} is not in ${result.stream} (already consumed or deleted); nothing changed.`);
+		return;
+	}
+	const left = result.state ? ` ${result.stream} now holds ${plural(result.state.messages, 'message')} (${formatBytes(result.state.bytes)}).` : '';
+	console.log(`Deleted message #${seq} from ${result.stream}.${left}`);
 }

@@ -2,9 +2,11 @@
 	import { resolve } from '$app/paths';
 	import ActivityIcon from '@lucide/svelte/icons/activity';
 	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
+	import FlaskConicalIcon from '@lucide/svelte/icons/flask-conical';
 	import GaugeIcon from '@lucide/svelte/icons/gauge';
 	import GlobeIcon from '@lucide/svelte/icons/globe';
 	import PlusIcon from '@lucide/svelte/icons/plus';
+	import SendIcon from '@lucide/svelte/icons/send';
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import { EMAIL_REPUTATION } from '@skiff/contracts';
@@ -50,6 +52,9 @@
 		title="Email"
 		description="Send mail from your own verified domains through Skiff's MTA, over the REST API, SMTP or a function binding."
 	>
+		{#if area.configured && area.can.send && area.enabled}
+			<Button variant="outline" href={resolve('/(dashboard)/email/send')}><SendIcon />Send a test</Button>
+		{/if}
 		{#if area.configured && area.can.update && area.enabled}
 			<Button href={resolve('/(dashboard)/email/domains')}><PlusIcon />Add domain</Button>
 		{/if}
@@ -71,6 +76,14 @@
 	{:else if !area.configured}
 		<NotSetUp platformAdmin={area.can.platform} />
 	{:else}
+		{#if verified === 0}
+			<Notice tone="info" title="Finish setting up email">
+				Nothing can be sent until a domain is verified. The <a
+					href={resolve('/(dashboard)/email/setup')}
+					class="font-medium underline underline-offset-4">setup guide</a
+				> walks through adding one, publishing its DNS records and sending a first test.
+			</Notice>
+		{/if}
 		{#if area.paused}
 			<Notice tone="warning" title="Delivery is paused platform-wide">
 				A platform admin paused outgoing mail. Sends are still accepted and queued; nothing leaves
@@ -119,6 +132,15 @@
 						{Math.round(quota.percent)}% of today's limit (resets at 00:00 UTC).
 					</p>
 				</div>
+				{#if org.state === 'sandbox'}
+					<Button
+						variant="outline"
+						size="sm"
+						class="mt-4"
+						href={resolve('/(dashboard)/email/sandbox')}
+						><FlaskConicalIcon />Sandbox recipients and production access<ArrowRightIcon /></Button
+					>
+				{/if}
 			</Panel>
 
 			<Panel

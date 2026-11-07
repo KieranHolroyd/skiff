@@ -4,7 +4,7 @@ Status: **implemented, 2026-11-05** (not yet exercised on a real Debian/Podman n
 
 A managed database is an org-owned database instance (PostgreSQL by default; MySQL, MariaDB,
 MongoDB, Valkey or Redis on request, §17) that Skiff provisions, runs, observes and connects to apps. It is not a project: it has no releases, deployments or routes. It reuses the
-tier-3 runtime (DESIGN §3.4): a rootless-style Quadlet container rendered by `skiff-helper`, inside
+tier-3 runtime (DESIGN §3.4): a rootful Quadlet container rendered by `skiff-helper`, inside
 `skiff-workloads.slice`, admitted against the node's memory budget (D41, D42).
 
 Everything goes through `packages/core` (`DatabaseService`); REST, MCP, CLI and the dashboard stay
@@ -70,6 +70,12 @@ unique per project). At activation the consumer workload receives:
 `<P>_URL` is the direct connection; the pooled URL is a separate variable so an app can choose per
 query path (Prisma uses `url = _POOL_URL`, `directUrl = _URL`).
 
+- **Connect as.** By default the app connects as the built-in owner. `attach` takes an optional
+  `credential` (a `dbc_…` id, or `app`/`readonly`/`backup` when exactly one ready credential has
+  that role; Postgres only, §16): `<P>_USER`/`<P>_PASSWORD` and the URLs then carry that role, so
+  an app or BI tool gets only the rights it needs. The attachment records `credentialId`, and the
+  credential cannot be revoked while any app is attached with it. PgBouncer's userlist carries
+  only the owner, so such an attachment connects directly and gets no `<P>_POOL_*` variables.
 - Process app on the database's node → `127.0.0.1:<hostPort>`.
 - Container app on the database's node → `db-<id hex>:5432` over `skiff-workloads` network.
 - **Same node only in v1.** A project with attachments is placed on the database's node at deploy
@@ -105,7 +111,11 @@ query path (Prisma uses `url = _POOL_URL`, `directUrl = _URL`).
   (`database:credentials`), which is audited as `database.public-url.reveal`. Setting or clearing
   it needs `database:update` and is audited. It never enters desired state, agent memory, logs,
   MCP or the audit arguments.
-- Rotation is a follow-up (needs `ALTER ROLE` from the agent plus a re-activation of consumers).
+- Named credentials (§16) are revealed one at a time by
+  `GET /api/v1/databases/:name/credentials/named/:id` (dashboard row menu, `skif db credentials
+  reveal`), gated the same way and audited as `database.credentials.reveal`. Listing, creating,
+  rotating and revoking return metadata only, so those are also available over MCP.
+- Rotation: §11 (owner/monitor) and §16 (named credentials).
 
 ## 5. Observability (D57)
 
@@ -168,8 +178,8 @@ connections above 90% of `max_connections`, pool saturation above 90%).
   plus one restore. `GET /databases/:name/move` shows the latest move.
   A database that cannot be dumped (failed, stopped, or its node offline) moves with an explicit
   `from`: `latest-backup` restores its newest good backup (later writes are lost) and `empty`
-  starts it fresh (its data is discarded). Valkey and Redis have no backups, so they can only move
-  `empty`. The dashboard asks for a confirmation for either.
+  starts it fresh (its data is discarded). Every engine has backups, so every engine moves with its
+  data. The dashboard asks for a confirmation for either.
 
 **Data location.** By default the data dir lives under the helper's state root. A database can
 instead be placed on a node volume (`volume` on create, or the node's default volume); its data
@@ -180,9 +190,9 @@ missing (D76). See [VOLUMES.md](./VOLUMES.md).
 
 | Surface | What |
 |---|---|
-| REST | `GET/POST /api/v1/databases`, `GET/PATCH/DELETE /api/v1/databases/:name`, `POST …/:name/restore`, `GET …/:name/credentials`, `GET …/:name/metrics`, `GET …/:name/logs`, `GET/POST …/:name/backups`, `GET/DELETE …/:name/backups/:id`, `POST …/:name/backups/:id/restore`, `GET/PATCH …/:name/backup-policy`, `GET/POST …/:name/rotate`, `POST …/:name/restart`, `GET/POST/DELETE …/:name/studio`, `GET/POST /api/v1/projects/:slug/databases`, `DELETE …/databases/:name` |
-| MCP | `list_databases`, `get_database`, `create_database`, `attach_database`, `detach_database`, `delete_database` (confirmed, soft), `list_database_backups`, `backup_database`, `restore_database`, `set_database_backup_policy`, `rotate_database_credentials`, `restart_database`, `get_database_logs` |
-| CLI | `skif db list\|create\|info\|attach\|detach\|delete\|restore\|credentials\|logs\|backups\|backup\|backup-delete\|restore-backup\|backup-policy\|rotate\|restart` |
+| REST | `GET/POST /api/v1/databases`, `GET/PATCH/DELETE /api/v1/databases/:name`, `POST …/:name/restore`, `GET …/:name/credentials`, `GET/POST …/:name/credentials/named`, `GET/DELETE …/:name/credentials/named/:id`, `POST …/:name/credentials/named/:id/rotate`, `GET …/:name/metrics`, `GET …/:name/logs`, `GET/POST …/:name/backups`, `GET/DELETE …/:name/backups/:id`, `POST …/:name/backups/:id/restore`, `GET/PATCH …/:name/backup-policy`, `GET/POST …/:name/rotate`, `POST …/:name/restart`, `GET/POST/DELETE …/:name/studio`, `GET/POST …/:name/replicas`, `DELETE …/:name/replicas/:id`, `POST …/:name/replicas/:id/promote` (`If-Match: <primaryGeneration>`), `GET/POST /api/v1/projects/:slug/databases`, `DELETE …/databases/:name` |
+| MCP | `list_databases`, `get_database`, `create_database`, `attach_database`, `detach_database`, `delete_database` (confirmed, soft), `list_database_backups`, `backup_database`, `restore_database`, `set_database_backup_policy`, `rotate_database_credentials`, `list_database_credentials`, `create_database_credential`, `rotate_database_credential`, `revoke_database_credential` (confirmed), `restart_database`, `update_database` (resize, pooler, extensions, forward version moves; the assistant asks first), `get_database_logs`, `list_database_replicas`, `create_database_replica` (the assistant asks first), `delete_database_replica` (confirmed); never promote |
+| CLI | `skif db list\|create\|info\|update\|attach\|detach\|delete\|restore\|credentials [list\|create\|rotate\|revoke\|reveal]\|logs\|backups\|backup\|backup-delete\|restore-backup\|backup-policy\|rotate\|restart\|upgrade\|replica [list\|add\|remove\|promote]` |
 | Dashboard | Databases list + create, detail (status, connection, pooler, attached projects, charts, tables, extensions/slow queries, backups/restore, rotate, restart, logs), **Studio** tab (native studio, read-only by default), attach from a project |
 
 ## 8. Backups and restore (D83)
@@ -193,7 +203,7 @@ default daily 03:00 and 7 days). The maintenance sweep queues a `database_backup
 duplicated.
 
 - The node sees `databaseBackupTasks` in desired state with a **presigned PUT** URL. The agent
-  calls the helper's fixed `pg_dump -Fc` verb, streams the dump straight to the object store while
+  calls the helper's fixed dump verb (`pg_dump -Fc` for Postgres; per-engine formats in §17), streams the dump straight to the object store while
   hashing it, and reports size + SHA-256 on its next heartbeat. The dump never touches the
   control plane and never enters desired state.
 - Restore is **always into a new database** (`POST /databases/:name/backups/:id/restore`), with new
@@ -205,12 +215,39 @@ duplicated.
   good backup. `skif db backups|backup|restore-backup|backup-policy` and the dashboard Backups panel
   expose the same service methods as REST/MCP.
 
+**Where a backup lives (0053).** Target resolution (org's oldest backup target → platform target →
+platform object store) only decides where the *next* backup goes. When a row is queued it records
+`target_id` (null = the platform object store), `target_name` and `location_json`, a snapshot of the
+target's kind, path or endpoint/bucket/region and prefix (never credentials). The presigned PUT,
+the restore GET, retention, purge and `backup-delete` all open the store from that record, with
+the location from the snapshot and credentials/region/write-only from the live target row, so
+adding a target or switching the default never moves an existing backup. The view exposes it as
+`target { id, name, kind, location, available, unavailableReason }`.
+
+- A target that holds retained backups (`ok`, `pending`, `running`) **cannot be deleted**, and its
+  `path`, `endpoint`, `bucket` and `pathPrefix` cannot change. The sealed credentials are the only
+  way Skiff can reach those objects, so a mistaken delete would be unrecoverable; refusing costs one
+  step. `DELETE /backup-targets/:id?force=1` (`skif backup-target remove --force`) overrides this
+  when nothing is in flight or being restored. The backups stay listed as unavailable with the
+  exact location; restore refuses them with that message, retention and purge skip them (the row
+  is the only record of the object), and `backup-delete` drops the row and leaves the object.
+- Adding a target with the same location (kind, directory or endpoint+bucket, prefix) in the same
+  scope reconnects unavailable backups, which undoes a forced delete.
+- The newest-good-backup rule counts only backups Skiff can still reach. A queued backup or restore
+  whose target vanished out of band fails with the reason instead of staying pending.
+- Migration 0053 backfills existing rows with the target that resolved for their org at migration
+  time, which is where every read looked for them before. Rows a rolled-back release writes later
+  leave `location_json` null and fall back to the current resolution.
+
 The local filesystem object store buffers uploads and enforces the 500 MB artifact limit; R2 gets a
 direct presigned PUT with no buffering. A production install should use R2 for large databases.
 
 PITR (pgBackRest WAL archiving and restore-to-time) is a separate, flag-gated path documented in
-[PITR.md](./PITR.md). It is not enabled by default and logical backups remain the supported restore
-path until a real restore drill passes.
+[PITR.md](./PITR.md): PostgreSQL 18 on the standard image only, which then runs the Skiff-built
+`skiff-postgres-pitr` image. `SKIFF_FEATURE_PITR` is on by default but needs the pgBackRest repository settings; logical
+backups remain the proven restore path until the restore drill (`scripts/pitr-drill.sh`) passes on a
+Linux node.
+A PITR restore, like a logical one, always creates a new database on the source's node.
 
 ## 9. Extensions and slow queries (D84)
 
@@ -227,6 +264,26 @@ official image (`pgvector/pgvector:0.8.7-pg18-trixie`, Debian) instead, so `pgve
 nss_wrapper), so data dirs, PITR files and restores keep one owner. 16 and 17 stay on alpine:
 moving an existing cluster from musl to glibc would change collation order under its text
 indexes, so getting pgvector on an older database is a dump/restore into a new 18 database.
+
+**Image variants (D126).** `databases.variant` (`standard` by default) picks the image at create
+and never changes. `postgis` and `pg_cron` are Skiff-built Postgres 18 images
+(`ghcr.io/kieranholroyd/skiff-postgres:18-<variant>-<revision>`, from `docker/postgres/Dockerfile`
+and `.github/workflows/postgres-images.yml`): the pinned pgvector image plus
+`postgresql-18-postgis-3` or `postgresql-18-cron` from the PGDG apt repo the base already has.
+Same uid 70, entrypoint and lockdown. Create adds the variant's extension; `postgis` and `pg_cron`
+are refused on any other variant (create, update) instead of failing softly. The desired-state
+profile carries `variant` only when it is not `standard`, and so does the activation hash, so
+existing databases did not restart. The helper keeps its own copy of the image mapping (D61) and
+rejects a variant on anything but Postgres 18. For `pg_cron` the helper also preloads `pg_cron`,
+sets `cron.database_name` to the owner database (`POSTGRES_DB` from the workload env, checked as
+an identifier) and `cron.host=/var/run/postgresql`, so jobs connect over the socket the image's
+initdb trusts and no password is stored for them. On the first boot pg_cron logs one
+`database "<name>" does not exist` from the entrypoint's temporary init server; it retries once
+the database exists. Restores (logical and PITR) copy the variant, because a dump with PostGIS or
+pg_cron objects only restores where the extension exists. Restored `cron.job` rows still name the
+source database. The upgrade planner blocks a major the variant has no image for. Tags are
+immutable: changing the Dockerfile or base means bumping the revision in the contract
+(`SKIFF_POSTGRES_IMAGE_REVISION`), the helper and the workflow together.
 
 Excluded on purpose: anything that reaches outside the container (`dblink`, `postgres_fdw`,
 `file_fdw`, `adminpack`), procedural languages (the image ships `plperl`/`pltcl` control files
@@ -260,7 +317,7 @@ both URLs and a "use direct for migrations" note.
 
 ### TLS
 
-`SKIFF_FEATURE_DB_TLS` (default off) asks the helper to generate a per-database CA and server
+`SKIFF_FEATURE_DB_TLS` (default on) asks the helper to generate a per-database CA and server
 certificate with the host's fixed `openssl` argv. Files live at
 `/run/skiff-workloads/<id>/tls/{ca.crt,server.crt,server.key}`, are `0400`, and are handed to the
 image's uid/gid 70. The Postgres unit mounts that directory read-only at `/run/skiff-tls` and starts
@@ -292,6 +349,12 @@ the new value from the node-authenticated endpoint just before `ALTER ROLE` (SQL
 argv) and verifies a fresh connection. Only after the node reports success does the control plane
 replace the live secret and bump the activation version, which restarts attached apps with the new
 value. A failed rotation leaves the old secret in place and records the error.
+
+The restart comes from the consumer's activation version (D56), which includes a hash of the
+sealed secret the app connects with: always for a named credential, and for the owner once the
+database has had its first confirmed owner rotation (so upgrading Skiff does not restart apps
+whose password never changed). Named credentials rotate the same way through
+`POST …/credentials/named/:id/rotate` (§16); only apps attached with that credential restart.
 
 ## 12. Restart controls (D87)
 
@@ -410,10 +473,10 @@ API), and the **Studio** tab on the database pages. Query history lives in the b
 
 ## 15. Follow-ups (on the roadmap)
 
-- Cross-node access via a node private address; bulk prune for databases; fully automated PITR
-  drills (see [PITR.md](./PITR.md) for the current foundation and remaining gaps).
+- Cross-node access via a node private address; bulk prune for databases; a scheduled PITR drill
+  (the drill itself is `scripts/pitr-drill.sh`; see [PITR.md](./PITR.md) for the remaining gaps).
 - Engine parity (§17): metrics samplers, TLS and named credentials for the newer engines, Valkey/Redis
-  backups (RDB), and ClickHouse as a seventh engine.
+  backups (RDB), and a studio plugin and backups (`BACKUP … TO File`) for ClickHouse.
 
 ## 16. Per-org networks and named credentials (plan 04b)
 
@@ -428,9 +491,28 @@ loopback-only.
 and monitor rows are created with the database; app/read-only/backup rows are opt-in. A new or
 rotated secret is sealed in `pending_secret_sealed` until the node confirms the Postgres role
 change, so a failed apply never locks an app out. Attachments reference the built-in owner
-credential row. Revealing a named credential needs `database:credentials`, an interactive user
-session (MCP/API keys never receive secrets) and writes `database.credentials.reveal` to the audit
-log. Creates, rotations and revocations are audited too.
+credential row unless they were attached with `credential` (§3).
+
+- **Roles.** `app` reads and writes tables in the `public` schema, `readonly` can only `SELECT`,
+  `backup` reads what a dump needs. Usernames are generated (`skiff_<role>_<hex>`); a purpose and
+  an expiry are optional. Creating needs `database:credentials` and `database:update` and the
+  engine's `namedCredentials` capability (Postgres).
+- **Lifecycle.** A credential is `pending` until the node confirms the `CREATE/ALTER ROLE`, then
+  `ready`; a failed apply is `failed` and keeps any previous secret. Rotate seals a new pending
+  secret the same way; apps attached with that credential restart once it is live (§11). Revoke
+  marks it `revoking` until the node disables the login, then `revoked`; it is refused while an
+  app is attached with it (detach first). Owner and monitor are rotated with §11 and cannot be
+  revoked.
+- **Reveal.** Needs `database:credentials` from the dashboard session or the CLI's API key; MCP
+  principals are refused in core (`requireCredentialReveal`), so agents never see a password.
+  Every reveal sets `lastUsedAt` and writes `database.credentials.reveal`. Creates, rotations and
+  revocations are audited as `database.credential.create|rotate|revoke`.
+- **Surfaces.** REST `GET/POST /databases/:name/credentials/named`, `GET/DELETE …/named/:id`
+  (reveal/revoke), `POST …/named/:id/rotate`; MCP `list_database_credentials`,
+  `create_database_credential`, `rotate_database_credential`, `revoke_database_credential`
+  (confirmed); CLI `skif db credentials list|create|rotate|revoke|reveal` and
+  `skif db attach --credential`; the dashboard's Credentials panel on the database overview and the
+  "Connect as" choice in the attach dialog.
 
 **Rollback / existing installs:** the network name is derived, not stored, so turning the flag off
 returns every workload to `skiff-workloads` on its next activation. The migration is additive
@@ -440,8 +522,8 @@ pre-restore snapshot/rollback; no table or column is dropped.
 
 ## 17. Database engines (D95)
 
-Six engines, all from the vendors' official images, chosen from the most-used self-hostable
-databases (Stack Overflow 2025, DB-Engines 2026). Oracle and SQL Server (proprietary, heavy) and
+Seven engines, all from the vendors' official images, chosen from the most-used self-hostable
+databases (Stack Overflow 2025, DB-Engines 2026), plus ClickHouse for analytics. Oracle and SQL Server (proprietary, heavy) and
 SQLite (embedded, not a server) are out of scope.
 
 | Engine | Versions (default) | Image | Port | Default prefix | URL |
@@ -452,6 +534,7 @@ SQLite (embedded, not a server) are out of scope.
 | MongoDB | 9.0, 8.0 (8.0) | `mongo:<v>` | 27017 | `MONGODB` | `mongodb://u:p@h:27017/name?authSource=admin` |
 | Valkey | 9.1, 8.1 (9.1) | `valkey/valkey:<v>-alpine` | 6379 | `REDIS` | `redis://u:p@h:6379/0` |
 | Redis | 8.10, 8.8 (8.10) | `redis:<v>-alpine` | 6379 | `REDIS` | `redis://u:p@h:6379/0` |
+| ClickHouse | 26.8, 26.3 (26.8) | `clickhouse/clickhouse-server:<v>` | 8123 (HTTP) | `CLICKHOUSE` | `http://u:p@h:8123/name` |
 
 Valkey is the BSD-licensed Linux Foundation fork of Redis and the recommended choice for caches and
 queues (BullMQ, Sidekiq, Celery). Redis 8 is AGPLv3; pick it only for Redis-only modules.
@@ -462,12 +545,12 @@ engine in `databaseEngineRegistry[engine].capabilities`, exposed on `DatabaseVie
 enforced by `DatabaseService` (a clear `ValidationError`), and used by the dashboard to hide tabs and
 panels:
 
-| Capability | Postgres | MySQL | MariaDB | MongoDB | Valkey | Redis |
-|---|---|---|---|---|---|---|
-| Owner password rotation | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Studio (native, D96) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Logical backups + restore into a new database | ✓ `pg_dump -Fc` | ✓ `mysqldump` | ✓ `mariadb-dump` | ✓ `mongodump --archive --gzip` | – | – |
-| Pooler, extensions, metrics/tables/slow queries, TLS, PITR, named credentials, upgrade planner | ✓ | – | – | – | – | – |
+| Capability | Postgres | MySQL | MariaDB | MongoDB | Valkey | Redis | ClickHouse |
+|---|---|---|---|---|---|---|---|
+| Owner password rotation | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (live, no restart) |
+| Studio (native, D96) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – |
+| Backups + restore into a new database | ✓ `pg_dump -Fc` | ✓ `mysqldump` | ✓ `mariadb-dump` | ✓ `mongodump --archive --gzip` | ✓ RDB (`valkey-cli --rdb`) | ✓ RDB (`redis-cli --rdb`) | ✓ `BACKUP DATABASE … TO File(zip)` |
+| Pooler, extensions, metrics/tables/slow queries, TLS, PITR, named credentials, upgrade planner | ✓ | – | – | – | – | – | – |
 
 **Runtime profile.** The helper keeps its own copy of the registry (D61) and renders the same
 lockdown as Postgres: the image's uid (999 for all four; Valkey/Redis group 1000), read-only root,
@@ -486,6 +569,17 @@ arguments sized from the unit's `MemoryMax`:
   disables the `default` user, defines the owner as the only ACL user, turns on AOF and sets
   `maxmemory` to 75% with `noeviction`, so a full instance refuses writes instead of being OOM-killed
   or dropping keys. Clients authenticate with `user:password`.
+- ClickHouse (uid/gid 101): no server arguments. The helper writes a standalone `config.xml` and
+  `users.xml` into a 0700 directory (owned by 101) mounted read-only at `/etc/skiff/clickhouse`, and
+  fixes `CLICKHOUSE_CONFIG`, `CLICKHOUSE_SKIP_USER_SETUP=1` and `CLICKHOUSE_WATCHDOG_ENABLE=0`, so
+  the image entrypoint only creates the owner's database on first start. Data lives under
+  `/data/clickhouse/`; logs go to stderr only (journald). `max_server_memory_usage` is 75% of the
+  unit's limit, merges get a 25% soft limit, caches are small and fixed, and every system log table
+  is off except a 7-day `query_log`. The owner is a config user with a SHA-256 password and
+  `access_management`, so it can create SQL users and roles (stored under the data dir); `default`
+  exists only because the entrypoint reads it, with an all-zero hash nobody can log in with, on
+  loopback only. HTTP 8123 is published on loopback; native TCP 9000 is reachable from containers on
+  the org network only. Minimum memory 1 GB, default 2 GB.
 
 MySQL and MariaDB keep `root` on the owner's password but bound to `localhost`, i.e. the container's
 own socket; that is how the helper's fixed dump/restore/rotate verbs authenticate (`MYSQL_PWD` in
@@ -495,25 +589,56 @@ a file without it is Postgres, so existing env files and units are unchanged.
 **Health.** The agent's TCP probe performs each engine's smallest handshake and needs an answer
 only the server gives (Podman's forwarder accepts before the server is up): the Postgres
 `SSLRequest`, the MySQL/MariaDB protocol-10 greeting, MongoDB `OP_MSG { hello: 1 }`, and RESP
-`PING` (a `-NOAUTH` reply counts; `-LOADING` does not). No credentials are sent.
+`PING` (a `-NOAUTH` reply counts; `-LOADING` does not), and ClickHouse's `GET /ping` (only a
+`200` counts; during the entrypoint's first-start init the server listens on its own loopback, so
+the probe waits it out). No credentials are sent.
 
 **Attachments.** Apps receive the usual `<PREFIX>_URL/_HOST/_PORT/_USER/_PASSWORD/_NAME`; MongoDB
 attachments also get `<PREFIX>_URI` (what MongoDB drivers and most apps read). `<PREFIX>_NAME` is
-`0` for Valkey/Redis. `_SSL_MODE` and the pooler variables exist only for Postgres. The env
+`0` for Valkey/Redis. ClickHouse URLs point at the HTTP interface; `@clickhouse/client`,
+`clickhouse-connect` and `clickhouse-go` read the path as the default database, but the server answers
+queries at `/`, so raw HTTP (curl) passes `?database=<NAME>` instead. `_SSL_MODE` and the pooler
+variables exist only for Postgres. The env
 suggestions recognise `REDIS_*`, `VALKEY_*`, `MONGODB_*`/`MONGO_*`, `MYSQL_*` and `MARIADB_*` and
 offer a one-click link under that prefix.
 
-**Versions.** Postgres majors go through the upgrade planner (§6). For MySQL, MariaDB, Valkey and
-Redis a plain update may move *forward* to a newer listed version in place (the image upgrades the
+**Versions.** Postgres majors go through the upgrade planner (§6). For MySQL, MariaDB, Valkey,
+Redis and ClickHouse (LTS to LTS) a plain update may move *forward* to a newer listed version in place (the image upgrades the
 data dir on start); downgrades are refused. MongoDB needs feature-compatibility steps between
 majors, so its version never changes in place: back up and restore into a new database.
 
 **Backups.** The backup task's `format` follows the engine (`pg_dump-custom`, `mysqldump-sql`,
-`mariadb-dump-sql`, `mongodump-archive-gzip`); the rest of the pipeline (presigned PUT, SHA-256,
-restore into a new database, verification, retention) is unchanged. MongoDB restores rename the
-archive's namespaces into the target database (`--nsFrom '$db$.$coll$'`); the tools read the
-password from a `--config` file written over stdin into the container's `/tmp` tmpfs and removed
-afterwards. Valkey/Redis backups are not available yet; their data persists across restarts (AOF).
+`mariadb-dump-sql`, `mongodump-archive-gzip`, `valkey-rdb`, `redis-rdb`, `clickhouse-backup-zip`);
+the rest of the pipeline (schedule, presigned PUT, SHA-256, restore into a new database,
+verification, retention, moves) is unchanged. MongoDB restores rename the archive's namespaces into
+the target database (`--nsFrom '$db$.$coll$'`); the tools read the password from a `--config` file
+written over stdin into the container's `/tmp` tmpfs and removed afterwards.
+
+Valkey/Redis and ClickHouse dumps are files the server writes itself, so they are staged in a 0700
+`skiff-dumps/` directory inside the database's own data dir (owned by the engine's uid; `/data/skiff-dumps/`
+in the container) rather than the helper's runtime tmpfs. The helper returns the file from there
+(0400); the HTTP layer's cleanup timer deletes it, and leftovers older than an hour are pruned
+before the next dump or restore. Staging names are fixed (`dump-|restore-<uuid>.rdb|zip`) and every
+identifier is validated before it reaches argv or SQL; passwords travel only in podman's
+environment (`REDISCLI_AUTH`, `CLICKHOUSE_PASSWORD`).
+
+- **Valkey/Redis**: `<engine>-cli --rdb` as the owner (the server forks a snapshot and sends it
+  over the replication protocol, so writes continue), then `<engine>-check-rdb` must accept the whole
+  file before the dump is reported. All logical databases (0–15) are in the snapshot; ACL users are
+  not (they live in the helper-written config). Restore: the artifact is staged and `check-rdb` must
+  accept it while the new instance still runs; the unit is then stopped, `appendonlydir/` is replaced
+  by the snapshot as the AOF base (`appendonly.aof.1.base.rdb` plus a one-line manifest), since with
+  `appendonly yes` the server would ignore a bare `dump.rdb`; the unit is started again (also when
+  the swap fails), and `PING` must return `PONG`, which it only does once the dataset has loaded
+  (up to ~10 minutes). A snapshot from a newer server version than the target's cannot load; restores
+  always use the source's version.
+- **ClickHouse**: `BACKUP DATABASE <db> AS skiff_backup TO File('/data/skiff-dumps/…zip')` (the
+  native format: schema, parts and checksums; `backups.allowed_path` in the generated config allows
+  only the staging dir). Storing it under a fixed name lets `RESTORE DATABASE skiff_backup AS
+  <target> … SETTINGS allow_different_database_def = 1` restore it into the new instance's own
+  (empty, entrypoint-created) database on the running server, which re-checks every checksum; a
+  `system.databases` lookup as the owner is the verification query. SQL-created users and roles are
+  not part of a database backup.
 
 **Schema.** SQLite cannot change the Postgres-only `CHECK` on `databases.engine` without a table
 rebuild, which the additive-migration rule (OPS §4.2.2) and the updater's preflight refuse. Migration
@@ -525,4 +650,55 @@ release rolled back with `--keep-db` reads the old column and sees every databas
 standing in for Podman (`podman exec` and `docker exec` share a CLI): the rendered server flags and
 env under a read-only root with no capabilities, the agent probe, and the helper's own dump,
 restore-into-a-new-database, rotation and verification verbs. Each engine's studio plugin passes the
-studio conformance suite against the same images (plan 22).
+studio conformance suite against the same images (plan 22). ClickHouse is covered by unit tests
+(rendered unit and config, probe, service) and its config follows the telemetry store's, which runs
+26.8 in production (D101); it has not yet been run under the database lockdown against the real
+image (first start, rotation reload).
+
+## 18. Read replicas (C7, [CLUSTERING.md §9.2–9.3](./CLUSTERING.md))
+
+Postgres only, `async` only (sync is refused: there is no downgrade path yet), at most
+`database.maxReplicas` (≤ 8) per database, none for a PITR database.
+
+- **Shape.** A replica is a row in `database_replicas` and its own container workload,
+  `db_dbr_<hex>`, on its node: the database's image and limits, its own loopback host port (from the
+  database range, counted by `allocatePort`) and optional node volume, and `database.replica.slot`
+  in desired state. It reserves the database's memory on its node. A replica on the primary's own
+  node is allowed (read scaling) but is never promoted.
+- **Link.** The walreceiver connects to a unix socket, `<agent data dir>/replication/<id>/.s.PGSQL.5432`,
+  which the helper bind-mounts read-only at `/run/skiff-upstream`; the agent pipes it to the
+  primary's loopback port (same node) or the primary node's pinned-mTLS provider listener (another
+  node; the provider merges replica and C2 consumer fingerprints on the database's host port).
+- **Primary.** `databaseReplication` tasks (version = hash of slots + secret) make the agent fetch the
+  `skiff_repl` password from `GET /api/agent/database-replication/:id` and call the helper's fixed
+  `replication/configure` verb: a managed `host replication skiff_repl all scram-sha-256` block in
+  `pg_hba.conf`, the role, `wal_keep_size = 512MB`, `max_slot_wal_keep_size = 2GB`,
+  `wal_sender_timeout = 60s` (ALTER SYSTEM + reload, no restart), exactly the listed `skiff_*`
+  physical slots (others dropped, walsender terminated first). An empty list tears it all down.
+  Every 30 s the agent samples `pg_replication_slots ⟕ pg_stat_replication` (`replication/status`);
+  the sample is the replica's status (`streaming`, `lagging` past 30 s / 256 MB, `stopped`, `lost`
+  when `wal_status = lost`), LSNs and lag.
+- **Replica.** The helper-written start script runs `pg_basebackup -X stream -c fast --max-rate=50M
+  --slot=<slot>` through the link into `pgdata.partial` (retrying every 10 s) when there is no
+  `PG_VERSION`, always touches `standby.signal`, then execs the image entrypoint with
+  `hot_standby=on`, `hot_standby_feedback=on`, `primary_conninfo=host=/run/skiff-upstream …`,
+  `primary_slot_name`. The replication password is `PGPASSWORD` in its env file (activation only).
+- **Read URLs.** While a replica the consumer can reach is `streaming` or `lagging`, attachments get
+  `<P>_READ_URL`, `_READ_URLS`, `_READ_HOST`, `_READ_PORT` (same credentials): same-node replicas
+  directly (`db-dbr<hex>:5432` for containers), remote ones through a C2 endpoint keyed by the
+  replica id (process apps with `SERVICE_ENDPOINTS`). The read target is folded into the consumer
+  version, so the app restarts when it changes. The stable 22000–22999 read port of §9.2 is not built.
+- **Remove.** Leaves desired state, the replica's node purges `db_dbr_<hex>` (`databasePurges`), the
+  primary drops the slot; the row goes once both are confirmed.
+- **Promote** (`database_failovers`): fence (the primary leaves its node's desired state; confirmed
+  when that node heartbeats at or past the fence version without it, or skipped when the node is
+  unreachable, which then needs `acceptDataLoss`; abandoned after 10 min) → the replica's node holds
+  the replica workload and runs the helper's `replica/promote` (`pg_ctl promote`, wait for
+  `pg_is_in_recovery() = false`, checkpoint, stop, rename `<root>/db_dbr_<hex>` to `<root>/<db id>`;
+  refused before anything when the target exists) → re-point (the row takes the replica's node, port
+  and volume, a new pooler port, `primary_generation + 1`; other replicas are rebuilt from scratch)
+  → completed when the database reports running there. The old primary's data dir is purged when
+  its node returns. Lag budget 64 MB / 60 s, report ≤ 2 min old and the primary's node online, else
+  `acceptDataLoss`. The failover controller's database handler (`failoverHandler()`) drives the
+  same steps and is registered only with `SKIFF_FEATURE_DB_AUTO_PROMOTE`.
+- Moves and Postgres major upgrades are refused while replicas exist.

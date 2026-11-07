@@ -7,13 +7,17 @@
  *   SKIFF_BUILD_DIR     scratch root for clones and artifacts
  *
  * Optional: `SKIFF_GIT_TOKEN` for private HTTPS repositories (never logged), sent only to the
- * hosts in `SKIFF_GIT_TOKEN_HOSTS` (comma-separated, default `github.com`), and
- * `SKIFF_BUILDER_SYSTEMD=false` to force direct execution on a development workstation.
+ * hosts in `SKIFF_GIT_TOKEN_HOSTS` (comma-separated, default `github.com`); `SKIFF_GIT_SSH_KEY`
+ * (a root-only private key file) for SSH repository URLs, with an optional pinned
+ * `SKIFF_GIT_SSH_KNOWN_HOSTS`; and `SKIFF_BUILDER_SYSTEMD=false` to force direct execution on a
+ * development workstation.
  *
  * On a node, `skiff-builder.service` runs `skiff-agent builder` with the agent's own
  * `/etc/skiff/agent.env`, so every enrolled node can build once an admin turns the role on (D47).
  * Builds then run as `SKIFF_BUILDER_USER` (default `skiff-build`) in a sandboxed transient unit.
  */
+
+import { isShellSafePath } from './command.ts';
 
 /** Toolchains a build can find: Skiff's own Bun first, then the system's. */
 export const DEFAULT_BUILD_PATH =
@@ -30,6 +34,13 @@ export interface BuilderConfig {
 	gitToken: string | null;
 	/** Hosts (`host` or `host:port`) the git token may be sent to. */
 	gitTokenHosts: string[];
+	/**
+	 * Deploy key for `ssh://` and `git@host:path` repositories, passed to the clone through
+	 * `GIT_SSH_COMMAND` only. Null leaves SSH clones to whatever the daemon's ssh would do.
+	 */
+	gitSshKey: string | null;
+	/** Pinned `known_hosts` for those clones; null records each host's key on first use. */
+	gitSshKnownHosts: string | null;
 	pollMs: number;
 	/** Run each build in a transient systemd unit; false uses a direct child process. */
 	systemd: boolean;
@@ -90,6 +101,15 @@ function gitTokenHosts(value: string | undefined): string[] {
 	return hosts;
 }
 
+/** An optional absolute file path that is safe to put, single-quoted, in `GIT_SSH_COMMAND`. */
+function sshPath(env: Env, name: string): string | null {
+	const value = env[name]?.trim();
+	if (!value) return null;
+	if (!isShellSafePath(value))
+		throw new ConfigError(`${name} must be an absolute path using only letters, digits and . _ / @ + -`);
+	return value;
+}
+
 export function loadConfig(env: Env = process.env): BuilderConfig {
 	const controlUrl = required(env, 'SKIFF_CONTROL_URL').replace(/\/+$/, '');
 	let parsed: URL;
@@ -120,6 +140,8 @@ export function loadConfig(env: Env = process.env): BuilderConfig {
 		buildDir: required(env, 'SKIFF_BUILD_DIR'),
 		gitToken: env.SKIFF_GIT_TOKEN?.trim() || null,
 		gitTokenHosts: gitTokenHosts(env.SKIFF_GIT_TOKEN_HOSTS),
+		gitSshKey: sshPath(env, 'SKIFF_GIT_SSH_KEY'),
+		gitSshKnownHosts: sshPath(env, 'SKIFF_GIT_SSH_KNOWN_HOSTS'),
 		pollMs: positiveInt(env, 'SKIFF_BUILDER_POLL_MS', 5_000),
 		systemd,
 		timeoutSeconds: positiveInt(env, 'SKIFF_BUILDER_TIMEOUT_SECONDS', 600),

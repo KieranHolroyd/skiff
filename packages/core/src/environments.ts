@@ -10,7 +10,7 @@ import {
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, NotFoundError, ValidationError } from './errors.ts';
-import { newId } from './util.ts';
+import { hashPassword, newId } from './util.ts';
 import type { ProjectRow } from './projects.ts';
 import type { DeploymentView } from './deployments.ts';
 
@@ -33,7 +33,10 @@ export class EnvironmentService {
 		return `${project.slug}--${environment.slug}.${this.contentDomain}`;
 	}
 
-	view(project: Pick<ProjectRow, 'slug'>, row: EnvironmentRow): EnvironmentView {
+	view(
+		project: Pick<ProjectRow, 'slug'> & Partial<Pick<ProjectRow, 'productionPasswordHash'>>,
+		row: EnvironmentRow,
+	): EnvironmentView {
 		return {
 			id: row.id,
 			projectId: row.projectId,
@@ -42,6 +45,7 @@ export class EnvironmentService {
 			slug: row.slug,
 			isProduction: row.isProduction,
 			access: row.access,
+			passwordSet: row.isProduction ? Boolean(project.productionPasswordHash) : Boolean(row.passwordHash),
 			host: this.hostFor(project, row),
 			deploymentId: row.deploymentId,
 			createdAt: new Date(row.createdAt).toISOString(),
@@ -74,6 +78,8 @@ export class EnvironmentService {
 			slug: 'production',
 			isProduction: true,
 			access: project.productionAccess,
+			// Production follows the project's production password; this column stays unused.
+			passwordHash: null,
 			deploymentId: project.productionDeploymentId,
 			createdAt: now,
 			updatedAt: now,
@@ -110,6 +116,14 @@ export class EnvironmentService {
 		if (slug === 'production') throw new ConflictError('The production environment is built in.');
 		const clash = this.rows(project.id).find((row) => row.slug === slug);
 		if (clash) throw new ConflictError(`An environment named "${slug}" already exists.`);
+		const access = parsed.access ?? project.previewAccess;
+		let passwordHash: string | null = null;
+		if (access === 'password') {
+			if (parsed.password) passwordHash = hashPassword(parsed.password);
+			// An environment that inherits password-protected previews inherits their password too.
+			else if (!parsed.access && project.previewPasswordHash) passwordHash = project.previewPasswordHash;
+			else throw new ValidationError('A password is required for password mode.');
+		}
 		const now = this.ctx.now();
 		const row: EnvironmentRow = {
 			id: newId('env_'),
@@ -118,7 +132,8 @@ export class EnvironmentService {
 			name: parsed.name,
 			slug,
 			isProduction: false,
-			access: parsed.access ?? project.previewAccess,
+			access,
+			passwordHash,
 			deploymentId: null,
 			createdAt: now,
 			updatedAt: now,
@@ -140,17 +155,30 @@ export class EnvironmentService {
 		requirePermission(principal, 'project:update');
 		const row = this.requireRow(project, slug);
 		if (row.isProduction) throw new ConflictError('The production environment cannot be renamed.');
+		const access = input.access ?? row.access;
+		// The environment's own password; other scopes are never touched.
+		let passwordHash = row.passwordHash;
+		if (access !== 'password') passwordHash = null;
+		else if (input.password) passwordHash = hashPassword(input.password);
+		else if (row.access !== 'password' || !row.passwordHash)
+			throw new ValidationError('A password is required for password mode.');
+		const next = { ...row, name: input.name ?? row.name, access, passwordHash };
 		this.ctx.db
 			.update(environments)
-			.set({
-				name: input.name ?? row.name,
-				access: input.access ?? row.access,
-				updatedAt: this.ctx.now(),
-			})
+			.set({ name: next.name, access, passwordHash, updatedAt: this.ctx.now() })
 			.where(eq(environments.id, row.id))
 			.run();
+		if (input.access !== undefined || input.password)
+			this.ctx.audit.record({
+				principal,
+				action: 'environment.set_access',
+				resource: 'environment',
+				resourceId: row.id,
+				args: { project: project.slug, slug, mode: access, passwordChanged: Boolean(input.password) },
+				result: 'ok',
+			});
 		this.ctx.projects.bump(project.orgId);
-		return this.view(project, { ...row, name: input.name ?? row.name, access: input.access ?? row.access });
+		return this.view(project, next);
 	}
 
 	remove(principal: Principal, project: ProjectRow, slug: string): void {

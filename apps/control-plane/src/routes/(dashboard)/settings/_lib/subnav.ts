@@ -26,7 +26,7 @@ export function settingsSubnav(data: SettingsSubnavData, pathname: string): Subn
 		depth: 1,
 		title: 'Settings',
 		icon: SettingsIcon,
-		back: { href: resolve('/(dashboard)/overview'), label: 'Back', remember: true },
+		back: { href: resolve('/(dashboard)/overview'), label: 'Overview' },
 		active: sectionForPath(pathname, sections)?.id ?? null,
 		target: 'settings.tab',
 		groups: GROUP_ORDER.map((group) => ({

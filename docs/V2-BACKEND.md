@@ -71,6 +71,16 @@ targeted `bun test` green.
   drift detection on check, injected DNS/Cloudflare clients for tests.
 - Agent: serve verified domains by cloning the project's production route with the custom host;
   `redirectTo` hosts 301; on-demand TLS with Caddy's `ask` pointing at `platformOrigin + /api/domains/ask`.
+- Status lifecycle (landed): `pending` → `verified` (TXT found by a check) → `active` (a node's
+  heartbeat `stats.certs` reports a current certificate whose names cover the hostname; the agent's
+  `CertProbe` probes custom domains with a name check, every 2 min for a new host's first 30 min,
+  capped at `HEARTBEAT_CERTS_MAX`). `active` → `verified` when the certificate has expired on every
+  reporting node. A never-verified domain becomes `failed` 72 h after creation
+  (`DOMAIN_FAIL_AFTER_MS`); the maintenance sweep (`DomainService.recheckDue`) re-checks pending
+  domains every 10 min and failed ones every 6 h, so a fixed record recovers to `verified`.
+  Verified and active are served; pending and failed are not. Transitions are audited as
+  `domain.status`. Hooks: `NodeService.heartbeat` → `applyServedCertificates`,
+  `MaintenanceService.run` → `recheckDue`.
 - New routes: `apps/control-plane/src/routes/api/v1/domains/**`,
   `apps/control-plane/src/routes/api/domains/ask/+server.ts`; CSRF exception in
   `apps/control-plane/src/lib/server/csrf.ts`.

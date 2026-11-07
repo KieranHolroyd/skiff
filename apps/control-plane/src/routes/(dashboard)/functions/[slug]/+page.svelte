@@ -71,6 +71,7 @@
 	import { functionSubnavKey } from '../_lib/subnav.js';
 	import { useSubnavLocal } from '#lib/nav/subnav-local.svelte.js';
 	import FunctionPanel from '../_lib/FunctionPanel.svelte';
+	import FunctionTestPanel from '../_lib/FunctionTestPanel.svelte';
 	import FunctionQuickstart from '../_lib/FunctionQuickstart.svelte';
 	import FunctionVariablesPanel from '../_lib/FunctionVariablesPanel.svelte';
 	import { FUNCTION_DEFAULT_TAB, FUNCTION_TABS, type FunctionTab } from '../_lib/function-tabs.js';
@@ -252,6 +253,35 @@
 		accessScope = scope;
 		accessMode = scope === 'production' ? fn.productionAccess : fn.previewAccess;
 		accessOpen = true;
+	}
+	/** Re-saving password mode on a scope that already has a password may leave the field blank. */
+	const accessKeepsPassword = $derived(
+		accessScope === 'production'
+			? fn.productionAccess === 'password' && fn.productionPasswordSet
+			: fn.previewAccess === 'password' && fn.previewPasswordSet
+	);
+
+	function revokeSiteSession(id: string) {
+		askConfirm({
+			title: 'End this visitor session?',
+			description:
+				'The visitor loses access within seconds. The share link keeps working, so revoke the link too if they should not come back.',
+			confirmLabel: 'End session',
+			tone: 'danger',
+			action: '?/revokeSiteSession',
+			fields: { sessionId: id }
+		});
+	}
+
+	function signOutVisitors() {
+		askConfirm({
+			title: `Sign out every caller of ${fn.name}?`,
+			description:
+				'Password, platform and share-link sessions end on production and every preview within seconds. Callers have to sign in again; share links keep working.',
+			confirmLabel: 'Sign out everyone',
+			tone: 'danger',
+			action: '?/signOutVisitors'
+		});
 	}
 
 	function deleteFunction() {
@@ -447,6 +477,14 @@
 		{/if}
 	{:else if tab === 'invocations'}
 		<FunctionInvocations invocations={data.invocations} canRead={data.can.readLogs} />
+	{:else if tab === 'test'}
+		<FunctionTestPanel
+			{view}
+			cronNext={data.cronNext}
+			hasHost={data.workload !== null && view !== null}
+			canDeploy={data.can.deploy}
+			canSendQueue={data.can.sendQueue}
+		/>
 	{:else if tab === 'deployments'}
 		{#if rejected}
 			<Notice tone="danger" title="The bundle was not deployed">
@@ -625,7 +663,11 @@
 			{view}
 			secrets={data.secrets}
 			fieldErrors={result?.fieldErrors}
-			can={{ createSecret: data.can.createSecret, deleteSecret: data.can.deleteSecret }}
+			can={{
+				createSecret: data.can.createSecret,
+				updateSecret: data.can.updateSecret,
+				deleteSecret: data.can.deleteSecret
+			}}
 		/>
 	{:else if tab === 'logs'}
 		<LogsPanel
@@ -706,6 +748,53 @@
 							</div>
 						</div>
 					{/each}
+					<div class="space-y-2 pt-2">
+						<div class="flex items-center justify-between gap-3">
+							<div class="min-w-0">
+								<p class="text-sm font-medium">Visitor sessions</p>
+								<p class="text-xs text-muted-foreground">
+									{data.siteSessions.length === 0
+										? 'No live share-link sessions.'
+										: `${data.siteSessions.length} live share-link ${data.siteSessions.length === 1 ? 'session' : 'sessions'}.`}
+									Password and platform sign-ins are not listed.
+								</p>
+							</div>
+							{#if data.can.update}
+								<Button variant="outline" size="sm" onclick={signOutVisitors}
+									>Sign out everyone</Button
+								>
+							{/if}
+						</div>
+						{#if data.siteSessions.length > 0}
+							<ul class="divide-y rounded-lg border">
+								{#each data.siteSessions.slice(0, 20) as session (session.id)}
+									<li class="flex items-center justify-between gap-3 px-3 py-2">
+										<div class="min-w-0">
+											<p class="truncate text-sm">
+												{session.email ?? session.note ?? 'Share-link visitor'}
+											</p>
+											<p class="truncate font-mono text-xs text-muted-foreground">
+												{session.host} · until
+												<time datetime={session.expiresAt}>{formatDateTime(session.expiresAt)}</time>
+											</p>
+										</div>
+										{#if data.can.revokeSession}
+											<Button
+												variant="ghost-danger"
+												size="sm"
+												onclick={() => revokeSiteSession(session.id)}>End</Button
+											>
+										{/if}
+									</li>
+								{/each}
+							</ul>
+							{#if data.siteSessions.length > 20}
+								<p class="text-xs text-muted-foreground">
+									Showing the 20 newest. Sign out everyone to end them all.
+								</p>
+							{/if}
+						{/if}
+					</div>
 				</Card.Content>
 			</Card.Root>
 
@@ -895,15 +984,26 @@
 			</Field.Field>
 			{#if accessMode === 'password'}
 				<Field.Field data-invalid={result?.fieldErrors?.password ? true : undefined}>
-					<Field.Label for="fn-access-password">Password</Field.Label>
+					<Field.Label for="fn-access-password"
+						>{accessScope === 'production' ? 'Production' : 'Preview'} password</Field.Label
+					>
 					<Input
 						id="fn-access-password"
 						name="password"
 						type="password"
 						autocomplete="new-password"
 						minlength={8}
-						required
+						required={!accessKeepsPassword}
+						placeholder={accessKeepsPassword ? 'Unchanged' : undefined}
+						aria-invalid={result?.fieldErrors?.password ? 'true' : undefined}
 					/>
+					<Field.Description
+						>{accessKeepsPassword
+							? 'Leave blank to keep the current password. '
+							: 'At least 8 characters. '}Only {accessScope === 'production'
+							? 'production'
+							: 'previews'} use it; the other scope keeps its own.</Field.Description
+					>
 					{#if result?.fieldErrors?.password}<Field.Error>{result.fieldErrors.password}</Field.Error
 						>{/if}
 				</Field.Field>

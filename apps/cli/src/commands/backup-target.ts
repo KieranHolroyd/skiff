@@ -13,7 +13,7 @@ Commands:
   list                         List backup targets (the default)
   add <name>                   Add a local or S3-compatible target
   test <id>                    Probe a target and show the result
-  remove <id>                  Delete a target (does not delete existing backups)
+  remove <id>                  Delete a target that holds no retained backups (--force to override)
 
 Add options:
       --kind <local|s3>        Target kind (default s3)
@@ -28,14 +28,22 @@ Add options:
       --object-lock            The bucket has object lock enabled
       --platform               Create the platform default (platform admins only)
 
+Remove options:
+      --force                  Delete even though backups were written to the target. They stay
+                               listed but cannot be restored until a target with the same location
+                               is added again. Objects are never deleted.
+
 Options:
   -y, --yes                    Don't ask for confirmation (required when stdin isn't a terminal)
       --json                   JSON output
   -h, --help                   Show this help
 
 Secrets are sealed with the org key. \`add\` prints them once when they were supplied; list and
-test never return them. A target is used by the next backup after it is created; existing
-backups stay where they were written.
+test never return them. A target is used by the next backup after it becomes the one that
+applies (the org's oldest target, else the platform default). Existing backups stay where they
+were written: each backup records its target and exact location, and restore and retention use
+that record. So a target that still holds retained backups cannot be removed (without --force)
+or have its path, endpoint, bucket or prefix changed.
 
 Examples:
   skif backup-target add local --kind local --path /var/lib/skiff/backups
@@ -63,7 +71,7 @@ const addFlags: FlagSpec = {
 	platform: { type: 'boolean' },
 };
 
-const removeFlags: FlagSpec = { ...baseFlags, yes: { type: 'boolean', short: 'y' } };
+const removeFlags: FlagSpec = { ...baseFlags, yes: { type: 'boolean', short: 'y' }, force: { type: 'boolean' } };
 
 export async function backupTargetCommand(argv: string[]): Promise<void> {
 	const first = argv[0];
@@ -199,20 +207,34 @@ async function removeTarget(argv: string[]): Promise<void> {
 		console.log(usage);
 		return;
 	}
-	rejectExtraPositionals(args, 1, 'Usage: skif backup-target remove <id> [--yes]');
+	rejectExtraPositionals(args, 1, 'Usage: skif backup-target remove <id> [--force] [--yes]');
 	const id = requirePositional(args, 0, `backup target id.\n\n${usage}`);
-	const confirmed = await confirmOrRefuse(`Delete backup target ${id}? Existing backups are not deleted.`, {
-		yes: args.boolean('yes'),
-		refusal: 'A backup target needs confirmation.',
-	});
+	const force = args.boolean('force');
+	const confirmed = await confirmOrRefuse(
+		force
+			? `Delete backup target ${id} even if backups were written to it? They stay listed but cannot be restored until a target with the same location is added again.`
+			: `Delete backup target ${id}? Existing backups are not deleted.`,
+		{
+			yes: args.boolean('yes'),
+			refusal: 'A backup target needs confirmation.',
+		},
+	);
 	if (!confirmed) {
 		console.log('Cancelled.');
 		return;
 	}
 	const client = await authenticatedClient();
-	const raw = await client.deleteBackupTarget(id);
-	if (args.boolean('json')) console.log(JSON.stringify(raw ?? null, null, 2));
-	else console.log(`Deleted backup target ${id}.`);
+	const raw = await client.deleteBackupTarget(id, { force });
+	if (args.boolean('json')) {
+		console.log(JSON.stringify(raw ?? null, null, 2));
+		return;
+	}
+	const unavailable = Number((raw as { unavailableBackups?: unknown } | null)?.unavailableBackups ?? 0);
+	console.log(`Deleted backup target ${id}.`);
+	if (unavailable > 0)
+		console.log(
+			`${unavailable} backup${unavailable === 1 ? ' is' : 's are'} now unavailable. Their objects were not removed; add a target with the same location to reconnect them.`,
+		);
 }
 
 function location(target: BackupTargetView): string {

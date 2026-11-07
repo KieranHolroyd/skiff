@@ -1,11 +1,15 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { CoreError } from '@skiff/core';
+import { CoreError, featureEnabled } from '@skiff/core';
 import {
 	databaseAttachSchema,
+	databaseCredentialCreateSchema,
 	databaseEngineRegistry,
 	databasePublicUrlUpdateSchema,
+	pitrUnsupportedReason,
+	type DatabasePitrStatus,
 	databaseUpdateSchema,
 	hasPermission,
+	type DatabaseCredentialView,
 	type DatabaseMetricPoint,
 	type DatabaseMoveView,
 	type NodeCapacityView,
@@ -81,26 +85,60 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		}
 	}
 
+	// Read replicas (docs/CLUSTERING.md §9.2): Postgres only; the primary's own node is a valid
+	// (read-scaling) target, so it is offered too.
 	let replicas: Awaited<ReturnType<typeof core.databaseReplicas.list>> = [];
+	let failovers: Awaited<ReturnType<typeof core.databaseReplicas.failovers>> = [];
 	try {
 		replicas = core.databaseReplicas.list(principal, params.name);
+		failovers = core.databaseReplicas.failovers(principal, params.name);
 	} catch {
 		replicas = [];
+		failovers = [];
 	}
 	let replicaTargets: NodeCapacityView[] = [];
 	if (dbCan.update && database.engine === 'postgres' && !database.deletedAt) {
 		try {
-			replicaTargets = core.workloads
-				.capacity(principal)
-				.filter((node) => node.nodeId !== database.nodeId && node.status === 'online');
+			replicaTargets = core.workloads.capacity(principal).filter((node) => node.status === 'online');
 		} catch {
 			replicaTargets = [];
 		}
 	}
 
+	// Named credentials (docs/DATABASES.md §16): metadata only; a password needs an audited reveal.
+	let credentials: DatabaseCredentialView[] = [];
+	if (database.capabilities.namedCredentials) {
+		try {
+			credentials = core.databases.listCredentials(principal, params.name);
+		} catch {
+			credentials = [];
+		}
+	}
+
+	// Point-in-time recovery (docs/PITR.md): only offered while SKIFF_FEATURE_PITR is on.
+	const pitrFeature = featureEnabled(core.ctx.config, 'PITR') && database.capabilities.pitr;
+	let pitr: DatabasePitrStatus | null = null;
+	let pitrError: string | null = null;
+	if (pitrFeature) {
+		try {
+			pitr = core.databases.pitrStatus(principal, params.name);
+		} catch (caught) {
+			// Typically the pgBackRest repository is not configured on the control plane.
+			pitrError = caught instanceof Error ? caught.message : String(caught);
+		}
+	}
+
 	return {
 		database,
+		credentials,
+		pitrFeature,
+		pitr,
+		pitrError,
+		pitrUnsupported: pitrFeature
+			? pitrUnsupportedReason(database.engine, database.version, database.variant)
+			: null,
 		replicas,
+		failovers,
 		replicaTargets,
 		move,
 		moveTargets,
@@ -131,7 +169,25 @@ export const actions: Actions = {
 		} catch (caught) {
 			return fail(failStatus(caught), toFormFailure(caught));
 		}
-		return { success: 'Replica registered. It starts streaming when the node converges.' };
+		return { success: 'Replica added. It copies the primary first, then streams.' };
+	},
+
+	promoteReplica: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const generation = Number(formString(data, 'generation'));
+		try {
+			core.databaseReplicas.promote(
+				principal,
+				params.name,
+				formString(data, 'id'),
+				{ confirm: true, acceptDataLoss: formString(data, 'acceptDataLoss') === 'on' },
+				{ ifMatch: Number.isInteger(generation) ? generation : null },
+			);
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+		return { success: 'Promotion started: the old primary stops first, then the replica takes over.' };
 	},
 
 	removeReplica: async ({ request, locals, params }) => {
@@ -142,7 +198,7 @@ export const actions: Actions = {
 		} catch (caught) {
 			return fail(failStatus(caught), toFormFailure(caught));
 		}
-		return { success: 'Replica removed.' };
+		return { success: 'Removing the replica: its node deletes the copy and the primary drops its slot.' };
 	},
 
 	credentials: async ({ locals, params }) => {
@@ -150,6 +206,74 @@ export const actions: Actions = {
 		try {
 			const credentials = core.databases.credentials(principal, params.name);
 			return { credentials };
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	'credential-create': async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const purpose = formString(data, 'purpose');
+		// A date input: the credential stops working at the end of that day (UTC).
+		const expires = formString(data, 'expires');
+		const expiresMs = expires ? Date.parse(`${expires}T23:59:59Z`) : undefined;
+		if (expiresMs !== undefined && Number.isNaN(expiresMs))
+			return fail(400, { message: 'Check the expiry date.', fieldErrors: { expires: 'Pick a date.' } });
+		const parsed = databaseCredentialCreateSchema.safeParse({
+			role: formString(data, 'role') || 'app',
+			...(purpose ? { purpose } : {}),
+			...(expiresMs !== undefined ? { expiresAt: new Date(expiresMs).toISOString() } : {})
+		});
+		if (!parsed.success)
+			return fail(400, {
+				message: parsed.error.issues[0]?.message ?? 'Check the credential.',
+				fieldErrors: fieldErrorsFrom(parsed.error.issues)
+			});
+		try {
+			const credential = core.databases.createCredential(principal, params.name, parsed.data);
+			return {
+				success: `Created ${credential.role} credential ${credential.username}. The node creates the role on its next pull; reveal or attach it once it is ready.`
+			};
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	'credential-rotate': async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const id = formString(await request.formData(), 'id');
+		if (!id) return fail(400, { message: 'Missing credential id.' });
+		try {
+			const credential = core.databases.rotateNamedCredential(principal, params.name, id);
+			return {
+				success: `Rotating ${credential.username}. The node applies the new password first; apps attached with it then restart.`
+			};
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	'credential-revoke': async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const id = formString(await request.formData(), 'id');
+		if (!id) return fail(400, { message: 'Missing credential id.' });
+		try {
+			const credential = core.databases.revokeCredential(principal, params.name, id);
+			return {
+				success: `Revoking ${credential.username}. The node disables its login on its next pull.`
+			};
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	'credential-reveal': async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const id = formString(await request.formData(), 'id');
+		if (!id) return fail(400, { message: 'Missing credential id.' });
+		try {
+			return { credential: core.databases.revealCredential(principal, params.name, id) };
 		} catch (caught) {
 			return fail(failStatus(caught), toFormFailure(caught));
 		}
@@ -327,6 +451,50 @@ export const actions: Actions = {
 		}
 	},
 
+	'pitr-policy': async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const enabled = formString(await request.formData(), 'enabled') === 'on';
+		try {
+			core.databases.setPitrPolicy(principal, params.name, { enabled });
+			return {
+				success: enabled
+					? 'Point-in-time recovery is on. The database restarts on the PITR image and takes its first full backup.'
+					: 'Point-in-time recovery is off. WAL is no longer archived.'
+			};
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	'pitr-backup': async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const type = formString(await request.formData(), 'type') || 'full';
+		try {
+			const task = core.databases.pitrBackup(principal, params.name, { type });
+			return { success: `Base backup ${task.id} queued. The node runs it on its next pull.` };
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	'pitr-restore': async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const name = formString(data, 'name');
+		const targetTime = formString(data, 'targetTime');
+		if (!name || !targetTime)
+			return fail(400, { message: 'Choose a moment to restore to and a new database name.' });
+		if (Number.isNaN(Date.parse(targetTime)) || !/(Z|[+-]\d{2}:\d{2})$/.test(targetTime))
+			return fail(400, { message: 'The restore time must be a full timestamp with a time zone.' });
+		let restored: DatabaseView;
+		try {
+			restored = core.databases.restoreToTimestamp(principal, params.name, { name, targetTime });
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+		redirect(303, `/databases/${encodeURIComponent(restored.name)}`);
+	},
+
 	'delete-backup': async ({ request, locals, params }) => {
 		const principal = locals.principal!;
 		const backupId = formString(await request.formData(), 'backupId');
@@ -397,7 +565,9 @@ export const actions: Actions = {
 				message: 'Choose a project.',
 				fieldErrors: { project: 'Choose a project.' }
 			});
-		const parsed = databaseAttachSchema.safeParse({ database: params.name, envPrefix });
+		// Empty: connect as the built-in owner.
+		const credential = formString(data, 'credential') || undefined;
+		const parsed = databaseAttachSchema.safeParse({ database: params.name, envPrefix, credential });
 		if (!parsed.success) {
 			return fail(400, {
 				message: parsed.error.issues[0]?.message ?? 'Check the env prefix.',
@@ -411,7 +581,7 @@ export const actions: Actions = {
 				parsed.data
 			);
 			return {
-				success: `Attached to ${attachment.projectSlug} as ${attachment.envPrefix}_URL. The app restarts with the new env.`,
+				success: `Attached to ${attachment.projectSlug} as ${attachment.envPrefix}_URL${attachment.credentialRole ? `, connecting as the ${attachment.credentialRole} credential` : ''}. The app restarts with the new env.`,
 				warning
 			};
 		} catch (caught) {

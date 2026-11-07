@@ -186,6 +186,8 @@ describe('database engines (D95)', () => {
 		['mongodb', '8.0', 'docker.io/library/mongo:8.0'],
 		['valkey', '9.1', 'docker.io/valkey/valkey:9.1-alpine'],
 		['redis', '8.10', 'docker.io/library/redis:8.10-alpine'],
+		['clickhouse', '26.8', 'docker.io/clickhouse/clickhouse-server:26.8'],
+		['clickhouse', '26.3', 'docker.io/clickhouse/clickhouse-server:26.3'],
 	] as const;
 	for (const [engine, version, image] of cases) {
 		test(`accepts ${engine} ${version} only with its own image`, () => {
@@ -272,6 +274,39 @@ describe('database profile', () => {
 		expect(databaseAlias('db_a_B-c')).toBe('db-ab-c');
 		expect(databaseImage({ engine: 'postgres', version: '16' })).toBe('docker.io/library/postgres:16-alpine');
 		expect(databaseImage({ engine: 'postgres', version: '18' })).toBe('docker.io/pgvector/pgvector:0.8.7-pg18-trixie');
+		expect(databaseImage({ engine: 'postgres', version: '18', variant: 'postgis' })).toBe(
+			'ghcr.io/kieranholroyd/skiff-postgres:18-postgis-1',
+		);
+	});
+
+	test('Skiff-built variants (D126) are Postgres 18 only and pin their own image', () => {
+		const cron = parseWorkload(
+			databaseInput({
+				image: 'ghcr.io/kieranholroyd/skiff-postgres:18-pg_cron-1',
+				database: { engine: 'postgres', version: '18', variant: 'pg_cron' },
+			}),
+		);
+		expect(cron.database).toEqual({ engine: 'postgres', version: '18', variant: 'pg_cron' });
+		// The variant changes the image, so the stock image is refused for it and vice versa.
+		expect(() =>
+			parseWorkload(
+				databaseInput({
+					image: 'docker.io/pgvector/pgvector:0.8.7-pg18-trixie',
+					database: { engine: 'postgres', version: '18', variant: 'postgis' },
+				}),
+			),
+		).toThrow(/workload.image must be/);
+		expect(() =>
+			parseWorkload(databaseInput({ database: { engine: 'postgres', version: '17', variant: 'postgis' } })),
+		).toThrow(/variant postgis is only supported for postgres 18/);
+		expect(() =>
+			parseWorkload(
+				databaseInput({
+					image: 'docker.io/pgvector/pgvector:0.8.7-pg18-trixie',
+					database: { engine: 'postgres', version: '18', variant: 'timescale' },
+				}),
+			),
+		).toThrow(/variant must be one of/);
 	});
 });
 

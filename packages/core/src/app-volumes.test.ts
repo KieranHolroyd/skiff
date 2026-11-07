@@ -292,4 +292,32 @@ describe('app volumes', () => {
 			}),
 		).toThrow(/missing/);
 	});
+
+	test('org quotas cap volume count and reserved size; trashed volumes do not count', async () => {
+		const project = core.projects.requireRow(owner, 'app-api');
+		// Live: "assets" (256 MB) and "media" (1024 MB). "app-data" is in the trash and frees its quota.
+		core.ctx.quota.set('org_1', { appVolumes: 3, appVolumeBytes: 2048 * MB });
+		expect(() => core.appVolumes.create(owner, project, { name: 'too-large', sizeMb: 769 })).toThrow(
+			'App volume storage quota (appVolumeBytes) exceeded: 2.00 GB used of 2.00 GB',
+		);
+		const cache = core.appVolumes.create(owner, project, { name: 'cache', sizeMb: 512 });
+		expect(cache.sizeMb).toBe(512);
+		let refused: unknown;
+		try {
+			core.appVolumes.create(owner, project, { name: 'third', sizeMb: 1 });
+		} catch (error) {
+			refused = error;
+		}
+		expect(refused).toMatchObject({ code: 'quota_exceeded', status: 409 });
+		expect((refused as Error).message).toContain('App volumes quota (appVolumes) exceeded: 4 used of 3');
+
+		// Growth checks only the delta: 1280 + 512 + 256 more = 2048 MB fits; one more MB does not.
+		expect(core.appVolumes.update(owner, project, 'cache', { sizeMb: 768 }).sizeMb).toBe(768);
+		expect(() => core.appVolumes.update(owner, project, 'cache', { sizeMb: 769 })).toThrow(/appVolumeBytes/);
+
+		const usage = await core.usage.view(owner, { projectSlug: project.slug });
+		expect(usage.metrics.appVolumes).toMatchObject({ used: 3, limit: 3, percent: 100 });
+		expect(usage.metrics.appVolumeBytes).toMatchObject({ used: 2048 * MB, limit: 2048 * MB });
+		core.ctx.quota.set('org_1', { appVolumes: -1, appVolumeBytes: -1 });
+	});
 });

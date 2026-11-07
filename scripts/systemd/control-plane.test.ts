@@ -1,8 +1,18 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { GUARD_UNIT, PRIMARY_UNIT, STANDBY_UNIT, controlPlaneUnits, ensureControlPlaneUnits } from './control-plane.ts';
+import {
+	DEFAULT_CONTROL_PLANE_PATHS,
+	GUARD_UNIT,
+	MASTER_KEY_DROP_IN,
+	PRIMARY_UNIT,
+	STANDBY_UNIT,
+	controlPlaneUnits,
+	ensureControlPlaneUnits,
+	ensureMasterKeyDropIns,
+	masterKeyDropIn,
+} from './control-plane.ts';
 
 describe('control-plane units', () => {
 	const units = controlPlaneUnits();
@@ -55,5 +65,51 @@ describe('control-plane units', () => {
 		expect(readFileSync(join(dir, STANDBY_UNIT), 'utf8')).toBe(units[STANDBY_UNIT]!);
 		expect(ensureControlPlaneUnits(input)).toBe(false);
 		expect(calls).toHaveLength(2);
+	});
+});
+
+describe('master key drop-ins', () => {
+	test('the unit body names the plaintext credential; the drop-in clears it and loads the sealed one', () => {
+		expect(controlPlaneUnits()[PRIMARY_UNIT]).toContain('LoadCredential=master-key:/etc/skiff/master.key\n');
+		const body = masterKeyDropIn('/etc/skiff/master.key.cred');
+		const lines = body.split('\n').filter((line) => line && !line.startsWith('#'));
+		// The reset must come before the new directive, or it would clear nothing useful.
+		expect(lines).toEqual(['[Service]', 'LoadCredential=', 'LoadCredentialEncrypted=master-key:/etc/skiff/master.key.cred']);
+	});
+
+	test('written for both slots when the key is sealed, removed again when it is not', () => {
+		const systemdDir = mkdtempSync(join(tmpdir(), 'skiff-dropins-'));
+		const etc = mkdtempSync(join(tmpdir(), 'skiff-etc-'));
+		const masterKeyFile = join(etc, 'master.key');
+		const dropIn = (unit: string) => join(systemdDir, `${unit}.d`, MASTER_KEY_DROP_IN);
+
+		expect(ensureMasterKeyDropIns({ systemdDir, masterKeyFile })).toEqual([]);
+		writeFileSync(`${masterKeyFile}.cred`, 'sealed');
+		expect(ensureMasterKeyDropIns({ systemdDir, masterKeyFile, dryRun: true })).toEqual([dropIn(PRIMARY_UNIT), dropIn(STANDBY_UNIT)]);
+		expect(existsSync(dropIn(PRIMARY_UNIT))).toBe(false);
+		expect(ensureMasterKeyDropIns({ systemdDir, masterKeyFile })).toEqual([dropIn(PRIMARY_UNIT), dropIn(STANDBY_UNIT)]);
+		for (const unit of [PRIMARY_UNIT, STANDBY_UNIT]) expect(readFileSync(dropIn(unit), 'utf8')).toBe(masterKeyDropIn(`${masterKeyFile}.cred`));
+		expect(ensureMasterKeyDropIns({ systemdDir, masterKeyFile })).toEqual([]);
+
+		// Back to plaintext (installer rollback): the drop-ins go.
+		expect(ensureMasterKeyDropIns({ systemdDir, masterKeyFile, exists: () => false })).toEqual([dropIn(PRIMARY_UNIT), dropIn(STANDBY_UNIT)]);
+		expect(existsSync(dropIn(PRIMARY_UNIT)) || existsSync(dropIn(STANDBY_UNIT))).toBe(false);
+	});
+
+	test('ensureControlPlaneUnits reloads systemd when only a drop-in changed', () => {
+		const systemdDir = mkdtempSync(join(tmpdir(), 'skiff-units-'));
+		const etc = mkdtempSync(join(tmpdir(), 'skiff-etc-'));
+		const paths = { ...DEFAULT_CONTROL_PLANE_PATHS, masterKeyFile: join(etc, 'master.key') };
+		const calls: string[][] = [];
+		const logs: string[] = [];
+		const input = { systemdDir, paths, run: (cmd: string[]) => void calls.push(cmd), log: (line: string) => void logs.push(line) };
+		expect(ensureControlPlaneUnits(input)).toBe(true);
+		expect(ensureControlPlaneUnits(input)).toBe(false);
+		writeFileSync(join(etc, 'master.key.cred'), 'sealed');
+		calls.length = 0;
+		expect(ensureControlPlaneUnits(input)).toBe(true);
+		expect(calls[0]).toEqual(['systemctl', 'daemon-reload']);
+		expect(logs.at(-1)).toContain(`${PRIMARY_UNIT}.d/${MASTER_KEY_DROP_IN}`);
+		expect(existsSync(join(systemdDir, `${STANDBY_UNIT}.d`, MASTER_KEY_DROP_IN))).toBe(true);
 	});
 });

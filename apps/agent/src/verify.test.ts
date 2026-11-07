@@ -331,6 +331,58 @@ describe('login callback', () => {
 	});
 });
 
+describe('sign out everyone (rotated site key)', () => {
+	// The control plane rotates a project's site key by bumping its session epoch; the agent only
+	// sees a new `siteKey` on the route, so everything signed with the old key must stop verifying.
+	const ROTATED_KEY = 'site-key-rotated-epoch-1';
+	function rotated(): DesiredState {
+		const next = state();
+		next.routes[0]!.access.siteKey = ROTATED_KEY;
+		return next;
+	}
+	const cookieFor = (key: string, sid?: string) => {
+		const exp = NOW + 3600;
+		return sid
+			? `${exp}.${sid}.${signVisitorCookie(key, HOST, exp, sid)}`
+			: `${exp}.${signVisitorCookie(key, HOST, exp)}`;
+	};
+	const verify = (cookie: string, routeState: DesiredState) =>
+		handleSiteRequest(
+			verifyRequest({ 'x-forwarded-host': HOST, 'x-forwarded-uri': '/', cookie: `__skiff_s=${cookie}` }),
+			{ ...options, state: routeState },
+		);
+
+	test('password, platform and share cookies from before the rotation are refused', () => {
+		expect(verify(cookieFor(SITE_KEY), state()).status).toBe(200);
+		expect(verify(cookieFor(SITE_KEY), rotated()).status).toBe(302);
+		expect(verify(cookieFor(SITE_KEY, 'red_9'), rotated()).status).toBe(302);
+	});
+
+	test('a callback token minted before the rotation cannot start a session', () => {
+		const response = handleSiteRequest(
+			new Request(`http://agent.local/_skiff/callback?token=${token({ host: HOST, exp: NOW + 60, sub: 'password:prj_1', kind: 'password' })}`, {
+				headers: { 'x-forwarded-host': HOST },
+			}),
+			{ ...options, state: rotated(), usedTokens: new UsedTokenCache() },
+		);
+		expect(response.status).toBe(403);
+	});
+
+	test('visitors who sign in again get a cookie under the new key', () => {
+		const response = handleSiteRequest(
+			new Request(
+				`http://agent.local/_skiff/callback?token=${token({ host: HOST, exp: NOW + 60, sub: 'password:prj_1', kind: 'password' }, ROTATED_KEY)}`,
+				{ headers: { 'x-forwarded-host': HOST } },
+			),
+			{ ...options, state: rotated(), usedTokens: new UsedTokenCache() },
+		);
+		expect(response.status).toBe(302);
+		const cookie = response.headers.get('set-cookie')!.split(';')[0]!.split('=')[1]!;
+		expect(verify(cookie, rotated()).status).toBe(200);
+		expect(verify(cookie, state()).status).toBe(302);
+	});
+});
+
 describe('helpers', () => {
 	test('normalizes hosts and ports', () => {
 		expect(normalizeHost('Secret.Example.COM:443')).toBe('secret.example.com');

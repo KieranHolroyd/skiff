@@ -151,6 +151,16 @@ describe('backup targets', () => {
 		const task = tasks.find((row) => row.id === backup.id)!;
 		expect(task.url).toContain('s3.example.test');
 		expect(new URL(task.url).pathname).toContain('/skiff/backups/database-backups/');
+		// A failed dump left nothing on the target, so it does not hold the target (deleted below).
+		core.databases.applyBackupResults(joined.nodeId, [
+			{ taskId: backup.id, action: 'backup', databaseId: task.databaseId, backupId: null, status: 'failed', error: 'test' },
+		]);
+		expect(core.databases.getBackup(owner, 'backup-db', backup.id).target).toMatchObject({
+			name: 'org-s3',
+			kind: 's3',
+			available: true,
+			location: expect.stringContaining('s3://backups/skiff/backups/database-backups/'),
+		});
 	});
 
 	test('resolves resource → org → platform → local default', () => {

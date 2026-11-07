@@ -13,7 +13,38 @@ import {
 	databasePublicUrlSchemes,
 	databaseUpdateSchema,
 	databaseUrlDatabase,
+	databaseCreateSchema,
+	databaseVariantsFor,
 } from './database.ts';
+
+describe('database image variants (D126)', () => {
+	test('PostGIS and pg_cron are Skiff-built Postgres 18 images', () => {
+		expect(databaseImage('postgres', '18', 'postgis')).toBe('ghcr.io/kieranholroyd/skiff-postgres:18-postgis-1');
+		expect(databaseImage('postgres', '18', 'pg_cron')).toBe('ghcr.io/kieranholroyd/skiff-postgres:18-pg_cron-1');
+		expect(databaseImage('postgres', '18')).toBe('docker.io/pgvector/pgvector:0.8.7-pg18-trixie');
+		expect(databaseVariantsFor('postgres', '18')).toEqual(['standard', 'postgis', 'pg_cron']);
+		expect(databaseVariantsFor('postgres', '17')).toEqual(['standard']);
+		expect(databaseVariantsFor('mysql', '8.4')).toEqual(['standard']);
+	});
+
+	test('create refuses a variant without an image and extensions locked to another variant', () => {
+		expect(databaseCreateSchema.parse({ name: 'geo', version: '18', variant: 'postgis' }).variant).toBe('postgis');
+		expect(databaseCreateSchema.parse({ name: 'plain' }).variant).toBe('standard');
+		const noImage = databaseCreateSchema.safeParse({ name: 'geo', variant: 'postgis' });
+		expect(noImage.success).toBe(false);
+		expect(noImage.error?.issues[0]?.path).toEqual(['variant']);
+		const mysql = databaseCreateSchema.safeParse({ name: 'geo', engine: 'mysql', variant: 'pg_cron' });
+		expect(mysql.success).toBe(false);
+		const locked = databaseCreateSchema.safeParse({
+			name: 'jobs',
+			version: '18',
+			variant: 'postgis',
+			extensions: ['pg_cron'],
+		});
+		expect(locked.success).toBe(false);
+		expect(locked.error?.issues[0]?.message).toMatch(/pg_cron variant/);
+	});
+});
 
 describe('database connection URLs', () => {
 	test('omits sslmode when TLS is disabled', () => {
@@ -129,6 +160,19 @@ describe('database engines (D95)', () => {
 			expect(databaseBackupFormat(engine) !== null).toBe(info.capabilities.backups);
 			expect(info.defaultMemoryMb).toBeGreaterThanOrEqual(info.minMemoryMb);
 		}
+	});
+
+	test('every engine backs up in its native format', () => {
+		expect(databaseEngines.map((engine) => databaseBackupFormat(engine))).toEqual([
+			'pg_dump-custom',
+			'mysqldump-sql',
+			'mariadb-dump-sql',
+			'mongodump-archive-gzip',
+			'valkey-rdb',
+			'redis-rdb',
+			'clickhouse-backup-zip',
+		]);
+		for (const engine of databaseEngines) expect(databaseEngineRegistry[engine].capabilities.backups).toBe(true);
 	});
 
 	test('Postgres 18 runs the pgvector image; 16 and 17 stay on alpine (D124)', () => {

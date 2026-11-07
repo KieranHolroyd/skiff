@@ -6,7 +6,7 @@ D-number when its spike (§15) passes and it is built; phases are **C0–C10** (
 the target design in the present tense; the phase named in each section says when it lands. "Today"
 means verified here, "the plan" means unbuilt.
 
-**Implemented so far (2026-11-06):** C0's backend — migration 0040, the `hardware` heartbeat block, node zone/roles/labels/CPU budget, derived volume classes, constraint-aware placement and the `GET /topology` + `GET /topology/blast-radius` API with its read-only dashboard page. C1's control-plane model and helper/agent apply path are in too (migration 0041, address allocation, peer graph, managed join fields, the desired-state `wireguard` block, root `wireguard/keygen|apply|status` verbs and peer health on the heartbeat); the served installer still requires the signed agent bundle, and real-host verification has not run. C2's data model, forwarding path, pinned self-signed mTLS and cross-node attachments for process apps are in as well (migration 0043, `node_certificates`, `service_endpoints`, the endpoint planner, desired-state endpoints/providers, the agent's Bun TCP/TLS forwarder with fingerprint pinning, and the `SERVICE_ENDPOINTS` flag covering database and private-storage attachments); the per-install CA, Caddy L4 proxy and cross-node container attachments are not. C3's share registry and dashboard page (migration 0044, CRUD, org grants) and the helper's fixed NFS/SMB mount/unmount verbs are in; desired-state mounting, `backing: share` and blast-radius inheritance are not. C4's replica table, spread planner, deploy-time row population, per-node desired state and route fan-out are in behind `MULTI_NODE_REPLICAS` (migration 0045, `workload_replicas`, `planReplicas`, `RouteSpec.upstreams`); Caddy active health checks, least-conn balancing and automatic replica re-placement off an offline/draining node are in; rolling deploys, surge and drain are not. The rest of this document remains the plan.
+**Implemented so far (2026-11-06):** C0's backend — migration 0040, the `hardware` heartbeat block, node zone/roles/labels/CPU budget, derived volume classes, constraint-aware placement and the `GET /topology` + `GET /topology/blast-radius` API with its read-only dashboard page. C1's control-plane model and helper/agent apply path are in too (migration 0041, address allocation, peer graph, managed join fields, the desired-state `wireguard` block, root `wireguard/keygen|apply|status` verbs and peer health on the heartbeat); the served installer still requires the signed agent bundle, and real-host verification has not run. C2's data model, forwarding path, pinned self-signed mTLS and cross-node attachments for process apps are in as well (migration 0043, `node_certificates`, `service_endpoints`, the endpoint planner, desired-state endpoints/providers, the agent's Bun TCP/TLS forwarder with fingerprint pinning, and the `SERVICE_ENDPOINTS` flag covering database and private-storage attachments); the per-install CA, Caddy L4 proxy and cross-node container attachments are not. C3's share registry and dashboard page (migration 0044, CRUD, org grants) and the helper's fixed NFS/SMB mount/unmount verbs are in; desired-state mounting, `backing: share` and blast-radius inheritance are not. C4's replica table, spread planner, deploy-time row population, per-node desired state and route fan-out are in behind `MULTI_NODE_REPLICAS` (migration 0045, `workload_replicas`, `planReplicas`, `RouteSpec.upstreams`); Caddy active health checks (interval `replicas.healthIntervalSeconds`) and least-conn balancing are in; rolling deploys, surge and drain are not. C8's failover controller is in as of 2026-11-07 (migration 0060 `failover_events`, `packages/core/src/failover-service.ts`): a controller lease in the control plane's own SQLite with the epoch checked inside every write, replica re-placement off a lost (`failover.enabled`) or draining node under the §8.3 rate limits, flap protection and queue expiry, ingress record-set tracking for the DNS drivers as `manual` events, and the database `decide` stage with a pluggable promotion handler; `GET /api/v1/ha/status`, `get_ha_status`, `skif ha status` and the Settings → High availability panels read it. Three-signal detection, the object-store lease, DNS writes and drills are not. C7's Postgres streaming read replicas are in as of 2026-11-07 (migration 0069): `pg_basebackup` bootstrap and streaming through an agent-served unix-socket link (local port or the primary node's pinned-mTLS provider listener), helper-managed `skiff_repl` role, `pg_hba` block and `skiff_*` slots, 30-second slot sampling for status/lag, `<P>_READ_*` env, removal with two-sided confirmation, and fenced manual promotion (`database_failovers`) that the C8 controller can drive behind `SKIFF_FEATURE_DB_AUTO_PROMOTE`; see [DATABASES.md](./DATABASES.md) §18. The rest of this document remains the plan.
 
 Related: [DESIGN.md](./DESIGN.md) §3 and §9, [VOLUMES.md](./VOLUMES.md),
 [DATABASES.md](./DATABASES.md), [OBJECT-STORAGE.md](./OBJECT-STORAGE.md), [OPS.md](./OPS.md),
@@ -23,11 +23,11 @@ Related: [DESIGN.md](./DESIGN.md) §3 and §9, [VOLUMES.md](./VOLUMES.md),
 | C1 | Managed overlay, hubs/LAN mesh, join, installer, helper keygen/apply/status, ufw/firewalld/nftables, peer health | Real two-host verification; installer still needs the signed agent bundle |
 | C2 | Cross-node DB/private storage for process apps, TCP/TLS forwarder, pinned self-signed mTLS, endpoint status plumbing | Per-install CA, Caddy L4, container apps, endpoint failover UI |
 | C3 | Share registry/API/dashboard, helper NFS/SMB mount verbs | Desired-state mounts, `backing: share`, quotas/uid-gid, blast radius |
-| C4 | Replica table/planner, deploy population, per-node state, route fan-out, health checks, re-placement | Rolling/surge, operator drain workflow, move-back |
+| C4 | Replica table/planner, deploy population, per-node state, route fan-out, health checks (configurable interval) | Rolling/surge, operator drain workflow, move-back |
 | C5 | Driver/policy contracts, `IngressHealth`, status API, Settings page | Probing, Cloudflare writes, full route tables, certificate distribution |
 | C6 | Lease decision logic and CAS interface | Standby, Litestream follow, epoch propagation, promotion |
-| C7 | Replica registry/API/UI, failover table, promotion-choice logic | `pg_basebackup`, slots/WAL, streaming/lag, promotion execution |
-| C8 | Failover stage machine | Three-signal detection, fencing/promotion execution, drills |
+| C7 | Postgres async streaming replicas: `pg_basebackup` + streaming over the agent link, slots/WAL retention, 30 s lag sampling, `<P>_READ_*` URLs, two-sided removal, fenced manual promotion (dashboard/CLI/REST, `If-Match`), rebuild of the other replicas; overlay firewall opens the provider ranges | `sync` mode and its downgrade, `db_replica_metrics_1m` and lag alerts, the stable 22000–22999 read port, `_READ_POOL_URL`, `pg_rewind` healing (the old primary is purged instead), PITR databases, switchover, live multi-node verification |
+| C8 | Stage machine; failover controller (SQLite lease + fenced writes, replica re-placement with rate limits/flap protection/expiry, ingress record-set tracking as manual events, database decide + `registerDatabaseHandler`); `failover_events`; `/ha/status`, `get_ha_status`, `skif ha status`, Settings panels | Three-signal detection, object-store lease across hosts, DNS driver writes, self-fencing of the old primary (so the C7 promotion handler is registered only with `SKIFF_FEATURE_DB_AUTO_PROMOTE`), drills and the chaos harness |
 | C9 | Replication registry/API/UI, migration | RustFS rule execution, IAM/config recreation, promotion |
 | C10 | Engine replication capability values | Per-engine replica topology and member networking |
 
@@ -478,7 +478,10 @@ address becomes `private_address` with no peer list.
 
 **Firewall.** One helper-owned `inet skiff` table, applied with `nft -f` after `nft -c -f`: on
 `wg0`, established state, UDP 51820 on a hub, `:8080` from ingress `/32`s, one `tcp dport <port> ip
-saddr <consumer /32>` rule per attachment, then drop.
+saddr <consumer /32>` rule per attachment, then drop. As built, the table accepts `8080` plus the
+provider listener ranges `15432–16431` (databases, incl. replica streaming) and `19000–19999`
+(private storage) on `wg0` from any overlay source, and the per-attachment allowlist is the
+listener's pinned client fingerprints; the per-`/32` rules are not built.
 
 **Desired state and join.** Per node, gated by `wg-mesh`: `{ mode, address, mtu, peers[],
 allowedPeers[] }`. C1 adds `wireguard/{keygen,apply,peers,status}` and `network/{allow,probe-mtu}`,
@@ -524,7 +527,7 @@ reporting online, and ports never change. A node holds at most 1,000 endpoints.
 
 | Range | Use | Owner |
 |---|---|---|
-| `8081`, `8082`, `8083` | S3, database and studio gateways (D82, D96) | existing config |
+| `8081`, `8082`, `8083`, `8084` | S3, database, studio and container-console gateways/fronts (D82, D96, D127) | existing config |
 | `15432–17431` | database host ports, then pooler ports | today |
 | `18123` | ClickHouse HTTP | `scripts/systemd/clickhouse.ts` |
 | `19000–19999` | storage instance ports | used today |
@@ -597,7 +600,7 @@ and authorisation is per port and per source; assets and adversaries are §17.
 | Consumer → provider | database or S3 protocol | node certificate | nftables `/32` per attachment | WireGuard and TLS | `attachment.create`/`delete` |
 | Container → listener | database protocol on the gateway | none, host-local | the container already runs there | none on the bridge | none |
 | Agent → control plane | desired state, heartbeat, activation | node token and TLS pin | token scoped to one node | TLS | `node.*` audit |
-| Control plane → gateway | S3 and studio requests (D82) | TLS, SigV4 or session token | per-request signing | TLS over the overlay | `storage.object.*` |
+| Control plane → gateway | S3, studio and container-console requests (D82, D96) | TLS, SigV4, session or console token | per-request signing or scope | TLS over the overlay | `storage.object.*`, `container.*` |
 | Control node → object store | lease CAS, Litestream, backups | S3 credentials | bucket policy | TLS | S3 access logs |
 | Operator → dashboard | session, passkey, MCP token | Better Auth | RBAC; fleet actions session-only | TLS | `audit_log` |
 
@@ -726,7 +729,7 @@ inherits the share's zone ("down if `home` is down", even with cloud replicas), 
 read-write copies there. That caps a share-backed app at `L2`: a share's zone is always its server
 node's, so the app can never meet §8.1's `L3` requirement of "no share confined to one zone".
 
-**Surfaces and audit.** A **Shares** page (create wizard with probe-before-save, mount status,
+**Surfaces and audit.** A **Network shares** page at `/shares`, named so it is not confused with share links (create wizard with probe-before-save, mount status,
 grants, rotation) and a `backing: share` option on the project Volumes attach form. Audited:
 `share.create`, `share.update`, `share.delete`, `share.grant`, `share.attach`, `share.detach`,
 `share.mount`, `share.unmount`, `share.mount.fail`, `share.credential.rotate`. Share CRUD is
@@ -878,7 +881,7 @@ more copy of the same release: `MemoryMax=1G` per unit (OPS §10), 150 MB steady
 | State | Mechanism | RPO | Failure mode | Verification |
 |---|---|---|---|---|
 | SQLite | Litestream from the lease holder to the object store (exists, ~1 s WAL sync); the standby restores the replica, then follows it (S2) | ≤ 1 s | Two writers to one replica path interleave generations; a standby past the 720 h retention cannot catch up | `PRAGMA integrity_check`; fingerprint compare (`scripts/skiff-db-fingerprint.ts`); replay position in `/api/v1/ha/status` |
-| Master key | Recovery kit at enrolment; the standby keeps its own copy at `/etc/skiff/master.key` (0400 root) behind `LoadCredential` | Until the next rotation | A rotation not re-delivered leaves the standby unable to decrypt | `skiff-recovery-kit verify` (fingerprints equal); read one secret |
+| Master key | Recovery kit at enrolment; the standby keeps its own copy, sealed on that host as `/etc/skiff/master.key.cred` behind `LoadCredentialEncrypted` (plaintext `master.key` 0400 root without systemd-creds) | Until the next rotation | A rotation not re-delivered leaves the standby unable to decrypt | `skiff-recovery-kit verify` (fingerprints equal); read one secret |
 | Platform config | Allowlisted `skiff.env` keys through the activation endpoint, values sealed (the OPS §4.3 shape; distribution is new) | Last saved value | Divergent R2, SMTP or alert settings on a promoted standby | Config digest in `/api/v1/ha/status`; `sha256` of the allowlisted keys |
 | Releases | Standby updates first (§6.5) | n/a | Older release, newer schema: pending migrations block promotion | `/readyz` `version` and `schema`; `skiff-update-self status` |
 | ClickHouse | Not replicated; optional and off by default (D101); one store per control node that installed it. The agent buffer is in memory, 5,000 minute-buckets, oldest dropped, lost on restart | Not applicable | A promoted standby with a fresh store has no hot history | `curl -s 127.0.0.1:18123/ping`; "not installed" is valid |
@@ -1353,6 +1356,30 @@ are in §12. Health, policy and retries are §8.6.
 7. **Record.** One audit row per moved copy (actor `system`, from, to, epoch), a timeline entry and an
    alert that the failover happened.
 
+**Status (2026-11-07, C8 controller).** Built in `packages/core/src/failover-service.ts`, ticked every
+`controlPlane.renewSeconds` (capped at a third of `leaseTtlSeconds`) by the primary control plane; a
+`SKIFF_STANDBY=1` process never ticks. Differences from the plan above:
+
+- **Switch, not per resource.** The trigger is fleet-wide `failover.enabled` (off by default) plus
+  `replicas.failoverGraceSeconds` (120 s) of silence since the last heartbeat; per-resource
+  `failover: auto`, HA levels and the step-2 pins are not checked yet, so every spread copy
+  (`MULTI_NODE_REPLICAS`) is eligible. A copy on a **draining** node moves whether or not the switch
+  is on. A node that heartbeats with Caddy down is not lost.
+- **Lease.** `ha:failover_lease` in the control plane's own `settings` table (`SqliteLeaseStore`): it
+  fences the processes that share one database (an old primary still running during an update), not
+  two hosts — that is still §6.3's object-store lease. Every write re-checks the holder and epoch in
+  its own transaction; a deposed controller writes nothing and records a `lease` event with a
+  critical alert.
+- **Limits as built.** `failover.maxPerMinute` (6) applied actions fleet-wide, 2 per target node, one
+  in flight per workload, counted from `failover_events.applied_at`. A waiting move expires after
+  10 min and alerts, and the same copy is not queued again off the same node for 30 min. A node that
+  was a failover source (replica, ingress or database) in the last 30 min is never a target. A move
+  is `in-progress` until the copy reports `running` from its new node, and `failed` after 10 min.
+- **Stages.** A copy's event walks the §9.3 stage machine (`detect` → … `promote` while it starts →
+  `complete`) one allowed step at a time, so no stage is skipped. Audit action `ha.failover`, actor
+  `system`, with from, to and epoch; alerts are the `failover` system-alert kind.
+- **Not built:** singleton ordering, the Rebalance action, the UPS drain deadline and the dry run.
+
 **No automatic move back.** The returned node holds nothing of this workload, because desired state no
 longer assigns it. The resource shows `degraded spread` and a **Rebalance** action; an operator
 decides whether the original shape is worth another move. Nothing moves back on its own: a flapping
@@ -1538,11 +1565,17 @@ history. Alerts fire on a ready-but-ejected copy for over 2 min, on a workload w
 
 ## 9. Database HA
 
-Status: **plan.** Every engine today runs one container on one node with a loopback-only port
-(DATABASES §2, D56), and a project with an attachment is placed on the database's node. Nothing
-replicates a database: there is no `pg_basebackup`, `pg_rewind` or `pg_ctl promote` in the tree, the
-engine registry has no `replication` capability, and `db_metrics_1m` has no lag columns. C7 adds
-replicas, C8 automatic failover; the unit of HA is the individual database (§8.1, §13 for its shape).
+Status: **partly built.** Postgres async streaming replicas and fenced manual promotion are in (C7;
+DATABASES §18 is the as-built description). Where this section differs, the build is: the
+walreceiver reaches its primary through an agent-served unix socket bind-mounted read-only into the
+replica container (not a C2 endpoint, which a container cannot reach), the slot is
+`skiff_<replica id>`, a same-node replica is allowed for read scaling but never promoted, `sync` is
+refused, the `pg_hba` rule is `host replication skiff_repl all scram-sha-256` (the source address
+behind the loopback publish is the container gateway, not a fixed endpoint address), and the
+fence is "leave the old node's desired state, confirmed by its heartbeat" rather than the
+object-store lease, so automatic promotion is opt-in. `pg_rewind`, `db_replica_metrics_1m`, lag
+alerts, the stable read port and other engines are still plan. The unit of HA is the individual
+database (§8.1, §13 for its shape).
 
 ### 9.1 Engine capability
 
@@ -1680,6 +1713,20 @@ pg_current_wal_lsn()`, promote — zero lost commits, refused when the gap is no
 D97 remains stop → dump → restore → purge; H16 **amends** it with a replica path: add a replica on the
 target, catch up, switch over, purge.
 
+**Status (2026-11-07, C8 controller).** The controller (`FailoverService`, §8.3) runs the first two stages
+for every database that has replicas. Detection is one signal only — no heartbeat from the primary's node
+for `failover.graceSeconds` (default 120 s) — not the three above. `decide` runs
+`chooseReplicaForPromotion` under `database.maxLagBytes`/`maxLagSeconds`, refusing a replica that is
+`pending` or whose own node is silent, and records the decision in `failover_events` (kind `database`,
+the target generation in `generation`) rather than `database_failovers`. With no eligible replica the
+event is `blocked`; with `failover.enabled` off, or no promotion path installed, it is `manual` and a
+critical `failover` alert asks for a promotion by hand; it closes as `cancelled` when the primary returns.
+The stages after `decide` (`fence`, `promote`, `repoint`, `heal`) belong to a handler registered with
+`FailoverService.registerDatabaseHandler({ run(stage, plan, fence) })`: the controller calls it once per
+tick until each stage reports `done`, checks the lease inside every write, passes `fence.holds()` for the
+handler to check before anything irreversible, and fails the event after 10 minutes. No handler is
+registered yet (the read-replica work, C7, plugs in here), so database failover is manual today.
+
 ### 9.4 Other engines
 
 | Engine | What C10 ships | What it deliberately does not |
@@ -1802,8 +1849,14 @@ Multi-drive alone is the disk layer of §5.1, not an HA level.
 
 ### 10.2 Bucket replication
 
-Bucket replication is a RustFS feature that Skiff configures and observes; Skiff does not move the
-objects. It is **active–passive**: the control plane owns the rule and the promotion.
+**As built (2026-11-07), Skiff moves the objects itself**: RustFS's bucket replication would dial the
+target from inside the source container, which cannot reach a private instance on another node
+(D56). One node's agent runs each rule as a scheduled copy pass through the peer node's gateway with
+a key scoped to the replicated buckets; that is the "scheduled sync" fallback below, `L1` with the
+interval as RPO. The runner, keys, comparison, delete and checkpoint rules are in
+[OBJECT-STORAGE.md](./OBJECT-STORAGE.md) §12. The plan that follows (a RustFS link, a second container
+with the same root key, versioned queues) remains the design for an `L2` replica if S5 passes. It is
+**active–passive**: the control plane owns the rule and the promotion.
 
 1. **Create the replica**: a second container on the target node, same version, same root key pair
    (from the sealed `storage_instances` columns, never desired state), same object-lock config.
@@ -2005,7 +2058,7 @@ admin's own dashboard session, never an API key, an OAuth token or MCP (`canAdmi
 | **Topology** (`/topology`) | platform admin, read | zones → nodes (hardware, roles, labels) → volumes and shares → services; overlay links with RTT and handshake age; level and effective level per resource; the blast-radius simulator | Plan (C0) |
 | **Node detail** (`/nodes`) | platform admin | today: status, stats, update, drain/resume, token rotation, storage, edge hand-off. Plan: Hardware tab, zone/roles/labels editing, endpoint and peer list | Today, extended in C0/C1 |
 | **Resource HA card** (project, database, storage) | org reader | level, replicas with node and zone, lag, effective level, **Promote**/**Switchover**, and why a higher level is unavailable | Plan (C6–C7) |
-| **Settings → High availability** | platform admin, session | ingress driver, standby enrolment and state, failover modes, headroom reserve, drill schedule and last result | Plan (C6) |
+| **Settings → High availability** | platform admin, session | ingress driver, standby enrolment and state, failover modes, headroom reserve, drill schedule and last result | Today: ingress driver and nodes, the failover controller (switch, lease, policy), node silence, ingress rotation, database candidates and failover history (C8). Standby, modes, headroom and drills: plan (C6) |
 | **Audit**, **Backups**, **Metrics**, **Updates** | org `project:read`; fleet rows platform admin | today's log filtered by `ha.*`, `node.*`, `database.*`; restore-drill result; metric sections; node update state | Today, HA actions added in C4 |
 
 ### 12.2 REST
@@ -2018,7 +2071,7 @@ the existing error shape and add `412 precondition_failed` for a stale `If-Match
 | Method | Path | Permission | Notes | Status |
 |---|---|---|---|---|
 | GET | `/topology`, `/topology/blast-radius?node=<id>` | platform admin | nodes, zones, links, effective level; impact from reported state | Plan |
-| GET | `/ha/status` | platform admin | epoch, lease, role and lag per control node, `canPromote`, effective driver (§7.2) | Plan |
+| GET | `/ha/status` | platform admin | today: the failover controller's `FailoverStatusView` (switch, lease epoch and holder, policy, per-node silence, ingress record set, database candidates, last 50 events). Plan: role and lag per control node, `canPromote` | Today (C8) / plan (C6) |
 | POST | `/ha/promote` | platform admin **session** | `If-Match: "<etag>"`, `{ expectEpoch, dryRun?, reason? }` | Plan |
 | PATCH, POST | `/nodes/:id`, `/nodes/:id/drain`, `/resume` | platform admin **session** | today `{ name, publicAddress, sliceMemoryMb, canBuild, … }` and a drain status bit; plan adds `{ zone, roles, labels, lanEndpoint }` and `{ mode: "cordon" \| "drain" \| "evacuate", deadlineSeconds? }` | Today / plan |
 | GET, POST | `/databases/:name/replicas` | `database:read` / `database:update` | list `{ node, zone, state, lagBytes, lagSeconds, slot }`; add `{ node, volume?, mode: "async" \| "sync" }` | Plan |
@@ -2046,7 +2099,7 @@ returns `409` instead of bumping twice, and `dryRun` returns the checks it would
 | Command | What it does | Status |
 |---|---|---|
 | `skif status`, `skif topology [--node <id>] [--blast-radius]` | fleet health; the Topology page in text | Today / plan (C0) |
-| `skif ha status [--wait]`, `skif ha promote --expect-epoch 7 [--dry-run]` | epoch, holder, per-node lag; promotion with a precondition | Plan (C6) |
+| `skif ha status [--events <n>]`, `skif ha promote --expect-epoch 7 [--dry-run]` | today: the failover controller (lease, lost nodes, database candidates, recent events); plan: per-node lag, `--wait` and promotion with a precondition | `status` today (C8); the rest plan (C6) |
 | `skif ha standby enrol --node edge-b`, `skif ha claim --from-store --expect-epoch 7`, `skif ha fence <node>` | enrolment, disaster claim, and the root break-glass actions (§6.5) | Plan (C6) |
 | `skif ha drill <kind>` | run a drill and print the measured RTO/RPO | Plan (C8) |
 | `skif node list\|show`, `skif node edit <node> --zone cloud-b --role ingress,control`, `skif node drain\|resume` | hardware, roles, zone, labels; drain modes and cancellation (C0, C4) | Plan |
@@ -2069,7 +2122,7 @@ delete, restore and prune.
 | Tool | Returns | Status |
 |---|---|---|
 | `get_topology`, `get_blast_radius` | zones, nodes, roles, links, effective levels, impact of losing a domain; platform-admin only | Plan |
-| `get_ha_status` | epoch, lease, standby lag, driver, effective level per resource | Plan |
+| `get_ha_status` | today: the same view as `GET /ha/status`; plan: standby lag and effective level per resource | Today (C8), extended in C6 |
 | `list_nodes`, `get_node_capacity` | fleet nodes and slice budgets | Today |
 
 The fleet reads reveal other organisations' placements, so they run only for a platform-admin
@@ -2114,6 +2167,9 @@ Every HA action writes one `audit_log` row, following the existing `resource.act
 edit is one `node.update` row with the changed fields in `args`; it never emits a second action.
 Each row carries the actor and surface, the before and after epoch and `primary_generation`, the node
 set, and a `reason` — who promoted, from where, and why, without a shell history.
+Today the failover controller writes `ha.failover` (actor `system`): one row per moved replica copy
+(`resource: workload_replica`, args `from`, `to`, `epoch`, `reason: failover | drain`) and one per
+database failover start and stage (`resource: database`).
 
 ### 12.7 Drills
 
@@ -2621,7 +2677,7 @@ fails.
 
 | Asset | Lives in | Why it matters |
 |---|---|---|
-| Master key (KEK) | `/etc/skiff/master.key` 0400 root as a systemd credential; one copy per control node | It unwraps every org DEK, the node CA key and the sealed config. One host with it is the install. |
+| Master key (KEK) | `/etc/skiff/master.key.cred` sealed with `systemd-creds` (or `master.key` 0400 root) as a systemd credential; one copy per control node | It unwraps every org DEK, the node CA key and the sealed config. One host with it is the install. |
 | Org DEKs and secrets | SQLite, wrapped by the KEK | Every stored and deployment secret, and every database credential. |
 | Platform state and credentials | `skiff.db`; R2, Cloudflare, SES and GitHub credentials in `skiff.env` and `agent.env`, 0640 root:skiff | Every org and audit row, plus releases, backups, DNS and build sources. Losing DNS loses every hostname at once. |
 | The lease object | `skiff/ha/control-lease.json` in R2 | Who may write the control plane. Forging it chooses the writer. |
@@ -2682,7 +2738,7 @@ and certificate, and loses only the right to be believed. Never use the epoch as
 | I2 | No managed data port is public | D56, per-`/32` nftables rules, the consumer-side loopback endpoint | an external scan finds 80/443 and, on a hub, UDP 51820 |
 | I3 | One control-plane writer per epoch; a fenced node writes nothing | lease CAS and epoch (§6.3); 503 for every non-GET on a fenced node | `chaos/partition-a-b`: no instant with two writers, no epoch regression |
 | I4 | No fleet or data-plane mutation over MCP | D53; `canAdministerPlatform` is session-only (§12.4) | no write tool exists for a node, a control role, a database role, a certificate or the lease |
-| I5 | Root work only through the helper's fixed verbs | D26/D43; socket `root:skiff` 0660 | no shell verb exists; `systemd-analyze security` on every unit |
+| I5 | Root work only through the helper's fixed verbs | D26/D43; socket `root:skiff` 0660 | no host shell verb exists (the D127 console shell runs inside a project's own container); `systemd-analyze security` on every unit |
 | I6 | Every reveal, role change, promote and certificate issue is attributable | `audit_log` with actor, surface, epoch and reason (§12.6) | an action with no row fails the §19 suite |
 | I7 | A removed node holds no route | token revoked, peer and `/32` removed, certificate expiry as the outer bound (§4.5) | a removed node's key cannot handshake and its leaf opens nothing |
 | I8 | A tenant reaches only its own org's attachments and secrets | secret scoping (D88), per-attachment `/32`, per-workload units | a two-org fixture reaches its own services and nothing else |
@@ -2706,7 +2762,7 @@ rows for certificate issuance, token rotation and a refused overlay connection. 
 
 | Asset | Generated | Stored | Lifetime | Rotation | Revocation |
 |---|---|---|---|---|---|
-| Master key (KEK) | installer, 32 random bytes | `master.key` 0400 root as a credential; one copy per control node | until rotated | `skif admin keys rotate` (planned; OPS §11) | none; the recovery kit is the way back |
+| Master key (KEK) | installer, 32 random bytes | `master.key.cred` sealed with `systemd-creds` (TPM2 + host key, else host key; plaintext `master.key` 0400 root without systemd-creds), loaded as a credential; one copy per control node, sealed on that node | until rotated | `sudo skiff-rotate-master-key` on the primary (OPS §11); re-delivery to standbys is C6 work | none; the recovery kit is the way back |
 | Org DEKs | control plane, at org creation | SQLite, wrapped by the KEK | until re-wrapped | re-wrapped in the KEK rotation's transaction | org delete |
 | Node CA, ECDSA P-256 | control plane at install (C2) | sealed with the master key in SQLite | 10 years | a second CA as `nextCaPem`, the old trusted until its last leaf expires | replace the CA |
 | Node leaf certificate | the node's key pair and CSR at join | node disk; serial in SQLite | 90 days, renewed at 60 | re-issue to a re-keyed node | removing the node removes its `/32` and peer; expiry is the bound |
@@ -2864,7 +2920,7 @@ partitioned, and surviving replicas exist. **Time** 20 min stateless, hours with
 1. Least privileged first: `POST /nodes/:id/rotate-token`, then re-key a leaving node (§4.5).
 2. Ingress TLS: `POST /ha/certificates/rotate` (C5), or let the `acme` holder renew and distribute it.
 3. Application secrets: replace `BETTER_AUTH_SECRET` or `SKIFF_SITE_COOKIE_SECRET` and restart (§7.1).
-4. Master key last: `sudo skif admin keys rotate` (planned; OPS §11.2), then re-export the recovery kit.
+4. Master key last: `sudo skiff-rotate-master-key` (OPS §11.2), then re-export the recovery kit.
 
 **Verify** a secret-backed deployment activates, one fingerprint everywhere, a matching recovery kit.
 **Roll back** keep the previous key for one window (OPS §11.3).

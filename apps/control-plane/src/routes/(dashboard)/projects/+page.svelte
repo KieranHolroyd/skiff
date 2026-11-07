@@ -573,9 +573,24 @@
 				</Field.Field>
 			</div>
 			{#if productionAccess === 'password' || previewAccess === 'password'}
-				<Field.Description>
-					Set the project password from the project's Settings tab after it is created.
-				</Field.Description>
+				<Field.Field data-invalid={result?.fieldErrors?.password ? true : undefined}>
+					<Field.Label for="create-access-password">Site password</Field.Label>
+					<Input
+						id="create-access-password"
+						name="password"
+						type="password"
+						autocomplete="new-password"
+						minlength={8}
+						required
+						aria-invalid={result?.fieldErrors?.password ? 'true' : undefined}
+					/>
+					<Field.Description>
+						At least 8 characters. Each password-protected scope gets its own copy; change either
+						one later from the project's Settings tab.
+					</Field.Description>
+					{#if result?.fieldErrors?.password}<Field.Error>{result.fieldErrors.password}</Field.Error
+						>{/if}
+				</Field.Field>
 			{/if}
 		</Field.Group>
 	</FormDialog>

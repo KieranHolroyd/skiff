@@ -149,7 +149,7 @@ describe('metrics export', () => {
 	});
 
 	test('settings: cache, app cap, disabled sections and private /metrics', async () => {
-		core.metricsExport.updateSettings({ maxApps: 1, cacheSeconds: 30 });
+		core.metricsExport.updateSettings(admin, { maxApps: 1, cacheSeconds: 30 });
 		const capped = await render(owner, ['apps']);
 		expect(capped).toContain('skiff_scrape_truncated{section="apps"} 1');
 		expect(capped).toContain('project="blog"');
@@ -163,13 +163,18 @@ describe('metrics export', () => {
 		clock += 31_000;
 		expect(await render(owner, ['apps'])).toContain('project="aaa"');
 
-		core.metricsExport.updateSettings({ sections: { databases: false }, publicPlatform: false });
+		core.metricsExport.updateSettings(admin, { sections: { databases: false }, publicPlatform: false });
 		expect(core.metricsExport.settings().sections.apps).toBe(true);
 		expect(await render(owner)).not.toContain('skiff_database_info');
 		await expect(render(owner, ['databases'])).rejects.toMatchObject({ status: 404 });
 		await expect(render(undefined)).rejects.toMatchObject({ status: 401 });
 
-		expect(() => core.metricsExport.updateSettings({ cacheSeconds: 9999 })).toThrow();
-		expect(() => core.metricsExport.updateSettings({ unknown: true })).toThrow();
+		expect(() => core.metricsExport.updateSettings(admin, { cacheSeconds: 9999 })).toThrow();
+		expect(() => core.metricsExport.updateSettings(admin, { unknown: true })).toThrow();
+		// Platform-wide: an org owner or a platform admin's API key cannot change it.
+		const adminKey = buildPrincipal({ kind: 'apiKey', userId: 'user_admin', orgId: 'org_a', role: 'owner', platformAdmin: true });
+		for (const principal of [owner, adminKey])
+			expect(() => core.metricsExport.updateSettings(principal, { cacheSeconds: 0 })).toThrow(/platform admin/);
+		expect(core.metricsExport.settings().cacheSeconds).toBe(30);
 	});
 });

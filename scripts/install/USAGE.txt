@@ -5,6 +5,7 @@ Usage: curl -fsSL <install.sh> | sudo sh
 
 Options:
   --yes                       Non-interactive; required values must be flags/env.
+                              Also SKIFF_YES=1.
   --dry-run                   Print the plan; change nothing.
   --upgrade                   Reuse /etc/skiff and data, build and activate a new release.
   --uninstall                 Stop and remove the Skiff units (keeps data/config).
@@ -14,8 +15,10 @@ Options:
   --acme-email <email>        ACME account email; turns on HTTPS (needs real domains).
   --public-address <ipv4>     This server's IPv4 for IP-only installs (default: detected).
   --skip-deps                 Don't install Caddy or Podman (they must already be installed).
+                              Also SKIFF_SKIP_DEPS=1.
   --admin-email <email>       Prefills the owner email in the setup wizard (optional).
-  --cloudflare-token-file     Optional Caddy DNS-01 token file, used only if it exists
+  --cloudflare-token-file <path>
+                              Optional Caddy DNS-01 token file, used only if it exists
                               (default /etc/caddy/cloudflare.token). Not prompted for.
   --skip-dns-check            Skip checking that the domains resolve before installing.
   --github-client-id <id>     Optional GitHub OAuth app.
@@ -24,18 +27,26 @@ Options:
   --smtp-port <port>          SMTP port (default 587).
   --smtp-user <user>          SMTP username.
   --smtp-password <pass>      SMTP password.
-  --smtp-from <address>       From address.
+  --smtp-from <address>       From address (default Skiff <noreply@<content-domain>>).
   --object-store local|r2     Artifact storage (default local).
   --r2-account-id <id>        R2 account id.
   --r2-bucket <bucket>        R2 bucket.
   --r2-access-key-id <id>     R2 access key.
   --r2-secret-access-key <s>  R2 secret.
   --no-agent                  Install the control plane only.
+  --no-node                   Skip the pinned Node.js LTS that Node.js process apps run on
+                              (~190 MB on disk). Also SKIFF_NO_NODE=1.
+  --no-python                 Don't warm the Pyodide cache that Python functions load (~36 MB);
+                              they stay unavailable on this node. Also SKIFF_NO_PYTHON=1.
+  --with-php                  Install the pinned FrankenPHP runtime for PHP process apps
+                              (~175 MB; off by default). Also SKIFF_INSTALL_PHP=1.
   --clickhouse                Also install the optional ClickHouse telemetry store (traffic
                               charts, dashboards; ~240 MB download, ~300–800 MB RAM).
                               Asked interactively; off with --yes. Also SKIFF_INSTALL_CLICKHOUSE=1.
   --no-clickhouse             Skip it without asking (an installed one is left in place).
   --version <label>           Release label (default: the repository VERSION file).
+                              Also SKIFF_VERSION.
+  -h, --help                  Print this help and exit.
 
 Bootstrap environment:
   SKIFF_REPO, SKIFF_REF, SKIFF_GITHUB_TOKEN, SKIFF_BUN_VERSION, SKIFF_SOURCE_DIR.

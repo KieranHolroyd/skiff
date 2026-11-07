@@ -1,171 +1,284 @@
 import { describe, expect, test } from 'bun:test';
 import type { z } from 'zod';
 import {
+	attachmentTarget,
+	blueprintApplyRequestSchema,
 	blueprintApplyViewSchema,
 	blueprintComposeImportResultSchema,
+	blueprintPlanRequestSchema,
 	blueprintPlanViewSchema,
 	blueprintSchema,
+	defaultAttachmentPrefix,
 } from './blueprint.ts';
 
+/** A v1 stack: one app with a database, a bucket and a queue, plus a static marketing site. */
 const document = {
 	apiVersion: 'skiff/v1',
-	project: 'my-app',
-	environments: { staging: { access: 'platform' } },
-	services: {
-		web: { type: 'static', path: './dist', spa: true },
-		api: {
-			type: 'process',
+	name: 'shop',
+	projects: {
+		'shop-web': {
+			runtime: 'static',
+			access: { production: 'public', previews: 'platform' },
+			environments: { staging: { access: 'platform' } },
+			domains: ['Shop.Example.com.'],
+		},
+		'shop-api': {
+			name: 'Shop API',
+			runtime: 'process',
+			placement: 'auto',
 			command: ['bun', 'run', 'start'],
 			port: 3000,
 			healthPath: '/health',
 			memoryMb: 256,
 			cpus: 1,
-			volumes: ['data:/var/lib/app'],
-		},
-		worker: {
-			type: 'container',
-			image: 'docker.io/library/worker:1.0',
-			command: ['worker'],
-			volumes: [{ volume: 'data', mountPath: '/var/lib/worker', readOnly: true }],
+			env: { LOG_LEVEL: 'info' },
+			secrets: ['STRIPE_KEY'],
 		},
 	},
 	databases: {
-		main: { engine: 'postgres', version: '17', sizeMb: 10240, extensions: ['pgvector', 'pg_trgm'] },
+		'shop-db': { engine: 'postgres', version: '18', storageMb: 10240, extensions: ['pgvector', 'pg_trgm'] },
+		'shop-cache': { engine: 'valkey' },
 	},
 	storage: {
-		assets: { public: true, buckets: { uploads: { access: 'private', versioning: true, quotaMb: 5120 } } },
+		'shop-assets': { public: true, buckets: { uploads: { access: 'private', versioning: true, quotaMb: 5120 } } },
 	},
-	jobs: {
-		cleanup: { schedule: '0 3 * * *', command: ['bun', 'run', 'cleanup'], timeoutSeconds: 300 },
-	},
-	volumes: { data: { sizeMb: 1024 } },
-	domains: [{ host: 'app.example.com', service: 'web' }],
-	env: { production: { LOG_LEVEL: 'info' } },
-	secrets: { production: ['DATABASE_URL'] },
+	brokers: { 'shop-queue': { engine: 'nats' } },
 	attachments: [
-		{ database: 'main', prefix: 'DATABASE' },
-		{ storage: 'assets', prefix: 'S3', grants: [{ bucket: 'uploads', mode: 'read-write' }] },
+		{ project: 'shop-api', database: 'shop-db' },
+		{ project: 'shop-api', database: 'shop-cache' },
+		{ project: 'shop-api', storage: 'shop-assets', grants: [{ bucket: 'uploads' }] },
+		{ project: 'shop-api', broker: 'shop-queue', prefix: 'QUEUE' },
 	],
-	previews: { enabled: true, data: 'schema-seed', ttlHours: 72, maxConcurrent: 5 },
 } as const;
 
-describe('skiff.yaml v1', () => {
-	test('parses a full document and is idempotent', () => {
+const fails = (value: unknown) => blueprintSchema.safeParse(value).success === false;
+const messages = (value: unknown): string => {
+	const result = blueprintSchema.safeParse(value);
+	return result.success ? '' : result.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('\n');
+};
+
+describe('blueprint v1 document', () => {
+	test('parses a full stack, fills defaults and is idempotent', () => {
 		const parsed = blueprintSchema.parse(document);
-		expect(parsed.services.web).toMatchObject({ type: 'static', path: 'dist', spa: true, cleanUrls: false });
-		expect(parsed.services.api).toMatchObject({
-			type: 'process',
-			volumes: [{ volume: 'data', mountPath: '/var/lib/app', readOnly: false }],
-		});
-		expect(parsed.services.worker).toMatchObject({ type: 'container', volumes: [{ readOnly: true }] });
-		expect(parsed.databases.main).toMatchObject({ engine: 'postgres', sizeMb: 10240, pooler: true });
-		expect(parsed.storage.assets?.buckets.uploads).toMatchObject({ versioning: true, quotaMb: 5120 });
-		expect(parsed.jobs.cleanup).toMatchObject({ concurrency: 'forbid', environment: 'production' });
-		expect(parsed.volumes.data).toMatchObject({ backing: 'state_dir', singleWriter: true });
-		expect(parsed.previews).toEqual({ enabled: true, data: 'schema-seed', ttlHours: 72, maxConcurrent: 5 });
+		expect(parsed.projects['shop-web']).toMatchObject({ runtime: 'static', domains: ['shop.example.com'] });
+		expect(parsed.projects['shop-api']).toMatchObject({ runtime: 'process', environments: {}, domains: [] });
+		expect(parsed.databases['shop-db']).toMatchObject({ engine: 'postgres', version: '18', extensions: ['pgvector', 'pg_trgm'] });
+		// Unset fields stay unset, so they are never managed.
+		expect(parsed.databases['shop-cache']).toEqual({ engine: 'valkey' });
+		expect(parsed.storage['shop-assets']?.buckets.uploads).toEqual({ access: 'private', versioning: true, quotaMb: 5120 });
+		expect(parsed.brokers['shop-queue']).toEqual({ engine: 'nats' });
+		expect(parsed.attachments[2]?.grants).toEqual([{ bucket: 'uploads', mode: 'read-write' }]);
 		expect(blueprintSchema.parse(parsed)).toEqual(parsed);
 	});
 
-	test('unknown fields fail with a path, at every level', () => {
-		for (const bad of [
-			{ ...document, extra: true },
-			{ ...document, services: { ...document.services, web: { ...document.services.web, extra: true } } },
-			{ ...document, databases: { main: { ...document.databases.main, extra: true } } },
-			{ ...document, previews: { ...document.previews, extra: true } },
-		]) {
-			const result = blueprintSchema.safeParse(bad);
-			expect(result.success).toBe(false);
-			if (!result.success) expect(result.error.message).toContain('Unrecognized key');
+	test('the smallest document is a name and an apiVersion', () => {
+		expect(blueprintSchema.parse({ apiVersion: 'skiff/v1', name: 'empty' })).toEqual({
+			apiVersion: 'skiff/v1',
+			name: 'empty',
+			projects: {},
+			databases: {},
+			storage: {},
+			brokers: {},
+			attachments: [],
+		});
+		expect(fails({ apiVersion: 'skiff/v2', name: 'empty' })).toBe(true);
+		expect(fails({ name: 'empty' })).toBe(true);
+	});
+
+	test('unknown fields fail with their path, at every level', () => {
+		const cases: Array<[unknown, string]> = [
+			[{ ...document, extra: true }, ''],
+			[{ ...document, projects: { 'shop-web': { ...document.projects['shop-web'], spa: true } } }, 'projects.shop-web'],
+			[{ ...document, databases: { 'shop-db': { engine: 'postgres', sizeMb: 1 } } }, 'databases.shop-db'],
+			[{ ...document, storage: { 'shop-assets': { buckets: { uploads: { lock: true } } } } }, 'storage.shop-assets.buckets.uploads'],
+			[{ ...document, attachments: [{ project: 'shop-api', database: 'shop-db', role: 'app' }] }, 'attachments.0'],
+		];
+		for (const [bad, path] of cases) {
+			const text = messages(bad);
+			expect(text).toContain('Unrecognized key');
+			expect(text.startsWith(path)).toBe(true);
 		}
 	});
 
-	test('cross references are checked before plan', () => {
-		const cases = [
-			{ ...document, services: { ...document.services, api: { ...document.services.api, volumes: ['missing:/var/lib/app'] } } },
-			{ ...document, attachments: [{ database: 'missing', prefix: 'DATABASE' }] },
-			{ ...document, domains: [{ host: 'app.example.com', service: 'missing' }] },
-			{ ...document, env: { qa: { A: '1' } } },
-			{ ...document, attachments: [{ storage: 'assets', prefix: 'S3', grants: [{ bucket: 'missing' }] }] },
-			{
-				...document,
-				services: {
-					...document.services,
-					api: { ...document.services.api, volumes: ['data:/var/lib/app', 'data:/var/lib/app'] },
-				},
-			},
-			{ ...document, previews: { enabled: true, data: 'fork', ttlHours: 72, maxConcurrent: 5 }, databases: {} },
-		];
-		for (const bad of cases) expect(blueprintSchema.safeParse(bad).success).toBe(false);
+	test('names are checked like the resources they create', () => {
+		expect(fails({ ...document, name: 'plan' })).toBe(true);
+		expect(fails({ ...document, name: 'Shop' })).toBe(true);
+		expect(fails({ apiVersion: 'skiff/v1', name: 'x', projects: {} })).toBe(true);
+		expect(fails({ apiVersion: 'skiff/v1', name: 'ok-name', projects: { 'a--b': {} } })).toBe(true);
+		expect(messages({ apiVersion: 'skiff/v1', name: 'pgs', databases: { 'pg-main': {} } })).toContain('cannot start with "pg-"');
+		expect(fails({ apiVersion: 'skiff/v1', name: 'envs', projects: { site: { environments: { production: {} } } } })).toBe(true);
+		expect(fails({ apiVersion: 'skiff/v1', name: 'envs', projects: { site: { environments: { s3: {} } } } })).toBe(true);
 	});
 
-	test('mounts accept both compact and object forms and reject bad paths', () => {
-		const withMount = (mounts: unknown[]) =>
-			blueprintSchema.safeParse({
-				...document,
-				services: { ...document.services, api: { ...document.services.api, volumes: mounts } },
-			});
-		expect(withMount(['data:/var/lib/app:ro']).success).toBe(true);
-		expect(withMount([{ volume: 'data', mountPath: '/var/lib/app' }]).success).toBe(true);
-		expect(withMount(['data:/etc']).success).toBe(false);
-		expect(withMount(['data:relative']).success).toBe(false);
-		expect(withMount(['data:/var/lib/app:rw']).success).toBe(false);
-		expect(withMount([{ volume: 'data', mountPath: '/var/lib/app', extra: true }]).success).toBe(false);
+	test('workload settings only fit process and container projects', () => {
+		const project = (value: Record<string, unknown>) => ({ apiVersion: 'skiff/v1', name: 'apps', projects: { app: value } });
+		expect(messages(project({ runtime: 'static', port: 3000 }))).toContain('Static projects have no workload settings');
+		expect(messages(project({ runtime: 'function', memoryMb: 128 }))).toContain('function bundle');
+		expect(messages(project({ runtime: 'process', image: 'nginx:1' }))).toContain('Only container projects take an image');
+		expect(fails(project({ runtime: 'container', image: 'nginx:1.27', port: 8080 }))).toBe(false);
+		expect(messages(project({ runtime: 'process', secrets: ['A', 'A'] }))).toContain('referenced once');
+		expect(messages(project({ runtime: 'process', env: { A: '1' }, secrets: ['A'] }))).toContain('also a secret reference');
+		expect(messages(project({ domains: ['a.example.com', 'A.example.com'] }))).toContain('listed once');
+		expect(fails(project({ domains: ['https://a.example.com/'] }))).toBe(true);
 	});
 
-	test('databases only accept the registered engine and version', () => {
-		expect(blueprintSchema.safeParse({ ...document, databases: { main: { engine: 'postgres', version: '99' } } }).success).toBe(
-			false,
+	test('secret references are names, never values', () => {
+		const withSecrets = (secrets: unknown) => ({
+			apiVersion: 'skiff/v1',
+			name: 'apps',
+			projects: { app: { runtime: 'process', secrets } },
+		});
+		expect(fails(withSecrets(['STRIPE_KEY']))).toBe(false);
+		expect(fails(withSecrets('sk_live_123'))).toBe(true);
+		expect(fails(withSecrets(['lowercase']))).toBe(true);
+		expect(fails(withSecrets({ STRIPE_KEY: 'sk_live_123' }))).toBe(true);
+	});
+
+	test('databases and brokers only accept their registered engine, version and features', () => {
+		const db = (value: Record<string, unknown>) => ({ apiVersion: 'skiff/v1', name: 'data', databases: { main: value } });
+		expect(fails(db({ engine: 'postgres', version: '99' }))).toBe(true);
+		expect(fails(db({ engine: 'oracle' }))).toBe(true);
+		expect(fails(db({ engine: 'valkey', version: '18' }))).toBe(true);
+		expect(messages(db({ engine: 'mysql', extensions: ['pg_trgm'] }))).toContain('has no extensions');
+		expect(messages(db({ engine: 'valkey', pooler: true }))).toContain('no connection pooler');
+		expect(messages(db({ engine: 'postgres', memoryMb: 128 }))).toBe('');
+		expect(fails({ apiVersion: 'skiff/v1', name: 'data', brokers: { jobs: { version: '1.0' } } })).toBe(true);
+		expect(fails({ apiVersion: 'skiff/v1', name: 'data', brokers: { jobs: { engine: 'kafka' } } })).toBe(true);
+	});
+
+	test('cross references are checked before any live state is read', () => {
+		const withAttachments = (attachments: unknown[]) => ({ ...document, attachments });
+		expect(messages(withAttachments([{ project: 'missing', database: 'shop-db' }]))).toContain('not declared under projects');
+		expect(messages(withAttachments([{ project: 'shop-web', database: 'shop-db' }]))).toContain('is static');
+		expect(messages(withAttachments([{ project: 'shop-api', database: 'missing' }]))).toContain('Database "missing" is not declared');
+		expect(messages(withAttachments([{ project: 'shop-api', broker: 'missing' }]))).toContain('Broker "missing"');
+		expect(messages(withAttachments([{ project: 'shop-api', database: 'shop-db', storage: 'shop-assets' }]))).toContain(
+			'exactly one',
 		);
-		expect(blueprintSchema.safeParse({ ...document, databases: { main: { engine: 'oracle' } } }).success).toBe(false);
-		expect(blueprintSchema.safeParse({ ...document, databases: { ...document.databases, cache: { engine: 'valkey' } } }).success).toBe(true);
+		expect(messages(withAttachments([{ project: 'shop-api' }]))).toContain('exactly one');
 		expect(
-			blueprintSchema.safeParse({ ...document, databases: { cache: { engine: 'valkey', version: '17' } } }).success,
-		).toBe(false);
+			messages(withAttachments([{ project: 'shop-api', storage: 'shop-assets', grants: [{ bucket: 'missing' }] }])),
+		).toContain('Bucket "missing" is not declared');
+		expect(messages(withAttachments([{ project: 'shop-api', storage: 'shop-assets' }]))).toContain('at least one bucket');
+		expect(messages(withAttachments([{ project: 'shop-api', database: 'shop-db', grants: [{ bucket: 'uploads' }] }]))).toContain(
+			'Only storage attachments',
+		);
 		expect(
-			blueprintSchema.safeParse({ ...document, databases: { main: { engine: 'mysql', extensions: ['pg_trgm'] } } })
-				.success,
+			messages(
+				withAttachments([
+					{ project: 'shop-api', database: 'shop-db' },
+					{ project: 'shop-api', database: 'shop-db' },
+				]),
+			),
+		).toContain('listed twice');
+		// Two Postgres databases would both default to DATABASE_URL.
+		const twoPostgres = {
+			...document,
+			databases: { ...document.databases, 'shop-db-2': { engine: 'postgres' } },
+			attachments: [
+				{ project: 'shop-api', database: 'shop-db' },
+				{ project: 'shop-api', database: 'shop-db-2' },
+			],
+		};
+		expect(messages(twoPostgres)).toContain('already uses this env prefix');
+		expect(
+			fails({
+				...twoPostgres,
+				attachments: [
+					{ project: 'shop-api', database: 'shop-db' },
+					{ project: 'shop-api', database: 'shop-db-2', prefix: 'ANALYTICS' },
+				],
+			}),
 		).toBe(false);
+		expect(messages(withAttachments([{ project: 'shop-api', database: 'shop-db', prefix: 'database_' }]))).not.toBe('');
 	});
 
-	test('secret refs are names, never values', () => {
-		expect(blueprintSchema.safeParse({ ...document, secrets: { production: 'value' } }).success).toBe(false);
-		expect(blueprintSchema.safeParse({ ...document, secrets: { production: ['lowercase'] } }).success).toBe(false);
+	test('attachment helpers name the target and its default prefix', () => {
+		const parsed = blueprintSchema.parse(document);
+		expect(parsed.attachments.map(attachmentTarget)).toEqual([
+			{ type: 'database', name: 'shop-db' },
+			{ type: 'database', name: 'shop-cache' },
+			{ type: 'storage', name: 'shop-assets' },
+			{ type: 'broker', name: 'shop-queue' },
+		]);
+		expect(defaultAttachmentPrefix(parsed, { type: 'database', name: 'shop-db' })).toBe('DATABASE');
+		expect(defaultAttachmentPrefix(parsed, { type: 'database', name: 'shop-cache' })).toBe('REDIS');
+		expect(defaultAttachmentPrefix(parsed, { type: 'storage', name: 'shop-assets' })).toBe('S3');
+		expect(defaultAttachmentPrefix(parsed, { type: 'broker', name: 'shop-queue' })).toBe('NATS');
+	});
+});
+
+describe('blueprint plan and apply wire shapes', () => {
+	const hash = 'a'.repeat(64);
+
+	test('plan and apply requests', () => {
+		expect(blueprintPlanRequestSchema.parse({ document: 'apiVersion: skiff/v1\nname: shop\n' })).toEqual({
+			document: 'apiVersion: skiff/v1\nname: shop\n',
+			prune: false,
+		});
+		expect(blueprintPlanRequestSchema.parse({ document: { apiVersion: 'skiff/v1' }, prune: true }).prune).toBe(true);
+		expect(blueprintPlanRequestSchema.safeParse({ document: '' }).success).toBe(false);
+		expect(blueprintPlanRequestSchema.safeParse({ document: 'x', extra: 1 }).success).toBe(false);
+		expect(blueprintApplyRequestSchema.parse({ planHash: hash })).toEqual({ planHash: hash });
+		expect(blueprintApplyRequestSchema.safeParse({ planHash: 'short' }).success).toBe(false);
 	});
 
 	test('plan, apply and compose views round-trip', () => {
 		const plan: z.output<typeof blueprintPlanViewSchema> = {
-			planHash: 'a'.repeat(64),
-			project: 'my-app',
-			projectAction: 'update',
+			planHash: hash,
+			stack: 'shop',
+			stackAction: 'create',
+			operationId: 'op_1',
+			prune: false,
 			resources: [
 				{
-					key: 'services.web',
-					kind: 'service',
+					key: 'projects.shop-web',
+					kind: 'project',
 					action: 'create',
-					changes: [{ path: 'type', from: null, to: 'static' }],
+					changes: [{ path: 'runtime', from: null, to: 'static' }],
 					reason: null,
 				},
+				{ key: 'databases.shop-db', kind: 'database', action: 'noop', changes: [], reason: 'up to date' },
 			],
-			summary: { create: 1, update: 0, delete: 0, noop: 4 },
+			summary: { create: 1, update: 0, delete: 0, noop: 1 },
 			warnings: [],
-			costEstimate: { monthlyUsd: 12.5, currency: 'USD' },
-			generatedAt: '2026-11-05T00:00:00.000Z',
+			generatedAt: '2026-11-07T00:00:00.000Z',
+			expiresAt: '2026-11-07T01:00:00.000Z',
 		};
 		expect(blueprintPlanViewSchema.parse(plan)).toEqual(plan);
 		expect(blueprintPlanViewSchema.safeParse({ ...plan, planHash: 'short' }).success).toBe(false);
+		expect(blueprintPlanViewSchema.safeParse({ ...plan, stackAction: 'delete' }).success).toBe(false);
+		expect(
+			blueprintPlanViewSchema.safeParse({ ...plan, resources: [{ ...plan.resources[0], kind: 'job' }] }).success,
+		).toBe(false);
 
 		const apply: z.output<typeof blueprintApplyViewSchema> = {
 			operationId: 'op_1',
-			planHash: 'a'.repeat(64),
-			status: 'succeeded',
-			projectId: 'prj_1',
-			resources: [{ key: 'services.web', kind: 'service', id: 'wl_1' }],
-			previewUrl: null,
+			planHash: hash,
+			stack: 'shop',
+			status: 'partial',
+			done: 2,
+			total: 3,
+			resources: [
+				{ key: 'projects.shop-web', kind: 'project', action: 'create', status: 'succeeded', reason: null, error: null },
+				{ key: 'databases.shop-db', kind: 'database', action: 'create', status: 'failed', reason: null, error: 'No room' },
+				{
+					key: 'attachments.shop-api.database.shop-db',
+					kind: 'attachment',
+					action: 'create',
+					status: 'skipped',
+					reason: 'an earlier step failed',
+					error: null,
+				},
+			],
 			error: null,
-			appliedAt: '2026-11-05T00:00:00.000Z',
+			appliedAt: null,
 		};
 		expect(blueprintApplyViewSchema.parse(apply)).toEqual(apply);
 		expect(blueprintApplyViewSchema.safeParse({ ...apply, status: 'unknown' }).success).toBe(false);
+		expect(
+			blueprintApplyViewSchema.parse({ operationId: 'op_2', planHash: hash, stack: 'shop', status: 'applying', done: 0, total: 1 }),
+		).toMatchObject({ resources: [], error: null, appliedAt: null });
 
 		const compose: z.output<typeof blueprintComposeImportResultSchema> = {
 			services: [{ name: 'web', kind: 'container' }],

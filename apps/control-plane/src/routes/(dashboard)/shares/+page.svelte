@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { ShareView } from '@skiff/contracts';
 	import PlusIcon from '@lucide/svelte/icons/plus';
-	import Share2Icon from '@lucide/svelte/icons/share-2';
+	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
@@ -36,26 +36,29 @@
 	}
 </script>
 
+<svelte:head><title>Network shares · Skiff</title></svelte:head>
+
 <PageHeader
-	title="Shares"
-	description="Platform-level NFS and SMB filesystems, with the orgs allowed to mount them."
+	title="Network shares"
+	description="Platform-level NFS and SMB filesystems, with the orgs allowed to mount them. Looking for a link that lets someone view a protected site? Share links live on each project's Share links tab."
+	target="network-shares.header"
 >
-	<Button size="sm" onclick={() => (addOpen = true)}><PlusIcon />Add share</Button>
+	<Button size="sm" onclick={() => (addOpen = true)}><PlusIcon />Add network share</Button>
 </PageHeader>
 
 {#if data.denied}
 	<EmptyState
-		icon={Share2Icon}
+		icon={HardDriveIcon}
 		title="Platform admin required"
-		description="Shares are platform infrastructure: they name servers, exports and org grants."
+		description="Network shares are platform infrastructure: they name servers, exports and org grants. Share links for a site are on each project's Share links tab."
 	/>
 {:else if data.shares.length === 0}
 	<EmptyState
-		icon={Share2Icon}
-		title="No shares yet"
+		icon={HardDriveIcon}
+		title="No network shares yet"
 		description="Register an NFS or SMB export once, then grant it to organisations."
 	>
-		<Button size="sm" onclick={() => (addOpen = true)}><PlusIcon />Add share</Button>
+		<Button size="sm" onclick={() => (addOpen = true)}><PlusIcon />Add network share</Button>
 	</EmptyState>
 {:else}
 	<Card.Root>
@@ -117,8 +120,8 @@
 {#if !data.denied}
 	<FormDialog
 		bind:open={addOpen}
-		icon={Share2Icon}
-		title="Add a share"
+		icon={HardDriveIcon}
+		title="Add a network share"
 		description="Register the export now; attaching it to app volumes comes next."
 		action="?/create"
 		submitLabel="Create share"
@@ -163,7 +166,7 @@
 	{#if grantShare}
 		<FormDialog
 			bind:open={grantsOpen}
-			icon={Share2Icon}
+			icon={HardDriveIcon}
 			title="Grants for {grantShare.name}"
 			description="One per line: org id, mode (ro or rw), optional path prefix."
 			action="?/grants"

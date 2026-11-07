@@ -3,9 +3,11 @@ import { parseMegabytes } from '../databases.ts';
 import { CliError, UsageError } from '../errors.ts';
 import { indent, printJson } from '../output.ts';
 import {
+	nearQuotaWarning,
+	snapshotDetails,
+	snapshotTable,
 	volumeDetails,
 	volumeTable,
-	type AppVolumeView,
 } from '../volumes.ts';
 import { authenticatedClient } from './common.ts';
 import { confirmOrRefuse } from './run-operation.ts';
@@ -19,10 +21,16 @@ const usage = `Usage: skif volume <command> [options]
 
 Commands:
   list                         List a project's volumes (the default)
+  show <name>                  Usage, attachments and recent snapshots of one volume
   create <name>                Create a volume with a size quota
   attach <name>                Mount a volume into the project's workload
   detach <name>                Unmount it; the data is untouched
   delete <name>                Soft-delete it (refused while attached; data kept 7 days)
+  snapshot <name>              Snapshot it to a backup target (pauses the writer while copying)
+  snapshots <name>             List its snapshots
+  restore <name> <snapshot>    Restore a snapshot into a NEW volume (--to <new-name>)
+  snapshot-delete <name> <snapshot>
+                               Delete a snapshot and its archive
 
 Create options:
   -p, --project <slug>         Project that owns the volume (required)
@@ -38,6 +46,18 @@ Attach/detach options:
       --env <name>             Environment label (default production)
       --read-only              Mount read-only
 
+Snapshot options:
+  -p, --project <slug>         Project that owns the volume (required)
+      --label <text>           A note to find it by later
+      --target <name>          Backup target (default: the org's, then the platform's)
+      --pin                    Mark it pinned
+      --no-quiesce             Copy without pausing the writer (may be inconsistent)
+
+Restore options:
+  -p, --project <slug>         Project that owns the volume (required)
+      --to <name>              Name of the new volume (required)
+      --size <size>            Quota of the new volume (default and minimum: the source's)
+
 Options:
   -y, --yes                    Don't ask before deleting (required without a terminal)
       --json                   JSON output
@@ -47,6 +67,8 @@ Examples:
   skif volume create app-data --project api --size 2G
   skif volume attach app-data --project api --mount /var/lib/app
   skif volume list --project api
+  skif volume snapshot app-data --project api --label "before v2 migration"
+  skif volume restore app-data avs_123 --project api --to app-data-copy
   skif volume delete app-data --project api --yes`;
 
 const baseFlags: FlagSpec = {
@@ -83,10 +105,26 @@ const detachFlags: FlagSpec = {
 
 const deleteFlags: FlagSpec = { ...projectFlags, yes: { type: 'boolean', short: 'y' } };
 
+const snapshotFlags: FlagSpec = {
+	...projectFlags,
+	label: { type: 'string' },
+	target: { type: 'string' },
+	pin: { type: 'boolean' },
+	quiesce: { type: 'boolean' },
+};
+
+const restoreFlags: FlagSpec = { ...projectFlags, to: { type: 'string' }, size: { type: 'string' } };
+
 const subcommands: Record<string, (argv: string[]) => Promise<void>> = {
 	list: listVolumes,
 	ls: listVolumes,
+	show: showVolume,
+	get: showVolume,
 	create: createVolume,
+	snapshot: snapshotVolume,
+	snapshots: listSnapshots,
+	restore: restoreVolume,
+	'snapshot-delete': deleteSnapshot,
 	attach: attachVolume,
 	detach: detachVolume,
 	delete: deleteVolume,
@@ -141,6 +179,140 @@ async function listVolumes(argv: string[]): Promise<void> {
 		return;
 	}
 	console.log(volumeTable(volumes));
+	for (const volume of volumes) {
+		const warning = nearQuotaWarning(volume);
+		if (warning) console.error(`Warning: ${warning}`);
+	}
+}
+
+/** `<name> <snapshot-id>` for the commands that act on one snapshot. */
+function parseSnapshotTarget(argv: string[], spec: FlagSpec, command: string) {
+	const args = parseArgs(argv, spec);
+	if (args.boolean('help')) {
+		console.log(usage);
+		return null;
+	}
+	const line = `Usage: skif volume ${command} <name> <snapshot-id> --project <slug>`;
+	rejectExtraPositionals(args, 2, line);
+	const name = requirePositional(args, 0, `volume name.\n\n${line}`);
+	const snapshotId = requirePositional(args, 1, `snapshot id (see \`skif volume snapshots ${name}\`).\n\n${line}`);
+	return { args, name, snapshotId };
+}
+
+async function showVolume(argv: string[]): Promise<void> {
+	const parsed = parseNamed(argv, projectFlags, 'show');
+	if (!parsed) return;
+	const { args, name } = parsed;
+	const project = projectOf(args);
+	const client = await authenticatedClient();
+	const { volume, raw } = await client.getVolume(project, name);
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	console.log(volumeDetails(volume));
+}
+
+async function snapshotVolume(argv: string[]): Promise<void> {
+	const parsed = parseNamed(argv, snapshotFlags, 'snapshot');
+	if (!parsed) return;
+	const { args, name } = parsed;
+	const project = projectOf(args);
+	const client = await authenticatedClient();
+	const { snapshot, warning, raw } = await client.snapshotVolume(project, name, {
+		...(args.string('label') ? { label: args.string('label')! } : {}),
+		...(args.string('target') ? { target: args.string('target')! } : {}),
+		...(args.has('pin') ? { pinned: args.boolean('pin') } : {}),
+		...(args.has('quiesce') ? { quiesce: args.boolean('quiesce') } : {}),
+	});
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	console.log(
+		`Queued snapshot ${snapshot.id} of ${name} to ${snapshot.target?.name ?? 'the platform object store'}. Its node picks it up within a few seconds.`,
+	);
+	if (warning) console.error(`Warning: ${warning}`);
+	console.log(
+		`\nNext steps:\n${indent([
+			`Follow:  skif volume snapshots ${name} --project ${project}`,
+			`Restore: skif volume restore ${name} ${snapshot.id} --project ${project} --to ${name}-restored`,
+		])}`,
+	);
+}
+
+async function listSnapshots(argv: string[]): Promise<void> {
+	const parsed = parseNamed(argv, projectFlags, 'snapshots');
+	if (!parsed) return;
+	const { args, name } = parsed;
+	const project = projectOf(args);
+	const client = await authenticatedClient();
+	const { snapshots, raw } = await client.listVolumeSnapshots(project, name);
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	if (snapshots.length === 0) {
+		console.log(`No snapshots of ${name}. Take one with \`skif volume snapshot ${name} --project ${project}\`.`);
+		return;
+	}
+	console.log(snapshotTable(snapshots));
+	const failed = snapshots.find((item) => item.status === 'failed');
+	if (failed) console.log(`\nLatest failure:\n${indent(snapshotDetails(failed).split('\n'))}`);
+}
+
+async function restoreVolume(argv: string[]): Promise<void> {
+	const parsed = parseSnapshotTarget(argv, restoreFlags, 'restore');
+	if (!parsed) return;
+	const { args, name, snapshotId } = parsed;
+	const project = projectOf(args);
+	const target = args.string('to');
+	if (!target) throw new UsageError('Name the new volume: --to <name>. A restore never overwrites the source.');
+	const size = args.string('size');
+	const client = await authenticatedClient();
+	const { volume, raw } = await client.restoreVolumeSnapshot(project, name, snapshotId, {
+		name: target,
+		...(size ? { sizeMb: parseMegabytes(size, '--size') } : {}),
+	});
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	console.log(
+		`Restoring ${snapshotId} into new volume "${volume.name}" (${volume.sizeMb} MB). It can be attached once its node finishes.`,
+	);
+	console.log(
+		`\nNext steps:\n${indent([
+			`Follow: skif volume show ${volume.name} --project ${project}`,
+			`Attach: skif volume attach ${volume.name} --project ${project} --mount /var/lib/app`,
+		])}`,
+	);
+}
+
+async function deleteSnapshot(argv: string[]): Promise<void> {
+	const parsed = parseSnapshotTarget(argv, deleteFlags, 'snapshot-delete');
+	if (!parsed) return;
+	const { args, name, snapshotId } = parsed;
+	const project = projectOf(args);
+	const confirmed = await confirmOrRefuse(
+		`Delete snapshot ${snapshotId} of "${name}" and its archive? This cannot be undone. [y/N] `,
+		{
+			yes: args.boolean('yes'),
+			refusal: `Not confirmed: stdin is not a terminal, so there's no one to ask before deleting ${snapshotId}.`,
+		},
+	);
+	if (!confirmed) {
+		console.error('Cancelled. Nothing was changed.');
+		process.exitCode = 1;
+		return;
+	}
+	const client = await authenticatedClient();
+	const { raw } = await client.deleteVolumeSnapshot(project, name, snapshotId);
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	console.log(`Deleted snapshot ${snapshotId} of ${name}.`);
 }
 
 async function createVolume(argv: string[]): Promise<void> {

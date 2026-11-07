@@ -172,6 +172,44 @@ export interface EmailCredentialCreateInput {
 	allowedFromDomains?: string[];
 }
 
+/** A sandbox recipient (EMAIL.md §4.3); mirrors `EmailSandboxAddressView`. */
+export interface EmailSandboxAddressView {
+	id: string;
+	address: string;
+	status: 'pending' | 'verified';
+	verifiedAt: string | null;
+	sentAt: string | null;
+	expiresAt: string | null;
+	createdAt: string;
+}
+
+export type EmailAccessRequestStatus = 'pending' | 'approved' | 'denied';
+
+/** A request to leave the sandbox (EMAIL.md §7.3); mirrors `EmailAccessRequestView`. */
+export interface EmailAccessRequestView {
+	id: string;
+	orgId: string;
+	orgName: string | null;
+	status: EmailAccessRequestStatus;
+	useCase: string;
+	expectedDailyVolume: number;
+	website: string | null;
+	requestedBy: { id: string; email: string | null };
+	decidedBy: string | null;
+	decidedAt: string | null;
+	note: string | null;
+	perDay: number | null;
+	perSecond: number | null;
+	createdAt: string;
+}
+
+/** Mirrors `emailAccessRequestCreateSchema` in @skiff/contracts. The server validates. */
+export interface EmailAccessRequestInput {
+	useCase: string;
+	expectedDailyVolume: number;
+	website?: string;
+}
+
 /** Mirrors `emailEnvNames` in @skiff/contracts (EMAIL.md §5.4). */
 export function emailEnvNames(prefix: string): string[] {
 	return ['HOST', 'PORT', 'SECURE', 'USER', 'PASSWORD', 'URL'].map((suffix) => `${prefix}_${suffix}`);
@@ -418,10 +456,56 @@ function rateLine(rate: number | null, warn: number, pause: number, digits: numb
 }
 
 const stateNotes: Record<EmailOrgState, string> = {
-	sandbox: 'only to your own verified domains and addresses; a platform admin can activate the org',
+	sandbox: 'only to your own verified domains and sandbox recipients; `skif email request-access` to leave it',
 	active: 'sending to anyone',
 	paused: 'every send is refused until a platform admin resumes the org',
 };
+
+/** Whether a pending address's link has run out (`now` in ms, for tests). */
+function linkExpired(address: EmailSandboxAddressView, now: number): boolean {
+	return address.expiresAt !== null && Date.parse(address.expiresAt) <= now;
+}
+
+export function emailAddressTable(addresses: EmailSandboxAddressView[], now = Date.now()): string {
+	return renderTable(
+		['ADDRESS', 'STATUS', 'VERIFIED', 'LINK EXPIRES', 'ADDED'],
+		addresses.map((item) => [
+			item.address,
+			item.status === 'pending' && linkExpired(item, now) ? 'link expired' : item.status,
+			formatTime(item.verifiedAt ?? undefined),
+			item.status === 'pending' ? formatTime(item.expiresAt ?? undefined) : '-',
+			formatTime(item.createdAt),
+		]),
+	);
+}
+
+/** The `skif email request-access` report for the org's latest request. */
+export function emailAccessRequestDetails(request: EmailAccessRequestView): string {
+	const lines: string[] = [];
+	const field = (label: string, value: string) => lines.push(`${label.padEnd(9)}  ${value}`);
+	field('Request', request.id);
+	field('Status', request.status);
+	field('Sent', `${formatTime(request.createdAt)} by ${request.requestedBy.email ?? request.requestedBy.id}`);
+	field('Volume', `${request.expectedDailyVolume.toLocaleString('en-US')} messages a day`);
+	if (request.website) field('Website', request.website);
+	field('Use case', truncate(request.useCase.replace(/\s+/g, ' '), 200));
+	if (request.decidedAt) field('Decided', formatTime(request.decidedAt));
+	if (request.status === 'approved' && request.perDay !== null)
+		field('Granted', `${request.perSecond}/s, ${request.perDay.toLocaleString('en-US')}/day`);
+	if (request.note) field(request.status === 'denied' ? 'Reason' : 'Note', request.note);
+	return lines.join('\n');
+}
+
+/** Parse `--volume`: a whole number of messages a day; `10k`/`2m` shorthands are accepted. */
+export function parseDailyVolume(value: string | undefined): number {
+	if (value === undefined || value.trim() === '') throw new UsageError('--volume is required: the messages a day you expect to send.');
+	const match = /^(\d+(?:\.\d+)?)\s*([km]?)$/i.exec(value.trim().replace(/[,_]/g, ''));
+	const scale = match?.[2]?.toLowerCase() === 'k' ? 1_000 : match?.[2]?.toLowerCase() === 'm' ? 1_000_000 : 1;
+	const volume = match ? Math.round(Number(match[1]) * scale) : Number.NaN;
+	if (!Number.isInteger(volume) || volume < 1 || volume > 10_000_000)
+		throw new UsageError(`--volume must be a whole number of messages a day between 1 and 10,000,000, got "${value}".`);
+	return volume;
+}
 
 /** The `skif email status` report. */
 export function emailStatusReport(org: EmailOrgView, settings: EmailSettingsView | null): string {

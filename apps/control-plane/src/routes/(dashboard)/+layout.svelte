@@ -5,6 +5,7 @@
 	import { browser } from '$app/env';
 	import { QueryClientProvider, createQuery } from '@tanstack/svelte-query';
 	import BellIcon from '@lucide/svelte/icons/bell';
+	import BookOpenIcon from '@lucide/svelte/icons/book-open';
 	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
 	import ChartAreaIcon from '@lucide/svelte/icons/chart-area';
 	import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
@@ -17,7 +18,7 @@
 	import WebhookIcon from '@lucide/svelte/icons/webhook';
 	import LayoutDashboardIcon from '@lucide/svelte/icons/layout-dashboard';
 	import NetworkIcon from '@lucide/svelte/icons/network';
-	import Share2Icon from '@lucide/svelte/icons/share-2';
+	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 	import LogOutIcon from '@lucide/svelte/icons/log-out';
 	import RocketIcon from '@lucide/svelte/icons/rocket';
 	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
@@ -82,7 +83,8 @@
 			| '/(dashboard)/deployments'
 			| '/(dashboard)/nodes'
 			| '/(dashboard)/audit'
-			| '/(dashboard)/settings';
+			| '/(dashboard)/settings'
+			| '/(dashboard)/docs';
 		path: string;
 		icon: typeof LayoutDashboardIcon;
 		/** Hidden unless this layout feature is on. */
@@ -151,10 +153,11 @@
 					feature: 'email'
 				},
 				{
-					label: 'Shares',
+					// NFS/SMB mounts, not a project's share links (those live on each project).
+					label: 'Network shares',
 					href: '/(dashboard)/shares',
 					path: '/shares',
-					icon: Share2Icon
+					icon: HardDriveIcon
 				},
 				{
 					label: 'Deployments',
@@ -189,6 +192,10 @@
 				{ label: 'Audit log', href: '/(dashboard)/audit', path: '/audit', icon: ScrollTextIcon },
 				{ label: 'Settings', href: '/(dashboard)/settings', path: '/settings', icon: SettingsIcon }
 			]
+		},
+		{
+			label: 'Help',
+			items: [{ label: 'Docs', href: '/(dashboard)/docs', path: '/docs', icon: BookOpenIcon }]
 		}
 	];
 	const nav = groups.flatMap((group) => group.items);
@@ -224,21 +231,6 @@
 		return key;
 	});
 
-	/** For panes whose "Back" remembers (Settings): the page the viewer entered them from. */
-	const enteredFrom = $state<Record<string, string>>({});
-	let previous = { key: 'main', url: '' };
-	$effect(() => {
-		const key = paneKey;
-		const url = page.url.pathname + page.url.search;
-		if (key !== previous.key && previous.url) enteredFrom[key] = previous.url;
-		previous = { key, url };
-	});
-	const backHref = $derived(
-		subnav?.back.remember
-			? (enteredFrom[subnav.key] ?? subnav.back.href)
-			: (subnav?.back.href ?? '')
-	);
-
 	function isActive(item: NavItem): boolean {
 		const current = page.url.pathname;
 		if (item.path === '/projects' && (current === '/new' || current.startsWith('/new/')))
@@ -251,7 +243,11 @@
 	}
 
 	/** Path segments whose label is not just the capitalised segment. */
-	const CRUMB_LABELS: Record<string, string> = { 'api-keys': 'API keys', usage: 'Usage & limits' };
+	const CRUMB_LABELS: Record<string, string> = {
+		'api-keys': 'API keys',
+		'connected-apps': 'Connected apps',
+		usage: 'Usage & limits'
+	};
 
 	/** Breadcrumbs from the URL: `/projects/foo` → Projects › foo. */
 	const crumbs = $derived.by(() => {
@@ -367,7 +363,7 @@
 								nav={subnav}
 								active={paneLocal?.active ?? subnav.active}
 								counts={paneLocal?.counts}
-								{backHref}
+								backHref={subnav.back.href}
 								select={paneLocal?.select}
 							/>
 						</nav>

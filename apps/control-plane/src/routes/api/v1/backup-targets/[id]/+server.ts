@@ -22,6 +22,8 @@ export const PUT = PATCH;
 export const DELETE: RequestHandler = (event) =>
 	route(() => {
 		const principal = requirePrincipal(event);
-		core.backupTargets.delete(principal, event.params.id);
-		return { deleted: true };
+		// `?force=1` deletes a target that still holds backups; they stay listed as unavailable.
+		const force = ['1', 'true'].includes(event.url.searchParams.get('force') ?? '');
+		const { unavailableBackups } = core.backupTargets.delete(principal, event.params.id, { force });
+		return { deleted: true, unavailableBackups };
 	});

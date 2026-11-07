@@ -14,6 +14,10 @@
  * chacha20-poly1305 cipher and the `age` CLI only reads passphrases from a TTY, which rules out
  * non-interactive restores and tests. Only the scrypt recipient type is supported.
  *
+ * The master key is read from whichever store the host uses (install/master-key.ts): the
+ * systemd-creds sealed `master.key.cred` (decrypted with `systemd-creds decrypt`, root only) or
+ * the plaintext `master.key`. `import` writes back into the same kind of store.
+ *
  * The passphrase comes from `--passphrase-file`, `$SKIFF_RECOVERY_PASSPHRASE_FILE`, or a no-echo
  * prompt on /dev/tty. An empty passphrase on export generates a strong one and prints it once.
  */
@@ -23,6 +27,7 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, chownSync, copyFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { basename } from 'node:path';
+import { detectCredsSupport, locateMasterKey, readMasterKey, sealMasterKey, type MasterKeyStore } from './install/master-key.ts';
 
 // ---------------------------------------------------------------------------------------------
 // ChaCha20-Poly1305 (RFC 8439)
@@ -470,14 +475,18 @@ const USAGE = `Usage:
 The kit is a standard age file: \`age -d kit.age\` also opens it.
 `;
 
+/** Keep a timestamped root-only copy of `path` (when it exists) before it is replaced. */
+function backupFile(path: string): string | null {
+	if (!existsSync(path)) return null;
+	const backup = `${path}.pre-recovery-${new Date().toISOString().replace(/[:.]/g, '').slice(0, 15)}Z`;
+	copyFileSync(path, backup);
+	chmodSync(backup, 0o400);
+	return backup;
+}
+
 /** Atomic write with mode and (when root) ownership; keeps a timestamped copy of what it replaces. */
 function installFile(path: string, content: string, mode: number, owner: { uid: number; gid: number } | null): string | null {
-	let backup: string | null = null;
-	if (existsSync(path)) {
-		backup = `${path}.pre-recovery-${new Date().toISOString().replace(/[:.]/g, '').slice(0, 15)}Z`;
-		copyFileSync(path, backup);
-		chmodSync(backup, 0o400);
-	}
+	const backup = backupFile(path);
 	const tmp = `${path}.tmp-${process.pid}`;
 	writeFileSync(tmp, content, { mode });
 	chmodSync(tmp, mode);
@@ -490,6 +499,15 @@ function groupId(name: string): number | null {
 	const result = spawnSync('getent', ['group', name], { encoding: 'utf8' });
 	const gid = result.status === 0 ? Number(result.stdout.split(':')[2]) : NaN;
 	return Number.isInteger(gid) ? gid : null;
+}
+
+/** The plaintext key behind the host's store; exits with systemd-creds' reason on failure. */
+function keyOf(store: MasterKeyStore): string {
+	try {
+		return readMasterKey(store);
+	} catch (error) {
+		fail(`${(error as Error).message}${store.kind === 'sealed' ? ' (run as root on the host that sealed it)' : ''}`);
+	}
 }
 
 export async function main(argv: string[]): Promise<void> {
@@ -507,8 +525,9 @@ export async function main(argv: string[]): Promise<void> {
 	const isRoot = process.getuid?.() === 0;
 
 	if (args.command === 'export') {
-		if (!existsSync(MASTER_KEY_FILE)) fail(`missing ${MASTER_KEY_FILE} (is Skiff installed?)`);
-		const masterKey = readFileSync(MASTER_KEY_FILE, 'utf8');
+		const store = locateMasterKey(MASTER_KEY_FILE);
+		if (!store) fail(`missing ${MASTER_KEY_FILE} (is Skiff installed?)`);
+		const masterKey = keyOf(store);
 		const env = args.includeEnv ? readFileSync(ENV_FILE, 'utf8') : undefined;
 		const kit = buildKit({ masterKey, env });
 		const out = args.out ?? `${isRoot ? '/root' : process.env.HOME ?? '.'}/skiff-recovery-kit-${kit.host}-${kit.createdAt.slice(0, 10)}.age`;
@@ -554,7 +573,19 @@ export async function main(argv: string[]): Promise<void> {
 		} catch (error) {
 			fail((error as Error).message);
 		}
-		const current = existsSync(MASTER_KEY_FILE) ? fingerprint(readFileSync(MASTER_KEY_FILE, 'utf8')) : null;
+		const store = locateMasterKey(MASTER_KEY_FILE);
+		// A sealed key that does not open here (rebuilt host, reset TPM, not root) is "unknown":
+		// verify fails, import replaces it only with --force.
+		let current: string | null = null;
+		let unreadable: string | null = null;
+		if (store) {
+			try {
+				current = fingerprint(readMasterKey(store));
+			} catch (error) {
+				unreadable = (error as Error).message;
+			}
+		}
+		const keyPath = store?.path ?? MASTER_KEY_FILE;
 		process.stdout.write(
 			`Recovery kit ${basename(args.file)}: created ${kit.createdAt} on ${kit.host}` +
 				`${kit.platformOrigin ? ` (${kit.platformOrigin})` : ''}, fingerprint ${kit.fingerprint}` +
@@ -562,6 +593,7 @@ export async function main(argv: string[]): Promise<void> {
 		);
 
 		if (args.command === 'verify') {
+			if (unreadable !== null) fail(`kit decrypts, but this host's master key cannot be read: ${unreadable} (run as root on the host that sealed it)`);
 			if (current === null) fail(`kit decrypts, but ${MASTER_KEY_FILE} is missing so it cannot be compared`);
 			if (current !== kit.fingerprint) fail(`kit decrypts, but this host's master key fingerprint is ${current}`);
 			process.stdout.write('OK: the kit decrypts and matches this host\'s master key.\n');
@@ -569,11 +601,23 @@ export async function main(argv: string[]): Promise<void> {
 		}
 
 		if (!isRoot && !process.env.SKIFF_ETC_DIR) fail('run as root');
+		if (unreadable !== null && !args.force)
+			fail(`${unreadable}; pass --force to replace it with the kit's key (a backup copy is kept)`);
 		if (current !== null && current !== kit.fingerprint && !args.force)
-			fail(`${MASTER_KEY_FILE} holds a different key (fingerprint ${current}); pass --force to replace it (a backup copy is kept)`);
-		if (current === kit.fingerprint) process.stdout.write(`${MASTER_KEY_FILE} already matches the kit.\n`);
-		else {
-			// Same as the installer: root-only, read through LoadCredential= by the control plane.
+			fail(`${keyPath} holds a different key (fingerprint ${current}); pass --force to replace it (a backup copy is kept)`);
+		if (current === kit.fingerprint) process.stdout.write(`${keyPath} already matches the kit.\n`);
+		else if (store?.kind === 'sealed') {
+			// Same store as the installer chose: sealed again with this host's systemd-creds keys.
+			const backup = backupFile(store.path);
+			let binding: string;
+			try {
+				binding = sealMasterKey(kit.masterKey, store.path, { tpm2: detectCredsSupport().tpm2 });
+			} catch (error) {
+				fail((error as Error).message);
+			}
+			process.stdout.write(`Sealed the kit's key into ${store.path} (${binding})${backup ? ` (previous file kept at ${backup})` : ''}\n`);
+		} else {
+			// Same as the installer without systemd-creds: root-only, read through LoadCredential=.
 			const backup = installFile(MASTER_KEY_FILE, `${kit.masterKey}\n`, 0o400, isRoot ? { uid: 0, gid: 0 } : null);
 			process.stdout.write(`Wrote ${MASTER_KEY_FILE}${backup ? ` (previous key kept at ${backup})` : ''}\n`);
 		}

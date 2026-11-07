@@ -257,6 +257,20 @@ async function proxy(deps: StudioProxyDeps, call: StudioProxyCall): Promise<Resp
 		);
 	}
 
+	// Caddy answers an unmatched host with an empty 200: the gateway route is not applied yet (or
+	// the node's front is not listening), never a studio answer. Every studio op sets a content
+	// type, so turn it into a retryable protocol error instead of an empty body the browser
+	// cannot parse.
+	if (upstream.ok && upstream.headers.get('content-type') === null) {
+		await upstream.body?.cancel().catch(() => {});
+		return studioErrorResponse(
+			new StudioError(
+				'studio_unavailable',
+				'The database studio is not reachable yet. Try again in a moment.'
+			)
+		);
+	}
+
 	if (op === 'apply' && upstream.status === 200) {
 		const text = await upstream.text();
 		let result: { applied: number } | null = null;

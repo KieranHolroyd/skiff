@@ -43,6 +43,7 @@
 	const passwordSaved = $derived(data.email.secretsSet.includes('SKIFF_SMTP_PASSWORD'));
 	const sms = $derived(data.sms.values);
 	const authTokenSaved = $derived(data.sms.secretsSet.includes('SKIFF_TWILIO_AUTH_TOKEN'));
+	const webhookSecretSaved = $derived(data.alerts.secretsSet.includes('SKIFF_ALERT_WEBHOOK_SECRET'));
 	const smsNumbers = $derived(
 		(alerts.SKIFF_ALERT_SMS ?? '')
 			.split(',')
@@ -256,6 +257,11 @@
 						<WebhookIcon class="size-3.5" />Webhook
 					</dt>
 					<dd class="font-mono text-sm break-all">{alerts.SKIFF_ALERT_WEBHOOK ?? '—'}</dd>
+					{#if alerts.SKIFF_ALERT_WEBHOOK}
+						<dd class="text-xs text-muted-foreground">
+							{webhookSecretSaved ? 'Signed with X-Skiff-Signature' : 'Not signed'}
+						</dd>
+					{/if}
 				</div>
 				<div class="space-y-1">
 					<dt class="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -458,10 +464,37 @@
 			/>
 			{#if fieldErrors.webhook}<Field.Error>{fieldErrors.webhook}</Field.Error>
 			{:else}<Field.Description>
-					Receives a JSON POST with <code>title</code>, <code>message</code>, <code>severity</code>
-					and <code>key</code>. Works with ntfy, Home Assistant and most chat webhooks.
+					Receives a JSON POST with <code>title</code>, <code>message</code>, <code>severity</code>,
+					<code>key</code>, <code>status</code>, <code>url</code> and <code>labels</code>. Works with
+					ntfy, Home Assistant and most chat webhooks.
 				</Field.Description>{/if}
 		</Field.Field>
+		<Field.Field data-invalid={fieldErrors.webhookSecret ? true : undefined}>
+			<Field.Label for="alert-webhook-secret">Signing secret (optional)</Field.Label>
+			<Input
+				id="alert-webhook-secret"
+				name="webhookSecret"
+				type="password"
+				autocomplete="new-password"
+				spellcheck={false}
+				class="font-mono"
+				placeholder={webhookSecretSaved ? 'Saved — leave blank to keep' : 'openssl rand -hex 32'}
+				aria-invalid={fieldErrors.webhookSecret ? 'true' : undefined}
+			/>
+			{#if fieldErrors.webhookSecret}<Field.Error>{fieldErrors.webhookSecret}</Field.Error>
+			{:else}<Field.Description>
+					Signs each request with an HMAC-SHA256 <code>X-Skiff-Signature</code> header, so the receiver
+					can check it came from Skiff. Not used for Discord or Slack URLs.
+				</Field.Description>{/if}
+		</Field.Field>
+		{#if webhookSecretSaved}
+			<Field.Field orientation="horizontal" class="gap-2">
+				<Checkbox id="alert-webhook-secret-remove" name="removeWebhookSecret" value="1" />
+				<Field.Label for="alert-webhook-secret-remove" class="font-normal"
+					>Remove the signing secret</Field.Label
+				>
+			</Field.Field>
+		{/if}
 		<Field.Field data-invalid={fieldErrors.email ? true : undefined}>
 			<Field.Label for="alert-email">Email alerts to</Field.Label>
 			<Input

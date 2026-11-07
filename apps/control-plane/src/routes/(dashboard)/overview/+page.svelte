@@ -10,11 +10,15 @@
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
 	import CircleXIcon from '@lucide/svelte/icons/circle-x';
+	import CpuIcon from '@lucide/svelte/icons/cpu';
 	import CylinderIcon from '@lucide/svelte/icons/cylinder';
 	import DatabaseIcon from '@lucide/svelte/icons/database';
 	import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
+	import GaugeIcon from '@lucide/svelte/icons/gauge';
 	import HammerIcon from '@lucide/svelte/icons/hammer';
+	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 	import InfoIcon from '@lucide/svelte/icons/info';
+	import MemoryStickIcon from '@lucide/svelte/icons/memory-stick';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import RocketIcon from '@lucide/svelte/icons/rocket';
 	import ServerIcon from '@lucide/svelte/icons/server';
@@ -32,7 +36,8 @@
 	import TrafficDashboard from '../_lib/TrafficDashboard.svelte';
 	import StatStrip from '../_lib/service/StatStrip.svelte';
 	import type { Stat } from '../_lib/service/sections.js';
-	import { formatBytes, formatRelative, plural, shortSha } from '../_lib/format.js';
+	import { formatBytes, formatDuration, formatRelative, plural, shortSha } from '../_lib/format.js';
+	import type { ResourceSummary } from './resources.js';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -109,6 +114,118 @@
 						: `${totalNodes - online} offline`
 		}
 	]);
+
+	// --- server resources ---------------------------------------------------------------------
+
+	/*
+	 * Heartbeats land every ~10 s; poll a small endpoint rather than re-running the whole load.
+	 * Whichever of the polled and page-loaded summaries is newer wins, so a navigation or an
+	 * invalidate never shows older figures than the poll already had.
+	 */
+	const RESOURCE_POLL_MS = 10_000;
+	let polled = $state<ResourceSummary | null>(null);
+	const resources = $derived(
+		polled && data.resources && Date.parse(polled.at) > Date.parse(data.resources.at)
+			? polled
+			: data.resources
+	);
+	const resourcesEnabled = $derived(data.resources !== null);
+	$effect(() => {
+		if (!resourcesEnabled) return;
+		let stopped = false;
+		const tick = async () => {
+			if (stopped || document.hidden) return;
+			try {
+				const response = await fetch(resolve('/(dashboard)/overview/resources'), {
+					headers: { accept: 'application/json' }
+				});
+				if (response.status === 401 || response.status === 403) {
+					stopped = true;
+					return;
+				}
+				if (response.ok) polled = (await response.json()) as ResourceSummary;
+			} catch {
+				// A missed poll is harmless; the next one catches up.
+			}
+		};
+		const timer = setInterval(() => void tick(), RESOURCE_POLL_MS);
+		const onVisible = () => {
+			if (!document.hidden) void tick();
+		};
+		document.addEventListener('visibilitychange', onVisible);
+		return () => {
+			stopped = true;
+			clearInterval(timer);
+			document.removeEventListener('visibilitychange', onVisible);
+		};
+	});
+
+	const liveNodeStats = $derived(
+		new Map((resources?.nodes ?? []).map((node) => [node.id, node.stats]))
+	);
+
+	const pctOf = (used: number | null, size: number | null) =>
+		used !== null && size ? (used / size) * 100 : null;
+
+	const resourceStats = $derived.by((): Stat[] => {
+		const fleet = resources?.fleet;
+		if (!fleet || fleet.reporting === 0) return [];
+		const many = fleet.reporting > 1;
+		const memPct = pctOf(fleet.memoryUsedBytes, fleet.memoryTotalBytes);
+		const diskPct = pctOf(fleet.diskUsedBytes, fleet.diskTotalBytes);
+		const hot = (spot: { name: string; pct: number } | null) =>
+			spot ? `busiest: ${spot.name} at ${spot.pct.toFixed(0)}%` : null;
+		return [
+			{
+				label: many ? 'CPU (fleet)' : 'CPU',
+				value: fleet.cpuPercent === null ? '—' : `${fleet.cpuPercent.toFixed(0)}%`,
+				icon: CpuIcon,
+				meter: fleet.cpuPercent,
+				caption:
+					hot(fleet.busiest.cpu) ??
+					(fleet.cpus !== null
+						? `${fleet.cpus} logical ${plural(fleet.cpus, 'CPU')}`
+						: 'Share of all cores in use')
+			},
+			{
+				label: 'Memory',
+				value: formatBytes(fleet.memoryUsedBytes),
+				unit: fleet.memoryTotalBytes ? `/ ${formatBytes(fleet.memoryTotalBytes)}` : undefined,
+				icon: MemoryStickIcon,
+				meter: memPct,
+				caption:
+					hot(fleet.busiest.memory) ??
+					(memPct !== null && fleet.memoryTotalBytes !== null && fleet.memoryUsedBytes !== null
+						? `${memPct.toFixed(0)}% used · ${formatBytes(fleet.memoryTotalBytes - fleet.memoryUsedBytes)} available`
+						: 'Not reported')
+			},
+			{
+				label: 'Disk',
+				value: formatBytes(fleet.diskUsedBytes),
+				unit: fleet.diskTotalBytes ? `/ ${formatBytes(fleet.diskTotalBytes)}` : undefined,
+				icon: HardDriveIcon,
+				meter: diskPct,
+				caption:
+					hot(fleet.busiest.disk) ??
+					(diskPct !== null && fleet.diskTotalBytes !== null && fleet.diskUsedBytes !== null
+						? `${formatBytes(fleet.diskTotalBytes - fleet.diskUsedBytes)} free on the data volume`
+						: 'Not reported')
+			},
+			{
+				label: 'Load (1 min)',
+				value: fleet.load1 === null ? '—' : fleet.load1.toFixed(2),
+				unit: fleet.cpus !== null ? `/ ${fleet.cpus} ${plural(fleet.cpus, 'CPU')}` : undefined,
+				icon: GaugeIcon,
+				meter: fleet.load1 !== null && fleet.cpus ? (fleet.load1 / fleet.cpus) * 100 : null,
+				caption:
+					fleet.uptimeSeconds === null
+						? undefined
+						: many
+							? `Last restart ${formatDuration(fleet.uptimeSeconds)} ago`
+							: `Up ${formatDuration(fleet.uptimeSeconds)}`
+			}
+		];
+	});
 
 	// --- needs attention ----------------------------------------------------------------------
 
@@ -228,6 +345,33 @@
 	{/if}
 
 	<StatStrip label="Fleet summary" {stats} />
+
+	{#if resources}
+		<section aria-labelledby="server-resources" class="space-y-2">
+			<div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+				<h2 id="server-resources" class="text-sm font-medium">Server resources</h2>
+				<p class="text-xs text-muted-foreground">
+					{#if resources.fleet.reporting > 0}
+						{resources.fleet.reporting === resources.fleet.online
+							? resources.fleet.reporting === 1
+								? 'From the node heartbeat'
+								: `Across ${resources.fleet.reporting} online nodes`
+							: `${resources.fleet.reporting} of ${resources.fleet.online} online nodes reporting`}
+						· refreshes every {RESOURCE_POLL_MS / 1000}s
+					{/if}
+				</p>
+			</div>
+			{#if resourceStats.length > 0}
+				<StatStrip label="Server resources" stats={resourceStats} />
+			{:else}
+				<p class="rounded-xl border px-4 py-3 text-sm text-muted-foreground">
+					{resources.fleet.online === 0
+						? 'No node is online, so there are no live CPU, memory or disk figures.'
+						: 'No online node has reported CPU, memory or disk figures yet. Agents send them with each heartbeat.'}
+				</p>
+			{/if}
+		</section>
+	{/if}
 
 	<TrafficDashboard
 		traffic={data.traffic}
@@ -412,7 +556,7 @@
 										: 'never seen'}
 								</span>
 							</div>
-							<NodeStats stats={node.stats} />
+							<NodeStats stats={liveNodeStats.get(node.id) ?? node.stats} />
 						</li>
 					{/each}
 				</ul>

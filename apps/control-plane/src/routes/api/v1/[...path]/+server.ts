@@ -1,6 +1,6 @@
 import type { RequestHandler } from './$types';
 import * as z from 'zod';
-import { MetricsExporter, PROMETHEUS_CONTENT_TYPE, ValidationError } from '@skiff/core';
+import { MetricsExporter, PROMETHEUS_CONTENT_TYPE, ValidationError, parseAuditTime } from '@skiff/core';
 import {
 	projectCreateSchema,
 	projectUpdateSchema,
@@ -357,16 +357,20 @@ const api: RequestHandler = async (event) => {
 		// --- audit ------------------------------------------------------------
 		if (segments[0] === 'audit' && segments.length === 1) {
 			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
-			const rawLimit = Number(event.url.searchParams.get('limit') ?? 50);
+			// `from`/`to`: epoch ms, ISO 8601 or a date (a date as `to` covers that whole day, UTC).
+			// `cursor`: the previous answer's `nextCursor`, for the next (older) page.
+			const query = event.url.searchParams;
+			const rawLimit = Number(query.get('limit') ?? 50);
 			const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : 50;
-			return {
-				entries: core.audit.list({
-					principal,
-					limit,
-					action: event.url.searchParams.get('action') ?? undefined,
-					resource: event.url.searchParams.get('resource') ?? undefined,
-				}),
-			};
+			return core.audit.page({
+				principal,
+				limit,
+				action: query.get('action') || undefined,
+				resource: query.get('resource') || undefined,
+				from: parseAuditTime(query.get('from'), 'from'),
+				to: parseAuditTime(query.get('to'), 'to'),
+				cursor: query.get('cursor') || null,
+			});
 		}
 
 		// --- secrets (metadata only; values never leave the platform) ---------

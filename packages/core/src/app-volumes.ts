@@ -1,7 +1,6 @@
 import { and, eq, isNull } from 'drizzle-orm';
 import {
 	appVolumeAttachments,
-	appVolumeSnapshots,
 	appVolumes,
 	nodeVolumes,
 	nodes,
@@ -10,6 +9,8 @@ import {
 } from '@skiff/db';
 import {
 	APP_VOLUME_ID_PREFIX,
+	APP_VOLUME_USAGE_WARN_PERCENT,
+	appVolumeUsagePercent,
 	appVolumeAttachSchema,
 	appVolumeCreateSchema,
 	appVolumeDetachSchema,
@@ -27,6 +28,7 @@ import {
 	type WorkloadVolumeMount,
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
+import { AppVolumeLifecycle } from './app-volume-lifecycle.ts';
 import { featureEnabled } from './config.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { newId, parseJson } from './util.ts';
@@ -89,10 +91,20 @@ export function nodeDiskFreeBytes(stats: unknown): number | null {
  * are unlimited.
  */
 export class AppVolumeService {
-	constructor(private readonly ctx: CoreContext) {}
+	/** Snapshots, restores, usage and the trash purge (app-volume-lifecycle.ts). */
+	readonly lifecycle: AppVolumeLifecycle;
+
+	constructor(private readonly ctx: CoreContext) {
+		this.lifecycle = new AppVolumeLifecycle(ctx, this);
+	}
 
 	enabled(): boolean {
 		return featureEnabled(this.ctx.config, 'APP_VOLUMES');
+	}
+
+	/** Throws `feature_disabled` (404) while SKIFF_FEATURE_APP_VOLUMES is off. */
+	assertFeature(): void {
+		this.assertEnabled();
 	}
 
 	private assertEnabled(): void {
@@ -158,7 +170,16 @@ export class AppVolumeService {
 
 	// ---------------------------------------------------------------- lifecycle
 
-	create(principal: Principal, project: ProjectRow, raw: AppVolumeCreate): AppVolumeView {
+	/**
+	 * Create a volume. `restoreFrom` (used by `lifecycle.restore`) marks it as being filled from a
+	 * snapshot: it stays `pending` and unattachable until its node reports the restore.
+	 */
+	create(
+		principal: Principal,
+		project: ProjectRow,
+		raw: AppVolumeCreate,
+		options: { restoreFrom?: { snapshotId: string; sourceName: string } } = {},
+	): AppVolumeView {
 		this.assertEnabled();
 		requirePermission(principal, 'project:update');
 		if (project.runtime === 'static')
@@ -177,6 +198,8 @@ export class AppVolumeService {
 					? `Volume "${input.name}" is in the trash. Wait for it to purge or pick another name.`
 					: `Volume "${input.name}" already exists in this project.`,
 			);
+		// Org quotas (docs/QUOTAS.md) before disk admission: the quota is policy, the disk is physics.
+		this.ctx.quota.assertCanCreateVolume(principal.orgId, project.id, input.sizeMb);
 
 		let nodeId: string;
 		let nodeVolumeId: string | null = null;
@@ -207,6 +230,8 @@ export class AppVolumeService {
 
 		const node = this.ctx.db.select().from(nodes).where(eq(nodes.id, nodeId)).get();
 		if (!node) throw new NotFoundError('Node');
+		const restoreFrom = options.restoreFrom;
+		if (restoreFrom) this.lifecycle.assertNodeCapable(nodeId, 'restore');
 		const now = this.ctx.now();
 		const id = newId(APP_VOLUME_ID_PREFIX);
 		this.ctx.db
@@ -222,9 +247,10 @@ export class AppVolumeService {
 				sizeMb: input.sizeMb,
 				usedBytes: null,
 				mountPath: '',
-				status: 'ready',
-				message: null,
+				status: restoreFrom ? 'pending' : 'ready',
+				message: restoreFrom ? `Restoring from snapshot ${restoreFrom.snapshotId} of "${restoreFrom.sourceName}".` : null,
 				singleWriter: input.singleWriter,
+				restoreSnapshotId: restoreFrom?.snapshotId ?? null,
 				createdBy: principal.userId,
 				createdAt: now,
 				updatedAt: now,
@@ -242,9 +268,11 @@ export class AppVolumeService {
 				backing: input.backing,
 				...(input.nodeVolume ? { nodeVolume: input.nodeVolume } : {}),
 				nodeId,
+				...(restoreFrom ? { restoreFrom: restoreFrom.snapshotId, source: restoreFrom.sourceName } : {}),
 			},
 			result: 'ok',
 		});
+		if (restoreFrom) this.ctx.nodes.bump();
 		return this.toView(this.requireRow(principal, project, input.name), project);
 	}
 
@@ -259,6 +287,7 @@ export class AppVolumeService {
 				`Volume "${name}" is ${row.sizeMb} MB; shrinking to ${input.sizeMb} MB is not supported. Create a new volume and copy the data.`,
 			);
 		if (input.sizeMb !== undefined && input.sizeMb > row.sizeMb) {
+			this.ctx.quota.assertCanResizeVolume(principal.orgId, project.id, row.sizeMb, input.sizeMb);
 			const freeBytes = row.nodeVolumeId
 				? this.nodeVolumeFreeBytes(row.nodeVolumeId)
 				: this.diskFreeForNode(row.nodeId);
@@ -307,6 +336,8 @@ export class AppVolumeService {
 		this.assertEnabled();
 		requirePermission(principal, 'project:update');
 		const row = this.requireRow(principal, project, name);
+		if (row.restoreSnapshotId)
+			throw new ConflictError(`Volume "${name}" is being restored; wait for the restore to finish (or fail) before deleting it.`);
 		const attached = this.ctx.db
 			.select({ id: appVolumeAttachments.id })
 			.from(appVolumeAttachments)
@@ -347,6 +378,12 @@ export class AppVolumeService {
 		const input = appVolumeAttachSchema.parse(raw);
 		const row = this.requireRow(principal, project, name);
 		if (row.deletedAt) throw new ConflictError(`Volume "${name}" is in the trash.`);
+		if (row.restoreSnapshotId)
+			throw new ConflictError(
+				`Volume "${name}" is still being restored from snapshot ${row.restoreSnapshotId}; attach it once it is ready.`,
+			);
+		if (row.status === 'failed')
+			throw new ConflictError(row.message ?? `Volume "${name}" failed. Delete it and create or restore it again.`);
 		const workload = this.resolveWorkload(project, input.workload);
 		if (workload.nodeId && workload.nodeId !== row.nodeId)
 			throw new ConflictError(
@@ -534,31 +571,10 @@ export class AppVolumeService {
 		return new Map(rows.map((row) => [row.nodeId, row.total ?? 0]));
 	}
 
-	// ---------------------------------------------------------------- snapshots (stub)
+	// ---------------------------------------------------------------- snapshots
 
 	snapshots(volumeId: string): AppVolumeSnapshotView[] {
-		return this.ctx.db
-			.select()
-			.from(appVolumeSnapshots)
-			.where(eq(appVolumeSnapshots.volumeId, volumeId))
-			.all()
-			.sort((a, b) => b.createdAt - a.createdAt)
-			.map((row) => ({
-				id: row.id,
-				volumeId: row.volumeId,
-				target: row.targetId ? { id: row.targetId, name: row.targetId } : null,
-				objectKey: row.objectKey,
-				sizeBytes: row.sizeBytes,
-				checksum: row.checksum,
-				pinned: row.pinned,
-				status: row.status,
-				error: row.error,
-				createdAt: new Date(row.createdAt).toISOString(),
-				expiresAt: row.expiresAt ? new Date(row.expiresAt).toISOString() : null,
-				restoreVerifiedAt: row.restoreVerifiedAt
-					? new Date(row.restoreVerifiedAt).toISOString()
-					: null,
-			}));
+		return this.lifecycle.snapshotViews(volumeId);
 	}
 
 	// ---------------------------------------------------------------- internals
@@ -599,6 +615,9 @@ export class AppVolumeService {
 				: null,
 			sizeMb: row.sizeMb,
 			usedBytes: row.usedBytes,
+			usedAt: row.usedAt ? new Date(row.usedAt).toISOString() : null,
+			nearQuota: (appVolumeUsagePercent(row) ?? 0) >= APP_VOLUME_USAGE_WARN_PERCENT,
+			restoringFrom: row.restoreSnapshotId,
 			mountPath: row.mountPath || attachments[0]?.mountPath || '',
 			status,
 			message,

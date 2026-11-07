@@ -1,0 +1,12 @@
+{
+	"runtime": "process",
+	"engine": "node",
+	"memoryMb": 128,
+	"cpus": 1,
+	"healthPath": "/health",
+	"socketActivation": true,
+	"idleStopSeconds": 300,
+	"env": {
+		"NODE_ENV": "production"
+	}
+}

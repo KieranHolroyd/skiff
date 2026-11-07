@@ -37,4 +37,15 @@ describe('builder config', () => {
 		expect(() => loadConfig({ ...config, SKIFF_GIT_TOKEN_HOSTS: 'https://github.com' })).toThrow(ConfigError);
 		expect(() => loadConfig({ ...config, SKIFF_GIT_TOKEN_HOSTS: 'evil/.com' })).toThrow(ConfigError);
 	});
+
+	test('reads an SSH deploy key and a pinned known_hosts file as plain absolute paths', () => {
+		const config = { ...base, SKIFF_BUILDER_SYSTEMD: 'true', SKIFF_BUILDER_USER: 'skiff-build' };
+		expect(loadConfig(config)).toMatchObject({ gitSshKey: null, gitSshKnownHosts: null });
+		expect(
+			loadConfig({ ...config, SKIFF_GIT_SSH_KEY: '/etc/skiff/git-deploy-key', SKIFF_GIT_SSH_KNOWN_HOSTS: '/etc/skiff/git-known-hosts' }),
+		).toMatchObject({ gitSshKey: '/etc/skiff/git-deploy-key', gitSshKnownHosts: '/etc/skiff/git-known-hosts' });
+		expect(() => loadConfig({ ...config, SKIFF_GIT_SSH_KEY: 'relative/key' })).toThrow(ConfigError);
+		expect(() => loadConfig({ ...config, SKIFF_GIT_SSH_KEY: "/etc/skiff/key'; rm -rf /" })).toThrow(ConfigError);
+		expect(() => loadConfig({ ...config, SKIFF_GIT_SSH_KNOWN_HOSTS: '/etc/../tmp/kh' })).toThrow(ConfigError);
+	});
 });

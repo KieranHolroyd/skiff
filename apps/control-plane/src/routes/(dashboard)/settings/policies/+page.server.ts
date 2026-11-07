@@ -50,7 +50,7 @@ export const actions: Actions = {
 
 		const before = core.policies.get();
 		try {
-			const saved = core.policies.update(update);
+			const saved = core.policies.update(principal, update);
 			const changed = (Object.keys(saved) as PlatformPolicyKey[]).filter(
 				(key) => saved[key] !== before[key]
 			);

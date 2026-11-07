@@ -1,5 +1,7 @@
 import {
 	CLUSTER_CONFIG_KEY,
+	canAdministerPlatform,
+	canViewPlatform,
 	clusterConfigSchema,
 	clusterConfigUpdateSchema,
 	type ClusterConfig,
@@ -7,10 +9,13 @@ import {
 	type Principal,
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
-import { ValidationError } from './errors.ts';
+import { CoreError, ValidationError } from './errors.ts';
 
 /**
  * Cluster configuration (Settings → Clustering). One settings row, cached and re-read on save.
+ * Platform-wide: platform admins read it (`view`), and only a platform admin's own dashboard
+ * session changes it (`update`; API keys and OAuth tokens never carry platform scope, D107).
+ * `get()` is the unchecked internal read the scheduler, nodes and replicas use.
  */
 export class ClusterConfigService {
 	#cache: ClusterConfig | null = null;
@@ -42,7 +47,20 @@ export class ClusterConfigService {
 		return this.#cache;
 	}
 
+	/** The configuration for a surface: platform admins only. */
+	view(principal: Principal): ClusterConfig {
+		if (!canViewPlatform(principal))
+			throw new CoreError('forbidden', 'Only a platform admin can read the cluster configuration.', 403);
+		return this.get();
+	}
+
 	update(principal: Principal, input: unknown): ClusterConfig {
+		if (!canAdministerPlatform(principal))
+			throw new CoreError(
+				'forbidden',
+				'Only a platform admin signed in to the dashboard can change the cluster configuration.',
+				403,
+			);
 		const patch = clusterConfigUpdateSchema.safeParse(input);
 		if (!patch.success) throw new ValidationError('Invalid cluster configuration.', patch.error.issues);
 		const current = this.get();
@@ -69,6 +87,8 @@ export class ClusterConfigService {
 			[CLUSTER_CONFIG_KEY, JSON.stringify(merged.data), this.ctx.now()],
 		);
 		this.#cache = merged.data;
+		// The edge's health-check interval is in every replicated route: re-render desired state.
+		if (merged.data.replicas.healthIntervalSeconds !== current.replicas.healthIntervalSeconds) this.ctx.projects.bump();
 		this.ctx.audit.record({
 			principal,
 			action: 'platform.cluster_config',

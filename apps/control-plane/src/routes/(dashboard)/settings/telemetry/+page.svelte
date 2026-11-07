@@ -3,6 +3,8 @@
 	import ChartAreaIcon from '@lucide/svelte/icons/chart-area';
 	import DownloadIcon from '@lucide/svelte/icons/download';
 	import FeatherIcon from '@lucide/svelte/icons/feather';
+	import MemoryStickIcon from '@lucide/svelte/icons/memory-stick';
+	import RotateCwIcon from '@lucide/svelte/icons/rotate-cw';
 	import TerminalIcon from '@lucide/svelte/icons/terminal';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
@@ -11,6 +13,8 @@
 	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
+	import * as Field from '#lib/components/ui/field/index.js';
+	import { Input } from '#lib/components/ui/input/index.js';
 	import EmptyState from '../../_lib/EmptyState.svelte';
 	import Panel from '../../_lib/Panel.svelte';
 	import { formatBytes, formatDuration } from '../../_lib/format.js';
@@ -27,7 +31,7 @@
 	const SMALL_HOST = 2 * 1024 ** 3;
 	const smallHost = $derived(t.host.totalMemoryBytes < SMALL_HOST);
 
-	const state = $derived(
+	const badge = $derived(
 		!t.installed && !t.unitPresent
 			? { label: 'Not installed', tone: 'neutral' as const }
 			: t.available
@@ -40,9 +44,52 @@
 	function install() {
 		askConfirm({
 			title: 'Install the telemetry store?',
-			description: `Skiff downloads ClickHouse 26.8 LTS (about 240 MB, checksum-verified) and runs it on 127.0.0.1 only, capped at 1 GB of memory (typically 300–800 MB in use). This host has ${formatBytes(t.host.totalMemoryBytes)} of RAM. The dashboard restarts for a few seconds when it is ready.`,
+			description: `Skiff downloads ClickHouse 26.8 LTS (about 240 MB, checksum-verified) and runs it on 127.0.0.1 only, with a ${t.memory.defaultMb} MiB memory ceiling (typically 300–800 MB in use; adjustable afterwards). This host has ${formatBytes(t.host.totalMemoryBytes)} of RAM. The dashboard restarts for a few seconds when it is ready.`,
 			confirmLabel: 'Install',
 			action: '?/install'
+		});
+	}
+
+	const MIB = 1024 ** 2;
+	const ceilingMb = $derived(t.memory.configuredMb ?? t.memory.defaultMb);
+	/** The unit's hard limit (MemoryMax) is 4/3 of the ceiling. */
+	const hardLimitMb = (mb: number) => Math.ceil((mb * 4) / 3);
+	/** Leave the host three quarters of its RAM for everything else (matches the server check). */
+	const maxForHostMb = $derived(
+		Math.min(t.memory.maxMb, Math.floor(((t.host.totalMemoryBytes * 0.75) / MIB) * 0.75))
+	);
+	let memoryMb = $state<number | null>(null);
+	$effect(() => {
+		memoryMb = ceilingMb;
+	});
+	const memoryValid = $derived(
+		memoryMb !== null &&
+			Number.isInteger(memoryMb) &&
+			memoryMb >= t.memory.minMb &&
+			memoryMb <= maxForHostMb
+	);
+	const memoryChanged = $derived(memoryMb !== ceilingMb);
+	/** ClickHouse refuses work once it reaches this share of its ceiling. */
+	const nearCeiling = $derived(t.stats ? t.stats.memoryBytes > ceilingMb * MIB * 0.9 : false);
+
+	function applyMemory(reset = false) {
+		const mb = reset ? t.memory.defaultMb : memoryMb!;
+		askConfirm({
+			title: `Restart ClickHouse with a ${mb} MiB memory ceiling?`,
+			description: `ClickHouse refuses queries and inserts past ${mb} MiB, and systemd stops it at ${hardLimitMb(mb)} MiB. Per-query limits scale with it (writer ${Math.floor((mb * 2) / 3)} MiB, ad-hoc SQL ${Math.floor(mb / 3)} MiB). ClickHouse restarts and telemetry pauses for a few seconds; if it does not come back, the previous ceiling is restored.`,
+			confirmLabel: 'Restart with new ceiling',
+			action: '?/memory',
+			fields: reset ? { reset: 'true' } : { memoryMb: String(mb) }
+		});
+	}
+
+	function restart() {
+		askConfirm({
+			title: 'Restart ClickHouse?',
+			description:
+				'Its configuration is unchanged. Telemetry pauses for a few seconds; agents re-send any minute that is missed.',
+			confirmLabel: 'Restart',
+			action: '?/restart'
 		});
 	}
 
@@ -72,7 +119,7 @@
 		inFlight={data.inFlight}
 		availability={data.availability}
 		restartPending={data.restartPending}
-		sections={['telemetry']}
+		sections={['telemetry', 'telemetry-memory', 'telemetry-restart']}
 	/>
 
 	<Panel
@@ -81,7 +128,7 @@
 		icon={ActivityIcon}
 	>
 		{#snippet actions()}
-			<StatusBadge status={state.label} tone={state.tone} />
+			<StatusBadge status={badge.label} tone={badge.tone} />
 		{/snippet}
 
 		{#if !t.installed && !t.unitPresent}
@@ -111,7 +158,7 @@
 				</div>
 				<div class="space-y-1">
 					<dt class="text-xs text-muted-foreground">Memory</dt>
-					<dd>300–800 MB typical, capped at 1 GB</dd>
+					<dd>300–800 MB typical, {t.memory.defaultMb} MiB ceiling by default (adjustable)</dd>
 				</div>
 				<div class="space-y-1">
 					<dt class="text-xs text-muted-foreground">This host</dt>
@@ -136,8 +183,27 @@
 					<TriangleAlertIcon />
 					<Alert.Title>ClickHouse is not answering</Alert.Title>
 					<Alert.Description>
-						{t.error} Check <code>systemctl status skiff-clickhouse</code> on the server (docs/OPS.md
-						§3.6).
+						<p>
+							{t.error} Check <code>systemctl status skiff-clickhouse</code> on the server (docs/OPS.md
+							§3.6).
+						</p>
+						{#if /MEMORY_LIMIT_EXCEEDED|memory limit exceeded/i.test(t.error)}
+							<p>
+								It hit its {ceilingMb} MiB memory ceiling. Raise it under Memory below, which also restarts
+								it.
+							</p>
+						{/if}
+						{#if !local}
+							<Button
+								onclick={restart}
+								disabled={!canChange}
+								size="sm"
+								variant="outline"
+								class="mt-2"
+							>
+								<RotateCwIcon />Restart ClickHouse
+							</Button>
+						{/if}
 					</Alert.Description>
 				</Alert.Root>
 			{:else if !t.installed}
@@ -159,8 +225,12 @@
 				<div class="space-y-1">
 					<dt class="text-xs text-muted-foreground">Memory in use</dt>
 					<dd>
-						{t.stats ? formatBytes(t.stats.memoryBytes) : '—'}
-						<span class="text-muted-foreground">of {formatBytes(t.host.totalMemoryBytes)} RAM</span>
+						<span class={nearCeiling ? 'text-destructive' : ''}
+							>{t.stats ? formatBytes(t.stats.memoryBytes) : '—'}</span
+						>
+						<span class="text-muted-foreground"
+							>of {ceilingMb} MiB ceiling · {formatBytes(t.host.totalMemoryBytes)} RAM</span
+						>
 					</dd>
 				</div>
 				<div class="space-y-1">
@@ -203,6 +273,11 @@
 							<DownloadIcon />Repair
 						</Button>
 					{/if}
+					{#if t.unitPresent}
+						<Button onclick={restart} disabled={!canChange} variant="outline" size="sm">
+							<RotateCwIcon />Restart
+						</Button>
+					{/if}
 					<Button onclick={() => remove(false)} disabled={!canChange} variant="outline" size="sm">
 						<Trash2Icon />Remove
 					</Button>
@@ -219,6 +294,64 @@
 			</div>
 		{/if}
 	</Panel>
+
+	{#if t.installed || t.unitPresent}
+		<Panel
+			title="Memory"
+			description="ClickHouse refuses queries and inserts once it reaches this ceiling (MEMORY_LIMIT_EXCEEDED). Per-query limits and the merge budget scale with it, and systemd stops the process at 4/3 of it."
+			icon={MemoryStickIcon}
+		>
+			<div class="flex flex-wrap items-end gap-3">
+				<Field.Field class="w-48">
+					<Field.Label for="telemetry-memory">Memory ceiling (MiB)</Field.Label>
+					<Input
+						id="telemetry-memory"
+						type="number"
+						min={t.memory.minMb}
+						max={maxForHostMb}
+						step={64}
+						bind:value={memoryMb}
+						disabled={local}
+					/>
+				</Field.Field>
+				{#if !local}
+					<Button
+						onclick={() => applyMemory()}
+						disabled={!canChange || !memoryValid || !memoryChanged}
+						size="sm"
+					>
+						Apply and restart
+					</Button>
+					{#if t.memory.configuredMb !== null}
+						<Button
+							onclick={() => applyMemory(true)}
+							disabled={!canChange}
+							variant="ghost"
+							size="sm"
+						>
+							Reset to {t.memory.defaultMb} MiB
+						</Button>
+					{/if}
+				{/if}
+			</div>
+			<p class="mt-3 text-xs text-muted-foreground">
+				{#if memoryValid && memoryMb !== null}
+					Hard limit {hardLimitMb(memoryMb)} MiB · writer queries {Math.floor((memoryMb * 2) / 3)} MiB
+					· ad-hoc SQL {Math.floor(memoryMb / 3)} MiB.
+				{:else}
+					Between {t.memory.minMb} and {maxForHostMb} MiB on this host ({formatBytes(
+						t.host.totalMemoryBytes
+					)} RAM).
+				{/if}
+				{t.memory.configuredMb === null
+					? `Using the default (${t.memory.defaultMb} MiB).`
+					: `Set in /etc/skiff/skiff.env as SKIFF_CLICKHOUSE_MEMORY_MB.`}
+				{#if local}
+					Dev server: <code class="font-mono">bun run dev:clickhouse --memory &lt;MiB&gt;</code>.
+				{/if}
+			</p>
+		</Panel>
+	{/if}
 
 	{#if !local && data.availability !== 'ready'}
 		<p class="text-sm text-muted-foreground">

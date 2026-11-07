@@ -1,0 +1,26 @@
+{
+	"name": "@skiff/docs",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts",
+		"./search": "./src/search.ts",
+		"./prose.css": "./src/prose.css",
+		"./disk": "./src/disk.ts",
+		"./diagrams": "./src/diagrams.ts",
+		"./database": "./src/database.ts"
+	},
+	"scripts": {
+		"check": "tsc -p . --noEmit",
+		"test": "bun test"
+	},
+	"dependencies": {
+		"marked": "^18.1.3",
+		"mermaid": "^12.3.0",
+		"shiki": "4.6.0"
+	},
+	"devDependencies": {
+		"dompurify": "^3.4.17"
+	}
+}

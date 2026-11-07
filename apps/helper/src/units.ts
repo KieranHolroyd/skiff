@@ -13,6 +13,10 @@ import {
 	workloadNetworkName,
 	type WorkloadDesired,
 } from './validate.ts';
+import { CLICKHOUSE_CONFIG_DIR } from './clickhouse-config.ts';
+import { REPLICA_START_SCRIPT, REPLICA_UPSTREAM_DIR, replicaPostgresArgs } from './replication.ts';
+import { PITR_CONTAINER_CONFIG_DIR, PITR_CONTAINER_CONFIG_PATH, PITR_NEEDS_INIT } from './pitr.ts';
+import { NODE_LISTEN_CREDENTIAL } from './node-listen.ts';
 
 /**
  * Pure unit renderers. Every value that reaches a unit file has already been validated by
@@ -171,7 +175,8 @@ export function renderPoolerUnit(options: {
 	lines.push(`NetworkAlias=${databaseAlias(workload.id)}-pool`);
 	lines.push(`Volume=${options.configPath}:/etc/pgbouncer/pgbouncer.ini:ro,Z`);
 	lines.push(`Volume=${options.userlistPath}:/etc/pgbouncer/userlist.txt:ro,Z`);
-	if (options.tlsDir) lines.push(`Volume=${options.tlsDir}:/run/skiff-tls:ro,Z`);
+	// The database container mounts the same TLS directory: shared label (`z`), never private.
+	if (options.tlsDir) lines.push(`Volume=${options.tlsDir}:/run/skiff-tls:ro,z`);
 	lines.push('DropCapability=all');
 	lines.push('NoNewPrivileges=true');
 	lines.push('ReadOnly=true');
@@ -245,6 +250,24 @@ export function renderExecStart(command: string[]): string {
 	if (!executable) throw new ValidationError('command must not be empty');
 	const rendered = command.map(quoteSystemdArg).join(' ');
 	return executable.startsWith('/') ? rendered : `/usr/bin/env ${rendered}`;
+}
+
+/**
+ * The value half of a double-quoted `Environment=` assignment. systemd expands `%` specifiers
+ * there (not `$`), and the quotes take C escapes; control characters have no safe form.
+ */
+export function escapeUnitEnvironmentValue(value: string): string {
+	let escaped = '';
+	for (const char of value) {
+		const code = char.codePointAt(0) ?? 0;
+		if (code < 0x20 || code === 0x7f)
+			throw new ValidationError('Environment values in a unit must not contain control characters');
+		if (char === '\\') escaped += '\\\\';
+		else if (char === '"') escaped += '\\"';
+		else if (char === '%') escaped += '%%';
+		else escaped += char;
+	}
+	return escaped;
 }
 
 /**
@@ -340,6 +363,11 @@ export interface ProcessUnitOptions {
 	envNames: string[];
 	/** App volumes mounted into the sandbox (plan 07). */
 	volumeMounts?: UnitVolumeMount[];
+	/**
+	 * Socket-activated Node.js apps (D125): the helper-written preload that adopts fd 3, passed as
+	 * a credential, and the app's own `NODE_OPTIONS`, which the preload is prepended to.
+	 */
+	nodeListen?: { path: string; userNodeOptions?: string };
 }
 
 /**
@@ -392,6 +420,15 @@ export function renderProcessUnit(options: ProcessUnitOptions): string {
 			`${mount.readOnly ? 'BindReadOnlyPaths' : 'BindPaths'}=${mount.hostPath}:${mount.mountPath}`,
 		);
 		if (!mount.readOnly) lines.push(`ReadWritePaths=${mount.mountPath}`);
+	}
+	if (options.nodeListen) {
+		// EnvironmentFile= would override Environment=, so the helper takes NODE_OPTIONS out of the
+		// env file and composes it here: the preload first, then the app's own flags.
+		lines.push(`LoadCredential=${NODE_LISTEN_CREDENTIAL}:${options.nodeListen.path}`);
+		const user = options.nodeListen.userNodeOptions?.trim();
+		lines.push(
+			`Environment="NODE_OPTIONS=--require=%d/${NODE_LISTEN_CREDENTIAL}${user ? ` ${escapeUnitEnvironmentValue(user)}` : ''}"`,
+		);
 	}
 	lines.push(`ExecStart=${renderExecStart(options.command)}`);
 	lines.push('Restart=on-failure');
@@ -597,6 +634,14 @@ export function renderSocketUnit(options: SocketUnitOptions): string {
 	return `${lines.join('\n')}\n`;
 }
 
+/**
+ * User namespace for application containers (not the pinned database/storage/broker images, which
+ * run as fixed non-root uids that the helper chowns their data directories to). Each container
+ * gets 65 536 ids, enough for any uid an image names, from the host's `containers` subordinate
+ * range, which `ensureContainerSubids` adds before the first container starts.
+ */
+export const CONTAINER_USERNS = 'auto:size=65536';
+
 export interface ContainerUnitOptions {
 	workload: WorkloadDesired;
 	image: string;
@@ -609,12 +654,17 @@ export interface ContainerUnitOptions {
 	pitr?: DatabaseUnitOptions['pitr'];
 	/** Host directory holding the database certificate/key, mounted read-only when TLS is on. */
 	tlsDir?: string | null;
-	/** Valkey/Redis server config written by the helper (holds the ACL user). */
+	/**
+	 * Helper-written server config: the Valkey/Redis config file (holds the ACL user), or the
+	 * ClickHouse config directory (`config.xml` + `users.xml`).
+	 */
 	serverConfigPath?: string | null;
 	/** App volumes mounted into the container (plan 07). */
 	volumeMounts?: UnitVolumeMount[];
 	/** AppArmor profile workaround for hosts with the stacked-profile kernel bug. */
 	apparmorProfile?: string | null;
+	/** Read replica (C7): the agent's link socket dir and the helper-written start script. */
+	replica?: DatabaseUnitOptions['replica'];
 }
 
 /**
@@ -632,6 +682,7 @@ export function renderContainerUnit(options: ContainerUnitOptions): string {
 			tlsDir: options.tlsDir ?? null,
 			serverConfigPath: options.serverConfigPath ?? null,
 			apparmorProfile: options.apparmorProfile ?? null,
+			...(options.replica ? { replica: options.replica } : {}),
 		});
 	if (workload.objectStorage)
 		return renderStorageUnit({
@@ -671,12 +722,19 @@ export function renderContainerUnit(options: ContainerUnitOptions): string {
 	if (workload.ingress !== 'none') lines.push(`PublishPort=127.0.0.1:${workload.port}:${workload.port}`);
 	lines.push(`Network=${networkUnitName(workloadNetworkName(workload))}`);
 	lines.push(`EnvironmentFile=${options.envFile}`);
-	if (!runner) lines.push(`Volume=${options.dataDir}:/data:Z`);
+	// Container root is not host root: every container gets its own range of the `containers`
+	// subordinate ids (see userns.ts), so uid 0 inside maps to an unprivileged host uid. `U` hands
+	// the writable mounts (and the 0400 secret files) to whichever uid the container runs as, on
+	// each start, because an `auto` range is not guaranteed to be the same one next time.
+	lines.push(`UserNS=${CONTAINER_USERNS}`);
+	if (!runner) lines.push(`Volume=${options.dataDir}:/data:Z,U`);
 	for (const mount of options.volumeMounts ?? []) {
-		lines.push(`Volume=${mount.hostPath}:${mount.mountPath}${mount.readOnly ? ':ro' : ''}:Z`);
+		// A read-only attachment is never chowned: the volume's one writer owns it (single-writer),
+		// and a reader re-owning it would take it away from that writer.
+		lines.push(`Volume=${mount.hostPath}:${mount.mountPath}:${mount.readOnly ? 'ro,Z' : 'Z,U'}`);
 	}
 	if (options.secretsDir) {
-		lines.push(`Volume=${options.secretsDir}:/run/skiff-secrets:ro,Z`);
+		lines.push(`Volume=${options.secretsDir}:/run/skiff-secrets:ro,Z,U`);
 		for (const secret of workload.secrets) {
 			if (secret.delivery === 'file')
 				lines.push(`Environment=${secret.name}_FILE=/run/skiff-secrets/${secret.name}`);
@@ -716,19 +774,31 @@ export interface DatabaseUnitOptions {
 	envFile: string;
 	/** Host directory mounted at /data, created 0700 and owned by the engine's user. */
 	dataDir: string;
-	/** WAL archiving (docs/PITR.md); config files are written by the helper before apply. */
+	/**
+	 * WAL archiving (docs/PITR.md). The helper creates the config directory (owned by the engine
+	 * uid) before apply and writes `pgbackrest.conf` + `pgpass` into it on `pitr/configure`; the
+	 * directory, not the files, is mounted so a rewrite reaches the running container.
+	 */
 	pitr?: {
 		stanza: string;
-		configPath: string;
-		pgpassPath: string;
+		configDir: string;
 		archiveTimeoutSeconds: number;
 	};
 	/** Host TLS directory mounted read-only at /run/skiff-tls; null renders plaintext only. */
 	tlsDir?: string | null;
-	/** Valkey/Redis: the helper-written 0600 server config, mounted read-only (it holds the ACL). */
+	/**
+	 * Valkey/Redis: the helper-written 0600 server config, mounted read-only (it holds the ACL).
+	 * ClickHouse: the helper-written 0700 config directory, mounted read-only.
+	 */
 	serverConfigPath?: string | null;
 	/** AppArmor profile workaround for hosts with the stacked-profile kernel bug. */
 	apparmorProfile?: string | null;
+	/**
+	 * Read replica (docs/CLUSTERING.md §9.2): `linkDir` is the agent's socket directory for this
+	 * replica, mounted read-only where the walreceiver looks for its upstream; `scriptPath` is the
+	 * helper-written standby start script. Required exactly when `workload.database.replica` is set.
+	 */
+	replica?: { linkDir: string; scriptPath: string };
 }
 
 /** Where a Valkey/Redis container reads the helper-written server config. */
@@ -743,6 +813,8 @@ export const KEY_VALUE_CONFIG_PATH = '/etc/skiff/server.conf';
  *   probe can never get the forwarder's address blocked by `max_connect_errors`.
  * - MongoDB: WiredTiger cache at 40% (minimum 0.25 GB).
  * - Valkey/Redis: everything lives in the mounted config (`maxmemory` is set there).
+ * - ClickHouse: none. The image entrypoint creates the owner's database on first start and then
+ *   runs the server with `CLICKHOUSE_CONFIG`, the mounted config sized from the same limit.
  */
 export function databaseServerArgs(engine: DatabaseEngineName, memoryMb: number): string[] {
 	const bufferPoolMb = Math.max(64, Math.floor(memoryMb * 0.4));
@@ -773,6 +845,8 @@ export function databaseServerArgs(engine: DatabaseEngineName, memoryMb: number)
 			return ['valkey-server', KEY_VALUE_CONFIG_PATH];
 		case 'redis':
 			return ['redis-server', KEY_VALUE_CONFIG_PATH];
+		case 'clickhouse':
+			return [];
 		case 'postgres':
 			throw new ValidationError('Postgres renders its own Exec line');
 	}
@@ -831,16 +905,33 @@ export function renderDatabaseUnit(options: DatabaseUnitOptions): string {
 	if (database.engine !== 'postgres') return renderEngineDatabaseUnit(lines, options);
 	// Keep the image entrypoint (initdb, then exec "$@") and pass the fixed Postgres flags. The
 	// shared preload is required before `CREATE EXTENSION pg_stat_statements` can work. When PITR
-	// is enabled the same Exec turns on WAL archiving; the pinned Postgres image must ship the
-	// `pgbackrest` binary (docs/PITR.md).
-	lines.push('Entrypoint=/usr/local/bin/docker-entrypoint.sh');
+	// is enabled the same Exec turns on WAL archiving; the image is then the Skiff-built
+	// `skiff-postgres-pitr`, which ships the `pgbackrest` binary (docs/PITR.md).
+	const replica = database.replica;
+	if (Boolean(replica) !== Boolean(options.replica))
+		throw new ValidationError('A replica database unit needs both workload.database.replica and its link paths');
+	if (replica && (options.pitr || workload.pooler))
+		throw new ValidationError('A replica database unit has no PITR archiving and no pooler');
+	// A replica starts through the helper's standby script, which runs pg_basebackup on first
+	// start and then execs the same entrypoint with the slot name stripped (replication.ts).
+	lines.push(`Entrypoint=${replica ? REPLICA_START_SCRIPT : '/usr/local/bin/docker-entrypoint.sh'}`);
 	const execArgs = [
+		...(replica ? [replica.slot] : []),
 		'postgres',
 		'-c',
-		'shared_preload_libraries=pg_stat_statements',
+		`shared_preload_libraries=${database.variant === 'pg_cron' ? 'pg_stat_statements,pg_cron' : 'pg_stat_statements'}`,
 		'-c',
 		'pg_stat_statements.track=all',
 	];
+	if (database.variant === 'pg_cron') {
+		// pg_cron's launcher lives in one database, and `CREATE EXTENSION pg_cron` only works there:
+		// point it at the owner's database (D126). Jobs connect over the container's Unix socket,
+		// which the image's initdb trusts, so no password is stored for them.
+		const cronDatabase = workload.env.POSTGRES_DB ?? '';
+		if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(cronDatabase))
+			throw new ValidationError('pg_cron databases need a valid POSTGRES_DB in workload.env');
+		execArgs.push('-c', `cron.database_name=${cronDatabase}`, '-c', 'cron.host=/var/run/postgresql');
+	}
 	if (options.pitr) {
 		execArgs.push(
 			'-c',
@@ -848,7 +939,7 @@ export function renderDatabaseUnit(options: DatabaseUnitOptions): string {
 			'-c',
 			'archive_mode=on',
 			'-c',
-			`archive_command=/usr/local/bin/pgbackrest --config=/etc/pgbackrest/pgbackrest.conf --stanza=${options.pitr.stanza} archive-push %p`,
+			`archive_command=/usr/local/bin/pgbackrest --config=${PITR_CONTAINER_CONFIG_PATH} --stanza=${options.pitr.stanza} archive-push %p`,
 			'-c',
 			`archive_timeout=${options.pitr.archiveTimeoutSeconds}`,
 		);
@@ -865,6 +956,7 @@ export function renderDatabaseUnit(options: DatabaseUnitOptions): string {
 			'ssl_min_protocol_version=TLSv1.2',
 		);
 	}
+	if (replica) execArgs.push(...replicaPostgresArgs(replica.slot));
 	lines.push(`Exec=${execArgs.map(quoteSystemdArg).join(' ')}`);
 	lines.push(`User=${info.uid}:${info.gid}`);
 	lines.push(`PublishPort=127.0.0.1:${workload.port}:${info.containerPort}`);
@@ -872,14 +964,23 @@ export function renderDatabaseUnit(options: DatabaseUnitOptions): string {
 	lines.push(`NetworkAlias=${databaseAlias(workload.id)}`);
 	lines.push(`EnvironmentFile=${options.envFile}`);
 	lines.push(`Volume=${options.dataDir}:/data:Z`);
-	if (options.pitr) {
-		lines.push(`Volume=${options.pitr.configPath}:/etc/pgbackrest/pgbackrest.conf:ro,Z`);
-		lines.push(`Volume=${options.pitr.pgpassPath}:/etc/pgbackrest/pgpass:ro,Z`);
+	// Shared label (`z`): a restore's one-shot containers mount the same config directory while
+	// this container runs; a private `Z` relabel would lock one of them out under SELinux.
+	if (options.pitr) lines.push(`Volume=${options.pitr.configDir}:${PITR_CONTAINER_CONFIG_DIR}:ro,z`);
+	// Shared with the PgBouncer sidecar, which mounts the same certificate directory.
+	if (options.tlsDir) lines.push(`Volume=${options.tlsDir}:/run/skiff-tls:ro,z`);
+	if (options.replica) {
+		// Read-only: the walreceiver connects to the agent's socket; nothing can be written there.
+		// Shared label (`z`): the agent keeps serving the socket from the host side.
+		lines.push(`Volume=${options.replica.linkDir}:${REPLICA_UPSTREAM_DIR}:ro,z`);
+		lines.push(`Volume=${options.replica.scriptPath}:${REPLICA_START_SCRIPT}:ro,Z`);
 	}
-	if (options.tlsDir) lines.push(`Volume=${options.tlsDir}:/run/skiff-tls:ro,Z`);
 	// The socket dir is created 3777 by the image; ReadOnly=true needs it (and /tmp) on tmpfs.
 	lines.push('Tmpfs=/var/run/postgresql:rw,size=8m,mode=1777');
 	lines.push('Tmpfs=/tmp:rw,size=64m');
+	// pgBackRest's async archiver orphans a process; with Postgres as PID 1 its non-zero exit
+	// would crash-restart the cluster (`PITR_NEEDS_INIT`, docs/PITR.md).
+	if (options.pitr && PITR_NEEDS_INIT) lines.push('RunInit=true');
 	lines.push('DropCapability=all');
 	lines.push('NoNewPrivileges=true');
 	lines.push('ReadOnly=true');
@@ -910,7 +1011,8 @@ function renderEngineDatabaseUnit(lines: string[], options: DatabaseUnitOptions)
 	const database = workload.database!;
 	const engine = database.engine;
 	const info = DATABASE_ENGINES[engine];
-	lines.push(`Exec=${databaseServerArgs(engine, workload.memoryMb).map(quoteSystemdArg).join(' ')}`);
+	const serverArgs = databaseServerArgs(engine, workload.memoryMb);
+	if (serverArgs.length > 0) lines.push(`Exec=${serverArgs.map(quoteSystemdArg).join(' ')}`);
 	lines.push(`User=${info.uid}:${info.gid}`);
 	lines.push(`PublishPort=127.0.0.1:${workload.port}:${info.containerPort}`);
 	lines.push(`Network=${networkUnitName(workloadNetworkName(workload))}`);
@@ -920,6 +1022,10 @@ function renderEngineDatabaseUnit(lines: string[], options: DatabaseUnitOptions)
 	if (engine === 'valkey' || engine === 'redis') {
 		if (!options.serverConfigPath) throw new ValidationError(`${engine} needs its helper-written server config`);
 		lines.push(`Volume=${options.serverConfigPath}:${KEY_VALUE_CONFIG_PATH}:ro,Z`);
+	}
+	if (engine === 'clickhouse') {
+		if (!options.serverConfigPath) throw new ValidationError('clickhouse needs its helper-written config directory');
+		lines.push(`Volume=${options.serverConfigPath}:${CLICKHOUSE_CONFIG_DIR}:ro,Z`);
 	}
 	// The server socket (and pid file) directory; the root filesystem stays read-only.
 	if (engine === 'mysql') lines.push('Tmpfs=/var/run/mysqld:rw,size=8m,mode=1777');

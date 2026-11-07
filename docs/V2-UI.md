@@ -47,9 +47,12 @@ Header shows runtime and placement badges. Opening a project swaps the dashboard
 project's own sections, sliding the main navigation out (the same takeover Settings, Alerts, and
 every database, storage, queue, function and deployment page use; **Back** at its top slides the
 main navigation back): **Monitor** (Traffic, Logs), **Ship** (Deployments, Environments, Builds,
-Source) and **Configure** (Domains, Data, Variables, Runtime, Share links, Settings). Every section
-is deep-linkable with `?tab=`, switches in place without a reload, and quiet counters show section
-size. A deployment page drills one level deeper, with its own sections and **Back** to the project. The primary **Deploy** action accepts a `.zip` of an already-built artifact (contents of the output directory,
+Source) and **Configure** (Domains, Data, Variables, Runtime, Share links, Settings). A container
+project replaces the Monitor group with **Container** (Overview, Logs, Shell, Files), and each
+console section appears only with its permission. Every section is deep-linkable with `?tab=`,
+switches in place without a reload, and quiet counters show section size. A deployment page drills
+one level deeper, with its own sections and **Back** to the project. The primary **Deploy** action
+accepts a `.zip` of an already-built artifact (contents of the output directory,
 not the folder) and deploys it to a chosen environment, with an optional message and
 promote-on-success. It is subject to the same 500 MB / 20,000 files / 25 MB per-file limits as the
 CLI. For repositories, use **Builds** instead.
@@ -148,8 +151,9 @@ stops the workload and clears the spec but keeps deployments and releases.
 
 | Field              | Applies to | Notes                                                                  |
 | ------------------ | ---------- | ---------------------------------------------------------------------- |
-| `command`          | process    | argv split on whitespace — no shell; defaults to `bun run start`       |
-| `image`            | container  | OCI reference, pulled rootlessly on the node                           |
+| `engine`           | process    | `bun` (default) or `node`, the pinned Node.js LTS (D125)               |
+| `command`          | process    | argv split on whitespace — no shell; defaults to `bun run start`, or the package.json `start` script for Node |
+| `image`            | container  | OCI reference, pulled by the root helper; the container runs in its own user namespace |
 | `port`             | both       | listen port; Caddy proxies to it locally                               |
 | `healthPath`       | both       | probed before the agent reports ready                                  |
 | `memoryMb`         | both       | admission unit and `MemoryMax` (32–8192)                               |
@@ -158,6 +162,30 @@ stops the workload and clears the spec but keeps deployments and releases.
 | `env`              | both       | plain, readable `NAME=value` pairs                                     |
 | `secrets`          | both       | write-only refs, delivered as env var or file; optional pinned version |
 | `data.sizeMb`      | both       | optional persistent directory at `/data`                               |
+
+### Container console
+
+Container projects (only) get **Overview**, **Files** and **Shell** in a **Container** group
+beside Logs. They act on the running container, not on a release, and each is gated by its own
+permission (`container:inspect`, `container:files`, `container:exec`; Restart also needs
+`project:update`) and hidden when `SKIFF_FEATURE_CONTAINER_CONSOLE` is off.
+
+- **Overview** is the live container: state, image and digest, node, unit and restart count, last
+  exit, CPU/memory/network/disk rates, the process table, configuration (environment variable
+  names only; values stay on the node), ports, mounts and sandbox flags. A browsable mount opens
+  Files at that path; **Restart** re-applies the unit, which stops and starts the container.
+- **Files** is a read-only browser of the image root and browsable mounts. Symlinks resolve inside
+  the container, text previews stop at 1 MiB (binary and larger files offer only a download),
+  listings stop at 2,000 entries, and secret/tmpfs mounts are never browsable.
+- **Shell** is an interactive terminal with a replica, shell (`auto`, bash, sh, ash) and user
+  (`default` or container `root`; capabilities stay dropped). It survives a tab switch and reload,
+  and closes after 15 idle minutes, 8 hours, a restart, or **Close**.
+
+The browser never holds a node credential: the control plane mints a five-minute token for one
+workload and user, adds it on the internal gateway hop, and the node's agent redeems it with its
+own node token. Files and shells are human surfaces, so API keys and MCP clients cannot use them
+even when granted the permission. Shell opens/closes and file reads/downloads are audited; contents
+and keystrokes are not (the D82/D96 token-and-gateway pattern).
 
 ### Settings
 

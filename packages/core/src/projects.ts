@@ -32,7 +32,14 @@ export interface ProjectRow {
 	productionDeploymentId: string | null;
 	productionAccess: 'public' | 'password' | 'platform';
 	previewAccess: 'public' | 'password' | 'platform';
+	/** Legacy shared hash (pre-0054); never read. Use the per-scope hashes. */
 	accessSecretHash: string | null;
+	/** scrypt hash for production in `password` mode; each scope has its own (0054). */
+	productionPasswordHash?: string | null;
+	/** scrypt hash for previews in `password` mode. */
+	previewPasswordHash?: string | null;
+	/** Visitor-session epoch mixed into the site key; "sign out everyone" bumps it. */
+	siteSessionEpoch?: number;
 	workloadJson: string | null;
 	createdBy: string;
 	deletedAt: number | null;
@@ -53,6 +60,10 @@ export interface ProjectView {
 	previewPattern: string;
 	productionAccess: string;
 	previewAccess: string;
+	/** Whether production has a password stored (the hash itself is never returned). */
+	productionPasswordSet: boolean;
+	/** Whether previews have a password stored. */
+	previewPasswordSet: boolean;
 	createdAt: string;
 	deletedAt: string | null;
 	/** When a trashed project is permanently deleted. */
@@ -117,6 +128,8 @@ export class ProjectService {
 			previewPattern: contentUrl(this.ctx.config.platformOrigin, `${row.slug}--<id>.${this.contentDomain}`),
 			productionAccess: row.productionAccess,
 			previewAccess: row.previewAccess,
+			productionPasswordSet: Boolean(row.productionPasswordHash),
+			previewPasswordSet: Boolean(row.previewPasswordHash),
 			createdAt: new Date(row.createdAt).toISOString(),
 			deletedAt: row.deletedAt ? new Date(row.deletedAt).toISOString() : null,
 			purgeAt: row.purgeAt ? new Date(row.purgeAt).toISOString() : null,
@@ -138,6 +151,10 @@ export class ProjectService {
 			throw new ConflictError(check.reason ?? 'Invalid slug', suggestions);
 		}
 		this.ctx.quota.assertCanCreateProject(principal.orgId);
+		const wantsPassword = input.productionAccess === 'password' || input.previewAccess === 'password';
+		if (wantsPassword && !input.password)
+			throw new ValidationError('A password is required for password mode.');
+		const passwordHash = wantsPassword && input.password ? hashPassword(input.password) : null;
 		const now = this.ctx.now();
 		const row: ProjectRow = {
 			id: `prj_${crypto.randomUUID().replace(/-/g, '')}`,
@@ -152,6 +169,8 @@ export class ProjectService {
 			productionAccess: input.productionAccess,
 			previewAccess: input.previewAccess,
 			accessSecretHash: null,
+			productionPasswordHash: input.productionAccess === 'password' ? passwordHash : null,
+			previewPasswordHash: input.previewAccess === 'password' ? passwordHash : null,
 			workloadJson: null,
 			createdBy: principal.userId,
 			deletedAt: null,
@@ -224,8 +243,14 @@ export class ProjectService {
 		if (input.placement !== undefined) patch.placement = input.placement;
 		if (input.placementSpec !== undefined)
 			patch.placementJson = input.placementSpec ? JSON.stringify(input.placementSpec) : null;
-		if (input.productionAccess !== undefined) patch.productionAccess = input.productionAccess;
-		if (input.previewAccess !== undefined) patch.previewAccess = input.previewAccess;
+		if (input.productionAccess !== undefined) {
+			patch.productionAccess = input.productionAccess;
+			Object.assign(patch, scopePasswordPatch(row, 'production', input.productionAccess));
+		}
+		if (input.previewAccess !== undefined) {
+			patch.previewAccess = input.previewAccess;
+			Object.assign(patch, scopePasswordPatch(row, 'previews', input.previewAccess));
+		}
 
 		let newSlug = row.slug;
 		if (input.slug && input.slug !== row.slug) {
@@ -266,13 +291,13 @@ export class ProjectService {
 	): Promise<ProjectView> {
 		requirePermission(principal, 'project:update');
 		const row = this.requireRow(principal, slug);
-		if (input.mode === 'password' && !input.password && !row.deletedAt)
-			throw new ValidationError('A password is required for password mode.');
-		const patch: Partial<ProjectRow> = { updatedAt: this.ctx.now() };
+		// Each scope keeps its own password: changing one scope never touches the other's.
+		const patch: Partial<ProjectRow> = {
+			updatedAt: this.ctx.now(),
+			...scopePasswordPatch(row, input.scope, input.mode, input.password),
+		};
 		if (input.scope === 'production') patch.productionAccess = input.mode;
 		else patch.previewAccess = input.mode;
-		if (input.mode === 'password' && input.password) patch.accessSecretHash = hashPassword(input.password);
-		if (input.mode !== 'password') patch.accessSecretHash = null;
 		await this.ctx.audit.wrap(
 			{ principal, action: 'project.set_access', resource: 'project', resourceId: row.id, args: { scope: input.scope, mode: input.mode } },
 			() => {
@@ -470,4 +495,25 @@ function parsePlacementSpec(raw: string | null | undefined): import('@skiff/cont
 function requirePlacementSpec(raw: string): import('@skiff/contracts').PlacementSpec {
 	const parsed = JSON.parse(raw) as unknown;
 	return placementSpecSchema.parse(parsed);
+}
+
+/**
+ * The password-hash change for one access scope. Password mode needs a password: a new one is
+ * hashed, and omitting it keeps the scope's current hash only when the scope is already in password
+ * mode with one stored. Any other mode clears that scope's hash and leaves the other scope alone.
+ */
+export function scopePasswordPatch(
+	row: ProjectRow,
+	scope: 'production' | 'previews',
+	mode: ProjectRow['productionAccess'],
+	password?: string,
+): Pick<Partial<ProjectRow>, 'productionPasswordHash' | 'previewPasswordHash'> {
+	const field = scope === 'production' ? 'productionPasswordHash' : 'previewPasswordHash';
+	if (mode !== 'password') return { [field]: null };
+	if (password) return { [field]: hashPassword(password) };
+	const currentMode = scope === 'production' ? row.productionAccess : row.previewAccess;
+	if (currentMode === 'password' && row[field]) return {};
+	throw new ValidationError(
+		`A password is required to put ${scope === 'production' ? 'production' : 'previews'} in password mode.`,
+	);
 }

@@ -1,0 +1,306 @@
+/*
+ * Typography for rendered docs pages, shared by the dashboard and the standalone site. Scoped to
+ * `.docs-prose`. Colours come from the host's theme tokens (the dashboard's shadcn tokens; the
+ * standalone site defines the same names), and `.dark` on an ancestor switches code colours.
+ */
+
+.docs-prose {
+	color: var(--foreground);
+	font-size: 0.9375rem;
+	line-height: 1.7;
+	overflow-wrap: break-word;
+}
+
+.docs-prose > :first-child {
+	margin-top: 0;
+}
+
+.docs-prose :where(p, ul, ol, .docs-table, .docs-code, .docs-callout, blockquote, hr) {
+	margin: 1rem 0;
+}
+
+.docs-prose :where(h2, h3, h4) {
+	position: relative;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+	line-height: 1.3;
+	scroll-margin-top: 5rem;
+	text-wrap: balance;
+}
+
+.docs-prose h2 {
+	margin: 2.5rem 0 0.75rem;
+	padding-top: 1.5rem;
+	border-top: 1px solid var(--border);
+	font-size: 1.375rem;
+}
+
+.docs-prose h3 {
+	margin: 1.75rem 0 0.5rem;
+	font-size: 1.0625rem;
+}
+
+.docs-prose h4 {
+	margin: 1.5rem 0 0.5rem;
+	font-size: 0.9375rem;
+}
+
+.docs-prose .docs-anchor {
+	position: absolute;
+	left: -1.1em;
+	padding-right: 0.3em;
+	color: var(--muted-foreground);
+	font-weight: 400;
+	text-decoration: none;
+	opacity: 0;
+	transition: opacity 120ms;
+}
+
+.docs-prose :where(h2, h3, h4):hover .docs-anchor,
+.docs-prose .docs-anchor:focus-visible {
+	opacity: 1;
+}
+
+.docs-prose a:not(.docs-anchor) {
+	color: var(--brand);
+	text-decoration: underline;
+	text-decoration-thickness: 1px;
+	text-underline-offset: 3px;
+	text-decoration-color: color-mix(in oklch, var(--brand) 45%, transparent);
+}
+
+.docs-prose a:not(.docs-anchor):hover {
+	text-decoration-color: var(--brand);
+}
+
+.docs-prose a.docs-broken {
+	color: var(--destructive);
+}
+
+.docs-prose strong {
+	font-weight: 600;
+}
+
+.docs-prose :where(ul, ol) {
+	padding-left: 1.4rem;
+}
+
+.docs-prose ul {
+	list-style: disc;
+}
+
+.docs-prose ol {
+	list-style: decimal;
+}
+
+.docs-prose li {
+	margin: 0.3rem 0;
+	padding-left: 0.2rem;
+}
+
+.docs-prose li > :where(ul, ol) {
+	margin: 0.3rem 0;
+}
+
+.docs-prose li::marker {
+	color: var(--muted-foreground);
+}
+
+.docs-prose hr {
+	border: 0;
+	border-top: 1px solid var(--border);
+	margin: 2rem 0;
+}
+
+.docs-prose blockquote {
+	border-left: 3px solid var(--border);
+	padding-left: 1rem;
+	color: var(--muted-foreground);
+}
+
+/* Inline code */
+.docs-prose :not(pre) > code {
+	padding: 0.1em 0.35em;
+	border: 1px solid var(--border);
+	border-radius: 0.3rem;
+	background: var(--muted);
+	font-family: var(--font-mono, ui-monospace, 'Geist Mono Variable', SFMono-Regular, Menlo, monospace);
+	font-size: 0.85em;
+	white-space: break-spaces;
+}
+
+.docs-prose a > code {
+	color: inherit;
+}
+
+/* Code blocks */
+.docs-prose .docs-code {
+	position: relative;
+}
+
+.docs-prose .docs-code pre {
+	margin: 0;
+	padding: 0.9rem 1rem;
+	overflow-x: auto;
+	border: 1px solid var(--border);
+	border-radius: 0.5rem;
+	background: color-mix(in oklch, var(--muted) 70%, var(--background));
+	font-family: var(--font-mono, ui-monospace, 'Geist Mono Variable', SFMono-Regular, Menlo, monospace);
+	font-size: 0.8125rem;
+	line-height: 1.6;
+	tab-size: 2;
+}
+
+.docs-prose .docs-code pre code {
+	display: block;
+	width: max-content;
+	min-width: 100%;
+}
+
+.docs-prose .shiki span {
+	color: var(--shiki-light);
+}
+
+.dark .docs-prose .shiki span {
+	color: var(--shiki-dark);
+}
+
+.docs-prose .docs-copy {
+	position: absolute;
+	top: 0.45rem;
+	right: 0.45rem;
+	padding: 0.15rem 0.5rem;
+	border: 1px solid var(--border);
+	border-radius: 0.35rem;
+	background: var(--background);
+	color: var(--muted-foreground);
+	font: 500 0.6875rem/1.4 inherit;
+	cursor: pointer;
+	opacity: 0;
+	transition: opacity 120ms;
+}
+
+.docs-prose .docs-code:hover .docs-copy,
+.docs-prose .docs-copy:focus-visible,
+.docs-prose .docs-copy[data-copied] {
+	opacity: 1;
+}
+
+@media (hover: none) {
+	.docs-prose .docs-copy {
+		opacity: 1;
+	}
+}
+
+/* Tables */
+.docs-prose .docs-table {
+	overflow-x: auto;
+	border: 1px solid var(--border);
+	border-radius: 0.5rem;
+}
+
+.docs-prose table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 0.875rem;
+	line-height: 1.55;
+}
+
+.docs-prose :where(th, td) {
+	padding: 0.5rem 0.75rem;
+	border-bottom: 1px solid var(--border);
+	text-align: left;
+	vertical-align: top;
+}
+
+.docs-prose th {
+	background: var(--muted);
+	font-weight: 600;
+	white-space: nowrap;
+}
+
+.docs-prose tr:last-child td {
+	border-bottom: 0;
+}
+
+.docs-prose td code {
+	white-space: nowrap;
+}
+
+/* Callouts */
+.docs-prose .docs-callout {
+	--callout: var(--info);
+	padding: 0.75rem 1rem;
+	border: 1px solid color-mix(in oklch, var(--callout) 30%, var(--border));
+	border-left: 3px solid var(--callout);
+	border-radius: 0.5rem;
+	background: color-mix(in oklch, var(--callout) 6%, transparent);
+}
+
+.docs-prose .docs-callout > :where(p, ul, ol) {
+	margin: 0.4rem 0;
+}
+
+.docs-prose .docs-callout > :last-child {
+	margin-bottom: 0;
+}
+
+.docs-prose .docs-callout-title {
+	margin: 0 0 0.25rem !important;
+	color: var(--callout);
+	font-size: 0.75rem;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+
+.docs-prose .docs-callout-tip {
+	--callout: var(--success);
+}
+
+.docs-prose .docs-callout-important {
+	--callout: var(--brand);
+}
+
+.docs-prose .docs-callout-warning {
+	--callout: var(--warning);
+}
+
+.docs-prose .docs-callout-caution {
+	--callout: var(--destructive);
+}
+
+/* Mermaid diagrams (rendered client-side by diagrams.ts) */
+.docs-prose .docs-diagram {
+	margin: 1.25rem 0;
+	padding: 1rem;
+	overflow-x: auto;
+	border: 1px solid var(--border);
+	border-radius: 0.5rem;
+	background: var(--card, var(--background));
+	text-align: center;
+}
+
+.docs-prose .docs-diagram svg {
+	display: inline-block;
+	max-width: 100%;
+	height: auto;
+}
+
+.docs-prose .docs-diagram:not([data-rendered]) {
+	text-align: left;
+}
+
+.docs-prose .docs-mermaid-source {
+	margin: 0;
+	color: var(--muted-foreground);
+	font-family: var(--font-mono, ui-monospace, 'Geist Mono Variable', SFMono-Regular, Menlo, monospace);
+	font-size: 0.75rem;
+	line-height: 1.5;
+	white-space: pre;
+}
+
+.docs-prose .docs-diagram:not([data-rendered]):not([data-error]) .docs-mermaid-source {
+	min-height: 6rem;
+	opacity: 0.55;
+}

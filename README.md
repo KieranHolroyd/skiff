@@ -63,7 +63,8 @@
 - **One brain, five surfaces.** The dashboard, optional in-dashboard assistant, REST API, MCP
   server and `skif` CLI all call the same service layer, so no surface can do more than another
   and every action is audited the same way.
-- **Operable.** Prometheus metrics, traffic and error telemetry, alerts (email and webhook),
+- **Operable.** Prometheus metrics, traffic and error telemetry, alerts (email, webhook, chat, SMS
+  and push),
   Litestream backups to R2, a monthly restore drill, a recovery kit, and self-update with rollback
   from the dashboard.
 
@@ -75,9 +76,11 @@
 | **Access** | Public, password-protected or platform-login sites via `forward_auth`; share links with limits and instant revocation |
 | **Accounts** | Email + password, passkeys, GitHub, magic links, TOTP 2FA (owners must prove a passkey or TOTP each session), first-run setup wizard, orgs, member invites, roles, API keys |
 | **Fleet** | Node agents with desired-state reconciliation, an on-disk release cache and heartbeats; wildcard TLS via DNS-01; a branded 503 with `Retry-After` when a node is down |
-| **Observe** | Dashboard for fleet, projects, deployments, traffic, errors, logs and the audit log; `/metrics` on the control plane and agents; alerts for offline nodes, disk, certs, backups and 5xx spikes after a promote |
+| **Observe** | Dashboard for fleet, projects, deployments, traffic, errors, logs and the audit log; `/metrics` on the control plane and agents; optional ClickHouse telemetry with custom dashboards; alerts for offline nodes, disk, certs, backups and 5xx spikes after a promote, plus metric alert rules, sent by email, webhook, Discord, Slack, Telegram, ntfy, SMS or Web Push |
 | **Recover** | Litestream → R2, scripted restore, monthly drill, age-encrypted recovery kit, atomic release switch with automatic rollback |
-| **Managed services** | Postgres 16/17 databases and RustFS S3-compatible object storage as tier-3 containers: attachments with scoped credentials, Railway-style env suggestions from `.env`/code, one-click linking, usage charts, soft delete and restore, human-only credential reveal, scheduled/verified backups and restore-to-new, PgBouncer pooling, an extension allowlist with slow queries, a native database studio with a data grid and query editor for every engine (read-only by default, write mode with `database:update`), and staged credential rotation ([DATABASES.md](./docs/DATABASES.md), [OBJECT-STORAGE.md](./docs/OBJECT-STORAGE.md)) |
+| **Managed services** | Postgres 16–18 databases (MySQL, MariaDB, MongoDB, Valkey, Redis and ClickHouse too, with lifecycle, credential rotation and the studio) and RustFS S3-compatible object storage as tier-3 containers: attachments with scoped credentials, Railway-style env suggestions from `.env`/code, one-click linking, usage charts, soft delete and restore, human-only credential reveal, scheduled/verified backups and restore-to-new, PgBouncer pooling, an extension allowlist with slow queries, a native database studio with a data grid and query editor for every engine (read-only by default, write mode with `database:update`), and staged credential rotation ([DATABASES.md](./docs/DATABASES.md), [OBJECT-STORAGE.md](./docs/OBJECT-STORAGE.md)) |
+| **Functions** | Workers-compatible functions on a pinned workerd runtime, bundled by Skiff (no Wrangler needed), with cron triggers and `skif wrangler dev` for local runs ([FUNCTIONS.md](./docs/FUNCTIONS.md)) |
+| **Queues & email** | Managed NATS JetStream brokers with queues, peek/send/redrive/purge and event rules ([BROKERS.md](./docs/BROKERS.md)); outbound email from verified domains through Skiff's own MTA, with DKIM, suppressions and activity ([EMAIL.md](./docs/EMAIL.md)) |
 | **Assistant** | Optional in-dashboard chat over the same MCP tools, one agent with every tool, click-to-confirm destructive actions, and a guided tour that navigates and spotlights elements ([ASSISTANT.md](./docs/ASSISTANT.md)) |
 | **v2 preview** | Sandboxed systemd process apps, Podman Quadlet containers, git builds on a builder node, custom domains with TXT verification, named environments, per-node workload budgets |
 
@@ -137,14 +140,26 @@ elicitation, and clients that don't support elicitation get a dashboard hand-off
 
 | Area | Tools |
 |---|---|
-| Identity | `whoami` |
-| Projects | `list_projects` · `get_project` · `create_project` · `update_project` · `delete_project` |
+| Identity & docs | `whoami` · `search_docs` · `read_docs` |
+| Projects | `list_projects` · `get_project` · `create_project` · `update_project` · `delete_project` · `delete_projects` · `restore_projects` · `get_operation` |
 | Deploy | `deploy_site` · `deploy_files` · `create_upload` · `finalize_upload` |
 | Releases | `list_deployments` · `get_deployment` · `promote_deployment` · `rollback` |
 | Environments | `list_environments` · `create_environment` · `deploy_to_environment` |
-| Workloads | `get_workload` · `set_workload` · `get_node_capacity` |
-| Access | `set_access` · `create_share_link` · `list_share_links` · `revoke_share_link` |
-| Operate | `get_status` · `get_metrics` · `get_logs` · `get_audit_log` · `list_nodes` |
+| Workloads & functions | `get_workload` · `get_function` · `invoke_function` · `run_function_cron` · `set_workload` · `get_node_capacity` |
+| Volumes | `list_volumes` · `create_volume` · `attach_volume` · `detach_volume` · `list_volume_snapshots` · `snapshot_volume` · `restore_volume` |
+| Jobs (while the feature is on) | `list_jobs` · `create_job` · `update_job` · `pause_job` · `run_job` · `run_command` · `get_job_runs` · `get_job_run` · `cancel_job_run` · `delete_job` |
+| Containers (while the feature is on) | `inspect_container` · `list_container_files` · `read_container_file` · `restart_container` |
+| Databases & backups | `list_databases` · `get_database` · `get_database_logs` · `create_database` · `list_database_backups` · `list_backup_targets` · `create_backup_target` · `test_backup_target` · `backup_database` · `restore_database` · `set_database_backup_policy` · `get_database_pitr` · `set_database_pitr` · `backup_database_pitr` · `restore_database_to_time` · `backup_all_databases` · `update_database` · `restart_database` · `list_database_replicas` · `create_database_replica` · `delete_database_replica` · `rotate_database_credentials` · `list_database_credentials` · `create_database_credential` · `rotate_database_credential` · `revoke_database_credential` · `attach_database` · `detach_database` · `delete_database` |
+| Brokers & queues | `list_brokers` · `get_broker` · `get_broker_logs` · `get_broker_metrics` · `get_broker_queues` · `create_queue` · `send_queue_message` · `peek_queue_messages` · `redrive_queue` · `get_node_task` · `create_broker` · `update_broker` · `restart_broker` · `attach_broker` · `detach_broker` |
+| Event rules | `list_event_rules` · `get_event_rule` · `create_event_rule` · `update_event_rule` · `test_event_rule` · `list_event_deliveries` · `delete_event_rule` |
+| Storage | `list_storage` · `get_storage` · `list_objects` · `presign_object` · `create_object_folder` · `create_storage` · `create_bucket` · `get_bucket_config` · `update_bucket_config` · `attach_storage` · `detach_storage` · `delete_storage` · `get_storage_logs` · `restart_storage` · `list_storage_keys` · `create_storage_key` · `revoke_storage_key` |
+| Access | `set_access` · `create_share_link` · `list_share_links` · `revoke_share_link` · `list_site_sessions` · `revoke_site_session` · `sign_out_all_visitors` |
+| Observe | `get_status` · `get_metrics` · `get_logs` · `get_audit_log` · `list_log_drains` · `create_log_drain` · `test_log_drain` · `delete_log_drain` |
+| Dashboards | `describe_telemetry` · `query_telemetry` · `list_dashboards` · `get_dashboard` · `create_dashboard` · `add_dashboard_panels` · `update_dashboard_panel` · `remove_dashboard_panels` · `update_dashboard` · `delete_dashboard` |
+| Alerts | `list_alerts` · `get_alert_rule` · `create_alert_rule` · `update_alert_rule` · `silence_alerts` · `acknowledge_alert` · `get_alert_history` · `delete_alert_rule` |
+| Email (while the feature is on) | `get_email_status` · `list_email_domains` · `get_email_domain` · `create_email_domain` · `check_email_domain` · `send_email` · `list_email_messages` · `get_email_message` · `list_email_suppressions` · `remove_email_suppression` · `list_email_addresses` · `add_email_address` · `remove_email_address` |
+| Blueprints (while the feature is on) | `plan_stack` · `apply_stack` · `get_task` |
+| Platform | `restart_services` · `list_nodes` · `get_ha_status` · `get_usage` · `get_quotas` |
 
 A token's effective permissions are always **its scopes ∩ the user's current role**. Demote someone
 and every token they've issued narrows straight away. Every tool call is recorded in the audit log
@@ -168,7 +183,8 @@ the chat and executed only with a signed, target-bound approval; chat tool calls
 Internet ──► Caddy (TLS, wildcard cert via DNS-01)
                 │  *.contentDomain
                 │        ├─ edge-placed sites: file_server from /releases/<sha>
-                │        └─ worker-placed sites: reverse_proxy over WireGuard (503 + Retry-After if down)
+                │        └─ worker-placed sites and apps: reverse_proxy over WireGuard → worker's Caddy :8080
+                │             → files or loopback app (503 + Retry-After if the worker is down)
                 │  control.platformDomain
                 ▼
           control plane (Bun, unix socket behind Caddy)
@@ -178,6 +194,10 @@ Internet ──► Caddy (TLS, wildcard cert via DNS-01)
                 │ desired-state long-poll + heartbeats (node token)
           node agent ──► Caddy admin API (unix socket only)
 ```
+
+A worker-placed site or app is proxied twice. The edge Caddy forwards the request over WireGuard to
+the worker's Caddy on `:8080`, and that Caddy serves the release's files itself for a static site
+or proxies a process/container app to its socket or `127.0.0.1:<port>`.
 
 Skiff is a Bun monorepo:
 
@@ -192,6 +212,10 @@ Skiff is a Bun monorepo:
 | [`packages/core`](packages/core) | The single service layer every surface calls: RBAC, deploys, access, audit |
 | [`packages/db`](packages/db) | Drizzle schema and forward-only SQL migrations, embedded at build time |
 | [`packages/site-config`](packages/site-config) | `_redirects` / `_headers` / `skiff.json` parsing and Caddy route compilation |
+| [`packages/docs`](packages/docs) | User documentation (Markdown), its renderer and the agents' search index; shown in the dashboard at `/docs` |
+| [`apps/docs`](apps/docs) | The same docs as a standalone static site, deployable anywhere (including Skiff) |
+
+User documentation (how to use and run Skiff) lives in [`packages/docs/content`](packages/docs/content): read it in the dashboard under **Docs**, run `bun run docs:dev`, or ask your agent, which can search it with `search_docs`.
 
 The design docs are the source of truth. Start with [`docs/DESIGN.md`](docs/DESIGN.md), then the
 numbered decision log in [`docs/DECISIONS.md`](docs/DECISIONS.md).
@@ -207,8 +231,10 @@ numbered decision log in [`docs/DECISIONS.md`](docs/DECISIONS.md).
 - **Deployed content is untrusted.** Strict Origin/CSRF checks, `__Host-` cookies and reserved
   slugs.
 - **Least privilege.** Caddy's admin API listens only on a unix socket, and the control plane and
-  agent run unprivileged. Secrets use envelope encryption with the master key in `systemd-creds`
-  (TPM2 where available) and can't be read back through the API.
+  agent run unprivileged. Secrets use envelope encryption under a master key sealed with
+  `systemd-creds` (TPM2 plus the host key where available), so it only opens on its own machine;
+  an offline recovery kit is the way back, `skiff-rotate-master-key` replaces it in place, and
+  secrets can't be read back through the API.
 
 Found a vulnerability? Please report it privately through
 [GitHub security advisories](https://github.com/KieranHolroyd/skiff/security/advisories/new)

@@ -2,7 +2,8 @@
 
 Status: **implemented, 2026-11-07** (not yet exercised on a real Debian/Podman node; the unit,
 config, validation, probe and control-plane flow are covered by unit tests; the metrics sampler
-was checked against a real `nats:2.12-alpine`). The decisions are D111 and D123 (metrics) in
+was checked against a real `nats:2.12-alpine`). The decisions are D111, D123 (metrics) and the
+queue-tools D124 (node tasks, §5.1) in
 [DECISIONS.md](./DECISIONS.md).
 
 A managed broker is an org-owned message broker that Skiff provisions, runs and connects to apps:
@@ -98,13 +99,39 @@ At activation the app receives `<P>_URL`, `<P>_HOST`, `<P>_PORT`, `<P>_USER`, `<
 - **REST:** see [API.md](./API.md#managed-queue-brokers).
 - **MCP:** `list_brokers`, `get_broker`, `get_broker_logs`, `get_broker_metrics`,
   `get_broker_queues`, `create_broker`, `update_broker`, `restart_broker`, `attach_broker`,
-  `detach_broker`. Credentials, delete and purge are not on MCP;
-  agents never receive the password (D58).
+  `detach_broker`, and the queue tools `create_queue`, `send_queue_message`,
+  `peek_queue_messages`, `redrive_queue` and `get_node_task` (§5.1). Credentials, delete and
+  purge, and the stream purge/delete tools, are not on MCP; agents never receive the password
+  (D58). The dashboard assistant asks before `send_queue_message` and `redrive_queue`.
 - **CLI:** `skif broker list|create|info|update|attach|detach|restart|delete|restore|purge|logs|credentials|metrics|queues`
+  and the queue tools `queue-create|send|peek|redrive|queue-purge|queue-rm|message-rm`
   (aliases `skif brokers`, `skif queue`).
 - **Dashboard:** Queues list (live + trash, create dialog), detail (connection with audited
   reveal and client snippets, resources, attachments, version upgrade, danger zone), Queues
-  (streams and consumers, §7), Metrics (charts, §7) and logs.
+  (streams and consumers, §7, with New queue, Send message and a per-stream menu: peek, send,
+  move messages, purge, delete), Metrics (charts, §7) and logs.
+
+### 5.1 Queue tools (D124)
+
+The control plane cannot reach a broker, so these run as **node tasks**: the control plane queues
+a typed task, the broker's node agent leases it, runs it over the broker's own client connection
+(as the D123 sampler does) and posts the result back. A call waits up to 20 s; a slower node
+answers `202` with a task to poll (`GET /api/v1/node-tasks/:id`).
+
+| Tool | What it does | Permission |
+|---|---|---|
+| Create queue | Creates `SKIFF_Q_<queue>` with the function-queue settings (§6) now instead of on first use. | `broker:update` |
+| Send message | Publishes a body (`json` or `text`) to `skiff.q.<queue>` as a queue binding would, with an optional delay and up to 100 copies. The task id is the `Nats-Msg-Id`, so a retried lease does not double it. | `broker:update` |
+| Peek | Reads up to 50 messages from any stream by sequence (`STREAM.MSG.GET`), without consuming them; bodies over 16 KiB are cut and binary bodies come back as base64. | `broker:update` |
+| Redrive | Moves up to 1,000 messages from a queue (usually a dead-letter queue) into another: body, id and content type are kept, the attempt count starts again, then the message is deleted from the source. | `broker:update` |
+| Purge | Removes every message; the stream and its consumers stay. | `broker:delete` |
+| Delete stream | Removes the stream and its consumers. A function queue's stream comes back on next use. | `broker:delete` |
+| Delete message | Removes one message by sequence. | `broker:delete` |
+
+Peek counts as an operator action, not a read, because message bodies are application data.
+After a change the stream's new totals are written into the stored listing, so the Queues tab
+does not wait for the next minute's sample. Only agents that advertise `node-tasks` get tasks;
+on an older agent the dashboard says to update the node.
 - **Flag:** `SKIFF_FEATURE_BROKERS` (default on). Off hides the nav entry and refuses new brokers
   and restores; existing brokers keep running.
 
@@ -180,7 +207,8 @@ config.
 
 - `GET /api/v1/brokers/:name/metrics?from&to&interval`: the series, as for databases.
   `GET /api/v1/brokers/:name/queues`: the newest listing. Both need `broker:read`.
-- Dashboard: **Queues** tab (streams, function-queue names, consumers and backlog) and
+- Dashboard: **Queues** tab (streams, function-queue names, consumers and backlog, plus the §5.1
+  actions: new queue, send, peek, move messages, purge, delete stream and delete message) and
   **Metrics** tab (store vs budget, backlog, throughput, connections, memory, oldest message).
   The list and overview show store used against the budget.
 - `/metrics/brokers[/<name>]` ([METRICS.md](./METRICS.md)): configuration and SQLite totals
@@ -195,8 +223,7 @@ config.
 ## 8. Not yet
 
 - RabbitMQ engine (registry entry, helper profile, AMQP greeting probe, management UI off).
-- Per-stream time series (today only the newest listing is kept per stream), and stream actions
-  from the dashboard (purge, delete, peek).
+- Per-stream time series (today only the newest listing is kept per stream).
 - Per-attachment users with subject permissions (today every attached app shares the broker's
   one user), TLS, cross-node endpoints (C2), stream snapshots as backups, moves (D97), bulk actions
   and prune, and an attach panel on the project page.

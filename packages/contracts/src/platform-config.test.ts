@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+	PLATFORM_CONFIG_SECRET_KEYS,
 	applyPlatformConfig,
 	parsePlatformConfigRequest,
 	parseSmsRecipients,
@@ -84,6 +85,10 @@ describe('validatePlatformConfigValue', () => {
 		expect(validatePlatformConfigValue('SKIFF_ALERT_WEBHOOK', 'https://user:pw@hooks.example')).not.toBeNull();
 		expect(validatePlatformConfigValue('SKIFF_ALERT_WEBHOOK', 'file:///etc/passwd')).not.toBeNull();
 		expect(validatePlatformConfigValue('SKIFF_ALERT_EMAIL', 'ops@example.com')).toBeNull();
+		expect(validatePlatformConfigValue('SKIFF_ALERT_WEBHOOK_SECRET', 'a3f9c0de5b7e41a2a3f9c0de5b7e41a2')).toBeNull();
+		expect(validatePlatformConfigValue('SKIFF_ALERT_WEBHOOK_SECRET', 'short')).not.toBeNull();
+		expect(validatePlatformConfigValue('SKIFF_ALERT_WEBHOOK_SECRET', 'has a space in it 123456')).not.toBeNull();
+		expect(PLATFORM_CONFIG_SECRET_KEYS.has('SKIFF_ALERT_WEBHOOK_SECRET')).toBe(true);
 	});
 
 	test('validates Twilio settings and SMS recipients', () => {
@@ -152,5 +157,22 @@ describe('applyPlatformConfig', () => {
 			configure({ section: 'email', unset: ['SKIFF_SMTP_HOST', 'SKIFF_SMTP_PORT', 'SKIFF_SMTP_FROM'] }),
 		);
 		expect(env.size).toBe(0);
+	});
+});
+
+describe('telemetry memory and restart requests', () => {
+	test('memoryMb is a whole number of MiB in range, or null for the default', () => {
+		const parse = (memoryMb: unknown) => parsePlatformConfigRequest({ ...base, action: 'telemetry-memory', memoryMb });
+		expect(parse(1024)).toEqual({ ok: true, request: { ...base, action: 'telemetry-memory', memoryMb: 1024 } });
+		expect(parse(null)).toEqual({ ok: true, request: { ...base, action: 'telemetry-memory', memoryMb: null } });
+		expect(parse(undefined)).toEqual({ ok: true, request: { ...base, action: 'telemetry-memory', memoryMb: null } });
+		for (const bad of [255, 65537, 1024.5, '1024', Number.NaN]) expect(parse(bad).ok).toBe(false);
+	});
+
+	test('restart takes no arguments', () => {
+		expect(parsePlatformConfigRequest({ ...base, action: 'telemetry-restart' })).toEqual({
+			ok: true,
+			request: { ...base, action: 'telemetry-restart' },
+		});
 	});
 });

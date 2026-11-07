@@ -18,10 +18,13 @@ import type { SecretService } from './secrets.ts';
 import type { WorkloadService } from './workloads.ts';
 import type { DatabaseService } from './databases.ts';
 import type { DatabaseStudioService } from './database-studio.ts';
+import type { ContainerConsoleService } from './container-console.ts';
 import type { StorageService } from './storage-instances.ts';
 import type { BrokerService } from './brokers.ts';
 import type { EmailService } from './email.ts';
 import type { EventService } from './events.ts';
+import type { NodeTaskService } from './node-tasks.ts';
+import type { JobService } from './jobs.ts';
 import type { VolumeService } from './volumes.ts';
 import type { AppVolumeService } from './app-volumes.ts';
 import type { ServiceMoveService } from './service-moves.ts';
@@ -31,6 +34,7 @@ import type { BuildService } from './builds.ts';
 import type { LogService } from './logs.ts';
 import type { EnvironmentService } from './environments.ts';
 import type { OperationService } from './operations/service.ts';
+import type { BlueprintService } from './blueprints.ts';
 import type { SchedulerService } from './scheduler.ts';
 import type { ServiceActionsService } from './service-actions.ts';
 import type { BackupTargetService } from './backup-targets.ts';
@@ -45,6 +49,7 @@ import type { ShareService } from './shares.ts';
 import type { DatabaseReplicaService } from './database-replica-service.ts';
 import type { StorageReplicationService } from './storage-replication-service.ts';
 import type { IngressHaService } from './ingress-ha.ts';
+import type { FailoverService } from './failover-service.ts';
 import type { ClusterConfigService } from './cluster-config-service.ts';
 
 /**
@@ -76,6 +81,8 @@ export interface CoreContext {
 	workloads: WorkloadService;
 	databases: DatabaseService;
 	databaseStudio: DatabaseStudioService;
+	/** Container console: inspect, files and shells (D127). */
+	containerConsole: ContainerConsoleService;
 	storage: StorageService;
 	/** Managed queue brokers (D111). */
 	brokers: BrokerService;
@@ -83,6 +90,9 @@ export interface CoreContext {
 	email: EmailService;
 	/** Event notifications into function queues (D122). */
 	events: EventService;
+	nodeTasks: NodeTaskService;
+	/** App cron jobs and one-off commands (plan 09, docs/SCHEDULER.md §Jobs). */
+	jobs: JobService;
 	storageObjects: StorageObjectsService;
 	volumes: VolumeService;
 	appVolumes: AppVolumeService;
@@ -92,6 +102,8 @@ export interface CoreContext {
 	logs: LogService;
 	environments: EnvironmentService;
 	operations: OperationService;
+	/** Blueprint stacks: plan/apply of a declarative file (plan 11). */
+	blueprints: BlueprintService;
 	scheduler: SchedulerService;
 	serviceActions: ServiceActionsService;
 	backupTargets: BackupTargetService;
@@ -112,6 +124,8 @@ export interface CoreContext {
 	storageReplication: StorageReplicationService;
 	/** Ingress HA status (CLUSTERING §7, C5). */
 	ingress: IngressHaService;
+	/** The failover controller: lease, replica moves, ingress rotation, database decide (C8). */
+	failover: FailoverService;
 	/** Cluster tunables (CLUSTERING). */
 	cluster: ClusterConfigService;
 	/** Functions: Workers-compatible workloads on workerd (D110). */

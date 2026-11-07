@@ -63,7 +63,7 @@ The same pattern works for any server that can listen on an inherited socket (`L
 | Python   | Gunicorn                       | `gunicorn --bind fd://3 app:app`                           |
 | Python   | Uvicorn                        | `uvicorn --fd 3 app:app`                                   |
 | Ruby     | Puma                           | socket activation is built in (`LISTEN_FDS`)               |
-| Node.js  | `node:http`                    | `server.listen({ fd: 3 })`                                 |
+| Node.js  | any (`engine: "node"`)         | automatic: the node's preload adopts fd 3 ([`examples/node-http`](../node-http), D125) |
 | Go       | `net/http`                     | `net.FileListener(os.NewFile(3, "socket"))`                |
 | Bun      | —                              | cannot adopt a listener yet; turn socket activation off and stay always on |
 

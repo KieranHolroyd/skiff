@@ -86,4 +86,46 @@ describe('migration aliases', () => {
 		expect(columns).toHaveLength(1);
 		sqlite.close();
 	});
+
+	/**
+	 * The D126 variant migration was published locally as `0053_database_variant.sql` and later
+	 * renumbered (now 0055) when `0053_backup_locations.sql` took that prefix. The ALTER is not
+	 * idempotent, so a database that ran the old id must record the new one instead of rerunning it.
+	 */
+	test('records the Postgres variant migration after it moved from 0053', () => {
+		const sqlite = new Database(':memory:', { create: true, strict: true });
+		sqlite.run('CREATE TABLE skiff_migrations (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)');
+
+		const apply = (migration: { id: string; sql: string }) => {
+			sqlite.run(migration.sql);
+			sqlite.run('INSERT INTO skiff_migrations (id, applied_at) VALUES (?, ?)', [
+				migration.id,
+				Date.now(),
+			]);
+		};
+
+		const variant = migrations.find((entry) => entry.id === '0055_database_variant.sql')!;
+		for (const migration of migrations) {
+			if (migration.id === variant.id) continue;
+			apply(migration);
+		}
+		// The old file had the same ALTER and is what the database already ran.
+		sqlite.run(variant.sql);
+		sqlite.run("INSERT INTO skiff_migrations (id, applied_at) VALUES ('0053_database_variant.sql', ?)", [
+			Date.now(),
+		]);
+
+		expect(() => migrate(sqlite)).not.toThrow();
+		const ids = sqlite
+			.query<{ id: string }, []>('SELECT id FROM skiff_migrations ORDER BY id')
+			.all()
+			.map((row) => row.id);
+		expect(ids).toContain('0055_database_variant.sql');
+		const columns = sqlite
+			.query<{ name: string }, []>('PRAGMA table_info(databases)')
+			.all()
+			.filter((row) => row.name === 'variant');
+		expect(columns).toHaveLength(1);
+		sqlite.close();
+	});
 });

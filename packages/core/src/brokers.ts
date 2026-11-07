@@ -38,6 +38,7 @@ import {
 } from '@skiff/contracts';
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
+import { requireCredentialReveal } from './credential-reveal.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { resolvePlacement } from './placement.ts';
 import { isFunctionTier } from './runtime-tier.ts';
@@ -437,13 +438,12 @@ export class BrokerService {
 	}
 
 	/**
-	 * Reveal the connection URL and password (as D58). Interactive only: MCP and API-key principals
-	 * never receive the secret; attached apps get it at activation instead. Every read is audited.
+	 * Reveal the connection URL and password (as D58): the dashboard session or a CLI API key with
+	 * `broker:credentials`; never MCP (attached apps get it at activation instead). Every read is
+	 * audited.
 	 */
 	credentials(principal: Principal, name: string): BrokerCredentials {
-		requirePermission(principal, 'broker:credentials');
-		if (principal.kind !== 'user')
-			throw new CoreError('forbidden', 'Credential reveal needs an interactive user session.', 403);
+		requireCredentialReveal(principal, 'broker:credentials');
 		const row = this.requireRow(principal, name);
 		const info = brokerEngineRegistry[row.engine];
 		const user = brokerIdentifier(row.name);

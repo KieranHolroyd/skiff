@@ -52,7 +52,11 @@ interface Fixture {
 }
 
 async function fixture(
-	options: { packageJson?: boolean; databaseTlsGenerator?: import('./tls.ts').DatabaseTlsGenerator } = {},
+	options: {
+		packageJson?: boolean;
+		databaseTlsGenerator?: import('./tls.ts').DatabaseTlsGenerator;
+		containerSubids?: import('./userns.ts').SubidFiles;
+	} = {},
 ): Promise<Fixture> {
 	const root = await fs.mkdtemp(join(tmpdir(), 'skiff-helper-systemd-'));
 	directories.push(root);
@@ -82,6 +86,7 @@ async function fixture(
 		socketMode: '0660',
 		socketGroup: 'caddy',
 		...(options.databaseTlsGenerator ? { databaseTlsGenerator: options.databaseTlsGenerator } : {}),
+		...(options.containerSubids ? { containerSubids: options.containerSubids } : {}),
 	});
 	return {
 		root,
@@ -586,7 +591,7 @@ describe('database profile', () => {
 		expect(status.tls?.enabled).toBe(true);
 		expect(status.tls?.caPem).toContain('BEGIN CERTIFICATE');
 		const quadlet = await fs.readFile(join(f.quadletDir, `skiff-workload-${DB_ID}.container`), 'utf8');
-		expect(quadlet).toContain(`Volume=${join(f.runtimeDir, DB_ID, 'tls')}:/run/skiff-tls:ro,Z`);
+		expect(quadlet).toContain(`Volume=${join(f.runtimeDir, DB_ID, 'tls')}:/run/skiff-tls:ro,z`);
 		expect(quadlet).toContain('ssl=on');
 	});
 
@@ -598,6 +603,26 @@ describe('database profile', () => {
 		);
 		expect(f.chowns).toEqual([]);
 		expect(f.runner.calls).toContainEqual(['/usr/bin/systemctl', 'restart', 'skiff-workload-wld_abc123.service']);
+	});
+
+	test('app containers get the containers subid range first; databases do not need it', async () => {
+		const root = await fs.mkdtemp(join(tmpdir(), 'skiff-helper-subids-'));
+		directories.push(root);
+		const subids = { subuid: join(root, 'subuid'), subgid: join(root, 'subgid') };
+		const f = await fixture({ containerSubids: subids });
+
+		f.runner.show = 'ActiveState=active\nSubState=running\nNRestarts=0\n';
+		await f.driver.apply(database(), databaseActivation());
+		await expect(fs.readFile(subids.subuid, 'utf8')).rejects.toThrow();
+
+		await f.driver.apply(
+			workload({ runtime: 'container', release: null, image: 'ghcr.io/acme/app:1', socketActivation: false }),
+			activation(),
+		);
+		expect(await fs.readFile(subids.subuid, 'utf8')).toMatch(/^containers:\d+:\d+\n$/);
+		expect(await fs.readFile(subids.subgid, 'utf8')).toMatch(/^containers:\d+:\d+\n$/);
+		const quadlet = await fs.readFile(join(f.quadletDir, 'skiff-workload-wld_abc123.container'), 'utf8');
+		expect(quadlet).toContain('UserNS=auto');
 	});
 
 	test('refuses to chown a data dir that is a symlink', async () => {

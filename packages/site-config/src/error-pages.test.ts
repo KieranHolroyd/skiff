@@ -3,7 +3,7 @@ import { compileCaddyConfig, errorPageHandler, renderErrorPage, type ErrorPageKi
 import type { SiteCompileInput } from './compile.ts';
 
 type Json = Record<string, unknown>;
-const KINDS: ErrorPageKind[] = ['no-site', 'unknown-host', 'not-found', 'unavailable', 'error'];
+const KINDS: ErrorPageKind[] = ['no-site', 'unknown-host', 'not-found', 'unavailable', 'error', 'awaiting-deploy'];
 
 const site: SiteCompileInput = {
 	host: 'blog.example.dev',
@@ -37,6 +37,17 @@ describe('error pages', () => {
 			expect(renderErrorPage(kind)).not.toContain('{http.request');
 		}
 		expect(placeholders(renderErrorPage('no-site'))).toEqual([]);
+	});
+
+	test('the default page links to the dashboard only with a safe absolute URL', () => {
+		expect(renderErrorPage('awaiting-deploy')).not.toContain('Open in dashboard');
+		expect(renderErrorPage('awaiting-deploy', { dashboardUrl: 'javascript:alert(1)' })).not.toContain('Open in dashboard');
+		const html = renderErrorPage('awaiting-deploy', { dashboardUrl: 'https://cloud.example.dev/projects/{env.SECRET}"x' });
+		expect(html).toContain('Open in dashboard');
+		expect(html).toContain('skiff deploy');
+		// Caller data can never become a Caddy placeholder or break out of the attribute.
+		expect(placeholders(html)).toEqual([]);
+		expect(html).not.toContain('"x');
 	});
 
 	test('negotiate HTML for browsers and plain text otherwise', () => {

@@ -210,8 +210,10 @@ describe('container unit', () => {
 		expect(unit).toContain('Image=ghcr.io/acme/app:1.2.3');
 		expect(unit).toContain('PublishPort=127.0.0.1:3000:3000');
 		expect(unit).toContain('EnvironmentFile=/run/skiff-workloads/wld_abc123/env');
-		expect(unit).toContain('Volume=/var/lib/skiff-workloads/wld_abc123:/data:Z');
-		expect(unit).toContain('Volume=/run/skiff-workloads/wld_abc123/secrets:/run/skiff-secrets:ro,Z');
+		expect(unit).toContain('Volume=/var/lib/skiff-workloads/wld_abc123:/data:Z,U');
+		expect(unit).toContain('Volume=/run/skiff-workloads/wld_abc123/secrets:/run/skiff-secrets:ro,Z,U');
+		// Container root is an unprivileged host uid, not host root.
+		expect(unit).toContain('UserNS=auto:size=65536');
 		expect(unit).toContain('Environment=TLS_KEY_FILE=/run/skiff-secrets/TLS_KEY');
 		expect(unit).toContain('DropCapability=all');
 		expect(unit).toContain('NoNewPrivileges=true');
@@ -360,6 +362,47 @@ describe('database unit', () => {
 		expect(unit).not.toContain('evil');
 	});
 
+	test('the pg_cron variant preloads pg_cron in the owner database (D126)', () => {
+		const cron = renderDatabaseUnit({
+			workload: database({
+				image: 'ghcr.io/kieranholroyd/skiff-postgres:18-pg_cron-1',
+				env: { POSTGRES_USER: 'orders', POSTGRES_DB: 'orders' },
+				database: { engine: 'postgres', version: '18', variant: 'pg_cron' },
+			}),
+			envFile: '/run/env',
+			dataDir: '/var/lib/x',
+		});
+		expect(cron).toContain('Image=ghcr.io/kieranholroyd/skiff-postgres:18-pg_cron-1');
+		expect(cron).toContain('shared_preload_libraries=pg_stat_statements,pg_cron');
+		expect(cron).toContain('cron.database_name=orders');
+		expect(cron).toContain('cron.host=/var/run/postgresql');
+		expect(cron).toContain('User=70:70');
+		expect(cron).toContain('ReadOnly=true');
+		const postgis = renderDatabaseUnit({
+			workload: database({
+				image: 'ghcr.io/kieranholroyd/skiff-postgres:18-postgis-1',
+				database: { engine: 'postgres', version: '18', variant: 'postgis' },
+			}),
+			envFile: '/run/env',
+			dataDir: '/var/lib/x',
+		});
+		expect(postgis).toContain('Image=ghcr.io/kieranholroyd/skiff-postgres:18-postgis-1');
+		expect(postgis).toContain('"shared_preload_libraries=pg_stat_statements"');
+		expect(postgis).not.toContain('cron.');
+		// The cron database name lands in argv, so only a plain identifier is accepted.
+		expect(() =>
+			renderDatabaseUnit({
+				workload: database({
+					image: 'ghcr.io/kieranholroyd/skiff-postgres:18-pg_cron-1',
+					env: { POSTGRES_DB: 'x -c archive_command=evil' },
+					database: { engine: 'postgres', version: '18', variant: 'pg_cron' },
+				}),
+				envFile: '/run/env',
+				dataDir: '/var/lib/x',
+			}),
+		).toThrow(/POSTGRES_DB/);
+	});
+
 	test('refuses a workload without a database profile', () => {
 		expect(() =>
 			renderDatabaseUnit({ workload: workload(), envFile: '/run/env', dataDir: '/var/lib/x' }),
@@ -373,7 +416,10 @@ describe('database unit', () => {
 			dataDir: '/var/lib/x',
 			tlsDir: `/run/skiff-workloads/${DB_ID}/tls`,
 		});
-		expect(unit).toContain(`Volume=/run/skiff-workloads/${DB_ID}/tls:/run/skiff-tls:ro,Z`);
+		expect(unit).toContain(`Volume=/run/skiff-workloads/${DB_ID}/tls:/run/skiff-tls:ro,z`);
+		// Managed services keep the image's fixed uid and get no user namespace; only app and
+		// runner containers do (see the app unit test).
+		expect(unit).not.toContain('UserNS=');
 		expect(unit).toContain('ssl=on');
 		expect(unit).toContain('ssl_cert_file=/run/skiff-tls/server.crt');
 		expect(unit).toContain('ssl_key_file=/run/skiff-tls/server.key');
@@ -454,7 +500,7 @@ describe('database pooler unit', () => {
 				userlistPath: '/run/users.txt',
 				tlsDir: '/run/skiff-workloads/db_abc123/tls',
 			}),
-		).toContain('Volume=/run/skiff-workloads/db_abc123/tls:/run/skiff-tls:ro,Z');
+		).toContain('Volume=/run/skiff-workloads/db_abc123/tls:/run/skiff-tls:ro,z');
 	});
 });
 
@@ -612,10 +658,10 @@ describe('app volume mounts (plan 07)', () => {
 			],
 		});
 		expect(unit).toContain(
-			'Volume=/var/lib/skiff-workloads/apps/prj_abc123/av_1:/var/lib/app:Z',
+			'Volume=/var/lib/skiff-workloads/apps/prj_abc123/av_1:/var/lib/app:Z,U',
 		);
 		expect(unit).toContain(
-			'Volume=/var/lib/skiff-workloads/apps/prj_abc123/av_2:/var/lib/media:ro:Z',
+			'Volume=/var/lib/skiff-workloads/apps/prj_abc123/av_2:/var/lib/media:ro,Z',
 		);
 	});
 });
@@ -644,7 +690,8 @@ describe('worker and runner units (plan 21)', () => {
 		expect(unit).not.toContain('PublishPort=');
 		expect(unit).toContain('ReadOnly=true');
 		expect(unit).toContain('Restart=on-failure');
-		expect(unit).toContain('Volume=/var/lib/skiff-workloads/wld_abc123-r1:/data:Z');
+		expect(unit).toContain('Volume=/var/lib/skiff-workloads/wld_abc123-r1:/data:Z,U');
+		expect(unit).toContain('UserNS=auto:size=65536');
 	});
 
 	test('a runner is ephemeral: fixed entrypoint, newest image, no restart, no data dir', () => {
@@ -750,6 +797,35 @@ describe('engine database units (D95)', () => {
 				dataDir: '/var/lib/x',
 			}),
 		).toThrow(/server config/);
+	});
+
+	test('ClickHouse keeps the image entrypoint and mounts its helper-written config directory', () => {
+		const unit = renderDatabaseUnit({
+			workload: engineDb('clickhouse', '26.8', 'docker.io/clickhouse/clickhouse-server:26.8', 2048),
+			envFile: '/run/env',
+			dataDir: '/var/lib/x',
+			serverConfigPath: '/run/skiff-workloads/db_x/clickhouse',
+		});
+		expect(unit).toContain('Image=docker.io/clickhouse/clickhouse-server:26.8');
+		// No Exec: the entrypoint creates the database on first start, then runs the server.
+		expect(unit).not.toContain('Exec=');
+		expect(unit).not.toContain('Entrypoint=');
+		expect(unit).toContain('User=101:101');
+		expect(unit).toContain('PublishPort=127.0.0.1:15432:8123');
+		expect(unit).toContain('Volume=/var/lib/x:/data:Z');
+		expect(unit).toContain('Volume=/run/skiff-workloads/db_x/clickhouse:/etc/skiff/clickhouse:ro,Z');
+		expect(unit).toContain('Tmpfs=/tmp:rw,size=64m');
+		expect(unit).toContain('ReadOnly=true');
+		expect(unit).toContain('DropCapability=all');
+		expect(unit).toContain('NoNewPrivileges=true');
+		expect(unit).toContain('MemoryMax=2048M');
+		expect(() =>
+			renderDatabaseUnit({
+				workload: engineDb('clickhouse', '26.8', 'docker.io/clickhouse/clickhouse-server:26.8', 2048),
+				envFile: '/run/env',
+				dataDir: '/var/lib/x',
+			}),
+		).toThrow(/config directory/);
 	});
 
 	test('MongoDB cache grows with memory', () => {

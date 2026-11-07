@@ -21,10 +21,17 @@ export interface HelperConfig {
 	runtimeDir: string;
 	/** Persistent container data root. */
 	stateDir: string;
+	/**
+	 * The agent's replica link root (C7, docs/CLUSTERING.md §9.2): it must equal the agent's
+	 * `<SKIFF_DATA_DIR>/replication`. Only `<dir>/<replica id>` is ever mounted, read-only.
+	 */
+	replicationDir: string;
 	/** Release roots to probe, in order. The agent's cache and /srv/skiff may differ. */
 	releaseDirs: string[];
 	/** Absolute bun used for the default `bun run start` process command. */
 	bunPath: string;
+	/** Absolute node whose directory leads PATH for a Node.js app's start script (D125). */
+	nodePath: string;
 	/** Root of the pinned workerd installations: `<workerdDir>/<version>/workerd` (FN1). */
 	workerdDir: string;
 	systemctlPath: string;
@@ -160,8 +167,10 @@ export function loadHelperConfig(env: Env = process.env): HelperConfig {
 		quadletDir: absolute(env, 'SKIFF_HELPER_QUADLET_DIR', '/etc/containers/systemd'),
 		runtimeDir,
 		stateDir: absolute(env, 'SKIFF_HELPER_STATE_DIR', '/var/lib/skiff-workloads'),
+		replicationDir: absolute(env, 'SKIFF_HELPER_REPLICATION_DIR', '/var/lib/skiff/agent/replication'),
 		releaseDirs: releaseDirs(optional(env, 'SKIFF_HELPER_RELEASE_DIRS', DEFAULT_RELEASE_DIRS.join(','))),
 		bunPath: absolute(env, 'SKIFF_HELPER_BUN_PATH', '/usr/local/bin/bun'),
+		nodePath: absolute(env, 'SKIFF_HELPER_NODE_PATH', '/usr/local/bin/node'),
 		workerdDir: absolute(env, 'SKIFF_HELPER_WORKERD_DIR', '/usr/lib/skiff/workerd'),
 		systemctlPath: absolute(env, 'SKIFF_HELPER_SYSTEMCTL', '/usr/bin/systemctl'),
 		journalctlPath: absolute(env, 'SKIFF_HELPER_JOURNALCTL', '/usr/bin/journalctl'),

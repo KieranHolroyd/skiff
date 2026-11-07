@@ -22,6 +22,8 @@
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PlugIcon from '@lucide/svelte/icons/plug';
 	import PlusIcon from '@lucide/svelte/icons/plus';
+	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
+	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import SlidersHorizontalIcon from '@lucide/svelte/icons/sliders-horizontal';
 	import TerminalIcon from '@lucide/svelte/icons/terminal';
@@ -31,7 +33,10 @@
 		storageEnvNames,
 		type StorageAttachmentView,
 		type StorageBucketView,
-		type StorageCredentials
+		type StorageCredentials,
+		type StorageKeyReveal,
+		type StorageKeyView,
+		type StorageReplicationView
 	} from '@skiff/contracts';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
@@ -184,6 +189,75 @@
 	function hide() {
 		credentials = null;
 	}
+
+	// --- root key rotation (§5): staged, proved by the node, rolled back on failure ----------------
+
+	const rootKey = $derived(st.rootKey);
+
+	function rotateRoot() {
+		askConfirm({
+			title: `Rotate the root key of ${st.name}?`,
+			description:
+				'RustFS restarts with a new root key, so S3 requests fail briefly. Once the node confirms the new key, the current one stops working: update any tool that uses it. Attached apps and named keys are not affected. If the node cannot confirm it within 10 minutes, the current key comes back.',
+			confirmLabel: 'Rotate root key',
+			tone: 'danger',
+			action: '?/rotateRoot'
+		});
+	}
+
+	function cancelRotation() {
+		askConfirm({
+			title: 'Cancel the root key rotation?',
+			description: 'RustFS restarts once more with the current root key.',
+			confirmLabel: 'Cancel rotation',
+			action: '?/cancelRootRotation'
+		});
+	}
+
+	// --- named keys: metadata in page data, secrets only on an audited reveal -----------------------
+
+	let keyOpen = $state(false);
+	let revealedKey = $state<StorageKeyReveal | null>(null);
+	let revealingKey = $state<string | null>(null);
+	const liveKeys = $derived(data.keys.filter((key) => key.status !== 'revoked'));
+	const revokedKeys = $derived(data.keys.filter((key) => key.status === 'revoked'));
+	const keyEndpoint = $derived(st.publicUrl ?? st.internalEndpoint.process);
+
+	async function revealKey(key: StorageKeyView) {
+		revealingKey = key.id;
+		const outcome = await runAction('?/revealKey', { id: key.id }, { apply: false });
+		revealingKey = null;
+		if (outcome.type === 'success')
+			revealedKey =
+				(outcome.data as { revealedKey?: StorageKeyReveal } | undefined)?.revealedKey ?? null;
+	}
+
+	function revokeKey(key: StorageKeyView) {
+		askConfirm({
+			title: `Revoke key ${key.name}?`,
+			description: `Anything still signing with ${key.accessKeyId} is refused once the node removes it, within a minute. This cannot be undone; create a new key instead.`,
+			confirmLabel: 'Revoke key',
+			tone: 'danger',
+			action: '?/revokeKey',
+			fields: { id: key.id }
+		});
+	}
+
+	const keyTone = (status: StorageKeyView['status']) =>
+		status === 'active' ? 'success' : status === 'expired' ? 'warning' : 'neutral';
+
+	// --- replication -------------------------------------------------------------------------------
+
+	/** On the target's own page the rule is read-only: it is managed from the source. */
+	const isSource = (replica: StorageReplicationView) => replica.sourceId === st.id;
+	const replicaTone = (status: StorageReplicationView['status']) =>
+		status === 'protected'
+			? 'success'
+			: status === 'failed'
+				? 'danger'
+				: status === 'lagging'
+					? 'warning'
+					: 'neutral';
 
 	// --- buckets ---------------------------------------------------------------------------------
 
@@ -427,45 +501,122 @@
 		<Panel
 			title="Replication"
 			icon={LayersIcon}
-			description="Passive bucket targets on other nodes. The source stays active; promotion is manual."
+			description="Bucket copies on other nodes. The source's node copies new and changed objects every sync interval and mirrors deletes; the target is passive and promotion is manual."
 		>
 			{#if data.replicas.length === 0}
 				<p class="text-sm text-muted-foreground">
-					No replication target. A target must be a private instance on another node.
+					No replication target. A target must be a private instance on another node; its buckets
+					are created for it.
 				</p>
 			{:else}
-				<div class="space-y-2">
+				<div class="space-y-3">
 					{#each data.replicas as replica (replica.id)}
-						<div
-							class="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm"
-						>
-							<div class="flex items-center gap-2">
-								<span class="font-medium">{replica.targetName ?? replica.targetId}</span>
-								<StatusBadge status={replica.status} />
-								{#if replica.lagSeconds !== null}
-									<span class="text-xs text-muted-foreground">{replica.lagSeconds}s lag</span>
+						{@const source = isSource(replica)}
+						<div class="space-y-2 rounded-md border px-3 py-2 text-sm">
+							<div class="flex flex-wrap items-center justify-between gap-2">
+								<div class="flex flex-wrap items-center gap-2">
+									<span class="font-mono text-xs">{replica.sourceName ?? replica.sourceId}</span>
+									<ArrowRightIcon class="size-3.5 text-muted-foreground" />
+									<span class="font-mono text-xs font-medium"
+										>{replica.targetName ?? replica.targetId}</span
+									>
+									<StatusBadge
+										status={replica.status}
+										label={replica.status}
+										tone={replicaTone(replica.status)}
+									/>
+									{#if !source}
+										<Badge variant="outline">this instance is the target</Badge>
+									{/if}
+								</div>
+								{#if source && can.update}
+									<Button
+										variant="ghost"
+										size="xs"
+										aria-label="Remove replication to {replica.targetName ?? replica.targetId}"
+										onclick={() =>
+											askConfirm({
+												title: `Remove replication to ${replica.targetName ?? replica.targetId}?`,
+												description:
+													'Copying stops and the link key is removed. The target instance and the objects already copied stay.',
+												confirmLabel: 'Remove target',
+												tone: 'danger',
+												action: '?/removeReplica',
+												fields: { id: replica.id }
+											})}
+									>
+										<TrashIcon class="size-3.5" />
+									</Button>
 								{/if}
 							</div>
-							<Button
-								variant="ghost"
-								size="xs"
-								onclick={() =>
-									askConfirm({
-										title: `Remove replication to ${replica.targetName ?? replica.targetId}?`,
-										description: 'The rule is removed; the target instance and its objects stay.',
-										confirmLabel: 'Remove target',
-										tone: 'danger',
-										action: '?/removeReplica',
-										fields: { id: replica.id }
-									})}
-							>
-								<TrashIcon class="size-3.5" />
-							</Button>
+							<dl class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
+								<div>
+									<dt class="text-muted-foreground">Last full sync</dt>
+									<dd>
+										{replica.lastSyncAt
+											? ago(replica.lastSyncAt)
+											: 'not yet'}{replica.lagSeconds !== null
+											? ` · ${formatDuration(replica.lagSeconds)} lag`
+											: ''}
+									</dd>
+								</div>
+								<div>
+									<dt class="text-muted-foreground">Last attempt</dt>
+									<dd>{ago(replica.lastAttemptAt)}</dd>
+								</div>
+								<div>
+									<dt class="text-muted-foreground">Copied</dt>
+									<dd class="tabular-nums">
+										{count(replica.objectsCopied)} objects · {formatBytes(replica.bytesCopied)}
+									</dd>
+								</div>
+								<div>
+									<dt class="text-muted-foreground">Pending</dt>
+									<dd class="tabular-nums">
+										{replica.pendingObjects === null ? '—' : count(replica.pendingObjects)}
+									</dd>
+								</div>
+							</dl>
+							{#if !replica.initialSyncAt}
+								<p class="text-xs text-muted-foreground">
+									The first full pass has not finished, so the target is not a usable copy yet.
+								</p>
+							{/if}
+							{#if replica.lastError}
+								<Notice tone={replica.status === 'failed' ? 'danger' : 'warning'}>
+									<span class="font-mono text-xs break-all">{replica.lastError}</span>
+								</Notice>
+							{/if}
+							{#if replica.buckets.length > 0}
+								<ul class="flex flex-wrap gap-1.5">
+									{#each replica.buckets as bucket (bucket.name)}
+										<li>
+											<Badge
+												variant={bucket.status === 'error' ? 'destructive' : 'secondary'}
+												class="font-mono font-normal"
+												title={bucket.error ??
+													(bucket.lastSyncAt
+														? `in sync as of ${bucket.lastSyncAt}`
+														: bucket.status)}
+											>
+												{bucket.name}
+												<span class="text-muted-foreground"
+													>{bucket.status === 'in-sync'
+														? '✓'
+														: bucket.status === 'error'
+															? `${bucket.pending} failed`
+															: '…'}</span
+												>
+											</Badge>
+										</li>
+									{/each}
+								</ul>
+							{/if}
 						</div>
 					{/each}
 				</div>
 			{/if}
-			{#if data.replicaTargets.length > 0}
+			{#if data.replicaTargets.length > 0 && !deleted && !data.replicas.some((replica) => !isSource(replica))}
 				<form method="POST" action="?/addReplica" class="mt-3 flex flex-wrap items-end gap-2">
 					<label class="text-xs text-muted-foreground" for="replica-target">Add target</label>
 					<select
@@ -501,8 +652,28 @@
 								Reveal root key
 							</Button>
 						{/if}
+						{#if rootKey?.status === 'rotating'}
+							<Button variant="outline" size="sm" onclick={cancelRotation}>Cancel rotation</Button>
+						{:else if st.status === 'running'}
+							<Button variant="outline" size="sm" onclick={rotateRoot}>
+								<RefreshCwIcon />Rotate
+							</Button>
+						{/if}
 					{/if}
 				{/snippet}
+
+				{#if rootKey?.status === 'rotating'}
+					<Notice tone="warning" title="Root key rotation in progress" class="mb-4">
+						RustFS is restarting with {rootKey.pendingAccessKeyId}. The current key ({rootKey.accessKeyId})
+						keeps working until the node confirms the new one{rootKey.rotationStartedAt
+							? `; started ${ago(rootKey.rotationStartedAt)}`
+							: ''}. Without a confirmation within 10 minutes, the current key comes back.
+					</Notice>
+				{:else if rootKey?.status === 'failed'}
+					<Notice tone="danger" title="The last root key rotation was rolled back" class="mb-4">
+						{rootKey.error ?? 'The node did not confirm the new key.'} The root key is still {rootKey.accessKeyId}.
+					</Notice>
+				{/if}
 
 				<DetailList>
 					<dt>Process apps</dt>
@@ -528,6 +699,14 @@
 					<dd class="font-mono text-xs">{st.region}</dd>
 					<dt>Addressing</dt>
 					<dd class="text-xs">Path-style</dd>
+					{#if rootKey}
+						<dt>Root key</dt>
+						<dd class="font-mono text-xs">
+							{rootKey.accessKeyId}{#if rootKey.rotatedAt}<span class="text-muted-foreground">
+									· rotated {ago(rootKey.rotatedAt)}</span
+								>{/if}
+						</dd>
+					{/if}
 					{#if credentials}
 						<dt>Root endpoint</dt>
 						<dd><CopyValue value={credentials.endpoint} label="root endpoint" /></dd>
@@ -679,6 +858,125 @@
 				{/if}
 			</Panel>
 		</div>
+
+		<Panel
+			title="Access keys"
+			icon={KeyRoundIcon}
+			count={liveKeys.length}
+			description="Named keys for people and outside services, scoped to the buckets you choose. Apps on Skiff get their own key when attached."
+			flush
+		>
+			{#snippet actions()}
+				{#if can.update && !deleted && readyBuckets.length > 0}
+					<Button size="sm" variant="outline" onclick={() => (keyOpen = true)}>
+						<PlusIcon />New key
+					</Button>
+				{/if}
+			{/snippet}
+
+			{#if revealedKey}
+				<div class="space-y-3 border-b p-4">
+					<DetailList>
+						<dt>Endpoint</dt>
+						<dd><CopyValue value={keyEndpoint} label="endpoint" /></dd>
+						<dt>Access key ID</dt>
+						<dd><CopyValue value={revealedKey.accessKeyId} label="access key ID" /></dd>
+						<dt>Secret key</dt>
+						<dd><CopyValue value={revealedKey.secretAccessKey} label="secret key" secret /></dd>
+					</DetailList>
+					<div class="flex items-center justify-between gap-2">
+						<p class="text-xs text-muted-foreground">
+							Key “{revealedKey.name}”. This reveal was recorded in the audit log.
+						</p>
+						<Button variant="outline" size="sm" onclick={() => (revealedKey = null)}>
+							<EyeOffIcon />Hide
+						</Button>
+					</div>
+				</div>
+			{/if}
+
+			{#if data.keys.length === 0}
+				<div class="p-4">
+					<p class="text-sm text-muted-foreground">
+						No named keys. Create one for a backup tool, a CDN or a teammate's S3 client; it can
+						only reach the buckets you grant.
+					</p>
+				</div>
+			{:else}
+				<Table.Root>
+					<Table.Header>
+						<Table.Row>
+							<Table.Head class="pl-4">Key</Table.Head>
+							<Table.Head>Buckets</Table.Head>
+							<Table.Head class="hidden md:table-cell">Status</Table.Head>
+							<Table.Head class="hidden lg:table-cell">Expires</Table.Head>
+							<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
+						</Table.Row>
+					</Table.Header>
+					<Table.Body>
+						{#each [...liveKeys, ...revokedKeys] as key (key.id)}
+							<Table.Row>
+								<Table.Cell class="pl-4">
+									<div class="min-w-0">
+										<span class="font-mono text-sm font-medium">{key.name}</span>
+										<p class="truncate font-mono text-xs text-muted-foreground">
+											{key.accessKeyId}{key.purpose ? ` · ${key.purpose}` : ''}
+										</p>
+									</div>
+								</Table.Cell>
+								<Table.Cell>
+									<div class="flex flex-wrap gap-1">
+										{#each key.grants as grant (grant.bucket)}
+											<Badge
+												variant={grant.mode === 'read-write' ? 'secondary' : 'outline'}
+												class="font-mono font-normal"
+												title={grant.mode}
+											>
+												{grant.bucket}<span class="text-muted-foreground"
+													>{grant.mode === 'read-write' ? 'rw' : 'r'}</span
+												>
+											</Badge>
+										{/each}
+									</div>
+								</Table.Cell>
+								<Table.Cell class="hidden md:table-cell">
+									<StatusBadge status={key.status} label={key.status} tone={keyTone(key.status)} />
+								</Table.Cell>
+								<Table.Cell class="hidden text-xs lg:table-cell">
+									{key.expiresAt ? formatDateTime(key.expiresAt) : 'Never'}
+								</Table.Cell>
+								<Table.Cell class="pr-4">
+									{#if key.status === 'active' && !deleted && (can.credentials || can.update)}
+										<RowMenu label="Actions for {key.name}">
+											{#if can.credentials}
+												<DropdownMenu.Item
+													disabled={revealingKey === key.id}
+													onSelect={() => revealKey(key)}
+												>
+													<KeyRoundIcon />Reveal secret
+												</DropdownMenu.Item>
+											{/if}
+											{#if can.update}
+												{#if can.credentials}<DropdownMenu.Separator />{/if}
+												<DropdownMenu.Item variant="destructive" onSelect={() => revokeKey(key)}>
+													<TrashIcon />Revoke
+												</DropdownMenu.Item>
+											{/if}
+										</RowMenu>
+									{/if}
+								</Table.Cell>
+							</Table.Row>
+						{/each}
+					</Table.Body>
+				</Table.Root>
+			{/if}
+			{#snippet footer()}
+				<span>
+					Revealing a secret needs <code class="font-mono">storage:credentials</code> and is audited.
+					MCP clients can list, create and revoke keys but never read a secret.
+				</span>
+			{/snippet}
+		</Panel>
 	{:else if tab === 'buckets'}
 		<!-- Buckets ------------------------------------------------------------------------------- -->
 		<Panel
@@ -1267,6 +1565,51 @@
 
 {#if can.update && !deleted}
 	<FormDialog
+		bind:open={keyOpen}
+		icon={KeyRoundIcon}
+		title="New access key for {st.name}"
+		description="The key can reach only the buckets you grant. Its secret is not shown now: reveal it from the list when you need it."
+		action="?/createKey"
+		submitLabel="Create key"
+		size="lg"
+	>
+		<Field.Group>
+			<div class="grid gap-4 sm:grid-cols-2">
+				<Field.Field data-invalid={errors.name ? true : undefined}>
+					<Field.Label for="key-name">Name</Field.Label>
+					<Input
+						id="key-name"
+						name="name"
+						placeholder="backup-tool"
+						maxlength={60}
+						required
+						autocapitalize="off"
+						spellcheck="false"
+						class="font-mono text-sm"
+						aria-invalid={errors.name ? 'true' : undefined}
+					/>
+					{#if errors.name}<Field.Error>{errors.name}</Field.Error>{/if}
+				</Field.Field>
+				<Field.Field data-invalid={errors.expiresAt ? true : undefined}>
+					<Field.Label for="key-expires">Expires</Field.Label>
+					<Input id="key-expires" name="expiresAt" type="date" class="text-sm" />
+					<Field.Description
+						>Optional. The key stops working at the end of that day (UTC).</Field.Description
+					>
+					{#if errors.expiresAt}<Field.Error>{errors.expiresAt}</Field.Error>{/if}
+				</Field.Field>
+			</div>
+			<Field.Field>
+				<Field.Label for="key-purpose">Purpose</Field.Label>
+				<Input id="key-purpose" name="purpose" maxlength={120} placeholder="Nightly offsite copy" />
+			</Field.Field>
+			<GrantsFields buckets={readyBucketNames} error={errors.grants} idPrefix="key-grant" />
+		</Field.Group>
+	</FormDialog>
+{/if}
+
+{#if can.update && !deleted}
+	<FormDialog
 		bind:open={resizeOpen}
 		icon={SlidersHorizontalIcon}
 		title="Resize {st.name}"
@@ -1346,7 +1689,7 @@
 		bind:open={moveOpen}
 		icon={ArrowLeftRightIcon}
 		title="Move {st.name} to another node"
-		description="Skiff cannot copy objects between nodes yet, so {st.name} starts empty on the target. Its buckets, access keys and attached apps' credentials come back unchanged; the copy on {nodeLabel} is deleted."
+		description="A move does not copy objects, so {st.name} starts empty on the target. Its buckets, access keys and attached apps' credentials come back unchanged; the copy on {nodeLabel} is deleted. Copy what you need first."
 		action="?/move"
 		submitLabel="Move storage"
 	>

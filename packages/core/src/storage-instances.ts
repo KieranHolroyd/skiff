@@ -53,6 +53,8 @@ import {
 	type StorageKeyView,
 	type StorageMetricBucket,
 	type StorageMetricPoint,
+	type StorageRootKeyReport,
+	type StorageRootKeyState,
 	type StorageRoute,
 	type StorageStatus,
 	type StorageUpdate,
@@ -65,6 +67,7 @@ import {
 } from '@skiff/contracts';
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
+import { requireCredentialReveal } from './credential-reveal.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { resolvePlacement } from './placement.ts';
 import type { ProjectRow } from './projects.ts';
@@ -437,9 +440,9 @@ export class StorageService {
 		return due.length;
 	}
 
-	/** The root key, for humans with `storage:credentials` (S6). Audited; MCP never calls this. */
+	/** The root key, for humans with `storage:credentials` (S6): dashboard or CLI API key, never MCP. Audited. */
 	credentials(principal: Principal, name: string): StorageCredentials {
-		requirePermission(principal, 'storage:credentials');
+		requireCredentialReveal(principal, 'storage:credentials');
 		const row = this.requireRow(principal, name);
 		const node = this.ctx.db.select({ name: nodes.name }).from(nodes).where(eq(nodes.id, row.nodeId)).get();
 		const internalEndpoint = `http://127.0.0.1:${row.hostPort}`;
@@ -505,6 +508,160 @@ export class StorageService {
 		return this.toView(this.requireRow(principal, name));
 	}
 
+	// ---------------------------------------------------------------- root key rotation
+
+	/**
+	 * Stage a new root key (§5). RustFS reads its root pair from the environment only (its admin
+	 * API cannot change it), so the instance is re-activated with the pending pair and restarts.
+	 * The node's agent proves the new key against the running server and reports it; then the pair
+	 * is promoted, which changes no activation input, so nothing restarts again. A rejected key, a
+	 * timeout or a cancel rolls back to the previous pair (one more restart). Scoped keys, buckets
+	 * and objects are untouched; attached apps never see the root key, so none of them restart.
+	 */
+	rotateRootKey(principal: Principal, name: string): StorageView {
+		requirePermission(principal, 'storage:credentials');
+		const row = this.requireRow(principal, name);
+		if (row.rootPendingAccessKey)
+			throw new ConflictError(`A root key rotation for "${row.name}" is already waiting for its node. Cancel it first, or wait.`);
+		if (row.status !== 'running')
+			throw new ConflictError(`"${row.name}" is ${row.status}; rotate the root key once it is running, so the node can prove the new key.`);
+		const now = this.ctx.now();
+		const pending = mintRootKeyPair();
+		this.ctx.db
+			.update(storageInstances)
+			.set({
+				rootPendingAccessKey: pending.accessKeyId,
+				rootPendingSecret: this.ctx.secrets.seal(row.orgId, pending.secret),
+				rootRotationStartedAt: now,
+				rootRotationError: null,
+				message: 'Root key rotation: restarting with the new key.',
+				updatedAt: now,
+			})
+			.where(eq(storageInstances.id, row.id))
+			.run();
+		this.ctx.logs.appendServiceSystem({
+			kind: 'storage',
+			serviceId: row.id,
+			orgId: row.orgId,
+			nodeId: row.nodeId,
+			level: 'warn',
+			message: `Root key rotation to ${pending.accessKeyId} requested by ${principal.userId}; RustFS restarts with the new key.`,
+		});
+		this.ctx.audit.record({
+			principal,
+			action: 'storage.root-key.rotate',
+			resource: 'storage',
+			resourceId: row.id,
+			args: { name: row.name, from: row.rootAccessKey, to: pending.accessKeyId },
+			result: 'ok',
+		});
+		this.ctx.projects.bump(principal.orgId);
+		return this.toView(this.requireRow(principal, name));
+	}
+
+	/** Abandon a staged rotation; the instance restarts with its current key. */
+	cancelRootKeyRotation(principal: Principal, name: string): StorageView {
+		requirePermission(principal, 'storage:credentials');
+		const row = this.requireRow(principal, name);
+		if (!row.rootPendingAccessKey) throw new ConflictError(`"${row.name}" has no root key rotation in progress.`);
+		this.rollbackRootKey(row, null);
+		this.ctx.audit.record({
+			principal,
+			action: 'storage.root-key.cancel',
+			resource: 'storage',
+			resourceId: row.id,
+			args: { name: row.name, pending: row.rootPendingAccessKey },
+			result: 'ok',
+		});
+		return this.toView(this.requireRow(principal, name));
+	}
+
+	/**
+	 * Root keys the node proved or saw refused. Only a report for the pending key moves anything:
+	 * `accepted` promotes it, `rejected` rolls back. Reports for the current key are ignored.
+	 */
+	applyRootKeyReports(nodeId: string, reports: StorageRootKeyReport[]): void {
+		for (const report of reports) {
+			const row = this.rowById(report.storageId);
+			if (!row || row.nodeId !== nodeId || row.deletedAt) continue;
+			if (!row.rootPendingAccessKey || report.accessKeyId !== row.rootPendingAccessKey) continue;
+			if (report.result === 'rejected') {
+				this.rollbackRootKey(
+					row,
+					`RustFS refused the new root key${report.message ? ` (${report.message})` : ''}; the previous key is back in use.`,
+				);
+				continue;
+			}
+			const now = this.ctx.now();
+			this.ctx.db
+				.update(storageInstances)
+				.set({
+					rootAccessKey: row.rootPendingAccessKey,
+					rootSecret: row.rootPendingSecret!,
+					rootPendingAccessKey: null,
+					rootPendingSecret: null,
+					rootRotationStartedAt: null,
+					rootRotationError: null,
+					rootRotatedAt: now,
+					message: null,
+					updatedAt: now,
+				})
+				.where(eq(storageInstances.id, row.id))
+				.run();
+			this.ctx.logs.appendServiceSystem({
+				kind: 'storage',
+				serviceId: row.id,
+				orgId: row.orgId,
+				nodeId: row.nodeId,
+				level: 'info',
+				message: `Root key rotated to ${row.rootPendingAccessKey}; the previous key no longer works.`,
+			});
+			this.ctx.audit.record({
+				orgId: row.orgId,
+				action: 'storage.root-key.rotated',
+				resource: 'storage',
+				resourceId: row.id,
+				args: { name: row.name, from: row.rootAccessKey, to: row.rootPendingAccessKey },
+				result: 'ok',
+			});
+			this.ctx.projects.bump(row.orgId);
+		}
+	}
+
+	private rollbackRootKey(row: StorageRow, error: string | null): void {
+		const now = this.ctx.now();
+		this.ctx.db
+			.update(storageInstances)
+			.set({
+				rootPendingAccessKey: null,
+				rootPendingSecret: null,
+				rootRotationStartedAt: null,
+				rootRotationError: error,
+				message: error ? 'Root key rotation rolled back.' : null,
+				updatedAt: now,
+			})
+			.where(eq(storageInstances.id, row.id))
+			.run();
+		this.ctx.logs.appendServiceSystem({
+			kind: 'storage',
+			serviceId: row.id,
+			orgId: row.orgId,
+			nodeId: row.nodeId,
+			level: error ? 'error' : 'warn',
+			message: error ?? `Root key rotation to ${row.rootPendingAccessKey} cancelled; restarting with the current key.`,
+		});
+		if (error)
+			this.ctx.audit.record({
+				orgId: row.orgId,
+				action: 'storage.root-key.rollback',
+				resource: 'storage',
+				resourceId: row.id,
+				args: { name: row.name, pending: row.rootPendingAccessKey, error },
+				result: 'error',
+			});
+		this.ctx.projects.bump(row.orgId);
+	}
+
 	// ---------------------------------------------------------------- named keys
 
 	listKeys(principal: Principal, name: string): StorageKeyView[] {
@@ -518,6 +675,8 @@ export class StorageService {
 		const input = storageKeyCreateSchema.parse(raw ?? {});
 		const row = this.requireRow(principal, name);
 		this.assertGrants(row, input.grants);
+		if (input.name.startsWith('attachment-'))
+			throw new ValidationError('Key names starting with "attachment-" are reserved for project attachments.');
 		if (this.keysOf(row.id).some((key) => key.name === input.name))
 			throw new ConflictError(`"${row.name}" already has a key named "${input.name}".`);
 		const now = this.ctx.now();
@@ -555,6 +714,7 @@ export class StorageService {
 		requirePermission(principal, 'storage:update');
 		const row = this.requireRow(principal, name);
 		const key = this.requireKey(row.id, keyId);
+		this.assertNamedKey(key, 'revoke');
 		if (key.revokedAt === null) {
 			this.ctx.db
 				.update(storageKeys)
@@ -575,15 +735,16 @@ export class StorageService {
 	}
 
 	/**
-	 * Reveal a named key. Interactive only: MCP/API keys never receive secrets. The surface
-	 * re-authenticates before calling this, and the read is audited.
+	 * Reveal a named key: the same policy as the root key (D67), so a person's dashboard session or
+	 * CLI API key with `storage:credentials`, never MCP. Every read is audited.
 	 */
 	revealKey(principal: Principal, name: string, keyId: string): StorageKeyReveal {
-		requirePermission(principal, 'storage:credentials');
-		if (principal.kind !== 'user')
-			throw new CoreError('forbidden', 'Credential reveal needs an interactive user session.', 403);
+		requireCredentialReveal(principal, 'storage:credentials');
+		if (principal.kind === 'system')
+			throw new CoreError('forbidden', 'Credential reveal needs a user session or API key.', 403);
 		const row = this.requireRow(principal, name);
 		const key = this.requireKey(row.id, keyId);
+		this.assertNamedKey(key, 'reveal');
 		if (key.revokedAt !== null) throw new ConflictError('This key is revoked.');
 		if (key.expiresAt !== null && key.expiresAt <= this.ctx.now())
 			throw new ConflictError('This key has expired.');
@@ -601,6 +762,25 @@ export class StorageService {
 			...toStorageKeyView(key),
 			secretAccessKey: this.ctx.secrets.open(row.orgId, key.secretSealed),
 		};
+	}
+
+	/**
+	 * An attachment's key belongs to its project (§5): it is listed with the named keys, but only
+	 * detaching revokes it, and it is never revealed (the app receives it at activation).
+	 */
+	private assertNamedKey(key: typeof storageKeys.$inferSelect, action: 'reveal' | 'revoke'): void {
+		const owner = this.ctx.db
+			.select({ slug: projects.slug })
+			.from(storageAttachments)
+			.innerJoin(projects, eq(projects.id, storageAttachments.projectId))
+			.where(eq(storageAttachments.credentialId, key.id))
+			.get();
+		if (!owner) return;
+		throw new ConflictError(
+			action === 'revoke'
+				? `This key belongs to the attachment of "${owner.slug}". Detach the project to revoke it.`
+				: `This key belongs to the attachment of "${owner.slug}", which receives it at activation. Create a named key for other clients.`,
+		);
 	}
 
 	private keysOf(storageId: string): Array<typeof storageKeys.$inferSelect> {
@@ -1000,6 +1180,8 @@ export class StorageService {
 				const users = new Map<string, StorageGrant[]>();
 				for (const item of attachments) users.set(item.accessKeyId, parseGrants(item.grantsJson));
 				for (const key of keys) users.set(key.accessKeyId, parseGrants(key.grantsJson));
+				// Replication links (§12): the peer side gets each link's scoped key.
+				for (const user of this.ctx.storageReplication.peerUsersFor(row.id)) users.set(user.accessKeyId, user.grants);
 				const isolated = featureEnabled(this.ctx.config, 'ORG_NETWORKS');
 				return {
 					id: row.id,
@@ -1045,7 +1227,8 @@ export class StorageService {
 						deleteBuckets: buckets
 							.filter((bucket) => bucket.deleteRequestedAt && (!bucket.deleteBlocked || bucket.deleteForce))
 							.map((bucket) => ({ name: bucket.name, force: bucket.deleteForce })),
-						keysVersion: keysVersion(row, attachments, keys),
+						keysVersion: keysVersion(row, attachments, keys, this.ctx.storageReplication.keysFingerprint(row.id)),
+						replication: this.ctx.storageReplication.linksFor(row.id),
 					},
 				};
 			});
@@ -1131,20 +1314,23 @@ export class StorageService {
 		const row = this.rowById(id);
 		if (!row || row.deletedAt) throw new NotFoundError('Storage');
 		if (row.nodeId !== nodeId) throw new CoreError('forbidden', 'This storage instance is placed on another node.', 403);
-		const rootSecret = this.ctx.secrets.open(row.orgId, row.rootSecret);
+		// While a rotation is staged the instance runs with the pending pair (§5).
+		const root = effectiveRoot(row);
+		const rootSecret = this.ctx.secrets.open(row.orgId, root.sealed);
 		const attachments = this.liveAttachmentsOf(row.id);
 		const keys = this.desiredKeysOf(row.id, attachments);
 		const userSecrets = new Map<string, string>();
 		for (const item of attachments)
 			userSecrets.set(item.accessKeyId, this.ctx.secrets.open(item.orgId, item.secretSealed));
 		for (const key of keys) userSecrets.set(key.accessKeyId, this.ctx.secrets.open(key.orgId, key.secretSealed));
+		for (const [accessKey, secret] of this.ctx.storageReplication.peerSecretsFor(row.id)) userSecrets.set(accessKey, secret);
 		const notifying = this.ctx.events.watchedBuckets(row.id).size > 0;
 		const notifyEnv = notifying ? rustfsNotifyEnv(this.ctx.events.storageNotifyEndpoint(row.id)) : {};
 		return {
 			workloadId: row.id,
 			activationVersion: storageActivationVersion(row, notifyEnv),
 			env: {
-				RUSTFS_ACCESS_KEY: row.rootAccessKey,
+				RUSTFS_ACCESS_KEY: root.accessKeyId,
 				RUSTFS_SECRET_KEY: rootSecret,
 				// The webhook's bearer token is a secret, so it rides the activation, never desired state.
 				...(notifying
@@ -1153,11 +1339,12 @@ export class StorageService {
 			},
 			files: {},
 			storageAdmin: {
-				rootAccessKeyId: row.rootAccessKey,
+				rootAccessKeyId: root.accessKeyId,
 				rootSecretAccessKey: rootSecret,
 				port: row.hostPort,
-				keysVersion: keysVersion(row, attachments, keys),
+				keysVersion: keysVersion(row, attachments, keys, this.ctx.storageReplication.keysFingerprint(row.id)),
 				users: Object.fromEntries([...userSecrets.entries()].sort(([a], [b]) => a.localeCompare(b))),
+				replication: this.ctx.storageReplication.linkSecretsFor(row.id),
 			},
 		};
 	}
@@ -1167,6 +1354,15 @@ export class StorageService {
 			if (!this.isStorageId(report.id)) continue;
 			const row = this.rowById(report.id);
 			if (!row || row.nodeId !== nodeId || row.deletedAt) continue;
+			if (
+				row.rootPendingAccessKey &&
+				row.rootRotationStartedAt !== null &&
+				this.ctx.now() - row.rootRotationStartedAt > ROOT_ROTATION_TIMEOUT_MS
+			)
+				this.rollbackRootKey(
+					row,
+					`The node did not confirm the new root key within ${ROOT_ROTATION_TIMEOUT_MS / 60_000} minutes; the previous key is back in use.`,
+				);
 			const status: StorageStatus = report.status === 'running' && report.restarts >= 5 ? 'failed' : report.status;
 			if (status === row.status) continue;
 			this.ctx.db
@@ -1204,6 +1400,7 @@ export class StorageService {
 			}
 			if (!row || row.nodeId !== nodeId || !row.deletedAt || !row.purgeRequestedAt) continue;
 			this.ctx.sqlite.transaction(() => {
+				this.ctx.storageReplication.removeForInstance(id);
 				this.ctx.db.delete(storageAttachments).where(eq(storageAttachments.storageId, id)).run();
 				this.ctx.db.delete(storageBuckets).where(eq(storageBuckets.storageId, id)).run();
 				this.ctx.db.delete(storageInstances).where(eq(storageInstances.id, id)).run();
@@ -1693,6 +1890,7 @@ export class StorageService {
 				.sort((a, b) => a.name.localeCompare(b.name))
 				.map(bucketView),
 			attachments: this.attachmentsOf(row.id),
+			rootKey: rootKeyState(row),
 			statsAt: row.statsAt ? new Date(row.statsAt).toISOString() : null,
 			createdAt: new Date(row.createdAt).toISOString(),
 			updatedAt: new Date(row.updatedAt).toISOString(),
@@ -1700,6 +1898,18 @@ export class StorageService {
 			purgeAt: row.purgeAt ? new Date(row.purgeAt).toISOString() : null,
 		};
 	}
+}
+
+function rootKeyState(row: StorageRow): StorageRootKeyState {
+	const iso = (value: number | null) => (value ? new Date(value).toISOString() : null);
+	return {
+		accessKeyId: row.rootAccessKey,
+		status: row.rootPendingAccessKey ? 'rotating' : row.rootRotationError ? 'failed' : 'current',
+		pendingAccessKeyId: row.rootPendingAccessKey,
+		rotationStartedAt: iso(row.rootRotationStartedAt),
+		error: row.rootRotationError,
+		rotatedAt: iso(row.rootRotatedAt),
+	};
 }
 
 function toStorageKeyView(row: typeof storageKeys.$inferSelect): StorageKeyView {
@@ -1770,7 +1980,9 @@ function storageActivationVersion(row: StorageRow, notifyEnv: Record<string, str
 			engine: row.engine,
 			version: row.version,
 			port: row.hostPort,
-			root: row.rootAccessKey,
+			// The pending key while a rotation is staged: changing it restarts RustFS with the new pair,
+			// and promoting it afterwards keeps the same value, so the promotion restarts nothing.
+			root: effectiveRoot(row).accessKeyId,
 			// A restart must re-activate (and so restart) the container without touching data.
 			restartGeneration: row.restartGeneration,
 			env: RUSTFS_ENV,
@@ -1785,14 +1997,36 @@ function keysVersion(
 	row: StorageRow,
 	attachments: AttachmentRow[],
 	keys: Array<typeof storageKeys.$inferSelect>,
+	replication = '',
 ): string {
 	const users = new Map<string, string>();
 	for (const item of attachments) users.set(item.accessKeyId, item.secretSealed);
 	for (const key of keys) users.set(key.accessKeyId, key.secretSealed);
 	return sha256Hex(
 		JSON.stringify({
-			root: row.rootAccessKey,
+			root: effectiveRoot(row).accessKeyId,
 			users: [...users.entries()].sort(([a], [b]) => a.localeCompare(b)),
+			// Only present with replication links, so every other instance keeps its version.
+			...(replication ? { replication } : {}),
 		}),
 	);
+}
+
+/** How long a staged root key may wait for the node's confirmation before it is rolled back. */
+export const ROOT_ROTATION_TIMEOUT_MS = 10 * 60_000;
+
+/** The root pair the instance should run with: the pending one while a rotation is staged. */
+function effectiveRoot(row: StorageRow): { accessKeyId: string; sealed: string } {
+	return row.rootPendingAccessKey && row.rootPendingSecret
+		? { accessKeyId: row.rootPendingAccessKey, sealed: row.rootPendingSecret }
+		: { accessKeyId: row.rootAccessKey, sealed: row.rootSecret };
+}
+
+function mintRootKeyPair(): { accessKeyId: string; secret: string } {
+	return { accessKeyId: accessKeyId(STORAGE_ROOT_KEY_PREFIX), secret: secretKey() };
+}
+
+/** A fresh scoped key pair (`SKF…` + secret), for replication links and other agent-owned users. */
+export function mintStorageKeyPair(): { accessKeyId: string; secret: string } {
+	return { accessKeyId: accessKeyId(STORAGE_USER_KEY_PREFIX), secret: secretKey() };
 }

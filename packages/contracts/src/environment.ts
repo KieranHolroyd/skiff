@@ -28,12 +28,16 @@ export const environmentCreateSchema = z.object({
 	slug: environmentSlugSchema.optional(),
 	/** Access for this environment's production pointer; defaults to the project's preview mode. */
 	access: z.enum(accessModes).optional(),
+	/** Required for `password` access, unless the mode is inherited from password-protected previews. */
+	password: z.string().min(8).max(200).optional(),
 });
 export type EnvironmentCreateInput = z.infer<typeof environmentCreateSchema>;
 
 export const environmentUpdateSchema = z.object({
 	name: z.string().min(1).max(60).optional(),
 	access: z.enum(accessModes).optional(),
+	/** New password for `password` access; omit to keep the current one. */
+	password: z.string().min(8).max(200).optional(),
 });
 export type EnvironmentUpdateInput = z.infer<typeof environmentUpdateSchema>;
 
@@ -45,6 +49,8 @@ export interface EnvironmentView {
 	slug: string;
 	isProduction: boolean;
 	access: (typeof accessModes)[number];
+	/** Whether a password is stored for this environment (production follows the project's). */
+	passwordSet: boolean;
 	host: string;
 	/** Deployment currently served at this environment's host. */
 	deploymentId: string | null;

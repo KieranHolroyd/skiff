@@ -24,6 +24,9 @@
 		{:else}
 			a platform admin picks a mail node. Ask one to set it up in Settings → Email.
 		{/if}
+		The <a href={resolve('/(dashboard)/email/setup')} class="font-medium underline underline-offset-4"
+			>setup guide</a
+		> walks through every step.
 	</Notice>
 {:else}
 	<EmptyState
@@ -33,8 +36,11 @@
 			? 'Skiff sends mail from one node you choose, with its own MTA. Pick the mail node in Settings → Email; the page checks port 25, reverse DNS and blocklists and lists the DNS records to publish.'
 			: 'Skiff sends mail from a node a platform admin chooses. Ask a platform admin to set it up in Settings → Email; until then you can add domains and credentials, but nothing is sent.'}
 	>
-		{#if platformAdmin}
-			<Button href={resolve('/(dashboard)/settings/email')}>Set up email<ArrowRightIcon /></Button>
-		{/if}
+		<div class="flex flex-wrap justify-center gap-2">
+			<Button href={resolve('/(dashboard)/email/setup')}>Follow the setup guide<ArrowRightIcon /></Button>
+			{#if platformAdmin}
+				<Button variant="outline" href={resolve('/(dashboard)/settings/email')}>Settings → Email</Button>
+			{/if}
+		</div>
 	</EmptyState>
 {/if}

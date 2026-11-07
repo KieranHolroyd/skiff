@@ -13,6 +13,7 @@
 	import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
 	import GaugeIcon from '@lucide/svelte/icons/gauge';
 	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
+	import HistoryIcon from '@lucide/svelte/icons/history';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import EyeOffIcon from '@lucide/svelte/icons/eye-off';
 	import LayersIcon from '@lucide/svelte/icons/layers';
@@ -37,6 +38,8 @@
 		databaseExtensionCatalog,
 		databaseExtensionCategories,
 		databaseExtensionCategoryLabels,
+		databaseVariantRegistry,
+		databaseVariants,
 		type DatabaseCredentials
 	} from '@skiff/contracts';
 	import { notify, runAction } from '#lib/actions.js';
@@ -65,6 +68,7 @@
 	import DangerZone from '../../_lib/service/DangerZone.svelte';
 	import RangePicker from '../../_lib/service/RangePicker.svelte';
 	import StatStrip from '../../_lib/service/StatStrip.svelte';
+	import ReplicasPanel from '../_lib/ReplicasPanel.svelte';
 	import { readTab, tabHref, type Stat } from '../../_lib/service/sections.js';
 	import { formatBytes, formatDate, formatDateTime, formatDuration } from '../../_lib/format.js';
 	import { purgeCountdown } from '../../_lib/operations/copy.js';
@@ -72,6 +76,7 @@
 	import { databaseSubnavKey, shownDatabaseTab } from '../_lib/subnav.js';
 	import { useSubnavLocal } from '#lib/nav/subnav-local.svelte.js';
 	import StorageMeter from '../_lib/StorageMeter.svelte';
+	import CredentialsPanel from '../_lib/CredentialsPanel.svelte';
 	import { databaseChart, databaseTotals, storagePercent } from '../_lib/database-series.js';
 	import { DATABASE_DEFAULT_TAB, DATABASE_TABS, type DatabaseTab } from '../_lib/database-tabs.js';
 	import type { PageProps } from './$types';
@@ -180,6 +185,22 @@
 		);
 	}
 	const extensionMatchCount = $derived(databaseExtensionAllowlist.filter(extensionMatches).length);
+	/**
+	 * What the database's image says about an extension outside the stock contrib set: shipped by
+	 * this variant or the PG 18 image, locked to another variant (D126), or simply not shipped.
+	 */
+	function extensionImageNote(
+		extension: (typeof databaseExtensionAllowlist)[number]
+	): { label: string; locked: boolean } | null {
+		if (databaseExtensionCatalog[extension].bundled) return null;
+		const owner = databaseVariants.find((variant) => databaseVariantRegistry[variant].extension === extension);
+		if (owner)
+			return owner === db.variant
+				? { label: 'In this image', locked: false }
+				: { label: `Needs the ${databaseVariantRegistry[owner].label} image`, locked: true };
+		if (extension === 'pgvector' && Number(db.version) >= 18) return { label: 'In this image', locked: false };
+		return { label: 'Not in this image', locked: false };
+	}
 
 	// --- credentials (D58): revealed on demand, audited, never in page data -------------------
 
@@ -241,7 +262,12 @@
 		{ key: 'django', label: 'Django', file: 'settings.py' },
 		{ key: 'rails', label: 'Rails', file: 'database.yml' },
 		{ key: 'pgx', label: 'Go (pgx)', file: 'main.go' },
-		{ key: 'verifyFull', label: 'Verify TLS', file: 'shell' }
+		{ key: 'verifyFull', label: 'Verify TLS', file: 'shell' },
+		// ClickHouse (HTTP interface).
+		{ key: 'curl', label: 'curl', file: 'shell' },
+		{ key: 'clickhouseJs', label: '@clickhouse/client', file: 'clickhouse.ts' },
+		{ key: 'python', label: 'Python', file: 'main.py' },
+		{ key: 'go', label: 'Go', file: 'main.go' }
 	];
 	let snippet = $state('psql');
 	const snippets = $derived(
@@ -271,6 +297,17 @@
 	}
 
 	const canAttach = $derived(can.attach && !deleted && data.projects.length > 0);
+
+	/** Ready, unexpired named credentials an app can connect as instead of the owner. */
+	const attachCredentials = $derived(
+		data.credentials.filter(
+			(credential) =>
+				credential.role !== 'owner' &&
+				credential.role !== 'monitor' &&
+				credential.status === 'ready' &&
+				(credential.expiresAt === null || Date.parse(credential.expiresAt) > Date.now())
+		)
+	);
 
 	// --- backups -------------------------------------------------------------------------------
 
@@ -303,6 +340,60 @@
 			tone: 'danger',
 			action: '?/delete-backup',
 			fields: { backupId }
+		});
+	}
+
+	// --- point-in-time recovery (docs/PITR.md) -------------------------------------------------
+
+	const pitr = $derived(data.pitr);
+	const pitrWindow = $derived(
+		pitr?.recoverableFrom && pitr.recoverableTo
+			? { from: pitr.recoverableFrom, to: pitr.recoverableTo }
+			: null
+	);
+	let pitrRestoreOpen = $state(false);
+	let pitrRestoreName = $state('');
+	/** `datetime-local` value in the browser's zone; sent as ISO with `Z`. */
+	let pitrLocalTime = $state('');
+	const pitrTargetIso = $derived.by(() => {
+		if (!pitrLocalTime) return '';
+		const parsed = new Date(pitrLocalTime);
+		return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString();
+	});
+
+	/** An ISO instant as a `datetime-local` value in the browser's zone (seconds precision). */
+	function toLocalInput(iso: string): string {
+		const date = new Date(iso);
+		return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 19);
+	}
+
+	function openPitrRestore() {
+		pitrRestoreName = `${db.name}-pitr`;
+		// Default to the latest point the node has confirmed.
+		pitrLocalTime = pitrWindow ? toLocalInput(pitrWindow.to) : '';
+		pitrRestoreOpen = true;
+	}
+
+	function setPitr(enabled: boolean) {
+		if (enabled) {
+			askConfirm({
+				title: `Turn on point-in-time recovery for ${db.name}?`,
+				description:
+					'The database restarts on the PITR image (same PostgreSQL build plus pgBackRest), WAL is archived to the repository and a first full base backup runs. Expect a short restart.',
+				confirmLabel: 'Turn on',
+				action: '?/pitr-policy',
+				fields: { enabled: 'on' }
+			});
+			return;
+		}
+		askConfirm({
+			title: `Turn off point-in-time recovery for ${db.name}?`,
+			description:
+				'WAL is no longer archived, so restores can only reach this moment. Existing base backups stay in the repository. The database restarts on the standard image.',
+			confirmLabel: 'Turn off',
+			tone: 'danger',
+			action: '?/pitr-policy',
+			fields: { enabled: '' }
 		});
 	}
 
@@ -391,7 +482,7 @@
 	/** Newest good backup: what a database that cannot be dumped can be moved from. */
 	const latestBackup = $derived(
 		data.backups
-			.filter((item) => item.status === 'ok')
+			.filter((item) => item.status === 'ok' && item.target.available)
 			.sort(
 				(a, b) => Date.parse(b.finishedAt ?? b.startedAt) - Date.parse(a.finishedAt ?? a.startedAt)
 			)[0] ?? null
@@ -476,68 +567,13 @@
 		<!-- Overview ------------------------------------------------------------------------------ -->
 		<StatStrip label="Database summary" stats={overviewStats} />
 
-		<Panel
-			title="Replicas"
-			icon={LayersIcon}
-			description="Copies on other nodes. C7 records intent; streaming is enabled per engine."
-		>
-			{#if data.replicas.length === 0}
-				<p class="text-sm text-muted-foreground">
-					No replicas. A replica must run on another node with an overlay address.
-				</p>
-			{:else}
-				<div class="space-y-2">
-					{#each data.replicas as replica (replica.id)}
-						<div
-							class="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm"
-						>
-							<div class="flex items-center gap-2">
-								<span class="font-medium">{replica.nodeName ?? replica.nodeId}</span>
-								<Badge variant="outline" class="font-mono text-[10px]"
-									>{replica.zone ?? 'zone?'}</Badge
-								>
-								<StatusBadge status={replica.status} />
-								{#if replica.lagSeconds !== null}
-									<span class="text-xs text-muted-foreground">{replica.lagSeconds}s lag</span>
-								{/if}
-							</div>
-							<Button
-								variant="ghost"
-								size="xs"
-								onclick={() =>
-									askConfirm({
-										title: `Remove the replica on ${replica.nodeName ?? replica.nodeId}?`,
-										description:
-											'The control-plane intent is removed; the node stops the copy on its next converge.',
-										confirmLabel: 'Remove replica',
-										tone: 'danger',
-										action: '?/removeReplica',
-										fields: { id: replica.id }
-									})}
-							>
-								<TrashIcon class="size-3.5" />
-							</Button>
-						</div>
-					{/each}
-				</div>
-			{/if}
-			{#if data.replicaTargets.length > 0}
-				<form method="POST" action="?/addReplica" class="mt-3 flex flex-wrap items-end gap-2">
-					<label class="text-xs text-muted-foreground" for="replica-node">Add on</label>
-					<select
-						id="replica-node"
-						name="node"
-						class="h-8 rounded-md border bg-background px-2 text-sm"
-						required
-					>
-						{#each data.replicaTargets as node (node.nodeId)}
-							<option value={node.nodeId}>{node.name}</option>
-						{/each}
-					</select>
-					<Button type="submit" size="sm" variant="outline"><PlusIcon />Add replica</Button>
-				</form>
-			{/if}
-		</Panel>
+		<ReplicasPanel
+			{db}
+			replicas={data.replicas}
+			failovers={data.failovers}
+			targets={data.replicaTargets}
+			canUpdate={can.update}
+		/>
 
 		<div class="grid items-start gap-5 xl:grid-cols-5">
 			<Panel
@@ -772,7 +808,9 @@
 										class="truncate font-mono text-xs text-muted-foreground"
 										title={attachment.envNames.join(', ')}
 									>
-										{attachment.envPrefix}_URL +{attachment.envNames.length - 1} · since
+										{attachment.envPrefix}_URL +{attachment.envNames.length - 1}{attachment.credentialRole
+											? ` · as ${attachment.credentialRole}`
+											: ''} · since
 										{formatDate(attachment.createdAt)}
 									</p>
 								</div>
@@ -793,6 +831,10 @@
 				{/if}
 			</Panel>
 		</div>
+
+		{#if caps.namedCredentials}
+			<CredentialsPanel {db} credentials={data.credentials} {can} fieldErrors={errors} />
+		{/if}
 	{:else if shown === 'metrics'}
 		<!-- Metrics ------------------------------------------------------------------------------- -->
 		<div class="flex flex-wrap items-end justify-between gap-3">
@@ -1027,13 +1069,17 @@
 							<Table.Head class="text-right">Size</Table.Head>
 							<Table.Head class="hidden sm:table-cell">Taken</Table.Head>
 							<Table.Head class="hidden md:table-cell">Verified</Table.Head>
+							<Table.Head class="hidden lg:table-cell">Target</Table.Head>
 							<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
 						</Table.Row>
 					</Table.Header>
 					<Table.Body>
 						{#each backups as backup (backup.id)}
 							{@const restorable =
-								backup.status === 'ok' && policy?.pendingRestoreId === null && !deleted}
+								backup.status === 'ok' &&
+								backup.target.available &&
+								policy?.pendingRestoreId === null &&
+								!deleted}
 							{@const removable =
 								can.delete && backup.status !== 'pending' && backup.status !== 'running'}
 							<Table.Row>
@@ -1062,6 +1108,15 @@
 										<span class="text-muted-foreground">—</span>
 									{/if}
 								</Table.Cell>
+								<Table.Cell class="hidden max-w-56 text-xs lg:table-cell">
+									<span class="block truncate" title={backup.target.location}>{backup.target.name}</span>
+									{#if !backup.target.available}
+										<span
+											class="block text-destructive"
+											title={backup.target.unavailableReason ?? undefined}>Target deleted</span
+										>
+									{/if}
+								</Table.Cell>
 								<Table.Cell class="pr-4">
 									{#if (editable && restorable) || removable}
 										<RowMenu label="Actions for backup {backup.id}">
@@ -1088,6 +1143,101 @@
 				</Table.Root>
 			{/if}
 		</Panel>
+
+		{#if data.pitrFeature}
+			<Panel
+				title="Point-in-time recovery"
+				icon={HistoryIcon}
+				description="WAL archived continuously with pgBackRest, plus weekly full and daily differential base backups. Restore to any moment in the window into a new database."
+			>
+				{#snippet actions()}
+					{#if editable && pitr && !data.pitrUnsupported}
+						{#if pitr.enabled}
+							<Button
+								size="sm"
+								variant="outline"
+								onclick={() => runAction('?/pitr-backup', { type: 'full' })}
+							>
+								<ArchiveIcon />Base backup
+							</Button>
+							{#if can.create}
+								<Button size="sm" variant="outline" disabled={!pitrWindow} onclick={openPitrRestore}>
+									<RotateCcwIcon />Restore to a point in time
+								</Button>
+							{/if}
+							<Button size="sm" variant="ghost" onclick={() => setPitr(false)}>Turn off</Button>
+						{:else}
+							<Button size="sm" onclick={() => setPitr(true)}><HistoryIcon />Turn on</Button>
+						{/if}
+					{/if}
+				{/snippet}
+
+				{#if data.pitrError}
+					<Notice tone="danger" title="PITR is not configured">{data.pitrError}</Notice>
+				{:else if data.pitrUnsupported}
+					<Notice tone="info">{data.pitrUnsupported}</Notice>
+				{:else if pitr && !pitr.enabled}
+					<EmptyState
+						icon={HistoryIcon}
+						compact
+						title="Off"
+						description="Turn it on to restore {db.name} to any second in the last weeks, not only to the last nightly dump."
+					/>
+				{:else if pitr}
+					<StatStrip
+						label="Point-in-time recovery"
+						stats={[
+							{
+								label: 'WAL archive',
+								icon: ActivityIcon,
+								value:
+									pitr.archiveStatus === 'ok'
+										? 'Healthy'
+										: pitr.archiveStatus === 'failing'
+											? 'Failing'
+											: 'Not checked',
+								caption: pitr.archiveAt ? `Checked ${ago(pitr.archiveAt)}` : 'Checked every 15 minutes'
+							},
+							{
+								label: 'Last base backup',
+								icon: ArchiveIcon,
+								value: pitr.lastBaseBackupAt ? ago(pitr.lastBaseBackupAt) : 'Never',
+								caption: pitr.lastBaseBackupType
+									? `${pitr.lastBaseBackupType} backup`
+									: pitr.nextFullAt
+										? `Next full ${formatDateTime(pitr.nextFullAt)}`
+										: 'The first full backup is queued'
+							},
+							{
+								label: 'Recoverable from',
+								icon: HistoryIcon,
+								value: pitrWindow ? formatDateTime(pitrWindow.from) : '—',
+								caption: 'Oldest retained base backup'
+							},
+							{
+								label: 'Recoverable to',
+								icon: TimerIcon,
+								value: pitrWindow ? formatDateTime(pitrWindow.to) : '—',
+								caption:
+									pitr.archiveStatus === 'ok'
+										? 'and later, while the archive stays healthy'
+										: 'Last archived WAL'
+							}
+						]}
+					/>
+					{#if pitr.error}
+						<Notice tone="danger" title="Point-in-time recovery needs attention">{pitr.error}</Notice>
+					{/if}
+					{#if pitr.verifiedAt}
+						<p class="text-muted-foreground mt-3 text-xs">
+							Last verified restore {ago(pitr.verifiedAt)}{pitr.lastRestoreTargetAt
+								? ` (to ${formatDateTime(pitr.lastRestoreTargetAt)})`
+								: ''}.
+						</p>
+					{/if}
+				{/if}
+			</Panel>
+		{/if}
 	{:else if shown === 'insights'}
 		<!-- Tables & queries ---------------------------------------------------------------------- -->
 		<Panel
@@ -1264,7 +1414,11 @@
 				{/snippet}
 				<DetailList>
 					<dt>Engine</dt>
-					<dd class="text-xs">{db.engineLabel} {db.version}</dd>
+					<dd class="text-xs">
+						{db.engineLabel}
+						{db.version}{#if db.variant !== 'standard'}
+							· {databaseVariantRegistry[db.variant].label} image{/if}
+					</dd>
 					<dt>Node</dt>
 					<dd class="font-mono text-xs">{nodeLabel}</dd>
 					<dt>Memory</dt>
@@ -1358,6 +1512,7 @@
 										<h3 class="text-xs font-medium text-muted-foreground">{group.label}</h3>
 										{#each group.extensions as extension (extension)}
 											{@const info = databaseExtensionCatalog[extension]}
+											{@const imageNote = extensionImageNote(extension)}
 											<label
 												class="flex items-start gap-2.5 rounded-md border px-3 py-2 transition-colors has-data-checked:border-primary/40 has-data-checked:bg-muted/40"
 												class:hidden={!extensionMatches(extension)}
@@ -1366,15 +1521,14 @@
 													name="extensions"
 													value={extension}
 													checked={db.extensions.includes(extension)}
-													disabled={!editable}
+													disabled={!editable || imageNote?.locked}
 													class="mt-0.5"
 												/>
 												<span class="min-w-0 flex-1 space-y-0.5">
 													<span class="flex flex-wrap items-center gap-1.5">
 														<span class="font-mono text-xs">{extension}</span>
-														{#if !info.bundled}
-															<Badge variant="outline" class="text-[10px]">Not in stock image</Badge
-															>
+														{#if imageNote}
+															<Badge variant="outline" class="text-[10px]">{imageNote.label}</Badge>
 														{/if}
 													</span>
 													<span class="block text-xs text-muted-foreground">{info.description}</span
@@ -1503,6 +1657,26 @@
 				</Field.Description>
 				{#if errors.envPrefix}<Field.Error>{errors.envPrefix}</Field.Error>{/if}
 			</Field.Field>
+			{#if attachCredentials.length > 0}
+				<Field.Field data-invalid={errors.credential ? true : undefined}>
+					<Field.Label for="attach-credential">Connect as</Field.Label>
+					<NativeSelect.Root id="attach-credential" name="credential" class="w-full">
+						<NativeSelect.Option value="">Owner (full rights)</NativeSelect.Option>
+						{#each attachCredentials as credential (credential.id)}
+							<NativeSelect.Option value={credential.id}>
+								{credential.role} · {credential.username}{credential.purpose
+									? ` (${credential.purpose})`
+									: ''}
+							</NativeSelect.Option>
+						{/each}
+					</NativeSelect.Root>
+					<Field.Description>
+						A named credential gives the app only that role's rights. It can't be revoked while
+						attached.
+					</Field.Description>
+					{#if errors.credential}<Field.Error>{errors.credential}</Field.Error>{/if}
+				</Field.Field>
+			{/if}
 		</Field.Group>
 	</FormDialog>
 {/if}
@@ -1560,7 +1734,57 @@
 					class="font-mono text-sm"
 				/>
 				<Field.Description>
-					The node runs pg_restore and a verification query before the database reports ready.
+					The node restores the dump with the engine's own tool and runs a verification query before
+					the database reports ready.
+				</Field.Description>
+				{#if errors.name}<Field.Error>{errors.name}</Field.Error>{/if}
+			</Field.Field>
+		</Field.Group>
+	</FormDialog>
+
+	<FormDialog
+		bind:open={pitrRestoreOpen}
+		icon={HistoryIcon}
+		title="Restore to a point in time"
+		description="Replay {db.name}'s WAL up to a moment into a brand-new database on {nodeLabel}. The source keeps running untouched; the new database gets its own credentials."
+		action="?/pitr-restore"
+		submitLabel="Restore into new database"
+	>
+		<input type="hidden" name="targetTime" value={pitrTargetIso} />
+		<Field.Group>
+			<Field.Field>
+				<Field.Label for="pitr-time">Restore to (your time zone)</Field.Label>
+				<Input
+					id="pitr-time"
+					type="datetime-local"
+					step="1"
+					bind:value={pitrLocalTime}
+					min={pitrWindow ? toLocalInput(pitrWindow.from) : undefined}
+					class="font-mono text-sm"
+				/>
+				<Field.Description>
+					{#if pitrWindow}
+						Between {formatDateTime(pitrWindow.from)} and {formatDateTime(pitrWindow.to)}{pitr?.archiveStatus ===
+						'ok'
+							? ', or later up to about two minutes ago while the archive is healthy'
+							: ''}.
+					{/if}
+					Sent as {pitrTargetIso || '—'}.
+				</Field.Description>
+			</Field.Field>
+			<Field.Field data-invalid={errors.name ? true : undefined}>
+				<Field.Label for="pitr-name">New database name</Field.Label>
+				<Input
+					id="pitr-name"
+					name="name"
+					bind:value={pitrRestoreName}
+					maxlength={40}
+					spellcheck="false"
+					class="font-mono text-sm"
+				/>
+				<Field.Description>
+					It stays pending until the node has replayed WAL and logged in as the new owner. Compare
+					it, then attach it to an app.
 				</Field.Description>
 				{#if errors.name}<Field.Error>{errors.name}</Field.Error>{/if}
 			</Field.Field>

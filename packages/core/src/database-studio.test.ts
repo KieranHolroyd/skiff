@@ -20,7 +20,7 @@ const dir = mkdtempSync(join(tmpdir(), 'skiff-database-studio-'));
 const opened = createDb({ path: ':memory:' });
 const store = new LocalObjectStore(join(dir, 'objects'), 'https://control.test', 'object-secret-123');
 let clock = Date.parse('2026-11-06T10:00:00Z');
-const features = { ...DEFAULT_FEATURES, ORG_NETWORKS: true, DB_STUDIO: true };
+const features = { ...DEFAULT_FEATURES, ORG_NETWORKS: true, DB_STUDIO: true, DB_TLS: false };
 
 const core: Core = createCore({
 	db: opened.db,
@@ -326,7 +326,18 @@ describe('native database studio sessions', () => {
 		core.databases.applyHeartbeat(worker.nodeId, [{ id: remote.id, status: 'running', restarts: 0 }]);
 
 		expect(core.databaseStudio.desiredForNode(edgeId)).toEqual({ port: 8083, sessions: [] });
-		expect(core.databaseStudio.gatewayRoutes(edgeId, true, () => null)).toEqual([]);
+		// Routes exist from placement, before the first session opens: opening a session bumps
+		// desired state, and a route derived from it would not be on the node when the browser's
+		// first call arrives (Caddy answers an unmatched route with an empty 200).
+		expect(core.databaseStudio.gatewayRoutes(edgeId, true, () => '203.0.113.20')).toEqual(
+			[
+				{ host: databaseStudioHost(edgeId), upstream: '127.0.0.1:8083' },
+				{ host: databaseStudioHost(worker.nodeId), upstream: 'http://203.0.113.20' },
+			].sort((a, b) => a.host.localeCompare(b.host)),
+		);
+		expect(core.databaseStudio.gatewayRoutes(worker.nodeId, false, () => '203.0.113.20')).toEqual([
+			{ host: databaseStudioHost(worker.nodeId), upstream: '127.0.0.1:8083' },
+		]);
 
 		const local = core.databaseStudio.open(owner, 'studio-db');
 		const far = core.databaseStudio.open(owner, 'remote-db');

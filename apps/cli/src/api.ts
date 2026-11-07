@@ -10,11 +10,18 @@
 import { platformOrigin } from './config.ts';
 import { ApiError, CliError } from './errors.ts';
 import type {
+	DatabaseFailoverView,
+	DatabaseReplicaView,
 	DatabaseAttachmentView,
 	DatabaseBackupAllResult,
 	DatabaseBackupView,
 	DatabaseCreateInput,
+	DatabaseUpdateInput,
 	DatabaseCredentials,
+	DatabaseCredentialView,
+	DatabaseNamedCredentialRole,
+	DatabasePitrTaskView,
+	DatabasePitrView,
 	DatabaseRotationView,
 	DatabaseUpgradePlan,
 	DatabaseView,
@@ -30,7 +37,11 @@ import type {
 	StorageCreateInput,
 	StorageCredentials,
 	StorageGrant,
+	StorageKeyCreateInput,
+	StorageKeyReveal,
+	StorageKeyView,
 	StorageMetricPoint,
+	StorageMoveResult,
 	StorageShareLink,
 	StorageUpdateInput,
 	StorageView,
@@ -45,11 +56,33 @@ import type {
 	BrokerView,
 } from './brokers.ts';
 import type { EventDeliveryView, EventRuleCreateInput, EventRuleUpdateInput, EventRuleView } from './events.ts';
+import type { AuditEntryView, LogDrainCreateInput, LogDrainTestResult, LogDrainUpdateInput, LogDrainView } from './log-drains.ts';
+import type { BlueprintPlanView, BlueprintRunView, BlueprintValidation } from './blueprints.ts';
 import type { OperationItemView, OperationView } from './operations.ts';
-import type { AppVolumeView } from './volumes.ts';
+import type { HaStatusView } from './ha.ts';
+import type { AppVolumeSnapshotView, AppVolumeView } from './volumes.ts';
+import type { JobLogPage, JobRunView, JobView } from './jobs.ts';
+import {
+	NODE_TASK_LIMITS,
+	nodeTaskDone,
+	type BrokerQueueCreateResult,
+	type BrokerQueueRedriveResult,
+	type BrokerQueueSendInput,
+	type BrokerQueueSendResult,
+	type BrokerStreamDeleteMessageResult,
+	type BrokerStreamDeleteResult,
+	type BrokerStreamPeekResult,
+	type BrokerStreamPurgeResult,
+	type FunctionInvokeInput,
+	type FunctionInvokeResult,
+	type FunctionScheduledResult,
+	type NodeTaskView,
+} from './node-tasks.ts';
 import {
 	listFrom,
 	viewFrom,
+	type EmailAccessRequestInput,
+	type EmailAccessRequestView,
 	type EmailCredentialCreateInput,
 	type EmailCredentialSecret,
 	type EmailCredentialView,
@@ -60,6 +93,7 @@ import {
 	type EmailOrgView,
 	type EmailSendInput,
 	type EmailSendResult,
+	type EmailSandboxAddressView,
 	type EmailSettingsView,
 	type EmailSuppressionView,
 } from './email.ts';
@@ -72,6 +106,8 @@ export interface ApiClientOptions {
 	uploadTimeoutMs?: number;
 	fetch?: typeof fetch;
 	userAgent?: string;
+	/** How long node-task calls (D124) poll for a result before giving up; default 2 minutes. */
+	nodeTaskWaitMs?: number;
 }
 
 export interface UserView {
@@ -302,6 +338,7 @@ export class ApiClient {
 	private readonly uploadTimeoutMs: number;
 	private readonly fetchImpl: typeof fetch;
 	private readonly userAgent: string;
+	private readonly nodeTaskWaitMs: number;
 
 	constructor(options: ApiClientOptions) {
 		this.baseUrl = options.baseUrl.replace(/\/+$/, '');
@@ -311,6 +348,7 @@ export class ApiClient {
 		this.uploadTimeoutMs = options.uploadTimeoutMs ?? DEFAULT_UPLOAD_TIMEOUT;
 		this.fetchImpl = options.fetch ?? globalThis.fetch;
 		this.userAgent = options.userAgent ?? 'skif-cli';
+		this.nodeTaskWaitMs = options.nodeTaskWaitMs ?? NODE_TASK_LIMITS.cliWaitMs;
 	}
 
 	async whoami(): Promise<{
@@ -412,6 +450,12 @@ export class ApiClient {
 			`/api/v1/usage${project ? `?project=${encodeURIComponent(project)}` : ''}`,
 		);
 		return { usage: raw as UsageView, raw };
+	}
+
+	/** The failover controller (platform admin): lease, lost nodes, ingress rotation, recent events. */
+	async getHaStatus(): Promise<{ status: HaStatusView; raw: unknown }> {
+		const raw = await this.request('GET', '/api/v1/ha/status');
+		return { status: raw as HaStatusView, raw };
 	}
 
 	async getQuotas(project?: string): Promise<{ quotas: unknown; raw: unknown }> {
@@ -724,6 +768,157 @@ export class ApiClient {
 		return response.body;
 	}
 
+	/**
+	 * One request whose body the caller reads itself (streams, downloads, raw input): container
+	 * console calls (D127). Non-2xx responses throw an `ApiError`; there is no timeout unless the
+	 * caller passes a signal.
+	 */
+	async raw(
+		method: string,
+		path: string,
+		options: { body?: string | Uint8Array; headers?: Record<string, string>; signal?: AbortSignal } = {},
+	): Promise<Response> {
+		const url = `${this.baseUrl}${path}`;
+		let response: Response;
+		try {
+			response = await this.fetchImpl(url, {
+				method,
+				headers: this.headers(options.headers),
+				...(options.body !== undefined ? { body: options.body as RequestInit['body'] } : {}),
+				...(options.signal ? { signal: options.signal } : {}),
+			});
+		} catch (error) {
+			if (options.signal?.aborted) throw error;
+			throw new CliError(`Could not reach ${this.baseUrl}: ${errorMessage(error)}`, { code: 'network', cause: error });
+		}
+		if (!response.ok) {
+			const text = await response.text().catch(() => '');
+			throw apiError(response, method, url, text, parseJson(text));
+		}
+		return response;
+	}
+
+	// --- blueprints (plan 11) ---------------------------------------------------------------
+
+	/** `POST /blueprints/validate`: the server parses the YAML or JSON text. */
+	async validateBlueprint(document: string): Promise<{ validation: BlueprintValidation; raw: unknown }> {
+		const raw = await this.request('POST', '/api/v1/blueprints/validate', { body: { document } });
+		return { validation: asRecord(raw)?.validation as BlueprintValidation, raw };
+	}
+
+	/** `POST /blueprints/plan`: changes nothing; the plan lasts an hour. */
+	async planBlueprint(document: string, options: { prune?: boolean } = {}): Promise<{ plan: BlueprintPlanView; raw: unknown }> {
+		const raw = await this.request('POST', '/api/v1/blueprints/plan', {
+			body: { document, ...(options.prune ? { prune: true } : {}) },
+		});
+		const plan = asRecord(asRecord(raw)?.plan);
+		if (!plan || typeof plan.planHash !== 'string')
+			throw new CliError('The platform returned an unexpected blueprint plan.', { code: 'protocol', details: raw });
+		return { plan: plan as unknown as BlueprintPlanView, raw };
+	}
+
+	/** `POST /blueprints/apply`; `waitSeconds` (≤25) holds the response until the run settles. */
+	async applyBlueprint(
+		input: { planHash: string; confirm?: string },
+		options: { waitSeconds?: number } = {},
+	): Promise<{ run: BlueprintRunView; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/blueprints/apply${waitQuery(options.waitSeconds)}`, {
+			body: input,
+			timeoutMs: waitTimeout(this.timeoutMs, options.waitSeconds),
+		});
+		return { run: blueprintRunFrom(raw), raw };
+	}
+
+	async getBlueprintRun(operationId: string): Promise<{ run: BlueprintRunView; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/blueprints/apply/${encodeURIComponent(operationId)}`);
+		return { run: blueprintRunFrom(raw), raw };
+	}
+
+	// --- jobs (plan 09) -----------------------------------------------------------------------
+
+	private jobsPath(project: string, rest = ''): string {
+		return `/api/v1/projects/${encodeURIComponent(project)}/jobs${rest}`;
+	}
+
+	async listJobs(project: string): Promise<{ jobs: JobView[]; raw: unknown }> {
+		const raw = await this.request('GET', this.jobsPath(project));
+		return { jobs: (asArray(asRecord(raw)?.jobs) ?? []) as JobView[], raw };
+	}
+
+	async getJob(project: string, name: string): Promise<{ job: JobView; raw: unknown }> {
+		const raw = await this.request('GET', this.jobsPath(project, `/${encodeURIComponent(name)}`));
+		return { job: asRecord(raw)?.job as unknown as JobView, raw };
+	}
+
+	async createJob(project: string, input: Record<string, unknown>): Promise<{ job: JobView; raw: unknown }> {
+		const raw = await this.request('POST', this.jobsPath(project), { body: input });
+		return { job: asRecord(raw)?.job as unknown as JobView, raw };
+	}
+
+	async updateJob(project: string, name: string, input: Record<string, unknown>): Promise<{ job: JobView; raw: unknown }> {
+		const raw = await this.request('PATCH', this.jobsPath(project, `/${encodeURIComponent(name)}`), { body: input });
+		return { job: asRecord(raw)?.job as unknown as JobView, raw };
+	}
+
+	async setJobPaused(project: string, name: string, paused: boolean): Promise<{ job: JobView; raw: unknown }> {
+		const raw = await this.request('POST', this.jobsPath(project, `/${encodeURIComponent(name)}/${paused ? 'pause' : 'resume'}`));
+		return { job: asRecord(raw)?.job as unknown as JobView, raw };
+	}
+
+	async deleteJob(project: string, name: string): Promise<unknown> {
+		return this.request('DELETE', this.jobsPath(project, `/${encodeURIComponent(name)}`));
+	}
+
+	async runJob(project: string, name: string): Promise<{ run: JobRunView; raw: unknown }> {
+		const raw = await this.request('POST', this.jobsPath(project, `/${encodeURIComponent(name)}/run`));
+		return { run: asRecord(raw)?.run as unknown as JobRunView, raw };
+	}
+
+	/** A one-off command against the current release (`skif run`). */
+	async runCommand(project: string, input: { command: string[]; timeoutSeconds?: number }): Promise<{ run: JobRunView; raw: unknown }> {
+		const raw = await this.request('POST', this.jobsPath(project, '/runs'), { body: input });
+		return { run: asRecord(raw)?.run as unknown as JobRunView, raw };
+	}
+
+	async listJobRuns(
+		project: string,
+		options: { job?: string; oneOff?: boolean; limit?: number } = {},
+	): Promise<{ runs: JobRunView[]; raw: unknown }> {
+		const params = new URLSearchParams();
+		if (options.limit) params.set('limit', String(options.limit));
+		if (options.oneOff) params.set('oneOff', '1');
+		const query = params.size > 0 ? `?${params.toString()}` : '';
+		const path = options.job ? `/${encodeURIComponent(options.job)}/runs${query}` : `/runs${query}`;
+		const raw = await this.request('GET', this.jobsPath(project, path));
+		return { runs: (asArray(asRecord(raw)?.runs) ?? []) as JobRunView[], raw };
+	}
+
+	/** `waitSeconds` (up to 25) holds the request until the run finishes. */
+	async getJobRun(project: string, runId: string, options: { waitSeconds?: number } = {}): Promise<{ run: JobRunView; raw: unknown }> {
+		const raw = await this.request('GET', this.jobsPath(project, `/runs/${encodeURIComponent(runId)}${waitQuery(options.waitSeconds)}`), {
+			timeoutMs: waitTimeout(this.timeoutMs, options.waitSeconds),
+		});
+		return { run: asRecord(raw)?.run as unknown as JobRunView, raw };
+	}
+
+	async cancelJobRun(project: string, runId: string): Promise<{ run: JobRunView; raw: unknown }> {
+		const raw = await this.request('POST', this.jobsPath(project, `/runs/${encodeURIComponent(runId)}/cancel`));
+		return { run: asRecord(raw)?.run as unknown as JobRunView, raw };
+	}
+
+	async jobRunLogs(project: string, runId: string, options: { after?: number; limit?: number } = {}): Promise<JobLogPage> {
+		const params = new URLSearchParams();
+		if (options.after !== undefined) params.set('after', String(options.after));
+		if (options.limit !== undefined) params.set('limit', String(options.limit));
+		const query = params.size > 0 ? `?${params.toString()}` : '';
+		const raw = asRecord(await this.request('GET', this.jobsPath(project, `/runs/${encodeURIComponent(runId)}/logs${query}`))) ?? {};
+		return {
+			events: (asArray(raw.events) ?? []) as JobLogPage['events'],
+			cursor: typeof raw.cursor === 'number' ? raw.cursor : (options.after ?? 0),
+			hasMore: raw.hasMore === true,
+		};
+	}
+
 	// --- app volumes (plan 07) ---------------------------------------------------------------
 
 	async listVolumes(project: string): Promise<{ volumes: AppVolumeView[]; raw: unknown }> {
@@ -789,6 +984,51 @@ export class ApiClient {
 		return { purgeAt: stringValue(asRecord(raw)?.purgeAt) ?? 'seven days', raw };
 	}
 
+	private volumePath(project: string, name: string): string {
+		return `/api/v1/projects/${encodeURIComponent(project)}/volumes/${encodeURIComponent(name)}`;
+	}
+
+	async listVolumeSnapshots(project: string, name: string): Promise<{ snapshots: AppVolumeSnapshotView[]; raw: unknown }> {
+		const raw = await this.request('GET', `${this.volumePath(project, name)}/snapshots`);
+		return { snapshots: (asArray(asRecord(raw)?.snapshots) ?? []) as AppVolumeSnapshotView[], raw };
+	}
+
+	async snapshotVolume(
+		project: string,
+		name: string,
+		input: { label?: string; pinned?: boolean; quiesce?: boolean; target?: string } = {},
+	): Promise<{ snapshot: AppVolumeSnapshotView; warning: string | null; raw: unknown }> {
+		const raw = await this.request('POST', `${this.volumePath(project, name)}/snapshots`, { body: input });
+		const record = asRecord(raw);
+		return {
+			snapshot: record?.snapshot as unknown as AppVolumeSnapshotView,
+			warning: stringValue(record?.warning) ?? null,
+			raw,
+		};
+	}
+
+	async deleteVolumeSnapshot(project: string, name: string, snapshotId: string): Promise<{ raw: unknown }> {
+		const raw = await this.request(
+			'DELETE',
+			`${this.volumePath(project, name)}/snapshots/${encodeURIComponent(snapshotId)}`,
+		);
+		return { raw };
+	}
+
+	async restoreVolumeSnapshot(
+		project: string,
+		name: string,
+		snapshotId: string,
+		input: { name: string; sizeMb?: number },
+	): Promise<{ volume: AppVolumeView; raw: unknown }> {
+		const raw = await this.request(
+			'POST',
+			`${this.volumePath(project, name)}/snapshots/${encodeURIComponent(snapshotId)}/restore`,
+			{ body: input },
+		);
+		return { volume: asRecord(raw)?.volume as unknown as AppVolumeView, raw };
+	}
+
 	// --- managed databases (docs/DATABASES.md) ---------------------------------------------
 
 	async listDatabases(options: { includeDeleted?: boolean } = {}): Promise<{ databases: DatabaseView[]; raw: unknown }> {
@@ -806,6 +1046,12 @@ export class ApiClient {
 
 	async createDatabase(input: DatabaseCreateInput): Promise<{ database: DatabaseView; raw: unknown }> {
 		const raw = await this.request('POST', '/api/v1/databases', { body: input });
+		return { database: databaseFrom(raw), raw };
+	}
+
+	/** Resize, toggle the pooler, set extensions, or move a version forward in place. */
+	async updateDatabase(name: string, input: DatabaseUpdateInput): Promise<{ database: DatabaseView; raw: unknown }> {
+		const raw = await this.request('PATCH', `/api/v1/databases/${encodeURIComponent(name)}`, { body: input });
 		return { database: databaseFrom(raw), raw };
 	}
 
@@ -833,6 +1079,81 @@ export class ApiClient {
 	async createDatabaseBackup(name: string, input: { pinned?: boolean } = {}): Promise<{ backup: DatabaseBackupView; raw: unknown }> {
 		const raw = await this.request('POST', `/api/v1/databases/${encodeURIComponent(name)}/backups`, { body: input });
 		return { backup: asRecord(asRecord(raw)?.backup) as unknown as DatabaseBackupView, raw };
+	}
+
+	// ---------------------------------------------------------------- read replicas (docs/CLUSTERING.md §9.2)
+
+	async databaseReplicas(name: string): Promise<{
+		primaryGeneration: number;
+		replicas: DatabaseReplicaView[];
+		failovers: DatabaseFailoverView[];
+		raw: unknown;
+	}> {
+		const raw = await this.request('GET', `/api/v1/databases/${encodeURIComponent(name)}/replicas`);
+		const record = asRecord(raw);
+		return {
+			primaryGeneration: typeof record?.primaryGeneration === 'number' ? record.primaryGeneration : 0,
+			replicas: (Array.isArray(record?.replicas) ? record.replicas : []) as DatabaseReplicaView[],
+			failovers: (Array.isArray(record?.failovers) ? record.failovers : []) as DatabaseFailoverView[],
+			raw,
+		};
+	}
+
+	async addDatabaseReplica(
+		name: string,
+		input: { node: string; volume?: string },
+	): Promise<{ replica: DatabaseReplicaView; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/databases/${encodeURIComponent(name)}/replicas`, { body: input });
+		return { replica: asRecord(raw)?.replica as unknown as DatabaseReplicaView, raw };
+	}
+
+	async removeDatabaseReplica(name: string, replicaId: string): Promise<{ replica: DatabaseReplicaView; raw: unknown }> {
+		const raw = await this.request(
+			'DELETE',
+			`/api/v1/databases/${encodeURIComponent(name)}/replicas/${encodeURIComponent(replicaId)}`,
+		);
+		return { replica: asRecord(raw)?.replica as unknown as DatabaseReplicaView, raw };
+	}
+
+	async promoteDatabaseReplica(
+		name: string,
+		replicaId: string,
+		input: { acceptDataLoss: boolean; ifMatch: number },
+	): Promise<{ failover: DatabaseFailoverView; raw: unknown }> {
+		const raw = await this.request(
+			'POST',
+			`/api/v1/databases/${encodeURIComponent(name)}/replicas/${encodeURIComponent(replicaId)}/promote`,
+			{ body: { confirm: true, acceptDataLoss: input.acceptDataLoss }, headers: { 'if-match': String(input.ifMatch) } },
+		);
+		return { failover: asRecord(raw)?.failover as unknown as DatabaseFailoverView, raw };
+	}
+
+	// ---------------------------------------------------------------- point-in-time recovery (docs/PITR.md)
+
+	async databasePitr(name: string): Promise<{ pitr: DatabasePitrView; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/databases/${encodeURIComponent(name)}/pitr`);
+		return { pitr: asRecord(raw)?.pitr as unknown as DatabasePitrView, raw };
+	}
+
+	async setDatabasePitr(name: string, enabled: boolean): Promise<{ pitr: DatabasePitrView; raw: unknown }> {
+		const raw = await this.request('PATCH', `/api/v1/databases/${encodeURIComponent(name)}/pitr`, { body: { enabled } });
+		return { pitr: asRecord(raw)?.pitr as unknown as DatabasePitrView, raw };
+	}
+
+	async createDatabasePitrBackup(
+		name: string,
+		type: 'full' | 'diff' | 'incr',
+	): Promise<{ task: DatabasePitrTaskView; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/databases/${encodeURIComponent(name)}/pitr/backups`, { body: { type } });
+		return { task: asRecord(raw)?.task as unknown as DatabasePitrTaskView, raw };
+	}
+
+	async restoreDatabaseToTime(
+		name: string,
+		input: { name: string; targetTime: string },
+	): Promise<{ database: DatabaseView; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/databases/${encodeURIComponent(name)}/pitr/restore`, { body: input });
+		return { database: databaseFrom(raw), raw };
 	}
 
 	async deleteDatabaseBackup(name: string, backupId: string): Promise<unknown> {
@@ -934,8 +1255,10 @@ export class ApiClient {
 		return { result: asRecord(asRecord(raw)?.result) as unknown as BackupTargetTestResult, raw };
 	}
 
-	async deleteBackupTarget(id: string): Promise<unknown> {
-		return this.request('DELETE', `/api/v1/backup-targets/${encodeURIComponent(id)}`);
+	/** `force` deletes a target that still holds backups; they stay listed as unavailable. */
+	async deleteBackupTarget(id: string, options: { force?: boolean } = {}): Promise<unknown> {
+		const query = options.force ? '?force=1' : '';
+		return this.request('DELETE', `/api/v1/backup-targets/${encodeURIComponent(id)}${query}`);
 	}
 
 	async restartDatabase(
@@ -1026,6 +1349,56 @@ export class ApiClient {
 	async testEventRule(id: string): Promise<{ delivery: EventDeliveryView; raw: unknown }> {
 		const raw = await this.request('POST', `/api/v1/events/${encodeURIComponent(id)}/test`);
 		return { delivery: asRecord(raw)?.delivery as EventDeliveryView, raw };
+	}
+
+	// ---------------------------------------------------------------- log drains and audit (DESIGN §8)
+
+	async listLogDrains(): Promise<{ drains: LogDrainView[]; canEdit: boolean; raw: unknown }> {
+		const raw = await this.request('GET', '/api/v1/log-drains');
+		return { drains: (asArray(asRecord(raw)?.drains) ?? []) as LogDrainView[], canEdit: asRecord(raw)?.canEdit === true, raw };
+	}
+
+	async getLogDrain(id: string): Promise<{ drain: LogDrainView; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/log-drains/${encodeURIComponent(id)}`);
+		return { drain: asRecord(raw)?.drain as LogDrainView, raw };
+	}
+
+	async createLogDrain(input: LogDrainCreateInput): Promise<{ drain: LogDrainView; signingSecret: string | null; raw: unknown }> {
+		const raw = await this.request('POST', '/api/v1/log-drains', { body: input });
+		const record = asRecord(raw);
+		return { drain: record?.drain as LogDrainView, signingSecret: typeof record?.signingSecret === 'string' ? record.signingSecret : null, raw };
+	}
+
+	async updateLogDrain(id: string, input: LogDrainUpdateInput): Promise<{ drain: LogDrainView; signingSecret: string | null; raw: unknown }> {
+		const raw = await this.request('PATCH', `/api/v1/log-drains/${encodeURIComponent(id)}`, { body: input });
+		const record = asRecord(raw);
+		return { drain: record?.drain as LogDrainView, signingSecret: typeof record?.signingSecret === 'string' ? record.signingSecret : null, raw };
+	}
+
+	async deleteLogDrain(id: string): Promise<unknown> {
+		return this.request('DELETE', `/api/v1/log-drains/${encodeURIComponent(id)}`);
+	}
+
+	async testLogDrain(id: string): Promise<{ result: LogDrainTestResult; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/log-drains/${encodeURIComponent(id)}/test`, { timeoutMs: 30_000 });
+		return { result: asRecord(raw)?.result as LogDrainTestResult, raw };
+	}
+
+	/** One page of the audit log, newest first; pass `nextCursor` back as `cursor` for older entries. */
+	async auditLog(
+		options: { from?: string; to?: string; action?: string; resource?: string; limit?: number; cursor?: string } = {},
+	): Promise<{ entries: AuditEntryView[]; nextCursor: string | null; raw: unknown }> {
+		const params = new URLSearchParams();
+		for (const key of ['from', 'to', 'action', 'resource', 'cursor'] as const) if (options[key]) params.set(key, options[key]);
+		if (options.limit) params.set('limit', String(options.limit));
+		const query = params.size > 0 ? `?${params}` : '';
+		const raw = await this.request('GET', `/api/v1/audit${query}`);
+		const record = asRecord(raw);
+		return {
+			entries: (asArray(record?.entries) ?? []) as AuditEntryView[],
+			nextCursor: typeof record?.nextCursor === 'string' ? record.nextCursor : null,
+			raw,
+		};
 	}
 
 	async listEventDeliveries(options: { rule?: string; status?: string; limit?: number } = {}): Promise<{ deliveries: EventDeliveryView[]; raw: unknown }> {
@@ -1124,6 +1497,37 @@ export class ApiClient {
 
 	async removeEmailSuppression(address: string): Promise<unknown> {
 		return this.request('DELETE', `/api/v1/email/suppressions/${encodeURIComponent(address)}`);
+	}
+
+	/** Sandbox recipients (EMAIL.md §4.3). */
+	async listEmailAddresses(): Promise<{ addresses: EmailSandboxAddressView[]; raw: unknown }> {
+		const raw = await this.request('GET', '/api/v1/email/addresses');
+		return { addresses: listFrom<EmailSandboxAddressView>(raw, 'addresses'), raw };
+	}
+
+	/** Add a sandbox recipient (the server mails it a link), or re-send the link to a pending one. */
+	async addEmailAddress(address: string): Promise<{ address: EmailSandboxAddressView; raw: unknown }> {
+		const raw = await this.request('POST', '/api/v1/email/addresses', { body: { address } });
+		const view = viewFrom<EmailSandboxAddressView>(raw, 'address', 'status');
+		if (!view) throw new CliError('The platform returned an unexpected sandbox recipient response.', { code: 'protocol', details: raw });
+		return { address: view, raw };
+	}
+
+	async removeEmailAddress(address: string): Promise<unknown> {
+		return this.request('DELETE', `/api/v1/email/addresses/${encodeURIComponent(address)}`);
+	}
+
+	/** The org's latest production access request (EMAIL.md §7.3); null if it never asked. */
+	async getEmailAccessRequest(): Promise<{ request: EmailAccessRequestView | null; raw: unknown }> {
+		const raw = await this.request('GET', '/api/v1/email/access-request');
+		return { request: viewFrom<EmailAccessRequestView>(raw, 'request', 'status'), raw };
+	}
+
+	async requestEmailAccess(input: EmailAccessRequestInput): Promise<{ request: EmailAccessRequestView; raw: unknown }> {
+		const raw = await this.request('POST', '/api/v1/email/access-request', { body: input });
+		const request = viewFrom<EmailAccessRequestView>(raw, 'request', 'status');
+		if (!request) throw new CliError('The platform returned an unexpected access request response.', { code: 'protocol', details: raw });
+		return { request, raw };
 	}
 
 	async listEmailCredentials(): Promise<{ credentials: EmailCredentialView[]; raw: unknown }> {
@@ -1302,6 +1706,123 @@ export class ApiClient {
 		return { events, cursor: numberValue(record?.cursor) ?? 0, hasMore: record?.hasMore === true, raw };
 	}
 
+	// ---------------------------------------------------------------- node tasks (D124)
+	// Queue and function tools run on the service's node. Each call waits up to 20s for the
+	// result, then polls `GET /node-tasks/:id` until it finishes (or `nodeTaskWaitMs` passes).
+
+	/** Create a function queue's stream (`SKIFF_Q_<queue>`) now instead of on first use. */
+	async brokerQueueCreate(name: string, queue: string): Promise<NodeTaskOutcome<BrokerQueueCreateResult>> {
+		return this.nodeTask('POST', `/api/v1/brokers/${encodeURIComponent(name)}/queues`, { queue });
+	}
+
+	/** Publish a test message (or `count` copies) to a function queue. */
+	async brokerQueueSend(name: string, queue: string, input: BrokerQueueSendInput): Promise<NodeTaskOutcome<BrokerQueueSendResult>> {
+		return this.nodeTask(
+			'POST',
+			`/api/v1/brokers/${encodeURIComponent(name)}/queues/${encodeURIComponent(queue)}/messages`,
+			input,
+		);
+	}
+
+	/** Move messages from dead-letter queue `from` into `to`. */
+	async brokerQueueRedrive(
+		name: string,
+		from: string,
+		input: { to: string; limit?: number },
+	): Promise<NodeTaskOutcome<BrokerQueueRedriveResult>> {
+		return this.nodeTask(
+			'POST',
+			`/api/v1/brokers/${encodeURIComponent(name)}/queues/${encodeURIComponent(from)}/redrive`,
+			input,
+		);
+	}
+
+	/** Read messages without consuming them. */
+	async brokerStreamPeek(
+		name: string,
+		stream: string,
+		options: { limit?: number; from?: number } = {},
+	): Promise<NodeTaskOutcome<BrokerStreamPeekResult>> {
+		const query = new URLSearchParams();
+		if (options.limit !== undefined) query.set('limit', String(options.limit));
+		if (options.from !== undefined) query.set('from', String(options.from));
+		const search = query.toString();
+		return this.nodeTask(
+			'GET',
+			`/api/v1/brokers/${encodeURIComponent(name)}/streams/${encodeURIComponent(stream)}/messages${search ? `?${search}` : ''}`,
+		);
+	}
+
+	/** Remove every message from a stream; the stream and its consumers stay. */
+	async brokerStreamPurge(name: string, stream: string): Promise<NodeTaskOutcome<BrokerStreamPurgeResult>> {
+		return this.nodeTask('POST', `/api/v1/brokers/${encodeURIComponent(name)}/streams/${encodeURIComponent(stream)}/purge`, {});
+	}
+
+	async brokerStreamDelete(name: string, stream: string): Promise<NodeTaskOutcome<BrokerStreamDeleteResult>> {
+		return this.nodeTask('DELETE', `/api/v1/brokers/${encodeURIComponent(name)}/streams/${encodeURIComponent(stream)}`);
+	}
+
+	async brokerStreamDeleteMessage(
+		name: string,
+		stream: string,
+		seq: number,
+	): Promise<NodeTaskOutcome<BrokerStreamDeleteMessageResult>> {
+		return this.nodeTask(
+			'DELETE',
+			`/api/v1/brokers/${encodeURIComponent(name)}/streams/${encodeURIComponent(stream)}/messages/${seq}`,
+		);
+	}
+
+	/** One test HTTP request to the function's host on its node (no Caddy, no domains). */
+	async functionInvoke(project: string, input: FunctionInvokeInput): Promise<NodeTaskOutcome<FunctionInvokeResult>> {
+		return this.nodeTask('POST', `/api/v1/projects/${encodeURIComponent(project)}/function/invoke`, input);
+	}
+
+	/** Run the function's `scheduled()` handler now for one of its crons. */
+	async functionScheduled(project: string, cron: string): Promise<NodeTaskOutcome<FunctionScheduledResult>> {
+		return this.nodeTask('POST', `/api/v1/projects/${encodeURIComponent(project)}/function/scheduled`, { cron });
+	}
+
+	async getNodeTask(id: string, options: { waitSeconds?: number } = {}): Promise<{ task: NodeTaskView; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/node-tasks/${encodeURIComponent(id)}${waitQuery(options.waitSeconds)}`, {
+			timeoutMs: waitTimeout(this.timeoutMs, options.waitSeconds),
+		});
+		return { task: nodeTaskFrom(raw), raw };
+	}
+
+	/**
+	 * Start a node task and wait for its result: 200 is done, 502 `node_task_failed` is the node's
+	 * failure, 202 means poll. A failed task becomes a CliError carrying the node's message.
+	 */
+	private async nodeTask<R>(method: string, path: string, body?: unknown): Promise<NodeTaskOutcome<R>> {
+		const waitSeconds = NODE_TASK_POLL_SECONDS;
+		const separator = path.includes('?') ? '&' : '?';
+		const { response, url, text, parsed } = await this.exchange(method, `${path}${separator}wait=${waitSeconds}`, {
+			...(body !== undefined ? { body } : {}),
+			timeoutMs: waitTimeout(this.timeoutMs, waitSeconds),
+		});
+		const record = asRecord(parsed);
+		if (response.status === 502 && record?.error === 'node_task_failed')
+			throw nodeTaskError(stringValue(record.message) ?? stringValue(asRecord(record.task)?.error), record.task);
+		if (!response.ok) throw apiError(response, method, url, text, parsed);
+		let task = nodeTaskFrom(parsed);
+		let raw = parsed;
+		const deadline = Date.now() + this.nodeTaskWaitMs;
+		while (!nodeTaskDone(task)) {
+			const left = deadline - Date.now();
+			if (left <= 0)
+				throw new CliError(
+					`Node ${task.target.nodeId} has not finished task ${task.id} (${task.status}) after ${Math.round(this.nodeTaskWaitMs / 1000)}s. It may still finish; its result is kept for an hour.`,
+					{ code: 'node_task_timeout', details: task, suggestions: [`GET /api/v1/node-tasks/${task.id}`] },
+				);
+			({ task, raw } = await this.getNodeTask(task.id, { waitSeconds: Math.max(1, Math.min(waitSeconds, Math.ceil(left / 1000))) }));
+		}
+		if (task.status === 'failed') throw nodeTaskError(task.error ?? undefined, task);
+		if (task.result === null || task.result === undefined)
+			throw new CliError('The node finished the task without a result.', { code: 'protocol', details: raw });
+		return { result: task.result as R, task: task as NodeTaskView<R>, raw };
+	}
+
 	async databaseCredentials(name: string): Promise<{ credentials: DatabaseCredentials; raw: unknown }> {
 		const raw = await this.request('GET', `/api/v1/databases/${encodeURIComponent(name)}/credentials`);
 		const credentials = asRecord(asRecord(raw)?.credentials);
@@ -1310,9 +1831,56 @@ export class ApiClient {
 		return { credentials: credentials as unknown as DatabaseCredentials, raw };
 	}
 
+	// Named credentials (docs/DATABASES.md §16): metadata everywhere except the audited reveal.
+	private namedCredentialsPath(name: string, id?: string): string {
+		const base = `/api/v1/databases/${encodeURIComponent(name)}/credentials/named`;
+		return id ? `${base}/${encodeURIComponent(id)}` : base;
+	}
+
+	private namedCredential(raw: unknown): DatabaseCredentialView {
+		const credential = asRecord(asRecord(raw)?.credential);
+		if (!credential || typeof credential.id !== 'string')
+			throw new CliError('The platform returned an unexpected credential response.', { code: 'protocol' });
+		return credential as unknown as DatabaseCredentialView;
+	}
+
+	async listDatabaseCredentials(name: string): Promise<{ credentials: DatabaseCredentialView[]; raw: unknown }> {
+		const raw = await this.request('GET', this.namedCredentialsPath(name));
+		return { credentials: (asArray(asRecord(raw)?.credentials) ?? []) as DatabaseCredentialView[], raw };
+	}
+
+	async createDatabaseCredential(
+		name: string,
+		input: { role: DatabaseNamedCredentialRole; purpose?: string; expiresAt?: string },
+	): Promise<{ credential: DatabaseCredentialView; raw: unknown }> {
+		const raw = await this.request('POST', this.namedCredentialsPath(name), { body: input });
+		return { credential: this.namedCredential(raw), raw };
+	}
+
+	async rotateDatabaseCredential(name: string, id: string): Promise<{ credential: DatabaseCredentialView; raw: unknown }> {
+		const raw = await this.request('POST', `${this.namedCredentialsPath(name, id)}/rotate`, { body: {} });
+		return { credential: this.namedCredential(raw), raw };
+	}
+
+	async revokeDatabaseCredential(name: string, id: string): Promise<{ credential: DatabaseCredentialView; raw: unknown }> {
+		const raw = await this.request('DELETE', this.namedCredentialsPath(name, id));
+		return { credential: this.namedCredential(raw), raw };
+	}
+
+	async revealDatabaseCredential(
+		name: string,
+		id: string,
+	): Promise<{ credential: DatabaseCredentialView & { password: string }; raw: unknown }> {
+		const raw = await this.request('GET', this.namedCredentialsPath(name, id));
+		const credential = this.namedCredential(raw) as DatabaseCredentialView & { password?: unknown };
+		if (typeof credential.password !== 'string')
+			throw new CliError('The platform returned an unexpected credential response.', { code: 'protocol' });
+		return { credential: credential as DatabaseCredentialView & { password: string }, raw };
+	}
+
 	async attachDatabase(
 		project: string,
-		input: { database: string; envPrefix?: string },
+		input: { database: string; envPrefix?: string; credential?: string },
 	): Promise<{ attachment: DatabaseAttachmentView; warning: string | null; raw: unknown }> {
 		const raw = await this.request('POST', `/api/v1/projects/${encodeURIComponent(project)}/databases`, { body: input });
 		const record = asRecord(raw) ?? {};
@@ -1414,6 +1982,66 @@ export class ApiClient {
 		if (!credentials || typeof credentials.secretAccessKey !== 'string')
 			throw new CliError('The platform returned an unexpected credentials response.', { code: 'protocol' });
 		return { credentials: credentials as unknown as StorageCredentials, raw };
+	}
+
+	// Named keys (plan 04b) and staged root key rotation (§5).
+
+	async listStorageKeys(name: string): Promise<{ keys: StorageKeyView[]; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/storage/${encodeURIComponent(name)}/keys`);
+		return { keys: ((asArray(asRecord(raw)?.keys) ?? []) as StorageKeyView[]).map(normalizeStorageKey), raw };
+	}
+
+	/** Create a named key; the response carries no secret (reveal it separately). */
+	async createStorageKey(name: string, input: StorageKeyCreateInput): Promise<{ key: StorageKeyView; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/storage/${encodeURIComponent(name)}/keys`, { body: input });
+		return { key: storageKeyFrom(raw), raw };
+	}
+
+	/** Reveal a named key's secret (audited; needs storage:credentials). */
+	async revealStorageKey(name: string, id: string): Promise<{ key: StorageKeyReveal; raw: unknown }> {
+		const raw = await this.request(
+			'POST',
+			`/api/v1/storage/${encodeURIComponent(name)}/keys/${encodeURIComponent(id)}/reveal`,
+			{ body: {} },
+		);
+		const key = storageKeyFrom(raw) as StorageKeyReveal;
+		if (typeof key.secretAccessKey !== 'string')
+			throw new CliError('The platform returned an unexpected key response.', { code: 'protocol' });
+		return { key, raw };
+	}
+
+	async revokeStorageKey(name: string, id: string): Promise<{ key: StorageKeyView; raw: unknown }> {
+		const raw = await this.request('DELETE', `/api/v1/storage/${encodeURIComponent(name)}/keys/${encodeURIComponent(id)}`);
+		return { key: storageKeyFrom(raw), raw };
+	}
+
+	/** Stage a new root key; RustFS restarts with it and the node confirms it. */
+	async rotateStorageRootKey(name: string): Promise<{ storage: StorageView; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/storage/${encodeURIComponent(name)}/rotate-root`, { body: {} });
+		return { storage: storageFrom(raw), raw };
+	}
+
+	async cancelStorageRootKeyRotation(name: string): Promise<{ storage: StorageView; raw: unknown }> {
+		const raw = await this.request('DELETE', `/api/v1/storage/${encodeURIComponent(name)}/rotate-root`);
+		return { storage: storageFrom(raw), raw };
+	}
+
+	/** Move to another node (D97). Objects are not copied, so this always sends `from: "empty"`. */
+	async moveStorage(name: string, input: { node: string; volume?: string }): Promise<{ result: StorageMoveResult; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/storage/${encodeURIComponent(name)}/move`, {
+			body: { node: input.node, ...(input.volume ? { volume: input.volume } : {}), from: 'empty' },
+		});
+		const record = asRecord(raw);
+		if (!record || typeof record.storage !== 'string')
+			throw new CliError('The platform returned an unexpected move response.', { code: 'protocol', details: raw });
+		return {
+			result: {
+				...(record as unknown as StorageMoveResult),
+				projects: (asArray(record.projects) ?? []) as string[],
+				warnings: (asArray(record.warnings) ?? []) as string[],
+			},
+			raw,
+		};
 	}
 
 	async storageMetrics(
@@ -1675,6 +2303,18 @@ export class ApiClient {
 		path: string,
 		options: { body?: unknown; headers?: Record<string, string>; timeoutMs?: number } = {},
 	): Promise<unknown> {
+		const { response, url, text, parsed } = await this.exchange(method, path, options);
+		if (!response.ok) throw apiError(response, method, url, text, parsed);
+		if (!text) return null;
+		return parsed === undefined ? text : parsed;
+	}
+
+	/** One JSON request whose status the caller inspects; only network failures throw. */
+	private async exchange(
+		method: string,
+		path: string,
+		options: { body?: unknown; headers?: Record<string, string>; timeoutMs?: number } = {},
+	): Promise<{ response: Response; url: string; text: string; parsed: unknown }> {
 		const url = `${this.baseUrl}${path}`;
 		const headers = this.headers(options.headers);
 		const timeoutMs = options.timeoutMs ?? this.timeoutMs;
@@ -1705,10 +2345,7 @@ export class ApiClient {
 		}
 
 		const text = await response.text().catch(() => '');
-		const parsed = parseJson(text);
-		if (!response.ok) throw apiError(response, method, url, text, parsed);
-		if (!text) return null;
-		return parsed === undefined ? text : parsed;
+		return { response, url, text, parsed: parseJson(text) };
 	}
 }
 
@@ -1749,7 +2386,45 @@ function apiError(response: Response, method: string, url: string, text: string,
 	});
 }
 
+/** Seconds each node-task request holds for a result (the server caps it at 25). */
+const NODE_TASK_POLL_SECONDS = 20;
+
+export interface NodeTaskOutcome<R> {
+	result: R;
+	task: NodeTaskView<R>;
+	/** The final `{ task }` response, for `--json`. */
+	raw: unknown;
+}
+
+function nodeTaskFrom(raw: unknown): NodeTaskView {
+	const task = asRecord(asRecord(raw)?.task);
+	if (!task || typeof task.id !== 'string' || typeof task.status !== 'string')
+		throw new CliError('The platform returned an unexpected node task response.', { code: 'protocol', details: raw });
+	const target = asRecord(task.target) ?? {};
+	return {
+		...(task as unknown as NodeTaskView),
+		target: {
+			type: target.type === 'workload' ? 'workload' : 'broker',
+			name: stringValue(target.name) ?? '',
+			nodeId: stringValue(target.nodeId) ?? '',
+		},
+		result: task.result ?? null,
+		error: typeof task.error === 'string' ? task.error : null,
+	};
+}
+
+function nodeTaskError(message: string | undefined, task: unknown): CliError {
+	return new CliError(message ?? 'The task failed on the node.', { code: 'node_task_failed', details: task });
+}
+
 /** Create/apply/cancel return the view itself; `GET /operations/:id` wraps it in `{ operation }`. */
+function blueprintRunFrom(raw: unknown): BlueprintRunView {
+	const run = asRecord(asRecord(raw)?.run);
+	if (!run || typeof run.operationId !== 'string' || typeof run.status !== 'string')
+		throw new CliError('The platform returned an unexpected blueprint run.', { code: 'protocol', details: raw });
+	return { ...(run as unknown as BlueprintRunView), resources: (asArray(run.resources) ?? []) as BlueprintRunView['resources'] };
+}
+
 function operationFrom(raw: unknown): OperationView {
 	const record = asRecord(raw);
 	const view = asRecord(record?.operation) ?? record;
@@ -1829,6 +2504,17 @@ function normalizeStorage(view: StorageView): StorageView {
 			grants: (asArray(item.grants) ?? []) as StorageGrant[],
 		})),
 	};
+}
+
+function storageKeyFrom(raw: unknown): StorageKeyView {
+	const key = asRecord(asRecord(raw)?.key);
+	if (!key || typeof key.id !== 'string')
+		throw new CliError('The platform returned an unexpected key response.', { code: 'protocol', details: raw });
+	return normalizeStorageKey(key as unknown as StorageKeyView);
+}
+
+function normalizeStorageKey(key: StorageKeyView): StorageKeyView {
+	return { ...key, grants: (asArray(key.grants) ?? []) as StorageGrant[] };
 }
 
 function bucketFrom(raw: unknown): StorageBucketView {

@@ -44,11 +44,12 @@ export class SecretService {
 		principal: Principal,
 		input: { name: string; value: string; projectId?: string | null; type?: 'secret' | 'env' },
 	): Promise<SecretView> {
-		requirePermission(principal, 'secret:create');
 		if (!/^[A-Z][A-Z0-9_]*$/.test(input.name))
 			throw new ValidationError('Secret names must be UPPER_SNAKE_CASE.');
 		const type = input.type ?? 'secret';
 		const projectId = input.projectId ?? null;
+		// A new name needs `secret:create`; a new version of a live one needs `secret:update`.
+		const latest = this.requireWrite(principal, { name: input.name, projectId });
 		if (projectId !== null) {
 			const project = this.ctx.db
 				.select({ id: projects.id })
@@ -57,13 +58,6 @@ export class SecretService {
 				.get();
 			if (!project) throw new NotFoundError('Project');
 		}
-		// Versions count within one scope: a project's FOO and the organisation's FOO are separate.
-		const latest = this.ctx.db
-			.select({ version: secrets.version })
-			.from(secrets)
-			.where(and(...this.scopeFilters(principal.orgId, projectId, input.name)))
-			.orderBy(sql`${secrets.version} DESC`)
-			.get();
 		const version = (latest?.version ?? 0) + 1;
 		const key = this.orgKey(principal.orgId);
 		const encrypted = encrypt(key, new TextEncoder().encode(input.value));
@@ -84,7 +78,7 @@ export class SecretService {
 			.run();
 		this.ctx.audit.record({
 			principal,
-			action: 'secret.set',
+			action: latest ? 'secret.update' : 'secret.create',
 			resource: 'secret',
 			resourceId: id,
 			args: { name: input.name, projectId, version, type },
@@ -100,6 +94,34 @@ export class SecretService {
 			projectId,
 			createdAt: new Date(this.ctx.now()).toISOString(),
 		};
+	}
+
+	/**
+	 * Whether `name` already has a live version in this scope (project, or `null` for the
+	 * organisation). Versions count within one scope: a project's FOO and the organisation's FOO
+	 * are separate secrets.
+	 */
+	latest(orgId: string, projectId: string | null, name: string): { version: number } | null {
+		return (
+			this.ctx.db
+				.select({ version: secrets.version })
+				.from(secrets)
+				.where(and(...this.scopeFilters(orgId, projectId, name)))
+				.orderBy(sql`${secrets.version} DESC`)
+				.get() ?? null
+		);
+	}
+
+	/**
+	 * The permission a write needs (RBAC `secret:*`): `secret:create` to add a name to a scope,
+	 * `secret:update` to store a new version of one that is live there. Throws when missing;
+	 * returns the latest live version (null for a new secret). Callers that write several secrets
+	 * check them all first so a refusal never leaves half of them written.
+	 */
+	requireWrite(principal: Principal, input: { name: string; projectId?: string | null }): { version: number } | null {
+		const latest = this.latest(principal.orgId, input.projectId ?? null, input.name);
+		requirePermission(principal, latest ? 'secret:update' : 'secret:create');
+		return latest;
 	}
 
 	/**

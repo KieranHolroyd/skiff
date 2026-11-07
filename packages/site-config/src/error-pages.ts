@@ -12,7 +12,7 @@ import type { CaddyHandler, CaddyRoute } from './compile.ts';
  * header could inject markup or poison a cache, so the page reads `location.host` in the browser
  * and sets it with `textContent`.
  */
-export type ErrorPageKind = 'no-site' | 'unknown-host' | 'not-found' | 'unavailable' | 'error';
+export type ErrorPageKind = 'no-site' | 'unknown-host' | 'not-found' | 'unavailable' | 'error' | 'awaiting-deploy';
 
 interface ErrorPage {
 	/** The large figure. A placeholder for the generic error page. */
@@ -20,7 +20,10 @@ interface ErrorPage {
 	title: string;
 	message: string;
 	hint?: string;
-	action: 'home' | 'retry' | null;
+	/** A shell command shown under the hint, for the site owner. */
+	command?: string;
+	/** `dashboard` links to the project in the dashboard when the caller passes its URL. */
+	action: 'home' | 'retry' | 'dashboard' | null;
 	icon: string;
 	/** What the chip under the message shows: the requested host, or the requested path. */
 	subject: 'host' | 'path';
@@ -35,6 +38,8 @@ const ICONS = {
 	file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="m9.5 12.5 5 5"/><path d="m14.5 12.5-5 5"/>',
 	cloud:
 		'<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/><path d="M12 11v3"/><path d="M12 17h.01"/>',
+	rocket:
+		'<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>',
 	alert:
 		'<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
 };
@@ -76,6 +81,16 @@ const PAGES: Record<ErrorPageKind, ErrorPage> = {
 		subject: 'host',
 		refresh: 30,
 	},
+	'awaiting-deploy': {
+		code: 'READY',
+		title: 'Nothing deployed yet',
+		message: 'This project is set up, but it has no deployment yet.',
+		hint: 'If this is your project, deploy a directory to put your site here:',
+		command: 'skiff deploy',
+		action: 'dashboard',
+		icon: ICONS.rocket,
+		subject: 'host',
+	},
 	error: {
 		code: '{http.error.status_code}',
 		title: 'Something went wrong',
@@ -104,24 +119,34 @@ p{margin:0 auto 12px;color:var(--muted);max-width:380px}
 .btn{display:inline-flex;align-items:center;height:36px;padding:0 16px;border:0;border-radius:8px;background:var(--accent);color:var(--accent-fg);font-size:14px;font-weight:500;line-height:1;font-family:inherit;text-decoration:none;cursor:pointer}
 .btn:hover{opacity:.88}
 .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.cmd{display:inline-block;margin:0 0 12px;padding:6px 12px;border:1px solid var(--border);border-radius:8px;background:var(--code);color:var(--fg);font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 .ref{margin-top:28px;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--muted);opacity:.8}
 `
 	.trim()
 	.replace(/\n/g, '');
 
+/** Braces are escaped too, so Caddy never expands a `{...}` placeholder from caller data. */
 function escapeHtml(value: string): string {
-	return value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
+	return value.replace(/[&<>"'{}]/g, (char) => `&#${char.charCodeAt(0)};`);
+}
+
+export interface ErrorPageOptions {
+	/** Absolute dashboard URL for the `dashboard` action; without it the button is left out. */
+	dashboardUrl?: string;
 }
 
 /** The full HTML document for one page. */
-export function renderErrorPage(kind: ErrorPageKind): string {
+export function renderErrorPage(kind: ErrorPageKind, options: ErrorPageOptions = {}): string {
 	const page = PAGES[kind];
+	const dashboardUrl = options.dashboardUrl && /^https?:\/\//.test(options.dashboardUrl) ? options.dashboardUrl : null;
 	const action =
 		page.action === 'home'
 			? '<div class="actions"><a class="btn" href="/">Go to homepage</a></div>'
 			: page.action === 'retry'
 				? '<div class="actions"><button class="btn" type="button" onclick="location.reload()">Try again</button></div>'
-				: '';
+				: page.action === 'dashboard' && dashboardUrl
+					? `<div class="actions"><a class="btn" href="${escapeHtml(dashboardUrl)}" rel="nofollow">Open in dashboard</a></div>`
+					: '';
 	const ref =
 		kind === 'error'
 			? '<div class="ref">Reference {http.error.id}</div>'
@@ -139,6 +164,7 @@ export function renderErrorPage(kind: ErrorPageKind): string {
 		`<p>${escapeHtml(page.message)}</p>`,
 		`<p><span class="host" id="subject">${page.subject === 'path' ? 'this page' : 'this address'}</span></p>`,
 		page.hint ? `<p>${escapeHtml(page.hint)}</p>` : '',
+		page.command ? `<code class="cmd">${escapeHtml(page.command)}</code>` : '',
 		action,
 		ref,
 		`</main><script>document.getElementById("subject").textContent=location.${page.subject === 'path' ? 'pathname' : 'host'}</script></body></html>`,
@@ -160,6 +186,7 @@ export function errorPageHandler(
 	kind: ErrorPageKind,
 	status: number | string,
 	headers: Record<string, string[]> = {},
+	options: ErrorPageOptions = {},
 ): CaddyHandler {
 	const base = { 'Cache-Control': ['no-store'], 'X-Robots-Tag': ['noindex'], ...headers };
 	const html: CaddyRoute = {
@@ -169,7 +196,7 @@ export function errorPageHandler(
 				handler: 'static_response',
 				status_code: status,
 				headers: { ...base, 'Content-Type': ['text/html; charset=utf-8'] },
-				body: renderErrorPage(kind),
+				body: renderErrorPage(kind, options),
 			},
 		],
 		terminal: true,

@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
-import type { EmailMessage, EmailTransport, Notifier } from './config.ts';
+import type { AlertMessage, EmailMessage, EmailTransport, Notifier } from './config.ts';
+import { signatureHeaders } from './webhook-signature.ts';
 
 /** SES SMTP in v1; the interface keeps webhooks and future transports symmetric (D22). */
 export class SmtpEmailTransport implements EmailTransport {
@@ -56,21 +57,59 @@ export class EmailNotifier implements Notifier {
 	}
 }
 
+export interface WebhookNotifierOptions {
+	/** Signs each request with `X-Skiff-Signature` (`SKIFF_ALERT_WEBHOOK_SECRET`, webhook-signature.ts). */
+	secret?: string;
+	/** Tests only. */
+	fetch?: typeof fetch;
+	now?: () => number;
+}
+
+/**
+ * The generic webhook body (docs/ALERTS.md §3). `title`, `message`, `severity` and `key` are the
+ * original four fields; `status`, `url` and `labels` were added after them, so receivers written
+ * for the first shape keep working. `url` is null only where no dashboard page exists (the host's
+ * systemd failure alerts).
+ */
+export function webhookPayload(alert: AlertMessage): {
+	title: string;
+	message: string;
+	severity: AlertMessage['severity'];
+	key: string;
+	status: 'firing' | 'resolved';
+	url: string | null;
+	labels: Record<string, string>;
+} {
+	return {
+		title: `Skiff: ${alert.title}`,
+		message: alert.detail,
+		severity: alert.severity,
+		key: alert.key,
+		status: alert.status ?? 'firing',
+		url: alert.url ?? null,
+		labels: alert.labels ?? {},
+	};
+}
+
 /** Generic webhook: ntfy, Discord, Home Assistant all accept a JSON body. */
 export class WebhookNotifier implements Notifier {
 	readonly name = 'webhook';
-	constructor(private readonly url: string) {}
+	private readonly fetch: typeof fetch;
+	private readonly now: () => number;
+	constructor(
+		private readonly url: string,
+		private readonly options: WebhookNotifierOptions = {},
+	) {
+		this.fetch = options.fetch ?? fetch;
+		this.now = options.now ?? Date.now;
+	}
 
-	async notify(alert: { key: string; title: string; detail: string; severity: string }): Promise<void> {
-		const response = await fetch(this.url, {
+	async notify(alert: AlertMessage): Promise<void> {
+		const body = JSON.stringify(webhookPayload(alert));
+		const response = await this.fetch(this.url, {
 			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({
-				title: `Skiff: ${alert.title}`,
-				message: alert.detail,
-				severity: alert.severity,
-				key: alert.key,
-			}),
+			headers: { 'content-type': 'application/json', ...signatureHeaders(this.options.secret, body, this.now()) },
+			body,
 		});
 		if (!response.ok) throw new Error(`Webhook returned ${response.status}`);
 	}

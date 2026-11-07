@@ -353,6 +353,16 @@ describe('studio proxy: dialling', () => {
 		expect(text).not.toContain(TOKEN);
 	});
 
+	test('an empty 200 from the gateway becomes a retryable 503', async () => {
+		// Caddy answers a host with no route yet with an empty 200; the browser must not be handed
+		// a body it cannot parse as JSON.
+		const { deps } = setup({ upstream: () => new Response(null, { status: 200 }) });
+		const response = await call(deps, 'info', {});
+		expect(response.status).toBe(503);
+		const body = (await response.json()) as { error: { code: string } };
+		expect(body.error.code).toBe('studio_unavailable');
+	});
+
 	test('upstream errors pass through with their status', async () => {
 		const { deps } = setup({
 			upstream: () =>

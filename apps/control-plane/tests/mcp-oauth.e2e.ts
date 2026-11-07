@@ -148,11 +148,22 @@ let client = await connect(tok1.access_token, 'accept');
 const tools = await client.listTools();
 check('tools/list over authenticated MCP', tools.tools.some((t) => t.name === 'delete_project'), tools.tools.map((t) => t.name).join(','));
 const toolNames = new Set(tools.tools.map((t) => t.name));
+// Credential tools that manage credentials without ever returning a secret (reveal stays human-only).
+const NON_SECRET_CREDENTIAL_TOOLS = new Set([
+	'rotate_database_credentials',
+	'list_database_credentials',
+	'create_database_credential',
+	'rotate_database_credential',
+	'revoke_database_credential',
+]);
 check(
 	'database tools listed; rotation allowed, no credential reveal or purge tool (D58, D53)',
 	['list_databases', 'get_database', 'create_database', 'attach_database', 'detach_database', 'delete_database'].every((name) => toolNames.has(name)) &&
 		toolNames.has('rotate_database_credentials') &&
-		![...toolNames].some((name) => /purge/.test(name) || (/credential/.test(name) && name !== 'rotate_database_credentials')),
+		![...toolNames].some(
+			(name) =>
+				/purge|reveal/.test(name) || (/credential/.test(name) && !NON_SECRET_CREDENTIAL_TOOLS.has(name)),
+		),
 );
 check(
 	'storage tools listed; no key reveal, purge or bucket delete tool (S6)',
@@ -251,6 +262,44 @@ const forged = await fetch(MCP, {
 	body: '{}',
 });
 check('tampered token rejected', forged.status === 401);
+
+// 14. Disconnecting the app (Settings → Connected apps) cuts off a token that hasn't expired yet.
+const mcpCall = (token: string) =>
+	fetch(MCP, {
+		method: 'POST',
+		headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${token}` },
+		body: JSON.stringify({
+			jsonrpc: '2.0', id: 1, method: 'initialize',
+			params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'skiff-e2e', version: '0.0.0' } },
+		}),
+	});
+const connectedApps = await (await http(`${BASE}/api/v1/connected-apps`)).json().catch(() => ({}));
+const grant = (connectedApps.connectedApps ?? []).find((app: { clientId: string }) => app.clientId === reg.client_id) as
+	| { id: string; scopes: string[] }
+	| undefined;
+check('connected apps lists the approved client with its scopes', !!grant && grant.scopes.includes('project:delete'), JSON.stringify(grant ?? connectedApps).slice(0, 140));
+const beforeRevoke = await mcpCall(tok2.access_token);
+check('token works before the app is disconnected', beforeRevoke.status !== 401, `status ${beforeRevoke.status}`);
+const revoked = await http(`${BASE}/api/v1/connected-apps/${grant?.id ?? 'missing'}`, { method: 'DELETE' });
+const revokedBody = await revoked.json().catch(() => ({}));
+check('DELETE /api/v1/connected-apps/{id} disconnects it', revoked.ok && revokedBody.revoked === true && revokedBody.clientId === reg.client_id, JSON.stringify(revokedBody).slice(0, 140));
+for (const [label, token] of [['newest', tok2.access_token], ['older', tok1.access_token]] as const) {
+	const after = await mcpCall(token);
+	const afterChallenge = after.headers.get('www-authenticate') ?? '';
+	check(
+		`revoked grant (${label} token) → 401 + sign-in challenge`,
+		after.status === 401 && /^Bearer /.test(afterChallenge) && /resource_metadata=/.test(afterChallenge),
+		`status ${after.status} ${afterChallenge.slice(0, 100)}`,
+	);
+}
+const refreshed = await (await fetch(as.token_endpoint, {
+	method: 'POST',
+	headers: { 'content-type': 'application/x-www-form-urlencoded' },
+	body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: tok2.refresh_token ?? '', client_id: reg.client_id, resource: MCP }),
+})).json().catch(() => ({}));
+check('revoked grant: refresh token no longer mints access tokens', !refreshed.access_token, refreshed.error ?? 'issued a token');
+const afterList = await (await http(`${BASE}/api/v1/connected-apps`)).json().catch(() => ({}));
+check('disconnected app is gone from the list', !(afterList.connectedApps ?? []).some((app: { clientId: string }) => app.clientId === reg.client_id));
 
 const failed = results.filter((r) => !r.ok).length;
 console.log(`\n${results.length - failed}/${results.length} passed`);

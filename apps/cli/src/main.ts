@@ -11,13 +11,20 @@ import { storageCommand } from './commands/storage.ts';
 import { brokerCommand } from './commands/broker.ts';
 import { eventsCommand } from './commands/events.ts';
 import { emailCommand } from './commands/email.ts';
+import { functionCommand } from './commands/function.ts';
+import { jobsCommand, runCommand } from './commands/jobs.ts';
+import { haCommand } from './commands/ha.ts';
 import { backupTargetCommand } from './commands/backup-target.ts';
+import { blueprintCommand } from './commands/blueprint.ts';
+import { logDrainCommand } from './commands/log-drain.ts';
+import { auditCommand } from './commands/audit.ts';
 import { volumeCommand } from './commands/volume.ts';
 import { deployCommand } from './commands/deploy.ts';
 import { deploymentsCommand } from './commands/deployments.ts';
 import { loginCommand } from './commands/login.ts';
 import { logoutCommand } from './commands/logout.ts';
 import { logsCommand } from './commands/logs.ts';
+import { containerCommand, shellCommand } from './commands/container.ts';
 import { openCommand } from './commands/open.ts';
 import { operationsCommand } from './commands/operations.ts';
 import { profileCommand } from './commands/profile.ts';
@@ -46,8 +53,13 @@ const commands: Record<string, (argv: string[]) => Promise<void>> = {
 	promote: promoteCommand,
 	rollback: rollbackCommand,
 	logs: logsCommand,
+	container: containerCommand,
+	ctr: containerCommand,
+	shell: shellCommand,
 	open: openCommand,
 	prune: pruneCommand,
+	blueprint: blueprintCommand,
+	blueprints: blueprintCommand,
 	operations: operationsCommand,
 	ops: operationsCommand,
 	db: dbCommand,
@@ -57,14 +69,24 @@ const commands: Record<string, (argv: string[]) => Promise<void>> = {
 	broker: brokerCommand,
 	brokers: brokerCommand,
 	queue: brokerCommand,
+	function: functionCommand,
+	functions: functionCommand,
+	fn: functionCommand,
+	jobs: jobsCommand,
+	job: jobsCommand,
+	run: runCommand,
 	events: eventsCommand,
 	event: eventsCommand,
 	email: emailCommand,
 	mail: emailCommand,
 	'backup-target': backupTargetCommand,
 	backupTargets: backupTargetCommand,
+	'log-drain': logDrainCommand,
+	'log-drains': logDrainCommand,
+	audit: auditCommand,
 	volume: volumeCommand,
 	volumes: volumeCommand,
+	ha: haCommand,
 	upgrade: upgradeCommand,
 	wrangler: wranglerCommand,
 };
@@ -89,17 +111,27 @@ Commands:
   promote <project> <deploymentId>           Move production to a deployment
   rollback <project>                         Move production back one deployment
   logs <project>                             Show recent project logs
+  container [inspect|ls|cat|cp|restart] <p>  Inspect a container project, read its files, restart it (\`skif container --help\`)
+  shell <project>                            Interactive shell inside a container project
   open <project>                             Open the site in a browser
   prune [--apply] [--plan <id>]              Find and remove orphaned data (dry run by default)
   operations [list|show|watch|cancel]        Inspect and follow bulk and prune operations
+  blueprint <validate|plan|apply> [file]     Declare a stack in one file; plan shows the diff, apply runs it
   db [list|create|info|attach|detach|…]      Managed PostgreSQL databases (\`skif db --help\`)
   upgrade <plan|apply|rollback>              Preflight, install or roll back the platform
   storage [list|create|info|buckets|…]       Managed S3-compatible object storage (\`skif storage --help\`)
   broker [list|create|info|attach|…]         Managed queue brokers, NATS with JetStream (\`skif broker --help\`)
+                                             Queue tools: send, peek, redrive, queue-purge, …
+  function [invoke|cron]                     Test a function on its node: a request, or a cron run now (\`skif function --help\`)
+  jobs [list|create|run|runs|logs|…]       Cron jobs and manual commands on an app (\`skif jobs --help\`)
+  run <project> -- <command…>               Run a one-off command against the app's current release
   events [list|create|test|deliveries|…]    Publish platform events (uploads, alerts, deploys, backups) to a function queue (\`skif events --help\`)
   email [status|domains|send|log|…]          Send email from your own domains, a self-hosted SES (\`skif email --help\`)
   backup-target [list|add|test|remove]       Where backups are written (\`skif backup-target --help\`)
-  volume [list|create|attach|detach|delete]  Persistent app volumes (\`skif volume --help\`)
+  log-drain [list|create|test|update|…]      Forward logs to a webhook or OTLP receiver (\`skif log-drain --help\`)
+  audit [--from] [--to] [--all]              Org audit log, newest first, with a date range and paging
+  volume [list|show|snapshot|restore|…]      Persistent app volumes and their snapshots (\`skif volume --help\`)
+  ha status                                  Failover controller: lease, lost nodes, recent failovers (platform admin)
 
 Global:
   --profile <name>  Use a saved profile (also ${PROFILE_ENV})

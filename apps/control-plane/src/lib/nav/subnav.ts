@@ -58,11 +58,10 @@ export interface Subnav {
 	/** Resource names (slugs, ids) read better in mono. */
 	mono?: boolean;
 	icon?: SubnavIcon;
+	/** Always the area's parent (never browser history), so Back is predictable. */
 	back: {
 		href: string;
 		label: string;
-		/** Return to wherever the viewer came from instead of `href` (Settings). */
-		remember?: boolean;
 	};
 	groups: SubnavGroup[];
 	/** The section the current URL shows; a page can override it while it switches in place. */

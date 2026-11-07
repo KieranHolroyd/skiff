@@ -284,6 +284,33 @@ describe('telemetry store (D101)', () => {
 	});
 });
 
+describe('telemetry memory and restart', () => {
+	const base = { id: 'req_0123456789', requestedAt: new Date().toISOString(), by: 'user_1' };
+
+	test('both refuse when ClickHouse is not installed', async () => {
+		writeFileSync(layout.envFile, 'NODE_ENV=production\n');
+		const host = fakeHost();
+		const helper = new PlatformConfigHelper(layout, host);
+		expect((await helper.apply({ ...base, action: 'telemetry-memory', memoryMb: 1024 })).outcome).toBe('rejected');
+		expect((await helper.apply({ ...base, action: 'telemetry-restart' })).outcome).toBe('rejected');
+		expect(readFileSync(layout.envFile, 'utf8')).toBe('NODE_ENV=production\n');
+		expect(host.commands).toEqual([]);
+	});
+
+	// Off Linux ensureClickHouse refuses at once, which exercises the revert path.
+	test.skipIf(process.platform === 'linux')('a ceiling ClickHouse cannot apply is reverted in skiff.env', async () => {
+		layout.optDir = join(root, 'opt');
+		writeFileSync(layout.envFile, 'NODE_ENV=production\nSKIFF_CLICKHOUSE_MEMORY_MB=1024\n');
+		writeFileSync(join(layout.systemdDir, 'skiff-clickhouse.service'), '[Unit]\n');
+		const host = fakeHost();
+		const status = await new PlatformConfigHelper(layout, host).apply({ ...base, action: 'telemetry-memory', memoryMb: 2048 });
+		expect(status.outcome).toBe('error');
+		expect(status.changed).toEqual(['SKIFF_CLICKHOUSE_MEMORY_MB']);
+		expect(readEnvFile(layout.envFile).get('SKIFF_CLICKHOUSE_MEMORY_MB')).toBe('1024');
+		expect(host.commands.some((cmd) => cmd.includes('skiff-control-plane.service'))).toBe(false);
+	});
+});
+
 describe('domains', () => {
 	const httpsTarget = { platformHost: 'control.example.com', contentDomain: 'example.dev', tls: true, acmeEmail: 'ops@example.com' };
 	const agentEnv = [

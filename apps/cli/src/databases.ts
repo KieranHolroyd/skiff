@@ -15,7 +15,44 @@ export interface DatabaseAttachmentView {
 	projectSlug: string;
 	envPrefix: string;
 	envNames: string[];
+	/** The named credential the app connects as; null/absent for the owner. */
+	credentialId?: string | null;
+	credentialRole?: DatabaseCredentialRole | null;
 	createdAt: string;
+}
+
+export type DatabaseCredentialRole = 'owner' | 'app' | 'monitor' | 'readonly' | 'backup';
+/** The roles a human can create; owner and monitor come with the database. */
+export const DATABASE_NAMED_CREDENTIAL_ROLES = ['app', 'readonly', 'backup'] as const;
+export type DatabaseNamedCredentialRole = (typeof DATABASE_NAMED_CREDENTIAL_ROLES)[number];
+
+/** Named credential metadata (docs/DATABASES.md §16); never carries a password. */
+export interface DatabaseCredentialView {
+	id: string;
+	databaseId: string;
+	role: DatabaseCredentialRole;
+	username: string;
+	purpose: string | null;
+	status: 'pending' | 'ready' | 'failed' | 'revoking' | 'revoked';
+	lastUsedAt: string | null;
+	expiresAt: string | null;
+	createdAt: string;
+	revokedAt: string | null;
+}
+
+export function databaseCredentialTable(credentials: DatabaseCredentialView[]): string {
+	return renderTable(
+		['ID', 'ROLE', 'USERNAME', 'STATUS', 'PURPOSE', 'EXPIRES', 'CREATED'],
+		credentials.map((item) => [
+			item.id,
+			item.role,
+			item.username,
+			item.status,
+			item.purpose ? truncate(item.purpose, 32) : '-',
+			item.expiresAt ? formatTime(item.expiresAt) : '-',
+			formatTime(item.createdAt),
+		]),
+	);
 }
 
 export interface DatabaseTableStat {
@@ -100,6 +137,15 @@ export interface DatabaseBackupView {
 	startedAt: string;
 	finishedAt: string | null;
 	expiresAt: string | null;
+	/** Where the backup was written; absent from control planes before 0053. */
+	target?: {
+		id: string | null;
+		name: string;
+		kind: 'platform' | 'local' | 's3';
+		location: string;
+		available: boolean;
+		unavailableReason: string | null;
+	};
 }
 
 export interface DatabaseView {
@@ -108,6 +154,8 @@ export interface DatabaseView {
 	engine: string;
 	engineLabel: string;
 	version: string;
+	/** Image variant (D126); absent from older control planes. */
+	variant?: string;
 	status: DatabaseStatus;
 	message: string | null;
 	nodeId: string;
@@ -166,18 +214,29 @@ export interface DatabaseCredentials {
 }
 
 /** Mirrors `databaseEngines` in @skiff/contracts (D95). Keep in sync; the server validates. */
-export const DATABASE_ENGINES = ['postgres', 'mysql', 'mariadb', 'mongodb', 'valkey', 'redis'] as const;
+export const DATABASE_ENGINES = ['postgres', 'mysql', 'mariadb', 'mongodb', 'valkey', 'redis', 'clickhouse'] as const;
 
 export interface DatabaseCreateInput {
 	name: string;
 	engine?: string;
 	version?: string;
+	variant?: string;
 	placement?: string;
 	memoryMb?: number;
 	cpus?: number;
 	storageMb?: number;
 	project?: string;
 	envPrefix?: string;
+	extensions?: string[];
+	pooler?: boolean;
+}
+
+/** `PATCH /api/v1/databases/:name`: any subset; the server checks it against the engine. */
+export interface DatabaseUpdateInput {
+	memoryMb?: number;
+	cpus?: number;
+	storageMb?: number;
+	version?: string;
 	extensions?: string[];
 	pooler?: boolean;
 }
@@ -210,8 +269,13 @@ export function statusLabel(view: Pick<DatabaseView, 'status' | 'deletedAt'>): s
 	return view.deletedAt ? 'deleted' : view.status;
 }
 
-export function engineLabel(view: Pick<DatabaseView, 'engineLabel' | 'engine' | 'version'>): string {
-	return `${view.engineLabel || view.engine} ${view.version}`;
+/** Postgres image variants (D126); the server checks the version. */
+export const DATABASE_VARIANTS = ['standard', 'postgis', 'pg_cron'] as const;
+const VARIANT_LABELS: Record<string, string> = { postgis: 'PostGIS', pg_cron: 'pg_cron' };
+
+export function engineLabel(view: Pick<DatabaseView, 'engineLabel' | 'engine' | 'version' | 'variant'>): string {
+	const label = `${view.engineLabel || view.engine} ${view.version}`;
+	return view.variant && view.variant !== 'standard' ? `${label} (${VARIANT_LABELS[view.variant] ?? view.variant})` : label;
 }
 
 /** `1.2 GiB / 10 GiB (12%)`, or the budget alone before the first sample. */
@@ -303,4 +367,76 @@ export function databaseDetails(view: DatabaseView, options: { now?: number; tab
 		if (more > 0) lines.push(`…and ${plural(more, 'more table')} (\`--json\` lists them all).`);
 	}
 	return lines.join('\n');
+}
+
+/** Mirrors `DatabaseReplicaView` in @skiff/contracts (docs/CLUSTERING.md §9.2). */
+export interface DatabaseReplicaView {
+	id: string;
+	databaseId: string;
+	nodeId: string;
+	nodeName: string | null;
+	zone: string | null;
+	status: 'pending' | 'streaming' | 'lagging' | 'lost' | 'failed' | 'stopped';
+	replayLsn: string | null;
+	lagBytes: number | null;
+	lagSeconds: number | null;
+	slot: string | null;
+	primaryGeneration: number;
+	workloadId: string;
+	mode: 'async' | 'sync';
+	hostPort: number | null;
+	volumeId: string | null;
+	sameNode: boolean;
+	message: string | null;
+	removing: boolean;
+	reportedAt: string | null;
+	createdAt: string;
+}
+
+/** Mirrors `DatabaseFailoverView` in @skiff/contracts (docs/CLUSTERING.md §9.3). */
+export interface DatabaseFailoverView {
+	id: string;
+	databaseId: string;
+	replicaId: string | null;
+	fromNodeId: string | null;
+	fromNodeName: string | null;
+	toNodeId: string;
+	toNodeName: string | null;
+	generation: number;
+	stage: 'fencing' | 'promoting' | 'repointing' | 'completed' | 'failed';
+	reason: string | null;
+	message: string | null;
+	startedAt: string;
+	finishedAt: string | null;
+}
+
+/** Mirrors `databasePitrStatusSchema` in @skiff/contracts (docs/PITR.md). Credential-free. */
+export interface DatabasePitrView {
+	databaseId: string;
+	databaseName: string;
+	enabled: boolean;
+	stanza: string;
+	status: 'pending' | 'ok' | 'failed' | 'paused';
+	repo: { kind: 's3'; endpoint: string | null; bucket: string; region: string; pathPrefix: string; forcePathStyle: boolean };
+	archiveStatus: 'ok' | 'failing' | 'unknown' | null;
+	archiveAt: string | null;
+	lastBaseBackupAt: string | null;
+	lastBaseBackupType: 'full' | 'diff' | 'incr' | null;
+	nextFullAt: string | null;
+	nextDiffAt: string | null;
+	lastRestoreTargetAt: string | null;
+	lastRestoreDatabaseId: string | null;
+	verifiedAt: string | null;
+	error: string | null;
+	recoverableFrom: string | null;
+	recoverableTo: string | null;
+	windowCheckedAt: string | null;
+}
+
+/** A queued PITR node task (base backup). */
+export interface DatabasePitrTaskView {
+	id: string;
+	action: 'basebackup' | 'restore' | 'status';
+	databaseId: string;
+	baseBackupType: 'full' | 'diff' | 'incr' | null;
 }

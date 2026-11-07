@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { resolve } from '$app/paths';
 	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import FingerprintIcon from '@lucide/svelte/icons/fingerprint';
@@ -56,7 +57,7 @@
 		if (err) {
 			error =
 				err.status === 401 || err.code === 'INVALID_EMAIL_OR_PASSWORD'
-					? 'That email and password don’t match. No password yet? Use a sign-in link below.'
+					? 'That email and password don’t match. Forgot it? Reset it, or use a sign-in link below.'
 					: (err.message ?? 'Sign-in failed');
 			return;
 		}
@@ -189,7 +190,14 @@
 				/>
 			</Field.Field>
 			<Field.Field>
-				<Field.Label for="password">Password</Field.Label>
+				<div class="flex items-baseline justify-between gap-2">
+					<Field.Label for="password">Password</Field.Label>
+					<a
+						class="text-xs text-muted-foreground underline-offset-4 hover:underline"
+						href={resolve('/forgot-password')}
+						>Forgot password?</a
+					>
+				</div>
 				<Input
 					id="password"
 					type="password"
@@ -209,7 +217,7 @@
 				disabled={pending}
 				onclick={sendMagicLink}
 			>
-				Forgot your password, or don’t have one? Email me a sign-in link
+				No password, or prefer a link? Email me a sign-in link
 			</button>
 		</form>
 

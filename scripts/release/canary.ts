@@ -12,6 +12,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { formatEnvFile, readEnvFile } from '../install/env-file.ts';
+import { credentialDirectiveFor } from '../install/master-key.ts';
 import { fullyHealthy, pollProbe, type Probe } from './health.ts';
 
 export const HOOK_PROTOCOL = 1;
@@ -84,7 +85,6 @@ export function canaryEnvironment(base: Map<string, string>, input: { scratch: s
 	const env = new Map(base);
 	for (const key of [...env.keys()]) if (/^(SKIFF_SMTP_|SKIFF_ALERT_|SKIFF_TWILIO_|R2_|SKIFF_R2_)/.test(key)) env.delete(key);
 	env.set('SKIFF_OBJECT_STORE', 'local');
-	env.set('SKIFF_DAILY_BACKUPS', '0');
 	env.set('SKIFF_DATA_DIR', join(input.scratch, 'data'));
 	env.set('SKIFF_MASTER_KEY_FILE', `/run/credentials/${input.unit}.service/master-key`);
 	env.set('SOCKET_PATH', join(input.scratch, 'control.sock'));
@@ -127,7 +127,8 @@ export async function runCanary(input: CanaryInput, run: Run = defaultRun): Prom
 		'Group=skiff',
 		'UMask=0007',
 		`EnvironmentFile=${envFile}`,
-		`LoadCredential=master-key:${input.masterKeyFile}`,
+		// Sealed (`master.key.cred`) or plaintext, whichever the host uses; stage-0 passes the plain path.
+		credentialDirectiveFor(input.masterKeyFile),
 		`WorkingDirectory=${input.release}/repo/apps/control-plane`,
 		'NoNewPrivileges=yes',
 		'PrivateTmp=yes',
