@@ -242,10 +242,19 @@ export function compileSiteRoute(input: SiteCompileInput): CaddyRoute {
 				{
 					handler: 'reverse_proxy',
 					upstreams: upstreams.map((upstream) => ({ dial: upstream.replace(/^https?:\/\//, '') })),
+					// JSON config field names, not the Caddyfile's `lb_policy`/`health_uri`: Caddy
+					// refuses unknown fields, and one bad route fails the node's whole config load.
 					...(input.upstreams && input.upstreams.length > 1
 						? {
-							lb_policy: 'least_conn',
-							...(input.healthPath ? { health_uri: input.healthPath, health_interval: '5s', fail_duration: '30s' } : {}),
+							load_balancing: { selection_policy: { policy: 'least_conn' } },
+							...(input.healthPath
+								? {
+									health_checks: {
+										active: { uri: input.healthPath, interval: '5s' },
+										passive: { fail_duration: '30s' },
+									},
+								}
+								: {}),
 						}
 						: {}),
 					headers: { request: { set: { 'X-Forwarded-Host': ['{http.request.host}'] } } },

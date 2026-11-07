@@ -105,8 +105,12 @@ describe('compileSiteRoute', () => {
 		const json = JSON.stringify(route);
 		expect(json).toContain('"dial":"10.88.1.2:8080"');
 		expect(json).toContain('"dial":"10.88.1.3:8080"');
-		expect(json).toContain('"health_uri":"/health"');
-		expect(json).toContain('"lb_policy":"least_conn"');
+		// Caddy's JSON field names; the Caddyfile spellings (`lb_policy`, `health_uri`) are refused
+		// as unknown fields and fail the whole config load.
+		expect(json).toContain('"load_balancing":{"selection_policy":{"policy":"least_conn"}}');
+		expect(json).toContain('"health_checks":{"active":{"uri":"/health","interval":"5s"},"passive":{"fail_duration":"30s"}}');
+		expect(json).not.toContain('lb_policy');
+		expect(json).not.toContain('health_uri');
 	});
 
 	test('protected sites forward_auth to the agent and set noindex/private', () => {

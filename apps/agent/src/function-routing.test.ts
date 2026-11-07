@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import type { CaddyHandler, CaddyRoute, SiteCompileInput } from '@skiff/site-config';
 import {
 	compileFunctionRoute,
+	FUNCTION_DIAL_RETRY,
 	functionAssetsRoot,
 	globToRegExp,
 	runWorkerFirstMatch,
@@ -112,6 +113,7 @@ describe('replica upstreams (phase 4)', () => {
 			upstreams: Array<{ dial: string }>;
 			headers: { request: { set: Record<string, string[]> } };
 			transport: Record<string, unknown>;
+			load_balancing: Record<string, unknown>;
 			handle_response: unknown;
 		};
 	}
@@ -137,6 +139,8 @@ describe('replica upstreams (phase 4)', () => {
 			},
 		});
 		expect(proxy.transport).toEqual({ protocol: 'http', response_header_timeout: '5m' });
+		// A socket that is briefly gone (deploy, watchdog restart) holds the request, not a 503.
+		expect(proxy.load_balancing).toEqual({ try_duration: FUNCTION_DIAL_RETRY, try_interval: '250ms' });
 		expect(JSON.stringify(proxy.handle_response)).toContain('"status_code":503');
 		expect(JSON.stringify(proxy.handle_response)).toContain('Retry-After');
 	});

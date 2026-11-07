@@ -216,6 +216,9 @@ function redirectRule(redirect: Redirect): CaddyRoute {
 	return { match, handle: [{ handler: 'static_response', status_code: redirect.status, body: '' }] };
 }
 
+/** How long Caddy keeps retrying a function socket that refuses connections. */
+export const FUNCTION_DIAL_RETRY = '30s';
+
 /**
  * The function host. `X-Skiff-Internal: 0` overwrites a client-supplied value so the shim's
  * `POST /__skiff/scheduled` and `/__skiff/queue` routes stay unreachable from the internet (FN9:
@@ -229,6 +232,11 @@ function proxyHandler(upstreams: readonly string[]): CaddyHandler {
 	return {
 		handler: 'reverse_proxy',
 		upstreams: upstreams.map((upstream) => ({ dial: upstream.replace(/^https?:\/\//, '') })),
+		// Hold the request while the host's socket is briefly absent (a deploy or the watchdog
+		// restarting the `.socket` unit) instead of answering 503 at once. A listening socket
+		// already queues the connection through a cold start; this covers the gaps between
+		// listeners. Caddy only retries failed dials, so a request the host saw is never resent.
+		load_balancing: { try_duration: FUNCTION_DIAL_RETRY, try_interval: '250ms' },
 		headers: {
 			request: {
 				set: {
