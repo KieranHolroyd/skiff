@@ -488,7 +488,10 @@ export class WorkloadService {
 				deploymentId: deployment.id,
 				...(isolated ? { orgId: project.orgId, networkName: orgNetworkName(project.orgId) } : {}),
 				runtime: spec.runtime,
-				status: quiesced.has(project.id) ? 'stopped' : workload.status,
+				// Desired, not observed. The row's status is the agent's last report; echoing a
+				// reported `stopped` back (an idle-stopped function, a crashed unit) makes the agent
+				// remove the units, so the socket stops listening and the app never cold-starts again.
+				status: quiesced.has(project.id) ? 'stopped' : 'running',
 				release: release?.sha256 ?? null,
 				...(spec.command ? { command: spec.command } : {}),
 				...(spec.image ? { image: spec.image } : {}),

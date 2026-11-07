@@ -69,6 +69,24 @@ describe('process apps that scale to zero', () => {
 		expect('idleStopSeconds' in alwaysOn!).toBe(false);
 	});
 
+	test('an idle-stopped app stays desired as running, so the node keeps its socket', async () => {
+		const before = await core.nodes.desiredState(nodeToken);
+		const php = before.workloads.find((workload) => workload.projectSlug === 'php')!;
+		// The agent reports `stopped` once the idle sweep stops the service (FN4). Echoing that back
+		// made the agent remove the units, and the next request answered 503 instead of cold-starting.
+		core.nodes.heartbeat(nodeToken, {
+			nodeId: core.nodes.authenticate(nodeToken).id,
+			agentVersion: '0.1.0',
+			actualStateVersion: before.version,
+			status: 'online',
+			caddyOk: true,
+			releases: [],
+			workloads: [{ id: php.id, status: 'stopped', restarts: 0 }],
+		});
+		const after = await core.nodes.desiredState(nodeToken);
+		expect(after.workloads.find((workload) => workload.id === php.id)?.status).toBe('running');
+	});
+
 	test('a spec that cannot scale to zero is refused before it is stored', () => {
 		const project = core.projects.requireRow(principal, 'always-on');
 		expect(() =>

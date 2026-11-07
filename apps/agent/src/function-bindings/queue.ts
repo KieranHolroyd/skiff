@@ -1,7 +1,11 @@
 import type { BindingRenderer, RenderedBinding } from './types.ts';
 import { capnpText } from '../function-config.ts';
 import queueWorkerSource from '../../../../packages/function-bindings/src/queue.js' with { type: 'text' };
-import natsSource from '../../../../packages/function-bindings/src/nats.js' with { type: 'text' };
+import { embedSource } from './embed-source.ts' with { type: 'macro' };
+
+// Not a text import: function-queues.ts imports nats.js as a module, and `bun build` cannot hold one
+// file as both (see embed-source.ts).
+const natsSource = embedSource('../../../../packages/function-bindings/src/nats.js');
 
 /** Helper credential names the queue service modules are embedded as (fixed contract with the helper). */
 export const QUEUE_BINDING_FILE = 'binding-queue';
