@@ -3,6 +3,10 @@ name: Publish release
 # Every push to main whose VERSION has no release yet is tested, built once in CI per
 # architecture, canaried under the production sandbox, signed and published as v<VERSION>.
 # Hosts install these signed artifacts (skiff-update-self); nothing is compiled on a server.
+#
+# Releases are published as GitHub prereleases: the canary channel. Hosts on canary (the
+# default) install them straight away; hosts on stable wait until promote.yml flips one to a
+# full release. Promotion reuses these exact signed artifacts (docs/OPS.md §4.1).
 
 on:
   push:
@@ -240,6 +244,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "v$VERSION" dist/* \
+            --prerelease \
             --target "$GITHUB_SHA" \
             --title "Skiff $VERSION" \
-            --notes "Signed release built from ${GITHUB_SHA::12}. Hosts install it with \`skiff-update-self\` (dashboard: Settings → Updates)."
+            --notes "Signed canary built from ${GITHUB_SHA::12}. Canary hosts install it with \`skiff-update-self\` (dashboard: Settings → Updates); stable hosts get it once it is promoted with the Promote workflow."

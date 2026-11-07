@@ -23,9 +23,13 @@ import {
 } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import {
+	DEFAULT_SELF_UPDATE_CHANNEL,
 	SELF_UPDATE_DEFAULTS,
+	isSelfUpdateChannel,
+	selfUpdateChannelFile,
 	selfUpdateModeFile,
 	updateSourceForMethod,
+	type SelfUpdateChannel,
 	type SelfUpdateLogLevel,
 	type SelfUpdateMethod,
 	type SelfUpdateOutcome,
@@ -44,7 +48,7 @@ import {
 } from '../systemd/control-plane.ts';
 import { hostPlatform, loadTrustedKeys, sha256File } from './signing.ts';
 import { UPDATER_IDENTITY } from './version.ts';
-import { consumeRequestedMethod } from './request.ts';
+import { consumeRequestedChannel, consumeRequestedMethod } from './request.ts';
 import { ensurePlatformConfigUnits } from '../platform-config/units.ts';
 import { ensureBuilder, linkAgentCommands } from '../systemd/builder.ts';
 import { ensureHelper } from '../systemd/helper.ts';
@@ -80,6 +84,7 @@ Usage:
   skiff-update-self plan [--json]        preflight the upgrade (disk, backup target, migrations)
   skiff-update-self rollback [options]   switch back to the previous release (repeat to undo)
   skiff-update-self status [--json]      show current/previous releases, verdicts and the last switch
+  skiff-update-self channel [canary|stable]  show or set this host's release channel
   skiff-update-self recover [--boot]     resolve an interrupted update (--boot: filesystem only, at boot)
   skiff-update-self self-test [--json]   qualify this updater binary (used before activating a new one)
   skiff-update-self version              print this updater's identity
@@ -89,6 +94,9 @@ update options:
                        download: install the signed release (never build on the host);
                        build: compile --ref from source (never run a prebuilt binary).
                        artifact/source are accepted as aliases of download/build.
+  --channel <name>     canary (default): every release, including GitHub prereleases;
+                       stable: only releases promoted by the Promote workflow. Remembered for
+                       later runs. Never downgrades: a host ahead of stable waits for it.
   --ref <ref>          build this branch, tag or sha from source (implies --source build)
   --repo <owner/name>  GitHub repository (default: from the current release, else KieranHolroyd/skiff)
   --force              install even if not newer (rebuild/downgrade), or retry a release that failed
@@ -113,6 +121,7 @@ Environment:
   SKIFF_GITHUB_TOKEN   token for a private repository (or put it in /etc/skiff/github.token, 0600)
   SKIFF_REPO, SKIFF_REF  defaults for --repo / --ref
   SKIFF_UPDATE_SOURCE  default for --source (auto, download or build)
+  SKIFF_UPDATE_CHANNEL default channel until one is chosen (canary or stable)
   SKIFF_UPDATER=source run the TypeScript updater from the current release instead of stage-0
 
 Exit status: 0 updated / up to date / nothing to do, 1 nothing changed or rolled back to the old
@@ -130,6 +139,7 @@ const UPDATE_COMMAND = '/usr/local/sbin/skiff-update-self';
 const STATUS_FILE = process.env.SKIFF_UPDATE_STATUS_FILE ?? SELF_UPDATE_DEFAULTS.statusFile;
 const LOG_FILE = process.env.SKIFF_UPDATE_LOG_FILE ?? SELF_UPDATE_DEFAULTS.logFile;
 const REQUEST_FILE = process.env.SKIFF_UPDATE_REQUEST_FILE ?? SELF_UPDATE_DEFAULTS.requestFile;
+const CHANNEL_FILE = process.env.SKIFF_UPDATE_CHANNEL_FILE ?? SELF_UPDATE_DEFAULTS.channelFile;
 const SYSTEMD_DIR = process.env.SKIFF_SYSTEMD_DIR ?? '/etc/systemd/system';
 
 const tty = process.stdout.isTTY;
@@ -159,6 +169,7 @@ const known = new Set([
 	'--json',
 	'--trigger',
 	'--source',
+	'--channel',
 	'--no-zero-downtime',
 	'--bake',
 	'--boot',
@@ -166,8 +177,10 @@ const known = new Set([
 	'--help',
 	'-h',
 ]);
-const withValue = new Set(['--ref', '--repo', '--trigger', '--source', '--bake']);
+const withValue = new Set(['--ref', '--repo', '--trigger', '--source', '--channel', '--bake']);
 for (let i = 0; i < argv.length; i++) {
+	// `channel <name>` is the one command with a positional argument.
+	if (command === 'channel' && i === 0 && !argv[0]!.startsWith('-')) continue;
 	if (!known.has(argv[i]!)) usageError(`unknown option ${argv[i]}`);
 	if (withValue.has(argv[i]!)) {
 		if (!argv[i + 1] || argv[i + 1]!.startsWith('-')) usageError(`${argv[i]} needs a value`);
@@ -565,6 +578,55 @@ function resolveMethod(
 	return requested ?? 'auto';
 }
 
+// ------------------------------------------------------------------ release channel
+
+function channelOption(): SelfUpdateChannel | undefined {
+	const value = option('--channel');
+	if (value === undefined) return undefined;
+	if (isSelfUpdateChannel(value)) return value;
+	usageError(`--channel must be canary or stable (got ${value})`);
+}
+
+/** The remembered channel, else SKIFF_UPDATE_CHANNEL, else canary (the default path). */
+function storedChannel(): SelfUpdateChannel {
+	try {
+		const value = readFileSync(CHANNEL_FILE, 'utf8').trim();
+		if (isSelfUpdateChannel(value)) return value;
+	} catch {
+		// Never chosen on this host.
+	}
+	const fromEnv = process.env.SKIFF_UPDATE_CHANNEL;
+	return isSelfUpdateChannel(fromEnv) ? fromEnv : DEFAULT_SELF_UPDATE_CHANNEL;
+}
+
+/** root:skiff 0640 like the status file: the dashboard shows it, only root changes it. */
+function persistChannel(channel: SelfUpdateChannel): void {
+	const dir = dirname(CHANNEL_FILE);
+	mkdirSync(dir, { recursive: true, mode: 0o750 });
+	const gid = skiffGroupId();
+	if (gid !== null) chownSync(dir, 0, gid);
+	const tmp = `${CHANNEL_FILE}.tmp-${process.pid}`;
+	writeFileSync(tmp, `${channel}\n`, { mode: 0o640 });
+	if (gid !== null) chownSync(tmp, 0, gid);
+	renameSync(tmp, CHANNEL_FILE);
+}
+
+/** `--channel` wins, then the dashboard's choice, then the remembered one. A choice is kept. */
+function resolveChannel(requested: SelfUpdateChannel | null, remember: boolean): SelfUpdateChannel {
+	const chosen = channelOption() ?? requested;
+	const current = storedChannel();
+	if (!chosen) return current;
+	if (remember && chosen !== current) {
+		try {
+			persistChannel(chosen);
+			host.log(`release channel changed: ${current} -> ${chosen}`);
+		} catch (error) {
+			host.warn(`could not remember the ${chosen} channel: ${(error as Error).message}`);
+		}
+	}
+	return chosen;
+}
+
 /**
  * Qualification for a candidate stage-0 (run by the current stage-0 before it activates this
  * binary). Read-only: it must be able to read the machine's state, trust release keys, reach
@@ -860,7 +922,8 @@ const host: Host = {
 
 	// ------------------------------------------------ signed releases (CI-built artifacts)
 	async listReleases(repo): Promise<PublishedRelease[]> {
-		const response = await fetch(`https://api.github.com/repos/${repo}/releases?per_page=30`, {
+		// 100 (the API maximum) so the newest stable release stays in view behind many canaries.
+		const response = await fetch(`https://api.github.com/repos/${repo}/releases?per_page=100`, {
 			headers: githubHeaders('application/vnd.github+json'),
 			signal: AbortSignal.timeout(20_000),
 		});
@@ -1021,12 +1084,31 @@ async function main(): Promise<number> {
 		return 0;
 	}
 
+	if (command === 'channel') {
+		const value = argv.find((arg) => !arg.startsWith('-'));
+		if (value === undefined) {
+			console.log(storedChannel());
+			return 0;
+		}
+		if (!isSelfUpdateChannel(value)) usageError(`channel must be canary or stable (got ${value})`);
+		preflight();
+		const before = storedChannel();
+		persistChannel(value);
+		console.log(
+			before === value
+				? `already on the ${value} channel`
+				: `release channel: ${before} -> ${value}. Run ${bold('sudo skiff-update-self')} to update on it.`,
+		);
+		return 0;
+	}
+
 	if (command === 'status') {
 		const status = updater.status();
 		if (flag('--json')) {
-			console.log(JSON.stringify(status, null, 2));
+			console.log(JSON.stringify({ ...status, channel: storedChannel() }, null, 2));
 			return 0;
 		}
+		console.log(`${bold('channel ')} ${storedChannel()}`);
 		console.log(`${bold('current ')} ${describe(status.current?.path, status.current?.meta ?? {})}`);
 		console.log(`${bold('previous')} ${describe(status.previous?.path, status.previous?.meta ?? {})}`);
 		const last = status.state.lastSwitch;
@@ -1059,11 +1141,12 @@ async function main(): Promise<number> {
 			repo: option('--repo') ?? process.env.SKIFF_REPO,
 			ref: option('--ref') ?? process.env.SKIFF_REF,
 			source: sourceOption(),
+			channel: channelOption() ?? storedChannel(),
 		});
 		if (flag('--json')) console.log(JSON.stringify(result, null, 2));
 		else {
 			console.log(`${bold('running')} ${result.fromVersion ?? dim('unknown')}`);
-			console.log(`${bold('latest ')} ${result.version} ${dim(`(${result.repo}@${result.ref}, ${result.commit.slice(0, 12)})`)}`);
+			console.log(`${bold('latest ')} ${result.version} ${dim(`(${result.channel} · ${result.repo}@${result.ref}, ${result.commit.slice(0, 12)})`)}`);
 			console.log(
 				result.failed
 					? yellow(`${result.version} failed to install before (${result.failed}); \`update --force\` retries it`)
@@ -1079,7 +1162,8 @@ async function main(): Promise<number> {
 		const result = await updater.plan({
 			repo: option('--repo') ?? process.env.SKIFF_REPO,
 			ref: option('--ref') ?? process.env.SKIFF_REF,
-			source: sourceOption()
+			source: sourceOption(),
+			channel: channelOption() ?? storedChannel(),
 		});
 		if (flag('--json')) {
 			console.log(JSON.stringify(result, null, 2));
@@ -1107,6 +1191,10 @@ async function main(): Promise<number> {
 			consumeRequestedMethod(selfUpdateModeFile(REQUEST_FILE), trigger),
 		);
 		const source = updateSourceForMethod(method);
+		const channel = resolveChannel(
+			consumeRequestedChannel(selfUpdateChannelFile(REQUEST_FILE), trigger),
+			!dryRun,
+		);
 		if (!dryRun) {
 			startUpdateLog(trigger);
 			const now = new Date().toISOString();
@@ -1114,6 +1202,7 @@ async function main(): Promise<number> {
 				running: true,
 				trigger,
 				method,
+				channel,
 				phase: 'checking',
 				message: 'Checking for a newer version',
 				fromVersion: null,
@@ -1150,6 +1239,7 @@ async function main(): Promise<number> {
 			publicCheck,
 			allowDestructiveMigrations: flag('--allow-destructive'),
 			source,
+			channel,
 			zeroDowntime: !flag('--no-zero-downtime'),
 			...(option('--bake') ? { bakeMs: Math.max(0, Number(option('--bake'))) * 1000 } : {}),
 		});

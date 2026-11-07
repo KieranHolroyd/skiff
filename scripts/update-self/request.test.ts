@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { consumeRequestedMethod } from './request.ts';
+import { consumeRequestedChannel, consumeRequestedMethod } from './request.ts';
 
 const path = join(mkdtempSync(join(tmpdir(), 'skiff-update-request-')), 'request.mode');
 
@@ -35,3 +35,24 @@ describe('consumeRequestedMethod', () => {
 });
 
 afterAll(() => rmSync(path, { force: true }));
+
+describe('consumeRequestedChannel', () => {
+	const channelPath = join(mkdtempSync(join(tmpdir(), 'skiff-update-channel-')), 'request.channel');
+
+	test('returns an allowlisted dashboard channel and deletes the sidecar', () => {
+		writeFileSync(channelPath, 'stable\n');
+		expect(consumeRequestedChannel(channelPath, 'dashboard')).toBe('stable');
+		expect(existsSync(channelPath)).toBe(false);
+	});
+
+	test('ignores unknown values and CLI runs, but always consumes the file', () => {
+		writeFileSync(channelPath, 'beta\n');
+		expect(consumeRequestedChannel(channelPath, 'dashboard')).toBeNull();
+		expect(existsSync(channelPath)).toBe(false);
+		writeFileSync(channelPath, 'canary\n');
+		expect(consumeRequestedChannel(channelPath, 'cli')).toBeNull();
+		expect(existsSync(channelPath)).toBe(false);
+	});
+
+	afterAll(() => rmSync(channelPath, { force: true }));
+});

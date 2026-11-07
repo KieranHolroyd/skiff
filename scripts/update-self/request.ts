@@ -1,18 +1,23 @@
 import { readFileSync, rmSync } from 'node:fs';
 import {
+	isSelfUpdateChannel,
 	isSelfUpdateMethod,
+	type SelfUpdateChannel,
 	type SelfUpdateMethod
 } from '../../packages/contracts/src/self-update.ts';
 
 /**
- * Read the dashboard's install method from the sidecar next to the update request, then delete it.
+ * Read one allowlisted value from a sidecar next to the dashboard's update request, then delete it.
  *
  * The trigger unit consumes the request itself (`ExecStartPre=rm`), so form data cannot travel
- * with it. Only the allowlisted method is used; everything else falls back to `auto`. The file is
- * removed even for a CLI run or an unrecognised value, so a stale choice cannot leak into a later
- * update.
+ * with it. Only an allowlisted value is used; anything else is ignored. The file is removed even
+ * for a CLI run or an unrecognised value, so a stale choice cannot leak into a later update.
  */
-export function consumeRequestedMethod(path: string, trigger: string): SelfUpdateMethod | null {
+function consumeSidecar<T extends string>(
+	path: string,
+	trigger: string,
+	allowed: (value: unknown) => value is T
+): T | null {
 	let value: string | null = null;
 	try {
 		value = readFileSync(path, 'utf8').trim();
@@ -20,6 +25,16 @@ export function consumeRequestedMethod(path: string, trigger: string): SelfUpdat
 		// No sidecar: a request from an older control plane, or a CLI run.
 	}
 	rmSync(path, { force: true });
-	if (trigger !== 'dashboard' || !isSelfUpdateMethod(value)) return null;
+	if (trigger !== 'dashboard' || !allowed(value)) return null;
 	return value;
+}
+
+/** The dashboard's install method (`request.mode`); null falls back to `auto`. */
+export function consumeRequestedMethod(path: string, trigger: string): SelfUpdateMethod | null {
+	return consumeSidecar(path, trigger, isSelfUpdateMethod);
+}
+
+/** The dashboard's release channel (`request.channel`); null keeps the host's channel. */
+export function consumeRequestedChannel(path: string, trigger: string): SelfUpdateChannel | null {
+	return consumeSidecar(path, trigger, isSelfUpdateChannel);
 }

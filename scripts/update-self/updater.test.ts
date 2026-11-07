@@ -13,6 +13,7 @@ import {
 	type Host,
 	type HookOutcome,
 	type Layout,
+	type PublishedRelease,
 	type SocketTarget,
 	type UpdateState,
 	Updater,
@@ -887,7 +888,9 @@ describe('signed release artifacts', () => {
 	let bytes: Map<string, Uint8Array>;
 	let artifactPath: string;
 
-	function publish(input: { version?: string; signWith?: string; tamper?: boolean; updater?: boolean } = {}) {
+	function publish(
+		input: { version?: string; signWith?: string; tamper?: boolean; updater?: boolean; prerelease?: boolean; also?: PublishedRelease[] } = {},
+	) {
 		const version = input.version ?? '0.2.0';
 		const build = join(root, `artifact-${version}`);
 		writeRepo(join(build, 'repo'), ['0001_init.sql']);
@@ -925,13 +928,14 @@ describe('signed release artifacts', () => {
 			{
 				tag: `v${version}`,
 				draft: false,
-				prerelease: false,
+				prerelease: input.prerelease ?? false,
 				assets: [
 					{ name: 'manifest.json', url: 'https://dl/manifest.json', size: body.length },
 					{ name: 'manifest.json.sig', url: 'https://dl/manifest.json.sig', size: 88 },
 					{ name: basename(artifactPath), url: 'https://dl/artifact', size: 1 },
 				],
 			},
+			...(input.also ?? []),
 		];
 	}
 
@@ -986,6 +990,61 @@ describe('signed release artifacts', () => {
 		expect(result.status === 'build-failed' ? result.reason : '').toMatch(/signed checksum/);
 		expect(readdirSync(layout.releasesDir).sort()).toEqual([basename(older), basename(original)].sort());
 		expect(existsSync(layout.stateFile)).toBe(false);
+	});
+
+	/** A signed-looking canary whose files were never served: installing it would fail loudly. */
+	const unreachableCanary = (version: string): PublishedRelease => ({
+		tag: `v${version}`,
+		draft: false,
+		prerelease: true,
+		assets: [
+			{ name: 'manifest.json', url: `https://dl/${version}/manifest.json`, size: 1 },
+			{ name: 'manifest.json.sig', url: `https://dl/${version}/manifest.json.sig`, size: 88 },
+		],
+	});
+
+	test('the canary channel (default) installs a GitHub prerelease', async () => {
+		publish({ prerelease: true });
+		const result = await new Updater(layout, host).update();
+		expect(result).toMatchObject({ status: 'updated', version: '0.2.0' });
+		expect(readMeta(readLink(layout.currentLink)!)).toMatchObject({ source: 'artifact', tag: 'v0.2.0', ref: 'main' });
+	});
+
+	test('the stable channel installs the newest promoted release and ignores newer canaries', async () => {
+		publish({ also: [unreachableCanary('0.3.0')] });
+		const check = await new Updater(layout, host).check({ channel: 'stable' });
+		expect(check).toMatchObject({ channel: 'stable', version: '0.2.0', ref: 'v0.2.0', available: true });
+		const result = await new Updater(layout, host).update({ channel: 'stable' });
+		expect(result).toMatchObject({ status: 'updated', version: '0.2.0' });
+	});
+
+	test('the stable channel refuses when nothing has been promoted yet', async () => {
+		publish({ prerelease: true });
+		await expect(new Updater(layout, host).update({ channel: 'stable' })).rejects.toThrow(/No stable release/);
+		await expect(new Updater(layout, host).update({ channel: 'stable', source: 'artifact' })).rejects.toThrow(
+			/No signed stable release/,
+		);
+		expect(readLink(layout.currentLink)).toBe(original);
+	});
+
+	test('a stable source build builds the newest stable tag, not the branch head', async () => {
+		publish({ also: [unreachableCanary('0.3.0')] });
+		const asked: string[] = [];
+		host.resolveCommit = async (_repo: string, ref: string) => (asked.push(ref), NEW);
+		host.version = '0.2.0\n';
+		const result = await new Updater(layout, host).update({ channel: 'stable', source: 'source' });
+		expect(asked).toEqual(['v0.2.0']);
+		expect(result).toMatchObject({ status: 'updated', version: '0.2.0' });
+		// The tracked branch is kept, so switching back to canary builds main again.
+		expect(readMeta(readLink(layout.currentLink)!)).toMatchObject({ ref: 'main', commit: NEW });
+	});
+
+	test('switching to stable while ahead of it stays on the canary until stable passes it', async () => {
+		writeFileSync(join(original, 'meta.json'), JSON.stringify({ commit: OLD, version: '0.3.0', repo: 'owner/skiff' }));
+		publish({ also: [unreachableCanary('0.4.0')] });
+		const result = await new Updater(layout, host).update({ channel: 'stable' });
+		expect(result).toMatchObject({ status: 'up-to-date', version: '0.2.0', fromVersion: '0.3.0' });
+		expect(host.logs.some((line) => line.includes('staying on 0.3.0 until stable passes it'))).toBe(true);
 	});
 
 	test('source: artifact refuses to build when nothing is published', async () => {

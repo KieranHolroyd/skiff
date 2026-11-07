@@ -11,16 +11,21 @@ import {
 } from 'node:fs';
 import { dirname } from 'node:path';
 import {
+	DEFAULT_SELF_UPDATE_CHANNEL,
 	SELF_UPDATE_DEFAULTS,
 	SELF_UPDATE_LOG_LINES,
 	SELF_UPDATE_STALE_MS,
 	canAdministerPlatform,
 	compareSemver,
+	isSelfUpdateChannel,
 	isSelfUpdateMethod,
 	parseSemver,
+	releaseInChannel,
+	selfUpdateChannelFile,
 	selfUpdateModeFile,
 	semverBump,
 	type Principal,
+	type SelfUpdateChannel,
 	type SelfUpdateLog,
 	type SelfUpdateLogLevel,
 	type SelfUpdateLogLine,
@@ -40,6 +45,8 @@ const requestFile = env.SKIFF_UPDATE_REQUEST_FILE ?? SELF_UPDATE_DEFAULTS.reques
 const paths = {
 	requestFile,
 	modeFile: selfUpdateModeFile(requestFile),
+	channelSidecar: selfUpdateChannelFile(requestFile),
+	channelFile: env.SKIFF_UPDATE_CHANNEL_FILE ?? SELF_UPDATE_DEFAULTS.channelFile,
 	statusFile: env.SKIFF_UPDATE_STATUS_FILE ?? SELF_UPDATE_DEFAULTS.statusFile,
 	logFile: env.SKIFF_UPDATE_LOG_FILE ?? SELF_UPDATE_DEFAULTS.logFile,
 	pathUnit: env.SKIFF_UPDATE_PATH_UNIT ?? SELF_UPDATE_DEFAULTS.pathUnit,
@@ -103,79 +110,134 @@ export function updateSource(): UpdateSource {
 	}
 }
 
+/**
+ * The release channel this host follows (docs/OPS.md §4.1, *Release channels*): the one the
+ * updater last recorded, else `SKIFF_UPDATE_CHANNEL`, else canary. Only the root updater writes
+ * the file; the dashboard changes it by sending a channel with an update request.
+ */
+export function currentChannel(): SelfUpdateChannel {
+	try {
+		const value = readFileSync(paths.channelFile, 'utf8').trim();
+		if (isSelfUpdateChannel(value)) return value;
+	} catch {
+		// Never chosen on this host, or an updater that predates channels.
+	}
+	return isSelfUpdateChannel(env.SKIFF_UPDATE_CHANNEL)
+		? env.SKIFF_UPDATE_CHANNEL
+		: DEFAULT_SELF_UPDATE_CHANNEL;
+}
+
+/** Parse a submitted channel; null means it was not one of the allowlisted choices. */
+export function updateChannelFromForm(value: unknown): SelfUpdateChannel | null {
+	return isSelfUpdateChannel(value) ? value : null;
+}
+
 export type LatestVersion =
 	| { ok: true; version: string; checkedAt: string }
 	| { ok: false; error: string; checkedAt: string };
 
-let cached: { key: string; at: number; value: LatestVersion } | null = null;
+/** One entry per repo/ref/method/channel, so the page can show both channels without refetching. */
+const cache = new Map<string, { at: number; value: LatestVersion }>();
+
+interface ListedRelease {
+	tag_name?: string;
+	draft?: boolean;
+	prerelease?: boolean;
+	assets?: { name?: string }[];
+}
 
 /**
- * Newest signed release (`v<semver>` with a manifest), the same choice the updater makes.
- * null when nothing is published or GitHub cannot be asked; the caller falls back to VERSION.
+ * Published releases, newest first, or null when GitHub cannot be asked. 100 per page (the API
+ * maximum), the same window as the updater, so the newest stable release stays in view behind
+ * many canaries.
  */
-async function latestPublishedVersion(repo: string): Promise<string | null> {
+async function listReleases(repo: string): Promise<ListedRelease[] | null> {
 	try {
-		const response = await fetch(`https://api.github.com/repos/${repo}/releases?per_page=30`, {
+		const response = await fetch(`https://api.github.com/repos/${repo}/releases?per_page=100`, {
 			headers: { 'User-Agent': 'skiff-control-plane', Accept: 'application/vnd.github+json' },
 			signal: AbortSignal.timeout(8_000)
 		});
 		if (!response.ok) return null;
-		const releases = (await response.json()) as {
-			tag_name?: string;
-			draft?: boolean;
-			prerelease?: boolean;
-			assets?: { name?: string }[];
-		}[];
-		const versions = releases
-			.filter(
-				(release) =>
-					!release.draft &&
-					!release.prerelease &&
-					/^v\d+\.\d+\.\d+$/.test(release.tag_name ?? '') &&
-					(release.assets ?? []).some((asset) => asset.name === 'manifest.json')
-			)
-			.map((release) => release.tag_name!.slice(1))
-			.sort((a, b) => compareSemver(b, a));
-		return versions[0] ?? null;
+		return (await response.json()) as ListedRelease[];
 	} catch {
 		return null;
 	}
 }
 
+/** Newest `v<semver>` release on `channel`; `signed` also requires a manifest (what download installs). */
+function newestOnChannel(
+	releases: ListedRelease[],
+	channel: SelfUpdateChannel,
+	signed: boolean
+): string | null {
+	const versions = releases
+		.filter(
+			(release) =>
+				releaseInChannel(release, channel) &&
+				/^v\d+\.\d+\.\d+$/.test(release.tag_name ?? '') &&
+				(!signed || (release.assets ?? []).some((asset) => asset.name === 'manifest.json'))
+		)
+		.map((release) => release.tag_name!.slice(1))
+		.sort((a, b) => compareSemver(b, a));
+	return versions[0] ?? null;
+}
+
 /**
- * The version the updater would install for the chosen method: the newest signed release, the
- * VERSION file on the update ref for a source build, or either for `auto` (signed first, then
- * source). Cached for five minutes unless `force`.
+ * The version the updater would install for the chosen method and channel: the newest signed
+ * release on the channel, the VERSION file on the update ref for a canary source build (the
+ * newest stable tag for a stable one), or either for `auto` (signed first, then source). Cached
+ * for five minutes unless `force`.
  */
 export async function latestVersion(
 	source: UpdateSource,
-	{ force = false, method = 'auto' }: { force?: boolean; method?: SelfUpdateMethod } = {}
+	{
+		force = false,
+		method = 'auto',
+		channel = currentChannel()
+	}: { force?: boolean; method?: SelfUpdateMethod; channel?: SelfUpdateChannel } = {}
 ): Promise<LatestVersion> {
-	const key = `${source.repo}@${source.ref}#${method}`;
-	if (!force && cached && cached.key === key && Date.now() - cached.at < CACHE_MS)
-		return cached.value;
-	const checkedAt = new Date().toISOString();
-	const ref = source.ref.split('/').map(encodeURIComponent).join('/');
-	let value: LatestVersion;
-	// A source build always reads VERSION at the update ref. Downloading only ever installs a
-	// signed published release; `auto` prefers one and falls back to the source path.
-	if (method !== 'build') {
-		const published = await latestPublishedVersion(source.repo);
-		if (published) {
-			value = { ok: true, version: published, checkedAt };
-			cached = { key, at: Date.now(), value };
-			return value;
+	const key = `${source.repo}@${source.ref}#${method}#${channel}`;
+	const hit = cache.get(key);
+	if (!force && hit && Date.now() - hit.at < CACHE_MS) return hit.value;
+	const value = await resolveLatest(source, method, channel, new Date().toISOString());
+	cache.set(key, { at: Date.now(), value });
+	return value;
+}
+
+async function resolveLatest(
+	source: UpdateSource,
+	method: SelfUpdateMethod,
+	channel: SelfUpdateChannel,
+	checkedAt: string
+): Promise<LatestVersion> {
+	// Stable never reads the branch: both install paths stop at the newest promoted release.
+	if (channel === 'stable' || method !== 'build') {
+		const releases = await listReleases(source.repo);
+		const signed = releases ? newestOnChannel(releases, channel, true) : null;
+		if (signed && method !== 'build') return { ok: true, version: signed, checkedAt };
+		if (channel === 'stable') {
+			if (!releases)
+				return {
+					ok: false,
+					error: `Could not list the releases of ${source.repo} on GitHub.`,
+					checkedAt
+				};
+			const tag = method === 'download' ? null : newestOnChannel(releases, 'stable', false);
+			if (tag) return { ok: true, version: tag, checkedAt };
+			return {
+				ok: false,
+				error: `No ${method === 'download' ? 'signed ' : ''}stable release of ${source.repo} has been promoted yet. Run the Promote workflow on GitHub, or stay on canary.`,
+				checkedAt
+			};
 		}
-		if (method === 'download') {
-			value = {
+		if (method === 'download')
+			return {
 				ok: false,
 				error: `No signed release is published for ${source.repo} (or GitHub could not be reached). Choose “Build from source”, or publish a signed release first.`,
 				checkedAt
 			};
-			cached = { key, at: Date.now(), value };
-			return value;
-		}
 	}
+	const ref = source.ref.split('/').map(encodeURIComponent).join('/');
 	try {
 		const response = await fetch(
 			`https://raw.githubusercontent.com/${source.repo}/${ref}/VERSION`,
@@ -184,34 +246,29 @@ export async function latestVersion(
 				signal: AbortSignal.timeout(8_000)
 			}
 		);
-		if (response.status === 404) {
-			value = {
+		if (response.status === 404)
+			return {
 				ok: false,
 				error: `No VERSION file on ${source.repo}@${source.ref} (or the repository is private).`,
 				checkedAt
 			};
-		} else if (!response.ok) {
-			value = { ok: false, error: `GitHub answered ${response.status}.`, checkedAt };
-		} else {
-			const body = (await response.text()).slice(0, 1024);
-			const parsed = parseSemver(body);
-			value = parsed
-				? { ok: true, version: parsed.version, checkedAt }
-				: {
-						ok: false,
-						error: `VERSION on ${source.repo}@${source.ref} is not a semantic version ("${body.trim().slice(0, 40)}").`,
-						checkedAt
-					};
-		}
+		if (!response.ok) return { ok: false, error: `GitHub answered ${response.status}.`, checkedAt };
+		const body = (await response.text()).slice(0, 1024);
+		const parsed = parseSemver(body);
+		return parsed
+			? { ok: true, version: parsed.version, checkedAt }
+			: {
+					ok: false,
+					error: `VERSION on ${source.repo}@${source.ref} is not a semantic version ("${body.trim().slice(0, 40)}").`,
+					checkedAt
+				};
 	} catch (error) {
-		value = {
+		return {
 			ok: false,
 			error: `Could not reach GitHub: ${error instanceof Error ? error.message : String(error)}`,
 			checkedAt
 		};
 	}
-	cached = { key, at: Date.now(), value };
-	return value;
 }
 
 export interface VersionComparison {
@@ -345,19 +402,27 @@ export function updateInFlight(status = readUpdateStatus()): boolean {
 export function requestUpdate(
 	principal: Principal,
 	target: string | null,
-	method: SelfUpdateMethod = 'auto'
+	method: SelfUpdateMethod = 'auto',
+	channel: SelfUpdateChannel = currentChannel()
 ): void {
 	if (!isSelfUpdateMethod(method)) throw new Error(`Unknown update method "${String(method)}".`);
+	if (!isSelfUpdateChannel(channel))
+		throw new Error(`Unknown release channel "${String(channel)}".`);
 	mkdirSync(dirname(paths.requestFile), { recursive: true });
-	// Write the method first so the path unit cannot fire before it exists. The updater deletes
-	// the sidecar as soon as it has read it, even when the value is not recognised.
-	const modeTmp = `${paths.modeFile}.${process.pid}.tmp`;
-	writeFileSync(modeTmp, `${method}\n`, { mode: 0o640 });
-	renameSync(modeTmp, paths.modeFile);
+	// Write the sidecars first so the path unit cannot fire before they exist. The updater deletes
+	// each one as soon as it has read it, even when the value is not recognised, and remembers the
+	// channel for later runs.
+	const writeSidecar = (path: string, value: string) => {
+		const sidecarTmp = `${path}.${process.pid}.tmp`;
+		writeFileSync(sidecarTmp, `${value}\n`, { mode: 0o640 });
+		renameSync(sidecarTmp, path);
+	};
+	writeSidecar(paths.modeFile, method);
+	writeSidecar(paths.channelSidecar, channel);
 	const tmp = `${paths.requestFile}.${process.pid}.tmp`;
 	writeFileSync(
 		tmp,
-		`${JSON.stringify({ requestedAt: new Date().toISOString(), by: principal.userId, target, method })}\n`,
+		`${JSON.stringify({ requestedAt: new Date().toISOString(), by: principal.userId, target, method, channel })}\n`,
 		{ mode: 0o640 }
 	);
 	renameSync(tmp, paths.requestFile);

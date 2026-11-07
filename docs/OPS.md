@@ -696,6 +696,9 @@ Litestream is current.
 sudo skiff-update-self                     # automatic: signed release if published, else source
 sudo skiff-update-self --source download   # signed release only; never builds on the host
 sudo skiff-update-self --source build      # build the configured ref from source only
+sudo skiff-update-self channel             # this host's release channel (canary or stable)
+sudo skiff-update-self channel stable      # follow promoted releases only; remembered
+sudo skiff-update-self --channel canary    # switch back and update in one go
 sudo skiff-update-self check               # running vs latest version; changes nothing
 sudo skiff-update-self plan                # preflight without changing anything (disk, target, migrations)
 sudo skiff-update-self --dry-run           # show the release and the plan
@@ -751,9 +754,48 @@ with `skiff-<version>-linux-<arch>.tar.gz`, `manifest.json`, `manifest.json.sig`
 public half is compiled into the updater ([`signing.ts`](../scripts/update-self/signing.ts)),
 and extra trusted keys can be dropped into `/etc/skiff/updater/keys/*.pub` for rotation.
 
-The updater installs the newest non-draft, non-prerelease `v<semver>` release whose manifest
-verifies, after checking the artifact's size and sha256 against it. Network, signature and
-checksum problems never mark a release bad; they are retried.
+The updater installs the newest non-draft `v<semver>` release **on the host's channel** (below)
+whose manifest verifies, after checking the artifact's size and sha256 against it. It lists the
+newest 100 releases, so a stable release stays in view behind up to 99 canaries. Network,
+signature and checksum problems never mark a release bad; they are retried.
+
+**Release channels (D128).** No update server is involved: GitHub Releases is the channel feed.
+
+| Channel | Installs | How a release gets there |
+|---|---|---|
+| `canary` (default) | Every release: GitHub prereleases and full releases | Automatic. `publish.yml` publishes each `VERSION` bump on `main` as a signed **prerelease**. |
+| `stable` | Full releases only | Manual. Run **Actions → Promote to stable** ([`promote.yml`](../.github/workflows/promote.yml)), or `gh workflow run promote.yml [-f version=0.7.4]`. |
+
+Promotion ([`scripts/release/promote.ts`](../scripts/release/promote.ts)) takes the newest signed
+canary, or the version you name. It downloads that release's manifest and verifies it against
+the keys compiled into the updater, then flips the release to a full one marked Latest. Nothing
+is rebuilt or re-signed, so stable hosts run exactly the bits canary hosts ran. It refuses a
+release that is already stable or unsigned, and one not newer than the current stable unless
+`allow_older` is ticked (stable hosts would never install it). `dry_run` only reports. The job
+summary lists the canaries that stable hosts will skip. To pull a bad canary before canary
+hosts take it, delete the release or turn it into a draft; promotion never sees drafts.
+
+A host's channel lives in `/var/lib/skiff-update/channel` (`root:skiff 0640`), written only by the
+updater. `--channel <name>` on `update`, `skiff-update-self channel <name>`, or the choice on
+**Settings → Updates** changes it, and the choice is remembered. Until a host chooses,
+`SKIFF_UPDATE_CHANNEL` (in `skiff.env`) is the default, and without that, `canary`. `check`,
+`plan` and `status` show the channel. Two rules keep a switch safe:
+
+- **No downgrade.** A canary host on 0.7.5 that switches to a stable at 0.7.3 keeps 0.7.5. It
+  installs the next stable release newer than 0.7.5. The updater logs this, and the dashboard
+  says so before you confirm. To go back down on purpose, use `rollback`, or
+  `update --channel stable --force` (forward-only migrations may not undo cleanly).
+- **Source builds follow the channel.** On `stable`, `--source build` (and `auto` when no signed
+  stable release exists) builds the newest stable *tag*, never the head of `main`. A host that
+  builds from source cannot skip the promotion step. On `canary` it builds the tracked branch as
+  before. `--ref` still builds exactly what you name.
+
+The signed manifest's `channel` field is legacy and ignored. Updaters older than D128 ignore
+prereleases, so until the first promotion they see nothing new. **Bootstrap:** after the first
+channel-aware release is published, promote it once (`gh workflow run promote.yml`). Older hosts
+update to it, their stage-0 becomes channel-aware, and from then on they follow `canary` unless
+told otherwise. Worker nodes (D99) need nothing: they install the control plane's own version by
+tag, prerelease or not.
 
 **Choose how to install.** The dashboard (Settings → Updates) and the CLI expose the same choice,
 so a host can avoid running prebuilt binaries if that matters to it:
@@ -793,8 +835,10 @@ restart itself. The button drops `/var/lib/skiff/update/request`. A root path un
 (`skiff-update-self.path`) notices it and starts `skiff-update-self.service`, which deletes the
 request and runs `skiff-update-self update --trigger dashboard`. The updater treats the request
 purely as a trigger: it re-checks GitHub itself and never reads the request file. The chosen
-install method is the one exception, carried in the allowlisted `request.mode` sidecar described
-above. Progress goes to
+install method and release channel are the exceptions, carried in the allowlisted `request.mode`
+and `request.channel` sidecars. The page previews either channel (`?channel=stable`); requesting
+an update with a channel other than the host's switches the host to it, even when nothing is
+newer (the run records the channel and stays put). Progress goes to
 `/var/lib/skiff-update/status.json` (`root:skiff 0640`), which the page polls, and the same run
 appends a JSON Lines log to `/var/lib/skiff-update/update.log` (`root:skiff 0640`). The page
 tails it into **Live log**. Every request is recorded in the audit log as `platform.update`.

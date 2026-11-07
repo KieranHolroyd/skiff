@@ -27,6 +27,7 @@
 	import Panel from '../../_lib/Panel.svelte';
 	import { formatDateTime, formatRelative } from '../../_lib/format.js';
 	import SettingsHeader from '../_lib/SettingsHeader.svelte';
+	import ChannelPicker from './ChannelPicker.svelte';
 	import MethodPicker from './MethodPicker.svelte';
 	import PreflightChecks from './PreflightChecks.svelte';
 	import UpdateHistory from './UpdateHistory.svelte';
@@ -171,8 +172,14 @@
 	});
 	const elapsed = $derived(activeRun ? formatElapsed(now - Date.parse(activeRun.startedAt)) : null);
 
-	const target = $derived(data.comparison.latest);
-	const canInstall = $derived(ready && !running && (data.comparison.available || !data.latest.ok));
+	const target = $derived(data.comparison.available ? data.comparison.latest : null);
+	/** Previewing the other channel: requesting an update also moves the host onto it. */
+	const switching = $derived(data.channel !== data.hostChannel);
+	const canInstall = $derived(
+		ready &&
+			!running &&
+			(data.comparison.available || switching || (!data.latest.ok && data.channel === 'canary'))
+	);
 
 	const lastRunFailed = $derived(
 		lastRun?.outcome === 'build-failed' ||
@@ -253,18 +260,27 @@
 				return {
 					tone: 'info',
 					icon: CircleArrowUpIcon,
-					eyebrow: data.comparison.bump ? `${data.comparison.bump} update` : 'Update available',
+					eyebrow: `${data.comparison.bump ? `${data.comparison.bump} update` : 'Update available'} · ${data.channel}`,
 					title: `Skiff v${target} is available`,
 					description:
 						'Test-booted against a copy of your data before anything switches over, and rolled back on its own if anything fails.',
 					target
 				};
+			if (switching)
+				return {
+					tone: 'info',
+					icon: ShieldCheckIcon,
+					eyebrow: `Switch to ${data.channel}`,
+					title: `This host is ahead of ${data.channel}`,
+					description: `The newest ${data.channel} release is v${data.comparison.latest}, older than the v${view.version} running here. Switching keeps v${view.version} (Skiff never downgrades) and installs the next ${data.channel} release once it is newer.`,
+					target: null
+				};
 			return {
 				tone: 'success',
 				icon: CircleCheckIcon,
-				eyebrow: 'Up to date',
+				eyebrow: `Up to date · ${data.channel}`,
 				title: "You're on the latest version",
-				description: `v${view.version} is the newest release on ${data.source.repo}@${data.source.ref}.`,
+				description: `v${view.version} is the newest ${data.channel} release of ${data.source.repo}.`,
 				target: null
 			};
 		}
@@ -286,6 +302,7 @@
 				};
 			}}
 		>
+			<input type="hidden" name="channel" value={data.channel} />
 			<Button type="submit" variant="outline" size="sm" disabled={checking || running}>
 				<RefreshCwIcon class={checking ? 'animate-spin' : ''} aria-hidden="true" />
 				{checking ? 'Checking…' : 'Check for updates'}
@@ -311,6 +328,10 @@
 		checkedAt={data.latest.checkedAt}
 		source={data.source}
 	/>
+
+	{#if data.availability !== 'unmanaged' && !running}
+		<ChannelPicker selected={data.channel} hostChannel={data.hostChannel} latest={data.channels} />
+	{/if}
 
 	{#if data.availability === 'not-enabled'}
 		<Notice tone="warning" title="Dashboard updates aren't enabled on this host">
@@ -393,9 +414,15 @@
 
 	{#if canInstall}
 		<Panel
-			title={target ? `Install v${target}` : 'Install the newest version'}
+			title={target
+				? `Install v${target}${switching ? ` from ${data.channel}` : ''}`
+				: switching
+					? `Switch to ${data.channel}`
+					: 'Install the newest version'}
 			icon={CircleArrowUpIcon}
-			description="Nothing on this host changes until the new version has passed a test boot."
+			description={target || !switching
+				? 'Nothing on this host changes until the new version has passed a test boot.'
+				: `Nothing is installed now. The host remembers ${data.channel} and updates when it has a newer release.`}
 		>
 			<form
 				bind:this={updateForm}
@@ -415,6 +442,7 @@
 					};
 				}}
 			>
+				<input type="hidden" name="channel" value={data.channel} />
 				<MethodPicker bind:value={method} defaultMethod={data.defaultMethod} />
 
 				<div class="space-y-3">
@@ -452,7 +480,11 @@
 						{:else}
 							<CircleArrowUpIcon aria-hidden="true" />
 						{/if}
-						{target ? `Update to v${target}` : 'Check and install'}
+						{target
+							? `Update to v${target}`
+							: switching
+								? `Switch to ${data.channel}`
+								: 'Check and install'}
 					</Button>
 				</div>
 			</form>
@@ -465,12 +497,18 @@
 						<CircleArrowUpIcon />
 					</AlertDialog.Media>
 					<AlertDialog.Title>
-						{target ? `Update Skiff to v${target}?` : 'Install the newest version?'}
+						{target
+							? `Update Skiff to v${target}?`
+							: switching
+								? `Switch this host to ${data.channel}?`
+								: 'Install the newest version?'}
 					</AlertDialog.Title>
 					<AlertDialog.Description>
 						{target
-							? 'The new version is test-booted against a copy of your database before anything switches over.'
-							: 'The updater checks GitHub itself and installs the newest version, if there is one.'}
+							? `The new version is test-booted against a copy of your database before anything switches over.${switching ? ` This host follows ${data.channel} from now on.` : ''}`
+							: switching
+								? `v${view.version} keeps running. The updater records ${data.channel} and installs its next release once it is newer.`
+								: 'The updater checks GitHub itself and installs the newest version, if there is one.'}
 					</AlertDialog.Description>
 				</AlertDialog.Header>
 

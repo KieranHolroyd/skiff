@@ -5,9 +5,10 @@
  * Instead it drops `requestFile`; a systemd path unit notices and starts
  * `skiff-update-self.service` as root, which deletes the request, runs the updater and keeps
  * `statusFile` current. The request carries no data the updater trusts: it is only a trigger,
- * and the updater re-checks the version on GitHub itself. The one exception is the install
- * method: it is an allowlisted enum written to a sidecar file (see {@link SELF_UPDATE_METHODS}),
- * because a systemd unit cannot pass form data through to the updater.
+ * and the updater re-checks the version on GitHub itself. The exceptions are the install method
+ * and the release channel: allowlisted enums written to sidecar files (see
+ * {@link SELF_UPDATE_METHODS}, {@link SELF_UPDATE_CHANNELS}), because a systemd unit cannot pass
+ * form data through to the updater.
  */
 
 export const SELF_UPDATE_DEFAULTS = {
@@ -21,7 +22,40 @@ export const SELF_UPDATE_DEFAULTS = {
 	pathUnit: '/etc/systemd/system/skiff-update-self.path',
 	/** Release metadata of the active release (repo/ref the updater pulls from). */
 	releaseMeta: '/opt/skiff/current/meta.json',
+	/** The host's release channel, persisted by the updater (root:skiff 0640, group-readable). */
+	channelFile: '/var/lib/skiff-update/channel',
 } as const;
+
+/**
+ * Release channels (docs/OPS.md §4.1, *Release channels*). Every `VERSION` bump on `main` is
+ * published as a signed GitHub **prerelease**: the canary. The Promote workflow flips a canary
+ * to a full release with the same signed bits: stable. `canary` hosts install the newest of
+ * either; `stable` hosts only full releases. GitHub Releases is the whole channel feed, so no
+ * update server is involved.
+ */
+export const SELF_UPDATE_CHANNELS = ['canary', 'stable'] as const;
+export type SelfUpdateChannel = (typeof SELF_UPDATE_CHANNELS)[number];
+
+/** Canary is the default path: a host follows every release unless it opts into stable. */
+export const DEFAULT_SELF_UPDATE_CHANNEL: SelfUpdateChannel = 'canary';
+
+export function isSelfUpdateChannel(value: unknown): value is SelfUpdateChannel {
+	return typeof value === 'string' && (SELF_UPDATE_CHANNELS as readonly string[]).includes(value);
+}
+
+/** Whether a published GitHub release belongs to `channel` (canary sees stable releases too). */
+export function releaseInChannel(
+	release: { draft?: boolean; prerelease?: boolean },
+	channel: SelfUpdateChannel
+): boolean {
+	if (release.draft) return false;
+	return channel === 'canary' || !release.prerelease;
+}
+
+/** The channel sidecar the control plane writes beside the request; the updater consumes it. */
+export function selfUpdateChannelFile(requestFile: string): string {
+	return `${requestFile}.channel`;
+}
 
 /**
  * How the updater obtains the release. `download` installs the CI-built, signed artifact;
@@ -71,6 +105,8 @@ export interface SelfUpdateStatus {
 	trigger: 'dashboard' | 'cli';
 	/** How this run obtains the release; absent on status files from older updaters. */
 	method?: SelfUpdateMethod;
+	/** The channel this run followed; absent on status files from older updaters. */
+	channel?: SelfUpdateChannel;
 	phase: SelfUpdatePhase;
 	message: string;
 	outcome?: SelfUpdateOutcome;

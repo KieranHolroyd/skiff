@@ -49,6 +49,11 @@ import {
 } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { compareSemver, parseSemver } from '../../packages/contracts/src/semver.ts';
+import {
+	DEFAULT_SELF_UPDATE_CHANNEL,
+	releaseInChannel,
+	type SelfUpdateChannel,
+} from '../../packages/contracts/src/self-update.ts';
 import { linkAgentCommands } from '../systemd/builder.ts';
 import {
 	createUpgradeSnapshotBundle,
@@ -323,6 +328,12 @@ export interface UpdateOptions {
 	 * none is published or `ref` is given. `artifact`: never build on the host. `source`: always build.
 	 */
 	source?: 'auto' | 'artifact' | 'source';
+	/**
+	 * Which published releases count (default `canary`). `canary`: GitHub prereleases and full
+	 * releases. `stable`: full releases only (promoted canaries); a source build then builds the
+	 * newest stable tag instead of the tracked branch.
+	 */
+	channel?: SelfUpdateChannel;
 	/** Default true. false: stop the old release before starting the new one (old behaviour). */
 	zeroDowntime?: boolean;
 	/** How long the new release must serve real traffic before it is committed. Default 60s. */
@@ -360,6 +371,7 @@ export type UpdateResult = Versions &
 export interface CheckResult extends Versions {
 	repo: string;
 	ref: string;
+	channel: SelfUpdateChannel;
 	commit: string;
 	/** `version` is newer than the running release (or the running version is unknown). */
 	available: boolean;
@@ -508,9 +520,11 @@ export class Updater {
 
 			host.log(`updater ${UPDATER_IDENTITY}`);
 			host.log(`current release ${basename(current)} (${currentMeta.version ?? 'unknown version'}, ${short(currentMeta.commit) || 'unknown commit'})`);
-			host.phase('checking', `Checking ${repo} for a newer release`);
+			const channel = options.channel ?? DEFAULT_SELF_UPDATE_CHANNEL;
+			host.log(`release channel: ${channel}`);
+			host.phase('checking', `Checking ${repo} for a newer ${channel} release`);
 			const target = await this.resolveTarget(repo, ref, currentMeta, options);
-			const { commit, version, fromVersion, published } = target;
+			const { commit, version, fromVersion, published, builtRef } = target;
 			const v: Versions = { version, fromVersion };
 			host.phase('checking', `Latest is ${version}; running ${fromVersion ?? 'an unversioned release'}`, v);
 
@@ -520,7 +534,7 @@ export class Updater {
 					host.log(
 						order === 0
 							? `already on ${version}`
-							: `the newest available is ${version}, older than the running ${fromVersion}; not downgrading (use rollback, or --force)`,
+							: `the newest ${channel} release is ${version}, older than the running ${fromVersion}; staying on ${fromVersion} until ${channel} passes it (or rollback, or --force to downgrade)`,
 					);
 					return { status: 'up-to-date', commit, ...v };
 				}
@@ -528,7 +542,7 @@ export class Updater {
 			if (!fromVersion) host.warn(`the current release has no semantic version; installing ${version}`);
 			else if (options.force && compareSemver(version, fromVersion) < 0)
 				host.warn(`downgrading ${fromVersion} -> ${version} (--force); forward-only migrations may not undo cleanly`);
-			host.log(`${fromVersion ?? 'unknown'} -> ${version} (${short(commit)}, ${published ? `signed release ${published.tag}` : 'built from source'})`);
+			host.log(`${fromVersion ?? 'unknown'} -> ${version} (${short(commit)}, ${published ? `signed release ${published.tag}` : `built from source at ${builtRef}`})`);
 
 			const failed = this.readState().failedCommits[commit];
 			if (!options.force && isBlocking(failed)) {
@@ -637,16 +651,17 @@ export class Updater {
 	}
 
 	/** Read-only: what would `update` install? Does not take the lock or touch the machine. */
-	async check(options: Pick<UpdateOptions, 'repo' | 'ref' | 'source'> = {}): Promise<CheckResult> {
+	async check(options: Pick<UpdateOptions, 'repo' | 'ref' | 'source' | 'channel'> = {}): Promise<CheckResult> {
 		const current = readLink(this.layout.currentLink);
 		const currentMeta = current ? readMeta(current) : {};
 		const repo = options.repo ?? currentMeta.repo ?? DEFAULT_REPO;
 		const ref = options.ref ?? trackedRef(currentMeta) ?? DEFAULT_REF;
-		const { published, ...resolved } = await this.resolveTarget(repo, ref, currentMeta, options);
+		const { published, builtRef, ...resolved } = await this.resolveTarget(repo, ref, currentMeta, options);
 		const failed = this.readState().failedCommits[resolved.commit];
 		return {
 			repo,
-			ref: published ? published.tag : ref,
+			ref: published ? published.tag : builtRef,
+			channel: options.channel ?? DEFAULT_SELF_UPDATE_CHANNEL,
 			...resolved,
 			available: !resolved.fromVersion || compareSemver(resolved.version, resolved.fromVersion) > 0,
 			...(isBlocking(failed) ? { failed: `${failed!.at}: ${failed!.reason}` } : {}),
@@ -654,38 +669,65 @@ export class Updater {
 	}
 
 	/**
-	 * What to install: the newest signed published release, unless the caller pinned a ref or
-	 * asked for a source build. Network and signature problems throw (retried, never blamed).
+	 * What to install: the newest signed release published on the host's channel, unless the
+	 * caller pinned a ref or asked for a source build. A source build on `stable` builds the newest
+	 * stable tag, never the branch head, so building from source cannot skip the promotion step.
+	 * `builtRef` is what a source build checks out. Network and signature problems throw (retried,
+	 * never blamed).
 	 */
 	private async resolveTarget(
 		repo: string,
 		ref: string,
 		currentMeta: ReleaseMeta,
-		options: Pick<UpdateOptions, 'ref' | 'source'>,
-	): Promise<{ commit: string; published: VerifiedRelease | null } & Versions> {
+		options: Pick<UpdateOptions, 'ref' | 'source' | 'channel'>,
+	): Promise<{ commit: string; published: VerifiedRelease | null; builtRef: string } & Versions> {
 		const source = options.source ?? 'auto';
+		const channel = options.channel ?? DEFAULT_SELF_UPDATE_CHANNEL;
 		const fromVersion = parseSemver(currentMeta.version)?.version ?? null;
 		if (source !== 'source' && !options.ref && this.host.listReleases) {
-			const published = await this.resolvePublished(repo);
-			if (published) return { commit: published.manifest.commit, version: published.manifest.version, fromVersion, published };
+			const published = await this.resolvePublished(repo, channel);
+			if (published)
+				return { commit: published.manifest.commit, version: published.manifest.version, fromVersion, published, builtRef: ref };
 			if (source === 'artifact')
-				throw new UpdateError(`No signed release of ${repo} is published; refusing to build on the host (source: download).`);
-			this.host.log(`no signed release of ${repo} is published; building ${ref} from source`);
+				throw new UpdateError(
+					`No signed ${channel === 'stable' ? 'stable ' : ''}release of ${repo} is published; refusing to build on the host (source: download).`,
+				);
 		} else if (source === 'artifact') {
 			throw new UpdateError('source: download cannot be combined with --ref (a ref is always built from source).');
 		}
-		return { ...(await this.resolve(repo, ref, currentMeta)), published: null };
+		let builtRef = ref;
+		if (channel === 'stable' && !options.ref) {
+			const tag = await this.newestStableTag(repo);
+			if (!tag)
+				throw new UpdateError(
+					`No stable release of ${repo} has been promoted yet. Run the Promote workflow on GitHub, or switch this host to the canary channel.`,
+				);
+			builtRef = tag;
+		}
+		if (source !== 'source' && !options.ref)
+			this.host.log(`no signed release of ${repo} is published on ${channel}; building ${builtRef} from source`);
+		return { ...(await this.resolve(repo, builtRef, currentMeta)), published: null, builtRef };
 	}
 
-	private async resolvePublished(repo: string): Promise<VerifiedRelease | null> {
+	/** The newest full (non-pre) `v<semver>` release tag, signed or not; null when none. */
+	private async newestStableTag(repo: string): Promise<string | null> {
+		if (!this.host.listReleases) throw new UpdateError('this host cannot list releases, so it cannot follow the stable channel');
+		const releases = await this.host.listReleases(repo);
+		const tags = releases
+			.filter((release) => releaseInChannel(release, 'stable') && /^v\d+\.\d+\.\d+$/.test(release.tag))
+			.map((release) => release.tag)
+			.sort((a, b) => compareSemver(b.slice(1), a.slice(1)));
+		return tags[0] ?? null;
+	}
+
+	private async resolvePublished(repo: string, channel: SelfUpdateChannel): Promise<VerifiedRelease | null> {
 		const { host } = this;
 		if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new UpdateError(`Invalid repository "${repo}" (expected owner/name).`);
 		const releases = await host.listReleases!(repo);
 		const candidates = releases
 			.filter(
 				(release) =>
-					!release.draft &&
-					!release.prerelease &&
+					releaseInChannel(release, channel) &&
 					/^v\d+\.\d+\.\d+$/.test(release.tag) &&
 					release.assets.some((asset) => asset.name === 'manifest.json') &&
 					release.assets.some((asset) => asset.name === 'manifest.json.sig'),
@@ -1586,7 +1628,7 @@ export class Updater {
 	 * Read-only plan for `skiff-update-self plan` and the CLI. Uses the running release's migration
 	 * list; the update itself re-runs this against the exact staged release before the canary.
 	 */
-	async plan(options: Pick<UpdateOptions, 'repo' | 'ref' | 'source'> = {}): Promise<{ check: CheckResult; preflight: UpgradePreflight }> {
+	async plan(options: Pick<UpdateOptions, 'repo' | 'ref' | 'source' | 'channel'> = {}): Promise<{ check: CheckResult; preflight: UpgradePreflight }> {
 		const check = await this.check(options);
 		const current = readLink(this.layout.currentLink);
 		const preflight = await this.preflight({

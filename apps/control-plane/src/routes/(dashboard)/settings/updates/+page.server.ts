@@ -3,12 +3,14 @@ import { core } from '#lib/server/core.js';
 import {
 	canManagePlatform,
 	compareToRunning,
+	currentChannel,
 	defaultUpdateMethod,
 	latestVersion,
 	readUpdateLog,
 	readUpdateStatus,
 	requestUpdate,
 	selfUpdateAvailability,
+	updateChannelFromForm,
 	updateInFlight,
 	updateMethodFromForm,
 	updatePending,
@@ -16,11 +18,18 @@ import {
 } from '#lib/server/self-update.js';
 import type { Actions, PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async ({ locals }) => {
+export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!canManagePlatform(locals.principal))
 		error(403, 'Only platform owners and admins can manage platform updates.');
 	const source = updateSource();
-	const latest = await latestVersion(source);
+	// `?channel=` previews the other channel; the host only switches when an update is requested.
+	const hostChannel = currentChannel();
+	const channel = updateChannelFromForm(url.searchParams.get('channel')) ?? hostChannel;
+	const [latest, canary, stable] = await Promise.all([
+		latestVersion(source, { channel }),
+		latestVersion(source, { channel: 'canary' }),
+		latestVersion(source, { channel: 'stable' })
+	]);
 	const status = readUpdateStatus();
 	const comparison = compareToRunning(latest);
 	const preflight = await core.upgrades.preflight({
@@ -38,6 +47,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 		availability: selfUpdateAvailability(),
 		source,
 		latest,
+		channel,
+		hostChannel,
+		channels: {
+			canary: canary.ok ? canary.version : null,
+			stable: stable.ok ? stable.version : null
+		},
 		comparison,
 		status,
 		log: readUpdateLog(),
@@ -50,16 +65,24 @@ export const load: PageServerLoad = async ({ locals }) => {
 };
 
 export const actions: Actions = {
-	check: async ({ locals }) => {
+	check: async ({ locals, request }) => {
 		if (!canManagePlatform(locals.principal))
 			return fail(403, { message: 'Only platform owners and admins can check for updates.' });
-		const latest = await latestVersion(updateSource(), { force: true });
+		// The page posts the channel it is previewing (`?/check` drops the page's own query).
+		const channel =
+			updateChannelFromForm((await request.formData()).get('channel')) ?? currentChannel();
+		const source = updateSource();
+		const other = channel === 'canary' ? 'stable' : 'canary';
+		const [latest] = await Promise.all([
+			latestVersion(source, { force: true, channel }),
+			latestVersion(source, { force: true, channel: other })
+		]);
 		if (!latest.ok) return fail(502, { message: latest.error });
 		const comparison = compareToRunning(latest);
 		return {
 			success: comparison.available
-				? `Version ${latest.version} is available.`
-				: `You're on the latest version (${comparison.current}).`
+				? `Version ${latest.version} is available on ${channel}.`
+				: `You're on the latest ${channel} version (${comparison.current}).`
 		};
 	},
 
@@ -71,6 +94,12 @@ export const actions: Actions = {
 		const submitted = data.get('method');
 		const method = submitted === null ? defaultUpdateMethod() : updateMethodFromForm(submitted);
 		if (!method) return fail(400, { message: 'Choose how to install the update.' });
+		const submittedChannel = data.get('channel');
+		const hostChannel = currentChannel();
+		const channel =
+			submittedChannel === null ? hostChannel : updateChannelFromForm(submittedChannel);
+		if (!channel) return fail(400, { message: 'Choose canary or stable.' });
+		const switching = channel !== hostChannel;
 		const availability = selfUpdateAvailability();
 		if (availability === 'unmanaged')
 			return fail(409, {
@@ -85,21 +114,26 @@ export const actions: Actions = {
 
 		// Re-check now rather than trusting the page: the button may be minutes old. A build reads
 		// VERSION at the configured ref; a download only considers signed published releases.
-		const latest = await latestVersion(updateSource(), { force: true, method });
+		const latest = await latestVersion(updateSource(), { force: true, method, channel });
 		const comparison = compareToRunning(latest);
-		if (latest.ok && !comparison.available)
-			return fail(409, { message: `Already on the latest version (${comparison.current}).` });
-		if (!latest.ok && method === 'download') return fail(409, { message: latest.error });
+		// A channel switch is still sent when nothing is newer: the updater records the channel
+		// and stays put until that channel passes the running version (it never downgrades).
+		if (latest.ok && !comparison.available && !switching)
+			return fail(409, {
+				message: `Already on the latest ${channel} version (${comparison.current}).`
+			});
+		if (!latest.ok && (method === 'download' || channel === 'stable'))
+			return fail(409, { message: latest.error });
 
-		const target = latest.ok ? latest.version : null;
+		const target = latest.ok && comparison.available ? latest.version : null;
 		try {
-			requestUpdate(principal, target, method);
+			requestUpdate(principal, target, method, channel);
 		} catch (cause) {
 			core.ctx.audit.record({
 				principal,
 				action: 'platform.update',
 				resource: 'platform',
-				args: { from: comparison.current, to: target, method },
+				args: { from: comparison.current, to: target, method, channel },
 				result: 'error',
 				error: (cause as Error).message
 			});
@@ -109,7 +143,7 @@ export const actions: Actions = {
 			principal,
 			action: 'platform.update',
 			resource: 'platform',
-			args: { from: comparison.current, to: target, method },
+			args: { from: comparison.current, to: target, method, channel },
 			result: 'ok'
 		});
 		const how =
@@ -118,9 +152,13 @@ export const actions: Actions = {
 				: method === 'download'
 					? 'downloading the signed release'
 					: 'installing the newest version';
+		if (switching && !target)
+			return {
+				success: `Switching this host to the ${channel} channel. It stays on ${comparison.current} until ${channel} has a newer release, then updates as usual.`
+			};
 		return {
 			success: target
-				? `Updating to ${target} by ${how}. The dashboard restarts near the end; this page reconnects on its own.`
+				? `Updating to ${target} on ${channel} by ${how}. The dashboard restarts near the end; this page reconnects on its own.`
 				: `Update requested (${how}). The updater checks GitHub itself and installs the newest version, if any.`
 		};
 	}

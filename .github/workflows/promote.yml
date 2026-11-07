@@ -1,0 +1,57 @@
+name: Promote to stable
+
+# Manual: flip a signed canary (a GitHub prerelease published by publish.yml) to a full release,
+# so hosts on the stable channel install it. Nothing is rebuilt or re-signed: stable hosts get the
+# exact artifacts canary hosts already ran. The manifest is verified against the release keys
+# compiled into the updater before anything changes (scripts/release/promote.ts, docs/OPS.md §4.1).
+#
+#   gh workflow run promote.yml                    # newest canary
+#   gh workflow run promote.yml -f version=0.7.4   # a specific one
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to promote (e.g. 0.7.4). Empty: the newest canary.'
+        required: false
+        default: ''
+      allow_older:
+        description: 'Allow promoting a version older than the current stable (stable hosts never downgrade).'
+        type: boolean
+        default: false
+      dry_run:
+        description: 'Only report what would be promoted.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: promote-release
+  cancel-in-progress: false
+
+env:
+  BUN_VERSION: '1.4.4'
+
+jobs:
+  promote:
+    name: Promote ${{ inputs.version || 'the newest canary' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Verify and promote
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          args=(--repo "$GITHUB_REPOSITORY")
+          [ -n "$VERSION" ] && args+=(--version "$VERSION")
+          [ "${{ inputs.allow_older }}" = "true" ] && args+=(--allow-older)
+          [ "${{ inputs.dry_run }}" = "true" ] && args+=(--dry-run)
+          bun scripts/release/promote.ts "${args[@]}"

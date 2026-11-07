@@ -5,6 +5,7 @@ import { route } from '#lib/server/api.js';
 import { requirePrincipal } from '#lib/server/principal.js';
 import {
 	compareToRunning,
+	currentChannel,
 	latestVersion,
 	updateSource
 } from '#lib/server/self-update.js';
@@ -33,6 +34,7 @@ export const GET: RequestHandler = (event) =>
 			plan,
 			latest,
 			source,
+			channel: currentChannel(),
 			comparison: compareToRunning(latest),
 			snapshots: core.upgrades.listSnapshotBundles().map((bundle) => ({
 				dir: bundle.dir,

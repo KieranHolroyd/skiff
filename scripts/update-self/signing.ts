@@ -36,6 +36,10 @@ export interface ReleaseManifest {
 	/** Commit the artifacts were built from. */
 	commit: string;
 	repo: string;
+	/**
+	 * Legacy and ignored: always `stable`. The release channel is the GitHub release's prerelease
+	 * flag (canary until promote.yml flips it), so promotion never re-signs the manifest.
+	 */
 	channel: 'stable' | 'edge';
 	createdAt: string;
 	/** Version of the stage-0 updater bundled in the artifacts (`updater/skiff-updated`). */
