@@ -1,4 +1,4 @@
-import { resolve4, resolveCname, resolveTxt } from 'node:dns/promises';
+import { resolve4, resolveCname } from 'node:dns/promises';
 import { and, asc, desc, eq, inArray, isNull, lt, or } from 'drizzle-orm';
 import { domains, nodes, projects } from '@skiff/db';
 import {
@@ -11,6 +11,7 @@ import {
 	type Principal,
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
+import { resolveTxtRecords } from './dns-txt.ts';
 import { ConflictError, NotFoundError, ValidationError } from './errors.ts';
 import { newId, randomToken } from './util.ts';
 import type { ProjectRow } from './projects.ts';
@@ -47,7 +48,7 @@ export interface DnsResolver {
 	resolve4(name: string): Promise<string[]>;
 }
 
-export const nodeDnsResolver: DnsResolver = { resolveTxt, resolveCname, resolve4 };
+export const nodeDnsResolver: DnsResolver = { resolveTxt: resolveTxtRecords, resolveCname, resolve4 };
 
 /** --- Cloudflare seam ------------------------------------------------------
  * Least privilege: the client only sees records for the configured zone and never a token.

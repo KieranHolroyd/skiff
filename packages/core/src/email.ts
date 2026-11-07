@@ -1,5 +1,5 @@
 import { generateKeyPairSync } from 'node:crypto';
-import { resolveMx, resolveTxt } from 'node:dns/promises';
+import { resolveMx } from 'node:dns/promises';
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import MailComposer from 'nodemailer/lib/mail-composer';
 import {
@@ -83,6 +83,7 @@ import {
 } from '@skiff/contracts';
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
+import { resolveTxtRecords } from './dns-txt.ts';
 import type { CloudflareClient, CloudflareRecordInput } from './domains.ts';
 import { ConflictError, CoreError, NotFoundError, QuotaError, RateLimitError, ValidationError } from './errors.ts';
 import type { ProjectRow } from './projects.ts';
@@ -107,7 +108,7 @@ export interface EmailDnsResolver {
 	resolveMx(name: string): Promise<Array<{ exchange: string; priority: number }>>;
 }
 
-export const nodeEmailDnsResolver: EmailDnsResolver = { resolveTxt, resolveMx };
+export const nodeEmailDnsResolver: EmailDnsResolver = { resolveTxt: resolveTxtRecords, resolveMx };
 
 const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
 
