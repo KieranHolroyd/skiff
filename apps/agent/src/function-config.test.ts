@@ -190,7 +190,7 @@ describe('renderWorkerdConfig', () => {
 		expect(config).toContain('compatibilityDate = "2026-10-01",');
 		expect(config).toContain('globalOutbound = "internet",');
 		expect(config).toContain('sockets = [ ( name = "http", http = (), service = "main" ) ],');
-		expect(config.endsWith(')\n')).toBe(true);
+		expect(config.endsWith(');\n')).toBe(true);
 		// Phase 4/5 config surface must never appear in a phase-1 host. The phase-3 tail Worker is
 		// always present, so `tails` is asserted separately below.
 		for (const forbidden of [
@@ -441,7 +441,7 @@ const config :Workerd.Config = (
         compatibilityDate = "2026-10-01",
         compatibilityFlags = [ "nodejs_compat" ],
         globalOutbound = "internet",
-        tails = [ "tail-api" ]
+        tails = [ "tail-api" ],
         bindings = [
           ( name = "GREETING", text = "hello world" ),
           ( name = "API_KEY", fromEnvironment = "API_KEY" ),
@@ -451,7 +451,7 @@ const config :Workerd.Config = (
       ) )
   ],
   sockets = [ ( name = "http", http = (), service = "main" ) ],
-)
+);
 `);
 	});
 });
@@ -477,7 +477,7 @@ describe('phase-3 tail worker', () => {
 			'    ( name = "tail-sink",\n      external = ( address = "127.0.0.1:8085", http = () ) )',
 		);
 		// The main Worker lists it in `tails`; the tail Worker declares no durable storage.
-		expect(rendered.config).toContain('        tails = [ "tail-api" ]');
+		expect(rendered.config).toContain('        tails = [ "tail-api" ],');
 		expect(rendered.config).not.toContain('durableObjectStorage');
 	});
 
@@ -738,7 +738,7 @@ describe('phase-2 KV and Cache services', () => {
 			workload: withBindings([{ name: 'HTTP', type: 'cache' }]),
 			releaseDir: RELEASE_DIR,
 		});
-		expect(rendered.config).toContain('cacheApiOutbound = "cache-api-0"');
+		expect(rendered.config).toContain('cacheApiOutbound = "cache-api-0",');
 		expect(rendered.config).toContain('( className = "CacheObject", uniqueKey = "prj_1-HTTP", enableSql = false )');
 		expect(rendered.files['binding-cache']).toContain('export class CacheObject');
 	});
@@ -766,5 +766,82 @@ describe('phase-2 KV and Cache services', () => {
 		expect(rendered.config.match(/name = "do-storage"/g)).toHaveLength(1);
 		expect(rendered.config).toContain('( name = "ROOMS", durableObjectNamespace = "Room" )');
 		expect(rendered.config).toContain('( className = "Room", uniqueKey = "prj_1-ROOMS", enableSql = true )');
+	});
+});
+
+/**
+ * Parse every rendered shape with the real workerd (`workerd compile`). String assertions above
+ * cannot catch Cap'n Proto syntax errors: a missing `;` or field comma made every function host
+ * fail to start in production while all of them passed. Runs when a workerd binary is available
+ * (`SKIFF_TEST_WORKERD=/path/to/workerd`, or `workerd` on PATH) and is skipped otherwise.
+ */
+const WORKERD_BIN = process.env.SKIFF_TEST_WORKERD || Bun.which('workerd');
+
+describe.skipIf(!WORKERD_BIN)('rendered configs compile with workerd', () => {
+	const allBindings = [
+		{ name: 'GREETING', type: 'text', value: 'hello' },
+		{ name: 'CONF', type: 'json', value: { a: 1 } },
+		{ name: 'API_KEY', type: 'secret' },
+		{ name: 'ADMIN', type: 'service', entrypoint: 'admin' },
+		{ name: 'SHOP', type: 'app', project: 'shop', upstream: 'unix//run/skiff-workloads/prj_shop.sock' },
+		{ name: 'ROOMS', type: 'durable_object', className: 'Room', uniqueKey: 'prj_1-ROOMS' },
+		{ name: 'DB', type: 'hyperdrive', database: 'app-db', envPrefix: 'DATABASE' },
+		{ name: 'KV', type: 'kv', namespaceId: 'prj_1-KV' },
+		{ name: 'HTTP_CACHE', type: 'cache' },
+		{ name: 'BUCKET', type: 'r2', storage: 'media', bucket: 'uploads', envPrefix: 'MEDIA' },
+		{ name: 'SQL', type: 'd1', database: 'main', namespaceId: 'prj_1-SQL' },
+		{ name: 'JOBS', type: 'queue', queue: 'jobs', producer: true, namespaceId: 'prj_1-JOBS' },
+		{ name: 'EVENTS', type: 'analytics_engine', dataset: 'events' },
+		{ name: 'ASSETS', type: 'assets' },
+	];
+	const env = {
+		...HYPERDRIVE_ENV,
+		MEDIA_ENDPOINT_URL: 'http://127.0.0.1:9000',
+		MEDIA_ACCESS_KEY_ID: 'key',
+		MEDIA_SECRET_ACCESS_KEY: 'secret',
+		MEDIA_REGION: 'us-east-1',
+		MEDIA_FORCE_PATH_STYLE: 'true',
+	};
+
+	async function compiles(bindings: unknown[]): Promise<void> {
+		const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises');
+		const { tmpdir } = await import('node:os');
+		const { join } = await import('node:path');
+		const dir = await mkdtemp(join(tmpdir(), 'skiff-workerd-'));
+		try {
+			const releaseDir = join(dir, 'release');
+			await mkdir(join(releaseDir, 'public'), { recursive: true });
+			const base = withBindings(bindings);
+			const workload: WorkloadDesired = {
+				...base,
+				function: { ...base.function!, assets: { directory: 'public', runWorkerFirst: [] } },
+			};
+			const rendered = renderWorkerdConfigParts({ workload, releaseDir, env });
+			await writeFile(join(dir, 'config.capnp'), rendered.config);
+			for (const [name, content] of Object.entries(rendered.files)) await writeFile(join(dir, name), content);
+			await writeFile(join(dir, 'function-shim'), 'export default {};');
+			await writeFile(join(dir, 'module-0'), 'export default {}; export class Room {}');
+			const proc = Bun.spawn([WORKERD_BIN!, 'compile', join(dir, 'config.capnp')], {
+				stdout: 'ignore',
+				stderr: 'pipe',
+			});
+			const stderr = await new Response(proc.stderr).text();
+			const code = await proc.exited;
+			if (code !== 0) throw new Error(`workerd compile failed (${code}):\n${stderr}\n--- config ---\n${rendered.config}`);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	}
+
+	test('no bindings', async () => {
+		await compiles([]);
+	});
+	for (const binding of allBindings) {
+		test(`a ${binding.type} binding`, async () => {
+			await compiles([binding]);
+		});
+	}
+	test('every binding kind together', async () => {
+		await compiles(allBindings);
 	});
 });

@@ -154,7 +154,8 @@ export function renderWorkerdConfigParts(input: RenderWorkerdConfigInput): Rende
 			`        compatibilityDate = ${capnpText(spec.compatibilityDate)},`,
 			`        compatibilityFlags = ${flags},`,
 			'        globalOutbound = "internet",',
-			...fragments.mainFields,
+			// Struct fields need a separating comma; renderers emit bare fields (`tails = [ … ]`).
+			...fragments.mainFields.map((field) => (field.trimEnd().endsWith(',') ? field : `${field},`)),
 			...durableFields,
 			bindings,
 			'      ) )',
@@ -189,7 +190,9 @@ export function renderWorkerdConfigParts(input: RenderWorkerdConfigInput): Rende
 				]
 			: []),
 		'  sockets = [ ( name = "http", http = (), service = "main" ) ],',
-		')',
+		// A Cap'n Proto `const` declaration ends with `;`; without it workerd reports a parse error
+		// at end of file and the host never starts.
+		');',
 		'',
 	];
 
