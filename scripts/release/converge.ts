@@ -26,6 +26,7 @@ import { DEFAULT_CONTROL_PLANE_PATHS, ensureControlPlaneUnits } from '../systemd
 import { ensureHelper } from '../systemd/helper.ts';
 import { ensureStorageUnits } from '../systemd/storage.ts';
 import { ensureStudioUnit } from '../systemd/studio.ts';
+import { ensureMailUnit } from '../systemd/mail.ts';
 import { TRIGGER_PATH_UNIT, triggerUnits, updateCommandScript } from '../update-self/units.ts';
 
 export interface HostPaths {
@@ -209,6 +210,11 @@ export async function convergeHost(input: ConvergeInput): Promise<ConvergeReport
 
 	await step(report, 'studio-unit', () =>
 		ensureStudioUnit({ systemdDir: paths.systemdDir, optDir: paths.optDir, runDir: paths.runDir, socketGroup: 'caddy', run: tolerant, log }),
+	);
+
+	// Email's MTA (docs/EMAIL.md): static like the studio; only the mail node's agent starts it.
+	await step(report, 'mail-unit', () =>
+		ensureMailUnit({ systemdDir: paths.systemdDir, optDir: paths.optDir, runDir: paths.runDir, socketGroup: 'caddy', run: tolerant, log }),
 	);
 
 	// Binary and unit; the caller restarts it (the running helper keeps its old inode until then).

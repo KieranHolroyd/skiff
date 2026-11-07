@@ -1,13 +1,21 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { CoreError } from '@skiff/core';
-import { brokerAttachSchema, brokerUpdateSchema, hasPermission, type BrokerView } from '@skiff/contracts';
+import {
+	brokerAttachSchema,
+	brokerUpdateSchema,
+	hasPermission,
+	type BrokerMetricPoint,
+	type BrokerQueuesView,
+	type BrokerView
+} from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
+import { parseTrafficRange, trafficRangeHref, trafficRanges } from '#lib/server/traffic-range.js';
 import { failStatus, formString, toFormFailure } from '../../_lib/errors.js';
 import { fieldErrorsFrom, optionalNumber } from '../../databases/_lib/forms.server.js';
 import { brokerCan } from '../_lib/forms.server.js';
 import type { Actions, PageServerLoad } from './$types';
 
-export const load: PageServerLoad = ({ locals, params }) => {
+export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const principal = locals.principal!;
 	let broker: BrokerView;
 	try {
@@ -34,7 +42,43 @@ export const load: PageServerLoad = ({ locals, params }) => {
 		}
 	}
 
-	return { broker, projects, brokerCan: brokerCan(principal) };
+	// Same presets as the storage and traffic pages: minute buckets up to a day, hourly beyond 48 h.
+	const range = parseTrafficRange(url.searchParams.get('range'));
+	let metrics: BrokerMetricPoint[] = [];
+	try {
+		metrics = await core.brokers.metrics(principal, params.name, {
+			from: range.from,
+			to: range.to,
+			interval: range.interval
+		});
+	} catch {
+		// Charts are a nicety; the page still works without them.
+	}
+	const rangeLinks = Object.fromEntries(
+		trafficRanges.map((item) => [item.key, trafficRangeHref(url, item.key)])
+	);
+
+	// The newest stream listing lives in SQLite, so it shows even without ClickHouse (D123).
+	let queues: BrokerQueuesView | null = null;
+	try {
+		queues = core.brokers.queues(principal, params.name);
+	} catch {
+		queues = null;
+	}
+
+	return {
+		broker,
+		projects,
+		brokerCan: brokerCan(principal),
+		metrics,
+		queues,
+		telemetryAvailable: (await core.ctx.telemetry?.ready()) ?? false,
+		telemetryInstalled: core.ctx.telemetry?.installed ?? false,
+		telemetryReason: core.ctx.telemetry?.error?.message ?? null,
+		range,
+		ranges: trafficRanges,
+		rangeLinks
+	};
 };
 
 export const actions: Actions = {

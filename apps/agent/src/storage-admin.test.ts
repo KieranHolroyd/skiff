@@ -4,6 +4,7 @@ import type { BucketCorsRule, BucketLifecycleRule, BucketObjectLock, StorageAdmi
 import {
 	StorageApiError,
 	StorageReconciler,
+	notificationXml,
 	type S3Object,
 	type S3Upload,
 	type StorageApi,
@@ -101,6 +102,14 @@ class FakeApi implements StorageApi {
 		return this.cors;
 	}
 
+	notifications = new Map<string, boolean>();
+
+	async putBucketNotifications(name: string, enabled: boolean) {
+		this.maybeUnsupported('notifications');
+		this.calls.push(`notify:${name}:${enabled ? 'on' : 'off'}`);
+		this.notifications.set(name, enabled);
+	}
+
 	async putBucketCors(_name: string, rules: BucketCorsRule[]) {
 		this.maybeUnsupported('cors');
 		this.calls.push(`cors:${rules.length}`);
@@ -171,6 +180,7 @@ function desired(overrides: Partial<WorkloadObjectStorage['buckets'][number]> = 
 				quotaBytes: 1024 * 1024,
 				objectLock,
 				configVersion: 1,
+				notifications: false,
 				...overrides,
 			},
 		],
@@ -214,8 +224,34 @@ describe('storage bucket configuration convergence', () => {
 			'cors:1',
 			`quota:${1024 * 1024}`,
 			'lock:governance:30',
+			// Asserted off too, so a rule removed while the agent was down still clears RustFS.
+			'notify:uploads:off',
 		]);
 		expect(api.lock).toEqual(objectLock);
+	});
+
+	test('a watched bucket points its events at the skiff target; unwatching clears it (D122)', async () => {
+		const api = new FakeApi();
+		const reconciler = new StorageReconciler({
+			source: { storageTargets: () => [{ ...target(api), desired: desired({ notifications: true }) }] },
+			apiFor: () => api,
+			now: () => 1_000_000,
+		});
+		await reconciler.reconcile();
+		expect(api.notifications.get('uploads')).toBe(true);
+		expect(notificationXml(true)).toContain('<Queue>arn:rustfs:sqs:us-east-1:skiff:webhook</Queue>');
+		expect(notificationXml(true)).toContain('<Event>s3:ObjectCreated:*</Event><Event>s3:ObjectRemoved:*</Event>');
+		expect(notificationXml(false)).not.toContain('QueueConfiguration');
+
+		// A build without the notification API reports `unsupported` instead of failing the bucket.
+		const old = new FakeApi();
+		old.unsupported.add('notifications');
+		await new StorageReconciler({
+			source: { storageTargets: () => [{ ...target(old), desired: desired({ notifications: true }) }] },
+			apiFor: () => old,
+			now: () => 1_000_000,
+		}).reconcile();
+		expect(old.calls).toContain(`quota:${1024 * 1024}`);
 	});
 
 	test('re-applying is idempotent until the full re-assert interval', async () => {

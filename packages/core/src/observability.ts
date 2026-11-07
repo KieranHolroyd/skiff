@@ -170,7 +170,10 @@ export class ObservabilityService {
 		const storage = Object.fromEntries(
 			attempt(() => this.ctx.storage.list(principal, { includeDeleted: true })).map((item) => [item.id, item.name]),
 		);
-		return { project, database, storage };
+		const broker = Object.fromEntries(
+			attempt(() => this.ctx.brokers.list(principal, { includeDeleted: true })).map((item) => [item.id, item.name]),
+		);
+		return { project, database, storage, broker };
 	}
 
 	async schema(principal: Principal): Promise<ObservabilitySchema> {
@@ -203,7 +206,13 @@ export class ObservabilityService {
 				const spec = input.query.builder;
 				const names = this.#visible(principal);
 				const scopeColumn = DATASETS[spec.dataset as ObservabilityDataset].scope;
-				const scope = Object.keys(scopeColumn === 'project_id' ? names.project : scopeColumn === 'database_id' ? names.database : names.storage);
+				const scopeNames = {
+					project_id: names.project,
+					database_id: names.database,
+					storage_id: names.storage,
+					broker_id: names.broker,
+				}[scopeColumn];
+				const scope = Object.keys(scopeNames);
 				const compiled = compileBuilder(spec, {
 					database: telemetry.database,
 					fromMs,

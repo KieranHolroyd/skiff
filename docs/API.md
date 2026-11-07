@@ -244,9 +244,66 @@ server (JetStream on) per broker, placed once and reachable only on its node.
 | POST | `/brokers/:name/restart` | `broker:update` | restarts the container (streams are kept) → `202 { broker }` |
 | GET | `/brokers/:name/credentials` | `broker:credentials`, interactive **session** | `{ credentials: { username, password, url, host, port, connectionSnippets, note } }`; `cache-control: no-store`; audited. API keys and MCP get 403 |
 | GET | `/brokers/:name/logs` | `logs:read` (+ `broker:read`) | `?after&limit&level&q` → the same page shape as `/storage/:name/logs`, `kind: "broker"` |
+| GET | `/brokers/:name/metrics` | `broker:read` | `?from&to&interval` (as `/databases/:name/metrics`; default the last hour at `1m`, ranges over 48 h use `1h`) → `{ points: BrokerMetricPoint[], interval }`: connections, store used/budget, messages, pending, awaiting ack, redelivered, oldest message age, and per-bucket published / messages and bytes in and out / slow consumers. Empty without ClickHouse (D123) |
+| GET | `/brokers/:name/queues` | `broker:read` | the newest stream listing the node reported (once a minute, SQLite, so it works without ClickHouse) → `{ brokerId, name, at, truncated, streams: [{ stream, queue, subjects, storage, retention, messages, bytes, maxBytes, firstAt, lastAt, consumerCount, pending, ackPending, redelivered, consumers: [{ name, pending, ackPending, redelivered, waiting, lastDeliveredAt }] }] }`. `queue` is the function queue name for `SKIFF_Q_<queue>` streams, else null |
 | GET | `/projects/:slug/brokers` | `broker:read` | `{ attachments: [{ brokerName, envPrefix, envNames, … }] }` |
 | POST | `/projects/:slug/brokers` | `broker:update` + `project:update` | `{ broker, envPrefix? }` → `201 { attachment, warning }`; the app gets `<PREFIX>_URL/_HOST/_PORT/_USER/_PASSWORD` at activation and is placed on the broker's node at its next deploy. 409 for a duplicate prefix; 422 for static projects or services on another node (function projects attach brokers for their queues, D112) |
 | DELETE | `/projects/:slug/brokers/:name` | `broker:update` + `project:update` | detach; the app restarts without the variables |
+
+## Event notifications
+
+Docs: [EVENTS.md](./EVENTS.md) (D122). A rule publishes one source's events into a queue on a
+managed broker; a function consumes the queue.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/events` | `broker:read` | `{ rules: EventRuleView[] }` with 24-hour delivery counts, last delivery and last error |
+| POST | `/events` | `broker:update` + the source's read permission | `{ source (storage\|alerts\|deployments\|database-backups), events? (default all), broker, queue, description?, enabled? }` plus the source's filter: `storage` + `bucket` (required), `prefix?`, `suffix?` for storage; `project?`; `database?`; `alertRule?` → `201 { rule }`. A storage rule restarts the instance once to switch notifications on |
+| GET | `/events/:id` | `broker:read` | `{ rule }` |
+| PATCH | `/events/:id` | `broker:update` | any of `{ events, prefix, suffix, queue, description, enabled }` (`null` clears a filter); the source, its resource and the broker are fixed → `{ rule }` |
+| DELETE | `/events/:id` | `broker:update` | drops the rule and its undelivered events → `{ ok: true }` |
+| POST | `/events/:id/test` | `broker:update` | queues one synthetic event → `202 { delivery }` |
+| GET | `/events/deliveries` | `broker:read` | `?rule&status=pending\|delivered\|failed&limit` (≤200), newest first → `{ deliveries }` with each message body |
+
+RustFS posts bucket events to `POST /api/webhooks/storage/:id` with the instance's bearer token
+(not for clients). Nodes use `POST /api/agent/events/lease` and `POST /api/agent/events/ack`.
+
+## Email
+
+Docs: [EMAIL.md](./EMAIL.md) (D114–D120). Sending domains, credentials, suppressions and the
+message log are org resources; the mail node and an org's sandbox state are platform settings.
+With `SKIFF_FEATURE_EMAIL=0`, configuring, creating domains or credentials, attaching and sending
+return 403 `feature_disabled`, and the MCP tools are not offered.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/email` | `email:read` | `{ org: EmailOrgView (state sandbox\|active\|paused, perSecond, perDay, sentToday, bounceRate, complaintRate, windowMessages, pausedReason), settings }`; `settings` is `{ nodeId, paused, generation, mailDomain, hostnames, platformRecords }` for platform admins, else `null` |
+| PATCH | `/email/settings` | platform admin **session** | `{ nodeId?: string\|null, paused?: boolean }` picks (or clears) the mail node, which must advertise the `mail` capability and have a public address, and pauses all sending → `{ settings }` |
+| PATCH | `/email/orgs/:orgId` | platform admin **session** | `{ state? (sandbox\|active\|paused), perSecond? (1–1000), perDay? (1–10,000,000) }`; leaving the sandbox applies the active defaults → `{ org }` |
+| GET | `/email/domains` | `email:read` | `{ domains: EmailDomainView[] }`, each with its records and last check results |
+| POST | `/email/domains` | `email:update` | `{ name, sending? (default true), autoDns? (default true) }`; generates the DKIM key, creates the records through Cloudflare when the zone is the platform's, then checks DNS → `201 { domain }`. 409 when the name is taken; `receiving` is refused until inbound ships |
+| GET | `/email/domains/:name` | `email:read` | `{ domain }` |
+| PATCH | `/email/domains/:name` | `email:update` | `{ sending? }` → `{ domain }` |
+| DELETE | `/email/domains/:name` | `email:delete` | removes the domain and the records Skiff created → `204` |
+| POST | `/email/domains/:name/check` | `email:read` | looks the records up in public DNS now; verified once DKIM is found → `{ domain }` |
+| POST | `/email/send` | `email:send` | `EmailSendInput` (`from`, `to/cc/bcc` ≤ 50 in total, `replyTo`, `subject`, `text`/`html`/`raw`, `attachments`, `headers`, `tags`, `unsubscribe`, `idempotencyKey`) → `202 { id, accepted, suppressed }`. Suppressed recipients are dropped; 403 `email_paused`, 429 `rate_limited`/`daily_quota`, 422 for the other policy codes (`from_not_verified`, `sandbox_recipient`, `all_suppressed`, …) |
+| POST | `/email/send-batch` | `email:send` | `{ messages: EmailSendInput[] }` (≤ 100) → `{ results }`, where `results[i]` is `{ id, accepted, suppressed }` or `{ error: { code, message } }` for `messages[i]` |
+| GET | `/email/messages` | `email:read` | `?limit (≤200, default 50)&before=<ISO>&recipient=<address>&status=<event kind>`, newest first → `{ messages: EmailMessageView[] }` |
+| GET | `/email/messages/:id` | `email:read` | `{ message }` with each recipient's status and last SMTP response |
+| GET | `/email/suppressions` | `email:read` | `?limit (≤1000, default 100)&address` → `{ suppressions }` |
+| POST | `/email/suppressions` | `email:update` | `{ address, reason? (manual\|bounce\|complaint\|unsubscribe, default manual) }` → `201 { suppression }` |
+| DELETE | `/email/suppressions/:address` | `email:update` | takes the address off the list → `204` (404 when it is not on it) |
+| GET | `/email/credentials` | `email:read` | `{ credentials: EmailCredentialView[] }` (never the password) |
+| POST | `/email/credentials` | `email:credentials`, not MCP | `{ name, project?, allowedFromDomains? }` → `201 { credential }` with `password` and `smtp` **once**; `cache-control: no-store`; audited |
+| DELETE | `/email/credentials/:id` | `email:credentials` | revoke → `204` |
+| GET | `/projects/:slug/email` | `email:read` (+ `project:read`) | `{ attachments: [{ envPrefix, envNames, username }] }` |
+| POST | `/projects/:slug/email` | `email:update` + `project:update` | `{ envPrefix? (default SMTP) }` creates a project-scoped credential; the app gets `<PREFIX>_HOST/_PORT/_SECURE/_USER/_PASSWORD/_URL` at activation → `201 { envPrefix, envNames }`. 409 for a duplicate prefix |
+| DELETE | `/projects/:slug/email?envPrefix=` | `email:update` + `project:update` | revokes that attachment's credential (default prefix SMTP); the app restarts without it → `204` |
+
+MCP has `get_email_status`, `list_email_domains`, `get_email_domain`, `create_email_domain`,
+`check_email_domain`, `send_email` (confirmed per message), `list_email_messages`,
+`get_email_message`, `list_email_suppressions` and `remove_email_suppression` (confirmed). It has no
+credential, settings or org-state tools.
 
 ## CLI browser login (`/cli/login`, `/api/v1/cli/token`)
 

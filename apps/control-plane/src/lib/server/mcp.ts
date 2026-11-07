@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import {
 	McpServer,
 	acceptedContent,
@@ -7,6 +7,9 @@ import {
 	isInputRequiredResult,
 	type AuthInfo,
 	type ScopeChallengeHandler,
+	type StandardSchemaWithJSON,
+	type ToolAnnotations,
+	type ToolCallback,
 } from '@modelcontextprotocol/server';
 import * as z from 'zod';
 import {
@@ -18,6 +21,9 @@ import {
 	bucketNameSchema,
 	brokerAttachSchema,
 	brokerCreateSchema,
+	eventDeliveryStatuses,
+	eventRuleCreateSchema,
+	type EventRuleView,
 	brokerUpdateSchema,
 	databaseAttachSchema,
 	databaseBackupCreateSchema,
@@ -62,7 +68,13 @@ import {
 	type DashboardView,
 	type DatabaseMetricPoint,
 	type DatabaseView,
+	EMAIL_MAX_RECIPIENTS,
+	emailEventKinds,
+	emailSendSchema,
+	type EmailDomainView,
+	type FeatureName,
 	type StorageGrant,
+	type BrokerMetricPoint,
 	type StorageMetricPoint,
 	type StorageView,
 	type OperationView,
@@ -70,6 +82,7 @@ import {
 	type Principal,
 	type Role,
 } from '@skiff/contracts';
+import { featureEnabled } from '@skiff/core';
 import { authSecret } from './config';
 import { core } from './core';
 import { principalFromMcp } from './principal';
@@ -102,6 +115,28 @@ export interface SkiffToolDefinition {
 	};
 	handler: (...args: unknown[]) => unknown;
 }
+
+/**
+ * `registerTool` for a tool that is only offered while a platform feature flag is on
+ * (`feature: 'EMAIL'`); `buildServer`'s `tool` skips it entirely when the flag is off.
+ */
+type FeatureGatedTool = <
+	OutputArgs extends StandardSchemaWithJSON,
+	InputArgs extends StandardSchemaWithJSON | undefined = undefined,
+>(
+	name: string,
+	config: {
+		title?: string;
+		description?: string;
+		inputSchema?: InputArgs;
+		outputSchema?: OutputArgs;
+		annotations?: ToolAnnotations;
+		scopeChallenge?: ScopeChallengeHandler;
+		_meta?: Record<string, unknown>;
+		feature: FeatureName;
+	},
+	cb: ToolCallback<InputArgs>,
+) => unknown;
 
 function principalFor(authInfo: AuthInfo | undefined): PrincipalResult {
 	const principal = principalFromMcp(authInfo, new Request('https://mcp.local/mcp'));
@@ -199,6 +234,51 @@ async function storageLastHour(principal: Principal, name: string, storageMb: nu
 		storageUsedRatio: round(latest.usedBytes / budget, 4),
 		objects: latest.objects,
 		buckets: latest.bucketCount,
+		memoryBytes: latest.memoryBytes,
+	};
+}
+
+/** Last-hour summary for `get_broker_metrics`, from the agent's 1-minute samples (D123). */
+async function brokerLastHour(principal: Principal, name: string, storageMb: number) {
+	const to = Date.now();
+	let points: BrokerMetricPoint[];
+	try {
+		points = await core.brokers.metrics(principal, name, { from: to - 3_600_000, to, interval: '1m' });
+	} catch (error) {
+		return { note: `Metrics are unavailable: ${(error as Error).message ?? String(error)}` };
+	}
+	if (points.length === 0)
+		return {
+			note: 'No samples in the last hour. The agent reports once a minute while the broker runs, and only when the telemetry store is installed.',
+		};
+	const sorted = [...points].sort((a, b) => a.bucket.localeCompare(b.bucket));
+	const latest = sorted[sorted.length - 1]!;
+	const budget = storageMb * 1024 * 1024;
+	const sum = (key: 'published' | 'messagesIn' | 'messagesOut' | 'slowConsumers') =>
+		sorted.reduce((total, point) => total + point[key], 0);
+	return {
+		samples: sorted.length,
+		latestAt: latest.bucket,
+		up: latest.up >= 0.5,
+		uptimeRatio: round(sorted.reduce((total, point) => total + point.up, 0) / sorted.length, 4),
+		connections: latest.connections,
+		streams: latest.streams,
+		consumers: latest.consumers,
+		storeBytes: latest.storeBytes,
+		storeBudgetBytes: budget,
+		storeUsedRatio: round(latest.storeBytes / budget, 4),
+		messages: latest.messages,
+		pending: latest.pending,
+		ackPending: latest.ackPending,
+		redelivered: latest.redelivered,
+		oldestMessageAgeSeconds: latest.oldestAgeSeconds,
+		peakBacklog: Math.max(...sorted.map((point) => point.pending + point.ackPending)),
+		lastHour: {
+			published: sum('published'),
+			messagesIn: sum('messagesIn'),
+			messagesOut: sum('messagesOut'),
+			slowConsumers: sum('slowConsumers'),
+		},
 		memoryBytes: latest.memoryBytes,
 	};
 }
@@ -356,8 +436,13 @@ function buildServer(
 			} as unknown as McpServer)
 		: new McpServer({ name: 'skiff', version: '0.1.0' });
 
-	/** `server.registerTool` with auditing of every call, including scope denials. */
-	const tool = ((name: string, config: Record<string, unknown>, callback: (...args: unknown[]) => unknown) => {
+	/**
+	 * `server.registerTool` with auditing of every call, including scope denials. A tool whose config
+	 * names a `feature` is not offered at all while that platform flag is off.
+	 */
+	const tool = ((name: string, rawConfig: Record<string, unknown>, callback: (...args: unknown[]) => unknown) => {
+		const { feature, ...config } = rawConfig as Record<string, unknown> & { feature?: FeatureName };
+		if (feature && !featureEnabled(core.ctx.config, feature)) return {};
 		const challenge = config.scopeChallenge as ScopeChallengeHandler | undefined;
 		const scopeChallenge: ScopeChallengeHandler | undefined = challenge
 			? async (context) => {
@@ -392,7 +477,7 @@ function buildServer(
 				throw error;
 			}
 		}) as never);
-	}) as unknown as McpServer['registerTool'];
+	}) as unknown as McpServer['registerTool'] & FeatureGatedTool;
 
 	tool(
 		'whoami',
@@ -1586,6 +1671,40 @@ function buildServer(
 	);
 
 	tool(
+		'get_broker_metrics',
+		{
+			title: 'Get queue broker metrics',
+			description:
+				'Last-hour summary of a managed broker from its node\'s 1-minute samples (D123): up, connections, JetStream store used vs ' +
+				'budget, messages held, consumer backlog (pending, awaiting ack, redelivered), oldest unprocessed message age, and ' +
+				'messages stored / in / out over the hour. Needs the optional telemetry store; without it, use get_broker_queues.',
+			inputSchema: z.object({ broker: z.string().describe('Broker name') }),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('broker:read'),
+		},
+		async ({ broker }) =>
+			run(async () => {
+				const row = core.brokers.get(principal, broker, { includeDeleted: true });
+				return { broker: row.name, ...(await brokerLastHour(principal, row.name, row.storageMb)) };
+			}),
+	);
+
+	tool(
+		'get_broker_queues',
+		{
+			title: 'Get queue broker streams',
+			description:
+				'The newest JetStream stream listing for a managed broker (D123), refreshed about once a minute: per stream (function ' +
+				'queues are SKIFF_Q_<queue>) messages, bytes, consumers, pending, awaiting ack, redelivered and the oldest message time, ' +
+				'with each consumer\'s backlog. Works without the telemetry store.',
+			inputSchema: z.object({ broker: z.string().describe('Broker name') }),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('broker:read'),
+		},
+		async ({ broker }) => run(() => core.brokers.queues(principal, broker)),
+	);
+
+	tool(
 		'create_broker',
 		{
 			title: 'Create queue broker',
@@ -1685,6 +1804,203 @@ function buildServer(
 				core.brokers.detach(principal, core.projects.requireRow(principal, project), broker);
 				return { ok: true, project, broker };
 			}),
+	);
+
+	// --- event notifications (docs/EVENTS.md, D122) ----
+	const eventNote =
+		'A rule publishes each matching event as a JSON message to a queue on a managed broker; a function consumes that queue ' +
+		'like any other (wrangler `queues.consumers`, broker attached to the function project) and handles it in `queue()`. ' +
+		'Storage messages use Cloudflare\'s R2 notification body ({ account, action, bucket, object: { key, size, eTag }, eventTime }); ' +
+		'every other source sends { type, id, time, account, data }. Delivery is at least once.';
+
+	tool(
+		'list_event_rules',
+		{
+			title: 'List event rules',
+			description:
+				'List event notification rules: source, what each watches, target broker/queue, 24-hour delivery counts and the last error. ' +
+				eventNote,
+			inputSchema: z.object({}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('broker:read'),
+		},
+		async () => run(() => ({ rules: core.events.list(principal) })),
+	);
+
+	tool(
+		'get_event_rule',
+		{
+			title: 'Get event rule',
+			description: 'Get one event rule with its 20 most recent deliveries (status, attempts, error and message body).',
+			inputSchema: z.object({ id: z.string().describe('Rule id (evr_…)') }),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('broker:read'),
+		},
+		async ({ id }) =>
+			run(() => ({ rule: core.events.get(principal, id), deliveries: core.events.deliveries(principal, { ruleId: id, limit: 20 }) })),
+	);
+
+	tool(
+		'create_event_rule',
+		{
+			title: 'Create event rule',
+			description:
+				'Publish a platform source\'s events to a queue. Sources and events: storage (object-create, object-delete; needs `storage` ' +
+				'and `bucket`, optional key `prefix`/`suffix`), alerts (firing, resolved; optional `alertRule` id), deployments (created, ' +
+				'promoted, failed; optional `project` slug), database-backups (completed, failed; optional `database`). Omit `events` for ' +
+				'all of them. A storage rule restarts the storage instance once to switch on bucket notifications. ' +
+				eventNote,
+			inputSchema: eventRuleCreateSchema,
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requiresWith(['broker:update'], (args) => {
+				switch (args.source) {
+					case 'storage':
+						return ['storage:read'];
+					case 'alerts':
+						return ['metrics:read'];
+					case 'deployments':
+						return ['deployment:read'];
+					case 'database-backups':
+						return ['database:read'];
+					default:
+						return [];
+				}
+			}),
+		},
+		async (input) =>
+			run(() => {
+				const rule = core.events.create(principal, input);
+				const attached = core.brokers.get(principal, rule.broker).attachments.map((item) => item.projectSlug);
+				return {
+					rule,
+					nextSteps: [
+						attached.length > 0
+							? `Consume it from a function attached to "${rule.broker}" (${attached.join(', ')}): add { "queue": "${rule.queue}" } to wrangler queues.consumers and redeploy.`
+							: `Attach "${rule.broker}" to the consuming function with attach_broker, add { "queue": "${rule.queue}" } to its wrangler queues.consumers, and redeploy.`,
+						`Check the path end to end with test_event_rule({ id: "${rule.id}" }), then list_event_deliveries.`,
+						...(rule.source === 'storage' ? [`Storage "${rule.filter.storage}" restarts once to switch bucket notifications on.`] : []),
+					],
+				};
+			}),
+	);
+
+	tool(
+		'update_event_rule',
+		{
+			title: 'Update event rule',
+			description:
+				'Change an event rule: `events`, storage key `prefix`/`suffix` (null clears), target `queue`, `description`, or `enabled`. ' +
+				'The source, its resource and the broker are fixed; delete and recreate the rule to change them.',
+			inputSchema: z.object({
+				id: z.string().describe('Rule id (evr_…)'),
+				events: z.array(z.string()).max(8).optional(),
+				prefix: z.string().max(1024).nullable().optional(),
+				suffix: z.string().max(1024).nullable().optional(),
+				queue: z.string().max(63).optional(),
+				description: z.string().max(200).nullable().optional(),
+				enabled: z.boolean().optional(),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('broker:update'),
+		},
+		async ({ id, ...patch }) => run(() => ({ rule: core.events.update(principal, id, patch) })),
+	);
+
+	tool(
+		'test_event_rule',
+		{
+			title: 'Send test event',
+			description:
+				'Queue one synthetic event through a rule (data.test = true; storage tests use a key built from the prefix and suffix). ' +
+				'Follow it with list_event_deliveries: pending until the broker node publishes it, then delivered.',
+			inputSchema: z.object({ id: z.string().describe('Rule id (evr_…)') }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('broker:update'),
+		},
+		async ({ id }) => run(() => ({ delivery: core.events.test(principal, id) })),
+	);
+
+	tool(
+		'list_event_deliveries',
+		{
+			title: 'List event deliveries',
+			description:
+				'Recent event deliveries, newest first, with status (pending, delivered, failed), attempts, last error and the message body. ' +
+				'A pending delivery is waiting for the broker\'s node; failed ones were not published within 24 hours. History is kept 7 days.',
+			inputSchema: z.object({
+				rule: z.string().optional().describe('Only this rule id'),
+				status: z.enum(eventDeliveryStatuses).optional(),
+				limit: z.number().int().min(1).max(200).default(50),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('broker:read'),
+		},
+		async ({ rule, status, limit }) =>
+			run(() => ({
+				deliveries: core.events.deliveries(principal, { ...(rule ? { ruleId: rule } : {}), ...(status ? { status } : {}), limit }),
+			})),
+	);
+
+	tool(
+		'delete_event_rule',
+		{
+			title: 'Delete event rule',
+			description:
+				'Delete an event rule. Its undelivered events are dropped; messages already in the queue stay. Requires confirmation.',
+			inputSchema: z.object({ id: z.string().describe('Rule id (evr_…)') }),
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+			scopeChallenge: requires('broker:read', 'broker:update'),
+		},
+		async ({ id }, ctx) => {
+			if (era === 'assistant')
+				return run(() => {
+					core.events.delete(principal, id);
+					return { ok: true, id };
+				});
+			if (era === 'legacy')
+				return {
+					isError: true,
+					...text(
+						`Deleting event rule ${id} needs your confirmation, which this MCP client can't show. ` +
+							`Ask the user to delete it from the Skiff dashboard: ${core.ctx.config.platformOrigin}/events`,
+					),
+				};
+			const key = `confirm_delete_event_rule:${id}`;
+			const schema = z.object({ confirm: z.boolean() });
+			const prompted = verifyConfirmation(ctx.mcpReq.requestState(), principal, 'delete_event_rule', id);
+			const answer = prompted ? acceptedContent(ctx.mcpReq.inputResponses, key, schema) : undefined;
+			const responded = prompted && ctx.mcpReq.inputResponses?.[key] !== undefined;
+			if (responded && answer?.confirm !== true) {
+				const cancelled = text(`Cancelled: event rule ${id} was not deleted (the user did not confirm).`);
+				declined.add(cancelled);
+				return cancelled;
+			}
+			if (answer?.confirm !== true) {
+				let rule: EventRuleView;
+				try {
+					rule = core.events.get(principal, id);
+				} catch (error) {
+					return run(() => {
+						throw error;
+					});
+				}
+				return inputRequired({
+					inputRequests: {
+						[key]: inputRequired.elicit({
+							message:
+								`Delete the ${rule.source} event rule ${rule.id} (→ ${rule.broker}/${rule.queue})? ` +
+								`${rule.deliveries.pending} undelivered events are dropped; messages already in the queue stay.`,
+							requestedSchema: schema,
+						}),
+					},
+					requestState: mintConfirmation(principal, 'delete_event_rule', id),
+				});
+			}
+			return run(() => {
+				core.events.delete(principal, id);
+				return { ok: true, id };
+			});
+		},
 	);
 
 	// --- managed object storage (docs/OBJECT-STORAGE.md; no key reveal, bucket force-delete or purge over MCP) ----
@@ -2810,6 +3126,394 @@ function buildServer(
 		async () => run(() => ({ nodes: core.nodes.list(principal) })),
 	);
 
+	// --- email (docs/EMAIL.md §9; no credential, settings or org-state tools: D58, platform admin only) ----
+	const emailNote =
+		'Mail goes out from an address on one of the org\'s verified sending domains. A new org starts in the sandbox ' +
+		'(low limits, verified recipients only) until a platform admin moves it out. Recipients on the suppression list ' +
+		'(hard bounces, complaints, manual entries) are dropped from a message, not reported as an error.';
+
+	/** What the user still has to add to DNS, phrased so an agent can relay it as-is. */
+	const emailDomainNextSteps = (view: EmailDomainView): string[] => {
+		const missing = view.records.filter((record) => !record.ok);
+		if (view.status === 'verified' && missing.length === 0) return [`${view.name} is verified and every record checks out.`];
+		const steps = missing.map(
+			(record) =>
+				`${record.required ? 'Required' : 'Recommended'} (${record.purpose}): ${record.type} record at ${record.name}` +
+				`${record.priority !== undefined ? ` with priority ${record.priority}` : ''}, value: ${record.value}` +
+				(record.note ? ` (${record.note})` : ''),
+		);
+		if (view.status !== 'verified')
+			steps.push(`After adding the records, call check_email_domain with domain "${view.name}". Sending works once the DKIM record is found.`);
+		else if (view.failingSince)
+			steps.push(`The DKIM record went missing at ${view.failingSince}; sending from ${view.name} pauses if it is not back within 72 hours.`);
+		return steps;
+	};
+
+	const recipientInputSchema = z.union([
+		z.string().describe('Bare address, e.g. ada@example.com'),
+		z.object({ name: z.string().max(200).optional(), address: z.string().describe('Bare address') }),
+	]);
+	const recipientsInputSchema = z.array(recipientInputSchema).max(EMAIL_MAX_RECIPIENTS).default([]);
+	const recipientLabel = (recipient: z.infer<typeof recipientInputSchema>) =>
+		typeof recipient === 'string' ? recipient : recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address;
+	const recipientAddressOf = (recipient: z.infer<typeof recipientInputSchema>) =>
+		(typeof recipient === 'string' ? recipient : recipient.address).trim();
+
+	/** Why a send would be refused before the policy check even runs, so the user isn't asked to confirm a dead end. */
+	const emailSendBlocker = (from: z.infer<typeof recipientInputSchema>): string | null => {
+		const settings = core.email.settings();
+		if (!settings.nodeId)
+			return 'Email is not set up on this platform yet: a platform admin has to choose a mail node in the Skiff dashboard (Settings → Email) before anything can be delivered.';
+		const address = recipientAddressOf(from);
+		const domain = address.slice(address.lastIndexOf('@') + 1).toLowerCase();
+		let domains: EmailDomainView[];
+		try {
+			domains = core.email.listDomains(principal);
+		} catch {
+			// A token with email:send but not email:read: leave the domain checks to core.email.send.
+			return null;
+		}
+		const match = domains.find((entry) => entry.name === domain);
+		const usable = domains.filter((entry) => entry.status === 'verified' && entry.sending).map((entry) => entry.name);
+		const elsewhere = usable.length ? ` Verified sending domains: ${usable.join(', ')}.` : ' The org has no verified sending domain yet.';
+		if (!match) return `${domain} is not a sending domain of this org. Add it with create_email_domain.${elsewhere}`;
+		if (match.status !== 'verified')
+			return `${domain} is not verified yet (status ${match.status}). Use get_email_domain to see the DNS records it still needs.${elsewhere}`;
+		if (!match.sending) return `Sending from ${domain} is turned off for this org.${elsewhere}`;
+		return null;
+	};
+
+	tool(
+		'get_email_status',
+		{
+			title: 'Get email status',
+			description:
+				'Whether Email is set up on this platform (a mail node is chosen), the org\'s sending state (sandbox, active or paused, with the reason), ' +
+				'limits, messages sent today, bounce and complaint rates, and its sending domains. Start here before sending. ' +
+				emailNote,
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('email:read'),
+			feature: 'EMAIL',
+		},
+		async () =>
+			run(() => {
+				const org = core.email.orgView(principal);
+				const settings = core.email.settings();
+				const domains = core.email.listDomains(principal).map((view) => ({ name: view.name, status: view.status, sending: view.sending }));
+				const nextSteps: string[] = [];
+				if (!settings.nodeId)
+					nextSteps.push('Email is not set up yet: a platform admin chooses a mail node in the Skiff dashboard (Settings → Email). Until then nothing is delivered.');
+				if (settings.paused) nextSteps.push('A platform admin has paused all outgoing mail on this platform.');
+				if (org.state === 'paused') nextSteps.push(`This org's sending is paused: ${org.pausedReason ?? 'by a platform admin'}. Only a platform admin can resume it.`);
+				if (org.state === 'sandbox')
+					nextSteps.push(`The org is in the sandbox (${org.perSecond}/s, ${org.perDay}/day). Ask a platform admin to move it out for real traffic.`);
+				if (!domains.some((entry) => entry.status === 'verified' && entry.sending))
+					nextSteps.push('No verified sending domain yet: add one with create_email_domain.');
+				return {
+					setUp: settings.nodeId !== null,
+					platformPaused: settings.paused,
+					org,
+					domains,
+					smtp: { host: settings.hostnames.submission, port: 587, secure: 'starttls' },
+					nextSteps,
+				};
+			}),
+	);
+
+	tool(
+		'list_email_domains',
+		{
+			title: 'List email domains',
+			description: 'List the org\'s sending domains with their verification status and DNS records (each with its last check result).',
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('email:read'),
+			feature: 'EMAIL',
+		},
+		async () => run(() => ({ domains: core.email.listDomains(principal) })),
+	);
+
+	tool(
+		'get_email_domain',
+		{
+			title: 'Get email domain',
+			description:
+				'Get one sending domain: status, every DNS record it needs (DKIM, SPF, DMARC) with what public DNS returned at the last check, ' +
+				'and `nextSteps` listing exactly which records the user still has to add. Relay those to the user verbatim.',
+			inputSchema: z.object({ domain: z.string().describe('Domain name, e.g. example.com') }),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('email:read'),
+			feature: 'EMAIL',
+		},
+		async ({ domain }) =>
+			run(() => {
+				const view = core.email.getDomain(principal, domain);
+				return { domain: view, nextSteps: emailDomainNextSteps(view) };
+			}),
+	);
+
+	tool(
+		'create_email_domain',
+		{
+			title: 'Create email domain',
+			description:
+				'Add a sending domain to the org. Skiff generates its DKIM key and, when the domain is in the platform\'s Cloudflare zone and ' +
+				'`autoDns` is on, creates the records itself; otherwise the result lists the records the user must add at their DNS host. ' +
+				'Sending works once the DKIM record is found (check_email_domain).',
+			inputSchema: z.object({
+				domain: z.string().describe('Domain to send from, e.g. example.com or mail.example.com'),
+				sending: z.boolean().default(true).describe('Allow sending from it right away once verified'),
+				autoDns: z.boolean().default(true).describe('Create the records through Cloudflare when Skiff manages the zone'),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+			scopeChallenge: requires('email:update'),
+			feature: 'EMAIL',
+		},
+		async ({ domain, sending, autoDns }) =>
+			run(async () => {
+				const view = await core.email.createDomain(principal, { name: domain, sending, autoDns });
+				return { domain: view, nextSteps: emailDomainNextSteps(view) };
+			}),
+	);
+
+	tool(
+		'check_email_domain',
+		{
+			title: 'Check email domain',
+			description:
+				'Look the domain\'s records up in public DNS now and update its status (verified once DKIM is found). DNS changes can take a few ' +
+				'minutes to show up; if a record is still missing, wait and check again rather than asking the user to re-add it.',
+			inputSchema: z.object({ domain: z.string().describe('Domain name') }),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+			scopeChallenge: requires('email:read'),
+			feature: 'EMAIL',
+		},
+		async ({ domain }) =>
+			run(async () => {
+				const view = await core.email.checkDomain(principal, domain);
+				return { domain: view, nextSteps: emailDomainNextSteps(view) };
+			}),
+	);
+
+	const sendEmailInputSchema = z.object({
+		from: recipientInputSchema.describe('Sender: an address on a verified sending domain of the org'),
+		to: recipientsInputSchema,
+		cc: recipientsInputSchema,
+		bcc: recipientsInputSchema,
+		replyTo: z.array(recipientInputSchema).max(10).default([]),
+		subject: z.string().max(998).describe('One line'),
+		text: z.string().optional().describe('Plain-text body; give text, html or both'),
+		html: z.string().optional().describe('HTML body'),
+		tags: z.record(z.string(), z.string()).default({}).describe('Up to 10 key/value tags, echoed in the message log'),
+		idempotencyKey: z.string().min(1).max(255).optional().describe('Repeat sends with the same key within 24 h return the first message'),
+	});
+
+	tool(
+		'send_email',
+		{
+			title: 'Send email',
+			description:
+				`Send a real email to real people from the org's verified domain (at most ${EMAIL_MAX_RECIPIENTS} recipients across to, cc and bcc). ` +
+				'The user must confirm each message before it is sent, and a sent message cannot be recalled: only send what the user asked for. ' +
+				'The result is the message id; delivery happens afterwards, so follow it with get_email_message. ' +
+				'In the sandbox, only verified recipients are accepted. Attachments and raw MIME are API/SMTP only. ' +
+				emailNote,
+			inputSchema: sendEmailInputSchema,
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+			scopeChallenge: requires('email:send'),
+			feature: 'EMAIL',
+		},
+		async (input, ctx) => {
+			const send = (idempotencyKey?: string) =>
+				run(async () => {
+					const result = await core.email.send(principal, { ...input, ...(idempotencyKey && !input.idempotencyKey ? { idempotencyKey } : {}) });
+					return {
+						...result,
+						nextSteps: [
+							`Accepted for delivery, not yet delivered. Call get_email_message with id "${result.id}" to see each recipient's status.`,
+							...(result.suppressed.length
+								? [`Dropped because they are on the suppression list: ${result.suppressed.join(', ')}. See list_email_suppressions.`]
+								: []),
+						],
+					};
+				});
+			// The dashboard assistant asks for a click in the chat before this runs (CONFIRM_TOOLS).
+			if (era === 'assistant') return send();
+			if (era === 'legacy')
+				return {
+					isError: true,
+					...text(
+						'Sending email needs your confirmation, which this MCP client can\'t show. ' +
+							`Ask the user to send it themselves (POST ${core.ctx.config.platformOrigin}/api/v1/email/send with an API key, or their SMTP client).`,
+					),
+				};
+			// The prompt is bound to this exact message: a confirmed state can't be reused for different content.
+			const target = createHash('sha256').update(JSON.stringify(input)).digest('base64url');
+			const key = 'confirm_send_email';
+			const schema = z.object({ confirm: z.boolean() });
+			const state = ctx.mcpReq.requestState();
+			const prompted = verifyConfirmation(state, principal, 'send_email', target);
+			const answer = prompted ? acceptedContent(ctx.mcpReq.inputResponses, key, schema) : undefined;
+			const responded = prompted && ctx.mcpReq.inputResponses?.[key] !== undefined;
+			if (responded && answer?.confirm !== true) {
+				const cancelled = text(`Cancelled: the email "${input.subject}" was not sent (the user did not confirm).`);
+				declined.add(cancelled);
+				return cancelled;
+			}
+			if (answer?.confirm !== true) {
+				// Fail before prompting when the message can't be sent anyway.
+				const parsed = emailSendSchema.safeParse(input);
+				if (!parsed.success)
+					return { isError: true, ...text(parsed.error.issues.map((issue) => `${issue.path.join('.') || 'input'}: ${issue.message}`).join('\n')) };
+				const blocker = emailSendBlocker(input.from);
+				if (blocker) return { isError: true, ...text(blocker) };
+				const body = (input.text ?? (input.html ?? '').replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
+				const lines = [
+					'Send this email? It goes to real recipients and cannot be recalled.',
+					'',
+					`From: ${recipientLabel(input.from)}`,
+					...(input.to.length ? [`To: ${input.to.map(recipientLabel).join(', ')}`] : []),
+					...(input.cc.length ? [`Cc: ${input.cc.map(recipientLabel).join(', ')}`] : []),
+					...(input.bcc.length ? [`Bcc: ${input.bcc.map(recipientLabel).join(', ')}`] : []),
+					`Subject: ${input.subject}`,
+					'',
+					body.length > 500 ? `${body.slice(0, 500)}…` : body,
+				];
+				return inputRequired({
+					inputRequests: { [key]: inputRequired.elicit({ message: lines.join('\n'), requestedSchema: schema }) },
+					requestState: mintConfirmation(principal, 'send_email', target),
+				});
+			}
+			// One confirmation sends once: replaying the same confirmed state hits the same idempotency key.
+			return send(`mcp-${createHash('sha256').update(String(state)).digest('base64url')}`);
+		},
+	);
+
+	tool(
+		'list_email_messages',
+		{
+			title: 'List email messages',
+			description:
+				'The org\'s message log, newest first: sender, subject, overall status and each recipient\'s latest status. ' +
+				'Filter by `recipient` (exact address) or `status`; page with `before` (the oldest createdAt you have).',
+			inputSchema: z.object({
+				limit: z.number().int().min(1).max(200).default(20),
+				before: z.string().optional().describe('ISO timestamp: only messages created before it'),
+				recipient: z.string().optional().describe('Exact recipient address'),
+				status: z.enum(emailEventKinds).optional(),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('email:read'),
+			feature: 'EMAIL',
+		},
+		async ({ limit, before, recipient, status }) =>
+			run(() => ({
+				messages: core.email.listMessages(principal, {
+					limit,
+					...(before ? { before } : {}),
+					...(recipient ? { recipient } : {}),
+					...(status ? { status } : {}),
+				}),
+			})),
+	);
+
+	tool(
+		'get_email_message',
+		{
+			title: 'Get email message',
+			description:
+				'One message by id (em_…): each recipient\'s status (accepted, deferred, delivered, bounced, complained, rejected, suppressed) ' +
+				'and the last SMTP response from the receiving server, which explains bounces and deferrals.',
+			inputSchema: z.object({ id: z.string().describe('Message id, em_…') }),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('email:read'),
+			feature: 'EMAIL',
+		},
+		async ({ id }) => run(() => ({ message: core.email.getMessage(principal, id) })),
+	);
+
+	tool(
+		'list_email_suppressions',
+		{
+			title: 'List email suppressions',
+			description:
+				'Addresses the org never sends to: hard bounces, complaints, unsubscribes and manual entries, newest first. ' +
+				'Pass `address` to check one address.',
+			inputSchema: z.object({
+				limit: z.number().int().min(1).max(1000).default(100),
+				address: z.string().optional().describe('Exact address to look up'),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('email:read'),
+			feature: 'EMAIL',
+		},
+		async ({ limit, address }) =>
+			run(() => ({ suppressions: core.email.listSuppressions(principal, { limit, ...(address ? { address } : {}) }) })),
+	);
+
+	tool(
+		'remove_email_suppression',
+		{
+			title: 'Remove email suppression',
+			description:
+				'Take an address off the suppression list so mail to it is attempted again. Only do this when the user says the address ' +
+				'is fixed (e.g. the mailbox exists again): sending to addresses that bounce or complain can pause the whole org. Requires confirmation.',
+			inputSchema: z.object({ address: z.string().describe('Suppressed address') }),
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+			scopeChallenge: requires('email:read', 'email:update'),
+			feature: 'EMAIL',
+		},
+		async ({ address }, ctx) => {
+			const remove = () =>
+				run(() => {
+					core.email.removeSuppression(principal, address);
+					return { ok: true, address };
+				});
+			if (era === 'assistant') return remove();
+			if (era === 'legacy')
+				return {
+					isError: true,
+					...text(
+						`Removing ${address} from the suppression list needs your confirmation, which this MCP client can't show. ` +
+							`Ask the user to remove it themselves (DELETE ${core.ctx.config.platformOrigin}/api/v1/email/suppressions/${encodeURIComponent(address)}).`,
+					),
+				};
+			const target = address.trim().toLowerCase();
+			const key = `confirm_remove_email_suppression:${target}`;
+			const schema = z.object({ confirm: z.boolean() });
+			const prompted = verifyConfirmation(ctx.mcpReq.requestState(), principal, 'remove_email_suppression', target);
+			const answer = prompted ? acceptedContent(ctx.mcpReq.inputResponses, key, schema) : undefined;
+			const responded = prompted && ctx.mcpReq.inputResponses?.[key] !== undefined;
+			if (responded && answer?.confirm !== true) {
+				const cancelled = text(`Cancelled: ${address} stays on the suppression list (the user did not confirm).`);
+				declined.add(cancelled);
+				return cancelled;
+			}
+			if (answer?.confirm !== true) {
+				let entry;
+				try {
+					entry = core.email.listSuppressions(principal, { address, limit: 1 })[0];
+				} catch (error) {
+					return run(() => {
+						throw error;
+					});
+				}
+				if (!entry) return { isError: true, ...text(`${address} is not on the suppression list.`) };
+				return inputRequired({
+					inputRequests: {
+						[key]: inputRequired.elicit({
+							message:
+								`Remove ${entry.address} from the suppression list? It was added on ${entry.createdAt} (${entry.reason}). ` +
+								'Mail to it will be attempted again; repeated bounces or complaints can pause sending for the whole org.',
+							requestedSchema: schema,
+						}),
+					},
+					requestState: mintConfirmation(principal, 'remove_email_suppression', target),
+				});
+			}
+			return remove();
+		},
+	);
+
 	// --- resources ----------------------------------------------------------
 	server.registerResource(
 		'deploying',
@@ -2931,6 +3635,33 @@ function buildServer(
 			],
 		}),
 	);
+
+	if (featureEnabled(core.ctx.config, 'EMAIL'))
+		server.registerResource(
+			'email',
+			'skiff://guides/email',
+			{ title: 'Email', mimeType: 'text/markdown' },
+			async (uri) => ({
+				contents: [
+					{
+						uri: uri.href,
+						text: [
+							'# Email',
+							'',
+							"Skiff sends mail through its own MTA on one mail node, which a platform admin chooses in Settings → Email. `get_email_status` says whether that is done, the org's state (sandbox, active, paused) and its limits.",
+							'',
+							'1. `create_email_domain` adds a sending domain and its DKIM key. `get_email_domain` lists the DKIM, SPF and DMARC records with what DNS returned; relay its `nextSteps` to the user. When the platform manages the zone in Cloudflare, Skiff creates the records itself.',
+							'2. `check_email_domain` re-checks DNS. The domain is verified once DKIM is found, and only verified domains can send.',
+							'3. `send_email` sends one message (text and/or html, at most 50 recipients). The user confirms every message. The result is a message id; `get_email_message` shows each recipient\'s delivery status and the last SMTP response.',
+							'',
+							'Apps send through SMTP or the REST API with credentials injected at activation (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_URL`, via `POST /api/v1/projects/:slug/email`). Credentials are never created or shown over MCP.',
+							'',
+							'New orgs start in the sandbox: low limits, verified recipients only. Hard bounces and complaints add addresses to the suppression list (`list_email_suppressions`), and suppressed recipients are dropped. High bounce or complaint rates pause the org. Only use `remove_email_suppression` (confirmed) when the user says the address is fixed.',
+						].join('\n'),
+					},
+				],
+			}),
+		);
 
 	tool(
 		'get_usage',

@@ -54,8 +54,14 @@
 	import DomainsPanel from './_components/DomainsPanel.svelte';
 	import EnvironmentsPanel from './_components/EnvironmentsPanel.svelte';
 	import LogsPanel from './_components/LogsPanel.svelte';
-	import ProjectNav from './_components/ProjectNav.svelte';
-	import { readProjectTab, type ProjectTab } from './_components/project-nav.js';
+	import {
+		PROJECT_TABS,
+		readProjectTab,
+		shareState,
+		type ProjectTab
+	} from './_components/project-nav.js';
+	import { projectSubnavKey } from './_components/project-subnav.js';
+	import { useSubnavLocal } from '#lib/nav/subnav-local.svelte.js';
 	import RuntimePanel from './_components/RuntimePanel.svelte';
 	import VariablesPanel from './_components/VariablesPanel.svelte';
 	import SourcePanel from './_components/SourcePanel.svelte';
@@ -81,7 +87,8 @@
 
 	type Deployment = (typeof data.deployments)[number];
 
-	let tab = $state<ProjectTab>(readProjectTab(page.url.searchParams.get('tab')));
+	/** Follows `?tab=` on navigation (back/forward, plain links); `setTab` overrides it in place. */
+	let tab = $derived<ProjectTab>(readProjectTab(page.url.searchParams.get('tab')));
 	let logSource = $state<'runtime' | 'build'>(
 		page.url.searchParams.get('logSource') === 'build' ? 'build' : 'runtime'
 	);
@@ -160,22 +167,6 @@
 			runningDeployment !== undefined &&
 			runningDeployment.id !== data.project.productionDeploymentId
 	);
-	const activeShares = $derived(data.shareLinks.filter((link) => shareState(link) === 'active'));
-	const runningBuilds = $derived(
-		data.builds.filter((build) => build.status === 'building' || build.status === 'queued').length
-	);
-	const navCounts = $derived({
-		deployments: data.deployments.length,
-		environments: data.environments.length,
-		builds: data.builds.length,
-		domains: data.domains.length,
-		data: data.appVolumes.length + data.databaseAttachments.length + data.storageAttachments.length,
-		variables: data.workloadSpec
-			? Object.keys(data.workloadSpec.env).length + data.workloadSpec.secrets.length
-			: undefined,
-		shares: activeShares.length
-	});
-
 	/** Switch sections in place, keeping `?tab=` deep-linkable. */
 	function setTab(next: ProjectTab) {
 		tab = next;
@@ -186,17 +177,16 @@
 		void goto(url, { shallow: true, replace: true });
 	}
 
-	function shareState(link: {
-		revokedAt: string | null;
-		expiresAt: string | null;
-		redemptions: number;
-		maxRedemptions: number | null;
-	}): string {
-		if (link.revokedAt) return 'revoked';
-		if (link.expiresAt && Date.parse(link.expiresAt) <= Date.now()) return 'expired';
-		if (link.maxRedemptions !== null && link.redemptions >= link.maxRedemptions) return 'used up';
-		return 'active';
-	}
+	/** The sidebar lists the project's sections; they switch here without waiting on a load. */
+	useSubnavLocal(() => ({
+		key: projectSubnavKey(data.project.slug),
+		active: tab,
+		select: (id) => {
+			if (!PROJECT_TABS.includes(id as ProjectTab)) return false;
+			setTab(id as ProjectTab);
+			return true;
+		}
+	}));
 
 	async function copy(text: string) {
 		await navigator.clipboard.writeText(text);
@@ -428,537 +418,528 @@
 		</Card.Content>
 	</Card.Root>
 
-	<ProjectNav variant="bar" {tab} counts={navCounts} {runningBuilds} onselect={setTab} />
-
-	<div class="grid gap-5 xl:grid-cols-[184px_minmax(0,1fr)] xl:gap-8">
-		<ProjectNav variant="rail" {tab} counts={navCounts} {runningBuilds} onselect={setTab} />
-
-		<div class="min-w-0">
-			{#if tab === 'traffic'}
-				<TrafficDashboard
-					traffic={data.traffic}
-					range={data.trafficRange}
-					ranges={data.trafficRanges}
-					links={data.trafficLinks}
-					variant="project"
+	<div class="min-w-0">
+		{#if tab === 'traffic'}
+			<TrafficDashboard
+				traffic={data.traffic}
+				range={data.trafficRange}
+				ranges={data.trafficRanges}
+				links={data.trafficLinks}
+				variant="project"
+			/>
+		{:else if tab === 'environments'}
+			<EnvironmentsPanel
+				environments={data.environments}
+				deployments={data.deployments}
+				platformOrigin={data.platform.origin}
+				previewAccess={data.project.previewAccess}
+				productionAccess={data.project.productionAccess}
+				runtime={data.project.runtime}
+				can={{
+					manageEnvironments: data.can.manageEnvironments,
+					promoteEnvironment: data.can.promoteEnvironment,
+					rollbackEnvironment: data.can.rollbackEnvironment
+				}}
+			/>
+		{:else if tab === 'source'}
+			{#if data.deployments.length === 0}
+				<EmptyState
+					icon={FolderTreeIcon}
+					title="Nothing to browse yet"
+					description="The source viewer reads the immutable release artifact behind a deployment. Deploy a build and its files will appear here."
 				/>
-			{:else if tab === 'environments'}
-				<EnvironmentsPanel
-					environments={data.environments}
+			{:else}
+				<SourcePanel
+					slug={data.project.slug}
 					deployments={data.deployments}
-					platformOrigin={data.platform.origin}
-					previewAccess={data.project.previewAccess}
-					productionAccess={data.project.productionAccess}
-					runtime={data.project.runtime}
-					can={{
-						manageEnvironments: data.can.manageEnvironments,
-						promoteEnvironment: data.can.promoteEnvironment,
-						rollbackEnvironment: data.can.rollbackEnvironment
-					}}
+					productionDeploymentId={data.project.productionDeploymentId}
 				/>
-			{:else if tab === 'source'}
-				{#if data.deployments.length === 0}
+			{/if}
+		{:else if tab === 'builds'}
+			<BuildsPanel
+				project={data.project}
+				gitSource={data.gitSource}
+				builds={data.builds}
+				platformOrigin={data.platform.origin}
+				can={{ createBuild: data.can.createBuild, cancelBuild: data.can.cancelBuild }}
+				onOpenLog={openBuildLog}
+				onBuildQueued={() => {
+					logSource = 'build';
+					logBuildId = '';
+					setTab('logs');
+				}}
+			/>
+		{:else if tab === 'logs'}
+			<LogsPanel
+				bind:source={logSource}
+				bind:buildId={logBuildId}
+				bind:deploymentId={logDeploymentId}
+				project={data.project}
+				deployments={data.deployments}
+				builds={data.builds}
+				workloadStatus={data.workload?.status ?? null}
+				workloadDeploymentId={data.workload?.deploymentId ?? ''}
+				canRead={data.can.readLogs}
+			/>
+		{:else if tab === 'domains'}
+			<DomainsPanel
+				project={data.project}
+				domains={data.domains}
+				contentDomain={data.contentDomain}
+				platformOrigin={data.platform.origin}
+				can={{ createDomain: data.can.createDomain, deleteDomain: data.can.deleteDomain }}
+			/>
+		{:else if tab === 'data'}
+			<div class="space-y-5">
+				{#if data.project.runtime === 'static'}
 					<EmptyState
-						icon={FolderTreeIcon}
-						title="Nothing to browse yet"
-						description="The source viewer reads the immutable release artifact behind a deployment. Deploy a build and its files will appear here."
+						icon={DatabaseIcon}
+						title="Static sites have no data services"
+						description="Databases, object storage and volumes attach to a running process or container. A static site is served as files, so there is nothing to attach them to."
 					/>
 				{:else}
-					<SourcePanel
+					<DatabasesCard
 						slug={data.project.slug}
-						deployments={data.deployments}
-						productionDeploymentId={data.project.productionDeploymentId}
+						attachments={data.databaseAttachments}
+						databases={data.attachableDatabases}
+						warning={result?.databaseWarning ?? null}
+						fieldErrors={result?.fieldErrors}
+						can={{
+							readDatabases: data.can.readDatabases,
+							createDatabase: data.can.createDatabase,
+							attachDatabase: data.can.attachDatabase
+						}}
+					/>
+					<StorageCard
+						slug={data.project.slug}
+						attachments={data.storageAttachments}
+						instances={data.attachableStorage}
+						bucketsByStorage={data.storageBuckets}
+						warning={result?.storageWarning ?? null}
+						fieldErrors={result?.fieldErrors}
+						can={{
+							readStorage: data.can.readStorage,
+							createStorage: data.can.createStorage,
+							attachStorage: data.can.attachStorage
+						}}
+					/>
+					<VolumesCard
+						slug={data.project.slug}
+						volumes={data.appVolumes}
+						workloadId={data.workload?.id ?? data.project.slug}
+						enabled={data.appVolumesEnabled}
+						fieldErrors={result?.fieldErrors}
+						can={{ manageVolumes: data.can.manageVolumes }}
 					/>
 				{/if}
-			{:else if tab === 'builds'}
-				<BuildsPanel
-					project={data.project}
-					gitSource={data.gitSource}
-					builds={data.builds}
-					platformOrigin={data.platform.origin}
-					can={{ createBuild: data.can.createBuild, cancelBuild: data.can.cancelBuild }}
-					onOpenLog={openBuildLog}
-					onBuildQueued={() => {
-						logSource = 'build';
-						logBuildId = '';
-						setTab('logs');
-					}}
-				/>
-			{:else if tab === 'logs'}
-				<LogsPanel
-					bind:source={logSource}
-					bind:buildId={logBuildId}
-					bind:deploymentId={logDeploymentId}
-					project={data.project}
-					deployments={data.deployments}
-					builds={data.builds}
-					workloadStatus={data.workload?.status ?? null}
-					workloadDeploymentId={data.workload?.deploymentId ?? ''}
-					canRead={data.can.readLogs}
-				/>
-			{:else if tab === 'domains'}
-				<DomainsPanel
-					project={data.project}
-					domains={data.domains}
-					contentDomain={data.contentDomain}
-					platformOrigin={data.platform.origin}
-					can={{ createDomain: data.can.createDomain, deleteDomain: data.can.deleteDomain }}
-				/>
-			{:else if tab === 'data'}
-				<div class="space-y-5">
-					{#if data.project.runtime === 'static'}
-						<EmptyState
-							icon={DatabaseIcon}
-							title="Static sites have no data services"
-							description="Databases, object storage and volumes attach to a running process or container. A static site is served as files, so there is nothing to attach them to."
-						/>
-					{:else}
-						<DatabasesCard
-							slug={data.project.slug}
-							attachments={data.databaseAttachments}
-							databases={data.attachableDatabases}
-							warning={result?.databaseWarning ?? null}
-							fieldErrors={result?.fieldErrors}
-							can={{
-								readDatabases: data.can.readDatabases,
-								createDatabase: data.can.createDatabase,
-								attachDatabase: data.can.attachDatabase
-							}}
-						/>
-						<StorageCard
-							slug={data.project.slug}
-							attachments={data.storageAttachments}
-							instances={data.attachableStorage}
-							bucketsByStorage={data.storageBuckets}
-							warning={result?.storageWarning ?? null}
-							fieldErrors={result?.fieldErrors}
-							can={{
-								readStorage: data.can.readStorage,
-								createStorage: data.can.createStorage,
-								attachStorage: data.can.attachStorage
-							}}
-						/>
-						<VolumesCard
-							slug={data.project.slug}
-							volumes={data.appVolumes}
-							workloadId={data.workload?.id ?? data.project.slug}
-							enabled={data.appVolumesEnabled}
-							fieldErrors={result?.fieldErrors}
-							can={{ manageVolumes: data.can.manageVolumes }}
-						/>
-					{/if}
+			</div>
+		{:else if tab === 'variables'}
+			<VariablesPanel
+				project={data.project}
+				spec={data.workloadSpec}
+				workload={data.workload}
+				secrets={data.secrets}
+				databaseAttachments={data.databaseAttachments}
+				storageAttachments={data.storageAttachments}
+				attachableDatabases={data.attachableDatabases}
+				attachableStorage={data.attachableStorage}
+				canAttachDatabase={data.can.attachDatabase}
+				canAttachStorage={data.can.attachStorage}
+				can={{
+					edit: data.can.manageWorkload,
+					createSecret: data.can.createSecret,
+					deleteSecret: data.can.deleteSecret
+				}}
+			/>
+		{:else if tab === 'runtime'}
+			{#if data.project.runtime !== 'static' && data.workloadSpec}
+				<div class="mb-5">
+					<WorkerCard
+						spec={data.workloadSpec}
+						workload={data.workload}
+						pool={data.runnerPool}
+						canManage={data.can.manageWorkload}
+					/>
 				</div>
-			{:else if tab === 'variables'}
-				<VariablesPanel
-					project={data.project}
-					spec={data.workloadSpec}
-					workload={data.workload}
-					secrets={data.secrets}
-					databaseAttachments={data.databaseAttachments}
-					storageAttachments={data.storageAttachments}
-					attachableDatabases={data.attachableDatabases}
-					attachableStorage={data.attachableStorage}
-					canAttachDatabase={data.can.attachDatabase}
-					canAttachStorage={data.can.attachStorage}
-					can={{
-						edit: data.can.manageWorkload,
-						createSecret: data.can.createSecret,
-						deleteSecret: data.can.deleteSecret
-					}}
-				/>
-			{:else if tab === 'runtime'}
-				{#if data.project.runtime !== 'static' && data.workloadSpec}
-					<div class="mb-5">
-						<WorkerCard
-							spec={data.workloadSpec}
-							workload={data.workload}
-							pool={data.runnerPool}
-							canManage={data.can.manageWorkload}
-						/>
-					</div>
-				{/if}
-				<RuntimePanel
-					project={data.project}
-					spec={data.workloadSpec}
-					workload={data.workload}
-					capacity={data.capacity}
-					can={{
-						manageWorkload: data.can.manageWorkload,
-						viewCapacity: data.can.viewCapacity
-					}}
-				/>
-			{:else if tab === 'deployments'}
-				{#if data.deployments.length === 0}
-					<EmptyState
-						icon={RocketIcon}
-						title="No deployments yet"
-						description="Deploy a built .zip from this page, or use the CLI, MCP clients or the REST API. Every deploy gets an immutable preview URL."
+			{/if}
+			<RuntimePanel
+				project={data.project}
+				spec={data.workloadSpec}
+				workload={data.workload}
+				capacity={data.capacity}
+				can={{
+					manageWorkload: data.can.manageWorkload,
+					viewCapacity: data.can.viewCapacity
+				}}
+			/>
+		{:else if tab === 'deployments'}
+			{#if data.deployments.length === 0}
+				<EmptyState
+					icon={RocketIcon}
+					title="No deployments yet"
+					description="Deploy a built .zip from this page, or use the CLI, MCP clients or the REST API. Every deploy gets an immutable preview URL."
+				>
+					<code class="rounded-md border bg-card px-2.5 py-1.5 font-mono text-xs"
+						><span class="text-muted-foreground select-none">$ </span>skif deploy ./dist --project {data
+							.project.slug}</code
 					>
-						<code class="rounded-md border bg-card px-2.5 py-1.5 font-mono text-xs"
-							><span class="text-muted-foreground select-none">$ </span>skif deploy ./dist --project {data
-								.project.slug}</code
-						>
-					</EmptyState>
-				{:else}
-					<div class="overflow-hidden rounded-xl border bg-card shadow-xs">
+				</EmptyState>
+			{:else}
+				<div class="overflow-hidden rounded-xl border bg-card shadow-xs">
+					<Table.Root>
+						<Table.Header class="bg-muted/45">
+							<Table.Row>
+								<Table.Head class="pl-4">Deployment</Table.Head>
+								<Table.Head class="hidden md:table-cell">Release</Table.Head>
+								<Table.Head class="hidden lg:table-cell">Created</Table.Head>
+								<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
+							</Table.Row>
+						</Table.Header>
+						<Table.Body>
+							{#each data.deployments as deployment (deployment.id)}
+								<Table.Row class={deployment.isProduction ? 'bg-brand/5 hover:bg-brand/5' : ''}>
+									<Table.Cell class="pl-4 whitespace-normal">
+										<div class="flex flex-wrap items-center gap-1.5">
+											<a
+												href={resolve('/(dashboard)/projects/[slug]/deployments/[id]', {
+													slug: data.project.slug,
+													id: deployment.id
+												})}
+												class="font-mono text-sm font-medium underline-offset-4 hover:underline"
+												>{deployment.shortId}</a
+											>
+											<StatusBadge status={deployment.status} />
+											{#if deployment.isProduction}<Badge variant="brand">production</Badge>{/if}
+											{#if !deployment.isProduction}
+												<Badge variant="outline" class="font-mono text-xs"
+													>{deployment.environmentSlug}</Badge
+												>
+											{/if}
+											{#if deployment.pinned}<Badge variant="outline"><PinIcon />pinned</Badge>{/if}
+										</div>
+										<a
+											href={deployment.previewUrl}
+											target="_blank"
+											rel="external noreferrer"
+											class="mt-0.5 inline-flex max-w-full items-center gap-1 truncate font-mono text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+										>
+											{displayUrl(deployment.previewUrl)}
+											<ArrowUpRightIcon class="size-3 shrink-0" />
+										</a>
+										{#if deployment.message}
+											<p
+												class="max-w-xl truncate text-xs text-muted-foreground"
+												title={deployment.message}
+											>
+												{deployment.message}
+											</p>
+										{/if}
+									</Table.Cell>
+									<Table.Cell class="hidden font-mono text-xs text-muted-foreground md:table-cell">
+										<span title={deployment.release.sha256}
+											>{shortSha(deployment.release.sha256)}</span
+										>
+										<p class="text-xs opacity-80">
+											{formatBytes(deployment.release.sizeBytes)}
+										</p>
+									</Table.Cell>
+									<Table.Cell class="hidden text-xs text-muted-foreground lg:table-cell">
+										<time datetime={deployment.createdAt}
+											>{formatDateTime(deployment.createdAt)}</time
+										>
+									</Table.Cell>
+									<Table.Cell class="pr-4">
+										<div class="flex items-center justify-end gap-1">
+											<Button
+												variant="ghost"
+												size="icon-sm"
+												aria-label="Tail runtime logs for {deployment.shortId}"
+												onclick={() => openDeploymentLog(deployment.id)}
+											>
+												<ScrollTextIcon />
+											</Button>
+											{#if data.can.promote && !deployment.isProduction && deployment.status === 'active'}
+												<Button variant="outline" size="sm" onclick={() => promote(deployment)}>
+													<ArrowUpIcon />Promote
+												</Button>
+											{/if}
+											<RowMenu label="Actions for {deployment.shortId}">
+												<DropdownMenu.Item
+													onSelect={() =>
+														goto(
+															resolve('/(dashboard)/projects/[slug]/deployments/[id]', {
+																slug: data.project.slug,
+																id: deployment.id
+															})
+														)}
+												>
+													<InfoIcon />View details
+												</DropdownMenu.Item>
+												<DropdownMenu.Item onSelect={() => openDeploymentLog(deployment.id)}>
+													<ScrollTextIcon />Tail logs
+												</DropdownMenu.Item>
+												<DropdownMenu.Item
+													onSelect={() =>
+														window.open(deployment.previewUrl, '_blank', 'noreferrer')}
+												>
+													<ArrowUpRightIcon />Open preview
+												</DropdownMenu.Item>
+												<DropdownMenu.Item onSelect={() => copy(deployment.previewUrl)}>
+													<CopyIcon />Copy preview URL
+												</DropdownMenu.Item>
+												{#if data.can.createShare}
+													<DropdownMenu.Item onSelect={() => openShare(deployment.id)}>
+														<LinkIcon />Share this deployment
+													</DropdownMenu.Item>
+												{/if}
+												{#if data.can.promote}
+													<DropdownMenu.Item
+														onSelect={() =>
+															runAction('?/pin', {
+																deploymentId: deployment.id,
+																pinned: deployment.pinned ? 'false' : 'true'
+															})}
+													>
+														{#if deployment.pinned}<PinOffIcon />Unpin{:else}<PinIcon />Pin (keep
+															forever){/if}
+													</DropdownMenu.Item>
+												{/if}
+												{#if data.can.deleteDeployment}
+													<DropdownMenu.Separator />
+													<DropdownMenu.Item
+														variant="destructive"
+														onSelect={() => deleteDeployment(deployment)}
+													>
+														<TrashIcon />Delete deployment
+													</DropdownMenu.Item>
+												{/if}
+											</RowMenu>
+										</div>
+									</Table.Cell>
+								</Table.Row>
+							{/each}
+						</Table.Body>
+					</Table.Root>
+				</div>
+				<p class="mt-3 text-xs text-muted-foreground">
+					{activeDeployments.length} active · the last 10 unpinned deployments are retained.
+				</p>
+			{/if}
+		{:else if tab === 'shares'}
+			<Card.Root class="gap-0 py-0">
+				<Card.Header class="border-b py-4">
+					<Card.Title>Share links</Card.Title>
+					<Card.Description>
+						Time- and usage-limited access to protected sites. A visit is a redemption, not a page
+						load.
+					</Card.Description>
+					{#if data.can.createShare}
+						<Card.Action class="self-center">
+							<Button onclick={() => openShare()}><PlusIcon />Create link</Button>
+						</Card.Action>
+					{/if}
+				</Card.Header>
+				<Card.Content class="px-0">
+					{#if data.shareLinks.length === 0}
+						<div class="p-4">
+							<EmptyState
+								icon={LinkIcon}
+								compact
+								title="No share links"
+								description="Create a link when someone outside the org needs temporary access to a protected site."
+							/>
+						</div>
+					{:else}
 						<Table.Root>
-							<Table.Header class="bg-muted/45">
+							<Table.Header>
 								<Table.Row>
-									<Table.Head class="pl-4">Deployment</Table.Head>
-									<Table.Head class="hidden md:table-cell">Release</Table.Head>
-									<Table.Head class="hidden lg:table-cell">Created</Table.Head>
+									<Table.Head class="pl-4">Link</Table.Head>
+									<Table.Head class="hidden sm:table-cell">Redemptions</Table.Head>
+									<Table.Head class="hidden md:table-cell">Expires</Table.Head>
+									<Table.Head>Status</Table.Head>
 									<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
 								</Table.Row>
 							</Table.Header>
 							<Table.Body>
-								{#each data.deployments as deployment (deployment.id)}
-									<Table.Row class={deployment.isProduction ? 'bg-brand/5 hover:bg-brand/5' : ''}>
-										<Table.Cell class="pl-4 whitespace-normal">
-											<div class="flex flex-wrap items-center gap-1.5">
-												<a
-													href={resolve('/(dashboard)/projects/[slug]/deployments/[id]', {
-														slug: data.project.slug,
-														id: deployment.id
-													})}
-													class="font-mono text-sm font-medium underline-offset-4 hover:underline"
-													>{deployment.shortId}</a
-												>
-												<StatusBadge status={deployment.status} />
-												{#if deployment.isProduction}<Badge variant="brand">production</Badge>{/if}
-												{#if !deployment.isProduction}
-													<Badge variant="outline" class="font-mono text-xs"
-														>{deployment.environmentSlug}</Badge
-													>
-												{/if}
-												{#if deployment.pinned}<Badge variant="outline"><PinIcon />pinned</Badge
-													>{/if}
-											</div>
-											<a
-												href={deployment.previewUrl}
-												target="_blank"
-												rel="external noreferrer"
-												class="mt-0.5 inline-flex max-w-full items-center gap-1 truncate font-mono text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-											>
-												{displayUrl(deployment.previewUrl)}
-												<ArrowUpRightIcon class="size-3 shrink-0" />
-											</a>
-											{#if deployment.message}
-												<p
-													class="max-w-xl truncate text-xs text-muted-foreground"
-													title={deployment.message}
-												>
-													{deployment.message}
-												</p>
+								{#each data.shareLinks as link (link.id)}
+									{@const state = shareState(link)}
+									<Table.Row class={state === 'active' ? '' : 'text-muted-foreground'}>
+										<Table.Cell class="pl-4">
+											<p class="font-mono text-sm">{link.host}</p>
+											{#if link.note}<p class="text-xs text-muted-foreground">{link.note}</p>{/if}
+										</Table.Cell>
+										<Table.Cell class="hidden font-mono text-xs tabular-nums sm:table-cell">
+											{link.redemptions}{link.maxRedemptions !== null
+												? ` / ${link.maxRedemptions}`
+												: ''}
+										</Table.Cell>
+										<Table.Cell class="hidden text-xs md:table-cell">
+											{#if link.expiresAt}
+												<time datetime={link.expiresAt}>{formatDateTime(link.expiresAt)}</time>
+											{:else}
+												Never
 											{/if}
 										</Table.Cell>
-										<Table.Cell
-											class="hidden font-mono text-xs text-muted-foreground md:table-cell"
-										>
-											<span title={deployment.release.sha256}
-												>{shortSha(deployment.release.sha256)}</span
-											>
-											<p class="text-xs opacity-80">
-												{formatBytes(deployment.release.sizeBytes)}
-											</p>
-										</Table.Cell>
-										<Table.Cell class="hidden text-xs text-muted-foreground lg:table-cell">
-											<time datetime={deployment.createdAt}
-												>{formatDateTime(deployment.createdAt)}</time
-											>
-										</Table.Cell>
+										<Table.Cell><StatusBadge status={state} /></Table.Cell>
 										<Table.Cell class="pr-4">
-											<div class="flex items-center justify-end gap-1">
+											{#if data.can.revokeShare && !link.revokedAt}
 												<Button
-													variant="ghost"
-													size="icon-sm"
-													aria-label="Tail runtime logs for {deployment.shortId}"
-													onclick={() => openDeploymentLog(deployment.id)}
+													variant="ghost-danger"
+													size="sm"
+													onclick={() => revokeShare(link.id)}
 												>
-													<ScrollTextIcon />
+													Revoke
 												</Button>
-												{#if data.can.promote && !deployment.isProduction && deployment.status === 'active'}
-													<Button variant="outline" size="sm" onclick={() => promote(deployment)}>
-														<ArrowUpIcon />Promote
-													</Button>
-												{/if}
-												<RowMenu label="Actions for {deployment.shortId}">
-													<DropdownMenu.Item
-														onSelect={() =>
-															goto(
-																resolve('/(dashboard)/projects/[slug]/deployments/[id]', {
-																	slug: data.project.slug,
-																	id: deployment.id
-																})
-															)}
-													>
-														<InfoIcon />View details
-													</DropdownMenu.Item>
-													<DropdownMenu.Item onSelect={() => openDeploymentLog(deployment.id)}>
-														<ScrollTextIcon />Tail logs
-													</DropdownMenu.Item>
-													<DropdownMenu.Item
-														onSelect={() =>
-															window.open(deployment.previewUrl, '_blank', 'noreferrer')}
-													>
-														<ArrowUpRightIcon />Open preview
-													</DropdownMenu.Item>
-													<DropdownMenu.Item onSelect={() => copy(deployment.previewUrl)}>
-														<CopyIcon />Copy preview URL
-													</DropdownMenu.Item>
-													{#if data.can.createShare}
-														<DropdownMenu.Item onSelect={() => openShare(deployment.id)}>
-															<LinkIcon />Share this deployment
-														</DropdownMenu.Item>
-													{/if}
-													{#if data.can.promote}
-														<DropdownMenu.Item
-															onSelect={() =>
-																runAction('?/pin', {
-																	deploymentId: deployment.id,
-																	pinned: deployment.pinned ? 'false' : 'true'
-																})}
-														>
-															{#if deployment.pinned}<PinOffIcon />Unpin{:else}<PinIcon />Pin (keep
-																forever){/if}
-														</DropdownMenu.Item>
-													{/if}
-													{#if data.can.deleteDeployment}
-														<DropdownMenu.Separator />
-														<DropdownMenu.Item
-															variant="destructive"
-															onSelect={() => deleteDeployment(deployment)}
-														>
-															<TrashIcon />Delete deployment
-														</DropdownMenu.Item>
-													{/if}
-												</RowMenu>
-											</div>
+											{/if}
 										</Table.Cell>
 									</Table.Row>
 								{/each}
 							</Table.Body>
 						</Table.Root>
-					</div>
-					<p class="mt-3 text-xs text-muted-foreground">
-						{activeDeployments.length} active · the last 10 unpinned deployments are retained.
-					</p>
-				{/if}
-			{:else if tab === 'shares'}
-				<Card.Root class="gap-0 py-0">
-					<Card.Header class="border-b py-4">
-						<Card.Title>Share links</Card.Title>
-						<Card.Description>
-							Time- and usage-limited access to protected sites. A visit is a redemption, not a page
-							load.
-						</Card.Description>
-						{#if data.can.createShare}
+					{/if}
+				</Card.Content>
+				<Card.Footer class="py-3 text-xs text-muted-foreground">
+					Sessions last one hour by default. Revocation reaches agents in seconds.
+				</Card.Footer>
+			</Card.Root>
+		{:else if tab === 'settings'}
+			<div class="grid items-start gap-5 xl:grid-cols-2">
+				<Card.Root class="xl:col-span-2">
+					<Card.Header>
+						<Card.Title>Project</Card.Title>
+						<Card.Description>Name, address and where the project is placed.</Card.Description>
+						{#if data.can.update}
 							<Card.Action class="self-center">
-								<Button onclick={() => openShare()}><PlusIcon />Create link</Button>
+								<Button variant="outline" size="sm" onclick={openProject}
+									><PencilIcon />Edit project</Button
+								>
 							</Card.Action>
 						{/if}
 					</Card.Header>
-					<Card.Content class="px-0">
-						{#if data.shareLinks.length === 0}
-							<div class="p-4">
-								<EmptyState
-									icon={LinkIcon}
-									compact
-									title="No share links"
-									description="Create a link when someone outside the org needs temporary access to a protected site."
-								/>
-							</div>
-						{:else}
-							<Table.Root>
-								<Table.Header>
-									<Table.Row>
-										<Table.Head class="pl-4">Link</Table.Head>
-										<Table.Head class="hidden sm:table-cell">Redemptions</Table.Head>
-										<Table.Head class="hidden md:table-cell">Expires</Table.Head>
-										<Table.Head>Status</Table.Head>
-										<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
-									</Table.Row>
-								</Table.Header>
-								<Table.Body>
-									{#each data.shareLinks as link (link.id)}
-										{@const state = shareState(link)}
-										<Table.Row class={state === 'active' ? '' : 'text-muted-foreground'}>
-											<Table.Cell class="pl-4">
-												<p class="font-mono text-sm">{link.host}</p>
-												{#if link.note}<p class="text-xs text-muted-foreground">{link.note}</p>{/if}
-											</Table.Cell>
-											<Table.Cell class="hidden font-mono text-xs tabular-nums sm:table-cell">
-												{link.redemptions}{link.maxRedemptions !== null
-													? ` / ${link.maxRedemptions}`
-													: ''}
-											</Table.Cell>
-											<Table.Cell class="hidden text-xs md:table-cell">
-												{#if link.expiresAt}
-													<time datetime={link.expiresAt}>{formatDateTime(link.expiresAt)}</time>
-												{:else}
-													Never
-												{/if}
-											</Table.Cell>
-											<Table.Cell><StatusBadge status={state} /></Table.Cell>
-											<Table.Cell class="pr-4">
-												{#if data.can.revokeShare && !link.revokedAt}
-													<Button
-														variant="ghost-danger"
-														size="sm"
-														onclick={() => revokeShare(link.id)}
-													>
-														Revoke
-													</Button>
-												{/if}
-											</Table.Cell>
-										</Table.Row>
-									{/each}
-								</Table.Body>
-							</Table.Root>
-						{/if}
+					<Card.Content>
+						<DetailList>
+							<dt>Name</dt>
+							<dd class="text-sm">{data.project.name}</dd>
+							<dt>Address</dt>
+							<dd class="font-mono text-xs">{data.project.slug}.{data.contentDomain}</dd>
+							<dt>Runtime</dt>
+							<dd class="capitalize">{data.project.runtime}</dd>
+							<dt>Placement</dt>
+							<dd class="font-mono text-sm">{data.project.placement}</dd>
+							<dt>Environments</dt>
+							<dd class="font-mono text-sm">{data.environments.length}</dd>
+							<dt>Custom domains</dt>
+							<dd class="font-mono text-sm">{data.domains.length}</dd>
+						</DetailList>
 					</Card.Content>
-					<Card.Footer class="py-3 text-xs text-muted-foreground">
-						Sessions last one hour by default. Revocation reaches agents in seconds.
+				</Card.Root>
+
+				<Card.Root>
+					<Card.Header>
+						<Card.Title>Access</Card.Title>
+						<Card.Description>Production and previews are protected separately.</Card.Description>
+					</Card.Header>
+					<Card.Content>
+						<Item.Group class="gap-2">
+							{#each [{ scope: 'production', label: 'Production', mode: data.project.productionAccess, hint: displayUrl(data.project.productionUrl) }, { scope: 'previews', label: 'Previews', mode: data.project.previewAccess, hint: `${data.project.slug}--<id>.${data.contentDomain}` }] as row (row.scope)}
+								<Item.Root variant="outline">
+									<Item.Content>
+										<Item.Title>{row.label}</Item.Title>
+										<Item.Description class="font-mono text-xs">{row.hint}</Item.Description>
+									</Item.Content>
+									<Item.Actions>
+										<AccessChip mode={row.mode} />
+										{#if data.can.update}
+											<Button
+												variant="outline"
+												size="sm"
+												onclick={() => openAccess(row.scope as 'production' | 'previews')}
+												>Change</Button
+											>
+										{/if}
+									</Item.Actions>
+								</Item.Root>
+							{/each}
+						</Item.Group>
+					</Card.Content>
+					<Card.Footer class="text-xs text-muted-foreground">
+						Protected sites set <code class="mx-1 font-mono">X-Robots-Tag: noindex</code> and never receive
+						platform session cookies.
 					</Card.Footer>
 				</Card.Root>
-			{:else if tab === 'settings'}
-				<div class="grid items-start gap-5 xl:grid-cols-2">
-					<Card.Root class="xl:col-span-2">
-						<Card.Header>
-							<Card.Title>Project</Card.Title>
-							<Card.Description>Name, address and where the project is placed.</Card.Description>
-							{#if data.can.update}
-								<Card.Action class="self-center">
-									<Button variant="outline" size="sm" onclick={openProject}
-										><PencilIcon />Edit project</Button
-									>
-								</Card.Action>
-							{/if}
-						</Card.Header>
-						<Card.Content>
-							<DetailList>
-								<dt>Name</dt>
-								<dd class="text-sm">{data.project.name}</dd>
-								<dt>Address</dt>
-								<dd class="font-mono text-xs">{data.project.slug}.{data.contentDomain}</dd>
-								<dt>Runtime</dt>
-								<dd class="capitalize">{data.project.runtime}</dd>
-								<dt>Placement</dt>
-								<dd class="font-mono text-sm">{data.project.placement}</dd>
-								<dt>Environments</dt>
-								<dd class="font-mono text-sm">{data.environments.length}</dd>
-								<dt>Custom domains</dt>
-								<dd class="font-mono text-sm">{data.domains.length}</dd>
-							</DetailList>
-						</Card.Content>
-					</Card.Root>
 
-					<Card.Root>
-						<Card.Header>
-							<Card.Title>Access</Card.Title>
-							<Card.Description>Production and previews are protected separately.</Card.Description>
-						</Card.Header>
-						<Card.Content>
-							<Item.Group class="gap-2">
-								{#each [{ scope: 'production', label: 'Production', mode: data.project.productionAccess, hint: displayUrl(data.project.productionUrl) }, { scope: 'previews', label: 'Previews', mode: data.project.previewAccess, hint: `${data.project.slug}--<id>.${data.contentDomain}` }] as row (row.scope)}
-									<Item.Root variant="outline">
-										<Item.Content>
-											<Item.Title>{row.label}</Item.Title>
-											<Item.Description class="font-mono text-xs">{row.hint}</Item.Description>
-										</Item.Content>
-										<Item.Actions>
-											<AccessChip mode={row.mode} />
-											{#if data.can.update}
-												<Button
-													variant="outline"
-													size="sm"
-													onclick={() => openAccess(row.scope as 'production' | 'previews')}
-													>Change</Button
-												>
-											{/if}
-										</Item.Actions>
-									</Item.Root>
-								{/each}
-							</Item.Group>
-						</Card.Content>
-						<Card.Footer class="text-xs text-muted-foreground">
-							Protected sites set <code class="mx-1 font-mono">X-Robots-Tag: noindex</code> and never
-							receive platform session cookies.
-						</Card.Footer>
-					</Card.Root>
+				<Card.Root>
+					<Card.Header>
+						<Card.Title>Details</Card.Title>
+						{#if data.can.update && data.project.runtime !== 'static' && moveTargets.length > 0}
+							<Card.Action>
+								<Button
+									variant="outline"
+									size="sm"
+									onclick={() => {
+										moveNode = moveTargets[0]?.nodeId ?? '';
+										moveOpen = true;
+									}}><ArrowLeftRightIcon />Move</Button
+								>
+							</Card.Action>
+						{/if}
+					</Card.Header>
+					<Card.Content>
+						<DetailList>
+							<dt>Production</dt>
+							<dd class="font-mono text-sm">{production?.shortId ?? 'not deployed'}</dd>
+							<dt>Runtime</dt>
+							<dd class="capitalize">{data.project.runtime}</dd>
+							<dt>Placement</dt>
+							<dd class="font-mono text-sm">{data.project.placement}</dd>
+							<dt>Workload</dt>
+							<dd class="text-sm">
+								{#if data.workload}
+									<span class="capitalize">{data.workload.status}</span>
+									<span class="text-muted-foreground">
+										· {data.workload.memoryMb} MB · {data.workload.cpus} vCPU{workloadNode
+											? ` · on ${workloadNode}`
+											: ''}</span
+									>
+								{:else}
+									<span class="text-muted-foreground">not running</span>
+								{/if}
+							</dd>
+							<dt>Created</dt>
+							<dd class="text-sm">
+								<time datetime={data.project.createdAt}
+									>{formatDateTime(data.project.createdAt)}</time
+								>
+							</dd>
+							<dt>Project ID</dt>
+							<dd class="flex items-center justify-end gap-1">
+								<span class="truncate font-mono text-xs" title={data.project.id}
+									>{shortId(data.project.id, 14)}</span
+								>
+								<CopyButton value={data.project.id} label="Copy project ID" iconOnly />
+							</dd>
+						</DetailList>
+					</Card.Content>
+				</Card.Root>
 
-					<Card.Root>
+				{#if data.can.deleteProject}
+					<Card.Root class="border-destructive/30 xl:col-span-2">
 						<Card.Header>
-							<Card.Title>Details</Card.Title>
-							{#if data.can.update && data.project.runtime !== 'static' && moveTargets.length > 0}
-								<Card.Action>
-									<Button
-										variant="outline"
-										size="sm"
-										onclick={() => {
-											moveNode = moveTargets[0]?.nodeId ?? '';
-											moveOpen = true;
-										}}><ArrowLeftRightIcon />Move</Button
-									>
-								</Card.Action>
-							{/if}
+							<Card.Title class="text-destructive">Danger zone</Card.Title>
+							<Card.Description>
+								Deleting moves the project to the trash for {data.policies.trashDays} days. Its production
+								site and every preview stop serving immediately.
+							</Card.Description>
+							<Card.Action class="self-center">
+								<Button variant="destructive" onclick={deleteProject}
+									><TrashIcon />Delete project</Button
+								>
+							</Card.Action>
 						</Card.Header>
-						<Card.Content>
-							<DetailList>
-								<dt>Production</dt>
-								<dd class="font-mono text-sm">{production?.shortId ?? 'not deployed'}</dd>
-								<dt>Runtime</dt>
-								<dd class="capitalize">{data.project.runtime}</dd>
-								<dt>Placement</dt>
-								<dd class="font-mono text-sm">{data.project.placement}</dd>
-								<dt>Workload</dt>
-								<dd class="text-sm">
-									{#if data.workload}
-										<span class="capitalize">{data.workload.status}</span>
-										<span class="text-muted-foreground">
-											· {data.workload.memoryMb} MB · {data.workload.cpus} vCPU{workloadNode
-												? ` · on ${workloadNode}`
-												: ''}</span
-										>
-									{:else}
-										<span class="text-muted-foreground">not running</span>
-									{/if}
-								</dd>
-								<dt>Created</dt>
-								<dd class="text-sm">
-									<time datetime={data.project.createdAt}
-										>{formatDateTime(data.project.createdAt)}</time
-									>
-								</dd>
-								<dt>Project ID</dt>
-								<dd class="flex items-center justify-end gap-1">
-									<span class="truncate font-mono text-xs" title={data.project.id}
-										>{shortId(data.project.id, 14)}</span
-									>
-									<CopyButton value={data.project.id} label="Copy project ID" iconOnly />
-								</dd>
-							</DetailList>
-						</Card.Content>
 					</Card.Root>
-
-					{#if data.can.deleteProject}
-						<Card.Root class="border-destructive/30 xl:col-span-2">
-							<Card.Header>
-								<Card.Title class="text-destructive">Danger zone</Card.Title>
-								<Card.Description>
-									Deleting moves the project to the trash for {data.policies.trashDays} days. Its production
-									site and every preview stop serving immediately.
-								</Card.Description>
-								<Card.Action class="self-center">
-									<Button variant="destructive" onclick={deleteProject}
-										><TrashIcon />Delete project</Button
-									>
-								</Card.Action>
-							</Card.Header>
-						</Card.Root>
-					{/if}
-				</div>
-			{/if}
-		</div>
+				{/if}
+			</div>
+		{/if}
 	</div>
 </div>
 

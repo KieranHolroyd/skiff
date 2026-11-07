@@ -284,6 +284,22 @@ password by editing it and running `sudo skiff-update-self`, which regenerates
 | `SKIFF_CLICKHOUSE_READER_USER` | `skiff_reader` | no | Read-only user for ad-hoc SQL from the dashboard. |
 | `SKIFF_CLICKHOUSE_READER_PASSWORD` | generated | yes | Reader password. |
 
+### 2.8 Email (`skiff-mail`, docs/EMAIL.md)
+
+The control plane reads one key; the MTA reads optional overrides from `/etc/skiff/mail.env` on the
+mail node (the unit sets the paths). None of them is secret: DKIM keys and credential hashes reach
+`skiff-mail` only from the agent, over `/run/skiff/mail.sock`, into memory.
+
+| Variable | Where | Default | Meaning |
+|---|---|---|---|
+| `SKIFF_MAIL_DOMAIN` | `skiff.env` | Cloudflare zone, else the platform host's parent | Domain for `mx1.`, `mx.`, `smtp.`, `bounces.` and `_spf.` (D116). |
+| `SKIFF_FEATURE_EMAIL` | `skiff.env` | `1` | `0` hides Email and refuses sends; a running `skiff-mail` keeps draining its spool. |
+| `SKIFF_MAIL_LISTEN` | `mail.env` | `0.0.0.0` | Listen address for the SMTP ports. |
+| `SKIFF_MAIL_PORT_INBOUND` / `_SUBMISSION` / `_SUBMISSIONS` | `mail.env` | `25` / `587` / `465` | Ports; `off` disables one. Submission stays off until a certificate exists. |
+| `SKIFF_MAIL_IPV6` | `mail.env` | unset | `1` delivers over IPv6 too. Only with a working IPv6 PTR. |
+| `SKIFF_MAIL_DELIVERY_PORT` | `mail.env` | `25` | Remote MX port (tests and lab setups only). |
+| `SKIFF_CADDY_DATA_DIR`, `SKIFF_MAIL_TLS_DIR` | helper env | `/var/lib/caddy/.local/share/caddy`, `/run/skiff/mail-tls` | Where the helper copies the `smtp.` certificate from and to. |
+
 ---
 
 ## 3. Install
@@ -606,6 +622,26 @@ sudo skiff-platform-config domains --platform-host control.example.com --content
 ```
 
 It runs the same apply-and-verify-or-revert flow as the dashboard.
+
+### 3.8 Email (Settings → Email)
+
+Email needs a node that can deliver mail directly (EMAIL.md §2). On the chosen node, before picking
+it in Settings → Email:
+
+1. **Port 25 out.** On Scaleway, tick *Enable SMTP* on the instance's security group (needs a
+   verified account). Check: `timeout 8 bash -c '</dev/tcp/gmail-smtp-in.l.google.com/25' && echo ok`.
+2. **Ports in.** Open 25, 465 and 587 in the host and provider firewalls.
+3. **Reverse DNS.** Set the PTR of the node's IPv4 to `mx1.<mail domain>` in the provider console.
+   Skiff creates the A record; `dig +short -x <ip>` must answer `mx1.<mail domain>.`.
+4. **Blocklists.** Check the IP at Spamhaus, and enrol it in Google Postmaster Tools and Microsoft SNDS/JMRP
+   (point complaint reports at `fbl@bounces.<mail domain>`).
+
+Then pick the node in Settings → Email. Its agent starts `skiff-mail.service` through the helper;
+Skiff publishes `mx1.`/`mx.`/`smtp.` A records, `_spf.` and the `bounces.` MX and SPF through
+Cloudflare (or lists them to copy), and Caddy obtains the `smtp.` certificate, after which
+submission on 587/465 comes up. `journalctl -u skiff-mail` shows the MTA; the spool is
+`/var/lib/skiff/mail` and survives restarts. New orgs start in the sandbox (D119); move an org out
+in Settings → Email.
 
 ## 4. Upgrade
 

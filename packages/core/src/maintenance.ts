@@ -49,6 +49,10 @@ export class MaintenanceService {
 		await this.ctx.databases.pruneBackups();
 		this.ctx.storage.requestExpiredPurges();
 		this.ctx.brokers.requestExpiredPurges();
+		// Event deliveries nobody could publish for a day fail; old history goes (D122).
+		this.ctx.events.sweep();
+		// Email: expire the outbox, trim the 30-day message log, re-check domains daily (docs/EMAIL.md).
+		await this.ctx.email.sweep().catch(() => undefined);
 		// Cheap, certain cleanup runs every sweep; prune is the on-demand deep backstop.
 		this.cleanupRows();
 		this.ctx.releases.gcSnapshots(operationLimits.pruneGraceMs);
@@ -125,6 +129,7 @@ export class MaintenanceService {
 
 		alertsFired.push(...(await this.databaseAlerts()));
 		alertsFired.push(...(await this.storageAlerts()));
+		alertsFired.push(...(await this.brokerAlerts()));
 		alertsFired.push(...(await this.quotaAlerts()));
 		// Daily trend points are idempotent: after the first sweep of a UTC day this is a no-op.
 		await this.ctx.usage.captureSnapshots();
@@ -345,6 +350,23 @@ export class MaintenanceService {
 				key,
 				title: `Object storage above ${percent}%`,
 				detail: `Storage ${row.name} uses ${(ratio * 100).toFixed(1)}% of its ${row.storageMb} MB budget.`,
+				severity: ratio >= 0.95 ? 'critical' : 'warning',
+			});
+		}
+		return fired;
+	}
+
+	/** Queue brokers near their message store budget (D123); a full JetStream store refuses publishes. */
+	private async brokerAlerts(): Promise<string[]> {
+		const fired: string[] = [];
+		const percent = this.ctx.policies.get().brokerStoreAlertPercent;
+		for (const { row, ratio } of this.ctx.brokers.alertCandidates(percent / 100)) {
+			const key = `broker_store:${row.id}`;
+			fired.push(key);
+			await this.notify({
+				key,
+				title: `Queue broker store above ${percent}%`,
+				detail: `Broker ${row.name} uses ${(ratio * 100).toFixed(1)}% of its ${row.storageMb} MB message store. When it is full, publishes are refused: drain or purge streams, or raise the store size.`,
 				severity: ratio >= 0.95 ? 'critical' : 'warning',
 			});
 		}

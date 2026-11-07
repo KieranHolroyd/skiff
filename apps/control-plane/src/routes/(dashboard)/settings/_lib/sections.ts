@@ -9,6 +9,7 @@ import DatabaseBackupIcon from '@lucide/svelte/icons/database-backup';
 import GlobeIcon from '@lucide/svelte/icons/globe';
 import HardDriveUploadIcon from '@lucide/svelte/icons/hard-drive-upload';
 import KeyRoundIcon from '@lucide/svelte/icons/key-round';
+import MailIcon from '@lucide/svelte/icons/mail';
 import SparklesIcon from '@lucide/svelte/icons/sparkles';
 import UserRoundIcon from '@lucide/svelte/icons/user-round';
 import UsersIcon from '@lucide/svelte/icons/users';
@@ -34,6 +35,7 @@ export type SectionId =
 	| 'policies'
 	| 'backups'
 	| 'notifications'
+	| 'email'
 	| 'assistant'
 	| 'telemetry'
 	| 'metrics'
@@ -55,6 +57,7 @@ export type SectionHref =
 	| '/(dashboard)/settings/policies'
 	| '/(dashboard)/settings/backups'
 	| '/(dashboard)/settings/notifications'
+	| '/(dashboard)/settings/email'
 	| '/(dashboard)/settings/assistant'
 	| '/(dashboard)/settings/telemetry'
 	| '/(dashboard)/settings/metrics'
@@ -180,6 +183,17 @@ export const SECTIONS: Section[] = [
 		path: '/settings/notifications',
 		icon: BellRingIcon,
 		ownerOnly: true
+	},
+	{
+		id: 'email',
+		group: 'platform',
+		label: 'Email',
+		summary:
+			'The mail node that sends for every organisation, the DNS it needs, the global pause and sending limits.',
+		href: '/(dashboard)/settings/email',
+		path: '/settings/email',
+		icon: MailIcon,
+		platformAdmin: true
 	},
 	{
 		id: 'assistant',

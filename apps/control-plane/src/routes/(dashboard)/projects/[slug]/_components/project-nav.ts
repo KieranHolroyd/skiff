@@ -26,3 +26,16 @@ export function readProjectTab(value: string | null): ProjectTab {
 	if (value && value in LEGACY_TABS) return LEGACY_TABS[value]!;
 	return PROJECT_TABS.includes(value as ProjectTab) ? (value as ProjectTab) : DEFAULT_PROJECT_TAB;
 }
+
+/** Where a share link stands; only `active` links still open the deployment. */
+export function shareState(link: {
+	revokedAt: string | null;
+	expiresAt: string | null;
+	redemptions: number;
+	maxRedemptions: number | null;
+}): string {
+	if (link.revokedAt) return 'revoked';
+	if (link.expiresAt && Date.parse(link.expiresAt) <= Date.now()) return 'expired';
+	if (link.maxRedemptions !== null && link.redemptions >= link.maxRedemptions) return 'used up';
+	return 'active';
+}

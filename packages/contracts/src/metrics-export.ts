@@ -7,7 +7,7 @@ import { z } from 'zod';
  */
 
 /** The sections a scrape can ask for: `/metrics/<section>[/<name>]`. */
-export const metricsSections = ['usage', 'apps', 'traffic', 'databases', 'storage', 'volumes', 'platform'] as const;
+export const metricsSections = ['usage', 'apps', 'traffic', 'databases', 'storage', 'brokers', 'volumes', 'platform'] as const;
 export type MetricsSection = (typeof metricsSections)[number];
 
 export const METRICS_EXPORT_SETTINGS_KEY = 'metrics_export';
@@ -19,6 +19,8 @@ const metricsSectionsSchema = z.object({
 	traffic: z.boolean().default(true),
 	databases: z.boolean().default(true),
 	storage: z.boolean().default(true),
+	/** Managed queue brokers, plus one series family per stream (D123). */
+	brokers: z.boolean().default(true),
 	volumes: z.boolean().default(true),
 	platform: z.boolean().default(true),
 });
@@ -47,6 +49,7 @@ export const metricsExportSettingsUpdateSchema = z
 			traffic: z.boolean(),
 			databases: z.boolean(),
 			storage: z.boolean(),
+			brokers: z.boolean(),
 			volumes: z.boolean(),
 			platform: z.boolean(),
 		}).partial(),

@@ -20,7 +20,7 @@
 </svelte:head>
 
 <div class="space-y-4">
-	<DatabaseHeader {db} {can} active="studio" />
+	<DatabaseHeader {db} {can} />
 
 	{#if !can.console}
 		<Notice tone="warning" title="Studio access required">

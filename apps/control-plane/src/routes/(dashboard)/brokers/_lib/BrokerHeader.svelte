@@ -2,10 +2,7 @@
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import InboxIcon from '@lucide/svelte/icons/inbox';
-	import LayoutDashboardIcon from '@lucide/svelte/icons/layout-dashboard';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
-	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
-	import Settings2Icon from '@lucide/svelte/icons/settings-2';
 	import TrashIcon from '@lucide/svelte/icons/trash';
 	import type { BrokerView } from '@skiff/contracts';
 	import { runAction } from '#lib/actions.js';
@@ -16,23 +13,12 @@
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import RowMenu from '../../_lib/RowMenu.svelte';
 	import ServiceHeader from '../../_lib/service/ServiceHeader.svelte';
-	import { tabHref, type ServiceSection } from '../../_lib/service/sections.js';
 	import { formatDate } from '../../_lib/format.js';
-	import { BROKER_DEFAULT_TAB, type BrokerTab } from './broker-tabs.js';
 
 	type Can = { update: boolean; delete: boolean };
 
-	let {
-		broker,
-		can,
-		active,
-		onselect
-	}: {
-		broker: BrokerView;
-		can: Can;
-		active: BrokerTab | 'logs';
-		onselect?: (tab: BrokerTab) => void;
-	} = $props();
+	/** Sections are in the sidebar (`./subnav.ts`); this is identity, facts and actions. */
+	let { broker, can }: { broker: BrokerView; can: Can } = $props();
 
 	/** Settings → Policies trash period; the layout loads it. */
 	const trashDays = $derived<number>(page.data.policies?.trashDays ?? 7);
@@ -41,24 +27,6 @@
 	const deleted = $derived(broker.deletedAt !== null);
 	/** Actions live on the detail route, so the header works from every sub-route. */
 	const act = (name: string) => `${base}?/${name}`;
-	const local = (id: BrokerTab, label: string, icon: ServiceSection['icon']) => ({
-		id,
-		label,
-		icon,
-		href: tabHref(base, id, BROKER_DEFAULT_TAB),
-		local: true
-	});
-
-	const sections = $derived<ServiceSection[]>([
-		local('overview', 'Overview', LayoutDashboardIcon),
-		{
-			id: 'logs',
-			label: 'Logs',
-			icon: ScrollTextIcon,
-			href: resolve('/(dashboard)/brokers/[name]/logs', { name: broker.name })
-		},
-		local('settings', 'Settings', Settings2Icon)
-	]);
 
 	function restart() {
 		askConfirm({
@@ -98,16 +66,7 @@
 	}
 </script>
 
-<ServiceHeader
-	icon={InboxIcon}
-	backHref={resolve('/(dashboard)/brokers')}
-	backLabel="Queues"
-	title={broker.name}
-	target="page.brokers"
-	{sections}
-	{active}
-	onselect={onselect ? (id) => onselect(id as BrokerTab) : undefined}
->
+<ServiceHeader icon={InboxIcon} title={broker.name} target="page.brokers">
 	{#snippet meta()}
 		<StatusBadge status={deleted ? 'deleted' : broker.status} />
 		<Badge variant="outline">{broker.engineLabel} {broker.version}</Badge>
@@ -115,12 +74,16 @@
 		<span aria-hidden="true">·</span>
 		<span class="font-mono text-xs tabular-nums">{broker.memoryMb} MB · {broker.cpus} vCPU</span>
 		<span aria-hidden="true">·</span>
-		<span class="text-xs">Created <time datetime={broker.createdAt}>{formatDate(broker.createdAt)}</time></span>
+		<span class="text-xs"
+			>Created <time datetime={broker.createdAt}>{formatDate(broker.createdAt)}</time></span
+		>
 	{/snippet}
 
 	{#if deleted}
 		{#if can.delete}
-			<Button variant="outline" onclick={() => void runAction(act('restore'))}><RotateCcwIcon />Restore</Button>
+			<Button variant="outline" onclick={() => void runAction(act('restore'))}
+				><RotateCcwIcon />Restore</Button
+			>
 			<Button variant="destructive" onclick={purge}><TrashIcon />Delete permanently</Button>
 		{/if}
 	{:else}

@@ -629,6 +629,7 @@ export class WorkloadService {
 		if (replica >= spec.replicas) throw new NotFoundError('Workload replica');
 		// Attached database, storage and broker connection values sit under the spec's own env and secrets (D56, S4, D111).
 		const env: Record<string, string> = {
+			...this.ctx.email.consumerEnv(row.projectId),
 			...this.ctx.brokers.consumerEnv(row.projectId, row.nodeId, spec.runtime),
 			...this.ctx.storage.consumerEnv(row.projectId, row.nodeId, spec.runtime),
 			...this.ctx.databases.consumerEnv(row.projectId, row.nodeId, spec.runtime),
@@ -777,6 +778,7 @@ export class WorkloadService {
 			this.ctx.databases.consumerVersion(projectId, nodeId, runtime),
 			this.ctx.storage.consumerVersion(projectId, nodeId, runtime),
 			this.ctx.brokers.consumerVersion(projectId, nodeId, runtime),
+			this.ctx.email.consumerVersion(projectId),
 			this.ctx.appVolumes.projectVersion(projectId),
 			this.secretsVersion(orgId, projectId, spec),
 		]

@@ -4,12 +4,9 @@
 	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
 	import CableIcon from '@lucide/svelte/icons/cable';
-	import FolderTreeIcon from '@lucide/svelte/icons/folder-tree';
 	import InfoIcon from '@lucide/svelte/icons/info';
-	import LayoutDashboardIcon from '@lucide/svelte/icons/layout-dashboard';
 	import PinIcon from '@lucide/svelte/icons/pin';
 	import PinOffIcon from '@lucide/svelte/icons/pin-off';
-	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
 	import TrashIcon from '@lucide/svelte/icons/trash';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
@@ -17,7 +14,6 @@
 	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
-	import * as Tabs from '#lib/components/ui/tabs/index.js';
 	import Panel from '../../../../_lib/Panel.svelte';
 	import CopyValue from '../../../../_lib/service/CopyValue.svelte';
 	import { readTab } from '../../../../_lib/service/sections.js';
@@ -32,13 +28,20 @@
 	import LogsPanel from '../../../../projects/[slug]/_components/LogsPanel.svelte';
 	import SourcePanel from '../../../../projects/[slug]/_components/SourcePanel.svelte';
 	import FunctionHeader from '../../../_lib/FunctionHeader.svelte';
+	import {
+		FUNCTION_DEPLOYMENT_TABS,
+		functionDeploymentSubnavKey,
+		type FunctionDeploymentTab
+	} from '../../../_lib/subnav.js';
+	import { useSubnavLocal } from '#lib/nav/subnav-local.svelte.js';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
 
-	const TABS = ['overview', 'logs', 'source'] as const;
-	type Tab = (typeof TABS)[number];
-	let tab = $state<Tab>(readTab(page.url.searchParams.get('tab'), TABS, 'overview'));
+	type Tab = FunctionDeploymentTab;
+	let tab = $state<Tab>(
+		readTab(page.url.searchParams.get('tab'), FUNCTION_DEPLOYMENT_TABS, 'overview')
+	);
 	function setTab(next: string) {
 		tab = next as Tab;
 		const url = new URL(page.url.href);
@@ -49,6 +52,17 @@
 	}
 
 	const deployment = $derived(data.deployment);
+
+	/** The sidebar lists the deployment's sections; they switch here without a page load. */
+	useSubnavLocal(() => ({
+		key: functionDeploymentSubnavKey(deployment.id),
+		active: tab,
+		select: (id) => {
+			if (!FUNCTION_DEPLOYMENT_TABS.includes(id as Tab)) return false;
+			setTab(id);
+			return true;
+		}
+	}));
 	const snapshot = $derived(deployment.spec?.function ?? null);
 	const onHost = $derived(data.runningDeploymentId === deployment.id);
 	const creator = $derived(
@@ -81,7 +95,7 @@
 </svelte:head>
 
 <div class="space-y-6">
-	<FunctionHeader slug={data.project.slug} active="deployment">
+	<FunctionHeader slug={data.project.slug}>
 		{#snippet meta()}
 			<span class="text-foreground">Deployment</span>
 			<span class="font-mono text-foreground">{deployment.shortId}</span>
@@ -113,19 +127,6 @@
 			>
 		{/if}
 	</FunctionHeader>
-
-	<Tabs.Root value={tab} onValueChange={setTab}>
-		<Tabs.List
-			variant="line"
-			class="w-full justify-start border-b"
-			aria-label="Deployment sections"
-		>
-			<Tabs.Trigger value="overview" class="flex-none"><LayoutDashboardIcon />Overview</Tabs.Trigger
-			>
-			<Tabs.Trigger value="logs" class="flex-none"><ScrollTextIcon />Logs</Tabs.Trigger>
-			<Tabs.Trigger value="source" class="flex-none"><FolderTreeIcon />Bundle</Tabs.Trigger>
-		</Tabs.List>
-	</Tabs.Root>
 
 	{#if tab === 'overview'}
 		<div class="grid items-start gap-5 xl:grid-cols-5">

@@ -378,6 +378,20 @@ export function buildCaddyConfig(options: CompileAgentConfigOptions): Record<str
 		automation.policies = policies;
 	}
 
+	// Email (docs/EMAIL.md §3.2): on the mail node Caddy obtains the submission and MX certificates.
+	// No route serves these names; `automate` manages a certificate without one. The helper copies
+	// the submission certificate out of Caddy's storage for skiff-mail.
+	if (options.state.mail && apps && options.tls) {
+		const names = [...new Set([options.state.mail.hostnames.submission, options.state.mail.hostnames.mx].map(normalizeHost))];
+		const tls = (apps.tls ??= {});
+		const certificates = ((tls as Record<string, unknown>).certificates ??= {}) as Record<string, unknown>;
+		certificates.automate = [...new Set([...((certificates.automate as string[] | undefined) ?? []), ...names])];
+		const automation = ((tls as Record<string, unknown>).automation ??= {}) as Record<string, unknown>;
+		const policies = (automation.policies as Record<string, unknown>[] | undefined) ?? [];
+		policies.push({ subjects: names, issuers: customDomainIssuers(options.tls) });
+		automation.policies = policies;
+	}
+
 	if (options.accessLog) {
 		// Without a logging app Caddy writes no access log and agent telemetry stays empty (§8).
 		// Raw logs stay on the node for 7 days, compressed; only 1-minute aggregates leave it.

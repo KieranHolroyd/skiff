@@ -45,13 +45,16 @@ export interface CloudflareRecord {
 }
 
 export interface CloudflareRecordInput {
-	type: 'CNAME' | 'A';
+	/** TXT and MX are written by Email (docs/EMAIL.md §4.2); domains only use CNAME/A. */
+	type: 'CNAME' | 'A' | 'TXT' | 'MX';
 	name: string;
 	content: string;
 	/** Grey cloud (DESIGN §5, D8): DNS only, never the Cloudflare proxy. */
 	proxied: false;
 	ttl: 1;
 	comment: string;
+	/** MX only. */
+	priority?: number;
 }
 
 export interface CloudflareClient {

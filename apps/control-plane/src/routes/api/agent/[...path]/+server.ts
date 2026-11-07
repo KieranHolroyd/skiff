@@ -1,6 +1,9 @@
 import type { RequestHandler } from './$types';
 import {
+	agentEventAckSchema,
 	heartbeatSchema,
+	mailEventsBatchSchema,
+	mailOutboxAckSchema,
 	nodeJoinSchema,
 	STUDIO_TOKEN_HEADER,
 	telemetryBatchSchema
@@ -78,6 +81,56 @@ const handler: RequestHandler = async (event) => {
 			return core.workloads.activationFor(node.id, activation[1]!);
 		}
 
+		// Event notifications (D122): the broker's node publishes pending deliveries and acks them.
+		if (action === 'events/lease') {
+			if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+			const node = core.nodes.authenticate(token);
+			return core.events.lease(node.id);
+		}
+
+		if (action === 'events/ack') {
+			if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+			const input = await readJson(request, agentEventAckSchema);
+			const node = core.nodes.authenticate(token);
+			return core.events.ack(node.id, input);
+		}
+
+		// Email (docs/EMAIL.md §3.5, D117): only the mail node's agent may call these. The state
+		// carries opened DKIM keys, so like an activation it is fetched, never put in desired state.
+		if (action === 'email/state') {
+			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
+			const node = core.nodes.authenticate(token);
+			return json(core.email.stateForNode(node.id), 200, { 'cache-control': 'no-store' });
+		}
+
+		if (action === 'email/outbox') {
+			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
+			const node = core.nodes.authenticate(token);
+			const limit = Number(url.searchParams.get('limit') ?? 50);
+			const wait = Math.min(Number(url.searchParams.get('wait') ?? 0), 25);
+			let messages = core.email.claimOutbox(node.id, limit);
+			const deadline = Date.now() + wait * 1000;
+			while (messages.length === 0 && Date.now() < deadline) {
+				await Bun.sleep(500);
+				messages = core.email.claimOutbox(node.id, limit);
+			}
+			return json({ messages }, 200, { 'cache-control': 'no-store' });
+		}
+
+		if (action === 'email/outbox/ack') {
+			if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+			const input = await readJson(request, mailOutboxAckSchema);
+			const node = core.nodes.authenticate(token);
+			return { acked: core.email.ackOutbox(node.id, input.messageIds) };
+		}
+
+		if (action === 'email/events') {
+			if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+			const input = await readJson(request, mailEventsBatchSchema);
+			const node = core.nodes.authenticate(token);
+			return core.email.ingestEvents(node.id, input.events);
+		}
+
 		const rotation = /^database-rotations\/([^/]+)$/.exec(action);
 		if (rotation) {
 			if (method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
@@ -124,8 +177,8 @@ const handler: RequestHandler = async (event) => {
 			// The token authenticates the node; the payload must not claim another one.
 			const node = core.nodes.authenticate(token);
 			if (node.id !== batch.nodeId) return json({ error: 'node_mismatch' }, 403);
-			// Database and object-storage sizes and snapshots land in SQLite even when ClickHouse is
-			// disabled (D57, S7).
+			// Database, object-storage and broker sizes and snapshots land in SQLite even when
+			// ClickHouse is disabled (D57, S7, D123).
 			const databases = await core.databases.ingestTelemetry(
 				node.id,
 				batch.databases,
@@ -136,12 +189,18 @@ const handler: RequestHandler = async (event) => {
 				batch.objectStorage,
 				batch.objectStorageBuckets
 			);
+			const brokerStats = await core.brokers.ingestTelemetry(
+				node.id,
+				batch.brokers,
+				batch.brokerQueues
+			);
 			if (!core.ctx.telemetry || !(await core.ctx.telemetry.ready()))
 				return json({
 					ok: true,
 					stored: 0,
 					databasesStored: 0,
 					storageStored: 0,
+					brokersStored: 0,
 					detail: 'telemetry disabled'
 				});
 			const result =
@@ -156,6 +215,7 @@ const handler: RequestHandler = async (event) => {
 				stored: result.inserted,
 				databasesStored: databases.stored,
 				storageStored: storage.stored,
+				brokersStored: brokerStats.stored,
 				analyticsStored: batch.analytics.length,
 				tailsStored: batch.tails.length
 			};

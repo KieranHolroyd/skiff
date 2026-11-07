@@ -11,7 +11,7 @@
 </svelte:head>
 
 <div class="space-y-6">
-	<StorageHeader st={data.storage} can={data.storageCan} active="logs" />
+	<StorageHeader st={data.storage} can={data.storageCan} />
 
 	<ServiceLogs
 		endpoint="/api/v1/storage/{encodeURIComponent(data.storage.name)}/logs"

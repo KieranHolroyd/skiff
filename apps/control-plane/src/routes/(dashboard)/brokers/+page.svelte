@@ -28,6 +28,7 @@
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import EmptyState from '../_lib/EmptyState.svelte';
+	import { formatBytes } from '../_lib/format.js';
 	import PageHeader from '../_lib/PageHeader.svelte';
 	import RowMenu from '../_lib/RowMenu.svelte';
 	import { formatDate } from '../_lib/format.js';
@@ -87,6 +88,15 @@
 			descFirst: true,
 			cell: limitsCell,
 			class: 'hidden font-mono text-xs tabular-nums lg:table-cell'
+		},
+		{
+			id: 'stored',
+			header: 'Stored',
+			value: (row) => row.storeBytes ?? -1,
+			searchable: false,
+			descFirst: true,
+			cell: storedCell,
+			class: 'hidden font-mono text-xs tabular-nums xl:table-cell'
 		},
 		{
 			id: 'attached',
@@ -478,6 +488,16 @@
 
 {#snippet limitsCell(item: Row)}
 	{item.memoryMb} MB · {item.storageMb} MB
+{/snippet}
+
+{#snippet storedCell(item: Row)}
+	{#if item.storeBytes === null}
+		<span class="text-muted-foreground">—</span>
+	{:else}
+		{formatBytes(item.storeBytes)}{#if item.messages !== null}<span class="text-muted-foreground">
+				· {item.messages.toLocaleString('en-GB')} msgs</span
+			>{/if}
+	{/if}
 {/snippet}
 
 {#snippet attachedCell(item: Row)}

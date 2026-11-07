@@ -1,8 +1,9 @@
 # Skiff — Email (a self-hosted SES)
 
-Status: **design proposed, 2026-11-07, pending review.** Nothing here is built. The decisions are
-written as **proposed D114–D120** (§13); they move into [DECISIONS.md](./DECISIONS.md) once agreed,
-and D114 amends D22. Execution plan: [plan 24](./build-plan/plans/24-email.md).
+Status: **E1 (outbound) built 2026-11-07**, not yet exercised on the prod node (the PTR still has
+to be set, §2). Decisions **D114–D120** in [DECISIONS.md](./DECISIONS.md); D114 amends D22.
+Execution plan and what's left: [plan 24](./build-plan/plans/24-email.md). Inbound routes, the
+function binding and tenant webhooks (E2) are designed here but not built.
 
 Skiff Email lets apps send and receive mail on their own domains: verified sending domains with
 DKIM, a REST send API, SMTP submission, a `send_email` binding and an `email()` handler for
@@ -65,10 +66,11 @@ and the blocklist check pass, and says which one failed.
 
 ## 3. Topology and the MTA
 
-### 3.1 Placement: the `mail` role
+### 3.1 Placement: the mail node
 
-A new node role, `mail`, joins `ingress | control | compute | data | build`
-(`packages/contracts/src/cluster.ts`). A mail node runs the MTA and accepts SMTP on public
+The mail node is a platform setting (Settings → Email, `settings` key `email.node_id`), not a
+placement role: a platform admin picks one node whose agent advertises the `mail` capability and
+which has a public address. It runs the MTA and accepts SMTP on public
 **25** (inbound MX, bounces, complaint reports), **587** (submission, STARTTLS) and **465**
 (submission, implicit TLS). It must have a public IPv4 with a PTR record; IPv6 egress is off unless
 its own PTR checks out (Gmail is strict on IPv6).
@@ -78,63 +80,58 @@ refused as a mail node (preflight's blocklist check catches PBL listings). More 
 weighted MX records and spool failover are a clustering phase (§11, E4).
 
 Agents advertise a `mail` capability in the heartbeat (as `brokers` does); only those nodes can
-take the role.
+be chosen. Desired state carries `mail` (generation + hostnames, no secrets) only for that node.
 
-### 3.2 The engine: KumoMTA under Skiff policy (D115)
+### 3.2 The engine: `skiff-mail`, Skiff's own MTA (D115)
 
-**KumoMTA** (Apache-2.0, Rust; release `2026.09.29` at writing) is the engine, subject to spike E0
-(§11). It was built for multi-tenant sending: per-tenant DKIM, egress sources and pools,
-per-destination traffic shaping, bounce classification, ARF complaint parsing, HTTP injection, an
-admin API (suspend, bounce, rebind, inspect) and webhook log hooks. Its DKIM signers cover RSA and
-ed25519.
+The MTA is Skiff code: `packages/mail`, run as **`skiff-agent mail`** under its own unit,
+`skiff-mail.service`. This is the studio pattern: the same signed binary as the agent, with its own
+cgroup and sandbox, and the agent as its only client. It needs no new release artifact or upstream
+pin. The protocol work comes from the nodemailer family (MIT / MIT-0, one maintainer, all mature):
+`smtp-server` for the listeners, nodemailer's `SMTPConnection` for outbound, `mailauth` for DKIM
+sign and verify, SPF and DMARC, and `mailparser` for inbound parsing. Skiff writes the rest.
 
-It runs as a **platform service**, not a tenant workload: `skiff-mta.service`, installed and removed
-by the root helper (`skiff-platform-config email on|off`, the ClickHouse pattern in
-`scripts/systemd/clickhouse.ts`), with the upstream build pinned by sha512 and shipped in the signed
-release. It is not in `skiff-workloads.slice`; it has its own `MemoryMax` (default 512 MB) and
-counts against the node's platform budget, which preflight reports.
-
-**Skiff owns the policy; the MTA owns the queue.** The Lua policy (`init.lua`) is fixed, shipped
-with the release and holds no tenant data. Every tenant decision is a call to the **node agent's
-mail policy endpoint** on a unix socket, cached in Kumo with `kumo.memoize` and invalidated by a
-generation number:
-
-| Kumo hook | Agent call | Decides |
+| Part | What it does | Module |
 |---|---|---|
-| `smtp_server_auth_plain` | `POST /mail/auth` | Credential valid, which org/project it belongs to |
-| `smtp_server_message_received` (submission listeners) | `POST /mail/authorize` | `From` domain verified for that org, recipients not suppressed, org not paused, quota/rate, size, recipient count. Same pure function as the REST path (§5.3). |
-| DKIM signing in `smtp_server_message_received` / `http_message_generated` | `GET /mail/dkim/<domain>` | Selector + key, delivered to the node opened for this node (§4.1) |
-| `smtp_server_message_received` (port 25) | `POST /mail/inbound` | Is the recipient domain receiving here? Route? For function routes, the verdict (§6) |
-| `get_queue_config` / `get_egress_path_config` | none (static + shaping file) | Egress source, HELO, TLS policy, per-provider rates; smarthost per destination when configured (§3.4) |
-| Log hook (every record) | `POST /mail/events` | Event normalisation (§8) |
+| Listeners | Port 25 (bounces, complaints, receiving domains), 587 STARTTLS and 465 implicit TLS submission; TLS before AUTH; size, recipient and connection limits | `smtp.ts` |
+| Policy | `authorizeSend` (§5.3) in-process, against the state the agent pushed; credentials checked against scrypt hashes | `policy.ts` |
+| DKIM | Signs each message once, before it is spooled, with the `From:` domain's key | `dkim.ts` |
+| Spool | `bun:sqlite` (WAL) plus one `.eml` file per message; "250 OK" only after both are fsynced | `spool.ts` |
+| Scheduler | Per-recipient state, retries at 1, 5, 15, 30 min, then hourly, expiry after 3 days (`bounced`, class `expired`) | `queue.ts` |
+| Delivery | MX lookup (null MX, A/AAAA fallback, priority order), one connection per destination host with reuse, all recipients for a domain in one transaction, opportunistic STARTTLS, HELO `mx1.<platformDomain>` | `deliver.ts` |
+| Shaping | Per-destination connection and message-rate limits (Gmail, Microsoft, Yahoo and a default), backing off on `421`/`4.7.x` throttling replies | `shaping.ts` |
+| Classification | SMTP replies → `delivered` / transient / permanent with a bounce class (`invalid-recipient`, `bad-domain`, `mailbox-full`, `spam-block`, `policy`, `auth`, `throttled`, `expired`, …) | `classify.ts` |
+| Bounces and complaints | VERP replies on `bounces.<platformDomain>` (RFC 3464 DSN) and ARF complaint reports become events | `inbound.ts` |
+| Events | Append-only table; the agent pulls by cursor and acknowledges | `events.ts` |
+| Control socket | `PUT /state`, `POST /inject`, `GET /events`, `POST /events/ack`, `GET /health` on `/run/skiff/mail.sock` | `control.ts` |
 
-The agent answers from the **mail section of desired state** (§3.5), so a control-plane outage does
-not stop queued mail from flowing, or submission from being authorised against the last known state.
+**The agent drives it; skiff-mail holds no credentials.** It never talks to the control plane. The
+agent pushes the mail state (§3.5) with the DKIM keys and credential hashes it fetched for this node,
+injects outbox messages, and pulls events. DKIM keys stay in memory. After a restart, `skiff-mail`
+answers `451 4.3.0` to submissions and holds deliveries until the agent pushes state again; the
+agent checks `GET /health` every few seconds and pushes immediately.
 
-**Spool.** RocksDB under `/var/lib/skiff/mail/spool`, or `<volume>/skiff/mail` when an operator pins
-a node volume (D74). Queued mail survives restarts and an agent outage; it does not survive losing
-the node (§12).
+**Spool.** `/var/lib/skiff/mail` (or `<volume>/skiff/mail`, D74). Queued mail survives restarts of
+`skiff-mail` and of the agent, but not the loss of the node (§12).
 
-**Shaping.** Kumo's maintained per-provider shaping rules (Gmail, Microsoft, Yahoo, …) plus Skiff's
-own per-org caps. New installs start with conservative per-destination rates that a platform admin
-can raise.
+**TLS.** Caddy already obtains certificates (DNS-01). The agent asks Caddy to manage
+`mx.<platformDomain>` and `smtp.<platformDomain>`, copies the files to `/run/skiff/mail-tls/`, and
+pushes a reload when they change. Outbound uses opportunistic STARTTLS. Required TLS for MTA-STS
+domains comes in phase 3.
 
-**TLS.** Caddy already obtains certificates (DNS-01). The agent asks Caddy for `mx.<platformDomain>`
-and `smtp.<platformDomain>` and hands the files to Kumo, reloading Kumo on renewal. Submission
-requires TLS before AUTH (Kumo refuses AUTH in clear). Outbound uses opportunistic TLS, upgraded to
-required for MTA-STS domains (phase 3).
-
-**Fallback engine.** If E0 fails (Kumo's documented floor is 4 cores / 4 GB and our edge is
-2 vCPU / 4 GB; idle RSS is undocumented; there is no Debian package), the fallback is **Postfix**:
-policy over the Postfix policy-delegation protocol to the same agent endpoints, DKIM through a small
-milter in the agent, and events from the journal by queue id. The control plane, API, DNS and data
-model don't change; only `apps/agent/src/mail/engine-*.ts` and the helper unit do.
+**Why our own.** KumoMTA was the first candidate. Its documented floor is 4 cores / 4 GB, it has no
+Debian package, and its policy would have been Lua calling back into the agent for every decision.
+Most of its machinery (egress pools, a throttle daemon shared across a fleet, millions of messages
+an hour) serves a volume Skiff doesn't have. Spike E0 (SPIKES.md) showed the pieces Skiff needs
+work under Bun 1.4: STARTTLS and implicit TLS on `smtp-server`, AUTH, DKIM sign and verify, and
+200 messages over TLS in 149 ms at about 130 MB RSS with every library loaded.
 
 ### 3.3 Preflight and the Settings → Email page
 
-A platform admin enables Email from **Settings → Email** (owner-only, validate-then-restart, like
-Notifications). Choosing the mail node runs preflight from that node, and every check is re-runnable
-and shown as a list:
+A platform admin enables Email from **Settings → Email** by choosing the mail node. It's a setting
+(no restart): the node's agent sees `mail` in its desired state and starts `skiff-mail`, and Skiff
+publishes the platform records below through Cloudflare. **Not built yet:** the automated preflight
+checks. Until they are, the operator runs them by hand. The checks, each re-runnable and shown as a list:
 
 1. Port 25 egress: an `EHLO` to two large providers' MX hosts (no `MAIL FROM`).
 2. Inbound reachability: the control plane connects to `<node ip>:25` from outside the node.
@@ -153,7 +150,7 @@ reputation summary (§7.2).
 
 ### 3.4 Smarthost relay (optional)
 
-Per destination pattern (`*` or e.g. `outlook.com, hotmail.com`), Kumo can hand mail to a smarthost
+Per destination pattern (`*` or e.g. `outlook.com, hotmail.com`), `skiff-mail` can hand mail to a smarthost
 (SES SMTP, any relay) instead of the MX. It covers a blocked port 25, a listed IP while delisting,
 or a provider that keeps junking a new IP. Credentials are sealed platform secrets. Through SES, the
 domain must also be verified in SES; Skiff can register it there with its own DKIM key (SES
@@ -165,7 +162,7 @@ domain must also be verified in SES; Skiff can register it there with its own DK
 
 ```ts
 mail: {
-  generation: number;                  // bumps on any change; Kumo's memoize key
+  generation: number;                  // bumps on any change; skiff-mail ignores a push it already has
   hostnames: { helo: string; mx: string; submission: string; bounce: string };
   domains: Array<{ id; orgId; name; sending: boolean; receiving: boolean;
                    dkim: { selector; algorithm: 'rsa-sha256' | 'ed25519-sha256'; keyRef } [] }>;
@@ -257,14 +254,14 @@ must carry a `From:` on a verified domain.
 
 | Path | Auth | Enters at | Notes |
 |---|---|---|---|
-| **REST** `POST /api/v1/email/send` | Skiff API key with `email:send`, or an email credential as Bearer | Control plane `EmailService.send` → **outbox** | Batch form `POST /api/v1/email/send-batch` (≤ 100 messages) |
-| **SMTP submission** `smtp.<platformDomain>:587/465` | AUTH PLAIN/LOGIN with an email credential | Kumo directly; authorised by the agent | For any framework mailer |
+| **REST** `POST /api/v1/email/send` | Skiff API key (or session) with `email:send`. Email credentials as Bearer are not accepted yet | Control plane `EmailService.send` → **outbox** | Batch form `POST /api/v1/email/send-batch` (≤ 100 messages) |
+| **SMTP submission** `smtp.<platformDomain>:587/465` | AUTH PLAIN/LOGIN with an email credential | `skiff-mail` directly; authorised in-process against the pushed state | For any framework mailer |
 | **Function `send_email` binding** | The binding itself (project + binding name) | Local agent's mail sink → control plane `/api/agent/email-send` → outbox | §5.5 |
 
 **The outbox.** REST and binding sends land in `email_outbox` (SQLite, the body as a blob) in the
 same transaction as the `email_messages` row. The mail node's agent long-polls
-`/api/agent/email-outbox`, injects each message into Kumo's loopback
-`POST /api/inject/v1` with its message id in the meta, and acknowledges it. The row is then
+`/api/agent/email-outbox`, injects each message into `skiff-mail` (`POST /inject` on its control socket, message id
+included), and acknowledges it once `skiff-mail` has spooled it. The row is then
 deleted. This keeps the pull model (agents dial the control plane, never the reverse), lets the API
 accept mail while the mail node restarts, and survives a mail node that isn't the control plane's
 node. Outbox rows older than 24 h fail with `rejected: mail node unavailable`.
@@ -272,8 +269,8 @@ node. Outbox rows older than 24 h fail with `rejected: mail node unavailable`.
 ### 5.3 One policy function
 
 `authorizeSend(snapshot, envelope) → { ok } | { reason }` lives in `packages/contracts` (pure, no
-I/O) and runs in both places: in `EmailService.send` against the database, and in the agent against
-desired state for SMTP. It checks, in order: org state (paused → refuse; sandbox → recipients
+I/O) and runs in both places: in `EmailService.send` against the database, and in `skiff-mail` against
+the pushed state for SMTP. It checks, in order: org state (paused → refuse; sandbox → recipients
 allowed?), `From` domain verified and sending-enabled for the org (and in the credential's
 `allowedFromDomains`), recipient count and size, rate and daily quota, then suppression. Suppressed
 recipients are **dropped with a `suppressed` event**, not an error (SES behaviour), unless every
@@ -323,7 +320,7 @@ enabled or the project's org has no verified sending domain.
 
 Receiving is per domain and opt-in: `receiving: true` adds the MX record (or shows it). If the domain
 already has MX records (Google Workspace, Microsoft 365), Skiff refuses unless the request says
-`replaceMx: true`. The dashboard suggests a subdomain (`in.example.com`) instead. Kumo accepts mail
+`replaceMx: true`. The dashboard suggests a subdomain (`in.example.com`) instead. `skiff-mail` accepts mail
 on port 25 only for recipient domains that are verified, receiving-enabled and have at least one
 route; everything else gets `550 5.1.1` at `RCPT`, so the mail node is never an open relay.
 
@@ -346,7 +343,7 @@ Actions:
 | Action | Delivery | Failure behaviour |
 |---|---|---|
 | `function` | **Synchronous, during SMTP `DATA`.** The agent POSTs the raw message and envelope to the function shim's `/__skiff/email` and waits ≤ 30 s. `message.setReject(reason)` → `550 <reason>`. A crash or timeout → `451` and the sender retries. Same semantics as Cloudflare Email Workers. | Sender's retry queue |
-| `webhook` | Accepted (`250`), then queued in Kumo and POSTed by the agent as JSON (envelope, parsed headers, text/html, attachment metadata, and the raw message as base64 or a presigned URL above 1 MB), signed (§8.2) | Retried for 24 h, then `dropped` event |
+| `webhook` | Accepted (`250`), then spooled by `skiff-mail` and POSTed by the agent as JSON (envelope, parsed headers, text/html, attachment metadata, and the raw message as base64 or a presigned URL above 1 MB), signed (§8.2) | Retried for 24 h, then `dropped` event |
 | `bucket` | Accepted, then the raw `.eml` is written to a storage bucket attached to the org (`<prefix>/<yyyy>/<mm>/<dd>/<messageId>.eml`) with a scoped key | Retried for 24 h |
 | `drop` | Accepted and discarded (for routes that only silence a catch-all) | — |
 
@@ -363,7 +360,7 @@ original DKIM signature. `reply` must come from the receiving domain.
 ### 6.4 Bounces and complaints arriving on port 25
 
 `bounces.<platformDomain>` is handled before routing: DSNs for `b-<messageId>@…` become `bounced`
-events (Kumo's out-of-band DSN parsing). ARF complaint reports (Yahoo CFL, Microsoft JMRP and other
+events (RFC 3464 DSN parsing in `skiff-mail`). ARF complaint reports (Yahoo CFL, Microsoft JMRP and other
 feedback loops, which the operator must enrol in by hand; preflight links to them) become
 `complained` events. Neither is ever routed to a tenant.
 
@@ -376,7 +373,7 @@ feedback loops, which the operator must enrol in by hand; preflight links to the
 `email_suppressions` is per org: `(org, address)` with a reason, `bounce` | `complaint` | `manual` |
 `unsubscribe`, plus a source message id and a date.
 
-- A hard bounce (Kumo class `InvalidRecipient`, `BadDomain`, … → 5xx permanent) adds the address
+- A hard bounce (class `invalid-recipient` or `bad-domain`, a permanent 5xx) adds the address
   immediately. Soft bounces add it after 3 consecutive failed messages over at least 72 h.
 - A complaint adds the address immediately.
 - RFC 8058 one-click unsubscribe POSTs to our `List-Unsubscribe` endpoint (when the send used
@@ -407,7 +404,7 @@ alerts (D109's per-kind configuration) carry `email.bounce_rate`, `email.complai
 
 Every org starts in **sandbox**: it may only send to its own verified domains and verified addresses,
 200 messages a day, 1 a second. A platform admin moves an org to `active` with explicit limits
-(default 10,000 a day, 10 a second). The owner's first org (the setup wizard's) starts `active`. The
+(default 10,000 a day, 10 a second). An org whose email a platform admin sets up (first domain or credential) starts `active`. The
 limits are org quota fields alongside the existing quotas (plan 16).
 
 ---
@@ -416,7 +413,7 @@ limits are org quota fields alongside the existing quotas (plan 16).
 
 ### 8.1 Events
 
-Kumo log records are normalised by the agent into `EmailEvent`:
+`skiff-mail` writes each attempt as an `EmailEvent`, and the agent forwards them:
 `accepted | delivered | deferred | bounced | complained | rejected | suppressed | received | dropped`
 (phase 3 adds `opened | clicked | unsubscribed`), with message id, org, project, domain, recipient,
 attempt number, remote MX and response, bounce class, TLS, tags, and timestamps.
@@ -492,7 +489,7 @@ Settings shows the trade-off.
 
 | Phase | Scope |
 |---|---|
-| **E0 spike** | KumoMTA on Debian 13 (2 vCPU / 4 GB): install from the pinned upstream build, idle and 10 msg/s RSS, policy round trip to a stub agent socket, DKIM pass at Gmail and Outlook from the prod IP (port 25 enabled, PTR set), inbound to a stub webhook, OOB DSN and ARF parsing. Measure Postfix with the same harness only if Kumo fails. Write the results in SPIKES.md. |
+| **E0 spike** | Done 2026-11-07 (SPIKES.md): `smtp-server` STARTTLS/465/AUTH, `mailauth` DKIM sign + verify and `mailparser` under Bun 1.4; port 25 egress from the prod IP works. Still open: set the PTR, then a DKIM/SPF/DMARC pass at Gmail and Outlook. |
 | **E1 outbound** | `mail` role + capability, helper install/remove, preflight, platform DNS, domains + DKIM + Cloudflare TXT/MX, outbox + REST send, SMTP submission, `authorizeSend`, credentials + attach, events → SQLite (+ ClickHouse), suppression from bounces/complaints, sandbox/limits/auto-pause, alerts, the dashboard pages, MCP, CLI. |
 | **E2 inbound + functions** | Port-25 inbound for receiving domains, inbound checks, routes (function/webhook/bucket/drop), the `email()` handler, the `send_email` binding, tenant webhooks, address identities. |
 | **E3 polish** | Custom MAIL FROM, ed25519 dual-signing, MTA-STS/TLS-RPT, DMARC aggregate report ingestion and a per-domain report view, smarthost relay with SES BYODKIM, optional rspamd, templates (`{{var}}` stored per org), open/click tracking (opt-in, `<slug>--t.<contentDomain>`), a platform-hosted unsubscribe page. |
@@ -506,39 +503,41 @@ Settings shows the trade-off.
 |---|---|
 | The prod IP has poor or no reputation; mail goes to spam even with a perfect setup | Sandbox + low default rates as an implicit warm-up; Gmail Postmaster Tools and Microsoft SNDS enrolment linked from preflight; the smarthost relay per destination as the escape hatch |
 | One org burns the shared IP for everyone | Sandbox by default, auto-pause thresholds below the providers' lines, platform suppression list, global pause |
-| KumoMTA too heavy for the edge | E0 measures it first; Postfix fallback behind the same agent contract; or a dedicated small mail node |
-| Losing the mail node loses queued mail | Outbox only deletes after Kumo's acceptance; spool on a node volume; E4 for real HA. Documented as an L0 resource in CLUSTERING terms |
+| Our MTA gets a delivery edge case wrong | Tests against a fake MX for every reply class; conservative retries and expiry; the smarthost relay as the escape hatch; per-attempt events make every failure visible |
+| Losing the mail node loses queued mail | Outbox only deletes after `skiff-mail` has spooled the message; spool on a node volume; E4 for real HA. Documented as an L0 resource in CLUSTERING terms |
 | Open relay or open submission by mistake | Port 25 accepts only receiving domains with routes; submission requires TLS + AUTH; tests enforce both, and preflight probes an open-relay attempt from outside |
 | Backscatter (bouncing spam to forged senders) | Reject at SMTP time (`RCPT`/`DATA`) rather than accept-then-bounce, except for webhook/bucket retry exhaustion, which drops with an event and never sends a DSN to an unauthenticated sender |
 | Function email handler latency holds SMTP sessions open | 30 s budget, per-route concurrency cap, `451` on overflow |
-| Private keys leaking through desired state or logs | Keys sealed per org, opened for the mail node only into agent memory, never in desired state or logs; Kumo receives them over the unix socket |
+| Private keys leaking through desired state or logs | Keys sealed per org, opened for the mail node only, held in agent and `skiff-mail` memory, never in desired state, the spool or logs; passed over the 0660 unix socket |
 
 ---
 
-## 13. Proposed decisions
+## 13. Decisions (as recorded in DECISIONS.md)
 
-These become rows in DECISIONS.md once agreed.
+These are summaries; the rows in [DECISIONS.md](./DECISIONS.md) are authoritative.
 
 - **D114 (amends D22).** Tenant email is delivered by Skiff's own MTA directly to recipients' MX
   hosts. D22 keeps the platform's own mail (sign-in, invites, alerts) on an external SMTP relay so
   that it works when the mail node does not. *Why:* the user wants SES's job on their own nodes, and
   SES's tenant model (identities, suppression, events) can't be layered on a relay we don't
   control. *Rejected:* SES as the only transport (keeps the D22 constraint, but tenants on a shared
-  AWS account); Postal (Ruby + MariaDB + RabbitMQ, too heavy); a hand-written MTA in Bun (queueing,
-  retries, MX/TLS and shaping are years of edge cases).
-- **D115.** KumoMTA is the engine (Postfix is the fallback if spike E0 fails), run as a platform
-  service on the one `mail`-role node with a fixed Lua policy. Every tenant decision is a call to the
-  node agent, which answers from desired state. *Why:* the MTA owns the queue and Skiff owns tenancy,
-  so swapping the engine changes one module. *Rejected:* tenant data in Lua or Kumo config files
-  (two sources of truth); a per-org MTA container (one IP, so one reputation, anyway).
+  AWS account); Postal (Ruby + MariaDB + RabbitMQ, too heavy).
+- **D115.** The MTA is Skiff's own: `packages/mail`, run as `skiff-agent mail` under
+  `skiff-mail.service` (the studio pattern), built on `smtp-server`, nodemailer's SMTP client,
+  `mailauth` and `mailparser`. Skiff writes the spool, scheduler, delivery, shaping, classification
+  and policy. The agent pushes state, injects outbox mail and pulls events over a unix socket;
+  `skiff-mail` holds no credentials. *Why:* one language and one binary, in-process policy, no
+  upstream pin, and a footprint that fits the edge. *Rejected:* KumoMTA (4-core floor, no Debian
+  package, Lua calling back into the agent for every decision); Postfix (policy and events through
+  log parsing); a per-org MTA (one IP, so one reputation anyway).
 - **D116.** A domain is verified by its DKIM record alone. Skiff generates per-domain RSA keys sealed
   with the org key, and the default return path is VERP on `bounces.<platformDomain>`, with DMARC
   aligned through DKIM. Records are created through Cloudflare when the zone is reachable, never
   overwriting SPF or DMARC. *Rejected:* a separate TXT token (the DKIM record already proves
   control); requiring custom MAIL FROM in v1 (one more record per domain for little gain).
 - **D117.** Three send paths share one pure `authorizeSend`. REST and binding sends go through a
-  SQLite outbox that the mail node's agent pulls; SMTP submission enters Kumo directly and is
-  authorised by the agent. *Rejected:* the control plane pushing to Kumo (breaks the pull model);
+  SQLite outbox that the mail node's agent pulls and injects; SMTP submission enters `skiff-mail`
+  directly and is authorised there against the pushed state. *Rejected:* the control plane pushing to the MTA (breaks the pull model);
   everything through SMTP (the binding and REST would need credentials).
 - **D118.** Inbound is opt-in per domain and refused over existing MX records unless confirmed. Mail
   is accepted only for routed recipients. Function routes run synchronously during `DATA`, so
@@ -546,7 +545,7 @@ These become rows in DECISIONS.md once agreed.
   and bucket targets must be on the mail node until C2. *Rejected:* store-and-forward for functions
   (no real reject; backscatter).
 - **D119.** Every org has a suppression list fed by hard bounces, complaints and unsubscribes, plus a
-  platform list for cross-org hard bounces. Orgs start in sandbox (the owner's first org excepted)
+  platform list for cross-org hard bounces. Orgs start in sandbox (orgs set up by a platform admin excepted)
   and pause automatically at an 8 % bounce rate or 0.3 % complaint rate. *Rejected:* trusting every
   org on a shared IP.
 - **D120.** Email events live in SQLite (30-day message log and the rate counters, so the product
@@ -555,8 +554,7 @@ These become rows in DECISIONS.md once agreed.
 
 ## 14. Open questions
 
-1. Should the MTA run as a native unit (pinned upstream binary, like ClickHouse) or as a Quadlet
-   container (official image)? E0 decides on footprint and update path; the native unit is preferred.
+1. Resolved by D115: `skiff-agent mail` as a native unit.
 2. Templates: store them per org in v1 (SES parity), or leave rendering to the app? (Proposed: E3.)
 3. Whether to accept `raw` MIME on REST at all in v1, or only through SMTP and the binding.
-4. Dedicated IPs per org once more than one IP exists (egress pools make this cheap in Kumo).
+4. Dedicated IPs per org once more than one IP exists.

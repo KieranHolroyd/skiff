@@ -45,6 +45,8 @@ const policyFields = {
 	poolSaturationAlertPercent: int(50, 100),
 	/** A storage instance above this share of its budget alerts (critical at 95%). */
 	storageAlertPercent: int(50, 99),
+	/** A queue broker's JetStream store above this share of its budget alerts (critical at 95%). */
+	brokerStoreAlertPercent: int(50, 99),
 	/** A built-in alert that is still true re-notifies after this many minutes. */
 	systemAlertRepeatMinutes: int(5, 1440),
 
@@ -89,6 +91,7 @@ export const PLATFORM_POLICY_DEFAULTS: PlatformPolicies = {
 	databaseConnectionsAlertPercent: 90,
 	poolSaturationAlertPercent: 90,
 	storageAlertPercent: 85,
+	brokerStoreAlertPercent: 85,
 	systemAlertRepeatMinutes: 30,
 	databaseBackupSchedule: '0 3 * * *',
 	databaseBackupRetentionDays: 7,

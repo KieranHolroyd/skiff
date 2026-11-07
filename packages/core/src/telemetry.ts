@@ -1,5 +1,7 @@
 import type {
 	AnalyticsEvent,
+	BrokerMetricBucket,
+	BrokerMetricPoint,
 	DatabaseMetricBucket,
 	DatabaseMetricPoint,
 	FunctionTailEvent,
@@ -18,6 +20,16 @@ import {
 	type ClickHouseParams,
 	type ClickHouseSettings,
 } from './clickhouse.ts';
+import {
+	MQ_COUNTERS,
+	MQ_GAUGES,
+	brokerCountersSql,
+	brokerGaugeAggregate,
+	brokerLatestSql,
+	brokerMetricsTableSql,
+	brokerRollupSql,
+	brokerSeriesSql,
+} from './broker-metrics-sql.ts';
 import {
 	DB_COUNTERS,
 	DB_GAUGES,
@@ -154,6 +166,13 @@ export interface StorageMetricsQuery {
 	interval: TelemetryInterval;
 }
 
+export interface BrokerMetricsQuery {
+	brokerId: string;
+	from: TimeInput;
+	to: TimeInput;
+	interval: TelemetryInterval;
+}
+
 /** Last-hour traffic for one project (`scrapeSamples`). */
 export interface ScrapeTrafficRow {
 	projectId: string;
@@ -182,6 +201,10 @@ export interface ScrapeSamples {
 	databaseCounters: ScrapeSampleRow[];
 	/** Newest sample per storage instance (`storageLatestSql` columns). */
 	storage: ScrapeSampleRow[];
+	/** Newest sample per broker (`brokerLatestSql` columns). */
+	brokers: ScrapeSampleRow[];
+	/** Last-hour sums of the `MQ_COUNTERS` columns per broker. */
+	brokerCounters: ScrapeSampleRow[];
 }
 
 export interface FunctionInvocationQuery {
@@ -1004,6 +1027,45 @@ export class TelemetryStore {
 		});
 	}
 
+	/** Managed queue broker minute samples (D123). Re-sending a minute replaces it. */
+	async ingestBrokerMetrics(buckets: BrokerMetricBucket[]): Promise<{ inserted: number }> {
+		return this.#guarded('ingestBrokerMetrics', { inserted: 0 }, async () => {
+			const rows = new Map<string, Record<string, unknown>>();
+			for (const bucket of buckets) {
+				const bucketMs = floorToMinute(toEpochMs(bucket.bucket));
+				const row: Record<string, unknown> = { broker_id: bucket.brokerId, bucket: chDateTime(bucketMs) };
+				for (const [column, key] of MQ_GAUGES) row[column] = key === 'up' ? (bucket.up ? 1 : 0) : toDouble(bucket[key]);
+				for (const [column, key] of MQ_COUNTERS) row[column] = Math.max(0, Math.trunc(toDouble(bucket[key])));
+				rows.set(`${bucket.brokerId}\u0000${bucketMs}`, row);
+			}
+			if (rows.size === 0) return { inserted: 0 };
+			return this.#serialize(async () => {
+				const version = this.#nextVersion();
+				const values = [...rows.values()].map((row) => ({ ...row, version }));
+				await this.#write().insert(`${this.database}.broker_metrics_1m`, values);
+				return { inserted: values.length };
+			});
+		});
+	}
+
+	async queryBrokerMetrics(input: BrokerMetricsQuery): Promise<BrokerMetricPoint[]> {
+		return this.#guarded('queryBrokerMetrics', [], async () => {
+			const fromMs = toEpochMs(input.from);
+			const toMs = toEpochMs(input.to);
+			if (toMs < fromMs) return [];
+			const rows = await this.#read(brokerSeriesSql(this.database, input.interval), {
+				id: input.brokerId,
+				from: chDateTime(fromMs),
+				to: chDateTime(toMs),
+			});
+			return rows.map((row) => {
+				const point = { bucket: isoFromMs(readNumber(row['bucket_ms'])) } as Record<string, unknown>;
+				for (const [column, key] of [...MQ_GAUGES, ...MQ_COUNTERS]) point[key] = readNumber(row[column]);
+				return point as unknown as BrokerMetricPoint;
+			});
+		});
+	}
+
 	/**
 	 * Analytics Engine datapoints written by function bindings (docs/FUNCTIONS.md §4.5, D101).
 	 * Insert-only and fail-open like every other method: a ClickHouse outage loses telemetry, never
@@ -1178,9 +1240,10 @@ export class TelemetryStore {
 				const rolled = readNumber(countRow?.n);
 				const settings = { ...READ_SETTINGS, insert_deduplicate: 0 };
 				if (rolled > 0) await client.exec(trafficRollupSql(this.database), { params, settings });
-				// Managed databases and object storage roll up over the same window (D57, S7).
+				// Managed databases, object storage and brokers roll up over the same window (D57, S7, D123).
 				await client.exec(dbRollupSql(this.database), { params, settings });
 				await client.exec(storageRollupSql(this.database), { params, settings });
+				await client.exec(brokerRollupSql(this.database), { params, settings });
 				return rolled;
 			});
 		});
@@ -1215,7 +1278,7 @@ export class TelemetryStore {
 				};
 				let raw = 0;
 				let hourly = 0;
-				for (const family of ['traffic', 'db_metrics', 'storage_metrics']) {
+				for (const family of ['traffic', 'db_metrics', 'storage_metrics', 'broker_metrics']) {
 					raw += await drop(`${family}_1m`, rawCutoff);
 					hourly += await drop(`${family}_1h`, hourlyCutoff);
 				}
@@ -1363,8 +1426,13 @@ export class TelemetryStore {
 	 * so the caller's tenancy decides what is read. Fail-open: an unavailable store returns empty
 	 * lists.
 	 */
-	async scrapeSamples(input: { projectIds: string[]; databaseIds: string[]; storageIds: string[] }): Promise<ScrapeSamples> {
-		const empty: ScrapeSamples = { traffic: [], databases: [], databaseCounters: [], storage: [] };
+	async scrapeSamples(input: {
+		projectIds: string[];
+		databaseIds: string[];
+		storageIds: string[];
+		brokerIds?: string[];
+	}): Promise<ScrapeSamples> {
+		const empty: ScrapeSamples = { traffic: [], databases: [], databaseCounters: [], storage: [], brokers: [], brokerCounters: [] };
 		return this.#guarded('scrapeSamples', empty, async () => {
 			const toMs = this.#now();
 			const hour = { from: chDateTime(toMs - HOUR_MS), to: chDateTime(toMs) };
@@ -1416,6 +1484,13 @@ export class TelemetryStore {
 				storageIds.size === 0
 					? []
 					: (await this.#read(storageLatestSql(this.database), { since })).filter((row) => storageIds.has(readString(row['storage_id'])));
+			const brokerIds = new Set(input.brokerIds ?? []);
+			const brokers =
+				brokerIds.size === 0
+					? []
+					: (await this.#read(brokerLatestSql(this.database), { since })).filter((row) => brokerIds.has(readString(row['broker_id'])));
+			const brokerCounters =
+				brokerIds.size === 0 ? [] : await this.#read(brokerCountersSql(this.database), { ...hour, brokerIds: [...brokerIds] });
 			return {
 				traffic: traffic.map((row) => ({
 					projectId: readString(row['project_id']),
@@ -1431,6 +1506,8 @@ export class TelemetryStore {
 				databases: databases.map((row) => numericRow(row, 'database_id')),
 				databaseCounters: databaseCounters.map((row) => numericRow(row, 'database_id')),
 				storage: storage.map((row) => numericRow(row, 'storage_id')),
+				brokers: brokers.map((row) => numericRow(row, 'broker_id')),
+				brokerCounters: brokerCounters.map((row) => numericRow(row, 'broker_id')),
 			};
 		});
 	}
@@ -1529,6 +1606,8 @@ export class TelemetryStore {
 			await client.exec(dbMetricsTableSql(db, 'db_metrics_1h', hourTtl, 'toYYYYMM(bucket)'));
 			await client.exec(storageMetricsTableSql(db, 'storage_metrics_1m', rawTtl, 'toYYYYMMDD(bucket)'));
 			await client.exec(storageMetricsTableSql(db, 'storage_metrics_1h', hourTtl, 'toYYYYMM(bucket)'));
+			await client.exec(brokerMetricsTableSql(db, 'broker_metrics_1m', rawTtl, 'toYYYYMMDD(bucket)'));
+			await client.exec(brokerMetricsTableSql(db, 'broker_metrics_1h', hourTtl, 'toYYYYMM(bucket)'));
 			// Analytics Engine datapoints (docs/FUNCTIONS.md §4.5): raw events, its own 90-day TTL.
 			await client.exec(analyticsTableSql(db));
 			// Tail-worker items (phase 3): structured invocation logs, independent 30-day TTL.
@@ -1563,6 +1642,12 @@ export class TelemetryStore {
 					'storage_id',
 					ST_GAUGES.map(([c]) => [c, ST_MAX_GAUGES.has(c) ? `max(${c})` : `avg(${c})`] as const),
 				),
+			);
+			await client.exec(
+				hourlyViewSql(db, 'broker_metrics_hourly', 'broker_metrics', 'broker_id', [
+					...MQ_GAUGES.map(([c]) => [c, brokerGaugeAggregate(c)] as const),
+					...MQ_COUNTERS.map(([c]) => [c, `sum(${c})`] as const),
+				]),
 			);
 			this.error = null;
 			this.available = true;

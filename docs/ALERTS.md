@@ -24,13 +24,14 @@ admins only.
 | Metric rules, silences, acknowledgements, history | Alerts → Rules, Silences, Active and History (org members, §1–§5) |
 
 **System alert settings.** Every built-in kind (`node_offline`, `disk`, `cert`, `promote_5xx`,
-`backup`, `database_storage`, `database_connections`, `database_pool`, `storage_usage`, `quota`,
-`telemetry`) can be turned off or sent to particular channels. The routing is stored as one JSON
+`backup`, `database_storage`, `database_connections`, `database_pool`, `storage_usage`,
+`broker_store`, `quota`, `telemetry`) can be turned off or sent to particular channels. The routing is stored as one JSON
 row in `settings` (`system_alert_routing`). A kind that is not listed is on and goes to every
 channel. Thresholds are platform policies: `nodeAlertMinutes`, `diskAlertPercent` (85),
 `certWarnDays`/`certCriticalDays` (14/3), `databaseStorageAlertPercent` (85),
-`databaseConnectionsAlertPercent` (90), `poolSaturationAlertPercent` (90) and
-`storageAlertPercent` (85). `systemAlertRepeatMinutes` (30) is how often a still-true built-in
+`databaseConnectionsAlertPercent` (90), `poolSaturationAlertPercent` (90),
+`storageAlertPercent` (85) and `brokerStoreAlertPercent` (85; a queue broker's JetStream store
+against its budget, from the SQLite totals, D123). `systemAlertRepeatMinutes` (30) is how often a still-true built-in
 alert repeats. The maintenance loop reads all of these on every sweep, so a change applies within
 a minute. A turned-off kind sends nothing and is not recorded. `OnFailure=` alerts from systemd
 (`skiff-alert`) still go to every channel, because they must work with the control plane down.
@@ -75,6 +76,9 @@ The editor and `create_alert_rule` start from presets. After creation each one i
 | `database_connections` | databases `connection_utilization` | > 90% for 5 min |
 | `database_deadlocks` | databases `sum(deadlocks)`, 5 min | > 0, repeat hourly |
 | `storage_down` | storage `min(up)` by instance, 2 min | < 1 for 2 min, no data = alerting, critical |
+| `broker_down` | brokers `min(up)` by broker, 2 min | < 1 for 2 min, no data = alerting, critical |
+| `broker_store_full` | brokers `store_utilization` by broker, 5 min | > 85% for 5 min |
+| `broker_backlog_stale` | brokers `min(oldest_age_seconds)` by broker, 10 min | > 15 min (a draining queue's oldest message) |
 
 ## 2. States
 

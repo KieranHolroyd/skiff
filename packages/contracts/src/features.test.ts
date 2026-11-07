@@ -14,6 +14,7 @@ describe('feature registry', () => {
 		expect(FEATURE_FLAG_NAMES).toEqual([
 			'FUNCTIONS',
 			'BROKERS',
+			'EMAIL',
 			'BACKUPS_RESTORE',
 			'PITR',
 			'OBJECT_BROWSER',

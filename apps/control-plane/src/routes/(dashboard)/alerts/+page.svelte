@@ -27,7 +27,6 @@
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import * as InputGroup from '#lib/components/ui/input-group/index.js';
 	import { Skeleton } from '#lib/components/ui/skeleton/index.js';
-	import * as Tabs from '#lib/components/ui/tabs/index.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
 	import { errorText } from '#lib/query.js';
 	import EmptyState from '../_lib/EmptyState.svelte';
@@ -56,6 +55,14 @@
 	import SilencesPanel from './_lib/SilencesPanel.svelte';
 	import StateBadge from './_lib/StateBadge.svelte';
 	import SystemAlerts from './_lib/SystemAlerts.svelte';
+	import {
+		ADMIN_ALERT_TABS,
+		ALERT_TABS,
+		ALERTS_SUBNAV_KEY,
+		readAlertTab,
+		type AlertTab
+	} from './_lib/subnav.js';
+	import { useSubnavLocal } from '#lib/nav/subnav-local.svelte.js';
 
 	const queryClient = useQueryClient();
 	const actions = ruleActions(queryClient);
@@ -81,16 +88,9 @@
 
 	// --- tabs ------------------------------------------------------------------------------------
 
-	const TABS = ['active', 'rules', 'silences', 'history', 'system', 'channels'] as const;
-	type Tab = (typeof TABS)[number];
-	const ADMIN_TABS = new Set<Tab>(['system', 'channels']);
-
-	function readTab(): Tab {
-		const raw = page.url.searchParams.get('tab') as Tab | null;
-		return raw && TABS.includes(raw) ? raw : 'active';
-	}
-	let tab = $state<Tab>(readTab());
-	const shown = $derived(ADMIN_TABS.has(tab) && !platformAdmin ? 'active' : tab);
+	type Tab = AlertTab;
+	let tab = $state<Tab>(readAlertTab(page.url.searchParams.get('tab'), true));
+	const shown = $derived(ADMIN_ALERT_TABS.has(tab) && !platformAdmin ? 'active' : tab);
 
 	function setTab(next: string) {
 		tab = next as Tab;
@@ -100,6 +100,22 @@
 		// eslint-disable-next-line svelte/no-navigation-without-resolve -- same route, only the query string changes
 		replaceState(`${url.pathname}${url.search}`, {});
 	}
+
+	/** The sidebar lists the sections and the counts this page polls for. */
+	useSubnavLocal(() => ({
+		key: ALERTS_SUBNAV_KEY,
+		active: shown,
+		counts: {
+			active: overview?.active.length,
+			rules: rulesQuery.data ? rules.length : undefined,
+			silences: overview?.counts.silences
+		},
+		select: (id) => {
+			if (!ALERT_TABS.includes(id as Tab)) return false;
+			setTab(id);
+			return true;
+		}
+	}));
 
 	const stats = $derived.by(() => {
 		if (!overview) return [];
@@ -367,39 +383,7 @@
 		</div>
 	{/if}
 
-	<Tabs.Root value={shown} onValueChange={setTab}>
-		<Tabs.List
-			variant="line"
-			class="w-full justify-start overflow-x-auto border-b"
-			aria-label="Alerts"
-		>
-			<Tabs.Trigger value="active" class="flex-none">
-				Active
-				{#if overview && overview.active.length}<Badge
-						variant={overview.counts.firing ? 'danger' : 'secondary'}
-						class="ml-1 tabular-nums">{overview.active.length}</Badge
-					>{/if}
-			</Tabs.Trigger>
-			<Tabs.Trigger value="rules" class="flex-none">
-				Rules
-				{#if rulesQuery.data}<Badge variant="secondary" class="ml-1 tabular-nums"
-						>{rules.length}</Badge
-					>{/if}
-			</Tabs.Trigger>
-			<Tabs.Trigger value="silences" class="flex-none">
-				Silences
-				{#if overview?.counts.silences}<Badge variant="secondary" class="ml-1 tabular-nums"
-						>{overview.counts.silences}</Badge
-					>{/if}
-			</Tabs.Trigger>
-			<Tabs.Trigger value="history" class="flex-none">History</Tabs.Trigger>
-			{#if platformAdmin}
-				<Tabs.Trigger value="system" class="flex-none">System alerts</Tabs.Trigger>
-				<Tabs.Trigger value="channels" class="flex-none">Channels</Tabs.Trigger>
-			{/if}
-		</Tabs.List>
-
-		<Tabs.Content value="active" class="pt-4">
+	{#if shown === 'active'}<div class="contents">
 			{#if overviewQuery.isPending}
 				<div class="space-y-2"><Skeleton class="h-12" /><Skeleton class="h-12" /></div>
 			{:else if overviewQuery.error}
@@ -440,9 +424,9 @@
 					/>
 				</Card.Root>
 			{/if}
-		</Tabs.Content>
+		</div>{/if}
 
-		<Tabs.Content value="rules" class="space-y-3 pt-4">
+	{#if shown === 'rules'}<div class="space-y-3">
 			<div class="flex flex-wrap items-center gap-2">
 				<InputGroup.Root class="w-full sm:w-64">
 					<InputGroup.Addon><SearchIcon /></InputGroup.Addon>
@@ -487,25 +471,24 @@
 					/>
 				</Card.Root>
 			{/if}
-		</Tabs.Content>
+		</div>{/if}
 
-		<Tabs.Content value="silences" class="pt-4">
+	{#if shown === 'silences'}<div class="contents">
 			<SilencesPanel {canSilence} oncreate={() => silence(null)} />
-		</Tabs.Content>
+		</div>{/if}
 
-		<Tabs.Content value="history" class="pt-4">
+	{#if shown === 'history'}<div class="contents">
 			<HistoryTimeline {platformAdmin} />
-		</Tabs.Content>
+		</div>{/if}
 
-		{#if platformAdmin}
-			<Tabs.Content value="system" class="pt-4">
+	{#if platformAdmin}
+		{#if shown === 'system'}<div class="contents">
 				<SystemAlerts />
-			</Tabs.Content>
-			<Tabs.Content value="channels" class="pt-4">
+			</div>{/if}
+		{#if shown === 'channels'}<div class="contents">
 				<Channels />
-			</Tabs.Content>
-		{/if}
-	</Tabs.Root>
+			</div>{/if}
+	{/if}
 </div>
 
 <SilenceDialog bind:open={silenceOpen} {rules} preset={silencePreset} />

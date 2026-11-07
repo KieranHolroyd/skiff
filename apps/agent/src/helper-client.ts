@@ -10,6 +10,7 @@ import {
 	type WorkloadStatus,
 } from '@skiff/contracts';
 import type { HelperNodeUpdateApi } from './node-update.ts';
+import type { HelperMailApi } from './mail-bridge.ts';
 
 /**
  * Client for the privileged helper's fixed verbs. The agent is unprivileged (D26): this is its
@@ -144,7 +145,7 @@ const NODE_UPDATE_TIMEOUT_MS = 11 * 60_000;
 const WIREGUARD_TIMEOUT_MS = 30_000;
 const STATUSES: readonly WorkloadStatus[] = ['pending', 'starting', 'running', 'failed', 'stopped'];
 
-export class HelperClient implements HelperApi, HelperStudioApi, HelperStudioPrincipalApi, HelperNodeUpdateApi {
+export class HelperClient implements HelperApi, HelperStudioApi, HelperStudioPrincipalApi, HelperNodeUpdateApi, HelperMailApi {
 	constructor(
 		readonly socketPath: string,
 		private readonly timeouts: { health?: number; apply?: number } = {},
@@ -217,6 +218,21 @@ export class HelperClient implements HelperApi, HelperStudioApi, HelperStudioPri
 
 	async studioStop(): Promise<void> {
 		await this.request('POST', '/v1/studio/stop', undefined, STUDIO_TIMEOUT_MS);
+	}
+
+	/** `systemctl start skiff-mail.service` on the mail node (docs/EMAIL.md). */
+	async mailStart(): Promise<void> {
+		await this.request('POST', '/v1/mail/start', undefined, STUDIO_TIMEOUT_MS);
+	}
+
+	async mailStop(): Promise<void> {
+		await this.request('POST', '/v1/mail/stop', undefined, STUDIO_TIMEOUT_MS);
+	}
+
+	/** Copy the submission certificate out of Caddy's storage into skiff-mail's TLS dir. */
+	async mailTls(host: string): Promise<{ found: boolean; changed: boolean }> {
+		const result = (await this.request('POST', '/v1/mail/tls', { host }, STUDIO_TIMEOUT_MS)) as { found?: unknown; changed?: unknown };
+		return { found: result.found === true, changed: result.changed === true };
 	}
 
 	/**

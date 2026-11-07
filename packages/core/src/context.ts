@@ -20,6 +20,8 @@ import type { DatabaseService } from './databases.ts';
 import type { DatabaseStudioService } from './database-studio.ts';
 import type { StorageService } from './storage-instances.ts';
 import type { BrokerService } from './brokers.ts';
+import type { EmailService } from './email.ts';
+import type { EventService } from './events.ts';
 import type { VolumeService } from './volumes.ts';
 import type { AppVolumeService } from './app-volumes.ts';
 import type { ServiceMoveService } from './service-moves.ts';
@@ -77,6 +79,10 @@ export interface CoreContext {
 	storage: StorageService;
 	/** Managed queue brokers (D111). */
 	brokers: BrokerService;
+	/** Email: Skiff's self-hosted SES (docs/EMAIL.md). */
+	email: EmailService;
+	/** Event notifications into function queues (D122). */
+	events: EventService;
 	storageObjects: StorageObjectsService;
 	volumes: VolumeService;
 	appVolumes: AppVolumeService;

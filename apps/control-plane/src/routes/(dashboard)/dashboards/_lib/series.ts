@@ -37,7 +37,8 @@ export type Frame = TimeFrame | CategoryFrame;
 const ID_COLUMNS: Record<string, keyof Names> = {
 	project_id: 'project',
 	database_id: 'database',
-	storage_id: 'storage'
+	storage_id: 'storage',
+	broker_id: 'broker'
 };
 
 /** Which name map a column's values belong to, if any. */

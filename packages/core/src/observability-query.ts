@@ -36,7 +36,7 @@ const FIXED_INTERVALS: Record<string, number> = {
 	'1d': 86_400,
 };
 
-type Family = 'traffic' | 'db_metrics' | 'storage_metrics';
+type Family = 'traffic' | 'db_metrics' | 'storage_metrics' | 'broker_metrics';
 
 interface MeasureDef {
 	name: string;
@@ -54,7 +54,7 @@ interface DatasetDef {
 	info: Omit<DatasetInfo, 'measures'>;
 	family: Family;
 	/** The column the caller's scope filters on. */
-	scope: 'project_id' | 'database_id' | 'storage_id';
+	scope: 'project_id' | 'database_id' | 'storage_id' | 'broker_id';
 	/** Datasets over the top_paths/top_referrers maps: one row per (bucket, key). */
 	mapColumn?: { column: 'top_paths' | 'top_referrers'; key: string };
 	measures: MeasureDef[];
@@ -176,6 +176,36 @@ const storageMeasures: MeasureDef[] = [
 	{ name: 'memory_bytes', label: 'Memory', kind: 'gauge', unit: 'bytes' },
 ];
 
+const brokerMeasures: MeasureDef[] = [
+	{ name: 'up', label: 'Up (availability)', kind: 'gauge', unit: 'percentunit' },
+	{ name: 'connections', label: 'Connections', kind: 'gauge', unit: 'short' },
+	{ name: 'streams', label: 'Streams', kind: 'gauge', unit: 'short' },
+	{ name: 'consumers', label: 'Consumers', kind: 'gauge', unit: 'short' },
+	{ name: 'store_bytes', label: 'Store used', kind: 'gauge', unit: 'bytes' },
+	{ name: 'store_limit_bytes', label: 'Store budget', kind: 'gauge', unit: 'bytes' },
+	{ name: 'memory_store_bytes', label: 'Memory store used', kind: 'gauge', unit: 'bytes' },
+	{ name: 'messages', label: 'Messages held', kind: 'gauge', unit: 'short' },
+	{ name: 'pending', label: 'Pending (undelivered)', kind: 'gauge', unit: 'short' },
+	{ name: 'ack_pending', label: 'Awaiting ack', kind: 'gauge', unit: 'short' },
+	{ name: 'redelivered', label: 'Redelivered', kind: 'gauge', unit: 'short' },
+	{ name: 'oldest_age_seconds', label: 'Oldest message age (s)', kind: 'gauge', unit: 'short' },
+	{ name: 'memory_bytes', label: 'Memory', kind: 'gauge', unit: 'bytes' },
+	{ name: 'published', label: 'Published (stored)', kind: 'counter', unit: 'short' },
+	{ name: 'messages_in', label: 'Messages in', kind: 'counter', unit: 'short' },
+	{ name: 'messages_out', label: 'Messages out', kind: 'counter', unit: 'short' },
+	{ name: 'bytes_in', label: 'Bytes in', kind: 'counter', unit: 'bytes' },
+	{ name: 'bytes_out', label: 'Bytes out', kind: 'counter', unit: 'bytes' },
+	{ name: 'slow_consumers', label: 'Slow consumers', kind: 'counter', unit: 'short' },
+	{
+		name: 'store_utilization',
+		label: 'Store utilization',
+		kind: 'derived',
+		unit: 'percentunit',
+		expression: 'if(max(store_limit_bytes) = 0, 0, max(store_bytes) / max(store_limit_bytes))',
+		description: 'File store used / budget',
+	},
+];
+
 const trafficDimensions = [
 	{ name: 'host', label: 'Host' },
 	{ name: 'project_id', label: 'Project', idOf: 'project' as const },
@@ -243,6 +273,18 @@ export const DATASETS: Record<ObservabilityDataset, DatasetDef> = {
 		family: 'storage_metrics',
 		scope: 'storage_id',
 		measures: storageMeasures,
+	},
+	brokers: {
+		info: {
+			name: 'brokers',
+			label: 'Queue brokers',
+			description: 'Per-minute samples from each managed broker: connections, JetStream store, backlog and message rates.',
+			dimensions: [{ name: 'broker_id', label: 'Broker', idOf: 'broker' }],
+			tables: { minute: 'broker_metrics_1m', hour: 'broker_metrics_hourly' },
+		},
+		family: 'broker_metrics',
+		scope: 'broker_id',
+		measures: brokerMeasures,
 	},
 };
 

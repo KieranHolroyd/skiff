@@ -11,7 +11,7 @@
 </svelte:head>
 
 <div class="space-y-6">
-	<DatabaseHeader db={data.database} can={data.dbCan} active="logs" />
+	<DatabaseHeader db={data.database} can={data.dbCan} />
 
 	<ServiceLogs
 		endpoint="/api/v1/databases/{encodeURIComponent(data.database.name)}/logs"

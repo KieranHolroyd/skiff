@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import { assertMailHost } from './mail.ts';
 import { dirname } from 'node:path';
 import type { HelperConfig } from './config.ts';
 import {
@@ -66,6 +67,12 @@ export interface HelperRuntime {
 	startStudio(): Promise<void>;
 	/** `systemctl stop skiff-studio.service`. */
 	stopStudio(): Promise<void>;
+	/** `systemctl start skiff-mail.service` (docs/EMAIL.md). Optional: older runtimes answer 501. */
+	startMail?(): Promise<void>;
+	/** `systemctl stop skiff-mail.service`. */
+	stopMail?(): Promise<void>;
+	/** Copy the submission host's certificate from Caddy's storage for `skiff-mail`. */
+	copyMailTls?(host: string): Promise<{ found: boolean; changed: boolean }>;
 	/** Restore a custom-format dump into a managed database. */
 	restoreDatabase(id: string, body: ReadableStream<Uint8Array> | null): Promise<void>;
 	/** Write the 0400 pgBackRest config for PITR (docs/PITR.md). */
@@ -188,6 +195,22 @@ export function createHandler(
 				if (path === '/v1/studio/start') await runtime.startStudio();
 				else await runtime.stopStudio();
 				return json({ ok: true });
+			}
+
+			// --- email (docs/EMAIL.md §3.2): one fixed unit, and its certificate -----------------
+			if (path === '/v1/mail/start' || path === '/v1/mail/stop') {
+				if (method !== 'POST') return methodNotAllowed('POST');
+				assertNoVerbInput({ search: url.search, body: await readText(request, maxBodyBytes) });
+				const verb = path === '/v1/mail/start' ? runtime.startMail : runtime.stopMail;
+				if (!verb) return json({ error: 'not_supported' }, 501);
+				await verb.call(runtime);
+				return json({ ok: true });
+			}
+			if (path === '/v1/mail/tls') {
+				if (method !== 'POST') return methodNotAllowed('POST');
+				const body = assertRecord(await readJson(request, maxBodyBytes), 'request');
+				if (!runtime.copyMailTls) return json({ error: 'not_supported' }, 501);
+				return json({ ok: true, ...(await runtime.copyMailTls(assertMailHost(body.host))) });
 			}
 
 			// --- volumes (D72, D76): read-only inventory and mount verification -----------------

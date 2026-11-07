@@ -3,11 +3,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDb } from '@skiff/db';
-import { brokerAlias, DEFAULT_FEATURES, workloadDesiredSchema } from '@skiff/contracts';
+import { brokerAlias, DEFAULT_FEATURES, observabilityQueryRequestSchema, workloadDesiredSchema } from '@skiff/contracts';
 import { buildPrincipal } from './orgs.ts';
-import { createCore } from './index.ts';
+import { createCore, MetricsExporter } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
 import type { Core } from './index.ts';
+import { disposeTelemetryStore, hasClickHouse, testTelemetryStore } from './test-clickhouse.ts';
 
 /** Managed queue brokers (docs/BROKERS.md, D111). */
 const dir = mkdtempSync(join(tmpdir(), 'skiff-brokers-'));
@@ -48,7 +49,10 @@ const stats = {
 	certs: [],
 };
 
-afterAll(() => {
+const telemetry = testTelemetryStore({ now: () => clock });
+
+afterAll(async () => {
+	await disposeTelemetryStore(telemetry);
 	opened.sqlite.close();
 	rmSync(dir, { recursive: true, force: true });
 });
@@ -125,6 +129,135 @@ describe('queue brokers', () => {
 		expect(core.brokers.get(owner, 'jobs')).toMatchObject({ status: 'failed', message: 'Restart loop (6 restarts)' });
 		heartbeat({ capabilities: ['brokers'], workloads: [{ id, status: 'running', restarts: 0 }] });
 		expect(core.brokers.get(owner, 'jobs').status).toBe('running');
+	});
+
+	test('node samples land in SQLite and ClickHouse, and feed /metrics and the store alert (D123)', async () => {
+		const jobs = core.brokers.get(owner, 'jobs');
+		expect(jobs).toMatchObject({ storeBytes: null, messages: null, statsAt: null });
+		expect(core.brokers.queues(owner, 'jobs')).toEqual({ brokerId: jobs.id, name: 'jobs', at: null, truncated: false, streams: [] });
+		if (hasClickHouse) core.ctx.telemetry = telemetry;
+
+		const GIB2 = 2048 * 1024 * 1024;
+		const sample = (minute: number, overrides: Record<string, unknown> = {}) => ({
+			brokerId: jobs.id,
+			bucket: new Date(clock - (3 - minute) * 60_000).toISOString(),
+			up: true,
+			connections: 2,
+			streams: 2,
+			consumers: 1,
+			storeBytes: Math.round(GIB2 * 0.9) + minute,
+			storeLimitBytes: GIB2,
+			memoryStoreBytes: 0,
+			messages: 40 + minute,
+			pending: 30,
+			ackPending: 2,
+			redelivered: 1,
+			oldestAgeSeconds: 120,
+			published: 10,
+			messagesIn: 12,
+			messagesOut: 14,
+			bytesIn: 1_000,
+			bytesOut: 2_000,
+			slowConsumers: 0,
+			memoryBytes: 50_000_000,
+			...overrides,
+		});
+		const listing = {
+			brokerId: jobs.id,
+			at: new Date(clock).toISOString(),
+			truncated: false,
+			streams: [
+				{
+					stream: 'SKIFF_Q_jobs',
+					queue: 'jobs',
+					subjects: ['skiff.q.jobs'],
+					storage: 'file' as const,
+					retention: 'workqueue',
+					messages: 42,
+					bytes: 4_200,
+					maxBytes: null,
+					firstAt: new Date(clock - 120_000).toISOString(),
+					lastAt: new Date(clock).toISOString(),
+					consumerCount: 1,
+					pending: 30,
+					ackPending: 2,
+					redelivered: 1,
+					consumers: [{ name: 'skiff-consumer', pending: 30, ackPending: 2, redelivered: 1, waiting: 1, lastDeliveredAt: null }],
+				},
+			],
+		};
+
+		// Another node cannot write this broker's numbers.
+		expect(await core.brokers.ingestTelemetry('nod_other', [sample(1)], [listing])).toEqual({ stored: 0 });
+		expect(core.brokers.get(owner, 'jobs').statsAt).toBeNull();
+
+		const result = await core.brokers.ingestTelemetry(
+			edgeId,
+			[sample(1), sample(2), { ...sample(2), brokerId: 'mq_not_mine' }],
+			[listing, { ...listing, brokerId: 'mq_not_mine' }],
+		);
+		expect(result.stored).toBe(hasClickHouse ? 2 : 0);
+		expect(core.brokers.get(owner, 'jobs')).toMatchObject({
+			storeBytes: Math.round(GIB2 * 0.9) + 2,
+			messages: 42,
+			statsAt: new Date(clock).toISOString(),
+		});
+		const queues = core.brokers.queues(owner, 'jobs');
+		expect(queues.at).toBe(new Date(clock).toISOString());
+		expect(queues.streams).toEqual([{ ...listing.streams[0]! }]);
+		expect(() => core.brokers.queues(owner, 'missing')).toThrow(/not found/i);
+
+		// A down sample does not overwrite the last good totals.
+		await core.brokers.ingestTelemetry(edgeId, [sample(3, { up: false, storeBytes: 0, messages: 0 })], []);
+		expect(core.brokers.get(owner, 'jobs').messages).toBe(42);
+
+		// 90% of the store budget raises the built-in alert.
+		const report = await core.maintenance.run();
+		expect(report.alertsFired).toContain(`broker_store:${jobs.id}`);
+
+		const text = await core.metricsExport.render(owner, MetricsExporter.scopeFromPath(['brokers', 'jobs']));
+		const labels = `broker="jobs",broker_id="${jobs.id}"`;
+		expect(text).toContain(`skiff_broker_info{${labels},engine="nats",version="2.12"} 1`);
+		expect(text).toContain(`skiff_broker_storage_limit_bytes{${labels}} ${GIB2}`);
+		expect(text).toContain(`skiff_broker_messages{${labels}} 42`);
+		expect(text).toContain(`skiff_broker_stream_pending{${labels},stream="SKIFF_Q_jobs",queue="jobs"} 30`);
+		expect(text).toContain(`skiff_broker_stream_oldest_message_age_seconds{${labels},stream="SKIFF_Q_jobs",queue="jobs"} 120`);
+		expect(() => MetricsExporter.scopeFromPath(['brokers', 'jobs', 'extra'])).toThrow();
+		await expect(core.metricsExport.render(owner, MetricsExporter.scopeFromPath(['brokers', 'nope']))).rejects.toThrow(/not found/i);
+		// The broker section needs broker:read on top of metrics:read.
+		const appsOnly = buildPrincipal({ kind: 'apiKey', userId: 'user_1', orgId: 'org_1', role: 'owner', granted: ['metrics:read', 'project:read'] });
+		expect(await core.metricsExport.render(appsOnly, MetricsExporter.scopeFromPath([]))).not.toContain('skiff_broker_');
+
+		if (!hasClickHouse) return;
+		expect(text).toContain(`skiff_broker_up{${labels}} 0`); // the newest sample was down
+		expect(text).toContain(`skiff_broker_published_1h{${labels}} 30`);
+		expect(text).toContain(`skiff_broker_messages_1h{${labels},direction="in"} 36`);
+
+		const points = await core.brokers.metrics(owner, 'jobs', { from: clock - 3_600_000, to: clock, interval: '1m' });
+		expect(points).toHaveLength(3);
+		expect(points[0]).toMatchObject({ up: 1, connections: 2, pending: 30, published: 10, messagesIn: 12, storeLimitBytes: GIB2 });
+		expect(points[2]).toMatchObject({ up: 0 });
+		await telemetry.rollupHourly(clock - 2 * 3_600_000, clock + 3_600_000);
+		const hourly = await core.brokers.metrics(owner, 'jobs', { from: clock - 3_600_000, to: clock, interval: '1h' });
+		// 09:58 and 09:59 fall in the 09:00 hour; the down sample at 10:00 starts the next one.
+		expect(hourly.map((point) => point.bucket)).toEqual(['2026-11-07T09:00:00.000Z', '2026-11-07T10:00:00.000Z']);
+		expect(hourly[0]).toMatchObject({ up: 1, published: 20, messagesIn: 24, pending: 30, storeBytes: Math.round(GIB2 * 0.9) + 2 });
+		expect(hourly[1]).toMatchObject({ up: 0 });
+
+		// The query builder's `brokers` dataset is scoped to the caller's brokers.
+		const utilization = await core.observability.query(
+			owner,
+			observabilityQueryRequestSchema.parse({
+				range: { from: new Date(clock - 3_600_000).toISOString(), to: new Date(clock + 60_000).toISOString() },
+				query: {
+					mode: 'builder',
+					builder: { dataset: 'brokers', metrics: [{ field: 'store_utilization', agg: 'max' }], groupBy: ['broker_id'], timeSeries: false },
+				},
+			}),
+		);
+		expect(JSON.stringify(utilization)).toContain(jobs.id);
+		expect(JSON.stringify(utilization)).toContain('0.9');
+		core.ctx.telemetry = undefined;
 	});
 
 	test('attach injects NATS_* for the runtime, re-activates the app and pins its node', async () => {

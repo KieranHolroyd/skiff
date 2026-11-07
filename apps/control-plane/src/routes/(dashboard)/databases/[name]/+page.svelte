@@ -69,6 +69,8 @@
 	import { formatBytes, formatDate, formatDateTime, formatDuration } from '../../_lib/format.js';
 	import { purgeCountdown } from '../../_lib/operations/copy.js';
 	import DatabaseHeader from '../_lib/DatabaseHeader.svelte';
+	import { databaseSubnavKey, shownDatabaseTab } from '../_lib/subnav.js';
+	import { useSubnavLocal } from '#lib/nav/subnav-local.svelte.js';
 	import StorageMeter from '../_lib/StorageMeter.svelte';
 	import { databaseChart, databaseTotals, storagePercent } from '../_lib/database-series.js';
 	import { DATABASE_DEFAULT_TAB, DATABASE_TABS, type DatabaseTab } from '../_lib/database-tabs.js';
@@ -94,7 +96,11 @@
 	const caps = $derived(db.capabilities);
 	const enginePrefix = $derived(databaseEngineRegistry[db.engine].defaultEnvPrefix);
 	const defaultEnvNames = $derived(
-		databaseEnvNames(enginePrefix, { pooler: db.pooler.enabled, tls: db.tls.enabled, engine: db.engine })
+		databaseEnvNames(enginePrefix, {
+			pooler: db.pooler.enabled,
+			tls: db.tls.enabled,
+			engine: db.engine
+		})
 	);
 
 	// --- sections ------------------------------------------------------------------------------
@@ -104,12 +110,7 @@
 	);
 
 	/** A section the engine lacks (a stale `?tab=` link) falls back to the overview. */
-	const shown = $derived<DatabaseTab>(
-		((tab === 'metrics' || tab === 'insights') && !caps.metrics) ||
-			(tab === 'backups' && !caps.backups)
-			? 'overview'
-			: tab
-	);
+	const shown = $derived<DatabaseTab>(shownDatabaseTab(tab, caps));
 
 	/** Switch sections in place (no reload), keeping `?tab=` deep-linkable. */
 	function setTab(next: DatabaseTab) {
@@ -117,6 +118,17 @@
 		// eslint-disable-next-line svelte/no-navigation-without-resolve -- same route, only `?tab` changes
 		replaceState(tabHref(page.url.pathname + page.url.search, next, DATABASE_DEFAULT_TAB), {});
 	}
+
+	/** The sidebar lists the sections; in-place ones switch here without a page load. */
+	useSubnavLocal(() => ({
+		key: databaseSubnavKey(db.name),
+		active: shown,
+		select: (id) => {
+			if (!DATABASE_TABS.includes(id as DatabaseTab)) return false;
+			setTab(id as DatabaseTab);
+			return true;
+		}
+	}));
 
 	// --- formatting ----------------------------------------------------------------------------
 
@@ -380,8 +392,9 @@
 	const latestBackup = $derived(
 		data.backups
 			.filter((item) => item.status === 'ok')
-			.sort((a, b) => Date.parse(b.finishedAt ?? b.startedAt) - Date.parse(a.finishedAt ?? a.startedAt))[0] ??
-			null
+			.sort(
+				(a, b) => Date.parse(b.finishedAt ?? b.startedAt) - Date.parse(a.finishedAt ?? a.startedAt)
+			)[0] ?? null
 	);
 	/** Running databases with backups move by a final dump; anything else needs an explicit source. */
 	const moveSources = $derived(
@@ -430,7 +443,7 @@
 </svelte:head>
 
 <div class="space-y-6">
-	<DatabaseHeader {db} {can} active={shown} backups={backups.length} onselect={setTab} />
+	<DatabaseHeader {db} {can} />
 
 	{#if deleted}
 		<Notice tone="warning" title="This database is in the trash">
@@ -469,14 +482,20 @@
 			description="Copies on other nodes. C7 records intent; streaming is enabled per engine."
 		>
 			{#if data.replicas.length === 0}
-				<p class="text-sm text-muted-foreground">No replicas. A replica must run on another node with an overlay address.</p>
+				<p class="text-sm text-muted-foreground">
+					No replicas. A replica must run on another node with an overlay address.
+				</p>
 			{:else}
 				<div class="space-y-2">
 					{#each data.replicas as replica (replica.id)}
-						<div class="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm">
+						<div
+							class="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm"
+						>
 							<div class="flex items-center gap-2">
 								<span class="font-medium">{replica.nodeName ?? replica.nodeId}</span>
-								<Badge variant="outline" class="font-mono text-[10px]">{replica.zone ?? 'zone?'}</Badge>
+								<Badge variant="outline" class="font-mono text-[10px]"
+									>{replica.zone ?? 'zone?'}</Badge
+								>
 								<StatusBadge status={replica.status} />
 								{#if replica.lagSeconds !== null}
 									<span class="text-xs text-muted-foreground">{replica.lagSeconds}s lag</span>
@@ -488,15 +507,16 @@
 								onclick={() =>
 									askConfirm({
 										title: `Remove the replica on ${replica.nodeName ?? replica.nodeId}?`,
-										description: 'The control-plane intent is removed; the node stops the copy on its next converge.',
+										description:
+											'The control-plane intent is removed; the node stops the copy on its next converge.',
 										confirmLabel: 'Remove replica',
 										tone: 'danger',
 										action: '?/removeReplica',
 										fields: { id: replica.id }
 									})}
-								>
+							>
 								<TrashIcon class="size-3.5" />
-								</Button>
+							</Button>
 						</div>
 					{/each}
 				</div>
@@ -504,7 +524,12 @@
 			{#if data.replicaTargets.length > 0}
 				<form method="POST" action="?/addReplica" class="mt-3 flex flex-wrap items-end gap-2">
 					<label class="text-xs text-muted-foreground" for="replica-node">Add on</label>
-					<select id="replica-node" name="node" class="h-8 rounded-md border bg-background px-2 text-sm" required>
+					<select
+						id="replica-node"
+						name="node"
+						class="h-8 rounded-md border bg-background px-2 text-sm"
+						required
+					>
 						{#each data.replicaTargets as node (node.nodeId)}
 							<option value={node.nodeId}>{node.name}</option>
 						{/each}
@@ -1262,116 +1287,122 @@
 							Connection pooling, extensions, per-minute metrics, PITR and named credentials are
 							PostgreSQL features. {db.engineLabel} databases support create, attach, credentials{caps.rotation
 								? ', password rotation'
-								: ''}{caps.backups ? ', backups and restore' : ''}{caps.console ? ', the studio' : ''},
-							logs and restart.
+								: ''}{caps.backups ? ', backups and restore' : ''}{caps.console
+								? ', the studio'
+								: ''}, logs and restart.
 						</p>
 					</Panel>
 				{/if}
 				{#if caps.pooler}
-				<Panel
-					title="Connection pooler"
-					icon={LayersIcon}
-					description="PgBouncer in transaction-pooling mode, next to Postgres on {nodeLabel}."
-				>
-					<div class="flex items-start justify-between gap-4">
-						<div class="space-y-1">
-							<label for="database-pooler" class="text-sm font-medium">
-								{db.pooler.enabled ? 'Pooling is on' : 'Pooling is off'}
-							</label>
-							<p class="text-xs text-muted-foreground">
-								{#if db.pooler.enabled}
-									Apps also receive <code class="font-mono">DATABASE_POOL_URL</code>, served at
-									<span class="font-mono">{db.pooler.host.process}</span>.
-								{:else}
-									Turn it on for apps that open many short-lived connections (serverless-style
-									handlers, many workers).
-								{/if}
-							</p>
+					<Panel
+						title="Connection pooler"
+						icon={LayersIcon}
+						description="PgBouncer in transaction-pooling mode, next to Postgres on {nodeLabel}."
+					>
+						<div class="flex items-start justify-between gap-4">
+							<div class="space-y-1">
+								<label for="database-pooler" class="text-sm font-medium">
+									{db.pooler.enabled ? 'Pooling is on' : 'Pooling is off'}
+								</label>
+								<p class="text-xs text-muted-foreground">
+									{#if db.pooler.enabled}
+										Apps also receive <code class="font-mono">DATABASE_POOL_URL</code>, served at
+										<span class="font-mono">{db.pooler.host.process}</span>.
+									{:else}
+										Turn it on for apps that open many short-lived connections (serverless-style
+										handlers, many workers).
+									{/if}
+								</p>
+							</div>
+							<Switch
+								id="database-pooler"
+								bind:checked={() => db.pooler.enabled, setPooler}
+								disabled={!editable}
+								aria-label="Connection pooler"
+							/>
 						</div>
-						<Switch
-							id="database-pooler"
-							bind:checked={() => db.pooler.enabled, setPooler}
-							disabled={!editable}
-							aria-label="Connection pooler"
-						/>
-					</div>
-				</Panel>
+					</Panel>
 				{/if}
 
 				{#if caps.extensions}
-				<Panel
-					title="Extensions"
-					icon={PuzzleIcon}
-					count={db.extensions.length || undefined}
-					description="Allowlisted Postgres extensions the node installs on the next activation."
-				>
-					<form method="POST" action="?/extensions" use:enhance={submitInline} class="space-y-4">
-						<InputGroup.Root>
-							<InputGroup.Input
-								type="search"
-								placeholder="Filter extensions"
-								bind:value={extensionQuery}
-								aria-label="Filter extensions"
-							/>
-							<InputGroup.Addon><SearchIcon /></InputGroup.Addon>
-							{#if extensionQuery}
-								<InputGroup.Addon align="inline-end">
-									<InputGroup.Text class="font-mono text-xs">{extensionMatchCount}</InputGroup.Text>
-								</InputGroup.Addon>
-							{/if}
-						</InputGroup.Root>
-						<div class="max-h-[28rem] space-y-4 overflow-y-auto pr-1">
-							{#each extensionGroups as group (group.category)}
-								<section
-									class="space-y-1.5"
-									class:hidden={!group.extensions.some(extensionMatches)}
-									aria-label={group.label}
-								>
-									<h3 class="text-xs font-medium text-muted-foreground">{group.label}</h3>
-									{#each group.extensions as extension (extension)}
-										{@const info = databaseExtensionCatalog[extension]}
-										<label
-											class="flex items-start gap-2.5 rounded-md border px-3 py-2 transition-colors has-data-checked:border-primary/40 has-data-checked:bg-muted/40"
-											class:hidden={!extensionMatches(extension)}
+					<Panel
+						title="Extensions"
+						icon={PuzzleIcon}
+						count={db.extensions.length || undefined}
+						description="Allowlisted Postgres extensions the node installs on the next activation."
+					>
+						<form method="POST" action="?/extensions" use:enhance={submitInline} class="space-y-4">
+							<InputGroup.Root>
+								<InputGroup.Input
+									type="search"
+									placeholder="Filter extensions"
+									bind:value={extensionQuery}
+									aria-label="Filter extensions"
+								/>
+								<InputGroup.Addon><SearchIcon /></InputGroup.Addon>
+								{#if extensionQuery}
+									<InputGroup.Addon align="inline-end">
+										<InputGroup.Text class="font-mono text-xs"
+											>{extensionMatchCount}</InputGroup.Text
 										>
-											<Checkbox
-												name="extensions"
-												value={extension}
-												checked={db.extensions.includes(extension)}
-												disabled={!editable}
-												class="mt-0.5"
-											/>
-											<span class="min-w-0 flex-1 space-y-0.5">
-												<span class="flex flex-wrap items-center gap-1.5">
-													<span class="font-mono text-xs">{extension}</span>
-													{#if !info.bundled}
-														<Badge variant="outline" class="text-[10px]">Not in stock image</Badge>
-													{/if}
+									</InputGroup.Addon>
+								{/if}
+							</InputGroup.Root>
+							<div class="max-h-[28rem] space-y-4 overflow-y-auto pr-1">
+								{#each extensionGroups as group (group.category)}
+									<section
+										class="space-y-1.5"
+										class:hidden={!group.extensions.some(extensionMatches)}
+										aria-label={group.label}
+									>
+										<h3 class="text-xs font-medium text-muted-foreground">{group.label}</h3>
+										{#each group.extensions as extension (extension)}
+											{@const info = databaseExtensionCatalog[extension]}
+											<label
+												class="flex items-start gap-2.5 rounded-md border px-3 py-2 transition-colors has-data-checked:border-primary/40 has-data-checked:bg-muted/40"
+												class:hidden={!extensionMatches(extension)}
+											>
+												<Checkbox
+													name="extensions"
+													value={extension}
+													checked={db.extensions.includes(extension)}
+													disabled={!editable}
+													class="mt-0.5"
+												/>
+												<span class="min-w-0 flex-1 space-y-0.5">
+													<span class="flex flex-wrap items-center gap-1.5">
+														<span class="font-mono text-xs">{extension}</span>
+														{#if !info.bundled}
+															<Badge variant="outline" class="text-[10px]">Not in stock image</Badge
+															>
+														{/if}
+													</span>
+													<span class="block text-xs text-muted-foreground">{info.description}</span
+													>
 												</span>
-												<span class="block text-xs text-muted-foreground">{info.description}</span>
-											</span>
-										</label>
-									{/each}
-								</section>
-							{/each}
-							{#if extensionMatchCount === 0}
-								<p class="py-6 text-center text-sm text-muted-foreground">
-									No extension matches “{extensionQuery}”.
+											</label>
+										{/each}
+									</section>
+								{/each}
+								{#if extensionMatchCount === 0}
+									<p class="py-6 text-center text-sm text-muted-foreground">
+										No extension matches “{extensionQuery}”.
+									</p>
+								{/if}
+							</div>
+							<div class="flex flex-wrap items-center justify-between gap-3">
+								<p class="text-xs text-muted-foreground">
+									Unticking never drops an extension; run <code class="font-mono"
+										>DROP EXTENSION</code
+									>
+									yourself.
 								</p>
-							{/if}
-						</div>
-						<div class="flex flex-wrap items-center justify-between gap-3">
-							<p class="text-xs text-muted-foreground">
-								Unticking never drops an extension; run <code class="font-mono">DROP EXTENSION</code
-								>
-								yourself.
-							</p>
-							{#if editable}
-								<Button size="sm" variant="outline" type="submit">Save extensions</Button>
-							{/if}
-						</div>
-					</form>
-				</Panel>
+								{#if editable}
+									<Button size="sm" variant="outline" type="submit">Save extensions</Button>
+								{/if}
+							</div>
+						</form>
+					</Panel>
 				{/if}
 			</div>
 		</div>
@@ -1385,8 +1416,8 @@
 						Detach it from {db.attachments.map((item) => item.projectSlug).join(', ')} first. Deleted
 						databases stay in the trash for {data.policies.trashDays} days with their data intact.
 					{:else}
-						Deleting stops the container and moves the database to the trash for {data.policies.trashDays} days. Its data
-						stays on the node until it is purged.
+						Deleting stops the container and moves the database to the trash for {data.policies
+							.trashDays} days. Its data stays on the node until it is purged.
 					{/if}
 				{/snippet}
 				{#if deleted}
@@ -1466,9 +1497,9 @@
 					aria-invalid={errors.envPrefix ? 'true' : undefined}
 				/>
 				<Field.Description class="font-mono text-xs">
-					{databaseEnvNames((attachPrefix || enginePrefix).toUpperCase(), { engine: db.engine }).join(
-						' '
-					)}
+					{databaseEnvNames((attachPrefix || enginePrefix).toUpperCase(), {
+						engine: db.engine
+					}).join(' ')}
 				</Field.Description>
 				{#if errors.envPrefix}<Field.Error>{errors.envPrefix}</Field.Error>{/if}
 			</Field.Field>
@@ -1703,8 +1734,8 @@
 										{#if option === 'latest-backup' && latestBackup}
 											<span class="font-medium">Restore the latest backup</span>
 											<span class="block text-xs text-muted-foreground">
-												Taken {formatDateTime(latestBackup.finishedAt ?? latestBackup.startedAt)}. Anything
-												written after it is lost.
+												Taken {formatDateTime(latestBackup.finishedAt ?? latestBackup.startedAt)}.
+												Anything written after it is lost.
 											</span>
 										{:else}
 											<span class="font-medium">Start empty</span>
@@ -1740,8 +1771,8 @@
 					<Notice tone="warning">
 						{db.attachments.length > 0
 							? `${db.attachments.map((item) => item.projectSlug).join(', ')} and the database are`
-							: 'The database is'} unavailable until the restore finishes: roughly the time a backup
-						plus a restore of {db.name} takes.
+							: 'The database is'} unavailable until the restore finishes: roughly the time a backup plus
+						a restore of {db.name} takes.
 					</Notice>
 				{:else}
 					<label class="flex items-start gap-2 text-sm">

@@ -68,6 +68,8 @@
 	import LogsPanel from '../../projects/[slug]/_components/LogsPanel.svelte';
 	import FunctionDataCard from '../_lib/FunctionDataCard.svelte';
 	import FunctionHeader from '../_lib/FunctionHeader.svelte';
+	import { functionSubnavKey } from '../_lib/subnav.js';
+	import { useSubnavLocal } from '#lib/nav/subnav-local.svelte.js';
 	import FunctionPanel from '../_lib/FunctionPanel.svelte';
 	import FunctionQuickstart from '../_lib/FunctionQuickstart.svelte';
 	import FunctionVariablesPanel from '../_lib/FunctionVariablesPanel.svelte';
@@ -86,7 +88,8 @@
 	/** Set by Create function when the attached bundle failed validation. */
 	const rejected = $derived(page.url.searchParams.get('rejected'));
 	const view = $derived(data.view);
-	let tab = $state<FunctionTab>(
+	/** Follows `?tab=` on navigation (back/forward, plain links); `setTab` overrides it in place. */
+	let tab = $derived<FunctionTab>(
 		readTab(page.url.searchParams.get('tab'), FUNCTION_TABS, FUNCTION_DEFAULT_TAB)
 	);
 
@@ -98,6 +101,17 @@
 		// eslint-disable-next-line svelte/no-navigation-without-resolve -- same route, only `?tab` changes
 		void goto(url, { shallow: true, replace: true });
 	}
+
+	/** The sidebar lists the sections; they all switch here without a page load. */
+	useSubnavLocal(() => ({
+		key: functionSubnavKey(fn.slug),
+		active: tab,
+		select: (id) => {
+			if (!FUNCTION_TABS.includes(id as FunctionTab)) return false;
+			setTab(id as FunctionTab);
+			return true;
+		}
+	}));
 
 	const production = $derived(data.deployments.find((d) => d.id === fn.productionDeploymentId));
 	const running = $derived(
@@ -111,11 +125,6 @@
 	const nodeLabel = $derived(
 		node?.name ?? (data.workload?.nodeId ? shortId(data.workload.nodeId, 12) : null)
 	);
-	const counts = $derived<Partial<Record<FunctionTab, number>>>({
-		deployments: data.deployments.length,
-		bindings: view?.bindings.length,
-		domains: data.domains.length
-	});
 	const hostStatus = $derived(functionStatus(data.workload, view));
 	const pinnedBy = $derived(statefulBindings(view));
 	const replicas = $derived(data.spec?.replicas ?? data.workload?.replicas ?? 1);
@@ -262,7 +271,7 @@
 </svelte:head>
 
 <div class="space-y-6">
-	<FunctionHeader slug={fn.slug} active={tab} {counts} onselect={setTab}>
+	<FunctionHeader slug={fn.slug}>
 		{#snippet meta()}
 			<span class="text-foreground">{fn.name}</span>
 			<span aria-hidden="true">·</span>

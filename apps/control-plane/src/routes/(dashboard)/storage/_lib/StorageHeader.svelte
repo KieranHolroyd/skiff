@@ -1,16 +1,10 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
-	import ActivityIcon from '@lucide/svelte/icons/activity';
-	import ArchiveIcon from '@lucide/svelte/icons/archive';
 	import CylinderIcon from '@lucide/svelte/icons/cylinder';
 	import EarthIcon from '@lucide/svelte/icons/earth';
-	import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
-	import LayoutDashboardIcon from '@lucide/svelte/icons/layout-dashboard';
 	import LockIcon from '@lucide/svelte/icons/lock';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
-	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
-	import Settings2Icon from '@lucide/svelte/icons/settings-2';
 	import TrashIcon from '@lucide/svelte/icons/trash';
 	import type { StorageView } from '@skiff/contracts';
 	import { runAction } from '#lib/actions.js';
@@ -21,23 +15,12 @@
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import RowMenu from '../../_lib/RowMenu.svelte';
 	import ServiceHeader from '../../_lib/service/ServiceHeader.svelte';
-	import { tabHref, type ServiceSection } from '../../_lib/service/sections.js';
 	import { formatDate } from '../../_lib/format.js';
-	import { STORAGE_DEFAULT_TAB, type StorageTab } from './storage-tabs.js';
 
 	type Can = { update: boolean; delete: boolean };
 
-	let {
-		st,
-		can,
-		active,
-		onselect
-	}: {
-		st: StorageView;
-		can: Can;
-		active: StorageTab | 'objects' | 'logs';
-		onselect?: (tab: StorageTab) => void;
-	} = $props();
+	/** Sections are in the sidebar (`./subnav.ts`); this is identity, facts and actions. */
+	let { st, can }: { st: StorageView; can: Can } = $props();
 
 	/** Settings → Policies trash period; the layout loads it. */
 	const trashDays = $derived<number>(page.data.policies?.trashDays ?? 7);
@@ -45,40 +28,8 @@
 	const base = $derived(resolve('/(dashboard)/storage/[name]', { name: st.name }));
 	const deleted = $derived(st.deletedAt !== null);
 	const nodeLabel = $derived(st.nodeName ?? st.nodeId);
-	const readyBuckets = $derived(st.buckets.filter((bucket) => bucket.state === 'ready').length);
 	/** Actions live on the detail route, so the header works from every sub-route. */
 	const act = (name: string) => `${base}?/${name}`;
-	const local = (id: StorageTab, label: string, icon: ServiceSection['icon'], count?: number) => ({
-		id,
-		label,
-		icon,
-		count,
-		href: tabHref(base, id, STORAGE_DEFAULT_TAB),
-		local: true
-	});
-
-	const sections = $derived<ServiceSection[]>([
-		local('overview', 'Overview', LayoutDashboardIcon),
-		local('buckets', 'Buckets', ArchiveIcon, readyBuckets),
-		...(deleted
-			? []
-			: [
-					{
-						id: 'objects',
-						label: 'Objects',
-						icon: FolderOpenIcon,
-						href: resolve('/(dashboard)/storage/[name]/objects', { name: st.name })
-					}
-				]),
-		local('metrics', 'Metrics', ActivityIcon),
-		{
-			id: 'logs',
-			label: 'Logs',
-			icon: ScrollTextIcon,
-			href: resolve('/(dashboard)/storage/[name]/logs', { name: st.name })
-		},
-		local('settings', 'Settings', Settings2Icon)
-	]);
 
 	function restart() {
 		askConfirm({
@@ -122,16 +73,7 @@
 	}
 </script>
 
-<ServiceHeader
-	icon={CylinderIcon}
-	backHref={resolve('/(dashboard)/storage')}
-	backLabel="Storage"
-	title={st.name}
-	target="page.storage"
-	{sections}
-	{active}
-	onselect={onselect ? (id) => onselect(id as StorageTab) : undefined}
->
+<ServiceHeader icon={CylinderIcon} title={st.name} target="page.storage">
 	{#snippet meta()}
 		<StatusBadge status={deleted ? 'deleted' : st.status} />
 		<Badge variant="outline">{st.engineLabel} {st.version}</Badge>

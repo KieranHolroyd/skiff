@@ -152,9 +152,13 @@
 - [ ] `skif` command for the workload spec (command, memory, idle stop); today it is the dashboard or `PUT /projects/:slug/workload`
 - [ ] A socket adapter for servers that cannot adopt fd 3 (Bun today), so they can scale to zero too
 
-## Email ([EMAIL.md](./EMAIL.md), proposed D114–D120)
-- [ ] E0 spike: KumoMTA on Debian 13 (2 vCPU / 4 GB) RSS, Lua → agent policy socket, DKIM/SPF/DMARC pass at Gmail and Outlook from the prod IP, inbound + DSN/ARF parsing (Postfix fallback)
-- [ ] E1: `mail` role, MTA install + preflight (port 25, FCrDNS, blocklists), platform DNS, domains with DKIM + Cloudflare TXT/MX, outbox + REST send, SMTP submission, credentials + attach env, suppression, sandbox/limits/auto-pause, events, alerts, REST/MCP/CLI/dashboard
+## Email ([EMAIL.md](./EMAIL.md), D114–D120)
+- [x] E0 spike: `smtp-server` STARTTLS/465/AUTH, `mailauth` DKIM and `mailparser` under Bun 1.4; port 25 egress from the prod IP (SPIKES.md §6); KumoMTA dropped for Skiff's own MTA (D115)
+- [ ] E0 delivery check: PTR for the prod IP, then DKIM/SPF/DMARC pass at Gmail and Outlook
+- [x] E1 MTA: `packages/mail` (`skiff-agent mail`): spool, retries/expiry, MX delivery, shaping, classification, DKIM signing, submission 587/465, port 25 for bounces and ARF, control socket; static `skiff-mail.service`; helper start/stop/cert verbs
+- [x] E1 control plane: migration 0050, `EmailService` (domains + DKIM + Cloudflare TXT/MX, platform records, outbox, send, credentials + `SMTP_*` attach env, suppression incl. platform list, sandbox/limits/auto-pause, message log, sweeps), agent routes, agent bridge, Caddy certificates for `smtp.`/`mx.`
+- [x] E1 surfaces: REST, MCP, CLI (`skif email`), dashboard Email pages and Settings → Email
+- [ ] E1 remaining: automated preflight (port 25, FCrDNS, blocklists), ClickHouse `email_events`, built-in alert kinds in Settings → Alerts, an admin list of org email states
 - [ ] E2: inbound routes (function `email()` handler synchronous in `DATA`, webhook, bucket), `send_email` binding, tenant webhooks, address identities
 - [ ] E3: custom MAIL FROM, ed25519, MTA-STS/TLS-RPT, DMARC reports, smarthost relay (SES BYODKIM), rspamd, templates, tracking, hosted unsubscribe
 - [ ] E4: several mail nodes, weighted MX, spool handover

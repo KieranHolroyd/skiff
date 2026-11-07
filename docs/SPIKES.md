@@ -97,7 +97,27 @@ where they are typically lower.
 - Control-plane RSS (production build, macOS): **92 MB idle, 145–163 MB after the e2e**.
   That's at or above the 80–150 MB target. Re-measure on Linux before optimising.
 
-## 6. Still to do
+## 6. Email MTA under Bun 1.4.0 (E0, 2026-11-07, docs/EMAIL.md)
+
+Libraries: `smtp-server` 3.21.3 (MIT-0), `nodemailer` 10.3.1 (MIT-0), `mailauth` 8.0.4 (MIT),
+`mailparser` 3.14.2 (MIT).
+
+- **Server-side STARTTLS works.** `smtp-server` upgrades the plain socket in place; nodemailer with
+  `requireTLS` reported `session.secure = true` on all 201 messages. Implicit TLS (465) works too.
+- **AUTH PLAIN** runs through `onAuth` after TLS, as it should.
+- **DKIM:** `mailauth` `dkimSign` (RSA-2048, relaxed/relaxed) followed by `dkimVerify` with an
+  injected resolver gives `pass`. `mailparser` parses the result and keeps the `DKIM-Signature`.
+- **Throughput and memory:** 200 messages over a 4-connection TLS pool in 149 ms. RSS was 101 MB
+  idle with every library loaded and 131 MB after the burst (macOS, `bun run`; re-measure on Linux).
+- **Port 25 egress from the prod IP (Scaleway):** open. `gmail-smtp-in.l.google.com:25` answered
+  `220 mx.google.com ESMTP`. Outbound 25 from a residential line (this Mac) times out, as expected.
+- **PTR:** still the provider default `163-172-72-185.rev.poneytelecom.eu`. It has to become
+  `mx1.<platformDomain>` in the Scaleway console before Gmail/Outlook delivery tests.
+- Not yet run: a real delivery with DKIM/SPF/DMARC results at Gmail and Outlook (needs the PTR).
+
+Verdict: build the MTA in Bun (D115). KumoMTA is no longer needed.
+
+## 7. Still to do
 - Litestream → R2 replication + `skif restore` drill (needs an R2 bucket and credentials).
 - Re-measure DuckDB, control-plane and Caddy RSS on Debian 13.
 - Real-client check: connect Claude Code / Claude.ai to a deployed instance (CIMD vs DCR, protocol era).

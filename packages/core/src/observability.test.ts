@@ -3,8 +3,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+	alertRuleTemplates,
 	builderSpecSchema,
 	dashboardCreateSchema,
+	dashboardTemplates,
 	observabilityQueryRequestSchema,
 	type MetricBucket,
 	type ObservabilityQueryRequest,
@@ -33,6 +35,26 @@ const ctx = (overrides: Partial<CompileContext> = {}): CompileContext => ({
 });
 
 describe('builder compilation', () => {
+	test('every starter dashboard and alert template compiles, brokers included (D123)', () => {
+		const specs = [
+			...Object.values(dashboardTemplates).flatMap((template) =>
+				template.panels.flatMap((panel) => (panel.query?.mode === 'builder' ? [panel.query.builder] : [])),
+			),
+			...alertRuleTemplates.flatMap((template) => (template.rule.query.mode === 'builder' ? [template.rule.query.builder] : [])),
+		];
+		expect(specs.some((spec) => spec.dataset === 'brokers')).toBe(true);
+		for (const spec of specs) {
+			const compiled = compileBuilder(builderSpecSchema.parse(spec), ctx({ variables: { database: '$__all' } }));
+			expect(compiled.sql).toContain('FROM');
+		}
+		const broker = compileBuilder(
+			builderSpecSchema.parse({ dataset: 'brokers', metrics: [{ field: 'store_utilization' }], groupBy: ['broker_id'] }),
+			ctx({ scope: ['mq_a'] }),
+		);
+		expect(broker.sql).toContain('broker_metrics_1m');
+		expect(broker.sql).toContain('max(store_bytes) / max(store_limit_bytes)');
+	});
+
 	test('values become parameters and the scope is always applied', () => {
 		const spec = builderSpecSchema.parse({
 			dataset: 'traffic',

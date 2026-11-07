@@ -66,6 +66,8 @@
 	import StorageMeter from '../../databases/_lib/StorageMeter.svelte';
 	import { storagePercent } from '../../databases/_lib/database-series.js';
 	import StorageHeader from '../_lib/StorageHeader.svelte';
+	import { storageSubnavKey } from '../_lib/subnav.js';
+	import { useSubnavLocal } from '#lib/nav/subnav-local.svelte.js';
 	import { STORAGE_DEFAULT_TAB, STORAGE_TABS, type StorageTab } from '../_lib/storage-tabs.js';
 	import GrantsFields from '../_lib/GrantsFields.svelte';
 	import { storageChart, storageTotals } from '../_lib/storage-series.js';
@@ -107,6 +109,17 @@
 		// eslint-disable-next-line svelte/no-navigation-without-resolve -- same route, only `?tab` changes
 		replaceState(tabHref(page.url.pathname + page.url.search, next, STORAGE_DEFAULT_TAB), {});
 	}
+
+	/** The sidebar lists the sections; in-place ones switch here without a page load. */
+	useSubnavLocal(() => ({
+		key: storageSubnavKey(st.name),
+		active: tab,
+		select: (id) => {
+			if (!STORAGE_TABS.includes(id as StorageTab)) return false;
+			setTab(id as StorageTab);
+			return true;
+		}
+	}));
 
 	const objectsHref = (bucket?: string) => {
 		const href = resolve('/(dashboard)/storage/[name]/objects', { name: st.name });
@@ -385,7 +398,7 @@
 </svelte:head>
 
 <div class="space-y-6">
-	<StorageHeader {st} {can} active={tab} onselect={setTab} />
+	<StorageHeader {st} {can} />
 
 	{#if deleted}
 		<Notice tone="warning" title="This storage instance is in the trash">
@@ -417,11 +430,15 @@
 			description="Passive bucket targets on other nodes. The source stays active; promotion is manual."
 		>
 			{#if data.replicas.length === 0}
-				<p class="text-sm text-muted-foreground">No replication target. A target must be a private instance on another node.</p>
+				<p class="text-sm text-muted-foreground">
+					No replication target. A target must be a private instance on another node.
+				</p>
 			{:else}
 				<div class="space-y-2">
 					{#each data.replicas as replica (replica.id)}
-						<div class="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm">
+						<div
+							class="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm"
+						>
 							<div class="flex items-center gap-2">
 								<span class="font-medium">{replica.targetName ?? replica.targetId}</span>
 								<StatusBadge status={replica.status} />
@@ -441,9 +458,9 @@
 										action: '?/removeReplica',
 										fields: { id: replica.id }
 									})}
-								>
+							>
 								<TrashIcon class="size-3.5" />
-								</Button>
+							</Button>
 						</div>
 					{/each}
 				</div>
@@ -451,7 +468,12 @@
 			{#if data.replicaTargets.length > 0}
 				<form method="POST" action="?/addReplica" class="mt-3 flex flex-wrap items-end gap-2">
 					<label class="text-xs text-muted-foreground" for="replica-target">Add target</label>
-					<select id="replica-target" name="target" class="h-8 rounded-md border bg-background px-2 text-sm" required>
+					<select
+						id="replica-target"
+						name="target"
+						class="h-8 rounded-md border bg-background px-2 text-sm"
+						required
+					>
 						{#each data.replicaTargets as target (target.name)}
 							<option value={target.name}>{target.name}</option>
 						{/each}
@@ -1346,7 +1368,9 @@
 			</Field.Field>
 			<label class="flex items-start gap-2 text-sm">
 				<Checkbox name="acknowledge" value="on" class="mt-0.5" />
-				<span>I understand the objects in {st.name} are not copied and are deleted with the old copy.</span>
+				<span
+					>I understand the objects in {st.name} are not copied and are deleted with the old copy.</span
+				>
 			</label>
 		</Field.Group>
 	</FormDialog>

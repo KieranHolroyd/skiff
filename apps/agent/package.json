@@ -12,11 +12,15 @@
 	"dependencies": {
 		"@skiff/builder": "workspace:*",
 		"@skiff/contracts": "workspace:*",
-		"@skiff/studio": "workspace:*",
+		"@skiff/mail": "workspace:*",
 		"@skiff/site-config": "workspace:*",
+		"@skiff/studio": "workspace:*",
 		"aws4fetch": "^1.0.20"
 	},
 	"engines": {
 		"bun": ">=1.4"
+	},
+	"devDependencies": {
+		"smtp-server": "3.21.3"
 	}
 }

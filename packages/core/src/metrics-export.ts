@@ -1,11 +1,13 @@
 import {
 	METRICS_EXPORT_DEFAULTS,
 	METRICS_EXPORT_SETTINGS_KEY,
+	brokerStreamStatsSchema,
 	canViewPlatform,
 	metricsExportSettingsSchema,
 	metricsExportSettingsUpdateSchema,
 	quotaUsageMetricKeys,
 	requirePermission,
+	type BrokerStreamStats,
 	type MetricsExportSettings,
 	type MetricsSection,
 	type Permission,
@@ -33,11 +35,11 @@ import type { ScrapeSampleRow, ScrapeSamples } from './telemetry.ts';
 export interface MetricsScope {
 	/** `all` is the bare `/metrics`. */
 	section: 'all' | MetricsSection;
-	/** One app slug, database or storage name; only for `apps`, `traffic`, `databases`, `storage`. */
+	/** One app slug, database, storage or broker name; only for `apps`, `traffic`, `databases`, `storage`, `brokers`. */
 	name?: string;
 }
 
-const NAMED_SECTIONS = new Set<MetricsScope['section']>(['apps', 'traffic', 'databases', 'storage', 'volumes']);
+const NAMED_SECTIONS = new Set<MetricsScope['section']>(['apps', 'traffic', 'databases', 'storage', 'brokers', 'volumes']);
 const MIB = 1024 * 1024;
 const DAY_MS = 86_400_000;
 
@@ -48,10 +50,11 @@ const SECTION_PERMISSION: Record<Exclude<MetricsSection, 'platform'>, Permission
 	traffic: 'project:read',
 	databases: 'database:read',
 	storage: 'storage:read',
+	brokers: 'broker:read',
 	volumes: 'project:read',
 };
 
-const ORG_SECTIONS = ['usage', 'apps', 'traffic', 'databases', 'storage', 'volumes'] as const;
+const ORG_SECTIONS = ['usage', 'apps', 'traffic', 'databases', 'storage', 'brokers', 'volumes'] as const;
 
 export const PROMETHEUS_CONTENT_TYPE = 'text/plain; version=0.0.4; charset=utf-8';
 
@@ -174,10 +177,11 @@ export class MetricsExporter {
 		const projects = appScope ? this.#projects(principal.orgId, scope, settings, out) : [];
 		const databases = wants('databases') ? this.#databases(principal.orgId, scope.section === 'databases' ? scope.name : undefined) : [];
 		const storage = wants('storage') ? this.#storage(principal.orgId, scope.section === 'storage' ? scope.name : undefined) : [];
+		const brokerRows = wants('brokers') ? this.#brokers(principal.orgId, scope.section === 'brokers' ? scope.name : undefined) : [];
 
 		// One ClickHouse round per scrape, filtered to those ids.
 		const telemetry = this.ctx.telemetry;
-		const needsTelemetry = wants('traffic') || databases.length > 0 || storage.length > 0;
+		const needsTelemetry = wants('traffic') || databases.length > 0 || storage.length > 0 || brokerRows.length > 0;
 		const telemetryUp = needsTelemetry && telemetry ? await telemetry.ready() : false;
 		const samples: ScrapeSamples =
 			telemetryUp && telemetry
@@ -185,8 +189,9 @@ export class MetricsExporter {
 						projectIds: wants('traffic') ? projects.map((p) => p.id) : [],
 						databaseIds: databases.map((d) => d.id),
 						storageIds: storage.map((s) => s.id),
+						brokerIds: brokerRows.map((b) => b.id),
 					})
-				: { traffic: [], databases: [], databaseCounters: [], storage: [] };
+				: { traffic: [], databases: [], databaseCounters: [], storage: [], brokers: [], brokerCounters: [] };
 
 		if (wants('usage')) await this.#usage(principal, out);
 		if (wants('apps')) this.#apps(principal.orgId, projects, out);
@@ -194,6 +199,7 @@ export class MetricsExporter {
 		if (wants('volumes')) this.#appVolumes(principal.orgId, projects, out);
 		if (wants('databases')) this.#databaseSeries(databases, samples, out);
 		if (wants('storage')) this.#storageSeries(storage, samples, out);
+		if (wants('brokers')) this.#brokerSeries(brokerRows, samples, out);
 
 		if (needsTelemetry)
 			out.gauge('skiff_telemetry_up', 'Whether the ClickHouse telemetry store answered this scrape (1 = up).', {}, telemetryUp ? 1 : 0);
@@ -364,6 +370,15 @@ export class MetricsExporter {
 		return [row];
 	}
 
+	#brokers(orgId: string, name: string | undefined): BrokerRef[] {
+		const base =
+			'SELECT id, name, engine, version, status, memory_mb, cpus, storage_mb, store_bytes, messages, queue_stats, stats_at FROM brokers WHERE org_id = ? AND deleted_at IS NULL';
+		if (name === undefined) return this.ctx.sqlite.query<BrokerRef, [string]>(`${base} ORDER BY name`).all(orgId);
+		const row = this.ctx.sqlite.query<BrokerRef, [string, string]>(`${base} AND name = ?`).get(orgId, name);
+		if (!row) throw new NotFoundError(`Broker "${name}"`);
+		return [row];
+	}
+
 	#databaseSeries(rows: DatabaseRef[], samples: ScrapeSamples, out: Exposition): void {
 		const latest = byId(samples.databases);
 		const counters = byId(samples.databaseCounters);
@@ -423,6 +438,71 @@ export class MetricsExporter {
 				out.gauge('skiff_storage_up', 'Whether the instance answered its last sample (1 = up).', labels, sample['up'] ?? 0);
 				out.gauge('skiff_storage_buckets', 'Buckets on the instance.', labels, sample['bucket_count'] ?? 0);
 				out.gauge('skiff_storage_memory_bytes', 'Container memory use.', labels, sample['memory_bytes'] ?? 0);
+			}
+		}
+	}
+
+	/**
+	 * Brokers (D123): configuration and the SQLite totals always; live gauges and last-hour rates
+	 * from ClickHouse when it answers; one series family per stream from the newest listing.
+	 */
+	#brokerSeries(rows: BrokerRef[], samples: ScrapeSamples, out: Exposition): void {
+		const latest = byId(samples.brokers);
+		const counters = byId(samples.brokerCounters);
+		for (const mq of rows) {
+			const labels = { broker: mq.name, broker_id: mq.id };
+			out.gauge('skiff_broker_info', 'One series per managed queue broker, carrying its engine and version.', { ...labels, engine: mq.engine, version: mq.version }, 1);
+			out.gauge('skiff_broker_running', '1 while the control plane considers the broker running.', labels, mq.status === 'running' ? 1 : 0);
+			out.gauge('skiff_broker_memory_limit_bytes', 'Configured memory limit.', labels, mq.memory_mb * MIB);
+			out.gauge('skiff_broker_cpu_limit', 'Configured CPU limit.', labels, mq.cpus);
+			out.gauge('skiff_broker_storage_limit_bytes', 'Configured message store budget (JetStream file store).', labels, mq.storage_mb * MIB);
+			const sample = latest.get(mq.id);
+			// A down sample reads zeros; the last good totals (SQLite) stay the better answer.
+			const live = sample && sample['up'] ? sample : undefined;
+			const store = live?.['store_bytes'] ?? mq.store_bytes;
+			const messages = live?.['messages'] ?? mq.messages;
+			if (store !== null && store !== undefined) out.gauge('skiff_broker_store_bytes', 'JetStream file store in use.', labels, store);
+			if (messages !== null && messages !== undefined) out.gauge('skiff_broker_messages', 'Messages held across streams.', labels, messages);
+			if (sample) {
+				out.gauge('skiff_broker_up', 'Whether the broker answered its last sample (1 = up).', labels, sample['up'] ?? 0);
+				out.gauge('skiff_broker_connections', 'Client connections (not counting the sampler).', labels, sample['connections'] ?? 0);
+				out.gauge('skiff_broker_streams', 'JetStream streams.', labels, sample['streams'] ?? 0);
+				out.gauge('skiff_broker_consumers', 'JetStream consumers.', labels, sample['consumers'] ?? 0);
+				out.gauge('skiff_broker_memory_store_bytes', 'JetStream memory store in use.', labels, sample['memory_store_bytes'] ?? 0);
+				out.gauge('skiff_broker_pending', 'Messages not yet delivered, summed over consumers.', labels, sample['pending'] ?? 0);
+				out.gauge('skiff_broker_ack_pending', 'Delivered messages awaiting an ack.', labels, sample['ack_pending'] ?? 0);
+				out.gauge('skiff_broker_redelivered', 'Unacknowledged messages delivered more than once.', labels, sample['redelivered'] ?? 0);
+				out.gauge('skiff_broker_oldest_message_age_seconds', 'Age of the oldest message held in any stream.', labels, sample['oldest_age_seconds'] ?? 0);
+				out.gauge('skiff_broker_memory_bytes', 'Container memory use.', labels, sample['memory_bytes'] ?? 0);
+			}
+			const sums = counters.get(mq.id);
+			if (sums) {
+				out.gauge('skiff_broker_published_1h', 'Messages JetStream stored in the last hour.', labels, sums['published'] ?? 0);
+				const msgs = 'Messages through the server in the last hour (in = sent by clients).';
+				out.gauge('skiff_broker_messages_1h', msgs, { ...labels, direction: 'in' }, sums['messages_in'] ?? 0);
+				out.gauge('skiff_broker_messages_1h', msgs, { ...labels, direction: 'out' }, sums['messages_out'] ?? 0);
+				const bytes = 'Bytes through the server in the last hour (in = sent by clients).';
+				out.gauge('skiff_broker_bytes_1h', bytes, { ...labels, direction: 'in' }, sums['bytes_in'] ?? 0);
+				out.gauge('skiff_broker_bytes_1h', bytes, { ...labels, direction: 'out' }, sums['bytes_out'] ?? 0);
+				out.gauge('skiff_broker_slow_consumers_1h', 'Clients cut off as slow consumers in the last hour.', labels, sums['slow_consumers'] ?? 0);
+			}
+			if (mq.stats_at === null) continue;
+			out.gauge('skiff_broker_streams_timestamp_seconds', 'When the node took the newest stream listing.', labels, mq.stats_at / 1000);
+			for (const stream of parseStreams(mq.queue_stats)) {
+				const streamLabels = { ...labels, stream: stream.stream, queue: stream.queue ?? '' };
+				out.gauge('skiff_broker_stream_messages', 'Messages held in the stream.', streamLabels, stream.messages);
+				out.gauge('skiff_broker_stream_bytes', 'Bytes held in the stream.', streamLabels, stream.bytes);
+				out.gauge('skiff_broker_stream_consumers', 'Consumers on the stream.', streamLabels, stream.consumerCount);
+				out.gauge('skiff_broker_stream_pending', 'Messages not yet delivered, summed over the stream’s consumers.', streamLabels, stream.pending);
+				out.gauge('skiff_broker_stream_ack_pending', 'Delivered messages awaiting an ack.', streamLabels, stream.ackPending);
+				out.gauge('skiff_broker_stream_redelivered', 'Unacknowledged messages delivered more than once.', streamLabels, stream.redelivered);
+				const first = stream.firstAt ? Date.parse(stream.firstAt) : Number.NaN;
+				out.gauge(
+					'skiff_broker_stream_oldest_message_age_seconds',
+					'Age of the stream’s oldest message at the listing (0 when empty).',
+					streamLabels,
+					stream.messages > 0 && Number.isFinite(first) ? Math.max(0, (mq.stats_at - first) / 1000) : 0,
+				);
 			}
 		}
 	}
@@ -510,6 +590,21 @@ interface DatabaseRef {
 	size_bytes: number | null;
 }
 
+interface BrokerRef {
+	id: string;
+	name: string;
+	engine: string;
+	version: string;
+	status: string;
+	memory_mb: number;
+	cpus: number;
+	storage_mb: number;
+	store_bytes: number | null;
+	messages: number | null;
+	queue_stats: string | null;
+	stats_at: number | null;
+}
+
 interface StorageRef {
 	id: string;
 	name: string;
@@ -525,7 +620,16 @@ interface StorageRef {
 }
 
 function isScopeSection(value: string | undefined): value is MetricsScope['section'] {
-	return value === 'usage' || value === 'apps' || value === 'traffic' || value === 'databases' || value === 'storage' || value === 'volumes' || value === 'platform';
+	return (
+		value === 'usage' ||
+		value === 'apps' ||
+		value === 'traffic' ||
+		value === 'databases' ||
+		value === 'storage' ||
+		value === 'brokers' ||
+		value === 'volumes' ||
+		value === 'platform'
+	);
 }
 
 function placeholders(n: number): string {
@@ -534,6 +638,21 @@ function placeholders(n: number): string {
 
 function byId(rows: ScrapeSampleRow[]): Map<string, Record<string, number>> {
 	return new Map(rows.map((row) => [row.id, row.values]));
+}
+
+/** The stored stream listing; anything that does not parse is skipped. */
+function parseStreams(json: string | null): BrokerStreamStats[] {
+	if (!json) return [];
+	try {
+		const raw = JSON.parse(json) as unknown;
+		if (!Array.isArray(raw)) return [];
+		return raw.flatMap((item) => {
+			const parsed = brokerStreamStatsSchema.safeParse(item);
+			return parsed.success ? [parsed.data] : [];
+		});
+	} catch {
+		return [];
+	}
 }
 
 function parseStats(json: string | null): Record<string, unknown> | null {

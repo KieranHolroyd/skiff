@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { AwsClient } from 'aws4fetch';
 import {
+	STORAGE_NOTIFY_ARN,
 	STORAGE_REGION,
 	STORAGE_USER_KEY_PREFIX,
 	publicReadBucketPolicy,
@@ -88,6 +89,8 @@ export interface StorageApi {
 	getBucketCors(name: string): Promise<BucketCorsRule[]>;
 	putBucketCors(name: string, rules: BucketCorsRule[]): Promise<void>;
 	deleteBucketCors(name: string): Promise<void>;
+	/** Point every create/delete event at the `skiff` webhook target, or clear the config (D122). */
+	putBucketNotifications(name: string, enabled: boolean): Promise<void>;
 	/** Hard byte cap; null clears it. */
 	getBucketQuota(name: string): Promise<number | null>;
 	putBucketQuota(name: string, bytes: number | null): Promise<void>;
@@ -267,6 +270,14 @@ export class RustfsApi implements StorageApi {
 			if (isMissingConfiguration(error)) return;
 			throw error;
 		}
+	}
+
+	async putBucketNotifications(name: string, enabled: boolean): Promise<void> {
+		await this.call('PUT', `/${bucketPath(name)}?notification`, {
+			body: notificationXml(enabled),
+			headers: { 'content-type': 'application/xml' },
+			expect: [200, 204],
+		});
 	}
 
 	async getBucketQuota(name: string): Promise<number | null> {
@@ -690,6 +701,7 @@ export class StorageReconciler {
 			cors: bucket.cors,
 			quotaBytes: bucket.quotaBytes,
 			objectLock: bucket.objectLock,
+			notifications: bucket.notifications,
 		});
 		if (state.bucketConfigs.get(bucket.name) === signature) return;
 
@@ -718,6 +730,8 @@ export class StorageReconciler {
 			await attempt('quota', () => api.putBucketQuota(bucket.name, bucket.quotaBytes));
 			if (bucket.objectLock)
 				await attempt('object lock', () => api.putObjectLock(bucket.name, bucket.objectLock!));
+			// Always asserted, so turning a rule off clears the config RustFS keeps for the bucket.
+			await attempt('event notifications', () => api.putBucketNotifications(bucket.name, bucket.notifications));
 			state.bucketConfigs.set(bucket.name, signature);
 			if (unsupported.length > 0) {
 				const message = `This RustFS build does not support ${unsupported.join(', ')}.`;
@@ -1093,4 +1107,19 @@ export function scrub(message: string, target: Pick<StorageTarget, 'admin'>): st
 function errorText(error: unknown): string {
 	if (error instanceof Error) return error.name === 'TimeoutError' ? 'timed out' : error.message;
 	return String(error);
+}
+
+/**
+ * A bucket's notification config (D122). Skiff sends every create/delete event to its one `skiff`
+ * webhook target and filters by prefix, suffix and event in the control plane, so rules can
+ * change without touching RustFS. Disabled is an empty config, which removes the bucket's rules.
+ */
+export function notificationXml(enabled: boolean): string {
+	if (!enabled) return '<NotificationConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></NotificationConfiguration>';
+	return (
+		'<NotificationConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">' +
+		`<QueueConfiguration><Id>skiff</Id><Queue>${STORAGE_NOTIFY_ARN}</Queue>` +
+		'<Event>s3:ObjectCreated:*</Event><Event>s3:ObjectRemoved:*</Event></QueueConfiguration>' +
+		'</NotificationConfiguration>'
+	);
 }

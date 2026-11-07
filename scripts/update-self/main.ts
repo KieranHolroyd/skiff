@@ -51,6 +51,7 @@ import { ensureHelper } from '../systemd/helper.ts';
 import { ensureCaddy } from '../systemd/caddy.ts';
 import { ensureStorageUnits } from '../systemd/storage.ts';
 import { ensureStudioUnit } from '../systemd/studio.ts';
+import { ensureMailUnit } from '../systemd/mail.ts';
 import { clickhouseInstalled, ensureClickHouse } from '../systemd/clickhouse.ts';
 import { R2ObjectStore } from '../../packages/core/src/object-store.ts';
 import { listUpgradeSnapshotBundles } from '../../packages/core/src/upgrade-plan.ts';
@@ -439,6 +440,15 @@ function ensureTriggerUnits(): void {
 	// The on-demand database studio (plan 22) sits beside the agent unit on every host, like the
 	// installer puts it. Never enabled: the agent starts it through the helper when needed.
 	ensureStudioUnit({
+		systemdDir: SYSTEMD_DIR,
+		optDir: layout.optDir,
+		runDir: RUN_DIR,
+		socketGroup: 'caddy',
+		run: (cmd) => void run(cmd, { quiet: true, allowFailure: true }),
+		log: (message) => host.log(message),
+	});
+	// Email's MTA (docs/EMAIL.md) sits beside it the same way; only the mail node's agent starts it.
+	ensureMailUnit({
 		systemdDir: SYSTEMD_DIR,
 		optDir: layout.optDir,
 		runDir: RUN_DIR,

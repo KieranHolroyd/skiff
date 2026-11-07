@@ -355,6 +355,14 @@ export class BuildService {
 		}
 
 		this.ctx.db.update(builds).set(patch).where(eq(builds.id, buildId)).run();
+		if (patch.status === 'failed')
+			this.ctx.events.emitDeployment(row.orgId, row.projectId, 'failed', {
+				project: project.slug,
+				buildId: row.id,
+				ref: row.ref,
+				commitSha: patch.commitSha ?? null,
+				error: patch.error ?? null,
+			});
 		this.ctx.logs.appendSystem({
 			orgId: row.orgId,
 			projectId: row.projectId,

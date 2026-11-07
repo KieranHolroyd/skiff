@@ -411,6 +411,11 @@ export const storageBucketDesiredSchema = z
 		objectLock: bucketObjectLockSchema.nullable().default(null),
 		/** Bumped by the control plane; the agent echoes it in its convergence report. */
 		configVersion: z.number().int().nonnegative().default(1),
+		/**
+		 * Event notifications (D122): when on, the agent points the bucket's create/delete events at
+		 * the instance's `skiff` webhook target; the control plane filters and routes them.
+		 */
+		notifications: z.boolean().default(false),
 	})
 	.superRefine(refineBucketConfig);
 

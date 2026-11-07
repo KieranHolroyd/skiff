@@ -1072,6 +1072,13 @@ export const brokers = sqliteTable(
 		purgeAt: integer('purge_at'),
 		/** Set when the purge was handed to the node; the row goes once the node reports it (D59). */
 		purgeRequestedAt: integer('purge_requested_at'),
+		/** Newest sample from the node (D123): JetStream file store in use and messages held. */
+		storeBytes: integer('store_bytes'),
+		messages: integer('messages'),
+		/** Newest stream listing (`BrokerStreamStats[]` as JSON). */
+		queueStats: text('queue_stats'),
+		queueStatsTruncated: integer('queue_stats_truncated', { mode: 'boolean' }).notNull().default(false),
+		statsAt: integer('stats_at'),
 	},
 	(t) => [
 		uniqueIndex('brokers_org_name_idx').on(t.orgId, t.name),
@@ -1690,6 +1697,150 @@ export const databaseMoves = sqliteTable(
 		index('database_moves_database_idx').on(t.databaseId, t.phase),
 		index('database_moves_phase_idx').on(t.phase),
 	],
+);
+
+// --- Email (docs/EMAIL.md, D114–D120, migration 0050) -----------------------------------------
+
+/** Per-org sending state and limits (EMAIL.md §7.3). */
+export const emailOrgs = sqliteTable('email_orgs', {
+	orgId: text('org_id').primaryKey(),
+	state: text('state', { enum: ['sandbox', 'active', 'paused'] }).notNull().default('sandbox'),
+	perSecond: integer('per_second').notNull().default(1),
+	perDay: integer('per_day').notNull().default(200),
+	pausedReason: text('paused_reason'),
+	updatedAt: integer('updated_at').notNull().$defaultFn(now),
+});
+
+/** Sending/receiving identities; the DKIM private key is sealed with the org data key (D116). */
+export const emailDomains = sqliteTable(
+	'email_domains',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		name: text('name').notNull(),
+		sending: integer('sending', { mode: 'boolean' }).notNull().default(true),
+		receiving: integer('receiving', { mode: 'boolean' }).notNull().default(false),
+		status: text('status', { enum: ['pending', 'verified', 'failed'] }).notNull().default('pending'),
+		dkimSelector: text('dkim_selector').notNull(),
+		/** Base64 SPKI, as published in the DKIM TXT record. */
+		dkimPublic: text('dkim_public').notNull(),
+		dkimPrivateSealed: text('dkim_private_sealed').notNull(),
+		/** EmailRecordCheck[] from the last check. */
+		recordsJson: text('records_json').notNull().default('[]'),
+		/** purpose → Cloudflare record id, for records Skiff created. */
+		managedJson: text('managed_json').notNull().default('{}'),
+		lastCheckedAt: integer('last_checked_at'),
+		verifiedAt: integer('verified_at'),
+		failingSince: integer('failing_since'),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [uniqueIndex('email_domains_name_idx').on(t.name), index('email_domains_org_idx').on(t.orgId)],
+);
+
+/** Verified single addresses (sandbox recipients, forward targets). */
+export const emailAddresses = sqliteTable(
+	'email_addresses',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		address: text('address').notNull(),
+		tokenHash: text('token_hash'),
+		verifiedAt: integer('verified_at'),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+	},
+	(t) => [uniqueIndex('email_addresses_org_address_idx').on(t.orgId, t.address)],
+);
+
+/** SMTP/API credentials; `envPrefix` marks a project attachment (EMAIL.md §5.4). */
+export const emailCredentials = sqliteTable(
+	'email_credentials',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		projectId: text('project_id'),
+		name: text('name').notNull(),
+		username: text('username').notNull(),
+		hash: text('hash').notNull(),
+		secretSealed: text('secret_sealed').notNull(),
+		allowedFromJson: text('allowed_from_json').notNull().default('[]'),
+		envPrefix: text('env_prefix'),
+		lastUsedAt: integer('last_used_at'),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		revokedAt: integer('revoked_at'),
+	},
+	(t) => [uniqueIndex('email_credentials_username_idx').on(t.username), index('email_credentials_org_idx').on(t.orgId)],
+);
+
+/** REST and binding sends waiting for the mail node (D117). */
+export const emailOutbox = sqliteTable(
+	'email_outbox',
+	{
+		messageId: text('message_id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		payloadJson: text('payload_json').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		claimedAt: integer('claimed_at'),
+	},
+	(t) => [index('email_outbox_created_idx').on(t.createdAt)],
+);
+
+/** The message log (D120). */
+export const emailMessages = sqliteTable(
+	'email_messages',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		projectId: text('project_id'),
+		source: text('source', { enum: ['api', 'smtp', 'binding'] }).notNull(),
+		fromAddress: text('from_address').notNull(),
+		subject: text('subject').notNull().default(''),
+		tagsJson: text('tags_json').notNull().default('{}'),
+		status: text('status').notNull().default('accepted'),
+		idempotencyKey: text('idempotency_key'),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [index('email_messages_org_created_idx').on(t.orgId, t.createdAt)],
+);
+
+export const emailRecipients = sqliteTable(
+	'email_recipients',
+	{
+		messageId: text('message_id').notNull(),
+		idx: integer('idx').notNull(),
+		orgId: text('org_id').notNull(),
+		address: text('address').notNull(),
+		status: text('status').notNull().default('accepted'),
+		bounceClass: text('bounce_class'),
+		lastResponse: text('last_response'),
+		hardBounced: integer('hard_bounced', { mode: 'boolean' }).notNull().default(false),
+		complained: integer('complained', { mode: 'boolean' }).notNull().default(false),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [
+		primaryKey({ columns: [t.messageId, t.idx] }),
+		index('email_recipients_org_created_idx').on(t.orgId, t.createdAt),
+		index('email_recipients_address_idx').on(t.orgId, t.address),
+	],
+);
+
+/** Suppression lists (D119); `orgId = '*'` is the platform-wide list. */
+export const emailSuppressions = sqliteTable(
+	'email_suppressions',
+	{
+		orgId: text('org_id').notNull(),
+		address: text('address').notNull(),
+		reason: text('reason', { enum: ['bounce', 'complaint', 'manual', 'unsubscribe'] }).notNull(),
+		messageId: text('message_id'),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		expiresAt: integer('expires_at'),
+	},
+	(t) => [primaryKey({ columns: [t.orgId, t.address] })],
 );
 
 /** Every table worth exporting, for tooling and tests. */

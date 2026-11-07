@@ -290,7 +290,7 @@ async function tarExtract(archive: string, dest: string): Promise<void> {
 export function restartNodeServices(systemctl = '/usr/bin/systemctl'): void {
 	setTimeout(() => {
 		const queue = (args: string[]) => spawn(systemctl, ['--no-block', ...args], { stdio: 'ignore', detached: true }).unref();
-		queue(['try-restart', 'skiff-builder.service', 'skiff-studio.service']);
+		queue(['try-restart', 'skiff-builder.service', 'skiff-studio.service', 'skiff-mail.service']);
 		queue(['restart', 'skiff-agent.service', 'skiff-helper.service']);
 	}, 500);
 }

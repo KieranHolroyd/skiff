@@ -176,6 +176,10 @@ export interface BrokerView {
 	internalHost: { process: string; container: string };
 	volume: VolumeSummary | null;
 	attachments: BrokerAttachmentView[];
+	/** From the newest sample the node reported (D123); null before the first one. */
+	storeBytes: number | null;
+	messages: number | null;
+	statsAt: string | null;
 	createdAt: string;
 	updatedAt: string;
 	deletedAt: string | null;
@@ -257,4 +261,137 @@ export function brokerUpgradeVersions(engine: BrokerEngine, current: string): st
 	if (info.inPlaceUpgrade === 'never') return [];
 	const index = info.versions.indexOf(current);
 	return index <= 0 ? [] : info.versions.slice(0, index);
+}
+
+// ---------------------------------------------------------------- metrics (D123)
+
+/**
+ * One broker's 1-minute sample, taken by the node agent over the broker's own client connection
+ * (JetStream `$JS.API.INFO`, `STREAM.LIST`, `CONSUMER.LIST` and the account's
+ * `$SYS.REQ.ACCOUNT.PING.STATZ`; docs/BROKERS.md §7). `bucket` is the time bucket, as in every
+ * telemetry schema. Gauges describe the broker at the sample; the `*In`/`*Out`/`published`/
+ * `slowConsumers` fields are deltas over the minute before it.
+ */
+export const brokerMetricBucketSchema = z.object({
+	brokerId: z.string().max(100),
+	bucket: z.string(),
+	up: z.boolean(),
+	/** Client connections, not counting the sampler's own. */
+	connections: z.number().int().nonnegative().default(0),
+	streams: z.number().int().nonnegative().default(0),
+	consumers: z.number().int().nonnegative().default(0),
+	/** JetStream file store in use, bytes (capped by the broker's store budget). */
+	storeBytes: z.number().int().nonnegative().default(0),
+	/** The broker's file store budget, bytes (`storageMb`), so ClickHouse can compute utilization. */
+	storeLimitBytes: z.number().int().nonnegative().default(0),
+	/** JetStream memory store in use, bytes. */
+	memoryStoreBytes: z.number().int().nonnegative().default(0),
+	/** Messages held across streams. */
+	messages: z.number().int().nonnegative().default(0),
+	/** Messages not yet delivered to a consumer, summed over consumers. */
+	pending: z.number().int().nonnegative().default(0),
+	/** Delivered but not acknowledged yet. */
+	ackPending: z.number().int().nonnegative().default(0),
+	/** Messages delivered more than once and still unacknowledged. */
+	redelivered: z.number().int().nonnegative().default(0),
+	/** Age of the oldest message held in any stream, seconds (0 when every stream is empty). */
+	oldestAgeSeconds: z.number().nonnegative().default(0),
+	/** Messages stored by JetStream in the minute. */
+	published: z.number().int().nonnegative().default(0),
+	/** Core NATS messages and bytes clients sent to / received from the server in the minute. */
+	messagesIn: z.number().int().nonnegative().default(0),
+	messagesOut: z.number().int().nonnegative().default(0),
+	bytesIn: z.number().int().nonnegative().default(0),
+	bytesOut: z.number().int().nonnegative().default(0),
+	/** Clients the server cut off for not keeping up, in the minute. */
+	slowConsumers: z.number().int().nonnegative().default(0),
+	/** Container memory use, bytes. */
+	memoryBytes: z.number().int().nonnegative().default(0),
+});
+export type BrokerMetricBucket = z.infer<typeof brokerMetricBucketSchema>;
+
+/** Stream prefix of a function queue (D112): `SKIFF_Q_<queue>`. */
+export const BROKER_QUEUE_STREAM_PREFIX = 'SKIFF_Q_';
+
+/** At most this many streams, and consumers per stream, are reported per broker. */
+export const BROKER_SNAPSHOT_MAX_STREAMS = 200;
+export const BROKER_SNAPSHOT_MAX_CONSUMERS = 20;
+
+export const brokerConsumerStatsSchema = z.object({
+	name: z.string().max(256),
+	pending: z.number().int().nonnegative(),
+	ackPending: z.number().int().nonnegative(),
+	redelivered: z.number().int().nonnegative(),
+	/** Pull requests waiting for messages (a live consumer keeps at least one open). */
+	waiting: z.number().int().nonnegative(),
+	/** Last delivery to this consumer, when the server reports it. */
+	lastDeliveredAt: z.string().nullable().default(null),
+});
+export type BrokerConsumerStats = z.infer<typeof brokerConsumerStatsSchema>;
+
+/** One JetStream stream as the dashboard lists it. Function queues carry their queue name. */
+export const brokerStreamStatsSchema = z.object({
+	stream: z.string().max(256),
+	/** The function queue (`SKIFF_Q_<queue>`), or null for a stream an app created itself. */
+	queue: z.string().max(63).nullable(),
+	subjects: z.array(z.string().max(256)).max(10).default([]),
+	storage: z.enum(['file', 'memory']).default('file'),
+	retention: z.string().max(32).default('limits'),
+	messages: z.number().int().nonnegative(),
+	bytes: z.number().int().nonnegative(),
+	/** The stream's own byte cap, when it has one. */
+	maxBytes: z.number().int().nonnegative().nullable().default(null),
+	/** Publish time of the oldest / newest message held (null when empty). */
+	firstAt: z.string().nullable().default(null),
+	lastAt: z.string().nullable().default(null),
+	consumerCount: z.number().int().nonnegative(),
+	pending: z.number().int().nonnegative(),
+	ackPending: z.number().int().nonnegative(),
+	redelivered: z.number().int().nonnegative(),
+	consumers: z.array(brokerConsumerStatsSchema).max(BROKER_SNAPSHOT_MAX_CONSUMERS).default([]),
+});
+export type BrokerStreamStats = z.infer<typeof brokerStreamStatsSchema>;
+
+/** Newest stream listing for one broker (only the latest is kept, in SQLite). */
+export const brokerQueueSnapshotSchema = z.object({
+	brokerId: z.string().max(100),
+	at: z.string(),
+	/** True when the broker has more streams than `BROKER_SNAPSHOT_MAX_STREAMS`. */
+	truncated: z.boolean().default(false),
+	streams: z.array(brokerStreamStatsSchema).max(BROKER_SNAPSHOT_MAX_STREAMS),
+});
+export type BrokerQueueSnapshot = z.infer<typeof brokerQueueSnapshotSchema>;
+
+/** Point returned by `GET /brokers/:name/metrics` (hourly points average gauges, sum deltas). */
+export interface BrokerMetricPoint {
+	bucket: string;
+	up: number;
+	connections: number;
+	streams: number;
+	consumers: number;
+	storeBytes: number;
+	storeLimitBytes: number;
+	memoryStoreBytes: number;
+	messages: number;
+	pending: number;
+	ackPending: number;
+	redelivered: number;
+	oldestAgeSeconds: number;
+	published: number;
+	messagesIn: number;
+	messagesOut: number;
+	bytesIn: number;
+	bytesOut: number;
+	slowConsumers: number;
+	memoryBytes: number;
+}
+
+/** `GET /brokers/:name/queues`: the newest listing the broker's node reported. */
+export interface BrokerQueuesView {
+	brokerId: string;
+	name: string;
+	/** When the node took the listing; null before the first sample. */
+	at: string | null;
+	truncated: boolean;
+	streams: BrokerStreamStats[];
 }

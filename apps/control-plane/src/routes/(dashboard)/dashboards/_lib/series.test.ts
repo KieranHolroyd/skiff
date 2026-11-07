@@ -21,7 +21,8 @@ function result(columns: QueryColumn[], rows: QueryResult['rows']): QueryResult 
 const names = {
 	project: { p1: 'Marketing site', p2: 'API' },
 	database: {},
-	storage: {}
+	storage: {},
+	broker: {}
 };
 
 describe('toFrame', () => {

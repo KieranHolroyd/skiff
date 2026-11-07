@@ -18,6 +18,8 @@ export const statements = {
 	database: ['create', 'read', 'update', 'delete', 'credentials', 'console'],
 	storage: ['create', 'read', 'update', 'delete', 'credentials'],
 	broker: ['create', 'read', 'update', 'delete', 'credentials'],
+	// Email (docs/EMAIL.md): domains, sending, suppressions, routes, credentials.
+	email: ['read', 'send', 'update', 'delete', 'credentials'],
 	shareLink: ['create', 'read', 'revoke'],
 	logs: ['read'],
 	metrics: ['read'],
@@ -50,12 +52,13 @@ export const roles = {
 		'database:create', 'database:read', 'database:update', 'database:credentials', 'database:console',
 		'storage:create', 'storage:read', 'storage:update', 'storage:credentials',
 		'broker:create', 'broker:read', 'broker:update', 'broker:credentials',
+		'email:read', 'email:send', 'email:update', 'email:credentials',
 		'shareLink:create', 'shareLink:read', 'shareLink:revoke',
 		'logs:read', 'metrics:read',
 	),
 	viewer: pick(
 		'project:read', 'deployment:read', 'domain:read', 'secret:read-metadata',
-		'build:read', 'database:read', 'storage:read', 'broker:read', 'shareLink:read', 'logs:read', 'metrics:read',
+		'build:read', 'database:read', 'storage:read', 'broker:read', 'email:read', 'shareLink:read', 'logs:read', 'metrics:read',
 	),
 } as const satisfies Record<string, readonly Permission[]>;
 
@@ -72,6 +75,7 @@ export const defaultAgentScopes: readonly Permission[] = roles.deployer.filter(
 		permission !== 'database:credentials' &&
 		permission !== 'storage:credentials' &&
 		permission !== 'broker:credentials' &&
+		permission !== 'email:credentials' &&
 		permission !== 'database:console',
 );
 
@@ -83,6 +87,7 @@ export const destructivePermissions: readonly Permission[] = [
 	'database:delete',
 	'storage:delete',
 	'broker:delete',
+	'email:delete',
 	'secret:delete',
 	'apiKey:revoke',
 	'member:remove',

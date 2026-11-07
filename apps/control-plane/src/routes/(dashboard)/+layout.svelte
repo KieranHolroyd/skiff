@@ -13,6 +13,8 @@
 	import FolderKanbanIcon from '@lucide/svelte/icons/folder-kanban';
 	import GlobeIcon from '@lucide/svelte/icons/globe';
 	import InboxIcon from '@lucide/svelte/icons/inbox';
+	import MailIcon from '@lucide/svelte/icons/mail';
+	import WebhookIcon from '@lucide/svelte/icons/webhook';
 	import LayoutDashboardIcon from '@lucide/svelte/icons/layout-dashboard';
 	import NetworkIcon from '@lucide/svelte/icons/network';
 	import Share2Icon from '@lucide/svelte/icons/share-2';
@@ -39,6 +41,10 @@
 	import { createDashboardQueryClient } from '#lib/query.js';
 	import type { LayoutProps } from './$types';
 	import { getOverview, keys as alertKeys } from './alerts/_lib/api.js';
+	import { pane as slidePane } from '#lib/nav/pane-transition.js';
+	import { provideSubnavLocal } from '#lib/nav/subnav-local.svelte.js';
+	import SubnavPane from '#lib/nav/SubnavPane.svelte';
+	import { subnavFor } from './_lib/subnav.js';
 
 	let { data, children }: LayoutProps = $props();
 
@@ -70,6 +76,8 @@
 			| '/(dashboard)/databases'
 			| '/(dashboard)/storage'
 			| '/(dashboard)/brokers'
+			| '/(dashboard)/events'
+			| '/(dashboard)/email'
 			| '/(dashboard)/shares'
 			| '/(dashboard)/deployments'
 			| '/(dashboard)/nodes'
@@ -129,6 +137,20 @@
 					feature: 'brokers'
 				},
 				{
+					label: 'Events',
+					href: '/(dashboard)/events',
+					path: '/events',
+					icon: WebhookIcon,
+					feature: 'brokers'
+				},
+				{
+					label: 'Email',
+					href: '/(dashboard)/email',
+					path: '/email',
+					icon: MailIcon,
+					feature: 'email'
+				},
+				{
 					label: 'Shares',
 					href: '/(dashboard)/shares',
 					path: '/shares',
@@ -173,6 +195,49 @@
 	type CrumbRoute = NavItem['href'] | '/(dashboard)/new';
 
 	let signingOut = $state(false);
+
+	/**
+	 * Inside an area (Settings, a project, a database…) the sidebar swaps the main navigation for
+	 * that area's sections. Builders read route data only, so the server renders the same pane.
+	 */
+	const subnav = $derived(subnavFor(page.route.id, page.data, page.url));
+
+	/** The owning page's in-place tab state and counts, while it is mounted. */
+	const subnavLocal = provideSubnavLocal();
+	const paneLocal = $derived(
+		subnav && subnavLocal.current?.key === subnav.key ? subnavLocal.current : null
+	);
+
+	/**
+	 * Which pane shows, and which way the swap slides: deeper areas push in from the right,
+	 * shallower ones slide back. Read by the pane transitions as they start.
+	 */
+	const motion = { key: 'main', depth: 0, dir: 0 };
+	const paneKey = $derived.by(() => {
+		const key = subnav?.key ?? 'main';
+		const depth = subnav?.depth ?? 0;
+		if (key !== motion.key) {
+			motion.dir = Math.sign(depth - motion.depth);
+			motion.key = key;
+			motion.depth = depth;
+		}
+		return key;
+	});
+
+	/** For panes whose "Back" remembers (Settings): the page the viewer entered them from. */
+	const enteredFrom = $state<Record<string, string>>({});
+	let previous = { key: 'main', url: '' };
+	$effect(() => {
+		const key = paneKey;
+		const url = page.url.pathname + page.url.search;
+		if (key !== previous.key && previous.url) enteredFrom[key] = previous.url;
+		previous = { key, url };
+	});
+	const backHref = $derived(
+		subnav?.back.remember
+			? (enteredFrom[subnav.key] ?? subnav.back.href)
+			: (subnav?.back.href ?? '')
+	);
 
 	function isActive(item: NavItem): boolean {
 		const current = page.url.pathname;
@@ -289,56 +354,76 @@
 			</Sidebar.Menu>
 		</Sidebar.Header>
 
-		<Sidebar.Content>
-			{#each groups as group (group.label ?? '')}
-				<Sidebar.Group>
-					{#if group.label}
-						<Sidebar.GroupLabel>{group.label}</Sidebar.GroupLabel>
-					{/if}
-					<Sidebar.Menu>
-						{#each group.items.filter(visible) as item (item.label)}
-							{@const active = isActive(item)}
-							<Sidebar.MenuItem>
-								<Sidebar.MenuButton
-									isActive={active}
-									tooltipContent={item.label}
-									class="data-active:[&_svg]:text-brand"
-								>
-									{#snippet child({ props })}
-										<a
-											href={resolve(item.href)}
-											aria-current={active ? 'page' : undefined}
-											data-skiff-target={`nav.${item.path.slice(1)}`}
-											{...props}
-										>
-											<item.icon />
-											<span>{item.label}</span>
-										</a>
-									{/snippet}
-								</Sidebar.MenuButton>
-								{#if item.path === '/alerts' && firing > 0}
-									<Sidebar.MenuBadge
-										class="bg-destructive/10 text-destructive"
-										title={`${firing} firing`}
-									>
-										{firing}<span class="sr-only"> firing alerts</span>
-									</Sidebar.MenuBadge>
+		<Sidebar.Content class="relative overflow-hidden">
+			{#key paneKey}
+				<div
+					class="absolute inset-0 no-scrollbar flex flex-col overflow-x-hidden overflow-y-auto bg-sidebar"
+					in:slidePane={{ dir: motion.dir }}
+					out:slidePane={{ dir: motion.dir }}
+				>
+					{#if subnav}
+						<nav aria-label="{subnav.title} sections" class="contents">
+							<SubnavPane
+								nav={subnav}
+								active={paneLocal?.active ?? subnav.active}
+								counts={paneLocal?.counts}
+								{backHref}
+								select={paneLocal?.select}
+							/>
+						</nav>
+					{:else}
+						{#each groups as group (group.label ?? '')}
+							<Sidebar.Group>
+								{#if group.label}
+									<Sidebar.GroupLabel>{group.label}</Sidebar.GroupLabel>
 								{/if}
-								{#if item.path === '/settings'}
-									{#await data.updateAvailable then update}
-										{#if update}
-											<Sidebar.MenuBadge title={`Skiff ${update.latest} is available`}>
-												<span class="size-2 rounded-full bg-brand"></span>
-												<span class="sr-only">Update available</span>
-											</Sidebar.MenuBadge>
-										{/if}
-									{/await}
-								{/if}
-							</Sidebar.MenuItem>
+								<Sidebar.Menu>
+									{#each group.items.filter(visible) as item (item.label)}
+										{@const active = isActive(item)}
+										<Sidebar.MenuItem>
+											<Sidebar.MenuButton
+												isActive={active}
+												tooltipContent={item.label}
+												class="data-active:[&_svg]:text-brand"
+											>
+												{#snippet child({ props })}
+													<a
+														href={resolve(item.href)}
+														aria-current={active ? 'page' : undefined}
+														data-skiff-target={`nav.${item.path.slice(1)}`}
+														{...props}
+													>
+														<item.icon />
+														<span>{item.label}</span>
+													</a>
+												{/snippet}
+											</Sidebar.MenuButton>
+											{#if item.path === '/alerts' && firing > 0}
+												<Sidebar.MenuBadge
+													class="bg-destructive/10 text-destructive"
+													title={`${firing} firing`}
+												>
+													{firing}<span class="sr-only"> firing alerts</span>
+												</Sidebar.MenuBadge>
+											{/if}
+											{#if item.path === '/settings'}
+												{#await data.updateAvailable then update}
+													{#if update}
+														<Sidebar.MenuBadge title={`Skiff ${update.latest} is available`}>
+															<span class="size-2 rounded-full bg-brand"></span>
+															<span class="sr-only">Update available</span>
+														</Sidebar.MenuBadge>
+													{/if}
+												{/await}
+											{/if}
+										</Sidebar.MenuItem>
+									{/each}
+								</Sidebar.Menu>
+							</Sidebar.Group>
 						{/each}
-					</Sidebar.Menu>
-				</Sidebar.Group>
-			{/each}
+					{/if}
+				</div>
+			{/key}
 		</Sidebar.Content>
 
 		<Sidebar.Footer>

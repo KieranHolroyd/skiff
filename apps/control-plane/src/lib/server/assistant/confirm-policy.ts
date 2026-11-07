@@ -27,7 +27,9 @@ export const CONFIRM_TOOLS: ReadonlySet<string> = new Set([
 	'restart_services',
 	'restart_storage',
 	'update_bucket_config',
-	'create_backup_target'
+	'create_backup_target',
+	// Real mail to real people can't be recalled (docs/EMAIL.md §9).
+	'send_email'
 ]);
 
 export function needsConfirmation(

@@ -60,6 +60,7 @@ import { BUILDER_UNIT, ensureBuilder, linkAgentCommands } from '../systemd/build
 import { HELPER_UNIT, ensureHelper } from '../systemd/helper.ts';
 import { ensureStorageUnits, STORAGE_PATH_UNIT } from '../systemd/storage.ts';
 import { STUDIO_UNIT, studioUnit } from '../systemd/studio.ts';
+import { MAIL_UNIT, mailUnit } from '../systemd/mail.ts';
 import { agentUnit, CADDY_ACCESS_LOG, detectCaddyAdminSocket } from '../systemd/agent.ts';
 import { CLI_COMMANDS, ensureHostCommands, RELEASE_COMMANDS } from './commands.ts';
 import { CLICKHOUSE_UNIT, clickhouseInstalled, ensureClickHouse, removeClickHouseUnit } from '../systemd/clickhouse.ts';
@@ -919,6 +920,8 @@ function writeUnits(release: string): void {
 	// The on-demand database studio (plan 22): installed beside the agent, never enabled. The
 	// agent starts it through the helper; it exits by itself when idle.
 	writeFileSync(join(SYSTEMD_DIR, STUDIO_UNIT), studioUnit({ optDir: OPT_DIR, runDir: RUN_DIR, socketGroup: 'caddy' }));
+	// Static, like the studio: the mail node's agent starts it (docs/EMAIL.md).
+	writeFileSync(join(SYSTEMD_DIR, MAIL_UNIT), mailUnit({ optDir: OPT_DIR, runDir: RUN_DIR, socketGroup: 'caddy' }));
 	// The privileged runtime helper ships in the active release so a `current` swap upgrades it.
 	ensureHelper({
 		systemdDir: SYSTEMD_DIR,
@@ -1156,6 +1159,7 @@ function startServices(): void {
 		run('systemctl', ['restart', 'skiff-agent.service']);
 		// A running studio moves to the new binary; a stopped one stays stopped.
 		run('systemctl', ['try-restart', STUDIO_UNIT], { allowFailure: true });
+		run('systemctl', ['try-restart', MAIL_UNIT], { allowFailure: true });
 		waitFor('agent socket', () => existsSync(join(RUN_DIR, 'agent.sock')), 90_000);
 	}
 	if (!options.noAgent) {

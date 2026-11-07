@@ -61,6 +61,7 @@ import {
 	type WorkloadDesired,
 	type WorkloadRuntime,
 	type WorkloadStatus,
+	STORAGE_NOTIFY_TARGET,
 } from '@skiff/contracts';
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
@@ -88,6 +89,20 @@ const RUSTFS_ENV: Record<string, string> = {
 	// Empty sends logs to stdout, so they reach the journal like every other workload.
 	RUSTFS_OBS_LOG_DIRECTORY: '',
 };
+
+/**
+ * RustFS's `skiff` webhook target (D122), set only while a rule watches a bucket on the instance.
+ * The endpoint is the control plane's public URL: RustFS refuses private webhook addresses (spiked
+ * on 1.0.4). The queue dir keeps undelivered events on the data disk across restarts and outages.
+ */
+function rustfsNotifyEnv(endpoint: string): Record<string, string> {
+	return {
+		RUSTFS_NOTIFY_ENABLE: 'true',
+		[`RUSTFS_NOTIFY_WEBHOOK_ENABLE_${STORAGE_NOTIFY_TARGET.toUpperCase()}`]: 'on',
+		[`RUSTFS_NOTIFY_WEBHOOK_ENDPOINT_${STORAGE_NOTIFY_TARGET.toUpperCase()}`]: endpoint,
+		[`RUSTFS_NOTIFY_WEBHOOK_QUEUE_DIR_${STORAGE_NOTIFY_TARGET.toUpperCase()}`]: '/data/.skiff-notify',
+	};
+}
 
 /** One consumer's view of an attachment, resolved for the node and runtime it runs on. */
 interface ResolvedAttachment {
@@ -976,6 +991,10 @@ export class StorageService {
 			.all()
 			.map((row) => {
 				const buckets = this.ctx.db.select().from(storageBuckets).where(eq(storageBuckets.storageId, row.id)).all();
+				// Event notifications (D122): the instance gets the `skiff` webhook target only while a
+				// rule watches one of its buckets, so instances without rules never restart for it.
+				const watched = this.ctx.events.watchedBuckets(row.id);
+				const notifyEnv = watched.size > 0 ? rustfsNotifyEnv(this.ctx.events.storageNotifyEndpoint(row.id)) : {};
 				const attachments = this.liveAttachmentsOf(row.id);
 				const keys = this.desiredKeysOf(row.id, attachments);
 				const users = new Map<string, StorageGrant[]>();
@@ -1000,8 +1019,8 @@ export class StorageService {
 					port: row.hostPort,
 					healthPath: '/health',
 					socketActivation: false,
-					activationVersion: storageActivationVersion(row),
-					env: { ...RUSTFS_ENV },
+					activationVersion: storageActivationVersion(row, notifyEnv),
+					env: { ...RUSTFS_ENV, ...notifyEnv },
 					secrets: [],
 					dataSizeMb: null,
 					objectStorage: {
@@ -1018,6 +1037,7 @@ export class StorageService {
 								quotaBytes: bucket.quotaBytes,
 								objectLock: parseObjectLock(bucket.objectLockJson),
 								configVersion: bucket.configVersion,
+								notifications: watched.has(bucket.name),
 							})),
 						users: [...users.entries()]
 							.map(([accessKeyId, grants]) => ({ accessKeyId, grants }))
@@ -1118,10 +1138,19 @@ export class StorageService {
 		for (const item of attachments)
 			userSecrets.set(item.accessKeyId, this.ctx.secrets.open(item.orgId, item.secretSealed));
 		for (const key of keys) userSecrets.set(key.accessKeyId, this.ctx.secrets.open(key.orgId, key.secretSealed));
+		const notifying = this.ctx.events.watchedBuckets(row.id).size > 0;
+		const notifyEnv = notifying ? rustfsNotifyEnv(this.ctx.events.storageNotifyEndpoint(row.id)) : {};
 		return {
 			workloadId: row.id,
-			activationVersion: storageActivationVersion(row),
-			env: { RUSTFS_ACCESS_KEY: row.rootAccessKey, RUSTFS_SECRET_KEY: rootSecret },
+			activationVersion: storageActivationVersion(row, notifyEnv),
+			env: {
+				RUSTFS_ACCESS_KEY: row.rootAccessKey,
+				RUSTFS_SECRET_KEY: rootSecret,
+				// The webhook's bearer token is a secret, so it rides the activation, never desired state.
+				...(notifying
+					? { [`RUSTFS_NOTIFY_WEBHOOK_AUTH_TOKEN_${STORAGE_NOTIFY_TARGET.toUpperCase()}`]: this.ctx.events.storageNotifyToken(row.id) }
+					: {}),
+			},
 			files: {},
 			storageAdmin: {
 				rootAccessKeyId: row.rootAccessKey,
@@ -1734,7 +1763,7 @@ function secretKey(): string {
 }
 
 /** Covers what the container itself depends on; bucket and key changes never restart it. */
-function storageActivationVersion(row: StorageRow): string {
+function storageActivationVersion(row: StorageRow, notifyEnv: Record<string, string> = {}): string {
 	return sha256Hex(
 		JSON.stringify({
 			id: row.id,
@@ -1745,6 +1774,8 @@ function storageActivationVersion(row: StorageRow): string {
 			// A restart must re-activate (and so restart) the container without touching data.
 			restartGeneration: row.restartGeneration,
 			env: RUSTFS_ENV,
+			// Only present while notifications are on, so every other instance keeps its version.
+			...(Object.keys(notifyEnv).length > 0 ? { notify: notifyEnv } : {}),
 		}),
 	);
 }

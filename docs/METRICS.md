@@ -9,8 +9,8 @@ control plane.
 | Request | Result |
 |---|---|
 | `GET /metrics`, no credentials | Fleet summary: node, node-volume and platform-wide traffic counts. Off when Settings → Metrics → *Public fleet summary* is off (then 401). |
-| `GET /metrics` with `Authorization: Bearer skif_…` (or a dashboard session) | Every enabled section for **the key's organisation only**. Needs `metrics:read`; sections the key cannot read (`project:read`, `database:read`, `storage:read`) are left out. |
-| `GET /metrics/<section>[/<name>]` | One section, or one app / database / storage instance. Always needs a key. |
+| `GET /metrics` with `Authorization: Bearer skif_…` (or a dashboard session) | Every enabled section for **the key's organisation only**. Needs `metrics:read`; sections the key cannot read (`project:read`, `database:read`, `storage:read`, `broker:read`) are left out. |
+| `GET /metrics/<section>[/<name>]` | One section, or one app / database / storage instance / broker. Always needs a key. |
 | An `Authorization` header that does not resolve | 401, never the public view. |
 
 The same paths work under `/api/v1/metrics/...`.
@@ -22,6 +22,7 @@ The same paths work under `/api/v1/metrics/...`.
 | `/metrics/traffic[/<slug>]` | Last-hour traffic per app only | `project:read` |
 | `/metrics/databases[/<name>]` | Managed databases | `database:read` |
 | `/metrics/storage[/<name>]` | Object storage instances | `storage:read` |
+| `/metrics/brokers[/<name>]` | Queue brokers, plus one series family per stream | `broker:read` |
 | `/metrics/volumes[/<slug>]` | App volumes | `project:read` |
 | `/metrics/platform` | Nodes and node volumes | platform admin |
 
@@ -88,6 +89,24 @@ telemetry store's TTL would make a running total go backwards.
   `skiff_storage_{memory_limit_bytes,storage_limit_bytes}`, `skiff_storage_used_bytes`,
   `skiff_storage_objects`, `skiff_storage_up`, `skiff_storage_buckets`, `skiff_storage_memory_bytes`
 
+**Queue brokers** (labels `broker`, `broker_id`; D123, [BROKERS.md](./BROKERS.md) §7)
+
+- `skiff_broker_info{engine,version}`, `skiff_broker_running`,
+  `skiff_broker_{memory_limit_bytes,cpu_limit,storage_limit_bytes}`, `skiff_broker_store_bytes`,
+  `skiff_broker_messages` (the last good sample, so they survive ClickHouse being off)
+- Latest sample: `skiff_broker_up`, `_connections`, `_streams`, `_consumers`,
+  `_memory_store_bytes`, `_pending`, `_ack_pending`, `_redelivered`,
+  `_oldest_message_age_seconds`, `_memory_bytes`
+- Last hour: `skiff_broker_published_1h`, `skiff_broker_messages_1h{direction}`,
+  `skiff_broker_bytes_1h{direction}` (`in` = sent by clients), `skiff_broker_slow_consumers_1h`
+- Per stream, from the newest listing (labels `stream`, `queue` = the function queue or empty):
+  `skiff_broker_stream_{messages,bytes,consumers,pending,ack_pending,redelivered}`,
+  `skiff_broker_stream_oldest_message_age_seconds`, plus
+  `skiff_broker_streams_timestamp_seconds` for when the node took the listing. At most 200
+  streams per broker.
+
+Brokers are not in the public fleet summary.
+
 **Fleet** (public `/metrics`, `/metrics/platform`)
 
 - `skiff_nodes_total`, `skiff_nodes_online`, `skiff_projects_total`, `skiff_deployments_active`,
@@ -119,6 +138,6 @@ restart.
 ## Cost
 
 A scrape runs a fixed set of grouped SQLite queries for each section: one per kind of resource,
-batched over every app in scope. It also runs at most four ClickHouse queries, filtered to the
+batched over every app in scope. It also runs at most six ClickHouse queries, filtered to the
 ids in scope. Cost therefore grows with the number of series written, not with the number of
 queries. Code: `packages/core/src/metrics-export.ts`, `TelemetryStore.scrapeSamples`.

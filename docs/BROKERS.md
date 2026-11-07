@@ -1,8 +1,9 @@
 # Skiff — Managed queue brokers
 
 Status: **implemented, 2026-11-07** (not yet exercised on a real Debian/Podman node; the unit,
-config, validation, probe and control-plane flow are covered by unit tests). The decision is D111
-in [DECISIONS.md](./DECISIONS.md).
+config, validation, probe and control-plane flow are covered by unit tests; the metrics sampler
+was checked against a real `nats:2.12-alpine`). The decisions are D111 and D123 (metrics) in
+[DECISIONS.md](./DECISIONS.md).
 
 A managed broker is an org-owned message broker that Skiff provisions, runs and connects to apps:
 background jobs, events and fan-out without hand-rolling a container. **NATS with JetStream** is
@@ -95,13 +96,15 @@ At activation the app receives `<P>_URL`, `<P>_HOST`, `<P>_PORT`, `<P>_USER`, `<
 ## 5. Surfaces
 
 - **REST:** see [API.md](./API.md#managed-queue-brokers).
-- **MCP:** `list_brokers`, `get_broker`, `get_broker_logs`, `create_broker`, `update_broker`,
-  `restart_broker`, `attach_broker`, `detach_broker`. Credentials, delete and purge are not on MCP;
+- **MCP:** `list_brokers`, `get_broker`, `get_broker_logs`, `get_broker_metrics`,
+  `get_broker_queues`, `create_broker`, `update_broker`, `restart_broker`, `attach_broker`,
+  `detach_broker`. Credentials, delete and purge are not on MCP;
   agents never receive the password (D58).
-- **CLI:** `skif broker list|create|info|update|attach|detach|restart|delete|restore|purge|logs|credentials`
+- **CLI:** `skif broker list|create|info|update|attach|detach|restart|delete|restore|purge|logs|credentials|metrics|queues`
   (aliases `skif brokers`, `skif queue`).
 - **Dashboard:** Queues list (live + trash, create dialog), detail (connection with audited
-  reveal and client snippets, resources, attachments, version upgrade, danger zone) and logs.
+  reveal and client snippets, resources, attachments, version upgrade, danger zone), Queues
+  (streams and consumers, §7), Metrics (charts, §7) and logs.
 - **Flag:** `SKIFF_FEATURE_BROKERS` (default on). Off hides the nav entry and refuses new brokers
   and restores; existing brokers keep running.
 
@@ -129,12 +132,71 @@ more than one:
 - A queue has one consumer per broker; a second deploy that consumes it is refused (409).
 - Streams are created on first use and stay until removed with `nats stream rm` (Skiff does not
   delete them when a function goes away).
+- Event rules (D122, [EVENTS.md](./EVENTS.md)) publish platform events into a broker's queues; the
+  broker's node agent does the publishing, with the broker's own credentials.
 
-## 7. Not yet
+## 7. Metrics (D123)
+
+Once a minute the agent on a broker's node samples it **over the broker's own client
+connection**, with the user and password from the broker's activation. It reads:
+
+| Call | Gives |
+|---|---|
+| `$JS.API.INFO` | JetStream file and memory store in use, stream and consumer counts |
+| `$JS.API.STREAM.LIST` (pages of 256, up to 1,024 streams) | per stream: messages, bytes, first/last sequence and time, consumer count |
+| `$JS.API.CONSUMER.LIST.<stream>` (first 200 streams) | per consumer: pending, awaiting ack, redelivered, waiting pulls, last delivery |
+| `$SYS.REQ.ACCOUNT.PING.STATZ` | the account's connections, messages and bytes in and out, slow consumers |
+
+NATS exports STATZ to every account, so no system user is needed. Nothing new listens on the
+node. The HTTP monitor port (`/varz`, `/jsz`, `/connz`) is unauthenticated: on node loopback,
+any tenant's process app could read it. Checked against `nats:2.12-alpine` with the helper's
+config.
+
+**The sample** (`brokerMetricBucketSchema`) rides the telemetry batch:
+
+- Gauges: `up`, connections (the sampler's own is not counted), streams, consumers, store used,
+  store budget (`storageMb`), memory store used, messages held, pending, awaiting ack,
+  redelivered, container memory, and **oldest message age**.
+- Per-minute deltas: messages JetStream stored (`published`, from stream sequences), messages and
+  bytes in and out of the server (STATZ, minus the sampler's own request/reply pairs), and slow
+  consumers. The first sample after an agent start reads 0. A restarted server resets its
+  counters, and the delta starts again from there.
+- Oldest message age counts only work-queue and interest streams that have a consumer. A held
+  message there is unprocessed by definition. A limits stream keeps messages on purpose, and a
+  dead-letter queue nobody consumes is parked, not lagging.
+- A broker that is not running, or does not answer, reports `up: false` with zeros. Its last good
+  totals stay in place.
+
+**Where it lands.** The control plane drops samples for brokers not placed on the sending node.
+
+- ClickHouse (when installed): `broker_metrics_1m` / `_1h` with the hourly rollup, prune and a
+  `broker_metrics_hourly` view, like databases and storage. Hourly points take the max of
+  sizes and backlog, average `up` and connections, and sum the deltas.
+- SQLite (always): `brokers.store_bytes`, `messages`, `stats_at` and the newest **stream
+  listing** (`queue_stats`, at most 200 streams with 20 consumers each; `queue_stats_truncated`
+  flags a cut), migration 0051.
+
+**Surfaces.**
+
+- `GET /api/v1/brokers/:name/metrics?from&to&interval`: the series, as for databases.
+  `GET /api/v1/brokers/:name/queues`: the newest listing. Both need `broker:read`.
+- Dashboard: **Queues** tab (streams, function-queue names, consumers and backlog) and
+  **Metrics** tab (store vs budget, backlog, throughput, connections, memory, oldest message).
+  The list and overview show store used against the budget.
+- `/metrics/brokers[/<name>]` ([METRICS.md](./METRICS.md)): configuration and SQLite totals
+  always, live gauges and last-hour rates from ClickHouse, and one series family per stream.
+- The `brokers` query-builder dataset, for dashboards and alert rules. It adds a derived
+  `store_utilization`. Alert templates: **Queue broker down**, **store nearly full** (> 85%)
+  and **backlog not draining** (oldest message > 15 min for 10 min).
+- Built-in system alert `broker_store` (Alerts → System alerts). It reads the SQLite totals, so
+  it needs no ClickHouse. Its threshold is the `brokerStoreAlertPercent` policy (default 85%,
+  critical at 95%). A full store refuses publishes (`discard: new`).
+
+## 8. Not yet
 
 - RabbitMQ engine (registry entry, helper profile, AMQP greeting probe, management UI off).
-- Metrics: a loopback monitor port sampled by the agent (`/varz`, `/jsz`) into ClickHouse, a
-  store-full alert, and stream/consumer listing in the dashboard.
+- Per-stream time series (today only the newest listing is kept per stream), and stream actions
+  from the dashboard (purge, delete, peek).
 - Per-attachment users with subject permissions (today every attached app shares the broker's
   one user), TLS, cross-node endpoints (C2), stream snapshots as backups, moves (D97), bulk actions
   and prune, and an attach panel on the project page.

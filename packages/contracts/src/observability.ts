@@ -14,7 +14,7 @@ import * as z from 'zod';
 // --- builder catalog --------------------------------------------------------------------------
 
 /** Builder datasets. Each maps to a `_1m`/`_1h` table pair; the server picks the resolution. */
-export const observabilityDatasets = ['traffic', 'traffic_paths', 'traffic_referrers', 'databases', 'storage'] as const;
+export const observabilityDatasets = ['traffic', 'traffic_paths', 'traffic_referrers', 'databases', 'storage', 'brokers'] as const;
 export type ObservabilityDataset = (typeof observabilityDatasets)[number];
 
 /** `counter`: per-bucket deltas that sum. `gauge`: a sampled level. `derived`: a fixed formula. */
@@ -32,8 +32,8 @@ export interface DatasetMeasure {
 export interface DatasetDimension {
 	name: string;
 	label: string;
-	/** `project_id`, `database_id` and `storage_id` values have display names in `names`. */
-	idOf?: 'project' | 'database' | 'storage';
+	/** `project_id`, `database_id`, `storage_id` and `broker_id` values have display names in `names`. */
+	idOf?: 'project' | 'database' | 'storage' | 'broker';
 }
 
 export interface DatasetInfo {
@@ -169,6 +169,7 @@ export interface ObservabilitySchema {
 		project: Record<string, string>;
 		database: Record<string, string>;
 		storage: Record<string, string>;
+		broker: Record<string, string>;
 	};
 	retention: { minuteHours: number; hourDays: number };
 }

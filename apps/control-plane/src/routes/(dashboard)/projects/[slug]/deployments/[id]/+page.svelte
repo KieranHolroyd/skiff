@@ -10,12 +10,10 @@
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import CpuIcon from '@lucide/svelte/icons/cpu';
 	import FileCogIcon from '@lucide/svelte/icons/file-cog';
-	import FolderTreeIcon from '@lucide/svelte/icons/folder-tree';
 	import GitCommitIcon from '@lucide/svelte/icons/git-commit-horizontal';
 	import GlobeIcon from '@lucide/svelte/icons/globe';
 	import HammerIcon from '@lucide/svelte/icons/hammer';
 	import InfoIcon from '@lucide/svelte/icons/info';
-	import LayoutDashboardIcon from '@lucide/svelte/icons/layout-dashboard';
 	import PackageIcon from '@lucide/svelte/icons/package';
 	import PinIcon from '@lucide/svelte/icons/pin';
 	import PinOffIcon from '@lucide/svelte/icons/pin-off';
@@ -41,12 +39,7 @@
 	import CopyValue from '../../../../_lib/service/CopyValue.svelte';
 	import ServiceHeader from '../../../../_lib/service/ServiceHeader.svelte';
 	import StatStrip from '../../../../_lib/service/StatStrip.svelte';
-	import {
-		readTab,
-		tabHref,
-		type ServiceSection,
-		type Stat
-	} from '../../../../_lib/service/sections.js';
+	import { readTab, tabHref, type Stat } from '../../../../_lib/service/sections.js';
 	import {
 		displayUrl,
 		formatBytes,
@@ -58,13 +51,20 @@
 	} from '../../../../_lib/format.js';
 	import LogsPanel from '../../_components/LogsPanel.svelte';
 	import SourcePanel from '../../_components/SourcePanel.svelte';
+	import {
+		DEPLOYMENT_DEFAULT_TAB,
+		DEPLOYMENT_TABS,
+		deploymentSubnavKey,
+		type DeploymentTab
+	} from '../../_components/project-subnav.js';
+	import { useSubnavLocal } from '#lib/nav/subnav-local.svelte.js';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
 
-	const TABS = ['overview', 'metrics', 'logs', 'files'] as const;
-	type Tab = (typeof TABS)[number];
-	const DEFAULT_TAB: Tab = 'overview';
+	const TABS = DEPLOYMENT_TABS;
+	type Tab = DeploymentTab;
+	const DEFAULT_TAB = DEPLOYMENT_DEFAULT_TAB;
 
 	const deployment = $derived(data.deployment);
 	const build = $derived(deployment.build);
@@ -88,21 +88,23 @@
 		page.url.searchParams.get('logSource') === 'build' ? 'build' : 'runtime'
 	);
 
-	const sections = $derived<ServiceSection[]>(
-		[
-			{ id: 'overview', label: 'Overview', icon: LayoutDashboardIcon },
-			{ id: 'metrics', label: 'Metrics', icon: ActivityIcon },
-			{ id: 'logs', label: 'Logs', icon: ScrollTextIcon },
-			{ id: 'files', label: 'Files', icon: FolderTreeIcon, count: deployment.release.fileCount }
-		].map((item) => ({ ...item, href: tabHref(base, item.id, DEFAULT_TAB), local: true }))
-	);
-
 	/** Switch sections in place (no reload), keeping `?tab=` deep-linkable. */
 	function setTab(next: string) {
 		tab = readTab(next, TABS, DEFAULT_TAB);
 		// eslint-disable-next-line svelte/no-navigation-without-resolve -- same route, only `?tab` changes
 		replaceState(tabHref(page.url.pathname + page.url.search, tab, DEFAULT_TAB), {});
 	}
+
+	/** The sidebar lists the deployment's sections; they switch here without a page load. */
+	useSubnavLocal(() => ({
+		key: deploymentSubnavKey(deployment.id),
+		active: tab,
+		select: (id) => {
+			if (!TABS.includes(id as Tab)) return false;
+			setTab(id);
+			return true;
+		}
+	}));
 
 	function openBuildLog() {
 		logSource = 'build';
@@ -204,16 +206,7 @@
 </svelte:head>
 
 <div class="space-y-6">
-	<ServiceHeader
-		icon={RocketIcon}
-		backHref="{projectHref}?tab=deployments"
-		backLabel="{data.project.name} deployments"
-		title={deployment.shortId}
-		target="page.deployment"
-		{sections}
-		active={tab}
-		onselect={setTab}
-	>
+	<ServiceHeader icon={RocketIcon} title={deployment.shortId} target="page.deployment">
 		{#snippet meta()}
 			<StatusBadge status={deployment.status} />
 			{#if deployment.isProduction}

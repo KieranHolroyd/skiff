@@ -1786,6 +1786,14 @@ export class DatabaseService {
 					result: ok ? 'ok' : 'error',
 					...(ok ? {} : { error: result.error ?? 'Backup failed on the node.' }),
 				});
+				this.ctx.events.emitBackup(backup.db.orgId, backup.db.id, ok ? 'completed' : 'failed', {
+					database: backup.db.name,
+					databaseId: backup.db.id,
+					engine: backup.db.engine,
+					backupId: backup.backup.id,
+					sizeBytes: result.sizeBytes ?? backup.backup.sizeBytes ?? null,
+					error: ok ? null : result.error ?? 'Backup failed on the node.',
+				});
 				// A move's final dump advances the move (D97).
 				this.ctx.moves.onBackupResult(backup.backup.id, ok, ok ? null : result.error ?? 'Backup failed on the node.');
 				changed = true;

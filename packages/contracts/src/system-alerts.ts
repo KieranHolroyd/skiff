@@ -20,6 +20,7 @@ export const systemAlertKinds = [
 	'database_connections',
 	'database_pool',
 	'storage_usage',
+	'broker_store',
 	'quota',
 	'telemetry',
 ] as const;
@@ -110,6 +111,13 @@ export const systemAlertCatalog: SystemAlertInfo[] = [
 		thresholds: [{ key: 'storageAlertPercent', label: 'Above', unit: 'percent', min: 50, max: 99 }],
 	},
 	{
+		kind: 'broker_store',
+		label: 'Queue broker store',
+		description: 'A queue broker’s message store passes a share of its budget. A full store refuses new messages.',
+		severity: 'warning; critical at 95%',
+		thresholds: [{ key: 'brokerStoreAlertPercent', label: 'Above', unit: 'percent', min: 50, max: 99 }],
+	},
+	{
 		kind: 'quota',
 		label: 'Org quota',
 		description: 'An organisation reaches 80% or 95% of a quota (once per threshold per day).',
@@ -156,6 +164,7 @@ export const systemAlertPolicyKeys = [
 	'databaseConnectionsAlertPercent',
 	'poolSaturationAlertPercent',
 	'storageAlertPercent',
+	'brokerStoreAlertPercent',
 	'systemAlertRepeatMinutes',
 ] as const satisfies readonly PlatformPolicyKey[];
 

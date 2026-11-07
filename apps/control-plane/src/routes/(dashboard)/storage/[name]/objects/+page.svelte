@@ -414,7 +414,7 @@
 {/snippet}
 
 <div class="space-y-6">
-	<StorageHeader st={data.storage} can={data.storageCan} active="objects" />
+	<StorageHeader st={data.storage} can={data.storageCan} />
 
 	{#if data.buckets.length === 0}
 		<EmptyState

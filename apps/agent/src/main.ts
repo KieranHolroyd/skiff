@@ -27,12 +27,14 @@ import { DatabaseBackupRunner } from './database-backups.ts';
 import { DatabasePitrRunner } from './database-pitr.ts';
 import { DatabaseCredentialRunner } from './database-credentials.ts';
 import { StudioPrincipalRunner } from './studio/principal.ts';
+import { MailBridge } from './mail-bridge.ts';
 import { NodeUpdateRunner } from './node-update.ts';
 import { DatabasePoolerRestartRunner } from './database-pooler-restarts.ts';
 import { DatabaseRotationRunner } from './database-rotations.ts';
 import { DATABASE_STATS_INTERVAL_MS, DatabaseStatsSampler } from './database-stats.ts';
 import { FunctionScheduler } from './function-scheduler.ts';
 import { FunctionQueueConsumers } from './function-queues.ts';
+import { EventPublisher } from './event-publisher.ts';
 import { HelperClient } from './helper-client.ts';
 import { formatEnv, JOIN_USAGE, joinNode, nodeFilePath, parseJoinArgs } from './join.ts';
 import { WorkloadLogDrain } from './log-drain.ts';
@@ -45,6 +47,7 @@ import { StatsCollector } from './stats.ts';
 import { StorageReconciler, STORAGE_RECONCILE_INTERVAL_MS } from './storage-admin.ts';
 import { StorageRequester } from './storage.ts';
 import { StorageStatsSampler, STORAGE_STATS_INTERVAL_MS } from './storage-stats.ts';
+import { BROKER_STATS_INTERVAL_MS, BrokerStatsSampler } from './broker-stats.ts';
 import { DesiredStateStore, desiredStateEtag, desiredStateRequest } from './state.ts';
 import { postTelemetryBatch, TelemetryClient } from './telemetry.ts';
 import { handleSiteRequest, normalizeHost, UsedTokenCache } from './verify.ts';
@@ -97,6 +100,8 @@ class AgentRuntime {
 	private wireguardStatusAt = 0;
 	private readonly certs: CertProbe | null;
 	private readonly helper: HelperClient;
+	/** Email (docs/EMAIL.md): runs and feeds skiff-mail when this node is the mail node. */
+	private readonly mail: MailBridge;
 	private readonly workloads: WorkloadRuntime;
 	private readonly logDrain: WorkloadLogDrain;
 	private readonly storage: StorageRequester;
@@ -110,8 +115,10 @@ class AgentRuntime {
 	private readonly databasePoolerRestarts: DatabasePoolerRestartRunner;
 	private readonly storageAdmin: StorageReconciler;
 	private readonly storageStats: StorageStatsSampler;
+	private readonly brokerStats: BrokerStatsSampler;
 	private readonly functions: FunctionScheduler;
 	private readonly functionQueues: FunctionQueueConsumers;
+	private readonly eventPublisher: EventPublisher;
 
 	private desired: DesiredState | null = null;
 	private desiredEtag: string | null = null;
@@ -172,6 +179,13 @@ class AgentRuntime {
 				)
 			: null;
 		this.helper = new HelperClient(config.helperSocket);
+		this.mail = new MailBridge({
+			controlUrl: config.controlUrl,
+			nodeToken: config.nodeToken,
+			socketPath: process.env.SKIFF_MAIL_SOCKET?.trim() || '/run/skiff/mail.sock',
+			helper: this.helper,
+			log,
+		});
 		this.storage = new StorageRequester(config.storageStateFile, config.storageRequestFile);
 		this.logDrain = new WorkloadLogDrain({
 			helper: this.helper,
@@ -227,6 +241,13 @@ class AgentRuntime {
 		// root key and user secrets stay in the workload runtime's memory (S4).
 		this.storageAdmin = new StorageReconciler({ source: this.workloads, log });
 		this.storageStats = new StorageStatsSampler({ source: this.workloads, log });
+		// Broker samples (D123) over each broker's own client connection; the password is fetched
+		// from the activation on demand and kept only in the open connection.
+		this.brokerStats = new BrokerStatsSampler({
+			source: this.workloads,
+			fetchActivation: (id, signal) => this.fetchWorkloadActivation(id, signal),
+			log,
+		});
 		// Scale to zero, the runaway watchdog and cron all run on the node (FN4, FN5, FN9).
 		this.functions = new FunctionScheduler({
 			helper: this.helper,
@@ -241,6 +262,13 @@ class AgentRuntime {
 			socketDir: config.workloadSocketDir,
 			fetchActivation: (id, signal) => this.fetchWorkloadActivation(id, signal),
 			noteActivity: (projectId) => this.functions.noteActivity(projectId),
+			log,
+		});
+		// Event notifications (D122): publish the control plane's outbox into local brokers.
+		this.eventPublisher = new EventPublisher({
+			controlUrl: config.controlUrl,
+			nodeToken: config.nodeToken,
+			fetchActivation: (id, signal) => this.fetchWorkloadActivation(id, signal),
 			log,
 		});
 	}
@@ -280,6 +308,7 @@ class AgentRuntime {
 				this.desired = cached.state;
 				this.desiredEtag = cached.etag;
 				this.applyStudio(cached.state.studio);
+				this.mail.apply(cached.state.mail);
 				log('info', `Loaded cached desired state v${cached.state.version}`);
 			}
 		}
@@ -342,8 +371,10 @@ class AgentRuntime {
 			this.nodeUpdateLoop(),
 			this.storageAdminLoop(),
 			this.storageStatsLoop(),
+			this.brokerStatsLoop(),
 			this.functions.run(() => this.desired, this.shutdownController.signal),
 			this.functionQueues.run(() => this.desired, this.shutdownController.signal),
+			this.eventPublisher.run(() => this.desired, this.shutdownController.signal),
 		];
 		if (this.config.logDrain)
 			this.loops.push(this.logDrain.run(() => this.desired, this.shutdownController.signal));
@@ -357,12 +388,14 @@ class AgentRuntime {
 		log('info', 'Shutting down');
 		this.shutdownController.abort();
 		await Promise.allSettled(this.loops);
+		this.brokerStats.close();
 		// Stop the sink before the telemetry client so its last flush carries any buffered events.
 		this.analyticsSink?.stop();
 		this.analyticsSink = null;
 		await this.telemetry?.stop().catch(() => undefined);
 		await this.studioUpdates;
 		if (this.studioFront) (await this.studioFront.catch(() => null))?.stop();
+		await this.mail.close();
 		this.serviceForwarder.close();
 		this.server?.stop(true);
 		this.server = null;
@@ -508,6 +541,7 @@ class AgentRuntime {
 		this.desiredEtag = etagHeader;
 		this.desiredPulledThisRun = true;
 		this.applyStudio(state.studio);
+		this.mail.apply(state.mail);
 		try {
 			await this.store.write(state, etagHeader);
 		} catch (error) {
@@ -1087,6 +1121,33 @@ class AgentRuntime {
 		}
 	}
 
+	/** Managed broker samples and stream listings (D123), riding the telemetry batch. */
+	private async brokerStatsLoop(): Promise<void> {
+		while (this.running) {
+			await sleep(BROKER_STATS_INTERVAL_MS, this.shutdownController.signal);
+			if (!this.running) break;
+			try {
+				await this.brokerStats.sample(this.shutdownController.signal);
+			} catch (error) {
+				log('warn', `Broker sampling failed: ${errorText(error)}`);
+			}
+			try {
+				await this.brokerStats.flush((payload) =>
+					postTelemetryBatch(
+						{
+							controlUrl: this.config.controlUrl,
+							nodeToken: this.config.nodeToken,
+							nodeId: this.config.nodeId,
+						},
+						payload,
+					),
+				);
+			} catch (error) {
+				log('warn', `Broker telemetry flush failed: ${errorText(error)}`);
+			}
+		}
+	}
+
 	// --- metrics -------------------------------------------------------------
 
 	private metricsText(): string {
@@ -1168,6 +1229,12 @@ class AgentRuntime {
 				'Storage samples and snapshots dropped to keep memory bounded.',
 				'counter',
 				this.storageStats.dropped,
+			],
+			[
+				'skiff_agent_broker_samples_dropped_total',
+				'Broker samples and stream listings dropped to keep memory bounded.',
+				'counter',
+				this.brokerStats.dropped,
 			],
 		];
 
@@ -1268,7 +1335,15 @@ if (import.meta.main) {
 	const subcommand = (name: string) => (process.argv[2] === name ? 2 : process.argv[1] === name ? 1 : -1);
 	const joinIndex = subcommand('join');
 	const storageIndex = subcommand('storage');
-	if (subcommand('studio') >= 0) {
+	if (subcommand('mail') >= 0) {
+		// Email's MTA (docs/EMAIL.md), run by skiff-mail.service in its own cgroup. It reads no agent
+		// config and never sees the node token: the agent feeds it over /run/skiff/mail.sock.
+		const { runMailProcess } = await import('@skiff/mail/process');
+		await runMailProcess().catch((error: unknown) => {
+			console.error(`[skiff-agent mail] fatal: ${errorText(error)}`);
+			process.exit(1);
+		});
+	} else if (subcommand('studio') >= 0) {
 		// The native database studio process (plan 22), run by skiff-studio.service in its own
 		// cgroup. It reads no agent config and never sees the node token.
 		const { runStudioProcess } = await import('./studio/process.ts');

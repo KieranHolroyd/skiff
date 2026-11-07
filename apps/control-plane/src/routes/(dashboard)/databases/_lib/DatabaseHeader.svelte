@@ -1,17 +1,10 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import ActivityIcon from '@lucide/svelte/icons/activity';
-	import ArchiveIcon from '@lucide/svelte/icons/archive';
 	import CloudUploadIcon from '@lucide/svelte/icons/cloud-upload';
 	import DatabaseIcon from '@lucide/svelte/icons/database';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
-	import LayoutDashboardIcon from '@lucide/svelte/icons/layout-dashboard';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
-	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
-	import Settings2Icon from '@lucide/svelte/icons/settings-2';
-	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
-	import TableIcon from '@lucide/svelte/icons/table';
 	import TrashIcon from '@lucide/svelte/icons/trash';
 	import type { DatabaseView } from '@skiff/contracts';
 	import { runAction } from '#lib/actions.js';
@@ -22,45 +15,21 @@
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import RowMenu from '../../_lib/RowMenu.svelte';
 	import ServiceHeader from '../../_lib/service/ServiceHeader.svelte';
-	import { tabHref, type ServiceSection } from '../../_lib/service/sections.js';
 	import { formatDate } from '../../_lib/format.js';
-	import { DATABASE_DEFAULT_TAB, type DatabaseTab } from './database-tabs.js';
 
 	type Can = {
 		update: boolean;
 		delete: boolean;
 		credentials: boolean;
-		console: boolean;
 	};
 
-	let {
-		db,
-		can,
-		active,
-		backups,
-		studioEnabled,
-		onselect
-	}: {
-		db: DatabaseView;
-		can: Can;
-		active: DatabaseTab | 'studio' | 'logs';
-		/** Backups count for the tab badge, when the page has it. */
-		backups?: number;
-		/**
-		 * `DB_STUDIO` is on (the default, D96). The Studio tab links to the native workspace route.
-		 * Defaults to the `studioEnabled` the `[name]` layout loads.
-		 */
-		studioEnabled?: boolean;
-		onselect?: (tab: DatabaseTab) => void;
-	} = $props();
+	/** Sections are in the sidebar (`./subnav.ts`); this is identity, facts and actions. */
+	let { db, can }: { db: DatabaseView; can: Can } = $props();
 
 	/** Settings → Policies trash period; the layout loads it. */
 	const trashDays = $derived<number>(page.data.policies?.trashDays ?? 7);
 
-	const studioOn = $derived(studioEnabled ?? page.data.studioEnabled === true);
-
 	const base = $derived(resolve('/(dashboard)/databases/[name]', { name: db.name }));
-	const studioHref = $derived(resolve('/(dashboard)/databases/[name]/studio', { name: db.name }));
 	const deleted = $derived(db.deletedAt !== null);
 	const nodeLabel = $derived(db.nodeName ?? db.nodeId);
 	/** Actions live on the detail route, so the header works from every sub-route. */
@@ -68,42 +37,6 @@
 
 	/** What the engine supports (docs/DATABASES.md §17); unsupported sections are not shown. */
 	const caps = $derived(db.capabilities);
-	const sections = $derived<ServiceSection[]>(
-		[
-			{ id: 'overview', label: 'Overview', icon: LayoutDashboardIcon },
-			...(caps.metrics ? [{ id: 'metrics', label: 'Metrics', icon: ActivityIcon }] : []),
-			...(caps.backups ? [{ id: 'backups', label: 'Backups', icon: ArchiveIcon, count: backups }] : []),
-			...(caps.metrics
-				? [
-						{
-							id: 'insights',
-							label: 'Tables & queries',
-							icon: TableIcon,
-							count: db.tables.length || undefined
-						}
-					]
-				: []),
-			...(can.console && caps.console && studioOn
-				? [{ id: 'studio', label: 'Studio', icon: SquareTerminalIcon }]
-				: []),
-			{ id: 'settings', label: 'Settings', icon: Settings2Icon }
-		]
-			.map((item) =>
-				item.id === 'studio'
-					? // The studio is its own full-height route, not an in-page section.
-						{ ...item, href: studioHref, local: false }
-					: { ...item, href: tabHref(base, item.id, DATABASE_DEFAULT_TAB), local: true }
-			)
-			.concat([
-				{
-					id: 'logs',
-					label: 'Logs',
-					icon: ScrollTextIcon,
-					href: resolve('/(dashboard)/databases/[name]/logs', { name: db.name }),
-					local: false
-				}
-			])
-	);
 
 	function restart(target: 'database' | 'pooler') {
 		askConfirm({
@@ -167,16 +100,7 @@
 	}
 </script>
 
-<ServiceHeader
-	icon={DatabaseIcon}
-	backHref={resolve('/(dashboard)/databases')}
-	backLabel="Databases"
-	title={db.name}
-	target="page.database"
-	{sections}
-	{active}
-	onselect={onselect ? (id) => onselect(id as DatabaseTab) : undefined}
->
+<ServiceHeader icon={DatabaseIcon} title={db.name} target="page.database">
 	{#snippet meta()}
 		<StatusBadge status={deleted ? 'deleted' : db.status} />
 		<Badge variant="outline">{db.engineLabel} {db.version}</Badge>

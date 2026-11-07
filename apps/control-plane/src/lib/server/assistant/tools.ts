@@ -95,6 +95,9 @@ const WRITE_PERMISSION: Record<string, Permission> = {
 	attach_storage: 'storage:update',
 	detach_storage: 'storage:update',
 	delete_storage: 'storage:delete',
+	create_email_domain: 'email:update',
+	send_email: 'email:send',
+	remove_email_suppression: 'email:update',
 	// Dashboards (D101) are an org resource behind metrics:read; there is no separate write scope.
 	create_dashboard: 'metrics:read',
 	add_dashboard_panels: 'metrics:read',

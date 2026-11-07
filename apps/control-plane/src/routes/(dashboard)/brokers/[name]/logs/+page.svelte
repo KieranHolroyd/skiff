@@ -11,7 +11,7 @@
 </svelte:head>
 
 <div class="space-y-6">
-	<BrokerHeader broker={data.broker} can={data.brokerCan} active="logs" />
+	<BrokerHeader broker={data.broker} can={data.brokerCan} />
 
 	<ServiceLogs
 		endpoint="/api/v1/brokers/{encodeURIComponent(data.broker.name)}/logs"

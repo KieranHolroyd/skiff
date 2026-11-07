@@ -223,8 +223,9 @@ and refuses to run if it is gone (D76). See [VOLUMES.md](./VOLUMES.md).
 
 ### Bucket configuration
 
-A bucket's desired state is `access`, `versioning`, `lifecycle`, `cors`, `quotaBytes` and
-`objectLock`. The control plane stores it on `storage_buckets` and increments `config_version` on
+A bucket's desired state is `access`, `versioning`, `lifecycle`, `cors`, `quotaBytes`,
+`objectLock` and `notifications` (on while an event rule watches the bucket, D122,
+[EVENTS.md](./EVENTS.md) §5). The control plane stores it on `storage_buckets` and increments `config_version` on
 every change; the node's agent converges it over the S3 and RustFS admin APIs and reports
 `configStatus` (`pending`, `converged`, `error`, `unsupported`) on its heartbeat.
 

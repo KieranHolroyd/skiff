@@ -108,7 +108,7 @@ export function panelsFromDrafts(
 
 // --- starter templates ------------------------------------------------------------------------
 
-export const dashboardTemplateIds = ['traffic', 'databases', 'storage'] as const;
+export const dashboardTemplateIds = ['traffic', 'databases', 'storage', 'brokers'] as const;
 export type DashboardTemplateId = (typeof dashboardTemplateIds)[number];
 
 export interface DashboardTemplate {
@@ -314,6 +314,30 @@ export const dashboardTemplates: Record<DashboardTemplateId, DashboardTemplate> 
 			{ title: 'Buckets', viz: 'stat', unit: 'short', query: builder({ dataset: 'storage', metrics: [{ field: 'bucket_count', agg: 'last' }], timeSeries: false }) },
 			{ title: 'Used space', viz: 'timeseries', unit: 'bytes', query: builder({ dataset: 'storage', metrics: [{ field: 'used_bytes', agg: 'max' }], groupBy: ['storage_id'] }) },
 			{ title: 'Objects', viz: 'timeseries', unit: 'short', query: builder({ dataset: 'storage', metrics: [{ field: 'objects', agg: 'max' }], groupBy: ['storage_id'] }) },
+		],
+	},
+	brokers: {
+		id: 'brokers',
+		title: 'Queue brokers',
+		description: 'Backlog, throughput, store headroom and connections for your queue brokers (D123).',
+		tags: ['queues'],
+		time: { from: 'now-24h', to: 'now' },
+		variables: [],
+		panels: [
+			{ title: 'Pending', viz: 'stat', unit: 'short', query: builder({ dataset: 'brokers', metrics: [{ field: 'pending', agg: 'last' }], timeSeries: false }) },
+			{ title: 'Oldest message', viz: 'stat', unit: 'short', description: 'Seconds, across draining queues.', query: builder({ dataset: 'brokers', metrics: [{ field: 'oldest_age_seconds', agg: 'last' }], timeSeries: false }) },
+			{ title: 'Store used', viz: 'gauge', unit: 'percentunit', query: builder({ dataset: 'brokers', metrics: [{ field: 'store_utilization', agg: 'max' }], groupBy: ['broker_id'], timeSeries: false }) },
+			{
+				title: 'Availability',
+				viz: 'stat',
+				unit: 'percentunit',
+				options: { reduce: 'mean' },
+				query: builder({ dataset: 'brokers', metrics: [{ field: 'up', agg: 'avg' }] }),
+			},
+			{ title: 'Backlog', viz: 'timeseries', unit: 'short', query: builder({ dataset: 'brokers', metrics: [{ field: 'pending', agg: 'max' }, { field: 'ack_pending', agg: 'max' }], groupBy: ['broker_id'] }) },
+			{ title: 'Published', viz: 'timeseries', unit: 'short', description: 'Messages JetStream stored, per second.', query: builder({ dataset: 'brokers', metrics: [{ field: 'published', agg: 'rate' }], groupBy: ['broker_id'] }) },
+			{ title: 'Messages in / out', viz: 'timeseries', unit: 'short', query: builder({ dataset: 'brokers', metrics: [{ field: 'messages_in', agg: 'rate' }, { field: 'messages_out', agg: 'rate' }] }) },
+			{ title: 'Connections', viz: 'timeseries', unit: 'short', query: builder({ dataset: 'brokers', metrics: [{ field: 'connections', agg: 'avg' }], groupBy: ['broker_id'] }) },
 		],
 	},
 };

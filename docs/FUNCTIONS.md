@@ -412,6 +412,9 @@ process apps as well. It is not a Functions-only feature.
   durable-storage directory. Messages sent with the default `v8` content type still reach the
   consumer base64-encoded; use `contentType: "json"` or `"text"` (or the `queues_json_messages`
   flag).
+- **Events** (D122): platform events (bucket uploads and deletes, alerts, deployments, database
+  backups) are published into a queue by an event rule, and the function consumes that queue as
+  above. Storage events use R2's notification body. See [EVENTS.md](./EVENTS.md).
 - **Alarms**: native to Durable Objects.
 
 ### 4.11 Surfaces

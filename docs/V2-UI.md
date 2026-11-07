@@ -43,11 +43,13 @@ control. A new catalog entry needs no dashboard change.
 
 ## Project navigation
 
-Header shows runtime and placement badges. Sections live in a sticky rail beside the content on wide
-screens and in a scrollable pill row on narrow screens: **Monitor** (Traffic, Logs), **Ship**
-(Deployments, Environments, Builds, Source) and **Configure** (Domains, Runtime, Share links,
-Settings). Every section is deep-linkable with `?tab=`, the active pill survives reloads, and quiet
-counters show section size. The primary **Deploy** action accepts a `.zip` of an already-built artifact (contents of the output directory,
+Header shows runtime and placement badges. Opening a project swaps the dashboard sidebar for the
+project's own sections, sliding the main navigation out (the same takeover Settings, Alerts, and
+every database, storage, queue, function and deployment page use; **Back** at its top slides the
+main navigation back): **Monitor** (Traffic, Logs), **Ship** (Deployments, Environments, Builds,
+Source) and **Configure** (Domains, Data, Variables, Runtime, Share links, Settings). Every section
+is deep-linkable with `?tab=`, switches in place without a reload, and quiet counters show section
+size. A deployment page drills one level deeper, with its own sections and **Back** to the project. The primary **Deploy** action accepts a `.zip` of an already-built artifact (contents of the output directory,
 not the folder) and deploys it to a chosen environment, with an optional message and
 promote-on-success. It is subject to the same 500 MB / 20,000 files / 25 MB per-file limits as the
 CLI. For repositories, use **Builds** instead.

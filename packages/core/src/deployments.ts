@@ -211,6 +211,15 @@ export class DeploymentService {
 			},
 		);
 		this.retention(project);
+		this.ctx.events.emitDeployment(project.orgId, project.id, 'created', {
+			project: project.slug,
+			deploymentId: id,
+			shortId: idShort,
+			environment: environment.slug,
+			production: promoteProduction,
+			previewUrl: `https://${row.previewHost}`,
+			message: row.message ?? null,
+		});
 		return this.view(row as typeof deployments.$inferSelect, project, promoteProduction);
 	}
 
@@ -465,6 +474,14 @@ export class DeploymentService {
 			},
 		);
 		this.retention(project);
+		this.ctx.events.emitDeployment(project.orgId, project.id, 'promoted', {
+			project: project.slug,
+			deploymentId: row.id,
+			shortId: row.shortId,
+			environment: environment.slug,
+			production: environment.isProduction,
+			rollback: false,
+		});
 		return environment.isProduction
 			? this.view({ ...row, promotedAt: now }, { ...project, productionDeploymentId: row.id })
 			: this.view(row, project);
@@ -495,6 +512,15 @@ export class DeploymentService {
 			() => this.setProduction(project, previous.id, this.ctx.now()),
 		);
 		this.retention({ ...project, productionDeploymentId: previous.id });
+		this.ctx.events.emitDeployment(project.orgId, project.id, 'promoted', {
+			project: project.slug,
+			deploymentId: previous.id,
+			shortId: previous.shortId,
+			environment: environment.slug,
+			production: true,
+			rollback: true,
+			from: project.productionDeploymentId,
+		});
 		return this.view(previous, { ...project, productionDeploymentId: previous.id });
 	}
 

@@ -16,6 +16,7 @@ import { renderWorkerdConfigParts } from './function-config.ts';
 import { renderFunctionShim } from './function-shim.ts';
 import { renderPythonFunctionShim } from './function-shim-python.ts';
 import type { StorageTarget, StorageTargetSource } from './storage-admin.ts';
+import type { BrokerStatsTarget, BrokerTargetSource } from './broker-stats.ts';
 import type { HelperApi, HelperWorkloadStatus } from './helper-client.ts';
 import type { ReleaseManager } from './releases.ts';
 import { atomicWriteFile } from './state.ts';
@@ -115,7 +116,7 @@ const HEALTH_PROBE_TIMEOUT_MS = 2_000;
 /** A runner reported stopped this soon after its apply may just not have started yet. */
 const RUNNER_SETTLE_MS = 20_000;
 
-export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSource {
+export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSource, BrokerTargetSource {
 	private readonly helper: HelperApi;
 	private readonly releases: WorkloadRuntimeOptions['releases'];
 	private readonly fetchActivation: WorkloadRuntimeOptions['fetchActivation'];
@@ -313,6 +314,24 @@ export class WorkloadRuntime implements DatabaseTargetSource, StorageTargetSourc
 				...(report?.memoryBytes !== undefined ? { memoryBytes: report.memoryBytes } : {}),
 				admin: { ...held.admin, users: { ...held.admin.users } },
 				desired: workload.objectStorage,
+			});
+		}
+		return targets.sort((a, b) => a.id.localeCompare(b.id));
+	}
+
+	/** Brokers the stats sampler talks to (D123). Credentials come from the activation, on demand. */
+	brokerTargets(): BrokerStatsTarget[] {
+		const targets: BrokerStatsTarget[] = [];
+		for (const [id, workload] of this.desiredById) {
+			if (!workload.broker) continue;
+			const report = this.reports.get(id);
+			targets.push({
+				id,
+				activationVersion: workload.activationVersion,
+				port: workload.port,
+				status: report?.status ?? 'pending',
+				...(report?.memoryBytes !== undefined ? { memoryBytes: report.memoryBytes } : {}),
+				storageMb: workload.broker.storageMb,
 			});
 		}
 		return targets.sort((a, b) => a.id.localeCompare(b.id));

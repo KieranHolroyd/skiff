@@ -10,6 +10,16 @@
 `apps/control-plane/src/routes/(dashboard)/email/**`, `apps/cli/src/commands/email.ts`,
 `packages/function-bindings/src/email.js`
 
+## Status (2026-11-07)
+
+E0's code spike passed and the MTA is Skiff's own (`packages/mail`, D115; KumoMTA dropped). E1 is
+built: contracts, `skiff-mail`, migration **0050** (0049 went to event notifications), `EmailService`,
+agent routes and bridge, helper verbs, `skiff-mail.service`, REST, MCP, CLI, dashboard. Still open
+in E1: automated preflight, ClickHouse `email_events`, built-in alert kinds, an admin view of every
+org's email state, and the real delivery check from the prod IP once its PTR is set. The design
+names below that say KumoMTA or `scripts/systemd/mta.ts` are superseded by `scripts/systemd/mail.ts`
+and `packages/mail`.
+
 ## Goal
 
 Apps send and receive mail on their own verified domains through Skiff's own MTA, with DKIM,

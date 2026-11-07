@@ -18,9 +18,15 @@ import {
 	orgNetworkName,
 	requirePermission,
 	type BrokerAttach,
+	brokerStreamStatsSchema,
 	type BrokerAttachmentView,
 	type BrokerCreate,
 	type BrokerCredentials,
+	type BrokerMetricBucket,
+	type BrokerMetricPoint,
+	type BrokerQueueSnapshot,
+	type BrokerQueuesView,
+	type BrokerStreamStats,
 	type BrokerStatus,
 	type BrokerUpdate,
 	type BrokerView,
@@ -82,6 +88,102 @@ export class BrokerService {
 			.get();
 		if (!row || (row.deletedAt && !options.includeDeleted)) throw new NotFoundError(`Broker "${name}"`);
 		return row;
+	}
+
+	// ---------------------------------------------------------------- metrics (D123)
+
+	/** Minute series from ClickHouse; empty without telemetry. Deleted brokers keep their history. */
+	async metrics(
+		principal: Principal,
+		name: string,
+		input: { from: string | number | Date; to: string | number | Date; interval?: '1m' | '1h' },
+	): Promise<BrokerMetricPoint[]> {
+		requirePermission(principal, 'broker:read');
+		const row = this.requireRow(principal, name, { includeDeleted: true });
+		if (!this.ctx.telemetry) return [];
+		return this.ctx.telemetry.queryBrokerMetrics({
+			brokerId: row.id,
+			from: input.from,
+			to: input.to,
+			interval: input.interval ?? '1m',
+		});
+	}
+
+	/** The newest stream listing the broker's node reported (SQLite, so it works without ClickHouse). */
+	queues(principal: Principal, name: string): BrokerQueuesView {
+		requirePermission(principal, 'broker:read');
+		const row = this.requireRow(principal, name, { includeDeleted: true });
+		return {
+			brokerId: row.id,
+			name: row.name,
+			at: row.statsAt ? new Date(row.statsAt).toISOString() : null,
+			truncated: row.queueStatsTruncated,
+			streams: storedStreams(row.queueStats),
+		};
+	}
+
+	/**
+	 * Samples and stream listings from a node. Anything for a broker not placed on that node is
+	 * dropped, so a node can never write another node's (or org's) numbers. The newest totals and
+	 * listing go to SQLite; the time series goes to ClickHouse when it is installed.
+	 */
+	async ingestTelemetry(
+		nodeId: string,
+		samples: BrokerMetricBucket[],
+		snapshots: BrokerQueueSnapshot[],
+	): Promise<{ stored: number }> {
+		if (samples.length === 0 && snapshots.length === 0) return { stored: 0 };
+		const owned = new Set(
+			this.ctx.db
+				.select({ id: brokers.id })
+				.from(brokers)
+				.where(and(eq(brokers.nodeId, nodeId), isNull(brokers.purgeRequestedAt)))
+				.all()
+				.map((row) => row.id),
+		);
+		const accepted = samples.filter((sample) => owned.has(sample.brokerId));
+		const latest = new Map<string, BrokerMetricBucket>();
+		for (const sample of accepted) {
+			const previous = latest.get(sample.brokerId);
+			if (!previous || previous.bucket < sample.bucket) latest.set(sample.brokerId, sample);
+		}
+		for (const [id, sample] of latest) {
+			if (!sample.up) continue;
+			this.ctx.db
+				.update(brokers)
+				.set({ storeBytes: sample.storeBytes, messages: sample.messages })
+				.where(eq(brokers.id, id))
+				.run();
+		}
+		for (const snapshot of snapshots) {
+			if (!owned.has(snapshot.brokerId)) continue;
+			const parsed = Date.parse(snapshot.at);
+			this.ctx.db
+				.update(brokers)
+				.set({
+					queueStats: JSON.stringify(snapshot.streams),
+					queueStatsTruncated: snapshot.truncated,
+					statsAt: Number.isFinite(parsed) ? Math.min(parsed, this.ctx.now()) : this.ctx.now(),
+				})
+				.where(eq(brokers.id, snapshot.brokerId))
+				.run();
+		}
+		if (accepted.length === 0 || !this.ctx.telemetry) return { stored: 0 };
+		const result = await this.ctx.telemetry.ingestBrokerMetrics(accepted);
+		return { stored: result.inserted };
+	}
+
+	/** Live brokers whose JetStream store is at or above `threshold` of the budget (system alert). */
+	alertCandidates(threshold = 0.85): Array<{ row: BrokerRow; ratio: number }> {
+		return this.ctx.db
+			.select()
+			.from(brokers)
+			.where(and(isNull(brokers.deletedAt), isNotNull(brokers.storeBytes)))
+			.all()
+			.flatMap((row) => {
+				const ratio = (row.storeBytes ?? 0) / (row.storageMb * 1024 * 1024);
+				return ratio >= threshold ? [{ row, ratio }] : [];
+			});
 	}
 
 	// ---------------------------------------------------------------- lifecycle
@@ -887,12 +989,28 @@ export class BrokerService {
 			},
 			volume: this.ctx.volumes.summary(row.volumeId),
 			attachments: this.attachmentsOf(row.id),
+			storeBytes: row.storeBytes ?? null,
+			messages: row.messages ?? null,
+			statsAt: row.statsAt ? new Date(row.statsAt).toISOString() : null,
 			createdAt: new Date(row.createdAt).toISOString(),
 			updatedAt: new Date(row.updatedAt).toISOString(),
 			deletedAt: row.deletedAt ? new Date(row.deletedAt).toISOString() : null,
 			purgeAt: row.purgeAt ? new Date(row.purgeAt).toISOString() : null,
 		};
 	}
+}
+
+/** The stored listing, re-validated on read so a bad row can never break the page. */
+function storedStreams(json: string | null): BrokerStreamStats[] {
+	if (!json) return [];
+	const raw = parseJson<unknown>(json, []);
+	if (!Array.isArray(raw)) return [];
+	const out: BrokerStreamStats[] = [];
+	for (const item of raw) {
+		const parsed = brokerStreamStatsSchema.safeParse(item);
+		if (parsed.success) out.push(parsed.data);
+	}
+	return out;
 }
 
 function password(): string {

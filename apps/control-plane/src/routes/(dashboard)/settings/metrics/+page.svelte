@@ -21,6 +21,7 @@
 		{ id: 'traffic', label: 'App traffic', description: 'Last-hour requests, egress and latency per app. Reads ClickHouse, the costliest section.', path: '/metrics/traffic[/<slug>]' },
 		{ id: 'databases', label: 'Databases', description: 'Size, connections, pooler and last-hour activity per database.', path: '/metrics/databases[/<name>]' },
 		{ id: 'storage', label: 'Object storage', description: 'Bytes, objects and buckets per storage instance.', path: '/metrics/storage[/<name>]' },
+		{ id: 'brokers', label: 'Queue brokers', description: 'Connections, store, backlog and last-hour message rates per broker, plus one series per stream.', path: '/metrics/brokers[/<name>]' },
 		{ id: 'volumes', label: 'App volumes', description: 'Size and usage per app volume.', path: '/metrics/volumes[/<slug>]' },
 		{ id: 'platform', label: 'Nodes and node volumes', description: 'Fleet health: node CPU, memory, disk, certificates and volume capacity.', path: '/metrics/platform' }
 	];
@@ -35,6 +36,7 @@
 		traffic: true,
 		databases: true,
 		storage: true,
+		brokers: true,
 		volumes: true,
 		platform: true
 	});

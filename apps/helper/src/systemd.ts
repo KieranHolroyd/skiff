@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { copyMailTls, MAIL_UNIT } from './mail.ts';
 import { constants as fsConstants, promises as fs } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import {
@@ -775,6 +776,25 @@ export class SystemdDriver {
 	/** Stop the studio process. It normally exits by itself when idle. */
 	async stopStudio(): Promise<void> {
 		await this.systemctl(['stop', STUDIO_UNIT]);
+	}
+
+	/** Start `skiff-mail` on the mail node (docs/EMAIL.md). The unit name is fixed. */
+	async startMail(): Promise<void> {
+		await this.systemctl(['start', MAIL_UNIT]);
+	}
+
+	async stopMail(): Promise<void> {
+		await this.systemctl(['stop', MAIL_UNIT]);
+	}
+
+	/** Copy the submission certificate out of Caddy's storage for `skiff-mail`. */
+	async copyMailTls(host: string): Promise<{ found: boolean; changed: boolean }> {
+		return copyMailTls(host, {
+			caddyDataDir: process.env.SKIFF_CADDY_DATA_DIR ?? '/var/lib/caddy/.local/share/caddy',
+			outDir: process.env.SKIFF_MAIL_TLS_DIR ?? '/run/skiff/mail-tls',
+			ownerFrom: process.env.SKIFF_MAIL_OWNER_PATH ?? '/var/lib/skiff',
+			chown: this.chown,
+		});
 	}
 
 	/**

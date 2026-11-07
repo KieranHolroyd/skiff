@@ -1,8 +1,18 @@
 import { parseArgs, rejectExtraPositionals, requirePositional, type FlagSpec } from '../args.ts';
 import { CliError, UsageError } from '../errors.ts';
-import { BROKER_ENGINES, brokerDetails, brokerTable, type BrokerCreateInput, type BrokerUpdateInput } from '../brokers.ts';
+import {
+	BROKER_ENGINES,
+	brokerDetails,
+	brokerMetricsSummary,
+	brokerMetricsTable,
+	brokerQueuesTable,
+	brokerTable,
+	type BrokerCreateInput,
+	type BrokerUpdateInput,
+} from '../brokers.ts';
 import { assertEnvPrefix, parseCpus, parseMegabytes } from '../databases.ts';
-import { formatTime, indent, printJson } from '../output.ts';
+import { parseDuration } from '../object-storage.ts';
+import { formatTime, indent, plural, printJson } from '../output.ts';
 import { authenticatedClient } from './common.ts';
 import { confirmOrRefuse } from './run-operation.ts';
 
@@ -22,6 +32,9 @@ Commands:
   restore <name>               Bring it back from the trash
   purge <name>                 Permanently delete a trashed broker and its streams
   logs <name>                  Broker container logs (--follow to stream)
+  metrics <name>               Store, backlog, connections and message rates (--since 1h, or
+                               --from/--to; --interval 1m|1h; --samples for every row)
+  queues <name>                JetStream streams and consumers with their backlog
   credentials <name>           Print the connection URL (--json for user, password, host, port)
 
 Create options:
@@ -73,6 +86,14 @@ const updateFlags: FlagSpec = { ...baseFlags, ...sizeFlags };
 const attachFlags: FlagSpec = { ...baseFlags, project: { type: 'string', short: 'p' }, prefix: { type: 'string' } };
 const detachFlags: FlagSpec = { ...baseFlags, project: { type: 'string', short: 'p' } };
 const confirmFlags: FlagSpec = { ...baseFlags, yes: { type: 'boolean', short: 'y' } };
+const metricsFlags: FlagSpec = {
+	...baseFlags,
+	since: { type: 'string' },
+	from: { type: 'string' },
+	to: { type: 'string' },
+	interval: { type: 'string' },
+	samples: { type: 'boolean' },
+};
 const logsFlags: FlagSpec = {
 	...baseFlags,
 	follow: { type: 'boolean', short: 'f' },
@@ -97,6 +118,9 @@ const subcommands: Record<string, (argv: string[]) => Promise<void>> = {
 	restore: restoreBroker,
 	purge: purgeBroker,
 	logs: brokerLogs,
+	metrics: showMetrics,
+	queues: showQueues,
+	streams: showQueues,
 	credentials: showCredentials,
 	creds: showCredentials,
 };
@@ -427,4 +451,64 @@ async function brokerLogs(argv: string[]): Promise<void> {
 		if (!follow) return;
 		await Bun.sleep(2_000);
 	} while (follow);
+}
+
+async function showMetrics(argv: string[]): Promise<void> {
+	const parsed = parseNamed(argv, metricsFlags, 'metrics');
+	if (!parsed) return;
+	const { args, name } = parsed;
+	const since = args.string('since');
+	const from = args.string('from');
+	if (since && from) throw new UsageError('Use --since or --from, not both.');
+	const interval = args.string('interval');
+	if (interval !== undefined && interval !== '1m' && interval !== '1h')
+		throw new UsageError('--interval expects 1m or 1h.');
+	const to = args.string('to');
+	let start = from;
+	if (since) {
+		// The server validates --from/--to; --since needs the end time here to count back from.
+		const end = to === undefined ? Date.now() : /^\d+$/.test(to.trim()) ? Number(to) : Date.parse(to);
+		if (!Number.isFinite(end)) throw new UsageError('--to expects an ISO timestamp or epoch milliseconds.');
+		start = new Date(end - parseDuration(since, '--since')).toISOString();
+	}
+	const client = await authenticatedClient();
+	const [{ broker }, { points, interval: used, raw }] = await Promise.all([
+		client.getBroker(name, { includeDeleted: true }),
+		client.brokerMetrics(name, { from: start, to, interval }),
+	]);
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	if (points.length === 0) {
+		console.log(
+			`No samples for "${name}" in that range. The agent reports once a minute while the broker runs, and the platform keeps them only with the telemetry store installed; \`skif broker queues ${name}\` works without it.`,
+		);
+		return;
+	}
+	console.log(`${plural(points.length, 'sample')} at ${used}:\n`);
+	console.log(brokerMetricsSummary(points, broker.storageMb));
+	if (args.boolean('samples')) console.log(`\n${brokerMetricsTable(points)}`);
+}
+
+async function showQueues(argv: string[]): Promise<void> {
+	const parsed = parseNamed(argv, baseFlags, 'queues');
+	if (!parsed) return;
+	const { args, name } = parsed;
+	const client = await authenticatedClient();
+	const { queues, raw } = await client.brokerQueues(name);
+	if (args.boolean('json')) {
+		printJson(raw);
+		return;
+	}
+	if (!queues.at) {
+		console.log(`No stream listing for "${name}" yet. Its node lists streams about a minute after the broker starts.`);
+		return;
+	}
+	if (queues.streams.length === 0) {
+		console.log(`"${name}" has no streams yet (listed ${formatTime(queues.at)}). A function queue creates its stream on first use.`);
+		return;
+	}
+	console.log(brokerQueuesTable(queues));
+	console.log(`\nListed ${formatTime(queues.at)}.${queues.truncated ? ` Only the first ${queues.streams.length} streams by name are shown.` : ''}`);
 }

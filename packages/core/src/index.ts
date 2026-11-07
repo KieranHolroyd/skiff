@@ -31,6 +31,9 @@ import { DatabaseService } from './databases.ts';
 import { DatabaseStudioService } from './database-studio.ts';
 import { StorageService } from './storage-instances.ts';
 import { BrokerService } from './brokers.ts';
+import { EmailService, type EmailServiceOptions } from './email.ts';
+import { cloudflareConfigFromEnv, HttpCloudflareClient } from './domains.ts';
+import { EventService } from './events.ts';
 import { VolumeService } from './volumes.ts';
 import { AppVolumeService } from './app-volumes.ts';
 import { ServiceMoveService } from './service-moves.ts';
@@ -83,6 +86,8 @@ export * from './databases.ts';
 export * from './database-studio.ts';
 export * from './storage-instances.ts';
 export * from './brokers.ts';
+export * from './email.ts';
+export * from './events.ts';
 export * from './domain-reconcile.ts';
 export * from './volumes.ts';
 export * from './app-volumes.ts';
@@ -110,6 +115,8 @@ export interface CoreOptions {
 	sqlite: Database;
 	config: CoreConfig;
 	version?: string;
+	/** Email DNS/Cloudflare seams (docs/EMAIL.md); defaults read `SKIFF_CLOUDFLARE_*` and `SKIFF_MAIL_DOMAIN`. */
+	email?: EmailServiceOptions;
 }
 
 export interface Core {
@@ -133,6 +140,7 @@ export interface Core {
 	databaseStudio: DatabaseStudioService;
 	storage: StorageService;
 	brokers: BrokerService;
+	events: EventService;
 	volumes: VolumeService;
 	appVolumes: AppVolumeService;
 	moves: ServiceMoveService;
@@ -167,6 +175,17 @@ export interface Core {
 	ingress: IngressHaService;
 	/** Cluster tunables (CLUSTERING). */
 	cluster: ClusterConfigService;
+	/** Email: Skiff's self-hosted SES (docs/EMAIL.md). */
+	email: EmailService;
+}
+
+function defaultEmailOptions(): EmailServiceOptions {
+	const cloudflare = cloudflareConfigFromEnv();
+	return {
+		cloudflare: cloudflare ? new HttpCloudflareClient(cloudflare) : null,
+		cloudflareZoneName: cloudflare?.zoneName ?? null,
+		mailDomain: process.env.SKIFF_MAIL_DOMAIN?.trim() || null,
+	};
 }
 
 /**
@@ -199,6 +218,8 @@ export function createCore(options: CoreOptions): Core {
 	ctx.databaseStudio = new DatabaseStudioService(ctx);
 	ctx.storage = new StorageService(ctx);
 	ctx.brokers = new BrokerService(ctx);
+	ctx.email = new EmailService(ctx, options.email ?? defaultEmailOptions());
+	ctx.events = new EventService(ctx);
 	ctx.volumes = new VolumeService(ctx);
 	ctx.appVolumes = new AppVolumeService(ctx);
 	ctx.moves = new ServiceMoveService(ctx);
@@ -256,6 +277,8 @@ export function createCore(options: CoreOptions): Core {
 		databaseStudio: ctx.databaseStudio,
 		storage: ctx.storage,
 		brokers: ctx.brokers,
+		email: ctx.email,
+		events: ctx.events,
 		volumes: ctx.volumes,
 		appVolumes: ctx.appVolumes,
 		moves: ctx.moves,

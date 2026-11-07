@@ -39,11 +39,30 @@ import type {
 	BrokerAttachmentView,
 	BrokerCreateInput,
 	BrokerCredentials,
+	BrokerMetricPoint,
+	BrokerQueuesView,
 	BrokerUpdateInput,
 	BrokerView,
 } from './brokers.ts';
+import type { EventDeliveryView, EventRuleCreateInput, EventRuleUpdateInput, EventRuleView } from './events.ts';
 import type { OperationItemView, OperationView } from './operations.ts';
 import type { AppVolumeView } from './volumes.ts';
+import {
+	listFrom,
+	viewFrom,
+	type EmailCredentialCreateInput,
+	type EmailCredentialSecret,
+	type EmailCredentialView,
+	type EmailDomainCreateInput,
+	type EmailDomainView,
+	type EmailMessageEvent,
+	type EmailMessageView,
+	type EmailOrgView,
+	type EmailSendInput,
+	type EmailSendResult,
+	type EmailSettingsView,
+	type EmailSuppressionView,
+} from './email.ts';
 
 export interface ApiClientOptions {
 	baseUrl: string;
@@ -978,6 +997,178 @@ export class ApiClient {
 		return this.request('PATCH', `/api/v1/databases/${encodeURIComponent(name)}/backup-policy`, { body: input });
 	}
 
+	// ---------------------------------------------------------------- event notifications (D122)
+
+	async listEventRules(): Promise<{ rules: EventRuleView[]; raw: unknown }> {
+		const raw = await this.request('GET', '/api/v1/events');
+		return { rules: (asArray(asRecord(raw)?.rules) ?? []) as EventRuleView[], raw };
+	}
+
+	async getEventRule(id: string): Promise<{ rule: EventRuleView; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/events/${encodeURIComponent(id)}`);
+		return { rule: asRecord(raw)?.rule as EventRuleView, raw };
+	}
+
+	async createEventRule(input: EventRuleCreateInput): Promise<{ rule: EventRuleView; raw: unknown }> {
+		const raw = await this.request('POST', '/api/v1/events', { body: input });
+		return { rule: asRecord(raw)?.rule as EventRuleView, raw };
+	}
+
+	async updateEventRule(id: string, input: EventRuleUpdateInput): Promise<{ rule: EventRuleView; raw: unknown }> {
+		const raw = await this.request('PATCH', `/api/v1/events/${encodeURIComponent(id)}`, { body: input });
+		return { rule: asRecord(raw)?.rule as EventRuleView, raw };
+	}
+
+	async deleteEventRule(id: string): Promise<unknown> {
+		return this.request('DELETE', `/api/v1/events/${encodeURIComponent(id)}`);
+	}
+
+	async testEventRule(id: string): Promise<{ delivery: EventDeliveryView; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/events/${encodeURIComponent(id)}/test`);
+		return { delivery: asRecord(raw)?.delivery as EventDeliveryView, raw };
+	}
+
+	async listEventDeliveries(options: { rule?: string; status?: string; limit?: number } = {}): Promise<{ deliveries: EventDeliveryView[]; raw: unknown }> {
+		const params = new URLSearchParams();
+		if (options.rule) params.set('rule', options.rule);
+		if (options.status) params.set('status', options.status);
+		if (options.limit) params.set('limit', String(options.limit));
+		const query = params.size > 0 ? `?${params}` : '';
+		const raw = await this.request('GET', `/api/v1/events/deliveries${query}`);
+		return { deliveries: (asArray(asRecord(raw)?.deliveries) ?? []) as EventDeliveryView[], raw };
+	}
+
+	// ---------------------------------------------------------------- email (docs/EMAIL.md, D114–D120)
+	// Single views may arrive bare or wrapped (`{ domain }`); lists bare or as `{ domains }`.
+
+	async emailStatus(): Promise<{ org: EmailOrgView; settings: EmailSettingsView | null; raw: unknown }> {
+		const raw = await this.request('GET', '/api/v1/email');
+		const org = viewFrom<EmailOrgView>(raw, 'org', 'state');
+		if (!org) throw new CliError('The platform returned an unexpected email status response.', { code: 'protocol', details: raw });
+		const settings = asRecord(asRecord(raw)?.settings) as EmailSettingsView | null;
+		return { org, settings, raw };
+	}
+
+	async listEmailDomains(): Promise<{ domains: EmailDomainView[]; raw: unknown }> {
+		const raw = await this.request('GET', '/api/v1/email/domains');
+		return { domains: listFrom<EmailDomainView>(raw, 'domains').map(withRecords), raw };
+	}
+
+	async getEmailDomain(name: string): Promise<{ domain: EmailDomainView; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/email/domains/${encodeURIComponent(name)}`);
+		return { domain: emailDomainFrom(raw), raw };
+	}
+
+	async createEmailDomain(input: EmailDomainCreateInput): Promise<{ domain: EmailDomainView; raw: unknown }> {
+		const raw = await this.request('POST', '/api/v1/email/domains', { body: input });
+		return { domain: emailDomainFrom(raw), raw };
+	}
+
+	async checkEmailDomain(name: string): Promise<{ domain: EmailDomainView; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/email/domains/${encodeURIComponent(name)}/check`, { body: {} });
+		return { domain: emailDomainFrom(raw), raw };
+	}
+
+	async deleteEmailDomain(name: string): Promise<unknown> {
+		return this.request('DELETE', `/api/v1/email/domains/${encodeURIComponent(name)}`);
+	}
+
+	async sendEmail(input: EmailSendInput): Promise<{ result: EmailSendResult; raw: unknown }> {
+		const raw = await this.request('POST', '/api/v1/email/send', { body: input });
+		const result = viewFrom<EmailSendResult>(raw, 'message', 'accepted') ?? viewFrom<EmailSendResult>(raw, 'result', 'accepted');
+		if (!result || typeof result.id !== 'string')
+			throw new CliError('The platform returned an unexpected send response.', { code: 'protocol', details: raw });
+		return { result: { ...result, accepted: stringArray(result.accepted), suppressed: stringArray(result.suppressed) }, raw };
+	}
+
+	async listEmailMessages(
+		options: { limit?: number; before?: string; recipient?: string; status?: string } = {},
+	): Promise<{ messages: EmailMessageView[]; raw: unknown }> {
+		const params = new URLSearchParams();
+		if (options.limit !== undefined) params.set('limit', String(options.limit));
+		if (options.before) params.set('before', options.before);
+		if (options.recipient) params.set('recipient', options.recipient);
+		if (options.status) params.set('status', options.status);
+		const query = params.size > 0 ? `?${params}` : '';
+		const raw = await this.request('GET', `/api/v1/email/messages${query}`);
+		return { messages: listFrom<EmailMessageView>(raw, 'messages').map(withRecipients), raw };
+	}
+
+	async getEmailMessage(id: string): Promise<{ message: EmailMessageView; events: EmailMessageEvent[]; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/email/messages/${encodeURIComponent(id)}`);
+		const message = viewFrom<EmailMessageView>(raw, 'message', 'recipients');
+		if (!message)
+			throw new CliError('The platform returned an unexpected message response.', { code: 'protocol', details: raw });
+		const events = (asArray(asRecord(raw)?.events) ?? asArray(asRecord(message)?.events) ?? []) as EmailMessageEvent[];
+		return { message: withRecipients(message), events, raw };
+	}
+
+	async listEmailSuppressions(
+		options: { limit?: number; address?: string } = {},
+	): Promise<{ suppressions: EmailSuppressionView[]; raw: unknown }> {
+		const params = new URLSearchParams();
+		if (options.limit !== undefined) params.set('limit', String(options.limit));
+		if (options.address) params.set('address', options.address);
+		const query = params.size > 0 ? `?${params}` : '';
+		const raw = await this.request('GET', `/api/v1/email/suppressions${query}`);
+		return { suppressions: listFrom<EmailSuppressionView>(raw, 'suppressions'), raw };
+	}
+
+	async addEmailSuppression(input: { address: string; reason?: string }): Promise<{ suppression: EmailSuppressionView; raw: unknown }> {
+		const raw = await this.request('POST', '/api/v1/email/suppressions', { body: input });
+		const suppression = viewFrom<EmailSuppressionView>(raw, 'suppression', 'address');
+		if (!suppression)
+			throw new CliError('The platform returned an unexpected suppression response.', { code: 'protocol', details: raw });
+		return { suppression, raw };
+	}
+
+	async removeEmailSuppression(address: string): Promise<unknown> {
+		return this.request('DELETE', `/api/v1/email/suppressions/${encodeURIComponent(address)}`);
+	}
+
+	async listEmailCredentials(): Promise<{ credentials: EmailCredentialView[]; raw: unknown }> {
+		const raw = await this.request('GET', '/api/v1/email/credentials');
+		return {
+			credentials: listFrom<EmailCredentialView>(raw, 'credentials').map((item) => ({
+				...item,
+				allowedFromDomains: stringArray(item.allowedFromDomains),
+			})),
+			raw,
+		};
+	}
+
+	async createEmailCredential(input: EmailCredentialCreateInput): Promise<{ credential: EmailCredentialSecret; raw: unknown }> {
+		const raw = await this.request('POST', '/api/v1/email/credentials', { body: input });
+		const credential = viewFrom<EmailCredentialSecret>(raw, 'credential', 'password');
+		if (!credential || !asRecord(credential.smtp))
+			throw new CliError('The platform returned an unexpected credential response.', { code: 'protocol' });
+		return { credential: { ...credential, allowedFromDomains: stringArray(credential.allowedFromDomains) }, raw };
+	}
+
+	async revokeEmailCredential(id: string): Promise<unknown> {
+		return this.request('DELETE', `/api/v1/email/credentials/${encodeURIComponent(id)}`);
+	}
+
+	async attachEmail(
+		project: string,
+		input: { envPrefix?: string },
+	): Promise<{ envPrefix: string | null; envNames: string[]; warning: string | null; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/projects/${encodeURIComponent(project)}/email`, { body: input });
+		const record = asRecord(raw);
+		const attachment = asRecord(record?.attachment) ?? record;
+		return {
+			envPrefix: stringValue(attachment?.envPrefix) ?? null,
+			envNames: stringArray(attachment?.envNames),
+			warning: stringValue(record?.warning) ?? null,
+			raw,
+		};
+	}
+
+	async detachEmail(project: string, envPrefix?: string): Promise<unknown> {
+		const query = envPrefix ? `?envPrefix=${encodeURIComponent(envPrefix)}` : '';
+		return this.request('DELETE', `/api/v1/projects/${encodeURIComponent(project)}/email${query}`);
+	}
+
 	// ---------------------------------------------------------------- queue brokers (D111)
 
 	async listBrokers(options: { includeDeleted?: boolean } = {}): Promise<{ brokers: BrokerView[]; raw: unknown }> {
@@ -1020,6 +1211,34 @@ export class ApiClient {
 	async restartBroker(name: string): Promise<{ broker: BrokerView; raw: unknown }> {
 		const raw = await this.request('POST', `/api/v1/brokers/${encodeURIComponent(name)}/restart`, { body: {} });
 		return { broker: brokerFrom(raw), raw };
+	}
+
+	/** Minute (or hourly) samples from the broker's node (D123); empty without the telemetry store. */
+	async brokerMetrics(
+		name: string,
+		range: { from?: string; to?: string; interval?: string } = {},
+	): Promise<{ points: BrokerMetricPoint[]; interval: string; raw: unknown }> {
+		const query = new URLSearchParams();
+		if (range.from) query.set('from', range.from);
+		if (range.to) query.set('to', range.to);
+		if (range.interval) query.set('interval', range.interval);
+		const search = query.toString();
+		const raw = await this.request('GET', `/api/v1/brokers/${encodeURIComponent(name)}/metrics${search ? `?${search}` : ''}`);
+		const record = asRecord(raw) ?? {};
+		return {
+			points: (asArray(record.points) ?? []) as BrokerMetricPoint[],
+			interval: stringValue(record.interval) ?? range.interval ?? '1m',
+			raw,
+		};
+	}
+
+	/** The newest JetStream stream listing (D123). */
+	async brokerQueues(name: string): Promise<{ queues: BrokerQueuesView; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/brokers/${encodeURIComponent(name)}/queues`);
+		const record = asRecord(raw);
+		if (!record || !Array.isArray(record.streams))
+			throw new CliError('The platform returned an unexpected queues response.', { code: 'protocol' });
+		return { queues: record as unknown as BrokerQueuesView, raw };
 	}
 
 	async brokerCredentials(name: string): Promise<{ credentials: BrokerCredentials; raw: unknown }> {
@@ -1555,6 +1774,27 @@ function brokerFrom(raw: unknown): BrokerView {
 	if (!view || typeof view.name !== 'string')
 		throw new CliError('The platform returned an unexpected broker response.', { code: 'protocol', details: raw });
 	return withAttachments(view as unknown as BrokerView);
+}
+
+function emailDomainFrom(raw: unknown): EmailDomainView {
+	const view = viewFrom<EmailDomainView>(raw, 'domain', 'records');
+	if (!view || typeof view.name !== 'string')
+		throw new CliError('The platform returned an unexpected email domain response.', { code: 'protocol', details: raw });
+	return withRecords(view);
+}
+
+function withRecords(view: EmailDomainView): EmailDomainView {
+	return {
+		...view,
+		records: ((asArray(view.records) ?? []) as EmailDomainView['records']).map((record) => ({
+			...record,
+			found: stringArray(record.found),
+		})),
+	};
+}
+
+function withRecipients(view: EmailMessageView): EmailMessageView {
+	return { ...view, recipients: (asArray(view.recipients) ?? []) as EmailMessageView['recipients'] };
 }
 
 function withAttachments(view: BrokerView): BrokerView {

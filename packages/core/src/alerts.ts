@@ -352,12 +352,13 @@ function toRecord(row: InstanceRow): InstanceRecord {
 const iso = (ms: number | null): string | null => (ms === null ? null : new Date(ms).toISOString());
 
 /** Label names that hold resource ids, and where their display names come from. */
-const ID_LABELS = { project_id: 'project', database_id: 'database', storage_id: 'storage' } as const;
+const ID_LABELS = { project_id: 'project', database_id: 'database', storage_id: 'storage', broker_id: 'broker' } as const;
 
 interface OrgNames {
 	project: Map<string, string>;
 	database: Map<string, string>;
 	storage: Map<string, string>;
+	broker: Map<string, string>;
 }
 
 export interface EvaluationReport {
@@ -440,6 +441,7 @@ export class AlertService {
 			project: attempt(() => this.ctx.projects.list(principal)),
 			database: attempt(() => this.ctx.databases.list(principal)),
 			storage: attempt(() => this.ctx.storage.list(principal)),
+			broker: attempt(() => this.ctx.brokers.list(principal)),
 		};
 	}
 
@@ -1177,7 +1179,7 @@ export class AlertService {
 		// Series that were there before and are missing now have no data.
 		for (const [fingerprint, previous] of existing) {
 			if (seen.has(fingerprint)) continue;
-			// A deleted project/database/storage instance is gone, not down.
+			// A deleted project/database/storage instance/broker is gone, not down.
 			const gone = Object.entries(previous.labels).some(([label, value]) => {
 				const kind = ID_LABELS[label as keyof typeof ID_LABELS];
 				return kind !== undefined && value !== '' && !names[kind].has(value);
@@ -1407,6 +1409,18 @@ export class AlertService {
 			...(single ? { labels: single.labels } : {}),
 		};
 		const delivery = await this.#deliver(alert, spec);
+		this.ctx.events.emitAlert(row.org_id, row.id, status, {
+			ruleId: row.id,
+			rule: row.name,
+			key: alert.key,
+			title,
+			detail,
+			severity: alert.severity,
+			status,
+			url: alert.url ?? null,
+			labels: single?.labels ?? {},
+			series: instances.map((instance) => ({ labels: instance.labels, state: instance.state, value: instance.value })),
+		});
 		this.#event({
 			orgId: row.org_id,
 			ruleId: row.id,

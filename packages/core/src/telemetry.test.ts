@@ -334,6 +334,8 @@ describe.skipIf(!hasClickHouse)('TelemetryStore', () => {
 			databases: [],
 			databaseCounters: [],
 			storage: [],
+			brokers: [],
+			brokerCounters: [],
 		});
 	});
 
@@ -674,7 +676,8 @@ describe('TelemetryStore analytics ingestion (injected client)', () => {
 		expect(store.available).toBe(true);
 
 		const ddl = fake.calls.filter((call) => call.statement.trimStart().startsWith('CREATE TABLE'));
-		expect(ddl).toHaveLength(8);
+		// traffic, db_metrics, storage_metrics and broker_metrics (1m + 1h each), analytics, tails.
+		expect(ddl).toHaveLength(10);
 
 		const analytics = fake.calls.find((call) => call.statement.includes('.function_analytics'))!;
 		expect(analytics.statement).toContain('ts DateTime64(3)');

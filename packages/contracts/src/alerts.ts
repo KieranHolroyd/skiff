@@ -403,6 +403,46 @@ export const alertRuleTemplates: AlertRuleTemplate[] = [
 			noData: 'alerting',
 		},
 	},
+	{
+		id: 'broker_down',
+		title: 'Queue broker down',
+		description: 'A managed broker reports down, or stops reporting, for 2 minutes.',
+		rule: {
+			name: 'Queue broker down',
+			severity: 'critical',
+			query: builder({ dataset: 'brokers', metrics: [{ field: 'up', agg: 'min' }], groupBy: ['broker_id'] }),
+			condition: { op: 'lt', threshold: 1 },
+			windowSeconds: 120,
+			forSeconds: 120,
+			noData: 'alerting',
+		},
+	},
+	{
+		id: 'broker_store_full',
+		title: 'Queue broker store nearly full',
+		description: 'JetStream file store above 85% of the broker’s budget for 5 minutes. A full store refuses publishes.',
+		rule: {
+			name: 'Queue broker store nearly full',
+			severity: 'warning',
+			query: builder({ dataset: 'brokers', metrics: [{ field: 'store_utilization', agg: 'max' }], groupBy: ['broker_id'] }),
+			condition: { op: 'gt', threshold: 0.85 },
+			windowSeconds: 300,
+			forSeconds: 300,
+		},
+	},
+	{
+		id: 'broker_backlog_stale',
+		title: 'Queue backlog not draining',
+		description: 'A broker holds a message older than 15 minutes, for 10 minutes: a consumer is down or falling behind.',
+		rule: {
+			name: 'Queue backlog not draining',
+			severity: 'warning',
+			query: builder({ dataset: 'brokers', metrics: [{ field: 'oldest_age_seconds', agg: 'min' }], groupBy: ['broker_id'] }),
+			condition: { op: 'gt', threshold: 900 },
+			windowSeconds: 600,
+			forSeconds: 0,
+		},
+	},
 ];
 
 export function alertRuleTemplate(id: string): AlertRuleTemplate | undefined {

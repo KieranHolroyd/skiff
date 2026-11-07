@@ -1,16 +1,5 @@
 import type { Component } from 'svelte';
 
-/** One tab in a managed service's section bar (database, storage). */
-export interface ServiceSection {
-	id: string;
-	label: string;
-	icon: Component<{ class?: string }>;
-	href: string;
-	count?: number;
-	/** Switches in place on the detail page instead of navigating. */
-	local?: boolean;
-}
-
 /** Narrow an untrusted `?tab=` to one of the page's in-place sections. */
 export function readTab<T extends string>(
 	value: string | null,

@@ -9,6 +9,8 @@ import { configCommand } from './commands/config.ts';
 import { dbCommand } from './commands/db.ts';
 import { storageCommand } from './commands/storage.ts';
 import { brokerCommand } from './commands/broker.ts';
+import { eventsCommand } from './commands/events.ts';
+import { emailCommand } from './commands/email.ts';
 import { backupTargetCommand } from './commands/backup-target.ts';
 import { volumeCommand } from './commands/volume.ts';
 import { deployCommand } from './commands/deploy.ts';
@@ -55,6 +57,10 @@ const commands: Record<string, (argv: string[]) => Promise<void>> = {
 	broker: brokerCommand,
 	brokers: brokerCommand,
 	queue: brokerCommand,
+	events: eventsCommand,
+	event: eventsCommand,
+	email: emailCommand,
+	mail: emailCommand,
 	'backup-target': backupTargetCommand,
 	backupTargets: backupTargetCommand,
 	volume: volumeCommand,
@@ -90,6 +96,8 @@ Commands:
   upgrade <plan|apply|rollback>              Preflight, install or roll back the platform
   storage [list|create|info|buckets|…]       Managed S3-compatible object storage (\`skif storage --help\`)
   broker [list|create|info|attach|…]         Managed queue brokers, NATS with JetStream (\`skif broker --help\`)
+  events [list|create|test|deliveries|…]    Publish platform events (uploads, alerts, deploys, backups) to a function queue (\`skif events --help\`)
+  email [status|domains|send|log|…]          Send email from your own domains, a self-hosted SES (\`skif email --help\`)
   backup-target [list|add|test|remove]       Where backups are written (\`skif backup-target --help\`)
   volume [list|create|attach|detach|delete]  Persistent app volumes (\`skif volume --help\`)
 

@@ -1344,6 +1344,7 @@ export class NodeService {
 			storageRoutes: this.ctx.storage.routesForNode(node.id, isEdge, (id) => nodeById.get(id)?.publicAddress ?? null),
 			storagePurges: this.ctx.storage.purgesForNode(node.id),
 			brokerPurges: this.ctx.brokers.purgesForNode(node.id),
+			mail: this.ctx.email.desiredForNode(node.id),
 			domains: this.ctx.domains.desiredForProjects(servedProjectIds),
 			serviceEndpoints: this.serviceEndpointsForNode(node.id),
 			serviceProviders: this.serviceProvidersForNode(node.id),
