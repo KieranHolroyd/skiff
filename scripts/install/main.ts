@@ -34,13 +34,15 @@
  *   --no-node                 skip the pinned Node.js LTS for Node.js process apps (D125; ~190 MB;
  *                             or SKIFF_NO_NODE=1)
  *   --version <label>         release label (default: the repository VERSION file)
+ *   --canary                  follow the canary channel (install.sh then builds main instead of
+ *                             the newest stable release; D128)
  */
 import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { confirm } from './confirm.ts';
 import { randomBytes } from 'node:crypto';
-import { SELF_UPDATE_DEFAULTS } from '../../packages/contracts/src/self-update.ts';
+import { isSelfUpdateChannel, SELF_UPDATE_DEFAULTS, type SelfUpdateChannel } from '../../packages/contracts/src/self-update.ts';
 import { parseSemver } from '../../packages/contracts/src/semver.ts';
 import { TRIGGER_PATH_UNIT, triggerUnits, updateCommandScript } from '../update-self/units.ts';
 import { controlPlaneUnits, DEFAULT_CONTROL_PLANE_PATHS, ensureMasterKeyDropIns, GUARD_UNIT, MASTER_KEY_DROP_IN, PRIMARY_UNIT, STANDBY_UNIT } from '../systemd/control-plane.ts';
@@ -166,6 +168,8 @@ interface Options {
 	 */
 	clickhouse?: boolean;
 	version: string;
+	/** The release channel the self-updater follows (D128). Stable unless --canary. */
+	channel: SelfUpdateChannel;
 }
 
 const args = process.argv.slice(2);
@@ -213,6 +217,21 @@ function setting(flag: string, envKeys: string[], fallback = ''): string {
 	return value(flag, fallback);
 }
 
+/**
+ * --canary, else what install.sh resolved (SKIFF_CHANNEL or the host's remembered channel), else
+ * the existing skiff.env default, else stable. A fresh install follows promoted releases only.
+ */
+function installChannel(): SelfUpdateChannel {
+	if (has('--canary')) return 'canary';
+	for (const candidate of [process.env.SKIFF_INSTALL_CHANNEL, process.env.SKIFF_CHANNEL, existingEnv.get('SKIFF_UPDATE_CHANNEL')]) {
+		if (!candidate) continue;
+		if (isSelfUpdateChannel(candidate)) return candidate;
+		console.error(`release channel must be stable or canary (got "${candidate}")`);
+		process.exit(64);
+	}
+	return 'stable';
+}
+
 const options: Options = {
 	yes: has('--yes') || process.env.SKIFF_YES === '1',
 	dryRun: has('--dry-run'),
@@ -244,6 +263,7 @@ const options: Options = {
 			? true
 			: undefined,
 	version: value('--version', process.env.SKIFF_VERSION ?? sourceVersion()),
+	channel: installChannel(),
 };
 if (options.objectStore !== 'local' && options.objectStore !== 'r2') {
 	console.error(`--object-store must be local or r2 (got "${options.objectStore}")`);
@@ -803,6 +823,26 @@ function ensureUsersAndDirs(): void {
 /** Set by writeSecrets: the key (for node enrolment) and whether this run sealed a plaintext one. */
 let masterKey: EnsureMasterKeyResult | null = null;
 
+/**
+ * A host that once chose a channel keeps it in the updater's channel file, which outranks
+ * skiff.env. install.sh starts from that file, so a difference here means --canary or
+ * SKIFF_CHANNEL asked for another one: rewrite it the way the updater does (root:skiff 0640).
+ */
+function syncRememberedChannel(): void {
+	const file = SELF_UPDATE_DEFAULTS.channelFile;
+	let current: string;
+	try {
+		current = readFileSync(file, 'utf8').trim();
+	} catch {
+		return;
+	}
+	if (current === options.channel) return;
+	writeFileSync(`${file}.tmp-${process.pid}`, `${options.channel}\n`, { mode: 0o640 });
+	run('chown', ['root:skiff', `${file}.tmp-${process.pid}`], { allowFailure: true });
+	renameSync(`${file}.tmp-${process.pid}`, file);
+	log(`release channel changed: ${current || 'unset'} -> ${options.channel}`);
+}
+
 function writeSecrets(): Map<string, string> {
 	step('Secrets and environment');
 	const existing = readEnvFile(ENV_FILE);
@@ -817,6 +857,8 @@ function writeSecrets(): Map<string, string> {
 	env.set('SKIFF_DATA_DIR', join(VAR_DIR, 'data'));
 	env.set('SKIFF_OBJECT_STORE', options.objectStore);
 	env.set('SKIFF_AGENT_VERSION', options.version);
+	// The updater's default channel until the host chooses one (D128).
+	env.set('SKIFF_UPDATE_CHANNEL', options.channel);
 	env.set('SKIFF_EDGE_NODE_ID', existing.get('SKIFF_EDGE_NODE_ID') ?? '');
 	env.set('BETTER_AUTH_SECRET', existing.get('BETTER_AUTH_SECRET') ?? base64(48));
 	env.set('SKIFF_SITE_COOKIE_SECRET', existing.get('SKIFF_SITE_COOKIE_SECRET') ?? base64(32));
@@ -852,6 +894,7 @@ function writeSecrets(): Map<string, string> {
 	}
 	if (!options.dryRun) {
 		writeEnvFile(ENV_FILE, env);
+		syncRememberedChannel();
 		run('chown', ['root:skiff', ENV_FILE], { allowFailure: true });
 		run('chmod', ['0640', ENV_FILE], { allowFailure: true });
 	}
@@ -917,10 +960,12 @@ function buildRelease(env: Map<string, string>): string {
 			{
 				version: options.version,
 				builtAt: new Date().toISOString(),
-				source: process.env.SKIFF_SOURCE_REF ?? 'local',
-				// Read by skiff-update-self to know where to pull updates from.
+				source: process.env.SKIFF_SOURCE_TAG ?? process.env.SKIFF_SOURCE_REF ?? 'local',
+				// Read by skiff-update-self to know where to pull updates from. `ref` is the branch
+				// source builds track, never a release tag; a stable install records its tag apart.
 				...(process.env.SKIFF_REPO ? { repo: process.env.SKIFF_REPO } : {}),
 				...(process.env.SKIFF_SOURCE_REF ? { ref: process.env.SKIFF_SOURCE_REF } : {}),
+				...(process.env.SKIFF_SOURCE_TAG ? { tag: process.env.SKIFF_SOURCE_TAG } : {}),
 			},
 			null,
 			2,
@@ -1553,7 +1598,7 @@ function uninstall(): void {
 }
 
 const main = async (): Promise<void> => {
-	console.log(`${color.bold('Skiff installer')} ${options.version}`);
+	console.log(`${color.bold('Skiff installer')} ${options.version} ${color.dim(`(${options.channel} channel)`)}`);
 	if (options.uninstall) return uninstall();
 	return install();
 };

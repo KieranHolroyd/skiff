@@ -122,7 +122,15 @@ curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/skiff/main/install.sh
 
 With `--yes`, ClickHouse is not installed, and a missing DNS record produces a warning and the install continues. HTTPS will not issue certificates until the names resolve.
 
-To install a specific release, set `SKIFF_REF`. The bootstrap downloads `main` by default.
+The bootstrap installs the newest stable release, and the host then updates only to promoted stable releases. To run the latest build instead, pass `--canary`. It installs the head of `main`, and the host follows the canary channel, which gets every release:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/skiff/main/install.sh | sudo sh -s -- --canary
+```
+
+Switch channels later with `sudo skiff-update-self channel stable` or `canary`. See [upgrades](/self-hosting/upgrades).
+
+To install a specific release, set `SKIFF_REF`.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/skiff/main/install.sh | sudo env SKIFF_REF=v1.2.3 SKIFF_YES=1 sh -s -- --platform-host control.example.com --content-domain example.com --acme-email ops@example.com
@@ -166,13 +174,15 @@ These flags are passed to the installer. Each one is also available as an enviro
 | `--with-php` | Install the pinned FrankenPHP runtime for PHP apps. About 175 MB. | `SKIFF_INSTALL_PHP=1` |
 | `--no-python` | Don't warm the Pyodide cache used by Python functions. About 36 MB. | `SKIFF_NO_PYTHON=1` |
 | `--version <label>` | Release label. Default: the `VERSION` file in the source. | `SKIFF_VERSION` |
+| `--canary` | Install the head of `main` and follow the canary channel. Default: the newest stable release on the stable channel. | `SKIFF_CHANNEL=canary` |
 | `--help`, `-h` | Print the usage text and exit. | none |
 
 The bootstrap script (`install.sh`) reads these environment variables itself:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `SKIFF_REF` | `main` | Git ref, tag or branch to install. |
+| `SKIFF_CHANNEL` | the host's current channel, else `stable` | `stable` or `canary`. Picks what is downloaded and the channel the updater follows. |
+| `SKIFF_REF` | newest stable tag, or `main` on canary | Git ref, tag or branch to install. |
 | `SKIFF_REPO` | `KieranHolroyd/skiff` | GitHub repository to download. |
 | `SKIFF_GITHUB_TOKEN` | none | Token for a private repository. |
 | `SKIFF_BUN_VERSION` | `1.4.0` | Bun version the installer uses. |
@@ -286,7 +296,7 @@ PHP apps run on a pinned FrankenPHP binary, which is large, so it is opt-in. Pas
 
 Running the installer again on an existing host is safe. It keeps your settings and secrets, takes a snapshot of the database, builds a new release and switches to it.
 
-`--upgrade` does the same without prompts or the DNS check. It also keeps an installed ClickHouse current, and adds one only if you pass `--clickhouse`. Because the bootstrap downloads `main` unless told otherwise, pin the release with `SKIFF_REF` when you upgrade:
+`--upgrade` does the same without prompts or the DNS check. It also keeps an installed ClickHouse current, and adds one only if you pass `--clickhouse`. The bootstrap downloads the newest release on the host's channel: the latest stable tag, or `main` on canary. Pin a release with `SKIFF_REF`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/skiff/main/install.sh | sudo env SKIFF_REF=v1.2.3 SKIFF_YES=1 sh -s -- --upgrade

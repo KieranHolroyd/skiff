@@ -46,7 +46,11 @@ Options:
   --no-clickhouse             Skip it without asking (an installed one is left in place).
   --version <label>           Release label (default: the repository VERSION file).
                               Also SKIFF_VERSION.
+  --canary                    Install the head of main and follow the canary channel (every
+                              release). Default: the newest stable release, stable channel.
+                              Also SKIFF_CHANNEL=canary.
   -h, --help                  Print this help and exit.
 
 Bootstrap environment:
-  SKIFF_REPO, SKIFF_REF, SKIFF_GITHUB_TOKEN, SKIFF_BUN_VERSION, SKIFF_SOURCE_DIR.
+  SKIFF_REPO, SKIFF_CHANNEL (stable or canary), SKIFF_REF, SKIFF_GITHUB_TOKEN,
+  SKIFF_BUN_VERSION, SKIFF_SOURCE_DIR.

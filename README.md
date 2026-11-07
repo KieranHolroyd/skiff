@@ -94,6 +94,15 @@ On Debian or Ubuntu with Caddy installed:
 curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/skiff/main/install.sh | sudo sh
 ```
 
+That installs the newest stable release, and the server then updates only to promoted stable
+releases. To run the latest build instead, install from canary, which gets every release:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/skiff/main/install.sh | sudo sh -s -- --canary
+```
+
+You can switch later with `sudo skiff-update-self channel stable|canary`.
+
 `install.sh` only fetches Bun and the repository. Everything else is in
 [`scripts/install/main.ts`](scripts/install/main.ts): preflight checks, users and directories,
 secrets, build, the atomic release switch, systemd units, Caddy hand-off, edge-node enrollment,

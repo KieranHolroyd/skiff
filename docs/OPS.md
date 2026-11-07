@@ -407,6 +407,18 @@ curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/skiff/main/install.sh
 
 Pass `--public-address <ipv4>` when the detected address is wrong (for example behind NAT).
 
+The bootstrap installs the newest stable release (the GitHub release marked Latest) and writes
+`SKIFF_UPDATE_CHANNEL=stable`, so the host then follows the stable channel (§4.1). Pass
+`--canary` (or `SKIFF_CHANNEL=canary`) to build the head of `main` and follow canary instead:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/skiff/main/install.sh | sudo sh -s -- --canary
+```
+
+A re-run keeps the channel the host already follows unless one of these asks for another, and
+then also rewrites the updater's remembered channel. Without a stable release the bootstrap
+stops and suggests `--canary`.
+
 Private repo: add `SKIFF_GITHUB_TOKEN=…`. Pin a ref with `SKIFF_REF=v1.2.3`. Use an existing
 checkout with `SKIFF_SOURCE_DIR=/path/to/skiff`.
 
@@ -864,7 +876,8 @@ hosts take it, delete the release or turn it into a draft; promotion never sees 
 A host's channel lives in `/var/lib/skiff-update/channel` (`root:skiff 0640`), written only by the
 updater. `--channel <name>` on `update`, `skiff-update-self channel <name>`, or the choice on
 **Settings → Updates** changes it, and the choice is remembered. Until a host chooses,
-`SKIFF_UPDATE_CHANNEL` (in `skiff.env`) is the default, and without that, `canary`. `check`,
+`SKIFF_UPDATE_CHANNEL` (in `skiff.env`; the installer writes `stable`, or `canary` with
+`--canary`) is the default, and without that, `canary`. `check`,
 `plan` and `status` show the channel. Two rules keep a switch safe:
 
 - **No downgrade.** A canary host on 0.7.5 that switches to a stable at 0.7.3 keeps 0.7.5. It

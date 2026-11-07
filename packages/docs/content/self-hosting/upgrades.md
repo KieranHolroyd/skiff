@@ -121,7 +121,7 @@ Exit codes: `0` means updated, already up to date or nothing to do. `1` means no
 
 ## Upgrade with the installer
 
-Re-running the installer with `--upgrade` reuses `/etc/skiff` and the data directory, then builds and activates a new release from source. Pin the release with `SKIFF_REF`, because the bootstrap downloads `main` by default:
+Re-running the installer with `--upgrade` reuses `/etc/skiff` and the data directory, then builds and activates a new release from source. It downloads the newest release on the host's channel (the latest stable tag, or `main` on canary). Pin a release with `SKIFF_REF`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/KieranHolroyd/skiff/main/install.sh | sudo env SKIFF_REF=v1.4.0 SKIFF_YES=1 sh -s -- --upgrade --yes
