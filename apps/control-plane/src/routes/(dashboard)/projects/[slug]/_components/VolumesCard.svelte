@@ -51,7 +51,7 @@
 		can: { manageVolumes: boolean };
 	} = $props();
 
-	/** Settings → Policies trash period; the layout loads it. */
+	/** Settings → Retention & defaults trash period; the layout loads it. */
 	const trashDays = $derived<number>(page.data.policies?.trashDays ?? 7);
 
 	let createOpen = $state(false);

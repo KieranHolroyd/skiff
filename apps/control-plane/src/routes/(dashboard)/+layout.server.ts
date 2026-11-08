@@ -51,7 +51,7 @@ export const load: LayoutServerLoad = ({ locals, url, cookies }) => {
 		/** Every org the caller can switch to (IAM.md I5, §8.1); the header's switcher lists these. */
 		orgs: listMemberships(principal.userId),
 		role: principal.role,
-		/** Platform policies the UI quotes in copy (Settings → Policies, Alerts → System alerts). */
+		/** Platform policies the UI quotes in copy (Settings → Retention & defaults, Alerts → System alerts). */
 		policies: (({ trashDays, logRetentionDays, nodeAlertMinutes, operationHistoryDays }) => ({
 			trashDays,
 			logRetentionDays,

@@ -70,7 +70,7 @@ action.level !== 'always'
   for that user, "Lock now" in the user menu, and the failure budget running out (§5).
 - `always`-level actions ignore the window and ask every time. Kept to a very short list (§4).
 
-The window is a constant at first. Making it a platform policy (5–120 min, in Settings → Policies) is
+The window is a constant at first. Making it a platform policy (5–120 min, in Settings → Retention & defaults) is
 a cheap follow-up if anyone asks.
 
 ## 4. Which actions need it

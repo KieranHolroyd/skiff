@@ -6,7 +6,7 @@ import { parseRuleLines } from './_lib/rules.js';
 import type { Actions, PageServerLoad } from './$types';
 
 /**
- * Settings → Access policies (IAM.md I25, §11.1). Deliberately compact: the policy list, its
+ * Settings → Skiff Access (IAM.md I25, §11.1). Deliberately compact: the policy list, its
  * ordered rules, and one form that turns Skiff Access on for a project or environment. A rule line
  * is `allow|deny <matcher> …`, e.g. `allow domain example.com` or `deny cidr 10.0.0.0/8`.
  */

@@ -7,10 +7,13 @@ import ClockIcon from '@lucide/svelte/icons/clock';
 import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
 import DatabaseBackupIcon from '@lucide/svelte/icons/database-backup';
 import FingerprintIcon from '@lucide/svelte/icons/fingerprint';
+import FolderTreeIcon from '@lucide/svelte/icons/folder-tree';
 import GitBranchIcon from '@lucide/svelte/icons/git-branch';
 import GlobeIcon from '@lucide/svelte/icons/globe';
+import GlobeLockIcon from '@lucide/svelte/icons/globe-lock';
 import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 import HardDriveUploadIcon from '@lucide/svelte/icons/hard-drive-upload';
+import IdCardIcon from '@lucide/svelte/icons/id-card';
 import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 import LogsIcon from '@lucide/svelte/icons/logs';
 import MailIcon from '@lucide/svelte/icons/mail';
@@ -21,14 +24,27 @@ import UsersIcon from '@lucide/svelte/icons/users';
 import NetworkIcon from '@lucide/svelte/icons/network';
 import PlugIcon from '@lucide/svelte/icons/plug';
 import PackageIcon from '@lucide/svelte/icons/package';
+import WaypointsIcon from '@lucide/svelte/icons/waypoints';
 import WrenchIcon from '@lucide/svelte/icons/wrench';
 import type { Permission } from '@skiff/contracts';
 
 /**
- * Every Settings section, grouped by who it belongs to: you, the organisation you are signed in
- * to, or this Skiff install. Install-wide sections are split into the platform's own config,
- * observability, and operations (backups, upkeep, upgrades). The layout's navigation and each
- * page's header both read from here, so a section's name and one-line summary live in one place.
+ * Every Settings section, grouped by what it is about rather than only by scope, so no group grows
+ * past five or six entries. The order still runs from you, through the organisation you are signed
+ * in to, to this Skiff install:
+ *
+ * - you: your own account and credentials;
+ * - organisation: the org itself, its people and what it uses;
+ * - security: who can sign in and do what (IAM, SSO, edge access, user pools);
+ * - integrations: outside services this org connects to (GitHub, registries, backup targets);
+ * - observability: where logs and metrics go (an org's drains, then the platform's stores);
+ * - platform: install-wide services and policy (addresses, notifications, mail, assistant);
+ * - infrastructure: how nodes cluster, fail over and store data;
+ * - operations: keeping the install healthy (backups, upgrades, clean-up).
+ *
+ * Visibility is per section, so a member who is not a platform admin simply sees fewer groups. The
+ * layout's navigation and each page's header both read from here, so a section's name and one-line
+ * summary live in one place.
  */
 
 export type SectionId =
@@ -61,13 +77,22 @@ export type SectionId =
 	| 'maintenance'
 	| 'updates';
 
-export type SectionGroup = 'you' | 'organisation' | 'platform' | 'observability' | 'operations';
+export type SectionGroup =
+	| 'you'
+	| 'organisation'
+	| 'security'
+	| 'integrations'
+	| 'observability'
+	| 'platform'
+	| 'infrastructure'
+	| 'operations';
 
 /**
  * The settings navigation passes each href to SvelteKit's `resolve()`, whose generic is distributed
- * over the route-id union; TypeScript stops inferring past 25 members. SSO and Identity are the
- * newest sections, so they are left out of this type and asserted at their entries below. Both are
- * real routes (`svelte-kit sync` lists them in `$app/types`); every other entry is literal-checked.
+ * over the route-id union; TypeScript stops inferring past 25 members. SSO, Skiff Access and User
+ * pools are the newest sections, so they are left out of this type and asserted at their entries
+ * below. All are real routes (`svelte-kit sync` lists them in `$app/types`); every other entry is
+ * literal-checked.
  */
 export type SectionHref =
 	| '/(dashboard)/settings'
@@ -163,53 +188,6 @@ export const SECTIONS: Section[] = [
 		icon: UsersIcon
 	},
 	{
-		id: 'access',
-		group: 'organisation',
-		label: 'Access',
-		summary:
-			'Roles, bindings and groups: who can do what in this organisation, at which scope, and why.',
-		href: '/(dashboard)/settings/access',
-		path: '/settings/access',
-		icon: ShieldCheckIcon,
-		anyPermission: ['iam:read']
-	},
-	{
-		id: 'access-policies',
-		group: 'organisation',
-		label: 'Access policies',
-		summary:
-			'Skiff Access: ordered allow and deny rules for sites and app environments, enforced at the edge.',
-		// See `SectionHref`: `resolve()` cannot infer past its 25-member union.
-		href: '/(dashboard)/settings/access-policies' as unknown as SectionHref,
-		path: '/settings/access-policies',
-		icon: ShieldCheckIcon,
-		anyPermission: ['accessPolicy:read', 'accessPolicy:create']
-	},
-	{
-		id: 'sso',
-		group: 'organisation',
-		label: 'SSO',
-		summary:
-			'OpenID Connect sign-in, and the email domains that route to it. SAML, JIT and enforcement follow.',
-		// See `SectionHref`: the route is real, but `resolve()` cannot infer past 25 members.
-		href: '/(dashboard)/settings/sso' as unknown as SectionHref,
-		path: '/settings/sso',
-		icon: FingerprintIcon,
-		anyPermission: ['sso:read']
-	},
-	{
-		id: 'identity',
-		group: 'organisation',
-		label: 'Identity',
-		summary:
-			'Managed user pools: the OIDC issuer, clients and signing keys for your apps’ own end users.',
-		// See `SectionHref`: the route is real, but `resolve()` cannot infer past 25 members.
-		href: '/(dashboard)/settings/identity' as unknown as SectionHref,
-		path: '/settings/identity',
-		icon: FingerprintIcon,
-		anyPermission: ['userPool:read']
-	},
-	{
 		id: 'usage',
 		group: 'organisation',
 		label: 'Usage & limits',
@@ -220,38 +198,55 @@ export const SECTIONS: Section[] = [
 		anyPermission: ['project:read']
 	},
 	{
-		id: 'backup-targets',
-		group: 'organisation',
-		label: 'Backup targets',
-		summary: 'Where this organisation’s database backups are written.',
-		href: '/(dashboard)/settings/backup-targets',
-		path: '/settings/backup-targets',
-		icon: HardDriveUploadIcon,
-		anyPermission: ['database:read']
+		id: 'access',
+		group: 'security',
+		label: 'Access',
+		summary:
+			'Roles, bindings and groups: who can do what in this organisation, at which scope, and why.',
+		href: '/(dashboard)/settings/access',
+		path: '/settings/access',
+		icon: ShieldCheckIcon,
+		anyPermission: ['iam:read']
 	},
 	{
-		id: 'log-drains',
-		group: 'organisation',
-		label: 'Log drains',
-		summary: 'Forward this organisation’s logs to a webhook or an OpenTelemetry (OTLP) receiver.',
-		href: '/(dashboard)/settings/log-drains',
-		path: '/settings/log-drains',
-		icon: LogsIcon,
-		anyPermission: ['logs:read']
+		id: 'sso',
+		group: 'security',
+		label: 'SSO',
+		summary:
+			'OpenID Connect sign-in, and the email domains that route to it. SAML, JIT and enforcement follow.',
+		// See `SectionHref`: the route is real, but `resolve()` cannot infer past 25 members.
+		href: '/(dashboard)/settings/sso' as unknown as SectionHref,
+		path: '/settings/sso',
+		icon: FingerprintIcon,
+		anyPermission: ['sso:read']
 	},
 	{
-		id: 'registry',
-		group: 'organisation',
-		label: 'Container registries',
-		summary: 'Logins for private registries, so nodes can pull this organisation’s images.',
-		href: '/(dashboard)/settings/registry',
-		path: '/settings/registry',
-		icon: PackageIcon,
-		anyPermission: ['image:pull']
+		id: 'access-policies',
+		group: 'security',
+		label: 'Skiff Access',
+		summary:
+			'Skiff Access: ordered allow and deny rules for sites and app environments, enforced at the edge.',
+		// See `SectionHref`: `resolve()` cannot infer past its 25-member union.
+		href: '/(dashboard)/settings/access-policies' as unknown as SectionHref,
+		path: '/settings/access-policies',
+		icon: GlobeLockIcon,
+		anyPermission: ['accessPolicy:read', 'accessPolicy:create']
+	},
+	{
+		id: 'identity',
+		group: 'security',
+		label: 'User pools',
+		summary:
+			'Managed user pools: the OIDC issuer, clients and signing keys for your apps’ own end users.',
+		// See `SectionHref`: the route is real, but `resolve()` cannot infer past 25 members.
+		href: '/(dashboard)/settings/identity' as unknown as SectionHref,
+		path: '/settings/identity',
+		icon: IdCardIcon,
+		anyPermission: ['userPool:read']
 	},
 	{
 		id: 'github',
-		group: 'organisation',
+		group: 'integrations',
 		label: 'GitHub',
 		summary:
 			'Skiff’s GitHub App: private clones, push and pull request events, commit statuses and runners without tokens or webhooks.',
@@ -261,6 +256,57 @@ export const SECTIONS: Section[] = [
 		anyPermission: ['build:read']
 	},
 	{
+		id: 'registry',
+		group: 'integrations',
+		label: 'Container registries',
+		summary: 'Logins for private registries, so nodes can pull this organisation’s images.',
+		href: '/(dashboard)/settings/registry',
+		path: '/settings/registry',
+		icon: PackageIcon,
+		anyPermission: ['image:pull']
+	},
+	{
+		id: 'backup-targets',
+		group: 'integrations',
+		label: 'Backup targets',
+		summary: 'Where this organisation’s database backups are written.',
+		href: '/(dashboard)/settings/backup-targets',
+		path: '/settings/backup-targets',
+		icon: HardDriveUploadIcon,
+		anyPermission: ['database:read']
+	},
+	{
+		id: 'log-drains',
+		group: 'observability',
+		label: 'Log drains',
+		summary: 'Forward this organisation’s logs to a webhook or an OpenTelemetry (OTLP) receiver.',
+		href: '/(dashboard)/settings/log-drains',
+		path: '/settings/log-drains',
+		icon: LogsIcon,
+		anyPermission: ['logs:read']
+	},
+	{
+		id: 'telemetry',
+		group: 'observability',
+		label: 'Telemetry',
+		summary:
+			'The optional ClickHouse store behind traffic charts and dashboards. Off by default to keep the install light.',
+		href: '/(dashboard)/settings/telemetry',
+		path: '/settings/telemetry',
+		icon: ActivityIcon,
+		ownerOnly: true
+	},
+	{
+		id: 'metrics',
+		group: 'observability',
+		label: 'Metrics',
+		summary: 'What /metrics exports for Prometheus and Grafana, and how much work a scrape may do.',
+		href: '/(dashboard)/settings/metrics',
+		path: '/settings/metrics',
+		icon: ChartLineIcon,
+		ownerOnly: true
+	},
+	{
 		id: 'domains',
 		group: 'platform',
 		label: 'Domains',
@@ -268,26 +314,6 @@ export const SECTIONS: Section[] = [
 		href: '/(dashboard)/settings/domains',
 		path: '/settings/domains',
 		icon: GlobeIcon,
-		ownerOnly: true
-	},
-	{
-		id: 'policies',
-		group: 'platform',
-		label: 'Policies',
-		summary: 'How long deleted things and history are kept, and defaults for new databases.',
-		href: '/(dashboard)/settings/policies',
-		path: '/settings/policies',
-		icon: ClockIcon,
-		ownerOnly: true
-	},
-	{
-		id: 'backups',
-		group: 'operations',
-		label: 'Backups',
-		summary: 'Continuous off-site backup of the platform database, and what a full restore needs.',
-		href: '/(dashboard)/settings/backups',
-		path: '/settings/backups',
-		icon: DatabaseBackupIcon,
 		ownerOnly: true
 	},
 	{
@@ -323,50 +349,8 @@ export const SECTIONS: Section[] = [
 		ownerOnly: true
 	},
 	{
-		id: 'telemetry',
-		group: 'observability',
-		label: 'Telemetry',
-		summary:
-			'The optional ClickHouse store behind traffic charts and dashboards. Off by default to keep the install light.',
-		href: '/(dashboard)/settings/telemetry',
-		path: '/settings/telemetry',
-		icon: ActivityIcon,
-		ownerOnly: true
-	},
-	{
-		id: 'metrics',
-		group: 'observability',
-		label: 'Metrics',
-		summary: 'What /metrics exports for Prometheus and Grafana, and how much work a scrape may do.',
-		href: '/(dashboard)/settings/metrics',
-		path: '/settings/metrics',
-		icon: ChartLineIcon,
-		ownerOnly: true
-	},
-	{
-		id: 'storage',
-		group: 'platform',
-		label: 'Storage',
-		summary: 'The system disk, fast disks and bulk disks, and where each kind of service keeps its data.',
-		href: '/(dashboard)/settings/storage',
-		path: '/settings/storage',
-		icon: HardDriveIcon,
-		platformAdmin: true
-	},
-	{
-		// NFS/SMB mounts, not a project's share links (those live on each project).
-		id: 'shares',
-		group: 'platform',
-		label: 'Network shares',
-		summary: 'NFS and SMB shares: mount them on nodes and use them as bulk disks.',
-		href: '/(dashboard)/settings/shares',
-		path: '/settings/shares',
-		icon: NetworkIcon,
-		platformAdmin: true
-	},
-	{
 		id: 'clustering',
-		group: 'platform',
+		group: 'infrastructure',
 		label: 'Clustering',
 		summary: 'Overlay addressing, endpoint ports, replica and failover limits, and share mounts.',
 		href: '/(dashboard)/settings/clustering',
@@ -376,12 +360,54 @@ export const SECTIONS: Section[] = [
 	},
 	{
 		id: 'high-availability',
-		group: 'platform',
+		group: 'infrastructure',
 		label: 'High availability',
 		summary: 'Ingress driver, failover hold-downs and ingress-node readiness.',
 		href: '/(dashboard)/settings/high-availability',
 		path: '/settings/high-availability',
-		icon: NetworkIcon,
+		icon: WaypointsIcon,
+		platformAdmin: true
+	},
+	{
+		id: 'storage',
+		group: 'infrastructure',
+		label: 'Storage',
+		summary:
+			'The system disk, fast disks and bulk disks, and where each kind of service keeps its data.',
+		href: '/(dashboard)/settings/storage',
+		path: '/settings/storage',
+		icon: HardDriveIcon,
+		platformAdmin: true
+	},
+	{
+		// NFS/SMB mounts, not a project's share links (those live on each project).
+		id: 'shares',
+		group: 'infrastructure',
+		label: 'Network shares',
+		summary: 'NFS and SMB shares: mount them on nodes and use them as bulk disks.',
+		href: '/(dashboard)/settings/shares',
+		path: '/settings/shares',
+		icon: FolderTreeIcon,
+		platformAdmin: true
+	},
+	{
+		id: 'backups',
+		group: 'operations',
+		label: 'Backups',
+		summary: 'Continuous off-site backup of the platform database, and what a full restore needs.',
+		href: '/(dashboard)/settings/backups',
+		path: '/settings/backups',
+		icon: DatabaseBackupIcon,
+		ownerOnly: true
+	},
+	{
+		id: 'updates',
+		group: 'operations',
+		label: 'Updates',
+		summary: 'The Skiff version running here, and safe one-click upgrades with automatic rollback.',
+		href: '/(dashboard)/settings/updates',
+		path: '/settings/updates',
+		icon: CircleArrowUpIcon,
 		platformAdmin: true
 	},
 	{
@@ -395,22 +421,25 @@ export const SECTIONS: Section[] = [
 		anyPermission: ['project:read']
 	},
 	{
-		id: 'updates',
+		id: 'policies',
 		group: 'operations',
-		label: 'Updates',
-		summary: 'The Skiff version running here, and safe one-click upgrades with automatic rollback.',
-		href: '/(dashboard)/settings/updates',
-		path: '/settings/updates',
-		icon: CircleArrowUpIcon,
-		platformAdmin: true
+		label: 'Retention & defaults',
+		summary: 'How long deleted things and history are kept, and defaults for new databases.',
+		href: '/(dashboard)/settings/policies',
+		path: '/settings/policies',
+		icon: ClockIcon,
+		ownerOnly: true
 	}
 ];
 
 export const GROUP_LABELS: Record<SectionGroup, string> = {
 	you: 'You',
 	organisation: 'Organisation',
-	platform: 'Platform',
+	security: 'Access & security',
+	integrations: 'Integrations',
 	observability: 'Observability',
+	platform: 'Platform',
+	infrastructure: 'Infrastructure',
 	operations: 'Operations'
 };
 
@@ -418,8 +447,11 @@ export const GROUP_LABELS: Record<SectionGroup, string> = {
 export const GROUP_ORDER: SectionGroup[] = [
 	'you',
 	'organisation',
-	'platform',
+	'security',
+	'integrations',
 	'observability',
+	'platform',
+	'infrastructure',
 	'operations'
 ];
 

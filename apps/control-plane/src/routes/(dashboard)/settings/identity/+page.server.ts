@@ -11,7 +11,7 @@ import {
 import type { Actions, PageServerLoad } from './$types';
 
 /**
- * Settings → Identity (IAM.md I26–I29, §11.2): user pools, their OIDC clients and the public
+ * Settings → User pools (IAM.md I26–I29, §11.2): user pools, their OIDC clients and the public
  * discovery/JWKS URLs. The hosted sign-in UI, users, sessions and MFA are not built yet and are
  * listed as such rather than faked. Every write goes through `core.userPools`.
  */

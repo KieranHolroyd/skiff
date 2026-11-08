@@ -43,7 +43,7 @@
 		title="History"
 		icon={HistoryIcon}
 		description="Recent mass actions and prune runs. Finished operations are kept for {data.policies
-			.operationHistoryDays} days (Settings → Policies)."
+			.operationHistoryDays} days (Settings → Retention & defaults)."
 		count={data.history.length}
 		flush
 	>

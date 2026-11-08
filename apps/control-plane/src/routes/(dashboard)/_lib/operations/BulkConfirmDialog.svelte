@@ -15,7 +15,7 @@
 	let { controller, contentDomain }: { controller: BulkController; contentDomain: string } =
 		$props();
 
-	/** Settings → Policies trash period; the layout loads it. */
+	/** Settings → Retention & defaults trash period; the layout loads it. */
 	const trashDays = $derived<number>(page.data.policies?.trashDays ?? 7);
 
 	const PREVIEW = 10;

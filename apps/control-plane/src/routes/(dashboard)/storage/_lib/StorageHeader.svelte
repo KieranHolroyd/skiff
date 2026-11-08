@@ -22,7 +22,7 @@
 	/** Sections are in the sidebar (`./subnav.ts`); this is identity, facts and actions. */
 	let { st, can }: { st: StorageView; can: Can } = $props();
 
-	/** Settings → Policies trash period; the layout loads it. */
+	/** Settings → Retention & defaults trash period; the layout loads it. */
 	const trashDays = $derived<number>(page.data.policies?.trashDays ?? 7);
 
 	const base = $derived(resolve('/(dashboard)/storage/[name]', { name: st.name }));

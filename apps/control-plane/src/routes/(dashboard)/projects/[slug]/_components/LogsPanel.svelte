@@ -60,7 +60,7 @@
 		single?: boolean;
 	} = $props();
 
-	/** Settings → Policies log retention; the layout loads it. */
+	/** Settings → Retention & defaults log retention; the layout loads it. */
 	const logRetentionDays = $derived<number>(page.data.policies?.logRetentionDays ?? 7);
 
 	let events = $state<LogEventView[]>([]);

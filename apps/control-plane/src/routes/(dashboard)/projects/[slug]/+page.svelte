@@ -956,7 +956,7 @@
 						<EmptyState
 							icon={ShieldCheckIcon}
 							title="No policies for this project"
-							description="Create a policy under Settings → Access policies, then assign it to production, previews or a named environment."
+							description="Create a policy under Settings → Skiff Access, then assign it to production, previews or a named environment."
 						/>
 					{/if}
 				</Card.Content>
@@ -1341,7 +1341,7 @@
 						{/each}
 					</NativeSelect.Root>
 					<Field.Description
-						>Manage the ordered rules under Settings → Access policies.</Field.Description
+						>Manage the ordered rules under Settings → Skiff Access.</Field.Description
 					>
 					{#if result?.fieldErrors?.policyId}<Field.Error>{result.fieldErrors.policyId}</Field.Error>{/if}
 				</Field.Field>

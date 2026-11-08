@@ -6,7 +6,7 @@ import {
 } from '@skiff/contracts';
 
 /**
- * The compact text form used by Settings → Access policies. One rule per line:
+ * The compact text form used by Settings → Skiff Access. One rule per line:
  * `<allow|deny> <matcher> [args…]`. Blank lines and `#` comments are ignored. Kept out of the
  * route's server module so the page can format a policy for the editor without bundling the server.
  */
