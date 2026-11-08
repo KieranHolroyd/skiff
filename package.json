@@ -4,7 +4,7 @@
   "type": "module",
   "workspaces": ["apps/*", "packages/*", "spikes/*"],
   "scripts": {
-    "check": "bun run --filter '*' check",
+    "check": "bun run --filter '*' check && bun scripts/lint-iam.ts",
     "check:migrations": "bun scripts/check-migrations.ts",
     "dev:clickhouse": "bun scripts/dev/clickhouse.ts",
     "docs:dev": "bun run --cwd apps/docs dev",

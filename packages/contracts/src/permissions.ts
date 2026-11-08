@@ -1,56 +1,39 @@
 /**
- * The single source of truth for Skiff's org-level permissions (DESIGN §6.2).
+ * Skiff's org-level permissions (DESIGN §6.2, IAM.md).
  *
- * The same `resource:action` strings are used as:
- *  - Better Auth organization access-control statements (RBAC roles),
- *  - OAuth scopes requested by MCP clients and shown on the consent screen,
- *  - API-key permission sets.
- *
- * A token's effective permissions are always `granted scopes ∩ the user's current role`,
- * so revoking a role immediately narrows every token the user has issued.
+ * The catalog in `iam/catalog.ts` is the source of truth for the permission strings and their
+ * metadata. This file keeps the parts every existing surface already imports: the built-in roles,
+ * the agent consent defaults, the destructive list and the `granted ∩ role` helper.
  */
-export const statements = {
-	project: ['create', 'read', 'update', 'delete'],
-	deployment: ['create', 'read', 'promote', 'rollback', 'delete'],
-	domain: ['create', 'read', 'delete'],
-	secret: ['create', 'read-metadata', 'update', 'delete'],
-	build: ['create', 'read', 'cancel'],
-	database: ['create', 'read', 'update', 'delete', 'credentials', 'console'],
-	storage: ['create', 'read', 'update', 'delete', 'credentials'],
-	broker: ['create', 'read', 'update', 'delete', 'credentials'],
-	// Email (docs/EMAIL.md): domains, sending, suppressions, routes, credentials.
-	email: ['read', 'send', 'update', 'delete', 'credentials'],
-	shareLink: ['create', 'read', 'revoke'],
-	logs: ['read'],
-	// Container console (D127): inspect a project's container, browse its files, open a shell.
-	container: ['inspect', 'files', 'exec'],
-	// Container images (docs/REGISTRY.md): pull and push the org's registry repositories, delete
-	// tags, and manage credentials for external registries (R2).
-	image: ['pull', 'push', 'delete', 'credentials'],
-	metrics: ['read'],
-	apiKey: ['create', 'read', 'revoke'],
-	member: ['invite', 'update-role', 'remove'],
-} as const;
+import {
+	allPermissions,
+	buildPermissionCatalog,
+	isPermission,
+	permissionsWithRisk,
+	type Permission,
+} from './iam/catalog.ts';
 
-export type Resource = keyof typeof statements;
-export type Permission = {
-	[R in Resource]: `${R}:${(typeof statements)[R][number]}`;
-}[Resource];
-
-export const allPermissions = Object.entries(statements).flatMap(([resource, actions]) =>
-	actions.map((action) => `${resource}:${action}` as Permission),
-);
-
-export const isPermission = (value: string): value is Permission =>
-	(allPermissions as readonly string[]).includes(value);
+export { allPermissions, isPermission, statements } from './iam/catalog.ts';
+export { buildPermissionCatalog, permissionsWithRisk } from './iam/catalog.ts';
+export type { Permission, Resource } from './iam/catalog.ts';
+export type { PermissionMeta, Risk, ScopeType, StepUp, TokenRule } from './iam/catalog.ts';
 
 const pick = (...perms: Permission[]) => perms;
 
 export const roles = {
 	owner: allPermissions,
-	admin: allPermissions,
+	// The owner/admin split agreed in IAM.md §15: these four are owner-only. Everything else is
+	// shared, because admin is the everyday org administrator.
+	admin: allPermissions.filter(
+		(permission) =>
+			permission !== 'org:delete' &&
+			permission !== 'org:transfer' &&
+			permission !== 'iam:manage-owners' &&
+			permission !== 'iam:manage-guardrails',
+	),
 	deployer: pick(
 		'project:create', 'project:read', 'project:update',
+		'environment:read',
 		'deployment:create', 'deployment:read', 'deployment:promote', 'deployment:rollback',
 		'domain:read', 'secret:create', 'secret:read-metadata', 'secret:update',
 		'build:create', 'build:read', 'build:cancel',
@@ -62,11 +45,15 @@ export const roles = {
 		'logs:read', 'metrics:read',
 		'container:inspect', 'container:files', 'container:exec',
 		'image:pull', 'image:push', 'image:credentials',
+		'pipeline:read', 'pipeline:dispatch', 'pipeline:cancel',
+		'alert:read', 'alert:acknowledge',
+		'dashboard:read', 'volume:read',
 	),
 	viewer: pick(
 		'project:read', 'deployment:read', 'domain:read', 'secret:read-metadata',
 		'build:read', 'database:read', 'storage:read', 'broker:read', 'email:read', 'shareLink:read', 'logs:read', 'metrics:read',
 		'container:inspect', 'image:pull',
+		'environment:read', 'pipeline:read', 'alert:read', 'dashboard:read', 'volume:read',
 	),
 } as const satisfies Record<string, readonly Permission[]>;
 
@@ -89,23 +76,27 @@ export const defaultAgentScopes: readonly Permission[] = roles.deployer.filter(
 		permission !== 'database:console' &&
 		// A shell and file reads inside a container are a human surface too (D127).
 		permission !== 'container:files' &&
-		permission !== 'container:exec',
+		permission !== 'container:exec' &&
+		// Starting a pipeline runs repository code with secrets: an explicit opt-in, like a shell.
+		permission !== 'pipeline:dispatch',
 );
 
+/**
+ * The catalog, with every permission's scopes, risk, step-up level, token rule and MCP visibility.
+ * Built here because `agentDefault` depends on the deployer-role defaults above.
+ */
+export const permissionCatalog = buildPermissionCatalog(new Set(defaultAgentScopes));
+
 /** Permissions that are never pre-ticked and always require an explicit opt-in. */
-export const destructivePermissions: readonly Permission[] = [
-	'project:delete',
-	'deployment:delete',
-	'domain:delete',
-	'database:delete',
-	'storage:delete',
-	'broker:delete',
-	'email:delete',
-	'secret:delete',
-	'image:delete',
-	'apiKey:revoke',
-	'member:remove',
-];
+export const destructivePermissions: readonly Permission[] = permissionsWithRisk(
+	permissionCatalog,
+	'destructive',
+);
+
+/** Permissions that need a fresh verification before they may be used (STEP-UP.md §4). */
+export const stepUpPermissions: readonly Permission[] = allPermissions.filter(
+	(permission) => permissionCatalog[permission].stepUp !== 'none',
+);
 
 /** Effective permissions for a request: what the token was granted, capped by the user's role. */
 export function effectivePermissions(

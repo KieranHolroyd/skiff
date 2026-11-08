@@ -556,6 +556,15 @@ standby.
 
 Each phase ships on its own and leaves the system working.
 
+Started 2026-11-08: I1's catalog and I2's principal v2 are in `packages/contracts/src/iam/catalog.ts`,
+`principal.ts` and `permissions.ts`. Every permission now carries scopes, risk, step-up level, token
+rule, MCP visibility and consent default; the owner/admin split is encoded in the built-in roles but
+no call site reads it yet. `scripts/lint-iam.ts` (in `bun run check`, baseline in
+`scripts/iam-lint-baseline.json`) now fails any new `principal.role` or `principal.kind` check, so the
+existing set can only burn down. Next: the compile/authorize engine (I1), then the call-site
+migration (I2) — it waits for the engine because the token and session rules have to be enforced
+before a role check is removed.
+
 | Phase | Contents | Proposals | Done when |
 |---|---|---|---|
 | **I0 Foundations** | Permission catalog with metadata. Principal v2. Named system principals. Role-name checks → permissions, plus the lint rule. Owner/admin split. Audit actor columns. Org switching and org-bound credentials. | I1–I5 | No `.role ===` outside iam/. Every system call has a named principal. Keys carry `org_id`. |
