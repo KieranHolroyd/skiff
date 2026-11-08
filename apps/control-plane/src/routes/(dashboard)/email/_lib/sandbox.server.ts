@@ -16,10 +16,7 @@ import { fieldErrorsFrom } from '../../databases/_lib/forms.server.js';
 
 /** Only an org owner or admin may ask to leave the sandbox. */
 export function canRequestAccess(principal: Principal): boolean {
-	return (
-		(principal.role === 'owner' || principal.role === 'admin') &&
-		principal.permissions.has('email:update')
-	);
+	return core.email.canRequestProductionAccess(principal);
 }
 
 const add: Action = async ({ request, locals }) => {

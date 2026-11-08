@@ -25,7 +25,7 @@ export const load: PageServerLoad = ({ locals, url }) => {
 			: [],
 		installUrl: app.configured ? core.githubApp.installUrl(principal) : null,
 		isAdmin,
-		canLink: principal.kind === 'user' && (principal.role === 'owner' || principal.role === 'admin'),
+		canLink: core.githubApp.canLink(principal),
 		defaultName: `Skiff ${new URL(core.ctx.config.platformOrigin).hostname}`.slice(0, 34),
 		/** Set by the callback pages after a redirect. */
 		notice: url.searchParams.get('created')

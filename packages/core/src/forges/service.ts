@@ -139,9 +139,14 @@ export class ForgeService {
 
 	// ------------------------------------------------------------------------------ connections
 
+	/** Whether the principal may add, edit or remove git provider connections (D173). */
+	canManage(principal: Principal): boolean {
+		return isOrgManager(principal) && this.ctx.iam.can(principal, 'build:create', { type: 'org' });
+	}
+
 	private requireManager(principal: Principal): void {
 		this.ctx.iam.require(principal, 'build:create', { type: 'org' });
-		if (principal.role !== 'owner' && principal.role !== 'admin')
+		if (!isOrgManager(principal))
 			throw new CoreError('forbidden', 'Only org owners and admins can manage git provider connections.', 403);
 	}
 
@@ -651,4 +656,9 @@ export class ForgeService {
 	private audit(principal: Principal, action: string, resourceId: string, args: Record<string, unknown>): void {
 		this.ctx.audit.record({ principal, action, resource: 'build', resourceId, args, result: 'ok' });
 	}
+}
+
+/** Org owners and admins; connections hold org-wide forge tokens (D173). */
+function isOrgManager(principal: Principal): boolean {
+	return principal.role === 'owner' || principal.role === 'admin';
 }

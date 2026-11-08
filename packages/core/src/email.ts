@@ -1633,10 +1633,15 @@ export class EmailService {
 		return row ? this.accessRequestView(row) : null;
 	}
 
+	/** Whether the principal may ask to leave the sandbox: an org owner or admin with `email:update`. */
+	canRequestProductionAccess(principal: Principal): boolean {
+		return (principal.role === 'owner' || principal.role === 'admin') && this.ctx.iam.can(principal, 'email:update', { type: 'org' });
+	}
+
 	/** An org owner or admin asks a platform admin to move the org out of the sandbox. */
 	async requestProductionAccess(principal: Principal, raw: unknown): Promise<EmailAccessRequestView> {
 		this.ctx.iam.require(principal, 'email:update', { type: 'org' });
-		if (principal.role !== 'owner' && principal.role !== 'admin')
+		if (!this.canRequestProductionAccess(principal))
 			throw new CoreError('forbidden', 'Only an organisation owner or admin can request production access.', 403);
 		this.requireFeature();
 		const input = emailAccessRequestCreateSchema.parse(raw);

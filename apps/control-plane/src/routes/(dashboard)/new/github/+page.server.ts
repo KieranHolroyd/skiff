@@ -48,8 +48,7 @@ export const load: PageServerLoad = ({ locals, url }) => {
 		connected: githubConnected || connections.length > 0,
 		githubConnected,
 		connections,
-		canInstall:
-			principal.kind === 'user' && (principal.role === 'owner' || principal.role === 'admin'),
+		canInstall: core.githubApp.canLink(principal),
 		canImport:
 			hasPermission(principal, 'project:create') && hasPermission(principal, 'build:create'),
 		repo: repo && /^[A-Za-z0-9_.~-]+(?:\/[A-Za-z0-9_.~-]+)+$/.test(repo) && repo.length <= 512 ? repo : null,

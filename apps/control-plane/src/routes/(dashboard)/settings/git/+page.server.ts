@@ -19,7 +19,7 @@ export const load: PageServerLoad = ({ locals }) => {
 			installations: app.configured ? core.githubApp.installations(principal).filter((entry) => entry.orgId === principal.orgId).length : 0
 		},
 		pipelineSetup: core.pipelines.autoSetup(principal),
-		canManage: hasPermission(principal, 'build:create') && (principal.role === 'owner' || principal.role === 'admin')
+		canManage: core.forges.canManage(principal)
 	};
 };
 

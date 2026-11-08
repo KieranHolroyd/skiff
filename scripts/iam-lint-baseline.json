@@ -16,8 +16,8 @@
 	"packages/core/src/credential-reveal.ts": {
 		"kind": 1
 	},
-	"packages/core/src/operations/prune.ts": {
-		"kind": 1
+	"packages/core/src/email.ts": {
+		"role": 1
 	},
 	"packages/core/src/operations/service.ts": {
 		"kind": 4
@@ -28,8 +28,8 @@
 	"packages/core/src/observability.ts": {
 		"role": 1
 	},
-	"packages/core/src/audit.ts": {
-		"kind": 3
+	"packages/core/src/forges/service.ts": {
+		"role": 1
 	},
 	"packages/core/src/databases.ts": {
 		"kind": 1
@@ -60,10 +60,6 @@
 	"apps/control-plane/src/routes/(dashboard)/settings/connected-apps/+page.server.ts": {
 		"role": 1
 	},
-	"apps/control-plane/src/routes/(dashboard)/settings/github/+page.server.ts": {
-		"role": 1,
-		"kind": 1
-	},
 	"apps/control-plane/src/routes/(dashboard)/settings/members/+page.server.ts": {
 		"role": 2
 	},
@@ -77,9 +73,6 @@
 		"role": 1
 	},
 	"apps/control-plane/src/routes/(dashboard)/+layout.server.ts": {
-		"role": 1
-	},
-	"apps/control-plane/src/routes/(dashboard)/email/sandbox/+page.server.ts": {
 		"role": 1
 	}
 }

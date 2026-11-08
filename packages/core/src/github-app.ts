@@ -399,7 +399,8 @@ export class GithubAppService {
 		return `${WEB}/apps/${app.slug}/installations/new?state=${encodeURIComponent(state)}`;
 	}
 
-	private canLink(principal: Principal): boolean {
+	/** Whether the principal may install the App or link an installation to its org (a person, owner or admin). */
+	canLink(principal: Principal): boolean {
 		return principal.kind === 'user' && (principal.role === 'owner' || principal.role === 'admin');
 	}
 
