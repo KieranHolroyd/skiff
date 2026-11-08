@@ -1,4 +1,5 @@
 import {
+	canMaintainPlatform,
 	hasPermission,
 	operationActions,
 	operationLimits,
@@ -10,6 +11,7 @@ import { CoreError, ForbiddenError } from '../errors.ts';
 import { projectOwnedTables } from '../projects.ts';
 import type { DomainRow } from '../domains.ts';
 import type { ActionDefinition, ItemResult, OperationParams, PlannedItem, RunContext, StoredItem } from './types.ts';
+import type { PlatformIamService } from '../platform-iam.ts';
 
 const ACTIVE_WORKLOAD = "('pending','starting','running')";
 /** Tables cleaned up under `project_rows`, plus share links (their redemptions go with them). */
@@ -369,9 +371,25 @@ function selected(params: OperationParams): PruneCategory[] {
 		.map((info) => info.id);
 }
 
-/** Platform prune: a platform admin's session or API key, never OAuth/MCP (docs/OPERATIONS.md §5.2). */
+/**
+ * Platform prune: once the D129 binding is seeded this is the `platform:maintenance` permission on
+ * a platform admin's dashboard session (API keys and MCP are refused). Until then the pre-I8 rule
+ * (a platform admin's session or API key, never OAuth/MCP) keeps it working.
+ */
+let platformIam: PlatformIamService | undefined;
+
+/**
+ * `OperationService` calls `authorize(principal, params)` before a `RunContext` exists, so the
+ * platform service is attached when the core is built (see `createCore`). Without it (a bare test
+ * importing the action) the pre-I8 platform-admin rule is used.
+ */
+export function configurePrunePlatformIam(service: PlatformIamService): void {
+	platformIam = service;
+}
+
 function canPrunePlatform(principal: Principal): boolean {
-	return (principal.platformAdmin === true && (principal.kind === 'user' || principal.kind === 'apiKey')) || principal.kind === 'system';
+	if (platformIam) return platformIam.canMaintain(principal);
+	return canMaintainPlatform(principal);
 }
 
 export const pruneAction: ActionDefinition = {

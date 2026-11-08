@@ -1,6 +1,11 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
+	import { enhance, type SubmitFunction } from '$app/forms';
+	import BanIcon from '@lucide/svelte/icons/ban';
+	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
 	import CircleQuestionMarkIcon from '@lucide/svelte/icons/circle-question-mark';
+	import ClockIcon from '@lucide/svelte/icons/clock';
+	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
+	import LockIcon from '@lucide/svelte/icons/lock';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import TrashIcon from '@lucide/svelte/icons/trash';
@@ -36,6 +41,15 @@
 	let createRoleOpen = $state(false);
 	let bindingOpen = $state(false);
 	let createGroupOpen = $state(false);
+	let guardrailOpen = $state(false);
+	let requestOpen = $state(false);
+
+	let guardrailScopeType = $state<'org' | 'project'>('org');
+	let guardrailScopeProject = $state('');
+
+	let requestScopeType = $state<ScopeType>('org');
+	let requestScopeProject = $state('');
+	let requestScopeEnvironment = $state('');
 
 	let bindingPrincipalType = $state<PrincipalType>('user');
 	let bindingScopeType = $state<ScopeType>('org');
@@ -172,6 +186,68 @@
 		if (seconds < 3600) return `in ${Math.floor(seconds / 60)}m`;
 		if (seconds < 86_400) return `in ${Math.floor(seconds / 3600)}h`;
 		return `in ${Math.floor(seconds / 86_400)}d`;
+	}
+
+	function durationLabel(seconds: number): string {
+		if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+		return `${seconds / 3600}h`;
+	}
+
+	function requestStatusVariant(status: string): BadgeVariant {
+		switch (status) {
+			case 'approved':
+				return 'success';
+			case 'pending':
+				return 'warning';
+			case 'denied':
+				return 'danger';
+			default:
+				return 'neutral';
+		}
+	}
+
+	function conditionLabel(condition: { op: string } | null): string {
+		if (!condition) return 'Always';
+		switch (condition.op) {
+			case 'credentialIn':
+				return 'Only some credential kinds';
+			case 'ipIn':
+				return 'Only some networks';
+			case 'environmentIn':
+				return 'Only some environments';
+			case 'before':
+			case 'after':
+				return 'Only in a time window';
+			default:
+				return condition.op;
+		}
+	}
+
+	/** Enhance callback for the compact row forms: notify, then refresh the page data. */
+	const submitThenNotify: SubmitFunction =
+		() =>
+		async ({ result, update }) => {
+			notify(result);
+			await update();
+		};
+
+	function deleteGuardrail(guardrail: { id: string; name: string }) {
+		askConfirm({
+			title: `Delete the ${guardrail.name} guardrail?`,
+			description:
+				'The deny rule stops applying at once. Roles and bindings are unaffected; any allow they granted becomes effective again.',
+			confirmLabel: 'Delete guardrail',
+			tone: 'danger',
+			action: '?/deleteGuardrail',
+			fields: { guardrailId: guardrail.id }
+		});
+	}
+
+	function openRequest() {
+		requestScopeType = 'org';
+		requestScopeProject = '';
+		requestScopeEnvironment = '';
+		requestOpen = true;
 	}
 
 	function openBinding() {
@@ -567,6 +643,222 @@
 			<span>
 				Group membership follows the group's bindings. Groups synced from SCIM or SSO are read-only
 				here.
+			</span>
+		{/snippet}
+	</Panel>
+
+	<Panel
+		title="Guardrails"
+		icon={LockIcon}
+		count={data.guardrails.length}
+		description="Deny rules that beat every allow. They are organisation- or project-wide, and a role editor cannot undo them."
+		flush
+	>
+		{#snippet actions()}
+			{#if data.accessCan.manageGuardrails}
+				<Button size="sm" onclick={() => (guardrailOpen = true)}
+					><PlusIcon />Create guardrail</Button
+				>
+			{/if}
+		{/snippet}
+
+		{#if data.guardrails.length === 0}
+			<div class="p-4">
+				<EmptyState
+					icon={LockIcon}
+					compact
+					title="No guardrails yet"
+					description="Start from a template such as “No secrets to robots” to stop machine principals revealing credentials, or “Production needs a human” to keep deployment promotion interactive."
+				>
+					{#if data.accessCan.manageGuardrails}
+						<Button size="sm" onclick={() => (guardrailOpen = true)}
+							><PlusIcon />Create a guardrail</Button
+						>
+					{/if}
+				</EmptyState>
+			</div>
+		{:else}
+			<div class="divide-y">
+				{#each data.guardrails as guardrail (guardrail.id)}
+					<div class="space-y-2 px-4 py-4">
+						<div class="flex flex-wrap items-start justify-between gap-3">
+							<div class="min-w-0 space-y-1">
+								<p class="flex flex-wrap items-center gap-2">
+									<span class="text-sm font-medium">{guardrail.name}</span>
+									<Badge variant={guardrail.enabled ? 'success' : 'neutral'}>
+										{guardrail.enabled ? 'Enabled' : 'Disabled'}
+									</Badge>
+									<Badge variant="outline">
+										{guardrail.orgId === null ? 'Platform' : 'Organisation'}
+									</Badge>
+									<Badge variant="secondary">
+										{guardrail.scope ? scopeLabel(guardrail.scope) : 'Every scope'}
+									</Badge>
+								</p>
+								<p class="text-xs text-muted-foreground">
+									Condition: {conditionLabel(guardrail.condition)}
+								</p>
+							</div>
+							{#if data.accessCan.manageGuardrails && guardrail.orgId !== null}
+								<div class="flex flex-wrap items-center gap-1">
+									<form method="POST" action="?/toggleGuardrail" use:enhance={submitThenNotify}>
+										<input type="hidden" name="guardrailId" value={guardrail.id} />
+										<input type="hidden" name="enabled" value={String(!guardrail.enabled)} />
+										<Button type="submit" size="sm" variant="outline">
+											{guardrail.enabled ? 'Disable' : 'Enable'}
+										</Button>
+									</form>
+									<Button
+										size="icon-sm"
+										variant="ghost"
+										aria-label="Delete the {guardrail.name} guardrail"
+										onclick={() => deleteGuardrail(guardrail)}
+									>
+										<TrashIcon />
+									</Button>
+								</div>
+							{/if}
+						</div>
+						<ul class="flex flex-wrap gap-1.5">
+							{#each guardrail.permissions as permission (permission)}
+								<li>
+									<Badge variant="danger" class="font-mono">{permission}</Badge>
+								</li>
+							{/each}
+						</ul>
+					</div>
+				{/each}
+			</div>
+		{/if}
+
+		{#snippet footer()}
+			<span>
+				A guardrail matches a permission and, optionally, a scope, principal selector and condition.
+				It denies even the owner, so disable it rather than working around it.
+			</span>
+		{/snippet}
+	</Panel>
+
+	<Panel
+		title="Access requests"
+		icon={KeyRoundIcon}
+		count={data.accessRequests.filter((request) => request.status === 'pending').length}
+		description="Ask for a role at a scope for a few hours. An approver who is not the requester grants a binding that expires on its own."
+		flush
+	>
+		{#snippet actions()}
+			<Button size="sm" variant="outline" onclick={openRequest}><ClockIcon />Request access</Button>
+		{/snippet}
+
+		{#if data.accessRequests.length === 0}
+			<div class="p-4">
+				<EmptyState
+					icon={KeyRoundIcon}
+					compact
+					title="No access requests"
+					description="A request names a role, a scope, a reason and a duration of at most eight hours. It expires if nobody decides it within 24 hours."
+				>
+					<Button size="sm" variant="outline" onclick={openRequest}>Request access</Button>
+				</EmptyState>
+			</div>
+		{:else}
+			<Table.Root>
+				<Table.Header class="bg-muted/45">
+					<Table.Row>
+						<Table.Head class="pl-4">Requester</Table.Head>
+						<Table.Head>Role and scope</Table.Head>
+						<Table.Head class="hidden lg:table-cell">Duration</Table.Head>
+						<Table.Head class="hidden xl:table-cell">Reason</Table.Head>
+						<Table.Head>Status</Table.Head>
+						<Table.Head class="w-0 pr-4"><span class="sr-only">Actions</span></Table.Head>
+					</Table.Row>
+				</Table.Header>
+				<Table.Body>
+					{#each data.accessRequests as accessRequest (accessRequest.id)}
+						<Table.Row>
+							<Table.Cell class="pl-4">
+								<p class="text-sm font-medium">{memberName(accessRequest.requesterId)}</p>
+								<p class="text-xs text-muted-foreground">
+									{formatDateTime(accessRequest.createdAt)}
+								</p>
+							</Table.Cell>
+							<Table.Cell>
+								<span class="font-mono text-sm">{accessRequest.roleName}</span>
+								<p class="mt-0.5 text-xs text-muted-foreground">
+									{scopeLabel(accessRequest.scope)}
+								</p>
+							</Table.Cell>
+							<Table.Cell class="hidden lg:table-cell">
+								<p class="text-sm">{durationLabel(accessRequest.durationSeconds)}</p>
+								{#if accessRequest.expiresAt !== null}
+									<p class="mt-0.5 text-xs text-muted-foreground">
+										{#if accessRequest.expiresAt <= data.now}
+											<Badge variant="danger">Expired</Badge>
+										{:else}
+											Ends {timeUntil(accessRequest.expiresAt)}
+										{/if}
+									</p>
+								{/if}
+							</Table.Cell>
+							<Table.Cell class="hidden max-w-64 xl:table-cell">
+								<p class="truncate text-xs" title={accessRequest.reason}>
+									{accessRequest.reason}
+								</p>
+								{#if accessRequest.changeRef}
+									<p class="mt-0.5 truncate font-mono text-xs text-muted-foreground">
+										{accessRequest.changeRef}
+									</p>
+								{/if}
+							</Table.Cell>
+							<Table.Cell>
+								<Badge variant={requestStatusVariant(accessRequest.status)}>
+									{accessRequest.status}
+								</Badge>
+							</Table.Cell>
+							<Table.Cell class="pr-4">
+								<div class="flex flex-wrap items-center justify-end gap-1">
+									{#if accessRequest.canDecide}
+										<form
+											method="POST"
+											action="?/approveAccessRequest"
+											use:enhance={submitThenNotify}
+										>
+											<input type="hidden" name="requestId" value={accessRequest.id} />
+											<Button type="submit" size="sm">
+												<CircleCheckIcon />Approve
+											</Button>
+										</form>
+										<form method="POST" action="?/denyAccessRequest" use:enhance={submitThenNotify}>
+											<input type="hidden" name="requestId" value={accessRequest.id} />
+											<Button type="submit" size="sm" variant="outline">
+												<BanIcon />Deny
+											</Button>
+										</form>
+									{/if}
+									{#if accessRequest.canCancel}
+										<form
+											method="POST"
+											action="?/cancelAccessRequest"
+											use:enhance={submitThenNotify}
+										>
+											<input type="hidden" name="requestId" value={accessRequest.id} />
+											<Button type="submit" size="sm" variant="ghost">
+												<XIcon />Cancel
+											</Button>
+										</form>
+									{/if}
+								</div>
+							</Table.Cell>
+						</Table.Row>
+					{/each}
+				</Table.Body>
+			</Table.Root>
+		{/if}
+
+		{#snippet footer()}
+			<span>
+				Approval creates a binding with an expiry. The requester can end it early; the audit log
+				records the request, the decision and the binding id.
 			</span>
 		{/snippet}
 	</Panel>
@@ -981,6 +1273,205 @@
 		</Field.Group>
 	</FormDialog>
 {/if}
+
+{#if data.accessCan.manageGuardrails}
+	<FormDialog
+		bind:open={guardrailOpen}
+		icon={LockIcon}
+		title="Create a guardrail"
+		description="Start from one of the IAM.md §9.2 templates. A guardrail denies, and a deny beats every allow."
+		action="?/createGuardrail"
+		submitLabel="Create guardrail"
+		size="lg"
+	>
+		<Field.Group>
+			<Field.Field>
+				<Field.Label for="guardrail-template">Template</Field.Label>
+				<NativeSelect.Root id="guardrail-template" name="template" required class="w-full">
+					<NativeSelect.Option value="">Pick a template</NativeSelect.Option>
+					{#each data.guardrailTemplates as template (template.key)}
+						<NativeSelect.Option value={template.key} disabled={!template.available}>
+							{template.name}{template.available ? '' : ' (not available yet)'}
+						</NativeSelect.Option>
+					{/each}
+				</NativeSelect.Root>
+				<Field.Description>
+					“Office only” is listed but cannot be created: it needs a negated IP condition, which the
+					engine does not support yet. MCP selectors are stored as written; the engine currently
+					selects by binding type, so “No destructive MCP” takes effect once it selects by principal
+					kind.
+				</Field.Description>
+			</Field.Field>
+
+			<Field.Field>
+				<Field.Label for="guardrail-name">
+					Name <span class="font-normal text-muted-foreground">optional</span>
+				</Field.Label>
+				<Input id="guardrail-name" name="name" maxlength={80} placeholder="Use the template name" />
+				<Field.Description>Shown in the list and the audit log.</Field.Description>
+			</Field.Field>
+
+			<div class="grid gap-4 sm:grid-cols-2">
+				<Field.Field>
+					<Field.Label for="guardrail-scope">Scope</Field.Label>
+					<NativeSelect.Root
+						id="guardrail-scope"
+						name="scopeType"
+						value={guardrailScopeType}
+						onchange={(event) => {
+							guardrailScopeType = event.currentTarget.value as 'org' | 'project';
+							guardrailScopeProject = '';
+						}}
+						class="w-full"
+					>
+						<NativeSelect.Option value="org">The whole organisation</NativeSelect.Option>
+						<NativeSelect.Option value="project">One project</NativeSelect.Option>
+					</NativeSelect.Root>
+				</Field.Field>
+
+				{#if guardrailScopeType === 'project'}
+					<Field.Field>
+						<Field.Label for="guardrail-project">Project</Field.Label>
+						<NativeSelect.Root
+							id="guardrail-project"
+							name="projectId"
+							required
+							bind:value={guardrailScopeProject}
+							class="w-full"
+						>
+							<NativeSelect.Option value="">Pick a project</NativeSelect.Option>
+							{#each data.projects as project (project.id)}
+								<NativeSelect.Option value={project.id}>{project.name}</NativeSelect.Option>
+							{/each}
+						</NativeSelect.Root>
+					</Field.Field>
+				{/if}
+			</div>
+		</Field.Group>
+	</FormDialog>
+{/if}
+
+<FormDialog
+	bind:open={requestOpen}
+	icon={KeyRoundIcon}
+	title="Request access"
+	description="Ask for a role at a scope for a few hours. Someone else with the authority to grant it must approve, and the binding expires on its own."
+	action="?/requestAccess"
+	submitLabel="Request access"
+	size="lg"
+>
+	<Field.Group>
+		<div class="grid gap-4 sm:grid-cols-2">
+			<Field.Field>
+				<Field.Label for="request-role">Role</Field.Label>
+				<NativeSelect.Root id="request-role" name="roleId" required class="w-full">
+					<NativeSelect.Option value="">Pick a role</NativeSelect.Option>
+					{#each data.roles as role (role.id)}
+						<NativeSelect.Option value={role.id}>
+							{role.name}{role.builtIn ? ' (built-in)' : ' (custom)'}
+						</NativeSelect.Option>
+					{/each}
+				</NativeSelect.Root>
+			</Field.Field>
+
+			<Field.Field>
+				<Field.Label for="request-duration">Duration</Field.Label>
+				<NativeSelect.Root id="request-duration" name="durationSeconds" value="3600" class="w-full">
+					<NativeSelect.Option value="1800">30 minutes</NativeSelect.Option>
+					<NativeSelect.Option value="3600">1 hour</NativeSelect.Option>
+					<NativeSelect.Option value="7200">2 hours</NativeSelect.Option>
+					<NativeSelect.Option value="14400">4 hours</NativeSelect.Option>
+					<NativeSelect.Option value="28800">8 hours</NativeSelect.Option>
+				</NativeSelect.Root>
+				<Field.Description>The maximum is eight hours.</Field.Description>
+			</Field.Field>
+		</div>
+
+		<div class="grid gap-4 sm:grid-cols-2">
+			<Field.Field>
+				<Field.Label for="request-scope">Scope</Field.Label>
+				<NativeSelect.Root
+					id="request-scope"
+					name="scopeType"
+					value={requestScopeType}
+					onchange={(event) => {
+						requestScopeType = event.currentTarget.value as ScopeType;
+						requestScopeProject = '';
+						requestScopeEnvironment = '';
+					}}
+					class="w-full"
+				>
+					<NativeSelect.Option value="org">The whole organisation</NativeSelect.Option>
+					<NativeSelect.Option value="project">One project</NativeSelect.Option>
+					<NativeSelect.Option value="environment">One environment</NativeSelect.Option>
+				</NativeSelect.Root>
+			</Field.Field>
+
+			{#if requestScopeType !== 'org'}
+				<Field.Field>
+					<Field.Label for="request-project">Project</Field.Label>
+					<NativeSelect.Root
+						id="request-project"
+						name="projectId"
+						required
+						bind:value={requestScopeProject}
+						onchange={() => (requestScopeEnvironment = '')}
+						class="w-full"
+					>
+						<NativeSelect.Option value="">Pick a project</NativeSelect.Option>
+						{#each data.projects as project (project.id)}
+							<NativeSelect.Option value={project.id}>{project.name}</NativeSelect.Option>
+						{/each}
+					</NativeSelect.Root>
+				</Field.Field>
+			{/if}
+		</div>
+
+		{#if requestScopeType === 'environment'}
+			<Field.Field>
+				<Field.Label for="request-environment">Environment</Field.Label>
+				<NativeSelect.Root
+					id="request-environment"
+					name="environmentId"
+					required
+					bind:value={requestScopeEnvironment}
+					class="w-full"
+				>
+					<NativeSelect.Option value="">Pick an environment</NativeSelect.Option>
+					{#each projectById.get(requestScopeProject)?.environments ?? [] as environment (environment.id)}
+						<NativeSelect.Option value={environment.id}>{environment.name}</NativeSelect.Option>
+					{/each}
+				</NativeSelect.Root>
+			</Field.Field>
+		{/if}
+
+		<Field.Field>
+			<Field.Label for="request-reason">Reason</Field.Label>
+			<Textarea
+				id="request-reason"
+				name="reason"
+				rows={3}
+				required
+				minlength={3}
+				maxlength={500}
+				placeholder="What will you do, and why now?"
+			/>
+			<Field.Description>Shown to the approver and kept in the audit log.</Field.Description>
+		</Field.Field>
+
+		<Field.Field>
+			<Field.Label for="request-change-ref">
+				Change reference <span class="font-normal text-muted-foreground">optional</span>
+			</Field.Label>
+			<Input
+				id="request-change-ref"
+				name="changeRef"
+				maxlength={200}
+				placeholder="A ticket, deploy or incident id"
+			/>
+		</Field.Field>
+	</Field.Group>
+</FormDialog>
 
 {#snippet permissionChips(permissions: readonly Permission[])}
 	<ul class="mt-2 flex flex-wrap gap-1.5">

@@ -1,7 +1,6 @@
 import { error, fail } from '@sveltejs/kit';
 import {
 	REGISTRY_MIRROR_UPSTREAMS,
-	canAdministerPlatform,
 	hasPermission,
 	type RegistryMirrorUpstream,
 	type RegistrySettingsUpdate
@@ -17,7 +16,7 @@ export const load: PageServerLoad = ({ locals }) => {
 	const principal = locals.principal!;
 	if (!hasPermission(principal, 'image:pull'))
 		error(403, 'You need permission to pull images to see registry credentials.');
-	const canAdminister = canAdministerPlatform(principal);
+	const canAdminister = core.ctx.platformIam.canAdminister(principal);
 	return {
 		credentials: core.registryCredentials.list(principal),
 		canEdit: hasPermission(principal, 'image:credentials'),

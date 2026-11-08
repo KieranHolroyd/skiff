@@ -1,6 +1,5 @@
 import { error, fail } from '@sveltejs/kit';
 import {
-	canAdministerPlatform,
 	emailOrgStates,
 	type EmailOrgState,
 	type EmailOrgView,
@@ -26,7 +25,7 @@ import type { Actions, PageServerLoad } from './$types';
 const MAIL_CAPABILITY = 'mail';
 
 function requirePlatformAdmin(locals: App.Locals): Principal {
-	if (!locals.principal || !canAdministerPlatform(locals.principal))
+	if (!locals.principal || !core.ctx.platformIam.canAdminister(locals.principal))
 		error(403, 'Only a platform admin can configure email.');
 	return locals.principal;
 }

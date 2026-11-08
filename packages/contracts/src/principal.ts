@@ -81,6 +81,15 @@ export function canAdministerPlatform(principal: Principal): boolean {
 	return (principal.platformAdmin === true && principal.kind === 'user') || principal.kind === 'system';
 }
 
+/**
+ * Platform-scope maintenance such as a fleet-wide prune: D129's session-only rule does not apply
+ * here yet (docs/OPERATIONS.md §5.2 leaves API keys open), so a platform admin's API key may run it
+ * while OAuth and MCP may not. `system` is the installer.
+ */
+export function canMaintainPlatform(principal: Principal): boolean {
+	return canAdministerPlatform(principal) || (principal.platformAdmin === true && principal.kind === 'apiKey');
+}
+
 export function hasPermission(principal: Principal, permission: Permission): boolean {
 	return principal.permissions.has(permission);
 }

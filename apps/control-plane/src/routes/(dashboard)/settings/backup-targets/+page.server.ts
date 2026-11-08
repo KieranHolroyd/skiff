@@ -1,5 +1,5 @@
 import { error, fail } from '@sveltejs/kit';
-import { canAdministerPlatform, hasPermission } from '@skiff/contracts';
+import { hasPermission } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -11,7 +11,7 @@ export const load: PageServerLoad = ({ locals }) => {
 	return {
 		targets: core.backupTargets.list(principal),
 		canEdit: hasPermission(principal, 'database:update'),
-		canPlatform: canAdministerPlatform(principal)
+		canPlatform: core.ctx.platformIam.canAdminister(principal)
 	};
 };
 

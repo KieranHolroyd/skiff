@@ -1,6 +1,5 @@
 import { error, fail } from '@sveltejs/kit';
 import {
-	canAdministerPlatform,
 	hasPermission,
 	logDrainFormats,
 	logDrainLevels,
@@ -20,7 +19,7 @@ export const load: PageServerLoad = ({ locals }) => {
 	return {
 		drains: core.logDrains.list(principal),
 		canEdit,
-		canPlatform: canAdministerPlatform(principal),
+		canPlatform: core.ctx.platformIam.canAdminister(principal),
 		projects: canEdit
 			? core.projects.list(principal).map((project) => ({ slug: project.slug, name: project.name }))
 			: []

@@ -57,8 +57,12 @@ import type { IngressHaService } from './ingress-ha.ts';
 import type { FailoverService } from './failover-service.ts';
 import type { ClusterConfigService } from './cluster-config-service.ts';
 import type { IamService } from './iam/service.ts';
+import type { GovernanceService } from './iam/governance.ts';
+import type { PlatformIamService } from './platform-iam.ts';
 import type { ServiceAccountService } from './service-accounts.ts';
 import type { AccessKeyService } from './access-keys.ts';
+import type { SigningKeyService } from './iam/keys.ts';
+import type { TokenService } from './iam/sts.ts';
 
 /**
  * Shared dependency object. Service instances are attached after construction (in `createCore`)
@@ -149,10 +153,18 @@ export interface CoreContext {
 	cluster: ClusterConfigService;
 	/** Identity and access management: bindings, roles, groups and the decision cache (IAM.md I1). */
 	iam: IamService;
+	/** Guardrails and just-in-time access (IAM.md I11/I22, §9.2–§9.4). */
+	governance: GovernanceService;
+	/** Platform roles and bindings at `{ type: 'platform' }` (IAM.md I24, D129). */
+	platformIam: PlatformIamService;
 	/** Service accounts: org-owned machine principals (`sa_…`, IAM.md I13). */
 	serviceAccounts: ServiceAccountService;
 	/** Org-bound access keys and their verification (IAM.md I14). */
 	accessKeys: AccessKeyService;
+	/** The platform signing-key ring: one issuer and one JWKS for every token (IAM.md I15). */
+	signingKeys: SigningKeyService;
+	/** RFC 8693 token exchange against federation trusts (IAM.md I16–I17). */
+	sts: TokenService;
 	/** Functions: Workers-compatible workloads on workerd (D110). */
 	functions: FunctionService;
 }

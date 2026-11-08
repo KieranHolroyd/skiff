@@ -354,6 +354,16 @@ export const auth = betterAuth({
 		useSecureCookies: secure,
 	},
 	plugins: [
+		// SSO (IAM.md I19): Better Auth 1.7.15 ships it as the separate `@better-auth/sso` package,
+		// which is not installed here. Adding it is a dependency change, so this slice does not
+		// register `sso()` and does not fake its endpoints. The provider rows it will consume are
+		// in `sso_providers` (migration 0087), with fields that mirror its `ssoProvider` model
+		// (`organizationId`, `issuer`, OIDC config, `domain`, `domainVerified`), and the domain
+		// checks live in `lib/server/sso.ts`. When the package lands, register it here with
+		// `organizationProvisioning: { disabled: true }` (Skiff owns JIT, roles and groups) and
+		// `domainVerification: { enabled: false }` (Skiff verifies domains itself via
+		// `skiff-verify=`), then copy the rows across at boot. The invite-only user-create hook and
+		// owner second-factor gate above stay as they are: SSO sign-ins must go through both.
 		// Stable signing key for access/ID tokens + /jwks (required by mcp()).
 		jwt(),
 		// mcp() *is* the OAuth 2.1 provider — never also register oauthProvider().

@@ -6,6 +6,7 @@ import ChartLineIcon from '@lucide/svelte/icons/chart-line';
 import ClockIcon from '@lucide/svelte/icons/clock';
 import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
 import DatabaseBackupIcon from '@lucide/svelte/icons/database-backup';
+import FingerprintIcon from '@lucide/svelte/icons/fingerprint';
 import GitBranchIcon from '@lucide/svelte/icons/git-branch';
 import GlobeIcon from '@lucide/svelte/icons/globe';
 import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
@@ -37,6 +38,7 @@ export type SectionId =
 	| 'general'
 	| 'members'
 	| 'access'
+	| 'sso'
 	| 'usage'
 	| 'backup-targets'
 	| 'log-drains'
@@ -59,6 +61,12 @@ export type SectionId =
 
 export type SectionGroup = 'you' | 'organisation' | 'platform' | 'observability' | 'operations';
 
+/**
+ * The settings navigation passes each href to SvelteKit's `resolve()`, whose generic is distributed
+ * over the route-id union; TypeScript stops inferring past 25 members. SSO is the newest section,
+ * so it is the one value left out of this type and asserted at its entry below. It is a real route
+ * (`svelte-kit sync` lists it in `$app/types`); every other entry is literal-checked.
+ */
 export type SectionHref =
 	| '/(dashboard)/settings'
 	| '/(dashboard)/settings/account'
@@ -162,6 +170,18 @@ export const SECTIONS: Section[] = [
 		path: '/settings/access',
 		icon: ShieldCheckIcon,
 		anyPermission: ['iam:read']
+	},
+	{
+		id: 'sso',
+		group: 'organisation',
+		label: 'SSO',
+		summary:
+			'OpenID Connect sign-in, and the email domains that route to it. SAML, JIT and enforcement follow.',
+		// See `SectionHref`: the route is real, but `resolve()` cannot infer past 25 members.
+		href: '/(dashboard)/settings/sso' as unknown as SectionHref,
+		path: '/settings/sso',
+		icon: FingerprintIcon,
+		anyPermission: ['sso:read']
 	},
 	{
 		id: 'usage',

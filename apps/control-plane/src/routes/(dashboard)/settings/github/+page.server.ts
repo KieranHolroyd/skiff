@@ -1,5 +1,5 @@
 import { error, fail } from '@sveltejs/kit';
-import { canAdministerPlatform, hasPermission } from '@skiff/contracts';
+import { hasPermission } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -11,7 +11,7 @@ import type { Actions, PageServerLoad } from './$types';
 export const load: PageServerLoad = ({ locals, url }) => {
 	const principal = locals.principal!;
 	if (!hasPermission(principal, 'build:read')) error(403, 'You need permission to read builds to see GitHub settings.');
-	const isAdmin = canAdministerPlatform(principal);
+	const isAdmin = core.ctx.platformIam.canAdminister(principal);
 	const app = core.githubApp.view(principal);
 	const installations = core.githubApp.installations(principal);
 	return {

@@ -64,8 +64,13 @@ import { FunctionService } from './functions.ts';
 import { TemplateService } from './templates.ts';
 import { BlueprintService } from './blueprints.ts';
 import { IamService } from './iam/service.ts';
+import { GovernanceService } from './iam/governance.ts';
+import { PlatformIamService } from './platform-iam.ts';
+import { configurePrunePlatformIam } from './operations/prune.ts';
 import { ServiceAccountService } from './service-accounts.ts';
 import { AccessKeyService } from './access-keys.ts';
+import { SigningKeyService } from './iam/keys.ts';
+import { TokenService } from './iam/sts.ts';
 
 export * from './config.ts';
 export * from './context.ts';
@@ -76,6 +81,10 @@ export * from './artifact.ts';
 export * from './object-store.ts';
 export * from './orgs.ts';
 export * from './iam/service.ts';
+export * from './iam/governance.ts';
+export * from './iam/keys.ts';
+export * from './iam/sts.ts';
+export * from './platform-iam.ts';
 export * from './service-accounts.ts';
 export * from './access-keys.ts';
 export * from './projects.ts';
@@ -231,10 +240,18 @@ export interface Core {
 	cluster: ClusterConfigService;
 	/** Identity and access management (IAM.md I1). */
 	iam: IamService;
+	/** Guardrails and just-in-time access (IAM.md I11/I22, §9.2–§9.4). */
+	governance: GovernanceService;
+	/** Platform roles and bindings at `{ type: 'platform' }` (IAM.md I24, D129). */
+	platformIam: PlatformIamService;
 	/** Service accounts: org-owned machine principals (`sa_…`, IAM.md I13). */
 	serviceAccounts: ServiceAccountService;
 	/** Org-bound access keys and their verification (IAM.md I14). */
 	accessKeys: AccessKeyService;
+	/** The platform signing-key ring: one issuer and one JWKS for every token (IAM.md I15). */
+	signingKeys: SigningKeyService;
+	/** RFC 8693 token exchange against federation trusts (IAM.md I16–I17). */
+	sts: TokenService;
 	/** Email: Skiff's self-hosted SES (docs/EMAIL.md). */
 	email: EmailService;
 	/** Log drains: forward stored log lines to webhooks and OTLP receivers (DESIGN §8). */
@@ -267,8 +284,18 @@ export function createCore(options: CoreOptions): Core {
 	ctx.policies = new PlatformPolicyService(ctx);
 	ctx.audit = new AuditService(ctx);
 	ctx.iam = new IamService(ctx);
+	ctx.governance = new GovernanceService(ctx);
+	ctx.platformIam = new PlatformIamService(ctx);
+	// Seed `platform-admin` from the Better Auth admin flag once, best effort. A boot before Better
+	// Auth's tables exist is covered by `sync(userId)` on demand; this is not a schema migration.
+	ctx.platformIam.syncAll();
+	// The prune action authorises before a RunContext exists, so it reads the platform service the
+	// core was built with. (Action definitions in this codebase are module-level singletons.)
+	configurePrunePlatformIam(ctx.platformIam);
 	ctx.serviceAccounts = new ServiceAccountService(ctx);
 	ctx.accessKeys = new AccessKeyService(ctx);
+	ctx.signingKeys = new SigningKeyService(ctx);
+	ctx.sts = new TokenService(ctx);
 	ctx.quota = new QuotaService(ctx);
 	ctx.projects = new ProjectService(ctx);
 	ctx.releases = new ReleaseService(ctx);
@@ -394,8 +421,12 @@ export function createCore(options: CoreOptions): Core {
 		failover: ctx.failover,
 		cluster: ctx.cluster,
 		iam: ctx.iam,
+		governance: ctx.governance,
+		platformIam: ctx.platformIam,
 		serviceAccounts: ctx.serviceAccounts,
 		accessKeys: ctx.accessKeys,
+		signingKeys: ctx.signingKeys,
+		sts: ctx.sts,
 		logDrains: new LogDrainService(ctx, options.version),
 	};
 }

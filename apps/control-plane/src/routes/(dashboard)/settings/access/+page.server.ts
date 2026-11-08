@@ -1,5 +1,16 @@
 import { error, fail } from '@sveltejs/kit';
-import { permissionCatalog, type Permission, type ScopeRef } from '@skiff/contracts';
+import {
+	GUARDRAIL_TEMPLATES,
+	ValidationError,
+	type AccessRequestView,
+	type GuardrailView
+} from '@skiff/core';
+import {
+	permissionCatalog,
+	type Permission,
+	type Principal,
+	type ScopeRef
+} from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
 import { failStatus, formOptionalString, formString, toFormFailure } from '../../_lib/errors.js';
 import { RESOURCE_LABELS } from '../_lib/resources.js';
@@ -42,6 +53,29 @@ function futureTime(value: string): number | 'invalid' | 'past' | undefined {
 
 function failure(cause: unknown) {
 	return fail(failStatus(cause), toFormFailure(cause));
+}
+
+/**
+ * The scope form shared by the guardrail, binding and just-in-time dialogs: the organisation, one
+ * project, or one environment. Throws a `ValidationError`, which `failure` turns into a field-free
+ * form failure.
+ */
+function formScope(principal: Principal, data: FormData): ScopeRef {
+	const type = formString(data, 'scopeType') || 'org';
+	if (type === 'org') return { type: 'org' };
+	const projectId = formString(data, 'projectId');
+	const project = core.projects.list(principal).find((entry) => entry.id === projectId);
+	if (!project) throw new ValidationError('Pick a project for this scope.');
+	if (type === 'project') return { type: 'project', id: project.id };
+	if (type === 'environment') {
+		const environmentId = formString(data, 'environmentId');
+		const environment = core.environments
+			.rows(project.id)
+			.find((entry) => entry.id === environmentId);
+		if (!environment) throw new ValidationError('Pick an environment in that project.');
+		return { type: 'environment', id: environment.id, projectId: project.id };
+	}
+	throw new ValidationError('Pick the organisation, a project or an environment.');
 }
 
 export const load: PageServerLoad = ({ locals }) => {
@@ -131,10 +165,23 @@ export const load: PageServerLoad = ({ locals }) => {
 		permissions
 	}));
 
+	let guardrails: GuardrailView[] = [];
+	let accessRequests: AccessRequestView[] = [];
+	try {
+		guardrails = core.governance.list(principal);
+		accessRequests = core.governance.list(principal, {});
+	} catch {
+		// The access_requests migration may not have run yet on an upgrading install; the rest of
+		// the page still renders and the sections say they are empty.
+	}
+
 	return {
 		roles: core.iam.listRoles(principal.orgId),
 		bindings: core.iam.listBindings(principal.orgId),
 		groups: core.iam.listGroups(principal.orgId),
+		guardrails,
+		guardrailTemplates: GUARDRAIL_TEMPLATES,
+		accessRequests,
 		members,
 		groupMembers,
 		projects,
@@ -143,9 +190,11 @@ export const load: PageServerLoad = ({ locals }) => {
 		accessCan: {
 			manageRoles: core.iam.can(principal, 'iam:manage-roles', org),
 			manageBindings: core.iam.can(principal, 'iam:manage-bindings', org),
-			manageGroups: core.iam.can(principal, 'iam:manage-groups', org)
+			manageGroups: core.iam.can(principal, 'iam:manage-groups', org),
+			manageGuardrails: core.iam.can(principal, 'iam:manage-guardrails', org)
 		},
 		showEmails,
+		currentUserId: principal.userId,
 		now: Date.now()
 	};
 };
@@ -351,6 +400,119 @@ export const actions: Actions = {
 		try {
 			core.iam.removeGroupMember(principal, groupId, userId);
 			return { success: 'Member removed from the group.' };
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	createGuardrail: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const template = formString(data, 'template');
+		if (!template)
+			return fail(400, {
+				message: 'Pick a guardrail template.',
+				fieldErrors: { template: 'Pick a template.' }
+			});
+		try {
+			core.governance.create(principal, {
+				template,
+				name: formOptionalString(data, 'name'),
+				scope: formScope(principal, data)
+			});
+			return { success: 'Guardrail created.' };
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	toggleGuardrail: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const guardrailId = formString(data, 'guardrailId');
+		if (!guardrailId) return fail(400, { message: 'Missing guardrail id.' });
+		try {
+			core.governance.update(principal, guardrailId, {
+				enabled: formString(data, 'enabled') === 'true'
+			});
+			return { success: 'Guardrail updated.' };
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	deleteGuardrail: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const guardrailId = formString(await request.formData(), 'guardrailId');
+		if (!guardrailId) return fail(400, { message: 'Missing guardrail id.' });
+		try {
+			core.governance.delete(principal, guardrailId);
+			return { success: 'Guardrail deleted.' };
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	requestAccess: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const roleId = formString(data, 'roleId');
+		if (!roleId)
+			return fail(400, {
+				message: 'Pick a role.',
+				fieldErrors: { roleId: 'Pick a role.' }
+			});
+		const reason = formString(data, 'reason');
+		if (reason.length < 3)
+			return fail(400, {
+				message: 'Give a reason for the request.',
+				fieldErrors: { reason: 'At least 3 characters.' }
+			});
+		try {
+			core.governance.request(principal, {
+				roleId,
+				scope: formScope(principal, data),
+				durationSeconds: Number(formString(data, 'durationSeconds') || '3600'),
+				reason,
+				changeRef: formOptionalString(data, 'changeRef')
+			});
+			return { success: 'Access requested. An approver will decide it.' };
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	approveAccessRequest: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const requestId = formString(await request.formData(), 'requestId');
+		if (!requestId) return fail(400, { message: 'Missing request id.' });
+		try {
+			core.governance.approve(principal, requestId);
+			return { success: 'Access approved and granted.' };
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	denyAccessRequest: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const requestId = formString(await request.formData(), 'requestId');
+		if (!requestId) return fail(400, { message: 'Missing request id.' });
+		try {
+			core.governance.deny(principal, requestId);
+			return { success: 'Access denied.' };
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	cancelAccessRequest: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const requestId = formString(await request.formData(), 'requestId');
+		if (!requestId) return fail(400, { message: 'Missing request id.' });
+		try {
+			core.governance.cancel(principal, requestId);
+			return { success: 'Access request cancelled.' };
 		} catch (cause) {
 			return failure(cause);
 		}
