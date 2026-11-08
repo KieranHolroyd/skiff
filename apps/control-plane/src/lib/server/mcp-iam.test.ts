@@ -81,7 +81,7 @@ const fakeCore = {
 };
 
 mock.module('./core', () => ({ core: fakeCore }));
-mock.module('./config', () => ({ authSecret: 'test-secret' }));
+mock.module('./config', () => ({ platformOrigin: 'https://control.test', authSecret: 'test-secret' }));
 mock.module('./principal', () => principalStub({ principalFromMcp: () => null }));
 
 const { skiffToolDefinitions } = await import('./mcp');

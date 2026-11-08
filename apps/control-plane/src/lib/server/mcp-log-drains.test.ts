@@ -39,7 +39,7 @@ realCore.logDrains.fetch = async (input) => {
 realCore.logDrains.resolveHost = async () => ['203.0.113.10'];
 
 mock.module('./core', () => ({ core: realCore }));
-mock.module('./config', () => ({ authSecret: 'test-secret' }));
+mock.module('./config', () => ({ platformOrigin: 'https://control.test', authSecret: 'test-secret' }));
 mock.module('./principal', () => principalStub({ principalFromMcp: () => null }));
 
 const { skiffToolDefinitions } = await import('./mcp');
