@@ -8,7 +8,7 @@ async function withServer<T>(
 	handler: (request: Request) => Response | Promise<Response>,
 	run: (server: ReturnType<typeof Bun.serve>) => Promise<T>,
 ): Promise<T> {
-	const server = Bun.serve({ port: 0, fetch: handler });
+	const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: handler });
 	try {
 		return await run(server);
 	} finally {

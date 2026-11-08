@@ -41,10 +41,10 @@ export function testTelemetryStore(options: Partial<TelemetryOptions> = {}): Tel
 	});
 }
 
-/** Close the store and drop its database. */
+/** Close the store and drop its database (nothing to drop when no server answered). */
 export async function disposeTelemetryStore(store: TelemetryStore): Promise<void> {
 	try {
-		await store.dropDatabase();
+		if (hasClickHouse) await store.dropDatabase();
 	} finally {
 		await store.close();
 	}

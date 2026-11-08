@@ -66,7 +66,9 @@ export const REVIEWED_DESTRUCTIVE_MIGRATIONS: Readonly<Record<string, string>> =
 	'0033_drop_database_console.sql':
 		'D96: drops the retired D60 studio console columns; nothing reads them after the cutover.',
 	'0074_pipelines_phase2.sql':
-		'Table rebuild: pipeline_triggers is copied to a new table without the event CHECK, then the old one is dropped and the new one renamed. No data is lost.'
+		'Table rebuild: pipeline_triggers is copied to a new table without the event CHECK, then the old one is dropped and the new one renamed. No data is lost.',
+	'0094_git_providers.sql':
+		'D173/D178: pipeline_repositories and registry_oidc_trusts are rebuilt without the GitHub-only provider CHECK (SQLite cannot alter a CHECK); rows are copied unchanged and indexes recreated. No data is lost.'
 });
 
 export interface MigrationCheckResult {
