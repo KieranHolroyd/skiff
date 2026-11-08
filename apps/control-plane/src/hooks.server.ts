@@ -2,7 +2,7 @@ import { building } from '$app/env';
 import { svelteKitHandler } from 'better-auth/svelte-kit';
 import { getMigrations } from 'better-auth/db/migration';
 import type { RequestEvent } from '@sveltejs/kit';
-import type { Handle, ServerInit } from '@sveltejs/kit/hooks';
+import type { Handle, HandleServerError, ServerInit } from '@sveltejs/kit/hooks';
 import { auth, backfillApiKeyRateLimits, ensurePlatformAdmin } from '#lib/server/auth.js';
 import { contentDomain, platformOrigin } from '#lib/server/config.js';
 import { featureEnabled, reconcilePlatformDomains, startFailoverLoop } from '@skiff/core';
@@ -18,6 +18,16 @@ import { enforceOwnerSecondFactor, userHasSecondFactor } from '#lib/server/secon
 import { isExemptBeforeSecondFactor, secondFactorState } from '#lib/server/second-factor-policy.js';
 import { requireSsoRefusalForUser, signInRefusalForUser } from '#lib/server/sso-enforcement.js';
 import { syncSsoProviders } from '#lib/server/sso-sync.js';
+import {
+	reportBackgroundError,
+	reportErrorResponse,
+	reportRequestError,
+	setServerErrorSink,
+	withErrorContext,
+} from '#lib/server/server-errors.js';
+
+// Settings → Server errors records into the core's store from here on (docs/SERVER-ERRORS.md).
+setServerErrorSink(core.serverErrors);
 
 /**
  * Apply Better Auth's schema on boot.
@@ -66,7 +76,7 @@ export const init: ServerInit = async () => {
 	const global = globalThis as typeof globalThis & { __skiffMaintenance?: ReturnType<typeof setInterval> };
 	if (!global.__skiffMaintenance) {
 		global.__skiffMaintenance = setInterval(() => {
-			void core.maintenance.run().catch((error) => console.error('[maintenance]', error));
+			void core.maintenance.run().catch((error) => reportBackgroundError('maintenance', error));
 		}, 60_000);
 		global.__skiffMaintenance.unref?.();
 		// The failover controller (docs/CLUSTERING.md §8.3): ticks every `controlPlane.renewSeconds`
@@ -82,13 +92,13 @@ export const init: ServerInit = async () => {
 			onError: (error) => {
 				if (Date.now() - lastFailoverError < 60_000) return;
 				lastFailoverError = Date.now();
-				console.error('[failover]', error);
+				reportBackgroundError('failover', error);
 			},
 		});
 		// Metric alert rules (docs/ALERTS.md): each rule has its own interval (≥ 1 min); this
 		// tick only picks up the ones that are due, so a rule runs at most ~20 s late.
 		setInterval(() => {
-			void core.alerts.evaluateDue().catch((error) => console.error('[alerts]', error));
+			void core.alerts.evaluateDue().catch((error) => reportBackgroundError('alerts', error));
 		}, 20_000).unref?.();
 		// Jobs (plan 09): fire due crons every 10 s so a run starts close to its minute; the
 		// 60 s maintenance sweep also fires them, and a conditional update keeps each fire single.
@@ -96,21 +106,21 @@ export const init: ServerInit = async () => {
 			try {
 				core.jobs.scheduleDue();
 			} catch (error) {
-				console.error('[jobs]', error);
+				reportBackgroundError('jobs', error);
 			}
 		}, 10_000).unref?.();
 		// Log drains (DESIGN §8): ship new lines every 5 s. A drain is leased while it is delivered
 		// and a tick that is still running skips the next, so a slow receiver never overlaps itself.
 		setInterval(() => {
-			void core.logDrains.deliverDue().catch((error) => console.error('[log-drains]', error));
+			void core.logDrains.deliverDue().catch((error) => reportBackgroundError('log-drains', error));
 		}, 5_000).unref?.();
 		// Flows (docs/FLOWS.md): signals and starts advance runs at once; this loop handles retries
 		// after backoff, wait timeouts and cancels requested while another process held the run.
 		setInterval(() => {
 			try {
-				void core.flows.drive().settled.catch((error) => console.error('[flows]', error));
+				void core.flows.drive().settled.catch((error) => reportBackgroundError('flows', error));
 			} catch (error) {
-				console.error('[flows]', error);
+				reportBackgroundError('flows', error);
 			}
 		}, 5_000).unref?.();
 		// Pick up mass operations whose runner died with the previous process (docs/OPERATIONS.md §2.2).
@@ -119,13 +129,44 @@ export const init: ServerInit = async () => {
 				const resumed = core.operations.resume();
 				if (resumed.length) console.info(`[operations] resumed ${resumed.length} operation(s)`);
 			} catch (error) {
-				console.error('[operations] resume failed:', error);
+				reportBackgroundError('operations', error);
 			}
 		}, 65_000).unref?.();
 	}
 };
 
-export const handle: Handle = async ({ event, resolve }) => {
+/**
+ * Every request runs inside an error context (Settings → Server errors, docs/SERVER-ERRORS.md):
+ * exceptions are recorded by `handleError` and the REST API's `errorResponse`, and a 5xx answered
+ * without one is recorded here as a bare response.
+ */
+export const handle: Handle = ({ event, resolve }) =>
+	withErrorContext(event, async () => {
+		try {
+			const response = await handleRequest({ event, resolve });
+			if (response.status >= 500) reportErrorResponse(event, response);
+			return response;
+		} catch (error) {
+			// `resolve` turns load and endpoint errors into responses; only our own hook code lands here.
+			reportRequestError(error, { event });
+			throw error;
+		}
+	});
+
+/**
+ * Unexpected errors in loads, actions and endpoints, recorded with their request. App errors
+ * (`error(…)`), framework errors (404s) and validation errors are expected and left alone. The
+ * issue id becomes the error page's reference so an admin can find it in Settings.
+ */
+export const handleError: HandleServerError = (caught) => {
+	if (caught.kind !== 'unknown') return;
+	const { error, event } = caught;
+	console.error(`[${event.request.method} ${event.route.id ?? event.url.pathname}]`, error);
+	const errorId = reportRequestError(error, { event, status: 500 });
+	return errorId ? { errorId } : undefined;
+};
+
+const handleRequest: Handle = async ({ event, resolve }) => {
 	// Dev server only: serve `<slug>.localhost` content hosts straight from the local object store
 	// instead of requiring the agent + Caddy. Production never reaches this branch.
 	if (isDevContentHost(event.url.hostname)) return serveDevContent(event);

@@ -1,5 +1,6 @@
 import ActivityIcon from '@lucide/svelte/icons/activity';
 import BellRingIcon from '@lucide/svelte/icons/bell-ring';
+import BugIcon from '@lucide/svelte/icons/bug';
 import Building2Icon from '@lucide/svelte/icons/building-2';
 import ChartColumnIcon from '@lucide/svelte/icons/chart-column';
 import ChartLineIcon from '@lucide/svelte/icons/chart-line';
@@ -70,6 +71,7 @@ export type SectionId =
 	| 'assistant'
 	| 'telemetry'
 	| 'metrics'
+	| 'errors'
 	| 'high-availability'
 	| 'storage'
 	| 'shares'
@@ -89,10 +91,9 @@ export type SectionGroup =
 
 /**
  * The settings navigation passes each href to SvelteKit's `resolve()`, whose generic is distributed
- * over the route-id union; TypeScript stops inferring past 25 members. SSO, Skiff Access and User
- * pools are the newest sections, so they are left out of this type and asserted at their entries
- * below. All are real routes (`svelte-kit sync` lists them in `$app/types`); every other entry is
- * literal-checked.
+ * over the route-id union; TypeScript stops inferring past 25 members. SSO, Skiff Access, User
+ * pools and Server errors are the newest sections, so they are left out of this type and asserted
+ * at their entries below. All are real routes (`svelte-kit sync` lists them in `$app/types`); every other entry is literal-checked.
  */
 export type SectionHref =
 	| '/(dashboard)/settings'
@@ -305,6 +306,18 @@ export const SECTIONS: Section[] = [
 		path: '/settings/metrics',
 		icon: ChartLineIcon,
 		ownerOnly: true
+	},
+	{
+		id: 'errors',
+		group: 'observability',
+		label: 'Server errors',
+		summary:
+			'Exceptions and 5xx answers from the control plane itself, grouped into issues you can resolve or ignore.',
+		// See `SectionHref`: the route is real, but `resolve()` cannot infer past 25 members.
+		href: '/(dashboard)/settings/errors' as unknown as SectionHref,
+		path: '/settings/errors',
+		icon: BugIcon,
+		platformAdmin: true
 	},
 	{
 		id: 'domains',

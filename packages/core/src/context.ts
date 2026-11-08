@@ -66,6 +66,7 @@ import type { SigningKeyService } from './iam/keys.ts';
 import type { TokenService } from './iam/sts.ts';
 import type { AccessPolicyService } from './iam/access-policies.ts';
 import type { UserPoolService } from './user-pools.ts';
+import type { ServerErrorService } from './server-errors.ts';
 
 /**
  * Shared dependency object. Service instances are attached after construction (in `createCore`)
@@ -160,6 +161,8 @@ export interface CoreContext {
 	governance: GovernanceService;
 	/** Per-organisation sign-in policy (IAM.md I21, §8.5). */
 	authPolicy: AuthPolicyService;
+	/** The control plane's own error tracker (docs/SERVER-ERRORS.md). */
+	serverErrors: ServerErrorService;
 	/** Platform roles and bindings at `{ type: 'platform' }` (IAM.md I24, D129). */
 	platformIam: PlatformIamService;
 	/** Service accounts: org-owned machine principals (`sa_…`, IAM.md I13). */

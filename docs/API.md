@@ -81,6 +81,8 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | POST | `/platform/storage/disks/:id/profile` | platform admin **session** | benchmark the disk (seq MB/s, 4 KiB IOPS, sync-write latency) → 202; the result lands on the disk (`profile`) |
 | PUT | `/platform/storage/defaults` | platform admin **session** | `{ defaults: [{ kind: databases\|object-storage\|brokers\|app-volumes\|builds\|site-data, target: system\|fast\|bulk }] }`. The target each create form preselects (and the API uses when `storage` is omitted); a kind with no default uses the system disk. Never moves existing services |
 | POST | `/platform/storage/onboarding` | platform admin **session** | `{ state: done\|skipped }` |
+| GET/PATCH | `/platform/errors` | platform admin | Server errors (docs/SERVER-ERRORS.md): GET lists issues (`?status=unresolved\|resolved\|ignored\|all&source=&q=&before=&limit=`) with a summary and 24 hourly counts; PATCH `{ ids, status }` changes several at once (platform maintenance) |
+| GET/PATCH/DELETE | `/platform/errors/:id` | platform admin | one issue with its newest 50 events and hourly/daily counts; PATCH `{ status }`; DELETE removes it with its events (platform maintenance) |
 | GET | `/shares` | platform admin | cluster share registry (C3) |
 | POST | `/shares` | platform admin **session** | `{ name, protocol: nfs\|smb, server, exportPath, zone?, readOnly?, credentials?: { username, password, domain? } }`; SMB credentials are sealed and never returned |
 | GET/PATCH/DELETE | `/shares/:name` | platform admin **session** | read (with `mounts`), update or remove a share; server/export/mode changes and delete are refused while mounted; `credentials` rotates |

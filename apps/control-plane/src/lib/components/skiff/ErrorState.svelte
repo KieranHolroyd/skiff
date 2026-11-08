@@ -24,6 +24,10 @@
 		<Empty.Description>
 			{page.error?.message && page.error.message !== 'Not Found' ? page.error.message : ''}
 			<span class="block font-mono text-xs">Error {status}</span>
+			{#if page.error?.errorId}
+				<!-- Settings → Server errors finds the issue by this id. -->
+				<span class="block font-mono text-xs">Reference {page.error.errorId}</span>
+			{/if}
 		</Empty.Description>
 	</Empty.Header>
 	<Empty.Content>

@@ -5,7 +5,8 @@ Discord, Slack, Telegram, ntfy and Web Push; see [OPS.md §7](./OPS.md)):
 
 - **System alerts** are built in and need no setup: node offline, disk above 85%, certificate
   expiry, a 5xx spike after a promote, failed backups and restore drills, database and storage
-  budgets, and quotas. The maintenance loop raises them from heartbeats and SQLite state, so they
+  budgets, quotas, and new or returning control-plane errors
+  ([SERVER-ERRORS.md](./SERVER-ERRORS.md)). The maintenance loop raises them from heartbeats and SQLite state, so they
   work without the telemetry store.
 - **Metric alert rules** (D109) are user-defined outage and threshold alerts over the ClickHouse
   telemetry store: "a site returns mostly 5xx", "a database stopped reporting", "p95 latency above

@@ -7,6 +7,10 @@ declare global {
 	const __SKIFF_VERSION__: string;
 
 	namespace App {
+		interface Error {
+			/** Settings → Server errors issue id, on unexpected (5xx) errors. */
+			errorId?: string;
+		}
 		interface Locals {
 			user?: Session['user'];
 			session?: Session['session'];

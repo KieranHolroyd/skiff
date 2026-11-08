@@ -1,4 +1,5 @@
 import { ConflictError, CoreError } from '@skiff/core';
+import { reportRequestError } from '#lib/server/server-errors.js';
 
 export interface FormFailure {
 	message: string;
@@ -20,6 +21,8 @@ export function toFormFailure(error: unknown): FormFailure {
 		return { message: error.message, code: error.code };
 	}
 	console.error('[dashboard] unexpected action error:', error);
+	// The form shows a generic message; Settings → Server errors keeps the real one.
+	reportRequestError(error, { source: 'request' });
 	return {
 		message: 'Something went wrong while saving. Please try again.',
 		code: 'internal_error'

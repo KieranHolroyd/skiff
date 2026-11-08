@@ -16,6 +16,7 @@ import { MaintenanceService } from './maintenance.ts';
 import { SecretService } from './secrets.ts';
 import { MetricsService } from './metrics.ts';
 import { MetricsExporter } from './metrics-export.ts';
+import { ServerErrorService } from './server-errors.ts';
 import { PlatformPolicyService } from './platform-policies.ts';
 import { ObservabilityService } from './observability.ts';
 import { AlertService } from './alerts.ts';
@@ -105,6 +106,7 @@ export * from './failover-service.ts';
 export * from './secrets.ts';
 export * from './metrics.ts';
 export * from './metrics-export.ts';
+export * from './server-errors.ts';
 export * from './platform-policies.ts';
 export * from './observability.ts';
 export * from './observability-query.ts';
@@ -180,6 +182,7 @@ export interface Core {
 	access: AccessService;
 	deploy: DeployService;
 	maintenance: MaintenanceService;
+	serverErrors: ServerErrorService;
 	secrets: SecretService;
 	metrics: MetricsService;
 	metricsExport: MetricsExporter;
@@ -298,6 +301,7 @@ export function createCore(options: CoreOptions): Core {
 	ctx.iam = new IamService(ctx);
 	ctx.governance = new GovernanceService(ctx);
 	ctx.authPolicy = new AuthPolicyService(ctx);
+	ctx.serverErrors = new ServerErrorService(ctx, options.version ?? null);
 	ctx.platformIam = new PlatformIamService(ctx);
 	// Seed `platform-admin` from the Better Auth admin flag once, best effort. A boot before Better
 	// Auth's tables exist is covered by `sync(userId)` on demand; this is not a schema migration.
@@ -438,6 +442,7 @@ export function createCore(options: CoreOptions): Core {
 		iam: ctx.iam,
 		governance: ctx.governance,
 		authPolicy: ctx.authPolicy,
+		serverErrors: ctx.serverErrors,
 		platformIam: ctx.platformIam,
 		serviceAccounts: ctx.serviceAccounts,
 		accessKeys: ctx.accessKeys,

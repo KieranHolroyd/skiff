@@ -24,6 +24,7 @@ export const systemAlertKinds = [
 	'quota',
 	'telemetry',
 	'failover',
+	'server_error',
 ] as const;
 export type SystemAlertKind = (typeof systemAlertKinds)[number];
 
@@ -138,6 +139,14 @@ export const systemAlertCatalog: SystemAlertInfo[] = [
 		description:
 			'The failover controller moved replica copies or changed ingress rotation, could not (no target, queue expired), needs a human for a lost node or database primary, or lost its lease.',
 		severity: 'info when it acted; warning when blocked; critical for a lost primary or lease',
+		thresholds: [],
+	},
+	{
+		kind: 'server_error',
+		label: 'New server error',
+		description:
+			'The control plane hits an error it has not seen before, or one marked resolved happens again (Settings → Server errors). At most 10 an hour.',
+		severity: 'warning',
 		thresholds: [],
 	},
 ];

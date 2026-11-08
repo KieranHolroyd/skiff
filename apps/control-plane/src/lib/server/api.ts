@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import { CoreError, ForbiddenError } from '@skiff/core';
 import { ZodError } from 'zod';
+import { reportRequestError } from './server-errors';
 
 export function json(data: unknown, status = 200, headers: Record<string, string> = {}): Response {
 	return new Response(JSON.stringify(data), {
@@ -52,7 +53,9 @@ export function errorResponse(error: unknown): Response {
 		);
 	if (error instanceof Response) return error;
 	console.error('[api]', error);
-	return json({ error: 'internal', message: 'Internal server error' }, 500);
+	// Settings → Server errors; the id lets a caller quote the failure to an admin.
+	const errorId = reportRequestError(error, { source: 'api' });
+	return json({ error: 'internal', message: 'Internal server error', ...(errorId ? { errorId } : {}) }, 500);
 }
 
 /**
