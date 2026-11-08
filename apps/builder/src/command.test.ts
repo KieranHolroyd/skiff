@@ -12,7 +12,7 @@ import {
 	unitName,
 	validateBuildCommand,
 } from './command.ts';
-import { gitEnv, withCloneToken } from './pipeline/git.ts';
+import { gitEnv, withCloneToken, type GitCredentials } from './pipeline/git.ts';
 
 describe('build command validation', () => {
 	test('accepts a normal command and trims edges', () => {
@@ -136,7 +136,7 @@ describe('clone credentials', () => {
 		expect(auth.GIT_CONFIG_VALUE_0).toBe(`Authorization: Basic ${Buffer.from('gitlab+deploy-token-1:gldt-1').toString('base64')}`);
 		expect(gitEnv('https://github.com/acme/api.git', env).GIT_CONFIG_VALUE_0).toBeUndefined();
 		// No host (an older control plane): github.com with GitHub's user name, as before.
-		const legacy = withCloneToken({ gitToken: null, gitTokenHosts: [], gitSshKey: null, gitSshKnownHosts: null, buildDir: '/tmp' }, 'ghs_1');
+		const legacy: GitCredentials = withCloneToken({ gitToken: null, gitTokenHosts: [], gitSshKey: null, gitSshKnownHosts: null, buildDir: '/tmp' } as GitCredentials, 'ghs_1');
 		expect(gitEnv('https://github.com/acme/api.git', legacy).GIT_CONFIG_VALUE_0).toBe(`Authorization: Basic ${Buffer.from('x-access-token:ghs_1').toString('base64')}`);
 		// A malformed host or user name never widens where the token goes.
 		expect(withCloneToken(legacy, 'x', { host: 'evil.example/x' }).gitTokenHosts).toEqual(['github.com']);
