@@ -1,5 +1,8 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import ExternalLinkIcon from '@lucide/svelte/icons/external-link';
 	import FingerprintIcon from '@lucide/svelte/icons/fingerprint';
 	import GlobeIcon from '@lucide/svelte/icons/globe';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
@@ -20,8 +23,17 @@
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
+	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
 	import * as Table from '#lib/components/ui/table/index.js';
 	import { Textarea } from '#lib/components/ui/textarea/index.js';
+	import {
+		SSO_PRESETS,
+		SsoPresetError,
+		detectSsoPreset,
+		ssoPreset,
+		type SsoPreset,
+		type SsoPresetConfig
+	} from '#lib/sso-presets.js';
 	import EmptyState from '../../_lib/EmptyState.svelte';
 	import Panel from '../../_lib/Panel.svelte';
 	import RowMenu from '../../_lib/RowMenu.svelte';
@@ -78,10 +90,62 @@
 	let savingPolicy = $state(false);
 
 	const DEFAULT_SCOPES = 'openid profile email';
+	const DEFAULT_CLAIMS = { email: 'email', name: 'name', groups: 'groups' };
+
+	/** `custom` is the plain OIDC form; anything else is a preset id from `sso-presets.ts`. */
+	let presetId = $state<string>('custom');
+	let presetValues = $state<Record<string, string>>({});
+	let providerName = $state('');
+	let scopesText = $state(DEFAULT_SCOPES);
+	let claims = $state({ ...DEFAULT_CLAIMS });
+	/** Once scopes or claims are edited (or come from a saved provider), the preset stops resetting them. */
+	let advancedTouched = $state(false);
+
+	const activePreset = $derived<SsoPreset | null>(ssoPreset(presetId));
+	const resolved = $derived.by<{ config: SsoPresetConfig } | { error: string } | null>(() => {
+		if (!activePreset) return null;
+		try {
+			return { config: activePreset.resolve(presetValues) };
+		} catch (cause) {
+			// Say nothing until something is typed; an empty form is not an error yet.
+			const typed = activePreset.fields.some(
+				(field) => !field.options && (presetValues[field.key] ?? '').trim() !== ''
+			);
+			return typed && cause instanceof SsoPresetError ? { error: cause.message } : null;
+		}
+	});
+	const consoleUrl = $derived(activePreset?.consoleUrl(presetValues) ?? null);
+	const redirectUri = $derived(editing ? editing.callbackUrl : data.reservedCallbackUrl);
+
+	$effect(() => {
+		const config = resolved && 'config' in resolved ? resolved.config : null;
+		if (!config || advancedTouched) return;
+		scopesText = config.scopes.join(' ');
+		claims = { ...config.claims };
+	});
+
+	function presetDefaults(preset: SsoPreset | null): Record<string, string> {
+		return Object.fromEntries(
+			(preset?.fields ?? []).map((field) => [field.key, field.options?.[0]?.value ?? ''])
+		);
+	}
+
+	function choosePreset(id: string) {
+		const preset = ssoPreset(id);
+		presetId = preset ? preset.id : 'custom';
+		presetValues = presetDefaults(preset);
+		if (!editing) providerName = preset?.name ?? '';
+		advancedTouched = false;
+		if (!preset) {
+			scopesText = editing?.scopes.join(' ') ?? DEFAULT_SCOPES;
+			claims = { ...(editing?.claims ?? DEFAULT_CLAIMS) };
+		}
+	}
 	const METHODS = [
 		['password', 'Password'],
 		['passkey', 'Passkey'],
 		['github', 'GitHub'],
+		['gitlab', 'GitLab'],
 		['magic-link', 'Magic link'],
 		['sso', 'Single sign-on']
 	] as const;
@@ -96,9 +160,25 @@
 		(data.policy as PolicyView).idleTimeout ? (data.policy as PolicyView).idleTimeout! / 60 : ''
 	);
 
-	function openProvider(provider: ProviderView | null) {
+	function openProvider(provider: ProviderView | null, preset = 'custom') {
 		editing = provider;
+		if (provider) {
+			// Reopen a saved provider in the preset its issuer came from, keeping its scopes and claims.
+			const detected = detectSsoPreset(provider.issuer);
+			presetId = detected?.preset.id ?? 'custom';
+			presetValues = { ...presetDefaults(detected?.preset ?? null), ...detected?.values };
+			providerName = provider.name;
+			scopesText = provider.scopes.join(' ');
+			claims = { ...provider.claims };
+			advancedTouched = true;
+		} else {
+			choosePreset(preset);
+		}
 		providerOpen = true;
+	}
+
+	function presetName(issuer: string): string | null {
+		return detectSsoPreset(issuer)?.preset.name ?? null;
 	}
 
 	function removeProvider(provider: ProviderView) {
@@ -149,23 +229,64 @@
 		flush
 	>
 		{#snippet actions()}
-			{#if data.canManage}
-				<Button size="sm" onclick={() => openProvider(null)}><PlusIcon />Add provider</Button>
+			{#if data.canManage && data.providers.length === 0}
+				<DropdownMenu.Root>
+					<DropdownMenu.Trigger>
+						{#snippet child({ props })}
+							<Button size="sm" {...props}><PlusIcon />Add provider<ChevronDownIcon /></Button>
+						{/snippet}
+					</DropdownMenu.Trigger>
+					<DropdownMenu.Content align="end" class="w-56">
+						{#each SSO_PRESETS as preset (preset.id)}
+							<DropdownMenu.Item onSelect={() => openProvider(null, preset.id)}>
+								{preset.name}
+							</DropdownMenu.Item>
+						{/each}
+						<DropdownMenu.Separator />
+						<DropdownMenu.Item onSelect={() => openProvider(null)}>Other OpenID Connect</DropdownMenu.Item>
+					</DropdownMenu.Content>
+				</DropdownMenu.Root>
 			{/if}
 		{/snippet}
 
 		{#if data.providers.length === 0}
 			<div class="p-4">
-				<EmptyState
-					icon={FingerprintIcon}
-					compact
-					title="No identity provider"
-					description="Add the issuer, client id and client secret from Okta, Entra ID, Google Workspace, Keycloak or any other OpenID Connect provider. Skiff reads its discovery document when you save."
-				>
-					{#if data.canManage}
-						<Button size="sm" onclick={() => openProvider(null)}><PlusIcon />Add a provider</Button>
-					{/if}
-				</EmptyState>
+				{#if data.canManage}
+					<p class="text-sm font-medium">Choose your identity provider</p>
+					<p class="mt-0.5 text-xs text-muted-foreground">
+						Skiff fills in the issuer, scopes and claims, and shows the steps and the redirect URI for
+						that provider’s console. It checks the provider’s discovery document when you save.
+					</p>
+					<div class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+						{#each SSO_PRESETS as preset (preset.id)}
+							<button
+								type="button"
+								class="rounded-lg border bg-background p-3 text-left transition-colors hover:bg-muted/60 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+								onclick={() => openProvider(null, preset.id)}
+							>
+								<span class="block text-sm font-medium">{preset.name}</span>
+								<span class="mt-0.5 block text-xs text-muted-foreground">{preset.summary}</span>
+							</button>
+						{/each}
+						<button
+							type="button"
+							class="rounded-lg border border-dashed bg-background p-3 text-left transition-colors hover:bg-muted/60 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+							onclick={() => openProvider(null)}
+						>
+							<span class="block text-sm font-medium">Other OpenID Connect</span>
+							<span class="mt-0.5 block text-xs text-muted-foreground">
+								Any issuer with a discovery document.
+							</span>
+						</button>
+					</div>
+				{:else}
+					<EmptyState
+						icon={FingerprintIcon}
+						compact
+						title="No identity provider"
+						description="Org owners and admins can connect Entra ID, Google Workspace, Okta or any other OpenID Connect provider here."
+					/>
+				{/if}
 			</div>
 		{:else}
 			<Table.Root>
@@ -183,6 +304,9 @@
 							<Table.Cell class="max-w-96 pl-4">
 								<p class="flex flex-wrap items-center gap-1.5">
 									<span class="font-medium">{provider.name}</span>
+									{#if presetName(provider.issuer) && presetName(provider.issuer) !== provider.name}
+										<Badge variant="outline">{presetName(provider.issuer)}</Badge>
+									{/if}
 									<Badge variant="outline">OIDC</Badge>
 								</p>
 								<p
@@ -562,42 +686,158 @@
 	<FormDialog
 		bind:open={providerOpen}
 		icon={FingerprintIcon}
-		title={editing ? `Edit ${editing.name}` : 'Add an identity provider'}
-		description="Skiff fetches the issuer's discovery document and stores the endpoints. The client secret is sealed with this organisation's key."
+		title={editing
+			? `Edit ${editing.name}`
+			: activePreset
+				? `Connect ${activePreset.name}`
+				: 'Add an identity provider'}
+		description={activePreset
+			? 'Create a client at the provider, then paste its client ID and secret here. Skiff works out the rest and checks it against the provider’s discovery document.'
+			: 'Skiff fetches the issuer’s discovery document and stores the endpoints. The client secret is sealed with this organisation’s key.'}
 		action="?/saveProvider"
 		submitLabel={editing ? 'Save provider' : 'Add provider'}
 		size="lg"
 	>
-		{#if editing}<input type="hidden" name="providerId" value={editing.id} />{/if}
+		{#if editing}
+			<input type="hidden" name="providerId" value={editing.id} />
+		{:else}
+			<input type="hidden" name="reservedProviderId" value={data.reservedProviderId} />
+		{/if}
 		<Field.Group>
+			<Field.Field>
+				<Field.Label for="sso-preset">Identity provider</Field.Label>
+				<NativeSelect.Root
+					id="sso-preset"
+					name="preset"
+					value={presetId}
+					onchange={(event) => choosePreset(event.currentTarget.value)}
+					class="w-full"
+				>
+					{#each SSO_PRESETS as preset (preset.id)}
+						<NativeSelect.Option value={preset.id}>{preset.name}</NativeSelect.Option>
+					{/each}
+					<NativeSelect.Option value="custom">Other OpenID Connect</NativeSelect.Option>
+				</NativeSelect.Root>
+			</Field.Field>
+
+			{#if activePreset}
+				<section class="rounded-lg border bg-muted/30 p-3">
+					<div class="flex flex-wrap items-center justify-between gap-2">
+						<p class="text-sm font-medium">At {activePreset.name}</p>
+						{#if consoleUrl}
+							<Button
+								size="sm"
+								variant="outline"
+								href={consoleUrl}
+								target="_blank"
+								rel="noopener noreferrer"
+							>
+								<ExternalLinkIcon />Open console
+							</Button>
+						{/if}
+					</div>
+					<ol class="mt-2 list-decimal space-y-1 pl-5 text-xs text-muted-foreground">
+						{#each activePreset.steps as step, index (index)}
+							<li>{step}</li>
+						{/each}
+					</ol>
+					<div class="mt-3">
+						<p class="text-xs font-medium">Redirect URI</p>
+						<div class="mt-1 flex items-center gap-1">
+							<code
+								class="min-w-0 truncate rounded bg-background px-1.5 py-0.5 font-mono text-xs"
+								title={redirectUri}>{redirectUri}</code
+							>
+							<CopyButton value={redirectUri} iconOnly label="Copy redirect URI" />
+						</div>
+					</div>
+				</section>
+
+				{#if activePreset.fields.length > 0}
+					<div class="grid gap-4 sm:grid-cols-2">
+						{#each activePreset.fields as field (field.key)}
+							<Field.Field
+								class={activePreset.fields.length === 1 ? 'sm:col-span-2' : undefined}
+							>
+								<Field.Label for={`sso-preset-${field.key}`}>
+									{field.label}{#if field.optional}<span class="font-normal text-muted-foreground">
+											(optional)</span
+										>{/if}
+								</Field.Label>
+								{#if field.options}
+									<NativeSelect.Root
+										id={`sso-preset-${field.key}`}
+										name={`preset.${field.key}`}
+										bind:value={presetValues[field.key]}
+										class="w-full"
+									>
+										{#each field.options as option (option.value)}
+											<NativeSelect.Option value={option.value}>{option.label}</NativeSelect.Option>
+										{/each}
+									</NativeSelect.Root>
+								{:else}
+									<Input
+										id={`sso-preset-${field.key}`}
+										name={`preset.${field.key}`}
+										bind:value={presetValues[field.key]}
+										placeholder={field.placeholder}
+										required={!field.optional}
+										autocapitalize="off"
+										spellcheck="false"
+										class="font-mono text-sm"
+									/>
+								{/if}
+								<Field.Description>{field.description}</Field.Description>
+							</Field.Field>
+						{/each}
+					</div>
+				{/if}
+
+				<div class="rounded-md border px-3 py-2 text-xs">
+					{#if resolved && 'config' in resolved}
+						<p class="text-muted-foreground">
+							Issuer <span class="font-mono text-foreground break-all">{resolved.config.issuer}</span>
+						</p>
+					{:else if resolved && 'error' in resolved}
+						<p class="text-destructive">{resolved.error}</p>
+					{:else}
+						<p class="text-muted-foreground">The issuer appears here as you fill in the fields above.</p>
+					{/if}
+					<p class="mt-1 text-muted-foreground">{activePreset.groups}</p>
+				</div>
+			{/if}
+
 			<div class="grid gap-4 sm:grid-cols-2">
-				<Field.Field>
+				<Field.Field class={activePreset ? 'sm:col-span-2' : undefined}>
 					<Field.Label for="sso-name">Name</Field.Label>
 					<Input
 						id="sso-name"
 						name="name"
-						value={editing?.name ?? ''}
-						placeholder="Okta"
+						bind:value={providerName}
+						placeholder={activePreset?.name ?? 'Okta'}
 						required
 						maxlength={80}
 					/>
+					{#if activePreset}
+						<Field.Description>Shown on the sign-in page.</Field.Description>
+					{/if}
 				</Field.Field>
-				<Field.Field>
-					<Field.Label for="sso-issuer">Issuer</Field.Label>
-					<Input
-						id="sso-issuer"
-						name="issuer"
-						value={editing?.issuer ?? ''}
-						placeholder="https://example.okta.com"
-						required
-						autocapitalize="off"
-						spellcheck="false"
-						class="font-mono text-sm"
-					/>
-					<Field.Description
-						>The `iss` value from the IdP, without a trailing slash.</Field.Description
-					>
-				</Field.Field>
+				{#if !activePreset}
+					<Field.Field>
+						<Field.Label for="sso-issuer">Issuer</Field.Label>
+						<Input
+							id="sso-issuer"
+							name="issuer"
+							value={editing?.issuer ?? ''}
+							placeholder="https://idp.example.com"
+							required
+							autocapitalize="off"
+							spellcheck="false"
+							class="font-mono text-sm"
+						/>
+						<Field.Description>The `iss` value from the IdP.</Field.Description>
+					</Field.Field>
+				{/if}
 			</div>
 			<div class="grid gap-4 sm:grid-cols-2">
 				<Field.Field>
@@ -624,75 +864,100 @@
 					/>
 				</Field.Field>
 			</div>
-			<Field.Field>
-				<Field.Label for="sso-discovery">Discovery URL</Field.Label>
-				<Input
-					id="sso-discovery"
-					name="discoveryUrl"
-					value={editing?.discoveryUrl ?? ''}
-					placeholder="https://example.okta.com/.well-known/openid-configuration"
-					autocapitalize="off"
-					spellcheck="false"
-					class="font-mono text-sm"
-				/>
-				<Field.Description>
-					Leave blank for the standard <span class="font-mono"
-						>/.well-known/openid-configuration</span
-					>
-					under the issuer.
-				</Field.Description>
-			</Field.Field>
-			<Field.Field>
-				<Field.Label for="sso-scopes">Scopes</Field.Label>
-				<Input
-					id="sso-scopes"
-					name="scopes"
-					value={editing?.scopes.join(' ') ?? DEFAULT_SCOPES}
-					placeholder={DEFAULT_SCOPES}
-					autocapitalize="off"
-					spellcheck="false"
-					class="font-mono text-sm"
-				/>
-				<Field.Description
-					>Space or comma separated. `openid` is always requested.</Field.Description
+
+			{#if !activePreset}
+				<Field.Field>
+					<Field.Label for="sso-discovery">Discovery URL</Field.Label>
+					<Input
+						id="sso-discovery"
+						name="discoveryUrl"
+						value={editing?.discoveryUrl ?? ''}
+						placeholder="https://idp.example.com/.well-known/openid-configuration"
+						autocapitalize="off"
+						spellcheck="false"
+						class="font-mono text-sm"
+					/>
+					<Field.Description>
+						Leave blank for the standard <span class="font-mono"
+							>/.well-known/openid-configuration</span
+						>
+						under the issuer.
+					</Field.Description>
+				</Field.Field>
+				<Field.Field>
+					<Field.Label for="sso-callback">Redirect URI</Field.Label>
+					<div class="flex items-center gap-1">
+						<code
+							id="sso-callback"
+							class="min-w-0 truncate rounded bg-muted px-1.5 py-0.5 font-mono text-xs"
+							title={redirectUri}>{redirectUri}</code
+						>
+						<CopyButton value={redirectUri} iconOnly label="Copy redirect URI" />
+					</div>
+					<Field.Description>Register this at the IdP as the client’s redirect (callback) URI.</Field.Description>
+				</Field.Field>
+			{/if}
+
+			<details class="group" open={!activePreset}>
+				<summary
+					class="inline-flex cursor-pointer list-none items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground"
 				>
-			</Field.Field>
-			<Field.Set>
-				<Field.Legend variant="label">Claim mapping</Field.Legend>
-				<Field.Description>Which claim in the ID token carries each value.</Field.Description>
-				<div class="grid gap-4 sm:grid-cols-3">
+					<ChevronRightIcon class="size-3.5 transition-transform group-open:rotate-90" />
+					{activePreset ? 'Scopes and claims (filled in for you)' : 'Scopes and claims'}
+				</summary>
+				<div class="mt-3 grid gap-4">
 					<Field.Field>
-						<Field.Label for="sso-claim-email">Email</Field.Label>
+						<Field.Label for="sso-scopes">Scopes</Field.Label>
 						<Input
-							id="sso-claim-email"
-							name="claimEmail"
-							value={editing?.claims.email ?? 'email'}
-							required
+							id="sso-scopes"
+							name="scopes"
+							bind:value={scopesText}
+							oninput={() => (advancedTouched = true)}
+							placeholder={DEFAULT_SCOPES}
+							autocapitalize="off"
+							spellcheck="false"
 							class="font-mono text-sm"
 						/>
+						<Field.Description>Space or comma separated. `openid` is always requested.</Field.Description>
 					</Field.Field>
-					<Field.Field>
-						<Field.Label for="sso-claim-name">Name</Field.Label>
-						<Input
-							id="sso-claim-name"
-							name="claimName"
-							value={editing?.claims.name ?? 'name'}
-							required
-							class="font-mono text-sm"
-						/>
-					</Field.Field>
-					<Field.Field>
-						<Field.Label for="sso-claim-groups">Groups</Field.Label>
-						<Input
-							id="sso-claim-groups"
-							name="claimGroups"
-							value={editing?.claims.groups ?? 'groups'}
-							required
-							class="font-mono text-sm"
-						/>
-					</Field.Field>
+					<Field.Set>
+						<Field.Legend variant="label">Claim mapping</Field.Legend>
+						<Field.Description>Which claim in the ID token carries each value.</Field.Description>
+						<div class="grid gap-4 sm:grid-cols-3">
+							<Field.Field>
+								<Field.Label for="sso-claim-email">Email</Field.Label>
+								<Input
+									id="sso-claim-email"
+									name="claimEmail"
+									bind:value={claims.email}
+									oninput={() => (advancedTouched = true)}
+									class="font-mono text-sm"
+								/>
+							</Field.Field>
+							<Field.Field>
+								<Field.Label for="sso-claim-name">Name</Field.Label>
+								<Input
+									id="sso-claim-name"
+									name="claimName"
+									bind:value={claims.name}
+									oninput={() => (advancedTouched = true)}
+									class="font-mono text-sm"
+								/>
+							</Field.Field>
+							<Field.Field>
+								<Field.Label for="sso-claim-groups">Groups</Field.Label>
+								<Input
+									id="sso-claim-groups"
+									name="claimGroups"
+									bind:value={claims.groups}
+									oninput={() => (advancedTouched = true)}
+									class="font-mono text-sm"
+								/>
+							</Field.Field>
+						</div>
+					</Field.Set>
 				</div>
-			</Field.Set>
+			</details>
 		</Field.Group>
 	</FormDialog>
 

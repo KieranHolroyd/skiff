@@ -19,12 +19,12 @@
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
-	import { Textarea } from '#lib/components/ui/textarea/index.js';
 	import EmptyState from '../../_lib/EmptyState.svelte';
 	import PageHeader from '../../_lib/PageHeader.svelte';
 	import Panel from '../../_lib/Panel.svelte';
 	import { formatDate, formatRelative } from '../../_lib/format.js';
 	import NotSetUp from '../_lib/NotSetUp.svelte';
+	import RequestAccessDialog from '../_lib/RequestAccessDialog.svelte';
 	import type { PageProps } from './$types';
 
 	interface FormResult {
@@ -105,7 +105,7 @@
 	</PageHeader>
 
 	{#if !area.configured}
-		<NotSetUp platformAdmin={area.can.platform} compact />
+		<NotSetUp platformAdmin={area.can.platform} />
 	{/if}
 
 	{#if data.denied || !org}
@@ -125,7 +125,9 @@
 			{/snippet}
 			{#if org.state === 'active'}
 				<p class="text-sm">
-					This organisation is out of the sandbox: it sends to any recipient, up to {fmt(org.perDay)}
+					This organisation is out of the sandbox: it sends to any recipient, up to {fmt(
+						org.perDay
+					)}
 					messages a day and {fmt(org.perSecond)} a second.
 				</p>
 				{#if request?.status === 'approved' && request.decidedAt}
@@ -146,7 +148,9 @@
 					</p>
 					<DetailList>
 						<dt>Sent</dt>
-						<dd class="text-xs"><time datetime={request.createdAt}>{formatDate(request.createdAt)}</time></dd>
+						<dd class="text-xs">
+							<time datetime={request.createdAt}>{formatDate(request.createdAt)}</time>
+						</dd>
 						<dt>Expected volume</dt>
 						<dd class="font-mono text-xs tabular-nums">{fmt(request.expectedDailyVolume)} a day</dd>
 						{#if request.website}
@@ -170,7 +174,9 @@
 						DMARC passing, ask a platform admin to move the organisation out.
 					</p>
 					{#if data.canRequest && canEdit}
-						<Button onclick={() => (requestOpen = true)}><RocketIcon />Request production access</Button>
+						<Button onclick={() => (requestOpen = true)}
+							><RocketIcon />Request production access</Button
+						>
 					{:else}
 						<p class="text-muted-foreground">
 							An organisation owner or admin requests production access.
@@ -213,8 +219,8 @@
 			{/if}
 			{#snippet footer()}
 				Up to {EMAIL_SANDBOX_ADDRESS_LIMITS.maxAddresses} recipients, {EMAIL_SANDBOX_ADDRESS_LIMITS.maxPending}
-				of them waiting at once. Links expire after {EMAIL_SANDBOX_ADDRESS_LIMITS.linkTtlSeconds / 3600} hours.
-				Sending from a domain also needs it verified on the
+				of them waiting at once. Links expire after {EMAIL_SANDBOX_ADDRESS_LIMITS.linkTtlSeconds /
+					3600} hours. Sending from a domain also needs it verified on the
 				<a href={resolve('/(dashboard)/email/domains')} class="underline underline-offset-4"
 					>Domains</a
 				> page.
@@ -253,65 +259,7 @@
 {/if}
 
 {#if canEdit && data.canRequest}
-	<FormDialog
-		bind:open={requestOpen}
-		icon={RocketIcon}
-		title="Request production access"
-		description="A platform admin reviews this. Approval lifts the sandbox; you get an email either way."
-		action="?/request"
-		submitLabel="Send request"
-		size="lg"
-	>
-		<Field.Group>
-			<Field.Field data-invalid={errors.useCase ? true : undefined}>
-				<Field.Label for="access-use-case">What you send, and to whom</Field.Label>
-				<Textarea
-					id="access-use-case"
-					name="useCase"
-					rows={5}
-					required
-					minlength={20}
-					maxlength={2000}
-					placeholder="Password resets and order receipts for customers who signed up on our shop. No marketing."
-					value={String(result?.values?.useCase ?? '')}
-					aria-invalid={errors.useCase ? 'true' : undefined}
-				/>
-				<Field.Description>
-					Say how recipients gave you their address and how you handle bounces and unsubscribes.
-				</Field.Description>
-				{#if errors.useCase}<Field.Error>{errors.useCase}</Field.Error>{/if}
-			</Field.Field>
-			<Field.Field data-invalid={errors.expectedDailyVolume ? true : undefined}>
-				<Field.Label for="access-volume">Expected messages a day</Field.Label>
-				<Input
-					id="access-volume"
-					name="expectedDailyVolume"
-					type="number"
-					min="1"
-					step="1"
-					required
-					placeholder="500"
-					class="font-mono"
-					value={String(result?.values?.expectedDailyVolume ?? '')}
-					aria-invalid={errors.expectedDailyVolume ? 'true' : undefined}
-				/>
-				{#if errors.expectedDailyVolume}<Field.Error>{errors.expectedDailyVolume}</Field.Error>{/if}
-			</Field.Field>
-			<Field.Field data-invalid={errors.website ? true : undefined}>
-				<Field.Label for="access-website">Website (optional)</Field.Label>
-				<Input
-					id="access-website"
-					name="website"
-					type="url"
-					placeholder="https://example.com"
-					class="font-mono text-sm"
-					value={String(result?.values?.website ?? '')}
-					aria-invalid={errors.website ? 'true' : undefined}
-				/>
-				{#if errors.website}<Field.Error>{errors.website}</Field.Error>{/if}
-			</Field.Field>
-		</Field.Group>
-	</FormDialog>
+	<RequestAccessDialog bind:open={requestOpen} {errors} values={result?.values} />
 {/if}
 
 {#snippet addressCell(row: Row)}
@@ -332,7 +280,9 @@
 	{#if row.verifiedAt}
 		<time datetime={row.verifiedAt}>Verified {formatDate(row.verifiedAt)}</time>
 	{:else if row.expiresAt}
-		<time datetime={row.expiresAt}>{expired(row) ? 'Expired' : 'Expires'} {formatRelative(row.expiresAt)}</time>
+		<time datetime={row.expiresAt}
+			>{expired(row) ? 'Expired' : 'Expires'} {formatRelative(row.expiresAt)}</time
+		>
 	{:else}
 		—
 	{/if}

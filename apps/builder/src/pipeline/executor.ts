@@ -213,7 +213,7 @@ export class PipelineExecutor {
 				ref: claim.checkout.ref,
 				sha: claim.checkout.sha,
 				dir: dirs.workspace,
-				credentials: withCloneToken(config, claim.gitToken),
+				credentials: withCloneToken(config, claim.gitToken, { host: claim.gitTokenHost, username: claim.gitTokenUsername }),
 			});
 			// The tokens travel in the environment only; job.json is readable by the job's steps (and
 			// the clone token must never reach an untrusted job).

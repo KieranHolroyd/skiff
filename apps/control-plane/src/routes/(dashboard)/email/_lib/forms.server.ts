@@ -9,7 +9,7 @@ export function emailCan(principal: Principal) {
 		delete: hasPermission(principal, 'email:delete'),
 		/** Create and revoke SMTP credentials (never on MCP, D58). */
 		credentials: hasPermission(principal, 'email:credentials'),
-		/** Settings → Email: the mail node, global pause and org limits. */
+		/** Email → Mail server: the mail node, global pause and org limits. */
 		platform: canAdministerPlatform(principal)
 	};
 }

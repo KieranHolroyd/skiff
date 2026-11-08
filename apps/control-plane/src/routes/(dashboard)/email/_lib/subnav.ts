@@ -6,24 +6,23 @@ import GlobeIcon from '@lucide/svelte/icons/globe';
 import InboxIcon from '@lucide/svelte/icons/inbox';
 import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 import LayoutDashboardIcon from '@lucide/svelte/icons/layout-dashboard';
-import ListChecksIcon from '@lucide/svelte/icons/list-checks';
 import MailIcon from '@lucide/svelte/icons/mail';
 import SendIcon from '@lucide/svelte/icons/send';
-import SettingsIcon from '@lucide/svelte/icons/settings';
+import ServerIcon from '@lucide/svelte/icons/server';
 import type { Subnav, RouteUrl } from '#lib/nav/subnav.js';
 
 export const EMAIL_SUBNAV_KEY = 'email';
 
 const SECTIONS = [
 	'overview',
-	'setup',
 	'domains',
 	'activity',
 	'send',
 	'sandbox',
 	'suppressions',
 	'credentials',
-	'requests'
+	'requests',
+	'server'
 ] as const;
 export type EmailSection = (typeof SECTIONS)[number];
 
@@ -34,8 +33,8 @@ export function emailSection(pathname: string): EmailSection {
 }
 
 /**
- * Email's sections (docs/EMAIL.md §9). Platform admins also get the production access queue and a
- * shortcut to Settings → Email.
+ * Email's sections (docs/EMAIL.md §9). Setup lives on the overview, as a checklist; platform admins
+ * also get the production access queue and the mail server, so all of Email is in one place.
  */
 export function emailSubnav(
 	data: { emailArea: { can: { platform: boolean } } },
@@ -58,12 +57,6 @@ export function emailSubnav(
 						label: 'Overview',
 						icon: LayoutDashboardIcon,
 						href: resolve('/(dashboard)/email')
-					},
-					{
-						id: 'setup',
-						label: 'Setup guide',
-						icon: ListChecksIcon,
-						href: resolve('/(dashboard)/email/setup')
 					},
 					{
 						id: 'domains',
@@ -116,10 +109,10 @@ export function emailSubnav(
 									href: resolve('/(dashboard)/email/requests')
 								},
 								{
-									id: 'settings',
+									id: 'server',
 									label: 'Mail server',
-									icon: SettingsIcon,
-									href: resolve('/(dashboard)/settings/email')
+									icon: ServerIcon,
+									href: resolve('/(dashboard)/email/server')
 								}
 							]
 						}

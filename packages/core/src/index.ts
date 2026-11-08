@@ -62,6 +62,7 @@ import { UpgradeService } from './upgrades.ts';
 import { GithubRunnerService } from './github-runners.ts';
 import { GithubAppService } from './github-app.ts';
 import { GithubImportService } from './github-import.ts';
+import { ForgeService, GitProviders } from './forges/index.ts';
 import { FunctionService } from './functions.ts';
 import { TemplateService } from './templates.ts';
 import { BlueprintService } from './blueprints.ts';
@@ -120,6 +121,7 @@ export * from './runtime-tier.ts';
 export * from './github-runners.ts';
 export * from './github-app.ts';
 export * from './github-import.ts';
+export * from './forges/index.ts';
 export * from './templates.ts';
 export * from './databases.ts';
 export * from './database-studio.ts';
@@ -226,8 +228,12 @@ export interface Core {
 	githubRunners: GithubRunnerService;
 	/** Skiff's GitHub App (docs/GITHUB.md). */
 	githubApp: GithubAppService;
-	/** Deploy from GitHub (docs/GITHUB.md §9). */
+	/** Deploy from Git (docs/GITHUB.md §9, docs/FORGES.md §7). */
 	githubImport: GithubImportService;
+	/** GitLab, Gitea and Forgejo connections (docs/FORGES.md). */
+	forges: ForgeService;
+	/** One door to every git provider (docs/FORGES.md §5). */
+	git: GitProviders;
 	templates: TemplateService;
 	/** Functions: Workers-compatible workloads on workerd (D110). */
 	functions: FunctionService;
@@ -360,6 +366,8 @@ export function createCore(options: CoreOptions): Core {
 	ctx.githubRunners = new GithubRunnerService(ctx);
 	ctx.githubApp = new GithubAppService(ctx);
 	ctx.githubImport = new GithubImportService(ctx);
+	ctx.forges = new ForgeService(ctx);
+	ctx.git = new GitProviders(ctx);
 	ctx.templates = new TemplateService(ctx);
 	ctx.functions = new FunctionService(ctx);
 	ctx.topology = new TopologyService(ctx);
@@ -433,6 +441,8 @@ export function createCore(options: CoreOptions): Core {
 		githubRunners: ctx.githubRunners,
 		githubApp: ctx.githubApp,
 		githubImport: ctx.githubImport,
+		forges: ctx.forges,
+		git: ctx.git,
 		templates: ctx.templates,
 		functions: ctx.functions,
 		topology: ctx.topology,

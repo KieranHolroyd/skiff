@@ -76,6 +76,8 @@ export function providerLabel(providerId: string): string {
 			return 'Email & password';
 		case 'github':
 			return 'GitHub';
+		case 'gitlab':
+			return 'GitLab';
 		case 'passkey':
 			return 'Passkey';
 		case 'magic-link':

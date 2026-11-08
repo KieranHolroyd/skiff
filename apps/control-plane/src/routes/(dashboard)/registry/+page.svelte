@@ -14,7 +14,9 @@
 	import DataTable, { type DataColumn } from '#lib/components/skiff/DataTable.svelte';
 	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
 	import GitHubMark from '#lib/components/skiff/GitHubMark.svelte';
-	import GithubRepoPicker from '#lib/components/skiff/GithubRepoPicker.svelte';
+	import GitRepoPicker from '#lib/components/skiff/GitRepoPicker.svelte';
+	import ForgeMark from '#lib/components/skiff/ForgeMark.svelte';
+	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
 	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
@@ -40,6 +42,7 @@
 	let trustOpen = $state(false);
 	/** `owner/repo` for a new trust; a pick from the GitHub App's repositories fills it. */
 	let trustRepo = $state('');
+	let trustProvider = $state<'github' | 'gitlab'>('github');
 
 	const orgSlug = $derived(data.org.slug ?? '<org>');
 	const host = $derived(data.denied ? '' : data.registry.host);
@@ -96,6 +99,17 @@ steps:
       password: \${{ steps.oidc.outputs.token }}
   - run: docker push ${host}/${orgSlug}/app:latest`);
 
+	const gitlabSnippet = $derived(`push-image:
+  image: docker:27
+  services: [docker:27-dind]
+  id_tokens:
+    SKIFF_ID_TOKEN:
+      aud: ${host}
+  script:
+    - echo "$SKIFF_ID_TOKEN" | docker login ${host} -u gitlab-oidc --password-stdin
+    - docker build -t ${host}/${orgSlug}/app:$CI_COMMIT_SHORT_SHA .
+    - docker push ${host}/${orgSlug}/app:$CI_COMMIT_SHORT_SHA`);
+
 	type Row = RegistryRepositoryView;
 	const columns: DataColumn<Row>[] = [
 		{ id: 'name', header: 'Repository', value: (row) => row.name, cell: nameCell, class: 'pl-4' },
@@ -137,8 +151,8 @@ steps:
 
 	function removeTrust(trust: RegistryOidcTrustView) {
 		askConfirm({
-			title: `Remove the trust for ${trust.githubRepository}?`,
-			description: `Workflows in ${trust.githubRepository} can no longer log in to ${trust.repository}. Images already pushed stay.`,
+			title: `Remove the trust for ${trust.subject ?? trust.githubRepository}?`,
+			description: `${trust.provider === 'gitlab' ? 'CI jobs' : 'Workflows'} in ${trust.subject ?? trust.githubRepository} can no longer log in to ${trust.repository}. Images already pushed stay.`,
 			confirmLabel: 'Remove trust',
 			tone: 'danger',
 			action: '?/removeTrust',
@@ -299,10 +313,10 @@ steps:
 		{/if}
 
 		<Panel
-			title="GitHub Actions (OIDC)"
+			title="CI identities (OIDC)"
 			icon={GitHubMark}
 			count={data.trusts.length}
-			description="Let a GitHub repository's workflows log in with their OIDC token instead of a stored API key."
+			description="Let a GitHub repository's workflows or a GitLab project's CI jobs log in with their OIDC token instead of a stored API key."
 			flush
 		>
 			{#snippet actions()}
@@ -317,14 +331,14 @@ steps:
 						icon={GitHubMark}
 						compact
 						title="No trusted workflows"
-						description="Add a trust to let a GitHub repository push or pull {orgSlug}/* images from Actions."
+						description="Add a trust to let a GitHub repository (Actions) or a GitLab project (CI id_tokens) push or pull {orgSlug}/* images."
 					/>
 				</div>
 			{:else}
 				<Table.Root>
 					<Table.Header class="bg-muted/45">
 						<Table.Row>
-							<Table.Head class="pl-4">GitHub repository</Table.Head>
+							<Table.Head class="pl-4">CI repository</Table.Head>
 							<Table.Head>Registry repository</Table.Head>
 							<Table.Head class="hidden md:table-cell">Ref</Table.Head>
 							<Table.Head>Access</Table.Head>
@@ -334,7 +348,12 @@ steps:
 					<Table.Body>
 						{#each data.trusts as trust (trust.id)}
 							<Table.Row>
-								<Table.Cell class="pl-4 font-mono text-sm">{trust.githubRepository}</Table.Cell>
+								<Table.Cell class="pl-4">
+									<span class="flex items-center gap-2 font-mono text-sm"
+										><ForgeMark kind={trust.provider} class="size-3.5 shrink-0 text-muted-foreground" />{trust.subject ?? trust.githubRepository}</span
+									>
+									{#if trust.provider === 'gitlab' && trust.issuer}<span class="block text-xs text-muted-foreground">{trust.issuer}</span>{/if}
+								</Table.Cell>
 								<Table.Cell class="font-mono text-xs">{trust.repository}</Table.Cell>
 								<Table.Cell class="hidden font-mono text-xs md:table-cell"
 									>{trust.ref ?? 'any ref'}</Table.Cell
@@ -360,8 +379,9 @@ steps:
 				</Table.Root>
 			{/if}
 
-			<div class="border-t p-4">
+			<div class="grid gap-4 border-t p-4 lg:grid-cols-2">
 				<CodeBlock label=".github/workflows/push.yml" lang="yaml" code={workflowSnippet} />
+				<CodeBlock label=".gitlab-ci.yml" lang="yaml" code={gitlabSnippet} />
 			</div>
 		</Panel>
 	{/if}
@@ -436,22 +456,42 @@ steps:
 	<FormDialog
 		bind:open={trustOpen}
 		icon={GitHubMark}
-		title="Trust a GitHub repository"
-		description="Its workflows log in as github-oidc with an OIDC token for audience {data.registry
-			.host}. No secret is stored."
+		title="Trust a CI repository"
+		description="{trustProvider === 'gitlab'
+			? 'Its CI jobs log in as gitlab-oidc with an id_token'
+			: 'Its workflows log in as github-oidc with an OIDC token'} for audience {data.registry.host}. No secret is stored."
 		action="?/addTrust"
 		submitLabel="Add trust"
 	>
 		<Field.Group>
-			<GithubRepoPicker hint={false} selected={trustRepo} onpick={(repo) => (trustRepo = repo.fullName)} />
+			<Field.Field>
+				<Field.Label for="trust-provider">CI</Field.Label>
+				<NativeSelect.Root id="trust-provider" name="provider" bind:value={trustProvider} class="w-full">
+					<NativeSelect.Option value="github">GitHub Actions</NativeSelect.Option>
+					<NativeSelect.Option value="gitlab">GitLab CI</NativeSelect.Option>
+				</NativeSelect.Root>
+			</Field.Field>
+			<GitRepoPicker
+				hint={false}
+				providers={[trustProvider]}
+				selected={trustRepo}
+				onpick={(repo) => (trustRepo = repo.fullName)}
+			/>
 			<div class="grid gap-4 sm:grid-cols-2">
+				{#if trustProvider === 'gitlab'}
+					<Field.Field class="sm:col-span-2">
+						<Field.Label for="trust-issuer">GitLab instance</Field.Label>
+						<Input id="trust-issuer" name="issuer" placeholder="https://gitlab.com" autocapitalize="off" spellcheck="false" class="font-mono text-sm" />
+						<Field.Description>The issuer of the ID tokens; blank means gitlab.com.</Field.Description>
+					</Field.Field>
+				{/if}
 				<Field.Field>
-					<Field.Label for="trust-github">GitHub repository</Field.Label>
+					<Field.Label for="trust-github">{trustProvider === 'gitlab' ? 'GitLab project path' : 'GitHub repository'}</Field.Label>
 					<Input
 						id="trust-github"
-						name="githubRepository"
+						name="subject"
 						bind:value={trustRepo}
-						placeholder="owner/repo"
+						placeholder={trustProvider === 'gitlab' ? 'group/project' : 'owner/repo'}
 						required
 						autocapitalize="off"
 						spellcheck="false"

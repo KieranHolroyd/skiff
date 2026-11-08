@@ -2,42 +2,49 @@ import {
 	detectFramework,
 	githubImportDetectSchema,
 	githubImportSchema,
-	parseGithubRepoUrl,
-	sameGithubRepo,
 	workloadSpecSchema,
+	FORGE_LABELS,
 	type GithubImportDetectInput,
 	type GithubImportDetection,
 	type GithubImportInput,
 	type GithubImportResult,
-	type GithubRepositoryView,
+	type GitRepositoryView,
 	type Principal,
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import { CoreError, ValidationError } from './errors.ts';
+import type { GitRepositoryRef } from './forges/router.ts';
 
 const WORKFLOW_DIR = '.skiff/workflows';
 /** Directories never offered as a root directory. */
 const HIDDEN_DIRECTORIES = new Set(['node_modules', '.git', '.github', '.skiff', '.vscode', '.idea']);
 
 /**
- * Deploy from GitHub (docs/GITHUB.md §9, D172): read a repository through the org's GitHub App,
- * guess how to build it, then create the project, its git source, the first build and, when the
- * repository has workflows, its pipeline repository in one step. Everything after that is the
- * existing machinery: pushes arrive on the App's webhook (D165), Builders clone with an
- * installation token (D164), and each build reports a commit status and a GitHub deployment.
+ * Deploy from Git (docs/GITHUB.md §9, D172; docs/FORGES.md §7, D177): read a repository through
+ * the org's GitHub App or a GitLab/Gitea/Forgejo connection, guess how to build it, then create the
+ * project, its git source, the first build and, when the repository has workflows, its pipeline
+ * repository in one step. Everything after that is the existing machinery: pushes arrive on the
+ * App's webhook (D165) or the hook Skiff creates on the forge (D174), Builders clone with a
+ * narrowed token (D164, D175), and each build reports a commit status and a deployment.
  */
 export class GithubImportService {
 	constructor(private readonly ctx: CoreContext) {}
 
-	private async requireRepository(orgId: string, fullName: string): Promise<GithubRepositoryView> {
-		const repo = await this.ctx.githubApp.repository(orgId, fullName);
+	private async requireRepository(orgId: string, ref: GitRepositoryRef): Promise<GitRepositoryView> {
+		const repo = await this.ctx.git.repository(orgId, ref);
 		if (!repo)
-			throw new CoreError(
-				'github_installation_missing',
-				`Skiff's GitHub App cannot reach ${fullName} for this organisation. Install it on ${fullName.split('/')[0]}, or grant it the repository, in Settings → GitHub.`,
-				409,
-			);
-		if (repo.archived) throw new ValidationError(`${repo.fullName} is archived on GitHub, so it cannot be built on push.`);
+			throw ref.connectionId
+				? new CoreError(
+						'forge_repository_missing',
+						`${this.ctx.git.label(orgId, ref)} cannot reach ${ref.fullName} with its token. Check the repository name and the token's access in Settings → Git providers.`,
+						409,
+					)
+				: new CoreError(
+						'github_installation_missing',
+						`Skiff's GitHub App cannot reach ${ref.fullName} for this organisation. Install it on ${ref.fullName.split('/')[0]}, or grant it the repository, in Settings → GitHub.`,
+						409,
+					);
+		if (repo.archived) throw new ValidationError(`${repo.fullName} is archived on ${FORGE_LABELS[repo.provider]}, so it cannot be built on push.`);
 		return repo;
 	}
 
@@ -45,10 +52,12 @@ export class GithubImportService {
 	async detect(principal: Principal, input: GithubImportDetectInput): Promise<GithubImportDetection> {
 		this.ctx.iam.require(principal, 'project:create', { type: 'org' });
 		const parsed = githubImportDetectSchema.parse(input);
-		const repo = await this.requireRepository(principal.orgId, parsed.repository);
+		const ref: GitRepositoryRef = { connectionId: parsed.connectionId ?? null, fullName: parsed.repository };
+		const repo = await this.requireRepository(principal.orgId, ref);
+		const at: GitRepositoryRef = { connectionId: ref.connectionId, fullName: repo.fullName };
 		const branch = parsed.branch ?? repo.defaultBranch;
 		const rootDir = normalizeDir(parsed.rootDir);
-		const listing = await this.ctx.githubApp.readPath(principal.orgId, repo.fullName, rootDir, branch);
+		const listing = await this.ctx.git.readPath(principal.orgId, at, rootDir, branch);
 		if (!listing || listing.kind !== 'dir')
 			throw new ValidationError(
 				rootDir === '.' ? `${repo.fullName} has no branch "${branch}", or it is empty.` : `There is no directory "${rootDir}" on ${branch}.`,
@@ -56,7 +65,7 @@ export class GithubImportService {
 		const names = listing.entries.map((entry) => entry.name);
 		let packageJson: unknown = null;
 		if (listing.entries.some((entry) => entry.type === 'file' && entry.name === 'package.json')) {
-			const file = await this.ctx.githubApp.readPath(principal.orgId, repo.fullName, joinDir(rootDir, 'package.json'), branch);
+			const file = await this.ctx.git.readPath(principal.orgId, at, joinDir(rootDir, 'package.json'), branch);
 			if (file?.kind === 'file' && file.text) {
 				try {
 					packageJson = JSON.parse(file.text);
@@ -65,10 +74,12 @@ export class GithubImportService {
 				}
 			}
 		}
-		const workflows = await this.workflows(principal.orgId, repo.fullName, branch);
+		const workflows = await this.workflows(principal.orgId, at, branch);
 		const packageName = (packageJson as { name?: unknown } | null)?.name;
 		return {
 			repository: {
+				provider: repo.provider,
+				connectionId: repo.connectionId,
 				fullName: repo.fullName,
 				cloneUrl: repo.cloneUrl,
 				htmlUrl: repo.htmlUrl,
@@ -91,9 +102,9 @@ export class GithubImportService {
 		};
 	}
 
-	private async workflows(orgId: string, fullName: string, ref: string): Promise<string[]> {
+	private async workflows(orgId: string, at: GitRepositoryRef, ref: string): Promise<string[]> {
 		try {
-			const listing = await this.ctx.githubApp.readPath(orgId, fullName, WORKFLOW_DIR, ref);
+			const listing = await this.ctx.git.readPath(orgId, at, WORKFLOW_DIR, ref);
 			return listing?.kind === 'dir'
 				? listing.entries
 						.filter((entry) => entry.type === 'file' && /\.ya?ml$/i.test(entry.name))
@@ -114,7 +125,9 @@ export class GithubImportService {
 		this.ctx.iam.require(principal, 'project:create', { type: 'org' });
 		this.ctx.iam.require(principal, 'build:create', { type: 'org' });
 		const parsed = githubImportSchema.parse(input);
-		const repo = await this.requireRepository(principal.orgId, parsed.repository);
+		const ref: GitRepositoryRef = { connectionId: parsed.connectionId ?? null, fullName: parsed.repository };
+		const repo = await this.requireRepository(principal.orgId, ref);
+		const at: GitRepositoryRef = { connectionId: ref.connectionId, fullName: repo.fullName };
 		const branch = parsed.branch ?? repo.defaultBranch;
 		const spec =
 			parsed.runtime === 'process'
@@ -126,7 +139,7 @@ export class GithubImportService {
 						...(parsed.env ? { env: parsed.env } : {}),
 					})
 				: null;
-		const workflows = parsed.pipelines ? await this.workflows(principal.orgId, repo.fullName, branch) : [];
+		const workflows = parsed.pipelines ? await this.workflows(principal.orgId, at, branch) : [];
 
 		const view = await this.ctx.projects.create(principal, {
 			name: parsed.name ?? repo.name,
@@ -157,19 +170,17 @@ export class GithubImportService {
 
 		let pipelineRepository: string | null = null;
 		if (workflows.length > 0) {
+			const identity = this.ctx.git.identity(principal.orgId, repo.cloneUrl);
 			const existing = this.ctx.pipelines
 				.listRepositories(principal)
-				.find((row) => {
-					const other = parseGithubRepoUrl(row.cloneUrl);
-					return other !== null && sameGithubRepo(`${other.owner}/${other.repo}`, repo.fullName);
-				});
+				.find((row) => identity !== null && this.ctx.git.identity(principal.orgId, row.cloneUrl) === identity);
 			if (existing) pipelineRepository = existing.name;
 			else {
 				try {
 					pipelineRepository = this.ctx.pipelines.createRepository(principal, {
 						name: this.ctx.pipelines.freeRepositoryName(principal.orgId, repo.fullName),
 						cloneUrl: repo.cloneUrl,
-						provider: 'github',
+						provider: repo.provider,
 						defaultBranch: repo.defaultBranch,
 					}).name;
 				} catch (error) {
@@ -180,10 +191,10 @@ export class GithubImportService {
 
 		this.ctx.audit.record({
 			principal,
-			action: 'github.import',
+			action: repo.provider === 'github' ? 'github.import' : 'git.import',
 			resource: 'project',
 			resourceId: project.id,
-			args: { repository: repo.fullName, branch, runtime: parsed.runtime, framework: parsed.framework ?? null, pipelineRepository },
+			args: { provider: repo.provider, connectionId: repo.connectionId, repository: repo.fullName, branch, runtime: parsed.runtime, framework: parsed.framework ?? null, pipelineRepository },
 			result: 'ok',
 		});
 		return { project: { id: project.id, slug: project.slug, name: project.name }, build, pipelineRepository, warnings };

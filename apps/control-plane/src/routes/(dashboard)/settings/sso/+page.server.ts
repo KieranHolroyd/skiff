@@ -2,7 +2,8 @@ import { error, fail } from '@sveltejs/kit';
 import { core } from '#lib/server/core.js';
 import { sqlite } from '#lib/server/db.js';
 import { userHasSecondFactor } from '#lib/server/second-factor.js';
-import { sso } from '#lib/server/sso.js';
+import { reserveSsoProviderId, sso, ssoCallbackUrl } from '#lib/server/sso.js';
+import { ssoPreset } from '#lib/sso-presets.js';
 import { ssoDefaultRole } from '#lib/server/sso-provision.js';
 import { failStatus, formBoolean, formString, toFormFailure } from '../../_lib/errors.js';
 import type { Actions, PageServerLoad } from './$types';
@@ -11,6 +12,10 @@ import type { Actions, PageServerLoad } from './$types';
  * Settings → SSO (IAM.md I19/I21, §8.3, §8.5). OIDC providers, the email domains that route to
  * them, and the org authentication policy (required SSO/2FA, methods, session limits, IP allowlist,
  * break-glass owners). Group mapping, SAML and SCIM are still shown as not yet built.
+ *
+ * Adding a provider starts from a preset (`#lib/sso-presets.ts`, D180) or a custom OIDC issuer.
+ * The provider id is reserved at load time so the dialog can show the exact redirect URI to
+ * register at the IdP before the provider exists.
  */
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -39,8 +44,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 		.all(principal.orgId)
 		.map((owner) => ({ ...owner, hasSecondFactor: userHasSecondFactor(owner.id) }));
 
+	const reservedProviderId = reserveSsoProviderId();
 	return {
 		providers,
+		reservedProviderId,
+		reservedCallbackUrl: ssoCallbackUrl(reservedProviderId),
 		domains,
 		owners,
 		policy: core.authPolicy.get(principal),
@@ -65,12 +73,24 @@ export const actions: Actions = {
 		const id = formString(data, 'providerId');
 		const clientSecret = formString(data, 'clientSecret');
 		const discoveryUrl = formString(data, 'discoveryUrl');
+		// A preset's own fields arrive as `preset.<key>`; the server resolves the issuer from them
+		// again rather than trusting the dialog's preview.
+		const preset = ssoPreset(formString(data, 'preset'));
+		const presetInput = preset
+			? {
+					preset: {
+						id: preset.id,
+						values: Object.fromEntries(
+							preset.fields.map((field) => [field.key, formString(data, `preset.${field.key}`)])
+						)
+					}
+				}
+			: { issuer: formString(data, 'issuer'), discoveryUrl: discoveryUrl || null };
 		const input = {
 			name: formString(data, 'name'),
-			issuer: formString(data, 'issuer'),
+			...presetInput,
 			clientId: formString(data, 'clientId'),
 			...(clientSecret ? { clientSecret } : {}),
-			discoveryUrl: discoveryUrl || null,
 			scopes: scopes(data),
 			claims: {
 				email: formString(data, 'claimEmail'),
@@ -88,7 +108,8 @@ export const actions: Actions = {
 					message: 'The client secret is required for a new provider.',
 					fieldErrors: { clientSecret: 'Required.' }
 				});
-			await sso.createProvider(principal, { ...input, clientSecret });
+			const reservedId = formString(data, 'reservedProviderId');
+			await sso.createProvider(principal, { ...input, clientSecret }, reservedId || undefined);
 			return { success: 'SSO provider added. Verify an email domain to route sign-ins to it.' };
 		} catch (cause) {
 			return failure(cause);

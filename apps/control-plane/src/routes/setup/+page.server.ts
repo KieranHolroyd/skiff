@@ -1,5 +1,5 @@
 import { fail, redirect, type Cookies } from '@sveltejs/kit';
-import { auth, githubSignIn } from '#lib/server/auth.js';
+import { auth, githubSignIn, gitlabSignIn } from '#lib/server/auth.js';
 import { core } from '#lib/server/core.js';
 import { contentDomain, features, objectStoreKind, platformOrigin, sharedDomain, smtp } from '#lib/server/config.js';
 import { sqlite } from '#lib/server/db.js';
@@ -51,6 +51,7 @@ function instanceFacts() {
 		sharedDomain,
 		email: smtp ? ('smtp' as const) : ('console' as const),
 		github: githubSignIn,
+		gitlab: gitlabSignIn,
 		objectStore: objectStoreKind,
 		nodes: nodes?.count ?? 0,
 		version: platformVersion,

@@ -166,7 +166,7 @@
 - [ ] E0 delivery check: PTR for the prod IP, then DKIM/SPF/DMARC pass at Gmail and Outlook
 - [x] E1 MTA: `packages/mail` (`skiff-agent mail`): spool, retries/expiry, MX delivery, shaping, classification, DKIM signing, submission 587/465, port 25 for bounces and ARF, control socket; static `skiff-mail.service`; helper start/stop/cert verbs
 - [x] E1 control plane: migration 0050, `EmailService` (domains + DKIM + Cloudflare TXT/MX, platform records, outbox, send, credentials + `SMTP_*` attach env, suppression incl. platform list, sandbox/limits/auto-pause, message log, sweeps), agent routes, agent bridge, Caddy certificates for `smtp.`/`mx.`
-- [x] E1 surfaces: REST, MCP, CLI (`skif email`), dashboard Email pages and Settings → Email
+- [x] E1 surfaces: REST, MCP, CLI (`skif email`), dashboard Email pages and Email → Mail server
 - [ ] E1 remaining: automated preflight (port 25, FCrDNS, blocklists), ClickHouse `email_events`, built-in alert kinds in Settings → Alerts, an admin list of org email states
 - [ ] E2: inbound routes (function `email()` handler synchronous in `DATA`, webhook, bucket), `send_email` binding, tenant webhooks, address identities
 - [ ] E3: custom MAIL FROM, ed25519, MTA-STS/TLS-RPT, DMARC reports, smarthost relay (SES BYODKIM), rspamd, templates, tracking, hosted unsubscribe

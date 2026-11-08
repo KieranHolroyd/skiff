@@ -168,7 +168,7 @@ export class JobRunner {
 
 			await mkdir(this.config.buildDir, { recursive: true });
 			tempDir = await mkdtemp(join(this.config.buildDir, 'build-'));
-			await cloneRef({ url: job.repoUrl, ref: job.ref, dir: tempDir, credentials: withCloneToken(this.config, job.auth?.password) });
+			await cloneRef({ url: job.repoUrl, ref: job.ref, dir: tempDir, credentials: withCloneToken(this.config, job.auth?.password, { host: job.auth?.host, username: job.auth?.username }) });
 
 			const info = await commitInfo(tempDir);
 			commitSha = info.sha ?? commitSha;

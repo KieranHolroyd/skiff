@@ -20,7 +20,7 @@ import type { CoreContext } from '../context.ts';
 import { ValidationError } from '../errors.ts';
 
 /** The sign-in methods a policy can allow (IAM.md §8.5). */
-export const AUTH_METHODS = ['password', 'passkey', 'github', 'magic-link', 'sso'] as const;
+export const AUTH_METHODS = ['password', 'passkey', 'github', 'gitlab', 'magic-link', 'sso'] as const;
 export type AuthMethod = (typeof AUTH_METHODS)[number];
 
 export const DEFAULT_ALLOWED_METHODS: readonly AuthMethod[] = [...AUTH_METHODS];

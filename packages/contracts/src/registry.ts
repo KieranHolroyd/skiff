@@ -315,15 +315,36 @@ export const REGISTRY_REPOSITORY_PATTERN = /^[a-z0-9]+(?:(?:\.|_|__|-+)[a-z0-9]+
 
 /** The Basic-auth username a GitHub Actions OIDC token is presented under. */
 export const REGISTRY_GITHUB_OIDC_USER = 'github-oidc';
+/** The Basic-auth username a GitLab CI ID token (`id_tokens`) is presented under (D178). */
+export const REGISTRY_GITLAB_OIDC_USER = 'gitlab-oidc';
+export const GITLAB_DEFAULT_ISSUER = 'https://gitlab.com';
 
 export const registryOidcTrustCreateSchema = z
 	.object({
-		provider: z.literal('github').default('github'),
+		/** `github` (Actions OIDC) or `gitlab` (CI `id_tokens`, docs/FORGES.md §8). */
+		provider: z.enum(['github', 'gitlab']).default('github'),
 		/** The GitHub repository, `owner/repo`, exactly as the token's `repository` claim names it. */
 		githubRepository: z
 			.string()
 			.trim()
-			.regex(/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/, 'Use owner/repo'),
+			.regex(/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/, 'Use owner/repo')
+			.optional(),
+		/** The GitLab project path (`group/sub/project`), as the token's `project_path` claim names it. */
+		gitlabProject: z
+			.string()
+			.trim()
+			.max(512)
+			.regex(/^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+$/, 'Use group/project')
+			.optional(),
+		/** GitLab instance that issues the tokens; https://gitlab.com when absent. */
+		issuer: z
+			.string()
+			.trim()
+			.max(512)
+			.url()
+			.refine((value) => value.startsWith('https://'), 'The issuer must be an https URL')
+			.transform((value) => value.replace(/\/+$/, ''))
+			.optional(),
 		/** Optional glob on the token's `ref`: `refs/heads/main`, `refs/tags/*`. Absent = any ref. */
 		ref: z.string().trim().min(1).max(255).optional(),
 		/** `<org>/<name>` or `<org>/*` in your organisation's namespace. */
@@ -331,13 +352,26 @@ export const registryOidcTrustCreateSchema = z
 		/** Push as well as pull (default true). */
 		push: z.boolean().default(true),
 	})
-	.strict();
+	.strict()
+	.superRefine((value, ctx) => {
+		if (value.provider === 'github' && !value.githubRepository)
+			ctx.addIssue({ code: 'custom', path: ['githubRepository'], message: 'Enter the GitHub repository (owner/repo).' });
+		if (value.provider === 'gitlab' && !value.gitlabProject)
+			ctx.addIssue({ code: 'custom', path: ['gitlabProject'], message: 'Enter the GitLab project path (group/project).' });
+		if (value.provider === 'github' && value.issuer)
+			ctx.addIssue({ code: 'custom', path: ['issuer'], message: 'GitHub Actions has one issuer; leave it blank.' });
+	});
 export type RegistryOidcTrustCreate = z.input<typeof registryOidcTrustCreateSchema>;
 
 export interface RegistryOidcTrustView {
 	id: string;
-	provider: 'github';
+	provider: 'github' | 'gitlab';
+	/** The trusted repository (GitHub `owner/repo` or GitLab project path); named for GitHub for compatibility. */
 	githubRepository: string;
+	/** Same as `githubRepository`, under a provider-neutral name. */
+	subject: string;
+	/** Token issuer for GitLab trusts; null for GitHub. */
+	issuer: string | null;
 	ref: string | null;
 	repository: string;
 	push: boolean;

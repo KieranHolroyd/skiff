@@ -587,6 +587,12 @@ export class GithubAppService {
 		return this.orgInstallations(orgId).filter((row) => row.accountLogin.toLowerCase() === owner.toLowerCase());
 	}
 
+	/** Who linked an installation to `orgId` (automatic pipeline setup acts on their behalf), or null. */
+	installationLinker(orgId: string, installationId: number): string | null {
+		const row = this.ctx.db.select().from(githubInstallations).where(eq(githubInstallations.installationId, installationId)).get();
+		return row?.orgId === orgId ? row.linkedBy : null;
+	}
+
 	/** Whether an org can use the App for `owner` (any linked installation on that account). */
 	hasInstallationFor(orgId: string, owner: string): boolean {
 		return this.installationsFor(orgId, owner).length > 0;

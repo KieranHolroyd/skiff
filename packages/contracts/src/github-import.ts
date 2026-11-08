@@ -1,5 +1,6 @@
 import * as z from 'zod';
 import { accessModes } from './model.ts';
+import { gitFullNameSchema, type GitProviderKind } from './forges.ts';
 
 /**
  * Deploy from GitHub (docs/GITHUB.md §9, D172).
@@ -178,7 +179,10 @@ const relativeDir = (label: string) =>
 		.refine((value) => !value.startsWith('/') && !value.split('/').includes('..'), `${label} must stay inside the repository`);
 
 export const githubImportDetectSchema = z.object({
-	repository: githubFullNameSchema,
+	/** `owner/name` on GitHub; with `connectionId`, the full name on that forge (may be nested). */
+	repository: gitFullNameSchema,
+	/** A forge connection (docs/FORGES.md); absent reads the repository through the GitHub App. */
+	connectionId: z.string().min(1).max(64).optional(),
 	/** Branch to read; the repository's default branch when absent. */
 	branch: z.string().min(1).max(255).optional(),
 	rootDir: relativeDir('rootDir').default('.'),
@@ -187,6 +191,8 @@ export type GithubImportDetectInput = z.input<typeof githubImportDetectSchema>;
 
 export interface GithubImportDetection {
 	repository: {
+		provider?: GitProviderKind;
+		connectionId?: string | null;
 		fullName: string;
 		cloneUrl: string;
 		htmlUrl: string;
@@ -208,7 +214,9 @@ export interface GithubImportDetection {
 
 export const githubImportSchema = z
 	.object({
-		repository: githubFullNameSchema,
+		repository: gitFullNameSchema,
+		/** A forge connection (docs/FORGES.md); absent imports through the GitHub App. */
+		connectionId: z.string().min(1).max(64).optional(),
 		branch: z.string().min(1).max(255).optional(),
 		name: z.string().min(1).max(120).optional(),
 		slug: z
@@ -254,13 +262,13 @@ export interface GithubImportResult {
 /** Org setting: add App-covered repositories with `.skiff/workflows` to Pipelines on push (D172). */
 export interface PipelineAutoSetupView {
 	enabled: boolean;
-	/** `owner/name` of repositories removed from Pipelines, which are not added back. */
+	/** Repositories removed from Pipelines, which are not added back: `owner/name` on GitHub, `host/full name` on other forges. */
 	ignored: string[];
 }
 
 export const pipelineAutoSetupSchema = z.object({
 	enabled: z.boolean().optional(),
 	/** Forget an ignored repository so its next push adds it again. */
-	unignore: githubFullNameSchema.optional(),
+	unignore: z.string().trim().min(3).max(600).optional(),
 });
 export type PipelineAutoSetupInput = z.infer<typeof pipelineAutoSetupSchema>;

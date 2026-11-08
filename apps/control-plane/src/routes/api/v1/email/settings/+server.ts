@@ -4,7 +4,7 @@ import { core } from '#lib/server/core.js';
 import { readJson, route } from '#lib/server/api.js';
 import { requirePrincipal } from '#lib/server/principal.js';
 
-/** Settings → Email: choose (or clear) the mail node, its IPv4, the mail domain and the global pause. Platform admin session only. */
+/** Email → Mail server: choose (or clear) the mail node, its IPv4, the mail domain and the global pause. Platform admin session only. */
 const settingsSchema = z.object({
 	nodeId: z.string().min(1).nullable().optional(),
 	ip: z.string().trim().max(15).nullable().optional(),

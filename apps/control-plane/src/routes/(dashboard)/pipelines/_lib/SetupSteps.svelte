@@ -8,6 +8,7 @@
 		hasRepository,
 		defaultBranch = 'main',
 		viaGithubApp = false,
+		viaForge = null,
 		coverage = null,
 		manageUrl = null,
 		owner = null
@@ -17,6 +18,8 @@
 		defaultBranch?: string;
 		/** Skiff's GitHub App covers the repository: no webhook step (docs/GITHUB.md). */
 		viaGithubApp?: boolean;
+		/** A connected forge's webhook (created by Skiff) delivers the repository: its name (docs/FORGES.md). */
+		viaForge?: string | null;
 		/** `not-selected` / `not-installed`: one click on GitHub makes the webhook step go away. */
 		coverage?: string | null;
 		/** Where that click is (the installation's settings, or the App's install page). */
@@ -75,7 +78,13 @@ jobs:
 			>3</span
 		>
 		<div class="min-w-0 flex-1 space-y-2">
-			{#if viaGithubApp}
+			{#if viaForge}
+				<p class="font-medium">Push</p>
+				<p class="text-muted-foreground">
+					Nothing to set up: Skiff created the webhook on {viaForge}, clones the repository and reports each
+					run as a commit status.
+				</p>
+			{:else if viaGithubApp}
 				<p class="font-medium">Push</p>
 				<p class="text-muted-foreground">
 					Nothing to set up: Skiff’s GitHub App delivers this repository’s pushes and pull requests,

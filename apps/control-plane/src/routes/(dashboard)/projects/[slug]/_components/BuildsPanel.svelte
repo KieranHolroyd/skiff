@@ -2,7 +2,7 @@
 	import DetailList from '#lib/components/skiff/DetailList.svelte';
 	import { resolve } from '$app/paths';
 	import type { ProjectView } from '@skiff/core';
-	import type { BuildView, GitSourceView, GithubRepositoryView } from '@skiff/contracts';
+	import { FORGE_LABELS, type BuildView, type GitRepositoryView, type GitSourceView } from '@skiff/contracts';
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
 	import CircleSlashIcon from '@lucide/svelte/icons/circle-slash';
 	import GitBranchIcon from '@lucide/svelte/icons/git-branch';
@@ -18,7 +18,8 @@
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
 	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import GithubRepoPicker from '#lib/components/skiff/GithubRepoPicker.svelte';
+	import GitRepoPicker from '#lib/components/skiff/GitRepoPicker.svelte';
+	import ForgeMark from '#lib/components/skiff/ForgeMark.svelte';
 	import GitHubMark from '#lib/components/skiff/GitHubMark.svelte';
 	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
@@ -81,8 +82,8 @@
 		sourceOpen = true;
 	}
 
-	function pickRepo(repo: GithubRepositoryView) {
-		pickedRepo = repo.fullName;
+	function pickRepo(repo: GitRepositoryView) {
+		pickedRepo = repo.key;
 		repoValue = repo.cloneUrl;
 		branchValue = repo.defaultBranch;
 	}
@@ -249,8 +250,8 @@
 					</dd>
 				</DetailList>
 				<p class="mt-3 flex items-start gap-2 text-xs text-muted-foreground">
-					{#if gitSource.githubAppInstallationId}
-						<GitHubMark class="mt-0.5 size-3.5 shrink-0" />
+					{#if gitSource.gitProvider?.delivered || gitSource.githubAppInstallationId}
+						<ForgeMark kind={gitSource.gitProvider?.kind ?? 'github'} class="mt-0.5 size-3.5 shrink-0" />
 					{:else}
 						<WebhookIcon class="mt-0.5 size-3.5 shrink-0" />
 					{/if}
@@ -259,12 +260,21 @@
 							Connected through Skiff’s GitHub App: pushes arrive without this webhook, private
 							clones need no node token, and each build reports a commit status and a GitHub
 							deployment. A hand-made webhook for the same repository is ignored.
+						{:else if gitSource.gitProvider?.delivered}
+							Connected through {FORGE_LABELS[gitSource.gitProvider.kind]} ({gitSource.gitProvider.via}): Skiff created
+							the webhook there, clones privately and reports a commit status for each build{gitSource.gitProvider.kind ===
+							'gitlab'
+								? ' and a deployment'
+								: ''}. A hand-made webhook for the same repository is ignored.
+						{:else if gitSource.gitProvider?.connectionId}
+							{FORGE_LABELS[gitSource.gitProvider.kind]} is connected, but Skiff could not create the webhook yet; see
+							Settings → Git providers. Private clones and commit statuses already work.
 						{:else if gitSource.hasWebhookSecret}
-							Signed deliveries only. Add the webhook in GitHub and use the same secret you set
-							here.
+							Signed deliveries only. Add the webhook in GitHub, GitLab, Gitea or Forgejo with the same secret you set
+							here (GitLab calls it the secret token).
 						{:else}
-							No webhook secret is set. Add one before enabling the GitHub webhook; unsigned
-							deliveries are rejected.
+							No webhook secret is set. Add one before enabling a webhook; unsigned deliveries are rejected. Or connect
+							the provider (Settings → GitHub or Git providers) and skip webhooks.
 						{/if}
 					</span>
 				</p>
@@ -431,14 +441,14 @@
 		submitLabel={gitSource ? 'Save source' : 'Connect repository'}
 	>
 		<Field.Group>
-			<GithubRepoPicker onpick={pickRepo} selected={pickedRepo} />
+			<GitRepoPicker onpick={pickRepo} selected={pickedRepo} />
 			<Field.Field>
 				<Field.Label for="git-repo">Repository URL</Field.Label>
 				<Input
 					id="git-repo"
 					name="repoUrl"
 					bind:value={repoValue}
-					placeholder="https://github.com/acme/site.git"
+					placeholder="https://gitlab.com/acme/site.git"
 					required
 					autocapitalize="off"
 					spellcheck="false"

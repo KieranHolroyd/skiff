@@ -67,6 +67,20 @@ export const github =
 		? { clientId: env.GITHUB_CLIENT_ID, clientSecret: env.GITHUB_CLIENT_SECRET }
 		: undefined;
 
+/**
+ * "Sign in with GitLab" (docs/FORGES.md §8, D178): an OAuth application on gitlab.com or a
+ * self-managed instance (`GITLAB_ISSUER`, e.g. https://gitlab.example.com), redirect URI
+ * `<origin>/api/auth/callback/gitlab`, scopes `read_user`.
+ */
+export const gitlab =
+	env.GITLAB_CLIENT_ID && env.GITLAB_CLIENT_SECRET
+		? {
+				clientId: env.GITLAB_CLIENT_ID,
+				clientSecret: env.GITLAB_CLIENT_SECRET,
+				...(env.GITLAB_ISSUER ? { issuer: env.GITLAB_ISSUER.replace(/\/+$/, '') } : {})
+			}
+		: undefined;
+
 export const smtp = env.SKIFF_SMTP_HOST
 	? {
 			host: env.SKIFF_SMTP_HOST,

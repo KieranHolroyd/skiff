@@ -204,6 +204,9 @@
 				viaGithubApp={data.coverage
 					? data.coverage.status === 'covered'
 					: Boolean(data.repository.githubAppInstallationId)}
+				viaForge={data.repository.provider !== 'github' && data.repository.gitProvider?.delivered
+					? (data.repository.gitProvider.via ?? 'the forge')
+					: null}
 				coverage={data.coverage?.status ?? null}
 				manageUrl={data.coverage?.manageUrl ?? null}
 				owner={data.coverage?.fullName?.split('/')[0] ?? null}

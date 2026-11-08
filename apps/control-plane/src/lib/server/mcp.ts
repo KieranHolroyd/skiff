@@ -5065,7 +5065,7 @@ function buildServer(
 	const emailSendBlocker = (from: z.infer<typeof recipientInputSchema>): string | null => {
 		const settings = core.email.settings();
 		if (!settings.nodeId)
-			return 'Email is not set up on this platform yet: a platform admin has to choose a mail node in the Skiff dashboard (Settings → Email) before anything can be delivered.';
+			return 'Email is not set up on this platform yet: a platform admin has to choose a mail node in the Skiff dashboard (Email → Mail server) before anything can be delivered.';
 		const address = recipientAddressOf(from);
 		const domain = address.slice(address.lastIndexOf('@') + 1).toLowerCase();
 		let domains: EmailDomainView[];
@@ -5104,7 +5104,7 @@ function buildServer(
 				const domains = core.email.listDomains(principal).map((view) => ({ name: view.name, status: view.status, sending: view.sending }));
 				const nextSteps: string[] = [];
 				if (!settings.nodeId)
-					nextSteps.push('Email is not set up yet: a platform admin chooses a mail node in the Skiff dashboard (Settings → Email). Until then nothing is delivered.');
+					nextSteps.push('Email is not set up yet: a platform admin chooses a mail node in the Skiff dashboard (Email → Mail server). Until then nothing is delivered.');
 				if (settings.paused) nextSteps.push('A platform admin has paused all outgoing mail on this platform.');
 				if (org.state === 'paused') nextSteps.push(`This org's sending is paused: ${org.pausedReason ?? 'by a platform admin'}. Only a platform admin can resume it.`);
 				if (org.state === 'sandbox') {
@@ -5738,7 +5738,7 @@ function buildServer(
 						text: [
 							'# Email',
 							'',
-							"Skiff sends mail through its own MTA on one mail node, which a platform admin chooses in Settings → Email. `get_email_status` says whether that is done, the org's state (sandbox, active, paused) and its limits.",
+							"Skiff sends mail through its own MTA on one mail node, which a platform admin chooses in Email → Mail server. `get_email_status` says whether that is done, the org's state (sandbox, active, paused) and its limits.",
 							'',
 							'1. `create_email_domain` adds a sending domain and its DKIM key. `get_email_domain` lists the DKIM, SPF and DMARC records with what DNS returned; relay its `nextSteps` to the user. When the platform manages the zone in Cloudflare, Skiff creates the records itself.',
 							'2. `check_email_domain` re-checks DNS. The domain is verified once DKIM is found, and only verified domains can send.',

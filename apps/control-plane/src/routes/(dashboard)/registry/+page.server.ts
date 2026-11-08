@@ -29,14 +29,19 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const ref = string(data, 'ref');
 		try {
+			const provider = string(data, 'provider') === 'gitlab' ? 'gitlab' : 'github';
+			const issuer = string(data, 'issuer');
 			const trust = core.registry.createOidcTrust(principal, {
-				githubRepository: string(data, 'githubRepository'),
+				provider,
+				...(provider === 'gitlab'
+					? { gitlabProject: string(data, 'subject'), ...(issuer ? { issuer } : {}) }
+					: { githubRepository: string(data, 'subject') }),
 				repository: string(data, 'repository'),
 				...(ref ? { ref } : {}),
 				push: data.get('push') === 'on'
 			});
 			return {
-				success: `Workflows in ${trust.githubRepository} can now ${trust.push ? 'push to and pull' : 'pull'} ${trust.repository}.`
+				success: `${provider === 'gitlab' ? 'CI jobs' : 'Workflows'} in ${trust.subject} can now ${trust.push ? 'push to and pull' : 'pull'} ${trust.repository}.`
 			};
 		} catch (cause) {
 			return fail(400, { message: (cause as Error).message });

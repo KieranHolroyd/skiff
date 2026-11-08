@@ -103,7 +103,7 @@
 	</PageHeader>
 
 	{#if !area.configured}
-		<NotSetUp platformAdmin={area.can.platform} compact />
+		<NotSetUp platformAdmin={area.can.platform} />
 	{/if}
 
 	{#if data.denied}

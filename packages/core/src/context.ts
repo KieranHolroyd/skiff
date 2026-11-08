@@ -44,6 +44,7 @@ import type { UpgradeService } from './upgrades.ts';
 import type { GithubRunnerService } from './github-runners.ts';
 import type { GithubAppService } from './github-app.ts';
 import type { GithubImportService } from './github-import.ts';
+import type { ForgeService, GitProviders } from './forges/index.ts';
 import type { FunctionService } from './functions.ts';
 import type { TemplateService } from './templates.ts';
 import type { AlertService } from './alerts.ts';
@@ -133,8 +134,12 @@ export interface CoreContext {
 	githubRunners: GithubRunnerService;
 	/** Skiff's GitHub App: installations, tokens, statuses, the App webhook (docs/GITHUB.md). */
 	githubApp: GithubAppService;
-	/** Deploy from GitHub: detect and import a repository (docs/GITHUB.md §9). */
+	/** Deploy from Git: detect and import a repository from any provider (docs/GITHUB.md §9, docs/FORGES.md §7). */
 	githubImport: GithubImportService;
+	/** GitLab, Gitea and Forgejo connections (docs/FORGES.md). */
+	forges: ForgeService;
+	/** Routes repository URLs to the GitHub App or a forge connection (docs/FORGES.md §5). */
+	git: GitProviders;
 	templates: TemplateService;
 	/** Metric alert rules (docs/ALERTS.md). */
 	alerts: AlertService;

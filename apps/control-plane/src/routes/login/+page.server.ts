@@ -1,6 +1,6 @@
 import { redirect } from '@sveltejs/kit';
 import { openSignup, platformOrigin, smtp } from '#lib/server/config.js';
-import { githubSignIn } from '#lib/server/auth.js';
+import { githubSignIn, gitlabSignIn } from '#lib/server/auth.js';
 import { sqlite } from '#lib/server/db.js';
 import { needsSetup } from '#lib/server/setup.js';
 import { safeRedirect } from '#lib/redirect.js';
@@ -16,6 +16,7 @@ export const load: PageServerLoad = ({ url }) => {
 	return {
 		redirect: redirectTo,
 		github: githubSignIn,
+		gitlab: gitlabSignIn,
 		/** Without SMTP, magic links go to the server log (ConsoleEmailTransport). */
 		emailToLog: !smtp
 	};

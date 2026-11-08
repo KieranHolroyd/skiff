@@ -79,11 +79,11 @@
 				</span>
 				<span class="min-w-0 flex-1 space-y-0.5">
 					<span id="github-heading" class="block font-semibold tracking-tight"
-						>Deploy from GitHub</span
+						>Deploy from Git</span
 					>
 					<span class="block text-sm text-pretty text-muted-foreground"
-						>Import a repository: Skiff detects the framework, builds it on every push and reports
-						back to GitHub. No webhook to set up.</span
+						>Import a repository from GitHub, GitLab, Gitea or Forgejo: Skiff detects the framework,
+						builds it on every push and reports back. No webhook to set up.</span
 					>
 				</span>
 				<span

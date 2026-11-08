@@ -1,12 +1,9 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
 import { and, asc, desc, eq, inArray, lt } from 'drizzle-orm';
 import { builds, deployments, gitSources, nodes, projects, releases } from '@skiff/db';
 import {
 	buildCreateSchema,
 	contentUrl,
 	gitSourceSchema,
-	parseGithubRepoUrl,
-	sameGithubRepo,
 	type BuildCreate,
 	type BuildJob,
 	type BuildReport,
@@ -23,6 +20,16 @@ import { buildSystemPrincipal } from './iam/system.ts';
 import { decrypt, encrypt, newId } from './util.ts';
 import type { ProjectRow } from './projects.ts';
 import type { GithubPushEvent } from './github-app.ts';
+import {
+	normaliseForgeEvent,
+	pushedBranch,
+	verifyDelivery,
+	webhookEventName,
+	webhookSource,
+	type ForgePushEvent,
+	type HeaderReader,
+} from './forges/events.ts';
+import type { RepositoryIdentity } from './forges/router.ts';
 
 export type GitSourceRow = typeof gitSources.$inferSelect;
 export type BuildRow = typeof builds.$inferSelect;
@@ -85,6 +92,8 @@ export class BuildService {
 		});
 		const row = this.ctx.db.select().from(gitSources).where(eq(gitSources.projectId, project.id)).get();
 		if (!row) throw new CoreError('error', 'Git source was not saved.');
+		// D174: a repository on a connected forge gets Skiff's webhook, so pushes need no setup.
+		if (row.enabled) this.ctx.git.ensureWebhook(row.orgId, row.repoUrl);
 		return this.gitView(project, row);
 	}
 
@@ -131,7 +140,7 @@ export class BuildService {
 			finishedAt: null,
 		};
 		this.ctx.db.insert(builds).values(row).run();
-		void this.reportGithub(project, source, row);
+		void this.reportGit(project, source, row);
 		this.ctx.audit.record({
 			principal,
 			action: 'build.create',
@@ -252,9 +261,10 @@ export class BuildService {
 				.run();
 			throw error;
 		}
-		// D164: a repository covered by the org's GitHub App is cloned with a one-hour, read-only
-		// token for that repository alone; otherwise the Builder uses its own git credentials.
-		const access = await this.ctx.githubApp.repoToken(source.orgId, source.repoUrl, { contents: 'read' });
+		// D164/D175: a repository covered by the org's GitHub App is cloned with a one-hour, read-only
+		// token for that repository alone, one on a connected forge with a deploy or clone token for
+		// its host; otherwise the Builder uses its own git credentials.
+		const access = await this.ctx.git.cloneAuth(source.orgId, source.repoUrl);
 		return {
 			buildId: row.id,
 			repoUrl: source.repoUrl,
@@ -264,7 +274,7 @@ export class BuildService {
 			buildCommand: source.buildCommand,
 			outputDir: source.outputDir,
 			uploadUrl,
-			auth: access ? { username: 'x-access-token', password: access.token } : null,
+			auth: access ? { username: access.username, password: access.token, host: access.host } : null,
 		};
 	}
 
@@ -360,7 +370,7 @@ export class BuildService {
 
 		this.ctx.db.update(builds).set(patch).where(eq(builds.id, buildId)).run();
 		const source = this.ctx.db.select().from(gitSources).where(eq(gitSources.id, row.gitSourceId)).get();
-		if (source) void this.reportGithub(project, source, { ...row, ...patch } as BuildRow);
+		if (source) void this.reportGit(project, source, { ...row, ...patch } as BuildRow);
 		if (patch.status === 'failed')
 			this.ctx.events.emitDeployment(row.orgId, row.projectId, 'failed', {
 				project: project.slug,
@@ -431,7 +441,7 @@ export class BuildService {
 		});
 		void this.cleanupObject(`builds/${row.id}.zip`);
 		const source = this.ctx.db.select().from(gitSources).where(eq(gitSources.id, row.gitSourceId)).get();
-		if (source) void this.reportGithub(project, source, { ...row, status, finishedAt: now });
+		if (source) void this.reportGit(project, source, { ...row, status, finishedAt: now });
 		this.ctx.audit.record({
 			principal,
 			action: 'build.cancel',
@@ -464,66 +474,73 @@ export class BuildService {
 	}
 
 	/**
-	 * GitHub push delivery to the project's own webhook. The URL names the project; the signature
-	 * proves the payload. Returns null when the push is for another branch, the repository is not
-	 * configured, or Skiff's GitHub App already delivers this repository's pushes (D165): one push
-	 * must never queue two builds.
+	 * A delivery to the project's own webhook (`/api/webhooks/git/<project>`). GitHub, Gitea and
+	 * Forgejo sign it with the stored secret; GitLab sends it in `X-Gitlab-Token` (D174). Returns null
+	 * when the push is for another branch, the source is disabled, or Skiff's GitHub App or a
+	 * Skiff-created forge hook already delivers this repository's pushes (D165): one push must
+	 * never queue two builds.
 	 */
-	async handleGithubWebhook(
-		project: ProjectRow,
-		rawBody: string,
-		signature: string | null,
-		event: string | null,
-	): Promise<BuildView | null> {
-		if (event !== 'push') return null;
+	async handleWebhook(project: ProjectRow, rawBody: string, headers: HeaderReader): Promise<BuildView | null> {
 		const source = this.ctx.db.select().from(gitSources).where(eq(gitSources.projectId, project.id)).get();
+		const from = webhookSource(headers) ?? 'github';
+		const eventName = webhookEventName(from, headers);
+		if (from !== 'gitlab' && eventName !== 'push') return null;
 		if (!source || !source.enabled) return null;
-		this.verifySignature(source, rawBody, signature);
-		let payload: GithubPushEvent;
+		this.verifySignature(source, from, rawBody, headers);
+		let payload: unknown;
 		try {
-			payload = JSON.parse(rawBody) as GithubPushEvent;
+			payload = JSON.parse(rawBody);
 		} catch {
-			throw new ValidationError('GitHub payload is not valid JSON.');
+			throw new ValidationError('Webhook payload is not valid JSON.');
 		}
-		const fullName = payload.repository?.full_name ?? this.githubFullName(source);
-		if (fullName && (await this.ctx.githubApp.deliversFor(project.orgId, fullName))) return null;
-		return this.queuePush(project, source, payload, 'build.webhook');
+		const event = normaliseForgeEvent(from, eventName, payload);
+		if (event.kind !== 'push') return null;
+		if (await this.ctx.git.deliversFor(project.orgId, source.repoUrl, event.fullName)) return null;
+		return this.queuePush(project, source, event, 'build.webhook');
+	}
+
+	/** `handleWebhook` with GitHub's two headers (kept for callers and tests that pass them). */
+	async handleGithubWebhook(project: ProjectRow, rawBody: string, signature: string | null, event: string | null): Promise<BuildView | null> {
+		return this.handleWebhook(project, rawBody, headerReader({ 'x-hub-signature-256': signature, 'x-github-event': event ?? 'push' }));
+	}
+
+	/** A push delivered through Skiff's GitHub App (D165). Returns the build ids. */
+	async handleAppPush(orgId: string, fullName: string, payload: GithubPushEvent): Promise<string[]> {
+		const event = normaliseForgeEvent('github', 'push', payload);
+		if (event.kind !== 'push') return [];
+		return this.handlePush(orgId, this.ctx.git.githubIdentity(fullName), event);
 	}
 
 	/**
-	 * A push delivered through Skiff's GitHub App (D165): every enabled git source in the org whose
-	 * repository is `fullName` and whose branch was pushed queues a build. Returns the build ids.
+	 * A push delivered by a Skiff-managed hook (the GitHub App, or a forge connection's hook, D174):
+	 * every enabled git source in the org whose repository has `identity` and whose branch was
+	 * pushed queues a build. Returns the build ids.
 	 */
-	async handleAppPush(orgId: string, fullName: string, payload: GithubPushEvent): Promise<string[]> {
+	async handlePush(orgId: string, identity: RepositoryIdentity, event: ForgePushEvent): Promise<string[]> {
 		const candidates = this.ctx.db
 			.select({ source: gitSources, project: projects })
 			.from(gitSources)
 			.innerJoin(projects, eq(projects.id, gitSources.projectId))
 			.where(and(eq(gitSources.orgId, orgId), eq(gitSources.enabled, true)))
 			.all()
-			.filter(({ source, project }) => !project.deletedAt && sameGithubRepo(this.githubFullName(source) ?? '', fullName));
+			.filter(({ source, project }) => !project.deletedAt && this.ctx.git.identity(orgId, source.repoUrl) === identity);
 		const queued: string[] = [];
 		for (const { source, project } of candidates) {
 			try {
-				const build = this.queuePush(project, source, payload, 'build.github_app');
+				const build = this.queuePush(project, source, event, identity.startsWith('github:') ? 'build.github_app' : 'build.forge_hook');
 				if (build) queued.push(build.id);
 			} catch (error) {
 				// A quota refusal for one project must not drop the push for the others.
-				console.warn(`[builds] ${project.slug}: GitHub App push ignored: ${(error as Error).message}`);
+				console.warn(`[builds] ${project.slug}: push ignored: ${(error as Error).message}`);
 			}
 		}
 		return queued;
 	}
 
-	private githubFullName(source: GitSourceRow): string | null {
-		const parsed = parseGithubRepoUrl(source.repoUrl);
-		return parsed ? `${parsed.owner}/${parsed.repo}` : null;
-	}
-
-	private queuePush(project: ProjectRow, source: GitSourceRow, payload: GithubPushEvent, action: string): BuildView | null {
-		const branch = payload.ref?.startsWith('refs/heads/') ? payload.ref.slice('refs/heads/'.length) : null;
+	private queuePush(project: ProjectRow, source: GitSourceRow, event: ForgePushEvent, action: string): BuildView | null {
+		const branch = pushedBranch(event);
 		if (!branch || branch !== source.branch) return null;
-		if (payload.deleted || !payload.after || /^0+$/.test(payload.after)) return null;
+		if (event.deleted || !event.after) return null;
 		this.ctx.quota.assertCanCreateBuild(project.orgId, project.id);
 		const now = this.ctx.now();
 		const row: BuildRow = {
@@ -533,8 +550,8 @@ export class BuildService {
 			gitSourceId: source.id,
 			status: 'queued',
 			ref: branch,
-			commitSha: payload.after ?? null,
-			commitMessage: payload.head_commit?.message?.slice(0, 2000) ?? null,
+			commitSha: event.after,
+			commitMessage: event.message?.slice(0, 2000) ?? null,
 			releaseId: null,
 			deploymentId: null,
 			nodeId: null,
@@ -549,29 +566,40 @@ export class BuildService {
 			finishedAt: null,
 		};
 		this.ctx.db.insert(builds).values(row).run();
-		void this.reportGithub(project, source, row);
+		void this.reportGit(project, source, row);
 		this.ctx.audit.record({
 			action,
 			resource: 'build',
 			resourceId: row.id,
 			orgId: project.orgId,
-			args: { project: project.slug, ref: branch, commit: payload.after },
+			args: { project: project.slug, ref: branch, commit: event.after },
 			result: 'ok',
 		});
 		return this.view(project, row);
 	}
 
 	/**
-	 * Commit status `skiff-build/<project>` for every state a build passes through, and a GitHub
-	 * deployment when it succeeds (D164). Only for repositories the org's GitHub App covers;
-	 * best effort, never throws.
+	 * Commit status `skiff-build/<project>` for every state a build passes through, and a
+	 * deployment when it succeeds (D164, D176): through the GitHub App or the forge connection that
+	 * serves the repository. Best effort, never throws.
 	 */
-	private async reportGithub(project: ProjectRow, source: GitSourceRow, row: BuildRow): Promise<void> {
+	private async reportGit(project: ProjectRow, source: GitSourceRow, row: BuildRow): Promise<void> {
 		try {
-			if (!row.commitSha || !this.githubFullName(source)) return;
+			if (!row.commitSha) return;
+			const link = this.ctx.git.link(project.orgId, source.repoUrl);
+			if (link.kind === 'generic') return;
 			const origin = this.ctx.config.platformOrigin.replace(/\/+$/, '');
 			const buildUrl = `${origin}/projects/${encodeURIComponent(project.slug)}?tab=builds`;
-			const state = row.status === 'succeeded' ? 'success' : row.status === 'failed' ? 'failure' : row.status === 'cancelled' ? 'error' : 'pending';
+			const state =
+				row.status === 'succeeded'
+					? 'success'
+					: row.status === 'failed'
+						? 'failure'
+						: row.status === 'cancelled'
+							? 'error'
+							: row.status === 'building'
+								? 'running'
+								: 'pending';
 			const description =
 				row.status === 'queued'
 					? 'Waiting for a build node'
@@ -582,7 +610,7 @@ export class BuildService {
 								? 'Built and deployed'
 								: 'Built; preview deployed'
 							: `${row.status}${row.error ? `: ${row.error.split('\n')[0]}` : ''}`;
-			await this.ctx.githubApp.commitStatus(project.orgId, source.repoUrl, {
+			await this.ctx.git.commitStatus(project.orgId, source.repoUrl, {
 				sha: row.commitSha,
 				state,
 				context: `skiff-build/${project.slug}`,
@@ -597,36 +625,30 @@ export class BuildService {
 				: deployment?.previewHost
 					? contentUrl(this.ctx.config.platformOrigin, deployment.previewHost)
 					: projectView.productionUrl;
-			await this.ctx.githubApp.deployment(project.orgId, source.repoUrl, {
+			await this.ctx.git.deployment(project.orgId, source.repoUrl, {
 				sha: row.commitSha,
+				ref: row.ref,
 				environment: row.promote ? project.slug : `${project.slug}-preview`,
 				production: row.promote,
 				description: `Skiff build ${row.id}`,
 				environmentUrl,
 				logUrl: buildUrl,
-				state: 'success',
 			});
 		} catch (error) {
-			console.warn(`[builds] GitHub report for ${row.id} skipped: ${(error as Error).message}`);
+			console.warn(`[builds] git provider report for ${row.id} skipped: ${(error as Error).message}`);
 		}
 	}
 
-	private verifySignature(source: GitSourceRow, rawBody: string, signature: string | null): void {
+	private verifySignature(source: GitSourceRow, from: ReturnType<typeof webhookSource> & string, rawBody: string, headers: HeaderReader): void {
 		// An unsigned public webhook would let anyone trigger builds (and spend build minutes).
 		if (!source.webhookSecret)
-			throw new CoreError(
-				'unauthorized',
-				'This project has no webhook secret. Set one before using GitHub webhooks.',
-				401,
-			);
-		if (!signature) throw new CoreError('unauthorized', 'Missing X-Hub-Signature-256.', 401);
+			throw new CoreError('unauthorized', 'This project has no webhook secret. Set one before using webhooks.', 401);
+		if (!headers.get('x-hub-signature-256') && !headers.get('x-gitea-signature') && !headers.get('x-forgejo-signature') && !headers.get('x-gitlab-token'))
+			throw new CoreError('unauthorized', 'Missing webhook signature (X-Hub-Signature-256, X-Gitea-Signature or X-Gitlab-Token).', 401);
 		const [nonce, ciphertext] = source.webhookSecret.split(':');
 		if (!nonce || !ciphertext) throw new CoreError('error', 'Stored webhook secret is corrupt.', 500);
 		const secret = new TextDecoder().decode(decrypt(this.ctx.config.masterKey, ciphertext, nonce));
-		const expected = `sha256=${createHmac('sha256', secret).update(rawBody).digest('hex')}`;
-		const given = signature.trim();
-		if (expected.length !== given.length || !timingSafeEqual(Buffer.from(expected), Buffer.from(given)))
-			throw new CoreError('unauthorized', 'Invalid webhook signature.', 401);
+		if (!verifyDelivery(from, secret, rawBody, headers)) throw new CoreError('unauthorized', 'Invalid webhook signature.', 401);
 	}
 
 	private requireGitSource(project: ProjectRow): GitSourceRow {
@@ -670,6 +692,7 @@ export class BuildService {
 			enabled: row.enabled,
 			hasWebhookSecret: Boolean(row.webhookSecret),
 			githubAppInstallationId: this.ctx.githubApp.repositoryLink(row.orgId, row.repoUrl).installationId,
+			gitProvider: this.ctx.git.link(row.orgId, row.repoUrl),
 			createdAt: new Date(row.createdAt).toISOString(),
 			updatedAt: new Date(row.updatedAt).toISOString(),
 		};
@@ -693,4 +716,10 @@ export class BuildService {
 			finishedAt: row.finishedAt ? new Date(row.finishedAt).toISOString() : null,
 		};
 	}
+}
+
+/** A header reader over a plain map (tests and the GitHub-only wrappers). */
+export function headerReader(values: Record<string, string | null | undefined>): HeaderReader {
+	const lower = Object.fromEntries(Object.entries(values).map(([key, value]) => [key.toLowerCase(), value ?? null]));
+	return { get: (name: string) => lower[name.toLowerCase()] ?? null };
 }

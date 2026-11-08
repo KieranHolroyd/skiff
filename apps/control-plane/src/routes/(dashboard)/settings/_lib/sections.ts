@@ -10,6 +10,7 @@ import DatabaseBackupIcon from '@lucide/svelte/icons/database-backup';
 import FingerprintIcon from '@lucide/svelte/icons/fingerprint';
 import FolderTreeIcon from '@lucide/svelte/icons/folder-tree';
 import GitBranchIcon from '@lucide/svelte/icons/git-branch';
+import GitMergeIcon from '@lucide/svelte/icons/git-merge';
 import GlobeIcon from '@lucide/svelte/icons/globe';
 import GlobeLockIcon from '@lucide/svelte/icons/globe-lock';
 import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
@@ -37,7 +38,7 @@ import type { Permission } from '@skiff/contracts';
  * - you: your own account and credentials;
  * - organisation: the org itself, its people and what it uses;
  * - security: who can sign in and do what (IAM, SSO, edge access, user pools);
- * - integrations: outside services this org connects to (GitHub, registries, backup targets);
+ * - integrations: outside services this org connects to (GitHub, GitLab/Gitea/Forgejo, registries, backup targets);
  * - observability: where logs and metrics go (an org's drains, then the platform's stores);
  * - platform: install-wide services and policy (addresses, notifications, mail, assistant);
  * - infrastructure: how nodes cluster, fail over and store data;
@@ -63,6 +64,7 @@ export type SectionId =
 	| 'log-drains'
 	| 'registry'
 	| 'github'
+	| 'git'
 	| 'domains'
 	| 'policies'
 	| 'backups'
@@ -111,7 +113,7 @@ export type SectionHref =
 	| '/(dashboard)/settings/policies'
 	| '/(dashboard)/settings/backups'
 	| '/(dashboard)/settings/notifications'
-	| '/(dashboard)/settings/email'
+	| '/(dashboard)/email/server'
 	| '/(dashboard)/settings/assistant'
 	| '/(dashboard)/settings/telemetry'
 	| '/(dashboard)/settings/metrics'
@@ -257,6 +259,18 @@ export const SECTIONS: Section[] = [
 		anyPermission: ['build:read']
 	},
 	{
+		id: 'git',
+		group: 'integrations',
+		label: 'Git providers',
+		summary:
+			'GitLab, Gitea and Forgejo: repository pickers, webhooks Skiff creates, private clones and commit statuses, like the GitHub App.',
+		// See `SectionHref`: the route is real, but `resolve()` cannot infer past 25 members.
+		href: '/(dashboard)/settings/git' as unknown as SectionHref,
+		path: '/settings/git',
+		icon: GitMergeIcon,
+		anyPermission: ['build:read']
+	},
+	{
 		id: 'registry',
 		group: 'integrations',
 		label: 'Container registries',
@@ -345,9 +359,9 @@ export const SECTIONS: Section[] = [
 		group: 'platform',
 		label: 'Email',
 		summary:
-			'The mail node that sends for every organisation, the DNS it needs, the global pause and sending limits.',
-		href: '/(dashboard)/settings/email',
-		path: '/settings/email',
+			'Opens Email → Mail server: the mail node that sends for every organisation, its DNS, the global pause and sending limits.',
+		href: '/(dashboard)/email/server',
+		path: '/email/server',
 		icon: MailIcon,
 		platformAdmin: true
 	},

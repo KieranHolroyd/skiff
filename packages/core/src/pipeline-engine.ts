@@ -70,6 +70,8 @@ import { buildSystemPrincipal } from './iam/system.ts';
 import { newId } from './util.ts';
 import { PipelineOidc } from './pipeline-oidc.ts';
 import { commitState, githubTarget, postCommitStatus } from './pipeline-status.ts';
+import { forgeClient } from './forges/clients.ts';
+import { forgeFullName, parseRepoUrl, type ForgeKind } from '@skiff/contracts';
 
 /** The secret name App-covered repositories get a repository-scoped installation token under. */
 export const GITHUB_TOKEN_SECRET = 'GITHUB_TOKEN';
@@ -121,14 +123,17 @@ function parse<T>(value: string | null | undefined, fallback: T): T {
 	}
 }
 
-/** `refs/heads/main` → `main`; `refs/tags/v1` → `v1`; `refs/pull/7/head` → `7/head`. */
+/**
+ * `refs/heads/main` → `main`; `refs/tags/v1` → `v1`; `refs/pull/7/head` → `7/head`; GitLab's
+ * `refs/merge-requests/7/head` → `7/head` (D174).
+ */
 export function refName(ref: string): string {
-	return ref.replace(/^refs\/(heads|tags|pull)\//, '');
+	return ref.replace(/^refs\/(heads|tags|pull|merge-requests)\//, '');
 }
 
 function refType(ref: string): 'branch' | 'tag' | 'pull' {
 	if (ref.startsWith('refs/tags/')) return 'tag';
-	if (ref.startsWith('refs/pull/')) return 'pull';
+	if (ref.startsWith('refs/pull/') || ref.startsWith('refs/merge-requests/')) return 'pull';
 	return 'branch';
 }
 
@@ -269,13 +274,14 @@ export class PipelineEngine {
 	}
 
 	/**
-	 * Best-effort GitHub commit status for a run (WP3): `skiff/<workflow>` on the run's commit,
-	 * linking to the run page. Uses the repository's status token, else the org's GitHub App; never throws.
+	 * Best-effort commit status for a run (WP3, D176): `skiff/<workflow>` on the run's commit,
+	 * linking to the run page. Uses the repository's status token, else the org's GitHub App or the
+	 * forge connection serving the repository; never throws.
 	 */
 	reportStatus(run: PipelineRunRow): void {
 		try {
 			const repository = this.requireRepository(run.repositoryId);
-			if (repository.provider !== 'github' || !/^[a-f0-9]{40}$/i.test(run.sha)) return;
+			if (repository.provider === 'generic' || !/^[a-f0-9]{40}$/i.test(run.sha)) return;
 			const state = commitState(run.status, run.conclusion);
 			const description =
 				run.status === 'queued'
@@ -288,23 +294,33 @@ export class PipelineEngine {
 			const warn = (error: unknown) =>
 				console.warn(`[pipelines] commit status for ${repository.name}#${run.number} failed: ${(error as Error).message}`);
 			if (repository.statusToken) {
-				const target = githubTarget(repository.cloneUrl);
+				const token = this.ctx.secrets.open(repository.orgId, repository.statusToken);
+				if (repository.provider === 'github') {
+					const target = githubTarget(repository.cloneUrl);
+					if (!target) return;
+					void postCommitStatus({ token, target, sha: run.sha, state, context, description, targetUrl, apiBase: this.statusApiBase, fetch: this.statusFetch }).catch(
+						warn,
+					);
+					return;
+				}
+				// A GitLab, Gitea or Forgejo status token: the API base is the connection's, else the URL's origin.
+				const target = forgeStatusTarget(this.ctx, repository);
 				if (!target) return;
-				void postCommitStatus({
-					token: this.ctx.secrets.open(repository.orgId, repository.statusToken),
-					target,
+				void forgeClient({ kind: target.kind, baseUrl: target.baseUrl, token, fetch: this.ctx.config.forgeFetch })
+					.commitStatus(target.fullName, { sha: run.sha, state: run.status === 'in_progress' ? 'running' : state, context, description, targetUrl })
+					.catch(warn);
+				return;
+			}
+			// No stored token: Skiff's GitHub App or the forge connection reports (D164, D176).
+			void this.ctx.git
+				.commitStatus(repository.orgId, repository.cloneUrl, {
 					sha: run.sha,
-					state,
+					state: run.status === 'in_progress' ? 'running' : state,
 					context,
 					description,
 					targetUrl,
-					apiBase: this.statusApiBase,
-					fetch: this.statusFetch,
-				}).catch(warn);
-				return;
-			}
-			// No stored token: Skiff's GitHub App reports for repositories it covers (D164).
-			void this.ctx.githubApp.commitStatus(repository.orgId, repository.cloneUrl, { sha: run.sha, state, context, description, targetUrl }).catch(warn);
+				})
+				.catch(warn);
 		} catch (error) {
 			console.warn('[pipelines] commit status skipped:', (error as Error).message);
 		}
@@ -1218,7 +1234,7 @@ export class PipelineEngine {
 				repository: { id: repository.id, name: repository.name, cloneUrl: repository.cloneUrl },
 				ref: trigger.row.ref,
 				sha: trigger.row.sha,
-				gitToken: await this.cloneToken(repository),
+				...(await this.cloneToken(repository)),
 			};
 		}
 
@@ -1331,19 +1347,23 @@ export class PipelineEngine {
 			runtime: (job.runtime as PipelineContainerRuntime | null) ?? null,
 			buildkit,
 			buildkitCacheScope: buildkit ? this.buildkitCacheScope(run) : null,
-			gitToken: await this.cloneToken(repository),
+			...(await this.cloneToken(repository)),
 		};
 	}
 
 	/**
 	 * D164: a one-hour, read-only token for this repository alone, minted from the org's GitHub App
-	 * installation, so the node can clone a private repository without credentials of its own. Null
-	 * when the App does not cover it (the node's own git credentials apply, D149).
+	 * installation (or, D175, a forge deploy/clone token), so the node can clone a private repository
+	 * without credentials of its own. Null when nothing covers it (the node's own git credentials
+	 * apply, D149).
 	 */
-	private async cloneToken(repository: PipelineRepositoryRow): Promise<string | null> {
-		if (repository.provider !== 'github') return null;
-		const access = await this.ctx.githubApp.repoToken(repository.orgId, repository.cloneUrl, { contents: 'read' });
-		return access?.token ?? null;
+	private async cloneToken(
+		repository: PipelineRepositoryRow,
+	): Promise<{ gitToken: string | null; gitTokenHost?: string; gitTokenUsername?: string }> {
+		// D175: a connected forge sends a deploy or clone token with the host and user it is for.
+		const access = await this.ctx.git.cloneAuth(repository.orgId, repository.cloneUrl);
+		if (!access) return { gitToken: null };
+		return { gitToken: access.token, gitTokenHost: access.host, gitTokenUsername: access.username };
 	}
 
 	/** Trusted jobs of an App-covered repository get `secrets.GITHUB_TOKEN` (unless one is set). */
@@ -1876,4 +1896,19 @@ export class PipelineEngine {
 		if (!row) throw new NotFoundError('Job');
 		return row;
 	}
+}
+
+/** Where a stored status token posts for a GitLab, Gitea or Forgejo repository (D176). */
+function forgeStatusTarget(
+	ctx: CoreContext,
+	repository: PipelineRepositoryRow,
+): { kind: ForgeKind; baseUrl: string; fullName: string } | null {
+	if (repository.provider !== 'gitlab' && repository.provider !== 'gitea' && repository.provider !== 'forgejo') return null;
+	const connection = ctx.forges.connectionFor(repository.orgId, repository.cloneUrl);
+	if (connection) return { kind: repository.provider, baseUrl: connection.row.baseUrl, fullName: connection.fullName };
+	const parsed = parseRepoUrl(repository.cloneUrl);
+	if (!parsed) return null;
+	const baseUrl = `https://${parsed.host}`;
+	const fullName = forgeFullName(baseUrl, repository.cloneUrl);
+	return fullName ? { kind: repository.provider, baseUrl, fullName } : null;
 }

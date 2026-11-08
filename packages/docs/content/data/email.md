@@ -10,11 +10,11 @@ Skiff Email sends transactional mail, such as sign-up confirmations, receipts an
 
 ## Set up the mail server
 
-Operators run this part once. A platform admin chooses a **mail node** in **Settings → Email**. The node must run an agent with mail support and have a public address. If it is greyed out, update its agent from **Nodes** first. Until a node is chosen, every send is refused with `email_not_set_up`.
+Operators run this part once, from the checklist on the **Email** overview or from **Email → Mail server**. A platform admin chooses a **mail node** there. The node must run an agent with mail support and have a public address. If it is greyed out, update its agent from **Nodes** first. Until a node is chosen, every send is refused with `email_not_set_up`.
 
 Email is on by default. Setting `SKIFF_FEATURE_EMAIL=0` hides the Email surfaces and refuses sends.
 
-The mail node answers on hostnames under one **mail domain**. By default it is the **content domain**, the one your sites live under. To send from somewhere else, enter a custom domain (or a URL) under **Mail domain** in **Settings → Email**; `SKIFF_MAIL_DOMAIN` sets one at install time, and the dashboard setting overrides it. The slugs `mx1`, `smtp` and `bounces` are reserved so no project takes a mail host name. **Settings → Email** lists the records to publish. For a mail domain of `example.com`, they are:
+The mail node answers on hostnames under one **mail domain**. By default it is the **content domain**, the one your sites live under. To send from somewhere else, enter a custom domain (or a URL) under **Mail domain** in **Email → Mail server**; `SKIFF_MAIL_DOMAIN` sets one at install time, and the dashboard setting overrides it. The slugs `mx1`, `smtp` and `bounces` are reserved so no project takes a mail host name. **Email → Mail server** lists the records to publish. For a mail domain of `example.com`, they are:
 
 | Name | Type | Value |
 | --- | --- | --- |
@@ -40,7 +40,7 @@ The node listens on these ports:
 | 587 | Submission with STARTTLS. |
 | 465 | Submission with implicit TLS. |
 
-**Settings → Email** also has a **Delivery** switch. While it is on, sends are accepted and queued, but nothing is attempted. Use it while you fix a DNS mistake or a blocklisting.
+**Email → Mail server** also has a **Delivery** switch. While it is on, sends are accepted and queued, but nothing is attempted. Use it while you fix a DNS mistake or a blocklisting.
 
 ## Add a sending domain
 
@@ -123,7 +123,7 @@ In the dashboard, use **Request production access** on **Email → Sandbox**. Pl
 
 An organisation can have one pending request at a time. You can't ask while sending is paused.
 
-Platform admins review requests on **Email → Access requests**. **Approve** takes optional daily and per-second limits, which default to 10,000 a day and 10 a second, and an optional note. **Deny** needs a reason. Moving an organisation out of the sandbox in **Settings → Email** also approves its pending request.
+Platform admins review requests on **Email → Access requests**. **Approve** takes optional daily and per-second limits, which default to 10,000 a day and 10 a second, and an optional note. **Deny** needs a reason. Moving an organisation out of the sandbox in **Email → Mail server** also approves its pending request.
 
 Every message is checked against these limits:
 
@@ -302,8 +302,7 @@ skif email log --follow                     # print new messages as they arrive
 
 The **Email** section has these pages:
 
-- **Overview**: the organisation's sending state, daily quota, reputation, domains and recent activity.
-- **Setup guide**: a checklist from choosing the mail node to leaving the sandbox.
+- **Overview**: until email is fully set up, a checklist from choosing the mail node to leaving the sandbox. Each step does its work on the page: pick the node, check reverse DNS, add a domain, publish its records, request production access. Once every step is done the checklist folds away, and the page shows the organisation's sending state, daily quota, reputation, domains and recent activity.
 - **Domains**: add domains, see their records and check them again.
 - **Activity**: the message log.
 - **Send a test**: send one message from a verified domain.
@@ -311,7 +310,7 @@ The **Email** section has these pages:
 - **Suppressions**: add and remove addresses.
 - **SMTP credentials**: create and revoke credentials.
 
-Platform admins also get **Access requests**, to approve or deny production access, and **Settings → Email** for the mail node, the Delivery switch and the platform DNS records.
+Platform admins also get **Access requests**, to approve or deny production access, and **Mail server** for the mail node, the mail domain, the Delivery switch, a live reverse DNS check, the platform DNS records, sending limits and how Skiff's own mail (sign-in links, alerts) goes out. Mail server used to be **Settings → Email**; old links redirect.
 
 ## CLI reference
 

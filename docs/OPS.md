@@ -338,7 +338,7 @@ mail node (the unit sets the paths). None of them is secret: DKIM keys and crede
 
 | Variable | Where | Default | Meaning |
 |---|---|---|---|
-| `SKIFF_MAIL_DOMAIN` | `skiff.env` | The content domain | Custom domain for `mx1.`, `mx.`, `smtp.`, `bounces.` and `_spf.` (D116). A mail domain saved in **Settings → Email** overrides it. |
+| `SKIFF_MAIL_DOMAIN` | `skiff.env` | The content domain | Custom domain for `mx1.`, `mx.`, `smtp.`, `bounces.` and `_spf.` (D116). A mail domain saved in **Email → Mail server** overrides it. |
 | `SKIFF_FEATURE_EMAIL` | `skiff.env` | `1` | `0` hides Email and refuses sends; a running `skiff-mail` keeps draining its spool. |
 | `SKIFF_MAIL_LISTEN` | `mail.env` | `0.0.0.0` | Listen address for the SMTP ports. |
 | `SKIFF_MAIL_PORT_INBOUND` / `_SUBMISSION` / `_SUBMISSIONS` | `mail.env` | `25` / `587` / `465` | Ports; `off` disables one. Submission stays off until a certificate exists. |
@@ -729,10 +729,10 @@ sudo skiff-platform-config domains --platform-host control.example.com --content
 
 It runs the same apply-and-verify-or-revert flow as the dashboard.
 
-### 3.8 Email (Settings → Email)
+### 3.8 Email (Email → Mail server)
 
 Email needs a node that can deliver mail directly (EMAIL.md §2). On the chosen node, before picking
-it in Settings → Email:
+it in Email → Mail server:
 
 1. **Port 25 out.** On Scaleway, tick *Enable SMTP* on the instance's security group (needs a
    verified account). Check: `timeout 8 bash -c '</dev/tcp/gmail-smtp-in.l.google.com/25' && echo ok`.
@@ -742,12 +742,12 @@ it in Settings → Email:
 4. **Blocklists.** Check the IP at Spamhaus, and enrol it in Google Postmaster Tools and Microsoft SNDS/JMRP
    (point complaint reports at `fbl@bounces.<mail domain>`).
 
-Then pick the node in Settings → Email. Its agent starts `skiff-mail.service` through the helper;
+Then pick the node in Email → Mail server. Its agent starts `skiff-mail.service` through the helper;
 Skiff publishes `mx1.`/`mx.`/`smtp.` A records, `_spf.` and the `bounces.` MX and SPF through
 Cloudflare (or lists them to copy), and Caddy obtains the `smtp.` certificate, after which
 submission on 587/465 comes up. `journalctl -u skiff-mail` shows the MTA; the spool is
 `/var/lib/skiff/mail` and survives restarts. New orgs start in the sandbox (D119); move an org out
-in Settings → Email.
+in Email → Mail server.
 
 ## 4. Upgrade
 

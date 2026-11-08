@@ -169,7 +169,48 @@ async function settleTrigger(principal: Principal, repository: string, trigger: 
 	return current;
 }
 
+interface DeployFromGitInput {
+	repository: string;
+	connectionId?: string;
+	branch?: string;
+	rootDir?: string;
+	name?: string;
+	slug?: string;
+	runtime?: 'static' | 'process';
+	buildCommand?: string;
+	outputDir?: string;
+	pipelines?: boolean;
+}
+
 export function pipelineTools(principal: Principal): PipelineToolSpec[] {
+	/** Detect, then import with the detected preset unless overridden (deploy_from_github / deploy_from_git). */
+	const deployFromGit = async (input: DeployFromGitInput) => {
+		const detected = await core.githubImport.detect(principal, {
+			repository: input.repository,
+			...(input.connectionId ? { connectionId: input.connectionId } : {}),
+			branch: input.branch,
+			rootDir: input.rootDir,
+		});
+		const preset = detected.preset;
+		const runtime = input.runtime ?? preset.runtime;
+		const result = await core.githubImport.importRepository(principal, {
+			repository: detected.repository.fullName,
+			...(input.connectionId ? { connectionId: input.connectionId } : {}),
+			branch: detected.branch,
+			rootDir: detected.rootDir,
+			name: input.name ?? detected.suggestedName,
+			...(input.slug ? { slug: input.slug } : {}),
+			framework: preset.id,
+			runtime,
+			buildCommand: input.buildCommand ?? preset.buildCommand,
+			outputDir: input.outputDir ?? preset.outputDir,
+			...(runtime === 'process' && preset.runtime === 'process'
+				? { ...(preset.command ? { command: preset.command } : {}), ...(preset.engine ? { engine: preset.engine } : {}), ...(preset.port ? { port: preset.port } : {}) }
+				: {}),
+			pipelines: input.pipelines ?? true,
+		});
+		return { ...result, framework: preset.label, branch: detected.branch, url: `/projects/${result.project.slug}` };
+	};
 	return [
 		{
 			name: 'list_github_repositories',
@@ -219,38 +260,66 @@ export function pipelineTools(principal: Principal): PipelineToolSpec[] {
 				annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
 			},
 			permissions: ['project:create', 'build:create'],
-			handler: async (args) => {
-				const input = args as {
-					repository: string;
-					branch?: string;
-					rootDir?: string;
-					name?: string;
-					slug?: string;
-					runtime?: 'static' | 'process';
-					buildCommand?: string;
-					outputDir?: string;
-					pipelines?: boolean;
-				};
-				const detected = await core.githubImport.detect(principal, { repository: input.repository, branch: input.branch, rootDir: input.rootDir });
-				const preset = detected.preset;
-				const runtime = input.runtime ?? preset.runtime;
-				const result = await core.githubImport.importRepository(principal, {
-					repository: detected.repository.fullName,
-					branch: detected.branch,
-					rootDir: detected.rootDir,
-					name: input.name ?? detected.suggestedName,
-					...(input.slug ? { slug: input.slug } : {}),
-					framework: preset.id,
-					runtime,
-					buildCommand: input.buildCommand ?? preset.buildCommand,
-					outputDir: input.outputDir ?? preset.outputDir,
-					...(runtime === 'process' && preset.runtime === 'process'
-						? { ...(preset.command ? { command: preset.command } : {}), ...(preset.engine ? { engine: preset.engine } : {}), ...(preset.port ? { port: preset.port } : {}) }
-						: {}),
-					pipelines: input.pipelines ?? true,
-				});
-				return { ...result, framework: preset.label, branch: detected.branch, url: `/projects/${result.project.slug}` };
+			handler: async (args) => deployFromGit(args as unknown as DeployFromGitInput),
+		},
+		{
+			name: 'list_git_repositories',
+			config: {
+				title: 'List git repositories (every provider)',
+				description:
+					'Repositories from every git provider the org connects (docs/FORGES.md): the GitHub App and each GitLab, Gitea or Forgejo connection. ' +
+					'Each row has provider, connectionId (null for GitHub), full name (GitLab names may be nested: group/sub/repo), clone URL, default branch and private. ' +
+					'Use a clone URL for a git build source or pipeline repository: Skiff creates the webhook, clones privately and posts commit statuses. ' +
+					'`errors` lists providers that could not be asked; owners connect forges in Settings → Git providers.',
+				inputSchema: z.object({
+					query: z.string().min(1).max(100).optional().describe('Only repositories whose full name contains this'),
+					provider: z.enum(['github', 'gitlab', 'gitea', 'forgejo']).optional().describe('Only this provider'),
+				}),
+				annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 			},
+			permissions: ['build:read'],
+			handler: async (args) => {
+				const { query, provider } = args as { query?: string; provider?: string };
+				const list = await core.git.repositories(principal);
+				const repositories = list.repositories
+					.filter((repo) => (!query || repo.fullName.toLowerCase().includes(query.toLowerCase())) && (!provider || repo.provider === provider))
+					.slice(0, 200)
+					.map((repo) => ({
+						provider: repo.provider,
+						connectionId: repo.connectionId,
+						fullName: repo.fullName,
+						cloneUrl: repo.cloneUrl,
+						defaultBranch: repo.defaultBranch,
+						private: repo.private,
+					}));
+				return { github: list.github, connections: list.connections, repositories, truncated: list.truncated, errors: list.errors };
+			},
+		},
+		{
+			name: 'deploy_from_git',
+			config: {
+				title: 'Deploy a repository from any git provider',
+				description:
+					'deploy_from_github for every provider: create a project from a repository listed by list_git_repositories (GitHub App, GitLab, Gitea or Forgejo). ' +
+					'Pass connectionId for GitLab/Gitea/Forgejo (omit it for GitHub). Skiff detects a framework preset, connects the git source (creating the forge webhook), ' +
+					'queues the first build (promoted on success) and adds the repository to Pipelines when it has .skiff/workflows. ' +
+					'Pass buildCommand/outputDir/runtime only to override the detected preset.',
+				inputSchema: z.object({
+					repository: z.string().min(3).max(512).describe('Full name as list_git_repositories returns it'),
+					connectionId: z.string().min(1).max(64).optional().describe('The forge connection (omit for the GitHub App)'),
+					branch: z.string().min(1).max(255).optional().describe('Branch to build and deploy on push (default: the repository default branch)'),
+					rootDir: z.string().max(512).optional().describe('Directory of the app inside the repository (monorepos), default "."'),
+					name: z.string().min(1).max(120).optional().describe('Project name (default: the repository name)'),
+					slug: z.string().min(3).max(40).optional().describe('Project slug, which is also the hostname (default: derived from the name)'),
+					runtime: z.enum(['static', 'process']).optional().describe('Override the detected runtime'),
+					buildCommand: z.string().min(1).max(2048).optional().describe('Override the detected build command'),
+					outputDir: z.string().min(1).max(512).optional().describe('Override the detected output directory (relative to rootDir)'),
+					pipelines: z.boolean().optional().describe('Add the repository to Pipelines when it has .skiff/workflows (default true)'),
+				}),
+				annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+			},
+			permissions: ['project:create', 'build:create'],
+			handler: async (args) => deployFromGit(args as unknown as DeployFromGitInput),
 		},
 		{
 			name: 'list_pipeline_runs',

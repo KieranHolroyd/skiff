@@ -152,7 +152,7 @@
 		bind:open={approveOpen}
 		icon={CheckIcon}
 		title={approving ? `Approve ${orgLabel(approving)}?` : 'Approve'}
-		description="The organisation leaves the sandbox at once and can send to any recipient within these limits. Change them later in Settings → Email."
+		description="The organisation leaves the sandbox at once and can send to any recipient within these limits. Change them later in Email → Mail server."
 		action="?/approve"
 		submitLabel="Approve"
 	>

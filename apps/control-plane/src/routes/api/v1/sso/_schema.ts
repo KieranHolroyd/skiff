@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { SSO_PRESET_IDS } from '#lib/sso-presets.js';
 
 /** Request bodies for `/api/v1/sso/*` (IAM.md §12, I19). */
 export const claimsSchema = z
@@ -9,9 +10,20 @@ export const claimsSchema = z
 	})
 	.optional();
 
+/**
+ * A ready-made set-up (`GET /api/v1/sso/presets`, D180): `{ "id": "entra", "values": { "tenantId":
+ * "…" } }`. It supplies the issuer and discovery URL, and default scopes and claims.
+ */
+export const presetSchema = z.object({
+	id: z.enum(SSO_PRESET_IDS),
+	values: z.record(z.string().max(64), z.string().max(500)).optional()
+});
+
 export const providerCreateSchema = z.object({
 	name: z.string().trim().min(1).max(80),
-	issuer: z.string().trim().min(1).max(500),
+	/** Required unless `preset` is given. */
+	issuer: z.string().trim().min(1).max(500).optional(),
+	preset: presetSchema.optional(),
 	clientId: z.string().trim().min(1).max(500),
 	clientSecret: z.string().min(1).max(4000),
 	discoveryUrl: z.string().trim().max(500).nullable().optional(),
@@ -26,7 +38,7 @@ export const domainCreateSchema = z.object({
 	domain: z.string().trim().min(1).max(253)
 });
 
-export const authMethodSchema = z.enum(['password', 'passkey', 'github', 'magic-link', 'sso']);
+export const authMethodSchema = z.enum(['password', 'passkey', 'github', 'gitlab', 'magic-link', 'sso']);
 
 /** IAM.md I21: every field optional for a partial update. */
 export const authPolicyUpdateSchema = z.object({

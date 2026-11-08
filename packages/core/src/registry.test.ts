@@ -284,6 +284,61 @@ describe('GitHub Actions OIDC (G3)', () => {
 	});
 });
 
+describe('GitLab CI ID tokens (D178)', () => {
+	const { generateKeyPairSync, sign } = require('node:crypto') as typeof import('node:crypto');
+	const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+	const jwk = { ...publicKey.export({ format: 'jwk' }), kid: 'gl-1', alg: 'RS256', use: 'sig' };
+	const ISSUER = 'https://gitlab.example.com';
+	const jwks = (async (input: string | URL | Request, init?: RequestInit) => {
+		const url = String(input instanceof Request ? input.url : input);
+		if (url === `${ISSUER}/oauth/discovery/keys`) return Response.json({ keys: [jwk] });
+		return registryFetch(input, init);
+	}) as typeof fetch;
+	function idToken(claims: Record<string, unknown>): string {
+		const now = Math.floor(Date.now() / 1000);
+		const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT', kid: 'gl-1' })).toString('base64url');
+		const payload = Buffer.from(
+			JSON.stringify({
+				iss: ISSUER,
+				aud: HOST,
+				sub: 'project_path:acme-gl/platform/web:ref_type:branch:ref:main',
+				project_path: 'acme-gl/platform/web',
+				ref: 'main',
+				ref_type: 'branch',
+				iat: now,
+				exp: now + 300,
+				...claims,
+			}),
+		).toString('base64url');
+		return `${header}.${payload}.${sign('RSA-SHA256', Buffer.from(`${header}.${payload}`), privateKey).toString('base64url')}`;
+	}
+	const login = (token: string) => ({ kind: 'login' as const, username: 'gitlab-oidc', password: token });
+
+	test('a gitlab trust lets one project push from its branch, keyed by issuer', async () => {
+		(core.ctx.config as { registryFetch?: typeof fetch }).registryFetch = jwks;
+		require('./registry-oidc.ts').resetOidcKeyCache();
+		expect(() => core.registry.createOidcTrust(admin, { provider: 'gitlab', repository: 'acme/web' })).toThrow(/project path/);
+		const trust = core.registry.createOidcTrust(admin, {
+			provider: 'gitlab',
+			gitlabProject: 'acme-gl/platform/web',
+			issuer: `${ISSUER}/`,
+			ref: 'refs/heads/main',
+			repository: 'acme/gl-web',
+		});
+		expect(trust).toMatchObject({ provider: 'gitlab', subject: 'acme-gl/platform/web', issuer: ISSUER });
+		const issued = await core.registry.authorize(login(idToken({})), HOST, ['repository:acme/gl-web:push,pull']);
+		expect(decode(issued.token).access).toEqual([{ type: 'repository', name: 'acme/gl-web', actions: ['push', 'pull'] }]);
+		expect(decode(issued.token).sub).toBe('gitlab:project_path:acme-gl/platform/web:ref_type:branch:ref:main');
+		const refuse = (claims: Record<string, unknown>) => core.registry.authorize(login(idToken(claims)), HOST, ['repository:acme/gl-web:pull']);
+		await expect(refuse({ ref: 'feature' })).rejects.toThrow(/No organisation trusts GitLab project/);
+		await expect(refuse({ ref: 'main', ref_type: 'tag' })).rejects.toThrow(/refs\/tags\/main/);
+		await expect(refuse({ iss: 'https://gitlab.com' })).rejects.toThrow(/No organisation trusts ID tokens/);
+		await expect(refuse({ aud: 'other' })).rejects.toThrow(/audience must be/);
+		await expect(refuse({ project_path: 'acme-gl/other' })).rejects.toThrow(/No organisation trusts/);
+		core.registry.deleteOidcTrust(admin, trust.id);
+	});
+});
+
 describe('mirrors, signatures, CVEs, S3 and quotas (G2, G4–G6)', () => {
 	const COSIGN_KEY = '-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEexample\n-----END PUBLIC KEY-----';
 	let graphql: Record<string, unknown> = {};

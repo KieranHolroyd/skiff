@@ -1,17 +1,13 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import CheckIcon from '@lucide/svelte/icons/check';
-	import CloudIcon from '@lucide/svelte/icons/cloud';
 	import GlobeIcon from '@lucide/svelte/icons/globe';
 	import ListChecksIcon from '@lucide/svelte/icons/list-checks';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import SendIcon from '@lucide/svelte/icons/send';
 	import TrashIcon from '@lucide/svelte/icons/trash';
-	import XIcon from '@lucide/svelte/icons/x';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
-	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
 	import Notice from '#lib/components/skiff/Notice.svelte';
 	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
@@ -19,11 +15,11 @@
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Spinner } from '#lib/components/ui/spinner/index.js';
 	import { Switch } from '#lib/components/ui/switch/index.js';
-	import * as Table from '#lib/components/ui/table/index.js';
 	import Panel from '../../../_lib/Panel.svelte';
 	import DangerZone from '../../../_lib/service/DangerZone.svelte';
 	import ServiceHeader from '../../../_lib/service/ServiceHeader.svelte';
 	import { formatDate, formatRelative } from '../../../_lib/format.js';
+	import DomainRecords from '../../_lib/DomainRecords.svelte';
 	import NotSetUp from '../../_lib/NotSetUp.svelte';
 	import { recordState } from '../../_lib/email-ui.js';
 	import type { PageProps } from './$types';
@@ -50,12 +46,6 @@
 		const result = await runAction('?/sending', { sending: next ? 'true' : '' });
 		if (result.type !== 'success') sending = !next;
 	}
-
-	const PURPOSE: Record<string, string> = { dkim: 'DKIM', spf: 'SPF', dmarc: 'DMARC', mx: 'MX' };
-	const valueOf = (record: (typeof domain.records)[number]) =>
-		record.type === 'MX' && record.priority !== undefined
-			? `${record.priority} ${record.value}`
-			: record.value;
 
 	function remove() {
 		askConfirm({
@@ -100,7 +90,7 @@
 	</ServiceHeader>
 
 	{#if !area.configured}
-		<NotSetUp platformAdmin={area.can.platform} compact />
+		<NotSetUp platformAdmin={area.can.platform} />
 	{/if}
 
 	{#if page.url.searchParams.get('created') === '1' && domain.status !== 'verified'}
@@ -135,85 +125,7 @@
 		description="Publish these at your DNS provider. Required records gate sending; recommended ones improve inbox placement."
 		flush
 	>
-		<Table.Root>
-			<Table.Header class="bg-muted/45">
-				<Table.Row>
-					<Table.Head class="pl-4">Record</Table.Head>
-					<Table.Head>Name</Table.Head>
-					<Table.Head>Value</Table.Head>
-					<Table.Head class="hidden md:table-cell">Need</Table.Head>
-					<Table.Head class="pr-4">Check</Table.Head>
-				</Table.Row>
-			</Table.Header>
-			<Table.Body>
-				{#each domain.records as record (record.purpose + record.name)}
-					{@const state = recordState(record)}
-					<Table.Row class="align-top">
-						<Table.Cell class="pl-4">
-							<p class="text-sm font-medium">{PURPOSE[record.purpose] ?? record.purpose}</p>
-							<p class="font-mono text-xs text-muted-foreground">{record.type}</p>
-						</Table.Cell>
-						<Table.Cell class="max-w-56">
-							<span class="flex min-w-0 items-center gap-0.5 font-mono text-xs">
-								<span class="truncate" title={record.name}>{record.name}</span>
-								<CopyButton
-									value={record.name}
-									label="Copy name"
-									iconOnly
-									variant="ghost"
-									size="icon-xs"
-								/>
-							</span>
-						</Table.Cell>
-						<Table.Cell class="max-w-80">
-							<span class="flex min-w-0 items-center gap-0.5 font-mono text-xs">
-								<span class="truncate" title={valueOf(record)}>{valueOf(record)}</span>
-								<CopyButton
-									value={valueOf(record)}
-									label="Copy value"
-									iconOnly
-									variant="ghost"
-									size="icon-xs"
-								/>
-							</span>
-							{#if record.note}
-								<p class="mt-1 text-xs whitespace-normal text-muted-foreground">{record.note}</p>
-							{/if}
-							{#if !record.ok && record.found.length > 0}
-								<p class="mt-1 text-xs whitespace-normal text-muted-foreground">
-									Found: <span class="font-mono break-all">{record.found.join(' · ')}</span>
-								</p>
-							{/if}
-						</Table.Cell>
-						<Table.Cell class="hidden md:table-cell">
-							<Badge variant={record.required ? 'secondary' : 'outline'} class="font-normal">
-								{record.required ? 'Required' : 'Recommended'}
-							</Badge>
-						</Table.Cell>
-						<Table.Cell class="pr-4">
-							<span class="flex items-center gap-1.5 text-xs">
-								{#if state === 'ok'}
-									<CheckIcon class="size-4 text-success" aria-hidden="true" />
-									<span>Found</span>
-								{:else}
-									<XIcon
-										class="size-4 {state === 'missing' ? 'text-destructive' : 'text-warning'}"
-										aria-hidden="true"
-									/>
-									<span>{state === 'missing' ? 'Missing' : 'Not found'}</span>
-								{/if}
-								{#if record.managed}
-									<CloudIcon
-										class="size-3.5 text-muted-foreground"
-										aria-label="Managed in Cloudflare"
-									/>
-								{/if}
-							</span>
-						</Table.Cell>
-					</Table.Row>
-				{/each}
-			</Table.Body>
-		</Table.Root>
+		<DomainRecords records={domain.records} />
 		{#snippet footer()}
 			{#if domain.lastCheckedAt}
 				Last checked <time datetime={domain.lastCheckedAt}

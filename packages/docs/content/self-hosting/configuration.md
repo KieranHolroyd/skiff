@@ -363,7 +363,7 @@ The rules that apply to these pages are:
 - Secret values are never shown again after they are saved. Leaving a secret field empty keeps the current value.
 - A section must be complete before it takes effect. For example, SMTP needs a host, a port and a From address, and Twilio needs all three of its keys.
 
-Settings → Email is a different thing. It configures Skiff's own mail service, and it does not write any of the variables above.
+Email → Mail server is a different thing. It configures Skiff's own mail service, and it does not write any of the variables above.
 
 > [!NOTE]
 > On a development server, dashboard changes are saved to `.data/platform-settings.json` in the data directory, and they take effect after a restart of the dev server.

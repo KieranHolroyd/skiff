@@ -68,7 +68,7 @@ and the blocklist check pass, and says which one failed.
 
 ### 3.1 Placement: the mail node
 
-The mail node is a platform setting (Settings → Email, `settings` key `email.node_id`), not a
+The mail node is a platform setting (Email → Mail server, `settings` key `email.node_id`), not a
 placement role: a platform admin picks one node whose agent advertises the `mail` capability, and
 its public IPv4 (`email.ipv4`). That IP is its own setting because `nodes.public_address` is the
 WireGuard upstream the edge proxies to, which the edge itself never has. Left blank, Skiff uses a
@@ -130,9 +130,9 @@ an hour) serves a volume Skiff doesn't have. Spike E0 (SPIKES.md) showed the pie
 work under Bun 1.4: STARTTLS and implicit TLS on `smtp-server`, AUTH, DKIM sign and verify, and
 200 messages over TLS in 149 ms at about 130 MB RSS with every library loaded.
 
-### 3.3 Preflight and the Settings → Email page
+### 3.3 Preflight and the Email → Mail server page
 
-A platform admin enables Email from **Settings → Email** by choosing the mail node. It's a setting
+A platform admin enables Email from **Email → Mail server** by choosing the mail node. It's a setting
 (no restart): the node's agent sees `mail` in its desired state and starts `skiff-mail`, and Skiff
 publishes the platform records below through Cloudflare. **Not built yet:** the automated preflight
 checks. Until they are, the operator runs them by hand. The checks, each re-runnable and shown as a list:
@@ -156,7 +156,9 @@ name (`localhost`, an IP) falls back to the platform host's parent. The project 
 and `bounces` are reserved so no site shadows a mail host. Changing the mail domain moves every
 host name: the PTR, the platform records and each org's SPF include and MX must follow.
 
-Direct delivery is refused until 1, 3 and 4 pass. Inbound is refused until 2 passes. The page also
+The page is **Email → Mail server** (`/email/server`); the overview's setup checklist embeds its
+node picker, live reverse DNS check and platform records for a first install. Direct delivery is
+refused until 1, 3 and 4 pass. Inbound is refused until 2 passes. The page also
 holds org sandbox/limits (§7.3), the smarthost relay (§3.4), the global pause switch and the
 reputation summary (§7.2).
 
@@ -459,7 +461,7 @@ limits are org quota fields alongside the existing quotas (plan 16).
 - A **platform admin** (own dashboard session, `canAdministerPlatform`) approves or denies it.
   Approving moves the org to `active` with the limits given (the active defaults otherwise) in one
   transaction; denying needs a reason and leaves the org in sandbox, free to ask again. Moving an
-  org out by hand in Settings → Email answers its pending request as approved. The requester is
+  org out by hand in Email → Mail server answers its pending request as approved. The requester is
   emailed the outcome (and the reason or note) through platform SMTP.
 - Requests are kept: the org sees its latest (`GET /email/access-request`), platform admins the
   queue, pending first (`GET /email/access-requests`). Audited as
@@ -523,25 +525,37 @@ list|add|rm`, `skif email addresses list|add|rm`, `skif email request-access --u
 --volume … [--website …]` (no flags: show the latest request), `skif email credentials
 create|list|revoke`, `skif email attach|detach`, `skif email routes …`, `skif email webhooks …`.
 
-**Dashboard: Email.**
-- **Setup guide** (`/email/setup`): a seven-step checklist from a fresh install to an app sending
-  real mail, each step judged from live state. The steps: choose the mail node, point reverse DNS
-  at it (checked live from the control plane: PTR names the HELO host and that host resolves back,
-  preflight check 3), add a domain, publish its records (the first unverified domain's records
-  inline, with Check DNS now), send a test (done on the first `delivered`), connect an app (an SMTP
-  credential exists or mail arrived other than from the dashboard), and leave the sandbox.
-  Platform-admin steps say so and tell other members whom to ask. The "not set up" state and the
-  overview, while no domain is verified, link to it.
+**Dashboard: Email.** Every email surface lives in the Email area (D179); Settings keeps only an
+entry that opens Mail server, and Settings → Notifications keeps the platform SMTP relay (§10).
+- **Overview** (`/email`): the setup checklist, then the org's sending state, quota, reputation,
+  domains and recent activity. The checklist has seven steps from a fresh install to an app sending
+  real mail, each judged from live state and each doing its work in place: choose the mail node
+  (the node picker, for platform admins), point reverse DNS at it (checked live from the control
+  plane: PTR names the HELO host and that host resolves back, preflight check 3; platform admins
+  also see the platform records), add a domain (inline, without leaving the page), publish its
+  records (the first unverified domain's records table with Set up for me and Check DNS now), send
+  a test (done on the first `delivered`), connect an app (an SMTP credential exists or mail arrived
+  other than from the dashboard), and leave the sandbox (the production access request opens in
+  place). Platform-admin steps say so and tell other members whom to ask. Once every step is done
+  the checklist folds into one line with *Show checklist*. Each embedded form posts to the same
+  shared action its own page runs (`email/_lib/*.server.ts`), and the records tables, reverse DNS
+  check, node picker and request dialog are the same components everywhere. `/email/setup` (the
+  old setup guide) redirects here. Every other Email page shows a one-line "not set up" banner that
+  points here until a mail node is chosen.
 - **Domains:** a records table with copy buttons and a live check per record, "Create in
   Cloudflare", DKIM rotation, and sending/receiving toggles.
 - **Activity:** message log with search by recipient, message id or tag, and a per-message event
   timeline.
 - **Sandbox** (`/email/sandbox`): the org's state; the production access request (form for owners
   and admins, the pending request, or the last denial's reason); and the sandbox recipients with
-  add, resend and remove. The overview's Sending panel and the setup guide's last step link to it.
+  add, resend and remove. The overview's Sending panel and the checklist's last step link to it.
 - **Access requests** (`/email/requests`, platform admin, in the Platform group of the Email nav):
   pending requests with their use case and volume, approve (with limits) or deny (with a reason),
   and the decided history.
+- **Mail server** (`/email/server`, platform admin, Platform group): §3.3, plus the live reverse DNS
+  check and a *Platform mail* panel saying how sign-in links, invites and alerts (the D22 relay, or
+  the journal when none is set), sandbox verification links (the mail node, D170) and org mail go
+  out, with a link to the relay settings. It was Settings → Email, which now redirects here.
 - **Suppressions.**
 - **Routes.**
 - **Webhooks.**
@@ -549,10 +563,10 @@ create|list|revoke`, `skif email attach|detach`, `skif email routes …`, `skif 
 - **Send a test:** compose one message (from a verified sending domain, to, subject, text or
   HTML) through `EmailService.send`, so limits, suppressions and the sandbox apply; it is tagged
   `source=dashboard-test` and opens the message's timeline in Activity. Domain pages link to it.
-- **Settings → Email** (platform admin): §3.3.
 
-**Flag:** `SKIFF_FEATURE_EMAIL`, default on. Every Email page shows a calm "not set up" state with a
-link to Settings → Email until a mail node is configured, which is the telemetry pattern.
+**Flag:** `SKIFF_FEATURE_EMAIL`, default on. Until a mail node is configured, the overview leads
+with the checklist and every other Email page shows a calm "not set up" banner pointing to it,
+which is the telemetry pattern.
 
 ---
 
@@ -561,7 +575,7 @@ link to Settings → Email until a mail node is configured, which is the telemet
 Sign-in links, invites and alerts keep the platform's own SMTP settings (`SKIFF_SMTP_*`, normally
 SES). The alert path must work while the mail node is down or the IP is listed. Once Email is
 healthy, an owner *may* point `SKIFF_SMTP_*` at `smtp.<mailDomain>` with a platform credential;
-Settings shows the trade-off.
+Email → Mail server shows which path each kind of platform mail takes (§9).
 
 ---
 

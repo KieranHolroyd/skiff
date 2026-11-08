@@ -39,7 +39,8 @@ export const actions: Actions = {
 		const values = {
 			name: formString(data, 'name'),
 			cloneUrl: formString(data, 'cloneUrl'),
-			provider: formString(data, 'provider') || 'github',
+			// Blank lets the control plane infer it from the URL (GitHub, a connected forge, else generic).
+			provider: formString(data, 'provider'),
 			defaultBranch: formString(data, 'defaultBranch') || 'main',
 			defaultImage: formString(data, 'defaultImage')
 		};
@@ -47,6 +48,7 @@ export const actions: Actions = {
 		const input = {
 			...values,
 			webhookSecret: webhookSecret || undefined,
+			provider: values.provider || undefined,
 			defaultImage: values.defaultImage || undefined
 		};
 		const parsed = pipelineRepositoryCreateSchema.safeParse(input);

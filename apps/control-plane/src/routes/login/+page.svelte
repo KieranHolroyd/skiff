@@ -10,6 +10,7 @@
 	import { authClient } from '#lib/auth-client.js';
 	import AuthShell from '#lib/components/skiff/AuthShell.svelte';
 	import GitHubMark from '#lib/components/skiff/GitHubMark.svelte';
+	import ForgeMark from '#lib/components/skiff/ForgeMark.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
@@ -157,6 +158,17 @@
 		if (err) error = err.message ?? 'GitHub sign-in failed';
 	}
 
+	async function signInWithGitLab() {
+		pending = true;
+		reset();
+		const { error: err } = await authClient.signIn.social({
+			provider: 'gitlab',
+			callbackURL: destination
+		});
+		pending = false;
+		if (err) error = err.message ?? 'GitLab sign-in failed';
+	}
+
 	async function sendMagicLink() {
 		reset();
 		if (!email) {
@@ -299,7 +311,7 @@
 			</button>
 		</form>
 
-		{#if passkeys || data.github}
+		{#if passkeys || data.github || data.gitlab}
 			<div class="my-6 flex items-center gap-3" aria-hidden="true">
 				<span class="h-px flex-1 bg-border"></span>
 				<span class="text-xs font-medium text-muted-foreground">or</span>
@@ -328,6 +340,18 @@
 					>
 						<GitHubMark />
 						Continue with GitHub
+					</Button>
+				{/if}
+				{#if data.gitlab}
+					<Button
+						size="lg"
+						variant="outline"
+						class="h-10 w-full"
+						disabled={pending}
+						onclick={signInWithGitLab}
+					>
+						<ForgeMark kind="gitlab" />
+						Continue with GitLab
 					</Button>
 				{/if}
 			</div>

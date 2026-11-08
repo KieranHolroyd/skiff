@@ -1,23 +1,26 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { githubImportSchema, hasPermission, parseGithubRepoUrl } from '@skiff/contracts';
+import { githubImportSchema, hasPermission, repoKey } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
 import { fieldErrorsFrom } from '../../databases/_lib/forms.server.js';
 import { failStatus, formString, toFormFailure } from '../../_lib/errors.js';
 import type { Actions, PageServerLoad } from './$types';
 
 /**
- * Deploy from GitHub (docs/GITHUB.md §9): pick a repository the org's GitHub App reaches, adjust
- * the detected build settings, deploy. The repository list and detection are fetched by the page
- * (`/api/v1/github/repositories`, `/api/v1/github/detect`); the import is a form action.
+ * Deploy from Git (docs/GITHUB.md §9, docs/FORGES.md §7): pick a repository the org's GitHub App
+ * or a GitLab/Gitea/Forgejo connection reaches, adjust the detected build settings, deploy. The
+ * repository list and detection are fetched by the page (`/api/v1/git/repositories`,
+ * `/api/v1/git/detect`); the import is a form action.
  */
 export const load: PageServerLoad = ({ locals, url }) => {
 	const principal = locals.principal!;
 	const app = core.githubApp.view(principal);
-	let connected = false;
+	let githubConnected = false;
+	let connections: Array<{ id: string; kind: string; name: string }> = [];
 	try {
-		connected = core.githubApp
+		githubConnected = core.githubApp
 			.installations(principal)
 			.some((entry) => entry.orgId === principal.orgId && !entry.suspended);
+		connections = core.forges.list(principal).map((entry) => ({ id: entry.id, kind: entry.kind, name: entry.name }));
 	} catch {
 		// No build:read: the page explains below.
 	}
@@ -29,24 +32,29 @@ export const load: PageServerLoad = ({ locals, url }) => {
 				principal,
 				core.projects.requireRow(principal, project.slug)
 			);
-			const parsed = source ? parseGithubRepoUrl(source.repoUrl) : null;
-			if (parsed) imported[`${parsed.owner}/${parsed.repo}`.toLowerCase()] ??= project.slug;
+			const key = source ? repoKey(source.repoUrl) : null;
+			if (key) imported[key] ??= project.slug;
 		} catch {
 			// A project the viewer cannot read builds of is simply not marked.
 		}
 	}
 	const repo = url.searchParams.get('repo');
+	const connection = url.searchParams.get('connection');
 	return {
 		app: {
 			configured: app.configured,
 			installUrl: app.configured ? core.githubApp.installUrl(principal) : null
 		},
-		connected,
+		connected: githubConnected || connections.length > 0,
+		githubConnected,
+		connections,
 		canInstall:
 			principal.kind === 'user' && (principal.role === 'owner' || principal.role === 'admin'),
 		canImport:
 			hasPermission(principal, 'project:create') && hasPermission(principal, 'build:create'),
-		repo: repo && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo) ? repo : null,
+		repo: repo && /^[A-Za-z0-9_.~-]+(?:\/[A-Za-z0-9_.~-]+)+$/.test(repo) && repo.length <= 512 ? repo : null,
+		/** The forge connection the repository comes through; null for the GitHub App. */
+		connection: connection && connections.some((entry) => entry.id === connection) ? connection : null,
 		imported
 	};
 };
@@ -70,6 +78,7 @@ export const actions: Actions = {
 		const runtime = formString(data, 'runtime') === 'process' ? 'process' : 'static';
 		const values = {
 			repository: formString(data, 'repository'),
+			connectionId: formString(data, 'connectionId'),
 			branch: formString(data, 'branch'),
 			name: formString(data, 'name'),
 			slug: formString(data, 'slug'),
@@ -89,6 +98,7 @@ export const actions: Actions = {
 		const command = values.command.split(/\s+/).filter(Boolean);
 		const parsed = githubImportSchema.safeParse({
 			repository: values.repository,
+			connectionId: values.connectionId || undefined,
 			branch: values.branch || undefined,
 			name: values.name || undefined,
 			slug: values.slug || undefined,

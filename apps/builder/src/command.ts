@@ -153,7 +153,12 @@ export function directRunArgs(command: string): string[] {
  * project member cannot point `repoUrl` at their own server and collect the token. Git also
  * drops a host-scoped header when a redirect leaves that host.
  */
-export function gitAuthEnv(repoUrl: string, token: string | null, allowedHosts: readonly string[]): Record<string, string> {
+export function gitAuthEnv(
+	repoUrl: string,
+	token: string | null,
+	allowedHosts: readonly string[],
+	username = 'x-access-token',
+): Record<string, string> {
 	if (!token) return {};
 	let url: URL;
 	try {
@@ -164,7 +169,9 @@ export function gitAuthEnv(repoUrl: string, token: string | null, allowedHosts: 
 	if (url.protocol !== 'https:' || url.username || url.password) return {};
 	const host = url.host.toLowerCase();
 	if (!allowedHosts.map((allowed) => allowed.toLowerCase()).includes(host)) return {};
-	const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
+	// GitHub ignores the user name; GitLab deploy tokens and Gitea/Forgejo tokens are checked with it (D175).
+	const user = /^[A-Za-z0-9._+@-]{1,128}$/.test(username) ? username : 'x-access-token';
+	const basic = Buffer.from(`${user}:${token}`).toString('base64');
 	return {
 		GIT_CONFIG_COUNT: '1',
 		GIT_CONFIG_KEY_0: `http.https://${host}/.extraHeader`,

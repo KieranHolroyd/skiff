@@ -22,9 +22,13 @@
 		FRAMEWORK_PRESETS,
 		frameworkIds,
 		type FrameworkId,
-		type GithubImportDetection,
-		type GithubRepositoryList
+		FORGE_LABELS,
+		type GitProviderKind,
+		type GitRepositoryList,
+		type GitRepositoryView,
+		type GithubImportDetection
 	} from '@skiff/contracts';
+	import ForgeMark from '#lib/components/skiff/ForgeMark.svelte';
 	import GitHubMark from '#lib/components/skiff/GitHubMark.svelte';
 	import Notice from '#lib/components/skiff/Notice.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
@@ -63,11 +67,11 @@
 	let refreshing = $state(false);
 
 	const repos = createQuery(() => ({
-		queryKey: ['github-repositories'] as const,
+		queryKey: ['git-repositories'] as const,
 		queryFn: ({ signal }) =>
-			fetchJson<GithubRepositoryList>('/api/v1/github/repositories', {
+			fetchJson<GitRepositoryList>('/api/v1/git/repositories', {
 				signal,
-				fallback: 'Could not list GitHub repositories'
+				fallback: 'Could not list repositories'
 			}),
 		enabled: browser && data.connected && !data.repo,
 		staleTime: 60_000,
@@ -78,8 +82,8 @@
 		refreshing = true;
 		try {
 			client.setQueryData(
-				['github-repositories'],
-				await fetchJson<GithubRepositoryList>('/api/v1/github/repositories?refresh=1')
+				['git-repositories'],
+				await fetchJson<GitRepositoryList>('/api/v1/git/repositories?refresh=1')
 			);
 		} finally {
 			refreshing = false;
@@ -95,9 +99,11 @@
 			.slice(0, 100);
 	});
 
-	function importHref(fullName: string): string {
-		return `${resolve('/(dashboard)/new/github')}?repo=${encodeURIComponent(fullName)}`;
+	function importHref(repo: GitRepositoryView): string {
+		const connection = repo.connectionId ? `&connection=${encodeURIComponent(repo.connectionId)}` : '';
+		return `${resolve('/(dashboard)/new/github')}?repo=${encodeURIComponent(repo.fullName)}${connection}`;
 	}
+
 
 	// ------------------------------------------------------------- step 2: configure and deploy
 
@@ -122,12 +128,13 @@
 	});
 
 	const detection = createQuery(() => ({
-		queryKey: ['github-detect', data.repo, branch, rootDir] as const,
+		queryKey: ['git-detect', data.connection, data.repo, branch, rootDir] as const,
 		queryFn: ({ signal }) => {
 			// eslint-disable-next-line svelte/prefer-svelte-reactivity -- a one-off query string, not state
 			const params = new URLSearchParams({ repository: data.repo ?? '', rootDir });
 			if (branch) params.set('branch', branch);
-			return fetchJson<GithubImportDetection>(`/api/v1/github/detect?${params}`, {
+			if (data.connection) params.set('connectionId', data.connection);
+			return fetchJson<GithubImportDetection>(`/api/v1/git/detect?${params}`, {
 				signal,
 				fallback: 'Could not read the repository'
 			});
@@ -137,6 +144,13 @@
 		retry: false,
 		placeholderData: (previous: GithubImportDetection | undefined) => previous
 	}));
+
+	/** The provider of the repository being configured (from the detection, else the URL). */
+	const provider = $derived<GitProviderKind>(
+		(detection.data?.repository.provider as GitProviderKind | undefined) ??
+			(data.connection ? ((data.connections.find((entry) => entry.id === data.connection)?.kind as GitProviderKind) ?? 'gitlab') : 'github')
+	);
+	const providerLabel = $derived(FORGE_LABELS[provider]);
 
 	let name = $state(kept?.name ?? '');
 	let slug = $state(kept?.slug ?? '');
@@ -242,17 +256,17 @@
 </script>
 
 <svelte:head>
-	<title>Deploy from GitHub · Skiff</title>
+	<title>Deploy from Git · Skiff</title>
 </svelte:head>
 
 <div class="space-y-6">
 	<PageHeader
 		target="page.new-github"
 		eyebrow="New project"
-		title={data.repo ? `Deploy ${data.repo}` : 'Deploy from GitHub'}
+		title={data.repo ? `Deploy ${data.repo}` : 'Deploy from Git'}
 		description={data.repo
 			? 'Skiff read the repository and picked how to build it. Adjust anything, then deploy. Every push to the branch deploys again.'
-			: 'Import a repository through Skiff’s GitHub App. Each push builds and deploys it, with a commit status and a GitHub deployment for every build.'}
+			: 'Import a repository from GitHub, GitLab, Gitea or Forgejo. Each push builds and deploys it, with a commit status for every build.'}
 	>
 		{#if data.repo}
 			<Button variant="outline" href={resolve('/(dashboard)/new/github')}>
@@ -271,14 +285,17 @@
 		</Notice>
 	{/if}
 
-	{#if !data.app.configured}
+	{#if !data.app.configured && !data.connected}
 		<EmptyState
 			icon={GitHubMark}
-			title="Connect GitHub first"
-			description="A platform admin creates Skiff’s GitHub App once, in Settings → GitHub. After that, anyone who can create projects can deploy repositories from here."
+			title="Connect a git provider first"
+			description="A platform admin creates Skiff’s GitHub App once, in Settings → GitHub; owners connect GitLab, Gitea or Forgejo with a token in Settings → Git providers. After that, anyone who can create projects can deploy repositories from here."
 		>
 			<Button href={resolve('/(dashboard)/settings/github')}>
-				<GitHubMark />Open Settings → GitHub
+				<GitHubMark />Settings → GitHub
+			</Button>
+			<Button variant="outline" href={resolve('/(dashboard)/settings/git' as '/(dashboard)/settings/github')}>
+				<ForgeMark kind="gitlab" />Settings → Git providers
 			</Button>
 		</EmptyState>
 	{:else if !data.connected}
@@ -314,7 +331,7 @@
 	>
 		<header class="flex flex-wrap items-center gap-3 border-b px-4 py-3">
 			<h2 id="repos-heading" class="flex items-center gap-2 text-sm font-semibold">
-				<GitHubMark class="size-4" />Import a repository
+				<ForgeMark kind={data.connections.length && !data.githubConnected ? 'generic' : 'github'} class="size-4" />Import a repository
 			</h2>
 			<div class="ml-auto flex w-full items-center gap-2 sm:w-auto">
 				<InputGroup.Root class="w-full bg-background sm:w-72">
@@ -351,10 +368,10 @@
 			<p class="px-4 py-6 text-sm text-destructive">{errorText(repos.error)}</p>
 		{:else}
 			<ul class="max-h-[32rem] divide-y overflow-y-auto">
-				{#each visible as repo (repo.id)}
-					{@const existing = data.imported[repo.fullName.toLowerCase()]}
+				{#each visible as repo (`${repo.connectionId ?? 'github'}:${repo.fullName}`)}
+					{@const existing = data.imported[repo.key]}
 					<li class="flex items-center gap-3 px-4 py-3">
-						<GitHubMark class="size-5 shrink-0 text-muted-foreground" />
+						<span title={FORGE_LABELS[repo.provider]}><ForgeMark kind={repo.provider} class="size-5 shrink-0 text-muted-foreground" /></span>
 						<div class="min-w-0 flex-1">
 							<p class="flex items-center gap-1.5 text-sm font-medium">
 								<span class="truncate">{repo.fullName}</span>
@@ -381,32 +398,26 @@
 						<Button
 							size="sm"
 							variant={existing ? 'outline' : 'default'}
-							href={importHref(repo.fullName)}
+							href={importHref(repo)}
 							disabled={!data.canImport}>Import</Button
 						>
 						<!-- eslint-enable svelte/no-navigation-without-resolve -->
 					</li>
 				{:else}
 					<li class="px-4 py-6 text-sm text-muted-foreground">
-						{filter ? 'No repository matches.' : 'The App cannot see any repositories yet.'}
+						{filter ? 'No repository matches.' : 'No connected provider lists any repositories yet.'}
 					</li>
 				{/each}
 			</ul>
 			<footer class="border-t px-4 py-2.5 text-xs text-muted-foreground">
-				{#if repos.data?.truncated}Showing the first 500 repositories.
+				{#if repos.data?.truncated}Some providers list more repositories than were fetched.
 				{/if}
-				Missing a repository?
-				{#if repos.data?.manageUrl}
-					<!-- eslint-disable svelte/no-navigation-without-resolve -- external GitHub URL -->
-					<a
-						class="underline underline-offset-2 hover:text-foreground"
-						href={repos.data.manageUrl}
-						target="_blank"
-						rel="noreferrer">Grant the GitHub App access</a
-					>, then refresh.
-					<!-- eslint-enable svelte/no-navigation-without-resolve -->
-				{/if}
-				{#if repos.data?.error}<span class="text-destructive"> {repos.data.error}</span>{/if}
+				Missing a repository? Grant the GitHub App access to it, check the forge token’s access in
+				<a class="underline underline-offset-2 hover:text-foreground" href={resolve('/(dashboard)/settings/git' as '/(dashboard)/settings/github')}>Settings → Git providers</a>,
+				then refresh.
+				{#each repos.data?.errors ?? [] as failure (`${failure.provider}:${failure.connectionId}`)}
+					<span class="block text-destructive">{failure.name}: {failure.error}</span>
+				{/each}
 			</footer>
 		{/if}
 	</section>
@@ -430,6 +441,7 @@
 			}}
 		>
 			<input type="hidden" name="repository" value={found?.repository.fullName ?? repository} />
+			<input type="hidden" name="connectionId" value={data.connection ?? ''} />
 			<input type="hidden" name="framework" value={framework} />
 
 			{#if result?.message}
@@ -441,7 +453,7 @@
 					<span
 						class="flex size-9 shrink-0 items-center justify-center rounded-lg border bg-background"
 					>
-						<GitHubMark class="size-5" />
+						<ForgeMark kind={provider} class="size-5" />
 					</span>
 					<div class="min-w-0 flex-1">
 						<h2 class="flex items-center gap-1.5 font-semibold">
@@ -452,13 +464,13 @@
 								/>{/if}
 						</h2>
 						{#if found}
-							<!-- eslint-disable svelte/no-navigation-without-resolve -- external GitHub URL -->
+							<!-- eslint-disable svelte/no-navigation-without-resolve -- external forge URL -->
 							<a
 								href={found.repository.htmlUrl}
 								target="_blank"
 								rel="noreferrer"
 								class="inline-flex items-center gap-0.5 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-								>View on GitHub<ArrowUpRightIcon class="size-3" /></a
+								>View on {providerLabel}<ArrowUpRightIcon class="size-3" /></a
 							>
 							<!-- eslint-enable svelte/no-navigation-without-resolve -->
 						{/if}
@@ -778,7 +790,9 @@
 								: `${found.workflows.length} workflows`} in
 							<code class="font-mono">.skiff/workflows</code>
 							({found.workflows.slice(0, 3).join(', ')}{found.workflows.length > 3 ? ', …' : ''})
-							run on push and pull request, delivered by the GitHub App.
+							run on push and {provider === 'gitlab' ? 'merge' : 'pull'} request, delivered by {provider === 'github'
+								? 'the GitHub App'
+								: 'the webhook Skiff creates'}.
 						</Field.Description>
 					</div>
 				</Field.Field>
@@ -823,11 +837,19 @@
 			</div>
 			<div class="space-y-2 rounded-xl border border-dashed p-4 text-xs text-muted-foreground">
 				<p class="flex items-center gap-1.5 font-medium text-foreground">
-					<GitHubMark class="size-3.5" />Nothing to set up on GitHub
+					<ForgeMark kind={provider} class="size-3.5" />Nothing to set up on {providerLabel}
 				</p>
 				<p class="text-pretty">
-					The GitHub App delivers pushes, Builders clone with a one-hour token, and every build
-					reports a commit status and a GitHub deployment. No webhook or deploy key.
+					{#if provider === 'github'}
+						The GitHub App delivers pushes, Builders clone with a one-hour token, and every build
+						reports a commit status and a GitHub deployment. No webhook or deploy key.
+					{:else}
+						Skiff creates the webhook on {providerLabel}, Builders clone with {provider === 'gitlab'
+							? 'a short-lived deploy token'
+							: 'the connection’s clone token'}, and every build reports a commit status{provider === 'gitlab'
+							? ' and a GitLab deployment'
+							: ''}.
+					{/if}
 				</p>
 				{#if found?.hasDockerfile}
 					<p class="text-pretty">

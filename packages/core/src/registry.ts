@@ -5,6 +5,8 @@ import {
 	REGISTRY_DEFAULT_VERSION,
 	REGISTRY_ENGINE,
 	REGISTRY_GITHUB_OIDC_USER,
+	REGISTRY_GITLAB_OIDC_USER,
+	GITLAB_DEFAULT_ISSUER,
 	REGISTRY_ID_PREFIX,
 	REGISTRY_PIN_TAG_PREFIX,
 	REGISTRY_REPOSITORY_PATTERN,
@@ -35,7 +37,7 @@ import type { CoreContext } from './context.ts';
 import { CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { buildSystemPrincipal } from './iam/system.ts';
 import { MANIFEST_ACCEPT } from './oci-client.ts';
-import { OidcError, refMatches, verifyGithubOidc } from './registry-oidc.ts';
+import { OidcError, refMatches, verifyGithubOidc, verifyGitlabOidc } from './registry-oidc.ts';
 import { generateRegistrySigningKey, signRegistryToken, type RegistryAccess, type RegistrySigningKey } from './registry-token.ts';
 import { hmac, newId, parseJson, randomToken, safeEqual, sha256Hex } from './util.ts';
 
@@ -625,27 +627,50 @@ export class RegistryService {
 	}
 
 	/**
-	 * The realm entry point (`GET /api/registry/token`). GitHub Actions OIDC tokens (G3) are verified
-	 * asynchronously against GitHub's keys; every other client goes through `issueToken`.
+	 * The realm entry point (`GET /api/registry/token`). CI OIDC tokens — GitHub Actions (G3) and
+	 * GitLab CI `id_tokens` (D178) — are verified asynchronously against the issuer's keys; every
+	 * other client goes through `issueToken`.
 	 */
 	async authorize(client: RegistryClient, service: string | null, scopes: string[]): Promise<RegistryTokenResponse> {
-		if (client.kind !== 'login' || client.username !== REGISTRY_GITHUB_OIDC_USER) return this.issueToken(client, service, scopes);
+		const oidcUser = client.kind === 'login' && (client.username === REGISTRY_GITHUB_OIDC_USER || client.username === REGISTRY_GITLAB_OIDC_USER);
+		if (!oidcUser || client.kind !== 'login') return this.issueToken(client, service, scopes);
 		if (!this.enabled()) throw new NotFoundError('Registry');
 		if (service && service !== this.host()) throw new ValidationError(`This realm issues tokens for ${this.host()}, not ${service}.`);
-		let claims: Awaited<ReturnType<typeof verifyGithubOidc>>;
+		let trusts: Array<typeof registryOidcTrusts.$inferSelect>;
+		let subject: string;
+		let source: string;
 		try {
-			claims = await verifyGithubOidc(client.password, { audience: this.host(), fetch: this.transport(), now: this.ctx.now() });
+			if (client.username === REGISTRY_GITHUB_OIDC_USER) {
+				const claims = await verifyGithubOidc(client.password, { audience: this.host(), fetch: this.transport(), now: this.ctx.now() });
+				trusts = this.ctx.db
+					.select()
+					.from(registryOidcTrusts)
+					.where(and(eq(registryOidcTrusts.provider, 'github'), eq(registryOidcTrusts.subjectRepository, claims.repository)))
+					.all()
+					.filter((trust) => refMatches(trust.subjectRef, claims.ref));
+				if (trusts.length === 0)
+					throw new CoreError('unauthorized', `No organisation trusts GitHub repository ${claims.repository} at ${claims.ref}.`, 401);
+				subject = `github:${claims.sub}`;
+				source = `github:${claims.repository}`;
+			} else {
+				const gitlabTrusts = this.ctx.db.select().from(registryOidcTrusts).where(eq(registryOidcTrusts.provider, 'gitlab')).all();
+				const issuers = [...new Set(gitlabTrusts.map((trust) => trust.issuer ?? GITLAB_DEFAULT_ISSUER))];
+				const claims = await verifyGitlabOidc(client.password, { audience: this.host(), issuers, fetch: this.transport(), now: this.ctx.now() });
+				trusts = gitlabTrusts.filter(
+					(trust) =>
+						(trust.issuer ?? GITLAB_DEFAULT_ISSUER) === claims.iss &&
+						trust.subjectRepository.toLowerCase() === claims.project_path.toLowerCase() &&
+						refMatches(trust.subjectRef, claims.fullRef),
+				);
+				if (trusts.length === 0)
+					throw new CoreError('unauthorized', `No organisation trusts GitLab project ${claims.project_path} at ${claims.fullRef}.`, 401);
+				subject = `gitlab:${claims.sub}`;
+				source = `gitlab:${claims.project_path}`;
+			}
 		} catch (error) {
+			if (error instanceof CoreError) throw error;
 			throw new CoreError('unauthorized', error instanceof OidcError ? error.message : 'Invalid OIDC token.', 401);
 		}
-		const trusts = this.ctx.db
-			.select()
-			.from(registryOidcTrusts)
-			.where(and(eq(registryOidcTrusts.provider, 'github'), eq(registryOidcTrusts.subjectRepository, claims.repository)))
-			.all()
-			.filter((trust) => refMatches(trust.subjectRef, claims.ref));
-		if (trusts.length === 0)
-			throw new CoreError('unauthorized', `No organisation trusts GitHub repository ${claims.repository} at ${claims.ref}.`, 401);
 		const access = scopes.flatMap((scope): RegistryAccess[] => {
 			const parsed = this.parseScope(scope);
 			if (!parsed) return [];
@@ -662,14 +687,14 @@ export class RegistryService {
 			const orgId = this.orgIdBySlug(parsed.name.split('/')[0]!)!;
 			if (actions.includes('push')) {
 				this.assertPushQuota(orgId, parsed.name);
-				this.ensureRepository(orgId, parsed.name, `github:${claims.repository}`);
+				this.ensureRepository(orgId, parsed.name, source);
 			}
 			return [{ type: 'repository', name: parsed.name, actions: [...new Set(actions)] }];
 		});
 		const signed = signRegistryToken(this.signingKey(), {
 			issuer: this.ctx.config.platformOrigin,
 			service: this.host(),
-			subject: `github:${claims.sub}`,
+			subject,
 			access,
 			ttlSeconds: TOKEN_TTL_SECONDS,
 		});
@@ -687,6 +712,8 @@ export class RegistryService {
 				id: row.id,
 				provider: row.provider,
 				githubRepository: row.subjectRepository,
+				subject: row.subjectRepository,
+				issuer: row.provider === 'gitlab' ? (row.issuer ?? GITLAB_DEFAULT_ISSUER) : null,
 				ref: row.subjectRef,
 				repository: row.repository,
 				push: row.push,
@@ -694,7 +721,7 @@ export class RegistryService {
 			}));
 	}
 
-	/** Let a GitHub repository's workflows use one repository (or `<org>/*`) with its OIDC token. */
+	/** Let a GitHub repository's workflows or a GitLab project's jobs use one repository (or `<org>/*`) with their OIDC token. */
 	createOidcTrust(principal: Principal, raw: RegistryOidcTrustCreate): RegistryOidcTrustView {
 		this.ctx.iam.require(principal, 'image:credentials', { type: 'org' });
 		const input = registryOidcTrustCreateSchema.parse(raw);
@@ -708,8 +735,9 @@ export class RegistryService {
 		const row = {
 			id: newId('rot_'),
 			orgId: principal.orgId,
-			provider: 'github' as const,
-			subjectRepository: input.githubRepository,
+			provider: input.provider,
+			subjectRepository: input.provider === 'gitlab' ? input.gitlabProject! : input.githubRepository!,
+			issuer: input.provider === 'gitlab' ? (input.issuer ?? GITLAB_DEFAULT_ISSUER) : null,
 			subjectRef: input.ref ?? null,
 			repository: input.repository,
 			push: input.push,
@@ -722,7 +750,7 @@ export class RegistryService {
 			action: 'registry.oidc.create',
 			resource: 'registryOidcTrust',
 			resourceId: row.id,
-			args: { githubRepository: row.subjectRepository, ref: row.subjectRef, repository: row.repository, push: row.push },
+			args: { provider: row.provider, subject: row.subjectRepository, issuer: row.issuer, ref: row.subjectRef, repository: row.repository, push: row.push },
 			result: 'ok',
 		});
 		return this.listOidcTrusts(principal).find((trust) => trust.id === row.id)!;

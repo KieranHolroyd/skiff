@@ -1,8 +1,8 @@
 import type { EmailOrgState } from '@skiff/contracts';
 
 /**
- * The Email setup guide (docs/EMAIL.md §9): the steps from "nothing configured" to "an app sends
- * real mail", each judged from live state. Pure, so the ordering and the done rules are tested
+ * The Email setup checklist on the overview (docs/EMAIL.md §9): the steps from "nothing configured"
+ * to "an app sends real mail", each judged from live state. Pure, so the ordering and the done rules are tested
  * directly; the page only renders what this returns.
  */
 
@@ -20,8 +20,17 @@ export type SetupStepId = (typeof setupStepIds)[number];
 /** Result of the forward-confirmed reverse DNS check on the mail node's IP. */
 export type ReverseDnsState = 'ok' | 'missing' | 'mismatch' | 'unknown';
 
+/** What the control plane's resolver found for the mail node (reverse-dns.server.ts). */
+export interface ReverseDnsCheck {
+	state: ReverseDnsState;
+	ip: string;
+	helo: string;
+	/** What the PTR lookup returned, shown when it doesn't match. */
+	ptr: string[];
+}
+
 export interface SetupFacts {
-	/** A platform admin picked a mail node (Settings → Email). */
+	/** A platform admin picked a mail node (Email → Mail server, or the checklist's first step). */
 	nodeChosen: boolean;
 	/** FCrDNS on the mail node's IPv4; null while checking or when there is no IP to check. */
 	reverseDns: ReverseDnsState | null;
@@ -47,32 +56,34 @@ export interface SetupStep {
 	state: SetupStepState;
 }
 
-const STEPS: Record<SetupStepId, { title: string; owner: SetupOwner; done: (f: SetupFacts) => boolean }> =
-	{
-		node: { title: 'Choose the mail node', owner: 'platform', done: (f) => f.nodeChosen },
-		'reverse-dns': {
-			title: 'Point reverse DNS at the mail node',
-			owner: 'platform',
-			done: (f) => f.reverseDns === 'ok'
-		},
-		domain: { title: 'Add a sending domain', owner: 'org', done: (f) => f.domains > 0 },
-		verify: {
-			title: 'Publish its DNS records',
-			owner: 'org',
-			done: (f) => f.verifiedDomains > 0
-		},
-		test: { title: 'Send a test message', owner: 'org', done: (f) => f.delivered },
-		connect: {
-			title: 'Connect your app',
-			owner: 'org',
-			done: (f) => f.credentials > 0 || f.appSent
-		},
-		sandbox: {
-			title: 'Leave the sandbox',
-			owner: 'platform',
-			done: (f) => f.orgState === 'active'
-		}
-	};
+const STEPS: Record<
+	SetupStepId,
+	{ title: string; owner: SetupOwner; done: (f: SetupFacts) => boolean }
+> = {
+	node: { title: 'Choose the mail node', owner: 'platform', done: (f) => f.nodeChosen },
+	'reverse-dns': {
+		title: 'Point reverse DNS at the mail node',
+		owner: 'platform',
+		done: (f) => f.reverseDns === 'ok'
+	},
+	domain: { title: 'Add a sending domain', owner: 'org', done: (f) => f.domains > 0 },
+	verify: {
+		title: 'Publish its DNS records',
+		owner: 'org',
+		done: (f) => f.verifiedDomains > 0
+	},
+	test: { title: 'Send a test message', owner: 'org', done: (f) => f.delivered },
+	connect: {
+		title: 'Connect your app',
+		owner: 'org',
+		done: (f) => f.credentials > 0 || f.appSent
+	},
+	sandbox: {
+		title: 'Leave the sandbox',
+		owner: 'platform',
+		done: (f) => f.orgState === 'active'
+	}
+};
 
 /**
  * Every step with its state. Steps can finish out of order (a domain can be added before a node is

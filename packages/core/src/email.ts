@@ -1125,7 +1125,7 @@ export class EmailService {
 		);
 		this.requireFeature();
 		if (!this.settings().nodeId)
-			throw new CoreError('email_not_set_up', 'Email is not set up on this platform yet: a platform admin has to choose a mail node in Settings → Email.', 409);
+			throw new CoreError('email_not_set_up', 'Email is not set up on this platform yet: a platform admin has to choose a mail node in Email → Mail server.', 409);
 		const input = emailSendSchema.parse(raw);
 		if (input.idempotencyKey) {
 			const existing = this.ctx.db
@@ -1398,7 +1398,7 @@ export class EmailService {
 		if (!transport)
 			throw new CoreError(
 				'platform_mail_unavailable',
-				'Skiff cannot send the verification email: no mail node is set up (Settings → Email) and no platform SMTP is configured (SKIFF_SMTP_*).',
+				'Skiff cannot send the verification email: no mail node is set up (Email → Mail server) and no platform SMTP is configured (SKIFF_SMTP_*).',
 				409,
 			);
 		return (message) => transport.send(message);
@@ -1731,7 +1731,7 @@ export class EmailService {
 		} else {
 			const org = this.orgRow(row.orgId);
 			if (org.state === 'paused')
-				throw new ConflictError('Sending is paused for this organisation; resume it in Settings → Email before approving.');
+				throw new ConflictError('Sending is paused for this organisation; resume it in Email → Mail server before approving.');
 			const perDay = input.perDay ?? (org.state === 'active' ? org.perDay : EMAIL_ACTIVE_DEFAULT_LIMITS.perDay);
 			const perSecond = input.perSecond ?? (org.state === 'active' ? org.perSecond : EMAIL_ACTIVE_DEFAULT_LIMITS.perSecond);
 			decided = {

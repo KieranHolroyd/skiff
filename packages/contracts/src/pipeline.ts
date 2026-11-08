@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { gitProviderKinds, type GitProviderKind, type GitProviderLink } from './forges.ts';
 
 /**
  * Pipelines (docs/PIPELINES.md): GitHub-Actions-shaped workflows run as jobs on build nodes.
@@ -282,9 +283,14 @@ export interface PipelineResolveClaim {
 	sha: string | null;
 	/**
 	 * A one-hour read-only token for this repository from Skiff's GitHub App (D164), used instead of
-	 * the node's own git credentials. Absent when the App does not cover the repository.
+	 * the node's own git credentials. Absent when the App does not cover the repository. Forge
+	 * connections (D175) send a deploy or clone token with the host and user name it is for.
 	 */
 	gitToken?: string | null;
+	/** Host `gitToken` may be sent to; github.com when absent (Builders older than D175 assume it). */
+	gitTokenHost?: string | null;
+	/** HTTP basic user name for `gitToken`; `x-access-token` when absent. */
+	gitTokenUsername?: string | null;
 }
 
 export interface PipelineJobClaim {
@@ -326,8 +332,10 @@ export interface PipelineJobClaim {
 	buildkit?: boolean;
 	/** BuildKit cache scope (W10): never shared between trusted and untrusted runs. */
 	buildkitCacheScope?: string | null;
-	/** Clone token from Skiff's GitHub App, as on `PipelineResolveClaim` (D164). */
+	/** Clone token, as on `PipelineResolveClaim` (D164, D175). */
 	gitToken?: string | null;
+	gitTokenHost?: string | null;
+	gitTokenUsername?: string | null;
 }
 
 export type PipelineClaim = PipelineResolveClaim | PipelineJobClaim;
@@ -514,9 +522,10 @@ const cloneUrl = z
 export const pipelineRepositoryCreateSchema = z.object({
 	name: repositoryName,
 	cloneUrl,
-	provider: z.enum(['github', 'generic']).default('github'),
+	/** Inferred from the clone URL when absent: a GitHub URL, a connected forge (docs/FORGES.md), else generic. */
+	provider: z.enum(gitProviderKinds).optional(),
 	defaultBranch: z.string().min(1).max(255).default('main'),
-	/** GitHub webhook secret (≥ 16 chars). Write-only. */
+	/** Webhook secret (≥ 16 chars) for a hand-made GitHub, GitLab, Gitea or Forgejo webhook. Write-only. */
 	webhookSecret: z.string().min(16).max(256).optional(),
 	/** Default image for jobs without `container:` (container isolation only). */
 	defaultImage: z.string().min(1).max(512).optional(),
@@ -531,8 +540,9 @@ export const pipelineRepositoryCreateSchema = z.object({
 		})
 		.optional(),
 	/**
-	 * A GitHub token allowed to write commit statuses (fine-grained: "Commit statuses: write") for
-	 * this repository. Write-only. When set, every run reports its status on the commit.
+	 * A token allowed to write commit statuses for this repository: GitHub ("Commit statuses: write"),
+	 * GitLab (api) or Gitea/Forgejo (write:repository). Write-only. When set, every run reports its
+	 * status on the commit.
 	 */
 	statusToken: z.string().min(10).max(512).optional(),
 });
@@ -554,7 +564,7 @@ export interface PipelineRepositoryView {
 	id: string;
 	name: string;
 	cloneUrl: string;
-	provider: 'github' | 'generic';
+	provider: GitProviderKind;
 	defaultBranch: string;
 	defaultImage: string | null;
 	enabled: boolean;
@@ -562,6 +572,8 @@ export interface PipelineRepositoryView {
 	hasStatusToken?: boolean;
 	/** The org's GitHub App installation covering this repository (docs/GITHUB.md), or null. */
 	githubAppInstallationId?: number | null;
+	/** Which provider serves the repository and whether its events arrive without this webhook (docs/FORGES.md). */
+	gitProvider?: GitProviderLink | null;
 	minIsolation?: { trusted: PipelineIsolationTier | null; untrusted: PipelineIsolationTier | null };
 	/** Path of the webhook receiver, relative to the platform origin. */
 	webhookPath: string;

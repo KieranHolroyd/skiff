@@ -51,7 +51,7 @@
 	/>
 
 	{#if !area.configured}
-		<NotSetUp platformAdmin={area.can.platform} compact />
+		<NotSetUp platformAdmin={area.can.platform} />
 	{:else if !area.can.send}
 		<Notice tone="info">Sending needs the <code class="font-mono">email:send</code> permission.</Notice>
 	{:else if data.domains.length === 0}

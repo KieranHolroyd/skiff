@@ -377,6 +377,17 @@ to directly. Better Auth needs a `member` row for sign-in to resolve an org, so 
   `auth.ts:233`). OIDC ships first. SAML follows in the same plugin.
 - Providers are per org: issuer, client id, client secret (sealed with the org key) and claim
   mapping. `/login` asks for the email first. A verified domain routes the user to its IdP.
+- **Presets (D180):** adding a provider starts from Microsoft Entra ID, Google Workspace, Okta,
+  Auth0, OneLogin, JumpCloud, PingOne, Keycloak, authentik or a custom OIDC issuer
+  (`apps/control-plane/src/lib/sso-presets.ts`). A preset asks only for what identifies the tenant
+  (Entra tenant GUID, Okta domain and optional authorization server, Auth0 domain, OneLogin
+  subdomain, PingOne region and environment, Keycloak URL and realm, authentik URL and slug). It
+  derives the exact issuer, discovery URL, scopes (`groups` only where the IdP accepts it) and
+  claims, and shows that IdP's console steps next to the redirect URI. The provider id is reserved
+  when the page loads, so that URI is final before the provider exists. The server resolves the
+  preset again and checks the discovery document as usual. The issuer is stored as discovery
+  publishes it, including the trailing slash Auth0, JumpCloud and authentik use, because ID-token
+  `iss` checks are exact. A saved provider reopens in its preset, which is detected from the issuer.
 - **Domain verification** is a TXT record `skiff-verify=<token>` on the domain, re-checked daily.
   This mirrors the email domain checks (D116).
 - **JIT provisioning:** the first SSO sign-in from a verified domain creates the user and a member

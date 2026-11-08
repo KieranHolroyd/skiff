@@ -66,7 +66,7 @@ export async function runResolve(input: {
 	log?: (message: string) => void;
 }): Promise<void> {
 	const { claim, api } = input;
-	const credentials = withCloneToken(input.credentials, claim.gitToken);
+	const credentials = withCloneToken(input.credentials, claim.gitToken, { host: claim.gitTokenHost, username: claim.gitTokenUsername });
 	const log = input.log ?? ((message: string) => console.log(`[pipeline] ${message}`));
 	const root = join(credentials.buildDir, 'pipelines');
 	await mkdir(root, { recursive: true, mode: 0o711 });

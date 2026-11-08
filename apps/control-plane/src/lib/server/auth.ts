@@ -15,7 +15,7 @@ import { allPermissions, roles, statements, type Permission, type Role } from '@
 import { readMembership } from '@skiff/core';
 import { getRequestEvent } from '$app/server';
 import * as z from 'zod';
-import { allowDcr, authSecret, contentDomain, github, mcpResource, openSignup, platformOrigin, smtp } from './config';
+import { allowDcr, authSecret, contentDomain, github, gitlab, mcpResource, openSignup, platformOrigin, smtp } from './config';
 import { core } from './core';
 import { MAGIC_LINK_TTL_SECONDS, sendInviteEmail, sendMagicLinkEmail, sendPasswordResetEmail } from './email';
 import {
@@ -50,6 +50,8 @@ import { provisionSsoUser } from './sso-provision';
  */
 const githubOAuth = github ?? core.githubApp.oauthCredentials();
 export const githubSignIn = Boolean(githubOAuth);
+/** "Sign in with GitLab" from `GITLAB_CLIENT_ID`/`GITLAB_CLIENT_SECRET` (D178). */
+export const gitlabSignIn = Boolean(gitlab);
 
 /**
  * Better Auth: passwords, passkeys, GitHub and magic links (D103), invite-only, 2FA for owners
@@ -248,9 +250,10 @@ export const auth = betterAuth({
 		'/sso/request-domain-verification',
 		'/sso/verify-domain',
 	],
-	socialProviders: githubOAuth
-		? { github: { clientId: githubOAuth.clientId, clientSecret: githubOAuth.clientSecret } }
-		: {},
+	socialProviders: {
+		...(githubOAuth ? { github: { clientId: githubOAuth.clientId, clientSecret: githubOAuth.clientSecret } } : {}),
+		...(gitlab ? { gitlab } : {})
+	},
 	trustedOrigins: [platformOrigin],
 	user: {
 		additionalFields: {

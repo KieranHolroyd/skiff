@@ -16,12 +16,13 @@
 import { sqlite } from './db';
 import { core } from './core';
 
-export type SignInMethod = 'password' | 'passkey' | 'github' | 'magic-link' | 'sso';
+export type SignInMethod = 'password' | 'passkey' | 'github' | 'gitlab' | 'magic-link' | 'sso';
 
 /** Which Better Auth endpoint a session was created by, or `undefined` for unknown flows. */
 export function signInMethodFromPath(path: string | undefined): SignInMethod | undefined {
 	if (!path) return undefined;
 	if (path.startsWith('/sso/callback') || path.startsWith('/sso/saml2/sp/acs')) return 'sso';
+	if (path.startsWith('/callback/gitlab')) return 'gitlab';
 	if (path.startsWith('/callback/')) return 'github';
 	if (path === '/passkey/verify-authentication' || path === '/passkey/verify-registration')
 		return 'passkey';
@@ -151,6 +152,8 @@ function methodLabel(method: SignInMethod): string {
 			return 'email-link';
 		case 'github':
 			return 'GitHub';
+		case 'gitlab':
+			return 'GitLab';
 		case 'sso':
 			return 'single sign-on';
 		case 'passkey':

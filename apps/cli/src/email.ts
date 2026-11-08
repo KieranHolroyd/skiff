@@ -525,7 +525,7 @@ export function emailStatusReport(org: EmailOrgView, settings: EmailSettingsView
 	}
 	if (settings) {
 		lines.push('');
-		if (!settings.nodeId) field('Mail node', 'not set up — choose one in Settings → Email');
+		if (!settings.nodeId) field('Mail node', 'not set up — choose one in Email → Mail server');
 		else field('Mail node', `${settings.nodeId}${settings.paused ? ' (delivery paused platform-wide)' : ''}`);
 		if (settings.hostnames?.submission) field('SMTP', `${settings.hostnames.submission}:587 (STARTTLS) or :465 (TLS)`);
 	}

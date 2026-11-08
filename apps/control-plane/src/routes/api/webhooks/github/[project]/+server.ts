@@ -5,8 +5,9 @@ import { core } from '#lib/server/core.js';
 import { json, route } from '#lib/server/api.js';
 
 /**
- * GitHub push webhook (D2). Authenticated by the repository's HMAC secret, never a cookie, so it
- * is listed as a CSRF-exempt prefix. The raw body is required verbatim for signature verification.
+ * A project's hand-made push webhook (D2, D174), also served as `/api/webhooks/git/<project>`.
+ * GitHub, Gitea and Forgejo sign the raw body with the project's secret; GitLab sends the secret in
+ * `X-Gitlab-Token`. Never a cookie, so it is a CSRF-exempt prefix.
  */
 export const POST: RequestHandler = async (event) => {
 	const projectSlug = event.params.project;
@@ -14,12 +15,7 @@ export const POST: RequestHandler = async (event) => {
 		const row = core.ctx.db.select().from(projects).where(eq(projects.slug, projectSlug)).get();
 		if (!row || row.deletedAt) return json({ error: 'not_found' }, 404);
 		const rawBody = await event.request.text();
-		const build = await core.builds.handleGithubWebhook(
-			row,
-			rawBody,
-			event.request.headers.get('x-hub-signature-256'),
-			event.request.headers.get('x-github-event'),
-		);
+		const build = await core.builds.handleWebhook(row, rawBody, event.request.headers);
 		if (!build) return json({ ok: true, ignored: true }, 202);
 		return json({ ok: true, build }, 202);
 	});

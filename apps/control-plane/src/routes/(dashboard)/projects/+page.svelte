@@ -332,7 +332,7 @@
 			{/if}
 			<Button variant="outline" href={resolve('/(dashboard)/new/github')}>
 				<GitHubMark />
-				Deploy from GitHub
+				Deploy from Git
 			</Button>
 			<Button onclick={openCreate}>
 				<PlusIcon />
@@ -372,7 +372,7 @@
 				{#if data.can.createProject}
 					<Button onclick={openCreate}><PlusIcon />Create a project</Button>
 					<Button variant="outline" href={resolve('/(dashboard)/new/github')}>
-						<GitHubMark />Deploy from GitHub
+						<GitHubMark />Deploy from Git
 					</Button>
 					{#if data.templates.length > 0}
 						<Button variant="outline" href={resolve('/(dashboard)/new')}>

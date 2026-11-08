@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import type { GitProviderLink } from './forges.ts';
 
 /**
  * Git builds (D2, D3). The control plane never builds: it queues a job and a Builder on the
@@ -37,7 +38,7 @@ export const gitSourceSchema = z.object({
 		.max(512)
 		.default('dist')
 		.refine((value) => !value.startsWith('/') && !value.split('/').includes('..'), 'outputDir must stay inside the repo'),
-	/** Optional webhook secret; when set, GitHub deliveries must carry a valid HMAC signature. */
+	/** Webhook secret for hand-made webhooks: GitHub/Gitea/Forgejo HMAC signatures, or GitLab's `X-Gitlab-Token`. */
 	webhookSecret: z.string().min(16).max(256).optional(),
 	enabled: z.boolean().default(true),
 });
@@ -59,6 +60,8 @@ export interface GitSourceView {
 	 * without the project webhook, private clones and commit statuses work. Null otherwise.
 	 */
 	githubAppInstallationId?: number | null;
+	/** Which provider serves the repository and whether its events arrive without the project webhook (docs/FORGES.md). */
+	gitProvider?: GitProviderLink | null;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -116,6 +119,9 @@ export interface BuildJob {
 	outputDir: string;
 	/** Presigned PUT for `builds/<id>.zip`; the Builder uploads, then reports success. */
 	uploadUrl: string;
-	/** Full clone URL with credentials when the repository is private. */
-	auth?: { username: string; password: string } | null;
+	/**
+	 * A clone credential for a private repository (D164, D175): sent only to `host` (github.com when
+	 * absent, which is all Builders older than D175 know) as HTTP basic auth for this clone alone.
+	 */
+	auth?: { username: string; password: string; host?: string } | null;
 }

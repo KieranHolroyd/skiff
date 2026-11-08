@@ -502,8 +502,9 @@ export const registryOidcTrusts = sqliteTable(
 	{
 		id: text('id').primaryKey(),
 		orgId: text('org_id').notNull(),
-		provider: text('provider', { enum: ['github'] }).notNull().default('github'),
-		/** `owner/repo` as GitHub names it in the token's `repository` claim. */
+		/** `github` (Actions OIDC) or `gitlab` (CI `id_tokens`, D178). */
+		provider: text('provider', { enum: ['github', 'gitlab'] }).notNull().default('github'),
+		/** `owner/repo` (GitHub `repository` claim) or a GitLab `project_path`. */
 		subjectRepository: text('subject_repository').notNull(),
 		/** Optional glob on the `ref` claim, e.g. `refs/heads/main` or `refs/tags/*`. */
 		subjectRef: text('subject_ref'),
@@ -512,6 +513,8 @@ export const registryOidcTrusts = sqliteTable(
 		push: integer('push', { mode: 'boolean' }).notNull().default(true),
 		createdBy: text('created_by').notNull(),
 		createdAt: integer('created_at').notNull().$defaultFn(now),
+		/** Token issuer for `gitlab` trusts (the GitLab base URL); null for GitHub (0094). */
+		issuer: text('issuer'),
 	},
 	(t) => [index('registry_oidc_trusts_subject_idx').on(t.provider, t.subjectRepository), index('registry_oidc_trusts_org_idx').on(t.orgId)],
 );
@@ -2049,6 +2052,51 @@ export const githubInstallations = sqliteTable(
 );
 
 /**
+ * GitLab, Gitea and Forgejo connections (docs/FORGES.md, D173, 0094). One per (org, base URL);
+ * tokens and the webhook secret are sealed with the org's data key.
+ */
+export const forgeConnections = sqliteTable(
+	'forge_connections',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		kind: text('kind', { enum: ['gitlab', 'gitea', 'forgejo'] }).notNull(),
+		name: text('name').notNull(),
+		/** `https://gitlab.com`, `https://git.example.com/gitea` (no trailing slash). */
+		baseUrl: text('base_url').notNull(),
+		tokenSealed: text('token_sealed').notNull(),
+		/** Optional read-only token build nodes may receive (D175). */
+		cloneTokenSealed: text('clone_token_sealed'),
+		webhookSecretSealed: text('webhook_secret_sealed').notNull(),
+		accountLogin: text('account_login'),
+		cloneLogin: text('clone_login'),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [uniqueIndex('forge_connections_org_base_idx').on(t.orgId, t.baseUrl)],
+);
+
+/** Hooks Skiff created on a forge (D174, 0094): per repository, or per group/organisation. */
+export const forgeWebhooks = sqliteTable(
+	'forge_webhooks',
+	{
+		id: text('id').primaryKey(),
+		connectionId: text('connection_id').notNull(),
+		orgId: text('org_id').notNull(),
+		scope: text('scope', { enum: ['repository', 'namespace'] }).notNull(),
+		/** Full name of the repository (as the forge spells it), or the namespace path. */
+		path: text('path').notNull(),
+		/** The forge's hook id; null when creating it failed (`error` says why). */
+		hookId: text('hook_id'),
+		error: text('error'),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [uniqueIndex('forge_webhooks_path_idx').on(t.connectionId, t.scope, t.path), index('forge_webhooks_org_idx').on(t.orgId)],
+);
+
+/**
  * Native database studio sessions (plan 22, D96). One open row per (database, user); the token is
  * sealed with the org key and only opened for the session's own endpoint and the node activation.
  */
@@ -2308,7 +2356,7 @@ export const pipelineRepositories = sqliteTable(
 		orgId: text('org_id').notNull(),
 		name: text('name').notNull(),
 		cloneUrl: text('clone_url').notNull(),
-		provider: text('provider', { enum: ['github', 'generic'] }).notNull().default('github'),
+		provider: text('provider', { enum: ['github', 'gitlab', 'gitea', 'forgejo', 'generic'] }).notNull().default('github'),
 		defaultBranch: text('default_branch').notNull().default('main'),
 		defaultImage: text('default_image'),
 		/** Envelope-encrypted webhook secret; never returned by the API. */
@@ -2628,6 +2676,8 @@ export const schema = {
 	scheduledTasks,
 	githubRunnerRegistrations,
 	githubInstallations,
+	forgeConnections,
+	forgeWebhooks,
 	databaseStudioSessions,
 	databaseMoves,
 };

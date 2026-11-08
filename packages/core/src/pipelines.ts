@@ -1,7 +1,5 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
 import { and, asc, desc, eq, gt, inArray, lt, sql } from 'drizzle-orm';
 import {
-	githubInstallations,
 	nodes,
 	pipelineArtifacts,
 	pipelineCaches,
@@ -20,9 +18,7 @@ import {
 	settings,
 } from '@skiff/db';
 import {
-	parseGithubRepoUrl,
 	pipelineAutoSetupSchema,
-	sameGithubRepo,
 	pipelineDispatchSchema,
 	pipelineEnvironmentSetSchema,
 	pipelineProjectLinkSchema,
@@ -68,6 +64,18 @@ import {
 	type PipelineRunRow,
 	type PipelineTriggerRow,
 } from './pipeline-engine.ts';
+import {
+	normaliseForgeEvent,
+	verifyDelivery,
+	webhookEventName,
+	webhookSource,
+	type ForgeEvent,
+	type ForgePullRequestEvent,
+	type ForgePushEvent,
+	type HeaderReader,
+	type WebhookSource,
+} from './forges/events.ts';
+import type { RepositoryIdentity } from './forges/router.ts';
 
 const iso = (value: number | null | undefined): string | null => (value ? new Date(value).toISOString() : null);
 
@@ -87,37 +95,19 @@ export interface PipelineWebhookResult {
 	triggerId?: string;
 }
 
-interface GithubRepo {
-	full_name?: string;
-	clone_url?: string;
-	default_branch?: string;
-}
-
 /** A repository without workflows is asked again after this, unless a push touches them (D172). */
 const AUTO_SETUP_RECHECK_MS = 10 * 60_000;
 const WORKFLOW_DIR = '.skiff/workflows';
 
-interface GithubPushPayload {
-	ref?: string;
-	after?: string;
-	deleted?: boolean;
-	head_commit?: { message?: string } | null;
-	commits?: Array<{ added?: string[]; modified?: string[]; removed?: string[] }>;
-	pusher?: { name?: string };
-	sender?: { login?: string };
-	repository?: GithubRepo;
-	installation?: { id?: number };
-}
-
-interface GithubPullRequestPayload {
-	action?: string;
-	number?: number;
-	pull_request?: {
-		title?: string;
-		head?: { sha?: string; ref?: string; repo?: GithubRepo | null };
-		base?: { ref?: string; repo?: GithubRepo | null };
-	};
-	sender?: { login?: string };
+/** Where a delivery for an unknown repository came from, so it may add it to Pipelines (D172, D177). */
+export interface AutoRegisterSource {
+	/** The forge connection; null for the GitHub App. */
+	connectionId: string | null;
+	fullName: string;
+	/** Who the repository is created on behalf of (the installation linker or connection creator). */
+	createdBy: string | null;
+	/** The delivery covers repositories Skiff does not know yet (App installation, namespace hook). */
+	mayAutoRegister: boolean;
 }
 
 /**
@@ -176,7 +166,7 @@ export class PipelineService {
 			orgId: principal.orgId,
 			name: parsed.name,
 			cloneUrl: parsed.cloneUrl,
-			provider: parsed.provider,
+			provider: parsed.provider ?? this.ctx.git.providerKind(principal.orgId, parsed.cloneUrl),
 			defaultBranch: parsed.defaultBranch,
 			defaultImage: parsed.defaultImage ?? null,
 			webhookSecret: parsed.webhookSecret ? this.sealWebhookSecret(parsed.webhookSecret) : null,
@@ -191,8 +181,10 @@ export class PipelineService {
 		};
 		this.ctx.db.insert(pipelineRepositories).values(row).run();
 		// Adding it by hand undoes an earlier removal for automatic setup.
-		const github = parseGithubRepoUrl(row.cloneUrl);
-		if (github) this.setIgnored(row.orgId, `${github.owner}/${github.repo}`, false);
+		const ignoreKey = this.ctx.git.autoSetupKey(row.orgId, row.cloneUrl);
+		if (ignoreKey) this.setIgnored(row.orgId, ignoreKey, false);
+		// D174: a repository on a connected forge gets Skiff's webhook.
+		this.ctx.git.ensureWebhook(row.orgId, row.cloneUrl);
 		this.audit(principal, 'pipeline.repository.create', row.id, { name: row.name, cloneUrl: row.cloneUrl });
 		return this.repositoryView(row);
 	}
@@ -202,7 +194,10 @@ export class PipelineService {
 		this.ctx.iam.require(principal, 'build:create', { type: 'pipelineRepository', id: row.id });
 		const parsed = pipelineRepositoryUpdateSchema.parse(input);
 		const patch: Partial<PipelineRepositoryRow> = { updatedAt: this.ctx.now() };
-		if (parsed.cloneUrl !== undefined) patch.cloneUrl = parsed.cloneUrl;
+		if (parsed.cloneUrl !== undefined) {
+			patch.cloneUrl = parsed.cloneUrl;
+			if (parsed.provider === undefined) patch.provider = this.ctx.git.providerKind(row.orgId, parsed.cloneUrl);
+		}
 		if (parsed.provider !== undefined) patch.provider = parsed.provider;
 		if (parsed.defaultBranch !== undefined) patch.defaultBranch = parsed.defaultBranch;
 		if (parsed.defaultImage !== undefined) patch.defaultImage = parsed.defaultImage;
@@ -218,6 +213,7 @@ export class PipelineService {
 			patch.minIsolationJson = JSON.stringify(parsed.minIsolation);
 		}
 		this.ctx.db.update(pipelineRepositories).set(patch).where(eq(pipelineRepositories.id, row.id)).run();
+		if (patch.cloneUrl || (patch.enabled && !row.enabled)) this.ctx.git.ensureWebhook(row.orgId, patch.cloneUrl ?? row.cloneUrl);
 		this.audit(principal, 'pipeline.repository.update', row.id, {
 			name: row.name,
 			fields: Object.keys(parsed).filter((key) => (key !== 'webhookSecret' && key !== 'statusToken') || parsed[key] !== undefined),
@@ -266,10 +262,10 @@ export class PipelineService {
 			this.ctx.db.delete(pipelineRepositories).where(eq(pipelineRepositories.id, row.id)).run();
 		});
 		for (const key of objectKeys) await this.ctx.objectStore.delete(key).catch(() => undefined);
-		// A removed GitHub repository must not come back on its next push through the App.
-		const github = parseGithubRepoUrl(row.cloneUrl);
-		if (github && !this.repositoriesFor(row.orgId, `${github.owner}/${github.repo}`).length)
-			this.setIgnored(row.orgId, `${github.owner}/${github.repo}`, true);
+		// A removed repository must not come back on its next push through the App or a namespace hook.
+		const ignoreKey = this.ctx.git.autoSetupKey(row.orgId, row.cloneUrl);
+		const identity = this.ctx.git.identity(row.orgId, row.cloneUrl);
+		if (ignoreKey && identity && !this.repositoriesFor(row.orgId, identity).length) this.setIgnored(row.orgId, ignoreKey, true);
 		this.audit(principal, 'pipeline.repository.delete', row.id, { name: row.name });
 	}
 
@@ -292,6 +288,7 @@ export class PipelineService {
 			hasWebhookSecret: Boolean(row.webhookSecret),
 			hasStatusToken: Boolean(row.statusToken),
 			githubAppInstallationId: row.provider === 'github' ? this.ctx.githubApp.repositoryLink(row.orgId, row.cloneUrl).installationId : null,
+			gitProvider: this.ctx.git.link(row.orgId, row.cloneUrl),
 			minIsolation: {
 				trusted: parse<Record<string, PipelineIsolationTier | null>>(row.minIsolationJson, {}).trusted ?? null,
 				untrusted: parse<Record<string, PipelineIsolationTier | null>>(row.minIsolationJson, {}).untrusted ?? null,
@@ -387,67 +384,93 @@ export class PipelineService {
 	}
 
 	/**
-	 * GitHub delivery for a repository. `push` and `pull_request` start runs; `ping` is accepted.
-	 * The repository's webhook secret is mandatory, as for git builds (D45). When Skiff's GitHub
-	 * App already delivers the repository's events (D165), this hook is ignored so one push never
-	 * starts two runs.
+	 * A delivery to a repository's own webhook (`/api/webhooks/pipelines/<id>`): GitHub, Gitea and
+	 * Forgejo sign it with the stored secret, GitLab sends it in `X-Gitlab-Token` (D174). `push` and
+	 * pull/merge requests start runs; `ping` is accepted. The secret is mandatory (D45). When Skiff's
+	 * GitHub App or a Skiff-created forge hook already delivers the repository's events (D165), this
+	 * hook is ignored so one push never starts two runs.
 	 */
-	async handleGithubWebhook(repositoryId: string, rawBody: string, signature: string | null, event: string | null): Promise<PipelineWebhookResult> {
+	async handleWebhook(repositoryId: string, rawBody: string, headers: HeaderReader): Promise<PipelineWebhookResult> {
 		const repository = this.ctx.db.select().from(pipelineRepositories).where(eq(pipelineRepositories.id, repositoryId)).get();
 		if (!repository) throw new NotFoundError('Repository');
-		this.verifySignature(repository, rawBody, signature);
+		const from = webhookSource(headers) ?? 'github';
+		this.verifySignature(repository, from, rawBody, headers);
 		if (!repository.enabled) return { accepted: false, reason: 'repository disabled' };
-		if (event === 'ping') return { accepted: true, reason: 'pong' };
 		let payload: unknown;
 		try {
 			payload = JSON.parse(rawBody);
 		} catch {
-			throw new ValidationError('GitHub payload is not valid JSON.');
+			throw new ValidationError('Webhook payload is not valid JSON.');
 		}
-		const parsed = parseGithubRepoUrl(repository.cloneUrl);
-		const fullName = (payload as { repository?: { full_name?: string } }).repository?.full_name ?? (parsed ? `${parsed.owner}/${parsed.repo}` : null);
-		if ((event === 'push' || event === 'pull_request') && fullName && (await this.ctx.githubApp.deliversFor(repository.orgId, fullName)))
-			return { accepted: false, reason: 'delivered by the GitHub App' };
-		return this.routeGithubEvent(repository, event, payload);
+		const event = normaliseForgeEvent(from, webhookEventName(from, headers), payload);
+		if (event.kind === 'ping') return { accepted: true, reason: 'pong' };
+		if (event.kind === 'ignored') return { accepted: false, reason: event.reason };
+		if (await this.ctx.git.deliversFor(repository.orgId, repository.cloneUrl, event.fullName))
+			return { accepted: false, reason: `delivered by ${this.ctx.git.link(repository.orgId, repository.cloneUrl).via ?? 'a managed webhook'}` };
+		return this.routeEvent(repository, event);
+	}
+
+	/** `handleWebhook` with GitHub's two headers (kept for callers and tests that pass them). */
+	async handleGithubWebhook(repositoryId: string, rawBody: string, signature: string | null, event: string | null): Promise<PipelineWebhookResult> {
+		const values: Record<string, string> = {};
+		if (signature) values['x-hub-signature-256'] = signature;
+		if (event) values['x-github-event'] = event;
+		return this.handleWebhook(repositoryId, rawBody, { get: (name: string) => values[name.toLowerCase()] ?? null });
+	}
+
+	/** An event delivered through Skiff's GitHub App (D165). Returns the trigger ids created. */
+	async handleAppEvent(orgId: string, fullName: string, event: string, payload: unknown): Promise<string[]> {
+		const normalised = normaliseForgeEvent('github', event, payload);
+		if (normalised.kind !== 'push' && normalised.kind !== 'pull_request') return [];
+		const installationId = (payload as { installation?: { id?: number } } | null)?.installation?.id ?? null;
+		return this.handleForgeEvent(orgId, this.ctx.git.githubIdentity(fullName), normalised, {
+			connectionId: null,
+			fullName,
+			createdBy: installationId ? this.ctx.githubApp.installationLinker(orgId, installationId) : null,
+			mayAutoRegister: true,
+		});
 	}
 
 	/**
-	 * An event delivered through Skiff's GitHub App (D165): every enabled GitHub repository of the
-	 * org whose clone URL names `fullName` gets it. Returns the trigger ids created.
+	 * An event delivered by a Skiff-managed hook (the GitHub App, or a forge connection's hook): every
+	 * enabled pipeline repository of the org with `identity` gets it. A push to a repository Pipelines
+	 * does not know yet may add it (D172, D177). Returns the trigger ids created.
 	 */
-	async handleAppEvent(orgId: string, fullName: string, event: string, payload: unknown): Promise<string[]> {
-		let repositories = this.repositoriesFor(orgId, fullName).filter((row) => row.enabled);
-		// D172: a push to a repository Pipelines does not know yet adds it, when it has workflows.
-		if (repositories.length === 0 && event === 'push' && !this.repositoriesFor(orgId, fullName).length) {
-			const created = await this.autoRegister(orgId, fullName, payload as GithubPushPayload);
+	async handleForgeEvent(
+		orgId: string,
+		identity: RepositoryIdentity,
+		event: ForgePushEvent | ForgePullRequestEvent,
+		source: AutoRegisterSource,
+	): Promise<string[]> {
+		const known = this.repositoriesFor(orgId, identity);
+		let repositories = known.filter((row) => row.enabled);
+		if (known.length === 0 && event.kind === 'push' && source.mayAutoRegister) {
+			const created = await this.autoRegister(orgId, identity, event, source);
 			if (created) repositories = [created];
 		}
 		const triggers: string[] = [];
 		for (const repository of repositories) {
 			try {
-				const result = this.routeGithubEvent(repository, event, payload);
+				const result = this.routeEvent(repository, event);
 				if (result.triggerId) triggers.push(result.triggerId);
 			} catch (error) {
-				console.warn(`[pipelines] ${repository.name}: GitHub App ${event} ignored: ${(error as Error).message}`);
+				console.warn(`[pipelines] ${repository.name}: ${event.kind} ignored: ${(error as Error).message}`);
 			}
 		}
 		return triggers;
 	}
 
-	/** Every pipeline repository of the org (enabled or not) whose clone URL names `fullName`. */
-	private repositoriesFor(orgId: string, fullName: string): PipelineRepositoryRow[] {
+	/** Every pipeline repository of the org (enabled or not) whose clone URL has `identity`. */
+	private repositoriesFor(orgId: string, identity: RepositoryIdentity): PipelineRepositoryRow[] {
 		return this.ctx.db
 			.select()
 			.from(pipelineRepositories)
 			.where(eq(pipelineRepositories.orgId, orgId))
 			.all()
-			.filter((row) => {
-				const parsed = parseGithubRepoUrl(row.cloneUrl);
-				return parsed !== null && sameGithubRepo(`${parsed.owner}/${parsed.repo}`, fullName);
-			});
+			.filter((row) => this.ctx.git.identity(orgId, row.cloneUrl) === identity);
 	}
 
-	// --- automatic setup through the GitHub App (D172) -----------------------------------
+	// --- automatic setup through the GitHub App or a namespace hook (D172, D177) -----------------------------------
 
 	private autoSetupKey(orgId: string): string {
 		return `pipelines.autoSetup.${orgId}`;
@@ -474,11 +497,12 @@ export class PipelineService {
 
 	private setIgnored(orgId: string, fullName: string, ignored: boolean): void {
 		const current = this.readAutoSetup(orgId);
-		const rest = current.ignored.filter((name) => !sameGithubRepo(name, fullName));
+		const same = (name: string) => name.toLowerCase() === fullName.toLowerCase();
+		const rest = current.ignored.filter((name) => !same(name));
 		const next = ignored ? [...rest, fullName].sort((a, b) => a.localeCompare(b)) : rest;
-		if (next.length === current.ignored.length && ignored === current.ignored.some((name) => sameGithubRepo(name, fullName))) return;
+		if (next.length === current.ignored.length && ignored === current.ignored.some(same)) return;
 		this.writeAutoSetup(orgId, { ...current, ignored: next });
-		this.autoSetupChecked.delete(`${orgId}:${fullName.toLowerCase()}`);
+		for (const key of this.autoSetupChecked.keys()) if (key.startsWith(`${orgId}:`)) this.autoSetupChecked.delete(key);
 	}
 
 	/** Whether pushes through the GitHub App add repositories with workflows automatically. */
@@ -501,27 +525,36 @@ export class PipelineService {
 	}
 
 	/**
-	 * A push through the GitHub App to a repository the org has no pipeline repository for: when
-	 * the pushed commit has `.skiff/workflows/*.yml`, add the repository (no webhook secret: the
-	 * App delivers its events) on behalf of whoever linked the installation, and return it. Pull
-	 * requests never add a repository, so a fork cannot register one. Never throws.
+	 * A push through the GitHub App or a forge namespace hook to a repository the org has no
+	 * pipeline repository for: when the pushed commit has `.skiff/workflows/*.yml`, add the
+	 * repository (no webhook secret: the managed hook delivers its events) on behalf of whoever
+	 * linked the installation or created the connection, and return it. Pull requests never add a
+	 * repository, so a fork cannot register one. Never throws.
 	 */
-	private async autoRegister(orgId: string, fullName: string, payload: GithubPushPayload): Promise<PipelineRepositoryRow | null> {
+	private async autoRegister(
+		orgId: string,
+		identity: RepositoryIdentity,
+		event: ForgePushEvent,
+		source: AutoRegisterSource,
+	): Promise<PipelineRepositoryRow | null> {
 		const setup = this.readAutoSetup(orgId);
-		if (!setup.enabled || setup.ignored.some((name) => sameGithubRepo(name, fullName))) return null;
-		if (!payload.ref?.startsWith('refs/heads/') || !payload.after || payload.deleted || /^0+$/.test(payload.after)) return null;
-		const cacheKey = `${orgId}:${fullName.toLowerCase()}`;
-		const touched = (payload.commits ?? []).some((commit) =>
-			[...(commit.added ?? []), ...(commit.modified ?? [])].some((file) => file.startsWith(`${WORKFLOW_DIR}/`)),
-		);
+		if (!setup.enabled || !source.createdBy) return null;
+		if (!event.ref.startsWith('refs/heads/') || !event.after || event.deleted) return null;
+		const cloneUrl =
+			event.cloneUrl ?? (source.connectionId ? null : `https://github.com/${source.fullName}.git`);
+		if (!cloneUrl || this.ctx.git.identity(orgId, cloneUrl) !== identity) return null;
+		const ignoreKey = this.ctx.git.autoSetupKey(orgId, cloneUrl);
+		if (!ignoreKey || setup.ignored.some((name) => name.toLowerCase() === ignoreKey.toLowerCase())) return null;
+		const cacheKey = `${orgId}:${identity}`;
+		const touched = event.addedOrModified.some((file) => file.startsWith(`${WORKFLOW_DIR}/`));
 		const until = this.autoSetupChecked.get(cacheKey);
 		if (!touched && until && until > this.ctx.now()) return null;
 		let workflows: string[];
 		try {
-			const listing = await this.ctx.githubApp.readPath(orgId, fullName, WORKFLOW_DIR, payload.after);
+			const listing = await this.ctx.git.readPath(orgId, { connectionId: source.connectionId, fullName: source.fullName }, WORKFLOW_DIR, event.after);
 			workflows = listing?.kind === 'dir' ? listing.entries.filter((entry) => entry.type === 'file' && /\.ya?ml$/i.test(entry.name)).map((entry) => entry.name) : [];
 		} catch (error) {
-			console.warn(`[pipelines] ${fullName}: could not look for workflows: ${(error as Error).message}`);
+			console.warn(`[pipelines] ${source.fullName}: could not look for workflows: ${(error as Error).message}`);
 			this.autoSetupChecked.set(cacheKey, this.ctx.now() + 60_000);
 			return null;
 		}
@@ -530,20 +563,15 @@ export class PipelineService {
 			return null;
 		}
 		// Re-check after the await: a concurrent push or a person may have added it meanwhile.
-		if (this.repositoriesFor(orgId, fullName).length) return null;
-		const installation = payload.installation?.id
-			? this.ctx.db.select().from(githubInstallations).where(eq(githubInstallations.installationId, payload.installation.id)).get()
-			: undefined;
-		const createdBy = installation?.orgId === orgId ? installation.linkedBy : null;
-		if (!createdBy) return null;
+		if (this.repositoriesFor(orgId, identity).length) return null;
 		const now = this.ctx.now();
 		const row: PipelineRepositoryRow = {
 			id: newId('prp_'),
 			orgId,
-			name: this.freeRepositoryName(orgId, fullName),
-			cloneUrl: payload.repository?.clone_url ?? `https://github.com/${fullName}.git`,
-			provider: 'github',
-			defaultBranch: payload.repository?.default_branch ?? payload.ref.slice('refs/heads/'.length),
+			name: this.freeRepositoryName(orgId, source.fullName),
+			cloneUrl,
+			provider: this.ctx.git.providerKind(orgId, cloneUrl),
+			defaultBranch: event.defaultBranch ?? event.ref.slice('refs/heads/'.length),
 			defaultImage: null,
 			webhookSecret: null,
 			enabled: true,
@@ -551,7 +579,7 @@ export class PipelineService {
 			schedulesJson: '[]',
 			minIsolationJson: '{}',
 			statusToken: null,
-			createdBy,
+			createdBy: source.createdBy,
 			createdAt: now,
 			updatedAt: now,
 		};
@@ -562,7 +590,7 @@ export class PipelineService {
 			resource: 'build',
 			resourceId: row.id,
 			orgId,
-			args: { name: row.name, repository: fullName, workflows },
+			args: { name: row.name, repository: source.fullName, provider: row.provider, workflows },
 			result: 'ok',
 		});
 		return row;
@@ -576,7 +604,9 @@ export class PipelineService {
 				.replace(/[^a-z0-9._-]+/g, '-')
 				.replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, '')
 				.slice(0, 90) || 'repo';
-		const [owner = '', repo = ''] = fullName.split('/');
+		const segments = fullName.split('/');
+		const repo = segments.pop() ?? '';
+		const owner = segments.join('-');
 		const taken = new Set(
 			this.ctx.db
 				.select({ name: pipelineRepositories.name })
@@ -590,65 +620,57 @@ export class PipelineService {
 		for (let n = 2; ; n++) if (!taken.has(`${candidates[0]}-${n}`)) return `${candidates[0]}-${n}`;
 	}
 
-	private routeGithubEvent(repository: PipelineRepositoryRow, event: string | null, payload: unknown): PipelineWebhookResult {
-		if (event === 'push') return this.onPush(repository, payload as GithubPushPayload);
-		if (event === 'pull_request') return this.onPullRequest(repository, payload as GithubPullRequestPayload);
-		return { accepted: false, reason: `event ${event ?? '(none)'} is not handled` };
+	private routeEvent(repository: PipelineRepositoryRow, event: ForgeEvent): PipelineWebhookResult {
+		if (event.kind === 'push') return this.onPush(repository, event);
+		if (event.kind === 'pull_request') return this.onPullRequest(repository, event);
+		return { accepted: false, reason: event.kind === 'ignored' ? event.reason : 'nothing to do' };
 	}
 
-	private onPush(repository: PipelineRepositoryRow, payload: GithubPushPayload): PipelineWebhookResult {
-		if (!payload.ref || !payload.after || payload.deleted || /^0+$/.test(payload.after))
-			return { accepted: false, reason: 'branch or tag deleted' };
-		// GitHub lists at most 20 commits per push; beyond that the file list is incomplete, so
-		// path filters must treat it as unknown rather than wrongly skip a workflow.
-		const commits = payload.commits ?? [];
-		const changedFiles =
-			commits.length > 0 && commits.length < 20
-				? [...new Set(commits.flatMap((c) => [...(c.added ?? []), ...(c.modified ?? []), ...(c.removed ?? [])]))]
-				: null;
+	private onPush(repository: PipelineRepositoryRow, event: ForgePushEvent): PipelineWebhookResult {
+		if (!event.after || event.deleted) return { accepted: false, reason: 'branch or tag deleted' };
 		this.ctx.quota.assertCanCreateBuild(repository.orgId, null);
 		const trigger = this.engine.createTrigger({
 			repository,
 			event: 'push',
-			ref: payload.ref,
-			sha: payload.after,
-			actor: payload.pusher?.name ?? payload.sender?.login ?? null,
+			ref: event.ref,
+			sha: event.after,
+			actor: event.actor,
 			trust: 'trusted',
 			createdBy: repository.createdBy,
 			payload: {
-				changedFiles,
-				title: payload.head_commit?.message ?? null,
-				event: { ref: payload.ref, after: payload.after, repository: payload.repository?.full_name ?? null },
+				// Null when the forge truncated the commit list: path filters then treat it as unknown.
+				changedFiles: event.changedFiles,
+				title: event.message,
+				event: { ref: event.ref, after: event.after, repository: event.fullName },
 			},
 		});
 		return { accepted: true, triggerId: trigger.id };
 	}
 
-	private onPullRequest(repository: PipelineRepositoryRow, payload: GithubPullRequestPayload): PipelineWebhookResult {
-		const pr = payload.pull_request;
-		const action = payload.action ?? '';
-		if (!pr?.head?.sha || !payload.number) return { accepted: false, reason: 'not a pull request' };
-		if (!['opened', 'synchronize', 'reopened', 'edited', 'ready_for_review', 'labeled'].includes(action))
-			return { accepted: false, reason: `action ${action} is not handled` };
-		// W10: a PR from a fork runs untrusted: no secrets, no deploys, its own cache scope.
-		const headRepo = pr.head.repo?.full_name ?? null;
-		const baseRepo = pr.base?.repo?.full_name ?? null;
-		const trust = headRepo && baseRepo && headRepo === baseRepo ? 'trusted' : 'untrusted';
+	private onPullRequest(repository: PipelineRepositoryRow, event: ForgePullRequestEvent): PipelineWebhookResult {
+		if (!['opened', 'synchronize', 'reopened', 'edited', 'ready_for_review', 'labeled'].includes(event.action))
+			return { accepted: false, reason: `action ${event.action} is not handled` };
+		// W10: a PR (or GitLab MR) from a fork runs untrusted: no secrets, no deploys, its own cache scope.
+		const trust = event.sameRepository ? 'trusted' : 'untrusted';
 		this.ctx.quota.assertCanCreateBuild(repository.orgId, null);
 		const trigger = this.engine.createTrigger({
 			repository,
 			event: 'pull_request',
-			ref: `refs/pull/${payload.number}/head`,
-			sha: pr.head.sha,
-			actor: payload.sender?.login ?? null,
+			ref: event.fetchRef,
+			sha: event.headSha,
+			actor: event.actor,
 			trust,
 			createdBy: repository.createdBy,
 			payload: {
-				action,
-				baseRef: pr.base?.ref ?? repository.defaultBranch,
-				prNumber: payload.number,
-				title: pr.title ?? null,
-				event: { action, number: payload.number, pull_request: { title: pr.title ?? null, head: { ref: pr.head.ref ?? null, sha: pr.head.sha }, base: { ref: pr.base?.ref ?? null } } },
+				action: event.action,
+				baseRef: event.baseRef ?? repository.defaultBranch,
+				prNumber: event.number,
+				title: event.title,
+				event: {
+					action: event.action,
+					number: event.number,
+					pull_request: { title: event.title, head: { ref: event.headRef, sha: event.headSha }, base: { ref: event.baseRef } },
+				},
 			},
 		});
 		return { accepted: true, triggerId: trigger.id };
@@ -659,18 +681,16 @@ export class PipelineService {
 		return `${encrypted.nonce}:${encrypted.ciphertext}`;
 	}
 
-	private verifySignature(repository: PipelineRepositoryRow, rawBody: string, signature: string | null): void {
+	private verifySignature(repository: PipelineRepositoryRow, from: WebhookSource, rawBody: string, headers: HeaderReader): void {
 		// An unsigned public webhook would let anyone start runs on your build nodes.
 		if (!repository.webhookSecret)
 			throw new CoreError('unauthorized', 'This repository has no webhook secret. Set one before using webhooks.', 401);
-		if (!signature) throw new CoreError('unauthorized', 'Missing X-Hub-Signature-256.', 401);
+		if (!headers.get('x-hub-signature-256') && !headers.get('x-gitea-signature') && !headers.get('x-forgejo-signature') && !headers.get('x-gitlab-token'))
+			throw new CoreError('unauthorized', 'Missing webhook signature (X-Hub-Signature-256, X-Gitea-Signature or X-Gitlab-Token).', 401);
 		const [nonce, ciphertext] = repository.webhookSecret.split(':');
 		if (!nonce || !ciphertext) throw new CoreError('error', 'Stored webhook secret is corrupt.', 500);
 		const secret = new TextDecoder().decode(decrypt(this.ctx.config.masterKey, ciphertext, nonce));
-		const expected = `sha256=${createHmac('sha256', secret).update(rawBody).digest('hex')}`;
-		const given = signature.trim();
-		if (expected.length !== given.length || !timingSafeEqual(Buffer.from(expected), Buffer.from(given)))
-			throw new CoreError('unauthorized', 'Invalid webhook signature.', 401);
+		if (!verifyDelivery(from, secret, rawBody, headers)) throw new CoreError('unauthorized', 'Invalid webhook signature.', 401);
 	}
 
 	/**

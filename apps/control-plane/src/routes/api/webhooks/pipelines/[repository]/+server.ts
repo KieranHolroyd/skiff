@@ -3,17 +3,13 @@ import { core } from '#lib/server/core.js';
 import { json, route } from '#lib/server/api.js';
 
 /**
- * GitHub webhook for a pipeline repository (docs/PIPELINES.md §4.1): `push`, `pull_request`,
- * `ping`. Authenticated by the repository's HMAC secret over the raw body, never a cookie.
+ * A pipeline repository's hand-made webhook (docs/PIPELINES.md §4.1, D174): GitHub, Gitea and
+ * Forgejo `push` / `pull_request` (signed with the repository's secret) and GitLab push and merge
+ * request hooks (`X-Gitlab-Token`). Never a cookie.
  */
-export const POST: RequestHandler = async (event) =>
+export const POST: RequestHandler = (event) =>
 	route(async () => {
 		const rawBody = await event.request.text();
-		const result = await core.pipelines.handleGithubWebhook(
-			event.params.repository,
-			rawBody,
-			event.request.headers.get('x-hub-signature-256'),
-			event.request.headers.get('x-github-event'),
-		);
+		const result = await core.pipelines.handleWebhook(event.params.repository, rawBody, event.request.headers);
 		return json({ ok: true, ...result }, 202);
 	});

@@ -51,7 +51,7 @@ export const FEATURE_FLAGS = {
 	EMAIL: {
 		name: 'EMAIL',
 		// docs/EMAIL.md: purely additive. Nothing listens on 25/587/465 until a platform admin picks a
-		// mail node in Settings → Email, so the flag ships on; 0 hides the surfaces and refuses sends.
+		// mail node in Email → Mail server, so the flag ships on; 0 hides the surfaces and refuses sends.
 		default: true,
 		area: 'email',
 		description: 'Send and receive email on verified domains through Skiff\'s own MTA (docs/EMAIL.md).'

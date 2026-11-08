@@ -255,7 +255,7 @@ backups work.
 
 ## Email is not delivering
 
-Email runs on a single node you choose in Settings → Email. Its agent starts the `skiff-mail` unit
+Email runs on a single node you choose in Email → Mail server. Its agent starts the `skiff-mail` unit
 through the helper, and the unit is normally stopped until then. Read the MTA's journal first:
 
 ```sh
@@ -272,8 +272,8 @@ Most delivery failures come from one of three things outside Skiff.
   `dig +short -x <ip>`. The answer must be `mx1.<mail domain>.`, with the trailing dot.
 - **The DNS records are missing or stale.** Skiff publishes the `mx1.`, `mx.` and `smtp.` A records,
   the `_spf` record and the `bounces.` MX and SPF records through Cloudflare, or lists them for you to
-  copy. Compare them in Settings → Email with `dig +short <name>`. Email for a new organisation starts
-  in a sandbox until you move it out in Settings → Email.
+  copy. Compare them in Email → Mail server with `dig +short <name>`. Email for a new organisation starts
+  in a sandbox until you move it out in Email → Mail server.
 
 The IP may also be on a blocklist. Check it on Spamhaus, and check your reputation in the provider
 postmaster tools. For the full set of steps, see [Email](/data/email).

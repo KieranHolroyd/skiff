@@ -12,6 +12,7 @@ import {
 	unitName,
 	validateBuildCommand,
 } from './command.ts';
+import { gitEnv, withCloneToken } from './pipeline/git.ts';
 
 describe('build command validation', () => {
 	test('accepts a normal command and trims edges', () => {
@@ -122,6 +123,24 @@ describe('clone credentials', () => {
 		expect(gitAuthEnv('https://git.corp:8443/x.git', 'tok', ['git.corp:8443']).GIT_CONFIG_KEY_0).toBe(
 			'http.https://git.corp:8443/.extraHeader',
 		);
+	});
+
+	test('a forge clone token goes to its host only, with the user name the forge checks (D175)', () => {
+		const env = withCloneToken(
+			{ gitToken: 'node-token', gitTokenHosts: ['github.com'], gitSshKey: null, gitSshKnownHosts: null, buildDir: '/tmp' },
+			'gldt-1',
+			{ host: 'gitlab.example.com', username: 'gitlab+deploy-token-1' },
+		);
+		expect(env.gitTokenHosts).toEqual(['gitlab.example.com']);
+		const auth = gitEnv('https://gitlab.example.com/acme/api.git', env);
+		expect(auth.GIT_CONFIG_VALUE_0).toBe(`Authorization: Basic ${Buffer.from('gitlab+deploy-token-1:gldt-1').toString('base64')}`);
+		expect(gitEnv('https://github.com/acme/api.git', env).GIT_CONFIG_VALUE_0).toBeUndefined();
+		// No host (an older control plane): github.com with GitHub's user name, as before.
+		const legacy = withCloneToken({ gitToken: null, gitTokenHosts: [], gitSshKey: null, gitSshKnownHosts: null, buildDir: '/tmp' }, 'ghs_1');
+		expect(gitEnv('https://github.com/acme/api.git', legacy).GIT_CONFIG_VALUE_0).toBe(`Authorization: Basic ${Buffer.from('x-access-token:ghs_1').toString('base64')}`);
+		// A malformed host or user name never widens where the token goes.
+		expect(withCloneToken(legacy, 'x', { host: 'evil.example/x' }).gitTokenHosts).toEqual(['github.com']);
+		expect(gitAuthEnv('https://h.example/x.git', 't', ['h.example'], 'a:b').GIT_CONFIG_VALUE_0).toBe(`Authorization: Basic ${Buffer.from('x-access-token:t').toString('base64')}`);
 	});
 
 	test('rejects refs git would read as options', () => {

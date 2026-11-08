@@ -111,7 +111,7 @@
 	<Panel
 		title="Outbound email"
 		icon={MailIcon}
-		description="Sign-in links, invitations and email alerts. Any SMTP server works; Amazon SES is the tested default."
+		description="Skiff's own mail: sign-in links, invitations and email alerts. Organisations send through the mail server in Email instead. Any SMTP server works; Amazon SES is the tested default."
 	>
 		{#snippet actions()}
 			<StatusBadge

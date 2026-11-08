@@ -71,6 +71,7 @@ export * from './flows.ts';
 export * from './github-runner.ts';
 export * from './github-app.ts';
 export * from './github-import.ts';
+export * from './forges.ts';
 export * from './templates.ts';
 export * from './observability.ts';
 export * from './metrics-export.ts';

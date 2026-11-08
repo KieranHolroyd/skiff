@@ -17,6 +17,7 @@ import {
 	ssoVerificationRecord,
 	verifiedDomainForEmail
 } from '../../../../../packages/core/src/iam/sso.ts';
+import { SsoPresetError, resolveSsoPreset, type SsoPresetValues } from '../sso-presets';
 import { core } from './core';
 import { platformOrigin } from './config';
 import { syncSsoProviders } from './sso-sync';
@@ -104,7 +105,13 @@ export interface SsoProviderView {
 
 export interface SsoProviderInput {
 	name: string;
-	issuer: string;
+	/** Required unless `preset` is given; a preset's issuer wins over this one. */
+	issuer?: string;
+	/**
+	 * A ready-made set-up (`sso-presets.ts`, D180). It supplies the issuer and discovery URL, and
+	 * the scopes and claims when the caller leaves those out.
+	 */
+	preset?: { id: string; values?: SsoPresetValues };
 	clientId: string;
 	clientSecret?: string;
 	discoveryUrl?: string | null;
@@ -124,10 +131,46 @@ export interface SsoDomainView {
 }
 
 interface OidcDiscovery {
+	/** The issuer exactly as the IdP publishes it, trailing slash included. */
+	issuer: string;
 	discoveryUrl: string;
 	authorizationEndpoint: string;
 	tokenEndpoint: string;
 	jwksEndpoint: string;
+}
+
+const PROVIDER_ID = /^sso_[0-9a-f]{32}$/;
+
+/** The redirect URI to register at the IdP for a provider id (Better Auth's OIDC callback). */
+export function ssoCallbackUrl(providerId: string): string {
+	return `${platformOrigin}/api/auth/sso/callback/${providerId}`;
+}
+
+/** A fresh provider id, so the dashboard can show the redirect URI before the provider exists. */
+export function reserveSsoProviderId(): string {
+	return newId('sso_');
+}
+
+/**
+ * Fold a preset into the input: its issuer and discovery URL always, its scopes and claims only
+ * where the caller gave none. A bad preset value is a validation error naming the field.
+ */
+function applyPreset<T extends Partial<SsoProviderInput>>(input: T): T {
+	if (!input.preset) return input;
+	let config;
+	try {
+		config = resolveSsoPreset(input.preset.id, input.preset.values ?? {});
+	} catch (cause) {
+		if (cause instanceof SsoPresetError) throw new ValidationError(cause.message, [cause]);
+		throw cause;
+	}
+	return {
+		...input,
+		issuer: config.issuer,
+		discoveryUrl: config.discoveryUrl,
+		scopes: input.scopes ?? config.scopes,
+		claims: { ...config.claims, ...input.claims }
+	};
 }
 
 function isLoopback(hostname: string): boolean {
@@ -249,7 +292,13 @@ async function discover(issuer: string, discoveryUrl: string | null): Promise<Oi
 		throw new ValidationError(`The discovery document at ${url} is not JSON.`);
 	}
 	const discoveredIssuer = typeof document.issuer === 'string' ? document.issuer : null;
-	if (!discoveredIssuer || normalizeIssuer(discoveredIssuer) !== issuer)
+	let sameIssuer = false;
+	try {
+		sameIssuer = discoveredIssuer !== null && normalizeIssuer(discoveredIssuer) === issuer;
+	} catch {
+		sameIssuer = false;
+	}
+	if (!discoveredIssuer || !sameIssuer)
 		throw new ValidationError(
 			`The discovery document names the issuer ${discoveredIssuer ?? '(none)'}, not ${issuer}.`
 		);
@@ -260,6 +309,9 @@ async function discover(issuer: string, discoveryUrl: string | null): Promise<Oi
 		return optionalUrl(value, key)!;
 	};
 	return {
+		// Kept verbatim: Better Auth checks each ID token's `iss` against it byte for byte, and
+		// Auth0, JumpCloud and authentik publish theirs with a trailing slash.
+		issuer: discoveredIssuer,
 		discoveryUrl: url,
 		authorizationEndpoint: endpoint('authorization_endpoint'),
 		tokenEndpoint: endpoint('token_endpoint'),
@@ -282,7 +334,7 @@ function view(row: ProviderRow): SsoProviderView {
 		claims: { email: row.claim_email, name: row.claim_name, groups: row.claim_groups },
 		enabled: row.enabled === 1,
 		hasClientSecret: row.client_secret_sealed.length > 0,
-		callbackUrl: `${platformOrigin}/api/auth/sso/callback/${row.id}`,
+		callbackUrl: ssoCallbackUrl(row.id),
 		createdAt: row.created_at,
 		updatedAt: row.updated_at
 	};
@@ -364,8 +416,20 @@ export class SsoService {
 		return this.#provider(principal.orgId, id).enabled === 1;
 	}
 
-	async createProvider(principal: Principal, input: SsoProviderInput): Promise<SsoProviderView> {
+	/**
+	 * `reservedId` is the id `reserveSsoProviderId` handed the dashboard, so the redirect URI an
+	 * admin already registered at the IdP stays right. The REST API does not take one.
+	 */
+	async createProvider(
+		principal: Principal,
+		rawInput: SsoProviderInput,
+		reservedId?: string
+	): Promise<SsoProviderView> {
 		this.#requireManage(principal);
+		const input = applyPreset(rawInput);
+		if (!input.issuer) throw new ValidationError('The issuer is required, or choose a preset.');
+		if (reservedId !== undefined && !PROVIDER_ID.test(reservedId))
+			throw new ValidationError('The reserved provider id is not valid. Reload the page and try again.');
 		// One provider per organisation in this slice: `sso_domains` has no provider id, so routing
 		// must be unambiguous. The plugin supports several; adding that needs a domain→provider link.
 		const existing = core.ctx.sqlite
@@ -385,7 +449,7 @@ export class SsoService {
 		const claims = cleanClaims(input.claims);
 		const endpoints = await discover(issuer, discoveryUrl);
 		const now = this.#now();
-		const id = newId('sso_');
+		const id = reservedId ?? newId('sso_');
 		try {
 			core.ctx.sqlite.run(
 				`INSERT INTO sso_providers
@@ -397,7 +461,7 @@ export class SsoService {
 					id,
 					principal.orgId,
 					name,
-					issuer,
+					endpoints.issuer,
 					clientId,
 					core.ctx.secrets.seal(principal.orgId, clientSecret),
 					endpoints.discoveryUrl,
@@ -420,19 +484,26 @@ export class SsoService {
 			throw cause;
 		}
 		syncSsoProviders();
-		this.#audit(principal, 'sso.provider.create', id, { name, issuer, clientId, scopes });
+		this.#audit(principal, 'sso.provider.create', id, {
+			name,
+			issuer: endpoints.issuer,
+			clientId,
+			scopes,
+			preset: rawInput.preset?.id ?? null
+		});
 		return view(this.#provider(principal.orgId, id));
 	}
 
 	async updateProvider(
 		principal: Principal,
 		id: string,
-		input: Partial<SsoProviderInput>
+		rawInput: Partial<SsoProviderInput>
 	): Promise<SsoProviderView> {
 		this.#requireManage(principal);
+		const input = applyPreset(rawInput);
 		const existing = this.#provider(principal.orgId, id);
 		const name = input.name === undefined ? existing.name : cleanName(input.name);
-		const issuer = input.issuer === undefined ? existing.issuer : normalizeIssuer(input.issuer);
+		const issuer = normalizeIssuer(input.issuer ?? existing.issuer);
 		const clientId =
 			input.clientId === undefined ? existing.client_id : cleanClientId(input.clientId);
 		const secret = cleanSecret(input.clientSecret);
@@ -452,8 +523,9 @@ export class SsoService {
 
 		// Discovery is only re-fetched when the identity boundary changes, so editing a name or a
 		// claim mapping does not need the IdP to be reachable.
+		// The stored issuer is verbatim (maybe with a trailing slash); compare it the way input is.
 		const rediscover =
-			issuer !== existing.issuer ||
+			issuer !== normalizeIssuer(existing.issuer) ||
 			discoveryUrl !== existing.discovery_url ||
 			!existing.authorization_endpoint ||
 			!existing.token_endpoint ||
@@ -461,6 +533,7 @@ export class SsoService {
 		const endpoints = rediscover
 			? await discover(issuer, discoveryUrl)
 			: {
+					issuer: existing.issuer,
 					discoveryUrl: existing.discovery_url,
 					authorizationEndpoint: existing.authorization_endpoint!,
 					tokenEndpoint: existing.token_endpoint!,
@@ -476,7 +549,7 @@ export class SsoService {
 				 WHERE org_id = ? AND id = ?`,
 				[
 					name,
-					issuer,
+					endpoints.issuer,
 					clientId,
 					secret ? core.ctx.secrets.seal(principal.orgId, secret) : existing.client_secret_sealed,
 					endpoints.discoveryUrl,
@@ -499,7 +572,13 @@ export class SsoService {
 			throw cause;
 		}
 		syncSsoProviders();
-		this.#audit(principal, 'sso.provider.update', id, { name, issuer, clientId, scopes });
+		this.#audit(principal, 'sso.provider.update', id, {
+			name,
+			issuer: endpoints.issuer,
+			clientId,
+			scopes,
+			preset: rawInput.preset?.id ?? null
+		});
 		return view(this.#provider(principal.orgId, id));
 	}
 

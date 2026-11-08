@@ -1,5 +1,7 @@
 import { promises as dns } from 'node:dns';
-import { judgeReverseDns, type ReverseDnsState } from './setup-guide.js';
+import { judgeReverseDns, type ReverseDnsCheck } from './setup-guide.js';
+
+export type { ReverseDnsCheck };
 
 const LOOKUP_TIMEOUT_MS = 3000;
 /** Resolver answers that mean "no such record", as opposed to a lookup that failed. */
@@ -19,14 +21,6 @@ async function lookup(run: () => Promise<string[]>): Promise<string[] | null> {
 	} finally {
 		clearTimeout(timer);
 	}
-}
-
-export interface ReverseDnsCheck {
-	state: ReverseDnsState;
-	ip: string;
-	helo: string;
-	/** What the PTR lookup returned, for "found" in the guide. */
-	ptr: string[];
 }
 
 /**

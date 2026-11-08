@@ -39,6 +39,8 @@ export async function capture(
 export interface GitCredentials {
 	gitToken: string | null;
 	gitTokenHosts: string[];
+	/** HTTP basic user name for `gitToken`; `x-access-token` (GitHub's) when absent. */
+	gitTokenUsername?: string | null;
 	gitSshKey: string | null;
 	gitSshKnownHosts: string | null;
 	/** Holds `known_hosts` when no pinned file is configured. */
@@ -46,20 +48,26 @@ export interface GitCredentials {
 }
 
 /**
- * Credentials for one clone when the control plane sent a token from Skiff's GitHub App (D164): a
- * one-hour, read-only token for that repository alone, used on github.com instead of the node's
- * own `SKIFF_GIT_TOKEN`. Without one the node's credentials apply unchanged.
+ * Credentials for one clone when the control plane sent a token (D164, D175): a read-only token
+ * for that repository alone — from Skiff's GitHub App (github.com) or a forge connection (its
+ * host, with the user name the forge checks) — used instead of the node's own `SKIFF_GIT_TOKEN`.
+ * Without one the node's credentials apply unchanged.
  */
-export function withCloneToken<T extends GitCredentials>(credentials: T, token: string | null | undefined): T {
+export function withCloneToken<T extends GitCredentials>(
+	credentials: T,
+	token: string | null | undefined,
+	options: { host?: string | null; username?: string | null } = {},
+): T {
 	if (!token) return credentials;
-	return { ...credentials, gitToken: token, gitTokenHosts: ['github.com'] };
+	const host = options.host && /^[a-z0-9.-]+(?::\d{1,5})?$/i.test(options.host) ? options.host.toLowerCase() : 'github.com';
+	return { ...credentials, gitToken: token, gitTokenHosts: [host], gitTokenUsername: options.username ?? null };
 }
 
 /** Environment for one git process against `url`: no prompts, plus credentials scoped to that URL. */
 export function gitEnv(url: string, credentials: GitCredentials): Record<string, string> {
 	return {
 		GIT_TERMINAL_PROMPT: '0',
-		...gitAuthEnv(url, credentials.gitToken, credentials.gitTokenHosts),
+		...gitAuthEnv(url, credentials.gitToken, credentials.gitTokenHosts, credentials.gitTokenUsername ?? undefined),
 		...gitSshEnv(url, {
 			keyPath: credentials.gitSshKey,
 			knownHostsPath: credentials.gitSshKnownHosts,

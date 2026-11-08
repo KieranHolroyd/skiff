@@ -10,8 +10,8 @@
 	import WorkflowIcon from '@lucide/svelte/icons/workflow';
 	import DataTable, { type DataColumn } from '#lib/components/skiff/DataTable.svelte';
 	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
-	import GithubRepoPicker from '#lib/components/skiff/GithubRepoPicker.svelte';
-	import type { GithubRepositoryView } from '@skiff/contracts';
+	import GitRepoPicker from '#lib/components/skiff/GitRepoPicker.svelte';
+	import type { GitRepositoryView } from '@skiff/contracts';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as InputGroup from '#lib/components/ui/input-group/index.js';
@@ -39,14 +39,16 @@
 	let nameValue = $derived(values.name ?? '');
 	let cloneValue = $derived(values.cloneUrl ?? '');
 	let branchValue = $derived(values.defaultBranch ?? 'main');
-	let providerValue = $derived(values.provider ?? 'github');
+	let providerValue = $derived(values.provider ?? '');
 	let pickedFullName = $state('');
+	let pickedProvider = $state<string>('github');
 
-	function pick(repo: GithubRepositoryView) {
-		pickedFullName = repo.fullName;
+	function pick(repo: GitRepositoryView) {
+		pickedFullName = repo.key;
+		pickedProvider = repo.provider;
 		cloneValue = repo.cloneUrl;
 		branchValue = repo.defaultBranch;
-		providerValue = 'github';
+		providerValue = repo.provider;
 		if (!nameValue)
 			nameValue = repo.name
 				.toLowerCase()
@@ -218,7 +220,7 @@
 		size="lg"
 	>
 		<Field.Group>
-			<GithubRepoPicker onpick={pick} selected={pickedFullName} />
+			<GitRepoPicker onpick={pick} selected={pickedFullName} />
 			<div class="grid gap-4 sm:grid-cols-2">
 				<Field.Field data-invalid={errors.name ? true : undefined}>
 					<Field.Label for="repo-name">Name</Field.Label>
@@ -245,7 +247,11 @@
 						bind:value={providerValue}
 						class="w-full"
 					>
+						<NativeSelect.Option value="">Detect from the URL</NativeSelect.Option>
 						<NativeSelect.Option value="github">GitHub</NativeSelect.Option>
+						<NativeSelect.Option value="gitlab">GitLab</NativeSelect.Option>
+						<NativeSelect.Option value="forgejo">Forgejo</NativeSelect.Option>
+						<NativeSelect.Option value="gitea">Gitea</NativeSelect.Option>
 						<NativeSelect.Option value="generic">Other git host</NativeSelect.Option>
 					</NativeSelect.Root>
 				</Field.Field>
@@ -293,8 +299,10 @@
 					/>
 					<Field.Description
 						>{pickedFullName
-							? 'Not needed: the GitHub App delivers this repository’s events.'
-							: 'At least 16 characters. Paste the same into GitHub. Not needed for repositories the GitHub App covers.'}</Field.Description
+							? pickedProvider === 'github'
+								? 'Not needed: the GitHub App delivers this repository’s events.'
+								: 'Not needed: Skiff creates the webhook on the forge.'
+							: 'At least 16 characters. Paste the same into the forge’s webhook (GitLab: Secret token). Not needed for repositories the GitHub App or a connected forge covers.'}</Field.Description
 					>
 					{#if errors.webhookSecret}<Field.Error>{errors.webhookSecret}</Field.Error>{/if}
 				</Field.Field>

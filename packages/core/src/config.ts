@@ -91,6 +91,8 @@ export interface CoreConfig {
 	storageFetch?: typeof fetch;
 	/** Injected GitHub API transport for tests (plan 21); production uses the global fetch. */
 	githubFetch?: typeof fetch;
+	/** Injected GitLab/Gitea/Forgejo API transport for tests (docs/FORGES.md); production uses the global fetch. */
+	forgeFetch?: typeof fetch;
 	/**
 	 * Injected container-registry transport for deploy-time digest pinning (docs/REGISTRY.md R1).
 	 * Production uses the global fetch; under `bun test` pinning is skipped unless this is set.

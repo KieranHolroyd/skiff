@@ -62,8 +62,8 @@
 			body: 'Build nodes clone with a one-hour, read-only token for that one repository, minted per build or job.'
 		},
 		{
-			title: 'Deploy from GitHub',
-			body: 'Projects → Deploy from GitHub imports a repository: Skiff detects the framework, connects it and deploys every push.'
+			title: 'Deploy from Git',
+			body: 'Projects → Deploy from Git imports a repository: Skiff detects the framework, connects it and deploys every push. GitLab, Gitea and Forgejo connect in Settings → Git providers.'
 		},
 		{
 			title: 'Pipelines set themselves up',

@@ -97,7 +97,7 @@
 			Set <code class="font-mono">SKIFF_FEATURE_EMAIL=1</code> to add domains.
 		</Notice>
 	{:else if !area.configured}
-		<NotSetUp platformAdmin={area.can.platform} compact />
+		<NotSetUp platformAdmin={area.can.platform} />
 	{/if}
 
 	{#if data.denied}
