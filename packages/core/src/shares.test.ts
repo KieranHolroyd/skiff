@@ -85,11 +85,11 @@ describe('cluster shares', () => {
 		).toThrow(/absolute/);
 	});
 
-	test('needs a platform admin', () => {
-		expect(() => core.shares.list(member)).toThrow(/Platform admin/);
+	test('needs platform administration', () => {
+		expect(() => core.shares.list(member)).toThrow(/storage:read/);
 		expect(() =>
 			core.shares.create(member, { name: 'nope', protocol: 'nfs', server: '10.0.0.5', exportPath: '/x' }),
-		).toThrow(/Platform admin/);
+		).toThrow(/storage:create/);
 	});
 });
 
@@ -217,7 +217,7 @@ describe('share mounts', () => {
 
 		expect(() => core.shares.mount(admin, 'library', { node: 'old-agent' })).toThrow(/Update the node/);
 		expect(() => core.shares.mount(admin, 'nocreds', { node: 'nfs-client' })).toThrow(/username and password/);
-		expect(() => core.shares.mount(member, 'library', { node: 'nfs-client' })).toThrow(/Platform admin/);
+		expect(() => core.shares.mount(member, 'library', { node: 'nfs-client' })).toThrow(/storage:update/);
 
 		// A read-only share is a plain mount: it never becomes a disk.
 		expect(core.shares.mount(admin, 'photos', { node: 'nfs-client' }).mounts[0]!.diskName).toBeNull();

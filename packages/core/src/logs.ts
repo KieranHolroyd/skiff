@@ -4,7 +4,6 @@ import {
 	levelForBuildLine,
 	parseLogLine,
 	parseWorkloadReplicaId,
-	requirePermission,
 	type BuildLogChunk,
 	type LogEventView,
 	type LogLevel,
@@ -293,8 +292,13 @@ export class LogService {
 		serviceId: string,
 		input: ServiceLogQuery = {},
 	): ServiceLogQueryResult {
-		requirePermission(principal, 'logs:read');
-		if (kind === 'broker') return this.queryBroker(principal, serviceId, input);
+		if (kind === 'broker') {
+			const owner = this.ctx.db.select({ orgId: brokers.orgId }).from(brokers).where(eq(brokers.id, serviceId)).get();
+			if (!owner || owner.orgId !== principal.orgId)
+				throw new CoreError('not_found', 'Service not found.', 404);
+			this.ctx.iam.require(principal, 'logs:read', { type: 'broker', id: serviceId });
+			return this.queryBroker(principal, serviceId, input);
+		}
 		const orgId =
 			kind === 'storage'
 				? this.ctx.db
@@ -309,6 +313,10 @@ export class LogService {
 						.get()?.orgId;
 		if (!orgId || orgId !== principal.orgId)
 			throw new CoreError('not_found', 'Service not found.', 404);
+		this.ctx.iam.require(principal, 'logs:read', {
+			type: kind === 'storage' ? 'storage' : 'database',
+			id: serviceId,
+		});
 
 		const requested = Number(input.limit ?? DEFAULT_LIMIT);
 		const limit = Number.isFinite(requested)
@@ -454,7 +462,7 @@ export class LogService {
 		project: ProjectRow,
 		input: LogQuery = {},
 	): LogQueryResult {
-		requirePermission(principal, 'logs:read');
+		this.ctx.iam.require(principal, 'logs:read', { type: 'project', id: project.id });
 		const requested = Number(input.limit ?? DEFAULT_LIMIT);
 		const limit = Number.isFinite(requested)
 			? Math.max(1, Math.min(Math.floor(requested), MAX_LIMIT))

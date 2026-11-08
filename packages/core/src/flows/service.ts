@@ -3,13 +3,13 @@ import {
 	FLOW_ID_PREFIX,
 	flowLimits,
 	isTerminalFlow,
-	requirePermission,
 	type FlowRunView,
 	type FlowStatus,
 	type FlowStepEvent,
 	type FlowStepLogEntry,
 	type Permission,
 	type Principal,
+	type ResourceRef,
 } from '@skiff/contracts';
 import type { CoreContext } from '../context.ts';
 import { ConflictError, NotFoundError, ValidationError } from '../errors.ts';
@@ -200,7 +200,14 @@ export class FlowService {
 
 	cancel(principal: Principal, id: string): FlowRunView {
 		const row = this.requireReadable(principal, id);
-		requirePermission(principal, (row.cancel_permission ?? row.read_permission ?? 'project:update') as Permission);
+		// The run's subject names the resource; a run without one falls back to the org.
+		this.ctx.iam.require(
+			principal,
+			(row.cancel_permission ?? row.read_permission ?? 'project:update') as Permission,
+			row.subject_kind && row.subject_id
+				? ({ type: row.subject_kind, id: row.subject_id } as ResourceRef)
+				: { type: 'org' },
+		);
 		const definition = this.definitions.get(row.kind);
 		const title = definition?.title ?? row.kind;
 		if (!definition?.cancel) throw new ConflictError(`A ${title.toLowerCase()} cannot be cancelled.`);

@@ -1,5 +1,4 @@
 import {
-	requirePermission,
 	serviceRestartSchema,
 	type DatabaseBackupAllResult,
 	type Principal,
@@ -23,8 +22,8 @@ export class ServiceActionsService {
 
 		const restartDatabases = input.databases ?? (input.scope === 'all' || input.scope === 'databases');
 		const restartStorage = input.storage ?? (input.scope === 'all' || input.scope === 'storage');
-		if (restartDatabases) requirePermission(principal, 'database:update');
-		if (restartStorage) requirePermission(principal, 'storage:update');
+		if (restartDatabases) this.ctx.iam.require(principal, 'database:update', { type: 'org' });
+		if (restartStorage) this.ctx.iam.require(principal, 'storage:update', { type: 'org' });
 
 		if (restartDatabases) {
 			const names = input.databases ?? this.ctx.databases.list(principal).map((item) => item.name);
@@ -69,7 +68,7 @@ export class ServiceActionsService {
 	 * without backups (none today; unknown engines from old rows) are neither queued nor skipped.
 	 */
 	backupAllDatabases(principal: Principal): DatabaseBackupAllResult {
-		requirePermission(principal, 'database:update');
+		this.ctx.iam.require(principal, 'database:update', { type: 'org' });
 		const result: DatabaseBackupAllResult = { queued: [], skipped: [] };
 		for (const database of this.ctx.databases.list(principal)) {
 			if (!database.capabilities.backups) continue;

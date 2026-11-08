@@ -656,3 +656,47 @@ jobs:
 		expect(run.conclusion).toBe('success');
 	});
 });
+
+describe('resource-scoped access', () => {
+	test('a pipelineRepository binding covers only that repository', () => {
+		const scopedOwner = buildPrincipal({
+			kind: 'user',
+			userId: 'user_scope_owner',
+			orgId: 'org_scope',
+			role: 'owner',
+		});
+		const create = (name: string) =>
+			core.pipelines.createRepository(scopedOwner, {
+				name,
+				cloneUrl: `https://github.com/acme/${name}.git`,
+				provider: 'github',
+				defaultBranch: 'main',
+			});
+		const visible = create('scope-visible');
+		const hidden = create('scope-hidden');
+
+		core.ctx.iam.bind(scopedOwner, {
+			principalType: 'user',
+			principalId: 'user_scope_owner',
+			roleId: 'owner',
+			scope: { type: 'org' },
+		});
+		core.ctx.iam.bind(scopedOwner, {
+			principalType: 'user',
+			principalId: 'user_pipeline_guest',
+			roleId: 'viewer',
+			scope: { type: 'pipelineRepository', id: visible.id },
+		});
+
+		const guest = buildPrincipal({
+			kind: 'user',
+			userId: 'user_pipeline_guest',
+			orgId: 'org_scope',
+			role: 'viewer',
+		});
+		expect(core.pipelines.getRepository(guest, visible.name).id).toBe(visible.id);
+		expect(core.pipelines.listRuns(guest, visible.name)).toEqual([]);
+		expect(() => core.pipelines.getRepository(guest, hidden.name)).toThrow(/build:read/);
+		expect(() => core.pipelines.listRuns(guest, hidden.name)).toThrow(/build:read/);
+	});
+});

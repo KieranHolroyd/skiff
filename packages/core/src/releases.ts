@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import { configSnapshots, releases } from '@skiff/db';
 import { parseSiteConfig, SiteConfigError, type ParsedConfig } from '@skiff/site-config';
-import { requirePermission, type Principal } from '@skiff/contracts';
+import type { Principal } from '@skiff/contracts';
 import { buildArtifact, entryMap, type FileEntry, type ReleaseArtifact } from './artifact.ts';
 import type { CoreContext } from './context.ts';
 import { NotFoundError, ValidationError } from './errors.ts';
@@ -23,7 +23,8 @@ export class ReleaseService {
 	constructor(private readonly ctx: CoreContext) {}
 
 	async prepare(principal: Principal, entries: FileEntry[], options: { precompress?: boolean } = {}): Promise<PreparedRelease> {
-		requirePermission(principal, 'deployment:create');
+		// TODO(I2): take the project so this is a project-scoped deployment:create check.
+		this.ctx.iam.require(principal, 'deployment:create', { type: 'org' });
 		let config: ParsedConfig;
 		try {
 			config = parseSiteConfig(entryMap(entries));

@@ -3,7 +3,6 @@ import { deployments, projects, releases } from '@skiff/db';
 import { parseManifest } from './artifact.ts';
 import {
 	FUNCTION_MANIFEST_FILE,
-	requirePermission,
 	type DeployFiles,
 	type DeploySite,
 	type Principal,
@@ -39,7 +38,7 @@ export class DeployService {
 		const functionBundle = input.files?.some((file) => file.path === FUNCTION_MANIFEST_FILE) ?? false;
 		let projectCreated = false;
 		if (!project) {
-			requirePermission(principal, 'project:create');
+			this.ctx.iam.require(principal, 'project:create', { type: 'org' });
 			const view = await this.ctx.projects.create(principal, {
 				name: input.name,
 				slug: input.name,

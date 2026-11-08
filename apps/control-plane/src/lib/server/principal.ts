@@ -1,13 +1,14 @@
 import type { RequestEvent } from '@sveltejs/kit';
 import type { AuthInfo } from '@modelcontextprotocol/server';
-import { buildPrincipal, isPlatformAdminUser, isRole, resolveMembership } from '@skiff/core';
-import type { AccessKeyVerification } from '@skiff/core';
+import { buildPrincipal, isPlatformAdminUser, resolveMembership } from '@skiff/core';
+import type { AccessKeyVerification, Membership } from '@skiff/core';
 import type { Permission, Principal, Role } from '@skiff/contracts';
 import { effectivePermissions, isPermission, roles as roleDefinitions } from '@skiff/contracts';
 import { auth } from './auth';
 import { openSignup } from './config';
 import { core } from './core';
 import { sqlite } from './db';
+import { membershipRoleIn } from './org-membership';
 
 /** The request's client address, before it is hashed for audit or storage. */
 function clientIp(request: Request): string | undefined {
@@ -30,13 +31,25 @@ function hashIp(request: Request): string | undefined {
  * Resolve a dashboard/browser session into the shared Principal shape. Returns `undefined` for a
  * signed-in user who belongs to no org yet (an invitee who hasn't accepted): they can reach
  * `/accept-invitation/*` but no org-scoped surface.
+ *
+ * The org is the credential's, then the session's `activeOrganizationId` when it is a membership,
+ * then the first membership (IAM.md I5, §8.1). `resolveMembership` remains the fallback because
+ * the setup wizard and open-signup bootstrap create the user's org on first use.
  */
 export function principalFromSession(
 	userId: string,
 	request: Request,
-	options: { name?: string; granted?: Iterable<string>; kind?: Principal['kind'] } = {},
+	options: {
+		name?: string;
+		granted?: Iterable<string>;
+		kind?: Principal['kind'];
+		/** `session.activeOrganizationId`: the org the caller last switched to. */
+		activeOrganizationId?: string | null;
+		/** A credential's bound org (an API key's `org_id`); it wins and never falls back. */
+		orgId?: string;
+	} = {},
 ): Principal | undefined {
-	const membership = resolveMembership(sqlite, userId, { fallbackName: options.name, openSignup });
+	const membership = membershipFrom(userId, options);
 	if (!membership) return undefined;
 	return buildPrincipal({
 		userId,
@@ -49,10 +62,27 @@ export function principalFromSession(
 	});
 }
 
+function membershipFrom(
+	userId: string,
+	options: { name?: string; activeOrganizationId?: string | null; orgId?: string },
+): Membership | undefined {
+	if (options.orgId) {
+		const role = membershipRoleIn(options.orgId, userId);
+		return role ? { orgId: options.orgId, role } : undefined;
+	}
+	if (options.activeOrganizationId) {
+		const role = membershipRoleIn(options.activeOrganizationId, userId);
+		if (role) return { orgId: options.activeOrganizationId, role };
+	}
+	return resolveMembership(sqlite, userId, { fallbackName: options.name, openSignup });
+}
+
 /**
  * REST authentication: either a Better Auth API key (`skif_…`), a Skiff access key (`skif_…`,
  * IAM.md I14), or the session cookie. Better Auth is tried first so existing keys keep working;
  * its `apikey` rows are migrated to `access_keys` only once spike S1 settles the hash format.
+ * Until then the dashboard (settings/api-keys) and CLI login (api/v1/cli/token) still mint Better
+ * Auth rows; both now stamp `metadata.orgId`, so a key stays in the org it was created in.
  * MCP tokens are audience-bound to `/mcp` and verified there, not accepted by the REST API.
  */
 export async function principalFromRequest(request: Request): Promise<Principal | undefined> {
@@ -68,6 +98,9 @@ export async function principalFromRequest(request: Request): Promise<Principal 
 			const principal = principalFromSession(userId, request, {
 				kind: 'apiKey',
 				granted: Array.isArray(granted) ? granted : undefined,
+				// Keys created since I5 carry the org they were minted in, so switching orgs or
+				// joining another one never moves an existing key (IAM.md I5, I14).
+				orgId: typeof metadata.orgId === 'string' ? metadata.orgId : undefined,
 			});
 			if (!principal) return undefined;
 			principal.keyId = result.key.id;
@@ -83,7 +116,10 @@ export async function principalFromRequest(request: Request): Promise<Principal 
 
 	const session = await auth.api.getSession({ headers: request.headers });
 	if (!session?.user) return undefined;
-	return principalFromSession(session.user.id, request, { name: session.user.name ?? undefined });
+	return principalFromSession(session.user.id, request, {
+		name: session.user.name ?? undefined,
+		activeOrganizationId: session.session.activeOrganizationId,
+	});
 }
 
 /**
@@ -115,7 +151,7 @@ function principalFromAccessKey(
 		};
 	}
 
-	const role = membershipRole(verified.orgId, verified.principalId);
+	const role = membershipRoleIn(verified.orgId, verified.principalId);
 	// A key outlives its owner's membership only until the next request: no member row, no access.
 	if (!role) return undefined;
 	return buildPrincipal({
@@ -130,31 +166,17 @@ function principalFromAccessKey(
 	});
 }
 
-/** The user's role in this specific org, not their first membership (IAM.md I5). */
-function membershipRole(orgId: string, userId: string): Role | undefined {
-	try {
-		const row = sqlite
-			.query<{ role: string }, [string, string]>(
-				'SELECT role FROM member WHERE organizationId = ? AND userId = ? LIMIT 1',
-			)
-			.get(orgId, userId);
-		if (!row) return undefined;
-		return isRole(row.role) ? row.role : 'viewer';
-	} catch {
-		return undefined;
-	}
-}
-
-function parseMetadata(metadata: unknown): { scopes?: string[]; permissions?: string[] } {
+function parseMetadata(metadata: unknown): { scopes?: string[]; permissions?: string[]; orgId?: string } {
 	if (!metadata) return {};
 	if (typeof metadata === 'string') {
 		try {
-			return JSON.parse(metadata) as { scopes?: string[]; permissions?: string[] };
+			return JSON.parse(metadata) as { scopes?: string[]; permissions?: string[]; orgId?: string };
 		} catch {
 			return {};
 		}
 	}
-	if (typeof metadata === 'object') return metadata as { scopes?: string[]; permissions?: string[] };
+	if (typeof metadata === 'object')
+		return metadata as { scopes?: string[]; permissions?: string[]; orgId?: string };
 	return {};
 }
 

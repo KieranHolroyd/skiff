@@ -513,3 +513,36 @@ describe('phase 1 functions', () => {
 	});
 
 });
+
+describe('resource-scoped access', () => {
+	test('a project-scoped viewer reads only that function’s view and invocations', async () => {
+		await createFunctionProject('scoped-fn-visible');
+		await createFunctionProject('scoped-fn-hidden');
+		const visible = core.projects.requireRow(principal, 'scoped-fn-visible');
+		const hidden = core.projects.requireRow(principal, 'scoped-fn-hidden');
+		// Inserted directly so iamVersion stays 0 and the owner in the rest of this file keeps its
+		// legacy org-wide grants.
+		opened.sqlite.run(
+			`INSERT INTO iam_bindings
+			   (id, org_id, principal_type, principal_id, role_id, scope_type, scope_id, created_by, created_at)
+			 VALUES ('bind_guest_functions', 'org_1', 'user', 'user_guest_functions', 'viewer', 'project', ?, 'test', 0)`,
+			[visible.id],
+		);
+		const guest = buildPrincipal({
+			kind: 'user',
+			userId: 'user_guest_functions',
+			orgId: 'org_1',
+			role: 'viewer',
+		});
+
+		expect(core.functions.view(guest, visible)).toBeNull();
+		expect(() => core.functions.view(guest, hidden)).toThrow(/deployment:read/);
+		expect(await core.functions.invocations(guest, visible, { from: 0, to: Date.now() })).toEqual({
+			available: false,
+			rows: [],
+		});
+		await expect(
+			core.functions.invocations(guest, hidden, { from: 0, to: Date.now() }),
+		).rejects.toThrow(/logs:read/);
+	});
+});

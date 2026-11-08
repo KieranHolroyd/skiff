@@ -308,3 +308,48 @@ describe('workload service calls used by the REST surface', () => {
 		).toThrow(/static/i);
 	});
 });
+
+describe('resource-scoped access', () => {
+	test('project and environment bindings bound what a guest may list and update', async () => {
+		const visible = await project('scoped-env-visible');
+		await project('scoped-env-hidden');
+		const hidden = requireProject('scoped-env-hidden');
+		const stagingRow = staging('scoped-env-visible');
+		core.environments.create(owner, visible, { name: 'QA' });
+		opened.sqlite.run(
+			`INSERT INTO iam_bindings
+			   (id, org_id, principal_type, principal_id, role_id, scope_type, scope_id, created_by, created_at)
+			 VALUES ('bind_guest_envs', 'org_1', 'user', 'user_guest_envs', 'viewer', 'project', ?, 'test', 0)`,
+			[visible.id],
+		);
+		const reader = buildPrincipal({
+			kind: 'user',
+			userId: 'user_guest_envs',
+			orgId: 'org_1',
+			role: 'viewer',
+		});
+		const slugs = core.environments.list(reader, visible).map((entry) => entry.slug);
+		expect(slugs).toContain('staging');
+		expect(slugs).toContain('qa');
+		expect(() => core.environments.list(reader, hidden)).toThrow(/project:read/);
+
+		// An environment-scope binding covers that environment only, even inside the same project.
+		opened.sqlite.run(
+			`INSERT INTO iam_bindings
+			   (id, org_id, principal_type, principal_id, role_id, scope_type, scope_id, scope_parent_id, created_by, created_at)
+			 VALUES ('bind_guest_env_staging', 'org_1', 'user', 'user_guest_env_staging', 'deployer', 'environment', ?, ?, 'test', 0)`,
+			[stagingRow.id, visible.id],
+		);
+		const writer = buildPrincipal({
+			kind: 'user',
+			userId: 'user_guest_env_staging',
+			orgId: 'org_1',
+			role: 'viewer',
+		});
+		expect(core.environments.update(writer, visible, 'staging', { name: 'Renamed staging' }).name).toBe(
+			'Renamed staging',
+		);
+		expect(() => core.environments.update(writer, visible, 'qa', { name: 'Q' })).toThrow(/project:update/);
+		expect(() => core.environments.remove(writer, visible, 'qa')).toThrow(/project:update/);
+	});
+});

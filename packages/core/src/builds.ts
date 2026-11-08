@@ -7,7 +7,6 @@ import {
 	gitSourceSchema,
 	parseGithubRepoUrl,
 	sameGithubRepo,
-	requirePermission,
 	type BuildCreate,
 	type BuildJob,
 	type BuildReport,
@@ -43,13 +42,13 @@ export class BuildService {
 	constructor(private readonly ctx: CoreContext) {}
 
 	gitSource(principal: Principal, project: ProjectRow): GitSourceView | null {
-		requirePermission(principal, 'build:read');
+		this.ctx.iam.require(principal, 'build:read', { type: 'project', id: project.id });
 		const row = this.ctx.db.select().from(gitSources).where(eq(gitSources.projectId, project.id)).get();
 		return row ? this.gitView(project, row) : null;
 	}
 
 	upsertGitSource(principal: Principal, project: ProjectRow, input: GitSourceInput): GitSourceView {
-		requirePermission(principal, 'build:create');
+		this.ctx.iam.require(principal, 'build:create', { type: 'project', id: project.id });
 		const parsed = gitSourceSchema.parse(input);
 		const existing = this.ctx.db.select().from(gitSources).where(eq(gitSources.projectId, project.id)).get();
 		const now = this.ctx.now();
@@ -90,7 +89,7 @@ export class BuildService {
 	}
 
 	removeGitSource(principal: Principal, project: ProjectRow): void {
-		requirePermission(principal, 'build:create');
+		this.ctx.iam.require(principal, 'build:create', { type: 'project', id: project.id });
 		this.ctx.db.delete(gitSources).where(eq(gitSources.projectId, project.id)).run();
 		this.ctx.audit.record({
 			principal,
@@ -103,7 +102,7 @@ export class BuildService {
 	}
 
 	enqueue(principal: Principal, project: ProjectRow, input: BuildCreate): BuildView {
-		requirePermission(principal, 'build:create');
+		this.ctx.iam.require(principal, 'build:create', { type: 'project', id: project.id });
 		const parsed = buildCreateSchema.parse(input);
 		const source = this.requireGitSource(project);
 		if (!source.enabled) throw new ConflictError('Git builds are disabled for this project.');
@@ -411,9 +410,9 @@ export class BuildService {
 	}
 
 	cancel(principal: Principal, project: ProjectRow, buildId: string): BuildView {
-		requirePermission(principal, 'build:cancel');
 		const row = this.ctx.db.select().from(builds).where(and(eq(builds.id, buildId), eq(builds.projectId, project.id))).get();
 		if (!row) throw new NotFoundError('Build');
+		this.ctx.iam.require(principal, 'build:cancel', { type: 'build', id: row.id, projectId: project.id });
 		if (!ACTIVE.includes(row.status as BuildStatus)) throw new ConflictError(`Build is already ${row.status}.`);
 		const now = this.ctx.now();
 		const status = 'cancelled' as const;
@@ -446,7 +445,7 @@ export class BuildService {
 	}
 
 	list(principal: Principal, project: ProjectRow, options: { limit?: number; full?: boolean } = {}): BuildView[] {
-		requirePermission(principal, 'build:read');
+		this.ctx.iam.require(principal, 'build:read', { type: 'project', id: project.id });
 		return this.ctx.db
 			.select()
 			.from(builds)
@@ -458,9 +457,9 @@ export class BuildService {
 	}
 
 	get(principal: Principal, project: ProjectRow, buildId: string): BuildView {
-		requirePermission(principal, 'build:read');
 		const row = this.ctx.db.select().from(builds).where(and(eq(builds.id, buildId), eq(builds.projectId, project.id))).get();
 		if (!row) throw new NotFoundError('Build');
+		this.ctx.iam.require(principal, 'build:read', { type: 'build', id: row.id, projectId: project.id });
 		return this.view(project, row, true);
 	}
 

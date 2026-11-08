@@ -4,7 +4,6 @@ import {
 	backupTargetCreateSchema,
 	backupTargetUpdateSchema,
 	canAdministerPlatform,
-	requirePermission,
 	type BackupTargetCredentials,
 	type BackupTargetResolution,
 	type BackupTargetTestResult,
@@ -109,7 +108,7 @@ export class BackupTargetService {
 	// ---------------------------------------------------------------- reads
 
 	list(principal: Principal): BackupTargetView[] {
-		requirePermission(principal, 'database:read');
+		this.ctx.iam.require(principal, 'database:read', { type: 'org' });
 		return this.ctx.db
 			.select()
 			.from(backupTargets)
@@ -120,9 +119,9 @@ export class BackupTargetService {
 	}
 
 	get(principal: Principal, id: string): BackupTargetView {
-		requirePermission(principal, 'database:read');
 		const row = this.findVisible(principal, id);
 		if (!row) throw new NotFoundError('Backup target');
+		this.ctx.iam.require(principal, 'database:read', { type: 'org' });
 		return this.toView(row);
 	}
 
@@ -139,7 +138,7 @@ export class BackupTargetService {
 		const input = backupTargetCreateSchema.parse(raw);
 		const platform = options.platform === true;
 		if (platform) this.requirePlatformAdmin(principal);
-		else requirePermission(principal, 'database:update');
+		else this.ctx.iam.require(principal, 'database:update', { type: 'org' });
 		const orgId = platform ? null : principal.orgId;
 		const duplicate = this.ctx.db
 			.select({ id: backupTargets.id })
@@ -744,7 +743,7 @@ export class BackupTargetService {
 		const row = this.findVisible(principal, id);
 		if (!row) throw new NotFoundError('Backup target');
 		if (row.orgId === null) this.requirePlatformAdmin(principal);
-		else requirePermission(principal, 'database:update');
+		else this.ctx.iam.require(principal, 'database:update', { type: 'org' });
 		return row;
 	}
 

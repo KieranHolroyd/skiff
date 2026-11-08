@@ -18,7 +18,6 @@ import {
 } from '@skiff/db';
 import {
 	databaseCapabilities,
-	requirePermission,
 	serviceMoveSchema,
 	workloadSpecSchema,
 	type AppMoveResult,
@@ -98,9 +97,9 @@ export class ServiceMoveService {
 	// ------------------------------------------------------------------ apps
 
 	moveApp(principal: Principal, slug: string, raw: unknown): AppMoveResult {
-		requirePermission(principal, 'project:update');
 		const input = serviceMoveSchema.parse(raw);
 		const project = this.ctx.projects.requireRow(principal, slug);
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		if (project.runtime === 'static')
 			throw new ValidationError(`"${project.slug}" is a static site; the edge node serves it, so it cannot move.`);
 		const workload = this.ctx.db.select().from(workloads).where(eq(workloads.projectId, project.id)).get();
@@ -157,9 +156,9 @@ export class ServiceMoveService {
 	// ------------------------------------------------------------- databases
 
 	moveDatabase(principal: Principal, name: string, raw: unknown): DatabaseMoveView {
-		requirePermission(principal, 'database:update');
 		const input = serviceMoveSchema.parse(raw);
 		const db = this.ctx.databases.requireRow(principal, name);
+		this.ctx.iam.require(principal, 'database:update', { type: 'database', id: db.id });
 		const source = db.nodeId;
 		const target = input.node;
 		const caps = databaseCapabilities(db.engine);
@@ -298,8 +297,8 @@ export class ServiceMoveService {
 
 	/** The newest move of a database, finished or not, for its detail page. */
 	latestForDatabase(principal: Principal, name: string): DatabaseMoveView | null {
-		requirePermission(principal, 'database:read');
 		const db = this.ctx.databases.requireRow(principal, name);
+		this.ctx.iam.require(principal, 'database:read', { type: 'database', id: db.id });
 		const row = this.ctx.db
 			.select()
 			.from(databaseMoves)
@@ -739,9 +738,9 @@ export class ServiceMoveService {
 	 * Apps pinned by private storage follow it unless something else they use stays behind.
 	 */
 	moveStorage(principal: Principal, name: string, raw: unknown): StorageMoveResult {
-		requirePermission(principal, 'storage:update');
 		const input = serviceMoveSchema.parse(raw);
 		const row = this.ctx.storage.requireRow(principal, name);
+		this.ctx.iam.require(principal, 'storage:update', { type: 'storage', id: row.id });
 		if (input.from !== 'empty')
 			throw new ConflictError(
 				`Skiff cannot copy objects between nodes yet, so "${row.name}" can only move empty: its buckets, keys and attached apps' credentials come back on the target, its objects do not. Move it with from: "empty".`,

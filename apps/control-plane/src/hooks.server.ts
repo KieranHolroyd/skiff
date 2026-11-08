@@ -134,6 +134,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 	if (session?.user) {
 		event.locals.principal = principalFromSession(session.user.id, event.request, {
 			name: session.user.name ?? undefined,
+			activeOrganizationId: session.session.activeOrganizationId,
 		});
 	} else if (event.request.headers.get('authorization')) {
 		event.locals.principal = await principalFromRequest(event.request);

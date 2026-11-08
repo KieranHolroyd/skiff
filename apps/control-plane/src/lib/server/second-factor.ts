@@ -1,6 +1,7 @@
 import { readMembership } from '@skiff/core';
 import { devPasswordLogin } from './config';
 import { sqlite } from './db';
+import { membershipRoleIn } from './org-membership';
 import { MAX_SECOND_FACTOR_FAILURES, type SecondFactor } from './second-factor-policy';
 
 /**
@@ -43,7 +44,11 @@ export function userHasPassword(userId: string): boolean {
 	}
 }
 
-export function userIsOwner(userId: string): boolean {
+export function userIsOwner(userId: string, orgId?: string | null): boolean {
+	// The gate follows the active org when a session names one: an owner of org A is not an owner
+	// while acting in org B (IAM.md I5). Without an org, the first membership is the bootstrap
+	// fallback the setup wizard relies on.
+	if (orgId) return membershipRoleIn(orgId, userId) === 'owner';
 	return readMembership(sqlite, userId)?.role === 'owner';
 }
 

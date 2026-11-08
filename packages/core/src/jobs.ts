@@ -7,7 +7,6 @@ import {
 	jobOneOffSchema,
 	jobRunDone,
 	jobUpdateSchema,
-	requirePermission,
 	type AgentJobHeartbeat,
 	type AgentJobHeartbeatResponse,
 	type AgentJobLease,
@@ -154,7 +153,7 @@ export class JobService {
 	// ---------------------------------------------------------------- definitions
 
 	list(principal: Principal, project: ProjectRow): JobView[] {
-		requirePermission(principal, 'project:read');
+		this.ctx.iam.require(principal, 'project:read', { type: 'project', id: project.id });
 		const rows = this.ctx.sqlite
 			.query<JobRow, [string, string]>('SELECT * FROM jobs WHERE org_id = ? AND project_id = ? ORDER BY name')
 			.all(principal.orgId, project.id);
@@ -162,14 +161,14 @@ export class JobService {
 	}
 
 	get(principal: Principal, project: ProjectRow, name: string): JobView {
-		requirePermission(principal, 'project:read');
+		this.ctx.iam.require(principal, 'project:read', { type: 'project', id: project.id });
 		return this.view(this.requireJob(principal, project, name), project.slug);
 	}
 
 	create(principal: Principal, project: ProjectRow, raw: unknown): JobView {
 		this.assertEnabled();
-		requirePermission(principal, 'project:update');
-		requirePermission(principal, 'deployment:create');
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
+		this.ctx.iam.require(principal, 'deployment:create', { type: 'project', id: project.id });
 		const input = jobCreateSchema.parse(raw);
 		this.requireJobRuntime(project);
 		// `…/jobs/runs` is the project's run history in the REST API.
@@ -214,8 +213,8 @@ export class JobService {
 
 	update(principal: Principal, project: ProjectRow, name: string, raw: unknown): JobView {
 		this.assertEnabled();
-		requirePermission(principal, 'project:update');
-		requirePermission(principal, 'deployment:create');
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
+		this.ctx.iam.require(principal, 'deployment:create', { type: 'project', id: project.id });
 		const input = jobUpdateSchema.parse(raw);
 		const row = this.requireJob(principal, project, name);
 		if (input.schedule) assertSchedule(input.schedule);
@@ -251,7 +250,7 @@ export class JobService {
 
 	/** Pause or resume. A paused job keeps its history and can still be run by hand. */
 	setEnabled(principal: Principal, project: ProjectRow, name: string, enabled: boolean): JobView {
-		requirePermission(principal, 'project:update');
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		const row = this.requireJob(principal, project, name);
 		if (enabled) this.assertEnabled();
 		if ((row.enabled === 1) === enabled) return this.view(row, project.slug);
@@ -264,8 +263,8 @@ export class JobService {
 
 	/** Delete the definition and its history; a run in progress is asked to stop. */
 	remove(principal: Principal, project: ProjectRow, name: string): { deleted: true; stopping: number } {
-		requirePermission(principal, 'project:update');
-		requirePermission(principal, 'deployment:create');
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
+		this.ctx.iam.require(principal, 'deployment:create', { type: 'project', id: project.id });
 		const row = this.requireJob(principal, project, name);
 		const now = this.ctx.now();
 		const stopping = this.ctx.sqlite.transaction(() => {
@@ -287,7 +286,7 @@ export class JobService {
 	/** Run a job now, whatever its schedule or pause state. */
 	run(principal: Principal, project: ProjectRow, name: string): JobRunView {
 		this.assertEnabled();
-		requirePermission(principal, 'deployment:create');
+		this.ctx.iam.require(principal, 'deployment:create', { type: 'project', id: project.id });
 		const job = this.requireJob(principal, project, name);
 		const target = this.requireTarget(project);
 		this.ctx.quota.assertCanRunJob(principal.orgId, project.id);
@@ -310,7 +309,7 @@ export class JobService {
 	/** One command, now, against the current release. Not saved as a job. */
 	runOneOff(principal: Principal, project: ProjectRow, raw: unknown): JobRunView {
 		this.assertEnabled();
-		requirePermission(principal, 'deployment:create');
+		this.ctx.iam.require(principal, 'deployment:create', { type: 'project', id: project.id });
 		const input = jobOneOffSchema.parse(raw);
 		this.requireJobRuntime(project);
 		const target = this.requireTarget(project);
@@ -333,7 +332,7 @@ export class JobService {
 
 	/** Newest first; `job` narrows to one job, `oneOff` to runs without one. */
 	runs(principal: Principal, project: ProjectRow, options: { job?: string; oneOff?: boolean; limit?: number } = {}): JobRunView[] {
-		requirePermission(principal, 'project:read');
+		this.ctx.iam.require(principal, 'project:read', { type: 'project', id: project.id });
 		const limit = Math.max(1, Math.min(Math.floor(options.limit ?? LIST_RUNS_DEFAULT), LIST_RUNS_MAX));
 		let rows: RunRow[];
 		if (options.job) {
@@ -356,13 +355,13 @@ export class JobService {
 	}
 
 	getRun(principal: Principal, project: ProjectRow, runId: string): JobRunView {
-		requirePermission(principal, 'project:read');
+		this.ctx.iam.require(principal, 'project:read', { type: 'project', id: project.id });
 		return runView(this.requireRun(principal, project, runId));
 	}
 
 	/** A queued run is cancelled at once; a running one is stopped by its node at the next heartbeat. */
 	cancelRun(principal: Principal, project: ProjectRow, runId: string): JobRunView {
-		requirePermission(principal, 'deployment:create');
+		this.ctx.iam.require(principal, 'deployment:create', { type: 'project', id: project.id });
 		const row = this.requireRun(principal, project, runId);
 		if (jobRunDone(row.status)) return runView(row);
 		const now = this.ctx.now();
@@ -375,7 +374,7 @@ export class JobService {
 
 	/** One run's output; the same `logs:read` check and cursor as project logs. */
 	runLogs(principal: Principal, project: ProjectRow, runId: string, input: Omit<LogQuery, 'jobRunId'> = {}): LogQueryResult {
-		requirePermission(principal, 'project:read');
+		this.ctx.iam.require(principal, 'project:read', { type: 'project', id: project.id });
 		const row = this.requireRun(principal, project, runId);
 		return this.ctx.logs.query(principal, project, { ...input, jobRunId: row.id });
 	}

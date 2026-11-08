@@ -83,7 +83,7 @@ afterAll(() => {
 
 beforeAll(async () => {
 	opened.sqlite.run('CREATE TABLE IF NOT EXISTS organization (id TEXT PRIMARY KEY, name TEXT, slug TEXT, createdAt TEXT)');
-	opened.sqlite.run(`INSERT INTO organization (id, name, slug) VALUES ('org_a', 'Acme', 'acme'), ('org_b', 'Other', 'other')`);
+	opened.sqlite.run(`INSERT INTO organization (id, name, slug) VALUES ('org_a', 'Acme', 'acme'), ('org_b', 'Other', 'other'), ('org_scope', 'Scoped', 'scope')`);
 	edgeId = core.nodes.join({ token: core.nodes.createJoinToken(admin, 'edge').token, name: 'edge' }).nodeId;
 	workerId = core.nodes.join({ token: core.nodes.createJoinToken(admin, 'worker').token, name: 'homelab' }).nodeId;
 	await core.projects.create(admin, {
@@ -391,5 +391,46 @@ describe('mirrors, signatures, CVEs, S3 and quotas (G2, G4–G6)', () => {
 		// Pulls are never refused.
 		expect(decode(core.registry.issueToken({ kind: 'principal', principal: viewer }, HOST, ['repository:acme/shop:pull']).token).access).toHaveLength(1);
 		core.ctx.quota.set('org_a', { registryBytes: -1 });
+	});
+});
+
+describe('resource-scoped access', () => {
+	test('a repository binding covers only that registry repository', () => {
+		const scopedOwner = buildPrincipal({
+			kind: 'user',
+			userId: 'user_scope_owner',
+			orgId: 'org_scope',
+			role: 'owner',
+		});
+		core.registry.issueToken({ kind: 'principal', principal: scopedOwner }, HOST, ['repository:scope/visible:push']);
+		core.registry.issueToken({ kind: 'principal', principal: scopedOwner }, HOST, ['repository:scope/hidden:push']);
+		const visible = opened.sqlite
+			.query<{ id: string }, [string]>('SELECT id FROM registry_repositories WHERE name = ?')
+			.get('scope/visible')!;
+		expect(visible.id).toBeTruthy();
+
+		core.ctx.iam.bind(scopedOwner, {
+			principalType: 'user',
+			principalId: 'user_scope_owner',
+			roleId: 'owner',
+			scope: { type: 'org' },
+		});
+		core.ctx.iam.bind(scopedOwner, {
+			principalType: 'user',
+			principalId: 'user_registry_guest',
+			roleId: 'viewer',
+			scope: { type: 'repository', id: visible.id },
+		});
+
+		const guest = buildPrincipal({
+			kind: 'user',
+			userId: 'user_registry_guest',
+			orgId: 'org_scope',
+			role: 'viewer',
+		});
+		expect(core.registry.repository(guest, 'scope/visible').name).toBe('scope/visible');
+		expect(core.registry.pins(guest, 'scope/visible')).toEqual([]);
+		expect(() => core.registry.repository(guest, 'scope/hidden')).toThrow(/image:pull/);
+		expect(() => core.registry.pins(guest, 'scope/hidden')).toThrow(/image:pull/);
 	});
 });

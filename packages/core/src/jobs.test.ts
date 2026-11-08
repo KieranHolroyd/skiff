@@ -369,3 +369,20 @@ describe('the JOBS flag', () => {
 		}
 	});
 });
+
+describe('resource-scoped access', () => {
+	test('a project binding covers only that project jobs', () => {
+		const visible = project();
+		const hidden = core.projects.requireRow(owner, 'site');
+		opened.sqlite.run(
+			`INSERT INTO iam_bindings
+			   (id, org_id, principal_type, principal_id, role_id, scope_type, scope_id, created_by, created_at)
+			 VALUES ('bind_scope_jobs', 'org_1', 'user', 'user_scope_jobs', 'viewer', 'project', ?, 'test', 0)`,
+			[visible.id],
+		);
+		const guest = buildPrincipal({ kind: 'user', userId: 'user_scope_jobs', orgId: 'org_1', role: 'viewer' });
+		expect(core.jobs.list(guest, visible).map((job) => job.id)).toEqual(core.jobs.list(owner, visible).map((job) => job.id));
+		expect(() => core.jobs.list(guest, hidden)).toThrow(/project:read/);
+		expect(() => core.jobs.runs(guest, hidden)).toThrow(/project:read/);
+	});
+});

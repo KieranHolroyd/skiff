@@ -261,3 +261,84 @@ describe('builder reports', () => {
 		expect(await store.exists(`builds/${build.id}.zip`)).toBe(false);
 	});
 });
+
+describe('resource-scoped access', () => {
+	test('a project binding covers its builds; a build binding covers one build', async () => {
+		const scopedOwner = buildPrincipal({
+			kind: 'user',
+			userId: 'user_scoped_owner',
+			orgId: 'org_scoped',
+			role: 'owner',
+		});
+		const createProject = async (slug: string) => {
+			await core.projects.create(scopedOwner, {
+				name: slug,
+				slug,
+				runtime: 'static',
+				placement: 'edge',
+				productionAccess: 'public',
+				previewAccess: 'platform',
+			});
+			return core.projects.requireRow(scopedOwner, slug);
+		};
+		const visible = await createProject('scoped-visible');
+		const hidden = await createProject('scoped-hidden');
+		for (const project of [visible, hidden]) {
+			core.builds.upsertGitSource(scopedOwner, project, {
+				repoUrl: `https://github.com/acme/${project.slug}.git`,
+				branch: 'main',
+				rootDir: '.',
+				buildCommand: 'bun run build',
+				outputDir: 'dist',
+				enabled: true,
+			});
+		}
+		const visibleBuild = core.builds.enqueue(scopedOwner, visible, { ref: 'main', promote: false });
+		clock += 1000;
+		const secondVisible = core.builds.enqueue(scopedOwner, visible, { ref: 'next', promote: false });
+		const hiddenBuild = core.builds.enqueue(scopedOwner, hidden, { ref: 'main', promote: false });
+
+		// Seed bindings by hand: the owner keeps org-wide access, the guests get one scope each.
+		core.ctx.iam.bind(scopedOwner, {
+			principalType: 'user',
+			principalId: 'user_scoped_owner',
+			roleId: 'owner',
+			scope: { type: 'org' },
+		});
+		core.ctx.iam.bind(scopedOwner, {
+			principalType: 'user',
+			principalId: 'user_project_guest',
+			roleId: 'viewer',
+			scope: { type: 'project', id: visible.id },
+		});
+		core.ctx.iam.bind(scopedOwner, {
+			principalType: 'user',
+			principalId: 'user_build_guest',
+			roleId: 'viewer',
+			scope: { type: 'build', id: visibleBuild.id, projectId: visible.id },
+		});
+
+		const projectGuest = buildPrincipal({
+			kind: 'user',
+			userId: 'user_project_guest',
+			orgId: 'org_scoped',
+			role: 'viewer',
+		});
+		expect(core.builds.list(projectGuest, visible).map((build) => build.id).sort()).toEqual(
+			[visibleBuild.id, secondVisible.id].sort(),
+		);
+		expect(core.builds.get(projectGuest, visible, visibleBuild.id).id).toBe(visibleBuild.id);
+		expect(core.builds.get(projectGuest, visible, secondVisible.id).id).toBe(secondVisible.id);
+		expect(() => core.builds.list(projectGuest, hidden)).toThrow(/build:read/);
+
+		const buildGuest = buildPrincipal({
+			kind: 'user',
+			userId: 'user_build_guest',
+			orgId: 'org_scoped',
+			role: 'viewer',
+		});
+		expect(core.builds.get(buildGuest, visible, visibleBuild.id).id).toBe(visibleBuild.id);
+		expect(() => core.builds.get(buildGuest, visible, secondVisible.id)).toThrow(/build:read/);
+		expect(() => core.builds.get(buildGuest, visible, hiddenBuild.id)).toThrow(/Build not found|build:read/);
+	});
+});

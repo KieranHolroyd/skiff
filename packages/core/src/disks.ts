@@ -64,7 +64,7 @@ import {
 	type VolumeProfileTask,
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
-import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
+import { ConflictError, NotFoundError, ValidationError } from './errors.ts';
 import type { PlacementCandidate } from './placement.ts';
 import { nodeDiskFreeBytes } from './app-volumes.ts';
 import { newId, parseJson } from './util.ts';
@@ -199,7 +199,7 @@ export class DiskService {
 	 * one by UUID at /mnt/skiff-disks/<name> (the disk is `pending` until the node reports it there).
 	 */
 	add(principal: Principal, raw: DiskAdd): DiskView {
-		this.assertWrite(principal);
+		this.assertWrite(principal, 'storage:create');
 		const input = diskAddSchema.parse(raw);
 		const node = this.requireNode(input.node);
 		const inventory = parseInventory(node.diskInventoryJson);
@@ -325,7 +325,7 @@ export class DiskService {
 
 	/** Rename a disk or set its tier. New services follow the tier; nothing placed moves. */
 	update(principal: Principal, id: string, raw: DiskUpdate): DiskView {
-		this.assertWrite(principal);
+		this.assertWrite(principal, 'storage:update');
 		const input = diskUpdateSchema.parse(raw);
 		const row = this.requireRow(id);
 		const changes: Partial<typeof disks.$inferInsert> = { updatedAt: this.ctx.now() };
@@ -354,7 +354,7 @@ export class DiskService {
 	 * by its node first (the row is `removing` until the node confirms); its files stay.
 	 */
 	remove(principal: Principal, id: string, opts: { viaShare?: boolean } = {}): { ok: true; unmounting: boolean } {
-		this.assertWrite(principal);
+		this.assertWrite(principal, 'storage:delete');
 		const row = this.requireRow(id);
 		if (row.status === 'removing') return { ok: true, unmounting: true };
 		const share = this.shareOf(row.id);
@@ -427,7 +427,7 @@ export class DiskService {
 
 	/** Set the default target per kind. New services start with it; nothing placed moves. */
 	setDefaults(principal: Principal, raw: StorageDefaultsInput): StorageDefaultView[] {
-		this.assertWrite(principal);
+		this.assertWrite(principal, 'storage:update');
 		const input = storageDefaultsSchema.parse(raw);
 		const now = this.ctx.now();
 		this.ctx.db.transaction(() => {
@@ -454,7 +454,7 @@ export class DiskService {
 	}
 
 	setOnboarding(principal: Principal, raw: { state: 'done' | 'skipped' }): { onboarding: StorageOnboardingState } {
-		this.assertWrite(principal);
+		this.assertWrite(principal, 'storage:update');
 		const input = storageOnboardingSchema.parse(raw);
 		const now = this.ctx.now();
 		this.ctx.db
@@ -601,7 +601,7 @@ export class DiskService {
 
 	/** Benchmark one disk (docs/STORAGE.md §5.1). */
 	profile(principal: Principal, id: string): { queued: true } {
-		this.assertWrite(principal);
+		this.assertWrite(principal, 'storage:update');
 		this.expireProfiles();
 		const row = this.requireRow(id);
 		const node = this.requireNode(row.nodeId);
@@ -978,18 +978,19 @@ export class DiskService {
 	}
 
 	private assertRead(principal: Principal): void {
-		if (!canViewPlatform(principal)) throw new CoreError('forbidden', 'Platform admin required.', 403);
+		// Platform IAM (I8) replaces this fallback: until platform bindings exist, a platform
+		// admin keeps the fleet-wide read/write access `canViewPlatform`/`canAdministerPlatform`
+		// grants today; everyone else is decided by the engine at platform scope.
+		if (canViewPlatform(principal)) return;
+		this.ctx.iam.require(principal, 'storage:read', { type: 'platform' });
 	}
 
-	private assertWrite(principal: Principal): void {
-		if (!canAdministerPlatform(principal))
-			throw new CoreError(
-				'forbidden',
-				principal.platformAdmin
-					? 'Storage changes need a platform admin signed in to the dashboard (not an API key or MCP token).'
-					: 'Platform admin required.',
-				403,
-			);
+	private assertWrite(
+		principal: Principal,
+		permission: 'storage:create' | 'storage:update' | 'storage:delete' = 'storage:update',
+	): void {
+		if (canAdministerPlatform(principal)) return;
+		this.ctx.iam.require(principal, permission, { type: 'platform' });
 	}
 }
 

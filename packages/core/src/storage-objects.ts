@@ -2,7 +2,6 @@ import { and, eq } from 'drizzle-orm';
 import { storageBuckets, storageInstances, storageShareLinks } from '@skiff/db';
 import {
 	STORAGE_REGION,
-	requirePermission,
 	storageFolderSchema,
 	storageGatewayHost,
 	storageObjectKeySchema,
@@ -105,8 +104,8 @@ export class StorageObjectsService {
 		name: string,
 		input: { bucket: string; prefix?: string; delimiter?: string; token?: string; limit?: number },
 	): Promise<StorageObjectList> {
-		requirePermission(principal, 'storage:read');
 		const row = this.ctx.storage.requireRow(principal, name);
+		this.ctx.storage.requireStoragePermission(principal, 'storage:read', row);
 		this.bucket(row, input.bucket);
 		return this.client(row).listObjects(input.bucket, {
 			prefix: input.prefix ?? '',
@@ -117,8 +116,8 @@ export class StorageObjectsService {
 	}
 
 	async stat(principal: Principal, name: string, bucket: string, key: string): Promise<StorageObjectStat> {
-		requirePermission(principal, 'storage:read');
 		const row = this.ctx.storage.requireRow(principal, name);
+		this.ctx.storage.requireStoragePermission(principal, 'storage:read', row);
 		this.bucket(row, bucket);
 		const safeKey = storageObjectKeySchema.parse(key);
 		const head = await this.client(row).headObject(bucket, safeKey);
@@ -140,8 +139,8 @@ export class StorageObjectsService {
 		key: string,
 		range?: string | null,
 	): Promise<{ response: Response; key: string; contentType: string | null; etag: string | null }> {
-		requirePermission(principal, 'storage:read');
 		const row = this.ctx.storage.requireRow(principal, name);
+		this.ctx.storage.requireStoragePermission(principal, 'storage:read', row);
 		this.bucket(row, bucket);
 		const safeKey = storageObjectKeySchema.parse(key);
 		// Only a single, well-formed byte range is forwarded; anything else gets the whole object.
@@ -165,8 +164,8 @@ export class StorageObjectsService {
 		body: Uint8Array,
 		contentType?: string | null,
 	): Promise<StorageObjectStat> {
-		requirePermission(principal, 'storage:update');
 		const row = this.ctx.storage.requireRow(principal, name);
+		this.ctx.storage.requireStoragePermission(principal, 'storage:update', row);
 		const bucketRow = this.bucket(row, bucket);
 		this.writable(bucketRow);
 		const safeKey = storageObjectKeySchema.parse(key);
@@ -203,8 +202,8 @@ export class StorageObjectsService {
 	}
 
 	async remove(principal: Principal, name: string, bucket: string, input: StorageObjectDelete): Promise<{ deleted: string[]; errors: Array<{ key: string; code: string; message: string }> }> {
-		requirePermission(principal, 'storage:update');
 		const row = this.ctx.storage.requireRow(principal, name);
+		this.ctx.storage.requireStoragePermission(principal, 'storage:update', row);
 		const bucketRow = this.bucket(row, bucket);
 		this.writable(bucketRow);
 		const keys = input.keys.map((key) => storageObjectKeySchema.parse(key));
@@ -222,8 +221,8 @@ export class StorageObjectsService {
 
 	/** Create a folder marker (a zero-byte object whose key ends in `/`). */
 	async folder(principal: Principal, name: string, bucket: string, rawPrefix: string): Promise<{ prefix: string }> {
-		requirePermission(principal, 'storage:update');
 		const row = this.ctx.storage.requireRow(principal, name);
+		this.ctx.storage.requireStoragePermission(principal, 'storage:update', row);
 		const bucketRow = this.bucket(row, bucket);
 		this.writable(bucketRow);
 		const { prefix } = storageFolderSchema.parse({ prefix: rawPrefix });
@@ -243,8 +242,12 @@ export class StorageObjectsService {
 	/** Presigned browser URL; only public instances have a reachable endpoint (D64). */
 	async presign(principal: Principal, name: string, bucket: string, input: StoragePresign): Promise<{ url: string; method: 'GET' | 'PUT'; expiresIn: number }> {
 		// A PUT URL is signed with the root key and lets its holder write: it needs write permission.
-		requirePermission(principal, input.method === 'PUT' ? 'storage:update' : 'storage:read');
 		const row = this.ctx.storage.requireRow(principal, name);
+		this.ctx.storage.requireStoragePermission(
+			principal,
+			input.method === 'PUT' ? 'storage:update' : 'storage:read',
+			row,
+		);
 		this.bucket(row, bucket);
 		if (!row.public || !row.publicHost)
 			throw new ConflictError(
@@ -272,12 +275,16 @@ export class StorageObjectsService {
 		bucket: string,
 		input: StorageShareLinkRequest,
 	): Promise<StorageShareLink> {
-		requirePermission(principal, input.method === 'PUT' ? 'storage:update' : 'storage:read');
 		if (!featureEnabled(this.ctx.config, 'OBJECT_BROWSER'))
 			throw new CoreError('feature_disabled', 'Share links need the OBJECT_BROWSER feature.', 403);
 		if (input.method === 'PUT' && input.maxDownloads !== undefined)
 			throw new CoreError('validation', 'A download limit only applies to GET links.', 422);
 		const row = this.ctx.storage.requireRow(principal, name);
+		this.ctx.storage.requireStoragePermission(
+			principal,
+			input.method === 'PUT' ? 'storage:update' : 'storage:read',
+			row,
+		);
 		this.bucket(row, bucket);
 		const now = this.ctx.now();
 		const expiresAt = now + input.expiresIn * 1000;

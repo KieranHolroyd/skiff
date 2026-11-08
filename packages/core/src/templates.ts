@@ -3,7 +3,6 @@ import {
 	buildAppTemplate,
 	getAppTemplate,
 	listAppTemplates,
-	requirePermission,
 	templateSecretSuffix,
 	type AppTemplateView,
 	type Principal,
@@ -35,23 +34,23 @@ export class TemplateService {
 	constructor(private readonly ctx: CoreContext) {}
 
 	list(principal: Principal): AppTemplateView[] {
-		requirePermission(principal, 'project:read');
+		this.ctx.iam.require(principal, 'project:read', { type: 'org' });
 		return listAppTemplates();
 	}
 
 	get(principal: Principal, id: string): AppTemplateView {
-		requirePermission(principal, 'project:read');
+		this.ctx.iam.require(principal, 'project:read', { type: 'org' });
 		const template = getAppTemplate(id);
 		if (!template) throw new NotFoundError(`Template "${id}"`);
 		return template;
 	}
 
 	async instantiate(principal: Principal, id: string, values: Record<string, unknown>): Promise<TemplateResult> {
-		requirePermission(principal, 'project:create');
-		requirePermission(principal, 'project:update');
-		requirePermission(principal, 'deployment:create');
+		this.ctx.iam.require(principal, 'project:create', { type: 'org' });
+		this.ctx.iam.require(principal, 'project:update', { type: 'org' });
+		this.ctx.iam.require(principal, 'deployment:create', { type: 'org' });
 		const draft = this.build(id, values);
-		if (draft.secrets.length > 0) requirePermission(principal, 'secret:create');
+		if (draft.secrets.length > 0) this.ctx.iam.require(principal, 'secret:create', { type: 'org' });
 		const missing = draft.requiredSecrets.filter((name) => !this.ctx.secrets.getValue(principal.orgId, name));
 		if (missing.length > 0)
 			throw new ValidationError(

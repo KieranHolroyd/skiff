@@ -381,7 +381,7 @@ export class AlertService {
 	// --- access -------------------------------------------------------------------------------
 
 	#requireRead(principal: Principal): void {
-		if (!principal.permissions.has('metrics:read')) throw new CoreError('forbidden', 'Missing permission metrics:read', 403);
+		this.ctx.iam.require(principal, 'metrics:read', { type: 'org' });
 	}
 
 	/** Rules page people (and can reach the platform's SMS), so org owners and admins write them. */

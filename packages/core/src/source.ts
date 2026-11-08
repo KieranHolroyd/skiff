@@ -5,7 +5,6 @@ import {
   detectEnvNames,
   isEnvFileName,
   parseEnvFileNames,
-  requirePermission,
   type DetectedEnvName,
   type Principal,
 } from "@skiff/contracts";
@@ -198,7 +197,6 @@ export class SourceService {
     project: ProjectRow,
     idOrShort?: string,
   ): { row: typeof deployments.$inferSelect; release: ReleaseRow } {
-    requirePermission(principal, "deployment:read");
     let id: string | null | undefined = idOrShort;
     if (!id) id = this.defaultDeploymentId(project);
     if (!id) throw new NotFoundError("Deployment");
@@ -213,6 +211,11 @@ export class SourceService {
       )
       .get();
     if (!row || row.status === "deleted") throw new NotFoundError("Deployment");
+    this.ctx.iam.require(principal, "deployment:read", {
+      type: "deployment",
+      id: row.id,
+      projectId: project.id,
+    });
     const release = this.ctx.db
       .select()
       .from(releases)

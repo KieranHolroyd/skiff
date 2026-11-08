@@ -247,3 +247,20 @@ describe('production access', () => {
 		expect(core.email.accessRequest(owner)).toMatchObject({ id: pending.id, status: 'approved', perDay: 10_000, perSecond: 10 });
 	});
 });
+
+describe('resource-scoped access', () => {
+	test('a domain binding reads that domain only, not the org-wide email views', () => {
+		const domain = core.email.getDomain(owner, 'tenant.test');
+		opened.sqlite.run(
+			`INSERT INTO iam_bindings
+			   (id, org_id, principal_type, principal_id, role_id, scope_type, scope_id, created_by, created_at)
+			 VALUES ('bind_scope_sandbox', 'org_t', 'user', 'user_scope_sandbox', 'viewer', 'emailDomain', ?, 'test', 0)`,
+			[domain.id],
+		);
+		const guest = buildPrincipal({ kind: 'user', userId: 'user_scope_sandbox', orgId: 'org_t', role: 'viewer' });
+		expect(core.email.getDomain(guest, 'tenant.test').id).toBe(domain.id);
+		expect(() => core.email.listDomains(guest)).toThrow(/email:read/);
+		expect(() => core.email.listSandboxAddresses(guest)).toThrow(/email:read/);
+		expect(() => core.email.orgView(guest)).toThrow(/email:read/);
+	});
+});

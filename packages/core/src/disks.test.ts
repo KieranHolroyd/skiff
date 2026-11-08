@@ -196,8 +196,8 @@ describe('disks', () => {
 			`uuid:${DATA_UUID}`,
 			'mount:fs:lab-ssd',
 		]);
-		expect(() => core.disks.overview(member)).toThrow(/Platform admin/);
-		expect(() => core.disks.add(member, { node: 'homelab', candidate: 'mount:fs:lab-ssd' })).toThrow(/Platform admin/);
+		expect(() => core.disks.overview(member)).toThrow(/storage:read/);
+		expect(() => core.disks.add(member, { node: 'homelab', candidate: 'mount:fs:lab-ssd' })).toThrow(/storage:create/);
 	});
 
 	test('Use this disk registers a mounted filesystem at once, with a derived tier', () => {

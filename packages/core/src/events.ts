@@ -2,7 +2,6 @@ import {
 	eventRuleCreateSchema,
 	eventRuleUpdateSchema,
 	eventTypesBySource,
-	requirePermission,
 	type Principal,
 	type AgentEventAck,
 	type AgentEventLease,
@@ -113,7 +112,9 @@ export class EventService {
 	// ---------------------------------------------------------------- rules
 
 	list(principal: Principal): EventRuleView[] {
-		requirePermission(principal, 'broker:read');
+		// TODO(IAM I2): narrow this list with scopeFilter once it returns broker ids; it
+		// currently returns only project and environment ids.
+		this.ctx.iam.require(principal, 'broker:read', { type: 'org' });
 		const rows = this.ctx.sqlite
 			.query<RuleRow, [string]>('SELECT * FROM event_rules WHERE org_id = ? ORDER BY created_at')
 			.all(principal.orgId);
@@ -121,18 +122,19 @@ export class EventService {
 	}
 
 	get(principal: Principal, id: string): EventRuleView {
-		requirePermission(principal, 'broker:read');
-		return this.view(this.requireRule(principal, id));
+		const row = this.requireRule(principal, id);
+		this.ctx.iam.require(principal, 'broker:read', { type: 'broker', id: row.broker_id });
+		return this.view(row);
 	}
 
 	create(principal: Principal, raw: EventRuleCreate): EventRuleView {
 		const input = eventRuleCreateSchema.parse(raw);
-		requirePermission(principal, 'broker:update');
+		const broker = this.ctx.brokers.requireRow(principal, input.broker);
+		this.ctx.iam.require(principal, 'broker:update', { type: 'broker', id: broker.id });
 		const count = this.ctx.sqlite
 			.query<{ n: number }, [string]>('SELECT COUNT(*) AS n FROM event_rules WHERE org_id = ?')
 			.get(principal.orgId)?.n ?? 0;
 		if (count >= MAX_RULES_PER_ORG) throw new ConflictError(`An org can have at most ${MAX_RULES_PER_ORG} event rules.`);
-		const broker = this.ctx.brokers.requireRow(principal, input.broker);
 		const filter = this.resolveFilter(principal, input);
 		const now = this.ctx.now();
 		const row: RuleRow = {
@@ -172,8 +174,8 @@ export class EventService {
 
 	update(principal: Principal, id: string, raw: EventRuleUpdate): EventRuleView {
 		const patch = eventRuleUpdateSchema.parse(raw);
-		requirePermission(principal, 'broker:update');
 		const row = this.requireRule(principal, id);
+		this.ctx.iam.require(principal, 'broker:update', { type: 'broker', id: row.broker_id });
 		const next: RuleRow = { ...row, updated_at: this.ctx.now() };
 		if (patch.events !== undefined) {
 			const known: readonly string[] = eventTypesBySource[row.source];
@@ -205,8 +207,8 @@ export class EventService {
 	}
 
 	delete(principal: Principal, id: string): void {
-		requirePermission(principal, 'broker:update');
 		const row = this.requireRule(principal, id);
+		this.ctx.iam.require(principal, 'broker:update', { type: 'broker', id: row.broker_id });
 		this.ctx.audit.wrap(
 			{ principal, action: 'event-rule.delete', resource: 'event-rule', resourceId: id, args: { source: row.source } },
 			() => {
@@ -220,8 +222,8 @@ export class EventService {
 
 	/** Publish one synthetic event through the rule, so a consumer can be checked end to end. */
 	test(principal: Principal, id: string): EventDeliveryView {
-		requirePermission(principal, 'broker:update');
 		const row = this.requireRule(principal, id);
+		this.ctx.iam.require(principal, 'broker:update', { type: 'broker', id: row.broker_id });
 		const now = this.ctx.now();
 		const filter = parseJson<StoredFilter>(row.filter_json, {});
 		const type = `${row.source}.${this.ruleEvents(row)[0]}`;
@@ -242,8 +244,13 @@ export class EventService {
 	}
 
 	deliveries(principal: Principal, options: { ruleId?: string; status?: EventDeliveryStatus; limit?: number } = {}): EventDeliveryView[] {
-		requirePermission(principal, 'broker:read');
-		if (options.ruleId) this.requireRule(principal, options.ruleId);
+		if (options.ruleId) {
+			const rule = this.requireRule(principal, options.ruleId);
+			this.ctx.iam.require(principal, 'broker:read', { type: 'broker', id: rule.broker_id });
+		} else {
+			// TODO(IAM I2): narrow this list with scopeFilter once it returns broker ids.
+			this.ctx.iam.require(principal, 'broker:read', { type: 'org' });
+		}
 		const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
 		const where = ['org_id = ?'];
 		const params: Array<string | number> = [principal.orgId];
@@ -493,8 +500,8 @@ export class EventService {
 	private resolveFilter(principal: Principal, input: ReturnType<typeof eventRuleCreateSchema.parse>): StoredFilter {
 		switch (input.source as EventSource) {
 			case 'storage': {
-				requirePermission(principal, 'storage:read');
 				const storage = this.ctx.storage.requireRow(principal, input.storage!);
+				this.ctx.iam.require(principal, 'storage:read', { type: 'storage', id: storage.id });
 				const bucket = this.ctx.sqlite
 					.query<{ name: string }, [string, string]>('SELECT name FROM storage_buckets WHERE storage_id = ? AND name = ?')
 					.get(storage.id, input.bucket!);
@@ -508,7 +515,7 @@ export class EventService {
 				};
 			}
 			case 'alerts': {
-				requirePermission(principal, 'metrics:read');
+				this.ctx.iam.require(principal, 'metrics:read', { type: 'org' });
 				if (!input.alertRule) return {};
 				const rule = this.ctx.sqlite
 					.query<{ id: string }, [string, string]>('SELECT id FROM alert_rules WHERE id = ? AND org_id = ?')
@@ -517,19 +524,27 @@ export class EventService {
 				return { alertRule: rule.id };
 			}
 			case 'deployments': {
-				requirePermission(principal, 'deployment:read');
-				if (!input.project) return {};
+				if (!input.project) {
+					this.ctx.iam.require(principal, 'deployment:read', { type: 'org' });
+					return {};
+				}
 				const project = this.ctx.projects.requireRow(principal, input.project);
+				this.ctx.iam.require(principal, 'deployment:read', { type: 'project', id: project.id });
 				return { project: project.slug, projectId: project.id };
 			}
 			case 'database-backups': {
-				requirePermission(principal, 'database:read');
-				if (!input.database) return {};
+				if (!input.database) {
+					this.ctx.iam.require(principal, 'database:read', { type: 'org' });
+					return {};
+				}
 				const database = this.ctx.databases.requireRow(principal, input.database);
+				this.ctx.iam.require(principal, 'database:read', { type: 'database', id: database.id });
 				return { database: database.name, databaseId: database.id };
 			}
 			case 'registry': {
-				requirePermission(principal, 'image:pull');
+				// TODO(IAM I2): resolve a repository binding once `listRepositories` is scoped; a
+				// repository name is not yet an IAM resource id this module can check directly.
+				this.ctx.iam.require(principal, 'image:pull', { type: 'org' });
 				if (!input.repository) return {};
 				if (!this.ctx.registry.listRepositories(principal).some((repo) => repo.name === input.repository))
 					throw new NotFoundError(`Repository "${input.repository}"`);

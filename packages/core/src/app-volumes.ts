@@ -15,7 +15,6 @@ import {
 	appVolumeCreateSchema,
 	appVolumeDetachSchema,
 	appVolumeUpdateSchema,
-	requirePermission,
 	type AppVolumeAttachmentView,
 	type AppVolumeAttach,
 	type AppVolumeCreate,
@@ -125,7 +124,8 @@ export class AppVolumeService {
 		options: { includeDeleted?: boolean } = {},
 	): AppVolumeView[] {
 		this.assertEnabled();
-		requirePermission(principal, 'project:read');
+		// Already scoped to one loaded project, so this check is the list filter (IAM.md §6.3).
+		this.ctx.iam.require(principal, 'project:read', { type: 'project', id: project.id });
 		const filters = [eq(appVolumes.orgId, principal.orgId), eq(appVolumes.projectId, project.id)];
 		if (!options.includeDeleted) filters.push(isNull(appVolumes.deletedAt));
 		return this.ctx.db
@@ -144,7 +144,7 @@ export class AppVolumeService {
 		options: { includeDeleted?: boolean } = {},
 	): AppVolumeView {
 		this.assertEnabled();
-		requirePermission(principal, 'project:read');
+		this.ctx.iam.require(principal, 'project:read', { type: 'project', id: project.id });
 		return this.toView(this.requireRow(principal, project, name, options), project);
 	}
 
@@ -182,7 +182,7 @@ export class AppVolumeService {
 		options: { restoreFrom?: { snapshotId: string; sourceName: string; diskId: string | null } } = {},
 	): AppVolumeView {
 		this.assertEnabled();
-		requirePermission(principal, 'project:update');
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		if (project.runtime === 'static')
 			throw new ValidationError(
 				`Project "${project.slug}" is static. Create it with runtime "process" or "container" to use a volume.`,
@@ -288,7 +288,7 @@ export class AppVolumeService {
 
 	update(principal: Principal, project: ProjectRow, name: string, raw: AppVolumeUpdate): AppVolumeView {
 		this.assertEnabled();
-		requirePermission(principal, 'project:update');
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		const input = appVolumeUpdateSchema.parse(raw);
 		const row = this.requireRow(principal, project, name);
 		if (row.deletedAt) throw new ConflictError(`Volume "${name}" is in the trash.`);
@@ -342,7 +342,7 @@ export class AppVolumeService {
 	/** Soft delete. Refused while attached; the data stays until `purgeAt` (seven days). */
 	delete(principal: Principal, project: ProjectRow, name: string): { ok: true; purgeAt: string } {
 		this.assertEnabled();
-		requirePermission(principal, 'project:update');
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		const row = this.requireRow(principal, project, name);
 		if (row.restoreSnapshotId)
 			throw new ConflictError(`Volume "${name}" is being restored; wait for the restore to finish (or fail) before deleting it.`);
@@ -378,7 +378,7 @@ export class AppVolumeService {
 
 	attach(principal: Principal, project: ProjectRow, name: string, raw: AppVolumeAttach): AppVolumeView {
 		this.assertEnabled();
-		requirePermission(principal, 'project:update');
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		if (project.runtime === 'static')
 			throw new ValidationError(
 				`Project "${project.slug}" is static. Create it with runtime "process" or "container" to mount a volume.`,
@@ -478,7 +478,7 @@ export class AppVolumeService {
 
 	detach(principal: Principal, project: ProjectRow, name: string, raw: AppVolumeDetach): AppVolumeView {
 		this.assertEnabled();
-		requirePermission(principal, 'project:update');
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		const input = appVolumeDetachSchema.parse(raw);
 		const row = this.requireRow(principal, project, name, { includeDeleted: true });
 		const workload = this.resolveWorkload(project, input.workload);

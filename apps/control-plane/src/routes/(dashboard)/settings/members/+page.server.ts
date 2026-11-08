@@ -128,7 +128,8 @@ export const load: PageServerLoad = ({ locals }) => {
 		invitations,
 		ownerCount: list.filter((member) => member.role === 'owner').length,
 		loadError,
-		can,
+		// Not `can`: that would shadow the dashboard layout's `can`, which the settings sidebar reads.
+		memberCan: can,
 		actorRole: principal.role,
 		assignableRoles
 	};

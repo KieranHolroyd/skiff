@@ -15,7 +15,6 @@ import {
 	functionBindingSummary,
 	functionManifestSchema,
 	functionRuntimeSpecSchema,
-	requirePermission,
 	workloadSpecSchema,
 	type FunctionManifest,
 	type FunctionModule,
@@ -70,12 +69,12 @@ export class FunctionService {
 			// manifest. Reuse the project's existing function spec for compatibility, bindings and
 			// assets, and infer the modules from the uploaded files. A first deploy still needs the
 			// generated manifest because there is nothing to infer from.
-			requirePermission(principal, 'deployment:create');
+			this.ctx.iam.require(principal, 'deployment:create', { type: 'project', id: project.id });
 			if (!featureEnabled(this.ctx.config, 'FUNCTIONS'))
 				throw new ValidationError('Functions are not enabled on this platform (SKIFF_FEATURE_FUNCTIONS).');
 			return this.applyInferredBundle(principal, project, entries);
 		}
-		requirePermission(principal, 'deployment:create');
+		this.ctx.iam.require(principal, 'deployment:create', { type: 'project', id: project.id });
 		if (!featureEnabled(this.ctx.config, 'FUNCTIONS'))
 			throw new ValidationError('Functions are not enabled on this platform (SKIFF_FEATURE_FUNCTIONS).');
 
@@ -322,7 +321,7 @@ export class FunctionService {
 
 	/** The function view, or null when the project is not a function. */
 	view(principal: Principal, project: ProjectRow): FunctionView | null {
-		requirePermission(principal, 'deployment:read');
+		this.ctx.iam.require(principal, 'deployment:read', { type: 'project', id: project.id });
 		// The workload row is the active deployment's snapshot (promote/rollback re-points it), so
 		// read that first: the project-level spec is only what the *next* deploy would use (D17).
 		const workload = this.ctx.db
@@ -370,7 +369,7 @@ export class FunctionService {
 		project: ProjectRow,
 		query: Omit<FunctionInvocationQuery, 'projectId'>,
 	): Promise<{ available: boolean; rows: FunctionInvocationRow[] }> {
-		requirePermission(principal, 'logs:read');
+		this.ctx.iam.require(principal, 'logs:read', { type: 'project', id: project.id });
 		const telemetry = this.ctx.telemetry;
 		if (!telemetry || !(await telemetry.ready())) return { available: false, rows: [] };
 		return { available: true, rows: await telemetry.functionInvocations({ ...query, projectId: project.id }) };
@@ -382,7 +381,7 @@ export class FunctionService {
 		project: ProjectRow,
 		window: { from: TimeInput; to: TimeInput },
 	): Promise<{ available: boolean; summary: FunctionInvocationSummary }> {
-		requirePermission(principal, 'logs:read');
+		this.ctx.iam.require(principal, 'logs:read', { type: 'project', id: project.id });
 		const telemetry = this.ctx.telemetry;
 		const empty = { total: 0, byOutcome: {} };
 		if (!telemetry || !(await telemetry.ready())) return { available: false, summary: empty };

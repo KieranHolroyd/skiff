@@ -299,3 +299,37 @@ describe('workload upstreams', () => {
 		expect(upstreamFor('prj_1', processSpec)).toBe('unix//run/skiff-workloads/prj_1.sock');
 	});
 });
+
+describe('resource-scoped access', () => {
+	test('a project-scoped viewer reads only that project’s workload', async () => {
+		for (const slug of ['scoped-workload-visible', 'scoped-workload-hidden']) {
+			await core.projects.create(principal, {
+				name: slug,
+				slug,
+				runtime: 'process',
+				placement: 'auto',
+				productionAccess: 'public',
+				previewAccess: 'platform',
+			});
+		}
+		const visible = core.projects.requireRow(principal, 'scoped-workload-visible');
+		const hidden = core.projects.requireRow(principal, 'scoped-workload-hidden');
+		// Inserted directly so iamVersion stays 0 and the owner in the rest of this file keeps its
+		// legacy org-wide grants.
+		opened.sqlite.run(
+			`INSERT INTO iam_bindings
+			   (id, org_id, principal_type, principal_id, role_id, scope_type, scope_id, created_by, created_at)
+			 VALUES ('bind_guest_workloads', 'org_1', 'user', 'user_guest_workloads', 'viewer', 'project', ?, 'test', 0)`,
+			[visible.id],
+		);
+		const guest = buildPrincipal({
+			kind: 'user',
+			userId: 'user_guest_workloads',
+			orgId: 'org_1',
+			role: 'viewer',
+		});
+
+		expect(core.workloads.get(guest, visible)).toBeNull();
+		expect(() => core.workloads.get(guest, hidden)).toThrow(/deployment:read/);
+	});
+});

@@ -36,13 +36,13 @@
 
 	/** Owners can only be changed by owners, and the last owner stays an owner. */
 	function canChangeRole(member: (typeof data.members)[number]) {
-		if (!data.can.updateRole) return false;
+		if (!data.memberCan.updateRole) return false;
 		if (member.role === 'owner' && data.actorRole !== 'owner') return false;
 		return true;
 	}
 
 	function canRemove(member: (typeof data.members)[number]) {
-		if (!data.can.remove || member.self) return false;
+		if (!data.memberCan.remove || member.self) return false;
 		if (member.role === 'owner' && (data.actorRole !== 'owner' || data.ownerCount <= 1))
 			return false;
 		return true;
@@ -85,7 +85,7 @@
 
 <SettingsHeader id="members">
 	{#snippet actions()}
-		{#if data.can.invite}
+		{#if data.memberCan.invite}
 			<Button onclick={() => (inviteOpen = true)}><UserPlusIcon />Invite member</Button>
 		{/if}
 	{/snippet}
@@ -191,7 +191,7 @@
 		{/if}
 	</Card.Root>
 
-	{#if data.can.invite}
+	{#if data.memberCan.invite}
 		<Card.Root class="gap-0 py-0">
 			<Card.Header class="border-b py-4">
 				<Card.Title class="flex items-center gap-2">

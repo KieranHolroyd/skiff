@@ -28,7 +28,6 @@ import {
 	databaseReplicaWorkloadId,
 	isDatabaseReplicaWorkloadId,
 	orgNetworkName,
-	requirePermission,
 	type DatabaseFailoverStage,
 	type DatabaseFailoverView,
 	type DatabaseReplicaCreate,
@@ -88,16 +87,16 @@ export class DatabaseReplicaService {
 	// ---------------------------------------------------------------- surfaces
 
 	list(principal: Principal, databaseName: string): DatabaseReplicaView[] {
-		requirePermission(principal, 'database:read');
 		const database = this.ctx.databases.requireRow(principal, databaseName);
+		this.ctx.iam.require(principal, 'database:read', { type: 'database', id: database.id });
 		const nodesById = this.nodesById();
 		return this.rowsFor(database.id).map((row) => this.view(row, database, nodesById));
 	}
 
 	add(principal: Principal, databaseName: string, raw: DatabaseReplicaCreate): DatabaseReplicaView {
-		requirePermission(principal, 'database:update');
 		const input = databaseReplicaCreateSchema.parse(raw);
 		const database = this.ctx.databases.requireRow(principal, databaseName);
+		this.ctx.iam.require(principal, 'database:update', { type: 'database', id: database.id });
 		if (databaseCapabilities(database.engine).replication !== 'streaming' || database.engine !== 'postgres')
 			throw new ValidationError(
 				`${databaseEngineRegistry[database.engine].label} replicas are not available yet; only Postgres streaming replicas are.`,
@@ -180,8 +179,8 @@ export class DatabaseReplicaService {
 	 * promotion is waiting on cancels that promotion and puts the old primary back.
 	 */
 	remove(principal: Principal, databaseName: string, replicaId: string): DatabaseReplicaView {
-		requirePermission(principal, 'database:update');
 		const database = this.ctx.databases.requireRow(principal, databaseName, { includeDeleted: true });
+		this.ctx.iam.require(principal, 'database:update', { type: 'database', id: database.id });
 		const row = this.ctx.db
 			.select()
 			.from(databaseReplicas)
@@ -224,9 +223,9 @@ export class DatabaseReplicaService {
 		raw: DatabaseReplicaPromote,
 		options: { ifMatch?: number | null } = {},
 	): DatabaseFailoverView {
-		requirePermission(principal, 'database:update');
 		const input = databaseReplicaPromoteSchema.parse(raw);
 		const database = this.ctx.databases.requireRow(principal, databaseName);
+		this.ctx.iam.require(principal, 'database:update', { type: 'database', id: database.id });
 		if (options.ifMatch !== undefined && options.ifMatch !== null && options.ifMatch !== database.primaryGeneration)
 			throw new CoreError(
 				'precondition_failed',
@@ -269,8 +268,8 @@ export class DatabaseReplicaService {
 
 	/** Promotion history for one database, newest first. */
 	failovers(principal: Principal, databaseName: string): DatabaseFailoverView[] {
-		requirePermission(principal, 'database:read');
 		const database = this.ctx.databases.requireRow(principal, databaseName, { includeDeleted: true });
+		this.ctx.iam.require(principal, 'database:read', { type: 'database', id: database.id });
 		const nodesById = this.nodesById();
 		return this.ctx.db
 			.select()

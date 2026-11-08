@@ -1,7 +1,6 @@
 import { and, eq, isNull, or } from 'drizzle-orm';
 import { nodes, storageBuckets, storageInstances, storageReplication } from '@skiff/db';
 import {
-	requirePermission,
 	storageGatewayHost,
 	storageReplicationCreateSchema,
 	storageReplicationReportSchema,
@@ -49,8 +48,8 @@ export class StorageReplicationService {
 	// ---------------------------------------------------------------- surfaces
 
 	list(principal: Principal, storageName: string): StorageReplicationView[] {
-		requirePermission(principal, 'storage:read');
 		const instance = this.ctx.storage.requireRow(principal, storageName, { includeDeleted: true });
+		this.ctx.iam.require(principal, 'storage:read', { type: 'storage', id: instance.id });
 		return this.ctx.db
 			.select()
 			.from(storageReplication)
@@ -60,9 +59,9 @@ export class StorageReplicationService {
 	}
 
 	add(principal: Principal, storageName: string, raw: StorageReplicationCreate): StorageReplicationView {
-		requirePermission(principal, 'storage:update');
 		const input = storageReplicationCreateSchema.parse(raw);
 		const source = this.ctx.storage.requireRow(principal, storageName);
+		this.ctx.iam.require(principal, 'storage:update', { type: 'storage', id: source.id });
 		const target = this.ctx.storage.requireRow(principal, input.target);
 		if (source.id === target.id) throw new ValidationError('Choose a different target instance.');
 		if (source.nodeId === target.nodeId)
@@ -130,8 +129,8 @@ export class StorageReplicationService {
 	}
 
 	remove(principal: Principal, storageName: string, replicationId: string): { ok: true } {
-		requirePermission(principal, 'storage:update');
 		const source = this.ctx.storage.requireRow(principal, storageName, { includeDeleted: true });
+		this.ctx.iam.require(principal, 'storage:update', { type: 'storage', id: source.id });
 		const row = this.ctx.db
 			.select()
 			.from(storageReplication)

@@ -14,7 +14,6 @@ import {
 	registryImageTag,
 	registryOidcTrustCreateSchema,
 	registrySettingsUpdateSchema,
-	requirePermission,
 	workloadSpecSchema,
 	type Permission,
 	type Principal,
@@ -165,7 +164,7 @@ export class RegistryService {
 	}
 
 	view(principal: Principal): RegistryView {
-		requirePermission(principal, 'image:pull');
+		this.ctx.iam.require(principal, 'image:pull', { type: 'org' });
 		const config = this.config();
 		const node = config.nodeId
 			? this.ctx.db.select({ id: nodes.id, name: nodes.name }).from(nodes).where(eq(nodes.id, config.nodeId)).get()
@@ -408,8 +407,8 @@ export class RegistryService {
 
 	/** G5: vulnerability summary (and the most severe CVEs) of one image, from zot's Trivy scan. */
 	async vulnerabilities(principal: Principal, repository: string, reference: string) {
-		requirePermission(principal, 'image:pull');
-		this.requireRepository(principal, repository);
+		const row = this.requireRepository(principal, repository);
+		this.ctx.iam.require(principal, 'image:pull', { type: 'repository', id: row.id });
 		if (!this.config().cveScanning) throw new ValidationError('CVE scanning is off; a platform admin turns it on in Settings → Container registries.');
 		if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$|^sha256:[a-f0-9]{64}$/.test(reference)) throw new ValidationError('Name a tag or a sha256 digest.');
 		const image = reference.startsWith('sha256:') ? `${repository}@${reference}` : `${repository}:${reference}`;
@@ -678,7 +677,7 @@ export class RegistryService {
 	}
 
 	listOidcTrusts(principal: Principal): RegistryOidcTrustView[] {
-		requirePermission(principal, 'image:pull');
+		this.ctx.iam.require(principal, 'image:pull', { type: 'org' });
 		return this.ctx.db
 			.select()
 			.from(registryOidcTrusts)
@@ -697,9 +696,9 @@ export class RegistryService {
 
 	/** Let a GitHub repository's workflows use one repository (or `<org>/*`) with its OIDC token. */
 	createOidcTrust(principal: Principal, raw: RegistryOidcTrustCreate): RegistryOidcTrustView {
-		requirePermission(principal, 'image:credentials');
+		this.ctx.iam.require(principal, 'image:credentials', { type: 'org' });
 		const input = registryOidcTrustCreateSchema.parse(raw);
-		if (input.push) requirePermission(principal, 'image:push');
+		if (input.push) this.ctx.iam.require(principal, 'image:push', { type: 'org' });
 		const slug = this.orgSlug(principal.orgId);
 		const [owner, ...rest] = input.repository.split('/');
 		if (!slug || owner !== slug || rest.length === 0)
@@ -730,7 +729,7 @@ export class RegistryService {
 	}
 
 	deleteOidcTrust(principal: Principal, id: string): void {
-		requirePermission(principal, 'image:credentials');
+		this.ctx.iam.require(principal, 'image:credentials', { type: 'org' });
 		const row = this.ctx.db.select().from(registryOidcTrusts).where(eq(registryOidcTrusts.id, id)).get();
 		if (!row || row.orgId !== principal.orgId) throw new NotFoundError('Trust');
 		this.ctx.db.delete(registryOidcTrusts).where(eq(registryOidcTrusts.id, id)).run();
@@ -914,9 +913,8 @@ export class RegistryService {
 
 	/** Link a repository tag to a project so every push of it deploys there; `project: null` unlinks. */
 	setAutoDeploy(principal: Principal, name: string, input: { project: string | null; tag?: string }): RegistryRepositoryView {
-		requirePermission(principal, 'image:push');
-		requirePermission(principal, 'deployment:create');
 		const row = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'image:push', { type: 'repository', id: row.id });
 		let projectId: string | null = null;
 		let tag: string | null = null;
 		if (input.project) {
@@ -926,12 +924,15 @@ export class RegistryService {
 				.where(and(eq(projects.orgId, principal.orgId), eq(projects.slug, input.project)))
 				.get();
 			if (!project || project.deletedAt) throw new NotFoundError('Project');
+			this.ctx.iam.require(principal, 'deployment:create', { type: 'project', id: project.id });
 			if (project.runtime !== 'container')
 				throw new ValidationError(`"${project.slug}" is not a container project; only containers deploy an image.`);
 			tag = (input.tag ?? 'latest').trim();
 			if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(tag) || tag.startsWith(REGISTRY_PIN_TAG_PREFIX))
 				throw new ValidationError(`"${tag}" is not a tag Skiff can deploy on push.`);
 			projectId = project.id;
+		} else {
+			this.ctx.iam.require(principal, 'deployment:create', { type: 'org' });
 		}
 		this.ctx.db
 			.update(registryRepositories)
@@ -946,7 +947,7 @@ export class RegistryService {
 			args: { project: input.project, tag },
 			result: 'ok',
 		});
-		return this.listRepositories(principal).find((repo) => repo.name === name)!;
+		return this.repositoryView(this.requireRepository(principal, name), this.projectSlugs(principal.orgId));
 	}
 
 	// ------------------------------------------------------------------- usage and quota
@@ -1092,47 +1093,60 @@ export class RegistryService {
 	// -------------------------------------------------------------------------- repositories
 
 	listRepositories(principal: Principal): RegistryRepositoryView[] {
-		requirePermission(principal, 'image:pull');
-		const projectSlugs = new Map(
-			this.ctx.db
-				.select({ id: projects.id, slug: projects.slug })
-				.from(projects)
-				.where(eq(projects.orgId, principal.orgId))
-				.all()
-				.map((row) => [row.id, row.slug]),
-		);
+		// TODO(IAM I2): narrow this list once registry repositories can be selected for a
+		// resource-scoped principal; `scopeFilter` only returns project/environment ids.
+		this.ctx.iam.require(principal, 'image:pull', { type: 'org' });
+		const projectSlugs = this.projectSlugs(principal.orgId);
 		return this.ctx.db
 			.select()
 			.from(registryRepositories)
 			.where(eq(registryRepositories.orgId, principal.orgId))
 			.all()
 			.sort((a, b) => a.name.localeCompare(b.name))
-			.map((row) => ({
-				name: row.name,
-				projectSlug: row.projectId ? (projectSlugs.get(row.projectId) ?? null) : null,
-				pushes: row.pushes,
-				lastTag: row.lastTag,
-				lastDigest: row.lastDigest,
-				lastPushAt: row.lastPushAt,
-				createdAt: row.createdAt,
-				bytes: row.bytes,
-				deploy: row.deployProjectId
-					? { project: projectSlugs.get(row.deployProjectId) ?? null, tag: row.deployTag ?? 'latest' }
-					: null,
-			}));
+			.map((row) => this.repositoryView(row, projectSlugs));
+	}
+
+	private projectSlugs(orgId: string): Map<string, string> {
+		return new Map(
+			this.ctx.db
+				.select({ id: projects.id, slug: projects.slug })
+				.from(projects)
+				.where(eq(projects.orgId, orgId))
+				.all()
+				.map((row) => [row.id, row.slug]),
+		);
+	}
+
+	private repositoryView(
+		row: typeof registryRepositories.$inferSelect,
+		projectSlugs: Map<string, string>,
+	): RegistryRepositoryView {
+		return {
+			name: row.name,
+			projectSlug: row.projectId ? (projectSlugs.get(row.projectId) ?? null) : null,
+			pushes: row.pushes,
+			lastTag: row.lastTag,
+			lastDigest: row.lastDigest,
+			lastPushAt: row.lastPushAt,
+			createdAt: row.createdAt,
+			bytes: row.bytes,
+			deploy: row.deployProjectId
+				? { project: projectSlugs.get(row.deployProjectId) ?? null, tag: row.deployTag ?? 'latest' }
+				: null,
+		};
 	}
 
 	/** One repository of the principal's org. */
 	repository(principal: Principal, name: string): RegistryRepositoryView {
-		requirePermission(principal, 'image:pull');
-		this.requireRepository(principal, name);
-		return this.listRepositories(principal).find((repo) => repo.name === name)!;
+		const row = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'image:pull', { type: 'repository', id: row.id });
+		return this.repositoryView(row, this.projectSlugs(principal.orgId));
 	}
 
 	/** Deployments that pin a digest of this repository, newest first. */
 	pins(principal: Principal, name: string): RegistryPinView[] {
-		requirePermission(principal, 'image:pull');
-		this.requireRepository(principal, name);
+		const row = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'image:pull', { type: 'repository', id: row.id });
 		return this.ctx.db
 			.select({ pin: registryPins, deployment: deployments, project: projects })
 			.from(registryPins)
@@ -1154,7 +1168,7 @@ export class RegistryService {
 
 	/** The org's sampled registry storage against its quota. */
 	usage(principal: Principal): RegistryUsageView {
-		requirePermission(principal, 'image:pull');
+		this.ctx.iam.require(principal, 'image:pull', { type: 'org' });
 		const limit = this.ctx.quota.effective(principal.orgId).registryBytes;
 		return { usedBytes: this.usedBytes(principal.orgId), limitBytes: limit < 0 ? null : limit };
 	}
@@ -1175,8 +1189,8 @@ export class RegistryService {
 
 	/** Tags of one repository, read from zot; deployment pins are hidden. */
 	async tags(principal: Principal, name: string): Promise<RegistryTagView[]> {
-		requirePermission(principal, 'image:pull');
-		this.requireRepository(principal, name);
+		const row = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'image:pull', { type: 'repository', id: row.id });
 		const token = this.internalToken(name);
 		const response = await this.transport()(this.registryUrl(`/v2/${name}/tags/list`), {
 			headers: { Authorization: `Bearer ${token}` },
@@ -1193,8 +1207,8 @@ export class RegistryService {
 
 	/** Delete one tag (the manifest goes once nothing else points at it; GC frees the blobs). */
 	async deleteTag(principal: Principal, name: string, tag: string): Promise<void> {
-		requirePermission(principal, 'image:delete');
-		this.requireRepository(principal, name);
+		const row = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'image:delete', { type: 'repository', id: row.id });
 		if (tag.startsWith(REGISTRY_PIN_TAG_PREFIX)) throw new ValidationError('Deployment pins are managed by Skiff.');
 		const response = await this.transport()(this.registryUrl(`/v2/${name}/manifests/${encodeURIComponent(tag)}`), {
 			method: 'DELETE',

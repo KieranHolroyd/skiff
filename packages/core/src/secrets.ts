@@ -1,6 +1,6 @@
 import { and, eq, isNull, or, sql } from 'drizzle-orm';
 import { orgKeys, projects, secrets } from '@skiff/db';
-import { requirePermission, type Principal } from '@skiff/contracts';
+import type { Principal } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import { NotFoundError, ValidationError } from './errors.ts';
 import { decrypt, encrypt, newId, randomBytes } from './util.ts';
@@ -120,7 +120,11 @@ export class SecretService {
 	 */
 	requireWrite(principal: Principal, input: { name: string; projectId?: string | null }): { version: number } | null {
 		const latest = this.latest(principal.orgId, input.projectId ?? null, input.name);
-		requirePermission(principal, latest ? 'secret:update' : 'secret:create');
+		this.ctx.iam.require(
+			principal,
+			latest ? 'secret:update' : 'secret:create',
+			input.projectId ? { type: 'project', id: input.projectId } : { type: 'org' },
+		);
 		return latest;
 	}
 
@@ -129,7 +133,14 @@ export class SecretService {
 	 * project's workload can reference: the organisation's secrets plus that project's own.
 	 */
 	list(principal: Principal, options: { projectId?: string | null; visibleTo?: string } = {}): SecretView[] {
-		requirePermission(principal, 'secret:read-metadata');
+		// TODO(I2): an org-wide listing should apply `iam.scopeFilter('secret:read-metadata')` so a
+		// guest sees only their projects' secrets; today it asks for the org-wide read.
+		const scoped = options.visibleTo ?? options.projectId ?? null;
+		this.ctx.iam.require(
+			principal,
+			'secret:read-metadata',
+			scoped ? { type: 'project', id: scoped } : { type: 'org' },
+		);
 		const filters = [eq(secrets.orgId, principal.orgId), isNull(secrets.deletedAt)];
 		if (options.projectId !== undefined) {
 			filters.push(options.projectId === null ? isNull(secrets.projectId) : eq(secrets.projectId, options.projectId));
@@ -160,13 +171,17 @@ export class SecretService {
 	}
 
 	async delete(principal: Principal, id: string): Promise<void> {
-		requirePermission(principal, 'secret:delete');
 		const row = this.ctx.db
 			.select()
 			.from(secrets)
 			.where(and(eq(secrets.id, id), eq(secrets.orgId, principal.orgId)))
 			.get();
 		if (!row) throw new NotFoundError('Secret');
+		this.ctx.iam.require(
+			principal,
+			'secret:delete',
+			row.projectId ? { type: 'project', id: row.projectId } : { type: 'org' },
+		);
 		this.ctx.db.update(secrets).set({ deletedAt: this.ctx.now() }).where(eq(secrets.id, id)).run();
 		this.ctx.audit.record({
 			principal,

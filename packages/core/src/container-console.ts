@@ -7,7 +7,6 @@ import {
 	CONTAINER_CONSOLE_TOKEN_TTL_MS,
 	containerConsoleHost,
 	parseWorkloadReplicaId,
-	requirePermission,
 	workloadReplicaId,
 	workloadSpecSchema,
 	type ContainerConsoleActivation,
@@ -74,8 +73,8 @@ export class ContainerConsoleService {
 
 	/** The containers a project runs, one per replica, with the node each one is on. */
 	targets(principal: Principal, slug: string): ContainerTarget[] {
-		requirePermission(principal, 'container:inspect');
 		const project = this.ctx.projects.requireRow(principal, slug);
+		this.ctx.iam.require(principal, 'container:inspect', { type: 'project', id: project.id });
 		return this.targetsOf(project);
 	}
 
@@ -90,14 +89,14 @@ export class ContainerConsoleService {
 		replica: number | null = null,
 	): ContainerConsoleEndpoint {
 		this.requireEnabled();
-		requirePermission(principal, SCOPE_PERMISSION[scope]);
+		const project = this.ctx.projects.requireRow(principal, slug);
+		this.ctx.iam.require(principal, SCOPE_PERMISSION[scope], { type: 'project', id: project.id });
 		if (!scopeAllowed(principal, scope))
 			throw new CoreError(
 				'forbidden',
 				'MCP clients cannot open container shells. Use the dashboard or `skif container shell`.',
 				403,
 			);
-		const project = this.ctx.projects.requireRow(principal, slug);
 		const targets = this.targetsOf(project);
 		if (targets.length === 0) throw new ConflictError('This project has no running container yet. Deploy it first.');
 		const target = replica === null ? targets[0]! : targets.find((item) => item.replica === replica);
@@ -214,8 +213,8 @@ export class ContainerConsoleService {
 	 * unit and systemd restarts it. Idempotent per request; needs `project:update`.
 	 */
 	restart(principal: Principal, slug: string): { generation: number } {
-		requirePermission(principal, 'project:update');
 		const project = this.ctx.projects.requireRow(principal, slug);
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		if (effectiveRuntime(project) !== 'container')
 			throw new ConflictError('Only container projects can be restarted from the console.');
 		const row = this.ctx.db.select().from(workloads).where(eq(workloads.projectId, project.id)).get();

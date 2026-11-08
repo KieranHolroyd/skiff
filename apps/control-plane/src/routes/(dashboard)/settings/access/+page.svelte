@@ -264,7 +264,7 @@
 		flush
 	>
 		{#snippet actions()}
-			{#if data.can.manageRoles}
+			{#if data.accessCan.manageRoles}
 				<Button size="sm" onclick={() => (createRoleOpen = true)}><PlusIcon />Create role</Button>
 			{/if}
 		{/snippet}
@@ -288,7 +288,7 @@
 								{role.description || 'No description.'}
 							</p>
 						</div>
-						{#if !role.builtIn && data.can.manageRoles}
+						{#if !role.builtIn && data.accessCan.manageRoles}
 							<Button
 								size="icon-sm"
 								variant="ghost"
@@ -330,7 +330,7 @@
 		flush
 	>
 		{#snippet actions()}
-			{#if data.can.manageBindings}
+			{#if data.accessCan.manageBindings}
 				<Button size="sm" onclick={openBinding}><PlusIcon />Add binding</Button>
 			{/if}
 		{/snippet}
@@ -343,7 +343,7 @@
 					title="No bindings yet"
 					description="Members get their base role as an organisation binding automatically. Add a binding to grant a role to a person, group or service account at a project, environment or the whole organisation."
 				>
-					{#if data.can.manageBindings}
+					{#if data.accessCan.manageBindings}
 						<Button size="sm" onclick={openBinding}><PlusIcon />Add a binding</Button>
 					{/if}
 				</EmptyState>
@@ -406,7 +406,7 @@
 								</p>
 							</Table.Cell>
 							<Table.Cell class="pr-4">
-								{#if data.can.manageBindings}
+								{#if data.accessCan.manageBindings}
 									<RowMenu label="Actions for the {principalName(binding)} binding">
 										<DropdownMenu.Item
 											variant="destructive"
@@ -439,7 +439,7 @@
 		flush
 	>
 		{#snippet actions()}
-			{#if data.can.manageGroups}
+			{#if data.accessCan.manageGroups}
 				<Button size="sm" onclick={() => (createGroupOpen = true)}><PlusIcon />Create group</Button>
 			{/if}
 		{/snippet}
@@ -452,7 +452,7 @@
 					title="No groups yet"
 					description="Create a group, add members, then bind a role to the group. SCIM and SSO can also sync groups from your identity provider."
 				>
-					{#if data.can.manageGroups}
+					{#if data.accessCan.manageGroups}
 						<Button size="sm" onclick={() => (createGroupOpen = true)}
 							><PlusIcon />Create a group</Button
 						>
@@ -495,7 +495,7 @@
 											class="inline-flex items-center gap-1 rounded-4xl border bg-muted/40 py-0.5 pr-1 pl-2 text-xs"
 										>
 											<span>{member.name}</span>
-											{#if data.can.manageGroups && group.source === 'local'}
+											{#if data.accessCan.manageGroups && group.source === 'local'}
 												<Button
 													size="icon-xs"
 													variant="ghost"
@@ -511,7 +511,7 @@
 							</ul>
 						{/if}
 
-						{#if data.can.manageGroups && group.source === 'local'}
+						{#if data.accessCan.manageGroups && group.source === 'local'}
 							{#if available.length > 0}
 								<form
 									method="POST"
@@ -725,7 +725,7 @@
 	</Panel>
 </div>
 
-{#if data.can.manageRoles}
+{#if data.accessCan.manageRoles}
 	<FormDialog
 		bind:open={createRoleOpen}
 		icon={ShieldCheckIcon}
@@ -791,7 +791,7 @@
 	</FormDialog>
 {/if}
 
-{#if data.can.manageBindings}
+{#if data.accessCan.manageBindings}
 	<FormDialog
 		bind:open={bindingOpen}
 		icon={UserRoundIcon}
@@ -947,7 +947,7 @@
 	</FormDialog>
 {/if}
 
-{#if data.can.manageGroups}
+{#if data.accessCan.manageGroups}
 	<FormDialog
 		bind:open={createGroupOpen}
 		icon={UsersIcon}

@@ -52,7 +52,6 @@ import {
 	normalizeAddress,
 	parseAddress,
 	recipientAddress,
-	requirePermission,
 	spfInclude,
 	spfIncludes,
 	suggestedDmarc,
@@ -445,7 +444,7 @@ export class EmailService {
 	}
 
 	orgView(principal: Principal): EmailOrgView {
-		requirePermission(principal, 'email:read');
+		this.ctx.iam.require(principal, 'email:read', { type: 'org' });
 		const row = this.peekOrg(principal.orgId, principal);
 		const reputation = this.reputation(principal.orgId);
 		return {
@@ -598,7 +597,9 @@ export class EmailService {
 	}
 
 	listDomains(principal: Principal): EmailDomainView[] {
-		requirePermission(principal, 'email:read');
+		// TODO(IAM I2): narrow this list with scopeFilter once it returns emailDomain ids; it
+		// currently returns only project and environment ids.
+		this.ctx.iam.require(principal, 'email:read', { type: 'org' });
 		return this.ctx.db
 			.select()
 			.from(emailDomains)
@@ -609,12 +610,13 @@ export class EmailService {
 	}
 
 	getDomain(principal: Principal, name: string): EmailDomainView {
-		requirePermission(principal, 'email:read');
-		return this.toDomainView(this.domainRow(principal, name));
+		const row = this.domainRow(principal, name);
+		this.ctx.iam.require(principal, 'email:read', { type: 'emailDomain', id: row.id });
+		return this.toDomainView(row);
 	}
 
 	async createDomain(principal: Principal, raw: EmailDomainCreate): Promise<EmailDomainView> {
-		requirePermission(principal, 'email:update');
+		this.ctx.iam.require(principal, 'email:update', { type: 'org' });
 		this.requireFeature();
 		const input = emailDomainCreateSchema.parse(raw);
 		if (input.name === this.mailDomain() || input.name.endsWith(`.${this.hostnames().bounce}`) || input.name === this.hostnames().bounce)
@@ -698,8 +700,8 @@ export class EmailService {
 	 * quiet publish in `checkDomain`, Cloudflare errors reach the caller.
 	 */
 	async publishDomain(principal: Principal, name: string): Promise<{ domain: EmailDomainView; written: string[] }> {
-		requirePermission(principal, 'email:update');
 		const row = this.domainRow(principal, name);
+		this.ctx.iam.require(principal, 'email:update', { type: 'emailDomain', id: row.id });
 		if (!this.inZone(row.name))
 			throw new ValidationError(`${row.name} isn't in the Cloudflare zone Skiff manages; add its records at your DNS host.`);
 		const written = await this.publishDomainRecords(row);
@@ -785,17 +787,17 @@ export class EmailService {
 
 	/** Re-check public DNS, and publish missing records through Cloudflare: a write. */
 	async checkDomain(principal: Principal, name: string): Promise<EmailDomainView> {
-		requirePermission(principal, 'email:update');
 		const row = this.domainRow(principal, name);
+		this.ctx.iam.require(principal, 'email:update', { type: 'emailDomain', id: row.id });
 		if (row.status !== 'verified') await this.publishDomainRecords(row).catch(() => undefined);
 		return this.toDomainView(await this.runCheck(this.domainRow(principal, name)));
 	}
 
 	updateDomain(principal: Principal, name: string, raw: unknown): EmailDomainView {
-		requirePermission(principal, 'email:update');
+		const row = this.domainRow(principal, name);
+		this.ctx.iam.require(principal, 'email:update', { type: 'emailDomain', id: row.id });
 		const input = emailDomainUpdateSchema.parse(raw);
 		if (input.receiving) throw new ValidationError('Receiving mail arrives in a later release.');
-		const row = this.domainRow(principal, name);
 		this.ctx.db
 			.update(emailDomains)
 			.set({ sending: input.sending ?? row.sending, updatedAt: this.ctx.now() })
@@ -807,8 +809,8 @@ export class EmailService {
 	}
 
 	async deleteDomain(principal: Principal, name: string): Promise<void> {
-		requirePermission(principal, 'email:delete');
 		const row = this.domainRow(principal, name);
+		this.ctx.iam.require(principal, 'email:delete', { type: 'emailDomain', id: row.id });
 		const managed = parseJson<Record<string, string>>(row.managedJson, {});
 		if (this.cloudflare) for (const id of Object.values(managed)) await this.cloudflare.deleteRecord(id).catch(() => undefined);
 		this.ctx.db.delete(emailDomains).where(eq(emailDomains.id, row.id)).run();
@@ -844,11 +846,14 @@ export class EmailService {
 	}
 
 	listCredentials(principal: Principal): EmailCredentialView[] {
-		requirePermission(principal, 'email:read');
+		const scope = this.ctx.iam.scopeFilter(principal, 'email:read');
+		if (scope !== 'all' && scope.size === 0) return [];
+		const filters = [eq(emailCredentials.orgId, principal.orgId), isNull(emailCredentials.revokedAt)];
+		if (scope !== 'all') filters.push(inArray(emailCredentials.projectId, [...scope]));
 		return this.ctx.db
 			.select()
 			.from(emailCredentials)
-			.where(and(eq(emailCredentials.orgId, principal.orgId), isNull(emailCredentials.revokedAt)))
+			.where(and(...filters))
 			.all()
 			.map((row) => this.credentialView(row));
 	}
@@ -881,12 +886,16 @@ export class EmailService {
 	}
 
 	createCredential(principal: Principal, raw: unknown): EmailCredentialSecret {
-		requirePermission(principal, 'email:credentials');
 		this.requireFeature();
-		// The password is shown once, so creating one is a reveal (D58): an interactive person only.
-		if (principal.kind !== 'user') throw new CoreError('forbidden', 'Email credentials are created by a person in the dashboard or CLI session, not an API key or agent (D58).', 403);
 		const input = emailCredentialCreateSchema.parse(raw);
 		const project = input.project ? this.ctx.projects.requireRow(principal, input.project) : null;
+		this.ctx.iam.require(
+			principal,
+			'email:credentials',
+			project ? { type: 'project', id: project.id } : { type: 'org' },
+		);
+		// The password is shown once, so creating one is a reveal (D58): an interactive person only.
+		if (principal.kind !== 'user') throw new CoreError('forbidden', 'Email credentials are created by a person in the dashboard or CLI session, not an API key or agent (D58).', 403);
 		const { row, password } = this.insertCredential(principal, {
 			name: input.name,
 			projectId: project?.id ?? null,
@@ -898,13 +907,17 @@ export class EmailService {
 	}
 
 	revokeCredential(principal: Principal, id: string): void {
-		requirePermission(principal, 'email:credentials');
 		const row = this.ctx.db
 			.select()
 			.from(emailCredentials)
 			.where(and(eq(emailCredentials.id, id), eq(emailCredentials.orgId, principal.orgId), isNull(emailCredentials.revokedAt)))
 			.get();
 		if (!row) throw new NotFoundError(`Credential ${id} not found.`);
+		this.ctx.iam.require(
+			principal,
+			'email:credentials',
+			row.projectId ? { type: 'project', id: row.projectId } : { type: 'org' },
+		);
 		this.ctx.db.update(emailCredentials).set({ revokedAt: this.ctx.now() }).where(eq(emailCredentials.id, id)).run();
 		this.bumpMail();
 		this.ctx.audit.record({ principal, action: 'email.credential.revoke', resource: 'email', resourceId: id, args: {}, result: 'ok' });
@@ -913,8 +926,8 @@ export class EmailService {
 
 	/** Give a project SMTP credentials as `<PREFIX>_*` env at activation (EMAIL.md §5.4). */
 	attach(principal: Principal, project: ProjectRow, input: { envPrefix?: string } = {}): { envPrefix: string; envNames: string[] } {
-		requirePermission(principal, 'email:update');
-		requirePermission(principal, 'project:update');
+		this.ctx.iam.require(principal, 'email:update', { type: 'project', id: project.id });
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		this.requireFeature();
 		const envPrefix = brokerEnvPrefixSchema.parse(input.envPrefix ?? DEFAULT_ENV_PREFIX);
 		const existing = this.ctx.db
@@ -930,8 +943,8 @@ export class EmailService {
 	}
 
 	detach(principal: Principal, project: ProjectRow, envPrefix = DEFAULT_ENV_PREFIX): void {
-		requirePermission(principal, 'email:update');
-		requirePermission(principal, 'project:update');
+		this.ctx.iam.require(principal, 'email:update', { type: 'project', id: project.id });
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		const row = this.ctx.db
 			.select()
 			.from(emailCredentials)
@@ -1058,7 +1071,11 @@ export class EmailService {
 		raw: EmailSendInput,
 		options: { projectId?: string | null; source?: 'api' | 'binding' } = {},
 	): Promise<EmailSendResult> {
-		requirePermission(principal, 'email:send');
+		this.ctx.iam.require(
+			principal,
+			'email:send',
+			options.projectId ? { type: 'project', id: options.projectId } : { type: 'org' },
+		);
 		this.requireFeature();
 		if (!this.settings().nodeId)
 			throw new CoreError('email_not_set_up', 'Email is not set up on this platform yet: a platform admin has to choose a mail node in Settings → Email.', 409);
@@ -1183,9 +1200,11 @@ export class EmailService {
 	}
 
 	listMessages(principal: Principal, options: { limit?: number; before?: string; recipient?: string; status?: string } = {}): EmailMessageView[] {
-		requirePermission(principal, 'email:read');
+		const scope = this.ctx.iam.scopeFilter(principal, 'email:read');
+		if (scope !== 'all' && scope.size === 0) return [];
 		const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
 		const filters = [eq(emailMessages.orgId, principal.orgId)];
+		if (scope !== 'all') filters.push(inArray(emailMessages.projectId, [...scope]));
 		if (options.before) {
 			const before = Date.parse(options.before);
 			if (Number.isFinite(before)) filters.push(lt(emailMessages.createdAt, before));
@@ -1212,16 +1231,20 @@ export class EmailService {
 	}
 
 	getMessage(principal: Principal, id: string): EmailMessageView {
-		requirePermission(principal, 'email:read');
 		const row = this.ctx.db.select().from(emailMessages).where(and(eq(emailMessages.id, id), eq(emailMessages.orgId, principal.orgId))).get();
 		if (!row) throw new NotFoundError(`Message ${id} not found.`);
+		this.ctx.iam.require(
+			principal,
+			'email:read',
+			row.projectId ? { type: 'project', id: row.projectId } : { type: 'org' },
+		);
 		return this.messageView(row);
 	}
 
 	// ------------------------------------------------------------------ suppressions
 
 	listSuppressions(principal: Principal, options: { limit?: number; address?: string } = {}): EmailSuppressionView[] {
-		requirePermission(principal, 'email:read');
+		this.ctx.iam.require(principal, 'email:read', { type: 'org' });
 		const filters = [eq(emailSuppressions.orgId, principal.orgId)];
 		if (options.address) filters.push(eq(emailSuppressions.address, normalizeAddress(options.address)));
 		return this.ctx.db
@@ -1243,7 +1266,7 @@ export class EmailService {
 	}
 
 	addSuppression(principal: Principal, raw: unknown): EmailSuppressionView {
-		requirePermission(principal, 'email:update');
+		this.ctx.iam.require(principal, 'email:update', { type: 'org' });
 		const input = emailSuppressionCreateSchema.parse(raw);
 		this.suppress(principal.orgId, input.address, input.reason, null);
 		this.bumpMail();
@@ -1252,7 +1275,7 @@ export class EmailService {
 	}
 
 	removeSuppression(principal: Principal, address: string): void {
-		requirePermission(principal, 'email:update');
+		this.ctx.iam.require(principal, 'email:update', { type: 'org' });
 		const result = this.ctx.sqlite.run('DELETE FROM email_suppressions WHERE org_id = ? AND address = ?', [
 			principal.orgId,
 			normalizeAddress(address),
@@ -1311,7 +1334,7 @@ export class EmailService {
 	}
 
 	listSandboxAddresses(principal: Principal): EmailSandboxAddressView[] {
-		requirePermission(principal, 'email:read');
+		this.ctx.iam.require(principal, 'email:read', { type: 'org' });
 		return this.ctx.db
 			.select()
 			.from(emailAddresses)
@@ -1326,7 +1349,7 @@ export class EmailService {
 	 * still pending. A verified address is returned as it is. The link replaces any earlier one.
 	 */
 	async addSandboxAddress(principal: Principal, raw: unknown): Promise<EmailSandboxAddressView> {
-		requirePermission(principal, 'email:update');
+		this.ctx.iam.require(principal, 'email:update', { type: 'org' });
 		this.requireFeature();
 		const { address: parsed } = emailSandboxAddressCreateSchema.parse(raw);
 		const address = normalizeAddress(parsed);
@@ -1443,7 +1466,7 @@ export class EmailService {
 	}
 
 	removeSandboxAddress(principal: Principal, address: string): void {
-		requirePermission(principal, 'email:update');
+		this.ctx.iam.require(principal, 'email:update', { type: 'org' });
 		const row = this.addressRow(principal.orgId, address);
 		if (!row) throw new NotFoundError(`Sandbox recipient ${address}`);
 		this.ctx.db.delete(emailAddresses).where(eq(emailAddresses.id, row.id)).run();
@@ -1482,7 +1505,7 @@ export class EmailService {
 
 	/** The org's latest request, whatever its outcome; null if it never asked. */
 	accessRequest(principal: Principal): EmailAccessRequestView | null {
-		requirePermission(principal, 'email:read');
+		this.ctx.iam.require(principal, 'email:read', { type: 'org' });
 		const row = this.ctx.db
 			.select()
 			.from(emailAccessRequests)
@@ -1495,7 +1518,7 @@ export class EmailService {
 
 	/** An org owner or admin asks a platform admin to move the org out of the sandbox. */
 	async requestProductionAccess(principal: Principal, raw: unknown): Promise<EmailAccessRequestView> {
-		requirePermission(principal, 'email:update');
+		this.ctx.iam.require(principal, 'email:update', { type: 'org' });
 		if (principal.role !== 'owner' && principal.role !== 'admin')
 			throw new CoreError('forbidden', 'Only an organisation owner or admin can request production access.', 403);
 		this.requireFeature();

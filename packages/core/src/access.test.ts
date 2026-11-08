@@ -80,3 +80,54 @@ describe('custom-host access', () => {
 		expect(core.access.isAllowedReturnHost('evil.example.com')).toBe(false);
 	});
 });
+
+describe('resource-scoped access', () => {
+	test('a project-scoped deployer manages only that project’s share links and visitor sessions', async () => {
+		for (const slug of ['share-scoped-visible', 'share-scoped-hidden']) {
+			await core.projects.create(principal, {
+				name: slug,
+				slug,
+				runtime: 'static',
+				placement: 'edge',
+				productionAccess: 'platform',
+				previewAccess: 'platform',
+			});
+		}
+		const visible = core.projects.requireRow(principal, 'share-scoped-visible');
+		const hidden = core.projects.requireRow(principal, 'share-scoped-hidden');
+		// Inserted directly so iamVersion stays 0 and the owner in the rest of this file keeps its
+		// legacy org-wide grants.
+		opened.sqlite.run(
+			`INSERT INTO iam_bindings
+			   (id, org_id, principal_type, principal_id, role_id, scope_type, scope_id, created_by, created_at)
+			 VALUES ('bind_guest_share_links', 'org_1', 'user', 'user_guest_share_links', 'deployer', 'project', ?, 'test', 0)`,
+			[visible.id],
+		);
+		const guest = buildPrincipal({
+			kind: 'user',
+			userId: 'user_guest_share_links',
+			orgId: 'org_1',
+			role: 'viewer',
+		});
+
+		const link = await core.access.createShareLink(guest, visible, { note: 'visible' });
+		expect(link.projectId).toBe(visible.id);
+		await expect(core.access.createShareLink(guest, hidden, {})).rejects.toThrow(/shareLink:create/);
+		expect(core.access.listShareLinks(guest, visible).map((entry) => entry.id)).toEqual([link.id]);
+		expect(() => core.access.listShareLinks(guest, hidden)).toThrow(/shareLink:read/);
+
+		const hiddenLink = await core.access.createShareLink(principal, hidden, {});
+		await expect(core.access.revokeShareLink(guest, hidden, hiddenLink.id)).rejects.toThrow(
+			/shareLink:revoke/,
+		);
+		await core.access.revokeShareLink(guest, visible, link.id);
+
+		expect(core.access.listSessions(guest, visible)).toEqual([]);
+		expect(() => core.access.listSessions(guest, hidden)).toThrow(/shareLink:read/);
+		await expect(core.access.revokeSession(guest, hidden, 'red_missing')).rejects.toThrow(
+			/shareLink:revoke/,
+		);
+		await core.access.signOutEveryone(guest, visible);
+		await expect(core.access.signOutEveryone(guest, hidden)).rejects.toThrow(/project:update/);
+	});
+});

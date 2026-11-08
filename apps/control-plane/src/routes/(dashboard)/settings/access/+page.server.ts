@@ -139,7 +139,8 @@ export const load: PageServerLoad = ({ locals }) => {
 		groupMembers,
 		projects,
 		catalog,
-		can: {
+		// Not `can`: that would shadow the dashboard layout's `can`, which the settings sidebar reads.
+		accessCan: {
 			manageRoles: core.iam.can(principal, 'iam:manage-roles', org),
 			manageBindings: core.iam.can(principal, 'iam:manage-bindings', org),
 			manageGroups: core.iam.can(principal, 'iam:manage-groups', org)

@@ -28,7 +28,6 @@ import {
 	pipelineSecretNameSchema,
 	pipelineSecretSetSchema,
 	pipelineVariableSetSchema,
-	requirePermission,
 	type PipelineConclusion,
 	type PipelineDispatch,
 	type PipelineEnvironmentSet,
@@ -130,7 +129,9 @@ export class PipelineService {
 	// --- repositories -------------------------------------------------------------------
 
 	listRepositories(principal: Principal): PipelineRepositoryView[] {
-		requirePermission(principal, 'build:read');
+		// TODO(IAM I2): narrow this list with scopeFilter once a pipeline repository can be
+		// resolved to a project binding; `scopeFilter` only returns project/environment ids.
+		this.ctx.iam.require(principal, 'build:read', { type: 'org' });
 		return this.ctx.db
 			.select()
 			.from(pipelineRepositories)
@@ -141,12 +142,13 @@ export class PipelineService {
 	}
 
 	getRepository(principal: Principal, name: string): PipelineRepositoryView {
-		requirePermission(principal, 'build:read');
-		return this.repositoryView(this.requireRepository(principal, name));
+		const row = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'build:read', { type: 'pipelineRepository', id: row.id });
+		return this.repositoryView(row);
 	}
 
 	createRepository(principal: Principal, input: PipelineRepositoryCreate): PipelineRepositoryView {
-		requirePermission(principal, 'build:create');
+		this.ctx.iam.require(principal, 'build:create', { type: 'org' });
 		const parsed = pipelineRepositoryCreateSchema.parse(input);
 		const taken = this.ctx.db
 			.select({ id: pipelineRepositories.id })
@@ -179,8 +181,8 @@ export class PipelineService {
 	}
 
 	updateRepository(principal: Principal, name: string, input: PipelineRepositoryUpdate): PipelineRepositoryView {
-		requirePermission(principal, 'build:create');
 		const row = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'build:create', { type: 'pipelineRepository', id: row.id });
 		const parsed = pipelineRepositoryUpdateSchema.parse(input);
 		const patch: Partial<PipelineRepositoryRow> = { updatedAt: this.ctx.now() };
 		if (parsed.cloneUrl !== undefined) patch.cloneUrl = parsed.cloneUrl;
@@ -208,8 +210,8 @@ export class PipelineService {
 
 	/** Deletes the repository and everything it owns: runs, logs, artifacts, caches, secrets. */
 	async deleteRepository(principal: Principal, name: string): Promise<void> {
-		requirePermission(principal, 'build:create');
 		const row = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'build:create', { type: 'pipelineRepository', id: row.id });
 		const objectKeys = [
 			...this.ctx.db.select({ key: pipelineArtifacts.objectKey }).from(pipelineArtifacts).where(eq(pipelineArtifacts.repositoryId, row.id)).all(),
 			...this.ctx.db.select({ key: pipelineCaches.objectKey }).from(pipelineCaches).where(eq(pipelineCaches.repositoryId, row.id)).all(),
@@ -294,8 +296,8 @@ export class PipelineService {
 
 	/** `workflow_dispatch` from the dashboard, REST, CLI or MCP. Inputs are checked once resolved. */
 	dispatch(principal: Principal, name: string, input: PipelineDispatch): PipelineTriggerView {
-		requirePermission(principal, 'build:create');
 		const repository = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'build:create', { type: 'pipelineRepository', id: repository.id });
 		if (!repository.enabled) throw new ConflictError(`Repository "${name}" is disabled.`);
 		const parsed = pipelineDispatchSchema.parse(input);
 		this.ctx.quota.assertCanCreateBuild(repository.orgId, null);
@@ -327,8 +329,8 @@ export class PipelineService {
 	}
 
 	listTriggers(principal: Principal, name: string, limit = 20): PipelineTriggerView[] {
-		requirePermission(principal, 'build:read');
 		const repository = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'build:read', { type: 'pipelineRepository', id: repository.id });
 		return this.ctx.db
 			.select()
 			.from(pipelineTriggers)
@@ -340,8 +342,8 @@ export class PipelineService {
 	}
 
 	getTrigger(principal: Principal, name: string, triggerId: string): PipelineTriggerView {
-		requirePermission(principal, 'build:read');
 		const repository = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'build:read', { type: 'pipelineRepository', id: repository.id });
 		const row = this.ctx.db
 			.select()
 			.from(pipelineTriggers)
@@ -595,8 +597,8 @@ export class PipelineService {
 		name: string,
 		options: { status?: string; workflow?: string; ref?: string; event?: string; limit?: number; before?: number } = {},
 	): PipelineRunSummary[] {
-		requirePermission(principal, 'build:read');
 		const repository = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'build:read', { type: 'pipelineRepository', id: repository.id });
 		const conditions = [eq(pipelineRuns.repositoryId, repository.id)];
 		if (options.status === 'queued' || options.status === 'in_progress' || options.status === 'completed')
 			conditions.push(eq(pipelineRuns.status, options.status));
@@ -616,7 +618,9 @@ export class PipelineService {
 
 	/** Runs across every repository of the org, newest first (dashboard overview). */
 	recentRuns(principal: Principal, limit = 20): PipelineRunSummary[] {
-		requirePermission(principal, 'build:read');
+		// TODO(IAM I2): narrow this list with scopeFilter once a pipeline repository can be
+		// resolved to a project binding; `scopeFilter` only returns project/environment ids.
+		this.ctx.iam.require(principal, 'build:read', { type: 'org' });
 		const repos = new Map(
 			this.ctx.db
 				.select()
@@ -639,8 +643,8 @@ export class PipelineService {
 	}
 
 	async getRun(principal: Principal, name: string, runRef: string): Promise<PipelineRunView> {
-		requirePermission(principal, 'build:read');
 		const repository = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'build:read', { type: 'pipelineRepository', id: repository.id });
 		const run = this.requireRun(repository, runRef);
 		// Workflow order first (stable sort keeps matrix rows in insertion order within a key).
 		const keyOrder = Object.keys(parse<{ jobs?: Record<string, unknown> }>(run.workflowJson, {}).jobs ?? {});
@@ -763,8 +767,8 @@ export class PipelineService {
 	}
 
 	async cancelRun(principal: Principal, name: string, runRef: string): Promise<PipelineRunView> {
-		requirePermission(principal, 'build:cancel');
 		const repository = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'build:cancel', { type: 'pipelineRepository', id: repository.id });
 		const run = this.requireRun(repository, runRef);
 		if (run.status === 'completed') throw new ConflictError('The run has already completed.');
 		this.engine.cancelRun(run);
@@ -773,8 +777,8 @@ export class PipelineService {
 	}
 
 	async rerun(principal: Principal, name: string, runRef: string, failedOnly: boolean): Promise<PipelineRunView> {
-		requirePermission(principal, 'build:create');
 		const repository = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'build:create', { type: 'pipelineRepository', id: repository.id });
 		const run = this.requireRun(repository, runRef);
 		this.ctx.quota.assertCanCreateBuild(repository.orgId, null);
 		this.engine.rerun(run, failedOnly, principal.userId);
@@ -784,11 +788,11 @@ export class PipelineService {
 
 	/** Environment approval (W12): org owners and admins only. */
 	async approveJob(principal: Principal, name: string, runRef: string, jobId: string, approve: boolean): Promise<PipelineRunView> {
-		requirePermission(principal, 'build:read');
+		const repository = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'build:read', { type: 'pipelineRepository', id: repository.id });
 		if (principal.role !== 'owner' && principal.role !== 'admin')
 			throw new CoreError('forbidden', 'Only org owners and admins can approve environment deployments.', 403);
 		if (principal.kind === 'mcp') throw new CoreError('forbidden', 'Environment approvals are a human decision.', 403);
-		const repository = this.requireRepository(principal, name);
 		const run = this.requireRun(repository, runRef);
 		const job = this.requireRunJob(run, jobId);
 		this.engine.approveJob(job, principal.userId, approve);
@@ -807,8 +811,8 @@ export class PipelineService {
 		jobId: string,
 		options: { after?: number; limit?: number; step?: number } = {},
 	): { lines: PipelineLogLine[]; next: number; complete: boolean } {
-		requirePermission(principal, 'build:read');
 		const repository = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'build:read', { type: 'pipelineRepository', id: repository.id });
 		const run = this.requireRun(repository, runRef);
 		const job = this.requireRunJob(run, jobId);
 		const conditions = [eq(pipelineLogLines.jobId, job.id), gt(pipelineLogLines.seq, options.after ?? 0)];
@@ -832,8 +836,8 @@ export class PipelineService {
 	}
 
 	async artifactDownload(principal: Principal, name: string, runRef: string, artifactId: string): Promise<string> {
-		requirePermission(principal, 'build:read');
 		const repository = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'build:read', { type: 'pipelineRepository', id: repository.id });
 		const run = this.requireRun(repository, runRef);
 		return this.engine.artifactDownloadUrl(run.id, artifactId);
 	}
@@ -841,8 +845,8 @@ export class PipelineService {
 	// --- secrets, variables, environments, deploy targets --------------------------------
 
 	listSecrets(principal: Principal, name: string): PipelineSecretView[] {
-		requirePermission(principal, 'secret:read-metadata');
 		const repository = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'secret:read-metadata', { type: 'pipelineRepository', id: repository.id });
 		return this.ctx.db
 			.select()
 			.from(pipelineSecrets)
@@ -853,9 +857,9 @@ export class PipelineService {
 	}
 
 	setSecret(principal: Principal, name: string, secretName: string, input: PipelineSecretSet): PipelineSecretView {
-		requirePermission(principal, 'build:create');
-		requirePermission(principal, 'secret:create');
 		const repository = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'build:create', { type: 'pipelineRepository', id: repository.id });
+		this.ctx.iam.require(principal, 'secret:create', { type: 'pipelineRepository', id: repository.id });
 		const key = pipelineSecretNameSchema.parse(secretName);
 		const parsed = pipelineSecretSetSchema.parse(input);
 		const environment = parsed.environment ?? '';
@@ -894,9 +898,9 @@ export class PipelineService {
 	}
 
 	deleteSecret(principal: Principal, name: string, secretName: string, environment?: string | null): void {
-		requirePermission(principal, 'build:create');
-		requirePermission(principal, 'secret:delete');
 		const repository = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'build:create', { type: 'pipelineRepository', id: repository.id });
+		this.ctx.iam.require(principal, 'secret:delete', { type: 'pipelineRepository', id: repository.id });
 		const removed = this.ctx.sqlite.run(
 			'DELETE FROM pipeline_secrets WHERE repository_id = ? AND environment = ? AND name = ?',
 			[repository.id, environment ?? '', secretName],
@@ -906,8 +910,8 @@ export class PipelineService {
 	}
 
 	listVariables(principal: Principal, name: string): PipelineVariableView[] {
-		requirePermission(principal, 'build:read');
 		const repository = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'build:read', { type: 'pipelineRepository', id: repository.id });
 		return this.ctx.db
 			.select()
 			.from(pipelineVariables)
@@ -918,8 +922,8 @@ export class PipelineService {
 	}
 
 	setVariable(principal: Principal, name: string, variable: string, value: string): PipelineVariableView {
-		requirePermission(principal, 'build:create');
 		const repository = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'build:create', { type: 'pipelineRepository', id: repository.id });
 		const key = pipelineSecretNameSchema.parse(variable);
 		const parsed = pipelineVariableSetSchema.parse({ value });
 		const now = this.ctx.now();
@@ -936,16 +940,16 @@ export class PipelineService {
 	}
 
 	deleteVariable(principal: Principal, name: string, variable: string): void {
-		requirePermission(principal, 'build:create');
 		const repository = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'build:create', { type: 'pipelineRepository', id: repository.id });
 		const removed = this.ctx.sqlite.run('DELETE FROM pipeline_variables WHERE repository_id = ? AND name = ?', [repository.id, variable]);
 		if (removed.changes === 0) throw new NotFoundError('Variable');
 		this.audit(principal, 'pipeline.variable.delete', repository.id, { repository: name, name: variable });
 	}
 
 	listEnvironments(principal: Principal, name: string): PipelineEnvironmentView[] {
-		requirePermission(principal, 'build:read');
 		const repository = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'build:read', { type: 'pipelineRepository', id: repository.id });
 		const secrets = this.ctx.db
 			.select({ name: pipelineSecrets.name, environment: pipelineSecrets.environment })
 			.from(pipelineSecrets)
@@ -967,11 +971,11 @@ export class PipelineService {
 	}
 
 	setEnvironment(principal: Principal, name: string, environment: string, input: PipelineEnvironmentSet): PipelineEnvironmentView {
-		requirePermission(principal, 'build:create');
+		const repository = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'build:create', { type: 'pipelineRepository', id: repository.id });
 		// Protection rules gate secrets and deploys; loosening them is an owner/admin decision.
 		if (principal.role !== 'owner' && principal.role !== 'admin')
 			throw new CoreError('forbidden', 'Only org owners and admins can change environment rules.', 403);
-		const repository = this.requireRepository(principal, name);
 		if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(environment)) throw new ValidationError('Invalid environment name.');
 		const parsed = pipelineEnvironmentSetSchema.parse(input);
 		const now = this.ctx.now();
@@ -996,10 +1000,10 @@ export class PipelineService {
 	}
 
 	deleteEnvironment(principal: Principal, name: string, environment: string): void {
-		requirePermission(principal, 'build:create');
+		const repository = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'build:create', { type: 'pipelineRepository', id: repository.id });
 		if (principal.role !== 'owner' && principal.role !== 'admin')
 			throw new CoreError('forbidden', 'Only org owners and admins can change environment rules.', 403);
-		const repository = this.requireRepository(principal, name);
 		this.ctx.db.transaction(() => {
 			this.ctx.db
 				.delete(pipelineEnvironments)
@@ -1014,8 +1018,8 @@ export class PipelineService {
 	}
 
 	listProjectLinks(principal: Principal, name: string): PipelineProjectLinkView[] {
-		requirePermission(principal, 'build:read');
 		const repository = this.requireRepository(principal, name);
+		this.ctx.iam.require(principal, 'build:read', { type: 'pipelineRepository', id: repository.id });
 		const links = this.ctx.db.select().from(pipelineProjectLinks).where(eq(pipelineProjectLinks.repositoryId, repository.id)).all();
 		if (!links.length) return [];
 		const rows = new Map(
@@ -1043,10 +1047,10 @@ export class PipelineService {
 
 	/** Allow this repository's trusted jobs to deploy to a project (§4.4). */
 	linkProject(principal: Principal, name: string, slug: string, input: PipelineProjectLink): PipelineProjectLinkView {
-		requirePermission(principal, 'build:create');
-		requirePermission(principal, 'deployment:promote');
 		const repository = this.requireRepository(principal, name);
 		const project = this.ctx.projects.requireRow(principal, slug);
+		this.ctx.iam.require(principal, 'build:create', { type: 'pipelineRepository', id: repository.id });
+		this.ctx.iam.require(principal, 'deployment:promote', { type: 'project', id: project.id });
 		const parsed = pipelineProjectLinkSchema.parse(input);
 		const now = this.ctx.now();
 		this.ctx.db
@@ -1068,9 +1072,9 @@ export class PipelineService {
 	}
 
 	unlinkProject(principal: Principal, name: string, slug: string): void {
-		requirePermission(principal, 'build:create');
 		const repository = this.requireRepository(principal, name);
 		const project = this.ctx.projects.requireRow(principal, slug);
+		this.ctx.iam.require(principal, 'build:create', { type: 'pipelineRepository', id: repository.id });
 		this.ctx.db
 			.delete(pipelineProjectLinks)
 			.where(and(eq(pipelineProjectLinks.repositoryId, repository.id), eq(pipelineProjectLinks.projectId, project.id)))

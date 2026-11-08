@@ -464,4 +464,38 @@ describe('native database studio sessions', () => {
 		expect(studioFingerprint('select col1 from t2')).not.toBe(studioFingerprint('select col3 from t4'));
 		expect(studioFingerprint('db.users.find({"email": "a@b"})')).toBe(studioFingerprint('db.users.find({"email": "c@d"})'));
 	});
+
+	test('a database-scoped binding covers only that database', () => {
+		const visible = core.databases.create(owner, { name: 'scoped-studio-visible', memoryMb: 128 });
+		const hidden = core.databases.create(owner, { name: 'scoped-studio-hidden', memoryMb: 128 });
+		// Inserted directly so iamVersion stays 0 and the owner in the rest of this file keeps its
+		// legacy org-wide grants.
+		opened.sqlite.run(
+			`INSERT INTO iam_bindings
+			   (id, org_id, principal_type, principal_id, role_id, scope_type, scope_id, created_by, created_at)
+			 VALUES ('bind_guest_studio', 'org_1', 'user', 'user_guest_studio', 'deployer', 'database', ?, 'test', 0)`,
+			[visible.id],
+		);
+		const guest = buildPrincipal({
+			kind: 'user',
+			userId: 'user_guest_studio',
+			orgId: 'org_1',
+			role: 'viewer',
+		});
+
+		expect(core.databaseStudio.view(guest, visible.name).active).toBe(false);
+		expect(() => core.databaseStudio.view(guest, hidden.name)).toThrow(/database:read/);
+		core.databaseStudio.recordActivity(guest, visible.name, {
+			op: 'run',
+			fingerprint: '0123456789abcdef',
+			readOnly: true,
+		});
+		expect(() =>
+			core.databaseStudio.recordActivity(guest, hidden.name, {
+				op: 'run',
+				fingerprint: '0123456789abcdef',
+				readOnly: true,
+			}),
+		).toThrow(/database:console/);
+	});
 });

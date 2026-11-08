@@ -4,7 +4,6 @@ import {
 	APP_VOLUME_SNAPSHOT_ID_PREFIX,
 	appVolumeRestoreSchema,
 	appVolumeSnapshotCreateSchema,
-	requirePermission,
 	type AppVolumeNodeRef,
 	type AppVolumeRestore,
 	type AppVolumeSnapshotCreate,
@@ -65,14 +64,14 @@ export class AppVolumeLifecycle {
 	/** Snapshots of one volume, newest first. Trashed volumes keep theirs until the purge. */
 	listSnapshots(principal: Principal, project: ProjectRow, name: string): AppVolumeSnapshotView[] {
 		this.volumes.assertFeature();
-		requirePermission(principal, 'project:read');
+		this.ctx.iam.require(principal, 'project:read', { type: 'project', id: project.id });
 		const row = this.volumes.requireRow(principal, project, name, { includeDeleted: true });
 		return this.snapshotViews(row.id);
 	}
 
 	getSnapshot(principal: Principal, project: ProjectRow, name: string, snapshotId: string): AppVolumeSnapshotView {
 		this.volumes.assertFeature();
-		requirePermission(principal, 'project:read');
+		this.ctx.iam.require(principal, 'project:read', { type: 'project', id: project.id });
 		const row = this.volumes.requireRow(principal, project, name, { includeDeleted: true });
 		return this.requireSnapshotView(row.id, snapshotId);
 	}
@@ -88,7 +87,7 @@ export class AppVolumeLifecycle {
 		raw: AppVolumeSnapshotCreate = {},
 	): AppVolumeSnapshotView {
 		this.volumes.assertFeature();
-		requirePermission(principal, 'project:update');
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		const input = appVolumeSnapshotCreateSchema.parse(raw);
 		const row = this.volumes.requireRow(principal, project, name);
 		if (row.restoreSnapshotId)
@@ -150,7 +149,7 @@ export class AppVolumeLifecycle {
 	/** Delete one snapshot: the archive first (from the target it was written to), then the row. */
 	async deleteSnapshot(principal: Principal, project: ProjectRow, name: string, snapshotId: string): Promise<void> {
 		this.volumes.assertFeature();
-		requirePermission(principal, 'project:update');
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		const row = this.volumes.requireRow(principal, project, name, { includeDeleted: true });
 		const snapshot = this.requireSnapshot(row.id, snapshotId);
 		if (snapshot.status === 'pending' || snapshot.status === 'running')
@@ -187,7 +186,7 @@ export class AppVolumeLifecycle {
 		raw: AppVolumeRestore,
 	): AppVolumeView {
 		this.volumes.assertFeature();
-		requirePermission(principal, 'project:update');
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		const input = appVolumeRestoreSchema.parse(raw);
 		const source = this.volumes.requireRow(principal, project, name, { includeDeleted: true });
 		const snapshot = this.requireSnapshot(source.id, snapshotId);

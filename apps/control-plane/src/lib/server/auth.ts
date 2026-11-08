@@ -36,6 +36,7 @@ import {
 } from './second-factor';
 import { OAUTH_AUTHORIZE_PATH, authPathAllowedBeforeSecondFactor, factorProvedBy } from './second-factor-policy';
 import { sqlite } from './db';
+import { membershipRoleIn, preferredOrganizationId, rememberOrganization } from './org-membership';
 import { MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH, SetupAlreadyCompleteError, claimInstance, parseClaimInput } from './setup';
 import { isValidSetupToken } from './setup-token';
 
@@ -101,10 +102,13 @@ const apiKeyEndpointPermissions: Record<string, Permission> = {
 	'/api-key/delete': 'apiKey:revoke',
 };
 
-/** True when the user's org role grants `permission` (no membership → false). */
-export function userHasOrgPermission(userId: string, permission: Permission): boolean {
-	const membership = readMembership(sqlite, userId);
-	return membership ? (roles[membership.role] as readonly Permission[]).includes(permission) : false;
+/**
+ * True when the user's role in `orgId` (the active org, when given) grants `permission`. Without
+ * an org this falls back to the first membership, which only the bootstrap paths need.
+ */
+export function userHasOrgPermission(userId: string, permission: Permission, orgId?: string | null): boolean {
+	const role = orgId ? membershipRoleIn(orgId, userId) : readMembership(sqlite, userId)?.role;
+	return role ? (roles[role] as readonly Permission[]).includes(permission) : false;
 }
 
 /**
@@ -223,6 +227,15 @@ export const auth = betterAuth({
 		? { github: { clientId: githubOAuth.clientId, clientSecret: githubOAuth.clientSecret } }
 		: {},
 	trustedOrigins: [platformOrigin],
+	user: {
+		additionalFields: {
+			/**
+			 * The org the caller last used. Server-written only; a new session starts here
+			 * (falling back to the first membership), which is IAM.md I5's "last used org".
+			 */
+			lastOrganizationId: { type: 'string', required: false, input: false },
+		},
+	},
 	session: {
 		additionalFields: {
 			// The second factor this session proved ('passkey' | 'totp' | 'backup-code'), set by the
@@ -231,6 +244,25 @@ export const auth = betterAuth({
 		},
 	},
 	databaseHooks: {
+		session: {
+			create: {
+				// Better Auth only records `activeOrganizationId` when a user is created or accepts an
+				// invitation, so every other sign-in starts without an org. Pick the active org at
+				// session creation (IAM.md I5, §8.1); the organization plugin owns the column.
+				before: async (session) => {
+					const organizationId = preferredOrganizationId(session.userId);
+					return organizationId ? { data: { ...session, activeOrganizationId: organizationId } } : undefined;
+				},
+			},
+			update: {
+				// Keep the remembered org in step with switches (including invitation acceptance, which
+				// Better Auth performs itself by updating the session's activeOrganizationId).
+				after: async (session) => {
+					const organizationId = (session as { activeOrganizationId?: string | null }).activeOrganizationId;
+					if (organizationId && session.userId) rememberOrganization(session.userId, organizationId);
+				},
+			},
+		},
 		user: {
 			create: {
 				// Invite-only (D10). The owner is created by the setup wizard (D102, `claimSetup`
@@ -273,7 +305,7 @@ export const auth = betterAuth({
 			// Owner second factor (D10): an unproven owner session may only sign in, verify a factor,
 			// or (with no factor yet) enrol one. See second-factor-policy.ts.
 			const sessionFactor = (session.session as { secondFactor?: string | null }).secondFactor;
-			if (enforceOwnerSecondFactor && !sessionFactor && userIsOwner(session.user.id)) {
+			if (enforceOwnerSecondFactor && !sessionFactor && userIsOwner(session.user.id, session.session.activeOrganizationId)) {
 				if (secondFactorAttemptsExhausted(session.session.id)) {
 					revokeSession(session.session.id);
 					throw new APIError('TOO_MANY_REQUESTS', {
@@ -293,7 +325,7 @@ export const auth = betterAuth({
 			}
 
 			const permission = apiKeyEndpointPermissions[ctx.path];
-			if (permission && !userHasOrgPermission(session.user.id, permission))
+			if (permission && !userHasOrgPermission(session.user.id, permission, session.session.activeOrganizationId))
 				throw new APIError('FORBIDDEN', { message: `Your role does not include ${permission}.` });
 		}),
 		after: createAuthMiddleware(async (ctx) => {
@@ -306,7 +338,7 @@ export const auth = betterAuth({
 				if (factor === 'passkey') return;
 				const session = await getSessionFromCtx(ctx).catch(() => null);
 				const proven = (session?.session as { secondFactor?: string | null } | undefined)?.secondFactor;
-				if (!session || proven || !userIsOwner(session.user.id)) return;
+				if (!session || proven || !userIsOwner(session.user.id, session.session.activeOrganizationId)) return;
 				if (recordSecondFactorFailure(session.session.id)) revokeSession(session.session.id);
 				return;
 			}
@@ -349,6 +381,13 @@ export const auth = betterAuth({
 					organization.name,
 					`${platformOrigin}/accept-invitation/${id}`,
 				);
+			},
+			organizationHooks: {
+				// Accepting an invitation makes that org active (Better Auth sets the session field);
+				// remember it so the next sign-in starts there too (IAM.md I5, §8.1).
+				afterAcceptInvitation: async ({ organization, user }) => {
+					rememberOrganization(user.id, organization.id);
+				},
 			},
 		}),
 		admin(),

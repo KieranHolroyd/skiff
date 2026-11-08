@@ -6,7 +6,6 @@ import {
 	logDrainCreateSchema,
 	logDrainUpdateSchema,
 	logDrainUrlError,
-	requirePermission,
 	type LogDrainCreate,
 	type LogDrainFormat,
 	type LogDrainKind,
@@ -17,6 +16,7 @@ import {
 	type LogDrainView,
 	type LogLevel,
 	type Principal,
+	type ResourceRef,
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
@@ -147,8 +147,13 @@ export class LogDrainService {
 
 	// ---------------------------------------------------------------- access
 
-	#requireRead(principal: Principal): void {
-		requirePermission(principal, 'logs:read');
+	#requireRead(principal: Principal, resource: ResourceRef = { type: 'org' }): void {
+		this.ctx.iam.require(principal, 'logs:read', resource);
+	}
+
+	/** A drain is org-wide unless it names a project. */
+	#resource(row: DrainRow): ResourceRef {
+		return row.project_id ? { type: 'project', id: row.project_id } : { type: 'org' };
 	}
 
 	/** A drain copies every log line out of Skiff, so org owners and admins manage them (as alert rules). */
@@ -159,8 +164,8 @@ export class LogDrainService {
 		);
 	}
 
-	#requireEdit(principal: Principal): void {
-		this.#requireRead(principal);
+	#requireEdit(principal: Principal, resource: ResourceRef = { type: 'org' }): void {
+		this.#requireRead(principal, resource);
 		if (!this.canEdit(principal))
 			throw new CoreError('forbidden', 'Only org owners and admins can change log drains.', 403);
 	}
@@ -176,8 +181,9 @@ export class LogDrainService {
 	}
 
 	get(principal: Principal, id: string): LogDrainView {
-		this.#requireRead(principal);
-		return this.#view(this.#row(principal, id));
+		const row = this.#row(principal, id);
+		this.#requireRead(principal, this.#resource(row));
+		return this.#view(row);
 	}
 
 	#row(principal: Principal, id: string): DrainRow {
@@ -191,10 +197,11 @@ export class LogDrainService {
 	// ---------------------------------------------------------------- mutations
 
 	create(principal: Principal, raw: LogDrainCreate): LogDrainMutationResult {
-		this.#requireEdit(principal);
 		const parsed = logDrainCreateSchema.safeParse(raw);
 		if (!parsed.success) throw new ValidationError(parsed.error.issues.map((issue) => issue.message).join(' '));
 		const input = parsed.data;
+		const project = input.project ? this.ctx.projects.requireRow(principal, input.project) : null;
+		this.#requireEdit(principal, project ? { type: 'project', id: project.id } : { type: 'org' });
 		if (input.allowPrivateNetwork && !canAdministerPlatform(principal))
 			throw new CoreError('forbidden', 'Only a platform admin, from the dashboard, can let a drain reach private addresses.', 403);
 		const count = this.ctx.sqlite
@@ -205,7 +212,7 @@ export class LogDrainService {
 		const name = input.name.trim();
 		if (this.ctx.sqlite.query('SELECT 1 FROM log_drains WHERE org_id = ? AND name = ?').get(principal.orgId, name))
 			throw new ConflictError(`A log drain named "${name}" already exists.`);
-		const projectId = input.project ? this.ctx.projects.requireRow(principal, input.project).id : null;
+		const projectId = project?.id ?? null;
 
 		const id = newId('ldr_');
 		const now = this.ctx.now();
@@ -262,11 +269,11 @@ export class LogDrainService {
 	}
 
 	update(principal: Principal, id: string, raw: LogDrainUpdate): LogDrainMutationResult {
-		this.#requireEdit(principal);
 		const parsed = logDrainUpdateSchema.safeParse(raw);
 		if (!parsed.success) throw new ValidationError(parsed.error.issues.map((issue) => issue.message).join(' '));
 		const input = parsed.data;
 		const row = this.#row(principal, id);
+		this.#requireEdit(principal, this.#resource(row));
 		const platform = canAdministerPlatform(principal);
 		const allowPrivate = input.allowPrivateNetwork ?? row.allow_private_network === 1;
 		// Pointing a private-network drain somewhere else is as sensitive as allowing it.
@@ -346,8 +353,8 @@ export class LogDrainService {
 	}
 
 	delete(principal: Principal, id: string): void {
-		this.#requireEdit(principal);
 		const row = this.#row(principal, id);
+		this.#requireEdit(principal, this.#resource(row));
 		this.ctx.sqlite.run('DELETE FROM log_drains WHERE id = ?', [id]);
 		this.ctx.audit.record({
 			principal,
@@ -361,8 +368,8 @@ export class LogDrainService {
 
 	/** Send one test line now. Delivery counters and cursors are left alone. */
 	async test(principal: Principal, id: string): Promise<LogDrainTestResult> {
-		this.#requireEdit(principal);
 		const row = this.#row(principal, id);
+		this.#requireEdit(principal, this.#resource(row));
 		const now = this.ctx.now();
 		const project = row.project_id ? this.#projectSlugs([row.project_id]).get(row.project_id) ?? null : null;
 		const line: DrainLine = {

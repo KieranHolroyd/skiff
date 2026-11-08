@@ -1,6 +1,6 @@
 import { and, eq, inArray, lt } from 'drizzle-orm';
 import { uploadSessions } from '@skiff/db';
-import { limits, requirePermission, type InlineFile, type Principal } from '@skiff/contracts';
+import { limits, type InlineFile, type Principal } from '@skiff/contracts';
 import { entriesFromFiles, entriesFromZip, type FileEntry } from './artifact.ts';
 import type { CoreContext } from './context.ts';
 import { NotFoundError, ValidationError } from './errors.ts';
@@ -29,7 +29,7 @@ export class UploadService {
 		project: ProjectRow,
 		input: { fileCount?: number; totalBytes?: number } = {},
 	): Promise<UploadSessionView> {
-		requirePermission(principal, 'deployment:create');
+		this.ctx.iam.require(principal, 'deployment:create', { type: 'project', id: project.id });
 		if (input.totalBytes) this.ctx.quota.assertCanUpload(principal.orgId, input.totalBytes);
 		const id = newId('upl_');
 		const objectKey = objectKeyForUpload(id);
@@ -76,7 +76,7 @@ export class UploadService {
 		uploadId: string,
 		options: { promote?: boolean; message?: string; environment?: string } = {},
 	): Promise<DeploymentView> {
-		requirePermission(principal, 'deployment:create');
+		this.ctx.iam.require(principal, 'deployment:create', { type: 'project', id: project.id });
 		const session = this.ctx.db
 			.select()
 			.from(uploadSessions)
@@ -162,7 +162,7 @@ export class UploadService {
 	}
 
 	list(principal: Principal, project: ProjectRow) {
-		requirePermission(principal, 'deployment:read');
+		this.ctx.iam.require(principal, 'deployment:read', { type: 'project', id: project.id });
 		return this.ctx.db
 			.select()
 			.from(uploadSessions)

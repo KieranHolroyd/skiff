@@ -9,7 +9,6 @@ import {
 	githubAppManualSchema,
 	missingPermissions,
 	parseGithubRepoUrl,
-	requirePermission,
 	sameGithubRepo,
 	type GithubAppManifestStart,
 	type GithubAppManual,
@@ -352,7 +351,7 @@ export class GithubAppService {
 
 	/** The org's installations, plus every unclaimed one for platform admins. */
 	installations(principal: Principal): GithubInstallationView[] {
-		requirePermission(principal, 'build:read');
+		this.ctx.iam.require(principal, 'build:read', { type: 'org' });
 		const rows = this.ctx.db.select().from(githubInstallations).all();
 		const admin = canAdministerPlatform(principal);
 		return rows
@@ -585,7 +584,7 @@ export class GithubAppService {
 
 	/** Every repository the org's installations can reach, for pickers. Best effort. */
 	async repositories(principal: Principal, options: { refresh?: boolean } = {}): Promise<GithubRepositoryList> {
-		requirePermission(principal, 'build:read');
+		this.ctx.iam.require(principal, 'build:read', { type: 'org' });
 		const installations = this.orgInstallations(principal.orgId);
 		const app = this.stored();
 		const result: GithubRepositoryList = {

@@ -12,7 +12,6 @@ import {
 	quotaUpdateSchema,
 	quotaUsageMetricKeys,
 	resolveQuota,
-	requirePermission,
 	type OrgQuota,
 	type ProjectQuotaFields,
 	type ProjectQuotaView,
@@ -65,8 +64,12 @@ export class UsageService {
 	constructor(private readonly ctx: CoreContext) {}
 
 	async view(principal: Principal, options: UsageOptions = {}): Promise<QuotaUsageView> {
-		requirePermission(principal, 'project:read');
 		const project = options.projectSlug ? this.project(principal, options.projectSlug) : null;
+		this.ctx.iam.require(
+			principal,
+			'project:read',
+			project ? { type: 'project', id: project.id } : { type: 'org' },
+		);
 		const projectId = project?.id ?? null;
 		const key = `${principal.orgId}:${projectId ?? ''}`;
 		const cached = this.cache.get(key);
@@ -99,9 +102,14 @@ export class UsageService {
 		principal: Principal,
 		options: UsageOptions = {},
 	): { orgId: string; projectId: string | null; projectSlug: string | null; base: OrgQuota; overrides: ProjectQuotaFields; effective: OrgQuota } {
-		requirePermission(principal, 'project:read');
+		const project = options.projectSlug ? this.project(principal, options.projectSlug) : null;
+		this.ctx.iam.require(
+			principal,
+			'project:read',
+			project ? { type: 'project', id: project.id } : { type: 'org' },
+		);
 		const base = this.ctx.quota.getConfigured(principal.orgId);
-		if (!options.projectSlug)
+		if (!project)
 			return {
 				orgId: principal.orgId,
 				projectId: null,
@@ -110,7 +118,6 @@ export class UsageService {
 				overrides: {},
 				effective: base,
 			};
-		const project = this.project(principal, options.projectSlug);
 		const overrides = this.ctx.quota.overrides(principal.orgId, project.id);
 		const view: ProjectQuotaView = {
 			orgId: principal.orgId,
@@ -179,8 +186,12 @@ export class UsageService {
 
 	/** Up to 30 daily points; the current day is included when a snapshot exists. */
 	history(principal: Principal, options: UsageOptions = {}): QuotaUsageHistoryView {
-		requirePermission(principal, 'project:read');
 		const project = options.projectSlug ? this.project(principal, options.projectSlug) : null;
+		this.ctx.iam.require(
+			principal,
+			'project:read',
+			project ? { type: 'project', id: project.id } : { type: 'org' },
+		);
 		const projectId = project?.id ?? null;
 		const rows = this.ctx.db
 			.select()

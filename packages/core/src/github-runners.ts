@@ -5,7 +5,6 @@ import {
 	GITHUB_RUNNER_JITCONFIG_ENV,
 	githubRunnerLabels,
 	githubRunnerTarget,
-	requirePermission,
 	type GithubRunner,
 	type GithubRunnerPoolView,
 	type GithubRunnerView,
@@ -105,7 +104,7 @@ export class GithubRunnerService {
 	 * best effort; a GitHub failure is returned as `error`, never thrown at the dashboard.
 	 */
 	async pool(principal: Principal, project: ProjectRow, spec: WorkloadSpec): Promise<GithubRunnerPoolView | null> {
-		requirePermission(principal, 'deployment:read');
+		this.ctx.iam.require(principal, 'deployment:read', { type: 'project', id: project.id });
 		const runner = spec.runner;
 		if (!runner) return null;
 		const view: GithubRunnerPoolView = {

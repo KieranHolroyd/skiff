@@ -259,3 +259,25 @@ describe('event notifications', () => {
 		expect((created.body as { data: { previewUrl: string } }).data.previewUrl).toMatch(/^https:\/\/site--.+\.sites\.test$/);
 	});
 });
+
+describe('resource-scoped access', () => {
+	test('a broker binding covers only rules that publish to it', () => {
+		const visible = core.brokers.requireRow(owner, 'events');
+		const hidden = core.brokers.create(owner, { name: 'scope-hidden' });
+		const visibleRule = core.events.create(owner, { source: 'alerts', broker: visible.name, queue: 'scope-visible' });
+		const hiddenRule = core.events.create(owner, { source: 'alerts', broker: hidden.name, queue: 'scope-hidden' });
+		opened.sqlite.run(
+			`INSERT INTO iam_bindings
+			   (id, org_id, principal_type, principal_id, role_id, scope_type, scope_id, created_by, created_at)
+			 VALUES ('bind_scope_events', 'org_1', 'user', 'user_scope_events', 'viewer', 'broker', ?, 'test', 0)`,
+			[visible.id],
+		);
+		const guest = buildPrincipal({ kind: 'user', userId: 'user_scope_events', orgId: 'org_1', role: 'viewer' });
+		expect(core.events.get(guest, visibleRule.id).id).toBe(visibleRule.id);
+		expect(core.events.deliveries(guest, { ruleId: visibleRule.id })).toEqual([]);
+		expect(() => core.events.get(guest, hiddenRule.id)).toThrow(/broker:read/);
+		expect(() => core.events.deliveries(guest, { ruleId: hiddenRule.id })).toThrow(/broker:read/);
+		// Listing every rule is an org-wide read, not one covered by a single-broker binding.
+		expect(() => core.events.list(guest)).toThrow(/broker:read/);
+	});
+});

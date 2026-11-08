@@ -16,7 +16,6 @@ import {
 	brokerUpdateSchema,
 	brokerUpgradeVersions,
 	orgNetworkName,
-	requirePermission,
 	type BrokerAttach,
 	brokerStreamStatsSchema,
 	type BrokerAttachmentView,
@@ -30,7 +29,9 @@ import {
 	type BrokerStatus,
 	type BrokerUpdate,
 	type BrokerView,
+	type Permission,
 	type Principal,
+	type ResourceRef,
 	type WorkloadActivation,
 	type WorkloadDesired,
 	type WorkloadRuntime,
@@ -64,21 +65,28 @@ export class BrokerService {
 	// ---------------------------------------------------------------- reads
 
 	list(principal: Principal, options: { includeDeleted?: boolean } = {}): BrokerView[] {
-		requirePermission(principal, 'broker:read');
 		const filters = [eq(brokers.orgId, principal.orgId)];
 		if (!options.includeDeleted) filters.push(isNull(brokers.deletedAt));
+		// A guest sees only brokers they hold a binding on (IAM.md §6.3). A project-scope binding
+		// covers a broker through any of its attachments; a broker-scope binding covers it directly.
+		const scope = this.ctx.iam.scopeFilter(principal, 'broker:read');
+		// `scopeFilter` reads bindings only; a credential restriction still narrows an org grant.
+		const orgWide =
+			scope === 'all' && this.ctx.iam.can(principal, 'broker:read', { type: 'org' });
 		return this.ctx.db
 			.select()
 			.from(brokers)
 			.where(and(...filters))
 			.all()
+			.filter((row) => orgWide || this.canBrokerPermission(principal, 'broker:read', row))
 			.sort((a, b) => a.name.localeCompare(b.name))
 			.map((row) => this.toView(row));
 	}
 
 	get(principal: Principal, name: string, options: { includeDeleted?: boolean } = {}): BrokerView {
-		requirePermission(principal, 'broker:read');
-		return this.toView(this.requireRow(principal, name, options));
+		const row = this.requireRow(principal, name, options);
+		this.requireBrokerPermission(principal, 'broker:read', row);
+		return this.toView(row);
 	}
 
 	requireRow(principal: Principal, name: string, options: { includeDeleted?: boolean } = {}): BrokerRow {
@@ -99,8 +107,8 @@ export class BrokerService {
 		name: string,
 		input: { from: string | number | Date; to: string | number | Date; interval?: '1m' | '1h' },
 	): Promise<BrokerMetricPoint[]> {
-		requirePermission(principal, 'broker:read');
 		const row = this.requireRow(principal, name, { includeDeleted: true });
+		this.requireBrokerPermission(principal, 'broker:read', row);
 		if (!this.ctx.telemetry) return [];
 		return this.ctx.telemetry.queryBrokerMetrics({
 			brokerId: row.id,
@@ -112,8 +120,8 @@ export class BrokerService {
 
 	/** The newest stream listing the broker's node reported (SQLite, so it works without ClickHouse). */
 	queues(principal: Principal, name: string): BrokerQueuesView {
-		requirePermission(principal, 'broker:read');
 		const row = this.requireRow(principal, name, { includeDeleted: true });
+		this.requireBrokerPermission(principal, 'broker:read', row);
 		return {
 			brokerId: row.id,
 			name: row.name,
@@ -190,7 +198,7 @@ export class BrokerService {
 	// ---------------------------------------------------------------- lifecycle
 
 	create(principal: Principal, raw: BrokerCreate): BrokerView {
-		requirePermission(principal, 'broker:create');
+		this.ctx.iam.require(principal, 'broker:create', { type: 'org' });
 		this.requireFeature();
 		const input = brokerCreateSchema.parse(raw);
 		const info = brokerEngineRegistry[input.engine];
@@ -212,8 +220,8 @@ export class BrokerService {
 		let project: ProjectRow | null = null;
 		let requested = input.placement;
 		if (input.project) {
-			requirePermission(principal, 'project:update');
 			project = this.ctx.projects.requireRow(principal, input.project);
+			this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 			this.assertConsumer(project);
 			// Co-locate with the app (D56): its pinned node, else its current workload node, else its request.
 			const workloadNode = this.ctx.db
@@ -289,9 +297,9 @@ export class BrokerService {
 	}
 
 	update(principal: Principal, name: string, raw: BrokerUpdate): BrokerView {
-		requirePermission(principal, 'broker:update');
-		const patch = brokerUpdateSchema.parse(raw);
 		const row = this.requireRow(principal, name);
+		this.requireBrokerPermission(principal, 'broker:update', row);
+		const patch = brokerUpdateSchema.parse(raw);
 		const info = brokerEngineRegistry[row.engine];
 		if (patch.version !== undefined && patch.version !== row.version) {
 			if (!info.versions.includes(patch.version))
@@ -334,8 +342,8 @@ export class BrokerService {
 
 	/** Soft delete (D59): the container stops, the data dir stays on the node for the trash window. */
 	delete(principal: Principal, name: string): BrokerView {
-		requirePermission(principal, 'broker:delete');
 		const row = this.requireRow(principal, name);
+		this.requireBrokerPermission(principal, 'broker:delete', row);
 		const attached = this.attachmentsOf(row.id);
 		if (attached.length > 0)
 			throw new ConflictError(
@@ -360,8 +368,8 @@ export class BrokerService {
 	}
 
 	restore(principal: Principal, name: string): BrokerView {
-		requirePermission(principal, 'broker:delete');
 		const row = this.requireRow(principal, name, { includeDeleted: true });
+		this.requireBrokerPermission(principal, 'broker:delete', row);
 		if (!row.deletedAt) return this.toView(row);
 		if (row.purgeRequestedAt)
 			throw new ConflictError(`Broker "${name}" is being purged and can no longer be restored.`);
@@ -388,8 +396,8 @@ export class BrokerService {
 
 	/** Permanently delete a trashed broker now. The node deletes the data, then the row goes. */
 	purgeNow(principal: Principal, name: string): void {
-		requirePermission(principal, 'broker:delete');
 		const row = this.requireRow(principal, name, { includeDeleted: true });
+		this.requireBrokerPermission(principal, 'broker:delete', row);
 		if (!row.deletedAt) throw new ConflictError(`Broker "${name}" must be deleted before it can be purged.`);
 		const now = this.ctx.now();
 		this.ctx.db
@@ -441,6 +449,7 @@ export class BrokerService {
 	credentials(principal: Principal, name: string): BrokerCredentials {
 		requireCredentialReveal(principal, 'broker:credentials');
 		const row = this.requireRow(principal, name);
+		this.requireBrokerPermission(principal, 'broker:credentials', row);
 		const info = brokerEngineRegistry[row.engine];
 		const user = brokerIdentifier(row.name);
 		const pass = this.ctx.secrets.open(row.orgId, row.ownerSecret);
@@ -469,8 +478,8 @@ export class BrokerService {
 
 	/** Restart the broker container by bumping the restart generation (folded into its activation). */
 	restart(principal: Principal, name: string): BrokerView {
-		requirePermission(principal, 'broker:update');
 		const row = this.requireRow(principal, name);
+		this.requireBrokerPermission(principal, 'broker:update', row);
 		const now = this.ctx.now();
 		this.ctx.db
 			.update(brokers)
@@ -499,7 +508,7 @@ export class BrokerService {
 	// ---------------------------------------------------------------- attachments
 
 	attachments(principal: Principal, project: ProjectRow): BrokerAttachmentView[] {
-		requirePermission(principal, 'broker:read');
+		this.ctx.iam.require(principal, 'broker:read', { type: 'project', id: project.id });
 		return this.attachmentsForProject(project.id);
 	}
 
@@ -508,11 +517,11 @@ export class BrokerService {
 		project: ProjectRow,
 		raw: BrokerAttach,
 	): { attachment: BrokerAttachmentView; warning: string | null } {
-		requirePermission(principal, 'broker:update');
-		requirePermission(principal, 'project:update');
 		const input = brokerAttachSchema.parse(raw);
 		this.assertConsumer(project);
 		const row = this.requireRow(principal, input.broker);
+		this.requireBrokerPermission(principal, 'broker:update', row);
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		const envPrefix = input.envPrefix ?? brokerEngineRegistry[row.engine].defaultEnvPrefix;
 		const current = this.attachmentsForProject(project.id);
 		if (current.some((item) => item.brokerId === row.id))
@@ -563,9 +572,9 @@ export class BrokerService {
 	}
 
 	detach(principal: Principal, project: ProjectRow, name: string): void {
-		requirePermission(principal, 'broker:update');
-		requirePermission(principal, 'project:update');
 		const row = this.requireRow(principal, name, { includeDeleted: true });
+		this.requireBrokerPermission(principal, 'broker:update', row);
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		const result = this.ctx.sqlite.run('DELETE FROM broker_attachments WHERE broker_id = ? AND project_id = ?', [
 			row.id,
 			project.id,
@@ -905,6 +914,56 @@ export class BrokerService {
 
 	private attachmentsOf(brokerId: string): BrokerAttachmentView[] {
 		return this.attachmentViews(eq(brokerAttachments.brokerId, brokerId));
+	}
+
+	/** The projects a broker is attached to, so a project-scope binding covers it. */
+	private attachedProjectIds(brokerId: string): string[] {
+		return [
+			...new Set(
+				this.ctx.db
+					.select({ projectId: brokerAttachments.projectId })
+					.from(brokerAttachments)
+					.where(eq(brokerAttachments.brokerId, brokerId))
+					.all()
+					.map((row) => row.projectId),
+			),
+		];
+	}
+
+	/** The resources a broker check may match: the broker itself, or any project it is attached to. */
+	private brokerResources(row: BrokerRow, projectIds: readonly string[]): ResourceRef[] {
+		return [
+			{ type: 'broker', id: row.id },
+			...[...new Set(projectIds)].map((projectId) => ({
+				type: 'broker' as const,
+				id: row.id,
+				projectId,
+			})),
+		];
+	}
+
+	private canBrokerPermission(
+		principal: Principal,
+		permission: Permission,
+		row: BrokerRow,
+		projectIds: readonly string[] = this.attachedProjectIds(row.id),
+	): boolean {
+		return this.brokerResources(row, projectIds).some((resource) =>
+			this.ctx.iam.can(principal, permission, resource),
+		);
+	}
+
+	private requireBrokerPermission(
+		principal: Principal,
+		permission: Permission,
+		row: BrokerRow,
+		projectIds?: readonly string[],
+	): void {
+		const broker: ResourceRef = { type: 'broker', id: row.id };
+		if (this.ctx.iam.can(principal, permission, broker)) return;
+		if (this.canBrokerPermission(principal, permission, row, projectIds)) return;
+		// Ask the engine for the decision (and reason) against the broker itself.
+		this.ctx.iam.require(principal, permission, broker);
 	}
 
 	private attachmentsForProject(projectId: string): BrokerAttachmentView[] {

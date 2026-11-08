@@ -393,6 +393,18 @@ describe.skipIf(!hasClickHouse)('alert service', () => {
 		expect(core.alerts.history(admin, { kinds: ['system'] }).map((event) => event.title)).toContain('Node offline');
 		expect(core.alerts.history(owner, { kinds: ['system'] })).toEqual([]);
 	});
+
+	test('metrics:read is checked at org scope, not by a project binding', () => {
+		opened.sqlite.run(
+			`INSERT INTO iam_bindings
+			   (id, org_id, principal_type, principal_id, role_id, scope_type, scope_id, created_by, created_at)
+			 VALUES ('bind_scope_alerts', 'org_1', 'user', 'user_scope_alerts', 'viewer', 'project', ?, 'test', 0)`,
+			[mine],
+		);
+		const guest = buildPrincipal({ kind: 'user', userId: 'user_scope_alerts', orgId: 'org_1', role: 'viewer' });
+		expect(() => core.alerts.listRules(guest)).toThrow(/metrics:read/);
+		expect(() => core.alerts.listSilences(guest)).toThrow(/metrics:read/);
+	});
 });
 
 describe('system alert settings', () => {

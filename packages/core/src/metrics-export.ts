@@ -7,7 +7,6 @@ import {
 	metricsExportSettingsSchema,
 	metricsExportSettingsUpdateSchema,
 	quotaUsageMetricKeys,
-	requirePermission,
 	type BrokerStreamStats,
 	type MetricsExportSettings,
 	type MetricsSection,
@@ -141,13 +140,14 @@ export class MetricsExporter {
 			if (scope.section !== 'all' || !settings.publicPlatform) throw new UnauthorizedError('Send an API key with metrics:read.');
 			return this.#cached('public', settings, () => this.#renderPlatform(settings));
 		}
-		requirePermission(principal, 'metrics:read');
+		this.ctx.iam.require(principal, 'metrics:read', { type: 'org' });
 		if (scope.section !== 'all' && !settings.sections[scope.section]) throw new NotFoundError(`Metrics section "${scope.section}"`);
 		if (scope.section === 'platform') {
 			if (!canViewPlatform(principal)) throw new ForbiddenError('platform admin');
 			return this.#cached('platform', settings, () => this.#renderPlatform(settings));
 		}
-		if (scope.section !== 'all') requirePermission(principal, SECTION_PERMISSION[scope.section]);
+		if (scope.section !== 'all')
+			this.ctx.iam.require(principal, SECTION_PERMISSION[scope.section], { type: 'org' });
 		const permissions = ORG_SECTIONS.map((s) => (principal.permissions.has(SECTION_PERMISSION[s]) ? '1' : '0')).join('');
 		const key = `org:${principal.orgId}:${scope.section}:${scope.name ?? ''}:${permissions}`;
 		return this.#cached(key, settings, () => this.#renderOrg(principal, scope, settings));

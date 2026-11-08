@@ -4,6 +4,7 @@ import { json, readJson, route } from '#lib/server/api.js';
 import { redeemCliLoginCode } from '#lib/server/cli-login.js';
 import { contentDomain, platformOrigin } from '#lib/server/config.js';
 import { core } from '#lib/server/core.js';
+import { preferredOrganizationId } from '#lib/server/org-membership.js';
 import { principalFromSession } from '#lib/server/principal.js';
 import type { RequestHandler } from './$types';
 
@@ -36,7 +37,10 @@ export const POST: RequestHandler = ({ request }) =>
 		}
 
 		// The CLI receives an API key, so the user's role must allow creating one (DESIGN §6.2).
-		if (!userHasOrgPermission(redeemed.userId, 'apiKey:create'))
+		// The key belongs to the org the user last worked in (IAM.md I5); without one, fall back to
+		// their first membership, which is what earlier builds did.
+		const orgId = preferredOrganizationId(redeemed.userId);
+		if (!userHasOrgPermission(redeemed.userId, 'apiKey:create', orgId))
 			return json(
 				{
 					error: 'forbidden',
@@ -50,6 +54,9 @@ export const POST: RequestHandler = ({ request }) =>
 			body: {
 				userId: redeemed.userId,
 				name: 'Skiff CLI (browser login)',
+				// IAM.md I14: still a Better Auth `apikey`; it moves to `access_keys` (org-bound,
+				// expiring) with the service-account work, once spike S1 settles the hash format.
+				metadata: orgId ? { orgId } : undefined,
 			},
 		});
 		if (!created?.key)
@@ -60,7 +67,7 @@ export const POST: RequestHandler = ({ request }) =>
 			);
 
 		try {
-			const principal = principalFromSession(redeemed.userId, request, { kind: 'user' });
+			const principal = principalFromSession(redeemed.userId, request, { kind: 'user', orgId });
 			if (principal) core.audit.record({
 				principal,
 				action: 'cli.login',

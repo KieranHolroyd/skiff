@@ -2,7 +2,6 @@ import { and, asc, eq, ne } from 'drizzle-orm';
 import { environments, deployments } from '@skiff/db';
 import {
 	environmentCreateSchema,
-	requirePermission,
 	type EnvironmentCreateInput,
 	type EnvironmentUpdateInput,
 	type EnvironmentView,
@@ -102,13 +101,13 @@ export class EnvironmentService {
 	}
 
 	list(principal: Principal, project: ProjectRow): EnvironmentView[] {
-		requirePermission(principal, 'project:read');
+		this.ctx.iam.require(principal, 'project:read', { type: 'project', id: project.id });
 		this.ensureProduction(project);
 		return this.rows(project.id).map((row) => this.view(project, row));
 	}
 
 	create(principal: Principal, project: ProjectRow, input: EnvironmentCreateInput): EnvironmentView {
-		requirePermission(principal, 'project:update');
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		this.ensureProduction(project);
 		const parsed = environmentCreateSchema.parse(input);
 		const slug = parsed.slug ?? slugify(parsed.name);
@@ -152,8 +151,12 @@ export class EnvironmentService {
 	}
 
 	update(principal: Principal, project: ProjectRow, slug: string, input: EnvironmentUpdateInput): EnvironmentView {
-		requirePermission(principal, 'project:update');
 		const row = this.requireRow(project, slug);
+		this.ctx.iam.require(principal, 'project:update', {
+			type: 'environment',
+			id: row.id,
+			projectId: project.id,
+		});
 		if (row.isProduction) throw new ConflictError('The production environment cannot be renamed.');
 		const access = input.access ?? row.access;
 		// The environment's own password; other scopes are never touched.
@@ -182,8 +185,12 @@ export class EnvironmentService {
 	}
 
 	remove(principal: Principal, project: ProjectRow, slug: string): void {
-		requirePermission(principal, 'project:update');
 		const row = this.requireRow(project, slug);
+		this.ctx.iam.require(principal, 'project:update', {
+			type: 'environment',
+			id: row.id,
+			projectId: project.id,
+		});
 		if (row.isProduction) throw new ConflictError('The production environment cannot be deleted.');
 		const used = this.ctx.db
 			.select({ id: deployments.id })
@@ -215,15 +222,23 @@ export class EnvironmentService {
 		slug: string,
 		deploymentId: string,
 	): Promise<DeploymentView> {
-		requirePermission(principal, 'deployment:promote');
-		this.requireRow(project, slug);
+		const row = this.requireRow(project, slug);
+		this.ctx.iam.require(principal, 'deployment:promote', {
+			type: 'environment',
+			id: row.id,
+			projectId: project.id,
+		});
 		return this.ctx.deployments.promote(principal, project, deploymentId, slug);
 	}
 
 	/** Walk back this environment's pointer (production uses promotion history). */
 	rollback(principal: Principal, project: ProjectRow, slug: string): Promise<DeploymentView> {
-		requirePermission(principal, 'deployment:rollback');
-		this.requireRow(project, slug);
+		const row = this.requireRow(project, slug);
+		this.ctx.iam.require(principal, 'deployment:rollback', {
+			type: 'environment',
+			id: row.id,
+			projectId: project.id,
+		});
 		return this.ctx.deployments.rollback(principal, project, slug);
 	}
 

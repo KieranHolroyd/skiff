@@ -5,7 +5,6 @@ import {
 	parseImageReference,
 	registryCredentialCreateSchema,
 	registryCredentialUpdateSchema,
-	requirePermission,
 	type Principal,
 	type RegistryAuthEntry,
 	type RegistryCredentialCreate,
@@ -32,7 +31,7 @@ export class RegistryCredentialService {
 	constructor(private readonly ctx: CoreContext) {}
 
 	list(principal: Principal): RegistryCredentialView[] {
-		requirePermission(principal, 'image:pull');
+		this.ctx.iam.require(principal, 'image:pull', { type: 'org' });
 		return this.ctx.db
 			.select()
 			.from(registryCredentials)
@@ -43,7 +42,7 @@ export class RegistryCredentialService {
 	}
 
 	create(principal: Principal, raw: RegistryCredentialCreate): RegistryCredentialView {
-		requirePermission(principal, 'image:credentials');
+		this.ctx.iam.require(principal, 'image:credentials', { type: 'org' });
 		const input = registryCredentialCreateSchema.parse(raw);
 		const existing = this.ctx.db
 			.select()
@@ -85,7 +84,7 @@ export class RegistryCredentialService {
 	}
 
 	update(principal: Principal, name: string, raw: RegistryCredentialUpdate): RegistryCredentialView {
-		requirePermission(principal, 'image:credentials');
+		this.ctx.iam.require(principal, 'image:credentials', { type: 'org' });
 		const input = registryCredentialUpdateSchema.parse(raw);
 		const row = this.require(principal.orgId, name);
 		if (input.registry && input.registry !== row.registry) {
@@ -118,7 +117,7 @@ export class RegistryCredentialService {
 	}
 
 	remove(principal: Principal, name: string): void {
-		requirePermission(principal, 'image:credentials');
+		this.ctx.iam.require(principal, 'image:credentials', { type: 'org' });
 		const row = this.require(principal.orgId, name);
 		this.ctx.db.delete(registryCredentials).where(eq(registryCredentials.id, row.id)).run();
 		this.ctx.audit.record({

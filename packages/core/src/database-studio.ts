@@ -8,7 +8,6 @@ import {
 	STUDIO_PROTOCOL_VERSION,
 	databaseStudioHost,
 	databaseStudioOpenSchema,
-	requirePermission,
 	studioSessionIdPattern,
 	type DatabaseEngine,
 	type DatabaseStudioActivation,
@@ -114,9 +113,9 @@ export class DatabaseStudioService {
 
 	/** The caller's own session, or an inactive view. Never carries the token. */
 	view(principal: Principal, name: string): DatabaseStudioView {
-		requirePermission(principal, 'database:read');
-		requirePermission(principal, 'database:console');
 		const row = this.ctx.databases.requireRow(principal, name, { includeDeleted: true });
+		this.ctx.iam.require(principal, 'database:read', { type: 'database', id: row.id });
+		this.ctx.iam.require(principal, 'database:console', { type: 'database', id: row.id });
 		return this.toView(row, this.openSessionOf(row.id, principal.userId));
 	}
 
@@ -125,12 +124,12 @@ export class DatabaseStudioService {
 	 * a mode change closes the old session so a read-only token can never become writable.
 	 */
 	open(principal: Principal, name: string, raw: unknown = {}): DatabaseStudioView {
-		requirePermission(principal, 'database:console');
+		const row = this.ctx.databases.requireRow(principal, name, { includeDeleted: true });
+		this.ctx.iam.require(principal, 'database:console', { type: 'database', id: row.id });
 		this.requireEnabled();
 		requireInteractive(principal);
 		const input = databaseStudioOpenSchema.parse(raw ?? {});
-		if (!input.readOnly) requirePermission(principal, 'database:update');
-		const row = this.ctx.databases.requireRow(principal, name, { includeDeleted: true });
+		if (!input.readOnly) this.ctx.iam.require(principal, 'database:update', { type: 'database', id: row.id });
 		this.ctx.databases.assertStudioOpenable(row);
 		// A read-only session connects as the database's own read-only account, never the owner.
 		// Opening one starts it (or retries a failed one); the view says `preparing` until then.
@@ -194,9 +193,9 @@ export class DatabaseStudioService {
 
 	/** Close the caller's session now. Closing works with the flag off so nothing is stranded. */
 	close(principal: Principal, name: string): DatabaseStudioView {
-		requirePermission(principal, 'database:console');
-		requireInteractive(principal);
 		const row = this.ctx.databases.requireRow(principal, name, { includeDeleted: true });
+		this.ctx.iam.require(principal, 'database:console', { type: 'database', id: row.id });
+		requireInteractive(principal);
 		const existing = this.openSessionOf(row.id, principal.userId);
 		if (existing) {
 			this.closeSession(existing, 'closed', this.ctx.now(), row.name, principal);
@@ -210,11 +209,11 @@ export class DatabaseStudioService {
 	 * token is opened here and in `activation` only; views and audit stay token-free.
 	 */
 	endpoint(principal: Principal, name: string): DatabaseStudioEndpoint {
-		requirePermission(principal, 'database:console');
+		const row = this.ctx.databases.requireRow(principal, name);
+		this.ctx.iam.require(principal, 'database:console', { type: 'database', id: row.id });
 		this.requireEnabled();
 		// The studio is a human surface (D60). An API key must not reuse an open session.
 		requireInteractive(principal);
-		const row = this.ctx.databases.requireRow(principal, name);
 		const session = this.openSessionOf(row.id, principal.userId);
 		if (!session) throw new ConflictError('The database studio is not open. Open it first.');
 		const now = this.ctx.now();
@@ -225,7 +224,7 @@ export class DatabaseStudioService {
 			throw new ConflictError('The database studio session has expired. Open it again.');
 		}
 		// A role change after opening must not keep a writable session usable.
-		if (!session.readOnly) requirePermission(principal, 'database:update');
+		if (!session.readOnly) this.ctx.iam.require(principal, 'database:update', { type: 'database', id: row.id });
 		// Read-only never falls back to the owner: wait for the principal instead.
 		if (session.readOnly) {
 			const principalStatus = this.principals.status(row);
@@ -372,8 +371,8 @@ export class DatabaseStudioService {
 	 * statement or any value (plan 22 "Audit").
 	 */
 	recordActivity(principal: Principal, name: string, entry: DatabaseStudioActivity): void {
-		requirePermission(principal, 'database:console');
 		const row = this.ctx.databases.requireRow(principal, name);
+		this.ctx.iam.require(principal, 'database:console', { type: 'database', id: row.id });
 		if (entry.op === 'run') {
 			if (!FINGERPRINT_PATTERN.test(entry.fingerprint))
 				throw new ValidationError('A studio run is audited by its fingerprint, not its text.');

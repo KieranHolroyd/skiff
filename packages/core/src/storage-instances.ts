@@ -19,7 +19,6 @@ import {
 	bucketCreateSchema,
 	bucketUpdateSchema,
 	orgNetworkName,
-	requirePermission,
 	storageAlias,
 	storageAttachSchema,
 	storageAttachmentUpdateSchema,
@@ -37,7 +36,9 @@ import {
 	type BucketCorsRule,
 	type BucketObjectLock,
 	type BucketUpdate,
+	type Permission,
 	type Principal,
+	type ResourceRef,
 	type StorageAttach,
 	type StorageAttachmentUpdate,
 	type StorageAttachmentView,
@@ -127,21 +128,29 @@ export class StorageService {
 	// ---------------------------------------------------------------- reads
 
 	list(principal: Principal, options: { includeDeleted?: boolean } = {}): StorageView[] {
-		requirePermission(principal, 'storage:read');
 		const filters = [eq(storageInstances.orgId, principal.orgId)];
 		if (!options.includeDeleted) filters.push(isNull(storageInstances.deletedAt));
+		// A guest sees only instances they hold a binding on (IAM.md §6.3). A project-scope
+		// binding covers an instance through any of its attachments; a storage-scope binding
+		// covers it directly, so the scope filter only short-circuits an org-wide grant.
+		const scope = this.ctx.iam.scopeFilter(principal, 'storage:read');
+		// `scopeFilter` reads bindings only; a credential restriction still narrows an org grant.
+		const orgWide =
+			scope === 'all' && this.ctx.iam.can(principal, 'storage:read', { type: 'org' });
 		return this.ctx.db
 			.select()
 			.from(storageInstances)
 			.where(and(...filters))
 			.all()
+			.filter((row) => orgWide || this.canStoragePermission(principal, 'storage:read', row))
 			.sort((a, b) => a.name.localeCompare(b.name))
 			.map((row) => this.toView(row));
 	}
 
 	get(principal: Principal, name: string, options: { includeDeleted?: boolean } = {}): StorageView {
-		requirePermission(principal, 'storage:read');
-		return this.toView(this.requireRow(principal, name, options));
+		const row = this.requireRow(principal, name, options);
+		this.requireStoragePermission(principal, 'storage:read', row);
+		return this.toView(row);
 	}
 
 	requireRow(principal: Principal, name: string, options: { includeDeleted?: boolean } = {}): StorageRow {
@@ -157,7 +166,7 @@ export class StorageService {
 	// ---------------------------------------------------------------- lifecycle
 
 	create(principal: Principal, raw: StorageCreate): StorageView {
-		requirePermission(principal, 'storage:create');
+		this.ctx.iam.require(principal, 'storage:create', { type: 'org' });
 		const input = storageCreateSchema.parse(raw);
 		const info = storageEngineRegistry[input.engine];
 		const version = input.version ?? info.defaultVersion;
@@ -179,8 +188,8 @@ export class StorageService {
 		let project: ProjectRow | null = null;
 		let requested = input.placement;
 		if (input.project) {
-			requirePermission(principal, 'project:update');
 			project = this.requireAppProject(principal, input.project);
+			this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 			if (!input.public) {
 				// Private instances are reachable on their own node only: co-locate with the app.
 				const workloadNode = this.workloadNodeOf(project.id);
@@ -276,9 +285,9 @@ export class StorageService {
 	}
 
 	update(principal: Principal, name: string, raw: StorageUpdate): StorageView {
-		requirePermission(principal, 'storage:update');
-		const patch = storageUpdateSchema.parse(raw);
 		const row = this.requireRow(principal, name);
+		this.requireStoragePermission(principal, 'storage:update', row);
+		const patch = storageUpdateSchema.parse(raw);
 		const info = storageEngineRegistry[row.engine];
 		const projectId = this.attachmentsOf(row.id)[0]?.projectId;
 		if (patch.storageMb !== undefined || patch.memoryMb !== undefined)
@@ -333,8 +342,8 @@ export class StorageService {
 
 	/** Soft delete (S8): the container stops and the route goes; the data dir stays for `trashDays`. */
 	delete(principal: Principal, name: string): StorageView {
-		requirePermission(principal, 'storage:delete');
 		const row = this.requireRow(principal, name);
+		this.requireStoragePermission(principal, 'storage:delete', row);
 		const attached = this.attachmentsOf(row.id);
 		if (attached.length > 0)
 			throw new ConflictError(
@@ -359,8 +368,8 @@ export class StorageService {
 	}
 
 	restore(principal: Principal, name: string): StorageView {
-		requirePermission(principal, 'storage:delete');
 		const row = this.requireRow(principal, name, { includeDeleted: true });
+		this.requireStoragePermission(principal, 'storage:delete', row);
 		if (!row.deletedAt) return this.toView(row);
 		if (row.purgeRequestedAt)
 			throw new ConflictError(`Storage "${name}" is being purged and can no longer be restored.`);
@@ -391,8 +400,8 @@ export class StorageService {
 
 	/** Permanently delete a trashed instance now. The node deletes the data, then the rows go. */
 	purgeNow(principal: Principal, name: string): void {
-		requirePermission(principal, 'storage:delete');
 		const row = this.requireRow(principal, name, { includeDeleted: true });
+		this.requireStoragePermission(principal, 'storage:delete', row);
 		if (!row.deletedAt) throw new ConflictError(`Storage "${name}" must be deleted before it can be purged.`);
 		const now = this.ctx.now();
 		this.ctx.db
@@ -440,6 +449,7 @@ export class StorageService {
 	credentials(principal: Principal, name: string): StorageCredentials {
 		requireCredentialReveal(principal, 'storage:credentials');
 		const row = this.requireRow(principal, name);
+		this.requireStoragePermission(principal, 'storage:credentials', row);
 		const node = this.ctx.db.select({ name: nodes.name }).from(nodes).where(eq(nodes.id, row.nodeId)).get();
 		const internalEndpoint = `http://127.0.0.1:${row.hostPort}`;
 		const publicEndpoint = this.publicUrl(row);
@@ -472,8 +482,8 @@ export class StorageService {
 	 * keys are untouched (D82).
 	 */
 	restart(principal: Principal, name: string): StorageView {
-		requirePermission(principal, 'storage:update');
 		const row = this.requireRow(principal, name);
+		this.requireStoragePermission(principal, 'storage:update', row);
 		const now = this.ctx.now();
 		this.ctx.db
 			.update(storageInstances)
@@ -515,8 +525,8 @@ export class StorageService {
 	 * and objects are untouched; attached apps never see the root key, so none of them restart.
 	 */
 	rotateRootKey(principal: Principal, name: string): StorageView {
-		requirePermission(principal, 'storage:credentials');
 		const row = this.requireRow(principal, name);
+		this.requireStoragePermission(principal, 'storage:credentials', row);
 		if (row.rootPendingAccessKey)
 			throw new ConflictError(`A root key rotation for "${row.name}" is already waiting for its node. Cancel it first, or wait.`);
 		if (row.status !== 'running')
@@ -557,8 +567,8 @@ export class StorageService {
 
 	/** Abandon a staged rotation; the instance restarts with its current key. */
 	cancelRootKeyRotation(principal: Principal, name: string): StorageView {
-		requirePermission(principal, 'storage:credentials');
 		const row = this.requireRow(principal, name);
+		this.requireStoragePermission(principal, 'storage:credentials', row);
 		if (!row.rootPendingAccessKey) throw new ConflictError(`"${row.name}" has no root key rotation in progress.`);
 		this.rollbackRootKey(row, null);
 		this.ctx.audit.record({
@@ -661,15 +671,15 @@ export class StorageService {
 	// ---------------------------------------------------------------- named keys
 
 	listKeys(principal: Principal, name: string): StorageKeyView[] {
-		requirePermission(principal, 'storage:read');
 		const row = this.requireRow(principal, name, { includeDeleted: true });
+		this.requireStoragePermission(principal, 'storage:read', row);
 		return this.keysOf(row.id).map((key) => toStorageKeyView(key));
 	}
 
 	createKey(principal: Principal, name: string, raw: unknown): StorageKeyView {
-		requirePermission(principal, 'storage:update');
-		const input = storageKeyCreateSchema.parse(raw ?? {});
 		const row = this.requireRow(principal, name);
+		this.requireStoragePermission(principal, 'storage:update', row);
+		const input = storageKeyCreateSchema.parse(raw ?? {});
 		this.assertGrants(row, input.grants);
 		if (input.name.startsWith('attachment-'))
 			throw new ValidationError('Key names starting with "attachment-" are reserved for project attachments.');
@@ -707,8 +717,8 @@ export class StorageService {
 	}
 
 	revokeKey(principal: Principal, name: string, keyId: string): StorageKeyView {
-		requirePermission(principal, 'storage:update');
 		const row = this.requireRow(principal, name);
+		this.requireStoragePermission(principal, 'storage:update', row);
 		const key = this.requireKey(row.id, keyId);
 		this.assertNamedKey(key, 'revoke');
 		if (key.revokedAt === null) {
@@ -739,6 +749,7 @@ export class StorageService {
 		if (principal.kind === 'system')
 			throw new CoreError('forbidden', 'Credential reveal needs a user session or API key.', 403);
 		const row = this.requireRow(principal, name);
+		this.requireStoragePermission(principal, 'storage:credentials', row);
 		const key = this.requireKey(row.id, keyId);
 		this.assertNamedKey(key, 'reveal');
 		if (key.revokedAt !== null) throw new ConflictError('This key is revoked.');
@@ -822,10 +833,10 @@ export class StorageService {
 	// ---------------------------------------------------------------- buckets
 
 	createBucket(principal: Principal, name: string, raw: BucketCreate): StorageBucketView {
-		requirePermission(principal, 'storage:update');
+		const row = this.requireRow(principal, name);
+		this.requireStoragePermission(principal, 'storage:update', row);
 		const input = bucketCreateSchema.parse(raw);
 		this.assertBucketConfigFlag(input);
-		const row = this.requireRow(principal, name);
 		const existing = this.bucketRow(row.id, input.name);
 		// Re-creating a bucket whose delete was blocked (not empty) cancels that delete.
 		if (existing?.deleteRequestedAt && existing.deleteBlocked && !existing.deleteForce) {
@@ -875,16 +886,16 @@ export class StorageService {
 
 	/** The desired configuration for one bucket, including the last convergence report. */
 	getBucketConfig(principal: Principal, name: string, bucket: string): StorageBucketView {
-		requirePermission(principal, 'storage:read');
 		const row = this.requireRow(principal, name);
+		this.requireStoragePermission(principal, 'storage:read', row);
 		return bucketView(this.requireBucket(row, bucket));
 	}
 
 	updateBucket(principal: Principal, name: string, bucket: string, raw: BucketUpdate): StorageBucketView {
-		requirePermission(principal, 'storage:update');
+		const row = this.requireRow(principal, name);
+		this.requireStoragePermission(principal, 'storage:update', row);
 		const input = bucketUpdateSchema.parse(raw);
 		this.assertBucketConfigFlag(input);
-		const row = this.requireRow(principal, name);
 		const target = this.requireBucket(row, bucket);
 		const objectLock = parseObjectLock(target.objectLockJson);
 		if (objectLock && input.versioning === false)
@@ -935,8 +946,8 @@ export class StorageService {
 	 * reports `not-empty` otherwise; `force` empties it first (humans with `storage:delete` only).
 	 */
 	deleteBucket(principal: Principal, name: string, bucket: string, options: { force?: boolean } = {}): StorageBucketView {
-		requirePermission(principal, options.force ? 'storage:delete' : 'storage:update');
 		const row = this.requireRow(principal, name);
+		this.requireStoragePermission(principal, options.force ? 'storage:delete' : 'storage:update', row);
 		const target = this.bucketRow(row.id, bucket);
 		if (!target) throw new NotFoundError(`Bucket "${bucket}" in "${name}"`);
 		const users = this.attachmentsOf(row.id).filter((item) => item.grants.some((grant) => grant.bucket === bucket));
@@ -968,7 +979,7 @@ export class StorageService {
 	// ---------------------------------------------------------------- attachments
 
 	attachments(principal: Principal, project: ProjectRow): StorageAttachmentView[] {
-		requirePermission(principal, 'storage:read');
+		this.ctx.iam.require(principal, 'storage:read', { type: 'project', id: project.id });
 		return this.attachmentsForProject(project.id);
 	}
 
@@ -977,11 +988,11 @@ export class StorageService {
 		project: ProjectRow,
 		raw: StorageAttach,
 	): { attachment: StorageAttachmentView; warning: string | null } {
-		requirePermission(principal, 'storage:update');
-		requirePermission(principal, 'project:update');
 		const input = storageAttachSchema.parse(raw);
 		this.assertAppProject(project);
 		const row = this.requireRow(principal, input.storage);
+		this.requireStoragePermission(principal, 'storage:update', row);
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		const current = this.attachmentsForProject(project.id);
 		if (current.some((item) => item.storageId === row.id))
 			throw new ConflictError(`Storage "${row.name}" is already attached to "${project.slug}".`);
@@ -1029,10 +1040,10 @@ export class StorageService {
 		name: string,
 		raw: StorageAttachmentUpdate,
 	): StorageAttachmentView {
-		requirePermission(principal, 'storage:update');
-		requirePermission(principal, 'project:update');
 		const input = storageAttachmentUpdateSchema.parse(raw);
 		const row = this.requireRow(principal, name);
+		this.requireStoragePermission(principal, 'storage:update', row);
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		this.assertGrants(row, input.grants);
 		const now = this.ctx.now();
 		const result = this.ctx.sqlite.run(
@@ -1065,9 +1076,9 @@ export class StorageService {
 	}
 
 	detach(principal: Principal, project: ProjectRow, name: string): void {
-		requirePermission(principal, 'storage:update');
-		requirePermission(principal, 'project:update');
 		const row = this.requireRow(principal, name, { includeDeleted: true });
+		this.requireStoragePermission(principal, 'storage:update', row);
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		const attachment = this.ctx.db
 			.select({ credentialId: storageAttachments.credentialId })
 			.from(storageAttachments)
@@ -1524,8 +1535,8 @@ export class StorageService {
 		name: string,
 		input: { from: string | number | Date; to: string | number | Date; interval?: '1m' | '1h' },
 	): Promise<StorageMetricPoint[]> {
-		requirePermission(principal, 'storage:read');
 		const row = this.requireRow(principal, name, { includeDeleted: true });
+		this.requireStoragePermission(principal, 'storage:read', row);
 		if (!this.ctx.telemetry) return [];
 		return this.ctx.telemetry.queryStorageMetrics({
 			storageId: row.id,
@@ -1778,6 +1789,57 @@ export class StorageService {
 
 	private attachmentsOf(storageId: string): StorageAttachmentView[] {
 		return this.attachmentViews(eq(storageAttachments.storageId, storageId));
+	}
+
+	/** The projects an instance is attached to, so a project-scope binding covers it. */
+	private attachedProjectIds(storageId: string): string[] {
+		return [
+			...new Set(
+				this.ctx.db
+					.select({ projectId: storageAttachments.projectId })
+					.from(storageAttachments)
+					.where(eq(storageAttachments.storageId, storageId))
+					.all()
+					.map((row) => row.projectId),
+			),
+		];
+	}
+
+	/** The resources a storage check may match: the instance itself, or any project it is attached to. */
+	private storageResources(row: StorageRow, projectIds: readonly string[]): ResourceRef[] {
+		return [
+			{ type: 'storage', id: row.id },
+			...[...new Set(projectIds)].map((projectId) => ({
+				type: 'storage' as const,
+				id: row.id,
+				projectId,
+			})),
+		];
+	}
+
+	private canStoragePermission(
+		principal: Principal,
+		permission: Permission,
+		row: StorageRow,
+		projectIds: readonly string[] = this.attachedProjectIds(row.id),
+	): boolean {
+		return this.storageResources(row, projectIds).some((resource) =>
+			this.ctx.iam.can(principal, permission, resource),
+		);
+	}
+
+	/** Enforce a storage permission on the instance or any project it is attached to. */
+	requireStoragePermission(
+		principal: Principal,
+		permission: Permission,
+		row: StorageRow,
+		projectIds?: readonly string[],
+	): void {
+		const storage: ResourceRef = { type: 'storage', id: row.id };
+		if (this.ctx.iam.can(principal, permission, storage)) return;
+		if (this.canStoragePermission(principal, permission, row, projectIds)) return;
+		// Ask the engine for the decision (and reason) against the instance itself.
+		this.ctx.iam.require(principal, permission, storage);
 	}
 
 	private attachmentsForProject(projectId: string): StorageAttachmentView[] {

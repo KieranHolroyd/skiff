@@ -12,7 +12,6 @@ import {
 	FUNCTIONS_PYTHON_CAPABILITY,
 	BUN_DEFAULT_COMMAND,
 	PROCESS_NODE_CAPABILITY,
-	requirePermission,
 	workloadEnvIssues,
 	workloadReplicaId,
 	workloadSpecSchema,
@@ -106,7 +105,7 @@ export class WorkloadService {
 	}
 
 	plan(principal: Principal, project: ProjectRow, input?: Partial<WorkloadSpec>): ResolvedWorkload {
-		requirePermission(principal, 'deployment:create');
+		this.ctx.iam.require(principal, 'deployment:create', { type: 'project', id: project.id });
 		const runtime = effectiveRuntime(project);
 		const spec = withEngineCommand(
 			workloadSpecSchema.parse({
@@ -208,7 +207,7 @@ export class WorkloadService {
 
 	/** Persist the project-level spec (validated); placement is still resolved at deploy time. */
 	setSpec(principal: Principal, project: ProjectRow, input: WorkloadSpecInput): WorkloadView | null {
-		requirePermission(principal, 'project:update');
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		const runtime = effectiveRuntime(project);
 		if (runtime === 'static')
 			throw new ValidationError(
@@ -267,7 +266,7 @@ export class WorkloadService {
 	 * the result on its next reconcile.
 	 */
 	async setVariables(principal: Principal, project: ProjectRow, input: WorkloadVariables): Promise<WorkloadView | null> {
-		requirePermission(principal, 'project:update');
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		const variables = workloadVariablesSchema.parse(input);
 		// Adding a name needs `secret:create`, a new value for a live one `secret:update`; all are
 		// checked before anything is written.
@@ -443,12 +442,12 @@ export class WorkloadService {
 	}
 
 	get(principal: Principal, project: ProjectRow): WorkloadView | null {
-		requirePermission(principal, 'deployment:read');
+		this.ctx.iam.require(principal, 'deployment:read', { type: 'project', id: project.id });
 		return this.view(project);
 	}
 
 	remove(principal: Principal, project: ProjectRow): void {
-		requirePermission(principal, 'project:update');
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		const row = this.ctx.db.select().from(workloads).where(eq(workloads.projectId, project.id)).get();
 		if (!row) throw new NotFoundError('Workload');
 		const runner = workloadSpecSchema.safeParse(parseJson<unknown>(row.specJson, null)).data?.runner;
@@ -842,7 +841,7 @@ export class WorkloadService {
 
 	/** The runner pool as GitHub reports it, for the dashboard and `GET .../runners`. */
 	async runnerPool(principal: Principal, project: ProjectRow): Promise<GithubRunnerPoolView | null> {
-		requirePermission(principal, 'deployment:read');
+		this.ctx.iam.require(principal, 'deployment:read', { type: 'project', id: project.id });
 		const row = this.ctx.db.select().from(workloads).where(eq(workloads.projectId, project.id)).get();
 		const spec = row ? this.specOf(project, row) : this.projectSpec(project);
 		if (!spec?.runner) return null;

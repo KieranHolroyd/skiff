@@ -15,7 +15,7 @@ import {
 	nodeTaskLimits,
 	nodeTaskResultSchemas,
 	nodeTaskTargetType,
-	requirePermission,
+	parseWorkloadReplicaId,
 	workloadReplicaId,
 	type AgentNodeTaskLease,
 	type AgentNodeTaskResult,
@@ -27,6 +27,7 @@ import {
 	type NodeTaskView,
 	type Permission,
 	type Principal,
+	type ResourceRef,
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
@@ -114,15 +115,16 @@ export class NodeTaskService {
 
 	/** Queue a task against a managed broker's JetStream (docs/BROKERS.md §5). */
 	brokerTask<K extends Extract<NodeTaskKind, `broker.${string}`>>(principal: Principal, name: string, kind: K, raw: unknown): NodeTaskView<K> {
-		requirePermission(principal, 'broker:read');
-		requirePermission(principal, KIND_PERMISSION[kind]);
-		const input = PARSERS[kind](raw);
 		const row = this.ctx.db
 			.select()
 			.from(brokers)
 			.where(and(eq(brokers.orgId, principal.orgId), eq(brokers.name, name)))
 			.get();
 		if (!row || row.deletedAt) throw new NotFoundError(`Broker "${name}"`);
+		const resource: ResourceRef = { type: 'broker', id: row.id };
+		this.ctx.iam.require(principal, 'broker:read', resource);
+		this.ctx.iam.require(principal, KIND_PERMISSION[kind], resource);
+		const input = PARSERS[kind](raw);
 		if (row.status !== 'running')
 			throw new ConflictError(`${name} is ${row.status}; queue tools need the broker running.`);
 		this.requireTaskNode(row.nodeId);
@@ -133,10 +135,15 @@ export class NodeTaskService {
 
 	/** Queue a test request or a cron run against a function's host (docs/FUNCTIONS.md §4.11). */
 	functionTask<K extends Extract<NodeTaskKind, `function.${string}`>>(principal: Principal, project: ProjectRow, kind: K, raw: unknown): NodeTaskView<K> {
-		requirePermission(principal, 'deployment:read');
-		requirePermission(principal, KIND_PERMISSION[kind]);
-		const input = PARSERS[kind](raw);
 		const host = this.functionHost(project);
+		const resource: ResourceRef = {
+			type: 'deployment',
+			id: host.deploymentId,
+			projectId: host.projectId,
+		};
+		this.ctx.iam.require(principal, 'deployment:read', resource);
+		this.ctx.iam.require(principal, KIND_PERMISSION[kind], resource);
+		const input = PARSERS[kind](raw);
 		if (kind === 'function.scheduled') {
 			const cron = (input as { cron: string }).cron;
 			if (!host.crons.includes(cron))
@@ -155,7 +162,11 @@ export class NodeTaskService {
 	get(principal: Principal, id: string): NodeTaskView {
 		const row = this.ctx.sqlite.query<TaskRow, [string, string]>('SELECT * FROM node_tasks WHERE id = ? AND org_id = ?').get(id, principal.orgId);
 		if (!row) throw new NotFoundError(`Task "${id}"`);
-		requirePermission(principal, row.target_type === 'broker' ? 'broker:read' : 'deployment:read');
+		this.ctx.iam.require(
+			principal,
+			row.target_type === 'broker' ? 'broker:read' : 'deployment:read',
+			this.taskResource(row),
+		);
 		return toView(row);
 	}
 
@@ -277,8 +288,20 @@ export class NodeTaskService {
 			throw new ConflictError(`${label} runs an agent that predates queue and function tools. Update the node first.`);
 	}
 
+	/** The narrowest resource a stored task targets, for a permission check on `get`. */
+	private taskResource(row: TaskRow): ResourceRef {
+		if (row.target_type === 'broker') return { type: 'broker', id: row.target_id };
+		const { workloadId } = parseWorkloadReplicaId(row.target_id);
+		const workload = this.ctx.db
+			.select({ projectId: workloads.projectId, deploymentId: workloads.deploymentId })
+			.from(workloads)
+			.where(eq(workloads.id, workloadId))
+			.get();
+		return { type: 'deployment', id: workload?.deploymentId ?? row.target_id, projectId: workload?.projectId };
+	}
+
 	/** Replica 0 of the function's active workload: the host whose crons and queues run (FN9). */
-	private functionHost(project: ProjectRow): { nodeId: string; desiredId: string; crons: string[] } {
+	private functionHost(project: ProjectRow): { nodeId: string; desiredId: string; crons: string[]; projectId: string; deploymentId: string } {
 		const row = this.ctx.db.select().from(workloads).where(eq(workloads.projectId, project.id)).get();
 		if (!row || (row.runtimeName ?? row.runtime) !== 'function')
 			throw new ConflictError(`${project.slug} has no active function deployment yet. Deploy it first.`);
@@ -289,10 +312,10 @@ export class NodeTaskService {
 			.from(workloadReplicas)
 			.where(and(eq(workloadReplicas.workloadId, row.id), eq(workloadReplicas.replicaIndex, 0)))
 			.get();
-		if (replica) return { nodeId: replica.nodeId, desiredId: workloadReplicaId(row.id, 0), crons };
+		if (replica) return { nodeId: replica.nodeId, desiredId: workloadReplicaId(row.id, 0), crons, projectId: row.projectId, deploymentId: row.deploymentId };
 		if (!row.nodeId) throw new ConflictError(`${project.slug} is not placed on a node yet.`);
 		const single = (spec.replicas ?? 1) === 1 && !spec.runner;
-		return { nodeId: row.nodeId, desiredId: single ? row.id : workloadReplicaId(row.id, 0), crons };
+		return { nodeId: row.nodeId, desiredId: single ? row.id : workloadReplicaId(row.id, 0), crons, projectId: row.projectId, deploymentId: row.deploymentId };
 	}
 
 	/** Fold a broker task's after-state into the stored listing (D123 keeps only the newest). */

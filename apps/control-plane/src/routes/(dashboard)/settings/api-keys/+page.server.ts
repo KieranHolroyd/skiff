@@ -175,7 +175,10 @@ export const actions: Actions = {
 				body: {
 					name,
 					expiresIn,
-					metadata: { scopes: selected }
+					// `orgId` binds the key to the org it was created in (IAM.md I5/I14): switching
+					// orgs, or joining another one, never moves an existing key. IAM.md I14 still owns
+					// moving these Better Auth `apikey` rows to `access_keys`.
+					metadata: { scopes: selected, orgId: principal.orgId }
 				},
 				headers: request.headers
 			});

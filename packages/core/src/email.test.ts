@@ -397,3 +397,24 @@ describe('maintenance', () => {
 		expect(() => core.email.getMessage(tenant, sent.id)).toThrow(/not found/);
 	});
 });
+
+describe('resource-scoped access', () => {
+	test('an emailDomain binding covers only that domain, not the org-wide list', async () => {
+		const visible = await core.email.createDomain(tenant, { name: 'scoped-visible.test', autoDns: false });
+		const hidden = await core.email.createDomain(tenant, { name: 'scoped-hidden.test', autoDns: false });
+		opened.sqlite.run(
+			`INSERT INTO iam_bindings
+			   (id, org_id, principal_type, principal_id, role_id, scope_type, scope_id, created_by, created_at)
+			 VALUES ('bind_scope_email', 'org_2', 'user', 'user_scope_email', 'owner', 'emailDomain', ?, 'test', 0)`,
+			[visible.id],
+		);
+		const guest = buildPrincipal({ kind: 'user', userId: 'user_scope_email', orgId: 'org_2', role: 'viewer' });
+		expect(core.email.getDomain(guest, 'scoped-visible.test').id).toBe(visible.id);
+		expect(core.email.updateDomain(guest, 'scoped-visible.test', { sending: false }).sending).toBe(false);
+		expect(() => core.email.getDomain(guest, 'scoped-hidden.test')).toThrow(/email:read/);
+		expect(() => core.email.updateDomain(guest, 'scoped-hidden.test', { sending: false })).toThrow(/email:update/);
+		await expect(core.email.deleteDomain(guest, 'scoped-hidden.test')).rejects.toThrow(/email:delete/);
+		// Listing every domain is an org-wide read, not one covered by a single-domain binding.
+		expect(() => core.email.listDomains(guest)).toThrow(/email:read/);
+	});
+});

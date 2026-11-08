@@ -4,6 +4,7 @@ import { core } from '#lib/server/core.js';
 import { contentDomain, features, platformOrigin, sharedDomain } from '#lib/server/config.js';
 import { availableUpdate, canManagePlatform } from '#lib/server/self-update.js';
 import { assistantStatus } from '#lib/server/assistant/config.js';
+import { listMemberships } from '#lib/server/org-membership.js';
 import type { LayoutServerLoad } from './$types';
 
 /**
@@ -47,6 +48,8 @@ export const load: LayoutServerLoad = ({ locals, url, cookies }) => {
 			name: org?.name ?? 'Personal',
 			slug: org?.slug ?? null
 		},
+		/** Every org the caller can switch to (IAM.md I5, §8.1); the header's switcher lists these. */
+		orgs: listMemberships(principal.userId),
 		role: principal.role,
 		/** Platform policies the UI quotes in copy (Settings → Policies, Alerts → System alerts). */
 		policies: (({ trashDays, logRetentionDays, nodeAlertMinutes, operationHistoryDays }) => ({

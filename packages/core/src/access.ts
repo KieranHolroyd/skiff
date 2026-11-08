@@ -2,7 +2,6 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import { deployments, domains, environments, projects, shareLinks, shareRedemptions } from '@skiff/db';
 import {
 	contentUrl,
-	requirePermission,
 	type AccessMode,
 	type Principal,
 	type ShareLinkCreate,
@@ -119,7 +118,7 @@ export class AccessService {
 	}
 
 	async createShareLink(principal: Principal, project: ProjectRow, input: Omit<ShareLinkCreate, 'project'>): Promise<ShareLinkView> {
-		requirePermission(principal, 'shareLink:create');
+		this.ctx.iam.require(principal, 'shareLink:create', { type: 'project', id: project.id });
 		if (input.deploymentId) {
 			const deployment = this.ctx.db
 				.select()
@@ -168,7 +167,7 @@ export class AccessService {
 	}
 
 	listShareLinks(principal: Principal, project: ProjectRow): ShareLinkView[] {
-		requirePermission(principal, 'shareLink:read');
+		this.ctx.iam.require(principal, 'shareLink:read', { type: 'project', id: project.id });
 		return this.ctx.db
 			.select()
 			.from(shareLinks)
@@ -179,7 +178,7 @@ export class AccessService {
 	}
 
 	async revokeShareLink(principal: Principal, project: ProjectRow, id: string): Promise<void> {
-		requirePermission(principal, 'shareLink:revoke');
+		this.ctx.iam.require(principal, 'shareLink:revoke', { type: 'project', id: project.id });
 		const row = this.ctx.db
 			.select()
 			.from(shareLinks)
@@ -205,7 +204,7 @@ export class AccessService {
 	 * revoked, belong to a revoked link or predate the last "sign out everyone" are left out.
 	 */
 	listSessions(principal: Principal, project: ProjectRow): SiteSessionView[] {
-		requirePermission(principal, 'shareLink:read');
+		this.ctx.iam.require(principal, 'shareLink:read', { type: 'project', id: project.id });
 		if (project.orgId !== principal.orgId) throw new NotFoundError('Project');
 		const epoch = this.epochOf(project.id);
 		const productionHost = `${project.slug}.${this.ctx.config.contentDomain}`;
@@ -247,7 +246,7 @@ export class AccessService {
 
 	/** End one share-link session. The agents refuse its cookie once they pull the revocation. */
 	async revokeSession(principal: Principal, project: ProjectRow, sessionId: string): Promise<void> {
-		requirePermission(principal, 'shareLink:revoke');
+		this.ctx.iam.require(principal, 'shareLink:revoke', { type: 'project', id: project.id });
 		if (project.orgId !== principal.orgId) throw new NotFoundError('Session');
 		// Only sessions redeemed from this project's share links can be revoked through it.
 		const result = this.ctx.sqlite.run(
@@ -275,7 +274,7 @@ export class AccessService {
 	 * themselves keep working; revoke a link to stop it starting new sessions.
 	 */
 	async signOutEveryone(principal: Principal, project: ProjectRow): Promise<{ epoch: number; signedOutAt: string; shareSessions: number }> {
-		requirePermission(principal, 'project:update');
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		if (project.orgId !== principal.orgId) throw new NotFoundError('Project');
 		const shareSessions = this.listSessions(principal, project).length;
 		let epoch = 0;

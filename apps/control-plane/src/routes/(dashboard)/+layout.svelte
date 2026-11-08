@@ -32,6 +32,7 @@
 	import AssistantTour from '#lib/assistant/AssistantTour.svelte';
 	import { authClient } from '#lib/auth-client.js';
 	import Logo from '#lib/components/skiff/Logo.svelte';
+	import OrgSwitcher from '#lib/components/skiff/OrgSwitcher.svelte';
 	import ThemeToggle from '#lib/components/skiff/ThemeToggle.svelte';
 	import * as Alert from '#lib/components/ui/alert/index.js';
 	import * as Avatar from '#lib/components/ui/avatar/index.js';
@@ -510,6 +511,7 @@
 				</Breadcrumb.List>
 			</Breadcrumb.Root>
 			<div class="ml-auto flex items-center gap-2">
+				<OrgSwitcher current={{ id: data.org.id, name: data.org.name }} orgs={data.orgs} />
 				{#await data.updateAvailable then update}
 					{#if update}
 						<Badge

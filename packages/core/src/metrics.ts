@@ -3,7 +3,6 @@ import { deployments, nodes, projects, releases } from '@skiff/db';
 import type { Principal } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import { ValidationError } from './errors.ts';
-import { requirePermission } from '@skiff/contracts';
 import {
 	TELEMETRY_NOT_INSTALLED,
 	emptyTrafficReport,
@@ -48,7 +47,7 @@ export class MetricsService {
 	) {}
 
 	status(principal: Principal): StatusSummary {
-		requirePermission(principal, 'project:read');
+		this.ctx.iam.require(principal, 'project:read', { type: 'org' });
 		const nodeRows = this.ctx.db.select({ status: nodes.status }).from(nodes).all();
 		const deploymentsRow = this.ctx.db
 			.select({
@@ -96,8 +95,8 @@ export class MetricsService {
 	): Promise<TrafficView> {
 		const empty = { permitted: false, available: false, report: emptyTrafficReport() } as const;
 		if (!principal.permissions.has('metrics:read')) return { ...empty };
-		requirePermission(principal, 'project:read');
 		const project = this.ctx.projects.requireRow(principal, projectSlug);
+		this.ctx.iam.require(principal, 'project:read', { type: 'project', id: project.id });
 		const telemetry = this.ctx.telemetry;
 		if (!telemetry || !(await telemetry.ready())) {
 			return { permitted: true, available: false, report: emptyTrafficReport(), reason: unavailableReason(telemetry), installed: telemetry?.installed ?? false };
@@ -121,9 +120,14 @@ export class MetricsService {
 	): Promise<TrafficView> {
 		const empty = { permitted: false, available: false, report: emptyTrafficReport() } as const;
 		if (!principal.permissions.has('metrics:read')) return { ...empty };
-		requirePermission(principal, 'project:read');
 		const project = this.ctx.projects.requireRow(principal, projectSlug);
 		const deployment = this.ctx.deployments.detail(principal, project, deploymentId);
+		this.ctx.iam.require(principal, 'project:read', {
+			type: 'deployment',
+			id: deployment.id,
+			projectId: project.id,
+			...(deployment.environmentId ? { environmentId: deployment.environmentId } : {}),
+		});
 		const hosts = [deployment.previewHost, ...deployment.serving.map((item) => item.host)];
 		if (!hosts.includes(host)) throw new ValidationError('That host does not serve this deployment.');
 		const telemetry = this.ctx.telemetry;
@@ -139,14 +143,21 @@ export class MetricsService {
 		if (!principal.permissions.has('metrics:read')) {
 			return { permitted: false, available: false, report: emptyTrafficReport() };
 		}
-		requirePermission(principal, 'project:read');
+		// Fleet traffic for every project the caller can read. The list is already scoped per
+		// project, so a guest without any project binding gets `permitted: false` rather than a
+		// forbidden error.
+		const scope = this.ctx.iam.scopeFilter(principal, 'project:read');
+		if (scope !== 'all' && scope.size === 0) {
+			return { permitted: false, available: false, report: emptyTrafficReport() };
+		}
 		const telemetry = this.ctx.telemetry;
 		if (!telemetry || !(await telemetry.ready())) {
 			return { permitted: true, available: false, report: emptyTrafficReport(), reason: unavailableReason(telemetry), installed: telemetry?.installed ?? false };
 		}
 		const projectIds = this.ctx.projects
 			.list(principal, { includeDeleted: true })
-			.map((project) => project.id);
+			.map((project) => project.id)
+			.filter((id) => scope === 'all' || scope.has(id));
 		if (projectIds.length === 0) {
 			return { permitted: true, available: true, report: emptyTrafficReport() };
 		}

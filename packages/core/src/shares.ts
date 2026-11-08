@@ -27,7 +27,7 @@ import {
 	type ShareView,
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
-import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
+import { ConflictError, NotFoundError, ValidationError } from './errors.ts';
 import { newId, parseJson } from './util.ts';
 
 type ShareRow = typeof shares.$inferSelect;
@@ -73,7 +73,7 @@ export class ShareService {
 	}
 
 	create(principal: Principal, raw: ShareCreate): ShareView {
-		this.assertWrite(principal);
+		this.assertWrite(principal, 'storage:create');
 		const input = shareCreateSchema.parse(raw);
 		if (this.ctx.db.select({ id: shares.id }).from(shares).where(eq(shares.name, input.name)).get())
 			throw new ConflictError(`Share "${input.name}" already exists.`);
@@ -115,7 +115,7 @@ export class ShareService {
 	}
 
 	update(principal: Principal, name: string, raw: ShareUpdate): ShareView {
-		this.assertWrite(principal);
+		this.assertWrite(principal, 'storage:update');
 		const input = shareUpdateSchema.parse(raw);
 		const row = this.requireRow(name);
 		const definitionChange =
@@ -159,7 +159,7 @@ export class ShareService {
 	}
 
 	remove(principal: Principal, name: string): { ok: true } {
-		this.assertWrite(principal);
+		this.assertWrite(principal, 'storage:delete');
 		const row = this.requireRow(name);
 		const mounted = this.mountRows(row.id);
 		if (mounted.length > 0)
@@ -183,7 +183,7 @@ export class ShareService {
 
 	/** Replace every org grant for a share. */
 	setGrants(principal: Principal, name: string, raw: ShareGrants): ShareView {
-		this.assertWrite(principal);
+		this.assertWrite(principal, 'storage:update');
 		const input = shareGrantsSchema.parse(raw);
 		const row = this.requireRow(name);
 		const now = this.ctx.now();
@@ -220,7 +220,7 @@ export class ShareService {
 	 * as the node reports the mount; a read-only one stays a plain mount.
 	 */
 	mount(principal: Principal, name: string, raw: ShareMountCreate): ShareView {
-		this.assertWrite(principal);
+		this.assertWrite(principal, 'storage:update');
 		const input = shareMountCreateSchema.parse(raw);
 		const share = this.requireRow(name);
 		const node = this.resolveNode(input.node);
@@ -271,7 +271,7 @@ export class ShareService {
 	 * on it; the mount row stays `unmounting` until the node confirms.
 	 */
 	unmount(principal: Principal, name: string, nodeRef: string): ShareView {
-		this.assertWrite(principal);
+		this.assertWrite(principal, 'storage:update');
 		const share = this.requireRow(name);
 		const node = this.resolveNode(nodeRef);
 		const row = this.mountRow(share.id, node.id);
@@ -298,7 +298,7 @@ export class ShareService {
 
 	/** Use an existing mount as a disk (now if the node reports it, else on its next report). */
 	link(principal: Principal, name: string, nodeRef: string, raw: ShareMountLink): ShareView {
-		this.assertWrite(principal);
+		this.assertWrite(principal, 'storage:update');
 		const input = shareMountLinkSchema.parse(raw);
 		const share = this.requireRow(name);
 		const node = this.resolveNode(nodeRef);
@@ -326,7 +326,7 @@ export class ShareService {
 
 	/** Stop using a mount as a disk; the share stays mounted. */
 	unlink(principal: Principal, name: string, nodeRef: string): ShareView {
-		this.assertWrite(principal);
+		this.assertWrite(principal, 'storage:update');
 		const share = this.requireRow(name);
 		const node = this.resolveNode(nodeRef);
 		const row = this.mountRow(share.id, node.id);
@@ -614,17 +614,18 @@ export class ShareService {
 	}
 
 	private assertRead(principal: Principal): void {
-		if (!canViewPlatform(principal)) throw new CoreError('forbidden', 'Platform admin required.', 403);
+		// Platform IAM (I8) replaces this fallback: until platform bindings exist, a platform
+		// admin keeps the fleet-wide read/write access `canViewPlatform`/`canAdministerPlatform`
+		// grants today; everyone else is decided by the engine at platform scope.
+		if (canViewPlatform(principal)) return;
+		this.ctx.iam.require(principal, 'storage:read', { type: 'platform' });
 	}
 
-	private assertWrite(principal: Principal): void {
-		if (!canAdministerPlatform(principal))
-			throw new CoreError(
-				'forbidden',
-				principal.platformAdmin
-					? 'Share changes need a platform admin signed in to the dashboard (not an API key or MCP token).'
-					: 'Platform admin required.',
-				403,
-			);
+	private assertWrite(
+		principal: Principal,
+		permission: 'storage:create' | 'storage:update' | 'storage:delete' = 'storage:update',
+	): void {
+		if (canAdministerPlatform(principal)) return;
+		this.ctx.iam.require(principal, permission, { type: 'platform' });
 	}
 }

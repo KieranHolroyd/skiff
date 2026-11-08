@@ -1,6 +1,6 @@
 import { auditLog } from '@skiff/db';
 import { desc, eq, and, gte, lt, lte, or, type SQL } from 'drizzle-orm';
-import { requirePermission, type Principal } from '@skiff/contracts';
+import type { Principal } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import { ValidationError } from './errors.ts';
 import { newId } from './util.ts';
@@ -87,7 +87,7 @@ export class AuditService {
 	page(options: AuditListOptions & { cursor?: string | null }): { entries: AuditEntry[]; nextCursor: string | null } {
 		let orgId = options.orgId!;
 		if (options.principal) {
-			requirePermission(options.principal, 'project:read');
+			this.ctx.iam.require(options.principal, 'project:read', { type: 'org' });
 			orgId = options.principal.orgId;
 		}
 		if (options.from !== undefined && options.to !== undefined && options.from > options.to)
