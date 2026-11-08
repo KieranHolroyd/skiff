@@ -61,13 +61,13 @@ opened.sqlite.run(
 	[edge.nodeId, clock, clock],
 );
 opened.sqlite.run(
-	`INSERT INTO node_volumes (id, node_id, name, kind, source_key, mount_path, fs_type, remote, class, status, created_by, created_at, updated_at)
+	`INSERT INTO node_volumes (id, node_id, name, kind, source_key, mount_path, fs_type, remote, tier, status, created_by, created_at, updated_at)
 	 VALUES ('vol_topo', ?, 'media', 'filesystem', 'fs:topo', '/mnt/media', 'xfs', 0, 'bulk', 'ready', 'user_1', ?, ?)`,
 	[worker.nodeId, clock, clock],
 );
 
 describe('topology view', () => {
-	test('groups nodes by zone and includes roles, hardware and volumes', () => {
+	test('groups nodes by zone and includes roles, hardware and disks', () => {
 		const view = core.topology.view(admin);
 		expect(view.zones.map((zone) => zone.zone).sort()).toEqual(['cloud-a', 'home']);
 		const home = view.nodes.find((node) => node.id === worker.nodeId)!;
@@ -77,17 +77,17 @@ describe('topology view', () => {
 			workloads: 1,
 			databases: 0,
 		});
-		expect(home.volumes).toEqual([
-			expect.objectContaining({ id: 'vol_topo', name: 'media', class: 'bulk' }),
+		expect(home.disks).toEqual([
+			expect.objectContaining({ id: 'vol_topo', name: 'media', tier: 'bulk' }),
 		]);
 		const edgeView = view.nodes.find((node) => node.id === edge.nodeId)!;
 		expect(edgeView.databases).toBe(1);
 	});
 
-	test('blast radius of a node names the workloads and volumes it would take down', () => {
+	test('blast radius of a node names the workloads and disks it would take down', () => {
 		const blast = core.topology.blastRadius(admin, { kind: 'node', id: worker.nodeId });
 		expect(blast.target.name).toBe('homelab');
-		expect(blast.summary).toMatchObject({ workloads: 1, volumes: 1, databases: 0 });
+		expect(blast.summary).toMatchObject({ workloads: 1, disks: 1, databases: 0 });
 		expect(blast.items.map((item) => item.name)).toContain('Topology app');
 	});
 

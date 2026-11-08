@@ -22,8 +22,6 @@ import { AlertService } from './alerts.ts';
 import { TopologyService } from './topology.ts';
 import { ServiceEndpointService } from './service-endpoints.ts';
 import { ShareService } from './shares.ts';
-import { DiskMountService } from './disk-mounts.ts';
-import { StoragePoolService } from './storage-pools.ts';
 import { RegistryCredentialService } from './registry-credentials.ts';
 import { RegistryService } from './registry.ts';
 import { DatabaseReplicaService } from './database-replica-service.ts';
@@ -43,7 +41,7 @@ import { EventService } from './events.ts';
 import { NodeTaskService } from './node-tasks.ts';
 import { JobService } from './jobs.ts';
 import { ConnectedAppService } from './connected-apps.ts';
-import { VolumeService } from './volumes.ts';
+import { DiskService } from './disks.ts';
 import { AppVolumeService } from './app-volumes.ts';
 import { ServiceMoveService } from './service-moves.ts';
 import { StorageObjectsService } from './storage-objects.ts';
@@ -113,8 +111,7 @@ export * from './node-tasks.ts';
 export * from './jobs.ts';
 export * from './connected-apps.ts';
 export * from './domain-reconcile.ts';
-export * from './volumes.ts';
-export * from './storage-pools.ts';
+export * from './disks.ts';
 export * from './app-volumes.ts';
 export * from './app-volume-lifecycle.ts';
 export * from './service-moves.ts';
@@ -184,7 +181,8 @@ export interface Core {
 	jobs: JobService;
 	/** MCP/OAuth clients users have approved (Settings → Connected apps). */
 	connectedApps: ConnectedAppService;
-	volumes: VolumeService;
+	/** Disks and default storage (docs/STORAGE.md, D169). */
+	disks: DiskService;
 	appVolumes: AppVolumeService;
 	moves: ServiceMoveService;
 	storageObjects: StorageObjectsService;
@@ -215,10 +213,6 @@ export interface Core {
 	endpoints: ServiceEndpointService;
 	/** Cluster shares (CLUSTERING §5.2, C3). */
 	shares: ShareService;
-	/** Local partitions mounted by UUID and adopted as volumes (docs/VOLUMES.md §3.1). */
-	diskMounts: DiskMountService;
-	/** Storage pools and placement rules (docs/STORAGE.md, D144). */
-	storagePools: StoragePoolService;
 	/** Credentials for external container registries (docs/REGISTRY.md R2). */
 	registryCredentials: RegistryCredentialService;
 	/** The platform container registry (docs/REGISTRY.md G1). */
@@ -289,7 +283,7 @@ export function createCore(options: CoreOptions): Core {
 	ctx.events = new EventService(ctx);
 	ctx.nodeTasks = new NodeTaskService(ctx);
 	ctx.jobs = new JobService(ctx);
-	ctx.volumes = new VolumeService(ctx);
+	ctx.disks = new DiskService(ctx);
 	ctx.appVolumes = new AppVolumeService(ctx);
 	ctx.moves = new ServiceMoveService(ctx);
 	ctx.storageObjects = new StorageObjectsService(ctx);
@@ -315,8 +309,6 @@ export function createCore(options: CoreOptions): Core {
 	ctx.topology = new TopologyService(ctx);
 	ctx.endpoints = new ServiceEndpointService(ctx);
 	ctx.shares = new ShareService(ctx);
-	ctx.diskMounts = new DiskMountService(ctx);
-	ctx.storagePools = new StoragePoolService(ctx);
 	ctx.registryCredentials = new RegistryCredentialService(ctx);
 	ctx.registry = new RegistryService(ctx);
 	ctx.databaseReplicas = new DatabaseReplicaService(ctx);
@@ -363,7 +355,7 @@ export function createCore(options: CoreOptions): Core {
 		nodeTasks: ctx.nodeTasks,
 		jobs: ctx.jobs,
 		connectedApps: new ConnectedAppService(ctx),
-		volumes: ctx.volumes,
+		disks: ctx.disks,
 		appVolumes: ctx.appVolumes,
 		moves: ctx.moves,
 		storageObjects: ctx.storageObjects,
@@ -389,8 +381,6 @@ export function createCore(options: CoreOptions): Core {
 		topology: ctx.topology,
 		endpoints: ctx.endpoints,
 		shares: ctx.shares,
-		diskMounts: ctx.diskMounts,
-		storagePools: ctx.storagePools,
 		registryCredentials: ctx.registryCredentials,
 		registry: ctx.registry,
 		databaseReplicas: ctx.databaseReplicas,

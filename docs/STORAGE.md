@@ -1,208 +1,193 @@
-# Skiff — Storage pools and default storage
+# Skiff — Disks and default storage
 
-Status: **designed 2026-11-07; phase S1 implemented** (see §9). Decision **D144**.
+Status: **rebuilt 2026-11-08** (D169). Replaces node volumes, storage pools and the partition
+table (D72–D75, D144). App volumes, the project-owned directories mounted into apps, are a
+separate resource: [VOLUMES.md](./VOLUMES.md).
 
-Skiff used to decide where data lands one resource at a time: a managed instance took an explicit
-volume, else its node's default volume, else the helper's state directory on the system disk.
-Nothing said "databases belong on SSD, object storage on the HDD array". This document makes
-storage something the operator sets up **first** — in onboarding, or later under **Settings →
-Storage**. **Where a service is stored is chosen when it is created**; Settings holds the default
-pool each kind of service starts with. Skiff never picks a different pool on its own.
-
-It builds on [VOLUMES.md](./VOLUMES.md) (node volumes, network shares, fail-closed mounts) and
-borrows from Unraid and TrueNAS, which both solved "fast pool for apps, big pool for bulk" for
-home servers.
+An operator should be able to answer "where does my data go?" in one screen. Skiff stores data on
+**disks**, each disk is **fast** or **bulk**, and Settings says which of the two (or the system
+disk) each kind of service uses by default. Nothing more to set up.
 
 ---
 
-## 1. What we borrow, and what we don't
-
-| From | Concept | In Skiff |
-|---|---|---|
-| Unraid | Named **pools** (6.9+, 7.x makes the array optional); `appdata`/`system` on the SSD pool, media on the array | **Pools** are named tiers (`ssd`, `hdd`, `nas`); the defaults put databases on the fast one |
-| Unraid | Per-share **primary storage** + **secondary storage** used when primary falls below **minimum free space** (default 10 %) | Each pool has `minFreePercent` (default 10). **No secondary/overflow pool:** a pool that cannot hold a service is a refusal, never a silent move elsewhere |
-| Unraid | **Allocation method** (`high-water`, `most-free`, `fill-up`) | Per pool: `most-free` (default) or `fill-up` |
-| Unraid | Changing a share's primary does **not** move existing files; the mover is explicit | Changing a default affects new services only; moving is an explicit action (D97 moves) |
-| Unraid | Remote SMB/NFS mounts under `/mnt/remotes` (Unassigned Devices) | Network shares mounted at `/mnt/skiff-shares/<share>` and linked as volumes (D143) |
-| TrueNAS | **Pools** of devices, then a **dataset per workload** with its own quota/snapshots | A pool member is a volume; each resource gets its own `<mount>/skiff/<id>` directory |
-| TrueNAS | Dataset **presets** (Generic, SMB, Apps) and property **inheritance** | The default per kind acts as a preset; the create form preselects it and the creator can pick another pool |
-| TrueNAS | Apps choose an **apps pool**; host-path datasets recommended over ixVolumes for durable data | The default for each kind is that choice, made once in Settings; each service can still choose |
-
-**Not copied:** Unraid's FUSE union filesystem (a resource always gets a real path on one volume),
-secondary storage and the schedule-driven mover (the pool chosen at creation is where the service
-lives; a full pool refuses rather than spills elsewhere), split levels, and public-by-default exports. ZFS vdev layout stays in
-VOLUMES P3: Skiff consumes what the disks provide and labels it with a class.
-
-## 2. Vocabulary
+## 1. Vocabulary
 
 | Term | Meaning |
 |---|---|
-| **Volume** | One mounted filesystem on one node: a local disk, an LVM/mdadm/ZFS/LUKS stack, or a mounted network share ([VOLUMES.md](./VOLUMES.md)). Has a derived class (`fast`/`bulk`/`remote`/`unknown`). |
-| **System disk** | Each node's built-in storage: the helper state dir and the D48 default directories. Always present, never a row. |
-| **Pool** | A platform-wide, named group of volumes, possibly on many nodes. A volume belongs to at most one pool. `system` is a built-in pool whose single member on every node is its system disk. |
-| **Data kind** | A category of data Skiff writes: databases, object storage, queues, app volumes, builds, site data (and later images, backups, telemetry). |
-| **Default storage** | For one data kind: the pool its create form preselects. |
+| **Disk** | One mounted filesystem on one node that Skiff may store data on: a local disk or partition, an LVM/mdadm/ZFS/LUKS device the OS already assembled, or a mounted network share. |
+| **System disk** | Each node's built-in storage (the helper state dir and the D48 install directories). Always there, never a row. |
+| **Tier** | `fast` or `bulk`, per disk. Derived from the hardware (SSD/NVMe → fast; spinning disk, network share, unknown → bulk) until an operator sets it. |
+| **Storage target** | Where a new service goes: `system`, `fast`, `bulk`, or one disk by name. |
+| **Default storage** | Per kind of service, the target its create form preselects. |
 
-## 3. Model
+There are no pools, allocation methods, minimum-free knobs, class overrides or node default
+volumes. Skiff never formats, partitions or assembles anything: it uses filesystems the OS
+already provides (D169).
+
+## 2. Model
 
 ```text
-storage_pools(id, name, description, allocation: most-free|fill-up, min_free_percent)
-node_volumes.pool_id → storage_pools.id        -- a volume is in ≤ 1 pool
-storage_rules(kind PK, pool_id NULL=system)    -- the defaults (overflow_pool_id is unused)
-settings['storage.onboarding'] = done|skipped  -- onboarding finished or skipped
+disks            SQL table node_volumes (0010), TS `disks`:
+                 id, node_id, name, kind, source_key, mount_path, fs_type, remote,
+                 tier fast|bulk, tier_set (operator chose it), mount_uuid (Skiff mounts it),
+                 status pending|ready|missing|failed|removing, message, size/free, stats_at
+storage_defaults kind PK → target system|fast|bulk
+settings['storage.onboarding'] = done|skipped
 ```
 
-The resource keeps what it was placed on (`volume_id`, or null for the system disk). Defaults only
-decide **new** services, and moves keep the resource's pool on the target node.
+The SQL names predate the rebuild and stay, because migrations are additive (OPS §4.2.2); the
+TypeScript schema calls the table `disks` and every `volume_id` placement column `diskId`.
+`storage_pools`, `storage_rules`, `disk_mounts` and `nodes.default_volume_id` are no longer read.
 
-### 3.1 Data kinds
+A resource keeps the disk it was placed on (`disk_id`, null for the system disk) until an
+explicit move. Disk data lives at `<mount>/skiff/<id>`; Skiff owns only that subtree (D78).
 
-| Kind | What | Unit of placement | Default (fresh install) | Phase |
-|---|---|---|---|---|
-| `databases` | Managed database data dirs, read replicas, move targets | `<volume>/skiff/<db_id>` | `system` | S1 |
-| `object-storage` | RustFS instance data | `<volume>/skiff/<st_id>` | `system` | S1 |
-| `brokers` | Queue broker data | `<volume>/skiff/<br_id>` | `system` | S1 |
-| `app-volumes` | Project volumes mounted into apps (VOLUMES §14) | `<volume>/skiff/apps/<project>/<vol_id>` | `system` | S1 |
-| `builds` | Builder scratch (D48 `buildDir`) | `<volume>/skiff/node/<node>/builds` | `system` | S1 |
-| `site-data` | Agent state and static release cache (D48 `dataDir`) | `<volume>/skiff/node/<node>/agent` | `system` | S1 |
-| `images` | Container image store (podman `graphroot`) | per node | `system` | S2 |
-| `backups` | Local backup target and dump staging | per node | `system` | S2 |
-| `telemetry` | ClickHouse data | control node | `system` | S3 |
+**Identity** is a stable source key, never `/dev/sdX` (D72): `fs:<UUID>[#subvol]`,
+`lvm:<vg-lv>`, `md:<array UUID>`, `zfs:<pool/dataset>`, `luks:<mapper>`,
+`nfs:<server>:<export>`, `cifs:<server>/<share>`. A filesystem without one is not offered.
 
-`system` everywhere is exactly the old behaviour, so an install that skips onboarding is unchanged.
-A kind with **no saved default** also keeps the legacy fallback — the node's `default_volume_id` —
-so existing installs that set a node default keep using it until they save defaults.
+### 2.1 Kinds and defaults
 
-### 3.2 Resolution
+| Kind | What | Data path | Suggested default |
+|---|---|---|---|
+| `databases` | Managed databases, read replicas, move targets | `<disk>/skiff/<db_id>` | fast |
+| `object-storage` | RustFS instances | `<disk>/skiff/<st_id>` | bulk |
+| `brokers` | Queue brokers | `<disk>/skiff/<br_id>` | fast |
+| `app-volumes` | App volumes ([VOLUMES.md](./VOLUMES.md)) | `<disk>/skiff/apps/<project>/<vol_id>` | fast |
+| `builds` | Builder scratch (D48 `buildDir`) | `<disk>/skiff/node/<node>/builds` | bulk |
+| `site-data` | Agent state and the static release cache (D48 `dataDir`) | `<disk>/skiff/node/<node>/agent` | system |
 
-For a new resource of kind `k`, with the pool `p` its creator chose (or a single volume, the
-advanced escape hatch that bypasses pools):
+A kind with no saved default uses the system disk, so an install that never adds a disk behaves
+exactly as before. The "suggested" column is what Settings fills in when an operator presses
+**Suggest**; nothing is applied on its own.
+
+### 2.2 Resolution
+
+For a new resource of kind `k` with target `t` (the creator's choice, else `default[k]`, else
+`system`):
 
 ```
-pool      ← p given ? p : default[k]
-             (no default saved → legacy: node default volume, else system)
-eligible  ← nodes with a usable member of pool (system: every node)
-node      ← placement as today, over eligible candidates only (CLUSTERING §3.4 filter)
-volume    ← pick(pool, node) ?? refuse          -- never another pool
-pick(pool, node):
-  pool = system → the system disk
-  members ← pool volumes on node, status ready, and
-            (free − request) ≥ size × minFreePercent
-  most-free → the member with the most free bytes; fill-up → the fullest member that still fits
+t = system  → every node is eligible; the data goes on the system disk
+t = <disk>  → the disk's node only (pins placement); the disk must be ready and have room
+t = fast|bulk:
+  eligible(node) ← ready disks on node with tier t and room for the request
+  node           ← placement over eligible nodes only (CLUSTERING §3.4 filter)
+  disk           ← the eligible disk on that node with the most free bytes
 ```
 
-A refusal names the pool and each node's reason ("ssd: edge has no member; homelab member nvme0 is
-below 10 % free after 20 GiB"), in the CLUSTERING §3.4 refusal style.
+"Room" means the disk keeps 10 % of its size free after the request (unknown capacity fits).
+**There is no fallback**: a `fast` request on a node with no usable fast disk is refused, naming
+each node's reason ("homelab: no fast disk; edge: fast disk nvme is below 10 % free after
+20 GiB"). Skiff never puts a service on another tier than the one chosen.
 
 Node-level kinds (`builds`, `site-data`) resolve per node when its desired state is built: the
-effective D48 directory is the node's explicit setting, else the default pool's member volume on that node
-(**local members only** — Caddy serves releases from `site-data`, and a build cache on a share is
-pointless), else the install default. A change reaches the node's existing `skiff-storage.service`
-applier, which moves the directory and reports back (D48).
+node's explicit D48 directory, else its most-free **local** ready disk of the default tier, else
+the install default. A change reaches the node's `skiff-storage.service` applier, which moves the
+directory (D48). Network shares are skipped here: Caddy serves releases from `site-data`.
 
-### 3.3 Per-resource choice
+Moves (D97) keep the resource's tier: a database on a fast disk moves to a fast disk on the
+target, one on the system disk to the target's system disk, unless the move names a target.
 
-Create forms and APIs for databases, object storage, brokers and app volumes take `pool?: string`.
-The form's **Storage** field lists the pools with the kind's default preselected, so the choice is
-made, and visible, when the service is created; the API uses the default when `pool` is omitted.
-`volume` stays for pinning one volume.
-The detail page shows the pool and volume a resource landed on.
+## 3. Adding a disk
 
-### 3.4 Network and durability
+Settings → Storage lists each node with its system disk, its disks, and a **Add a disk** list of
+what the node reports that Skiff could use. Each candidate is one row with one button:
 
-A pool can mix local and network volumes, but the pool view shows the classes of its members and
-warns when the `databases` default is a pool with `remote` or `bulk` members (CLUSTERING §3.3:
-`unknown` is refused for databases). Durability is per volume: Skiff shows "no Skiff backup" for
-shares (CLUSTERING §5.1) and leaves disk redundancy to the volume's stack.
+| Candidate | What **Use this disk** does |
+|---|---|
+| A filesystem already mounted at a usable path (e.g. `/mnt/data`, a ZFS dataset, an assembled array) | Registers it as a disk at once (`ready`). |
+| An unmounted ext4/ext3/ext2/xfs/btrfs/f2fs filesystem with a UUID, on a node with the `disk-mounts` capability | Registers it as `pending` with `mount_uuid`; the node's helper mounts it by UUID at `/mnt/skiff-disks/<name>`; the disk turns `ready` when the inventory shows that UUID there. |
+
+The dialog asks only for a name (prefilled from the label or device) and the tier (prefilled from
+the hardware). Everything the node reports that cannot be used — the OS's own filesystems, swap,
+LVM/RAID/LUKS/ZFS members, disks without a filesystem, vfat/ntfs/exfat, filesystems without a
+UUID — is folded into **Not usable (n)** with the reason, so the list never shows a partition the
+operator cannot act on.
+
+**Remove** unregisters a disk; it is refused while anything is stored on it. A disk Skiff mounted
+goes `removing`, the node unmounts it (never forced; the mount point is removed with `rmdir`) and
+the row is deleted when the node confirms. Its files stay on the disk. **Rename** and **tier**
+are edited in place; changing a tier affects new services only.
+
+Network shares are defined under **Settings → Network shares** (D143). Mounting a share on a node
+makes it a disk on that node (tier `bulk`, marked *network*), named after the share unless
+renamed; unmounting removes the disk first.
+
+### 3.1 Node protocol
+
+The wire names predate the rebuild and are unchanged, so agents and helpers of either age agree:
+
+| Desired state | Heartbeat | Helper |
+|---|---|---|
+| `volumes`: every disk except `removing` `{ id, mountPath, sourceKey, fsType }` (the registry D76 verifies against) | `volumes`: inventory `{ mounts, devices }`; devices now include `rotational` | `volumes.inventory`, `volumes.verify` |
+| `diskMounts`: disks with `mount_uuid`, not `removing` `{ id, name, fsUuid, fsType }`; `diskUnmounts`: `removing` ones | `diskMounts` `{ id, mounted, error }`, `unmountedDisks` | `/v1/disks/{status,mount,unmount}` |
+| `volumeProfileTasks` `{ id, volumeId, … }` (a disk id) | `volumeProfileResults` | `/v1/volumes/profile` |
+
+The helper re-reads `lsblk` before every mount and refuses unless exactly one unmounted, unheld
+device has that UUID; it mounts with `rw,noatime,nosuid,nodev`. The agent remounts after a reboot
+(checked every 15 s); workloads on a disk fail closed until it has (D76).
 
 ## 4. Onboarding
 
-Setup gains a **Storage** step after Secure:
-
-1. **Detect.** Show what each node reports: system disk, mounted filesystems not yet adopted
-   (with class, size, free), and free block devices (P1 formatting comes later).
-2. **Pools.** Suggest pools from classes: `fast` mounts → `ssd`, `bulk` → `hdd`, network shares →
-   `nas`. The operator adopts mounts, names pools and assigns volumes; **Add network share** opens
-   the share flow (D143).
-3. **Defaults.** Prefill: databases, queues and app volumes → the fast pool; object storage and
-   builds → the bulk pool; site data → system. Each service can still choose another pool.
-4. **Finish** stores `storage.onboarding = done`. **Use the system disk for now** stores `skipped`.
-
-Until one of those is stored, platform admins see a banner linking to Settings → Storage.
+Setup's **Storage** step shows the same per-node list: use the disks you want, check their tiers,
+press **Suggest** (or pick) the defaults, then **Finish** (`storage.onboarding = done`). **Use the
+system disk for now** stores `skipped`. Until one is stored, platform admins see a banner linking
+to Settings → Storage.
 
 ## 5. Settings → Storage
 
-One page (platform group, platform admin), four sections:
+One page, platform admin:
 
-- **Default storage** — one default pool per kind, which the create forms preselect.
-- **Pools** — capacity bar, members (volume @ node, class, free/size), allocation, min free; create,
-  edit, delete (refused while it is a default; members fall back to unassigned).
-- **Volumes** — per node: registered volumes with a pool picker; a **partition table** listing every
-  partition, LV, array and LUKS mapper the node reports with **Add as volume** (adopt a mounted one,
-  or mount an unmounted ext4/xfs/btrfs/f2fs filesystem first — [VOLUMES.md §3.1](./VOLUMES.md));
-  other mounts waiting to be adopted; and a link to **Settings → Network shares** (D143).
-- **Onboarding state** — the banner disappears once defaults are saved or setup is skipped.
+1. **Defaults** — one row per kind: `System disk` / `Fast disks` / `Bulk disks`, with a warning
+   when a node-level kind's tier has only network disks or a tier has no disks at all.
+2. **Nodes** — per node: system disk usage; its disks (name, tier, network badge, mount path,
+   used/size bar, status, what is stored on it, latest benchmark) with *Profile*, *Edit*,
+   *Remove*; then **Add a disk** candidates and the folded **Not usable** list.
 
 ### 5.1 Profiling
 
-**Profile** on a pool (or on one volume, or on a linked network-share mount) benchmarks each ready
-member so an operator can see which tier is which before choosing defaults:
+**Profile** on a disk benchmarks it so the operator can see which tier it belongs in:
 
 | Measure | How (fio) | Fallback (no fio) |
 |---|---|---|
 | Sequential read / write | 1 MiB blocks, queue depth 8, MB/s | GNU `dd` 1 MiB, O_DIRECT |
-| Random read / write | 4 KiB, queue depth 32, IOPS | not measured (shown as —, with a hint to install fio) |
+| Random read / write | 4 KiB, queue depth 32, IOPS | not measured (—, with a hint to install fio) |
 | Sync write | 4 KiB, `fdatasync` after each, depth 1: IOPS and mean round trip | `dd bs=4k oflag=dsync` |
 
-Mechanics: the control plane queues a `volume_profiles` row per member (0070) and lists queued
-ones in the node's desired state as `volumeProfileTasks` `{ id, volumeId, sizeMb: 512,
-runtimeSeconds: 10 }` — a registered volume id, never a path. The agent (capability
-`volume-profiles`) runs them **one at a time** through the helper's `/v1/volumes/profile`, which
-resolves the mount from its own registry, verifies it (D76), refuses when free space is under twice
-the scratch size, writes under `<mount>/skiff/.profile/` and deletes it afterwards. All I/O is
-O_DIRECT unless the filesystem refuses (some CIFS mounts), in which case the result says it measured
-cached I/O. Results arrive as `volumeProfileResults` in the heartbeat; a run not finished within 15
-minutes fails, and a late report never overwrites a final one. Nodes keep every run; views show the
-latest per volume. A profile loads the disk heavily for about a minute per volume, so the dashboard
-asks for confirmation first.
-
-**Installing the tools.** `fio` (profiling), `nfs-common` and `cifs-utils` (network shares) are
-installed with the other prerequisites by the installer on every agent node. Nodes installed
-earlier, or updated in place through the signed node-update verb, get them from the helper: on its
-first start of a new version it checks for `fio`, `mount.nfs` and `mount.cifs`, and if any is
-missing runs `apt-get install` once in the background (waiting up to 120 s for the apt lock),
-recording the attempt per helper version so an unavailable package never makes every restart an
-apt run. Debian/Ubuntu only. `SKIFF_HELPER_STORAGE_TOOLS=0` in `/etc/skiff/helper.env` turns it
-off, and `--skip-deps` installs write that for the operator.
+The control plane queues a `volume_profiles` row and lists it in desired state as a
+`volumeProfileTasks` entry naming the disk id, never a path. The agent (capability
+`volume-profiles`) runs them one at a time through the helper, which resolves the mount from its
+own registry, verifies it (D76), refuses when free space is under twice the 512 MiB scratch size,
+writes under `<mount>/skiff/.profile/` and deletes it afterwards. A run not finished within 15
+minutes fails, and a late report never overwrites a final one. `fio`, `nfs-common` and
+`cifs-utils` are installed by the installer and, on in-place updates, once per helper version by
+the helper (`SKIFF_HELPER_STORAGE_TOOLS=0` turns that off; Debian/Ubuntu only).
 
 ## 6. Surfaces
 
 | Surface | What |
 |---|---|
-| REST | Under `/api/v1/platform/storage` (`/storage` is object storage): `GET` (pools, defaults, nodes, onboarding); `POST /pools`, `PATCH/DELETE /pools/:name`, `POST /pools/:name/profile`; `PUT /defaults`; `POST /volumes/:id/profile`; `PUT /volumes/:id/pool` `{ pool: name\|null }`; `POST /onboarding` `{ state: done\|skipped }`. `pool` on database, storage, broker and app-volume create, replica add and moves |
-| Permissions | Platform admin dashboard session for every write (D129); read for platform viewers |
-| Audit | `storage.pool.create|update|delete`, `storage.defaults.update`, `storage.profile`, `storage.volume.pool`, `storage.onboarding` |
-| MCP | read-only `storage` view later; no writes (D29/D53) |
+| REST | `GET /api/v1/platform/storage` (defaults, nodes with disks and candidates, onboarding); `POST /platform/storage/disks` `{ node, candidate, name?, tier? }`; `PATCH`/`DELETE /platform/storage/disks/:id`; `POST /platform/storage/disks/:id/profile`; `PUT /platform/storage/defaults` `{ defaults: [{ kind, target }] }`; `POST /platform/storage/onboarding` `{ state }`. Create bodies for databases, object storage, brokers and app volumes, replica add and moves take `storage?: "system" \| "fast" \| "bulk" \| <disk name>`. |
+| Views | A placed resource shows `disk: { id, name, tier, remote } \| null` (null = system disk). Create forms get `storageChoices(kind)`: the default target and the tiers that have at least one ready disk (no nodes, paths or capacity). |
+| Permissions | Platform admin dashboard session for every write (D129); platform viewers read. |
+| Audit | `storage.disk.add`, `storage.disk.update`, `storage.disk.remove`, `storage.disk.mount.fail`, `storage.defaults.update`, `storage.profile`, `storage.onboarding` |
+| CLI | `--storage <system\|fast\|bulk\|disk>` on `skif db create`, `skif db replica add`, `skif storage create`, `skif broker create`, `skif volume create`. |
+| MCP | `storage` on the same create tools; no disk writes over MCP (D29/D53). |
 
 ## 7. Safety
 
-- Defaults never move existing data, and Skiff never puts a service on a pool other than the one
-  chosen for it. A resource's `volume_id` is fixed until an explicit move.
-- Resolution only picks `ready` volumes; the helper still verifies every mount before a start
-  (D76), so a missing share fails closed instead of writing to the system disk.
-- Deleting a pool that is a default is refused; removing a volume from a pool never touches its data.
-- Node-level kinds skip remote members, so Caddy and the builder never depend on a share.
+- The wire carries ids, UUIDs and source keys, never device paths or commands; the helper
+  re-derives everything from its own `lsblk`/`findmnt`.
+- Every managed start verifies the mount and its source key (D76); a missing disk fails closed
+  instead of writing to the system disk through an empty mountpoint.
+- Only `<mount>/skiff/<id>` is created and chowned; removing a disk never deletes files (D78).
+- Defaults and tier changes never move existing data; a disk holding anything cannot be removed.
+- Node-level kinds skip network disks, so Caddy and the builder never depend on a share.
+- Health and capacity ride the heartbeat (D80): a disk that disappears is `missing`.
 
-## 8. Moves
+## 8. Later
 
-`databases` moves (D97) and storage moves ask the resolver for the target node with the
-resource's current pool (the pool of its volume, or the kind's default when it was on the system
-disk), so a database on `ssd` stays on `ssd` when it moves.
-
-## 9. Phases
-
-| Phase | Scope |
-|---|---|
-| **S1** | **Done:** pools, per-kind defaults with the pool chosen at creation, resolution and placement filtering for databases, replicas, moves, object storage, brokers and app volumes; `builds`/`site-data` through the D48 applier; Settings → Storage; onboarding step and banner; pool/volume profiling with fio installed by the installer and the helper; REST; tests. |
-| **S2** | `images` (podman `graphroot` per node: stop containers, switch `storage.conf`, re-pull) and `backups` (local backup target per pool); pool capacity alerts. |
-| **S3** | `telemetry`; a mover that rebalances existing resources between pools on request (stop → copy → verify → start, the D48/D97 pattern); per-pool quotas per org. |
+- `images` (podman `graphroot`) and `backups` (local backup target) as kinds; capacity alerts per
+  tier.
+- Moving a resource between disks on one node (stop → copy → re-point → start, D79).
+- Systemd mount units for disks Skiff mounts (today the agent remounts after boot).

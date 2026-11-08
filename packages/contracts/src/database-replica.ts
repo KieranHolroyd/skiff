@@ -30,7 +30,8 @@ export interface DatabaseReplicaView extends DatabaseReplica {
 	mode: DatabaseReplicaMode;
 	/** Loopback port the replica publishes on its node (read-only connections). */
 	hostPort: number | null;
-	volumeId: string | null;
+	/** Disk on the replica's node; null is the system disk. */
+	diskId: string | null;
 	/** True when the replica shares the primary's node: read scaling only, no protection from node loss. */
 	sameNode: boolean;
 	/** Last problem the primary or the replica node reported, if any. */

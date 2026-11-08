@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
-import { deployments, nodeVolumes, nodes, projects, releases, workloadReplicas, workloads } from '@skiff/db';
+import { deployments, nodes, projects, releases, workloadReplicas, workloads } from '@skiff/db';
 import {
 	canViewPlatform,
 	githubRunnerSecretNames,
@@ -989,22 +989,8 @@ export class WorkloadService {
 		const reserved = this.reservedByNode();
 		const reservedDisk = this.ctx.appVolumes.reservedDiskByNode();
 		const reservedCpu = this.reservedCpuByNode();
-		const volumes = this.ctx.db
-			.select({
-				nodeId: nodeVolumes.nodeId,
-				id: nodeVolumes.id,
-				class: nodeVolumes.class,
-				classOverride: nodeVolumes.classOverride,
-			})
-			.from(nodeVolumes)
-			.all();
-		const volumeFacts = new Map<string, { classes: string[]; ids: string[] }>();
-		for (const volume of volumes) {
-			const fact = volumeFacts.get(volume.nodeId) ?? { classes: [], ids: [] };
-			fact.classes.push(volume.classOverride ?? volume.class);
-			fact.ids.push(volume.id);
-			volumeFacts.set(volume.nodeId, fact);
-		}
+		// Disk tiers (plus `remote`) answer the `volumeClass` / `volumeId` placement constraints (D169).
+		const volumeFacts = this.ctx.disks.placementFacts();
 		return this.ctx.db
 			.select()
 			.from(nodes)

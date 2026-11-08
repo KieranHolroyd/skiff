@@ -32,9 +32,9 @@ export interface PlacementCandidate {
 	roles?: NodeRole[];
 	/** Operator labels plus derived `skiff.io/*` facts. */
 	labels?: Record<string, string>;
-	/** Classes of the volumes registered on this node. */
+	/** Tiers of the disks on this node, plus `remote` when one is a network share (D169). */
 	volumeClasses?: string[];
-	/** Ids of the volumes registered on this node. */
+	/** Ids of the disks on this node. */
 	volumeIds?: string[];
 	/** Optional CPU reservation ceiling and current reservation, in millis. */
 	cpuBudgetMillis?: number | null;
@@ -157,11 +157,11 @@ function filterBySpec(
 			continue;
 		}
 		if (spec.volumeClass && !(node.volumeClasses ?? []).includes(spec.volumeClass)) {
-			fail(`has no ${spec.volumeClass} volume`);
+			fail(`has no ${spec.volumeClass} disk`);
 			continue;
 		}
 		if (spec.volumeId && !(node.volumeIds ?? []).includes(spec.volumeId)) {
-			fail(`does not own volume ${spec.volumeId}`);
+			fail(`does not have disk ${spec.volumeId}`);
 			continue;
 		}
 		if (request.replicaNodes?.includes(node.id)) {

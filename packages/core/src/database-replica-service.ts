@@ -144,7 +144,7 @@ export class DatabaseReplicaService {
 		if (live.length >= maxReplicas)
 			throw new ValidationError(`This install allows at most ${maxReplicas} replica(s) per database.`);
 
-		// The replica holds a full copy: same memory as the primary, and the volume must be local.
+		// The replica holds a full copy: same memory as the primary, and its disk must be on that node.
 		const decision = resolvePlacement({
 			runtime: 'container',
 			requested: node.id,
@@ -154,28 +154,19 @@ export class DatabaseReplicaService {
 		});
 		if (!decision.ok)
 			throw new ValidationError(decision.message.replace('this app reserves', 'this replica reserves'), decision.freeByNode);
-		// An explicit volume, else the requested pool, else the primary's pool, else the databases
-		// rule (docs/STORAGE.md §8): a primary on `ssd` gets its replica on `ssd`.
-		let volume = input.volume
-			? this.ctx.volumes.findByName(input.volume)
-			: this.ctx.storagePools.pick(
-					this.ctx.storagePools.plan('databases', input.pool ?? this.ctx.storagePools.poolNameOfVolume(database.volumeId) ?? undefined),
-					node.id,
-					database.storageMb,
-				);
-		if (input.volume && volume && volume.nodeId !== node.id)
-			throw new ValidationError(`Volume "${volume.name}" is on another node; pick a volume on "${node.name}".`);
-		if (volume && volume.nodeId !== node.id) volume = null;
-		if (volume) this.ctx.volumes.assertRoom(volume, database.storageMb);
+		// The requested storage, else the primary's tier (docs/STORAGE.md §2.2): a primary on a fast
+		// disk gets its replica on a fast disk, one on the system disk on that node's system disk.
+		const plan = this.ctx.disks.plan('databases', input.storage ?? this.ctx.disks.targetOf(database.diskId), node.id);
+		const disk = this.ctx.disks.pick(plan, node.id, database.storageMb);
 		this.ctx.quota.assertCanAdmitMemory(database.orgId, null, database.memoryMb);
 
-		const view = this.insertReplica(database, node.id, volume?.id ?? null);
+		const view = this.insertReplica(database, node.id, disk?.id ?? null);
 		this.ctx.audit.record({
 			principal,
 			action: 'database.replica.add',
 			resource: 'database',
 			resourceId: database.id,
-			args: { name: database.name, replicaId: view.id, node: node.id, mode: input.mode, volume: volume?.name ?? null, sameNode },
+			args: { name: database.name, replicaId: view.id, node: node.id, mode: input.mode, disk: disk?.name ?? null, sameNode },
 			result: 'ok',
 		});
 		this.ctx.endpoints.reconcileForDatabase(database.id);
@@ -494,7 +485,7 @@ export class DatabaseReplicaService {
 					env,
 					secrets: [],
 					dataSizeMb: null,
-					...(replica.volumeId ? { volumeId: replica.volumeId } : {}),
+					...(replica.diskId ? { volumeId: replica.diskId } : {}),
 					database: {
 						engine: database.engine,
 						version: database.version,
@@ -940,7 +931,7 @@ export class DatabaseReplicaService {
 
 	// ---------------------------------------------------------------- internals
 
-	private insertReplica(database: DatabaseRow, nodeId: string, volumeId: string | null): DatabaseReplicaView {
+	private insertReplica(database: DatabaseRow, nodeId: string, diskId: string | null): DatabaseReplicaView {
 		const now = this.ctx.now();
 		const id = newId('dbr_');
 		const hostPort = this.ctx.databases.allocatePort(nodeId);
@@ -965,7 +956,7 @@ export class DatabaseReplicaService {
 					slot: slotName(id),
 					primaryGeneration: database.primaryGeneration,
 					hostPort,
-					volumeId,
+					diskId,
 					mode: 'async',
 					createdAt: now,
 					updatedAt: now,
@@ -999,7 +990,7 @@ export class DatabaseReplicaService {
 		this.ctx.db.delete(databaseReplicas).where(eq(databaseReplicas.id, row.id)).run();
 		const database = this.ctx.db.select().from(databases).where(eq(databases.id, row.databaseId)).get();
 		if (row.rebuildOnPurge && database && !database.deletedAt && database.nodeId !== row.nodeId) {
-			const view = this.insertReplica(database, row.nodeId, row.volumeId);
+			const view = this.insertReplica(database, row.nodeId, row.diskId);
 			this.ctx.audit.record({
 				orgId: database.orgId,
 				action: 'database.replica.rebuild',
@@ -1123,7 +1114,7 @@ export class DatabaseReplicaService {
 				.set({
 					nodeId: replica.nodeId,
 					hostPort: replica.hostPort!,
-					volumeId: replica.volumeId,
+					diskId: replica.diskId,
 					poolerPort,
 					primaryGeneration: failover.generation,
 					status: 'pending',
@@ -1265,7 +1256,7 @@ export class DatabaseReplicaService {
 			workloadId: databaseReplicaWorkloadId(row.id),
 			mode: row.mode,
 			hostPort: row.hostPort,
-			volumeId: row.volumeId,
+			diskId: row.diskId,
 			sameNode: row.nodeId === database.nodeId,
 			message: row.message,
 			removing: row.removingAt !== null,

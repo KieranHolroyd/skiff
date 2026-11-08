@@ -6,9 +6,7 @@ import {
 	deployments,
 	environments,
 	nodeJoinTokens,
-	nodeVolumes,
 	shareMounts,
-	volumeProfiles,
 	nodes,
 	projects,
 	releases,
@@ -99,8 +97,6 @@ export interface NodeView {
 	sliceCpuWeight: number;
 	/** Requested storage locations (`null` = install default) and what the node last reported (D48). */
 	storage: NodeStorage & { status: NodeStorageStatus | null };
-	/** Volume new managed instances use when they name none (D74). */
-	defaultVolumeId: string | null;
 	/** Failure domain (CLUSTERING §3.2). */
 	zone: string;
 	/** What the node may run; derived from mode/can_build when roles_json is null. */
@@ -172,7 +168,6 @@ export class NodeService {
 				buildDir: row.storageBuildDir,
 				status: storageStatus(row.storageStatusJson),
 			},
-			defaultVolumeId: row.defaultVolumeId,
 			zone: row.zone,
 			roles: rolesFor(row),
 			labels,
@@ -536,12 +531,12 @@ export class NodeService {
 		if (input.storageRootKeys?.length) this.ctx.storage.applyRootKeyReports(node.id, input.storageRootKeys);
 		if (input.storageReplication?.length)
 			this.ctx.storageReplication.applyReports(node.id, input.storageReplication);
-		if (input.volumes) this.ctx.volumes.applyInventory(node.id, input.volumes);
-		// Share mount state, then link any mounted share waiting to become a volume (VOLUMES §5).
+		// Disks first (capacity, missing mounts, Skiff mounts turning ready), then share mounts, which
+		// register a mounted share as a disk once the inventory shows it (docs/STORAGE.md §3).
+		if (input.volumes) this.ctx.disks.applyInventory(node.id, input.volumes);
+		this.ctx.disks.applyMountReport(node.id, input.diskMounts, input.unmountedDisks);
 		this.ctx.shares.applyNodeReport(node.id, input.shareMounts, input.unmountedShares);
-		// Partition mounts the same way: status, unmount confirmations, then adopt (VOLUMES §3.1).
-		this.ctx.diskMounts.applyNodeReport(node.id, input.diskMounts, input.unmountedDisks);
-		if (input.volumeProfileResults?.length) this.ctx.storagePools.applyProfileResults(node.id, input.volumeProfileResults);
+		if (input.volumeProfileResults?.length) this.ctx.disks.applyProfileResults(node.id, input.volumeProfileResults);
 		// Custom domains go `active` once an edge reports serving their certificate.
 		if (input.stats?.certs?.length) {
 			try {
@@ -731,18 +726,6 @@ export class NodeService {
 			const next = patch.cpuBudgetMillis ?? null;
 			if (next !== node.cpuBudgetMillis) changes.cpuBudgetMillis = next;
 		}
-		if (patch.defaultVolumeId !== undefined && patch.defaultVolumeId !== node.defaultVolumeId) {
-			if (patch.defaultVolumeId === null) changes.defaultVolumeId = null;
-			else {
-				const volume = this.ctx.db
-					.select({ id: nodeVolumes.id })
-					.from(nodeVolumes)
-					.where(and(eq(nodeVolumes.id, patch.defaultVolumeId), eq(nodeVolumes.nodeId, nodeId)))
-					.get();
-				if (!volume) throw new ValidationError('That volume is not registered on this node.');
-				changes.defaultVolumeId = volume.id;
-			}
-		}
 		const dataDir = patch.dataDir === undefined ? node.storageDataDir : patch.dataDir || null;
 		const buildDir = patch.buildDir === undefined ? node.storageBuildDir : patch.buildDir || null;
 		if (dataDir && buildDir && (dataDir === buildDir || dataDir.startsWith(`${buildDir}/`) || buildDir.startsWith(`${dataDir}/`)))
@@ -817,8 +800,8 @@ export class NodeService {
 	 */
 	effectiveStorage(node: { id: string; storageDataDir: string | null; storageBuildDir: string | null }): NodeStorage {
 		return {
-			dataDir: node.storageDataDir ?? this.ctx.storagePools.nodeDirectory('site-data', node.id),
-			buildDir: node.storageBuildDir ?? this.ctx.storagePools.nodeDirectory('builds', node.id),
+			dataDir: node.storageDataDir ?? this.ctx.disks.nodeDirectory('site-data', node.id),
+			buildDir: node.storageBuildDir ?? this.ctx.disks.nodeDirectory('builds', node.id),
 		};
 	}
 
@@ -905,11 +888,9 @@ export class NodeService {
 			requeuedBuilds = this.ctx.builds.releaseNodeClaims(nodeId);
 			this.ctx.pipelines.engine.releaseNode(nodeId);
 			this.ctx.db.delete(databaseStudioSessions).where(eq(databaseStudioSessions.nodeId, nodeId)).run();
-			this.ctx.db.delete(nodeVolumes).where(eq(nodeVolumes.nodeId, nodeId)).run();
+			this.ctx.disks.forgetNode(nodeId);
 			// Share mounts on it are forgotten with it; the share definitions stay.
 			this.ctx.db.delete(shareMounts).where(eq(shareMounts.nodeId, nodeId)).run();
-			this.ctx.diskMounts.forgetNode(nodeId);
-			this.ctx.db.delete(volumeProfiles).where(eq(volumeProfiles.nodeId, nodeId)).run();
 			this.ctx.db.delete(nodes).where(eq(nodes.id, nodeId)).run();
 			// A removed node can never confirm a purge an earlier move left for it.
 			this.ctx.moves.forgetNode(nodeId);
@@ -1432,12 +1413,12 @@ export class NodeService {
 			hostRedirects,
 			placeholders,
 			workloads: workloadRows,
-			volumes: this.ctx.volumes.desiredForNode(node.id),
+			volumes: this.ctx.disks.desiredForNode(node.id),
 			shareMounts: this.ctx.shares.mountsForNode(node.id),
 			shareUnmounts: this.ctx.shares.unmountsForNode(node.id),
-			diskMounts: this.ctx.diskMounts.mountsForNode(node.id),
-			diskUnmounts: this.ctx.diskMounts.unmountsForNode(node.id),
-			volumeProfileTasks: this.ctx.storagePools.profileTasksForNode(node.id),
+			diskMounts: this.ctx.disks.mountsForNode(node.id),
+			diskUnmounts: this.ctx.disks.unmountsForNode(node.id),
+			volumeProfileTasks: this.ctx.disks.profileTasksForNode(node.id),
 			// App-volume usage, purges and snapshot/restore tasks (docs/VOLUMES.md §14).
 			appVolumes: this.ctx.appVolumes.lifecycle.volumesForNode(node.id),
 			appVolumePurges: this.ctx.appVolumes.lifecycle.purgesForNode(node.id),

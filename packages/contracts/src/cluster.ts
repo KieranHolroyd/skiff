@@ -35,6 +35,7 @@ export const nodeLabelKeySchema = z
 export const nodeLabelValueSchema = z.string().trim().min(0).max(128);
 export const nodeLabelsSchema = z.record(nodeLabelKeySchema, nodeLabelValueSchema);
 
+/** Placement constraint on a node's disks (D169): a tier, or `remote` for a network share. `unknown` matches nothing. */
 export const volumeClasses = ['fast', 'bulk', 'remote', 'unknown'] as const;
 export type VolumeClass = (typeof volumeClasses)[number];
 export const volumeClassSchema = z.enum(volumeClasses);
@@ -149,10 +150,10 @@ export interface TopologyNodeView {
 	hardware: NodeHardware | null;
 	/** Derived labels (skiff.io/*) plus operator labels. */
 	derivedLabels: Record<string, string>;
-	volumes: Array<{
+	disks: Array<{
 		id: string;
 		name: string;
-		class: VolumeClass;
+		tier: 'fast' | 'bulk';
 		mountPath: string;
 		sizeBytes: number | null;
 		freeBytes: number | null;
@@ -180,7 +181,7 @@ export interface TopologyView {
 }
 
 export interface BlastRadiusItem {
-	kind: 'workload' | 'database' | 'storage' | 'volume';
+	kind: 'workload' | 'database' | 'storage' | 'disk';
 	id: string;
 	name: string;
 	nodeId: string;
@@ -197,6 +198,6 @@ export interface BlastRadiusView {
 		workloads: number;
 		databases: number;
 		storageInstances: number;
-		volumes: number;
+		disks: number;
 	};
 }

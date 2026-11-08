@@ -38,13 +38,12 @@ import {
 } from '@skiff/contracts';
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
-import type { StoragePlan } from './storage-pools.ts';
 import { requireCredentialReveal } from './credential-reveal.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
-import { resolvePlacement } from './placement.ts';
+import { resolvePlacement, type PlacementCandidate } from './placement.ts';
 import { isFunctionTier } from './runtime-tier.ts';
 import type { ProjectRow } from './projects.ts';
-import type { VolumeRow } from './volumes.ts';
+import type { DiskRow } from './disks.ts';
 import { newId, parseJson, randomBytes, sha256Hex } from './util.ts';
 
 export type BrokerRow = typeof brokers.$inferSelect;
@@ -225,25 +224,18 @@ export class BrokerService {
 			requested = this.ctx.workloads.attachmentNode(project.id) ?? workloadNode ?? project.placement;
 		}
 
-		// A named volume pins the node: the data dir has to be on the same node as the container.
-		let volume: VolumeRow | null = null;
-		if (input.volume) {
-			volume = this.ctx.volumes.findByName(input.volume);
-			const edgeNodeId = this.ctx.workloads.edgeNode();
-			const target = requested === 'auto' ? null : requested === 'edge' ? edgeNodeId : requested;
-			if (target && target !== volume.nodeId)
-				throw new ValidationError(
-					`Volume "${volume.name}" is on another node; place this broker there or pick a volume on the target node.`,
-				);
-			requested = volume.nodeId;
-		}
-
-		// No explicit volume: the storage pool (chosen at creation, else the brokers default) narrows the nodes
-		// and picks the volume there (docs/STORAGE.md §3.2).
-		const storagePlan = volume ? null : this.ctx.storagePools.plan('brokers', input.pool);
-		const nodeId = this.place(requested, memoryMb, storagePlan ? { plan: storagePlan, storageMb: input.storageMb } : null);
-		if (storagePlan) volume = this.ctx.storagePools.pick(storagePlan, nodeId, input.storageMb);
-		if (volume) this.ctx.volumes.assertRoom(volume, input.storageMb);
+		// The storage target (chosen at creation, else the brokers default) narrows the nodes; a named
+		// disk pins its node (docs/STORAGE.md §2.2).
+		const storage = this.ctx.disks.prepare({
+			kind: 'brokers',
+			storage: input.storage,
+			requested,
+			storageMb: input.storageMb,
+			edgeNodeId: this.ctx.workloads.edgeNode(),
+			candidates: this.ctx.workloads.placementCandidates(),
+		});
+		const nodeId = this.place(storage.requested, memoryMb, storage.candidates);
+		const disk: DiskRow | null = this.ctx.disks.pick(storage.plan, nodeId, input.storageMb);
 		this.ctx.quota.assertCanAdmitMemory(principal.orgId, project?.id, memoryMb);
 
 		const id = newId(BROKER_ID_PREFIX);
@@ -265,7 +257,7 @@ export class BrokerService {
 					memoryMb,
 					cpus: input.cpus,
 					storageMb: input.storageMb,
-					volumeId: volume?.id ?? null,
+					diskId: disk?.id ?? null,
 					status: 'pending',
 					ownerSecret,
 					createdBy: principal.userId,
@@ -287,7 +279,7 @@ export class BrokerService {
 				nodeId,
 				memoryMb,
 				storageMb: input.storageMb,
-				...(volume ? { volume: volume.name } : {}),
+				...(disk ? { disk: disk.name } : {}),
 				...(project ? { project: project.slug, envPrefix } : {}),
 			},
 			result: 'ok',
@@ -321,8 +313,8 @@ export class BrokerService {
 				);
 			}
 		}
-		if (patch.storageMb !== undefined && patch.storageMb > row.storageMb && row.volumeId)
-			this.ctx.volumes.assertVolumeReady(row.volumeId, patch.storageMb - row.storageMb);
+		if (patch.storageMb !== undefined && patch.storageMb > row.storageMb && row.diskId)
+			this.ctx.disks.assertReady(row.diskId, patch.storageMb - row.storageMb);
 		this.ctx.db
 			.update(brokers)
 			.set({ ...patch, updatedAt: this.ctx.now() })
@@ -376,7 +368,7 @@ export class BrokerService {
 		this.requireFeature();
 		this.ctx.quota.assertCanAdmitMemory(principal.orgId, null, row.memoryMb);
 		this.admit(row, row.memoryMb);
-		this.ctx.volumes.assertVolumeReady(row.volumeId, row.storageMb);
+		this.ctx.disks.assertReady(row.diskId, row.storageMb);
 		this.ctx.db
 			.update(brokers)
 			.set({ deletedAt: null, purgeAt: null, status: 'pending', message: null, updatedAt: this.ctx.now() })
@@ -676,7 +668,7 @@ export class BrokerService {
 				env: {},
 				secrets: [],
 				dataSizeMb: null,
-				...(row.volumeId ? { volumeId: row.volumeId } : {}),
+				...(row.diskId ? { volumeId: row.diskId } : {}),
 				broker: { engine: row.engine, version: row.version, storageMb: row.storageMb },
 			}));
 	}
@@ -855,13 +847,8 @@ export class BrokerService {
 	 * Resolve placement among nodes whose agent can run a broker. An older agent would hand the
 	 * helper a plain container without the broker profile, so it is never a candidate.
 	 */
-	private place(requested: string, memoryMb: number, storage: { plan: StoragePlan; storageMb: number } | null = null): string {
-		const all = storage
-			? this.ctx.storagePools.filterCandidates(storage.plan, this.ctx.workloads.placementCandidates(), storage.storageMb, {
-					requested,
-					edgeNodeId: this.ctx.workloads.edgeNode(),
-				})
-			: this.ctx.workloads.placementCandidates();
+	private place(requested: string, memoryMb: number, narrowed: PlacementCandidate[] | null = null): string {
+		const all = narrowed ?? this.ctx.workloads.placementCandidates();
 		const capable = new Set(
 			this.ctx.db
 				.select({ id: nodes.id, capabilitiesJson: nodes.capabilitiesJson })
@@ -996,7 +983,7 @@ export class BrokerService {
 				process: `127.0.0.1:${row.hostPort}`,
 				container: `${brokerAlias(row.id)}:${info.containerPort}`,
 			},
-			volume: this.ctx.volumes.summary(row.volumeId),
+			disk: this.ctx.disks.summary(row.diskId),
 			attachments: this.attachmentsOf(row.id),
 			storeBytes: row.storeBytes ?? null,
 			messages: row.messages ?? null,

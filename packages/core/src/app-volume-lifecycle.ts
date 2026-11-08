@@ -200,25 +200,17 @@ export class AppVolumeLifecycle {
 			throw new ValidationError(
 				`Volume "${name}" was ${source.sizeMb} MB; its restore needs at least that (asked for ${sizeMb} MB).`,
 			);
-		let nodeVolume: string | undefined;
-		if (source.backing === 'node_volume') {
-			nodeVolume = source.nodeVolumeId ? this.ctx.volumes.byId(source.nodeVolumeId)?.name : undefined;
-			if (!nodeVolume)
-				throw new ConflictError(
-					`The node volume that backed "${name}" was removed, so its snapshot cannot be restored onto the same backing.`,
-				);
-		}
+		if (source.backing === 'node_volume' && !this.ctx.disks.byId(source.diskId))
+			throw new ConflictError(`The disk that held "${name}" was removed, so its snapshot cannot be restored onto it.`);
 		return this.volumes.create(
 			principal,
 			project,
 			{
 				name: input.name,
 				sizeMb,
-				backing: source.backing,
-				...(nodeVolume ? { nodeVolume } : {}),
 				singleWriter: source.singleWriter,
 			},
-			{ restoreFrom: { snapshotId: snapshot.id, sourceName: source.name } },
+			{ restoreFrom: { snapshotId: snapshot.id, sourceName: source.name, diskId: source.backing === 'node_volume' ? source.diskId : null } },
 		);
 	}
 
@@ -640,7 +632,7 @@ function nodeRef(row: AppVolumeRow): AppVolumeNodeRef {
 		id: row.id,
 		projectId: row.projectId,
 		backing: row.backing,
-		...(row.backing === 'node_volume' && row.nodeVolumeId ? { nodeVolumeId: row.nodeVolumeId } : {}),
+		...(row.backing === 'node_volume' && row.diskId ? { nodeVolumeId: row.diskId } : {}),
 	};
 }
 

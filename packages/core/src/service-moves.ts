@@ -32,7 +32,7 @@ import { ConflictError, NotFoundError, ValidationError } from './errors.ts';
 import type { DatabaseRow } from './databases.ts';
 import { backupObjectKey } from './databases.ts';
 import { resolvePlacement } from './placement.ts';
-import type { VolumeRow } from './volumes.ts';
+import type { DiskRow } from './disks.ts';
 import { newId, parseJson } from './util.ts';
 import { flow, type FlowDefinition, type FlowOutcome } from './flows/types.ts';
 
@@ -85,7 +85,7 @@ export const MOVE_STEP_TIMEOUT_MS = 2 * 60 * 60_000;
  * 1. `quiescing`: attached apps are listed as `stopped` on the source. The dump waits until the
  *    source has converged that state and no longer reports them, so no write lands after it.
  * 2. `dumping`: a final backup runs on the source through the D83 pipeline.
- * 3. `restoring`: the row is re-pointed at the target (fresh ports and volume) with
+ * 3. `restoring`: the row is re-pointed at the target (fresh ports and disk) with
  *    `pendingRestoreId`, so the target creates an empty instance and restores the dump into it.
  *    The source drops the unit but keeps its data: nothing is purged without an explicit entry.
  * 4. `purging`: on success the attached apps follow the database and the source copy is purged;
@@ -213,7 +213,7 @@ export class ServiceMoveService {
 				decision.message.replace('this app reserves', `this database${attached.length ? ' and its apps reserve' : ' reserves'}`),
 				decision.freeByNode,
 			);
-		const volume = this.resolveVolume('databases', db, target, input.volume, input.pool);
+		const disk = this.resolveDisk('databases', db, target, input.storage);
 
 		const now = this.ctx.now();
 		const id = newId('dmv_');
@@ -229,8 +229,8 @@ export class ServiceMoveService {
 					targetNodeId: target,
 					sourceHostPort: db.hostPort,
 					sourcePoolerPort: db.poolerPort,
-					sourceVolumeId: db.volumeId,
-					targetVolumeId: volume?.id ?? null,
+					sourceDiskId: db.diskId,
+					targetDiskId: disk?.id ?? null,
 					dataSource: input.from,
 					// A database that cannot run has nothing to quiesce or dump: cut over straight away.
 					phase: offline ? 'dumping' : 'quiescing',
@@ -272,7 +272,7 @@ export class ServiceMoveService {
 				name: db.name,
 				from: source,
 				to: target,
-				volume: volume?.name ?? null,
+				disk: disk?.name ?? null,
 				projects: attached.map((item) => item.slug),
 				source: input.from,
 				...(latest ? { backupId: latest.id } : {}),
@@ -790,7 +790,7 @@ export class ServiceMoveService {
 		});
 		if (!decision.ok)
 			throw new ValidationError(decision.message.replace('this app reserves', 'this storage instance reserves'), decision.freeByNode);
-		const volume = this.resolveVolume('object-storage', { volumeId: row.volumeId, storageMb: row.storageMb }, target, input.volume, input.pool);
+		const disk = this.resolveDisk('object-storage', row, target, input.storage);
 		const hostPort = this.ctx.storage.allocatePort(target);
 
 		const now = this.ctx.now();
@@ -800,7 +800,7 @@ export class ServiceMoveService {
 				.set({
 					nodeId: target,
 					hostPort,
-					volumeId: volume?.id ?? null,
+					diskId: disk?.id ?? null,
 					status: 'pending',
 					message: null,
 					usedBytes: null,
@@ -832,33 +832,25 @@ export class ServiceMoveService {
 	}
 
 	/**
-	 * Explicit volume on the target, else the requested pool, else the resource's current pool,
-	 * else the kind's default pool (docs/STORAGE.md §8). Null means the system disk.
+	 * The requested storage on the target, else the resource's current tier (a fast disk moves to a
+	 * fast disk, the system disk to the target's system disk; docs/STORAGE.md §2.2). Null means
+	 * the system disk.
 	 */
-	private resolveVolume(
+	private resolveDisk(
 		kind: 'databases' | 'object-storage',
-		current: { volumeId: string | null; storageMb: number },
+		current: { diskId: string | null; storageMb: number },
 		target: string,
-		name: string | undefined,
-		pool: string | undefined,
-	): VolumeRow | null {
-		let volume: VolumeRow | null = null;
-		if (name) {
-			volume = this.ctx.volumes.requireOnNode(target, name);
-		} else {
-			const currentPool = current.volumeId ? this.ctx.storagePools.poolNameOfVolume(current.volumeId) : null;
-			volume = this.ctx.storagePools.pick(this.ctx.storagePools.plan(kind, pool ?? currentPool ?? undefined), target, current.storageMb);
-		}
-		if (volume) {
-			this.ctx.volumes.assertRoom(volume, current.storageMb);
-			const existing = current.volumeId ? this.ctx.volumes.byId(current.volumeId) : null;
-			// Both nodes mounting one network share: purging the old copy would delete the new one.
-			if (existing && existing.sourceKey === volume.sourceKey)
-				throw new ConflictError(
-					`Volume "${volume.name}" is the same share as "${existing.name}" on the current node; moving gains nothing and the old copy's purge would delete the new one.`,
-				);
-		}
-		return volume;
+		storage: string | undefined,
+	): DiskRow | null {
+		const plan = this.ctx.disks.plan(kind, storage ?? this.ctx.disks.targetOf(current.diskId), target);
+		const disk = this.ctx.disks.pick(plan, target, current.storageMb);
+		const existing = this.ctx.disks.byId(current.diskId);
+		// Both nodes mounting one network share: purging the old copy would delete the new one.
+		if (disk && existing && existing.sourceKey === disk.sourceKey)
+			throw new ConflictError(
+				`Disk "${disk.name}" is the same share as "${existing.name}" on the current node; moving gains nothing and the old copy's purge would delete the new one.`,
+			);
+		return disk;
 	}
 
 	private startDump(row: MoveRow, now: number): void {
@@ -948,7 +940,7 @@ export class ServiceMoveService {
 					nodeId: row.targetNodeId,
 					hostPort,
 					poolerPort,
-					volumeId: row.targetVolumeId,
+					diskId: row.targetDiskId,
 					status: 'pending',
 					pendingRestoreId: row.backupId,
 					message:
@@ -1068,7 +1060,7 @@ export class ServiceMoveService {
 					nodeId: row.sourceNodeId,
 					hostPort: row.sourceHostPort,
 					poolerPort: row.sourcePoolerPort,
-					volumeId: row.sourceVolumeId,
+					diskId: row.sourceDiskId,
 					status: 'pending',
 					pendingRestoreId: null,
 					backupEnabled: row.backupWasEnabled,

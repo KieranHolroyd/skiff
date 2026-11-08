@@ -46,7 +46,7 @@ import {
 	volumeInventorySchema,
 } from './volume.ts';
 import { shareMountDesiredSchema, shareMountReportSchema, shareUnmountDesiredSchema } from './share.ts';
-import { volumeProfileResultSchema, volumeProfileTaskSchema } from './storage-pool.ts';
+import { volumeProfileResultSchema, volumeProfileTaskSchema } from './disk.ts';
 import {
 	appVolumeNodeRefSchema,
 	appVolumeTaskResultSchema,

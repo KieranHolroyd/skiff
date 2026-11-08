@@ -5,9 +5,8 @@ export const databaseReplicaCreateSchema = z
 	.object({
 		node: z.string().trim().min(1).max(100),
 		mode: z.enum(['async', 'sync']).default('async'),
-		volume: z.string().trim().min(3).max(40).optional(),
-		/** Storage pool on the target node; omitted keeps the primary's pool, else the databases default. */
-		pool: z.string().trim().min(2).max(40).optional(),
+		/** `system`, `fast`, `bulk` or a disk on that node; omitted keeps the primary's tier (docs/STORAGE.md §2.2). */
+		storage: z.string().trim().min(3).max(40).optional(),
 	})
 	.strict();
 export type DatabaseReplicaCreate = z.input<typeof databaseReplicaCreateSchema>;

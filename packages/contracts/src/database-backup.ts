@@ -83,7 +83,8 @@ export const databaseRestoreSchema = z.object({
 	memoryMb: z.number().int().min(128).max(16_384).optional(),
 	cpus: z.number().positive().max(8).optional(),
 	storageMb: z.number().int().min(256).max(1_048_576).optional(),
-	volume: z.string().min(3).max(40).optional(),
+	/** `system`, `fast`, `bulk` or a disk name (docs/STORAGE.md). */
+	storage: z.string().trim().min(3).max(40).optional(),
 	/** Attach the restored database to this project immediately. */
 	project: z.string().min(1).max(64).optional(),
 	envPrefix: z.string().min(1).max(64).optional(),

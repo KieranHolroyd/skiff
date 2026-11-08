@@ -1,5 +1,5 @@
 import { and, eq, inArray, or } from 'drizzle-orm';
-import { nodeVolumes, nodes, shareGrants, shareMounts, shares } from '@skiff/db';
+import { disks, nodes, shareGrants, shareMounts, shares } from '@skiff/db';
 import {
 	canAdministerPlatform,
 	canViewPlatform,
@@ -44,10 +44,10 @@ const PLATFORM_KEY_ORG = 'platform';
  *
  * The registry holds protocol, server/export, failure-domain zone, org grants and sealed SMB
  * credentials. A **mount** asks one node's helper to mount the share at
- * `/mnt/skiff-shares/<name>`; the node reports the result in its heartbeat. A mount can be
- * **linked** to Skiff: once the node's volume inventory shows the share's source key at that path,
- * it is adopted as a node volume, so managed databases, storage instances and app volumes can be
- * placed on it and the helper verifies it before every start (D76).
+ * `/mnt/skiff-shares/<name>`; the node reports the result in its heartbeat. A read-write mount
+ * becomes a **disk** (D169): once the node's inventory shows the share's source key at that path,
+ * services can be placed on it like on any other disk, and the helper verifies it before every
+ * start (D76).
  *
  * Credentials never enter desired state: the node fetches them for one mount call through the
  * node-authenticated credential endpoint, and neither values nor usernames reach audit arguments.
@@ -216,8 +216,8 @@ export class ShareService {
 
 	/**
 	 * Mount a share on a node. The node's helper mounts it at `/mnt/skiff-shares/<name>` on its
-	 * next pull; with a `volumeName` (default: the share name) it is linked as a node volume as soon
-	 * as the node reports the mount.
+	 * next pull. A read-write share becomes the disk `diskName` (default: the share name) as soon
+	 * as the node reports the mount; a read-only one stays a plain mount.
 	 */
 	mount(principal: Principal, name: string, raw: ShareMountCreate): ShareView {
 		this.assertWrite(principal);
@@ -237,8 +237,8 @@ export class ShareService {
 					? `Share "${name}" is still being unmounted from ${node.name}. Wait for it to finish.`
 					: `Share "${name}" is already mounted on ${node.name}.`,
 			);
-		const volumeName = input.volumeName === undefined ? share.name : input.volumeName;
-		if (volumeName) this.assertLinkable(share, node, volumeName);
+		const diskName = share.readOnly ? null : (input.diskName ?? share.name);
+		if (diskName) this.assertLinkable(share, node, diskName);
 		const now = this.ctx.now();
 		const row: MountRow = {
 			id: newId('shm_'),
@@ -246,9 +246,8 @@ export class ShareService {
 			nodeId: node.id,
 			status: 'pending',
 			message: null,
-			volumeName,
-			volumeDefault: volumeName ? input.defaultVolume : false,
-			volumeId: null,
+			diskName,
+			diskId: null,
 			mountedAt: null,
 			createdBy: principal.userId,
 			createdAt: now,
@@ -260,7 +259,7 @@ export class ShareService {
 			action: 'share.mount',
 			resource: 'share',
 			resourceId: share.id,
-			args: { name, nodeId: node.id, node: node.name, mountPath: shareMountPath(share.name), volumeName },
+			args: { name, nodeId: node.id, node: node.name, mountPath: shareMountPath(share.name), diskName },
 			result: 'ok',
 		});
 		this.ctx.nodes.bump();
@@ -268,8 +267,8 @@ export class ShareService {
 	}
 
 	/**
-	 * Unmount a share from a node. A linked volume is unregistered first, which is refused while
-	 * anything lives on it; the mount row stays `unmounting` until the node confirms.
+	 * Unmount a share from a node. Its disk is removed first, which is refused while anything lives
+	 * on it; the mount row stays `unmounting` until the node confirms.
 	 */
 	unmount(principal: Principal, name: string, nodeRef: string): ShareView {
 		this.assertWrite(principal);
@@ -278,11 +277,11 @@ export class ShareService {
 		const row = this.mountRow(share.id, node.id);
 		if (!row) throw new NotFoundError(`Mount of "${name}" on ${node.name}`);
 		if (row.status === 'unmounting') return this.view(share);
-		// Unregistering refuses (and changes nothing) while anything is placed on the volume.
-		this.unregisterVolume(row, principal);
+		// Removing the disk refuses (and changes nothing) while anything is placed on it.
+		this.removeDisk(row, principal);
 		this.ctx.db
 			.update(shareMounts)
-			.set({ status: 'unmounting', message: null, volumeName: null, volumeId: null, volumeDefault: false, updatedAt: this.ctx.now() })
+			.set({ status: 'unmounting', message: null, diskName: null, diskId: null, updatedAt: this.ctx.now() })
 			.where(eq(shareMounts.id, row.id))
 			.run();
 		this.ctx.audit.record({
@@ -297,7 +296,7 @@ export class ShareService {
 		return this.view(share);
 	}
 
-	/** Link an existing mount to Skiff as a node volume (now if the node reports it, else on its next report). */
+	/** Use an existing mount as a disk (now if the node reports it, else on its next report). */
 	link(principal: Principal, name: string, nodeRef: string, raw: ShareMountLink): ShareView {
 		this.assertWrite(principal);
 		const input = shareMountLinkSchema.parse(raw);
@@ -305,12 +304,12 @@ export class ShareService {
 		const node = this.resolveNode(nodeRef);
 		const row = this.mountRow(share.id, node.id);
 		if (!row || row.status === 'unmounting') throw new NotFoundError(`Mount of "${name}" on ${node.name}`);
-		if (row.volumeId && this.ctx.volumes.byId(row.volumeId))
-			throw new ConflictError(`Share "${name}" on ${node.name} is already linked as a volume.`);
-		this.assertLinkable(share, node, input.volumeName);
+		if (row.diskId && this.ctx.disks.byId(row.diskId))
+			throw new ConflictError(`Share "${name}" on ${node.name} is already a disk.`);
+		this.assertLinkable(share, node, input.diskName);
 		this.ctx.db
 			.update(shareMounts)
-			.set({ volumeName: input.volumeName, volumeDefault: input.defaultVolume, volumeId: null, message: null, updatedAt: this.ctx.now() })
+			.set({ diskName: input.diskName, diskId: null, message: null, updatedAt: this.ctx.now() })
 			.where(eq(shareMounts.id, row.id))
 			.run();
 		this.ctx.audit.record({
@@ -318,24 +317,24 @@ export class ShareService {
 			action: 'share.link',
 			resource: 'share',
 			resourceId: share.id,
-			args: { name, nodeId: node.id, volumeName: input.volumeName, default: input.defaultVolume },
+			args: { name, nodeId: node.id, diskName: input.diskName },
 			result: 'ok',
 		});
-		this.linkPending(node.id, principal);
+		this.linkPending(node.id);
 		return this.view(share);
 	}
 
-	/** Stop using a mount as a Skiff volume; the share stays mounted. */
+	/** Stop using a mount as a disk; the share stays mounted. */
 	unlink(principal: Principal, name: string, nodeRef: string): ShareView {
 		this.assertWrite(principal);
 		const share = this.requireRow(name);
 		const node = this.resolveNode(nodeRef);
 		const row = this.mountRow(share.id, node.id);
 		if (!row) throw new NotFoundError(`Mount of "${name}" on ${node.name}`);
-		this.unregisterVolume(row, principal);
+		this.removeDisk(row, principal);
 		this.ctx.db
 			.update(shareMounts)
-			.set({ volumeName: null, volumeId: null, volumeDefault: false, updatedAt: this.ctx.now() })
+			.set({ diskName: null, diskId: null, updatedAt: this.ctx.now() })
 			.where(eq(shareMounts.id, row.id))
 			.run();
 		this.ctx.audit.record({
@@ -402,8 +401,8 @@ export class ShareService {
 	}
 
 	/**
-	 * Apply a heartbeat: mount status per desired mount, unmount confirmations, then link any
-	 * mounted share that is waiting to become a volume.
+	 * Apply a heartbeat: mount status per desired mount, unmount confirmations, then register any
+	 * mounted share that is waiting to become a disk.
 	 */
 	applyNodeReport(nodeId: string, reports: ShareMountReport[] | undefined, unmounted: string[] | undefined): void {
 		const now = this.ctx.now();
@@ -448,18 +447,18 @@ export class ShareService {
 
 	// ---------------------------------------------------------------- internals
 
-	/** Adopt mounted shares with a requested volume name whose mount the node's inventory shows. */
-	private linkPending(nodeId: string, principal?: Principal): void {
+	/** Register mounted shares waiting to become a disk once the node's inventory shows the mount. */
+	private linkPending(nodeId: string): void {
 		const pending = this.ctx.db
 			.select({ mount: shareMounts, share: shares })
 			.from(shareMounts)
 			.innerJoin(shares, eq(shares.id, shareMounts.shareId))
 			.where(and(eq(shareMounts.nodeId, nodeId), eq(shareMounts.status, 'mounted')))
 			.all()
-			.filter(({ mount }) => mount.volumeName && !mount.volumeId);
+			.filter(({ mount }) => mount.diskName && !mount.diskId);
 		if (pending.length === 0) return;
 		const node = this.ctx.db.select().from(nodes).where(eq(nodes.id, nodeId)).get();
-		const inventory = volumeInventorySchema.safeParse(parseJson(node?.volumeInventoryJson ?? null, null));
+		const inventory = volumeInventorySchema.safeParse(parseJson(node?.diskInventoryJson ?? null, null));
 		if (!node || !inventory.success) return;
 		for (const { mount, share } of pending) {
 			const sourceKey = shareSourceKey(share);
@@ -467,53 +466,47 @@ export class ShareService {
 			const entry = inventory.data.mounts.find((item) => item.sourceKey === sourceKey);
 			// Not in this inventory yet (it refreshes about once a minute): try again next heartbeat.
 			if (!entry) continue;
-			let volumeId: string | null = null;
+			let diskId: string | null = null;
 			let message: string | null = null;
 			if (entry.mountPath !== mountPath) {
-				message = `The node also mounts ${sourceKey} at ${entry.mountPath}; unmount that copy so Skiff can link ${mountPath}.`;
+				message = `The node also mounts ${sourceKey} at ${entry.mountPath}; unmount that copy so Skiff can use ${mountPath}.`;
 			} else {
 				try {
-					volumeId = this.ctx.volumes.adoptMount({
+					diskId = this.ctx.disks.register({
 						nodeId,
-						name: mount.volumeName!,
+						name: mount.diskName!,
 						sourceKey,
-						makeDefault: mount.volumeDefault,
 						createdBy: mount.createdBy,
-						principal,
 						auditArgs: { share: share.name },
 					}).id;
 				} catch (error) {
-					message = `Could not link as volume "${mount.volumeName}": ${error instanceof Error ? error.message : String(error)}`;
+					message = `Could not use it as disk "${mount.diskName}": ${error instanceof Error ? error.message : String(error)}`;
 				}
 			}
-			if (message === mount.message && volumeId === null) continue;
+			if (message === mount.message && diskId === null) continue;
 			this.ctx.db
 				.update(shareMounts)
-				.set({ volumeId, message, updatedAt: this.ctx.now() })
+				.set({ diskId, message, updatedAt: this.ctx.now() })
 				.where(eq(shareMounts.id, mount.id))
 				.run();
 		}
 	}
 
-	/** Remove the node volume a mount is linked to, refusing while anything is placed on it. */
-	private unregisterVolume(row: MountRow, principal: Principal): void {
-		if (!row.volumeId) return;
-		const volume = this.ctx.volumes.byId(row.volumeId);
-		if (!volume) return;
-		this.ctx.volumes.remove(principal, volume.nodeId, volume.name);
+	/** Remove the disk a mount became, refusing while anything is placed on it. */
+	private removeDisk(row: MountRow, principal: Principal): void {
+		if (!row.diskId || !this.ctx.disks.byId(row.diskId)) return;
+		this.ctx.disks.remove(principal, row.diskId, { viaShare: true });
 	}
 
-	private assertLinkable(share: ShareRow, node: NodeRow, volumeName: string): void {
+	private assertLinkable(share: ShareRow, node: NodeRow, diskName: string): void {
 		if (share.readOnly)
-			throw new ValidationError(
-				`Share "${share.name}" is read-only, so Skiff cannot keep data on it. Make the share read-write, or mount it without linking.`,
-			);
+			throw new ValidationError(`Share "${share.name}" is read-only, so Skiff cannot keep data on it. Make the share read-write first.`);
 		const clash = this.ctx.db
-			.select({ id: nodeVolumes.id })
-			.from(nodeVolumes)
-			.where(and(eq(nodeVolumes.nodeId, node.id), eq(nodeVolumes.name, volumeName)))
+			.select({ id: disks.id })
+			.from(disks)
+			.where(and(eq(disks.nodeId, node.id), eq(disks.name, diskName)))
 			.get();
-		if (clash) throw new ConflictError(`Volume "${volumeName}" already exists on ${node.name}. Pick another name.`);
+		if (clash) throw new ConflictError(`A disk named "${diskName}" already exists on ${node.name}. Pick another name.`);
 	}
 
 	private sealCredentials(raw: ShareCredentials): string {
@@ -571,7 +564,7 @@ export class ShareService {
 		);
 		return rows
 			.map((row) => {
-				const volume = row.volumeId ? this.ctx.volumes.byId(row.volumeId) : null;
+				const disk = this.ctx.disks.byId(row.diskId);
 				return {
 					id: row.id,
 					nodeId: row.nodeId,
@@ -579,10 +572,8 @@ export class ShareService {
 					mountPath: shareMountPath(share.name),
 					status: row.status,
 					message: row.message,
-					volumeName: volume?.name ?? row.volumeName,
-					volume: volume
-						? { id: volume.id, name: volume.name, status: volume.status, profile: this.ctx.storagePools.latestProfile(volume.id) }
-						: null,
+					diskName: disk?.name ?? row.diskName,
+					disk: disk ? { id: disk.id, name: disk.name, status: disk.status, profile: this.ctx.disks.latestProfile(disk.id) } : null,
 					mountedAt: row.mountedAt ? new Date(row.mountedAt).toISOString() : null,
 					createdAt: new Date(row.createdAt).toISOString(),
 					updatedAt: new Date(row.updatedAt).toISOString(),

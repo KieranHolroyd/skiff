@@ -1,6 +1,6 @@
 import * as z from 'zod';
 import { SLUG_PATTERN } from './slugs.ts';
-import type { VolumeSummary } from './volume.ts';
+import { storageTargetSchema, type DiskSummary } from './disk.ts';
 import { storageReplicationDesiredSchema } from './storage-replication.ts';
 
 /**
@@ -201,10 +201,8 @@ export const storageCreateSchema = z
 		public: z.boolean().default(false),
 		/** Buckets to create right away (all `private`). */
 		buckets: z.array(bucketNameSchema).max(20).default([]),
-		/** Pin one node volume for the data dir (advanced; bypasses storage pools, D74). */
-		volume: z.string().min(3).max(40).optional(),
-		/** Storage pool (or `system`) for the data dir; omitted uses the default from Settings → Storage (docs/STORAGE.md). */
-		pool: z.string().trim().min(2).max(40).optional(),
+		/** `system`, `fast`, `bulk` or a disk name; omitted uses the default from Settings → Storage (docs/STORAGE.md). */
+		storage: storageTargetSchema.optional(),
 		/** Attach to this project right away, read-write on every bucket created here. */
 		project: z.string().min(1).max(64).optional(),
 		envPrefix: storageEnvPrefixSchema.optional(),
@@ -376,7 +374,8 @@ export interface StorageView {
 	/** What an attached app on the same node connects to. */
 	internalEndpoint: { process: string; container: string };
 	/** Where the data dir lives; null keeps the helper state dir (D74). */
-	volume: VolumeSummary | null;
+	/** The disk the data lives on; null is the system disk. */
+	disk: DiskSummary | null;
 	region: string;
 	buckets: StorageBucketView[];
 	attachments: StorageAttachmentView[];

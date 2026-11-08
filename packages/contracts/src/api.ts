@@ -152,8 +152,6 @@ export const nodeUpdateSchema = z
 		dataDir: nodeStoragePathSchema.nullable().optional(),
 		/** Builder scratch directory; `null` restores the install default (D48). */
 		buildDir: nodeStoragePathSchema.nullable().optional(),
-		/** Volume new managed instances on this node use when they name none (D74). */
-		defaultVolumeId: z.string().max(100).nullable().optional(),
 		/** Failure domain (CLUSTERING §3.2). */
 		zone: nodeZoneSchema.optional(),
 		/** What this node may run; removing a role in use is refused. */

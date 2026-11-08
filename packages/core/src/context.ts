@@ -25,7 +25,7 @@ import type { EmailService } from './email.ts';
 import type { EventService } from './events.ts';
 import type { NodeTaskService } from './node-tasks.ts';
 import type { JobService } from './jobs.ts';
-import type { VolumeService } from './volumes.ts';
+import type { DiskService } from './disks.ts';
 import type { AppVolumeService } from './app-volumes.ts';
 import type { ServiceMoveService } from './service-moves.ts';
 import type { StorageObjectsService } from './storage-objects.ts';
@@ -49,8 +49,6 @@ import type { AlertService } from './alerts.ts';
 import type { TopologyService } from './topology.ts';
 import type { ServiceEndpointService } from './service-endpoints.ts';
 import type { ShareService } from './shares.ts';
-import type { DiskMountService } from './disk-mounts.ts';
-import type { StoragePoolService } from './storage-pools.ts';
 import type { RegistryCredentialService } from './registry-credentials.ts';
 import type { RegistryService } from './registry.ts';
 import type { DatabaseReplicaService } from './database-replica-service.ts';
@@ -103,7 +101,8 @@ export interface CoreContext {
 	/** App cron jobs and one-off commands (plan 09, docs/SCHEDULER.md §Jobs). */
 	jobs: JobService;
 	storageObjects: StorageObjectsService;
-	volumes: VolumeService;
+	/** Disks and default storage (docs/STORAGE.md, D169). */
+	disks: DiskService;
 	appVolumes: AppVolumeService;
 	moves: ServiceMoveService;
 	domains: DomainService;
@@ -133,10 +132,6 @@ export interface CoreContext {
 	endpoints: ServiceEndpointService;
 	/** Cluster shares (CLUSTERING §5.2, C3). */
 	shares: ShareService;
-	/** Local partitions mounted by UUID and adopted as volumes (docs/VOLUMES.md §3.1). */
-	diskMounts: DiskMountService;
-	/** Storage pools and placement rules (docs/STORAGE.md, D144). */
-	storagePools: StoragePoolService;
 	/** Credentials for external container registries (docs/REGISTRY.md R2). */
 	registryCredentials: RegistryCredentialService;
 	/** The platform container registry (docs/REGISTRY.md G1). */

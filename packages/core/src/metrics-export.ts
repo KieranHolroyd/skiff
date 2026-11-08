@@ -569,17 +569,18 @@ export class MetricsExporter {
 			}
 		}
 
-		// D80 / docs/VOLUMES.md: volume health and capacity.
+		// D80 / docs/STORAGE.md: disk health and capacity. Series and label names predate disks (D169)
+		// and stay, so existing dashboards keep working; `tier` is new.
 		const volumes = this.ctx.sqlite
-			.query<{ node_id: string; name: string; kind: string; status: string; size_bytes: number | null; free_bytes: number | null }, []>(
-				'SELECT node_id, name, kind, status, size_bytes, free_bytes FROM node_volumes ORDER BY node_id, name',
+			.query<{ node_id: string; name: string; kind: string; tier: string; status: string; size_bytes: number | null; free_bytes: number | null }, []>(
+				'SELECT node_id, name, kind, tier, status, size_bytes, free_bytes FROM node_volumes ORDER BY node_id, name',
 			)
 			.all();
 		for (const volume of volumes) {
-			const labels = { node: nameOf.get(volume.node_id) ?? volume.node_id, volume: volume.name, kind: volume.kind };
-			out.gauge('skiff_volume_up', '1 while the node volume is mounted and ready.', labels, volume.status === 'ready' ? 1 : 0);
-			if (volume.size_bytes !== null) out.gauge('skiff_volume_size_bytes', 'Node volume size.', labels, volume.size_bytes);
-			if (volume.free_bytes !== null) out.gauge('skiff_volume_free_bytes', 'Node volume free space.', labels, volume.free_bytes);
+			const labels = { node: nameOf.get(volume.node_id) ?? volume.node_id, volume: volume.name, kind: volume.kind, tier: volume.tier };
+			out.gauge('skiff_volume_up', '1 while the disk is mounted and ready.', labels, volume.status === 'ready' ? 1 : 0);
+			if (volume.size_bytes !== null) out.gauge('skiff_volume_size_bytes', 'Disk size.', labels, volume.size_bytes);
+			if (volume.free_bytes !== null) out.gauge('skiff_volume_free_bytes', 'Disk free space.', labels, volume.free_bytes);
 		}
 	}
 }

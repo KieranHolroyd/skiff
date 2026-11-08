@@ -1,7 +1,7 @@
 import * as z from 'zod';
 import { SLUG_PATTERN } from './slugs.ts';
 import { volumeNameSchema } from './volume.ts';
-import type { VolumeProfileView } from './storage-pool.ts';
+import type { DiskProfileView } from './disk.ts';
 
 /**
  * Cluster shares (docs/CLUSTERING.md §5.2, C3). Platform-level network filesystem definitions.
@@ -165,23 +165,14 @@ export const shareMountCreateSchema = z
 	.object({
 		/** Node id or name. */
 		node: z.string().trim().min(1).max(100),
-		/**
-		 * Link the mount to Skiff as a node volume with this name once it is mounted; null leaves it
-		 * a plain mount. Defaults to the share name.
-		 */
-		volumeName: volumeNameSchema.nullable().optional(),
-		/** Make the linked volume the node's default for new managed instances. */
-		defaultVolume: z.boolean().default(false),
+		/** The disk the mount becomes once mounted (D169). Defaults to the share name. */
+		diskName: volumeNameSchema.optional(),
 	})
 	.strict();
 export type ShareMountCreate = z.input<typeof shareMountCreateSchema>;
 
-export const shareMountLinkSchema = z
-	.object({
-		volumeName: volumeNameSchema,
-		defaultVolume: z.boolean().default(false),
-	})
-	.strict();
+/** Use an existing mount as a disk (after it was stopped, or a name clash). */
+export const shareMountLinkSchema = z.object({ diskName: volumeNameSchema }).strict();
 export type ShareMountLink = z.input<typeof shareMountLinkSchema>;
 
 export interface ShareMountView {
@@ -191,10 +182,10 @@ export interface ShareMountView {
 	mountPath: string;
 	status: ShareMountStatus;
 	message: string | null;
-	/** Requested volume name; set until the link happens (or when it is linked). */
-	volumeName: string | null;
-	/** The linked node volume, once adopted. */
-	volume: { id: string; name: string; status: string; profile: VolumeProfileView | null } | null;
+	/** The disk name the mount becomes (or became). */
+	diskName: string | null;
+	/** The disk, once the node reports the mount. */
+	disk: { id: string; name: string; status: string; profile: DiskProfileView | null } | null;
 	mountedAt: string | null;
 	createdAt: string;
 	updatedAt: string;

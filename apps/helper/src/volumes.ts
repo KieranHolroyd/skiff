@@ -25,6 +25,8 @@ export interface HelperMount {
 	sizeBytes: number;
 	freeBytes: number;
 	remote: boolean;
+	/** The block device behind it spins (lsblk ROTA); null for network and pool filesystems. */
+	rotational: boolean | null;
 }
 
 export interface HelperDevice {
@@ -42,6 +44,8 @@ export interface HelperDevice {
 	label: string | null;
 	mountPath: string | null;
 	holders: string[];
+	/** lsblk ROTA: a spinning disk (bulk) or not (SSD/NVMe, fast). */
+	rotational: boolean | null;
 	free: boolean;
 }
 
@@ -195,6 +199,14 @@ function bytes(record: RawRecord, ...names: string[]): number {
 	return 0;
 }
 
+/** lsblk prints ROTA as `true`/`false` (util-linux ≥ 2.33) or `"1"`/`"0"`. */
+function flag(value: unknown): boolean | null {
+	if (typeof value === 'boolean') return value;
+	if (value === '1' || value === 1) return true;
+	if (value === '0' || value === 0) return false;
+	return null;
+}
+
 function array(value: unknown): RawRecord[] {
 	return Array.isArray(value) ? value.filter((item): item is RawRecord => typeof item === 'object' && item !== null) : [];
 }
@@ -260,10 +272,11 @@ export interface LsblkNode {
 	model: string | null;
 	sizeBytes: number;
 	fsType: string | null;
+	rotational: boolean | null;
 	children: LsblkNode[];
 }
 
-/** Parse `lsblk -J -b -o NAME,KNAME,TYPE,UUID,LABEL,MOUNTPOINT,SERIAL,MODEL,SIZE,FSTYPE`. */
+/** Parse `lsblk -J -b -o NAME,KNAME,TYPE,UUID,LABEL,MOUNTPOINT,SERIAL,MODEL,SIZE,FSTYPE,ROTA`. */
 export function parseLsblk(stdout: string): LsblkNode[] {
 	let parsed: unknown;
 	try {
@@ -287,6 +300,7 @@ export function parseLsblk(stdout: string): LsblkNode[] {
 			model: text(row, 'model', 'Model'),
 			sizeBytes: bytes(row, 'size', 'Size'),
 			fsType: text(row, 'fstype', 'Fstype'),
+			rotational: flag(field(row, 'rota', 'Rota')),
 			children: array(field(row, 'children', 'Children'))
 				.map(walk)
 				.filter((node): node is LsblkNode => node !== null),
@@ -378,6 +392,7 @@ export function inventoryFrom(
 			sizeBytes: entry.sizeBytes,
 			freeBytes: entry.freeBytes,
 			remote: NETWORK_FS.has(entry.fsType),
+			rotational: NETWORK_FS.has(entry.fsType) ? null : (devices.get(entry.source)?.rotational ?? null),
 		});
 	}
 	mounts.sort((a, b) => a.mountPath.localeCompare(b.mountPath));
@@ -417,6 +432,7 @@ function freeDevices(nodes: LsblkNode[]): HelperDevice[] {
 				label: node.label,
 				mountPath: node.mountPath === null ? null : node.mountPath === '[SWAP]' ? node.mountPath : normalizePath(node.mountPath),
 				holders,
+				rotational: node.rotational,
 				free: !used,
 			});
 		}
@@ -516,7 +532,7 @@ export interface VolumeRunner {
 export const FINDMNT = '/usr/bin/findmnt';
 export const LSBLK = '/usr/bin/lsblk';
 const FINDMNT_ARGS = ['-J', '-b', '-o', 'TARGET,SOURCE,FSTYPE,UUID,LABEL,SIZE,AVAIL,OPTIONS'];
-const LSBLK_ARGS = ['-J', '-b', '-o', 'NAME,KNAME,TYPE,UUID,LABEL,MOUNTPOINT,SERIAL,MODEL,SIZE,FSTYPE'];
+const LSBLK_ARGS = ['-J', '-b', '-o', 'NAME,KNAME,TYPE,UUID,LABEL,MOUNTPOINT,SERIAL,MODEL,SIZE,FSTYPE,ROTA'];
 
 /** Read the current mounts and block devices. Read-only; safe to call every minute. */
 export async function readInventory(runner: VolumeRunner, now: Date = new Date()): Promise<HelperInventory> {

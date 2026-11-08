@@ -157,7 +157,7 @@ describe('app volumes', () => {
 			singleWriter: true,
 			usedBytes: null,
 		});
-		expect(view.nodeVolume).toBeNull();
+		expect(view.disk).toBeNull();
 		expect(JSON.stringify(view)).not.toContain('/skiff/apps');
 		expect(JSON.stringify(view)).not.toContain(dir);
 	});
@@ -266,18 +266,13 @@ describe('app volumes', () => {
 		expect(trash.find((item) => item.name === 'app-data')?.status).toBe('deleting');
 	});
 
-	test('a node-volume backing pins the node and reports missing with its mount', () => {
+	test('a volume on a disk pins the node and reports missing with its mount', () => {
 		const project = core.projects.requireRow(owner, 'app-api');
 		heartbeat(token, nodeId, { volumes: inventory([mount('fs:uuid-1', '/mnt/data')]) });
-		core.volumes.adopt(owner, nodeId, { name: 'data', sourceKey: 'fs:uuid-1' });
-		const volume = core.appVolumes.create(owner, project, {
-			name: 'media',
-			sizeMb: 1024,
-			backing: 'node_volume',
-			nodeVolume: 'data',
-		});
+		core.disks.add(owner, { node: nodeId, candidate: 'mount:fs:uuid-1', name: 'data' });
+		const volume = core.appVolumes.create(owner, project, { name: 'media', sizeMb: 1024, storage: 'data' });
 		expect(volume.backing).toBe('node_volume');
-		expect(volume.nodeVolume).toEqual({ id: expect.any(String), name: 'data', remote: false });
+		expect(volume.disk).toEqual({ id: expect.any(String), name: 'data', tier: 'bulk', remote: false });
 		expect(JSON.stringify(volume)).not.toContain('/mnt/data');
 
 		heartbeat(token, nodeId, { volumes: inventory([]) });

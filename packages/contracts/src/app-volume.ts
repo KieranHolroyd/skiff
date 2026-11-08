@@ -117,32 +117,17 @@ export const appVolumeMountPathSchema = z
 	});
 
 /**
- * Create a project volume. `sizeMb` is both the quota and the disk-admission input. With no
- * `backing`, the pool chosen (`pool`, else the `app-volumes` default) picks the node volume or the state
- * directory (docs/STORAGE.md); `backing` + `nodeVolume` pin one explicitly.
+ * Create a project volume. `sizeMb` is both the quota and the disk-admission input. `storage` is
+ * `system`, `fast`, `bulk` or a disk name, like every other service (docs/STORAGE.md); omitted
+ * uses the `app-volumes` default from Settings → Storage.
  */
-export const appVolumeCreateSchema = z
-	.strictObject({
-		name: appVolumeNameSchema,
-		sizeMb: z.number().int().min(1).max(1_048_576).default(1024),
-		backing: z.enum(appVolumeBackings).optional(),
-		/** Node volume name (not a host path); required for `node_volume`, rejected otherwise. */
-		nodeVolume: z.string().min(3).max(40).optional(),
-		/** Storage pool (or `system`); only without an explicit backing. */
-		pool: z.string().trim().min(2).max(40).optional(),
-		/** v1 is single-writer; keep the default unless the volume is read-only everywhere. */
-		singleWriter: z.boolean().default(true),
-	})
-	.superRefine((input, ctx) => {
-		if (input.backing === 'node_volume' && !input.nodeVolume)
-			ctx.addIssue({ code: 'custom', path: ['nodeVolume'], message: 'Choose the node volume that backs this volume.' });
-		if (input.backing === 'state_dir' && input.nodeVolume)
-			ctx.addIssue({ code: 'custom', path: ['nodeVolume'], message: 'A state-dir volume cannot name a node volume.' });
-		if (input.backing === undefined && input.nodeVolume)
-			ctx.addIssue({ code: 'custom', path: ['backing'], message: 'Set backing to node_volume to name a node volume.' });
-		if (input.backing !== undefined && input.pool)
-			ctx.addIssue({ code: 'custom', path: ['pool'], message: 'Pick a storage pool or an explicit backing, not both.' });
-	});
+export const appVolumeCreateSchema = z.strictObject({
+	name: appVolumeNameSchema,
+	sizeMb: z.number().int().min(1).max(1_048_576).default(1024),
+	storage: z.string().trim().min(3).max(40).optional(),
+	/** v1 is single-writer; keep the default unless the volume is read-only everywhere. */
+	singleWriter: z.boolean().default(true),
+});
 export type AppVolumeCreate = z.input<typeof appVolumeCreateSchema>;
 
 export const appVolumeUpdateSchema = z
@@ -212,12 +197,14 @@ export type AppVolumeRestore = z.input<typeof appVolumeRestoreSchema>;
  * The node volume backing a volume. A summary only: the node's mount path and device are host
  * details and deliberately absent from project-facing responses.
  */
-export const appVolumeNodeVolumeSchema = z.strictObject({
+/** The disk an app volume lives on (D169); null is the node's system disk. */
+export const appVolumeDiskSchema = z.strictObject({
 	id: z.string(),
 	name: z.string(),
+	tier: z.enum(['fast', 'bulk']),
 	remote: z.boolean(),
 });
-export type AppVolumeNodeVolume = z.infer<typeof appVolumeNodeVolumeSchema>;
+export type AppVolumeDisk = z.infer<typeof appVolumeDiskSchema>;
 
 export const appVolumeAttachmentViewSchema = z.strictObject({
 	id: z.string(),
@@ -264,7 +251,7 @@ export const appVolumeViewSchema = z.strictObject({
 	name: z.string(),
 	nodeId: z.string(),
 	backing: z.enum(appVolumeBackings),
-	nodeVolume: appVolumeNodeVolumeSchema.nullable(),
+	disk: appVolumeDiskSchema.nullable(),
 	sizeMb: z.number().int().positive(),
 	/** Latest helper usage sample; null until the agent reports. */
 	usedBytes: z.number().int().nonnegative().nullable(),

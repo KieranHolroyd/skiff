@@ -99,6 +99,23 @@ describe('volume inventory', () => {
 		expect(inventory.devices.find((device) => device.name === '/dev/sda')?.free).toBe(false);
 	});
 
+	test('reports whether the device behind a mount spins (lsblk ROTA, either encoding)', () => {
+		const lsblk = JSON.stringify({
+			blockdevices: [
+				{ name: 'sdb', kname: 'sdb', type: 'disk', size: 100000, rota: true, children: [
+					{ name: 'sdb1', kname: 'sdb1', type: 'part', uuid: 'data-uuid', mountpoint: '/mnt/data', size: 100000, fstype: 'ext4', rota: true },
+				] },
+				{ name: 'nvme0n1', kname: 'nvme0n1', type: 'disk', size: 500000, rota: '0' },
+			],
+		});
+		const inventory = inventoryFrom(parseFindmnt(FINDMNT), parseLsblk(lsblk));
+		expect(inventory.mounts.find((mount) => mount.mountPath === '/mnt/data')!.rotational).toBe(true);
+		expect(inventory.mounts.find((mount) => mount.mountPath === '/srv/nas')!.rotational).toBeNull();
+		expect(inventory.devices.find((device) => device.name === '/dev/nvme0n1')!.rotational).toBe(false);
+		// Older lsblk without the column: unknown, not false.
+		expect(inventoryFrom(parseFindmnt(FINDMNT), parseLsblk(LSBLK)).devices[0]!.rotational).toBeNull();
+	});
+
 	test('verifies the registered mount and rejects a shadowed path', () => {
 		const ok = verifyFrom(FINDMNT, LSBLK, '/mnt/data', 'fs:data-uuid');
 		expect(ok).toMatchObject({ ok: true, sourceKey: 'fs:data-uuid' });

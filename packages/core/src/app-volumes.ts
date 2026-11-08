@@ -2,7 +2,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import {
 	appVolumeAttachments,
 	appVolumes,
-	nodeVolumes,
+	disks,
 	nodes,
 	projects,
 	workloads,
@@ -33,7 +33,7 @@ import { featureEnabled } from './config.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { newId, parseJson } from './util.ts';
 import type { ProjectRow } from './projects.ts';
-import type { VolumeRow } from './volumes.ts';
+import type { DiskRow } from './disks.ts';
 
 export type AppVolumeRow = typeof appVolumes.$inferSelect;
 export type AppVolumeAttachmentRow = typeof appVolumeAttachments.$inferSelect;
@@ -179,7 +179,7 @@ export class AppVolumeService {
 		principal: Principal,
 		project: ProjectRow,
 		raw: AppVolumeCreate,
-		options: { restoreFrom?: { snapshotId: string; sourceName: string } } = {},
+		options: { restoreFrom?: { snapshotId: string; sourceName: string; diskId: string | null } } = {},
 	): AppVolumeView {
 		this.assertEnabled();
 		requirePermission(principal, 'project:update');
@@ -202,36 +202,33 @@ export class AppVolumeService {
 		// Org quotas (docs/QUOTAS.md) before disk admission: the quota is policy, the disk is physics.
 		this.ctx.quota.assertCanCreateVolume(principal.orgId, project.id, input.sizeMb);
 
+		// The storage target (chosen at creation, else the app-volumes default) picks a disk on the
+		// project's node, or its system disk (docs/STORAGE.md §2.2). A volume pins its project to one
+		// node, so a named disk may choose the node only while nothing runs yet. A restore goes back
+		// onto the source's disk.
 		let nodeId: string;
-		let nodeVolumeId: string | null = null;
 		let freeBytes: number | null;
 		let reservedBytes: number;
-		let backing = input.backing;
-		let pinnedVolume: VolumeRow | null = backing === 'node_volume' ? this.ctx.volumes.findByName(input.nodeVolume!) : null;
-		if (backing === undefined) {
-			// No explicit backing: the pool chosen at creation (else the app-volumes default) picks a volume
-			// on the project's node, else the state dir (docs/STORAGE.md §3.2). A volume pins its
-			// project to one node, so the node is the project's, never chosen by the pool.
-			const targetNode = this.workloadNode(project) ?? this.requiredEdgeNode();
-			const plan = this.ctx.storagePools.plan('app-volumes', input.pool);
-			pinnedVolume = plan.legacy ? null : this.ctx.storagePools.pick(plan, targetNode, input.sizeMb);
-			backing = pinnedVolume ? 'node_volume' : 'state_dir';
-		}
-		if (backing === 'node_volume') {
-			const nodeVolume = pinnedVolume!;
-			const workloadNode = this.workloadNode(project);
-			if (workloadNode && workloadNode !== nodeVolume.nodeId)
+		const workloadNode = this.workloadNode(project);
+		let disk: DiskRow | null;
+		if (options.restoreFrom) {
+			disk = this.ctx.disks.byId(options.restoreFrom.diskId);
+			if (options.restoreFrom.diskId && !disk)
+				throw new ConflictError('The disk that held the source volume was removed, so its snapshot cannot be restored onto it.');
+			if (disk) this.ctx.disks.assertRoom(disk, input.sizeMb);
+		} else {
+			const plan = this.ctx.disks.plan('app-volumes', input.storage, workloadNode);
+			if (plan.target === 'disk' && workloadNode && workloadNode !== plan.disk!.nodeId)
 				throw new ValidationError(
-					`Volume "${input.nodeVolume}" is on another node; a volume cannot pin this project away from its running workload. Detach or move the workload first.`,
+					`Disk "${plan.disk!.name}" is on another node; a volume cannot pin this project away from its running workload. Detach or move the workload first.`,
 				);
-			if (nodeVolume.status !== 'ready')
-				throw new ConflictError(
-					`Node volume "${nodeVolume.name}" is ${nodeVolume.status}${nodeVolume.message ? `: ${nodeVolume.message}` : ''}.`,
-				);
-			nodeId = nodeVolume.nodeId;
-			nodeVolumeId = nodeVolume.id;
-			freeBytes = nodeVolume.freeBytes;
-			reservedBytes = this.reservedBytesForNodeVolume(nodeVolume.id);
+			disk = this.ctx.disks.pick(plan, plan.target === 'disk' ? plan.disk!.nodeId : (workloadNode ?? this.requiredEdgeNode()), input.sizeMb);
+		}
+		const backing = disk ? 'node_volume' : 'state_dir';
+		if (disk) {
+			nodeId = disk.nodeId;
+			freeBytes = disk.freeBytes;
+			reservedBytes = this.reservedBytesForDisk(disk.id);
 		} else {
 			nodeId = this.workloadNode(project) ?? this.requiredEdgeNode();
 			freeBytes = this.diskFreeForNode(nodeId);
@@ -255,7 +252,7 @@ export class AppVolumeService {
 				name: input.name,
 				nodeId,
 				backing,
-				nodeVolumeId,
+				diskId: disk?.id ?? null,
 				sizeMb: input.sizeMb,
 				usedBytes: null,
 				mountPath: '',
@@ -278,8 +275,8 @@ export class AppVolumeService {
 				name: input.name,
 				sizeMb: input.sizeMb,
 				backing,
-				...(pinnedVolume ? { nodeVolume: pinnedVolume.name } : {}),
-				...(input.pool ? { pool: input.pool } : {}),
+				...(disk ? { disk: disk.name } : {}),
+				...(input.storage ? { storage: input.storage } : {}),
 				nodeId,
 				...(restoreFrom ? { restoreFrom: restoreFrom.snapshotId, source: restoreFrom.sourceName } : {}),
 			},
@@ -301,11 +298,9 @@ export class AppVolumeService {
 			);
 		if (input.sizeMb !== undefined && input.sizeMb > row.sizeMb) {
 			this.ctx.quota.assertCanResizeVolume(principal.orgId, project.id, row.sizeMb, input.sizeMb);
-			const freeBytes = row.nodeVolumeId
-				? this.nodeVolumeFreeBytes(row.nodeVolumeId)
-				: this.diskFreeForNode(row.nodeId);
-			const reservedBytes = row.nodeVolumeId
-				? this.reservedBytesForNodeVolume(row.nodeVolumeId) - row.sizeMb * MB
+			const freeBytes = row.diskId ? (this.ctx.disks.byId(row.diskId)?.freeBytes ?? null) : this.diskFreeForNode(row.nodeId);
+			const reservedBytes = row.diskId
+				? this.reservedBytesForDisk(row.diskId) - row.sizeMb * MB
 				: this.reservedBytesForStateDir(row.nodeId) - row.sizeMb * MB;
 			const problem = diskAdmissionProblem({
 				requestMb: input.sizeMb,
@@ -546,7 +541,7 @@ export class AppVolumeService {
 				mountPath: attachment.mountPath,
 				readOnly: attachment.readOnly,
 				backing: volume.backing,
-				...(volume.nodeVolumeId ? { nodeVolumeId: volume.nodeVolumeId } : {}),
+				...(volume.diskId ? { nodeVolumeId: volume.diskId } : {}),
 			}));
 	}
 
@@ -599,19 +594,17 @@ export class AppVolumeService {
 			.where(eq(appVolumeAttachments.volumeId, row.id))
 			.all()
 			.sort((a, b) => a.createdAt - b.createdAt);
-		const nodeVolume = row.nodeVolumeId
-			? (this.ctx.db.select().from(nodeVolumes).where(eq(nodeVolumes.id, row.nodeVolumeId)).get() ?? null)
-			: null;
+		const disk = this.ctx.disks.byId(row.diskId);
 		let status = row.status as AppVolumeStatus;
 		let message = row.message;
 		if (row.deletedAt) status = 'deleting';
-		else if (row.nodeVolumeId) {
-			if (!nodeVolume) {
+		else if (row.diskId) {
+			if (!disk) {
 				status = 'missing';
-				message = 'The node volume backing this app volume was removed.';
-			} else if (nodeVolume.status !== 'ready') {
-				status = nodeVolume.status === 'missing' ? 'missing' : 'failed';
-				message = nodeVolume.message ?? `The backing node volume is ${nodeVolume.status}.`;
+				message = 'The disk this volume lives on was removed.';
+			} else if (disk.status !== 'ready') {
+				status = disk.status === 'missing' ? 'missing' : 'failed';
+				message = disk.message ?? `Its disk "${disk.name}" is ${disk.status}.`;
 			}
 		}
 		const writer = attachments.find((item) => !item.readOnly) ?? null;
@@ -623,9 +616,7 @@ export class AppVolumeService {
 			name: row.name,
 			nodeId: row.nodeId,
 			backing: row.backing,
-			nodeVolume: nodeVolume
-				? { id: nodeVolume.id, name: nodeVolume.name, remote: nodeVolume.remote }
-				: null,
+			disk: disk ? { id: disk.id, name: disk.name, tier: disk.tier, remote: disk.remote } : null,
 			sizeMb: row.sizeMb,
 			usedBytes: row.usedBytes,
 			usedAt: row.usedAt ? new Date(row.usedAt).toISOString() : null,
@@ -701,16 +692,6 @@ export class AppVolumeService {
 		return nodeDiskFreeBytes(parseJson(row?.statsJson ?? null, null));
 	}
 
-	private nodeVolumeFreeBytes(nodeVolumeId: string): number | null {
-		return (
-			this.ctx.db
-				.select({ freeBytes: nodeVolumes.freeBytes })
-				.from(nodeVolumes)
-				.where(eq(nodeVolumes.id, nodeVolumeId))
-				.get()?.freeBytes ?? null
-		);
-	}
-
 	private reservedBytesForStateDir(nodeId: string): number {
 		const rows = this.ctx.db
 			.select({ sizeMb: appVolumes.sizeMb })
@@ -726,31 +707,24 @@ export class AppVolumeService {
 		return rows.reduce((total, row) => total + row.sizeMb * MB, 0);
 	}
 
-	private reservedBytesForNodeVolume(nodeVolumeId: string): number {
+	private reservedBytesForDisk(diskId: string): number {
 		const rows = this.ctx.db
 			.select({ sizeMb: appVolumes.sizeMb })
 			.from(appVolumes)
-			.where(and(eq(appVolumes.nodeVolumeId, nodeVolumeId), isNull(appVolumes.deletedAt)))
+			.where(and(eq(appVolumes.diskId, diskId), isNull(appVolumes.deletedAt)))
 			.all();
 		return rows.reduce((total, row) => total + row.sizeMb * MB, 0);
 	}
 
 	private assertBackingReady(row: AppVolumeRow): void {
-		if (!row.nodeVolumeId) return;
-		const nodeVolume = this.ctx.db
-			.select()
-			.from(nodeVolumes)
-			.where(eq(nodeVolumes.id, row.nodeVolumeId))
-			.get();
-		if (!nodeVolume)
-			throw new ConflictError('The node volume backing this app volume was removed.');
-		if (nodeVolume.status !== 'ready')
+		if (!row.diskId) return;
+		const disk = this.ctx.disks.byId(row.diskId);
+		if (!disk) throw new ConflictError('The disk this volume lives on was removed.');
+		if (disk.status !== 'ready')
+			throw new ConflictError(`Its disk "${disk.name}" is ${disk.status}${disk.message ? `: ${disk.message}` : ''}.`);
+		if (disk.freeBytes !== null && disk.freeBytes < row.sizeMb * MB)
 			throw new ConflictError(
-				`The backing node volume "${nodeVolume.name}" is ${nodeVolume.status}${nodeVolume.message ? `: ${nodeVolume.message}` : ''}.`,
-			);
-		if (nodeVolume.freeBytes !== null && nodeVolume.freeBytes < row.sizeMb * MB)
-			throw new ConflictError(
-				`The backing node volume "${nodeVolume.name}" has ${Math.floor(nodeVolume.freeBytes / MB)} MB free; this volume needs ${row.sizeMb} MB.`,
+				`Its disk "${disk.name}" has ${Math.floor(disk.freeBytes / MB)} MB free; this volume needs ${row.sizeMb} MB.`,
 			);
 	}
 }

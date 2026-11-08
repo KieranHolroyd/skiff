@@ -1,6 +1,6 @@
 import * as z from 'zod';
 import { SLUG_PATTERN } from './slugs.ts';
-import type { VolumeSummary } from './volume.ts';
+import { storageTargetSchema, type DiskSummary } from './disk.ts';
 
 /**
  * Managed queue brokers (docs/BROKERS.md, D111).
@@ -105,10 +105,8 @@ export const brokerCreateSchema = z
 		cpus: z.number().positive().max(8).default(0.5),
 		/** Persistent message storage (JetStream file store) in MB; also the engine's own cap. */
 		storageMb: z.number().int().min(256).max(1_048_576).default(2_048),
-		/** Pin one node volume for the data dir (advanced; bypasses storage pools, D74). */
-		volume: z.string().min(3).max(40).optional(),
-		/** Storage pool (or `system`) for the data dir; omitted uses the default from Settings → Storage (docs/STORAGE.md). */
-		pool: z.string().trim().min(2).max(40).optional(),
+		/** `system`, `fast`, `bulk` or a disk name; omitted uses the default from Settings → Storage (docs/STORAGE.md). */
+		storage: storageTargetSchema.optional(),
 		/** Attach to this project right away (placement then follows the project's workload node). */
 		project: z.string().min(1).max(64).optional(),
 		envPrefix: brokerEnvPrefixSchema.optional(),
@@ -176,7 +174,8 @@ export interface BrokerView {
 	username: string;
 	/** Where attached apps reach it: process apps on loopback, containers by network alias. */
 	internalHost: { process: string; container: string };
-	volume: VolumeSummary | null;
+	/** The disk the data lives on; null is the system disk. */
+	disk: DiskSummary | null;
 	attachments: BrokerAttachmentView[];
 	/** From the newest sample the node reported (D123); null before the first one. */
 	storeBytes: number | null;

@@ -71,7 +71,7 @@ import { requireCredentialReveal } from './credential-reveal.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { resolvePlacement } from './placement.ts';
 import type { ProjectRow } from './projects.ts';
-import type { VolumeRow } from './volumes.ts';
+import type { DiskRow } from './disks.ts';
 import { newId, parseJson, randomBytes, sha256Hex } from './util.ts';
 
 export type StorageRow = typeof storageInstances.$inferSelect;
@@ -189,35 +189,23 @@ export class StorageService {
 			}
 		}
 
-		// A named volume pins the node: the data dir has to be on the same node as the container.
-		let volume: VolumeRow | null = null;
-		if (input.volume) {
-			volume = this.ctx.volumes.findByName(input.volume);
-			const edgeNodeId = this.ctx.workloads.edgeNode();
-			const target = requested === 'auto' ? null : requested === 'edge' ? edgeNodeId : requested;
-			if (target && target !== volume.nodeId)
-				throw new ValidationError(
-					`Volume "${volume.name}" is on another node; place this instance there or pick a volume on the target node.`,
-				);
-			requested = volume.nodeId;
-		}
-
-		// No explicit volume: the storage pool (chosen at creation, else the object-storage default) narrows
-		// the nodes and picks the volume there (docs/STORAGE.md §3.2).
+		// The storage target (chosen at creation, else the object-storage default) narrows the nodes;
+		// a named disk pins its node (docs/STORAGE.md §2.2).
 		const edgeNodeId = this.ctx.workloads.edgeNode();
-		const storagePlan = volume ? null : this.ctx.storagePools.plan('object-storage', input.pool);
-		const candidates = storagePlan
-			? this.ctx.storagePools.filterCandidates(storagePlan, this.ctx.workloads.placementCandidates(), input.storageMb, {
-					requested,
-					edgeNodeId,
-				})
-			: this.ctx.workloads.placementCandidates();
+		const storage = this.ctx.disks.prepare({
+			kind: 'object-storage',
+			storage: input.storage,
+			requested,
+			storageMb: input.storageMb,
+			edgeNodeId,
+			candidates: this.ctx.workloads.placementCandidates(),
+		});
 		const decision = resolvePlacement({
 			runtime: 'container',
-			requested,
+			requested: storage.requested,
 			memoryMb,
 			edgeNodeId,
-			candidates,
+			candidates: storage.candidates,
 		});
 		if (!decision.ok)
 			throw new ValidationError(
@@ -227,8 +215,7 @@ export class StorageService {
 
 		const id = newId(STORAGE_ID_PREFIX);
 		const now = this.ctx.now();
-		if (storagePlan) volume = this.ctx.storagePools.pick(storagePlan, decision.nodeId, input.storageMb);
-		if (volume) this.ctx.volumes.assertRoom(volume, input.storageMb);
+		const disk: DiskRow | null = this.ctx.disks.pick(storage.plan, decision.nodeId, input.storageMb);
 		this.ctx.quota.assertCanCreateStorage(principal.orgId, project?.id, input.storageMb, memoryMb);
 		const hostPort = this.allocatePort(decision.nodeId);
 		this.ctx.sqlite.transaction(() => {
@@ -245,7 +232,7 @@ export class StorageService {
 					memoryMb,
 					cpus: input.cpus,
 					storageMb: input.storageMb,
-					volumeId: volume?.id ?? null,
+					diskId: disk?.id ?? null,
 					public: input.public,
 					publicHost,
 					status: 'pending',
@@ -279,7 +266,7 @@ export class StorageService {
 				memoryMb,
 				public: input.public,
 				buckets: input.buckets,
-				...(volume ? { volume: volume.name } : {}),
+				...(disk ? { disk: disk.name } : {}),
 				...(project ? { project: project.slug } : {}),
 			},
 			result: 'ok',
@@ -384,7 +371,7 @@ export class StorageService {
 			row.memoryMb,
 		);
 		this.admit(row, row.memoryMb);
-		this.ctx.volumes.assertVolumeReady(row.volumeId, row.storageMb);
+		this.ctx.disks.assertReady(row.diskId, row.storageMb);
 		this.ctx.db
 			.update(storageInstances)
 			.set({ deletedAt: null, purgeAt: null, status: 'pending', message: null, updatedAt: this.ctx.now() })
@@ -1203,7 +1190,7 @@ export class StorageService {
 					status: 'running' as const,
 					release: null,
 					image: storageImage(row.engine, row.version),
-					...(row.volumeId ? { volumeId: row.volumeId } : {}),
+					...(row.diskId ? { volumeId: row.diskId } : {}),
 					upstream: `127.0.0.1:${row.hostPort}`,
 					memoryMb: row.memoryMb,
 					cpus: row.cpus,
@@ -1889,7 +1876,7 @@ export class StorageService {
 				process: `http://127.0.0.1:${row.hostPort}`,
 				container: `http://${storageAlias(row.id)}:${info.containerPort}`,
 			},
-			volume: this.ctx.volumes.summary(row.volumeId),
+			disk: this.ctx.disks.summary(row.diskId),
 			region: STORAGE_REGION,
 			buckets: this.ctx.db
 				.select()

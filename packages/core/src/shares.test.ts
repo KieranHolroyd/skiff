@@ -168,19 +168,21 @@ describe('share mounts', () => {
 
 		// Mounted, but the inventory has not caught up: no link yet.
 		heartbeat(node, { shareMounts: [{ id: mountId, mounted: true, error: null }] });
-		expect(core.shares.get(admin, 'vault').mounts[0]).toMatchObject({ status: 'mounted', volume: null });
+		expect(core.shares.get(admin, 'vault').mounts[0]).toMatchObject({ status: 'mounted', disk: null });
 
-		// The next inventory shows the mount at its path: it becomes a remote node volume.
+		// The next inventory shows the mount at its path: it becomes a bulk network disk.
 		heartbeat(node, {
 			shareMounts: [{ id: mountId, mounted: true, error: null }],
 			volumes: inventory([{ sourceKey: 'cifs:nas.home/vault', kind: 'cifs', mountPath: '/mnt/skiff-shares/vault' }]),
 		});
 		const linked = core.shares.get(admin, 'vault').mounts[0]!;
-		expect(linked.volume).toMatchObject({ name: 'vault', status: 'ready' });
-		const volumes = core.volumes.list(admin, node.nodeId).volumes;
-		expect(volumes).toMatchObject([
-			{ name: 'vault', kind: 'cifs', remote: true, class: 'remote', mountPath: '/mnt/skiff-shares/vault', isDefault: true },
+		expect(linked.disk).toMatchObject({ name: 'vault', status: 'ready' });
+		const disks = core.disks.overview(admin).nodes.find((item) => item.id === node.nodeId)!.disks;
+		expect(disks).toMatchObject([
+			{ name: 'vault', kind: 'cifs', remote: true, tier: 'bulk', share: 'vault', mountPath: '/mnt/skiff-shares/vault' },
 		]);
+		// Settings → Storage cannot remove it; the share owns it.
+		expect(() => core.disks.remove(admin, disks[0]!.id)).toThrow(/Network shares/);
 		expect((await core.nodes.desiredState(node.token)).volumes.map((volume) => volume.sourceKey)).toEqual([
 			'cifs:nas.home/vault',
 		]);
@@ -192,10 +194,10 @@ describe('share mounts', () => {
 		expect(rotated.username).toBe('skiff2');
 		expect((await core.nodes.desiredState(node.token)).shareMounts[0]!.generation).toBe('2');
 
-		// Unmount drops the volume registration, then waits for the node.
+		// Unmount removes the disk, then waits for the node.
 		const unmounting = core.shares.unmount(admin, 'vault', node.nodeId);
-		expect(unmounting.mounts[0]).toMatchObject({ status: 'unmounting', volume: null });
-		expect(core.volumes.list(admin, node.nodeId).volumes).toEqual([]);
+		expect(unmounting.mounts[0]).toMatchObject({ status: 'unmounting', disk: null });
+		expect(core.disks.overview(admin).nodes.find((item) => item.id === node.nodeId)!.disks).toEqual([]);
 		const pulled = await core.nodes.desiredState(node.token);
 		expect(pulled.shareMounts).toEqual([]);
 		expect(pulled.shareUnmounts).toEqual([{ id: mountId, name: 'vault' }]);
@@ -215,29 +217,30 @@ describe('share mounts', () => {
 
 		expect(() => core.shares.mount(admin, 'library', { node: 'old-agent' })).toThrow(/Update the node/);
 		expect(() => core.shares.mount(admin, 'nocreds', { node: 'nfs-client' })).toThrow(/username and password/);
-		expect(() => core.shares.mount(admin, 'photos', { node: 'nfs-client' })).toThrow(/read-only/);
 		expect(() => core.shares.mount(member, 'library', { node: 'nfs-client' })).toThrow(/Platform admin/);
 
-		// A read-only share can still be mounted as a plain mount.
-		expect(core.shares.mount(admin, 'photos', { node: 'nfs-client', volumeName: null }).mounts[0]!.volumeName).toBeNull();
+		// A read-only share is a plain mount: it never becomes a disk.
+		expect(core.shares.mount(admin, 'photos', { node: 'nfs-client' }).mounts[0]!.diskName).toBeNull();
 
-		const mountId = core.shares.mount(admin, 'library', { node: 'nfs-client', volumeName: null }).mounts[0]!.id;
+		const mountId = core.shares.mount(admin, 'library', { node: 'nfs-client', diskName: 'library-disk' }).mounts[0]!.id;
 		expect(() => core.shares.mount(admin, 'library', { node: 'nfs-client' })).toThrow(/already mounted/);
 		heartbeat(node, { shareMounts: [{ id: mountId, mounted: false, error: 'access denied by server' }] });
 		expect(core.shares.get(admin, 'library').mounts[0]).toMatchObject({ status: 'failed', message: 'access denied by server' });
 
-		// Linking later, once it is mounted.
+		// Once mounted, it becomes the disk it was asked to be.
 		heartbeat(node, {
 			shareMounts: [{ id: mountId, mounted: true, error: null }],
 			volumes: inventory([{ sourceKey: 'nfs:10.0.0.5:/export/library', kind: 'nfs', mountPath: '/mnt/skiff-shares/library' }]),
 		});
-		const linked = core.shares.link(admin, 'library', 'nfs-client', { volumeName: 'library-vol' });
-		expect(linked.mounts[0]!.volume).toMatchObject({ name: 'library-vol' });
+		expect(core.shares.get(admin, 'library').mounts[0]!.disk).toMatchObject({ name: 'library-disk' });
 
-		// Removing the volume elsewhere must not make the mount re-link itself.
-		core.volumes.remove(admin, node.nodeId, 'library-vol');
+		// Stop using it as a disk: the share stays mounted and does not turn back into one.
+		core.shares.unlink(admin, 'library', 'nfs-client');
 		heartbeat(node, { shareMounts: [{ id: mountId, mounted: true, error: null }] });
-		expect(core.shares.get(admin, 'library').mounts[0]).toMatchObject({ volume: null, volumeName: null });
+		expect(core.shares.get(admin, 'library').mounts[0]).toMatchObject({ status: 'mounted', disk: null, diskName: null });
+		// And use it again under another name.
+		const linked = core.shares.link(admin, 'library', 'nfs-client', { diskName: 'library-vol' });
+		expect(linked.mounts[0]!.disk).toMatchObject({ name: 'library-vol' });
 	});
 });
 

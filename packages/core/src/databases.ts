@@ -108,7 +108,7 @@ import { nextCronTime } from './cron.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { resolvePlacement } from './placement.ts';
 import type { ProjectRow } from './projects.ts';
-import type { VolumeRow } from './volumes.ts';
+import type { DiskRow } from './disks.ts';
 import { isPostgresMajorChange, postgresMajor } from './upgrade-plan.ts';
 import { newId, parseJson, randomBytes, sha256Hex } from './util.ts';
 
@@ -239,41 +239,28 @@ export class DatabaseService {
 			requested = pinned ?? workloadNode ?? project.placement;
 		}
 
-		// A named volume pins the node: the data dir has to be on the same node as the container.
-		let volume: VolumeRow | null = null;
-		if (input.volume) {
-			volume = this.ctx.volumes.findByName(input.volume);
-			const edgeNodeId = this.ctx.workloads.edgeNode();
-			const target = requested === 'auto' ? null : requested === 'edge' ? edgeNodeId : requested;
-			if (target && target !== volume.nodeId)
-				throw new ValidationError(
-					`Volume "${volume.name}" is on another node; place this database there or pick a volume on the target node.`,
-				);
-			requested = volume.nodeId;
-		}
-
-		// No explicit volume: the storage pool (chosen at creation, else the databases default) narrows the
-		// nodes and picks the volume there (docs/STORAGE.md §3.2).
+		// The storage target (chosen at creation, else the databases default) narrows the nodes; a
+		// named disk pins its node (docs/STORAGE.md §2.2).
 		const edgeNodeId = this.ctx.workloads.edgeNode();
-		const storagePlan = volume ? null : this.ctx.storagePools.plan('databases', input.pool);
-		const candidates = storagePlan
-			? this.ctx.storagePools.filterCandidates(storagePlan, this.ctx.workloads.placementCandidates(), input.storageMb, {
-					requested,
-					edgeNodeId,
-				})
-			: this.ctx.workloads.placementCandidates();
+		const storage = this.ctx.disks.prepare({
+			kind: 'databases',
+			storage: input.storage,
+			requested,
+			storageMb: input.storageMb,
+			edgeNodeId,
+			candidates: this.ctx.workloads.placementCandidates(),
+		});
 		const decision = resolvePlacement({
 			runtime: 'container',
-			requested,
+			requested: storage.requested,
 			memoryMb,
 			edgeNodeId,
-			candidates,
+			candidates: storage.candidates,
 		});
 		if (!decision.ok)
 			throw new ValidationError(decision.message.replace('this app reserves', 'this database reserves'), decision.freeByNode);
 
-		if (storagePlan) volume = this.ctx.storagePools.pick(storagePlan, decision.nodeId, input.storageMb);
-		if (volume) this.ctx.volumes.assertRoom(volume, input.storageMb);
+		const disk: DiskRow | null = this.ctx.disks.pick(storage.plan, decision.nodeId, input.storageMb);
 		this.ctx.quota.assertCanCreateDatabase(principal.orgId, project?.id, input.storageMb, memoryMb);
 
 		const id = newId('db_');
@@ -297,7 +284,7 @@ export class DatabaseService {
 					memoryMb,
 					cpus: input.cpus,
 					storageMb: input.storageMb,
-					volumeId: volume?.id ?? null,
+					diskId: disk?.id ?? null,
 					extensionsJson: JSON.stringify(extensions),
 					poolerEnabled: pooler,
 					poolerPort,
@@ -329,7 +316,7 @@ export class DatabaseService {
 				...(input.variant !== 'standard' ? { variant: input.variant } : {}),
 				nodeId: decision.nodeId,
 				memoryMb,
-				...(volume ? { volume: volume.name } : {}),
+				...(disk ? { disk: disk.name } : {}),
 				...(project ? { project: project.slug } : {}),
 			},
 			result: 'ok',
@@ -620,7 +607,7 @@ export class DatabaseService {
 			row.memoryMb,
 		);
 		this.admit(row, row.memoryMb);
-		this.ctx.volumes.assertVolumeReady(row.volumeId, row.storageMb);
+		this.ctx.disks.assertReady(row.diskId, row.storageMb);
 		this.ctx.db
 			.update(databases)
 			.set({ deletedAt: null, purgeAt: null, status: 'pending', message: null, updatedAt: this.ctx.now() })
@@ -1675,7 +1662,7 @@ export class DatabaseService {
 			...(input.memoryMb !== undefined ? { memoryMb: input.memoryMb } : {}),
 			...(input.cpus !== undefined ? { cpus: input.cpus } : {}),
 			...(input.storageMb !== undefined ? { storageMb: input.storageMb } : {}),
-			...(input.volume !== undefined ? { volume: input.volume } : {}),
+			...(input.storage !== undefined ? { storage: input.storage } : {}),
 			...(input.project !== undefined ? { project: input.project } : {}),
 			...(input.envPrefix !== undefined ? { envPrefix: input.envPrefix } : {}),
 			extensions: parseJson(source.extensionsJson, []),
@@ -2224,7 +2211,7 @@ export class DatabaseService {
 			...(input.memoryMb !== undefined ? { memoryMb: input.memoryMb } : {}),
 			...(input.cpus !== undefined ? { cpus: input.cpus } : {}),
 			...(input.storageMb !== undefined ? { storageMb: input.storageMb } : {}),
-			...(input.volume !== undefined ? { volume: input.volume } : {}),
+			...(input.storage !== undefined ? { storage: input.storage } : {}),
 			extensions: parseJson<string[]>(source.extensionsJson, []) as DatabaseCreate['extensions'],
 			pooler: source.poolerEnabled,
 		});
@@ -2946,7 +2933,7 @@ export class DatabaseService {
 					env,
 					secrets: [],
 					dataSizeMb: null,
-					...(row.volumeId ? { volumeId: row.volumeId } : {}),
+					...(row.diskId ? { volumeId: row.diskId } : {}),
 					database: {
 						engine: row.engine,
 						version: row.version,
@@ -3568,7 +3555,7 @@ export class DatabaseService {
 						: null,
 			},
 			tls,
-			volume: this.ctx.volumes.summary(row.volumeId),
+			disk: this.ctx.disks.summary(row.diskId),
 			attachments: this.attachmentsOf(row.id),
 			tables: parseJson<DatabaseTableStat[]>(row.statsJson, []),
 			statsAt: row.statsAt ? new Date(row.statsAt).toISOString() : null,

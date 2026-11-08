@@ -69,9 +69,8 @@ export const nodes = sqliteTable(
 		/** Last report from the node's skiff-storage.service (`NodeStorageStatus`). */
 		storageStatusJson: text('storage_status_json'),
 		/** Volume new managed instances use when they name none (D74). */
-		defaultVolumeId: text('default_volume_id'),
 		/** Latest raw volume inventory (`VolumeInventory`), for the adopt/provision wizard. */
-		volumeInventoryJson: text('volume_inventory_json'),
+		diskInventoryJson: text('volume_inventory_json'),
 		/** Capabilities from the last heartbeat (JSON array); `[]` for agents that predate them. */
 		capabilitiesJson: text('capabilities_json'),
 		/** Outstanding dashboard update target (D99); NULL when none is pending. */
@@ -145,7 +144,7 @@ export const shares = sqliteTable(
 	(t) => [uniqueIndex('shares_name_idx').on(t.name)],
 );
 
-/** Where a share is mounted, and the node volume the mount is linked to (0067). */
+/** Where a share is mounted, and the disk the mount became (0067, D169). */
 export const shareMounts = sqliteTable(
 	'share_mounts',
 	{
@@ -154,44 +153,16 @@ export const shareMounts = sqliteTable(
 		nodeId: text('node_id').notNull(),
 		status: text('status', { enum: ['pending', 'mounted', 'failed', 'unmounting'] }).notNull().default('pending'),
 		message: text('message'),
-		/** Link as a node volume with this name once mounted; null = a plain mount. */
-		volumeName: text('volume_name'),
-		volumeDefault: integer('volume_default', { mode: 'boolean' }).notNull().default(false),
-		volumeId: text('volume_id'),
+		/** Register the mount as a disk with this name once mounted (D169). */
+		diskName: text('volume_name'),
+		/** The disk the mount became. */
+		diskId: text('volume_id'),
 		mountedAt: integer('mounted_at'),
 		createdBy: text('created_by').notNull(),
 		createdAt: integer('created_at').notNull().$defaultFn(now),
 		updatedAt: integer('updated_at').notNull().$defaultFn(now),
 	},
 	(t) => [uniqueIndex('share_mounts_share_node_idx').on(t.shareId, t.nodeId), index('share_mounts_node_idx').on(t.nodeId)],
-);
-
-/** A local partition mounted by filesystem UUID at /mnt/skiff-disks/<name>, then adopted as a volume (0078). */
-export const diskMounts = sqliteTable(
-	'disk_mounts',
-	{
-		id: text('id').primaryKey(),
-		nodeId: text('node_id').notNull(),
-		/** Mount directory under /mnt/skiff-disks. */
-		name: text('name').notNull(),
-		fsUuid: text('fs_uuid').notNull(),
-		fsType: text('fs_type').notNull(),
-		/** Kernel device when requested; display only. */
-		device: text('device'),
-		status: text('status', { enum: ['pending', 'mounted', 'failed', 'unmounting'] }).notNull().default('pending'),
-		message: text('message'),
-		/** Adopt as a node volume with this name once mounted; null = a plain mount. */
-		volumeName: text('volume_name'),
-		volumeDefault: integer('volume_default', { mode: 'boolean' }).notNull().default(false),
-		/** Put the adopted volume in this pool. */
-		poolId: text('pool_id'),
-		volumeId: text('volume_id'),
-		mountedAt: integer('mounted_at'),
-		createdBy: text('created_by').notNull(),
-		createdAt: integer('created_at').notNull().$defaultFn(now),
-		updatedAt: integer('updated_at').notNull().$defaultFn(now),
-	},
-	(t) => [uniqueIndex('disk_mounts_node_name_idx').on(t.nodeId, t.name), uniqueIndex('disk_mounts_node_uuid_idx').on(t.nodeId, t.fsUuid)],
 );
 
 export const shareGrants = sqliteTable(
@@ -246,7 +217,8 @@ export const databaseReplicas = sqliteTable(
 		primaryGeneration: integer('primary_generation').notNull().default(0),
 		/** Loopback port the replica publishes on its node (0069). */
 		hostPort: integer('host_port'),
-		volumeId: text('volume_id'),
+		/** Disk on the replica's node; null is the system disk. */
+		diskId: text('volume_id'),
 		mode: text('mode', { enum: ['async', 'sync'] }).notNull().default('async'),
 		/** Last problem the primary or the replica node reported. */
 		message: text('message'),
@@ -398,11 +370,12 @@ export const nodeJoinTokens = sqliteTable(
 );
 
 /**
- * A mounted filesystem a node can place managed workloads on (docs/VOLUMES.md, D72). `source_key`
- * is the stable node-reported identity (filesystem UUID, `zfs:pool/dataset`, `nfs:host:/export`);
- * `stack_json` records how a provisioned volume was built. Names are unique per node.
+ * Disks (docs/STORAGE.md, D169): a mounted filesystem on one node that Skiff may store data on.
+ * The SQL table keeps its 0010 name. `source_key` is the stable node-reported identity
+ * (`fs:<UUID>`, `zfs:pool/dataset`, `nfs:host:/export`); `mount_uuid` is set when Skiff mounts the
+ * filesystem itself at /mnt/skiff-disks/<name>. Names are unique per node.
  */
-export const nodeVolumes = sqliteTable(
+export const disks = sqliteTable(
 	'node_volumes',
 	{
 		id: text('id').primaryKey(),
@@ -414,16 +387,13 @@ export const nodeVolumes = sqliteTable(
 		sourceKey: text('source_key').notNull(),
 		mountPath: text('mount_path').notNull(),
 		fsType: text('fs_type').notNull(),
-		/** Comma-separated mount options as last observed; display and re-mount hints only. */
-		options: text('options').notNull().default(''),
 		remote: integer('remote', { mode: 'boolean' }).notNull().default(false),
-		/** Derived volume class (CLUSTERING §3.3): fast, bulk, remote or unknown. */
-		class: text('class', { enum: ['fast', 'bulk', 'remote', 'unknown'] }).notNull().default('unknown'),
-		/** Operator override; `class` stays the derived value for drift detection. */
-		classOverride: text('class_override', { enum: ['fast', 'bulk', 'remote'] }),
-		classOverrideReason: text('class_override_reason'),
-		/** Provisioning plan/steps (`VolumeStack`); null for an adopted mount. */
-		stackJson: text('stack_json'),
+		/** `fast` or `bulk`; derived from the hardware on every report unless `tierSet` (0083). */
+		tier: text('tier', { enum: ['fast', 'bulk'] }).notNull().default('bulk'),
+		tierSet: integer('tier_set', { mode: 'boolean' }).notNull().default(false),
+		/** Filesystem UUID when Skiff mounts it (the node's `diskMounts`); null for a mount Skiff found. */
+		mountUuid: text('mount_uuid'),
+		/** `pending` until a Skiff mount appears; `removing` while the node unmounts it. */
 		status: text('status', { enum: ['pending', 'ready', 'missing', 'failed', 'removing'] })
 			.notNull()
 			.default('pending'),
@@ -431,8 +401,6 @@ export const nodeVolumes = sqliteTable(
 		sizeBytes: integer('size_bytes'),
 		freeBytes: integer('free_bytes'),
 		statsAt: integer('stats_at'),
-		/** Storage pool this volume belongs to (docs/STORAGE.md, 0068); null = unassigned. */
-		poolId: text('pool_id'),
 		createdBy: text('created_by').notNull(),
 		createdAt: integer('created_at').notNull().$defaultFn(now),
 		updatedAt: integer('updated_at').notNull().$defaultFn(now),
@@ -441,32 +409,15 @@ export const nodeVolumes = sqliteTable(
 		uniqueIndex('node_volumes_node_name_idx').on(t.nodeId, t.name),
 		uniqueIndex('node_volumes_node_source_idx').on(t.nodeId, t.sourceKey),
 		index('node_volumes_node_idx').on(t.nodeId),
-		index('node_volumes_pool_idx').on(t.poolId),
 	],
 );
 
-/** Named, platform-wide groups of node volumes (docs/STORAGE.md, D144). */
-export const storagePools = sqliteTable(
-	'storage_pools',
-	{
-		id: text('id').primaryKey(),
-		name: text('name').notNull(),
-		description: text('description').notNull().default(''),
-		allocation: text('allocation', { enum: ['most-free', 'fill-up'] }).notNull().default('most-free'),
-		minFreePercent: integer('min_free_percent').notNull().default(10),
-		createdBy: text('created_by').notNull(),
-		createdAt: integer('created_at').notNull().$defaultFn(now),
-		updatedAt: integer('updated_at').notNull().$defaultFn(now),
-	},
-	(t) => [uniqueIndex('storage_pools_name_idx').on(t.name)],
-);
-
-/** Benchmarks of node volumes (docs/STORAGE.md §5, 0070); the latest per volume is shown. */
-export const volumeProfiles = sqliteTable(
+/** Benchmarks of disks (docs/STORAGE.md §5.1, 0070); the latest per disk is shown. */
+export const diskProfiles = sqliteTable(
 	'volume_profiles',
 	{
 		id: text('id').primaryKey(),
-		volumeId: text('volume_id').notNull(),
+		diskId: text('volume_id').notNull(),
 		nodeId: text('node_id').notNull(),
 		status: text('status', { enum: ['queued', 'running', 'succeeded', 'failed'] }).notNull().default('queued'),
 		method: text('method', { enum: ['fio', 'dd'] }),
@@ -485,14 +436,13 @@ export const volumeProfiles = sqliteTable(
 		createdAt: integer('created_at').notNull().$defaultFn(now),
 		finishedAt: integer('finished_at'),
 	},
-	(t) => [index('volume_profiles_volume_idx').on(t.volumeId, t.createdAt), index('volume_profiles_node_status_idx').on(t.nodeId, t.status)],
+	(t) => [index('volume_profiles_volume_idx').on(t.diskId, t.createdAt), index('volume_profiles_node_status_idx').on(t.nodeId, t.status)],
 );
 
-/** Which pool each kind of data uses; `poolId` null = the system disk (docs/STORAGE.md §3). */
-export const storageRules = sqliteTable('storage_rules', {
+/** Default storage target per kind of service: `system`, `fast` or `bulk` (0083). */
+export const storageDefaults = sqliteTable('storage_defaults', {
 	kind: text('kind').primaryKey(),
-	poolId: text('pool_id'),
-	overflowPoolId: text('overflow_pool_id'),
+	target: text('target', { enum: ['system', 'fast', 'bulk'] }).notNull(),
 	updatedBy: text('updated_by').notNull(),
 	updatedAt: integer('updated_at').notNull().$defaultFn(now),
 });
@@ -593,7 +543,8 @@ export const appVolumes = sqliteTable(
 		name: text('name').notNull(),
 		nodeId: text('node_id').notNull(),
 		backing: text('backing', { enum: ['node_volume', 'state_dir'] }).notNull().default('state_dir'),
-		nodeVolumeId: text('node_volume_id'),
+		/** Disk for `backing: node_volume` (D169). */
+		diskId: text('node_volume_id'),
 		/** Quota and disk-admission input. */
 		sizeMb: integer('size_mb').notNull(),
 		/** Latest helper usage sample; null until the node reports one. */
@@ -1024,8 +975,8 @@ export const databases = sqliteTable(
 		memoryMb: integer('memory_mb').notNull(),
 		cpus: real('cpus').notNull().default(1),
 		storageMb: integer('storage_mb').notNull().default(10_240),
-		/** Node volume holding the data dir; null keeps the helper state dir (D74). */
-		volumeId: text('volume_id'),
+		/** Disk holding the data dir; null is the system disk (docs/STORAGE.md, D169). */
+		diskId: text('volume_id'),
 		/** PgBouncer sidecar (docs/DATABASES.md §11); null port when disabled. */
 		poolerEnabled: integer('pooler_enabled', { mode: 'boolean' }).notNull().default(false),
 		poolerPort: integer('pooler_port'),
@@ -1265,8 +1216,8 @@ export const storageInstances = sqliteTable(
 		memoryMb: integer('memory_mb').notNull(),
 		cpus: real('cpus').notNull().default(1),
 		storageMb: integer('storage_mb').notNull().default(10_240),
-		/** Node volume holding the data dir; null keeps the helper state dir (D74). */
-		volumeId: text('volume_id'),
+		/** Disk holding the data dir; null is the system disk (docs/STORAGE.md, D169). */
+		diskId: text('volume_id'),
 		/** Bumped by an explicit restart; folded into the activation version (D82). */
 		restartGeneration: integer('restart_generation').notNull().default(0),
 		public: integer('public', { mode: 'boolean' }).notNull().default(false),
@@ -1390,8 +1341,8 @@ export const brokers = sqliteTable(
 		cpus: real('cpus').notNull().default(0.5),
 		/** Persistent message store cap (JetStream file store), in MB. */
 		storageMb: integer('storage_mb').notNull().default(2_048),
-		/** Node volume holding the data dir; null keeps the helper state dir (D74). */
-		volumeId: text('volume_id'),
+		/** Disk holding the data dir; null is the system disk (docs/STORAGE.md, D169). */
+		diskId: text('volume_id'),
 		/** Bumped by an explicit restart; folded into the activation version. */
 		restartGeneration: integer('restart_generation').notNull().default(0),
 		status: text('status', { enum: ['pending', 'starting', 'running', 'failed', 'stopped'] })
@@ -2133,8 +2084,8 @@ export const databaseMoves = sqliteTable(
 		targetNodeId: text('target_node_id').notNull(),
 		sourceHostPort: integer('source_host_port').notNull(),
 		sourcePoolerPort: integer('source_pooler_port'),
-		sourceVolumeId: text('source_volume_id'),
-		targetVolumeId: text('target_volume_id'),
+		sourceDiskId: text('source_volume_id'),
+		targetDiskId: text('target_volume_id'),
 		/** `dump` (final backup of a running database), `latest-backup` or `empty` (for one that cannot run). */
 		dataSource: text('data_source', { enum: ['dump', 'latest-backup', 'empty'] })
 			.notNull()

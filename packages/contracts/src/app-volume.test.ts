@@ -17,18 +17,14 @@ import {
 const created = appVolumeCreateSchema.parse({ name: 'app-data' });
 
 describe('app volume schemas', () => {
-	test('create defaults to a single-writer volume placed in the default storage pool', () => {
+	test('create defaults to a single-writer volume placed on the default storage', () => {
 		expect(created).toEqual({
 			name: 'app-data',
 			sizeMb: 1024,
 			singleWriter: true,
 		});
-		expect(appVolumeCreateSchema.safeParse({ name: 'app-data', backing: 'state_dir', pool: 'ssd' }).success).toBe(false);
-		expect(appVolumeCreateSchema.safeParse({ name: 'app-data', nodeVolume: 'data' }).success).toBe(false);
-		expect(appVolumeCreateSchema.safeParse({ name: 'app-data', backing: 'node_volume' }).success).toBe(false);
-		expect(
-			appVolumeCreateSchema.parse({ name: 'app-data', backing: 'node_volume', nodeVolume: 'data' }).nodeVolume,
-		).toBe('data');
+		expect(appVolumeCreateSchema.safeParse({ name: 'app-data', backing: 'state_dir' }).success).toBe(false);
+		expect(appVolumeCreateSchema.parse({ name: 'app-data', storage: 'fast' }).storage).toBe('fast');
 		expect(appVolumeCreateSchema.safeParse({ name: 'a--b' }).success).toBe(false);
 		expect(appVolumeCreateSchema.safeParse({ name: 'app-data', unknown: true }).success).toBe(false);
 	});
@@ -94,7 +90,7 @@ describe('app volume schemas', () => {
 			name: 'app-data',
 			nodeId: 'node_1',
 			backing: 'state_dir',
-			nodeVolume: null,
+			disk: null,
 			sizeMb: 1024,
 			usedBytes: 512,
 			usedAt: '2026-11-05T00:00:00.000Z',

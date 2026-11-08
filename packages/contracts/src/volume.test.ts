@@ -1,13 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import {
-	volumeAdoptSchema,
-	volumeInventorySchema,
-	volumeNameSchema,
-	volumeSourceKeySchema,
-	volumeUpdateSchema,
-	isRemoteVolumeKind,
-	volumeHasRoom,
-} from './volume.ts';
+import { volumeInventorySchema, volumeNameSchema, volumeSourceKeySchema, isRemoteVolumeKind } from './volume.ts';
+import { diskAddSchema, diskNameSchema, diskUpdateSchema, storageDefaultsSchema } from './disk.ts';
 
 describe('volume schemas', () => {
 	test('names follow slug rules with no double hyphen', () => {
@@ -31,16 +24,25 @@ describe('volume schemas', () => {
 		expect(volumeSourceKeySchema.safeParse('fs:a b').success).toBe(false);
 	});
 
-	test('adoption is strict and needs a name plus source key', () => {
-		expect(volumeAdoptSchema.parse({ name: 'data', sourceKey: 'fs:abc' })).toEqual({
-			name: 'data',
-			sourceKey: 'fs:abc',
-			default: false,
+	test('disk names reserve the storage targets', () => {
+		expect(diskNameSchema.parse('nvme')).toBe('nvme');
+		for (const name of ['system', 'fast', 'bulk']) expect(diskNameSchema.safeParse(name).success).toBe(false);
+	});
+
+	test('adding a disk names a candidate; updates need a field', () => {
+		expect(diskAddSchema.parse({ node: 'homelab', candidate: 'uuid:abcd-1234' })).toEqual({
+			node: 'homelab',
+			candidate: 'uuid:abcd-1234',
 		});
-		expect(volumeAdoptSchema.safeParse({ name: 'data', sourceKey: 'fs:abc', mountPath: '/mnt/x' }).success).toBe(
-			false,
-		);
-		expect(volumeUpdateSchema.safeParse({}).success).toBe(false);
+		expect(diskAddSchema.safeParse({ node: 'homelab', candidate: 'uuid:abcd-1234', mountPath: '/mnt/x' }).success).toBe(false);
+		expect(diskAddSchema.safeParse({ node: 'homelab', candidate: 'uuid:abcd-1234', tier: 'remote' }).success).toBe(false);
+		expect(diskUpdateSchema.safeParse({}).success).toBe(false);
+		expect(diskUpdateSchema.parse({ tier: 'fast' })).toEqual({ tier: 'fast' });
+	});
+
+	test('defaults are system or a tier', () => {
+		expect(storageDefaultsSchema.safeParse({ defaults: [{ kind: 'databases', target: 'fast' }] }).success).toBe(true);
+		expect(storageDefaultsSchema.safeParse({ defaults: [{ kind: 'databases', target: 'ssd' }] }).success).toBe(false);
 	});
 
 	test('inventory rejects system mount paths and negative sizes', () => {
@@ -62,12 +64,9 @@ describe('volume schemas', () => {
 		).toBe(false);
 	});
 
-	test('remote kinds and capacity checks', () => {
+	test('remote kinds', () => {
 		expect(isRemoteVolumeKind('nfs')).toBe(true);
 		expect(isRemoteVolumeKind('cifs')).toBe(true);
 		expect(isRemoteVolumeKind('zfs')).toBe(false);
-		expect(volumeHasRoom({ freeBytes: 10 * 1024 * 1024 }, 10)).toBe(true);
-		expect(volumeHasRoom({ freeBytes: 9 * 1024 * 1024 }, 10)).toBe(false);
-		expect(volumeHasRoom({ freeBytes: null }, 10_000)).toBe(true);
 	});
 });

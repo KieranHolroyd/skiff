@@ -1,5 +1,5 @@
 import { and, eq, isNotNull, isNull } from 'drizzle-orm';
-import { databases, nodeVolumes, nodes, projects, storageInstances, workloads } from '@skiff/db';
+import { databases, disks, nodes, projects, storageInstances, workloads } from '@skiff/db';
 import {
 	canViewPlatform,
 	type BlastRadiusItem,
@@ -8,7 +8,6 @@ import {
 	type TopologyNodeView,
 	type TopologyView,
 	type TopologyZoneView,
-	type VolumeClass,
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import { CoreError, NotFoundError } from './errors.ts';
@@ -26,7 +25,7 @@ export class TopologyService {
 	view(principal: Principal): TopologyView {
 		this.assertRead(principal);
 		const nodeRows = this.ctx.db.select().from(nodes).all();
-		const volumeRows = this.ctx.db.select().from(nodeVolumes).all();
+		const diskRows = this.ctx.db.select().from(disks).all();
 		const liveWorkloads = this.liveWorkloads();
 		const liveDatabases = this.ctx.db
 			.select({ id: databases.id, name: databases.name, nodeId: databases.nodeId, orgId: databases.orgId })
@@ -41,17 +40,17 @@ export class TopologyService {
 
 		const views: TopologyNodeView[] = nodeRows.map((row) => {
 			const facts = this.ctx.nodes.view(row);
-			const volumes = volumeRows
-				.filter((volume) => volume.nodeId === row.id)
+			const nodeDisks = diskRows
+				.filter((disk) => disk.nodeId === row.id)
 				.sort((a, b) => a.name.localeCompare(b.name))
-				.map((volume) => ({
-					id: volume.id,
-					name: volume.name,
-					class: (volume.classOverride ?? volume.class) as VolumeClass,
-					mountPath: volume.mountPath,
-					sizeBytes: volume.sizeBytes,
-					freeBytes: volume.freeBytes,
-					remote: volume.remote,
+				.map((disk) => ({
+					id: disk.id,
+					name: disk.name,
+					tier: disk.tier,
+					mountPath: disk.mountPath,
+					sizeBytes: disk.sizeBytes,
+					freeBytes: disk.freeBytes,
+					remote: disk.remote,
 				}));
 			return {
 				id: row.id,
@@ -66,7 +65,7 @@ export class TopologyService {
 				lanEndpoint: facts.lanEndpoint,
 				hardware: facts.hardware,
 				derivedLabels: facts.derivedLabels,
-				volumes,
+				disks: nodeDisks,
 				workloads: liveWorkloads.filter((item) => item.nodeId === row.id).length,
 				databases: liveDatabases.filter((item) => item.nodeId === row.id).length,
 				storageInstances: liveStorage.filter((item) => item.nodeId === row.id).length,
@@ -141,13 +140,13 @@ export class TopologyService {
 			if (!nodeIds.has(item.nodeId)) continue;
 			items.push({ kind: 'storage', ...item, haLevel: 'L0' });
 		}
-		for (const volume of this.ctx.db.select().from(nodeVolumes).all()) {
-			if (!nodeIds.has(volume.nodeId)) continue;
+		for (const disk of this.ctx.db.select().from(disks).all()) {
+			if (!nodeIds.has(disk.nodeId)) continue;
 			items.push({
-				kind: 'volume',
-				id: volume.id,
-				name: volume.name,
-				nodeId: volume.nodeId,
+				kind: 'disk',
+				id: disk.id,
+				name: disk.name,
+				nodeId: disk.nodeId,
 				orgId: null,
 				haLevel: 'L0',
 			});
@@ -161,7 +160,7 @@ export class TopologyService {
 				workloads: items.filter((item) => item.kind === 'workload').length,
 				databases: items.filter((item) => item.kind === 'database').length,
 				storageInstances: items.filter((item) => item.kind === 'storage').length,
-				volumes: items.filter((item) => item.kind === 'volume').length,
+				disks: items.filter((item) => item.kind === 'disk').length,
 			},
 		};
 	}

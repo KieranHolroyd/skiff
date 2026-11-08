@@ -1,7 +1,7 @@
 import * as z from 'zod';
 import { SLUG_PATTERN } from './slugs.ts';
 import type { DatabaseBackupSummary } from './database-backup.ts';
-import type { VolumeSummary } from './volume.ts';
+import { storageTargetSchema, type DiskSummary } from './disk.ts';
 
 /**
  * Managed databases (docs/DATABASES.md, D55–D61).
@@ -754,10 +754,8 @@ export const databaseCreateSchema = z
 		cpus: z.number().positive().max(8).default(1),
 		/** Storage budget used for alerts and the dashboard gauge, in MB. */
 		storageMb: z.number().int().min(256).max(1_048_576).default(10_240),
-		/** Pin one node volume for the data dir (advanced; bypasses storage pools, D74). */
-		volume: z.string().min(3).max(40).optional(),
-		/** Storage pool (or `system`) for the data dir; omitted uses the default from Settings → Storage (docs/STORAGE.md). */
-		pool: z.string().trim().min(2).max(40).optional(),
+		/** `system`, `fast`, `bulk` or a disk name; omitted uses the default from Settings → Storage (docs/STORAGE.md). */
+		storage: storageTargetSchema.optional(),
 		/** Attach to this project right away (placement then follows the project's workload node). */
 		project: z.string().min(1).max(64).optional(),
 		envPrefix: databaseEnvPrefixSchema.optional(),
@@ -1092,7 +1090,8 @@ export interface DatabaseView {
 		error: string | null;
 	};
 	/** Where the data dir lives; null keeps the helper state dir (D74). */
-	volume: VolumeSummary | null;
+	/** The disk the data lives on; null is the system disk. */
+	disk: DiskSummary | null;
 	attachments: DatabaseAttachmentView[];
 	tables: DatabaseTableStat[];
 	statsAt: string | null;

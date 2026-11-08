@@ -10,7 +10,7 @@ export * from './cluster-config.ts';
 export * from './overlay.ts';
 export * from './endpoint.ts';
 export * from './share.ts';
-export * from './storage-pool.ts';
+export * from './disk.ts';
 export * from './replica.ts';
 export * from './ingress.ts';
 export * from './lease.ts';
