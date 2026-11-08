@@ -22,7 +22,7 @@ The installer adds these packages unless you pass `--skip-deps`:
 
 - **Caddy**, from the official Caddy apt repository, plus the `caddy-dns/cloudflare` module that wildcard HTTPS needs. If the module is added, the Caddy package is held so `apt upgrade` keeps the custom build. If the module download fails, the install continues over HTTP, and HTTPS needs the module later.
 - **Podman** (agent installs only): `podman`, `uidmap`, `passt`, `netavark` and `aardvark-dns`. Podman runs managed databases and object storage. If it is missing, the installer warns and those services cannot start.
-- **Storage tools** (agent installs only): `fio`, `nfs-common` and `cifs-utils`. `fio` measures disk speed when you profile a storage pool, and the other two mount NFS and SMB network shares. If one cannot be installed, the installer warns and continues.
+- **Storage tools** (agent installs only): `fio`, `nfs-common` and `cifs-utils`. `fio` measures disk speed when you benchmark a [disk](/self-hosting/nodes-and-fleet#disks), and the other two mount NFS and SMB network shares. If one cannot be installed, the installer warns and continues.
 
 Nodes installed before the storage tools were added get them on their next update. When a node starts a new version and finds one missing, it installs it once in the background. To manage these packages yourself, set `SKIFF_HELPER_STORAGE_TOOLS=0` in `/etc/skiff/helper.env`.
 

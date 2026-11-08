@@ -39,12 +39,11 @@
 	let active = $state<ShareView | null>(null);
 	let activeMount = $state<ShareMountView | null>(null);
 	let grantText = $state('');
-	let mountLink = $state(true);
 
 	// Refresh while a linked mount is being profiled, so results appear without a reload.
 	const profiling = $derived(
 		data.shares.some((share) =>
-			share.mounts.some((mount) => mount.volume?.profile?.status === 'queued' || mount.volume?.profile?.status === 'running')
+			share.mounts.some((mount) => mount.disk?.profile?.status === 'queued' || mount.disk?.profile?.status === 'running')
 		)
 	);
 	$effect(() => {
@@ -73,7 +72,6 @@
 
 	function openMount(share: ShareView) {
 		active = share;
-		mountLink = !share.readOnly;
 		mountOpen = true;
 	}
 
@@ -92,8 +90,8 @@
 	function unmount(share: ShareView, mount: ShareMountView) {
 		askConfirm({
 			title: `Unmount “${share.name}” from ${mount.nodeName ?? mount.nodeId}?`,
-			description: mount.volume
-				? `Volume “${mount.volume.name}” is removed from Skiff first; that is refused while a database, storage instance or app volume is placed on it. Files on the server are untouched.`
+			description: mount.disk
+				? `The disk “${mount.disk.name}” is removed first; that is refused while anything is stored on it. Files on the server are untouched.`
 				: 'The node unmounts the share. Files on the server are untouched.',
 			confirmLabel: 'Unmount',
 			tone: 'danger',
@@ -104,9 +102,9 @@
 
 	function unlink(share: ShareView, mount: ShareMountView) {
 		askConfirm({
-			title: `Stop using “${share.name}” as a Skiff volume?`,
-			description: `Volume “${mount.volume?.name}” is removed from Skiff; refused while anything is placed on it. The share stays mounted.`,
-			confirmLabel: 'Unlink volume',
+			title: `Stop using “${share.name}” as a disk?`,
+			description: `The disk “${mount.disk?.name}” is removed; refused while anything is stored on it. The share stays mounted.`,
+			confirmLabel: 'Stop using as disk',
 			tone: 'danger',
 			action: '?/unlink',
 			fields: { name: share.name, node: mount.nodeId },
@@ -127,7 +125,7 @@
 
 <SettingsHeader
 	id="shares"
-	description="Define an NFS export or SMB share once, mount it on the nodes that need it, and link a mount to Skiff as a volume so it can join a storage pool. Looking for a link that lets someone view a protected site? Share links live on each project's Share links tab."
+	description="Define an NFS export or SMB share once and mount it on the nodes that need it. A read-write share becomes a disk under Settings → Storage. Looking for a link that lets someone view a protected site? Share links live on each project's Share links tab."
 >
 	{#snippet actions()}
 		<Button size="sm" onclick={() => (addOpen = true)}><PlusIcon />Add network share</Button>
@@ -194,33 +192,33 @@
 									<div class="flex flex-wrap items-center gap-2">
 										<span class="font-medium">{mount.nodeName ?? mount.nodeId}</span>
 										<StatusBadge status={mount.status} tone={mountTones[mount.status]} />
-										{#if mount.volume}
-											<Badge variant="info"><LinkIcon class="size-3" />Volume {mount.volume.name}</Badge>
-										{:else if mount.volumeName && mount.status !== 'unmounting'}
-											<Badge variant="outline">Links as {mount.volumeName} once mounted</Badge>
+										{#if mount.disk}
+											<Badge variant="info"><LinkIcon class="size-3" />Disk {mount.disk.name}</Badge>
+										{:else if mount.diskName && mount.status !== 'unmounting'}
+											<Badge variant="outline">Becomes disk {mount.diskName} once mounted</Badge>
 										{/if}
 									</div>
 									<div class="font-mono text-xs text-muted-foreground">{mount.mountPath}</div>
 									{#if mount.message}
 										<div class="text-xs text-destructive">{mount.message}</div>
 									{/if}
-									{#if mount.volume?.profile}<VolumeProfileStats profile={mount.volume.profile} />{/if}
+									{#if mount.disk?.profile}<VolumeProfileStats profile={mount.disk.profile} />{/if}
 								</div>
 								{#if mount.status !== 'unmounting'}
 									<div class="flex flex-wrap gap-1">
-										{#if mount.volume}
+										{#if mount.disk}
 											<Button
 												variant="outline"
 												size="xs"
-												disabled={mount.volume.profile?.status === 'queued' || mount.volume.profile?.status === 'running'}
-												onclick={() => void runAction('?/profile', { volumeId: mount.volume!.id, name: share.name })}
+												disabled={mount.disk.profile?.status === 'queued' || mount.disk.profile?.status === 'running'}
+												onclick={() => void runAction('?/profile', { diskId: mount.disk!.id, name: share.name })}
 											>
 												<GaugeIcon class="size-3.5" />Profile
 											</Button>
-											<Button variant="ghost" size="xs" onclick={() => unlink(share, mount)}>Unlink volume</Button>
-										{:else if !mount.volumeName && !share.readOnly}
+											<Button variant="ghost" size="xs" onclick={() => unlink(share, mount)}>Stop using as disk</Button>
+										{:else if !mount.diskName && !share.readOnly}
 											<Button variant="outline" size="xs" onclick={() => openLink(share, mount)}>
-												<LinkIcon class="size-3.5" />Link to Skiff
+												<LinkIcon class="size-3.5" />Use as disk
 											</Button>
 										{/if}
 										<Button variant="ghost" size="xs" onclick={() => unmount(share, mount)}>Unmount</Button>
@@ -245,7 +243,7 @@
 		bind:open={addOpen}
 		icon={HardDriveIcon}
 		title="Add a network share"
-		description="Define the export once. Mount it on a node next; a read-write share can then become a Skiff volume."
+		description="Define the export once. Mount it on a node next; a read-write share then becomes a disk."
 		action="?/create"
 		submitLabel="Create share"
 	>
@@ -313,7 +311,7 @@
 				</Field.Field>
 			</div>
 			<p class="text-xs text-muted-foreground">
-				Nodes need {protocol === 'smb' ? 'cifs-utils' : 'nfs-common (or nfs-utils)'} installed. Network volumes trade
+				Nodes need {protocol === 'smb' ? 'cifs-utils' : 'nfs-common (or nfs-utils)'} installed. Network disks trade
 				latency and locking guarantees for capacity; Skiff does not back up what lives on a share.
 			</p>
 		</Field.Group>
@@ -338,32 +336,14 @@
 						{/each}
 					</NativeSelect.Root>
 				</Field.Field>
-				<Field.Field orientation="horizontal" class="gap-2">
-					<input
-						type="checkbox"
-						id="mount-link"
-						name="link"
-						value="1"
-						bind:checked={mountLink}
-						disabled={active.readOnly}
-						class="size-4 accent-brand"
-					/>
-					<Field.Label for="mount-link" class="font-normal">
-						Link to Skiff as a volume once mounted
-						{#if active.readOnly}<span class="text-muted-foreground">(needs a read-write share)</span>{/if}
-					</Field.Label>
-				</Field.Field>
-				{#if mountLink && !active.readOnly}
-					<div class="grid gap-4 sm:grid-cols-2">
-						<Field.Field>
-							<Field.Label for="mount-volume">Volume name</Field.Label>
-							<Input id="mount-volume" name="volumeName" value={active.name} maxlength={40} class="font-mono text-sm" />
-						</Field.Field>
-						<Field.Field orientation="horizontal" class="gap-2 pt-6">
-							<input type="checkbox" id="mount-default" name="defaultVolume" value="1" class="size-4 accent-brand" />
-							<Field.Label for="mount-default" class="font-normal">Default for new instances on this node</Field.Label>
-						</Field.Field>
-					</div>
+				{#if active.readOnly}
+					<Field.Description>Read-only: it is mounted for reading and does not become a disk.</Field.Description>
+				{:else}
+					<Field.Field>
+						<Field.Label for="mount-disk">Disk name</Field.Label>
+						<Input id="mount-disk" name="diskName" value={active.name} maxlength={40} class="font-mono text-sm" />
+						<Field.Description>Once mounted it is a bulk, network disk under Settings → Storage.</Field.Description>
+					</Field.Field>
 				{/if}
 			</Field.Group>
 		</FormDialog>
@@ -372,23 +352,17 @@
 			<FormDialog
 				bind:open={linkOpen}
 				icon={LinkIcon}
-				title="Link {active.name} to Skiff"
-				description="Registers the mount on {activeMount.nodeName ?? activeMount.nodeId} as a node volume. Databases, storage instances and app volumes can then be placed on it."
+				title="Use {active.name} as a disk"
+				description="Makes the mount on {activeMount.nodeName ?? activeMount.nodeId} a disk under Settings → Storage, so services can be stored on it."
 				action="?/link"
-				submitLabel="Link volume"
+				submitLabel="Use as disk"
 			>
 				<input type="hidden" name="name" value={active.name} />
 				<input type="hidden" name="node" value={activeMount.nodeId} />
-				<div class="grid gap-4 sm:grid-cols-2">
-					<Field.Field>
-						<Field.Label for="link-volume">Volume name</Field.Label>
-						<Input id="link-volume" name="volumeName" value={active.name} maxlength={40} class="font-mono text-sm" />
-					</Field.Field>
-					<Field.Field orientation="horizontal" class="gap-2 pt-6">
-						<input type="checkbox" id="link-default" name="defaultVolume" value="1" class="size-4 accent-brand" />
-						<Field.Label for="link-default" class="font-normal">Default for new instances on this node</Field.Label>
-					</Field.Field>
-				</div>
+				<Field.Field>
+					<Field.Label for="link-disk">Disk name</Field.Label>
+					<Input id="link-disk" name="diskName" value={active.name} maxlength={40} class="font-mono text-sm" />
+				</Field.Field>
 			</FormDialog>
 		{/if}
 

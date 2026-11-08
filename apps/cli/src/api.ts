@@ -977,8 +977,8 @@ export class ApiClient {
 		input: {
 			name: string;
 			sizeMb?: number;
-			backing?: 'state_dir' | 'node_volume';
-			nodeVolume?: string;
+			/** `system`, `fast`, `bulk` or a disk name. */
+			storage?: string;
 			singleWriter?: boolean;
 		},
 	): Promise<{ volume: AppVolumeView; raw: unknown }> {
@@ -1139,7 +1139,7 @@ export class ApiClient {
 
 	async addDatabaseReplica(
 		name: string,
-		input: { node: string; volume?: string },
+		input: { node: string; storage?: string },
 	): Promise<{ replica: DatabaseReplicaView; raw: unknown }> {
 		const raw = await this.request('POST', `/api/v1/databases/${encodeURIComponent(name)}/replicas`, { body: input });
 		return { replica: asRecord(raw)?.replica as unknown as DatabaseReplicaView, raw };
@@ -2157,9 +2157,9 @@ export class ApiClient {
 	}
 
 	/** Move to another node (D97). Objects are not copied, so this always sends `from: "empty"`. */
-	async moveStorage(name: string, input: { node: string; volume?: string }): Promise<{ result: StorageMoveResult; raw: unknown }> {
+	async moveStorage(name: string, input: { node: string; storage?: string }): Promise<{ result: StorageMoveResult; raw: unknown }> {
 		const raw = await this.request('POST', `/api/v1/storage/${encodeURIComponent(name)}/move`, {
-			body: { node: input.node, ...(input.volume ? { volume: input.volume } : {}), from: 'empty' },
+			body: { node: input.node, ...(input.storage ? { storage: input.storage } : {}), from: 'empty' },
 		});
 		const record = asRecord(raw);
 		if (!record || typeof record.storage !== 'string')

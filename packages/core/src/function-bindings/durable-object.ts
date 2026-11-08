@@ -3,7 +3,7 @@ import type { BindingResolveContext, BindingResolver } from './types.ts';
 /**
  * Durable Objects (docs/FUNCTIONS.md §4.5, FN11): a native workerd namespace, so the control plane
  * only has to give it a stable identity. Nothing in the org is looked up: the class lives in the
- * user's own bundle and the storage is the project's single-node volume.
+ * user's own bundle and the storage lives on the project's node.
  */
 export const resolveDurableObject: BindingResolver = (context: BindingResolveContext, binding) => {
 	if (binding.type !== 'durable_object') {

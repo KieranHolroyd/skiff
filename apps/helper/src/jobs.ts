@@ -395,7 +395,7 @@ export interface JobDriverOptions {
 	journalctlPath: string;
 	podmanPath: string;
 	apparmorProfile?: string | null;
-	/** The workload driver's resolvers (they verify node-volume mounts before anything starts). */
+	/** The workload driver's resolvers (they verify disk mounts before anything starts). */
 	resolveAppVolumeMounts(workload: WorkloadDesired): Promise<UnitVolumeMount[]>;
 	resolveDataDir(workload: WorkloadDesired): Promise<string>;
 }

@@ -19,7 +19,7 @@ function view(overrides: Partial<AppVolumeView> = {}): AppVolumeView {
 		name: 'app-data',
 		nodeId: 'nod_1',
 		backing: 'state_dir',
-		nodeVolume: null,
+		disk: null,
 		sizeMb: 1024,
 		usedBytes: null,
 		mountPath: '/var/lib/app',
@@ -42,11 +42,11 @@ describe('app volume formatting', () => {
 		expect(volumeQuota({ usedBytes: 512 * 1024 * 1024, sizeMb: 1024 })).toBe('512 MiB / 1.0 GiB (50%)');
 	});
 
-	test('lists a node-volume backing by name and never prints a host path', () => {
+	test('lists a disk backing by name and never prints a host path', () => {
 		const out = volumeTable([
 			view({
 				backing: 'node_volume',
-				nodeVolume: { id: 'vol_1', name: 'data', remote: false },
+				disk: { id: 'dsk_1', name: 'data', tier: 'fast', remote: false },
 				attachments: [
 					{
 						id: 'ava_1',
@@ -61,7 +61,7 @@ describe('app volume formatting', () => {
 				],
 			}),
 		]);
-		expect(out).toContain('node:data');
+		expect(out).toContain('disk:data');
 		expect(out).toContain('/var/lib/app');
 		expect(out).not.toContain('/mnt/data');
 	});

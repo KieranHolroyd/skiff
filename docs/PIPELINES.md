@@ -31,7 +31,7 @@ on build nodes, producing images, binaries, artifacts and deployments. The test 
 - **Native multi-architecture builds**: one job per architecture on a node of that architecture,
   combined into one image index. No QEMU in the default path.
 - Artifacts, caches, logs and secrets are part of Skiff and use its existing seams: ObjectStore,
-  org/project secrets, storage pools (STORAGE.md), EventService, notifiers, quotas.
+  org/project secrets, disks and default storage (STORAGE.md), EventService, notifiers, quotas.
 - The existing git build becomes a one-job workflow, not a second build system (D2 still holds:
   one artifact → release → deployment path).
 - Every surface Skiff has: dashboard, REST, CLI, MCP, so coding agents can trigger a run, read
@@ -95,8 +95,8 @@ on build nodes, producing images, binaries, artifacts and deployments. The test 
 - **One repository per project** (`git_sources` unique on project) and only `push` webhooks for
   the configured branch, always promoting. No CLI or MCP trigger.
 - Reusable: the HMAC-checked webhook, envelope-encrypted secrets, `log_events`, the durable
-  scheduler (`scheduler.ts`), `EventService`, notifiers, the `buildsPerDay` quota, storage pools'
-  `builds` and `images` kinds, and the ephemeral-container pattern of the GitHub runner (D91).
+  scheduler (`scheduler.ts`), `EventService`, notifiers, the `buildsPerDay` quota, the storage
+  `builds` kind (and the planned `images` kind, STORAGE.md §8), and the ephemeral-container pattern of the GitHub runner (D91).
 
 ---
 
@@ -429,8 +429,8 @@ long jobs, labels, multi-step), so it is worth shipping before images exist.
    rootless BuildKit in a container. Keep it per-job, non-root, scoped cache only, and gate
    untrusted builds behind gVisor or buildah once WS4 says which works.
 3. **Disk growth.** Registry layers, BuildKit caches, artifacts and logs all grow. Retention and
-   GC defaults ship in the same phase as the thing that stores data, with storage-pool placement
-   and a usage card per repository.
+   GC defaults ship in the same phase as the thing that stores data, with disk placement through a
+   storage kind and a usage card per repository.
 4. **Cache poisoning across trust tiers.** Scopes are part of the cache key and the registry ACL,
    not a convention.
 5. **Builder starving ingress** on single-node installs. Default capacity on an ingress node is

@@ -9,7 +9,7 @@ import type {
 import type { HelperAppVolumeApi } from './helper-client.ts';
 
 /**
- * App volumes on the node (docs/VOLUMES.md §14). Three jobs, all driven by desired state and
+ * App volumes on the node (docs/VOLUMES.md). Three jobs, all driven by desired state and
  * answered in the heartbeat:
  *
  * - **usage**: every `usageIntervalMs` the helper measures `appVolumes` (`du -B1`); the latest

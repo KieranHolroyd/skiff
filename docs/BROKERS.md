@@ -21,7 +21,7 @@ Everything goes through `packages/core` (`BrokerService`); REST, MCP, CLI and th
 
 | Table | Purpose |
 |---|---|
-| `brokers` | One row per broker: org, name, engine/version, resolved node, host port, memory/CPU, message-store cap, optional node volume, status, sealed owner password, restart generation, soft-delete columns. |
+| `brokers` | One row per broker: org, name, engine/version, resolved node, host port, memory/CPU, message-store cap, optional disk (null = system disk), status, sealed owner password, restart generation, soft-delete columns. |
 | `broker_attachments` | Broker ↔ project, with the env prefix the project receives (`NATS` → `NATS_URL`). |
 | `broker_log_events` | Runtime and lifecycle log lines. `service_log_events.kind` has a storage/database CHECK (0017), so brokers get a table of the same shape. |
 
@@ -58,8 +58,9 @@ takes an image, user, mount or config from the wire:
   `MemoryMax` and `max_file_store` at the broker's store cap, so a full broker refuses publishes
   instead of filling the disk or being OOM-killed. Values are validated before they reach the file.
 - **Env.** Only `GOMEMLIMIT` (80% of `MemoryMax`), so Go collects before the cgroup kills it.
-- Data under `<stateDir>/<id>`, or `<volume>/skiff/<id>` with a node volume (D74, D76). `purge`
-  accepts `mq_` ids and removes only that directory.
+- Data under `<stateDir>/<id>`, or `<disk>/skiff/<id>` on a disk (D169, D76). The create body's
+  `storage` (`system`, `fast`, `bulk` or a disk name) picks it; the default is the `brokers` kind in
+  Settings → Storage (docs/STORAGE.md). `purge` accepts `mq_` ids and removes only that directory.
 
 **Health.** A NATS server greets every connection with `INFO {…}`; Podman's forwarder accepts the
 connect but never speaks. The agent's TCP probe waits for that greeting; no credentials are sent.
@@ -91,7 +92,7 @@ At activation the app receives `<P>_URL`, `<P>_HOST`, `<P>_PORT`, `<P>_USER`, `<
 | Update | Memory (admission + quota), CPU, store cap, forward-only version. The unit re-renders and restarts; JetStream data is kept. |
 | Restart | Bumps the restart generation; a breadcrumb lands in the broker log. |
 | Delete | Refused while attached. The container stops; the data stays for the trash period (D59). |
-| Restore | Re-checks admission and the volume; refused once a purge was requested. |
+| Restore | Re-checks admission and the disk; refused once a purge was requested. |
 | Purge | Immediately or when the trash expires (maintenance sweep): `brokerPurges` → the helper deletes the data → `purgedBrokers` in the heartbeat → rows and logs go. |
 
 ## 5. Surfaces

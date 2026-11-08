@@ -5,10 +5,10 @@ import { assertId, assertRecord, ValidationError } from './validate.ts';
 import { verifyMount as defaultVerifyMount, type VerifyResult, type VolumeRegistry, type VolumeRunner } from './volumes.ts';
 
 /**
- * App-volume data verbs for the privileged helper (docs/VOLUMES.md §14): usage, purge, snapshot
+ * App-volume data verbs for the privileged helper (docs/VOLUMES.md): usage, purge, snapshot
  * and restore. The wire carries ids and the backing only; the host directory is derived here
  * exactly as for mounts (`<state dir>/apps/<project>/<volume>` or
- * `<node volume>/skiff/apps/<project>/<volume>`), and a node-volume backing is verified with
+ * `<disk mount>/skiff/apps/<project>/<volume>`), and a disk backing is verified with
  * `findmnt` before anything is read, written or deleted: an unmounted backing never falls through
  * to the root disk.
  *
@@ -221,7 +221,7 @@ export interface AppVolumeDataOptions {
 	log?: (level: 'info' | 'warn' | 'error', message: string) => void;
 }
 
-/** Thrown when a node-volume backing is registered but not mounted: retry later, never fall back. */
+/** Thrown when a disk backing is registered but not mounted: retry later, never fall back. */
 export class BackingUnavailableError extends ValidationError {}
 
 export class AppVolumeData {
@@ -254,7 +254,7 @@ export class AppVolumeData {
 	}
 
 	/**
-	 * The project directory that holds `ref`, or null when its node volume is not registered here
+	 * The project directory that holds `ref`, or null when its disk is not registered here
 	 * (removed from Skiff: nothing on this node is Skiff's to touch). A registered but unmounted
 	 * backing throws `BackingUnavailableError`.
 	 */
@@ -331,7 +331,7 @@ export class AppVolumeData {
 	/** Delete a trashed volume's directory (and any staging clone). Idempotent. */
 	async purge(ref: AppVolumeRef): Promise<void> {
 		const base = await this.base(ref);
-		// The node volume was removed from Skiff: its disk is the operator's, nothing to delete.
+		// The disk was removed from Skiff: it is the operator's, nothing to delete.
 		if (base === null) return;
 		await fs.rm(childOf(base, ref.id), { recursive: true, force: true });
 		await fs.rm(childOf(join(base, STAGE_DIR), ref.id), { recursive: true, force: true });

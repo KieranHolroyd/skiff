@@ -50,7 +50,8 @@ export interface AppVolumeView {
 	name: string;
 	nodeId: string;
 	backing: 'node_volume' | 'state_dir';
-	nodeVolume: { id: string; name: string; remote: boolean } | null;
+	/** The disk it lives on; null is the system disk. */
+	disk: { id: string; name: string; tier?: string; remote: boolean } | null;
 	sizeMb: number;
 	usedBytes: number | null;
 	/** Absent from control planes older than snapshots. */
@@ -125,8 +126,8 @@ export function snapshotDetails(snapshot: AppVolumeSnapshotView): string {
 	return lines.join('\n');
 }
 
-export function volumeBacking(view: Pick<AppVolumeView, 'backing' | 'nodeVolume'>): string {
-	return view.backing === 'node_volume' ? `node:${view.nodeVolume?.name ?? 'removed'}` : 'state-dir';
+export function volumeBacking(view: Pick<AppVolumeView, 'backing' | 'disk'>): string {
+	return view.backing === 'node_volume' ? `disk:${view.disk?.name ?? 'removed'}` : 'system';
 }
 
 export function volumeTable(volumes: AppVolumeView[]): string {

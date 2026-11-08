@@ -1,24 +1,24 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { storageKinds, type StorageKind, type StorageDefaultInput } from '@skiff/contracts';
+import {
+	storageDefaultTargets,
+	storageKinds,
+	type StorageDefaultInput,
+	type StorageDefaultTarget
+} from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
 import { failStatus, formBoolean, formString, toFormFailure } from '../../_lib/errors.js';
 import type { Actions, PageServerLoad } from './$types';
 
-/** Settings → Storage (docs/STORAGE.md §5): pools, volumes, network shares and the storage rules. */
+/** Settings → Storage (docs/STORAGE.md §5): defaults per kind, then each node's disks. */
 export const load: PageServerLoad = ({ locals, url }) => {
 	const principal = locals.principal!;
-	if (!principal.platformAdmin) error(403, 'Storage is platform infrastructure; a platform admin manages it.');
-	const overview = core.storagePools.overview(principal);
+	if (!principal.platformAdmin)
+		error(403, 'Storage is platform infrastructure; a platform admin manages it.');
+	const overview = core.disks.overview(principal);
 	return {
 		overview,
-		shares: core.shares.list(principal).map((share) => ({
-			name: share.name,
-			protocol: share.protocol,
-			server: share.server,
-			exportPath: share.exportPath,
-			mounts: share.mounts.length,
-		})),
-		onboarding: url.searchParams.has('onboarding') || overview.onboarding === 'pending',
+		shares: core.shares.list(principal).length,
+		onboarding: url.searchParams.has('onboarding') || overview.onboarding === 'pending'
 	};
 };
 
@@ -31,131 +31,91 @@ function act<T>(fn: () => T, success: string) {
 	return { success };
 }
 
+function tierField(data: FormData): 'fast' | 'bulk' | undefined {
+	const value = formString(data, 'tier');
+	return value === 'fast' || value === 'bulk' ? value : undefined;
+}
+
 export const actions: Actions = {
-	createPool: async ({ request, locals }) => {
+	addDisk: async ({ request, locals }) => {
 		const data = await request.formData();
 		const name = formString(data, 'name');
-		return act(
-			() =>
-				core.storagePools.createPool(locals.principal!, {
-					name,
-					description: formString(data, 'description'),
-					allocation: formString(data, 'allocation') === 'fill-up' ? 'fill-up' : 'most-free',
-					minFreePercent: Number(formString(data, 'minFreePercent') || 10),
-					volumes: data.getAll('volumes').map(String),
-				}),
-			`Pool “${name}” created.`,
-		);
-	},
-
-	updatePool: async ({ request, locals }) => {
-		const data = await request.formData();
-		const name = formString(data, 'name');
-		return act(
-			() =>
-				core.storagePools.updatePool(locals.principal!, name, {
-					description: formString(data, 'description'),
-					allocation: formString(data, 'allocation') === 'fill-up' ? 'fill-up' : 'most-free',
-					minFreePercent: Number(formString(data, 'minFreePercent') || 10),
-				}),
-			`Pool “${name}” saved.`,
-		);
-	},
-
-	deletePool: async ({ request, locals }) => {
-		const name = formString(await request.formData(), 'name');
-		return act(() => core.storagePools.deletePool(locals.principal!, name), `Pool “${name}” deleted. Its volumes are unassigned; no data moved.`);
-	},
-
-	assignVolume: async ({ request, locals }) => {
-		const data = await request.formData();
-		const pool = formString(data, 'pool');
-		return act(
-			() => core.storagePools.setVolumePool(locals.principal!, formString(data, 'volumeId'), pool || null),
-			pool ? `Volume added to “${pool}”.` : 'Volume removed from its pool.',
-		);
-	},
-
-	/** Adopt a mount the node reports and (optionally) put it straight into a pool. */
-	adopt: async ({ request, locals }) => {
-		const data = await request.formData();
-		const name = formString(data, 'name');
-		const pool = formString(data, 'pool');
-		return act(() => {
-			const volume = core.volumes.adopt(locals.principal!, formString(data, 'nodeId'), {
-				name,
-				sourceKey: formString(data, 'sourceKey'),
+		let message = '';
+		const result = act(() => {
+			const disk = core.disks.add(locals.principal!, {
+				node: formString(data, 'nodeId'),
+				candidate: formString(data, 'candidate'),
+				...(name ? { name } : {}),
+				...(tierField(data) ? { tier: tierField(data) } : {})
 			});
-			if (pool) core.storagePools.setVolumePool(locals.principal!, volume.id, pool);
-		}, pool ? `“${name}” adopted into “${pool}”.` : `“${name}” adopted.`);
+			message =
+				disk.status === 'ready'
+					? `“${disk.name}” is ready. New services can be stored on it.`
+					: `Mounting “${disk.name}” at ${disk.mountPath}. It is ready as soon as the node reports it (about a minute).`;
+		}, '');
+		return 'success' in result ? { success: message } : result;
 	},
 
-	/** Mount an unmounted partition by UUID at /mnt/skiff-disks/<name>, then adopt it (docs/VOLUMES.md §3.1). */
-	mountPartition: async ({ request, locals }) => {
+	updateDisk: async ({ request, locals }) => {
 		const data = await request.formData();
 		const name = formString(data, 'name');
-		const pool = formString(data, 'pool');
 		return act(
 			() =>
-				core.diskMounts.mount(locals.principal!, formString(data, 'nodeId'), {
-					fsUuid: formString(data, 'fsUuid'),
-					name,
-					pool: pool || null,
-					defaultVolume: formBoolean(data, 'defaultVolume'),
+				core.disks.update(locals.principal!, formString(data, 'id'), {
+					...(name ? { name } : {}),
+					...(tierField(data) ? { tier: tierField(data) } : {})
 				}),
-			`Mounting the partition as “${name}”. It becomes a volume${pool ? ` in “${pool}”` : ''} once the node reports it, usually within a minute.`,
+			'Disk saved. New services follow the tier; nothing already stored moves.'
 		);
 	},
 
-	/** Unregister the volume (refused while anything is on it) and unmount the partition. */
-	unmountPartition: async ({ request, locals }) => {
+	removeDisk: async ({ request, locals }) => {
+		const data = await request.formData();
+		let unmounting = false;
+		const result = act(() => {
+			unmounting = core.disks.remove(locals.principal!, formString(data, 'id')).unmounting;
+		}, '');
+		if (!('success' in result)) return result;
+		return {
+			success: unmounting
+				? 'Unmounting the disk on its node. Its files stay on the disk.'
+				: 'Disk removed from Skiff. Its files and mount were left alone.'
+		};
+	},
+
+	profileDisk: async ({ request, locals }) => {
 		const data = await request.formData();
 		return act(
-			() => core.diskMounts.unmount(locals.principal!, formString(data, 'nodeId'), formString(data, 'id')),
-			'Unmounting the partition. Its files stay on the disk.',
+			() => core.disks.profile(locals.principal!, formString(data, 'id')),
+			'Profiling the disk. Results appear here in about a minute.'
 		);
 	},
 
 	saveDefaults: async ({ request, locals }) => {
 		const data = await request.formData();
-		const defaults: StorageDefaultInput[] = storageKinds.map((kind: StorageKind) => ({
-			kind,
-			pool: formString(data, `${kind}.pool`) || 'system',
-		}));
-		const result = act(
-			() => core.storagePools.setDefaults(locals.principal!, { defaults }),
-			'Default storage saved. New services start with it; anything already created stays where it is.',
-		);
-		if ('success' in result && formBoolean(data, 'finish')) {
-			core.storagePools.setOnboarding(locals.principal!, { state: 'done' });
-			redirect(303, '/overview?storage=ready');
-		}
+		const defaults: StorageDefaultInput[] = storageKinds.flatMap((kind) => {
+			const target = formString(data, `${kind}.target`);
+			return (storageDefaultTargets as readonly string[]).includes(target)
+				? [{ kind, target: target as StorageDefaultTarget }]
+				: [];
+		});
+		if (defaults.length === 0)
+			return fail(400, { message: 'Pick a default for at least one kind of service.' });
+		const finish = formBoolean(data, 'finish');
+		const result = act(() => {
+			core.disks.setDefaults(locals.principal!, { defaults });
+			if (finish) core.disks.setOnboarding(locals.principal!, { state: 'done' });
+		}, 'Defaults saved. New services start with them; nothing already created moved.');
+		if (finish && 'success' in result) redirect(303, '/settings/storage');
 		return result;
 	},
 
-	/** Benchmark every ready member of a pool, or one volume (docs/STORAGE.md §5). */
-	profilePool: async ({ request, locals }) => {
-		const name = formString(await request.formData(), 'name');
-		try {
-			const result = core.storagePools.profilePool(locals.principal!, name);
-			const skipped = result.skipped.length ? ` Skipped: ${result.skipped.map((item) => `${item.volume} ${item.reason}`).join('; ')}.` : '';
-			return { success: `Profiling ${result.queued.join(', ')}. Results appear here in about a minute per volume.${skipped}` };
-		} catch (caught) {
-			return fail(failStatus(caught), toFormFailure(caught));
-		}
-	},
-
-	profileVolume: async ({ request, locals }) => {
-		const volumeId = formString(await request.formData(), 'volumeId');
-		return act(() => core.storagePools.profileVolume(locals.principal!, volumeId), 'Profiling the volume. Results appear here in about a minute.');
-	},
-
 	skipOnboarding: async ({ locals }) => {
-		try {
-			core.storagePools.setOnboarding(locals.principal!, { state: 'skipped' });
-		} catch (caught) {
-			return fail(failStatus(caught), toFormFailure(caught));
-		}
-		redirect(303, '/overview');
-	},
+		const result = act(
+			() => core.disks.setOnboarding(locals.principal!, { state: 'skipped' }),
+			'Using the system disk for now.'
+		);
+		if ('success' in result) redirect(303, '/settings/storage');
+		return result;
+	}
 };

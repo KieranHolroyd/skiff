@@ -9,7 +9,7 @@ import { diskAdmissionProblem } from './app-volumes.ts';
  * migrates on its own.
  *
  * The old `edge | <node> | auto` shorthand still works. A `PlacementSpec` adds hard filters
- * (node, zone, roles, labels, volume class, replica spread) and a soft locality hint (`near`).
+ * (node, zone, roles, labels, disk tier, replica spread) and a soft locality hint (`near`).
  * When no spec is present the old algorithm runs unchanged.
  */
 

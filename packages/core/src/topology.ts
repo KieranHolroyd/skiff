@@ -16,7 +16,7 @@ import { CoreError, NotFoundError } from './errors.ts';
  * Topology and blast radius (docs/CLUSTERING.md §3.6 and §12, phase C0).
  *
  * Everything is computed from current placement, not a separate cache: a node's zone, roles,
- * hardware and volumes, what runs on it, and what an outage of that node or zone would take down.
+ * hardware and disks, what runs on it, and what an outage of that node or zone would take down.
  * C0 is read-only; later phases add service endpoints, shares and HA levels.
  */
 export class TopologyService {

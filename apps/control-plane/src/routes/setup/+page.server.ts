@@ -60,7 +60,7 @@ function instanceFacts() {
 
 /** What the storage step shows: whether it is still open, and what the nodes offer so far. */
 function storageStep() {
-	const state = core.storagePools.onboardingState();
+	const state = core.disks.onboardingState();
 	const rows = sqlite
 		.query<{ name: string; volume_inventory_json: string | null }, []>('SELECT name, volume_inventory_json FROM nodes ORDER BY created_at')
 		.all();
@@ -184,7 +184,7 @@ export const actions: Actions = {
 	/** Keep everything on each node's system disk for now; Settings → Storage changes it later. */
 	skipStorage: async (event) => {
 		if (!owner(event) || !event.locals.principal) return fail(401, { storageError: 'Sign in first.' });
-		core.storagePools.setOnboarding(event.locals.principal, { state: 'skipped' });
+		core.disks.setOnboarding(event.locals.principal, { state: 'skipped' });
 		redirect(303, '/setup');
 	},
 

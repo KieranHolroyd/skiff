@@ -223,8 +223,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			attachableStorage,
 			storageBuckets,
 			appVolumesEnabled,
-			/** Storage pools the volume form offers (docs/STORAGE.md §3.3). */
-			appVolumeStorage: appVolumesEnabled ? core.storagePools.choices('app-volumes') : null,
+			/** Storage targets the volume form offers (docs/STORAGE.md §2.2). */
+			appVolumeStorage: appVolumesEnabled ? core.disks.choices('app-volumes') : null,
 			appVolumes,
 			// Jobs (plan 09): the tab hides unless SKIFF_FEATURE_JOBS is on.
 			jobsEnabled: core.jobs.enabled(),
@@ -1163,15 +1163,14 @@ export const actions: Actions = {
 	createVolume: async ({ request, locals, params }) => {
 		const principal = locals.principal!;
 		const data = await request.formData();
-		// Storage: empty follows the app-volumes rule, a pool name picks that pool, and
-		// `__node_volume` pins one named node volume (docs/STORAGE.md §3.3).
-		const storage = formString(data, 'storage');
-		const nodeVolume = storage === '__node_volume' ? formOptionalString(data, 'nodeVolume') : undefined;
+		// Storage: `system`, `fast` or `bulk` (empty follows the app-volumes default), or `__disk`
+		// to name one disk (docs/STORAGE.md §2.2).
+		const choice = formString(data, 'storage');
+		const storage = choice === '__disk' ? formOptionalString(data, 'disk') : choice || undefined;
 		const parsed = appVolumeCreateSchema.safeParse({
 			name: formString(data, 'name'),
 			sizeMb: numberField(data, 'sizeMb', 1024),
-			...(storage === '__node_volume' ? { backing: 'node_volume', ...(nodeVolume ? { nodeVolume } : {}) } : {}),
-			...(storage && storage !== '__node_volume' ? { pool: storage } : {}),
+			...(storage ? { storage } : {}),
 			singleWriter: formBoolean(data, 'singleWriter')
 		});
 		if (!parsed.success) {

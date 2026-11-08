@@ -23,7 +23,7 @@
 		{ id: 'storage', label: 'Object storage', description: 'Bytes, objects and buckets per storage instance.', path: '/metrics/storage[/<name>]' },
 		{ id: 'brokers', label: 'Queue brokers', description: 'Connections, store, backlog and last-hour message rates per broker, plus one series per stream.', path: '/metrics/brokers[/<name>]' },
 		{ id: 'volumes', label: 'App volumes', description: 'Size and usage per app volume.', path: '/metrics/volumes[/<slug>]' },
-		{ id: 'platform', label: 'Nodes and node volumes', description: 'Fleet health: node CPU, memory, disk, certificates and volume capacity.', path: '/metrics/platform' }
+		{ id: 'platform', label: 'Nodes and disks', description: 'Fleet health: node CPU, memory, disk, certificates and disk capacity.', path: '/metrics/platform' }
 	];
 
 	// Form state, seeded from the saved settings (and re-seeded after a save).

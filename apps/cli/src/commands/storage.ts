@@ -65,6 +65,7 @@ Create options:
       --memory <size>            Memory limit, e.g. 512M or 1G (default 512M)
       --cpus <n>                 CPU limit (default 1)
       --storage <size>           Storage budget for alerts and the gauge (default 10G)
+      --disk <where>             system, fast, bulk or a disk name (default: Settings → Storage)
 
 Update options:
       --memory <size>  --cpus <n>  --storage <size>  --version <v>  --public | --no-public
@@ -159,6 +160,7 @@ const createFlags: FlagSpec = {
 	memory: { type: 'string' },
 	cpus: { type: 'string' },
 	storage: { type: 'string' },
+	disk: { type: 'string' },
 };
 
 const updateFlags: FlagSpec = {
@@ -221,6 +223,8 @@ const keysFlags: FlagSpec = {
 const moveFlags: FlagSpec = {
 	...baseFlags,
 	node: { type: 'string' },
+	disk: { type: 'string' },
+	/** Deprecated alias of --disk. */
 	volume: { type: 'string' },
 	yes: { type: 'boolean', short: 'y' },
 };
@@ -344,6 +348,8 @@ async function createStorage(argv: string[]): Promise<void> {
 	if (args.boolean('public')) input.public = true;
 	const placement = args.string('placement');
 	if (placement) input.placement = placement;
+	const disk = args.string('disk');
+	if (disk) input.storage = disk;
 	readLimits(args, input);
 
 	const client = await authenticatedClient();
@@ -642,7 +648,7 @@ async function moveStorage(argv: string[]): Promise<void> {
 	const { args, name } = parsed;
 	const node = args.string('node');
 	if (!node) throw new UsageError(`Name the target node: skif storage move ${name} --node <node id>`);
-	const volume = args.string('volume');
+	const disk = args.string('disk') ?? args.string('volume');
 	const client = await authenticatedClient();
 	const { storage } = await client.getStorage(name);
 	const objects = storage.objects === null ? 'its objects' : `its ${plural(storage.objects, 'object')}`;
@@ -657,7 +663,7 @@ async function moveStorage(argv: string[]): Promise<void> {
 		},
 	);
 	if (!confirmed) return cancelled();
-	const { result, raw } = await client.moveStorage(name, { node, ...(volume ? { volume } : {}) });
+	const { result, raw } = await client.moveStorage(name, { node, ...(disk ? { storage: disk } : {}) });
 	if (args.boolean('json')) {
 		printJson(raw);
 		return;

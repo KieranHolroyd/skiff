@@ -23,7 +23,7 @@ This creates a broker called `jobs` and attaches it to the `api` project, which 
 | `--storage` | `2G` | 256 MB to 1 TB; the most message data the broker keeps on disk |
 | `--placement` | `auto` | `auto`, `edge`, or a node id |
 | `--prefix` | `NATS` | the environment variable prefix for the project |
-| `--volume` | the node's default | a node volume for the broker's data |
+| `--disk` | the **Queues** default in **Settings → Storage** | `system`, `fast`, `bulk`, or a [disk](/self-hosting/nodes-and-fleet#disks) by name, for the broker's data. `--volume` still works as an old name for it |
 
 A broker listens only on its node's loopback address and its private container network, never on a public address. Connections are not encrypted, so reach a broker on another machine through an SSH tunnel rather than over the internet.
 

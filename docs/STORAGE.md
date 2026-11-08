@@ -171,7 +171,7 @@ the helper (`SKIFF_HELPER_STORAGE_TOOLS=0` turns that off; Debian/Ubuntu only).
 | Views | A placed resource shows `disk: { id, name, tier, remote } \| null` (null = system disk). Create forms get `storageChoices(kind)`: the default target and the tiers that have at least one ready disk (no nodes, paths or capacity). |
 | Permissions | Platform admin dashboard session for every write (D129); platform viewers read. |
 | Audit | `storage.disk.add`, `storage.disk.update`, `storage.disk.remove`, `storage.disk.mount.fail`, `storage.defaults.update`, `storage.profile`, `storage.onboarding` |
-| CLI | `--storage <system\|fast\|bulk\|disk>` on `skif db create`, `skif db replica add`, `skif storage create`, `skif broker create`, `skif volume create`. |
+| CLI | `--disk <system\|fast\|bulk\|name>` on `skif db create`, `skif db replica add`, `skif storage create`, `skif storage move`, `skif broker create`, `skif volume create` (`--storage` already means the size budget). `--volume` is a deprecated alias on replica add, storage move and broker create. |
 | MCP | `storage` on the same create tools; no disk writes over MCP (D29/D53). |
 
 ## 7. Safety

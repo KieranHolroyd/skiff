@@ -129,7 +129,7 @@ export async function runHelper(): Promise<void> {
 	if (stopping) await helper.stop();
 	log('info', `Listening on unix/${config.socketPath} (units ${config.unitDir})`);
 
-	// Storage tools for volume profiling and share mounts (docs/STORAGE.md §5): a node that updated
+	// Storage tools for disk profiling and share mounts (docs/STORAGE.md §5.1): a node that updated
 	// in place gets them on its first start of a new helper version. Off the request path.
 	if (config.installStorageTools) {
 		const runner = spawnRunner();

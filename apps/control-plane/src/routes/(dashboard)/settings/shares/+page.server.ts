@@ -110,20 +110,17 @@ export const actions: Actions = {
 		const name = formString(data, 'name');
 		const node = formString(data, 'node');
 		if (!node) return fail(400, { message: 'Pick a node to mount the share on.' });
-		const link = formBoolean(data, 'link');
+		const diskName = formString(data, 'diskName');
+		let readOnly = false;
 		try {
-			core.shares.mount(principal, name, {
-				node,
-				volumeName: link ? formString(data, 'volumeName') || name : null,
-				defaultVolume: link && formBoolean(data, 'defaultVolume'),
-			});
+			readOnly = core.shares.mount(principal, name, { node, ...(diskName ? { diskName } : {}) }).readOnly;
 		} catch (error) {
 			return fail(failStatus(error), toFormFailure(error));
 		}
 		return {
-			success: link
-				? `Mounting “${name}”. It becomes a Skiff volume as soon as the node reports the mount.`
-				: `Mounting “${name}” on the node.`,
+			success: readOnly
+				? `Mounting “${name}” on the node.`
+				: `Mounting “${name}”. It becomes a disk under Settings → Storage as soon as the node reports the mount.`,
 		};
 	},
 
@@ -143,23 +140,20 @@ export const actions: Actions = {
 		const principal = locals.principal!;
 		const data = await request.formData();
 		const name = formString(data, 'name');
-		const volumeName = formString(data, 'volumeName') || name;
+		const diskName = formString(data, 'diskName') || name;
 		try {
-			core.shares.link(principal, name, formString(data, 'node'), {
-				volumeName,
-				defaultVolume: formBoolean(data, 'defaultVolume'),
-			});
+			core.shares.link(principal, name, formString(data, 'node'), { diskName });
 		} catch (error) {
 			return fail(failStatus(error), toFormFailure(error));
 		}
-		return { success: `“${name}” will be linked as volume “${volumeName}”.` };
+		return { success: `“${name}” becomes the disk “${diskName}”.` };
 	},
 
-	/** Benchmark the volume a linked mount became (docs/STORAGE.md §5). */
+	/** Benchmark the disk a mount became (docs/STORAGE.md §5.1). */
 	profile: async ({ request, locals }) => {
 		const data = await request.formData();
 		try {
-			core.storagePools.profileVolume(locals.principal!, formString(data, 'volumeId'));
+			core.disks.profile(locals.principal!, formString(data, 'diskId'));
 		} catch (error) {
 			return fail(failStatus(error), toFormFailure(error));
 		}
@@ -175,6 +169,6 @@ export const actions: Actions = {
 		} catch (error) {
 			return fail(failStatus(error), toFormFailure(error));
 		}
-		return { success: `“${name}” is no longer a Skiff volume. The share stays mounted.` };
+		return { success: `“${name}” is no longer a disk. The share stays mounted.` };
 	},
 };

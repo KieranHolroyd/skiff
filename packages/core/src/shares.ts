@@ -40,7 +40,7 @@ export const SHARE_MOUNT_CAPABILITY = 'share-mounts';
 const PLATFORM_KEY_ORG = 'platform';
 
 /**
- * Cluster shares (docs/CLUSTERING.md §5.2, docs/VOLUMES.md §5).
+ * Cluster shares (docs/CLUSTERING.md §5.2, docs/STORAGE.md §3, D143).
  *
  * The registry holds protocol, server/export, failure-domain zone, org grants and sealed SMB
  * credentials. A **mount** asks one node's helper to mount the share at

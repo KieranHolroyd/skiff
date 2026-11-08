@@ -39,7 +39,7 @@ const replica = (overrides: Record<string, unknown> = {}) => ({
 	workloadId: 'db_dbr_1',
 	mode: 'async',
 	hostPort: 15433,
-	volumeId: null,
+	diskId: null,
 	sameNode: false,
 	message: null,
 	removing: false,
@@ -121,11 +121,13 @@ describe('skif db replica', () => {
 		expect(result.stdout).toContain('homelab → worker  generation 2  completed');
 	});
 
-	test('add posts the node and volume', async () => {
+	test('add posts the node and the storage target (--volume is an alias of --disk)', async () => {
 		const seen = serve({ 'POST /api/v1/databases/main/replicas': { replica: replica({ status: 'pending' }) } });
-		const result = await cli('db', 'replica', 'add', 'main', '--node', 'worker', '--volume', 'fast');
+		const result = await cli('db', 'replica', 'add', 'main', '--node', 'worker', '--disk', 'fast');
 		expect(result.code).toBe(0);
-		expect(seen[0]).toMatchObject({ method: 'POST', body: { node: 'worker', volume: 'fast' } });
+		expect(seen[0]).toMatchObject({ method: 'POST', body: { node: 'worker', storage: 'fast' } });
+		await cli('db', 'replica', 'add', 'main', '--node', 'worker', '--volume', 'nvme');
+		expect(seen[1]).toMatchObject({ body: { node: 'worker', storage: 'nvme' } });
 		expect(result.stdout).toContain('Added replica dbr_1 of "main" on worker');
 	});
 

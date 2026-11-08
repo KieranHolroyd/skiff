@@ -85,10 +85,10 @@ export function nodeDiskFreeBytes(stats: unknown): number | null {
 }
 
 /**
- * Project-owned app volumes (plan 07). A volume is not a node volume: it is a directory with a
- * quota, backed by a node volume or the helper state directory, attached to one workload. The
+ * Project-owned app volumes (plan 07). A volume is not a disk: it is a directory with a quota, on
+ * a disk or the node's system disk (the helper state directory), attached to one workload. The
  * control plane stores ids, sizes and mount points — the node derives the host path and fails
- * closed if the backing mount is missing. Single-writer is enforced here; read-only attachments
+ * closed if the disk's mount is missing. Single-writer is enforced here; read-only attachments
  * are unlimited.
  */
 export class AppVolumeService {

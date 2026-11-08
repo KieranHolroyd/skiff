@@ -164,7 +164,7 @@ connections above 90% of `max_connections`, pool saturation above 90%).
   state lists the id under `databasePurges`; the agent calls the helper's fixed `purge` verb, which
   removes only `<stateDir>/<id>`, then reports it, and the control plane deletes the row.
 
-- **Move to another node** (D97, `POST /databases/:name/move { node, volume? }`, dashboard
+- **Move to another node** (D97, `POST /databases/:name/move { node, storage? }`, dashboard
   Settings → Resources → Move): engines with backups only, and not while PITR is on. The move
   stops attached apps (`quiescing`), takes a final backup on the source once it has applied the
   stop (`dumping`), re-points the row at the target with fresh ports so it restores into an empty
@@ -181,10 +181,12 @@ connections above 90% of `max_connections`, pool saturation above 90%).
   starts it fresh (its data is discarded). Every engine has backups, so every engine moves with its
   data. The dashboard asks for a confirmation for either.
 
-**Data location.** By default the data dir lives under the helper's state root. A database can
-instead be placed on a node volume (`volume` on create, or the node's default volume); its data
-then lives at `<mount>/skiff/<id>` (D74, D78), and the node refuses to start it when the mount is
-missing (D76). See [VOLUMES.md](./VOLUMES.md).
+**Data location.** A database goes on the storage target its create request names (`storage`:
+`system`, `fast`, `bulk` or a disk name; CLI `--disk`), else the `databases` default in Settings →
+Storage, else the system disk, where the data dir lives under the helper's state root. On a disk
+its data lives at `<mount>/skiff/<id>` (D169, D78), and the node refuses to start it when the mount
+is missing (D76). Replicas, moves and restores keep the database's tier unless they name another
+target. See [STORAGE.md](./STORAGE.md).
 
 ## 7. Surfaces
 
@@ -662,7 +664,7 @@ Postgres only, `async` only (sync is refused: there is no downgrade path yet), a
 
 - **Shape.** A replica is a row in `database_replicas` and its own container workload,
   `db_dbr_<hex>`, on its node: the database's image and limits, its own loopback host port (from the
-  database range, counted by `allocatePort`) and optional node volume, and `database.replica.slot`
+  database range, counted by `allocatePort`) and optional disk, and `database.replica.slot`
   in desired state. It reserves the database's memory on its node. A replica on the primary's own
   node is allowed (read scaling) but is never promoted.
 - **Link.** The walreceiver connects to a unix socket, `<agent data dir>/replication/<id>/.s.PGSQL.5432`,

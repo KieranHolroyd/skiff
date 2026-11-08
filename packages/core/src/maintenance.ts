@@ -59,7 +59,7 @@ export class MaintenanceService {
 		// Replication rules from before migration 0059 get their scoped key (OBJECT-STORAGE.md §12).
 		this.ctx.storageReplication.backfillKeys();
 		this.ctx.brokers.requestExpiredPurges();
-		// App volumes: trash purge, snapshot/restore timeouts, snapshots of purged volumes (VOLUMES.md §14).
+		// App volumes: trash purge, snapshot/restore timeouts, snapshots of purged volumes (VOLUMES.md).
 		await this.ctx.appVolumes.lifecycle.tick().catch((error: unknown) => console.error('[maintenance] app volumes:', error));
 		// Pipelines: lapsed leases, `schedule:` triggers, expired artifacts and caches (docs/PIPELINES.md).
 		this.ctx.pipelines.tickSchedules();
@@ -403,7 +403,7 @@ export class MaintenanceService {
 		return fired;
 	}
 
-	/** App volumes near their quota (docs/VOLUMES.md §14); routed with the object-storage usage kind. */
+	/** App volumes near their quota (docs/VOLUMES.md); routed with the object-storage usage kind. */
 	private async appVolumeAlerts(): Promise<string[]> {
 		const fired: string[] = [];
 		const percent = this.ctx.policies.get().storageAlertPercent;

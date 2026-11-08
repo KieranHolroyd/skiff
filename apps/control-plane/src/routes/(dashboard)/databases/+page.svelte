@@ -1,5 +1,5 @@
 <script lang="ts">
-	import StoragePoolSelect from '#lib/components/skiff/StoragePoolSelect.svelte';
+	import StorageSelect from '#lib/components/skiff/StorageSelect.svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -528,7 +528,7 @@
 					{#if errors.storageMb}<Field.Error>{errors.storageMb}</Field.Error>{/if}
 				</Field.Field>
 			</div>
-			<StoragePoolSelect choices={data.storageChoices} id="database-pool" value={(form as { values?: { pool?: string } } | null)?.values?.pool ?? ''} />
+			<StorageSelect choices={data.storageChoices} id="database-storage" value={(form as { values?: { storage?: string } } | null)?.values?.storage ?? ''} />
 
 			{#if data.projects.length > 0}
 				<div class="grid gap-4 sm:grid-cols-2">

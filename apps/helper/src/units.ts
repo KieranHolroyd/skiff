@@ -501,7 +501,7 @@ export function pyodideCacheDir(workerdPath: string): string {
 	return `${workerdPath.slice(0, workerdPath.lastIndexOf('/'))}/pyodide`;
 }
 
-/** Root systemd uses for `StateDirectory=skiff-workloads/<id>` (D72/D74). */
+/** Root systemd uses for `StateDirectory=skiff-workloads/<id>` (D72). */
 export const FUNCTION_STATE_DIR = '/var/lib/skiff-workloads';
 
 /**

@@ -50,8 +50,8 @@ export const load: PageServerLoad = ({ locals, url }) => {
 	}
 
 	return {
-		/** Storage pools the create form offers (docs/STORAGE.md §3.3). */
-		storageChoices: core.storagePools.choices('databases'),
+		/** Storage targets the create form offers (docs/STORAGE.md §2.2). */
+		storageChoices: core.disks.choices('databases'),
 		view,
 		denied,
 		databases: all.filter((database) => !database.deletedAt),
@@ -77,7 +77,7 @@ export const actions: Actions = {
 			placement: formString(data, 'placement') || 'auto',
 			memoryMb: formString(data, 'memoryMb'),
 			storageMb: formString(data, 'storageMb'),
-			pool: formString(data, 'pool'),
+			storage: formString(data, 'storage'),
 			project: formString(data, 'project'),
 			envPrefix: formString(data, 'envPrefix').toUpperCase()
 		};
@@ -95,7 +95,7 @@ export const actions: Actions = {
 			placement: values.placement,
 			memoryMb: optionalNumber(values.memoryMb),
 			storageMb: optionalNumber(values.storageMb),
-			pool: values.pool || undefined,
+			storage: values.storage || undefined,
 			project: values.project || undefined,
 			// Empty: the engine's default prefix (DATABASE, MONGODB or REDIS).
 			envPrefix: values.project ? values.envPrefix || databaseEngineRegistry[engine].defaultEnvPrefix : undefined

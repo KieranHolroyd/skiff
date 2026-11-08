@@ -6,9 +6,9 @@ import type { DiskProfileView } from './disk.ts';
 /**
  * Cluster shares (docs/CLUSTERING.md §5.2, C3). Platform-level network filesystem definitions.
  *
- * A share is defined once, mounted on the nodes that need it (`share_mounts`), and each mount can
- * be linked to Skiff as a node volume so managed databases, storage instances and app volumes can
- * be placed on it (docs/VOLUMES.md §5).
+ * A share is defined once and mounted on the nodes that need it (`share_mounts`). A read-write
+ * mount becomes a `bulk`, network disk on that node, so managed databases, storage instances and
+ * app volumes can be stored on it (docs/STORAGE.md §3, D143).
  */
 
 export const shareProtocols = ['nfs', 'smb'] as const;
@@ -134,7 +134,7 @@ export interface ShareView {
 	/** The stored SMB username, for display; null for NFS or when none is stored. */
 	username: string | null;
 	grants: ShareGrant[];
-	/** Where the share is mounted, and the node volume each mount is linked to. */
+	/** Where the share is mounted, and the disk each mount became. */
 	mounts: ShareMountView[];
 	createdAt: string;
 	updatedAt: string;
@@ -145,7 +145,7 @@ export interface ShareView {
 export const shareMountStatuses = ['pending', 'mounted', 'failed', 'unmounting'] as const;
 export type ShareMountStatus = (typeof shareMountStatuses)[number];
 
-/** Node directory every share mounts under; the volume inventory reports it (docs/VOLUMES.md §5). */
+/** Node directory every share mounts under; the disk inventory reports it (docs/STORAGE.md §3). */
 export const SHARE_MOUNT_ROOT = '/mnt/skiff-shares';
 
 export function shareMountPath(shareName: string): string {
@@ -153,8 +153,8 @@ export function shareMountPath(shareName: string): string {
 }
 
 /**
- * The node-volume source key the helper's inventory derives for this share once mounted:
- * `nfs:<server>:<export>` or `cifs:<server>/<share>`. Linking matches on it.
+ * The disk source key the helper's inventory derives for this share once mounted:
+ * `nfs:<server>:<export>` or `cifs:<server>/<share>`. Turning a mount into a disk matches on it.
  */
 export function shareSourceKey(share: { protocol: ShareProtocol; server: string; exportPath: string }): string {
 	const path = share.exportPath.length > 1 ? share.exportPath.replace(/\/+$/, '') : share.exportPath;

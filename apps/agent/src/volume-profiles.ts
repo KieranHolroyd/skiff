@@ -1,7 +1,7 @@
 import type { DesiredState, VolumeProfileResult, VolumeProfileTask } from '@skiff/contracts';
 
 /**
- * Runs `volumeProfileTasks` (docs/STORAGE.md §5) one at a time through the helper's
+ * Runs `volumeProfileTasks` (docs/STORAGE.md §5.1) one at a time through the helper's
  * `/v1/volumes/profile` verb, so two benchmarks never compete for the same node's I/O. Each task
  * reports `running` when it starts and its numbers (or error) when it ends; results are kept until
  * a heartbeat delivers them, and a finished task is never run again while it stays in desired state.

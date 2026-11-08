@@ -406,8 +406,9 @@ export const workloadVolumeMountSchema = z.object({
 	mountPath: z.string().min(1).max(200),
 	readOnly: z.boolean().default(false),
 	/**
-	 * How the helper resolves the backing directory. `node_volume` names a node volume in the
-	 * helper's own registry (verified before start); `state_dir` is the helper's state directory.
+	 * How the helper resolves the backing directory. `node_volume` (the wire name for a disk) names
+	 * a disk in the helper's own registry, verified before start; `state_dir` is the helper's state
+	 * directory on the system disk.
 	 * These are ids and kinds only — never a host path or a device.
 	 */
 	backing: z.enum(['node_volume', 'state_dir']).optional(),
@@ -495,8 +496,9 @@ export const workloadDesiredSchema = z.object({
 	/** The platform registry (docs/REGISTRY.md G1): zot, rendered by the helper from this profile. */
 	registry: workloadRegistrySchema.optional(),
 	/**
-	 * Managed services only: the node volume the data dir lives on (D74). The helper resolves the
-	 * mount path from its own registry and fails the start if it is not mounted (D76).
+	 * Managed services only: the disk the data dir lives on (D169; absent = the system disk). The
+	 * helper resolves the mount path from its own registry and fails the start if it is not mounted
+	 * (D76).
 	 */
 	volumeId: z.string().max(100).optional(),
 	/** App volumes mounted into this workload (plan 07); omitted by older control planes. */

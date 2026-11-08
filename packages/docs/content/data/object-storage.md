@@ -22,7 +22,7 @@ skif storage create media --bucket uploads --project api
 skif storage create assets --bucket img,css --public --storage 50G
 ```
 
-Defaults are 512 MB of memory, 1 CPU and a 10 GB storage budget. The budget drives the usage gauge and the alert at 85%; it does not cap what the instance can hold. The memory limit must be at least 256 MB. Use `--placement auto` (the default), `edge`, or a node id to choose where the instance runs. `--project` needs at least one `--bucket`, because the project is granted read-write on the buckets you create.
+Defaults are 512 MB of memory, 1 CPU and a 10 GB storage budget. The budget drives the usage gauge and the alert at 85%; it does not cap what the instance can hold. The memory limit must be at least 256 MB. Use `--placement auto` (the default), `edge`, or a node id to choose where the instance runs. `--disk` chooses where its data is stored: `system`, `fast`, `bulk`, or a [disk](/self-hosting/nodes-and-fleet#disks) by name. It defaults to the **Object storage** default in **Settings → Storage**. `--project` needs at least one `--bucket`, because the project is granted read-write on the buckets you create.
 
 Check on it with `skif storage info media`, which shows its status, node, endpoints, buckets and attached projects.
 
@@ -229,7 +229,7 @@ The target is passive: nothing writes to it except replication, and Skiff does n
 skif storage move media --node <node-id>
 ```
 
-Skiff does not copy objects when it moves an instance. The instance starts empty on the target node with the same buckets, keys and attachments, and the old copy and its objects are deleted once it is up. Copy what you need first, for example with `aws s3 sync` and the root key. `move` asks you to type the instance's name, or takes `--yes` off a terminal. `--volume` picks a volume on the target node. Attached apps on the old node move with a private instance. In the dashboard, use **Move** on the **Settings** tab.
+Skiff does not copy objects when it moves an instance. The instance starts empty on the target node with the same buckets, keys and attachments, and the old copy and its objects are deleted once it is up. Copy what you need first, for example with `aws s3 sync` and the root key. `move` asks you to type the instance's name, or takes `--yes` off a terminal. The instance keeps its tier on the target node; `--disk` picks another target there. Attached apps on the old node move with a private instance. In the dashboard, use **Move** on the **Settings** tab.
 
 ## Restart
 
@@ -257,7 +257,7 @@ An instance that still has attached projects cannot be deleted. Detach them firs
 | Command | Purpose | Key flags |
 | --- | --- | --- |
 | `skif storage [list]` | List instances. | `--all` includes the trash |
-| `create <name>` | Create an instance. | `-b`, `-p`, `--prefix`, `--public`, `--placement`, `--memory`, `--cpus`, `--storage`, `--version` |
+| `create <name>` | Create an instance. | `-b`, `-p`, `--prefix`, `--public`, `--placement`, `--memory`, `--cpus`, `--storage`, `--disk`, `--version` |
 | `info <name>` | Status, endpoints, buckets and attachments. | |
 | `update <name>` | Change limits, version or public access. | `--memory`, `--cpus`, `--storage`, `--version`, `--public` or `--no-public` |
 | `restart <name>` or `--all` | Restart the RustFS container. | `--all` |
@@ -267,7 +267,7 @@ An instance that still has attached projects cannot be deleted. Detach them firs
 | `credentials <name>` | Print the root key as env lines. | `--prefix` (default `AWS`), `--json` |
 | `rotate-root <name>` | Replace the root key; RustFS restarts. | `--cancel`, `--yes` |
 | `keys list\|create\|reveal\|revoke` | Manage named access keys. | `-b <bucket>[:read\|:read-write]`, `--purpose`, `--expires`, `--prefix`, `--yes` |
-| `move <name>` | Move the instance to another node, empty. | `--node`, `--volume`, `--yes` |
+| `move <name>` | Move the instance to another node, empty. | `--node`, `--disk`, `--yes` |
 | `metrics <name>` | Usage samples. | `--since`, `--from`, `--to`, `--interval 1m\|1h` |
 | `logs <name>` | Container output. | `-f`, `--level`, `--q`, `--limit`, `--after` |
 | `attach <name>` | Give a project a scoped key. | `-p`, `-b <bucket>[:read\|:read-write]` (repeatable), `--prefix` (default `S3`) |

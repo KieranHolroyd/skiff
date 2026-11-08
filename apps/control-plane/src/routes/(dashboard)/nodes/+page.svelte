@@ -120,34 +120,6 @@
 		return null;
 	}
 
-	function volumesOf(nodeId: string) {
-		return data.volumesByNode[nodeId];
-	}
-
-	/** Mounts the node reports that are not adopted yet (D72). */
-	function adoptable(nodeId: string) {
-		const view = volumesOf(nodeId);
-		if (!view?.inventory) return [];
-		const taken = new Set(view.volumes.map((volume) => volume.sourceKey));
-		return view.inventory.mounts.filter((mount) => !taken.has(mount.sourceKey));
-	}
-
-	function setDefaultVolume(nodeId: string, name: string) {
-		void runAction('?/defaultVolume', { nodeId, name });
-	}
-
-	function removeVolume(nodeId: string, name: string) {
-		askConfirm({
-			title: `Remove volume “${name}” from Skiff?`,
-			description:
-				'Only the registration is removed. The filesystem stays mounted and its data is untouched; instances still using it block the removal.',
-			confirmLabel: 'Remove volume',
-			tone: 'danger',
-			action: '?/removeVolume',
-			fields: { nodeId, name }
-		});
-	}
-
 	$effect(() => {
 		if (result?.command) commandOpen = true;
 	});
@@ -193,7 +165,7 @@
 		askConfirm({
 			title: `Remove ${node.name} from Skiff?`,
 			description:
-				'Its token is revoked at once, its volume registrations are dropped and any builds it claimed go back to the queue. Projects, workloads, databases, storage instances or app volumes still on it block the removal. Nothing on the machine is deleted; uninstall the agent there afterwards.',
+				'Its token is revoked at once, its disks are dropped and any builds it claimed go back to the queue. Projects, workloads, databases, storage instances or app volumes still on it block the removal. Nothing on the machine is deleted; uninstall the agent there afterwards.',
 			confirmLabel: 'Remove node',
 			tone: 'danger',
 			typeToConfirm: node.name,
@@ -516,91 +488,26 @@
 								<time datetime={node.createdAt}>{formatDateTime(node.createdAt)}</time>
 							</dd>
 						</DetailList>
-						{@const volumeView = volumesOf(node.id)}
-						{#if volumeView}
-							<div class="space-y-2 border-t pt-3">
-								<div class="flex items-center justify-between gap-2">
-									<span class="text-xs font-medium">Volumes</span>
-									<span class="text-xs text-muted-foreground">
-										{volumeView.volumes.length}
-										{volumeView.volumes.length === 1 ? 'volume' : 'volumes'}
-									</span>
-								</div>
-								{#each volumeView.volumes as volume (volume.id)}
-									<div class="space-y-1 rounded-md border px-2.5 py-2 text-xs">
-										<div class="flex flex-wrap items-center gap-1.5">
-											<span class="font-medium">{volume.name}</span>
-											<Badge variant="outline" class="font-mono text-[10px]">{volume.class}</Badge>
-											{#if volume.isDefault}<Badge variant="info">Default</Badge>{/if}
-											{#if volume.remote}<Badge variant="outline">Network</Badge>{/if}
-											{#if volume.status !== 'ready'}<StatusBadge status={volume.status} />{/if}
-										</div>
-										<div class="font-mono text-muted-foreground">
-											{volume.mountPath} · {volume.kind} · {formatBytes(volume.freeBytes)} free of
-											{formatBytes(volume.sizeBytes)}
-										</div>
-										{#if volume.instances.storage.length > 0 || volume.instances.databases.length > 0}
-											<div class="text-muted-foreground">
-												{[
-													...volume.instances.storage.map((name) => `storage ${name}`),
-													...volume.instances.databases.map((name) => `database ${name}`)
-												].join(', ')}
-											</div>
-										{/if}
-										{#if volume.message}
-											<div class="text-destructive">{volume.message}</div>
-										{/if}
-										<div class="flex gap-1 pt-0.5">
-											{#if !volume.isDefault}
-												<Button
-													size="sm"
-													variant="ghost"
-													onclick={() => setDefaultVolume(node.id, volume.name)}
-												>
-													Make default
-												</Button>
-											{/if}
-											<Button
-												size="sm"
-												variant="ghost"
-												onclick={() => removeVolume(node.id, volume.name)}
-											>
-												Remove
-											</Button>
-										</div>
-									</div>
-								{/each}
-								{#if adoptable(node.id).length > 0}
-									<form
-										method="POST"
-										action="?/adoptVolume"
-										class="grid gap-2 sm:grid-cols-[1fr_1fr_auto]"
-									>
-										<input type="hidden" name="nodeId" value={node.id} />
-										<Input
-											name="name"
-											placeholder="volume name"
-											required
-											minlength={3}
-											maxlength={40}
-										/>
-										<NativeSelect.Root name="sourceKey" required class="w-full">
-											{#each adoptable(node.id) as mount (mount.sourceKey)}
-												<NativeSelect.Option value={mount.sourceKey}>
-													{mount.mountPath} · {mount.fsType} · {formatBytes(mount.freeBytes)} free
-												</NativeSelect.Option>
-											{/each}
-										</NativeSelect.Root>
-										<Button type="submit" size="sm">Adopt</Button>
-									</form>
-								{:else if volumeView.volumes.length === 0}
-									<p class="text-xs text-muted-foreground">
-										No mounts reported yet. The agent sends its inventory within a minute of
-										starting.
-									</p>
-								{/if}
+						{@const nodeDisks = data.disksByNode[node.id] ?? []}
+						<div class="space-y-2 border-t pt-3">
+							<div class="flex items-center justify-between gap-2">
+								<span class="text-xs font-medium">Disks</span>
+								<a class="text-xs text-muted-foreground underline-offset-2 hover:underline" href={resolve('/(dashboard)/settings/storage')}>
+									Manage in Settings → Storage
+								</a>
 							</div>
-						{/if}
+							{#each nodeDisks as disk (disk.id)}
+								<div class="flex flex-wrap items-center gap-1.5 text-xs">
+									<span class="font-medium">{disk.name}</span>
+									<Badge variant="outline" class="text-[10px]">{disk.tier}</Badge>
+									{#if disk.remote}<Badge variant="outline" class="text-[10px]">Network</Badge>{/if}
+									{#if disk.status !== 'ready'}<StatusBadge status={disk.status} />{/if}
+									<span class="text-muted-foreground">{formatBytes(disk.freeBytes)} free of {formatBytes(disk.sizeBytes)}</span>
+								</div>
+							{:else}
+								<p class="text-xs text-muted-foreground">Only the system disk.</p>
+							{/each}
+						</div>
 						{#if node.stats}
 							<Collapsible.Root>
 								<Collapsible.Trigger

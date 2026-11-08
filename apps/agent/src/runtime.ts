@@ -1109,7 +1109,7 @@ export function workloadFingerprint(workload: WorkloadDesired): string {
 		// Node.js apps (D125) get a different default command and the fd-3 preload.
 		...(workload.engine ? { engine: workload.engine } : {}),
 		...(workload.runner ? { runner: workload.runner.provider } : {}),
-		// A volume move must re-render the unit and restart the container (D74).
+		// A disk move must re-render the unit and restart the container (D169).
 		...(workload.volumeId ? { volumeId: workload.volumeId } : {}),
 		// Only present for databases, so existing app fingerprints (and units) stay unchanged.
 		...(workload.database

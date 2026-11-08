@@ -1,6 +1,6 @@
 import { fail } from '@sveltejs/kit';
 import type { NodeView } from '@skiff/core';
-import type { NodeCapacityView, NodeRole, NodeVolumesView } from '@skiff/contracts';
+import type { DiskView, NodeCapacityView, NodeRole } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
 import {
 	failStatus,
@@ -23,16 +23,13 @@ export const load: PageServerLoad = ({ locals }) => {
 		denied = true;
 	}
 
-	// Volume registrations and the node's latest mount inventory (D72). Only platform admins
-	// reach this page, so one call per node is fine.
-	const volumesByNode: Record<string, NodeVolumesView> = {};
+	// Disks per node, read-only here; adding and editing them is Settings → Storage (D169).
+	const disksByNode: Record<string, DiskView[]> = {};
 	if (!denied) {
-		for (const node of nodes) {
-			try {
-				volumesByNode[node.id] = core.volumes.list(principal, node.id);
-			} catch {
-				// Keep the page usable when one node has no inventory yet.
-			}
+		try {
+			for (const node of core.disks.overview(principal).nodes) disksByNode[node.id] = node.disks;
+		} catch {
+			// Platform viewers without storage read keep the rest of the page.
 		}
 	}
 
@@ -40,7 +37,7 @@ export const load: PageServerLoad = ({ locals }) => {
 		nodes,
 		capacity,
 		denied,
-		volumesByNode,
+		disksByNode,
 		platformOrigin: core.ctx.config.platformOrigin,
 		/** The release nodes should run: the control plane's own version (D99). */
 		targetVersion: core.ctx.config.desiredAgentVersion ?? null
@@ -71,50 +68,6 @@ export const actions: Actions = {
 		} catch (error) {
 			return fail(failStatus(error), toFormFailure(error));
 		}
-	},
-
-	adoptVolume: async ({ request, locals }) => {
-		const principal = locals.principal!;
-		const data = await request.formData();
-		const nodeId = formString(data, 'nodeId');
-		const name = formString(data, 'name');
-		const sourceKey = formString(data, 'sourceKey');
-		if (!nodeId || !name || !sourceKey)
-			return fail(400, { message: 'Pick a mount and give the volume a name.' });
-		try {
-			core.volumes.adopt(principal, nodeId, { name, sourceKey });
-		} catch (error) {
-			return fail(failStatus(error), toFormFailure(error));
-		}
-		return { success: `Volume “${name}” adopted. New instances can use it now.` };
-	},
-
-	defaultVolume: async ({ request, locals }) => {
-		const principal = locals.principal!;
-		const data = await request.formData();
-		const nodeId = formString(data, 'nodeId');
-		const name = formString(data, 'name');
-		if (!nodeId || !name) return fail(400, { message: 'Missing node or volume.' });
-		try {
-			core.volumes.update(principal, nodeId, name, { default: true });
-		} catch (error) {
-			return fail(failStatus(error), toFormFailure(error));
-		}
-		return { success: `“${name}” is now the default volume for new instances on this node.` };
-	},
-
-	removeVolume: async ({ request, locals }) => {
-		const principal = locals.principal!;
-		const data = await request.formData();
-		const nodeId = formString(data, 'nodeId');
-		const name = formString(data, 'name');
-		if (!nodeId || !name) return fail(400, { message: 'Missing node or volume.' });
-		try {
-			core.volumes.remove(principal, nodeId, name);
-		} catch (error) {
-			return fail(failStatus(error), toFormFailure(error));
-		}
-		return { success: `Volume “${name}” removed from Skiff. The mount itself was left alone.` };
 	},
 
 	setDraining: async ({ request, locals }) => {

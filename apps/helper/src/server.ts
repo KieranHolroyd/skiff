@@ -116,11 +116,11 @@ export interface HelperRuntime {
 	): Promise<{ targetDatabaseId: string; targetTime: number; verified: true }>;
 	/** Credential-free archive/repository status and the recoverable window. */
 	pitrStatus(id: string): Promise<HelperPitrStatus>;
-	/** Mounts and free block devices for the volume wizard (D72). */
+	/** Mounts and block devices, from which Settings → Storage lists disk candidates (D72). */
 	volumesInventory(): Promise<HelperInventory>;
-	/** Replace the volume registry from desired state (D74). */
+	/** Replace the disk registry from desired state (D76). */
 	syncVolumes(volumes: unknown): Promise<number>;
-	/** Prove that a registered volume is really mounted before a workload starts (D76). */
+	/** Prove that a registered disk is really mounted before a workload starts (D76). */
 	verifyVolume(input: { mountPath: string; sourceKey: string }): Promise<VerifyResult>;
 }
 
@@ -137,7 +137,7 @@ export interface HandlerOptions {
 	nodeUpdate?: { update(request: NodeUpdateRequest): Promise<NodeUpdateResult> };
 	/** Managed overlay verbs (C1); absent on a helper that predates the overlay. */
 	wireguard?: WireguardApi;
-	/** Storage profiling of a registered volume (docs/STORAGE.md §5); absent = 404. */
+	/** Profiling of a registered disk (docs/STORAGE.md §5.1); absent = 404. */
 	volumeProfiler?: { profile(request: VolumeProfileRequest): Promise<VolumeProfileResult> };
 	/** Share mount verbs (C3); absent on a helper that predates cluster shares. */
 	shares?: {
@@ -145,7 +145,7 @@ export interface HandlerOptions {
 		unmount(id: string): Promise<{ id: string; mounted: boolean; error: string | null }>;
 		status(ids: string[]): Promise<ShareMountStatus[]>;
 	};
-	/** Partition mount verbs (docs/VOLUMES.md §3.1); absent on a helper that predates them. */
+	/** Disk mount verbs (docs/STORAGE.md §3.1); absent on a helper that predates them. */
 	disks?: {
 		mount(request: DiskMountRequest): Promise<DiskMountStatus>;
 		unmount(id: string): Promise<{ id: string; mounted: boolean; error: string | null }>;
@@ -153,7 +153,7 @@ export interface HandlerOptions {
 	};
 	/** Container console verbs (D127); absent on a helper that predates them. */
 	containers?: ContainerConsole;
-	/** App-volume usage, purge, snapshot and restore (docs/VOLUMES.md §14); absent = 404. */
+	/** App-volume usage, purge, snapshot and restore (docs/VOLUMES.md); absent = 404. */
 	appVolumes?: Pick<AppVolumeData, 'usage' | 'purge' | 'snapshot' | 'restore'>;
 	/** Job runs as transient units (plan 09); absent on a helper that predates jobs. */
 	jobs?: JobApi;
@@ -257,7 +257,7 @@ export function createHandler(
 				return json({ ok: true, ...(await options.shares.unmount(id)) });
 			}
 
-			// --- partition mounts (VOLUMES §3.1): a UUID and a name in, fixed mount, no shell -----
+			// --- disk mounts (STORAGE §3.1): a UUID and a name in, fixed mount, no shell ----------
 			if (path === '/v1/disks/mount' || path === '/v1/disks/unmount' || path === '/v1/disks/status') {
 				if (method !== 'POST') return methodNotAllowed('POST');
 				if (!options.disks) return json({ error: 'partition mounts are not available on this helper' }, 404);
@@ -344,7 +344,7 @@ export function createHandler(
 				return json(await runtime.verifyVolume({ mountPath, sourceKey }));
 			}
 
-			// --- app volumes (docs/VOLUMES.md §14): ids and backing in, never a path ------------------
+			// --- app volumes (docs/VOLUMES.md): ids and backing in, never a path ----------------------
 			if (path.startsWith('/v1/app-volumes/')) {
 				const appVolumes = options.appVolumes;
 				if (!appVolumes) return json({ error: 'app volume verbs are not available on this helper' }, 404);

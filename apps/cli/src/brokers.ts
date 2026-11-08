@@ -46,7 +46,8 @@ export interface BrokerView {
 	storageMb: number;
 	username: string;
 	internalHost: { process: string; container: string };
-	volume: { id: string; name: string } | null;
+	/** The disk the data lives on; null is the system disk. Absent from servers before D169. */
+	disk?: { id: string; name: string; tier: string } | null;
 	attachments: BrokerAttachmentView[];
 	/** Newest node sample (D123); absent from servers that predate broker metrics. */
 	storeBytes?: number | null;
@@ -138,7 +139,8 @@ export interface BrokerCreateInput {
 	memoryMb?: number;
 	cpus?: number;
 	storageMb?: number;
-	volume?: string;
+	/** `system`, `fast`, `bulk` or a disk name (docs/STORAGE.md). */
+	storage?: string;
 	project?: string;
 	envPrefix?: string;
 }
@@ -186,7 +188,7 @@ export function brokerDetails(view: BrokerView): string {
 			'Stored',
 			`${formatBytes(view.storeBytes)} of ${megabytes(view.storageMb)}${view.messages !== null && view.messages !== undefined ? `, ${formatNumber(view.messages)} messages` : ''}`,
 		);
-	if (view.volume) field('Volume', view.volume.name);
+	field('Disk', view.disk ? `${view.disk.name} (${view.disk.tier})` : 'system disk');
 	field('User', view.username);
 	field('Process', view.internalHost.process);
 	field('Container', view.internalHost.container);

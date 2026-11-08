@@ -138,7 +138,7 @@ describe('share mounts', () => {
 
 		const mounted = core.shares.mount(admin, 'vault', { node: 'nas-client' });
 		expect(mounted.mounts).toMatchObject([
-			{ nodeName: 'nas-client', status: 'pending', mountPath: '/mnt/skiff-shares/vault', volumeName: 'vault', volume: null },
+			{ nodeName: 'nas-client', status: 'pending', mountPath: '/mnt/skiff-shares/vault', diskName: 'vault', disk: null },
 		]);
 		const mountId = mounted.mounts[0]!.id;
 

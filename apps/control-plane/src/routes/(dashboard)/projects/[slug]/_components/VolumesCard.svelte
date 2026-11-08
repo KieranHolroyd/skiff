@@ -42,7 +42,7 @@
 	}: {
 		slug: string;
 		volumes: AppVolumeView[];
-		/** Storage pools on offer (docs/STORAGE.md §3.3). */
+		/** Storage targets on offer (docs/STORAGE.md §2.2). */
 		storage?: StorageChoices | null;
 		/** Workload id or the project slug; the server resolves either. */
 		workloadId: string;
@@ -60,12 +60,12 @@
 	let mountPath = $state('/var/lib/app');
 	let readOnly = $state(false);
 	let sizeMb = $state(1024);
-	/** A pool name (preselected to the default), or `__node_volume` to pin one volume. */
+	/** `system`, `fast` or `bulk` (preselected to the default), or `__disk` to name one disk. */
 	let storageChoice = $state('');
 	$effect(() => {
-		if (createOpen) storageChoice = storage?.defaultPool ?? '';
+		if (createOpen) storageChoice = storage?.defaultTarget ?? 'system';
 	});
-	let nodeVolume = $state('');
+	let diskName = $state('');
 	let singleWriter = $state(true);
 	let snapshotOpen = $state(false);
 	let snapshotting = $state<AppVolumeView | null>(null);
@@ -206,8 +206,8 @@
 								</p>
 								<p class="text-xs text-muted-foreground">
 									{volume.backing === 'node_volume'
-										? `On node volume ${volume.nodeVolume?.name ?? '(removed)'}`
-										: "On the node's state directory"}{volume.singleWriter
+										? `On disk ${volume.disk?.name ?? '(removed)'}${volume.disk ? ` (${volume.disk.tier})` : ''}`
+										: 'On the system disk'}{volume.singleWriter
 										? ' · single writer'
 										: ''} · created {formatDate(volume.createdAt)}
 								</p>
@@ -387,37 +387,26 @@
 						/>
 						{#if fieldErrors.sizeMb}<Field.Error>{fieldErrors.sizeMb}</Field.Error>{/if}
 					</Field.Field>
-					<Field.Field data-invalid={fieldErrors.backing || fieldErrors.pool ? true : undefined}>
+					<Field.Field data-invalid={fieldErrors.storage ? true : undefined}>
 						<Field.Label for="volume-storage">Storage</Field.Label>
 						<NativeSelect.Root id="volume-storage" name="storage" bind:value={storageChoice} class="w-full">
-							{#if !storage?.defaultPool}<NativeSelect.Option value="">System disk</NativeSelect.Option>{/if}
-							{#each (storage?.pools ?? []).filter((pool) => storage?.defaultPool || pool.name !== 'system') as pool (pool.name)}
-								<NativeSelect.Option value={pool.name}>
-									{pool.name === 'system' ? 'System disk' : pool.name}{pool.classes.length ? ` · ${pool.classes.join(', ')}` : ''}{pool.name === storage?.defaultPool ? ' (default)' : ''}
+							{#each storage?.targets ?? [{ value: 'system', label: 'System disk', available: true }] as target (target.value)}
+								<NativeSelect.Option value={target.value} disabled={!target.available && target.value !== storageChoice}>
+									{target.label}{target.value === storage?.defaultTarget ? ' (default)' : ''}{target.available ? '' : ' · none yet'}
 								</NativeSelect.Option>
 							{/each}
-							<NativeSelect.Option value="__node_volume">A specific node volume…</NativeSelect.Option>
+							<NativeSelect.Option value="__disk">A specific disk…</NativeSelect.Option>
 						</NativeSelect.Root>
-						{#if fieldErrors.backing || fieldErrors.pool}<Field.Error>{fieldErrors.backing ?? fieldErrors.pool}</Field.Error>{/if}
+						{#if fieldErrors.storage}<Field.Error>{fieldErrors.storage}</Field.Error>{/if}
 					</Field.Field>
 				</div>
-				{#if storageChoice === '__node_volume'}
-					<Field.Field data-invalid={fieldErrors.nodeVolume ? true : undefined}>
-						<Field.Label for="volume-node-volume">Node volume name</Field.Label>
-						<Input
-							id="volume-node-volume"
-							name="nodeVolume"
-							bind:value={nodeVolume}
-							placeholder="data"
-							required
-							class="font-mono text-sm"
-							aria-invalid={fieldErrors.nodeVolume ? 'true' : undefined}
-						/>
+				{#if storageChoice === '__disk'}
+					<Field.Field>
+						<Field.Label for="volume-disk">Disk name</Field.Label>
+						<Input id="volume-disk" name="disk" bind:value={diskName} placeholder="nvme" required class="font-mono text-sm" />
 						<Field.Description>
-							Must already be registered on the project's node. Ask a platform admin if you do not
-							know the name.
+							A disk on the project's node, as Settings → Storage names it. Ask a platform admin if you do not know it.
 						</Field.Description>
-						{#if fieldErrors.nodeVolume}<Field.Error>{fieldErrors.nodeVolume}</Field.Error>{/if}
 					</Field.Field>
 				{/if}
 				<Field.Field orientation="horizontal">

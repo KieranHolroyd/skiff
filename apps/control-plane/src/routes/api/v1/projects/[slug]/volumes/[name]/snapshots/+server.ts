@@ -5,7 +5,7 @@ import { json, readJson, route } from '#lib/server/api.js';
 import { requirePrincipal } from '#lib/server/principal.js';
 
 /**
- * Snapshots of one app volume (docs/VOLUMES.md §14). A snapshot is queued here and run by the
+ * Snapshots of one app volume (docs/VOLUMES.md). A snapshot is queued here and run by the
  * volume's node, which streams a gzip tar to the backup target recorded on the snapshot.
  */
 

@@ -225,7 +225,7 @@ Each table has one row per path. Where a path takes several methods, they share 
 | GET, POST | `/projects/{slug}/builds` | List git builds, or queue one. |
 | GET | `/projects/{slug}/builds/{id}` | One build, with its full log. |
 | POST | `/projects/{slug}/builds/{id}/cancel` | Cancel a build. |
-| GET, POST | `/projects/{slug}/volumes` | List app volumes, or create one. |
+| GET, POST | `/projects/{slug}/volumes` | List app volumes, or create one. Takes the same `storage` target as databases. |
 | GET, PATCH, DELETE | `/projects/{slug}/volumes/{name}` | Read, grow or rename, or soft-delete a volume. Attached volumes cannot be deleted. |
 | POST, DELETE | `/projects/{slug}/volumes/{name}/attach` | Mount a volume into a workload, or detach it. |
 | GET, POST | `/projects/{slug}/volumes/{name}/snapshots` | List a volume's snapshots, or queue one (`202`). |
@@ -261,7 +261,7 @@ Each table has one row per path. Where a path takes several methods, they share 
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET, POST | `/databases` | List databases (`?includeDeleted=1` adds the trash), or create one. |
+| GET, POST | `/databases` | List databases (`?includeDeleted=1` adds the trash), or create one. `storage` picks where its data goes: `system`, `fast`, `bulk` or a disk name (see [disks](/self-hosting/nodes-and-fleet#disks)). |
 | GET, PATCH, DELETE | `/databases/{name}` | Read, resize, change extensions and pooler, or move the version forward in place; or soft-delete. `?purge=1` removes a trashed database for good. |
 | POST | `/databases/{name}/restore` | Bring a soft-deleted database back. |
 | GET | `/databases/{name}/credentials` | Reveal connection details. Audited and never cached. |
@@ -275,10 +275,10 @@ Each table has one row per path. Where a path takes several methods, they share 
 | GET, PATCH | `/databases/{name}/pitr` | Point-in-time recovery status, including `recoverableFrom` and `recoverableTo`, and `{"enabled": true}` to turn it on. PostgreSQL 18, behind the `SKIFF_FEATURE_PITR` flag. |
 | POST | `/databases/{name}/pitr/backups` | Queue a PITR base backup: `{"type": "full"}`, `"diff"` or `"incr"`. |
 | POST | `/databases/{name}/pitr/restore` | Restore to `targetTime` (inside the recoverable window) into a new database named `name`. |
-| GET, POST | `/databases/{name}/replicas` | List read replicas with `primaryGeneration` and the promotion history, or add one with `{"node": "<id or name>"}`. PostgreSQL only. |
+| GET, POST | `/databases/{name}/replicas` | List read replicas with `primaryGeneration` and the promotion history, or add one with `{"node": "<id or name>"}` and an optional `storage` target. PostgreSQL only. |
 | DELETE | `/databases/{name}/replicas/{id}` | Start removing a replica (202): its node deletes the copy and the primary drops its slot. |
 | POST | `/databases/{name}/replicas/{id}/promote` | Promote a replica to primary (202): `{"confirm": true, "acceptDataLoss": false}` with `If-Match: <primaryGeneration>`; a stale generation returns 412. |
-| GET, POST | `/databases/{name}/move` | Read the latest move, or start moving the database to another node. |
+| GET, POST | `/databases/{name}/move` | Read the latest move, or start moving the database to another node, with an optional `storage` target there. |
 | GET, POST | `/databases/{name}/rotate` | Rotate the owner or monitor password, with `role`. |
 | POST | `/databases/{name}/restart` | Restart the database, or only its pooler, with `target`. |
 | GET, POST, DELETE | `/databases/{name}/studio` | Open, read or close your studio session. See [database studio](/data/database-studio). |
@@ -290,11 +290,11 @@ Each table has one row per path. Where a path takes several methods, they share 
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET, POST | `/storage` | List storage instances (`?includeDeleted=1` adds the trash), or create one. |
+| GET, POST | `/storage` | List storage instances (`?includeDeleted=1` adds the trash), or create one. Takes the same `storage` target as databases. |
 | GET, PATCH, DELETE | `/storage/{name}` | Read, resize or change visibility, or soft-delete an instance. |
 | POST | `/storage/{name}/restore` | Bring a soft-deleted instance back. |
 | POST | `/storage/{name}/restart` | Restart the instance. Buckets, objects and keys are kept. |
-| POST | `/storage/{name}/move` | Move an empty instance to another node. Objects are not copied. |
+| POST | `/storage/{name}/move` | Move an empty instance to another node, with an optional `storage` target there. Objects are not copied. |
 | GET | `/storage/{name}/credentials` | Reveal the root key. Audited and never cached. |
 | POST, DELETE | `/storage/{name}/rotate-root` | Start a root key rotation (RustFS restarts with a new key, promoted once the node confirms it), or cancel one that is waiting. Needs `storage:credentials`. |
 | GET, POST | `/storage/{name}/keys` | List named access keys, or create one with `name`, `grants`, and optional `purpose` and `expiresAt`. No secrets. |
@@ -320,7 +320,7 @@ Each table has one row per path. Where a path takes several methods, they share 
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET, POST | `/brokers` | List queue brokers (`?includeDeleted=1` adds the trash), or create one. |
+| GET, POST | `/brokers` | List queue brokers (`?includeDeleted=1` adds the trash), or create one. Takes the same `storage` target as databases. |
 | GET, PATCH, DELETE | `/brokers/{name}` | Read, resize or move the version forward, or soft-delete a broker. |
 | POST | `/brokers/{name}/restore` | Bring a soft-deleted broker back. |
 | POST | `/brokers/{name}/restart` | Restart the broker. Streams are kept. |
@@ -379,19 +379,26 @@ Each table has one row per path. Where a path takes several methods, they share 
 | POST | `/nodes/{id}/resume` | Resume a drained node. |
 | POST | `/nodes/{id}/rotate-token` | Rotate a node's token. Session only. |
 | POST | `/nodes/{id}/edge` | Make an online node the public edge. Session only. |
-| GET, POST | `/nodes/{id}/volumes` | List a node's mounts and registered volumes, or adopt a mount. |
-| PATCH, DELETE | `/nodes/{id}/volumes/{name}` | Update a registered volume, or remove the registration. The mount itself stays. |
 
 ### Topology, cluster and platform
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/topology` | Zones, nodes, roles, labels, volumes and placement counts. |
+| GET | `/topology` | Zones, nodes, roles, labels, disks and placement counts. |
 | GET | `/topology/blast-radius` | What an outage of `?node=` or `?zone=` would take down. |
 | GET, PATCH | `/cluster/config` | Read or change cluster tunables such as overlay, replicas and limits. Platform admin, session only for changes. |
 | GET, POST | `/shares` | List cluster shares (NFS or SMB), or register one. Session only for creates. |
 | GET, PATCH, PUT, DELETE | `/shares/{name}` | Read, update or remove a cluster share. |
 | PUT | `/shares/{name}/grants` | Replace the set of orgs that may use a share. |
+| POST | `/shares/{name}/mounts` | Mount a share on a node: `{"node": "<id or name>", "diskName": "<name>"}`. A read-write share becomes a bulk, network disk once mounted. Session only. |
+| DELETE | `/shares/{name}/mounts/{node}` | Remove the share's disk (refused while anything is stored on it), then unmount. Session only. |
+| PUT, DELETE | `/shares/{name}/mounts/{node}/disk` | Use a mounted share as a disk (`{"diskName": "<name>"}`), or stop using it as one. The share stays mounted. Session only. |
+| GET | `/platform/storage` | Storage defaults, and per node its system disk, disks and the filesystems it could add. Platform admin. |
+| POST | `/platform/storage/disks` | Add a disk: `{"node", "candidate", "name", "tier"}`, where `candidate` is a key from the listing. Session only. |
+| PATCH, DELETE | `/platform/storage/disks/{id}` | Rename a disk or change its tier, or stop using it. Removal is refused while anything is stored on it. Session only. |
+| POST | `/platform/storage/disks/{id}/profile` | Benchmark a disk. Session only. |
+| PUT | `/platform/storage/defaults` | Set the default per kind: `{"defaults": [{"kind": "databases", "target": "fast"}]}`. Session only. |
+| POST | `/platform/storage/onboarding` | Mark the setup Storage step `done` or `skipped`. Session only. |
 | GET | `/ingress/status` | Ingress driver and readiness. |
 | GET | `/ha/status` | The failover controller: whether automatic failover is on, the lease (epoch, holder), policy, per-node silence and replica copies, the ingress record set, databases whose primary is lost with the promotion candidate, and the last 50 failover events. Platform admin. |
 | GET | `/platform/upgrade/plan` | A read-only plan for upgrading the platform. It never changes the host. |

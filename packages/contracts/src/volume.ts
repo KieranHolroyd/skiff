@@ -76,7 +76,7 @@ export const volumeDeviceSchema = z.object({
 	serial: z.string().max(120).nullable().default(null),
 	sizeBytes: z.number().int().nonnegative(),
 	fsType: z.string().max(32).nullable().default(null),
-	/** Filesystem UUID; what a partition mount is addressed by, never the device name. */
+	/** Filesystem UUID; what a disk Skiff mounts is addressed by, never the device name. */
 	uuid: z.string().max(100).nullable().default(null),
 	label: z.string().max(120).nullable().default(null),
 	mountPath: z.string().max(200).nullable().default(null),
@@ -103,7 +103,7 @@ export const volumeInventorySchema = z.object({
 });
 export type VolumeInventory = z.infer<typeof volumeInventorySchema>;
 
-// ------------------------------------------------------------------ partition mounts
+// ------------------------------------------------------------------ disk mounts
 
 /**
  * Disks Skiff mounts (docs/STORAGE.md §3): *Use this disk* on an unmounted filesystem asks the

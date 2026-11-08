@@ -11,7 +11,7 @@ Skiff exposes its state as Prometheus text, so you can chart apps, databases, qu
 
 | Request | Result |
 |---|---|
-| `GET /metrics` with no credentials | The fleet summary: node, node volume and platform-wide counts. Returns `401` when **Settings → Metrics → Public fleet summary** is off. |
+| `GET /metrics` with no credentials | The fleet summary: node, disk and platform-wide counts. Returns `401` when **Settings → Metrics → Public fleet summary** is off. |
 | `GET /metrics` with `Authorization: Bearer skif_…` | Every enabled section for the key's organisation, limited to the resources the key can read. Needs `metrics:read`. |
 | `GET /metrics/<section>` or `GET /metrics/<section>/<name>` | One section, or one app, database, storage instance or broker. Always needs a key or a dashboard session. |
 | A bearer header that does not resolve | `401`. Skiff never falls back to the public view. |
@@ -27,7 +27,7 @@ The same paths also work under `/api/v1/metrics/…`. Each section needs the per
 | `/metrics/databases`, `/metrics/databases/<name>` | Managed databases | `database:read` |
 | `/metrics/storage`, `/metrics/storage/<name>` | Object storage instances | `storage:read` |
 | `/metrics/brokers`, `/metrics/brokers/<name>` | Queue brokers, with one series per stream | `broker:read` |
-| `/metrics/platform` | Nodes and node volumes | A platform admin's dashboard session. API keys do not carry platform scope. |
+| `/metrics/platform` | Nodes and disks | A platform admin's dashboard session. API keys do not carry platform scope. |
 
 `/metrics` with a key does not include `/metrics/platform`. Scrape that path separately with a platform admin session, or use the public fleet summary if it suits you.
 
@@ -115,7 +115,7 @@ Apps carry a `project` label holding the app's slug.
 | `skiff_broker_oldest_message_age_seconds` | gauge | Age of the oldest message held in any stream. |
 | `skiff_broker_stream_messages{broker,stream,queue}` | gauge | Messages held in one stream, from the newest listing. There is a matching family for bytes, consumers, pending, ack-pending and redelivered. |
 
-### Nodes and node volumes
+### Nodes and disks
 
 These appear on `/metrics/platform`, and in the public fleet summary when it is on.
 
@@ -128,8 +128,9 @@ These appear on `/metrics/platform`, and in the public fleet summary when it is 
 | `skiff_node_disk_free_bytes{node}` | gauge | Free bytes on the data filesystem. |
 | `skiff_node_last_heartbeat_timestamp_seconds{node}` | gauge | When the node last sent a heartbeat. |
 | `skiff_node_cert_expiry_timestamp_seconds{node,host}` | gauge | When a TLS certificate served by the node expires. |
-| `skiff_volume_up{node,volume,kind}` | gauge | 1 while a node volume is mounted and ready. |
-| `skiff_volume_free_bytes{node,volume,kind}` | gauge | Free space on a node volume. |
+| `skiff_volume_up{node,volume,kind,tier}` | gauge | 1 while a [disk](/self-hosting/nodes-and-fleet#disks) is mounted and ready. `volume` is the disk's name and `tier` is `fast` or `bulk`. |
+| `skiff_volume_size_bytes{node,volume,kind,tier}` | gauge | A disk's size. |
+| `skiff_volume_free_bytes{node,volume,kind,tier}` | gauge | Free space on a disk. |
 
 ### Scrape health
 

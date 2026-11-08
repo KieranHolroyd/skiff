@@ -3,13 +3,14 @@ import { join } from 'node:path';
 import type { VolumeRegistry, VolumeRunner, VerifyResult } from './volumes.ts';
 
 /**
- * Storage profiling for node volumes (docs/STORAGE.md §5).
+ * Disk profiling (docs/STORAGE.md §5.1).
  *
- * The agent names a **registered volume id**, never a path: the helper resolves the mount from
- * its own registry, proves it is mounted (D76), and benchmarks a scratch file under
- * `<mount>/skiff/.profile/`, removing it afterwards. With `fio` installed it measures sequential
- * read/write (1 MiB, queue depth 8), random 4 KiB read/write IOPS (queue depth 32) and sync-write
- * latency (4 KiB writes, `fdatasync` after each, queue depth 1 — what a database commit feels).
+ * The agent names a **registered disk id** (`volumeId` on the wire), never a path: the helper
+ * resolves the mount from its own registry, proves it is mounted (D76), and benchmarks a scratch
+ * file under `<mount>/skiff/.profile/`, removing it afterwards. With `fio` installed it measures
+ * sequential read/write (1 MiB, queue depth 8), random 4 KiB read/write IOPS (queue depth 32) and
+ * sync-write latency (4 KiB writes, `fdatasync` after each, queue depth 1 — what a database commit
+ * feels).
  * Without `fio`, GNU `dd` gives sequential throughput and sync-write IOPS; random IOPS stay null.
  * All I/O uses O_DIRECT where the filesystem allows it, so the page cache does not flatter reads.
  */

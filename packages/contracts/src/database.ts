@@ -1089,7 +1089,6 @@ export interface DatabaseView {
 		/** Last certificate-generation / startup warning from the node, if any. */
 		error: string | null;
 	};
-	/** Where the data dir lives; null keeps the helper state dir (D74). */
 	/** The disk the data lives on; null is the system disk. */
 	disk: DiskSummary | null;
 	attachments: DatabaseAttachmentView[];

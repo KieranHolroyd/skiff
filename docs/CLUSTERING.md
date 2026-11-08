@@ -6,7 +6,7 @@ D-number when its spike (§15) passes and it is built; phases are **C0–C10** (
 the target design in the present tense; the phase named in each section says when it lands. "Today"
 means verified here, "the plan" means unbuilt.
 
-**Implemented so far (2026-11-06):** C0's backend — migration 0040, the `hardware` heartbeat block, node zone/roles/labels/CPU budget, derived volume classes, constraint-aware placement and the `GET /topology` + `GET /topology/blast-radius` API with its read-only dashboard page. C1's control-plane model and helper/agent apply path are in too (migration 0041, address allocation, peer graph, managed join fields, the desired-state `wireguard` block, root `wireguard/keygen|apply|status` verbs and peer health on the heartbeat); the served installer still requires the signed agent bundle, and real-host verification has not run. C2's data model, forwarding path, pinned self-signed mTLS and cross-node attachments for process apps are in as well (migration 0043, `node_certificates`, `service_endpoints`, the endpoint planner, desired-state endpoints/providers, the agent's Bun TCP/TLS forwarder with fingerprint pinning, and the `SERVICE_ENDPOINTS` flag covering database and private-storage attachments); the per-install CA, Caddy L4 proxy and cross-node container attachments are not. C3's share registry and dashboard page (migration 0044, CRUD, org grants), the helper's fixed NFS/SMB mount/unmount/status verbs and desired-state mounting are in (migration 0067, D143): a share mounts on chosen nodes at `/mnt/skiff-shares/<share>` with sealed SMB credentials and links to Skiff as a `remote` node volume (VOLUMES §5); `backing: share` attachments, transport probes and blast-radius inheritance are not. C4's replica table, spread planner, deploy-time row population, per-node desired state and route fan-out are in behind `MULTI_NODE_REPLICAS` (migration 0045, `workload_replicas`, `planReplicas`, `RouteSpec.upstreams`); Caddy active health checks (interval `replicas.healthIntervalSeconds`) and least-conn balancing are in; rolling deploys, surge and drain are not. C8's failover controller is in as of 2026-11-07 (migration 0060 `failover_events`, `packages/core/src/failover-service.ts`): a controller lease in the control plane's own SQLite with the epoch checked inside every write, replica re-placement off a lost (`failover.enabled`) or draining node under the §8.3 rate limits, flap protection and queue expiry, ingress record-set tracking for the DNS drivers as `manual` events, and the database `decide` stage with a pluggable promotion handler; `GET /api/v1/ha/status`, `get_ha_status`, `skif ha status` and the Settings → High availability panels read it. Three-signal detection, the object-store lease, DNS writes and drills are not. C7's Postgres streaming read replicas are in as of 2026-11-07 (migration 0069): `pg_basebackup` bootstrap and streaming through an agent-served unix-socket link (local port or the primary node's pinned-mTLS provider listener), helper-managed `skiff_repl` role, `pg_hba` block and `skiff_*` slots, 30-second slot sampling for status/lag, `<P>_READ_*` env, removal with two-sided confirmation, and fenced manual promotion (`database_failovers`) that the C8 controller can drive behind `SKIFF_FEATURE_DB_AUTO_PROMOTE`; see [DATABASES.md](./DATABASES.md) §18. The rest of this document remains the plan.
+**Implemented so far (2026-11-06):** C0's backend — migration 0040, the `hardware` heartbeat block, node zone/roles/labels/CPU budget, derived volume classes (disk tiers since D169), constraint-aware placement and the `GET /topology` + `GET /topology/blast-radius` API with its read-only dashboard page. C1's control-plane model and helper/agent apply path are in too (migration 0041, address allocation, peer graph, managed join fields, the desired-state `wireguard` block, root `wireguard/keygen|apply|status` verbs and peer health on the heartbeat); the served installer still requires the signed agent bundle, and real-host verification has not run. C2's data model, forwarding path, pinned self-signed mTLS and cross-node attachments for process apps are in as well (migration 0043, `node_certificates`, `service_endpoints`, the endpoint planner, desired-state endpoints/providers, the agent's Bun TCP/TLS forwarder with fingerprint pinning, and the `SERVICE_ENDPOINTS` flag covering database and private-storage attachments); the per-install CA, Caddy L4 proxy and cross-node container attachments are not. C3's share registry and dashboard page (migration 0044, CRUD, org grants), the helper's fixed NFS/SMB mount/unmount/status verbs and desired-state mounting are in (migration 0067, D143): a share mounts on chosen nodes at `/mnt/skiff-shares/<share>` with sealed SMB credentials and a read-write mount becomes a `bulk`, network disk ([STORAGE.md](./STORAGE.md) §3, D169); `backing: share` attachments, transport probes and blast-radius inheritance are not. C4's replica table, spread planner, deploy-time row population, per-node desired state and route fan-out are in behind `MULTI_NODE_REPLICAS` (migration 0045, `workload_replicas`, `planReplicas`, `RouteSpec.upstreams`); Caddy active health checks (interval `replicas.healthIntervalSeconds`) and least-conn balancing are in; rolling deploys, surge and drain are not. C8's failover controller is in as of 2026-11-07 (migration 0060 `failover_events`, `packages/core/src/failover-service.ts`): a controller lease in the control plane's own SQLite with the epoch checked inside every write, replica re-placement off a lost (`failover.enabled`) or draining node under the §8.3 rate limits, flap protection and queue expiry, ingress record-set tracking for the DNS drivers as `manual` events, and the database `decide` stage with a pluggable promotion handler; `GET /api/v1/ha/status`, `get_ha_status`, `skif ha status` and the Settings → High availability panels read it. Three-signal detection, the object-store lease, DNS writes and drills are not. C7's Postgres streaming read replicas are in as of 2026-11-07 (migration 0069): `pg_basebackup` bootstrap and streaming through an agent-served unix-socket link (local port or the primary node's pinned-mTLS provider listener), helper-managed `skiff_repl` role, `pg_hba` block and `skiff_*` slots, 30-second slot sampling for status/lag, `<P>_READ_*` env, removal with two-sided confirmation, and fenced manual promotion (`database_failovers`) that the C8 controller can drive behind `SKIFF_FEATURE_DB_AUTO_PROMOTE`; see [DATABASES.md](./DATABASES.md) §18. The rest of this document remains the plan.
 
 Related: [DESIGN.md](./DESIGN.md) §3 and §9, [VOLUMES.md](./VOLUMES.md),
 [DATABASES.md](./DATABASES.md), [OBJECT-STORAGE.md](./OBJECT-STORAGE.md), [OPS.md](./OPS.md),
@@ -19,7 +19,7 @@ Related: [DESIGN.md](./DESIGN.md) §3 and §9, [VOLUMES.md](./VOLUMES.md),
 
 | Phase | In the tree | Not built |
 |---|---|---|
-| C0 | Hardware heartbeat, zones/roles/labels, placement spec, CPU admission, volume classes, topology/blast radius, Topology UI | Hardware tab, class-override UI, MCP tools |
+| C0 | Hardware heartbeat, zones/roles/labels, placement spec, CPU admission, disk tiers (D169), topology/blast radius, Topology UI | Hardware tab, MCP tools |
 | C1 | Managed overlay, hubs/LAN mesh, join, installer, helper keygen/apply/status, ufw/firewalld/nftables, peer health | Real two-host verification; installer still needs the signed agent bundle |
 | C2 | Cross-node DB/private storage for process apps, TCP/TLS forwarder, pinned self-signed mTLS, endpoint status plumbing | Per-install CA, Caddy L4, container apps, endpoint failover UI |
 | C3 | Share registry/API/dashboard, helper NFS/SMB mount verbs | Desired-state mounts, `backing: share`, quotas/uid-gid, blast radius |
@@ -107,7 +107,7 @@ or federation (D5): distant users keep zone latency, and one install has one con
 | **Zone** | A failure domain: everything in it shares power, uplink and provider fate. A node belongs to exactly one. |
 | **Role** | What a node may run: `ingress`, `control`, `compute`, `data`, `build`. Placement filters on the set. |
 | **Label** | A `key=value` attribute placement matches. `skiff.io/*` is derived and read-only; operator labels are free-form. |
-| **Volume class** | `fast`, `bulk`, `remote` or `unknown`, derived from the mount's stack and overridable with a reason (§3.3). |
+| **Disk tier** | `fast` or `bulk`, derived from the hardware and editable in Settings → Storage (§3.3, D169). Placement constraints also accept `remote` for a network disk. |
 | **HA level** | Per-resource redundancy: `L0` single, `L1` recoverable, `L2` failover, `L3` active (§8.1). Default `L0`. |
 | **Service endpoint** | A consumer-side loopback port forwarded over the overlay to a provider node (§4.3). |
 | **Lease** | A time-bound object-store claim to be the control-plane primary: `{epoch, holderNodeId, expiresAt}`. |
@@ -164,10 +164,9 @@ sanitised `skiff.io/cpu-model`, recomputed only when the block changes.
 | Field | Default | Validation |
 |---|---|---|
 | `zone` | `default` | Lowercase `[a-z0-9-]{1,32}`; one zone per power/uplink domain |
-| `roles` | Edge: `ingress, control, compute, data`; worker: `compute, data` | At least one; `ingress` needs an address or tunnel, `control` 2 GB RAM and 10 GB free, `data` a mounted volume, `build` `can_build` (D47) |
+| `roles` | Edge: `ingress, control, compute, data`; worker: `compute, data` | At least one; `ingress` needs an address or tunnel, `control` 2 GB RAM and 10 GB free, `data` a ready disk, `build` `can_build` (D47) |
 | `labels` | none | ≤ 32, lowercase keys, `skiff.io/` reserved |
 | `lanEndpoint` | none | Private LAN address inside one zone |
-| `defaultVolumeId` | none | A registered, mounted volume on that node (D74) |
 | `sliceMemoryMb` | 1024 | Cannot drop below current reservations (D42/D47) |
 | `sliceCpuWeight` | 200 | 1–10,000; lower than the platform services |
 | `canBuild` | false | Boolean; `build` is its alias |
@@ -178,8 +177,8 @@ an app volume or a persistent data dir cannot move, a PITR database cannot move,
 instance moves only empty. There the choices are to keep the role, delete and recreate elsewhere, or
 wait for move support that does not exist yet.
 
-**Derived versus operator.** Operator-owned: the eight fields above. Derived: `hardware_json`, the
-`skiff.io/*` labels, volume classes, the effective role set (`build` when `can_build` is true), free
+**Derived versus operator.** Operator-owned: the seven fields above. Derived: `hardware_json`, the
+`skiff.io/*` labels, disk tiers (until an operator sets one), the effective role set (`build` when `can_build` is true), free
 budget and the HA ceiling. `nodes.mode` and `can_build` stay stored: several nodes may hold
 `ingress` but exactly one is the edge (D98 relies on the singular field and lookup in
 `packages/core/src/nodes.ts`), and `can_build` is D47's toggle with `build` as its alias. This
@@ -190,26 +189,25 @@ providers are two zones; one LAN or one UPS is one. A rename is refused while an
 spreads across it, and the dashboard warns when two zones share a public /24 or LAN prefix. `L3`
 across zones requires zones that pass that check, or an explicit override.
 
-### 3.3 Volume classes (H3)
+### 3.3 Disk tiers (H3)
 
-Every volume gets a `class`, derived from how the filesystem is provided and from the disk facts.
-The derivation is conservative: an unrecognised stack is `unknown`, and `unknown` is refused for
-managed databases rather than guessed as `fast`.
+Every disk is `fast` or `bulk` ([STORAGE.md](./STORAGE.md) §1, D169). The tier is derived from the
+hardware until an operator sets it, and Settings → Storage shows it on every disk.
 
-| Detected stack | Class | Why |
+| Detected | Tier | Why |
 |---|---|---|
-| NVMe, or a SATA/SAS SSD (`rotational=0`) | `fast` | Lowest commit latency; the database default |
-| HDD, USB, md RAID5/6, or any array with a rotational member | `bulk` | Seek and parity penalties make fsync unpredictable |
-| md RAID0/1 over SSDs | `fast` | No parity penalty |
-| ZFS all-flash vdevs / ZFS raidz over HDDs | `fast` / `bulk` | Data vdevs decide; raidz pays parity |
-| Unraid array over virtiofs / cache-pool vdisk | `bulk` / `fast` | The vdisk lies about rotation; the pool is SSD, so override |
-| NFS or SMB mount | `remote` | Locking, latency and a server that can vanish |
-| Unknown stack, or no stable identity | `unknown` | Refused for managed data (D72) |
+| NVMe, or a SATA/SAS SSD (`rotational=0`) | `fast` | Lowest commit latency |
+| HDD, or a device with a rotational member | `bulk` | Seeks make fsync unpredictable |
+| NFS or SMB share | `bulk`, marked *network* (`remote`) | Locking, latency and a server that can vanish |
+| No rotation report (older helpers): NVMe / anything else | `fast` / `bulk` | Conservative guess |
 
-**Overrides.** An operator may set `classOverride` plus a reason, audited as `node.update`. `remote`
-cannot become `fast` or `bulk`; the override is stored against the volume's `sourceKey`, goes inert
-if the volume is replaced, and is re-checked when the inventory changes. It is the only way a virtio
-cache-pool vdisk becomes `fast`.
+**Changing a tier.** An operator edits a disk's tier in Settings → Storage
+(`PATCH /platform/storage/disks/:id`); the choice sticks across inventory changes and affects new
+services only. That is how an Unraid cache-pool vdisk, which reports itself as rotational, becomes
+`fast`.
+
+For placement constraints (§3.4) a node's facts are the tiers of its disks plus `remote` when one
+of them is a network share.
 
 ### 3.4 Placement (H4)
 
@@ -220,7 +218,7 @@ shorthands.
 interface PlacementSpec {
   node?: string; zone?: string | string[];                    // hard pin; zone restriction
   roles?: Role[]; labels?: Record<string, string>;            // derived from type; all must match
-  volumeClass?: 'fast' | 'bulk' | 'remote'; volumeId?: string; // volume pins its node (D74)
+  volumeClass?: 'fast' | 'bulk' | 'remote'; volumeId?: string; // disk tier or id; an id pins its node (D169)
   spread?: 'node' | 'zone'; near?: string;                    // replica constraint; locality hint
 }
 ```
@@ -254,7 +252,7 @@ failover reserve must still fit the largest node's reservations, or the placemen
 
 ```
 placement refused for database "orders" (data, zone cloud-b, 2048 MiB, 500 millicores, a
-fast volume): edge memory 512/1024 MiB free; edge-b no mounted fast volume; homelab draining
+fast disk): edge memory 512/1024 MiB free; edge-b no fast disk; homelab draining
 ```
 
 REST returns `{ error: "placement_refused", resource, requirements, nodes: [{id, name, reason}] }`
@@ -278,7 +276,7 @@ re-evaluated only on deploy, scale, **Rebalance** and failover.
 | Ingress and static sites | `ingress` | Public address or tunnel, stable uplink | Every ingress node serves every route and static release (§7) |
 | Control plane, ClickHouse | `control` | 2 GB RAM, a zone distinct from the primary's; ClickHouse only where 300–800 MB is spare | Primary and standby in different zones (§6); telemetry is optional (D101) |
 | Process and container apps | `compute` | `near` their database; `spread` for replicas | Short data hop, spread failure |
-| Postgres, MySQL, MariaDB, MongoDB, Valkey, Redis | `data` | A `fast` volume with RAM headroom | Parity fsyncs make commit latency unpredictable; replica traffic crosses nodes |
+| Postgres, MySQL, MariaDB, MongoDB, Valkey, Redis | `data` | A `fast` disk with RAM headroom | Parity fsyncs make commit latency unpredictable; replica traffic crosses nodes |
 | RustFS | `data` | `bulk` for capacity, `fast` for small hot buckets | Objects tolerate seek latency; databases do not |
 | Builds | `build` | `can_build`, most cores, not an ingress node when another builder exists | Bursty; must not starve ingress (D47) |
 | GPU jobs | `compute` | `skiff.io/gpu=nvidia` | The label is the only proof the device is visible |
@@ -315,10 +313,12 @@ fleet keeps that reserve.
 
 ### 3.7 Unraid specifics
 
-- **Databases:** a vdisk on the SSD **cache pool**, or a passed-through NVMe, adopted as a `fast`
-  volume. The vdisk reports `rotational=1`, so it needs the §3.3 override, never the parity array.
-- **Bulk data:** an array share passed with **virtiofs** (Unraid 7) is local-path `bulk`; the same
-  share exported over NFS is `remote` (D77). Both serve the same data; their classes differ.
+- **Databases:** a vdisk on the SSD **cache pool**, or a passed-through NVMe, added as a `fast`
+  disk. The vdisk reports `rotational=1`, so set its tier to `fast` by hand (§3.3); never use the
+  parity array.
+- **Bulk data:** an array share passed with **virtiofs** (Unraid 7) is a local `bulk` disk; the same
+  share exported over NFS is a `bulk` network disk (D143). Both serve the same data; only the second
+  is `remote`.
 - **GPU:** VFIO passthrough, so the VM reports `skiff.io/gpu=nvidia`; without the device the label
   disappears and GPU placement refuses rather than landing silently.
 - **Boot order:** VM autostart after the array starts. Mount units fail closed (D76), so a VM that
@@ -395,10 +395,10 @@ health host; helper reports its version; clock skew under 120 s; the volume inve
 agent declares `ha-epoch` and `l4-endpoints`. Failure leaves the node `online` but
 **placement-ineligible** and names the check; a wrong clock cannot hold a lease.
 
-**Label and admit.** `PATCH /nodes/:id` sets `zone`, `roles`, `labels`, `lanEndpoint`, default
-volume and class overrides (§3.2/§3.3); every edit is audited as `node.update`. A node is eligible
-when it is `online`, verified, has no `hardware_error` and passes admission for the resource; the
-dashboard shows **eligible** or the first blocking reason.
+**Label and admit.** `PATCH /nodes/:id` sets `zone`, `roles`, `labels` and `lanEndpoint` (§3.2);
+every edit is audited as `node.update`. Disk tiers are edited in Settings → Storage (§3.3). A node
+is eligible when it is `online`, verified, has no `hardware_error` and passes admission for the
+resource; the dashboard shows **eligible** or the first blocking reason.
 
 **Drain.** `POST /nodes/:id/drain` with mode `cordon`, `drain` or `evacuate`: **cordon** stops new
 placements; **drain** moves what can move; **evacuate** stops everything and accepts downtime for
@@ -638,7 +638,7 @@ Four layers, four failures, four recovery costs. A resource's HA level (§8.1) i
 
 | Layer | Protects against | Mechanism | RPO | RTO | Status |
 |---|---|---|---|---|---|
-| Disk | A failed drive | mdadm or a ZFS mirror/RAIDZ under a node volume (VOLUMES §4) | 0, writes are mirrored synchronously | 0, it serves degraded until the drive is replaced | Adopt exists; mdadm/ZFS provisioning planned (VOLUMES P2/P3) |
+| Disk | A failed drive | An mdadm array or a ZFS mirror/RAIDZ the OS assembles, used as a disk ([STORAGE.md](./STORAGE.md) §1) | 0, writes are mirrored synchronously | 0, it serves degraded until the drive is replaced | Using an assembled array exists; Skiff does not build arrays (D169) |
 | Service | A failed node | Postgres replicas (C7), bucket replication (C9), Litestream (C9 for app SQLite) | Replicas: the lag, ≈ 0 with `sync`; app SQLite: ≈ 1 s; buckets: the sync interval | Manual promote: minutes; control plane `auto`: TTL + replay ≈ 45 s (§6.3) | `skiff-litestream.service` exists for the control plane's SQLite; the app paths are planned |
 | Zone | A failed site | The same replicas in another zone (`spread: zone`, §3.4) | As the service row, plus WAN exposure | As the service row; `L3` ingress moves in 5–10 s (§8.1) | Plan (C7–C9) |
 | Backup | Deletion, corruption, ransomware | Verified logical dumps (D83), PITR where enabled, app-volume snapshots (C9) | 24 h at the default daily policy; ≤ 1 min with PITR | Hours, dominated by download and replay | Dumps exist; PITR is flag-gated and unproven ([PITR.md](./PITR.md)); snapshots are metadata only |
@@ -653,15 +653,15 @@ run. No RTO here is measured; C9 records one per drill.
 ### 5.2 Cluster shares (H7)
 
 A **share** is a platform-level network filesystem defined once and mounted on whichever nodes need
-it. This is C3. The registry, the mount verbs and node mounting exist; a mounted share reaches
-workloads as a linked `remote` node volume (VOLUMES §5, D143), and `backing: share` app-volume
-attachments with per-org subpaths are still to come.
+it. This is C3. The registry, the mount verbs and node mounting exist; a mounted read-write share
+reaches workloads as a `bulk`, network disk ([STORAGE.md](./STORAGE.md) §3, D143), and
+`backing: share` app-volume attachments with per-org subpaths are still to come.
 
 ```ts
 interface Share {
   id: string; name: string;                      // name: 3–40 chars, unique per install
   protocol: 'nfs' | 'smb'; server: string; export: string;   // nfs: host + /export
-  options: AllowlistedOptions;                   // D77 rules, never a free-form string
+  options: AllowlistedOptions;                   // D143 rules, never a free-form string
   credentialsRef: string | null;                 // opaque id, never the value
   zone: string;                                  // derived from the server node
   grants: { orgId: string; mode: 'ro' | 'rw' }[];
@@ -676,7 +676,7 @@ grant must name an existing org and stay inside the share's root.
 
 **Credentials** are write-only: sealed with the org key and written as a `0400` root file at
 `/run/skiff/shares/<id>.cred` at mount time. The workload never sees them, and the value never
-enters desired state, the disk cache, logs, MCP or audit arguments (D18, D43, D77).
+enters desired state, the disk cache, logs, MCP or audit arguments (D18, D43, D143).
 
 **Mount lifecycle.** The helper owns the mount; the agent reports `mountStatus` and the last error.
 
@@ -812,8 +812,9 @@ incremental snapshots to a standby node's volume, kept at rest under
    diverged directories is not solvable.
 4. **Level.** The RPO is the interval, so this is `L2` for node loss with a manual promotion only; a
    zone loss takes both copies when the standby is in the same zone. The shadow copy is inert until
-   promotion, so it is not a continuous replica. VOLUMES §14 pins an app volume to one node today;
-   this protocol relaxes the pin, and it ships with the mechanism rather than before it.
+   promotion, so it is not a continuous replica. [VOLUMES.md](./VOLUMES.md) pins an app volume to
+   one node today; this protocol relaxes the pin, and it ships with the mechanism rather than before
+   it.
 
 **Recommendation.** A single SQLite file gets Litestream (`L1`); a file-heavy single-writer volume
 gets snapshot shipping (`L2` for node loss, RPO = interval); media and drop folders get a share
@@ -1277,7 +1278,7 @@ Today every workload is effectively `L0`; §8.2–§8.6 are the plan, from C4, C
 | `L0` single | One copy on one node. | Nothing; today's behaviour. | One memory reservation. | Down until the node returns or an operator moves it (D97). | Until repaired. |
 | `L1` recoverable | `L0` plus a verified backup and a scripted restore. | A backup target and a passing restore drill: a D83 dump for a database, Litestream for a SQLite app volume. | Backup storage and a scheduled dump; 1–2% CPU while it runs. | Restore is a human action into a new instance. Litestream restores a file; it is not a warm standby. | Minutes to hours; RPO is the backup interval. |
 | `L2` failover, replica | A warm standby or replica in another node or zone, manual or opt-in automatic promotion. | A second `data`/`compute` node in another zone, the engine's replication (§9.2), a drilled promotion. | A second memory reservation and a copy of the data; `sync` Postgres pays the zone RTT per commit. | 1–2 replicas, caught up before promotion. No automatic move back (§8.3). No protection from a bad release. | Workload replica 5–10 s after promotion; Postgres 90 s target / 2 min budget after detection; RPO is replication lag, 0 with `sync`. |
-| `L2` failover, snapshot | Snapshot shipping to a standby, mounted read-write only on promotion. | The above, plus `zfs send`/`btrfs send` or `rsync`. | A second copy of the volume. | **Not available today**: an app volume pins its project to one node (VOLUMES §14, OPS §4.2); C9 adds mount-on-promotion. | After the mount; RPO is the snapshot interval. |
+| `L2` failover, snapshot | Snapshot shipping to a standby, mounted read-write only on promotion. | The above, plus `zfs send`/`btrfs send` or `rsync`. | A second copy of the volume. | **Not available today**: an app volume pins its project to one node ([VOLUMES.md](./VOLUMES.md), OPS §4.2); C9 adds mount-on-promotion. | After the mount; RPO is the snapshot interval. |
 | `L3` active | Several active copies across zones behind the ingress load balancer. | ≥2 replicas, `ingress: http`, two verified-distinct zones, no `singleton`, no app volume, no share confined to one zone. | n × the memory reservation across the fleet, plus route fan-out on every ingress node (§7.1). | Traffic failover only: a bad release or a `DROP TABLE` reaches every copy. Capacity restoration needs headroom. Two real zones, not two nodes in one house. | Traffic 5–10 s; capacity ≥ grace + placement + start, 2–3 min; stateless. |
 
 `L3` for a **worker** means active capacity, not traffic failover: copies have no route (D89), each
@@ -1343,7 +1344,7 @@ are in §12. Health, policy and retries are §8.6.
    Re-placement waits `grace`, default 120 s from the last heartbeat — the same origin and duration as
    the offline alert, so the two cannot disagree about how long a node has been gone.
 2. **Decide.** The level is `L2` or `L3`, `failover: auto` is set, and nothing pins the resource: not a
-   `singleton` (§8.4), not a database primary (§9.3), not a volume (D74), not a share in the failed
+   `singleton` (§8.4), not a database primary (§9.3), not on a local disk (D169), not a share in the failed
    zone (§5.2), and until C2 not an attachment on the failed node (D56).
 3. **Order.** Stateless HTTP copies first, workers next, singletons last after lease expiry plus
    margin. Within a workload the lowest index moves first, so the log stream keeps its shape.
@@ -1601,10 +1602,11 @@ one dataset two authorities.
 
 ### 9.2 Postgres replicas (H16)
 
-**Roles and layout.** `database_replicas` holds one row per replica (node, volume, slot, role
+**Roles and layout.** `database_replicas` holds one row per replica (node, disk, slot, role
 `primary`/`replica`/`fenced`, replayed LSN, lag, state). `databases.primary_generation` counts promotions;
 `databases.durability` is `async` or `sync`. No two members share a node, and a replica node needs the
-`data` role and a `fast` volume.
+`data` role and, unless the add names another target, a ready disk of the primary's tier (the system
+disk when the primary is on one; D169).
 
 **Bootstrap.** The helper verb `POST /v1/workloads/:id/replica/init` fills an empty data directory with
 `pg_basebackup -D /data/pgdata -X stream -c fast -R --checkpoint=fast --max-rate=50M` against the primary,
@@ -1837,7 +1839,7 @@ objects are gone; the row lives in the control plane, the bytes do not. **Plan (
 
 | Option | Protects against | Does not protect against | Status |
 |---|---|---|---|
-| Multiple drives, one node | One failed drive, with degraded reads during rebuild | Node, PSU or zone loss | Plan (VOLUMES P4) |
+| Multiple drives, one node | One failed drive, with degraded reads during rebuild | Node, PSU or zone loss | Plan |
 | Distributed RustFS, one zone | One failed node: serves and rebuilds | Zone loss; any node over a WAN | Plan; no multi-node schema |
 | Bucket replication, two zones | Zone loss, with RPO = replication lag | Deletion, corruption, metadata, IAM | Plan: C9 |
 
@@ -2057,7 +2059,7 @@ admin's own dashboard session, never an API key, an OAuth token or MCP (`canAdmi
 
 | Page | Who | Content | Status |
 |---|---|---|---|
-| **Topology** (`/topology`) | platform admin, read | zones → nodes (hardware, roles, labels) → volumes and shares → services; overlay links with RTT and handshake age; level and effective level per resource; the blast-radius simulator | Plan (C0) |
+| **Topology** (`/topology`) | platform admin, read | zones → nodes (hardware, roles, labels) → disks and shares → services; overlay links with RTT and handshake age; level and effective level per resource; the blast-radius simulator | Plan (C0) |
 | **Node detail** (`/nodes`) | platform admin | today: status, stats, update, drain/resume, token rotation, storage, edge hand-off. Plan: Hardware tab, zone/roles/labels editing, endpoint and peer list | Today, extended in C0/C1 |
 | **Resource HA card** (project, database, storage) | org reader | level, replicas with node and zone, lag, effective level, **Promote**/**Switchover**, and why a higher level is unavailable | Plan (C6–C7) |
 | **Settings → High availability** | platform admin, session | ingress driver, standby enrolment and state, failover modes, headroom reserve, drill schedule and last result | Today: ingress driver and nodes, the failover controller (switch, lease, policy), node silence, ingress rotation, database candidates and failover history (C8). Standby, modes, headroom and drills: plan (C6) |
@@ -2076,7 +2078,7 @@ the existing error shape and add `412 precondition_failed` for a stale `If-Match
 | GET | `/ha/status` | platform admin | today: the failover controller's `FailoverStatusView` (switch, lease epoch and holder, policy, per-node silence, ingress record set, database candidates, last 50 events). Plan: role and lag per control node, `canPromote` | Today (C8) / plan (C6) |
 | POST | `/ha/promote` | platform admin **session** | `If-Match: "<etag>"`, `{ expectEpoch, dryRun?, reason? }` | Plan |
 | PATCH, POST | `/nodes/:id`, `/nodes/:id/drain`, `/resume` | platform admin **session** | today `{ name, publicAddress, sliceMemoryMb, canBuild, … }` and a drain status bit; plan adds `{ zone, roles, labels, lanEndpoint }` and `{ mode: "cordon" \| "drain" \| "evacuate", deadlineSeconds? }` | Today / plan |
-| GET, POST | `/databases/:name/replicas` | `database:read` / `database:update` | list `{ node, zone, state, lagBytes, lagSeconds, slot }`; add `{ node, volume?, mode: "async" \| "sync" }` | Plan |
+| GET, POST | `/databases/:name/replicas` | `database:read` / `database:update` | list `{ node, zone, state, lagBytes, lagSeconds, slot }`; add `{ node, storage?, mode: "async" \| "sync" }` | Plan |
 | POST | `/databases/:name/promote`, `/switchover` | `database:update` | `If-Match: <primary_generation>`, `{ acceptDataLoss? }`; switchover waits for LSN parity | Plan |
 | GET, POST, DELETE | `/shares`, `/ha/certificates` (+ `/rotate`) | platform admin **session** | the share resource (H7); per-ingress certificate state and the `acme` lease holder | Plan |
 
@@ -2257,10 +2259,9 @@ alias.
 | `private_cidr`, `wg_public_key`, `network_mode` | TEXT NULL | — | NULL; `network_mode` is `skiff` or `external`, NULL = legacy host-provisioned |
 | `cpu_budget_millis` | INTEGER NULL | — | NULL; derived from `hardware.cores × 1000` |
 
-`node_volumes` gains `class TEXT NOT NULL DEFAULT 'unknown' CHECK (class IN ('fast','bulk','remote','unknown'))`,
-`class_override TEXT`, `class_reason TEXT`, `class_source TEXT NOT NULL DEFAULT 'derived'` (C0). The
-migration sets `remote` for `remote = 1`; a sweep derives the rest, and a managed database create
-refuses `unknown`. C2 and C5 add `node_certificates` and `ingress_certificates`, sealed material only
+`node_volumes` (the disk registry) gained `class` and `class_override` in C0 (migration 0040);
+D169 replaced them with `tier` (`fast`\|`bulk`) and `tier_set`, carried over from the old class
+(migration 0083, [STORAGE.md](./STORAGE.md) §2). The class columns are no longer read. C2 and C5 add `node_certificates` and `ingress_certificates`, sealed material only
 (§4.3, §7.3).
 
 `settings` is the existing `key`/`value`/`updated_at` table, unused by HA today: platform config lives
@@ -2283,7 +2284,7 @@ desired-state field, so it needs no agent capability. `spread` is a hard filter,
 interface PlacementSpec {
   node?: string; zone?: string | string[];                     // hard pin; zone restriction
   roles?: Role[]; labels?: Record<string, string>;             // implied by type; all must match
-  volumeClass?: 'fast' | 'bulk' | 'remote'; volumeId?: string; // a volume pins its node (D74)
+  volumeClass?: 'fast' | 'bulk' | 'remote'; volumeId?: string; // disk tier or id; an id pins its node (D169)
   spread?: 'node' | 'zone'; near?: string;                     // replica filter; locality hint
 }
 interface HaPolicy {
@@ -2468,7 +2469,7 @@ and other work keeps landing, so a hard-coded number here would be wrong by the 
 
 | Phase | Goal and scope | Deliverables and primary files | Migration, flag, depends |
 |---|---|---|---|
-| **C0** | Hardware facts and derived labels, zone/roles/labels editing, volume classes, `PlacementSpec` filter and score with explained refusals, CPU budget, read-only Topology and blast radius | `hardware.v1`, `PATCH /nodes/:id` fields, class sweep, `GET /topology`, `/topology/blast-radius`; `packages/contracts/src/{agent,node,features}.ts`, `packages/core/src/{nodes,placement,volumes}.ts`, `apps/agent/src/{stats,main}.ts`, `apps/control-plane/src/routes/(dashboard)/{nodes,topology}` | `NNN1_nodes_topology.sql`, `NNN2_placement.sql`, `NNN3_volume_class.sql`; `SKIFF_FEATURE_PLACEMENT_SPEC`; none |
+| **C0** | Hardware facts and derived labels, zone/roles/labels editing, volume classes (disk tiers since D169), `PlacementSpec` filter and score with explained refusals, CPU budget, read-only Topology and blast radius | `hardware.v1`, `PATCH /nodes/:id` fields, class sweep, `GET /topology`, `/topology/blast-radius`; `packages/contracts/src/{agent,node,features}.ts`, `packages/core/src/{nodes,placement,volumes}.ts`, `apps/agent/src/{stats,main}.ts`, `apps/control-plane/src/routes/(dashboard)/{nodes,topology}` | `NNN1_nodes_topology.sql`, `NNN2_placement.sql`, `NNN3_volume_class.sql`; `SKIFF_FEATURE_PLACEMENT_SPEC`; none |
 | **C1** | Plan 23's single hub generalised to hubs plus a LAN mesh; one-command join; `private_address`; peer health; external networks unchanged | Helper `wireguard/{keygen,apply,peers,status}` and `network/{allow,probe-mtu}`, join exchange, install script; new `apps/helper/src/{wireguard,network}.ts`, `apps/agent/src/join.ts`, `packages/core/src/nodes.ts`, `scripts/install/{main.ts,node.sh}` | `NNN4_private_network.sql`; `SKIFF_FEATURE_MANAGED_OVERLAY`; C0 |
 | **C2** | Per-install CA, mTLS, loopback consumer port and overlay provider listener, cross-node database and private-storage attachments; S1 picks `caddy-l4` or the Bun forwarder | `node_certificates`, `service_endpoints`, port allocation, one nftables rule per attachment; `packages/contracts/src/{agent,database}.ts`, `packages/core/src/{databases,storage-instances}.ts`, `apps/agent/src/{caddy-config,caddy}.ts`, `docker/node/Dockerfile` | `NNN5_node_certificates.sql`, `NNN6_service_endpoints.sql`; `SKIFF_FEATURE_SERVICE_ENDPOINTS`; C1, S1 |
 | **C3** | `shares` resource, on-demand NFS/SMB mounts, `backing: share`, credential refs, blast-radius inheritance | Share CRUD and grants, mount lifecycle and probes, credential handoff, Shares page; new `packages/core/src/shares.ts`, `packages/contracts/src/{app-volume,agent}.ts`, `apps/helper/src/shares.ts` | `NNN7_shares.sql`; `SKIFF_FEATURE_CLUSTER_SHARES`; C0, C1 |

@@ -219,10 +219,11 @@ Mirrors databases (D59):
 - **Bucket delete**: refused if the bucket isn't empty, unless `--force` (a human with
   `storage:delete`, typed confirmation in the dashboard; never over MCP).
 
-**Data location.** By default the data dir lives under the helper's state root. An instance can
-instead be placed on a node volume — pass `volume` on create or set the node's default volume; its
-data then lives at `<mount>/skiff/<id>` (D74, D78). The node verifies the mount before every start
-and refuses to run if it is gone (D76). See [VOLUMES.md](./VOLUMES.md).
+**Data location.** An instance goes on the storage target its create request names (`storage`:
+`system`, `fast`, `bulk` or a disk name; CLI `--disk`), else the `object-storage` default in
+Settings → Storage, else the system disk, where the data dir lives under the helper's state root.
+On a disk its data lives at `<mount>/skiff/<id>` (D169, D78). The node verifies the mount before
+every start and refuses to run if it is gone (D76). See [STORAGE.md](./STORAGE.md).
 
 ## 8. Surfaces
 

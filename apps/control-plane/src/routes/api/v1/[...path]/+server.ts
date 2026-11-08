@@ -24,18 +24,15 @@ import {
 	flowStatuses,
 	isFlowId,
 	type FlowStatus,
-	volumeAdoptSchema,
-	volumeUpdateSchema,
 	shareCreateSchema,
 	shareUpdateSchema,
 	shareGrantsSchema,
 	shareMountCreateSchema,
 	shareMountLinkSchema,
 	storageOnboardingSchema,
-	storagePoolCreateSchema,
-	storagePoolUpdateSchema,
 	storageDefaultsSchema,
-	storageVolumePoolSchema,
+	diskAddSchema,
+	diskUpdateSchema,
 	type ItemStatus,
 	type ItemVerdict,
 	type OperationKind,
@@ -317,48 +314,35 @@ const api: RequestHandler = async (event) => {
 			return json({ error: 'not_found' }, 404);
 		}
 
-		// --- storage pools and default storage (platform admin; docs/STORAGE.md, D144) -------
+		// --- disks and default storage (platform admin; docs/STORAGE.md, D169) ---------------
 		// Under /platform/storage: /storage is object storage.
 		if (segments[0] === 'platform' && segments[1] === 'storage') {
 			const sub = segments.slice(1);
 			if (sub.length === 1) {
-				if (method === 'GET') return core.storagePools.overview(principal);
+				if (method === 'GET') return core.disks.overview(principal);
 				return json({ error: 'method_not_allowed' }, 405);
 			}
-			if (sub[1] === 'pools') {
+			if (sub[1] === 'disks') {
 				if (sub.length === 2) {
-					if (method === 'POST')
-						return json(core.storagePools.createPool(principal, await readJson(request, storagePoolCreateSchema)), 201);
+					if (method === 'POST') return json(core.disks.add(principal, await readJson(request, diskAddSchema)), 201);
 					return json({ error: 'method_not_allowed' }, 405);
 				}
 				if (sub.length === 4 && sub[3] === 'profile') {
-					if (method === 'POST') return json(core.storagePools.profilePool(principal, sub[2]!), 202);
+					if (method === 'POST') return json(core.disks.profile(principal, sub[2]!), 202);
 					return json({ error: 'method_not_allowed' }, 405);
 				}
 				if (sub.length === 3) {
-					if (method === 'PATCH')
-						return core.storagePools.updatePool(principal, sub[2]!, await readJson(request, storagePoolUpdateSchema));
-					if (method === 'DELETE') return core.storagePools.deletePool(principal, sub[2]!);
+					if (method === 'PATCH') return core.disks.update(principal, sub[2]!, await readJson(request, diskUpdateSchema));
+					if (method === 'DELETE') return core.disks.remove(principal, sub[2]!);
 					return json({ error: 'method_not_allowed' }, 405);
 				}
 			}
 			if (sub[1] === 'defaults' && sub.length === 2) {
-				if (method === 'PUT') return { defaults: core.storagePools.setDefaults(principal, await readJson(request, storageDefaultsSchema)) };
-				return json({ error: 'method_not_allowed' }, 405);
-			}
-			if (sub[1] === 'volumes' && sub.length === 4 && sub[3] === 'profile') {
-				if (method === 'POST') return json(core.storagePools.profileVolume(principal, sub[2]!), 202);
-				return json({ error: 'method_not_allowed' }, 405);
-			}
-			if (sub[1] === 'volumes' && sub.length === 4 && sub[3] === 'pool') {
-				if (method === 'PUT') {
-					const input = await readJson(request, storageVolumePoolSchema);
-					return { pool: core.storagePools.setVolumePool(principal, sub[2]!, input.pool) };
-				}
+				if (method === 'PUT') return { defaults: core.disks.setDefaults(principal, await readJson(request, storageDefaultsSchema)) };
 				return json({ error: 'method_not_allowed' }, 405);
 			}
 			if (sub[1] === 'onboarding' && sub.length === 2) {
-				if (method === 'POST') return core.storagePools.setOnboarding(principal, await readJson(request, storageOnboardingSchema));
+				if (method === 'POST') return core.disks.setOnboarding(principal, await readJson(request, storageOnboardingSchema));
 				return json({ error: 'method_not_allowed' }, 405);
 			}
 			return json({ error: 'not_found' }, 404);
@@ -381,8 +365,8 @@ const api: RequestHandler = async (event) => {
 			}
 			if (segments.length === 3 && segments[2] === 'grants' && method === 'PUT')
 				return core.shares.setGrants(principal, name, await readJson(request, shareGrantsSchema));
-			// Mounts (docs/VOLUMES.md §5): POST /shares/:name/mounts, DELETE /shares/:name/mounts/:node,
-			// PUT|DELETE /shares/:name/mounts/:node/volume to link or unlink it as a node volume.
+			// Mounts (docs/STORAGE.md §3, D143): POST /shares/:name/mounts, DELETE /shares/:name/mounts/:node,
+			// PUT|DELETE /shares/:name/mounts/:node/disk to use the mount as a disk or stop using it as one.
 			if (segments[2] === 'mounts') {
 				if (segments.length === 3) {
 					if (method === 'POST')
@@ -394,7 +378,7 @@ const api: RequestHandler = async (event) => {
 					if (method === 'DELETE') return core.shares.unmount(principal, name, node);
 					return json({ error: 'method_not_allowed' }, 405);
 				}
-				if (segments.length === 5 && segments[4] === 'volume') {
+				if (segments.length === 5 && segments[4] === 'disk') {
 					if (method === 'PUT') return core.shares.link(principal, name, node, await readJson(request, shareMountLinkSchema));
 					if (method === 'DELETE') return core.shares.unlink(principal, name, node);
 					return json({ error: 'method_not_allowed' }, 405);
@@ -428,25 +412,6 @@ const api: RequestHandler = async (event) => {
 			if (segments.length === 2 && method === 'PATCH')
 				return core.nodes.update(principal, nodeId, await readJson(request, nodeUpdateSchema));
 			if (segments.length === 2 && method === 'DELETE') return core.nodes.remove(principal, nodeId);
-			// --- node volumes (docs/VOLUMES.md, D72) ---------------------------
-			if (segments[2] === 'volumes') {
-				if (segments.length === 3 && method === 'GET') return core.volumes.list(principal, nodeId);
-				if (segments.length === 3 && method === 'POST')
-					return json(
-						core.volumes.adopt(principal, nodeId, await readJson(request, volumeAdoptSchema)),
-						201,
-					);
-				if (segments.length === 4 && method === 'PATCH')
-					return core.volumes.update(
-						principal,
-						nodeId,
-						segments[3]!,
-						await readJson(request, volumeUpdateSchema),
-					);
-				if (segments.length === 4 && method === 'DELETE')
-					return core.volumes.remove(principal, nodeId, segments[3]!);
-				return json({ error: 'not_found' }, 404);
-			}
 			if (segments[2] === 'drain' && method === 'POST')
 				return core.nodes.setDraining(principal, nodeId, true);
 			if (segments[2] === 'resume' && method === 'POST')

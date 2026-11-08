@@ -204,18 +204,18 @@
 - [ ] MCP resource `skiff://dashboards/{id}` and a prompt template for "build a dashboard for …"
 - [ ] Per-panel `explain` tool: summarise what a panel shows over a range (trends, spikes) for incident triage
 
-## Node volumes ([VOLUMES.md](./VOLUMES.md))
-- [x] P0: `node_volumes`, per-instance `volume_id`, node default, inventory heartbeat, adopt an existing mount, fail-closed mount verification (D72, D74, D76, D78)
-- [x] P0: helper `volumes.inventory`/`volumes.verify`, `<mount>/skiff/<id>` data dirs, storage/database create `volume`, REST
-- [ ] P0: dashboard volumes page (adopt/set default/usage) and `--volume` on the CLI
-- [ ] P1: guided local format (GPT + ext4/xfs) with plan/confirm/apply (D73, D75)
-- [ ] P2: LVM and mdadm provisioning; array/pool health alerts
-- [ ] P3: ZFS pools/datasets; LUKS2 with keyfile/TPM2
-- [ ] P4: native NFS/CIFS creation with sealed credentials; migration between volumes (D77, D79); multi-drive RustFS
-- [ ] Volume snapshots/backups, quota per volume, SMART health, instance move UI
+## Disks ([STORAGE.md](./STORAGE.md))
+- [x] Disks with a `fast`/`bulk` tier derived from the hardware and editable; the system disk on every node; fail-closed mount verification (D72, D76, D78, D169)
+- [x] One default per kind (databases, object storage, queues, app volumes, builds, site data) in Settings → Storage and the setup Storage step; `storage` on create, replica add, move and restore (REST, MCP), `--disk` on the CLI
+- [x] **Use this disk**: register a mounted filesystem at once, or mount an unmounted ext/xfs/btrfs/f2fs filesystem by UUID at `/mnt/skiff-disks/<name>`; everything else folded under **Not usable** with a reason. Skiff never formats
+- [x] Network shares become `bulk`, network disks once mounted (D143)
+- [x] Disk profiling: sequential, random and sync-write benchmarks (fio, `dd` fallback)
+- [ ] `images` (podman `graphroot`) and `backups` (local backup target) storage kinds; capacity alerts per tier
+- [ ] Move a resource between disks on one node (stop → copy → re-point → start, D79)
+- [ ] Systemd mount units for disks Skiff mounts (today the agent remounts after boot)
 
 ## Clustering & HA ([CLUSTERING.md](./CLUSTERING.md), D107)
-- [ ] C0: hardware report and derived labels, zones/roles/labels, volume classes, constraint placement with explained refusals, CPU budget, Topology page and blast radius
+- [ ] C0: hardware report and derived labels, zones/roles/labels, disk tiers, constraint placement with explained refusals, CPU budget, Topology page and blast radius
 - [ ] C1: Skiff-managed overlay (plan 23) generalised to hubs + LAN mesh; `private_address`; peer health
 - [ ] C2: node CA + mTLS, loopback service endpoints (`caddy-l4` or Bun forwarder), cross-node database/storage attachments
 - [ ] C3: cluster shares (NFS/SMB) mounted on demand, `backing: share`, blast-radius inheritance

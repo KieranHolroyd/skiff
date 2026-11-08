@@ -61,7 +61,7 @@ Bindings map onto services Skiff already runs:
 | R2 | Managed RustFS (D62) |
 | Hyperdrive | Managed Postgres through PgBouncer (D85) |
 | Analytics Engine | The ClickHouse telemetry store (D101) |
-| Durable Objects | workerd's own SQLite storage on a volume (D72) |
+| Durable Objects | workerd's own SQLite storage on the node's disk (D72) |
 | Secrets | The existing activation path (D18) |
 
 Cron runs from the node, in keeping with pull, not push. The control plane stays out of the
@@ -284,7 +284,7 @@ start; see §4.7.
 | Service bindings (same project) | 1 | Named entrypoints in the same host | JS RPC works within one process |
 | Service bindings (other project) | 3 | An `external` service over the other host's socket, or the overlay for another node | **fetch only.** JS RPC across processes needs cluster channel tokens (phase 4). |
 | Bindings to Skiff apps | 1 | An `external` service to the app's socket or loopback port | The way to reach containers (§1.1 fact 5) |
-| Durable Objects (SQLite) | 2 | Native `durableObjectStorage.localDisk` on the project's volume (D72/D74) | Single node until phase 4. Alarms and hibernating WebSockets work in-process. |
+| Durable Objects (SQLite) | 2 | Native `durableObjectStorage.localDisk` on the project's node, on its disk (D72, D169) | Single node until phase 4. Alarms and hibernating WebSockets work in-process. |
 | R2 | 2 | An `r2Bucket` binding to an R2-gateway service that speaks S3 to a managed RustFS instance, using an attachment-scoped key (D66) | Port R2 semantics from Miniflare's `r2/bucket.worker.ts` |
 | Hyperdrive | 2 | workerd's `hyperdrive` binding pointing at an `external` server for the database's PgBouncer (`127.0.0.1:<port>`) | The connection string comes from the attachment |
 | KV | 2 | A KV binding service backed by Durable Object SQLite (from Miniflare's `kv/namespace.worker.ts`) | Strongly consistent on one node, which exceeds Cloudflare's guarantee, so it is safe |
@@ -364,7 +364,7 @@ process apps as well. It is not a Functions-only feature.
 ### 4.9 State, placement and HA (FN11)
 
 - **Phases 1–3: node-local state.** Durable Object, KV and D1 data lives at
-  `<volume>/skiff/fn-<workload-id>/`. The rules a running app follows apply: it never changes node
+  `<disk>/skiff/fn-<workload-id>/`. The rules a running app follows apply: it never changes node
   on its own, and moving it is stop → copy → start (D97). Backups take SQLite snapshots through
   the D83 backup path to the platform `ObjectStore`, with restore to a new project.
 - **Stateless functions** (no Durable Object, KV or D1 bindings) can run `replicas > 1`

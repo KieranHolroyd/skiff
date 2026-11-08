@@ -68,8 +68,7 @@ export const nodes = sqliteTable(
 		storageBuildDir: text('storage_build_dir'),
 		/** Last report from the node's skiff-storage.service (`NodeStorageStatus`). */
 		storageStatusJson: text('storage_status_json'),
-		/** Volume new managed instances use when they name none (D74). */
-		/** Latest raw volume inventory (`VolumeInventory`), for the adopt/provision wizard. */
+		/** Latest raw volume inventory (`VolumeInventory`), from which Settings → Storage lists disk candidates. */
 		diskInventoryJson: text('volume_inventory_json'),
 		/** Capabilities from the last heartbeat (JSON array); `[]` for agents that predate them. */
 		capabilitiesJson: text('capabilities_json'),
@@ -531,8 +530,8 @@ export const registryPins = sqliteTable(
 
 /**
  * Project-owned application volumes (plan 07, docs/VOLUMES.md). Distinct from `node_volumes`:
- * an app volume is the user-facing resource a workload mounts, backed by a node volume or the
- * helper's state directory. The host path is derived on the node and never stored here.
+ * an app volume is the user-facing resource a workload mounts, on a disk or the helper's state
+ * directory (the system disk). The host path is derived on the node and never stored here.
  */
 export const appVolumes = sqliteTable(
 	'app_volumes',

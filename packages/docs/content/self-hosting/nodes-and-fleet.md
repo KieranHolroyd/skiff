@@ -178,54 +178,71 @@ The flow has a few limits you may notice:
 
 Message bodies are cut to 16 KiB in a peek. A test request to a function can carry up to 1 MiB of body, and the response is cut at 256 KiB.
 
-## Storage
+## Disks
 
-Skiff asks where data should live before you deploy anything. Setup ends with a **Storage** step, and you can change it at any time under **Settings → Storage**. If you skip it, everything stays on each node's system disk, as before.
+Skiff stores data on **disks**. A disk is one mounted filesystem on one node: a local drive or partition, an LVM volume, RAID array, ZFS dataset or LUKS device the OS has already set up, or a mounted [network share](#network-shares). Every node also has its **system disk**, the storage Skiff is installed on. It is always there and needs no setup.
 
-Storage is set up in three layers:
+Each disk is **fast** or **bulk**:
 
-| Layer | What it is | Example |
+| Tier | Meant for | Skiff picks it for |
 | --- | --- | --- |
-| Volume | One mounted filesystem on one node: a disk, an array, a ZFS dataset, or a [network share](#network-shares). | `homelab / disk1` at `/mnt/disk1` |
-| Pool | A named group of volumes, on one node or several. Every node's system disk is the built-in `system` pool. | `ssd` = the NVMe drive on every node |
-| Default | The pool each kind of service starts with. You can pick another when you create the service. | Databases → `ssd`; object storage → `hdd` |
+| Fast | Databases, queues and app volumes | SSD and NVMe drives |
+| Bulk | Object storage, builds and other large data | Spinning disks, network shares, and anything it cannot identify |
 
-1. Under **Disks and volumes**, each node lists its partitions. Select **Add as volume** on one. A partition that is already mounted is adopted where it is. An unmounted ext4, xfs, btrfs or f2fs partition is first mounted at `/mnt/skiff-disks/<name>`, and the node mounts it again after a reboot. Skiff never formats a disk; it only creates its own `skiff/` folder inside, so a partition with no filesystem, or a Windows (NTFS or exFAT) one, cannot be added. Create an ext4 or xfs filesystem on it first.
-2. Select **New pool**, name it (for example `ssd` or `hdd`) and tick its volumes. **Most free** spreads data across the volumes. **Fill up** uses one volume until it reaches the **Keep free** threshold, which defaults to 10 %.
-3. Under **Default storage**, pick a pool for each kind of service, or select **Suggest from pools**, then select **Save defaults**.
+Setup ends with a **Storage** step that shows the same page as **Settings → Storage**, and you can change it at any time. If you skip it with **Use the system disk for now**, everything stays on each node's system disk, as before.
 
-| Service | What it covers |
-| --- | --- |
-| Databases | Managed databases, read replicas and moved databases |
-| Object storage | S3-compatible storage instances |
-| Queues | Message broker data |
-| App volumes | Persistent directories mounted into apps |
-| Builds | Builder scratch space. Local volumes only. |
-| Site data | Agent state and the static release cache. Local volumes only. |
+### Add a disk
 
-To see how fast each pool really is, select **Profile** on the pool. Each volume in it is benchmarked in turn: sequential read and write speed, random 4 KiB read and write IOPS, and the latency of a synced write, which is what a database commit waits for. A profile takes about a minute per volume and works the disk hard while it runs, so pick a quiet moment. The IOPS figures come from `fio`. The installer installs it, and nodes installed earlier get it when they next update. On a node without it you still get sequential speed and synced-write latency. You can also profile a single volume, or a linked network share from **Settings → Network shares**.
+1. Go to **Settings → Storage**. Under **Disks**, each node lists its system disk, the disks already added, and an **Add a disk** list of filesystems Skiff can use.
+2. Select **Use this disk** on one. Give it a name and check the tier. Both are filled in for you.
+3. A filesystem that is already mounted is added at once. An unmounted ext4, ext3, ext2, xfs, btrfs or f2fs filesystem is mounted by the node at `/mnt/skiff-disks/<name>` and shows **Mounting…** until the node reports it. The node mounts it again after a reboot. A node with an older agent lists such a filesystem under **Not usable** until you update it, or until you mount it yourself under `/mnt`.
 
-You choose where a service is stored when you create it. The create forms for databases, object storage, queues and app volumes have a **Storage** field that lists your pools, with the default already selected. A service is only placed on a node that has a volume in its pool with room to spare. If no node does, it is not created. Skiff never puts it on a different pool instead.
+Skiff never formats, partitions or assembles anything. Everything the node reports that cannot be used is folded under **Not usable** with the reason: the OS's own filesystems, swap, members of an LVM group, RAID array, ZFS pool or LUKS container (the assembled device is listed on its own), drives with no filesystem, Windows (vfat, NTFS or exFAT) filesystems, and filesystems with no UUID. To use a blank drive, create an ext4 or xfs filesystem on it yourself first. Skiff only ever creates its own `skiff/` folder on a disk.
 
-Changing a default never moves anything that already exists. A database stays on the volume it was created on until you move it, and a moved database stays in its pool on the new node. Builds and site data have no create form, so they always use their default. Changing it moves those folders on each affected node, the same way as changing a node's storage paths.
+**Edit** renames a disk or changes its tier. A new tier applies to services created afterwards; nothing already stored moves. The remove button stops using a disk. It is refused while anything is stored on the disk. A disk Skiff mounted is unmounted by its node, and the files on it stay.
+
+### Defaults
+
+Under **Defaults**, pick where each kind of service goes when its create form is left alone: **System disk**, **Fast disks** or **Bulk disks**. Select **Suggest** to fill in the usual choices, then select **Save defaults**. A kind with no default uses the system disk.
+
+| Service | What it covers | Suggested |
+| --- | --- | --- |
+| Databases | Managed databases, read replicas and moved databases | Fast |
+| Object storage | S3-compatible storage instances | Bulk |
+| Queues | Message broker data | Fast |
+| App volumes | Persistent directories mounted into apps | Fast |
+| Builds | Builder scratch space. Local disks only. | Bulk |
+| Site data | Agent state and the static release cache. Local disks only. | System disk |
+
+You choose where a service is stored when you create it. The create forms for databases, object storage, queues and app volumes have a **Storage** field with the default already selected: the system disk, fast disks, bulk disks, or one disk by name. The CLI takes the same choice as `--disk` and the REST API as `storage`.
+
+- **Fast** or **Bulk** places the service only on a node that has a ready disk of that tier with room for it, keeping 10 % of the disk free. On that node it uses the disk with the most free space.
+- **A disk name** places the service on that disk's node.
+- If no node qualifies, the service is not created, and the error says why for each node. Skiff never puts a service on the other tier instead.
+
+Changing a default never moves anything that already exists. A service stays on the disk it was created on until you move it. A moved database or a new read replica keeps its tier on the new node unless you pick another target. Builds and site data have no create form, so they always use their default. Changing it moves those folders on each affected node, the same way as changing a node's storage paths. They skip network disks.
+
+### Benchmark a disk
+
+To see how fast a disk really is, select **Benchmark** on it. Skiff measures sequential read and write speed, random 4 KiB read and write IOPS, and the latency of a synced write, which is what a database commit waits for. A run takes about a minute and works the disk hard, so pick a quiet moment. The IOPS figures come from `fio`. The installer installs it, and nodes installed earlier get it when they next update. On a node without it you still get sequential speed and synced-write latency. Use the result to check the disk's tier.
 
 ## Network shares
 
-A NAS or file server can give a node more storage. Skiff mounts an NFS export or SMB share on the nodes you choose and then registers each mount as a node volume. Databases, storage instances and app volumes can be placed on that volume, the same as a local disk.
+A NAS or file server can give a node more storage. Skiff mounts an NFS export or SMB share on the nodes you choose. A read-write share then becomes a **bulk** disk on that node, marked *network*, and databases, storage instances and app volumes can be stored on it like any other disk. A read-only share is mounted for reading only and does not become a disk.
 
 1. Install the mount tools on each node that will mount the share: `nfs-common` (Debian and Ubuntu) or `nfs-utils` for NFS, and `cifs-utils` for SMB.
 2. Go to **Settings → Network shares → Add network share**. Enter the server and the export path. For SMB, enter the share name with a leading slash, such as `/media`, and a username and password. Leave **Mount read-only** off if Skiff should keep data on the share.
-3. Select **Mount on node** and pick the node. Keep **Link to Skiff as a volume once mounted** on.
+3. Select **Mount on node** and pick the node. The **Disk name** defaults to the share's name.
 
-The node mounts the share at `/mnt/skiff-shares/<share name>`. About a minute later the mount shows **Volume `<name>`**, and the volume is listed under that node on the **Nodes** page. If you mounted without linking, select **Link to Skiff** on the mount later.
+The node mounts the share at `/mnt/skiff-shares/<share name>`. About a minute later the disk appears under that node in **Settings → Storage**. To keep a share mounted without storing services on it, select **Stop using as disk** on the mount. **Use as disk** turns it back into a disk.
 
 - **Credentials.** SMB passwords are encrypted. The node fetches them only to mount and they are never shown again. To change them, select **Credentials**. A mount that failed retries straight away with the new ones.
-- **Failures.** A mount that fails shows the error on the mount, for example missing mount tools, a refused login, or a server the node cannot reach. Skiff retries after 5 s, 15 s and 45 s, then every 5 minutes. After a reboot the agent mounts the share again. Apps and databases on the volume do not start until it is mounted, so they never write to the node's own disk instead.
-- **Unmount.** Select **Unmount** on the mount. Skiff removes the volume first, and refuses while anything is still placed on it. It never forces an unmount and never deletes files on the share.
+- **Failures.** A mount that fails shows the error on the mount, for example missing mount tools, a refused login, or a server the node cannot reach. Skiff retries after 5 s, 15 s and 45 s, then every 5 minutes. After a reboot the agent mounts the share again. Apps and databases on the share do not start until it is mounted, so they never write to the node's own disk instead.
+- **Unmount.** Select **Unmount** on the mount. Skiff removes the disk first, and refuses while anything is still stored on it. It never forces an unmount and never deletes files on the share. A share's disk cannot be removed from **Settings → Storage**; unmount the share instead.
 - **Changes.** You cannot change a share's server, export or read-only setting, or delete it, while it is mounted on any node.
 
 > [!WARNING]
-> A network volume is slower than a local disk, and file locking depends on the server. Skiff does not back up what is stored on a share. Prefer local disks for databases. Export paths with spaces or `$` are not supported yet.
+> A network share is slower than a local disk, and file locking depends on the server. Skiff does not back up what is stored on a share. Prefer local fast disks for databases. Export paths with spaces or `$` are not supported yet.
 
 ## Draining and removing nodes
 
@@ -235,7 +252,7 @@ Every action on a node is in the **Actions** menu on the **Nodes** page. Each on
 - **Edit node** changes the name, the address the edge proxies to, the zone, roles, labels, slice budget and storage paths.
 - **Make this the edge** moves ingress to another online node. The new edge takes over every static site and the old edge becomes a worker that keeps what it hosts. Skiff does not move your DNS records or TLS for you, so point DNS at the new address yourself. Skiff refuses the change when `SKIFF_EDGE_NODE_ID` pins the edge in the control plane's environment.
 - **Rotate token** issues a new node token and shows it once. Put it in `SKIFF_NODE_TOKEN` in `/etc/skiff/agent.env` and restart `skiff-agent`. The old token stops working at once.
-- **Remove node** forgets a worker. Its token stops working, its volume registrations go, and any builds it had claimed return to the queue. Deployment and audit history keep the node's id. Removal is refused while the node still hosts projects, workloads, databases, storage instances, app volumes or a database move, and the error lists them. Removal never moves or deletes data. Move or delete those first. The edge cannot be removed. Removing a node changes nothing on the machine itself, so uninstall the agent there.
+- **Remove node** forgets a worker. Its token stops working, its disk registrations go, and any builds it had claimed return to the queue. Deployment and audit history keep the node's id. Removal is refused while the node still hosts projects, workloads, databases, storage instances, app volumes or a database move, and the error lists them. Removal never moves or deletes data. Move or delete those first. The edge cannot be removed. Removing a node changes nothing on the machine itself, so uninstall the agent there.
 
 ## Builders
 
@@ -246,8 +263,8 @@ Any node can be a Builder, which gives it the `build` role. Its `skiff-builder.s
 **Topology** shows the fleet as a platform-level view. It is for platform admins only, because it names every node, zone and workload.
 
 - **Zones** group nodes that share power, uplink and provider fate. Set a node's zone under **Edit node**. Nodes default to the `default` zone.
-- **Nodes** lists each node's status, mode, roles, labels, hardware, volumes, and its addresses on the public and overlay networks.
-- **Blast radius** counts what an outage of that node would take down: apps, databases, storage instances and volumes. The counts come from current placement, so they change when workloads move.
+- **Nodes** lists each node's status, mode, roles, labels, hardware, disks, and its addresses on the public and overlay networks.
+- **Blast radius** counts what an outage of that node would take down: apps, databases, storage instances and disks. The counts come from current placement, so they change when workloads move.
 
 Topology is read-only. To change roles, zones or labels, use **Edit node** on the **Nodes** page.
 

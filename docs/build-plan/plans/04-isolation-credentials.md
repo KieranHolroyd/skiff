@@ -84,8 +84,8 @@ Add `database_credentials` and `storage_keys` (see 02):
 - RustFS: enable SSE-S3 if the pinned build supports it; otherwise document the host-disk
   encryption requirement and add a `skiff doctor --data` check for LUKS/dm-crypt on the backing
   volume.
-- Postgres: data dir on a LUKS volume is the supported path (node volumes D72); document that an
-  unencrypted ext4 volume is a known gap.
+- Postgres: data dir on a disk the OS unlocked with LUKS is the supported path (D72, D169); document
+  that an unencrypted ext4 disk is a known gap.
 - Backups: client-side envelope encryption is in 01; do not rely on target at-rest encryption alone.
 - Key rotation: org key rotation runbook; re-seal rows; recovery kit update.
 

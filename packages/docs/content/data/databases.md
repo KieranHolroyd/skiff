@@ -56,6 +56,7 @@ This creates a PostgreSQL 17 database called `main` and attaches it to the `api`
 | `--memory <size>` | For example `512M` or `1G`. Defaults to the engine's default. |
 | `--cpus <n>` | CPU limit, for example `1` or `0.5`. Default `1`. |
 | `--storage <size>` | Storage budget for alerts and the dashboard gauge. Default `10G`. |
+| `--disk <where>` | Where the data is stored: `system`, `fast`, `bulk`, or a [disk](/self-hosting/nodes-and-fleet#disks) by name. Defaults to the **Databases** default in **Settings → Storage**. |
 | `--[no-]pooler` | PgBouncer sidecar. On by default; PostgreSQL only. |
 | `--extension <name>` | Enable an allowlisted extension. Repeatable; PostgreSQL only. |
 | `-y, --yes` | Skip confirmation. Required when stdin is not a terminal. |
@@ -63,13 +64,13 @@ This creates a PostgreSQL 17 database called `main` and attaches it to the `api`
 
 Names are 3 to 40 characters of lowercase letters, digits and single hyphens, starting and ending with a letter or digit. MySQL names can be at most 32 characters. A name is unique within your organisation, including databases in the trash. On PostgreSQL, names cannot start with `pg-`, and the reserved names `postgres`, `template0` and `template1` are refused. Each engine also reserves a few names of its own, which the dashboard and API reject.
 
-With `--placement auto`, Skiff picks the node with the most free memory budget. If no node has room for the requested memory, creation fails rather than overcommitting.
+With `--placement auto`, Skiff picks the node with the most free memory budget. If no node has room for the requested memory, creation fails rather than overcommitting. With `--disk fast` or `--disk bulk`, only nodes with a ready disk of that tier and room for the storage budget are considered, and Skiff never falls back to the other tier. A disk name places the database on that disk's node.
 
 ## Sizing
 
 - **Memory** is a hard limit enforced when the node runs the container. It must be at least the engine's minimum and at most 16 GB. Memory is counted against the node's budget when you create or grow a database.
 - **CPUs** can be fractional, up to 8.
-- **Storage** is a budget between 256 MB and 1 TB, with a 10 GB default. Skiff uses it for the storage gauge and the storage alert. When the database's data directory sits on a node volume, Skiff also checks that the volume has room for the budget.
+- **Storage** is a budget between 256 MB and 1 TB, with a 10 GB default. Skiff uses it for the storage gauge and the storage alert. When the database's data directory sits on a disk, Skiff also checks that the disk has room for the budget and keeps 10% of it free.
 
 To change any of these, open the database's **Settings** tab and use **Resources → Resize**, run `skif db update main --memory 1G --cpus 2 --storage 20G`, or send a `PATCH` to the API. Limits take effect when the node next restarts the container, so run `skif db restart main` to apply them now.
 
@@ -288,7 +289,7 @@ Asking the planner for the major the database already runs is refused, because t
 
 For MySQL, MariaDB, Valkey, Redis and ClickHouse, change the version with `skif db update main --version <version>`, the `update_database` MCP tool, or `PATCH /api/v1/databases/main` with `{"version": "…"}`. The CLI asks you to confirm, and `-y` skips the prompt. The database restarts on the new image with its data. The dashboard does not change versions. Only forward moves within the listed versions are accepted, and downgrades are refused.
 
-To move a database to another node, open **Settings** and choose **Move to another node**, or send `POST /api/v1/databases/main/move`. A move copies the data with a backup, so it works for every engine. Attached projects are stopped while Skiff takes a final backup and restores it on the new node. Downtime is roughly one backup plus one restore. Projects that use app volumes or a persistent data directory block the move.
+To move a database to another node, open **Settings** and choose **Move to another node**, or send `POST /api/v1/databases/main/move`. A move copies the data with a backup, so it works for every engine. Attached projects are stopped while Skiff takes a final backup and restores it on the new node. Downtime is roughly one backup plus one restore. The data lands on a disk of the same tier on the new node, or its system disk if the database is on one; add `storage` to the request body to choose another target. Projects that use app volumes or a persistent data directory block the move.
 
 A database with read replicas cannot move, and its PostgreSQL major cannot be upgraded. Remove the replicas first, or add a replica on the target node and promote it.
 
@@ -333,7 +334,7 @@ skif db replica remove main dbr_…
 
 The same actions are in the **Replicas** section of the database's **Overview**, the `list_database_replicas`, `create_database_replica` and `delete_database_replica` MCP tools, and `GET`, `POST /api/v1/databases/main/replicas` and `DELETE /api/v1/databases/main/replicas/{id}`.
 
-- A replica reserves the database's memory on its node. Pass `--volume <name>` to keep its data on one of that node's volumes. Each database can have up to 2 replicas by default (`database.maxReplicas` in **Settings → Clustering**).
+- A replica reserves the database's memory on its node. Its data goes on a disk of the same tier as the primary's, or on the node's system disk if the primary is on one. Pass `--disk <where>` (`system`, `fast`, `bulk` or a disk on that node) to choose another. Each database can have up to 2 replicas by default (`database.maxReplicas` in **Settings → Clustering**).
 - On first start the replica copies the primary with `pg_basebackup`, then streams changes. Its status is `pending` until it first connects, then `streaming`, or `lagging` when it is more than 30 seconds or 256 MB behind. `stopped` means it is not connected; `lost` means the primary removed WAL it still needed, so remove it and add a new one.
 - A replica on another node needs both nodes on the managed overlay. The replication traffic goes through the same mTLS listener as a cross-node attachment, and no port is published.
 - Removing a replica deletes its copy from its node. The primary and its data are untouched.
@@ -392,7 +393,7 @@ Over REST, send `POST /api/v1/databases/main/replicas/{id}/promote` with `{"conf
 | `skif db restore-backup <name> <id> --as <new>` | Restore a backup into a new database. |
 | `skif db backup-policy <name>` | Show or change the schedule and retention. |
 | `skif db replica list <name>` | List [read replicas](#read-replicas) with status and lag, and recent promotions. |
-| `skif db replica add <name> --node <node>` | Add a read replica on a node. `--volume` picks a volume on that node. |
+| `skif db replica add <name> --node <node>` | Add a read replica on a node. `--disk` picks where its data goes on that node. |
 | `skif db replica remove <name> <id>` | Remove a replica and delete its copy. |
 | `skif db replica promote <name> <id>` | [Promote a replica](#promote-a-replica) to primary. `--accept-data-loss` promotes a replica that is behind. |
 

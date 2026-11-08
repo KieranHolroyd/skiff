@@ -270,7 +270,7 @@ export interface SystemdDriverOptions {
 	runtimeDir: string;
 	/** Persistent container data root, normally /var/lib/skiff-workloads. */
 	stateDir: string;
-	/** Volume registry written by the root applier, normally /etc/skiff/volumes.json (D74). */
+	/** Disk registry written by the root applier, normally /etc/skiff/volumes.json (D76). */
 	volumeRegistryFile?: string;
 	/**
 	 * Injectable registry for tests, used instead of `volumeRegistryFile`. Production always reads
@@ -424,7 +424,7 @@ export class SystemdDriver {
 	}
 
 	/**
-	 * Replace the volume registry from desired state (D74). The agent may ask, but the helper
+	 * Replace the disk registry from desired state (D76). The agent may ask, but the helper
 	 * validates ids, paths and identities itself; a bad entry rejects the whole list. Writes are
 	 * atomic and only when the content changed.
 	 */
@@ -462,7 +462,7 @@ export class SystemdDriver {
 		return verifyMount(this.runner, input.mountPath, input.sourceKey);
 	}
 
-	/** Benchmarks a registered, mounted volume (docs/STORAGE.md §5); resolves paths itself. */
+	/** Benchmarks a registered, mounted disk (docs/STORAGE.md §5.1); resolves paths itself. */
 	volumeProfiler(): VolumeProfiler {
 		return new VolumeProfiler({
 			runner: this.runner,
@@ -475,7 +475,7 @@ export class SystemdDriver {
 		return this.volumeRegistryOverride ?? readVolumeRegistry(this.volumeRegistryFile);
 	}
 
-	/** App-volume data verbs (docs/VOLUMES.md §14), resolving paths exactly like the mounts below. */
+	/** App-volume data verbs (docs/VOLUMES.md), resolving paths exactly like the mounts below. */
 	appVolumeData(options: Pick<AppVolumeDataOptions, 'log' | 'maxPauseMs'> = {}): AppVolumeData {
 		return new AppVolumeData({
 			stateDir: this.stateDir,
@@ -487,7 +487,7 @@ export class SystemdDriver {
 	}
 
 	/**
-	 * Where one container's data lives (D74). A volume-backed workload is resolved through the
+	 * Where one container's data lives (D78, D169). A disk-backed workload is resolved through the
 	 * root applier's registry and verified *before* anything is written: if the mount is gone the
 	 * start fails, because the alternative is silently filling the root disk (D76). The helper
 	 * never accepts a path from the wire.
@@ -511,7 +511,7 @@ export class SystemdDriver {
 	/**
 	 * Resolve app volumes to host directories before anything is written (plan 07).
 	 *
-	 * A node-volume backing is verified with `findmnt` every start; a missing mount fails the
+	 * A disk backing (`node_volume`) is verified with `findmnt` every start; a missing mount fails the
 	 * start rather than creating `/mnt/empty/skiff/apps/...` on the root disk. State-dir volumes
 	 * live under the helper's own state directory. Only `<base>/<volumeId>` is created.
 	 */
@@ -1778,7 +1778,7 @@ END $$;`];
 		return { config: paths.config, pgpass: paths.pgpass };
 	}
 
-	/** Resolve a managed database's data dir from the same roots `purge` uses (D74). */
+	/** Resolve a managed database's data dir from the same roots `purge` uses (D78). */
 	private async dataDirFor(id: string): Promise<string> {
 		const roots = [resolve(this.stateDir)];
 		const registry = await this.registry();
@@ -2383,8 +2383,8 @@ END $$;`];
 	async purge(id: string): Promise<void> {
 		assertManagedId(id, 'managed id');
 		await this.remove(id);
-		// The data dir is under the state root or, for a volume-backed workload, `<mount>/skiff`
-		// (D74). Both are fixed shapes with the id as the basename; nothing else is ever removed.
+		// The data dir is under the state root or, for a disk-backed workload, `<mount>/skiff`
+		// (D78). Both are fixed shapes with the id as the basename; nothing else is ever removed.
 		const roots = [resolve(this.stateDir)];
 		const registry = await this.registry();
 		for (const entry of Object.values(registry)) roots.push(resolve(entry.mountPath, 'skiff'));

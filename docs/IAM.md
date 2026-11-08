@@ -526,7 +526,7 @@ A **user pool** is an org resource, like a database. It's an OIDC provider for o
 
 | Engine | Verdict |
 |---|---|
-| **Native `skiff-identity`** | **Recommended first.** `skiff-agent identity` runs as a static `skiff-identity.service` on a chosen node (the skiff-mail pattern, D115: same signed binary, own cgroup, `MemoryMax=256M`). Each pool is its own Better Auth instance with its own SQLite file on a pool volume (D144), replicated by Litestream. The edge routes `auth.<sitesDomain>` to it. It reuses Skiff's Better Auth knowledge and the existing passkey and mail plumbing, and costs about 50 MB rather than a JVM. |
+| **Native `skiff-identity`** | **Recommended first.** `skiff-agent identity` runs as a static `skiff-identity.service` on a chosen node (the skiff-mail pattern, D115: same signed binary, own cgroup, `MemoryMax=256M`). Each pool is its own Better Auth instance with its own SQLite file on a disk (D169), replicated by Litestream. The edge routes `auth.<sitesDomain>` to it. It reuses Skiff's Better Auth knowledge and the existing passkey and mail plumbing, and costs about 50 MB rather than a JVM. |
 | Managed Keycloak | A later engine as a tier-3 container, for SAML IdP or LDAP federation needs. It takes about 512 MB or more. |
 | Managed Authentik / Zitadel | Template candidates (D92) rather than first-class engines. |
 | Embedding pools in the control plane | Rejected. Tenant sign-in traffic would hit the control plane, which conflicts with D107 (the control plane may fail over). |

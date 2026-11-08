@@ -1283,7 +1283,7 @@ databases, storage instances, app volumes). Apps move from the project's **Detai
 databases and storage instances from **Settings/Resources → Move**, which takes their attached
 apps along (D97). Storage moves empty (objects are not copied), and app volumes cannot move yet.
 Then use **Nodes → ⋯ → Remove node** (or
-`DELETE /api/v1/nodes/:id`). The token is revoked immediately, volume registrations go, and any
+`DELETE /api/v1/nodes/:id`). The token is revoked immediately, disk registrations go, and any
 build it had claimed is requeued for another Builder. The edge node cannot be removed. Removal
 does not touch the machine: run `sudo skiff-uninstall` there (or `docker compose down -v` for the
 container node), otherwise the agent keeps serving its last config and logs `Unknown node token`.

@@ -73,7 +73,7 @@ Create options:
       --memory <size>          Memory limit, e.g. 256M or 1G (default 256M)
       --cpus <n>               CPU limit (default 0.5)
       --storage <size>         Persistent message store cap (default 2G)
-      --volume <name>          Node volume for the data (default: the node's default volume)
+      --disk <where>           system, fast, bulk or a disk name (default: Settings → Storage)
 
 Options:
   -y, --yes                    Don't ask for confirmation (required when stdin isn't a terminal)
@@ -110,6 +110,8 @@ const createFlags: FlagSpec = {
 	prefix: { type: 'string' },
 	engine: { type: 'string' },
 	placement: { type: 'string' },
+	disk: { type: 'string' },
+	/** Deprecated alias of --disk. */
 	volume: { type: 'string' },
 };
 const updateFlags: FlagSpec = { ...baseFlags, ...sizeFlags };
@@ -260,8 +262,8 @@ async function createBroker(argv: string[]): Promise<void> {
 	if (prefix) input.envPrefix = prefix;
 	const placement = args.string('placement');
 	if (placement) input.placement = placement;
-	const volume = args.string('volume');
-	if (volume) input.volume = volume;
+	const disk = args.string('disk') ?? args.string('volume');
+	if (disk) input.storage = disk;
 
 	const client = await authenticatedClient();
 	const { broker, raw } = await client.createBroker(input);

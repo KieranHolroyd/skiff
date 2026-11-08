@@ -8,6 +8,10 @@
 
 > **Status update (5 Nov 2026):** node volumes (D72–D80) are shipped for managed instances.
 > Remaining: app volumes for workloads, snapshots, disk admission. Verify before implementing.
+>
+> **Since 8 Nov 2026 (D169)** node volumes are **disks** ([STORAGE.md](../../STORAGE.md)). An app
+> volume takes a storage target (`storage`) instead of `backing`/`nodeVolume`; `node_volume` and
+> `nodeVolumeId` survive only as wire names. The plan below keeps its original wording.
 
 ## Goal
 

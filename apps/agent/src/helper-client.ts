@@ -128,7 +128,7 @@ export interface HelperStudioPrincipalApi {
 	ensureStudioPrincipal(id: string, user: string, password: string): Promise<void>;
 }
 
-/** App-volume data verbs (docs/VOLUMES.md §14). Apart from `HelperApi` so test fakes need not grow. */
+/** App-volume data verbs (docs/VOLUMES.md). Apart from `HelperApi` so test fakes need not grow. */
 export interface HelperAppVolumeApi {
 	/** Allocated bytes per volume (`du -B1`); null with an error for one the helper could not read. */
 	appVolumeUsage(
@@ -483,7 +483,7 @@ export class HelperClient
 		return volumeInventorySchema.parse(asRecord(body).inventory);
 	}
 
-	/** Which shares are mounted at `/mnt/skiff-shares/<id>` (docs/VOLUMES.md §5). No credentials. */
+	/** Which shares are mounted at `/mnt/skiff-shares/<id>` (docs/STORAGE.md §3). No credentials. */
 	async shareStatus(ids: string[], signal?: AbortSignal): Promise<Array<{ id: string; mounted: boolean }>> {
 		const body = asRecord(await this.request('POST', '/v1/shares/status', { ids }, VOLUME_TIMEOUT_MS, signal));
 		const shares = Array.isArray(body.shares) ? body.shares : [];
@@ -517,7 +517,7 @@ export class HelperClient
 		};
 	}
 
-	/** Which partitions are mounted at `/mnt/skiff-disks/<id>` (docs/VOLUMES.md §3.1). */
+	/** Which of the disks Skiff mounts are up at `/mnt/skiff-disks/<id>` (docs/STORAGE.md §3.1). */
 	async diskStatus(ids: string[], signal?: AbortSignal): Promise<Array<{ id: string; mounted: boolean }>> {
 		const body = asRecord(await this.request('POST', '/v1/disks/status', { ids }, VOLUME_TIMEOUT_MS, signal));
 		const disks = Array.isArray(body.disks) ? body.disks : [];
@@ -551,7 +551,7 @@ export class HelperClient
 		};
 	}
 
-	/** Benchmark one registered volume (docs/STORAGE.md §5); the helper resolves the path. */
+	/** Benchmark one disk (docs/STORAGE.md §5.1); the helper resolves the path. */
 	async profileVolume(
 		input: { volumeId: string; sizeMb: number; runtimeSeconds: number },
 		signal?: AbortSignal,
@@ -575,7 +575,7 @@ export class HelperClient
 		};
 	}
 
-	/** Replace the helper's volume registry from desired state (D74). */
+	/** Replace the helper's disk registry (`volumes`) from desired state (D76). */
 	async syncVolumes(volumes: NodeVolumeDesired[], signal?: AbortSignal): Promise<void> {
 		await this.request('POST', '/v1/volumes/registry', { volumes }, VOLUME_TIMEOUT_MS, signal);
 	}

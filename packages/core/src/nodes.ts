@@ -795,8 +795,9 @@ export class NodeService {
 	}
 
 	/**
-	 * D48 directories the node should use: its explicit setting, else the `site-data` / `builds`
-	 * default pool's local volume on this node (docs/STORAGE.md §3.2), else the install default.
+	 * D48 directories the node should use: its explicit setting, else the most-free local ready disk
+	 * of the `site-data` / `builds` default tier on this node (docs/STORAGE.md §2.2), else the
+	 * install default.
 	 */
 	effectiveStorage(node: { id: string; storageDataDir: string | null; storageBuildDir: string | null }): NodeStorage {
 		return {
@@ -817,7 +818,7 @@ export class NodeService {
 
 	/**
 	 * What still lives on a node and so blocks removing it. Removal never moves or deletes data:
-	 * the operator relocates or deletes these first, exactly as volume removal works (D74).
+	 * the operator relocates or deletes these first, exactly as removing a disk works (D169).
 	 * Soft-deleted rows do not count; their purge simply never runs once the node is gone.
 	 */
 	removalBlockers(nodeId: string): string[] {
@@ -863,7 +864,7 @@ export class NodeService {
 	}
 
 	/**
-	 * Forget a worker node: its token stops working at once, its volume registrations and studio
+	 * Forget a worker node: its token stops working at once, its disk registrations and studio
 	 * sessions go, and builds it had claimed return to the queue. History (deployments, builds,
 	 * logs, audit) keeps the node id. The edge cannot be removed — it terminates ingress — and a
 	 * node that still hosts anything is refused with the list of what to move first. Nothing on
@@ -1419,7 +1420,7 @@ export class NodeService {
 			diskMounts: this.ctx.disks.mountsForNode(node.id),
 			diskUnmounts: this.ctx.disks.unmountsForNode(node.id),
 			volumeProfileTasks: this.ctx.disks.profileTasksForNode(node.id),
-			// App-volume usage, purges and snapshot/restore tasks (docs/VOLUMES.md §14).
+			// App-volume usage, purges and snapshot/restore tasks (docs/VOLUMES.md).
 			appVolumes: this.ctx.appVolumes.lifecycle.volumesForNode(node.id),
 			appVolumePurges: this.ctx.appVolumes.lifecycle.purgesForNode(node.id),
 			appVolumeTasks: await this.ctx.appVolumes.lifecycle.tasksForNode(node.id),

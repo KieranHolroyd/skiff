@@ -95,7 +95,7 @@ describe('metrics export', () => {
 		expect(text).toContain('skiff_node_up{node="edge-1",mode="edge"} 1');
 		expect(text).toContain('skiff_node_cpu_percent{node="edge-1"} 12.5');
 		expect(text).toContain('skiff_node_cert_expiry_timestamp_seconds{node="edge-1",host="*.sites.test"} 1798761600');
-		expect(text).toContain('skiff_volume_free_bytes{node="edge-1",volume="data",kind="filesystem"} 250');
+		expect(text).toContain('skiff_volume_free_bytes{node="edge-1",volume="data",kind="filesystem",tier="bulk"} 250');
 		expect(text).not.toContain('skiff_project_info');
 	});
 
@@ -145,7 +145,7 @@ describe('metrics export', () => {
 
 	test('a platform admin key can scrape the fleet section', async () => {
 		const text = await render(admin, ['platform']);
-		expect(text).toContain('skiff_volume_up{node="edge-1",volume="data",kind="filesystem"} 1');
+		expect(text).toContain('skiff_volume_up{node="edge-1",volume="data",kind="filesystem",tier="bulk"} 1');
 	});
 
 	test('settings: cache, app cap, disabled sections and private /metrics', async () => {

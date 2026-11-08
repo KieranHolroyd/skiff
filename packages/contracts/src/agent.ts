@@ -211,19 +211,19 @@ export const desiredStateSchema = z.object({
 	databaseReplicaLinks: z.array(databaseReplicaLinkSchema).default([]),
 	/** Replicas on this node to promote and hand over to their database id (§9.3). */
 	databaseReplicaPromotions: z.array(databaseReplicaPromotionTaskSchema).default([]),
-	/** Registered volumes this node must know about, for volume-backed data dirs (D74). */
+	/** Disks this node must know about, so disk-backed data dirs can be verified (D76, D169). */
 	volumes: z.array(nodeVolumeDesiredSchema).default([]),
-	/** Network shares this node keeps mounted under `/mnt/skiff-shares` (docs/VOLUMES.md §5). */
+	/** Network shares this node keeps mounted under `/mnt/skiff-shares` (docs/STORAGE.md §3, D143). */
 	shareMounts: z.array(shareMountDesiredSchema).default([]),
 	/** Share mounts to remove; the node unmounts and reports `unmountedShares`. */
 	shareUnmounts: z.array(shareUnmountDesiredSchema).default([]),
-	/** Local partitions this node keeps mounted under `/mnt/skiff-disks` by UUID (docs/VOLUMES.md §3.1). */
+	/** Disks this node keeps mounted under `/mnt/skiff-disks` by filesystem UUID (docs/STORAGE.md §3). */
 	diskMounts: z.array(diskMountDesiredSchema).default([]),
-	/** Partition mounts to remove; the node unmounts and reports `unmountedDisks`. */
+	/** Disk mounts to remove; the node unmounts and reports `unmountedDisks`. */
 	diskUnmounts: z.array(diskUnmountDesiredSchema).default([]),
-	/** Storage benchmarks to run, one at a time (docs/STORAGE.md §5). */
+	/** Disk benchmarks to run, one at a time (docs/STORAGE.md §5.1). */
 	volumeProfileTasks: z.array(volumeProfileTaskSchema).default([]),
-	/** Live app volumes placed on this node; the agent measures their usage (docs/VOLUMES.md §14). */
+	/** Live app volumes placed on this node; the agent measures their usage (docs/VOLUMES.md). */
 	appVolumes: z.array(appVolumeNodeRefSchema).default([]),
 	/** Trashed app volumes past their retention window: delete the directory, then report. */
 	appVolumePurges: z.array(appVolumeNodeRefSchema).default([]),
@@ -355,15 +355,15 @@ export const heartbeatSchema = z.object({
 	nodeCertificate: nodeIdentityCertificateSchema.optional(),
 	/** What the node's storage service last applied (D48). */
 	storage: nodeStorageStatusSchema.optional(),
-	/** Mounts and free block devices the node reports for the volume wizard (D72, D80). */
+	/** Mounts and block devices the node reports, from which Settings → Storage lists disk candidates (D72, D80). */
 	volumes: volumeInventorySchema.optional(),
 	/** The node's view of every desired share mount, each heartbeat. */
 	shareMounts: z.array(shareMountReportSchema).max(200).optional(),
 	/** Share mount ids from `shareUnmounts` that are now unmounted. */
 	unmountedShares: z.array(z.string().max(100)).max(200).optional(),
-	/** The node's view of every desired partition mount, each heartbeat. */
+	/** The node's view of every desired disk mount, each heartbeat. */
 	diskMounts: z.array(diskMountReportSchema).max(200).optional(),
-	/** Partition mount ids from `diskUnmounts` that are now unmounted. */
+	/** Disk mount ids from `diskUnmounts` that are now unmounted. */
 	unmountedDisks: z.array(z.string().max(100)).max(200).optional(),
 	/** Progress and results of `volumeProfileTasks`. */
 	volumeProfileResults: z.array(volumeProfileResultSchema).max(50).optional(),

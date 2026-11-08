@@ -2,8 +2,8 @@ import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 
 /**
- * Storage tools every node needs (docs/STORAGE.md §5, docs/VOLUMES.md §5): `fio` for volume
- * profiling, `nfs-common` and `cifs-utils` for network share mounts.
+ * Storage tools every node needs (docs/STORAGE.md §5.1, §3): `fio` for disk profiling,
+ * `nfs-common` and `cifs-utils` for network share mounts.
  *
  * The installer installs them up front (scripts/install/main.ts, same package list). Nodes that
  * were installed before, or that only ever update through the signed node-update verb, get them

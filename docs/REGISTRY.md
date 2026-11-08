@@ -33,7 +33,7 @@ Skiff's or someone else's, safe to deploy from.
 | R7 | Repositories are **`<org>/<name>`**, owned by an org, optionally linked to a project, and created on first push | Matches GHCR. The org is the tenancy boundary. |
 | R8 | A new permission resource **`image: pull, push, delete`** | Same model as `database:*`. API keys can be scoped to push only (CI). |
 | R9 | **Nodes pull over the overlay** through a loopback mirror (`127.0.0.1:8085`), with the public host as fallback | Pulls skip the internet round trip and keep working over WireGuard. Same pattern as the H6 loopback endpoints. |
-| R10 | Blobs live on a **pool volume** (new storage kind `registry`, D144). S3 on a RustFS instance comes with HA. | Filesystem storage deduplicates without Redis. Pools already decide where bulk data goes. |
+| R10 | Blobs live on a **disk**, through a future `registry` storage kind (D169). S3 on a RustFS instance comes with HA. | Filesystem storage deduplicates without Redis. The storage defaults already decide where bulk data goes. |
 | R11 | **Retention is deployment-aware.** Skiff keeps a hidden `skiff-d-<deploymentId>` tag on every retained deployment's digest. zot deletes untagged manifests after a grace period. | GC can never remove a rollback target. |
 | R12 | **Builders produce images.** A Dockerfile build runs under buildah and pushes with a token scoped to that job. | Git → image → deploy without GitHub Actions. |
 | R13 | **Pull-through cache** for docker.io, ghcr.io and quay.io, used by every node through `registries.conf` mirrors | Avoids Docker Hub's anonymous limit (100 pulls per 6 h per IP). Engine images keep pulling when upstream is down. |
@@ -111,7 +111,7 @@ registry_pins(repository_id, digest, deployment_id, tag)      -- R11, one per re
 registry_credentials(id rc_<hex>, org_id, name, host, username, sealed_secret,
                      created_at, last_used_at, deleted_at)    -- R2, external registries
 deployments.image_digest                                       -- R1
-settings['registry.*']                                         -- host, node, pool, mirrors, retention
+settings['registry.*']                                         -- host, node, mirrors, retention
 ```
 
 Tags and manifests are **not** copied into SQLite. zot is the truth for content. Skiff keeps
@@ -248,11 +248,11 @@ insecure = true                  # plain HTTP on loopback only
   The helper renders `config.json` itself: storage root, bearer realm and cert, GC and retention,
   sync upstreams. Nothing comes from the wire except the triple and the settings it validates.
 - **Placement:** the operator picks the node in Settings → Registry, or `auto` picks a node with a
-  member of the `registry` storage rule. It is not movable on its own. A move uses the D97 pattern
-  (stop → copy → verify → start).
-- **Storage kind `registry`** joins STORAGE.md §3.1, with a default rule of `system` and an
-  onboarding prefill of the bulk pool. On this fleet that means the homelab's HDD pool. **The prod
-  VPS root disk (about 4.5 GB free) cannot hold it.**
+  ready disk of the `registry` kind's default tier. It is not movable on its own. A move uses the
+  D97 pattern (stop → copy → verify → start).
+- **Storage kind `registry`** (not built) joins STORAGE.md §2.1, with no default (the system disk)
+  and a suggested `bulk`. On this fleet that means the homelab's HDD. **The prod VPS root disk
+  (about 4.5 GB free) cannot hold it.**
 - **Dedupe:** zot's filesystem dedupe stores each blob once across every repo *(confirm the
   mechanism and its cache in S1)*. Since v2.1.21 a blob is readable in a repo only after it was
   pushed or mounted there, which closes the cross-org "does this layer exist" probe. Pin ≥ 2.1.23.
@@ -275,8 +275,8 @@ insecure = true                  # plain HTTP on loopback only
 An agent verb `pruneImages` runs after each reconcile at most hourly. It removes images not used
 by any container on the node, not referenced by desired state, and not one of the last two digests
 per workload (fast rollback). Images younger than 1 h are never pruned. This is also the
-`node_caches` slot in OPERATIONS.md, and the STORAGE S2 `images` kind (graphroot per pool) builds
-on it.
+`node_caches` slot in OPERATIONS.md, and the planned `images` storage kind (podman `graphroot` on a
+disk, STORAGE.md §8) builds on it.
 
 ### 6.3 Quotas
 

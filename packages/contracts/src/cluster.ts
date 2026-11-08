@@ -97,7 +97,9 @@ export type NodeHardware = z.infer<typeof nodeHardwareSchema>;
 
 /**
  * Placement constraints. The old `edge | <node> | auto` values on a project remain shorthands;
- * a spec adds hard constraints (zone, roles, labels, volume class) and a soft locality hint.
+ * a spec adds hard constraints (zone, roles, labels, disk tier or id) and a soft locality hint.
+ * `volumeClass` matches a node's disk tiers plus `remote` for a network disk; `volumeId` is a disk
+ * id and pins its node (D169).
  */
 export const placementSpecSchema = z
 	.object({

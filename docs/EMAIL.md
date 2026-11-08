@@ -115,8 +115,8 @@ injects outbox messages, and pulls events. DKIM keys stay in memory. After a res
 answers `451 4.3.0` to submissions and holds deliveries until the agent pushes state again; the
 agent checks `GET /health` every few seconds and pushes immediately.
 
-**Spool.** `/var/lib/skiff/mail` (or `<volume>/skiff/mail`, D74). Queued mail survives restarts of
-`skiff-mail` and of the agent, but not the loss of the node (§12).
+**Spool.** `/var/lib/skiff/mail` (`SKIFF_MAIL_DATA_DIR`) on the node's system disk. Queued mail
+survives restarts of `skiff-mail` and of the agent, but not the loss of the node (§12).
 
 **TLS.** Caddy already obtains certificates (DNS-01). The agent asks Caddy to manage
 `mx.<mailDomain>` and `smtp.<mailDomain>`, copies the files to `/run/skiff/mail-tls/`, and
@@ -572,7 +572,7 @@ Settings shows the trade-off.
 | The prod IP has poor or no reputation; mail goes to spam even with a perfect setup | Sandbox + low default rates as an implicit warm-up; Gmail Postmaster Tools and Microsoft SNDS enrolment linked from preflight; the smarthost relay per destination as the escape hatch |
 | One org burns the shared IP for everyone | Sandbox by default, auto-pause thresholds below the providers' lines, platform suppression list, global pause |
 | Our MTA gets a delivery edge case wrong | Tests against a fake MX for every reply class; conservative retries and expiry; the smarthost relay as the escape hatch; per-attempt events make every failure visible |
-| Losing the mail node loses queued mail | Outbox only deletes after `skiff-mail` has spooled the message; spool on a node volume; E4 for real HA. Documented as an L0 resource in CLUSTERING terms |
+| Losing the mail node loses queued mail | Outbox only deletes after `skiff-mail` has spooled the message; E4 for real HA. Documented as an L0 resource in CLUSTERING terms |
 | Open relay or open submission by mistake | Port 25 accepts only receiving domains with routes; submission requires TLS + AUTH; tests enforce both, and preflight probes an open-relay attempt from outside |
 | Backscatter (bouncing spam to forged senders) | Reject at SMTP time (`RCPT`/`DATA`) rather than accept-then-bounce, except for webhook/bucket retry exhaustion, which drops with an event and never sends a DSN to an unauthenticated sender |
 | Function email handler latency holds SMTP sessions open | 30 s budget, per-route concurrency cap, `451` on overflow |

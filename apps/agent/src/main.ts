@@ -121,12 +121,12 @@ class AgentRuntime {
 	private readonly storage: StorageRequester;
 	private readonly databaseStats: DatabaseStatsSampler;
 	private readonly databaseBackups: DatabaseBackupRunner;
-	/** App-volume usage, purges, snapshots and restores (docs/VOLUMES.md §14). */
+	/** App-volume usage, purges, snapshots and restores (docs/VOLUMES.md). */
 	private readonly appVolumes: AppVolumeRunner;
-	/** Network share mounts under /mnt/skiff-shares (docs/VOLUMES.md §5). */
+	/** Network share mounts under /mnt/skiff-shares (docs/STORAGE.md §3, D143). */
 	private readonly shareMounts: ShareMountRunner;
 	private readonly diskMounts: DiskMountRunner;
-	/** Storage benchmarks of node volumes (docs/STORAGE.md §5). */
+	/** Disk benchmarks (docs/STORAGE.md §5.1). */
 	private readonly volumeProfiles: VolumeProfileRunner;
 	private readonly databasePitr: DatabasePitrRunner;
 	private readonly databaseRotations: DatabaseRotationRunner;
@@ -756,8 +756,8 @@ class AgentRuntime {
 		await this.convergeShareMounts(state);
 		await this.convergeDiskMounts(state);
 
-		// The helper needs the registered volumes before it can resolve a volume-backed data dir
-		// (D74). A failure is logged; affected workloads then fail closed at start (D76).
+		// The helper needs the disk registry before it can resolve a disk-backed data dir (D169). A
+		// failure is logged; affected workloads then fail closed at start (D76).
 		try {
 			await this.helper.syncVolumes(state.volumes, this.shutdownController.signal);
 		} catch (error) {
@@ -956,7 +956,7 @@ class AgentRuntime {
 		}
 	}
 
-	/** Re-check share and partition mounts between reconciles: retries failures, notices drops. */
+	/** Re-check share and disk mounts between reconciles: retries failures, notices drops. */
 	private async shareMountLoop(): Promise<void> {
 		while (this.running) {
 			await sleep(15_000, this.shutdownController.signal).catch(() => undefined);

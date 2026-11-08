@@ -245,7 +245,7 @@ export class LogService {
 		return rows.length;
 	}
 
-	/** A lifecycle breadcrumb in a managed service's own stream (restart, volume move, …). */
+	/** A lifecycle breadcrumb in a managed service's own stream (restart, disk move, …). */
 	appendServiceSystem(input: {
 		kind: ServiceLogKind;
 		serviceId: string;

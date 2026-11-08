@@ -188,6 +188,8 @@ export interface StorageCreateInput {
 	name: string;
 	version?: string;
 	placement?: string;
+	/** `system`, `fast`, `bulk` or a disk name (docs/STORAGE.md). */
+	storage?: string;
 	memoryMb?: number;
 	cpus?: number;
 	storageMb?: number;

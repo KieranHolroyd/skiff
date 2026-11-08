@@ -7,7 +7,7 @@ import type { BindingRenderer } from './types.ts';
  * The main Worker declares the class once in `durableObjectNamespaces` and each binding becomes a
  * `durableObjectNamespace` capability pointing at that class. Storage is the shared `do-storage`
  * disk service the helper makes writable under the workload's state directory, so object data is
- * single-node SQLite on the project's volume (D72/D74).
+ * single-node SQLite on the project's node (D72).
  */
 export const renderDurableObject: BindingRenderer = ({ binding }) => {
 	if (binding.type !== 'durable_object')

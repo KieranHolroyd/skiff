@@ -3,12 +3,12 @@ import { join } from 'node:path';
 import { defaultRunner, type CommandRunner } from './wireguard.ts';
 
 /**
- * Network share mounts (docs/CLUSTERING.md §5.2, docs/VOLUMES.md §5).
+ * Network share mounts (docs/CLUSTERING.md §5.2, docs/STORAGE.md §3, D143).
  *
  * The helper is the only process that can mount: the agent passes a fixed, validated description
  * and never a command or an option string. Shares mount at `/mnt/skiff-shares/<id>`, a path the
- * volume inventory reports, so a mounted share can be adopted as a node volume and verified by
- * source key before a workload starts (D76).
+ * volume inventory reports, so a mounted share can become a disk and be verified by source key
+ * before a workload starts (D76).
  *
  * NFS has no credentials. SMB writes a 0600 credentials file under `/run/skiff-shares` (tmpfs,
  * never inside the mount root) for the duration of the mount call only; the kernel keeps the

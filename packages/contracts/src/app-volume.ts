@@ -6,10 +6,11 @@ import { volumeNameSchema } from './volume.ts';
  * App volumes (plan 07, docs/VOLUMES.md).
  *
  * An app volume is a project-scoped directory with a size quota, mounted into a workload. It is
- * deliberately distinct from a **node volume** (`volume.ts`, D72–D80): node volumes are
- * infrastructure mounts that back managed databases and storage instances; app volumes are the
- * user-facing resource that apps attach to. A volume is backed by a node volume or the helper
- * state directory, but the API never exposes a host path — only names, quotas and mount points.
+ * deliberately distinct from a **disk** (`disk.ts`, docs/STORAGE.md): a disk is an infrastructure
+ * mount on a node that managed services and app volumes are stored on; an app volume is the
+ * user-facing resource that apps attach to. A volume lives on a disk or the node's system disk (the
+ * helper state directory), but the API never exposes a host path — only names, quotas and mount
+ * points.
  *
  * Single-writer is the v1 rule: a read-write volume has one running owner; read-only attachments
  * are unlimited. Snapshots are versioned copies written to a backup target (plan 05) and restore
@@ -18,7 +19,7 @@ import { volumeNameSchema } from './volume.ts';
 
 export const APP_VOLUME_ID_PREFIX = 'av_';
 
-/** Volume names reuse the node-volume rules so they are safe in URLs, units and CLI arguments. */
+/** Volume names reuse the disk-name rules so they are safe in URLs, units and CLI arguments. */
 export const appVolumeNameSchema = volumeNameSchema;
 
 export const appVolumeBackings = ['node_volume', 'state_dir'] as const;
@@ -194,10 +195,10 @@ export type AppVolumeRestore = z.input<typeof appVolumeRestoreSchema>;
 // -------------------------------------------------------------------- views
 
 /**
- * The node volume backing a volume. A summary only: the node's mount path and device are host
- * details and deliberately absent from project-facing responses.
+ * The disk an app volume lives on (D169); null is the node's system disk. A summary only: the
+ * node's mount path and device are host details and deliberately absent from project-facing
+ * responses.
  */
-/** The disk an app volume lives on (D169); null is the node's system disk. */
 export const appVolumeDiskSchema = z.strictObject({
 	id: z.string(),
 	name: z.string(),
@@ -279,7 +280,7 @@ export type AppVolumeView = z.infer<typeof appVolumeViewSchema>;
 
 /**
  * An app volume as the node sees it: ids and the backing only. The helper derives the host path
- * from its own state dir or node-volume registry, exactly as it does for mounts.
+ * from its own state dir or disk registry, exactly as it does for mounts.
  */
 export const appVolumeNodeRefSchema = z.object({
 	id: z.string().regex(/^av_[A-Za-z0-9_-]{1,96}$/),

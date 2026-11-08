@@ -16,7 +16,7 @@ Each volume has:
 
 - **A name**, unique within its project. Names are 3 to 40 characters: lowercase letters, digits and single hyphens, starting and ending with a letter or digit.
 - **A size quota** in megabytes. The quota is reserved on the node's disk when you create or grow the volume. See [size and capacity](#size-and-capacity).
-- **A backing**, which is where the directory lives on the node. `state-dir` is the default and uses the platform's own state directory. `node-volume` uses a disk that an operator has added to a node.
+- **A disk**, which is where the directory lives on the node: the node's system disk, or a [disk](/self-hosting/nodes-and-fleet#disks) an operator has added. You pick it when you create the volume.
 - **Mounts**: one or more attachments, each giving a path inside the app.
 - **A single-writer flag**, on by default. A single-writer volume can have one read-write attachment at a time. Read-only attachments are unlimited.
 
@@ -28,13 +28,15 @@ The app only sees the mount path. Host paths and device names are never shown in
 skif volume create app-data --project api --size 2G
 ```
 
+`--disk` picks where it is stored: `system` for the node's system disk, `fast` or `bulk` for a disk of that tier, or a disk by name. Without it, the volume uses the **App volumes** default from **Settings → Storage**, which is the system disk unless an operator set another. The dashboard's **Storage** field offers the same choice.
+
 Create a volume after the project has been deployed at least once if you want it on the same node as the app. See [node placement](#node-placement).
 
 ### Size and capacity
 
 `--size` takes a whole number of megabytes, or a number with an `M` or `G` unit: `512M`, `2G`. The default is 1 GB (1024 MB). The largest volume is 1 TB (1,048,576 MB).
 
-When you create or grow a volume, Skiff checks that the total reserved quota on that backing stays within 90% of the free disk the node last reported. If it would not, the request is refused and the error names the free space and the limit. A node that has not reported its free disk yet also refuses the request. It reports about every 10 seconds, so retry shortly.
+When you create or grow a volume, Skiff checks that the total reserved quota on that disk stays within 90% of the free space the node last reported. If it would not, the request is refused and the error names the free space and the limit. A node that has not reported its free disk yet also refuses the request. It reports about every 10 seconds, so retry shortly.
 
 > [!NOTE]
 > The quota is a reservation for capacity planning. Skiff does not currently stop an app writing past its quota.
@@ -63,11 +65,12 @@ By default an attachment goes to the project's workload. `--workload` also accep
 
 A volume lives on one node, and its project is tied to that node while the volume is attached.
 
-- A `state-dir` volume is created on the node the project's workload runs on. If the project has no workload yet, it is created on the edge node. If no edge node is registered, creation fails.
-- A `node-volume` volume lives on the node that disk belongs to. Creating it for a project whose workload runs elsewhere is refused.
+- A volume is created on the node the project's workload runs on. If the project has no workload yet, it is created on the edge node. If no edge node is registered, creation fails.
+- With `fast` or `bulk`, that node needs a ready disk of that tier with room for the quota. If it has none, creation is refused; Skiff never uses the other tier instead.
+- A volume on a named disk lives on that disk's node. Naming a disk on another node than the one the project's workload runs on is refused.
 - Attaching a volume to a workload on a different node is refused.
 - Apps with volumes cannot be moved to another node yet.
-- A `node-volume` volume is checked each time the app starts. If the disk is not mounted, the app does not start, and Skiff never falls back to the root disk.
+- A volume on a disk is checked each time the app starts. If the disk is not mounted, the app does not start, and Skiff never falls back to the system disk.
 
 ## Resize a volume
 
@@ -147,7 +150,7 @@ A restore always creates a **new** volume in the same project. It never overwrit
 skif volume restore app-data avs_… --project api --to app-data-restored
 ```
 
-The new volume has the same backing and single-writer setting as the source, and at least the same quota. Use `--size` to make it larger. Creating it goes through the same quota and capacity checks as `skif volume create`, and the snapshot's backup target must still exist.
+The new volume is on the same disk and has the same single-writer setting as the source, and at least the same quota. Use `--size` to make it larger. Creating it goes through the same quota and capacity checks as `skif volume create`, and the snapshot's backup target must still exist.
 
 The node downloads the archive and extracts it into the new, empty volume, checking the SHA-256 checksum as it goes. Until that finishes, the volume shows as `restoring` and cannot be attached or deleted. Follow it with `skif volume show app-data-restored --project api`. When it is ready, mount it in place of the old volume:
 
@@ -169,7 +172,7 @@ skif volume list --project api --json
 skif volume show app-data --project api
 ```
 
-The table shows each volume's status, backing, quota, usage, the mount paths it is attached at, and when it was created. A nearly full volume gets a warning under the table. `show` adds the writer, when usage was last measured, a restore in progress and the latest snapshots. `--json` prints the raw API response.
+The table shows each volume's status, backing (`system` or `disk:<name>`), quota, usage, the mount paths it is attached at, and when it was created. A nearly full volume gets a warning under the table. `show` adds the writer, when usage was last measured, a restore in progress and the latest snapshots. `--json` prints the raw API response.
 
 ## CLI reference
 
@@ -194,8 +197,7 @@ skif volume <command> [options]
 | --- | --- | --- |
 | `-p`, `--project <slug>` | all | Project that owns the volume. Required. |
 | `--size <size>` | create | Quota, such as `512M` or `2G`. Default 1 GB. |
-| `--backing <kind>` | create | `state-dir` (default) or `node-volume`. |
-| `--node-volume <name>` | create | Registered node volume to use. Required with `--backing node-volume`. |
+| `--disk <where>` | create | `system`, `fast`, `bulk` or a disk name. Defaults to the **App volumes** default in **Settings → Storage**. |
 | `--[no-]single-writer` | create | Refuse a second read-write attachment. On by default. |
 | `-m`, `--mount <path>` | attach | Absolute path inside the app, such as `/var/lib/app`. Required. |
 | `--workload <id\|slug>` | attach, detach | Workload id or project slug. Defaults to the project's workload. |
@@ -218,7 +220,7 @@ Every route is under `/api/v1/projects/{slug}` and takes `Authorization: Bearer 
 | Method and path | Purpose | Body | Response |
 | --- | --- | --- | --- |
 | `GET /volumes` | List volumes | | `{ "volumes": [...] }` |
-| `POST /volumes` | Create a volume | `name`, `sizeMb`, `backing`, `nodeVolume`, `singleWriter` | The new volume, `201` |
+| `POST /volumes` | Create a volume | `name`, `sizeMb`, `storage`, `singleWriter` | The new volume, `201` |
 | `GET /volumes/{name}` | Get one volume | | `{ "volume": {...} }` |
 | `PATCH /volumes/{name}` | Rename, grow or change single-writer | `name`, `sizeMb`, `singleWriter` | `{ "volume": {...} }` |
 | `DELETE /volumes/{name}` | Soft-delete | | `{ "ok": true, "purgeAt": "…" }` |
@@ -230,7 +232,7 @@ Every route is under `/api/v1/projects/{slug}` and takes `Authorization: Bearer 
 | `DELETE /volumes/{name}/snapshots/{id}` | Delete a snapshot and its archive | | `{ "ok": true }` |
 | `POST /volumes/{name}/snapshots/{id}/restore` | Restore into a new volume | `name`, `sizeMb` | `{ "volume": {...} }`, `202` |
 
-The create body uses `sizeMb` in megabytes, not the CLI's `--size` string. Here is an example that creates and mounts a volume:
+The create body uses `sizeMb` in megabytes, not the CLI's `--size` string, and `storage` for the CLI's `--disk`. Here is an example that creates and mounts a volume:
 
 ```sh
 curl -X POST https://control.example.com/api/v1/projects/api/volumes \
@@ -244,7 +246,7 @@ curl -X POST https://control.example.com/api/v1/projects/api/volumes/app-data/at
   -d '{"mountPath": "/var/lib/app"}'
 ```
 
-The `workload` and `environment` fields in the attach body default to the project's workload and `production`. A volume view includes `usedBytes`, `usedAt`, `nearQuota`, `restoringFrom` (the snapshot id while a restore runs) and its latest snapshots. See [the REST API](/clients/rest-api) for authentication and error formats.
+The `workload` and `environment` fields in the attach body default to the project's workload and `production`. A volume view includes `disk` (`{ id, name, tier, remote }`, or `null` for the system disk), `usedBytes`, `usedAt`, `nearQuota`, `restoringFrom` (the snapshot id while a restore runs) and its latest snapshots. See [the REST API](/clients/rest-api) for authentication and error formats.
 
 Over MCP, `list_volume_snapshots`, `snapshot_volume` and `restore_volume` do the same. Deleting a snapshot is not available over MCP. See [MCP](/clients/mcp).
 
@@ -252,7 +254,7 @@ Over MCP, `list_volume_snapshots`, `snapshot_volume` and `restore_volume` do the
 
 Open **Projects → my-site → Data**, then find the **Volumes** card.
 
-- **New volume** creates a volume with a name, size, single-writer setting and backing.
+- **New volume** creates a volume with a name, size, single-writer setting and storage.
 - **Mount in my-site…** attaches an unattached volume at a path you choose. It defaults to `/var/lib/app`.
 - **Unmount from production** detaches a mount. The data is kept.
 - **Snapshot now…** takes a snapshot, with an optional label. Tick **Copy without pausing the app** to skip the pause.
@@ -267,4 +269,4 @@ You need permission to update the project to see these actions. The dashboard do
 
 - [Apps and containers](/compute/apps-and-containers) explains the runtimes a volume can attach to.
 - [The CLI](/clients/cli) covers authentication and global flags.
-- [Nodes and fleet](/self-hosting/nodes-and-fleet) explains how operators add the node volumes used by `node-volume` backing.
+- [Disks](/self-hosting/nodes-and-fleet#disks) explains how operators add disks and set the default for app volumes.

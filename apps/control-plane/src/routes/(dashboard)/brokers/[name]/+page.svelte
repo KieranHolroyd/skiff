@@ -390,7 +390,7 @@
 					<dd class="font-mono text-xs tabular-nums">{broker.storageMb} MB cap</dd>
 					<dt>Data</dt>
 					<dd class="text-xs">
-						{broker.volume ? `Volume ${broker.volume.name}` : 'Node state directory'}
+						{broker.disk ? `Disk ${broker.disk.name} (${broker.disk.tier})` : 'System disk'}
 					</dd>
 					<dt>Features</dt>
 					<dd class="flex flex-wrap justify-end gap-1">

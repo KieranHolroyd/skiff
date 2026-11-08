@@ -161,7 +161,7 @@ Record the kernel, `podman --version` and `podman info` with the result.
   `tests/mcp-oauth.e2e.ts` cover surfaces; this harness calls the service-layer clients
   (`RustfsApi`, `S3Client`, Bun SQL) against real containers. A route/auth regression needs the
   existing e2e suites.
-- **PITR, 1 GB dumps, pooler, extensions, rotation, node volumes, public TLS and cross-node
+- **PITR, 1 GB dumps, pooler, extensions, rotation, disks, public TLS and cross-node
   WireGuard** are not in Wave 0. They stay covered by unit/renderer tests and need feature-lane
   cases after plans 01–07 land.
 - **No quota/RSS assertion** for the edge baseline; this lane checks behaviour, not memory.

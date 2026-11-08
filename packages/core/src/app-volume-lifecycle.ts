@@ -23,7 +23,7 @@ import type { ProjectRow } from './projects.ts';
 import { newId, parseJson } from './util.ts';
 
 /**
- * App-volume snapshots, restores, usage and the trash purge (docs/VOLUMES.md §14).
+ * App-volume snapshots, restores, usage and the trash purge (docs/VOLUMES.md).
  *
  * A snapshot is a gzip tar of the volume directory that the volume's node streams to a plan-05
  * backup target through a presigned PUT. The row records the target it was written to (as

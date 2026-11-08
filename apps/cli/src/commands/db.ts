@@ -67,6 +67,7 @@ Create options:
       --memory <size>          Memory limit, e.g. 256M or 1G (default 256M)
       --cpus <n>               CPU limit (default 1)
       --storage <size>         Storage budget for alerts and the gauge (default 10G)
+      --disk <where>           system, fast, bulk or a disk name (default: Settings → Storage)
       --[no-]pooler            PgBouncer sidecar (default on; postgres only; injects <PREFIX>_POOL_URL)
       --extension <name>       Enable an allowlisted extension, e.g. pg_trgm, uuid-ossp
                                (repeatable; postgres only)
@@ -117,6 +118,7 @@ const createFlags: FlagSpec = {
 	memory: { type: 'string' },
 	cpus: { type: 'string' },
 	storage: { type: 'string' },
+	disk: { type: 'string' },
 	pooler: { type: 'boolean' },
 	extension: { type: 'string', multiple: true },
 };
@@ -284,6 +286,8 @@ async function createDatabase(argv: string[]): Promise<void> {
 	}
 	const placement = args.string('placement');
 	if (placement) input.placement = placement;
+	const disk = args.string('disk');
+	if (disk) input.storage = disk;
 	const memory = args.string('memory');
 	if (memory) input.memoryMb = parseMegabytes(memory, '--memory');
 	const cpus = args.string('cpus');

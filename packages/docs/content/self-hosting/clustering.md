@@ -53,7 +53,7 @@ The dashboard, REST API, CLI and MCP stop, and so do deploys and configuration c
 
 ### Disk failure
 
-Skiff does not mirror a node's disks. A failed drive loses that node's data unless you have backups. See [volumes](/compute/volumes) and [backups and point-in-time recovery](/data/backups-and-pitr).
+Skiff does not mirror a node's disks. A failed drive loses that node's data unless you have backups. For redundancy on one node, set up an mdadm array or a ZFS mirror in the OS and add it as a disk. See [disks](/self-hosting/nodes-and-fleet#disks) and [backups and point-in-time recovery](/data/backups-and-pitr).
 
 ## Set up what exists
 
@@ -242,5 +242,5 @@ The page is for status. Only the `direct` driver, which is today's single edge, 
 > - Rolling deploys, and a drain that moves every app off a node.
 > - Mirrored node disks.
 > - Bucket replication to another node.
-> - One share used by apps on several nodes at once. Each node mounts a share as its own volume. See [network shares](/self-hosting/nodes-and-fleet#network-shares).
+> - One share used by apps on several nodes at once. Each node mounts a share as its own disk. See [network shares](/self-hosting/nodes-and-fleet#network-shares).
 > - Replicas for engines other than Postgres.

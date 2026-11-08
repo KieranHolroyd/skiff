@@ -394,7 +394,7 @@ Deliverable:
 | Object storage | `storage-admin.test.ts` | list/upload/download/delete | RustFS SigV4 + multipart | presigned scope, CORS, quota |
 | Pooling/TLS | renderer tests | 200 concurrent connections | TLS handshake + `sslmode=require` | cert lifecycle, no plaintext |
 | Isolation | network renderer | two orgs cannot resolve each other | netavark network | no public DB port |
-| App volumes | mount renderer | attach/detach/snapshot | node volume + helper | fail-closed mount check |
+| App volumes | mount renderer | attach/detach/snapshot | disk + helper | fail-closed mount check |
 | Jobs | cron parser, runner | one-off + scheduled | systemd transient unit | timeout, no overlap |
 | Blueprints | schema/plan diff | apply then re-apply is a no-op | one full stack | no secret values |
 | Previews | lifecycle | PR open/close, teardown | DB clone + bucket prefix | fork PR isolation |
@@ -455,7 +455,7 @@ shipped; do not re-implement them. Verify the exact gaps before starting the pla
 | Pooling | Per-database PgBouncer sidecar, port allocation, unit rendering | TLS, pooled/direct UX, pool metrics, node-level pooler decision |
 | Isolation | Credential rotation (`database_rotations`), sealed secrets | Per-org networks, TLS, named app/backup keys, encryption-at-rest proof |
 | Extensions | `pgvector`/`pg_trgm`/etc. allowlist, `pg_stat_statements` slow queries | Verify on Debian 13; PostGIS image availability |
-| Volumes | Node volumes for managed instances (D72–D80) | App volumes for workloads, snapshots, disk admission |
+| Volumes | Disks for managed instances (D72, D76, D78–D80; D169) | App volumes for workloads, snapshots, disk admission |
 | Scheduling | Cron parser, backup `next_backup_at` sweep | Generic durable scheduler, user jobs, preview teardown |
 | Agent/MCP | DB backups/restore/rotation tools | Read-only SQL, presigned URLs, plan/apply stack, fork, data health |
 

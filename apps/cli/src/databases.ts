@@ -222,6 +222,8 @@ export interface DatabaseCreateInput {
 	version?: string;
 	variant?: string;
 	placement?: string;
+	/** `system`, `fast`, `bulk` or a disk name (docs/STORAGE.md). */
+	storage?: string;
 	memoryMb?: number;
 	cpus?: number;
 	storageMb?: number;
@@ -385,7 +387,7 @@ export interface DatabaseReplicaView {
 	workloadId: string;
 	mode: 'async' | 'sync';
 	hostPort: number | null;
-	volumeId: string | null;
+	diskId: string | null;
 	sameNode: boolean;
 	message: string | null;
 	removing: boolean;

@@ -6,7 +6,7 @@ import {
 } from '@skiff/contracts';
 
 /**
- * Keeps `shareMounts` mounted and `shareUnmounts` unmounted (docs/VOLUMES.md §5).
+ * Keeps `shareMounts` mounted and `shareUnmounts` unmounted (docs/STORAGE.md §3, D143).
  *
  * Every round asks the helper which shares are mounted (no credentials needed), mounts the
  * missing ones and unmounts the ones the control plane removed. SMB credentials are fetched from

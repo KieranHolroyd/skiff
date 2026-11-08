@@ -4,11 +4,11 @@ import { LSBLK, parseLsblk, type LsblkNode } from './volumes.ts';
 import { defaultRunner, type CommandRunner } from './wireguard.ts';
 
 /**
- * Partition mounts (docs/VOLUMES.md §3.1).
+ * Disks Skiff mounts (docs/STORAGE.md §3, §3.1).
  *
  * The control plane asks for a filesystem UUID and a name; the helper mounts that filesystem at
- * `/mnt/skiff-disks/<name>` with fixed options, a path the volume inventory reports so the mount
- * can then be adopted as a node volume. It never formats anything and never takes a device path
+ * `/mnt/skiff-disks/<name>` with fixed options, a path the volume inventory reports so the disk
+ * turns ready once it is mounted. It never formats anything and never takes a device path
  * from the wire: before every mount it re-reads `lsblk` and refuses unless exactly one device
  * carries the UUID, that device is unmounted, holds nothing, and has the expected filesystem type
  * (D76 rule 2: only provably free devices).
@@ -31,7 +31,7 @@ export interface DiskMountStatus {
 }
 
 export interface DiskMounterOptions {
-	/** Parent of every partition mount point. Must be a path the volume inventory reports. */
+	/** Parent of every disk mount point. Must be a path the volume inventory reports. */
 	root?: string;
 	runner?: CommandRunner;
 }
@@ -54,7 +54,7 @@ export class DiskMounter {
 		this.runner = options.runner ?? defaultRunner;
 	}
 
-	/** Is each partition mounted at its mount point? Read-only. */
+	/** Is each disk mounted at its mount point? Read-only. */
 	async status(ids: string[]): Promise<DiskMountStatus[]> {
 		return Promise.all(
 			ids.map(async (id) => {

@@ -1,12 +1,12 @@
 <script lang="ts">
-	import type { VolumeProfileView } from '@skiff/contracts';
+	import type { DiskProfileView } from '@skiff/contracts';
 	import { Spinner } from '#lib/components/ui/spinner/index.js';
 
 	/**
-	 * One volume's latest benchmark (docs/STORAGE.md §5): sequential MB/s, random 4 KiB IOPS and the
+	 * One disk's latest benchmark (docs/STORAGE.md §5.1): sequential MB/s, random 4 KiB IOPS and the
 	 * fdatasync round trip a database commit pays.
 	 */
-	let { profile }: { profile: VolumeProfileView | null | undefined } = $props();
+	let { profile }: { profile: DiskProfileView | null | undefined } = $props();
 
 	const iops = (value: number | null) =>
 		value === null ? '—' : value >= 10_000 ? `${Math.round(value / 1000)}k` : value.toLocaleString();

@@ -1421,6 +1421,8 @@
 					</dd>
 					<dt>Node</dt>
 					<dd class="font-mono text-xs">{nodeLabel}</dd>
+					<dt>Disk</dt>
+					<dd class="text-xs">{db.disk ? `${db.disk.name} · ${db.disk.tier}${db.disk.remote ? ' · network' : ''}` : 'System disk'}</dd>
 					<dt>Memory</dt>
 					<dd class="font-mono text-xs">{db.memoryMb} MB</dd>
 					<dt>CPU</dt>
@@ -1985,7 +1987,7 @@
 					<Field.Description>
 						Needs {db.memoryMb} MB for the database{db.attachments.length > 0
 							? ` plus the memory of ${db.attachments.map((item) => item.projectSlug).join(', ')}`
-							: ''}. Data goes to the target's default volume.
+							: ''}. Data stays on the same kind of storage: {db.disk ? `a ${db.disk.tier} disk` : 'the system disk'} on the target.
 					</Field.Description>
 				</Field.Field>
 				{#if moveTarget && moveTarget.freeMemoryMb < db.memoryMb}

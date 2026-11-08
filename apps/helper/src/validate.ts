@@ -251,7 +251,7 @@ export interface WorkloadDesired {
 	 * cap matter: image, user, mounts, config and container port come from `BROKER_ENGINES`.
 	 */
 	broker?: WorkloadBroker;
-	/** Node volume for the data dir (D74); resolved and verified against the helper's registry. */
+	/** Disk for the data dir (D169); resolved and verified against the helper's registry. */
 	volumeId?: string;
 	/** App volumes mounted into this workload (plan 07); ids and mount points only, never paths. */
 	volumes?: WorkloadVolumeMount[];
@@ -1307,7 +1307,7 @@ export function parseWorkload(value: unknown): WorkloadDesired {
 	if (volumes.length > 0) workload.volumes = volumes;
 	const volumeId = record.volumeId === undefined ? undefined : assertId(record.volumeId, 'workload.volumeId');
 	if (volumeId) {
-		// Volumes hold managed-service data (D74); an app workload never mounts one.
+		// Disks hold managed-service data dirs (D169); an app workload reaches one only through an app volume.
 		if (!database && !objectStorage && !broker)
 			throw new ValidationError('workload.volumeId is only valid for a database, objectStorage or broker workload');
 		workload.volumeId = volumeId;

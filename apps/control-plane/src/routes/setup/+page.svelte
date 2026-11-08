@@ -403,9 +403,9 @@
 		<div class="space-y-4">
 			<div class="space-y-2 rounded-lg border p-3 text-sm">
 				<p>
-					Skiff can keep everything on each node's system disk, or you can group disks and network shares into
-					<strong>pools</strong>, for example databases on an <code>ssd</code> pool and object storage on an
-					<code>hdd</code> array or a NAS.
+					Skiff can keep everything on each node's system disk, or you can add more disks. Each disk is
+					<strong>fast</strong> (SSD, NVMe) or <strong>bulk</strong> (spinning disks, arrays, a NAS), and you pick
+					which one databases, object storage, app data and builds use.
 				</p>
 				<p class="text-muted-foreground">
 					{data.storage.nodes} node{data.storage.nodes === 1 ? '' : 's'} enrolled ·

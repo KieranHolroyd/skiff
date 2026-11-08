@@ -27,9 +27,9 @@
 		return parts.join(' · ') || 'reported';
 	}
 
-	function volumeSummary(node: TopologyNodeView): string {
-		if (node.volumes.length === 0) return 'no volumes';
-		return node.volumes.map((volume) => `${volume.name} (${volume.class}${volume.freeBytes !== null ? `, ${formatBytes(volume.freeBytes)} free` : ''})`).join(', ');
+	function diskSummary(node: TopologyNodeView): string {
+		if (node.disks.length === 0) return 'system disk only';
+		return node.disks.map((disk) => `${disk.name} (${disk.tier}${disk.remote ? ', network' : ''}${disk.freeBytes !== null ? `, ${formatBytes(disk.freeBytes)} free` : ''})`).join(', ');
 	}
 </script>
 
@@ -93,7 +93,7 @@
 							<th class="px-2 py-2">Zone</th>
 							<th class="px-2 py-2">Roles</th>
 							<th class="px-2 py-2">Hardware</th>
-							<th class="px-2 py-2">Volumes</th>
+							<th class="px-2 py-2">Disks</th>
 							<th class="px-2 py-2">Blast radius</th>
 						</tr>
 					</thead>
@@ -122,14 +122,14 @@
 										</div>
 									{/if}
 								</td>
-								<td class="px-2 py-3 text-xs">{volumeSummary(node)}</td>
+								<td class="px-2 py-3 text-xs">{diskSummary(node)}</td>
 								<td class="px-2 py-3">
 									{#if blast[node.id]}
 										<div class="flex flex-wrap gap-1 text-xs">
 											<Badge variant="secondary">{blast[node.id]!.summary.workloads} app</Badge>
 											<Badge variant="secondary">{blast[node.id]!.summary.databases} db</Badge>
 											<Badge variant="secondary">{blast[node.id]!.summary.storageInstances} storage</Badge>
-											<Badge variant="secondary">{blast[node.id]!.summary.volumes} vol</Badge>
+											<Badge variant="secondary">{blast[node.id]!.summary.disks} disk</Badge>
 										</div>
 									{:else}
 										<span class="text-xs text-muted-foreground">—</span>

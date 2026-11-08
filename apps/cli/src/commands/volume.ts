@@ -35,8 +35,7 @@ Commands:
 Create options:
   -p, --project <slug>         Project that owns the volume (required)
       --size <size>            Quota, e.g. 1G or 512M (default 1G)
-      --backing <kind>         state-dir (default) or node-volume
-      --node-volume <name>     Registered node volume, required for --backing node-volume
+      --disk <where>           system, fast, bulk or a disk name (default: Settings → Storage)
       --[no-]single-writer     Refuse a second read-write attachment (default on)
 
 Attach/detach options:
@@ -85,7 +84,7 @@ const createFlags: FlagSpec = {
 	...projectFlags,
 	size: { type: 'string' },
 	backing: { type: 'string' },
-	'node-volume': { type: 'string' },
+	disk: { type: 'string' },
 	'single-writer': { type: 'boolean' },
 };
 
@@ -323,20 +322,13 @@ async function createVolume(argv: string[]): Promise<void> {
 	const input: {
 		name: string;
 		sizeMb?: number;
-		backing?: 'state_dir' | 'node_volume';
-		nodeVolume?: string;
+		storage?: string;
 		singleWriter?: boolean;
 	} = { name };
 	const size = args.string('size');
 	if (size) input.sizeMb = parseMegabytes(size, '--size');
-	const backing = args.string('backing');
-	if (backing) {
-		if (backing !== 'state-dir' && backing !== 'state_dir' && backing !== 'node-volume' && backing !== 'node_volume')
-			throw new UsageError('--backing expects "state-dir" or "node-volume".');
-		input.backing = backing.startsWith('node') ? 'node_volume' : 'state_dir';
-	}
-	const nodeVolume = args.string('node-volume');
-	if (nodeVolume) input.nodeVolume = nodeVolume;
+	const disk = args.string('disk');
+	if (disk) input.storage = disk;
 	if (args.has('single-writer')) input.singleWriter = args.boolean('single-writer');
 
 	const client = await authenticatedClient();

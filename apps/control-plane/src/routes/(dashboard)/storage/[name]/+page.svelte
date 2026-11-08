@@ -1301,6 +1301,8 @@
 					<dd class="text-xs">{st.engineLabel} {st.version}</dd>
 					<dt>Node</dt>
 					<dd class="font-mono text-xs">{nodeLabel}</dd>
+					<dt>Disk</dt>
+					<dd class="text-xs">{st.disk ? `${st.disk.name} · ${st.disk.tier}${st.disk.remote ? ' · network' : ''}` : 'System disk'}</dd>
 					<dt>Memory</dt>
 					<dd class="font-mono text-xs">{st.memoryMb} MB</dd>
 					<dt>CPU</dt>

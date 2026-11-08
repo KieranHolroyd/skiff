@@ -13,7 +13,8 @@ import { confirmOrRefuse } from './run-operation.ts';
 export const replicaUsage = `Usage:
   skif db replica list <name>                 Replicas with status, lag and the promotion history
   skif db replica add <name> --node <node>    Add an async streaming replica on a node (id or name);
-                                              --volume <name> keeps its data on that node's volume
+                                              --disk <where> system, fast, bulk or a disk on that
+                                              node (default: the primary's kind of disk)
   skif db replica remove <name> <replica-id>  Stop it; its node deletes the copy, the primary drops
                                               its slot
   skif db replica promote <name> <replica-id> Make the replica the primary: fence the old one,
@@ -32,7 +33,7 @@ reach is streaming or lagging. Reads may trail the primary by the lag; use <PREF
 read-your-writes. A replica on the primary's own node is for read scaling and cannot be promoted.`;
 
 const base: FlagSpec = { json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' } };
-const addFlags: FlagSpec = { ...base, node: { type: 'string' }, volume: { type: 'string' } };
+const addFlags: FlagSpec = { ...base, node: { type: 'string' }, disk: { type: 'string' }, volume: { type: 'string' } };
 const removeFlags: FlagSpec = { ...base, yes: { type: 'boolean', short: 'y' } };
 const promoteFlags: FlagSpec = { ...removeFlags, 'accept-data-loss': { type: 'boolean' } };
 
@@ -109,14 +110,14 @@ async function listReplicas(argv: string[]): Promise<void> {
 }
 
 async function addReplica(argv: string[]): Promise<void> {
-	const args = parse(argv, addFlags, 1, 'Usage: skif db replica add <name> --node <node> [--volume <name>]');
+	const args = parse(argv, addFlags, 1, 'Usage: skif db replica add <name> --node <node> [--disk <where>]');
 	if (!args) return;
 	const name = requirePositional(args, 0, `database name.\n\n${replicaUsage}`);
 	const node = args.string('node');
 	if (!node) throw new UsageError(`Name the node: skif db replica add ${name} --node <node>`);
-	const volume = args.string('volume');
+	const disk = args.string('disk') ?? args.string('volume');
 	const client = await authenticatedClient();
-	const { replica, raw } = await client.addDatabaseReplica(name, { node, ...(volume ? { volume } : {}) });
+	const { replica, raw } = await client.addDatabaseReplica(name, { node, ...(disk ? { storage: disk } : {}) });
 	if (args.boolean('json')) {
 		printJson(raw);
 		return;

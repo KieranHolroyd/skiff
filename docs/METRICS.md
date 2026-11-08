@@ -8,7 +8,7 @@ control plane.
 
 | Request | Result |
 |---|---|
-| `GET /metrics`, no credentials | Fleet summary: node, node-volume and platform-wide traffic counts. Off when Settings → Metrics → *Public fleet summary* is off (then 401). |
+| `GET /metrics`, no credentials | Fleet summary: node, disk and platform-wide traffic counts. Off when Settings → Metrics → *Public fleet summary* is off (then 401). |
 | `GET /metrics` with `Authorization: Bearer skif_…` (or a dashboard session) | Every enabled section for **the key's organisation only**. Needs `metrics:read`; sections the key cannot read (`project:read`, `database:read`, `storage:read`, `broker:read`) are left out. |
 | `GET /metrics/<section>[/<name>]` | One section, or one app / database / storage instance / broker. Always needs a key. |
 | An `Authorization` header that does not resolve | 401, never the public view. |
@@ -24,7 +24,7 @@ The same paths work under `/api/v1/metrics/...`.
 | `/metrics/storage[/<name>]` | Object storage instances | `storage:read` |
 | `/metrics/brokers[/<name>]` | Queue brokers, plus one series family per stream | `broker:read` |
 | `/metrics/volumes[/<slug>]` | App volumes | `project:read` |
-| `/metrics/platform` | Nodes and node volumes | platform admin |
+| `/metrics/platform` | Nodes and disks | platform admin |
 
 With hundreds of apps, give each Grafana dashboard its own scrape job on the narrowest path it
 needs. For example, scrape `/metrics/usage` every 5 minutes and `/metrics/apps/shop` every 30
@@ -115,7 +115,9 @@ Brokers are not in the public fleet summary.
   `skiff_node_last_heartbeat_timestamp_seconds`, `skiff_node_cpu_percent`, `skiff_node_load1`,
   `skiff_node_memory_{used,total}_bytes`, `skiff_node_disk_{used,total,free}_bytes`,
   `skiff_node_uptime_seconds`, `skiff_node_cert_expiry_timestamp_seconds{host}`
-- `skiff_volume_up{node,volume,kind}`, `skiff_volume_size_bytes`, `skiff_volume_free_bytes` (D80)
+- Disks: `skiff_volume_up{node,volume,kind,tier}`, `skiff_volume_size_bytes`,
+  `skiff_volume_free_bytes` (D80). The names predate disks and stay; `volume` is the disk name and
+  `tier` is `fast` or `bulk` ([STORAGE.md](./STORAGE.md)).
 - Public `/metrics` only: `skiff_http_requests_total{host}`, `skiff_http_errors_total`,
   `skiff_bytes_total` (last hour), and `skiff_database_*` / `skiff_storage_*` keyed by id.
 

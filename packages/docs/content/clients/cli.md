@@ -452,7 +452,7 @@ Manages databases: PostgreSQL by default, and also MySQL, MariaDB, MongoDB, Valk
 | Command | Arguments and flags |
 | --- | --- |
 | `list` | `-a`, `--all` includes databases in the trash. The default. |
-| `create <name>` | `-p, --project <slug>` attaches it at once. `--engine` is `postgres` (default), `mysql`, `mariadb`, `mongodb`, `valkey`, `redis` or `clickhouse`. `--version`, `--variant` (PostgreSQL 18 image: `standard`, `postgis` or `pg_cron`), `--prefix`, `--placement` (`auto`, `edge` or a node ID), `--memory` (default `256M`), `--cpus` (default `1`), `--storage` (default `10G`), `--[no-]pooler` (PostgreSQL only, default on), `--extension <name>` (repeatable, PostgreSQL only). |
+| `create <name>` | `-p, --project <slug>` attaches it at once. `--engine` is `postgres` (default), `mysql`, `mariadb`, `mongodb`, `valkey`, `redis` or `clickhouse`. `--version`, `--variant` (PostgreSQL 18 image: `standard`, `postgis` or `pg_cron`), `--prefix`, `--placement` (`auto`, `edge` or a node ID), `--memory` (default `256M`), `--cpus` (default `1`), `--storage` (default `10G`, the storage budget), `--disk` (`system`, `fast`, `bulk` or a disk name; default from **Settings → Storage**), `--[no-]pooler` (PostgreSQL only, default on), `--extension <name>` (repeatable, PostgreSQL only). |
 | `info <name>` | none. Shows status, node, size against budget, attached projects and largest tables. |
 | `update <name>` | `--memory`, `--cpus`, `--storage`, `--[no-]pooler` (PostgreSQL only), `--extension <name>` (repeatable, PostgreSQL only; adds to the enabled list), `--version` (a newer listed version, in place; MySQL, MariaDB, Valkey, Redis and ClickHouse only). `--version` asks to confirm; `-y, --yes` skips it. New limits apply at the next restart. |
 | `attach <name>` | `-p, --project <slug>` (required), `--prefix <PREFIX>`, `--credential <id\|role>` connects as a named credential (PostgreSQL only). |
@@ -479,7 +479,7 @@ Manages databases: PostgreSQL by default, and also MySQL, MariaDB, MongoDB, Valk
 | `pitr-backup <name>` | `--type full`, `diff` or `incr` (default `full`). Queues a PITR base backup. |
 | `restore-to <name>` | `--time <ISO 8601 with offset or Z>` and `--as <new-name>` (both required). Restores to that moment into a new database on the same node. |
 | `replica list <name>` | Read replicas with status, lag, replay position and recent promotions. PostgreSQL only. |
-| `replica add <name>` | `--node <id or name>` (required), `--volume <name>`. Adds an async streaming replica on that node. |
+| `replica add <name>` | `--node <id or name>` (required), `--disk <where>` (`system`, `fast`, `bulk` or a disk on that node; default: the primary's tier). Adds an async streaming replica on that node. |
 | `replica remove <name> <id>` | `-y, --yes`. Stops the replica and deletes its copy. |
 | `replica promote <name> <id>` | `--accept-data-loss`, `-y, --yes`. Makes the replica the primary; asks you to type the database name. See [promote a replica](/data/databases#promote-a-replica). |
 
@@ -505,7 +505,7 @@ Manages S3-compatible object storage instances. Each instance runs on one node a
 | Command | Arguments and flags |
 | --- | --- |
 | `list` | `-a`, `--all` includes the trash. The default. |
-| `create <name>` | `-b, --bucket <name>` (repeatable or comma-separated), `-p, --project`, `--prefix` (default `S3`), `--public`, `--version`, `--placement`, `--memory` (default `512M`), `--cpus` (default `1`), `--storage` (default `10G`). |
+| `create <name>` | `-b, --bucket <name>` (repeatable or comma-separated), `-p, --project`, `--prefix` (default `S3`), `--public`, `--version`, `--placement`, `--memory` (default `512M`), `--cpus` (default `1`), `--storage` (default `10G`, the storage budget), `--disk` (`system`, `fast`, `bulk` or a disk name; default from **Settings → Storage**). |
 | `info <name>` | none. Status, endpoints, usage, buckets and attached projects. |
 | `update <name>` | `--memory`, `--cpus`, `--storage`, `--version`, `--public` or `--no-public`. |
 | `restart <name>` or `--all` | none. Buckets and objects are kept. |
@@ -514,7 +514,7 @@ Manages S3-compatible object storage instances. Each instance runs on one node a
 | `credentials <name>` | `--prefix <PREFIX>`. Prints the root key as `AWS_*` lines, or everything as JSON with `--json`. |
 | `rotate-root <name>` | `--cancel` abandons a rotation still waiting for the node. `-y, --yes`. Restarts RustFS with a new root key; the old key stops working once the node confirms the new one. |
 | `keys <command>` | Subcommands below. |
-| `move <name>` | `--node <node-id>` (required), `--volume <name>`, `-y, --yes`. Moves the instance empty: objects are not copied and the old copy is deleted. Asks you to type the name. |
+| `move <name>` | `--node <node-id>` (required), `--disk <where>` (default: the instance's current tier), `-y, --yes`. Moves the instance empty: objects are not copied and the old copy is deleted. Asks you to type the name. |
 | `metrics <name>` | `--since <duration>` (for example `1h`), or `--from` and `--to`. `--interval 1m` or `1h`. |
 | `buckets <command>` | Subcommands below. |
 | `objects <command>` | Subcommands below. |
@@ -577,7 +577,7 @@ Manages persistent volumes mounted into a project's workload. See [volumes](/com
 | --- | --- |
 | `list` | `-p, --project <slug>`. The default. Warns about volumes that are nearly full. |
 | `show <name>` | `-p, --project` (required). Usage, attachments and the latest snapshots. Also `get`. |
-| `create <name>` | `-p, --project` (required), `--size` (default `1G`), `--backing state-dir` (default) or `node-volume`, `--node-volume <name>` (required with `node-volume`), `--[no-]single-writer` (default on). |
+| `create <name>` | `-p, --project` (required), `--size` (default `1G`), `--disk` (`system`, `fast`, `bulk` or a disk name; default from **Settings → Storage**), `--[no-]single-writer` (default on). |
 | `attach <name>` | `-p, --project` (required), `-m, --mount <path>` (absolute path, for example `/var/lib/app`), `--workload <id or slug>`, `--env <name>` (default `production`), `--read-only`. |
 | `detach <name>` | `-p, --project` (required), `--workload`, `--env`. The data is untouched. |
 | `delete <name>` | `-p, --project` (required), `-y, --yes`. Refused while attached. The data is kept for 7 days. Also `rm`. |
@@ -604,7 +604,7 @@ Manages NATS brokers with JetStream. Queue commands also work on function queues
 | Command | Arguments and flags |
 | --- | --- |
 | `list` | `-a`, `--all` includes the trash. The default. |
-| `create <name>` | `-p, --project`, `--prefix` (default `NATS`), `--engine` (`nats`), `--version` (`2.12` or `2.11`), `--placement`, `--memory` (default `256M`), `--cpus` (default `0.5`), `--storage` (default `2G`, the message store cap), `--volume <name>`. |
+| `create <name>` | `-p, --project`, `--prefix` (default `NATS`), `--engine` (`nats`), `--version` (`2.12` or `2.11`), `--placement`, `--memory` (default `256M`), `--cpus` (default `0.5`), `--storage` (default `2G`, the message store cap), `--disk` (`system`, `fast`, `bulk` or a disk name; default from **Settings → Storage**). |
 | `info <name>` | none. Also `show`. |
 | `update <name>` | `--version`, `--memory`, `--cpus`, `--storage`. |
 | `attach <name>` | `-p, --project` (required), `--prefix`. |
