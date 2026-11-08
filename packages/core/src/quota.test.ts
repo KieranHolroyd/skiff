@@ -226,6 +226,17 @@ describe('usage aggregation', () => {
 		expect(Array.isArray(history.points)).toBe(true);
 	});
 
+	test('history fills metric keys missing from snapshots taken before they existed', () => {
+		const legacy = { projects: { used: 2, limit: -1, unit: 'count', percent: null } };
+		opened.sqlite.run(
+			'INSERT INTO usage_snapshots (org_id, project_id, day, metrics_json, created_at) VALUES (?, ?, ?, ?, ?)',
+			['org_a', '', '2026-10-01', JSON.stringify(legacy), clock],
+		);
+		const point = core.usage.history(ownerA).points.find((p) => p.day === '2026-10-01');
+		expect(point?.metrics.projects.used).toBe(2);
+		expect(point?.metrics.registryBytes).toEqual({ used: 0, limit: QUOTA_UNLIMITED, unit: 'bytes', percent: null });
+	});
+
 	test('another org cannot read this org usage or project', async () => {
 		const other = await core.usage.view(ownerB);
 		expect(other.orgId).toBe('org_b');

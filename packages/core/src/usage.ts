@@ -6,6 +6,7 @@ import {
 	usageSnapshots,
 } from '@skiff/db';
 import {
+	QUOTA_UNLIMITED,
 	quotaMetricUnitsByKey,
 	quotaPercent,
 	projectQuotaOverrideSchema,
@@ -37,6 +38,24 @@ function requireQuotaAdmin(principal: Principal): void {
 }
 const CACHE_MS = 60_000;
 const DAYS = 30;
+
+/**
+ * Snapshots are frozen JSON from the day they were taken, so ones written before a metric key
+ * existed (e.g. `registryBytes`) lack it. Fill the gap with zero-used/unlimited so every point
+ * carries every key the contract promises.
+ */
+function completeSnapshot(stored: Partial<QuotaUsageMetrics>): QuotaUsageMetrics {
+	const metrics = {} as QuotaUsageMetrics;
+	for (const key of quotaUsageMetricKeys) {
+		metrics[key] = stored[key] ?? {
+			used: 0,
+			limit: QUOTA_UNLIMITED,
+			unit: quotaMetricUnitsByKey[key],
+			percent: null,
+		};
+	}
+	return metrics;
+}
 
 export interface UsageOptions {
 	/** Scope the view to one project in the caller's org. */
@@ -211,7 +230,7 @@ export class UsageService {
 			projectSlug: project?.slug ?? null,
 			points: rows.map((row) => ({
 				day: row.day,
-				metrics: JSON.parse(row.metricsJson) as QuotaUsageMetrics,
+				metrics: completeSnapshot(JSON.parse(row.metricsJson) as Partial<QuotaUsageMetrics>),
 			})),
 		};
 	}
