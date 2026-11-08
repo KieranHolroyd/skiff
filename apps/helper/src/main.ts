@@ -8,6 +8,8 @@ import { ShareMounter } from './shares.ts';
 import { ContainerConsole } from './container-console.ts';
 import { DEFAULT_SUBID_FILES } from './userns.ts';
 import { JobDriver } from './jobs.ts';
+import { PipelineJobDriver, resolveBuildsRoot } from './pipeline-jobs.ts';
+import { ensureStorageTools } from './storage-tools.ts';
 import { dirname, join } from 'node:path';
 
 /**
@@ -92,6 +94,7 @@ export async function runHelper(): Promise<void> {
 		nodeUpdate,
 		wireguard,
 		shares: new ShareMounter(),
+		volumeProfiler: driver.volumeProfiler(),
 		containers,
 		appVolumes: driver.appVolumeData({ log: (level, message) => log(level, `app volumes: ${message}`) }),
 		// Job runs (plan 09): systemd-run sits beside systemctl on every supported distribution.
@@ -109,9 +112,32 @@ export async function runHelper(): Promise<void> {
 			resolveAppVolumeMounts: (workload) => driver.resolveAppVolumeMounts(workload),
 			resolveDataDir: (workload) => driver.resolveDataDir(workload),
 		}),
+		// Pipeline job containers (docs/PIPELINES.md W5/W6): the Builder never runs Podman itself.
+		pipelineJobs: new PipelineJobDriver({
+			runner: spawnRunner(),
+			podmanPath: config.podmanPath,
+			runtimeDir: config.runtimeDir,
+			buildsRoot: () => resolveBuildsRoot({ override: process.env.SKIFF_HELPER_BUILDS_DIR?.trim() || null, unitDir: config.unitDir }),
+			stepBinary: config.nodeUpdate.agentBinary,
+			apparmorProfile: config.apparmorProfile,
+			subidFiles: DEFAULT_SUBID_FILES,
+			log: (level, message) => log(level, message),
+		}),
 	});
 	if (stopping) await helper.stop();
 	log('info', `Listening on unix/${config.socketPath} (units ${config.unitDir})`);
+
+	// Storage tools for volume profiling and share mounts (docs/STORAGE.md §5): a node that updated
+	// in place gets them on its first start of a new helper version. Off the request path.
+	if (config.installStorageTools) {
+		const runner = spawnRunner();
+		void ensureStorageTools({
+			stateDir: config.stateDir,
+			version: config.version,
+			run: (argv, env) => runner.run(argv, env ? { env } : {}),
+			log: (level, message) => log(level, `storage tools: ${message}`),
+		});
+	}
 
 	// D96 retired the D60 studio console; clear any console sidecar a node kept from before the upgrade. Best
 	// effort and off the request path: a failure is logged and retried on the next helper start.

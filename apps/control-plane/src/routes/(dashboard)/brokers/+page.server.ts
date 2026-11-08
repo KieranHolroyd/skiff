@@ -49,6 +49,8 @@ export const load: PageServerLoad = ({ locals, url }) => {
 	}
 
 	return {
+		/** Storage pools the create form offers (docs/STORAGE.md §3.3). */
+		storageChoices: core.storagePools.choices('brokers'),
 		view,
 		denied,
 		enabled: features.BROKERS,
@@ -72,6 +74,7 @@ export const actions: Actions = {
 			memoryMb: formString(data, 'memoryMb'),
 			cpus: formString(data, 'cpus'),
 			storageMb: formString(data, 'storageMb'),
+			pool: formString(data, 'pool'),
 			project: formString(data, 'project'),
 			envPrefix: formString(data, 'envPrefix').toUpperCase()
 		};
@@ -83,6 +86,7 @@ export const actions: Actions = {
 			memoryMb: optionalNumber(values.memoryMb),
 			cpus: optionalNumber(values.cpus),
 			storageMb: optionalNumber(values.storageMb),
+			pool: values.pool || undefined,
 			project: values.project || undefined,
 			envPrefix: values.project ? values.envPrefix || undefined : undefined
 		};

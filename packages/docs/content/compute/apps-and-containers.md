@@ -58,7 +58,7 @@ A PHP app that adopts the socket is in `examples/php-frankenphp` in the reposito
 
 ## Create a container
 
-A container needs an image. Pin it by digest so that a deploy always runs the same bytes:
+A container needs an image. You can name a tag: each deploy resolves it to the image's digest and runs that digest, so a deployment, and a rollback to it, always runs the same bytes. To pick up a tag that moved, deploy again. You can also name a digest yourself:
 
 ```json
 {
@@ -74,6 +74,85 @@ A container needs an image. Pin it by digest so that a deploy always runs the sa
 ```
 
 Containers cannot set a `command`. Use the entrypoint the image defines. Skiff publishes the container's `port` only on the node's loopback interface, and Caddy on the same node proxies to it.
+
+To change only the image and deploy it, run `skif registry deploy <project> <image>` (or `POST /api/v1/projects/<slug>/deploy-image`).
+
+### Private images
+
+Add a login for the image's registry under **Settings → Container registries**, or with the CLI:
+
+```sh
+echo "$GHCR_TOKEN" | skif registry credentials add ghcr ghcr.io -u my-org --password-stdin
+```
+
+There is one credential per registry host per organisation; use `docker.io` for Docker Hub. Skiff uses it to resolve the digest when you deploy, and the node gets it only when it pulls, as a root-only auth file next to the container. Changing a credential doesn't restart anything: a container that failed to pull retries with the new login.
+
+### The platform registry
+
+A platform admin can run a registry for the whole install (Settings → Container registries → **Turn on**). Its host is `registry.<your content domain>` by default. Push to it with your Skiff API key:
+
+```sh
+skif registry login                      # docker login with this profile's API key
+docker push registry.example.com/my-org/my-api:1.0
+skif registry deploy my-api registry.example.com/my-org/my-api:1.0
+```
+
+The first path segment is your organisation's slug: you can push only to your own organisation, and only with `image:push` (deployers and above). Viewers can pull.
+
+The **Registry** page in the sidebar lists your repositories with their size and last push. Open one to see its tags, which deployments run each digest, deploy a tag to a container project, set up deploy on push, scan a tag for vulnerabilities or delete a tag. Nodes pull with a login scoped to the one repository each container uses. Each repository keeps its newest tags (20 by default), plus every digest a deployment still runs.
+
+Nodes delete images that no container or unit needs any more, once an hour. `localhost/…` images loaded with `podman load` are never deleted automatically.
+
+#### Deploy on push
+
+`skif registry autodeploy my-org/web web --tag latest` (or **Deploy on push** on the repository's page) deploys every push of `my-org/web:latest` to the `web` container project, pinned to the pushed digest. Each deployment keeps its digest in the registry for as long as the deployment exists, so retention never deletes what you might roll back to.
+
+#### Build in a pipeline
+
+A Pipelines workflow builds a Dockerfile and pushes with the job's own login; no secret is needed. `registry/<name>` means your organisation's namespace on the platform registry:
+
+```yaml
+jobs:
+  image:
+    runs-on: self-hosted
+    steps:
+      - uses: skiff/checkout
+      - id: build
+        uses: skiff/build-image
+        with:
+          tags: registry/web:${{ skiff.sha }}
+      - uses: skiff/deploy
+        with:
+          project: web
+          image: ${{ steps.build.outputs.image }}
+```
+
+Pull requests from forks can pull but never push.
+
+#### Push from GitHub Actions
+
+Let a GitHub repository push without storing a secret: `skif registry trust add my-gh-org/web my-org/web --ref refs/heads/main`, or **Add trust** on the Registry page. In the workflow:
+
+```yaml
+permissions: { id-token: write, contents: read }
+steps:
+  - id: oidc
+    run: |
+      token=$(curl -sH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=registry.example.com" | jq -r .value)
+      echo "::add-mask::$token"; echo "token=$token" >> "$GITHUB_OUTPUT"
+  - uses: docker/login-action@v3
+    with: { registry: registry.example.com, username: github-oidc, password: "${{ steps.oidc.outputs.token }}" }
+```
+
+#### Mirrors, signatures and scans
+
+A platform admin can also turn on, under Settings → Container registries:
+
+- **Mirrors** for Docker Hub, GHCR and Quay. Nodes then pull those images through the registry (and straight from upstream if it is down), which avoids Docker Hub's pull limits.
+- **Signatures.** Add your cosign public key. With `enforce`, a deploy of an image from the platform registry is refused unless its digest is signed by a trusted key; `warn` only logs.
+- **CVE scanning.** `skif registry scan my-org/web:1.0` lists the image's vulnerabilities.
+- **S3 storage** for the registry's blobs, with a Valkey cache, so the registry can move to another node without copying anything.
+- A **registry quota** (`registryBytes`) per organisation or project. Over it, pushes are refused; pulls never are.
 
 ## Workload settings
 

@@ -14,7 +14,7 @@ Operators run this part once. A platform admin chooses a **mail node** in **Sett
 
 Email is on by default. Setting `SKIFF_FEATURE_EMAIL=0` hides the Email surfaces and refuses sends.
 
-The mail node answers on hostnames under one **mail domain**. Skiff takes it from `SKIFF_MAIL_DOMAIN` if set, otherwise from the Cloudflare zone it manages, otherwise from the parent of the platform's host (`control.example.com` gives `example.com`). **Settings → Email** lists the records to publish. For a mail domain of `example.com`, they are:
+The mail node answers on hostnames under one **mail domain**. By default it is the **content domain**, the one your sites live under. To send from somewhere else, enter a custom domain (or a URL) under **Mail domain** in **Settings → Email**; `SKIFF_MAIL_DOMAIN` sets one at install time, and the dashboard setting overrides it. The slugs `mx1`, `smtp` and `bounces` are reserved so no project takes a mail host name. **Settings → Email** lists the records to publish. For a mail domain of `example.com`, they are:
 
 | Name | Type | Value |
 | --- | --- | --- |

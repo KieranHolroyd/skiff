@@ -958,3 +958,87 @@ describe('studio process', () => {
 		expect(f.runner.calls).toEqual([]);
 	});
 });
+
+describe('platform registry (docs/REGISTRY.md G1)', () => {
+	const REG_ID = 'reg_0123456789abcdef0123456789abcdef';
+	const CERT = '-----BEGIN CERTIFICATE-----\nMIIBAAAA\n-----END CERTIFICATE-----';
+	const registryWorkload = (overrides: Record<string, unknown> = {}) =>
+		workload({
+			id: REG_ID,
+			projectId: REG_ID,
+			projectSlug: 'registry',
+			deploymentId: REG_ID,
+			runtime: 'container',
+			release: null,
+			image: 'ghcr.io/project-zot/zot:v2.1.23',
+			upstream: '127.0.0.1:15000',
+			port: 15000,
+			healthPath: '/readyz',
+			socketActivation: false,
+			env: {},
+			secrets: [],
+			registry: {
+				engine: 'zot',
+				version: '2.1.23',
+				service: 'registry.example.com',
+				realm: 'https://control.example.com/api/registry/token',
+				keepTags: 15,
+			},
+			...overrides,
+		});
+	const registryActivation = (env: Record<string, string> = {}): WorkloadActivation => ({
+		workloadId: REG_ID,
+		activationVersion: 'b'.repeat(64),
+		env: {
+			SKIFF_REGISTRY_TOKEN_CERT: CERT,
+			SKIFF_REGISTRY_EVENTS_URL: 'https://control.example.com/api/webhooks/registry/s3cret',
+			...env,
+		},
+		files: {},
+	});
+
+	test('renders zot from the profile: pinned image, config dir, unprivileged uid, no secrets in env', async () => {
+		const f = await fixture();
+		await f.driver.apply(parseWorkload(registryWorkload()), registryActivation());
+		const unit = await fs.readFile(join(f.quadletDir, `skiff-workload-${REG_ID}.container`), 'utf8');
+		expect(unit).toContain('Image=ghcr.io/project-zot/zot:v2.1.23@sha256:9d3de83ac2099e6f4843045b4c9b65b7e8baf40f92d28f54906dee9d4d390fd7');
+		expect(unit).toContain('User=65532:65532');
+		expect(unit).toContain('PublishPort=127.0.0.1:15000:5000');
+		expect(unit).toContain(`Volume=${join(f.runtimeDir, REG_ID, 'zot')}:/etc/zot:ro,Z`);
+		expect(unit).toContain('ReadOnly=true');
+		expect(unit).not.toContain('UserNS=');
+		const config = JSON.parse(await fs.readFile(join(f.runtimeDir, REG_ID, 'zot', 'config.json'), 'utf8'));
+		expect(config.http.auth.bearer).toEqual({
+			realm: 'https://control.example.com/api/registry/token',
+			service: 'registry.example.com',
+			cert: '/etc/zot/cert.pem',
+		});
+		expect(config.http.compat).toEqual(['docker2s2']);
+		expect(config.storage.retention.policies[0].keepTags).toEqual([
+			{ patterns: ['^skiff-d-.*'] },
+			{ mostRecentlyPushedCount: 15 },
+		]);
+		expect(config.extensions.events.sinks[0].address).toBe('https://control.example.com/api/webhooks/registry/s3cret');
+		expect(await fs.readFile(join(f.runtimeDir, REG_ID, 'zot', 'cert.pem'), 'utf8')).toBe(`${CERT}\n`);
+		const env = await fs.readFile(join(f.runtimeDir, REG_ID, 'env'), 'utf8');
+		expect(env).not.toContain('SKIFF_REGISTRY');
+		expect(f.chowns).toContainEqual([join(f.runtimeDir, REG_ID, 'zot', 'config.json'), 65532, 65532]);
+		// The first start pulls the image, so the restart is queued.
+		expect(f.runner.calls).toContainEqual(['/usr/bin/systemctl', 'restart', '--no-block', `skiff-workload-${REG_ID}.service`]);
+		// The config dir ends read-only; reopen it so the fixture cleanup (not root) can delete it.
+		expect((await fs.stat(join(f.runtimeDir, REG_ID, 'zot'))).mode & 0o777).toBe(0o500);
+		await fs.chmod(join(f.runtimeDir, REG_ID, 'zot'), 0o700);
+	});
+
+	test('refuses another image, a missing certificate, and app ids with the registry prefix', async () => {
+		expect(() => parseWorkload(registryWorkload({ image: 'docker.io/library/registry:2' }))).toThrow(/workload.image must be/);
+		expect(() => parseWorkload(registryWorkload({ registry: { engine: 'zot', version: '9.9.9', service: 'r.example.com', realm: 'https://x/t' } }))).toThrow(
+			/version/,
+		);
+		expect(() => parseWorkload(workload({ id: 'reg_1234' }))).toThrow(/reserved for the registry/);
+		const f = await fixture();
+		await expect(
+			f.driver.apply(parseWorkload(registryWorkload()), registryActivation({ SKIFF_REGISTRY_TOKEN_CERT: 'not a cert' })),
+		).rejects.toThrow(/PEM certificate/);
+	});
+});

@@ -12,11 +12,13 @@ import { brokerCommand } from './commands/broker.ts';
 import { eventsCommand } from './commands/events.ts';
 import { emailCommand } from './commands/email.ts';
 import { functionCommand } from './commands/function.ts';
-import { jobsCommand, runCommand } from './commands/jobs.ts';
+import { jobsCommand } from './commands/jobs.ts';
+import { repoCommand, runOrPipelineCommand, secretCommand, varCommand, workflowCommand } from './commands/pipelines.ts';
 import { haCommand } from './commands/ha.ts';
 import { backupTargetCommand } from './commands/backup-target.ts';
 import { blueprintCommand } from './commands/blueprint.ts';
 import { logDrainCommand } from './commands/log-drain.ts';
+import { registryCommand } from './commands/registry.ts';
 import { auditCommand } from './commands/audit.ts';
 import { volumeCommand } from './commands/volume.ts';
 import { deployCommand } from './commands/deploy.ts';
@@ -74,7 +76,17 @@ const commands: Record<string, (argv: string[]) => Promise<void>> = {
 	fn: functionCommand,
 	jobs: jobsCommand,
 	job: jobsCommand,
-	run: runCommand,
+	run: runOrPipelineCommand,
+	repo: repoCommand,
+	repos: repoCommand,
+	repository: repoCommand,
+	workflow: workflowCommand,
+	workflows: workflowCommand,
+	wf: workflowCommand,
+	secret: secretCommand,
+	secrets: secretCommand,
+	var: varCommand,
+	vars: varCommand,
 	events: eventsCommand,
 	event: eventsCommand,
 	email: emailCommand,
@@ -83,6 +95,8 @@ const commands: Record<string, (argv: string[]) => Promise<void>> = {
 	backupTargets: backupTargetCommand,
 	'log-drain': logDrainCommand,
 	'log-drains': logDrainCommand,
+	registry: registryCommand,
+	images: registryCommand,
 	audit: auditCommand,
 	volume: volumeCommand,
 	volumes: volumeCommand,
@@ -125,10 +139,15 @@ Commands:
   function [invoke|cron]                     Test a function on its node: a request, or a cron run now (\`skif function --help\`)
   jobs [list|create|run|runs|logs|…]       Cron jobs and manual commands on an app (\`skif jobs --help\`)
   run <project> -- <command…>               Run a one-off command against the app's current release
+  repo [list|show|add|remove]                Git repositories for pipelines (\`skif repo --help\`)
+  run [list|view|watch|logs|cancel|rerun]    Pipeline runs: jobs, steps, logs (\`skif run --help\`)
+  workflow [dispatch|run|lint]               Start a workflow, run a local file, or lint one (\`skif workflow --help\`)
+  secret|var [list|set|rm] <repo>            Pipeline secrets and variables (\`skif secret --help\`)
   events [list|create|test|deliveries|…]    Publish platform events (uploads, alerts, deploys, backups) to a function queue (\`skif events --help\`)
   email [status|domains|send|log|…]          Send email from your own domains, a self-hosted SES (\`skif email --help\`)
   backup-target [list|add|test|remove]       Where backups are written (\`skif backup-target --help\`)
   log-drain [list|create|test|update|…]      Forward logs to a webhook or OTLP receiver (\`skif log-drain --help\`)
+  registry [status|login|repos|credentials|deploy]  The platform registry, private registry logins, image deploys (\`skif registry --help\`)
   audit [--from] [--to] [--all]              Org audit log, newest first, with a date range and paging
   volume [list|show|snapshot|restore|…]      Persistent app volumes and their snapshots (\`skif volume --help\`)
   ha status                                  Failover controller: lease, lost nodes, recent failovers (platform admin)

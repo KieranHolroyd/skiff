@@ -17,13 +17,13 @@ import {
 const created = appVolumeCreateSchema.parse({ name: 'app-data' });
 
 describe('app volume schemas', () => {
-	test('create defaults to a state-dir single-writer volume', () => {
+	test('create defaults to a single-writer volume placed in the default storage pool', () => {
 		expect(created).toEqual({
 			name: 'app-data',
 			sizeMb: 1024,
-			backing: 'state_dir',
 			singleWriter: true,
 		});
+		expect(appVolumeCreateSchema.safeParse({ name: 'app-data', backing: 'state_dir', pool: 'ssd' }).success).toBe(false);
 		expect(appVolumeCreateSchema.safeParse({ name: 'app-data', nodeVolume: 'data' }).success).toBe(false);
 		expect(appVolumeCreateSchema.safeParse({ name: 'app-data', backing: 'node_volume' }).success).toBe(false);
 		expect(

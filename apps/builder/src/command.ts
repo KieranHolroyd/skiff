@@ -39,7 +39,13 @@ export function unitName(buildId: string): string {
 
 export interface SystemdLimits {
 	workDir: string;
-	command: string;
+	/** Shell command run with `bash -lc` (git builds). Ignored when `argv` is set. */
+	command?: string;
+	/**
+	 * Program and arguments run as-is instead of `bash -lc <command>` (the pipeline step runner).
+	 * Each element stays one argument; nothing is parsed by a shell.
+	 */
+	argv?: string[];
 	unit?: string;
 	memoryMax?: string;
 	cpuQuota?: string;
@@ -56,6 +62,11 @@ export interface SystemdLimits {
 	env?: Record<string, string>;
 	/** Cap on processes in the unit, so a fork bomb stays inside the build. */
 	tasksMax?: number;
+	/**
+	 * Variables copied from systemd-run's own environment (`--setenv=NAME`, no value), so a
+	 * credential such as the pipeline job token never appears in argv and therefore in `ps`.
+	 */
+	inheritEnv?: string[];
 }
 
 /** Paths a build must never read, whatever account it runs as. `-` tolerates a missing path. */
@@ -108,11 +119,22 @@ export function systemdRunArgs(input: SystemdLimits): string[] {
 		`--property=RuntimeMaxSec=${input.timeoutSeconds ?? 600}`,
 		...sandboxProperties(input).map((property) => `--property=${property}`),
 		...Object.entries(input.env ?? {}).map(([key, value]) => `--setenv=${key}=${value}`),
+		...(input.inheritEnv ?? []).map((name) => `--setenv=${validateEnvName(name)}`),
 		`--working-directory=${input.workDir}`,
-		'/bin/bash',
-		'-lc',
-		validateBuildCommand(input.command),
+		...(input.argv ? validateArgv(input.argv) : ['/bin/bash', '-lc', validateBuildCommand(input.command ?? '')]),
 	];
+}
+
+function validateEnvName(name: string): string {
+	if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new BuildValidationError(`Invalid environment variable name "${name}"`);
+	return name;
+}
+
+/** An explicit argv: absolute program path, no NUL bytes (systemd would truncate the argument). */
+function validateArgv(argv: string[]): string[] {
+	if (!argv.length || !argv[0]!.startsWith('/')) throw new BuildValidationError('argv must start with an absolute program path');
+	if (argv.some((arg) => arg.includes('\0'))) throw new BuildValidationError('argv contains a NUL byte');
+	return argv;
 }
 
 /** Direct-execution fallback for development; identical command boundary to the unit. */

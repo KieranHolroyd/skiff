@@ -353,7 +353,13 @@ export class QuotaService {
 			.from(builds)
 			.where(and(...filters))
 			.get();
-		this.assertLimit('Builds today', 'buildsPerDay', (row?.count ?? 0) + 1, quota.buildsPerDay, 'count');
+		// Pipeline triggers (docs/PIPELINES.md) count as builds org-wide; they belong to no project.
+		const pipelineTriggers = scope
+			? 0
+			: (this.ctx.sqlite
+					.query<{ n: number }, [string, number]>('SELECT COUNT(*) AS n FROM pipeline_triggers WHERE org_id = ? AND created_at >= ?')
+					.get(orgId, since)?.n ?? 0);
+		this.assertLimit('Builds today', 'buildsPerDay', (row?.count ?? 0) + pipelineTriggers + 1, quota.buildsPerDay, 'count');
 	}
 
 	/**
@@ -383,6 +389,14 @@ export class QuotaService {
 		if (!this.enforced()) return;
 		const quota = this.effective(orgId, projectId);
 		this.assertLimit('Egress (30 days)', 'egressBytes', usedBytes + additionalBytes, quota.egressBytes, 'bytes');
+	}
+
+	/** Platform registry pushes (docs/REGISTRY.md §6.3): refused while sampled usage is at the limit. */
+	assertCanPushImage(orgId: string, projectId: string | null, usedBytes: number): void {
+		if (!this.enforced()) return;
+		const quota = this.effective(orgId, projectId);
+		if (quota.registryBytes < 0 || usedBytes < quota.registryBytes) return;
+		this.assertLimit('Registry images', 'registryBytes', usedBytes + 1, quota.registryBytes, 'bytes');
 	}
 
 	// ---------------------------------------------------------------- memory and uploads
@@ -678,6 +692,7 @@ function rowToQuota(row: typeof orgQuotas.$inferSelect): Quota {
 		previews: row.previews ?? -1,
 		workloadMemoryMb: row.workloadMemoryMb ?? -1,
 		egressBytes: row.egressBytes ?? -1,
+		registryBytes: row.registryBytes ?? -1,
 	};
 }
 

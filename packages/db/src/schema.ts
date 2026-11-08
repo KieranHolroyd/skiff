@@ -403,6 +403,8 @@ export const nodeVolumes = sqliteTable(
 		sizeBytes: integer('size_bytes'),
 		freeBytes: integer('free_bytes'),
 		statsAt: integer('stats_at'),
+		/** Storage pool this volume belongs to (docs/STORAGE.md, 0068); null = unassigned. */
+		poolId: text('pool_id'),
 		createdBy: text('created_by').notNull(),
 		createdAt: integer('created_at').notNull().$defaultFn(now),
 		updatedAt: integer('updated_at').notNull().$defaultFn(now),
@@ -411,7 +413,142 @@ export const nodeVolumes = sqliteTable(
 		uniqueIndex('node_volumes_node_name_idx').on(t.nodeId, t.name),
 		uniqueIndex('node_volumes_node_source_idx').on(t.nodeId, t.sourceKey),
 		index('node_volumes_node_idx').on(t.nodeId),
+		index('node_volumes_pool_idx').on(t.poolId),
 	],
+);
+
+/** Named, platform-wide groups of node volumes (docs/STORAGE.md, D144). */
+export const storagePools = sqliteTable(
+	'storage_pools',
+	{
+		id: text('id').primaryKey(),
+		name: text('name').notNull(),
+		description: text('description').notNull().default(''),
+		allocation: text('allocation', { enum: ['most-free', 'fill-up'] }).notNull().default('most-free'),
+		minFreePercent: integer('min_free_percent').notNull().default(10),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [uniqueIndex('storage_pools_name_idx').on(t.name)],
+);
+
+/** Benchmarks of node volumes (docs/STORAGE.md §5, 0070); the latest per volume is shown. */
+export const volumeProfiles = sqliteTable(
+	'volume_profiles',
+	{
+		id: text('id').primaryKey(),
+		volumeId: text('volume_id').notNull(),
+		nodeId: text('node_id').notNull(),
+		status: text('status', { enum: ['queued', 'running', 'succeeded', 'failed'] }).notNull().default('queued'),
+		method: text('method', { enum: ['fio', 'dd'] }),
+		sizeMb: integer('size_mb').notNull(),
+		runtimeSeconds: integer('runtime_seconds').notNull(),
+		seqReadMBps: real('seq_read_mbps'),
+		seqWriteMBps: real('seq_write_mbps'),
+		randReadIops: integer('rand_read_iops'),
+		randWriteIops: integer('rand_write_iops'),
+		syncWriteIops: integer('sync_write_iops'),
+		syncWriteLatencyUs: integer('sync_write_latency_us'),
+		direct: integer('direct', { mode: 'boolean' }),
+		notesJson: text('notes_json'),
+		error: text('error'),
+		requestedBy: text('requested_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		finishedAt: integer('finished_at'),
+	},
+	(t) => [index('volume_profiles_volume_idx').on(t.volumeId, t.createdAt), index('volume_profiles_node_status_idx').on(t.nodeId, t.status)],
+);
+
+/** Which pool each kind of data uses; `poolId` null = the system disk (docs/STORAGE.md §3). */
+export const storageRules = sqliteTable('storage_rules', {
+	kind: text('kind').primaryKey(),
+	poolId: text('pool_id'),
+	overflowPoolId: text('overflow_pool_id'),
+	updatedBy: text('updated_by').notNull(),
+	updatedAt: integer('updated_at').notNull().$defaultFn(now),
+});
+
+/**
+ * Credentials for external container registries (docs/REGISTRY.md R2, 0069). One per registry
+ * host per org; the password is sealed with the org key and only leaves through activation.
+ */
+export const registryCredentials = sqliteTable(
+	'registry_credentials',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		name: text('name').notNull(),
+		/** Normalised host, e.g. `ghcr.io`, `docker.io`, `registry.example.com:5000`. */
+		registry: text('registry').notNull(),
+		username: text('username').notNull(),
+		passwordSealed: text('password_sealed').notNull(),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+		lastUsedAt: integer('last_used_at'),
+	},
+	(t) => [
+		uniqueIndex('registry_credentials_org_name_idx').on(t.orgId, t.name),
+		uniqueIndex('registry_credentials_org_registry_idx').on(t.orgId, t.registry),
+	],
+);
+
+/** Repositories in the platform registry (docs/REGISTRY.md G1, 0072); content lives in zot. */
+export const registryRepositories = sqliteTable(
+	'registry_repositories',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		/** `<org slug>/<name>`, exactly as pushed. */
+		name: text('name').notNull(),
+		projectId: text('project_id'),
+		pushes: integer('pushes').notNull().default(0),
+		lastTag: text('last_tag'),
+		lastDigest: text('last_digest'),
+		lastPushAt: integer('last_push_at'),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		/** Deploy on push (0073): a push of `deployTag` deploys the image to this project. */
+		deployProjectId: text('deploy_project_id'),
+		deployTag: text('deploy_tag'),
+		/** Sampled size of the repository's images (0075). */
+		bytes: integer('bytes').notNull().default(0),
+		bytesSampledAt: integer('bytes_sampled_at'),
+	},
+	(t) => [uniqueIndex('registry_repositories_name_idx').on(t.name), index('registry_repositories_org_idx').on(t.orgId)],
+);
+
+/** CI identities allowed to use the registry without a secret (G3, 0076): GitHub Actions OIDC. */
+export const registryOidcTrusts = sqliteTable(
+	'registry_oidc_trusts',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		provider: text('provider', { enum: ['github'] }).notNull().default('github'),
+		/** `owner/repo` as GitHub names it in the token's `repository` claim. */
+		subjectRepository: text('subject_repository').notNull(),
+		/** Optional glob on the `ref` claim, e.g. `refs/heads/main` or `refs/tags/*`. */
+		subjectRef: text('subject_ref'),
+		/** `<org>/<name>` or `<org>/*` in the trusting org's namespace. */
+		repository: text('repository').notNull(),
+		push: integer('push', { mode: 'boolean' }).notNull().default(true),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+	},
+	(t) => [index('registry_oidc_trusts_subject_idx').on(t.provider, t.subjectRepository), index('registry_oidc_trusts_org_idx').on(t.orgId)],
+);
+
+/** Deployment pins (R11, 0073): the hidden `skiff-d-<deployment>` tag on a deployment's digest. */
+export const registryPins = sqliteTable(
+	'registry_pins',
+	{
+		deploymentId: text('deployment_id').primaryKey(),
+		repository: text('repository').notNull(),
+		digest: text('digest').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+	},
+	(t) => [index('registry_pins_repository_idx').on(t.repository)],
 );
 
 /**
@@ -1676,6 +1813,8 @@ export const orgQuotas = sqliteTable('org_quotas', {
 	previews: integer('previews').default(-1),
 	workloadMemoryMb: integer('workload_memory_mb').default(-1),
 	egressBytes: integer('egress_bytes').default(-1),
+	/** Platform registry bytes (0075). */
+	registryBytes: integer('registry_bytes').default(-1),
 	updatedAt: integer('updated_at').notNull().$defaultFn(now),
 });
 
@@ -1704,6 +1843,7 @@ export const projectQuotas = sqliteTable(
 		previews: integer('previews'),
 		workloadMemoryMb: integer('workload_memory_mb'),
 		egressBytes: integer('egress_bytes'),
+		registryBytes: integer('registry_bytes'),
 		updatedAt: integer('updated_at').notNull().$defaultFn(now),
 	},
 	(t) => [index('project_quotas_org_idx').on(t.orgId)],
@@ -2143,6 +2283,303 @@ export const emailSuppressions = sqliteTable(
 );
 
 /** Every table worth exporting, for tooling and tests. */
+// --- Pipelines (docs/PIPELINES.md, migration 0071) --------------------------------------
+
+const pipelineConclusion = ['success', 'failure', 'cancelled', 'skipped', 'timed_out'] as const;
+
+/** A git repository whose `.skiff/workflows` run as pipelines (W3). Org-owned, name unique per org. */
+export const pipelineRepositories = sqliteTable(
+	'pipeline_repositories',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		name: text('name').notNull(),
+		cloneUrl: text('clone_url').notNull(),
+		provider: text('provider', { enum: ['github', 'generic'] }).notNull().default('github'),
+		defaultBranch: text('default_branch').notNull().default('main'),
+		defaultImage: text('default_image'),
+		/** Envelope-encrypted webhook secret; never returned by the API. */
+		webhookSecret: text('webhook_secret'),
+		enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+		nextRunNumber: integer('next_run_number').notNull().default(1),
+		/**
+		 * `[{path, cron}]` from the default branch's workflows, refreshed whenever a push to it is
+		 * resolved, so `schedule:` triggers need no clone every minute.
+		 */
+		schedulesJson: text('schedules_json').notNull().default('[]'),
+		/** W14: `{trusted?, untrusted?}` weakest isolation tier allowed per trust level (0074). */
+		minIsolationJson: text('min_isolation_json').notNull().default('{}'),
+		/** Sealed GitHub token for commit statuses; never returned by the API (0074). */
+		statusToken: text('status_token'),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [uniqueIndex('pipeline_repositories_name_idx').on(t.orgId, t.name)],
+);
+
+/** An event waiting for a build node to read the workflow files at its commit. */
+export const pipelineTriggers = sqliteTable(
+	'pipeline_triggers',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		repositoryId: text('repository_id').notNull(),
+		event: text('event', { enum: ['push', 'pull_request', 'workflow_dispatch', 'schedule', 'skiff_event'] }).notNull(),
+		ref: text('ref').notNull(),
+		sha: text('sha'),
+		actor: text('actor'),
+		trust: text('trust', { enum: ['trusted', 'untrusted'] }).notNull().default('trusted'),
+		/** Event details: inputs, workflow path or inline text, PR number, base ref, changed files. */
+		payloadJson: text('payload_json').notNull().default('{}'),
+		status: text('status', { enum: ['queued', 'resolving', 'resolved', 'failed'] }).notNull().default('queued'),
+		nodeId: text('node_id'),
+		tokenHash: text('token_hash'),
+		leaseExpiresAt: integer('lease_expires_at'),
+		error: text('error'),
+		runIdsJson: text('run_ids_json').notNull().default('[]'),
+		createdBy: text('created_by'),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		finishedAt: integer('finished_at'),
+	},
+	(t) => [
+		index('pipeline_triggers_status_idx').on(t.status, t.createdAt),
+		index('pipeline_triggers_repo_idx').on(t.repositoryId, t.createdAt),
+		uniqueIndex('pipeline_triggers_token_idx').on(t.tokenHash),
+	],
+);
+
+export const pipelineRuns = sqliteTable(
+	'pipeline_runs',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		repositoryId: text('repository_id').notNull(),
+		triggerId: text('trigger_id'),
+		number: integer('number').notNull(),
+		workflowPath: text('workflow_path').notNull(),
+		workflowName: text('workflow_name').notNull(),
+		/** The normalized workflow the run was planned from (frozen; re-runs reuse it). */
+		workflowJson: text('workflow_json').notNull(),
+		event: text('event').notNull(),
+		ref: text('ref').notNull(),
+		sha: text('sha').notNull(),
+		title: text('title').notNull().default(''),
+		actor: text('actor'),
+		trust: text('trust', { enum: ['trusted', 'untrusted'] }).notNull().default('trusted'),
+		inputsJson: text('inputs_json').notNull().default('{}'),
+		status: text('status', { enum: ['queued', 'in_progress', 'completed'] }).notNull().default('queued'),
+		conclusion: text('conclusion', { enum: pipelineConclusion }),
+		attempt: integer('attempt').notNull().default(1),
+		concurrencyGroup: text('concurrency_group'),
+		cancelRequested: integer('cancel_requested', { mode: 'boolean' }).notNull().default(false),
+		/** Why the run failed before any job ran (invalid workflow, refused environment). */
+		error: text('error'),
+		createdBy: text('created_by'),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		startedAt: integer('started_at'),
+		finishedAt: integer('finished_at'),
+	},
+	(t) => [
+		uniqueIndex('pipeline_runs_number_idx').on(t.repositoryId, t.number),
+		index('pipeline_runs_status_idx').on(t.status),
+		index('pipeline_runs_repo_created_idx').on(t.repositoryId, t.createdAt),
+		index('pipeline_runs_concurrency_idx').on(t.repositoryId, t.concurrencyGroup),
+	],
+);
+
+/** One job (one matrix combination) of a run; claimed by a node with a renewable lease (W4). */
+export const pipelineJobs = sqliteTable(
+	'pipeline_jobs',
+	{
+		id: text('id').primaryKey(),
+		runId: text('run_id').notNull(),
+		orgId: text('org_id').notNull(),
+		repositoryId: text('repository_id').notNull(),
+		key: text('key').notNull(),
+		name: text('name').notNull(),
+		matrixJson: text('matrix_json'),
+		needsJson: text('needs_json').notNull().default('[]'),
+		runsOnJson: text('runs_on_json').notNull().default('[]'),
+		environment: text('environment'),
+		status: text('status', { enum: ['pending', 'waiting', 'queued', 'in_progress', 'completed'] })
+			.notNull()
+			.default('pending'),
+		conclusion: text('conclusion', { enum: pipelineConclusion }),
+		nodeId: text('node_id'),
+		/** sha256 of the job token; cleared when the job completes. */
+		tokenHash: text('token_hash'),
+		leaseExpiresAt: integer('lease_expires_at'),
+		attempt: integer('attempt').notNull().default(1),
+		outputsJson: text('outputs_json').notNull().default('{}'),
+		/** The job spec with matrix-dependent fields resolved. */
+		specJson: text('spec_json').notNull(),
+		error: text('error'),
+		cancelRequested: integer('cancel_requested', { mode: 'boolean' }).notNull().default(false),
+		approvedBy: text('approved_by'),
+		/** OCI runtime the job was claimed with (`runc`/`runsc`/`kata`), null for sandbox (0074). */
+		runtime: text('runtime'),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		queuedAt: integer('queued_at'),
+		startedAt: integer('started_at'),
+		finishedAt: integer('finished_at'),
+	},
+	(t) => [
+		index('pipeline_jobs_run_idx').on(t.runId),
+		index('pipeline_jobs_status_idx').on(t.status, t.queuedAt),
+		uniqueIndex('pipeline_jobs_token_idx').on(t.tokenHash),
+	],
+);
+
+export const pipelineSteps = sqliteTable(
+	'pipeline_steps',
+	{
+		jobId: text('job_id').notNull(),
+		idx: integer('idx').notNull(),
+		name: text('name').notNull(),
+		status: text('status', { enum: ['pending', 'in_progress', 'completed'] }).notNull().default('pending'),
+		conclusion: text('conclusion', { enum: pipelineConclusion }),
+		outputsJson: text('outputs_json').notNull().default('{}'),
+		/** `$SKIFF_STEP_SUMMARY` Markdown (0074). */
+		summary: text('summary'),
+		startedAt: integer('started_at'),
+		finishedAt: integer('finished_at'),
+	},
+	(t) => [primaryKey({ columns: [t.jobId, t.idx] })],
+);
+
+/** Live job log lines (W13); pruned with the run's log retention. */
+export const pipelineLogLines = sqliteTable(
+	'pipeline_log_lines',
+	{
+		seq: integer('seq').primaryKey({ autoIncrement: true }),
+		jobId: text('job_id').notNull(),
+		runId: text('run_id').notNull(),
+		step: integer('step').notNull().default(-1),
+		stream: text('stream', { enum: ['stdout', 'stderr', 'system'] }).notNull().default('stdout'),
+		text: text('text').notNull(),
+		ts: integer('ts').notNull(),
+	},
+	(t) => [index('pipeline_log_lines_job_idx').on(t.jobId, t.seq), index('pipeline_log_lines_ts_idx').on(t.ts)],
+);
+
+export const pipelineArtifacts = sqliteTable(
+	'pipeline_artifacts',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		repositoryId: text('repository_id').notNull(),
+		runId: text('run_id').notNull(),
+		jobId: text('job_id'),
+		name: text('name').notNull(),
+		objectKey: text('object_key').notNull(),
+		size: integer('size').notNull(),
+		sha256: text('sha256').notNull(),
+		status: text('status', { enum: ['pending', 'ready'] }).notNull().default('pending'),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		expiresAt: integer('expires_at').notNull(),
+	},
+	(t) => [
+		uniqueIndex('pipeline_artifacts_run_name_idx').on(t.runId, t.name),
+		index('pipeline_artifacts_expires_idx').on(t.expiresAt),
+	],
+);
+
+/** Dependency caches, scoped by trust and branch so a PR can never poison main's cache (W10). */
+export const pipelineCaches = sqliteTable(
+	'pipeline_caches',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		repositoryId: text('repository_id').notNull(),
+		scope: text('scope').notNull(),
+		key: text('key').notNull(),
+		version: text('version').notNull(),
+		objectKey: text('object_key').notNull(),
+		size: integer('size').notNull(),
+		status: text('status', { enum: ['pending', 'ready'] }).notNull().default('pending'),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		lastUsedAt: integer('last_used_at').notNull().$defaultFn(now),
+	},
+	(t) => [
+		uniqueIndex('pipeline_caches_key_idx').on(t.repositoryId, t.scope, t.key, t.version),
+		index('pipeline_caches_used_idx').on(t.lastUsedAt),
+	],
+);
+
+/** Repository (`environment` = '') or environment secrets, sealed with the org key (W11, W12). */
+export const pipelineSecrets = sqliteTable(
+	'pipeline_secrets',
+	{
+		id: text('id').primaryKey(),
+		orgId: text('org_id').notNull(),
+		repositoryId: text('repository_id').notNull(),
+		environment: text('environment').notNull().default(''),
+		name: text('name').notNull(),
+		valueSealed: text('value_sealed').notNull(),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [uniqueIndex('pipeline_secrets_name_idx').on(t.repositoryId, t.environment, t.name)],
+);
+
+/** Plain configuration values (`vars` context). */
+export const pipelineVariables = sqliteTable(
+	'pipeline_variables',
+	{
+		repositoryId: text('repository_id').notNull(),
+		name: text('name').notNull(),
+		value: text('value').notNull(),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [primaryKey({ columns: [t.repositoryId, t.name] })],
+);
+
+export const pipelineEnvironments = sqliteTable(
+	'pipeline_environments',
+	{
+		id: text('id').primaryKey(),
+		repositoryId: text('repository_id').notNull(),
+		name: text('name').notNull(),
+		allowedRefsJson: text('allowed_refs_json').notNull().default('[]'),
+		requireApproval: integer('require_approval', { mode: 'boolean' }).notNull().default(false),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [uniqueIndex('pipeline_environments_name_idx').on(t.repositoryId, t.name)],
+);
+
+/** Projects a repository's jobs may deploy to with `skiff/deploy` (§4.4). */
+export const pipelineProjectLinks = sqliteTable(
+	'pipeline_project_links',
+	{
+		repositoryId: text('repository_id').notNull(),
+		projectId: text('project_id').notNull(),
+		environment: text('environment'),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+	},
+	(t) => [primaryKey({ columns: [t.repositoryId, t.projectId] })],
+);
+
+/** A two-step archive deploy from a job (upload, then finalize). */
+export const pipelineDeploys = sqliteTable(
+	'pipeline_deploys',
+	{
+		id: text('id').primaryKey(),
+		jobId: text('job_id').notNull(),
+		projectId: text('project_id').notNull(),
+		objectKey: text('object_key'),
+		promote: integer('promote', { mode: 'boolean' }).notNull().default(false),
+		message: text('message'),
+		status: text('status', { enum: ['pending', 'done', 'failed'] }).notNull().default('pending'),
+		deploymentId: text('deployment_id'),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+	},
+	(t) => [index('pipeline_deploys_job_idx').on(t.jobId)],
+);
+
 export const schema = {
 	nodes,
 	nodeJoinTokens,

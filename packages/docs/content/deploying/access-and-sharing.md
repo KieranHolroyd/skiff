@@ -173,7 +173,7 @@ curl -X DELETE https://control.example.com/api/v1/projects/my-site/sessions \
 ```
 
 > [!NOTE]
-> The **Network shares** page in the sidebar is a different feature. It defines network filesystem mounts for clustered nodes, and only platform administrators can see it. Share links are created from each project, as described on this page. For cluster storage, see [clustering](/self-hosting/clustering).
+> **Settings → Network shares** is a different feature. It defines network filesystem mounts for clustered nodes, and only platform administrators can see it. Share links are created from each project, as described on this page. For cluster storage, see [clustering](/self-hosting/clustering).
 
 ## MCP tools
 

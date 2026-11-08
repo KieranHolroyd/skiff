@@ -55,7 +55,10 @@ export const CONFIRM_TOOLS: ReadonlySet<string> = new Set([
 	'run_job',
 	'run_command',
 	// A log drain copies every log line out of Skiff, to a URL the model chose (DESIGN §8).
-	'create_log_drain'
+	'create_log_drain',
+	// Pipelines run workflow code with the repository's secrets and may deploy (docs/PIPELINES.md §7).
+	'dispatch_workflow',
+	'rerun_pipeline_run'
 ]);
 
 export function needsConfirmation(

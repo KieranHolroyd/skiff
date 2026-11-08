@@ -44,6 +44,7 @@ interface StoredFilter {
 	project?: string;
 	database?: string;
 	alertRule?: string;
+	repository?: string;
 	storageId?: string;
 	projectId?: string;
 	databaseId?: string;
@@ -274,6 +275,11 @@ export class EventService {
 		this.emitPlatform(orgId, 'deployments', event, data, (filter) => !filter.projectId || filter.projectId === projectId);
 	}
 
+	/** A push to the platform registry (docs/REGISTRY.md §5.3); `data` names repository, tag and digest. */
+	emitRegistryPush(orgId: string, repository: string, data: Record<string, unknown>): void {
+		this.emitPlatform(orgId, 'registry', 'push', data, (filter) => !filter.repository || filter.repository === repository);
+	}
+
 	emitBackup(orgId: string, databaseId: string, event: 'completed' | 'failed', data: Record<string, unknown>): void {
 		this.emitPlatform(orgId, 'database-backups', event, data, (filter) => !filter.databaseId || filter.databaseId === databaseId);
 	}
@@ -428,6 +434,8 @@ export class EventService {
 		data: Record<string, unknown>,
 		matches: (filter: StoredFilter) => boolean,
 	): void {
+		// Workflows subscribed with `on: skiff_event` (docs/PIPELINES.md); never throws.
+		this.ctx.pipelines?.onPlatformEvent(orgId, `${source}.${event}`, data);
 		try {
 			const rules = this.rulesFor(orgId, source).filter((rule) => this.ruleEvents(rule).includes(event) && matches(parseJson<StoredFilter>(rule.filter_json, {})));
 			if (rules.length === 0) return;
@@ -519,6 +527,13 @@ export class EventService {
 				if (!input.database) return {};
 				const database = this.ctx.databases.requireRow(principal, input.database);
 				return { database: database.name, databaseId: database.id };
+			}
+			case 'registry': {
+				requirePermission(principal, 'image:pull');
+				if (!input.repository) return {};
+				if (!this.ctx.registry.listRepositories(principal).some((repo) => repo.name === input.repository))
+					throw new NotFoundError(`Repository "${input.repository}"`);
+				return { repository: input.repository };
 			}
 		}
 		throw new ValidationError(`Unknown event source "${input.source}".`);

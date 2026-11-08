@@ -45,7 +45,7 @@ read more. Prefer live tools over docs for anything about the user's own resourc
 
 Projects. Projects, releases, deployments, promotion and rollback, named environments, workloads,
 access modes and share links. Share links are on each project's Share links tab; the sidebar's
-Network shares page (/shares) is unrelated: platform-admin NFS/SMB mounts for clustered nodes.
+Settings → Network shares (/settings/shares) is unrelated: platform-admin NFS/SMB mounts for clustered nodes.
 Use list_projects/get_project to find the exact slug. A deployment
 is immutable and gets a preview URL; promotion and rollback only move a pointer, so they are
 instant. Production is \`<slug>.<contentDomain>\`; named environments are

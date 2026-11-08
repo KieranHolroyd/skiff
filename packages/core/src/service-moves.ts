@@ -184,7 +184,7 @@ export class ServiceMoveService {
 				decision.message.replace('this app reserves', `this database${attached.length ? ' and its apps reserve' : ' reserves'}`),
 				decision.freeByNode,
 			);
-		const volume = this.resolveVolume(db, target, input.volume);
+		const volume = this.resolveVolume('databases', db, target, input.volume, input.pool);
 
 		const now = this.ctx.now();
 		const id = newId('dmv_');
@@ -627,7 +627,7 @@ export class ServiceMoveService {
 		});
 		if (!decision.ok)
 			throw new ValidationError(decision.message.replace('this app reserves', 'this storage instance reserves'), decision.freeByNode);
-		const volume = this.resolveVolume({ volumeId: row.volumeId, storageMb: row.storageMb }, target, input.volume);
+		const volume = this.resolveVolume('object-storage', { volumeId: row.volumeId, storageMb: row.storageMb }, target, input.volume, input.pool);
 		const hostPort = this.ctx.storage.allocatePort(target);
 
 		const now = this.ctx.now();
@@ -668,17 +668,23 @@ export class ServiceMoveService {
 		};
 	}
 
-	/** Explicit volume on the target, else the target's default, else the helper state dir. */
+	/**
+	 * Explicit volume on the target, else the requested pool, else the resource's current pool,
+	 * else the kind's default pool (docs/STORAGE.md §8). Null means the system disk.
+	 */
 	private resolveVolume(
+		kind: 'databases' | 'object-storage',
 		current: { volumeId: string | null; storageMb: number },
 		target: string,
 		name: string | undefined,
+		pool: string | undefined,
 	): VolumeRow | null {
 		let volume: VolumeRow | null = null;
 		if (name) {
 			volume = this.ctx.volumes.requireOnNode(target, name);
 		} else {
-			volume = this.ctx.volumes.defaultFor(target);
+			const currentPool = current.volumeId ? this.ctx.storagePools.poolNameOfVolume(current.volumeId) : null;
+			volume = this.ctx.storagePools.pick(this.ctx.storagePools.plan(kind, pool ?? currentPool ?? undefined), target, current.storageMb);
 		}
 		if (volume) {
 			this.ctx.volumes.assertRoom(volume, current.storageMb);

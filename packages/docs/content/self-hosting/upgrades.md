@@ -135,6 +135,7 @@ Worker nodes run `skiff-agent` and `skiff-helper` from a signed node bundle. Upd
 
 - The node downloads the signed bundle, checks its signature and checksum itself, replaces both binaries and restarts them. Sites and workloads keep running. The node shows as offline for a few seconds.
 - A node installs only the control plane's own version. It never downgrades.
+- After an update, each node checks for the storage tools (`fio`, `nfs-common`, `cifs-utils`) and installs any that are missing, once per version, in the background. This applies to the control-plane host too. Set `SKIFF_HELPER_STORAGE_TOOLS=0` in `/etc/skiff/helper.env` to manage them yourself.
 - The menu item is missing when the agent is too old to update itself. Those agents need a one-time manual update first. This page does not cover that; see [nodes and fleet](/self-hosting/nodes-and-fleet).
 
 The control-plane host is not updated from **Nodes**. Its own binaries belong to the release managed by `skiff-update-self`, so use that command for it.

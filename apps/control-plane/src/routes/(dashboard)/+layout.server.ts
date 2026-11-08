@@ -55,6 +55,8 @@ export const load: LayoutServerLoad = ({ locals, url, cookies }) => {
 			nodeAlertMinutes,
 			operationHistoryDays
 		}))(core.policies.get()),
+		/** Platform admins are nudged to Settings → Storage until it is set up or skipped (docs/STORAGE.md §4). */
+		storageOnboarding: principal.platformAdmin ? core.storagePools.onboardingState() : ('done' as const),
 		permissions: [...principal.permissions].sort(),
 		can: {
 			createProject: hasPermission(principal, 'project:create'),

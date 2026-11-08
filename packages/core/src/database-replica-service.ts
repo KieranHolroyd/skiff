@@ -154,7 +154,15 @@ export class DatabaseReplicaService {
 		});
 		if (!decision.ok)
 			throw new ValidationError(decision.message.replace('this app reserves', 'this replica reserves'), decision.freeByNode);
-		let volume = input.volume ? this.ctx.volumes.findByName(input.volume) : this.ctx.volumes.defaultFor(node.id);
+		// An explicit volume, else the requested pool, else the primary's pool, else the databases
+		// rule (docs/STORAGE.md §8): a primary on `ssd` gets its replica on `ssd`.
+		let volume = input.volume
+			? this.ctx.volumes.findByName(input.volume)
+			: this.ctx.storagePools.pick(
+					this.ctx.storagePools.plan('databases', input.pool ?? this.ctx.storagePools.poolNameOfVolume(database.volumeId) ?? undefined),
+					node.id,
+					database.storageMb,
+				);
 		if (input.volume && volume && volume.nodeId !== node.id)
 			throw new ValidationError(`Volume "${volume.name}" is on another node; pick a volume on "${node.name}".`);
 		if (volume && volume.nodeId !== node.id) volume = null;

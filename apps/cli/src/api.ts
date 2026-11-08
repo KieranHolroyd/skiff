@@ -239,6 +239,44 @@ export interface BackupTargetTestResult {
 	objectLock: boolean | null;
 }
 
+export interface RegistryCredentialView {
+	id: string;
+	name: string;
+	registry: string;
+	username: string;
+	createdAt: number;
+	updatedAt: number;
+	lastUsedAt: number | null;
+}
+
+export interface RegistryView {
+	enabled: boolean;
+	host: string;
+	node: { id: string; name: string } | null;
+	status: string;
+	engine: string;
+	version: string;
+	keepTags: number;
+}
+
+export interface RegistryRepositoryView {
+	name: string;
+	projectSlug: string | null;
+	pushes: number;
+	lastTag: string | null;
+	lastDigest: string | null;
+	lastPushAt: number | null;
+	createdAt: number;
+	deploy?: { project: string | null; tag: string } | null;
+}
+
+/** The fields of a workload an image deploy reports back. */
+export interface ImageWorkloadView {
+	image: string | null;
+	imageDigest: string | null;
+	status?: string;
+}
+
 export interface DeploymentView {
 	id?: string;
 	shortId?: string;
@@ -1349,6 +1387,98 @@ export class ApiClient {
 	async testEventRule(id: string): Promise<{ delivery: EventDeliveryView; raw: unknown }> {
 		const raw = await this.request('POST', `/api/v1/events/${encodeURIComponent(id)}/test`);
 		return { delivery: asRecord(raw)?.delivery as EventDeliveryView, raw };
+	}
+
+	// ---------------------------------------------------------------- container images (docs/REGISTRY.md)
+
+	async listRegistryCredentials(): Promise<{ credentials: RegistryCredentialView[]; raw: unknown }> {
+		const raw = await this.request('GET', '/api/v1/registry/credentials');
+		return { credentials: (asArray(asRecord(raw)?.credentials) ?? []) as RegistryCredentialView[], raw };
+	}
+
+	async createRegistryCredential(input: {
+		name: string;
+		registry: string;
+		username: string;
+		password: string;
+	}): Promise<{ credential: RegistryCredentialView; raw: unknown }> {
+		const raw = await this.request('POST', '/api/v1/registry/credentials', { body: input });
+		return { credential: asRecord(raw)?.credential as RegistryCredentialView, raw };
+	}
+
+	async updateRegistryCredential(
+		name: string,
+		input: { registry?: string; username?: string; password?: string },
+	): Promise<{ credential: RegistryCredentialView; raw: unknown }> {
+		const raw = await this.request('PATCH', `/api/v1/registry/credentials/${encodeURIComponent(name)}`, { body: input });
+		return { credential: asRecord(raw)?.credential as RegistryCredentialView, raw };
+	}
+
+	async deleteRegistryCredential(name: string): Promise<void> {
+		await this.request('DELETE', `/api/v1/registry/credentials/${encodeURIComponent(name)}`);
+	}
+
+	async getRegistry(): Promise<{ registry: RegistryView; raw: unknown }> {
+		const raw = await this.request('GET', '/api/v1/registry');
+		return { registry: asRecord(raw)?.registry as RegistryView, raw };
+	}
+
+	async listRegistryRepositories(): Promise<{ repositories: RegistryRepositoryView[]; raw: unknown }> {
+		const raw = await this.request('GET', '/api/v1/registry/repositories');
+		return { repositories: (asArray(asRecord(raw)?.repositories) ?? []) as RegistryRepositoryView[], raw };
+	}
+
+	async setRegistryAutoDeploy(input: { repository: string; project: string | null; tag?: string }): Promise<{ repository: RegistryRepositoryView; raw: unknown }> {
+		const raw = await this.request('PATCH', '/api/v1/registry/repositories', { body: input });
+		return { repository: asRecord(raw)?.repository as RegistryRepositoryView, raw };
+	}
+
+	async registryScan(repository: string, reference: string): Promise<{ report: { image: string; summary: Record<string, unknown> | null; cves: Array<{ Id: string; Severity: string; Title: string }> }; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/registry/scan?repository=${encodeURIComponent(repository)}&reference=${encodeURIComponent(reference)}`, { timeoutMs: 60_000 });
+		return { report: raw as never, raw };
+	}
+
+	async listRegistryTrusts(): Promise<{ trusts: Array<{ id: string; githubRepository: string; ref: string | null; repository: string; push: boolean }>; raw: unknown }> {
+		const raw = await this.request('GET', '/api/v1/registry/trusts');
+		return { trusts: (asArray(asRecord(raw)?.trusts) ?? []) as never, raw };
+	}
+
+	async createRegistryTrust(input: { githubRepository: string; repository: string; ref?: string; push?: boolean }): Promise<{ trust: { id: string }; raw: unknown }> {
+		const raw = await this.request('POST', '/api/v1/registry/trusts', { body: input });
+		return { trust: asRecord(raw)?.trust as { id: string }, raw };
+	}
+
+	async deleteRegistryTrust(id: string): Promise<void> {
+		await this.request('DELETE', `/api/v1/registry/trusts/${encodeURIComponent(id)}`);
+	}
+
+	async listRegistryTags(repository: string): Promise<{ tags: Array<{ tag: string }>; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/registry/tags?repository=${encodeURIComponent(repository)}`);
+		return { tags: (asArray(asRecord(raw)?.tags) ?? []) as Array<{ tag: string }>, raw };
+	}
+
+	async deleteRegistryTag(repository: string, tag: string): Promise<void> {
+		await this.request(
+			'DELETE',
+			`/api/v1/registry/tags?repository=${encodeURIComponent(repository)}&tag=${encodeURIComponent(tag)}`,
+		);
+	}
+
+	/** Set a container project's image and deploy it; the server pins the tag to a digest. */
+	async deployImage(
+		project: string,
+		input: { image: string; promote?: boolean; message?: string; environment?: string },
+	): Promise<{ deployment: DeploymentView; workload: ImageWorkloadView | null; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/projects/${encodeURIComponent(project)}/deploy-image`, {
+			body: input,
+			timeoutMs: 120_000,
+		});
+		const record = asRecord(raw);
+		return {
+			deployment: (record?.deployment ?? {}) as DeploymentView,
+			workload: (record?.workload ?? null) as ImageWorkloadView | null,
+			raw,
+		};
 	}
 
 	// ---------------------------------------------------------------- log drains and audit (DESIGN §8)

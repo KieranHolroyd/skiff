@@ -7,6 +7,7 @@ import ClockIcon from '@lucide/svelte/icons/clock';
 import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
 import DatabaseBackupIcon from '@lucide/svelte/icons/database-backup';
 import GlobeIcon from '@lucide/svelte/icons/globe';
+import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 import HardDriveUploadIcon from '@lucide/svelte/icons/hard-drive-upload';
 import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 import LogsIcon from '@lucide/svelte/icons/logs';
@@ -16,6 +17,7 @@ import UserRoundIcon from '@lucide/svelte/icons/user-round';
 import UsersIcon from '@lucide/svelte/icons/users';
 import NetworkIcon from '@lucide/svelte/icons/network';
 import PlugIcon from '@lucide/svelte/icons/plug';
+import PackageIcon from '@lucide/svelte/icons/package';
 import WrenchIcon from '@lucide/svelte/icons/wrench';
 import type { Permission } from '@skiff/contracts';
 
@@ -35,6 +37,7 @@ export type SectionId =
 	| 'usage'
 	| 'backup-targets'
 	| 'log-drains'
+	| 'registry'
 	| 'domains'
 	| 'policies'
 	| 'backups'
@@ -44,6 +47,8 @@ export type SectionId =
 	| 'telemetry'
 	| 'metrics'
 	| 'high-availability'
+	| 'storage'
+	| 'shares'
 	| 'clustering'
 	| 'maintenance'
 	| 'updates';
@@ -59,6 +64,7 @@ export type SectionHref =
 	| '/(dashboard)/settings/usage'
 	| '/(dashboard)/settings/backup-targets'
 	| '/(dashboard)/settings/log-drains'
+	| '/(dashboard)/settings/registry'
 	| '/(dashboard)/settings/domains'
 	| '/(dashboard)/settings/policies'
 	| '/(dashboard)/settings/backups'
@@ -68,6 +74,8 @@ export type SectionHref =
 	| '/(dashboard)/settings/telemetry'
 	| '/(dashboard)/settings/metrics'
 	| '/(dashboard)/settings/high-availability'
+	| '/(dashboard)/settings/storage'
+	| '/(dashboard)/settings/shares'
 	| '/(dashboard)/settings/clustering'
 	| '/(dashboard)/settings/maintenance'
 	| '/(dashboard)/settings/updates';
@@ -169,6 +177,16 @@ export const SECTIONS: Section[] = [
 		anyPermission: ['logs:read']
 	},
 	{
+		id: 'registry',
+		group: 'organisation',
+		label: 'Container registries',
+		summary: 'Logins for private registries, so nodes can pull this organisation’s images.',
+		href: '/(dashboard)/settings/registry',
+		path: '/settings/registry',
+		icon: PackageIcon,
+		anyPermission: ['image:pull']
+	},
+	{
 		id: 'domains',
 		group: 'platform',
 		label: 'Domains',
@@ -250,6 +268,27 @@ export const SECTIONS: Section[] = [
 		path: '/settings/metrics',
 		icon: ChartLineIcon,
 		ownerOnly: true
+	},
+	{
+		id: 'storage',
+		group: 'platform',
+		label: 'Storage',
+		summary: 'Pools of disks and network shares, and where each kind of data goes.',
+		href: '/(dashboard)/settings/storage',
+		path: '/settings/storage',
+		icon: HardDriveIcon,
+		platformAdmin: true
+	},
+	{
+		// NFS/SMB mounts, not a project's share links (those live on each project).
+		id: 'shares',
+		group: 'platform',
+		label: 'Network shares',
+		summary: 'NFS and SMB shares: mount them on nodes and link them to Skiff as storage volumes.',
+		href: '/(dashboard)/settings/shares',
+		path: '/settings/shares',
+		icon: NetworkIcon,
+		platformAdmin: true
 	},
 	{
 		id: 'clustering',

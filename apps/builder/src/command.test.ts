@@ -171,3 +171,32 @@ describe('SSH deploy key', () => {
 		);
 	});
 });
+
+describe('systemd argv for the pipeline step runner', () => {
+	test('runs an explicit argv instead of bash -lc, inheriting the token by name', () => {
+		const argv = systemdRunArgs({
+			workDir: '/b/pipelines/j1/workspace',
+			writableDir: '/b/pipelines/j1',
+			argv: ['/opt/skiff/bin/skiff-agent', 'pipeline-step', '/b/pipelines/j1/meta/job.json'],
+			unit: 'skiff-job-j1',
+			user: 'skiff-build',
+			env: { HOME: '/b/pipelines/j1/home' },
+			inheritEnv: ['SKIFF_JOB_TOKEN'],
+		});
+		expect(argv.slice(-4)).toEqual([
+			'--working-directory=/b/pipelines/j1/workspace',
+			'/opt/skiff/bin/skiff-agent',
+			'pipeline-step',
+			'/b/pipelines/j1/meta/job.json',
+		]);
+		expect(argv).toContain('--setenv=SKIFF_JOB_TOKEN');
+		expect(argv).toContain('--property=ReadWritePaths=/b/pipelines/j1');
+		expect(argv).not.toContain('-lc');
+	});
+
+	test('rejects a relative program, NUL bytes and odd variable names', () => {
+		expect(() => systemdRunArgs({ workDir: '/w', argv: ['skiff-agent'] })).toThrow(BuildValidationError);
+		expect(() => systemdRunArgs({ workDir: '/w', argv: ['/bin/x', 'a\0b'] })).toThrow(BuildValidationError);
+		expect(() => systemdRunArgs({ workDir: '/w', argv: ['/bin/x'], inheritEnv: ['A=B'] })).toThrow(BuildValidationError);
+	});
+});

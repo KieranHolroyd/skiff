@@ -64,7 +64,9 @@ export interface MigrationCheckOptions {
  */
 export const REVIEWED_DESTRUCTIVE_MIGRATIONS: Readonly<Record<string, string>> = Object.freeze({
 	'0033_drop_database_console.sql':
-		'D96: drops the retired D60 studio console columns; nothing reads them after the cutover.'
+		'D96: drops the retired D60 studio console columns; nothing reads them after the cutover.',
+	'0074_pipelines_phase2.sql':
+		'Table rebuild: pipeline_triggers is copied to a new table without the event CHECK, then the old one is dropped and the new one renamed. No data is lost.'
 });
 
 export interface MigrationCheckResult {

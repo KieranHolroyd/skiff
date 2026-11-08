@@ -134,18 +134,19 @@ RustFS sends bucket events through a webhook target, and the spike on 1.0.4 deci
 
 ## 6. Surfaces
 
-- **Dashboard:** no page of its own. Events reach a function only through a queue it consumes, so
-  rules are set up as **Event sources** on the function's **Bindings & triggers** tab (behind
-  `SKIFF_FEATURE_BROKERS`). The card lists the rules that publish into the function's consumer
-  queues, plus rules on a broker attached to it whose queue no function consumes yet (flagged
-  "not consumed", so a source set up before the consumer is deployed stays visible), with their
-  events, target queue and 24-hour counts with the last error. A row menu sends a test event,
-  pauses or resumes the rule, or removes it. **Recent deliveries** below shows the newest 25 for
-  those rules with each message body. "Add event source" changes its fields with the source
-  (instance, bucket and key filters for storage; project, database or alert rule otherwise) and
-  targets one of the function's consumer queues, or a new queue on an attached broker together
-  with the `wrangler.jsonc` consumer line to copy. Every check still lives in `core.events`; the
-  console only refuses to act on a rule that doesn't deliver to the function it is open on.
+- **Dashboard:** no page of its own. An event rule is shown as an **event trigger** in the
+  **Triggers** card on the function's **Bindings & triggers** tab, next to its HTTP, cron and queue
+  triggers (behind `SKIFF_FEATURE_BROKERS`). The card lists the rules that publish into the
+  function's consumer queues, plus rules on a broker attached to it whose queue no function
+  consumes yet (flagged "queue not consumed", so a trigger set up before the consumer is deployed
+  stays visible). Each one shows its source, events, filter, target queue and 24-hour counts with
+  the last error. A row menu sends a test event, pauses or resumes it, or removes it. **Recent event
+  deliveries** at the foot of the card shows the newest 25 for those rules with each message body.
+  **Add trigger** changes its fields with the source (instance, bucket and key filters for storage;
+  project, database or alert rule otherwise) and targets one of the function's consumer queues, or
+  a new queue on an attached broker together with the `wrangler.jsonc` consumer line to copy. Every
+  check still lives in `core.events`; the console only refuses to act on a rule that doesn't
+  deliver to the function it is open on.
 - **REST:** see [API.md](./API.md#event-notifications).
 - **MCP and the assistant:** `list_event_rules`, `get_event_rule` (with its 20 newest deliveries),
   `create_event_rule` (returns next steps for wiring the consumer), `update_event_rule`,

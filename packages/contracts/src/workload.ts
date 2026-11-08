@@ -3,6 +3,7 @@ import { databaseExtensionAllowlist, databaseMonitorSchema, workloadDatabaseSche
 import { storageAdminSchema, workloadObjectStorageSchema } from './object-storage.ts';
 import { workloadBrokerSchema } from './broker.ts';
 import { githubRunnerSchema } from './github-runner.ts';
+import { MAX_REGISTRY_AUTH_ENTRIES, imageDigestSchema, registryAuthEntrySchema, workloadRegistrySchema } from './registry.ts';
 import {
 	FUNCTION_PYTHON_MIN_MEMORY_MB,
 	FUNCTION_STATEFUL_REPLICA_MESSAGE,
@@ -150,6 +151,12 @@ export const workloadSpecSchema = z
 		engine: z.enum(processEngines).optional(),
 		/** Container: OCI image reference. Mutually exclusive with `command`. */
 		image: z.string().min(1).max(512).optional(),
+		/**
+		 * Container, set by Skiff only (R1, docs/REGISTRY.md): the digest `image` resolved to when
+		 * the deployment was created. The node runs `<repository>@<digest>`, so a deployment and its
+		 * rollback always start the same bytes. Inputs drop it (`setSpec`, REST, MCP).
+		 */
+		imageDigest: imageDigestSchema.optional(),
 		/** Port the app listens on; the agent binds it and Caddy proxies locally. */
 		port: z.number().int().min(1).max(65535).default(3000),
 		/** Admission unit: the agent sets `MemoryMax` and the slice reserves the same amount. */
@@ -247,6 +254,8 @@ export const workloadSpecSchema = z
 			ctx.addIssue({ code: 'custom', path: ['command'], message: 'Container workloads cannot set a command.' });
 		if (spec.runtime === 'container' && !spec.image)
 			ctx.addIssue({ code: 'custom', path: ['image'], message: 'Container workloads need an image.' });
+		if (spec.imageDigest && spec.runtime !== 'container')
+			ctx.addIssue({ code: 'custom', path: ['imageDigest'], message: 'Only container workloads pin an image digest.' });
 	});
 export type WorkloadSpec = z.infer<typeof workloadSpecSchema>;
 /** What callers may pass before defaults apply (`ingress`, `replicas`, … optional). */
@@ -359,6 +368,10 @@ export interface WorkloadView {
 	cpus: number;
 	/** Process/container upstream Caddy on the target node proxies to. */
 	upstream: string | null;
+	/** Containers: the configured image reference. */
+	image: string | null;
+	/** Containers: the digest the running deployment is pinned to (R1); null when it runs a tag. */
+	imageDigest: string | null;
 	message: string | null;
 	createdAt: string;
 	updatedAt: string;
@@ -479,6 +492,8 @@ export const workloadDesiredSchema = z.object({
 	objectStorage: workloadObjectStorageSchema.optional(),
 	/** Managed queue broker profile (D111); the helper derives image, user, config and mounts. */
 	broker: workloadBrokerSchema.optional(),
+	/** The platform registry (docs/REGISTRY.md G1): zot, rendered by the helper from this profile. */
+	registry: workloadRegistrySchema.optional(),
 	/**
 	 * Managed services only: the node volume the data dir lives on (D74). The helper resolves the
 	 * mount path from its own registry and fails the start if it is not mounted (D76).
@@ -537,8 +552,22 @@ export const workloadActivationSchema = z.object({
 		.optional(),
 	/** Storage instances only: root and scoped keys for bucket/user reconcile, agent memory only. */
 	storageAdmin: storageAdminSchema.optional(),
+	/**
+	 * Containers only (R2): registry credentials for the image's registry. The helper writes them
+	 * to the workload's 0400 auth file and points `AuthFile=` at it; absent when none apply.
+	 */
+	registryAuth: z.array(registryAuthEntrySchema).max(MAX_REGISTRY_AUTH_ENTRIES).optional(),
 });
 export type WorkloadActivation = z.infer<typeof workloadActivationSchema>;
 
 export const workloadUpdateSchema = workloadSpecSchema;
 export type WorkloadUpdate = z.infer<typeof workloadUpdateSchema>;
+
+/** `POST /projects/:slug/deploy-image` (docs/REGISTRY.md §5.3): set a container's image and deploy it. */
+export const imageDeploySchema = z.object({
+	image: z.string().trim().min(1).max(512),
+	promote: z.boolean().optional(),
+	message: z.string().max(500).optional(),
+	environment: z.string().min(1).max(40).optional(),
+});
+export type ImageDeployInput = z.input<typeof imageDeploySchema>;

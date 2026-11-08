@@ -76,6 +76,7 @@ describe('quota math and inheritance', () => {
 			previews: 2,
 			workloadMemoryMb: 512,
 			egressBytes: 10_000,
+			registryBytes: -1,
 		};
 		const effective = resolveQuota(base, { databases: 1, egressBytes: null });
 		expect(effective.databases).toBe(1);
@@ -219,7 +220,7 @@ describe('usage aggregation', () => {
 		const csv = core.usage.csv(view);
 		expect(csv).toContain('metric,unit,used,limit,percent');
 		expect(csv).toContain('databaseStorageBytes,bytes');
-		expect(csv.split('\n').filter(Boolean).length).toBe(15);
+		expect(csv.split('\n').filter(Boolean).length).toBe(16);
 		const history = core.usage.history(ownerA);
 		expect(history.orgId).toBe('org_a');
 		expect(Array.isArray(history.points)).toBe(true);

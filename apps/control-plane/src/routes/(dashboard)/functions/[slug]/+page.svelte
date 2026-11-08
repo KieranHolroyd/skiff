@@ -622,7 +622,7 @@
 				workload={data.workload}
 				capacity={data.capacity}
 				cronNext={data.cronNext}
-				eventSources={data.eventSources}
+				eventTriggers={data.eventTriggers}
 				fieldErrors={result?.fieldErrors}
 				can={{ manageWorkload: data.can.update, viewCapacity: data.can.viewCapacity }}
 			/>

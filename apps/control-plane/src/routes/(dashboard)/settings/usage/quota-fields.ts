@@ -45,7 +45,12 @@ export const QUOTA_FIELDS: Record<QuotaField, QuotaFieldMeta> = {
 	},
 	storageObjects: { label: 'Objects' },
 	appVolumes: { label: 'Volumes' },
-	appVolumeBytes: { label: 'Volume space', hint: 'Configured volume sizes', inputUnit: 'GB' }
+	appVolumeBytes: { label: 'Volume space', hint: 'Configured volume sizes', inputUnit: 'GB' },
+	registryBytes: {
+		label: 'Registry images',
+		hint: 'Platform registry; over the limit, pushes are refused',
+		inputUnit: 'GB'
+	}
 };
 
 /** Multiplier from the form's unit to the stored value. */
@@ -73,7 +78,8 @@ export const QUOTA_GROUPS: QuotaGroup[] = [
 		title: 'Object storage',
 		fields: ['storageInstances', 'storageBytes', 'storageObjects']
 	},
-	{ id: 'volumes', title: 'Volumes', fields: ['appVolumes', 'appVolumeBytes'] }
+	{ id: 'volumes', title: 'Volumes', fields: ['appVolumes', 'appVolumeBytes'] },
+	{ id: 'registry', title: 'Container registry', fields: ['registryBytes'] }
 ];
 
 /** Fields with a live usage reading; the rest (upload size, kept deployments) are limits only. */

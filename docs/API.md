@@ -71,6 +71,14 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | POST | `/databases/:name/replicas` | `database:update` | `{ node, mode?: async, volume? }` (201); Postgres only, `sync` refused; same node allowed (reads only), another node needs both on the overlay |
 | DELETE | `/databases/:name/replicas/:id` | `database:update` | 202; stops it, its node purges the copy and the primary drops the slot, then the row goes |
 | POST | `/databases/:name/replicas/:id/promote` | `database:update` | `{ confirm: true, acceptDataLoss? }` + `If-Match: <primaryGeneration>` (412 when stale); 202 with the failover (fencing → promoting → repointing → completed). Never MCP |
+| GET | `/platform/storage` | platform admin | storage overview: `{ onboarding, pools, defaults, nodes }` (docs/STORAGE.md) |
+| POST | `/platform/storage/pools` | platform admin **session** | `{ name, description?, allocation?: most-free\|fill-up, minFreePercent?, volumes?: [volumeId] }` |
+| PATCH/DELETE | `/platform/storage/pools/:name` | platform admin **session** | edit a pool; delete is refused while it is a default (its volumes become unassigned, no data moves) |
+| PUT | `/platform/storage/defaults` | platform admin **session** | `{ defaults: [{ kind: databases\|object-storage\|brokers\|app-volumes\|builds\|site-data, pool }] }`; `pool` is a pool name or `system`. The pool each create form preselects (and the API uses when `pool` is omitted); never moves existing services |
+| PUT | `/platform/storage/volumes/:id/pool` | platform admin **session** | `{ pool: name\|null }` |
+| POST | `/platform/storage/onboarding` | platform admin **session** | `{ state: done\|skipped }` |
+| POST | `/platform/storage/pools/:name/profile` | platform admin **session** | benchmark every ready member (seq MB/s, 4 KiB IOPS, sync-write latency) → 202 `{ queued, skipped }`; results land on the pool's members (`profile`) |
+| POST | `/platform/storage/volumes/:id/profile` | platform admin **session** | benchmark one volume → 202 `{ queued, skipped }` |
 | GET | `/shares` | platform admin | cluster share registry (C3) |
 | POST | `/shares` | platform admin **session** | `{ name, protocol: nfs\|smb, server, exportPath, zone?, readOnly?, credentials?: { username, password, domain? } }`; SMB credentials are sealed and never returned |
 | GET/PATCH/DELETE | `/shares/:name` | platform admin **session** | read (with `mounts`), update or remove a share; server/export/mode changes and delete are refused while mounted; `credentials` rotates |
@@ -99,7 +107,18 @@ cookie (dashboard) or `Authorization: Bearer skif_…` (API key, CLI). Every mut
 | GET/POST | `/projects/:slug/environments` | `project:read` / `project:update` | list or create a named environment |
 | PATCH/DELETE | `/projects/:slug/environments/:env` | `project:update` | rename/access (`{ name?, access?, password? }`; the environment's own password, kept when omitted) or remove (production is built in) |
 | POST | `/projects/:slug/environments/:env/promote` | `deployment:promote` | `{ deploymentId }`; moves only that environment's pointer (production also re-points a process/container workload) |
-| GET/PUT/DELETE | `/projects/:slug/workload` | `deployment:read` / `project:update` | tier 2/3 runtime spec for the project. `idleStopSeconds` (process only; needs `socketActivation`, HTTP ingress and one replica; 0 or absent = always on) scales the app to zero after that many seconds without a request (D121) |
+| GET/PUT/DELETE | `/projects/:slug/workload` | `deployment:read` / `project:update` | tier 2/3 runtime spec for the project. `idleStopSeconds` (process only; needs `socketActivation`, HTTP ingress and one replica; 0 or absent = always on) scales the app to zero after that many seconds without a request (D121) | The view carries `image` and `imageDigest` (the digest the running deployment is pinned to, D145; null when it runs a tag)
+| POST | `/projects/:slug/deploy-image` | `deployment:create` + `project:update` | `{ image, promote?, message?, environment? }` → `201 { deployment, workload }`. Container projects only: keeps the rest of the spec, sets `image`, deploys a one-file `skiff-image.json` release and pins the tag to its digest (D145) |
+| GET/POST | `/registry/credentials` | `image:pull` / `image:credentials` | registry logins for external registries (D146). POST `{ name, registry, username, password }` → `201 { credential }`; one per registry host per org (Docker Hub aliases fold into `docker.io`); the password is write-only |
+| PATCH/DELETE | `/registry/credentials/:name` | `image:credentials` | `{ registry?, username?, password? }`; delete leaves running containers alone |
+| GET/PATCH | `/registry` | `image:pull` / platform admin **session** | the platform registry: `{ enabled, host, node, status, engine, version, keepTags, realm }`; PATCH `{ enabled?, node?, host?, keepTags?, memoryMb?, mirrors?, signatures?: off\|warn\|enforce, cosignKeys?: [pem], cveScanning?, s3?: { endpoint, bucket, region?, accessKeyId, secretAccessKey, cacheUrl }\|null }` (D154, D159) |
+| GET | `/registry/repositories` | `image:pull` | the org's repositories (created on first push) with the last tag, digest and push time |
+| GET/DELETE | `/registry/tags?repository=<org>/<name>[&tag=]` | `image:pull` / `image:delete` | tags of a repository (deployment pins hidden); DELETE removes one tag |
+| PATCH | `/registry/repositories` | `image:push` + `deployment:create` | deploy on push: `{ repository, project: slug\|null, tag? (latest) }` (D157) |
+| GET | `/registry/scan?repository=<org>/<name>&reference=<tag\|sha256:…>` | `image:pull` | Trivy summary and the 50 most severe CVEs; 400 while CVE scanning is off (D159) |
+| GET/POST | `/registry/trusts` | `image:pull` / `image:credentials` | GitHub Actions OIDC trusts: `{ githubRepository: owner/repo, ref?: glob, repository: <org>/<name>\|<org>/*, push? }` (D158) |
+| DELETE | `/registry/trusts/:id` | `image:credentials` | remove a trust |
+| GET | `/api/registry/token` (not under `/api/v1`) | Basic: any user + `skif_` API key | the Docker token realm (D155): `?service=<host>&scope=repository:<org>/<name>:pull,push` → `{ token, access_token, expires_in, issued_at }` |
 | GET | `/projects/:slug/container/targets` | `container:inspect` | container projects (D127): one entry per replica, `{ replica, nodeId, nodeName, desiredId }`. Every console call takes `?replica=<n>` for a multi-copy workload |
 | GET | `/projects/:slug/container/inspect` | `container:inspect` | `{ targets, container }`: state, unit restarts, image and digest, entrypoint/command, env **names**, ports, networks, mounts, sandbox flags, raw counters (`stats`: CPU µs, memory/peak/limit, OOM kills, PIDs, net and block bytes, `sampledAt`; rates are the difference of two calls) and processes |
 | GET | `/projects/:slug/container/files?path=` | `container:files` | `{ listing }` of one directory, symlinks resolved inside the container, ≤ 2,000 entries (`truncated`). 403 for the secrets dir and tmpfs, 409 while the container is not running |
@@ -144,7 +163,7 @@ wire protocol is versioned in `packages/studio/src/protocol.ts` and may change b
 | Method | Path | Permission | Notes |
 |---|---|---|---|
 | GET | `/databases` | `database:read` | `?includeDeleted=1` adds the trash → `{ databases }` |
-| POST | `/databases` | `database:create` (+ `project:update` with `project`) | `{ name, engine?, version? (16\|17), placement? (auto\|edge\|node id), memoryMb?, cpus?, storageMb?, volume?, project?, envPrefix?, extensions?, pooler? }` → `201 { database }`. Placement is resolved once; with `project` it follows the project's node and the attachment is created in the same call |
+| POST | `/databases` | `database:create` (+ `project:update` with `project`) | `{ name, engine?, version? (16\|17), placement? (auto\|edge\|node id), memoryMb?, cpus?, storageMb?, volume?, pool? (storage pool or `system`; default: the kind's default from Settings → Storage, docs/STORAGE.md), project?, envPrefix?, extensions?, pooler? }` → `201 { database }`. Placement is resolved once; with `project` it follows the project's node and the attachment is created in the same call |
 | GET | `/databases/:name` | `database:read` | `?includeDeleted=1` to read a trashed one → `{ database }` |
 | PATCH | `/databases/:name` | `database:update` | any of `{ memoryMb, cpus, storageMb, version, extensions, pooler }`; more memory re-checks admission; `version` moves forward in place for engines that allow it (409 on a downgrade, a PostgreSQL major or MongoDB) → `{ database }` |
 | DELETE | `/databases/:name` | `database:delete` | soft delete, restorable 7 days; 409 while projects are attached → `{ database }` |
@@ -202,7 +221,7 @@ secret keys, except `/credentials`.
 | Method | Path | Permission | Notes |
 |---|---|---|---|
 | GET | `/storage` | `storage:read` | `?includeDeleted=1` adds the trash → `{ storage: StorageView[] }` |
-| POST | `/storage` | `storage:create` (+ `project:update` with `project`) | `{ name, engine? (rustfs), version?, placement? (auto\|edge\|node id), memoryMb?, cpus?, storageMb?, volume?, public?, buckets? (names, created private), project?, envPrefix? }` → `201 { storage }`. `project` needs at least one bucket and is granted read-write on all of them; a private instance with `project` follows the project's node |
+| POST | `/storage` | `storage:create` (+ `project:update` with `project`) | `{ name, engine? (rustfs), version?, placement? (auto\|edge\|node id), memoryMb?, cpus?, storageMb?, volume?, pool? (storage pool or `system`; default: the kind's default from Settings → Storage, docs/STORAGE.md), public?, buckets? (names, created private), project?, envPrefix? }` → `201 { storage }`. `project` needs at least one bucket and is granted read-write on all of them; a private instance with `project` follows the project's node |
 | GET | `/storage/:name` | `storage:read` | `?includeDeleted=1` to read a trashed one → `{ storage }` |
 | PATCH | `/storage/:name` | `storage:update` | any of `{ memoryMb, cpus, storageMb, public, version }`; more memory re-checks admission; going private is refused (409) while apps on other nodes use it → `{ storage }` |
 | DELETE | `/storage/:name` | `storage:delete` | soft delete, restorable 7 days; the container and public route stop; 409 while projects are attached → `{ storage }` |
@@ -267,7 +286,7 @@ server (JetStream on) per broker, placed once and reachable only on its node.
 | Method | Path | Permission | Notes |
 |---|---|---|---|
 | GET | `/brokers` | `broker:read` | `?includeDeleted=1` adds the trash → `{ brokers: BrokerView[] }` |
-| POST | `/brokers` | `broker:create` (+ `project:update` with `project`) | `{ name, engine? (nats), version? (2.12\|2.11), placement? (auto\|edge\|node id), memoryMb? (≥64, default 256), cpus? (default 0.5), storageMb? (message-store cap, default 2048), volume?, project?, envPrefix? (default NATS) }` → `201 { broker }`. Only nodes whose agent advertises the `brokers` capability are candidates; `project` places it on that project's node. 422 when `SKIFF_FEATURE_BROKERS=0` |
+| POST | `/brokers` | `broker:create` (+ `project:update` with `project`) | `{ name, engine? (nats), version? (2.12\|2.11), placement? (auto\|edge\|node id), memoryMb? (≥64, default 256), cpus? (default 0.5), storageMb? (message-store cap, default 2048), volume?, pool? (storage pool or `system`; default: the kind's default from Settings → Storage, docs/STORAGE.md), project?, envPrefix? (default NATS) }` → `201 { broker }`. Only nodes whose agent advertises the `brokers` capability are candidates; `project` places it on that project's node. 422 when `SKIFF_FEATURE_BROKERS=0` |
 | GET | `/brokers/:name` | `broker:read` | `?includeDeleted=1` to read a trashed one → `{ broker }` |
 | PATCH | `/brokers/:name` | `broker:update` | any of `{ memoryMb, cpus, storageMb, version }`; more memory re-checks admission and the memory quota; `version` only moves forward (409 on a downgrade) → `{ broker }` |
 | DELETE | `/brokers/:name` | `broker:delete` | soft delete, restorable for the trash period; 409 while projects are attached → `{ broker }` |

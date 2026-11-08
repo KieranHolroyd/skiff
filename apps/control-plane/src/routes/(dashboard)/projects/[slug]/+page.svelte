@@ -615,6 +615,7 @@
 					<VolumesCard
 						slug={data.project.slug}
 						volumes={data.appVolumes}
+						storage={data.appVolumeStorage}
 						workloadId={data.workload?.id ?? data.project.slug}
 						enabled={data.appVolumesEnabled}
 						fieldErrors={result?.fieldErrors}
@@ -681,6 +682,7 @@
 				spec={data.workloadSpec}
 				workload={data.workload}
 				capacity={data.capacity}
+				registryImages={data.registryImages}
 				can={{
 					manageWorkload: data.can.manageWorkload,
 					viewCapacity: data.can.viewCapacity

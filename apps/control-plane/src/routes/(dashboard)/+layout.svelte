@@ -17,6 +17,7 @@
 	import MailIcon from '@lucide/svelte/icons/mail';
 	import LayoutDashboardIcon from '@lucide/svelte/icons/layout-dashboard';
 	import NetworkIcon from '@lucide/svelte/icons/network';
+	import PackageIcon from '@lucide/svelte/icons/package';
 	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 	import LogOutIcon from '@lucide/svelte/icons/log-out';
 	import RocketIcon from '@lucide/svelte/icons/rocket';
@@ -25,6 +26,7 @@
 	import SettingsIcon from '@lucide/svelte/icons/settings';
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
 	import UserRoundIcon from '@lucide/svelte/icons/user-round';
+	import WorkflowIcon from '@lucide/svelte/icons/workflow';
 	import ZapIcon from '@lucide/svelte/icons/zap';
 	import AssistantLauncher from '#lib/assistant/AssistantLauncher.svelte';
 	import AssistantTour from '#lib/assistant/AssistantTour.svelte';
@@ -77,8 +79,9 @@
 			| '/(dashboard)/storage'
 			| '/(dashboard)/brokers'
 			| '/(dashboard)/email'
-			| '/(dashboard)/shares'
 			| '/(dashboard)/deployments'
+			| '/(dashboard)/pipelines'
+			| '/(dashboard)/registry'
 			| '/(dashboard)/nodes'
 			| '/(dashboard)/audit'
 			| '/(dashboard)/settings'
@@ -144,17 +147,22 @@
 					feature: 'email'
 				},
 				{
-					// NFS/SMB mounts, not a project's share links (those live on each project).
-					label: 'Network shares',
-					href: '/(dashboard)/shares',
-					path: '/shares',
-					icon: HardDriveIcon
-				},
-				{
 					label: 'Deployments',
 					href: '/(dashboard)/deployments',
 					path: '/deployments',
 					icon: RocketIcon
+				},
+				{
+					label: 'Pipelines',
+					href: '/(dashboard)/pipelines',
+					path: '/pipelines',
+					icon: WorkflowIcon
+				},
+				{
+					label: 'Registry',
+					href: '/(dashboard)/registry',
+					path: '/registry',
+					icon: PackageIcon
 				}
 			]
 		},
@@ -260,12 +268,18 @@
 		const top = nav.find((item) => item.path === `/${segments[0] ?? ''}`);
 		const out: { label: string; route?: CrumbRoute; mono?: boolean }[] = [];
 		if (top) out.push({ label: top.label, route: segments.length > 1 ? top.href : undefined });
+		// Registry repositories are paths (`org/name`): one crumb, not one per segment.
+		if (top?.path === '/registry' && segments.length > 1) {
+			out.push({ label: segments.slice(1).map(decodeURIComponent).join('/'), mono: true });
+			return out;
+		}
 		const isProject =
 			top?.path === '/projects' ||
 			top?.path === '/functions' ||
 			top?.path === '/databases' ||
 			top?.path === '/storage' ||
-			top?.path === '/brokers';
+			top?.path === '/brokers' ||
+			top?.path === '/pipelines';
 		for (const [index, raw] of segments.slice(1).entries()) {
 			const segment = decodeURIComponent(raw);
 			// `/functions/new` is a page, not a function called "new".
@@ -517,6 +531,20 @@
 				</Badge>
 			</div>
 		</header>
+
+		{#if data.storageOnboarding === 'pending' && !page.url.pathname.startsWith('/settings/storage')}
+			<div class="px-4 pt-6 md:px-8">
+				<Alert.Root class="mx-auto max-w-[1320px]">
+					<HardDriveIcon />
+					<Alert.Title>Set up storage</Alert.Title>
+					<Alert.Description>
+						Choose where databases, object storage, app volumes and builds live before you deploy: pool your disks and
+						network shares, or keep everything on each node's system disk.
+						<a class="font-medium underline underline-offset-4" href="/settings/storage?onboarding=1">Open storage setup</a>
+					</Alert.Description>
+				</Alert.Root>
+			</div>
+		{/if}
 
 		{#if data.sharedDomain}
 			<div class="px-4 pt-6 md:px-8">

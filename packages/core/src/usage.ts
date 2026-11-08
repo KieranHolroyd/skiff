@@ -316,6 +316,7 @@ export class UsageService {
 			previews: counts.previews,
 			workloadMemoryMb: counts.workloadMemoryMb,
 			egressBytes: egress,
+			registryBytes: this.ctx.registry.usedBytes(orgId, projectId),
 		};
 
 		const metrics = {} as QuotaUsageMetrics;

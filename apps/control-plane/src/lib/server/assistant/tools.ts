@@ -140,7 +140,11 @@ const WRITE_PERMISSION: Record<string, Permission> = {
 	// Log drains (DESIGN §8): the service further limits writes to owners and admins.
 	create_log_drain: 'logs:read',
 	test_log_drain: 'logs:read',
-	delete_log_drain: 'logs:read'
+	delete_log_drain: 'logs:read',
+	// Pipelines (docs/PIPELINES.md §8): a dispatch or re-run runs a workflow with the repository's secrets.
+	dispatch_workflow: 'build:create',
+	rerun_pipeline_run: 'build:create',
+	cancel_pipeline_run: 'build:cancel'
 };
 
 /** Every permitted MCP tool, plus the UI guide, for one signed-in user. */

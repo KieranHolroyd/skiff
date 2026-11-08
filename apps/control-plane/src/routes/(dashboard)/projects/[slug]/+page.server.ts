@@ -185,6 +185,18 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			appVolumesEnabled && row.runtime !== 'static'
 				? safely(() => core.appVolumes.list(principal, row), [])
 				: [];
+		// Image picker suggestions from the platform registry (docs/REGISTRY.md G2); never fails the page.
+		const registryImages: string[] =
+			row.runtime === 'container' && hasPermission(principal, 'image:pull')
+				? safely(() => {
+						const registry = core.registry.view(principal);
+						if (!registry.enabled) return [];
+						return core.registry
+							.listRepositories(principal)
+							.filter((repo) => repo.lastTag)
+							.map((repo) => `${registry.host}/${repo.name}:${repo.lastTag}`);
+					}, [])
+				: [];
 
 		return {
 			project,
@@ -201,6 +213,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			gitSource,
 			workload,
 			workloadSpec,
+			registryImages,
 			runnerPool,
 			secrets,
 			capacity,
@@ -210,6 +223,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			attachableStorage,
 			storageBuckets,
 			appVolumesEnabled,
+			/** Storage pools the volume form offers (docs/STORAGE.md §3.3). */
+			appVolumeStorage: appVolumesEnabled ? core.storagePools.choices('app-volumes') : null,
 			appVolumes,
 			// Jobs (plan 09): the tab hides unless SKIFF_FEATURE_JOBS is on.
 			jobsEnabled: core.jobs.enabled(),
@@ -1148,13 +1163,15 @@ export const actions: Actions = {
 	createVolume: async ({ request, locals, params }) => {
 		const principal = locals.principal!;
 		const data = await request.formData();
-		const backing = formString(data, 'backing') === 'node_volume' ? 'node_volume' : 'state_dir';
-		const nodeVolume = formOptionalString(data, 'nodeVolume');
+		// Storage: empty follows the app-volumes rule, a pool name picks that pool, and
+		// `__node_volume` pins one named node volume (docs/STORAGE.md §3.3).
+		const storage = formString(data, 'storage');
+		const nodeVolume = storage === '__node_volume' ? formOptionalString(data, 'nodeVolume') : undefined;
 		const parsed = appVolumeCreateSchema.safeParse({
 			name: formString(data, 'name'),
 			sizeMb: numberField(data, 'sizeMb', 1024),
-			backing,
-			...(nodeVolume ? { nodeVolume } : {}),
+			...(storage === '__node_volume' ? { backing: 'node_volume', ...(nodeVolume ? { nodeVolume } : {}) } : {}),
+			...(storage && storage !== '__node_volume' ? { pool: storage } : {}),
 			singleWriter: formBoolean(data, 'singleWriter')
 		});
 		if (!parsed.success) {

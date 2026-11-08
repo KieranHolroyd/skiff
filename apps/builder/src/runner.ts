@@ -6,15 +6,13 @@ import type { ControlClient } from './client.ts';
 import {
 	BuildValidationError,
 	directRunArgs,
-	gitAuthEnv,
-	gitSshEnv,
 	redactSecret,
 	safeRelativeDir,
 	systemdRunArgs,
 	unitName,
 	validateBuildCommand,
-	validateGitRef,
 } from './command.ts';
+import { capture, cloneRef, commitInfo } from './pipeline/git.ts';
 import { zipDirectory } from './zip.ts';
 
 type StreamName = 'stdout' | 'stderr';
@@ -27,36 +25,6 @@ export class BuildFailure extends Error {
 		super(message);
 		this.name = 'BuildFailure';
 	}
-}
-
-interface CaptureResult {
-	code: number;
-	stdout: string;
-	stderr: string;
-}
-
-async function streamText(stream: ReadableStream<Uint8Array> | number | undefined): Promise<string> {
-	if (!stream || typeof stream === 'number') return '';
-	return new Response(stream).text();
-}
-
-async function capture(
-	argv: string[],
-	options: { cwd?: string; env?: Record<string, string | undefined> } = {},
-): Promise<CaptureResult> {
-	const proc = Bun.spawn(argv, {
-		cwd: options.cwd,
-		env: { ...process.env, ...options.env },
-		stdin: 'ignore',
-		stdout: 'pipe',
-		stderr: 'pipe',
-	});
-	const [stdout, stderr, code] = await Promise.all([
-		streamText(proc.stdout),
-		streamText(proc.stderr),
-		proc.exited,
-	]);
-	return { code, stdout, stderr };
 }
 
 async function pumpLines(
@@ -200,7 +168,7 @@ export class JobRunner {
 
 			await mkdir(this.config.buildDir, { recursive: true });
 			tempDir = await mkdtemp(join(this.config.buildDir, 'build-'));
-			await this.clone(job, tempDir);
+			await cloneRef({ url: job.repoUrl, ref: job.ref, dir: tempDir, credentials: this.config });
 
 			const info = await commitInfo(tempDir);
 			commitSha = info.sha ?? commitSha;
@@ -303,45 +271,6 @@ export class JobRunner {
 		if (result.code !== 0)
 			throw new Error(`Could not hand the checkout to ${user}: ${result.stderr.trim().slice(0, 500) || `exit ${result.code}`}`);
 	}
-
-	/** Branch/tag clone first; a commit SHA (which `--branch` rejects) falls back to fetch + checkout. */
-	private async clone(job: BuildJob, dir: string): Promise<void> {
-		const ref = validateGitRef(job.ref);
-		const url = job.repoUrl;
-		// The token (when this host may have it) lives only in this process environment: never in
-		// the URL, so never in `.git/config`, which the build user can read.
-		// The SSH deploy key is likewise a root-owned file named only in this environment.
-		const env = {
-			GIT_TERMINAL_PROMPT: '0',
-			...gitAuthEnv(url, this.config.gitToken, this.config.gitTokenHosts),
-			...gitSshEnv(url, {
-				keyPath: this.config.gitSshKey,
-				knownHostsPath: this.config.gitSshKnownHosts,
-				fallbackKnownHostsPath: join(this.config.buildDir, 'known_hosts'),
-			}),
-		};
-		const direct = await capture(
-			['git', 'clone', '--depth', '1', '--single-branch', '--branch', ref, '--', url, dir],
-			{ cwd: this.config.buildDir, env },
-		);
-		if (direct.code === 0) return;
-
-		await rm(dir, { recursive: true, force: true });
-		await mkdir(dir, { recursive: true });
-		const steps: string[][] = [
-			['git', 'init'],
-			['git', 'remote', 'add', 'origin', url],
-			['git', 'fetch', '--depth', '1', 'origin', ref],
-			['git', 'checkout', '--detach', 'FETCH_HEAD'],
-		];
-		for (const step of steps) {
-			const result = await capture(step, { cwd: dir, env });
-			if (result.code !== 0)
-				throw new BuildValidationError(
-					`git ${step[1] ?? 'command'} failed: ${result.stderr.trim().slice(0, 1000) || `exit ${result.code}`}`,
-				);
-		}
-	}
 }
 
 /** Resolve `path` (following symlinks) and require it to stay inside `root`. */
@@ -357,13 +286,4 @@ export async function insideCheckout(root: string, path: string, label: string):
 	if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel))
 		throw new BuildValidationError(`${label} resolves outside the repository`);
 	return resolved;
-}
-
-async function commitInfo(dir: string): Promise<{ sha: string | null; message: string | null }> {
-	const sha = await capture(['git', '-C', dir, 'rev-parse', 'HEAD']);
-	const message = await capture(['git', '-C', dir, 'log', '-1', '--pretty=%B']);
-	return {
-		sha: sha.code === 0 ? sha.stdout.trim().slice(0, 64) : null,
-		message: message.code === 0 ? message.stdout.trim().slice(0, 2000) : null,
-	};
 }

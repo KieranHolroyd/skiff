@@ -68,6 +68,9 @@
 - [ ] Tier 3 containers (Podman Quadlet)
 - [x] Container console for container projects: live overview and processes, read-only file browser, interactive shell, restart (permission-gated and audited; `CONTAINER_CONSOLE` kill switch)
 - [ ] Git builds on the homelab Builder + GitHub webhooks
+- [x] Pipelines WP1 ([PIPELINES.md](./PIPELINES.md), D148–D153): GitHub-Actions-shaped workflows on build nodes (DAG, matrix, secrets, environments + approvals, fork trust, artifacts, caches, schedules, `skiff/deploy`), dashboard, REST, CLI, MCP
+- [x] Pipelines WP2–WP6 (D151, D160–D162): helper-started job containers, per-job BuildKit, isolation tiers (container/gVisor/microVM), reusable workflows, remote/composite/JS actions, commit statuses, OIDC, `skiff_event`, `skif workflow run --local`, Skiff's release workflow ported
+- [ ] Pipelines next: microVM tier on real KVM, a container-safe release canary (then retire GitHub Actions for releases), GitHub App check runs, remote reusable workflows
 - [ ] Custom domains (TXT verify, on-demand TLS, Cloudflare auto-records, apex↔www)
 - [ ] `ObjectStore`: local fs, Garage/MinIO, multi-target replication
 - [ ] Optional `docker` runtime driver
@@ -223,6 +226,16 @@
 - [ ] C9: RustFS bucket replication, Litestream for SQLite apps, app-volume snapshot shipping, Skiff-served NFS
 - [ ] C10: MongoDB replica sets, Valkey/Redis and MySQL/MariaDB replicas
 - [ ] Ingress drivers `cloudflare-lb` and `cloudflare-tunnel` (homelab as an ingress behind CGNAT)
+
+## Container registry ([REGISTRY.md](./REGISTRY.md), D145–D147, D154–D159)
+- [x] G0: deploys pin image digests (D145); org registry credentials via per-workload `--authfile` (D146); node image prune (D147)
+- [x] G1: zot `registry` helper profile (D154), Skiff token realm + `image:*` permissions + per-workload node logins (D155), push events (D156), `skif registry login|repos|deploy`, Settings → Container registries
+- [ ] Not built (REGISTRY.md §13): zot cluster replicas, Podman policy.json checks, `registry` storage kind, R9 loopback mirror, Linux node conformance run
+- [x] G2: deployment pins, deploy on push, `registry.push` events, `registryBytes` quota, image picker, MCP read tools (D157)
+- [x] G3: Pipelines `skiff/build-image` pushes with the job login, `registry/<name>` tags, GitHub Actions OIDC trusts (D158)
+- [x] G4: pull-through cache for docker.io / ghcr.io / quay.io with node mirrors (D159)
+- [x] G5: cosign signature policy at deploy, CVE scanning (D159)
+- [x] G6: S3 storage + Valkey cache, single replica (D159)
 
 ## Later / maybe
 - Importing external Prometheus datasources

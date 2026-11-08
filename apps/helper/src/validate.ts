@@ -8,6 +8,14 @@
  * widen the privileged surface.
  */
 
+import {
+	REGISTRY_ID_PREFIX,
+	RegistryValidationError,
+	assertRegistryId,
+	parseRegistryProfile,
+	registryImage,
+	type WorkloadRegistry,
+} from './registry.ts';
 import { volumePathProblem } from './volumes.ts';
 
 export const WORKLOAD_RUNTIMES = ['process', 'container', 'function'] as const;
@@ -236,6 +244,8 @@ export interface WorkloadDesired {
 	 * The agent's bucket/user desired state is accepted on the wire but never reaches a unit.
 	 */
 	objectStorage?: WorkloadObjectStorage;
+	/** The platform registry (docs/REGISTRY.md G1): zot, image and config derived by the helper. */
+	registry?: WorkloadRegistry;
 	/**
 	 * Managed queue broker profile (D111). Like `database`, only `engine`, `version` and the store
 	 * cap matter: image, user, mounts, config and container port come from `BROKER_ENGINES`.
@@ -656,7 +666,7 @@ export function assertBrokerId(value: unknown, label = 'broker id'): string {
 /** A managed-service id (`db_`, `st_` or `mq_`): the only ids whose data dir `purge` may delete. */
 export function assertManagedId(value: unknown, label = 'managed id'): string {
 	const id = assertId(value, label);
-	for (const prefix of [DATABASE_ID_PREFIX, STORAGE_ID_PREFIX, BROKER_ID_PREFIX]) {
+	for (const prefix of [DATABASE_ID_PREFIX, STORAGE_ID_PREFIX, BROKER_ID_PREFIX, REGISTRY_ID_PREFIX]) {
 		if (id.startsWith(prefix) && id.length > prefix.length) return id;
 	}
 	throw new ValidationError(
@@ -669,6 +679,50 @@ export interface WorkloadActivation {
 	activationVersion: string;
 	env: Record<string, string>;
 	files: Record<string, string>;
+	/** Containers only (docs/REGISTRY.md R2): credentials written to the workload's auth file. */
+	registryAuth?: RegistryAuthEntry[];
+}
+
+export interface RegistryAuthEntry {
+	registry: string;
+	username: string;
+	password: string;
+}
+
+const MAX_REGISTRY_AUTH_ENTRIES = 8;
+/** A registry host with an optional port; Docker Hub arrives as `docker.io`. */
+const REGISTRY_HOST_PATTERN = /^(?:localhost|[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*)(?::[0-9]{1,5})?$/;
+
+/** Validate the registry credentials of an activation; only container workloads may carry them. */
+export function parseRegistryAuth(value: unknown, workload?: WorkloadDesired): RegistryAuthEntry[] | undefined {
+	if (value === undefined) return undefined;
+	if (!Array.isArray(value)) throw new ValidationError('activation.registryAuth must be an array');
+	if (value.length > MAX_REGISTRY_AUTH_ENTRIES)
+		throw new ValidationError(`activation.registryAuth holds at most ${MAX_REGISTRY_AUTH_ENTRIES} entries`);
+	if (workload && workload.runtime !== 'container')
+		throw new ValidationError('activation.registryAuth is only for container workloads');
+	const seen = new Set<string>();
+	return value.map((raw, index) => {
+		const record = assertRecord(raw, `activation.registryAuth[${index}]`);
+		const registry = assertString(record.registry, `activation.registryAuth[${index}].registry`, { max: 253 });
+		if (!REGISTRY_HOST_PATTERN.test(registry))
+			throw new ValidationError(`activation.registryAuth[${index}].registry is not a registry host`);
+		if (seen.has(registry)) throw new ValidationError(`activation.registryAuth repeats ${registry}`);
+		seen.add(registry);
+		const username = assertString(record.username, `activation.registryAuth[${index}].username`, { max: 256 });
+		// `user:password` is base64-encoded; a colon in the username would split it wrongly.
+		if (username.includes(':')) throw new ValidationError(`activation.registryAuth[${index}].username contains ":"`);
+		const password = assertString(record.password, `activation.registryAuth[${index}].password`, { max: 4096 });
+		return { registry, username, password };
+	});
+}
+
+/** `containers-auth.json(5)`: one `auths` entry per registry, `auth` = base64(`user:password`). */
+export function renderRegistryAuthFile(entries: readonly RegistryAuthEntry[]): string {
+	const auths: Record<string, { auth: string }> = {};
+	for (const entry of entries)
+		auths[entry.registry] = { auth: Buffer.from(`${entry.username}:${entry.password}`).toString('base64') };
+	return `${JSON.stringify({ auths }, null, 2)}\n`;
 }
 
 export function assertRecord(value: unknown, label: string): Record<string, unknown> {
@@ -1117,6 +1171,15 @@ export function parseWorkload(value: unknown): WorkloadDesired {
 	const broker = record.broker === undefined ? undefined : parseBroker(record.broker);
 	if (broker && (database || objectStorage))
 		throw new ValidationError('A workload cannot have a broker profile together with another managed profile');
+	let registry: WorkloadRegistry | undefined;
+	try {
+		registry = record.registry === undefined ? undefined : parseRegistryProfile(record.registry);
+	} catch (error) {
+		if (error instanceof RegistryValidationError) throw new ValidationError(error.message);
+		throw error;
+	}
+	if (registry && (database || objectStorage || broker))
+		throw new ValidationError('A workload cannot have a registry profile together with another managed profile');
 	const id = assertId(record.id, 'workload.id');
 	const orgId = record.orgId === undefined ? undefined : assertId(record.orgId, 'workload.orgId');
 	const networkName =
@@ -1166,6 +1229,20 @@ export function parseWorkload(value: unknown): WorkloadDesired {
 	} else if (id.startsWith(BROKER_ID_PREFIX)) {
 		throw new ValidationError(`workload.id prefix "${BROKER_ID_PREFIX}" is reserved for queue brokers`);
 	}
+	if (registry) {
+		if (runtime !== 'container') throw new ValidationError('Registry workloads must use the container runtime');
+		const pinned = registryImage(registry);
+		if (image !== pinned && image !== pinned.split('@')[0])
+			throw new ValidationError(`workload.image must be ${pinned} for ${registry.engine} ${registry.version}`);
+		try {
+			assertRegistryId(id);
+		} catch (error) {
+			throw new ValidationError((error as Error).message);
+		}
+		if (secrets.length > 0) throw new ValidationError('Registry workloads take no secrets');
+	} else if (id.startsWith(REGISTRY_ID_PREFIX)) {
+		throw new ValidationError(`workload.id prefix "${REGISTRY_ID_PREFIX}" is reserved for the registry`);
+	}
 
 	const dataSizeMb =
 		record.dataSizeMb === null || record.dataSizeMb === undefined
@@ -1212,9 +1289,10 @@ export function parseWorkload(value: unknown): WorkloadDesired {
 	}
 	if (objectStorage) workload.objectStorage = objectStorage;
 	if (broker) workload.broker = broker;
+	if (registry) workload.registry = registry;
 	if (record.ingress !== undefined) {
 		if (record.ingress !== 'none') throw new ValidationError('workload.ingress must be "none" when present');
-		if (database || objectStorage || broker) throw new ValidationError('Managed services cannot be workers');
+		if (database || objectStorage || broker || registry) throw new ValidationError('Managed services cannot be workers');
 		workload.ingress = 'none';
 	}
 	if (record.runner !== undefined) {
@@ -1264,7 +1342,8 @@ export function parseActivation(value: unknown, workload?: WorkloadDesired): Wor
 		files[name] = value;
 	}
 
-	return { workloadId, activationVersion, env, files };
+	const registryAuth = parseRegistryAuth(record.registryAuth, workload);
+	return { workloadId, activationVersion, env, files, ...(registryAuth?.length ? { registryAuth } : {}) };
 }
 
 /**

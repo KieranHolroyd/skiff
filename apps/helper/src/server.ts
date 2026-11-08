@@ -1,3 +1,5 @@
+import type { ImagePruneResult } from './images.ts';
+import { MirrorValidationError, parseMirrorRequest, type MirrorRequest } from './registry-mirror.ts';
 import { createReadStream, promises as fs } from 'node:fs';
 import { Readable } from 'node:stream';
 import { assertMailHost } from './mail.ts';
@@ -26,6 +28,7 @@ import type { HelperInventory, VerifyResult } from './volumes.ts';
 import { NodeUpdateError, parseNodeUpdateRequest, type NodeUpdateRequest, type NodeUpdateResult } from './node-update.ts';
 import type { WireguardStatus } from './wireguard.ts';
 import type { ShareMount, ShareMountStatus } from './shares.ts';
+import type { VolumeProfileRequest, VolumeProfileResult } from './volume-profile.ts';
 import { CONSOLE_SHELLS, ConsoleError, type ConsoleShell, type ContainerConsole } from './container-console.ts';
 import { ContainerFileError } from './container-files.ts';
 import {
@@ -36,6 +39,7 @@ import {
 	type AppVolumeData,
 } from './app-volumes.ts';
 import { assertRunId, parseJobRequest, type JobApi } from './jobs.ts';
+import { routePipelineRequest, type PipelineJobApi } from './pipeline-jobs.ts';
 
 /**
  * The helper's entire network surface is a fixed set of verbs (slice, apply, status, remove, logs,
@@ -85,6 +89,10 @@ export interface HelperRuntime {
 	replicationStatus?(id: string): Promise<{ slots: ReplicationSlotStatus[] }>;
 	replicaPromote?(id: string, input: { databaseId?: unknown }): Promise<{ databaseId: string; lsn: string | null }>;
 	/** `systemctl start skiff-studio.service` (plan 22). The unit name is fixed; no arguments. */
+	/** Remove images no unit or container needs (docs/REGISTRY.md R3). Optional for test fakes. */
+	pruneImages?(): Promise<ImagePruneResult>;
+	/** The platform registry's pull-through mirror (docs/REGISTRY.md G4). Optional for test fakes. */
+	applyRegistryMirror?(request: MirrorRequest): Promise<{ upstreams: string[]; changed: boolean }>;
 	startStudio(): Promise<void>;
 	/** `systemctl stop skiff-studio.service`. */
 	stopStudio(): Promise<void>;
@@ -128,6 +136,8 @@ export interface HandlerOptions {
 	nodeUpdate?: { update(request: NodeUpdateRequest): Promise<NodeUpdateResult> };
 	/** Managed overlay verbs (C1); absent on a helper that predates the overlay. */
 	wireguard?: WireguardApi;
+	/** Storage profiling of a registered volume (docs/STORAGE.md §5); absent = 404. */
+	volumeProfiler?: { profile(request: VolumeProfileRequest): Promise<VolumeProfileResult> };
 	/** Share mount verbs (C3); absent on a helper that predates cluster shares. */
 	shares?: {
 		mount(share: ShareMount): Promise<ShareMountStatus>;
@@ -140,6 +150,8 @@ export interface HandlerOptions {
 	appVolumes?: Pick<AppVolumeData, 'usage' | 'purge' | 'snapshot' | 'restore'>;
 	/** Job runs as transient units (plan 09); absent on a helper that predates jobs. */
 	jobs?: JobApi;
+	/** Pipeline job containers (docs/PIPELINES.md W5/W6); absent on a helper that predates them. */
+	pipelineJobs?: PipelineJobApi;
 }
 
 class BodyTooLargeError extends Error {}
@@ -161,6 +173,25 @@ export function createHandler(
 			if (path === '/healthz') {
 				if (method !== 'GET' && method !== 'HEAD') return methodNotAllowed('GET');
 				return json({ ok: true, version: options.version });
+			}
+
+			if (path === '/v1/registry/mirror') {
+				if (method !== 'POST') return methodNotAllowed('POST');
+				if (!runtime.applyRegistryMirror) return json({ error: 'not_found', path }, 404);
+				let mirror: MirrorRequest;
+				try {
+					mirror = parseMirrorRequest(await readJson(request, maxBodyBytes));
+				} catch (error) {
+					if (error instanceof MirrorValidationError) throw new ValidationError(error.message);
+					throw error;
+				}
+				return json({ ok: true, ...(await runtime.applyRegistryMirror(mirror)) });
+			}
+
+			if (path === '/v1/images/prune') {
+				if (method !== 'POST') return methodNotAllowed('POST');
+				if (!runtime.pruneImages) return json({ error: 'not_found', path }, 404);
+				return json({ ok: true, ...(await runtime.pruneImages()) });
 			}
 
 			if (path === '/v1/slice') {
@@ -256,6 +287,21 @@ export function createHandler(
 				const count = await runtime.syncVolumes(body.volumes);
 				return json({ ok: true, count });
 			}
+			if (path === '/v1/volumes/profile') {
+				if (method !== 'POST') return methodNotAllowed('POST');
+				if (!options.volumeProfiler) return json({ error: 'volume profiling is not available on this helper' }, 404);
+				const body = assertRecord(await readJson(request, maxBodyBytes), 'request');
+				const input = {
+					volumeId: assertString(body.volumeId, 'volumeId', { max: 100 }),
+					sizeMb: Number(body.sizeMb),
+					runtimeSeconds: Number(body.runtimeSeconds),
+				};
+				try {
+					return json({ ok: true, profile: await options.volumeProfiler.profile(input) });
+				} catch (error) {
+					return json({ ok: false, error: error instanceof Error ? error.message : String(error) });
+				}
+			}
 			if (path === '/v1/volumes/verify') {
 				if (method !== 'POST') return methodNotAllowed('POST');
 				const body = assertRecord(await readJson(request, maxBodyBytes), 'request');
@@ -299,6 +345,21 @@ export function createHandler(
 					return json({ ok: true, restored: ref.id });
 				}
 				return json({ error: 'not_found', path }, 404);
+			}
+
+			// --- pipeline job containers (W5/W6): validated fields only, helper-derived mounts ----------
+			if (path.startsWith('/v1/pipeline/')) {
+				if (!options.pipelineJobs) return json({ error: 'pipeline jobs are not available on this helper' }, 404);
+				const routed = await routePipelineRequest(options.pipelineJobs, {
+					method,
+					path,
+					search: url.search,
+					readJson: () => readJson(request, maxBodyBytes),
+					readText: () => readText(request, maxBodyBytes),
+				});
+				if (!routed) return json({ error: 'not_found', path }, 404);
+				if (routed.allow) return methodNotAllowed(routed.allow);
+				return json(routed.body, routed.status);
 			}
 
 			// --- job runs (plan 09): one transient unit per run id, argv only, no shell ----------------
@@ -685,7 +746,7 @@ export interface RunningHelper {
 export async function startHelperServer(
 	config: HelperConfig,
 	runtime: HelperRuntime,
-	extras: Pick<HandlerOptions, 'nodeUpdate' | 'wireguard' | 'shares' | 'containers' | 'appVolumes' | 'jobs'> = {},
+	extras: Pick<HandlerOptions, 'nodeUpdate' | 'wireguard' | 'shares' | 'containers' | 'appVolumes' | 'jobs' | 'pipelineJobs' | 'volumeProfiler'> = {},
 ): Promise<RunningHelper> {
 	const directory = dirname(config.socketPath);
 	const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;

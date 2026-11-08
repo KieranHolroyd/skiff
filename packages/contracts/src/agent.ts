@@ -1,3 +1,4 @@
+import { registryMirrorDesiredSchema } from './registry.ts';
 import * as z from 'zod';
 import { nodeContainerConsoleDesiredSchema } from './container-console.ts';
 import { nodeStudioDesiredSchema } from './database-studio.ts';
@@ -39,6 +40,7 @@ import { storageReplicationReportSchema } from './storage-replication.ts';
 import { nodeStorageSchema, nodeStorageStatusSchema } from './storage.ts';
 import { nodeVolumeDesiredSchema, volumeInventorySchema } from './volume.ts';
 import { shareMountDesiredSchema, shareMountReportSchema, shareUnmountDesiredSchema } from './share.ts';
+import { volumeProfileResultSchema, volumeProfileTaskSchema } from './storage-pool.ts';
 import {
 	appVolumeNodeRefSchema,
 	appVolumeTaskResultSchema,
@@ -209,6 +211,8 @@ export const desiredStateSchema = z.object({
 	shareMounts: z.array(shareMountDesiredSchema).default([]),
 	/** Share mounts to remove; the node unmounts and reports `unmountedShares`. */
 	shareUnmounts: z.array(shareUnmountDesiredSchema).default([]),
+	/** Storage benchmarks to run, one at a time (docs/STORAGE.md §5). */
+	volumeProfileTasks: z.array(volumeProfileTaskSchema).default([]),
 	/** Live app volumes placed on this node; the agent measures their usage (docs/VOLUMES.md §14). */
 	appVolumes: z.array(appVolumeNodeRefSchema).default([]),
 	/** Trashed app volumes past their retention window: delete the directory, then report. */
@@ -239,6 +243,12 @@ export const desiredStateSchema = z.object({
 	serviceProviders: z.array(serviceProviderSchema).default([]),
 	/** Public storage endpoints this node serves (S3): byte-for-byte proxies, not sites. */
 	storageRoutes: z.array(storageRouteSchema).default([]),
+	/**
+	 * The platform registry's pull-through cache (docs/REGISTRY.md G4): the node points Podman's
+	 * `registries.conf.d` mirrors for these upstreams at the registry and logs in with its node
+	 * token. Absent when no mirror is on, which removes the node's mirror config.
+	 */
+	registryMirror: registryMirrorDesiredSchema.nullable().default(null),
 	/** Purged storage instances whose data dir this node must delete, then report (S8). */
 	storagePurges: z.array(z.string()).default([]),
 	/** Purged queue brokers whose data dir this node must delete, then report (D111). */
@@ -274,6 +284,7 @@ export type DesiredState = z.infer<typeof desiredStateSchema>;
  * - `database-replicas`: runs Postgres replica workloads, serves their link sockets, applies
  *   `databaseReplication` and `databaseReplicaPromotions` (docs/CLUSTERING.md §9.2, C7).
  * - `share-mounts`: mounts `shareMounts`, unmounts `shareUnmounts` and reports both.
+ * - `volume-profiles`: benchmarks `volumeProfileTasks` through the helper and reports results.
  */
 export const nodeCapabilities = [
 	'studio-principal',
@@ -287,6 +298,7 @@ export const nodeCapabilities = [
 	'jobs',
 	'database-replicas',
 	'share-mounts',
+	'volume-profiles',
 ] as const;
 export type NodeCapability = (typeof nodeCapabilities)[number];
 
@@ -337,6 +349,8 @@ export const heartbeatSchema = z.object({
 	shareMounts: z.array(shareMountReportSchema).max(200).optional(),
 	/** Share mount ids from `shareUnmounts` that are now unmounted. */
 	unmountedShares: z.array(z.string().max(100)).max(200).optional(),
+	/** Progress and results of `volumeProfileTasks`. */
+	volumeProfileResults: z.array(volumeProfileResultSchema).max(50).optional(),
 	/** Actual workload state, so the fleet view reflects restart loops and OOM kills (DESIGN §9). */
 	workloads: z.array(z.object({
 		id: z.string(),

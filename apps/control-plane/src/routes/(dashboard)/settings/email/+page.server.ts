@@ -18,8 +18,8 @@ import {
 import type { Actions, PageServerLoad } from './$types';
 
 /**
- * Settings → Email (docs/EMAIL.md §3.3): the mail node, the global pause, the platform DNS the
- * node needs, and this organisation's sandbox state and limits. `core.email` re-checks that the
+ * Settings → Email (docs/EMAIL.md §3.3): the mail node, the mail domain (the content domain or a
+ * custom one), the global pause, the platform DNS the node needs, and this organisation's sandbox state and limits. `core.email` re-checks that the
  * caller is a platform admin on every change.
  */
 
@@ -76,6 +76,23 @@ export const actions: Actions = {
 				success: settings.nodeId
 					? 'Mail node saved. Its agent starts skiff-mail on the next reconcile; publish the platform records below.'
 					: 'Email is switched off: no node sends or receives mail.'
+			};
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	domain: async ({ request, locals }) => {
+		const principal = requirePlatformAdmin(locals);
+		const data = await request.formData();
+		const mailDomain = formString(data, 'reset') ? null : formString(data, 'mailDomain') || null;
+		try {
+			const settings = await core.email.configure(principal, { mailDomain });
+			return {
+				success:
+					settings.mailDomainSource === 'content'
+						? `Mail hostnames are back on the content domain, ${settings.mailDomain}.`
+						: `Mail hostnames now live under ${settings.mailDomain}. Publish the records below and update the PTR.`
 			};
 		} catch (caught) {
 			return fail(failStatus(caught), toFormFailure(caught));

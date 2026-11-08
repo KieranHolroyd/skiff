@@ -245,6 +245,20 @@ describe('container unit', () => {
 			'PodmanArgs=--security-opt apparmor=unconfined',
 		);
 	});
+
+	test('pulls with the workload auth file only when it has registry credentials', () => {
+		const base = {
+			workload: workload({ runtime: 'container', release: null, image: 'ghcr.io/acme/app:1', socketActivation: false }),
+			image: 'ghcr.io/acme/app:1',
+			envFile: '/run/skiff-workloads/wld_abc123/env',
+			dataDir: '/var/lib/skiff-workloads/wld_abc123',
+			secretsDir: null,
+		};
+		expect(renderContainerUnit(base)).not.toContain('--authfile');
+		expect(renderContainerUnit({ ...base, authFile: '/run/skiff-workloads/wld_abc123/auth.json' })).toContain(
+			'PodmanArgs=--authfile=/run/skiff-workloads/wld_abc123/auth.json',
+		);
+	});
 });
 
 describe('network unit', () => {

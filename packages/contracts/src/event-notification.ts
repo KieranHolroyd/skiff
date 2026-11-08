@@ -9,7 +9,7 @@ import { z } from 'zod';
  * delivery gets the queue's ack, retry and dead-letter behaviour for free.
  */
 
-export const eventSources = ['storage', 'alerts', 'deployments', 'database-backups'] as const;
+export const eventSources = ['storage', 'alerts', 'deployments', 'database-backups', 'registry'] as const;
 export type EventSource = (typeof eventSources)[number];
 
 /** Event types per source. The message `type` is `<source>.<event>` (`storage` keeps R2's body). */
@@ -18,6 +18,8 @@ export const eventTypesBySource = {
 	alerts: ['firing', 'resolved'],
 	deployments: ['created', 'promoted', 'failed'],
 	'database-backups': ['completed', 'failed'],
+	// The platform registry (docs/REGISTRY.md): an image pushed to one of the org's repositories.
+	registry: ['push'],
 } as const satisfies Record<EventSource, readonly string[]>;
 export type EventType<S extends EventSource = EventSource> = (typeof eventTypesBySource)[S][number];
 
@@ -43,6 +45,8 @@ export const eventRuleCreateSchema = z
 		database: resourceName.optional(),
 		/** `alerts`: one rule (id); absent means every rule. */
 		alertRule: resourceName.optional(),
+		/** `registry`: one repository (`<org>/<name>`); absent means every repository of the org. */
+		repository: z.string().trim().min(3).max(255).optional(),
 		/** The managed broker (name) and queue the message is published to. */
 		broker: resourceName,
 		queue: z.string().regex(eventQueueNamePattern, 'Queue names are lower-case letters, digits and dashes (max 63).'),
@@ -58,7 +62,7 @@ export const eventRuleCreateSchema = z
 					path: ['events', index],
 					message: `"${event}" is not a ${input.source} event (use ${known.join(', ')}).`,
 				});
-		const only = (field: 'storage' | 'bucket' | 'prefix' | 'suffix' | 'project' | 'database' | 'alertRule', source: EventSource) => {
+		const only = (field: 'storage' | 'bucket' | 'prefix' | 'suffix' | 'project' | 'database' | 'alertRule' | 'repository', source: EventSource) => {
 			if (input[field] !== undefined && input.source !== source)
 				ctx.addIssue({ code: 'custom', path: [field], message: `\`${field}\` only applies to ${source} rules.` });
 		};
@@ -66,6 +70,7 @@ export const eventRuleCreateSchema = z
 		only('project', 'deployments');
 		only('database', 'database-backups');
 		only('alertRule', 'alerts');
+		only('repository', 'registry');
 		if (input.source === 'storage') {
 			if (!input.storage) ctx.addIssue({ code: 'custom', path: ['storage'], message: 'Name the storage instance to watch.' });
 			if (!input.bucket) ctx.addIssue({ code: 'custom', path: ['bucket'], message: 'Name the bucket to watch.' });
@@ -94,6 +99,7 @@ export const eventRuleFilterSchema = z.object({
 	project: z.string().optional(),
 	database: z.string().optional(),
 	alertRule: z.string().optional(),
+	repository: z.string().optional(),
 });
 export type EventRuleFilter = z.infer<typeof eventRuleFilterSchema>;
 

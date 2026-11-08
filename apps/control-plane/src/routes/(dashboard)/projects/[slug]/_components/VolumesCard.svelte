@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import type { StorageChoices } from '@skiff/contracts';
 	import CameraIcon from '@lucide/svelte/icons/camera';
 	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
@@ -36,10 +37,13 @@
 		workloadId,
 		enabled,
 		fieldErrors = {},
-		can
+		can,
+		storage = null
 	}: {
 		slug: string;
 		volumes: AppVolumeView[];
+		/** Storage pools on offer (docs/STORAGE.md §3.3). */
+		storage?: StorageChoices | null;
 		/** Workload id or the project slug; the server resolves either. */
 		workloadId: string;
 		enabled: boolean;
@@ -56,7 +60,11 @@
 	let mountPath = $state('/var/lib/app');
 	let readOnly = $state(false);
 	let sizeMb = $state(1024);
-	let backing = $state<'state_dir' | 'node_volume'>('state_dir');
+	/** A pool name (preselected to the default), or `__node_volume` to pin one volume. */
+	let storageChoice = $state('');
+	$effect(() => {
+		if (createOpen) storageChoice = storage?.defaultPool ?? '';
+	});
 	let nodeVolume = $state('');
 	let singleWriter = $state(true);
 	let snapshotOpen = $state(false);
@@ -379,21 +387,21 @@
 						/>
 						{#if fieldErrors.sizeMb}<Field.Error>{fieldErrors.sizeMb}</Field.Error>{/if}
 					</Field.Field>
-					<Field.Field data-invalid={fieldErrors.backing ? true : undefined}>
-						<Field.Label for="volume-backing">Backing</Field.Label>
-						<NativeSelect.Root
-							id="volume-backing"
-							name="backing"
-							bind:value={backing}
-							class="w-full"
-						>
-							<NativeSelect.Option value="state_dir">Helper state directory</NativeSelect.Option>
-							<NativeSelect.Option value="node_volume">Registered node volume</NativeSelect.Option>
+					<Field.Field data-invalid={fieldErrors.backing || fieldErrors.pool ? true : undefined}>
+						<Field.Label for="volume-storage">Storage</Field.Label>
+						<NativeSelect.Root id="volume-storage" name="storage" bind:value={storageChoice} class="w-full">
+							{#if !storage?.defaultPool}<NativeSelect.Option value="">System disk</NativeSelect.Option>{/if}
+							{#each (storage?.pools ?? []).filter((pool) => storage?.defaultPool || pool.name !== 'system') as pool (pool.name)}
+								<NativeSelect.Option value={pool.name}>
+									{pool.name === 'system' ? 'System disk' : pool.name}{pool.classes.length ? ` · ${pool.classes.join(', ')}` : ''}{pool.name === storage?.defaultPool ? ' (default)' : ''}
+								</NativeSelect.Option>
+							{/each}
+							<NativeSelect.Option value="__node_volume">A specific node volume…</NativeSelect.Option>
 						</NativeSelect.Root>
-						{#if fieldErrors.backing}<Field.Error>{fieldErrors.backing}</Field.Error>{/if}
+						{#if fieldErrors.backing || fieldErrors.pool}<Field.Error>{fieldErrors.backing ?? fieldErrors.pool}</Field.Error>{/if}
 					</Field.Field>
 				</div>
-				{#if backing === 'node_volume'}
+				{#if storageChoice === '__node_volume'}
 					<Field.Field data-invalid={fieldErrors.nodeVolume ? true : undefined}>
 						<Field.Label for="volume-node-volume">Node volume name</Field.Label>
 						<Input

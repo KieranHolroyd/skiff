@@ -22,8 +22,11 @@ The installer adds these packages unless you pass `--skip-deps`:
 
 - **Caddy**, from the official Caddy apt repository, plus the `caddy-dns/cloudflare` module that wildcard HTTPS needs. If the module is added, the Caddy package is held so `apt upgrade` keeps the custom build. If the module download fails, the install continues over HTTP, and HTTPS needs the module later.
 - **Podman** (agent installs only): `podman`, `uidmap`, `passt`, `netavark` and `aardvark-dns`. Podman runs managed databases and object storage. If it is missing, the installer warns and those services cannot start.
+- **Storage tools** (agent installs only): `fio`, `nfs-common` and `cifs-utils`. `fio` measures disk speed when you profile a storage pool, and the other two mount NFS and SMB network shares. If one cannot be installed, the installer warns and continues.
 
-With `--skip-deps`, Caddy must already be on the `PATH`, or preflight fails.
+Nodes installed before the storage tools were added get them on their next update. When a node starts a new version and finds one missing, it installs it once in the background. To manage these packages yourself, set `SKIFF_HELPER_STORAGE_TOOLS=0` in `/etc/skiff/helper.env`.
+
+With `--skip-deps`, Caddy must already be on the `PATH`, or preflight fails. The node also never installs the storage tools by itself.
 
 ### Network access
 
@@ -151,7 +154,7 @@ These flags are passed to the installer. Each one is also available as an enviro
 | `--content-domain <domain>` | Domain that sites are served under. Blank uses `<ip>.sslip.io`. | `SKIFF_CONTENT_DOMAIN` |
 | `--acme-email <email>` | Let's Encrypt account email. Turns on HTTPS when both domains are real. | `SKIFF_ACME_EMAIL` |
 | `--public-address <ipv4>` | This server's IPv4 address for installs without a dashboard domain. Default: detected. | `SKIFF_PUBLIC_HOST` |
-| `--skip-deps` | Don't install Caddy or Podman. Caddy must already be installed. | `SKIFF_SKIP_DEPS=1` |
+| `--skip-deps` | Don't install Caddy, Podman or the storage tools. Caddy must already be installed. | `SKIFF_SKIP_DEPS=1` |
 | `--admin-email <email>` | Pre-fills the owner's email in the setup wizard. It does not create an account. | `SKIFF_ADMIN_EMAIL` |
 | `--cloudflare-token-file <path>` | Cloudflare token file for DNS-01, used only if the file exists and HTTPS is on. Default `/etc/caddy/cloudflare.token`. | `SKIFF_CLOUDFLARE_TOKEN_FILE` |
 | `--skip-dns-check` | Don't check that the domains resolve before installing. | none |

@@ -125,6 +125,7 @@ import { core } from './core';
 import { principalFromMcp } from './principal';
 import { consoleJson } from './container-console';
 import { containerConsoleDeps } from './container-console-deps';
+import { pipelineTools } from './mcp-pipelines';
 
 /**
  * Skiff's MCP server (DESIGN §6.3, D11, D29, D35).
@@ -3174,7 +3175,7 @@ function buildServer(
 					isError: true,
 					...text(
 						`Deleting event rule ${id} needs your confirmation, which this MCP client can't show. ` +
-							`Ask the user to remove it in the Skiff dashboard, under Event sources on the consuming function's Bindings & triggers tab (${core.ctx.config.platformOrigin}/functions).`,
+							`Ask the user to remove it in the Skiff dashboard, in the Triggers card on the consuming function's Bindings & triggers tab (${core.ctx.config.platformOrigin}/functions).`,
 					),
 				};
 			const key = `confirm_delete_event_rule:${id}`;
@@ -4596,6 +4597,45 @@ function buildServer(
 		async (input) => run(() => consoleJson(containerConsoleDeps, principal, input.project, 'restart'))
 	);
 
+	// --- platform registry (docs/REGISTRY.md G2): read-only; push, delete and deploy stay elsewhere --
+	tool(
+		'list_images',
+		{
+			title: 'List registry images',
+			description:
+				"List the org's repositories in the platform container registry (<host>/<org>/<name>), with the last pushed tag, " +
+				'digest and push time, sampled size, linked project and deploy-on-push target. Deploy one with set_workload ' +
+				'using image "<host>/<repository>:<tag>"; the deploy pins its digest.',
+			inputSchema: z.object({}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('image:pull'),
+		},
+		async () =>
+			run(() => {
+				const registry = core.registry.view(principal);
+				return {
+					host: registry.enabled ? registry.host : null,
+					enabled: registry.enabled,
+					repositories: registry.enabled ? core.registry.listRepositories(principal) : [],
+				};
+			}),
+	);
+
+	tool(
+		'image_tags',
+		{
+			title: 'List image tags',
+			description:
+				'List the tags of one repository in the platform registry, each with its digest. Deployment pins (skiff-d-…) are hidden.',
+			inputSchema: z.object({
+				repository: z.string().min(3).max(255).describe('Repository as listed by list_images, e.g. acme/api'),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('image:pull'),
+		},
+		async ({ repository }) => run(async () => ({ repository, tags: await core.registry.tags(principal, repository) })),
+	);
+
 	tool(
 		'get_audit_log',
 		{
@@ -5509,6 +5549,11 @@ function buildServer(
 				],
 			}),
 		);
+
+	// --- pipelines (docs/PIPELINES.md §8): declared in ./mcp-pipelines --------------
+	for (const spec of pipelineTools(principal))
+		tool(spec.name, { ...spec.config, scopeChallenge: requires(...spec.permissions) } as never, (async (args: Record<string, unknown>) =>
+			run(() => spec.handler(args))) as never);
 
 	tool(
 		'get_usage',

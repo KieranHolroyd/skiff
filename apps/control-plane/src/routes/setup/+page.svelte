@@ -38,13 +38,16 @@
 	let { data, form }: PageProps = $props();
 	const result = $derived(form as SetupFormResult | null);
 
-	type Step = 'check' | 'account' | 'secure' | 'done';
+	type Step = 'check' | 'account' | 'secure' | 'storage' | 'done';
 	const steps: { id: Step; label: string }[] = [
 		{ id: 'check', label: 'Check' },
 		{ id: 'account', label: 'Account' },
 		{ id: 'secure', label: 'Secure' },
+		{ id: 'storage', label: 'Storage' },
 		{ id: 'done', label: 'Finish' }
 	];
+	/** The owner is set up but storage is still open (docs/STORAGE.md §4). */
+	const storagePending = $derived(data.phase === 'done' && 'storage' in data && data.storage?.state === 'pending');
 
 	let accountStep = $state<'check' | 'account'>('check');
 	const step = $derived<Step | null>(
@@ -53,7 +56,9 @@
 			: data.phase === 'secure'
 				? 'secure'
 				: data.phase === 'done'
-					? 'done'
+					? storagePending
+						? 'storage'
+						: 'done'
 					: null
 	);
 	const stepIndex = $derived(step ? steps.findIndex((s) => s.id === step) : -1);
@@ -188,6 +193,7 @@
 			check: 'Welcome to Skiff',
 			account: 'Create the owner account',
 			secure: 'Secure your account',
+			storage: 'Set up storage',
 			done: 'You’re all set'
 		}[step ?? data.phase] ?? 'Set up Skiff'
 	);
@@ -199,6 +205,7 @@
 			account: 'You will own this install: its organisation, its nodes and its settings.',
 			secure:
 				'Owners need a second factor as well as a password. Add a passkey, or an authenticator app if passkeys can’t work here.',
+			storage: 'Choose where databases, object storage, app data and builds live before anything is deployed.',
 			done: 'Your owner account is ready.'
 		}[step ?? data.phase] ?? ''
 	);
@@ -392,6 +399,28 @@
 				</Button>
 			</div>
 		</form>
+	{:else if step === 'storage' && data.phase === 'done' && 'storage' in data}
+		<div class="space-y-4">
+			<div class="space-y-2 rounded-lg border p-3 text-sm">
+				<p>
+					Skiff can keep everything on each node's system disk, or you can group disks and network shares into
+					<strong>pools</strong>, for example databases on an <code>ssd</code> pool and object storage on an
+					<code>hdd</code> array or a NAS.
+				</p>
+				<p class="text-muted-foreground">
+					{data.storage.nodes} node{data.storage.nodes === 1 ? '' : 's'} enrolled ·
+					{data.storage.mounts} extra filesystem{data.storage.mounts === 1 ? '' : 's'} detected. You can change this any time under
+					Settings → Storage.
+				</p>
+			</div>
+			<Button size="lg" class="h-10 w-full" href="/settings/storage?onboarding=1">
+				Set up storage
+				<ArrowRightIcon aria-hidden="true" />
+			</Button>
+			<form method="POST" action="?/skipStorage">
+				<Button type="submit" variant="outline" size="lg" class="h-10 w-full">Use the system disk for now</Button>
+			</form>
+		</div>
 	{:else if step === 'secure' || step === 'done'}
 		<div class="space-y-5">
 			{#if step === 'done'}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import type { EventRuleView } from '@skiff/contracts';
-import { eventSourcesFor, parseQueueKey } from './event-sources.js';
+import { eventTriggersFor, parseQueueKey } from './event-triggers.js';
 
 const rule = (id: string, broker: string, queue: string): EventRuleView => ({
 	id,
@@ -18,7 +18,7 @@ const rule = (id: string, broker: string, queue: string): EventRuleView => ({
 	lastError: null
 });
 
-describe('eventSourcesFor', () => {
+describe('eventTriggersFor', () => {
 	const rules = [
 		rule('mine', 'jobs', 'images'),
 		rule('pending', 'jobs', 'thumbs'),
@@ -27,7 +27,7 @@ describe('eventSourcesFor', () => {
 	];
 
 	it('keeps rules on consumed queues and unclaimed queues on attached brokers', () => {
-		const sources = eventSourcesFor(rules, {
+		const sources = eventTriggersFor(rules, {
 			consumers: [{ broker: 'jobs', queue: 'images' }],
 			attachedBrokers: ['jobs'],
 			consumedElsewhere: new Set(['jobs/emails'])
@@ -40,7 +40,7 @@ describe('eventSourcesFor', () => {
 
 	it('shows nothing without consumers or attachments', () => {
 		expect(
-			eventSourcesFor(rules, { consumers: [], attachedBrokers: [], consumedElsewhere: new Set() })
+			eventTriggersFor(rules, { consumers: [], attachedBrokers: [], consumedElsewhere: new Set() })
 		).toEqual([]);
 	});
 });

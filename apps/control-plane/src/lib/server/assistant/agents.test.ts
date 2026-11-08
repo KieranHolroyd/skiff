@@ -4,9 +4,13 @@ import { ASSISTANT_SYSTEM } from './agents';
 import { GUIDE_TOOL } from './constants';
 
 const mcpSource = readFileSync(new URL('../mcp.ts', import.meta.url), 'utf8');
-const registered = new Set(
-	[...mcpSource.matchAll(/\n\ttool\(\n\t\t'([a-z_]+)',/g)].map((match) => match[1])
-);
+// Pipelines tools are declared in ../mcp-pipelines.ts and registered by mcp.ts in a loop.
+const pipelineSource = readFileSync(new URL('../mcp-pipelines.ts', import.meta.url), 'utf8');
+const pipelineToolNames = [...pipelineSource.matchAll(/\n\t\t\tname: '([a-z_]+)',/g)].map((match) => match[1]);
+const registered = new Set([
+	...[...mcpSource.matchAll(/\n\ttool\(\n\t\t'([a-z_]+)',/g)].map((match) => match[1]),
+	...pipelineToolNames
+]);
 const toolsSource = readFileSync(new URL('./tools.ts', import.meta.url), 'utf8');
 const gated = [...toolsSource.matchAll(/^\t([a-z_]+): '[a-zA-Z]+:[a-z-]+',?$/gm)].map(
 	(match) => match[1]!

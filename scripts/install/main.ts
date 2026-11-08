@@ -18,7 +18,7 @@
  *   --content-domain <domain> sites domain; blank uses the temporary <server-ip>.sslip.io (HTTP)
  *   --acme-email <email>      ACME account email; turns on HTTPS (needs real domains)
  *   --public-address <ipv4>   this server's address for IP-only installs (default: detected)
- *   --skip-deps               don't install Caddy or Podman (they must already be there)
+ *   --skip-deps               don't install Caddy, Podman or the storage tools (they must already be there)
  *   --admin-email <email>     prefills the owner email in the setup wizard (optional)
  *   --cloudflare-token-file   optional Caddy DNS-01 token file, used only if it exists
  *                             (default /etc/caddy/cloudflare.token)
@@ -532,6 +532,12 @@ function resolveDomains(): void {
 
 const CADDY_DNS_MODULE = 'github.com/caddy-dns/cloudflare';
 const PODMAN_PACKAGES = ['podman', 'uidmap', 'passt', 'netavark', 'aardvark-dns'];
+/**
+ * Storage tools (docs/STORAGE.md §5): fio profiles volumes, nfs-common and cifs-utils mount network
+ * shares. Keep in step with STORAGE_TOOL_PACKAGES in apps/helper/src/storage-tools.ts, which
+ * installs them on nodes that update in place.
+ */
+const STORAGE_TOOL_PACKAGES = ['fio', 'nfs-common', 'cifs-utils'];
 const CADDYFILE = '/etc/caddy/Caddyfile';
 
 function hasCommand(command: string): boolean {
@@ -558,17 +564,30 @@ function installPrerequisites(): void {
 		log('skipping package installation (--skip-deps)');
 		return;
 	}
+	const installed = (name: string) => capture('dpkg-query', ['-W', '-f=${Status}', name])?.includes('install ok installed') ?? false;
 	const missingCaddy = !hasCommand('caddy');
-	const missingPodman = !options.noAgent && PODMAN_PACKAGES.some((name) => !capture('dpkg-query', ['-W', '-f=${Status}', name])?.includes('install ok installed'));
-	if (!missingCaddy && !missingPodman) return;
+	const missingPodman = !options.noAgent && PODMAN_PACKAGES.some((name) => !installed(name));
+	const missingStorage = options.noAgent ? [] : STORAGE_TOOL_PACKAGES.filter((name) => !installed(name));
+	if (!missingCaddy && !missingPodman && missingStorage.length === 0) return;
 	if (options.dryRun) {
 		if (missingCaddy) log(`would install Caddy from the official apt repository and add ${CADDY_DNS_MODULE}`);
 		if (missingPodman) log(`would install ${PODMAN_PACKAGES.join(' ')}`);
+		if (missingStorage.length) log(`would install ${missingStorage.join(' ')}`);
 		return;
 	}
 	step('Prerequisites');
 	if (missingCaddy) installCaddy();
 	if (missingPodman) installPodman();
+	if (missingStorage.length) installStorageTools(missingStorage);
+}
+
+/** Best effort: Skiff runs without them, but profiling and network shares are limited. */
+function installStorageTools(packages: string[]): void {
+	log(`installing ${packages.join(' ')} (volume profiling and network shares)`);
+	if (aptInstall(packages)) return;
+	const missing = packages.filter((name) => !aptInstall([name]));
+	if (missing.length)
+		log(color.yellow(`warning: could not install ${missing.join(', ')}; volume profiling or network share mounts will be limited`));
 }
 
 function installCaddy(): void {
@@ -1014,6 +1033,13 @@ function writeUnits(release: string): void {
 		log,
 		start: false,
 	});
+	// `--skip-deps` leaves packages to the operator: the helper must not apt-install storage tools later either.
+	if (options.skipDeps) {
+		const helperEnvFile = join(ETC_DIR, 'helper.env');
+		const body = existsSync(helperEnvFile) ? readFileSync(helperEnvFile, 'utf8') : '';
+		if (!/^SKIFF_HELPER_STORAGE_TOOLS=/m.test(body))
+			writeFileSync(helperEnvFile, `${body}${body && !body.endsWith('\n') ? '\n' : ''}SKIFF_HELPER_STORAGE_TOOLS=0\n`);
+	}
 	for (const [name, body] of Object.entries(triggerUnits())) writeFileSync(join(SYSTEMD_DIR, name), body);
 	run('systemctl', ['daemon-reload']);
 	// Settings → Backups / Notifications in the dashboard (docs/OPS.md §4.3).

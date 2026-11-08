@@ -28,6 +28,7 @@ const METRICS = [
 	'previews',
 	'workloadMemoryMb',
 	'egressBytes',
+	'registryBytes',
 ] as const;
 
 export async function usageCommand(argv: string[]): Promise<void> {

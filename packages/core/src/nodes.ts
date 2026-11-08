@@ -8,6 +8,7 @@ import {
 	nodeJoinTokens,
 	nodeVolumes,
 	shareMounts,
+	volumeProfiles,
 	nodes,
 	projects,
 	releases,
@@ -497,6 +498,7 @@ export class NodeService {
 			this.ctx.databases.applyHeartbeat(node.id, input.workloads);
 			this.ctx.storage.applyHeartbeat(node.id, input.workloads);
 			this.ctx.brokers.applyHeartbeat(node.id, input.workloads);
+			this.ctx.registry.applyHeartbeat(node.id, input.workloads);
 			this.ctx.databaseReplicas.applyWorkloadReports(node.id, input.workloads);
 		}
 		if (input.databaseReplication?.length)
@@ -537,6 +539,7 @@ export class NodeService {
 		if (input.volumes) this.ctx.volumes.applyInventory(node.id, input.volumes);
 		// Share mount state, then link any mounted share waiting to become a volume (VOLUMES §5).
 		this.ctx.shares.applyNodeReport(node.id, input.shareMounts, input.unmountedShares);
+		if (input.volumeProfileResults?.length) this.ctx.storagePools.applyProfileResults(node.id, input.volumeProfileResults);
 		// Custom domains go `active` once an edge reports serving their certificate.
 		if (input.stats?.certs?.length) {
 			try {
@@ -803,8 +806,18 @@ export class NodeService {
 	 * than trusting the request file the agent drops, so only a platform admin picks paths (D48).
 	 */
 	storageFor(token: string): NodeStorage {
-		const node = this.authenticate(token);
-		return { dataDir: node.storageDataDir, buildDir: node.storageBuildDir };
+		return this.effectiveStorage(this.authenticate(token));
+	}
+
+	/**
+	 * D48 directories the node should use: its explicit setting, else the `site-data` / `builds`
+	 * default pool's local volume on this node (docs/STORAGE.md §3.2), else the install default.
+	 */
+	effectiveStorage(node: { id: string; storageDataDir: string | null; storageBuildDir: string | null }): NodeStorage {
+		return {
+			dataDir: node.storageDataDir ?? this.ctx.storagePools.nodeDirectory('site-data', node.id),
+			buildDir: node.storageBuildDir ?? this.ctx.storagePools.nodeDirectory('builds', node.id),
+		};
 	}
 
 	rotateToken(principal: Principal, nodeId: string): { token: string } {
@@ -888,10 +901,12 @@ export class NodeService {
 		let requeuedBuilds = 0;
 		this.ctx.db.transaction(() => {
 			requeuedBuilds = this.ctx.builds.releaseNodeClaims(nodeId);
+			this.ctx.pipelines.engine.releaseNode(nodeId);
 			this.ctx.db.delete(databaseStudioSessions).where(eq(databaseStudioSessions.nodeId, nodeId)).run();
 			this.ctx.db.delete(nodeVolumes).where(eq(nodeVolumes.nodeId, nodeId)).run();
 			// Share mounts on it are forgotten with it; the share definitions stay.
 			this.ctx.db.delete(shareMounts).where(eq(shareMounts.nodeId, nodeId)).run();
+			this.ctx.db.delete(volumeProfiles).where(eq(volumeProfiles.nodeId, nodeId)).run();
 			this.ctx.db.delete(nodes).where(eq(nodes.id, nodeId)).run();
 			// A removed node can never confirm a purge an earlier move left for it.
 			this.ctx.moves.forgetNode(nodeId);
@@ -1377,6 +1392,8 @@ export class NodeService {
 			...this.ctx.databaseReplicas.desiredForNode(node.id),
 			...this.ctx.storage.desiredForNode(node.id),
 			...this.ctx.brokers.desiredForNode(node.id),
+			// The platform registry (docs/REGISTRY.md G1) on its node.
+			...this.ctx.registry.desiredForNode(node.id),
 		];
 		// Custom domains always clone the production route (stream B), so only projects with a
 		// production pointer are candidates; staging-only projects must not serve them.
@@ -1403,7 +1420,7 @@ export class NodeService {
 			platformOrigin: this.ctx.config.platformOrigin,
 			sliceMemoryMb: node.sliceMemoryMb,
 			sliceCpuWeight: node.sliceCpuWeight,
-			storage: { dataDir: node.storageDataDir, buildDir: node.storageBuildDir },
+			storage: this.effectiveStorage(node),
 			releases: releaseSpecs,
 			routes,
 			// Kept until every session a revocation affects has expired (share sessions last up to
@@ -1415,6 +1432,7 @@ export class NodeService {
 			volumes: this.ctx.volumes.desiredForNode(node.id),
 			shareMounts: this.ctx.shares.mountsForNode(node.id),
 			shareUnmounts: this.ctx.shares.unmountsForNode(node.id),
+			volumeProfileTasks: this.ctx.storagePools.profileTasksForNode(node.id),
 			// App-volume usage, purges and snapshot/restore tasks (docs/VOLUMES.md §14).
 			appVolumes: this.ctx.appVolumes.lifecycle.volumesForNode(node.id),
 			appVolumePurges: this.ctx.appVolumes.lifecycle.purgesForNode(node.id),
@@ -1441,7 +1459,13 @@ export class NodeService {
 			studio: this.ctx.databaseStudio.desiredForNode(node.id),
 			databaseGateway,
 			containerConsole: this.ctx.containerConsole.desiredForNode(node),
-			storageRoutes: this.ctx.storage.routesForNode(node.id, isEdge, (id) => nodeById.get(id)?.publicAddress ?? null),
+			storageRoutes: [
+				...this.ctx.storage.routesForNode(node.id, isEdge, (id) => nodeById.get(id)?.publicAddress ?? null),
+				// The registry host streams like public S3: no body limit, no buffering (G1).
+				...this.ctx.registry.routesForNode(node.id, isEdge, (id) => nodeById.get(id)?.publicAddress ?? null),
+			],
+			// The registry's pull-through cache (G4): Podman mirrors docker.io/ghcr.io/quay.io through it.
+			registryMirror: this.ctx.registry.mirrorForNodes(),
 			storagePurges: this.ctx.storage.purgesForNode(node.id),
 			brokerPurges: this.ctx.brokers.purgesForNode(node.id),
 			mail: this.ctx.email.desiredForNode(node.id),

@@ -59,7 +59,7 @@ const core: Core = createCore({
 	config: {
 		dataDir: dir,
 		platformOrigin: 'https://control.skiff.test',
-		contentDomain: 'sites.test',
+		contentDomain: 'skiff.test',
 		objectStore: store,
 		masterKey: new Uint8Array(32).fill(7),
 		siteCookieSecret: 'site-cookie-secret-123',

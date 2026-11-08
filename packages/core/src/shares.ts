@@ -580,7 +580,9 @@ export class ShareService {
 					status: row.status,
 					message: row.message,
 					volumeName: volume?.name ?? row.volumeName,
-					volume: volume ? { id: volume.id, name: volume.name, status: volume.status } : null,
+					volume: volume
+						? { id: volume.id, name: volume.name, status: volume.status, profile: this.ctx.storagePools.latestProfile(volume.id) }
+						: null,
 					mountedAt: row.mountedAt ? new Date(row.mountedAt).toISOString() : null,
 					createdAt: new Date(row.createdAt).toISOString(),
 					updatedAt: new Date(row.updatedAt).toISOString(),

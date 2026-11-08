@@ -1,4 +1,21 @@
 import { randomUUID } from 'node:crypto';
+import { VolumeProfiler } from './volume-profile.ts';
+import { pruneNodeImages, type ImagePruneResult } from './images.ts';
+import { applyMirror, type MirrorRequest } from './registry-mirror.ts';
+import {
+	REGISTRY_ADMIN_HTPASSWD_ENV,
+	REGISTRY_CACHE_URL_ENV,
+	REGISTRY_CERT_ENV,
+	REGISTRY_ENGINES,
+	REGISTRY_EVENTS_ENV,
+	REGISTRY_S3_ACCESS_KEY_ENV,
+	REGISTRY_S3_SECRET_KEY_ENV,
+	assertAdminHtpasswd,
+	assertCertificatePem,
+	assertEventsUrl,
+	renderZotConfig,
+	type RegistrySecrets,
+} from './registry.ts';
 import { copyMailTls, MAIL_UNIT } from './mail.ts';
 import { constants as fsConstants, promises as fs } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -70,6 +87,7 @@ import {
 	databaseAlias,
 	functionNeedsDurableStorage,
 	postgresPitrImage,
+	renderRegistryAuthFile,
 	workloadNetworkName,
 	type DatabaseEngine,
 	type WorkloadActivation,
@@ -244,6 +262,10 @@ export interface SystemdDriverOptions {
 	unitDir: string;
 	/** Quadlet source directory, normally /etc/containers/systemd. Defaults to `unitDir` (tests). */
 	quadletDir?: string;
+	/** Podman's registries.conf drop-in dir (G4 mirror), normally /etc/containers/registries.conf.d. */
+	registriesConfDir?: string;
+	/** Root's default Podman auth file (G4 node login), normally /run/containers/0/auth.json. */
+	rootAuthFile?: string;
 	/** Root-owned runtime directory for env files and sockets, normally /run/skiff-workloads. */
 	runtimeDir: string;
 	/** Persistent container data root, normally /var/lib/skiff-workloads. */
@@ -314,6 +336,8 @@ export class SystemdDriver {
 	private readonly runner: CommandRunner;
 	private readonly unitDir: string;
 	private readonly quadletDir: string;
+	private readonly registriesConfDir: string;
+	private readonly rootAuthFile: string;
 	private readonly runtimeDir: string;
 	private readonly stateDir: string;
 	private readonly volumeRegistryFile: string;
@@ -345,6 +369,8 @@ export class SystemdDriver {
 		this.restorePollMs = options.restorePollMs ?? 1_000;
 		this.unitDir = assertAbsolutePath(options.unitDir, 'unitDir');
 		this.quadletDir = assertAbsolutePath(options.quadletDir ?? options.unitDir, 'quadletDir');
+		this.registriesConfDir = assertAbsolutePath(options.registriesConfDir ?? '/etc/containers/registries.conf.d', 'registriesConfDir');
+		this.rootAuthFile = assertAbsolutePath(options.rootAuthFile ?? '/run/containers/0/auth.json', 'rootAuthFile');
 		this.runtimeDir = assertAbsolutePath(options.runtimeDir, 'runtimeDir');
 		this.stateDir = assertAbsolutePath(options.stateDir, 'stateDir');
 		this.volumeRegistryFile = assertAbsolutePath(
@@ -434,6 +460,15 @@ export class SystemdDriver {
 	/** Verify a registered volume without writing anything (D76). */
 	async verifyVolume(input: { mountPath: string; sourceKey: string }): Promise<VerifyResult> {
 		return verifyMount(this.runner, input.mountPath, input.sourceKey);
+	}
+
+	/** Benchmarks a registered, mounted volume (docs/STORAGE.md §5); resolves paths itself. */
+	volumeProfiler(): VolumeProfiler {
+		return new VolumeProfiler({
+			runner: this.runner,
+			registry: () => this.registry(),
+			verify: (input) => this.verifyVolume(input),
+		});
 	}
 
 	private async registry(): Promise<VolumeRegistry> {
@@ -595,6 +630,8 @@ export class SystemdDriver {
 		if (workload.database) Object.assign(env, databaseFixedEnv(workload.database.engine, env));
 		// The storage profile's fixed settings win over anything on the wire (S1).
 		if (workload.objectStorage) Object.assign(env, STORAGE_ENV);
+		// The registry's token certificate and event sink become zot's config files, never env (G1).
+		const registryFiles = workload.registry ? takeRegistryFiles(env) : null;
 		// The broker's user and password go only into its server config, never the container env (D111).
 		const brokerAuth = workload.broker ? takeBrokerAuth(env) : null;
 		if (workload.broker) Object.assign(env, brokerFixedEnv(workload.memoryMb));
@@ -763,17 +800,27 @@ export class SystemdDriver {
 			const pitrConfigDir = workload.database?.pitr ? await this.ensurePitrConfigDir(workload.id) : null;
 			const serverConfigPath = brokerAuth
 				? await this.writeBrokerConfig(workload, brokerAuth, workloadRuntimeDir)
-				: await this.writeKeyValueConfig(workload, env, workloadRuntimeDir, studioPassword);
+				: registryFiles
+					? await this.writeRegistryConfig(workload, registryFiles, workloadRuntimeDir)
+					: await this.writeKeyValueConfig(workload, env, workloadRuntimeDir, studioPassword);
 			if (serverConfigPath) changed = serverConfigPath.changed || changed;
 			// App containers run in their own user namespace; Podman needs the id range first.
-			if (this.containerSubids && !workload.database && !workload.objectStorage && !workload.broker)
+			if (this.containerSubids && !workload.database && !workload.objectStorage && !workload.broker && !workload.registry)
 				await ensureContainerSubids(this.containerSubids);
 			// A read replica (C7) needs its start script and the agent's link directory first.
 			const replica = workload.database?.replica ? await this.prepareReplica(workload.id, workloadRuntimeDir) : null;
 			if (replica) changed = replica.changed || changed;
+			// Registry credentials (R2) live beside the env file, root-only; podman reads them as root.
+			const authFile = join(workloadRuntimeDir, 'auth.json');
+			// Managed services pull the helper's own pinned images (D61) and never take credentials.
+			const appContainer = !workload.database && !workload.objectStorage && !workload.broker && !workload.registry;
+			const registryAuth = appContainer ? (activation.registryAuth ?? []) : [];
+			if (registryAuth.length > 0) await this.writeAtomic(authFile, renderRegistryAuthFile(registryAuth), 0o400);
+			else await this.removeIfExists(authFile);
 			const container = renderContainerUnit({
 				workload,
 				image,
+				authFile: registryAuth.length > 0 ? authFile : null,
 				envFile,
 				dataDir,
 				secretsDir: Object.keys(activation.files).length > 0 ? secretsDir : null,
@@ -1050,6 +1097,16 @@ export class SystemdDriver {
 	 * started once its process is exec'd, so a missing unit or a start-limit hit comes back as the
 	 * systemctl error instead of a silent queued job.
 	 */
+	/** Point Podman's mirrors for the given upstreams at the platform registry (G4); empty removes. */
+	async applyRegistryMirror(request: MirrorRequest): Promise<{ upstreams: string[]; changed: boolean }> {
+		return applyMirror(request, { confDir: this.registriesConfDir, authFile: this.rootAuthFile });
+	}
+
+	/** Remove images no unit or container needs (docs/REGISTRY.md R3); local images are kept. */
+	async pruneImages(): Promise<ImagePruneResult> {
+		return pruneNodeImages({ runner: this.runner, podmanPath: this.podmanPath, quadletDir: this.quadletDir });
+	}
+
 	async startStudio(): Promise<void> {
 		await this.systemctl(['start', STUDIO_UNIT]);
 	}
@@ -1774,6 +1831,41 @@ END $$;`];
 	 * A broker reads its user, password and store caps from a helper-written config: 0600, owned by
 	 * the container's uid, beside the env file (D111).
 	 */
+	/**
+	 * zot's config directory (G1): `config.json` and the token certificate, owned by zot's uid and
+	 * mounted read-only at /etc/zot. The events URL carries a secret, so the files are 0400.
+	 */
+	private async writeRegistryConfig(
+		workload: WorkloadDesired,
+		files: RegistrySecrets,
+		workloadRuntimeDir: string,
+	): Promise<{ path: string; changed: boolean }> {
+		const registry = workload.registry!;
+		const info = REGISTRY_ENGINES[registry.engine];
+		const dir = join(workloadRuntimeDir, 'zot');
+		await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+		// Writable while the files are replaced, read-only (and zot's) afterwards.
+		await fs.chmod(dir, 0o700);
+		let config: string;
+		try {
+			config = renderZotConfig(registry, files);
+		} catch (error) {
+			throw new ValidationError((error as Error).message);
+		}
+		let changed = await this.writeIfChanged(join(dir, 'config.json'), config, 0o400);
+		changed = (await this.writeIfChanged(join(dir, 'cert.pem'), files.certificatePem, 0o400)) || changed;
+		const owned = [dir, join(dir, 'config.json'), join(dir, 'cert.pem')];
+		if (files.adminHtpasswd) {
+			changed = (await this.writeIfChanged(join(dir, 'htpasswd'), files.adminHtpasswd, 0o400)) || changed;
+			owned.push(join(dir, 'htpasswd'));
+		} else {
+			changed = (await this.removeIfExists(join(dir, 'htpasswd'))) || changed;
+		}
+		for (const path of owned) await this.chown(path, info.uid, info.gid).catch(() => undefined);
+		await fs.chmod(dir, 0o500).catch(() => undefined);
+		return { path: dir, changed };
+	}
+
 	private async writeBrokerConfig(
 		workload: WorkloadDesired,
 		auth: { user: string; password: string },
@@ -2769,7 +2861,42 @@ function managedOwner(workload: WorkloadDesired): { uid: number; gid: number } |
 	if (workload.database) return DATABASE_ENGINES[workload.database.engine];
 	if (workload.objectStorage) return STORAGE_ENGINES[workload.objectStorage.engine];
 	if (workload.broker) return BROKER_ENGINES[workload.broker.engine];
+	if (workload.registry) return REGISTRY_ENGINES[workload.registry.engine];
 	return null;
+}
+
+/** Remove the registry's certificate and event sink from the env and validate them (G1). */
+export function takeRegistryFiles(env: Record<string, string>): RegistrySecrets {
+	const take = (name: string) => {
+		const value = env[name];
+		delete env[name];
+		return value;
+	};
+	const cert = take(REGISTRY_CERT_ENV);
+	const events = take(REGISTRY_EVENTS_ENV);
+	const htpasswd = take(REGISTRY_ADMIN_HTPASSWD_ENV);
+	const accessKey = take(REGISTRY_S3_ACCESS_KEY_ENV);
+	const secretKey = take(REGISTRY_S3_SECRET_KEY_ENV);
+	const cacheUrl = take(REGISTRY_CACHE_URL_ENV);
+	try {
+		const s3 =
+			accessKey || secretKey || cacheUrl
+				? (() => {
+						if (!accessKey || !secretKey || !cacheUrl) throw new Error('S3 storage needs an access key, a secret key and a cache URL');
+						if (!/^rediss?:\/\/\S+$/.test(cacheUrl)) throw new Error(`${REGISTRY_CACHE_URL_ENV} must be a redis:// or rediss:// URL`);
+						if (/\s/.test(accessKey + secretKey)) throw new Error('S3 credentials cannot contain whitespace');
+						return { accessKey, secretKey, cacheUrl };
+					})()
+				: null;
+		return {
+			certificatePem: assertCertificatePem(cert),
+			eventsUrl: assertEventsUrl(events),
+			adminHtpasswd: assertAdminHtpasswd(htpasswd),
+			s3,
+		};
+	} catch (error) {
+		throw new ValidationError((error as Error).message);
+	}
 }
 
 /** Activation env names that carry the broker's credentials (set by the control plane, D111). */

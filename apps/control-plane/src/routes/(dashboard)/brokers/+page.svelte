@@ -1,4 +1,5 @@
 <script lang="ts">
+	import StoragePoolSelect from '#lib/components/skiff/StoragePoolSelect.svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -411,6 +412,7 @@
 					{#if errors.storageMb}<Field.Error>{errors.storageMb}</Field.Error>{/if}
 				</Field.Field>
 			</div>
+			<StoragePoolSelect choices={data.storageChoices} id="broker-pool" value={(form as { values?: { pool?: string } } | null)?.values?.pool ?? ''} />
 			<p class="text-xs text-muted-foreground">
 				Memory is reserved from the node's workload slice (at least {data.engine.minMemoryMb} MB). The
 				message store is a hard cap: a full broker refuses new messages instead of filling the disk.

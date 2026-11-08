@@ -64,7 +64,7 @@ const core: Core = createCore({
 	config: {
 		dataDir: dir,
 		platformOrigin: 'https://control.skiff.test',
-		contentDomain: 'sites.test',
+		contentDomain: 'skiff.test',
 		objectStore: store,
 		masterKey: new Uint8Array(32).fill(7),
 		siteCookieSecret: 'site-cookie-secret-123',
@@ -140,6 +140,22 @@ describe('mail node', () => {
 		expect(JSON.stringify(state.mail)).not.toContain('PRIVATE KEY');
 		expect(core.email.desiredForNode('node_other')).toBeNull();
 		expect(() => core.email.stateForNode('node_other')).toThrow(/not the mail node/);
+	});
+
+	test('the mail domain follows the content domain unless a custom one is set', async () => {
+		expect(core.email.settings()).toMatchObject({ mailDomain: 'skiff.test', mailDomainSource: 'content', contentDomain: 'skiff.test' });
+		const before = core.email.settings().generation;
+		const custom = await core.email.configure(admin, { mailDomain: 'https://Mail.Skiff.test/' });
+		expect(custom).toMatchObject({ mailDomain: 'mail.skiff.test', mailDomainSource: 'custom', hostnames: { helo: 'mx1.mail.skiff.test', submission: 'smtp.mail.skiff.test' } });
+		expect(custom.generation).toBe(before + 1);
+		expect((await core.nodes.desiredState(nodeToken)).mail).toMatchObject({ hostnames: { mx: 'mx.mail.skiff.test' } });
+		expect([...zone.values()].map((record) => `${record.type} ${record.name} ${record.content}`)).toContain('A mx1.mail.skiff.test 203.0.113.10');
+		await expect(core.email.configure(admin, { mailDomain: 'not a domain' })).rejects.toThrow(/not a domain name/);
+		await expect(core.email.configure(tenant, { mailDomain: 'mail.example.com' })).rejects.toThrow(/platform admin/);
+		// Naming the content domain is the default, not a custom setting.
+		expect(await core.email.configure(admin, { mailDomain: 'skiff.test' })).toMatchObject({ mailDomain: 'skiff.test', mailDomainSource: 'content' });
+		await core.email.configure(admin, { mailDomain: 'mail.skiff.test' });
+		expect(await core.email.configure(admin, { mailDomain: null })).toMatchObject({ mailDomain: 'skiff.test', mailDomainSource: 'content' });
 	});
 });
 

@@ -201,8 +201,10 @@ export const storageCreateSchema = z
 		public: z.boolean().default(false),
 		/** Buckets to create right away (all `private`). */
 		buckets: z.array(bucketNameSchema).max(20).default([]),
-		/** Node volume for the data dir; null keeps the helper state dir (D74). */
+		/** Pin one node volume for the data dir (advanced; bypasses storage pools, D74). */
 		volume: z.string().min(3).max(40).optional(),
+		/** Storage pool (or `system`) for the data dir; omitted uses the default from Settings → Storage (docs/STORAGE.md). */
+		pool: z.string().trim().min(2).max(40).optional(),
 		/** Attach to this project right away, read-write on every bucket created here. */
 		project: z.string().min(1).max(64).optional(),
 		envPrefix: storageEnvPrefixSchema.optional(),

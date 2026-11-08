@@ -31,6 +31,7 @@ import type { ServiceMoveService } from './service-moves.ts';
 import type { StorageObjectsService } from './storage-objects.ts';
 import type { DomainService } from './domains.ts';
 import type { BuildService } from './builds.ts';
+import type { PipelineService } from './pipelines.ts';
 import type { LogService } from './logs.ts';
 import type { EnvironmentService } from './environments.ts';
 import type { OperationService } from './operations/service.ts';
@@ -46,6 +47,9 @@ import type { AlertService } from './alerts.ts';
 import type { TopologyService } from './topology.ts';
 import type { ServiceEndpointService } from './service-endpoints.ts';
 import type { ShareService } from './shares.ts';
+import type { StoragePoolService } from './storage-pools.ts';
+import type { RegistryCredentialService } from './registry-credentials.ts';
+import type { RegistryService } from './registry.ts';
 import type { DatabaseReplicaService } from './database-replica-service.ts';
 import type { StorageReplicationService } from './storage-replication-service.ts';
 import type { IngressHaService } from './ingress-ha.ts';
@@ -99,6 +103,8 @@ export interface CoreContext {
 	moves: ServiceMoveService;
 	domains: DomainService;
 	builds: BuildService;
+	/** GitHub-Actions-shaped pipelines (docs/PIPELINES.md). */
+	pipelines: PipelineService;
 	logs: LogService;
 	environments: EnvironmentService;
 	operations: OperationService;
@@ -118,6 +124,12 @@ export interface CoreContext {
 	endpoints: ServiceEndpointService;
 	/** Cluster shares (CLUSTERING §5.2, C3). */
 	shares: ShareService;
+	/** Storage pools and placement rules (docs/STORAGE.md, D144). */
+	storagePools: StoragePoolService;
+	/** Credentials for external container registries (docs/REGISTRY.md R2). */
+	registryCredentials: RegistryCredentialService;
+	/** The platform container registry (docs/REGISTRY.md G1). */
+	registry: RegistryService;
 	/** Managed database replicas (CLUSTERING §9.2, C7). */
 	databaseReplicas: DatabaseReplicaService;
 	/** Bucket replication (CLUSTERING §10.2, C9). */

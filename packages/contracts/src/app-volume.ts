@@ -117,16 +117,19 @@ export const appVolumeMountPathSchema = z
 	});
 
 /**
- * Create a project volume. `sizeMb` is both the quota and the disk-admission input; an omitted
- * backing uses the helper state directory, and `nodeVolume` names an adopted node volume.
+ * Create a project volume. `sizeMb` is both the quota and the disk-admission input. With no
+ * `backing`, the pool chosen (`pool`, else the `app-volumes` default) picks the node volume or the state
+ * directory (docs/STORAGE.md); `backing` + `nodeVolume` pin one explicitly.
  */
 export const appVolumeCreateSchema = z
 	.strictObject({
 		name: appVolumeNameSchema,
 		sizeMb: z.number().int().min(1).max(1_048_576).default(1024),
-		backing: z.enum(appVolumeBackings).default('state_dir'),
+		backing: z.enum(appVolumeBackings).optional(),
 		/** Node volume name (not a host path); required for `node_volume`, rejected otherwise. */
 		nodeVolume: z.string().min(3).max(40).optional(),
+		/** Storage pool (or `system`); only without an explicit backing. */
+		pool: z.string().trim().min(2).max(40).optional(),
 		/** v1 is single-writer; keep the default unless the volume is read-only everywhere. */
 		singleWriter: z.boolean().default(true),
 	})
@@ -135,6 +138,10 @@ export const appVolumeCreateSchema = z
 			ctx.addIssue({ code: 'custom', path: ['nodeVolume'], message: 'Choose the node volume that backs this volume.' });
 		if (input.backing === 'state_dir' && input.nodeVolume)
 			ctx.addIssue({ code: 'custom', path: ['nodeVolume'], message: 'A state-dir volume cannot name a node volume.' });
+		if (input.backing === undefined && input.nodeVolume)
+			ctx.addIssue({ code: 'custom', path: ['backing'], message: 'Set backing to node_volume to name a node volume.' });
+		if (input.backing !== undefined && input.pool)
+			ctx.addIssue({ code: 'custom', path: ['pool'], message: 'Pick a storage pool or an explicit backing, not both.' });
 	});
 export type AppVolumeCreate = z.input<typeof appVolumeCreateSchema>;
 

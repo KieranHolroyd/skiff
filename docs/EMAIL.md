@@ -51,7 +51,7 @@ MTA (D114) means owning the things SES hides. The design makes each one explicit
 | Forward-confirmed reverse DNS: the IP's PTR names the HELO host and that host resolves back to the IP | Operator sets the PTR at the provider; Skiff publishes the A record and checks the round trip | §3.3 |
 | IP not on major blocklists (Spamhaus, Barracuda, …) | Preflight + daily check, alert on listing | §3.3, §7.2 |
 | DKIM on every message, aligned with `From:` | Skiff (per-domain keys, signed in the MTA) | §4 |
-| SPF covering the sending IPs | Skiff publishes `_spf.<platformDomain>`; domains include it | §4.2 |
+| SPF covering the sending IPs | Skiff publishes `_spf.<mailDomain>`; domains include it | §4.2 |
 | DMARC record on the `From:` domain (Gmail/Yahoo bulk rules) | Domain owner; Skiff checks and suggests | §4.2 |
 | TLS to recipient MX when offered; valid cert on our MX and submission ports | MTA; cert from Caddy | §3.2 |
 | Bounce rate < 5 %, complaint rate < 0.3 % (Gmail's line) | Suppression + automatic pause per org | §7 |
@@ -102,10 +102,10 @@ sign and verify, SPF and DMARC, and `mailparser` for inbound parsing. Skiff writ
 | DKIM | Signs each message once, before it is spooled, with the `From:` domain's key | `dkim.ts` |
 | Spool | `bun:sqlite` (WAL) plus one `.eml` file per message; "250 OK" only after both are fsynced | `spool.ts` |
 | Scheduler | Per-recipient state, retries at 1, 5, 15, 30 min, then hourly, expiry after 3 days (`bounced`, class `expired`) | `queue.ts` |
-| Delivery | MX lookup (null MX, A/AAAA fallback, priority order), one connection per destination host with reuse, all recipients for a domain in one transaction, opportunistic STARTTLS, HELO `mx1.<platformDomain>` | `deliver.ts` |
+| Delivery | MX lookup (null MX, A/AAAA fallback, priority order), one connection per destination host with reuse, all recipients for a domain in one transaction, opportunistic STARTTLS, HELO `mx1.<mailDomain>` | `deliver.ts` |
 | Shaping | Per-destination connection and message-rate limits (Gmail, Microsoft, Yahoo and a default), backing off on `421`/`4.7.x` throttling replies | `shaping.ts` |
 | Classification | SMTP replies → `delivered` / transient / permanent with a bounce class (`invalid-recipient`, `bad-domain`, `mailbox-full`, `spam-block`, `policy`, `auth`, `throttled`, `expired`, …) | `classify.ts` |
-| Bounces and complaints | VERP replies on `bounces.<platformDomain>` (RFC 3464 DSN) and ARF complaint reports become events | `inbound.ts` |
+| Bounces and complaints | VERP replies on `bounces.<mailDomain>` (RFC 3464 DSN) and ARF complaint reports become events | `inbound.ts` |
 | Events | Append-only table; the agent pulls by cursor and acknowledges | `events.ts` |
 | Control socket | `PUT /state`, `POST /inject`, `GET /events`, `POST /events/ack`, `GET /health` on `/run/skiff/mail.sock` | `control.ts` |
 
@@ -119,7 +119,7 @@ agent checks `GET /health` every few seconds and pushes immediately.
 `skiff-mail` and of the agent, but not the loss of the node (§12).
 
 **TLS.** Caddy already obtains certificates (DNS-01). The agent asks Caddy to manage
-`mx.<platformDomain>` and `smtp.<platformDomain>`, copies the files to `/run/skiff/mail-tls/`, and
+`mx.<mailDomain>` and `smtp.<mailDomain>`, copies the files to `/run/skiff/mail-tls/`, and
 pushes a reload when they change. Outbound uses opportunistic STARTTLS. Required TLS for MTA-STS
 domains comes in phase 3.
 
@@ -139,14 +139,21 @@ checks. Until they are, the operator runs them by hand. The checks, each re-runn
 
 1. Port 25 egress: an `EHLO` to two large providers' MX hosts (no `MAIL FROM`).
 2. Inbound reachability: the control plane connects to `<node ip>:25` from outside the node.
-3. FCrDNS: `PTR(ip)` = `mx1.<platformDomain>` and `A(mx1.<platformDomain>)` = ip. Skiff creates the
+3. FCrDNS: `PTR(ip)` = `mx1.<mailDomain>` and `A(mx1.<mailDomain>)` = ip. Skiff creates the
    A record through Cloudflare; the PTR is a provider-console step, with the exact value to paste.
 4. Blocklists: Spamhaus ZEN (queried with a DQS key when given; public resolvers get refused),
    Barracuda, SpamCop, and the IPv6 equivalents when v6 is on.
 5. Budget: free memory against the MTA's `MemoryMax`.
-6. Platform DNS that Skiff publishes: `mx.<platformDomain>` (A), `mx1.<platformDomain>` (A),
-   `_spf.<platformDomain>` (TXT `v=spf1 ip4:<ips> -all`), `bounces.<platformDomain>` (MX →
-   `mx.<platformDomain>`, plus SPF), `smtp.<platformDomain>` (A, for submission).
+6. Platform DNS that Skiff publishes: `mx.<mailDomain>` (A), `mx1.<mailDomain>` (A),
+   `_spf.<mailDomain>` (TXT `v=spf1 ip4:<ips> -all`), `bounces.<mailDomain>` (MX →
+   `mx.<mailDomain>`, plus SPF), `smtp.<mailDomain>` (A, for submission).
+
+`<mailDomain>` is the **content domain** (`SKIFF_CONTENT_DOMAIN`) unless a custom one is set: the
+**Mail domain** field on this page (a domain or a URL; `PATCH /api/v1/email/settings`
+`{ mailDomain }`, `null` resets), else `SKIFF_MAIL_DOMAIN`. A content domain that is not a domain
+name (`localhost`, an IP) falls back to the platform host's parent. The project slugs `mx1`, `smtp`
+and `bounces` are reserved so no site shadows a mail host. Changing the mail domain moves every
+host name: the PTR, the platform records and each org's SPF include and MX must follow.
 
 Direct delivery is refused until 1, 3 and 4 pass. Inbound is refused until 2 passes. The page also
 holds org sandbox/limits (§7.3), the smarthost relay (§3.4), the global pause switch and the
@@ -214,13 +221,13 @@ Unique across the platform; a second org claiming a verified domain gets 409.
 | Record | Value | Required for | Created by Skiff |
 |---|---|---|---|
 | `skf<yyyymm>._domainkey.<domain>` TXT | `v=DKIM1; k=rsa; p=<key>` | Verification, sending | When the zone is reachable |
-| `<domain>` TXT (SPF) | `v=spf1 include:_spf.<platformDomain> ~all`, merged into an existing SPF record, never a second one | Sending (SPF pass for custom MAIL FROM; recommended always) | Only when no SPF record exists; otherwise shown as an edit |
+| `<domain>` TXT (SPF) | `v=spf1 include:_spf.<mailDomain> ~all`, merged into an existing SPF record, never a second one | Sending (SPF pass for custom MAIL FROM; recommended always) | Only when no SPF record exists; otherwise shown as an edit |
 | `_dmarc.<domain>` TXT | `v=DMARC1; p=none; rua=mailto:dmarc@<domain>` suggested | Gmail/Yahoo bulk rules | Never overwritten; suggested if missing |
-| `<domain>` MX | `10 mx.<platformDomain>` | Receiving | Only on explicit opt-in, refused while other MX records exist unless confirmed (§6.1) |
-| `<mailfrom>.<domain>` MX + TXT | `mx.<platformDomain>` + SPF | Custom MAIL FROM (phase 3) | When the zone is reachable |
+| `<domain>` MX | `10 mx.<mailDomain>` | Receiving | Only on explicit opt-in, refused while other MX records exist unless confirmed (§6.1) |
+| `<mailfrom>.<domain>` MX + TXT | `mx.<mailDomain>` + SPF | Custom MAIL FROM (phase 3) | When the zone is reachable |
 
 **Return path.** By default the envelope sender is a VERP address on the platform's bounce domain:
-`b-<messageId>@bounces.<platformDomain>`. DMARC then aligns through DKIM (relaxed), which is
+`b-<messageId>@bounces.<mailDomain>`. DMARC then aligns through DKIM (relaxed), which is
 enough, and no per-domain MX is needed to collect bounces. Custom MAIL FROM (`bounce.<domain>`)
 adds SPF alignment and comes in phase 3.
 
@@ -278,7 +285,7 @@ must carry a `From:` on a verified domain.
 | Path | Auth | Enters at | Notes |
 |---|---|---|---|
 | **REST** `POST /api/v1/email/send` | Skiff API key (or session) with `email:send`. Email credentials as Bearer are not accepted yet | Control plane `EmailService.send` → **outbox** | Batch form `POST /api/v1/email/send-batch` (≤ 100 messages) |
-| **SMTP submission** `smtp.<platformDomain>:587/465` | AUTH PLAIN/LOGIN with an email credential | `skiff-mail` directly; authorised in-process against the pushed state | For any framework mailer |
+| **SMTP submission** `smtp.<mailDomain>:587/465` | AUTH PLAIN/LOGIN with an email credential | `skiff-mail` directly; authorised in-process against the pushed state | For any framework mailer |
 | **Function `send_email` binding** | The binding itself (project + binding name) | Local agent's mail sink → control plane `/api/agent/email-send` → outbox | §5.5 |
 
 **The outbox.** REST and binding sends land in `email_outbox` (SQLite, the body as a blob) in the
@@ -309,8 +316,8 @@ optionally to a project, and optionally to a list of from-domains.
 activation (the brokers pattern, `consumerEnv`):
 
 ```
-SMTP_HOST=smtp.<platformDomain>  SMTP_PORT=587  SMTP_SECURE=starttls
-SMTP_USER=skf_…  SMTP_PASSWORD=…  SMTP_URL=smtp://skf_…:…@smtp.<platformDomain>:587
+SMTP_HOST=smtp.<mailDomain>  SMTP_PORT=587  SMTP_SECURE=starttls
+SMTP_USER=skf_…  SMTP_PASSWORD=…  SMTP_URL=smtp://skf_…:…@smtp.<mailDomain>:587
 SKIFF_EMAIL_API=https://<platformDomain>/api/v1/email   # the same credential works as Bearer
 ```
 
@@ -382,7 +389,7 @@ original DKIM signature. `reply` must come from the receiving domain.
 
 ### 6.4 Bounces and complaints arriving on port 25
 
-`bounces.<platformDomain>` is handled before routing: DSNs for `b-<messageId>@…` become `bounced`
+`bounces.<mailDomain>` is handled before routing: DSNs for `b-<messageId>@…` become `bounced`
 events (RFC 3464 DSN parsing in `skiff-mail`). ARF complaint reports (Yahoo CFL, Microsoft JMRP and other
 feedback loops, which the operator must enrol in by hand; preflight links to them) become
 `complained` events. Neither is ever routed to a tenant.
@@ -541,7 +548,7 @@ link to Settings → Email until a mail node is configured, which is the telemet
 
 Sign-in links, invites and alerts keep the platform's own SMTP settings (`SKIFF_SMTP_*`, normally
 SES). The alert path must work while the mail node is down or the IP is listed. Once Email is
-healthy, an owner *may* point `SKIFF_SMTP_*` at `smtp.<platformDomain>` with a platform credential;
+healthy, an owner *may* point `SKIFF_SMTP_*` at `smtp.<mailDomain>` with a platform credential;
 Settings shows the trade-off.
 
 ---
@@ -592,7 +599,7 @@ These are summaries; the rows in [DECISIONS.md](./DECISIONS.md) are authoritativ
   package, Lua calling back into the agent for every decision); Postfix (policy and events through
   log parsing); a per-org MTA (one IP, so one reputation anyway).
 - **D116.** A domain is verified by its DKIM record alone. Skiff generates per-domain RSA keys sealed
-  with the org key, and the default return path is VERP on `bounces.<platformDomain>`, with DMARC
+  with the org key, and the default return path is VERP on `bounces.<mailDomain>`, with DMARC
   aligned through DKIM. Records are created through Cloudflare when the zone is reachable, never
   overwriting SPF or DMARC. *Rejected:* a separate TXT token (the DKIM record already proves
   control); requiring custom MAIL FROM in v1 (one more record per domain for little gain).

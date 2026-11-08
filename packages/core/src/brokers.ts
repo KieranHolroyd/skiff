@@ -38,6 +38,7 @@ import {
 } from '@skiff/contracts';
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
+import type { StoragePlan } from './storage-pools.ts';
 import { requireCredentialReveal } from './credential-reveal.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { resolvePlacement } from './placement.ts';
@@ -237,8 +238,11 @@ export class BrokerService {
 			requested = volume.nodeId;
 		}
 
-		const nodeId = this.place(requested, memoryMb);
-		if (!volume) volume = this.ctx.volumes.defaultFor(nodeId);
+		// No explicit volume: the storage pool (chosen at creation, else the brokers default) narrows the nodes
+		// and picks the volume there (docs/STORAGE.md §3.2).
+		const storagePlan = volume ? null : this.ctx.storagePools.plan('brokers', input.pool);
+		const nodeId = this.place(requested, memoryMb, storagePlan ? { plan: storagePlan, storageMb: input.storageMb } : null);
+		if (storagePlan) volume = this.ctx.storagePools.pick(storagePlan, nodeId, input.storageMb);
 		if (volume) this.ctx.volumes.assertRoom(volume, input.storageMb);
 		this.ctx.quota.assertCanAdmitMemory(principal.orgId, project?.id, memoryMb);
 
@@ -851,8 +855,13 @@ export class BrokerService {
 	 * Resolve placement among nodes whose agent can run a broker. An older agent would hand the
 	 * helper a plain container without the broker profile, so it is never a candidate.
 	 */
-	private place(requested: string, memoryMb: number): string {
-		const all = this.ctx.workloads.placementCandidates();
+	private place(requested: string, memoryMb: number, storage: { plan: StoragePlan; storageMb: number } | null = null): string {
+		const all = storage
+			? this.ctx.storagePools.filterCandidates(storage.plan, this.ctx.workloads.placementCandidates(), storage.storageMb, {
+					requested,
+					edgeNodeId: this.ctx.workloads.edgeNode(),
+				})
+			: this.ctx.workloads.placementCandidates();
 		const capable = new Set(
 			this.ctx.db
 				.select({ id: nodes.id, capabilitiesJson: nodes.capabilitiesJson })

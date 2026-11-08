@@ -27,12 +27,12 @@ import { actions as projectActions } from '../../projects/[slug]/+page.server.js
 import { nodeTaskAction } from '#lib/server/node-tasks.js';
 import { parseHeaderLines } from '../_lib/test-request.js';
 import {
-	createEventSource,
-	deleteEventSource,
-	loadEventSources,
-	testEventSource,
-	toggleEventSource
-} from '../_lib/event-sources.server.js';
+	createEventTrigger,
+	deleteEventTrigger,
+	loadEventTriggers,
+	testEventTrigger,
+	toggleEventTrigger
+} from '../_lib/event-triggers.server.js';
 import type { Actions, PageServerLoad } from './$types';
 
 /** Run a read the viewer may not be allowed to make without taking the page down. */
@@ -149,8 +149,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const siteSessions = hasPermission(principal, 'shareLink:read')
 		? safely(() => core.access.listSessions(principal, row), [])
 		: [];
-	// Event sources (D122): platform events published into the queues this function consumes.
-	const eventSources = loadEventSources(principal, row, view);
+	// Event triggers (D122): platform events published into the queues this function consumes.
+	const eventTriggers = loadEventTriggers(principal, row, view);
 
 	return {
 		project,
@@ -174,7 +174,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		invocationSummary,
 		invocations,
 		siteSessions,
-		eventSources,
+		eventTriggers,
 		maxReplicas: MAX_WORKLOAD_REPLICAS,
 		can: {
 			update: hasPermission(principal, 'project:update'),
@@ -401,36 +401,36 @@ export const actions: Actions = {
 		);
 	},
 
-	// --- event sources: rules that publish platform events into this function's queues (D122) ---
+	// --- event triggers: rules that publish platform events into this function's queues (D122) ---
 
-	createEventSource: async ({ request, locals, params }) => {
+	createEventTrigger: async ({ request, locals, params }) => {
 		const principal = locals.principal!;
 		try {
-			return await createEventSource(principal, requireFunction(principal, params.slug), request);
+			return await createEventTrigger(principal, requireFunction(principal, params.slug), request);
 		} catch (caught) {
 			return fail(failStatus(caught), toFormFailure(caught));
 		}
 	},
-	testEventSource: async ({ request, locals, params }) => {
+	testEventTrigger: async ({ request, locals, params }) => {
 		const principal = locals.principal!;
 		try {
-			return await testEventSource(principal, requireFunction(principal, params.slug), request);
+			return await testEventTrigger(principal, requireFunction(principal, params.slug), request);
 		} catch (caught) {
 			return fail(failStatus(caught), toFormFailure(caught));
 		}
 	},
-	toggleEventSource: async ({ request, locals, params }) => {
+	toggleEventTrigger: async ({ request, locals, params }) => {
 		const principal = locals.principal!;
 		try {
-			return await toggleEventSource(principal, requireFunction(principal, params.slug), request);
+			return await toggleEventTrigger(principal, requireFunction(principal, params.slug), request);
 		} catch (caught) {
 			return fail(failStatus(caught), toFormFailure(caught));
 		}
 	},
-	deleteEventSource: async ({ request, locals, params }) => {
+	deleteEventTrigger: async ({ request, locals, params }) => {
 		const principal = locals.principal!;
 		try {
-			return await deleteEventSource(principal, requireFunction(principal, params.slug), request);
+			return await deleteEventTrigger(principal, requireFunction(principal, params.slug), request);
 		} catch (caught) {
 			return fail(failStatus(caught), toFormFailure(caught));
 		}

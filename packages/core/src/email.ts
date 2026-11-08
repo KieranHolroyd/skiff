@@ -39,6 +39,7 @@ import {
 	emailAccessRequestDecisionSchema,
 	emailCredentialCreateSchema,
 	emailDomainCreateSchema,
+	emailDomainNameSchema,
 	emailDomainUpdateSchema,
 	emailEnvNames,
 	emailSendBatchEnvelopeSchema,
@@ -131,13 +132,19 @@ export interface EmailServiceOptions {
 	/** The platform's Cloudflare client (the domains one); null disables automatic records. */
 	cloudflare?: CloudflareClient | null;
 	cloudflareZoneName?: string | null;
-	/** Domain for the mail hostnames (`mx1.<domain>` …). Defaults as `mailDomainFor` explains. */
+	/** Install-time default for the mail domain (`SKIFF_MAIL_DOMAIN`); the dashboard setting wins. */
 	mailDomain?: string | null;
 }
 
 /** The capability a node must advertise before it is made the mail node. */
 const MAIL_CAPABILITY = 'mail';
-const SETTINGS = { node: 'email.node_id', ip: 'email.ipv4', paused: 'email.paused', generation: 'email.generation' } as const;
+const SETTINGS = {
+	node: 'email.node_id',
+	ip: 'email.ipv4',
+	paused: 'email.paused',
+	generation: 'email.generation',
+	domain: 'email.mail_domain',
+} as const;
 const RETENTION_DAYS = 30;
 const DAY_MS = 86_400_000;
 /** A claimed outbox row the agent never acknowledged is handed out again after this. */
@@ -149,16 +156,41 @@ const RECORD_COMMENT = 'skiff-email';
 export const SANDBOX_VERIFY_PATH = '/verify-email-address';
 const DEFAULT_ENV_PREFIX = 'SMTP';
 
+/** Where the mail domain came from: the dashboard setting, `SKIFF_MAIL_DOMAIN`, or the content domain. */
+export type MailDomainSource = 'custom' | 'env' | 'content';
+
 /**
- * Mail hostnames hang off one domain: an explicit setting, else the Cloudflare zone (so Skiff can
- * publish them), else the platform host's parent (`control.example.com` → `example.com`).
+ * Mail hostnames (`mx1.`, `mx.`, `smtp.`, `bounces.`, `_spf.`) hang off one domain: a custom one
+ * (the dashboard setting, else `SKIFF_MAIL_DOMAIN`), else the content domain. A content domain
+ * that is no domain name (`localhost`, an IP) falls back to the platform host's parent.
  */
-export function mailDomainFor(platformOrigin: string, zoneName: string | null | undefined, explicit?: string | null): string {
-	if (explicit) return explicit.toLowerCase();
-	if (zoneName) return zoneName.toLowerCase();
+export function mailDomainFor(
+	contentDomain: string,
+	platformOrigin: string,
+	custom?: { setting?: string | null; env?: string | null },
+): { domain: string; source: MailDomainSource } {
+	if (custom?.setting) return { domain: custom.setting.toLowerCase(), source: 'custom' };
+	if (custom?.env) return { domain: custom.env.toLowerCase(), source: 'env' };
+	const content = contentDomain.trim().toLowerCase();
+	if (emailDomainNameSchema.safeParse(content).success) return { domain: content, source: 'content' };
 	const host = new URL(platformOrigin).hostname.toLowerCase();
 	const labels = host.split('.');
-	return labels.length > 2 ? labels.slice(1).join('.') : host;
+	return { domain: labels.length > 2 ? labels.slice(1).join('.') : host, source: 'content' };
+}
+
+/** A custom mail domain as typed: a bare name or a URL (`https://mail.example.com/`). */
+export function parseMailDomain(value: string): string {
+	let host = value.trim();
+	if (/^[a-z][a-z0-9+.-]*:\/\//i.test(host)) {
+		try {
+			host = new URL(host).hostname;
+		} catch {
+			throw new ValidationError(`${value} is not a domain name or URL.`);
+		}
+	}
+	const parsed = emailDomainNameSchema.safeParse(host.replace(/\.$/, ''));
+	if (!parsed.success) throw new ValidationError(`${value} is not a domain name. Use one such as mail.example.com.`);
+	return parsed.data;
 }
 
 const domainOf = (address: string) => address.slice(address.lastIndexOf('@') + 1).toLowerCase();
@@ -180,7 +212,7 @@ export class EmailService {
 	private readonly dns: EmailDnsResolver;
 	private readonly cloudflare: CloudflareClient | null;
 	private readonly zoneName: string | null;
-	private readonly explicitMailDomain: string | null;
+	private readonly envMailDomain: string | null;
 
 	constructor(
 		private readonly ctx: CoreContext,
@@ -189,13 +221,20 @@ export class EmailService {
 		this.dns = options.dns ?? nodeEmailDnsResolver;
 		this.cloudflare = options.cloudflare ?? null;
 		this.zoneName = options.cloudflareZoneName?.toLowerCase() ?? null;
-		this.explicitMailDomain = options.mailDomain ?? null;
+		this.envMailDomain = options.mailDomain?.trim().toLowerCase() || null;
 	}
 
 	// ------------------------------------------------------------------ platform settings
 
+	private resolvedMailDomain(): { domain: string; source: MailDomainSource } {
+		return mailDomainFor(this.ctx.config.contentDomain, this.ctx.config.platformOrigin, {
+			setting: this.setting(SETTINGS.domain),
+			env: this.envMailDomain,
+		});
+	}
+
 	mailDomain(): string {
-		return mailDomainFor(this.ctx.config.platformOrigin, this.zoneName, this.explicitMailDomain);
+		return this.resolvedMailDomain().domain;
 	}
 
 	hostnames(): MailHostnames {
@@ -225,15 +264,22 @@ export class EmailService {
 		paused: boolean;
 		generation: number;
 		mailDomain: string;
+		/** `content` when the mail domain follows the content domain, else where the custom one is set. */
+		mailDomainSource: MailDomainSource;
+		/** The content domain the mail domain follows when no custom one is set. */
+		contentDomain: string;
 		hostnames: MailHostnames;
 	} {
+		const mail = this.resolvedMailDomain();
 		return {
 			nodeId: this.setting(SETTINGS.node),
 			ip: this.setting(SETTINGS.ip),
 			paused: this.setting(SETTINGS.paused) === '1',
 			generation: Number(this.setting(SETTINGS.generation) ?? 0),
-			mailDomain: this.mailDomain(),
-			hostnames: this.hostnames(),
+			mailDomain: mail.domain,
+			mailDomainSource: mail.source,
+			contentDomain: this.ctx.config.contentDomain,
+			hostnames: mailHostnames(mail.domain),
 		};
 	}
 
@@ -249,18 +295,34 @@ export class EmailService {
 	}
 
 	/**
-	 * Choose (or clear) the mail node, its sending IPv4 and the global pause. Platform admins only.
+	 * Choose (or clear) the mail node, its sending IPv4, the mail domain and the global pause.
+	 * Platform admins only. `mailDomain: null` puts the mail hostnames back on the content domain.
 	 * `nodes.public_address` is the WireGuard upstream the edge proxies to, so the edge never has
 	 * one; the sending IP is its own setting. Left out, it is kept for the same node or found as
 	 * `detectIp` explains; otherwise the admin has to enter it.
 	 */
 	async configure(
 		principal: Principal,
-		input: { nodeId?: string | null; ip?: string | null; paused?: boolean },
+		input: { nodeId?: string | null; ip?: string | null; paused?: boolean; mailDomain?: string | null },
 	): Promise<ReturnType<EmailService['settings']>> {
 		if (!canAdministerPlatform(principal)) throw new CoreError('forbidden', 'Only a platform admin can configure email.', 403);
 		this.requireFeature();
 		const current = this.settings();
+		let mailDomain: string | null | undefined;
+		if (input.mailDomain !== undefined) {
+			mailDomain = input.mailDomain === null || input.mailDomain.trim() === '' ? null : parseMailDomain(input.mailDomain);
+			// The content domain itself is the default, not a custom setting.
+			if (mailDomain === this.ctx.config.contentDomain.toLowerCase()) mailDomain = null;
+			const next = mailDomainFor(this.ctx.config.contentDomain, this.ctx.config.platformOrigin, { setting: mailDomain, env: this.envMailDomain }).domain;
+			const bounce = mailHostnames(next).bounce;
+			const clash = this.ctx.db
+				.select({ name: emailDomains.name })
+				.from(emailDomains)
+				.all()
+				.find((row) => row.name === next || row.name === bounce || row.name.endsWith(`.${bounce}`));
+			if (clash) throw new ValidationError(`${clash.name} is an organisation's sending domain, so it can't hold the platform's mail hostnames.`);
+		}
+		const domainChanged = mailDomain !== undefined && mailDomain !== this.setting(SETTINGS.domain);
 		const nodeId = input.nodeId !== undefined ? input.nodeId : current.nodeId;
 		const touchesNode = input.nodeId !== undefined || input.ip !== undefined;
 		let ip: string | null = null;
@@ -284,9 +346,18 @@ export class EmailService {
 			this.setSetting(SETTINGS.ip, ip);
 		}
 		if (input.paused !== undefined) this.setSetting(SETTINGS.paused, input.paused ? '1' : null);
+		if (domainChanged) this.setSetting(SETTINGS.domain, mailDomain ?? null);
 		this.bumpMail();
-		this.ctx.audit.record({ principal, action: 'email.configure', resource: 'email', resourceId: 'platform', args: { ...input, ip }, result: 'ok' });
-		if (touchesNode && nodeId) await this.publishPlatformRecords().catch(() => undefined);
+		this.ctx.audit.record({
+			principal,
+			action: 'email.configure',
+			resource: 'email',
+			resourceId: 'platform',
+			args: { ...input, ip, ...(mailDomain !== undefined ? { mailDomain } : {}) },
+			result: 'ok',
+		});
+		const nodeSet = touchesNode ? nodeId : current.nodeId;
+		if ((touchesNode || domainChanged) && nodeSet) await this.publishPlatformRecords().catch(() => undefined);
 		return this.settings();
 	}
 

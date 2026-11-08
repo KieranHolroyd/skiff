@@ -1,3 +1,4 @@
+import { REGISTRY_CONFIG_MOUNT, REGISTRY_ENGINES, registryImage } from './registry.ts';
 import {
 	BROKER_ENGINES,
 	DATABASE_ENGINES,
@@ -665,6 +666,8 @@ export interface ContainerUnitOptions {
 	apparmorProfile?: string | null;
 	/** Read replica (C7): the agent's link socket dir and the helper-written start script. */
 	replica?: DatabaseUnitOptions['replica'];
+	/** Registry credentials for the pull (docs/REGISTRY.md R2): a root-only `auth.json`. */
+	authFile?: string | null;
 }
 
 /**
@@ -689,6 +692,14 @@ export function renderContainerUnit(options: ContainerUnitOptions): string {
 			workload,
 			envFile: options.envFile,
 			dataDir: options.dataDir,
+			apparmorProfile: options.apparmorProfile ?? null,
+		});
+	if (workload.registry)
+		return renderRegistryUnit({
+			workload,
+			envFile: options.envFile,
+			dataDir: options.dataDir,
+			configDir: options.serverConfigPath ?? null,
 			apparmorProfile: options.apparmorProfile ?? null,
 		});
 	if (workload.broker)
@@ -749,6 +760,8 @@ export function renderContainerUnit(options: ContainerUnitOptions): string {
 		lines.push('Tmpfs=/tmp:rw,size=64m');
 	}
 	pushApparmor(lines, options.apparmorProfile);
+	// `podman run --authfile` works on every Quadlet version, unlike a `.container` AuthFile= key.
+	if (options.authFile) lines.push(`PodmanArgs=--authfile=${options.authFile}`);
 	lines.push('');
 	lines.push('[Service]');
 	if (runner) {
@@ -1079,6 +1092,61 @@ export function renderStorageUnit(options: DatabaseUnitOptions): string {
 	lines.push(`NetworkAlias=${storageAlias(workload.id)}`);
 	lines.push(`EnvironmentFile=${options.envFile}`);
 	lines.push(`Volume=${options.dataDir}:/data:Z`);
+	lines.push('Tmpfs=/tmp:rw,size=64m');
+	lines.push('DropCapability=all');
+	lines.push('NoNewPrivileges=true');
+	lines.push('ReadOnly=true');
+	pushApparmor(lines, options.apparmorProfile);
+	lines.push('');
+	lines.push('[Service]');
+	lines.push('Restart=on-failure');
+	lines.push('RestartSec=5');
+	// The first start pulls the image.
+	lines.push('TimeoutStartSec=600');
+	lines.push('TimeoutStopSec=60');
+	lines.push(`MemoryMax=${workload.memoryMb}M`);
+	lines.push(`CPUQuota=${cpuQuota(workload.cpus)}`);
+	lines.push(`Slice=${WORKLOAD_SLICE}`);
+	lines.push('');
+	lines.push('[Install]');
+	lines.push('WantedBy=default.target');
+	return `${lines.join('\n')}\n`;
+}
+
+/**
+ * The platform registry (docs/REGISTRY.md G1): zot as an unprivileged fixed uid, its data in the
+ * resolved data dir, its helper-written config and token certificate mounted read-only.
+ */
+export function renderRegistryUnit(options: {
+	workload: WorkloadDesired;
+	envFile: string;
+	dataDir: string;
+	configDir: string | null;
+	apparmorProfile?: string | null;
+}): string {
+	const { workload } = options;
+	const registry = workload.registry;
+	if (!registry) throw new ValidationError('renderRegistryUnit needs a registry workload');
+	if (!options.configDir) throw new ValidationError('renderRegistryUnit needs the zot config directory');
+	const info = REGISTRY_ENGINES[registry.engine];
+	const lines: string[] = [];
+	lines.push('[Unit]');
+	lines.push(`Description=Skiff registry ${workload.id} (${registry.engine} ${registry.version}, ${registry.service})`);
+	lines.push('After=network-online.target');
+	lines.push('Wants=network-online.target');
+	lines.push('StartLimitIntervalSec=300');
+	lines.push('StartLimitBurst=10');
+	lines.push('');
+	lines.push('[Container]');
+	lines.push(`ContainerName=skiff-workload-${workload.id}`);
+	lines.push(`Image=${registryImage(registry)}`);
+	lines.push(`User=${info.uid}:${info.gid}`);
+	lines.push(`PublishPort=127.0.0.1:${workload.port}:${info.containerPort}`);
+	lines.push(`Network=${networkUnitName(workloadNetworkName(workload))}`);
+	lines.push(`EnvironmentFile=${options.envFile}`);
+	lines.push(`Volume=${options.dataDir}:/var/lib/registry:Z`);
+	lines.push(`Volume=${options.configDir}:${REGISTRY_CONFIG_MOUNT}:ro,Z`);
+	lines.push(`Exec=serve ${REGISTRY_CONFIG_MOUNT}/config.json`);
 	lines.push('Tmpfs=/tmp:rw,size=64m');
 	lines.push('DropCapability=all');
 	lines.push('NoNewPrivileges=true');

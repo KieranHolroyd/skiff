@@ -165,7 +165,7 @@ export function parseJobRequest(value: unknown): JobRequest {
 	const { workload, activation } = parseApplyRequest({ workload: record.workload, activation: record.activation });
 	if (workload.runtime !== 'process' && workload.runtime !== 'container')
 		throw new ValidationError('Jobs run on process and container apps only');
-	if (workload.database || workload.objectStorage || workload.broker)
+	if (workload.database || workload.objectStorage || workload.broker || workload.registry)
 		throw new ValidationError('Jobs run on apps, not managed services');
 	if (workload.runner) throw new ValidationError('CI runner pools do not run jobs');
 	if (workload.runtime === 'container' && !workload.image) throw new ValidationError('Container jobs need workload.image');

@@ -1,0 +1,387 @@
+name: Publish release
+
+# WP5 dogfood (docs/PIPELINES.md §9): the Skiff port of .github/workflows/publish.yml. Every push to
+# main whose VERSION has no release yet is tested, built natively per architecture, canaried,
+# signed and published as the GitHub prerelease v<VERSION> (the canary channel), exactly like the
+# GitHub Actions workflow, which stays the fallback builder for one release cycle.
+#
+# It also builds the Postgres images (docker/postgres*, .github/workflows/postgres*-image*.yml)
+# natively per arch with skiff/build-image, joins them with skiff/image-index on Skiff's registry
+# and mirrors them to GHCR.
+#
+# Repository setup (not expressible in this file):
+# - environment `release`: allowed refs refs/heads/main, one required approver; secrets
+#   SKIFF_RELEASE_SIGNING_KEY (the pkcs8 release key), GH_TOKEN (contents:write on the GitHub repo)
+#   and GHCR_TOKEN (packages:write).
+# - repository secret GH_READ_TOKEN (contents:read) for the plan job's "already published?" check.
+# - variable GH_RELEASE_REPO: the GitHub repository releases are published to (owner/name).
+# - build nodes labelled linux + x64 and linux + arm64 (oci-build on the image jobs).
+# Jobs run in the skiff-runner image (docker/runner, .skiff/workflows/runner-image.yml); each job
+# still checks Bun against BUN_VERSION and installs the pinned one if the image differs.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - 'research_notes/**'
+      - 'reports/**'
+      - '**/*.md'
+  workflow_dispatch:
+
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+
+env:
+  BUN_VERSION: '1.4.4'
+  CADDY_VERSION: '2.11.8'
+  CADDY_DNS_CLOUDFLARE_VERSION: 'v0.2.4'
+  XCADDY_VERSION: 'v0.4.7'
+  GO_VERSION: '1.24'
+  GH_REPO: '${{ vars.GH_RELEASE_REPO }}'
+  GHCR_OWNER: kieranholroyd
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: linux
+    container: ghcr.io/kieranholroyd/skiff-runner:latest
+    outputs:
+      version: '${{ steps.plan.outputs.version }}'
+      publish: '${{ steps.plan.outputs.publish }}'
+    steps:
+      - uses: skiff/checkout@v1
+      - id: plan
+        env:
+          GH_TOKEN: '${{ secrets.GH_READ_TOKEN }}'
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          echo "version=$VERSION" >> "$SKIFF_OUTPUT"
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "v$VERSION is already published"
+            echo "publish=false" >> "$SKIFF_OUTPUT"
+          else
+            echo "publish=true" >> "$SKIFF_OUTPUT"
+          fi
+
+  test:
+    name: '${{ matrix.name }}'
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: linux
+    container: ghcr.io/kieranholroyd/skiff-runner:latest
+    # Telemetry tests run against a real ClickHouse (D101); packages/core/src/test-clickhouse.ts.
+    # Services sit on the job's network under their key, so the URL uses the name, not a port map.
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:26.8
+        env:
+          CLICKHOUSE_PASSWORD: ci
+        options: >-
+          --health-cmd "clickhouse-client --password ci -q 'SELECT 1'"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      SKIFF_TEST_CLICKHOUSE_URL: http://clickhouse:8123
+      SKIFF_TEST_CLICKHOUSE_USER: default
+      SKIFF_TEST_CLICKHOUSE_PASSWORD: ci
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: Test
+            run: bun test
+          - name: Type-check
+            run: bun run check && bunx tsc -p scripts/tsconfig.json --noEmit
+    steps:
+      - uses: skiff/checkout@v1
+      - name: Pinned Bun
+        run: |
+          if [ "$(bun --version 2>/dev/null)" != "$BUN_VERSION" ]; then
+            curl -fsSL https://bun.sh/install | BUN_INSTALL="$HOME/.bun" bash -s "bun-v$BUN_VERSION"
+            echo "$HOME/.bun/bin" >> "$SKIFF_PATH"
+          fi
+      - run: bun install --frozen-lockfile
+      - run: '${{ matrix.run }}'
+
+  # Runs alongside `test`: nothing here can reach a host until `publish`, which needs both.
+  build:
+    name: 'Build (${{ matrix.pkg }})'
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: [linux, '${{ matrix.arch }}']
+    container: ghcr.io/kieranholroyd/skiff-runner:latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: x64
+            pkg: amd64
+          - arch: arm64
+            pkg: arm64
+    env:
+      VERSION: '${{ needs.plan.outputs.version }}'
+    steps:
+      - uses: skiff/checkout@v1
+
+      # Release files are staged outside the workspace: the workspace itself is the `repo/` tree.
+      - name: Staging directories
+        run: |
+          echo "STAGE=$RUNNER_TEMP/stage" >> "$SKIFF_ENV"
+          echo "DIST=$RUNNER_TEMP/dist" >> "$SKIFF_ENV"
+
+      # The release ships Caddy with the DNS-01 module so the updater can upgrade the edge's
+      # proxy together with the platform. It depends only on the pinned versions, so it is built
+      # natively once per arch and then cached.
+      - name: Restore Caddy
+        id: caddy-cache
+        uses: skiff/cache@v1
+        with:
+          path: ~/.cache/skiff-release/caddy
+          key: 'caddy-${{ env.CADDY_VERSION }}-cloudflare-${{ env.CADDY_DNS_CLOUDFLARE_VERSION }}-xcaddy-${{ env.XCADDY_VERSION }}-go${{ env.GO_VERSION }}-linux-${{ matrix.pkg }}'
+
+      # actions/setup-go, by hand: the newest Go ${GO_VERSION}.x for this arch.
+      - name: Build Caddy with caddy-dns/cloudflare
+        if: steps.caddy-cache.outputs.cache-hit != 'true'
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          set -euo pipefail
+          go_file="$(curl -fsSL 'https://go.dev/dl/?mode=json&include=all' |
+            jq -r --arg v "go${GO_VERSION}." --arg a "${{ matrix.pkg }}" \
+              '[.[] | select(.stable and (.version | startswith($v)))][0].files[] | select(.os == "linux" and .arch == $a and .kind == "archive") | .filename')"
+          curl -fsSL "https://go.dev/dl/$go_file" | tar -xz -C "$RUNNER_TEMP"
+          export PATH="$RUNNER_TEMP/go/bin:$PATH" GOPATH="$RUNNER_TEMP/gopath" GOCACHE="$RUNNER_TEMP/gocache"
+          GOBIN="$RUNNER_TEMP/bin" go install "github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}"
+          mkdir -p ~/.cache/skiff-release
+          "$RUNNER_TEMP/bin/xcaddy" build "v${CADDY_VERSION}" \
+            --with "github.com/caddy-dns/cloudflare@${CADDY_DNS_CLOUDFLARE_VERSION}" \
+            --output ~/.cache/skiff-release/caddy
+
+      - name: Check Caddy
+        run: |
+          set -euo pipefail
+          mkdir -p "$STAGE/caddy" "$DIST"
+          install -m 0755 ~/.cache/skiff-release/caddy "$STAGE/caddy/caddy"
+          "$STAGE/caddy/caddy" list-modules | grep -x 'dns.providers.cloudflare'
+          tar -czf "$DIST/skiff-caddy-${VERSION}-linux-${{ matrix.pkg }}.tar.gz" -C "$STAGE/caddy" caddy
+
+      - name: Pinned Bun
+        run: |
+          if [ "$(bun --version 2>/dev/null)" != "$BUN_VERSION" ]; then
+            curl -fsSL https://bun.sh/install | BUN_INSTALL="$HOME/.bun" bash -s "bun-v$BUN_VERSION"
+            echo "$HOME/.bun/bin" >> "$SKIFF_PATH"
+          fi
+
+      # The same steps the host updater used to run, done once here instead of on every server.
+      - name: Install and build
+        run: |
+          bun install --frozen-lockfile
+          bun run --cwd apps/control-plane build
+          bun run --cwd apps/agent build
+          bun run --cwd apps/cli build
+          bun run --cwd apps/helper build
+
+      # Dashboard node updates (D99) install only these two binaries on workers. Exactly two
+      # entries, no paths: the helper on the node refuses anything else.
+      - name: Package the node bundle
+        run: |
+          stage="$(mktemp -d)"
+          install -m 0755 apps/agent/dist/skiff-agent apps/helper/dist/skiff-helper "$stage/"
+          tar -czf "$DIST/skiff-node-${VERSION}-linux-${{ matrix.pkg }}.tar.gz" -C "$stage" skiff-agent skiff-helper
+          tar -tzf "$DIST/skiff-node-${VERSION}-linux-${{ matrix.pkg }}.tar.gz"
+
+      - name: Compile the stage-0 updater
+        run: |
+          mkdir -p "$STAGE/updater"
+          bun build --compile scripts/update-self/main.ts \
+            --define "SKIFF_UPDATER_BUILD=\"${SKIFF_SHA::12}\"" \
+            --outfile "$STAGE/updater/skiff-updated"
+          "$STAGE/updater/skiff-updated" --version
+
+      # Ship only what runs; done before the canary so it boots exactly the tree hosts install.
+      - name: Prune to production dependencies
+        run: |
+          find . -name node_modules -type d -prune -exec rm -rf {} +
+          rm -rf apps/control-plane/.svelte-kit
+          bun install --frozen-lockfile --production
+          du -sh node_modules .
+
+      # NOT faithful yet: the canary boots the release as root via systemd-run under the production
+      # sandbox. An unprivileged W5 job container has neither, so this step fails loudly instead of
+      # silently skipping the gate (see the report in docs/PIPELINES.md §9 when WP5 lands).
+      - name: Canary under the production sandbox
+        run: |
+          if ! command -v systemd-run >/dev/null; then
+            echo "::error::the canary needs root and systemd-run (production sandbox); this runner has neither"
+            exit 1
+          fi
+          runas=""; [ "$(id -u)" = 0 ] || runas="sudo"
+          $runas env BUN_BIN="$(command -v bun)" scripts/release/ci-canary.sh "$SKIFF_WORKSPACE"
+
+      # Same layout hosts unpack: repo/ (this workspace), updater/, caddy/.
+      - name: Package
+        run: |
+          set -euo pipefail
+          gz=gzip
+          command -v pigz >/dev/null && gz=pigz
+          base="$(basename "$SKIFF_WORKSPACE")"
+          tar --use-compress-program="$gz" -cf "$DIST/skiff-${VERSION}-linux-${{ matrix.pkg }}.tar.gz" \
+            --exclude="$base/.git" \
+            --exclude="$base/.skiff/local" \
+            --exclude="$base/node_modules/.old_modules-*" \
+            --exclude="$base/node_modules/.cache" \
+            --transform "flags=rh;s,^$base,repo," \
+            -C "$(dirname "$SKIFF_WORKSPACE")" "$base" \
+            -C "$STAGE" updater caddy
+          ls -l "$DIST"
+
+      - uses: skiff/upload-artifact@v1
+        with:
+          name: 'skiff-${{ matrix.pkg }}'
+          path: '${{ runner.temp }}/dist/skiff-*.tar.gz'
+          retention-days: 7
+
+  publish:
+    name: 'Sign and publish v${{ needs.plan.outputs.version }}'
+    needs: [plan, test, build]
+    # Holds SKIFF_RELEASE_SIGNING_KEY and GH_TOKEN; main only, approval required (W12).
+    environment: release
+    runs-on: linux
+    container: ghcr.io/kieranholroyd/skiff-runner:latest
+    env:
+      VERSION: '${{ needs.plan.outputs.version }}'
+    steps:
+      - uses: skiff/checkout@v1
+      - name: Pinned Bun
+        run: |
+          if [ "$(bun --version 2>/dev/null)" != "$BUN_VERSION" ]; then
+            curl -fsSL https://bun.sh/install | BUN_INSTALL="$HOME/.bun" bash -s "bun-v$BUN_VERSION"
+            echo "$HOME/.bun/bin" >> "$SKIFF_PATH"
+          fi
+
+      # No merge-multiple: each artifact lands in dist/<name>/, flattened below.
+      - uses: skiff/download-artifact@v1
+        with:
+          path: dist
+      - run: |
+          find dist -mindepth 2 -type f -exec mv {} dist/ \;
+          find dist -mindepth 1 -type d -empty -delete
+          ls -l dist
+
+      - name: Write and sign the manifest
+        env:
+          SKIFF_RELEASE_SIGNING_KEY: '${{ secrets.SKIFF_RELEASE_SIGNING_KEY }}'
+        run: |
+          bun scripts/release/manifest.ts \
+            --version "$VERSION" --commit "$SKIFF_SHA" --repo "$GH_REPO" --dir dist
+          cp scripts/release/recover.sh dist/skiff-recover.sh
+
+      - name: Publish
+        env:
+          GH_TOKEN: '${{ secrets.GH_TOKEN }}'
+        run: |
+          gh release create "v$VERSION" dist/* \
+            --repo "$GH_REPO" \
+            --prerelease \
+            --target "$SKIFF_SHA" \
+            --title "Skiff $VERSION" \
+            --notes "Signed canary built on Skiff from ${SKIFF_SHA::12}. Canary hosts install it with \`skiff-update-self\` (dashboard: Settings → Updates); stable hosts get it once it is promoted with the Promote workflow."
+
+  # --- Postgres images (D126, docs/PITR.md) ------------------------------------------------
+  # Each `<major>-<variant>-<revision>` tag is immutable: bump the revision here, in
+  # packages/contracts and in apps/helper/src/validate.ts together (see the GitHub workflows).
+
+  image:
+    name: '${{ matrix.repo }}:${{ matrix.tag }} (${{ matrix.arch }})'
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: [linux, '${{ matrix.arch }}', oci-build]
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+        image: [postgis, pg_cron, pitr]
+        include:
+          - image: postgis
+            repo: skiff-postgres
+            tag: 18-postgis-1
+            context: docker/postgres
+            args: VARIANT=postgis
+          - image: pg_cron
+            repo: skiff-postgres
+            tag: 18-pg_cron-1
+            context: docker/postgres
+            args: VARIANT=pg_cron
+          - image: pitr
+            repo: skiff-postgres-pitr
+            tag: 18-1
+            context: docker/postgres-pitr
+            args: ''
+    steps:
+      - uses: skiff/checkout@v1
+      - uses: skiff/build-image@v1
+        with:
+          context: '${{ matrix.context }}'
+          file: '${{ matrix.context }}/Dockerfile'
+          tags: 'registry/${{ matrix.repo }}:${{ matrix.tag }}-${{ matrix.arch }}'
+          build-args: '${{ matrix.args }}'
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ vars.GH_RELEASE_REPO }}
+            org.opencontainers.image.revision=${{ skiff.sha }}
+
+  image-index:
+    name: '${{ matrix.repo }}:${{ matrix.tag }} (multi-arch)'
+    needs: image
+    runs-on: linux
+    strategy:
+      matrix:
+        include:
+          - { repo: skiff-postgres, tag: 18-postgis-1 }
+          - { repo: skiff-postgres, tag: 18-pg_cron-1 }
+          - { repo: skiff-postgres-pitr, tag: 18-1 }
+    steps:
+      # By tag, not digest outputs: matrix jobs share one outputs map (last writer wins).
+      - uses: skiff/image-index@v1
+        with:
+          tag: 'registry/${{ matrix.repo }}:${{ matrix.tag }}'
+          sources: |
+            registry/${{ matrix.repo }}:${{ matrix.tag }}-x64
+            registry/${{ matrix.repo }}:${{ matrix.tag }}-arm64
+
+  image-mirror:
+    name: 'Mirror ${{ matrix.repo }}:${{ matrix.tag }} to GHCR'
+    needs: image-index
+    if: skiff.ref == 'refs/heads/main'
+    environment: release
+    runs-on: linux
+    container: ghcr.io/kieranholroyd/skiff-runner:latest
+    strategy:
+      matrix:
+        include:
+          - { repo: skiff-postgres, tag: 18-postgis-1 }
+          - { repo: skiff-postgres, tag: 18-pg_cron-1 }
+          - { repo: skiff-postgres-pitr, tag: 18-1 }
+    steps:
+      # A published tag never moves (the GitHub workflows refuse to overwrite one too).
+      - id: published
+        env:
+          GHCR_TOKEN: '${{ secrets.GHCR_TOKEN }}'
+        run: |
+          path="$GHCR_OWNER/${{ matrix.repo }}"
+          token="$(curl -fsS -u "$GHCR_OWNER:$GHCR_TOKEN" "https://ghcr.io/token?scope=repository:$path:pull" | jq -r .token)"
+          if curl -fsSI -H "Authorization: Bearer $token" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json' "https://ghcr.io/v2/$path/manifests/${{ matrix.tag }}" >/dev/null; then
+            echo "ghcr.io/$path:${{ matrix.tag }} is already published; bump the revision to publish a change."
+            echo "exists=true" >> "$SKIFF_OUTPUT"
+          else
+            echo "exists=false" >> "$SKIFF_OUTPUT"
+          fi
+      - if: steps.published.outputs.exists != 'true'
+        uses: skiff/image-index@v1
+        with:
+          tag: 'ghcr.io/${{ env.GHCR_OWNER }}/${{ matrix.repo }}:${{ matrix.tag }}'
+          sources: 'registry/${{ matrix.repo }}:${{ matrix.tag }}'
+          username: '${{ env.GHCR_OWNER }}'
+          password: '${{ secrets.GHCR_TOKEN }}'

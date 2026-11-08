@@ -14,12 +14,12 @@ import { features } from '#lib/server/config.js';
 import { failStatus, formString, toFormFailure } from '../../_lib/errors.js';
 import { fieldErrorsFrom } from '../../databases/_lib/forms.server.js';
 import {
-	eventSourcesFor,
+	eventTriggersFor,
 	parseQueueKey,
 	queueKey,
-	type FunctionEventSource,
+	type FunctionEventTrigger,
 	type QueueTarget
-} from './event-sources.js';
+} from './event-triggers.js';
 
 type ProjectRow = ReturnType<typeof core.projects.requireRow>;
 
@@ -57,7 +57,7 @@ function functionRules(principal: Principal, row: ProjectRow, view: FunctionView
 				if (consumer.broker === broker.name) consumedElsewhere.add(queueKey(consumer));
 		}
 	const attachedBrokers = attached.map((broker) => broker.name);
-	const rules = eventSourcesFor(
+	const rules = eventTriggersFor(
 		quietly(() => core.events.list(principal), []),
 		{
 			consumers,
@@ -69,15 +69,19 @@ function functionRules(principal: Principal, row: ProjectRow, view: FunctionView
 }
 
 /**
- * A function's event sources (docs/EVENTS.md, D122): the event rules that publish into queues it
- * consumes, their newest deliveries, and what the "Add event source" dialog offers.
+ * A function's event triggers (docs/EVENTS.md, D122): the event rules that publish into queues it
+ * consumes, their newest deliveries, and what the "Add trigger" dialog offers.
  */
-export function loadEventSources(principal: Principal, row: ProjectRow, view: FunctionView | null) {
+export function loadEventTriggers(
+	principal: Principal,
+	row: ProjectRow,
+	view: FunctionView | null
+) {
 	const enabled = features.BROKERS;
 	const empty = {
 		enabled,
 		readable: false,
-		rules: [] as FunctionEventSource[],
+		rules: [] as FunctionEventTrigger[],
 		deliveries: [] as EventDeliveryView[],
 		consumers: [] as QueueTarget[],
 		attachedBrokers: [] as string[],
@@ -131,7 +135,7 @@ export function loadEventSources(principal: Principal, row: ProjectRow, view: Fu
 	};
 }
 
-export type FunctionEventSourcesData = ReturnType<typeof loadEventSources>;
+export type FunctionEventTriggersData = ReturnType<typeof loadEventTriggers>;
 
 /** The rule ids a function's console may act on, so a forged id can't reach another function's rule. */
 function ownedRuleIds(principal: Principal, row: ProjectRow): Set<string> {
@@ -140,14 +144,14 @@ function ownedRuleIds(principal: Principal, row: ProjectRow): Set<string> {
 }
 
 function requireOwnedRule(principal: Principal, row: ProjectRow, id: string) {
-	if (!id) return fail(400, { message: 'Missing event source id.' });
+	if (!id) return fail(400, { message: 'Missing event trigger id.' });
 	if (!ownedRuleIds(principal, row).has(id))
-		return fail(404, { message: `That event source does not deliver to ${row.slug}.` });
+		return fail(404, { message: `That event trigger does not deliver to ${row.slug}.` });
 	return null;
 }
 
 /** Create an event rule that publishes into a queue this function consumes (or will consume). */
-export async function createEventSource(principal: Principal, row: ProjectRow, request: Request) {
+export async function createEventTrigger(principal: Principal, row: ProjectRow, request: Request) {
 	const data = await request.formData();
 	const source = formString(data, 'source') as EventSource;
 	const target = parseQueueKey(formString(data, 'target'));
@@ -160,6 +164,7 @@ export async function createEventSource(principal: Principal, row: ProjectRow, r
 		project: formString(data, 'project'),
 		database: formString(data, 'database'),
 		alertRule: formString(data, 'alertRule'),
+		repository: formString(data, 'repository'),
 		broker: target?.broker ?? formString(data, 'broker'),
 		queue: target?.queue ?? formString(data, 'queue'),
 		description: formString(data, 'description')
@@ -209,7 +214,8 @@ export async function createEventSource(principal: Principal, row: ProjectRow, r
 			: {}),
 		...(source === 'deployments' ? { project: optional(values.project) } : {}),
 		...(source === 'database-backups' ? { database: optional(values.database) } : {}),
-		...(source === 'alerts' ? { alertRule: optional(values.alertRule) } : {})
+		...(source === 'alerts' ? { alertRule: optional(values.alertRule) } : {}),
+		...(source === 'registry' ? { repository: optional(values.repository) } : {})
 	};
 	const parsed = eventRuleCreateSchema.safeParse(input);
 	if (!parsed.success)
@@ -225,29 +231,29 @@ export async function createEventSource(principal: Principal, row: ProjectRow, r
 				: '';
 		return {
 			success: consumes
-				? `Event source added. Matching events now reach ${row.slug} through ${rule.queue}.${restart}`
-				: `Event source added. Add a consumer for ${rule.queue} to wrangler.jsonc and deploy to start receiving them.${restart}`
+				? `Event trigger added. Matching events now reach ${row.slug} through ${rule.queue}.${restart}`
+				: `Event trigger added. Add a consumer for ${rule.queue} to wrangler.jsonc and deploy to start receiving them.${restart}`
 		};
 	} catch (error) {
 		return fail(failStatus(error), toFormFailure(error));
 	}
 }
 
-export async function testEventSource(principal: Principal, row: ProjectRow, request: Request) {
+export async function testEventTrigger(principal: Principal, row: ProjectRow, request: Request) {
 	const id = formString(await request.formData(), 'id');
 	const denied = requireOwnedRule(principal, row, id);
 	if (denied) return denied;
 	try {
 		const delivery = core.events.test(principal, id);
 		return {
-			success: `Queued test event ${delivery.id}. It shows under Recent deliveries once the broker's node publishes it.`
+			success: `Queued test event ${delivery.id}. It shows under Recent event deliveries once the broker's node publishes it.`
 		};
 	} catch (error) {
 		return fail(failStatus(error), toFormFailure(error));
 	}
 }
 
-export async function toggleEventSource(principal: Principal, row: ProjectRow, request: Request) {
+export async function toggleEventTrigger(principal: Principal, row: ProjectRow, request: Request) {
 	const data = await request.formData();
 	const id = formString(data, 'id');
 	const enabled = formString(data, 'enabled') === 'true';
@@ -260,12 +266,12 @@ export async function toggleEventSource(principal: Principal, row: ProjectRow, r
 	}
 	return {
 		success: enabled
-			? 'Event source enabled.'
-			: 'Event source paused. Events from now on are not queued.'
+			? 'Event trigger resumed.'
+			: 'Event trigger paused. Events from now on are not queued.'
 	};
 }
 
-export async function deleteEventSource(principal: Principal, row: ProjectRow, request: Request) {
+export async function deleteEventTrigger(principal: Principal, row: ProjectRow, request: Request) {
 	const id = formString(await request.formData(), 'id');
 	const denied = requireOwnedRule(principal, row, id);
 	if (denied) return denied;
@@ -274,5 +280,5 @@ export async function deleteEventSource(principal: Principal, row: ProjectRow, r
 	} catch (error) {
 		return fail(failStatus(error), toFormFailure(error));
 	}
-	return { success: 'Event source removed. Its undelivered events were dropped.' };
+	return { success: 'Event trigger removed. Its undelivered events were dropped.' };
 }

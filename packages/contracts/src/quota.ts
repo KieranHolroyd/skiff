@@ -33,6 +33,7 @@ export const quotaFieldNames = [
 	'previews',
 	'workloadMemoryMb',
 	'egressBytes',
+	'registryBytes',
 ] as const;
 export type QuotaField = (typeof quotaFieldNames)[number];
 
@@ -60,6 +61,7 @@ export const orgQuotaSchema = z
 		previews: quotaLimitDefault,
 		workloadMemoryMb: quotaLimitDefault,
 		egressBytes: quotaLimitDefault,
+		registryBytes: quotaLimitDefault,
 	})
 	.describe('Org quota; -1 is unlimited.');
 export type OrgQuota = z.infer<typeof orgQuotaSchema>;
@@ -82,6 +84,7 @@ export const quotaUpdateSchema = z
 		previews: quotaLimitOptional,
 		workloadMemoryMb: quotaLimitOptional,
 		egressBytes: quotaLimitOptional,
+		registryBytes: quotaLimitOptional,
 	})
 	.refine((input) => Object.keys(input).length > 0, 'Nothing to update.');
 export type QuotaUpdate = z.infer<typeof quotaUpdateSchema>;
@@ -104,6 +107,7 @@ export const projectQuotaFieldsSchema = z.strictObject({
 	previews: quotaOverride,
 	workloadMemoryMb: quotaOverride,
 	egressBytes: quotaOverride,
+	registryBytes: quotaOverride,
 });
 export type ProjectQuotaFields = z.infer<typeof projectQuotaFieldsSchema>;
 
@@ -130,6 +134,7 @@ export const quotaUsageMetricKeys = [
 	'previews',
 	'workloadMemoryMb',
 	'egressBytes',
+	'registryBytes',
 ] as const;
 export type QuotaUsageMetricKey = (typeof quotaUsageMetricKeys)[number];
 
@@ -152,6 +157,7 @@ export const quotaMetricUnitsByKey: Record<QuotaUsageMetricKey, QuotaMetricUnit>
 	previews: 'count',
 	workloadMemoryMb: 'megabytes',
 	egressBytes: 'bytes',
+	registryBytes: 'bytes',
 };
 
 /** Percentage used, or null when unlimited. May exceed 100 when a quota was lowered. */
@@ -204,6 +210,7 @@ export const quotaUsageMetricsSchema = z
 		previews: metric,
 		workloadMemoryMb: metric,
 		egressBytes: metric,
+		registryBytes: metric,
 	})
 	.describe('Usage for every quota metric.');
 export type QuotaUsageMetrics = z.infer<typeof quotaUsageMetricsSchema>;

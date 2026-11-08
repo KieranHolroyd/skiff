@@ -19,16 +19,13 @@
 	} from '@skiff/contracts';
 	import CableIcon from '@lucide/svelte/icons/cable';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
-	import ClockIcon from '@lucide/svelte/icons/clock';
 	import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
-	import GlobeIcon from '@lucide/svelte/icons/globe';
-	import InboxIcon from '@lucide/svelte/icons/inbox';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import TableIcon from '@lucide/svelte/icons/table-2';
 	import ZapIcon from '@lucide/svelte/icons/zap';
-	import FunctionEventSources from './FunctionEventSources.svelte';
 	import FunctionQuickstart from './FunctionQuickstart.svelte';
-	import type { FunctionEventSourcesData } from './event-sources.server.js';
+	import FunctionTriggers from './FunctionTriggers.svelte';
+	import type { FunctionEventTriggersData } from './event-triggers.server.js';
 	import { formatDateTime, formatRelative, shortId } from '../../_lib/format.js';
 	import {
 		COMPATIBILITY_LAG_WARN_DAYS,
@@ -37,7 +34,6 @@
 		functionStatus,
 		statefulBindings,
 		compatibilityLagDays,
-		describeCron,
 		formatIdleStop,
 		groupBindings,
 		isDefaultIdleStop
@@ -55,7 +51,7 @@
 		workload,
 		capacity,
 		cronNext,
-		eventSources,
+		eventTriggers,
 		fieldErrors,
 		can
 	}: {
@@ -67,7 +63,7 @@
 		/** Next fire time per cron expression, computed on the server (UTC). */
 		cronNext: Record<string, string | null>;
 		/** Event rules publishing into the queues this function consumes (D122). */
-		eventSources: FunctionEventSourcesData;
+		eventTriggers: FunctionEventTriggersData;
 		fieldErrors?: Record<string, string>;
 		can: { manageWorkload: boolean; viewCapacity: boolean };
 	} = $props();
@@ -326,76 +322,11 @@
 				</Card.Content>
 			</Card.Root>
 
-			<Card.Root class="gap-0 py-0">
-				<Card.Header class="border-b py-4">
-					<Card.Title class="flex items-center gap-2">
-						<ClockIcon class="size-4 text-muted-foreground" />
-						Triggers
-					</Card.Title>
-					<Card.Description>
-						Requests arrive at the function's URL, previews and custom domains. Cron runs on the
-						node that owns the function, in UTC; queue batches arrive in <code
-							class="font-mono text-xs">queue()</code
-						>.
-					</Card.Description>
-				</Card.Header>
-				<Card.Content class="space-y-3 py-4">
-					<div class="flex items-start gap-2.5">
-						<GlobeIcon class="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-						<div class="min-w-0 text-sm">
-							<p class="font-medium">HTTP <span class="font-mono text-xs">fetch</span></p>
-							<p class="truncate text-xs text-muted-foreground" title={project.productionUrl}>
-								{project.productionUrl}, previews and custom domains
-							</p>
-						</div>
-					</div>
-					{#each view.triggers.crons as cron (cron)}
-						{@const described = describeCron(cron)}
-						{@const next = cronNext[cron]}
-						<div class="flex items-start gap-2.5">
-							<ClockIcon class="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-							<div class="min-w-0 text-sm">
-								<p>
-									<span class="font-mono text-xs font-medium">{cron}</span>
-									{#if described}<span class="text-muted-foreground"> · {described}</span>{/if}
-								</p>
-								{#if next}
-									<p class="text-xs text-muted-foreground">
-										Next <time datetime={next} title={formatDateTime(next)}
-											>{formatDateTime(next)}</time
-										>
-									</p>
-								{/if}
-							</div>
-						</div>
-					{:else}
-						<p class="text-xs text-muted-foreground">
-							No cron triggers. Add <code class="font-mono">triggers.crons</code> to wrangler.jsonc
-							and export <code class="font-mono">scheduled()</code>; each schedule fires once per
-							occurrence from the function's node.
-						</p>
-					{/each}
-					{#each view.triggers.queues as consumer (`${consumer.broker}/${consumer.queue}`)}
-						{@const sourceCount = eventSources.rules.filter(
-							(rule) => rule.broker === consumer.broker && rule.queue === consumer.queue
-						).length}
-						<div class="flex items-start gap-2.5">
-							<InboxIcon class="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-							<div class="min-w-0 text-sm">
-								<p>
-									Queue <span class="font-mono text-xs font-medium">{consumer.queue}</span>
-								</p>
-								<p class="text-xs text-muted-foreground">
-									on {consumer.broker}{#if sourceCount > 0}
-										· {sourceCount} event {sourceCount === 1 ? 'source' : 'sources'}{/if}
-								</p>
-							</div>
-						</div>
-					{/each}
-				</Card.Content>
-			</Card.Root>
+			<div class="lg:col-span-2">
+				<FunctionTriggers {project} {view} {cronNext} events={eventTriggers} {fieldErrors} />
+			</div>
 
-			<Card.Root class="gap-0 py-0">
+			<Card.Root class="gap-0 py-0 lg:col-span-2">
 				<Card.Header class="border-b py-4">
 					<Card.Title class="flex items-center gap-2">
 						<FolderOpenIcon class="size-4 text-muted-foreground" />
@@ -432,8 +363,6 @@
 			</Card.Root>
 		</div>
 	{/if}
-
-	<FunctionEventSources slug={project.slug} data={eventSources} {fieldErrors} />
 
 	<Collapsible.Root bind:open={matrixOpen}>
 		<Card.Root class="gap-0 py-0">

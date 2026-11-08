@@ -3,15 +3,18 @@ import { builds, configSnapshots, deployments, environments, nodes, projects, re
 import {
 	contentUrl,
 	hasPermission,
+	parseImageReference,
 	requirePermission,
 	workloadSpecSchema,
 	type BuildView,
 	type Principal,
 	type WorkloadIngress,
+	type WorkloadSpec,
 } from '@skiff/contracts';
-import type { FileEntry } from './artifact.ts';
+import { entriesFromFiles, type FileEntry } from './artifact.ts';
 import type { CoreContext } from './context.ts';
-import { ConflictError, NotFoundError } from './errors.ts';
+import { ConflictError, NotFoundError, ValidationError } from './errors.ts';
+import { resolveImageDigest } from './oci-client.ts';
 import type { PreparedRelease } from './releases.ts';
 import { effectiveRuntime, storedRuntime } from './runtime-tier.ts';
 import { newId, parseJson, shortId } from './util.ts';
@@ -101,8 +104,17 @@ export interface DeploymentDetailView extends DeploymentView {
 	build: BuildView | null;
 }
 
-type DeploymentOptions = { promote?: boolean; message?: string; environment?: string };
+type DeploymentOptions = {
+	promote?: boolean;
+	message?: string;
+	environment?: string;
+	/** Set by `deployEntries` only: the digest the container image resolved to (R1). */
+	imageDigest?: string;
+};
 type EnvironmentLike = Pick<EnvironmentRow, 'slug' | 'isProduction' | 'name'>;
+
+/** The one file of an image deploy's release: names the image, for the deployment record. */
+export const IMAGE_MARKER_PATH = 'skiff-image.json';
 
 /** Release + config snapshot; immutable, preview URL always, production pointer moved explicitly (D13, D17). */
 export class DeploymentService {
@@ -110,6 +122,67 @@ export class DeploymentService {
 
 	private contentDomain(): string {
 		return this.ctx.config.contentDomain;
+	}
+
+	/**
+	 * The digest a container project's image tag points at now (R1). Null for every other runtime,
+	 * for runners (they follow `Pull=newer` on purpose, D91), for `localhost/` images that exist only
+	 * in a node's store, and when the registry cannot be asked: then the deploy runs the tag, exactly
+	 * as before pinning, and the dashboard shows it as not pinned.
+	 */
+	private async resolveImagePin(project: ProjectRow): Promise<string | undefined> {
+		if (effectiveRuntime(project) !== 'container') return undefined;
+		let spec: WorkloadSpec | null;
+		try {
+			spec = this.ctx.workloads.projectSpec(project);
+		} catch {
+			return undefined;
+		}
+		if (!spec?.image || spec.runner) return undefined;
+		const parsed = parseImageReference(spec.image);
+		if (!parsed || parsed.registry === 'localhost') return undefined;
+		if (parsed.digest) return parsed.digest;
+		// Unit tests never reach a real registry unless they inject a transport.
+		const transport = this.ctx.config.registryFetch ?? (process.env.NODE_ENV === 'test' ? null : fetch);
+		if (!transport) return undefined;
+		try {
+			const bearerToken = this.ctx.registry.bearerForImage(project.orgId, spec.image);
+			return await resolveImageDigest(spec.image, {
+				fetch: transport,
+				...(bearerToken
+					? { bearerToken }
+					: { credentials: this.ctx.registryCredentials.loginForImage(project.orgId, spec.image) }),
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			console.warn(`[deployments] ${project.slug}: running ${spec.image} by tag, not pinned: ${message}`);
+			return undefined;
+		}
+	}
+
+	/**
+	 * Point a container project at `image` and deploy it (docs/REGISTRY.md §5.3): the spec keeps every
+	 * other field, the release is a one-file marker naming the image, and the deploy pins the digest.
+	 */
+	async deployImage(
+		principal: Principal,
+		project: ProjectRow,
+		input: { image: string; promote?: boolean; message?: string; environment?: string },
+	): Promise<DeploymentView> {
+		requirePermission(principal, 'deployment:create');
+		if (effectiveRuntime(project) !== 'container')
+			throw new ValidationError(`"${project.slug}" is not a container project; only containers deploy an image.`);
+		const image = input.image.trim();
+		if (!parseImageReference(image)) throw new ValidationError(`"${image}" is not a valid image reference.`);
+		const current = this.ctx.workloads.projectSpec(project);
+		this.ctx.workloads.setSpec(principal, project, { ...(current ?? { runtime: 'container' }), image } as WorkloadSpec);
+		const fresh = this.ctx.db.select().from(projects).where(eq(projects.id, project.id)).get() ?? project;
+		const marker = new TextEncoder().encode(`${JSON.stringify({ image }, null, 2)}\n`);
+		return this.deployEntries(principal, fresh as ProjectRow, entriesFromFiles([{ path: IMAGE_MARKER_PATH, data: marker }]), {
+			promote: input.promote,
+			message: input.message,
+			environment: input.environment,
+		});
 	}
 
 	async deployEntries(
@@ -126,12 +199,29 @@ export class DeploymentService {
 		// Functions validate their manifest and persist the resolved spec before the release is stored
 		// (D110). No-op for every other bundle.
 		await this.ctx.functions.applyBundle(principal, project, entries);
+		// Pin a container image to its digest before anything is stored (R1, docs/REGISTRY.md §5.1).
+		const imageDigest = await this.resolveImagePin(project);
+		if (imageDigest) options = { ...options, imageDigest };
+		// G5: own-registry images must carry a trusted signature when the policy says so. Outside the
+		// pin's fallback on purpose: `enforce` refuses the deploy instead of running the tag.
+		const image = effectiveRuntime(project) === 'container' ? this.ctx.workloads.projectSpec(project)?.image : undefined;
+		if (image && this.ctx.registry.isOwnImage(image)) {
+			if (imageDigest) await this.ctx.registry.checkSignature(image, imageDigest);
+			else if (this.ctx.registry.signaturePolicy() === 'enforce')
+				throw new ValidationError(`${image} could not be pinned to a digest, so its signature cannot be checked.`);
+		}
 		let prepared = await this.ctx.releases.prepare(principal, entries, { precompress: options.precompress });
 		// Release GC runs concurrently and may have removed a reused release row while we awaited.
 		// Re-check synchronously right before `create` (also synchronous) so nothing can slip between.
 		for (let attempt = 0; attempt < 3; attempt++) {
 			const stillThere = this.ctx.db.select({ id: releases.id }).from(releases).where(eq(releases.id, prepared.release.id)).get();
-			if (stillThere) return this.create(principal, project, prepared, options);
+			if (stillThere) {
+				const view = this.create(principal, project, prepared, options);
+				// Keep the pinned digest in Skiff's own registry while this deployment exists (R11).
+				if (options.imageDigest)
+					await this.ctx.registry.pinDeployment(this.ctx.workloads.projectSpec(project)?.image, options.imageDigest, view.id);
+				return view;
+			}
 			prepared = { ...prepared, release: await this.ctx.releases.store(principal, prepared.artifact) };
 		}
 		throw new ConflictError('The release was garbage-collected while deploying; please retry.');
@@ -154,7 +244,10 @@ export class DeploymentService {
 		}
 		const environment = this.resolveEnvironment(project, options.environment);
 		const runtime = effectiveRuntime(project);
-		const workload = runtime === 'static' ? null : this.ctx.workloads.plan(principal, project);
+		const workload =
+			runtime === 'static'
+				? null
+				: this.ctx.workloads.plan(principal, project, options.imageDigest ? { imageDigest: options.imageDigest } : undefined);
 		const nodeId = workload?.nodeId ?? this.nodeForPlacement(project.placement);
 		// `promote` moves the pointer for the deployment's own environment. Only production also
 		// moves the project-level pointer; non-production environments never touch it.

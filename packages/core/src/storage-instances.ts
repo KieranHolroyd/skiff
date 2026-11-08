@@ -202,12 +202,22 @@ export class StorageService {
 			requested = volume.nodeId;
 		}
 
+		// No explicit volume: the storage pool (chosen at creation, else the object-storage default) narrows
+		// the nodes and picks the volume there (docs/STORAGE.md §3.2).
+		const edgeNodeId = this.ctx.workloads.edgeNode();
+		const storagePlan = volume ? null : this.ctx.storagePools.plan('object-storage', input.pool);
+		const candidates = storagePlan
+			? this.ctx.storagePools.filterCandidates(storagePlan, this.ctx.workloads.placementCandidates(), input.storageMb, {
+					requested,
+					edgeNodeId,
+				})
+			: this.ctx.workloads.placementCandidates();
 		const decision = resolvePlacement({
 			runtime: 'container',
 			requested,
 			memoryMb,
-			edgeNodeId: this.ctx.workloads.edgeNode(),
-			candidates: this.ctx.workloads.placementCandidates(),
+			edgeNodeId,
+			candidates,
 		});
 		if (!decision.ok)
 			throw new ValidationError(
@@ -217,8 +227,7 @@ export class StorageService {
 
 		const id = newId(STORAGE_ID_PREFIX);
 		const now = this.ctx.now();
-		// No explicit volume: use the node's default, so an operator only sets it once.
-		if (!volume) volume = this.ctx.volumes.defaultFor(decision.nodeId);
+		if (storagePlan) volume = this.ctx.storagePools.pick(storagePlan, decision.nodeId, input.storageMb);
 		if (volume) this.ctx.volumes.assertRoom(volume, input.storageMb);
 		this.ctx.quota.assertCanCreateStorage(principal.orgId, project?.id, input.storageMb, memoryMb);
 		const hostPort = this.allocatePort(decision.nodeId);

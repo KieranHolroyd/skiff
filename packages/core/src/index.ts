@@ -22,6 +22,9 @@ import { AlertService } from './alerts.ts';
 import { TopologyService } from './topology.ts';
 import { ServiceEndpointService } from './service-endpoints.ts';
 import { ShareService } from './shares.ts';
+import { StoragePoolService } from './storage-pools.ts';
+import { RegistryCredentialService } from './registry-credentials.ts';
+import { RegistryService } from './registry.ts';
 import { DatabaseReplicaService } from './database-replica-service.ts';
 import { StorageReplicationService } from './storage-replication-service.ts';
 import { IngressHaService } from './ingress-ha.ts';
@@ -45,6 +48,7 @@ import { ServiceMoveService } from './service-moves.ts';
 import { StorageObjectsService } from './storage-objects.ts';
 import { DomainService } from './domains.ts';
 import { BuildService } from './builds.ts';
+import { PipelineService } from './pipelines.ts';
 import { LogService } from './logs.ts';
 import { LogDrainService } from './log-drains.ts';
 import { EnvironmentService } from './environments.ts';
@@ -102,6 +106,7 @@ export * from './jobs.ts';
 export * from './connected-apps.ts';
 export * from './domain-reconcile.ts';
 export * from './volumes.ts';
+export * from './storage-pools.ts';
 export * from './app-volumes.ts';
 export * from './app-volume-lifecycle.ts';
 export * from './service-moves.ts';
@@ -109,6 +114,12 @@ export * from './storage-objects.ts';
 export * from './storage-s3.ts';
 export * from './domains.ts';
 export * from './builds.ts';
+export * from './pipelines.ts';
+export * from './pipeline-engine.ts';
+export * from './registry-credentials.ts';
+export * from './registry.ts';
+export * from './registry-token.ts';
+export * from './oci-client.ts';
 export * from './logs.ts';
 export * from './environments.ts';
 export * from './source.ts';
@@ -170,6 +181,7 @@ export interface Core {
 	storageObjects: StorageObjectsService;
 	domains: DomainService;
 	builds: BuildService;
+	pipelines: PipelineService;
 	logs: LogService;
 	environments: EnvironmentService;
 	source: SourceService;
@@ -191,6 +203,12 @@ export interface Core {
 	endpoints: ServiceEndpointService;
 	/** Cluster shares (CLUSTERING §5.2, C3). */
 	shares: ShareService;
+	/** Storage pools and placement rules (docs/STORAGE.md, D144). */
+	storagePools: StoragePoolService;
+	/** Credentials for external container registries (docs/REGISTRY.md R2). */
+	registryCredentials: RegistryCredentialService;
+	/** The platform container registry (docs/REGISTRY.md G1). */
+	registry: RegistryService;
 	/** Managed database replicas (CLUSTERING §9.2, C7). */
 	databaseReplicas: DatabaseReplicaService;
 	/** Bucket replication (CLUSTERING §10.2, C9). */
@@ -258,6 +276,7 @@ export function createCore(options: CoreOptions): Core {
 	ctx.domains = new DomainService(ctx);
 	ctx.logs = new LogService(ctx);
 	ctx.builds = new BuildService(ctx);
+	ctx.pipelines = new PipelineService(ctx);
 	ctx.operations = createOperationService(ctx);
 	ctx.blueprints = new BlueprintService(ctx);
 	ctx.scheduler = new SchedulerService(ctx);
@@ -274,6 +293,9 @@ export function createCore(options: CoreOptions): Core {
 	ctx.topology = new TopologyService(ctx);
 	ctx.endpoints = new ServiceEndpointService(ctx);
 	ctx.shares = new ShareService(ctx);
+	ctx.storagePools = new StoragePoolService(ctx);
+	ctx.registryCredentials = new RegistryCredentialService(ctx);
+	ctx.registry = new RegistryService(ctx);
 	ctx.databaseReplicas = new DatabaseReplicaService(ctx);
 	ctx.storageReplication = new StorageReplicationService(ctx);
 	ctx.ingress = new IngressHaService(ctx);
@@ -322,6 +344,7 @@ export function createCore(options: CoreOptions): Core {
 		storageObjects: ctx.storageObjects,
 		domains: ctx.domains,
 		builds: ctx.builds,
+		pipelines: ctx.pipelines,
 		logs: ctx.logs,
 		environments: ctx.environments,
 		source,
@@ -339,6 +362,9 @@ export function createCore(options: CoreOptions): Core {
 		topology: ctx.topology,
 		endpoints: ctx.endpoints,
 		shares: ctx.shares,
+		storagePools: ctx.storagePools,
+		registryCredentials: ctx.registryCredentials,
+		registry: ctx.registry,
 		databaseReplicas: ctx.databaseReplicas,
 		storageReplication: ctx.storageReplication,
 		ingress: ctx.ingress,

@@ -105,8 +105,10 @@ export const brokerCreateSchema = z
 		cpus: z.number().positive().max(8).default(0.5),
 		/** Persistent message storage (JetStream file store) in MB; also the engine's own cap. */
 		storageMb: z.number().int().min(256).max(1_048_576).default(2_048),
-		/** Node volume for the data dir; null keeps the helper state dir (D74). */
+		/** Pin one node volume for the data dir (advanced; bypasses storage pools, D74). */
 		volume: z.string().min(3).max(40).optional(),
+		/** Storage pool (or `system`) for the data dir; omitted uses the default from Settings → Storage (docs/STORAGE.md). */
+		pool: z.string().trim().min(2).max(40).optional(),
 		/** Attach to this project right away (placement then follows the project's workload node). */
 		project: z.string().min(1).max(64).optional(),
 		envPrefix: brokerEnvPrefixSchema.optional(),

@@ -6,7 +6,8 @@ the helper's fixed state directory (`/var/lib/skiff-workloads/<id>`), so there i
 to put an S3 instance on another disk. This document defines **volumes**: node-scoped storage that
 an instance can be placed on, plus the guided setup for the common ways of adding a drive.
 
-Decisions are recorded as **D72–D80** in [DECISIONS.md](./DECISIONS.md). The implementation is
+Volumes are grouped into named **storage pools** and chosen per kind of data by storage rules —
+see [STORAGE.md](./STORAGE.md) (D144). Decisions are recorded as **D72–D80** in [DECISIONS.md](./DECISIONS.md). The implementation is
 phased (§12); the destructive verbs are only added once the safety rails in §6 exist and are
 tested.
 
@@ -106,7 +107,7 @@ shell string.
 
 ## 5. Network mounts (first-class)
 
-**Built (D143, 2026-11-07):** Network shares (`/shares`) → *Mount on node* → the node's helper
+**Built (D143, 2026-11-07):** Settings → Network shares (`/settings/shares`) → *Mount on node* → the node's helper
 mounts the share at `/mnt/skiff-shares/<share>` → once the heartbeat inventory reports it there
 with the expected source key (`nfs:<server>:<export>` / `cifs:<server>/<share>`), a read-write
 mount is adopted as a `remote` node volume (named after the share unless renamed; *Link to Skiff*

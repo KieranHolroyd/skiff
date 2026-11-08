@@ -33,6 +33,7 @@ import { featureEnabled } from './config.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { newId, parseJson } from './util.ts';
 import type { ProjectRow } from './projects.ts';
+import type { VolumeRow } from './volumes.ts';
 
 export type AppVolumeRow = typeof appVolumes.$inferSelect;
 export type AppVolumeAttachmentRow = typeof appVolumeAttachments.$inferSelect;
@@ -205,8 +206,19 @@ export class AppVolumeService {
 		let nodeVolumeId: string | null = null;
 		let freeBytes: number | null;
 		let reservedBytes: number;
-		if (input.backing === 'node_volume') {
-			const nodeVolume = this.ctx.volumes.findByName(input.nodeVolume!);
+		let backing = input.backing;
+		let pinnedVolume: VolumeRow | null = backing === 'node_volume' ? this.ctx.volumes.findByName(input.nodeVolume!) : null;
+		if (backing === undefined) {
+			// No explicit backing: the pool chosen at creation (else the app-volumes default) picks a volume
+			// on the project's node, else the state dir (docs/STORAGE.md §3.2). A volume pins its
+			// project to one node, so the node is the project's, never chosen by the pool.
+			const targetNode = this.workloadNode(project) ?? this.requiredEdgeNode();
+			const plan = this.ctx.storagePools.plan('app-volumes', input.pool);
+			pinnedVolume = plan.legacy ? null : this.ctx.storagePools.pick(plan, targetNode, input.sizeMb);
+			backing = pinnedVolume ? 'node_volume' : 'state_dir';
+		}
+		if (backing === 'node_volume') {
+			const nodeVolume = pinnedVolume!;
 			const workloadNode = this.workloadNode(project);
 			if (workloadNode && workloadNode !== nodeVolume.nodeId)
 				throw new ValidationError(
@@ -242,7 +254,7 @@ export class AppVolumeService {
 				projectId: project.id,
 				name: input.name,
 				nodeId,
-				backing: input.backing,
+				backing,
 				nodeVolumeId,
 				sizeMb: input.sizeMb,
 				usedBytes: null,
@@ -265,8 +277,9 @@ export class AppVolumeService {
 				project: project.slug,
 				name: input.name,
 				sizeMb: input.sizeMb,
-				backing: input.backing,
-				...(input.nodeVolume ? { nodeVolume: input.nodeVolume } : {}),
+				backing,
+				...(pinnedVolume ? { nodeVolume: pinnedVolume.name } : {}),
+				...(input.pool ? { pool: input.pool } : {}),
 				nodeId,
 				...(restoreFrom ? { restoreFrom: restoreFrom.snapshotId, source: restoreFrom.sourceName } : {}),
 			},

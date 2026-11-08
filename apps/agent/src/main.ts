@@ -28,6 +28,7 @@ import { controlSocketFetch } from './control-socket.ts';
 import { DatabaseBackupRunner } from './database-backups.ts';
 import { AppVolumeRunner } from './app-volumes.ts';
 import { ShareMountRunner } from './share-mounts.ts';
+import { VolumeProfileRunner } from './volume-profiles.ts';
 import { DatabasePitrRunner } from './database-pitr.ts';
 import { DatabaseCredentialRunner } from './database-credentials.ts';
 import { StudioPrincipalRunner } from './studio/principal.ts';
@@ -69,6 +70,8 @@ const HEARTBEAT_INTERVAL_MS = 10_000;
 const LONG_POLL_SECONDS = 8;
 const LONG_POLL_TIMEOUT_MS = (LONG_POLL_SECONDS + 10) * 1_000;
 const TELEMETRY_INTERVAL_MS = 60_000;
+/** Unreferenced images are pruned at most this often (docs/REGISTRY.md R3). */
+const IMAGE_PRUNE_INTERVAL_MS = 60 * 60_000;
 /** Mounts change rarely; heartbeat every 10 s but re-read the helper's inventory once a minute. */
 const VOLUME_INVENTORY_INTERVAL_MS = 60_000;
 /** `@id` present in every config the agent loads (site-config's catch-all route). */
@@ -121,6 +124,8 @@ class AgentRuntime {
 	private readonly appVolumes: AppVolumeRunner;
 	/** Network share mounts under /mnt/skiff-shares (docs/VOLUMES.md §5). */
 	private readonly shareMounts: ShareMountRunner;
+	/** Storage benchmarks of node volumes (docs/STORAGE.md §5). */
+	private readonly volumeProfiles: VolumeProfileRunner;
 	private readonly databasePitr: DatabasePitrRunner;
 	private readonly databaseRotations: DatabaseRotationRunner;
 	private readonly databaseCredentials: DatabaseCredentialRunner;
@@ -159,6 +164,14 @@ class AgentRuntime {
 	private loops: Array<Promise<void>> = [];
 
 	private lastReconcileAttemptAt = 0;
+	/** The registry mirror last applied (G4); `undefined` until the first reconcile checks it. */
+	private appliedMirror: string | undefined;
+	private appliedMirrorHost: string | undefined;
+
+	/** Image prune (docs/REGISTRY.md R3): at most hourly, after a reconcile, never two at once. */
+	private lastImagePruneAt = 0;
+	private imagePruneRunning = false;
+	private imagePruneWarned = false;
 	private lastReconcileSuccessAt = 0;
 	private reconcileFailures = 0;
 	private heartbeatFailures = 0;
@@ -233,6 +246,7 @@ class AgentRuntime {
 		this.databaseStats = new DatabaseStatsSampler({ source: this.workloads, log });
 		this.databaseBackups = new DatabaseBackupRunner({ helper: this.helper, log });
 		this.appVolumes = new AppVolumeRunner({ helper: this.helper, log });
+		this.volumeProfiles = new VolumeProfileRunner({ helper: this.helper, log });
 		this.shareMounts = new ShareMountRunner({
 			controlUrl: config.controlUrl,
 			nodeToken: config.nodeToken,
@@ -439,6 +453,7 @@ class AgentRuntime {
 			this.databaseBackupLoop(),
 			this.appVolumeLoop(),
 			this.shareMountLoop(),
+			this.volumeProfileLoop(),
 			this.databasePitrLoop(),
 			this.databaseRotationLoop(),
 			this.databaseCredentialLoop(),
@@ -814,10 +829,60 @@ class AgentRuntime {
 		} catch (error) {
 			log('warn', `Release GC failed: ${errorText(error)}`);
 		}
+		void this.maybePruneImages();
+		void this.applyRegistryMirror(state);
 
 		// Bucket and key changes are desired state too (S4): converge them now instead of waiting
 		// for the minute loop. The reconciler never throws and coalesces overlapping rounds.
 		void this.storageAdmin.reconcile();
+	}
+
+	/**
+	 * The platform registry's pull-through cache (G4): Podman mirrors for docker.io/ghcr.io/quay.io
+	 * point at the registry, and root logs in there with this node's token. Re-applied when the
+	 * desired mirror changes and once after every agent start (the auth file lives in /run).
+	 */
+	private async applyRegistryMirror(state: DesiredState): Promise<void> {
+		const mirror = state.registryMirror ?? null;
+		const key = JSON.stringify(mirror);
+		if (key === this.appliedMirror) return;
+		try {
+			await this.helper.applyRegistryMirror({
+				// Removing uses the host last applied, so its login leaves root's auth file too.
+				host: mirror?.host ?? this.appliedMirrorHost ?? 'registry.invalid',
+				upstreams: mirror?.upstreams ?? [],
+				username: `node.${this.config.nodeId}`,
+				password: this.config.nodeToken,
+			});
+			this.appliedMirror = key;
+			this.appliedMirrorHost = mirror?.host;
+			if (mirror) log('info', `Registry mirror for ${mirror.upstreams.join(', ')} → ${mirror.host}`);
+		} catch (error) {
+			// Older helpers lack the verb: nothing to undo, pulls go straight upstream.
+			log('warn', `Registry mirror not applied: ${errorText(error)}`);
+			this.appliedMirror = key;
+		}
+	}
+
+	/**
+	 * Ask the helper to drop images no unit or container references (R3). Every deploy of a new
+	 * digest otherwise leaves the old image on disk. Failures are logged once and retried next hour.
+	 */
+	private async maybePruneImages(): Promise<void> {
+		if (this.imagePruneRunning || Date.now() - this.lastImagePruneAt < IMAGE_PRUNE_INTERVAL_MS) return;
+		this.imagePruneRunning = true;
+		this.lastImagePruneAt = Date.now();
+		try {
+			const result = await this.helper.pruneImages();
+			this.imagePruneWarned = false;
+			if (result.removed > 0)
+				log('info', `Image prune removed ${result.removed} image(s), ${Math.round(result.reclaimedBytes / 1048576)} MiB; kept ${result.kept}`);
+		} catch (error) {
+			if (!this.imagePruneWarned) log('warn', `Image prune failed: ${errorText(error)}`);
+			this.imagePruneWarned = true;
+		} finally {
+			this.imagePruneRunning = false;
+		}
 	}
 
 	/** Best-effort content domain for the cert probe; never throws. */
@@ -885,6 +950,19 @@ class AgentRuntime {
 			const state = this.desired;
 			if (!state || (state.shareMounts.length === 0 && state.shareUnmounts.length === 0)) continue;
 			await this.convergeShareMounts(state);
+		}
+	}
+
+	/** Starts the next storage benchmark; it runs in the background and reports in the heartbeat. */
+	private async volumeProfileLoop(): Promise<void> {
+		while (this.running) {
+			await sleep(5_000, this.shutdownController.signal).catch(() => undefined);
+			if (!this.running) break;
+			const state = this.desired;
+			if (!state || state.volumeProfileTasks.length === 0) continue;
+			void this.volumeProfiles.runOnce(state, this.shutdownController.signal)?.catch((error) => {
+				log('warn', `Volume profile round failed: ${errorText(error)}`);
+			});
 		}
 	}
 
@@ -1054,6 +1132,7 @@ class AgentRuntime {
 		const purgedBrokers = this.workloads.pendingPurgedBrokers();
 		const appVolumeReport = this.appVolumes.pending();
 		const shareMountReport = this.shareMounts.report();
+		const volumeProfileResults = this.volumeProfiles.results();
 		const volumeInventory = await this.volumeInventoryForHeartbeat();
 		const backupResults = this.databaseBackups.pendingResults();
 		const pitrResults = this.databasePitr.pendingResults();
@@ -1115,6 +1194,7 @@ class AgentRuntime {
 			...(volumeInventory ? { volumes: volumeInventory } : {}),
 			...(shareMountReport.shareMounts.length > 0 ? { shareMounts: shareMountReport.shareMounts } : {}),
 			...(shareMountReport.unmountedShares.length > 0 ? { unmountedShares: shareMountReport.unmountedShares } : {}),
+			...(volumeProfileResults.length > 0 ? { volumeProfileResults } : {}),
 		};
 
 		const parsed = heartbeatSchema.safeParse(body);
@@ -1149,6 +1229,7 @@ class AgentRuntime {
 		this.workloads.acknowledgePurgedBrokers(purgedBrokers);
 		this.appVolumes.acknowledge(appVolumeReport);
 		this.shareMounts.acknowledgeUnmounted(shareMountReport.unmountedShares);
+		this.volumeProfiles.acknowledge(volumeProfileResults);
 		this.storageAdmin.acknowledgeBucketDeletions(storageBucketDeletions);
 		this.storageAdmin.acknowledgeBucketConfigs(storageBucketConfigs);
 		this.storageAdmin.acknowledgeRootKeyReports(storageRootKeys);
@@ -1544,6 +1625,15 @@ if (import.meta.main) {
 		// Root-only node storage moves (D48), run by skiff-storage.service.
 		const { runStorageCli } = await import('./storage-apply.ts');
 		process.exitCode = await runStorageCli(process.argv.slice(storageIndex + 1));
+	} else if (subcommand('pipeline-step') >= 0) {
+		// The in-job Pipelines step runner (docs/PIPELINES.md W5), started by the Builder inside a job
+		// container or sandbox unit. It reads no agent config: only job.json and the job token.
+		const { runPipelineStep } = await import('@skiff/builder');
+		const code = await runPipelineStep(process.argv[subcommand('pipeline-step') + 1]).catch((error: unknown) => {
+			console.error(`[skiff-agent pipeline-step] fatal: ${errorText(error)}`);
+			return 1;
+		});
+		process.exit(code);
 	} else if (subcommand('builder') >= 0) {
 		// The git Builder ships inside the agent binary so every node can build (D47). It runs as its
 		// own unit (`skiff-builder.service`), never inside the agent's sandbox or memory budget.

@@ -236,6 +236,8 @@ export const emailSettingsUpdateSchema = z
 		/** The mail node's public IPv4; found automatically for the edge when left out. */
 		ip: z.string().trim().max(15).nullable().optional(),
 		paused: z.boolean().optional(),
+		/** A custom domain (or URL) for the mail hostnames; null puts them back on the content domain. */
+		mailDomain: z.string().trim().max(2048).nullable().optional(),
 	})
 	.strict();
 

@@ -529,6 +529,7 @@ reporting online, and ports never change. A node holds at most 1,000 endpoints.
 |---|---|---|
 | `8081`, `8082`, `8083`, `8084` | S3, database, studio and container-console gateways/fronts (D82, D96, D127) | existing config |
 | `15432–17431` | database host ports, then pooler ports | today |
+| `15000` | the platform registry (zot, docs/REGISTRY.md, D154) | `RegistryService` |
 | `18123` | ClickHouse HTTP | `scripts/systemd/clickhouse.ts` |
 | `19000–19999` | storage instance ports | used today |
 | `21000–21999` | consumer endpoint ports | C2 |
@@ -730,7 +731,7 @@ inherits the share's zone ("down if `home` is down", even with cloud replicas), 
 read-write copies there. That caps a share-backed app at `L2`: a share's zone is always its server
 node's, so the app can never meet §8.1's `L3` requirement of "no share confined to one zone".
 
-**Surfaces and audit.** A **Network shares** page at `/shares`, named so it is not confused with share links (create wizard with probe-before-save, mount status,
+**Surfaces and audit.** A **Network shares** section at Settings → Network shares (`/settings/shares`, was `/shares`), named so it is not confused with share links (create wizard with probe-before-save, mount status,
 grants, rotation) and a `backing: share` option on the project Volumes attach form. Audited:
 `share.create`, `share.update`, `share.delete`, `share.grant`, `share.attach`, `share.detach`,
 `share.mount`, `share.unmount`, `share.mount.fail`, `share.credential.rotate`. Share CRUD is

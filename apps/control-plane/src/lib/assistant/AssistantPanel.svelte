@@ -39,7 +39,7 @@
 		assistant.prefs.includePage
 			? path === '/'
 				? 'This page: overview'
-				: `This page: ${path.startsWith('/shares') ? `network ${path.slice(1)}` : path.slice(1)}`
+				: `This page: ${path.startsWith('/settings/shares') ? 'settings/network shares' : path.slice(1)}`
 			: 'Page hidden'
 	);
 
@@ -61,7 +61,7 @@
 		if (path.startsWith('/storage')) {
 			return ['Which buckets are public?', 'How do I give an app a scoped bucket key?'];
 		}
-		if (path.startsWith('/shares')) {
+		if (path.startsWith('/settings/shares')) {
 			return [
 				'How are network shares different from share links?',
 				'How do I mount a network share into an app?'

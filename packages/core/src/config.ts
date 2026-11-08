@@ -92,6 +92,11 @@ export interface CoreConfig {
 	/** Injected GitHub API transport for tests (plan 21); production uses the global fetch. */
 	githubFetch?: typeof fetch;
 	/**
+	 * Injected container-registry transport for deploy-time digest pinning (docs/REGISTRY.md R1).
+	 * Production uses the global fetch; under `bun test` pinning is skipped unless this is set.
+	 */
+	registryFetch?: typeof fetch;
+	/**
 	 * Resolved `SKIFF_FEATURE_*` flags. Optional so existing tests and embedders keep working;
 	 * services must read them through `featureEnabled`, which falls back to the registry defaults.
 	 */

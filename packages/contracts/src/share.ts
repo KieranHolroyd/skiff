@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import { SLUG_PATTERN } from './slugs.ts';
 import { volumeNameSchema } from './volume.ts';
+import type { VolumeProfileView } from './storage-pool.ts';
 
 /**
  * Cluster shares (docs/CLUSTERING.md §5.2, C3). Platform-level network filesystem definitions.
@@ -193,7 +194,7 @@ export interface ShareMountView {
 	/** Requested volume name; set until the link happens (or when it is linked). */
 	volumeName: string | null;
 	/** The linked node volume, once adopted. */
-	volume: { id: string; name: string; status: string } | null;
+	volume: { id: string; name: string; status: string; profile: VolumeProfileView | null } | null;
 	mountedAt: string | null;
 	createdAt: string;
 	updatedAt: string;

@@ -16,6 +16,7 @@ import {
 	parseActivation,
 	parseApplyRequest,
 	parseWorkload,
+	renderRegistryAuthFile,
 	storageAlias,
 	storageImage,
 	ValidationError,
@@ -452,6 +453,52 @@ describe('parseActivation', () => {
 		const parsed = parseApplyRequest({ workload: workloadInput(), activation: activationInput() });
 		expect(parsed.workload.id).toBe('wld_abc123');
 		expect(parsed.activation.env.DATABASE_URL).toBe('postgres://example');
+	});
+});
+
+describe('registry credentials (docs/REGISTRY.md R2)', () => {
+	const container = () =>
+		parseWorkload(
+			workloadInput({
+				runtime: 'container',
+				release: null,
+				image: 'ghcr.io/acme/app@sha256:' + 'c'.repeat(64),
+				socketActivation: false,
+				upstream: '127.0.0.1:3000',
+			}),
+		);
+	const auth = [{ registry: 'ghcr.io', username: 'robot', password: 'pat:with:colons' }];
+
+	test('accepts credentials for a container and renders containers-auth.json', () => {
+		const activation = parseActivation(activationInput({ registryAuth: auth }), container());
+		expect(activation.registryAuth).toEqual(auth);
+		const file = JSON.parse(renderRegistryAuthFile(activation.registryAuth!));
+		expect(Buffer.from(file.auths['ghcr.io'].auth, 'base64').toString()).toBe('robot:pat:with:colons');
+	});
+
+	test('omits the field when empty or absent', () => {
+		expect('registryAuth' in parseActivation(activationInput(), container())).toBe(false);
+		expect('registryAuth' in parseActivation(activationInput({ registryAuth: [] }), container())).toBe(false);
+	});
+
+	test('refuses credentials for other runtimes and malformed entries', () => {
+		expect(() => parseActivation(activationInput({ registryAuth: auth }), parseWorkload(workloadInput()))).toThrow(
+			/only for container/,
+		);
+		const bad = (entry: Record<string, unknown>) =>
+			parseActivation(activationInput({ registryAuth: [{ ...auth[0], ...entry }] }), container());
+		expect(() => bad({ registry: 'https://ghcr.io' })).toThrow(/registry host/);
+		expect(() => bad({ username: 'a:b' })).toThrow(/contains ":"/);
+		expect(() => bad({ password: '' })).toThrow(ValidationError);
+		expect(() =>
+			parseActivation(activationInput({ registryAuth: [auth[0], auth[0]] }), container()),
+		).toThrow(/repeats/);
+		expect(() =>
+			parseActivation(
+				activationInput({ registryAuth: Array.from({ length: 9 }, (_, i) => ({ ...auth[0], registry: `r${i}.io` })) }),
+				container(),
+			),
+		).toThrow(/at most 8/);
 	});
 });
 

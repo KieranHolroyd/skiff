@@ -28,6 +28,11 @@ import {
 	shareGrantsSchema,
 	shareMountCreateSchema,
 	shareMountLinkSchema,
+	storageOnboardingSchema,
+	storagePoolCreateSchema,
+	storagePoolUpdateSchema,
+	storageDefaultsSchema,
+	storageVolumePoolSchema,
 	type ItemStatus,
 	type ItemVerdict,
 	type OperationKind,
@@ -278,6 +283,53 @@ const api: RequestHandler = async (event) => {
 					promote: input.promote,
 					message: input.message,
 				});
+			}
+			return json({ error: 'not_found' }, 404);
+		}
+
+		// --- storage pools and default storage (platform admin; docs/STORAGE.md, D144) -------
+		// Under /platform/storage: /storage is object storage.
+		if (segments[0] === 'platform' && segments[1] === 'storage') {
+			const sub = segments.slice(1);
+			if (sub.length === 1) {
+				if (method === 'GET') return core.storagePools.overview(principal);
+				return json({ error: 'method_not_allowed' }, 405);
+			}
+			if (sub[1] === 'pools') {
+				if (sub.length === 2) {
+					if (method === 'POST')
+						return json(core.storagePools.createPool(principal, await readJson(request, storagePoolCreateSchema)), 201);
+					return json({ error: 'method_not_allowed' }, 405);
+				}
+				if (sub.length === 4 && sub[3] === 'profile') {
+					if (method === 'POST') return json(core.storagePools.profilePool(principal, sub[2]!), 202);
+					return json({ error: 'method_not_allowed' }, 405);
+				}
+				if (sub.length === 3) {
+					if (method === 'PATCH')
+						return core.storagePools.updatePool(principal, sub[2]!, await readJson(request, storagePoolUpdateSchema));
+					if (method === 'DELETE') return core.storagePools.deletePool(principal, sub[2]!);
+					return json({ error: 'method_not_allowed' }, 405);
+				}
+			}
+			if (sub[1] === 'defaults' && sub.length === 2) {
+				if (method === 'PUT') return { defaults: core.storagePools.setDefaults(principal, await readJson(request, storageDefaultsSchema)) };
+				return json({ error: 'method_not_allowed' }, 405);
+			}
+			if (sub[1] === 'volumes' && sub.length === 4 && sub[3] === 'profile') {
+				if (method === 'POST') return json(core.storagePools.profileVolume(principal, sub[2]!), 202);
+				return json({ error: 'method_not_allowed' }, 405);
+			}
+			if (sub[1] === 'volumes' && sub.length === 4 && sub[3] === 'pool') {
+				if (method === 'PUT') {
+					const input = await readJson(request, storageVolumePoolSchema);
+					return { pool: core.storagePools.setVolumePool(principal, sub[2]!, input.pool) };
+				}
+				return json({ error: 'method_not_allowed' }, 405);
+			}
+			if (sub[1] === 'onboarding' && sub.length === 2) {
+				if (method === 'POST') return core.storagePools.setOnboarding(principal, await readJson(request, storageOnboardingSchema));
+				return json({ error: 'method_not_allowed' }, 405);
 			}
 			return json({ error: 'not_found' }, 404);
 		}

@@ -1,5 +1,5 @@
 import { and, eq } from 'drizzle-orm';
-import { appVolumes, databases, nodeVolumes, nodes, shareMounts, storageInstances } from '@skiff/db';
+import { appVolumes, databases, nodeVolumes, nodes, shareMounts, storageInstances, volumeProfiles } from '@skiff/db';
 import {
 	VOLUME_ID_PREFIX,
 	canAdministerPlatform,
@@ -263,6 +263,7 @@ export class VolumeService {
 		const now = this.ctx.now();
 		this.ctx.db.transaction(() => {
 			this.ctx.db.delete(nodeVolumes).where(eq(nodeVolumes.id, row.id)).run();
+			this.ctx.db.delete(volumeProfiles).where(eq(volumeProfiles.volumeId, row.id)).run();
 			// A share mount linked to this volume stays mounted but must not re-link itself.
 			this.ctx.db
 				.update(shareMounts)
@@ -294,6 +295,11 @@ export class VolumeService {
 			.all()
 			.map((item) => `app volume ${item.name}`)
 			.sort();
+		// Node-level storage defaults (docs/STORAGE.md §3.2) may have put builds or site data here.
+		for (const kind of ['site-data', 'builds'] as const) {
+			const dir = this.ctx.storagePools.nodeDirectory(kind, row.nodeId);
+			if (dir?.startsWith(`${row.mountPath}/`)) apps.push(kind === 'builds' ? 'the node\'s builds' : 'the node\'s site data');
+		}
 		const holders = [...onVolume.storage, ...onVolume.databases, ...apps];
 		if (holders.length > 0)
 			throw new ConflictError(`Volume "${row.name}" still holds ${holders.join(', ')}. Move or delete them first.`);

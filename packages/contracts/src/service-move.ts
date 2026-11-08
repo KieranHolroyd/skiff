@@ -7,8 +7,10 @@ import * as z from 'zod';
 export const serviceMoveSchema = z.object({
 	/** Target node id. */
 	node: z.string().min(1).max(64),
-	/** Databases only: a volume on the target node; omitted uses the target's default volume. */
+	/** Databases only: a volume on the target node; omitted keeps the current storage pool (docs/STORAGE.md §8). */
 	volume: z.string().min(3).max(40).optional(),
+	/** Storage pool on the target node; omitted keeps the resource's current pool. */
+	pool: z.string().trim().min(2).max(40).optional(),
 	/**
 	 * Databases only: where the target's data comes from. `dump` (default) takes a final backup of
 	 * the running database. For one that is failed, stopped or on an offline node, `latest-backup`

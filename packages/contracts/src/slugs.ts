@@ -15,6 +15,10 @@ export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
 	'cloud', 'api', 'mcp', 'auth', 'www', 'admin', 'status', 'mail', 'login',
 	'static', 'assets', 'cdn', 'control', 'preview', 'previews', 'staging',
 	'skiff', 'skif', '_', '_skiff', 'well-known', 'internal', 'system', 'support', 'billing',
+	// Mail hostnames live on the content domain by default (`mx1.`, `smtp.`, `bounces.`; EMAIL.md §3.3).
+	'mx1', 'smtp', 'bounces',
+	// The platform registry's default host is `registry.<contentDomain>` (docs/REGISTRY.md §3.3).
+	'registry',
 ]);
 
 export type SlugProblem = 'length' | 'characters' | 'double-hyphen' | 'reserved' | 'taken';

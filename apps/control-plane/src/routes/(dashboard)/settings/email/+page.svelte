@@ -3,6 +3,7 @@
 	import { resolve } from '$app/paths';
 	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
 	import GaugeIcon from '@lucide/svelte/icons/gauge';
+	import GlobeIcon from '@lucide/svelte/icons/globe';
 	import ListChecksIcon from '@lucide/svelte/icons/list-checks';
 	import PauseIcon from '@lucide/svelte/icons/pause';
 	import ServerIcon from '@lucide/svelte/icons/server';
@@ -53,16 +54,20 @@
 
 	let nodeId = $state('');
 	let ipInput = $state('');
+	let domainInput = $state('');
 	let paused = $state(false);
 	let orgState = $state('sandbox');
 	$effect.pre(() => {
 		nodeId = data.settings.nodeId ?? '';
 		ipInput = data.settings.ip ?? '';
+		domainInput = data.settings.mailDomainSource === 'custom' ? data.settings.mailDomain : '';
 		paused = data.settings.paused;
 		orgState = data.emailOrg?.state ?? 'sandbox';
 	});
 
 	let savingNode = $state(false);
+	let savingDomain = $state(false);
+	const customDomain = $derived(settings.mailDomainSource === 'custom' ? settings.mailDomain : '');
 	let savingOrg = $state(false);
 
 	async function togglePause(next: boolean) {
@@ -194,6 +199,71 @@
 		Preflight checks (port 25 egress, inbound reachability, FCrDNS, blocklists) are not run from the
 		dashboard yet; check them from the node before sending real mail.
 	{/snippet}
+</Panel>
+
+<Panel
+	title="Mail domain"
+	icon={GlobeIcon}
+	description="The domain the mail node's host names live under. By default it is the content domain, {settings.contentDomain}; set a custom one to send from somewhere else."
+>
+	<form
+		method="POST"
+		action="?/domain"
+		class="flex flex-wrap items-end gap-3"
+		use:enhance={() => {
+			savingDomain = true;
+			return async ({ result, update }) => {
+				await update({ reset: false });
+				savingDomain = false;
+				notify(result);
+			};
+		}}
+	>
+		<Field.Field class="min-w-64 flex-1">
+			<Field.Label for="mail-domain">Custom domain</Field.Label>
+			<InputGroup.Root>
+				<InputGroup.Input
+					id="mail-domain"
+					name="mailDomain"
+					bind:value={domainInput}
+					placeholder={settings.contentDomain}
+					autocomplete="off"
+					spellcheck="false"
+					class="font-mono"
+					disabled={!data.enabled}
+				/>
+			</InputGroup.Root>
+		</Field.Field>
+		<Button
+			type="submit"
+			disabled={!data.enabled || savingDomain || domainInput.trim() === customDomain}
+		>
+			{#if savingDomain}<Spinner />{/if}
+			Save
+		</Button>
+		{#if settings.mailDomainSource === 'custom'}
+			<Button
+				type="submit"
+				name="reset"
+				value="1"
+				variant="outline"
+				disabled={!data.enabled || savingDomain}>Use content domain</Button
+			>
+		{/if}
+	</form>
+	<p class="mt-3 text-xs text-muted-foreground">
+		{#if settings.mailDomainSource === 'content'}
+			Using the content domain: mail goes out as <code class="font-mono">{hostnames.helo}</code>.
+		{:else if settings.mailDomainSource === 'env'}
+			Set by <code class="font-mono">SKIFF_MAIL_DOMAIN</code> to
+			<code class="font-mono">{settings.mailDomain}</code>. A custom domain saved here takes over
+			from it.
+		{:else}
+			Using <code class="font-mono">{settings.mailDomain}</code>.
+		{/if}
+		A domain or a URL works. Changing it moves every host name below: update the PTR, publish the new
+		records, and re-check organisations' SPF and MX records, which name the old hosts.
+	</p>
 </Panel>
 
 {#if settings.nodeId}

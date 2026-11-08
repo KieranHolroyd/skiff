@@ -55,6 +55,9 @@ export class MaintenanceService {
 		this.ctx.brokers.requestExpiredPurges();
 		// App volumes: trash purge, snapshot/restore timeouts, snapshots of purged volumes (VOLUMES.md §14).
 		await this.ctx.appVolumes.lifecycle.tick().catch((error: unknown) => console.error('[maintenance] app volumes:', error));
+		// Pipelines: lapsed leases, `schedule:` triggers, expired artifacts and caches (docs/PIPELINES.md).
+		this.ctx.pipelines.tickSchedules();
+		await this.ctx.pipelines.engine.prune().catch((error: unknown) => console.error('[maintenance] pipelines:', error));
 		// Event deliveries nobody could publish for a day fail; old history goes (D122).
 		this.ctx.events.sweep();
 		// Queue and function tools: fail tasks no node ran, drop results after an hour (D124).
@@ -69,6 +72,10 @@ export class MaintenanceService {
 		await this.ctx.domains.recheckDue().catch(() => undefined);
 		// Cheap, certain cleanup runs every sweep; prune is the on-demand deep backstop.
 		this.cleanupRows();
+		// Registry repository sizes for usage and the push quota; throttled to hourly inside.
+		void this.ctx.registry.sampleUsage().catch((error: unknown) => console.warn('[registry] usage sample failed:', error));
+		// Signing keys reach zot once it runs (G5); retried until they land.
+		void this.ctx.registry.syncTrustKeys().catch(() => undefined);
 		this.ctx.releases.gcSnapshots(operationLimits.pruneGraceMs);
 		this.ctx.operations.expireAndPrune();
 		// Rename redirects older than 30 days release their slug (DESIGN §5.1).
@@ -307,6 +314,8 @@ export class MaintenanceService {
 	cleanupRows(): void {
 		const cutoff = this.ctx.now() - this.ctx.policies.deletedHistoryMs();
 		this.ctx.db.delete(deployments).where(lt(deployments.deletedAt, cutoff)).run();
+		// Registry pins of deployments that are gone stop protecting their digest (R11).
+		void this.ctx.registry.sweepPins().catch((error) => console.warn('[registry] pin sweep failed:', error));
 		this.ctx.db.delete(shareRedemptions).where(lt(shareRedemptions.expiresAt, cutoff)).run();
 		this.ctx.db.delete(shareLinks).where(lt(shareLinks.revokedAt, cutoff)).run();
 	}

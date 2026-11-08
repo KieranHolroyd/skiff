@@ -4,7 +4,10 @@ import * as z from 'zod';
 import { CONFIRM_TOOLS, needsConfirmation, validateToolArgs } from './confirm-policy';
 
 const mcpSource = readFileSync(new URL('../mcp.ts', import.meta.url), 'utf8');
-const registered = new Set([...mcpSource.matchAll(/\n\ttool\(\n\t\t'([a-z_]+)',/g)].map((match) => match[1]));
+// Pipelines tools are declared in ../mcp-pipelines.ts and registered by mcp.ts in a loop.
+const pipelineSource = readFileSync(new URL('../mcp-pipelines.ts', import.meta.url), 'utf8');
+const pipelineToolNames = [...pipelineSource.matchAll(/\n\t\t\tname: '([a-z_]+)',/g)].map((match) => match[1]);
+const registered = new Set([...[...mcpSource.matchAll(/\n\ttool\(\n\t\t'([a-z_]+)',/g)].map((match) => match[1]), ...pipelineToolNames]);
 
 describe('assistant confirmation policy', () => {
 	test('production-changing tools need a click even when not annotated destructive', () => {

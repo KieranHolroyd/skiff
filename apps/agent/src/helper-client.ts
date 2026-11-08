@@ -17,6 +17,7 @@ import {
 import type { HelperNodeUpdateApi } from './node-update.ts';
 import type { HelperMailApi } from './mail-bridge.ts';
 import type { HelperShareApi } from './share-mounts.ts';
+import type { HelperVolumeProfileApi } from './volume-profiles.ts';
 import type { HelperJobApi, HelperJobStatus } from './jobs.ts';
 
 /**
@@ -172,6 +173,8 @@ const APPLY_TIMEOUT_MS = 90_000;
 const REMOVE_TIMEOUT_MS = 60_000;
 /** Stopping Postgres (TimeoutStopSec=120) plus deleting a large data dir. */
 const PURGE_TIMEOUT_MS = 300_000;
+/** Removing many images can take a while; the agent never waits on it during a reconcile. */
+const IMAGE_PRUNE_TIMEOUT_MS = 300_000;
 const STATUS_TIMEOUT_MS = 2_000;
 /** `systemctl stop` waits for the unit's TimeoutStopSec; a restart is the same plus a start. */
 const LIFECYCLE_TIMEOUT_MS = 120_000;
@@ -200,7 +203,8 @@ export class HelperClient
 		HelperNodeUpdateApi,
 		HelperMailApi,
 		HelperAppVolumeApi,
-		HelperShareApi
+		HelperShareApi,
+		HelperVolumeProfileApi
 {
 	constructor(
 		readonly socketPath: string,
@@ -511,6 +515,30 @@ export class HelperClient
 		};
 	}
 
+	/** Benchmark one registered volume (docs/STORAGE.md §5); the helper resolves the path. */
+	async profileVolume(
+		input: { volumeId: string; sizeMb: number; runtimeSeconds: number },
+		signal?: AbortSignal,
+	): Promise<Awaited<ReturnType<HelperVolumeProfileApi['profileVolume']>>> {
+		// Five fio jobs of `runtimeSeconds` each, plus laying out the scratch file.
+		const timeoutMs = Math.min(15 * 60_000, (input.runtimeSeconds + 2) * 5 * 1000 + 5 * 60_000);
+		const body = asRecord(await this.request('POST', '/v1/volumes/profile', input, timeoutMs, signal));
+		if (body.ok !== true) throw new Error(typeof body.error === 'string' ? body.error : 'volume profile failed');
+		const profile = asRecord(body.profile);
+		const num = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null);
+		return {
+			method: profile.method === 'fio' || profile.method === 'dd' ? profile.method : null,
+			seqReadMBps: num(profile.seqReadMBps),
+			seqWriteMBps: num(profile.seqWriteMBps),
+			randReadIops: num(profile.randReadIops),
+			randWriteIops: num(profile.randWriteIops),
+			syncWriteIops: num(profile.syncWriteIops),
+			syncWriteLatencyUs: num(profile.syncWriteLatencyUs),
+			direct: typeof profile.direct === 'boolean' ? profile.direct : null,
+			notes: Array.isArray(profile.notes) ? profile.notes.filter((note): note is string => typeof note === 'string').map((note) => note.slice(0, 300)).slice(0, 10) : [],
+		};
+	}
+
 	/** Replace the helper's volume registry from desired state (D74). */
 	async syncVolumes(volumes: NodeVolumeDesired[], signal?: AbortSignal): Promise<void> {
 		await this.request('POST', '/v1/volumes/registry', { volumes }, VOLUME_TIMEOUT_MS, signal);
@@ -600,6 +628,24 @@ export class HelperClient
 			const text = await response.text().catch(() => '');
 			throw new HelperError(`helper restore ${volume.id} -> ${response.status}${text ? `: ${text.slice(0, 500)}` : ''}`);
 		}
+	}
+
+	/** Point Podman's mirrors at the platform registry, or remove them with no upstreams (G4). */
+	async applyRegistryMirror(request: { host: string; upstreams: string[]; username: string; password: string }): Promise<void> {
+		await this.request('POST', '/v1/registry/mirror', request, SLICE_TIMEOUT_MS);
+	}
+
+	/** Remove images no unit or container needs (docs/REGISTRY.md R3). Local images are kept. */
+	async pruneImages(): Promise<{ removed: number; kept: number; reclaimedBytes: number; failed: number }> {
+		const body = asRecord(await this.request('POST', '/v1/images/prune', {}, IMAGE_PRUNE_TIMEOUT_MS));
+		const count = (value: unknown) => (Array.isArray(value) ? value.length : 0);
+		const number = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : 0);
+		return {
+			removed: count(body.removed),
+			kept: number(body.kept),
+			reclaimedBytes: number(body.reclaimedBytes),
+			failed: count(body.failed),
+		};
 	}
 
 	async status(id: string): Promise<HelperWorkloadStatus> {

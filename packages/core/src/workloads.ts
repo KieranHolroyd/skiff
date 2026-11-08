@@ -6,6 +6,7 @@ import {
 	githubRunnerTarget,
 	orgNetworkName,
 	parseWorkloadReplicaId,
+	pinnedImageReference,
 	processIdleStopIssue,
 	functionIsPython,
 	FUNCTIONS_PYTHON_CAPABILITY,
@@ -213,10 +214,22 @@ export class WorkloadService {
 			throw new ValidationError(
 				`Project "${project.slug}" is static. Create it with runtime "process", "container" or "function" to run a workload.`,
 			);
-		const spec = workloadSpecSchema.parse({ ...input, runtime });
+		// The digest is Skiff's to set at deploy time (R1); an input never carries one.
+		const { imageDigest: _ignored, ...specInput } = input as WorkloadSpecInput & { imageDigest?: string };
+		const spec = workloadSpecSchema.parse({ ...specInput, runtime });
 		this.assertEnvResolvable(project, spec);
 		this.assertRunnerResolvable(project, spec);
 		const existing = this.ctx.db.select().from(workloads).where(eq(workloads.projectId, project.id)).get();
+		// The running workload keeps its pinned digest while the image is unchanged, so saving other
+		// fields neither restarts it on a moved tag nor drops the pin. A new image runs by tag until
+		// the next deploy pins it.
+		const runningDigest = existing
+			? workloadSpecSchema.safeParse(parseJson<unknown>(existing.specJson, null)).data
+			: undefined;
+		const liveSpec: WorkloadSpec =
+			runningDigest?.imageDigest && runningDigest.image === spec.image
+				? { ...spec, imageDigest: runningDigest.imageDigest }
+				: spec;
 		this.ctx.quota.assertCanAdmitMemory(
 			project.orgId,
 			project.id,
@@ -231,7 +244,7 @@ export class WorkloadService {
 			this.ctx.db
 				.update(workloads)
 				.set({
-					specJson: JSON.stringify(spec),
+					specJson: JSON.stringify(liveSpec),
 					runtime: storedWorkloadRuntime(spec.runtime),
 					runtimeName: spec.runtime,
 					memoryMb: reservedMemoryMb(spec),
@@ -536,7 +549,7 @@ export class WorkloadService {
 				...(spec.command ? { command: spec.command } : {}),
 				// Node apps only (D125): every Bun workload's desired state stays byte-for-byte the same.
 				...(spec.runtime === 'process' && spec.engine === 'node' ? { engine: 'node' as const } : {}),
-				...(spec.image ? { image: spec.image } : {}),
+				...(spec.image ? { image: desiredImage(spec) } : {}),
 				// A function owns a socket per replica (phase 4). Replica 0 keeps the workload id, so
 				// a single-host function dials `<workload-id>.sock`, matching the helper's socket unit.
 				upstream:
@@ -697,6 +710,7 @@ export class WorkloadService {
 		if (this.ctx.databases.isDatabaseId(desiredId)) return this.ctx.databases.activation(nodeId, desiredId);
 		if (this.ctx.storage.isStorageId(desiredId)) return this.ctx.storage.activation(nodeId, desiredId);
 		if (this.ctx.brokers.isBrokerId(desiredId)) return this.ctx.brokers.activation(nodeId, desiredId);
+		if (this.ctx.registry.isRegistryId(desiredId)) return this.ctx.registry.activation(nodeId, desiredId);
 		const { workloadId, replica } = parseWorkloadReplicaId(desiredId);
 		const row = this.ctx.db.select().from(workloads).where(eq(workloads.id, workloadId)).get();
 		if (!row) throw new NotFoundError('Workload');
@@ -733,11 +747,14 @@ export class WorkloadService {
 			if (ref.delivery === 'file') files[ref.name] = value.value;
 			else env[ref.name] = value.value;
 		}
+		// Containers pull with the org's credential for the image's registry (R2), if it has one.
+		const registryAuth = spec.runtime === 'container' ? this.ctx.registryCredentials.authForImage(row.orgId, spec.image, desiredId) : [];
 		return {
 			workloadId: desiredId,
 			activationVersion: activationVersion(spec, this.attachmentsVersion(row.projectId, row.nodeId, spec.runtime, row.orgId, spec)),
 			env,
 			files,
+			...(registryAuth.length > 0 ? { registryAuth } : {}),
 		};
 	}
 
@@ -849,6 +866,9 @@ export class WorkloadService {
 			// A function's socket follows the workload id (phase 4). Recomputed from the row id so a
 			// row written before this change still reports the socket the helper now creates.
 			upstream: (spec?.runtime === 'function' ? upstreamFor(row.id, spec) : null) ?? row.upstream,
+			// Containers (R1): the image as configured and the digest the running deployment pinned.
+			image: spec?.image ?? null,
+			imageDigest: spec?.imageDigest ?? null,
 			message: row.message,
 			createdAt: new Date(row.createdAt).toISOString(),
 			updatedAt: new Date(row.updatedAt).toISOString(),
@@ -1127,6 +1147,8 @@ export function activationVersion(spec: WorkloadSpec, databases = ''): string {
 			secrets: spec.secrets,
 			command: spec.command,
 			image: spec.image,
+			// Only pinned deployments carry it (R1), so every existing workload keeps its version.
+			...(spec.imageDigest ? { imageDigest: spec.imageDigest } : {}),
 			port: spec.port,
 			...(databases ? { databases } : {}),
 			// Only present when set, so existing workloads keep their version (no restart on upgrade).
@@ -1138,6 +1160,15 @@ export function activationVersion(spec: WorkloadSpec, databases = ''): string {
 			...(spec.function ? { function: spec.function } : {}),
 		}),
 	);
+}
+
+/**
+ * The image reference a node runs: `<registry>/<repository>@<digest>` once a deploy pinned it (R1),
+ * else the image as configured (local images, runners, deployments from before pinning).
+ */
+export function desiredImage(spec: Pick<WorkloadSpec, 'image' | 'imageDigest'>): string | undefined {
+	if (!spec.image) return undefined;
+	return spec.imageDigest ? pinnedImageReference(spec.image, spec.imageDigest) : spec.image;
 }
 
 /** Capabilities a node reported in its last heartbeat; empty for agents that predate them. */

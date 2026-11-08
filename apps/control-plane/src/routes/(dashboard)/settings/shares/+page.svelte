@@ -13,11 +13,15 @@
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
 	import { Textarea } from '#lib/components/ui/textarea/index.js';
-	import EmptyState from '../_lib/EmptyState.svelte';
+	import EmptyState from '../../_lib/EmptyState.svelte';
 	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
 	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
-	import PageHeader from '../_lib/PageHeader.svelte';
+	import SettingsHeader from '../_lib/SettingsHeader.svelte';
 	import { askConfirm } from '#lib/confirm.svelte.js';
+	import { runAction } from '#lib/actions.js';
+	import { invalidateAll } from '$app/navigation';
+	import GaugeIcon from '@lucide/svelte/icons/gauge';
+	import VolumeProfileStats from '#lib/components/skiff/VolumeProfileStats.svelte';
 	import type { Tone } from '#lib/status.js';
 	import type { PageProps } from './$types';
 
@@ -36,6 +40,18 @@
 	let activeMount = $state<ShareMountView | null>(null);
 	let grantText = $state('');
 	let mountLink = $state(true);
+
+	// Refresh while a linked mount is being profiled, so results appear without a reload.
+	const profiling = $derived(
+		data.shares.some((share) =>
+			share.mounts.some((mount) => mount.volume?.profile?.status === 'queued' || mount.volume?.profile?.status === 'running')
+		)
+	);
+	$effect(() => {
+		if (!profiling) return;
+		const timer = setInterval(() => void invalidateAll(), 4_000);
+		return () => clearInterval(timer);
+	});
 
 	const mountTones: Record<ShareMountView['status'], Tone> = {
 		pending: 'info',
@@ -109,15 +125,14 @@
 	}
 </script>
 
-<svelte:head><title>Network shares · Skiff</title></svelte:head>
-
-<PageHeader
-	title="Network shares"
-	description="NFS and SMB filesystems: define the share once, mount it on the nodes that need it, and link a mount to Skiff as a volume so databases, storage and app volumes can live on it. Looking for a link that lets someone view a protected site? Share links live on each project's Share links tab."
-	target="network-shares.header"
+<SettingsHeader
+	id="shares"
+	description="Define an NFS export or SMB share once, mount it on the nodes that need it, and link a mount to Skiff as a volume so it can join a storage pool. Looking for a link that lets someone view a protected site? Share links live on each project's Share links tab."
 >
-	<Button size="sm" onclick={() => (addOpen = true)}><PlusIcon />Add network share</Button>
-</PageHeader>
+	{#snippet actions()}
+		<Button size="sm" onclick={() => (addOpen = true)}><PlusIcon />Add network share</Button>
+	{/snippet}
+</SettingsHeader>
 
 {#if data.denied}
 	<EmptyState
@@ -189,10 +204,19 @@
 									{#if mount.message}
 										<div class="text-xs text-destructive">{mount.message}</div>
 									{/if}
+									{#if mount.volume?.profile}<VolumeProfileStats profile={mount.volume.profile} />{/if}
 								</div>
 								{#if mount.status !== 'unmounting'}
 									<div class="flex flex-wrap gap-1">
 										{#if mount.volume}
+											<Button
+												variant="outline"
+												size="xs"
+												disabled={mount.volume.profile?.status === 'queued' || mount.volume.profile?.status === 'running'}
+												onclick={() => void runAction('?/profile', { volumeId: mount.volume!.id, name: share.name })}
+											>
+												<GaugeIcon class="size-3.5" />Profile
+											</Button>
 											<Button variant="ghost" size="xs" onclick={() => unlink(share, mount)}>Unlink volume</Button>
 										{:else if !mount.volumeName && !share.readOnly}
 											<Button variant="outline" size="xs" onclick={() => openLink(share, mount)}>

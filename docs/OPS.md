@@ -338,7 +338,7 @@ mail node (the unit sets the paths). None of them is secret: DKIM keys and crede
 
 | Variable | Where | Default | Meaning |
 |---|---|---|---|
-| `SKIFF_MAIL_DOMAIN` | `skiff.env` | Cloudflare zone, else the platform host's parent | Domain for `mx1.`, `mx.`, `smtp.`, `bounces.` and `_spf.` (D116). |
+| `SKIFF_MAIL_DOMAIN` | `skiff.env` | The content domain | Custom domain for `mx1.`, `mx.`, `smtp.`, `bounces.` and `_spf.` (D116). A mail domain saved in **Settings → Email** overrides it. |
 | `SKIFF_FEATURE_EMAIL` | `skiff.env` | `1` | `0` hides Email and refuses sends; a running `skiff-mail` keeps draining its spool. |
 | `SKIFF_MAIL_LISTEN` | `mail.env` | `0.0.0.0` | Listen address for the SMTP ports. |
 | `SKIFF_MAIL_PORT_INBOUND` / `_SUBMISSION` / `_SUBMISSIONS` | `mail.env` | `25` / `587` / `465` | Ports; `off` disables one. Submission stays off until a certificate exists. |
@@ -474,6 +474,20 @@ checkout with `SKIFF_SOURCE_DIR=/path/to/skiff`.
    clone's environment only; host keys are pinned by `SKIFF_GIT_SSH_KNOWN_HOSTS` or recorded on
    first use in `/var/lib/skiff-builder/known_hosts`. `.git`
    directories and the build's scratch `HOME` are never included in the artifact.
+   The same daemon runs **pipeline** jobs ([PIPELINES.md](./PIPELINES.md), D148–D153, D160–D162),
+   set in `/etc/skiff/agent.env`: `SKIFF_PIPELINES=false` turns them off; `SKIFF_PIPELINE_MAX_JOBS`
+   (default 1) is how many run at once; `SKIFF_PIPELINE_LABELS` adds `runs-on` labels to the
+   automatic ones (`linux`, `x64`/`arm64`, `self-hosted`, the node name, `oci-build`).
+   `SKIFF_PIPELINE_ISOLATION` is `auto` (default), `container` or `sandbox`. `auto` asks skiff-helper
+   (`GET /v1/pipeline/capabilities`) and, when it answers with a working Podman, runs each job in a
+   per-job container the helper starts (D151), otherwise in the git-build sandbox as `skiff-build`.
+   Job containers, their services and the per-job BuildKit sidecar live under the Builder's build
+   directory; the helper copies `buildctl` out of the pinned BuildKit image once into `tools/`, and
+   BuildKit caches live in `buildkit-cache/<scope>`. The node reports which OCI runtimes it has:
+   install gVisor (`runsc`, from `gvisor.tar.bz2`) and register it with Podman to offer the `gvisor`
+   tier; the `microvm` tier needs a Podman-usable Kata runtime and `/dev/kvm`.
+   `SKIFF_PIPELINE_CONTROL_URL` is the control-plane URL as seen from inside a job container when it
+   differs. Jobs heartbeat every 15 s; a job whose node stops responding for 60 s fails.
 10. **Health** — waits for the public platform URL, then, while no owner exists, prints the
    one-time setup link (`https://<platform>/setup?token=…`, §3.5). `--admin-email` only prefills
    the wizard's email field.

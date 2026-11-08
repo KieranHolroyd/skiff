@@ -178,12 +178,43 @@ The flow has a few limits you may notice:
 
 Message bodies are cut to 16 KiB in a peek. A test request to a function can carry up to 1 MiB of body, and the response is cut at 256 KiB.
 
+## Storage
+
+Skiff asks where data should live before you deploy anything. Setup ends with a **Storage** step, and you can change it at any time under **Settings → Storage**. If you skip it, everything stays on each node's system disk, as before.
+
+Storage is set up in three layers:
+
+| Layer | What it is | Example |
+| --- | --- | --- |
+| Volume | One mounted filesystem on one node: a disk, an array, a ZFS dataset, or a [network share](#network-shares). | `homelab / disk1` at `/mnt/disk1` |
+| Pool | A named group of volumes, on one node or several. Every node's system disk is the built-in `system` pool. | `ssd` = the NVMe drive on every node |
+| Default | The pool each kind of service starts with. You can pick another when you create the service. | Databases → `ssd`; object storage → `hdd` |
+
+1. Mount the disk on the node with your usual tools. Under **Disks and volumes**, select **Adopt**. Skiff never formats a disk; it only creates its own `skiff/` folder inside.
+2. Select **New pool**, name it (for example `ssd` or `hdd`) and tick its volumes. **Most free** spreads data across the volumes. **Fill up** uses one volume until it reaches the **Keep free** threshold, which defaults to 10 %.
+3. Under **Default storage**, pick a pool for each kind of service, or select **Suggest from pools**, then select **Save defaults**.
+
+| Service | What it covers |
+| --- | --- |
+| Databases | Managed databases, read replicas and moved databases |
+| Object storage | S3-compatible storage instances |
+| Queues | Message broker data |
+| App volumes | Persistent directories mounted into apps |
+| Builds | Builder scratch space. Local volumes only. |
+| Site data | Agent state and the static release cache. Local volumes only. |
+
+To see how fast each pool really is, select **Profile** on the pool. Each volume in it is benchmarked in turn: sequential read and write speed, random 4 KiB read and write IOPS, and the latency of a synced write, which is what a database commit waits for. A profile takes about a minute per volume and works the disk hard while it runs, so pick a quiet moment. The IOPS figures come from `fio`. The installer installs it, and nodes installed earlier get it when they next update. On a node without it you still get sequential speed and synced-write latency. You can also profile a single volume, or a linked network share from **Settings → Network shares**.
+
+You choose where a service is stored when you create it. The create forms for databases, object storage, queues and app volumes have a **Storage** field that lists your pools, with the default already selected. A service is only placed on a node that has a volume in its pool with room to spare. If no node does, it is not created. Skiff never puts it on a different pool instead.
+
+Changing a default never moves anything that already exists. A database stays on the volume it was created on until you move it, and a moved database stays in its pool on the new node. Builds and site data have no create form, so they always use their default. Changing it moves those folders on each affected node, the same way as changing a node's storage paths.
+
 ## Network shares
 
 A NAS or file server can give a node more storage. Skiff mounts an NFS export or SMB share on the nodes you choose and then registers each mount as a node volume. Databases, storage instances and app volumes can be placed on that volume, the same as a local disk.
 
 1. Install the mount tools on each node that will mount the share: `nfs-common` (Debian and Ubuntu) or `nfs-utils` for NFS, and `cifs-utils` for SMB.
-2. Go to **Network shares → Add network share**. Enter the server and the export path. For SMB, enter the share name with a leading slash, such as `/media`, and a username and password. Leave **Mount read-only** off if Skiff should keep data on the share.
+2. Go to **Settings → Network shares → Add network share**. Enter the server and the export path. For SMB, enter the share name with a leading slash, such as `/media`, and a username and password. Leave **Mount read-only** off if Skiff should keep data on the share.
 3. Select **Mount on node** and pick the node. Keep **Link to Skiff as a volume once mounted** on.
 
 The node mounts the share at `/mnt/skiff-shares/<share name>`. About a minute later the mount shows **Volume `<name>`**, and the volume is listed under that node on the **Nodes** page. If you mounted without linking, select **Link to Skiff** on the mount later.

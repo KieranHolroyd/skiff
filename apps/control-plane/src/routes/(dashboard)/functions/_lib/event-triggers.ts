@@ -7,7 +7,7 @@ export interface QueueTarget {
 }
 
 /** An event rule as a function's console shows it: whether this function consumes its queue yet. */
-export type FunctionEventSource = EventRuleView & { consumed: boolean };
+export type FunctionEventTrigger = EventRuleView & { consumed: boolean };
 
 export const queueKey = (target: QueueTarget) => `${target.broker}/${target.queue}`;
 
@@ -22,9 +22,9 @@ export function parseQueueKey(value: string): QueueTarget | null {
  * The event rules that belong to one function (D122). Events reach a function only through a queue
  * it consumes, so a rule belongs here when it targets one of the function's consumer queues. A rule
  * on a broker attached to the function whose queue no function consumes yet is shown too (flagged
- * `consumed: false`), so a source set up before the consumer is deployed doesn't disappear.
+ * `consumed: false`), so a trigger set up before the consumer is deployed doesn't disappear.
  */
-export function eventSourcesFor(
+export function eventTriggersFor(
 	rules: EventRuleView[],
 	scope: {
 		consumers: QueueTarget[];
@@ -32,10 +32,10 @@ export function eventSourcesFor(
 		/** `broker/queue` keys other functions consume. */
 		consumedElsewhere: Set<string>;
 	}
-): FunctionEventSource[] {
+): FunctionEventTrigger[] {
 	const consumed = new Set(scope.consumers.map(queueKey));
 	const attached = new Set(scope.attachedBrokers);
-	const sources: FunctionEventSource[] = [];
+	const sources: FunctionEventTrigger[] = [];
 	for (const rule of rules) {
 		const key = queueKey(rule);
 		if (consumed.has(key)) sources.push({ ...rule, consumed: true });

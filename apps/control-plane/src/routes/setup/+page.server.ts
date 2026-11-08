@@ -1,5 +1,6 @@
 import { fail, redirect, type Cookies } from '@sveltejs/kit';
 import { auth } from '#lib/server/auth.js';
+import { core } from '#lib/server/core.js';
 import { contentDomain, features, github, objectStoreKind, platformOrigin, sharedDomain, smtp } from '#lib/server/config.js';
 import { sqlite } from '#lib/server/db.js';
 import {
@@ -57,6 +58,23 @@ function instanceFacts() {
 	};
 }
 
+/** What the storage step shows: whether it is still open, and what the nodes offer so far. */
+function storageStep() {
+	const state = core.storagePools.onboardingState();
+	const rows = sqlite
+		.query<{ name: string; volume_inventory_json: string | null }, []>('SELECT name, volume_inventory_json FROM nodes ORDER BY created_at')
+		.all();
+	let mounts = 0;
+	for (const row of rows) {
+		try {
+			mounts += (JSON.parse(row.volume_inventory_json ?? '{}') as { mounts?: unknown[] }).mounts?.length ?? 0;
+		} catch {
+			// An unreadable inventory counts as none.
+		}
+	}
+	return { state, nodes: rows.length, mounts };
+}
+
 function sessionFactor(locals: App.Locals): string | null {
 	return (locals.session as { secondFactor?: string | null } | undefined)?.secondFactor ?? null;
 }
@@ -83,7 +101,9 @@ export const load: PageServerLoad = ({ url, locals, cookies }) => {
 			hasTotp: userHasTotp(userId),
 			/** Better Auth asks for it again before adding an authenticator app. */
 			hasPassword: userHasPassword(userId),
-			instance: instanceFacts()
+			instance: instanceFacts(),
+			/** Storage is the last onboarding step (docs/STORAGE.md §4). */
+			storage: storageStep()
 		};
 	}
 
@@ -159,6 +179,13 @@ export const actions: Actions = {
 		const started = await startTotpEnrolment(event.request.headers, formPassword(await event.request.formData()));
 		if (!started.ok) return fail(400, { totpError: started.message });
 		return { enrolment: started.value };
+	},
+
+	/** Keep everything on each node's system disk for now; Settings → Storage changes it later. */
+	skipStorage: async (event) => {
+		if (!owner(event) || !event.locals.principal) return fail(401, { storageError: 'Sign in first.' });
+		core.storagePools.setOnboarding(event.locals.principal, { state: 'skipped' });
+		redirect(303, '/setup');
 	},
 
 	verifyTotp: async (event) => {

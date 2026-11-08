@@ -27,12 +27,15 @@
 		spec,
 		workload,
 		capacity,
+		registryImages = [],
 		can
 	}: {
 		project: ProjectView;
 		spec: WorkloadSpec | null;
 		workload: WorkloadView | null;
 		capacity: NodeCapacityView[];
+		/** `<host>/<repo>:<lastTag>` suggestions from the platform registry. */
+		registryImages?: string[];
 		can: {
 			manageWorkload: boolean;
 			viewCapacity: boolean;
@@ -178,6 +181,22 @@
 						</dd>
 						<dt>Memory / CPU</dt>
 						<dd class="font-mono text-xs">{workload.memoryMb} MB · {workload.cpus} vCPU</dd>
+						{#if workload.image}
+							<dt>Image</dt>
+							<dd class="min-w-0 text-xs">
+								<p class="truncate font-mono" title={workload.image}>{workload.image}</p>
+								{#if workload.imageDigest}
+									<p class="truncate font-mono text-muted-foreground" title={workload.imageDigest}>
+										pinned to {workload.imageDigest.slice(0, 19)}…
+									</p>
+								{:else}
+									<p class="text-muted-foreground">
+										<Badge variant="outline">not pinned</Badge>
+										runs the tag; deploy again to pin its digest
+									</p>
+								{/if}
+							</dd>
+						{/if}
 						<dt>Deployment</dt>
 						<dd class="truncate font-mono text-xs">{shortId(workload.deploymentId, 12)}</dd>
 						<dt>Updated</dt>
@@ -449,8 +468,16 @@
 						bind:value={image}
 						placeholder="ghcr.io/acme/app:latest"
 						required
+						list={registryImages.length > 0 ? 'workload-image-suggestions' : undefined}
 						class="font-mono text-sm"
 					/>
+					{#if registryImages.length > 0}
+						<datalist id="workload-image-suggestions">
+							{#each registryImages as suggestion (suggestion)}
+								<option value={suggestion}></option>
+							{/each}
+						</datalist>
+					{/if}
 					<Field.Description>
 						Pulled rootlessly on the node. Use a digest or immutable tag for reproducible deploys.
 					</Field.Description>

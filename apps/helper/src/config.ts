@@ -57,6 +57,8 @@ export interface HelperConfig {
 	controlSocketGroup: string | null;
 	/** Advertised helper version. */
 	version: string;
+	/** Install missing storage tools (fio, nfs-common, cifs-utils) at start; `SKIFF_HELPER_STORAGE_TOOLS=0` turns it off. */
+	installStorageTools: boolean;
 	/** Binaries the `node/update` verb replaces (D99). */
 	nodeUpdate: {
 		agentBinary: string;
@@ -194,6 +196,7 @@ export function loadHelperConfig(env: Env = process.env): HelperConfig {
 		),
 		// Embedded at build time, never configurable: it must name the binary that is running (D99).
 		version: BUILD_VERSION,
+		installStorageTools: (env.SKIFF_HELPER_STORAGE_TOOLS ?? '1').trim() !== '0',
 		nodeUpdate: {
 			agentBinary: absolute(env, 'SKIFF_HELPER_AGENT_BINARY', '/opt/skiff/current/agent/skiff-agent'),
 			helperBinary: absolute(env, 'SKIFF_HELPER_SELF_BINARY', '/opt/skiff/helper/skiff-helper'),

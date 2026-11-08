@@ -214,6 +214,18 @@ These two tools search and read this documentation, as it shipped with the platf
 | `promote_deployment` | Point production, or an environment, at an existing deployment. Instant, with no rebuild | `deployment:promote` |
 | `rollback` | Point an environment back at its previous deployment, including its configuration | `deployment:rollback` |
 
+### Pipelines
+
+See [Pipelines](/deploying/pipelines). There are no tools for secrets, variables or environment approvals: those are a person's decision.
+
+| Tool | What it does | Permission |
+|---|---|---|
+| `list_pipeline_runs` | List a repository's runs, newest first, with status and conclusion | `build:read` |
+| `get_pipeline_run` | Show a run's jobs and steps, plus the last 200 log lines of the first failed job | `build:read` |
+| `dispatch_workflow` | Start a workflow from `.skiff/workflows` (`workflow`) or inline YAML (`workflow_text`, always untrusted: no secrets, environments or deploys). The dashboard assistant asks to confirm | `build:create` |
+| `rerun_pipeline_run` | Re-run a completed run, or only its failed jobs. The dashboard assistant asks to confirm | `build:create` |
+| `cancel_pipeline_run` | Cancel a queued or running run | `build:cancel` |
+
 ### Environments and workloads
 
 | Tool | What it does | Permission |
@@ -235,6 +247,8 @@ These two tools search and read this documentation, as it shipped with the platf
 | `list_container_files` | List a directory inside the running container. Secret files and `tmpfs` mounts are refused | `container:files` |
 | `read_container_file` | Read a text file from the running container, up to 1 MiB. Audited | `container:files` |
 | `restart_container` | Restart every replica from the same image and configuration | `project:update` |
+| `list_images` | List the org's repositories in the platform registry, with the last tag, digest, size and deploy-on-push target | `image:pull` |
+| `image_tags` | List one repository's tags with their digests. Deployment pins are hidden | `image:pull` |
 
 There is no shell or command tool for containers. An agent reads untrusted text (logs, file contents), so running commands inside production stays with people: the dashboard's Shell section and `skif shell`.
 
