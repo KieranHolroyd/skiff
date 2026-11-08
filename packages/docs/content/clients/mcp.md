@@ -221,6 +221,8 @@ See [Pipelines](/deploying/pipelines). There are no tools for secrets, variables
 
 | Tool | What it does | Permission |
 |---|---|---|
+| `list_github_repositories` | Repositories the organisation can use through Skiff's GitHub App | `build:read` |
+| `deploy_from_github` | Create a project from a GitHub repository: detects the framework, connects the repository, queues the first build and adds `.skiff/workflows` to Pipelines. Later pushes deploy through the App ([Deploy from GitHub](/deploying/github#deploy-from-github)) | `project:create`, `build:create` |
 | `list_pipeline_runs` | List a repository's runs, newest first, with status and conclusion | `build:read` |
 | `get_pipeline_run` | Show a run's jobs and steps, plus the last 200 log lines of the first failed job | `build:read` |
 | `dispatch_workflow` | Start a workflow from `.skiff/workflows` (`workflow`) or inline YAML (`workflow_text`, always untrusted: no secrets, environments or deploys). The dashboard assistant asks to confirm | `build:create` |

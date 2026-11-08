@@ -61,6 +61,7 @@ import { BackupTargetService } from './backup-targets.ts';
 import { UpgradeService } from './upgrades.ts';
 import { GithubRunnerService } from './github-runners.ts';
 import { GithubAppService } from './github-app.ts';
+import { GithubImportService } from './github-import.ts';
 import { FunctionService } from './functions.ts';
 import { TemplateService } from './templates.ts';
 import { BlueprintService } from './blueprints.ts';
@@ -118,6 +119,7 @@ export * from './functions.ts';
 export * from './runtime-tier.ts';
 export * from './github-runners.ts';
 export * from './github-app.ts';
+export * from './github-import.ts';
 export * from './templates.ts';
 export * from './databases.ts';
 export * from './database-studio.ts';
@@ -224,6 +226,8 @@ export interface Core {
 	githubRunners: GithubRunnerService;
 	/** Skiff's GitHub App (docs/GITHUB.md). */
 	githubApp: GithubAppService;
+	/** Deploy from GitHub (docs/GITHUB.md §9). */
+	githubImport: GithubImportService;
 	templates: TemplateService;
 	/** Functions: Workers-compatible workloads on workerd (D110). */
 	functions: FunctionService;
@@ -355,6 +359,7 @@ export function createCore(options: CoreOptions): Core {
 	});
 	ctx.githubRunners = new GithubRunnerService(ctx);
 	ctx.githubApp = new GithubAppService(ctx);
+	ctx.githubImport = new GithubImportService(ctx);
 	ctx.templates = new TemplateService(ctx);
 	ctx.functions = new FunctionService(ctx);
 	ctx.topology = new TopologyService(ctx);
@@ -427,6 +432,7 @@ export function createCore(options: CoreOptions): Core {
 		upgrades: ctx.upgrades,
 		githubRunners: ctx.githubRunners,
 		githubApp: ctx.githubApp,
+		githubImport: ctx.githubImport,
 		templates: ctx.templates,
 		functions: ctx.functions,
 		topology: ctx.topology,

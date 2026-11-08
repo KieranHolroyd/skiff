@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { and, asc, desc, eq, gt, inArray, lt, sql } from 'drizzle-orm';
 import {
+	githubInstallations,
 	nodes,
 	pipelineArtifacts,
 	pipelineCaches,
@@ -16,9 +17,11 @@ import {
 	pipelineTriggers,
 	pipelineVariables,
 	projects,
+	settings,
 } from '@skiff/db';
 import {
 	parseGithubRepoUrl,
+	pipelineAutoSetupSchema,
 	sameGithubRepo,
 	pipelineDispatchSchema,
 	pipelineEnvironmentSetSchema,
@@ -28,6 +31,8 @@ import {
 	pipelineSecretNameSchema,
 	pipelineSecretSetSchema,
 	pipelineVariableSetSchema,
+	type PipelineAutoSetupInput,
+	type PipelineAutoSetupView,
 	type PipelineConclusion,
 	type PipelineDispatch,
 	type PipelineEnvironmentSet,
@@ -84,7 +89,13 @@ export interface PipelineWebhookResult {
 
 interface GithubRepo {
 	full_name?: string;
+	clone_url?: string;
+	default_branch?: string;
 }
+
+/** A repository without workflows is asked again after this, unless a push touches them (D172). */
+const AUTO_SETUP_RECHECK_MS = 10 * 60_000;
+const WORKFLOW_DIR = '.skiff/workflows';
 
 interface GithubPushPayload {
 	ref?: string;
@@ -95,6 +106,7 @@ interface GithubPushPayload {
 	pusher?: { name?: string };
 	sender?: { login?: string };
 	repository?: GithubRepo;
+	installation?: { id?: number };
 }
 
 interface GithubPullRequestPayload {
@@ -121,6 +133,8 @@ interface GithubPullRequestPayload {
 export class PipelineService {
 	readonly engine: PipelineEngine;
 	private lastScheduleMinute = 0;
+	/** `orgId:owner/repo` → when to look for workflows again (automatic setup, D172). */
+	private readonly autoSetupChecked = new Map<string, number>();
 
 	constructor(private readonly ctx: CoreContext) {
 		this.engine = new PipelineEngine(ctx);
@@ -176,6 +190,9 @@ export class PipelineService {
 			updatedAt: now,
 		};
 		this.ctx.db.insert(pipelineRepositories).values(row).run();
+		// Adding it by hand undoes an earlier removal for automatic setup.
+		const github = parseGithubRepoUrl(row.cloneUrl);
+		if (github) this.setIgnored(row.orgId, `${github.owner}/${github.repo}`, false);
 		this.audit(principal, 'pipeline.repository.create', row.id, { name: row.name, cloneUrl: row.cloneUrl });
 		return this.repositoryView(row);
 	}
@@ -249,6 +266,10 @@ export class PipelineService {
 			this.ctx.db.delete(pipelineRepositories).where(eq(pipelineRepositories.id, row.id)).run();
 		});
 		for (const key of objectKeys) await this.ctx.objectStore.delete(key).catch(() => undefined);
+		// A removed GitHub repository must not come back on its next push through the App.
+		const github = parseGithubRepoUrl(row.cloneUrl);
+		if (github && !this.repositoriesFor(row.orgId, `${github.owner}/${github.repo}`).length)
+			this.setIgnored(row.orgId, `${github.owner}/${github.repo}`, true);
 		this.audit(principal, 'pipeline.repository.delete', row.id, { name: row.name });
 	}
 
@@ -395,15 +416,12 @@ export class PipelineService {
 	 * org whose clone URL names `fullName` gets it. Returns the trigger ids created.
 	 */
 	async handleAppEvent(orgId: string, fullName: string, event: string, payload: unknown): Promise<string[]> {
-		const repositories = this.ctx.db
-			.select()
-			.from(pipelineRepositories)
-			.where(and(eq(pipelineRepositories.orgId, orgId), eq(pipelineRepositories.enabled, true)))
-			.all()
-			.filter((row) => {
-				const parsed = parseGithubRepoUrl(row.cloneUrl);
-				return parsed !== null && sameGithubRepo(`${parsed.owner}/${parsed.repo}`, fullName);
-			});
+		let repositories = this.repositoriesFor(orgId, fullName).filter((row) => row.enabled);
+		// D172: a push to a repository Pipelines does not know yet adds it, when it has workflows.
+		if (repositories.length === 0 && event === 'push' && !this.repositoriesFor(orgId, fullName).length) {
+			const created = await this.autoRegister(orgId, fullName, payload as GithubPushPayload);
+			if (created) repositories = [created];
+		}
 		const triggers: string[] = [];
 		for (const repository of repositories) {
 			try {
@@ -414,6 +432,162 @@ export class PipelineService {
 			}
 		}
 		return triggers;
+	}
+
+	/** Every pipeline repository of the org (enabled or not) whose clone URL names `fullName`. */
+	private repositoriesFor(orgId: string, fullName: string): PipelineRepositoryRow[] {
+		return this.ctx.db
+			.select()
+			.from(pipelineRepositories)
+			.where(eq(pipelineRepositories.orgId, orgId))
+			.all()
+			.filter((row) => {
+				const parsed = parseGithubRepoUrl(row.cloneUrl);
+				return parsed !== null && sameGithubRepo(`${parsed.owner}/${parsed.repo}`, fullName);
+			});
+	}
+
+	// --- automatic setup through the GitHub App (D172) -----------------------------------
+
+	private autoSetupKey(orgId: string): string {
+		return `pipelines.autoSetup.${orgId}`;
+	}
+
+	private readAutoSetup(orgId: string): PipelineAutoSetupView {
+		const row = this.ctx.db.select().from(settings).where(eq(settings.key, this.autoSetupKey(orgId))).get();
+		const stored = parse<Partial<PipelineAutoSetupView>>(row?.value, {});
+		return {
+			enabled: stored.enabled !== false,
+			ignored: Array.isArray(stored.ignored) ? stored.ignored.filter((name) => typeof name === 'string') : [],
+		};
+	}
+
+	private writeAutoSetup(orgId: string, value: PipelineAutoSetupView): void {
+		const json = JSON.stringify(value);
+		const now = this.ctx.now();
+		this.ctx.db
+			.insert(settings)
+			.values({ key: this.autoSetupKey(orgId), value: json, updatedAt: now })
+			.onConflictDoUpdate({ target: settings.key, set: { value: json, updatedAt: now } })
+			.run();
+	}
+
+	private setIgnored(orgId: string, fullName: string, ignored: boolean): void {
+		const current = this.readAutoSetup(orgId);
+		const rest = current.ignored.filter((name) => !sameGithubRepo(name, fullName));
+		const next = ignored ? [...rest, fullName].sort((a, b) => a.localeCompare(b)) : rest;
+		if (next.length === current.ignored.length && ignored === current.ignored.some((name) => sameGithubRepo(name, fullName))) return;
+		this.writeAutoSetup(orgId, { ...current, ignored: next });
+		this.autoSetupChecked.delete(`${orgId}:${fullName.toLowerCase()}`);
+	}
+
+	/** Whether pushes through the GitHub App add repositories with workflows automatically. */
+	autoSetup(principal: Principal): PipelineAutoSetupView {
+		this.ctx.iam.require(principal, 'build:read', { type: 'org' });
+		return this.readAutoSetup(principal.orgId);
+	}
+
+	/** Turn automatic setup on or off, or forget a removed repository. Owners and admins only. */
+	setAutoSetup(principal: Principal, input: PipelineAutoSetupInput): PipelineAutoSetupView {
+		this.ctx.iam.require(principal, 'build:create', { type: 'org' });
+		if (principal.role !== 'owner' && principal.role !== 'admin')
+			throw new CoreError('forbidden', 'Only org owners and admins can change automatic pipeline setup.', 403);
+		const parsed = pipelineAutoSetupSchema.parse(input);
+		if (parsed.unignore) this.setIgnored(principal.orgId, parsed.unignore, false);
+		if (parsed.enabled !== undefined) this.writeAutoSetup(principal.orgId, { ...this.readAutoSetup(principal.orgId), enabled: parsed.enabled });
+		this.autoSetupChecked.clear();
+		this.audit(principal, 'pipeline.auto_setup', principal.orgId, { ...parsed });
+		return this.readAutoSetup(principal.orgId);
+	}
+
+	/**
+	 * A push through the GitHub App to a repository the org has no pipeline repository for: when
+	 * the pushed commit has `.skiff/workflows/*.yml`, add the repository (no webhook secret: the
+	 * App delivers its events) on behalf of whoever linked the installation, and return it. Pull
+	 * requests never add a repository, so a fork cannot register one. Never throws.
+	 */
+	private async autoRegister(orgId: string, fullName: string, payload: GithubPushPayload): Promise<PipelineRepositoryRow | null> {
+		const setup = this.readAutoSetup(orgId);
+		if (!setup.enabled || setup.ignored.some((name) => sameGithubRepo(name, fullName))) return null;
+		if (!payload.ref?.startsWith('refs/heads/') || !payload.after || payload.deleted || /^0+$/.test(payload.after)) return null;
+		const cacheKey = `${orgId}:${fullName.toLowerCase()}`;
+		const touched = (payload.commits ?? []).some((commit) =>
+			[...(commit.added ?? []), ...(commit.modified ?? [])].some((file) => file.startsWith(`${WORKFLOW_DIR}/`)),
+		);
+		const until = this.autoSetupChecked.get(cacheKey);
+		if (!touched && until && until > this.ctx.now()) return null;
+		let workflows: string[];
+		try {
+			const listing = await this.ctx.githubApp.readPath(orgId, fullName, WORKFLOW_DIR, payload.after);
+			workflows = listing?.kind === 'dir' ? listing.entries.filter((entry) => entry.type === 'file' && /\.ya?ml$/i.test(entry.name)).map((entry) => entry.name) : [];
+		} catch (error) {
+			console.warn(`[pipelines] ${fullName}: could not look for workflows: ${(error as Error).message}`);
+			this.autoSetupChecked.set(cacheKey, this.ctx.now() + 60_000);
+			return null;
+		}
+		if (workflows.length === 0) {
+			this.autoSetupChecked.set(cacheKey, this.ctx.now() + AUTO_SETUP_RECHECK_MS);
+			return null;
+		}
+		// Re-check after the await: a concurrent push or a person may have added it meanwhile.
+		if (this.repositoriesFor(orgId, fullName).length) return null;
+		const installation = payload.installation?.id
+			? this.ctx.db.select().from(githubInstallations).where(eq(githubInstallations.installationId, payload.installation.id)).get()
+			: undefined;
+		const createdBy = installation?.orgId === orgId ? installation.linkedBy : null;
+		if (!createdBy) return null;
+		const now = this.ctx.now();
+		const row: PipelineRepositoryRow = {
+			id: newId('prp_'),
+			orgId,
+			name: this.freeRepositoryName(orgId, fullName),
+			cloneUrl: payload.repository?.clone_url ?? `https://github.com/${fullName}.git`,
+			provider: 'github',
+			defaultBranch: payload.repository?.default_branch ?? payload.ref.slice('refs/heads/'.length),
+			defaultImage: null,
+			webhookSecret: null,
+			enabled: true,
+			nextRunNumber: 1,
+			schedulesJson: '[]',
+			minIsolationJson: '{}',
+			statusToken: null,
+			createdBy,
+			createdAt: now,
+			updatedAt: now,
+		};
+		this.ctx.db.insert(pipelineRepositories).values(row).run();
+		this.autoSetupChecked.delete(cacheKey);
+		this.ctx.audit.record({
+			action: 'pipeline.repository.auto_create',
+			resource: 'build',
+			resourceId: row.id,
+			orgId,
+			args: { name: row.name, repository: fullName, workflows },
+			result: 'ok',
+		});
+		return row;
+	}
+
+	/** `repo`, else `owner-repo`, else `repo-2`… — a free pipeline repository name in the org. */
+	freeRepositoryName(orgId: string, fullName: string): string {
+		const slug = (value: string) =>
+			value
+				.toLowerCase()
+				.replace(/[^a-z0-9._-]+/g, '-')
+				.replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, '')
+				.slice(0, 90) || 'repo';
+		const [owner = '', repo = ''] = fullName.split('/');
+		const taken = new Set(
+			this.ctx.db
+				.select({ name: pipelineRepositories.name })
+				.from(pipelineRepositories)
+				.where(eq(pipelineRepositories.orgId, orgId))
+				.all()
+				.map((row) => row.name),
+		);
+		const candidates = [slug(repo), slug(`${owner}-${repo}`)];
+		for (const candidate of candidates) if (!taken.has(candidate)) return candidate;
+		for (let n = 2; ; n++) if (!taken.has(`${candidates[0]}-${n}`)) return `${candidates[0]}-${n}`;
 	}
 
 	private routeGithubEvent(repository: PipelineRepositoryRow, event: string | null, payload: unknown): PipelineWebhookResult {

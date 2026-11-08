@@ -17,6 +17,7 @@
 	import { operationActions, operationLimits, type OperationActionInfo } from '@skiff/contracts';
 	import { toast } from 'svelte-sonner';
 	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
+	import GitHubMark from '#lib/components/skiff/GitHubMark.svelte';
 	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import { Checkbox } from '#lib/components/ui/checkbox/index.js';
@@ -329,6 +330,10 @@
 					From template
 				</Button>
 			{/if}
+			<Button variant="outline" href={resolve('/(dashboard)/new/github')}>
+				<GitHubMark />
+				Deploy from GitHub
+			</Button>
 			<Button onclick={openCreate}>
 				<PlusIcon />
 				New project
@@ -366,6 +371,9 @@
 			>
 				{#if data.can.createProject}
 					<Button onclick={openCreate}><PlusIcon />Create a project</Button>
+					<Button variant="outline" href={resolve('/(dashboard)/new/github')}>
+						<GitHubMark />Deploy from GitHub
+					</Button>
 					{#if data.templates.length > 0}
 						<Button variant="outline" href={resolve('/(dashboard)/new')}>
 							<LayoutTemplateIcon />Browse templates

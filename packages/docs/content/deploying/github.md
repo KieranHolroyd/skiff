@@ -71,6 +71,21 @@ To add or remove repositories later, open the installation's menu and choose **C
 
 Platform admins also see installations that are not linked to any organisation. That happens when the App was installed without the OAuth step, or when its webhook could not reach Skiff. An admin can link one to their current organisation with **Link here**. **Sync** fetches the current list from GitHub.
 
+## Deploy from GitHub
+
+**Projects → Deploy from GitHub** (also on **New**) lists the repositories the App can see, most recently pushed first. Choose **Import** on one and Skiff reads it:
+
+- It picks a **framework preset**: Vite, Astro, SvelteKit, Next.js, Nuxt, Gatsby, Create React App, Docusaurus, VitePress, Eleventy, Hugo, a Bun or Node server, or plain HTML. The preset fills in the build command, the output directory and whether the project serves static files or runs a process app.
+- For a monorepo, set the **root directory** (click a folder to step into it). Skiff detects the framework again for that directory.
+- Under **Build and output settings** you can change the build command, output directory and runtime. A process app also takes a start command, port and plain environment variables.
+- If the repository has workflows in `.skiff/workflows`, **Run its workflows in Pipelines** is ticked.
+
+Choose **Deploy**. Skiff creates the project, connects the repository on the production branch, queues the first build and opens the project's Builds tab. The build is promoted when it succeeds. From then on every push to that branch builds and deploys. There is no webhook or deploy key to add on GitHub.
+
+Agents can do the same with the MCP tool `deploy_from_github`, and scripts with `GET /api/v1/github/detect?repository=owner/name` followed by `POST /api/v1/github/import`.
+
+Builds run with Bun on your Builder nodes, and Bun reads npm, Yarn and pnpm lockfiles. Password and Skiff Access protection are set on the project after the import.
+
 ## Git builds
 
 Connect a repository as usual in **Projects → my-site → Builds**. When the App covers the repository:
@@ -82,7 +97,12 @@ Connect a repository as usual in **Projects → my-site → Builds**. When the A
 
 ## Pipelines
 
-Add the repository under **Pipelines → Add repository** and pick it from the list. You can leave the webhook secret empty. The repository's settings page shows that events come through the App.
+You don't have to add repositories the App covers. Push a commit that contains a workflow in `.skiff/workflows`, and the repository appears under **Pipelines** and its workflows run. Skiff adds it on behalf of the person who connected the installation. Pull requests never add a repository, so a fork can't register one.
+
+- To stop a repository from running, disable it in its settings. If you delete it instead, Skiff remembers that and does not add it back. **Settings → GitHub → Pipelines** lists these repositories, with **Allow again** for each one.
+- Owners and admins can turn this off in **Settings → GitHub → Pipelines → Set up pipelines automatically**.
+
+You can still add a repository by hand under **Pipelines → Add repository** and pick it from the list. You can leave the webhook secret empty. If the App is installed on the repository's owner but doesn't include that repository, its setup steps link to the installation on GitHub, where you can add it.
 
 Runs report commit statuses through the App. A status token you set on the repository is used instead of the App, if one is set.
 

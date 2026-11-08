@@ -10,6 +10,8 @@
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import TrashIcon from '@lucide/svelte/icons/trash';
 	import UnlinkIcon from '@lucide/svelte/icons/unlink';
+	import WorkflowIcon from '@lucide/svelte/icons/workflow';
+	import { resolve } from '$app/paths';
 	import type { GithubInstallationView } from '@skiff/contracts';
 	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
 	import DetailList from '#lib/components/skiff/DetailList.svelte';
@@ -23,6 +25,7 @@
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import { Spinner } from '#lib/components/ui/spinner/index.js';
+	import { Switch } from '#lib/components/ui/switch/index.js';
 	import * as Table from '#lib/components/ui/table/index.js';
 	import { Textarea } from '#lib/components/ui/textarea/index.js';
 	import { notify } from '#lib/actions.js';
@@ -39,6 +42,9 @@
 	let createOpen = $state(false);
 	let manualOpen = $state(false);
 	let syncing = $state(false);
+	let autoForm = $state<HTMLFormElement | null>(null);
+	/** Follows the server after each save; the switch writes it first. */
+	let autoEnabled = $derived(data.pipelineSetup.enabled);
 	let manifestForm = $state<HTMLFormElement | null>(null);
 
 	/** The manifest action answers with what to POST to GitHub; send the browser there. */
@@ -54,6 +60,14 @@
 		{
 			title: 'Private repositories, no node token',
 			body: 'Build nodes clone with a one-hour, read-only token for that one repository, minted per build or job.'
+		},
+		{
+			title: 'Deploy from GitHub',
+			body: 'Projects → Deploy from GitHub imports a repository: Skiff detects the framework, connects it and deploys every push.'
+		},
+		{
+			title: 'Pipelines set themselves up',
+			body: 'A push to a repository with .skiff/workflows adds it to Pipelines and starts its workflows. Nothing to register, no webhook.'
 		},
 		{
 			title: 'Events without webhooks',
@@ -321,6 +335,69 @@
 					Tokens are minted per use and never stored.
 				</span>
 			{/snippet}
+		</Panel>
+
+		<Panel
+			title="Pipelines"
+			icon={WorkflowIcon}
+			description="Repositories the App covers run their .skiff/workflows without being added by hand."
+		>
+			<form
+				bind:this={autoForm}
+				method="POST"
+				action="?/autoPipelines"
+				use:enhance={() =>
+					async ({ result, update }) => {
+						await update({ reset: false });
+						notify(result);
+					}}
+				class="flex items-start gap-3"
+			>
+				<Switch
+					id="auto-pipelines"
+					name="enabled"
+					value="1"
+					bind:checked={autoEnabled}
+					disabled={!data.canLink}
+					onCheckedChange={() => void tick().then(() => autoForm?.requestSubmit())}
+				/>
+				<div class="space-y-0.5">
+					<label for="auto-pipelines" class="text-sm font-medium">Set up pipelines automatically</label>
+					<p class="text-sm text-muted-foreground">
+						On a push, a repository with workflow files that is not in
+						<a class="underline underline-offset-2" href={resolve('/(dashboard)/pipelines')}>Pipelines</a> yet
+						is added (as whoever linked the installation) and its workflows run. Pull requests never add
+						one, so a fork cannot.{data.canLink ? '' : ' Owners and admins can change this.'}
+					</p>
+				</div>
+			</form>
+			{#if data.pipelineSetup.ignored.length > 0}
+				<div class="mt-4 space-y-2 border-t pt-4">
+					<p class="text-xs text-muted-foreground">Removed from Pipelines, so not added back:</p>
+					<ul class="flex flex-wrap gap-2">
+						{#each data.pipelineSetup.ignored as repository (repository)}
+							<li>
+								<form
+									method="POST"
+									action="?/unignore"
+									use:enhance={() =>
+										async ({ result, update }) => {
+											await update({ reset: false });
+											notify(result);
+										}}
+									class="flex items-center gap-1 rounded-md border py-0.5 pr-0.5 pl-2"
+								>
+									<input type="hidden" name="repository" value={repository} />
+									<span class="font-mono text-xs">{repository}</span>
+									{#if data.canLink}
+										<Button size="xs" variant="ghost" type="submit">Allow again</Button>
+									{/if}
+								</form>
+							</li>
+						{/each}
+					</ul>
+				</div>
+			{/if}
 		</Panel>
 
 		{#if data.isAdmin && (data.unclaimed.length > 0 || data.elsewhere.length > 0)}

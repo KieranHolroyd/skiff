@@ -43,6 +43,7 @@ import type { BackupTargetService } from './backup-targets.ts';
 import type { UpgradeService } from './upgrades.ts';
 import type { GithubRunnerService } from './github-runners.ts';
 import type { GithubAppService } from './github-app.ts';
+import type { GithubImportService } from './github-import.ts';
 import type { FunctionService } from './functions.ts';
 import type { TemplateService } from './templates.ts';
 import type { AlertService } from './alerts.ts';
@@ -132,6 +133,8 @@ export interface CoreContext {
 	githubRunners: GithubRunnerService;
 	/** Skiff's GitHub App: installations, tokens, statuses, the App webhook (docs/GITHUB.md). */
 	githubApp: GithubAppService;
+	/** Deploy from GitHub: detect and import a repository (docs/GITHUB.md §9). */
+	githubImport: GithubImportService;
 	templates: TemplateService;
 	/** Metric alert rules (docs/ALERTS.md). */
 	alerts: AlertService;

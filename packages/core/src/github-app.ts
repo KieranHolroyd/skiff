@@ -132,6 +132,26 @@ export interface CommitStatusReport {
 	targetUrl: string;
 }
 
+export interface GithubCoverage {
+	status: 'covered' | 'not-selected' | 'not-installed' | 'no-app' | 'not-github';
+	fullName: string | null;
+	installationId: number | null;
+	/** Where to grant the repository or install the App. */
+	manageUrl: string | null;
+}
+
+interface GithubContentApi {
+	name: string;
+	path: string;
+	type: 'file' | 'dir' | 'symlink' | 'submodule';
+	content?: string;
+	encoding?: string;
+}
+
+export type GithubPathContent =
+	| { kind: 'dir'; entries: Array<{ name: string; path: string; type: 'file' | 'dir' }> }
+	| { kind: 'file'; text: string | null };
+
 export interface GithubWebhookResult {
 	accepted: boolean;
 	reason?: string;
@@ -652,6 +672,76 @@ export class GithubAppService {
 		return false;
 	}
 
+	/**
+	 * How the App covers a repository URL in an org, asking GitHub when the cached list is stale:
+	 * `covered` (events, clones and statuses need nothing else), `not-selected` (installed on the
+	 * owner, but the repository is not among the installation's selected ones), `not-installed`,
+	 * `no-app` or `not-github`. `manageUrl` is where to fix it.
+	 */
+	async coverage(orgId: string, url: string): Promise<GithubCoverage> {
+		const parsed = parseGithubRepoUrl(url);
+		if (!parsed) return { status: 'not-github', fullName: null, installationId: null, manageUrl: null };
+		const fullName = `${parsed.owner}/${parsed.repo}`;
+		const app = this.stored();
+		if (!app) return { status: 'no-app', fullName, installationId: null, manageUrl: null };
+		const installations = this.installationsFor(orgId, parsed.owner);
+		const install = app.slug ? `${WEB}/apps/${app.slug}/installations/new` : null;
+		if (installations.length === 0) return { status: 'not-installed', fullName, installationId: null, manageUrl: install };
+		for (const installation of installations) {
+			if (installation.repositorySelection === 'all')
+				return { status: 'covered', fullName, installationId: installation.installationId, manageUrl: null };
+			try {
+				const listed = await this.installationRepositories(installation.installationId, false);
+				if (listed.repositories.some((repo) => sameGithubRepo(repo.fullName, fullName)))
+					return { status: 'covered', fullName, installationId: installation.installationId, manageUrl: null };
+			} catch {
+				// GitHub could not be asked: say what the owner match suggests rather than "not covered".
+				return { status: 'covered', fullName, installationId: installation.installationId, manageUrl: null };
+			}
+		}
+		const first = installations[0]!;
+		return { status: 'not-selected', fullName, installationId: first.installationId, manageUrl: this.installationView(first).settingsUrl };
+	}
+
+	/** One repository of the org, through the App. Null when no installation reaches it. */
+	async repository(orgId: string, fullName: string): Promise<GithubRepositoryView | null> {
+		const access = await this.repoToken(orgId, `${WEB}/${fullName}`, { contents: 'read' });
+		if (!access) return null;
+		const repo = await this.request<GithubRepoApi>(access.token, 'GET', repoPath(access), undefined, { allowNotFound: true });
+		return repo ? repoView(repo, access.installationId) : null;
+	}
+
+	/**
+	 * Read a path of a repository at `ref` through the App (contents API): a directory listing or a
+	 * file's text (files over 1 MB are not returned). Null when the path does not exist; throws when
+	 * the App does not reach the repository or GitHub fails.
+	 */
+	async readPath(orgId: string, fullName: string, path: string, ref?: string): Promise<GithubPathContent | null> {
+		const access = await this.repoToken(orgId, `${WEB}/${fullName}`, { contents: 'read' });
+		if (!access)
+			throw new CoreError(
+				'github_installation_missing',
+				`Skiff's GitHub App cannot reach ${fullName} for this organisation. Install it, or grant it the repository, in Settings → GitHub.`,
+				409,
+			);
+		const clean = path.replace(/^\.?\/+/, '').replace(/\/+$/, '');
+		const encoded = clean && clean !== '.' ? `/${clean.split('/').map(encodeURIComponent).join('/')}` : '';
+		const query = ref ? `?ref=${encodeURIComponent(ref)}` : '';
+		const found = await this.request<GithubContentApi | GithubContentApi[]>(
+			access.token,
+			'GET',
+			`${repoPath(access)}/contents${encoded}${query}`,
+			undefined,
+			{ allowNotFound: true },
+		);
+		if (!found) return null;
+		if (Array.isArray(found))
+			return { kind: 'dir', entries: found.map((entry) => ({ name: entry.name, path: entry.path, type: entry.type === 'dir' ? 'dir' : 'file' })) };
+		if (found.type !== 'file') return null;
+		const text = found.encoding === 'base64' && typeof found.content === 'string' ? Buffer.from(found.content, 'base64').toString('utf8') : null;
+		return { kind: 'file', text };
+	}
+
 	// ------------------------------------------------------------------------------------ tokens
 
 	private requireApp(): StoredApp {
@@ -921,6 +1011,7 @@ export class GithubAppService {
 		method: 'GET' | 'POST' | 'DELETE' | 'PATCH',
 		path: string,
 		body?: unknown,
+		options: { allowNotFound?: boolean } = {},
 	): Promise<T | null> {
 		let response: Response;
 		try {
@@ -939,6 +1030,7 @@ export class GithubAppService {
 		} catch (error) {
 			throw new CoreError('github_unreachable', `GitHub could not be reached: ${error instanceof Error ? error.message : String(error)}`, 502);
 		}
+		if (response.status === 404 && options.allowNotFound) return null;
 		if (!response.ok) {
 			let detail = '';
 			try {

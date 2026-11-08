@@ -1,7 +1,7 @@
 # Skiff — GitHub App
 
-Status: **built 2026-11-08** (§2 → D163, §3 → D164, §4 → D165, §5 → D166). What is not built is
-listed in §8. User documentation: `packages/docs/content/deploying/github.md`.
+Status: **built 2026-11-08** (§2 → D163, §3 → D164, §4 → D165, §5 → D166; §9–§10 → D172). What
+is not built is listed in §8. User documentation: `packages/docs/content/deploying/github.md`.
 
 Skiff talked to GitHub in five places, each with its own credential and setup step: git builds
 (a per-project webhook plus a node-wide `SKIFF_GIT_TOKEN`), pipelines (a per-repository webhook,
@@ -25,6 +25,8 @@ covers a repository, and leaves every old path working for repositories it does 
 | Runner pools authenticate with the installation (`auth.method: installation`) | `GithubRunnerService` | D165 |
 | Repository pickers in the git source, pipeline repository and registry trust forms | `GET /api/v1/github/repositories`, `GithubRepoPicker.svelte`, MCP `list_github_repositories` | — |
 | "Sign in with GitHub" falls back to the App's OAuth client | `auth.ts` at boot | D166 |
+| Deploy from GitHub: detect a framework, create project + git source + first build (+ pipeline repository) | `/new/github`, `GithubImportService`, `POST /api/v1/github/import`, MCP `deploy_from_github` | D172 |
+| A push with `.skiff/workflows` adds an App-covered repository to Pipelines | `PipelineService.autoRegister`, Settings → GitHub → Pipelines | D172 |
 
 ## 2. Registration and installations (D163)
 
@@ -139,3 +141,51 @@ says which source is in use.
 - Self-update and node update downloads still read GitHub Releases anonymously.
 - GitHub Enterprise Server (API and web base URLs are fixed to github.com).
 - A CLI command; the REST endpoints and MCP tool cover scripts and agents.
+
+## 9. Deploy from GitHub (D172)
+
+Vercel's "Import Git Repository", on Skiff's existing pieces. `/new/github` (linked from Projects and
+New) lists the org's App repositories (§6 pickers' endpoint), most recently pushed first, marking
+the ones a project already builds.
+
+**Detect.** `GithubImportService.detect` (`GET /api/v1/github/detect?repository&branch&rootDir`)
+reads the repository through `GithubAppService.repository` and `readPath` (contents API with a
+`contents: read` token for that repository): the root directory's listing, its `package.json`, and
+`.skiff/workflows`. `detectFramework` in `@skiff/contracts` (pure, unit tested) maps them to a
+`FRAMEWORK_PRESETS` entry: runtime (`static` or `process`), build command, output directory, and
+for process apps start command, engine and port. Every preset builds with Bun, which every Builder
+has. The dashboard re-detects when the root directory or branch changes and keeps fields the person
+typed.
+
+**Import.** `importRepository` (`POST /api/v1/github/import`, form action, MCP
+`deploy_from_github`) checks everything that can be refused first (permissions `project:create` and
+`build:create`, the App reaching the repository, archived repositories, the schema, the process
+spec), then creates the project (`edge` placement for static, `auto` for process), sets the process
+spec, upserts the git source (no webhook secret: the App delivers pushes, D165), queues the first
+build on the branch with `promote: true`, and, when asked and the repository has workflows, creates
+a pipeline repository (reusing one that already names the repository). A refused build or pipeline
+step after the project exists is returned in `warnings` rather than thrown. Password and Skiff
+Access modes are set on the project afterwards (the import refuses them so no secret travels in the
+import form).
+
+## 10. Pipelines set themselves up (D172)
+
+With the App, adding a repository to Pipelines is optional. When `PipelineService.handleAppEvent`
+gets a `push` for a repository the org has no pipeline repository for (enabled or not), it asks
+GitHub (contents API at the pushed commit) for `.skiff/workflows/*.y{a,}ml`. If there are any, it
+creates the pipeline repository (name from the repository, then `owner-repo`, then `repo-N`; default
+branch from the payload; no webhook secret or status token) with `createdBy` set to the user who
+linked the installation, audits `pipeline.repository.auto_create`, and routes the push to it.
+
+- Only pushes to branches add a repository. `pull_request` never does, so a fork cannot register
+  one; tag pushes and deletions are ignored.
+- A repository without workflows is not asked again for ten minutes, unless a push adds or modifies
+  a file under `.skiff/workflows/` (a failed lookup waits one minute).
+- Deleting a GitHub pipeline repository records it in the org's ignore list
+  (`settings` key `pipelines.autoSetup.<orgId>`, `{ enabled, ignored[] }`); adding it by hand removes
+  it from the list. Owners and admins turn the behaviour off, or forget an ignored repository, in
+  Settings → GitHub → Pipelines (`GET`/`PATCH /api/v1/github/pipeline-setup`).
+- The pipeline repository page uses `GithubAppService.coverage` (`covered`, `not-selected`,
+  `not-installed`, `no-app`, `not-github`) instead of an owner match, so a repository the
+  installation does not select links to the installation's settings instead of claiming the App
+  delivers its events.

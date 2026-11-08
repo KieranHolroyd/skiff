@@ -6,6 +6,7 @@
 	import LayoutTemplateIcon from '@lucide/svelte/icons/layout-template';
 	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
 	import SearchIcon from '@lucide/svelte/icons/search';
+	import GitHubMark from '#lib/components/skiff/GitHubMark.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import * as InputGroup from '#lib/components/ui/input-group/index.js';
 	import EmptyState from '../_lib/EmptyState.svelte';
@@ -64,6 +65,36 @@
 		title="Start something new"
 		description="Pick a template and Skiff creates the project, stores its credentials and deploys it in one step. Or start from a blank runtime."
 	/>
+
+	{#if data.can.createProject}
+		<section aria-labelledby="github-heading">
+			<a
+				href={resolve('/(dashboard)/new/github')}
+				class="group flex items-center gap-4 rounded-2xl border bg-card p-5 shadow-xs transition-all hover:border-foreground/20 hover:shadow-md focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+			>
+				<span
+					class="flex size-11 shrink-0 items-center justify-center rounded-xl border bg-background"
+				>
+					<GitHubMark class="size-6" />
+				</span>
+				<span class="min-w-0 flex-1 space-y-0.5">
+					<span id="github-heading" class="block font-semibold tracking-tight"
+						>Deploy from GitHub</span
+					>
+					<span class="block text-sm text-pretty text-muted-foreground"
+						>Import a repository: Skiff detects the framework, builds it on every push and reports
+						back to GitHub. No webhook to set up.</span
+					>
+				</span>
+				<span
+					class="hidden h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground shadow-xs transition-colors group-hover:bg-primary/90 sm:inline-flex"
+					aria-hidden="true"
+				>
+					Import<ArrowRightIcon class="size-4 transition-transform group-hover:translate-x-0.5" />
+				</span>
+			</a>
+		</section>
+	{/if}
 
 	<section class="space-y-4" aria-labelledby="templates-heading">
 		<div class="flex flex-wrap items-end justify-between gap-3">

@@ -9,7 +9,7 @@ import type { Actions, PageServerLoad } from './$types';
 
 const STATUSES = new Set(['queued', 'in_progress', 'completed']);
 
-export const load: PageServerLoad = ({ locals, params, url }) => {
+export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const principal = locals.principal!;
 	let repository: PipelineRepositoryView;
 	try {
@@ -33,7 +33,13 @@ export const load: PageServerLoad = ({ locals, params, url }) => {
 		).values()
 	];
 	if (workflow && !workflows.some((item) => item.path === workflow)) workflows.push({ path: workflow, name: workflow });
+	// Whether the GitHub App delivers this repository's events, or what would make it (D172).
+	const coverage =
+		repository.provider === 'github' && runs.length === 0
+			? await core.githubApp.coverage(principal.orgId, repository.cloneUrl).catch(() => null)
+			: null;
 	return {
+		coverage,
 		repository,
 		runs,
 		triggers: core.pipelines.listTriggers(principal, params.repo, 20),

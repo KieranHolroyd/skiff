@@ -121,7 +121,9 @@
 		<EmptyState
 			icon={WorkflowIcon}
 			title="No repositories yet"
-			description="Connect a repository and Skiff runs its workflows on every push and pull request."
+			description={data.automatic
+				? 'Push a commit with a workflow in .skiff/workflows to a repository Skiff’s GitHub App covers: it appears here and runs. Or add one by hand.'
+				: 'Connect a repository and Skiff runs its workflows on every push and pull request.'}
 		>
 			{#if data.can.manage}
 				<Button onclick={() => (createOpen = true)}><PlusIcon />Add repository</Button>

@@ -18,13 +18,18 @@ export const load: PageServerLoad = ({ locals, depends }) => {
 	let repositories: PipelineRepositoryView[] = [];
 	let recent: PipelineRunSummary[] = [];
 	let denied = false;
+	/** D172: with the GitHub App linked, a push with `.skiff/workflows` adds its repository here. */
+	let automatic = false;
 	try {
 		repositories = core.pipelines.listRepositories(principal);
 		recent = core.pipelines.recentRuns(principal, 15);
+		automatic =
+			core.pipelines.autoSetup(principal).enabled &&
+			core.githubApp.installations(principal).some((entry) => entry.orgId === principal.orgId && !entry.suspended);
 	} catch {
 		denied = true;
 	}
-	return { repositories, recent, denied, origin: platformOrigin, can: pipelineCan(principal) };
+	return { repositories, recent, denied, automatic, origin: platformOrigin, can: pipelineCan(principal) };
 };
 
 export const actions: Actions = {

@@ -196,6 +196,63 @@ export function pipelineTools(principal: Principal): PipelineToolSpec[] {
 			},
 		},
 		{
+			name: 'deploy_from_github',
+			config: {
+				title: 'Deploy a GitHub repository',
+				description:
+					'Create a project from a repository Skiff\'s GitHub App can reach (see list_github_repositories), like Vercel\'s "Import Git Repository": ' +
+					'Skiff reads the repository, picks a framework preset (build command, output directory, static or process app), connects it as the git source, ' +
+					'queues the first build (promoted when it succeeds) and, when the repository has .skiff/workflows, adds it to Pipelines. Every later push to the ' +
+					'branch builds and deploys through the App; nothing has to be set up on GitHub. Pass buildCommand/outputDir/runtime only to override the detected preset. ' +
+					'Returns the project slug and the build id; follow the build with the project tools.',
+				inputSchema: z.object({
+					repository: z.string().min(3).max(201).describe('owner/name, as list_github_repositories returns it'),
+					branch: z.string().min(1).max(255).optional().describe('Branch to build and deploy on push (default: the repository default branch)'),
+					rootDir: z.string().max(512).optional().describe('Directory of the app inside the repository (monorepos), default "."'),
+					name: z.string().min(1).max(120).optional().describe('Project name (default: the repository name)'),
+					slug: z.string().min(3).max(40).optional().describe('Project slug, which is also the hostname (default: derived from the name)'),
+					runtime: z.enum(['static', 'process']).optional().describe('Override the detected runtime'),
+					buildCommand: z.string().min(1).max(2048).optional().describe('Override the detected build command'),
+					outputDir: z.string().min(1).max(512).optional().describe('Override the detected output directory (relative to rootDir)'),
+					pipelines: z.boolean().optional().describe('Add the repository to Pipelines when it has .skiff/workflows (default true)'),
+				}),
+				annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+			},
+			permissions: ['project:create', 'build:create'],
+			handler: async (args) => {
+				const input = args as {
+					repository: string;
+					branch?: string;
+					rootDir?: string;
+					name?: string;
+					slug?: string;
+					runtime?: 'static' | 'process';
+					buildCommand?: string;
+					outputDir?: string;
+					pipelines?: boolean;
+				};
+				const detected = await core.githubImport.detect(principal, { repository: input.repository, branch: input.branch, rootDir: input.rootDir });
+				const preset = detected.preset;
+				const runtime = input.runtime ?? preset.runtime;
+				const result = await core.githubImport.importRepository(principal, {
+					repository: detected.repository.fullName,
+					branch: detected.branch,
+					rootDir: detected.rootDir,
+					name: input.name ?? detected.suggestedName,
+					...(input.slug ? { slug: input.slug } : {}),
+					framework: preset.id,
+					runtime,
+					buildCommand: input.buildCommand ?? preset.buildCommand,
+					outputDir: input.outputDir ?? preset.outputDir,
+					...(runtime === 'process' && preset.runtime === 'process'
+						? { ...(preset.command ? { command: preset.command } : {}), ...(preset.engine ? { engine: preset.engine } : {}), ...(preset.port ? { port: preset.port } : {}) }
+						: {}),
+					pipelines: input.pipelines ?? true,
+				});
+				return { ...result, framework: preset.label, branch: detected.branch, url: `/projects/${result.project.slug}` };
+			},
+		},
+		{
 			name: 'list_pipeline_runs',
 			config: {
 				title: 'List pipeline runs',

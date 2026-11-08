@@ -15,6 +15,8 @@ export const load: PageServerLoad = ({ locals, url }) => {
 	const app = core.githubApp.view(principal);
 	const installations = core.githubApp.installations(principal);
 	return {
+		/** D172: pushes add repositories with `.skiff/workflows` to Pipelines. */
+		pipelineSetup: core.pipelines.autoSetup(principal),
 		app,
 		installations: installations.filter((entry) => entry.orgId === principal.orgId),
 		unclaimed: installations.filter((entry) => entry.orgId === null),
@@ -97,6 +99,30 @@ export const actions: Actions = {
 		try {
 			core.githubApp.unlinkInstallation(locals.principal!, id);
 			return { success: 'Disconnected. The App stays installed on GitHub until you uninstall it there.' };
+		} catch (cause) {
+			return fail(400, { message: message(cause) });
+		}
+	},
+
+	autoPipelines: async ({ request, locals }) => {
+		const enabled = (await request.formData()).get('enabled') !== null;
+		try {
+			core.pipelines.setAutoSetup(locals.principal!, { enabled });
+			return {
+				success: enabled
+					? 'Repositories with .skiff/workflows now join Pipelines on their next push.'
+					: 'Pushes no longer add repositories to Pipelines. Add them by hand under Pipelines.'
+			};
+		} catch (cause) {
+			return fail(400, { message: message(cause) });
+		}
+	},
+
+	unignore: async ({ request, locals }) => {
+		const repository = text(await request.formData(), 'repository');
+		try {
+			core.pipelines.setAutoSetup(locals.principal!, { unignore: repository });
+			return { success: `${repository} joins Pipelines again on its next push.` };
 		} catch (cause) {
 			return fail(400, { message: message(cause) });
 		}

@@ -201,7 +201,12 @@
 				hasRepository
 				webhookUrl={data.webhookUrl}
 				defaultBranch={data.repository.defaultBranch}
-				viaGithubApp={Boolean(data.repository.githubAppInstallationId)}
+				viaGithubApp={data.coverage
+					? data.coverage.status === 'covered'
+					: Boolean(data.repository.githubAppInstallationId)}
+				coverage={data.coverage?.status ?? null}
+				manageUrl={data.coverage?.manageUrl ?? null}
+				owner={data.coverage?.fullName?.split('/')[0] ?? null}
 			/>
 		</Panel>
 	{:else}
