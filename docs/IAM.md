@@ -568,10 +568,12 @@ existing set can only burn down.
 
 The engine is built: the pure `authorize`/`compileGrants` in `packages/contracts/src/iam/authorize.ts`
 and the impure `IamService` in `packages/core/src/iam/service.ts` (bindings, custom roles, groups,
-guardrails, the `iamVersion` cache, `require`/`can`/`scopeFilter`/`explain`), on migration
+guardrails, the `iamVersion` cache, `require`/`can`/`scopeFilter`/`explain`/`whoCan`), on migration
 `0080_iam.sql`. `member.role` becomes an org binding the first time the engine sees a user, so
-existing access is unchanged. Nothing calls `iam.require` yet. Next: the API and Settings → Access
-surfaces, the table-driven matrix test, then I2's module-by-module threading.
+existing access is unchanged. The matrix test (`packages/core/src/iam/matrix.test.ts`) runs every
+catalog permission through an org grant, a project grant, another project, expiry, a guardrail, a
+token restriction and a session-only condition. Nothing calls `iam.require` yet. Next: the API and
+Settings → Access surfaces, then I2's module-by-module threading.
 
 | Phase | Contents | Proposals | Done when |
 |---|---|---|---|

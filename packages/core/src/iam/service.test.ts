@@ -246,6 +246,31 @@ describe('bindings and the decision', () => {
 		});
 	});
 
+	test('whoCan expands groups and the member base role', () => {
+		addMember('user_1', 'owner');
+		addMember('user_2', 'viewer');
+		const owner = principal();
+		const group = core.ctx.iam.createGroup(owner, { name: 'release' });
+		core.ctx.iam.addGroupMember(owner, group.id, 'user_2');
+		core.ctx.iam.bind(owner, {
+			principalType: 'group',
+			principalId: group.id,
+			roleId: 'deployer',
+			scope: { type: 'project', id: 'prj_1' },
+		});
+		expect(
+			core.ctx.iam
+				.whoCan('org_1', 'org:update', { type: 'org' })
+				.map((entry) => entry.principalId),
+		).toEqual(['user_1']);
+		expect(
+			core.ctx.iam
+				.whoCan('org_1', 'deployment:create', { type: 'project', id: 'prj_1' })
+				.map((entry) => entry.principalId)
+				.sort(),
+		).toEqual(['user_1', 'user_2']);
+	});
+
 	test('a deny explains its chain and require throws', () => {
 		addMember('user_1', 'viewer');
 		const viewer = principal({ role: 'viewer' });

@@ -105,6 +105,13 @@ export interface BindingView {
 	createdAt: number;
 }
 
+export interface WhoCanEntry {
+	principalType: BindingPrincipalType;
+	principalId: string;
+	/** The binding that allowed it, or null when a group path was used. */
+	via: string | null;
+}
+
 export interface GroupView {
 	id: string;
 	name: string;
@@ -155,21 +162,7 @@ export class IamService {
 			)
 			.all(principal.orgId, type, principal.userId, principal.userId);
 
-		const bindings = rows.flatMap((row) => {
-			const scope = scopeFromRow(row);
-			const permissions = this.rolePermissions(row.org_id ?? principal.orgId, row.role_id);
-			if (!scope || !permissions) return [];
-			return [
-				{
-					id: row.id,
-					roleId: row.role_id,
-					permissions,
-					scope,
-					expiresAt: row.expires_at,
-					condition: parseCondition(row.condition_json),
-				} satisfies Binding,
-			];
-		});
+		const bindings = this.bindingsFromRows(principal.orgId, rows);
 
 		const compiled = compileGrants({
 			orgId: principal.orgId,
@@ -214,6 +207,76 @@ export class IamService {
 
 	explain(principal: Principal, permission: Permission, resource: ResourceRef): Decision {
 		return this.decide(principal, permission, resource);
+	}
+
+	/**
+	 * Who can do this, for the "who can access this?" view (IAM.md I12). Expands group bindings to
+	 * their members and reconciles every member's base role first, so the answer matches a check.
+	 */
+	whoCan(orgId: string, permission: Permission, resource: ResourceRef): WhoCanEntry[] {
+		this.syncMembers(orgId);
+		const rows = this.#sqlite
+			.query<BindingRow, [string]>(
+				'SELECT * FROM iam_bindings WHERE org_id = ? OR org_id IS NULL',
+			)
+			.all(orgId);
+		const membersByGroup = new Map<string, string[]>();
+		for (const row of this.#sqlite
+			.query<{ group_id: string; user_id: string }, [string]>(
+				`SELECT m.group_id, m.user_id FROM iam_group_members m
+				 JOIN iam_groups g ON g.id = m.group_id WHERE g.org_id = ?`,
+			)
+			.all(orgId)) {
+			const list = membersByGroup.get(row.group_id) ?? [];
+			list.push(row.user_id);
+			membersByGroup.set(row.group_id, list);
+		}
+		const candidates = new Map<string, { type: BindingPrincipalType; id: string; rows: BindingRow[] }>();
+		const add = (type: BindingPrincipalType, id: string, row: BindingRow) => {
+			const key = `${type}:${id}`;
+			const entry = candidates.get(key) ?? { type, id, rows: [] };
+			entry.rows.push(row);
+			candidates.set(key, entry);
+		};
+		for (const row of rows) {
+			const type = row.principal_type as BindingPrincipalType;
+			if (type === 'group') {
+				for (const userId of membersByGroup.get(row.principal_id) ?? [])
+					add('user', userId, row);
+			} else add(type, row.principal_id, row);
+		}
+		const out: WhoCanEntry[] = [];
+		for (const candidate of candidates.values()) {
+			const decision = authorize(
+				compileGrants({
+					orgId,
+					bindings: this.bindingsFromRows(orgId, candidate.rows),
+					guardrails: this.guardrails(
+						{ kind: candidate.type === 'user' ? 'user' : 'serviceAccount', userId: candidate.id, orgId } as Principal,
+						candidate.type,
+					),
+				}),
+				{ permission, resource, context: { now: this.ctx.now() } },
+			);
+			if (decision.allow)
+				out.push({ principalType: candidate.type, principalId: candidate.id, via: decision.via ?? null });
+		}
+		return out;
+	}
+
+	/** Create the org binding a member's base role stands for, for every member not yet bound. */
+	syncMembers(orgId: string): number {
+		let members: Array<{ userId: string }> = [];
+		try {
+			members = this.#sqlite
+				.query<{ userId: string }, [string]>('SELECT userId FROM member WHERE organizationId = ?')
+				.all(orgId);
+		} catch {
+			return 0;
+		}
+		let added = 0;
+		for (const member of members) added += this.ensureMemberBindingFor(orgId, member.userId) ? 1 : 0;
+		return added;
 	}
 
 	private decide(principal: Principal, permission: Permission, resource: ResourceRef): Decision {
@@ -558,30 +621,50 @@ export class IamService {
 
 	// ---------------------------------------------------------------- internals
 
+	private bindingsFromRows(orgId: string, rows: readonly BindingRow[]): Binding[] {
+		return rows.flatMap((row) => {
+			const scope = scopeFromRow(row);
+			const permissions = this.rolePermissions(row.org_id ?? orgId, row.role_id);
+			if (!scope || !permissions) return [];
+			return [
+				{
+					id: row.id,
+					roleId: row.role_id,
+					permissions,
+					scope,
+					expiresAt: row.expires_at,
+					condition: parseCondition(row.condition_json),
+				} satisfies Binding,
+			];
+		});
+	}
+
 	/**
 	 * A user's `member.role` becomes an org binding the first time the engine sees them, when they
 	 * have none (IAM.md §4). I2 replaces the member endpoints so this disappears.
 	 */
 	private ensureMemberBinding(principal: Principal): void {
-		if (principal.kind === 'system') return;
-		const type = bindingType(principal);
-		if (type !== 'user') return;
+		if (bindingType(principal) !== 'user') return;
+		this.ensureMemberBindingFor(principal.orgId, principal.userId);
+	}
+
+	private ensureMemberBindingFor(orgId: string, userId: string): boolean {
 		const existing = this.#sqlite
 			.query('SELECT 1 FROM iam_bindings WHERE org_id = ? AND principal_type = ? AND principal_id = ? LIMIT 1')
-			.get(principal.orgId, type, principal.userId);
-		if (existing) return;
+			.get(orgId, 'user', userId);
+		if (existing) return false;
 		let role: string | undefined;
 		try {
 			role = this.#sqlite
 				.query<{ role: string }, [string, string]>(
 					'SELECT role FROM member WHERE organizationId = ? AND userId = ?',
 				)
-				.get(principal.orgId, principal.userId)?.role;
+				.get(orgId, userId)?.role;
 		} catch {
 			// Better Auth tables are absent in a bare core test or before boot.
-			return;
+			return false;
 		}
-		if (!role || !(role in roles)) return;
+		if (!role || !(role in roles)) return false;
 		this.ensureBuiltIns();
 		this.#sqlite.transaction(() => {
 			this.#sqlite.run(
@@ -589,10 +672,11 @@ export class IamService {
 				   (id, org_id, principal_type, principal_id, role_id, scope_type, scope_id, scope_parent_id,
 				    created_by, created_at)
 				 VALUES (?, ?, 'user', ?, ?, 'org', NULL, NULL, ?, ?)`,
-				[newId('bind_'), principal.orgId, principal.userId, role, 'system:member-sync', this.ctx.now()],
+				[newId('bind_'), orgId, userId, role, 'system:member-sync', this.ctx.now()],
 			);
-			this.touch(principal.orgId);
+			this.touch(orgId);
 		})();
+		return true;
 	}
 
 	private ensureBuiltIns(): void {
