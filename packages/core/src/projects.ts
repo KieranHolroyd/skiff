@@ -1,10 +1,9 @@
-import { and, desc, eq, gt, isNull, isNotNull, lte } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, isNotNull, lte } from 'drizzle-orm';
 import { projects, slugRedirects } from '@skiff/db';
 import {
 	checkSlug,
 	deriveSlug,
 	contentUrl,
-	requirePermission,
 	suggestSlugs,
 	type Principal,
 	type ProjectCreate,
@@ -137,7 +136,7 @@ export class ProjectService {
 	}
 
 	async create(principal: Principal, input: ProjectCreate): Promise<ProjectView> {
-		requirePermission(principal, 'project:create');
+		this.ctx.iam.require(principal, 'project:create', { type: 'org' });
 		// Functions is on by default (D110), but a platform can disable the tier with
 		// SKIFF_FEATURE_FUNCTIONS=0; refuse a project it could never run.
 		if (input.runtime === 'function' && !featureEnabled(this.ctx.config, 'FUNCTIONS'))
@@ -190,8 +189,9 @@ export class ProjectService {
 	}
 
 	async get(principal: Principal, slug: string, options: { includeDeleted?: boolean } = {}): Promise<ProjectView> {
-		requirePermission(principal, 'project:read');
-		return this.view(this.requireRow(principal, slug, options));
+		const row = this.requireRow(principal, slug, options);
+		this.ctx.iam.require(principal, 'project:read', { type: 'project', id: row.id });
+		return this.view(row);
 	}
 
 	/** Internal lookup that skips permission checks (other services re-check the action they need). */
@@ -218,16 +218,23 @@ export class ProjectService {
 	}
 
 	list(principal: Principal, options: { includeDeleted?: boolean; onlyDeleted?: boolean } = {}): ProjectView[] {
-		requirePermission(principal, 'project:read');
+		// A guest sees only the projects they hold a binding on (IAM.md §6.3). Filtering before the
+		// query keeps ordering and pagination correct once a caller adds a limit.
+		const scope = this.ctx.iam.scopeFilter(principal, 'project:read');
+		if (scope !== 'all' && scope.size === 0) return [];
 		const rows = this.ctx.db
 			.select()
 			.from(projects)
 			.where(
-				options.onlyDeleted
-					? and(eq(projects.orgId, principal.orgId), isNotNull(projects.deletedAt))
-					: options.includeDeleted
-						? eq(projects.orgId, principal.orgId)
-						: and(eq(projects.orgId, principal.orgId), isNull(projects.deletedAt)),
+				and(
+					eq(projects.orgId, principal.orgId),
+					options.onlyDeleted
+						? isNotNull(projects.deletedAt)
+						: options.includeDeleted
+							? undefined
+							: isNull(projects.deletedAt),
+					scope === 'all' ? undefined : inArray(projects.id, [...scope]),
+				),
 			)
 			.orderBy(desc(projects.createdAt))
 			.all() as ProjectRow[];
@@ -235,8 +242,8 @@ export class ProjectService {
 	}
 
 	async update(principal: Principal, slug: string, input: ProjectUpdate & { slug?: string }): Promise<ProjectView> {
-		requirePermission(principal, 'project:update');
 		const row = this.requireRow(principal, slug);
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: row.id });
 		const now = this.ctx.now();
 		const patch: Partial<ProjectRow> = { updatedAt: now };
 		if (input.name !== undefined) patch.name = input.name.trim();
@@ -289,8 +296,8 @@ export class ProjectService {
 		slug: string,
 		input: { scope: 'production' | 'previews'; mode: 'public' | 'password' | 'platform'; password?: string },
 	): Promise<ProjectView> {
-		requirePermission(principal, 'project:update');
 		const row = this.requireRow(principal, slug);
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: row.id });
 		// Each scope keeps its own password: changing one scope never touches the other's.
 		const patch: Partial<ProjectRow> = {
 			updatedAt: this.ctx.now(),
@@ -318,8 +325,8 @@ export class ProjectService {
 	}
 
 	async softDelete(principal: Principal, slug: string, options: { operationId?: string } = {}): Promise<void> {
-		requirePermission(principal, 'project:delete');
 		const row = this.requireRow(principal, slug);
+		this.ctx.iam.require(principal, 'project:delete', { type: 'project', id: row.id });
 		const now = this.ctx.now();
 		await this.ctx.audit.wrap(
 			{ principal, action: 'project.delete', resource: 'project', resourceId: row.id, args: { slug }, operationId: options.operationId },
@@ -349,8 +356,8 @@ export class ProjectService {
 	}
 
 	async restore(principal: Principal, slug: string, options: { operationId?: string } = {}): Promise<ProjectView> {
-		requirePermission(principal, 'project:update');
 		const row = this.requireRow(principal, slug, { includeDeleted: true });
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: row.id });
 		if (!row.deletedAt) return this.view(row);
 		// A restored project counts against the quota again, exactly like a new one.
 		this.ctx.quota.assertCanCreateProject(principal.orgId);
@@ -389,8 +396,8 @@ export class ProjectService {
 	 * (bulk `project.purge`). Irreversible, so it only accepts trashed projects.
 	 */
 	async purgeNow(principal: Principal, slug: string, options: { operationId?: string } = {}): Promise<void> {
-		requirePermission(principal, 'project:delete');
 		const row = this.requireRow(principal, slug, { includeDeleted: true });
+		this.ctx.iam.require(principal, 'project:delete', { type: 'project', id: row.id });
 		if (!row.deletedAt) throw new ConflictError(`"${slug}" is not in the trash. Delete it first.`);
 		await this.ctx.audit.wrap(
 			{

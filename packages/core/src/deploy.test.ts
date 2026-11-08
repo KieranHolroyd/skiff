@@ -224,3 +224,25 @@ describe('SPA hint', () => {
 		expect(suppressed.hint).toBeUndefined();
 	});
 });
+
+describe('resource-scoped access', () => {
+	test('a project-scoped viewer lists and reads only that project’s deployments', async () => {
+		const visible = await project(orgA, 'guest-visible');
+		const hidden = await project(orgA, 'guest-hidden');
+		const deployment = await core.uploads.deployInline(orgA, visible, [file('index.html', 'visible')]);
+		await core.uploads.deployInline(orgA, hidden, [file('index.html', 'hidden')]);
+		// A project-scoped viewer binding. Inserted directly so iamVersion stays 0 and the owner
+		// principals in the rest of this file keep their legacy org-wide grants.
+		opened.sqlite.run(
+			`INSERT INTO iam_bindings
+			   (id, org_id, principal_type, principal_id, role_id, scope_type, scope_id, created_by, created_at)
+			 VALUES ('bind_guest_deployments', 'org_a', 'user', 'user_guest', 'viewer', 'project', ?, 'test', 0)`,
+			[visible.id],
+		);
+		const guest = buildPrincipal({ kind: 'user', userId: 'user_guest', orgId: 'org_a', role: 'viewer' });
+
+		expect(core.deployments.list(guest, visible).map((item) => item.id)).toContain(deployment.id);
+		expect(core.deployments.get(guest, visible, deployment.id).id).toBe(deployment.id);
+		expect(() => core.deployments.list(guest, hidden)).toThrow(/permission/);
+	});
+});

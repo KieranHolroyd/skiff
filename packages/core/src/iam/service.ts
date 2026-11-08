@@ -133,7 +133,20 @@ export class IamService {
 
 	/** Compile a principal's grants. Cached by `(principal, org, iamVersion)` (IAM.md §5.2). */
 	compiledFor(principal: Principal): CompiledGrants {
-		if (principal.kind === 'system') return compileGrants({ orgId: principal.orgId, bindings: [] });
+		// A named system principal carries its fixed permission set (IAM.md I3); it has no bindings.
+		if (principal.kind === 'system') {
+			return compileGrants({
+				orgId: principal.orgId,
+				bindings: [
+					{
+						id: `system:${principal.userId}`,
+						roleId: 'system',
+						permissions: [...principal.permissions],
+						scope: { type: 'org' },
+					},
+				],
+			});
+		}
 		this.ensureMemberBinding(principal);
 		const version = this.version(principal.orgId);
 		const type = bindingType(principal);
@@ -163,6 +176,17 @@ export class IamService {
 			.all(principal.orgId, type, principal.userId, principal.userId);
 
 		const bindings = this.bindingsFromRows(principal.orgId, rows);
+		// Compatibility until I2 has seeded bindings everywhere: a principal with no binding rows
+		// at all keeps exactly the permissions its legacy role/grant already gave it. Once the
+		// member endpoints write bindings, this branch is unreachable and gets deleted.
+		if (bindings.length === 0 && version === 0 && principal.permissions.size > 0) {
+			bindings.push({
+				id: 'compat:legacy-role',
+				roleId: principal.role,
+				permissions: [...principal.permissions],
+				scope: { type: 'org' },
+			});
+		}
 
 		const compiled = compileGrants({
 			orgId: principal.orgId,

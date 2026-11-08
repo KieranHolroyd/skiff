@@ -2,13 +2,13 @@ import { resolve4, resolveCname } from 'node:dns/promises';
 import { and, asc, desc, eq, inArray, isNull, lt, or } from 'drizzle-orm';
 import { domains, nodes, projects } from '@skiff/db';
 import {
-	requirePermission,
 	type DomainCheckResult,
 	type DomainCreateInput,
 	type DomainKind,
 	type DomainStatus,
 	type DomainView,
 	type Principal,
+	type ResourceRef,
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import { resolveTxtRecords } from './dns-txt.ts';
@@ -17,6 +17,15 @@ import { newId, randomToken } from './util.ts';
 import type { ProjectRow } from './projects.ts';
 
 export type DomainRow = typeof domains.$inferSelect;
+
+/**
+ * The resource reference for one domain. `ResourceRef` has no `domain` member yet, and the catalog
+ * only grants `domain:*` at org or project scope, so the owning project is the narrowest resource
+ * the check can carry today.
+ */
+function domainResource(row: Pick<DomainRow, 'projectId'>): ResourceRef {
+	return { type: 'project', id: row.projectId };
+}
 
 const VERIFY_PREFIX = '_skiff';
 const TOKEN_PREFIX = 'skiff-verify=';
@@ -277,15 +286,31 @@ export class DomainService {
 	}
 
 	list(principal: Principal, project?: ProjectRow): DomainView[] {
-		requirePermission(principal, 'domain:read');
-		const rows = project
-			? this.ctx.db.select().from(domains).where(eq(domains.projectId, project.id)).orderBy(desc(domains.createdAt)).all()
-			: this.ctx.db
-					.select()
-					.from(domains)
-					.where(eq(domains.orgId, principal.orgId))
-					.orderBy(desc(domains.createdAt))
-					.all();
+		let rows: DomainRow[];
+		if (project) {
+			this.ctx.iam.require(principal, 'domain:read', { type: 'project', id: project.id });
+			rows = this.ctx.db
+				.select()
+				.from(domains)
+				.where(eq(domains.projectId, project.id))
+				.orderBy(desc(domains.createdAt))
+				.all();
+		} else {
+			// A guest only sees domains of projects they can read (IAM.md §6.3).
+			const scope = this.ctx.iam.scopeFilter(principal, 'domain:read');
+			if (scope !== 'all' && scope.size === 0) return [];
+			rows = this.ctx.db
+				.select()
+				.from(domains)
+				.where(
+					and(
+						eq(domains.orgId, principal.orgId),
+						scope === 'all' ? undefined : inArray(domains.projectId, [...scope]),
+					),
+				)
+				.orderBy(desc(domains.createdAt))
+				.all();
+		}
 		return rows.flatMap((row) => {
 			const owner = this.projectById(row.projectId);
 			return owner ? [this.view(row, owner)] : [];
@@ -293,16 +318,16 @@ export class DomainService {
 	}
 
 	get(principal: Principal, id: string): DomainView {
-		requirePermission(principal, 'domain:read');
 		const row = this.requireRow(principal, id);
+		this.ctx.iam.require(principal, 'domain:read', domainResource(row));
 		const project = this.projectById(row.projectId);
 		if (!project) throw new NotFoundError('Project');
 		return this.view(row, project);
 	}
 
 	async create(principal: Principal, input: DomainCreateInput): Promise<DomainView> {
-		requirePermission(principal, 'domain:create');
 		const project = this.ctx.projects.requireRow(principal, input.project);
+		this.ctx.iam.require(principal, 'domain:create', { type: 'project', id: project.id });
 		const hostname = normalizeHostname(input.hostname);
 		this.assertNotPlatformHost(hostname);
 		const clash = this.ctx.db.select().from(domains).where(eq(domains.hostname, hostname)).get();
@@ -383,9 +408,9 @@ export class DomainService {
 	}
 
 	async remove(principal: Principal, id: string): Promise<void> {
-		requirePermission(principal, 'domain:delete');
 		const row = this.ctx.db.select().from(domains).where(and(eq(domains.id, id), eq(domains.orgId, principal.orgId))).get();
 		if (!row) throw new NotFoundError('Domain');
+		this.ctx.iam.require(principal, 'domain:delete', domainResource(row));
 		const project = this.projectById(row.projectId);
 		await this.removeCloudflareRecords(row, project);
 		this.ctx.db.delete(domains).where(eq(domains.id, id)).run();
@@ -402,8 +427,8 @@ export class DomainService {
 
 	/** Re-check DNS; on success the domain moves to `verified` and is eligible for TLS. */
 	async check(principal: Principal, id: string): Promise<DomainCheckResult> {
-		requirePermission(principal, 'domain:read');
 		const row = this.requireRow(principal, id);
+		this.ctx.iam.require(principal, 'domain:read', domainResource(row));
 		const project = this.projectById(row.projectId);
 		if (!project) throw new NotFoundError('Project');
 		if (!row.verificationToken)

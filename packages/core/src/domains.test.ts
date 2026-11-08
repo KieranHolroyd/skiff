@@ -531,3 +531,43 @@ describe('domain status lifecycle', () => {
 		expect(nextStatus({ status: 'verified', verifiedAt: 1, createdAt: 0 }, false, DOMAIN_FAIL_AFTER_MS * 2)).toBe('verified');
 	});
 });
+
+describe('resource-scoped access', () => {
+	test('a guest sees and reads only the domains of their project', async () => {
+		await core.projects.create(principal, {
+			name: 'Other',
+			slug: 'guest-other',
+			runtime: 'static',
+			placement: 'edge',
+			productionAccess: 'public',
+			previewAccess: 'platform',
+		});
+		const blog = core.projects.requireRow(principal, 'blog');
+		const other = core.projects.requireRow(principal, 'guest-other');
+		const visible = await service.create(principal, {
+			project: 'blog',
+			hostname: 'guest-visible.example.net',
+			redirectWww: false,
+		});
+		const hidden = await service.create(principal, {
+			project: 'guest-other',
+			hostname: 'guest-hidden.example.net',
+			redirectWww: false,
+		});
+		// A project-scoped viewer binding. Inserted directly so iamVersion stays 0 and the owner
+		// principal in the rest of this file keeps its legacy org-wide grants.
+		opened.sqlite.run(
+			`INSERT INTO iam_bindings
+			   (id, org_id, principal_type, principal_id, role_id, scope_type, scope_id, created_by, created_at)
+			 VALUES ('bind_guest_domains', 'org_1', 'user', 'user_guest', 'viewer', 'project', ?, 'test', 0)`,
+			[blog.id],
+		);
+		const guest = buildPrincipal({ kind: 'user', userId: 'user_guest', orgId: 'org_1', role: 'viewer' });
+
+		expect(service.list(guest).map((domain) => domain.id)).toContain(visible.id);
+		expect(service.list(guest).map((domain) => domain.id)).not.toContain(hidden.id);
+		expect(service.get(guest, visible.id).id).toBe(visible.id);
+		expect(() => service.get(guest, hidden.id)).toThrow(/permission/);
+		expect(() => service.list(guest, other)).toThrow(/permission/);
+	});
+});

@@ -271,6 +271,25 @@ describe('bindings and the decision', () => {
 		).toEqual(['user_1', 'user_2']);
 	});
 
+	test('a named system principal uses its fixed permissions, not bindings', () => {
+		const robot: Principal = {
+			kind: 'system',
+			userId: 'system:alerts',
+			orgId: 'org_1',
+			role: 'viewer',
+			permissions: new Set(['project:read']),
+			credential: 'system',
+		};
+		expect(core.ctx.iam.can(robot, 'project:read', { type: 'org' })).toBe(true);
+		expect(core.ctx.iam.can(robot, 'project:delete', { type: 'org' })).toBe(false);
+	});
+
+	test('a principal with no binding rows keeps its legacy permissions during I2', () => {
+		const legacy = principal({ userId: 'user_legacy', role: 'viewer' });
+		expect(core.ctx.iam.can(legacy, 'project:read', { type: 'org' })).toBe(true);
+		expect(core.ctx.iam.can(legacy, 'project:delete', { type: 'org' })).toBe(false);
+	});
+
 	test('a deny explains its chain and require throws', () => {
 		addMember('user_1', 'viewer');
 		const viewer = principal({ role: 'viewer' });

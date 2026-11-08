@@ -58,6 +58,7 @@ import type { FailoverService } from './failover-service.ts';
 import type { ClusterConfigService } from './cluster-config-service.ts';
 import type { IamService } from './iam/service.ts';
 import type { ServiceAccountService } from './service-accounts.ts';
+import type { AccessKeyService } from './access-keys.ts';
 
 /**
  * Shared dependency object. Service instances are attached after construction (in `createCore`)
@@ -150,6 +151,8 @@ export interface CoreContext {
 	iam: IamService;
 	/** Service accounts: org-owned machine principals (`sa_…`, IAM.md I13). */
 	serviceAccounts: ServiceAccountService;
+	/** Org-bound access keys and their verification (IAM.md I14). */
+	accessKeys: AccessKeyService;
 	/** Functions: Workers-compatible workloads on workerd (D110). */
 	functions: FunctionService;
 }

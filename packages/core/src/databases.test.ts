@@ -425,6 +425,103 @@ describe('managed databases', () => {
 		expect(JSON.stringify(audit)).not.toContain(creds.password);
 	});
 
+	test('resource scopes: a project binding covers attached databases and a database binding its own', async () => {
+		// A separate org keeps this test's `iam_bindings`/`iamVersion` away from org_1, whose
+		// principals still rely on the I2 compatibility fallback in the other tests.
+		const scopedOwner = buildPrincipal({
+			kind: 'user',
+			userId: 'user_scoped_owner',
+			orgId: 'org_scope',
+			role: 'owner',
+		});
+		for (const [name, slug] of [
+			['Scoped app', 'scoped-app'],
+			['Other app', 'other-app'],
+		] as const) {
+			await core.projects.create(scopedOwner, {
+				name,
+				slug,
+				runtime: 'process',
+				placement: 'auto',
+				productionAccess: 'public',
+				previewAccess: 'platform',
+			});
+		}
+		const scopedProject = core.projects.requireRow(scopedOwner, 'scoped-app');
+		const otherProject = core.projects.requireRow(scopedOwner, 'other-app');
+		const scopedDb = core.databases.create(scopedOwner, {
+			name: 'scoped-db',
+			project: 'scoped-app',
+			memoryMb: 128,
+		});
+		const otherDb = core.databases.create(scopedOwner, {
+			name: 'other-db',
+			project: 'other-app',
+			memoryMb: 128,
+		});
+
+		// Bind the owner first: the write bumps `iamVersion`, after which org_scope principals are
+		// resolved from bindings rather than the legacy fallback (there is no `member` table here).
+		core.ctx.iam.bind(scopedOwner, {
+			principalType: 'user',
+			principalId: 'user_scoped_owner',
+			roleId: 'owner',
+			scope: { type: 'org' },
+		});
+
+		// A project-scope grant covers a database through any of its attachments, and nothing else.
+		core.ctx.iam.bind(scopedOwner, {
+			principalType: 'user',
+			principalId: 'user_project_guest',
+			roleId: 'deployer',
+			scope: { type: 'project', id: scopedProject.id },
+		});
+		const projectGuest = buildPrincipal({
+			kind: 'user',
+			userId: 'user_project_guest',
+			orgId: 'org_scope',
+			role: 'viewer',
+		});
+		expect(core.databases.list(projectGuest).map((db) => db.name)).toEqual(['scoped-db']);
+		expect(core.databases.get(projectGuest, 'scoped-db').id).toBe(scopedDb.id);
+		expect(() => core.databases.get(projectGuest, 'other-db')).toThrow(/database:read/);
+		expect(core.databases.credentials(projectGuest, 'scoped-db').username).toBe('scoped_db');
+		expect(() => core.databases.credentials(projectGuest, 'other-db')).toThrow(/database:credentials/);
+
+		// A database-scope grant covers that database directly, even with no project to report.
+		core.ctx.iam.bind(scopedOwner, {
+			principalType: 'user',
+			principalId: 'user_database_guest',
+			roleId: 'viewer',
+			scope: { type: 'database', id: otherDb.id },
+		});
+		const databaseGuest = buildPrincipal({
+			kind: 'user',
+			userId: 'user_database_guest',
+			orgId: 'org_scope',
+			role: 'viewer',
+		});
+		expect(core.databases.list(databaseGuest).map((db) => db.name)).toEqual(['other-db']);
+		expect(core.databases.get(databaseGuest, 'other-db').id).toBe(otherDb.id);
+		expect(() => core.databases.get(databaseGuest, 'scoped-db')).toThrow(/database:read/);
+		// viewer holds database:read but not database:update or database:credentials.
+		expect(() => core.databases.update(databaseGuest, 'other-db', { memoryMb: 256 })).toThrow(
+			/database:update/,
+		);
+		expect(() => core.databases.credentials(databaseGuest, 'other-db')).toThrow(/database:credentials/);
+
+		// Return the node's memory so the later deployment tests keep their capacity.
+		for (const [project, name] of [
+			['scoped-app', 'scoped-db'],
+			['other-app', 'other-db'],
+		] as const) {
+			core.databases.detach(scopedOwner, core.projects.requireRow(scopedOwner, project), name);
+			core.databases.delete(scopedOwner, name);
+			core.databases.purgeNow(scopedOwner, name);
+		}
+		core.databases.applyPurged(edgeId, [scopedDb.id, otherDb.id]);
+	});
+
 	test('attaching injects connection values at activation and re-versions the app', async () => {
 		await core.projects.create(owner, {
 			name: 'backend',

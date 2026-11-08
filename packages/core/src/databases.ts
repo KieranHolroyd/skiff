@@ -56,7 +56,6 @@ import {
 	pitrStanzaFor,
 	pitrUnsupportedReason,
 	postgresPitrImage,
-	requirePermission,
 	validatePitrTargetTime,
 	validatePitrTargetInWindow,
 	type DatabaseAttach,
@@ -95,7 +94,9 @@ import {
 	type DatabaseUpgradePlan,
 	type DatabaseUpgradeStep,
 	type DatabaseView,
+	type Permission,
 	type Principal,
+	type ResourceRef,
 	type WorkloadActivation,
 	type WorkloadDesired,
 	type WorkloadRuntime,
@@ -103,7 +104,6 @@ import {
 } from '@skiff/contracts';
 import { featureEnabled } from './config.ts';
 import type { CoreContext } from './context.ts';
-import { requireCredentialReveal } from './credential-reveal.ts';
 import { nextCronTime } from './cron.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { resolvePlacement } from './placement.ts';
@@ -160,21 +160,34 @@ export class DatabaseService {
 	// ---------------------------------------------------------------- reads
 
 	list(principal: Principal, options: { includeDeleted?: boolean } = {}): DatabaseView[] {
-		requirePermission(principal, 'database:read');
 		const filters = [eq(databases.orgId, principal.orgId)];
 		if (!options.includeDeleted) filters.push(isNull(databases.deletedAt));
+		// A guest sees only the databases they hold a binding on (IAM.md §6.3). A database has no
+		// `project_id`: a project-scope binding covers it through any of its attachments, and a
+		// database-scope binding covers it directly, so each row is checked against its resources.
+		const scope = this.ctx.iam.scopeFilter(principal, 'database:read', 'project');
+		// `scopeFilter` reads bindings only; a credential restriction still narrows an org grant.
+		const orgWide =
+			scope === 'all' && this.ctx.iam.can(principal, 'database:read', { type: 'org' });
+		const projects = orgWide ? null : this.attachmentProjects(principal.orgId);
 		return this.ctx.db
 			.select()
 			.from(databases)
 			.where(and(...filters))
 			.all()
+			.filter(
+				(row) =>
+					projects === null ||
+					this.canDatabasePermission(principal, 'database:read', row, projects.get(row.id) ?? []),
+			)
 			.sort((a, b) => a.name.localeCompare(b.name))
 			.map((row) => this.toView(row));
 	}
 
 	get(principal: Principal, name: string, options: { includeDeleted?: boolean } = {}): DatabaseView {
-		requirePermission(principal, 'database:read');
-		return this.toView(this.requireRow(principal, name, options));
+		const row = this.requireRow(principal, name, options);
+		this.requireDatabasePermission(principal, 'database:read', row);
+		return this.toView(row);
 	}
 
 	requireRow(principal: Principal, name: string, options: { includeDeleted?: boolean } = {}): DatabaseRow {
@@ -187,10 +200,78 @@ export class DatabaseService {
 		return row;
 	}
 
+	/**
+	 * The resources a database check may match. A database is an org resource that can be attached
+	 * to more than one project (and has no `project_id` column), so a project-scope grant covers it
+	 * through any attachment; a database-scope grant covers the database itself.
+	 */
+	private databaseResources(row: DatabaseRow, projectIds: readonly string[]): ResourceRef[] {
+		return [
+			{ type: 'database', id: row.id },
+			...[...new Set(projectIds)].map((projectId) => ({
+				type: 'database' as const,
+				id: row.id,
+				projectId,
+			})),
+		];
+	}
+
+	/** `require` with the resource threaded through: the database, or any project it is attached to. */
+	private requireDatabasePermission(
+		principal: Principal,
+		permission: Permission,
+		row: DatabaseRow,
+		projectIds?: readonly string[],
+	): void {
+		const database: ResourceRef = { type: 'database', id: row.id };
+		// An org- or database-scope grant covers the resource without looking at attachments.
+		if (this.ctx.iam.can(principal, permission, database)) return;
+		const resources = this.databaseResources(row, projectIds ?? this.attachedProjectIds(row.id));
+		if (resources.some((resource) => this.ctx.iam.can(principal, permission, resource))) return;
+		// Ask the engine for the decision (and reason) against the database itself.
+		this.ctx.iam.require(principal, permission, database);
+	}
+
+	private canDatabasePermission(
+		principal: Principal,
+		permission: Permission,
+		row: DatabaseRow,
+		projectIds: readonly string[] = this.attachedProjectIds(row.id),
+	): boolean {
+		return this.databaseResources(row, projectIds).some((resource) =>
+			this.ctx.iam.can(principal, permission, resource),
+		);
+	}
+
+	private attachedProjectIds(databaseId: string): string[] {
+		return this.ctx.db
+			.select({ projectId: databaseAttachments.projectId })
+			.from(databaseAttachments)
+			.where(eq(databaseAttachments.databaseId, databaseId))
+			.all()
+			.map((row) => row.projectId);
+	}
+
+	/** Every database's attachment projects in one query, for the list filter. */
+	private attachmentProjects(orgId: string): Map<string, string[]> {
+		const projects = new Map<string, string[]>();
+		for (const row of this.ctx.db
+			.select({ databaseId: databaseAttachments.databaseId, projectId: databaseAttachments.projectId })
+			.from(databaseAttachments)
+			.where(eq(databaseAttachments.orgId, orgId))
+			.all()) {
+			const ids = projects.get(row.databaseId) ?? [];
+			ids.push(row.projectId);
+			projects.set(row.databaseId, ids);
+		}
+		return projects;
+	}
+
 	// ---------------------------------------------------------------- lifecycle
 
 	create(principal: Principal, raw: DatabaseCreate): DatabaseView {
-		requirePermission(principal, 'database:create');
+		// A database exists as an org resource before any project attachment, so creation is org-scoped.
+		this.ctx.iam.require(principal, 'database:create', { type: 'org' });
 		const input = databaseCreateSchema.parse(raw);
 		const info = databaseEngineRegistry[input.engine];
 		const version = input.version ?? info.defaultVersion;
@@ -223,8 +304,8 @@ export class DatabaseService {
 		let project: ProjectRow | null = null;
 		let requested = input.placement;
 		if (input.project) {
-			requirePermission(principal, 'project:update');
 			project = this.ctx.projects.requireRow(principal, input.project);
+			this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 			if (project.runtime === 'static')
 				throw new ValidationError(
 					`Project "${project.slug}" is static; only process or container projects can use a database.`,
@@ -329,9 +410,9 @@ export class DatabaseService {
 	}
 
 	update(principal: Principal, name: string, raw: DatabaseUpdate): DatabaseView {
-		requirePermission(principal, 'database:update');
-		const patch = databaseUpdateSchema.parse(raw);
 		const row = this.requireRow(principal, name);
+		this.requireDatabasePermission(principal, 'database:update', row);
+		const patch = databaseUpdateSchema.parse(raw);
 		this.ctx.moves.assertNotMoving(row);
 		const info = databaseEngineRegistry[row.engine];
 		const projectId = this.attachmentsOf(row.id)[0]?.projectId;
@@ -417,9 +498,9 @@ export class DatabaseService {
 	 * The platform deliberately does not start the version switch itself in this release.
 	 */
 	upgradeDatabase(principal: Principal, name: string, raw: DatabaseUpgradeInput): DatabaseUpgradePlan {
-		requirePermission(principal, 'database:update');
-		const input = databaseUpgradeSchema.parse(raw);
 		const row = this.requireRow(principal, name);
+		this.requireDatabasePermission(principal, 'database:update', row);
+		const input = databaseUpgradeSchema.parse(raw);
 		this.ctx.moves.assertNotMoving(row);
 		const info = databaseEngineRegistry[row.engine];
 		this.requireCapability(row, 'upgradePlan', 'The upgrade planner');
@@ -555,8 +636,8 @@ export class DatabaseService {
 	}
 
 	/** Soft delete (D59): the container stops, the data dir stays on the node for `trashDays`. */	delete(principal: Principal, name: string): DatabaseView {
-		requirePermission(principal, 'database:delete');
 		const row = this.requireRow(principal, name);
+		this.requireDatabasePermission(principal, 'database:delete', row);
 		this.ctx.moves.assertNotMoving(row);
 		const attached = this.attachmentsOf(row.id);
 		if (attached.length > 0)
@@ -595,8 +676,8 @@ export class DatabaseService {
 	}
 
 	restore(principal: Principal, name: string): DatabaseView {
-		requirePermission(principal, 'database:delete');
 		const row = this.requireRow(principal, name, { includeDeleted: true });
+		this.requireDatabasePermission(principal, 'database:delete', row);
 		if (!row.deletedAt) return this.toView(row);
 		if (row.purgeRequestedAt)
 			throw new ConflictError(`Database "${name}" is being purged and can no longer be restored.`);
@@ -627,8 +708,8 @@ export class DatabaseService {
 
 	/** Permanently delete a trashed database now. The node deletes the data, then the row goes. */
 	purgeNow(principal: Principal, name: string): void {
-		requirePermission(principal, 'database:delete');
 		const row = this.requireRow(principal, name, { includeDeleted: true });
+		this.requireDatabasePermission(principal, 'database:delete', row);
 		if (!row.deletedAt) throw new ConflictError(`Database "${name}" must be deleted before it can be purged.`);
 		const now = this.ctx.now();
 		this.ctx.db
@@ -674,8 +755,9 @@ export class DatabaseService {
 
 	/** The owner URL and password (D58): dashboard or CLI API key, never MCP. Audited. */
 	credentials(principal: Principal, name: string): DatabaseCredentials {
-		requireCredentialReveal(principal, 'database:credentials');
 		const row = this.requireRow(principal, name);
+		this.requireDatabasePermission(principal, 'database:credentials', row);
+		this.assertCredentialRevealAllowed(principal);
 		const user = databaseIdentifier(row.name);
 		const pass = this.ctx.secrets.open(row.orgId, row.ownerSecret);
 		const info = databaseEngineRegistry[row.engine];
@@ -747,8 +829,9 @@ export class DatabaseService {
 
 	/** Metadata only: whether a public URL exists and when it was last set. */
 	publicUrl(principal: Principal, name: string): DatabasePublicUrlView {
-		requirePermission(principal, 'database:read');
-		return this.publicUrlView(this.requireRow(principal, name));
+		const row = this.requireRow(principal, name);
+		this.requireDatabasePermission(principal, 'database:read', row);
+		return this.publicUrlView(row);
 	}
 
 	/**
@@ -756,9 +839,9 @@ export class DatabaseService {
 	 * SQLite; the URL is never written to the audit row, desired state or a view.
 	 */
 	setPublicUrl(principal: Principal, name: string, raw: unknown): DatabasePublicUrlView {
-		requirePermission(principal, 'database:update');
-		const input = databasePublicUrlUpdateSchema.parse(raw);
 		const row = this.requireRow(principal, name);
+		this.requireDatabasePermission(principal, 'database:update', row);
+		const input = databasePublicUrlUpdateSchema.parse(raw);
 		const schemes = databasePublicUrlSchemes(row.engine);
 		const scheme = input.url.slice(0, input.url.indexOf('://')).toLowerCase();
 		if (!schemes.includes(scheme))
@@ -789,9 +872,9 @@ export class DatabaseService {
 
 	/** Decrypt the public URL. This is the only read path; every call is audited. */
 	revealPublicUrl(principal: Principal, name: string): DatabasePublicUrlReveal {
-		requirePermission(principal, 'database:read');
-		requirePermission(principal, 'database:credentials');
 		const row = this.requireRow(principal, name);
+		this.requireDatabasePermission(principal, 'database:read', row);
+		this.requireDatabasePermission(principal, 'database:credentials', row);
 		if (!row.publicUrlSealed) throw new NotFoundError(`Public URL for "${name}"`);
 		const url = this.ctx.secrets.open(row.orgId, row.publicUrlSealed);
 		this.ctx.audit.record({
@@ -811,8 +894,8 @@ export class DatabaseService {
 	}
 
 	clearPublicUrl(principal: Principal, name: string): DatabasePublicUrlView {
-		requirePermission(principal, 'database:update');
 		const row = this.requireRow(principal, name);
+		this.requireDatabasePermission(principal, 'database:update', row);
 		this.ctx.db
 			.update(databases)
 			.set({
@@ -841,9 +924,9 @@ export class DatabaseService {
 	 * the PgBouncer sidecar through a small request flag the node acknowledges.
 	 */
 	restart(principal: Principal, name: string, raw: unknown = {}): DatabaseView {
-		requirePermission(principal, 'database:update');
-		const input = databaseRestartSchema.parse(raw);
 		const row = this.requireRow(principal, name);
+		this.requireDatabasePermission(principal, 'database:update', row);
+		const input = databaseRestartSchema.parse(raw);
 		this.ctx.moves.assertNotMoving(row);
 		const now = this.ctx.now();
 		if (input.target === 'pooler') {
@@ -965,8 +1048,8 @@ export class DatabaseService {
 	// ---------------------------------------------------------------- credential rotation
 
 	rotations(principal: Principal, name: string): DatabaseRotationView[] {
-		requirePermission(principal, 'database:read');
 		const db = this.requireRow(principal, name, { includeDeleted: true });
+		this.requireDatabasePermission(principal, 'database:read', db);
 		return this.ctx.db
 			.select()
 			.from(databaseRotations)
@@ -982,10 +1065,10 @@ export class DatabaseService {
 	 * failed rotation cannot lock an app out.
 	 */
 	rotateCredentials(principal: Principal, name: string, raw: unknown): DatabaseRotationView {
-		requirePermission(principal, 'database:credentials');
-		requirePermission(principal, 'database:update');
-		const input = databaseRotateSchema.parse(raw);
 		const db = this.requireRow(principal, name);
+		this.requireDatabasePermission(principal, 'database:credentials', db);
+		this.requireDatabasePermission(principal, 'database:update', db);
+		const input = databaseRotateSchema.parse(raw);
 		this.ctx.moves.assertNotMoving(db);
 		this.requireCapability(db, 'rotation', 'Credential rotation');
 		if (input.role === 'monitor') this.requireCapability(db, 'metrics', 'The monitor role');
@@ -1153,18 +1236,18 @@ export class DatabaseService {
 	// ---------------------------------------------------------------- named credentials
 
 	listCredentials(principal: Principal, name: string): DatabaseCredentialView[] {
-		requirePermission(principal, 'database:read');
 		const db = this.requireRow(principal, name, { includeDeleted: true });
+		this.requireDatabasePermission(principal, 'database:read', db);
 		this.ensureBuiltInCredential(db.id, 'owner');
 		if (databaseCapabilities(db.engine).metrics) this.ensureBuiltInCredential(db.id, 'monitor');
 		return this.credentialsOf(db.id).map(toCredentialView);
 	}
 
 	createCredential(principal: Principal, name: string, raw: unknown): DatabaseCredentialView {
-		requirePermission(principal, 'database:credentials');
-		requirePermission(principal, 'database:update');
-		const input = databaseCredentialCreateSchema.parse(raw ?? {}) as DatabaseCredentialCreate;
 		const db = this.requireRow(principal, name);
+		this.requireDatabasePermission(principal, 'database:credentials', db);
+		this.requireDatabasePermission(principal, 'database:update', db);
+		const input = databaseCredentialCreateSchema.parse(raw ?? {}) as DatabaseCredentialCreate;
 		this.ctx.moves.assertNotMoving(db);
 		this.requireCapability(db, 'namedCredentials', 'Named credentials');
 		if (input.role !== 'app' && input.role !== 'readonly' && input.role !== 'backup')
@@ -1203,9 +1286,9 @@ export class DatabaseService {
 	}
 
 	rotateNamedCredential(principal: Principal, name: string, credentialId: string): DatabaseCredentialView {
-		requirePermission(principal, 'database:credentials');
-		requirePermission(principal, 'database:update');
 		const db = this.requireRow(principal, name);
+		this.requireDatabasePermission(principal, 'database:credentials', db);
+		this.requireDatabasePermission(principal, 'database:update', db);
 		const credential = this.requireCredential(db.id, credentialId);
 		if (credential.role === 'owner' || credential.role === 'monitor')
 			throw new ValidationError('Rotate the owner or monitor credential with rotate_database_credentials.');
@@ -1232,9 +1315,9 @@ export class DatabaseService {
 	}
 
 	revokeCredential(principal: Principal, name: string, credentialId: string): DatabaseCredentialView {
-		requirePermission(principal, 'database:credentials');
-		requirePermission(principal, 'database:update');
 		const db = this.requireRow(principal, name);
+		this.requireDatabasePermission(principal, 'database:credentials', db);
+		this.requireDatabasePermission(principal, 'database:update', db);
 		const credential = this.requireCredential(db.id, credentialId);
 		if (credential.role === 'owner' || credential.role === 'monitor')
 			throw new ValidationError('The built-in owner and monitor credentials cannot be revoked here.');
@@ -1268,10 +1351,11 @@ export class DatabaseService {
 	 * session or the CLI's API key with `database:credentials`, never MCP. Every read is audited.
 	 */
 	revealCredential(principal: Principal, name: string, credentialId: string): DatabaseCredentialView & { password: string } {
-		requireCredentialReveal(principal, 'database:credentials');
+		const db = this.requireRow(principal, name);
+		this.requireDatabasePermission(principal, 'database:credentials', db);
+		this.assertCredentialRevealAllowed(principal);
 		if (principal.kind === 'system')
 			throw new CoreError('forbidden', 'Credential reveal needs a user session or API key.', 403);
-		const db = this.requireRow(principal, name);
 		const credential = this.requireCredential(db.id, credentialId);
 		if (credential.status !== 'ready' || credential.revokedAt !== null)
 			throw new ConflictError('This credential is not active.');
@@ -1484,14 +1568,15 @@ export class DatabaseService {
 	}
 
 	backupPolicy(principal: Principal, name: string): DatabaseBackupSummary {
-		requirePermission(principal, 'database:read');
-		return this.backupSummary(this.requireRow(principal, name));
+		const row = this.requireRow(principal, name);
+		this.requireDatabasePermission(principal, 'database:read', row);
+		return this.backupSummary(row);
 	}
 
 	setBackupPolicy(principal: Principal, name: string, raw: unknown): DatabaseBackupSummary {
-		requirePermission(principal, 'database:update');
-		const patch = databaseBackupPolicySchema.parse(raw);
 		const row = this.requireRow(principal, name);
+		this.requireDatabasePermission(principal, 'database:update', row);
+		const patch = databaseBackupPolicySchema.parse(raw);
 		this.requireCapability(row, 'backups', 'Backups');
 		const schedule = patch.schedule ?? row.backupSchedule;
 		const enabled = patch.enabled ?? row.backupEnabled;
@@ -1524,8 +1609,8 @@ export class DatabaseService {
 	}
 
 	listBackups(principal: Principal, name: string, options: { includeDeleted?: boolean } = {}): DatabaseBackupView[] {
-		requirePermission(principal, 'database:read');
 		const db = this.requireRow(principal, name, options);
+		this.requireDatabasePermission(principal, 'database:read', db);
 		return this.ctx.db
 			.select()
 			.from(databaseBackups)
@@ -1536,8 +1621,8 @@ export class DatabaseService {
 	}
 
 	getBackup(principal: Principal, name: string, backupId: string): DatabaseBackupView {
-		requirePermission(principal, 'database:read');
 		const db = this.requireRow(principal, name, { includeDeleted: true });
+		this.requireDatabasePermission(principal, 'database:read', db);
 		const row = this.ctx.db
 			.select()
 			.from(databaseBackups)
@@ -1549,9 +1634,9 @@ export class DatabaseService {
 
 	/** Queue a dump now. The node picks it up on its next desired-state pull. */
 	createBackup(principal: Principal, name: string, raw: unknown = {}): DatabaseBackupView {
-		requirePermission(principal, 'database:update');
-		const input = databaseBackupCreateSchema.parse(raw);
 		const db = this.requireRow(principal, name);
+		this.requireDatabasePermission(principal, 'database:update', db);
+		const input = databaseBackupCreateSchema.parse(raw);
 		this.ctx.moves.assertNotMoving(db);
 		this.requireCapability(db, 'backups', 'Backups');
 		const pending = this.ctx.db
@@ -1597,8 +1682,8 @@ export class DatabaseService {
 
 	/** Delete one artifact. The object goes first; a missing object is treated as already gone. */
 	async deleteBackup(principal: Principal, name: string, backupId: string): Promise<void> {
-		requirePermission(principal, 'database:delete');
 		const db = this.requireRow(principal, name, { includeDeleted: true });
+		this.requireDatabasePermission(principal, 'database:delete', db);
 		const backup = this.ctx.db
 			.select()
 			.from(databaseBackups)
@@ -1640,7 +1725,9 @@ export class DatabaseService {
 	 * `pg_restore` succeeded; consumers can attach it immediately.
 	 */
 	restoreBackup(principal: Principal, sourceName: string, backupId: string, raw: unknown): DatabaseView {
-		requirePermission(principal, 'database:create');
+		// The new database may carry a project, but it does not exist yet, so creation is org-scoped
+		// (`create` re-checks it and the project attachment separately).
+		this.ctx.iam.require(principal, 'database:create', { type: 'org' });
 		const source = this.requireRow(principal, sourceName, { includeDeleted: true });
 		const backup = this.ctx.db
 			.select()
@@ -2021,8 +2108,8 @@ export class DatabaseService {
 
 	/** PITR state for one database (docs/PITR.md). Readable while the feature flag is off. */
 	pitrStatus(principal: Principal, name: string): DatabasePitrStatus {
-		requirePermission(principal, 'database:read');
 		const row = this.requireRow(principal, name);
+		this.requireDatabasePermission(principal, 'database:read', row);
 		const state = this.ctx.db.select().from(databasePitr).where(eq(databasePitr.databaseId, row.id)).get();
 		let repo: DatabasePitrStatus['repo'];
 		if (state) {
@@ -2060,10 +2147,10 @@ export class DatabaseService {
 
 	/** Enable or disable WAL archiving and the full/diff base-backup schedule. */
 	setPitrPolicy(principal: Principal, name: string, raw: unknown): DatabasePitrStatus {
-		requirePermission(principal, 'database:update');
+		const row = this.requireRow(principal, name);
+		this.requireDatabasePermission(principal, 'database:update', row);
 		this.requirePitrFeature();
 		const input = databasePitrPolicySchema.parse(raw);
-		const row = this.requireRow(principal, name);
 		this.ctx.moves.assertNotMoving(row);
 		this.requireCapability(row, 'pitr', 'Point-in-time recovery');
 		if (input.enabled) {
@@ -2151,10 +2238,10 @@ export class DatabaseService {
 
 	/** Queue a base backup now; the scheduler handles the recurring full/diff pair. */
 	pitrBackup(principal: Principal, name: string, raw: unknown = {}): DatabasePitrTask {
-		requirePermission(principal, 'database:update');
+		const row = this.requireRow(principal, name);
+		this.requireDatabasePermission(principal, 'database:update', row);
 		this.requirePitrFeature();
 		const input = databasePitrBackupSchema.parse(raw);
-		const row = this.requireRow(principal, name);
 		const state = this.requirePitrEnabled(row);
 		const now = this.ctx.now();
 		const id = this.queuePitrBaseBackup(row, input.type, now, principal.userId);
@@ -2191,7 +2278,8 @@ export class DatabaseService {
 	 * fresh credentials and stays `pending` with scheduled dumps paused until the node verifies it.
 	 */
 	restoreToTimestamp(principal: Principal, sourceName: string, raw: unknown): DatabaseView {
-		requirePermission(principal, 'database:create');
+		// The restored-to database is a new org resource, so creation is org-scoped (`create` re-checks).
+		this.ctx.iam.require(principal, 'database:create', { type: 'org' });
 		this.requirePitrFeature();
 		const input = databasePitrRestoreSchema.parse(raw);
 		const source = this.requireRow(principal, sourceName);
@@ -2656,7 +2744,7 @@ export class DatabaseService {
 	// ---------------------------------------------------------------- attachments
 
 	attachments(principal: Principal, project: ProjectRow): DatabaseAttachmentView[] {
-		requirePermission(principal, 'database:read');
+		this.ctx.iam.require(principal, 'database:read', { type: 'project', id: project.id });
 		return this.attachmentsForProject(project.id);
 	}
 
@@ -2665,14 +2753,14 @@ export class DatabaseService {
 		project: ProjectRow,
 		raw: DatabaseAttach,
 	): { attachment: DatabaseAttachmentView; warning: string | null } {
-		requirePermission(principal, 'database:update');
-		requirePermission(principal, 'project:update');
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		const input = databaseAttachSchema.parse(raw);
 		if (project.runtime === 'static')
 			throw new ValidationError(
 				`Project "${project.slug}" is static; only process or container projects can use a database.`,
 			);
 		const row = this.requireRow(principal, input.database);
+		this.requireDatabasePermission(principal, 'database:update', row);
 		this.ctx.moves.assertNotMoving(row);
 		// A project already stopped for another database's move cannot pick up a new pin mid-move.
 		if (this.ctx.moves.quiescedProjectIds().has(project.id))
@@ -2731,9 +2819,9 @@ export class DatabaseService {
 	}
 
 	detach(principal: Principal, project: ProjectRow, name: string): void {
-		requirePermission(principal, 'database:update');
-		requirePermission(principal, 'project:update');
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
 		const row = this.requireRow(principal, name, { includeDeleted: true });
+		this.requireDatabasePermission(principal, 'database:update', row);
 		const result = this.ctx.sqlite.run('DELETE FROM database_attachments WHERE database_id = ? AND project_id = ?', [
 			row.id,
 			project.id,
@@ -3135,8 +3223,8 @@ export class DatabaseService {
 		name: string,
 		input: { from: string | number | Date; to: string | number | Date; interval?: '1m' | '1h' },
 	): Promise<DatabaseMetricPoint[]> {
-		requirePermission(principal, 'database:read');
 		const row = this.requireRow(principal, name, { includeDeleted: true });
+		this.requireDatabasePermission(principal, 'database:read', row);
 		if (!this.ctx.telemetry) return [];
 		return this.ctx.telemetry.queryDatabaseMetrics({
 			databaseId: row.id,
@@ -3187,6 +3275,19 @@ export class DatabaseService {
 
 	private rowById(id: string): DatabaseRow | undefined {
 		return this.ctx.db.select().from(databases).where(eq(databases.id, id)).get();
+	}
+
+	/**
+	 * The MCP half of `requireCredentialReveal` (D58): agents never get a root secret, even with the
+	 * permission. The permission itself is checked against the database resource by the caller.
+	 */
+	private assertCredentialRevealAllowed(principal: Principal): void {
+		if (principal.kind !== 'mcp') return;
+		throw new CoreError(
+			'forbidden',
+			'Credentials are never returned over MCP. Read them in the dashboard or with the CLI (`skif … credentials`).',
+			403,
+		);
 	}
 
 	/** Refuse a feature the database's engine does not support (docs/DATABASES.md §17). */

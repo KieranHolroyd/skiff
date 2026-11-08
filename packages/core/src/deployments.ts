@@ -2,9 +2,7 @@ import { and, desc, eq, inArray, isNotNull, lte, ne } from 'drizzle-orm';
 import { builds, configSnapshots, deployments, environments, nodes, projects, releases } from '@skiff/db';
 import {
 	contentUrl,
-	hasPermission,
 	parseImageReference,
-	requirePermission,
 	workloadSpecSchema,
 	type BuildView,
 	type Principal,
@@ -169,7 +167,7 @@ export class DeploymentService {
 		project: ProjectRow,
 		input: { image: string; promote?: boolean; message?: string; environment?: string },
 	): Promise<DeploymentView> {
-		requirePermission(principal, 'deployment:create');
+		this.ctx.iam.require(principal, 'deployment:create', { type: 'project', id: project.id });
 		if (effectiveRuntime(project) !== 'container')
 			throw new ValidationError(`"${project.slug}" is not a container project; only containers deploy an image.`);
 		const image = input.image.trim();
@@ -191,7 +189,7 @@ export class DeploymentService {
 		entries: FileEntry[],
 		options: DeploymentOptions & { precompress?: boolean } = {},
 	): Promise<DeploymentView> {
-		requirePermission(principal, 'deployment:create');
+		this.ctx.iam.require(principal, 'deployment:create', { type: 'project', id: project.id });
 		// Quotas first, so a refused deploy stores nothing: over the egress quota new deploys pause
 		// (docs/QUOTAS.md), and a deploy that adds a preview needs room under `previews`.
 		await this.ctx.quota.assertCanCreateDeployment(project.orgId, project.id);
@@ -233,7 +231,7 @@ export class DeploymentService {
 		prepared: PreparedRelease,
 		options: DeploymentOptions = {},
 	): DeploymentView {
-		requirePermission(principal, 'deployment:create');
+		this.ctx.iam.require(principal, 'deployment:create', { type: 'project', id: project.id });
 		const now = this.ctx.now();
 		const id = newId('dep_');
 		let idShort = shortId();
@@ -396,7 +394,7 @@ export class DeploymentService {
 	}
 
 	list(principal: Principal, project: ProjectRow, options: { limit?: number } = {}): DeploymentView[] {
-		requirePermission(principal, 'deployment:read');
+		this.ctx.iam.require(principal, 'deployment:read', { type: 'project', id: project.id });
 		const rows = this.ctx.db
 			.select()
 			.from(deployments)
@@ -408,7 +406,6 @@ export class DeploymentService {
 	}
 
 	get(principal: Principal, project: ProjectRow, idOrShort: string): DeploymentView {
-		requirePermission(principal, 'deployment:read');
 		const row = this.ctx.db
 			.select()
 			.from(deployments)
@@ -420,6 +417,12 @@ export class DeploymentService {
 				.where(and(eq(deployments.projectId, project.id), eq(deployments.shortId, idOrShort)))
 				.get();
 		if (!row || row.status === 'deleted') throw new NotFoundError('Deployment');
+		this.ctx.iam.require(principal, 'deployment:read', {
+			type: 'deployment',
+			id: row.id,
+			projectId: project.id,
+			environmentId: row.environmentId ?? undefined,
+		});
 		return this.view(row, project);
 	}
 
@@ -521,7 +524,14 @@ export class DeploymentService {
 		]);
 
 		let build: BuildView | null = null;
-		if (hasPermission(principal, 'build:read')) {
+		if (
+			this.ctx.iam.can(principal, 'build:read', {
+				type: 'deployment',
+				id: row.id,
+				projectId: project.id,
+				environmentId: row.environmentId ?? undefined,
+			})
+		) {
 			const buildRow = this.ctx.db
 				.select({ id: builds.id })
 				.from(builds)
@@ -562,8 +572,13 @@ export class DeploymentService {
 		idOrShort: string,
 		environmentSlug?: string,
 	): Promise<DeploymentView> {
-		requirePermission(principal, 'deployment:promote');
 		const row = this.requireRow(project, idOrShort);
+		this.ctx.iam.require(principal, 'deployment:promote', {
+			type: 'deployment',
+			id: row.id,
+			projectId: project.id,
+			environmentId: row.environmentId ?? undefined,
+		});
 		if (row.status !== 'active') throw new ConflictError('Only active deployments can be promoted.');
 		const environment = this.resolveEnvironment(project, environmentSlug);
 		const now = this.ctx.now();
@@ -605,8 +620,12 @@ export class DeploymentService {
 	 * `promotedAt`, so repeated rollbacks keep walking back instead of toggling between two.
 	 */
 	async rollback(principal: Principal, project: ProjectRow, environmentSlug?: string): Promise<DeploymentView> {
-		requirePermission(principal, 'deployment:rollback');
 		const environment = this.resolveEnvironment(project, environmentSlug);
+		this.ctx.iam.require(principal, 'deployment:rollback', {
+			type: 'environment',
+			id: environment.id,
+			projectId: project.id,
+		});
 		if (!environment.isProduction) return this.rollbackEnvironment(principal, project, environment);
 		const previous = this.previouslyPromoted(project);
 		if (!previous)
@@ -743,16 +762,26 @@ export class DeploymentService {
 	}
 
 	async setPinned(principal: Principal, project: ProjectRow, idOrShort: string, pinned: boolean): Promise<DeploymentView> {
-		requirePermission(principal, 'deployment:promote');
 		const row = this.requireRow(project, idOrShort);
+		this.ctx.iam.require(principal, 'deployment:promote', {
+			type: 'deployment',
+			id: row.id,
+			projectId: project.id,
+			environmentId: row.environmentId ?? undefined,
+		});
 		this.ctx.db.update(deployments).set({ pinned }).where(eq(deployments.id, row.id)).run();
 		this.retention(project);
 		return this.view({ ...row, pinned }, project);
 	}
 
 	async delete(principal: Principal, project: ProjectRow, idOrShort: string): Promise<void> {
-		requirePermission(principal, 'deployment:delete');
 		const row = this.requireRow(project, idOrShort);
+		this.ctx.iam.require(principal, 'deployment:delete', {
+			type: 'deployment',
+			id: row.id,
+			projectId: project.id,
+			environmentId: row.environmentId ?? undefined,
+		});
 		const now = this.ctx.now();
 		await this.ctx.audit.wrap(
 			{ principal, action: 'deployment.delete', resource: 'deployment', resourceId: row.id, args: { project: project.slug } },

@@ -53,6 +53,7 @@ import {
 	effectivePermissions,
 	environmentCreateSchema,
 	inlineFileSchema,
+	isPermission,
 	isTerminalOperation,
 	isFlowId,
 	isTerminalFlow,
@@ -116,6 +117,7 @@ import {
 	type OperationView,
 	type Permission,
 	type Principal,
+	type ResourceRef,
 	type Role,
 	logDrainFormats,
 	logDrainKinds,
@@ -644,6 +646,151 @@ function buildServer(
 				permissions: [...principal.permissions].sort(),
 				platform: core.ctx.config.platformOrigin,
 			})),
+	);
+
+	// --- access (IAM.md §9.3, §12) -------------------------------------------
+	/** A resource an access question is about; `org` is the default, as `requirePermission`. */
+	const accessResourceSchema = z.object({
+		type: z
+			.enum([
+				'platform',
+				'org',
+				'project',
+				'environment',
+				'deployment',
+				'secret',
+				'build',
+				'database',
+				'storage',
+				'broker',
+				'emailDomain',
+				'shareLink',
+				'container',
+				'repository',
+				'pipelineRepository',
+				'userPool',
+				'accessPolicy',
+				'apiKey',
+			])
+			.default('org')
+			.describe('The kind of resource the question is about; the whole organisation by default'),
+		id: z.string().optional().describe('The resource id (a project id, an environment id, …)'),
+		projectId: z.string().optional().describe('The project the resource belongs to'),
+		environmentId: z.string().optional().describe('The environment, when the question is about one'),
+	});
+	const accessTarget = (resource: z.infer<typeof accessResourceSchema> | undefined): ResourceRef =>
+		resource ?? { type: 'org' };
+	/** Reject a permission outside the catalog before the engine answers "no binding". */
+	const knownPermission = (value: string): Permission => {
+		const permission = value.trim();
+		if (!isPermission(permission))
+			throw new Error(
+				`"${value}" is not a permission in the catalog. Call list_roles to see the permissions each role grants.`,
+			);
+		return permission;
+	};
+
+	tool(
+		'list_roles',
+		{
+			title: 'List roles',
+			description:
+				"List the organization's roles — the built-in roles and any custom ones — with the permissions each grants.",
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('iam:read'),
+		},
+		async () =>
+			run(() => {
+				requirePermission(principal, 'iam:read');
+				return { roles: core.iam.listRoles(principal.orgId) };
+			}),
+	);
+
+	tool(
+		'explain_access',
+		{
+			title: 'Explain access',
+			description:
+				'Explain why you can or cannot do something: the decision for one permission on a resource, with its reason, the binding or guardrail that decided it, and every grant considered. Read-only; use it to answer "why can\'t I…?".',
+			inputSchema: z.object({
+				permission: z.string().describe('Permission to explain, e.g. "project:read" or "deployment:promote"'),
+				resource: accessResourceSchema.optional().describe('The resource to ask about; omit for the whole organisation'),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('iam:read'),
+		},
+		async ({ permission, resource }) =>
+			run(() => {
+				requirePermission(principal, 'iam:read');
+				const name = knownPermission(permission);
+				const target = accessTarget(resource);
+				const decision = core.iam.explain(principal, name, target);
+				return {
+					permission: name,
+					resource: target,
+					allow: decision.allow,
+					reason: decision.reason,
+					via: decision.via ?? null,
+					chain: decision.chain,
+				};
+			}),
+	);
+
+	tool(
+		'who_can',
+		{
+			title: 'Who can',
+			description:
+				'List the principals who can do something in the organization, each with the binding that allows them. Group bindings are expanded to their members.',
+			inputSchema: z.object({
+				permission: z.string().describe('Permission to ask about, e.g. "project:read" or "deployment:promote"'),
+				resource: accessResourceSchema.optional().describe('The resource to ask about; omit for the whole organisation'),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('iam:read'),
+		},
+		async ({ permission, resource }) =>
+			run(() => {
+				requirePermission(principal, 'iam:read');
+				const name = knownPermission(permission);
+				const target = accessTarget(resource);
+				const bindings = new Map(core.iam.listBindings(principal.orgId).map((binding) => [binding.id, binding]));
+				return {
+					permission: name,
+					resource: target,
+					principals: core.iam.whoCan(principal.orgId, name, target).map((entry) => {
+						const binding = entry.via ? bindings.get(entry.via) : undefined;
+						return {
+							principalType: entry.principalType,
+							principalId: entry.principalId,
+							via: entry.via,
+							...(binding
+								? {
+										binding: {
+											id: binding.id,
+											roleId: binding.roleId,
+											scope: binding.scope,
+											expiresAt: binding.expiresAt,
+										},
+									}
+								: {}),
+						};
+					}),
+				};
+			}),
+	);
+
+	tool(
+		'list_service_accounts',
+		{
+			title: 'List service accounts',
+			description:
+				"List the organization's service accounts with their description, owner group and disabled state. Keys and secrets are never returned over MCP.",
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('serviceAccount:read'),
+		},
+		// The service checks serviceAccount:read itself.
+		async () => run(() => ({ serviceAccounts: core.serviceAccounts.list(principal) })),
 	);
 
 	// --- documentation ------------------------------------------------------
@@ -1785,13 +1932,12 @@ function buildServer(
 		{
 			title: 'Create app volume',
 			description:
-				'Create a project-owned persistent volume with a size quota. It is backed by the helper state directory by default, or by a registered node volume (`backing: "node_volume"` plus `nodeVolume`). Disk admission reserves at most 90% of free space. Attach it with attach_volume.',
+				'Create a project-owned persistent volume with a size quota. `storage` picks where it lives: `system` (the node\'s system disk), `fast` or `bulk` disks, or one disk by name; omitted uses the app-volumes default from Settings → Storage. Disk admission reserves at most 90% of free space. Attach it with attach_volume.',
 			inputSchema: z.object({
 				project: z.string().describe('Project slug'),
 				name: z.string().min(3).max(40).describe('Volume name (slug rules)'),
 				sizeMb: z.number().int().min(1).max(1_048_576).default(1024).describe('Quota in MB'),
-				backing: z.enum(['state_dir', 'node_volume']).default('state_dir'),
-				nodeVolume: z.string().optional().describe('Node volume name, required for backing "node_volume"'),
+				storage: z.string().min(3).max(40).optional().describe('system, fast, bulk or a disk name'),
 				singleWriter: z.boolean().default(true),
 			}),
 			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
@@ -1920,7 +2066,7 @@ function buildServer(
 		{
 			title: 'Restore app volume snapshot',
 			description:
-				'Restore a completed snapshot into a NEW volume in the same project (never over the source), on the same backing and at least the same size. ' +
+				'Restore a completed snapshot into a NEW volume in the same project (never over the source), on the same disk and at least the same size. ' +
 				'Quotas and disk admission apply. The new volume cannot be attached until its node has extracted the archive and matched its checksum.',
 			inputSchema: appVolumeRestoreSchema.extend({
 				project: z.string().describe('Project slug'),

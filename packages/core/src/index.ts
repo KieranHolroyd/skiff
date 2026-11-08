@@ -65,6 +65,7 @@ import { TemplateService } from './templates.ts';
 import { BlueprintService } from './blueprints.ts';
 import { IamService } from './iam/service.ts';
 import { ServiceAccountService } from './service-accounts.ts';
+import { AccessKeyService } from './access-keys.ts';
 
 export * from './config.ts';
 export * from './context.ts';
@@ -76,6 +77,7 @@ export * from './object-store.ts';
 export * from './orgs.ts';
 export * from './iam/service.ts';
 export * from './service-accounts.ts';
+export * from './access-keys.ts';
 export * from './projects.ts';
 export * from './releases.ts';
 export * from './deployments.ts';
@@ -231,6 +233,8 @@ export interface Core {
 	iam: IamService;
 	/** Service accounts: org-owned machine principals (`sa_…`, IAM.md I13). */
 	serviceAccounts: ServiceAccountService;
+	/** Org-bound access keys and their verification (IAM.md I14). */
+	accessKeys: AccessKeyService;
 	/** Email: Skiff's self-hosted SES (docs/EMAIL.md). */
 	email: EmailService;
 	/** Log drains: forward stored log lines to webhooks and OTLP receivers (DESIGN §8). */
@@ -264,6 +268,7 @@ export function createCore(options: CoreOptions): Core {
 	ctx.audit = new AuditService(ctx);
 	ctx.iam = new IamService(ctx);
 	ctx.serviceAccounts = new ServiceAccountService(ctx);
+	ctx.accessKeys = new AccessKeyService(ctx);
 	ctx.quota = new QuotaService(ctx);
 	ctx.projects = new ProjectService(ctx);
 	ctx.releases = new ReleaseService(ctx);
@@ -390,6 +395,7 @@ export function createCore(options: CoreOptions): Core {
 		cluster: ctx.cluster,
 		iam: ctx.iam,
 		serviceAccounts: ctx.serviceAccounts,
+		accessKeys: ctx.accessKeys,
 		logDrains: new LogDrainService(ctx, options.version),
 	};
 }
