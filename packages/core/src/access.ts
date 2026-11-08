@@ -65,6 +65,15 @@ export type AccessScope =
 	| { kind: 'previews' }
 	| { kind: 'environment'; environmentId: string };
 
+/**
+ * The protection mode a scope actually uses. A scope with a Skiff Access policy is `access`; the
+ * legacy `production_access`/`preview_access`/`environments.access` columns keep a value an older
+ * control plane can still act on (`platform`, so nothing becomes public).
+ */
+export function effectiveAccessMode(mode: string, policyId: string | null | undefined): AccessMode {
+	return policyId ? 'access' : (mode as AccessMode);
+}
+
 export interface SiteVisit {
 	host: string;
 	project: ProjectRow;
@@ -86,6 +95,8 @@ export interface ContentRoute {
 	production: boolean;
 	/** Access mode the agent applies to this exact host. */
 	access: AccessMode;
+	/** The Skiff Access policy that decided it, when `access` is `access`. */
+	policyId: string | null;
 	/** The scope whose access mode (and password) applies to this host. */
 	scope: AccessScope;
 }
@@ -335,7 +346,8 @@ export class AccessService {
 					project: owner,
 					deploymentId: owner.productionDeploymentId,
 					production: true,
-					access: owner.productionAccess,
+					access: effectiveAccessMode(owner.productionAccess, owner.productionAccessPolicyId),
+					policyId: owner.productionAccessPolicyId ?? null,
 					scope: { kind: 'production' },
 				};
 			return null;
@@ -352,7 +364,8 @@ export class AccessService {
 					project,
 					deploymentId: deployment.id,
 					production: false,
-					access: project.previewAccess,
+					access: effectiveAccessMode(project.previewAccess, project.previewAccessPolicyId),
+					policyId: project.previewAccessPolicyId ?? null,
 					scope: { kind: 'previews' },
 				};
 		}
@@ -374,7 +387,8 @@ export class AccessService {
 				project: bare,
 				deploymentId: bare.productionDeploymentId,
 				production: true,
-				access: bare.productionAccess,
+				access: effectiveAccessMode(bare.productionAccess, bare.productionAccessPolicyId),
+				policyId: bare.productionAccessPolicyId ?? null,
 				scope: { kind: 'production' },
 			};
 
@@ -393,7 +407,15 @@ export class AccessService {
 						project,
 						deploymentId: environment.deploymentId,
 						production: true,
-						access: environment.isProduction ? project.productionAccess : environment.access,
+						access: effectiveAccessMode(
+							environment.isProduction ? project.productionAccess : environment.access,
+							environment.isProduction
+								? project.productionAccessPolicyId
+								: environment.accessPolicyId,
+						),
+						policyId: (environment.isProduction
+							? project.productionAccessPolicyId
+							: environment.accessPolicyId) ?? null,
 						scope: environment.isProduction
 							? { kind: 'production' }
 							: { kind: 'environment', environmentId: environment.id },
@@ -428,6 +450,27 @@ export class AccessService {
 		if (!resolved) throw new NotFoundError('Site');
 		if (resolved.project.orgId !== principal.orgId) throw new NotFoundError('Site');
 		return this.mint(resolved.project, host, principal.userId, 'platform', 60 * 60, undefined, resolved.deploymentId);
+	}
+
+	/**
+	 * A visitor who passed the host's Skiff Access policy (IAM.md I25). The caller evaluates the
+	 * policy first; this only mints the host-bound, one-time callback token the agent exchanges for
+	 * its host-only cookie. `email` is carried so the app receives `Skiff-Access-Email`.
+	 */
+	accessVisit(principal: Principal, host: string, email: string | null): SiteVisit {
+		const resolved = this.resolveHost(host);
+		if (!resolved || resolved.access !== 'access' || !resolved.policyId) throw new NotFoundError('Site');
+		if (resolved.project.orgId !== principal.orgId) throw new NotFoundError('Site');
+		return this.mint(
+			resolved.project,
+			host,
+			principal.userId,
+			'access',
+			8 * 60 * 60,
+			undefined,
+			resolved.deploymentId,
+			email?.toLowerCase(),
+		);
 	}
 
 	/**
@@ -552,6 +595,7 @@ export class AccessService {
 		ttlSeconds: number,
 		sessionId?: string,
 		deploymentId?: string,
+		email?: string | null,
 	): SiteVisit {
 		const siteKey = this.siteKeyFor(project);
 		const now = Math.floor(this.ctx.now() / 1000);
@@ -564,6 +608,7 @@ export class AccessService {
 			sub: subject,
 			kind,
 			...(sessionId ? { sid: sessionId } : {}),
+			...(email ? { email } : {}),
 		};
 		const token = signAccessToken(siteKey, claims);
 		return {

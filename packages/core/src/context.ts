@@ -58,11 +58,14 @@ import type { FailoverService } from './failover-service.ts';
 import type { ClusterConfigService } from './cluster-config-service.ts';
 import type { IamService } from './iam/service.ts';
 import type { GovernanceService } from './iam/governance.ts';
+import type { AuthPolicyService } from './iam/auth-policy.ts';
 import type { PlatformIamService } from './platform-iam.ts';
 import type { ServiceAccountService } from './service-accounts.ts';
 import type { AccessKeyService } from './access-keys.ts';
 import type { SigningKeyService } from './iam/keys.ts';
 import type { TokenService } from './iam/sts.ts';
+import type { AccessPolicyService } from './iam/access-policies.ts';
+import type { UserPoolService } from './user-pools.ts';
 
 /**
  * Shared dependency object. Service instances are attached after construction (in `createCore`)
@@ -155,6 +158,8 @@ export interface CoreContext {
 	iam: IamService;
 	/** Guardrails and just-in-time access (IAM.md I11/I22, §9.2–§9.4). */
 	governance: GovernanceService;
+	/** Per-organisation sign-in policy (IAM.md I21, §8.5). */
+	authPolicy: AuthPolicyService;
 	/** Platform roles and bindings at `{ type: 'platform' }` (IAM.md I24, D129). */
 	platformIam: PlatformIamService;
 	/** Service accounts: org-owned machine principals (`sa_…`, IAM.md I13). */
@@ -165,6 +170,10 @@ export interface CoreContext {
 	signingKeys: SigningKeyService;
 	/** RFC 8693 token exchange against federation trusts (IAM.md I16–I17). */
 	sts: TokenService;
+	/** Skiff Access policies: identity-aware proxy rules for content hosts (IAM.md I25). */
+	accessPolicies: AccessPolicyService;
+	/** Managed user pools: OIDC clients and discovery for tenant apps (IAM.md I26–I29). */
+	userPools: UserPoolService;
 	/** Functions: Workers-compatible workloads on workerd (D110). */
 	functions: FunctionService;
 }

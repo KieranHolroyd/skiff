@@ -1,5 +1,9 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { DesiredState, RouteSpec } from '@skiff/contracts';
+import {
+	handleSkiffAccessRequest,
+	type AccessDecisionCache,
+} from './skiff-access.ts';
 
 /**
  * Stateless protected-site verification for Caddy's forward_auth (D20).
@@ -58,6 +62,12 @@ export interface VerifyOptions {
 	nowSeconds?: () => number;
 	/** Redeemed callback tokens; one per agent process. */
 	usedTokens?: UsedTokenCache;
+	/** Cookie name for Skiff Access sessions (defaults to `__skiff_a`). */
+	accessCookieName?: string;
+	/** HMAC secret for `Skiff-Access-Jwt`; the route's site key when absent. */
+	accessJwtSecret?: string | null;
+	/** Brief cache of verified access decisions (IAM.md §11.1 S6). */
+	accessCache?: AccessDecisionCache;
 }
 
 interface AccessTokenClaims {
@@ -74,6 +84,19 @@ interface AccessTokenClaims {
 }
 
 const defaultUsedTokens = new UsedTokenCache();
+
+/** Adapt the shared verify options to the Skiff Access handler. */
+function accessOptions(options: VerifyOptions) {
+	return {
+		accessCookieName: options.accessCookieName ?? '__skiff_a',
+		insecureHttp: options.insecureHttp,
+		nowSeconds: options.nowSeconds,
+		usedTokens: options.usedTokens ?? defaultUsedTokens,
+		revokedIds: new Set((options.state?.revocations ?? []).map((revocation) => revocation.id)),
+		signingSecret: options.accessJwtSecret ?? null,
+		cache: options.accessCache,
+	};
+}
 
 export function hmacBase64url(secret: string, value: string): string {
 	return createHmac('sha256', secret).update(value).digest('base64url');
@@ -147,6 +170,16 @@ export function handleSiteRequest(request: Request, options: VerifyOptions): Res
 	const forwardedUri = headerWithoutControls(request.headers.get('x-forwarded-uri'));
 	const host = normalizeHost(request.headers.get('x-forwarded-host') ?? request.headers.get('host'));
 
+	// Skiff Access has its own callback path; both it and normal requests reach forward_auth as
+	// `/_skiff/verify`, so the original URI is authoritative.
+	const accessPath = (forwardedUri ?? pathname).split('?')[0];
+	if (accessPath === '/_skiff/access/callback') {
+		if (!host) return textResponse(404, 'Unknown host');
+		const route = findRoute(options.state, host);
+		if (!route) return textResponse(404, 'Unknown host');
+		return handleSkiffAccessRequest(request, accessOptions(options), route, host, forwardedUri, now);
+	}
+
 	if (pathname === '/_skiff/callback' || forwardedUri?.startsWith('/_skiff/callback'))
 		return handleCallback(request, options, host, pathname, forwardedUri, now);
 
@@ -155,6 +188,11 @@ export function handleSiteRequest(request: Request, options: VerifyOptions): Res
 
 	const route = findRoute(options.state, host);
 	if (!route) return textResponse(404, 'Unknown host');
+
+	// Skiff Access (IAM.md I25): a policy already let this identity in on the platform; the agent
+	// verifies the host-bound session and mints the upstream headers.
+	if (route.accessMode === 'access')
+		return handleSkiffAccessRequest(request, accessOptions(options), route, host, forwardedUri, now);
 
 	// Public routes never reach forward_auth, but answering 200 keeps a misconfiguration safe.
 	if (route.accessMode === 'public') return visitorResponse('public', route);
@@ -247,7 +285,19 @@ function findRoute(state: DesiredState | null, host: string): RouteSpec | undefi
 		for (const route of state.routes) routes.set(normalizeHost(route.host), route);
 		routeCache.set(state, routes);
 	}
-	return routes.get(host);
+	const direct = routes.get(host);
+	if (direct) return direct;
+	// A verified custom domain is a clone of the project's production route; Caddy adds the clone
+	// at compile time, so the auth handler has to resolve it the same way.
+	const domain = state.domains.find(
+		(entry) => !entry.redirectTo && normalizeHost(entry.host) === host,
+	);
+	if (!domain) return undefined;
+	return state.routes.find(
+		(route) =>
+			route.projectId === domain.projectId &&
+			(route.production === true || normalizeHost(route.host) === `${route.slug}.${state.contentDomain}`),
+	);
 }
 
 function redirectToLogin(

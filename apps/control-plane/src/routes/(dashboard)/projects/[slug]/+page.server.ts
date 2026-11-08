@@ -226,6 +226,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			/** Storage targets the volume form offers (docs/STORAGE.md §2.2). */
 			appVolumeStorage: appVolumesEnabled ? core.disks.choices('app-volumes') : null,
 			appVolumes,
+			/** Policies assignable to this project's scopes (IAM.md I25). */
+			accessPolicies: safely(() => core.accessPolicies.list(principal, { projectId: row.id }), []),
 			// Jobs (plan 09): the tab hides unless SKIFF_FEATURE_JOBS is on.
 			jobsEnabled: core.jobs.enabled(),
 			can: {
@@ -280,12 +282,15 @@ export const actions: Actions = {
 		const scope = formString(data, 'scope');
 		const mode = formString(data, 'mode');
 		const password = formRawString(data, 'password');
+		const policyId = formString(data, 'policyId');
 
 		const fieldErrors: Record<string, string> = {};
 		if (scope !== 'production' && scope !== 'previews')
 			fieldErrors.scope = 'Choose production or previews.';
 		if (!(accessModes as readonly string[]).includes(mode))
 			fieldErrors.mode = 'Choose a valid access mode.';
+		if (mode === 'access' && !policyId)
+			fieldErrors.policyId = 'Choose a Skiff Access policy.';
 		// A blank password keeps the scope's current one; core refuses it when there is none.
 		if (mode === 'password' && password.length > 0 && password.length < 8) {
 			fieldErrors.password = 'Use at least 8 characters for password mode.';
@@ -299,7 +304,8 @@ export const actions: Actions = {
 			await core.projects.setAccess(principal, project.slug, {
 				scope: scope as 'production' | 'previews',
 				mode: mode as (typeof accessModes)[number],
-				password: mode === 'password' && password ? password : undefined
+				password: mode === 'password' && password ? password : undefined,
+				policyId: mode === 'access' ? policyId : undefined
 			});
 		} catch (caught) {
 			return fail(failStatus(caught), toFormFailure(caught));
@@ -594,6 +600,7 @@ export const actions: Actions = {
 		const slug = formString(data, 'slug');
 		const access = accessMode(formString(data, 'access') || 'platform');
 		const password = formRawString(data, 'password');
+		const policyId = formString(data, 'policyId');
 
 		if (!name)
 			return fail(400, {
@@ -604,6 +611,11 @@ export const actions: Actions = {
 			return fail(400, {
 				message: 'Choose a valid access mode.',
 				fieldErrors: { access: 'Invalid access mode.' }
+			});
+		if (access === 'access' && !policyId)
+			return fail(400, {
+				message: 'Choose a Skiff Access policy.',
+				fieldErrors: { policyId: 'Required for Skiff Access.' }
 			});
 		if (access === 'password' && password.length < 8)
 			return fail(400, {
@@ -617,7 +629,8 @@ export const actions: Actions = {
 				name,
 				slug: slug || undefined,
 				access,
-				...(access === 'password' ? { password } : {})
+				...(access === 'password' ? { password } : {}),
+				...(access === 'access' ? { policyId } : {})
 			});
 			return { success: `Environment "${environment.name}" created at ${environment.host}.` };
 		} catch (caught) {
@@ -632,8 +645,14 @@ export const actions: Actions = {
 		const name = formString(data, 'name');
 		const access = accessMode(formString(data, 'access') || 'platform');
 		const password = formRawString(data, 'password');
+		const policyId = formString(data, 'policyId');
 
 		if (!environmentSlug) return fail(400, { message: 'Missing environment.' });
+		if (access === 'access' && !policyId)
+			return fail(400, {
+				message: 'Choose a Skiff Access policy.',
+				fieldErrors: { policyId: 'Required for Skiff Access.' }
+			});
 		if (access === 'password' && password.length > 0 && password.length < 8)
 			return fail(400, {
 				message: 'Use at least 8 characters for password mode.',
@@ -655,7 +674,8 @@ export const actions: Actions = {
 			const environment = core.environments.update(principal, project, environmentSlug, {
 				name,
 				access,
-				...(access === 'password' && password ? { password } : {})
+				...(access === 'password' && password ? { password } : {}),
+				...(access === 'access' ? { policyId } : {})
 			});
 			return { success: `Environment "${environment.name}" updated.` };
 		} catch (caught) {

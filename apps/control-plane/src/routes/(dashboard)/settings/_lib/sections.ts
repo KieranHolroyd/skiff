@@ -38,7 +38,9 @@ export type SectionId =
 	| 'general'
 	| 'members'
 	| 'access'
+	| 'access-policies'
 	| 'sso'
+	| 'identity'
 	| 'usage'
 	| 'backup-targets'
 	| 'log-drains'
@@ -63,9 +65,9 @@ export type SectionGroup = 'you' | 'organisation' | 'platform' | 'observability'
 
 /**
  * The settings navigation passes each href to SvelteKit's `resolve()`, whose generic is distributed
- * over the route-id union; TypeScript stops inferring past 25 members. SSO is the newest section,
- * so it is the one value left out of this type and asserted at its entry below. It is a real route
- * (`svelte-kit sync` lists it in `$app/types`); every other entry is literal-checked.
+ * over the route-id union; TypeScript stops inferring past 25 members. SSO and Identity are the
+ * newest sections, so they are left out of this type and asserted at their entries below. Both are
+ * real routes (`svelte-kit sync` lists them in `$app/types`); every other entry is literal-checked.
  */
 export type SectionHref =
 	| '/(dashboard)/settings'
@@ -172,6 +174,18 @@ export const SECTIONS: Section[] = [
 		anyPermission: ['iam:read']
 	},
 	{
+		id: 'access-policies',
+		group: 'organisation',
+		label: 'Access policies',
+		summary:
+			'Skiff Access: ordered allow and deny rules for sites and app environments, enforced at the edge.',
+		// See `SectionHref`: `resolve()` cannot infer past its 25-member union.
+		href: '/(dashboard)/settings/access-policies' as unknown as SectionHref,
+		path: '/settings/access-policies',
+		icon: ShieldCheckIcon,
+		anyPermission: ['accessPolicy:read', 'accessPolicy:create']
+	},
+	{
 		id: 'sso',
 		group: 'organisation',
 		label: 'SSO',
@@ -182,6 +196,18 @@ export const SECTIONS: Section[] = [
 		path: '/settings/sso',
 		icon: FingerprintIcon,
 		anyPermission: ['sso:read']
+	},
+	{
+		id: 'identity',
+		group: 'organisation',
+		label: 'Identity',
+		summary:
+			'Managed user pools: the OIDC issuer, clients and signing keys for your apps’ own end users.',
+		// See `SectionHref`: the route is real, but `resolve()` cannot infer past 25 members.
+		href: '/(dashboard)/settings/identity' as unknown as SectionHref,
+		path: '/settings/identity',
+		icon: FingerprintIcon,
+		anyPermission: ['userPool:read']
 	},
 	{
 		id: 'usage',

@@ -4,6 +4,7 @@ import { setSessionCookie } from 'better-auth/cookies';
 import { admin, jwt, magicLink, organization, twoFactor } from 'better-auth/plugins';
 import { passkey } from '@better-auth/passkey';
 import { apiKey } from '@better-auth/api-key';
+import { sso as ssoPlugin } from '@better-auth/sso';
 import { createAccessControl } from 'better-auth/plugins/access';
 import { defaultStatements } from 'better-auth/plugins/organization/access';
 import { sveltekitCookies } from 'better-auth/svelte-kit';
@@ -39,6 +40,8 @@ import { sqlite } from './db';
 import { membershipRoleIn, preferredOrganizationId, rememberOrganization } from './org-membership';
 import { MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH, SetupAlreadyCompleteError, claimInstance, parseClaimInput } from './setup';
 import { isValidSetupToken } from './setup-token';
+import { signInEmailFromPath, signInMethodFromPath, signInRefusalForEmail, signInRefusalForUser } from './sso-enforcement';
+import { provisionSsoUser } from './sso-provision';
 
 /**
  * "Sign in with GitHub" credentials: `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` from the
@@ -158,6 +161,16 @@ const skiffSetup = {
 const API_KEY_RATE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const API_KEY_RATE_MAX = 100_000;
 
+/**
+ * Whether a database hook is running inside an SSO callback. SSO users are created by an
+ * admin-configured provider on a domain the organisation proved; the ordinary invite-only rule
+ * would reject that first sign-in. The path comes from the endpoint context Better Auth passes as
+ * the second argument to database hooks.
+ */
+function isSsoCallbackPath(path: string | undefined): boolean {
+	return Boolean(path && (path.startsWith('/sso/callback') || path.startsWith('/sso/saml2/sp/acs')));
+}
+
 const secure = platformOrigin.startsWith('https://');
 const platformHost = new URL(platformOrigin).hostname;
 
@@ -223,6 +236,18 @@ export const auth = betterAuth({
 			'/reset-password/*': { window: 60, max: 10 },
 		},
 	},
+	// SSO providers are managed only by Settings → SSO (sso_providers → syncSsoProviders). The
+	// plugin's own register/update/delete and domain-verification endpoints are closed, so a
+	// signed-in user cannot register an IdP of their own or edit the synced rows.
+	disabledPaths: [
+		'/sso/register',
+		'/sso/update-provider',
+		'/sso/delete-provider',
+		'/sso/providers',
+		'/sso/get-provider',
+		'/sso/request-domain-verification',
+		'/sso/verify-domain',
+	],
 	socialProviders: githubOAuth
 		? { github: { clientId: githubOAuth.clientId, clientSecret: githubOAuth.clientSecret } }
 		: {},
@@ -241,6 +266,11 @@ export const auth = betterAuth({
 			// The second factor this session proved ('passkey' | 'totp' | 'backup-code'), set by the
 			// after-hook below. Owners need it before using the platform (second-factor-policy.ts).
 			secondFactor: { type: 'string', required: false, input: false },
+			// How the session was established, for the org auth policy's allowed-methods check
+			// (IAM.md I21). Set from the Better Auth endpoint path when the session is created.
+			signInMethod: { type: 'string', required: false, input: false },
+			// Last request seen, at most once a minute (hooks.server.ts). The idle-timeout clock.
+			lastSeenAt: { type: 'number', required: false, input: false },
 		},
 	},
 	databaseHooks: {
@@ -249,9 +279,23 @@ export const auth = betterAuth({
 				// Better Auth only records `activeOrganizationId` when a user is created or accepts an
 				// invitation, so every other sign-in starts without an org. Pick the active org at
 				// session creation (IAM.md I5, §8.1); the organization plugin owns the column.
-				before: async (session) => {
+				before: async (session, context) => {
 					const organizationId = preferredOrganizationId(session.userId);
-					return organizationId ? { data: { ...session, activeOrganizationId: organizationId } } : undefined;
+					const method = signInMethodFromPath((context as { path?: string } | undefined)?.path);
+					// The org auth policy is enforced before the session exists, so a password or
+					// GitHub sign-in on an SSO-required org never reaches an authenticated request.
+					if (method) {
+						const refusal = signInRefusalForUser(session.userId, method);
+						if (refusal) throw new APIError('FORBIDDEN', { message: refusal, code: 'SIGN_IN_POLICY' });
+					}
+					return {
+						data: {
+							...session,
+							...(organizationId ? { activeOrganizationId: organizationId } : {}),
+							...(method ? { signInMethod: method } : {}),
+							lastSeenAt: Date.now(),
+						},
+					};
 				},
 			},
 			update: {
@@ -267,8 +311,10 @@ export const auth = betterAuth({
 			create: {
 				// Invite-only (D10). The owner is created by the setup wizard (D102, `claimSetup`
 				// above), never by whoever signs up first: until setup is done, sign-up is refused.
-				// Invitations are Better Auth organization invitations by email.
-				before: async (user) => {
+				// Invitations are Better Auth organization invitations by email. An SSO callback is the
+				// one exception: the provider is admin-configured and its domain is verified by Skiff,
+				// so the IdP has already proved the address (IAM.md I19, §8.3).
+				before: async (user, context) => {
 					const count = sqlite.query<{ count: number }, []>('SELECT count(*) AS count FROM user').get();
 					if ((count?.count ?? 0) === 0) {
 						if (!openSignup)
@@ -279,6 +325,7 @@ export const auth = betterAuth({
 						return { data: { ...user, role: 'admin' } };
 					}
 					if (openSignup) return;
+					if (isSsoCallbackPath((context as { path?: string } | undefined)?.path)) return;
 					const invited = sqlite
 						.query<{ id: string }, [string, string]>(
 							"SELECT id FROM invitation WHERE lower(email) = ? AND status = 'pending' AND expiresAt > ?",
@@ -299,13 +346,28 @@ export const auth = betterAuth({
 			// Trusted in-process calls without request headers (e.g. the CLI token exchange) do their
 			// own checks; anything carrying a user session is held to that user's role and factor.
 			if (!ctx.request && !ctx.headers) return;
+
+			// Email-first sign-in policy (IAM.md I19/I21): refuse password and magic-link attempts for
+			// an address an org requires SSO for, before a session or user row exists.
+			const emailSignIn = signInEmailFromPath(ctx.path, ctx.body);
+			if (emailSignIn) {
+				const refusal = signInRefusalForEmail(emailSignIn.email, emailSignIn.method);
+				if (refusal) throw new APIError('FORBIDDEN', { message: refusal, code: 'SIGN_IN_POLICY' });
+			}
+
 			const session = await getSessionFromCtx(ctx);
 			if (!session) return; // the endpoint itself rejects unauthenticated calls
 
-			// Owner second factor (D10): an unproven owner session may only sign in, verify a factor,
-			// or (with no factor yet) enrol one. See second-factor-policy.ts.
+			// Second factor: owners (D10) and, when the org policy says so, every member (IAM.md I21).
+			// An unproven session may only sign in, verify a factor, or (with no factor yet) enrol one.
 			const sessionFactor = (session.session as { secondFactor?: string | null }).secondFactor;
-			if (enforceOwnerSecondFactor && !sessionFactor && userIsOwner(session.user.id, session.session.activeOrganizationId)) {
+			const policy = session.session.activeOrganizationId
+				? core.authPolicy.forOrg(session.session.activeOrganizationId)
+				: null;
+			const requiresSecondFactor =
+				(enforceOwnerSecondFactor && userIsOwner(session.user.id, session.session.activeOrganizationId)) ||
+				Boolean(policy?.require2fa);
+			if (requiresSecondFactor && !sessionFactor) {
 				if (secondFactorAttemptsExhausted(session.session.id)) {
 					revokeSession(session.session.id);
 					throw new APIError('TOO_MANY_REQUESTS', {
@@ -333,12 +395,19 @@ export const auth = betterAuth({
 			if (!factor) return;
 			if (ctx.context.returned instanceof APIError) {
 				// Better Auth limits attempts during password sign-in, but not when a signed-in session
-				// verifies a code. Cap guesses from an unproven owner session; passkey failures prove
+				// verifies a code. Cap guesses from an unproven session; passkey failures prove
 				// nothing either way.
 				if (factor === 'passkey') return;
 				const session = await getSessionFromCtx(ctx).catch(() => null);
 				const proven = (session?.session as { secondFactor?: string | null } | undefined)?.secondFactor;
-				if (!session || proven || !userIsOwner(session.user.id, session.session.activeOrganizationId)) return;
+				const policy = session?.session.activeOrganizationId
+					? core.authPolicy.forOrg(session.session.activeOrganizationId)
+					: null;
+				const requiresSecondFactor = session
+					? (enforceOwnerSecondFactor && userIsOwner(session.user.id, session.session.activeOrganizationId)) ||
+						Boolean(policy?.require2fa)
+					: false;
+				if (!session || proven || !requiresSecondFactor) return;
 				if (recordSecondFactorFailure(session.session.id)) revokeSession(session.session.id);
 				return;
 			}
@@ -354,16 +423,21 @@ export const auth = betterAuth({
 		useSecureCookies: secure,
 	},
 	plugins: [
-		// SSO (IAM.md I19): Better Auth 1.7.15 ships it as the separate `@better-auth/sso` package,
-		// which is not installed here. Adding it is a dependency change, so this slice does not
-		// register `sso()` and does not fake its endpoints. The provider rows it will consume are
-		// in `sso_providers` (migration 0087), with fields that mirror its `ssoProvider` model
-		// (`organizationId`, `issuer`, OIDC config, `domain`, `domainVerified`), and the domain
-		// checks live in `lib/server/sso.ts`. When the package lands, register it here with
-		// `organizationProvisioning: { disabled: true }` (Skiff owns JIT, roles and groups) and
-		// `domainVerification: { enabled: false }` (Skiff verifies domains itself via
-		// `skiff-verify=`), then copy the rows across at boot. The invite-only user-create hook and
-		// owner second-factor gate above stay as they are: SSO sign-ins must go through both.
+		// SSO (IAM.md I19, §8.3). `@better-auth/sso` 1.7.15. Skiff owns provider storage
+		// (`sso_providers`, 0087), domain ownership (`sso_domains`, the `skiff-verify=` TXT check) and
+		// JIT membership, so organisation provisioning and the plugin's domain verification are off.
+		// `syncSsoProviders()` copies each enabled row into the plugin's `ssoProvider` table at boot
+		// and after every settings change. The callback is the plugin default,
+		// `/api/auth/sso/callback/:providerId`, which Settings → SSO shows for the IdP registration.
+		// `providersLimit: 0` plus `disabledPaths` above means only this sync writes providers.
+		ssoPlugin({
+			organizationProvisioning: { disabled: true },
+			domainVerification: { enabled: false },
+			providersLimit: 0,
+			provisionUser: async ({ user, provider }) => {
+				provisionSsoUser({ user, provider });
+			},
+		}),
 		// Stable signing key for access/ID tokens + /jwks (required by mcp()).
 		jwt(),
 		// mcp() *is* the OAuth 2.1 provider — never also register oauthProvider().

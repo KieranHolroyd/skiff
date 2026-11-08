@@ -75,6 +75,8 @@ export const routeAccessSchema = z.object({
 	siteKey: z.string().min(16),
 	/** Hashed password for `password` mode, verified by the control plane. */
 	loginUrl: z.string().url(),
+	/** The Skiff Access policy this host uses; present when `mode` is `access`. */
+	policyId: z.string().nullable().optional(),
 });
 export type RouteAccess = z.infer<typeof routeAccessSchema>;
 

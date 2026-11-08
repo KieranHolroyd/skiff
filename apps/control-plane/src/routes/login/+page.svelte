@@ -24,7 +24,7 @@
 	let notice = $state('');
 	let pending = $state(false);
 	/** After a password sign-in for an account with an authenticator app (D10, D103). */
-	let step = $state<'credentials' | 'code'>('credentials');
+	let step = $state<'email' | 'methods' | 'code'>('email');
 	let useBackup = $state(false);
 	/** Passkeys need a secure context (HTTPS or localhost); hide the button where they can't work. */
 	let passkeys = $state(true);
@@ -46,6 +46,61 @@
 	function reset() {
 		error = '';
 		notice = '';
+	}
+
+	/**
+	 * Email first (IAM.md §8.3): a verified domain sends the browser to its organisation's IdP.
+	 * Resolution uses Skiff's own `sso_domains` check (exact hostname, verified only), then the
+	 * Better Auth plugin starts the flow for that provider id. No provider means the address falls
+	 * through to the methods below, and the server-side policy still refuses a method the
+	 * organisation does not allow.
+	 */
+	async function startSignIn(event: SubmitEvent) {
+		event.preventDefault();
+		reset();
+		const address = email.trim();
+		if (!address) {
+			error = 'Enter your email address first.';
+			return;
+		}
+		pending = true;
+		try {
+			const response = await fetch(
+				`/api/v1/sso/resolve?email=${encodeURIComponent(address)}`,
+				{ headers: { accept: 'application/json' } }
+			);
+			const resolved = response.ok
+				? ((await response.json()) as { provider?: { id: string } | null })
+				: null;
+			const providerId = resolved?.provider?.id;
+			if (providerId) {
+				const { data: result, error: err } = await authClient.signIn.sso({
+					providerId,
+					loginHint: address,
+					callbackURL: destination
+				});
+				if (result?.url) {
+					window.location.href = result.url;
+					return;
+				}
+				if (err) error = err.message ?? 'Could not start single sign-on.';
+				step = 'methods';
+				return;
+			}
+			step = 'methods';
+		} catch {
+			step = 'methods';
+		} finally {
+			pending = false;
+		}
+	}
+
+	function changeEmail() {
+		password = '';
+		code = '';
+		useBackup = false;
+		reset();
+		step = 'email';
 	}
 
 	async function signInWithPassword(event: SubmitEvent) {
@@ -130,7 +185,9 @@
 		? useBackup
 			? 'Use one of the backup codes you saved when you set up the authenticator app.'
 			: 'Open your authenticator app and enter the 6-digit code for Skiff.'
-		: 'No account? Ask an organisation owner for an invitation.'}
+		: step === 'email'
+			? 'Enter your work email. If your organisation uses single sign-on, you go straight to its identity provider.'
+			: 'No account? Ask an organisation owner for an invitation.'}
 >
 	{#if step === 'code'}
 		<form class="space-y-3" onsubmit={verifyCode}>
@@ -169,14 +226,14 @@
 				type="button"
 				class="underline-offset-4 hover:underline"
 				onclick={() => {
-					step = 'credentials';
+					step = 'methods';
 					code = '';
 					reset();
 				}}>Back</button
 			>
 		</div>
-	{:else}
-		<form class="space-y-3" onsubmit={signInWithPassword}>
+	{:else if step === 'email'}
+		<form class="space-y-3" onsubmit={startSignIn}>
 			<Field.Field>
 				<Field.Label for="email">Email address</Field.Label>
 				<Input
@@ -188,7 +245,28 @@
 					bind:value={email}
 					required
 				/>
+				<Field.Description>
+					We use the domain to find your organisation's sign-in method.
+				</Field.Description>
 			</Field.Field>
+			<Button type="submit" size="lg" class="h-10 w-full" disabled={pending}>
+				<LogInIcon aria-hidden="true" />
+				Continue
+			</Button>
+		</form>
+	{:else}
+		<div
+			class="mb-4 flex items-center justify-between gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm"
+		>
+			<span class="truncate font-medium">{email}</span>
+			<button
+				type="button"
+				class="shrink-0 text-xs text-muted-foreground underline-offset-4 hover:underline"
+				onclick={changeEmail}>Change</button
+			>
+		</div>
+		<form class="space-y-3" onsubmit={signInWithPassword}>
+			<input type="hidden" name="email" value={email} />
 			<Field.Field>
 				<div class="flex items-baseline justify-between gap-2">
 					<Field.Label for="password">Password</Field.Label>

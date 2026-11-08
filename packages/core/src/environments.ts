@@ -10,6 +10,7 @@ import {
 import type { CoreContext } from './context.ts';
 import { ConflictError, NotFoundError, ValidationError } from './errors.ts';
 import { hashPassword, newId } from './util.ts';
+import { effectiveAccessMode } from './access.ts';
 import type { ProjectRow } from './projects.ts';
 import type { DeploymentView } from './deployments.ts';
 
@@ -33,9 +34,13 @@ export class EnvironmentService {
 	}
 
 	view(
-		project: Pick<ProjectRow, 'slug'> & Partial<Pick<ProjectRow, 'productionPasswordHash'>>,
+		project: Pick<ProjectRow, 'slug'> &
+			Partial<Pick<ProjectRow, 'productionPasswordHash' | 'productionAccessPolicyId'>>,
 		row: EnvironmentRow,
 	): EnvironmentView {
+		const policyId = row.isProduction
+			? (project.productionAccessPolicyId ?? null)
+			: (row.accessPolicyId ?? null);
 		return {
 			id: row.id,
 			projectId: row.projectId,
@@ -43,7 +48,8 @@ export class EnvironmentService {
 			name: row.name,
 			slug: row.slug,
 			isProduction: row.isProduction,
-			access: row.access,
+			access: effectiveAccessMode(row.access, policyId),
+			accessPolicyId: policyId,
 			passwordSet: row.isProduction ? Boolean(project.productionPasswordHash) : Boolean(row.passwordHash),
 			host: this.hostFor(project, row),
 			deploymentId: row.deploymentId,
@@ -77,6 +83,7 @@ export class EnvironmentService {
 			slug: 'production',
 			isProduction: true,
 			access: project.productionAccess,
+			accessPolicyId: project.productionAccessPolicyId ?? null,
 			// Production follows the project's production password; this column stays unused.
 			passwordHash: null,
 			deploymentId: project.productionDeploymentId,
@@ -115,7 +122,13 @@ export class EnvironmentService {
 		if (slug === 'production') throw new ConflictError('The production environment is built in.');
 		const clash = this.rows(project.id).find((row) => row.slug === slug);
 		if (clash) throw new ConflictError(`An environment named "${slug}" already exists.`);
-		const access = parsed.access ?? project.previewAccess;
+		const access = parsed.access ?? effectiveAccessMode(project.previewAccess, project.previewAccessPolicyId);
+		if (access === 'access' && !parsed.policyId && !project.previewAccessPolicyId)
+			throw new ValidationError('Choose a Skiff Access policy for this environment.');
+		const policyId =
+			access === 'access'
+				? (parsed.policyId ?? project.previewAccessPolicyId ?? null)
+				: null;
 		let passwordHash: string | null = null;
 		if (access === 'password') {
 			if (parsed.password) passwordHash = hashPassword(parsed.password);
@@ -131,7 +144,8 @@ export class EnvironmentService {
 			name: parsed.name,
 			slug,
 			isProduction: false,
-			access,
+			access: access === 'access' ? 'platform' : access,
+			accessPolicyId: policyId,
 			passwordHash,
 			deploymentId: null,
 			createdAt: now,
@@ -158,26 +172,45 @@ export class EnvironmentService {
 			projectId: project.id,
 		});
 		if (row.isProduction) throw new ConflictError('The production environment cannot be renamed.');
-		const access = input.access ?? row.access;
+		const access =
+			input.access ?? effectiveAccessMode(row.access, row.accessPolicyId ?? null);
+		const policyId =
+			access === 'access'
+				? (input.policyId !== undefined ? input.policyId : (row.accessPolicyId ?? null))
+				: null;
+		if (access === 'access' && !policyId)
+			throw new ValidationError('Choose a Skiff Access policy for this environment.');
 		// The environment's own password; other scopes are never touched.
 		let passwordHash = row.passwordHash;
 		if (access !== 'password') passwordHash = null;
 		else if (input.password) passwordHash = hashPassword(input.password);
 		else if (row.access !== 'password' || !row.passwordHash)
 			throw new ValidationError('A password is required for password mode.');
-		const next = { ...row, name: input.name ?? row.name, access, passwordHash };
+		const next = {
+			...row,
+			name: input.name ?? row.name,
+			access: access === 'access' ? 'platform' : access,
+			accessPolicyId: policyId,
+			passwordHash,
+		};
 		this.ctx.db
 			.update(environments)
-			.set({ name: next.name, access, passwordHash, updatedAt: this.ctx.now() })
+			.set({
+				name: next.name,
+				access: access === 'access' ? 'platform' : access,
+				accessPolicyId: policyId,
+				passwordHash,
+				updatedAt: this.ctx.now(),
+			})
 			.where(eq(environments.id, row.id))
 			.run();
-		if (input.access !== undefined || input.password)
+		if (input.access !== undefined || input.password || input.policyId !== undefined)
 			this.ctx.audit.record({
 				principal,
 				action: 'environment.set_access',
 				resource: 'environment',
 				resourceId: row.id,
-				args: { project: project.slug, slug, mode: access, passwordChanged: Boolean(input.password) },
+				args: { project: project.slug, slug, mode: access, policyId, passwordChanged: Boolean(input.password) },
 				result: 'ok',
 			});
 		this.ctx.projects.bump(project.orgId);

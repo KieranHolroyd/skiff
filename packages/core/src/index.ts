@@ -65,12 +65,15 @@ import { TemplateService } from './templates.ts';
 import { BlueprintService } from './blueprints.ts';
 import { IamService } from './iam/service.ts';
 import { GovernanceService } from './iam/governance.ts';
+import { AuthPolicyService } from './iam/auth-policy.ts';
 import { PlatformIamService } from './platform-iam.ts';
 import { configurePrunePlatformIam } from './operations/prune.ts';
 import { ServiceAccountService } from './service-accounts.ts';
 import { AccessKeyService } from './access-keys.ts';
 import { SigningKeyService } from './iam/keys.ts';
 import { TokenService } from './iam/sts.ts';
+import { AccessPolicyService } from './iam/access-policies.ts';
+import { UserPoolService } from './user-pools.ts';
 
 export * from './config.ts';
 export * from './context.ts';
@@ -82,8 +85,11 @@ export * from './object-store.ts';
 export * from './orgs.ts';
 export * from './iam/service.ts';
 export * from './iam/governance.ts';
+export * from './iam/auth-policy.ts';
 export * from './iam/keys.ts';
 export * from './iam/sts.ts';
+export * from './iam/access-policies.ts';
+export * from './user-pools.ts';
 export * from './platform-iam.ts';
 export * from './service-accounts.ts';
 export * from './access-keys.ts';
@@ -242,6 +248,8 @@ export interface Core {
 	iam: IamService;
 	/** Guardrails and just-in-time access (IAM.md I11/I22, §9.2–§9.4). */
 	governance: GovernanceService;
+	/** Per-organisation sign-in policy (IAM.md I21, §8.5). */
+	authPolicy: AuthPolicyService;
 	/** Platform roles and bindings at `{ type: 'platform' }` (IAM.md I24, D129). */
 	platformIam: PlatformIamService;
 	/** Service accounts: org-owned machine principals (`sa_…`, IAM.md I13). */
@@ -252,6 +260,10 @@ export interface Core {
 	signingKeys: SigningKeyService;
 	/** RFC 8693 token exchange against federation trusts (IAM.md I16–I17). */
 	sts: TokenService;
+	/** Skiff Access policies (IAM.md I25). */
+	accessPolicies: AccessPolicyService;
+	/** Managed user pools: OIDC clients and discovery for tenant apps (IAM.md I26–I29). */
+	userPools: UserPoolService;
 	/** Email: Skiff's self-hosted SES (docs/EMAIL.md). */
 	email: EmailService;
 	/** Log drains: forward stored log lines to webhooks and OTLP receivers (DESIGN §8). */
@@ -285,6 +297,7 @@ export function createCore(options: CoreOptions): Core {
 	ctx.audit = new AuditService(ctx);
 	ctx.iam = new IamService(ctx);
 	ctx.governance = new GovernanceService(ctx);
+	ctx.authPolicy = new AuthPolicyService(ctx);
 	ctx.platformIam = new PlatformIamService(ctx);
 	// Seed `platform-admin` from the Better Auth admin flag once, best effort. A boot before Better
 	// Auth's tables exist is covered by `sync(userId)` on demand; this is not a schema migration.
@@ -296,6 +309,8 @@ export function createCore(options: CoreOptions): Core {
 	ctx.accessKeys = new AccessKeyService(ctx);
 	ctx.signingKeys = new SigningKeyService(ctx);
 	ctx.sts = new TokenService(ctx);
+	ctx.accessPolicies = new AccessPolicyService(ctx);
+	ctx.userPools = new UserPoolService(ctx);
 	ctx.quota = new QuotaService(ctx);
 	ctx.projects = new ProjectService(ctx);
 	ctx.releases = new ReleaseService(ctx);
@@ -422,11 +437,14 @@ export function createCore(options: CoreOptions): Core {
 		cluster: ctx.cluster,
 		iam: ctx.iam,
 		governance: ctx.governance,
+		authPolicy: ctx.authPolicy,
 		platformIam: ctx.platformIam,
 		serviceAccounts: ctx.serviceAccounts,
 		accessKeys: ctx.accessKeys,
 		signingKeys: ctx.signingKeys,
 		sts: ctx.sts,
+		accessPolicies: ctx.accessPolicies,
+		userPools: ctx.userPools,
 		logDrains: new LogDrainService(ctx, options.version),
 	};
 }

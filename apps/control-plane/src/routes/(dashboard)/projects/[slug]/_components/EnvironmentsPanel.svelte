@@ -32,7 +32,8 @@
 		platformOrigin,
 		previewAccess = 'platform',
 		productionAccess = 'public',
-		runtime = 'static'
+		runtime = 'static',
+		accessPolicies = []
 	}: {
 		environments: EnvironmentView[];
 		deployments: DeploymentView[];
@@ -45,14 +46,17 @@
 		previewAccess?: string;
 		productionAccess?: string;
 		runtime?: string;
+		accessPolicies?: Array<{ id: string; name: string }>;
 	} = $props();
 
 	let createOpen = $state(false);
 	let createAccess = $state('platform');
+	let createPolicy = $state('');
 
 	let editOpen = $state(false);
 	let editing = $state<EnvironmentView | null>(null);
 	let editAccess = $state('platform');
+	let editPolicy = $state('');
 
 	let promoteOpen = $state(false);
 	let promoting = $state<EnvironmentView | null>(null);
@@ -81,12 +85,14 @@
 
 	function openCreate() {
 		createAccess = previewAccess;
+		createPolicy = '';
 		createOpen = true;
 	}
 
 	function openEdit(environment: EnvironmentView) {
 		editing = environment;
 		editAccess = environment.access;
+		editPolicy = environment.accessPolicyId ?? '';
 		editOpen = true;
 	}
 
@@ -304,6 +310,17 @@
 					Staging usually uses platform login so only members of this organisation can open it.
 				</Field.Description>
 			</Field.Field>
+			{#if createAccess === 'access'}
+				<Field.Field>
+					<Field.Label for="env-policy">Skiff Access policy</Field.Label>
+					<NativeSelect.Root id="env-policy" name="policyId" bind:value={createPolicy} required>
+						<NativeSelect.Option value="">Choose a policy</NativeSelect.Option>
+						{#each accessPolicies as policy (policy.id)}
+							<NativeSelect.Option value={policy.id}>{policy.name}</NativeSelect.Option>
+						{/each}
+					</NativeSelect.Root>
+				</Field.Field>
+			{/if}
 			{#if createAccess === 'password'}
 				<Field.Field>
 					<Field.Label for="env-password">Environment password</Field.Label>
@@ -341,6 +358,17 @@
 				<Field.Label for="env-edit-access">Access</Field.Label>
 				<AccessSelect id="env-edit-access" name="access" bind:value={editAccess} />
 			</Field.Field>
+			{#if editAccess === 'access'}
+				<Field.Field>
+					<Field.Label for="env-edit-policy">Skiff Access policy</Field.Label>
+					<NativeSelect.Root id="env-edit-policy" name="policyId" bind:value={editPolicy} required>
+						<NativeSelect.Option value="">Choose a policy</NativeSelect.Option>
+						{#each accessPolicies as policy (policy.id)}
+							<NativeSelect.Option value={policy.id}>{policy.name}</NativeSelect.Option>
+						{/each}
+					</NativeSelect.Root>
+				</Field.Field>
+			{/if}
 			{#if editAccess === 'password'}
 				{@const keep = editing?.access === 'password' && editing.passwordSet}
 				<Field.Field>

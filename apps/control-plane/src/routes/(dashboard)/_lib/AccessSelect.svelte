@@ -25,6 +25,12 @@
 			label: 'Platform login',
 			hint: 'Members of this org',
 			icon: ShieldCheckIcon
+		},
+		{
+			value: 'access',
+			label: 'Skiff Access',
+			hint: 'A policy: groups, email, SSO or a pool',
+			icon: ShieldCheckIcon
 		}
 	] as const;
 	const selected = $derived(options.find((option) => option.value === value) ?? options[0]);

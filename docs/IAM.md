@@ -569,12 +569,35 @@ existing set can only burn down.
 The engine is built: the pure `authorize`/`compileGrants` in `packages/contracts/src/iam/authorize.ts`
 and the impure `IamService` in `packages/core/src/iam/service.ts` (bindings, custom roles, groups,
 guardrails, the `iamVersion` cache, `require`/`can`/`scopeFilter`/`explain`/`whoCan`), on migration
-`0080_iam.sql`. `member.role` becomes an org binding the first time the engine sees a user, so
-existing access is unchanged. The matrix test (`packages/core/src/iam/matrix.test.ts`) runs every
-catalog permission through an org grant, a project grant, another project, expiry, a guardrail, a
-token restriction and a session-only condition. The REST surface is `/api/v1/iam` (roles, bindings,
-groups, explain, who-can), documented in [API.md](./API.md). Nothing calls `iam.require` yet. Next:
-Settings → Access, then I2's module-by-module threading.
+`0080_iam.sql`. `member.role` becomes an org binding the first time the engine sees a user. The matrix
+test runs every catalog permission through an org grant, a project grant, another project, expiry, a
+guardrail, a token restriction and a session-only condition.
+
+What is built now:
+
+- **I0/I1** — catalog, principal v2, named system principals, audit actor columns, the lint guard,
+  roles/groups/bindings, `/api/v1/iam` and Settings → Access.
+- **I2** — the core modules authorize through `iam.require` with a resource (projects, deployments,
+  domains, databases, pipelines, builds, registry, storage, brokers, shares, app volumes, email,
+  jobs, events, alerts, workloads, functions, templates, environments, access, studio, node tasks,
+  replicas, moves, metrics, backups, usage, uploads, logs, secrets, console, flows, releases,
+  GitHub), with `scopeFilter` on the lists that can express it. A temporary legacy fallback and the
+  42 baselined role/kind checks remain.
+- **I3** — service accounts and org-bound `access_keys` with SHA-256 hashes, expiry, CIDR and
+  restriction, plus creation/revocation routes.
+- **I4** — the ES256 key ring with rotation and shared JWKS, federation trusts and RFC 8693 token
+  exchange. The registry realm and pipeline OIDC still use their old keys (next consumer).
+- **I5** — active-organization sessions, the header switcher and org-bound key metadata (the
+  workload-identity half is not built).
+- **I6** — OIDC sign-in through `@better-auth/sso`, provider sync, JIT membership, domain routing,
+  org auth policy and enforcement. Group mapping, SAML and SCIM remain.
+- **I7** — guardrail templates and CRUD, JIT access requests, usage rollup, access reviews, and the
+  `requireStepUp` contract (not yet wired into call sites).
+- **I8** — platform roles at platform scope, D129 as a session condition, and seeded admin bindings.
+- **I9** — access policies, the `access` protection mode, the agent's `forward_auth` handler and the
+  Settings page. Service tokens and user-pool identity are not enforced at the edge yet.
+- **I10** — user pools and OIDC clients with discovery/JWKS. The native identity engine is a seam
+  only: no users, hosted sign-in or sessions yet.
 
 | Phase | Contents | Proposals | Done when |
 |---|---|---|---|

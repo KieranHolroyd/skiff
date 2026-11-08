@@ -1,13 +1,16 @@
 import { error, fail } from '@sveltejs/kit';
 import { core } from '#lib/server/core.js';
+import { sqlite } from '#lib/server/db.js';
+import { userHasSecondFactor } from '#lib/server/second-factor.js';
 import { sso } from '#lib/server/sso.js';
-import { failStatus, formString, toFormFailure } from '../../_lib/errors.js';
+import { ssoDefaultRole } from '#lib/server/sso-provision.js';
+import { failStatus, formBoolean, formString, toFormFailure } from '../../_lib/errors.js';
 import type { Actions, PageServerLoad } from './$types';
 
 /**
- * Settings → SSO (IAM.md I19, §8.3). OIDC providers and the email domains that route to them.
- * JIT provisioning, group mapping, enforcement, SAML and SCIM are shown as not yet built: this
- * slice stores configuration and proves domain ownership, and does not fake a sign-in flow.
+ * Settings → SSO (IAM.md I19/I21, §8.3, §8.5). OIDC providers, the email domains that route to
+ * them, and the org authentication policy (required SSO/2FA, methods, session limits, IP allowlist,
+ * break-glass owners). Group mapping, SAML and SCIM are still shown as not yet built.
  */
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -26,9 +29,22 @@ export const load: PageServerLoad = async ({ locals }) => {
 		// Keep the stored state when DNS is unavailable.
 	}
 
+	const owners = sqlite
+		.query<{ id: string; email: string; name: string }, [string]>(
+			`SELECT u.id, u.email, u.name
+			 FROM member m JOIN user u ON u.id = m.userId
+			 WHERE m.organizationId = ? AND m.role = 'owner'
+			 ORDER BY u.email COLLATE NOCASE`
+		)
+		.all(principal.orgId)
+		.map((owner) => ({ ...owner, hasSecondFactor: userHasSecondFactor(owner.id) }));
+
 	return {
 		providers,
 		domains,
+		owners,
+		policy: core.authPolicy.get(principal),
+		defaultSsoRole: ssoDefaultRole,
 		canManage: core.iam.can(principal, 'sso:manage', resource)
 	};
 };
@@ -141,6 +157,73 @@ export const actions: Actions = {
 		try {
 			sso.removeDomain(principal, domain);
 			return { success: `${domain} removed.` };
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	savePolicy: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const requireSso = formBoolean(data, 'requireSso');
+		const require2fa = formBoolean(data, 'require2fa');
+		const methods = data
+			.getAll('methods')
+			.filter((value): value is string => typeof value === 'string');
+		const breakGlassUserIds = data
+			.getAll('breakGlass')
+			.filter((value): value is string => typeof value === 'string');
+
+		const hours = formString(data, 'sessionMaxAgeHours');
+		const minutes = formString(data, 'idleTimeoutMinutes');
+		const sessionMaxAge = hours ? Number(hours) * 3600 : null;
+		const idleTimeout = minutes ? Number(minutes) * 60 : null;
+		if (hours && (sessionMaxAge === null || !Number.isInteger(sessionMaxAge) || sessionMaxAge <= 0))
+			return fail(400, { message: 'Session maximum age must be a whole number of hours.' });
+		if (minutes && (idleTimeout === null || !Number.isInteger(idleTimeout) || idleTimeout <= 0))
+			return fail(400, { message: 'Idle timeout must be a whole number of minutes.' });
+
+		// Preflight before turning enforcement on (IAM.md §8.3): without an enabled IdP, a verified
+		// domain and a break-glass owner who can actually prove a factor, everyone could be locked out.
+		if (requireSso) {
+			if (!sso.listProviders(principal).some((provider) => provider.enabled))
+				return fail(400, {
+					message: 'Add and enable an identity provider before requiring SSO.'
+				});
+			if (!sso.listDomains(principal).some((domain) => domain.verified))
+				return fail(400, {
+					message: 'Verify at least one email domain before requiring SSO.'
+				});
+			const owners = sqlite
+				.query<{ id: string }, [string]>(
+					"SELECT u.id FROM member m JOIN user u ON u.id = m.userId WHERE m.organizationId = ? AND m.role = 'owner'"
+				)
+				.all(principal.orgId);
+			const ownerIds = new Set(owners.map((owner) => owner.id));
+			const usable = breakGlassUserIds.some(
+				(id) => ownerIds.has(id) && userHasSecondFactor(id)
+			);
+			if (!usable)
+				return fail(400, {
+					message:
+						'Choose at least one break-glass owner who has a passkey or authenticator app. Otherwise an IdP outage locks everyone out.'
+				});
+		}
+
+		try {
+			core.authPolicy.update(principal, {
+				requireSso,
+				require2fa,
+				allowedMethods: methods as Parameters<typeof core.authPolicy.update>[1]['allowedMethods'],
+				sessionMaxAge,
+				idleTimeout,
+				ipAllowlist: formString(data, 'ipAllowlist')
+					.split(/[\s,]+/)
+					.map((value) => value.trim())
+					.filter(Boolean),
+				breakGlassUserIds
+			});
+			return { success: 'Authentication policy saved.' };
 		} catch (cause) {
 			return failure(cause);
 		}

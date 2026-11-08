@@ -18,7 +18,7 @@ export const limits = {
 	redirectDays: 30,
 } as const;
 
-export const accessModes = ['public', 'password', 'platform'] as const;
+export const accessModes = ['public', 'password', 'platform', 'access'] as const;
 export type AccessMode = (typeof accessModes)[number];
 
 export const runtimes = ['static', 'process', 'container', 'function'] as const;

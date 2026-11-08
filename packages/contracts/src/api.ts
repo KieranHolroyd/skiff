@@ -13,6 +13,9 @@ export const projectCreateSchema = z.object({
 	placementSpec: placementSpecSchema.optional(),
 	productionAccess: z.enum(accessModes).default('public'),
 	previewAccess: z.enum(accessModes).default('platform'),
+	/** Required when a scope is `access`: the Skiff Access policy it applies. */
+	productionAccessPolicyId: z.string().min(1).max(100).optional(),
+	previewAccessPolicyId: z.string().min(1).max(100).optional(),
 	/** Required when either scope is `password`; each such scope stores its own copy. */
 	password: z.string().min(8).max(200).optional(),
 });
@@ -24,6 +27,8 @@ export const projectUpdateSchema = z.object({
 	placementSpec: placementSpecSchema.nullable().optional(),
 	productionAccess: z.enum(accessModes).optional(),
 	previewAccess: z.enum(accessModes).optional(),
+	productionAccessPolicyId: z.string().min(1).max(100).nullable().optional(),
+	previewAccessPolicyId: z.string().min(1).max(100).nullable().optional(),
 	pinned: z.boolean().optional(),
 });
 export type ProjectUpdate = z.infer<typeof projectUpdateSchema>;
@@ -99,6 +104,8 @@ export const setAccessSchema = z.object({
 	 * already has one, which keeps it. Each scope has its own password.
 	 */
 	password: z.string().min(8).max(200).optional(),
+	/** Required when `mode` is `access`: the policy this scope applies. */
+	policyId: z.string().min(1).max(100).optional(),
 });
 export type SetAccess = z.infer<typeof setAccessSchema>;
 

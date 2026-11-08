@@ -36,8 +36,12 @@ export function secondFactorState(input: {
 	kind: Principal['kind'] | undefined;
 	sessionFactor: string | null | undefined;
 	hasFactor: boolean;
+	/** The org auth policy's `require_2fa` (IAM.md I21). Owners are gated regardless. */
+	requireTwoFactor?: boolean;
 }): SecondFactorState {
-	if (!input.enforce || input.kind !== 'user' || input.role !== 'owner') return 'satisfied';
+	if (input.kind !== 'user') return 'satisfied';
+	const ownerGate = input.enforce && input.role === 'owner';
+	if (!ownerGate && !input.requireTwoFactor) return 'satisfied';
 	if (input.sessionFactor) return 'satisfied';
 	return input.hasFactor ? 'challenge' : 'enrol';
 }

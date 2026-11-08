@@ -12,7 +12,9 @@
 			? { icon: LockKeyholeIcon, label: 'Password', tone: 'text-warning' }
 			: mode === 'platform'
 				? { icon: ShieldCheckIcon, label: 'Platform login', tone: 'text-info' }
-				: { icon: GlobeIcon, label: 'Public', tone: 'text-success' }
+				: mode === 'access'
+					? { icon: ShieldCheckIcon, label: 'Skiff Access', tone: 'text-info' }
+					: { icon: GlobeIcon, label: 'Public', tone: 'text-success' }
 	);
 </script>
 

@@ -62,6 +62,7 @@ import { BROKER_STATS_INTERVAL_MS, BrokerStatsSampler } from './broker-stats.ts'
 import { DesiredStateStore, desiredStateEtag, desiredStateRequest } from './state.ts';
 import { postTelemetryBatch, TelemetryClient } from './telemetry.ts';
 import { handleSiteRequest, normalizeHost, UsedTokenCache } from './verify.ts';
+import { AccessDecisionCache } from './skiff-access.ts';
 import type { StudioFront } from './studio/front.ts';
 import { ConsoleFront, controlPlaneConsoleActivationFetcher } from './console-front.ts';
 
@@ -157,6 +158,8 @@ class AgentRuntime {
 	private actualStateVersion = 0;
 	private projectByHost = new Map<string, string>();
 	private readonly usedTokens = new UsedTokenCache();
+	/** Brief cache of verified Skiff Access decisions (IAM.md §11.1, S6). */
+	private readonly accessCache = new AccessDecisionCache();
 
 	private caddyOk = false;
 	private running = true;
@@ -537,6 +540,9 @@ class AgentRuntime {
 			cookieName: this.config.cookieName,
 			insecureHttp: this.config.insecureHttp,
 			usedTokens: this.usedTokens,
+			accessCookieName: this.config.accessCookieName,
+			accessJwtSecret: this.config.accessJwtSecret,
+			accessCache: this.accessCache,
 		});
 	}
 

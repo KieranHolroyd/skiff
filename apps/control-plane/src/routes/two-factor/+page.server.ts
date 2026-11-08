@@ -1,5 +1,6 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { auth } from '#lib/server/auth.js';
+import { core } from '#lib/server/core.js';
 import { platformOrigin } from '#lib/server/config.js';
 import {
 	enforceOwnerSecondFactor,
@@ -29,12 +30,15 @@ export const load: PageServerLoad = ({ locals, url }) => {
 
 	const userId = locals.user.id;
 	const hasFactor = userHasSecondFactor(userId);
+	const orgId = locals.principal?.orgId ?? locals.session.activeOrganizationId ?? undefined;
+	const policy = orgId ? core.authPolicy.forOrg(orgId) : null;
 	const state = secondFactorState({
 		enforce: enforceOwnerSecondFactor,
 		role: locals.principal?.role,
 		kind: locals.principal?.kind,
 		sessionFactor: sessionFactor(locals),
-		hasFactor
+		hasFactor,
+		requireTwoFactor: Boolean(policy?.require2fa)
 	});
 	const setup = url.searchParams.get('setup') === '1';
 	if (state === 'satisfied' && !setup) redirect(303, next);

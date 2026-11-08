@@ -88,7 +88,9 @@ export interface AccessTokenClaims {
 	exp: number;
 	/** Subject: user id or share redemption id. */
 	sub: string;
-	kind: 'platform' | 'share' | 'password';
+	kind: 'platform' | 'share' | 'password' | 'access';
+	/** The verified address, so the agent can hand `Skiff-Access-Email` upstream. */
+	email?: string;
 	/** Session/redemption id, used for revocation. */
 	sid?: string;
 	/** Session expiry: the agent copies this into the host-only cookie (longer than `exp`). */

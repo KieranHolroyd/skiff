@@ -1,11 +1,14 @@
 <script lang="ts">
+	import { enhance } from '$app/forms';
 	import FingerprintIcon from '@lucide/svelte/icons/fingerprint';
 	import GlobeIcon from '@lucide/svelte/icons/globe';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import PowerIcon from '@lucide/svelte/icons/power';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
+	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import TrashIcon from '@lucide/svelte/icons/trash';
+	import { toast } from 'svelte-sonner';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
@@ -18,6 +21,7 @@
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as Table from '#lib/components/ui/table/index.js';
+	import { Textarea } from '#lib/components/ui/textarea/index.js';
 	import EmptyState from '../../_lib/EmptyState.svelte';
 	import Panel from '../../_lib/Panel.svelte';
 	import RowMenu from '../../_lib/RowMenu.svelte';
@@ -35,6 +39,7 @@
 		claims: { email: string; name: string; groups: string };
 		enabled: boolean;
 		hasClientSecret: boolean;
+		callbackUrl: string;
 		updatedAt: number;
 	}
 
@@ -47,14 +52,49 @@
 		lastCheckedAt: number | null;
 	}
 
+	interface OwnerView {
+		id: string;
+		email: string;
+		name: string;
+		hasSecondFactor: boolean;
+	}
+
+	interface PolicyView {
+		requireSso: boolean;
+		require2fa: boolean;
+		allowedMethods: string[];
+		sessionMaxAge: number | null;
+		idleTimeout: number | null;
+		ipAllowlist: string[];
+		breakGlassUserIds: string[];
+	}
+
 	let { data }: PageProps = $props();
 
 	let providerOpen = $state(false);
 	let editing = $state<ProviderView | null>(null);
 	let domainOpen = $state(false);
 	let verifying = $state<string | null>(null);
+	let savingPolicy = $state(false);
 
 	const DEFAULT_SCOPES = 'openid profile email';
+	const METHODS = [
+		['password', 'Password'],
+		['passkey', 'Passkey'],
+		['github', 'GitHub'],
+		['magic-link', 'Magic link'],
+		['sso', 'Single sign-on']
+	] as const;
+
+	const ssoAvailable = $derived(
+		data.providers.some((provider) => provider.enabled) && data.domains.some((domain) => domain.verified)
+	);
+	const hours = $derived(
+		(data.policy as PolicyView).sessionMaxAge ? (data.policy as PolicyView).sessionMaxAge! / 3600 : ''
+	);
+	const minutes = $derived(
+		(data.policy as PolicyView).idleTimeout ? (data.policy as PolicyView).idleTimeout! / 60 : ''
+	);
 
 	function openProvider(provider: ProviderView | null) {
 		editing = provider;
@@ -154,6 +194,12 @@
 								<p class="mt-0.5 truncate text-xs text-muted-foreground">
 									Client id <span class="font-mono">{provider.clientId}</span>
 								</p>
+								<div class="mt-0.5 flex items-center gap-1">
+									<p class="truncate text-xs text-muted-foreground">
+										Callback <span class="font-mono">{provider.callbackUrl}</span>
+									</p>
+									<CopyButton value={provider.callbackUrl} iconOnly label="Copy callback URL" />
+								</div>
 							</Table.Cell>
 							<Table.Cell class="hidden lg:table-cell">
 								<p class="text-xs text-muted-foreground">
@@ -309,37 +355,192 @@
 	</Panel>
 
 	<Panel
+		title="Authentication policy"
+		icon={ShieldCheckIcon}
+		description="Enforced for every member of this organisation, on top of the owner rules. Owners always need a second factor."
+	>
+		<form
+			method="POST"
+			action="?/savePolicy"
+			use:enhance={() => {
+				savingPolicy = true;
+				return async ({ result, update }) => {
+					await update({ reset: false });
+					savingPolicy = false;
+					if (result.type === 'success')
+						toast.success(
+							String((result.data as { success?: unknown } | undefined)?.success ?? 'Saved')
+						);
+					else if (result.type === 'failure')
+						toast.error(
+							String((result.data as { message?: unknown } | undefined)?.message ?? 'Could not save')
+						);
+				};
+			}}
+		>
+			<div class="grid gap-5 sm:grid-cols-2">
+				<Field.Field orientation="horizontal">
+					<Checkbox
+						id="policy-require-sso"
+						name="requireSso"
+						value="true"
+						checked={(data.policy as PolicyView).requireSso}
+						disabled={!data.canManage}
+					/>
+					<Field.Label for="policy-require-sso" class="font-medium">Require single sign-on</Field.Label>
+					<Field.Description>
+						Refuse password, magic links, GitHub and passkeys for members. Break-glass owners below
+						keep them. Needs an enabled provider and a verified domain.
+					</Field.Description>
+				</Field.Field>
+				<Field.Field orientation="horizontal">
+					<Checkbox
+						id="policy-require-2fa"
+						name="require2fa"
+						value="true"
+						checked={(data.policy as PolicyView).require2fa}
+						disabled={!data.canManage}
+					/>
+					<Field.Label for="policy-require-2fa" class="font-medium">Require a second factor</Field.Label>
+					<Field.Description>
+						Every member must use a passkey or authenticator app. The owner rule stays on even when
+						this is off.
+					</Field.Description>
+				</Field.Field>
+			</div>
+
+			<Field.Set class="mt-5">
+				<Field.Legend variant="label">Allowed sign-in methods</Field.Legend>
+				<Field.Description>
+					Methods not selected are refused, including on an existing session. Single sign-on requires a
+					provider and a verified domain{#if !ssoAvailable}<span class="text-amber-600">
+							(a provider or domain is still missing)</span
+						>{/if}.
+				</Field.Description>
+				<div class="mt-2 flex flex-wrap gap-x-6 gap-y-2">
+					{#each METHODS as [value, label] (value)}
+						<Field.Field orientation="horizontal">
+							<Checkbox
+								id={`policy-method-${value}`}
+								name="methods"
+								{value}
+								checked={(data.policy as PolicyView).allowedMethods.includes(value)}
+								disabled={!data.canManage}
+							/>
+							<Field.Label for={`policy-method-${value}`}>{label}</Field.Label>
+						</Field.Field>
+					{/each}
+				</div>
+			</Field.Set>
+
+			<div class="mt-5 grid gap-5 sm:grid-cols-2">
+				<Field.Field>
+					<Field.Label for="policy-session-age">Session maximum age (hours)</Field.Label>
+					<Input
+						id="policy-session-age"
+						name="sessionMaxAgeHours"
+						type="number"
+						min="1"
+						step="1"
+						value={hours}
+						placeholder="No limit"
+						disabled={!data.canManage}
+					/>
+					<Field.Description>Leave blank for no maximum age.</Field.Description>
+				</Field.Field>
+				<Field.Field>
+					<Field.Label for="policy-idle">Idle timeout (minutes)</Field.Label>
+					<Input
+						id="policy-idle"
+						name="idleTimeoutMinutes"
+						type="number"
+						min="5"
+						step="1"
+						value={minutes}
+						placeholder="No timeout"
+						disabled={!data.canManage}
+					/>
+					<Field.Description>
+						Signed-in sessions are checked against the last request, tracked at most once a minute.
+					</Field.Description>
+				</Field.Field>
+			</div>
+
+			<Field.Field class="mt-5">
+				<Field.Label for="policy-ip">IP allowlist</Field.Label>
+				<Textarea
+					id="policy-ip"
+					name="ipAllowlist"
+					rows={3}
+					placeholder="203.0.113.0/24"
+					value={(data.policy as PolicyView).ipAllowlist.join('\n')}
+					disabled={!data.canManage}
+					class="font-mono text-sm"
+				/>
+				<Field.Description>
+					One IPv4 address or CIDR per line. Empty means any network. Sessions from other addresses are
+					refused.
+				</Field.Description>
+			</Field.Field>
+
+			<Field.Set class="mt-5">
+				<Field.Legend variant="label">Break-glass owners</Field.Legend>
+				<Field.Description>
+					Owners who keep their non-SSO methods when SSO is required. Pick at least one with a passkey or
+					authenticator app before turning enforcement on.
+				</Field.Description>
+				{#if data.owners.length === 0}
+					<p class="mt-2 text-sm text-muted-foreground">This organisation has no owners.</p>
+				{:else}
+					<div class="mt-2 grid gap-2 sm:grid-cols-2">
+						{#each data.owners as owner (owner.id)}
+							<Field.Field orientation="horizontal">
+								<Checkbox
+									id={`policy-break-glass-${owner.id}`}
+									name="breakGlass"
+									value={owner.id}
+									checked={(data.policy as PolicyView).breakGlassUserIds.includes(owner.id)}
+									disabled={!data.canManage}
+								/>
+								<Field.Label for={`policy-break-glass-${owner.id}`} class="min-w-0">
+									<span class="truncate">{owner.name || owner.email}</span>
+									<span class="block truncate text-xs font-normal text-muted-foreground">
+										{owner.email}{#if !owner.hasSecondFactor}
+											· no passkey or authenticator{/if}
+									</span>
+								</Field.Label>
+							</Field.Field>
+						{/each}
+					</div>
+				{/if}
+			</Field.Set>
+
+			<p class="mt-5 text-xs text-muted-foreground">
+				New SSO users get the
+				<span class="font-medium">{data.defaultSsoRole === 'none' ? 'no organisation role' : 'viewer role'}</span
+				>{#if data.defaultSsoRole === 'none'}
+					(server started with <span class="font-mono">SKIFF_SSO_DEFAULT_ROLE=none</span>){/if}.
+			</p>
+
+			<div class="mt-5 flex justify-end">
+				<Button type="submit" size="sm" disabled={savingPolicy || !data.canManage}>
+					{savingPolicy ? 'Saving…' : 'Save policy'}
+				</Button>
+			</div>
+		</form>
+	</Panel>
+
+	<Panel
 		title="Not yet"
 		icon={FingerprintIcon}
-		description="This slice stores configuration and proves domain ownership. These follow with the Better Auth plugin."
+		description="Sign-in, JIT provisioning and the auth policy above are live. These follow."
 	>
 		<ul class="grid gap-3 text-sm sm:grid-cols-2">
-			<li class="flex items-start justify-between gap-3 rounded-md border p-3">
-				<span>
-					<span class="font-medium">Just-in-time provisioning</span>
-					<span class="mt-0.5 block text-xs text-muted-foreground">
-						Create a member on first SSO sign-in, with the default role.
-					</span>
-				</span>
-				<Badge variant="neutral">Not yet</Badge>
-			</li>
 			<li class="flex items-start justify-between gap-3 rounded-md border p-3">
 				<span>
 					<span class="font-medium">Group mapping</span>
 					<span class="mt-0.5 block text-xs text-muted-foreground">
 						Map IdP groups to Skiff groups, so roles follow the directory.
-					</span>
-				</span>
-				<Badge variant="neutral">Not yet</Badge>
-			</li>
-			<li class="flex items-start justify-between gap-3 rounded-md border p-3">
-				<span class="flex-1">
-					<Field.Field orientation="horizontal">
-						<Checkbox id="require-sso" disabled />
-						<Field.Label for="require-sso" class="font-medium">Require SSO</Field.Label>
-					</Field.Field>
-					<span class="mt-0.5 block text-xs text-muted-foreground">
-						Refuse passwords, magic links and GitHub for verified domains, with break-glass owners.
 					</span>
 				</span>
 				<Badge variant="neutral">Not yet</Badge>

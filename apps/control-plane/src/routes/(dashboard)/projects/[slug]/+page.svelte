@@ -6,6 +6,7 @@
 	import ArrowLeftRightIcon from '@lucide/svelte/icons/arrow-left-right';
 	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
+	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import BoxIcon from '@lucide/svelte/icons/box';
 	import ClockIcon from '@lucide/svelte/icons/clock';
 	import CopyIcon from '@lucide/svelte/icons/copy';
@@ -133,6 +134,7 @@
 	let accessOpen = $state(false);
 	let accessScope = $state<'production' | 'previews'>('production');
 	let accessMode = $state('public');
+	let accessPolicyId = $state('');
 	/** Re-saving password mode on a scope that already has a password may leave the field blank. */
 	const accessKeepsPassword = $derived(
 		accessScope === 'production'
@@ -235,6 +237,10 @@
 		accessScope = scope;
 		accessMode =
 			scope === 'production' ? data.project.productionAccess : data.project.previewAccess;
+		accessPolicyId =
+			(scope === 'production'
+				? data.project.productionAccessPolicyId
+				: data.project.previewAccessPolicyId) ?? '';
 		accessOpen = true;
 	}
 
@@ -523,6 +529,7 @@
 				platformOrigin={data.platform.origin}
 				previewAccess={data.project.previewAccess}
 				productionAccess={data.project.productionAccess}
+				accessPolicies={data.accessPolicies}
 				runtime={data.project.runtime}
 				can={{
 					manageEnvironments: data.can.manageEnvironments,
@@ -918,6 +925,47 @@
 					Sessions last one hour by default. Revocation reaches agents in seconds.
 				</Card.Footer>
 			</Card.Root>
+		{:else if tab === 'access'}
+			<Card.Root>
+				<Card.Header>
+					<Card.Title class="flex items-center gap-2"><ShieldCheckIcon class="size-4" />Skiff Access</Card.Title>
+					<Card.Description>
+						An identity-aware proxy in front of every host: a policy decides who gets in, and the
+						app receives <code class="font-mono text-xs">Skiff-Access-Email</code> and a signed JWT.
+					</Card.Description>
+				</Card.Header>
+				<Card.Content class="space-y-4">
+					<Item.Group class="gap-2">
+						{#each [{ label: 'Production', mode: data.project.productionAccess, policyId: data.project.productionAccessPolicyId }, { label: 'Previews', mode: data.project.previewAccess, policyId: data.project.previewAccessPolicyId }] as row (row.label)}
+							<Item.Root variant="outline">
+								<Item.Content>
+									<Item.Title>{row.label}</Item.Title>
+									<Item.Description>
+										{#if row.mode === 'access'}
+											{data.accessPolicies.find((policy) => policy.id === row.policyId)?.name ?? row.policyId}
+										{:else}
+											Not using Skiff Access.
+										{/if}
+									</Item.Description>
+								</Item.Content>
+								<Item.Actions><AccessChip mode={row.mode} /></Item.Actions>
+							</Item.Root>
+						{/each}
+					</Item.Group>
+					{#if data.accessPolicies.length === 0}
+						<EmptyState
+							icon={ShieldCheckIcon}
+							title="No policies for this project"
+							description="Create a policy under Settings → Access policies, then assign it to production, previews or a named environment."
+						/>
+					{/if}
+				</Card.Content>
+				<Card.Footer class="py-3">
+					<Button variant="outline" size="sm" href="/settings/access-policies?project={data.project.slug}">
+						Manage access policies<ArrowUpRightIcon class="size-3.5" />
+					</Button>
+				</Card.Footer>
+			</Card.Root>
 		{:else if tab === 'settings'}
 			<div class="grid items-start gap-5 xl:grid-cols-2">
 				<Card.Root class="xl:col-span-2">
@@ -1283,6 +1331,21 @@
 				<Field.Label for="access-mode">Who can view</Field.Label>
 				<AccessSelect id="access-mode" name="mode" bind:value={accessMode} />
 			</Field.Field>
+			{#if accessMode === 'access'}
+				<Field.Field data-invalid={result?.fieldErrors?.policyId ? true : undefined}>
+					<Field.Label for="access-policy">Policy</Field.Label>
+					<NativeSelect.Root id="access-policy" name="policyId" bind:value={accessPolicyId} required>
+						<NativeSelect.Option value="">Choose a policy</NativeSelect.Option>
+						{#each data.accessPolicies as policy (policy.id)}
+							<NativeSelect.Option value={policy.id}>{policy.name}</NativeSelect.Option>
+						{/each}
+					</NativeSelect.Root>
+					<Field.Description
+						>Manage the ordered rules under Settings → Access policies.</Field.Description
+					>
+					{#if result?.fieldErrors?.policyId}<Field.Error>{result.fieldErrors.policyId}</Field.Error>{/if}
+				</Field.Field>
+			{/if}
 			{#if accessMode === 'password'}
 				<Field.Field data-invalid={result?.fieldErrors?.password ? true : undefined}>
 					<Field.Label for="access-password"

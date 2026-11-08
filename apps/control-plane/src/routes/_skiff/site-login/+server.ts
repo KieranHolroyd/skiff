@@ -108,6 +108,15 @@ const handler: RequestHandler = async (event) => {
 
 	if (mode === 'public') return new Response(null, { status: 302, headers: { location: target.toString() } });
 
+	// Skiff Access owns sign-in: it evaluates the host's policy on the platform origin.
+	if (mode === 'access') {
+		const authorize = new URL('/api/v1/access/authorize', url.origin);
+		authorize.searchParams.set('project', project.id);
+		authorize.searchParams.set('host', host);
+		authorize.searchParams.set('return', target.toString());
+		return new Response(null, { status: 302, headers: { location: authorize.toString(), 'cache-control': 'no-store' } });
+	}
+
 	if (mode === 'platform') {
 		if (!locals.principal) {
 			const here = `${url.pathname}${url.search}`;

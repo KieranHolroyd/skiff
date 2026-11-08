@@ -40,6 +40,10 @@ export interface AgentConfig {
 	caddyAccessLog: string | null;
 	/** Host-only site session cookie name. */
 	cookieName: string;
+	/** Host-only Skiff Access session cookie name (IAM.md I25). */
+	accessCookieName: string;
+	/** HMAC secret for `Skiff-Access-Jwt`; null falls back to the route's site key. */
+	accessJwtSecret: string | null;
 	/** Dev-only: emit non-Secure cookies and http return URLs. */
 	insecureHttp: boolean;
 	/** Terminate TLS in Caddy with ACME (DNS-01 when a Cloudflare token is present). */
@@ -285,6 +289,9 @@ export function loadConfig(env: Env = process.env): AgentConfig {
 	const cookieName = optional(env, 'SKIFF_SITE_COOKIE_COOKIE_NAME', '__skiff_s');
 	if (!/^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$/.test(cookieName))
 		throw new ConfigError('SKIFF_SITE_COOKIE_COOKIE_NAME is not a valid cookie name');
+	const accessCookieName = optional(env, 'SKIFF_ACCESS_COOKIE_NAME', '__skiff_a');
+	if (!/^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$/.test(accessCookieName))
+		throw new ConfigError('SKIFF_ACCESS_COOKIE_NAME is not a valid cookie name');
 
 	const controlSocket = optionalValue(env, 'SKIFF_CONTROL_SOCKET');
 	if (controlSocket && !controlSocket.startsWith('/'))
@@ -305,6 +312,8 @@ export function loadConfig(env: Env = process.env): AgentConfig {
 		agentSocket: optional(env, 'SKIFF_AGENT_SOCKET', '/run/skiff-agent/agent.sock'),
 		caddyAccessLog: caddyAccessLog ? caddyAccessLog : null,
 		cookieName,
+		accessCookieName: optional(env, 'SKIFF_ACCESS_COOKIE_NAME', '__skiff_a'),
+		accessJwtSecret: optionalValue(env, 'SKIFF_ACCESS_JWT_SECRET'),
 		insecureHttp,
 		tls,
 		acmeEmail,

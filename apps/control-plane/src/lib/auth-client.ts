@@ -3,6 +3,7 @@ import { oauthProviderClient } from '@better-auth/oauth-provider/client';
 import { magicLinkClient, organizationClient, twoFactorClient } from 'better-auth/client/plugins';
 import { passkeyClient } from '@better-auth/passkey/client';
 import { apiKeyClient } from '@better-auth/api-key/client';
+import { ssoClient } from '@better-auth/sso/client';
 
 /**
  * Browser auth client. oauthProviderClient forwards the signed `oauth_query` so sign-in resumes OAuth
@@ -16,6 +17,8 @@ export const authClient = createAuthClient({
 		organizationClient(),
 		passkeyClient(),
 		apiKeyClient(),
-		twoFactorClient()
+		twoFactorClient(),
+		// Email-first sign-in: `authClient.signIn.sso({ email, callbackURL })` routes to the org's IdP.
+		ssoClient()
 	],
 });

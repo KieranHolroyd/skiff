@@ -22,6 +22,7 @@ import {
 	statements,
 	type Condition,
 	type CredentialKind,
+	type Permission,
 	type Principal,
 	type ResourceRef,
 	type ScopeRef
@@ -35,7 +36,14 @@ export const MAX_DURATION_SECONDS = 8 * 60 * 60;
 /** A pending request left undecided for this long becomes `expired` on the next read. */
 export const REQUEST_TTL_SECONDS = 24 * 60 * 60;
 
+/** The usage rollup looks back this far into `audit_log` on every run. */
+export const USAGE_WINDOW_DAYS = 30;
+/** "Shorten" in an access review leaves the binding with at most this long to live (IAM.md §9.5). */
+export const REVIEW_SHORTEN_DAYS = 30;
+
 const REQUEST_TTL_MS = REQUEST_TTL_SECONDS * 1000;
+const USAGE_WINDOW_MS = USAGE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+const REVIEW_SHORTEN_MS = REVIEW_SHORTEN_DAYS * 24 * 60 * 60 * 1000;
 
 const CREDENTIAL_KINDS: readonly CredentialKind[] = [
 	'session',
@@ -246,6 +254,83 @@ export interface AccessRequestListOptions {
 	status?: AccessRequestStatus;
 }
 
+export type ReviewStatus = 'open' | 'completed';
+export type ReviewDecision = 'keep' | 'revoke' | 'shorten';
+export type ReviewDefaultDecision = 'keep' | 'revoke';
+
+export interface AccessReviewCreate {
+  scope: ScopeRef;
+  name?: string;
+  /** Applied to every undecided item when the campaign completes. Defaults to `keep`. */
+  defaultDecision?: ReviewDefaultDecision;
+  dueAt?: number;
+}
+
+export interface AccessReviewItemView {
+  id: string;
+  reviewId: string;
+  bindingId: string;
+  principalType: string;
+  principalId: string;
+  roleId: string;
+  roleName: string;
+  scope: ScopeRef;
+  condition: Condition | null;
+  expiresAt: number | null;
+  /** A scope manager the campaign assigned this item to; a hint, not an authorization. */
+  reviewerId: string | null;
+  decision: ReviewDecision | null;
+  decidedBy: string | null;
+  decidedAt: number | null;
+  /** The newest audit-derived use of any permission in the binding's role, or null. */
+  lastUsedAt: number | null;
+  /** Whole days since `lastUsedAt`, or null when there is no use in the 30-day rollup. */
+  unusedDays: number | null;
+}
+
+export interface AccessReviewView {
+  id: string;
+  name: string;
+  scope: ScopeRef;
+  status: ReviewStatus;
+  defaultDecision: ReviewDefaultDecision;
+  dueAt: number | null;
+  createdBy: string;
+  createdAt: number;
+  completedBy: string | null;
+  completedAt: number | null;
+  items: AccessReviewItemView[];
+  /** The caller may decide items and complete the campaign. */
+  canDecide: boolean;
+  /** Open campaigns this caller has an item in, for the "needs your review" hint. */
+  assignedToMe: number;
+}
+
+export interface AccessReviewListOptions {
+  status?: ReviewStatus;
+}
+
+export interface PermissionUsageView {
+  principalType: string;
+  principalId: string;
+  permission: string;
+  scopeType: string;
+  scopeId: string | null;
+  lastUsedAt: number;
+  count30d: number;
+}
+
+export interface UsageRollupResult {
+  /** Organisations whose usage rows were replaced. */
+  orgs: number;
+  /** Aggregate rows written. */
+  rows: number;
+  /** Inclusive lower bound of the audit window, epoch ms. */
+  from: number;
+  /** Upper bound of the audit window, epoch ms. */
+  to: number;
+}
+
 // ------------------------------------------------------------------------------- rows
 
 interface GuardrailRow {
@@ -280,6 +365,74 @@ interface AccessRequestRow {
 	binding_id: string | null;
 	created_at: number;
 	binding_expires_at: number | null;
+}
+
+interface AccessReviewRow {
+  id: string;
+  org_id: string;
+  name: string;
+  scope_type: string;
+  scope_id: string | null;
+  scope_parent_id: string | null;
+  status: string;
+  default_decision: string;
+  due_at: number | null;
+  created_by: string;
+  created_at: number;
+  completed_by: string | null;
+  completed_at: number | null;
+}
+
+interface AccessReviewItemRow {
+  id: string;
+  review_id: string;
+  org_id: string;
+  binding_id: string;
+  principal_type: string;
+  principal_id: string;
+  role_id: string;
+  role_name: string;
+  scope_type: string;
+  scope_id: string | null;
+  scope_parent_id: string | null;
+  condition_json: string | null;
+  expires_at: number | null;
+  reviewer_id: string | null;
+  decision: string | null;
+  decided_by: string | null;
+  decided_at: number | null;
+  created_at: number;
+}
+
+interface PermissionUsageRow {
+  org_id: string;
+  principal_type: string;
+  principal_id: string;
+  permission: string;
+  scope_type: string;
+  scope_id: string | null;
+  last_used_at: number;
+  count_30d: number;
+}
+
+interface AuditUsageRow {
+  org_id: string;
+  actor_type: string;
+  actor_id: string | null;
+  action: string;
+  created_at: number;
+}
+
+interface BindingSnapshotRow {
+  id: string;
+  principal_type: string;
+  principal_id: string;
+  role_id: string;
+  scope_type: string;
+  scope_id: string | null;
+  scope_parent_id: string | null;
+  condition_json: string | null;
+  expires_at: number | null;
 }
 
 // ----------------------------------------------------------------------------- service
@@ -724,6 +877,435 @@ export class GovernanceService {
 		return this.#requestFor(principal, row.id);
 	}
 
+	// ---------------------------------------------------------------- permission usage
+
+	/**
+	 * Recompute each org's permission usage from `audit_log` (IAM.md I23, §9.5). The sweep calls
+	 * this daily.
+	 *
+	 * `audit_log` has no permission column, so the permission is derived from `action` (see
+	 * `permissionFromAction`). Rows whose action cannot be mapped are skipped, as are rows with no
+	 * `actor_id`. Audit rows carry no scope either, so every row is recorded at org scope: the
+	 * table's `scope_type`/`scope_id` are placeholders until audit learns to carry a resource.
+	 *
+	 * The org's rows are deleted and reinserted inside one transaction. That makes a second run on
+	 * the same day idempotent, makes counts correct after a late audit row, and drops rows that have
+	 * aged out of the 30-day window. `last_used_at` is therefore only as old as the window.
+	 */
+	rollupUsage(): UsageRollupResult {
+		const to = this.ctx.now();
+		const from = to - USAGE_WINDOW_MS;
+		const auditRows = this.#sqlite
+			.query<AuditUsageRow, [number, number]>(
+				`SELECT org_id, actor_type, actor_id, action, created_at
+				FROM audit_log
+				WHERE org_id IS NOT NULL AND created_at >= ? AND created_at <= ?`,
+			)
+			.all(from, to);
+
+		const aggregate = new Map<
+			string,
+			{
+				orgId: string;
+				principalType: string;
+				principalId: string;
+				permission: string;
+				lastUsedAt: number;
+				count: number;
+			}
+		>();
+		const orgs = new Set(
+			this.#sqlite
+				.query<{ org_id: string }, []>(
+					'SELECT DISTINCT org_id FROM iam_permission_usage',
+				)
+				.all()
+				.map((row) => row.org_id),
+		);
+
+		for (const row of auditRows) {
+			const principalType = usagePrincipalType(row.actor_type);
+			if (!principalType || !row.actor_id) continue;
+			const permission = permissionFromAction(row.action);
+			if (!permission) continue;
+			orgs.add(row.org_id);
+			const key = `${row.org_id}\u0000${principalType}\u0000${row.actor_id}\u0000${permission}`;
+			const entry = aggregate.get(key);
+			if (entry) {
+				entry.count += 1;
+				entry.lastUsedAt = Math.max(entry.lastUsedAt, row.created_at);
+			} else {
+				aggregate.set(key, {
+					orgId: row.org_id,
+					principalType,
+					principalId: row.actor_id,
+					permission,
+					lastUsedAt: row.created_at,
+					count: 1,
+				});
+			}
+		}
+
+		this.#sqlite.transaction(() => {
+			for (const orgId of orgs)
+				this.#sqlite.run('DELETE FROM iam_permission_usage WHERE org_id = ?', [
+					orgId,
+				]);
+			for (const entry of aggregate.values())
+				this.#sqlite.run(
+					`INSERT INTO iam_permission_usage
+						(org_id, principal_type, principal_id, permission, scope_type, scope_id, last_used_at, count_30d)
+					VALUES (?, ?, ?, ?, 'org', NULL, ?, ?)`,
+					[
+						entry.orgId,
+						entry.principalType,
+						entry.principalId,
+						entry.permission,
+						entry.lastUsedAt,
+						entry.count,
+					],
+				);
+		})();
+
+		return { orgs: orgs.size, rows: aggregate.size, from, to };
+	}
+
+	/**
+	 * The org's rolled-up usage, newest first (IAM.md §9.5). Reading someone else's usage needs
+	 * `iam:read`; a principal may always read their own.
+	 */
+	usageFor(
+		principal: Principal,
+		options: { principalId?: string } = {},
+	): PermissionUsageView[] {
+		const principalId = options.principalId?.trim() || principal.userId;
+		if (principalId !== principal.userId)
+			this.ctx.iam.require(principal, 'iam:read', { type: 'org' });
+
+		const rows = principalId
+			? this.#sqlite
+					.query<PermissionUsageRow, [string, string]>(
+						`SELECT * FROM iam_permission_usage
+						WHERE org_id = ? AND principal_id = ?
+						ORDER BY last_used_at DESC`,
+					)
+					.all(principal.orgId, principalId)
+			: this.#sqlite
+					.query<PermissionUsageRow, [string]>(
+						`SELECT * FROM iam_permission_usage
+						WHERE org_id = ?
+						ORDER BY last_used_at DESC`,
+					)
+					.all(principal.orgId);
+
+		return rows.map((row) => ({
+			principalType: row.principal_type,
+			principalId: row.principal_id,
+			permission: row.permission,
+			scopeType: row.scope_type,
+			scopeId: row.scope_id,
+			lastUsedAt: row.last_used_at,
+			count30d: row.count_30d,
+		}));
+	}
+
+	// ---------------------------------------------------------------- access reviews
+
+	/**
+	 * The org's access-review campaigns, newest first (IAM.md I23, §9.5). Visible with `iam:read`;
+	 * starting, deciding and completing need `iam:review`.
+	 */
+	listReviews(
+		principal: Principal,
+		options: AccessReviewListOptions = {},
+	): AccessReviewView[] {
+		// Reading is `iam:read`, but a reviewer granted only `iam:review` still needs their queue.
+		if (
+			!this.ctx.iam.can(principal, 'iam:read', { type: 'org' }) &&
+			!this.ctx.iam.can(principal, 'iam:review', { type: 'org' })
+		)
+			throw new ForbiddenError('iam:read');
+		const reviews = this.#sqlite
+			.query<AccessReviewRow, [string]>(
+				'SELECT * FROM access_reviews WHERE org_id = ? ORDER BY created_at DESC',
+			)
+			.all(principal.orgId);
+		const items = this.#sqlite
+			.query<AccessReviewItemRow, [string]>(
+				'SELECT * FROM access_review_items WHERE org_id = ? ORDER BY created_at, id',
+			)
+			.all(principal.orgId);
+		const byReview = new Map<string, AccessReviewItemRow[]>();
+		for (const item of items) {
+			const list = byReview.get(item.review_id) ?? [];
+			list.push(item);
+			byReview.set(item.review_id, list);
+		}
+
+		const rolePermissions = new Map(
+			this.ctx.iam
+				.listRoles(principal.orgId)
+				.map((role) => [role.id, role.permissions] as const),
+		);
+		const usage = this.#lastUsedByPrincipal(principal.orgId);
+
+		return reviews.flatMap((review) => {
+			if (options.status && review.status !== options.status) return [];
+			const scope = scopeFromRow(review);
+			if (!scope) return [];
+			return [
+				this.#reviewView(
+					review,
+					scope,
+					byReview.get(review.id) ?? [],
+					rolePermissions,
+					usage,
+					principal,
+				),
+			];
+		});
+	}
+
+	/**
+	 * Start a campaign: snapshot every live binding at the scope (or, at org scope, every live
+	 * binding in the org) into items and assign each to a manager of that scope. A project campaign
+	 * includes bindings in its environments and on its resources.
+	 */
+	startReview(
+		principal: Principal,
+		input: AccessReviewCreate,
+	): AccessReviewView {
+		const scope = validateRequestScope(input.scope);
+		this.ctx.iam.require(principal, 'iam:review', resourceForScope(scope));
+
+		const now = this.ctx.now();
+		const name = validateReviewName(input.name, now);
+		const defaultDecision = input.defaultDecision ?? 'keep';
+		if (defaultDecision !== 'keep' && defaultDecision !== 'revoke')
+			throw new ValidationError('A review default is "keep" or "revoke".');
+		if (
+			input.dueAt !== undefined &&
+			(!Number.isInteger(input.dueAt) || input.dueAt <= now)
+		)
+			throw new ValidationError(
+				'A review deadline must be a future epoch-millisecond time.',
+			);
+
+		const reviewer = this.#reviewManager(principal, scope);
+		const roles = new Map(
+			this.ctx.iam
+				.listRoles(principal.orgId)
+				.map((role) => [role.id, role.name]),
+		);
+		const scoped = scopeToRow(scope);
+		const bindings = this.#snapshotBindings(principal.orgId, scope, now);
+
+		const id = newId('rev_');
+		this.#sqlite.transaction(() => {
+			this.#sqlite.run(
+				`INSERT INTO access_reviews
+					(id, org_id, name, scope_type, scope_id, scope_parent_id, status, default_decision,
+						due_at, created_by, created_at, completed_by, completed_at)
+				VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, NULL, NULL)`,
+				[
+					id,
+					principal.orgId,
+					name,
+					scoped.type,
+					scoped.id,
+					scoped.parentId,
+					defaultDecision,
+					input.dueAt ?? null,
+					principal.userId,
+					now,
+				],
+			);
+			for (const binding of bindings) {
+				const itemScope = scopeToRowForBinding(binding);
+				this.#sqlite.run(
+					`INSERT INTO access_review_items
+						(id, review_id, org_id, binding_id, principal_type, principal_id, role_id, role_name,
+							scope_type, scope_id, scope_parent_id, condition_json, expires_at, reviewer_id,
+							decision, decided_by, decided_at, created_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)`,
+					[
+						newId('rvi_'),
+						id,
+						principal.orgId,
+						binding.id,
+						binding.principal_type,
+						binding.principal_id,
+						binding.role_id,
+						roles.get(binding.role_id) ?? binding.role_id,
+						itemScope.type,
+						itemScope.id,
+						itemScope.parentId,
+						binding.condition_json,
+						binding.expires_at,
+						reviewer,
+						now,
+					],
+				);
+			}
+		})();
+
+		this.ctx.audit.record({
+			principal,
+			action: 'iam.review.create',
+			resource: 'access_review',
+			resourceId: id,
+			args: {
+				name,
+				scope,
+				defaultDecision,
+				dueAt: input.dueAt ?? null,
+				items: bindings.length,
+			},
+			result: 'ok',
+		});
+		return this.#reviewFor(principal, id);
+	}
+
+	/** Record `keep`, `revoke` or `shorten` for one item of an open campaign. */
+	decideReviewItem(
+		principal: Principal,
+		id: string,
+		decision: ReviewDecision,
+	): AccessReviewItemView {
+		if (decision !== 'keep' && decision !== 'revoke' && decision !== 'shorten')
+			throw new ValidationError(
+				'A review decision is "keep", "revoke" or "shorten".',
+			);
+		const item = this.#reviewItemRow(principal.orgId, id);
+		if (!item) throw new NotFoundError('Access review item');
+		const review = this.#reviewRow(principal.orgId, item.review_id);
+		if (!review) throw new NotFoundError('Access review');
+		if (review.status !== 'open')
+			throw new ConflictError('This access review has already been completed.');
+		const scope = scopeFromRow(review);
+		if (!scope) throw new ValidationError('That review has an invalid scope.');
+		this.ctx.iam.require(principal, 'iam:review', resourceForScope(scope));
+
+		const now = this.ctx.now();
+		this.#sqlite.run(
+			`UPDATE access_review_items
+			SET decision = ?, decided_by = ?, decided_at = ?
+			WHERE id = ? AND org_id = ?`,
+			[decision, principal.userId, now, item.id, principal.orgId],
+		);
+		this.ctx.audit.record({
+			principal,
+			action: 'iam.review.decide',
+			resource: 'access_review_item',
+			resourceId: item.id,
+			args: {
+				reviewId: review.id,
+				bindingId: item.binding_id,
+				decision,
+				principalType: item.principal_type,
+				principalId: item.principal_id,
+				roleId: item.role_id,
+			},
+			result: 'ok',
+		});
+		return this.#reviewItemView(
+			{ ...item, decision, decided_by: principal.userId, decided_at: now },
+			now,
+		);
+	}
+
+	/**
+	 * Close a campaign and apply its decisions. `keep` does nothing, `revoke` deletes the binding
+	 * through `iam.unbind`, and `shorten` caps its `expires_at` at {@link REVIEW_SHORTEN_DAYS}
+	 * (never extending an expiry that is already sooner). Undecided items take the campaign's
+	 * default. A binding deleted since the snapshot is skipped.
+	 */
+	completeReview(principal: Principal, id: string): AccessReviewView {
+		const review = this.#reviewRow(principal.orgId, id);
+		if (!review) throw new NotFoundError('Access review');
+		if (review.status !== 'open')
+			throw new ConflictError('This access review has already been completed.');
+		const scope = scopeFromRow(review);
+		if (!scope) throw new ValidationError('That review has an invalid scope.');
+		const resource = resourceForScope(scope);
+		this.ctx.iam.require(principal, 'iam:review', resource);
+
+		const items = this.#sqlite
+			.query<AccessReviewItemRow, [string, string]>(
+				'SELECT * FROM access_review_items WHERE review_id = ? AND org_id = ? ORDER BY created_at, id',
+			)
+			.all(id, principal.orgId);
+		const effective = items.map((item) => ({
+			item,
+			decision: (item.decision ?? review.default_decision) as ReviewDecision,
+		}));
+		// Revoking goes through `iam.unbind`, which needs `iam:manage-bindings` too. Check that
+		// before touching anything so a review cannot fail halfway and leave some items applied.
+		if (effective.some((entry) => entry.decision === 'revoke'))
+			this.ctx.iam.require(principal, 'iam:manage-bindings', resource);
+
+		const now = this.ctx.now();
+		const shortenTo = now + REVIEW_SHORTEN_MS;
+		const counts = { kept: 0, revoked: 0, shortened: 0 };
+		for (const { item, decision } of effective) {
+			const binding = this.#sqlite
+				.query<{ id: string; expires_at: number | null }, [string, string]>(
+					'SELECT id, expires_at FROM iam_bindings WHERE id = ? AND org_id = ?',
+				)
+				.get(item.binding_id, principal.orgId);
+
+			if (decision === 'keep') {
+				counts.kept += 1;
+			} else if (decision === 'revoke') {
+				if (binding) this.ctx.iam.unbind(principal, item.binding_id);
+				counts.revoked += 1;
+			} else {
+				if (binding) {
+					const expiresAt =
+						binding.expires_at === null
+							? shortenTo
+							: Math.min(binding.expires_at, shortenTo);
+					this.#sqlite.transaction(() => {
+						this.#sqlite.run(
+							'UPDATE iam_bindings SET expires_at = ? WHERE id = ?',
+							[expiresAt, binding.id],
+						);
+						this.ctx.iam.touch(principal.orgId);
+					})();
+				}
+				counts.shortened += 1;
+			}
+		}
+
+		this.#sqlite.transaction(() => {
+			for (const { item, decision } of effective) {
+				if (item.decision !== null) continue;
+				this.#sqlite.run(
+					`UPDATE access_review_items
+					SET decision = ?, decided_by = 'system:review-default', decided_at = ?
+					WHERE id = ? AND decision IS NULL`,
+					[decision, now, item.id],
+				);
+			}
+			this.#sqlite.run(
+				`UPDATE access_reviews
+				SET status = 'completed', completed_by = ?, completed_at = ?
+				WHERE id = ? AND status = 'open'`,
+				[principal.userId, now, id],
+			);
+		})();
+
+		this.ctx.audit.record({
+			principal,
+			action: 'iam.review.complete',
+			resource: 'access_review',
+			resourceId: id,
+			args: { scope, items: items.length, ...counts },
+			result: 'ok',
+		});
+		return this.#reviewFor(principal, id);
+	}
+
 	// ------------------------------------------------------------------------- internals
 
 	#guardrailRow(principal: Principal, id: string): GuardrailRow {
@@ -834,6 +1416,381 @@ export class GovernanceService {
 	#roleNames(orgId: string): Map<string, string> {
 		return new Map(this.ctx.iam.listRoles(orgId).map((role) => [role.id, role.name]));
 	}
+
+	// ------------------------------------------------------------------- review internals
+
+	#reviewRow(orgId: string, id: string): AccessReviewRow | undefined {
+		return (
+			this.#sqlite
+				.query<AccessReviewRow, [string, string]>(
+					'SELECT * FROM access_reviews WHERE id = ? AND org_id = ?',
+				)
+				.get(id, orgId) ?? undefined
+		);
+	}
+
+	#reviewItemRow(orgId: string, id: string): AccessReviewItemRow | undefined {
+		return (
+			this.#sqlite
+				.query<AccessReviewItemRow, [string, string]>(
+					'SELECT * FROM access_review_items WHERE id = ? AND org_id = ?',
+				)
+				.get(id, orgId) ?? undefined
+		);
+	}
+
+	#reviewFor(principal: Principal, id: string): AccessReviewView {
+		const review = this.#reviewRow(principal.orgId, id);
+		if (!review) throw new NotFoundError('Access review');
+		const scope = scopeFromRow(review);
+		if (!scope) throw new ValidationError('That review has an invalid scope.');
+		const items = this.#sqlite
+			.query<AccessReviewItemRow, [string]>(
+				'SELECT * FROM access_review_items WHERE review_id = ? ORDER BY created_at, id',
+			)
+			.all(id);
+		const rolePermissions = new Map(
+			this.ctx.iam
+				.listRoles(principal.orgId)
+				.map((role) => [role.id, role.permissions] as const),
+		);
+		return this.#reviewView(
+			review,
+			scope,
+			items,
+			rolePermissions,
+			this.#lastUsedByPrincipal(principal.orgId),
+			principal,
+		);
+	}
+
+	#reviewView(
+		review: AccessReviewRow,
+		scope: ScopeRef,
+		items: readonly AccessReviewItemRow[],
+		rolePermissions: ReadonlyMap<string, readonly Permission[]>,
+		usage: ReadonlyMap<string, number>,
+		principal: Principal,
+	): AccessReviewView {
+		const now = this.ctx.now();
+		const viewItems = items.flatMap((item) =>
+			scopeFromRow(item)
+				? [
+						this.#reviewItemView(
+							item,
+							now,
+							rolePermissions.get(item.role_id),
+							usage,
+						),
+					]
+				: [],
+		);
+		return {
+			id: review.id,
+			name: review.name,
+			scope,
+			status: review.status as ReviewStatus,
+			defaultDecision: review.default_decision as ReviewDefaultDecision,
+			dueAt: review.due_at,
+			createdBy: review.created_by,
+			createdAt: review.created_at,
+			completedBy: review.completed_by,
+			completedAt: review.completed_at,
+			items: viewItems,
+			canDecide:
+				review.status === 'open' &&
+				this.ctx.iam.can(principal, 'iam:review', resourceForScope(scope)),
+			assignedToMe:
+				review.status === 'open'
+					? items.filter(
+							(item) =>
+								item.reviewer_id === principal.userId && item.decision === null,
+						).length
+					: 0,
+		};
+	}
+
+	#reviewItemView(
+		row: AccessReviewItemRow,
+		now: number,
+		rolePermissions?: readonly Permission[],
+		usage?: ReadonlyMap<string, number>,
+	): AccessReviewItemView {
+		let lastUsedAt: number | null = null;
+		if (usage && rolePermissions) {
+			for (const permission of rolePermissions) {
+				const used = usage.get(
+					usageKey(row.principal_type, row.principal_id, permission),
+				);
+				if (used !== undefined && (lastUsedAt === null || used > lastUsedAt))
+					lastUsedAt = used;
+			}
+		}
+		return {
+			id: row.id,
+			reviewId: row.review_id,
+			bindingId: row.binding_id,
+			principalType: row.principal_type,
+			principalId: row.principal_id,
+			roleId: row.role_id,
+			roleName: row.role_name || row.role_id,
+			scope: scopeFromRow(row) ?? { type: 'org' },
+			condition: parseCondition(row.condition_json),
+			expiresAt: row.expires_at,
+			reviewerId: row.reviewer_id,
+			decision: (row.decision as ReviewDecision | null) ?? null,
+			decidedBy: row.decided_by,
+			decidedAt: row.decided_at,
+			lastUsedAt,
+			unusedDays:
+				lastUsedAt === null
+					? null
+					: Math.max(0, Math.floor((now - lastUsedAt) / 86_400_000)),
+		};
+	}
+
+	/**
+	 * The live bindings a campaign covers. An org campaign covers the whole org; a project campaign
+	 * covers the project, its environments and its resources; anything narrower matches exactly.
+	 */
+	#snapshotBindings(
+		orgId: string,
+		scope: ScopeRef,
+		now: number,
+	): BindingSnapshotRow[] {
+		const unexpired = '(expires_at IS NULL OR expires_at > ?)';
+		switch (scope.type) {
+			case 'org':
+				return this.#sqlite
+					.query<BindingSnapshotRow, [string, number]>(
+						`SELECT * FROM iam_bindings
+						WHERE org_id = ? AND ${unexpired}
+						ORDER BY created_at, id`,
+					)
+					.all(orgId, now);
+			case 'project':
+				return this.#sqlite
+					.query<BindingSnapshotRow, [string, number, string, string]>(
+						`SELECT * FROM iam_bindings
+						WHERE org_id = ? AND ${unexpired}
+							AND ((scope_type = 'project' AND scope_id = ?) OR scope_parent_id = ?)
+						ORDER BY created_at, id`,
+					)
+					.all(orgId, now, scope.id, scope.id);
+			case 'environment':
+				return this.#sqlite
+					.query<BindingSnapshotRow, [string, number, string]>(
+						`SELECT * FROM iam_bindings
+						WHERE org_id = ? AND ${unexpired}
+							AND scope_type = 'environment' AND scope_id = ?
+						ORDER BY created_at, id`,
+					)
+					.all(orgId, now, scope.id);
+			case 'platform':
+				// Reviews are for org resources; `startReview` rejects a platform scope.
+				return [];
+			default:
+				return this.#sqlite
+					.query<BindingSnapshotRow, [string, number, string, string]>(
+						`SELECT * FROM iam_bindings
+						WHERE org_id = ? AND ${unexpired}
+							AND scope_type = ? AND scope_id = ?
+						ORDER BY created_at, id`,
+					)
+					.all(orgId, now, scope.type, scope.id);
+		}
+	}
+
+	/**
+	 * A manager of the campaign's scope, as a hint for the item's reviewer. Prefers someone other
+	 * than the person starting the campaign, then the caller.
+	 */
+	#reviewManager(principal: Principal, scope: ScopeRef): string {
+		const managers = this.ctx.iam
+			.whoCan(principal.orgId, 'iam:manage-bindings', resourceForScope(scope))
+			.filter((entry) => entry.principalType === 'user')
+			.map((entry) => entry.principalId)
+			.sort();
+		return (
+			managers.find((id) => id !== principal.userId) ??
+			managers[0] ??
+			principal.userId
+		);
+	}
+
+	/** Newest use per `(principal_type, principal_id, permission)` in the org's usage rows. */
+	#lastUsedByPrincipal(orgId: string): Map<string, number> {
+		const out = new Map<string, number>();
+		try {
+			const rows = this.#sqlite
+				.query<
+					{
+						principal_type: string;
+						principal_id: string;
+						permission: string;
+						last_used_at: number;
+					},
+					[string]
+				>(
+					`SELECT principal_type, principal_id, permission, MAX(last_used_at) AS last_used_at
+					FROM iam_permission_usage
+					WHERE org_id = ?
+					GROUP BY principal_type, principal_id, permission`,
+				)
+				.all(orgId);
+			for (const row of rows)
+				out.set(
+					usageKey(row.principal_type, row.principal_id, row.permission),
+					row.last_used_at,
+				);
+		} catch {
+			// The usage table may not exist on an upgrading install; the hint is optional.
+		}
+		return out;
+	}
+}
+
+// ------------------------------------------------------------------- usage derivation
+
+/**
+ * Audit actions whose permission is not the obvious `resource:verb` pair. The audit log records
+ * what happened, not which permission was checked, so this table (and the fallback below) is a
+ * best-effort derivation. An action that does not map is skipped rather than guessed: a wrong
+ * 'last used' is worse than a missing one.
+ */
+const ACTION_PERMISSION: Readonly<Record<string, Permission>> = {
+	'database.credentials': 'database:credentials',
+	'database.credentials.reveal': 'database:credentials',
+	'database.credential.create': 'database:credentials',
+	'database.credential.revoke': 'database:credentials',
+	'database.credential.rotate': 'database:credentials',
+	'database.console.open': 'database:console',
+	'database.studio.run': 'database:console',
+	'database.studio.write': 'database:console',
+	'database.studio.alter': 'database:console',
+	'database.studio.principal-requested': 'database:console',
+	'database.restore': 'database:update',
+	'database.restore-backup': 'database:update',
+	'database.pitr-restore': 'database:update',
+	'database.rotate': 'database:update',
+	'broker.credentials': 'broker:credentials',
+	'storage.credentials': 'storage:credentials',
+	'storage.key.create': 'storage:credentials',
+	'storage.key.reveal': 'storage:credentials',
+	'storage.key.revoke': 'storage:credentials',
+	'storage.root-key.rotate': 'storage:credentials',
+	'storage.root-key.rollback': 'storage:credentials',
+	'storage.root-key.cancel': 'storage:credentials',
+	'email.credential.create': 'email:credentials',
+	'email.credential.revoke': 'email:credentials',
+	'org.rename': 'org:update',
+	'project.set_access': 'project:update',
+	'environment.set_access': 'environment:update',
+	'member.update_role': 'member:update-role',
+	'member.cancel_invitation': 'member:invite',
+	'iam.binding.create': 'iam:manage-bindings',
+	'iam.binding.delete': 'iam:manage-bindings',
+	'iam.role.create': 'iam:manage-roles',
+	'iam.role.delete': 'iam:manage-roles',
+	'iam.group.create': 'iam:manage-groups',
+	'iam.group.member.add': 'iam:manage-groups',
+	'iam.guardrail.create': 'iam:manage-guardrails',
+	'iam.guardrail.update': 'iam:manage-guardrails',
+	'iam.guardrail.delete': 'iam:manage-guardrails',
+	'iam.review.create': 'iam:review',
+	'iam.review.decide': 'iam:review',
+	'iam.review.complete': 'iam:review',
+	'iam.key.rotate': 'iam:read',
+	'iam.token.exchange': 'iam:read',
+	'service_account.create': 'serviceAccount:create',
+	'service_account.update': 'serviceAccount:update',
+	'service_account.delete': 'serviceAccount:delete',
+	'access_key.create': 'accessKey:create',
+	'access_key.revoke': 'accessKey:revoke',
+	'share_link.create': 'shareLink:create',
+	'share_link.revoke': 'shareLink:revoke',
+	'share_link.read': 'shareLink:read',
+	'share.credential.use': 'shareLink:read',
+};
+
+/** Audit resource nouns that differ from a catalog resource name. */
+const RESOURCE_ALIASES: Readonly<Record<string, string>> = {
+	alert_rule: 'alert',
+	alert_silence: 'alert',
+	access_key: 'accessKey',
+	service_account: 'serviceAccount',
+	share_link: 'shareLink',
+	share: 'shareLink',
+	log_drain: 'logDrain',
+	app_volume: 'volume',
+};
+
+/** Derive the catalog permission an audit row most likely exercised (see `ACTION_PERMISSION`). */
+export function permissionFromAction(action: string): Permission | null {
+	const override = ACTION_PERMISSION[action];
+	if (override) return override;
+	const parts = action.split('.').filter(Boolean);
+	if (parts.length < 2) return null;
+	const head = parts[0]!;
+	const resource = RESOURCE_ALIASES[head] ?? head;
+	if (!(resource in statements)) return null;
+	// Prefer the most specific verb (`storage.bucket.create` → `storage:create`), then broader
+	// segments. A compound action such as `database.public-url.reveal` maps to `database:reveal`
+	// only if the catalog has it; otherwise it is skipped.
+	for (const segment of [...parts.slice(1)].reverse()) {
+		const candidate = `${resource}:${segment.replaceAll('_', '-')}`;
+		if (isPermission(candidate)) return candidate;
+	}
+	return null;
+}
+
+/** `audit_log.actor_type` → the usage table's principal type. Null skips the row. */
+function usagePrincipalType(
+	actorType: string,
+): 'user' | 'serviceAccount' | null {
+	switch (actorType) {
+		case 'user':
+		case 'apiKey':
+		case 'mcp':
+		case 'agent':
+			return 'user';
+		case 'system':
+			// IAM.md §7.1: service accounts are written as `system` until the audit CHECK is relaxed.
+			return 'serviceAccount';
+		default:
+			return null;
+	}
+}
+
+function usageKey(
+	principalType: string,
+	principalId: string,
+	permission: string,
+): string {
+	return `${principalType}\u0000${principalId}\u0000${permission}`;
+}
+
+function scopeToRowForBinding(binding: {
+	scope_type: string;
+	scope_id: string | null;
+	scope_parent_id: string | null;
+}): { type: string; id: string | null; parentId: string | null } {
+	return {
+		type: binding.scope_type,
+		id: binding.scope_id,
+		parentId: binding.scope_parent_id,
+	};
+}
+
+function validateReviewName(raw: string | undefined, now: number): string {
+	const name =
+		(raw ?? '').trim() ||
+		`Access review · ${new Date(now).toISOString().slice(0, 10)}`;
+	if (name.length < 2 || name.length > 80)
+		throw new ValidationError('A review name is 2–80 characters.');
+	if (/[\r\n\t]/.test(name))
+		throw new ValidationError('A review name must be a single line of text.');
+	return name;
 }
 
 // ------------------------------------------------------------------------ scope helpers
@@ -1139,3 +2096,4 @@ function parseCondition(json: string | null): Condition | null {
 		return null;
 	}
 }
+

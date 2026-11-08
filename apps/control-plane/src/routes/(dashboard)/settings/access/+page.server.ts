@@ -3,6 +3,7 @@ import {
 	GUARDRAIL_TEMPLATES,
 	ValidationError,
 	type AccessRequestView,
+	type AccessReviewView,
 	type GuardrailView
 } from '@skiff/core';
 import {
@@ -167,12 +168,18 @@ export const load: PageServerLoad = ({ locals }) => {
 
 	let guardrails: GuardrailView[] = [];
 	let accessRequests: AccessRequestView[] = [];
+	let accessReviews: AccessReviewView[] = [];
 	try {
 		guardrails = core.governance.list(principal);
 		accessRequests = core.governance.list(principal, {});
 	} catch {
 		// The access_requests migration may not have run yet on an upgrading install; the rest of
 		// the page still renders and the sections say they are empty.
+	}
+	try {
+		accessReviews = core.governance.listReviews(principal);
+	} catch {
+		// `0090_access_reviews.sql` may not have run yet on an upgrading install.
 	}
 
 	return {
@@ -182,6 +189,7 @@ export const load: PageServerLoad = ({ locals }) => {
 		guardrails,
 		guardrailTemplates: GUARDRAIL_TEMPLATES,
 		accessRequests,
+		accessReviews,
 		members,
 		groupMembers,
 		projects,
@@ -191,7 +199,8 @@ export const load: PageServerLoad = ({ locals }) => {
 			manageRoles: core.iam.can(principal, 'iam:manage-roles', org),
 			manageBindings: core.iam.can(principal, 'iam:manage-bindings', org),
 			manageGroups: core.iam.can(principal, 'iam:manage-groups', org),
-			manageGuardrails: core.iam.can(principal, 'iam:manage-guardrails', org)
+			manageGuardrails: core.iam.can(principal, 'iam:manage-guardrails', org),
+			review: core.iam.can(principal, 'iam:review', org)
 		},
 		showEmails,
 		currentUserId: principal.userId,
@@ -513,6 +522,53 @@ export const actions: Actions = {
 		try {
 			core.governance.cancel(principal, requestId);
 			return { success: 'Access request cancelled.' };
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	startReview: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const defaultDecision = formString(data, 'defaultDecision') === 'revoke' ? 'revoke' : 'keep';
+		try {
+			core.governance.startReview(principal, {
+				scope: formScope(principal, data),
+				name: formOptionalString(data, 'name'),
+				defaultDecision
+			});
+			return { success: 'Access review started. Decide each binding, then complete it.' };
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	decideReviewItem: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const itemId = formString(data, 'itemId');
+		const decision = pick(formString(data, 'decision'), ['keep', 'revoke', 'shorten'] as const);
+		if (!itemId) return fail(400, { message: 'Missing review item id.' });
+		if (!decision)
+			return fail(400, {
+				message: 'Choose keep, revoke or shorten.',
+				fieldErrors: { decision: 'Choose a decision.' }
+			});
+		try {
+			core.governance.decideReviewItem(principal, itemId, decision);
+			return { success: `Review item marked ${decision}.` };
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	completeReview: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const reviewId = formString(await request.formData(), 'reviewId');
+		if (!reviewId) return fail(400, { message: 'Missing review id.' });
+		try {
+			core.governance.completeReview(principal, reviewId);
+			return { success: 'Access review completed and its decisions applied.' };
 		} catch (cause) {
 			return failure(cause);
 		}

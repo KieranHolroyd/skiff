@@ -678,8 +678,12 @@ export class IamService {
 
 	private ensureMemberBindingFor(orgId: string, userId: string): boolean {
 		const existing = this.#sqlite
-			.query('SELECT 1 FROM iam_bindings WHERE org_id = ? AND principal_type = ? AND principal_id = ? LIMIT 1')
-			.get(orgId, 'user', userId);
+			.query(
+				`SELECT 1 FROM iam_bindings
+				  WHERE org_id = ? AND principal_type = 'user' AND principal_id = ? AND scope_type = 'org'
+				  LIMIT 1`,
+			)
+			.get(orgId, userId);
 		if (existing) return false;
 		let role: string | undefined;
 		try {

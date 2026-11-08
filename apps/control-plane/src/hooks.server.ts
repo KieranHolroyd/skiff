@@ -6,6 +6,7 @@ import type { Handle, ServerInit } from '@sveltejs/kit/hooks';
 import { auth, backfillApiKeyRateLimits, ensurePlatformAdmin } from '#lib/server/auth.js';
 import { contentDomain, platformOrigin } from '#lib/server/config.js';
 import { featureEnabled, reconcilePlatformDomains, startFailoverLoop } from '@skiff/core';
+import { ipInCidr } from '@skiff/contracts';
 import { checkCsrf } from '#lib/server/csrf.js';
 import { sqlite } from '#lib/server/db.js';
 import { needsSetup, setupUrl } from '#lib/server/setup.js';
@@ -15,6 +16,8 @@ import { isDevContentHost, serveDevContent } from '#lib/server/dev-content.js';
 import { principalFromRequest, principalFromSession } from '#lib/server/principal.js';
 import { enforceOwnerSecondFactor, userHasSecondFactor } from '#lib/server/second-factor.js';
 import { isExemptBeforeSecondFactor, secondFactorState } from '#lib/server/second-factor-policy.js';
+import { requireSsoRefusalForUser, signInRefusalForUser } from '#lib/server/sso-enforcement.js';
+import { syncSsoProviders } from '#lib/server/sso-sync.js';
 
 /**
  * Apply Better Auth's schema on boot.
@@ -25,6 +28,8 @@ export const init: ServerInit = async () => {
 	if (building) return;
 	const { runMigrations } = await getMigrations(auth.options);
 	await runMigrations();
+	const syncedProviders = syncSsoProviders();
+	if (syncedProviders > 0) console.info(`[sso] synced ${syncedProviders} provider(s) to Better Auth`);
 	const lifted = backfillApiKeyRateLimits();
 	if (lifted > 0) console.info(`[auth] raised rate limit on ${lifted} API key(s)`);
 	const promoted = ensurePlatformAdmin();
@@ -140,6 +145,16 @@ export const handle: Handle = async ({ event, resolve }) => {
 		event.locals.principal = await principalFromRequest(event.request);
 	}
 
+	// Org auth policy (IAM.md I21, §8.5): session maximum age, idle timeout, IP allowlist and the
+	// allowed-methods / required-SSO rule. Sign-in methods are recorded on the session at creation;
+	// this is the backstop that covers passkey, GitHub and SSO as well as password and magic link.
+	const policyOrgId = event.locals.principal?.orgId ?? session?.session.activeOrganizationId ?? undefined;
+	const policy = policyOrgId ? core.authPolicy.forOrg(policyOrgId) : null;
+	if (session && event.locals.principal) {
+		const rejection = enforceSessionPolicy(event, session, policyOrgId, policy);
+		if (rejection) return withFrameProtection(rejection);
+	}
+
 	// The REST API is bearer/session authenticated throughout; answer 401 here, as JSON, so no handler
 	// can turn a missing principal into a 500 (a `Response` thrown outside `route()` would).
 	if (!event.locals.principal && isAuthenticatedApi(event.url.pathname))
@@ -147,15 +162,19 @@ export const handle: Handle = async ({ event, resolve }) => {
 			Response.json({ error: 'unauthorized', message: 'Sign in or send a valid API key.' }, { status: 401 }),
 		);
 
-	// Owner second factor (D10, second-factor-policy.ts): an owner's session must have proved a
-	// passkey or authenticator code before it can reach anything beyond the challenge page.
+	// Second factor (D10 + IAM.md I21): owner sessions, and every session when the org policy says
+	// so, must have proved a passkey or authenticator code before reaching anything beyond /two-factor.
 	if (session && event.locals.principal && !isExemptBeforeSecondFactor(event.url.pathname)) {
+		const requiresSecondFactor =
+			(enforceOwnerSecondFactor && event.locals.principal.role === 'owner') ||
+			Boolean(policy?.require2fa);
 		const state = secondFactorState({
 			enforce: enforceOwnerSecondFactor,
 			role: event.locals.principal.role,
 			kind: event.locals.principal.kind,
 			sessionFactor: (session.session as { secondFactor?: string | null }).secondFactor,
-			hasFactor: event.locals.principal.role === 'owner' && userHasSecondFactor(session.user.id),
+			hasFactor: requiresSecondFactor && userHasSecondFactor(session.user.id),
+			requireTwoFactor: Boolean(policy?.require2fa),
 		});
 		if (state !== 'satisfied') return withFrameProtection(secondFactorRequired(event));
 	}
@@ -164,10 +183,115 @@ export const handle: Handle = async ({ event, resolve }) => {
 	return withFrameProtection(response);
 };
 
+interface PolicySession {
+	user: { id: string };
+	session: {
+		id: string;
+		createdAt: Date | string;
+		activeOrganizationId?: string | null;
+		lastSeenAt?: number | null;
+		signInMethod?: string | null;
+	};
+}
+
+/**
+ * Enforce the org auth policy against a live session. Returns a response when the session is
+ * refused (and deletes the session row), or `undefined` to continue. `lastSeenAt` is written at
+ * most once a minute, which is precise enough for an idle timeout and keeps writes off the hot path.
+ */
+function enforceSessionPolicy(
+	event: RequestEvent,
+	session: PolicySession,
+	orgId: string | undefined,
+	policy: ReturnType<typeof core.authPolicy.forOrg> | null,
+): Response | undefined {
+	if (!policy) return undefined;
+	const now = Date.now();
+	const createdAt = new Date(session.session.createdAt).getTime();
+	const lastSeenAt = session.session.lastSeenAt ?? createdAt;
+
+	if (policy.sessionMaxAge !== null && now - createdAt > policy.sessionMaxAge * 1000)
+		return endPolicySession(event, session.session.id, 'session_expired', 'Your session reached its maximum age. Sign in again.');
+	if (policy.idleTimeout !== null && now - lastSeenAt > policy.idleTimeout * 1000)
+		return endPolicySession(event, session.session.id, 'session_idle', 'Your session timed out. Sign in again.');
+
+	if (policy.ipAllowlist.length > 0) {
+		const ip = clientIp(event.request);
+		if (!ip || !policy.ipAllowlist.some((cidr) => ipInCidr(ip, cidr)))
+			return endPolicySession(
+				event,
+				session.session.id,
+				'ip_not_allowed',
+				'Your network is not allowed by this organisation’s sign-in policy.',
+			);
+	}
+
+	const method = session.session.signInMethod;
+	if (method) {
+		const refusal = signInRefusalForUser(session.user.id, method as Parameters<typeof signInRefusalForUser>[1]);
+		if (refusal)
+			return endPolicySession(event, session.session.id, 'sign_in_policy', refusal);
+	} else {
+		const refusal = requireSsoRefusalForUser(session.user.id);
+		if (refusal) return endPolicySession(event, session.session.id, 'sign_in_policy', refusal);
+	}
+
+	if (now - lastSeenAt > 60_000) {
+		sqlite.run('UPDATE session SET lastSeenAt = ? WHERE id = ?', [now, session.session.id]);
+		session.session.lastSeenAt = now;
+	}
+	return undefined;
+}
+
+/** Delete the session and answer the request as signed out. Auth API calls continue so Better Auth
+ *  can report the missing session itself rather than receiving an HTML redirect. */
+function endPolicySession(
+	event: RequestEvent,
+	sessionId: string,
+	code: string,
+	message: string,
+): Response | undefined {
+	sqlite.run('DELETE FROM session WHERE id = ?', [sessionId]);
+	event.locals.user = undefined;
+	event.locals.session = undefined;
+	event.locals.principal = undefined;
+	if (event.url.pathname.startsWith('/api/auth/')) return undefined;
+
+	const status = code === 'ip_not_allowed' || code === 'sign_in_policy' ? 403 : 401;
+	if (isAuthenticatedApi(event.url.pathname))
+		return Response.json({ error: code, message }, { status });
+	if (event.request.method === 'GET' || event.request.method === 'HEAD') {
+		const location = `/login?error=${code}`;
+		if (event.isDataRequest)
+			return Response.json({ type: 'redirect', location }, { headers: { 'cache-control': 'no-store' } });
+		if ((event.request.headers.get('accept') ?? '').includes('text/html'))
+			return new Response(null, { status: 303, headers: { location, 'cache-control': 'no-store' } });
+	}
+	return Response.json({ error: code, message }, { status });
+}
+
+/** The request's client address, before it is hashed for audit (same order as principal.ts). */
+function clientIp(request: Request): string | undefined {
+	return (
+		request.headers.get('cf-connecting-ip') ??
+		request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+		request.headers.get('x-real-ip') ??
+		undefined
+	);
+}
+
 /** `/api/v1/**` except the endpoints that authenticate themselves (CLI code exchange). */
 function isAuthenticatedApi(pathname: string): boolean {
 	if (pathname === '/api/v1') return true;
-	return pathname.startsWith('/api/v1/') && pathname !== '/api/v1/cli/token';
+	return (
+		pathname.startsWith('/api/v1/') &&
+		pathname !== '/api/v1/cli/token' &&
+		// Skiff Access sign-in: the agent sends an unauthenticated browser here, and the handler
+		// redirects to `/login` (IAM.md I25, §11.1).
+		pathname !== '/api/v1/access/authorize' &&
+		// `/login` asks this before a session exists (email → IdP routing).
+		pathname !== '/api/v1/sso/resolve'
+	);
 }
 
 /** Pages redirect to the challenge (and back afterwards); API calls get a JSON 403. */

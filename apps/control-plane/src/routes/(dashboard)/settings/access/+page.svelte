@@ -3,6 +3,7 @@
 	import BanIcon from '@lucide/svelte/icons/ban';
 	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
 	import CircleQuestionMarkIcon from '@lucide/svelte/icons/circle-question-mark';
+	import ClipboardCheckIcon from '@lucide/svelte/icons/clipboard-check';
 	import ClockIcon from '@lucide/svelte/icons/clock';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import LockIcon from '@lucide/svelte/icons/lock';
@@ -43,6 +44,7 @@
 	let createGroupOpen = $state(false);
 	let guardrailOpen = $state(false);
 	let requestOpen = $state(false);
+	let reviewOpen = $state(false);
 
 	let guardrailScopeType = $state<'org' | 'project'>('org');
 	let guardrailScopeProject = $state('');
@@ -50,6 +52,10 @@
 	let requestScopeType = $state<ScopeType>('org');
 	let requestScopeProject = $state('');
 	let requestScopeEnvironment = $state('');
+
+	let reviewScopeType = $state<ScopeType>('org');
+	let reviewScopeProject = $state('');
+	let reviewScopeEnvironment = $state('');
 
 	let bindingPrincipalType = $state<PrincipalType>('user');
 	let bindingScopeType = $state<ScopeType>('org');
@@ -206,6 +212,30 @@
 		}
 	}
 
+	function reviewStatusVariant(status: string): BadgeVariant {
+		return status === 'open' ? 'warning' : 'success';
+	}
+
+	function decisionVariant(decision: string | null): BadgeVariant {
+		switch (decision) {
+			case 'keep':
+				return 'success';
+			case 'revoke':
+				return 'danger';
+			case 'shorten':
+				return 'warning';
+			default:
+				return 'outline';
+		}
+	}
+
+	/** The audit rollup covers 30 days, so "unused" is deliberately conservative. */
+	function usageLabel(item: { lastUsedAt: number | null; unusedDays: number | null }): string {
+		if (item.lastUsedAt === null) return 'No use in 30 days';
+		if (item.unusedDays === 0) return 'Used today';
+		return `Used ${item.unusedDays}d ago`;
+	}
+
 	function conditionLabel(condition: { op: string } | null): string {
 		if (!condition) return 'Always';
 		switch (condition.op) {
@@ -248,6 +278,13 @@
 		requestScopeProject = '';
 		requestScopeEnvironment = '';
 		requestOpen = true;
+	}
+
+	function openReview() {
+		reviewScopeType = 'org';
+		reviewScopeProject = '';
+		reviewScopeEnvironment = '';
+		reviewOpen = true;
 	}
 
 	function openBinding() {
@@ -864,6 +901,173 @@
 	</Panel>
 
 	<Panel
+		title="Access reviews"
+		icon={ClipboardCheckIcon}
+		count={data.accessReviews.filter((review) => review.status === 'open').length}
+		description="Recertify access on a schedule: snapshot the bindings at a scope, decide keep, revoke or shorten for each, then complete the campaign to apply it."
+		flush
+	>
+		{#snippet actions()}
+			{#if data.accessCan.review}
+				<Button size="sm" onclick={openReview}><PlusIcon />Start review</Button>
+			{/if}
+		{/snippet}
+
+		{#if data.accessReviews.length === 0}
+			<div class="p-4">
+				<EmptyState
+					icon={ClipboardCheckIcon}
+					compact
+					title="No access reviews yet"
+					description="A quarterly campaign snapshots every binding at a scope. Undecided items follow the campaign's default, so a review can always be completed."
+				>
+					{#if data.accessCan.review}
+						<Button size="sm" onclick={openReview}><PlusIcon />Start a review</Button>
+					{/if}
+				</EmptyState>
+			</div>
+		{:else}
+			<div class="divide-y">
+				{#each data.accessReviews as review (review.id)}
+					<div class="space-y-3 px-4 py-4">
+						<div class="flex flex-wrap items-start justify-between gap-3">
+							<div class="min-w-0 space-y-1">
+								<p class="flex flex-wrap items-center gap-2">
+									<span class="text-sm font-medium">{review.name}</span>
+									<Badge variant={reviewStatusVariant(review.status)}>{review.status}</Badge>
+									<Badge variant="secondary">{scopeLabel(review.scope)}</Badge>
+									<Badge variant="outline">
+										Default: {review.defaultDecision}
+									</Badge>
+									<Badge variant="secondary" class="tabular-nums">
+										{review.items.length}
+										{review.items.length === 1 ? 'binding' : 'bindings'}
+									</Badge>
+								</p>
+								<p class="text-xs text-muted-foreground">
+									Started {formatDateTime(review.createdAt)}
+									{#if review.completedAt !== null}
+										· Completed {formatDateTime(review.completedAt)}
+									{/if}
+									{#if review.assignedToMe > 0}
+										· {review.assignedToMe} assigned to you
+									{/if}
+								</p>
+							</div>
+							{#if review.status === 'open' && review.canDecide}
+								<form method="POST" action="?/completeReview" use:enhance={submitThenNotify}>
+									<input type="hidden" name="reviewId" value={review.id} />
+									<Button type="submit" size="sm">
+										<CircleCheckIcon />Complete review
+									</Button>
+								</form>
+							{/if}
+						</div>
+
+						{#if review.items.length === 0}
+							<p class="text-xs text-muted-foreground">
+								No live bindings at this scope when the review started.
+							</p>
+						{:else}
+							<Table.Root>
+								<Table.Header>
+									<Table.Row>
+										<Table.Head>Principal</Table.Head>
+										<Table.Head>Role</Table.Head>
+										<Table.Head class="hidden lg:table-cell">Scope</Table.Head>
+										<Table.Head class="hidden md:table-cell">Last used</Table.Head>
+										<Table.Head>Decision</Table.Head>
+										{#if review.status === 'open' && review.canDecide}
+											<Table.Head class="w-0 text-right">Set</Table.Head>
+										{/if}
+									</Table.Row>
+								</Table.Header>
+								<Table.Body>
+									{#each review.items as item (item.id)}
+										<Table.Row>
+											<Table.Cell>
+												<p class="text-sm font-medium">
+													{principalName({
+														principalType: item.principalType as PrincipalType,
+														principalId: item.principalId
+													})}
+												</p>
+												<p class="mt-0.5 truncate font-mono text-xs text-muted-foreground">
+													{item.principalType} · {item.principalId}
+												</p>
+											</Table.Cell>
+											<Table.Cell>
+												<span class="font-mono text-sm">{roleName(item.roleId)}</span>
+											</Table.Cell>
+											<Table.Cell class="hidden lg:table-cell">
+												<p class="text-sm">{scopeLabel(item.scope)}</p>
+											</Table.Cell>
+											<Table.Cell class="hidden md:table-cell">
+												<p class="text-xs text-muted-foreground">{usageLabel(item)}</p>
+											</Table.Cell>
+											<Table.Cell>
+												<Badge variant={decisionVariant(item.decision)}>
+													{item.decision ?? 'undecided'}
+												</Badge>
+											</Table.Cell>
+											{#if review.status === 'open' && review.canDecide}
+												<Table.Cell class="text-right">
+													<form
+														method="POST"
+														action="?/decideReviewItem"
+														class="flex flex-wrap justify-end gap-1"
+														use:enhance={submitThenNotify}
+													>
+														<input type="hidden" name="itemId" value={item.id} />
+														<Button
+															type="submit"
+															name="decision"
+															value="keep"
+															size="sm"
+															variant="outline"
+														>
+															Keep
+														</Button>
+														<Button
+															type="submit"
+															name="decision"
+															value="shorten"
+															size="sm"
+															variant="outline"
+														>
+															Shorten
+														</Button>
+														<Button
+															type="submit"
+															name="decision"
+															value="revoke"
+															size="sm"
+															variant="destructive"
+														>
+															Revoke
+														</Button>
+													</form>
+												</Table.Cell>
+											{/if}
+										</Table.Row>
+									{/each}
+								</Table.Body>
+							</Table.Root>
+						{/if}
+					</div>
+				{/each}
+			</div>
+		{/if}
+
+		{#snippet footer()}
+			<span>
+				“Shorten” caps a binding at 30 days. Completing applies every decision at once; an undecided
+				item takes the campaign default. A binding removed since the snapshot is skipped.
+			</span>
+		{/snippet}
+	</Panel>
+
+	<Panel
 		title="Why can't I?"
 		icon={CircleQuestionMarkIcon}
 		description="Ask the authorization engine what it decides for you, and which bindings it considered."
@@ -1348,6 +1552,98 @@
 				{/if}
 			</div>
 		</Field.Group>
+	</FormDialog>
+{/if}
+
+{#if data.accessCan.review}
+	<FormDialog
+		bind:open={reviewOpen}
+		icon={ClipboardCheckIcon}
+		title="Start an access review"
+		description="Snapshot every live binding at a scope and recertify it. Items are assigned to the scope's managers as a hint; deciding one needs the review permission."
+		action="?/startReview"
+		submitLabel="Start review"
+		size="lg"
+	>
+		<Field.Group>
+			<Field.Field>
+				<Field.Label for="review-name">
+					Name <span class="font-normal text-muted-foreground">optional</span>
+				</Field.Label>
+				<Input id="review-name" name="name" maxlength={80} placeholder="Q4 access review" />
+			</Field.Field>
+
+			<div class="grid gap-4 sm:grid-cols-2">
+				<Field.Field>
+					<Field.Label for="review-scope">Scope</Field.Label>
+					<NativeSelect.Root
+						id="review-scope"
+						name="scopeType"
+						value={reviewScopeType}
+						onchange={(event) => {
+							reviewScopeType = event.currentTarget.value as ScopeType;
+							reviewScopeProject = '';
+							reviewScopeEnvironment = '';
+						}}
+						class="w-full"
+					>
+						<NativeSelect.Option value="org">The whole organisation</NativeSelect.Option>
+						<NativeSelect.Option value="project">One project</NativeSelect.Option>
+						<NativeSelect.Option value="environment">One environment</NativeSelect.Option>
+					</NativeSelect.Root>
+					<Field.Description>
+						An organisation review covers every binding. A project review covers the project, its
+						environments and its resources.
+					</Field.Description>
+				</Field.Field>
+
+				<Field.Field>
+					<Field.Label for="review-default">Undecided items</Field.Label>
+					<NativeSelect.Root id="review-default" name="defaultDecision" value="keep" class="w-full">
+						<NativeSelect.Option value="keep">Keep access</NativeSelect.Option>
+						<NativeSelect.Option value="revoke">Revoke access</NativeSelect.Option>
+					</NativeSelect.Root>
+					<Field.Description>Applied to anything left undecided at completion.</Field.Description>
+				</Field.Field>
+			</div>
+
+			{#if reviewScopeType !== 'org'}
+				<Field.Field>
+					<Field.Label for="review-project">Project</Field.Label>
+					<NativeSelect.Root
+						id="review-project"
+						name="projectId"
+						required
+						bind:value={reviewScopeProject}
+						onchange={() => (reviewScopeEnvironment = '')}
+						class="w-full"
+					>
+						<NativeSelect.Option value="">Pick a project</NativeSelect.Option>
+						{#each data.projects as project (project.id)}
+							<NativeSelect.Option value={project.id}>{project.name}</NativeSelect.Option>
+						{/each}
+					</NativeSelect.Root>
+				</Field.Field>
+			{/if}
+		</Field.Group>
+
+		{#if reviewScopeType === 'environment'}
+			<Field.Field>
+				<Field.Label for="review-environment">Environment</Field.Label>
+				<NativeSelect.Root
+					id="review-environment"
+					name="environmentId"
+					required
+					bind:value={reviewScopeEnvironment}
+					class="w-full"
+				>
+					<NativeSelect.Option value="">Pick an environment</NativeSelect.Option>
+					{#each projectById.get(reviewScopeProject)?.environments ?? [] as environment (environment.id)}
+						<NativeSelect.Option value={environment.id}>{environment.name}</NativeSelect.Option>
+					{/each}
+				</NativeSelect.Root>
+			</Field.Field>
+		{/if}
 	</FormDialog>
 {/if}
 

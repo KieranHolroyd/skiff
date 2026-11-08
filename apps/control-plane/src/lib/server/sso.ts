@@ -18,23 +18,21 @@ import {
 	verifiedDomainForEmail
 } from '../../../../../packages/core/src/iam/sso.ts';
 import { core } from './core';
+import { platformOrigin } from './config';
+import { syncSsoProviders } from './sso-sync';
 
 /**
  * SSO providers and verified email domains (IAM.md I19, §8.3).
  *
- * Reality check for this slice: Better Auth 1.7.15's SSO plugin is the separate
- * `@better-auth/sso` package, which is not a dependency of the control plane. Adding it would
- * change `package.json`/`bun.lock`, which this slice deliberately does not touch, so no `sso()`
- * plugin is registered in `auth.ts`. Instead this service owns the per-organisation provider rows
- * that the plugin will consume when it lands. Its `ssoProvider` model is the shape aimed for:
- * `organizationId`, `providerId`, `issuer`, an OIDC config object, `domain` and `domainVerified`.
- * `sso_providers` mirrors that, and adoption is a copy of rows into the boot-migrated table, not a
- * rewrite of the settings UI or API.
+ * `sso_providers` is the source of truth for configuration (issuer, sealed client secret, claim
+ * mapping, enabled flag); `sso_domains` proves ownership with a `skiff-verify=` TXT record.
+ * `sso-sync.ts` copies the enabled rows into Better Auth's boot-migrated `ssoProvider` table, which
+ * `@better-auth/sso` reads for the actual OIDC sign-in. Settings never writes that table directly.
  *
- * What is real here: provider configuration (client secret sealed with the organisation key),
- * OIDC discovery at save time, domain TXT ownership checks re-run daily, and the permission checks.
- * What is not: sign-in, JIT provisioning, group mapping, enforcement, SAML and SCIM. The settings
- * page shows those as not yet built rather than pretending a toggle works.
+ * What is real here: provider configuration, OIDC discovery at save time, domain TXT ownership
+ * checks re-run daily, permission checks, email→provider routing for `/login`, and the callback URL
+ * to register at the IdP. Sign-in and JIT provisioning run through Better Auth; group mapping, SAML
+ * and SCIM are still to come.
  */
 
 const MAX_NAME = 80;
@@ -98,6 +96,8 @@ export interface SsoProviderView {
 	enabled: boolean;
 	/** The secret is write-only; the UI only needs to know one is stored. */
 	hasClientSecret: boolean;
+	/** Register this with the IdP as the OIDC redirect URI. */
+	callbackUrl: string;
 	createdAt: number;
 	updatedAt: number;
 }
@@ -282,6 +282,7 @@ function view(row: ProviderRow): SsoProviderView {
 		claims: { email: row.claim_email, name: row.claim_name, groups: row.claim_groups },
 		enabled: row.enabled === 1,
 		hasClientSecret: row.client_secret_sealed.length > 0,
+		callbackUrl: `${platformOrigin}/api/auth/sso/callback/${row.id}`,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at
 	};
@@ -418,6 +419,7 @@ export class SsoService {
 				throw new ConflictError('This organisation already has a provider for that issuer.');
 			throw cause;
 		}
+		syncSsoProviders();
 		this.#audit(principal, 'sso.provider.create', id, { name, issuer, clientId, scopes });
 		return view(this.#provider(principal.orgId, id));
 	}
@@ -496,6 +498,7 @@ export class SsoService {
 				throw new ConflictError('This organisation already has a provider for that issuer.');
 			throw cause;
 		}
+		syncSsoProviders();
 		this.#audit(principal, 'sso.provider.update', id, { name, issuer, clientId, scopes });
 		return view(this.#provider(principal.orgId, id));
 	}
@@ -507,6 +510,7 @@ export class SsoService {
 			principal.orgId,
 			id
 		]);
+		syncSsoProviders();
 		this.#audit(principal, 'sso.provider.delete', id, { name: row.name, issuer: row.issuer });
 	}
 
@@ -532,6 +536,7 @@ export class SsoService {
 			)
 			.all(principal.orgId, now - SSO_RECHECK_MS, RECHECK_BATCH);
 		for (const row of due) await this.#check(row);
+		if (due.length > 0) syncSsoProviders();
 		return this.listDomains(principal);
 	}
 
@@ -556,6 +561,7 @@ export class SsoService {
 		this.#audit(principal, 'sso.domain.create', domain, { domain });
 		const row = this.#domain(principal.orgId, domain);
 		await this.#check(row);
+		syncSsoProviders();
 		return domainView(this.#domain(principal.orgId, domain));
 	}
 
@@ -565,6 +571,7 @@ export class SsoService {
 		if (!domain) throw new ValidationError('Enter a bare domain, for example example.com.');
 		const row = this.#domain(principal.orgId, domain);
 		await this.#check(row);
+		syncSsoProviders();
 		const current = this.#domain(principal.orgId, domain);
 		this.#audit(principal, 'sso.domain.verify', domain, {
 			domain,
@@ -582,13 +589,14 @@ export class SsoService {
 			principal.orgId,
 			domain
 		]);
+		syncSsoProviders();
 		this.#audit(principal, 'sso.domain.delete', domain, { domain });
 	}
 
 	/**
-	 * The provider an email address routes to, for `/login`'s email-first step. Not exposed yet:
-	 * the Better Auth plugin owns the sign-in endpoint and this slice does not fake one. A verified
-	 * domain is required, and a provider can be disabled without deleting its configuration.
+	 * The provider an email address routes to, for `/login`'s email-first step. Only a verified
+	 * domain routes, and a provider can be disabled without deleting its configuration. The plugin
+	 * is then asked to sign in by provider id, so its own domain matching is not relied on.
 	 */
 	resolveProviderForEmail(
 		email: string

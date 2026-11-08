@@ -17,6 +17,7 @@ import LayoutDashboardIcon from '@lucide/svelte/icons/layout-dashboard';
 import LinkIcon from '@lucide/svelte/icons/link-2';
 import RocketIcon from '@lucide/svelte/icons/rocket';
 import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
+import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 import VariableIcon from '@lucide/svelte/icons/variable';
 import type { Subnav, SubnavIcon, RouteUrl } from '#lib/nav/subnav.js';
 import { readTab, tabHref } from '../../../_lib/service/sections.js';
@@ -136,6 +137,7 @@ export function projectSubnav(data: ProjectSubnavData, url: RouteUrl): Subnav {
 						LinkIcon,
 						data.shareLinks.filter((link) => shareState(link) === 'active').length
 					),
+					item('access', 'Access', ShieldCheckIcon),
 					item('settings', 'Settings', KeyRoundIcon)
 				]
 			}

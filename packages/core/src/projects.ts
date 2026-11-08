@@ -12,6 +12,7 @@ import {
 	placementSpecSchema,
 } from '@skiff/contracts';
 import { featureEnabled } from './config.ts';
+import { effectiveAccessMode } from './access.ts';
 import type { CoreContext } from './context.ts';
 import { ConflictError, NotFoundError, ValidationError } from './errors.ts';
 import { effectiveRuntime, storedRuntime, type TierRuntime } from './runtime-tier.ts';
@@ -31,6 +32,9 @@ export interface ProjectRow {
 	productionDeploymentId: string | null;
 	productionAccess: 'public' | 'password' | 'platform';
 	previewAccess: 'public' | 'password' | 'platform';
+	/** Skiff Access policy for each project scope (IAM.md I25); presence means effective `access`. */
+	productionAccessPolicyId?: string | null;
+	previewAccessPolicyId?: string | null;
 	/** Legacy shared hash (pre-0054); never read. Use the per-scope hashes. */
 	accessSecretHash: string | null;
 	/** scrypt hash for production in `password` mode; each scope has its own (0054). */
@@ -59,6 +63,9 @@ export interface ProjectView {
 	previewPattern: string;
 	productionAccess: string;
 	previewAccess: string;
+	/** The policies behind an `access` mode, when assigned. */
+	productionAccessPolicyId: string | null;
+	previewAccessPolicyId: string | null;
 	/** Whether production has a password stored (the hash itself is never returned). */
 	productionPasswordSet: boolean;
 	/** Whether previews have a password stored. */
@@ -125,8 +132,10 @@ export class ProjectService {
 			productionDeploymentId: row.productionDeploymentId,
 			productionUrl: contentUrl(this.ctx.config.platformOrigin, productionHost),
 			previewPattern: contentUrl(this.ctx.config.platformOrigin, `${row.slug}--<id>.${this.contentDomain}`),
-			productionAccess: row.productionAccess,
-			previewAccess: row.previewAccess,
+			productionAccess: effectiveAccessMode(row.productionAccess, row.productionAccessPolicyId),
+			previewAccess: effectiveAccessMode(row.previewAccess, row.previewAccessPolicyId),
+			productionAccessPolicyId: row.productionAccessPolicyId ?? null,
+			previewAccessPolicyId: row.previewAccessPolicyId ?? null,
 			productionPasswordSet: Boolean(row.productionPasswordHash),
 			previewPasswordSet: Boolean(row.previewPasswordHash),
 			createdAt: new Date(row.createdAt).toISOString(),
@@ -153,6 +162,10 @@ export class ProjectService {
 		const wantsPassword = input.productionAccess === 'password' || input.previewAccess === 'password';
 		if (wantsPassword && !input.password)
 			throw new ValidationError('A password is required for password mode.');
+		if (input.productionAccess === 'access' && !input.productionAccessPolicyId)
+			throw new ValidationError('Choose a Skiff Access policy for production.');
+		if (input.previewAccess === 'access' && !input.previewAccessPolicyId)
+			throw new ValidationError('Choose a Skiff Access policy for previews.');
 		const passwordHash = wantsPassword && input.password ? hashPassword(input.password) : null;
 		const now = this.ctx.now();
 		const row: ProjectRow = {
@@ -165,8 +178,12 @@ export class ProjectService {
 			placement: input.placement,
 			placementJson: input.placementSpec ? JSON.stringify(input.placementSpec) : null,
 			productionDeploymentId: null,
-			productionAccess: input.productionAccess,
-			previewAccess: input.previewAccess,
+			productionAccess: input.productionAccess === 'access' ? 'platform' : input.productionAccess,
+			previewAccess: input.previewAccess === 'access' ? 'platform' : input.previewAccess,
+			productionAccessPolicyId:
+				input.productionAccess === 'access' ? (input.productionAccessPolicyId ?? null) : null,
+			previewAccessPolicyId:
+				input.previewAccess === 'access' ? (input.previewAccessPolicyId ?? null) : null,
 			accessSecretHash: null,
 			productionPasswordHash: input.productionAccess === 'password' ? passwordHash : null,
 			previewPasswordHash: input.previewAccess === 'password' ? passwordHash : null,
@@ -251,12 +268,30 @@ export class ProjectService {
 		if (input.placementSpec !== undefined)
 			patch.placementJson = input.placementSpec ? JSON.stringify(input.placementSpec) : null;
 		if (input.productionAccess !== undefined) {
-			patch.productionAccess = input.productionAccess;
+			const policyId =
+				input.productionAccess === 'access'
+					? (input.productionAccessPolicyId ?? row.productionAccessPolicyId ?? null)
+					: null;
+			if (input.productionAccess === 'access' && !policyId)
+				throw new ValidationError('Choose a Skiff Access policy for production.');
+			patch.productionAccess = input.productionAccess === 'access' ? 'platform' : input.productionAccess;
+			patch.productionAccessPolicyId = policyId;
 			Object.assign(patch, scopePasswordPatch(row, 'production', input.productionAccess));
+		} else if (input.productionAccessPolicyId !== undefined) {
+			patch.productionAccessPolicyId = input.productionAccessPolicyId;
 		}
 		if (input.previewAccess !== undefined) {
-			patch.previewAccess = input.previewAccess;
+			const policyId =
+				input.previewAccess === 'access'
+					? (input.previewAccessPolicyId ?? row.previewAccessPolicyId ?? null)
+					: null;
+			if (input.previewAccess === 'access' && !policyId)
+				throw new ValidationError('Choose a Skiff Access policy for previews.');
+			patch.previewAccess = input.previewAccess === 'access' ? 'platform' : input.previewAccess;
+			patch.previewAccessPolicyId = policyId;
 			Object.assign(patch, scopePasswordPatch(row, 'previews', input.previewAccess));
+		} else if (input.previewAccessPolicyId !== undefined) {
+			patch.previewAccessPolicyId = input.previewAccessPolicyId;
 		}
 
 		let newSlug = row.slug;
@@ -294,19 +329,32 @@ export class ProjectService {
 	async setAccess(
 		principal: Principal,
 		slug: string,
-		input: { scope: 'production' | 'previews'; mode: 'public' | 'password' | 'platform'; password?: string },
+		input: {
+			scope: 'production' | 'previews';
+			mode: 'public' | 'password' | 'platform' | 'access';
+			password?: string;
+			policyId?: string;
+		},
 	): Promise<ProjectView> {
 		const row = this.requireRow(principal, slug);
 		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: row.id });
+		if (input.mode === 'access' && !input.policyId)
+			throw new ValidationError('Choose a Skiff Access policy.');
+		const storedMode = input.mode === 'access' ? 'platform' : input.mode;
 		// Each scope keeps its own password: changing one scope never touches the other's.
 		const patch: Partial<ProjectRow> = {
 			updatedAt: this.ctx.now(),
 			...scopePasswordPatch(row, input.scope, input.mode, input.password),
 		};
-		if (input.scope === 'production') patch.productionAccess = input.mode;
-		else patch.previewAccess = input.mode;
+		if (input.scope === 'production') {
+			patch.productionAccess = storedMode;
+			patch.productionAccessPolicyId = input.mode === 'access' ? (input.policyId ?? null) : null;
+		} else {
+			patch.previewAccess = storedMode;
+			patch.previewAccessPolicyId = input.mode === 'access' ? (input.policyId ?? null) : null;
+		}
 		await this.ctx.audit.wrap(
-			{ principal, action: 'project.set_access', resource: 'project', resourceId: row.id, args: { scope: input.scope, mode: input.mode } },
+			{ principal, action: 'project.set_access', resource: 'project', resourceId: row.id, args: { scope: input.scope, mode: input.mode, policyId: input.policyId } },
 			() => {
 				this.ctx.db.update(projects).set(patch).where(eq(projects.id, row.id)).run();
 				this.bump(principal.orgId);
@@ -512,7 +560,7 @@ function requirePlacementSpec(raw: string): import('@skiff/contracts').Placement
 export function scopePasswordPatch(
 	row: ProjectRow,
 	scope: 'production' | 'previews',
-	mode: ProjectRow['productionAccess'],
+	mode: ProjectRow['productionAccess'] | 'access',
 	password?: string,
 ): Pick<Partial<ProjectRow>, 'productionPasswordHash' | 'previewPasswordHash'> {
 	const field = scope === 'production' ? 'productionPasswordHash' : 'previewPasswordHash';

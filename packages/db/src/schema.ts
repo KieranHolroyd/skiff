@@ -680,6 +680,12 @@ export const projects = sqliteTable(
 			.notNull()
 			.default('platform'),
 		/**
+		 * Skiff Access policy ids (IAM.md I25). Present = the scope's effective mode is `access`;
+		 * the legacy mode column stores `platform` so older agents fail closed.
+		 */
+		productionAccessPolicyId: text('production_access_policy_id'),
+		previewAccessPolicyId: text('preview_access_policy_id'),
+		/**
 		 * Legacy shared password hash (one per project, both scopes). Superseded by the per-scope
 		 * hashes below (0054); no longer read or written, kept because migrations are additive.
 		 */
@@ -899,6 +905,8 @@ export const environments = sqliteTable(
 		access: text('access', { enum: ['public', 'password', 'platform'] })
 			.notNull()
 			.default('platform'),
+		/** Skiff Access policy for this environment; present = effective mode `access` (I25). */
+		accessPolicyId: text('access_policy_id'),
 		/**
 		 * Hashed password (scrypt) when `access` is `password`. Never returned by the API. Unused for
 		 * the production environment, which follows the project's production password.

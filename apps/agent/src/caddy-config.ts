@@ -3,6 +3,7 @@ import type { DesiredState, RouteSpec } from '@skiff/contracts';
 import {
 	compileAwaitingDeployRoute,
 	compileCaddyConfig,
+	type CaddyHandler,
 	type CaddyRoute,
 	type SiteCompileInput,
 	type TlsOptions,
@@ -235,6 +236,58 @@ function normalizeHandlers(value: unknown): unknown {
 	return normalized;
 }
 
+/**
+ * Caddy's `forward_auth` copies named response headers onto the upstream request; the long-form
+ * JSON the compiler emits has to say so explicitly. Only Skiff Access routes need the two headers,
+ * so the patch is limited to their hosts (IAM.md I25).
+ */
+function enableAccessHeaderCopy(routes: CaddyRoute[], hosts: ReadonlySet<string>): void {
+	if (hosts.size === 0) return;
+	for (const route of routes) {
+		const matcher = route.match?.[0] as { host?: string[] } | undefined;
+		if (!matcher?.host?.some((host) => hosts.has(normalizeHost(host)))) continue;
+		patchAccessAuthHandlers(route.handle);
+	}
+}
+
+function patchAccessAuthHandlers(handlers: CaddyHandler[] | undefined): void {
+	if (!handlers) return;
+	for (const handler of handlers) {
+		if (handler.handler === 'reverse_proxy') {
+			const rewrite = handler.rewrite as { uri?: string } | undefined;
+			if (rewrite?.uri !== '/_skiff/verify') continue;
+			const responses = handler.handle_response as
+				| Array<{ match?: { status_code?: number[] }; routes?: Array<{ handle?: CaddyHandler[] }> }>
+				| undefined;
+			for (const response of responses ?? []) {
+				if (!response.match?.status_code?.includes(2)) continue;
+				for (const responseRoute of response.routes ?? []) {
+					responseRoute.handle ??= [];
+					// `forward_auth`'s `copy_headers` is the expanded form's `request_header` handler:
+					// it copies from the auth response (`{rp.header.*}`) onto the original request.
+					responseRoute.handle.unshift({
+						handler: 'headers',
+						request: {
+							set: {
+								'Skiff-Access-Jwt': ['{rp.header.Skiff-Access-Jwt}'],
+								'Skiff-Access-Email': ['{rp.header.Skiff-Access-Email}'],
+							},
+						},
+					});
+				}
+			}
+		}
+		// A site is a subroute; walk into it and anything else nested.
+		for (const value of Object.values(handler)) {
+			if (Array.isArray(value)) {
+				for (const child of value) {
+					if (child && typeof child === 'object') patchAccessAuthHandlers([child as CaddyHandler]);
+				}
+			}
+		}
+	}
+}
+
 function caddySocketAddress(socketPath: string): string {
 	if (socketPath.includes('|')) return socketPath.startsWith('unix/') ? socketPath : `unix/${socketPath}`;
 	const base = socketPath.startsWith('unix/') ? socketPath : `unix/${socketPath}`;
@@ -322,6 +375,14 @@ export function buildCaddyConfig(options: CompileAgentConfigOptions): Record<str
 	// Public storage endpoints match on a dedicated host and never collide with site routes (S3).
 	const storageRoutes = options.state.storageRoutes.map(compileStorageRoute);
 	server.routes = [...storageRoutes, ...redirects, ...domainRedirects, ...placeholderRoutes, ...server.routes];
+
+	// Skiff Access needs its two response headers copied from the auth response to the upstream.
+	const accessHosts = new Set(
+		entries
+			.filter((entry) => entry.route.accessMode === 'access')
+			.map((entry) => normalizeHost(entry.site.host)),
+	);
+	enableAccessHeaderCopy(server.routes, accessHosts);
 
 	// The control plane's object browser reaches instances through an internal gateway (D82).
 	// The edge gets a loopback listener; a worker puts its routes on the WireGuard-only server.

@@ -1,11 +1,15 @@
 import { describe, expect, test } from 'bun:test';
 import {
 	ForbiddenError,
+	STEP_UP_WINDOW_MS,
+	StepUpRequiredError,
 	canAdministerPlatform,
 	canViewPlatform,
 	hasPermission,
 	isHumanPrincipal,
 	requirePermission,
+	requireStepUp,
+	stepUpLevel,
 	type Principal,
 } from './principal.ts';
 import type { Permission } from './permissions.ts';
@@ -56,5 +60,69 @@ describe('principal v2', () => {
 	test('requirePermission fails closed', () => {
 		expect(hasPermission(principal(), 'project:read')).toBe(true);
 		expect(() => requirePermission(principal(), 'project:delete')).toThrow(ForbiddenError);
+	});
+});
+
+describe('step-up', () => {
+	const now = Date.parse('2026-11-08T12:00:00Z');
+
+	test('level comes from the catalog', () => {
+		expect(stepUpLevel('project:read')).toBe('none');
+		expect(stepUpLevel('database:credentials')).toBe('window');
+		expect(stepUpLevel('org:delete')).toBe('always');
+	});
+
+	test('none needs no verification', () => {
+		expect(() => requireStepUp(principal(), 'project:read', now)).not.toThrow();
+	});
+
+	test('window accepts a fresh verification of the strongest class', () => {
+		const verified = principal({
+			verification: { at: now - 60_000, class: 'strong', strongest: 'strong' },
+		});
+		expect(() => requireStepUp(verified, 'database:credentials', now)).not.toThrow();
+
+		const basicOnly = principal({
+			verification: { at: now - 60_000, class: 'basic', strongest: 'basic' },
+		});
+		expect(() => requireStepUp(basicOnly, 'database:credentials', now)).not.toThrow();
+	});
+
+	test('window expires, and a basic verification is not enough once a strong factor exists', () => {
+		expect(() =>
+			requireStepUp(principal(), 'database:credentials', now),
+		).toThrow(StepUpRequiredError);
+
+		expect(() =>
+			requireStepUp(
+				principal({
+					verification: { at: now - STEP_UP_WINDOW_MS, class: 'strong', strongest: 'strong' },
+				}),
+				'database:credentials',
+				now,
+			),
+		).toThrow(StepUpRequiredError);
+
+		expect(() =>
+			requireStepUp(
+				principal({
+					verification: { at: now - 60_000, class: 'basic', strongest: 'strong' },
+				}),
+				'database:credentials',
+				now,
+			),
+		).toThrow(StepUpRequiredError);
+	});
+
+	test('always asks every time, even after a fresh verification', () => {
+		expect(() =>
+			requireStepUp(
+				principal({
+					verification: { at: now - 60_000, class: 'strong', strongest: 'strong' },
+				}),
+				'org:delete',
+				now,
+			),
+		).toThrow(StepUpRequiredError);
 	});
 });

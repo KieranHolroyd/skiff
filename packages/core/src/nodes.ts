@@ -61,10 +61,21 @@ import { effectiveRuntime } from './runtime-tier.ts';
 import { upstreamFor } from './workloads.ts';
 import { allocateOverlayAddress, buildWireguardState, type OverlayNode } from './overlay.ts';
 import { siteKeyFor } from './config.ts';
+import { effectiveAccessMode } from './access.ts';
 import { newId, randomToken, sha256Hex, parseJson } from './util.ts';
 import type { ParsedConfig } from '@skiff/site-config';
 
 const JOIN_TTL_MS = 60 * 60 * 1000;
+
+/**
+ * Where an unauthenticated visitor goes. Skiff Access has its own platform endpoint because it must
+ * evaluate a policy and may redirect to an IdP or user pool before handing back a host-bound code.
+ */
+function loginUrlFor(platformOrigin: string, mode: string, projectId: string): string {
+	return mode === 'access'
+		? `${platformOrigin}/api/v1/access/authorize?project=${projectId}`
+		: `${platformOrigin}/_skiff/site-login?project=${projectId}`;
+}
 /**
  * An agent is offline after 30 s without a heartbeat (DESIGN §9). The alert delay is a platform
  * policy (`nodeAlertMinutes`, Settings → Policies).
@@ -1243,7 +1254,8 @@ export class NodeService {
 				baseByDeployment.set(deployment.id, base);
 
 				// Every deployment always gets its immutable preview URL, whatever its environment.
-				const previewAccessMode = project.previewAccess;
+				const previewPolicyId = project.previewAccessPolicyId ?? null;
+				const previewAccessMode = effectiveAccessMode(project.previewAccess, previewPolicyId);
 				routes.push({
 					...base,
 					host: deployment.previewHost,
@@ -1252,7 +1264,8 @@ export class NodeService {
 					access: {
 						mode: previewAccessMode,
 						siteKey: siteKeyFor(this.ctx.config.siteCookieSecret, project.id, project.siteSessionEpoch),
-						loginUrl: `${this.ctx.config.platformOrigin}/_skiff/site-login?project=${project.id}`,
+						loginUrl: loginUrlFor(this.ctx.config.platformOrigin, previewAccessMode, project.id),
+						policyId: previewPolicyId,
 					},
 				});
 			}
@@ -1291,6 +1304,7 @@ export class NodeService {
 					slug: 'production',
 					isProduction: true,
 					access: project.productionAccess,
+					accessPolicyId: project.productionAccessPolicyId ?? null,
 					passwordHash: null,
 					deploymentId: project.productionDeploymentId,
 					createdAt: project.createdAt,
@@ -1304,7 +1318,13 @@ export class NodeService {
 				if (!deploymentId) continue;
 				const base = baseByDeployment.get(deploymentId);
 				if (!base) continue;
-				const accessMode = environment.isProduction ? project.productionAccess : environment.access;
+				const environmentPolicyId = environment.isProduction
+					? (project.productionAccessPolicyId ?? null)
+					: (environment.accessPolicyId ?? null);
+				const accessMode = effectiveAccessMode(
+					environment.isProduction ? project.productionAccess : environment.access,
+					environmentPolicyId,
+				);
 				routes.push({
 					...base,
 					host: this.ctx.environments.hostFor(project, environment),
@@ -1313,7 +1333,8 @@ export class NodeService {
 					access: {
 						mode: accessMode,
 						siteKey: siteKeyFor(this.ctx.config.siteCookieSecret, project.id, project.siteSessionEpoch),
-						loginUrl: `${this.ctx.config.platformOrigin}/_skiff/site-login?project=${project.id}`,
+						loginUrl: loginUrlFor(this.ctx.config.platformOrigin, accessMode, project.id),
+						policyId: environmentPolicyId,
 					},
 				});
 				if (environment.isProduction) productionProjectIds.add(project.id);

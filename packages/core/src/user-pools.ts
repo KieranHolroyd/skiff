@@ -1,0 +1,513 @@
+/**
+ * Managed user pools (IAM.md I26–I29, §11.2).
+ *
+ * A pool is an org resource like a database, but its purpose is authentication for one deployed
+ * app's own end users. This slice owns the pool row, its OIDC clients, and the public discovery
+ * and JWKS documents. It deliberately does **not** implement users, passwords, sessions, hosted
+ * sign-in pages, MFA or email: those belong to the native `skiff-identity` engine (I27), which
+ * runs as its own process with its own SQLite file per pool. The engine seam is recorded below so
+ * the control plane never pretends it is already hosting users.
+ *
+ * Signing is the one piece that exists today: each pool gets a key in the platform ring with
+ * purpose `pool:<id>` (IAM.md I15, §7.3). Discovery and JWKS are public, unauthenticated reads;
+ * every write is a normal IAM permission check on the pool resource.
+ */
+import {
+	userPoolClientCreateSchema,
+	userPoolCreateSchema,
+	userPoolUpdateSchema,
+	type Permission,
+	type Principal,
+	type UserPoolClientCreate,
+	type UserPoolClientCreated,
+	type UserPoolClientView,
+	type UserPoolCreate,
+	type UserPoolEngineId,
+	type UserPoolJwks,
+	type UserPoolOidcDiscovery,
+	type UserPoolSignupMode,
+	type UserPoolTheme,
+	type UserPoolUpdate,
+	type UserPoolView
+} from '@skiff/contracts';
+import type { CoreContext } from './context.ts';
+import { ConflictError, ForbiddenError, NotFoundError } from './errors.ts';
+import { newId, parseJson, randomToken } from './util.ts';
+
+/** The pool's own signing-key purpose; the platform JWKS excludes `pool:*` (IAM.md §7.3). */
+export function userPoolSigningPurpose(poolId: string): `pool:${string}` {
+	return `pool:${poolId}`;
+}
+
+/**
+ * The public issuer for a pool. The id, not the display name, keeps two organisations with a
+ * pool called "shop" from colliding; a verified custom domain can replace it later.
+ */
+export function userPoolIssuer(contentDomain: string, poolId: string): string {
+	const domain = contentDomain.trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+	return `https://auth.${domain}/${poolId}`;
+}
+
+/**
+ * The engine seam (IAM.md I27). The native engine ships first; managed Keycloak and Authentik are
+ * later registry entries. An engine owns the tenant's users, sessions, hosted pages and data file.
+ * `implemented` is false until `skiff-agent identity` exists, so the dashboard can say so honestly.
+ */
+export interface UserPoolEngine {
+	readonly id: UserPoolEngineId;
+	readonly label: string;
+	/** True once a process exists that can host users for a pool. */
+	readonly implemented: boolean;
+	/** What the engine owns, for documentation and future provisioning code. */
+	readonly owns: readonly ('users' | 'sessions' | 'hosted-sign-in' | 'mfa' | 'social-login')[];
+}
+
+export const USER_POOL_ENGINE_IMPLEMENTATIONS: Record<UserPoolEngineId, UserPoolEngine> = {
+	'skiff-identity': {
+		id: 'skiff-identity',
+		label: 'Skiff Identity',
+		implemented: false,
+		owns: ['users', 'sessions', 'hosted-sign-in', 'mfa', 'social-login']
+	}
+};
+
+interface UserPoolRow {
+	id: string;
+	org_id: string;
+	name: string;
+	description: string;
+	engine: string;
+	issuer: string;
+	signing_key_id: string | null;
+	signup_mode: string;
+	theme_json: string;
+	created_by: string;
+	created_at: number;
+	updated_at: number;
+	disabled_at: number | null;
+}
+
+interface UserPoolClientRow {
+	id: string;
+	pool_id: string;
+	name: string;
+	client_id: string;
+	client_secret_sealed: string | null;
+	redirect_uris_json: string;
+	public: number;
+	created_at: number;
+}
+
+export class UserPoolService {
+	constructor(private readonly ctx: CoreContext) {}
+
+	// ---------------------------------------------------------------- reads
+
+	/** Pools the caller may read. An org grant covers every pool; a pool grant covers one. */
+	list(principal: Principal): UserPoolView[] {
+		if (!this.canReadAny(principal)) throw new ForbiddenError('userPool:read');
+		const orgWide = this.ctx.iam.can(principal, 'userPool:read', { type: 'org' });
+		return this.#rows(principal.orgId)
+			.filter(
+				(row) =>
+					orgWide ||
+					this.ctx.iam.can(principal, 'userPool:read', { type: 'userPool', id: row.id })
+			)
+			.map((row) => this.#view(row));
+	}
+
+	/** Whether any pool is readable, for the settings page's 403 rather than a misleading empty list. */
+	canReadAny(principal: Principal): boolean {
+		if (this.ctx.iam.can(principal, 'userPool:read', { type: 'org' })) return true;
+		return this.#rows(principal.orgId).some((row) =>
+			this.ctx.iam.can(principal, 'userPool:read', { type: 'userPool', id: row.id })
+		);
+	}
+
+	get(principal: Principal, id: string): UserPoolView {
+		const row = this.#row(principal, id);
+		this.#require(principal, 'userPool:read', row);
+		return this.#view(row);
+	}
+
+	listClients(principal: Principal, poolId: string): UserPoolClientView[] {
+		const row = this.#row(principal, poolId);
+		this.#require(principal, 'userPool:read', row);
+		return this.#clients(row.id).map(clientView);
+	}
+
+	// ---------------------------------------------------------------- lifecycle
+
+	async create(principal: Principal, raw: UserPoolCreate): Promise<UserPoolView> {
+		this.ctx.iam.require(principal, 'userPool:create', { type: 'org' });
+		const input = userPoolCreateSchema.parse(raw);
+		const existing = this.ctx.sqlite
+			.query<{ id: string }, [string, string]>(
+				'SELECT id FROM user_pools WHERE org_id = ? AND name = ?'
+			)
+			.get(principal.orgId, input.name);
+		if (existing) throw new ConflictError(`A user pool named "${input.name}" already exists.`);
+
+		const id = newId('up_');
+		const issuer = userPoolIssuer(this.ctx.config.contentDomain, id);
+		// Create the ring entry now so `signing_key_id` is never a guess. The private key never
+		// leaves the control plane; discovery publishes only the public half.
+		const key = await this.ctx.signingKeys.ensure(userPoolSigningPurpose(id));
+		const now = this.ctx.now();
+		try {
+			this.ctx.sqlite.run(
+				`INSERT INTO user_pools
+				   (id, org_id, name, description, engine, issuer, signing_key_id, signup_mode, theme_json,
+				    created_by, created_at, updated_at, disabled_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+				[
+					id,
+					principal.orgId,
+					input.name,
+					input.description ?? '',
+					input.engine,
+					issuer,
+					key.kid,
+					input.signupMode,
+					JSON.stringify(input.theme ?? {}),
+					principal.userId,
+					now,
+					now
+				]
+			);
+		} catch (cause) {
+			// The issuer is unique as a second line of defence; surface it as a normal conflict.
+			if (cause instanceof Error && /UNIQUE/i.test(cause.message))
+				throw new ConflictError(`A user pool named "${input.name}" already exists.`);
+			throw cause;
+		}
+		this.ctx.audit.record({
+			principal,
+			action: 'user_pool.create',
+			resource: 'user_pool',
+			resourceId: id,
+			args: {
+				name: input.name,
+				engine: input.engine,
+				signupMode: input.signupMode,
+				issuer,
+				signingKeyId: key.kid
+			},
+			result: 'ok'
+		});
+		return this.#view(this.#rowById(id));
+	}
+
+	update(principal: Principal, id: string, raw: UserPoolUpdate): UserPoolView {
+		const row = this.#row(principal, id);
+		this.#require(principal, 'userPool:update', row);
+		const patch = userPoolUpdateSchema.parse(raw);
+		const name = patch.name ?? row.name;
+		const description = patch.description ?? row.description;
+		const signupMode = (patch.signupMode ?? row.signup_mode) as UserPoolSignupMode;
+		const theme = patch.theme === undefined ? parseTheme(row.theme_json) : patch.theme;
+		const disabledAt =
+			patch.disabled === undefined
+				? row.disabled_at
+				: patch.disabled
+					? (row.disabled_at ?? this.ctx.now())
+					: null;
+
+		if (name !== row.name) {
+			const taken = this.ctx.sqlite
+				.query<{ id: string }, [string, string, string]>(
+					'SELECT id FROM user_pools WHERE org_id = ? AND name = ? AND id != ?'
+				)
+				.get(principal.orgId, name, row.id);
+			if (taken) throw new ConflictError(`A user pool named "${name}" already exists.`);
+		}
+
+		const unchanged =
+			name === row.name &&
+			description === row.description &&
+			signupMode === row.signup_mode &&
+			disabledAt === row.disabled_at &&
+			JSON.stringify(theme) === JSON.stringify(parseTheme(row.theme_json));
+		if (unchanged) return this.#view(row);
+
+		this.ctx.sqlite.run(
+			`UPDATE user_pools
+			    SET name = ?, description = ?, signup_mode = ?, theme_json = ?, disabled_at = ?, updated_at = ?
+			  WHERE id = ? AND org_id = ?`,
+			[
+				name,
+				description,
+				signupMode,
+				JSON.stringify(theme),
+				disabledAt,
+				this.ctx.now(),
+				row.id,
+				principal.orgId
+			]
+		);
+		this.ctx.audit.record({
+			principal,
+			action: 'user_pool.update',
+			resource: 'user_pool',
+			resourceId: row.id,
+			args: {
+				name,
+				description,
+				signupMode,
+				disabled: disabledAt !== null,
+				...(row.name !== name ? { previousName: row.name } : {})
+			},
+			result: 'ok'
+		});
+		return this.#view(this.#rowById(row.id));
+	}
+
+	delete(principal: Principal, id: string): void {
+		const row = this.#row(principal, id);
+		this.#require(principal, 'userPool:delete', row);
+		this.ctx.sqlite.transaction(() => {
+			this.ctx.sqlite.run('DELETE FROM user_pool_clients WHERE pool_id = ?', [row.id]);
+			this.ctx.sqlite.run('DELETE FROM user_pools WHERE id = ? AND org_id = ?', [
+				row.id,
+				principal.orgId
+			]);
+		})();
+		this.ctx.audit.record({
+			principal,
+			action: 'user_pool.delete',
+			resource: 'user_pool',
+			resourceId: row.id,
+			args: { name: row.name },
+			result: 'ok'
+		});
+	}
+
+	// ---------------------------------------------------------------- clients
+
+	createClient(
+		principal: Principal,
+		poolId: string,
+		raw: UserPoolClientCreate
+	): UserPoolClientCreated {
+		const pool = this.#row(principal, poolId);
+		this.#require(principal, 'userPool:credentials', pool);
+		const input = userPoolClientCreateSchema.parse(raw);
+		const taken = this.ctx.sqlite
+			.query<{ id: string }, [string, string]>(
+				'SELECT id FROM user_pool_clients WHERE pool_id = ? AND name = ?'
+			)
+			.get(pool.id, input.name);
+		if (taken)
+			throw new ConflictError(`A client named "${input.name}" already exists in this pool.`);
+
+		const id = newId('upcc_');
+		const clientId = newId('upc_');
+		const clientSecret = input.public ? null : randomToken(32);
+		const now = this.ctx.now();
+		this.ctx.sqlite.run(
+			`INSERT INTO user_pool_clients
+			   (id, pool_id, name, client_id, client_secret_sealed, redirect_uris_json, public, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			[
+				id,
+				pool.id,
+				input.name,
+				clientId,
+				clientSecret ? this.ctx.secrets.seal(pool.org_id, clientSecret) : null,
+				JSON.stringify(input.redirectUris),
+				input.public ? 1 : 0,
+				now
+			]
+		);
+		this.ctx.audit.record({
+			principal,
+			action: 'user_pool.client.create',
+			resource: 'user_pool_client',
+			resourceId: id,
+			args: {
+				poolId: pool.id,
+				pool: pool.name,
+				name: input.name,
+				clientId,
+				public: input.public,
+				redirectUris: input.redirectUris
+			},
+			result: 'ok'
+		});
+		return { client: clientView(this.#clientById(pool.id, id)), clientSecret };
+	}
+
+	deleteClient(principal: Principal, poolId: string, clientIdOrRowId: string): void {
+		const pool = this.#row(principal, poolId);
+		this.#require(principal, 'userPool:credentials', pool);
+		const client = this.ctx.sqlite
+			.query<UserPoolClientRow, [string, string, string]>(
+				`SELECT * FROM user_pool_clients
+				  WHERE pool_id = ? AND (id = ? OR client_id = ?)`
+			)
+			.get(pool.id, clientIdOrRowId, clientIdOrRowId);
+		if (!client) throw new NotFoundError('User pool client');
+		this.ctx.sqlite.run('DELETE FROM user_pool_clients WHERE id = ? AND pool_id = ?', [
+			client.id,
+			pool.id
+		]);
+		this.ctx.audit.record({
+			principal,
+			action: 'user_pool.client.delete',
+			resource: 'user_pool_client',
+			resourceId: client.id,
+			args: { poolId: pool.id, pool: pool.name, name: client.name, clientId: client.client_id },
+			result: 'ok'
+		});
+	}
+
+	// ---------------------------------------------------------------- public OIDC metadata
+
+	/**
+	 * OpenID Connect Discovery for a pool. Public and unauthenticated by design (a client must be
+	 * able to read it before a user exists). A disabled pool is deliberately absent, so no client
+	 * is told that a switched-off issuer will answer.
+	 */
+	async discovery(poolId: string): Promise<UserPoolOidcDiscovery> {
+		const row = this.#publicRow(poolId);
+		await this.#ensurePoolKey(row);
+		const issuer = row.issuer;
+		return {
+			issuer,
+			authorization_endpoint: `${issuer}/oauth2/authorize`,
+			token_endpoint: `${issuer}/oauth2/token`,
+			userinfo_endpoint: `${issuer}/oauth2/userinfo`,
+			jwks_uri: `${issuer}/.well-known/jwks.json`,
+			end_session_endpoint: `${issuer}/oauth2/logout`,
+			response_types_supported: ['code'],
+			grant_types_supported: ['authorization_code', 'refresh_token'],
+			subject_types_supported: ['public'],
+			id_token_signing_alg_values_supported: ['ES256'],
+			scopes_supported: ['openid', 'profile', 'email'],
+			token_endpoint_auth_methods_supported: [
+				'client_secret_basic',
+				'client_secret_post',
+				'none'
+			],
+			code_challenge_methods_supported: ['S256'],
+			claims_supported: ['iss', 'sub', 'aud', 'exp', 'iat', 'name', 'email', 'email_verified']
+		};
+	}
+
+	/** The pool's public JWKS: the active and next `pool:<id>` keys, plus retired keys still in their window. */
+	async jwks(poolId: string): Promise<UserPoolJwks> {
+		const row = this.#publicRow(poolId);
+		await this.#ensurePoolKey(row);
+		return { keys: this.ctx.signingKeys.jwks(userPoolSigningPurpose(row.id)) };
+	}
+
+	// ---------------------------------------------------------------- internals
+
+	#require(principal: Principal, permission: Permission, pool: UserPoolRow): void {
+		this.ctx.iam.require(principal, permission, { type: 'userPool', id: pool.id });
+	}
+
+	#rows(orgId: string): UserPoolRow[] {
+		return this.ctx.sqlite
+			.query<UserPoolRow, [string]>(
+				'SELECT * FROM user_pools WHERE org_id = ? ORDER BY name COLLATE NOCASE'
+			)
+			.all(orgId);
+	}
+
+	#row(principal: Principal, id: string): UserPoolRow {
+		const row = this.ctx.sqlite
+			.query<UserPoolRow, [string, string]>(
+				'SELECT * FROM user_pools WHERE id = ? AND org_id = ?'
+			)
+			.get(id, principal.orgId);
+		if (!row) throw new NotFoundError('User pool');
+		return row;
+	}
+
+	#rowById(id: string): UserPoolRow {
+		const row = this.ctx.sqlite
+			.query<UserPoolRow, [string]>('SELECT * FROM user_pools WHERE id = ?')
+			.get(id);
+		if (!row) throw new NotFoundError('User pool');
+		return row;
+	}
+
+	/** Public reads resolve by id alone, but a disabled pool stops answering discovery. */
+	#publicRow(id: string): UserPoolRow {
+		const row = this.#rowById(id);
+		if (row.disabled_at !== null) throw new NotFoundError('User pool');
+		return row;
+	}
+
+	#clients(poolId: string): UserPoolClientRow[] {
+		return this.ctx.sqlite
+			.query<UserPoolClientRow, [string]>(
+				'SELECT * FROM user_pool_clients WHERE pool_id = ? ORDER BY name COLLATE NOCASE'
+			)
+			.all(poolId);
+	}
+
+	#clientById(poolId: string, id: string): UserPoolClientRow {
+		const row = this.ctx.sqlite
+			.query<UserPoolClientRow, [string, string]>(
+				'SELECT * FROM user_pool_clients WHERE id = ? AND pool_id = ?'
+			)
+			.get(id, poolId);
+		if (!row) throw new NotFoundError('User pool client');
+		return row;
+	}
+
+	/** Create or repair the pool's ring entry and keep `signing_key_id` in step with rotation. */
+	async #ensurePoolKey(row: UserPoolRow): Promise<void> {
+		const key = await this.ctx.signingKeys.active(userPoolSigningPurpose(row.id));
+		if (row.signing_key_id !== key.kid) {
+			this.ctx.sqlite.run('UPDATE user_pools SET signing_key_id = ? WHERE id = ?', [
+				key.kid,
+				row.id
+			]);
+			row.signing_key_id = key.kid;
+		}
+	}
+
+	#view(row: UserPoolRow): UserPoolView {
+		return {
+			id: row.id,
+			orgId: row.org_id,
+			name: row.name,
+			description: row.description,
+			engine: row.engine as UserPoolEngineId,
+			issuer: row.issuer,
+			signingKeyId: row.signing_key_id,
+			signupMode: row.signup_mode as UserPoolSignupMode,
+			theme: parseTheme(row.theme_json),
+			disabled: row.disabled_at !== null,
+			disabledAt: row.disabled_at,
+			createdBy: row.created_by,
+			createdAt: row.created_at,
+			updatedAt: row.updated_at
+		};
+	}
+}
+
+function parseTheme(json: string): UserPoolTheme {
+	const value = parseJson<unknown>(json, {});
+	return value && typeof value === 'object' && !Array.isArray(value)
+		? (value as UserPoolTheme)
+		: {};
+}
+
+function clientView(row: UserPoolClientRow): UserPoolClientView {
+	const uris = parseJson<unknown>(row.redirect_uris_json, []);
+	return {
+		id: row.id,
+		poolId: row.pool_id,
+		name: row.name,
+		clientId: row.client_id,
+		redirectUris: Array.isArray(uris)
+			? uris.filter((uri): uri is string => typeof uri === 'string')
+			: [],
+		public: row.public === 1,
+		createdAt: row.created_at
+	};
+}
