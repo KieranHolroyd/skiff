@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDb } from '@skiff/db';
-import { DEFAULT_FEATURES, EMAIL_SANDBOX_ADDRESS_LIMITS, mailStateSchema } from '@skiff/contracts';
+import { DEFAULT_FEATURES, EMAIL_SANDBOX_ADDRESS_LIMITS, mailStateSchema, type MailInject } from '@skiff/contracts';
 import type { AlertMessage, EmailMessage } from './config.ts';
 import type { EmailDnsResolver } from './email.ts';
 import { createCore, type Core } from './index.ts';
@@ -69,10 +69,22 @@ const ownerKey = buildPrincipal({ kind: 'apiKey', userId: 'user_owner', orgId: '
 const deployer = buildPrincipal({ kind: 'user', userId: 'user_dep', orgId: 'org_t', role: 'deployer' });
 const viewer = buildPrincipal({ kind: 'user', userId: 'user_view', orgId: 'org_t', role: 'viewer' });
 
-/** The token in the last verification mail. */
+/** The last message queued for the mail node, decoded (quoted-printable bodies unfolded). */
+function lastQueued(): { payload: MailInject; text: string } {
+	const row = opened.sqlite.query<{ payload_json: string }, []>('SELECT payload_json FROM email_outbox ORDER BY created_at DESC, rowid DESC LIMIT 1').get();
+	if (!row) throw new Error('nothing in the outbox');
+	const payload = JSON.parse(row.payload_json) as MailInject;
+	const text = Buffer.from(payload.raw, 'base64')
+		.toString('utf8')
+		.replace(/=\r?\n/g, '')
+		.replace(/=([0-9A-F]{2})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+	return { payload, text };
+}
+
+/** The token in the last verification mail, which goes through the mail node (EMAIL.md §4.3). */
 function lastToken(): string {
-	const match = /verify-email-address\?token=([A-Za-z0-9_-]+)/.exec(mail.at(-1)?.text ?? '');
-	if (!match) throw new Error('no verification link in the last mail');
+	const match = /verify-email-address\?token=([A-Za-z0-9_-]+)/.exec(lastQueued().text);
+	if (!match) throw new Error('no verification link in the last queued mail');
 	return decodeURIComponent(match[1]!);
 }
 
@@ -101,16 +113,30 @@ afterAll(() => {
 });
 
 describe('sandbox recipients', () => {
-	test('adding an address mails a single-use link through platform mail', async () => {
+	test('adding an address queues a single-use link on the mail node, from the platform sender', async () => {
+		const smtpBefore = mail.length;
 		const added = await core.email.addSandboxAddress(owner, { address: 'Ada@Gmail.com' });
 		expect(added).toMatchObject({ address: 'ada@gmail.com', status: 'pending', verifiedAt: null });
 		expect(added.expiresAt).toBe(new Date(clock + EMAIL_SANDBOX_ADDRESS_LIMITS.linkTtlSeconds * 1000).toISOString());
-		const sent = mail.at(-1)!;
-		expect(sent.to).toBe('ada@gmail.com');
-		expect(sent.subject).toContain('Tenant Ltd');
-		expect(sent.text).toContain('owner@tenant.test');
-		expect(sent.text).toContain('https://control.skiff.test/verify-email-address?token=');
+		expect(mail.length).toBe(smtpBefore);
+		const { payload, text } = lastQueued();
+		// Past the sandbox (the address isn't verified yet), logged under the org, sent as the platform.
+		expect(payload).toMatchObject({ orgId: 'org_t', from: 'no-reply@sites.test', recipients: ['ada@gmail.com'], tags: { skiff: 'sandbox-verification' } });
+		expect(text).toContain('Tenant Ltd');
+		expect(text).toContain('owner@tenant.test');
+		expect(text).toContain('https://control.skiff.test/verify-email-address?token=');
+		expect(text).toContain('Auto-Submitted: auto-generated');
+		expect(core.email.listMessages(owner)[0]).toMatchObject({ from: 'no-reply@sites.test', recipients: [{ address: 'ada@gmail.com', status: 'accepted' }] });
 		expect(core.email.listSandboxAddresses(viewer).map((entry) => entry.address)).toEqual(['ada@gmail.com']);
+	});
+
+	test('the mail node signs for the platform sender, and its DKIM record is a platform record', () => {
+		const state = mailStateSchema.parse(core.email.stateForNode(nodeId));
+		const platform = state.domains.find((domain) => domain.name === 'sites.test')!;
+		expect(platform).toMatchObject({ orgId: '*', sending: true, receiving: false });
+		expect(platform.dkim[0]!.privateKey).toContain('PRIVATE KEY');
+		const record = core.email.platformRecords().find((entry) => entry.name === `${platform.dkim[0]!.selector}._domainkey.sites.test`);
+		expect(record?.value).toStartWith('v=DKIM1; k=rsa; p=');
 	});
 
 	test('a pending address does not open the sandbox', async () => {
@@ -131,10 +157,26 @@ describe('sandbox recipients', () => {
 		expect(core.email.peekSandboxVerification(second)).toMatchObject({ address: 'ada@gmail.com', orgName: 'Tenant Ltd', expired: false });
 	});
 
-	test('a failed verification mail leaves no row behind', async () => {
-		failNext = true;
-		await expect(core.email.addSandboxAddress(owner, { address: 'bob@gmail.com' })).rejects.toThrow(/SMTP said no/);
+	test('without a mail node it falls back to platform SMTP; a failed send leaves no row behind', async () => {
+		await core.email.configure(admin, { nodeId: null });
+		try {
+			failNext = true;
+			await expect(core.email.addSandboxAddress(owner, { address: 'bob@gmail.com' })).rejects.toThrow(/SMTP said no/);
+			expect(core.email.listSandboxAddresses(owner).map((entry) => entry.address)).toEqual(['ada@gmail.com']);
+			clock += 61_000;
+			await core.email.addSandboxAddress(owner, { address: 'bob@gmail.com' });
+			expect(mail.at(-1)).toMatchObject({ to: 'bob@gmail.com' });
+			core.email.removeSandboxAddress(owner, 'bob@gmail.com');
+		} finally {
+			await core.email.configure(admin, { nodeId });
+		}
+	});
+
+	test('a suppressed address gets no verification mail', async () => {
+		core.email.addSuppression(owner, { address: 'gone@gmail.com', reason: 'manual' });
+		await expect(core.email.addSandboxAddress(owner, { address: 'gone@gmail.com' })).rejects.toThrow(/suppression list/);
 		expect(core.email.listSandboxAddresses(owner).map((entry) => entry.address)).toEqual(['ada@gmail.com']);
+		core.email.removeSuppression(owner, 'gone@gmail.com');
 	});
 
 	test('confirming verifies the address once; sends to it then pass the sandbox', async () => {
@@ -145,9 +187,9 @@ describe('sandbox recipients', () => {
 		expect(() => core.email.verifySandboxAddress(token)).toThrow(/already used/);
 		expect(core.email.listSandboxAddresses(owner)[0]).toMatchObject({ status: 'verified', expiresAt: null });
 		// Adding it again is a no-op, not another mail.
-		const before = mail.length;
+		const before = lastQueued().payload.messageId;
 		expect((await core.email.addSandboxAddress(owner, { address: 'ada@gmail.com' })).status).toBe('verified');
-		expect(mail.length).toBe(before);
+		expect(lastQueued().payload.messageId).toBe(before);
 
 		clock += 2000;
 		const result = await core.email.send(ownerKey, { from: 'hi@tenant.test', to: ['ada@gmail.com'], subject: 'Hello', text: 'Hi' });
@@ -175,7 +217,15 @@ describe('sandbox recipients', () => {
 			.query<{ action: string }, []>("SELECT action FROM audit_log WHERE action LIKE 'email.address.%' ORDER BY rowid")
 			.all()
 			.map((row) => row.action);
-		expect(actions).toEqual(['email.address.add', 'email.address.resend', 'email.address.verify', 'email.address.add', 'email.address.remove']);
+		expect(actions).toEqual([
+			'email.address.add',
+			'email.address.resend',
+			'email.address.add',
+			'email.address.remove',
+			'email.address.verify',
+			'email.address.add',
+			'email.address.remove',
+		]);
 	});
 
 	test('at most a handful of addresses wait for verification at once', async () => {

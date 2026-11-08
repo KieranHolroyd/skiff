@@ -321,6 +321,20 @@ describe('control API', () => {
 		expect((await control('POST', '/inject', { ...inject, orgId: 'org_b' })).status).toBe(409);
 	});
 
+	test('the platform sender (orgId *) signs mail logged under any org', async () => {
+		const platform = { id: 'platform', orgId: '*', name: 'mail.example.net', sending: true, receiving: false, dkim: [{ selector: 'skf202611', algorithm: 'rsa-sha256' as const, privateKey: PRIVATE_PEM }] };
+		server.loadState(state({ generation: 7, domains: [...state().domains, platform] }));
+		try {
+			const platformRaw = Buffer.from('From: Skiff <no-reply@mail.example.net>\r\nTo: new@example.org\r\nSubject: Confirm\r\n\r\nHello\r\n').toString('base64');
+			const sent = { ...inject, messageId: 'em_feedfacefeedfacefeedfacefeedface', orgId: 'org_b', from: 'no-reply@mail.example.net', raw: platformRaw };
+			expect((await control('POST', '/inject', sent)).status).toBe(200);
+			await drain();
+			expect(mx.received.at(-1)!.raw.toString()).toContain('d=mail.example.net');
+		} finally {
+			server.loadState(state({ generation: 8 }));
+		}
+	});
+
 	test('events page by cursor and acks delete them', async () => {
 		await control('POST', '/inject', inject);
 		await drain();

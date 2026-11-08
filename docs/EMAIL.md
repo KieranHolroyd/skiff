@@ -146,7 +146,8 @@ checks. Until they are, the operator runs them by hand. The checks, each re-runn
 5. Budget: free memory against the MTA's `MemoryMax`.
 6. Platform DNS that Skiff publishes: `mx.<mailDomain>` (A), `mx1.<mailDomain>` (A),
    `_spf.<mailDomain>` (TXT `v=spf1 ip4:<ips> -all`), `bounces.<mailDomain>` (MX →
-   `mx.<mailDomain>`, plus SPF), `smtp.<mailDomain>` (A, for submission).
+   `mx.<mailDomain>`, plus SPF), `smtp.<mailDomain>` (A, for submission), and
+   `<selector>._domainkey.<mailDomain>` (TXT, the platform sender's DKIM key, §4.3).
 
 `<mailDomain>` is the **content domain** (`SKIFF_CONTENT_DOMAIN`) unless a custom one is set: the
 **Mail domain** field on this page (a domain or a URL; `PATCH /api/v1/email/settings`
@@ -239,10 +240,21 @@ domain). It exists for the sandbox: an org in sandbox may only send to addresses
 domains or to verified addresses (§7.3).
 
 - **Adding** one (`email:update`) stores the lowercased address with the SHA-256 of a single-use
-  32-byte token and mails `<platform origin>/verify-email-address?token=…` through the **platform's
-  own SMTP** (D22, `SKIFF_SMTP_*`), never the org's mail node: the org isn't trusted yet. Without
-  platform SMTP the add is refused (`409 platform_mail_unavailable`); if the send fails nothing is
-  stored. Adding an address that is already verified changes nothing.
+  32-byte token and mails `<platform origin>/verify-email-address?token=…` (D170). With a mail node
+  set, the mail goes through **Skiff Email itself** from the platform sender
+  `Skiff <no-reply@<mailDomain>>`, never from the org's domains (the org isn't trusted yet): it is
+  queued in the org's outbox (tag `skiff: sandbox-verification`, `Auto-Submitted: auto-generated`),
+  passes the org's sandbox, quota and sending-domain checks by design, still honours the suppression
+  lists (`422 recipient_suppressed`), and shows in the org's activity, where a bounce suppresses the
+  address for that org. While sending is paused platform-wide the add is refused (`409 email_paused`).
+  Without a mail node it falls back to platform SMTP (D22, `SKIFF_SMTP_*`); with neither the add is
+  refused (`409 platform_mail_unavailable`). If the send fails nothing is stored. Adding an address
+  that is already verified changes nothing.
+- **The platform sender** signs with a platform DKIM key for `<mailDomain>` (setting
+  `email.platform_dkim`, sealed with the platform key, created on first use). Its record
+  `<selector>._domainkey.<mailDomain>` is one of the platform records (§3.3), and `skiff-mail` gets it
+  as a sending domain with `orgId: '*'` that may sign mail injected for any org. SMTP submission can't
+  use it: no org can add the mail domain, so it is never in an org's sending domains.
 - **The link** lasts 24 hours. Adding a pending address again sends a fresh link and voids the old
   one, at most once a minute and 5 times per link lifetime (`sent_at`, `send_count`, migration 0066).
   An org holds at most 50 addresses, 10 of them pending (`EMAIL_SANDBOX_ADDRESS_LIMITS`).

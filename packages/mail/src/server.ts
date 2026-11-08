@@ -176,7 +176,8 @@ export class MailServer {
 		const from = parseAddress(input.from);
 		if (!from) return { status: 422, body: { error: `invalid sender ${input.from}` } };
 		const domain = this.policy.domain(from.domain);
-		if (!domain || domain.orgId !== input.orgId || !domain.sending || domain.dkim.length === 0)
+		// The platform's own sender (orgId '*') signs platform mail logged under any org (EMAIL.md §4.3).
+		if (!domain || (domain.orgId !== input.orgId && domain.orgId !== '*') || !domain.sending || domain.dkim.length === 0)
 			return { status: 409, body: { error: `${from.domain} is not a sending domain with a key on this node` } };
 		const at = new Date(this.now());
 		const raw = Buffer.from(input.raw, 'base64');

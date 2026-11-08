@@ -144,7 +144,16 @@ const SETTINGS = {
 	paused: 'email.paused',
 	generation: 'email.generation',
 	domain: 'email.mail_domain',
+	platformDkim: 'email.platform_dkim',
 } as const;
+/**
+ * The platform's own sender on the mail node (sandbox verification mail): `no-reply@<mail domain>`,
+ * signed with a platform DKIM key. `'*'` is the platform's org id in the pushed state, as for the
+ * platform suppression list.
+ */
+const PLATFORM_MAIL_ORG = '*';
+const PLATFORM_KEY_ORG = 'platform';
+const PLATFORM_SENDER_LOCAL = 'no-reply';
 const RETENTION_DAYS = 30;
 const DAY_MS = 86_400_000;
 /** A claimed outbox row the agent never acknowledged is handed out again after this. */
@@ -387,7 +396,45 @@ export class EmailService {
 		}
 		records.push({ type: 'MX', name: names.bounce, value: names.mx, priority: 10 });
 		records.push({ type: 'TXT', name: names.bounce, value: `v=spf1 ${spfInclude(this.mailDomain())} -all` });
+		if (nodeId) {
+			const key = this.platformDkim();
+			records.push({ type: 'TXT', name: dkimRecordName(key.selector, this.mailDomain()), value: dkimRecordValue(key.publicKey) });
+		}
 		return records;
+	}
+
+	/**
+	 * The platform's DKIM key for `<mail domain>`, created on first use. Creating it bumps the mail
+	 * state so the mail node can sign with it before any platform mail reaches the outbox.
+	 */
+	private platformDkim(): { selector: string; publicKey: string; privateSealed: string } {
+		const stored = parseJson<{ selector: string; publicKey: string; privateSealed: string } | null>(this.setting(SETTINGS.platformDkim) ?? 'null', null);
+		if (stored) return stored;
+		const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+		const key = {
+			selector: dkimSelector(new Date(this.ctx.now())),
+			publicKey: publicKey.export({ type: 'spki', format: 'der' }).toString('base64'),
+			privateSealed: this.ctx.secrets.seal(PLATFORM_KEY_ORG, privateKey.export({ type: 'pkcs8', format: 'pem' }).toString()),
+		};
+		this.setSetting(SETTINGS.platformDkim, JSON.stringify(key));
+		this.bumpMail();
+		// Installs that set up email before the platform sender existed get its record without a settings change.
+		if (this.settings().nodeId)
+			queueMicrotask(() => void this.publishPlatformRecords().catch((error) => console.error('[email] could not publish the platform DKIM record:', error instanceof Error ? error.message : error)));
+		return key;
+	}
+
+	/** The platform sender in the pushed state; an org can never hold the mail domain (createDomain, configure). */
+	private platformMailDomain(): MailState['domains'][number] {
+		const key = this.platformDkim();
+		return {
+			id: 'platform',
+			orgId: PLATFORM_MAIL_ORG,
+			name: this.mailDomain(),
+			sending: true,
+			receiving: false,
+			dkim: [{ selector: key.selector, algorithm: 'rsa-sha256', privateKey: this.ctx.secrets.open(PLATFORM_KEY_ORG, key.privateSealed) }],
+		};
 	}
 
 	private inZone(name: string): boolean {
@@ -1118,16 +1165,46 @@ export class EmailService {
 			throw new CoreError(decision.code, decision.message, status);
 		}
 
+		this.enqueue({
+			messageId,
+			orgId,
+			projectId: options.projectId ?? null,
+			source: options.source ?? 'api',
+			from,
+			subject: input.subject,
+			tags: input.tags,
+			idempotencyKey: input.idempotencyKey ?? null,
+			deliver: decision.deliver,
+			suppressed: decision.suppressed,
+			mime,
+		});
+		return { id: messageId, accepted: decision.deliver, suppressed: decision.suppressed };
+	}
+
+	/** The message log and the outbox row, in one transaction (D117). */
+	private enqueue(message: {
+		messageId: string;
+		orgId: string;
+		projectId: string | null;
+		source: 'api' | 'binding';
+		from: string;
+		subject: string;
+		tags: Record<string, string>;
+		idempotencyKey: string | null;
+		deliver: string[];
+		suppressed: string[];
+		mime: Buffer;
+	}): void {
+		const { messageId, orgId, projectId, deliver, suppressed } = message;
 		const now = this.ctx.now();
-		const projectId = options.projectId ?? null;
 		const payload: MailInject = {
 			messageId,
 			orgId,
 			projectId,
-			from,
-			recipients: decision.deliver,
-			raw: mime.toString('base64'),
-			tags: input.tags,
+			from: message.from,
+			recipients: deliver,
+			raw: message.mime.toString('base64'),
+			tags: message.tags,
 		};
 		this.ctx.sqlite.transaction(() => {
 			this.ctx.db
@@ -1136,19 +1213,19 @@ export class EmailService {
 					id: messageId,
 					orgId,
 					projectId,
-					source: options.source ?? 'api',
-					fromAddress: from,
-					subject: input.subject,
-					tagsJson: JSON.stringify(input.tags),
+					source: message.source,
+					fromAddress: message.from,
+					subject: message.subject,
+					tagsJson: JSON.stringify(message.tags),
 					status: 'accepted',
-					idempotencyKey: input.idempotencyKey ?? null,
+					idempotencyKey: message.idempotencyKey,
 					createdAt: now,
 					updatedAt: now,
 				})
 				.run();
 			const rows = [
-				...decision.deliver.map((address, idx) => ({ address, idx, status: 'accepted' })),
-				...decision.suppressed.map((address, i) => ({ address, idx: decision.deliver.length + i, status: 'suppressed' })),
+				...deliver.map((address, idx) => ({ address, idx, status: 'accepted' })),
+				...suppressed.map((address, i) => ({ address, idx: deliver.length + i, status: 'suppressed' })),
 			];
 			for (const entry of rows)
 				this.ctx.db
@@ -1157,7 +1234,6 @@ export class EmailService {
 					.run();
 			this.ctx.db.insert(emailOutbox).values({ messageId, orgId, payloadJson: JSON.stringify(payload), createdAt: now, claimedAt: null }).run();
 		})();
-		return { id: messageId, accepted: decision.deliver, suppressed: decision.suppressed };
 	}
 
 	/** Each message succeeds or fails on its own; only the batch envelope is validated up front. */
@@ -1304,12 +1380,53 @@ export class EmailService {
 		}
 	}
 
-	/** Platform mail (D22), never the org's own mail node: the sandbox exists before the org is trusted. */
-	private platformMail(): NonNullable<CoreContext['config']['email']> {
+	/**
+	 * How a verification mail leaves (EMAIL.md §4.3): through Skiff Email itself once a mail node is
+	 * set, from the platform's own sender (`no-reply@<mail domain>`, never the org's domains, and
+	 * past the org's sandbox, which is what the mail is for); else through platform SMTP (D22).
+	 */
+	private verificationSender(orgId: string): (message: { to: string; subject: string; text: string }) => Promise<void> {
+		const settings = this.settings();
+		if (settings.nodeId) {
+			if (settings.paused)
+				throw new CoreError('email_paused', 'Sending is paused on this platform, so the verification email cannot go out. Ask a platform admin to resume it.', 409);
+			return async (message) => {
+				await this.queuePlatformMail(orgId, message, { skiff: 'sandbox-verification' });
+			};
+		}
 		const transport = this.ctx.config.email;
 		if (!transport)
-			throw new CoreError('platform_mail_unavailable', 'Skiff has no outgoing mail of its own configured (SKIFF_SMTP_*), so it cannot send the verification email.', 409);
-		return transport;
+			throw new CoreError(
+				'platform_mail_unavailable',
+				'Skiff cannot send the verification email: no mail node is set up (Settings → Email) and no platform SMTP is configured (SKIFF_SMTP_*).',
+				409,
+			);
+		return (message) => transport.send(message);
+	}
+
+	/**
+	 * Queue one platform-originated message on the mail node, logged under `orgId` so it shows in
+	 * that org's activity and its bounces suppress there. Policy is the platform's: only the
+	 * suppression lists apply, not the org's sandbox, quota or sending domains.
+	 */
+	private async queuePlatformMail(orgId: string, message: { to: string; subject: string; text: string }, tags: Record<string, string>): Promise<string> {
+		const to = normalizeAddress(message.to);
+		if (this.isSuppressed(orgId, to))
+			throw new CoreError('recipient_suppressed', `${to} is on the suppression list after a bounce or complaint. Remove it from the list first.`, 422);
+		this.platformDkim();
+		const from = `${PLATFORM_SENDER_LOCAL}@${this.mailDomain()}`;
+		const messageId = `${EMAIL_MESSAGE_ID_PREFIX}${newId().slice(0, 32)}`;
+		const input = emailSendSchema.parse({
+			from: { name: 'Skiff', address: from },
+			to: [to],
+			subject: message.subject,
+			text: message.text,
+			headers: { 'Auto-Submitted': 'auto-generated' },
+			tags,
+		});
+		const mime = await this.compose(input, messageId);
+		this.enqueue({ messageId, orgId, projectId: null, source: 'api', from, subject: message.subject, tags, idempotencyKey: null, deliver: [to], suppressed: [], mime });
+		return messageId;
 	}
 
 	private addressView(row: EmailAddressRow): EmailSandboxAddressView {
@@ -1356,7 +1473,7 @@ export class EmailService {
 		const limits = EMAIL_SANDBOX_ADDRESS_LIMITS;
 		const existing = this.addressRow(principal.orgId, address);
 		if (existing?.verifiedAt) return this.addressView(existing);
-		const transport = this.platformMail();
+		const send = this.verificationSender(principal.orgId);
 		const now = this.ctx.now();
 		let sendCount = 1;
 		if (existing) {
@@ -1394,7 +1511,7 @@ export class EmailService {
 		const requester = this.userEmail(principal.userId);
 		const url = `${this.ctx.config.platformOrigin}${SANDBOX_VERIFY_PATH}?token=${encodeURIComponent(token)}`;
 		try {
-			await transport.send({
+			await send({
 				to: address,
 				subject: `Confirm ${address} to receive test email from ${orgName}`,
 				text: [
@@ -1723,6 +1840,7 @@ export class EmailService {
 	/** The full state `skiff-mail` runs on, with keys opened for the mail node (EMAIL.md §3.5). */
 	stateForNode(nodeId: string): MailState {
 		this.requireMailNode(nodeId);
+		const platformDomain = this.platformMailDomain();
 		const settings = this.settings();
 		const domains = this.ctx.db.select().from(emailDomains).where(eq(emailDomains.status, 'verified')).all();
 		const credentials = this.ctx.db.select().from(emailCredentials).where(isNull(emailCredentials.revokedAt)).all();
@@ -1733,14 +1851,17 @@ export class EmailService {
 			generation: settings.generation,
 			hostnames: settings.hostnames,
 			paused: settings.paused,
-			domains: domains.map((row) => ({
-				id: row.id,
-				orgId: row.orgId,
-				name: row.name,
-				sending: row.sending,
-				receiving: row.receiving,
-				dkim: [{ selector: row.dkimSelector, algorithm: 'rsa-sha256' as const, privateKey: this.ctx.secrets.open(row.orgId, row.dkimPrivateSealed) }],
-			})),
+			domains: [
+				platformDomain,
+				...domains.map((row) => ({
+					id: row.id,
+					orgId: row.orgId,
+					name: row.name,
+					sending: row.sending,
+					receiving: row.receiving,
+					dkim: [{ selector: row.dkimSelector, algorithm: 'rsa-sha256' as const, privateKey: this.ctx.secrets.open(row.orgId, row.dkimPrivateSealed) }],
+				})),
+			],
 			credentials: credentials.map((row) => ({
 				id: row.id,
 				orgId: row.orgId,

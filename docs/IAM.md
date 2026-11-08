@@ -2,7 +2,7 @@
 
 Status: **Agreed (2026-11-08) → D168.** Both parts are in scope, Part A first, with the shape
 questions in §15 answered and the rest left as recommendations. Proposals are numbered I1–I30 and
-take D-numbers (next free: D170) as they ship; this document is the plan, not the implementation.
+take D-numbers (next free: D171) as they ship; this document is the plan, not the implementation.
 [STEP-UP.md](./STEP-UP.md) is a separate, still-open proposal; this plan builds on it (§9.1) and does
 not replace it.
 
