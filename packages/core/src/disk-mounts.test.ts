@@ -138,6 +138,21 @@ describe('partition mounts', () => {
 		expect(partitions(node.nodeId).find((part) => part.device === '/dev/sde1')).toMatchObject({ state: 'volume', volumeName: 'media' });
 	});
 
+	test('lists a partition once when an older helper repeats it under each RAID member', () => {
+		const node = enrol('mirrored');
+		heartbeat(node, {
+			volumes: inventory({
+				devices: [
+					{ name: 'sda2', type: 'part', fsType: 'linux_raid_member', holders: ['md0'] },
+					{ name: 'md0p1', type: 'part', parent: 'md0', fsType: 'ext4', uuid: ROOT_UUID, mountPath: '/' },
+					{ name: 'sdb2', type: 'part', fsType: 'linux_raid_member', holders: ['md0'] },
+					{ name: 'md0p1', type: 'part', parent: 'md0', fsType: 'ext4', uuid: ROOT_UUID, mountPath: '/' },
+				],
+			}),
+		});
+		expect(partitions(node.nodeId).map((part) => part.device)).toEqual(['/dev/md0p1', '/dev/sda2', '/dev/sdb2']);
+	});
+
 	test('an older agent lists partitions but cannot mount them', () => {
 		const node = enrol('old-agent');
 		heartbeat(node, { volumes: inventory({ devices: baseDevices() }) }, []);

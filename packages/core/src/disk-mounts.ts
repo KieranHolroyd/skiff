@@ -349,7 +349,11 @@ export function partitionViews(input: {
 	const rowByUuid = new Map(input.diskMounts.map((row) => [row.fsUuid.toLowerCase(), row]));
 
 	const out: StoragePartitionView[] = [];
+	// Helpers before 2026-11-08 reported a RAID array's partitions once per member disk; the rows are keyed by device.
+	const seen = new Set<string>();
 	for (const device of inventory.devices) {
+		if (seen.has(device.name)) continue;
+		seen.add(device.name);
 		const isDisk = device.type === 'disk' || device.type === null;
 		// A disk with partitions is a header, not a row; its partitions follow.
 		if (isDisk && device.holders.length > 0 && !device.fsType) continue;

@@ -250,6 +250,10 @@ create_upload → presigned PUT ─┼─► Upload session ─► finalize ─�
   (OPS §3.5). Both are audited as `user.password_reset`.
 
 ### 6.2 RBAC
+- The agreed expansion of this section is [IAM.md](./IAM.md) (D168): bindings scoped to
+  platform, org, project, environment or one resource, custom roles, groups, guests, service
+  accounts and (for tenant apps) user pools, shipped in phases I0–I11. Until a phase ships, the
+  four roles and the checks below are what runs.
 - **Platform level** (`admin` plugin): `platform:admin` manages nodes, global settings, domains, Caddy.
   It is the admin-plugin **user role** (`user.role = admin`), independent of org roles: an org owner is
   not a platform admin. The first user is made platform admin at bootstrap. Read-only fleet views work
