@@ -423,6 +423,10 @@ export class IamService {
 			throw new ValidationError(`Unknown role "${input.roleId}".`);
 		if (input.expiresAt != null && input.expiresAt <= this.ctx.now())
 			throw new ValidationError('An expiry must be in the future.');
+		if (input.scope.type !== 'platform' && input.scope.type !== 'org' && !input.scope.id)
+			throw new ValidationError('A scoped binding needs a resource id.');
+		if (input.scope.type === 'environment' && !input.scope.projectId)
+			throw new ValidationError('An environment binding needs its project.');
 		if (input.scope.type === 'platform' && principal.platformAdmin !== true)
 			throw new ValidationError('Platform bindings are written by a platform admin, not an org.');
 

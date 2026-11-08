@@ -486,6 +486,26 @@ admin (or a platform admin); acknowledging and silencing also allow deployers.
 | POST | `/alerts/channels/test` | platform owner | `{ channel? }`: test one channel or all → `{ delivery }` |
 | GET | `/alerts/history?rule=&kind=&before=&limit=` | `metrics:read` | Events newest first: `state`, `notification` (with per-channel `delivery`), `error`, `ack`, `silence`, and `system` (platform admins) |
 
+## IAM
+
+Bindings, custom roles and groups ([IAM.md](./IAM.md) I1). Reads need `iam:read`; writes check
+`iam:manage-roles`, `iam:manage-bindings` or `iam:manage-groups`, which owners and admins hold.
+Resource arguments are query parameters: `resourceType` (default `org`), `resourceId`, `projectId`,
+`environmentId`.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/iam` | `iam:read` | `{ version, roles, bindings, groups, can }` for the caller's org |
+| POST | `/iam/roles` | `iam:manage-roles` | `{ name, description?, permissions: string[] }` → 201. Names cannot shadow a built-in; permissions must be catalog entries |
+| DELETE | `/iam/roles/:id` | `iam:manage-roles` | 409 while any binding still uses the role |
+| POST | `/iam/bindings` | `iam:manage-bindings` | `{ principalType: user\|group\|serviceAccount, principalId, roleId, scope: { type, id?, projectId? }, condition?, expiresAt?, reason? }` → 201 |
+| DELETE | `/iam/bindings/:id` | `iam:manage-bindings` | Platform bindings are removed by a platform admin |
+| POST | `/iam/groups` | `iam:manage-groups` | `{ name, description? }` → 201 |
+| POST | `/iam/groups/:id/members` | `iam:manage-groups` | `{ userId }`; SCIM/SSO groups are read-only |
+| DELETE | `/iam/groups/:id/members` | `iam:manage-groups` | `{ userId }` |
+| GET | `/iam/explain?permission&resourceType&…` | `iam:read` | The caller's decision plus every grant considered (IAM.md I12) |
+| GET | `/iam/who-can?permission&resourceType&…` | `iam:read` | `{ permission, principals: [{ principalType, principalId, via }] }`; expands groups |
+
 ## Objects (local store only)
 
 With `SKIFF_OBJECT_STORE=local`, presigned URLs point at `/api/objects/<key>?exp=&sig=` and are

@@ -548,7 +548,7 @@ standby.
 | Surface | Additions |
 |---|---|
 | Dashboard | Settings → **Access** (Members, Groups, Roles, Service accounts, Access keys (org-wide), Federation, SSO and domains, Auth policy, Guardrails, Requests, Reviews). Each project and resource gets an **Access** tab (bindings at that scope, invite guest, explain). There's also an org switcher and a "Why can't I?" link on every 403 page that calls explain. |
-| REST | `/api/v1/iam/{roles,groups,bindings,guardrails,explain,who-can,simulate}`, `/api/v1/service-accounts`, `/api/v1/access-keys`, `/api/v1/federation-trusts`, `/api/v1/sso/*`, `/api/v1/access-requests`, `/api/v1/access-reviews`, `/api/iam/token` (STS), `/.well-known/jwks.json` |
+| REST | `/api/v1/iam/{roles,groups,bindings,explain,who-can}` (built with I1), then guardrails and simulate (I7), `/api/v1/service-accounts`, `/api/v1/access-keys`, `/api/v1/federation-trusts`, `/api/v1/sso/*`, `/api/v1/access-requests`, `/api/v1/access-reviews`, `/api/iam/token` (STS), `/.well-known/jwks.json` |
 | CLI | `skif iam roles\|groups\|bind\|unbind\|explain\|who-can`, `skif sa create\|keys\|token`, `skif access request\|approve`, `skif org switch`, `skif iam keys rotate` |
 | MCP | Read: `whoami` (gains bindings), `explain_access`, `who_can`, `list_roles`, `list_service_accounts`. Write (confirmed): `create_service_account`, `bind_role`, `request_access`. Never over MCP: approving requests, creating keys, SSO, guardrails, owner changes. |
 | Scope-filtered `tools/list` | Tools are filtered by the compiled grants (FEATURE-RESEARCH P1), which become cheap once I10 exists. |
@@ -572,8 +572,9 @@ guardrails, the `iamVersion` cache, `require`/`can`/`scopeFilter`/`explain`/`who
 `0080_iam.sql`. `member.role` becomes an org binding the first time the engine sees a user, so
 existing access is unchanged. The matrix test (`packages/core/src/iam/matrix.test.ts`) runs every
 catalog permission through an org grant, a project grant, another project, expiry, a guardrail, a
-token restriction and a session-only condition. Nothing calls `iam.require` yet. Next: the API and
-Settings → Access surfaces, then I2's module-by-module threading.
+token restriction and a session-only condition. The REST surface is `/api/v1/iam` (roles, bindings,
+groups, explain, who-can), documented in [API.md](./API.md). Nothing calls `iam.require` yet. Next:
+Settings → Access, then I2's module-by-module threading.
 
 | Phase | Contents | Proposals | Done when |
 |---|---|---|---|
