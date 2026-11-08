@@ -6,7 +6,7 @@
 	import LayoutTemplateIcon from '@lucide/svelte/icons/layout-template';
 	import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
 	import SearchIcon from '@lucide/svelte/icons/search';
-	import GitHubMark from '#lib/components/skiff/GitHubMark.svelte';
+	import ForgeMark from '#lib/components/skiff/ForgeMark.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import * as InputGroup from '#lib/components/ui/input-group/index.js';
 	import EmptyState from '../_lib/EmptyState.svelte';
@@ -75,7 +75,7 @@
 				<span
 					class="flex size-11 shrink-0 items-center justify-center rounded-xl border bg-background"
 				>
-					<GitHubMark class="size-6" />
+					<ForgeMark kind="generic" class="size-6" />
 				</span>
 				<span class="min-w-0 flex-1 space-y-0.5">
 					<span id="github-heading" class="block font-semibold tracking-tight"

@@ -207,6 +207,9 @@
 				viaForge={data.repository.provider !== 'github' && data.repository.gitProvider?.delivered
 					? (data.repository.gitProvider.via ?? 'the forge')
 					: null}
+				forgeMissing={data.forgeCoverage?.status === 'not-hooked'
+					? { name: data.forgeCoverage.connectionName ?? 'the forge', error: data.forgeCoverage.error, canCreate: data.can.manage }
+					: null}
 				coverage={data.coverage?.status ?? null}
 				manageUrl={data.coverage?.manageUrl ?? null}
 				owner={data.coverage?.fullName?.split('/')[0] ?? null}

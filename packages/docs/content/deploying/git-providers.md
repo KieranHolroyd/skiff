@@ -30,6 +30,8 @@ An organisation owner or admin does this.
 2. Optionally, create a second, read-only token for clones: `read_repository` on GitLab, `read:repository` on Gitea or Forgejo. Build nodes may receive this token, so use a bot account that can read only the repositories Skiff builds.
 3. In Skiff, open **Settings → Git providers** and choose **Connect**. Pick the forge, enter the instance URL (gitlab.com and Codeberg are filled in for you), and paste the token or tokens.
 
+As soon as you connect, Skiff creates webhooks for the repositories your projects and pipelines already use on that forge, so nothing needs re-saving.
+
 Skiff checks each token with the forge before saving it. Tokens are sealed with your organisation's key and never shown again. The API token never leaves the control plane.
 
 An instance on a private network (a homelab address such as `192.168.0.9`, or a `.lan` or `.local` name) can only be connected by a platform admin. This stops the control plane from being used to reach machines on its own network.
@@ -38,6 +40,7 @@ An instance on a private network (a homelab address such as `192.168.0.9`, or a 
 
 - **Deploy from Git.** **Projects → Deploy from Git** lists repositories from every connected provider. Pick one, and Skiff reads it, picks a framework preset, creates the project and its git source, makes the webhook, and queues the first build.
 - **Git sources and pipelines.** Choose a repository in the picker, or paste its clone URL. When a connection serves that URL, Skiff creates the webhook as soon as you save, so you don't need a webhook secret.
+- **Pipelines on push.** Watch a group or organisation, and a push that adds `.skiff/workflows` to one of its repositories adds that repository to Pipelines. The **Set up pipelines automatically** switch on **Settings → Git providers** is the same setting as on Settings → GitHub, and it lists removed repositories you can allow again.
 - **Retry or add webhooks.** Each connection on **Settings → Git providers** lists the webhooks Skiff created and any error the forge returned, with a **Retry** button. **Add a repository webhook** re-creates one by hand.
 
 When Skiff's webhook already delivers a repository, a hand-made webhook for the same repository is accepted and ignored, so one push never starts two builds.

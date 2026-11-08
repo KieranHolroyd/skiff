@@ -9,6 +9,8 @@
 	import TrashIcon from '@lucide/svelte/icons/trash';
 	import WebhookIcon from '@lucide/svelte/icons/webhook';
 	import { enhance } from '$app/forms';
+	import { tick } from 'svelte';
+	import WorkflowIcon from '@lucide/svelte/icons/workflow';
 	import { resolve } from '$app/paths';
 	import {
 		FORGE_LABELS,
@@ -31,6 +33,7 @@
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
+	import { Switch } from '#lib/components/ui/switch/index.js';
 	import * as Table from '#lib/components/ui/table/index.js';
 	import { notify } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
@@ -50,6 +53,11 @@
 	let baseUrl = $state(FORGE_PRESETS.gitlab.baseUrl);
 	let editing = $state<ForgeConnectionView | null>(null);
 	let hookScope = $state<'repository' | 'namespace'>('namespace');
+	let autoForm = $state<HTMLFormElement | null>(null);
+	/** Follows the server after each save; the switch writes it first. */
+	let autoEnabled = $derived(data.pipelineSetup.enabled);
+	/** Ignore-list entries for forges are `host/full name`; GitHub's are `owner/name` (owners never contain a dot). */
+	const forgeIgnored = $derived(data.pipelineSetup.ignored.filter((name) => /[.:]/.test(name.split('/')[0] ?? '')));
 
 	/** Switching kind swaps the hosted preset in, unless the person typed their own instance. */
 	function chooseKind(next: ForgeKind) {
@@ -259,11 +267,74 @@
 			{#snippet footer()}
 				<span>
 					Skiff adds a repository webhook when a git source or pipeline names the repository. A {namespaceWord(connection)} webhook
-					also lets pushes add repositories with .skiff/workflows to Pipelines{data.pipelineSetup.enabled ? '' : ' (turned off in Settings → GitHub → Pipelines)'}.
+					also lets pushes add repositories with .skiff/workflows to Pipelines{data.pipelineSetup.enabled ? '' : ' (turned off below)'}.
 				</span>
 			{/snippet}
 		</Panel>
 	{/each}
+
+	{#if data.connections.length > 0}
+		<Panel
+			title="Pipelines"
+			icon={WorkflowIcon}
+			description="Repositories under a watched group or organisation run their .skiff/workflows without being added by hand."
+		>
+			<form
+				bind:this={autoForm}
+				method="POST"
+				action="?/autoPipelines"
+				use:enhance={() =>
+					async ({ result, update }) => {
+						await update({ reset: false });
+						notify(result);
+					}}
+				class="flex items-start gap-3"
+			>
+				<Switch
+					id="auto-pipelines"
+					name="enabled"
+					value="1"
+					bind:checked={autoEnabled}
+					disabled={!data.canManage}
+					onCheckedChange={() => void tick().then(() => autoForm?.requestSubmit())}
+				/>
+				<div class="space-y-0.5">
+					<label for="auto-pipelines" class="text-sm font-medium">Set up pipelines automatically</label>
+					<p class="text-sm text-muted-foreground">
+						On a push through a group or organisation webhook, a repository with workflow files that is not in
+						<a class="underline underline-offset-2" href={resolve('/(dashboard)/pipelines')}>Pipelines</a> yet is added
+						(as whoever connected the forge) and its workflows run. Merge and pull requests never add one, so a fork
+						cannot. This is the same switch as for the GitHub App.{data.canManage ? '' : ' Owners and admins can change this.'}
+					</p>
+				</div>
+			</form>
+			{#if forgeIgnored.length > 0}
+				<div class="mt-4 space-y-2 border-t pt-4">
+					<p class="text-xs text-muted-foreground">Removed from Pipelines, so not added back:</p>
+					<ul class="flex flex-wrap gap-2">
+						{#each forgeIgnored as repository (repository)}
+							<li>
+								<form
+									method="POST"
+									action="?/unignore"
+									use:enhance={() =>
+										async ({ result, update }) => {
+											await update({ reset: false });
+											notify(result);
+										}}
+									class="flex items-center gap-1 rounded-md border py-0.5 pr-0.5 pl-2"
+								>
+									<input type="hidden" name="repository" value={repository} />
+									<span class="font-mono text-xs">{repository}</span>
+									{#if data.canManage}<Button size="xs" variant="ghost" type="submit">Allow again</Button>{/if}
+								</form>
+							</li>
+						{/each}
+					</ul>
+				</div>
+			{/if}
+		</Panel>
+	{/if}
 
 	<Panel title="What a connection does" icon={GitMergeIcon} description="The GitHub App’s features, through each forge’s API.">
 		<ul class="grid gap-4 sm:grid-cols-2">

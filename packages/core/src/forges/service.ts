@@ -1,7 +1,7 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { and, eq } from 'drizzle-orm';
-import { forgeConnections, forgeWebhooks } from '@skiff/db';
+import { forgeConnections, forgeWebhooks, gitSources, pipelineRepositories, projects } from '@skiff/db';
 import {
 	FORGE_LABELS,
 	canAdministerPlatform,
@@ -60,6 +60,16 @@ export interface ForgeCloneAuth {
 	host: string;
 	username: string;
 	token: string;
+}
+
+/** How a connected forge delivers a repository's events (pipeline set-up hints, D174). */
+export interface ForgeCoverage {
+	status: 'covered' | 'not-hooked' | 'no-connection';
+	connectionId: string | null;
+	connectionName: string | null;
+	fullName: string | null;
+	/** The forge's refusal the last time Skiff tried to create the webhook. */
+	error: string | null;
 }
 
 export interface ForgeWebhookResult {
@@ -241,6 +251,8 @@ export class ForgeService {
 		};
 		this.ctx.db.insert(forgeConnections).values(row).run();
 		this.audit(principal, 'git.connection.create', row.id, { kind: row.kind, baseUrl: row.baseUrl, account: account.login });
+		// Like installing the GitHub App: repositories the org already builds start delivering now.
+		await this.backfill(row.id);
 		return this.view(row);
 	}
 
@@ -263,6 +275,8 @@ export class ForgeService {
 		}
 		this.ctx.db.update(forgeConnections).set(patch).where(eq(forgeConnections.id, row.id)).run();
 		this.forget(row.id);
+		// A new token may have the permissions an earlier one lacked: retry what failed.
+		if (parsed.token) await this.backfill(row.id);
 		this.audit(principal, 'git.connection.update', row.id, {
 			fields: Object.keys(parsed).filter((key) => parsed[key as keyof typeof parsed] !== undefined),
 		});
@@ -499,6 +513,69 @@ export class ForgeService {
 		if (!match || this.deliversFor(match.row.id, match.fullName)) return;
 		const result = await this.installHook(match.row, 'repository', match.fullName);
 		if (result.error) console.warn(`[forges] webhook for ${match.fullName} not created: ${result.error}`);
+	}
+
+	/**
+	 * Create the webhook for every repository the org already builds or runs pipelines for on this
+	 * connection (enabled git sources and pipeline repositories) that no hook of Skiff's covers yet,
+	 * including ones that failed before (D174). Called when a connection is added or its token
+	 * replaced. Returns how many hooks were created; failures are recorded on the connection.
+	 */
+	async backfill(connectionId: string): Promise<number> {
+		const row = this.ctx.db.select().from(forgeConnections).where(eq(forgeConnections.id, connectionId)).get();
+		if (!row) return 0;
+		const urls = [
+			...this.ctx.db
+				.select({ url: gitSources.repoUrl, deletedAt: projects.deletedAt })
+				.from(gitSources)
+				.innerJoin(projects, eq(projects.id, gitSources.projectId))
+				.where(and(eq(gitSources.orgId, row.orgId), eq(gitSources.enabled, true)))
+				.all()
+				.filter((entry) => !entry.deletedAt)
+				.map((entry) => entry.url),
+			...this.ctx.db
+				.select({ url: pipelineRepositories.cloneUrl })
+				.from(pipelineRepositories)
+				.where(and(eq(pipelineRepositories.orgId, row.orgId), eq(pipelineRepositories.enabled, true)))
+				.all()
+				.map((entry) => entry.url),
+		];
+		const names = new Map<string, string>();
+		for (const url of urls) {
+			const match = this.connectionFor(row.orgId, url);
+			if (match?.row.id === row.id) names.set(match.fullName.toLowerCase(), match.fullName);
+		}
+		let created = 0;
+		for (const fullName of names.values()) {
+			if (this.deliversFor(row.id, fullName)) continue;
+			const hook = await this.installHook(row, 'repository', fullName);
+			if (hook.hookId) created++;
+			else console.warn(`[forges] webhook for ${fullName} not created: ${hook.error}`);
+		}
+		return created;
+	}
+
+	/** How the org's connection serves a repository URL, for set-up hints (no network). */
+	coverage(orgId: string, url: string): ForgeCoverage {
+		const match = this.connectionFor(orgId, url);
+		if (!match) return { status: 'no-connection', connectionId: null, connectionName: null, fullName: null, error: null };
+		const failed = this.webhookRows(match.row.id).find(
+			(hook) => hook.scope === 'repository' && hook.hookId === null && hook.path.toLowerCase() === match.fullName.toLowerCase(),
+		);
+		return {
+			status: this.deliversFor(match.row.id, match.fullName) ? 'covered' : 'not-hooked',
+			connectionId: match.row.id,
+			connectionName: match.row.name,
+			fullName: match.fullName,
+			error: failed?.error ?? null,
+		};
+	}
+
+	/** Create the hook for one repository URL now (the pipeline page's "Create the webhook"). */
+	async hookRepository(principal: Principal, url: string): Promise<ForgeWebhookView> {
+		const match = this.connectionFor(principal.orgId, url);
+		if (!match) throw new ValidationError('No git provider connection serves that repository.');
+		return this.addWebhook(principal, match.row.id, { repository: match.fullName });
 	}
 
 	/** Create (or re-create) a repository or namespace hook from the connection page. */

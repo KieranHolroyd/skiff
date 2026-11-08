@@ -96,6 +96,31 @@ export const actions: Actions = {
 		}
 	},
 
+	/** The same org setting as Settings → GitHub → Pipelines (D172, D177). */
+	autoPipelines: async ({ request, locals }) => {
+		const enabled = (await request.formData()).get('enabled') !== null;
+		try {
+			core.pipelines.setAutoSetup(locals.principal!, { enabled });
+			return {
+				success: enabled
+					? 'Repositories with .skiff/workflows now join Pipelines on their next push.'
+					: 'Pushes no longer add repositories to Pipelines. Add them by hand under Pipelines.'
+			};
+		} catch (cause) {
+			return fail(400, { message: message(cause) });
+		}
+	},
+
+	unignore: async ({ request, locals }) => {
+		const repository = text(await request.formData(), 'repository');
+		try {
+			core.pipelines.setAutoSetup(locals.principal!, { unignore: repository });
+			return { success: `${repository} joins Pipelines again on its next push.` };
+		} catch (cause) {
+			return fail(400, { message: message(cause) });
+		}
+	},
+
 	removeWebhook: async ({ request, locals }) => {
 		const data = await request.formData();
 		try {

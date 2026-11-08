@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { enhance } from '$app/forms';
+	import { notify } from '#lib/actions.js';
 	import CodeBlock from '../../_lib/CodeBlock.svelte';
 	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
 
@@ -9,6 +11,7 @@
 		defaultBranch = 'main',
 		viaGithubApp = false,
 		viaForge = null,
+		forgeMissing = null,
 		coverage = null,
 		manageUrl = null,
 		owner = null
@@ -20,6 +23,8 @@
 		viaGithubApp?: boolean;
 		/** A connected forge's webhook (created by Skiff) delivers the repository: its name (docs/FORGES.md). */
 		viaForge?: string | null;
+		/** A connected forge serves the repository but no webhook of Skiff's covers it yet. */
+		forgeMissing?: { name: string; error: string | null; canCreate: boolean } | null;
 		/** `not-selected` / `not-installed`: one click on GitHub makes the webhook step go away. */
 		coverage?: string | null;
 		/** Where that click is (the installation's settings, or the App's install page). */
@@ -84,6 +89,29 @@ jobs:
 					Nothing to set up: Skiff created the webhook on {viaForge}, clones the repository and reports each
 					run as a commit status.
 				</p>
+			{:else if forgeMissing}
+				<p class="font-medium">Let Skiff create the webhook on {forgeMissing.name}</p>
+				<p class="text-muted-foreground">
+					{forgeMissing.error
+						? `The last attempt failed: ${forgeMissing.error}`
+						: 'The repository is on a connected forge, but no webhook delivers it yet.'}
+					Once it exists, pushes and merge or pull requests arrive with no secret to copy.
+				</p>
+				{#if forgeMissing.canCreate}
+					<form
+						method="POST"
+						action="?/createWebhook"
+						use:enhance={() =>
+							async ({ result, update }) => {
+								await update({ reset: false });
+								notify(result);
+							}}
+					>
+						<button type="submit" class="inline-flex items-center gap-1 text-sm font-medium underline underline-offset-4"
+							>Create the webhook</button
+						>
+					</form>
+				{/if}
 			{:else if viaGithubApp}
 				<p class="font-medium">Push</p>
 				<p class="text-muted-foreground">

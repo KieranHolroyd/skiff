@@ -38,8 +38,12 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		repository.provider === 'github' && runs.length === 0
 			? await core.githubApp.coverage(principal.orgId, repository.cloneUrl).catch(() => null)
 			: null;
+	// The same for a repository on a connected GitLab, Gitea or Forgejo (D174).
+	const forgeCoverage =
+		repository.provider !== 'github' && runs.length === 0 ? core.forges.coverage(principal.orgId, repository.cloneUrl) : null;
 	return {
 		coverage,
+		forgeCoverage: forgeCoverage && forgeCoverage.status !== 'no-connection' ? forgeCoverage : null,
 		repository,
 		runs,
 		triggers: core.pipelines.listTriggers(principal, params.repo, 20),
@@ -71,5 +75,17 @@ export const actions: Actions = {
 		);
 		if (!result.ok) return result.failure;
 		return { success: `Reading the workflow at ${result.value.ref}. The run appears here in a moment.` };
+	},
+
+	/** Create the webhook on the connected forge for this repository (docs/FORGES.md §3). */
+	createWebhook: async ({ locals, params }) => {
+		const principal = locals.principal!;
+		const result = await attempt(async () => {
+			const repository = core.pipelines.getRepository(principal, params.repo);
+			return core.forges.hookRepository(principal, repository.cloneUrl);
+		});
+		if (!result.ok) return result.failure;
+		if (result.value.error) return fail(400, { message: `The forge refused the webhook: ${result.value.error}` });
+		return { success: `${result.value.path} now sends its pushes and merge or pull requests to Skiff.` };
 	}
 };

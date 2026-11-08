@@ -75,7 +75,11 @@ hooks itself:
   connection serves, `ensureWebhook` looks for a hook with Skiff's URL (`GET …/hooks`) and creates
   one if none exists (GitLab: push + merge request events; Gitea/Forgejo: push + pull request,
   type `gitea`, JSON). The hook id is recorded in `forge_webhooks`. Failures are kept on the row
-  and shown on the connection page, with a retry.
+  and shown on the connection page, with a retry. Like installing the GitHub App, adding a
+  connection (or replacing its token) runs `backfill`: every enabled git source and pipeline
+  repository the connection serves gets its hook then, so repositories set up earlier need nothing.
+  A pipeline repository with no runs yet shows a missing hook in its set-up steps, with **Create the
+  webhook** (`ForgeService.coverage` / `hookRepository`).
 - **Per namespace.** "Receive events for a whole group / organisation" creates one group hook
   (GitLab Premium or self-managed with the feature) or organisation hook (Gitea/Forgejo, free).
   Repositories under it need no hook of their own, and pushes to repositories Skiff does not know

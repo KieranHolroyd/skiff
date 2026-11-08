@@ -411,3 +411,23 @@ describe('egress', () => {
 		expect(live.forges.list(owner)).toEqual([]);
 	});
 });
+
+describe('connecting covers what the org already builds', () => {
+	test('a git source saved before the forge was connected gets its webhook on connect', async () => {
+		await core.forges.remove(owner, forgejoId);
+		const project = await core.projects.create(owner, { name: 'legacy', slug: 'legacy', runtime: 'static', placement: 'edge', productionAccess: 'public', previewAccess: 'platform' });
+		core.builds.upsertGitSource(owner, core.projects.requireRow(owner, project.slug), {
+			repoUrl: 'https://forgejo.test/acme/legacy.git',
+			branch: 'main',
+			rootDir: '.',
+			buildCommand: 'bun run build',
+			outputDir: 'dist',
+			enabled: true,
+		});
+		expect(core.forges.coverage('org_1', 'https://forgejo.test/acme/legacy.git').status).toBe('no-connection');
+		forgejoId = (await core.forges.create(owner, { kind: 'forgejo', baseUrl: 'https://forgejo.test', token: 'fj-api-token' })).id;
+		expect(hookFor('acme/legacy').url).toBe(`https://control.test/api/webhooks/forge/${forgejoId}`);
+		expect(core.forges.coverage('org_1', 'https://forgejo.test/acme/legacy.git')).toMatchObject({ status: 'covered', connectionId: forgejoId, fullName: 'acme/legacy' });
+		expect(core.forges.coverage('org_1', 'https://forgejo.test/acme/other.git').status).toBe('not-hooked');
+	});
+});

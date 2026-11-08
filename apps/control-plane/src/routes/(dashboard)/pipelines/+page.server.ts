@@ -18,14 +18,21 @@ export const load: PageServerLoad = ({ locals, depends }) => {
 	let repositories: PipelineRepositoryView[] = [];
 	let recent: PipelineRunSummary[] = [];
 	let denied = false;
-	/** D172: with the GitHub App linked, a push with `.skiff/workflows` adds its repository here. */
-	let automatic = false;
+	/**
+	 * D172/D177: a push with `.skiff/workflows` adds its repository here, through the GitHub App or a
+	 * forge connection's group/organisation webhook. Lists what delivers such pushes, for the hint.
+	 */
+	let automatic: string[] = [];
 	try {
 		repositories = core.pipelines.listRepositories(principal);
 		recent = core.pipelines.recentRuns(principal, 15);
-		automatic =
-			core.pipelines.autoSetup(principal).enabled &&
-			core.githubApp.installations(principal).some((entry) => entry.orgId === principal.orgId && !entry.suspended);
+		if (core.pipelines.autoSetup(principal).enabled) {
+			if (core.githubApp.installations(principal).some((entry) => entry.orgId === principal.orgId && !entry.suspended))
+				automatic.push('Skiff’s GitHub App');
+			for (const connection of core.forges.list(principal))
+				if (connection.webhooks.some((hook) => hook.scope === 'namespace' && hook.hookId))
+					automatic.push(`a watched ${connection.kind === 'gitlab' ? 'group' : 'organisation'} on ${connection.name}`);
+		}
 	} catch {
 		denied = true;
 	}
