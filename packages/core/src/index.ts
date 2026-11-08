@@ -65,6 +65,7 @@ import { GithubAppService } from './github-app.ts';
 import { FunctionService } from './functions.ts';
 import { TemplateService } from './templates.ts';
 import { BlueprintService } from './blueprints.ts';
+import { IamService } from './iam/service.ts';
 
 export * from './config.ts';
 export * from './context.ts';
@@ -74,6 +75,7 @@ export * from './cron.ts';
 export * from './artifact.ts';
 export * from './object-store.ts';
 export * from './orgs.ts';
+export * from './iam/service.ts';
 export * from './projects.ts';
 export * from './releases.ts';
 export * from './deployments.ts';
@@ -229,6 +231,8 @@ export interface Core {
 	failover: FailoverService;
 	/** Cluster tunables (CLUSTERING). */
 	cluster: ClusterConfigService;
+	/** Identity and access management (IAM.md I1). */
+	iam: IamService;
 	/** Email: Skiff's self-hosted SES (docs/EMAIL.md). */
 	email: EmailService;
 	/** Log drains: forward stored log lines to webhooks and OTLP receivers (DESIGN §8). */
@@ -260,6 +264,7 @@ export function createCore(options: CoreOptions): Core {
 
 	ctx.policies = new PlatformPolicyService(ctx);
 	ctx.audit = new AuditService(ctx);
+	ctx.iam = new IamService(ctx);
 	ctx.quota = new QuotaService(ctx);
 	ctx.projects = new ProjectService(ctx);
 	ctx.releases = new ReleaseService(ctx);
@@ -388,6 +393,7 @@ export function createCore(options: CoreOptions): Core {
 		ingress: ctx.ingress,
 		failover: ctx.failover,
 		cluster: ctx.cluster,
+		iam: ctx.iam,
 		logDrains: new LogDrainService(ctx, options.version),
 	};
 }

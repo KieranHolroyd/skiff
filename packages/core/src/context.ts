@@ -58,6 +58,7 @@ import type { StorageReplicationService } from './storage-replication-service.ts
 import type { IngressHaService } from './ingress-ha.ts';
 import type { FailoverService } from './failover-service.ts';
 import type { ClusterConfigService } from './cluster-config-service.ts';
+import type { IamService } from './iam/service.ts';
 
 /**
  * Shared dependency object. Service instances are attached after construction (in `createCore`)
@@ -149,6 +150,8 @@ export interface CoreContext {
 	failover: FailoverService;
 	/** Cluster tunables (CLUSTERING). */
 	cluster: ClusterConfigService;
+	/** Identity and access management: bindings, roles, groups and the decision cache (IAM.md I1). */
+	iam: IamService;
 	/** Functions: Workers-compatible workloads on workerd (D110). */
 	functions: FunctionService;
 }

@@ -159,7 +159,7 @@ These are Skiff migrations, `0080_iam_*` onward.
 | `iam_roles` | `id`, `org_id` (null = built-in or platform), `name`, `description`, `permissions_json`, `built_in`, `created_by`, `updated_at` |
 | `iam_groups` | `id`, `org_id`, `name`, `description`, `source` (`local`\|`scim`\|`sso`), `external_id` |
 | `iam_group_members` | `group_id`, `user_id`, `source`, `expires_at` |
-| `iam_bindings` | `id`, `org_id` (null = platform), `principal_type` (`user`\|`group`\|`serviceAccount`), `principal_id`, `role_id`, `scope_type`, `scope_id`, `condition_json`, `expires_at`, `reason`, `access_request_id`, `created_by`, `created_at` |
+| `iam_bindings` | `id`, `org_id` (null = platform), `principal_type` (`user`\|`group`\|`serviceAccount`), `principal_id`, `role_id`, `scope_type`, `scope_id`, `scope_parent_id` (the project an environment or resource scope belongs to), `condition_json`, `expires_at`, `reason`, `access_request_id`, `created_by`, `created_at` |
 | `iam_guardrails` | `id`, `org_id` (null = platform), `name`, `principal_selector_json`, `permissions_json`, `scope_type`, `scope_id`, `condition_json`, `enabled` |
 | `service_accounts` | `id` (`sa_…`), `org_id`, `name` (slug, unique per org), `description`, `owner_group_id`, `disabled_at`, `created_by` |
 | `access_keys` | `id`, `org_id`, `principal_type` (`user`\|`serviceAccount`), `principal_id`, `name`, `prefix`, `start`, `hash`, `restriction_json` (permissions + resource limits), `allowed_cidrs`, `expires_at`, `last_used_at`, `last_used_ip_hash`, `created_by`, `revoked_at` |
@@ -172,8 +172,11 @@ These are Skiff migrations, `0080_iam_*` onward.
 | `iam_permission_usage` | `org_id`, `principal_type`, `principal_id`, `permission`, `scope_type`, `scope_id`, `last_used_at`, `count_30d` (daily rollup from audit) |
 
 Better Auth's SSO and SCIM plugins add their own boot-migrated tables (`ssoProvider`,
-`scimProvider`). The `organization.metadata` row gains `iamVersion`. That counter is bumped in the
-same transaction as every IAM write and invalidates compiled grants (§5.2).
+`scimProvider`). `iam_state` holds each org's `iamVersion`; it is bumped in the same transaction as
+every IAM write and invalidates compiled grants (§5.2). A dedicated row is used rather than
+`organization.metadata` because the counter must exist before Better Auth's tables and must survive
+its writes. Built-in roles are seeded as `org_id IS NULL, built_in = 1` rows from the code catalog on
+first use, so the role lists have one source; custom roles live per org.
 
 **Migration of existing data (I0 → I1):**
 
@@ -561,9 +564,14 @@ Started 2026-11-08: I1's catalog and I2's principal v2 are in `packages/contract
 rule, MCP visibility and consent default; the owner/admin split is encoded in the built-in roles but
 no call site reads it yet. `scripts/lint-iam.ts` (in `bun run check`, baseline in
 `scripts/iam-lint-baseline.json`) now fails any new `principal.role` or `principal.kind` check, so the
-existing set can only burn down. Next: the compile/authorize engine (I1), then the call-site
-migration (I2) — it waits for the engine because the token and session rules have to be enforced
-before a role check is removed.
+existing set can only burn down.
+
+The engine is built: the pure `authorize`/`compileGrants` in `packages/contracts/src/iam/authorize.ts`
+and the impure `IamService` in `packages/core/src/iam/service.ts` (bindings, custom roles, groups,
+guardrails, the `iamVersion` cache, `require`/`can`/`scopeFilter`/`explain`), on migration
+`0080_iam.sql`. `member.role` becomes an org binding the first time the engine sees a user, so
+existing access is unchanged. Nothing calls `iam.require` yet. Next: the API and Settings → Access
+surfaces, the table-driven matrix test, then I2's module-by-module threading.
 
 | Phase | Contents | Proposals | Done when |
 |---|---|---|---|

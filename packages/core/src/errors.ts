@@ -46,7 +46,15 @@ export class RateLimitError extends CoreError {
 }
 
 export class ForbiddenError extends CoreError {
-	constructor(readonly permission: string) {
-		super('forbidden', `Missing permission ${permission}`, 403);
+	constructor(
+		readonly permission: string,
+		readonly reason?: string,
+		readonly via?: string,
+	) {
+		super(
+			'forbidden',
+			`Missing permission ${permission}${reason ? ` (${reason})` : ''}`,
+			403,
+		);
 	}
 }
