@@ -12,7 +12,7 @@ import {
 	unitName,
 	validateBuildCommand,
 } from './command.ts';
-import { capture, cloneRef, commitInfo } from './pipeline/git.ts';
+import { capture, cloneRef, commitInfo, withCloneToken } from './pipeline/git.ts';
 import { zipDirectory } from './zip.ts';
 
 type StreamName = 'stdout' | 'stderr';
@@ -168,7 +168,7 @@ export class JobRunner {
 
 			await mkdir(this.config.buildDir, { recursive: true });
 			tempDir = await mkdtemp(join(this.config.buildDir, 'build-'));
-			await cloneRef({ url: job.repoUrl, ref: job.ref, dir: tempDir, credentials: this.config });
+			await cloneRef({ url: job.repoUrl, ref: job.ref, dir: tempDir, credentials: withCloneToken(this.config, job.auth?.password) });
 
 			const info = await commitInfo(tempDir);
 			commitSha = info.sha ?? commitSha;
@@ -246,7 +246,7 @@ export class JobRunner {
 			);
 		} catch (error) {
 			await logs?.stop().catch(() => undefined);
-			const message = redactSecret(errorText(error), this.config.gitToken).slice(0, 4000);
+			const message = redactSecret(redactSecret(errorText(error), this.config.gitToken), job.auth?.password ?? null).slice(0, 4000);
 			console.error(`[builder] ${job.buildId} failed: ${message}`);
 			try {
 				await this.client.report(job.buildId, {

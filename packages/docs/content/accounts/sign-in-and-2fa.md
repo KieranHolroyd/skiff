@@ -34,7 +34,9 @@ Reset links need email. When the operator has not configured SMTP, **Forgot pass
 
 ### Configure GitHub sign-in
 
-GitHub sign-in needs an OAuth app on GitHub and two environment variables on the control plane:
+If a platform admin has created Skiff's [GitHub App](/deploying/github), GitHub sign-in uses the App's OAuth client after the next control-plane restart, and you can skip this section. Environment variables, when set, take precedence over the App.
+
+Otherwise, GitHub sign-in needs an OAuth app on GitHub and two environment variables on the control plane:
 
 ```dotenv
 GITHUB_CLIENT_ID=Iv1.xxxxxxxxxxxxxxxx

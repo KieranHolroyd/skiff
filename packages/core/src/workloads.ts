@@ -317,6 +317,13 @@ export class WorkloadService {
 	 */
 	private assertRunnerResolvable(project: ProjectRow, spec: WorkloadSpec): void {
 		if (!spec.runner) return;
+		if (spec.runner.auth.method === 'installation') {
+			if (!this.ctx.githubApp.hasInstallationFor(project.orgId, spec.runner.owner))
+				throw new ValidationError(
+					`Skiff's GitHub App is not installed on ${spec.runner.owner} for this organisation. Install it from Settings → GitHub, or use a token.`,
+				);
+			return;
+		}
 		const missing = githubRunnerSecretNames(spec.runner).filter(
 			(name) => !this.ctx.secrets.resolve(project.orgId, project.id, name),
 		);

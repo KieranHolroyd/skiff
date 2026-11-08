@@ -8,7 +8,7 @@ Pipelines run workflows from your repository on Skiff's build nodes: tests on ev
 ## Quick start
 
 1. Make sure at least one node has the **Builder** role (**Nodes → Edit node**). Pipelines run on the same nodes as git builds.
-2. In the dashboard open **Pipelines → Add repository**. Give it a name, the clone URL and, for GitHub, a webhook secret of at least 16 characters.
+2. In the dashboard open **Pipelines → Add repository**. Give it a name, the clone URL and, for GitHub, a webhook secret of at least 16 characters. With Skiff's [GitHub App](/deploying/github) installed, pick the repository from the list instead and skip the webhook.
 3. Add a workflow to the repository:
 
    ```yaml
@@ -200,7 +200,8 @@ jobs:
 
 ## Commit statuses, OIDC and Skiff events
 
-- **Commit statuses.** Under **Settings → Commit statuses and isolation**, add a GitHub token with *Commit statuses: write* on the repository. Every run then appears as `skiff/<workflow name>` on its commit and pull request, linking back to the run.
+- **Commit statuses.** Every run appears as `skiff/<workflow name>` on its commit and pull request, linking back to the run, when Skiff's [GitHub App](/deploying/github) covers the repository. Without the App, add a GitHub token with *Commit statuses: write* under **Settings → Commit statuses and isolation**.
+- **`GITHUB_TOKEN`.** With the GitHub App, trusted jobs get `secrets.GITHUB_TOKEN`, a token for the run's repository only (see [GitHub App](/deploying/github#pipelines)).
 - **OIDC tokens.** In a trusted job, `- id: oidc` / `uses: skiff/oidc-token@v1` / `with: { audience: sts.amazonaws.com }` sets `steps.oidc.outputs.token` to a ten-minute ID token for cloud federation (masked in logs), so no cloud keys need to be stored as secrets. The issuer is `https://<your Skiff>/api/pipeline/oidc` (discovery at `/.well-known/openid-configuration`, keys at `/jwks`). The `sub` claim follows GitHub's format: `repo:<org>/<repository>:environment:<env>`, `…:pull_request` or `…:ref:<ref>`, so existing trust policies translate directly. Untrusted runs cannot get one.
 - **Skiff events.** `on: { skiff_event: { types: [deployments.failed] } }` starts a workflow on the default branch when a Skiff event happens in your organisation: `deployments.created`, `deployments.promoted`, `deployments.failed`, `alerts.firing`, `alerts.resolved`, `database-backups.completed` or `database-backups.failed`. The event is available as `skiff.event`. Leave `types` empty to run on every event.
 

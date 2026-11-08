@@ -167,7 +167,7 @@ export const githubRunnerTemplateInputSchema = z
 		memoryMb: positiveIntFromForm(256, 8192).default(2048),
 		cpus: z.coerce.number().positive().max(8).default(2),
 		image: z.string().trim().min(1).max(512).default(GITHUB_RUNNER_DEFAULT_IMAGE),
-		auth: z.enum(['pat', 'app']).default('pat'),
+		auth: z.enum(['pat', 'app', 'installation']).default('pat'),
 		/** PAT value to store as a new project secret. */
 		token: z.string().trim().max(512).optional().or(z.literal('').transform(() => undefined)),
 		/** Or the name of an existing project/org secret holding the PAT or the App key. */
@@ -190,7 +190,7 @@ export const githubRunnerTemplateInputSchema = z
 					path: ['token'],
 					message: 'Paste a token or name an existing secret (one of the two).',
 				});
-		} else {
+		} else if (input.auth === 'app') {
 			if (!input.appId) ctx.addIssue({ code: 'custom', path: ['appId'], message: 'Enter the GitHub App ID.' });
 			if (!input.installationId)
 				ctx.addIssue({ code: 'custom', path: ['installationId'], message: 'Enter the installation ID.' });
@@ -205,6 +205,8 @@ export const githubRunnerTemplateInputSchema = z
 			ctx.addIssue({ code: 'custom', path: ['token'], message: 'A token is only used with PAT authentication.' });
 		if (input.privateKey && input.auth !== 'app')
 			ctx.addIssue({ code: 'custom', path: ['privateKey'], message: 'A private key is only used with GitHub App authentication.' });
+		if (input.existingSecret && input.auth === 'installation')
+			ctx.addIssue({ code: 'custom', path: ['existingSecret'], message: 'Skiff’s GitHub App needs no secret.' });
 	});
 export type GithubRunnerTemplateInput = z.input<typeof githubRunnerTemplateInputSchema>;
 
@@ -276,6 +278,11 @@ export const githubRunnerTemplate: AppTemplate = {
 			options: [
 				{ value: 'pat', label: 'Personal access token', description: 'Quickest to set up. Fine-grained tokens are scoped to the repository or organisation.' },
 				{ value: 'app', label: 'GitHub App', description: 'Not tied to a person; GitHub issues short-lived tokens.' },
+				{
+					value: 'installation',
+					label: 'Skiff’s GitHub App',
+					description: 'The App connected in Settings → GitHub, installed on this owner. Nothing to paste.',
+				},
 			],
 		},
 		{
@@ -374,6 +381,8 @@ export function buildGithubRunnerTemplate(raw: unknown, options: TemplateBuildOp
 		if (input.token) secrets.push({ name: tokenSecret, value: input.token });
 		else requiredSecrets.push(tokenSecret);
 		auth = { method: 'pat', tokenSecret };
+	} else if (input.auth === 'installation') {
+		auth = { method: 'installation' };
 	} else {
 		const privateKeySecret = input.existingSecret ?? suffixed(GITHUB_RUNNER_APP_KEY_SECRET, options);
 		if (input.privateKey) secrets.push({ name: privateKeySecret, value: `${input.privateKey.trim()}\n` });

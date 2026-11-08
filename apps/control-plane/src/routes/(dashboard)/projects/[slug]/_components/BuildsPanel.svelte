@@ -2,7 +2,7 @@
 	import DetailList from '#lib/components/skiff/DetailList.svelte';
 	import { resolve } from '$app/paths';
 	import type { ProjectView } from '@skiff/core';
-	import type { BuildView, GitSourceView } from '@skiff/contracts';
+	import type { BuildView, GitSourceView, GithubRepositoryView } from '@skiff/contracts';
 	import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right';
 	import CircleSlashIcon from '@lucide/svelte/icons/circle-slash';
 	import GitBranchIcon from '@lucide/svelte/icons/git-branch';
@@ -18,6 +18,8 @@
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
 	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
+	import GithubRepoPicker from '#lib/components/skiff/GithubRepoPicker.svelte';
+	import GitHubMark from '#lib/components/skiff/GitHubMark.svelte';
 	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
@@ -66,9 +68,23 @@
 		builds.filter((build) => build.status === 'queued' || build.status === 'building').length
 	);
 
+	// The source form's repository fields; a GitHub pick fills them.
+	let repoValue = $state('');
+	let branchValue = $state('main');
+	let pickedRepo = $state('');
+
 	function openSource() {
 		sourceEnabled = gitSource?.enabled ?? true;
+		repoValue = gitSource?.repoUrl ?? '';
+		branchValue = gitSource?.branch ?? 'main';
+		pickedRepo = '';
 		sourceOpen = true;
+	}
+
+	function pickRepo(repo: GithubRepositoryView) {
+		pickedRepo = repo.fullName;
+		repoValue = repo.cloneUrl;
+		branchValue = repo.defaultBranch;
 	}
 
 	function openBuild() {
@@ -233,9 +249,17 @@
 					</dd>
 				</DetailList>
 				<p class="mt-3 flex items-start gap-2 text-xs text-muted-foreground">
-					<WebhookIcon class="mt-0.5 size-3.5 shrink-0" />
+					{#if gitSource.githubAppInstallationId}
+						<GitHubMark class="mt-0.5 size-3.5 shrink-0" />
+					{:else}
+						<WebhookIcon class="mt-0.5 size-3.5 shrink-0" />
+					{/if}
 					<span>
-						{#if gitSource.hasWebhookSecret}
+						{#if gitSource.githubAppInstallationId}
+							Connected through Skiff’s GitHub App: pushes arrive without this webhook, private
+							clones need no node token, and each build reports a commit status and a GitHub
+							deployment. A hand-made webhook for the same repository is ignored.
+						{:else if gitSource.hasWebhookSecret}
 							Signed deliveries only. Add the webhook in GitHub and use the same secret you set
 							here.
 						{:else}
@@ -407,12 +431,13 @@
 		submitLabel={gitSource ? 'Save source' : 'Connect repository'}
 	>
 		<Field.Group>
+			<GithubRepoPicker onpick={pickRepo} selected={pickedRepo} />
 			<Field.Field>
 				<Field.Label for="git-repo">Repository URL</Field.Label>
 				<Input
 					id="git-repo"
 					name="repoUrl"
-					value={gitSource?.repoUrl ?? ''}
+					bind:value={repoValue}
 					placeholder="https://github.com/acme/site.git"
 					required
 					autocapitalize="off"
@@ -420,8 +445,9 @@
 					class="font-mono text-sm"
 				/>
 				<Field.Description>
-					Public HTTPS, SSH or git URL. A private repository needs a credential on each Builder
-					node: <code class="font-mono text-xs">SKIFF_GIT_TOKEN</code> for HTTPS, or
+					Public HTTPS, SSH or git URL. Repositories Skiff’s GitHub App can see clone without any
+					setup. Any other private repository needs a credential on each Builder node:
+					<code class="font-mono text-xs">SKIFF_GIT_TOKEN</code> for HTTPS, or
 					<code class="font-mono text-xs">SKIFF_GIT_SSH_KEY</code> for SSH.
 					<a
 						class="underline underline-offset-2"
@@ -436,7 +462,7 @@
 					<Input
 						id="git-branch"
 						name="branch"
-						value={gitSource?.branch ?? 'main'}
+						bind:value={branchValue}
 						placeholder="main"
 						required
 						class="font-mono text-sm"

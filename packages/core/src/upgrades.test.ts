@@ -126,7 +126,19 @@ describe('preflight rules', () => {
 		});
 		expect(plan.ok).toBe(false);
 		expect(plan.migrations.destructive).toBe(true);
-		expect(plan.errors.join(' ')).toMatch(/Destructive migration 0003_drop_old\.sql/);
+		expect(plan.errors.join(' ')).toMatch(/Destructive migration 0003_drop_old\.sql \(DROP TABLE on line 1\)/);
+		expect(plan.errors.join(' ')).toMatch(/Settings → Updates → Review and approve.*skiff-update-self --allow-destructive/);
+
+		// Approving by id covers exactly the named migrations.
+		const byId = (approved: string[]) =>
+			evaluateUpgradePreflight({
+				...base,
+				migrations: [migration('0003_drop_old.sql', 'DROP TABLE old;'), migration('0004_drop_more.sql', 'ALTER TABLE t DROP COLUMN c;')],
+				appliedMigrations: [],
+				approvedDestructiveMigrations: approved
+			});
+		expect(byId(['0003_drop_old.sql']).errors.join(' ')).toMatch(/Destructive migration 0004_drop_more\.sql \(DROP COLUMN on line 1\)/);
+		expect(byId(['0003_drop_old.sql', '0004_drop_more.sql']).ok).toBe(true);
 
 		const approved = evaluateUpgradePreflight({
 			...base,

@@ -70,7 +70,8 @@
 - [ ] Git builds on the homelab Builder + GitHub webhooks
 - [x] Pipelines WP1 ([PIPELINES.md](./PIPELINES.md), D148–D153): GitHub-Actions-shaped workflows on build nodes (DAG, matrix, secrets, environments + approvals, fork trust, artifacts, caches, schedules, `skiff/deploy`), dashboard, REST, CLI, MCP
 - [x] Pipelines WP2–WP6 (D151, D160–D162): helper-started job containers, per-job BuildKit, isolation tiers (container/gVisor/microVM), reusable workflows, remote/composite/JS actions, commit statuses, OIDC, `skiff_event`, `skif workflow run --local`, Skiff's release workflow ported
-- [ ] Pipelines next: microVM tier on real KVM, a container-safe release canary (then retire GitHub Actions for releases), GitHub App check runs, remote reusable workflows
+- [x] GitHub App ([GITHUB.md](./GITHUB.md), D163–D166): one-click manifest registration, OAuth-verified installation linking, repo-scoped clone tokens for builds and pipelines, App webhook replacing per-repo webhooks, commit statuses, GitHub deployments, `secrets.GITHUB_TOKEN`, runner auth, repository pickers, sign-in fallback
+- [ ] Pipelines next: microVM tier on real KVM, a container-safe release canary (then retire GitHub Actions for releases), GitHub App check runs and PR comments, remote reusable workflows
 - [ ] Custom domains (TXT verify, on-demand TLS, Cloudflare auto-records, apex↔www)
 - [ ] `ObjectStore`: local fs, Garage/MinIO, multi-target replication
 - [ ] Optional `docker` runtime driver

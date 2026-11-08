@@ -30,10 +30,16 @@ export interface HelperMount {
 export interface HelperDevice {
 	id: string;
 	name: string;
+	type: string;
+	/** Kernel name of the device this one sits on (a partition's disk). */
+	parent: string | null;
 	model: string | null;
 	serial: string | null;
 	sizeBytes: number;
 	fsType: string | null;
+	/** Filesystem UUID. */
+	uuid: string | null;
+	label: string | null;
 	mountPath: string | null;
 	holders: string[];
 	free: boolean;
@@ -248,6 +254,7 @@ export interface LsblkNode {
 	kname: string;
 	type: string;
 	uuid: string | null;
+	label: string | null;
 	mountPath: string | null;
 	serial: string | null;
 	model: string | null;
@@ -256,7 +263,7 @@ export interface LsblkNode {
 	children: LsblkNode[];
 }
 
-/** Parse `lsblk -J -b -o NAME,KNAME,TYPE,UUID,MOUNTPOINT,SERIAL,MODEL,SIZE,FSTYPE`. */
+/** Parse `lsblk -J -b -o NAME,KNAME,TYPE,UUID,LABEL,MOUNTPOINT,SERIAL,MODEL,SIZE,FSTYPE`. */
 export function parseLsblk(stdout: string): LsblkNode[] {
 	let parsed: unknown;
 	try {
@@ -274,6 +281,7 @@ export function parseLsblk(stdout: string): LsblkNode[] {
 			kname: text(row, 'kname', 'Kname') ?? name,
 			type: (text(row, 'type', 'Type') ?? '').toLowerCase(),
 			uuid: text(row, 'uuid', 'UUID'),
+			label: text(row, 'label', 'Label'),
 			mountPath: text(row, 'mountpoint', 'Mountpoint'),
 			serial: text(row, 'serial', 'Serial'),
 			model: text(row, 'model', 'Model'),
@@ -376,11 +384,18 @@ export function inventoryFrom(
 	return { generatedAt: now.toISOString(), mounts, devices: freeDevices(lsblk) };
 }
 
+/** Device types reported to the control plane; loop, rom and zram noise is left out. */
+function reportedType(type: string): boolean {
+	return type === 'disk' || type === 'part' || type === 'lvm' || type === 'crypt' || type.startsWith('raid');
+}
+
 function freeDevices(nodes: LsblkNode[]): HelperDevice[] {
 	const out: HelperDevice[] = [];
-	const walk = (node: LsblkNode): void => {
-		const diskLike = node.type === 'disk' || node.type === 'part';
-		if (diskLike) {
+	const seen = new Set<string>();
+	const walk = (node: LsblkNode, parent: LsblkNode | null): void => {
+		// A RAID array or LV shared by several members appears under each; report it once.
+		if (reportedType(node.type) && !/^(zram|loop|ram)\d/.test(node.name) && !seen.has(node.kname)) {
+			seen.add(node.kname);
 			const holders = node.children.map((child) => child.name);
 			const used =
 				node.mountPath !== null ||
@@ -391,19 +406,23 @@ function freeDevices(nodes: LsblkNode[]): HelperDevice[] {
 				node.type.startsWith('raid');
 			out.push({
 				id: node.serial ?? `dev:${node.name}`,
-				name: `/dev/${node.name}`,
+				name: node.type === 'lvm' || node.type === 'crypt' ? `/dev/mapper/${node.name}` : `/dev/${node.name}`,
+				type: node.type,
+				parent: parent?.name ?? null,
 				model: node.model,
 				serial: node.serial,
 				sizeBytes: node.sizeBytes,
 				fsType: node.fsType,
-				mountPath: node.mountPath,
+				uuid: node.uuid,
+				label: node.label,
+				mountPath: node.mountPath === null ? null : node.mountPath === '[SWAP]' ? node.mountPath : normalizePath(node.mountPath),
 				holders,
 				free: !used,
 			});
 		}
-		for (const child of node.children) walk(child);
+		for (const child of node.children) walk(child, node);
 	};
-	for (const node of nodes) walk(node);
+	for (const node of nodes) walk(node, null);
 	return out;
 }
 
@@ -497,7 +516,7 @@ export interface VolumeRunner {
 export const FINDMNT = '/usr/bin/findmnt';
 export const LSBLK = '/usr/bin/lsblk';
 const FINDMNT_ARGS = ['-J', '-b', '-o', 'TARGET,SOURCE,FSTYPE,UUID,LABEL,SIZE,AVAIL,OPTIONS'];
-const LSBLK_ARGS = ['-J', '-b', '-o', 'NAME,KNAME,TYPE,UUID,MOUNTPOINT,SERIAL,MODEL,SIZE,FSTYPE'];
+const LSBLK_ARGS = ['-J', '-b', '-o', 'NAME,KNAME,TYPE,UUID,LABEL,MOUNTPOINT,SERIAL,MODEL,SIZE,FSTYPE'];
 
 /** Read the current mounts and block devices. Read-only; safe to call every minute. */
 export async function readInventory(runner: VolumeRunner, now: Date = new Date()): Promise<HelperInventory> {

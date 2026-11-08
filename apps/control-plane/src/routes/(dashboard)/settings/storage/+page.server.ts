@@ -90,6 +90,32 @@ export const actions: Actions = {
 		}, pool ? `“${name}” adopted into “${pool}”.` : `“${name}” adopted.`);
 	},
 
+	/** Mount an unmounted partition by UUID at /mnt/skiff-disks/<name>, then adopt it (docs/VOLUMES.md §3.1). */
+	mountPartition: async ({ request, locals }) => {
+		const data = await request.formData();
+		const name = formString(data, 'name');
+		const pool = formString(data, 'pool');
+		return act(
+			() =>
+				core.diskMounts.mount(locals.principal!, formString(data, 'nodeId'), {
+					fsUuid: formString(data, 'fsUuid'),
+					name,
+					pool: pool || null,
+					defaultVolume: formBoolean(data, 'defaultVolume'),
+				}),
+			`Mounting the partition as “${name}”. It becomes a volume${pool ? ` in “${pool}”` : ''} once the node reports it, usually within a minute.`,
+		);
+	},
+
+	/** Unregister the volume (refused while anything is on it) and unmount the partition. */
+	unmountPartition: async ({ request, locals }) => {
+		const data = await request.formData();
+		return act(
+			() => core.diskMounts.unmount(locals.principal!, formString(data, 'nodeId'), formString(data, 'id')),
+			'Unmounting the partition. Its files stay on the disk.',
+		);
+	},
+
 	saveDefaults: async ({ request, locals }) => {
 		const data = await request.formData();
 		const defaults: StorageDefaultInput[] = storageKinds.map((kind: StorageKind) => ({

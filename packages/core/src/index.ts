@@ -22,6 +22,7 @@ import { AlertService } from './alerts.ts';
 import { TopologyService } from './topology.ts';
 import { ServiceEndpointService } from './service-endpoints.ts';
 import { ShareService } from './shares.ts';
+import { DiskMountService } from './disk-mounts.ts';
 import { StoragePoolService } from './storage-pools.ts';
 import { RegistryCredentialService } from './registry-credentials.ts';
 import { RegistryService } from './registry.ts';
@@ -55,10 +56,12 @@ import { EnvironmentService } from './environments.ts';
 import { SourceService } from './source.ts';
 import { createOperationService, type OperationService } from './operations/index.ts';
 import { SchedulerService } from './scheduler.ts';
+import { FlowService } from './flows/service.ts';
 import { ServiceActionsService } from './service-actions.ts';
 import { BackupTargetService } from './backup-targets.ts';
 import { UpgradeService } from './upgrades.ts';
 import { GithubRunnerService } from './github-runners.ts';
+import { GithubAppService } from './github-app.ts';
 import { FunctionService } from './functions.ts';
 import { TemplateService } from './templates.ts';
 import { BlueprintService } from './blueprints.ts';
@@ -93,6 +96,7 @@ export * from './workloads.ts';
 export * from './functions.ts';
 export * from './runtime-tier.ts';
 export * from './github-runners.ts';
+export * from './github-app.ts';
 export * from './templates.ts';
 export * from './databases.ts';
 export * from './database-studio.ts';
@@ -129,6 +133,7 @@ export * from './notify-chat.ts';
 export * from './telemetry.ts';
 export * from './operations/index.ts';
 export * from './scheduler.ts';
+export * from './flows/index.ts';
 export * from './usage.ts';
 export * from './service-actions.ts';
 export * from './backup-targets.ts';
@@ -189,11 +194,14 @@ export interface Core {
 	operations: OperationService;
 	blueprints: BlueprintService;
 	scheduler: SchedulerService;
+	flows: FlowService;
 	serviceActions: ServiceActionsService;
 	backupTargets: BackupTargetService;
 	usage: UsageService;
 	upgrades: UpgradeService;
 	githubRunners: GithubRunnerService;
+	/** Skiff's GitHub App (docs/GITHUB.md). */
+	githubApp: GithubAppService;
 	templates: TemplateService;
 	/** Functions: Workers-compatible workloads on workerd (D110). */
 	functions: FunctionService;
@@ -203,6 +211,8 @@ export interface Core {
 	endpoints: ServiceEndpointService;
 	/** Cluster shares (CLUSTERING §5.2, C3). */
 	shares: ShareService;
+	/** Local partitions mounted by UUID and adopted as volumes (docs/VOLUMES.md §3.1). */
+	diskMounts: DiskMountService;
 	/** Storage pools and placement rules (docs/STORAGE.md, D144). */
 	storagePools: StoragePoolService;
 	/** Credentials for external container registries (docs/REGISTRY.md R2). */
@@ -280,6 +290,7 @@ export function createCore(options: CoreOptions): Core {
 	ctx.operations = createOperationService(ctx);
 	ctx.blueprints = new BlueprintService(ctx);
 	ctx.scheduler = new SchedulerService(ctx);
+	ctx.flows = new FlowService(ctx);
 	ctx.serviceActions = new ServiceActionsService(ctx);
 	ctx.backupTargets = new BackupTargetService(ctx);
 	ctx.usage = new UsageService(ctx);
@@ -288,11 +299,13 @@ export function createCore(options: CoreOptions): Core {
 		agentVersion: options.config.desiredAgentVersion ?? null
 	});
 	ctx.githubRunners = new GithubRunnerService(ctx);
+	ctx.githubApp = new GithubAppService(ctx);
 	ctx.templates = new TemplateService(ctx);
 	ctx.functions = new FunctionService(ctx);
 	ctx.topology = new TopologyService(ctx);
 	ctx.endpoints = new ServiceEndpointService(ctx);
 	ctx.shares = new ShareService(ctx);
+	ctx.diskMounts = new DiskMountService(ctx);
 	ctx.storagePools = new StoragePoolService(ctx);
 	ctx.registryCredentials = new RegistryCredentialService(ctx);
 	ctx.registry = new RegistryService(ctx);
@@ -301,6 +314,8 @@ export function createCore(options: CoreOptions): Core {
 	ctx.ingress = new IngressHaService(ctx);
 	ctx.failover = new FailoverService(ctx);
 	ctx.cluster = new ClusterConfigService(ctx);
+	// Flow definitions register once every service exists, so their steps can call any of them.
+	ctx.flows.register(ctx.moves.databaseMoveFlow());
 	const source = new SourceService(ctx);
 
 	const deploy = new DeployService(ctx);
@@ -352,16 +367,19 @@ export function createCore(options: CoreOptions): Core {
 		operations: ctx.operations,
 		blueprints: ctx.blueprints,
 		scheduler: ctx.scheduler,
+		flows: ctx.flows,
 		serviceActions: ctx.serviceActions,
 		backupTargets: ctx.backupTargets,
 		usage: ctx.usage,
 		upgrades: ctx.upgrades,
 		githubRunners: ctx.githubRunners,
+		githubApp: ctx.githubApp,
 		templates: ctx.templates,
 		functions: ctx.functions,
 		topology: ctx.topology,
 		endpoints: ctx.endpoints,
 		shares: ctx.shares,
+		diskMounts: ctx.diskMounts,
 		storagePools: ctx.storagePools,
 		registryCredentials: ctx.registryCredentials,
 		registry: ctx.registry,

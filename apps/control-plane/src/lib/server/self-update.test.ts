@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -12,8 +12,14 @@ const requestFile = join(dir, 'request');
 process.env.SKIFF_UPDATE_REQUEST_FILE = requestFile;
 // `version.ts` reads the build-time constant at module load.
 (globalThis as { __SKIFF_VERSION__?: string }).__SKIFF_VERSION__ = '0.0.0';
-const { currentChannel, latestVersion, parseUpdateLog, readUpdateLog, requestUpdate } =
-	await import('./self-update.js');
+const {
+	approvalsFromForm,
+	currentChannel,
+	latestVersion,
+	parseUpdateLog,
+	readUpdateLog,
+	requestUpdate
+} = await import('./self-update.js');
 
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -129,5 +135,43 @@ describe('release channels', () => {
 		expect(readFileSync(`${requestFile}.channel`, 'utf8')).toBe('stable\n');
 		expect(readFileSync(`${requestFile}.mode`, 'utf8')).toBe('download\n');
 		expect(JSON.parse(readFileSync(requestFile, 'utf8'))).toMatchObject({ channel: 'stable' });
+	});
+});
+
+describe('approving destructive migrations', () => {
+	const sha = 'c'.repeat(64);
+	const reported = {
+		version: '0.11.8',
+		migrations: [
+			{
+				id: '0074_pipelines_phase2.sql',
+				sha256: sha,
+				statements: [{ line: 33, statement: 'DROP TABLE' }],
+				sql: 'DROP TABLE x;',
+				truncated: false
+			}
+		]
+	};
+
+	test('accepts only migrations the updater reported, with the same SQL hash', () => {
+		expect(approvalsFromForm([], undefined)).toEqual([]);
+		expect(approvalsFromForm([`0074_pipelines_phase2.sql ${sha}`], reported)).toEqual([
+			{ id: '0074_pipelines_phase2.sql', sha256: sha }
+		]);
+		expect(approvalsFromForm([`0074_pipelines_phase2.sql ${'d'.repeat(64)}`], reported)).toBeNull();
+		expect(approvalsFromForm([`0099_other.sql ${sha}`], reported)).toBeNull();
+		expect(approvalsFromForm([`0074_pipelines_phase2.sql ${sha}`], undefined)).toBeNull();
+	});
+
+	test('the approval travels with its request only', () => {
+		const principal = { kind: 'user', userId: 'u1' } as Parameters<typeof requestUpdate>[0];
+		requestUpdate(principal, '0.11.8', 'download', 'stable', [
+			{ id: '0074_pipelines_phase2.sql', sha256: sha }
+		]);
+		expect(readFileSync(`${requestFile}.approve`, 'utf8')).toBe(
+			`0074_pipelines_phase2.sql ${sha}\n`
+		);
+		requestUpdate(principal, '0.11.8', 'download', 'stable');
+		expect(existsSync(`${requestFile}.approve`)).toBe(false);
 	});
 });

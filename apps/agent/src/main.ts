@@ -28,6 +28,7 @@ import { controlSocketFetch } from './control-socket.ts';
 import { DatabaseBackupRunner } from './database-backups.ts';
 import { AppVolumeRunner } from './app-volumes.ts';
 import { ShareMountRunner } from './share-mounts.ts';
+import { DiskMountRunner } from './disk-mounts.ts';
 import { VolumeProfileRunner } from './volume-profiles.ts';
 import { DatabasePitrRunner } from './database-pitr.ts';
 import { DatabaseCredentialRunner } from './database-credentials.ts';
@@ -124,6 +125,7 @@ class AgentRuntime {
 	private readonly appVolumes: AppVolumeRunner;
 	/** Network share mounts under /mnt/skiff-shares (docs/VOLUMES.md §5). */
 	private readonly shareMounts: ShareMountRunner;
+	private readonly diskMounts: DiskMountRunner;
 	/** Storage benchmarks of node volumes (docs/STORAGE.md §5). */
 	private readonly volumeProfiles: VolumeProfileRunner;
 	private readonly databasePitr: DatabasePitrRunner;
@@ -253,6 +255,7 @@ class AgentRuntime {
 			helper: this.helper,
 			log,
 		});
+		this.diskMounts = new DiskMountRunner({ helper: this.helper, log });
 		this.databasePitr = new DatabasePitrRunner({
 			controlUrl: config.controlUrl,
 			nodeToken: config.nodeToken,
@@ -749,8 +752,9 @@ class AgentRuntime {
 				await this.releases.activate(route.projectId, route.release);
 		}
 
-		// Shares first: a volume linked to a share must be mounted before a workload on it starts.
+		// Shares and partitions first: a volume on one must be mounted before a workload on it starts.
 		await this.convergeShareMounts(state);
+		await this.convergeDiskMounts(state);
 
 		// The helper needs the registered volumes before it can resolve a volume-backed data dir
 		// (D74). A failure is logged; affected workloads then fail closed at start (D76).
@@ -942,14 +946,25 @@ class AgentRuntime {
 		}
 	}
 
-	/** Re-check share mounts between reconciles: retries failures and notices a dropped mount. */
+	/** Mount missing partitions and unmount removed ones; a change refreshes the volume inventory. */
+	private async convergeDiskMounts(state: DesiredState): Promise<void> {
+		try {
+			// Adoption keys off the inventory, so re-read it on the next heartbeat.
+			if (await this.diskMounts.runOnce(state, this.shutdownController.signal)) this.volumeInventoryAt = 0;
+		} catch (error) {
+			log('error', `Partition mount converge failed: ${errorText(error)}`);
+		}
+	}
+
+	/** Re-check share and partition mounts between reconciles: retries failures, notices drops. */
 	private async shareMountLoop(): Promise<void> {
 		while (this.running) {
 			await sleep(15_000, this.shutdownController.signal).catch(() => undefined);
 			if (!this.running) break;
 			const state = this.desired;
-			if (!state || (state.shareMounts.length === 0 && state.shareUnmounts.length === 0)) continue;
-			await this.convergeShareMounts(state);
+			if (!state) continue;
+			if (state.shareMounts.length > 0 || state.shareUnmounts.length > 0) await this.convergeShareMounts(state);
+			if (state.diskMounts.length > 0 || state.diskUnmounts.length > 0) await this.convergeDiskMounts(state);
 		}
 	}
 
@@ -1132,6 +1147,7 @@ class AgentRuntime {
 		const purgedBrokers = this.workloads.pendingPurgedBrokers();
 		const appVolumeReport = this.appVolumes.pending();
 		const shareMountReport = this.shareMounts.report();
+		const diskMountReport = this.diskMounts.report();
 		const volumeProfileResults = this.volumeProfiles.results();
 		const volumeInventory = await this.volumeInventoryForHeartbeat();
 		const backupResults = this.databaseBackups.pendingResults();
@@ -1194,6 +1210,8 @@ class AgentRuntime {
 			...(volumeInventory ? { volumes: volumeInventory } : {}),
 			...(shareMountReport.shareMounts.length > 0 ? { shareMounts: shareMountReport.shareMounts } : {}),
 			...(shareMountReport.unmountedShares.length > 0 ? { unmountedShares: shareMountReport.unmountedShares } : {}),
+			...(diskMountReport.diskMounts.length > 0 ? { diskMounts: diskMountReport.diskMounts } : {}),
+			...(diskMountReport.unmountedDisks.length > 0 ? { unmountedDisks: diskMountReport.unmountedDisks } : {}),
 			...(volumeProfileResults.length > 0 ? { volumeProfileResults } : {}),
 		};
 
@@ -1229,6 +1247,7 @@ class AgentRuntime {
 		this.workloads.acknowledgePurgedBrokers(purgedBrokers);
 		this.appVolumes.acknowledge(appVolumeReport);
 		this.shareMounts.acknowledgeUnmounted(shareMountReport.unmountedShares);
+		this.diskMounts.acknowledgeUnmounted(diskMountReport.unmountedDisks);
 		this.volumeProfiles.acknowledge(volumeProfileResults);
 		this.storageAdmin.acknowledgeBucketDeletions(storageBucketDeletions);
 		this.storageAdmin.acknowledgeBucketConfigs(storageBucketConfigs);

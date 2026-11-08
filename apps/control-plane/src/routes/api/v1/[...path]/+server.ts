@@ -21,6 +21,9 @@ import {
 	operationCreateSchema,
 	operationKinds,
 	operationStatuses,
+	flowStatuses,
+	isFlowId,
+	type FlowStatus,
 	volumeAdoptSchema,
 	volumeUpdateSchema,
 	shareCreateSchema,
@@ -240,7 +243,34 @@ const api: RequestHandler = async (event) => {
 			}
 			if (segments.length === 2 && segments[1] === 'actions' && method === 'GET')
 				return { actions: core.operations.actions(principal) };
+			// Flows (docs/FLOWS.md §5): durable multi-step changes share this async-operation
+			// contract. `flw_` ids answer `{ flow }`; `?wait=` holds until terminal; `?steps=1` adds
+			// the step log; `POST …/cancel` cancels where the flow allows it.
+			if (segments.length === 2 && segments[1] === 'flows' && method === 'GET') {
+				const kind = params.get('kind');
+				const status = params.get('status');
+				const subjectKind = params.get('subjectKind');
+				const subjectId = params.get('subjectId');
+				return {
+					flows: core.flows.list(principal, {
+						...(kind ? { kind } : {}),
+						...(status && (flowStatuses as readonly string[]).includes(status) ? { status: status as FlowStatus } : {}),
+						...(subjectKind && subjectId ? { subject: { kind: subjectKind, id: subjectId } } : {}),
+						...(Number(params.get('limit')) > 0 ? { limit: Number(params.get('limit')) } : {}),
+					}),
+				};
+			}
 			const id = segments[1]!;
+			if (isFlowId(id)) {
+				const steps = params.get('steps') === '1';
+				if (segments.length === 2 && method === 'GET') {
+					if (waitMs) await core.flows.wait(principal, id, waitMs);
+					return { flow: core.flows.get(principal, id, { steps }) };
+				}
+				if (segments.length === 3 && segments[2] === 'cancel' && method === 'POST')
+					return { flow: core.flows.cancel(principal, id) };
+				return json({ error: 'not_found' }, 404);
+			}
 			if (segments.length === 2 && method === 'GET') {
 				const operation = await settle(core.operations.get(principal, id));
 				if (!params.get('items')) return { operation };

@@ -28,6 +28,7 @@ import type { HelperInventory, VerifyResult } from './volumes.ts';
 import { NodeUpdateError, parseNodeUpdateRequest, type NodeUpdateRequest, type NodeUpdateResult } from './node-update.ts';
 import type { WireguardStatus } from './wireguard.ts';
 import type { ShareMount, ShareMountStatus } from './shares.ts';
+import type { DiskMountRequest, DiskMountStatus } from './disks.ts';
 import type { VolumeProfileRequest, VolumeProfileResult } from './volume-profile.ts';
 import { CONSOLE_SHELLS, ConsoleError, type ConsoleShell, type ContainerConsole } from './container-console.ts';
 import { ContainerFileError } from './container-files.ts';
@@ -144,6 +145,12 @@ export interface HandlerOptions {
 		unmount(id: string): Promise<{ id: string; mounted: boolean; error: string | null }>;
 		status(ids: string[]): Promise<ShareMountStatus[]>;
 	};
+	/** Partition mount verbs (docs/VOLUMES.md §3.1); absent on a helper that predates them. */
+	disks?: {
+		mount(request: DiskMountRequest): Promise<DiskMountStatus>;
+		unmount(id: string): Promise<{ id: string; mounted: boolean; error: string | null }>;
+		status(ids: string[]): Promise<DiskMountStatus[]>;
+	};
 	/** Container console verbs (D127); absent on a helper that predates them. */
 	containers?: ContainerConsole;
 	/** App-volume usage, purge, snapshot and restore (docs/VOLUMES.md §14); absent = 404. */
@@ -248,6 +255,31 @@ export function createHandler(
 				}
 				const id = assertString(body.id, 'id', { max: 100 });
 				return json({ ok: true, ...(await options.shares.unmount(id)) });
+			}
+
+			// --- partition mounts (VOLUMES §3.1): a UUID and a name in, fixed mount, no shell -----
+			if (path === '/v1/disks/mount' || path === '/v1/disks/unmount' || path === '/v1/disks/status') {
+				if (method !== 'POST') return methodNotAllowed('POST');
+				if (!options.disks) return json({ error: 'partition mounts are not available on this helper' }, 404);
+				const body = assertRecord(await readJson(request, maxBodyBytes), 'request');
+				if (path === '/v1/disks/status') {
+					if (!Array.isArray(body.ids) || body.ids.length > 100) throw new ValidationError('ids must be an array of at most 100');
+					const ids = body.ids.map((id, index) => assertString(id, `ids[${index}]`, { max: 100 }));
+					return json({ ok: true, disks: await options.disks.status(ids) });
+				}
+				if (path === '/v1/disks/mount') {
+					const disk = assertRecord(body.disk, 'disk');
+					return json({
+						ok: true,
+						disk: await options.disks.mount({
+							id: assertString(disk.id, 'disk.id', { max: 100 }),
+							fsUuid: assertString(disk.fsUuid, 'disk.fsUuid', { max: 64 }),
+							fsType: assertString(disk.fsType, 'disk.fsType', { max: 32 }),
+						}),
+					});
+				}
+				const id = assertString(body.id, 'id', { max: 100 });
+				return json({ ok: true, ...(await options.disks.unmount(id)) });
 			}
 
 			// --- native database studio (plan 22): start/stop one fixed unit, nothing else -----
@@ -746,7 +778,7 @@ export interface RunningHelper {
 export async function startHelperServer(
 	config: HelperConfig,
 	runtime: HelperRuntime,
-	extras: Pick<HandlerOptions, 'nodeUpdate' | 'wireguard' | 'shares' | 'containers' | 'appVolumes' | 'jobs' | 'pipelineJobs' | 'volumeProfiler'> = {},
+	extras: Pick<HandlerOptions, 'nodeUpdate' | 'wireguard' | 'shares' | 'disks' | 'containers' | 'appVolumes' | 'jobs' | 'pipelineJobs' | 'volumeProfiler'> = {},
 ): Promise<RunningHelper> {
 	const directory = dirname(config.socketPath);
 	const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;

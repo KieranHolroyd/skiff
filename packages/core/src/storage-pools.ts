@@ -1,6 +1,7 @@
 import { and, desc, eq, inArray, lt } from 'drizzle-orm';
 import { nodeVolumes, nodes, settings, storagePools, storageRules, volumeProfiles } from '@skiff/db';
 import {
+	DISK_MOUNT_CAPABILITY,
 	SYSTEM_POOL,
 	VOLUME_PROFILE_CAPABILITY,
 	canAdministerPlatform,
@@ -36,6 +37,7 @@ import type { PlacementCandidate } from './placement.ts';
 import { nodeDiskFreeBytes } from './app-volumes.ts';
 import type { VolumeRow } from './volumes.ts';
 import { newId, parseJson } from './util.ts';
+import { partitionViews } from './disk-mounts.ts';
 
 type PoolRow = typeof storagePools.$inferSelect;
 type NodeRow = typeof nodes.$inferSelect;
@@ -671,6 +673,7 @@ export class StoragePoolService {
 				const mine = volumes.filter((volume) => volume.nodeId === node.id);
 				const inventory = volumeInventorySchema.safeParse(parseJson(node.volumeInventoryJson, null));
 				const taken = new Set(mine.map((volume) => volume.sourceKey));
+				const canMount = parseJson<string[]>(node.capabilitiesJson, []).includes(DISK_MOUNT_CAPABILITY);
 				const stats = parseJson<Record<string, unknown> | null>(node.statsJson, null);
 				const total = stats && typeof stats.diskTotalBytes === 'number' ? stats.diskTotalBytes : null;
 				return {
@@ -694,6 +697,13 @@ export class StoragePoolService {
 						.sort((a, b) => a.name.localeCompare(b.name)),
 					adoptable: inventory.success ? inventory.data.mounts.filter((mount) => !taken.has(mount.sourceKey)) : [],
 					freeDevices: inventory.success ? inventory.data.devices.filter((device) => device.free).length : 0,
+					partitions: partitionViews({
+						inventory: inventory.success ? inventory.data : null,
+						volumes: mine,
+						diskMounts: this.ctx.diskMounts.rowsForNode(node.id),
+						canMount,
+					}),
+					canMountPartitions: canMount,
 					systemFreeBytes: nodeDiskFreeBytes(stats),
 					systemSizeBytes: total,
 				};

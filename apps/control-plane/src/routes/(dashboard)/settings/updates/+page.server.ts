@@ -1,6 +1,7 @@
 import { error, fail } from '@sveltejs/kit';
 import { core } from '#lib/server/core.js';
 import {
+	approvalsFromForm,
 	canManagePlatform,
 	compareToRunning,
 	currentChannel,
@@ -111,6 +112,13 @@ export const actions: Actions = {
 					'Dashboard updates are not enabled on this host. Run `sudo skiff-update-self check` on the server once.'
 			});
 		if (updateInFlight()) return fail(409, { message: 'An update is already queued or running.' });
+		// Destructive migrations approved in the review dialog: only ones the updater reported.
+		const approvals = approvalsFromForm(data.getAll('approve'), readUpdateStatus()?.approval);
+		if (!approvals)
+			return fail(409, {
+				message:
+					'The migrations waiting for approval have changed since this page loaded. Reload it and review them again.'
+			});
 
 		// Re-check now rather than trusting the page: the button may be minutes old. A build reads
 		// VERSION at the configured ref; a download only considers signed published releases.
@@ -127,13 +135,19 @@ export const actions: Actions = {
 
 		const target = latest.ok && comparison.available ? latest.version : null;
 		try {
-			requestUpdate(principal, target, method, channel);
+			requestUpdate(principal, target, method, channel, approvals);
 		} catch (cause) {
 			core.ctx.audit.record({
 				principal,
 				action: 'platform.update',
 				resource: 'platform',
-				args: { from: comparison.current, to: target, method, channel },
+				args: {
+					from: comparison.current,
+					to: target,
+					method,
+					channel,
+					approvedMigrations: approvals.map((approval) => approval.id)
+				},
 				result: 'error',
 				error: (cause as Error).message
 			});
@@ -143,9 +157,19 @@ export const actions: Actions = {
 			principal,
 			action: 'platform.update',
 			resource: 'platform',
-			args: { from: comparison.current, to: target, method, channel },
+			args: {
+				from: comparison.current,
+				to: target,
+				method,
+				channel,
+				approvedMigrations: approvals.map((approval) => approval.id)
+			},
 			result: 'ok'
 		});
+		if (approvals.length > 0)
+			return {
+				success: `Approved ${approvals.map((approval) => approval.id).join(', ')}. Updating to ${target ?? 'the newest version'}; the control database is snapshotted before the migration runs.`
+			};
 		const how =
 			method === 'build'
 				? 'building it from source on this server'

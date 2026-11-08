@@ -54,6 +54,11 @@ export interface GitSourceView {
 	outputDir: string;
 	enabled: boolean;
 	hasWebhookSecret: boolean;
+	/**
+	 * The org's GitHub App installation that covers this repository (docs/GITHUB.md): events arrive
+	 * without the project webhook, private clones and commit statuses work. Null otherwise.
+	 */
+	githubAppInstallationId?: number | null;
 	createdAt: string;
 	updatedAt: string;
 }

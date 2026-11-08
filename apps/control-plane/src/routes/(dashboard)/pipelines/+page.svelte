@@ -10,6 +10,8 @@
 	import WorkflowIcon from '@lucide/svelte/icons/workflow';
 	import DataTable, { type DataColumn } from '#lib/components/skiff/DataTable.svelte';
 	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
+	import GithubRepoPicker from '#lib/components/skiff/GithubRepoPicker.svelte';
+	import type { GithubRepositoryView } from '@skiff/contracts';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as InputGroup from '#lib/components/ui/input-group/index.js';
@@ -32,6 +34,26 @@
 	);
 	const errors = $derived(result?.fieldErrors ?? {});
 	const values = $derived(result?.values ?? {});
+
+	// Picking a GitHub repository fills these; typing still works (writable deriveds).
+	let nameValue = $derived(values.name ?? '');
+	let cloneValue = $derived(values.cloneUrl ?? '');
+	let branchValue = $derived(values.defaultBranch ?? 'main');
+	let providerValue = $derived(values.provider ?? 'github');
+	let pickedFullName = $state('');
+
+	function pick(repo: GithubRepositoryView) {
+		pickedFullName = repo.fullName;
+		cloneValue = repo.cloneUrl;
+		branchValue = repo.defaultBranch;
+		providerValue = 'github';
+		if (!nameValue)
+			nameValue = repo.name
+				.toLowerCase()
+				.replace(/[^a-z0-9._-]+/g, '-')
+				.replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, '')
+				.slice(0, 100);
+	}
 
 	let createOpen = $state(page.url.searchParams.get('new') === '1');
 	let query = $state('');
@@ -194,6 +216,7 @@
 		size="lg"
 	>
 		<Field.Group>
+			<GithubRepoPicker onpick={pick} selected={pickedFullName} />
 			<div class="grid gap-4 sm:grid-cols-2">
 				<Field.Field data-invalid={errors.name ? true : undefined}>
 					<Field.Label for="repo-name">Name</Field.Label>
@@ -206,7 +229,7 @@
 						autocapitalize="off"
 						spellcheck="false"
 						class="font-mono text-sm"
-						value={values.name ?? ''}
+						bind:value={nameValue}
 						aria-invalid={errors.name ? 'true' : undefined}
 					/>
 					<Field.Description>Lowercase letters, digits, dots, dashes, underscores.</Field.Description>
@@ -217,7 +240,7 @@
 					<NativeSelect.Root
 						id="repo-provider"
 						name="provider"
-						value={values.provider ?? 'github'}
+						bind:value={providerValue}
 						class="w-full"
 					>
 						<NativeSelect.Option value="github">GitHub</NativeSelect.Option>
@@ -234,7 +257,7 @@
 					required
 					spellcheck="false"
 					class="font-mono text-sm"
-					value={values.cloneUrl ?? ''}
+					bind:value={cloneValue}
 					aria-invalid={errors.cloneUrl ? 'true' : undefined}
 				/>
 				{#if errors.cloneUrl}<Field.Error>{errors.cloneUrl}</Field.Error>{/if}
@@ -248,7 +271,7 @@
 						placeholder="main"
 						spellcheck="false"
 						class="font-mono text-sm"
-						value={values.defaultBranch ?? 'main'}
+						bind:value={branchValue}
 						aria-invalid={errors.defaultBranch ? 'true' : undefined}
 					/>
 					{#if errors.defaultBranch}<Field.Error>{errors.defaultBranch}</Field.Error>{/if}
@@ -266,7 +289,11 @@
 						class="font-mono text-sm"
 						aria-invalid={errors.webhookSecret ? 'true' : undefined}
 					/>
-					<Field.Description>At least 16 characters. Paste the same into GitHub.</Field.Description>
+					<Field.Description
+						>{pickedFullName
+							? 'Not needed: the GitHub App delivers this repository’s events.'
+							: 'At least 16 characters. Paste the same into GitHub. Not needed for repositories the GitHub App covers.'}</Field.Description
+					>
 					{#if errors.webhookSecret}<Field.Error>{errors.webhookSecret}</Field.Error>{/if}
 				</Field.Field>
 			</div>

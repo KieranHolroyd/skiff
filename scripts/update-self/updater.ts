@@ -47,11 +47,15 @@ import {
 	writeFileSync,
 	writeSync,
 } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
 import { compareSemver, parseSemver } from '../../packages/contracts/src/semver.ts';
 import {
 	DEFAULT_SELF_UPDATE_CHANNEL,
+	SELF_UPDATE_APPROVAL_SQL_BYTES,
 	releaseInChannel,
+	type MigrationApproval,
+	type SelfUpdateApproval,
 	type SelfUpdateChannel,
 } from '../../packages/contracts/src/self-update.ts';
 import { linkAgentCommands } from '../systemd/builder.ts';
@@ -321,6 +325,8 @@ export interface UpdateOptions {
 	stabilizeMs?: number;
 	/** Explicit approval for a destructive migration; default false. */
 	allowDestructiveMigrations?: boolean;
+	/** Approvals from the dashboard: each covers one migration whose SQL hashes to `sha256`. */
+	approvedMigrations?: MigrationApproval[];
 	/** How many successful pre-update bundles to retain (pinned bundles are always kept). */
 	snapshotKeep?: number;
 	/**
@@ -385,6 +391,17 @@ export type RollbackResult =
 	| { status: 'reverted'; reason: string; recovered: boolean };
 
 export class UpdateError extends Error {}
+/** The staged release has destructive migrations nobody approved; the dashboard can review them. */
+export class ApprovalRequiredError extends UpdateError {
+	constructor(
+		reason: string,
+		readonly approval: SelfUpdateApproval,
+	) {
+		super(reason);
+	}
+}
+
+const sqlHash = (sql: string) => createHash('sha256').update(sql).digest('hex');
 /** The switch was reverted but the old release did not come back healthy. Needs a human. */
 export class RecoveryError extends UpdateError {}
 /** The release's own check said no (well-formed verdict): the release is at fault. */
@@ -602,13 +619,27 @@ export class Updater {
 				release,
 				targetVersion: version,
 				allowDestructiveMigrations: options.allowDestructiveMigrations,
+				approvedMigrations: options.approvedMigrations,
 				allowDowngrade: options.force
 			});
 			if (!stagedPreflight.ok) {
 				rmSync(release, { recursive: true, force: true });
-				throw new UpdateError(
-					`Upgrade preflight refused ${version}:\n- ${stagedPreflight.errors.join('\n- ')}`
-				);
+				const reason = `Upgrade preflight refused ${version}:\n- ${stagedPreflight.errors.join('\n- ')}`;
+				const destructive = stagedPreflight.migrations.pending.filter((migration) => migration.destructive);
+				if (destructive.length > 0 && !options.allowDestructiveMigrations) {
+					// Everything the dashboard needs to review and approve them, bound to the SQL hash.
+					throw new ApprovalRequiredError(reason, {
+						version,
+						migrations: destructive.map((migration) => ({
+							id: migration.id,
+							sha256: sqlHash(migration.sql),
+							statements: migration.destructiveStatements.map(({ line, statement }) => ({ line, statement })),
+							sql: migration.sql.slice(0, SELF_UPDATE_APPROVAL_SQL_BYTES),
+							truncated: migration.sql.length > SELF_UPDATE_APPROVAL_SQL_BYTES,
+						})),
+					});
+				}
+				throw new UpdateError(reason);
 			}
 			for (const warning of stagedPreflight.warnings) host.warn(`preflight: ${warning}`);
 
@@ -1643,6 +1674,7 @@ export class Updater {
 		release: string | null;
 		targetVersion: string;
 		allowDestructiveMigrations?: boolean;
+		approvedMigrations?: MigrationApproval[];
 		allowDowngrade?: boolean;
 	}): Promise<UpgradePreflight> {
 		const { host, layout } = this;
@@ -1671,6 +1703,14 @@ export class Updater {
 				: null,
 			managedDatabases: readManagedDatabaseFacts(layout.dbPath),
 			allowDestructiveMigrations: input.allowDestructiveMigrations,
+			// An approval counts only for the exact SQL it was given for.
+			approvedDestructiveMigrations: migrations
+				.filter((migration) =>
+					(input.approvedMigrations ?? []).some(
+						(approval) => approval.id === migration.id && approval.sha256 === sqlHash(migration.sql),
+					),
+				)
+				.map((migration) => migration.id),
 			allowDowngrade: input.allowDowngrade,
 			now: host.now().getTime()
 		});

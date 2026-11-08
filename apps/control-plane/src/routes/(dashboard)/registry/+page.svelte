@@ -14,6 +14,7 @@
 	import DataTable, { type DataColumn } from '#lib/components/skiff/DataTable.svelte';
 	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
 	import GitHubMark from '#lib/components/skiff/GitHubMark.svelte';
+	import GithubRepoPicker from '#lib/components/skiff/GithubRepoPicker.svelte';
 	import StatusBadge from '#lib/components/skiff/StatusBadge.svelte';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
@@ -37,6 +38,8 @@
 	let query = $state('');
 	let matched = $state(0);
 	let trustOpen = $state(false);
+	/** `owner/repo` for a new trust; a pick from the GitHub App's repositories fills it. */
+	let trustRepo = $state('');
 
 	const orgSlug = $derived(data.org.slug ?? '<org>');
 	const host = $derived(data.denied ? '' : data.registry.host);
@@ -440,12 +443,14 @@ steps:
 		submitLabel="Add trust"
 	>
 		<Field.Group>
+			<GithubRepoPicker hint={false} selected={trustRepo} onpick={(repo) => (trustRepo = repo.fullName)} />
 			<div class="grid gap-4 sm:grid-cols-2">
 				<Field.Field>
 					<Field.Label for="trust-github">GitHub repository</Field.Label>
 					<Input
 						id="trust-github"
 						name="githubRepository"
+						bind:value={trustRepo}
 						placeholder="owner/repo"
 						required
 						autocapitalize="off"

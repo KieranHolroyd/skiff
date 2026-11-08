@@ -45,6 +45,16 @@ export interface GitCredentials {
 	buildDir: string;
 }
 
+/**
+ * Credentials for one clone when the control plane sent a token from Skiff's GitHub App (D164): a
+ * one-hour, read-only token for that repository alone, used on github.com instead of the node's
+ * own `SKIFF_GIT_TOKEN`. Without one the node's credentials apply unchanged.
+ */
+export function withCloneToken<T extends GitCredentials>(credentials: T, token: string | null | undefined): T {
+	if (!token) return credentials;
+	return { ...credentials, gitToken: token, gitTokenHosts: ['github.com'] };
+}
+
 /** Environment for one git process against `url`: no prompts, plus credentials scoped to that URL. */
 export function gitEnv(url: string, credentials: GitCredentials): Record<string, string> {
 	return {

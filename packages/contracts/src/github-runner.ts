@@ -40,7 +40,7 @@ const secretNameSchema = z
 	.regex(/^[A-Z][A-Z0-9_]*$/, 'Secret names must be UPPER_SNAKE_CASE')
 	.max(128);
 
-export const githubRunnerAuthMethods = ['pat', 'app'] as const;
+export const githubRunnerAuthMethods = ['pat', 'app', 'installation'] as const;
 export type GithubRunnerAuthMethod = (typeof githubRunnerAuthMethods)[number];
 
 /**
@@ -51,6 +51,8 @@ export type GithubRunnerAuthMethod = (typeof githubRunnerAuthMethods)[number];
  *   runners: write" on the organisation (a classic token needs `repo` / `admin:org`).
  * - `app`: a GitHub App installed on the repository or organisation with the same permission.
  *   The control plane signs a JWT with the private key and exchanges it for an installation token.
+ * - `installation`: Skiff's own GitHub App (Settings → GitHub, D165). The org's linked installation
+ *   on `owner` is used; nothing is stored on the project.
  */
 export const githubRunnerAuthSchema = z.discriminatedUnion('method', [
 	z.object({ method: z.literal('pat'), tokenSecret: secretNameSchema }),
@@ -60,6 +62,7 @@ export const githubRunnerAuthSchema = z.discriminatedUnion('method', [
 		installationId: z.number().int().positive(),
 		privateKeySecret: secretNameSchema,
 	}),
+	z.object({ method: z.literal('installation') }),
 ]);
 export type GithubRunnerAuth = z.infer<typeof githubRunnerAuthSchema>;
 
@@ -116,6 +119,7 @@ export function githubRunnerTarget(runner: Pick<GithubRunner, 'scope' | 'owner' 
 
 /** Secret names a runner spec reads on the control plane (never delivered to the container). */
 export function githubRunnerSecretNames(runner: Pick<GithubRunner, 'auth'>): string[] {
+	if (runner.auth.method === 'installation') return [];
 	return [runner.auth.method === 'pat' ? runner.auth.tokenSecret : runner.auth.privateKeySecret];
 }
 

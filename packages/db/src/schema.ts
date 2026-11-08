@@ -166,6 +166,34 @@ export const shareMounts = sqliteTable(
 	(t) => [uniqueIndex('share_mounts_share_node_idx').on(t.shareId, t.nodeId), index('share_mounts_node_idx').on(t.nodeId)],
 );
 
+/** A local partition mounted by filesystem UUID at /mnt/skiff-disks/<name>, then adopted as a volume (0078). */
+export const diskMounts = sqliteTable(
+	'disk_mounts',
+	{
+		id: text('id').primaryKey(),
+		nodeId: text('node_id').notNull(),
+		/** Mount directory under /mnt/skiff-disks. */
+		name: text('name').notNull(),
+		fsUuid: text('fs_uuid').notNull(),
+		fsType: text('fs_type').notNull(),
+		/** Kernel device when requested; display only. */
+		device: text('device'),
+		status: text('status', { enum: ['pending', 'mounted', 'failed', 'unmounting'] }).notNull().default('pending'),
+		message: text('message'),
+		/** Adopt as a node volume with this name once mounted; null = a plain mount. */
+		volumeName: text('volume_name'),
+		volumeDefault: integer('volume_default', { mode: 'boolean' }).notNull().default(false),
+		/** Put the adopted volume in this pool. */
+		poolId: text('pool_id'),
+		volumeId: text('volume_id'),
+		mountedAt: integer('mounted_at'),
+		createdBy: text('created_by').notNull(),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [uniqueIndex('disk_mounts_node_name_idx').on(t.nodeId, t.name), uniqueIndex('disk_mounts_node_uuid_idx').on(t.nodeId, t.fsUuid)],
+);
+
 export const shareGrants = sqliteTable(
 	'share_grants',
 	{
@@ -2036,6 +2064,33 @@ export const githubRunnerRegistrations = sqliteTable(
 );
 
 /**
+ * Installations of Skiff's GitHub App (docs/GITHUB.md, 0077). GitHub's installation id is the key;
+ * `orgId` is the Skiff organisation it is linked to, null while unclaimed. No credential is stored:
+ * installation tokens are minted on demand from the App key in `settings` (`github.app`).
+ */
+export const githubInstallations = sqliteTable(
+	'github_installations',
+	{
+		installationId: integer('installation_id').primaryKey(),
+		orgId: text('org_id'),
+		accountLogin: text('account_login').notNull(),
+		accountId: integer('account_id').notNull(),
+		/** `User` or `Organization`. */
+		accountType: text('account_type').notNull(),
+		avatarUrl: text('avatar_url'),
+		/** `all` or `selected`. */
+		repositorySelection: text('repository_selection').notNull().default('selected'),
+		permissionsJson: text('permissions_json').notNull().default('{}'),
+		suspendedAt: integer('suspended_at'),
+		linkedBy: text('linked_by'),
+		linkedAt: integer('linked_at'),
+		createdAt: integer('created_at').notNull().$defaultFn(now),
+		updatedAt: integer('updated_at').notNull().$defaultFn(now),
+	},
+	(t) => [index('github_installations_org_idx').on(t.orgId), index('github_installations_account_idx').on(t.accountLogin)],
+);
+
+/**
  * Native database studio sessions (plan 22, D96). One open row per (database, user); the token is
  * sealed with the org key and only opened for the session's own endpoint and the node activation.
  */
@@ -2614,6 +2669,7 @@ export const schema = {
 	databasePitrTasks,
 	scheduledTasks,
 	githubRunnerRegistrations,
+	githubInstallations,
 	databaseStudioSessions,
 	databaseMoves,
 };

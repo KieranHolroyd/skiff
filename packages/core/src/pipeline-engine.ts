@@ -70,6 +70,9 @@ import { buildPrincipal } from './orgs.ts';
 import { newId } from './util.ts';
 import { PipelineOidc } from './pipeline-oidc.ts';
 import { commitState, githubTarget, postCommitStatus } from './pipeline-status.ts';
+
+/** The secret name App-covered repositories get a repository-scoped installation token under. */
+export const GITHUB_TOKEN_SECRET = 'GITHUB_TOKEN';
 import { inlineWorkflowCalls, type InlinedJobSpec, type PipelineCallInfo, type WorkflowWithCalls } from './pipeline-calls.ts';
 
 export type PipelineRepositoryRow = typeof pipelineRepositories.$inferSelect;
@@ -267,14 +270,12 @@ export class PipelineEngine {
 
 	/**
 	 * Best-effort GitHub commit status for a run (WP3): `skiff/<workflow>` on the run's commit,
-	 * linking to the run page. Only for GitHub repositories with a status token; never throws.
+	 * linking to the run page. Uses the repository's status token, else the org's GitHub App; never throws.
 	 */
 	reportStatus(run: PipelineRunRow): void {
 		try {
 			const repository = this.requireRepository(run.repositoryId);
-			if (!repository.statusToken || repository.provider !== 'github' || !/^[a-f0-9]{40}$/i.test(run.sha)) return;
-			const target = githubTarget(repository.cloneUrl);
-			if (!target) return;
+			if (repository.provider !== 'github' || !/^[a-f0-9]{40}$/i.test(run.sha)) return;
 			const state = commitState(run.status, run.conclusion);
 			const description =
 				run.status === 'queued'
@@ -282,19 +283,28 @@ export class PipelineEngine {
 					: run.status === 'in_progress'
 						? 'Running'
 						: `${run.conclusion ?? 'completed'}${run.error ? `: ${run.error.split('\n')[0]}` : ''}`;
-			void postCommitStatus({
-				token: this.ctx.secrets.open(repository.orgId, repository.statusToken),
-				target,
-				sha: run.sha,
-				state,
-				context: `skiff/${run.workflowName}`,
-				description,
-				targetUrl: `${this.ctx.config.platformOrigin}/pipelines/${encodeURIComponent(repository.name)}/runs/${run.number}`,
-				apiBase: this.statusApiBase,
-				fetch: this.statusFetch,
-			}).catch((error: unknown) =>
-				console.warn(`[pipelines] commit status for ${repository.name}#${run.number} failed: ${(error as Error).message}`),
-			);
+			const context = `skiff/${run.workflowName}`;
+			const targetUrl = `${this.ctx.config.platformOrigin}/pipelines/${encodeURIComponent(repository.name)}/runs/${run.number}`;
+			const warn = (error: unknown) =>
+				console.warn(`[pipelines] commit status for ${repository.name}#${run.number} failed: ${(error as Error).message}`);
+			if (repository.statusToken) {
+				const target = githubTarget(repository.cloneUrl);
+				if (!target) return;
+				void postCommitStatus({
+					token: this.ctx.secrets.open(repository.orgId, repository.statusToken),
+					target,
+					sha: run.sha,
+					state,
+					context,
+					description,
+					targetUrl,
+					apiBase: this.statusApiBase,
+					fetch: this.statusFetch,
+				}).catch(warn);
+				return;
+			}
+			// No stored token: Skiff's GitHub App reports for repositories it covers (D164).
+			void this.ctx.githubApp.commitStatus(repository.orgId, repository.cloneUrl, { sha: run.sha, state, context, description, targetUrl }).catch(warn);
 		} catch (error) {
 			console.warn('[pipelines] commit status skipped:', (error as Error).message);
 		}
@@ -1208,6 +1218,7 @@ export class PipelineEngine {
 				repository: { id: repository.id, name: repository.name, cloneUrl: repository.cloneUrl },
 				ref: trigger.row.ref,
 				sha: trigger.row.sha,
+				gitToken: await this.cloneToken(repository),
 			};
 		}
 
@@ -1246,7 +1257,7 @@ export class PipelineEngine {
 		});
 		if (!claimed) return null;
 		try {
-			return this.jobClaim(claimed.job, claimed.spec, claimed.token);
+			return await this.jobClaim(claimed.job, claimed.spec, claimed.token);
 		} catch (error) {
 			const fresh = this.requireJob(claimed.job.id);
 			this.completeJob(fresh, 'failure', `Could not start the job: ${(error as Error).message}`);
@@ -1255,7 +1266,7 @@ export class PipelineEngine {
 		}
 	}
 
-	private jobClaim(job: PipelineJobRow, spec: InlinedJobSpec, token: string): PipelineJobClaim {
+	private async jobClaim(job: PipelineJobRow, spec: InlinedJobSpec, token: string): Promise<PipelineJobClaim> {
 		const run = this.requireRun(job.runId);
 		const repository = this.requireRepository(run.repositoryId);
 		const workflow = parse<PipelineWorkflow>(run.workflowJson, null as unknown as PipelineWorkflow);
@@ -1320,7 +1331,24 @@ export class PipelineEngine {
 			runtime: (job.runtime as PipelineContainerRuntime | null) ?? null,
 			buildkit,
 			buildkitCacheScope: buildkit ? this.buildkitCacheScope(run) : null,
+			gitToken: await this.cloneToken(repository),
 		};
+	}
+
+	/**
+	 * D164: a one-hour, read-only token for this repository alone, minted from the org's GitHub App
+	 * installation, so the node can clone a private repository without credentials of its own. Null
+	 * when the App does not cover it (the node's own git credentials apply, D149).
+	 */
+	private async cloneToken(repository: PipelineRepositoryRow): Promise<string | null> {
+		if (repository.provider !== 'github') return null;
+		const access = await this.ctx.githubApp.repoToken(repository.orgId, repository.cloneUrl, { contents: 'read' });
+		return access?.token ?? null;
+	}
+
+	/** Trusted jobs of an App-covered repository get `secrets.GITHUB_TOKEN` (unless one is set). */
+	private offersGithubToken(run: PipelineRunRow, repository: PipelineRepositoryRow): boolean {
+		return run.trust === 'trusted' && repository.provider === 'github' && this.ctx.githubApp.repositoryLink(repository.orgId, repository.cloneUrl).installationId !== null;
 	}
 
 	/** W6/W10: one BuildKit cache per repository for trusted runs, one per ref for untrusted. */
@@ -1347,6 +1375,7 @@ export class PipelineEngine {
 			.where(eq(pipelineSecrets.repositoryId, repository.id))
 			.all();
 		const available = new Set(rows.filter((row) => row.environment === '' || row.environment === environment).map((row) => row.name));
+		if (this.offersGithubToken(run, repository)) available.add(GITHUB_TOKEN_SECRET);
 		if (map === 'inherit') return [...available].sort();
 		return Object.entries(map)
 			.filter(([, source]) => available.has(source))
@@ -1395,11 +1424,22 @@ export class PipelineEngine {
 		return { cancelled: false, leaseExpiresAt };
 	}
 
-	secrets(job: PipelineJobRow): Record<string, string> {
+	async secrets(job: PipelineJobRow): Promise<Record<string, string>> {
 		const run = this.requireRun(job.runId);
 		if (run.trust === 'untrusted') return {};
 		const map = parse<InlinedJobSpec | null>(job.specJson, null);
 		const all = this.allSecrets(job);
+		// D164: like GitHub Actions' GITHUB_TOKEN, scoped to this repository and short-lived. A
+		// repository secret of the same name wins.
+		const repository = this.requireRepository(job.repositoryId);
+		if (all[GITHUB_TOKEN_SECRET] === undefined && this.offersGithubToken(run, repository)) {
+			const access = await this.ctx.githubApp.repoToken(repository.orgId, repository.cloneUrl, {
+				contents: 'read',
+				statuses: 'write',
+				pull_requests: 'read',
+			});
+			if (access) all[GITHUB_TOKEN_SECRET] = access.token;
+		}
 		if (!map?.callKey || map.callSecretMap === 'inherit') return all;
 		return Object.fromEntries(
 			Object.entries(map.callSecretMap ?? {}).flatMap(([name, source]) => (all[source] !== undefined ? [[name, all[source]!]] : [])),

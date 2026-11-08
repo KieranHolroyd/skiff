@@ -215,8 +215,14 @@ export class GithubRunnerService {
 		await this.request(token, 'DELETE', `${basePath(runner)}/actions/runners/${runnerId}`, undefined, [404]);
 	}
 
-	/** A PAT from the secret store, or a cached App installation token. */
+	/** A PAT from the secret store, a cached App installation token, or Skiff's own App (D165). */
 	private async accessToken(orgId: string, projectId: string, runner: GithubRunner): Promise<string> {
+		if (runner.auth.method === 'installation') {
+			return this.ctx.githubApp.ownerToken(orgId, runner.owner, {
+				...(runner.scope === 'repo' && runner.repo ? { repo: runner.repo } : {}),
+				permissions: runner.scope === 'repo' ? { administration: 'write' } : { organization_self_hosted_runners: 'write' },
+			});
+		}
 		if (runner.auth.method === 'pat') {
 			const secret = this.ctx.secrets.getValue(orgId, runner.auth.tokenSecret, undefined, projectId);
 			if (!secret) throw new CoreError('github_credential_missing', `Secret ${runner.auth.tokenSecret} does not exist.`, 409);

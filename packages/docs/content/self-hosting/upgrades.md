@@ -115,6 +115,21 @@ The options you are most likely to need:
 | `--no-agent` | Leave `skiff-agent` on its old binary. By default it restarts on the new release. |
 | `--no-zero-downtime` | Stop the old release before starting the new one, instead of the standby switch. |
 
+### Destructive migrations
+
+A migration that drops a table or column, or changes a column's type, is never applied unattended. The updater stops before the test boot and says which migration and which statement:
+
+```
+Destructive migration 0074_pipelines_phase2.sql (DROP TABLE on line 33): it changes or removes existing data …
+```
+
+Approve it in either of two ways:
+
+- **Dashboard:** Settings → Updates shows the migration with its SQL. Choose **Review and approve**, confirm you've read it, and the update starts. The approval covers exactly that SQL: if the release changes the migration, or adds another destructive one, you are asked again.
+- **Server:** `sudo skiff-update-self --allow-destructive` approves every destructive migration in that run.
+
+Either way the control database is snapshotted first and restored if the update rolls back. The dashboard approval needs an updater that knows about it; on older releases use the command line.
+
 `sudo skiff-update-self status` shows the current and previous releases, the last switch, any failed releases and the retained snapshots.
 
 Exit codes: `0` means updated, already up to date or nothing to do. `1` means nothing changed, or the update was rolled back and the old release is serving. `2` means a rollback could not bring the old release back. Act immediately in that case, starting with `journalctl -u skiff-control-plane -n 200`.

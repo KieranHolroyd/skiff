@@ -162,6 +162,60 @@ export interface StorageDefaultView {
 	warnings: string[];
 }
 
+/**
+ * What Settings → Storage can do with one partition (docs/VOLUMES.md §3.1):
+ * - `volume`: already a registered volume;
+ * - `adoptable`: mounted at a usable path — *Add as volume* adopts it (`sourceKey`);
+ * - `mountable`: an unmounted ext4/xfs/btrfs/f2fs filesystem — *Add as volume* mounts it at
+ *   `/mnt/skiff-disks/<name>` by UUID, then adopts it;
+ * - `mounting` / `failed` / `unmounting`: a partition mount in progress, failed or being removed;
+ * - `system`: mounted at `/`, `/boot`, … (cannot hold managed data);
+ * - `in-use`: swap, an LVM/RAID/LUKS/ZFS member, or a disk holding partitions;
+ * - `unformatted`: no filesystem (formatting is not offered);
+ * - `unsupported`: a filesystem without Unix permissions or a stable UUID.
+ */
+export const storagePartitionStates = [
+	'volume',
+	'adoptable',
+	'mountable',
+	'mounting',
+	'failed',
+	'unmounting',
+	'system',
+	'in-use',
+	'unformatted',
+	'unsupported',
+] as const;
+export type StoragePartitionState = (typeof storagePartitionStates)[number];
+
+export interface StoragePartitionView {
+	/** `/dev/sdb1`, display only. */
+	device: string;
+	type: string | null;
+	/** Kernel name of the disk the partition is on. */
+	parent: string | null;
+	/** Model of the device or of its disk. */
+	model: string | null;
+	sizeBytes: number;
+	fsType: string | null;
+	uuid: string | null;
+	label: string | null;
+	mountPath: string | null;
+	state: StoragePartitionState;
+	/** Why it cannot be added, or the last mount error. */
+	reason: string | null;
+	/** Registered volume on it (`volume`). */
+	volumeName: string | null;
+	/** Inventory source key to adopt (`adoptable`). */
+	sourceKey: string | null;
+	/** Partition mount row (`mounting`, `failed`, `unmounting`, or a mount Skiff made). */
+	diskMountId: string | null;
+	/** Name suggested for *Add as volume*. */
+	suggestedName: string;
+	/** Free bytes when mounted. */
+	freeBytes: number | null;
+}
+
 export interface StorageNodeView {
 	id: string;
 	name: string;
@@ -184,6 +238,10 @@ export interface StorageNodeView {
 	adoptable: VolumeInventoryEntry[];
 	/** Free block devices (formatting comes with VOLUMES P1). */
 	freeDevices: number;
+	/** Every partition (and whole-disk filesystem, LV, array or LUKS mapper) the node reports. */
+	partitions: StoragePartitionView[];
+	/** The node's agent can mount an unmounted partition (`disk-mounts`). */
+	canMountPartitions: boolean;
 	/** Free bytes on the system disk, when the node reports it. */
 	systemFreeBytes: number | null;
 	systemSizeBytes: number | null;

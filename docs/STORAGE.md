@@ -137,8 +137,10 @@ One page (platform group, platform admin), four sections:
 - **Default storage** — one default pool per kind, which the create forms preselect.
 - **Pools** — capacity bar, members (volume @ node, class, free/size), allocation, min free; create,
   edit, delete (refused while it is a default; members fall back to unassigned).
-- **Volumes** — per node: registered volumes with a pool picker, mounts waiting to be adopted, and
-  a link to **Settings → Network shares** (D143), the section next to Storage.
+- **Volumes** — per node: registered volumes with a pool picker; a **partition table** listing every
+  partition, LV, array and LUKS mapper the node reports with **Add as volume** (adopt a mounted one,
+  or mount an unmounted ext4/xfs/btrfs/f2fs filesystem first — [VOLUMES.md §3.1](./VOLUMES.md));
+  other mounts waiting to be adopted; and a link to **Settings → Network shares** (D143).
 - **Onboarding state** — the banner disappears once defaults are saved or setup is skipped.
 
 ### 5.1 Profiling

@@ -33,7 +33,7 @@ Root and output directories must stay inside the repository: a leading `/` or a 
 
 ### Build on push
 
-Add a GitHub webhook to the repository with these settings:
+If Skiff's [GitHub App](/deploying/github) is installed on the repository's account, pushes arrive without any setup. Otherwise, add a GitHub webhook to the repository with these settings:
 
 - **Payload URL:** `https://control.example.com/api/webhooks/github/my-site`
 - **Content type:** `application/json`
@@ -47,7 +47,9 @@ Skiff checks the `X-Hub-Signature-256` header against the secret. Deliveries wit
 
 ### Private repositories
 
-A private repository needs a credential on each Builder node, set in `/etc/skiff/agent.env`. Use a token for HTTPS URLs or a deploy key for SSH URLs. A Builder can hold both, and each clone uses the one that matches its URL.
+Repositories that Skiff's [GitHub App](/deploying/github) can see need no setup: each build clones with a one-hour, read-only token for that repository alone.
+
+Any other private repository needs a credential on each Builder node, set in `/etc/skiff/agent.env`. Use a token for HTTPS URLs or a deploy key for SSH URLs. A Builder can hold both, and each clone uses the one that matches its URL.
 
 To clone a private GitHub repository over HTTPS, set a token:
 
@@ -164,10 +166,10 @@ Every build counts against the daily build quota (`buildsPerDay`). A build that 
 Skiff can host a pool of GitHub Actions self-hosted runners. Choose **Projects → From template → GitHub Actions runner**, then enter:
 
 - the GitHub owner, and either one repository or a whole organisation;
-- a credential that can register runners: a fine-grained personal access token with *Administration: write* on the repository (or *Self-hosted runners: write* on the organisation), or a GitHub App with the same permission and its private key;
+- a credential that can register runners: **Skiff's GitHub App** when it is [installed](/deploying/github) on the owner (nothing to paste), a fine-grained personal access token with *Administration: write* on the repository (or *Self-hosted runners: write* on the organisation), or another GitHub App with the same permission and its private key;
 - the number of runners, the memory for each runner and any extra labels.
 
-Skiff stores the credential as a project secret and deploys the pool. The runners appear under the repository's or organisation's runner settings on GitHub. Use them from a workflow with:
+Skiff stores a pasted credential as a project secret (the GitHub App needs none) and deploys the pool. The runners appear under the repository's or organisation's runner settings on GitHub. Use them from a workflow with:
 
 ```yaml
 jobs:

@@ -14,7 +14,7 @@
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
-	import type { StorageKind, StoragePoolView, VolumeInventoryEntry } from '@skiff/contracts';
+	import { DISK_MOUNT_ROOT, type StorageKind, type StorageNodeView, type StoragePartitionView, type StoragePoolView, type VolumeInventoryEntry } from '@skiff/contracts';
 	import { notify, runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
 	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
@@ -40,10 +40,14 @@
 	});
 	let savingDefaults = $state(false);
 
-	// While a benchmark is queued or running, refresh so results appear without a reload.
+	// While a benchmark or a partition mount is in flight, refresh so results appear without a reload.
 	const profiling = $derived(
 		overview.pools.some((pool) => pool.profiling) ||
-			overview.nodes.some((node) => node.volumes.some((volume) => volume.profile?.status === 'queued' || volume.profile?.status === 'running'))
+			overview.nodes.some(
+				(node) =>
+					node.volumes.some((volume) => volume.profile?.status === 'queued' || volume.profile?.status === 'running') ||
+					node.partitions.some((part) => part.state === 'mounting' || part.state === 'unmounting'),
+			)
 	);
 	$effect(() => {
 		if (!profiling) return;
@@ -85,6 +89,52 @@
 	let editing = $state<StoragePoolView | null>(null);
 	let adoptOpen = $state(false);
 	let adopting = $state<{ nodeId: string; nodeName: string; mount: VolumeInventoryEntry } | null>(null);
+	let mountOpen = $state(false);
+	let mountingPart = $state<{ nodeId: string; nodeName: string; part: StoragePartitionView } | null>(null);
+
+	/** Mounts the node reports that are not a listed partition (network shares, ZFS datasets, …). */
+	function otherMounts(node: StorageNodeView): VolumeInventoryEntry[] {
+		const shown = new Set(node.partitions.map((part) => part.mountPath).filter(Boolean));
+		return node.adoptable.filter((mount) => !shown.has(mount.mountPath));
+	}
+
+	/** *Add as volume*: adopt a mounted partition, or mount an unmounted one first. */
+	function addPartition(node: StorageNodeView, part: StoragePartitionView) {
+		if (part.state === 'adoptable') {
+			const mount = node.adoptable.find((item) => item.sourceKey === part.sourceKey);
+			if (!mount) return;
+			adopting = { nodeId: node.id, nodeName: node.name, mount };
+			adoptOpen = true;
+			return;
+		}
+		mountingPart = { nodeId: node.id, nodeName: node.name, part };
+		mountOpen = true;
+	}
+
+	function unmountPartition(node: StorageNodeView, part: StoragePartitionView) {
+		if (!part.diskMountId) return;
+		askConfirm({
+			title: part.state === 'volume' ? `Remove volume “${part.volumeName}” and unmount ${part.device}?` : `Unmount ${part.device}?`,
+			description:
+				part.state === 'volume'
+					? 'The volume is unregistered first, which is refused while anything is stored on it. The partition is then unmounted on the node; its files stay on the disk.'
+					: 'The node stops mounting it. Its files stay on the disk.',
+			confirmLabel: 'Unmount',
+			tone: 'danger',
+			action: '?/unmountPartition',
+			fields: { nodeId: node.id, id: part.diskMountId },
+		});
+	}
+
+	const partitionBadge: Record<string, { label: string; tone: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'outline' }> = {
+		mounting: { label: 'Mounting…', tone: 'info' },
+		failed: { label: 'Mount failed', tone: 'danger' },
+		unmounting: { label: 'Unmounting…', tone: 'neutral' },
+		system: { label: 'System', tone: 'neutral' },
+		'in-use': { label: 'In use', tone: 'neutral' },
+		unformatted: { label: 'No filesystem', tone: 'outline' },
+		unsupported: { label: 'Not supported', tone: 'outline' },
+	};
 
 	const unassigned = $derived(
 		overview.nodes.flatMap((node) =>
@@ -304,7 +354,7 @@
 <Panel
 	title="Disks and volumes"
 	icon={ServerIcon}
-	description="What each node reports. Mount a disk with your usual tools (or add a network share), adopt it, and put it in a pool. Skiff never formats or deletes anything here."
+	description="Every partition each node reports. Add as volume adopts a mounted partition, or first mounts an unmounted ext4, xfs, btrfs or f2fs filesystem at {DISK_MOUNT_ROOT}/<name> by its UUID. Then put it in a pool. Skiff never formats or deletes anything here."
 	class="mb-5"
 >
 	{#snippet actions()}
@@ -321,7 +371,7 @@
 						System disk: {formatBytes(node.systemFreeBytes)} free{node.systemSizeBytes ? ` of ${formatBytes(node.systemSizeBytes)}` : ''}
 					</span>
 				</div>
-				{#if node.volumes.length === 0 && node.adoptable.length === 0}
+				{#if node.volumes.length === 0 && node.adoptable.length === 0 && node.partitions.length === 0}
 					<p class="pl-6 text-xs text-muted-foreground">
 						Only the system disk.{node.freeDevices
 							? ` ${node.freeDevices} unformatted disk(s) detected: format and mount them on the node, and they appear here.`
@@ -358,7 +408,65 @@
 						{#if volume.profile}<div class="basis-full pl-5"><VolumeProfileStats profile={volume.profile} /></div>{/if}
 					</div>
 				{/each}
-				{#each node.adoptable as mount (mount.sourceKey)}
+				{#if node.partitions.length > 0}
+					<div class="ml-6 overflow-x-auto rounded-md border">
+						<table class="w-full text-sm">
+							<thead class="text-left text-xs uppercase tracking-wide text-muted-foreground">
+								<tr class="border-b">
+									<th class="px-3 py-2">Partition</th>
+									<th class="px-3 py-2">Size</th>
+									<th class="px-3 py-2">Filesystem</th>
+									<th class="px-3 py-2">Mounted at</th>
+									<th class="px-3 py-2 text-right"><span class="sr-only">Action</span></th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each node.partitions as part (part.device)}
+									<tr class="border-b align-top last:border-0">
+										<td class="px-3 py-2">
+											<div class="flex items-center gap-1.5">
+												<HardDriveIcon class="size-3.5 shrink-0 text-muted-foreground" />
+												<span class="font-mono text-xs">{part.device}</span>
+												{#if part.type && part.type !== 'part'}<Badge variant="outline">{part.type}</Badge>{/if}
+											</div>
+											{#if part.label || part.model}
+												<div class="pl-5 text-xs text-muted-foreground">{[part.label, part.model].filter(Boolean).join(' · ')}</div>
+											{/if}
+											{#if part.reason}
+												<div class="max-w-md pl-5 text-xs {part.state === 'failed' ? 'text-destructive' : 'text-muted-foreground'}">{part.reason}</div>
+											{/if}
+										</td>
+										<td class="whitespace-nowrap px-3 py-2 text-xs">
+											{formatBytes(part.sizeBytes)}
+											{#if part.freeBytes !== null}<div class="text-muted-foreground">{formatBytes(part.freeBytes)} free</div>{/if}
+										</td>
+										<td class="px-3 py-2 text-xs">{part.fsType ?? '—'}</td>
+										<td class="px-3 py-2 font-mono text-xs text-muted-foreground">{part.mountPath ?? '—'}</td>
+										<td class="px-3 py-2">
+											<div class="flex flex-wrap items-center justify-end gap-1.5">
+												{#if part.state === 'volume'}
+													<Badge variant="success">Volume {part.volumeName}</Badge>
+												{:else if part.state === 'adoptable' || part.state === 'mountable'}
+													<Button variant="outline" size="xs" onclick={() => addPartition(node, part)}>
+														<PlusIcon class="size-3.5" />Add as volume
+													</Button>
+												{:else}
+													<Badge variant={partitionBadge[part.state]?.tone ?? 'neutral'}>{partitionBadge[part.state]?.label ?? part.state}</Badge>
+												{/if}
+												{#if part.diskMountId && part.state !== 'unmounting'}
+													<Button variant="ghost" size="xs" onclick={() => unmountPartition(node, part)}>
+														{part.state === 'mounting' || part.state === 'failed' ? 'Cancel' : 'Unmount'}
+													</Button>
+												{/if}
+											</div>
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				{/if}
+				{#each otherMounts(node) as mount (mount.sourceKey)}
 					<div class="ml-6 flex flex-wrap items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm">
 						<HardDriveIcon class="size-3.5 text-muted-foreground" />
 						<span class="font-mono text-xs">{mount.mountPath}</span>
@@ -461,6 +569,40 @@
 					<Input id="edit-minfree" name="minFreePercent" type="number" min={0} max={90} value={String(editing.minFreePercent)} />
 				</Field.Field>
 			</div>
+		</Field.Group>
+	</FormDialog>
+{/if}
+
+{#if mountingPart}
+	<FormDialog
+		bind:open={mountOpen}
+		icon={HardDriveIcon}
+		title="Add {mountingPart.part.device} as a volume"
+		description="{mountingPart.nodeName} mounts this {mountingPart.part.fsType} filesystem by its UUID at {DISK_MOUNT_ROOT}/<name> and keeps it mounted across reboots, then it becomes a volume. Nothing is formatted; Skiff only creates its own skiff/ directory inside."
+		action="?/mountPartition"
+		submitLabel="Add as volume"
+	>
+		<input type="hidden" name="nodeId" value={mountingPart.nodeId} />
+		<input type="hidden" name="fsUuid" value={mountingPart.part.uuid} />
+		<Field.Group>
+			<div class="grid gap-4 sm:grid-cols-2">
+				<Field.Field>
+					<Field.Label for="mount-name">Volume name</Field.Label>
+					<Input id="mount-name" name="name" required minlength={3} maxlength={40} value={mountingPart.part.suggestedName} class="font-mono text-sm" />
+					<Field.Description>Mounted at <code>{DISK_MOUNT_ROOT}/&lt;name&gt;</code>.</Field.Description>
+				</Field.Field>
+				<Field.Field>
+					<Field.Label for="mount-pool">Pool</Field.Label>
+					<NativeSelect.Root id="mount-pool" name="pool" class="w-full" value={suggestedPool(/nvme/i.test(mountingPart.part.device) ? 'fast' : '', false)}>
+						<NativeSelect.Option value="">No pool yet</NativeSelect.Option>
+						{#each poolNames as name (name)}<NativeSelect.Option value={name}>{name}</NativeSelect.Option>{/each}
+					</NativeSelect.Root>
+				</Field.Field>
+			</div>
+			<label class="flex items-center gap-2 text-sm">
+				<input type="checkbox" name="defaultVolume" value="1" class="size-4 accent-brand" />
+				Make it {mountingPart.nodeName}'s default volume for new services
+			</label>
 		</Field.Group>
 	</FormDialog>
 {/if}

@@ -38,12 +38,18 @@ export class MaintenanceService {
 	async run(): Promise<MaintenanceReport> {
 		// Expire scheduler leases from crashed workers; this is the only periodic loop (F4).
 		this.ctx.scheduler.tick();
+		// Flows (docs/FLOWS.md): resume runs whose process died mid-step, then advance anything due.
+		// The control plane also drives flows every few seconds; this sweep is the backstop.
+		this.ctx.flows.tick();
+		this.ctx.flows.drive({ limit: 200 });
+		this.ctx.flows.prune();
 		const projectsPurged = await this.ctx.projects.purgeExpired();
 		// Trashed databases past their window are handed to their node, which deletes the data (D59).
 		this.ctx.databases.requestExpiredPurges();
 		this.ctx.databases.tickBackups();
 		this.ctx.databases.tickPitr();
-		// Database moves whose node never answered roll back or give up (D97).
+		// Database moves (D97) run as flows; this adopts moves from before flows and times out
+		// steps whose node never answered.
 		this.ctx.moves.tick();
 		// Abandon a replica promotion whose fence the old primary's node never confirmed (C7).
 		this.ctx.databaseReplicas.tick();

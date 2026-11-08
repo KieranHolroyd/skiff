@@ -89,6 +89,39 @@ The dashboard never asks an operator to type a shell command, and the agent neve
    volume as `ready` only after `findmnt` confirms the mount and the UUID matches. Workload
    starts re-check this every time (§6).
 
+### 3.1 Partition list and *Add as volume* (built 2026-11-08)
+
+Settings → Storage → **Disks and volumes** lists, per node, every partition the heartbeat
+inventory reports (`lsblk` types `disk`, `part`, `lvm`, `crypt`, `raid*`; loop/rom/zram are
+dropped; a disk that only holds partitions is not a row of its own). Each row carries a state
+derived in `partitionViews` (`packages/core/src/disk-mounts.ts`):
+
+| State | Meaning | Action |
+|---|---|---|
+| `volume` | Already a registered volume | *Unmount* when Skiff mounted it |
+| `adoptable` | Mounted at a usable path | **Add as volume** → the P0 adopt dialog |
+| `mountable` | Unmounted ext4/ext3/ext2/xfs/btrfs/f2fs with a UUID, node has `disk-mounts` | **Add as volume** → mount, then adopt |
+| `mounting` / `failed` / `unmounting` | A partition mount in flight, failed (error shown) or being removed | *Cancel* |
+| `system` | Mounted at `/`, `/boot`, `/var`, … or any path volumes cannot use | — |
+| `in-use` | Swap, LVM PV, RAID member, LUKS container, ZFS member, or holds other devices | — |
+| `unformatted` | No filesystem | — (formatting stays P1) |
+| `unsupported` | vfat/ntfs/exfat (no POSIX ownership), no UUID, or an agent without `disk-mounts` | — |
+
+**Mounting** an unmounted partition is non-destructive and follows the share-mount pattern (§5):
+
+| Step | Where |
+|---|---|
+| Request | `DiskMountService.mount` (`disk_mounts` row, 0078): `{ fsUuid, name, pool?, defaultVolume }`; refused unless the inventory shows exactly one device with that UUID, unmounted, holding nothing, with a mountable filesystem |
+| Node | Desired state `diskMounts` `{ id, name, fsUuid, fsType }` / `diskUnmounts`; agent capability `disk-mounts`; heartbeat `diskMounts` / `unmountedDisks` |
+| Helper | `/v1/disks/{status,mount,unmount}`: re-reads `lsblk` and repeats the free-device check, then `mount -t <fs> -o rw,noatime,nosuid,nodev /dev/disk/by-uuid/<uuid> /mnt/skiff-disks/<name>`; unmount never forces and removes the mount point with `rmdir` |
+| Adopt | Once the inventory shows the UUID at `/mnt/skiff-disks/<name>`, it is adopted as a node volume named `<name>` and put in the requested pool |
+| Unmount | `DiskMountService.unmount`: unregisters the volume (refused while anything is on it), then the node unmounts and confirms |
+
+The wire never carries a device path. Like share mounts there is no fstab entry or mount unit
+yet: the agent remounts after a reboot (re-checked every 15 s), and workloads on the volume fail
+closed until it has (D76). Not yet: REST/CLI verbs (dashboard only), LUKS unlock, and mounting a
+btrfs subvolume other than the default.
+
 ## 4. Supported stacks
 
 | Kind | Provision natively | Adopt existing | Notes / limits |
@@ -211,6 +244,7 @@ The helper keeps its fixed-verb surface; volumes add:
 |---|---|
 | `volumes.inventory` | Read-only `lsblk`/`findmnt`/pool inventory. |
 | `volumes.verify` | Is `mountPath` a real mount with the expected UUID/source? |
+| `disks.status` / `disks.mount` / `disks.unmount` | **Built:** mount an unmounted filesystem by UUID at `/mnt/skiff-disks/<name>` (§3.1). |
 | `volumes.apply` | Execute a validated plan (one per node, hash-checked). |
 | `volumes.remove` | Unmount, remove the mount unit and stack; `wipe` only with confirmation. |
 | `volumes.mount` / `volumes.unmount` | Repair actions for an existing registered volume. |
@@ -231,7 +265,7 @@ replication is not used for a local move. Databases use their own safe stop/copy
 | Phase | Scope |
 |---|---|
 | **P0 (foundation)** | **Done:** `node_volumes` + per-instance `volume_id` + node default; inventory in the heartbeat; adopt an existing mount (no formatting); helper `volumes.inventory`/`volumes.verify`; `<mount>/skiff/<id>` data dirs with a fail-closed start; REST + storage/database create `volume`; tests. **Open:** the dashboard volumes page and `--volume` on the CLI. |
-| **P1** | Guided local format (GPT + ext4/xfs) through plan/apply; mount units by UUID; dashboard wizard. |
+| **P1** | **Done:** the partition list with *Add as volume*, mounting an existing filesystem by UUID (§3.1). **Open:** guided local format (GPT + ext4/xfs) through plan/apply; mount units by UUID. |
 | **P2** | LVM and mdadm provisioning; array/pool health in heartbeats. |
 | **P3** | ZFS pools/datasets; LUKS2 with keyfile/TPM2. |
 | **P4** | **Done:** NFS/CIFS mounts from the share registry with sealed credentials, linked as node volumes (§5, D143). **Open:** systemd mount units/automount, migration between volumes; multi-drive RustFS (erasure coding) as a separate decision. |

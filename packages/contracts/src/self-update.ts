@@ -8,7 +8,8 @@
  * and the updater re-checks the version on GitHub itself. The exceptions are the install method
  * and the release channel: allowlisted enums written to sidecar files (see
  * {@link SELF_UPDATE_METHODS}, {@link SELF_UPDATE_CHANNELS}), because a systemd unit cannot pass
- * form data through to the updater.
+ * form data through to the updater, plus approvals of destructive migrations, each bound to the
+ * hash of the SQL the updater reported ({@link selfUpdateApprovalFile}).
  */
 
 export const SELF_UPDATE_DEFAULTS = {
@@ -81,6 +82,74 @@ export function selfUpdateModeFile(requestFile: string): string {
 	return `${requestFile}.mode`;
 }
 
+/**
+ * Destructive migrations approved from the dashboard (`request.approve`). The updater refuses a
+ * destructive migration unattended and reports it in the status ({@link SelfUpdateApproval}); an
+ * admin reviews the SQL and approves it. Each approval names the migration and the SHA-256 of
+ * the exact SQL that was shown, so the updater accepts it only for that file: a release whose
+ * migration changed, or that adds another destructive one, is refused again.
+ */
+export function selfUpdateApprovalFile(requestFile: string): string {
+	return `${requestFile}.approve`;
+}
+
+export interface MigrationApproval {
+	id: string;
+	sha256: string;
+}
+
+const MIGRATION_ID = /^[0-9]{4}_[a-z0-9_]{1,80}\.sql$/;
+const SHA256 = /^[a-f0-9]{64}$/;
+const MAX_APPROVALS = 50;
+
+export function isMigrationApproval(value: unknown): value is MigrationApproval {
+	const entry = value as MigrationApproval | null;
+	return (
+		typeof entry === 'object' &&
+		entry !== null &&
+		typeof entry.id === 'string' &&
+		MIGRATION_ID.test(entry.id) &&
+		typeof entry.sha256 === 'string' &&
+		SHA256.test(entry.sha256)
+	);
+}
+
+/** The approval sidecar body: one `<id> <sha256>` per line. */
+export function formatMigrationApprovals(approvals: MigrationApproval[]): string {
+	return approvals.map((approval) => `${approval.id} ${approval.sha256}`).join('\n');
+}
+
+/** Parse the sidecar; null when any line is malformed, so a bad file approves nothing. */
+export function parseMigrationApprovals(text: string): MigrationApproval[] | null {
+	const lines = text.split('\n').map((line) => line.trim()).filter(Boolean);
+	if (lines.length === 0 || lines.length > MAX_APPROVALS) return null;
+	const approvals: MigrationApproval[] = [];
+	for (const line of lines) {
+		const [id, sha256, extra] = line.split(/\s+/);
+		const entry = { id, sha256 };
+		if (extra !== undefined || !isMigrationApproval(entry)) return null;
+		approvals.push(entry);
+	}
+	return approvals;
+}
+
+/** A destructive migration the updater refused, as the dashboard's review dialog shows it. */
+export interface SelfUpdateApprovalMigration extends MigrationApproval {
+	/** What makes it destructive, with the line in `sql`. */
+	statements: Array<{ line: number; statement: string }>;
+	/** The migration's SQL, capped at {@link SELF_UPDATE_APPROVAL_SQL_BYTES}. */
+	sql: string;
+	truncated: boolean;
+}
+
+export const SELF_UPDATE_APPROVAL_SQL_BYTES = 64 * 1024;
+
+/** Set on the status when a release waits for destructive migrations to be approved. */
+export interface SelfUpdateApproval {
+	version: string;
+	migrations: SelfUpdateApprovalMigration[];
+}
+
 export type SelfUpdatePhase =
 	| 'queued'
 	| 'checking'
@@ -115,6 +184,8 @@ export interface SelfUpdateStatus {
 	startedAt: string;
 	updatedAt: string;
 	finishedAt?: string;
+	/** The release was refused until these destructive migrations are approved. */
+	approval?: SelfUpdateApproval;
 }
 
 /** A run that has not written progress for this long is treated as dead (updater crashed). */

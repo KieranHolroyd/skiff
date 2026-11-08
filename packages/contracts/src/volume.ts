@@ -64,16 +64,25 @@ export const volumeInventoryEntrySchema = z.object({
 export type VolumeInventoryEntry = z.infer<typeof volumeInventoryEntrySchema>;
 
 /**
- * A block device for the provisioning wizard (P1+). `id` is a serial/WWN where available so it
- * survives reboots; `free` means no filesystem, mount, holder, swap or system role.
+ * A block device (disk, partition, LV, array or LUKS mapper) the node reports. `id` is a
+ * serial/WWN where available so it survives reboots; `free` means no filesystem, mount, holder,
+ * swap or system role. `type`, `uuid`, `label` and `parent` are absent from agents that predate
+ * partition mounts (they then default to null).
  */
 export const volumeDeviceSchema = z.object({
 	id: z.string().min(1).max(200),
 	name: z.string().min(1).max(200),
+	/** lsblk TYPE: `disk`, `part`, `lvm`, `crypt`, `raid1`, … */
+	type: z.string().max(32).nullable().default(null),
+	/** Kernel name of the device this one sits on (a partition's disk). */
+	parent: z.string().max(200).nullable().default(null),
 	model: z.string().max(120).nullable().default(null),
 	serial: z.string().max(120).nullable().default(null),
 	sizeBytes: z.number().int().nonnegative(),
 	fsType: z.string().max(32).nullable().default(null),
+	/** Filesystem UUID; what a partition mount is addressed by, never the device name. */
+	uuid: z.string().max(100).nullable().default(null),
+	label: z.string().max(120).nullable().default(null),
 	mountPath: z.string().max(200).nullable().default(null),
 	holders: z.array(z.string().max(120)).max(20).default([]),
 	free: z.boolean(),
@@ -164,3 +173,75 @@ export interface NodeVolumesView {
 export function volumeHasRoom(volume: Pick<VolumeView, 'freeBytes'>, storageMb: number): boolean {
 	return volume.freeBytes === null || volume.freeBytes >= storageMb * 1024 * 1024;
 }
+
+// ------------------------------------------------------------------ partition mounts
+
+/**
+ * Partition mounts (docs/VOLUMES.md §3.1): Settings → Storage lists every partition a node
+ * reports, and *Add as volume* on an unmounted one asks the node's helper to mount that filesystem
+ * — by UUID, never by device name — at `/mnt/skiff-disks/<name>`. Once the inventory shows it
+ * there, it is adopted as a node volume. Nothing is ever formatted.
+ */
+export const DISK_MOUNT_ROOT = '/mnt/skiff-disks';
+export const DISK_MOUNT_CAPABILITY = 'disk-mounts';
+
+export function diskMountPath(name: string): string {
+	return `${DISK_MOUNT_ROOT}/${name}`;
+}
+
+/** Filesystems Skiff mounts for managed data: POSIX ownership and permissions are required. */
+export const mountableFsTypes = ['ext4', 'ext3', 'ext2', 'xfs', 'btrfs', 'f2fs'] as const;
+export function isMountableFsType(fsType: string | null | undefined): boolean {
+	return !!fsType && (mountableFsTypes as readonly string[]).includes(fsType.toLowerCase());
+}
+
+/** A filesystem UUID as lsblk reports it (ext/xfs/btrfs hex-with-dashes, FAT `ABCD-1234`). */
+export const fsUuidSchema = z
+	.string()
+	.trim()
+	.min(4)
+	.max(64)
+	.regex(/^[A-Fa-f0-9-]+$/, 'Unexpected characters in the filesystem UUID.');
+
+export const diskMountStatuses = ['pending', 'mounted', 'failed', 'unmounting'] as const;
+export type DiskMountStatus = (typeof diskMountStatuses)[number];
+
+export const diskMountCreateSchema = z
+	.object({
+		/** Filesystem UUID from the node's inventory. */
+		fsUuid: fsUuidSchema,
+		/** Volume name; also the last segment of the mount path. */
+		name: volumeNameSchema,
+		/** Put the volume in this pool once it is adopted. */
+		pool: z.string().trim().max(40).nullable().optional(),
+		/** Make it the node default for new managed instances. */
+		defaultVolume: z.boolean().default(false),
+	})
+	.strict();
+export type DiskMountCreate = z.input<typeof diskMountCreateSchema>;
+
+/** One partition mount in a node's desired state: a UUID and a name, never a device path. */
+export const diskMountDesiredSchema = z.object({
+	/** `disk_mounts.id`; reports use it. */
+	id: z.string().min(1).max(100),
+	/** Mount directory name under `/mnt/skiff-disks`. */
+	name: volumeNameSchema,
+	fsUuid: fsUuidSchema,
+	fsType: z.enum(mountableFsTypes),
+});
+export type DiskMountDesired = z.infer<typeof diskMountDesiredSchema>;
+
+/** A partition mount the node must unmount (its row is `unmounting`). */
+export const diskUnmountDesiredSchema = z.object({
+	id: z.string().min(1).max(100),
+	name: volumeNameSchema,
+});
+export type DiskUnmountDesired = z.infer<typeof diskUnmountDesiredSchema>;
+
+/** Heartbeat report: the node's view of each desired partition mount. */
+export const diskMountReportSchema = z.object({
+	id: z.string().min(1).max(100),
+	mounted: z.boolean(),
+	error: z.string().max(2_000).nullable().default(null),
+});
+export type DiskMountReport = z.infer<typeof diskMountReportSchema>;

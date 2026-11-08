@@ -3,7 +3,7 @@ import { isAbsolute, join, relative, sep } from 'node:path';
 import type { PipelineResolveClaim, PipelineResolveReport } from '@skiff/contracts';
 import { PIPELINE_WORKFLOW_DIR } from '@skiff/contracts';
 import { redactSecret } from '../command.ts';
-import { cloneAtSha, cloneRef, commitInfo, type GitCredentials } from './git.ts';
+import { cloneAtSha, cloneRef, commitInfo, withCloneToken, type GitCredentials } from './git.ts';
 
 /**
  * Resolve claims (W1): read `.skiff/workflows/*.yml` at a ref for the control plane, which cannot
@@ -65,7 +65,8 @@ export async function runResolve(input: {
 	credentials: GitCredentials;
 	log?: (message: string) => void;
 }): Promise<void> {
-	const { claim, api, credentials } = input;
+	const { claim, api } = input;
+	const credentials = withCloneToken(input.credentials, claim.gitToken);
 	const log = input.log ?? ((message: string) => console.log(`[pipeline] ${message}`));
 	const root = join(credentials.buildDir, 'pipelines');
 	await mkdir(root, { recursive: true, mode: 0o711 });
@@ -83,7 +84,8 @@ export async function runResolve(input: {
 		});
 		log(`resolved ${claim.repository.name}@${claim.ref}: ${files.length} workflow files`);
 	} catch (error) {
-		const message = redactSecret(error instanceof Error ? error.message : String(error), credentials.gitToken).slice(0, 4000);
+		const raw = error instanceof Error ? error.message : String(error);
+		const message = redactSecret(redactSecret(raw, credentials.gitToken), input.credentials.gitToken).slice(0, 4000);
 		log(`resolve ${claim.triggerId} failed: ${message}`);
 		await api.resolve({ error: message, files: [] }).catch((reportError: unknown) =>
 			log(`resolve ${claim.triggerId} report failed: ${reportError instanceof Error ? reportError.message : String(reportError)}`),

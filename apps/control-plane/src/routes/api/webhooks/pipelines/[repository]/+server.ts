@@ -9,7 +9,7 @@ import { json, route } from '#lib/server/api.js';
 export const POST: RequestHandler = async (event) =>
 	route(async () => {
 		const rawBody = await event.request.text();
-		const result = core.pipelines.handleGithubWebhook(
+		const result = await core.pipelines.handleGithubWebhook(
 			event.params.repository,
 			rawBody,
 			event.request.headers.get('x-hub-signature-256'),

@@ -29,6 +29,7 @@
 	import SettingsHeader from '../_lib/SettingsHeader.svelte';
 	import ChannelPicker from './ChannelPicker.svelte';
 	import MethodPicker from './MethodPicker.svelte';
+	import MigrationApproval from './MigrationApproval.svelte';
 	import PreflightChecks from './PreflightChecks.svelte';
 	import UpdateHistory from './UpdateHistory.svelte';
 	import UpdateLog from './UpdateLog.svelte';
@@ -187,6 +188,10 @@
 			lastRun?.outcome === 'error' ||
 			lastRun?.outcome === 'rolled-back'
 	);
+	/** The last run was refused until destructive migrations are approved (see MigrationApproval). */
+	const approval = $derived(lastRun?.approval ?? null);
+	/** It is for the version on offer, so approving replaces the plain install. */
+	const needsApproval = $derived(Boolean(approval && (!target || approval.version === target)));
 	/** The last run tried this same version and failed: lead with that, not the offer. */
 	const retrying = $derived(lastRunFailed && Boolean(target) && lastRun?.toVersion === target);
 
@@ -246,6 +251,15 @@
 						? `${data.latest.error} The updater can still check with its own GitHub credentials.`
 						: data.latest.error,
 					target: null
+				};
+			if (approval && needsApproval)
+				return {
+					tone: 'warning',
+					icon: TriangleAlertIcon,
+					eyebrow: 'Needs your approval',
+					title: `v${approval.version} is waiting for you`,
+					description: `It changes or removes existing data in the control database, so Skiff stopped before installing it. Review the migration below and approve it to continue. You're still on v${view.version}.`,
+					target: approval.version
 				};
 			if (data.comparison.available && retrying && lastRun)
 				return {
@@ -412,7 +426,18 @@
 		<UpdateLog log={currentLog} running />
 	{/if}
 
-	{#if canInstall}
+	{#if approval && needsApproval && ready && !running}
+		<MigrationApproval
+			{approval}
+			currentVersion={view.version}
+			{method}
+			channel={data.channel}
+			previousUpdatedAt={data.status?.updatedAt ?? null}
+			onrequested={beginFollowing}
+		/>
+	{/if}
+
+	{#if canInstall && !needsApproval}
 		<Panel
 			title={target
 				? `Install v${target}${switching ? ` from ${data.channel}` : ''}`

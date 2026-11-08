@@ -428,3 +428,83 @@ describe('an app using a database and private storage on the old node', () => {
 		expect(core.storage.get(owner, 'notes-files').nodeId).toBe(beta.nodeId);
 	});
 });
+
+describe('the move flow (docs/FLOWS.md §6)', () => {
+	const runOf = (moveId: string) => core.flows.get(owner, core.flows.idFor('database.move', moveId)!, { steps: true });
+
+	test('a move reports its run, which follows the phases and ends with the purge', () => {
+		const db = core.databases.create(owner, { name: 'journal', placement: alpha.nodeId, pooler: false });
+		core.databases.applyHeartbeat(alpha.nodeId, [{ id: db.id, status: 'running', restarts: 0 }]);
+		// Nothing attached: straight to the final dump.
+		const move = core.moves.moveDatabase(owner, 'journal', { node: beta.nodeId });
+		expect(move.operationId).toMatch(/^flw_/);
+		expect(core.flows.get(owner, move.operationId!)).toMatchObject({
+			kind: 'database.move',
+			status: 'waiting',
+			step: 'dump',
+			waitingFor: 'backup-result',
+			subject: { kind: 'database', id: db.id },
+		});
+		const { backupId } = moveRow(db.id);
+		beat(alpha, { databaseBackupResults: [{ taskId: backupId!, action: 'backup', databaseId: db.id, backupId: null, status: 'ok' }] });
+		expect(runOf(move.id)).toMatchObject({ status: 'waiting', step: 'cutover', waitingFor: 'restore-result' });
+		// After the cut-over the restore result decides; a cancel is refused.
+		expect(() => core.flows.cancel(owner, move.operationId!)).toThrow(/cannot be cancelled while it is in step "cutover"/);
+		beat(beta, {
+			databaseBackupResults: [{ taskId: `restore:${db.id}`, action: 'restore', databaseId: db.id, backupId, status: 'ok' }],
+		});
+		expect(runOf(move.id)).toMatchObject({ status: 'waiting', step: 'purge', waitingFor: 'purged' });
+		beat(alpha, { purgedDatabases: [db.id] });
+		const run = runOf(move.id);
+		expect(run).toMatchObject({ status: 'succeeded', result: { moveId: move.id, outcome: 'moved' } });
+		expect(run.steps!.map((entry) => `${entry.step}:${entry.event}`)).toEqual([
+			'dump:started',
+			'dump:wait',
+			'cutover:next',
+			'cutover:wait',
+			// The refused cancel stays in the log.
+			'cutover:cancel-requested',
+			'cutover:cancel-refused',
+			'purge:next',
+			'purge:wait',
+			'purge:succeeded',
+		]);
+		expect(moveRow(db.id).phase).toBe('done');
+	});
+
+	test('cancelling before the cut-over aborts the move and restores backups', () => {
+		const db = core.databases.get(owner, 'journal');
+		core.databases.applyHeartbeat(beta.nodeId, [{ id: db.id, status: 'running', restarts: 0 }]);
+		const move = core.moves.moveDatabase(owner, 'journal', { node: alpha.nodeId });
+		const cancelled = core.flows.cancel(owner, move.operationId!);
+		expect(cancelled.status).toBe('cancelled');
+		expect(core.moves.latestForDatabase(owner, 'journal')).toMatchObject({ phase: 'failed', error: 'The move was cancelled.' });
+		expect(core.databases.get(owner, 'journal').nodeId).toBe(beta.nodeId);
+		// The abandoned dump never reaches the node.
+		expect(core.databases.getBackup(owner, 'journal', moveRow(db.id).backupId!).status).toBe('failed');
+	});
+
+	test('a move that began before flows is adopted where it stands', () => {
+		const db = core.databases.get(owner, 'journal');
+		const move = core.moves.moveDatabase(owner, 'journal', { node: alpha.nodeId });
+		// Simulate an install upgraded mid-move: the move row exists, its run does not.
+		opened.sqlite.run('DELETE FROM flow_steps WHERE run_id = ?', [move.operationId!]);
+		opened.sqlite.run('DELETE FROM flow_runs WHERE id = ?', [move.operationId!]);
+		expect(core.moves.latestForDatabase(owner, 'journal')?.operationId).toBeNull();
+
+		const { backupId } = moveRow(db.id);
+		beat(beta, { databaseBackupResults: [{ taskId: backupId!, action: 'backup', databaseId: db.id, backupId: null, status: 'ok' }] });
+		const adopted = core.moves.latestForDatabase(owner, 'journal')!;
+		expect(adopted.phase).toBe('restoring');
+		expect(runOf(move.id)).toMatchObject({ status: 'waiting', step: 'cutover' });
+		expect(runOf(move.id).steps![0]).toMatchObject({ step: 'dump', event: 'started', detail: expect.stringMatching(/Adopted/) });
+
+		// A restore that never reports back rolls the move back from the maintenance tick.
+		clock += 2 * 60 * 60_000 + 1;
+		// Moves earlier tests left waiting on a dump time out in the same tick.
+		expect(core.moves.tick()).toBeGreaterThanOrEqual(1);
+		expect(core.moves.latestForDatabase(owner, 'journal')).toMatchObject({ phase: 'purging', outcome: 'rolled_back' });
+		beat(alpha, { purgedDatabases: [db.id] });
+		expect(runOf(move.id)).toMatchObject({ status: 'failed', error: expect.stringMatching(/did not finish in time/) });
+	});
+});

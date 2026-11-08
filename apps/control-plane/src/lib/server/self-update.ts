@@ -6,6 +6,7 @@ import {
 	readFileSync,
 	readSync,
 	renameSync,
+	rmSync,
 	statSync,
 	writeFileSync
 } from 'node:fs';
@@ -20,11 +21,15 @@ import {
 	isSelfUpdateChannel,
 	isSelfUpdateMethod,
 	parseSemver,
+	formatMigrationApprovals,
 	releaseInChannel,
+	selfUpdateApprovalFile,
 	selfUpdateChannelFile,
 	selfUpdateModeFile,
 	semverBump,
+	type MigrationApproval,
 	type Principal,
+	type SelfUpdateApproval,
 	type SelfUpdateChannel,
 	type SelfUpdateLog,
 	type SelfUpdateLogLevel,
@@ -46,6 +51,7 @@ const paths = {
 	requestFile,
 	modeFile: selfUpdateModeFile(requestFile),
 	channelSidecar: selfUpdateChannelFile(requestFile),
+	approvalSidecar: selfUpdateApprovalFile(requestFile),
 	channelFile: env.SKIFF_UPDATE_CHANNEL_FILE ?? SELF_UPDATE_DEFAULTS.channelFile,
 	statusFile: env.SKIFF_UPDATE_STATUS_FILE ?? SELF_UPDATE_DEFAULTS.statusFile,
 	logFile: env.SKIFF_UPDATE_LOG_FILE ?? SELF_UPDATE_DEFAULTS.logFile,
@@ -403,7 +409,8 @@ export function requestUpdate(
 	principal: Principal,
 	target: string | null,
 	method: SelfUpdateMethod = 'auto',
-	channel: SelfUpdateChannel = currentChannel()
+	channel: SelfUpdateChannel = currentChannel(),
+	approvals: MigrationApproval[] = []
 ): void {
 	if (!isSelfUpdateMethod(method)) throw new Error(`Unknown update method "${String(method)}".`);
 	if (!isSelfUpdateChannel(channel))
@@ -419,6 +426,10 @@ export function requestUpdate(
 	};
 	writeSidecar(paths.modeFile, method);
 	writeSidecar(paths.channelSidecar, channel);
+	// Approvals only travel with the request that carries them; never leave an old one behind.
+	if (approvals.length > 0)
+		writeSidecar(paths.approvalSidecar, formatMigrationApprovals(approvals));
+	else rmSync(paths.approvalSidecar, { force: true });
 	const tmp = `${paths.requestFile}.${process.pid}.tmp`;
 	writeFileSync(
 		tmp,
@@ -437,4 +448,27 @@ export function defaultUpdateMethod(): SelfUpdateMethod {
 /** Parse a submitted radio value; null means it was not one of the allowlisted choices. */
 export function updateMethodFromForm(value: unknown): SelfUpdateMethod | null {
 	return isSelfUpdateMethod(value) ? value : null;
+}
+
+/**
+ * The destructive migrations an admin approved in the review dialog, checked against what the
+ * updater last reported: only migrations it refused (same id and SQL hash) can be approved.
+ * Returns null when the submission names anything else.
+ */
+export function approvalsFromForm(
+	values: FormDataEntryValue[],
+	reported: SelfUpdateApproval | undefined
+): MigrationApproval[] | null {
+	if (values.length === 0) return [];
+	if (!reported) return null;
+	const approvals: MigrationApproval[] = [];
+	for (const value of values) {
+		const [id, sha256] = String(value).split(' ');
+		const match = reported.migrations.find(
+			(migration) => migration.id === id && migration.sha256 === sha256
+		);
+		if (!match) return null;
+		approvals.push({ id: match.id, sha256: match.sha256 });
+	}
+	return approvals;
 }

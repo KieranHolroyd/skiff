@@ -245,6 +245,7 @@
 	const CRUMB_LABELS: Record<string, string> = {
 		'api-keys': 'API keys',
 		'connected-apps': 'Connected apps',
+		github: 'GitHub',
 		usage: 'Usage & limits'
 	};
 

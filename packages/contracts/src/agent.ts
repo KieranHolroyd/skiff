@@ -38,7 +38,13 @@ import {
 } from './object-storage.ts';
 import { storageReplicationReportSchema } from './storage-replication.ts';
 import { nodeStorageSchema, nodeStorageStatusSchema } from './storage.ts';
-import { nodeVolumeDesiredSchema, volumeInventorySchema } from './volume.ts';
+import {
+	diskMountDesiredSchema,
+	diskMountReportSchema,
+	diskUnmountDesiredSchema,
+	nodeVolumeDesiredSchema,
+	volumeInventorySchema,
+} from './volume.ts';
 import { shareMountDesiredSchema, shareMountReportSchema, shareUnmountDesiredSchema } from './share.ts';
 import { volumeProfileResultSchema, volumeProfileTaskSchema } from './storage-pool.ts';
 import {
@@ -211,6 +217,10 @@ export const desiredStateSchema = z.object({
 	shareMounts: z.array(shareMountDesiredSchema).default([]),
 	/** Share mounts to remove; the node unmounts and reports `unmountedShares`. */
 	shareUnmounts: z.array(shareUnmountDesiredSchema).default([]),
+	/** Local partitions this node keeps mounted under `/mnt/skiff-disks` by UUID (docs/VOLUMES.md §3.1). */
+	diskMounts: z.array(diskMountDesiredSchema).default([]),
+	/** Partition mounts to remove; the node unmounts and reports `unmountedDisks`. */
+	diskUnmounts: z.array(diskUnmountDesiredSchema).default([]),
 	/** Storage benchmarks to run, one at a time (docs/STORAGE.md §5). */
 	volumeProfileTasks: z.array(volumeProfileTaskSchema).default([]),
 	/** Live app volumes placed on this node; the agent measures their usage (docs/VOLUMES.md §14). */
@@ -284,6 +294,7 @@ export type DesiredState = z.infer<typeof desiredStateSchema>;
  * - `database-replicas`: runs Postgres replica workloads, serves their link sockets, applies
  *   `databaseReplication` and `databaseReplicaPromotions` (docs/CLUSTERING.md §9.2, C7).
  * - `share-mounts`: mounts `shareMounts`, unmounts `shareUnmounts` and reports both.
+ * - `disk-mounts`: mounts `diskMounts` by filesystem UUID, unmounts `diskUnmounts`, reports both.
  * - `volume-profiles`: benchmarks `volumeProfileTasks` through the helper and reports results.
  */
 export const nodeCapabilities = [
@@ -299,6 +310,7 @@ export const nodeCapabilities = [
 	'database-replicas',
 	'share-mounts',
 	'volume-profiles',
+	'disk-mounts',
 ] as const;
 export type NodeCapability = (typeof nodeCapabilities)[number];
 
@@ -349,6 +361,10 @@ export const heartbeatSchema = z.object({
 	shareMounts: z.array(shareMountReportSchema).max(200).optional(),
 	/** Share mount ids from `shareUnmounts` that are now unmounted. */
 	unmountedShares: z.array(z.string().max(100)).max(200).optional(),
+	/** The node's view of every desired partition mount, each heartbeat. */
+	diskMounts: z.array(diskMountReportSchema).max(200).optional(),
+	/** Partition mount ids from `diskUnmounts` that are now unmounted. */
+	unmountedDisks: z.array(z.string().max(100)).max(200).optional(),
 	/** Progress and results of `volumeProfileTasks`. */
 	volumeProfileResults: z.array(volumeProfileResultSchema).max(50).optional(),
 	/** Actual workload state, so the fleet view reflects restart loops and OOM kills (DESIGN §9). */

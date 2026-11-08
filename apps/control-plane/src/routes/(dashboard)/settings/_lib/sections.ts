@@ -6,6 +6,7 @@ import ChartLineIcon from '@lucide/svelte/icons/chart-line';
 import ClockIcon from '@lucide/svelte/icons/clock';
 import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
 import DatabaseBackupIcon from '@lucide/svelte/icons/database-backup';
+import GitBranchIcon from '@lucide/svelte/icons/git-branch';
 import GlobeIcon from '@lucide/svelte/icons/globe';
 import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 import HardDriveUploadIcon from '@lucide/svelte/icons/hard-drive-upload';
@@ -38,6 +39,7 @@ export type SectionId =
 	| 'backup-targets'
 	| 'log-drains'
 	| 'registry'
+	| 'github'
 	| 'domains'
 	| 'policies'
 	| 'backups'
@@ -65,6 +67,7 @@ export type SectionHref =
 	| '/(dashboard)/settings/backup-targets'
 	| '/(dashboard)/settings/log-drains'
 	| '/(dashboard)/settings/registry'
+	| '/(dashboard)/settings/github'
 	| '/(dashboard)/settings/domains'
 	| '/(dashboard)/settings/policies'
 	| '/(dashboard)/settings/backups'
@@ -185,6 +188,17 @@ export const SECTIONS: Section[] = [
 		path: '/settings/registry',
 		icon: PackageIcon,
 		anyPermission: ['image:pull']
+	},
+	{
+		id: 'github',
+		group: 'organisation',
+		label: 'GitHub',
+		summary:
+			'Skiff’s GitHub App: private clones, push and pull request events, commit statuses and runners without tokens or webhooks.',
+		href: '/(dashboard)/settings/github',
+		path: '/settings/github',
+		icon: GitBranchIcon,
+		anyPermission: ['build:read']
 	},
 	{
 		id: 'domains',

@@ -40,6 +40,14 @@ import { MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH, SetupAlreadyCompleteError, cl
 import { isValidSetupToken } from './setup-token';
 
 /**
+ * "Sign in with GitHub" credentials: `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` from the
+ * environment, else the OAuth client of Skiff's GitHub App (docs/GITHUB.md, D166). Read once at
+ * boot, so an App created from the dashboard enables sign-in after the next restart.
+ */
+const githubOAuth = github ?? core.githubApp.oauthCredentials();
+export const githubSignIn = Boolean(githubOAuth);
+
+/**
  * Better Auth: passwords, passkeys, GitHub and magic links (D103), invite-only, 2FA for owners
  * (D10); organizations with the
  * same RBAC statements the API/MCP/CLI use (D9); API keys and MCP OAuth 2.1 (D11).
@@ -211,8 +219,8 @@ export const auth = betterAuth({
 			'/reset-password/*': { window: 60, max: 10 },
 		},
 	},
-	socialProviders: github
-		? { github: { clientId: github.clientId, clientSecret: github.clientSecret } }
+	socialProviders: githubOAuth
+		? { github: { clientId: githubOAuth.clientId, clientSecret: githubOAuth.clientSecret } }
 		: {},
 	trustedOrigins: [platformOrigin],
 	session: {

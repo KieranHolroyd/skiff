@@ -2,7 +2,7 @@ import { Database } from 'bun:sqlite';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { createPublicKey, generateKeyPairSync } from 'node:crypto';
+import { createHash, createPublicKey, generateKeyPairSync } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import {
@@ -16,6 +16,7 @@ import {
 	type PublishedRelease,
 	type SocketTarget,
 	type UpdateState,
+	ApprovalRequiredError,
 	Updater,
 	acquireLock,
 	assembleRelease,
@@ -456,6 +457,36 @@ describe('update', () => {
 		expect(host.calls).not.toContain('canary');
 		expect(readLink(layout.currentLink)).toBe(original);
 		expect(readdirSync(layout.releasesDir).some((entry) => entry.startsWith('202611031200'))).toBe(false);
+	});
+
+	test('a refusal carries the SQL to review; an approval counts only for that exact SQL', async () => {
+		host.migrations = ['0001_init.sql', '0003_drop.sql'];
+		const sql = 'DROP TABLE notes;';
+		const originalFetch = host.fetchSource;
+		host.fetchSource = async (repo, commit, dest) => {
+			await originalFetch(repo, commit, dest);
+			mkdirSync(join(dest, 'packages', 'db', 'migrations'), { recursive: true });
+			writeFileSync(join(dest, 'packages', 'db', 'migrations', '0003_drop.sql'), sql);
+		};
+		const refused = await new Updater(layout, host).update().catch((error: unknown) => error);
+		expect(refused).toBeInstanceOf(ApprovalRequiredError);
+		const sha256 = createHash('sha256').update(sql).digest('hex');
+		expect((refused as ApprovalRequiredError).approval).toEqual({
+			version: '0.2.0',
+			migrations: [{ id: '0003_drop.sql', sha256, statements: [{ line: 1, statement: 'DROP TABLE' }], sql, truncated: false }],
+		});
+		expect((refused as Error).message).toMatch(/Review and approve/);
+
+		// A hash for different SQL approves nothing.
+		await expect(
+			new Updater(layout, host).update({ approvedMigrations: [{ id: '0003_drop.sql', sha256: 'a'.repeat(64) }] }),
+		).rejects.toThrow(ApprovalRequiredError);
+		const canaryRan = () => host.calls.some((call) => call.startsWith('hook canary'));
+		expect(canaryRan()).toBe(false);
+
+		// The reviewed SQL gets past the preflight to the canary.
+		await new Updater(layout, host).update({ approvedMigrations: [{ id: '0003_drop.sql', sha256 }] }).catch(() => null);
+		expect(canaryRan()).toBe(true);
 	});
 
 	test('plan returns the same preflight rules without changing anything', async () => {

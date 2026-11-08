@@ -54,6 +54,10 @@ import {
 	environmentCreateSchema,
 	inlineFileSchema,
 	isTerminalOperation,
+	isFlowId,
+	isTerminalFlow,
+	flowTaskStatus,
+	type FlowRunView,
 	limits,
 	operationLimits,
 	projectCreateSchema,
@@ -832,6 +836,22 @@ function buildServer(
 	);
 
 	// --- mass actions (docs/OPERATIONS.md §6.3) ------------------------------
+	/** A flow run (docs/FLOWS.md) as a tool result: status, where it is, and what to do next. */
+	const flowResult = (flow: FlowRunView) => ({
+		operationId: flow.id,
+		kind: flow.kind,
+		status: flow.status,
+		step: flow.step,
+		waitingFor: flow.waitingFor,
+		detail: flow.detail,
+		error: flow.error,
+		result: flow.result,
+		steps: (flow.steps ?? []).map((entry) => ({ step: entry.step, event: entry.event, detail: entry.detail, at: entry.at })),
+		...(isTerminalFlow(flow.status)
+			? {}
+			: { nextSteps: [`Still running (step "${flow.step}"). Call get_task with taskId "${flow.id}" to follow it.`] }),
+	});
+
 	/** Wrap a finished operation as a compact tool result agents can act on. */
 	const operationResult = (operation: OperationView) => {
 		const items = core.operations.items(principal, operation.id, { limit: 200 }).items;
@@ -981,13 +1001,15 @@ function buildServer(
 		'get_operation',
 		{
 			title: 'Get a mass operation',
-			description: 'Status, progress and per-item results of a bulk operation (e.g. one started by delete_projects).',
-			inputSchema: z.object({ id: z.string().describe('Operation id (op_…)') }),
+			description:
+				'Status, progress and per-item results of a bulk operation (e.g. one started by delete_projects), or the status and step log of a multi-step change such as a database move (a flow, id flw_…).',
+			inputSchema: z.object({ id: z.string().describe('Operation id (op_… or flw_…)') }),
 			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 			scopeChallenge: requires('project:read'),
 		},
 		async ({ id }) =>
 			run(() => {
+				if (isFlowId(id)) return flowResult(core.flows.get(principal, id, { steps: true }));
 				const operation = core.operations.get(principal, id);
 				return { ...operationResult(operation), progress: { done: operation.done, total: operation.total, phase: operation.phase } };
 			}),
@@ -1118,13 +1140,28 @@ function buildServer(
 		{
 			title: 'Get a durable task',
 			description:
-				'Poll durable work by its taskId: a blueprint run started by apply_stack (taskId is the operation id) or any other operation. Returns its status, progress and, for blueprint runs, every resource step.',
+				'Poll durable work by its taskId: a blueprint run started by apply_stack (taskId is the operation id), any other operation, or a multi-step change such as a database move (flw_…, its operationId). Returns its status, progress and, for blueprint runs and flows, every step.',
 			inputSchema: getTaskInputSchema,
 			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 			scopeChallenge: requires('project:read'),
 		},
 		async ({ taskId }) =>
 			run(() => {
+				if (isFlowId(taskId)) {
+					const flow = core.flows.get(principal, taskId, { steps: true });
+					return {
+						id: flow.id,
+						tool: flow.kind,
+						status: flowTaskStatus(flow.status),
+						progress: null,
+						result: flowResult(flow),
+						error: flow.status === 'failed' ? (flow.error ?? 'The run failed.') : null,
+						approval: { required: false, requestState: null, expiresAt: null },
+						createdAt: flow.createdAt,
+						updatedAt: flow.updatedAt,
+						expiresAt: null,
+					};
+				}
 				const operation = core.operations.get(principal, taskId);
 				const result =
 					operation.action === 'blueprint.apply' ? core.blueprints.applyView(principal, taskId) : operationResult(operation);
@@ -1146,6 +1183,26 @@ function buildServer(
 					expiresAt: operation.planExpiresAt,
 				};
 			}),
+	);
+
+	tool(
+		'cancel_task',
+		{
+			title: 'Cancel a durable task',
+			description:
+				'Cancel durable work by its taskId: a mass operation (op_…) or a multi-step change (flw_…) while it is still safe, for example a database move before its cut-over. ' +
+				'A change past that point is refused with the reason; it then finishes or rolls back by itself. Cancelling an already-cancelled task succeeds.',
+			inputSchema: getTaskInputSchema,
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+			// The run's own permission (e.g. database:update for a move) is checked in core.
+			scopeChallenge: requires('project:read'),
+		},
+		async ({ taskId }) =>
+			run(() =>
+				isFlowId(taskId)
+					? flowResult(core.flows.cancel(principal, taskId))
+					: operationResult(core.operations.cancel(principal, taskId)),
+			),
 	);
 
 	// --- deploying ----------------------------------------------------------

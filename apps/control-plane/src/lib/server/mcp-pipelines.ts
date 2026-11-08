@@ -172,6 +172,30 @@ async function settleTrigger(principal: Principal, repository: string, trigger: 
 export function pipelineTools(principal: Principal): PipelineToolSpec[] {
 	return [
 		{
+			name: 'list_github_repositories',
+			config: {
+				title: 'List GitHub repositories',
+				description:
+					'Repositories the org can use through Skiff\'s GitHub App (docs/GITHUB.md): full name, clone URL, default branch, private. ' +
+					'Use a clone URL from here for a git build source or a pipeline repository: events, private clones and commit statuses then ' +
+					'need no webhook or token. `connected: false` means no installation is linked; an org owner installs the App in Settings → GitHub.',
+				inputSchema: z.object({
+					query: z.string().min(1).max(100).optional().describe('Only repositories whose full name contains this'),
+				}),
+				annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+			},
+			permissions: ['build:read'],
+			handler: async (args) => {
+				const query = (args as { query?: string }).query?.toLowerCase();
+				const list = await core.githubApp.repositories(principal);
+				const repositories = list.repositories
+					.filter((repo) => !query || repo.fullName.toLowerCase().includes(query))
+					.slice(0, 200)
+					.map((repo) => ({ fullName: repo.fullName, cloneUrl: repo.cloneUrl, defaultBranch: repo.defaultBranch, private: repo.private, archived: repo.archived }));
+				return { connected: list.connected, repositories, truncated: list.truncated, ...(list.error ? { error: list.error } : {}) };
+			},
+		},
+		{
 			name: 'list_pipeline_runs',
 			config: {
 				title: 'List pipeline runs',

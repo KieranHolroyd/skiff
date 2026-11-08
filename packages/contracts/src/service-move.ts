@@ -43,6 +43,12 @@ export interface DatabaseMoveView {
 	updatedAt: string;
 	finishedAt: string | null;
 	/**
+	 * The flow run driving the move (`flw_…`, docs/FLOWS.md): follow it with
+	 * `GET /api/v1/operations/<id>?wait=…` or MCP `get_task`. Null for a move older than flows
+	 * that has not been adopted yet.
+	 */
+	operationId?: string | null;
+	/**
 	 * Only on the response that starts a move: services attached apps also use that stay on the old
 	 * node for now. Those apps cannot reach them (or deploy) until they move too.
 	 */

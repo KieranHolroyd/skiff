@@ -5,6 +5,7 @@ import { NodeUpdater } from './node-update.ts';
 import { WireguardManager } from './wireguard.ts';
 import { NetworkManager } from './network.ts';
 import { ShareMounter } from './shares.ts';
+import { DiskMounter } from './disks.ts';
 import { ContainerConsole } from './container-console.ts';
 import { DEFAULT_SUBID_FILES } from './userns.ts';
 import { JobDriver } from './jobs.ts';
@@ -94,6 +95,7 @@ export async function runHelper(): Promise<void> {
 		nodeUpdate,
 		wireguard,
 		shares: new ShareMounter(),
+		disks: new DiskMounter(),
 		volumeProfiler: driver.volumeProfiler(),
 		containers,
 		appVolumes: driver.appVolumeData({ log: (level, message) => log(level, `app volumes: ${message}`) }),

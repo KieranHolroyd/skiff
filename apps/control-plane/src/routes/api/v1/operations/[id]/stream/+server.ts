@@ -1,6 +1,7 @@
 import type { RequestHandler } from './$types';
 import { core } from '#lib/server/core.js';
 import { errorResponse } from '#lib/server/api.js';
+import { isFlowId } from '@skiff/contracts';
 
 const HEARTBEAT_MS = 15_000;
 
@@ -13,8 +14,10 @@ const HEARTBEAT_MS = 15_000;
 export const GET: RequestHandler = async ({ locals, params, url, request }) => {
 	const principal = locals.principal;
 	if (!principal) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 });
+	const flow = isFlowId(params.id);
 	try {
-		core.operations.get(principal, params.id);
+		if (flow) core.flows.get(principal, params.id);
+		else core.operations.get(principal, params.id);
 	} catch (error) {
 		return errorResponse(error);
 	}
@@ -40,14 +43,22 @@ export const GET: RequestHandler = async ({ locals, params, url, request }) => {
 			const heartbeat = setInterval(() => write(': ping\n\n'), HEARTBEAT_MS);
 			write('retry: 2000\n\n');
 			try {
-				for await (const event of core.operations.events(principal, params.id, {
-					after,
-					signal: request.signal,
-					untilPlanned,
-				})) {
-					if (event.type === 'items') send('items', { items: event.items, cursor: event.cursor }, event.cursor);
-					else send(event.type, event.operation);
-					if (event.type === 'done') break;
+				// A flow (docs/FLOWS.md §5) streams `progress` on every transition, then `done`.
+				if (flow) {
+					for await (const event of core.flows.events(principal, params.id, { signal: request.signal })) {
+						send(event.type, event.flow);
+						if (event.type === 'done') break;
+					}
+				} else {
+					for await (const event of core.operations.events(principal, params.id, {
+						after,
+						signal: request.signal,
+						untilPlanned,
+					})) {
+						if (event.type === 'items') send('items', { items: event.items, cursor: event.cursor }, event.cursor);
+						else send(event.type, event.operation);
+						if (event.type === 'done') break;
+					}
 				}
 			} catch (error) {
 				send('server-error', { message: error instanceof Error ? error.message : 'The progress stream failed.' });

@@ -99,6 +99,15 @@ export const init: ServerInit = async () => {
 		setInterval(() => {
 			void core.logDrains.deliverDue().catch((error) => console.error('[log-drains]', error));
 		}, 5_000).unref?.();
+		// Flows (docs/FLOWS.md): signals and starts advance runs at once; this loop handles retries
+		// after backoff, wait timeouts and cancels requested while another process held the run.
+		setInterval(() => {
+			try {
+				void core.flows.drive().settled.catch((error) => console.error('[flows]', error));
+			} catch (error) {
+				console.error('[flows]', error);
+			}
+		}, 5_000).unref?.();
 		// Pick up mass operations whose runner died with the previous process (docs/OPERATIONS.md §2.2).
 		setTimeout(() => {
 			try {

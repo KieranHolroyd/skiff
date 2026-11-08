@@ -190,7 +190,7 @@ Storage is set up in three layers:
 | Pool | A named group of volumes, on one node or several. Every node's system disk is the built-in `system` pool. | `ssd` = the NVMe drive on every node |
 | Default | The pool each kind of service starts with. You can pick another when you create the service. | Databases → `ssd`; object storage → `hdd` |
 
-1. Mount the disk on the node with your usual tools. Under **Disks and volumes**, select **Adopt**. Skiff never formats a disk; it only creates its own `skiff/` folder inside.
+1. Under **Disks and volumes**, each node lists its partitions. Select **Add as volume** on one. A partition that is already mounted is adopted where it is. An unmounted ext4, xfs, btrfs or f2fs partition is first mounted at `/mnt/skiff-disks/<name>`, and the node mounts it again after a reboot. Skiff never formats a disk; it only creates its own `skiff/` folder inside, so a partition with no filesystem, or a Windows (NTFS or exFAT) one, cannot be added. Create an ext4 or xfs filesystem on it first.
 2. Select **New pool**, name it (for example `ssd` or `hdd`) and tick its volumes. **Most free** spreads data across the volumes. **Fill up** uses one volume until it reaches the **Keep free** threshold, which defaults to 10 %.
 3. Under **Default storage**, pick a pool for each kind of service, or select **Suggest from pools**, then select **Save defaults**.
 

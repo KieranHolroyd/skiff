@@ -121,8 +121,20 @@
 		</Panel>
 	</form>
 
-	<Panel title="Webhook" icon={WebhookIcon} description="GitHub → repository settings → Webhooks → Add webhook.">
+	<Panel
+		title="Webhook"
+		icon={WebhookIcon}
+		description={data.repository.githubAppInstallationId
+			? 'Not needed: Skiff’s GitHub App delivers this repository’s events.'
+			: 'GitHub → repository settings → Webhooks → Add webhook.'}
+	>
 		<div class="grid gap-5">
+			{#if data.repository.githubAppInstallationId}
+				<p class="text-sm text-muted-foreground">
+					Pushes and pull requests arrive through the GitHub App (Settings → GitHub). A webhook you add
+					here as well is ignored while the App covers the repository, so nothing runs twice.
+				</p>
+			{/if}
 			<dl class="grid grid-cols-[8rem_minmax(0,1fr)] items-center gap-x-3 gap-y-2 text-sm">
 				<dt class="text-muted-foreground">Payload URL</dt>
 				<dd class="flex min-w-0 items-center gap-2">
@@ -192,8 +204,15 @@
 		<div class="grid gap-6">
 			<div class="grid gap-3">
 				<p class="text-sm text-muted-foreground">
-					A GitHub token with <em>Commit statuses: write</em> on this repository. Each run then shows as
-					<code class="font-mono text-xs">skiff/&lt;workflow&gt;</code> on its commit and pull request.
+					{#if data.repository.githubAppInstallationId}
+						Skiff’s GitHub App reports each run as
+						<code class="font-mono text-xs">skiff/&lt;workflow&gt;</code> on its commit and pull request; no
+						token is needed. A token set here is used instead of the App.
+					{:else}
+						A GitHub token with <em>Commit statuses: write</em> on this repository. Each run then shows as
+						<code class="font-mono text-xs">skiff/&lt;workflow&gt;</code> on its commit and pull request. Or
+						install Skiff’s GitHub App (Settings → GitHub) and skip the token.
+					{/if}
 				</p>
 				<div class="flex items-center gap-2 text-sm">
 					<span class="text-muted-foreground">Status token</span>

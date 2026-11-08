@@ -2,6 +2,8 @@ import { readFileSync, rmSync } from 'node:fs';
 import {
 	isSelfUpdateChannel,
 	isSelfUpdateMethod,
+	parseMigrationApprovals,
+	type MigrationApproval,
 	type SelfUpdateChannel,
 	type SelfUpdateMethod
 } from '../../packages/contracts/src/self-update.ts';
@@ -37,4 +39,21 @@ export function consumeRequestedMethod(path: string, trigger: string): SelfUpdat
 /** The dashboard's release channel (`request.channel`); null keeps the host's channel. */
 export function consumeRequestedChannel(path: string, trigger: string): SelfUpdateChannel | null {
 	return consumeSidecar(path, trigger, isSelfUpdateChannel);
+}
+
+/**
+ * The dashboard's approvals of destructive migrations (`request.approve`), one `<id> <sha256>` per
+ * line. Empty for a CLI run or a malformed file; the updater still checks each hash against the
+ * staged release's SQL before it counts.
+ */
+export function consumeRequestedApprovals(path: string, trigger: string): MigrationApproval[] {
+	let text = '';
+	try {
+		text = readFileSync(path, 'utf8');
+	} catch {
+		// No approvals requested.
+	}
+	rmSync(path, { force: true });
+	if (trigger !== 'dashboard') return [];
+	return parseMigrationApprovals(text) ?? [];
 }

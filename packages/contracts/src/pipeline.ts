@@ -280,6 +280,11 @@ export interface PipelineResolveClaim {
 	repository: PipelineRepositoryRef;
 	ref: string;
 	sha: string | null;
+	/**
+	 * A one-hour read-only token for this repository from Skiff's GitHub App (D164), used instead of
+	 * the node's own git credentials. Absent when the App does not cover the repository.
+	 */
+	gitToken?: string | null;
 }
 
 export interface PipelineJobClaim {
@@ -321,6 +326,8 @@ export interface PipelineJobClaim {
 	buildkit?: boolean;
 	/** BuildKit cache scope (W10): never shared between trusted and untrusted runs. */
 	buildkitCacheScope?: string | null;
+	/** Clone token from Skiff's GitHub App, as on `PipelineResolveClaim` (D164). */
+	gitToken?: string | null;
 }
 
 export type PipelineClaim = PipelineResolveClaim | PipelineJobClaim;
@@ -553,6 +560,8 @@ export interface PipelineRepositoryView {
 	enabled: boolean;
 	hasWebhookSecret: boolean;
 	hasStatusToken?: boolean;
+	/** The org's GitHub App installation covering this repository (docs/GITHUB.md), or null. */
+	githubAppInstallationId?: number | null;
 	minIsolation?: { trusted: PipelineIsolationTier | null; untrusted: PipelineIsolationTier | null };
 	/** Path of the webhook receiver, relative to the platform origin. */
 	webhookPath: string;

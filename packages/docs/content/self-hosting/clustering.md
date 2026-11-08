@@ -124,6 +124,8 @@ curl -X POST https://control.example.com/api/v1/databases/my-db/move \
   -d '{"node": "<node-id>", "from": "dump"}'
 ```
 
+The response's `move.operationId` identifies the run driving the move. Follow it with `GET /api/v1/operations/<operationId>?wait=25&steps=1`, or ask your agent to call `get_task`. Until the final backup has been taken, you can cancel the move with `POST /api/v1/operations/<operationId>/cancel` (or `cancel_task`). The apps start again on the old node and nothing moves. Once the backup is being restored on the target, the move can no longer be cancelled. It finishes, or it rolls back to the old node if the restore fails.
+
 **Storage instances** must be moved with `from` set to `empty`. Objects are not copied. The instance starts empty on the target, and the old copy is deleted. Buckets, access keys and attachments are kept.
 
 > [!WARNING]

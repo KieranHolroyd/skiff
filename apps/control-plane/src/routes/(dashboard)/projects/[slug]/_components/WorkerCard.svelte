@@ -94,7 +94,13 @@
 							<Badge variant="secondary"
 								>{view.scope === 'repo' ? 'repository' : 'organisation'}</Badge
 							>
-							<Badge variant="outline">{view.auth === 'pat' ? 'access token' : 'GitHub App'}</Badge>
+							<Badge variant="outline"
+								>{view.auth === 'pat'
+									? 'access token'
+									: view.auth === 'installation'
+										? 'Skiff GitHub App'
+										: 'GitHub App'}</Badge
+							>
 						</div>
 						<div class="flex flex-wrap gap-1.5">
 							{#each view.labels as label (label)}

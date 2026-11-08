@@ -196,10 +196,11 @@ These two tools search and read this documentation, as it shipped with the platf
 | `delete_project` | Soft-delete a project. Asks to confirm | `project:delete` |
 | `delete_projects` | Soft-delete up to 25 projects in one confirmed operation. Asks to confirm | `project:delete` |
 | `restore_projects` | Restore up to 25 soft-deleted projects | `project:update` |
-| `get_operation` | Show progress and per-item results of a bulk operation | `project:read` |
+| `get_operation` | Show progress and per-item results of a bulk operation, or the steps of a multi-step change such as a database move | `project:read` |
 | `plan_stack` | Plan a blueprint (YAML or JSON text): every resource step with its field changes, and a plan hash. Changes nothing. No pruning. Offered while the `BLUEPRINTS` feature is on | `project:read`, plus the permissions of every step it plans |
 | `apply_stack` | Apply a plan from `plan_stack` by its hash, waiting up to 20 seconds. Refuses a plan whose live state moved, and any plan that deletes resources. Offered while `BLUEPRINTS` is on. Asks to confirm | `project:update`, plus each step's own permission |
 | `get_task` | Follow durable work by its task id: a blueprint run from `apply_stack` (with every step's result) or any other operation | `project:read` |
+| `cancel_task` | Cancel durable work by its task id: a bulk operation, or a multi-step change while it is still safe (a database move before its final backup is restored) | `project:read`, plus the work's own permission (e.g. `database:update`) |
 
 ### Deploying
 

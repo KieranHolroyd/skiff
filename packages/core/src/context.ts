@@ -37,16 +37,19 @@ import type { EnvironmentService } from './environments.ts';
 import type { OperationService } from './operations/service.ts';
 import type { BlueprintService } from './blueprints.ts';
 import type { SchedulerService } from './scheduler.ts';
+import type { FlowService } from './flows/service.ts';
 import type { ServiceActionsService } from './service-actions.ts';
 import type { BackupTargetService } from './backup-targets.ts';
 import type { UpgradeService } from './upgrades.ts';
 import type { GithubRunnerService } from './github-runners.ts';
+import type { GithubAppService } from './github-app.ts';
 import type { FunctionService } from './functions.ts';
 import type { TemplateService } from './templates.ts';
 import type { AlertService } from './alerts.ts';
 import type { TopologyService } from './topology.ts';
 import type { ServiceEndpointService } from './service-endpoints.ts';
 import type { ShareService } from './shares.ts';
+import type { DiskMountService } from './disk-mounts.ts';
 import type { StoragePoolService } from './storage-pools.ts';
 import type { RegistryCredentialService } from './registry-credentials.ts';
 import type { RegistryService } from './registry.ts';
@@ -111,10 +114,14 @@ export interface CoreContext {
 	/** Blueprint stacks: plan/apply of a declarative file (plan 11). */
 	blueprints: BlueprintService;
 	scheduler: SchedulerService;
+	/** Durable step machines for multi-step changes (docs/FLOWS.md, D163). */
+	flows: FlowService;
 	serviceActions: ServiceActionsService;
 	backupTargets: BackupTargetService;
 	upgrades: UpgradeService;
 	githubRunners: GithubRunnerService;
+	/** Skiff's GitHub App: installations, tokens, statuses, the App webhook (docs/GITHUB.md). */
+	githubApp: GithubAppService;
 	templates: TemplateService;
 	/** Metric alert rules (docs/ALERTS.md). */
 	alerts: AlertService;
@@ -124,6 +131,8 @@ export interface CoreContext {
 	endpoints: ServiceEndpointService;
 	/** Cluster shares (CLUSTERING §5.2, C3). */
 	shares: ShareService;
+	/** Local partitions mounted by UUID and adopted as volumes (docs/VOLUMES.md §3.1). */
+	diskMounts: DiskMountService;
 	/** Storage pools and placement rules (docs/STORAGE.md, D144). */
 	storagePools: StoragePoolService;
 	/** Credentials for external container registries (docs/REGISTRY.md R2). */

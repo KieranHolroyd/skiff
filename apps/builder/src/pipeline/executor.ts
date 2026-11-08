@@ -9,7 +9,7 @@ import type { BuilderConfig, PipelineIsolation } from '../config.ts';
 import { ConfigError } from '../config.ts';
 import { JobApi, isLeaseLost } from './client.ts';
 import { buildJobContext, runnerArch, runnerOs } from './context.ts';
-import { capture, cloneAtSha } from './git.ts';
+import { capture, cloneAtSha, withCloneToken } from './git.ts';
 import { PipelineHelperClient, readK8sLog, type HelperPipelineService, type PipelineHelper } from './helper-client.ts';
 import { LogBatcher, pumpLines } from './logs.ts';
 import { Masker } from './masker.ts';
@@ -139,6 +139,7 @@ export class PipelineExecutor {
 		const masker = new Masker();
 		masker.add(claim.token);
 		if (config.gitToken) masker.add(config.gitToken);
+		if (claim.gitToken) masker.add(claim.gitToken);
 		const logs = new LogBatcher(api, masker, { onError: (error) => this.log(`${jobId} log upload failed: ${errorText(error)}`) });
 		const isolation = config.pipelineIsolation;
 		const limitMinutes = Math.min(claim.job.timeoutMinutes || Infinity, claim.limits.timeoutMinutes || Infinity);
@@ -207,10 +208,17 @@ export class PipelineExecutor {
 			for (const dir of [dirs.workspace, dirs.home, dirs.tmp, dirs.meta]) await mkdir(dir, { recursive: true, mode: 0o700 });
 
 			logs.system(-1, `Checking out ${claim.repository.name} at ${claim.checkout.sha} (${claim.checkout.ref})`);
-			await cloneAtSha({ url: claim.repository.cloneUrl, ref: claim.checkout.ref, sha: claim.checkout.sha, dir: dirs.workspace, credentials: config });
-			// The token travels in the environment only; job.json is readable by the job's steps.
+			await cloneAtSha({
+				url: claim.repository.cloneUrl,
+				ref: claim.checkout.ref,
+				sha: claim.checkout.sha,
+				dir: dirs.workspace,
+				credentials: withCloneToken(config, claim.gitToken),
+			});
+			// The tokens travel in the environment only; job.json is readable by the job's steps (and
+			// the clone token must never reach an untrusted job).
 			const jobFile = join(dirs.meta, 'job.json');
-			await writeFile(jobFile, JSON.stringify({ ...claim, token: '' }), { mode: 0o600 });
+			await writeFile(jobFile, JSON.stringify({ ...claim, token: '', gitToken: null }), { mode: 0o600 });
 
 			if (cancelRequested) {
 				await complete({ conclusion: 'cancelled', outputs: {} });
@@ -252,7 +260,7 @@ export class PipelineExecutor {
 			logs.system(-1, error);
 			await complete({ conclusion, outputs: {}, error });
 		} catch (error) {
-			const message = redactSecret(errorText(error), config.gitToken).slice(0, 4000);
+			const message = redactSecret(redactSecret(errorText(error), config.gitToken), claim.gitToken ?? null).slice(0, 4000);
 			this.log(`${jobId} failed: ${message}`);
 			logs.system(-1, `Error: ${message}`);
 			await complete({ conclusion: cancelRequested ? 'cancelled' : 'failure', outputs: {}, error: message });

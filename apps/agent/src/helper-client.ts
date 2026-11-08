@@ -17,6 +17,7 @@ import {
 import type { HelperNodeUpdateApi } from './node-update.ts';
 import type { HelperMailApi } from './mail-bridge.ts';
 import type { HelperShareApi } from './share-mounts.ts';
+import type { HelperDiskApi } from './disk-mounts.ts';
 import type { HelperVolumeProfileApi } from './volume-profiles.ts';
 import type { HelperJobApi, HelperJobStatus } from './jobs.ts';
 
@@ -204,6 +205,7 @@ export class HelperClient
 		HelperMailApi,
 		HelperAppVolumeApi,
 		HelperShareApi,
+		HelperDiskApi,
 		HelperVolumeProfileApi
 {
 	constructor(
@@ -508,6 +510,40 @@ export class HelperClient
 	/** Unmount one share; a busy mount is reported as still mounted, never forced. */
 	async unmountShare(id: string, signal?: AbortSignal): Promise<{ id: string; mounted: boolean; error: string | null }> {
 		const body = asRecord(await this.request('POST', '/v1/shares/unmount', { id }, SHARE_MOUNT_TIMEOUT_MS, signal));
+		return {
+			id: String(body.id ?? id),
+			mounted: body.mounted === true,
+			error: typeof body.error === 'string' ? body.error : null,
+		};
+	}
+
+	/** Which partitions are mounted at `/mnt/skiff-disks/<id>` (docs/VOLUMES.md §3.1). */
+	async diskStatus(ids: string[], signal?: AbortSignal): Promise<Array<{ id: string; mounted: boolean }>> {
+		const body = asRecord(await this.request('POST', '/v1/disks/status', { ids }, VOLUME_TIMEOUT_MS, signal));
+		const disks = Array.isArray(body.disks) ? body.disks : [];
+		return disks.map((item) => {
+			const record = asRecord(item);
+			return { id: String(record.id), mounted: record.mounted === true };
+		});
+	}
+
+	/** Mount one partition by filesystem UUID; the helper re-checks it is free first. */
+	async mountDisk(
+		disk: Parameters<HelperDiskApi['mountDisk']>[0],
+		signal?: AbortSignal,
+	): Promise<{ id: string; mounted: boolean; error: string | null }> {
+		const body = asRecord(await this.request('POST', '/v1/disks/mount', { disk }, SHARE_MOUNT_TIMEOUT_MS, signal));
+		const record = asRecord(body.disk);
+		return {
+			id: String(record.id),
+			mounted: record.mounted === true,
+			error: typeof record.error === 'string' ? record.error : null,
+		};
+	}
+
+	/** Unmount one partition; a busy mount is reported as still mounted, never forced. */
+	async unmountDisk(id: string, signal?: AbortSignal): Promise<{ id: string; mounted: boolean; error: string | null }> {
+		const body = asRecord(await this.request('POST', '/v1/disks/unmount', { id }, SHARE_MOUNT_TIMEOUT_MS, signal));
 		return {
 			id: String(body.id ?? id),
 			mounted: body.mounted === true,

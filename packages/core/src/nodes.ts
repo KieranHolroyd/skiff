@@ -539,6 +539,8 @@ export class NodeService {
 		if (input.volumes) this.ctx.volumes.applyInventory(node.id, input.volumes);
 		// Share mount state, then link any mounted share waiting to become a volume (VOLUMES §5).
 		this.ctx.shares.applyNodeReport(node.id, input.shareMounts, input.unmountedShares);
+		// Partition mounts the same way: status, unmount confirmations, then adopt (VOLUMES §3.1).
+		this.ctx.diskMounts.applyNodeReport(node.id, input.diskMounts, input.unmountedDisks);
 		if (input.volumeProfileResults?.length) this.ctx.storagePools.applyProfileResults(node.id, input.volumeProfileResults);
 		// Custom domains go `active` once an edge reports serving their certificate.
 		if (input.stats?.certs?.length) {
@@ -906,6 +908,7 @@ export class NodeService {
 			this.ctx.db.delete(nodeVolumes).where(eq(nodeVolumes.nodeId, nodeId)).run();
 			// Share mounts on it are forgotten with it; the share definitions stay.
 			this.ctx.db.delete(shareMounts).where(eq(shareMounts.nodeId, nodeId)).run();
+			this.ctx.diskMounts.forgetNode(nodeId);
 			this.ctx.db.delete(volumeProfiles).where(eq(volumeProfiles.nodeId, nodeId)).run();
 			this.ctx.db.delete(nodes).where(eq(nodes.id, nodeId)).run();
 			// A removed node can never confirm a purge an earlier move left for it.
@@ -1432,6 +1435,8 @@ export class NodeService {
 			volumes: this.ctx.volumes.desiredForNode(node.id),
 			shareMounts: this.ctx.shares.mountsForNode(node.id),
 			shareUnmounts: this.ctx.shares.unmountsForNode(node.id),
+			diskMounts: this.ctx.diskMounts.mountsForNode(node.id),
+			diskUnmounts: this.ctx.diskMounts.unmountsForNode(node.id),
 			volumeProfileTasks: this.ctx.storagePools.profileTasksForNode(node.id),
 			// App-volume usage, purges and snapshot/restore tasks (docs/VOLUMES.md §14).
 			appVolumes: this.ctx.appVolumes.lifecycle.volumesForNode(node.id),

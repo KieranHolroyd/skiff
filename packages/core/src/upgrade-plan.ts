@@ -89,6 +89,11 @@ export interface UpgradePreflightInput {
 	managedDatabases?: ManagedDatabaseFact[];
 	/** An operator has reviewed a destructive migration and wants to proceed anyway. */
 	allowDestructiveMigrations?: boolean;
+	/**
+	 * Destructive migrations approved one by one (the dashboard's review dialog). Only the named
+	 * ids are approved, so a release that adds another destructive migration is refused again.
+	 */
+	approvedDestructiveMigrations?: string[];
 	/** `--force` deliberately downgrades; the version check is then a warning, not a refusal. */
 	allowDowngrade?: boolean;
 	now?: number;
@@ -204,6 +209,26 @@ const MS_PER_DAY = 86_400_000;
 const STALE_BACKUP_MS = 30 * MS_PER_DAY;
 
 /**
+ * Why a destructive migration was refused and how to approve it. Lists what each one does (with
+ * the line, so it can be found in the SQL) and both ways to approve: the dashboard's review
+ * dialog, which approves exactly these ids, and the CLI flag.
+ */
+export function destructiveRefusal(migrations: PendingMigration[]): string {
+	const one = migrations.length === 1;
+	const details = migrations
+		.map((migration) => {
+			const statements = migration.destructiveStatements.map((entry) => `${entry.statement} on line ${entry.line}`);
+			return `${migration.id} (${statements.join(', ')})`;
+		})
+		.join('; ');
+	return [
+		`Destructive migration${one ? '' : 's'} ${details}: ${one ? 'it changes or removes' : 'they change or remove'} existing data, so Skiff will not apply ${one ? 'it' : 'them'} unattended.`,
+		`Review the SQL, then approve: in the dashboard, Settings → Updates → Review and approve; or on the server, sudo skiff-update-self --allow-destructive.`,
+		'The control database is snapshotted first and restored if the update rolls back.'
+	].join(' ');
+}
+
+/**
  * Pure preflight rules. Refuse anything that could make the upgrade hard or impossible to undo:
  * an unreachable backup target, too little disk for the control DB snapshot, a missing data
  * directory, an unreviewed destructive migration, unknown applied migrations (a downgrade), or a
@@ -219,6 +244,10 @@ export function evaluateUpgradePreflight(input: UpgradePreflightInput): UpgradeP
 	const targetIds = new Set(migrations.map((migration) => migration.id));
 	const pending = pendingMigrations(migrations, applied);
 	const destructive = pending.filter((migration) => migration.destructive);
+	const approvedIds = new Set(input.approvedDestructiveMigrations ?? []);
+	const unapproved = input.allowDestructiveMigrations
+		? []
+		: destructive.filter((migration) => !approvedIds.has(migration.id));
 	const unknownApplied = migrations.length > 0 ? applied.filter((id) => !targetIds.has(id)) : [];
 	const controlDbBytes = Math.max(0, input.controlDbBytes ?? 0);
 	const freeBytes = input.freeBytes ?? null;
@@ -304,14 +333,14 @@ export function evaluateUpgradePreflight(input: UpgradePreflightInput): UpgradeP
 			'error',
 			`The database has migrations the target release does not ship (${unknownApplied.join(', ')}). The target predates the current schema; restore the pre-update snapshot instead of downgrading.`
 		);
-	} else if (destructive.length > 0 && !input.allowDestructiveMigrations) {
+	} else if (unapproved.length > 0) {
+		check('migrations', 'error', destructiveRefusal(unapproved));
+	} else if (destructive.length > 0) {
 		check(
 			'migrations',
-			'error',
-			`Destructive migration${destructive.length === 1 ? '' : 's'} ${destructive.map((migration) => migration.id).join(', ')} must be reviewed and approved explicitly; Skiff will not apply ${destructive.length === 1 ? 'it' : 'them'} automatically.`
+			'warn',
+			`Destructive migration${destructive.length === 1 ? '' : 's'} ${destructive.map((migration) => migration.id).join(', ')} ${destructive.length === 1 ? 'is' : 'are'} explicitly approved; the control database is snapshotted first.`
 		);
-	} else if (destructive.length > 0) {
-		check('migrations', 'warn', `Destructive migrations ${destructive.map((migration) => migration.id).join(', ')} are explicitly approved.`);
 	} else if (migrations.length > 0) {
 		check('migrations', 'ok', `${pending.length} pending migration${pending.length === 1 ? '' : 's'}; none are destructive.`);
 	}

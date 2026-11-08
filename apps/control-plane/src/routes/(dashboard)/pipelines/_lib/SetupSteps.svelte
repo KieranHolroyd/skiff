@@ -6,8 +6,15 @@
 	let {
 		webhookUrl,
 		hasRepository,
-		defaultBranch = 'main'
-	}: { webhookUrl: string; hasRepository: boolean; defaultBranch?: string } = $props();
+		defaultBranch = 'main',
+		viaGithubApp = false
+	}: {
+		webhookUrl: string;
+		hasRepository: boolean;
+		defaultBranch?: string;
+		/** Skiff's GitHub App covers the repository: no webhook step (docs/GITHUB.md). */
+		viaGithubApp?: boolean;
+	} = $props();
 
 	const example = $derived(`name: ci
 on:
@@ -60,21 +67,30 @@ jobs:
 			>3</span
 		>
 		<div class="min-w-0 flex-1 space-y-2">
-			<p class="font-medium">Add a GitHub webhook</p>
-			<p class="text-muted-foreground">
-				Repository settings → Webhooks → Add webhook. Use the same secret you set here.
-			</p>
-			<dl class="grid grid-cols-[8rem_minmax(0,1fr)] items-center gap-x-3 gap-y-2 text-xs">
-				<dt class="text-muted-foreground">Payload URL</dt>
-				<dd class="flex min-w-0 items-center gap-2">
-					<code class="truncate font-mono">{webhookUrl}</code>
-					{#if hasRepository}<CopyButton value={webhookUrl} iconOnly size="icon-xs" variant="ghost" />{/if}
-				</dd>
-				<dt class="text-muted-foreground">Content type</dt>
-				<dd><code class="font-mono">application/json</code></dd>
-				<dt class="text-muted-foreground">Events</dt>
-				<dd>Pushes and pull requests</dd>
-			</dl>
+			{#if viaGithubApp}
+				<p class="font-medium">Push</p>
+				<p class="text-muted-foreground">
+					Nothing to set up: Skiff’s GitHub App delivers this repository’s pushes and pull requests,
+					clones it, and reports each run as a commit status.
+				</p>
+			{:else}
+				<p class="font-medium">Add a GitHub webhook</p>
+				<p class="text-muted-foreground">
+					Repository settings → Webhooks → Add webhook. Use the same secret you set here. Or install
+					Skiff’s GitHub App (Settings → GitHub) and skip this step.
+				</p>
+				<dl class="grid grid-cols-[8rem_minmax(0,1fr)] items-center gap-x-3 gap-y-2 text-xs">
+					<dt class="text-muted-foreground">Payload URL</dt>
+					<dd class="flex min-w-0 items-center gap-2">
+						<code class="truncate font-mono">{webhookUrl}</code>
+						{#if hasRepository}<CopyButton value={webhookUrl} iconOnly size="icon-xs" variant="ghost" />{/if}
+					</dd>
+					<dt class="text-muted-foreground">Content type</dt>
+					<dd><code class="font-mono">application/json</code></dd>
+					<dt class="text-muted-foreground">Events</dt>
+					<dd>Pushes and pull requests</dd>
+				</dl>
+			{/if}
 		</div>
 	</li>
 </ol>

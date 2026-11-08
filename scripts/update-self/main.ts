@@ -26,6 +26,7 @@ import {
 	DEFAULT_SELF_UPDATE_CHANNEL,
 	SELF_UPDATE_DEFAULTS,
 	isSelfUpdateChannel,
+	selfUpdateApprovalFile,
 	selfUpdateChannelFile,
 	selfUpdateModeFile,
 	updateSourceForMethod,
@@ -48,7 +49,7 @@ import {
 } from '../systemd/control-plane.ts';
 import { hostPlatform, loadTrustedKeys, sha256File } from './signing.ts';
 import { UPDATER_IDENTITY } from './version.ts';
-import { consumeRequestedChannel, consumeRequestedMethod } from './request.ts';
+import { consumeRequestedApprovals, consumeRequestedChannel, consumeRequestedMethod } from './request.ts';
 import { ensurePlatformConfigUnits } from '../platform-config/units.ts';
 import { ensureBuilder, linkAgentCommands } from '../systemd/builder.ts';
 import { ensureHelper } from '../systemd/helper.ts';
@@ -69,6 +70,7 @@ import {
 	type CheckResult,
 	type RollbackResult,
 	type UpdateResult,
+	ApprovalRequiredError,
 	RecoveryError,
 	UpdateError,
 	Updater,
@@ -1195,6 +1197,9 @@ async function main(): Promise<number> {
 			consumeRequestedChannel(selfUpdateChannelFile(REQUEST_FILE), trigger),
 			!dryRun,
 		);
+		const approvedMigrations = consumeRequestedApprovals(selfUpdateApprovalFile(REQUEST_FILE), trigger);
+		if (approvedMigrations.length > 0)
+			host.log(`Approved from the dashboard: ${approvedMigrations.map((approval) => approval.id).join(', ')}`);
 		if (!dryRun) {
 			startUpdateLog(trigger);
 			const now = new Date().toISOString();
@@ -1238,13 +1243,19 @@ async function main(): Promise<number> {
 			dryRun,
 			publicCheck,
 			allowDestructiveMigrations: flag('--allow-destructive'),
+			approvedMigrations,
 			source,
 			channel,
 			zeroDowntime: !flag('--no-zero-downtime'),
 			...(option('--bake') ? { bakeMs: Math.max(0, Number(option('--bake'))) * 1000 } : {}),
 		});
 		} catch (error) {
-			finish('error', (error as Error).message);
+			// A refusal the dashboard can act on carries the migrations to review and approve.
+			finish(
+				'error',
+				(error as Error).message,
+				error instanceof ApprovalRequiredError ? { approval: error.approval, toVersion: error.approval.version } : {},
+			);
 			throw error;
 		}
 		const done = outcomeMessage(result);

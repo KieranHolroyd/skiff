@@ -270,6 +270,8 @@ export class VolumeService {
 				.set({ volumeId: null, volumeName: null, volumeDefault: false, updatedAt: now })
 				.where(eq(shareMounts.volumeId, row.id))
 				.run();
+			// Likewise a partition Skiff mounted (VOLUMES §3.1).
+			this.ctx.diskMounts.forgetVolume(row.id);
 			if (node.defaultVolumeId === row.id)
 				this.ctx.db.update(nodes).set({ defaultVolumeId: null, updatedAt: now }).where(eq(nodes.id, nodeId)).run();
 		});

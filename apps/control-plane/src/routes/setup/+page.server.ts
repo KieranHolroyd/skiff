@@ -1,7 +1,7 @@
 import { fail, redirect, type Cookies } from '@sveltejs/kit';
-import { auth } from '#lib/server/auth.js';
+import { auth, githubSignIn } from '#lib/server/auth.js';
 import { core } from '#lib/server/core.js';
-import { contentDomain, features, github, objectStoreKind, platformOrigin, sharedDomain, smtp } from '#lib/server/config.js';
+import { contentDomain, features, objectStoreKind, platformOrigin, sharedDomain, smtp } from '#lib/server/config.js';
 import { sqlite } from '#lib/server/db.js';
 import {
 	enforceOwnerSecondFactor,
@@ -50,7 +50,7 @@ function instanceFacts() {
 		contentDomain,
 		sharedDomain,
 		email: smtp ? ('smtp' as const) : ('console' as const),
-		github: Boolean(github),
+		github: githubSignIn,
 		objectStore: objectStoreKind,
 		nodes: nodes?.count ?? 0,
 		version: platformVersion,

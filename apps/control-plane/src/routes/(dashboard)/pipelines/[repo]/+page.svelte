@@ -201,6 +201,7 @@
 				hasRepository
 				webhookUrl={data.webhookUrl}
 				defaultBranch={data.repository.defaultBranch}
+				viaGithubApp={Boolean(data.repository.githubAppInstallationId)}
 			/>
 		</Panel>
 	{:else}

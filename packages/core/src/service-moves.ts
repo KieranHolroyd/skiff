@@ -34,8 +34,37 @@ import { backupObjectKey } from './databases.ts';
 import { resolvePlacement } from './placement.ts';
 import type { VolumeRow } from './volumes.ts';
 import { newId, parseJson } from './util.ts';
+import { flow, type FlowDefinition, type FlowOutcome } from './flows/types.ts';
 
 type MoveRow = typeof databaseMoves.$inferSelect;
+
+/** The flow that drives a database move (docs/FLOWS.md §6). Its key is the move id. */
+export const DATABASE_MOVE_FLOW = 'database.move';
+interface DatabaseMoveFlowState {
+	moveId: string;
+}
+/** Signals the move flow waits for; the node protocol hooks below send them. */
+const MOVE_SIGNALS = {
+	converged: 'source-converged',
+	backup: 'backup-result',
+	restore: 'restore-result',
+	purged: 'purged',
+} as const;
+/** Where a move that predates flows is adopted, by phase; null for a finished move. */
+function adoptionPoint(phase: MoveRow['phase']): { step: string; signal: string; timeoutMs: number | null } | null {
+	switch (phase) {
+		case 'quiescing':
+			return { step: 'quiesce', signal: MOVE_SIGNALS.converged, timeoutMs: MOVE_QUIESCE_TIMEOUT_MS };
+		case 'dumping':
+			return { step: 'dump', signal: MOVE_SIGNALS.backup, timeoutMs: MOVE_STEP_TIMEOUT_MS };
+		case 'restoring':
+			return { step: 'cutover', signal: MOVE_SIGNALS.restore, timeoutMs: MOVE_STEP_TIMEOUT_MS };
+		case 'purging':
+			return { step: 'purge', signal: MOVE_SIGNALS.purged, timeoutMs: null };
+		default:
+			return null;
+	}
+}
 
 /** Phases in which the database is unavailable and its attached apps are stopped. */
 const ACTIVE_PHASES = ['quiescing', 'dumping', 'restoring'] as const;
@@ -250,9 +279,20 @@ export class ServiceMoveService {
 			},
 			result: 'ok',
 		});
-		if (offline) this.cutOver(this.requireMove(id));
-		// Nothing to stop: go straight to the dump.
-		else if (!attached.some((item) => item.nodeId === source)) this.startDump(this.requireMove(id), now);
+		// The flow takes it from here (docs/FLOWS.md §6). Its steps are synchronous, so the first
+		// transitions (an offline cut-over, or the dump when nothing needs stopping) happen now.
+		this.ctx.flows.start<DatabaseMoveFlowState>({
+			kind: DATABASE_MOVE_FLOW,
+			key: id,
+			input: { moveId: id },
+			orgId: db.orgId,
+			subject: { kind: 'database', id: db.id },
+			readPermission: 'database:read',
+			cancelPermission: 'database:update',
+			createdBy: principal.userId,
+			step: offline ? 'cutover' : attached.some((item) => item.nodeId === source) ? 'quiesce' : 'dump',
+			detail: `Moving ${db.name} to ${targetName}.`,
+		});
 		return { ...this.view(this.requireMove(id)), warnings };
 	}
 
@@ -323,9 +363,8 @@ export class ServiceMoveService {
 
 	// --------------------------------------------------------- node protocol
 
-	/** Advance `quiescing` once the source applied the stop and no longer runs the attached apps. */
+	/** Signal `quiescing` moves once the source applied the stop and no longer runs the attached apps. */
 	onHeartbeat(nodeId: string, actualStateVersion: number, reportedIds: readonly string[]): void {
-		const now = this.ctx.now();
 		for (const row of this.activeMoves()) {
 			if (row.phase !== 'quiescing' || row.sourceNodeId !== nodeId) continue;
 			if (actualStateVersion < row.quiesceVersion) continue;
@@ -340,11 +379,11 @@ export class ServiceMoveService {
 				workloadIds.some((workloadId) => id === workloadId || id.startsWith(`${workloadId}-r`)),
 			);
 			if (stillRunning) continue;
-			this.startDump(row, now);
+			this.signalMove(row, MOVE_SIGNALS.converged);
 		}
 	}
 
-	/** The final dump finished on the source: re-point the database, or give up. */
+	/** The final dump finished on the source: the flow re-points the database, or gives up. */
 	onBackupResult(backupId: string, ok: boolean, error: string | null): void {
 		const row = this.ctx.db
 			.select()
@@ -352,11 +391,7 @@ export class ServiceMoveService {
 			.where(and(eq(databaseMoves.backupId, backupId), eq(databaseMoves.phase, 'dumping')))
 			.get();
 		if (!row) return;
-		if (!ok) {
-			this.abort(row, `The final backup failed: ${error ?? 'unknown error'}`);
-			return;
-		}
-		this.cutOver(row);
+		this.signalMove(row, MOVE_SIGNALS.backup, { ok, error });
 	}
 
 	/**
@@ -366,8 +401,7 @@ export class ServiceMoveService {
 	onRestoreResult(db: DatabaseRow, ok: boolean, error: string | null): boolean {
 		const row = this.activeFor(db.id);
 		if (!row || row.phase !== 'restoring' || db.pendingRestoreId !== row.backupId) return false;
-		if (ok) this.finish(row, db);
-		else this.rollBack(row, `The restore on the target failed: ${error ?? 'unknown error'}`);
+		this.signalMove(row, MOVE_SIGNALS.restore, { ok, error });
 		return true;
 	}
 
@@ -409,30 +443,159 @@ export class ServiceMoveService {
 				args: { nodeId, outcome: row.outcome },
 				result: 'ok',
 			});
+			// The purge is domain state any reader needs at once; the flow only records the end.
+			this.ctx.flows.signal(DATABASE_MOVE_FLOW, row.id, MOVE_SIGNALS.purged);
 		}
 		if (rows.length > 0) this.ctx.projects.bump();
 	}
 
-	/** Maintenance: give up on moves whose node never answered. */
-	tick(now = this.ctx.now()): number {
-		let changed = 0;
-		for (const row of this.activeMoves()) {
-			const age = now - row.updatedAt;
-			if (row.phase === 'quiescing' && age > MOVE_QUIESCE_TIMEOUT_MS) {
-				this.abort(row, `The attached apps did not stop within ${MOVE_QUIESCE_TIMEOUT_MS / 60_000} minutes.`);
-				changed += 1;
-			} else if (row.phase === 'dumping' && age > MOVE_STEP_TIMEOUT_MS) {
-				this.abort(row, 'The final backup did not finish in time.');
-				changed += 1;
-			} else if (row.phase === 'restoring' && age > MOVE_STEP_TIMEOUT_MS) {
-				this.rollBack(row, 'The restore on the target did not finish in time.');
-				changed += 1;
-			}
-		}
-		return changed;
+	/**
+	 * Maintenance: adopt moves that began before flows, then advance due move runs (timeouts give
+	 * up on nodes that never answered). Returns the runs advanced.
+	 */
+	tick(): number {
+		for (const row of this.ctx.db.select().from(databaseMoves).where(inArray(databaseMoves.phase, [...ACTIVE_PHASES, 'purging'])).all())
+			this.adopt(row);
+		return this.ctx.flows.drive({ kind: DATABASE_MOVE_FLOW }).processed;
+	}
+
+	/**
+	 * The flow definition (docs/FLOWS.md §6). Steps reuse the transitions below; each re-reads the
+	 * move row, and the `database_moves` phase stays the domain state other services read.
+	 */
+	databaseMoveFlow(): FlowDefinition<DatabaseMoveFlowState> {
+		const move = (state: DatabaseMoveFlowState) => this.requireMove(state.moveId);
+		const result = (row: MoveRow) => ({ moveId: row.id, outcome: row.outcome, databaseId: row.databaseId });
+		const failedWith = (row: MoveRow, fallback: string): FlowOutcome =>
+			flow.fail(this.requireMove(row.id).error ?? fallback);
+		/** After the cut-over, a result either finishes the move or returns it to the source. */
+		const restored = (row: MoveRow, ok: boolean, error: string | null): FlowOutcome => {
+			const db = this.ctx.db.select().from(databases).where(eq(databases.id, row.databaseId)).get();
+			if (!db) return flow.fail('The database was deleted during the move.');
+			if (ok) this.finish(row, db);
+			else this.rollBack(row, `The restore on the target failed: ${error ?? 'unknown error'}`);
+			return flow.next('purge');
+		};
+		return {
+			kind: DATABASE_MOVE_FLOW,
+			title: 'Database move',
+			steps: {
+				quiesce: {
+					run: () =>
+						flow.wait(MOVE_SIGNALS.converged, {
+							timeoutMs: MOVE_QUIESCE_TIMEOUT_MS,
+							detail: 'Stopping the attached apps on the source.',
+						}),
+					onSignal: () => flow.next('dump'),
+					onTimeout: ({ state }) => {
+						const error = `The attached apps did not stop within ${MOVE_QUIESCE_TIMEOUT_MS / 60_000} minutes.`;
+						this.abort(move(state), error);
+						return flow.fail(error);
+					},
+				},
+				dump: {
+					run: ({ state, now }) => {
+						const row = move(state);
+						// Idempotent: a resumed step whose dump was already requested keeps waiting for it.
+						if (row.phase !== 'dumping') this.startDump(row, now);
+						return flow.wait(MOVE_SIGNALS.backup, { timeoutMs: MOVE_STEP_TIMEOUT_MS, detail: 'Taking the final backup on the source.' });
+					},
+					onSignal: ({ state }, signal) => {
+						const row = move(state);
+						const { ok, error } = signal.payload as { ok: boolean; error: string | null };
+						if (ok) return flow.next('cutover');
+						const message = `The final backup failed: ${error ?? 'unknown error'}`;
+						this.abort(row, message);
+						return flow.fail(message);
+					},
+					onTimeout: ({ state }) => {
+						const error = 'The final backup did not finish in time.';
+						this.abort(move(state), error);
+						return flow.fail(error);
+					},
+				},
+				cutover: {
+					run: ({ state }) => {
+						const row = move(state);
+						// Resumed after the cut-over already happened: keep waiting for the restore.
+						const outcome = row.phase === 'restoring' ? 'restoring' : row.phase === 'purging' ? 'finished' : this.cutOver(row);
+						if (outcome === 'aborted') return failedWith(row, 'The move could not cut over.');
+						if (outcome === 'finished') return flow.next('purge');
+						return flow.wait(MOVE_SIGNALS.restore, {
+							timeoutMs: MOVE_STEP_TIMEOUT_MS,
+							detail: 'Restoring the data on the target.',
+						});
+					},
+					onSignal: ({ state }, signal) => {
+						const { ok, error } = signal.payload as { ok: boolean; error: string | null };
+						return restored(move(state), ok, error);
+					},
+					onTimeout: ({ state }) => {
+						this.rollBack(move(state), 'The restore on the target did not finish in time.');
+						return flow.next('purge');
+					},
+				},
+				purge: {
+					run: ({ state }) => {
+						const row = move(state);
+						if (row.phase === 'done') return this.endOfMove(row, result(row));
+						return flow.wait(MOVE_SIGNALS.purged, { detail: 'Deleting the old copy.' });
+					},
+					onSignal: ({ state }) => {
+						const row = move(state);
+						return this.endOfMove(row, result(row));
+					},
+				},
+			},
+			// Before the cut-over nothing has moved, so a cancel is an abort; after it, the restore
+			// result decides (finish or roll back) and the move cannot be cancelled.
+			cancel: ({ state, run }) => {
+				if (run.step !== 'quiesce' && run.step !== 'dump') return null;
+				this.abort(move(state), 'The move was cancelled.');
+				return flow.cancel('The move was cancelled before the cut-over.');
+			},
+			onFailure: ({ state }, error) => {
+				const row = this.ctx.db.select().from(databaseMoves).where(eq(databaseMoves.id, state.moveId)).get();
+				if (!row) return;
+				if (row.phase === 'quiescing' || row.phase === 'dumping') this.abort(row, error);
+				else if (row.phase === 'restoring') this.rollBack(row, error);
+			},
+		};
 	}
 
 	// ------------------------------------------------------------- internals
+
+	/** A rolled-back move ends failed (its data never moved); a completed one succeeds. */
+	private endOfMove(row: MoveRow, result: unknown): FlowOutcome {
+		return row.outcome === 'rolled_back'
+			? flow.fail(row.error ?? 'The move failed and was rolled back.')
+			: flow.succeed(result, 'Moved.');
+	}
+
+	/** Deliver a node event to the move's flow, adopting a move that began before flows. */
+	private signalMove(row: MoveRow, name: string, payload?: unknown): void {
+		this.adopt(row);
+		this.ctx.flows.signal(DATABASE_MOVE_FLOW, row.id, name, payload);
+	}
+
+	/** Give a pre-flow move a run parked where its phase is, so signals and timeouts reach it. */
+	private adopt(row: MoveRow): void {
+		if (this.ctx.flows.idFor(DATABASE_MOVE_FLOW, row.id)) return;
+		const point = adoptionPoint(row.phase);
+		if (!point) return;
+		this.ctx.flows.start<DatabaseMoveFlowState>({
+			kind: DATABASE_MOVE_FLOW,
+			key: row.id,
+			input: { moveId: row.id },
+			orgId: row.orgId,
+			subject: { kind: 'database', id: row.databaseId },
+			readPermission: 'database:read',
+			cancelPermission: 'database:update',
+			createdBy: row.createdBy,
+			step: point.step,
+			waiting: { signal: point.signal, deadline: point.timeoutMs === null ? null : row.updatedAt + point.timeoutMs },
+		});
+	}
 
 	private assertMovable(db: DatabaseRow, offline: boolean): void {
 		this.assertNotMoving(db);
@@ -738,10 +901,17 @@ export class ServiceMoveService {
 		this.ctx.projects.bump(db.orgId);
 	}
 
-	/** Point the database at the target with the final dump as its pending restore. */
-	private cutOver(row: MoveRow): void {
+	/**
+	 * Point the database at the target with the final dump as its pending restore. Returns
+	 * `restoring` (wait for the target), `finished` (nothing to restore; the move is purging) or
+	 * `aborted` (the target can no longer take it; nothing moved).
+	 */
+	private cutOver(row: MoveRow): 'restoring' | 'finished' | 'aborted' {
 		const db = this.ctx.db.select().from(databases).where(eq(databases.id, row.databaseId)).get();
-		if (!db) return;
+		if (!db) {
+			this.abort(row, 'The database was deleted during the move.');
+			return 'aborted';
+		}
 		const now = this.ctx.now();
 		// Capacity may have changed since the move was accepted; check again before committing.
 		const attachedMemory = this.ctx.db
@@ -759,7 +929,7 @@ export class ServiceMoveService {
 		});
 		if (!decision.ok) {
 			this.abort(row, decision.message);
-			return;
+			return 'aborted';
 		}
 		let hostPort: number;
 		let poolerPort: number | null;
@@ -768,7 +938,7 @@ export class ServiceMoveService {
 			poolerPort = db.poolerPort !== null ? this.ctx.databases.allocatePoolerPort(row.targetNodeId) : null;
 		} catch (error) {
 			this.abort(row, error instanceof Error ? error.message : String(error));
-			return;
+			return 'aborted';
 		}
 		const targetName = this.nodeRef(row.targetNodeId).name ?? row.targetNodeId;
 		this.ctx.sqlite.transaction(() => {
@@ -814,9 +984,10 @@ export class ServiceMoveService {
 		if (!row.backupId) {
 			const moved = this.ctx.db.select().from(databases).where(eq(databases.id, db.id)).get();
 			if (moved) this.finish(this.requireMove(row.id), moved);
-			return;
+			return 'finished';
 		}
 		this.ctx.projects.bump(db.orgId);
+		return 'restoring';
 	}
 
 	/** The target restored the dump: attached apps follow, and the source copy is purged. */
@@ -1046,6 +1217,7 @@ export class ServiceMoveService {
 			createdAt: new Date(row.createdAt).toISOString(),
 			updatedAt: new Date(row.updatedAt).toISOString(),
 			finishedAt: row.finishedAt ? new Date(row.finishedAt).toISOString() : null,
+			operationId: this.ctx.flows.idFor(DATABASE_MOVE_FLOW, row.id),
 		};
 	}
 }

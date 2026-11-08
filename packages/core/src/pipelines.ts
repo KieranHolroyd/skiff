@@ -18,6 +18,8 @@ import {
 	projects,
 } from '@skiff/db';
 import {
+	parseGithubRepoUrl,
+	sameGithubRepo,
 	pipelineDispatchSchema,
 	pipelineEnvironmentSetSchema,
 	pipelineProjectLinkSchema,
@@ -266,6 +268,7 @@ export class PipelineService {
 			enabled: row.enabled,
 			hasWebhookSecret: Boolean(row.webhookSecret),
 			hasStatusToken: Boolean(row.statusToken),
+			githubAppInstallationId: row.provider === 'github' ? this.ctx.githubApp.repositoryLink(row.orgId, row.cloneUrl).installationId : null,
 			minIsolation: {
 				trusted: parse<Record<string, PipelineIsolationTier | null>>(row.minIsolationJson, {}).trusted ?? null,
 				untrusted: parse<Record<string, PipelineIsolationTier | null>>(row.minIsolationJson, {}).untrusted ?? null,
@@ -362,9 +365,11 @@ export class PipelineService {
 
 	/**
 	 * GitHub delivery for a repository. `push` and `pull_request` start runs; `ping` is accepted.
-	 * The repository's webhook secret is mandatory, as for git builds (D45).
+	 * The repository's webhook secret is mandatory, as for git builds (D45). When Skiff's GitHub
+	 * App already delivers the repository's events (D165), this hook is ignored so one push never
+	 * starts two runs.
 	 */
-	handleGithubWebhook(repositoryId: string, rawBody: string, signature: string | null, event: string | null): PipelineWebhookResult {
+	async handleGithubWebhook(repositoryId: string, rawBody: string, signature: string | null, event: string | null): Promise<PipelineWebhookResult> {
 		const repository = this.ctx.db.select().from(pipelineRepositories).where(eq(pipelineRepositories.id, repositoryId)).get();
 		if (!repository) throw new NotFoundError('Repository');
 		this.verifySignature(repository, rawBody, signature);
@@ -376,6 +381,40 @@ export class PipelineService {
 		} catch {
 			throw new ValidationError('GitHub payload is not valid JSON.');
 		}
+		const parsed = parseGithubRepoUrl(repository.cloneUrl);
+		const fullName = (payload as { repository?: { full_name?: string } }).repository?.full_name ?? (parsed ? `${parsed.owner}/${parsed.repo}` : null);
+		if ((event === 'push' || event === 'pull_request') && fullName && (await this.ctx.githubApp.deliversFor(repository.orgId, fullName)))
+			return { accepted: false, reason: 'delivered by the GitHub App' };
+		return this.routeGithubEvent(repository, event, payload);
+	}
+
+	/**
+	 * An event delivered through Skiff's GitHub App (D165): every enabled GitHub repository of the
+	 * org whose clone URL names `fullName` gets it. Returns the trigger ids created.
+	 */
+	async handleAppEvent(orgId: string, fullName: string, event: string, payload: unknown): Promise<string[]> {
+		const repositories = this.ctx.db
+			.select()
+			.from(pipelineRepositories)
+			.where(and(eq(pipelineRepositories.orgId, orgId), eq(pipelineRepositories.enabled, true)))
+			.all()
+			.filter((row) => {
+				const parsed = parseGithubRepoUrl(row.cloneUrl);
+				return parsed !== null && sameGithubRepo(`${parsed.owner}/${parsed.repo}`, fullName);
+			});
+		const triggers: string[] = [];
+		for (const repository of repositories) {
+			try {
+				const result = this.routeGithubEvent(repository, event, payload);
+				if (result.triggerId) triggers.push(result.triggerId);
+			} catch (error) {
+				console.warn(`[pipelines] ${repository.name}: GitHub App ${event} ignored: ${(error as Error).message}`);
+			}
+		}
+		return triggers;
+	}
+
+	private routeGithubEvent(repository: PipelineRepositoryRow, event: string | null, payload: unknown): PipelineWebhookResult {
 		if (event === 'push') return this.onPush(repository, payload as GithubPushPayload);
 		if (event === 'pull_request') return this.onPullRequest(repository, payload as GithubPullRequestPayload);
 		return { accepted: false, reason: `event ${event ?? '(none)'} is not handled` };

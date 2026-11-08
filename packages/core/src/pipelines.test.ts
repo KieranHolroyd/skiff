@@ -313,7 +313,7 @@ jobs:
 		);
 		const test1 = (await claimJob())!;
 		expect(test1.secretNames).toEqual(['TOKEN']);
-		expect(engine.secrets(engine.authenticateJob(test1.token))).toEqual({ TOKEN: 'repo-token' });
+		expect(await engine.secrets(engine.authenticateJob(test1.token))).toEqual({ TOKEN: 'repo-token' });
 		finish(test1);
 		expect(await claimJob()).toBeNull(); // waiting for approval
 		let run = await core.pipelines.getRun(owner, r.name, runIds[0]!);
@@ -322,7 +322,7 @@ jobs:
 		await expect(core.pipelines.approveJob(deployer, r.name, run.id, ship.id, true)).rejects.toThrow();
 		await core.pipelines.approveJob(owner, r.name, run.id, ship.id, true);
 		const claim = (await claimJob())!;
-		expect(engine.secrets(engine.authenticateJob(claim.token))).toEqual({ TOKEN: 'prod-token' });
+		expect(await engine.secrets(engine.authenticateJob(claim.token))).toEqual({ TOKEN: 'prod-token' });
 		finish(claim);
 		run = await core.pipelines.getRun(owner, r.name, runIds[0]!);
 		expect(run.conclusion).toBe('success');
@@ -378,8 +378,8 @@ describe('webhooks', () => {
 			commits: [{ modified: ['src/app.ts'] }],
 			pusher: { name: 'kieran' },
 		});
-		expect(() => core.pipelines.handleGithubWebhook(r.id, body, 'sha256=bad', 'push')).toThrow();
-		const result = core.pipelines.handleGithubWebhook(r.id, body, sign(body), 'push');
+		await expect(core.pipelines.handleGithubWebhook(r.id, body, 'sha256=bad', 'push')).rejects.toThrow();
+		const result = await core.pipelines.handleGithubWebhook(r.id, body, sign(body), 'push');
 		expect(result.accepted).toBe(true);
 		const claim = (await engine.claim(nodeId, labels)) as PipelineResolveClaim;
 		expect(claim.sha).toBe('b'.repeat(40));
@@ -415,7 +415,7 @@ describe('webhooks', () => {
 			},
 			sender: { login: 'evil' },
 		});
-		core.pipelines.handleGithubWebhook(r.id, body, sign(body), 'pull_request');
+		await core.pipelines.handleGithubWebhook(r.id, body, sign(body), 'pull_request');
 		const claim = (await engine.claim(nodeId, labels)) as PipelineResolveClaim;
 		expect(claim.ref).toBe('refs/pull/7/head');
 		engine.resolveTrigger(engine.authenticateTrigger(claim.token), {
@@ -425,7 +425,7 @@ describe('webhooks', () => {
 		const job = (await claimJob())!;
 		expect(job.trust).toBe('untrusted');
 		expect(job.secretNames).toEqual([]);
-		expect(engine.secrets(engine.authenticateJob(job.token))).toEqual({});
+		expect(await engine.secrets(engine.authenticateJob(job.token))).toEqual({});
 		await expect(engine.startDeploy(engine.authenticateJob(job.token), { project: 'x', archive: true, promote: false })).rejects.toThrow(
 			'Untrusted',
 		);
@@ -567,7 +567,7 @@ describe('skiff_event triggers', () => {
 		const r = repo();
 		const body = JSON.stringify({ ref: 'refs/heads/main', after: 'f'.repeat(40), commits: [] });
 		const sig = `sha256=${createHmac('sha256', WEBHOOK_SECRET).update(body).digest('hex')}`;
-		core.pipelines.handleGithubWebhook(r.id, body, sig, 'push');
+		await core.pipelines.handleGithubWebhook(r.id, body, sig, 'push');
 		const claim = (await engine.claim(nodeId, labels)) as PipelineResolveClaim;
 		engine.resolveTrigger(engine.authenticateTrigger(claim.token), {
 			sha: 'f'.repeat(40),
@@ -644,7 +644,7 @@ jobs:
 		expect(build.job.key).toBe('ship--build');
 		expect(build.context.inputs).toEqual({ version: '1.4.2', dry: true });
 		expect(build.secretNames).toEqual(['KEY']);
-		expect(engine.secrets(engine.authenticateJob(build.token))).toEqual({ KEY: 'k1' });
+		expect(await engine.secrets(engine.authenticateJob(build.token))).toEqual({ KEY: 'k1' });
 		expect('callWith' in build.job).toBe(false);
 		finish(build);
 		finish((await claimJob())!, 'success', { url: 'https://x.test' });

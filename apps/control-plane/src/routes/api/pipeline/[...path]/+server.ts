@@ -84,7 +84,7 @@ const handler: RequestHandler = async (event) => {
 			}
 			case 'secrets':
 				if (method !== 'GET') return notAllowed();
-				return { secrets: engine.secrets(job) };
+				return { secrets: await engine.secrets(job) };
 			case 'steps': {
 				if (method !== 'POST') return notAllowed();
 				const index = Number(id);

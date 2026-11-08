@@ -3,7 +3,10 @@ import { and, asc, desc, eq, inArray, lt } from 'drizzle-orm';
 import { builds, deployments, gitSources, nodes, projects, releases } from '@skiff/db';
 import {
 	buildCreateSchema,
+	contentUrl,
 	gitSourceSchema,
+	parseGithubRepoUrl,
+	sameGithubRepo,
 	requirePermission,
 	type BuildCreate,
 	type BuildJob,
@@ -20,6 +23,7 @@ import { entriesFromZip } from './artifact.ts';
 import { buildPrincipal } from './orgs.ts';
 import { decrypt, encrypt, newId } from './util.ts';
 import type { ProjectRow } from './projects.ts';
+import type { GithubPushEvent } from './github-app.ts';
 
 export type GitSourceRow = typeof gitSources.$inferSelect;
 export type BuildRow = typeof builds.$inferSelect;
@@ -128,6 +132,7 @@ export class BuildService {
 			finishedAt: null,
 		};
 		this.ctx.db.insert(builds).values(row).run();
+		void this.reportGithub(project, source, row);
 		this.ctx.audit.record({
 			principal,
 			action: 'build.create',
@@ -248,6 +253,9 @@ export class BuildService {
 				.run();
 			throw error;
 		}
+		// D164: a repository covered by the org's GitHub App is cloned with a one-hour, read-only
+		// token for that repository alone; otherwise the Builder uses its own git credentials.
+		const access = await this.ctx.githubApp.repoToken(source.orgId, source.repoUrl, { contents: 'read' });
 		return {
 			buildId: row.id,
 			repoUrl: source.repoUrl,
@@ -257,7 +265,7 @@ export class BuildService {
 			buildCommand: source.buildCommand,
 			outputDir: source.outputDir,
 			uploadUrl,
-			auth: null,
+			auth: access ? { username: 'x-access-token', password: access.token } : null,
 		};
 	}
 
@@ -355,6 +363,8 @@ export class BuildService {
 		}
 
 		this.ctx.db.update(builds).set(patch).where(eq(builds.id, buildId)).run();
+		const source = this.ctx.db.select().from(gitSources).where(eq(gitSources.id, row.gitSourceId)).get();
+		if (source) void this.reportGithub(project, source, { ...row, ...patch } as BuildRow);
 		if (patch.status === 'failed')
 			this.ctx.events.emitDeployment(row.orgId, row.projectId, 'failed', {
 				project: project.slug,
@@ -424,6 +434,8 @@ export class BuildService {
 			message: 'Build was cancelled by an operator.',
 		});
 		void this.cleanupObject(`builds/${row.id}.zip`);
+		const source = this.ctx.db.select().from(gitSources).where(eq(gitSources.id, row.gitSourceId)).get();
+		if (source) void this.reportGithub(project, source, { ...row, status, finishedAt: now });
 		this.ctx.audit.record({
 			principal,
 			action: 'build.cancel',
@@ -456,8 +468,10 @@ export class BuildService {
 	}
 
 	/**
-	 * GitHub push delivery. The URL names the project; the signature (when configured) proves the
-	 * payload. Returns null when the push is for another branch or the repository is not configured.
+	 * GitHub push delivery to the project's own webhook. The URL names the project; the signature
+	 * proves the payload. Returns null when the push is for another branch, the repository is not
+	 * configured, or Skiff's GitHub App already delivers this repository's pushes (D165): one push
+	 * must never queue two builds.
 	 */
 	async handleGithubWebhook(
 		project: ProjectRow,
@@ -469,14 +483,51 @@ export class BuildService {
 		const source = this.ctx.db.select().from(gitSources).where(eq(gitSources.projectId, project.id)).get();
 		if (!source || !source.enabled) return null;
 		this.verifySignature(source, rawBody, signature);
-		let payload: { ref?: string; after?: string; head_commit?: { message?: string } };
+		let payload: GithubPushEvent;
 		try {
-			payload = JSON.parse(rawBody) as typeof payload;
+			payload = JSON.parse(rawBody) as GithubPushEvent;
 		} catch {
 			throw new ValidationError('GitHub payload is not valid JSON.');
 		}
-		const branch = payload.ref?.replace('refs/heads/', '');
+		const fullName = payload.repository?.full_name ?? this.githubFullName(source);
+		if (fullName && (await this.ctx.githubApp.deliversFor(project.orgId, fullName))) return null;
+		return this.queuePush(project, source, payload, 'build.webhook');
+	}
+
+	/**
+	 * A push delivered through Skiff's GitHub App (D165): every enabled git source in the org whose
+	 * repository is `fullName` and whose branch was pushed queues a build. Returns the build ids.
+	 */
+	async handleAppPush(orgId: string, fullName: string, payload: GithubPushEvent): Promise<string[]> {
+		const candidates = this.ctx.db
+			.select({ source: gitSources, project: projects })
+			.from(gitSources)
+			.innerJoin(projects, eq(projects.id, gitSources.projectId))
+			.where(and(eq(gitSources.orgId, orgId), eq(gitSources.enabled, true)))
+			.all()
+			.filter(({ source, project }) => !project.deletedAt && sameGithubRepo(this.githubFullName(source) ?? '', fullName));
+		const queued: string[] = [];
+		for (const { source, project } of candidates) {
+			try {
+				const build = this.queuePush(project, source, payload, 'build.github_app');
+				if (build) queued.push(build.id);
+			} catch (error) {
+				// A quota refusal for one project must not drop the push for the others.
+				console.warn(`[builds] ${project.slug}: GitHub App push ignored: ${(error as Error).message}`);
+			}
+		}
+		return queued;
+	}
+
+	private githubFullName(source: GitSourceRow): string | null {
+		const parsed = parseGithubRepoUrl(source.repoUrl);
+		return parsed ? `${parsed.owner}/${parsed.repo}` : null;
+	}
+
+	private queuePush(project: ProjectRow, source: GitSourceRow, payload: GithubPushEvent, action: string): BuildView | null {
+		const branch = payload.ref?.startsWith('refs/heads/') ? payload.ref.slice('refs/heads/'.length) : null;
 		if (!branch || branch !== source.branch) return null;
+		if (payload.deleted || !payload.after || /^0+$/.test(payload.after)) return null;
 		this.ctx.quota.assertCanCreateBuild(project.orgId, project.id);
 		const now = this.ctx.now();
 		const row: BuildRow = {
@@ -502,8 +553,9 @@ export class BuildService {
 			finishedAt: null,
 		};
 		this.ctx.db.insert(builds).values(row).run();
+		void this.reportGithub(project, source, row);
 		this.ctx.audit.record({
-			action: 'build.webhook',
+			action,
 			resource: 'build',
 			resourceId: row.id,
 			orgId: project.orgId,
@@ -511,6 +563,56 @@ export class BuildService {
 			result: 'ok',
 		});
 		return this.view(project, row);
+	}
+
+	/**
+	 * Commit status `skiff-build/<project>` for every state a build passes through, and a GitHub
+	 * deployment when it succeeds (D164). Only for repositories the org's GitHub App covers;
+	 * best effort, never throws.
+	 */
+	private async reportGithub(project: ProjectRow, source: GitSourceRow, row: BuildRow): Promise<void> {
+		try {
+			if (!row.commitSha || !this.githubFullName(source)) return;
+			const origin = this.ctx.config.platformOrigin.replace(/\/+$/, '');
+			const buildUrl = `${origin}/projects/${encodeURIComponent(project.slug)}?tab=builds`;
+			const state = row.status === 'succeeded' ? 'success' : row.status === 'failed' ? 'failure' : row.status === 'cancelled' ? 'error' : 'pending';
+			const description =
+				row.status === 'queued'
+					? 'Waiting for a build node'
+					: row.status === 'building'
+						? 'Building'
+						: row.status === 'succeeded'
+							? row.promote
+								? 'Built and deployed'
+								: 'Built; preview deployed'
+							: `${row.status}${row.error ? `: ${row.error.split('\n')[0]}` : ''}`;
+			await this.ctx.githubApp.commitStatus(project.orgId, source.repoUrl, {
+				sha: row.commitSha,
+				state,
+				context: `skiff-build/${project.slug}`,
+				description,
+				targetUrl: buildUrl,
+			});
+			if (row.status !== 'succeeded' || !row.deploymentId) return;
+			const deployment = this.ctx.db.select().from(deployments).where(eq(deployments.id, row.deploymentId)).get();
+			const projectView = this.ctx.projects.view(project);
+			const environmentUrl = row.promote
+				? projectView.productionUrl
+				: deployment?.previewHost
+					? contentUrl(this.ctx.config.platformOrigin, deployment.previewHost)
+					: projectView.productionUrl;
+			await this.ctx.githubApp.deployment(project.orgId, source.repoUrl, {
+				sha: row.commitSha,
+				environment: row.promote ? project.slug : `${project.slug}-preview`,
+				production: row.promote,
+				description: `Skiff build ${row.id}`,
+				environmentUrl,
+				logUrl: buildUrl,
+				state: 'success',
+			});
+		} catch (error) {
+			console.warn(`[builds] GitHub report for ${row.id} skipped: ${(error as Error).message}`);
+		}
 	}
 
 	private verifySignature(source: GitSourceRow, rawBody: string, signature: string | null): void {
@@ -571,6 +673,7 @@ export class BuildService {
 			outputDir: row.outputDir,
 			enabled: row.enabled,
 			hasWebhookSecret: Boolean(row.webhookSecret),
+			githubAppInstallationId: this.ctx.githubApp.repositoryLink(row.orgId, row.repoUrl).installationId,
 			createdAt: new Date(row.createdAt).toISOString(),
 			updatedAt: new Date(row.updatedAt).toISOString(),
 		};
