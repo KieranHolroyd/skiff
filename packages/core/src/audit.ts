@@ -24,19 +24,13 @@ export class AuditService {
 
 	record(input: AuditInput): void {
 		const principal = input.principal;
+		const id = newId('aud_');
 		this.ctx.db
 			.insert(auditLog)
 			.values({
-				id: newId('aud_'),
+				id,
 				orgId: input.orgId ?? principal?.orgId ?? null,
-				actorType:
-					principal?.kind === 'apiKey'
-						? 'apiKey'
-						: principal?.kind === 'mcp'
-							? 'mcp'
-							: principal?.kind === 'system'
-								? 'system'
-								: 'user',
+				actorType: actorTypeFor(principal?.kind),
 				actorId: principal?.userId ?? null,
 				clientId: principal?.clientId ?? principal?.keyId ?? null,
 				action: input.action,
@@ -49,6 +43,20 @@ export class AuditService {
 				operationId: input.operationId ?? null,
 			})
 			.run();
+
+		// IAM.md §7.1 actor columns (migration 0081). Written separately because the drizzle table
+		// in @skiff/db has not picked the columns up yet; the common path (no credential / no
+		// acting-for) skips the second statement entirely.
+		const actedFor = principal?.actingFor;
+		const credentialId = principal?.keyId ?? principal?.credential ?? null;
+		const actingForType = actedFor?.kind ?? null;
+		const actingForId = actedFor?.id ?? null;
+		if (credentialId !== null || actingForType !== null || actingForId !== null) {
+			this.ctx.sqlite.run(
+				'UPDATE audit_log SET credential_id = ?, acting_for_type = ?, acting_for_id = ? WHERE id = ?',
+				[credentialId, actingForType, actingForId, id],
+			);
+		}
 	}
 
 	/** Run a mutation and record both success and failure, keeping tool code clean. */
@@ -115,6 +123,18 @@ export class AuditService {
 	}
 }
 
+/**
+ * `actor_type` stays within the CHECK in 0001_init (user/apiKey/mcp/system/agent). New IAM principal
+ * kinds (serviceAccount/workload/job/node) are recorded as `system` until the CHECK is relaxed.
+ */
+function actorTypeFor(kind: Principal['kind'] | undefined): 'user' | 'apiKey' | 'mcp' | 'system' {
+	if (kind === 'apiKey') return 'apiKey';
+	if (kind === 'mcp') return 'mcp';
+	if (kind === 'user' || kind === undefined) return 'user';
+	return 'system';
+}
+
+/** A stored audit row. `credentialId` / `actingForType` / `actingForId` (IAM.md §7.1) appear here once @skiff/db's schema includes migration 0081. */
 export type AuditEntry = typeof auditLog.$inferSelect;
 
 export type AuditListOptions = {

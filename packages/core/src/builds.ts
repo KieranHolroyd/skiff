@@ -20,7 +20,7 @@ import {
 import type { CoreContext } from './context.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { entriesFromZip } from './artifact.ts';
-import { buildPrincipal } from './orgs.ts';
+import { buildSystemPrincipal } from './iam/system.ts';
 import { decrypt, encrypt, newId } from './util.ts';
 import type { ProjectRow } from './projects.ts';
 import type { GithubPushEvent } from './github-app.ts';
@@ -288,11 +288,8 @@ export class BuildService {
 			throw new NotFoundError('Project');
 		}
 		const now = this.ctx.now();
-		const system = buildPrincipal({
-			kind: 'system',
-			userId: row.createdBy,
-			orgId: row.orgId,
-			role: 'owner',
+		const system = buildSystemPrincipal('system:build-claim', row.orgId, {
+			actingFor: { kind: 'user', id: row.createdBy },
 		});
 		const objectKey = `builds/${row.id}.zip`;
 		const patch: Partial<BuildRow> = {

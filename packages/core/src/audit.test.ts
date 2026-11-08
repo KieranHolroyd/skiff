@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDb } from '@skiff/db';
+import type { Principal } from '@skiff/contracts';
 import { MAX_AUDIT_PAGE, parseAuditTime } from './audit.ts';
 import { createCore, type Core } from './index.ts';
 import { LocalObjectStore } from './object-store.ts';
@@ -123,5 +124,63 @@ describe('parseAuditTime', () => {
 		expect(parseAuditTime('', 'to')).toBeUndefined();
 		for (const bad of ['yesterday', '2026-13-45', '11/07/2026', '-5'])
 			expect(() => parseAuditTime(bad, 'from')).toThrow(/not a date/);
+	});
+});
+
+describe('audit actor columns (IAM.md §7.1)', () => {
+	const sessionUser: Principal = { ...owner, credential: 'session' };
+	const job: Principal = {
+		...buildPrincipal({ kind: 'job', userId: 'job_1', orgId: 'org_1', role: 'owner' }),
+		credential: 'job',
+		actingFor: { kind: 'user', id: 'user_1' },
+	};
+	const keyUser: Principal = {
+		...buildPrincipal({ kind: 'apiKey', userId: 'user_1', orgId: 'org_1', role: 'owner', keyId: 'key_9' }),
+		credential: 'apiKey',
+	};
+
+	interface ActorRow {
+		actor_type: string;
+		credential_id: string | null;
+		acting_for_type: string | null;
+		acting_for_id: string | null;
+	}
+
+	function actorRow(resourceId: string): ActorRow {
+		const row = opened.sqlite
+			.query('SELECT actor_type, credential_id, acting_for_type, acting_for_id FROM audit_log WHERE resource_id = ?')
+			.get(resourceId) as ActorRow | null;
+		expect(row).not.toBeNull();
+		return row!;
+	}
+
+	test('a session user records the credential and no acting-for', () => {
+		core.audit.record({ principal: sessionUser, action: 'project.update', resource: 'project', resourceId: 'actor_session', result: 'ok' });
+		expect(actorRow('actor_session')).toEqual({
+			actor_type: 'user',
+			credential_id: 'session',
+			acting_for_type: null,
+			acting_for_id: null,
+		});
+	});
+
+	test('a machine kind records credential and acting-for as system', () => {
+		core.audit.record({ principal: job, action: 'job.run', resource: 'job', resourceId: 'actor_job', result: 'ok' });
+		// `job` is not in actor_type's CHECK yet, so it is stored as `system` (migration 0081).
+		expect(actorRow('actor_job')).toEqual({
+			actor_type: 'system',
+			credential_id: 'job',
+			acting_for_type: 'user',
+			acting_for_id: 'user_1',
+		});
+	});
+
+	test('a key id wins over the credential kind', () => {
+		core.audit.record({ principal: keyUser, action: 'project.update', resource: 'project', resourceId: 'actor_key', result: 'ok' });
+		expect(actorRow('actor_key')).toMatchObject({ actor_type: 'apiKey', credential_id: 'key_9' });
+	});
+
+	test('rows without a credential or acting-for stay NULL', () => {
+		expect(actorRow('day0')).toEqual({ actor_type: 'user', credential_id: null, acting_for_type: null, acting_for_id: null });
 	});
 });

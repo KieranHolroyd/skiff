@@ -40,7 +40,7 @@ import { ClickHouseError, ClickHouseUnavailableError } from './clickhouse.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { DATASETS, expandSqlMacros } from './observability-query.ts';
 import { toQueryResult, type ObservabilityService } from './observability.ts';
-import { buildPrincipal } from './orgs.ts';
+import { buildSystemPrincipal } from './iam/system.ts';
 import { TELEMETRY_NOT_INSTALLED } from './telemetry.ts';
 import { newId, parseJson } from './util.ts';
 
@@ -425,7 +425,7 @@ export class AlertService {
 	// --- names ----------------------------------------------------------------------------------
 
 	#orgPrincipal(orgId: string): Principal {
-		return buildPrincipal({ kind: 'system', userId: 'system:alerts', orgId, role: 'owner' });
+		return buildSystemPrincipal('system:alerts', orgId);
 	}
 
 	#names(orgId: string): OrgNames {

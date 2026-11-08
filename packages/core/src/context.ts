@@ -59,6 +59,7 @@ import type { IngressHaService } from './ingress-ha.ts';
 import type { FailoverService } from './failover-service.ts';
 import type { ClusterConfigService } from './cluster-config-service.ts';
 import type { IamService } from './iam/service.ts';
+import type { ServiceAccountService } from './service-accounts.ts';
 
 /**
  * Shared dependency object. Service instances are attached after construction (in `createCore`)
@@ -152,6 +153,8 @@ export interface CoreContext {
 	cluster: ClusterConfigService;
 	/** Identity and access management: bindings, roles, groups and the decision cache (IAM.md I1). */
 	iam: IamService;
+	/** Service accounts: org-owned machine principals (`sa_…`, IAM.md I13). */
+	serviceAccounts: ServiceAccountService;
 	/** Functions: Workers-compatible workloads on workerd (D110). */
 	functions: FunctionService;
 }

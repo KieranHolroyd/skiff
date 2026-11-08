@@ -34,7 +34,7 @@ import {
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import { CoreError, NotFoundError, ValidationError } from './errors.ts';
-import { buildPrincipal } from './orgs.ts';
+import { buildSystemPrincipal } from './iam/system.ts';
 import { MANIFEST_ACCEPT } from './oci-client.ts';
 import { OidcError, refMatches, verifyGithubOidc } from './registry-oidc.ts';
 import { generateRegistrySigningKey, signRegistryToken, type RegistryAccess, type RegistrySigningKey } from './registry-token.ts';
@@ -901,7 +901,7 @@ export class RegistryService {
 	private async autoDeploy(orgId: string, projectId: string, repository: string, tag: string, digest: string): Promise<void> {
 		const project = this.ctx.db.select().from(projects).where(eq(projects.id, projectId)).get();
 		if (!project || project.deletedAt || project.orgId !== orgId) return;
-		const principal = buildPrincipal({ kind: 'system', userId: 'registry', orgId, role: 'owner' });
+		const principal = buildSystemPrincipal('system:registry-autodeploy', orgId);
 		try {
 			await this.ctx.deployments.deployImage(principal, project, {
 				image: `${this.host()}/${repository}:${tag}`,

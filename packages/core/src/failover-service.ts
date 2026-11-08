@@ -25,7 +25,7 @@ import { canAdvance } from './failover.ts';
 import { IngressHealth } from './ingress-health.ts';
 import { ControlPlaneLease, SqliteLeaseStore, type LeaseDecision } from './lease.ts';
 import { OFFLINE_AFTER_MS } from './nodes.ts';
-import { buildPrincipal } from './orgs.ts';
+import { buildSystemPrincipal } from './iam/system.ts';
 import { newId, parseJson, randomToken } from './util.ts';
 import type { ReplicaCopy } from './workloads.ts';
 
@@ -1274,7 +1274,7 @@ function sourceReason(fact: NodeFact | undefined, nodeId: string, why: 'drain' |
 }
 
 function systemPrincipal(orgId: string): Principal {
-	return buildPrincipal({ kind: 'system', userId: 'system:failover', orgId, role: 'owner' });
+	return buildSystemPrincipal('system:failover', orgId);
 }
 
 function requireViewer(principal: Principal): void {

@@ -18,6 +18,7 @@ import { haCommand } from './commands/ha.ts';
 import { backupTargetCommand } from './commands/backup-target.ts';
 import { blueprintCommand } from './commands/blueprint.ts';
 import { logDrainCommand } from './commands/log-drain.ts';
+import { iamCommand } from './commands/iam.ts';
 import { registryCommand } from './commands/registry.ts';
 import { auditCommand } from './commands/audit.ts';
 import { volumeCommand } from './commands/volume.ts';
@@ -95,6 +96,7 @@ const commands: Record<string, (argv: string[]) => Promise<void>> = {
 	backupTargets: backupTargetCommand,
 	'log-drain': logDrainCommand,
 	'log-drains': logDrainCommand,
+	iam: iamCommand,
 	registry: registryCommand,
 	images: registryCommand,
 	audit: auditCommand,
@@ -147,6 +149,7 @@ Commands:
   email [status|domains|send|log|…]          Send email from your own domains, a self-hosted SES (\`skif email --help\`)
   backup-target [list|add|test|remove]       Where backups are written (\`skif backup-target --help\`)
   log-drain [list|create|test|update|…]      Forward logs to a webhook or OTLP receiver (\`skif log-drain --help\`)
+  iam [roles|bindings|groups|bind|…]         Roles, bindings and groups, and why access is allowed (\`skif iam --help\`)
   registry [status|login|repos|credentials|deploy]  The platform registry, private registry logins, image deploys (\`skif registry --help\`)
   audit [--from] [--to] [--all]              Org audit log, newest first, with a date range and paging
   volume [list|show|snapshot|restore|…]      Persistent app volumes and their snapshots (\`skif volume --help\`)

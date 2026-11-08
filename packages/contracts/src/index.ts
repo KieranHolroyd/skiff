@@ -1,6 +1,7 @@
 export * from './permissions.ts';
 export * from './principal.ts';
 export * from './iam/authorize.ts';
+export * from './iam/system.ts';
 export * from './slugs.ts';
 export * from './semver.ts';
 export * from './features.ts';

@@ -87,6 +87,7 @@ import type { CoreContext } from './context.ts';
 import { resolveTxtRecords } from './dns-txt.ts';
 import type { CloudflareClient, CloudflareRecordInput } from './domains.ts';
 import { ConflictError, CoreError, NotFoundError, QuotaError, RateLimitError, ValidationError } from './errors.ts';
+import { buildSystemPrincipal } from './iam/system.ts';
 import type { ProjectRow } from './projects.ts';
 import { hashPassword, newId, parseJson, randomToken, sha256Hex } from './util.ts';
 
@@ -530,7 +531,7 @@ export class EmailService {
 		this.ctx.db.update(emailOrgs).set({ state: 'paused', pausedReason: reason, updatedAt: this.ctx.now() }).where(eq(emailOrgs.orgId, orgId)).run();
 		this.bumpMail();
 		this.ctx.audit.record({
-			principal: { kind: 'system', userId: 'system', orgId, role: 'owner', permissions: new Set() } as unknown as Principal,
+			principal: buildSystemPrincipal('system:email-delivery', orgId),
 			action: 'email.org.paused',
 			resource: 'email',
 			resourceId: orgId,
@@ -1432,7 +1433,7 @@ export class EmailService {
 		if (result.changes === 0) throw new CoreError('invalid_link', 'This link is not valid or was already used.', 404);
 		this.bumpMail();
 		this.ctx.audit.record({
-			principal: { kind: 'system', userId: 'system', orgId: row.orgId, role: 'owner', permissions: new Set() } as unknown as Principal,
+			principal: buildSystemPrincipal('system:email-delivery', row.orgId),
 			action: 'email.address.verify',
 			resource: 'email',
 			resourceId: row.address,

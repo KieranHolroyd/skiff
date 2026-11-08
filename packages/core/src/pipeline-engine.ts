@@ -66,7 +66,7 @@ import {
 import type { CoreContext } from './context.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from './errors.ts';
 import { entriesFromZip } from './artifact.ts';
-import { buildPrincipal } from './orgs.ts';
+import { buildSystemPrincipal } from './iam/system.ts';
 import { newId } from './util.ts';
 import { PipelineOidc } from './pipeline-oidc.ts';
 import { commitState, githubTarget, postCommitStatus } from './pipeline-status.ts';
@@ -1754,7 +1754,11 @@ export class PipelineEngine {
 			);
 		if (link.environment && link.environment !== job.environment)
 			throw new CoreError('forbidden', `Deploys to "${slug}" are only allowed from jobs in environment "${link.environment}".`, 403);
-		const principal = buildPrincipal({ kind: 'system', userId: run.createdBy ?? 'pipeline', orgId: job.orgId, role: 'owner' });
+		const principal = buildSystemPrincipal(
+			'system:pipeline-deploy',
+			job.orgId,
+			run.createdBy ? { actingFor: { kind: 'user', id: run.createdBy } } : undefined,
+		);
 		return { run, project, principal };
 	}
 
@@ -1816,7 +1820,7 @@ export class PipelineEngine {
 		}
 	}
 
-	private audit(principal: ReturnType<typeof buildPrincipal>, job: PipelineJobRow, project: string, deploymentId: string): void {
+	private audit(principal: ReturnType<typeof buildSystemPrincipal>, job: PipelineJobRow, project: string, deploymentId: string): void {
 		this.ctx.audit.record({
 			principal,
 			action: 'pipeline.deploy',

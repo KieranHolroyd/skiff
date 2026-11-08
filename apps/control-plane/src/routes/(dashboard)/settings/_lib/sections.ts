@@ -13,6 +13,7 @@ import HardDriveUploadIcon from '@lucide/svelte/icons/hard-drive-upload';
 import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 import LogsIcon from '@lucide/svelte/icons/logs';
 import MailIcon from '@lucide/svelte/icons/mail';
+import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 import SparklesIcon from '@lucide/svelte/icons/sparkles';
 import UserRoundIcon from '@lucide/svelte/icons/user-round';
 import UsersIcon from '@lucide/svelte/icons/users';
@@ -35,6 +36,7 @@ export type SectionId =
 	| 'connected-apps'
 	| 'general'
 	| 'members'
+	| 'access'
 	| 'usage'
 	| 'backup-targets'
 	| 'log-drains'
@@ -63,6 +65,7 @@ export type SectionHref =
 	| '/(dashboard)/settings/api-keys'
 	| '/(dashboard)/settings/connected-apps'
 	| '/(dashboard)/settings/members'
+	| '/(dashboard)/settings/access'
 	| '/(dashboard)/settings/usage'
 	| '/(dashboard)/settings/backup-targets'
 	| '/(dashboard)/settings/log-drains'
@@ -148,6 +151,17 @@ export const SECTIONS: Section[] = [
 		href: '/(dashboard)/settings/members',
 		path: '/settings/members',
 		icon: UsersIcon
+	},
+	{
+		id: 'access',
+		group: 'organisation',
+		label: 'Access',
+		summary:
+			'Roles, bindings and groups: who can do what in this organisation, at which scope, and why.',
+		href: '/(dashboard)/settings/access',
+		path: '/settings/access',
+		icon: ShieldCheckIcon,
+		anyPermission: ['iam:read']
 	},
 	{
 		id: 'usage',
