@@ -284,7 +284,7 @@
 						icon={FingerprintIcon}
 						compact
 						title="No identity provider"
-						description="Org owners and admins can connect Entra ID, Google Workspace, Okta or any other OpenID Connect provider here."
+						description="Org owners and admins can connect Entra ID, Google Workspace, Okta, GitLab, Gitea, Forgejo or any other OpenID Connect provider here."
 					/>
 				{/if}
 			</div>

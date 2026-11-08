@@ -2,6 +2,8 @@
 
 Status: **built 2026-11-08** (§2 → D163, §3 → D164, §4 → D165, §5 → D166; §9–§10 → D172). What
 is not built is listed in §8. User documentation: `packages/docs/content/deploying/github.md`.
+GitLab, Gitea and Forgejo get the same features through [FORGES.md](./FORGES.md); since D174 builds
+and pipelines take normalised events, and `/new/github` lists every provider.
 
 Skiff talked to GitHub in five places, each with its own credential and setup step: git builds
 (a per-project webhook plus a node-wide `SKIFF_GIT_TOKEN`), pipelines (a per-repository webhook,
@@ -140,6 +142,8 @@ says which source is in use.
   narrowed to the run's repository; `ACTIONS_GITHUB_TOKEN` remains the way.
 - Self-update and node update downloads still read GitHub Releases anonymously.
 - GitHub Enterprise Server (API and web base URLs are fixed to github.com).
+- GitLab, Gitea and Forgejo: built as forge connections in [FORGES.md](./FORGES.md) (D173–D178), routed
+  through the same event and reporting paths (`core.git`).
 - A CLI command; the REST endpoints and MCP tool cover scripts and agents.
 
 ## 9. Deploy from GitHub (D172)

@@ -147,7 +147,10 @@ describe('detectSsoPreset', () => {
 		jumpcloud: {},
 		pingone: { region: 'com.au', environmentId: ENV },
 		keycloak: { serverUrl: 'https://sso.example.com', realm: 'acme corp' },
-		authentik: { serverUrl: 'https://auth.example.com/sub', slug: 'skiff' }
+		authentik: { serverUrl: 'https://auth.example.com/sub', slug: 'skiff' },
+		gitlab: { serverUrl: 'https://gitlab.com' },
+		forgejo: { serverUrl: 'https://codeberg.org' },
+		gitea: { serverUrl: 'https://gitea.example.com' }
 	};
 
 	test('every preset round-trips: detecting its issuer gives values that rebuild it', () => {
@@ -159,6 +162,16 @@ describe('detectSsoPreset', () => {
 			expect(detected?.preset.id).toBe(preset.id);
 			expect(preset.resolve(detected!.values).issuer).toBe(issuer);
 		}
+	});
+
+	test('forge issuers: GitLab without a trailing slash, Gitea and Forgejo with one; unknown hosts stay custom', () => {
+		expect(ssoPreset('gitlab')!.resolve({ serverUrl: 'https://gitlab.example.com/' })).toMatchObject({
+			issuer: 'https://gitlab.example.com',
+			discoveryUrl: 'https://gitlab.example.com/.well-known/openid-configuration'
+		});
+		expect(ssoPreset('forgejo')!.resolve({ serverUrl: 'https://codeberg.org' })).toMatchObject({ issuer: 'https://codeberg.org/', scopes: ['openid', 'profile', 'email', 'groups'] });
+		expect(detectSsoPreset('https://git.example.com/')).toBeNull();
+		expect(detectSsoPreset('https://gitlab.com/')).toBeNull();
 	});
 
 	test('a stored Okta org issuer reopens with no authorization server', () => {

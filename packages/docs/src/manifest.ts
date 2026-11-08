@@ -36,7 +36,8 @@ export const SECTIONS: DocsSection[] = [
 			'deploying/domains-and-environments',
 			'deploying/git-builds',
 			'deploying/pipelines',
-			'deploying/github'
+			'deploying/github',
+			'deploying/git-providers'
 		]
 	},
 	{

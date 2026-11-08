@@ -2070,6 +2070,8 @@ export const forgeConnections = sqliteTable(
 		webhookSecretSealed: text('webhook_secret_sealed').notNull(),
 		accountLogin: text('account_login'),
 		cloneLogin: text('clone_login'),
+		/** Set when a platform admin connected an instance on a private address; otherwise private hosts are refused. */
+		allowPrivateNetwork: integer('allow_private_network', { mode: 'boolean' }).notNull().default(false),
 		createdBy: text('created_by').notNull(),
 		createdAt: integer('created_at').notNull().$defaultFn(now),
 		updatedAt: integer('updated_at').notNull().$defaultFn(now),

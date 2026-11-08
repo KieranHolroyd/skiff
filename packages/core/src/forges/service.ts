@@ -1,7 +1,10 @@
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
 import { and, eq } from 'drizzle-orm';
 import { forgeConnections, forgeWebhooks } from '@skiff/db';
 import {
 	FORGE_LABELS,
+	canAdministerPlatform,
 	forgeBaseKey,
 	forgeConnectionCreateSchema,
 	forgeConnectionUpdateSchema,
@@ -21,6 +24,7 @@ import type { CoreContext } from '../context.ts';
 import { ConflictError, CoreError, NotFoundError, ValidationError } from '../errors.ts';
 import type { GithubPathContent } from '../github-app.ts';
 import { newId, randomToken } from '../util.ts';
+import { isPrivateAddress } from '../log-drains.ts';
 import {
 	forgeClient,
 	type ForgeClient,
@@ -70,10 +74,49 @@ export class ForgeService {
 	private readonly cloneCache = new Map<string, ForgeCloneCredential>();
 	private readonly negative = new Map<string, number>();
 
+	/** Test seam: the resolver used for the egress check. */
+	resolveHost: (hostname: string) => Promise<string[]> = async (hostname) =>
+		(await lookup(hostname, { all: true, verbatim: true })).map((entry) => entry.address);
+
 	constructor(private readonly ctx: CoreContext) {}
 
-	private get fetcher(): typeof fetch {
-		return this.ctx.config.forgeFetch ?? fetch;
+	/** Whether `baseUrl`'s host is (or resolves to) a private, loopback or link-local address. */
+	async isPrivateHost(baseUrl: string): Promise<boolean> {
+		const host = new URL(baseUrl).hostname.replace(/^\[|\]$/g, '');
+		if (/^localhost$|\.localhost$|\.local$|\.internal$|\.lan$|\.home\.arpa$/i.test(host)) return true;
+		const addresses = isIP(host) ? [host] : await this.resolveHost(host).catch(() => [] as string[]);
+		if (addresses.length === 0) throw new ValidationError(`${host} does not resolve.`);
+		return addresses.some(isPrivateAddress);
+	}
+
+	/**
+	 * The transport for one connection. Unless a platform admin allowed private networks for it,
+	 * every request re-checks that the host still resolves to public addresses (DNS rebinding).
+	 * The injected test transport skips the check.
+	 */
+	private fetcherFor(allowPrivate: boolean): typeof fetch {
+		const injected = this.ctx.config.forgeFetch;
+		if (injected) return injected;
+		if (allowPrivate) return fetch;
+		return (async (input: string | URL | Request, init?: RequestInit) => {
+			const url = new URL(input instanceof Request ? input.url : String(input));
+			if (await this.isPrivateHost(url.origin))
+				throw new CoreError('forge_private_network', `${url.host} is on a private network. A platform admin can connect it.`, 409);
+			return fetch(input, init);
+		}) as typeof fetch;
+	}
+
+	/** Refuse a private instance unless a platform admin is connecting it; returns the flag to store. */
+	private async privateNetworkFor(principal: Principal, baseUrl: string): Promise<boolean> {
+		if (this.ctx.config.forgeFetch) return false;
+		if (!(await this.isPrivateHost(baseUrl))) return false;
+		if (!canAdministerPlatform(principal))
+			throw new CoreError(
+				'forbidden',
+				`${new URL(baseUrl).host} is on a private network. Only a platform admin, from the dashboard, can connect a forge there.`,
+				403,
+			);
+		return true;
 	}
 
 	private get origin(): string {
@@ -158,12 +201,12 @@ export class ForgeService {
 		return this.rows(orgId).map((row) => ({ id: row.id, kind: row.kind, name: row.name, baseUrl: row.baseUrl }));
 	}
 
-	private clientFor(kind: ForgeKind, baseUrl: string, token: string): ForgeClient {
-		return forgeClient({ kind, baseUrl, token, fetch: this.fetcher });
+	private clientFor(kind: ForgeKind, baseUrl: string, token: string, allowPrivate: boolean): ForgeClient {
+		return forgeClient({ kind, baseUrl, token, fetch: this.fetcherFor(allowPrivate) });
 	}
 
 	private client(row: ForgeConnectionRow): ForgeClient {
-		return this.clientFor(row.kind, row.baseUrl, this.ctx.secrets.open(row.orgId, row.tokenSealed));
+		return this.clientFor(row.kind, row.baseUrl, this.ctx.secrets.open(row.orgId, row.tokenSealed), row.allowPrivateNetwork);
 	}
 
 	/** Prove the token(s), then store the connection. */
@@ -176,8 +219,9 @@ export class ForgeService {
 			throw new ValidationError('GitHub connects through Skiff’s GitHub App, in Settings → GitHub.');
 		if (this.rows(principal.orgId).some((row) => forgeBaseKey(row.baseUrl) === baseKey))
 			throw new ConflictError(`${parsed.baseUrl} is already connected. Update its token instead.`);
-		const account = await this.clientFor(parsed.kind, parsed.baseUrl, parsed.token).user();
-		const clone = parsed.cloneToken ? await this.clientFor(parsed.kind, parsed.baseUrl, parsed.cloneToken).user() : null;
+		const allowPrivate = await this.privateNetworkFor(principal, parsed.baseUrl);
+		const account = await this.clientFor(parsed.kind, parsed.baseUrl, parsed.token, allowPrivate).user();
+		const clone = parsed.cloneToken ? await this.clientFor(parsed.kind, parsed.baseUrl, parsed.cloneToken, allowPrivate).user() : null;
 		const now = this.ctx.now();
 		const row: ForgeConnectionRow = {
 			id: newId('fgc_'),
@@ -190,6 +234,7 @@ export class ForgeService {
 			webhookSecretSealed: this.ctx.secrets.seal(principal.orgId, randomToken(32)),
 			accountLogin: account.login,
 			cloneLogin: clone?.login ?? null,
+			allowPrivateNetwork: allowPrivate,
 			createdBy: principal.userId,
 			createdAt: now,
 			updatedAt: now,
@@ -206,14 +251,14 @@ export class ForgeService {
 		const patch: Partial<ForgeConnectionRow> = { updatedAt: this.ctx.now() };
 		if (parsed.name) patch.name = parsed.name;
 		if (parsed.token) {
-			patch.accountLogin = (await this.clientFor(row.kind, row.baseUrl, parsed.token).user()).login;
+			patch.accountLogin = (await this.clientFor(row.kind, row.baseUrl, parsed.token, row.allowPrivateNetwork).user()).login;
 			patch.tokenSealed = this.ctx.secrets.seal(row.orgId, parsed.token);
 		}
 		if (parsed.cloneToken === null) {
 			patch.cloneTokenSealed = null;
 			patch.cloneLogin = null;
 		} else if (parsed.cloneToken) {
-			patch.cloneLogin = (await this.clientFor(row.kind, row.baseUrl, parsed.cloneToken).user()).login;
+			patch.cloneLogin = (await this.clientFor(row.kind, row.baseUrl, parsed.cloneToken, row.allowPrivateNetwork).user()).login;
 			patch.cloneTokenSealed = this.ctx.secrets.seal(row.orgId, parsed.cloneToken);
 		}
 		this.ctx.db.update(forgeConnections).set(patch).where(eq(forgeConnections.id, row.id)).run();

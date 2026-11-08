@@ -26,7 +26,10 @@ export type SsoPresetId =
 	| 'jumpcloud'
 	| 'pingone'
 	| 'keycloak'
-	| 'authentik';
+	| 'authentik'
+	| 'gitlab'
+	| 'gitea'
+	| 'forgejo';
 
 export interface SsoPresetClaims {
 	email: string;
@@ -609,6 +612,78 @@ const authentik: SsoPreset = {
 	}
 };
 
+/**
+ * GitLab, Gitea and Forgejo are OpenID Connect providers too (docs/FORGES.md §8). GitLab publishes
+ * its issuer without a trailing slash; Gitea and Forgejo publish their `ROOT_URL`, which has one.
+ */
+function forgePreset(id: 'gitlab' | 'gitea' | 'forgejo'): SsoPreset {
+	const name = id === 'gitlab' ? 'GitLab' : id === 'gitea' ? 'Gitea' : 'Forgejo';
+	const example = id === 'gitlab' ? 'https://gitlab.com' : id === 'forgejo' ? 'https://codeberg.org' : 'https://gitea.example.com';
+	const trailing = id === 'gitlab' ? '' : '/';
+	const base = (values: SsoPresetValues) => {
+		const found = baseOf(required(values, 'serverUrl', `${name} URL`));
+		if (!found) throw new SsoPresetError(`Enter the ${name} URL, for example ${example}.`, 'serverUrl');
+		return found;
+	};
+	return {
+		id,
+		name,
+		summary: id === 'gitlab' ? 'gitlab.com or a self-managed GitLab.' : `${id === 'forgejo' ? 'Codeberg or a self-hosted Forgejo' : 'A self-hosted Gitea'}.`,
+		fields: [{ key: 'serverUrl', label: `${name} URL`, placeholder: example, description: `The instance’s address${id === 'gitlab' ? '' : ' (its ROOT_URL)'}.` }],
+		steps:
+			id === 'gitlab'
+				? [
+						'In GitLab, open your group (or Admin → Applications on a self-managed instance) → Settings → Applications → Add new application.',
+						'Name it Skiff, paste the redirect URI shown here, keep Confidential on and tick the openid, profile and email scopes.',
+						'Save, then copy the Application ID (client id) and Secret.'
+					]
+				: [
+						`In ${name}, open Settings → Applications (or Site administration → Integrations → Applications for an instance-wide app).`,
+						'Create an OAuth2 application named Skiff with the redirect URI shown here, keeping Confidential client on.',
+						'Copy the client ID and client secret.'
+					],
+		groups:
+			id === 'gitlab'
+				? 'GitLab sends the user’s groups in `groups` on the userinfo endpoint.'
+				: `${name} sends organisation and team names in \`groups\` when the groups scope is requested.`,
+		consoleUrl(values) {
+			try {
+				return `${base(values)}${id === 'gitlab' ? '/-/user_settings/applications' : '/user/settings/applications'}`;
+			} catch {
+				return null;
+			}
+		},
+		resolve(values) {
+			const root = base(values);
+			return {
+				issuer: `${root}${trailing}`,
+				discoveryUrl: `${root}/.well-known/openid-configuration`,
+				scopes: id === 'gitlab' ? [...BASE_SCOPES] : [...BASE_SCOPES, 'groups'],
+				claims: { ...STANDARD_CLAIMS }
+			};
+		},
+		match(issuer) {
+			// Any issuer could be a forge, so only the well-known hosts (and hosts named after the
+			// product) reopen in this preset; the rest reopen as custom OIDC.
+			if (id === 'gitlab' ? issuer.endsWith('/') : !issuer.endsWith('/')) return null;
+			const url = issuerUrl(issuer);
+			if (!url || (url.pathname !== '/' && url.pathname !== '')) return null;
+			const host = url.hostname;
+			const known =
+				id === 'gitlab'
+					? host === 'gitlab.com' || host.startsWith('gitlab.')
+					: id === 'forgejo'
+						? host === 'codeberg.org' || host.startsWith('forgejo.')
+						: host === 'gitea.com' || host.startsWith('gitea.');
+			return known ? { serverUrl: `${url.protocol}//${url.host}` } : null;
+		}
+	};
+}
+
+const gitlabPreset = forgePreset('gitlab');
+const giteaPreset = forgePreset('gitea');
+const forgejoPreset = forgePreset('forgejo');
+
 /** Most-used first; the picker shows them in this order, then "Other OpenID Connect". */
 export const SSO_PRESETS: readonly SsoPreset[] = [
 	entra,
@@ -619,7 +694,10 @@ export const SSO_PRESETS: readonly SsoPreset[] = [
 	jumpcloud,
 	pingone,
 	keycloak,
-	authentik
+	authentik,
+	gitlabPreset,
+	forgejoPreset,
+	giteaPreset
 ];
 
 export const SSO_PRESET_IDS = SSO_PRESETS.map((preset) => preset.id) as [SsoPresetId, ...SsoPresetId[]];

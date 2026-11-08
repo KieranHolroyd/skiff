@@ -33,7 +33,7 @@ Root and output directories must stay inside the repository: a leading `/` or a 
 
 ### Build on push
 
-If Skiff's [GitHub App](/deploying/github) is installed on the repository's account, pushes arrive without any setup. Otherwise, add a GitHub webhook to the repository with these settings:
+If Skiff's [GitHub App](/deploying/github) is installed on the repository's account, or the repository is on a connected [GitLab, Gitea or Forgejo](/deploying/git-providers), pushes arrive without any setup. Otherwise, add a webhook to the repository. GitLab, Gitea and Forgejo webhooks work too (see [Hand-made webhooks](/deploying/git-providers#hand-made-webhooks)). For GitHub, use these settings:
 
 - **Payload URL:** `https://control.example.com/api/webhooks/github/my-site`
 - **Content type:** `application/json`
@@ -47,7 +47,7 @@ Skiff checks the `X-Hub-Signature-256` header against the secret. Deliveries wit
 
 ### Private repositories
 
-Repositories that Skiff's [GitHub App](/deploying/github) can see need no setup: each build clones with a one-hour, read-only token for that repository alone.
+Repositories that Skiff's [GitHub App](/deploying/github) can see need no setup: each build clones with a one-hour, read-only token for that repository alone. Repositories on a connected [GitLab, Gitea or Forgejo](/deploying/git-providers) clone with a GitLab deploy token or the connection's clone token.
 
 Any other private repository needs a credential on each Builder node, set in `/etc/skiff/agent.env`. Use a token for HTTPS URLs or a deploy key for SSH URLs. A Builder can hold both, and each clone uses the one that matches its URL.
 

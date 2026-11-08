@@ -49,6 +49,12 @@ forge's base URL and an API token, and Skiff does with that token what the App d
 token separately. The API token never leaves the control plane. Only owners and admins of the
 org add, change or remove connections (`build:create` plus role, like automatic pipeline setup).
 
+**Egress.** Base URLs are typed by org admins, so the control plane must not become a way into its
+own network. As for log drains, a host that is (or resolves to) a loopback, private, link-local or
+CGNAT address, or a `.local`/`.lan`/`.internal` name, is refused unless a platform admin connects it,
+which sets `allow_private_network` (migration 0095; a homelab Gitea is exactly that case). For every other
+connection each request re-resolves the host and refuses a private answer (DNS rebinding).
+
 **Which connection serves a URL.** `parseRepoUrl` turns `https://host[/base]/group/sub/repo(.git)`,
 `git@host:group/repo.git` and `ssh://git@host[:port]/group/repo.git` into a host and a path. A
 connection serves a URL when the host matches and the path starts with the connection's base path;
@@ -180,9 +186,11 @@ time, then matches `project_path` and `refs/heads/<ref>` or `refs/tags/<ref>` (f
 `provider IN ('github')` check and adds `issuer`.
 
 **Sign-in.** GitLab, Gitea and Forgejo are OpenID Connect providers, so an org can use any of them
-through Settings → Single sign-on today; the dialog names them. A platform-wide "Sign in with
-GitLab" button reads `GITLAB_CLIENT_ID`, `GITLAB_CLIENT_SECRET` and optional `GITLAB_ISSUER` (for
-self-managed) at boot, like `GITHUB_CLIENT_ID`.
+through Settings → Single sign-on; the preset list has GitLab, Forgejo and Gitea (GitLab's issuer has
+no trailing slash, Gitea/Forgejo's `ROOT_URL` has one). A platform-wide "Continue with GitLab"
+button reads `GITLAB_CLIENT_ID`, `GITLAB_CLIENT_SECRET` and optional `GITLAB_ISSUER` (self-managed)
+at boot, like `GITHUB_CLIENT_ID`; `gitlab` is a sign-in method an org's auth policy can allow or
+refuse, like `github`.
 
 ## 9. Not built
 

@@ -378,3 +378,36 @@ describe('Deploy from Git', () => {
 		expect(core.builds.gitSource(owner, core.projects.requireRow(owner, 'api-two'))?.gitProvider).toMatchObject({ kind: 'gitlab', delivered: true });
 	});
 });
+
+describe('egress', () => {
+	const other = createDb({ path: ':memory:' });
+	const live: Core = createCore({
+		db: other.db,
+		sqlite: other.sqlite,
+		version: '0.1.0',
+		config: {
+			dataDir: dir,
+			platformOrigin: 'https://control.test',
+			contentDomain: 'sites.test',
+			objectStore: store,
+			masterKey: new Uint8Array(32).fill(9),
+			siteCookieSecret: 'site-cookie-secret-123',
+			objectStoreSecret: 'object-secret-123',
+			desiredAgentVersion: '0.1.0',
+		},
+	});
+	afterAll(() => other.sqlite.close());
+
+	test('a forge on a private address needs a platform admin', async () => {
+		live.forges.resolveHost = async (host) => (host === 'git.home.example' ? ['192.168.0.9'] : ['93.184.216.34']);
+		expect(await live.forges.isPrivateHost('https://git.home.example')).toBe(true);
+		expect(await live.forges.isPrivateHost('http://127.0.0.1:3000')).toBe(true);
+		expect(await live.forges.isPrivateHost('https://gitea.lan')).toBe(true);
+		expect(await live.forges.isPrivateHost('https://gitlab.example.org')).toBe(false);
+		await expect(live.forges.create(owner, { kind: 'gitea', baseUrl: 'https://git.home.example', token: 'tok-12345678' })).rejects.toMatchObject({
+			status: 403,
+			message: expect.stringContaining('platform admin'),
+		});
+		expect(live.forges.list(owner)).toEqual([]);
+	});
+});
