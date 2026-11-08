@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseActionManifest } from '@skiff/contracts';
@@ -125,7 +126,9 @@ describe('ActionResolver', () => {
 	});
 
 	test('size cap, HTTP errors, missing manifest and sub-path traversal', async () => {
-		const big = tarball({ 'action.yml': ACTION, 'blob.bin': 'x'.repeat(200_000) + Math.random() });
+		// Random bytes, so the gzipped archive stays far over the cap with any tar (GNU tar compresses
+		// a repeated character to under 1 KB).
+		const big = tarball({ 'action.yml': ACTION, 'blob.bin': randomBytes(20_000).toString('base64') });
 		const server = serve((request) => {
 			const path = new URL(request.url).pathname;
 			if (path.startsWith('/acme/big/')) return new Response(Bun.file(big));
