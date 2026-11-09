@@ -1,18 +1,21 @@
 <script lang="ts">
-	import type { AccessPolicy } from '@skiff/contracts';
+	import type { AccessPolicy, AccessPolicyRule } from '@skiff/contracts';
 	import { untrack } from 'svelte';
-	import { enhance } from '$app/forms';
+	import { enhance, type SubmitFunction } from '$app/forms';
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
+	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
+	import * as Dialog from '#lib/components/ui/dialog/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import { Textarea } from '#lib/components/ui/textarea/index.js';
 	import * as NativeSelect from '#lib/components/ui/native-select/index.js';
+	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
 	import EmptyState from '../../_lib/EmptyState.svelte';
 	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
 	import SettingsHeader from '../_lib/SettingsHeader.svelte';
@@ -29,6 +32,21 @@
 	let rulesOpen = $state(false);
 	let rulesPolicy = $state<AccessPolicy | null>(null);
 	let rulesText = $state('');
+
+	let tokenOpen = $state(false);
+	let tokenPolicy = $state<AccessPolicy | null>(null);
+	let tokenHeader = $state('X-Skiff-Access-Token');
+	let tokenSecret = $state('');
+	let tokenError = $state('');
+	let tokenPending = $state(false);
+
+	$effect(() => {
+		// Drop the one-time secret from memory when the dialog closes.
+		if (!tokenOpen) {
+			tokenSecret = '';
+			tokenError = '';
+		}
+	});
 
 	let assignProject = $state(untrack(() => data.focusProject ?? data.projects[0]?.slug ?? ''));
 	let assignTarget = $state('production');
@@ -59,6 +77,48 @@
 		rulesPolicy = policy;
 		rulesText = rulesToText(policy);
 		rulesOpen = true;
+	}
+
+	function openServiceToken(policy: AccessPolicy) {
+		tokenPolicy = policy;
+		tokenHeader = 'X-Skiff-Access-Token';
+		tokenSecret = '';
+		tokenError = '';
+		tokenOpen = true;
+	}
+
+	const createServiceToken: SubmitFunction = () => {
+		tokenPending = true;
+		tokenError = '';
+		tokenSecret = '';
+		return async ({ result, update }) => {
+			await update({ reset: false });
+			tokenPending = false;
+			if (result.type === 'success') {
+				const created = result.data as { serviceToken?: string; serviceTokenHeader?: string };
+				tokenSecret = created.serviceToken ?? '';
+				tokenHeader = created.serviceTokenHeader ?? tokenHeader;
+				notify(result);
+			} else if (result.type === 'failure') {
+				const message = (result.data as { message?: unknown } | undefined)?.message;
+				tokenError = typeof message === 'string' ? message : 'Could not create the service token.';
+			} else {
+				tokenError = 'Something went wrong. Please try again.';
+			}
+		};
+	};
+
+	function revokeServiceToken(policy: AccessPolicy, rule: AccessPolicyRule) {
+		if (rule.matcher.type !== 'serviceToken') return;
+		askConfirm({
+			title: `Revoke the ${rule.matcher.header} token?`,
+			description:
+				'The token stops working within seconds, and existing Skiff Access cookies for this policy are signed out.',
+			confirmLabel: 'Revoke token',
+			tone: 'danger',
+			action: '?/revokeServiceToken',
+			fields: { id: policy.id, idx: String(rule.idx) },
+		});
 	}
 
 	function remove(policy: AccessPolicy) {
@@ -178,6 +238,9 @@
 							{/if}
 						</div>
 						<div class="flex flex-wrap gap-1">
+							<Button variant="ghost" size="xs" onclick={() => openServiceToken(policy)}>
+								<KeyRoundIcon class="size-3.5" />Service token
+							</Button>
 							<Button variant="ghost" size="xs" onclick={() => toggle(policy)}>
 								{policy.enabled ? 'Disable' : 'Enable'}
 							</Button>
@@ -215,6 +278,16 @@
 																		? rule.matcher.header
 																		: 'any member'}
 										</span>
+										{#if rule.matcher.type === 'serviceToken'}
+											<Button
+												variant="ghost"
+												size="xs"
+												class="ml-2 align-baseline"
+												onclick={() => revokeServiceToken(policy, rule)}
+											>
+												Revoke
+											</Button>
+										{/if}
 									</li>
 								{/each}
 							</ol>
@@ -285,3 +358,67 @@
 		<Textarea id="rules-edit" name="rules" rows={10} bind:value={rulesText} class="font-mono text-xs" />
 	</Field.Field>
 </FormDialog>
+
+<Dialog.Root bind:open={tokenOpen}>
+	<Dialog.Content class="sm:max-w-md">
+		<Dialog.Header>
+			<Dialog.Title class="flex items-center gap-2">
+				<KeyRoundIcon class="size-4 text-muted-foreground" />
+				Service token for {tokenPolicy?.name ?? 'policy'}
+			</Dialog.Title>
+			<Dialog.Description>
+				A machine sends this header pair. Only the SHA-256 of the value is stored in the policy.
+			</Dialog.Description>
+		</Dialog.Header>
+		{#if tokenSecret}
+			<div class="grid gap-3">
+				<p class="text-sm font-medium">Copy this token now. It is shown once.</p>
+				<div class="flex items-center gap-2 rounded-md border bg-muted/40 p-2">
+					<code class="min-w-0 flex-1 break-all font-mono text-xs">{tokenSecret}</code>
+					<CopyButton value={tokenSecret} label="Copy token" iconOnly />
+				</div>
+				<p class="text-xs text-muted-foreground">
+					Send it as <code class="font-mono">{tokenHeader.toLowerCase()}: {tokenSecret}</code>. Revoke it
+					from the policy's rule list when it should stop working.
+				</p>
+				<Dialog.Footer>
+					<Dialog.Close>
+						{#snippet child({ props })}
+							<Button {...props}>Done</Button>
+						{/snippet}
+					</Dialog.Close>
+				</Dialog.Footer>
+			</div>
+		{:else}
+			<form method="POST" action="?/serviceToken" use:enhance={createServiceToken} class="grid gap-4">
+				<input type="hidden" name="id" value={tokenPolicy?.id ?? ''} />
+				<Field.Field>
+					<Field.Label for="token-header">Header name</Field.Label>
+					<Input
+						id="token-header"
+						name="header"
+						bind:value={tokenHeader}
+						required
+						maxlength={80}
+						pattern="[A-Za-z0-9-]+"
+						placeholder="X-Skiff-Access-Token"
+					/>
+					<Field.Description>
+						Most proxies pass a custom header unchanged. The value is generated for you.
+					</Field.Description>
+				</Field.Field>
+				{#if tokenError}<p class="text-sm text-danger">{tokenError}</p>{/if}
+				<Dialog.Footer>
+					<Dialog.Close>
+						{#snippet child({ props })}
+							<Button variant="outline" {...props} disabled={tokenPending}>Cancel</Button>
+						{/snippet}
+					</Dialog.Close>
+					<Button type="submit" disabled={tokenPending}>
+						{tokenPending ? 'Creating…' : 'Create token'}
+					</Button>
+				</Dialog.Footer>
+			</form>
+		{/if}
+	</Dialog.Content>
+</Dialog.Root>

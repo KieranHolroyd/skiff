@@ -55,6 +55,7 @@
 		enabled: boolean;
 		hasClientSecret: boolean;
 		hasCertificate: boolean;
+		certificateCount: number;
 		callbackUrl: string;
 		spMetadataUrl: string | null;
 		acsUrl: string | null;
@@ -65,6 +66,9 @@
 			audience: string | null;
 			wantAssertionsSigned: boolean;
 			identifierFormat: string | null;
+			certificates: string[];
+			sloUrl: string | null;
+			sloBinding: 'redirect' | 'post';
 		} | null;
 		updatedAt: number;
 	}
@@ -147,11 +151,13 @@
 		metadataUrl: '',
 		entityId: '',
 		entryPoint: '',
-		cert: '',
+		certificates: '',
 		spEntityId: '',
 		audience: '',
 		identifierFormat: '',
-		wantAssertionsSigned: true
+		wantAssertionsSigned: true,
+		sloUrl: '',
+		sloBinding: 'redirect' as 'redirect' | 'post'
 	});
 	let scopesText = $state(DEFAULT_SCOPES);
 	let claims = $state({ ...DEFAULT_CLAIMS });
@@ -227,11 +233,13 @@
 			metadataUrl: '',
 			entityId: '',
 			entryPoint: '',
-			cert: '',
+			certificates: '',
 			spEntityId: '',
 			audience: '',
 			identifierFormat: '',
-			wantAssertionsSigned: true
+			wantAssertionsSigned: true,
+			sloUrl: '',
+			sloBinding: 'redirect'
 		};
 	}
 	const METHODS = [
@@ -274,11 +282,13 @@
 					metadataUrl: provider.discoveryUrl ?? '',
 					entityId: provider.saml?.entityId ?? provider.issuer,
 					entryPoint: provider.saml?.entryPoint ?? '',
-					cert: '',
+					certificates: (provider.saml?.certificates ?? []).join('\n\n'),
 					spEntityId: provider.saml?.spEntityId ?? '',
 					audience: provider.saml?.audience ?? '',
 					identifierFormat: provider.saml?.identifierFormat ?? '',
-					wantAssertionsSigned: provider.saml?.wantAssertionsSigned ?? true
+					wantAssertionsSigned: provider.saml?.wantAssertionsSigned ?? true,
+					sloUrl: provider.saml?.sloUrl ?? '',
+					sloBinding: provider.saml?.sloBinding ?? 'redirect'
 				};
 				advancedTouched = true;
 			} else {
@@ -514,6 +524,12 @@
 								{#if provider.protocol === 'saml'}
 									<p class="mt-0.5 truncate text-xs text-muted-foreground">
 										SSO URL <span class="font-mono">{provider.saml?.entryPoint ?? '—'}</span>
+									</p>
+									<p class="mt-0.5 truncate text-xs text-muted-foreground">
+										Certificates <span class="font-mono">{provider.certificateCount}</span>
+										{#if provider.saml?.sloUrl}
+											· SLO <span class="font-mono">{provider.saml.sloBinding}</span>
+										{/if}
 									</p>
 									<div class="mt-0.5 flex items-center gap-1">
 										<p class="truncate text-xs text-muted-foreground">
@@ -1361,6 +1377,29 @@
 								<CopyButton value={acsUrl} iconOnly label="Copy ACS URL" />
 							</div>
 						</div>
+						<div>
+							<p class="text-xs font-medium">SP entity id</p>
+							<div class="mt-1 flex items-center gap-1">
+								<code
+									class="min-w-0 truncate rounded bg-background px-1.5 py-0.5 font-mono text-xs"
+									title={editing?.saml?.spEntityId ?? spMetadataUrl}
+									>{editing?.saml?.spEntityId ?? spMetadataUrl}</code
+								>
+								<CopyButton
+									value={editing?.saml?.spEntityId ?? spMetadataUrl}
+									iconOnly
+									label="Copy SP entity id"
+								/>
+							</div>
+						</div>
+						<div>
+							<p class="text-xs font-medium">SP signing certificate</p>
+							<p class="mt-1 text-xs text-muted-foreground">
+								Not configured. Signed AuthnRequests need an SP private key stored by the SSO
+								plugin, so SP signing is deferred. Skiff does not publish a placeholder
+								certificate. The IdP can still import the SP metadata URL above.
+							</p>
+						</div>
 					</div>
 				</section>
 
@@ -1427,18 +1466,54 @@
 						</Field.Description>
 					</Field.Field>
 					<Field.Field class="sm:col-span-2">
-						<Field.Label for="sso-saml-cert">IdP signing certificate</Field.Label>
+						<Field.Label for="sso-saml-certs">IdP signing certificates</Field.Label>
 						<Textarea
-							id="sso-saml-cert"
-							name="samlCert"
-							rows={4}
-							bind:value={saml.cert}
+							id="sso-saml-certs"
+							name="samlCerts"
+							rows={6}
+							bind:value={saml.certificates}
 							placeholder="-----BEGIN CERTIFICATE-----&#10;…&#10;-----END CERTIFICATE-----"
 							class="font-mono text-xs"
 						/>
 						<Field.Description>
-							PEM or the bare base64 body from the IdP. Public material; the private key stays at
-							the IdP.{#if editing?.hasCertificate} Leave blank to keep the stored certificate.{/if}
+							One PEM block per certificate. During an IdP rollover, add the new certificate next
+							to the old one, then remove the old one after the IdP stops using it. Public
+							material; the private key stays at the IdP.{#if editing?.certificateCount} This
+							provider trusts {editing.certificateCount} certificate{editing.certificateCount ===
+							1
+								? ''
+								: 's'}.{/if}
+						</Field.Description>
+					</Field.Field>
+					<Field.Field>
+						<Field.Label for="sso-saml-slo-url">Single Logout URL (optional)</Field.Label>
+						<Input
+							id="sso-saml-slo-url"
+							name="samlSloUrl"
+							bind:value={saml.sloUrl}
+							placeholder="https://idp.example.com/app/…/slo/saml"
+							autocapitalize="off"
+							spellcheck="false"
+							class="font-mono text-sm"
+						/>
+						<Field.Description>
+							Where the browser goes after Skiff clears its own session. Leave blank to sign out
+							locally only.
+						</Field.Description>
+					</Field.Field>
+					<Field.Field>
+						<Field.Label for="sso-saml-slo-binding">SLO binding</Field.Label>
+						<NativeSelect.Root
+							id="sso-saml-slo-binding"
+							name="samlSloBinding"
+							bind:value={saml.sloBinding}
+							class="w-full"
+						>
+							<NativeSelect.Option value="redirect">HTTP-Redirect</NativeSelect.Option>
+							<NativeSelect.Option value="post">HTTP-POST</NativeSelect.Option>
+						</NativeSelect.Root>
+						<Field.Description>
+							The binding the IdP advertises for its Single Logout Service.
 						</Field.Description>
 					</Field.Field>
 				</div>

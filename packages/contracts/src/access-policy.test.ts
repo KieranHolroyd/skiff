@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import {
+	evaluateAccessEdge,
 	evaluateAccessPolicy,
+	serviceTokenRules,
 	sha256Hex,
 	type AccessPolicyRule,
 } from './access-policy.ts';
@@ -116,5 +118,45 @@ describe('evaluateAccessPolicy', () => {
 		const rules = [rule(0, 'allow', { type: 'ssoProvider', providerId: 'sso_okta' })];
 		expect(evaluateAccessPolicy(policy(rules), { ssoProviderId: 'sso_okta' })).toBe('allow');
 		expect(evaluateAccessPolicy(policy(rules), { ssoProviderId: 'sso_other' })).toBe('deny');
+	});
+});
+
+describe('evaluateAccessEdge', () => {
+	const token = 'skiff-service-token';
+	const tokens = serviceTokenRules(
+		policy([
+			rule(0, 'allow', { type: 'serviceToken', header: 'X-Skiff-Access-Token', tokenHash: sha256Hex(token) }),
+			rule(1, 'deny', { type: 'serviceToken', header: 'X-Blocked', tokenHash: sha256Hex('blocked') }),
+		]),
+	);
+
+	test('a matching service token allows before any redirect', () => {
+		expect(
+			evaluateAccessEdge(tokens, { 'x-skiff-access-token': token }, true),
+		).toEqual({ decision: 'allow', header: 'x-skiff-access-token' });
+	});
+
+	test('a missing or wrong token continues to login when a person could match', () => {
+		expect(evaluateAccessEdge(tokens, {}, true)).toEqual({ decision: 'login' });
+		expect(
+			evaluateAccessEdge(tokens, { 'x-skiff-access-token': 'not-it' }, true),
+		).toEqual({ decision: 'login' });
+	});
+
+	test('a machine-only policy denies rather than sending a machine to a login page', () => {
+		expect(evaluateAccessEdge(tokens, {}, false)).toEqual({ decision: 'deny' });
+	});
+
+	test('a matching deny token beats an allow, whatever the header order', () => {
+		const rules = serviceTokenRules(
+			policy([
+				rule(0, 'allow', { type: 'serviceToken', header: 'X-Skiff-Access-Token', tokenHash: sha256Hex(token) }),
+				rule(1, 'deny', { type: 'serviceToken', header: 'X-Skiff-Access-Token', tokenHash: sha256Hex('blocked') }),
+			]),
+		);
+		expect(evaluateAccessEdge(rules, { 'x-skiff-access-token': 'blocked' }, true)).toEqual({
+			decision: 'deny',
+			header: 'x-skiff-access-token',
+		});
 	});
 });

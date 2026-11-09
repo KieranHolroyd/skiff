@@ -25,6 +25,7 @@ import { userPoolSigningPurpose } from './user-pools.ts';
 const dir = mkdtempSync(join(tmpdir(), 'skiff-user-pool-engine-'));
 const opened = createDb({ path: ':memory:' });
 opened.sqlite.exec(readFileSync(new URL('../../db/migrations/0097_user_pool_engine.sql', import.meta.url), 'utf8'));
+opened.sqlite.exec(readFileSync(new URL('../../db/migrations/0101_user_pool_passkeys.sql', import.meta.url), 'utf8'));
 
 let now = Date.parse('2026-11-08T12:00:00Z');
 const core: Core = createCore({

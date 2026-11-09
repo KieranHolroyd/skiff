@@ -7,6 +7,7 @@
 	import ClockIcon from '@lucide/svelte/icons/clock';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import LockIcon from '@lucide/svelte/icons/lock';
+	import NetworkIcon from '@lucide/svelte/icons/network';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import TrashIcon from '@lucide/svelte/icons/trash';
@@ -30,6 +31,7 @@
 	import EmptyState from '../../_lib/EmptyState.svelte';
 	import Panel from '../../_lib/Panel.svelte';
 	import RowMenu from '../../_lib/RowMenu.svelte';
+	import SecretDialog from '#lib/components/skiff/SecretDialog.svelte';
 	import { formatDateTime } from '../../_lib/format.js';
 	import SettingsHeader from '../_lib/SettingsHeader.svelte';
 	import type { PageProps } from './$types';
@@ -37,7 +39,34 @@
 	type PrincipalType = 'user' | 'group' | 'serviceAccount';
 	type ScopeType = 'org' | 'project' | 'environment';
 
-	let { data }: PageProps = $props();
+	interface IssuedTokenResult {
+		accessToken: string;
+		tokenType: string;
+		expiresIn: number;
+		audience: string;
+		accountName: string;
+	}
+
+	interface CreatedKeyResult {
+		id: string;
+		name: string;
+		key: string;
+		start: string;
+		principalType: string;
+		principalId: string;
+		expiresAt: number | null;
+	}
+
+	interface AccessFormResult {
+		message?: string;
+		success?: string;
+		fieldErrors?: Record<string, string>;
+		issuedToken?: IssuedTokenResult;
+		createdKey?: CreatedKeyResult;
+	}
+
+	let { data, form }: PageProps = $props();
+	const actionResult = $derived(form as AccessFormResult | null);
 
 	let createRoleOpen = $state(false);
 	let bindingOpen = $state(false);
@@ -45,6 +74,35 @@
 	let guardrailOpen = $state(false);
 	let requestOpen = $state(false);
 	let reviewOpen = $state(false);
+	let federationOpen = $state(false);
+	let tokenOpen = $state(false);
+	let keyOpen = $state(false);
+
+	let tokenAccount = $state('');
+	let tokenTtl = $state('3600');
+	let keyAccount = $state('');
+	let keySecretOpen = $state(false);
+	let tokenSecretOpen = $state(false);
+	let issuedToken = $state<IssuedTokenResult | null>(null);
+	let createdKey = $state<CreatedKeyResult | null>(null);
+
+	$effect(() => {
+		if (actionResult?.issuedToken) {
+			issuedToken = actionResult.issuedToken;
+			tokenSecretOpen = true;
+			tokenOpen = false;
+		}
+		if (actionResult?.createdKey) {
+			createdKey = actionResult.createdKey;
+			keySecretOpen = true;
+			keyOpen = false;
+		}
+	});
+	$effect(() => {
+		// Never keep a one-time secret in memory after its dialog closes.
+		if (!tokenSecretOpen) issuedToken = null;
+		if (!keySecretOpen) createdKey = null;
+	});
 
 	let guardrailScopeType = $state<'org' | 'project'>('org');
 	let guardrailScopeProject = $state('');
@@ -77,6 +135,12 @@
 	const groupById = $derived(new Map(data.groups.map((group) => [group.id, group])));
 	const projectById = $derived(new Map(data.projects.map((project) => [project.id, project])));
 	const bindingById = $derived(new Map(data.bindings.map((binding) => [binding.id, binding])));
+	const serviceAccountById = $derived(new Map(data.serviceAccounts.map((account) => [account.id, account])));
+	const serviceAccountKeyRows = $derived(
+		data.serviceAccounts.flatMap((account) =>
+			(data.serviceAccountKeys[account.id] ?? []).map((key) => ({ ...key, accountName: account.name }))
+		)
+	);
 	const riskByPermission = $derived(
 		new Map(
 			data.catalog.flatMap((group) =>
@@ -293,6 +357,40 @@
 		bindingProject = '';
 		bindingEnvironment = '';
 		bindingOpen = true;
+	}
+
+	function openToken(accountId: string) {
+		tokenAccount = accountId;
+		tokenTtl = '3600';
+		tokenOpen = true;
+	}
+
+	function openKey(accountId: string) {
+		keyAccount = accountId || data.serviceAccounts[0]?.id || '';
+		keyOpen = true;
+	}
+
+	function deleteFederationTrust(trust: { id: string; issuer: string }) {
+		askConfirm({
+			title: `Delete the trust for ${trust.issuer}?`,
+			description:
+				'The issuer can no longer exchange a token for that service account. Tokens already minted keep their remaining TTL.',
+			confirmLabel: 'Delete trust',
+			tone: 'danger',
+			action: '?/deleteFederationTrust',
+			fields: { trustId: trust.id }
+		});
+	}
+
+	function revokeServiceAccountKey(key: { id: string; name: string; start: string }) {
+		askConfirm({
+			title: `Revoke ${key.name}?`,
+			description: `Keys starting with ${key.start} stop authenticating at once. This cannot be undone.`,
+			confirmLabel: 'Revoke key',
+			tone: 'danger',
+			action: '?/revokeServiceAccountKey',
+			fields: { keyId: key.id }
+		});
 	}
 
 	function deleteRole(role: { id: string; name: string }) {
@@ -1078,6 +1176,13 @@
 			description="Org-owned machine principals. An account unused for 90 days is flagged; disabling it keeps its keys and bindings."
 			flush
 		>
+			{#snippet actions()}
+				{#if data.accessCan.manageKeys && data.serviceAccounts.length > 0}
+					<Button size="sm" variant="outline" onclick={() => openKey('')}>
+						<PlusIcon />New key
+					</Button>
+				{/if}
+			{/snippet}
 			{#if data.serviceAccounts.length === 0}
 				<div class="p-4">
 					<EmptyState
@@ -1094,7 +1199,8 @@
 							<Table.Head class="pl-4">Account</Table.Head>
 							<Table.Head>Owner</Table.Head>
 							<Table.Head>Last used</Table.Head>
-							<Table.Head class="pr-4">Status</Table.Head>
+							<Table.Head>Status</Table.Head>
+							<Table.Head class="pr-4">Actions</Table.Head>
 						</Table.Row>
 					</Table.Header>
 					<Table.Body>
@@ -1113,7 +1219,7 @@
 								<Table.Cell class="text-sm text-muted-foreground">
 									{usageLabel(account)}
 								</Table.Cell>
-								<Table.Cell class="pr-4">
+								<Table.Cell>
 									<div class="flex flex-wrap items-center gap-1.5">
 										{#if account.disabled}
 											<Badge variant="neutral">disabled</Badge>
@@ -1123,6 +1229,162 @@
 											<Badge variant="success">in use</Badge>
 										{/if}
 									</div>
+								</Table.Cell>
+								<Table.Cell class="pr-4">
+									<div class="flex flex-wrap items-center gap-1.5">
+										{#if data.accessCan.impersonate}
+											<Button
+												size="sm"
+												variant="outline"
+												disabled={account.disabled}
+												onclick={() => openToken(account.id)}
+											>
+												Issue token
+											</Button>
+										{/if}
+										{#if data.accessCan.manageKeys}
+											<Button
+												size="sm"
+												variant="ghost"
+												onclick={() => openKey(account.id)}
+												aria-label="New key for {account.name}"
+											>
+												<PlusIcon />Key
+											</Button>
+										{/if}
+									</div>
+								</Table.Cell>
+							</Table.Row>
+						{/each}
+					</Table.Body>
+				</Table.Root>
+			{/if}
+
+			{#if serviceAccountKeyRows.length > 0}
+				<div class="border-t">
+					<div class="flex items-center justify-between px-4 py-3">
+						<p class="text-sm font-medium">Keys</p>
+						<p class="text-xs text-muted-foreground">The secret is shown once, at creation.</p>
+					</div>
+					<Table.Root>
+						<Table.Header class="bg-muted/45">
+							<Table.Row>
+								<Table.Head class="pl-4">Key</Table.Head>
+								<Table.Head>Account</Table.Head>
+								<Table.Head>Expires</Table.Head>
+								<Table.Head>Last used</Table.Head>
+								<Table.Head>State</Table.Head>
+								<Table.Head class="pr-4">Actions</Table.Head>
+							</Table.Row>
+						</Table.Header>
+						<Table.Body>
+							{#each serviceAccountKeyRows as key (key.id)}
+								<Table.Row>
+									<Table.Cell class="pl-4">
+										<p class="text-sm font-medium">{key.name}</p>
+										<p class="font-mono text-xs text-muted-foreground">{key.start}…</p>
+									</Table.Cell>
+									<Table.Cell class="text-sm">{key.accountName}</Table.Cell>
+									<Table.Cell class="text-sm text-muted-foreground">
+										{key.expiresAt === null ? 'never' : formatDateTime(key.expiresAt)}
+									</Table.Cell>
+									<Table.Cell class="text-sm text-muted-foreground">
+										{key.lastUsedAt === null ? 'never' : formatDateTime(key.lastUsedAt)}
+									</Table.Cell>
+									<Table.Cell>
+										{#if key.revokedAt !== null}
+											<Badge variant="neutral">revoked</Badge>
+										{:else}
+											<Badge variant="success">active</Badge>
+										{/if}
+									</Table.Cell>
+									<Table.Cell class="pr-4">
+										{#if key.revokedAt === null && data.accessCan.manageKeys}
+											<Button
+												size="sm"
+												variant="ghost"
+												onclick={() => revokeServiceAccountKey(key)}
+											>
+												<TrashIcon />Revoke
+											</Button>
+										{/if}
+									</Table.Cell>
+								</Table.Row>
+							{/each}
+						</Table.Body>
+					</Table.Root>
+				</div>
+			{/if}
+		</Panel>
+	{/if}
+
+	{#if data.accessCan.federation || data.federationTrusts.length > 0}
+		<Panel
+			title="Federation trusts"
+			icon={NetworkIcon}
+			count={data.federationTrusts.length}
+			description="Keyless CI: an OIDC issuer, audience and subject pattern mint a short-lived token for one service account. The exchange enforces the trust's TTL cap and restriction."
+			flush
+		>
+			{#snippet actions()}
+				{#if data.accessCan.manageFederation && data.serviceAccounts.length > 0}
+					<Button size="sm" onclick={() => (federationOpen = true)}>
+						<PlusIcon />Add trust
+					</Button>
+				{/if}
+			{/snippet}
+			{#if data.federationTrusts.length === 0}
+				<div class="p-4">
+					<EmptyState
+						icon={NetworkIcon}
+						compact
+						title="No federation trusts"
+						description="Add one for GitHub Actions, GitLab, Kubernetes or another Skiff platform. It maps the issuer's tokens to a service account."
+					/>
+				</div>
+			{:else}
+				<Table.Root>
+					<Table.Header class="bg-muted/45">
+						<Table.Row>
+							<Table.Head class="pl-4">Issuer</Table.Head>
+							<Table.Head>Audience</Table.Head>
+							<Table.Head>Subject</Table.Head>
+							<Table.Head>Service account</Table.Head>
+							<Table.Head>Max TTL</Table.Head>
+							<Table.Head class="pr-4">Actions</Table.Head>
+						</Table.Row>
+					</Table.Header>
+					<Table.Body>
+						{#each data.federationTrusts as trust (trust.id)}
+							<Table.Row>
+								<Table.Cell class="pl-4">
+									<p class="max-w-72 truncate font-mono text-xs" title={trust.issuer}>{trust.issuer}</p>
+									<p class="font-mono text-[11px] text-muted-foreground">{trust.id}</p>
+								</Table.Cell>
+								<Table.Cell>
+									<div class="flex max-w-48 flex-wrap gap-1">
+										{#each trust.audiences as audience (audience)}
+											<Badge variant="secondary" class="font-mono font-normal">{audience}</Badge>
+										{/each}
+									</div>
+								</Table.Cell>
+								<Table.Cell class="font-mono text-xs">{trust.subjectPattern}</Table.Cell>
+								<Table.Cell class="text-sm">
+									{serviceAccountById.get(trust.serviceAccountId)?.name ?? trust.serviceAccountId}
+								</Table.Cell>
+								<Table.Cell class="text-sm text-muted-foreground">
+									{trust.maxTtlSeconds}s
+								</Table.Cell>
+								<Table.Cell class="pr-4">
+									{#if data.accessCan.manageFederation}
+										<Button
+											size="sm"
+											variant="ghost"
+											onclick={() => deleteFederationTrust(trust)}
+										>
+											<TrashIcon />Delete
+										</Button>
+									{/if}
 								</Table.Cell>
 							</Table.Row>
 						{/each}
@@ -1833,6 +2095,298 @@
 		</Field.Field>
 	</Field.Group>
 </FormDialog>
+
+{#if data.accessCan.manageFederation && data.serviceAccounts.length > 0}
+	<FormDialog
+		bind:open={federationOpen}
+		icon={NetworkIcon}
+		title="Add a federation trust"
+		description="Map an OIDC issuer to one service account. A token whose issuer, audience and subject match is exchanged for a short-lived Skiff token for that account."
+		action="?/createFederationTrust"
+		submitLabel="Add trust"
+		size="lg"
+	>
+		<Field.Group>
+			<Field.Field>
+				<Field.Label for="trust-service-account">Service account</Field.Label>
+				<NativeSelect.Root
+					id="trust-service-account"
+					name="serviceAccountId"
+					required
+					class="w-full"
+				>
+					<NativeSelect.Option value="">Pick a service account</NativeSelect.Option>
+					{#each data.serviceAccounts as account (account.id)}
+						<NativeSelect.Option value={account.id} disabled={account.disabled}>
+							{account.name}{account.disabled ? ' (disabled)' : ''}
+						</NativeSelect.Option>
+					{/each}
+				</NativeSelect.Root>
+				<Field.Description>
+					The account whose bindings the exchanged token carries. Bind it first.
+				</Field.Description>
+			</Field.Field>
+
+			<div class="grid gap-4 sm:grid-cols-2">
+				<Field.Field>
+					<Field.Label for="trust-issuer">Issuer</Field.Label>
+					<Input
+						id="trust-issuer"
+						name="issuer"
+						required
+						maxlength={2048}
+						placeholder="https://token.actions.githubusercontent.com"
+						autocapitalize="off"
+						spellcheck="false"
+						class="font-mono text-sm"
+					/>
+					<Field.Description>The exact <code>iss</code> claim; no trailing slash.</Field.Description>
+				</Field.Field>
+				<Field.Field>
+					<Field.Label for="trust-audiences">Audiences</Field.Label>
+					<Input
+						id="trust-audiences"
+						name="audiences"
+						required
+						placeholder="https://control.example.com"
+						autocapitalize="off"
+						spellcheck="false"
+						class="font-mono text-sm"
+					/>
+					<Field.Description>
+						Comma or space separated. A subject token must carry one of them.
+					</Field.Description>
+				</Field.Field>
+			</div>
+
+			<div class="grid gap-4 sm:grid-cols-2">
+				<Field.Field>
+					<Field.Label for="trust-subject">Subject pattern</Field.Label>
+					<Input
+						id="trust-subject"
+						name="subjectPattern"
+						maxlength={512}
+						placeholder="repo:acme/web:ref:refs/heads/main"
+						autocapitalize="off"
+						spellcheck="false"
+						class="font-mono text-sm"
+					/>
+					<Field.Description>
+						Glob: <code>*</code> within a segment, <code>**</code> across. Empty means any subject.
+					</Field.Description>
+				</Field.Field>
+				<Field.Field>
+					<Field.Label for="trust-ttl">Maximum TTL</Field.Label>
+					<NativeSelect.Root id="trust-ttl" name="maxTtlSeconds" value="900" class="w-full">
+						<NativeSelect.Option value="900">15 minutes</NativeSelect.Option>
+						<NativeSelect.Option value="1800">30 minutes</NativeSelect.Option>
+						<NativeSelect.Option value="3600">1 hour</NativeSelect.Option>
+					</NativeSelect.Root>
+					<Field.Description>The exchange never mints longer than one hour.</Field.Description>
+				</Field.Field>
+			</div>
+
+			<Field.Field>
+				<Field.Label for="trust-conditions">
+					Claim conditions <span class="font-normal text-muted-foreground">optional</span>
+				</Field.Label>
+				<Textarea
+					id="trust-conditions"
+					name="claimConditions"
+					rows={2}
+					placeholder={'{"ref":"refs/heads/main"}'}
+					class="font-mono text-sm"
+				/>
+				<Field.Description>A JSON object; every claim named must equal the token's value.</Field.Description>
+			</Field.Field>
+
+			<div class="grid gap-4 sm:grid-cols-2">
+				<Field.Field>
+					<Field.Label for="trust-permissions">
+						Permission ceiling <span class="font-normal text-muted-foreground">optional</span>
+					</Field.Label>
+					<Input
+						id="trust-permissions"
+						name="permissions"
+						placeholder="project:read, deployment:create"
+						autocapitalize="off"
+						spellcheck="false"
+						class="font-mono text-sm"
+					/>
+					<Field.Description>
+						Comma separated. Empty means the account's bindings are the ceiling.
+					</Field.Description>
+				</Field.Field>
+				<Field.Field>
+					<Field.Label for="trust-resources">
+						Resource limits <span class="font-normal text-muted-foreground">optional</span>
+					</Field.Label>
+					<Input
+						id="trust-resources"
+						name="resources"
+						placeholder="project:web, database:*"
+						autocapitalize="off"
+						spellcheck="false"
+						class="font-mono text-sm"
+					/>
+					<Field.Description>Comma separated; only ever narrows the token.</Field.Description>
+				</Field.Field>
+			</div>
+		</Field.Group>
+	</FormDialog>
+{/if}
+
+{#if data.accessCan.impersonate}
+	<FormDialog
+		bind:open={tokenOpen}
+		icon={KeyRoundIcon}
+		title="Issue a service account token"
+		description="A short-lived STS token for debugging or a one-off run. It carries the account's bindings, and the swap is audited against you."
+		action="?/issueServiceAccountToken"
+		submitLabel="Issue token"
+	>
+		<Field.Group>
+			<Field.Field>
+				<Field.Label for="token-account">Service account</Field.Label>
+				<NativeSelect.Root
+					id="token-account"
+					name="serviceAccountId"
+					required
+					bind:value={tokenAccount}
+					class="w-full"
+				>
+					<NativeSelect.Option value="">Pick a service account</NativeSelect.Option>
+					{#each data.serviceAccounts as account (account.id)}
+						<NativeSelect.Option value={account.id} disabled={account.disabled}>
+							{account.name}{account.disabled ? ' (disabled)' : ''}
+						</NativeSelect.Option>
+					{/each}
+				</NativeSelect.Root>
+			</Field.Field>
+			<Field.Field>
+				<Field.Label for="token-ttl">Lifetime</Field.Label>
+				<NativeSelect.Root id="token-ttl" name="ttl" bind:value={tokenTtl} class="w-full">
+					<NativeSelect.Option value="900">15 minutes</NativeSelect.Option>
+					<NativeSelect.Option value="1800">30 minutes</NativeSelect.Option>
+					<NativeSelect.Option value="3600">1 hour</NativeSelect.Option>
+				</NativeSelect.Root>
+				<Field.Description>The maximum is one hour.</Field.Description>
+			</Field.Field>
+		</Field.Group>
+	</FormDialog>
+{/if}
+
+{#if data.accessCan.manageKeys}
+	<FormDialog
+		bind:open={keyOpen}
+		icon={KeyRoundIcon}
+		title="New service account key"
+		description="A long-lived skif_ key for a machine. The secret is shown once; revoke it to rotate."
+		action="?/createServiceAccountKey"
+		submitLabel="Create key"
+	>
+		<Field.Group>
+			<Field.Field>
+				<Field.Label for="key-account">Service account</Field.Label>
+				<NativeSelect.Root
+					id="key-account"
+					name="serviceAccountId"
+					required
+					bind:value={keyAccount}
+					class="w-full"
+				>
+					<NativeSelect.Option value="">Pick a service account</NativeSelect.Option>
+					{#each data.serviceAccounts as account (account.id)}
+						<NativeSelect.Option value={account.id}>
+							{account.name}{account.disabled ? ' (disabled)' : ''}
+						</NativeSelect.Option>
+					{/each}
+				</NativeSelect.Root>
+			</Field.Field>
+			<div class="grid gap-4 sm:grid-cols-2">
+				<Field.Field>
+					<Field.Label for="key-name">Key name</Field.Label>
+					<Input id="key-name" name="name" required maxlength={100} placeholder="ci" />
+					<Field.Description>Shown in the list and the audit log.</Field.Description>
+				</Field.Field>
+				<Field.Field>
+					<Field.Label for="key-expiry">
+						Expires in <span class="font-normal text-muted-foreground">days</span>
+					</Field.Label>
+					<Input
+						id="key-expiry"
+						name="expiresInDays"
+						type="number"
+						min="1"
+						max="365"
+						value="90"
+					/>
+					<Field.Description>Service-account keys default to 90 days.</Field.Description>
+				</Field.Field>
+			</div>
+			<div class="grid gap-4 sm:grid-cols-2">
+				<Field.Field>
+					<Field.Label for="key-permissions">
+						Permission ceiling <span class="font-normal text-muted-foreground">optional</span>
+					</Field.Label>
+					<Input
+						id="key-permissions"
+						name="permissions"
+						placeholder="project:read, deployment:create"
+						autocapitalize="off"
+						spellcheck="false"
+						class="font-mono text-sm"
+					/>
+				</Field.Field>
+				<Field.Field>
+					<Field.Label for="key-resources">
+						Resource limits <span class="font-normal text-muted-foreground">optional</span>
+					</Field.Label>
+					<Input
+						id="key-resources"
+						name="resources"
+						placeholder="project:web, database:*"
+						autocapitalize="off"
+						spellcheck="false"
+						class="font-mono text-sm"
+					/>
+				</Field.Field>
+			</div>
+		</Field.Group>
+	</FormDialog>
+{/if}
+
+{#if issuedToken}
+	<SecretDialog
+		bind:open={tokenSecretOpen}
+		title="Token for {issuedToken.accountName}"
+		description="Use it as a Bearer token. It carries the account's bindings, not yours."
+		value={issuedToken.accessToken}
+		multiline
+	>
+		<p class="text-xs text-muted-foreground">
+			Audience <span class="font-mono">{issuedToken.audience}</span> · expires in
+			{issuedToken.expiresIn} seconds. The issuance is in the audit log as
+			<span class="font-mono">service_account.impersonate</span>.
+		</p>
+	</SecretDialog>
+{/if}
+
+{#if createdKey}
+	<SecretDialog
+		bind:open={keySecretOpen}
+		title="Key for {createdKey.name}"
+		description="Configure the machine with this key. Only its start is kept after this dialog."
+		value={createdKey.key}
+	>
+		<p class="text-xs text-muted-foreground">
+			Service account <span class="font-mono">{createdKey.principalId}</span>
+			{#if createdKey.expiresAt !== null}
+				· expires {formatDateTime(createdKey.expiresAt)}
+			{/if}
+		</p>
+	</SecretDialog>
+{/if}
 
 {#snippet permissionChips(permissions: readonly Permission[])}
 	<ul class="mt-2 flex flex-wrap gap-1.5">

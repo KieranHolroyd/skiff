@@ -95,6 +95,20 @@
 	let { data, form }: PageProps = $props();
 	const result = $derived(form as ProjectFormResult | null);
 
+	/** A policy assigned to this project's scopes, for the Access tab. */
+	function accessPolicyById(id: string | null) {
+		return id ? data.accessPolicies.find((policy) => policy.id === id) : undefined;
+	}
+
+	/** Service-token headers a machine may present to this host (the secret itself is never listed). */
+	function accessTokenHeaders(id: string | null): string[] {
+		return (
+			accessPolicyById(id)?.rules.flatMap((rule) =>
+				rule.matcher.type === 'serviceToken' ? [rule.matcher.header] : [],
+			) ?? []
+		);
+	}
+
 	type Deployment = (typeof data.deployments)[number];
 
 	/** Follows `?tab=` on navigation (back/forward, plain links); `setTab` overrides it in place. */
@@ -970,6 +984,15 @@
 										<Item.Description>
 											{#if row.mode === 'access'}
 												{data.accessPolicies.find((policy) => policy.id === row.policyId)?.name ?? row.policyId}
+												{#if accessTokenHeaders(row.policyId).length > 0}
+													<span class="mt-1 flex flex-wrap gap-1">
+														{#each accessTokenHeaders(row.policyId) as header (header)}
+															<Badge variant="outline" class="font-mono text-[10px]">
+																machine · {header}
+															</Badge>
+														{/each}
+													</span>
+												{/if}
 											{:else}
 												Not using Skiff Access.
 											{/if}

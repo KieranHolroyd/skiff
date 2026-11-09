@@ -12,7 +12,8 @@ import type { Actions, PageServerLoad } from './$types';
 /**
  * Settings → SSO (IAM.md I19/I20/I21, §8.3–§8.5). OIDC providers, the email domains that route to
  * them, group mapping, SCIM bearer tokens and the org authentication policy (required SSO/2FA,
- * methods, session limits, IP allowlist, break-glass owners). SAML is still not built.
+ * methods, session limits, IP allowlist, break-glass owners). SAML includes certificate rollover
+ * and the IdP Single Logout URL; full SAML SLO messages need the plugin option described below.
  *
  * Adding a provider starts from a preset (`#lib/sso-presets.ts`, D180) or a custom OIDC issuer.
  * The provider id is reserved at load time so the dialog can show the exact redirect URI to
@@ -101,6 +102,10 @@ export const actions: Actions = {
 			entityId: formString(data, 'samlEntityId'),
 			entryPoint: formString(data, 'samlEntryPoint'),
 			cert: formString(data, 'samlCert'),
+			certs: formString(data, 'samlCerts'),
+			secondaryCerts: formString(data, 'samlSecondaryCerts'),
+			sloUrl: formString(data, 'samlSloUrl') || null,
+			sloBinding: formString(data, 'samlSloBinding') || 'redirect',
 			spEntityId: formString(data, 'samlSpEntityId'),
 			audience: formString(data, 'samlAudience'),
 			wantAssertionsSigned: formBoolean(data, 'samlWantAssertionsSigned'),

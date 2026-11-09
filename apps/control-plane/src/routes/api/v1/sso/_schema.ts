@@ -28,6 +28,13 @@ export const samlSchema = z.object({
 	entityId: z.string().trim().min(1).max(500).optional(),
 	entryPoint: z.string().trim().min(1).max(500).optional(),
 	cert: z.string().max(20_000).optional(),
+	/** Every IdP signing certificate, for a rollover. Takes precedence over `cert`. */
+	certs: z.union([z.string().max(100_000), z.array(z.string().max(20_000)).max(20)]).optional(),
+	secondaryCerts: z
+		.union([z.string().max(100_000), z.array(z.string().max(20_000)).max(20)])
+		.optional(),
+	sloUrl: z.string().trim().max(500).nullable().optional(),
+	sloBinding: z.enum(['redirect', 'post']).optional(),
 	spEntityId: z.string().trim().max(500).optional(),
 	audience: z.string().trim().max(500).optional(),
 	wantAssertionsSigned: z.boolean().optional(),

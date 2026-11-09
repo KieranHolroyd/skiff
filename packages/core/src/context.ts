@@ -64,6 +64,7 @@ import type { AuthPolicyService } from './iam/auth-policy.ts';
 import type { PlatformIamService } from './platform-iam.ts';
 import type { ServiceAccountService } from './service-accounts.ts';
 import type { AccessKeyService } from './access-keys.ts';
+import type { FederationTrustService } from './iam/federation.ts';
 import type { SigningKeyService } from './iam/keys.ts';
 import type { WorkloadIdentityService } from './iam/workload-identity.ts';
 import type { TokenService } from './iam/sts.ts';
@@ -180,6 +181,8 @@ export interface CoreContext {
 	serviceAccounts: ServiceAccountService;
 	/** Org-bound access keys and their verification (IAM.md I14). */
 	accessKeys: AccessKeyService;
+	/** Federation trusts that map an OIDC issuer to a service account (IAM.md I17). */
+	federation: FederationTrustService;
 	/** The platform signing-key ring: one issuer and one JWKS for every token (IAM.md I15). */
 	signingKeys: SigningKeyService;
 	/** Per-workload service accounts and tokens (IAM.md I18, §7.4). */

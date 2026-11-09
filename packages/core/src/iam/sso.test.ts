@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
 	SSO_RECHECK_MS,
+	SSO_SAML_SLO_BINDINGS,
 	SSO_VERIFY_PREFIX,
 	emailDomain,
 	groupClaimValues,
@@ -8,13 +9,17 @@ import {
 	hasSsoVerificationRecord,
 	isAllowedSsoUrl,
 	isSsoProtocol,
+	isSsoSamlSloBinding,
 	normalizeGroupClaim,
+	normalizeSamlCertificates,
 	normalizeSamlCertificate,
 	normalizeSsoDomain,
+	normalizeSsoSloUrl,
 	ssoDomainCheckDue,
 	ssoProviderFieldErrors,
 	ssoSamlAcsUrl,
 	ssoSamlMetadataUrl,
+	ssoSamlSloBindingUri,
 	ssoVerificationRecord,
 	verifiedDomainForEmail
 } from './sso.ts';
@@ -241,6 +246,90 @@ describe('normalizeSamlCertificate', () => {
 	});
 });
 
+describe('normalizeSamlCertificates', () => {
+	const first = 'A'.repeat(120);
+	const second = 'B'.repeat(120);
+
+	test('accepts a single bare base64 body', () => {
+		const certs = normalizeSamlCertificates(first);
+		expect(certs).toHaveLength(1);
+		expect(certs[0]).toBe(normalizeSamlCertificate(first)!);
+	});
+
+	test('accepts an array and de-duplicates repeated certificates', () => {
+		const certs = normalizeSamlCertificates([first, second, first]);
+		expect(certs).toHaveLength(2);
+		expect(certs[0]).toBe(normalizeSamlCertificate(first)!);
+		expect(certs[1]).toBe(normalizeSamlCertificate(second)!);
+	});
+
+	test('reads several PEM blocks from one field', () => {
+		const certs = normalizeSamlCertificates(
+			`${normalizeSamlCertificate(first)}\n\n${normalizeSamlCertificate(second)}`
+		);
+		expect(certs).toHaveLength(2);
+	});
+
+	test('reads comma-separated and one-line newline-separated bare values', () => {
+		expect(normalizeSamlCertificates(`${first},${second}`)).toHaveLength(2);
+		expect(normalizeSamlCertificates(`${first}\n${second}`)).toHaveLength(2);
+	});
+
+	test('keeps the valid certificates and drops junk', () => {
+		const certs = normalizeSamlCertificates([first, 'sha256:AB:CD', 'not a cert']);
+		expect(certs).toHaveLength(1);
+		expect(certs[0]).toBe(normalizeSamlCertificate(first)!);
+	});
+
+	test('an empty or missing value is an empty list', () => {
+		expect(normalizeSamlCertificates('')).toEqual([]);
+		expect(normalizeSamlCertificates(undefined)).toEqual([]);
+		expect(normalizeSamlCertificates(null)).toEqual([]);
+		expect(normalizeSamlCertificates([])).toEqual([]);
+	});
+});
+
+describe('SAML single logout', () => {
+	test('only redirect and post are bindings', () => {
+		expect(SSO_SAML_SLO_BINDINGS).toEqual(['redirect', 'post']);
+		expect(isSsoSamlSloBinding('redirect')).toBe(true);
+		expect(isSsoSamlSloBinding('post')).toBe(true);
+		expect(isSsoSamlSloBinding('GET')).toBe(false);
+		expect(isSsoSamlSloBinding(undefined)).toBe(false);
+	});
+
+	test('maps a binding to its SAML URI', () => {
+		expect(ssoSamlSloBindingUri('redirect')).toBe(
+			'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect'
+		);
+		expect(ssoSamlSloBindingUri('post')).toBe(
+			'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST'
+		);
+	});
+
+	test('normalises an https SLO URL and strips a fragment', () => {
+		expect(normalizeSsoSloUrl('  https://idp.example.com/slo  ')).toBe(
+			'https://idp.example.com/slo'
+		);
+		expect(normalizeSsoSloUrl('https://idp.example.com/slo#fragment')).toBe(
+			'https://idp.example.com/slo'
+		);
+		expect(normalizeSsoSloUrl('https://idp.example.com')).toBe('https://idp.example.com/');
+	});
+
+	test('allows loopback http only, like every other SSO URL', () => {
+		expect(normalizeSsoSloUrl('http://localhost:8080/slo')).toBe('http://localhost:8080/slo');
+		expect(normalizeSsoSloUrl('http://idp.example.com/slo')).toBeNull();
+	});
+
+	test('refuses an empty, malformed or over-long URL', () => {
+		expect(normalizeSsoSloUrl('')).toBeNull();
+		expect(normalizeSsoSloUrl(undefined)).toBeNull();
+		expect(normalizeSsoSloUrl('not a url')).toBeNull();
+		expect(normalizeSsoSloUrl(`https://example.com/${'a'.repeat(501)}`)).toBeNull();
+	});
+});
+
 describe('ssoProviderFieldErrors', () => {
 	const cert = 'A'.repeat(120);
 
@@ -269,6 +358,7 @@ describe('ssoProviderFieldErrors', () => {
 	test('SAML with a metadata URL needs no manual fields', () => {
 		const errors = ssoProviderFieldErrors({
 			name: 'Okta SAML',
+			issuer: 'https://idp.example.com/metadata',
 			protocol: 'saml',
 			saml: { metadataUrl: 'https://idp.example.com/metadata' }
 		});
@@ -278,6 +368,7 @@ describe('ssoProviderFieldErrors', () => {
 	test('SAML refuses plain http, a bad certificate and an over-long audience', () => {
 		const errors = ssoProviderFieldErrors({
 			name: 'Okta SAML',
+			issuer: 'https://idp.example.com/metadata',
 			protocol: 'saml',
 			saml: {
 				entityId: 'http://www.okta.com/exk123',
@@ -294,13 +385,92 @@ describe('ssoProviderFieldErrors', () => {
 	test('SAML ignores OIDC client fields', () => {
 		const errors = ssoProviderFieldErrors({
 			name: 'Okta SAML',
-			protocol: 'saml',
 			issuer: 'http://www.okta.com/exk123',
+			protocol: 'saml',
 			clientId: '',
 			clientSecret: '',
 			saml: { entryPoint: 'https://idp.example.com/sso', cert }
 		});
 		expect(errors).toEqual({});
+	});
+
+	test('SAML accepts a secondary certificate for a rollover', () => {
+		const errors = ssoProviderFieldErrors({
+			name: 'Okta SAML',
+			issuer: 'https://idp.example.com/metadata',
+			protocol: 'saml',
+			saml: {
+				entryPoint: 'https://idp.example.com/sso',
+				cert,
+				secondaryCerts: 'B'.repeat(120)
+			}
+		});
+		expect(errors).toEqual({});
+	});
+
+	test('SAML accepts a certificate list instead of a single cert', () => {
+		const errors = ssoProviderFieldErrors({
+			name: 'Okta SAML',
+			issuer: 'https://idp.example.com/metadata',
+			protocol: 'saml',
+			saml: { entryPoint: 'https://idp.example.com/sso', certs: [cert, 'B'.repeat(120)] }
+		});
+		expect(errors).toEqual({});
+	});
+
+	test('SAML refuses a secondary value that is not a certificate', () => {
+		const errors = ssoProviderFieldErrors({
+			name: 'Okta SAML',
+			issuer: 'https://idp.example.com/metadata',
+			protocol: 'saml',
+			saml: {
+				entryPoint: 'https://idp.example.com/sso',
+				cert,
+				secondaryCerts: 'sha256:AB:CD:EF'
+			}
+		});
+		expect(errors.secondaryCerts).toMatch(/additional/);
+	});
+
+	test('SAML accepts a valid SLO URL and binding', () => {
+		const errors = ssoProviderFieldErrors({
+			name: 'Okta SAML',
+			issuer: 'https://idp.example.com/metadata',
+			protocol: 'saml',
+			saml: {
+				entryPoint: 'https://idp.example.com/sso',
+				cert,
+				sloUrl: 'https://idp.example.com/slo',
+				sloBinding: 'post'
+			}
+		});
+		expect(errors).toEqual({});
+	});
+
+	test('SAML refuses a plain-http SLO URL and an unknown binding', () => {
+		const errors = ssoProviderFieldErrors({
+			name: 'Okta SAML',
+			issuer: 'https://idp.example.com/metadata',
+			protocol: 'saml',
+			saml: {
+				entryPoint: 'https://idp.example.com/sso',
+				cert,
+				sloUrl: 'http://idp.example.com/slo',
+				sloBinding: 'artifact'
+			}
+		});
+		expect(errors.sloUrl).toMatch(/https/);
+		expect(errors.sloBinding).toMatch(/redirect or POST/);
+	});
+
+	test('an empty SLO URL is not an error: it disables SLO', () => {
+		const errors = ssoProviderFieldErrors({
+			name: 'Okta SAML',
+			issuer: 'https://idp.example.com/metadata',
+			protocol: 'saml',
+			saml: { entryPoint: 'https://idp.example.com/sso', cert, sloUrl: '  ' }
+		});
+		expect(errors.sloUrl).toBeUndefined();
 	});
 
 	test('an unknown protocol is refused before anything else', () => {

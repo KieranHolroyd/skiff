@@ -87,6 +87,79 @@ export function normalizeSamlCertificate(raw: string | null | undefined): string
 	return `-----BEGIN CERTIFICATE-----\n${lines.join('\n')}\n-----END CERTIFICATE-----`;
 }
 
+/**
+ * Normalise one or more IdP signing certificates for rolling rotation. The plugin accepts a string
+ * or an array of PEM strings and trusts any certificate that verifies an assertion, so a rollover
+ * is "publish the new IdP certificate next to the old one, then remove the old one".
+ *
+ * Accepts an array, PEM blocks, comma-separated values, or one-line bare base64 values. Invalid
+ * entries are dropped rather than failing the whole list: an IdP that publishes a stray
+ * fingerprint in its metadata should not stop the real certificate from being used.
+ */
+export function normalizeSamlCertificates(
+	raw: string | readonly string[] | null | undefined
+): string[] {
+	if (raw === null || raw === undefined) return [];
+	const out: string[] = [];
+	const add = (candidate: string | null | undefined): void => {
+		const certificate = normalizeSamlCertificate(candidate);
+		if (certificate && !out.includes(certificate)) out.push(certificate);
+	};
+	const pemBlock = /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
+	for (const value of Array.isArray(raw) ? raw : [raw]) {
+		if (typeof value !== 'string') continue;
+		const text = value.trim();
+		if (!text) continue;
+		let remainder = text;
+		// PEM blocks are unambiguous even when they contain line breaks; take them first.
+		for (const block of text.match(pemBlock) ?? []) {
+			add(block);
+			remainder = remainder.replace(block, '').trim();
+		}
+		if (!remainder) continue;
+		// A comma-separated list of bare base64 bodies, or one-line values separated by newlines.
+		for (const separator of [',', '\n']) {
+			if (!remainder.includes(separator)) continue;
+			const chunks = remainder
+				.split(separator)
+				.map((chunk) => chunk.trim())
+				.filter(Boolean);
+			if (chunks.length > 0 && chunks.every((chunk) => normalizeSamlCertificate(chunk))) {
+				for (const chunk of chunks) add(chunk);
+				remainder = '';
+				break;
+			}
+		}
+		if (remainder) add(remainder);
+	}
+	return out;
+}
+
+/** The two SAML bindings an IdP's Single Logout Service may use. */
+export const SSO_SAML_SLO_BINDINGS = ['redirect', 'post'] as const;
+
+export type SsoSamlSloBinding = (typeof SSO_SAML_SLO_BINDINGS)[number];
+
+export function isSsoSamlSloBinding(value: unknown): value is SsoSamlSloBinding {
+	return value === 'redirect' || value === 'post';
+}
+
+/** Normalise an IdP Single Logout Service URL. An empty value means "no SLO configured". */
+export function normalizeSsoSloUrl(raw: string | null | undefined): string | null {
+	const value = raw?.trim();
+	if (!value || value.length > MAX_SSO_VALUE || !isAllowedSsoUrl(value)) return null;
+	const url = new URL(value);
+	url.hash = '';
+	return url.toString();
+}
+
+/** The SAML binding URI for an IdP Single Logout Service, for `samlConfig.idpMetadata`. */
+export function ssoSamlSloBindingUri(binding: SsoSamlSloBinding): string {
+	return binding === 'post'
+		? 'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST'
+		: 'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect';
+}
+
 // ---------------------------------------------------------------- provider field validation
 
 /** The SAML half of a provider form. Metadata import is one way to fill it; manual fields the other. */
@@ -97,8 +170,16 @@ export interface SsoSamlFields {
 	entityId?: string;
 	/** The IdP SSO URL (manual entry). */
 	entryPoint?: string;
-	/** The IdP signing certificate (public). */
+	/** The IdP signing certificate (public). May contain more than one PEM block. */
 	cert?: string;
+	/** Additional IdP signing certificates for a rollover, or every certificate when provided. */
+	certs?: string | readonly string[];
+	/** Additional IdP signing certificates (PEM or bare base64, comma/newline separated). */
+	secondaryCerts?: string | readonly string[];
+	/** The IdP Single Logout Service URL. Empty means SLO is not configured. */
+	sloUrl?: string | null;
+	/** The IdP SLO binding. Defaults to `redirect`. */
+	sloBinding?: string;
 	/** The SP entity id; defaults to the SP metadata URL. */
 	spEntityId?: string;
 	audience?: string;
@@ -127,6 +208,9 @@ export type SsoProviderField =
 	| 'metadataUrl'
 	| 'entryPoint'
 	| 'cert'
+	| 'secondaryCerts'
+	| 'sloUrl'
+	| 'sloBinding'
 	| 'spEntityId'
 	| 'audience'
 	| 'identifierFormat';
@@ -182,12 +266,33 @@ export function ssoProviderFieldErrors(
 		else if (saml.entryPoint!.trim().length > MAX_SSO_VALUE)
 			errors.entryPoint = 'The entry point is too long.';
 
-		if (!trimToNull(saml.cert)) errors.cert = 'The IdP signing certificate is required.';
-		else if (!normalizeSamlCertificate(saml.cert))
+		const suppliedCertText =
+			saml.certs === undefined
+				? saml.cert
+				: typeof saml.certs === 'string'
+					? saml.certs
+					: saml.certs.join('\n');
+		if (!trimToNull(suppliedCertText)) errors.cert = 'The IdP signing certificate is required.';
+		else if (normalizeSamlCertificates(suppliedCertText).length === 0)
 			errors.cert = 'Paste the IdP signing certificate in PEM or base64 form.';
 	} else if (!isAllowedSsoUrl(metadataUrl)) {
 		errors.metadataUrl = 'The metadata URL must use https (http is allowed only for localhost).';
 	}
+
+	// Secondary certificates are optional; when supplied, each one must be a certificate. They are
+	// what makes a rolling rotation possible without a gap in trust.
+	const secondaryText =
+		typeof saml.secondaryCerts === 'string'
+			? saml.secondaryCerts
+			: (saml.secondaryCerts ?? []).join('\n');
+	if (trimToNull(secondaryText) && normalizeSamlCertificates(secondaryText).length === 0)
+		errors.secondaryCerts = 'Paste each additional IdP signing certificate in PEM or base64 form.';
+
+	// SLO is optional. A blank URL disables it, so an empty value is not an error.
+	if (trimToNull(saml.sloUrl) && !normalizeSsoSloUrl(saml.sloUrl))
+		errors.sloUrl = 'The SLO URL must use https (http is allowed only for localhost).';
+	if (trimToNull(saml.sloBinding) && !isSsoSamlSloBinding(saml.sloBinding))
+		errors.sloBinding = 'Choose the redirect or POST binding.';
 
 	if (!trimToNull(saml.entityId) && !trimToNull(input.issuer) && !metadataUrl)
 		errors.issuer = 'The IdP entity id is required.';

@@ -119,13 +119,14 @@ import {
 	type Principal,
 	type ResourceRef,
 	type Role,
+	type ScopeRef,
 	logDrainFormats,
 	logDrainKinds,
 	logDrainLevels,
 	logDrainSources,
 	type LogDrainView,
 } from '@skiff/contracts';
-import { featureEnabled, parseAuditTime } from '@skiff/core';
+import { MAX_DURATION_SECONDS, featureEnabled, parseAuditTime } from '@skiff/core';
 import { authSecret } from './config';
 import { core } from './core';
 import { principalFromMcp } from './principal';
@@ -649,35 +650,56 @@ function buildServer(
 	);
 
 	// --- access (IAM.md §9.3, §12) -------------------------------------------
+	/** Every scope a binding or an access question can name. `platform` is platform-admin only. */
+	const scopeTypes = [
+		'platform',
+		'org',
+		'project',
+		'environment',
+		'deployment',
+		'secret',
+		'build',
+		'database',
+		'storage',
+		'broker',
+		'emailDomain',
+		'shareLink',
+		'container',
+		'repository',
+		'pipelineRepository',
+		'userPool',
+		'accessPolicy',
+		'apiKey',
+	] as const;
 	/** A resource an access question is about; `org` is the default, as `requirePermission`. */
 	const accessResourceSchema = z.object({
 		type: z
-			.enum([
-				'platform',
-				'org',
-				'project',
-				'environment',
-				'deployment',
-				'secret',
-				'build',
-				'database',
-				'storage',
-				'broker',
-				'emailDomain',
-				'shareLink',
-				'container',
-				'repository',
-				'pipelineRepository',
-				'userPool',
-				'accessPolicy',
-				'apiKey',
-			])
+			.enum(scopeTypes)
 			.default('org')
 			.describe('The kind of resource the question is about; the whole organisation by default'),
 		id: z.string().optional().describe('The resource id (a project id, an environment id, …)'),
 		projectId: z.string().optional().describe('The project the resource belongs to'),
 		environmentId: z.string().optional().describe('The environment, when the question is about one'),
 	});
+	/** A binding/request scope: the resource the grant applies to, defaulting to the organisation. */
+	const iamScopeSchema = z.object({
+		type: z.enum(scopeTypes).default('org').describe('What the grant covers; the whole organisation by default'),
+		id: z.string().min(1).optional().describe('The resource id (a project id, an environment id, …)'),
+		projectId: z.string().min(1).optional().describe('The project an environment or resource belongs to'),
+	});
+	/**
+	 * Platform bindings are written by a platform admin, never an org or an MCP token (IAM.md §7, I24).
+	 * Refuse them here so the failure names the scope rather than a generic core validation error.
+	 */
+	const orgScope = (scope: z.infer<typeof iamScopeSchema>, action: 'bind' | 'request'): ScopeRef => {
+		if (scope.type === 'platform')
+			throw new Error(
+				action === 'bind'
+					? 'Platform bindings are written by a platform admin, not over MCP.'
+					: 'Platform access is a platform-admin grant; a just-in-time request is for an org resource.',
+			);
+		return scope as ScopeRef;
+	};
 	const accessTarget = (resource: z.infer<typeof accessResourceSchema> | undefined): ResourceRef =>
 		resource ?? { type: 'org' };
 	/** Reject a permission outside the catalog before the engine answers "no binding". */
@@ -791,6 +813,185 @@ function buildServer(
 		},
 		// The service checks serviceAccount:read itself.
 		async () => run(() => ({ serviceAccounts: core.serviceAccounts.list(principal) })),
+	);
+
+	tool(
+		'list_federation_trusts',
+		{
+			title: 'List federation trusts',
+			description:
+				"List the organization's workload-identity federation trusts: the OIDC issuer each one accepts, its audiences, " +
+				'the service account it exchanges into and the restriction it applies. Read-only; create, update and delete are dashboard, REST and CLI only.',
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('federation:read'),
+		},
+		// The service checks federation:read; a trust holds only public issuer data, never a secret.
+		async () => run(() => ({ federationTrusts: core.federation.list(principal) })),
+	);
+
+	tool(
+		'create_service_account',
+		{
+			title: 'Create service account',
+			description:
+				'Create an org-owned machine principal (`sa_…`). It is bound to roles like any other principal. ' +
+				'No key or token is created or returned: issue those from the dashboard or CLI, where a human reveals them once.',
+			inputSchema: z.object({
+				name: z
+					.string()
+					.min(3)
+					.max(40)
+					.describe('Lowercase letters, digits and single hyphens; it starts and ends with a letter or digit'),
+				description: z.string().max(500).optional().describe('What the account is for'),
+				ownerGroupId: z
+					.string()
+					.min(1)
+					.optional()
+					.describe('An iam group that owns the account; omit for the organisation'),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('serviceAccount:create'),
+		},
+		// The service checks serviceAccount:create and returns metadata only (never keys).
+		async ({ name, description, ownerGroupId }) =>
+			run(() => core.serviceAccounts.create(principal, { name, description, ownerGroupId })),
+	);
+
+	tool(
+		'bind_role',
+		{
+			title: 'Bind a role',
+			description:
+				'Grant a role to a user, group or service account at a scope, optionally expiring and with a reason. ' +
+				'Refuses platform bindings: those are a platform-admin grant written from Settings → Platform access. ' +
+				'Use explain_access first when the caller needs to see the decision a binding would produce.',
+			inputSchema: z.object({
+				principalType: z.enum(['user', 'group', 'serviceAccount']).describe('What is being bound'),
+				principalId: z.string().min(1).describe('The user id, group id or service-account id'),
+				roleId: z.string().min(1).max(80).describe('The role id from list_roles'),
+				scope: iamScopeSchema.optional().describe('Where the role applies; the whole organisation by default'),
+				expiresAt: z
+					.number()
+					.int()
+					.positive()
+					.optional()
+					.describe('When the binding stops granting, in epoch milliseconds; omit for no expiry'),
+				reason: z.string().max(500).optional().describe('Why the binding exists, kept on the row and in the audit log'),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+			scopeChallenge: requires('iam:manage-bindings'),
+		},
+		async ({ principalType, principalId, roleId, scope, expiresAt, reason }) =>
+			run(() => {
+				const target = orgScope(scope ?? { type: 'org' }, 'bind');
+				return core.iam.bind(principal, { principalType, principalId, roleId, scope: target, expiresAt, reason });
+			}),
+	);
+
+	tool(
+		'request_access',
+		{
+			title: 'Request access',
+			description:
+				'Ask for a time-boxed role at a scope, with a reason and an optional change reference. ' +
+				'This only creates a pending request: the caller asks, and a human approver who is not the requester decides. ' +
+				'Approving, denying and extending requests are not available over MCP.',
+			inputSchema: z.object({
+				role: z.string().min(1).max(80).describe('The role id from list_roles'),
+				scope: iamScopeSchema.optional().describe('What access is wanted for; the whole organisation by default'),
+				duration: z
+					.number()
+					.int()
+					.min(60)
+					.max(MAX_DURATION_SECONDS)
+					.describe(`How long it is needed, in seconds (at most ${MAX_DURATION_SECONDS / 3600} hours)`),
+				reason: z.string().min(3).max(500).describe('Why the access is needed'),
+				changeRef: z.string().max(200).optional().describe('A ticket, change or incident reference'),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+		},
+		async ({ role, scope, duration, reason, changeRef }) =>
+			run(() => {
+				const target = orgScope(scope ?? { type: 'org' }, 'request');
+				const request = core.governance.request(principal, {
+					roleId: role,
+					scope: target,
+					durationSeconds: duration,
+					reason,
+					changeRef,
+				});
+				return {
+					...request,
+					nextSteps: [
+						`Request ${request.id} is pending until a human approver decides it (it expires ${new Date(request.requestExpiresAt).toISOString()}). ` +
+							'Approval is dashboard/CLI only; this MCP client cannot approve it.',
+					],
+				};
+			}),
+	);
+
+	tool(
+		'unbind_role',
+		{
+			title: 'Unbind a role',
+			description:
+				'Remove a binding by id. The access it grants (and every permission it contributes) stops immediately. ' +
+				'Platform bindings are refused: a platform admin removes those from Settings → Platform access. Requires confirmation.',
+			inputSchema: z.object({
+				bindingId: z.string().min(1).describe('Binding id (bind_…) from who_can or the binding list'),
+			}),
+			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+			scopeChallenge: requires('iam:manage-bindings'),
+		},
+		async ({ bindingId }, ctx) => {
+			const remove = () =>
+				run(() => {
+					core.iam.unbind(principal, bindingId);
+					return { ok: true, bindingId };
+				});
+			// The dashboard assistant gates destructive tools in the chat UI before they reach here.
+			if (era === 'assistant') return remove();
+			if (era === 'legacy')
+				return {
+					isError: true,
+					...text(
+						`Removing binding ${bindingId} needs your confirmation, which this MCP client can't show. ` +
+							`Ask the user to remove it in the Skiff dashboard (Settings → Access → Bindings).`,
+					),
+				};
+			const key = `confirm_unbind_role:${bindingId}`;
+			const schema = z.object({ confirm: z.boolean() });
+			const prompted = verifyConfirmation(ctx.mcpReq.requestState(), principal, 'unbind_role', bindingId);
+			const answer = prompted ? acceptedContent(ctx.mcpReq.inputResponses, key, schema) : undefined;
+			const responded = prompted && ctx.mcpReq.inputResponses?.[key] !== undefined;
+			if (responded && answer?.confirm !== true) {
+				const cancelled = text(
+					`Cancelled: binding ${bindingId} was not removed (the user did not confirm).`,
+				);
+				declined.add(cancelled);
+				return cancelled;
+			}
+			if (answer?.confirm !== true) {
+				let detail = `binding ${bindingId}`;
+				try {
+					const binding = core.iam.listBindings(principal.orgId).find((entry) => entry.id === bindingId);
+					if (binding)
+						detail = `binding ${binding.id} (${binding.roleId} for ${binding.principalType} ${binding.principalId})`;
+				} catch {
+					// Keep the id-only prompt; the write still re-checks the binding.
+				}
+				return inputRequired({
+					inputRequests: {
+						[key]: inputRequired.elicit({
+							message: `Remove ${detail}? The access it grants stops immediately.`,
+							requestedSchema: schema,
+						}),
+					},
+					requestState: mintConfirmation(principal, 'unbind_role', bindingId),
+				});
+			}
+			return remove();
+		},
 	);
 
 	// --- documentation ------------------------------------------------------

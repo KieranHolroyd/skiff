@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDb } from '@skiff/db';
@@ -11,6 +11,9 @@ import { buildPrincipal } from './orgs.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'skiff-user-pools-'));
 const opened = createDb({ path: ':memory:' });
+opened.sqlite.exec(
+	readFileSync(new URL('../../db/migrations/0101_user_pool_passkeys.sql', import.meta.url), 'utf8')
+);
 let now = Date.parse('2026-11-08T12:00:00Z');
 let core: Core;
 

@@ -1,7 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import {
+	parseCidrs,
+	parseTokenTtl,
 	resolveServiceAccount,
+	serviceAccountKeyTable,
 	serviceAccountTable,
+	type ServiceAccountKeyView,
 	type ServiceAccountView,
 } from './service-accounts.ts';
 
@@ -39,6 +43,68 @@ describe('resolveServiceAccount', () => {
 	test('prefers an exact id over a name', () => {
 		const odd = { ...ci, id: 'deploy-bot', name: 'other' };
 		expect(resolveServiceAccount([odd, deploy], 'deploy-bot').id).toBe('deploy-bot');
+	});
+});
+
+describe('parseTokenTtl', () => {
+	const now = Date.UTC(2026, 10, 9, 12, 0, 0);
+
+	test('defaults to one hour', () => {
+		expect(parseTokenTtl(undefined, now)).toBe(3600);
+	});
+
+	test('reads minutes and hours', () => {
+		expect(parseTokenTtl('15m', now)).toBe(900);
+		expect(parseTokenTtl('30m', now)).toBe(1800);
+		expect(parseTokenTtl('1h', now)).toBe(3600);
+	});
+
+	test('refuses more than one hour and nonsense', () => {
+		expect(() => parseTokenTtl('2h', now)).toThrow(/one hour/);
+		expect(() => parseTokenTtl('soon', now)).toThrow();
+	});
+});
+
+describe('parseCidrs', () => {
+	test('splits commas and deduplicates', () => {
+		expect(parseCidrs(['10.0.0.0/8, 192.168.0.0/16', '10.0.0.0/8'])).toEqual([
+			'10.0.0.0/8',
+			'192.168.0.0/16',
+		]);
+	});
+
+	test('needs at least one network', () => {
+		expect(() => parseCidrs([])).toThrow();
+	});
+});
+
+describe('serviceAccountKeyTable', () => {
+	test('shows the start, expiry, last use and state', () => {
+		const keys: ServiceAccountKeyView[] = [
+			{
+				id: 'ak_1',
+				name: 'ci',
+				start: 'skif_abc',
+				expiresAt: Date.UTC(2026, 11, 1, 9, 0, 0),
+				lastUsedAt: null,
+				revokedAt: null,
+			},
+			{
+				id: 'ak_2',
+				name: 'old',
+				start: 'skif_def',
+				expiresAt: null,
+				lastUsedAt: Date.UTC(2026, 10, 9, 12, 0, 0),
+				revokedAt: Date.UTC(2026, 10, 10, 12, 0, 0),
+			},
+		];
+		const table = serviceAccountKeyTable(keys);
+		expect(table).toContain('skif_abc');
+		expect(table).toContain('2026-12-01 09:00:00Z');
+		expect(table).toContain('never');
+		expect(table).toContain('2026-11-09 12:00:00Z');
+		expect(table).toContain('active');
+		expect(table).toContain('revoked');
 	});
 });
 

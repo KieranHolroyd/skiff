@@ -2,9 +2,12 @@ import { error, fail } from '@sveltejs/kit';
 import {
 	GUARDRAIL_TEMPLATES,
 	ValidationError,
+	type AccessKeyView,
 	type AccessRequestView,
 	type AccessReviewView,
-	type GuardrailView
+	type FederationTrustView,
+	type GuardrailView,
+	type ServiceAccountToken
 } from '@skiff/core';
 import {
 	permissionCatalog,
@@ -54,6 +57,39 @@ function futureTime(value: string): number | 'invalid' | 'past' | undefined {
 
 function failure(cause: unknown) {
 	return fail(failStatus(cause), toFormFailure(cause));
+}
+
+/** A comma or newline separated list from one form field. */
+function formList(data: FormData, name: string): string[] {
+	return formString(data, name)
+		.split(/[\s,]+/)
+		.map((entry) => entry.trim())
+		.filter(Boolean);
+}
+
+/** An optional positive whole number; `invalid` becomes a 400 rather than a coerced NaN. */
+function optionalInteger(data: FormData, name: string): number | undefined {
+	const raw = formString(data, name).trim();
+	if (!raw) return undefined;
+	const value = Number(raw);
+	if (!Number.isInteger(value) || value <= 0)
+		throw new ValidationError(`${name} must be a positive whole number.`);
+	return value;
+}
+
+/** Claim conditions arrive as a small JSON object; anything else is a validation failure. */
+function formConditions(data: FormData): Record<string, unknown> | undefined {
+	const raw = formString(data, 'claimConditions').trim();
+	if (!raw) return undefined;
+	let value: unknown;
+	try {
+		value = JSON.parse(raw);
+	} catch {
+		throw new ValidationError('Claim conditions must be valid JSON, for example {"ref":"refs/heads/main"}.');
+	}
+	if (!value || typeof value !== 'object' || Array.isArray(value))
+		throw new ValidationError('Claim conditions must be a JSON object.');
+	return value as Record<string, unknown>;
 }
 
 /**
@@ -169,7 +205,9 @@ export const load: PageServerLoad = ({ locals }) => {
 	let guardrails: GuardrailView[] = [];
 	let accessRequests: AccessRequestView[] = [];
 	let accessReviews: AccessReviewView[] = [];
+	let federationTrusts: FederationTrustView[] = [];
 	let serviceAccounts: ReturnType<typeof core.serviceAccounts.list> = [];
+	const serviceAccountKeys: Record<string, AccessKeyView[]> = {};
 	try {
 		guardrails = core.governance.list(principal);
 		accessRequests = core.governance.list(principal, {});
@@ -184,8 +222,22 @@ export const load: PageServerLoad = ({ locals }) => {
 	}
 	try {
 		serviceAccounts = core.serviceAccounts.list(principal);
+		for (const account of serviceAccounts) {
+			try {
+				serviceAccountKeys[account.id] = core.ctx.accessKeys.list(principal, {
+					principalId: account.id
+				});
+			} catch {
+				// Listing an account's keys needs manage-keys or read-all; the card still renders.
+			}
+		}
 	} catch {
 		// Without `serviceAccount:read` the card is simply absent.
+	}
+	try {
+		federationTrusts = core.federation.list(principal);
+	} catch {
+		// Without `federation:read` the card is simply absent.
 	}
 
 	return {
@@ -196,7 +248,9 @@ export const load: PageServerLoad = ({ locals }) => {
 		guardrailTemplates: GUARDRAIL_TEMPLATES,
 		accessRequests,
 		accessReviews,
+		federationTrusts,
 		serviceAccounts,
+		serviceAccountKeys,
 		members,
 		groupMembers,
 		projects,
@@ -208,7 +262,12 @@ export const load: PageServerLoad = ({ locals }) => {
 			manageGroups: core.iam.can(principal, 'iam:manage-groups', org),
 			manageGuardrails: core.iam.can(principal, 'iam:manage-guardrails', org),
 			review: core.iam.can(principal, 'iam:review', org),
-			serviceAccounts: core.iam.can(principal, 'serviceAccount:read', org)
+			serviceAccounts: core.iam.can(principal, 'serviceAccount:read', org),
+			impersonate: core.iam.can(principal, 'serviceAccount:impersonate', org),
+			manageKeys: core.iam.can(principal, 'serviceAccount:manage-keys', org),
+			readAllKeys: core.iam.can(principal, 'accessKey:read-all', org),
+			federation: core.iam.can(principal, 'federation:read', org),
+			manageFederation: core.iam.can(principal, 'federation:create', org)
 		},
 		showEmails,
 		currentUserId: principal.userId,
@@ -577,6 +636,118 @@ export const actions: Actions = {
 		try {
 			core.governance.completeReview(principal, reviewId);
 			return { success: 'Access review completed and its decisions applied.' };
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	createFederationTrust: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const serviceAccountId = formString(data, 'serviceAccountId');
+		if (!serviceAccountId)
+			return fail(400, {
+				message: 'Pick a service account for the trust.',
+				fieldErrors: { serviceAccountId: 'Pick a service account.' }
+			});
+		try {
+			const trust = core.federation.create(principal, {
+				serviceAccountId,
+				issuer: formString(data, 'issuer'),
+				audiences: formList(data, 'audiences'),
+				subjectPattern: formOptionalString(data, 'subjectPattern'),
+				claimConditions: formConditions(data),
+				maxTtlSeconds: optionalInteger(data, 'maxTtlSeconds'),
+				restriction: {
+					permissions: formList(data, 'permissions') as Permission[],
+					resources: formList(data, 'resources')
+				}
+			});
+			return { success: `Created the ${trust.issuer} federation trust.` };
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	deleteFederationTrust: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const trustId = formString(await request.formData(), 'trustId');
+		if (!trustId) return fail(400, { message: 'Missing federation trust id.' });
+		try {
+			core.federation.delete(principal, trustId);
+			return { success: 'Federation trust deleted. New exchanges stop; existing tokens keep their TTL.' };
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	issueServiceAccountToken: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const serviceAccountId = formString(data, 'serviceAccountId');
+		if (!serviceAccountId)
+			return fail(400, {
+				message: 'Pick a service account.',
+				fieldErrors: { serviceAccountId: 'Pick a service account.' }
+			});
+		try {
+			const token = await core.serviceAccounts.impersonate(principal, serviceAccountId, {
+				ttl: optionalInteger(data, 'ttl')
+			});
+			const issued: ServiceAccountToken = token;
+			return {
+				success: `Issued a token for ${token.serviceAccount.name}, valid for ${token.expiresIn} seconds.`,
+				issuedToken: {
+					...issued,
+					accountName: token.serviceAccount.name
+				}
+			};
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	createServiceAccountKey: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const serviceAccountId = formString(data, 'serviceAccountId');
+		const name = formString(data, 'name');
+		if (!serviceAccountId)
+			return fail(400, {
+				message: 'Pick a service account.',
+				fieldErrors: { serviceAccountId: 'Pick a service account.' }
+			});
+		if (!name)
+			return fail(400, {
+				message: 'Give the key a name.',
+				fieldErrors: { name: 'Give the key a name.' }
+			});
+		try {
+			const days = optionalInteger(data, 'expiresInDays');
+			const created = core.ctx.accessKeys.create(principal, {
+				principalType: 'serviceAccount',
+				principalId: serviceAccountId,
+				name,
+				permissions: formList(data, 'permissions'),
+				resources: formList(data, 'resources'),
+				expiresInSeconds: days === undefined ? undefined : days * 86_400
+			});
+			return {
+				success: `Created the ${created.accessKey.name} key; it is shown once.`,
+				createdKey: { ...created.accessKey, key: created.key }
+			};
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	revokeServiceAccountKey: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const keyId = formString(await request.formData(), 'keyId');
+		if (!keyId) return fail(400, { message: 'Missing key id.' });
+		try {
+			core.ctx.accessKeys.revoke(principal, keyId);
+			return { success: 'Access key revoked. It stops working at once.' };
 		} catch (cause) {
 			return failure(cause);
 		}

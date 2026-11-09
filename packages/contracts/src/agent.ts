@@ -77,6 +77,24 @@ export const routeAccessSchema = z.object({
 	loginUrl: z.string().url(),
 	/** The Skiff Access policy this host uses; present when `mode` is `access`. */
 	policyId: z.string().nullable().optional(),
+	/** `false` when the policy is disabled; the edge fails closed before any token or cookie. */
+	policyEnabled: z.boolean().optional(),
+	/**
+	 * Service-token rules for this host (IAM.md I25). Only header names, SHA-256 hashes and the
+	 * action are published, so the agent can allow a machine before redirecting a browser.
+	 */
+	serviceTokens: z
+		.array(
+			z.object({
+				header: z.string().min(1).max(80),
+				tokenHash: z.string().regex(/^[a-f0-9]{64}$/),
+				action: z.enum(['allow', 'deny']),
+			}),
+		)
+		.max(100)
+		.optional(),
+	/** Whether a non-service-token rule exists; absent means an older control plane. */
+	hasPersonRules: z.boolean().optional(),
 });
 export type RouteAccess = z.infer<typeof routeAccessSchema>;
 

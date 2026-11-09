@@ -73,6 +73,7 @@ import { PlatformIamService } from './platform-iam.ts';
 import { configurePrunePlatformIam } from './operations/prune.ts';
 import { ServiceAccountService } from './service-accounts.ts';
 import { AccessKeyService } from './access-keys.ts';
+import { FederationTrustService } from './iam/federation.ts';
 import { SigningKeyService } from './iam/keys.ts';
 import { WorkloadIdentityService } from './iam/workload-identity.ts';
 import { TokenService } from './iam/sts.ts';
@@ -93,6 +94,7 @@ export * from './iam/service.ts';
 export * from './iam/governance.ts';
 export * from './iam/auth-policy.ts';
 export * from './iam/sso.ts';
+export * from './iam/federation.ts';
 export * from './iam/keys.ts';
 export * from './iam/workload-identity.ts';
 export * from './iam/sts.ts';
@@ -277,6 +279,8 @@ export interface Core {
 	serviceAccounts: ServiceAccountService;
 	/** Org-bound access keys and their verification (IAM.md I14). */
 	accessKeys: AccessKeyService;
+	/** Federation trusts that map an OIDC issuer to a service account (IAM.md I17). */
+	federation: FederationTrustService;
 	/** The platform signing-key ring: one issuer and one JWKS for every token (IAM.md I15). */
 	signingKeys: SigningKeyService;
 	/** Per-workload service accounts and tokens (IAM.md I18, §7.4). */
@@ -335,6 +339,7 @@ export function createCore(options: CoreOptions): Core {
 	configurePrunePlatformIam(ctx.platformIam);
 	ctx.serviceAccounts = new ServiceAccountService(ctx);
 	ctx.accessKeys = new AccessKeyService(ctx);
+	ctx.federation = new FederationTrustService(ctx);
 	ctx.signingKeys = new SigningKeyService(ctx);
 	ctx.workloadIdentity = new WorkloadIdentityService(ctx);
 	ctx.sts = new TokenService(ctx);
@@ -482,6 +487,7 @@ export function createCore(options: CoreOptions): Core {
 		platformIam: ctx.platformIam,
 		serviceAccounts: ctx.serviceAccounts,
 		accessKeys: ctx.accessKeys,
+		federation: ctx.federation,
 		signingKeys: ctx.signingKeys,
 		workloadIdentity: ctx.workloadIdentity,
 		sts: ctx.sts,

@@ -6,8 +6,8 @@ import { json, readJson, route } from '#lib/server/api.js';
 import { requirePrincipal } from '#lib/server/principal.js';
 
 /**
- * Service accounts (IAM.md I13, §12). This endpoint owns the accounts only; keys, impersonation
- * tokens and federation trusts belong to later phases. Every check lives in
+ * Service accounts (IAM.md I13, §12). This endpoint owns the accounts; keys and impersonation
+ * tokens hang off `/service-accounts/:id/{keys,token}`. Every check lives in
  * `core.serviceAccounts`.
  */
 

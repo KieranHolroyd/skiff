@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDb } from '@skiff/db';
-import type { AccessPolicyRule } from '@skiff/contracts';
+import { evaluateAccessPolicy, type AccessPolicyRule } from '@skiff/contracts';
 import { buildPrincipal } from '../orgs.ts';
 import { createCore, type Core } from '../index.ts';
 import { LocalObjectStore } from '../object-store.ts';
@@ -142,5 +142,64 @@ describe('access policy CRUD', () => {
 		core.accessPolicies.assign(admin, row, { scope: 'production', policyId: null });
 		expect((await core.projects.get(admin, row.slug)).productionAccess).toBe('platform');
 		core.accessPolicies.remove(admin, policy.id);
+	});
+
+	test('a pool session identity matches its pool and groups', () => {
+		const poolRules: AccessPolicyRule[] = [
+			{
+				idx: 0,
+				action: 'allow',
+				matcher: { type: 'userPool', poolId: 'pool_1', groups: ['staff', 'admins'] },
+			},
+		];
+		const decision = evaluateAccessPolicy(
+			{ enabled: true, rules: poolRules },
+			{ userPoolId: 'pool_1', poolGroups: ['staff'], email: 'ada@example.com' },
+		);
+		expect(decision).toBe('allow');
+		expect(
+			evaluateAccessPolicy(
+				{ enabled: true, rules: poolRules },
+				{ userPoolId: 'pool_2', poolGroups: ['staff'], email: 'ada@example.com' },
+			),
+		).toBe('deny');
+	});
+
+	test('removing a service token rotates the site epoch, so old cookies stop verifying', async () => {
+		const createdProject = await project();
+		const row = core.projects.requireRow(admin, createdProject.slug);
+		const poolAndToken: AccessPolicyRule[] = [
+			{ idx: 0, action: 'allow', matcher: { type: 'anyMember' } },
+			{
+				idx: 1,
+				action: 'allow',
+				matcher: {
+					type: 'serviceToken',
+					header: 'x-skiff-access-token',
+					tokenHash: 'a'.repeat(64),
+				},
+			},
+		];
+		const policy = core.accessPolicies.create(admin, {
+			name: 'Revocation',
+			scope: { type: 'org' },
+			rules: poolAndToken,
+		});
+		core.accessPolicies.assign(admin, row, { scope: 'production', policyId: policy.id });
+		const assigned = core.projects.requireRow(admin, createdProject.slug).siteSessionEpoch ?? 0;
+		const siteKey = core.access.siteKeyFor({ id: createdProject.id });
+		expect(core.accessPolicies.edgeSettings(policy.id).serviceTokens).toHaveLength(1);
+
+		// Adding a rule is not a revocation and must not sign existing visitors out.
+		core.accessPolicies.update(admin, policy.id, {
+			rules: [...poolAndToken, { idx: 2, action: 'deny', matcher: { type: 'email', email: 'x@example.com' } }],
+		});
+		expect(core.projects.requireRow(admin, createdProject.slug).siteSessionEpoch).toBe(assigned);
+
+		// Revoking the service token is: every cookie signed under the old policy epoch fails.
+		core.accessPolicies.update(admin, policy.id, { rules: poolAndToken.slice(0, 1) });
+		expect(core.projects.requireRow(admin, createdProject.slug).siteSessionEpoch).toBe(assigned + 1);
+		expect(core.access.siteKeyFor({ id: createdProject.id })).not.toBe(siteKey);
+		expect(core.accessPolicies.edgeSettings(policy.id).serviceTokens).toEqual([]);
 	});
 });

@@ -1,8 +1,8 @@
 /**
  * Service accounts (IAM.md I13, §4, §7.2): org-owned machine principals with a stable `sa_…` id.
- * They are bound like any other principal, so this module owns only the account rows. Access keys,
- * federation trusts, STS tokens and impersonation arrive in later phases (I3/I4); until then a
- * service account cannot authenticate as itself.
+ * They are bound like any other principal. This module owns the account rows and the
+ * impersonation token (`impersonate`); access keys live in `access-keys.ts` and federation trusts
+ * in `iam/federation.ts`. A token or key carries the account's bindings, never the caller's.
  *
  * Permissions are read from `principal.permissions` for now, like the rest of the IAM writes: the
  * authorization engine is not yet wired to call sites (IAM.md §13), so these methods check
@@ -20,6 +20,9 @@ import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '.
 import { newId } from './util.ts';
 
 const DAY_MS = 86_400_000;
+/** Impersonation tokens last at most one hour (IAM.md I13, §7.2). */
+export const MAX_IMPERSONATION_TTL_SECONDS = 60 * 60;
+const DEFAULT_IMPERSONATION_TTL_SECONDS = 60 * 60;
 
 /** IAM.md §9.5: a service account with no use for this long is flagged (and may be disabled). */
 export const SERVICE_ACCOUNT_UNUSED_DAYS = 90;
@@ -82,6 +85,22 @@ export interface ServiceAccountUpdate {
 	disabled?: boolean;
 }
 
+/** The result of a user minting a token for a service account (IAM.md §7.2). */
+export interface ServiceAccountToken {
+	accessToken: string;
+	tokenType: 'Bearer';
+	expiresIn: number;
+	audience: string;
+	serviceAccount: ServiceAccountView;
+}
+
+export interface ImpersonationOptions {
+	/** Seconds; defaults to one hour and is capped at {@link MAX_IMPERSONATION_TTL_SECONDS}. */
+	ttl?: number;
+	/** The minted token's audience; defaults to the platform origin. */
+	audience?: string;
+}
+
 const SERVICE_ACCOUNT_SELECT = `
 	SELECT sa.*,
 	       (SELECT MAX(ak.last_used_at) FROM access_keys ak
@@ -102,6 +121,61 @@ export class ServiceAccountService {
 	get(principal: Principal, id: string): ServiceAccountView {
 		this.#require(principal, 'serviceAccount:read');
 		return view(this.#row(principal, id), this.ctx.now());
+	}
+
+	/**
+	 * Mint a short-lived STS token for one service account (`serviceAccount:impersonate`, IAM.md
+	 * I13, §7.2). This is the equivalent of `skif sa token <name>`: a person debugs a CI identity
+	 * without a standing key. The token names the account and carries the caller as its `act`
+	 * claim; it is audited as `service_account.impersonate` against the account.
+	 *
+	 * The account's bindings remain the permission ceiling: the token carries no `scope`, so a
+	 * surface compiles the same grants an access key would. Disabling the account stops it at once.
+	 */
+	async impersonate(
+		principal: Principal,
+		id: string,
+		options: ImpersonationOptions = {},
+	): Promise<ServiceAccountToken> {
+		this.#require(principal, 'serviceAccount:impersonate');
+		const row = this.#row(principal, id);
+		if (row.disabled_at !== null)
+			throw new ValidationError('A disabled service account cannot be impersonated.');
+
+		const ttl = impersonationTtl(options.ttl);
+		const audience = impersonationAudience(
+			options.audience ?? this.ctx.config.platformOrigin,
+		);
+		const accessToken = await this.ctx.signingKeys.sign(
+			'sts',
+			{
+				sub: row.id,
+				aud: audience,
+				org_id: row.org_id,
+				// RFC 8693 §4.1 `act`: the person the machine identity is standing in for.
+				act: { iss: this.ctx.config.platformOrigin, sub: principal.userId },
+				impersonated_by: principal.userId,
+			},
+			ttl,
+		);
+
+		this.ctx.audit.record({
+			principal,
+			action: 'service_account.impersonate',
+			resource: 'service_account',
+			resourceId: row.id,
+			orgId: row.org_id,
+			args: { name: row.name, ttl, audience, actingFor: principal.userId },
+			result: 'ok',
+		});
+
+		return {
+			accessToken,
+			tokenType: 'Bearer',
+			expiresIn: ttl,
+			audience,
+			serviceAccount: view(row, this.ctx.now()),
+		};
 	}
 
 	/** Enabled accounts with no use for `minDays` (default 90), for Settings → Service accounts. */
@@ -326,6 +400,24 @@ export class ServiceAccountService {
 	#require(principal: Principal, permission: Permission): void {
 		if (!principal.permissions.has(permission)) throw new ForbiddenError(permission);
 	}
+}
+
+function impersonationTtl(value: number | undefined): number {
+	if (value === undefined) return DEFAULT_IMPERSONATION_TTL_SECONDS;
+	if (!Number.isInteger(value) || value <= 0)
+		throw new ValidationError('A token TTL must be a positive whole number of seconds.');
+	if (value > MAX_IMPERSONATION_TTL_SECONDS)
+		throw new ValidationError(
+			`An impersonation token lasts at most ${MAX_IMPERSONATION_TTL_SECONDS} seconds (one hour).`,
+		);
+	return value;
+}
+
+function impersonationAudience(value: string | undefined): string {
+	const audience = value?.trim() || 'skiff';
+	if (audience.length > 512 || /[\u0000-\u001f\u007f]/.test(audience))
+		throw new ValidationError('A token audience must be 1–512 printable characters.');
+	return audience;
 }
 
 function normalizeName(raw: string): string {

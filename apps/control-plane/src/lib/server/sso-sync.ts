@@ -10,8 +10,9 @@
  * - disabled or removed provider -> delete it, so sign-in fails closed;
  * - an OIDC client secret is opened with the organisation key here and copied in the clear,
  *   because that is the shape the plugin's OIDC client reads. It never leaves the server;
- * - a SAML provider copies its public certificate, entry point and SP entity id, and never stores a
- *   private key: signing stays with the IdP.
+ * - a SAML provider copies its public certificate list, entry point, SP entity id and (when set)
+ *   the IdP Single Logout Service, and never stores a private key: assertion signing stays with
+ *   the IdP, and SP request signing is deferred because the plugin requires a stored SP key.
  *
  * `domainVerification` stays off in the plugin: Skiff proves domain ownership itself
  * (`sso_domains`, the daily `skiff-verify=` TXT check) and only routes a verified domain to an IdP.
@@ -19,7 +20,12 @@
  * when a caller has no provider id.
  */
 import { SQLiteError } from 'bun:sqlite';
-import { ssoSamlMetadataUrl } from '../../../../../packages/core/src/iam/sso.ts';
+import {
+	isSsoSamlSloBinding,
+	normalizeSamlCertificates,
+	ssoSamlMetadataUrl,
+	ssoSamlSloBindingUri
+} from '../../../../../packages/core/src/iam/sso.ts';
 import { sqlite } from './db';
 import { core } from './core';
 import { platformOrigin } from './config';
@@ -42,6 +48,11 @@ interface ProviderRow {
 	claim_groups: string;
 	entry_point: string | null;
 	cert: string | null;
+	/** Additional IdP signing certificates (JSON array of PEM blocks). */
+	certs_json?: string | null;
+	/** The IdP Single Logout Service URL and binding. */
+	slo_url?: string | null;
+	slo_binding?: string | null;
 	callback_url: string | null;
 	sp_entity_id: string | null;
 	audience: string | null;
@@ -88,24 +99,43 @@ function oidcConfig(row: ProviderRow, clientSecret: string): string {
 	});
 }
 
+/** The trusted IdP signing certificates: `cert` first, then the rollover extras. */
+function certificateList(row: ProviderRow): string[] {
+	let extras: unknown = [];
+	try {
+		extras = row.certs_json ? JSON.parse(row.certs_json) : [];
+	} catch {
+		extras = [];
+	}
+	return normalizeSamlCertificates([
+		row.cert ?? '',
+		...(Array.isArray(extras) ? extras.filter((value): value is string => typeof value === 'string') : [])
+	]);
+}
+
 /**
  * The plugin's SAML shape. `issuer` here is the *SP* entity id (not the IdP's), so it defaults to
  * the metadata URL this server serves. The IdP's authority is `idpMetadata.entityID`, stored in
- * `sso_providers.issuer`. The certificate is public; no private key is copied, because request
- * signing stays optional and the IdP holds the key that signs assertions.
+ * `sso_providers.issuer`. Certificates are public; no private key is copied, because request
+ * signing needs a SP key and is deferred (see `sso-provision`/settings notes). The plugin accepts
+ * either one certificate or a list, so a rollover keeps the old and new IdP certificates trusted
+ * at the same time.
  */
 function samlConfig(row: ProviderRow): string {
 	const spEntityId = row.sp_entity_id?.trim() || ssoSamlMetadataUrl(platformOrigin, row.id);
+	const certificates = certificateList(row);
+	const sloBinding = isSsoSamlSloBinding(row.slo_binding) ? row.slo_binding : 'redirect';
+	const sloUrl = row.slo_url?.trim() || null;
 	return JSON.stringify({
 		issuer: spEntityId,
 		entryPoint: row.entry_point ?? undefined,
-		cert: row.cert ?? undefined,
+		cert: certificates,
 		audience: row.audience ?? undefined,
 		wantAssertionsSigned: row.want_assertions_signed === 1,
 		identifierFormat: row.identifier_format ?? undefined,
 		idpMetadata: {
 			entityID: row.issuer,
-			cert: row.cert ?? undefined,
+			cert: certificates,
 			singleSignOnService: row.entry_point
 				? [
 						{
@@ -113,6 +143,11 @@ function samlConfig(row: ProviderRow): string {
 							Location: row.entry_point
 						}
 					]
+				: undefined,
+			// The plugin reads this when its `saml.enableSingleLogout` option is turned on. Keeping it
+			// in the derived config means enabling SLO is a one-line auth.ts change, not a resync.
+			singleLogoutService: sloUrl
+				? [{ Binding: ssoSamlSloBindingUri(sloBinding), Location: sloUrl }]
 				: undefined
 		},
 		// Defaults to the metadata URL, so the SP entity id is stable and importable.
@@ -153,6 +188,11 @@ export function syncSsoProviders(): number {
 		if (isSaml) {
 			if (!row.issuer) {
 				console.error(`[sso] SAML provider ${row.id} has no IdP entity id; skipping it.`);
+				deletePluginRow(row.id);
+				continue;
+			}
+			if (certificateList(row).length === 0) {
+				console.error(`[sso] SAML provider ${row.id} has no IdP signing certificate; skipping it.`);
 				deletePluginRow(row.id);
 				continue;
 			}

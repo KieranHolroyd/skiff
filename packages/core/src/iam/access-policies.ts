@@ -12,12 +12,14 @@ import {
 	accessPolicyMatcherSchema,
 	accessPolicyRuleSchema,
 	evaluateAccessPolicy,
+	serviceTokenRules,
 	type AccessIdentity,
 	type AccessPolicy,
 	type AccessPolicyDecision,
 	type AccessPolicyRule,
 	type AccessPolicyScope,
 	type AccessPolicyUpdate,
+	type AccessServiceTokenRule,
 	type Principal,
 	type ResourceRef,
 } from '@skiff/contracts';
@@ -123,6 +125,30 @@ export class AccessPolicyService {
 		};
 	}
 
+	/**
+	 * The part of a policy the edge needs (IAM.md I25): whether it is enabled, its service-token
+	 * rules, and whether any rule could still match a person. Desired state carries this per route
+	 * so the agent can allow a machine token before it redirects an anonymous browser.
+	 */
+	edgeSettings(policyId: string): {
+		enabled: boolean;
+		serviceTokens: AccessServiceTokenRule[];
+		hasPersonRules: boolean;
+	} {
+		const row = this.#sqlite
+			.query<{ enabled: number }, [string]>('SELECT enabled FROM access_policies WHERE id = ?')
+			.get(policyId);
+		if (!row) return { enabled: false, serviceTokens: [], hasPersonRules: true };
+		const rules = this.rules(policyId);
+		return {
+			enabled: row.enabled === 1,
+			serviceTokens: serviceTokenRules({ rules }),
+			// Anything the agent cannot prove from headers alone (a person, a CIDR request, a pool)
+			// means an anonymous visitor may still have a way in and should be sent to login.
+			hasPersonRules: rules.some((rule) => rule.matcher.type !== 'serviceToken'),
+		};
+	}
+
 	// ---------------------------------------------------------------- writes
 
 	create(
@@ -182,7 +208,11 @@ export class AccessPolicyService {
 		if (input.name !== undefined) patch.name = input.name.trim();
 		if (input.description !== undefined) patch.description = input.description.trim();
 		if (input.enabled !== undefined) patch.enabled = input.enabled ? 1 : 0;
+		const previousRules = input.rules === undefined ? null : this.rules(id);
 		const rules = input.rules === undefined ? null : normalizeRules(input.rules);
+		const revoked =
+			input.enabled === false ||
+			(previousRules !== null && rules !== null && rulesWereRevoked(previousRules, rules));
 		this.#sqlite.transaction(() => {
 			this.#sqlite.run(
 				`UPDATE access_policies SET name = ?, description = ?, enabled = ?, updated_at = ?
@@ -194,12 +224,17 @@ export class AccessPolicyService {
 				this.writeRules(id, rules);
 			}
 		})();
+		// Removing or tightening a rule (or disabling the policy) is a revocation: rotate the
+		// session epoch of every host using it, which rotates their site keys and makes every cookie
+		// and callback token issued under the old policy stop verifying. Adding a service token is
+		// not a revocation, so it does not sign existing visitors out.
+		if (revoked) this.bumpHostsForPolicy(id);
 		this.ctx.audit.record({
 			principal,
 			action: 'access_policy.update',
 			resource: 'access_policy',
 			resourceId: id,
-			args: { ...input, rules: rules?.length },
+			args: { ...input, rules: rules?.length, revoked },
 			result: 'ok',
 		});
 		this.ctx.projects.bump(principal.orgId);
@@ -241,8 +276,8 @@ export class AccessPolicyService {
 		const environment =
 			input.scope === 'environment'
 				? this.#sqlite
-						.query<{ id: string }, [string, string]>(
-							'SELECT id FROM environments WHERE id = ? AND project_id = ?',
+						.query<{ id: string; accessPolicyId: string | null }, [string, string]>(
+							'SELECT id, access_policy_id AS accessPolicyId FROM environments WHERE id = ? AND project_id = ?',
 						)
 						.get(input.environmentId!, project.id)
 				: undefined;
@@ -259,6 +294,13 @@ export class AccessPolicyService {
 		}
 
 		const now = this.ctx.now();
+		const previousPolicyId =
+			input.scope === 'environment'
+				? (environment!.accessPolicyId ?? null)
+				: input.scope === 'production'
+					? (project.productionAccessPolicyId ?? null)
+					: (project.previewAccessPolicyId ?? null);
+		const changed = previousPolicyId !== (input.policyId ?? null);
 		this.#sqlite.transaction(() => {
 			if (input.scope === 'environment') {
 				this.#sqlite.run(
@@ -288,6 +330,9 @@ export class AccessPolicyService {
 				);
 			}
 		})();
+		// Changing which policy guards a host is also a revocation: the host's next cookie is minted
+		// under the new decision, and every cookie issued under the previous one stops verifying.
+		if (changed) this.bumpProjectEpoch(project.id, now);
 		this.ctx.projects.bump(principal.orgId);
 		this.ctx.audit.record({
 			principal,
@@ -300,6 +345,31 @@ export class AccessPolicyService {
 	}
 
 	// ---------------------------------------------------------------- internals
+
+	/** Rotate every project that currently points at this policy (any scope). */
+	private bumpHostsForPolicy(policyId: string): void {
+		const now = this.ctx.now();
+		const rows = this.#sqlite
+			.query<{ projectId: string }, [string, string, string]>(
+				`SELECT id AS projectId FROM projects
+				   WHERE production_access_policy_id = ? OR preview_access_policy_id = ?
+				 UNION
+				 SELECT project_id AS projectId FROM environments WHERE access_policy_id = ?`,
+			)
+			.all(policyId, policyId, policyId);
+		for (const row of rows) this.bumpProjectEpoch(row.projectId, now);
+	}
+
+	/**
+	 * Bump a project's visitor-session epoch. The site key is derived from it, so every cookie and
+	 * callback token signed before now stops verifying on the agents (IAM.md §11.1 revocation).
+	 */
+	private bumpProjectEpoch(projectId: string, now: number): void {
+		this.#sqlite.run(
+			'UPDATE projects SET site_session_epoch = site_session_epoch + 1, updated_at = ? WHERE id = ?',
+			[now, projectId],
+		);
+	}
 
 	private requireRow(orgId: string, id: string): PolicyRow {
 		const row = this.#sqlite
@@ -404,4 +474,14 @@ function normalizeRules(rules: readonly AccessPolicyRule[]): AccessPolicyRule[] 
 		action: rule.action,
 		matcher: accessPolicyMatcherSchema.parse(rule.matcher),
 	}));
+}
+
+/** True when an existing rule is gone or changed: a removal, a new deny, or a new token hash. */
+function rulesWereRevoked(before: readonly AccessPolicyRule[], after: readonly AccessPolicyRule[]): boolean {
+	const next = new Set(after.map(ruleKey));
+	return before.some((rule) => !next.has(ruleKey(rule)));
+}
+
+function ruleKey(rule: AccessPolicyRule): string {
+	return JSON.stringify([rule.action, rule.matcher]);
 }

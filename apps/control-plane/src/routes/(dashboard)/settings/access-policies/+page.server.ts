@@ -1,5 +1,6 @@
 import { fail } from '@sveltejs/kit';
-import type { AccessPolicy, AccessPolicyScope } from '@skiff/contracts';
+import { randomToken } from '@skiff/core';
+import { sha256Hex, type AccessPolicy, type AccessPolicyScope } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
 import { formOptionalString, formString, failStatus, toFormFailure } from '../../_lib/errors.js';
 import { parseRuleLines } from './_lib/rules.js';
@@ -104,6 +105,57 @@ export const actions: Actions = {
 			return fail(failStatus(error), toFormFailure(error));
 		}
 		return { success: 'Policy rules saved, in order.' };
+	},
+
+	/**
+	 * Mint a service token for a policy: the raw `skiff_svc_…` value is returned once, and only its
+	 * SHA-256 is appended as an allow rule. Removing the rule later is the revocation (and rotates
+	 * the hosts' session epoch, so cookies issued under the old policy stop verifying).
+	 */
+	serviceToken: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		try {
+			const policy = core.accessPolicies.get(principal, formString(data, 'id'));
+			const header = (formOptionalString(data, 'header') || 'X-Skiff-Access-Token').trim();
+			const secret = `skiff_svc_${randomToken(32)}`;
+			core.accessPolicies.update(principal, policy.id, {
+				rules: [
+					...policy.rules,
+					{
+						idx: policy.rules.length,
+						action: 'allow',
+						matcher: { type: 'serviceToken', header, tokenHash: sha256Hex(secret) },
+					},
+				],
+			});
+			return {
+				success: 'Service token created. Copy it now: it is shown once.',
+				serviceToken: secret,
+				serviceTokenHeader: header,
+			};
+		} catch (error) {
+			return fail(failStatus(error), toFormFailure(error));
+		}
+	},
+
+	revokeServiceToken: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		try {
+			const policy = core.accessPolicies.get(principal, formString(data, 'id'));
+			const idx = Number(formString(data, 'idx'));
+			if (!Number.isInteger(idx)) throw new Error('Choose a service token to revoke.');
+			const target = policy.rules.find((rule) => rule.idx === idx);
+			if (!target || target.matcher.type !== 'serviceToken')
+				throw new Error('Choose a service token to revoke.');
+			const rules = policy.rules.filter((rule) => rule.idx !== idx);
+			if (rules.length === policy.rules.length) throw new Error('Choose a service token to revoke.');
+			core.accessPolicies.update(principal, policy.id, { rules });
+		} catch (error) {
+			return fail(failStatus(error), toFormFailure(error));
+		}
+		return { success: 'Service token revoked. Its header pair stops working within seconds.' };
 	},
 
 	toggle: async ({ request, locals }) => {

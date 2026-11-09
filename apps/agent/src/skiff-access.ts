@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { RouteSpec } from '@skiff/contracts';
+import { evaluateAccessEdge, type RouteSpec } from '@skiff/contracts';
 
 /**
  * Skiff Access, the identity-aware proxy (IAM.md I25, §11.1).
@@ -160,10 +160,25 @@ export function handleSkiffAccessRequest(
 	if (path === '/_skiff/access/callback') return handleAccessCallback(request, options, route, host, forwardedUri, now);
 	if (route.accessMode !== 'access') return textResponse(404, 'Not a Skiff Access host');
 	if (!route.access.policyId) return textResponse(500, 'Route has no access policy');
+	if (route.access.policyEnabled === false) return textResponse(403, 'Access is closed');
+
+	// Machines present a service token as a header pair; decide that before any redirect, so a CI
+	// job or webhook never lands on a browser login page (IAM.md I25, §11.1).
+	const machine = evaluateAccessEdge(
+		route.access.serviceTokens ?? [],
+		requestHeaders(request.headers),
+		route.access.hasPersonRules ?? true,
+	);
+	if (machine.decision === 'deny') return textResponse(403, 'Access denied');
+	if (machine.decision === 'allow') {
+		const headers = accessHeaders(route, host, '', now, options, machine.header);
+		return new Response(null, { status: 200, headers });
+	}
 
 	const cookie = readCookie(request.headers.get('cookie'), options.accessCookieName);
 	const cache = options.cache;
-	const cacheKey = `${host}|${cookie ?? ''}`;
+	// The site key is part of the key: rotating it on revocation must not serve an old allow.
+	const cacheKey = `${host}|${route.access.siteKey}|${cookie ?? ''}`;
 	const nowMs = now * 1000;
 	const cached = cache?.get(cacheKey, nowMs);
 	if (cached) return new Response(null, { status: 200, headers: cached });
@@ -235,26 +250,42 @@ function accessHeaders(
 	email: string,
 	now: number,
 	options: SkiffAccessOptions,
+	/** Set for a service-token request: the machine's identity, with no email. */
+	serviceHeader?: string,
 ): Record<string, string> {
 	const headers: Record<string, string> = {
 		'Skiff-Access-Jwt': signAccessJwt(options.signingSecret ?? route.access.siteKey, {
 			host,
 			email,
 			policyId: route.access.policyId ?? '',
-			subject: `access:${email || host}`,
+			subject: serviceHeader ? `service:${host}` : `access:${email || host}`,
 			now,
+			...(serviceHeader ? { identity: 'service' as const } : {}),
 		}),
 		// Copied upstream even when empty so the header pair is predictable for apps.
 		'Skiff-Access-Email': email,
 		'cache-control': 'no-store',
 	};
+	if (serviceHeader) {
+		headers['Skiff-Access-Identity'] = 'service';
+		headers['Skiff-Access-Service'] = serviceHeader;
+	}
 	return headers;
 }
 
 /** Header + claims of the upstream JWT, signed HS256 with the agent's access secret. */
 export function signAccessJwt(
 	secret: string,
-	input: { host: string; email: string; policyId: string; subject: string; now: number; ttlSeconds?: number },
+	input: {
+		host: string;
+		email: string;
+		policyId: string;
+		subject: string;
+		now: number;
+		ttlSeconds?: number;
+		/** `service` marks a machine allowed by a service token; it never carries an email. */
+		identity?: 'user' | 'service';
+	},
 ): string {
 	const header = { alg: 'HS256', typ: 'JWT', kid: 'access' };
 	const issuedAt = input.now;
@@ -266,6 +297,7 @@ export function signAccessJwt(
 		host: input.host,
 		policy: input.policyId || undefined,
 		purpose: 'access',
+		...(input.identity === 'service' ? { identity: 'service' } : {}),
 		iat: issuedAt,
 		exp: issuedAt + (input.ttlSeconds ?? 15 * 60),
 	};
@@ -334,6 +366,15 @@ function readCookie(header: string | null, name: string): string | null {
 		return part.slice(separator + 1).trim();
 	}
 	return null;
+}
+
+/** Lowercase header names, as the policy evaluator looks them up. */
+function requestHeaders(headers: Headers): Record<string, string> {
+	const record: Record<string, string> = {};
+	headers.forEach((value, name) => {
+		record[name.toLowerCase()] = value;
+	});
+	return record;
 }
 
 function forwardedPath(uri: string | null): string | null {

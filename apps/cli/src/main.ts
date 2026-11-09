@@ -23,6 +23,9 @@ import { identityCommand } from './commands/identity.ts';
 import { stsCommand } from './commands/sts.ts';
 import { serviceAccountsCommand } from './commands/service-accounts.ts';
 import { accessKeysCommand } from './commands/access-keys.ts';
+import { federationCommand } from './commands/federation.ts';
+import { accessCommand } from './commands/access.ts';
+import { orgCommand } from './commands/org.ts';
 import { userPoolsCommand } from './commands/user-pools.ts';
 import { accessPoliciesCommand } from './commands/access-policies.ts';
 import { registryCommand } from './commands/registry.ts';
@@ -108,6 +111,12 @@ const commands: Record<string, (argv: string[]) => Promise<void>> = {
 	sa: serviceAccountsCommand,
 	'service-account': serviceAccountsCommand,
 	'service-accounts': serviceAccountsCommand,
+	federation: federationCommand,
+	federations: federationCommand,
+	access: accessCommand,
+	org: orgCommand,
+	organization: orgCommand,
+	organisation: orgCommand,
 	key: accessKeysCommand,
 	keys: accessKeysCommand,
 	'access-key': accessKeysCommand,
@@ -173,7 +182,10 @@ Commands:
   iam [roles|bindings|groups|bind|…]         Roles, bindings and groups, and why access is allowed (\`skif iam --help\`)
   identity token [--audience <aud>]          Workload token for Skiff or a cloud audience (\`skif identity --help\`)
   sts exchange --subject-token-file <path>   Exchange a subject token for a short-lived Skiff token (\`skif sts --help\`)
-  sa [list|create|disable|enable|delete]     Service accounts: org-owned machine principals (\`skif sa --help\`)
+  sa [list|create|disable|enable|delete|…]   Service accounts, tokens and keys; secrets print once (\`skif sa --help\`)
+  federation [list|create|delete]            Map an OIDC issuer to a service account (\`skif federation --help\`)
+  access [request|approve|deny]              Just-in-time access requests (\`skif access --help\`)
+  org switch <org-id>                        Switch the active organisation for this session
   key [list|create|revoke]                   Access keys; the secret is printed once (\`skif key --help\`)
   pool [list|create|disable|clients]         Managed user pools and their OIDC clients (\`skif pool --help\`)
   access-policy [list|create|assign]         Skiff Access allow/deny policies (\`skif access-policy --help\`)

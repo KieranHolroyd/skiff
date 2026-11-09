@@ -226,6 +226,74 @@ export interface UserPoolJwks {
 	keys: Array<Record<string, unknown>>;
 }
 
+/**
+ * One enrolled passkey, as the account page lists it. The credential id and public key never reach
+ * the hosted page; removal targets the row id instead.
+ */
+export interface UserPoolPasskeyView {
+	id: string;
+	poolId: string;
+	userId: string;
+	name: string;
+	createdAt: number;
+	lastUsedAt: number | null;
+}
+
+/** A credential descriptor the browser may suggest, used in the WebAuthn option documents. */
+export interface UserPoolPasskeyCredentialDescriptor {
+	id: string;
+	type?: string;
+	transports?: string[];
+}
+
+/**
+ * The registration options document (`PublicKeyCredentialCreationOptions` in JSON form). It is
+ * passed straight to `navigator.credentials.create()` after the client decodes the base64url
+ * members, so the shape follows the WebAuthn JSON serialisation rather than the DOM types.
+ */
+export interface UserPoolPasskeyRegistrationOptionsJSON {
+	challenge: string;
+	rp: { id: string; name: string };
+	user: { id: string; name: string; displayName: string };
+	pubKeyCredParams: Array<{ alg: number; type: string }>;
+	timeout?: number;
+	attestation?: string;
+	excludeCredentials?: UserPoolPasskeyCredentialDescriptor[];
+	authenticatorSelection?: {
+		authenticatorAttachment?: string;
+		residentKey?: string;
+		requireResidentKey?: boolean;
+		userVerification?: string;
+	};
+	hints?: string[];
+}
+
+/** The authentication options document (`PublicKeyCredentialRequestOptions` in JSON form). */
+export interface UserPoolPasskeyAuthenticationOptionsJSON {
+	challenge: string;
+	rpId: string;
+	timeout?: number;
+	allowCredentials?: UserPoolPasskeyCredentialDescriptor[];
+	userVerification?: string;
+	hints?: string[];
+}
+
+/**
+ * A short-lived, one-time server-side challenge. The opaque `challengeId` is what the browser
+ * echoes back; the WebAuthn `challenge` itself stays in `options`.
+ */
+export interface UserPoolPasskeyRegistrationChallenge {
+	challengeId: string;
+	expiresAt: number;
+	options: UserPoolPasskeyRegistrationOptionsJSON;
+}
+
+export interface UserPoolPasskeyAuthenticationChallenge {
+	challengeId: string;
+	expiresAt: number;
+	options: UserPoolPasskeyAuthenticationOptionsJSON;
+}
+
 /** Friendly aliases for consumers that speak the OIDC spec names. */
 export type OidcDiscoveryDocument = UserPoolOidcDiscovery;
 export type OidcJwks = UserPoolJwks;

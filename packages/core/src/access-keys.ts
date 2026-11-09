@@ -111,8 +111,25 @@ export class AccessKeyService {
 	 */
 	list(principal: Principal, options: { principalId?: string } = {}): AccessKeyView[] {
 		const readAll = principal.permissions.has('accessKey:read-all');
-		if (!readAll) this.#require(principal, 'accessKey:read');
+		const manageKeys = principal.permissions.has('serviceAccount:manage-keys');
 		const filterId = options.principalId?.trim();
+		const forServiceAccount = Boolean(filterId?.startsWith('sa_'));
+
+		// `serviceAccount:manage-keys` covers an account's keys in the caller's org, the same
+		// permission that mints and revokes them. Anything else needs org-wide key read.
+		if (!readAll && manageKeys && forServiceAccount) {
+			this.#requireServiceAccount(principal.orgId, filterId!);
+			return this.#sqlite
+				.query<AccessKeyRow, [string, string]>(
+					`SELECT * FROM access_keys
+					 WHERE org_id = ? AND principal_type = 'serviceAccount' AND principal_id = ?
+					 ORDER BY created_at DESC`,
+				)
+				.all(principal.orgId, filterId!)
+				.map(view);
+		}
+
+		if (!readAll) this.#require(principal, 'accessKey:read');
 		if (!readAll && filterId && filterId !== principal.userId)
 			throw new ForbiddenError('accessKey:read-all');
 
@@ -251,8 +268,17 @@ export class AccessKeyService {
 		if (!row) throw new NotFoundError('Access key');
 
 		const own = row.principal_type === callerType(principal) && row.principal_id === principal.userId;
-		if (own) this.#require(principal, 'accessKey:revoke');
-		else this.#require(principal, 'accessKey:revoke-any');
+		if (own) {
+			this.#require(principal, 'accessKey:revoke');
+		} else if (
+			row.principal_type === 'serviceAccount' &&
+			principal.permissions.has('serviceAccount:manage-keys')
+		) {
+			// The same permission that mints an account's keys revokes them.
+			this.#requireServiceAccount(principal.orgId, row.principal_id);
+		} else {
+			this.#require(principal, 'accessKey:revoke-any');
+		}
 
 		if (row.revoked_at !== null) return view(row);
 		const now = this.ctx.now();

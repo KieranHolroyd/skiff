@@ -21,6 +21,9 @@ const opened = createDb({ path: ':memory:' });
 opened.sqlite.exec(
 	readFileSync(new URL('../../db/migrations/0099_user_pool_attachments.sql', import.meta.url), 'utf8')
 );
+opened.sqlite.exec(
+	readFileSync(new URL('../../db/migrations/0101_user_pool_passkeys.sql', import.meta.url), 'utf8')
+);
 
 let now = Date.parse('2026-11-09T12:00:00Z');
 const core: Core = createCore({

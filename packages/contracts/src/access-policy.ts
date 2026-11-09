@@ -130,6 +130,62 @@ export interface AccessRequestContext {
 
 export type AccessPolicyDecision = 'allow' | 'deny' | 'login';
 
+/**
+ * The service-token subset of a policy, in the shape the edge needs. The agent never sees the
+ * whole policy: only header names, hashes and actions, so a matching token can be allowed before
+ * an unauthenticated browser is redirected to the platform.
+ */
+export interface AccessServiceTokenRule {
+	header: string;
+	tokenHash: string;
+	action: AccessPolicyAction;
+}
+
+export type AccessEdgeDecision =
+	| { decision: 'allow'; header: string }
+	| { decision: 'deny'; header?: string }
+	| { decision: 'login' };
+
+/** Service-token rules from a stored policy, with header names normalised for lookup. */
+export function serviceTokenRules(
+	policy: Pick<AccessPolicy, 'rules'>,
+): AccessServiceTokenRule[] {
+	return policy.rules.flatMap((rule) =>
+		rule.matcher.type === 'serviceToken'
+			? [
+					{
+						header: rule.matcher.header.toLowerCase(),
+						tokenHash: rule.matcher.tokenHash.toLowerCase(),
+						action: rule.action,
+					},
+				]
+			: [],
+	);
+}
+
+/**
+ * The edge's pre-redirect decision (IAM.md I25, §11.1). A matching service token is decided from
+ * the request headers alone; a matching deny wins over an allow. When no token matches, the agent
+ * only knows to send the visitor to login if the policy also has a rule a person could satisfy —
+ * a machine-only policy ends in deny, never a pointless login redirect.
+ */
+export function evaluateAccessEdge(
+	rules: readonly AccessServiceTokenRule[],
+	headers: Readonly<Record<string, string | undefined>>,
+	hasPersonRules: boolean,
+): AccessEdgeDecision {
+	let allowedHeader: string | null = null;
+	for (const rule of rules) {
+		const value = headers[rule.header.toLowerCase()];
+		if (typeof value !== 'string' || value.length === 0) continue;
+		if (!timingSafeHexEqual(sha256Hex(value), rule.tokenHash)) continue;
+		if (rule.action === 'deny') return { decision: 'deny', header: rule.header };
+		allowedHeader ??= rule.header;
+	}
+	if (allowedHeader) return { decision: 'allow', header: allowedHeader };
+	return hasPersonRules ? { decision: 'login' } : { decision: 'deny' };
+}
+
 const MACHINE_MATCHERS = new Set<AccessPolicyMatcher['type']>(['cidr', 'serviceToken']);
 
 function hasIdentity(identity: AccessIdentity): boolean {
@@ -239,6 +295,15 @@ const SHA256_K = new Uint32Array([
 
 function rotr(value: number, bits: number): number {
 	return (value >>> bits) | (value << (32 - bits));
+}
+
+/** Constant-time comparison for lowercase hex digests; a length mismatch is already a failure. */
+function timingSafeHexEqual(left: string, right: string): boolean {
+	if (left.length !== right.length) return false;
+	let difference = 0;
+	for (let index = 0; index < left.length; index += 1)
+		difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+	return difference === 0;
 }
 
 /** Small synchronous SHA-256 so the evaluator stays pure (Web Crypto's digest is async). */

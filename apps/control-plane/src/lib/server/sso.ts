@@ -15,16 +15,19 @@ import {
 	SSO_RECHECK_MS,
 	hasSsoVerificationRecord,
 	isSsoProtocol,
+	isSsoSamlSloBinding,
 	normalizeGroupClaim,
-	normalizeSamlCertificate,
+	normalizeSamlCertificates,
 	normalizeSsoDomain,
+	normalizeSsoSloUrl,
 	ssoProviderFieldErrors,
 	ssoSamlAcsUrl,
 	ssoSamlMetadataUrl,
 	ssoVerificationRecord,
 	verifiedDomainForEmail,
 	type SsoProtocol,
-	type SsoSamlFields
+	type SsoSamlFields,
+	type SsoSamlSloBinding
 } from '../../../../../packages/core/src/iam/sso.ts';
 import { SsoPresetError, resolveSsoPreset, type SsoPresetValues } from '../sso-presets';
 import { core } from './core';
@@ -80,6 +83,12 @@ interface ProviderRow {
 	claim_groups: string;
 	entry_point: string | null;
 	cert: string | null;
+	/** Additional IdP signing certificates (a JSON array of PEM blocks), for a rollover. */
+	certs_json?: string | null;
+	/** The IdP Single Logout Service URL. */
+	slo_url?: string | null;
+	/** `redirect` or `post`; the binding the IdP advertises for its SLO endpoint. */
+	slo_binding?: string | null;
 	callback_url: string | null;
 	sp_entity_id: string | null;
 	audience: string | null;
@@ -132,6 +141,8 @@ export interface SsoProviderView {
 	hasClientSecret: boolean;
 	/** The SAML certificate is public; the UI only needs to know one is stored. */
 	hasCertificate: boolean;
+	/** How many IdP signing certificates are trusted (one or more; two during a rollover). */
+	certificateCount: number;
 	/**
 	 * The URL to register at the IdP: the OIDC redirect URI, or the SAML ACS URL. Kept as one field
 	 * so the existing provider row can show whichever applies without a protocol branch in the table.
@@ -148,6 +159,11 @@ export interface SsoProviderView {
 		audience: string | null;
 		wantAssertionsSigned: boolean;
 		identifierFormat: string | null;
+		/** IdP signing certificates, public. The first is the primary; the rest are rollover. */
+		certificates: string[];
+		/** The IdP Single Logout Service URL, when configured. */
+		sloUrl: string | null;
+		sloBinding: SsoSamlSloBinding;
 	} | null;
 	createdAt: number;
 	updatedAt: number;
@@ -172,6 +188,14 @@ export interface SsoProviderInput {
 	enabled?: boolean;
 	/** SAML configuration. `metadataUrl` is fetched at save time; the rest is manual entry. */
 	saml?: SsoSamlFields;
+}
+
+/** Where a SAML sign-out should send the browser, once the local session is gone. */
+export interface SsoLogoutTarget {
+	providerId: string | null;
+	/** The IdP Single Logout Service URL, when one is configured. */
+	sloUrl: string | null;
+	sloBinding: SsoSamlSloBinding;
 }
 
 export interface SsoGroupMappingView {
@@ -378,7 +402,8 @@ function xmlAttribute(tag: string, name: string): string | null {
 interface SamlMetadata {
 	entityId: string | null;
 	entryPoint: string | null;
-	cert: string | null;
+	/** Every signing certificate the document publishes; the first is the primary. */
+	certs: string[];
 }
 
 /**
@@ -403,15 +428,37 @@ function parseSamlMetadata(xml: string): SamlMetadata {
 		entryPoint ??= location;
 	}
 
-	const certificate =
-		/<(?:[\w-]+:)?X509Certificate\b[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?X509Certificate>/i.exec(xml)?.[1] ??
-		null;
+	const certificates =
+		xml.match(
+			/<(?:[\w-]+:)?X509Certificate\b[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?X509Certificate>/gi
+		) ?? [];
+	const certs = normalizeSamlCertificates(
+		certificates.map(
+			(block) =>
+				/<(?:[\w-]+:)?X509Certificate\b[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?X509Certificate>/i.exec(
+					block
+				)?.[1] ?? ''
+		)
+	);
 
-	return {
-		entityId,
-		entryPoint,
-		cert: normalizeSamlCertificate(certificate)
-	};
+	return { entityId, entryPoint, certs };
+}
+
+/** The IdP signing certificates on a stored row: `cert` first, then the rollover extras. */
+function providerCertificates(row: {
+	cert: string | null;
+	certs_json?: string | null;
+}): string[] {
+	let extras: unknown = [];
+	try {
+		extras = row.certs_json ? JSON.parse(row.certs_json) : [];
+	} catch {
+		extras = [];
+	}
+	return normalizeSamlCertificates([
+		row.cert ?? '',
+		...(Array.isArray(extras) ? extras.filter((value): value is string => typeof value === 'string') : [])
+	]);
 }
 
 async function fetchSamlMetadata(url: string): Promise<SamlMetadata> {
@@ -434,7 +481,7 @@ async function fetchSamlMetadata(url: string): Promise<SamlMetadata> {
 	if (new TextEncoder().encode(xml).length > MAX_SAML_METADATA_BYTES)
 		throw new ValidationError('The IdP metadata document is too large.');
 	const metadata = parseSamlMetadata(xml);
-	if (!metadata.entityId || !metadata.entryPoint || !metadata.cert)
+	if (!metadata.entityId || !metadata.entryPoint || metadata.certs.length === 0)
 		throw new ValidationError(
 			'The IdP metadata document is missing its entity id, single sign-on URL or signing certificate.'
 		);
@@ -443,7 +490,8 @@ async function fetchSamlMetadata(url: string): Promise<SamlMetadata> {
 
 /**
  * Resolve the SAML fields for a create or an update. A metadata URL wins over manual values for
- * the fields it supplies; a blank certificate on update keeps the stored one.
+ * the fields it supplies; a blank certificate on update keeps the stored one. SLO is optional: an
+ * omitted `sloUrl` keeps the stored endpoint, and an explicit blank disables it.
  */
 async function resolveSaml(
 	input: { issuer?: string; saml?: SsoSamlFields },
@@ -452,11 +500,13 @@ async function resolveSaml(
 ): Promise<{
 	entityId: string;
 	entryPoint: string;
-	cert: string;
+	certs: string[];
 	spEntityId: string;
 	audience: string | null;
 	wantAssertionsSigned: boolean;
 	identifierFormat: string | null;
+	sloUrl: string | null;
+	sloBinding: SsoSamlSloBinding;
 	metadataUrl: string | null;
 }> {
 	const saml = input.saml ?? {};
@@ -483,12 +533,47 @@ async function resolveSaml(
 	if (!entryPoint)
 		throw new ValidationError('The entry point (IdP SSO URL) is required, or import a metadata URL.');
 
-	const cert =
-		fetched?.cert ?? normalizeSamlCertificate(saml.cert) ?? existing?.cert ?? null;
-	if (!cert)
+	// A form that submits the full certificate textarea wins; otherwise `cert` and the additional
+	// certificates are combined. A blank field on update keeps what is stored, so a provider can be
+	// edited without re-pasting its certificates. Metadata import supplies the whole set when the
+	// document publishes several certificates (an IdP mid-rollover).
+	const supplied =
+		saml.certs !== undefined
+			? normalizeSamlCertificates(saml.certs)
+			: normalizeSamlCertificates([
+					saml.cert ?? '',
+					...(typeof saml.secondaryCerts === 'string'
+						? [saml.secondaryCerts]
+						: (saml.secondaryCerts ?? []))
+				]);
+	const fetchedCerts = fetched?.certs ?? [];
+	const certs = supplied.length
+		? supplied
+		: fetchedCerts.length
+			? fetchedCerts
+			: existing
+				? providerCertificates(existing)
+				: [];
+	if (certs.length === 0)
 		throw new ValidationError(
 			'The IdP signing certificate is required, or import a metadata URL.'
 		);
+
+	// SLO is optional. A blank value on update disables it; omitting the field keeps the stored one.
+	const sloUrl =
+		saml.sloUrl === undefined
+			? (existing?.slo_url ?? null)
+			: saml.sloUrl === null || saml.sloUrl.trim() === ''
+				? null
+				: normalizeSsoSloUrl(saml.sloUrl);
+	if (saml.sloUrl !== undefined && saml.sloUrl !== null && saml.sloUrl.trim() !== '' && !sloUrl)
+		throw new ValidationError(
+			'The SLO URL must use https (http is allowed only for localhost).'
+		);
+	const sloBindingInput = saml.sloBinding ?? existing?.slo_binding ?? 'redirect';
+	if (!isSsoSamlSloBinding(sloBindingInput))
+		throw new ValidationError('Choose the redirect or POST binding for single logout.');
+	const sloBinding: SsoSamlSloBinding = sloBindingInput;
 
 	const spEntityId =
 		saml.spEntityId === undefined
@@ -513,11 +598,13 @@ async function resolveSaml(
 	return {
 		entityId,
 		entryPoint,
-		cert,
+		certs,
 		spEntityId,
 		audience,
 		wantAssertionsSigned,
 		identifierFormat,
+		sloUrl,
+		sloBinding,
 		metadataUrl
 	};
 }
@@ -581,6 +668,8 @@ async function discover(issuer: string, discoveryUrl: string | null): Promise<Oi
 function view(row: ProviderRow): SsoProviderView {
 	const protocol: SsoProtocol = row.protocol === 'saml' ? 'saml' : 'oidc';
 	const acsUrl = protocol === 'saml' ? ssoSamlAcs(row.id) : null;
+	const certificates = protocol === 'saml' ? providerCertificates(row) : [];
+	const sloBinding = isSsoSamlSloBinding(row.slo_binding) ? row.slo_binding : 'redirect';
 	return {
 		id: row.id,
 		name: row.name,
@@ -595,7 +684,8 @@ function view(row: ProviderRow): SsoProviderView {
 		claims: { email: row.claim_email, name: row.claim_name, groups: row.claim_groups },
 		enabled: row.enabled === 1,
 		hasClientSecret: row.client_secret_sealed.length > 0,
-		hasCertificate: Boolean(row.cert),
+		hasCertificate: certificates.length > 0,
+		certificateCount: certificates.length,
 		callbackUrl: acsUrl ?? ssoCallbackUrl(row.id),
 		spMetadataUrl: protocol === 'saml' ? ssoSamlMetadata(row.id) : null,
 		acsUrl,
@@ -607,7 +697,10 @@ function view(row: ProviderRow): SsoProviderView {
 						spEntityId: row.sp_entity_id,
 						audience: row.audience,
 						wantAssertionsSigned: row.want_assertions_signed === 1,
-						identifierFormat: row.identifier_format
+						identifierFormat: row.identifier_format,
+						certificates,
+						sloUrl: row.slo_url ?? null,
+						sloBinding
 					}
 				: null,
 		createdAt: row.created_at,
@@ -703,6 +796,39 @@ export class SsoService {
 	}
 
 	/**
+	 * The IdP sign-out endpoint for a member's SAML session. A specific provider id is honoured only
+	 * inside the caller's organisation; otherwise the provider the user last signed in with is used
+	 * (`account.providerId`, written by the plugin). Any member can sign out, so this deliberately
+	 * needs no `sso:read` grant.
+	 */
+	resolveLogoutTarget(principal: Principal, providerId?: string): SsoLogoutTarget {
+		let row: ProviderRow | null = null;
+		if (providerId) {
+			row = core.ctx.sqlite
+				.query<ProviderRow, [string, string]>(
+					'SELECT * FROM sso_providers WHERE org_id = ? AND id = ?'
+				)
+				.get(principal.orgId, providerId);
+		} else {
+			row = core.ctx.sqlite
+				.query<ProviderRow, [string, string]>(
+					`SELECT p.* FROM sso_providers p
+					 JOIN account a ON a.providerId = p.id AND a.userId = ?
+					 WHERE p.org_id = ? AND p.protocol = 'saml' AND p.enabled = 1
+					 ORDER BY a.updatedAt DESC LIMIT 1`
+				)
+				.get(principal.userId, principal.orgId);
+		}
+		if (!row || row.protocol !== 'saml')
+			return { providerId: row?.id ?? null, sloUrl: null, sloBinding: 'redirect' };
+		return {
+			providerId: row.id,
+			sloUrl: row.slo_url ? normalizeSsoSloUrl(row.slo_url) : null,
+			sloBinding: isSsoSamlSloBinding(row.slo_binding) ? row.slo_binding : 'redirect'
+		};
+	}
+
+	/**
 	 * `reservedId` is the id `reserveSsoProviderId` handed the dashboard, so the redirect URI an
 	 * admin already registered at the IdP stays right. The REST API does not take one.
 	 */
@@ -743,10 +869,10 @@ export class SsoService {
 					`INSERT INTO sso_providers
 					 (id, org_id, name, protocol, issuer, client_id, client_secret_sealed, discovery_url,
 					  authorization_endpoint, token_endpoint, jwks_endpoint, scopes_json,
-					  claim_email, claim_name, claim_groups, entry_point, cert, callback_url, sp_entity_id,
-					  audience, want_assertions_signed, identifier_format, enabled, created_by,
-					  created_at, updated_at)
-					 VALUES (?, ?, ?, 'saml', ?, '', '', ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					  claim_email, claim_name, claim_groups, entry_point, cert, certs_json, slo_url,
+					  slo_binding, callback_url, sp_entity_id, audience, want_assertions_signed,
+					  identifier_format, enabled, created_by, created_at, updated_at)
+					 VALUES (?, ?, ?, 'saml', ?, '', '', ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 					[
 						id,
 						principal.orgId,
@@ -758,7 +884,10 @@ export class SsoService {
 						claims.name,
 						claims.groups,
 						saml.entryPoint,
-						saml.cert,
+						saml.certs[0]!,
+						JSON.stringify(saml.certs.slice(1)),
+						saml.sloUrl,
+						saml.sloBinding,
 						ssoSamlAcs(id),
 						saml.spEntityId,
 						saml.audience,
@@ -783,6 +912,9 @@ export class SsoService {
 				entryPoint: saml.entryPoint,
 				spEntityId: saml.spEntityId,
 				metadataUrl: saml.metadataUrl,
+				certificateCount: saml.certs.length,
+				sloUrl: saml.sloUrl,
+				sloBinding: saml.sloBinding,
 				hasCertificate: true
 			});
 			return view(this.#provider(principal.orgId, id));
@@ -869,9 +1001,9 @@ export class SsoService {
 				core.ctx.sqlite.run(
 					`UPDATE sso_providers SET
 					   name = ?, issuer = ?, discovery_url = ?, claim_email = ?, claim_name = ?,
-					   claim_groups = ?, entry_point = ?, cert = ?, callback_url = ?, sp_entity_id = ?,
-					   audience = ?, want_assertions_signed = ?, identifier_format = ?, enabled = ?,
-					   updated_at = ?
+					   claim_groups = ?, entry_point = ?, cert = ?, certs_json = ?, slo_url = ?,
+					   slo_binding = ?, callback_url = ?, sp_entity_id = ?, audience = ?,
+					   want_assertions_signed = ?, identifier_format = ?, enabled = ?, updated_at = ?
 					 WHERE org_id = ? AND id = ?`,
 					[
 						name,
@@ -881,7 +1013,10 @@ export class SsoService {
 						claims.name,
 						claims.groups,
 						saml.entryPoint,
-						saml.cert,
+						saml.certs[0]!,
+						JSON.stringify(saml.certs.slice(1)),
+						saml.sloUrl,
+						saml.sloBinding,
 						ssoSamlAcs(id),
 						saml.spEntityId,
 						saml.audience,
@@ -905,7 +1040,10 @@ export class SsoService {
 				issuer: saml.entityId,
 				entryPoint: saml.entryPoint,
 				spEntityId: saml.spEntityId,
-				metadataUrl: saml.metadataUrl
+				metadataUrl: saml.metadataUrl,
+				certificateCount: saml.certs.length,
+				sloUrl: saml.sloUrl,
+				sloBinding: saml.sloBinding
 			});
 			return view(this.#provider(principal.orgId, id));
 		}

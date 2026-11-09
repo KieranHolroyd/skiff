@@ -1131,6 +1131,24 @@ export class NodeService {
 			});
 
 		const routes: RouteSpec[] = [];
+		/**
+		 * The edge-only part of each policy (service tokens, whether a person could still match and
+		 * whether the policy is enabled), read once per pull and shared by every route using it.
+		 */
+		const edgeSettings = new Map<string, ReturnType<CoreContext['accessPolicies']['edgeSettings']>>();
+		const accessEdge = (policyId: string | null) => {
+			if (!policyId) return {};
+			let settings = edgeSettings.get(policyId);
+			if (!settings) {
+				settings = this.ctx.accessPolicies.edgeSettings(policyId);
+				edgeSettings.set(policyId, settings);
+			}
+			return {
+				policyEnabled: settings.enabled,
+				serviceTokens: settings.serviceTokens,
+				hasPersonRules: settings.hasPersonRules,
+			};
+		};
 		const releaseShas = new Set<string>();
 		/** Route body per deployment, reused for that deployment's preview and environment routes. */
 		const baseByDeployment = new Map<string, Omit<RouteSpec, 'host' | 'access' | 'accessMode'>>();
@@ -1267,6 +1285,7 @@ export class NodeService {
 						siteKey: siteKeyFor(this.ctx.config.siteCookieSecret, project.id, project.siteSessionEpoch),
 						loginUrl: loginUrlFor(this.ctx.config.platformOrigin, previewAccessMode, project.id),
 						policyId: previewPolicyId,
+						...accessEdge(previewPolicyId),
 					},
 				});
 			}
@@ -1336,6 +1355,7 @@ export class NodeService {
 						siteKey: siteKeyFor(this.ctx.config.siteCookieSecret, project.id, project.siteSessionEpoch),
 						loginUrl: loginUrlFor(this.ctx.config.platformOrigin, accessMode, project.id),
 						policyId: environmentPolicyId,
+						...accessEdge(environmentPolicyId),
 					},
 				});
 				if (environment.isProduction) productionProjectIds.add(project.id);

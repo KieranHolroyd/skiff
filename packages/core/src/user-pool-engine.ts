@@ -28,16 +28,33 @@
  * single-use token whose SHA-256 hash is all that is stored; no request reveals whether an address
  * is known, and each request is rate limited per address and per client IP.
  *
- * TODO(I27): passkeys, social login, TOTP MFA, breached-password checks, lockout, suspicious
- * sign-in mail, import/export and the identity process remain for a later slice.
+ * Passkeys are WebAuthn credentials bound to the pool issuer's host. Registration and sign-in use
+ * a short-lived, one-time challenge that this process keeps server-side (the identity process will
+ * move it to the pool's own SQLite file). Only the public key and signature counter are stored, a
+ * counter that does not advance is refused as a cloned authenticator, and every failure is the
+ * same generic refusal so neither an address nor a credential id becomes an enumeration oracle.
+ *
+ * TODO(I27): social login, TOTP MFA, breached-password checks, lockout, suspicious sign-in mail,
+ * import/export and the identity process remain for a later slice.
  */
+import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import type {
+	UserPoolPasskeyAuthenticationChallenge,
+	UserPoolPasskeyAuthenticationOptionsJSON,
+	UserPoolPasskeyRegistrationChallenge,
+	UserPoolPasskeyRegistrationOptionsJSON,
+	UserPoolPasskeyView
+} from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import {
 	ConflictError,
 	CoreError,
 	ForbiddenError,
 	NotFoundError,
+	RateLimitError,
 	UnauthorizedError,
 	ValidationError
 } from './errors.ts';
@@ -60,6 +77,16 @@ export const USER_POOL_MAGIC_LINK_TTL_SECONDS = 15 * 60;
 export const USER_POOL_PASSWORD_RESET_TTL_SECONDS = 60 * 60;
 export const USER_POOL_PASSWORD_MIN_LENGTH = 8;
 export const USER_POOL_PASSWORD_MAX_LENGTH = 200;
+
+/** A WebAuthn challenge is a sign-in credential itself: short lived and single use. */
+export const USER_POOL_PASSKEY_CHALLENGE_TTL_SECONDS = 5 * 60;
+/** Per-user registration challenges in one rolling window. */
+export const USER_POOL_PASSKEY_REGISTER_LIMIT = 10;
+/** Sign-in options and verification attempts, per address/credential and per client IP. */
+export const USER_POOL_PASSKEY_LOGIN_LIMIT = 20;
+export const USER_POOL_PASSKEY_POOL_LIMIT = 200;
+/** How many outstanding challenges one process will remember before it drops the oldest. */
+export const USER_POOL_PASSKEY_CHALLENGE_CAP = 10_000;
 
 /** Request throttles, per address and per client IP, over one rolling window. */
 export const USER_POOL_REQUEST_WINDOW_SECONDS = 15 * 60;
@@ -206,6 +233,158 @@ export interface UserPoolUserInfo {
 	name?: string;
 }
 
+/**
+ * The WebAuthn registration response as `@simplewebauthn/browser` serialises it. Binary members
+ * are base64url strings, which is what the server library expects.
+ */
+export interface UserPoolPasskeyRegistrationResponse {
+	id: string;
+	rawId: string;
+	type: string;
+	response: {
+		clientDataJSON: string;
+		attestationObject: string;
+		transports?: string[];
+	};
+	clientExtensionResults?: Record<string, unknown>;
+	authenticatorAttachment?: string | null;
+}
+
+/** The assertion response, again in the browser library's JSON form. */
+export interface UserPoolPasskeyAuthenticationResponse {
+	id: string;
+	rawId: string;
+	type: string;
+	response: {
+		clientDataJSON: string;
+		authenticatorData: string;
+		signature: string;
+		userHandle?: string | null;
+	};
+	clientExtensionResults?: Record<string, unknown>;
+	authenticatorAttachment?: string | null;
+}
+
+/** A credential as `verifyAuthenticationResponse` needs it: public key bytes and the counter. */
+export interface UserPoolWebAuthnCredential {
+	id: string;
+	publicKey: Uint8Array;
+	counter: number;
+	transports?: string[];
+}
+
+export interface UserPoolWebAuthnRegistrationResult {
+	verified: boolean;
+	registrationInfo?: {
+		credential: UserPoolWebAuthnCredential;
+	};
+}
+
+export interface UserPoolWebAuthnAuthenticationResult {
+	verified: boolean;
+	authenticationInfo?: {
+		newCounter: number;
+	};
+}
+
+export interface UserPoolRegistrationOptionsInput {
+	rpName: string;
+	rpID: string;
+	userName: string;
+	userID: Uint8Array;
+	userDisplayName?: string;
+	attestationType?: 'none';
+	excludeCredentials?: Array<{ id: string; transports?: string[] }>;
+	authenticatorSelection?: {
+		residentKey?: 'required' | 'preferred' | 'discouraged';
+		userVerification?: 'required' | 'preferred' | 'discouraged';
+	};
+}
+
+export interface UserPoolRegistrationVerifyInput {
+	response: UserPoolPasskeyRegistrationResponse;
+	expectedChallenge: string;
+	expectedOrigin: string;
+	expectedRPID: string;
+	requireUserVerification: boolean;
+}
+
+export interface UserPoolAuthenticationOptionsInput {
+	rpID: string;
+	allowCredentials?: Array<{ id: string; transports?: string[] }>;
+	userVerification: 'required' | 'preferred' | 'discouraged';
+}
+
+export interface UserPoolAuthenticationVerifyInput {
+	response: UserPoolPasskeyAuthenticationResponse;
+	expectedChallenge: string;
+	expectedOrigin: string;
+	expectedRPID: string;
+	credential: UserPoolWebAuthnCredential;
+	requireUserVerification: boolean;
+}
+
+/**
+ * The four WebAuthn operations the engine needs, narrowed to the fields it uses. The real
+ * implementation is `@simplewebauthn/server`; tests inject a fake through
+ * `setUserPoolWebAuthnProvider`, and a deployment without the package fails with a clear 503.
+ */
+export interface UserPoolWebAuthnProvider {
+	generateRegistrationOptions(
+		options: UserPoolRegistrationOptionsInput
+	): Promise<UserPoolPasskeyRegistrationOptionsJSON>;
+	verifyRegistrationResponse(
+		options: UserPoolRegistrationVerifyInput
+	): Promise<UserPoolWebAuthnRegistrationResult>;
+	generateAuthenticationOptions(
+		options: UserPoolAuthenticationOptionsInput
+	): Promise<UserPoolPasskeyAuthenticationOptionsJSON>;
+	verifyAuthenticationResponse(
+		options: UserPoolAuthenticationVerifyInput
+	): Promise<UserPoolWebAuthnAuthenticationResult>;
+}
+
+export interface UserPoolPasskeyRegisterVerifyInput {
+	poolId: string;
+	userId: string;
+	challengeId: string;
+	response: UserPoolPasskeyRegistrationResponse;
+	name?: string | null;
+}
+
+export interface UserPoolPasskeyLoginVerifyInput {
+	poolId: string;
+	challengeId: string;
+	response: UserPoolPasskeyAuthenticationResponse;
+	/** Optional hint; never used to shape the options, only to reject a mismatched credential. */
+	email?: string | null;
+	ip?: string | null;
+}
+
+interface UserPoolPasskeyRow {
+	id: string;
+	pool_id: string;
+	user_id: string;
+	credential_id: string;
+	public_key: string;
+	counter: number;
+	transports_json: string;
+	name: string;
+	created_at: number;
+	last_used_at: number | null;
+}
+
+interface PasskeyChallengeRecord {
+	poolId: string;
+	type: 'registration' | 'authentication';
+	userId: string | null;
+	emailHint: string | null;
+	challenge: string;
+	rpId: string;
+	origin: string;
+	expiresAt: number;
+}
+
 interface UserPoolRow {
 	id: string;
 	org_id: string;
@@ -326,9 +505,181 @@ function parseScopes(raw: string | null | undefined): string[] | null {
 	return [...new Set(scopes)];
 }
 
+/** The WebAuthn relying party a pool uses. Derived from the pool issuer unless a page origin is given. */
+export interface UserPoolPasskeyRelyingParty {
+	/** The `rpID`: a hostname, never a URL. */
+	rpId: string;
+	/** The exact page origin the browser will report at verification time. */
+	origin: string;
+}
+
+function isLoopbackHost(hostname: string): boolean {
+	const host = hostname.toLowerCase();
+	return (
+		host === 'localhost' ||
+		host.endsWith('.localhost') ||
+		host === '127.0.0.1' ||
+		host === '::1' ||
+		host === '[::1]'
+	);
+}
+
+/** Whether two hostnames belong to the same site (a conservative suffix test, not a PSL lookup). */
+function sameSiteHost(left: string, right: string): boolean {
+	const a = left.toLowerCase();
+	const b = right.toLowerCase();
+	if (a === b) return true;
+	if (a.endsWith(`.${b}`) || b.endsWith(`.${a}`)) return true;
+	const aParts = a.split('.');
+	const bParts = b.split('.');
+	return aParts.length >= 2 && bParts.length >= 2 && aParts.slice(-2).join('.') === bParts.slice(-2).join('.');
+}
+
+/**
+ * Resolve the pool's relying party. Without a request origin the issuer's host is used verbatim
+ * (`https://auth.example.com/<pool>` → `auth.example.com`). The hosted pages also run on the
+ * control-plane origin; when a page origin is supplied it must be the issuer host or share its
+ * site, so a page on an unrelated host can never register a credential for this pool.
+ */
+export function userPoolPasskeyRelyingParty(
+	issuer: string,
+	requestOrigin?: string | null
+): UserPoolPasskeyRelyingParty {
+	let issuerUrl: URL;
+	try {
+		issuerUrl = new URL(issuer);
+	} catch {
+		throw new ValidationError('This user pool has an invalid issuer.');
+	}
+	const fallback = { rpId: issuerUrl.hostname, origin: issuerUrl.origin };
+	if (!requestOrigin) return fallback;
+
+	let requestUrl: URL;
+	try {
+		requestUrl = new URL(requestOrigin);
+	} catch {
+		throw new ValidationError('That passkey request origin is not valid.');
+	}
+	if (requestUrl.protocol !== 'https:' && !(requestUrl.protocol === 'http:' && isLoopbackHost(requestUrl.hostname)))
+		throw new ValidationError('Passkeys need HTTPS (or localhost).');
+	if (!sameSiteHost(requestUrl.hostname, issuerUrl.hostname))
+		throw new ValidationError('That passkey request belongs to another site.');
+	return { rpId: requestUrl.hostname, origin: requestUrl.origin };
+}
+
+/**
+ * Whether an assertion's signature counter proves it is fresh. A stored zero means the
+ * authenticator does not implement a counter, so any non-negative value is accepted; otherwise the
+ * counter must strictly increase, or the credential may have been cloned.
+ */
+export function passkeyCounterAccepted(stored: number, next: number): boolean {
+	if (!Number.isFinite(next) || next < 0) return false;
+	return stored === 0 ? true : next > stored;
+}
+
+let injectedWebAuthn: UserPoolWebAuthnProvider | null | undefined;
+
+/** Replace the WebAuthn implementation (tests), or pass null to restore the lazy default loader. */
+export function setUserPoolWebAuthnProvider(provider: UserPoolWebAuthnProvider | null): void {
+	injectedWebAuthn = provider;
+}
+
+function webAuthnAnchors(): string[] {
+	const anchors: string[] = [import.meta.url];
+	const add = (path: string | undefined): void => {
+		if (!path) return;
+		try {
+			anchors.push(pathToFileURL(path).href);
+		} catch {
+			// An anchor that cannot be a file URL is simply skipped.
+		}
+	};
+	add(join(process.cwd(), 'package.json'));
+	add(join(process.cwd(), 'apps/control-plane/package.json'));
+	try {
+		add(join(import.meta.dir, '../../../apps/control-plane/package.json'));
+	} catch {
+		// `import.meta.dir` is Bun-specific; a bundled build may not have it.
+	}
+	add(process.argv[1]);
+	return anchors;
+}
+
+function resolveFromAnchors(specifier: string, anchors: string[]): string | null {
+	for (const anchor of anchors) {
+		try {
+			return createRequire(anchor).resolve(specifier);
+		} catch {
+			// Try the next anchor.
+		}
+	}
+	return null;
+}
+
+/**
+ * `@simplewebauthn/server` arrives through the platform's passkey plugin, not as a direct
+ * dependency of this package (the same reason `step-up/webauthn.ts` resolves it that way). Search
+ * the process's workspace roots so an in-process control plane and a bundled build both find it.
+ */
+function loadWebAuthnProvider(): UserPoolWebAuthnProvider {
+	const anchors = webAuthnAnchors();
+	let entry = resolveFromAnchors('@simplewebauthn/server', anchors);
+	if (!entry) {
+		const passkey = resolveFromAnchors('@better-auth/passkey', anchors);
+		if (passkey) entry = resolveFromAnchors('@simplewebauthn/server', [passkey]);
+	}
+	if (!entry)
+		throw new CoreError('passkey_unavailable', 'Passkeys are not available on this server.', 503);
+	const loaded = createRequire(entry)(entry) as unknown;
+	if (!loaded || typeof loaded !== 'object')
+		throw new CoreError('passkey_unavailable', 'Passkeys are not available on this server.', 503);
+	const candidate = loaded as Partial<UserPoolWebAuthnProvider>;
+	for (const name of [
+		'generateRegistrationOptions',
+		'verifyRegistrationResponse',
+		'generateAuthenticationOptions',
+		'verifyAuthenticationResponse'
+	] as const) {
+		if (typeof candidate[name] !== 'function')
+			throw new CoreError('passkey_unavailable', 'Passkeys are not available on this server.', 503);
+	}
+	return candidate as UserPoolWebAuthnProvider;
+}
+
+function webAuthnProvider(): UserPoolWebAuthnProvider {
+	if (!injectedWebAuthn) injectedWebAuthn = loadWebAuthnProvider();
+	return injectedWebAuthn;
+}
+
+function parseTransports(json: string): string[] {
+	const value = parseJson<unknown>(json, []);
+	return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function passkeyView(row: UserPoolPasskeyRow): UserPoolPasskeyView {
+	return {
+		id: row.id,
+		poolId: row.pool_id,
+		userId: row.user_id,
+		name: row.name,
+		createdAt: row.created_at,
+		lastUsedAt: row.last_used_at
+	};
+}
+
+function passkeyName(raw: string | null | undefined, transports: string[]): string {
+	const name = (raw ?? '').trim().slice(0, 80);
+	if (name) return name;
+	if (transports.includes('hybrid')) return 'Phone or tablet';
+	if (transports.includes('internal')) return 'This device';
+	return 'Passkey';
+}
+
 export class UserPoolEngineService {
 	/** Per-instance rolling windows for the enumeration-safe request endpoints. */
 	private readonly requestWindow = new Map<string, number[]>();
+	/** Outstanding, single-use WebAuthn challenges. Per-process until the identity process owns them. */
+	private readonly passkeyChallenges = new Map<string, PasskeyChallengeRecord>();
 
 	constructor(private readonly ctx: CoreContext) {}
 
@@ -460,6 +811,238 @@ export class UserPoolEngineService {
 		return this.startSession(pool, this.requireUser(pool.id, user.id), 'magic_link');
 	}
 
+	// ---------------------------------------------------------------- passkeys (WebAuthn)
+
+	/**
+	 * Start enrolling a passkey for a signed-in pool user. The options are bound to the pool, the
+	 * user and a server-side challenge; `challengeId` is the only value the browser is trusted to
+	 * echo back. `origin` is the hosted page's origin, checked against the pool issuer.
+	 */
+	async passkeyRegisterOptions(
+		poolId: string,
+		userId: string,
+		origin: string
+	): Promise<UserPoolPasskeyRegistrationChallenge> {
+		const pool = this.requireEnabledPool(poolId);
+		const user = this.requireUser(pool.id, userId);
+		if (user.disabled_at !== null) throw new UnauthorizedError('Sign in first.');
+		if (!this.allowRequest(`passkey-register:${pool.id}:${user.id}`, USER_POOL_PASSKEY_REGISTER_LIMIT))
+			throw new RateLimitError('Too many passkey attempts. Wait a few minutes and try again.');
+
+		const rp = userPoolPasskeyRelyingParty(pool.issuer, origin);
+		const existing = this.passkeyRows(pool.id, user.id);
+		const options = await this.webAuthnGeneration(async (provider) =>
+			provider.generateRegistrationOptions({
+				rpName: pool.name,
+				rpID: rp.rpId,
+				userName: user.email,
+				userID: new TextEncoder().encode(user.id),
+				userDisplayName: user.name || user.email,
+				attestationType: 'none',
+				excludeCredentials: existing.map((row) => ({
+					id: row.credential_id,
+					transports: parseTransports(row.transports_json)
+				})),
+				authenticatorSelection: { residentKey: 'required', userVerification: 'required' }
+			})
+		);
+		const issued = this.issuePasskeyChallenge({
+			poolId: pool.id,
+			type: 'registration',
+			userId: user.id,
+			emailHint: user.email,
+			challenge: options.challenge,
+			rpId: rp.rpId,
+			origin: rp.origin
+		});
+		return { challengeId: issued.challengeId, expiresAt: issued.expiresAt, options };
+	}
+
+	/**
+	 * Finish enrollment. The challenge must belong to this pool and user, must be unused and
+	 * unexpired, and the authenticator must report user verification. A credential id is unique
+	 * across the platform, so re-registering the same authenticator is a conflict.
+	 */
+	async passkeyRegisterVerify(input: UserPoolPasskeyRegisterVerifyInput): Promise<UserPoolPasskeyView> {
+		const refusal = new UnauthorizedError('That passkey could not be registered. Try again.');
+		const pool = this.requireEnabledPool(input.poolId);
+		const user = this.requireUser(pool.id, input.userId);
+		if (user.disabled_at !== null) throw refusal;
+		const challenge = this.consumePasskeyChallenge(pool.id, input.challengeId, 'registration');
+		if (challenge.userId !== user.id) throw refusal;
+
+		const verified = await this.webAuthnVerification(async (provider) =>
+			provider.verifyRegistrationResponse({
+				response: input.response,
+				expectedChallenge: challenge.challenge,
+				expectedOrigin: challenge.origin,
+				expectedRPID: challenge.rpId,
+				requireUserVerification: true
+			})
+		);
+		if (!verified.verified || !verified.registrationInfo) throw refusal;
+		const credential = verified.registrationInfo.credential;
+		if (!credential?.id || !credential.publicKey?.length) throw refusal;
+
+		const existing = this.ctx.sqlite
+			.query<{ id: string }, [string]>('SELECT id FROM user_pool_passkeys WHERE credential_id = ?')
+			.get(credential.id);
+		if (existing) throw new ConflictError('That passkey is already registered.');
+
+		const now = this.ctx.now();
+		const id = newId('uppk_');
+		const transports = Array.isArray(credential.transports)
+			? credential.transports.filter((item): item is string => typeof item === 'string')
+			: [];
+		try {
+			this.ctx.sqlite.run(
+				`INSERT INTO user_pool_passkeys
+				   (id, pool_id, user_id, credential_id, public_key, counter, transports_json, name,
+				    created_at, last_used_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+				[
+					id,
+					pool.id,
+					user.id,
+					credential.id,
+					Buffer.from(credential.publicKey).toString('base64url'),
+					Math.max(0, Math.trunc(credential.counter ?? 0)),
+					JSON.stringify(transports),
+					passkeyName(input.name, transports),
+					now
+				]
+			);
+		} catch (cause) {
+			if (cause instanceof Error && /UNIQUE/i.test(cause.message))
+				throw new ConflictError('That passkey is already registered.');
+			throw cause;
+		}
+		return passkeyView(this.requirePasskey(pool.id, user.id, id));
+	}
+
+	/**
+	 * Start a passkey sign-in. Options are always discoverable (`allowCredentials` is empty), so
+	 * the answer reveals nothing about whether `email` maps to an account; the hint is only used to
+	 * reject a credential that belongs to somebody else after verification.
+	 */
+	async passkeyLoginOptions(
+		poolId: string,
+		email?: string | null,
+		options: { origin?: string | null } = {}
+	): Promise<UserPoolPasskeyAuthenticationChallenge> {
+		const pool = this.requireEnabledPool(poolId);
+		const hint = email?.trim() ? normalizeEmail(email) : null;
+		if (
+			!this.allowRequest(`passkey-login:pool:${pool.id}`, USER_POOL_PASSKEY_POOL_LIMIT) ||
+			!this.allowRequest(
+				`passkey-login:hint:${pool.id}:${hint ?? 'discoverable'}`,
+				USER_POOL_PASSKEY_LOGIN_LIMIT
+			)
+		)
+			throw new RateLimitError('Too many passkey attempts. Wait a few minutes and try again.');
+
+		const rp = userPoolPasskeyRelyingParty(pool.issuer, options.origin);
+		const generated = await this.webAuthnGeneration(async (provider) =>
+			provider.generateAuthenticationOptions({
+				rpID: rp.rpId,
+				userVerification: 'required'
+			})
+		);
+		const issued = this.issuePasskeyChallenge({
+			poolId: pool.id,
+			type: 'authentication',
+			userId: null,
+			emailHint: hint,
+			challenge: generated.challenge,
+			rpId: rp.rpId,
+			origin: rp.origin
+		});
+		return { challengeId: issued.challengeId, expiresAt: issued.expiresAt, options: generated };
+	}
+
+	/**
+	 * Verify a passkey assertion, advance its counter and start a pool session. Every failure is
+	 * one generic refusal. A counter that does not advance (or a concurrent update losing the
+	 * compare-and-set) is treated as a possible clone and refused without touching the counter.
+	 */
+	async passkeyLoginVerify(input: UserPoolPasskeyLoginVerifyInput): Promise<UserPoolSignInResult> {
+		const refusal = new UnauthorizedError('Passkey sign-in failed.');
+		const pool = this.requireEnabledPool(input.poolId);
+		if (
+			!this.allowRequest(
+				`passkey-verify:${pool.id}:${input.ip ?? 'unknown'}`,
+				USER_POOL_PASSKEY_LOGIN_LIMIT
+			) ||
+			!this.allowRequest(`passkey-verify:pool:${pool.id}`, USER_POOL_PASSKEY_POOL_LIMIT)
+		)
+			throw new RateLimitError('Too many passkey attempts. Wait a few minutes and try again.');
+
+		const challenge = this.consumePasskeyChallenge(pool.id, input.challengeId, 'authentication');
+		const credentialId = input.response?.id;
+		if (!credentialId) throw refusal;
+		const row = this.ctx.sqlite
+			.query<UserPoolPasskeyRow, [string, string]>(
+				'SELECT * FROM user_pool_passkeys WHERE credential_id = ? AND pool_id = ?'
+			)
+			.get(credentialId, pool.id);
+		if (!row) throw refusal;
+		const user = this.ctx.sqlite
+			.query<UserRow, [string, string]>('SELECT * FROM user_pool_users WHERE id = ? AND pool_id = ?')
+			.get(row.user_id, pool.id);
+		if (!user || user.disabled_at !== null) throw refusal;
+		if (challenge.emailHint !== null && user.email !== challenge.emailHint) throw refusal;
+
+		const verified = await this.webAuthnVerification(async (provider) =>
+			provider.verifyAuthenticationResponse({
+				response: input.response,
+				expectedChallenge: challenge.challenge,
+				expectedOrigin: challenge.origin,
+				expectedRPID: challenge.rpId,
+				credential: {
+					id: row.credential_id,
+					publicKey: Buffer.from(row.public_key, 'base64url'),
+					counter: row.counter,
+					transports: parseTransports(row.transports_json)
+				},
+				requireUserVerification: true
+			})
+		);
+		if (!verified.verified || !verified.authenticationInfo) throw refusal;
+
+		const nextCounter = verified.authenticationInfo.newCounter;
+		if (!passkeyCounterAccepted(row.counter, nextCounter)) {
+			// Ids only: never log the credential or the user's address.
+			console.warn(`[user-pool] passkey counter did not advance for pool ${pool.id}; refusing.`);
+			throw refusal;
+		}
+		const now = this.ctx.now();
+		const updated = this.ctx.sqlite.run(
+			`UPDATE user_pool_passkeys
+			    SET counter = ?, last_used_at = ?
+			  WHERE credential_id = ? AND pool_id = ? AND counter = ?`,
+			[nextCounter, now, row.credential_id, pool.id, row.counter]
+		);
+		// A lost compare-and-set means another request consumed the same assertion first.
+		if (updated.changes === 0) throw refusal;
+
+		return this.startSession(pool, this.requireUser(pool.id, user.id), 'passkey');
+	}
+
+	/** Passkeys enrolled by one user, newest first. Never includes the credential or public key. */
+	listPasskeys(poolId: string, userId: string): UserPoolPasskeyView[] {
+		this.requireUser(poolId, userId);
+		return this.passkeyRows(poolId, userId).map(passkeyView);
+	}
+
+	/** Remove one passkey. Returns false when it was already gone (or belongs to another user). */
+	deletePasskey(poolId: string, userId: string, passkeyId: string): boolean {
+		const result = this.ctx.sqlite.run(
+			'DELETE FROM user_pool_passkeys WHERE id = ? AND pool_id = ? AND user_id = ?',
+			[passkeyId, poolId, userId]
+		);
+		return result.changes > 0;
+	}
+
 	/** Request a password-reset link. Enumeration-safe and rate limited like a magic link. */
 	async requestPasswordReset(
 		poolId: string,
@@ -524,11 +1107,11 @@ export class UserPoolEngineService {
 		await this.sendLinkMail(pool, user, 'verify_email', issued.token);
 	}
 
-	/** Insert a session row and emit the D122 event; shared by password, magic-link and reset sign-in. */
+	/** Insert a session row and emit the D122 event; shared by password, magic-link, reset and passkey sign-in. */
 	private startSession(
 		pool: UserPoolRow,
 		user: UserRow,
-		method: 'password' | 'magic_link' | 'password_reset'
+		method: 'password' | 'magic_link' | 'password_reset' | 'passkey'
 	): UserPoolSignInResult {
 		const now = this.ctx.now();
 		const token = randomToken(32);
@@ -717,6 +1300,10 @@ export class UserPoolEngineService {
 				user.id,
 				poolId
 			]);
+			this.ctx.sqlite.run('DELETE FROM user_pool_passkeys WHERE user_id = ? AND pool_id = ?', [
+				user.id,
+				poolId
+			]);
 			this.ctx.sqlite.run('DELETE FROM user_pool_users WHERE id = ? AND pool_id = ?', [user.id, poolId]);
 		})();
 		return true;
@@ -728,6 +1315,7 @@ export class UserPoolEngineService {
 		this.ctx.sqlite.run('DELETE FROM user_pool_sessions WHERE pool_id = ?', [poolId]);
 		this.ctx.sqlite.run('DELETE FROM user_pool_email_tokens WHERE pool_id = ?', [poolId]);
 		this.ctx.sqlite.run('DELETE FROM user_pool_invites WHERE pool_id = ?', [poolId]);
+		this.ctx.sqlite.run('DELETE FROM user_pool_passkeys WHERE pool_id = ?', [poolId]);
 		this.ctx.sqlite.run('DELETE FROM user_pool_users WHERE pool_id = ?', [poolId]);
 	}
 
@@ -1089,8 +1677,7 @@ export class UserPoolEngineService {
 		user: UserRow,
 		purpose: Exclude<UserPoolMailPurpose, 'invite'>,
 		token: string
-	): Promise<void> {
-		const link = this.poolLink(pool.id, purpose, token);
+	): Promise<void> {		const link = this.poolLink(pool.id, purpose, token);
 		const ttlMinutes = Math.round(EMAIL_TOKEN_TTL[purpose] / 60);
 		const copy: Record<
 			Exclude<UserPoolMailPurpose, 'invite'>,
@@ -1185,6 +1772,83 @@ export class UserPoolEngineService {
 					error instanceof Error ? error.name : 'unknown error'
 				}).`
 			);
+		}
+	}
+
+	private passkeyRows(poolId: string, userId: string): UserPoolPasskeyRow[] {
+		return this.ctx.sqlite
+			.query<UserPoolPasskeyRow, [string, string]>(
+				'SELECT * FROM user_pool_passkeys WHERE pool_id = ? AND user_id = ? ORDER BY created_at DESC'
+			)
+			.all(poolId, userId);
+	}
+
+	private requirePasskey(poolId: string, userId: string, passkeyId: string): UserPoolPasskeyRow {
+		const row = this.ctx.sqlite
+			.query<UserPoolPasskeyRow, [string, string, string]>(
+				'SELECT * FROM user_pool_passkeys WHERE id = ? AND pool_id = ? AND user_id = ?'
+			)
+			.get(passkeyId, poolId, userId);
+		if (!row) throw new NotFoundError('Passkey');
+		return row;
+	}
+
+	/** Store a one-time challenge and return its opaque id. Expired entries are swept opportunistically. */
+	private issuePasskeyChallenge(
+		record: Omit<PasskeyChallengeRecord, 'expiresAt'> & { expiresAt?: number }
+	): { challengeId: string; expiresAt: number } {
+		const now = this.ctx.now();
+		for (const [id, entry] of this.passkeyChallenges)
+			if (entry.expiresAt <= now) this.passkeyChallenges.delete(id);
+		// Bounded memory: drop the oldest outstanding challenge rather than grow without limit.
+		while (this.passkeyChallenges.size >= USER_POOL_PASSKEY_CHALLENGE_CAP) {
+			const oldest = this.passkeyChallenges.keys().next().value;
+			if (oldest === undefined) break;
+			this.passkeyChallenges.delete(oldest);
+		}
+		const challengeId = randomToken(24);
+		const expiresAt = record.expiresAt ?? now + USER_POOL_PASSKEY_CHALLENGE_TTL_SECONDS * 1000;
+		this.passkeyChallenges.set(challengeId, { ...record, expiresAt });
+		return { challengeId, expiresAt };
+	}
+
+	/**
+	 * Consume a challenge exactly once. Unknown, wrong-pool, wrong-type, reused and expired ids all
+	 * answer with the same refusal, so a caller cannot tell them apart.
+	 */
+	private consumePasskeyChallenge(
+		poolId: string,
+		challengeId: string,
+		type: PasskeyChallengeRecord['type']
+	): PasskeyChallengeRecord {
+		const refusal = new UnauthorizedError('Passkey verification failed.');
+		const record = challengeId ? this.passkeyChallenges.get(challengeId) : undefined;
+		if (!record || record.poolId !== poolId || record.type !== type) throw refusal;
+		this.passkeyChallenges.delete(challengeId);
+		if (record.expiresAt <= this.ctx.now()) throw refusal;
+		return record;
+	}
+
+	private async webAuthnGeneration<T>(run: (provider: UserPoolWebAuthnProvider) => Promise<T>): Promise<T> {
+		const provider = webAuthnProvider();
+		try {
+			return await run(provider);
+		} catch (error) {
+			if (error instanceof CoreError) throw error;
+			throw new CoreError('passkey_unavailable', 'Passkeys are not available on this server.', 503);
+		}
+	}
+
+	/** Any library refusal, malformed response or bad signature is one generic unauthorized answer. */
+	private async webAuthnVerification<T>(
+		run: (provider: UserPoolWebAuthnProvider) => Promise<T>,
+		message = 'Passkey verification failed.'
+	): Promise<T> {
+		const provider = webAuthnProvider();
+		try {
+			return await run(provider);
+		} catch {
+			throw new UnauthorizedError(message);
 		}
 	}
 
