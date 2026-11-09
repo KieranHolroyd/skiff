@@ -58,6 +58,7 @@ import type {
 import type { EventDeliveryView, EventRuleCreateInput, EventRuleUpdateInput, EventRuleView } from './events.ts';
 import type { AuditEntryView, LogDrainCreateInput, LogDrainTestResult, LogDrainUpdateInput, LogDrainView } from './log-drains.ts';
 import type { BlueprintPlanView, BlueprintRunView, BlueprintValidation } from './blueprints.ts';
+import type { ConfigExportDocument } from './config-export.ts';
 import type { OperationItemView, OperationView } from './operations.ts';
 import type { HaStatusView } from './ha.ts';
 import type { AppVolumeSnapshotView, AppVolumeView } from './volumes.ts';
@@ -1515,6 +1516,17 @@ export class ApiClient {
 	}
 
 	/** One page of the audit log, newest first; pass `nextCursor` back as `cursor` for older entries. */
+	/** `GET /export`: the org's configuration, secrets by name only (OPERATIONS.md §13). */
+	async configExport(options: { projects?: string[] } = {}): Promise<ConfigExportDocument> {
+		const params = new URLSearchParams();
+		for (const slug of options.projects ?? []) params.append('project', slug);
+		const query = params.size > 0 ? `?${params}` : '';
+		const record = asRecord(await this.request('GET', `/api/v1/export${query}`));
+		const doc = asRecord(record?.export);
+		if (!doc || typeof doc.apiVersion !== 'string') throw new Error('The platform returned no export. Is it running a version with `GET /api/v1/export`?');
+		return { ...doc, skipped: (asArray(doc.skipped) ?? []) as ConfigExportDocument['skipped'] } as ConfigExportDocument;
+	}
+
 	async auditLog(
 		options: { from?: string; to?: string; action?: string; resource?: string; limit?: number; cursor?: string } = {},
 	): Promise<{ entries: AuditEntryView[]; nextCursor: string | null; raw: unknown }> {

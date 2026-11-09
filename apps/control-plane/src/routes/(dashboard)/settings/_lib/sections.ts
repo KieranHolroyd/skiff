@@ -7,6 +7,7 @@ import ChartLineIcon from '@lucide/svelte/icons/chart-line';
 import ClockIcon from '@lucide/svelte/icons/clock';
 import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
 import DatabaseBackupIcon from '@lucide/svelte/icons/database-backup';
+import FileDownIcon from '@lucide/svelte/icons/file-down';
 import FingerprintIcon from '@lucide/svelte/icons/fingerprint';
 import FolderTreeIcon from '@lucide/svelte/icons/folder-tree';
 import GitBranchIcon from '@lucide/svelte/icons/git-branch';
@@ -61,6 +62,7 @@ export type SectionId =
 	| 'sso'
 	| 'identity'
 	| 'usage'
+	| 'export'
 	| 'backup-targets'
 	| 'log-drains'
 	| 'registry'
@@ -95,7 +97,7 @@ export type SectionGroup =
 /**
  * The settings navigation passes each href to SvelteKit's `resolve()`, whose generic is distributed
  * over the route-id union; TypeScript stops inferring past 25 members. SSO, Skiff Access, User
- * pools and Server errors are the newest sections, so they are left out of this type and asserted
+ * pools, Server errors and Config export are the newest sections, so they are left out of this type and asserted
  * at their entries below. All are real routes (`svelte-kit sync` lists them in `$app/types`); every other entry is literal-checked.
  */
 export type SectionHref =
@@ -210,6 +212,18 @@ export const SECTIONS: Section[] = [
 		href: '/(dashboard)/settings/usage',
 		path: '/settings/usage',
 		icon: ChartColumnIcon,
+		anyPermission: ['project:read']
+	},
+	{
+		id: 'export',
+		group: 'organisation',
+		label: 'Config export',
+		summary:
+			'Download this organisation’s configuration as one YAML or JSON file: settings only, no data, secrets by name.',
+		// See `SectionHref`: the route is real, but `resolve()` cannot infer past 25 members.
+		href: '/(dashboard)/settings/export' as unknown as SectionHref,
+		path: '/settings/export',
+		icon: FileDownIcon,
 		anyPermission: ['project:read']
 	},
 	{

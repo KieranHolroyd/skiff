@@ -503,3 +503,45 @@ audit row with the operation id.
 Jobs, app volumes, previews, static uploads (`path`), drift badges, `export`, JSON Schema
 publishing, compensation on failure and Compose import (plan 14) are not implemented.
 
+
+## 13. Config export (`GET /export`, `skif export`)
+
+Status: **implemented, 2026-11-09** (D198). A read-only snapshot of one organisation's
+configuration in one document (`apiVersion: skiff.export/v1`), for keeping in git, diffing
+between dates or rebuilding by hand. It is not a backup and not a blueprint: it restores nothing.
+Platform disaster recovery remains `skiff-restore` with a recovery kit
+([platform backups](../packages/docs/content/self-hosting/platform-backups.md)). Service:
+`packages/core/src/config-export.ts`. Header contract: `packages/contracts/src/config-export.ts`.
+
+**What it holds.** Every live project with its settings, environments, domains, stored workload
+spec (`workload`, or null for static), function view, jobs, app volumes, project secret *names*
+and database/storage/broker attachments. Org-level sections: secrets (names), databases, storage
+(with buckets), brokers, `iam` (roles, bindings, groups, guardrails, auth policy), service
+accounts, access keys (metadata), federation trusts, access policies, user pools with their
+clients, log drains, backup targets, event rules, alert rules (full rule, not firing state), email
+(org settings and domains), pipeline repositories with variables, secret names, environments and
+project links, registry credentials, forge connections, shares and templates.
+
+**What it never holds.** Secret values, credentials, passwords and header values (each section
+is the view its REST GET returns, which is write-only for those), deployments and releases,
+database rows, bucket objects, volume contents, logs, metrics, pool users and invites, audit
+history, trashed resources and platform-level settings (`/etc/skiff`, nodes, platform IAM).
+
+**Permissions.** No new permission. Each section is read through its normal service call with the
+caller's principal, so it sees exactly what the API would show them. A section that throws a
+`CoreError` (403 forbidden, 404 feature disabled, …) is left out and listed in `skipped:
+[{ section, code, reason }]`; any other error fails the export as a bug. `?project=<slug>`
+(repeatable or comma-separated) limits `projects`. Unknown slugs are listed in `skipped` as
+`not_found`, and org-level sections are still exported. Each export writes a `config.export`
+audit row with the project count, filter and skipped sections.
+
+**Dashboard.** **Settings → Config export** (Organisation group, needs `project:read`) picks YAML
+or JSON and all or some projects, then downloads the file from
+`/settings/export/download?format=&project=` (same service call, `Content-Disposition:
+attachment`, YAML via `Bun.YAML.stringify`). Opening the page lists projects only; the audit row is
+written when the file is downloaded.
+
+**CLI.** `skif export [--out <file>|-] [--format yaml|json] [--project <slug>] [--force]` writes
+`skiff-config-<org>-<date>.yaml` (mode 0600) and prints a section summary plus the skipped list.
+The CLI runs on Node, so YAML is emitted by `apps/cli/src/config-export.ts`. Strings that are
+not plainly safe are JSON-quoted, and a test round-trips the output through `Bun.YAML.parse`.

@@ -778,6 +778,29 @@ skif audit --from 2026-11-01 --to 2026-11-07
 skif audit --resource log_drain --all --json
 ```
 
+### export
+
+```sh
+skif export [options]
+```
+
+Writes your organisation's configuration to one file. The file covers every project's settings, environments, domains, workload spec, jobs, volumes and attachments. It also covers the managed databases, storage and brokers, IAM, service accounts, access keys, federation, access policies, user pools and their clients, log drains, backup targets, event and alert rules, email, pipelines, registry logins, forges, shares and templates.
+
+The file holds configuration only. It has no deployments, database rows, objects, logs or pool users. Secrets appear by name and never by value. Each section is read with your own permissions. A section you cannot read, or whose feature is off, is listed under `skipped` and does not fail the export. You can download the same file from **Settings → Config export** in the dashboard. The export is not a backup and cannot be restored. To recover the whole platform, see [platform backups](/self-hosting/platform-backups).
+
+| Flag | Meaning |
+| --- | --- |
+| `-o`, `--out <file>` | Where to write. The default is `skiff-config-<org>-<date>.yaml` in the current directory, and `-` writes to stdout. The file is created with mode 0600. |
+| `--format <yaml\|json>` | The output format. The default is YAML, or JSON when `--out` ends in `.json`. |
+| `-p`, `--project <slug>` | Only these projects, repeated or comma-separated. Org-level configuration is still exported. |
+| `--force` | Overwrite an existing file. |
+
+```sh
+skif export
+skif export --out skiff-config.json
+skif export --project shop-web,shop-api --out -
+```
+
 ### function
 
 ```sh

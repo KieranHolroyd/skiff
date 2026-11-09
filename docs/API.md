@@ -38,6 +38,7 @@ owner/admin. Authentication is either the Better Auth session cookie (dashboard)
 | GET | `/blueprints/apply/:operationId` | creator or `project:read` | `{ run }` with every step's status |
 | GET | `/blueprints` | `project:read` | `{ stacks }`: managed keys, last status, applied hash |
 | GET | `/blueprints/:name` | `project:read` | `{ stack, lastRun }` |
+| GET | `/export` | each section's own read permission | `{ export }`: the org's configuration (docs/OPERATIONS.md §13), secrets by name only; `?project=<slug>` (repeatable or comma-separated) limits projects; unreadable sections are listed in `skipped`; audited as `config.export` |
 | POST | `/projects/:slug/access` | `project:update` | `{ scope: production\|previews, mode: public\|password\|platform\|access, password?, policyId? }`; each scope has its own password. `password` is required to switch a scope to `password` and may be omitted to keep the current one; leaving password mode clears only that scope's. `policyId` is required for `access` (Skiff Access) |
 | POST | `/projects/:slug/deploy` | `deployment:create` | inline files (`deploy_files`); the URL slug is the target (`project` in the body is optional and must match); `environment` selects a named environment. Process/container projects run one workload, so only the latest deployment is active |
 | GET | `/projects/:slug/deployments` | `deployment:read` | |
