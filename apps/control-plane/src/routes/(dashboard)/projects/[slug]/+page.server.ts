@@ -12,6 +12,7 @@ import {
 	placementSpecSchema,
 	storageAttachSchema,
 	storageAttachmentUpdateSchema,
+	userPoolAttachSchema,
 	workloadSpecSchema,
 	workloadVariablesSchema,
 	type BuildView,
@@ -20,12 +21,16 @@ import {
 	type EnvironmentView,
 	type GitSourceView,
 	type NodeCapacityView,
+	type Permission,
 	type StorageAttachmentView,
 	type StorageView,
+	type UserPoolAttachmentView,
 	type WorkloadView
 } from '@skiff/contracts';
 import type { SecretView } from '@skiff/core';
+import { auth } from '#lib/server/auth.js';
 import { core } from '#lib/server/core.js';
+import { authErrorMessage } from '#lib/server/user-settings.js';
 import { parseTrafficRange, trafficRangeHref, trafficRanges } from '#lib/server/traffic-range.js';
 import {
 	failStatus,
@@ -81,6 +86,36 @@ function fieldErrorsFrom(issues: Array<{ path: PropertyKey[]; message: string }>
 	return fieldErrors;
 }
 
+/** People with a direct project-scope binding, including guests (IAM.md §8.2). */
+interface ProjectMemberRow {
+	id: string;
+	userId: string;
+	name: string | null;
+	email: string | null;
+	role: string;
+	memberRole: string | null;
+	joinedAt: string | null;
+}
+
+function projectMembers(orgId: string, projectId: string): ProjectMemberRow[] {
+	try {
+		return core.ctx.sqlite
+			.query<ProjectMemberRow, [string, string]>(
+				`SELECT b.id AS id, b.principal_id AS userId, b.role_id AS role,
+				        u.name AS name, u.email AS email, m.role AS memberRole, m.createdAt AS joinedAt
+				   FROM iam_bindings b
+				   LEFT JOIN user u ON u.id = b.principal_id
+				   LEFT JOIN member m ON m.userId = b.principal_id AND m.organizationId = b.org_id
+				  WHERE b.org_id = ? AND b.principal_type = 'user'
+				    AND b.scope_type = 'project' AND b.scope_id = ?
+				  ORDER BY u.name ASC`
+			)
+			.all(orgId, projectId);
+	} catch {
+		return [];
+	}
+}
+
 export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const principal = locals.principal!;
 	try {
@@ -94,6 +129,20 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			);
 		}
 		const row = core.projects.requireRow(principal, params.slug);
+		// Permissions in this page are project-scoped: a guest or a project-bound custom role gets
+		// the same actions on this project as an org-wide principal with the same role (IAM.md §8.2).
+		const canAt = (permission: Permission) =>
+			core.ctx.iam.can(principal, permission, { type: 'project', id: row.id });
+		const showGuestEmails = canAt('iam:read');
+		const membersWithAccess = projectMembers(principal.orgId, row.id).map((member) => ({
+			id: member.id,
+			userId: member.userId,
+			name: member.name || member.email?.split('@')[0] || member.userId,
+			email: showGuestEmails ? member.email : null,
+			role: member.role,
+			guest: member.memberRole === 'guest' || member.memberRole === null,
+			joinedAt: member.joinedAt
+		}));
 		const consoleOn = project.runtime === 'container' && core.containerConsole.enabled();
 		const trafficRange = parseTrafficRange(url.searchParams.get('range'));
 		const traffic = await core.metrics.trafficForProject(principal, params.slug, {
@@ -110,7 +159,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		const deployments = core.deployments.list(principal, row, { limit: 100 });
 		let shareLinks: Awaited<ReturnType<typeof core.access.listShareLinks>> = [];
 		let siteSessions: ReturnType<typeof core.access.listSessions> = [];
-		if (hasPermission(principal, 'shareLink:read')) {
+		if (canAt('shareLink:read')) {
 			try {
 				shareLinks = core.access.listShareLinks(principal, row);
 				siteSessions = core.access.listSessions(principal, row);
@@ -179,6 +228,30 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 				.filter((item) => storageAttachments.some((attached) => attached.storageId === item.id))
 				.map((item) => [item.name, readyBuckets(item)])
 		);
+		// Managed user pools (IAM.md I28): the same process/container/function rule as databases.
+		const userPoolAttachments: UserPoolAttachmentView[] =
+			row.runtime === 'static' ? [] : safely(() => core.userPools.attachments(principal, row), []);
+		const attachableUserPools =
+			row.runtime === 'static'
+				? []
+				: safely(
+						() =>
+							core.userPools
+								.list(principal)
+								.filter(
+									(pool) => !userPoolAttachments.some((attached) => attached.poolId === pool.id)
+								)
+								.map((pool) => ({
+									name: pool.name,
+									issuer: pool.issuer,
+									disabled: pool.disabled,
+									clients: safely(() => core.userPools.listClients(principal, pool.id), [])
+										.filter((client) => !client.public)
+										.map((client) => ({ name: client.name, clientId: client.clientId }))
+								}))
+								.filter((pool) => !pool.disabled && pool.clients.length > 0),
+						[]
+					);
 		// App volumes (plan 07) are project-owned and only meaningful for runtime projects.
 		const appVolumesEnabled = core.appVolumes.enabled();
 		const appVolumes =
@@ -187,7 +260,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 				: [];
 		// Image picker suggestions from the platform registry (docs/REGISTRY.md G2); never fails the page.
 		const registryImages: string[] =
-			row.runtime === 'container' && hasPermission(principal, 'image:pull')
+			row.runtime === 'container' && canAt('image:pull')
 				? safely(() => {
 						const registry = core.registry.view(principal);
 						if (!registry.enabled) return [];
@@ -222,6 +295,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			storageAttachments,
 			attachableStorage,
 			storageBuckets,
+			userPoolAttachments,
+			attachableUserPools,
 			appVolumesEnabled,
 			/** Storage targets the volume form offers (docs/STORAGE.md §2.2). */
 			appVolumeStorage: appVolumesEnabled ? core.disks.choices('app-volumes') : null,
@@ -230,42 +305,52 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			accessPolicies: safely(() => core.accessPolicies.list(principal, { projectId: row.id }), []),
 			// Jobs (plan 09): the tab hides unless SKIFF_FEATURE_JOBS is on.
 			jobsEnabled: core.jobs.enabled(),
+			/** Direct project-scope members, including guests (IAM.md §8.2). */
+			projectMembers: membersWithAccess,
 			can: {
-				update: hasPermission(principal, 'project:update'),
-				deleteProject: hasPermission(principal, 'project:delete'),
-				createDeployment: hasPermission(principal, 'deployment:create'),
-				promote: hasPermission(principal, 'deployment:promote'),
-				rollback: hasPermission(principal, 'deployment:rollback'),
-				deleteDeployment: hasPermission(principal, 'deployment:delete'),
-				createShare: hasPermission(principal, 'shareLink:create'),
-				revokeShare: hasPermission(principal, 'shareLink:revoke'),
-				manageEnvironments: hasPermission(principal, 'project:update'),
-				promoteEnvironment: hasPermission(principal, 'deployment:promote'),
-				rollbackEnvironment: hasPermission(principal, 'deployment:rollback'),
-				createBuild: hasPermission(principal, 'build:create'),
-				cancelBuild: hasPermission(principal, 'build:cancel'),
-				readLogs: hasPermission(principal, 'logs:read'),
-				createDomain: hasPermission(principal, 'domain:create'),
-				deleteDomain: hasPermission(principal, 'domain:delete'),
-				createSecret: hasPermission(principal, 'secret:create'),
-				updateSecret: hasPermission(principal, 'secret:update'),
-				deleteSecret: hasPermission(principal, 'secret:delete'),
-				manageWorkload: hasPermission(principal, 'project:update'),
+				update: canAt('project:update'),
+				// Better Auth's invite endpoint checks the caller's org role, so the button also needs
+				// the org-level permission; a project-only custom inviter would be refused there.
+				inviteGuest: canAt('member:invite') && hasPermission(principal, 'member:invite'),
+				updateGuest: canAt('member:update-role'),
+				removeGuest: canAt('member:remove'),
+				deleteProject: canAt('project:delete'),
+				createDeployment: canAt('deployment:create'),
+				promote: canAt('deployment:promote'),
+				rollback: canAt('deployment:rollback'),
+				deleteDeployment: canAt('deployment:delete'),
+				createShare: canAt('shareLink:create'),
+				revokeShare: canAt('shareLink:revoke'),
+				manageEnvironments: canAt('project:update'),
+				promoteEnvironment: canAt('deployment:promote'),
+				rollbackEnvironment: canAt('deployment:rollback'),
+				createBuild: canAt('build:create'),
+				cancelBuild: canAt('build:cancel'),
+				readLogs: canAt('logs:read'),
+				createDomain: canAt('domain:create'),
+				deleteDomain: canAt('domain:delete'),
+				createSecret: canAt('secret:create'),
+				updateSecret: canAt('secret:update'),
+				deleteSecret: canAt('secret:delete'),
+				manageWorkload: canAt('project:update'),
 				// Container console (D127): only for container projects while the feature is on.
-				inspectContainer: consoleOn && hasPermission(principal, 'container:inspect'),
-				containerFiles: consoleOn && principal.credential === 'session' && hasPermission(principal, 'container:files'),
-				containerExec: consoleOn && principal.credential === 'session' && hasPermission(principal, 'container:exec'),
-				restartContainer: consoleOn && hasPermission(principal, 'project:update'),
+				inspectContainer: consoleOn && canAt('container:inspect'),
+				containerFiles: consoleOn && principal.credential === 'session' && canAt('container:files'),
+				containerExec: consoleOn && principal.credential === 'session' && canAt('container:exec'),
+				restartContainer: consoleOn && canAt('project:update'),
 				viewCapacity: principal.platformAdmin === true,
-				readDatabases: hasPermission(principal, 'database:read'),
-				createDatabase: hasPermission(principal, 'database:create'),
+				readDatabases: canAt('database:read'),
+				createDatabase: canAt('database:create'),
 				attachDatabase:
-					hasPermission(principal, 'database:update') && hasPermission(principal, 'project:update'),
-				readStorage: hasPermission(principal, 'storage:read'),
-				createStorage: hasPermission(principal, 'storage:create'),
+					canAt('database:update') && canAt('project:update'),
+				readStorage: canAt('storage:read'),
+				createStorage: canAt('storage:create'),
 				attachStorage:
-					hasPermission(principal, 'storage:update') && hasPermission(principal, 'project:update'),
-				manageVolumes: appVolumesEnabled && hasPermission(principal, 'project:update')
+					canAt('storage:update') && canAt('project:update'),
+				readUserPools: canAt('userPool:read'),
+				attachUserPool:
+					canAt('userPool:update') && canAt('project:update'),
+				manageVolumes: appVolumesEnabled && canAt('project:update')
 			}
 		};
 	} catch (caught) {
@@ -276,6 +361,90 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 };
 
 export const actions: Actions = {
+	/**
+	 * Invite a guest to this project only (IAM.md §8.2). The org invitation creates the `member`
+	 * row that sign-in needs; `projectId`/`projectRole` turn acceptance into a project binding.
+	 */
+	inviteGuest: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const email = formString(data, 'email').toLowerCase();
+		const role = formString(data, 'role');
+		const fieldErrors: Record<string, string> = {};
+		if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+			fieldErrors.email = 'Enter a valid email address.';
+		if (role !== 'deployer' && role !== 'viewer')
+			fieldErrors.role = 'Choose deployer or viewer for this project.';
+		if (Object.keys(fieldErrors).length > 0)
+			return fail(400, { message: 'Check the invitation.', fieldErrors });
+
+		let project: ReturnType<typeof core.projects.requireRow> | undefined;
+		try {
+			project = core.projects.requireRow(principal, params.slug);
+			core.ctx.iam.require(principal, 'member:invite', { type: 'project', id: project.id });
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+		if (!project) return fail(404, { message: 'That project no longer exists.' });
+
+		try {
+			await auth.api.createInvitation({
+				body: {
+					email,
+					// The org role stays empty; access is the project binding recorded below.
+					role: 'guest',
+					organizationId: principal.orgId,
+					resend: true,
+					projectId: project.id,
+					projectRole: role
+				},
+				headers: request.headers
+			});
+		} catch (caught) {
+			return fail(400, { message: authErrorMessage(caught) });
+		}
+		core.audit.record({
+			principal,
+			action: 'member.invite',
+			resource: 'invitation',
+			args: { email, role, projectId: project.id, scope: 'project' },
+			result: 'ok'
+		});
+		return { success: `Invitation sent to ${email} for ${project.name}.` };
+	},
+
+	/** Change a guest's role on this project (deployer or viewer). */
+	updateGuestRole: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const bindingId = formString(data, 'bindingId');
+		const role = formString(data, 'role');
+		if (!bindingId) return fail(400, { message: 'Missing the project member.' });
+		if (role !== 'deployer' && role !== 'viewer')
+			return fail(400, { message: 'Choose deployer or viewer for this project.' });
+		try {
+			const project = core.projects.requireRow(principal, params.slug);
+			core.ctx.iam.updateProjectBindingRole(principal, bindingId, project.id, role);
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+		return { success: `Project role changed to ${role}.` };
+	},
+
+	/** Remove someone's access to this project; their org guest membership stays until removed there. */
+	removeGuest: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const bindingId = formString(await request.formData(), 'bindingId');
+		if (!bindingId) return fail(400, { message: 'Missing the project member.' });
+		try {
+			const project = core.projects.requireRow(principal, params.slug);
+			core.ctx.iam.removeProjectBinding(principal, bindingId, project.id);
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+		return { success: 'Project access removed.' };
+	},
+
 	setAccess: async ({ request, locals, params }) => {
 		const principal = locals.principal!;
 		const data = await request.formData();
@@ -1114,6 +1283,46 @@ export const actions: Actions = {
 			return fail(failStatus(caught), toFormFailure(caught));
 		}
 		return { success: `${name} detached. The app restarts without its env.` };
+	},
+
+	// --- Managed user pools (IAM.md I28) -----------------------------------------
+
+	attachUserPool: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const data = await request.formData();
+		const parsed = userPoolAttachSchema.safeParse({
+			pool: formString(data, 'pool'),
+			client: formString(data, 'client'),
+			envPrefix: formString(data, 'envPrefix').toUpperCase() || undefined
+		});
+		if (!parsed.success) {
+			return fail(400, {
+				message: parsed.error.issues[0]?.message ?? 'Check the attachment.',
+				fieldErrors: fieldErrorsFrom(parsed.error.issues)
+			});
+		}
+		try {
+			const project = core.projects.requireRow(principal, params.slug);
+			const { attachment } = core.userPools.attach(principal, project, parsed.data);
+			return {
+				success: `${attachment.poolName} attached as ${attachment.envPrefix}_ISSUER, ${attachment.envPrefix}_CLIENT_ID and ${attachment.envPrefix}_CLIENT_SECRET. The app restarts with the new env.`
+			};
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+	},
+
+	detachUserPool: async ({ request, locals, params }) => {
+		const principal = locals.principal!;
+		const name = formString(await request.formData(), 'pool');
+		if (!name) return fail(400, { message: 'Missing user pool name.' });
+		try {
+			const project = core.projects.requireRow(principal, params.slug);
+			core.userPools.detach(principal, project, name);
+		} catch (caught) {
+			return fail(failStatus(caught), toFormFailure(caught));
+		}
+		return { success: `${name} detached. The app restarts without its pool env.` };
 	},
 
 	// --- Managed object storage (S4) ---------------------------------------------

@@ -117,6 +117,13 @@ export const BINDING_INFO: Readonly<Record<FunctionBindingType, BindingInfo>> = 
 		group: 'messaging',
 		backing: 'Durable Object broker on the host',
 		wrangler: 'queues.producers'
+	},
+	auth: {
+		label: 'User pool auth',
+		group: 'services',
+		backing: "The attached pool's JWKS, verified in a sibling Worker",
+		wrangler: 'skiff.auth (added by a pool attachment)',
+		needs: 'A user pool attached to the function'
 	}
 };
 

@@ -4,6 +4,7 @@ import {
 	FUNCTION_DEFAULT_IDLE_STOP_SECONDS,
 	FUNCTION_DEFAULT_COMPATIBILITY_DATE,
 	FUNCTION_DEFAULT_MEMORY_MB,
+	USER_POOL_AUTH_BINDING,
 	FUNCTION_PYTHON_COMPAT_FLAG,
 	FUNCTION_PYTHON_DEFAULT_MEMORY_MB,
 	FUNCTION_PYTHON_MIN_MEMORY_MB,
@@ -302,8 +303,16 @@ export class FunctionService {
 				secrets: secretNames.map((name) => ({ name, delivery: 'env' as const })),
 			});
 		}
+		// Rebuild the attachment-owned AUTH binding from current attachments: a redeploy after an
+		// attach/detach must not keep verifying against a pool the project no longer uses.
+		const bindings: FunctionRuntimeBinding[] = (base.function?.bindings ?? []).filter(
+			(binding) => binding.type !== 'auth'
+		);
+		if (this.ctx.userPools.soleAttachedPool(project.id))
+			bindings.push(await this.ctx.userPools.authBindingForProject(project.id));
 		const resolved = functionRuntimeSpecSchema.parse({
 			...base.function!,
+			bindings,
 			main,
 			modules,
 		});
@@ -492,7 +501,8 @@ export class FunctionService {
 				case 'd1':
 				case 'queue':
 				case 'analytics_engine':
-				case 'assets': {
+				case 'assets':
+				case 'auth': {
 					if (binding.type === 'assets' && !manifest?.assets?.directory)
 						throw new ValidationError(
 							`Binding ${binding.name}: an assets binding needs the manifest's assets directory.`,
@@ -518,6 +528,14 @@ export class FunctionService {
 				}
 			}
 		}
+
+		// IAM.md I28: attaching a pool gives the function `env.AUTH` without a manifest change. With
+		// several pools attached the manifest must name one (`{ "type": "auth", "pool": "shop" }`).
+		const alreadyBound = bindings.some(
+			(binding) => binding.type === 'auth' || binding.name === USER_POOL_AUTH_BINDING
+		);
+		if (!alreadyBound && this.ctx.userPools.soleAttachedPool(project.id))
+			bindings.push(await this.ctx.userPools.authBindingForProject(project.id));
 		return { bindings, secrets };
 	}
 }

@@ -13,6 +13,7 @@
 		type DatabaseAttachmentView,
 		type EnvSuggestion,
 		type StorageAttachmentView,
+		type UserPoolAttachmentView,
 		type WorkloadSpec,
 		type WorkloadView
 	} from '@skiff/contracts';
@@ -108,7 +109,12 @@
 	type Item =
 		| { kind: 'plain'; name: string; row: PlainRow; status: RowStatus }
 		| { kind: 'secret'; name: string; row: SecretRow; status: RowStatus }
-		| { kind: 'linked'; name: string; source: string; sourceKind: 'database' | 'storage' };
+		| {
+				kind: 'linked';
+				name: string;
+				source: string;
+				sourceKind: 'database' | 'storage' | 'user-pool';
+		  };
 
 	type EditState =
 		| { kind: 'plain'; uid: number; key: string; value: string }
@@ -121,6 +127,7 @@
 		secrets,
 		databaseAttachments = [],
 		storageAttachments = [],
+		userPoolAttachments = [],
 		attachableDatabases = [],
 		attachableStorage = [],
 		canAttachDatabase = false,
@@ -134,6 +141,7 @@
 		secrets: SecretView[];
 		databaseAttachments?: DatabaseAttachmentView[];
 		storageAttachments?: StorageAttachmentView[];
+		userPoolAttachments?: UserPoolAttachmentView[];
 		attachableDatabases?: AttachableDatabase[];
 		attachableStorage?: AttachableStorage[];
 		canAttachDatabase?: boolean;
@@ -248,6 +256,9 @@
 		),
 		...storageAttachments.flatMap((item) =>
 			item.envNames.map((name) => ({ name, source: item.storageName, kind: 'storage' as const }))
+		),
+		...userPoolAttachments.flatMap((item) =>
+			item.envNames.map((name) => ({ name, source: item.poolName, kind: 'user-pool' as const }))
 		)
 	]);
 	const injectedBy = $derived(new Map(injected.map((item) => [item.name, item.source])));
@@ -1233,7 +1244,9 @@
 											<a
 												href={item.sourceKind === 'database'
 													? resolve('/(dashboard)/databases/[name]', { name: item.source })
-													: resolve('/(dashboard)/storage/[name]', { name: item.source })}
+													: item.sourceKind === 'storage'
+														? resolve('/(dashboard)/storage/[name]', { name: item.source })
+														: resolve('/(dashboard)/settings/identity')}
 												class="font-medium text-foreground underline-offset-2 hover:underline"
 												>{item.source}</a
 											>

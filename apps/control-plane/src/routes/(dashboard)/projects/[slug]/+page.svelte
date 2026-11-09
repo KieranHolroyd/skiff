@@ -62,6 +62,7 @@
 	import EnvironmentsPanel from './_components/EnvironmentsPanel.svelte';
 	import LogsPanel from './_components/LogsPanel.svelte';
 	import JobsPanel from './_components/JobsPanel.svelte';
+	import ProjectAccessCard from './_components/ProjectAccessCard.svelte';
 	import {
 		PROJECT_TABS,
 		readProjectTab,
@@ -74,6 +75,7 @@
 	import VariablesPanel from './_components/VariablesPanel.svelte';
 	import SourcePanel from './_components/SourcePanel.svelte';
 	import StorageCard from './_components/StorageCard.svelte';
+	import UserPoolCard from './_components/UserPoolCard.svelte';
 	import VolumesCard from './_components/VolumesCard.svelte';
 	import WorkerCard from './_components/WorkerCard.svelte';
 	import { displayUrl, formatBytes, formatDateTime, shortId, shortSha } from '../../_lib/format.js';
@@ -619,6 +621,16 @@
 							attachStorage: data.can.attachStorage
 						}}
 					/>
+					<UserPoolCard
+						slug={data.project.slug}
+						attachments={data.userPoolAttachments}
+						pools={data.attachableUserPools}
+						fieldErrors={result?.fieldErrors}
+						can={{
+							readUserPools: data.can.readUserPools,
+							attachUserPool: data.can.attachUserPool
+						}}
+					/>
 					<VolumesCard
 						slug={data.project.slug}
 						volumes={data.appVolumes}
@@ -638,6 +650,7 @@
 				secrets={data.secrets}
 				databaseAttachments={data.databaseAttachments}
 				storageAttachments={data.storageAttachments}
+				userPoolAttachments={data.userPoolAttachments}
 				attachableDatabases={data.attachableDatabases}
 				attachableStorage={data.attachableStorage}
 				canAttachDatabase={data.can.attachDatabase}
@@ -926,46 +939,65 @@
 				</Card.Footer>
 			</Card.Root>
 		{:else if tab === 'access'}
-			<Card.Root>
-				<Card.Header>
-					<Card.Title class="flex items-center gap-2"><ShieldCheckIcon class="size-4" />Skiff Access</Card.Title>
-					<Card.Description>
-						An identity-aware proxy in front of every host: a policy decides who gets in, and the
-						app receives <code class="font-mono text-xs">Skiff-Access-Email</code> and a signed JWT.
-					</Card.Description>
-				</Card.Header>
-				<Card.Content class="space-y-4">
-					<Item.Group class="gap-2">
-						{#each [{ label: 'Production', mode: data.project.productionAccess, policyId: data.project.productionAccessPolicyId }, { label: 'Previews', mode: data.project.previewAccess, policyId: data.project.previewAccessPolicyId }] as row (row.label)}
-							<Item.Root variant="outline">
-								<Item.Content>
-									<Item.Title>{row.label}</Item.Title>
-									<Item.Description>
-										{#if row.mode === 'access'}
-											{data.accessPolicies.find((policy) => policy.id === row.policyId)?.name ?? row.policyId}
-										{:else}
-											Not using Skiff Access.
-										{/if}
-									</Item.Description>
-								</Item.Content>
-								<Item.Actions><AccessChip mode={row.mode} /></Item.Actions>
-							</Item.Root>
-						{/each}
-					</Item.Group>
-					{#if data.accessPolicies.length === 0}
-						<EmptyState
-							icon={ShieldCheckIcon}
-							title="No policies for this project"
-							description="Create a policy under Settings → Skiff Access, then assign it to production, previews or a named environment."
-						/>
-					{/if}
-				</Card.Content>
-				<Card.Footer class="py-3">
-					<Button variant="outline" size="sm" href="/settings/access-policies?project={data.project.slug}">
-						Manage access policies<ArrowUpRightIcon class="size-3.5" />
-					</Button>
-				</Card.Footer>
-			</Card.Root>
+			<div class="space-y-5">
+				{#if data.can.inviteGuest || data.can.updateGuest || data.can.removeGuest}
+					<ProjectAccessCard
+						members={data.projectMembers}
+						can={{
+							inviteGuest: data.can.inviteGuest,
+							updateGuest: data.can.updateGuest,
+							removeGuest: data.can.removeGuest
+						}}
+					/>
+				{/if}
+				<Card.Root>
+					<Card.Header>
+						<Card.Title class="flex items-center gap-2"
+							><ShieldCheckIcon class="size-4" />Skiff Access</Card.Title
+						>
+						<Card.Description>
+							An identity-aware proxy in front of every host: a policy decides who gets in, and
+							the app receives <code class="font-mono text-xs">Skiff-Access-Email</code> and a
+							signed JWT.
+						</Card.Description>
+					</Card.Header>
+					<Card.Content class="space-y-4">
+						<Item.Group class="gap-2">
+							{#each [{ label: 'Production', mode: data.project.productionAccess, policyId: data.project.productionAccessPolicyId }, { label: 'Previews', mode: data.project.previewAccess, policyId: data.project.previewAccessPolicyId }] as row (row.label)}
+								<Item.Root variant="outline">
+									<Item.Content>
+										<Item.Title>{row.label}</Item.Title>
+										<Item.Description>
+											{#if row.mode === 'access'}
+												{data.accessPolicies.find((policy) => policy.id === row.policyId)?.name ?? row.policyId}
+											{:else}
+												Not using Skiff Access.
+											{/if}
+										</Item.Description>
+									</Item.Content>
+									<Item.Actions><AccessChip mode={row.mode} /></Item.Actions>
+								</Item.Root>
+							{/each}
+						</Item.Group>
+						{#if data.accessPolicies.length === 0}
+							<EmptyState
+								icon={ShieldCheckIcon}
+								title="No policies for this project"
+								description="Create a policy under Settings → Skiff Access, then assign it to production, previews or a named environment."
+							/>
+						{/if}
+					</Card.Content>
+					<Card.Footer class="py-3">
+						<Button
+							variant="outline"
+							size="sm"
+							href="/settings/access-policies?project={data.project.slug}"
+						>
+							Manage access policies<ArrowUpRightIcon class="size-3.5" />
+						</Button>
+					</Card.Footer>
+				</Card.Root>
+			</div>
 		{:else if tab === 'settings'}
 			<div class="grid items-start gap-5 xl:grid-cols-2">
 				<Card.Root class="xl:col-span-2">

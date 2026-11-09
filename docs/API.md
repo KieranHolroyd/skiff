@@ -615,6 +615,14 @@ narrowed by the matching federation trust's restriction and the optional `scope`
 | GET | `/.well-known/jwks.json` (platform origin) | public | every signing-key purpose except `pool:*`; 5-minute cache |
 | GET | `/.well-known/openid-configuration` (platform origin) | public | issuer, `jwks_uri`, `token_endpoint`, token-exchange grant, subject token types and the claims Skiff mints |
 
+From a workload, `skif identity token --audience <aud>` reads `$SKIFF_TOKEN_FILE` (or
+`/var/run/skiff/token`) and uses the node metadata endpoint for a non-`skiff` audience;
+`skif sts exchange --subject-token-file <path> --audience <aud> [--scope <p>]` runs this exchange.
+Neither prints the subject token. The full setup, including AWS, GCP and Azure trust policies, is
+in [CLOUD-IDENTITY.md](./CLOUD-IDENTITY.md). The endpoint mints tokens, but the REST API, registry
+realm and MCP do not yet accept a workload or STS token as `Bearer`; they verify API keys, access
+keys and sessions only.
+
 There is no federation-trust CRUD route yet: trusts are read by the token service from the
 database, and `/api/v1/federation-trusts` (listed as planned in [IAM.md](./IAM.md) §12) does not
 exist.

@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import { canAdministerPlatform, canViewPlatform } from '@skiff/contracts';
-import { buildPrincipal, isPlatformAdminUser, memberChangeError, resolveMembership } from './orgs.ts';
+import { buildPrincipal, isPlatformAdminUser, isRole, memberChangeError, resolveMembership } from './orgs.ts';
 
 function authDb() {
 	const sqlite = new Database(':memory:');
@@ -91,5 +91,30 @@ describe('memberChangeError', () => {
 		expect(memberChangeError('owner', { action: 'update-role', targetRole: 'viewer', role: 'viewer', self: false }, 1)).toBeDefined();
 		expect(memberChangeError('owner', { action: 'remove', targetRole: 'deployer', self: true }, 2)).toBeDefined();
 		expect(memberChangeError('admin', { action: 'remove', targetRole: 'owner', self: false }, 2)).toBeDefined();
+	});
+
+	test('guest membership is project-only (IAM.md §8.2)', () => {
+		expect(isRole('guest')).toBe(true);
+		// A guest is created by a project invitation, never by an org invite.
+		expect(memberChangeError('owner', { action: 'invite', role: 'guest' }, 1)).toContain('project');
+		// Promoting a guest to owner needs an explicit org binding, not a member-role edit.
+		expect(
+			memberChangeError(
+				'owner',
+				{ action: 'update-role', targetRole: 'guest', role: 'owner', self: false },
+				2,
+			),
+		).toContain('org binding');
+		expect(
+			memberChangeError(
+				'owner',
+				{ action: 'update-role', targetRole: 'guest', role: 'viewer', self: false },
+				2,
+			),
+		).toBeDefined();
+		// Removing a guest follows the ordinary member rule: no owner special case.
+		expect(
+			memberChangeError('admin', { action: 'remove', targetRole: 'guest', self: false }, 1),
+		).toBeUndefined();
 	});
 });

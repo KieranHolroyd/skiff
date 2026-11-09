@@ -9,7 +9,15 @@ import { z } from 'zod';
  * delivery gets the queue's ack, retry and dead-letter behaviour for free.
  */
 
-export const eventSources = ['storage', 'alerts', 'deployments', 'database-backups', 'registry'] as const;
+export const eventSources = [
+	'storage',
+	'alerts',
+	'deployments',
+	'database-backups',
+	'registry',
+	// Managed user pools (IAM.md I26–I28, §11.2): a pool's own end-user activity.
+	'pools'
+] as const;
 export type EventSource = (typeof eventSources)[number];
 
 /** Event types per source. The message `type` is `<source>.<event>` (`storage` keeps R2's body). */
@@ -20,6 +28,8 @@ export const eventTypesBySource = {
 	'database-backups': ['completed', 'failed'],
 	// The platform registry (docs/REGISTRY.md): an image pushed to one of the org's repositories.
 	registry: ['push'],
+	// Pool events carry pool and user metadata, never a password, session token or client secret.
+	pools: ['user.created', 'user.signed_in', 'user.deleted', 'mfa.enabled']
 } as const satisfies Record<EventSource, readonly string[]>;
 export type EventType<S extends EventSource = EventSource> = (typeof eventTypesBySource)[S][number];
 
@@ -47,6 +57,8 @@ export const eventRuleCreateSchema = z
 		alertRule: resourceName.optional(),
 		/** `registry`: one repository (`<org>/<name>`); absent means every repository of the org. */
 		repository: z.string().trim().min(3).max(255).optional(),
+		/** `pools`: one pool (name); absent means every pool in the org. */
+		pool: resourceName.optional(),
 		/** The managed broker (name) and queue the message is published to. */
 		broker: resourceName,
 		queue: z.string().regex(eventQueueNamePattern, 'Queue names are lower-case letters, digits and dashes (max 63).'),
@@ -62,7 +74,7 @@ export const eventRuleCreateSchema = z
 					path: ['events', index],
 					message: `"${event}" is not a ${input.source} event (use ${known.join(', ')}).`,
 				});
-		const only = (field: 'storage' | 'bucket' | 'prefix' | 'suffix' | 'project' | 'database' | 'alertRule' | 'repository', source: EventSource) => {
+		const only = (field: 'storage' | 'bucket' | 'prefix' | 'suffix' | 'project' | 'database' | 'alertRule' | 'repository' | 'pool', source: EventSource) => {
 			if (input[field] !== undefined && input.source !== source)
 				ctx.addIssue({ code: 'custom', path: [field], message: `\`${field}\` only applies to ${source} rules.` });
 		};
@@ -71,6 +83,7 @@ export const eventRuleCreateSchema = z
 		only('database', 'database-backups');
 		only('alertRule', 'alerts');
 		only('repository', 'registry');
+		only('pool', 'pools');
 		if (input.source === 'storage') {
 			if (!input.storage) ctx.addIssue({ code: 'custom', path: ['storage'], message: 'Name the storage instance to watch.' });
 			if (!input.bucket) ctx.addIssue({ code: 'custom', path: ['bucket'], message: 'Name the bucket to watch.' });
@@ -100,6 +113,7 @@ export const eventRuleFilterSchema = z.object({
 	database: z.string().optional(),
 	alertRule: z.string().optional(),
 	repository: z.string().optional(),
+	pool: z.string().optional(),
 });
 export type EventRuleFilter = z.infer<typeof eventRuleFilterSchema>;
 

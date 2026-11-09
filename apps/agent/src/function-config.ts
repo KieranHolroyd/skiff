@@ -320,7 +320,7 @@ function collectBindingFragments(
 		// Defence in depth: the control plane refuses unsupported bindings before a node sees them.
 		throw new Error(
 			`Binding "${binding.name}" uses type "${binding.type}", which has no node renderer in this Skiff build yet; ` +
-				'this build renders Durable Objects, Hyperdrive, KV, Cache, R2, D1, queues, assets and Analytics Engine on the node.',
+				'this build renders Durable Objects, Hyperdrive, KV, Cache, R2, D1, queues, assets, Analytics Engine and user-pool auth on the node.',
 		);
 	}
 

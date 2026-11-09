@@ -1,5 +1,5 @@
 import { fail } from '@sveltejs/kit';
-import { hasPermission, roles, type Permission, type Principal, type Role } from '@skiff/contracts';
+import { hasPermission, isGuestPrincipal, roles, type Permission, type Principal, type Role } from '@skiff/contracts';
 import { isRole, memberChangeError } from '@skiff/core';
 import { auth } from '#lib/server/auth.js';
 import { platformOrigin } from '#lib/server/config.js';
@@ -14,7 +14,9 @@ import type { Actions, PageServerLoad } from './$types';
  * Skiff checks the permission and the ownership rules (`memberChangeError`) first for clear errors.
  */
 
-const ROLES = Object.keys(roles) as Role[];
+// Guests are project-scope members (IAM.md §8.2): the org list shows them, but they are invited
+// from a project's Access tab and never assigned an org role here.
+const ROLES = (Object.keys(roles) as Role[]).filter((role) => role !== 'guest');
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 interface MemberRow {
@@ -63,6 +65,18 @@ function denied(principal: Principal, permission: Permission) {
 
 export const load: PageServerLoad = ({ locals }) => {
 	const principal = locals.principal!;
+	// Guests are project-only (IAM.md §8.2): the org member list is empty for them. Their access is
+	// shown, and managed, on each project's Access tab.
+	if (isGuestPrincipal(principal))
+		return {
+			members: [],
+			invitations: [],
+			ownerCount: 0,
+			loadError: null,
+			memberCan: { invite: false, updateRole: false, remove: false },
+			actorRole: principal.role,
+			assignableRoles: [] as Role[]
+		};
 	const showEmails = hasPermission(principal, 'iam:read');
 	const can = {
 		invite: hasPermission(principal, 'member:invite'),
@@ -121,7 +135,7 @@ export const load: PageServerLoad = ({ locals }) => {
 	}
 
 	// Only holders of `iam:manage-owners` may grant `owner` (Better Auth enforces this too).
-	const assignableRoles = ROLES.filter(
+	const assignableRoles: Role[] = ROLES.filter(
 		(role) => role !== 'owner' || hasPermission(principal, 'iam:manage-owners')
 	);
 

@@ -34,6 +34,41 @@ export class SmtpEmailTransport implements EmailTransport {
 	}
 }
 
+/**
+ * An IAM notification (JIT request, decision, review) on the same channels as alerts. It is not a
+ * system alert: nothing is recorded in the alert history and the system-alert routing filters do
+ * not apply. The payload deliberately carries identifiers and user-written text only, never a
+ * credential, token or hash.
+ */
+export interface IamNotification {
+	key: string;
+	title: string;
+	detail: string;
+	severity?: AlertMessage['severity'];
+	url?: string;
+}
+
+/**
+ * Deliver an IAM notification through every configured channel. A channel failing never fails the
+ * caller (the governance write has already committed), and no channel configured is a no-op.
+ */
+export async function notifyIam(notifiers: readonly Notifier[], notification: IamNotification): Promise<void> {
+	if (notifiers.length === 0) return;
+	const alert: AlertMessage = {
+		key: notification.key,
+		title: notification.title,
+		detail: notification.detail,
+		severity: notification.severity ?? 'info',
+		status: 'firing',
+		...(notification.url ? { url: notification.url } : {}),
+	};
+	const results = await Promise.allSettled(notifiers.map((notifier) => notifier.notify(alert)));
+	for (const [index, result] of results.entries()) {
+		if (result.status === 'rejected')
+			console.error(`[iam] ${notifiers[index]?.name ?? 'notifier'} failed:`, result.reason);
+	}
+}
+
 /** Log transport for development; never used in production. */
 export class ConsoleEmailTransport implements EmailTransport {
 	async send(message: EmailMessage): Promise<void> {

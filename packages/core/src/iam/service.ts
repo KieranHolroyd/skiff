@@ -540,6 +540,111 @@ export class IamService {
 		});
 	}
 
+	/**
+	 * Give a user project-scope access as a guest (IAM.md §8.2). This runs when a project
+	 * invitation is accepted, on the invitee's behalf, so it has no acting principal; the inviter
+	 * is recorded as `created_by`. The caller has already checked the invite.
+	 */
+	grantGuestProject(input: {
+		orgId: string;
+		userId: string;
+		projectId: string;
+		roleId: 'deployer' | 'viewer';
+		createdBy: string;
+	}): string {
+		if (input.roleId !== 'deployer' && input.roleId !== 'viewer')
+			throw new ValidationError('A guest can be a deployer or a viewer on a project.');
+		const project = this.#sqlite
+			.query<{ id: string }, [string, string]>('SELECT id FROM projects WHERE id = ? AND org_id = ?')
+			.get(input.projectId, input.orgId);
+		if (!project) throw new NotFoundError('Project');
+		const id = newId('bind_');
+		const now = this.ctx.now();
+		this.#sqlite.transaction(() => {
+			this.#sqlite.run(
+				`INSERT INTO iam_bindings
+				   (id, org_id, principal_type, principal_id, role_id, scope_type, scope_id, scope_parent_id,
+				    condition_json, expires_at, reason, created_by, created_at)
+				 VALUES (?, ?, 'user', ?, ?, 'project', ?, NULL, NULL, NULL, NULL, ?, ?)`,
+				[id, input.orgId, input.userId, input.roleId, input.projectId, input.createdBy, now],
+			);
+			this.touch(input.orgId);
+		})();
+		return id;
+	}
+
+	/** Change a user's project binding from the project Access tab (`member:update-role`). */
+	updateProjectBindingRole(
+		principal: Principal,
+		bindingId: string,
+		projectId: string,
+		roleId: 'deployer' | 'viewer',
+	): void {
+		if (roleId !== 'deployer' && roleId !== 'viewer')
+			throw new ValidationError('A project member can be a deployer or a viewer.');
+		this.require(principal, 'member:update-role', { type: 'project', id: projectId });
+		const row = this.#sqlite
+			.query<BindingRow, [string, string, string]>(
+				`SELECT * FROM iam_bindings
+				  WHERE id = ? AND org_id = ? AND principal_type = 'user'
+				    AND scope_type = 'project' AND scope_id = ?`,
+			)
+			.get(bindingId, principal.orgId, projectId);
+		if (!row) throw new NotFoundError('Project member');
+		if (row.role_id === roleId) return;
+		this.#sqlite.transaction(() => {
+			this.#sqlite.run('UPDATE iam_bindings SET role_id = ? WHERE id = ?', [roleId, bindingId]);
+			this.touch(principal.orgId);
+		})();
+		this.ctx.audit.record({
+			principal,
+			action: 'iam.binding.update',
+			resource: 'iam_binding',
+			resourceId: bindingId,
+			args: { from: row.role_id, to: roleId, projectId },
+			result: 'ok',
+		});
+	}
+
+	/** Remove a user's project binding from the project Access tab (`member:remove`). */
+	removeProjectBinding(principal: Principal, bindingId: string, projectId: string): void {
+		this.require(principal, 'member:remove', { type: 'project', id: projectId });
+		const row = this.#sqlite
+			.query<BindingRow, [string, string, string]>(
+				`SELECT * FROM iam_bindings
+				  WHERE id = ? AND org_id = ? AND principal_type = 'user'
+				    AND scope_type = 'project' AND scope_id = ?`,
+			)
+			.get(bindingId, principal.orgId, projectId);
+		if (!row) throw new NotFoundError('Project member');
+		this.#sqlite.transaction(() => {
+			this.#sqlite.run('DELETE FROM iam_bindings WHERE id = ?', [bindingId]);
+			this.touch(principal.orgId);
+		})();
+		this.ctx.audit.record({
+			principal,
+			action: 'iam.binding.delete',
+			resource: 'iam_binding',
+			resourceId: bindingId,
+			args: { projectId, role: row.role_id },
+			result: 'ok',
+		});
+	}
+
+	/** Drop every binding a user holds in an org (used when a member, including a guest, is removed). */
+	removeUserBindings(orgId: string, userId: string): number {
+		let changes = 0;
+		this.#sqlite.transaction(() => {
+			const result = this.#sqlite.run(
+				"DELETE FROM iam_bindings WHERE org_id = ? AND principal_type = 'user' AND principal_id = ?",
+				[orgId, userId],
+			);
+			changes = result.changes;
+			if (changes > 0) this.touch(orgId);
+		})();
+		return changes;
+	}
+
 	listBindings(orgId: string): BindingView[] {
 		return this.#sqlite
 			.query<BindingRow, [string]>('SELECT * FROM iam_bindings WHERE org_id = ? ORDER BY created_at DESC')
@@ -704,7 +809,10 @@ export class IamService {
 			// Better Auth tables are absent in a bare core test or before boot.
 			return false;
 		}
-		if (!role || !(role in roles)) return false;
+		// A guest is project-only (IAM.md §8.2). Their `member` row exists so sign-in resolves an org,
+		// but syncing it to an org binding would grant the (empty) guest role at org scope and hide
+		// their real access, which comes from project bindings created when the invitation is accepted.
+		if (!role || role === 'guest' || !(role in roles)) return false;
 		this.ensureBuiltIns();
 		this.#sqlite.transaction(() => {
 			this.#sqlite.run(
@@ -803,6 +911,7 @@ const BUILT_IN_DESCRIPTIONS: Record<Role, string> = {
 	admin: 'Everything except deleting or transferring the org, managing owners, and editing guardrails.',
 	deployer: 'Deploy and run projects, databases, storage and pipelines; no org administration.',
 	viewer: 'Read-only access to the org and its projects.',
+	guest: 'Project-only access from bindings; no organisation-wide permissions.',
 };
 
 function bindingType(principal: Principal): BindingPrincipalType {

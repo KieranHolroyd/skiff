@@ -30,4 +30,10 @@ describe('permissions', () => {
 		expect(eff.has('deployment:create')).toBe(false);
 		expect(eff.has('deployment:read')).toBe(true);
 	});
+
+	test('the guest role has no permissions at all (IAM.md §8.2)', () => {
+		expect(roles.guest).toEqual([]);
+		// A token or key cannot elevate a guest either: their access is project bindings only.
+		expect(effectivePermissions(allPermissions, 'guest').size).toBe(0);
+	});
 });

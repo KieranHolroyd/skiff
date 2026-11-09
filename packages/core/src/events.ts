@@ -44,9 +44,11 @@ interface StoredFilter {
 	database?: string;
 	alertRule?: string;
 	repository?: string;
+	pool?: string;
 	storageId?: string;
 	projectId?: string;
 	databaseId?: string;
+	poolId?: string;
 }
 
 interface RuleRow {
@@ -289,6 +291,20 @@ export class EventService {
 
 	emitBackup(orgId: string, databaseId: string, event: 'completed' | 'failed', data: Record<string, unknown>): void {
 		this.emitPlatform(orgId, 'database-backups', event, data, (filter) => !filter.databaseId || filter.databaseId === databaseId);
+	}
+
+	/**
+	 * A managed user pool's end-user event (IAM.md I28, D122). `data` carries pool and user
+	 * metadata only; callers must never put a password, session token, verification token or
+	 * client secret in it.
+	 */
+	emitUserPool(
+		orgId: string,
+		poolId: string,
+		event: 'user.created' | 'user.signed_in' | 'user.deleted' | 'mfa.enabled',
+		data: Record<string, unknown>
+	): void {
+		this.emitPlatform(orgId, 'pools', event, data, (filter) => !filter.poolId || filter.poolId === poolId);
 	}
 
 	/**
@@ -550,6 +566,20 @@ export class EventService {
 					throw new NotFoundError(`Repository "${input.repository}"`);
 				return { repository: input.repository };
 			}
+			case 'pools': {
+				if (!input.pool) {
+					this.ctx.iam.require(principal, 'userPool:read', { type: 'org' });
+					return {};
+				}
+				const pool = this.ctx.sqlite
+					.query<{ id: string; name: string }, [string, string]>(
+						'SELECT id, name FROM user_pools WHERE name = ? AND org_id = ?'
+					)
+					.get(input.pool, principal.orgId);
+				if (!pool) throw new NotFoundError(`User pool "${input.pool}"`);
+				this.ctx.iam.require(principal, 'userPool:read', { type: 'userPool', id: pool.id });
+				return { pool: pool.name, poolId: pool.id };
+			}
 		}
 		throw new ValidationError(`Unknown event source "${input.source}".`);
 	}
@@ -573,10 +603,11 @@ export class EventService {
 			)
 			.get(row.id);
 		const broker = this.ctx.sqlite.query<{ name: string }, [string]>('SELECT name FROM brokers WHERE id = ?').get(row.broker_id);
-		const { storageId: _storageId, projectId, databaseId, ...shown } = filter;
-		// Show current names: a project or database can be renamed after the rule was made.
+		const { storageId: _storageId, projectId, databaseId, poolId, ...shown } = filter;
+		// Show current names: a project, database or pool can be renamed after the rule was made.
 		if (projectId) shown.project = this.ctx.sqlite.query<{ slug: string }, [string]>('SELECT slug FROM projects WHERE id = ?').get(projectId)?.slug ?? shown.project;
 		if (databaseId) shown.database = this.ctx.sqlite.query<{ name: string }, [string]>('SELECT name FROM databases WHERE id = ?').get(databaseId)?.name ?? shown.database;
+		if (poolId) shown.pool = this.ctx.sqlite.query<{ name: string }, [string]>('SELECT name FROM user_pools WHERE id = ?').get(poolId)?.name ?? shown.pool;
 		return {
 			id: row.id,
 			source: row.source,

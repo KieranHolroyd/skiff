@@ -34,6 +34,12 @@ declare module '*/function-bindings/src/queue.js' {
 	export default text;
 }
 
+/** `import authWorker from '…/packages/function-bindings/src/auth.js' with { type: 'text' }` (Bun). */
+declare module '*/function-bindings/src/auth.js' {
+	const text: string;
+	export default text;
+}
+
 /** `import analyticsWorker from '…/packages/function-bindings/src/analytics.js' with { type: 'text' }` (Bun). */
 declare module '*/function-bindings/src/analytics.js' {
 	const text: string;

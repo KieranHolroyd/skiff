@@ -19,6 +19,18 @@ import type { CoreContext } from './context.ts';
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from './errors.ts';
 import { newId } from './util.ts';
 
+const DAY_MS = 86_400_000;
+
+/** IAM.md §9.5: a service account with no use for this long is flagged (and may be disabled). */
+export const SERVICE_ACCOUNT_UNUSED_DAYS = 90;
+
+/**
+ * The org policy that would turn the flag into an automatic disable has no column yet (IAM.md §9.5).
+ * Until it does, the sweep only reports unused accounts; flip this constant when policy storage
+ * lands. `ServiceAccountService.sweepUnused` already supports the disable path.
+ */
+export const SERVICE_ACCOUNT_AUTO_DISABLE_UNUSED = false;
+
 interface ServiceAccountRow {
 	id: string;
 	org_id: string;
@@ -28,6 +40,8 @@ interface ServiceAccountRow {
 	disabled_at: number | null;
 	created_by: string;
 	created_at: number;
+	/** MAX(access_keys.last_used_at) for this account, or null when no key has been used. */
+	last_used_at?: number | null;
 }
 
 export interface ServiceAccountView {
@@ -41,6 +55,18 @@ export interface ServiceAccountView {
 	disabledAt: number | null;
 	createdBy: string;
 	createdAt: number;
+	/** The newest `access_keys.last_used_at` for this account, or null when it has never been used. */
+	lastUsedAt: number | null;
+	/** Whole days since the last use, or since creation when there is no use yet. */
+	unusedDays: number;
+	/** `unusedDays` is at or beyond {@link SERVICE_ACCOUNT_UNUSED_DAYS} (IAM.md §9.5). */
+	unused: boolean;
+}
+
+/** The daily hygiene pass: what is unused, and what was disabled when policy allowed it. */
+export interface ServiceAccountSweep {
+	unused: ServiceAccountView[];
+	autoDisabled: ServiceAccountView[];
 }
 
 export interface ServiceAccountCreate {
@@ -56,6 +82,13 @@ export interface ServiceAccountUpdate {
 	disabled?: boolean;
 }
 
+const SERVICE_ACCOUNT_SELECT = `
+	SELECT sa.*,
+	       (SELECT MAX(ak.last_used_at) FROM access_keys ak
+	         WHERE ak.org_id = sa.org_id AND ak.principal_type = 'serviceAccount'
+	           AND ak.principal_id = sa.id) AS last_used_at
+	  FROM service_accounts sa`;
+
 export class ServiceAccountService {
 	constructor(private readonly ctx: CoreContext) {}
 
@@ -63,17 +96,48 @@ export class ServiceAccountService {
 
 	list(principal: Principal): ServiceAccountView[] {
 		this.#require(principal, 'serviceAccount:read');
-		return this.ctx.sqlite
-			.query<ServiceAccountRow, [string]>(
-				'SELECT * FROM service_accounts WHERE org_id = ? ORDER BY name',
-			)
-			.all(principal.orgId)
-			.map(view);
+		return this.#views(principal.orgId);
 	}
 
 	get(principal: Principal, id: string): ServiceAccountView {
 		this.#require(principal, 'serviceAccount:read');
-		return view(this.#row(principal, id));
+		return view(this.#row(principal, id), this.ctx.now());
+	}
+
+	/** Enabled accounts with no use for `minDays` (default 90), for Settings → Service accounts. */
+	unused(principal: Principal, options: { minDays?: number } = {}): ServiceAccountView[] {
+		this.#require(principal, 'serviceAccount:read');
+		return this.#views(principal.orgId).filter(
+			(account) => !account.disabled && account.unusedDays >= (options.minDays ?? SERVICE_ACCOUNT_UNUSED_DAYS),
+		);
+	}
+
+	// ---------------------------------------------------------------- maintenance
+
+	/**
+	 * The IAM daily sweep's service-account pass. `unused` is every enabled account at or beyond
+	 * `minDays`; `autoDisabled` is non-empty only when the caller passes `autoDisable` (the org
+	 * policy does not exist yet, so the maintenance sweep passes {@link SERVICE_ACCOUNT_AUTO_DISABLE_UNUSED}).
+	 * Rows are never deleted: disabling keeps keys, bindings and history (IAM.md §7.2).
+	 */
+	sweepUnused(
+		orgId: string,
+		options: { now?: number; minDays?: number; autoDisable?: boolean } = {},
+	): ServiceAccountSweep {
+		const now = options.now ?? this.ctx.now();
+		const minDays = options.minDays ?? SERVICE_ACCOUNT_UNUSED_DAYS;
+		const candidates = this.#views(orgId, now).filter(
+			(account) => !account.disabled && account.unusedDays >= minDays,
+		);
+		const autoDisabled: ServiceAccountView[] = [];
+		if (options.autoDisable) {
+			const system = maintenancePrincipal(orgId);
+			for (const account of candidates) {
+				this.update(system, account.id, { disabled: true });
+				autoDisabled.push(account);
+			}
+		}
+		return { unused: candidates, autoDisabled };
 	}
 
 	// ---------------------------------------------------------------- mutations
@@ -111,6 +175,9 @@ export class ServiceAccountService {
 			disabledAt: null,
 			createdBy: principal.userId,
 			createdAt: now,
+			lastUsedAt: null,
+			unusedDays: 0,
+			unused: false,
 		};
 	}
 
@@ -178,7 +245,7 @@ export class ServiceAccountService {
 				result: 'ok',
 			});
 		}
-		return view(this.#row(principal, id));
+		return view(this.#row(principal, id), this.ctx.now());
 	}
 
 	delete(principal: Principal, id: string): void {
@@ -215,11 +282,22 @@ export class ServiceAccountService {
 	#row(principal: Principal, id: string): ServiceAccountRow {
 		const row = this.ctx.sqlite
 			.query<ServiceAccountRow, [string, string]>(
-				'SELECT * FROM service_accounts WHERE id = ? AND org_id = ?',
+				`${SERVICE_ACCOUNT_SELECT}
+				 WHERE sa.id = ? AND sa.org_id = ?`,
 			)
 			.get(id, principal.orgId);
 		if (!row) throw new NotFoundError('Service account');
 		return row;
+	}
+
+	#views(orgId: string, now = this.ctx.now()): ServiceAccountView[] {
+		return this.ctx.sqlite
+			.query<ServiceAccountRow, [string]>(
+				`${SERVICE_ACCOUNT_SELECT}
+				 WHERE sa.org_id = ? ORDER BY sa.name`,
+			)
+			.all(orgId)
+			.map((row) => view(row, now));
 	}
 
 	#requireGroup(orgId: string, groupId: string): void {
@@ -261,7 +339,11 @@ function normalizeName(raw: string): string {
 	return name;
 }
 
-function view(row: ServiceAccountRow): ServiceAccountView {
+function view(row: ServiceAccountRow, now: number): ServiceAccountView {
+	const lastUsedAt = row.last_used_at ?? null;
+	// A never-used account is measured from creation, so a new account is not flagged as stale.
+	const since = lastUsedAt ?? row.created_at;
+	const unusedDays = Math.max(0, Math.floor((now - since) / DAY_MS));
 	return {
 		id: row.id,
 		name: row.name,
@@ -271,5 +353,20 @@ function view(row: ServiceAccountRow): ServiceAccountView {
 		disabledAt: row.disabled_at,
 		createdBy: row.created_by,
 		createdAt: row.created_at,
+		lastUsedAt,
+		unusedDays,
+		unused: unusedDays >= SERVICE_ACCOUNT_UNUSED_DAYS,
+	};
+}
+
+/** The in-process actor for the daily hygiene pass; it may only disable an account. */
+function maintenancePrincipal(orgId: string): Principal {
+	return {
+		kind: 'system',
+		userId: 'system:iam-maintenance',
+		orgId,
+		role: 'viewer',
+		permissions: new Set<Permission>(['serviceAccount:update']),
+		credential: 'system',
 	};
 }

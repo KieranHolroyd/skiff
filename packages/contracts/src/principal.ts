@@ -90,6 +90,15 @@ export function isHumanPrincipal(principal: Principal): boolean {
 	return principal.kind === 'user' || principal.kind === 'apiKey' || principal.kind === 'mcp';
 }
 
+/**
+ * A guest is a project-only member (IAM.md §8.2): their `member.role` is `guest` and every
+ * permission comes from a project-scope binding. Org-level surfaces are empty or forbidden for
+ * them. This is a display/surface shortcut; authorization still goes through the bindings engine.
+ */
+export function isGuestPrincipal(principal: Principal): boolean {
+	return principal.role === 'guest';
+}
+
 /** Read-only platform views (e.g. `list_nodes`): any surface of a platform-admin user. */
 export function canViewPlatform(principal: Principal): boolean {
 	return principal.platformAdmin === true || principal.kind === 'system';

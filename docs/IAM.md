@@ -329,6 +329,9 @@ working.
   - The REST API, registry realm and MCP accept it as `Bearer`.
 - **The registry realm** accepts STS tokens, so `job.<id>`, `github-oidc` and the `workload.<id>`
   HMAC logins (D158) collapse into "present a token". The old logins stay for one release.
+- **Cloud identity federation:** AWS, GCP and Azure trust the platform issuer directly, and the
+  workload metadata endpoint mints audience-bound tokens for them. See
+  [CLOUD-IDENTITY.md](./CLOUD-IDENTITY.md).
 
 ### 7.4 Workload identity (I18)
 
@@ -346,8 +349,8 @@ working.
   - Registry pulls, replacing the HMAC login.
   - Short-lived credentials for attached storage, if RustFS supports
     `AssumeRoleWithWebIdentity` (spike S3). Otherwise attachment keys stay as they are (D66).
-  - AWS, GCP and Azure workload identity federation trusting the Skiff issuer, documented with
-    examples.
+  - AWS, GCP and Azure workload identity federation trusting the Skiff issuer
+    ([CLOUD-IDENTITY.md](./CLOUD-IDENTITY.md)).
 - Database attachments keep passwords (D58, D86). Postgres has no native OIDC auth, and a pgbouncer
   auth hook is out of scope.
 

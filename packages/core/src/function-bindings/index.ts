@@ -8,6 +8,7 @@ import { resolveD1Binding } from './d1.ts';
 import { resolveQueueBinding } from './queue.ts';
 import { resolveAssetsBinding } from './assets.ts';
 import { resolveAnalyticsEngineBinding } from './analytics-engine.ts';
+import { resolveAuthBinding } from './auth.ts';
 import type { BindingResolver } from './types.ts';
 
 /**
@@ -28,6 +29,7 @@ const RESOLVERS: ReadonlyMap<FunctionBindingType, BindingResolver> = new Map([
 	['queue', resolveQueueBinding],
 	['assets', resolveAssetsBinding],
 	['analytics_engine', resolveAnalyticsEngineBinding],
+	['auth', resolveAuthBinding],
 ]);
 
 /** The resolver for a binding type, or undefined when this build cannot resolve it yet. */

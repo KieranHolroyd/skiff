@@ -8,6 +8,7 @@ import { renderD1Binding } from './d1.ts';
 import { renderQueueBinding } from './queue.ts';
 import { renderAssetsBinding } from './assets.ts';
 import { renderAnalyticsEngineBinding } from './analytics-engine.ts';
+import { renderAuthBinding } from './auth.ts';
 import type { BindingRenderer } from './types.ts';
 
 /**
@@ -57,6 +58,8 @@ export function bindingRenderer(type: FunctionRuntimeBinding['type']): BindingRe
 			return renderAssetsBinding;
 		case 'analytics_engine':
 			return renderAnalyticsEngineBinding;
+		case 'auth':
+			return renderAuthBinding;
 		default:
 			return undefined;
 	}
@@ -72,4 +75,5 @@ export {
 	renderKvBinding,
 	renderQueueBinding,
 	renderR2Binding,
+	renderAuthBinding,
 };

@@ -208,6 +208,89 @@ export function compileStorageRoute(route: DesiredState['storageRoutes'][number]
 	return compileProxyRoute(`storage:${route.storageId}`, route.host, route.upstream);
 }
 
+/**
+ * User-pool issuer routes (IAM.md I26–I28, §11.2).
+ *
+ * A pool's public issuer is `https://auth.<contentDomain>/<poolId>`, but discovery, JWKS and the
+ * OIDC code flow live on the control plane under `/api/v1/user-pools/<poolId>/…`; the hosted
+ * pages live under `/pool/<poolId>/…`. These routes rewrite the issuer-shaped path and proxy to
+ * the platform upstream. `auth.<contentDomain>` is reserved in `RESERVED_SLUGS`, so a project can
+ * never claim it.
+ *
+ * Requirements outside this file: the content domain's wildcard (`*.example.com`) already covers
+ * `auth`, so DNS must resolve it like any project host, and Caddy must be able to issue its
+ * certificate. The agent only adds these routes when `SKIFF_PLATFORM_HOST` and
+ * `SKIFF_PLATFORM_UPSTREAM` are configured, i.e. on the node that serves the platform.
+ */
+const USER_POOL_ISSUER_ROUTES: ReadonlyArray<{ id: string; name: string; pattern: string; uri: string }> = [
+	{
+		id: 'discovery',
+		name: 'skiff_pool_discovery',
+		pattern: '^/(?P<pool>[A-Za-z0-9_-]+)/[.]well-known/(?P<doc>openid-configuration|jwks[.]json)$',
+		uri: '/api/v1/user-pools/{http.regexp.skiff_pool_discovery.pool}/.well-known/{http.regexp.skiff_pool_discovery.doc}'
+	},
+	{
+		id: 'oauth',
+		name: 'skiff_pool_oauth',
+		pattern: '^/(?P<pool>[A-Za-z0-9_-]+)/oauth2/(?P<action>authorize|token|userinfo|logout)/?$',
+		uri: '/api/v1/user-pools/{http.regexp.skiff_pool_oauth.pool}/oauth/{http.regexp.skiff_pool_oauth.action}'
+	},
+	{
+		id: 'hosted-root',
+		name: 'skiff_pool_root',
+		pattern: '^/(?P<pool>[A-Za-z0-9_-]+)/?$',
+		uri: '/pool/{http.regexp.skiff_pool_root.pool}'
+	},
+	{
+		id: 'hosted',
+		name: 'skiff_pool_hosted',
+		pattern: '^/(?P<pool>[A-Za-z0-9_-]+)/(?P<page>login|signup|logout|verify)$',
+		uri: '/pool/{http.regexp.skiff_pool_hosted.pool}/{http.regexp.skiff_pool_hosted.page}'
+	},
+	{
+		id: 'hosted-nested',
+		name: 'skiff_pool_hosted_nested',
+		pattern: '^/(?P<pool>[A-Za-z0-9_-]+)/(?P<page>login|signup|logout|verify)(?P<rest>/.*)$',
+		uri: '/pool/{http.regexp.skiff_pool_hosted_nested.pool}/{http.regexp.skiff_pool_hosted_nested.page}{http.regexp.skiff_pool_hosted_nested.rest}'
+	}
+];
+
+/** The issuer host for a content domain, or null when the domain is empty. */
+export function userPoolIssuerHost(contentDomain: string): string | null {
+	const domain = normalizeHost(contentDomain);
+	return domain ? `auth.${domain}` : null;
+}
+
+export function compileUserPoolIssuerRoutes(
+	contentDomain: string,
+	platform: { host: string; upstream: string }
+): CaddyRoute[] {
+	const host = userPoolIssuerHost(contentDomain);
+	if (!host) return [];
+	const upstream = platform.upstream.replace(/^https?:\/\//, '');
+	return USER_POOL_ISSUER_ROUTES.map((route) => ({
+		'@id': `user-pool:${route.id}`,
+		match: [{ host: [host], path_regexp: { name: route.name, pattern: route.pattern } }],
+		terminal: true,
+		handle: [
+			{ handler: 'rewrite', uri: route.uri },
+			{ handler: 'encode', encodings: { zstd: {}, gzip: {} } },
+			{
+				handler: 'reverse_proxy',
+				upstreams: [{ dial: upstream }],
+				headers: {
+					request: {
+						set: {
+							'X-Forwarded-Host': ['{http.request.host}'],
+							'X-Forwarded-Proto': ['{http.request.scheme}']
+						}
+					}
+				}
+			}
+		]
+	}));
+}
+
 /** Only the loopback may carry the internal gateway; a public listener would expose private S3. */
 export function isLoopbackListen(listen: string): boolean {
 	return /^(127\.0\.0\.1|\[::1\]|localhost):\d{1,5}$/.test(listen);
@@ -343,6 +426,13 @@ export function buildCaddyConfig(options: CompileAgentConfigOptions): Record<str
 		| undefined;
 	const server = apps?.http.servers.content;
 	if (!server) throw new Error('site-config compiler did not produce an HTTP server config');
+
+	// User-pool issuers (`auth.<contentDomain>`) rewrite to the control-plane OIDC and hosted paths.
+	// Put them before the platform route: an operator may point the platform at the same host.
+	if (options.platform) {
+		const issuerRoutes = compileUserPoolIssuerRoutes(options.state.contentDomain, options.platform);
+		if (issuerRoutes.length > 0) server.routes = [...issuerRoutes, ...server.routes];
+	}
 
 	// Functions (D110): swap the compiled static/worker route for assets-first routing with the
 	// workerd host as the fallback. Custom-domain clones are in `entries` too, so they inherit the

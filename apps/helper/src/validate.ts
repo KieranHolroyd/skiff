@@ -45,6 +45,7 @@ export const FUNCTION_BINDING_TYPES = [
 	'queue',
 	'cache',
 	'assets',
+	'auth',
 ] as const;
 export type FunctionBindingType = (typeof FUNCTION_BINDING_TYPES)[number];
 

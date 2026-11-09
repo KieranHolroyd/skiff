@@ -739,6 +739,7 @@ export class WorkloadService {
 			...this.ctx.brokers.consumerEnv(row.projectId, row.nodeId, spec.runtime),
 			...this.ctx.storage.consumerEnv(row.projectId, row.nodeId, spec.runtime),
 			...this.ctx.databases.consumerEnv(row.projectId, row.nodeId, spec.runtime),
+			...this.ctx.userPools.consumerEnv(row.projectId),
 			...spec.env,
 		};
 		const files: Record<string, string> = {};
@@ -983,6 +984,7 @@ export class WorkloadService {
 			this.ctx.databases.consumerVersion(projectId, nodeId, runtime),
 			this.ctx.storage.consumerVersion(projectId, nodeId, runtime),
 			this.ctx.brokers.consumerVersion(projectId, nodeId, runtime),
+			this.ctx.userPools.consumerVersion(projectId),
 			this.ctx.email.consumerVersion(projectId),
 			this.ctx.appVolumes.projectVersion(projectId),
 			this.secretsVersion(orgId, projectId, spec),

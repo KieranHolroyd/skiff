@@ -1,5 +1,10 @@
 import { fail } from '@sveltejs/kit';
-import { destructivePermissions, statements, type Permission } from '@skiff/contracts';
+import {
+	destructivePermissions,
+	isGuestPrincipal,
+	statements,
+	type Permission
+} from '@skiff/contracts';
 import { renameOrganization } from '@skiff/core';
 import { core } from '#lib/server/core.js';
 import { failStatus, formString, toFormFailure } from '../_lib/errors.js';
@@ -41,6 +46,9 @@ export const load: PageServerLoad = ({ locals }) => {
 	} catch {
 		// Auth tables may not exist during first boot; the page still renders.
 	}
+	// Guests are project-only (IAM.md §8.2): the org people list is empty for them. Their access is
+	// on each project's Access tab and "Your access" below.
+	if (isGuestPrincipal(principal)) members = [];
 
 	const destructive = new Set<string>(destructivePermissions);
 	const access = Object.entries(statements).map(([resource, actions]) => ({

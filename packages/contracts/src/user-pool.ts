@@ -105,6 +105,73 @@ export interface UserPoolClientCreated {
 	clientSecret: string | null;
 }
 
+/** The binding name a pool attachment exposes to a function (IAM.md I28, §11.2). */
+export const USER_POOL_AUTH_BINDING = 'AUTH' as const;
+
+/** Env names a pool attachment injects, under the prefix its owner chose (or the pool's name). */
+export function userPoolEnvNames(prefix: string): string[] {
+	return [`${prefix}_ISSUER`, `${prefix}_CLIENT_ID`, `${prefix}_CLIENT_SECRET`];
+}
+
+/**
+ * `shop` → `SHOP`, `acme-auth` → `ACME_AUTH`. The prefix must be a valid env name, so a pool
+ * name that starts with a digit gets an `AUTH_` head rather than an illegal variable.
+ */
+export function userPoolDefaultEnvPrefix(name: string): string {
+	const base = name
+		.trim()
+		.toUpperCase()
+		.replace(/[^A-Z0-9]+/g, '_')
+		.replace(/^_+|_+$/g, '')
+		.slice(0, 60);
+	return /^[A-Z]/.test(base) ? base : `AUTH_${base}`.replace(/_+$/g, '');
+}
+
+/**
+ * Attaching a pool to a project. The client must already exist and be confidential: an app gets
+ * a real `<P>_CLIENT_SECRET`, and the same sealed row a database attachment uses delivers it at
+ * activation. A public (PKCE-only) client has no secret to inject.
+ */
+export const userPoolAttachSchema = z.object({
+	/** Pool name (a slug, unique within the org). */
+	pool: userPoolNameSchema,
+	/** Client name or public OIDC `client_id` in that pool. */
+	client: z.string().trim().min(1).max(100),
+	/** Injected env prefix; defaults to the pool name in UPPER_SNAKE. */
+	envPrefix: z
+		.string()
+		.trim()
+		.toUpperCase()
+		.min(1)
+		.max(64)
+		.regex(/^[A-Z][A-Z0-9_]*$/, 'Use an env prefix such as SHOP or ACME_AUTH.')
+		.optional()
+});
+export type UserPoolAttach = z.input<typeof userPoolAttachSchema>;
+
+export interface UserPoolAttachmentView {
+	id: string;
+	orgId: string;
+	poolId: string;
+	poolName: string;
+	issuer: string;
+	/** The public OIDC `client_id` the app authenticates with. */
+	clientId: string;
+	clientName: string;
+	projectId: string;
+	projectSlug: string;
+	envPrefix: string;
+	/** Every env name the attachment injects, in a stable order. */
+	envNames: string[];
+	createdAt: string;
+}
+
+/** The public config a deployed app receives; never the client secret. */
+export interface UserPoolAttachmentEnv {
+	issuer: string;
+	clientId: string;
+}
+
 export interface UserPoolView {
 	id: string;
 	orgId: string;

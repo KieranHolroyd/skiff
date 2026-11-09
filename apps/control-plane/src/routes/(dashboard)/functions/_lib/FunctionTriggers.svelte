@@ -4,6 +4,7 @@
 	import ClockIcon from '@lucide/svelte/icons/clock';
 	import CylinderIcon from '@lucide/svelte/icons/cylinder';
 	import DatabaseBackupIcon from '@lucide/svelte/icons/database-backup';
+	import FingerprintIcon from '@lucide/svelte/icons/fingerprint';
 	import GlobeIcon from '@lucide/svelte/icons/globe';
 	import InboxIcon from '@lucide/svelte/icons/inbox';
 	import PlusIcon from '@lucide/svelte/icons/plus';
@@ -76,6 +77,11 @@
 			label: 'Registry',
 			icon: PackageIcon,
 			blurb: 'An image pushed to the platform registry'
+		},
+		pools: {
+			label: 'User pools',
+			icon: FingerprintIcon,
+			blurb: 'A pool user signing up or signing in'
 		}
 	};
 	const EVENT_LABELS: Record<string, string> = {
@@ -86,7 +92,11 @@
 		created: 'Created',
 		promoted: 'Promoted',
 		failed: 'Failed',
-		completed: 'Completed'
+		completed: 'Completed',
+		'user.created': 'User created',
+		'user.signed_in': 'User signed in',
+		'user.deleted': 'User deleted',
+		'mfa.enabled': 'MFA enabled'
 	};
 	const NEW_QUEUE = '__new';
 
@@ -135,6 +145,8 @@
 				const named = events.alertRules.find((item) => item.id === filter.alertRule)?.name;
 				return filter.alertRule ? `rule ${named ?? filter.alertRule}` : 'every alert rule';
 			}
+			case 'pools':
+				return filter.pool ? `pool ${filter.pool}` : 'every pool';
 		}
 	}
 

@@ -101,6 +101,9 @@ const organizationRoles = {
 	admin: ac.newRole(statementsFor('admin')),
 	deployer: ac.newRole(statementsFor('deployer')),
 	viewer: ac.newRole(statementsFor('viewer')),
+	// Guests are project-only (IAM.md §8.2): the member row exists so sign-in resolves an org, but
+	// Better Auth's own endpoints grant them nothing. Skiff's project bindings are the only source.
+	guest: ac.newRole({}),
 };
 
 /** Better Auth's API-key endpoints, gated by the same RBAC permissions as the dashboard (§6.2). */
@@ -539,6 +542,16 @@ export const auth = betterAuth({
 			ac,
 			roles: organizationRoles,
 			creatorRole: 'owner',
+			// A project guest invitation records the project and role it is for (IAM.md §8.2).
+			// Better Auth adds the columns at boot; acceptance turns them into a project binding.
+			schema: {
+				invitation: {
+					additionalFields: {
+						projectId: { type: 'string', required: false, input: true },
+						projectRole: { type: 'string', required: false, input: true },
+					},
+				},
+			},
 			// Orgs come from bootstrap (or open signup) and invitations, never self-service (D10).
 			allowUserToCreateOrganization: false,
 			organizationLimit: 10,
@@ -553,8 +566,31 @@ export const auth = betterAuth({
 			organizationHooks: {
 				// Accepting an invitation makes that org active (Better Auth sets the session field);
 				// remember it so the next sign-in starts there too (IAM.md I5, §8.1).
-				afterAcceptInvitation: async ({ organization, user }) => {
+				afterAcceptInvitation: async ({ organization, user, invitation }) => {
 					rememberOrganization(user.id, organization.id);
+					// A project invitation becomes a project-scope binding, and only that (IAM.md §8.2):
+					// the new member is a `guest` and `ensureMemberBindingFor` never gives it org access.
+					const projectId = invitation.projectId;
+					if (typeof projectId !== 'string' || !projectId) return;
+					try {
+						core.ctx.iam.grantGuestProject({
+							orgId: organization.id,
+							userId: user.id,
+							projectId,
+							roleId: invitation.projectRole === 'deployer' ? 'deployer' : 'viewer',
+							createdBy: invitation.inviterId,
+						});
+					} catch (error) {
+						console.error('[auth] could not grant the invited project access:', error);
+					}
+				},
+				// Removing a member revokes their bindings too, including a guest's project access.
+				afterRemoveMember: async ({ organization, user }) => {
+					try {
+						core.ctx.iam.removeUserBindings(organization.id, user.id);
+					} catch (error) {
+						console.error('[auth] could not remove the member’s bindings:', error);
+					}
 				},
 			},
 		}),

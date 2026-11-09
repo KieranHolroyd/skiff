@@ -55,6 +55,12 @@ export const roles = {
 		'container:inspect', 'image:pull',
 		'environment:read', 'pipeline:read', 'alert:read', 'dashboard:read', 'volume:read',
 	),
+	/**
+	 * A guest has no org-wide permissions (IAM.md §8.2). They need a `member` row so sign-in can
+	 * resolve an org, but every permission comes from a project-scope binding. Keeping the role
+	 * empty means a mis-scoped org binding can never grant anything by accident.
+	 */
+	guest: pick(),
 } as const satisfies Record<string, readonly Permission[]>;
 
 export type Role = keyof typeof roles;

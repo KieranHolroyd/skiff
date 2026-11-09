@@ -61,6 +61,7 @@
 	import type { Stat } from '../../_lib/service/sections.js';
 	import DatabasesCard from '../../projects/[slug]/_components/DatabasesCard.svelte';
 	import StorageCard from '../../projects/[slug]/_components/StorageCard.svelte';
+	import UserPoolCard from '../../projects/[slug]/_components/UserPoolCard.svelte';
 	import { compactCount, formatRate } from '../_lib/function-metrics.js';
 	import FunctionInvocations from '../_lib/FunctionInvocations.svelte';
 	import { invocationErrorRate } from '../_lib/invocations.js';
@@ -656,6 +657,16 @@
 					readStorage: data.can.readStorage,
 					createStorage: data.can.createStorage,
 					attachStorage: data.can.attachStorage
+				}}
+			/>
+			<UserPoolCard
+				slug={fn.slug}
+				attachments={data.userPoolAttachments}
+				pools={data.attachableUserPools}
+				fieldErrors={result?.fieldErrors}
+				can={{
+					readUserPools: data.can.readUserPools,
+					attachUserPool: data.can.attachUserPool
 				}}
 			/>
 		</div>

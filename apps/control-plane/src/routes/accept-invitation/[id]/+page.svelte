@@ -19,7 +19,10 @@
 		});
 		pending = false;
 		if (err) error = err.message ?? 'Could not accept the invitation';
-		else window.location.href = '/overview';
+		else
+			window.location.href = data.projectSlug
+				? `/projects/${encodeURIComponent(data.projectSlug)}?tab=access`
+				: '/overview';
 	}
 </script>
 

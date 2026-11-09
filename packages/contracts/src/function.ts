@@ -150,6 +150,8 @@ export const functionBindingTypes = [
 	'queue',
 	'cache',
 	'assets',
+	// A managed user pool (IAM.md I28): `env.AUTH.verify(request)` verifies the pool's access token.
+	'auth',
 ] as const;
 export type FunctionBindingType = (typeof functionBindingTypes)[number];
 
@@ -196,6 +198,7 @@ export const FUNCTION_BINDING_PHASE: Readonly<Record<FunctionBindingType, number
 	cache: 2,
 	queue: 3,
 	assets: 2,
+	auth: 2,
 });
 
 /**
@@ -221,6 +224,7 @@ export const FUNCTION_BINDING_IMPLEMENTED: Readonly<Record<FunctionBindingType, 
 	analytics_engine: true,
 	queue: true,
 	assets: true,
+	auth: true,
 });
 
 const textBindingSchema = z.object({
@@ -305,6 +309,22 @@ const queueBindingSchema = z.object({
 });
 const cacheBindingSchema = z.object({ type: z.literal('cache') });
 const assetsBindingSchema = z.object({ type: z.literal('assets') });
+/**
+ * A user-pool attachment as the function sees it. `pool` picks one when the project has several
+ * attached pools; omitted means the project's only attached pool (a deploy with more than one and
+ * no pool named is refused).
+ */
+const authBindingSchema = z.object({
+	type: z.literal('auth'),
+	pool: z
+		.string()
+		.trim()
+		.toLowerCase()
+		.min(2)
+		.max(40)
+		.regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/, 'Use the attached pool name.')
+		.optional(),
+});
 
 /**
  * One manifest binding: a capability the deploy asks the control plane to resolve.
@@ -324,6 +344,7 @@ export const functionBindingSchema = z.discriminatedUnion('type', [
 	queueBindingSchema.extend({ name: bindingName }),
 	cacheBindingSchema.extend({ name: bindingName }),
 	assetsBindingSchema.extend({ name: bindingName }),
+	authBindingSchema.extend({ name: bindingName }),
 ]);
 export type FunctionBinding = z.infer<typeof functionBindingSchema>;
 
@@ -396,6 +417,18 @@ export const functionRuntimeBindingSchema = z.discriminatedUnion('type', [
 		dataset: z.string().min(1).max(100),
 	}),
 	assetsBindingSchema.extend({ name: bindingName }),
+	z.object({
+		type: z.literal('auth'),
+		name: bindingName,
+		/** The attached pool and its public issuer. */
+		poolId: z.string().min(1).max(100),
+		issuer: z.string().url(),
+		/**
+		 * The pool's public JWKS at deploy time. The node renders it into the auth service Worker,
+		 * so `verify()` needs no network call; the next deploy picks up a rotated key.
+		 */
+		jwks: z.array(z.record(z.string(), z.unknown())).min(1).max(32),
+	}),
 ]);
 export type FunctionRuntimeBinding = z.infer<typeof functionRuntimeBindingSchema>;
 
@@ -634,6 +667,8 @@ export function functionBindingSummary(binding: FunctionRuntimeBinding): string 
 			return `Analytics Engine ${binding.dataset}`;
 		case 'assets':
 			return 'assets (the project\'s static files)';
+		case 'auth':
+			return `user pool ${binding.poolId}`;
 	}
 }
 

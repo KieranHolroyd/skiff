@@ -1,3 +1,4 @@
+import { isGuestPrincipal } from '@skiff/contracts';
 import { core } from '#lib/server/core.js';
 import {
 	backupHealth,
@@ -28,11 +29,15 @@ export const load: LayoutServerLoad = ({ locals }) => {
 
 	const owner = canConfigurePlatform(principal);
 	const availability = owner ? configAvailability() : null;
+	// A guest gets no org-level counts (IAM.md §8.2); their access is per project.
+	const guest = isGuestPrincipal(principal);
 
 	return {
 		hints: {
-			members: count('SELECT COUNT(*) AS n FROM member WHERE organizationId = ?', principal.orgId),
-			invitations: principal.permissions.has('member:invite')
+			members: guest
+				? null
+				: count('SELECT COUNT(*) AS n FROM member WHERE organizationId = ?', principal.orgId),
+			invitations: !guest && principal.permissions.has('member:invite')
 				? count(
 						`SELECT COUNT(*) AS n FROM invitation
 						 WHERE organizationId = ? AND status = 'pending' AND expiresAt > ?`,

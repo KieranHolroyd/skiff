@@ -29,6 +29,8 @@ import {
 } from '@skiff/contracts';
 import type { CoreContext } from '../context.ts';
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../errors.ts';
+import { notifyIam, type IamNotification } from '../notify.ts';
+import { SERVICE_ACCOUNT_UNUSED_DAYS } from '../service-accounts.ts';
 import { newId } from '../util.ts';
 
 /** An approved binding may not outlive this. The org maximum is one constant for now (I22). */
@@ -304,6 +306,15 @@ export interface AccessReviewView {
   canDecide: boolean;
   /** Open campaigns this caller has an item in, for the "needs your review" hint. */
   assignedToMe: number;
+  /** Open and past `dueAt`; the daily sweep completes it with the campaign default. */
+  overdue: boolean;
+}
+
+export interface AccessReviewSweep {
+	/** Open campaigns whose deadline has passed. */
+	flagged: number;
+	/** Campaigns the sweep completed successfully. */
+	completed: number;
 }
 
 export interface AccessReviewListOptions {
@@ -329,6 +340,17 @@ export interface UsageRollupResult {
   from: number;
   /** Upper bound of the audit window, epoch ms. */
   to: number;
+}
+
+/** A service account the daily hygiene pass considers unused (IAM.md §9.5). */
+export interface UnusedServiceAccountView {
+  id: string;
+  name: string;
+  ownerGroupId: string | null;
+  disabled: boolean;
+  createdAt: number;
+  lastUsedAt: number | null;
+  unusedDays: number;
 }
 
 // ------------------------------------------------------------------------------- rows
@@ -732,6 +754,22 @@ export class GovernanceService {
 			args: { roleId: input.roleId, scope, durationSeconds, reason, changeRef },
 			result: 'ok'
 		});
+		const roleName = roles.find((role) => role.id === input.roleId)?.name ?? input.roleId;
+		this.#notify({
+			key: `iam:access-request:${id}`,
+			title: `Access request: ${roleName} at ${scopeLabel(scope)}`,
+			detail: [
+				`${principal.userId} requested ${roleName} at ${scopeLabel(scope)} for ${formatDuration(durationSeconds)}.`,
+				`Reason: ${reason}`,
+				changeRef ? `Change reference: ${changeRef}` : null,
+				this.#approversLine(principal.orgId, scope, principal.userId),
+				`Request ${id}; it expires ${formatTime(now + REQUEST_TTL_MS)}. Approve or deny it in Skiff → Access.`
+			]
+				.filter((line): line is string => line !== null)
+				.join('\n'),
+			severity: 'info',
+			url: this.#url(`/iam/access/${id}`)
+		});
 		return this.#requestView(
 			{
 				id,
@@ -810,6 +848,15 @@ export class GovernanceService {
 			},
 			result: 'ok'
 		});
+		this.#notify({
+			key: `iam:access-approved:${row.id}`,
+			title: `Access approved: ${role.name} at ${scopeLabel(scope)}`,
+			detail:
+				`${principal.userId} approved ${row.requester_id}'s request for ${role.name} at ${scopeLabel(scope)}. ` +
+				`The grant is binding ${binding.id} and expires ${formatTime(expiresAt)}.`,
+			severity: 'info',
+			url: this.#url(`/iam/access/${row.id}`)
+		});
 		return this.#requestFor(principal, row.id);
 	}
 
@@ -838,6 +885,16 @@ export class GovernanceService {
 			resourceId: row.id,
 			args: { requesterId: row.requester_id, roleId: row.role_id, scope, reason: row.reason },
 			result: 'ok'
+		});
+		const roleName = this.#roleNames(principal.orgId).get(row.role_id) ?? row.role_id;
+		this.#notify({
+			key: `iam:access-denied:${row.id}`,
+			title: `Access denied: ${roleName} at ${scopeLabel(scope)}`,
+			detail:
+				`${principal.userId} denied ${row.requester_id}'s request for ${roleName} at ${scopeLabel(scope)}. ` +
+				`Reason given: ${row.reason}`,
+			severity: 'warning',
+			url: this.#url(`/iam/access/${row.id}`)
 		});
 		return this.#requestFor(principal, row.id);
 	}
@@ -1009,6 +1066,92 @@ export class GovernanceService {
 		}));
 	}
 
+	/**
+	 * Expire every pending request past the 24-hour TTL (IAM.md §9.4). The read path expires the
+	 * caller's org on demand; this is the daily backstop, so an untouched org is still cleaned up.
+	 * Returns the number of rows changed, so the maintenance report can show it.
+	 */
+	expireStaleRequests(now = this.ctx.now()): number {
+		return this.#sqlite.run(
+			`UPDATE access_requests SET status = 'expired'
+			 WHERE status = 'pending' AND created_at <= ?`,
+			[now - REQUEST_TTL_MS],
+		).changes;
+	}
+
+	/**
+	 * Complete every open campaign whose deadline has passed, applying its default decision to
+	 * items nobody decided (IAM.md §9.5). Runs as an in-process system actor that holds only
+	 * `iam:review` and `iam:manage-bindings`; a failure is logged and the campaign stays open for
+	 * the next sweep rather than being half-applied.
+	 */
+	sweepOverdueReviews(now = this.ctx.now()): AccessReviewSweep {
+		const reviews = this.#sqlite
+			.query<AccessReviewRow, [number]>(
+				`SELECT * FROM access_reviews
+				 WHERE status = 'open' AND due_at IS NOT NULL AND due_at <= ?
+				 ORDER BY due_at, id`,
+			)
+			.all(now);
+		let completed = 0;
+		for (const review of reviews) {
+			const scope = scopeFromRow(review);
+			if (!scope) continue;
+			const reviewer =
+				this.#sqlite
+					.query<{ reviewer_id: string | null }, [string]>(
+						`SELECT reviewer_id FROM access_review_items
+						 WHERE review_id = ? AND reviewer_id IS NOT NULL ORDER BY created_at, id LIMIT 1`,
+					)
+					.get(review.id)?.reviewer_id ?? review.created_by;
+			try {
+				this.completeReview(maintenancePrincipal(review.org_id), review.id);
+				completed += 1;
+				this.#notify({
+					key: `iam:review-overdue:${review.id}:${review.due_at}`,
+					title: `Access review overdue: ${review.name}`,
+					detail:
+						`"${review.name}" at ${scopeLabel(scope)} passed its deadline (${formatTime(review.due_at ?? now)}). ` +
+						`It was completed automatically; undecided items took the ${review.default_decision} default. ` +
+						`Reviewer: ${reviewer}.`,
+					severity: review.default_decision === 'revoke' ? 'warning' : 'info',
+					url: this.#url(`/iam/reviews/${review.id}`),
+				});
+			} catch (error) {
+				console.error(`[maintenance] access review ${review.id} could not be completed:`, error);
+			}
+		}
+		return { flagged: reviews.length, completed };
+	}
+
+	/**
+	 * Enabled service accounts with no use for the 90-day window (IAM.md §9.5). The usage data is
+	 * `access_keys.last_used_at`; a never-used account is measured from creation, so a new account
+	 * is not flagged. Reading needs `iam:read` or `serviceAccount:read`.
+	 */
+	unusedServiceAccounts(
+		principal: Principal,
+		options: { minDays?: number } = {},
+	): UnusedServiceAccountView[] {
+		if (
+			!this.ctx.iam.can(principal, 'iam:read', { type: 'org' }) &&
+			!principal.permissions.has('serviceAccount:read')
+		)
+			throw new ForbiddenError('iam:read');
+		const minDays = options.minDays ?? SERVICE_ACCOUNT_UNUSED_DAYS;
+		return this.ctx.serviceAccounts
+			.sweepUnused(principal.orgId, { now: this.ctx.now(), minDays })
+			.unused.map((account) => ({
+				id: account.id,
+				name: account.name,
+				ownerGroupId: account.ownerGroupId,
+				disabled: account.disabled,
+				createdAt: account.createdAt,
+				lastUsedAt: account.lastUsedAt,
+				unusedDays: account.unusedDays,
+			}));
+	}
+
 	// ---------------------------------------------------------------- access reviews
 
 	/**
@@ -1163,6 +1306,16 @@ export class GovernanceService {
 			},
 			result: 'ok',
 		});
+		this.#notify({
+			key: `iam:review-started:${id}`,
+			title: `Access review started: ${name}`,
+			detail:
+				`${principal.userId} started "${name}" at ${scopeLabel(scope)} covering ${bindings.length} binding(s). ` +
+				`Reviewer: ${reviewer}.` +
+				(input.dueAt === undefined ? '' : ` Due ${formatTime(input.dueAt)}.`),
+			severity: 'info',
+			url: this.#url(`/iam/reviews/${id}`),
+		});
 		return this.#reviewFor(principal, id);
 	}
 
@@ -1307,6 +1460,37 @@ export class GovernanceService {
 	}
 
 	// ------------------------------------------------------------------------- internals
+
+	/**
+	 * JIT and review messages go through the platform's configured channels (email/webhook/chat)
+	 * as plain `AlertMessage`s. Nothing here is a system alert, nothing is stored in alert history,
+	 * and the payload never includes a key, token or hash.
+	 */
+	#notify(notification: IamNotification): void {
+		void notifyIam(this.ctx.notifiers, notification).catch((error: unknown) =>
+			console.error('[iam] notification failed:', error),
+		);
+	}
+
+	#url(path: string): string {
+		return `${this.ctx.config.platformOrigin.replace(/\/$/, '')}${path}`;
+	}
+
+	/** A human hint in the request notification; the approvers stay the authorization decision. */
+	#approversLine(orgId: string, scope: ScopeRef, requesterId: string): string {
+		try {
+			const approvers = this.ctx.iam
+				.whoCan(orgId, 'iam:manage-bindings', resourceForScope(scope))
+				.filter((entry) => entry.principalType === 'user' && entry.principalId !== requesterId)
+				.map((entry) => entry.principalId);
+			const unique = [...new Set(approvers)];
+			return unique.length > 0
+				? `Approvers: ${unique.join(', ')}`
+				: 'No approver currently holds iam:manage-bindings at this scope.';
+		} catch {
+			return 'Approvers could not be listed.';
+		}
+	}
 
 	#guardrailRow(principal: Principal, id: string): GuardrailRow {
 		const row = this.#sqlite
@@ -1507,6 +1691,10 @@ export class GovernanceService {
 								item.reviewer_id === principal.userId && item.decision === null,
 						).length
 					: 0,
+			overdue:
+				review.status === 'open' &&
+				review.due_at !== null &&
+				review.due_at <= now,
 		};
 	}
 
@@ -1794,6 +1982,43 @@ function validateReviewName(raw: string | undefined, now: number): string {
 }
 
 // ------------------------------------------------------------------------ scope helpers
+
+/** The daily sweep's in-process actor; only the two writes a review completion needs. */
+function maintenancePrincipal(orgId: string): Principal {
+	return {
+		kind: 'system',
+		userId: 'system:iam-maintenance',
+		orgId,
+		role: 'viewer',
+		permissions: new Set<Permission>(['iam:review', 'iam:manage-bindings']),
+		credential: 'system',
+	};
+}
+
+function scopeLabel(scope: ScopeRef): string {
+	switch (scope.type) {
+		case 'platform':
+			return 'the platform';
+		case 'org':
+			return 'the organisation';
+		case 'project':
+			return `project ${scope.id}`;
+		case 'environment':
+			return `environment ${scope.id}`;
+		default:
+			return `${scope.type} ${scope.id}`;
+	}
+}
+
+function formatDuration(seconds: number): string {
+	if (seconds < 3600) return `${Math.round(seconds / 60)} min`;
+	const hours = seconds / 3600;
+	return Number.isInteger(hours) ? `${hours} h` : `${hours.toFixed(1)} h`;
+}
+
+function formatTime(ms: number): string {
+	return new Date(ms).toISOString();
+}
 
 /** A scope as a `ResourceRef`, for the engine's `require`/`can` checks. */
 export function resourceForScope(scope: ScopeRef): ResourceRef {

@@ -19,6 +19,8 @@ import { backupTargetCommand } from './commands/backup-target.ts';
 import { blueprintCommand } from './commands/blueprint.ts';
 import { logDrainCommand } from './commands/log-drain.ts';
 import { iamCommand } from './commands/iam.ts';
+import { identityCommand } from './commands/identity.ts';
+import { stsCommand } from './commands/sts.ts';
 import { serviceAccountsCommand } from './commands/service-accounts.ts';
 import { accessKeysCommand } from './commands/access-keys.ts';
 import { userPoolsCommand } from './commands/user-pools.ts';
@@ -101,6 +103,8 @@ const commands: Record<string, (argv: string[]) => Promise<void>> = {
 	'log-drain': logDrainCommand,
 	'log-drains': logDrainCommand,
 	iam: iamCommand,
+	identity: identityCommand,
+	sts: stsCommand,
 	sa: serviceAccountsCommand,
 	'service-account': serviceAccountsCommand,
 	'service-accounts': serviceAccountsCommand,
@@ -167,6 +171,8 @@ Commands:
   backup-target [list|add|test|remove]       Where backups are written (\`skif backup-target --help\`)
   log-drain [list|create|test|update|…]      Forward logs to a webhook or OTLP receiver (\`skif log-drain --help\`)
   iam [roles|bindings|groups|bind|…]         Roles, bindings and groups, and why access is allowed (\`skif iam --help\`)
+  identity token [--audience <aud>]          Workload token for Skiff or a cloud audience (\`skif identity --help\`)
+  sts exchange --subject-token-file <path>   Exchange a subject token for a short-lived Skiff token (\`skif sts --help\`)
   sa [list|create|disable|enable|delete]     Service accounts: org-owned machine principals (\`skif sa --help\`)
   key [list|create|revoke]                   Access keys; the secret is printed once (\`skif key --help\`)
   pool [list|create|disable|clients]         Managed user pools and their OIDC clients (\`skif pool --help\`)

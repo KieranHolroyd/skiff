@@ -73,7 +73,13 @@ afterAll(() => {
 describe('roles', () => {
 	test('built-in roles are seeded as read-only rows', () => {
 		const roles = core.ctx.iam.listRoles('org_1');
-		expect(roles.map((role) => role.name)).toEqual(['owner', 'admin', 'deployer', 'viewer']);
+		expect(roles.map((role) => role.name)).toEqual([
+			'owner',
+			'admin',
+			'deployer',
+			'viewer',
+			'guest',
+		]);
 		expect(roles.every((role) => role.builtIn)).toBe(true);
 	});
 
@@ -196,6 +202,53 @@ describe('bindings and the decision', () => {
 		const guest = principal({ userId: 'user_2', role: 'viewer' });
 		expect(core.ctx.iam.scopeFilter(guest, 'project:read')).toEqual(new Set(['prj_1', 'prj_2']));
 		expect(core.ctx.iam.scopeFilter(principal(), 'project:read')).toBe('all');
+	});
+
+	test('a guest is allowed on its project and denied org-wide (IAM.md §8.2)', () => {
+		addMember('user_1', 'owner');
+		addMember('user_guest', 'guest');
+		opened.sqlite.run(
+			`INSERT OR REPLACE INTO projects
+			   (id, org_id, slug, name, runtime, placement, created_by, created_at, updated_at)
+			 VALUES ('prj_1', 'org_1', 'guest-project', 'Guest project', 'static', 'edge', 'user_1', ?, ?)`,
+			[now, now],
+		);
+		const owner = principal();
+		const bindingId = core.ctx.iam.grantGuestProject({
+			orgId: 'org_1',
+			userId: 'user_guest',
+			projectId: 'prj_1',
+			roleId: 'viewer',
+			createdBy: 'user_1',
+		});
+		const guest = principal({ userId: 'user_guest', role: 'guest' });
+
+		// The role itself carries nothing; the binding is the whole grant.
+		expect(guest.permissions.size).toBe(0);
+		expect(core.ctx.iam.can(guest, 'project:read', { type: 'project', id: 'prj_1' })).toBe(true);
+		expect(core.ctx.iam.can(guest, 'deployment:read', { type: 'project', id: 'prj_1' })).toBe(true);
+		// Org lists and projects they are not bound to are closed.
+		expect(core.ctx.iam.can(guest, 'project:read', { type: 'org' })).toBe(false);
+		expect(core.ctx.iam.can(guest, 'project:read', { type: 'project', id: 'prj_2' })).toBe(false);
+		expect(core.ctx.iam.scopeFilter(guest, 'project:read')).toEqual(new Set(['prj_1']));
+		// Member sync never turns `member.role = 'guest'` into an org binding.
+		expect(
+			opened.sqlite
+				.query(
+					"SELECT count(*) AS n FROM iam_bindings WHERE principal_id = 'user_guest' AND scope_type = 'org'",
+				)
+				.get(),
+		).toEqual({ n: 0 });
+
+		core.ctx.iam.updateProjectBindingRole(owner, bindingId, 'prj_1', 'deployer');
+		expect(
+			core.ctx.iam.can(guest, 'deployment:create', { type: 'project', id: 'prj_1' }),
+		).toBe(true);
+
+		// Removing the member (or their access) drops the project bindings.
+		expect(core.ctx.iam.removeUserBindings('org_1', 'user_guest')).toBe(1);
+		expect(core.ctx.iam.can(guest, 'project:read', { type: 'project', id: 'prj_1' })).toBe(false);
+		opened.sqlite.run("DELETE FROM projects WHERE id = 'prj_1'");
 	});
 
 	test('an API key is capped by its grants even when its user is an owner', () => {

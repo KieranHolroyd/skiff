@@ -37,6 +37,9 @@
 	/** Owners can only be changed by owners, and the last owner stays an owner. */
 	function canChangeRole(member: (typeof data.members)[number]) {
 		if (!data.memberCan.updateRole) return false;
+		// A guest is project-only (IAM.md §8.2). Their role is changed on the project's Access tab;
+		// an org role needs an explicit org binding, not an edit here.
+		if (member.role === 'guest') return false;
 		if (member.role === 'owner' && data.actorRole !== 'owner') return false;
 		return true;
 	}
@@ -165,7 +168,14 @@
 											{/if}
 										</NativeSelect.Root>
 									{:else}
-										<Badge variant={roleBadge(member.role)} class="capitalize">{member.role}</Badge>
+										<div class="flex flex-wrap items-center gap-1.5">
+											<Badge variant={roleBadge(member.role)} class="capitalize"
+												>{member.role}</Badge
+											>
+											{#if member.role === 'guest'}
+												<span class="text-xs text-muted-foreground">project only</span>
+											{/if}
+										</div>
 									{/if}
 								</Table.Cell>
 								<Table.Cell class="hidden text-xs text-muted-foreground md:table-cell">

@@ -3,7 +3,8 @@ import {
 	buildEnvSuggestions,
 	type DatabaseAttachmentView,
 	type DetectedEnvName,
-	type StorageAttachmentView
+	type StorageAttachmentView,
+	type UserPoolAttachmentView
 } from '@skiff/contracts';
 import { json, route } from '#lib/server/api.js';
 import { core } from '#lib/server/core.js';
@@ -24,6 +25,7 @@ export const GET: RequestHandler = (event) =>
 
 		let databases: DatabaseAttachmentView[] = [];
 		let storage: StorageAttachmentView[] = [];
+		let userPools: UserPoolAttachmentView[] = [];
 		let secretNames: string[] = [];
 		let detected: DetectedEnvName[] = [];
 
@@ -34,6 +36,11 @@ export const GET: RequestHandler = (event) =>
 		}
 		try {
 			storage = core.storage.attachments(principal, project);
+		} catch {
+			// Same as databases.
+		}
+		try {
+			userPools = core.userPools.attachments(principal, project);
 		} catch {
 			// Same as databases.
 		}
@@ -61,6 +68,10 @@ export const GET: RequestHandler = (event) =>
 					})),
 					storage: storage.map((item) => ({
 						name: item.storageName,
+						envNames: item.envNames
+					})),
+					userPools: userPools.map((item) => ({
+						name: item.poolName,
 						envNames: item.envNames
 					})),
 					secretNames,

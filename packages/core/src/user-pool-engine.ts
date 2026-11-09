@@ -17,12 +17,11 @@
  * them. The control-plane routes under `/api/v1/user-pools/:id/oauth/*` are thin adapters around
  * `authorize`, `token`, `userinfo` and `logout`.
  *
- * TODO(I28): attachment injection of `<P>_ISSUER`, `<P>_CLIENT_ID` and `<P>_CLIENT_SECRET`, and the
- * function binding `env.AUTH.verify(request)`, belong to the app-attachment slice. They should
- * call `session`/`userinfo` rather than minting their own tokens.
- * TODO(I28/D122): `user.created`, `user.signed_in`, `user.deleted` and `mfa.enabled` events need a
- * `pool` event source in `@skiff/contracts`; the event registry does not know pools yet, so this
- * engine leaves a note rather than silently dropping events.
+ * I28 is built around this engine: `UserPoolService` attaches a pool to a project and injects
+ * `<P>_ISSUER`, `<P>_CLIENT_ID` and `<P>_CLIENT_SECRET` at activation, a function gets
+ * `env.AUTH.verify(request)` against the pool JWKS, and `user.created`/`user.signed_in` are emitted
+ * to the `pools` event source (D122). The secret stays in the sealed client row; only the
+ * activation payload opens it.
  * TODO(I27): passkeys, social login, TOTP MFA, magic links, password reset, breached-password
  * checks, lockout and import/export remain for the identity process. Email verification links are
  * issued here; sending them through the platform's skiff-mail outbox is wired by the hosted page
@@ -331,6 +330,17 @@ export class UserPoolEngineService {
 		})();
 
 		const user = this.requireUser(pool.id, id);
+		// D122: pool activity goes to queues. Metadata only: no password, token or client secret.
+		this.ctx.events.emitUserPool(pool.org_id, pool.id, 'user.created', {
+			poolId: pool.id,
+			poolName: pool.name,
+			user: {
+				id: user.id,
+				email: user.email,
+				name: user.name,
+				emailVerified: user.email_verified_at !== null
+			}
+		});
 		return {
 			user: userView(user),
 			verificationToken: invite ? null : this.issueEmailVerification(pool.id, id, now).token
@@ -361,6 +371,13 @@ export class UserPoolEngineService {
 			 VALUES (?, ?, ?, ?, ?, ?, NULL)`,
 			[id, pool.id, user.id, expiresAt, now, now]
 		);
+		// D122: sign-in metadata only. The raw session token never leaves this method.
+		this.ctx.events.emitUserPool(pool.org_id, pool.id, 'user.signed_in', {
+			poolId: pool.id,
+			poolName: pool.name,
+			user: { id: user.id, email: user.email, name: user.name },
+			session: { id, expiresAt }
+		});
 		return {
 			token,
 			user: userView(user),
@@ -710,6 +727,29 @@ export class UserPoolEngineService {
 			id_token: idToken,
 			scope: scopes.join(' ')
 		};
+	}
+
+	/**
+	 * Verify a pool access token and return its user, or null. This is deliberately forgiving: an
+	 * expired, malformed, wrong-issuer or id-token value is simply "not signed in" to a caller,
+	 * never an exception. The function binding's `env.AUTH.verify(request)` has the same contract.
+	 */
+	async verifyAccessToken(poolId: string, token: string): Promise<UserPoolUserView | null> {
+		try {
+			const pool = this.requireEnabledPool(poolId);
+			const claims = await this.ctx.signingKeys.verify(userPoolSigningPurpose(pool.id), token, {
+				issuer: pool.issuer
+			});
+			if (claims.typ !== 'access') return null;
+			const row = this.ctx.sqlite
+				.query<UserRow, [string, string]>(
+					'SELECT * FROM user_pool_users WHERE id = ? AND pool_id = ? AND disabled_at IS NULL'
+				)
+				.get(String(claims.sub), pool.id);
+			return row ? userView(row) : null;
+		} catch {
+			return null;
+		}
 	}
 
 	/** Resolve a bearer access token to the OIDC userinfo claims. */

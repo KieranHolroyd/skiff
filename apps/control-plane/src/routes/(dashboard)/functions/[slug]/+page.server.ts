@@ -15,6 +15,7 @@ import {
 	type DatabaseAttachmentView,
 	type DomainView,
 	type StorageAttachmentView,
+	type UserPoolAttachmentView,
 	type FunctionView,
 	type NodeCapacityView,
 	type WorkloadView
@@ -133,6 +134,27 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			.filter((item) => storageAttachments.some((attached) => attached.storageId === item.id))
 			.map((item) => [item.name, readyBuckets(item)])
 	);
+	// User pools (IAM.md I28): an attached pool also gives the function `env.AUTH`.
+	const userPoolAttachments: UserPoolAttachmentView[] = safely(
+		() => core.userPools.attachments(principal, row),
+		[]
+	);
+	const attachableUserPools = safely(
+		() =>
+			core.userPools
+				.list(principal)
+				.filter((pool) => !userPoolAttachments.some((attached) => attached.poolId === pool.id))
+				.map((pool) => ({
+					name: pool.name,
+					issuer: pool.issuer,
+					disabled: pool.disabled,
+					clients: safely(() => core.userPools.listClients(principal, pool.id), [])
+						.filter((client) => !client.public)
+						.map((client) => ({ name: client.name, clientId: client.clientId }))
+				}))
+				.filter((pool) => !pool.disabled && pool.clients.length > 0),
+		[]
+	);
 
 	// Invocations (tail workers, phase 3): a 24-hour headline now, the newest items streamed.
 	const now = Date.now();
@@ -171,6 +193,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		storageAttachments,
 		attachableStorage,
 		storageBuckets,
+		userPoolAttachments,
+		attachableUserPools,
 		invocationSummary,
 		invocations,
 		siteSessions,
@@ -200,7 +224,10 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			readStorage: hasPermission(principal, 'storage:read'),
 			createStorage: hasPermission(principal, 'storage:create'),
 			attachStorage:
-				hasPermission(principal, 'storage:update') && hasPermission(principal, 'project:update')
+				hasPermission(principal, 'storage:update') && hasPermission(principal, 'project:update'),
+			readUserPools: hasPermission(principal, 'userPool:read'),
+			attachUserPool:
+				hasPermission(principal, 'userPool:update') && hasPermission(principal, 'project:update')
 		}
 	};
 };
@@ -238,6 +265,8 @@ export const actions: Actions = {
 	attachStorage: reuse(projectActions.attachStorage),
 	updateStorageGrants: reuse(projectActions.updateStorageGrants),
 	detachStorage: reuse(projectActions.detachStorage),
+	attachUserPool: reuse(projectActions.attachUserPool),
+	detachUserPool: reuse(projectActions.detachUserPool),
 
 	/**
 	 * Scale a stateless function across replicas on its node (phase 4). The count lives on the

@@ -159,9 +159,21 @@ export function memberChangeError(actorRole: Role, change: MemberChange, ownerCo
 	const actorIsOwner = actorRole === 'owner';
 	switch (change.action) {
 		case 'invite':
+			// Guests are project-scope members (IAM.md §8.2): they are invited from the project's
+			// Access tab, which records the project binding the org invitation cannot express.
+			if (change.role === 'guest')
+				return 'Guests are invited from a project’s Access tab, not the organisation.';
 			return change.role === 'owner' && !actorIsOwner ? 'Only owners can invite another owner.' : undefined;
 		case 'update-role':
 			if (change.role === change.targetRole) return 'That member already has this role.';
+			// A guest promotes to an org role only through an explicit org binding. Allowing it here
+			// would turn `member.role` into an org grant without anyone choosing a scope.
+			if (change.targetRole === 'guest')
+				return change.role === 'owner'
+					? 'Promoting a guest to owner needs an explicit org binding. Grant it from Settings → Access.'
+					: 'A guest has project-only access. Manage their projects from the project’s Access tab.';
+			if (change.role === 'guest')
+				return 'A guest role is created by a project invitation, not by changing an org member.';
 			if ((change.targetRole === 'owner' || change.role === 'owner') && !actorIsOwner)
 				return 'Only owners can grant or change the owner role.';
 			if (change.targetRole === 'owner' && ownerCount <= 1)

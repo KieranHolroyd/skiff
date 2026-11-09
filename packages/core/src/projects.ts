@@ -92,6 +92,8 @@ export const projectOwnedTables = [
 	'slug_redirects',
 	'database_attachments',
 	'storage_attachments',
+	// User pools are org resources; the attachment is project-owned (IAM.md I28).
+	'user_pool_attachments',
 	'app_volume_attachments',
 	'app_volumes',
 	'github_runner_registrations',

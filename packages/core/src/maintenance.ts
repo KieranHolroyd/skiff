@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { backupRuns, deployments, orgQuotas, shareLinks, shareRedemptions } from '@skiff/db';
 import { operationLimits } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
+import { SERVICE_ACCOUNT_AUTO_DISABLE_UNUSED } from './service-accounts.ts';
 
 const DAY_MS = 86_400_000;
 const MINUTE_MS = 60_000;
@@ -15,6 +16,8 @@ export const SPIKE_MIN_REQUESTS = 20;
 export const SPIKE_MIN_RATIO = 0.05;
 export const SPIKE_FACTOR = 2;
 const PARQUET_STATE_KEY = 'telemetry:parquet_exported_day';
+/** The last UTC day the IAM rollup and hygiene pass ran (IAM.md §9.5). */
+export const IAM_DAILY_STATE_KEY = 'iam:daily_last_run';
 
 export interface MaintenanceReport {
 	projectsPurged: number;
@@ -23,6 +26,16 @@ export interface MaintenanceReport {
 	logsPruned: number;
 	alertsFired: string[];
 	telemetry?: { rolledUp: number; pruned: { raw: number; hourly: number }; archivedDay?: string };
+	/** The daily IAM pass; absent when it already ran today (the marker lives in `alert_state`). */
+	iam?: {
+		day: string;
+		rolledUp: boolean;
+		requestsExpired: number;
+		reviewsFlagged: number;
+		reviewsCompleted: number;
+		unusedServiceAccounts: number;
+		serviceAccountsDisabled: number;
+	};
 }
 
 /**
@@ -163,6 +176,8 @@ export class MaintenanceService {
 		alertsFired.push(...(await this.quotaAlerts()));
 		// Daily trend points are idempotent: after the first sweep of a UTC day this is a no-op.
 		await this.ctx.usage.captureSnapshots();
+		// IAM rollup, request expiry, overdue reviews and service-account hygiene, once per UTC day.
+		const iam = await this.iamDaily();
 
 		alertsFired.push(...(await this.promoteSpikeAlerts()));
 
@@ -185,6 +200,85 @@ export class MaintenanceService {
 			logsPruned,
 			alertsFired,
 			telemetry,
+			iam,
+		};
+	}
+
+	/**
+	 * The daily IAM pass (IAM.md §9.4–§9.5): roll permission usage from audit, expire requests past
+	 * 24 hours, complete reviews past their deadline with the campaign default, and flag (and, when
+	 * policy allows it, disable) service accounts unused for 90 days.
+	 *
+	 * A marker in `alert_state` makes this run once per UTC day even across restarts. The rollup is
+	 * idempotent, but skipping it avoids a full audit scan on every 60-second sweep. Other tasks are
+	 * idempotent too, so a failure in one is logged and retried tomorrow; the marker is only written
+	 * after the rollup succeeds, so a transient database error retries on the next sweep.
+	 */
+	private async iamDaily(): Promise<MaintenanceReport['iam'] | undefined> {
+		const now = this.ctx.now();
+		const day = new Date(Math.floor(now / DAY_MS) * DAY_MS).toISOString().slice(0, 10);
+		const done = this.ctx.sqlite
+			.query<{ last_value: string | null }, [string]>('SELECT last_value FROM alert_state WHERE key = ?')
+			.get(IAM_DAILY_STATE_KEY);
+		if (done?.last_value === day) return undefined;
+
+		let rolledUp = false;
+		try {
+			this.ctx.governance.rollupUsage();
+			rolledUp = true;
+		} catch (error) {
+			console.error('[maintenance] IAM usage rollup failed:', error);
+			return undefined;
+		}
+
+		let requestsExpired = 0;
+		try {
+			requestsExpired = this.ctx.governance.expireStaleRequests(now);
+		} catch (error) {
+			console.error('[maintenance] access request expiry failed:', error);
+		}
+
+		let reviewsFlagged = 0;
+		let reviewsCompleted = 0;
+		try {
+			const swept = this.ctx.governance.sweepOverdueReviews(now);
+			reviewsFlagged = swept.flagged;
+			reviewsCompleted = swept.completed;
+		} catch (error) {
+			console.error('[maintenance] access review sweep failed:', error);
+		}
+
+		let unusedServiceAccounts = 0;
+		let serviceAccountsDisabled = 0;
+		try {
+			const orgs = this.ctx.sqlite
+				.query<{ org_id: string }, []>('SELECT DISTINCT org_id FROM service_accounts')
+				.all();
+			for (const { org_id } of orgs) {
+				const swept = this.ctx.serviceAccounts.sweepUnused(org_id, {
+					now,
+					autoDisable: SERVICE_ACCOUNT_AUTO_DISABLE_UNUSED,
+				});
+				unusedServiceAccounts += swept.unused.length;
+				serviceAccountsDisabled += swept.autoDisabled.length;
+			}
+		} catch (error) {
+			console.error('[maintenance] service-account hygiene failed:', error);
+		}
+
+		this.ctx.sqlite.run(
+			'INSERT INTO alert_state (key, last_fired_at, last_value) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET last_fired_at = excluded.last_fired_at, last_value = excluded.last_value',
+			[IAM_DAILY_STATE_KEY, now, day],
+		);
+
+		return {
+			day,
+			rolledUp,
+			requestsExpired,
+			reviewsFlagged,
+			reviewsCompleted,
+			unusedServiceAccounts,
+			serviceAccountsDisabled,
 		};
 	}
 

@@ -17,6 +17,7 @@ const UPPER_ENV_NAME = /^[A-Z][A-Z0-9_]*$/;
 export type EnvSuggestionSource =
 	| 'database'
 	| 'storage'
+	| 'user-pool'
 	| 'secret'
 	| 'env-file'
 	| 'code'
@@ -45,6 +46,8 @@ export interface DetectedEnvName {
 export interface EnvSuggestionInput {
 	databases?: Array<{ name: string; envNames: string[] }>;
 	storage?: Array<{ name: string; envNames: string[] }>;
+	/** Attached user pools: `<P>_ISSUER`, `<P>_CLIENT_ID`, `<P>_CLIENT_SECRET` (IAM.md I28). */
+	userPools?: Array<{ name: string; envNames: string[] }>;
 	secretNames?: string[];
 	detected?: DetectedEnvName[];
 	/** Include the small curated list of common names (default true). */
@@ -86,6 +89,9 @@ export function buildEnvSuggestions(input: EnvSuggestionInput): EnvSuggestion[] 
 	}
 	for (const storage of input.storage ?? []) {
 		for (const name of storage.envNames) add(name, 'storage', storage.name, true);
+	}
+	for (const pool of input.userPools ?? []) {
+		for (const name of pool.envNames) add(name, 'user-pool', pool.name, true);
 	}
 	for (const name of input.secretNames ?? []) add(name, 'secret', 'Organisation secret', false);
 	for (const item of input.detected ?? []) add(item.name, item.source, item.detail, false);

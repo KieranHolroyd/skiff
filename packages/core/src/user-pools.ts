@@ -13,11 +13,18 @@
  * every write is a normal IAM permission check on the pool resource.
  */
 import {
+	USER_POOL_AUTH_BINDING,
+	userPoolAttachSchema,
 	userPoolClientCreateSchema,
 	userPoolCreateSchema,
+	userPoolDefaultEnvPrefix,
+	userPoolEnvNames,
 	userPoolUpdateSchema,
+	type FunctionRuntimeBinding,
 	type Permission,
 	type Principal,
+	type UserPoolAttach,
+	type UserPoolAttachmentView,
 	type UserPoolClientCreate,
 	type UserPoolClientCreated,
 	type UserPoolClientView,
@@ -31,13 +38,14 @@ import {
 	type UserPoolView
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
+import type { ProjectRow } from './projects.ts';
 import type {
 	UserPoolInviteCreated,
 	UserPoolInviteView,
 	UserPoolUserView
 } from './user-pool-engine.ts';
-import { ConflictError, ForbiddenError, NotFoundError } from './errors.ts';
-import { newId, parseJson, randomToken } from './util.ts';
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from './errors.ts';
+import { newId, parseJson, randomToken, sha256Hex } from './util.ts';
 
 /** The pool's own signing-key purpose; the platform JWKS excludes `pool:*` (IAM.md §7.3). */
 export function userPoolSigningPurpose(poolId: string): `pool:${string}` {
@@ -101,6 +109,24 @@ interface UserPoolClientRow {
 	redirect_uris_json: string;
 	public: number;
 	created_at: number;
+}
+
+interface UserPoolAttachmentRow {
+	id: string;
+	org_id: string;
+	pool_id: string;
+	client_row_id: string;
+	project_id: string;
+	env_prefix: string;
+	created_by: string;
+	created_at: number;
+	pool_name: string;
+	issuer: string;
+	client_name: string;
+	client_id: string;
+	client_secret_sealed: string | null;
+	client_public: number;
+	project_slug: string;
 }
 
 /** The public part of a pool that a hosted page may show before anybody signs in. */
@@ -354,6 +380,11 @@ export class UserPoolService {
 	delete(principal: Principal, id: string): void {
 		const row = this.#row(principal, id);
 		this.#require(principal, 'userPool:delete', row);
+		const attached = this.attachmentsOf(row.id);
+		if (attached.length > 0)
+			throw new ConflictError(
+				`User pool "${row.name}" is attached to ${attached.map((item) => item.projectSlug).join(', ')}. Detach it first.`
+			);
 		this.ctx.sqlite.transaction(() => {
 			this.ctx.userPoolEngine.purgePool(row.id);
 			this.ctx.sqlite.run('DELETE FROM user_pool_clients WHERE pool_id = ?', [row.id]);
@@ -437,6 +468,17 @@ export class UserPoolService {
 			)
 			.get(pool.id, clientIdOrRowId, clientIdOrRowId);
 		if (!client) throw new NotFoundError('User pool client');
+		const attached = this.ctx.sqlite
+			.query<{ project_slug: string }, [string]>(
+				`SELECT p.slug AS project_slug
+				   FROM user_pool_attachments a JOIN projects p ON p.id = a.project_id
+				  WHERE a.client_row_id = ?`
+			)
+			.all(client.id);
+		if (attached.length > 0)
+			throw new ConflictError(
+				`Client "${client.name}" is attached to ${attached.map((item) => item.project_slug).join(', ')}. Detach it first.`
+			);
 		this.ctx.sqlite.run('DELETE FROM user_pool_clients WHERE id = ? AND pool_id = ?', [
 			client.id,
 			pool.id
@@ -449,6 +491,186 @@ export class UserPoolService {
 			args: { poolId: pool.id, pool: pool.name, name: client.name, clientId: client.client_id },
 			result: 'ok'
 		});
+	}
+
+	// ---------------------------------------------------------------- attachments
+
+	/** Pools attached to one project, with the env prefix and client each injects. */
+	attachments(principal: Principal, project: ProjectRow): UserPoolAttachmentView[] {
+		if (!this.canReadAny(principal)) throw new ForbiddenError('userPool:read');
+		return this.#attachmentRows(project.id)
+			.filter((row) => this.ctx.iam.can(principal, 'userPool:read', { type: 'userPool', id: row.pool_id }))
+			.map(attachmentView);
+	}
+
+	/**
+	 * Attach a pool to a project like a database. The client must be confidential: its sealed
+	 * secret is opened only at activation, so no secret enters desired state or a plain env row.
+	 */
+	attach(
+		principal: Principal,
+		project: ProjectRow,
+		raw: UserPoolAttach
+	): { attachment: UserPoolAttachmentView } {
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
+		const input = userPoolAttachSchema.parse(raw);
+		if (project.runtime === 'static')
+			throw new ValidationError(
+				`Project "${project.slug}" is static; only process, container or function projects can use a user pool.`
+			);
+		const row = this.#rowByName(principal, input.pool);
+		this.#require(principal, 'userPool:update', row);
+		if (row.disabled_at !== null)
+			throw new ValidationError(`User pool "${row.name}" is disabled; enable it before attaching.`);
+
+		const client = this.ctx.sqlite
+			.query<UserPoolClientRow, [string, string, string]>(
+				`SELECT * FROM user_pool_clients
+				  WHERE pool_id = ? AND (name = ? OR client_id = ?)`
+			)
+			.get(row.id, input.client, input.client);
+		if (!client) throw new NotFoundError('User pool client');
+		if (client.public === 1 || !client.client_secret_sealed)
+			throw new ValidationError(
+				`Client "${client.name}" is public; an attachment needs a confidential client with a secret.`
+			);
+
+		const envPrefix = input.envPrefix ?? userPoolDefaultEnvPrefix(row.name);
+		const current = this.#attachmentRows(project.id);
+		if (current.some((item) => item.pool_id === row.id))
+			throw new ConflictError(`User pool "${row.name}" is already attached to "${project.slug}".`);
+		if (current.some((item) => item.env_prefix === envPrefix))
+			throw new ConflictError(
+				`"${project.slug}" already uses the env prefix ${envPrefix}. Pick another, e.g. ${envPrefix}_2.`
+			);
+
+		const id = newId('upa_');
+		const now = this.ctx.now();
+		this.ctx.sqlite.run(
+			`INSERT INTO user_pool_attachments
+			   (id, org_id, pool_id, client_row_id, project_id, env_prefix, created_by, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			[id, principal.orgId, row.id, client.id, project.id, envPrefix, principal.userId, now]
+		);
+		this.ctx.audit.record({
+			principal,
+			action: 'user_pool.attach',
+			resource: 'user_pool',
+			resourceId: row.id,
+			args: {
+				pool: row.name,
+				project: project.slug,
+				envPrefix,
+				clientId: client.client_id
+			},
+			result: 'ok'
+		});
+		this.ctx.projects.bump(principal.orgId);
+		return {
+			attachment: attachmentView(this.#attachmentById(row.id, project.id)!)
+		};
+	}
+
+	/** Detach one pool from a project. The pool, its users and its key are untouched. */
+	detach(principal: Principal, project: ProjectRow, poolName: string): void {
+		this.ctx.iam.require(principal, 'project:update', { type: 'project', id: project.id });
+		const row = this.#rowByName(principal, poolName);
+		this.#require(principal, 'userPool:update', row);
+		const result = this.ctx.sqlite.run(
+			'DELETE FROM user_pool_attachments WHERE pool_id = ? AND project_id = ?',
+			[row.id, project.id]
+		);
+		if (result.changes === 0)
+			throw new NotFoundError(`Attachment of "${poolName}" to "${project.slug}"`);
+		this.ctx.audit.record({
+			principal,
+			action: 'user_pool.detach',
+			resource: 'user_pool',
+			resourceId: row.id,
+			args: { pool: row.name, project: project.slug },
+			result: 'ok'
+		});
+		this.ctx.projects.bump(principal.orgId);
+	}
+
+	/**
+	 * Activation env for every pool attached to one project. The client secret is opened here, at
+	 * delivery time, exactly like a database password; it is never stored in the workload spec.
+	 */
+	consumerEnv(projectId: string): Record<string, string> {
+		const env: Record<string, string> = {};
+		for (const row of this.#attachmentRows(projectId)) {
+			const secret = row.client_secret_sealed
+				? this.ctx.secrets.open(row.org_id, row.client_secret_sealed)
+				: null;
+			for (const name of userPoolEnvNames(row.env_prefix)) {
+				const suffix = name.slice(row.env_prefix.length + 1);
+				if (suffix === 'ISSUER') env[name] = row.issuer;
+				else if (suffix === 'CLIENT_ID') env[name] = row.client_id;
+				else if (secret !== null) env[name] = secret;
+			}
+		}
+		return env;
+	}
+
+	/**
+	 * Stable fingerprint of a project's pool attachments, folded into its activation version so
+	 * attach, detach or a rotated client secret restarts the app. It hashes the sealed value, never
+	 * the secret itself, like the database attachment version.
+	 */
+	consumerVersion(projectId: string): string {
+		const items = this.#attachmentRows(projectId).map((row) => ({
+			poolId: row.pool_id,
+			prefix: row.env_prefix,
+			clientId: row.client_id,
+			secret: row.client_secret_sealed ? sha256Hex(row.client_secret_sealed) : null
+		}));
+		return items.length === 0 ? '' : sha256Hex(JSON.stringify({ userPools: items }));
+	}
+
+	/** The project's only attached pool, or null when none or several are attached. */
+	soleAttachedPool(projectId: string): UserPoolAttachmentView | null {
+		const rows = this.#attachmentRows(projectId);
+		return rows.length === 1 ? attachmentView(rows[0]!) : null;
+	}
+
+	/**
+	 * The `env.AUTH` runtime binding for a function project (IAM.md I28). With no `pool`, the
+	 * project's only attached pool is used; several attachments require the manifest to name one.
+	 */
+	async authBindingForProject(projectId: string, pool?: string): Promise<FunctionRuntimeBinding> {
+		const rows = this.#attachmentRows(projectId);
+		const row = pool
+			? rows.find((item) => item.pool_name === pool)
+			: rows.length === 1
+				? rows[0]
+				: null;
+		if (!row) {
+			if (pool)
+				throw new ValidationError(`User pool "${pool}" is not attached to this project.`);
+			if (rows.length === 0)
+				throw new ValidationError('Attach a user pool to this project before using an AUTH binding.');
+			throw new ValidationError(
+				`This project has several user pools attached (${rows.map((item) => item.pool_name).join(', ')}); name one in the AUTH binding.`
+			);
+		}
+		const keys = await this.jwks(row.pool_id);
+		return {
+			name: USER_POOL_AUTH_BINDING,
+			type: 'auth',
+			poolId: row.pool_id,
+			issuer: row.issuer,
+			jwks: keys.keys
+		};
+	}
+
+	/**
+	 * Verify a pool access token against the pool's JWKS and return its user, or null. This is the
+	 * same decision the function binding's `verify(request)` makes on the node; exposed here for
+	 * tests, the body of a future REST guard and server-rendered checks.
+	 */
+	async verifyAccessToken(poolId: string, token: string): Promise<UserPoolUserView | null> {
+		return this.ctx.userPoolEngine.verifyAccessToken(poolId, token);
 	}
 
 	// ---------------------------------------------------------------- public OIDC metadata
@@ -523,6 +745,40 @@ export class UserPoolService {
 		return row;
 	}
 
+	#rowByName(principal: Principal, name: string): UserPoolRow {
+		const row = this.ctx.sqlite
+			.query<UserPoolRow, [string, string]>(
+				'SELECT * FROM user_pools WHERE name = ? AND org_id = ?'
+			)
+			.get(name.trim().toLowerCase(), principal.orgId);
+		if (!row) throw new NotFoundError('User pool');
+		return row;
+	}
+
+	#attachmentRows(projectId: string): UserPoolAttachmentRow[] {
+		return this.ctx.sqlite
+			.query<UserPoolAttachmentRow, [string]>(`${ATTACHMENT_SELECT} WHERE a.project_id = ? ORDER BY a.created_at, a.env_prefix`)
+			.all(projectId);
+	}
+
+	#attachmentById(poolId: string, projectId: string): UserPoolAttachmentRow | null {
+		return (
+			this.ctx.sqlite
+				.query<UserPoolAttachmentRow, [string, string]>(
+					`${ATTACHMENT_SELECT} WHERE a.pool_id = ? AND a.project_id = ?`
+				)
+				.get(poolId, projectId) ?? null
+		);
+	}
+
+	/** Attachments of one pool, used by delete to refuse while something still consumes it. */
+	attachmentsOf(poolId: string): UserPoolAttachmentView[] {
+		return this.ctx.sqlite
+			.query<UserPoolAttachmentRow, [string]>(`${ATTACHMENT_SELECT} WHERE a.pool_id = ? ORDER BY a.created_at`)
+			.all(poolId)
+			.map(attachmentView);
+	}
+
 	/** Public reads resolve by id alone, but a disabled pool stops answering discovery. */
 	#publicRow(id: string): UserPoolRow {
 		const row = this.#rowById(id);
@@ -585,6 +841,30 @@ function parseTheme(json: string): UserPoolTheme {
 	return value && typeof value === 'object' && !Array.isArray(value)
 		? (value as UserPoolTheme)
 		: {};
+}
+
+const ATTACHMENT_SELECT = `SELECT a.*, p.name AS pool_name, p.issuer, c.name AS client_name,
+	   c.client_id, c.client_secret_sealed, c.public AS client_public, pr.slug AS project_slug
+  FROM user_pool_attachments a
+  JOIN user_pools p ON p.id = a.pool_id
+  JOIN user_pool_clients c ON c.id = a.client_row_id
+  JOIN projects pr ON pr.id = a.project_id`;
+
+function attachmentView(row: UserPoolAttachmentRow): UserPoolAttachmentView {
+	return {
+		id: row.id,
+		orgId: row.org_id,
+		poolId: row.pool_id,
+		poolName: row.pool_name,
+		issuer: row.issuer,
+		clientId: row.client_id,
+		clientName: row.client_name,
+		projectId: row.project_id,
+		projectSlug: row.project_slug,
+		envPrefix: row.env_prefix,
+		envNames: userPoolEnvNames(row.env_prefix),
+		createdAt: new Date(row.created_at).toISOString()
+	};
 }
 
 function clientView(row: UserPoolClientRow): UserPoolClientView {
