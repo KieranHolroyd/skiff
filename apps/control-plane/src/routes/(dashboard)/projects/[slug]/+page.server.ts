@@ -253,8 +253,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 				manageWorkload: hasPermission(principal, 'project:update'),
 				// Container console (D127): only for container projects while the feature is on.
 				inspectContainer: consoleOn && hasPermission(principal, 'container:inspect'),
-				containerFiles: consoleOn && principal.kind === 'user' && hasPermission(principal, 'container:files'),
-				containerExec: consoleOn && principal.kind === 'user' && hasPermission(principal, 'container:exec'),
+				containerFiles: consoleOn && principal.credential === 'session' && hasPermission(principal, 'container:files'),
+				containerExec: consoleOn && principal.credential === 'session' && hasPermission(principal, 'container:exec'),
 				restartContainer: consoleOn && hasPermission(principal, 'project:update'),
 				viewCapacity: principal.platformAdmin === true,
 				readDatabases: hasPermission(principal, 'database:read'),

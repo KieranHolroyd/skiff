@@ -100,7 +100,7 @@ describe('registry settings', () => {
 	test('is off until a platform admin enables it on a node, from the dashboard only', () => {
 		expect(core.registry.view(viewer)).toMatchObject({ enabled: false, host: HOST, status: 'disabled', engine: 'zot' });
 		expect(() => core.registry.update(adminKey, { enabled: true, node: 'homelab' })).toThrow(/signed in to the dashboard/);
-		expect(() => core.registry.update(deployer, { enabled: true, node: 'homelab' })).toThrow(/Platform admin/);
+		expect(() => core.registry.update(deployer, { enabled: true, node: 'homelab' })).toThrow(/platform admin/i);
 		expect(() => core.registry.update(admin, { enabled: true })).toThrow(/Choose the node/);
 		const view = core.registry.update(admin, { enabled: true, node: 'homelab', keepTags: 12 });
 		expect(view).toMatchObject({ enabled: true, node: { id: workerId, name: 'homelab' }, keepTags: 12, status: 'pending' });

@@ -658,7 +658,7 @@ export class ForgeService {
 	}
 }
 
-/** Org owners and admins; connections hold org-wide forge tokens (D173). */
+/** Org managers (`org:update`); connections hold org-wide forge tokens (D173). */
 function isOrgManager(principal: Principal): boolean {
-	return principal.role === 'owner' || principal.role === 'admin';
+	return principal.permissions.has('org:update');
 }

@@ -24,6 +24,7 @@ import {
 	type Principal,
 	type QueryResult,
 	SYSTEM_ALERT_ROUTING_KEY,
+	canAdministerPlatform,
 	knownAlertChannels,
 	systemAlertCatalog,
 	systemAlertKindOf,
@@ -384,14 +385,14 @@ export class AlertService {
 		this.ctx.iam.require(principal, 'metrics:read', { type: 'org' });
 	}
 
-	/** Rules page people (and can reach the platform's SMS), so org owners and admins write them. */
+	/** Rules page people (and can reach the platform's SMS), so `alert:update` writes them. */
 	canEdit(principal: Principal): boolean {
-		return principal.permissions.has('metrics:read') && (principal.role === 'owner' || principal.role === 'admin' || principal.platformAdmin === true);
+		return this.ctx.iam.can(principal, 'alert:update', { type: 'org' });
 	}
 
-	/** Silencing and acknowledging are on-call actions: deployers too. */
+	/** Silencing and acknowledging are on-call actions: `alert:acknowledge` (deployers too). */
 	canSilence(principal: Principal): boolean {
-		return this.canEdit(principal) || (principal.permissions.has('metrics:read') && principal.role === 'deployer');
+		return this.ctx.iam.can(principal, 'alert:acknowledge', { type: 'org' });
 	}
 
 	#requireEdit(principal: Principal): void {
@@ -921,9 +922,13 @@ export class AlertService {
 
 	// --- system alerts (built-in; routing and thresholds) --------------------------------------
 
-	/** Platform owner: a platform admin's own session in an org they own. */
+	/** Platform owner: a platform admin's own session in an org where they hold `iam:manage-owners`. */
 	canConfigureSystem(principal: Principal): boolean {
-		return principal.platformAdmin === true && principal.kind === 'user' && principal.role === 'owner';
+		return (
+			principal.platformAdmin === true &&
+			canAdministerPlatform(principal) &&
+			principal.permissions.has('iam:manage-owners')
+		);
 	}
 
 	#routing(): SystemAlertRouting {

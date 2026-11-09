@@ -56,6 +56,7 @@ export type SectionId =
 	| 'general'
 	| 'members'
 	| 'access'
+	| 'platform-access'
 	| 'access-policies'
 	| 'sso'
 	| 'identity'
@@ -210,6 +211,18 @@ export const SECTIONS: Section[] = [
 		path: '/settings/access',
 		icon: ShieldCheckIcon,
 		anyPermission: ['iam:read']
+	},
+	{
+		id: 'platform-access',
+		group: 'security',
+		label: 'Platform access',
+		summary:
+			'Platform roles for the whole install: admins, operators and viewers, plus fleet-wide deny guardrails.',
+		// See `SectionHref`: the route is real, but `resolve()` cannot infer past 25 members.
+		href: '/(dashboard)/settings/platform-access' as unknown as SectionHref,
+		path: '/settings/platform-access',
+		icon: KeyRoundIcon,
+		platformAdmin: true
 	},
 	{
 		id: 'sso',

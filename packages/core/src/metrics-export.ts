@@ -2,8 +2,6 @@ import {
 	METRICS_EXPORT_DEFAULTS,
 	METRICS_EXPORT_SETTINGS_KEY,
 	brokerStreamStatsSchema,
-	canAdministerPlatform,
-	canViewPlatform,
 	metricsExportSettingsSchema,
 	metricsExportSettingsUpdateSchema,
 	quotaUsageMetricKeys,
@@ -103,8 +101,8 @@ export class MetricsExporter {
 	 * merges, persists and drops every cached render.
 	 */
 	updateSettings(principal: Principal, input: unknown): MetricsExportSettings {
-		if (!canAdministerPlatform(principal))
-			throw new CoreError('forbidden', 'Only a platform admin signed in to the dashboard can change metrics export settings.', 403);
+		if (!this.ctx.platformIam.canAdminister(principal))
+			throw new CoreError('forbidden', 'Only a platform admin role signed in to the dashboard can change metrics export settings.', 403);
 		const update = metricsExportSettingsUpdateSchema.safeParse(input);
 		if (!update.success) throw new ValidationError('Invalid metrics export settings.', update.error.issues);
 		const current = this.settings();
@@ -143,7 +141,7 @@ export class MetricsExporter {
 		this.ctx.iam.require(principal, 'metrics:read', { type: 'org' });
 		if (scope.section !== 'all' && !settings.sections[scope.section]) throw new NotFoundError(`Metrics section "${scope.section}"`);
 		if (scope.section === 'platform') {
-			if (!canViewPlatform(principal)) throw new ForbiddenError('platform admin');
+			if (!this.ctx.platformIam.canView(principal)) throw new ForbiddenError('platform:read');
 			return this.#cached('platform', settings, () => this.#renderPlatform(settings));
 		}
 		if (scope.section !== 'all')

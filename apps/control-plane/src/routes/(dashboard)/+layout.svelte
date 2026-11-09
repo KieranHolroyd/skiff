@@ -25,6 +25,7 @@
 	import ServerIcon from '@lucide/svelte/icons/server';
 	import SettingsIcon from '@lucide/svelte/icons/settings';
 	import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
+	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import UserRoundIcon from '@lucide/svelte/icons/user-round';
 	import WorkflowIcon from '@lucide/svelte/icons/workflow';
 	import ZapIcon from '@lucide/svelte/icons/zap';
@@ -42,6 +43,7 @@
 	import { Separator } from '#lib/components/ui/separator/index.js';
 	import * as Sidebar from '#lib/components/ui/sidebar/index.js';
 	import { createDashboardQueryClient } from '#lib/query.js';
+	import { lockStepUp } from '#lib/verify.svelte.js';
 	import type { LayoutProps } from './$types';
 	import { getOverview, keys as alertKeys } from './alerts/_lib/api.js';
 	import { pane as slidePane } from '#lib/nav/pane-transition.js';
@@ -326,6 +328,10 @@
 			await goto(resolve('/login'));
 		}
 	}
+
+	async function lockVerification() {
+		await lockStepUp();
+	}
 </script>
 
 <svelte:head>
@@ -469,6 +475,22 @@
 								<SettingsIcon />
 								Organisation
 							</DropdownMenu.Item>
+							<DropdownMenu.Separator />
+							{#if data.stepUp?.fresh}
+								<DropdownMenu.Item onSelect={lockVerification}>
+									<ShieldCheckIcon />
+									<span class="flex-1">
+										Verified · {data.stepUp.minutesLeft} min
+									</span>
+									<span class="text-xs font-medium text-muted-foreground">Lock</span>
+								</DropdownMenu.Item>
+							{:else}
+								<DropdownMenu.Item onSelect={() => goto(resolve('/(dashboard)/settings/account'))}>
+									<ShieldCheckIcon />
+									<span class="flex-1 text-muted-foreground">Not verified</span>
+									<span class="text-xs font-medium text-muted-foreground">Verify</span>
+								</DropdownMenu.Item>
+							{/if}
 							<DropdownMenu.Separator />
 							<div class="flex items-center justify-between gap-2 px-2 py-1">
 								<span class="text-sm text-muted-foreground">Theme</span>

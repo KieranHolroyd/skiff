@@ -38,7 +38,7 @@ export const load: PageServerLoad = ({ locals }) => {
 				.filter((app) => app.user.id !== principal.userId)
 				.map((app) => ({
 					...summary(app),
-					canRevoke: app.user.role !== 'owner' || principal.role === 'owner'
+					canRevoke: app.user.role !== 'owner' || principal.permissions.has('iam:manage-owners')
 				}))
 		: [];
 	return { mine, others, canManageOrg };

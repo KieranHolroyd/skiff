@@ -180,7 +180,7 @@ describe('audit actor columns (IAM.md §7.1)', () => {
 		expect(actorRow('actor_key')).toMatchObject({ actor_type: 'apiKey', credential_id: 'key_9' });
 	});
 
-	test('rows without a credential or acting-for stay NULL', () => {
-		expect(actorRow('day0')).toEqual({ actor_type: 'user', credential_id: null, acting_for_type: null, acting_for_id: null });
+	test('a session principal records its credential kind; acting-for stays NULL', () => {
+		expect(actorRow('day0')).toEqual({ actor_type: 'user', credential_id: 'session', acting_for_type: null, acting_for_id: null });
 	});
 });

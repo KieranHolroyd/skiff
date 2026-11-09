@@ -319,7 +319,7 @@ jobs:
 		let run = await core.pipelines.getRun(owner, r.name, runIds[0]!);
 		const ship = run.jobs.find((job) => job.key === 'ship')!;
 		expect(ship.status).toBe('waiting');
-		await expect(core.pipelines.approveJob(deployer, r.name, run.id, ship.id, true)).rejects.toThrow();
+		await expect(core.pipelines.approveJob(deployer, r.name, run.id, ship.id, true)).rejects.toThrow('pipeline:approve');
 		await core.pipelines.approveJob(owner, r.name, run.id, ship.id, true);
 		const claim = (await claimJob())!;
 		expect(await engine.secrets(engine.authenticateJob(claim.token))).toEqual({ TOKEN: 'prod-token' });

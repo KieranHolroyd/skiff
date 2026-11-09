@@ -1,4 +1,7 @@
-import type { StepUpClass, StepUpVerification } from '@skiff/contracts';
+import type { StepUpClass } from '@skiff/contracts';
+import { userHasSecondFactor } from './second-factor';
+import { sqlite } from './db';
+import type { SignInMethod } from './sso-enforcement';
 
 /**
  * Read the step-up window off a Better Auth session row (STEP-UP.md §3, §6).
@@ -18,26 +21,51 @@ import type { StepUpClass, StepUpVerification } from '@skiff/contracts';
  * plugin's schema, so an endpoint would verify and then immediately forget. STEP-UP.md §10 step 2
  * adds the plugin and the endpoint together.
  */
-export function verificationFromSession(session: unknown): StepUpVerification | undefined {
-	if (!session || typeof session !== 'object') return undefined;
-	const row = session as Record<string, unknown>;
-	const at = timestamp(row.verificationAt) ?? timestamp(row.verifiedAt);
-	const used = stepUpClass(row.verificationClass) ?? stepUpClass(row.verifiedClass);
-	// Without both a time and a class there is nothing we can prove: treat the session as unverified.
-	if (at === undefined || !used) return undefined;
-	return { at, class: used, strongest: stepUpClass(row.strongest) ?? used };
+export { verificationFromSession } from './step-up/verification';
+
+/** The strongest factor this person has enrolled *now* (a passkey or a verified authenticator app). */
+export function strongestStepUpClass(userId: string): StepUpClass {
+	return userHasSecondFactor(userId) ? 'strong' : 'basic';
 }
 
-function timestamp(value: unknown): number | undefined {
-	if (value instanceof Date) return Number.isFinite(value.getTime()) ? value.getTime() : undefined;
-	if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? value : undefined;
-	if (typeof value === 'string') {
-		const parsed = Date.parse(value);
-		return Number.isFinite(parsed) ? parsed : undefined;
-	}
-	return undefined;
+/**
+ * A fresh sign-in seeds the window (STEP-UP.md §3): a passkey sign-in counts as strong, every
+ * other method (password, GitHub, magic link, SSO) as basic. A later TOTP/backup-code verification
+ * upgrades the session from the auth after-hook, which is also how a first-time enrolment counts.
+ */
+export function seedSessionStepUp(sessionId: string, userId: string, method: SignInMethod | undefined): void {
+	const used: StepUpClass = method === 'passkey' ? 'strong' : 'basic';
+	sqlite.run(
+		'UPDATE session SET verificationAt = ?, verificationClass = ?, strongest = ? WHERE id = ?',
+		[Date.now(), used, strongestStepUpClass(userId), sessionId],
+	);
 }
 
-function stepUpClass(value: unknown): StepUpClass | undefined {
-	return value === 'strong' || value === 'basic' ? value : undefined;
+/** Record a successful step-up on this session. `class` is the method's class, not the user's. */
+export function markSessionStepUp(sessionId: string, userId: string, used: StepUpClass): void {
+	sqlite.run(
+		'UPDATE session SET verificationAt = ?, verificationClass = ?, strongest = ? WHERE id = ?',
+		[Date.now(), used, strongestStepUpClass(userId), sessionId],
+	);
+}
+
+/** Recompute `strongest` after a factor is added or removed, without touching the window. */
+export function refreshStrongestStepUp(userId: string): void {
+	sqlite.run('UPDATE session SET strongest = ? WHERE userId = ?', [strongestStepUpClass(userId), userId]);
+}
+
+/** Clear the window on this session ("Lock now", or a password change on the current device). */
+export function clearSessionStepUp(sessionId: string): void {
+	sqlite.run(
+		'UPDATE session SET verificationAt = NULL, verificationClass = NULL WHERE id = ?',
+		[sessionId],
+	);
+}
+
+/** Clear every session's window after a password reset, a factor removal or a role change. */
+export function clearStepUpForUser(userId: string): void {
+	sqlite.run(
+		'UPDATE session SET verificationAt = NULL, verificationClass = NULL WHERE userId = ?',
+		[userId],
+	);
 }

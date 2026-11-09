@@ -1,7 +1,6 @@
 import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { deployments, nodes, projects, releases, workloadReplicas, workloads } from '@skiff/db';
 import {
-	canViewPlatform,
 	githubRunnerSecretNames,
 	githubRunnerTarget,
 	orgNetworkName,
@@ -475,7 +474,7 @@ export class WorkloadService {
 	}
 
 	capacity(principal: Principal): NodeCapacityView[] {
-		if (!canViewPlatform(principal)) throw new CoreError('forbidden', 'Platform admin required.', 403);
+		if (!this.ctx.platformIam.canView(principal)) throw new CoreError('forbidden', 'Platform admin permission required.', 403);
 		return this.capacityInternal();
 	}
 

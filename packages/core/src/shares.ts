@@ -1,8 +1,6 @@
 import { and, eq, inArray, or } from 'drizzle-orm';
 import { disks, nodes, shareGrants, shareMounts, shares } from '@skiff/db';
 import {
-	canAdministerPlatform,
-	canViewPlatform,
 	shareCreateSchema,
 	shareCredentialsSchema,
 	shareGrantsSchema,
@@ -614,10 +612,10 @@ export class ShareService {
 	}
 
 	private assertRead(principal: Principal): void {
-		// Platform IAM (I8) replaces this fallback: until platform bindings exist, a platform
-		// admin keeps the fleet-wide read/write access `canViewPlatform`/`canAdministerPlatform`
-		// grants today; everyone else is decided by the engine at platform scope.
-		if (canViewPlatform(principal)) return;
+		// Platform IAM (I24/D129): the engine at platform scope, with the pre-I8 platform admin
+		// as the fallback until bindings are seeded. An org `storage:read` at platform scope is
+		// kept so the existing platform-wide storage grants continue to work.
+		if (this.ctx.platformIam.allows(principal, 'platform:read')) return;
 		this.ctx.iam.require(principal, 'storage:read', { type: 'platform' });
 	}
 
@@ -625,7 +623,7 @@ export class ShareService {
 		principal: Principal,
 		permission: 'storage:create' | 'storage:update' | 'storage:delete' = 'storage:update',
 	): void {
-		if (canAdministerPlatform(principal)) return;
+		if (this.ctx.platformIam.allows(principal, 'platform:storage')) return;
 		this.ctx.iam.require(principal, permission, { type: 'platform' });
 	}
 }

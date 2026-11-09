@@ -69,6 +69,7 @@ import type { WorkloadIdentityService } from './iam/workload-identity.ts';
 import type { TokenService } from './iam/sts.ts';
 import type { AccessPolicyService } from './iam/access-policies.ts';
 import type { UserPoolService } from './user-pools.ts';
+import type { UserPoolEngineService } from './user-pool-engine.ts';
 import type { ScimTokenService } from './iam/scim.ts';
 import type { ServerErrorService } from './server-errors.ts';
 
@@ -189,6 +190,8 @@ export interface CoreContext {
 	accessPolicies: AccessPolicyService;
 	/** Managed user pools: OIDC clients and discovery for tenant apps (IAM.md I26–I29). */
 	userPools: UserPoolService;
+	/** Native email/password user-pool engine: users, sessions and the OIDC code flow (I27). */
+	userPoolEngine: UserPoolEngineService;
 	/** SCIM bearer tokens and directory reconciliation (IAM.md I20). */
 	scim: ScimTokenService;
 	/** Functions: Workers-compatible workloads on workerd (D110). */

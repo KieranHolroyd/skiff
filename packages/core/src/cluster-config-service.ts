@@ -1,7 +1,5 @@
 import {
 	CLUSTER_CONFIG_KEY,
-	canAdministerPlatform,
-	canViewPlatform,
 	clusterConfigSchema,
 	clusterConfigUpdateSchema,
 	type ClusterConfig,
@@ -49,16 +47,16 @@ export class ClusterConfigService {
 
 	/** The configuration for a surface: platform admins only. */
 	view(principal: Principal): ClusterConfig {
-		if (!canViewPlatform(principal))
-			throw new CoreError('forbidden', 'Only a platform admin can read the cluster configuration.', 403);
+		if (!this.ctx.platformIam.canView(principal))
+			throw new CoreError('forbidden', 'Only a platform admin role can read the cluster configuration.', 403);
 		return this.get();
 	}
 
 	update(principal: Principal, input: unknown): ClusterConfig {
-		if (!canAdministerPlatform(principal))
+		if (!this.ctx.platformIam.canAdminister(principal))
 			throw new CoreError(
 				'forbidden',
-				'Only a platform admin signed in to the dashboard can change the cluster configuration.',
+				'Only a platform admin role signed in to the dashboard can change the cluster configuration.',
 				403,
 			);
 		const patch = clusterConfigUpdateSchema.safeParse(input);

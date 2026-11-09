@@ -30,8 +30,6 @@ import {
 	HARD_BOUNCE_CLASSES,
 	authorizeSend,
 	brokerEnvPrefixSchema,
-	canAdministerPlatform,
-	canViewPlatform,
 	dkimRecordName,
 	dkimRecordValue,
 	dkimSelector,
@@ -314,7 +312,7 @@ export class EmailService {
 		principal: Principal,
 		input: { nodeId?: string | null; ip?: string | null; paused?: boolean; mailDomain?: string | null },
 	): Promise<ReturnType<EmailService['settings']>> {
-		if (!canAdministerPlatform(principal)) throw new CoreError('forbidden', 'Only a platform admin can configure email.', 403);
+		if (!this.ctx.platformIam.canAdminister(principal)) throw new CoreError('forbidden', 'Only a platform admin role can configure email.', 403);
 		this.requireFeature();
 		const current = this.settings();
 		let mailDomain: string | null | undefined;
@@ -467,7 +465,7 @@ export class EmailService {
 		const row = this.ctx.db.select().from(emailOrgs).where(eq(emailOrgs.orgId, orgId)).get();
 		if (row) return row;
 		// Orgs start in the sandbox (D119); one whose email a platform admin sets up starts active.
-		const active = principal ? principal.platformAdmin === true : false;
+		const active = principal ? this.ctx.platformIam.canAdminister(principal) : false;
 		const limits = active ? EMAIL_ACTIVE_DEFAULT_LIMITS : EMAIL_SANDBOX_LIMITS;
 		const created = {
 			orgId,
@@ -485,7 +483,7 @@ export class EmailService {
 	private peekOrg(orgId: string, principal?: Principal): Pick<typeof emailOrgs.$inferSelect, 'state' | 'perSecond' | 'perDay' | 'pausedReason'> {
 		const row = this.ctx.db.select().from(emailOrgs).where(eq(emailOrgs.orgId, orgId)).get();
 		if (row) return row;
-		const active = principal?.platformAdmin === true;
+		const active = principal ? this.ctx.platformIam.canAdminister(principal) : false;
 		const limits = active ? EMAIL_ACTIVE_DEFAULT_LIMITS : EMAIL_SANDBOX_LIMITS;
 		return { state: active ? 'active' : 'sandbox', perSecond: limits.perSecond, perDay: limits.perDay, pausedReason: null };
 	}
@@ -508,7 +506,7 @@ export class EmailService {
 
 	/** Move an org out of (or back into) the sandbox, pause or resume it. Platform admins only. */
 	setOrgState(principal: Principal, orgId: string, raw: { state?: EmailOrgState; perSecond?: number; perDay?: number }): EmailOrgView {
-		if (!canAdministerPlatform(principal)) throw new CoreError('forbidden', 'Only a platform admin can change sending limits.', 403);
+		if (!this.ctx.platformIam.canAdminister(principal)) throw new CoreError('forbidden', 'Only a platform admin role can change sending limits.', 403);
 		const input = emailOrgStateUpdateSchema.parse(raw);
 		if (!/^[A-Za-z0-9_-]{1,128}$/.test(orgId)) throw new ValidationError('Not an organisation id.');
 		const row = this.orgRow(orgId);
@@ -1633,9 +1631,12 @@ export class EmailService {
 		return row ? this.accessRequestView(row) : null;
 	}
 
-	/** Whether the principal may ask to leave the sandbox: an org owner or admin with `email:update`. */
+	/** Whether the principal may ask to leave the sandbox: an org manager (`org:update`) with `email:update`. */
 	canRequestProductionAccess(principal: Principal): boolean {
-		return (principal.role === 'owner' || principal.role === 'admin') && this.ctx.iam.can(principal, 'email:update', { type: 'org' });
+		return (
+			this.ctx.iam.can(principal, 'org:update', { type: 'org' }) &&
+			this.ctx.iam.can(principal, 'email:update', { type: 'org' })
+		);
 	}
 
 	/** An org owner or admin asks a platform admin to move the org out of the sandbox. */
@@ -1703,7 +1704,7 @@ export class EmailService {
 
 	/** The platform admin's queue, pending first, then the newest decisions. */
 	listAccessRequests(principal: Principal, options: { status?: EmailAccessRequestStatus; limit?: number } = {}): EmailAccessRequestView[] {
-		if (!canViewPlatform(principal)) throw new CoreError('forbidden', 'Only a platform admin can see production access requests.', 403);
+		if (!this.ctx.platformIam.canView(principal)) throw new CoreError('forbidden', 'Only a platform admin role can see production access requests.', 403);
 		const limit = Math.min(Math.max(options.limit ?? 100, 1), 500);
 		const rows = this.ctx.db
 			.select()
@@ -1721,7 +1722,7 @@ export class EmailService {
 	 * reason is required, and the org stays in the sandbox). The requester is told by email.
 	 */
 	async decideAccessRequest(principal: Principal, id: string, raw: unknown): Promise<EmailAccessRequestView> {
-		if (!canAdministerPlatform(principal)) throw new CoreError('forbidden', 'Only a platform admin can decide production access requests.', 403);
+		if (!this.ctx.platformIam.canAdminister(principal)) throw new CoreError('forbidden', 'Only a platform admin role can decide production access requests.', 403);
 		const input = emailAccessRequestDecisionSchema.parse(raw);
 		const row = this.ctx.db.select().from(emailAccessRequests).where(eq(emailAccessRequests.id, id)).get();
 		if (!row) throw new NotFoundError(`Access request ${id}`);

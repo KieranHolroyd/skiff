@@ -43,6 +43,8 @@ import { MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH, SetupAlreadyCompleteError, cl
 import { isValidSetupToken } from './setup-token';
 import { signInEmailFromPath, signInMethodFromPath, signInRefusalForEmail, signInRefusalForUser } from './sso-enforcement';
 import { provisionSsoUser } from './sso-provision';
+import { clearStepUpForUser, markSessionStepUp, refreshStrongestStepUp, strongestStepUpClass } from './step-up';
+import { stepUp } from './step-up/plugin';
 
 /**
  * "Sign in with GitHub" credentials: `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` from the
@@ -232,6 +234,9 @@ export const auth = betterAuth({
 		onPasswordReset: async ({ user }, request) => {
 			// One link resets once; any other links sent before it stop working too.
 			deleteResetTokens(sqlite, user.id);
+			// A password reset is a clearing event for step-up (STEP-UP.md §3): the person who reset
+			// is not the person who was at the keyboard a minute ago.
+			clearStepUpForUser(user.id);
 			try {
 				recordPasswordReset(core.audit, sqlite, { userId: user.id, method: 'email', ipHash: hashRequestIp(request) });
 			} catch (error) {
@@ -284,6 +289,12 @@ export const auth = betterAuth({
 			signInMethod: { type: 'string', required: false, input: false },
 			// Last request seen, at most once a minute (hooks.server.ts). The idle-timeout clock.
 			lastSeenAt: { type: 'number', required: false, input: false },
+			// Step-up verification window (STEP-UP.md §3). Server-written only: `input: false` means a
+			// client cannot claim it verified. `strongest` is the strongest factor the person has
+			// enrolled now, so adding a passkey can never leave an old basic verification sufficient.
+			verificationAt: { type: 'number', required: false, input: false },
+			verificationClass: { type: 'string', required: false, input: false },
+			strongest: { type: 'string', required: false, input: false },
 		},
 	},
 	databaseHooks: {
@@ -307,6 +318,12 @@ export const auth = betterAuth({
 							...(organizationId ? { activeOrganizationId: organizationId } : {}),
 							...(method ? { signInMethod: method } : {}),
 							lastSeenAt: Date.now(),
+							// A fresh sign-in seeds the step-up window (STEP-UP.md §3). Only a passkey
+							// sign-in is strong at this point; a TOTP/backup-code challenge creates a new
+							// session and the after-hook below upgrades it.
+							verificationAt: Date.now(),
+							verificationClass: method === 'passkey' ? 'strong' : 'basic',
+							strongest: strongestStepUpClass(session.userId),
 						},
 					};
 				},
@@ -441,7 +458,17 @@ export const auth = betterAuth({
 			// Sign-in and first-time TOTP verification create a new session; otherwise it's this one.
 			const sessionId =
 				ctx.context.newSession?.session.id ?? (await getSessionFromCtx(ctx).catch(() => null))?.session.id;
-			if (sessionId) markSessionSecondFactor(sessionId, factor);
+			if (sessionId) {
+				markSessionSecondFactor(sessionId, factor);
+				// A passkey, TOTP code or backup code is a strong factor. This is also how enrolling
+				// one satisfies step-up immediately (STEP-UP.md §3) and how a first-time enrolment
+				// upgrades this session's class.
+				const user = ctx.context.newSession?.user ?? (await getSessionFromCtx(ctx).catch(() => null))?.user;
+				if (user?.id) {
+					markSessionStepUp(sessionId, user.id, 'strong');
+					refreshStrongestStepUp(user.id);
+				}
+			}
 		}),
 	},
 	advanced: {
@@ -548,6 +575,9 @@ export const auth = betterAuth({
 				await sendMagicLinkEmail(email, url);
 			},
 		}),
+		// Step-up verification (STEP-UP.md §5): the endpoints under /api/auth/step-up. Enforcement
+		// itself lives in `@skiff/contracts`' `requireStepUp` and is gated by `SKIFF_STEP_UP`.
+		stepUp(),
 		skiffSetup,
 		// Must stay last: it copies Set-Cookie from server-side calls onto the SvelteKit response.
 		sveltekitCookies(getRequestEvent),

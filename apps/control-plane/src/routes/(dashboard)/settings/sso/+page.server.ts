@@ -3,7 +3,7 @@ import { core } from '#lib/server/core.js';
 import { platformOrigin } from '#lib/server/config.js';
 import { sqlite } from '#lib/server/db.js';
 import { userHasSecondFactor } from '#lib/server/second-factor.js';
-import { reserveSsoProviderId, sso, ssoCallbackUrl } from '#lib/server/sso.js';
+import { reserveSsoProviderId, sso, ssoCallbackUrl, ssoSamlAcs, ssoSamlMetadata } from '#lib/server/sso.js';
 import { ssoPreset } from '#lib/sso-presets.js';
 import { ssoDefaultRole } from '#lib/server/sso-provision.js';
 import { failStatus, formBoolean, formString, toFormFailure } from '../../_lib/errors.js';
@@ -50,6 +50,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		providers,
 		reservedProviderId,
 		reservedCallbackUrl: ssoCallbackUrl(reservedProviderId),
+		reservedAcsUrl: ssoSamlAcs(reservedProviderId),
+		reservedSpMetadataUrl: ssoSamlMetadata(reservedProviderId),
 		domains,
 		owners,
 		policy: core.authPolicy.get(principal),
@@ -77,6 +79,8 @@ export const actions: Actions = {
 		const principal = locals.principal!;
 		const data = await request.formData();
 		const id = formString(data, 'providerId');
+		const protocol: 'oidc' | 'saml' =
+			formString(data, 'protocol') === 'saml' ? 'saml' : 'oidc';
 		const clientSecret = formString(data, 'clientSecret');
 		const discoveryUrl = formString(data, 'discoveryUrl');
 		// A preset's own fields arrive as `preset.<key>`; the server resolves the issuer from them
@@ -92,31 +96,52 @@ export const actions: Actions = {
 					}
 				}
 			: { issuer: formString(data, 'issuer'), discoveryUrl: discoveryUrl || null };
+		const saml = {
+			metadataUrl: formString(data, 'samlMetadataUrl') || null,
+			entityId: formString(data, 'samlEntityId'),
+			entryPoint: formString(data, 'samlEntryPoint'),
+			cert: formString(data, 'samlCert'),
+			spEntityId: formString(data, 'samlSpEntityId'),
+			audience: formString(data, 'samlAudience'),
+			wantAssertionsSigned: formBoolean(data, 'samlWantAssertionsSigned'),
+			identifierFormat: formString(data, 'samlIdentifierFormat')
+		};
 		const input = {
 			name: formString(data, 'name'),
-			...presetInput,
+			protocol,
+			...(protocol === 'oidc' ? presetInput : { issuer: formString(data, 'samlEntityId') }),
 			clientId: formString(data, 'clientId'),
 			...(clientSecret ? { clientSecret } : {}),
-			scopes: scopes(data),
+			...(protocol === 'oidc' ? { scopes: scopes(data) } : {}),
 			claims: {
 				email: formString(data, 'claimEmail'),
 				name: formString(data, 'claimName'),
 				groups: formString(data, 'claimGroups')
-			}
+			},
+			...(protocol === 'saml' ? { saml } : {})
 		};
 		try {
 			if (id) {
 				await sso.updateProvider(principal, id, input);
 				return { success: 'SSO provider saved.' };
 			}
-			if (!clientSecret)
+			if (protocol === 'oidc' && !clientSecret)
 				return fail(400, {
 					message: 'The client secret is required for a new provider.',
 					fieldErrors: { clientSecret: 'Required.' }
 				});
 			const reservedId = formString(data, 'reservedProviderId');
-			await sso.createProvider(principal, { ...input, clientSecret }, reservedId || undefined);
-			return { success: 'SSO provider added. Verify an email domain to route sign-ins to it.' };
+			await sso.createProvider(
+				principal,
+				protocol === 'oidc' ? { ...input, clientSecret } : input,
+				reservedId || undefined
+			);
+			return {
+				success:
+					protocol === 'saml'
+						? 'SAML provider added. Give the IdP the SP metadata or ACS URL shown above.'
+						: 'SSO provider added. Verify an email domain to route sign-ins to it.'
+			};
 		} catch (cause) {
 			return failure(cause);
 		}

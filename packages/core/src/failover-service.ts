@@ -2,7 +2,6 @@ import { hostname } from 'node:os';
 import { and, desc, eq, gte, inArray, isNull } from 'drizzle-orm';
 import { databaseReplicas, databases, failoverEvents, nodes } from '@skiff/db';
 import {
-	canViewPlatform,
 	failoverEventKinds,
 	type ClusterConfig,
 	type DatabaseReplica,
@@ -873,8 +872,13 @@ export class FailoverService {
 
 	// ------------------------------------------------------------------ reads
 
+	/** Fleet reads: `platform:read`, with the pre-I8 platform admin as the seeding fallback. */
+	private requireViewer(principal: Principal): void {
+		if (!this.ctx.platformIam.canView(principal))
+			throw new CoreError('forbidden', 'Only a platform admin role can read the failover controller.', 403);
+	}
 	status(principal: Principal): FailoverStatusView {
-		requireViewer(principal);
+		this.requireViewer(principal);
 		const config = this.ctx.cluster.get();
 		const now = this.ctx.now();
 		const facts = this.#nodeFacts(now, config);
@@ -989,7 +993,7 @@ export class FailoverService {
 	}
 
 	history(principal: Principal, options: { limit?: number; kind?: FailoverEventKind } = {}): FailoverEventView[] {
-		requireViewer(principal);
+		this.requireViewer(principal);
 		if (options.kind !== undefined && !(failoverEventKinds as readonly string[]).includes(options.kind))
 			throw new CoreError('invalid_request', `Unknown failover event kind ${options.kind}.`, 400);
 		return this.#history(options);
@@ -1275,10 +1279,6 @@ function sourceReason(fact: NodeFact | undefined, nodeId: string, why: 'drain' |
 
 function systemPrincipal(orgId: string): Principal {
 	return buildSystemPrincipal('system:failover', orgId);
-}
-
-function requireViewer(principal: Principal): void {
-	if (!canViewPlatform(principal)) throw new CoreError('forbidden', 'Only a platform admin can read the failover controller.', 403);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

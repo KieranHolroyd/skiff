@@ -63,7 +63,7 @@ function denied(principal: Principal, permission: Permission) {
 
 export const load: PageServerLoad = ({ locals }) => {
 	const principal = locals.principal!;
-	const showEmails = principal.role === 'owner' || principal.role === 'admin';
+	const showEmails = hasPermission(principal, 'iam:read');
 	const can = {
 		invite: hasPermission(principal, 'member:invite'),
 		updateRole: hasPermission(principal, 'member:update-role'),
@@ -120,8 +120,10 @@ export const load: PageServerLoad = ({ locals }) => {
 		loadError = 'Members are temporarily unavailable. Try again in a moment.';
 	}
 
-	// Only owners may grant `owner` (Better Auth enforces this too).
-	const assignableRoles = ROLES.filter((role) => role !== 'owner' || principal.role === 'owner');
+	// Only holders of `iam:manage-owners` may grant `owner` (Better Auth enforces this too).
+	const assignableRoles = ROLES.filter(
+		(role) => role !== 'owner' || hasPermission(principal, 'iam:manage-owners')
+	);
 
 	return {
 		members: list,

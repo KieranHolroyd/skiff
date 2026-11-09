@@ -127,7 +127,9 @@ export const load: PageServerLoad = ({ url, locals, cookies }) => {
 
 /** Owner session for the post-claim actions; refuses anyone else. */
 function owner(event: RequestEvent) {
-	return event.locals.user && event.locals.principal?.role === 'owner' ? event.locals.user : undefined;
+	return event.locals.user && event.locals.principal?.permissions.has('iam:manage-owners')
+		? event.locals.user
+		: undefined;
 }
 
 export const actions: Actions = {

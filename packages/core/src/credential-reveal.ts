@@ -12,7 +12,7 @@ import { CoreError } from './errors.ts';
  */
 export function requireCredentialReveal(principal: Principal, permission: Permission): void {
 	requirePermission(principal, permission);
-	if (principal.kind === 'mcp')
+	if (principal.credential === 'oauth')
 		throw new CoreError(
 			'forbidden',
 			'Credentials are never returned over MCP. Read them in the dashboard or with the CLI (`skif … credentials`).',

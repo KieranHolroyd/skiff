@@ -53,7 +53,7 @@ import { canManagePlatform } from './self-update';
  * On a single-user install that is the bootstrap user.
  */
 export function canConfigurePlatform(principal: Principal | undefined): boolean {
-	return canManagePlatform(principal) && principal?.role === 'owner';
+	return canManagePlatform(principal) && principal?.permissions.has('iam:manage-owners') === true;
 }
 
 export const OWNER_ONLY_MESSAGE = 'Only the owner can change email, backup and alert settings.';

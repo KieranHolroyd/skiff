@@ -19,17 +19,34 @@ export const presetSchema = z.object({
 	values: z.record(z.string().max(64), z.string().max(500)).optional()
 });
 
+/**
+ * The SAML half of a provider (`@better-auth/sso` `samlConfig`). A metadata URL is imported at
+ * save time; without one, an entry point and the IdP signing certificate are required.
+ */
+export const samlSchema = z.object({
+	metadataUrl: z.string().trim().max(500).nullable().optional(),
+	entityId: z.string().trim().min(1).max(500).optional(),
+	entryPoint: z.string().trim().min(1).max(500).optional(),
+	cert: z.string().max(20_000).optional(),
+	spEntityId: z.string().trim().max(500).optional(),
+	audience: z.string().trim().max(500).optional(),
+	wantAssertionsSigned: z.boolean().optional(),
+	identifierFormat: z.string().trim().max(500).optional()
+});
+
 export const providerCreateSchema = z.object({
 	name: z.string().trim().min(1).max(80),
-	/** Required unless `preset` is given. */
+	protocol: z.enum(['oidc', 'saml']).optional(),
+	/** The OIDC issuer, or a SAML IdP entity id. Required for OIDC unless `preset` is given. */
 	issuer: z.string().trim().min(1).max(500).optional(),
 	preset: presetSchema.optional(),
-	clientId: z.string().trim().min(1).max(500),
-	clientSecret: z.string().min(1).max(4000),
+	clientId: z.string().trim().min(1).max(500).optional(),
+	clientSecret: z.string().min(1).max(4000).optional(),
 	discoveryUrl: z.string().trim().max(500).nullable().optional(),
 	scopes: z.array(z.string().trim().min(1).max(100)).max(20).optional(),
 	claims: claimsSchema,
-	enabled: z.boolean().optional()
+	enabled: z.boolean().optional(),
+	saml: samlSchema.optional()
 });
 
 export const providerUpdateSchema = providerCreateSchema.partial();

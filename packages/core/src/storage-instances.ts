@@ -746,7 +746,7 @@ export class StorageService {
 	 */
 	revealKey(principal: Principal, name: string, keyId: string): StorageKeyReveal {
 		requireCredentialReveal(principal, 'storage:credentials');
-		if (principal.kind === 'system')
+		if (principal.credential === 'system')
 			throw new CoreError('forbidden', 'Credential reveal needs a user session or API key.', 403);
 		const row = this.requireRow(principal, name);
 		this.requireStoragePermission(principal, 'storage:credentials', row);

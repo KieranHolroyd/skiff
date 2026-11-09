@@ -156,12 +156,9 @@ export class LogDrainService {
 		return row.project_id ? { type: 'project', id: row.project_id } : { type: 'org' };
 	}
 
-	/** A drain copies every log line out of Skiff, so org owners and admins manage them (as alert rules). */
+	/** A drain copies every log line out of Skiff, so `logDrain:update` (owners and admins) manages them. */
 	canEdit(principal: Principal): boolean {
-		return (
-			principal.permissions.has('logs:read') &&
-			(principal.role === 'owner' || principal.role === 'admin' || principal.platformAdmin === true)
-		);
+		return this.ctx.iam.can(principal, 'logDrain:update', { type: 'org' });
 	}
 
 	#requireEdit(principal: Principal, resource: ResourceRef = { type: 'org' }): void {

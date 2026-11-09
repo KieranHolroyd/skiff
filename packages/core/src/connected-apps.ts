@@ -150,7 +150,7 @@ export class ConnectedAppService {
 				.get(grant.userId, principal.orgId)?.role;
 			// Another organisation's grant is not this caller's to see, let alone revoke.
 			if (!role) throw new NotFoundError('Connected app');
-			if (role === 'owner' && principal.role !== 'owner')
+			if (role === 'owner' && !principal.permissions.has('iam:manage-owners'))
 				throw new CoreError('forbidden', "Only an owner can revoke an owner's connected apps.", 403);
 		}
 		return this.ctx.audit.wrap(

@@ -10,7 +10,6 @@ import {
 	REGISTRY_ID_PREFIX,
 	REGISTRY_PIN_TAG_PREFIX,
 	REGISTRY_REPOSITORY_PATTERN,
-	canAdministerPlatform,
 	hasPermission,
 	parseImageReference,
 	registryImageTag,
@@ -225,12 +224,12 @@ export class RegistryService {
 	}
 
 	update(principal: Principal, raw: RegistrySettingsUpdate): RegistryView {
-		if (!canAdministerPlatform(principal))
+		if (!this.ctx.platformIam.canAdminister(principal))
 			throw new CoreError(
 				'forbidden',
 				principal.platformAdmin
-					? 'Registry settings need a platform admin signed in to the dashboard (not an API key or MCP token).'
-					: 'Platform admin required.',
+					? 'Registry settings need a platform admin role signed in to the dashboard (not an API key or MCP token).'
+					: 'Platform admin permission required.',
 				403,
 			);
 		const input = registrySettingsUpdateSchema.parse(raw);

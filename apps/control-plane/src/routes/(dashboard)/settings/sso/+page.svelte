@@ -46,6 +46,7 @@
 	interface ProviderView {
 		id: string;
 		name: string;
+		protocol: 'oidc' | 'saml';
 		issuer: string;
 		clientId: string;
 		discoveryUrl: string | null;
@@ -53,7 +54,18 @@
 		claims: { email: string; name: string; groups: string };
 		enabled: boolean;
 		hasClientSecret: boolean;
+		hasCertificate: boolean;
 		callbackUrl: string;
+		spMetadataUrl: string | null;
+		acsUrl: string | null;
+		saml: {
+			entityId: string;
+			entryPoint: string | null;
+			spEntityId: string | null;
+			audience: string | null;
+			wantAssertionsSigned: boolean;
+			identifierFormat: string | null;
+		} | null;
 		updatedAt: number;
 	}
 
@@ -123,11 +135,24 @@
 
 	const DEFAULT_SCOPES = 'openid profile email';
 	const DEFAULT_CLAIMS = { email: 'email', name: 'name', groups: 'groups' };
+	/** SAML attribute names default to the conventional ones; the form lets them be changed. */
+	const SAML_DEFAULT_CLAIMS = { email: 'email', name: 'displayName', groups: 'groups' };
 
 	/** `custom` is the plain OIDC form; anything else is a preset id from `sso-presets.ts`. */
 	let presetId = $state<string>('custom');
 	let presetValues = $state<Record<string, string>>({});
 	let providerName = $state('');
+	let protocol = $state<'oidc' | 'saml'>('oidc');
+	let saml = $state({
+		metadataUrl: '',
+		entityId: '',
+		entryPoint: '',
+		cert: '',
+		spEntityId: '',
+		audience: '',
+		identifierFormat: '',
+		wantAssertionsSigned: true
+	});
 	let scopesText = $state(DEFAULT_SCOPES);
 	let claims = $state({ ...DEFAULT_CLAIMS });
 	/** Once scopes or claims are edited (or come from a saved provider), the preset stops resetting them. */
@@ -148,6 +173,14 @@
 	});
 	const consoleUrl = $derived(activePreset?.consoleUrl(presetValues) ?? null);
 	const redirectUri = $derived(editing ? editing.callbackUrl : data.reservedCallbackUrl);
+	const acsUrl = $derived(
+		editing?.protocol === 'saml' && editing.acsUrl ? editing.acsUrl : data.reservedAcsUrl
+	);
+	const spMetadataUrl = $derived(
+		editing?.protocol === 'saml' && editing.spMetadataUrl
+			? editing.spMetadataUrl
+			: data.reservedSpMetadataUrl
+	);
 
 	$effect(() => {
 		const config = resolved && 'config' in resolved ? resolved.config : null;
@@ -164,14 +197,42 @@
 
 	function choosePreset(id: string) {
 		const preset = ssoPreset(id);
+		protocol = 'oidc';
 		presetId = preset ? preset.id : 'custom';
 		presetValues = presetDefaults(preset);
 		if (!editing) providerName = preset?.name ?? '';
 		advancedTouched = false;
 		if (!preset) {
-			scopesText = editing?.scopes.join(' ') ?? DEFAULT_SCOPES;
-			claims = { ...(editing?.claims ?? DEFAULT_CLAIMS) };
+			scopesText = editing?.protocol === 'oidc' ? editing.scopes.join(' ') : DEFAULT_SCOPES;
+			claims = { ...(editing?.protocol === 'oidc' ? editing.claims : DEFAULT_CLAIMS) };
 		}
+	}
+
+	function chooseProtocol(value: string) {
+		if (value === 'saml') {
+			protocol = 'saml';
+			presetId = 'custom';
+			if (!editing) {
+				providerName = '';
+				claims = { ...SAML_DEFAULT_CLAIMS };
+				advancedTouched = false;
+			}
+		} else {
+			choosePreset('custom');
+		}
+	}
+
+	function resetSaml() {
+		saml = {
+			metadataUrl: '',
+			entityId: '',
+			entryPoint: '',
+			cert: '',
+			spEntityId: '',
+			audience: '',
+			identifierFormat: '',
+			wantAssertionsSigned: true
+		};
 	}
 	const METHODS = [
 		['password', 'Password'],
@@ -195,19 +256,52 @@
 		(data.policy as PolicyView).idleTimeout ? (data.policy as PolicyView).idleTimeout! / 60 : ''
 	);
 
-	function openProvider(provider: ProviderView | null, preset = 'custom') {
+	function openProvider(
+		provider: ProviderView | null,
+		preset = 'custom',
+		chosenProtocol: 'oidc' | 'saml' = 'oidc'
+	) {
 		editing = provider;
 		if (provider) {
-			// Reopen a saved provider in the preset its issuer came from, keeping its scopes and claims.
-			const detected = detectSsoPreset(provider.issuer);
-			presetId = detected?.preset.id ?? 'custom';
-			presetValues = { ...presetDefaults(detected?.preset ?? null), ...detected?.values };
-			providerName = provider.name;
-			scopesText = provider.scopes.join(' ');
-			claims = { ...provider.claims };
-			advancedTouched = true;
+			protocol = provider.protocol;
+			if (provider.protocol === 'saml') {
+				presetId = 'custom';
+				presetValues = {};
+				providerName = provider.name;
+				claims = { ...provider.claims };
+				scopesText = provider.scopes.join(' ');
+				saml = {
+					metadataUrl: provider.discoveryUrl ?? '',
+					entityId: provider.saml?.entityId ?? provider.issuer,
+					entryPoint: provider.saml?.entryPoint ?? '',
+					cert: '',
+					spEntityId: provider.saml?.spEntityId ?? '',
+					audience: provider.saml?.audience ?? '',
+					identifierFormat: provider.saml?.identifierFormat ?? '',
+					wantAssertionsSigned: provider.saml?.wantAssertionsSigned ?? true
+				};
+				advancedTouched = true;
+			} else {
+				// Reopen a saved provider in the preset its issuer came from, keeping its scopes and claims.
+				const detected = detectSsoPreset(provider.issuer);
+				presetId = detected?.preset.id ?? 'custom';
+				presetValues = { ...presetDefaults(detected?.preset ?? null), ...detected?.values };
+				providerName = provider.name;
+				scopesText = provider.scopes.join(' ');
+				claims = { ...provider.claims };
+				advancedTouched = true;
+			}
 		} else {
-			choosePreset(preset);
+			resetSaml();
+			providerName = '';
+			if (chosenProtocol === 'saml') {
+				protocol = 'saml';
+				presetId = 'custom';
+				claims = { ...SAML_DEFAULT_CLAIMS };
+				advancedTouched = false;
+			} else {
+				choosePreset(preset);
+			}
 		}
 		providerOpen = true;
 	}
@@ -312,7 +406,7 @@
 		title="Identity provider"
 		icon={FingerprintIcon}
 		count={data.providers.length}
-		description="OpenID Connect. Users sign in at your IdP; Skiff trusts the email claim from a verified domain."
+		description="OpenID Connect or SAML 2.0. Users sign in at your IdP; Skiff trusts the email claim from a verified domain."
 		flush
 	>
 		{#snippet actions()}
@@ -332,6 +426,9 @@
 						<DropdownMenu.Separator />
 						<DropdownMenu.Item onSelect={() => openProvider(null)}
 							>Other OpenID Connect</DropdownMenu.Item
+						>
+						<DropdownMenu.Item onSelect={() => openProvider(null, 'custom', 'saml')}
+							>SAML 2.0</DropdownMenu.Item
 						>
 					</DropdownMenu.Content>
 				</DropdownMenu.Root>
@@ -367,6 +464,16 @@
 								Any issuer with a discovery document.
 							</span>
 						</button>
+						<button
+							type="button"
+							class="rounded-lg border border-dashed bg-background p-3 text-left transition-colors hover:bg-muted/60 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+							onclick={() => openProvider(null, 'custom', 'saml')}
+						>
+							<span class="block text-sm font-medium">SAML 2.0</span>
+							<span class="mt-0.5 block text-xs text-muted-foreground">
+								Metadata URL, or an entry point and certificate.
+							</span>
+						</button>
 					</div>
 				{:else}
 					<EmptyState
@@ -393,10 +500,10 @@
 							<Table.Cell class="max-w-96 pl-4">
 								<p class="flex flex-wrap items-center gap-1.5">
 									<span class="font-medium">{provider.name}</span>
-									{#if presetName(provider.issuer) && presetName(provider.issuer) !== provider.name}
+									{#if provider.protocol === 'oidc' && presetName(provider.issuer) && presetName(provider.issuer) !== provider.name}
 										<Badge variant="outline">{presetName(provider.issuer)}</Badge>
 									{/if}
-									<Badge variant="outline">OIDC</Badge>
+									<Badge variant="outline">{provider.protocol === 'saml' ? 'SAML' : 'OIDC'}</Badge>
 								</p>
 								<p
 									class="mt-0.5 truncate font-mono text-xs text-muted-foreground"
@@ -404,15 +511,27 @@
 								>
 									{provider.issuer}
 								</p>
-								<p class="mt-0.5 truncate text-xs text-muted-foreground">
-									Client id <span class="font-mono">{provider.clientId}</span>
-								</p>
-								<div class="mt-0.5 flex items-center gap-1">
-									<p class="truncate text-xs text-muted-foreground">
-										Callback <span class="font-mono">{provider.callbackUrl}</span>
+								{#if provider.protocol === 'saml'}
+									<p class="mt-0.5 truncate text-xs text-muted-foreground">
+										SSO URL <span class="font-mono">{provider.saml?.entryPoint ?? '—'}</span>
 									</p>
-									<CopyButton value={provider.callbackUrl} iconOnly label="Copy callback URL" />
-								</div>
+									<div class="mt-0.5 flex items-center gap-1">
+										<p class="truncate text-xs text-muted-foreground">
+											ACS <span class="font-mono">{provider.acsUrl}</span>
+										</p>
+										<CopyButton value={provider.acsUrl ?? ''} iconOnly label="Copy ACS URL" />
+									</div>
+								{:else}
+									<p class="mt-0.5 truncate text-xs text-muted-foreground">
+										Client id <span class="font-mono">{provider.clientId}</span>
+									</p>
+									<div class="mt-0.5 flex items-center gap-1">
+										<p class="truncate text-xs text-muted-foreground">
+											Callback <span class="font-mono">{provider.callbackUrl}</span>
+										</p>
+										<CopyButton value={provider.callbackUrl} iconOnly label="Copy callback URL" />
+									</div>
+								{/if}
 							</Table.Cell>
 							<Table.Cell class="hidden lg:table-cell">
 								<p class="text-xs text-muted-foreground">
@@ -420,9 +539,18 @@
 									<span class="font-mono">{provider.claims.name}</span>, groups
 									<span class="font-mono">{provider.claims.groups}</span>
 								</p>
-								<p class="mt-0.5 text-xs text-muted-foreground">
-									Scopes <span class="font-mono">{provider.scopes.join(' ')}</span>
-								</p>
+								{#if provider.protocol === 'oidc'}
+									<p class="mt-0.5 text-xs text-muted-foreground">
+										Scopes <span class="font-mono">{provider.scopes.join(' ')}</span>
+									</p>
+								{:else}
+									<p class="mt-0.5 text-xs text-muted-foreground">
+										Signed assertions
+										<span class="font-mono"
+											>{provider.saml?.wantAssertionsSigned ? 'required' : 'optional'}</span
+										>
+									</p>
+								{/if}
 							</Table.Cell>
 							<Table.Cell>
 								<StatusBadge
@@ -463,8 +591,9 @@
 
 		{#snippet footer()}
 			<span>
-				The client secret is write-only: it is sealed with this organisation's key and never
-				returned. {#if !data.canManage}Org owners and admins manage SSO.{/if}
+				An OIDC client secret is write-only: it is sealed with this organisation's key and never
+				returned. A SAML signing certificate is public, and the private key stays at the IdP.
+				{#if !data.canManage}Org owners and admins manage SSO.{/if}
 			</span>
 		{/snippet}
 	</Panel>
@@ -953,24 +1082,6 @@
 			</div>
 		</form>
 	</Panel>
-
-	<Panel
-		title="Not yet"
-		icon={FingerprintIcon}
-		description="Sign-in, JIT provisioning, group mapping and SCIM are live. SAML follows in the same plugin."
-	>
-		<ul class="grid gap-3 text-sm sm:grid-cols-2">
-			<li class="flex items-start justify-between gap-3 rounded-md border p-3">
-				<span>
-					<span class="font-medium">SAML 2.0</span>
-					<span class="mt-0.5 block text-xs text-muted-foreground">
-						The same plugin accepts SAML providers; the dashboard form still speaks OIDC only.
-					</span>
-				</span>
-				<Badge variant="neutral">Not yet</Badge>
-			</li>
-		</ul>
-	</Panel>
 </div>
 
 {#if data.canManage}
@@ -979,37 +1090,63 @@
 		icon={FingerprintIcon}
 		title={editing
 			? `Edit ${editing.name}`
+			: protocol === 'saml'
+				? 'Add a SAML 2.0 provider'
+				: activePreset
+					? `Connect ${activePreset.name}`
+					: 'Add an identity provider'}
+		description={protocol === 'saml'
+			? 'Import the IdP metadata URL, or enter the SSO URL and signing certificate. The certificate is public; the private key stays with the IdP.'
 			: activePreset
-				? `Connect ${activePreset.name}`
-				: 'Add an identity provider'}
-		description={activePreset
-			? 'Create a client at the provider, then paste its client ID and secret here. Skiff works out the rest and checks it against the provider’s discovery document.'
-			: 'Skiff fetches the issuer’s discovery document and stores the endpoints. The client secret is sealed with this organisation’s key.'}
+				? 'Create a client at the provider, then paste its client ID and secret here. Skiff works out the rest and checks it against the provider’s discovery document.'
+				: 'Skiff fetches the issuer’s discovery document and stores the endpoints. The client secret is sealed with this organisation’s key.'}
 		action="?/saveProvider"
 		submitLabel={editing ? 'Save provider' : 'Add provider'}
 		size="lg"
 	>
 		{#if editing}
 			<input type="hidden" name="providerId" value={editing.id} />
+			<input type="hidden" name="protocol" value={editing.protocol} />
 		{:else}
 			<input type="hidden" name="reservedProviderId" value={data.reservedProviderId} />
 		{/if}
 		<Field.Group>
-			<Field.Field>
-				<Field.Label for="sso-preset">Identity provider</Field.Label>
-				<NativeSelect.Root
-					id="sso-preset"
-					name="preset"
-					value={presetId}
-					onchange={(event) => choosePreset(event.currentTarget.value)}
-					class="w-full"
-				>
-					{#each SSO_PRESETS as preset (preset.id)}
-						<NativeSelect.Option value={preset.id}>{preset.name}</NativeSelect.Option>
-					{/each}
-					<NativeSelect.Option value="custom">Other OpenID Connect</NativeSelect.Option>
-				</NativeSelect.Root>
-			</Field.Field>
+			{#if !editing}
+				<Field.Field>
+					<Field.Label for="sso-protocol">Protocol</Field.Label>
+					<NativeSelect.Root
+						id="sso-protocol"
+						name="protocol"
+						value={protocol}
+						onchange={(event) => chooseProtocol(event.currentTarget.value)}
+						class="w-full"
+					>
+						<NativeSelect.Option value="oidc">OpenID Connect</NativeSelect.Option>
+						<NativeSelect.Option value="saml">SAML 2.0</NativeSelect.Option>
+					</NativeSelect.Root>
+					<Field.Description>
+						SAML is for IdPs that do not offer OpenID Connect, or an organisation that requires it.
+					</Field.Description>
+				</Field.Field>
+			{/if}
+
+			{#if protocol === 'oidc'}
+				<Field.Field>
+					<Field.Label for="sso-preset">Identity provider</Field.Label>
+					<NativeSelect.Root
+						id="sso-preset"
+						name="preset"
+						value={presetId}
+						onchange={(event) => choosePreset(event.currentTarget.value)}
+						class="w-full"
+					>
+						{#each SSO_PRESETS as preset (preset.id)}
+							<NativeSelect.Option value={preset.id}>{preset.name}</NativeSelect.Option>
+						{/each}
+						<NativeSelect.Option value="custom">Other OpenID Connect</NativeSelect.Option>
+					</NativeSelect.Root>
+				</Field.Field>
+			{/if}
 
 			{#if activePreset}
 				<section class="rounded-lg border bg-muted/30 p-3">
@@ -1101,13 +1238,13 @@
 			{/if}
 
 			<div class="grid gap-4 sm:grid-cols-2">
-				<Field.Field class={activePreset ? 'sm:col-span-2' : undefined}>
+				<Field.Field class={protocol === 'oidc' && activePreset ? 'sm:col-span-2' : undefined}>
 					<Field.Label for="sso-name">Name</Field.Label>
 					<Input
 						id="sso-name"
 						name="name"
 						bind:value={providerName}
-						placeholder={activePreset?.name ?? 'Okta'}
+						placeholder={protocol === 'saml' ? 'Okta SAML' : (activePreset?.name ?? 'Okta')}
 						required
 						maxlength={80}
 					/>
@@ -1115,7 +1252,7 @@
 						<Field.Description>Shown on the sign-in page.</Field.Description>
 					{/if}
 				</Field.Field>
-				{#if !activePreset}
+				{#if protocol === 'oidc' && !activePreset}
 					<Field.Field>
 						<Field.Label for="sso-issuer">Issuer</Field.Label>
 						<Input
@@ -1132,94 +1269,218 @@
 					</Field.Field>
 				{/if}
 			</div>
-			<div class="grid gap-4 sm:grid-cols-2">
-				<Field.Field>
-					<Field.Label for="sso-client-id">Client id</Field.Label>
-					<Input
-						id="sso-client-id"
-						name="clientId"
-						value={editing?.clientId ?? ''}
-						required
-						autocapitalize="off"
-						spellcheck="false"
-						class="font-mono text-sm"
-					/>
-				</Field.Field>
-				<Field.Field>
-					<Field.Label for="sso-client-secret">Client secret</Field.Label>
-					<Input
-						id="sso-client-secret"
-						name="clientSecret"
-						type="password"
-						placeholder={editing?.hasClientSecret ? 'Leave blank to keep the stored secret' : ''}
-						required={!editing}
-						autocomplete="new-password"
-					/>
-				</Field.Field>
-			</div>
-
-			{#if !activePreset}
-				<Field.Field>
-					<Field.Label for="sso-discovery">Discovery URL</Field.Label>
-					<Input
-						id="sso-discovery"
-						name="discoveryUrl"
-						value={editing?.discoveryUrl ?? ''}
-						placeholder="https://idp.example.com/.well-known/openid-configuration"
-						autocapitalize="off"
-						spellcheck="false"
-						class="font-mono text-sm"
-					/>
-					<Field.Description>
-						Leave blank for the standard <span class="font-mono"
-							>/.well-known/openid-configuration</span
-						>
-						under the issuer.
-					</Field.Description>
-				</Field.Field>
-				<Field.Field>
-					<Field.Label for="sso-callback">Redirect URI</Field.Label>
-					<div class="flex items-center gap-1">
-						<code
-							id="sso-callback"
-							class="min-w-0 truncate rounded bg-muted px-1.5 py-0.5 font-mono text-xs"
-							title={redirectUri}>{redirectUri}</code
-						>
-						<CopyButton value={redirectUri} iconOnly label="Copy redirect URI" />
-					</div>
-					<Field.Description
-						>Register this at the IdP as the client’s redirect (callback) URI.</Field.Description
-					>
-				</Field.Field>
-			{/if}
-
-			<details class="group" open={!activePreset}>
-				<summary
-					class="inline-flex cursor-pointer list-none items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground"
-				>
-					<ChevronRightIcon class="size-3.5 transition-transform group-open:rotate-90" />
-					{activePreset ? 'Scopes and claims (filled in for you)' : 'Scopes and claims'}
-				</summary>
-				<div class="mt-3 grid gap-4">
+			{#if protocol === 'oidc'}
+				<div class="grid gap-4 sm:grid-cols-2">
 					<Field.Field>
-						<Field.Label for="sso-scopes">Scopes</Field.Label>
+						<Field.Label for="sso-client-id">Client id</Field.Label>
 						<Input
-							id="sso-scopes"
-							name="scopes"
-							bind:value={scopesText}
-							oninput={() => (advancedTouched = true)}
-							placeholder={DEFAULT_SCOPES}
+							id="sso-client-id"
+							name="clientId"
+							value={editing?.clientId ?? ''}
+							required
 							autocapitalize="off"
 							spellcheck="false"
 							class="font-mono text-sm"
 						/>
+					</Field.Field>
+					<Field.Field>
+						<Field.Label for="sso-client-secret">Client secret</Field.Label>
+						<Input
+							id="sso-client-secret"
+							name="clientSecret"
+							type="password"
+							placeholder={editing?.hasClientSecret ? 'Leave blank to keep the stored secret' : ''}
+							required={!editing}
+							autocomplete="new-password"
+						/>
+					</Field.Field>
+				</div>
+
+				{#if !activePreset}
+					<Field.Field>
+						<Field.Label for="sso-discovery">Discovery URL</Field.Label>
+						<Input
+							id="sso-discovery"
+							name="discoveryUrl"
+							value={editing?.discoveryUrl ?? ''}
+							placeholder="https://idp.example.com/.well-known/openid-configuration"
+							autocapitalize="off"
+							spellcheck="false"
+							class="font-mono text-sm"
+						/>
+						<Field.Description>
+							Leave blank for the standard <span class="font-mono"
+								>/.well-known/openid-configuration</span
+							>
+							under the issuer.
+						</Field.Description>
+					</Field.Field>
+					<Field.Field>
+						<Field.Label for="sso-callback">Redirect URI</Field.Label>
+						<div class="flex items-center gap-1">
+							<code
+								id="sso-callback"
+								class="min-w-0 truncate rounded bg-muted px-1.5 py-0.5 font-mono text-xs"
+								title={redirectUri}>{redirectUri}</code
+							>
+							<CopyButton value={redirectUri} iconOnly label="Copy redirect URI" />
+						</div>
 						<Field.Description
-							>Space or comma separated. `openid` is always requested.</Field.Description
+							>Register this at the IdP as the client’s redirect (callback) URI.</Field.Description
 						>
 					</Field.Field>
+				{/if}
+			{/if}
+
+			{#if protocol === 'saml'}
+				<section class="rounded-lg border bg-muted/30 p-3">
+					<p class="text-sm font-medium">At your identity provider</p>
+					<p class="mt-1 text-xs text-muted-foreground">
+						Add a SAML application, then give it the SP metadata URL (or the ACS URL and SP entity
+						id) below. The IdP returns the email, name and groups attributes named under claim
+						mapping.
+					</p>
+					<div class="mt-3 grid gap-3">
+						<div>
+							<p class="text-xs font-medium">SP metadata URL</p>
+							<div class="mt-1 flex items-center gap-1">
+								<code
+									class="min-w-0 truncate rounded bg-background px-1.5 py-0.5 font-mono text-xs"
+									title={spMetadataUrl}>{spMetadataUrl}</code
+								>
+								<CopyButton value={spMetadataUrl} iconOnly label="Copy SP metadata URL" />
+							</div>
+						</div>
+						<div>
+							<p class="text-xs font-medium">ACS URL</p>
+							<div class="mt-1 flex items-center gap-1">
+								<code
+									class="min-w-0 truncate rounded bg-background px-1.5 py-0.5 font-mono text-xs"
+									title={acsUrl}>{acsUrl}</code
+								>
+								<CopyButton value={acsUrl} iconOnly label="Copy ACS URL" />
+							</div>
+						</div>
+					</div>
+				</section>
+
+				<div class="grid gap-4 sm:grid-cols-2">
+					<Field.Field class="sm:col-span-2">
+						<Field.Label for="sso-saml-metadata">IdP metadata URL</Field.Label>
+						<Input
+							id="sso-saml-metadata"
+							name="samlMetadataUrl"
+							bind:value={saml.metadataUrl}
+							placeholder="https://idp.example.com/app/.../sso/saml/metadata"
+							autocapitalize="off"
+							spellcheck="false"
+							class="font-mono text-sm"
+						/>
+						<Field.Description>
+							Skiff imports the entity id, SSO URL and signing certificate. Leave blank to enter
+							them below.
+						</Field.Description>
+					</Field.Field>
+					<Field.Field class="sm:col-span-2">
+						<Field.Label for="sso-saml-entity-id">IdP entity id</Field.Label>
+						<Input
+							id="sso-saml-entity-id"
+							name="samlEntityId"
+							bind:value={saml.entityId}
+							placeholder="http://www.okta.com/exk…"
+							autocapitalize="off"
+							spellcheck="false"
+							class="font-mono text-sm"
+						/>
+						<Field.Description>
+							From the IdP’s metadata; metadata import fills this in. Required for manual entry.
+						</Field.Description>
+					</Field.Field>
+					<Field.Field>
+						<Field.Label for="sso-saml-entry-point">Entry point (SSO URL)</Field.Label>
+						<Input
+							id="sso-saml-entry-point"
+							name="samlEntryPoint"
+							bind:value={saml.entryPoint}
+							placeholder="https://idp.example.com/sso/saml"
+							autocapitalize="off"
+							spellcheck="false"
+							class="font-mono text-sm"
+						/>
+						<Field.Description>
+							Where the browser is sent to authenticate. Metadata import fills this in.
+						</Field.Description>
+					</Field.Field>
+					<Field.Field>
+						<Field.Label for="sso-saml-sp-entity">SP entity id</Field.Label>
+						<Input
+							id="sso-saml-sp-entity"
+							name="samlSpEntityId"
+							bind:value={saml.spEntityId}
+							placeholder="Defaults to the SP metadata URL"
+							autocapitalize="off"
+							spellcheck="false"
+							class="font-mono text-sm"
+						/>
+						<Field.Description>
+							What Skiff calls itself to the IdP. Leave blank to use the metadata URL.
+						</Field.Description>
+					</Field.Field>
+					<Field.Field class="sm:col-span-2">
+						<Field.Label for="sso-saml-cert">IdP signing certificate</Field.Label>
+						<Textarea
+							id="sso-saml-cert"
+							name="samlCert"
+							rows={4}
+							bind:value={saml.cert}
+							placeholder="-----BEGIN CERTIFICATE-----&#10;…&#10;-----END CERTIFICATE-----"
+							class="font-mono text-xs"
+						/>
+						<Field.Description>
+							PEM or the bare base64 body from the IdP. Public material; the private key stays at
+							the IdP.{#if editing?.hasCertificate} Leave blank to keep the stored certificate.{/if}
+						</Field.Description>
+					</Field.Field>
+				</div>
+			{/if}
+
+			<details class="group" open={protocol === 'saml' || !activePreset}>
+				<summary
+					class="inline-flex cursor-pointer list-none items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground"
+				>
+					<ChevronRightIcon class="size-3.5 transition-transform group-open:rotate-90" />
+					{protocol === 'saml'
+						? 'Claims and SAML options'
+						: activePreset
+							? 'Scopes and claims (filled in for you)'
+							: 'Scopes and claims'}
+				</summary>
+				<div class="mt-3 grid gap-4">
+					{#if protocol === 'oidc'}
+						<Field.Field>
+							<Field.Label for="sso-scopes">Scopes</Field.Label>
+							<Input
+								id="sso-scopes"
+								name="scopes"
+								bind:value={scopesText}
+								oninput={() => (advancedTouched = true)}
+								placeholder={DEFAULT_SCOPES}
+								autocapitalize="off"
+								spellcheck="false"
+								class="font-mono text-sm"
+							/>
+							<Field.Description
+								>Space or comma separated. `openid` is always requested.</Field.Description
+							>
+						</Field.Field>
+					{/if}
 					<Field.Set>
 						<Field.Legend variant="label">Claim mapping</Field.Legend>
-						<Field.Description>Which claim in the ID token carries each value.</Field.Description>
+						<Field.Description>
+							{protocol === 'saml'
+								? 'The SAML attribute names carrying each value. Attribute names are case-sensitive.'
+								: 'Which claim in the ID token carries each value.'}
+						</Field.Description>
 						<div class="grid gap-4 sm:grid-cols-3">
 							<Field.Field>
 								<Field.Label for="sso-claim-email">Email</Field.Label>
@@ -1253,6 +1514,55 @@
 							</Field.Field>
 						</div>
 					</Field.Set>
+					{#if protocol === 'saml'}
+						<Field.Field orientation="horizontal">
+							<Checkbox
+								id="sso-saml-signed"
+								name="samlWantAssertionsSigned"
+								value="true"
+								bind:checked={saml.wantAssertionsSigned}
+							/>
+							<Field.Label for="sso-saml-signed" class="font-medium">
+								Require signed assertions
+							</Field.Label>
+							<Field.Description>
+								Reject an assertion the IdP did not sign. Keep this on unless the IdP cannot sign
+								responses.
+							</Field.Description>
+						</Field.Field>
+						<div class="grid gap-4 sm:grid-cols-2">
+							<Field.Field>
+								<Field.Label for="sso-saml-audience">Audience</Field.Label>
+								<Input
+									id="sso-saml-audience"
+									name="samlAudience"
+									bind:value={saml.audience}
+									placeholder="Defaults to the SP entity id"
+									autocapitalize="off"
+									spellcheck="false"
+									class="font-mono text-sm"
+								/>
+								<Field.Description>
+									Only set this when the IdP sends an audience different from the SP entity id.
+								</Field.Description>
+							</Field.Field>
+							<Field.Field>
+								<Field.Label for="sso-saml-identifier">NameID format</Field.Label>
+								<Input
+									id="sso-saml-identifier"
+									name="samlIdentifierFormat"
+									bind:value={saml.identifierFormat}
+									placeholder="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"
+									autocapitalize="off"
+									spellcheck="false"
+									class="font-mono text-sm"
+								/>
+								<Field.Description>
+									Optional. Leave blank for the IdP’s default NameID format.
+								</Field.Description>
+							</Field.Field>
+						</div>
+					{/if}
 				</div>
 			</details>
 		</Field.Group>

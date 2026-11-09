@@ -300,9 +300,9 @@ export class ContainerConsoleService {
  * people and API keys (the CLI), never MCP clients. The permissions themselves are never default
  * agent scopes, so a key or token holds `container:files`/`container:exec` only by explicit grant.
  */
-export function scopeAllowed(principal: Pick<Principal, 'kind'>, scope: ContainerConsoleScope): boolean {
-	if (principal.kind === 'system') return false;
-	if (scope === 'exec') return principal.kind === 'user' || principal.kind === 'apiKey';
+export function scopeAllowed(principal: Pick<Principal, 'credential'>, scope: ContainerConsoleScope): boolean {
+	if (principal.credential === 'system') return false;
+	if (scope === 'exec') return principal.credential === 'session' || principal.credential === 'apiKey';
 	return true;
 }
 

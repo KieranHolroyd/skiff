@@ -329,7 +329,7 @@ export class BlueprintService {
 		this.requireFeature();
 		this.require(principal, 'project:read');
 		const input = blueprintPlanRequestSchema.parse(raw);
-		if (input.prune && principal.kind === 'mcp')
+		if (input.prune && principal.credential === 'oauth')
 			throw new CoreError('surface_not_allowed', 'Pruning a blueprint deletes resources; use the dashboard or CLI.', 403);
 		const document = parseBlueprint(input.document);
 		const diff = this.diff(principal, document, input.prune);
@@ -1241,7 +1241,7 @@ export class BlueprintService {
 	checkBeforeApply(principal: Principal, params: BlueprintOperationParams, confirm: string | undefined): void {
 		this.requireFeature();
 		const deletes = params.steps.some((step) => step.action === 'delete');
-		if (params.prune && principal.kind === 'mcp')
+		if (params.prune && principal.credential === 'oauth')
 			throw new CoreError('surface_not_allowed', 'A pruning blueprint plan deletes resources; apply it from the dashboard or CLI.', 403);
 		if (deletes && confirm !== params.stack)
 			throw new ValidationError(`This plan deletes resources. Type the stack name "${params.stack}" to confirm.`);

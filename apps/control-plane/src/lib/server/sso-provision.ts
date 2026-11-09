@@ -67,7 +67,12 @@ function mappedGroupIds(
 		)
 		.get(orgId, providerId);
 	if (!provider) return { groups: undefined, groupIds: [] };
-	const groups = userInfo ? groupClaimValues(userInfo[provider.claim_groups]) : undefined;
+	// The plugin normalises both OIDC extra fields and SAML attributes under the canonical
+	// `groups` key (sso-sync.ts maps the provider's claim there), so prefer it and fall back to
+	// the raw claim name for older provider rows or a plugin that passes attributes through.
+	const rawGroups =
+		userInfo?.groups !== undefined ? userInfo.groups : userInfo?.[provider.claim_groups];
+	const groups = userInfo ? groupClaimValues(rawGroups) : undefined;
 	if (groups === undefined) return { groups, groupIds: [] };
 	let mappings: Array<{ claimValue: string; groupId: string }> = [];
 	try {

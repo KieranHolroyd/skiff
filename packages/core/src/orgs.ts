@@ -110,6 +110,7 @@ export function buildPrincipal(input: {
 	keyId?: string;
 	ipHash?: string;
 	platformAdmin?: boolean;
+	credential?: Principal['credential'];
 }): Principal {
 	const rolePermissions = new Set<string>(roleDefinitions[input.role]);
 	const granted = input.granted ? new Set(input.granted) : rolePermissions;
@@ -126,8 +127,22 @@ export function buildPrincipal(input: {
 		keyId: input.keyId,
 		ipHash: input.ipHash,
 		platformAdmin: input.platformAdmin === true,
+		// The credential a surface check needs: a session-backed `user`, a Better Auth key, an MCP
+		// OAuth token, or the named internal actor. Machine kinds set theirs explicitly elsewhere.
+		credential: input.credential ?? CREDENTIAL_BY_KIND[input.kind],
 	};
 }
+
+/** The credential a principal kind proves itself with when the caller doesn't say (IAM.md §7.1). */
+const CREDENTIAL_BY_KIND: Partial<Record<Principal['kind'], NonNullable<Principal['credential']>>> = {
+	user: 'session',
+	apiKey: 'apiKey',
+	mcp: 'oauth',
+	system: 'system',
+	workload: 'workload',
+	job: 'job',
+	node: 'node',
+};
 
 /** A membership change requested from the dashboard (DESIGN §6.2 `member:*`). */
 export type MemberChange =
@@ -174,7 +189,7 @@ export function renameOrganization(
 	principal: Principal,
 	input: { name: string; slug: string },
 ): { name: string; slug: string } {
-	if (principal.kind !== 'user' || (principal.role !== 'owner' && principal.role !== 'admin'))
+	if (principal.credential !== 'session' || !principal.permissions.has('org:update'))
 		throw new ForbiddenError('Only an owner or admin can rename the organisation.');
 	const name = input.name.trim().replace(/\s+/g, ' ');
 	const slug = input.slug.trim().toLowerCase();

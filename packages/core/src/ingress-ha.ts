@@ -1,4 +1,4 @@
-import { canViewPlatform, type IngressDriver, type Principal } from '@skiff/contracts';
+import type { IngressDriver, Principal } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import { CoreError } from './errors.ts';
 
@@ -13,7 +13,7 @@ export class IngressHaService {
 	constructor(private readonly ctx: CoreContext) {}
 
 	status(principal: Principal): IngressStatus {
-		if (!canViewPlatform(principal)) throw new CoreError('forbidden', 'Platform admin required.', 403);
+		if (!this.ctx.platformIam.canView(principal)) throw new CoreError('forbidden', 'Platform admin permission required.', 403);
 		const policies = this.ctx.policies.get();
 		return {
 			driver: policies.ingressDriver,

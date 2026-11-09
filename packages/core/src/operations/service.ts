@@ -1,4 +1,5 @@
 import {
+	canMaintainPlatform,
 	isTerminalOperation,
 	itemStatuses,
 	itemVerdicts,
@@ -108,7 +109,7 @@ const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
 
 /** Can this principal see every org's operations (platform-scope prune history)? */
 const seesPlatform = (principal: Principal): boolean =>
-	principal.platformAdmin === true && (principal.kind === 'user' || principal.kind === 'apiKey');
+	principal.platformAdmin === true && canMaintainPlatform(principal);
 
 /**
  * Mass actions and prune runs (docs/OPERATIONS.md). Operations are planned (a verdict per item),
@@ -161,7 +162,7 @@ export class OperationService {
 		if (definition.info.kind === 'bulk') {
 			const targets = [...new Set((parsed.targets ?? []).map((target) => target.trim()).filter(Boolean))];
 			if (targets.length === 0) throw new ValidationError('Name at least one target.');
-			const cap = principal.kind === 'mcp' ? operationLimits.mcpTargets : operationLimits.bulkTargets;
+			const cap = principal.credential === 'oauth' ? operationLimits.mcpTargets : operationLimits.bulkTargets;
 			if (targets.length > cap) throw new ValidationError(`At most ${cap} targets per operation from this surface.`);
 			params.targets = targets;
 		} else {
@@ -688,9 +689,9 @@ export class OperationService {
 
 	/** Surface rules: irreversible actions are never available to MCP (D29, docs/OPERATIONS.md D53). */
 	private checkSurface(principal: Principal, info: OperationActionInfo): void {
-		if (principal.kind === 'mcp' && !info.surfaces.mcp)
+		if (principal.credential === 'oauth' && !info.surfaces.mcp)
 			throw new CoreError('surface_not_allowed', `${info.label} is not available to MCP clients. Use the dashboard or CLI.`, 403);
-		if (principal.kind === 'apiKey' && !info.surfaces.apiKey)
+		if (principal.credential === 'apiKey' && !info.surfaces.apiKey)
 			throw new CoreError('surface_not_allowed', `${info.label} needs a dashboard session.`, 403);
 	}
 

@@ -5,6 +5,7 @@
 	import { Toaster } from '#lib/components/ui/sonner/index.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
 	import ConfirmHost from '#lib/components/skiff/ConfirmHost.svelte';
+	import VerifyDialog from '#lib/components/skiff/VerifyDialog.svelte';
 	import type { LayoutProps } from './$types';
 
 	let { children }: LayoutProps = $props();
@@ -23,6 +24,7 @@
 <ModeWatcher themeColors={{ light: '#ffffff', dark: '#0a0a0a' }} />
 <Toaster position="bottom-right" richColors closeButton />
 <ConfirmHost />
+<VerifyDialog />
 
 <Tooltip.Provider delayDuration={250}>
 	{@render children()}

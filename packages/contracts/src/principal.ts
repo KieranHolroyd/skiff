@@ -142,7 +142,9 @@ export class StepUpRequiredError extends Error {
 	readonly level: Exclude<StepUp, 'none'>;
 
 	constructor(permission: Permission, level: Exclude<StepUp, 'none'>) {
-		super(`Step-up verification required for ${permission}`);
+		super(
+			`Step-up verification required for ${permission}. Verify it's you in the dashboard, then try again.`,
+		);
 		this.name = 'StepUpRequiredError';
 		this.permission = permission;
 		this.level = level;

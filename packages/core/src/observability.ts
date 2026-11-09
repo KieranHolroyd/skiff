@@ -1,5 +1,4 @@
 import {
-	canViewPlatform,
 	dashboardSpecSchema,
 	dashboardTemplates,
 	dashboardVariableSchema,
@@ -147,9 +146,9 @@ function specUsesSql(spec: DashboardSpec): boolean {
 export class ObservabilityService {
 	constructor(private readonly ctx: CoreContext) {}
 
-	/** Platform admins may run SQL: the reader sees every org's telemetry. */
+	/** Platform roles may run SQL: the reader sees every org's telemetry. */
 	canUseSql(principal: Principal): boolean {
-		return canViewPlatform(principal) && principal.kind !== 'system' && principal.permissions.has('metrics:read');
+		return this.ctx.platformIam.canView(principal) && principal.kind !== 'system' && principal.permissions.has('metrics:read');
 	}
 
 	/** Ids (and display names) the caller can see, per scope column. */
@@ -293,7 +292,8 @@ export class ObservabilityService {
 
 	#canEdit(principal: Principal, row: Pick<DashboardRow, 'created_by'>): boolean {
 		return (
-			row.created_by === principal.userId || principal.role === 'owner' || principal.role === 'admin' || principal.platformAdmin === true
+			row.created_by === principal.userId ||
+			this.ctx.iam.can(principal, 'dashboard:update', { type: 'org' })
 		);
 	}
 

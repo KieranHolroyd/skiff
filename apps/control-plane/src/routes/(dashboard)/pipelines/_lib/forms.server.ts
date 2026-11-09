@@ -16,8 +16,8 @@ export function pipelineCan(principal: Principal) {
 			hasPermission(principal, 'secret:create') &&
 			hasPermission(principal, 'secret:delete'),
 		link: hasPermission(principal, 'build:create') && hasPermission(principal, 'deployment:promote'),
-		/** Environment approvals (W12): org owners and admins; the server enforces it. */
-		approve: principal.role === 'owner' || principal.role === 'admin'
+		/** Environment approvals (W12): `pipeline:approve`; the server enforces it. */
+		approve: hasPermission(principal, 'pipeline:approve')
 	};
 }
 

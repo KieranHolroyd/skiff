@@ -10,6 +10,12 @@ import {
 import { passwordProblem } from '#lib/server/setup.js';
 import { formPassword } from '#lib/server/totp-enrolment.js';
 import {
+	clearSessionStepUp,
+	clearStepUpForUser,
+	refreshStrongestStepUp,
+} from '#lib/server/step-up.js';
+import { freshUntil, isVerificationFresh, minutesLeft } from '#lib/server/step-up/policy.js';
+import {
 	authErrorMessage,
 	providerLabel,
 	toIso,
@@ -81,6 +87,16 @@ export const load: PageServerLoad = async ({ locals, request }) => {
 		passkeysError = `Passkeys are temporarily unavailable: ${authErrorMessage(error)}`;
 	}
 
+	const verification = locals.principal!.verification;
+	const stepUp = verification
+		? {
+				fresh: isVerificationFresh(verification),
+				class: verification.class,
+				strongest: verification.strongest,
+				minutesLeft: minutesLeft(freshUntil(verification)),
+			}
+		: null;
+
 	return {
 		user: {
 			id: user.id,
@@ -91,6 +107,7 @@ export const load: PageServerLoad = async ({ locals, request }) => {
 		},
 		role: locals.principal!.role,
 		currentSessionId,
+		stepUp,
 		sessions,
 		sessionsError,
 		accounts,
@@ -104,7 +121,8 @@ export const load: PageServerLoad = async ({ locals, request }) => {
 			sessionFactor:
 				(locals.session as { secondFactor?: string | null } | undefined)?.secondFactor ?? null,
 			/** Owners must use a passkey or authenticator app (D10). */
-			requiredForRole: enforceOwnerSecondFactor && locals.principal!.role === 'owner'
+			requiredForRole:
+				enforceOwnerSecondFactor && locals.principal!.permissions.has('iam:manage-owners')
 		}
 	};
 };
@@ -198,6 +216,10 @@ export const actions: Actions = {
 				headers: request.headers
 			});
 			if (result.token && factor) carrySecondFactorToToken(result.token, factor);
+			// A password change is a clearing event for step-up (STEP-UP.md §3). Better Auth may have
+			// issued a fresh session for this device, so clear that one explicitly too.
+			clearStepUpForUser(locals.user!.id);
+			if (locals.session?.id) clearSessionStepUp(locals.session.id);
 		} catch (error) {
 			return fail(400, { message: authErrorMessage(error), fieldErrors: { currentPassword: 'Check this.' } });
 		}
@@ -210,23 +232,35 @@ export const actions: Actions = {
 		const password = formPassword(await request.formData());
 		try {
 			await auth.api.disableTwoFactor({ body: password ? { password } : {}, headers: request.headers });
+			// Removing any factor clears every step-up window (STEP-UP.md §3), and `strongest` may
+			// drop from strong to basic.
+			clearStepUpForUser(user.id);
+			refreshStrongestStepUp(user.id);
 		} catch (error) {
 			return fail(400, { message: authErrorMessage(error) });
 		}
 		return { success: 'Authenticator app removed.' };
 	},
 
-	deletePasskey: async ({ request }) => {
+	deletePasskey: async ({ request, locals }) => {
 		const data = await request.formData();
 		const id = formString(data, 'passkeyId');
 		if (!id) return fail(400, { message: 'Missing passkey id.' });
 
 		try {
 			await auth.api.deletePasskey({ body: { id }, headers: request.headers });
+			clearStepUpForUser(locals.user!.id);
+			refreshStrongestStepUp(locals.user!.id);
 		} catch (error) {
 			return fail(400, { message: authErrorMessage(error) });
 		}
 
 		return { success: 'Passkey removed.' };
+	},
+
+	/** "Lock now" from Settings → Account: clear this session's window without signing out. */
+	lockStepUp: async ({ locals }) => {
+		if (locals.session?.id) clearSessionStepUp(locals.session.id);
+		return { success: 'Locked. Sensitive actions will ask you to verify again.' };
 	}
 };

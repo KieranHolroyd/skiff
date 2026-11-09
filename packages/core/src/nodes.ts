@@ -19,8 +19,6 @@ import {
 	type nodes as nodesTable,
 } from '@skiff/db';
 import {
-	canAdministerPlatform,
-	canViewPlatform,
 	compareSemver,
 	contentUrl,
 	parseSemver,
@@ -52,6 +50,7 @@ import {
 	type NodeUpdate,
 	type NodeUpdateTask,
 	type Principal,
+	type PlatformPermission,
 	type RouteSpec,
 	type WorkloadSpec,
 } from '@skiff/contracts';
@@ -217,7 +216,7 @@ export class NodeService {
 	 * again after a failure is a retry (a new generation).
 	 */
 	requestUpdate(principal: Principal, nodeId: string): NodeView {
-		this.assertPlatformAdmin(principal);
+		this.assertPlatformAdmin(principal, 'platform:updates');
 		const node = this.ctx.db.select().from(nodes).where(eq(nodes.id, nodeId)).get();
 		if (!node) throw new NotFoundError('Node');
 		const target = parseSemver(this.ctx.config.desiredAgentVersion)?.version;
@@ -314,24 +313,26 @@ export class NodeService {
 	}
 
 	/**
-	 * Platform-admin only: nodes and Caddy are global (DESIGN §6.2). This is the admin plugin's
-	 * `user.role`, never an org role, and mutations need the admin's own session (no API keys or
-	 * OAuth tokens), so a scoped key can't mint node credentials.
+	 * Platform-only: nodes and Caddy are global (DESIGN §6.2). Platform IAM decides the
+	 * `platform:*` permission (IAM.md I24); the service keeps the pre-I8 admin flag as the fallback
+	 * until bindings are seeded, and D129's session-only rule for `platform-admin`.
 	 */
-	private assertPlatformAdmin(principal: Principal, access: 'read' | 'write' = 'write'): void {
-		const allowed = access === 'read' ? canViewPlatform(principal) : canAdministerPlatform(principal);
-		if (!allowed)
-			throw new CoreError(
-				'forbidden',
-				principal.platformAdmin
-					? 'Fleet changes need a platform admin signed in to the dashboard (not an API key or MCP token).'
-					: 'Platform admin required.',
-				403,
-			);
+	private assertPlatformAdmin(
+		principal: Principal,
+		permission: PlatformPermission = 'platform:nodes',
+	): void {
+		if (this.ctx.platformIam.allows(principal, permission)) return;
+		throw new CoreError(
+			'forbidden',
+			principal.platformAdmin
+				? 'Fleet changes need a platform admin role signed in to the dashboard (not an API key or MCP token).'
+				: 'Platform admin permission required.',
+			403,
+		);
 	}
 
 	list(principal: Principal): NodeView[] {
-		this.assertPlatformAdmin(principal, 'read');
+		this.assertPlatformAdmin(principal, 'platform:read');
 		return this.ctx.db
 			.select()
 			.from(nodes)
@@ -598,7 +599,7 @@ export class NodeService {
 	}
 
 	setDraining(principal: Principal, nodeId: string, draining: boolean): NodeView {
-		this.assertPlatformAdmin(principal);
+		this.assertPlatformAdmin(principal, 'platform:drain');
 		const node = this.ctx.db.select().from(nodes).where(eq(nodes.id, nodeId)).get();
 		if (!node) throw new NotFoundError('Node');
 		this.ctx.db

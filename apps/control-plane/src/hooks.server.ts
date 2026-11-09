@@ -166,12 +166,30 @@ export const handleError: HandleServerError = (caught) => {
 	return errorId ? { errorId } : undefined;
 };
 
+/**
+ * Public user-pool endpoints: OIDC discovery/JWKS and the OAuth code flow. They authenticate with
+ * a client secret, PKCE or the pool's own bearer token, never the platform session (IAM.md §11.2).
+ */
+const USER_POOL_PUBLIC_API = /^\/api\/v1\/user-pools\/[^/]+\/(?:oauth\/|\.well-known\/)/;
+const USER_POOL_OAUTH_API = /^\/api\/v1\/user-pools\/[^/]+\/oauth\//;
+
 const handleRequest: Handle = async ({ event, resolve }) => {
 	// Dev server only: serve `<slug>.localhost` content hosts straight from the local object store
 	// instead of requiring the agent + Caddy. Production never reaches this branch.
 	if (isDevContentHost(event.url.hostname)) return serveDevContent(event);
 
-	const csrf = checkCsrf(event.request, event.url, platformOrigin);
+	// Hosted user-pool pages are the pool's own sign-in surface. They use a per-pool cookie and
+	// must keep working when the platform is signed out or fails over, so the platform session,
+	// its auth policy and second-factor gate do not apply. Our forms carry their own CSRF token.
+	if (event.url.pathname.startsWith('/pool/')) {
+		const csrf = checkCsrf(event.request, event.url, platformOrigin);
+		if (!csrf.ok) return new Response(`Forbidden: ${csrf.reason}`, { status: 403 });
+		return withFrameProtection(await svelteKitHandler({ event, resolve, auth, building }));
+	}
+
+	const csrf = USER_POOL_OAUTH_API.test(event.url.pathname)
+		? { ok: true as const }
+		: checkCsrf(event.request, event.url, platformOrigin);
 	if (!csrf.ok) return new Response(`Forbidden: ${csrf.reason}`, { status: 403 });
 
 	const session = await auth.api.getSession({ headers: event.request.headers });
@@ -206,9 +224,9 @@ const handleRequest: Handle = async ({ event, resolve }) => {
 
 	// Second factor (D10 + IAM.md I21): owner sessions, and every session when the org policy says
 	// so, must have proved a passkey or authenticator code before reaching anything beyond /two-factor.
-	if (session && event.locals.principal && !isExemptBeforeSecondFactor(event.url.pathname)) {
+	if (session && event.locals.principal && !USER_POOL_PUBLIC_API.test(event.url.pathname) && !isExemptBeforeSecondFactor(event.url.pathname)) {
 		const requiresSecondFactor =
-			(enforceOwnerSecondFactor && event.locals.principal.role === 'owner') ||
+			(enforceOwnerSecondFactor && event.locals.principal.permissions.has('iam:manage-owners')) ||
 			Boolean(policy?.require2fa);
 		const state = secondFactorState({
 			enforce: enforceOwnerSecondFactor,
@@ -328,6 +346,8 @@ function isAuthenticatedApi(pathname: string): boolean {
 	return (
 		pathname.startsWith('/api/v1/') &&
 		pathname !== '/api/v1/cli/token' &&
+		// Public user-pool OIDC discovery and code flow (IAM.md §11.2).
+		!USER_POOL_PUBLIC_API.test(pathname) &&
 		// Skiff Access sign-in: the agent sends an unauthenticated browser here, and the handler
 		// redirects to `/login` (IAM.md I25, §11.1).
 		pathname !== '/api/v1/access/authorize' &&

@@ -2,7 +2,6 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
 import { githubInstallations, settings } from '@skiff/db';
 import {
-	canAdministerPlatform,
 	githubAppManifest,
 	githubAppManifestStartSchema,
 	githubAppManifestUrl,
@@ -228,7 +227,7 @@ export class GithubAppService {
 
 	view(principal: Principal): GithubAppView {
 		const app = this.stored();
-		const admin = canAdministerPlatform(principal);
+		const admin = this.ctx.platformIam.canAdminister(principal);
 		const env = this.envOAuth();
 		return {
 			configured: Boolean(app),
@@ -265,8 +264,8 @@ export class GithubAppService {
 	}
 
 	private requireAdmin(principal: Principal): void {
-		if (!canAdministerPlatform(principal))
-			throw new CoreError('forbidden', 'Only a platform admin, signed in to the dashboard, can change the GitHub App.', 403);
+		if (!this.ctx.platformIam.canAdminister(principal))
+			throw new CoreError('forbidden', 'Only a platform admin role, signed in to the dashboard, can change the GitHub App.', 403);
 	}
 
 	/**
@@ -373,7 +372,7 @@ export class GithubAppService {
 	installations(principal: Principal): GithubInstallationView[] {
 		this.ctx.iam.require(principal, 'build:read', { type: 'org' });
 		const rows = this.ctx.db.select().from(githubInstallations).all();
-		const admin = canAdministerPlatform(principal);
+		const admin = this.ctx.platformIam.canAdminister(principal);
 		return rows
 			.filter((row) => row.orgId === principal.orgId || (admin && row.orgId === null))
 			.sort((a, b) => a.accountLogin.localeCompare(b.accountLogin))
@@ -439,7 +438,7 @@ export class GithubAppService {
 		// The signed state proves this user started the install from this org; without it a crafted
 		// callback link could attach someone else's installation (and their OAuth code) to this org.
 		if (input.state) this.verifyState(input.state, { kind: 'install', userId: principal.userId, orgId: principal.orgId });
-		else if (!canAdministerPlatform(principal))
+		else if (!this.ctx.platformIam.canAdminister(principal))
 			throw new CoreError(
 				'github_state_invalid',
 				'Start the installation from Settings → GitHub → Install on GitHub so Skiff knows which organisation it is for.',
@@ -450,7 +449,7 @@ export class GithubAppService {
 			const userToken = await this.exchangeOAuthCode(app, input.code);
 			verified = await this.userCanSee(userToken, input.installationId);
 			if (!verified) throw new CoreError('forbidden', 'Your GitHub account cannot see that installation.', 403);
-		} else if (!canAdministerPlatform(principal)) {
+		} else if (!this.ctx.platformIam.canAdminister(principal)) {
 			throw new CoreError(
 				'forbidden',
 				'GitHub did not confirm who installed the App, so only a platform admin can link this installation. Ask one to link it from Settings → GitHub.',
@@ -488,7 +487,7 @@ export class GithubAppService {
 	unlinkInstallation(principal: Principal, installationId: number): void {
 		const row = this.requireInstallation(installationId);
 		const own = row.orgId === principal.orgId && this.canLink(principal);
-		if (!own && !canAdministerPlatform(principal))
+		if (!own && !this.ctx.platformIam.canAdminister(principal))
 			throw new CoreError('forbidden', 'Only organisation owners and admins can disconnect GitHub installations.', 403);
 		this.ctx.db
 			.update(githubInstallations)

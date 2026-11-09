@@ -1,5 +1,6 @@
 import { error, redirect } from '@sveltejs/kit';
-import { hasPermission } from '@skiff/contracts';
+import { hasPermission, STEP_UP_WINDOW_MS } from '@skiff/contracts';
+import { freshUntil, isVerificationFresh, minutesLeft } from '#lib/server/step-up/policy.js';
 import { core } from '#lib/server/core.js';
 import { contentDomain, features, platformOrigin, sharedDomain } from '#lib/server/config.js';
 import { availableUpdate, canManagePlatform } from '#lib/server/self-update.js';
@@ -37,6 +38,16 @@ export const load: LayoutServerLoad = ({ locals, url, cookies }) => {
 	}
 
 	const platformHostname = new URL(platformOrigin).hostname;
+	const verification = principal.verification;
+	const stepUp = verification
+		? {
+				fresh: isVerificationFresh(verification, Date.now(), STEP_UP_WINDOW_MS),
+				class: verification.class,
+				strongest: verification.strongest,
+				until: freshUntil(verification, STEP_UP_WINDOW_MS),
+				minutesLeft: minutesLeft(freshUntil(verification, STEP_UP_WINDOW_MS)),
+			}
+		: null;
 	return {
 		user: {
 			id: principal.userId,
@@ -51,6 +62,8 @@ export const load: LayoutServerLoad = ({ locals, url, cookies }) => {
 		/** Every org the caller can switch to (IAM.md I5, §8.1); the header's switcher lists these. */
 		orgs: listMemberships(principal.userId),
 		role: principal.role,
+		/** The session's step-up window, for the user-menu chip (STEP-UP.md §6). */
+		stepUp,
 		/** Platform policies the UI quotes in copy (Settings → Retention & defaults, Alerts → System alerts). */
 		policies: (({ trashDays, logRetentionDays, nodeAlertMinutes, operationHistoryDays }) => ({
 			trashDays,
@@ -82,7 +95,7 @@ export const load: LayoutServerLoad = ({ locals, url, cookies }) => {
 			manageNodes: principal.platformAdmin === true,
 			viewCapacity: principal.platformAdmin === true,
 			manageApiKeys: hasPermission(principal, 'apiKey:create'),
-			seeMemberEmails: principal.role === 'owner' || principal.role === 'admin'
+			seeMemberEmails: hasPermission(principal, 'iam:read')
 		},
 		platform: {
 			origin: platformOrigin,

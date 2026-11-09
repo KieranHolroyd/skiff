@@ -14,10 +14,17 @@ import {
 	MAX_GROUP_CLAIM_LENGTH,
 	SSO_RECHECK_MS,
 	hasSsoVerificationRecord,
+	isSsoProtocol,
 	normalizeGroupClaim,
+	normalizeSamlCertificate,
 	normalizeSsoDomain,
+	ssoProviderFieldErrors,
+	ssoSamlAcsUrl,
+	ssoSamlMetadataUrl,
 	ssoVerificationRecord,
-	verifiedDomainForEmail
+	verifiedDomainForEmail,
+	type SsoProtocol,
+	type SsoSamlFields
 } from '../../../../../packages/core/src/iam/sso.ts';
 import { SsoPresetError, resolveSsoPreset, type SsoPresetValues } from '../sso-presets';
 import { core } from './core';
@@ -27,27 +34,33 @@ import { syncSsoProviders } from './sso-sync';
 /**
  * SSO providers and verified email domains (IAM.md I19, §8.3).
  *
- * `sso_providers` is the source of truth for configuration (issuer, sealed client secret, claim
- * mapping, enabled flag); `sso_domains` proves ownership with a `skiff-verify=` TXT record.
- * `sso-sync.ts` copies the enabled rows into Better Auth's boot-migrated `ssoProvider` table, which
- * `@better-auth/sso` reads for the actual OIDC sign-in. Settings never writes that table directly.
+ * `sso_providers` is the source of truth for configuration (issuer, sealed client secret, SAML
+ * certificate and endpoints, claim mapping, enabled flag); `sso_domains` proves ownership with a
+ * `skiff-verify=` TXT record. `sso-sync.ts` copies the enabled rows into Better Auth's
+ * boot-migrated `ssoProvider` table, which `@better-auth/sso` reads for the actual sign-in. Settings
+ * never writes that table directly.
  *
- * What is real here: provider configuration, OIDC discovery at save time, domain TXT ownership
- * checks re-run daily, permission checks, email→provider routing for `/login`, the callback URL to
- * register at the IdP, and the IdP-group → Skiff-group mapping used by JIT provisioning. Sign-in
- * and JIT provisioning run through Better Auth; SAML is still to come, and SCIM lives in
- * `auth.ts`/`core.scim`.
+ * What is real here: provider configuration, OIDC discovery at save time, SAML metadata import,
+ * domain TXT ownership checks re-run daily, permission checks, email→provider routing for `/login`,
+ * the callback/ACS URLs to register at the IdP, and the IdP-group → Skiff-group mapping used by JIT
+ * provisioning. Sign-in and JIT provisioning run through Better Auth for both protocols; SCIM lives
+ * in `auth.ts`/`core.scim`.
  */
 
 const MAX_NAME = 80;
 const MAX_URL = 500;
 const MAX_SECRET = 4000;
 const MAX_CLAIM = 100;
+/** An IdP metadata document is small; refuse anything larger rather than parse it. */
+const MAX_SAML_METADATA_BYTES = 1_000_000;
 const DISCOVERY_TIMEOUT_MS = 5_000;
 /** At most this many domains are re-checked in one visit, oldest first. */
 const RECHECK_BATCH = 25;
 const DEFAULT_SCOPES = ['openid', 'profile', 'email'];
 const DEFAULT_CLAIMS = { email: 'email', name: 'name', groups: 'groups' };
+/** SAML attributes are attribute names; `displayName` is the common default for a person's name. */
+const DEFAULT_SAML_CLAIMS = { email: 'email', name: 'displayName', groups: 'groups' };
+const SAML_REDIRECT_BINDING = 'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect';
 
 interface ProviderRow {
 	id: string;
@@ -65,6 +78,13 @@ interface ProviderRow {
 	claim_email: string;
 	claim_name: string;
 	claim_groups: string;
+	entry_point: string | null;
+	cert: string | null;
+	callback_url: string | null;
+	sp_entity_id: string | null;
+	audience: string | null;
+	want_assertions_signed: number;
+	identifier_format: string | null;
 	enabled: number;
 	created_by: string;
 	created_at: number;
@@ -97,7 +117,8 @@ export interface SsoClaims {
 export interface SsoProviderView {
 	id: string;
 	name: string;
-	protocol: string;
+	protocol: SsoProtocol;
+	/** OIDC issuer, or the SAML IdP entity id. */
 	issuer: string;
 	clientId: string;
 	discoveryUrl: string | null;
@@ -107,29 +128,50 @@ export interface SsoProviderView {
 	scopes: readonly string[];
 	claims: SsoClaims;
 	enabled: boolean;
-	/** The secret is write-only; the UI only needs to know one is stored. */
+	/** The OIDC secret is write-only; the UI only needs to know one is stored. */
 	hasClientSecret: boolean;
-	/** Register this with the IdP as the OIDC redirect URI. */
+	/** The SAML certificate is public; the UI only needs to know one is stored. */
+	hasCertificate: boolean;
+	/**
+	 * The URL to register at the IdP: the OIDC redirect URI, or the SAML ACS URL. Kept as one field
+	 * so the existing provider row can show whichever applies without a protocol branch in the table.
+	 */
 	callbackUrl: string;
+	/** SAML only: the SP metadata document an IdP can import. */
+	spMetadataUrl: string | null;
+	/** SAML only: the Assertion Consumer Service URL. */
+	acsUrl: string | null;
+	saml: {
+		entityId: string;
+		entryPoint: string | null;
+		spEntityId: string | null;
+		audience: string | null;
+		wantAssertionsSigned: boolean;
+		identifierFormat: string | null;
+	} | null;
 	createdAt: number;
 	updatedAt: number;
 }
 
 export interface SsoProviderInput {
 	name: string;
-	/** Required unless `preset` is given; a preset's issuer wins over this one. */
+	/** Defaults to `oidc`. A SAML provider cannot change protocol after creation. */
+	protocol?: SsoProtocol;
+	/** Required for OIDC unless `preset` is given; the SAML IdP entity id may live in `saml`. */
 	issuer?: string;
 	/**
-	 * A ready-made set-up (`sso-presets.ts`, D180). It supplies the issuer and discovery URL, and
-	 * the scopes and claims when the caller leaves those out.
+	 * A ready-made OIDC set-up (`sso-presets.ts`, D180). It supplies the issuer and discovery URL,
+	 * and the scopes and claims when the caller leaves those out.
 	 */
 	preset?: { id: string; values?: SsoPresetValues };
-	clientId: string;
+	clientId?: string;
 	clientSecret?: string;
 	discoveryUrl?: string | null;
 	scopes?: readonly string[];
 	claims?: Partial<SsoClaims>;
 	enabled?: boolean;
+	/** SAML configuration. `metadataUrl` is fetched at save time; the rest is manual entry. */
+	saml?: SsoSamlFields;
 }
 
 export interface SsoGroupMappingView {
@@ -172,6 +214,15 @@ const PROVIDER_ID = /^sso_[0-9a-f]{32}$/;
 /** The redirect URI to register at the IdP for a provider id (Better Auth's OIDC callback). */
 export function ssoCallbackUrl(providerId: string): string {
 	return `${platformOrigin}/api/auth/sso/callback/${providerId}`;
+}
+
+/** The SAML ACS URL, and the SP metadata URL an IdP can import, for a provider id. */
+export function ssoSamlAcs(providerId: string): string {
+	return ssoSamlAcsUrl(platformOrigin, providerId);
+}
+
+export function ssoSamlMetadata(providerId: string): string {
+	return ssoSamlMetadataUrl(platformOrigin, providerId);
 }
 
 /** A fresh provider id, so the dashboard can show the redirect URI before the provider exists. */
@@ -291,6 +342,186 @@ function cleanSecret(raw: string | undefined): string | undefined {
 	return secret;
 }
 
+/** Refuse the form input with the first protocol-aware field error (pure checks in `@skiff/core`). */
+function assertProviderFields(
+	input: SsoProviderInput,
+	options: { requireSecret?: boolean } = {}
+): void {
+	const errors = ssoProviderFieldErrors(input, options);
+	const first = Object.entries(errors)[0];
+	if (first) throw new ValidationError(first[1], [{ field: first[0] }]);
+}
+
+/** A SAML entity id is an opaque URI, not necessarily an http(s) URL (Okta and ADFS use odd ones). */
+function cleanEntityId(raw: string | undefined): string | undefined {
+	const value = raw?.trim();
+	if (!value) return undefined;
+	if (value.length > MAX_URL) throw new ValidationError('The IdP entity id is too long.');
+	if (/[\s<>"']/.test(value))
+		throw new ValidationError('The IdP entity id cannot contain spaces, quotes or angle brackets.');
+	return value;
+}
+
+function cleanOptionalText(raw: string | null | undefined, label: string): string | null {
+	const value = raw?.trim();
+	if (!value) return null;
+	if (value.length > MAX_URL) throw new ValidationError(`${label} is too long.`);
+	return value;
+}
+
+/** One SAML value from an IdP metadata document, tolerant of prefixes and attribute order. */
+function xmlAttribute(tag: string, name: string): string | null {
+	const pattern = new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, 'i');
+	return pattern.exec(tag)?.[1]?.trim() || null;
+}
+
+interface SamlMetadata {
+	entityId: string | null;
+	entryPoint: string | null;
+	cert: string | null;
+}
+
+/**
+ * Read the parts of an IdP metadata document the plugin needs. This is deliberately a small
+ * extractor rather than a full XML parser: it only ever sees an admin-supplied document, and the
+ * values are re-checked (URL shape, certificate format) before they are stored.
+ */
+function parseSamlMetadata(xml: string): SamlMetadata {
+	const entityDescriptor = /<(?:[\w-]+:)?EntityDescriptor\b[^>]*>/i.exec(xml)?.[0] ?? '';
+	const entityId = xmlAttribute(entityDescriptor, 'entityID');
+
+	let entryPoint: string | null = null;
+	const ssoServices = xml.match(/<(?:[\w-]+:)?SingleSignOnService\b[^>]*>/gi) ?? [];
+	for (const service of ssoServices) {
+		const binding = xmlAttribute(service, 'Binding');
+		const location = xmlAttribute(service, 'Location');
+		if (!location) continue;
+		if (binding === SAML_REDIRECT_BINDING) {
+			entryPoint = location;
+			break;
+		}
+		entryPoint ??= location;
+	}
+
+	const certificate =
+		/<(?:[\w-]+:)?X509Certificate\b[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?X509Certificate>/i.exec(xml)?.[1] ??
+		null;
+
+	return {
+		entityId,
+		entryPoint,
+		cert: normalizeSamlCertificate(certificate)
+	};
+}
+
+async function fetchSamlMetadata(url: string): Promise<SamlMetadata> {
+	let response: Response;
+	try {
+		response = await fetch(url, {
+			redirect: 'error',
+			headers: { accept: 'application/samlmetadata+xml, application/xml, text/xml' },
+			signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS)
+		});
+	} catch (cause) {
+		throw new ValidationError(
+			`Could not read the IdP metadata at ${url}. Check the URL and that the identity provider allows this server to reach it.`,
+			[cause]
+		);
+	}
+	if (!response.ok)
+		throw new ValidationError(`The IdP metadata at ${url} answered ${response.status}.`);
+	const xml = await response.text();
+	if (new TextEncoder().encode(xml).length > MAX_SAML_METADATA_BYTES)
+		throw new ValidationError('The IdP metadata document is too large.');
+	const metadata = parseSamlMetadata(xml);
+	if (!metadata.entityId || !metadata.entryPoint || !metadata.cert)
+		throw new ValidationError(
+			'The IdP metadata document is missing its entity id, single sign-on URL or signing certificate.'
+		);
+	return metadata;
+}
+
+/**
+ * Resolve the SAML fields for a create or an update. A metadata URL wins over manual values for
+ * the fields it supplies; a blank certificate on update keeps the stored one.
+ */
+async function resolveSaml(
+	input: { issuer?: string; saml?: SsoSamlFields },
+	id: string,
+	existing?: ProviderRow
+): Promise<{
+	entityId: string;
+	entryPoint: string;
+	cert: string;
+	spEntityId: string;
+	audience: string | null;
+	wantAssertionsSigned: boolean;
+	identifierFormat: string | null;
+	metadataUrl: string | null;
+}> {
+	const saml = input.saml ?? {};
+	const metadataUrlInput =
+		saml.metadataUrl === undefined ? undefined : cleanOptionalText(saml.metadataUrl, 'The metadata URL');
+	const metadataUrl =
+		metadataUrlInput === undefined ? (existing?.discovery_url ?? null) : metadataUrlInput;
+	const fetched = metadataUrlInput ? await fetchSamlMetadata(metadataUrlInput) : null;
+
+	const entityId =
+		fetched?.entityId ??
+		cleanEntityId(saml.entityId) ??
+		cleanEntityId(input.issuer) ??
+		existing?.issuer ??
+		null;
+	if (!entityId) throw new ValidationError('The IdP entity id is required, or import a metadata URL.');
+
+	const entryPointRaw =
+		fetched?.entryPoint ??
+		cleanOptionalText(saml.entryPoint, 'The entry point') ??
+		existing?.entry_point ??
+		null;
+	const entryPoint = entryPointRaw ? optionalUrl(entryPointRaw, 'The entry point') : null;
+	if (!entryPoint)
+		throw new ValidationError('The entry point (IdP SSO URL) is required, or import a metadata URL.');
+
+	const cert =
+		fetched?.cert ?? normalizeSamlCertificate(saml.cert) ?? existing?.cert ?? null;
+	if (!cert)
+		throw new ValidationError(
+			'The IdP signing certificate is required, or import a metadata URL.'
+		);
+
+	const spEntityId =
+		saml.spEntityId === undefined
+			? (existing?.sp_entity_id ?? ssoSamlMetadata(id))
+			: (cleanOptionalText(saml.spEntityId, 'The SP entity id') ?? ssoSamlMetadata(id));
+
+	const audience =
+		saml.audience === undefined
+			? (existing?.audience ?? null)
+			: cleanOptionalText(saml.audience, 'The audience');
+	const identifierFormat =
+		saml.identifierFormat === undefined
+			? (existing?.identifier_format ?? null)
+			: cleanOptionalText(saml.identifierFormat, 'The identifier format');
+	const wantAssertionsSigned =
+		saml.wantAssertionsSigned === undefined
+			? existing
+				? existing.want_assertions_signed === 1
+				: true
+			: saml.wantAssertionsSigned;
+
+	return {
+		entityId,
+		entryPoint,
+		cert,
+		spEntityId,
+		audience,
+		wantAssertionsSigned,
+		identifierFormat,
+		metadataUrl
+	};
+}
+
 /**
  * Read the provider's discovery document and keep the endpoints. A provider whose document is
  * unreachable or names a different issuer is refused at save time: a typo in the issuer would
@@ -348,10 +579,12 @@ async function discover(issuer: string, discoveryUrl: string | null): Promise<Oi
 }
 
 function view(row: ProviderRow): SsoProviderView {
+	const protocol: SsoProtocol = row.protocol === 'saml' ? 'saml' : 'oidc';
+	const acsUrl = protocol === 'saml' ? ssoSamlAcs(row.id) : null;
 	return {
 		id: row.id,
 		name: row.name,
-		protocol: row.protocol,
+		protocol,
 		issuer: row.issuer,
 		clientId: row.client_id,
 		discoveryUrl: row.discovery_url,
@@ -362,7 +595,21 @@ function view(row: ProviderRow): SsoProviderView {
 		claims: { email: row.claim_email, name: row.claim_name, groups: row.claim_groups },
 		enabled: row.enabled === 1,
 		hasClientSecret: row.client_secret_sealed.length > 0,
-		callbackUrl: ssoCallbackUrl(row.id),
+		hasCertificate: Boolean(row.cert),
+		callbackUrl: acsUrl ?? ssoCallbackUrl(row.id),
+		spMetadataUrl: protocol === 'saml' ? ssoSamlMetadata(row.id) : null,
+		acsUrl,
+		saml:
+			protocol === 'saml'
+				? {
+						entityId: row.issuer,
+						entryPoint: row.entry_point,
+						spEntityId: row.sp_entity_id,
+						audience: row.audience,
+						wantAssertionsSigned: row.want_assertions_signed === 1,
+						identifierFormat: row.identifier_format
+					}
+				: null,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at
 	};
@@ -465,8 +712,12 @@ export class SsoService {
 		reservedId?: string
 	): Promise<SsoProviderView> {
 		this.#requireManage(principal);
-		const input = applyPreset(rawInput);
-		if (!input.issuer) throw new ValidationError('The issuer is required, or choose a preset.');
+		const protocol = rawInput.protocol ?? 'oidc';
+		if (!isSsoProtocol(protocol)) throw new ValidationError('Choose either OIDC or SAML.');
+		if (protocol === 'saml' && rawInput.preset)
+			throw new ValidationError('A preset is an OIDC configuration; choose OIDC or remove the preset.');
+		const input = protocol === 'oidc' ? applyPreset(rawInput) : rawInput;
+		assertProviderFields({ ...input, protocol }, { requireSecret: protocol === 'oidc' });
 		if (reservedId !== undefined && !PROVIDER_ID.test(reservedId))
 			throw new ValidationError(
 				'The reserved provider id is not valid. Reload the page and try again.'
@@ -481,16 +732,70 @@ export class SsoService {
 		if ((existing?.count ?? 0) > 0)
 			throw new ConflictError('This organisation already has an SSO provider. Edit it instead.');
 		const name = cleanName(input.name);
-		const issuer = normalizeIssuer(input.issuer);
-		const clientId = cleanClientId(input.clientId);
+		const now = this.#now();
+		const id = reservedId ?? newId('sso_');
+
+		if (protocol === 'saml') {
+			const saml = await resolveSaml(input, id);
+			const claims = cleanClaims(input.claims, DEFAULT_SAML_CLAIMS);
+			try {
+				core.ctx.sqlite.run(
+					`INSERT INTO sso_providers
+					 (id, org_id, name, protocol, issuer, client_id, client_secret_sealed, discovery_url,
+					  authorization_endpoint, token_endpoint, jwks_endpoint, scopes_json,
+					  claim_email, claim_name, claim_groups, entry_point, cert, callback_url, sp_entity_id,
+					  audience, want_assertions_signed, identifier_format, enabled, created_by,
+					  created_at, updated_at)
+					 VALUES (?, ?, ?, 'saml', ?, '', '', ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					[
+						id,
+						principal.orgId,
+						name,
+						saml.entityId,
+						saml.metadataUrl,
+						JSON.stringify(DEFAULT_SCOPES),
+						claims.email,
+						claims.name,
+						claims.groups,
+						saml.entryPoint,
+						saml.cert,
+						ssoSamlAcs(id),
+						saml.spEntityId,
+						saml.audience,
+						saml.wantAssertionsSigned ? 1 : 0,
+						saml.identifierFormat,
+						input.enabled === false ? 0 : 1,
+						principal.userId,
+						now,
+						now
+					]
+				);
+			} catch (cause) {
+				if (String(cause).includes('UNIQUE'))
+					throw new ConflictError('This organisation already has a provider for that issuer.');
+				throw cause;
+			}
+			syncSsoProviders();
+			this.#audit(principal, 'sso.provider.create', id, {
+				name,
+				protocol,
+				issuer: saml.entityId,
+				entryPoint: saml.entryPoint,
+				spEntityId: saml.spEntityId,
+				metadataUrl: saml.metadataUrl,
+				hasCertificate: true
+			});
+			return view(this.#provider(principal.orgId, id));
+		}
+
+		const issuer = normalizeIssuer(input.issuer!);
+		const clientId = cleanClientId(input.clientId!);
 		const clientSecret = cleanSecret(input.clientSecret);
 		if (!clientSecret) throw new ValidationError('The client secret is required.');
 		const discoveryUrl = optionalUrl(input.discoveryUrl, 'The discovery URL');
 		const scopes = cleanScopes(input.scopes);
 		const claims = cleanClaims(input.claims);
 		const endpoints = await discover(issuer, discoveryUrl);
-		const now = this.#now();
-		const id = reservedId ?? newId('sso_');
 		try {
 			core.ctx.sqlite.run(
 				`INSERT INTO sso_providers
@@ -527,6 +832,7 @@ export class SsoService {
 		syncSsoProviders();
 		this.#audit(principal, 'sso.provider.create', id, {
 			name,
+			protocol,
 			issuer: endpoints.issuer,
 			clientId,
 			scopes,
@@ -541,9 +847,69 @@ export class SsoService {
 		rawInput: Partial<SsoProviderInput>
 	): Promise<SsoProviderView> {
 		this.#requireManage(principal);
-		const input = applyPreset(rawInput);
 		const existing = this.#provider(principal.orgId, id);
+		const protocol: SsoProtocol = existing.protocol === 'saml' ? 'saml' : 'oidc';
+		if (rawInput.protocol !== undefined && rawInput.protocol !== protocol)
+			throw new ValidationError(
+				'Remove the provider and add a new one to change its protocol. Existing sign-ins keep working until then.'
+			);
+		const input = protocol === 'oidc' ? applyPreset(rawInput) : rawInput;
 		const name = input.name === undefined ? existing.name : cleanName(input.name);
+
+		if (protocol === 'saml') {
+			if (input.preset)
+				throw new ValidationError('A preset is an OIDC configuration; choose OIDC instead.');
+			const saml = await resolveSaml(input, id, existing);
+			const claims = cleanClaims(input.claims, {
+				email: existing.claim_email,
+				name: existing.claim_name,
+				groups: existing.claim_groups
+			});
+			try {
+				core.ctx.sqlite.run(
+					`UPDATE sso_providers SET
+					   name = ?, issuer = ?, discovery_url = ?, claim_email = ?, claim_name = ?,
+					   claim_groups = ?, entry_point = ?, cert = ?, callback_url = ?, sp_entity_id = ?,
+					   audience = ?, want_assertions_signed = ?, identifier_format = ?, enabled = ?,
+					   updated_at = ?
+					 WHERE org_id = ? AND id = ?`,
+					[
+						name,
+						saml.entityId,
+						saml.metadataUrl,
+						claims.email,
+						claims.name,
+						claims.groups,
+						saml.entryPoint,
+						saml.cert,
+						ssoSamlAcs(id),
+						saml.spEntityId,
+						saml.audience,
+						saml.wantAssertionsSigned ? 1 : 0,
+						saml.identifierFormat,
+						input.enabled === undefined ? existing.enabled : input.enabled ? 1 : 0,
+						this.#now(),
+						principal.orgId,
+						id
+					]
+				);
+			} catch (cause) {
+				if (String(cause).includes('UNIQUE'))
+					throw new ConflictError('This organisation already has a provider for that issuer.');
+				throw cause;
+			}
+			syncSsoProviders();
+			this.#audit(principal, 'sso.provider.update', id, {
+				name,
+				protocol,
+				issuer: saml.entityId,
+				entryPoint: saml.entryPoint,
+				spEntityId: saml.spEntityId,
+				metadataUrl: saml.metadataUrl
+			});
+			return view(this.#provider(principal.orgId, id));
+		}
+
 		const issuer = normalizeIssuer(input.issuer ?? existing.issuer);
 		const clientId =
 			input.clientId === undefined ? existing.client_id : cleanClientId(input.clientId);
@@ -615,6 +981,7 @@ export class SsoService {
 		syncSsoProviders();
 		this.#audit(principal, 'sso.provider.update', id, {
 			name,
+			protocol,
 			issuer: endpoints.issuer,
 			clientId,
 			scopes,

@@ -66,7 +66,7 @@ const CACHE_MS = 5 * 60 * 1000;
 /** Updating restarts the whole platform: platform admins, signed in interactively (no API keys/MCP). */
 export function canManagePlatform(principal: Principal | undefined): boolean {
 	// Platform admin (admin-plugin user role), never merely an org owner/admin (DESIGN §6.2).
-	return principal !== undefined && principal.kind === 'user' && canAdministerPlatform(principal);
+	return principal !== undefined && canAdministerPlatform(principal);
 }
 
 /**

@@ -19,6 +19,190 @@
 /** The DNS TXT value an organisation publishes to prove it owns a domain. */
 export const SSO_VERIFY_PREFIX = 'skiff-verify=';
 
+/** The sign-in protocols `@better-auth/sso` supports for one provider (IAM.md §8.3). */
+export type SsoProtocol = 'oidc' | 'saml';
+
+export const SSO_PROTOCOLS = ['oidc', 'saml'] as const;
+
+export function isSsoProtocol(value: unknown): value is SsoProtocol {
+	return value === 'oidc' || value === 'saml';
+}
+
+/** The longest a claim, URL or entity id may be before it is refused. */
+const MAX_SSO_VALUE = 500;
+
+function trimToNull(value: string | null | undefined): string | null {
+	const trimmed = value?.trim();
+	return trimmed ? trimmed : null;
+}
+
+/**
+ * True for an absolute `https` URL, or `http` on a loopback host for a development IdP. SAML
+ * entity ids are opaque strings, so they are not checked with this.
+ */
+export function isAllowedSsoUrl(value: string): boolean {
+	let url: URL;
+	try {
+		url = new URL(value);
+	} catch {
+		return false;
+	}
+	if (url.protocol === 'https:') return true;
+	return (
+		url.protocol === 'http:' &&
+		(url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]')
+	);
+}
+
+/**
+ * The Assertion Consumer Service URL `@better-auth/sso` serves for a provider. It is derived from
+ * the provider id, so Settings can show it (and the SP metadata URL) before the provider exists.
+ */
+export function ssoSamlAcsUrl(origin: string, providerId: string): string {
+	return `${origin.replace(/\/+$/, '')}/api/auth/sso/saml2/sp/acs/${encodeURIComponent(providerId)}`;
+}
+
+/** The SP metadata URL the plugin serves, which an IdP can import instead of manual fields. */
+export function ssoSamlMetadataUrl(origin: string, providerId: string): string {
+	return `${origin.replace(/\/+$/, '')}/api/auth/sso/saml2/sp/metadata?providerId=${encodeURIComponent(providerId)}`;
+}
+
+/**
+ * Normalise an IdP signing certificate to a PEM block. Certificates are public, unlike a private
+ * key, so they are stored and returned in the clear; only the IdP holds the matching private key.
+ * Accepts a PEM block or the bare base64 body an IdP console often shows.
+ */
+export function normalizeSamlCertificate(raw: string | null | undefined): string | null {
+	const value = raw?.trim();
+	if (!value) return null;
+	const body = value
+		.replace(/-----BEGIN CERTIFICATE-----/g, '')
+		.replace(/-----END CERTIFICATE-----/g, '')
+		.replace(/\s+/g, '');
+	// A certificate is base64; anything else (a private key, a fingerprint) is refused rather than
+	// handed to the SAML library as a signing certificate.
+	if (!/^[A-Za-z0-9+/]+={0,2}$/.test(body)) return null;
+	if (body.length < 100 || body.length > 20_000) return null;
+	const lines = body.match(/.{1,64}/g) ?? [];
+	return `-----BEGIN CERTIFICATE-----\n${lines.join('\n')}\n-----END CERTIFICATE-----`;
+}
+
+// ---------------------------------------------------------------- provider field validation
+
+/** The SAML half of a provider form. Metadata import is one way to fill it; manual fields the other. */
+export interface SsoSamlFields {
+	/** An IdP metadata document URL, fetched at save time. */
+	metadataUrl?: string | null;
+	/** The IdP entity id (the `issuer` column). Metadata import supplies it. */
+	entityId?: string;
+	/** The IdP SSO URL (manual entry). */
+	entryPoint?: string;
+	/** The IdP signing certificate (public). */
+	cert?: string;
+	/** The SP entity id; defaults to the SP metadata URL. */
+	spEntityId?: string;
+	audience?: string;
+	wantAssertionsSigned?: boolean;
+	identifierFormat?: string;
+}
+
+export interface SsoProviderFieldInput {
+	protocol?: string | null;
+	name?: string;
+	/** The OIDC issuer, or the SAML IdP entity id when `saml.entityId` is absent. */
+	issuer?: string;
+	clientId?: string;
+	clientSecret?: string;
+	/** Present when the OIDC configuration comes from a preset. */
+	preset?: unknown;
+	saml?: SsoSamlFields | null;
+}
+
+export type SsoProviderField =
+	| 'protocol'
+	| 'name'
+	| 'issuer'
+	| 'clientId'
+	| 'clientSecret'
+	| 'metadataUrl'
+	| 'entryPoint'
+	| 'cert'
+	| 'spEntityId'
+	| 'audience'
+	| 'identifierFormat';
+
+export interface SsoProviderFieldOptions {
+	/** A new OIDC provider needs a secret; a partial update may keep the stored one. */
+	requireSecret?: boolean;
+}
+
+/**
+ * Protocol-aware presence and shape checks, shared by the settings form, the REST API and the
+ * service so they refuse the same input with the same words. It deliberately does not fetch or
+ * normalise anything (issuer discovery and metadata import need I/O); the service does that after
+ * these pass, and re-checks the values it stored.
+ */
+export function ssoProviderFieldErrors(
+	input: SsoProviderFieldInput,
+	options: SsoProviderFieldOptions = {}
+): Partial<Record<SsoProviderField, string>> {
+	const errors: Partial<Record<SsoProviderField, string>> = {};
+	const protocol = input.protocol ?? 'oidc';
+	if (!isSsoProtocol(protocol)) {
+		errors.protocol = 'Choose either OIDC or SAML.';
+		return errors;
+	}
+
+	const name = input.name?.trim() ?? '';
+	if (!name) errors.name = 'Give the provider a name.';
+	else if (name.length > 80) errors.name = 'Keep the name under 80 characters.';
+
+	const saml = input.saml ?? {};
+
+	if (protocol === 'oidc') {
+		if (input.preset === undefined || input.preset === null) {
+			if (!trimToNull(input.issuer)) errors.issuer = 'The issuer is required, or choose a preset.';
+			else if (input.issuer!.trim().length > MAX_SSO_VALUE)
+				errors.issuer = 'The issuer is too long.';
+		}
+		if (!trimToNull(input.clientId)) errors.clientId = 'The client id is required.';
+		else if (input.clientId!.trim().length > MAX_SSO_VALUE)
+			errors.clientId = 'The client id is too long.';
+		if (options.requireSecret && !trimToNull(input.clientSecret))
+			errors.clientSecret = 'The client secret is required.';
+		return errors;
+	}
+
+	const metadataUrl = trimToNull(saml.metadataUrl);
+	if (!metadataUrl) {
+		if (!trimToNull(saml.entryPoint))
+			errors.entryPoint = 'An entry point (SSO URL) or an IdP metadata URL is required.';
+		else if (!isAllowedSsoUrl(saml.entryPoint!.trim()))
+			errors.entryPoint = 'The entry point must use https (http is allowed only for localhost).';
+		else if (saml.entryPoint!.trim().length > MAX_SSO_VALUE)
+			errors.entryPoint = 'The entry point is too long.';
+
+		if (!trimToNull(saml.cert)) errors.cert = 'The IdP signing certificate is required.';
+		else if (!normalizeSamlCertificate(saml.cert))
+			errors.cert = 'Paste the IdP signing certificate in PEM or base64 form.';
+	} else if (!isAllowedSsoUrl(metadataUrl)) {
+		errors.metadataUrl = 'The metadata URL must use https (http is allowed only for localhost).';
+	}
+
+	if (!trimToNull(saml.entityId) && !trimToNull(input.issuer) && !metadataUrl)
+		errors.issuer = 'The IdP entity id is required.';
+	if (trimToNull(saml.entityId) && saml.entityId!.trim().length > MAX_SSO_VALUE)
+		errors.issuer = 'The IdP entity id is too long.';
+	if (trimToNull(saml.spEntityId) && saml.spEntityId!.trim().length > MAX_SSO_VALUE)
+		errors.spEntityId = 'The SP entity id is too long.';
+	if (trimToNull(saml.audience) && saml.audience!.trim().length > MAX_SSO_VALUE)
+		errors.audience = 'The audience is too long.';
+	if (trimToNull(saml.identifierFormat) && saml.identifierFormat!.trim().length > MAX_SSO_VALUE)
+		errors.identifierFormat = 'The identifier format is too long.';
+
+	return errors;
+}
+
 /** How long a verification result is trusted before the record is checked again (IAM.md §8.3). */
 export const SSO_RECHECK_MS = 24 * 60 * 60 * 1000;
 

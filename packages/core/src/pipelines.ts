@@ -208,7 +208,7 @@ export class PipelineService {
 			patch.statusToken = parsed.statusToken ? this.ctx.secrets.seal(row.orgId, parsed.statusToken) : null;
 		if (parsed.minIsolation !== undefined) {
 			// Loosening isolation is an owner/admin decision, like environment rules.
-			if (principal.role !== 'owner' && principal.role !== 'admin')
+			if (!this.ctx.iam.can(principal, 'pipeline:manage', { type: 'pipelineRepository', id: row.id }))
 				throw new CoreError('forbidden', 'Only org owners and admins can change isolation minimums.', 403);
 			patch.minIsolationJson = JSON.stringify(parsed.minIsolation);
 		}
@@ -323,7 +323,9 @@ export class PipelineService {
 		// print the repository's secrets, so it runs untrusted (no secrets, environments or deploys)
 		// unless an org owner or admin dispatches it from a human session. Never trusted over MCP.
 		const inlineTrusted =
-			!parsed.workflowText || (principal.kind !== 'mcp' && (principal.role === 'owner' || principal.role === 'admin'));
+			!parsed.workflowText ||
+			(principal.credential !== 'oauth' &&
+				this.ctx.iam.can(principal, 'pipeline:manage', { type: 'pipelineRepository', id: repository.id }));
 		const trigger = this.engine.createTrigger({
 			repository,
 			event: 'workflow_dispatch',
@@ -511,10 +513,10 @@ export class PipelineService {
 		return this.readAutoSetup(principal.orgId);
 	}
 
-	/** Turn automatic setup on or off, or forget a removed repository. Owners and admins only. */
+	/** Turn automatic setup on or off, or forget a removed repository. `pipeline:manage` only. */
 	setAutoSetup(principal: Principal, input: PipelineAutoSetupInput): PipelineAutoSetupView {
 		this.ctx.iam.require(principal, 'build:create', { type: 'org' });
-		if (principal.role !== 'owner' && principal.role !== 'admin')
+		if (!this.ctx.iam.can(principal, 'pipeline:manage', { type: 'org' }))
 			throw new CoreError('forbidden', 'Only org owners and admins can change automatic pipeline setup.', 403);
 		const parsed = pipelineAutoSetupSchema.parse(input);
 		if (parsed.unignore) this.setIgnored(principal.orgId, parsed.unignore, false);
@@ -980,13 +982,12 @@ export class PipelineService {
 		return this.getRun(principal, name, run.id);
 	}
 
-	/** Environment approval (W12): org owners and admins only. */
+	/** Environment approval (W12): `pipeline:approve`, and never over MCP. */
 	async approveJob(principal: Principal, name: string, runRef: string, jobId: string, approve: boolean): Promise<PipelineRunView> {
 		const repository = this.requireRepository(principal, name);
 		this.ctx.iam.require(principal, 'build:read', { type: 'pipelineRepository', id: repository.id });
-		if (principal.role !== 'owner' && principal.role !== 'admin')
-			throw new CoreError('forbidden', 'Only org owners and admins can approve environment deployments.', 403);
-		if (principal.kind === 'mcp') throw new CoreError('forbidden', 'Environment approvals are a human decision.', 403);
+		this.ctx.iam.require(principal, 'pipeline:approve', { type: 'pipelineRepository', id: repository.id });
+		if (principal.credential === 'oauth') throw new CoreError('forbidden', 'Environment approvals are a human decision.', 403);
 		const run = this.requireRun(repository, runRef);
 		const job = this.requireRunJob(run, jobId);
 		this.engine.approveJob(job, principal.userId, approve);
@@ -1167,8 +1168,8 @@ export class PipelineService {
 	setEnvironment(principal: Principal, name: string, environment: string, input: PipelineEnvironmentSet): PipelineEnvironmentView {
 		const repository = this.requireRepository(principal, name);
 		this.ctx.iam.require(principal, 'build:create', { type: 'pipelineRepository', id: repository.id });
-		// Protection rules gate secrets and deploys; loosening them is an owner/admin decision.
-		if (principal.role !== 'owner' && principal.role !== 'admin')
+		// Protection rules gate secrets and deploys; loosening them needs `pipeline:manage`.
+		if (!this.ctx.iam.can(principal, 'pipeline:manage', { type: 'pipelineRepository', id: repository.id }))
 			throw new CoreError('forbidden', 'Only org owners and admins can change environment rules.', 403);
 		if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(environment)) throw new ValidationError('Invalid environment name.');
 		const parsed = pipelineEnvironmentSetSchema.parse(input);
@@ -1196,7 +1197,7 @@ export class PipelineService {
 	deleteEnvironment(principal: Principal, name: string, environment: string): void {
 		const repository = this.requireRepository(principal, name);
 		this.ctx.iam.require(principal, 'build:create', { type: 'pipelineRepository', id: repository.id });
-		if (principal.role !== 'owner' && principal.role !== 'admin')
+		if (!this.ctx.iam.can(principal, 'pipeline:manage', { type: 'pipelineRepository', id: repository.id }))
 			throw new CoreError('forbidden', 'Only org owners and admins can change environment rules.', 403);
 		this.ctx.db.transaction(() => {
 			this.ctx.db

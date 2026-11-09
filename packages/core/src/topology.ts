@@ -1,7 +1,6 @@
 import { and, eq, isNotNull, isNull } from 'drizzle-orm';
 import { databases, disks, nodes, projects, storageInstances, workloads } from '@skiff/db';
 import {
-	canViewPlatform,
 	type BlastRadiusItem,
 	type BlastRadiusView,
 	type Principal,
@@ -177,7 +176,7 @@ export class TopologyService {
 	}
 
 	private assertRead(principal: Principal): void {
-		if (!canViewPlatform(principal))
-			throw new CoreError('forbidden', 'Platform admin required to view the fleet topology.', 403);
+		if (!this.ctx.platformIam.canView(principal))
+			throw new CoreError('forbidden', 'Platform admin permission required to view the fleet topology.', 403);
 	}
 }

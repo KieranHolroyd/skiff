@@ -65,9 +65,8 @@ export const load: PageServerLoad = ({ locals }) => {
 		heldCount: principal.permissions.size,
 		totalCount: access.reduce((sum, group) => sum + group.actions.length, 0),
 		platformAdmin: principal.platformAdmin === true,
-		/** Owners and admins may rename the org (Better Auth grants both `organization:update`). */
-		canRename:
-			principal.kind === 'user' && (principal.role === 'owner' || principal.role === 'admin')
+		/** Only an org manager (`org:update`) may rename the org. */
+		canRename: core.ctx.iam.can(principal, 'org:update', { type: 'org' })
 	};
 };
 

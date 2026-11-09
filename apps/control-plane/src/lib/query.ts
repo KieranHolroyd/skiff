@@ -1,5 +1,6 @@
 import { browser } from '$app/env';
 import { QueryClient } from '@tanstack/svelte-query';
+import { askVerify } from '#lib/verify.svelte.js';
 
 /**
  * TanStack Query for the dashboard's client-side reads: live tails, polled status and lazily
@@ -42,7 +43,7 @@ export class StepUpRequiredHttpError extends HttpError {
 	constructor(
 		readonly permission: string,
 		readonly level: 'window' | 'always',
-		message = 'Verify it’s you to continue. Step-up verification is not available in this build yet.'
+		message = 'Verify it’s you to continue.'
 	) {
 		super(403, message);
 		this.name = 'StepUpRequiredHttpError';
@@ -72,6 +73,23 @@ async function failure(response: Response, fallback: string): Promise<HttpError>
 
 /** GET JSON, throwing an `HttpError` that carries the server's message. */
 export async function fetchJson<T>(
+	url: string,
+	init: RequestInit & { fallback?: string } = {}
+): Promise<T> {
+	try {
+		return await requestJson<T>(url, init);
+	} catch (error) {
+		// A 403 `step_up_required` opens the global dialog and retries this request once
+		// (STEP-UP.md §6). Only a browser has a person to ask.
+		if (error instanceof StepUpRequiredHttpError && browser) {
+			const verified = await askVerify({ permission: error.permission, level: error.level });
+			if (verified) return requestJson<T>(url, init);
+		}
+		throw error;
+	}
+}
+
+async function requestJson<T>(
 	url: string,
 	init: RequestInit & { fallback?: string } = {}
 ): Promise<T> {

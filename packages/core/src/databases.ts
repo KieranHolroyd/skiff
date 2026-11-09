@@ -1354,7 +1354,7 @@ export class DatabaseService {
 		const db = this.requireRow(principal, name);
 		this.requireDatabasePermission(principal, 'database:credentials', db);
 		this.assertCredentialRevealAllowed(principal);
-		if (principal.kind === 'system')
+		if (principal.credential === 'system')
 			throw new CoreError('forbidden', 'Credential reveal needs a user session or API key.', 403);
 		const credential = this.requireCredential(db.id, credentialId);
 		if (credential.status !== 'ready' || credential.revokedAt !== null)

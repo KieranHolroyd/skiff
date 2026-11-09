@@ -31,6 +31,11 @@ import {
 	type UserPoolView
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
+import type {
+	UserPoolInviteCreated,
+	UserPoolInviteView,
+	UserPoolUserView
+} from './user-pool-engine.ts';
 import { ConflictError, ForbiddenError, NotFoundError } from './errors.ts';
 import { newId, parseJson, randomToken } from './util.ts';
 
@@ -98,6 +103,16 @@ interface UserPoolClientRow {
 	created_at: number;
 }
 
+/** The public part of a pool that a hosted page may show before anybody signs in. */
+export interface UserPoolPublicInfo {
+	id: string;
+	name: string;
+	description: string;
+	issuer: string;
+	signupMode: UserPoolSignupMode;
+	theme: UserPoolTheme;
+}
+
 export class UserPoolService {
 	constructor(private readonly ctx: CoreContext) {}
 
@@ -134,6 +149,80 @@ export class UserPoolService {
 		const row = this.#row(principal, poolId);
 		this.#require(principal, 'userPool:read', row);
 		return this.#clients(row.id).map(clientView);
+	}
+
+	/** Theme and signup mode for the hosted pages; no authentication, like discovery. */
+	publicInfo(poolId: string): UserPoolPublicInfo {
+		const row = this.#publicRow(poolId);
+		return {
+			id: row.id,
+			name: row.name,
+			description: row.description,
+			issuer: row.issuer,
+			signupMode: row.signup_mode as UserPoolSignupMode,
+			theme: parseTheme(row.theme_json)
+		};
+	}
+
+	// ---------------------------------------------------------------- user administration
+
+	listUsers(principal: Principal, poolId: string): UserPoolUserView[] {
+		const row = this.#row(principal, poolId);
+		this.#require(principal, 'userPool:manage-users', row);
+		return this.ctx.userPoolEngine.listUsers(row.id);
+	}
+
+	disableUser(principal: Principal, poolId: string, userId: string, disabled = true): UserPoolUserView {
+		const row = this.#row(principal, poolId);
+		this.#require(principal, 'userPool:manage-users', row);
+		const user = this.ctx.userPoolEngine.setUserDisabled(row.id, userId, disabled);
+		this.ctx.audit.record({
+			principal,
+			action: disabled ? 'user_pool.user.disable' : 'user_pool.user.enable',
+			resource: 'user_pool_user',
+			resourceId: user.id,
+			args: { poolId: row.id, pool: row.name, email: user.email },
+			result: 'ok'
+		});
+		return user;
+	}
+
+	deleteUser(principal: Principal, poolId: string, userId: string): void {
+		const row = this.#row(principal, poolId);
+		this.#require(principal, 'userPool:manage-users', row);
+		const user = this.ctx.userPoolEngine.user(row.id, userId);
+		if (!this.ctx.userPoolEngine.deleteUser(row.id, userId)) throw new NotFoundError('User pool user');
+		this.ctx.audit.record({
+			principal,
+			action: 'user_pool.user.delete',
+			resource: 'user_pool_user',
+			resourceId: user.id,
+			args: { poolId: row.id, pool: row.name, email: user.email },
+			result: 'ok'
+		});
+	}
+
+	inviteUser(principal: Principal, poolId: string, email: string): UserPoolInviteCreated {
+		const row = this.#row(principal, poolId);
+		this.#require(principal, 'userPool:manage-users', row);
+		const created = this.ctx.userPoolEngine.createInvite(row.id, email, {
+			createdBy: principal.userId
+		});
+		this.ctx.audit.record({
+			principal,
+			action: 'user_pool.user.invite',
+			resource: 'user_pool_invite',
+			resourceId: created.invite.id,
+			args: { poolId: row.id, pool: row.name, email: created.invite.email },
+			result: 'ok'
+		});
+		return created;
+	}
+
+	listInvites(principal: Principal, poolId: string): UserPoolInviteView[] {
+		const row = this.#row(principal, poolId);
+		this.#require(principal, 'userPool:manage-users', row);
+		return this.ctx.userPoolEngine.listInvites(row.id);
 	}
 
 	// ---------------------------------------------------------------- lifecycle
@@ -266,6 +355,7 @@ export class UserPoolService {
 		const row = this.#row(principal, id);
 		this.#require(principal, 'userPool:delete', row);
 		this.ctx.sqlite.transaction(() => {
+			this.ctx.userPoolEngine.purgePool(row.id);
 			this.ctx.sqlite.run('DELETE FROM user_pool_clients WHERE pool_id = ?', [row.id]);
 			this.ctx.sqlite.run('DELETE FROM user_pools WHERE id = ? AND org_id = ?', [
 				row.id,
@@ -380,7 +470,7 @@ export class UserPoolService {
 			jwks_uri: `${issuer}/.well-known/jwks.json`,
 			end_session_endpoint: `${issuer}/oauth2/logout`,
 			response_types_supported: ['code'],
-			grant_types_supported: ['authorization_code', 'refresh_token'],
+			grant_types_supported: ['authorization_code'],
 			subject_types_supported: ['public'],
 			id_token_signing_alg_values_supported: ['ES256'],
 			scopes_supported: ['openid', 'profile', 'email'],

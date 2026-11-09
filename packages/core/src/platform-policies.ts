@@ -1,6 +1,5 @@
 import {
 	PLATFORM_POLICIES_KEY,
-	canAdministerPlatform,
 	platformPoliciesMergedSchema,
 	platformPoliciesSchema,
 	platformPoliciesUpdateSchema,
@@ -43,8 +42,8 @@ export class PlatformPolicyService {
 	 * merges and persists. Returns the saved policies.
 	 */
 	update(principal: Principal, input: unknown): PlatformPolicies {
-		if (!canAdministerPlatform(principal))
-			throw new CoreError('forbidden', 'Only a platform admin signed in to the dashboard can change platform policies.', 403);
+		if (!this.ctx.platformIam.canAdminister(principal))
+			throw new CoreError('forbidden', 'Only a platform admin role signed in to the dashboard can change platform policies.', 403);
 		const update = platformPoliciesUpdateSchema.safeParse(input);
 		if (!update.success) throw new ValidationError('Invalid platform policies.', update.error.issues);
 		const merged = platformPoliciesMergedSchema.safeParse({ ...this.get(), ...update.data });

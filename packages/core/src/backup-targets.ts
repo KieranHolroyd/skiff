@@ -3,7 +3,6 @@ import { backupTargets, databaseBackups, databases } from '@skiff/db';
 import {
 	backupTargetCreateSchema,
 	backupTargetUpdateSchema,
-	canAdministerPlatform,
 	type BackupTargetCredentials,
 	type BackupTargetResolution,
 	type BackupTargetTestResult,
@@ -748,8 +747,8 @@ export class BackupTargetService {
 	}
 
 	private requirePlatformAdmin(principal: Principal): void {
-		if (!canAdministerPlatform(principal))
-			throw new CoreError('forbidden', 'Only a platform admin dashboard session can change the platform backup target.', 403);
+		if (!this.ctx.platformIam.canAdminister(principal))
+			throw new CoreError('forbidden', 'Only a platform admin role dashboard session can change the platform backup target.', 403);
 	}
 
 	private requireMutationsEnabled(): void {

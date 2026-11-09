@@ -79,6 +79,7 @@ import { TokenService } from './iam/sts.ts';
 import { AccessPolicyService } from './iam/access-policies.ts';
 import { ScimTokenService } from './iam/scim.ts';
 import { UserPoolService } from './user-pools.ts';
+import { UserPoolEngineService } from './user-pool-engine.ts';
 
 export * from './config.ts';
 export * from './context.ts';
@@ -98,6 +99,7 @@ export * from './iam/sts.ts';
 export * from './iam/access-policies.ts';
 export * from './iam/scim.ts';
 export * from './user-pools.ts';
+export * from './user-pool-engine.ts';
 export * from './platform-iam.ts';
 export * from './service-accounts.ts';
 export * from './access-keys.ts';
@@ -284,6 +286,8 @@ export interface Core {
 	accessPolicies: AccessPolicyService;
 	/** Managed user pools: OIDC clients and discovery for tenant apps (IAM.md I26–I29). */
 	userPools: UserPoolService;
+	/** Native user-pool engine: pool users, sessions and OIDC code flow (I27). */
+	userPoolEngine: UserPoolEngineService;
 	/** SCIM bearer tokens and directory reconciliation (IAM.md I20). */
 	scim: ScimTokenService;
 	/** Email: Skiff's self-hosted SES (docs/EMAIL.md). */
@@ -335,6 +339,7 @@ export function createCore(options: CoreOptions): Core {
 	ctx.sts = new TokenService(ctx);
 	ctx.accessPolicies = new AccessPolicyService(ctx);
 	ctx.userPools = new UserPoolService(ctx);
+	ctx.userPoolEngine = new UserPoolEngineService(ctx);
 	ctx.scim = new ScimTokenService(ctx);
 	ctx.quota = new QuotaService(ctx);
 	ctx.projects = new ProjectService(ctx);
@@ -478,6 +483,7 @@ export function createCore(options: CoreOptions): Core {
 		sts: ctx.sts,
 		accessPolicies: ctx.accessPolicies,
 		userPools: ctx.userPools,
+		userPoolEngine: ctx.userPoolEngine,
 		scim: ctx.scim,
 		logDrains: new LogDrainService(ctx, options.version)
 	};

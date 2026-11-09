@@ -14,7 +14,9 @@
 	import UserRoundIcon from '@lucide/svelte/icons/user-round';
 	import { toast } from 'svelte-sonner';
 	import { authClient } from '#lib/auth-client.js';
+	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
+	import { askVerify } from '#lib/verify.svelte.js';
 	import CopyButton from '#lib/components/skiff/CopyButton.svelte';
 	import FormDialog from '#lib/components/skiff/FormDialog.svelte';
 	import GitHubMark from '#lib/components/skiff/GitHubMark.svelte';
@@ -51,6 +53,7 @@
 	let passkeyPending = $state(false);
 	let passkeyError = $state('');
 	let passkeySupported = $state<boolean | null>(null);
+	let locking = $state(false);
 
 	onMount(() => {
 		passkeySupported = 'PublicKeyCredential' in window;
@@ -142,6 +145,20 @@
 			action: '?/deletePasskey',
 			fields: { passkeyId: passkey.id }
 		});
+	}
+
+	async function lock() {
+		if (locking) return;
+		locking = true;
+		try {
+			await runAction('?/lockStepUp');
+		} finally {
+			locking = false;
+		}
+	}
+
+	function verifyNow() {
+		void askVerify({ action: 'Verify this session' });
 	}
 </script>
 
@@ -330,6 +347,45 @@
 				<span class="self-center text-xs text-muted-foreground">
 					This session was verified with {factorLabels[data.twoFactor.sessionFactor] ??
 						'a second factor'}.
+				</span>
+			{/if}
+		</Card.Content>
+	</Card.Root>
+
+	<Card.Root>
+		<Card.Header>
+			<Card.Title class="flex items-center gap-2">
+				<ShieldCheckIcon class="size-4 text-muted-foreground" />Step-up verification
+				{#if data.stepUp?.fresh}
+					<Badge variant="success">verified</Badge>
+				{:else}
+					<Badge variant="neutral">not verified</Badge>
+				{/if}
+			</Card.Title>
+			<Card.Description>
+				Sensitive actions ask you to prove it’s you again, then stay unlocked for 30 minutes on
+				this session. Locking ends that early.
+			</Card.Description>
+			<Card.Action>
+				{#if data.stepUp?.fresh}
+					<Button size="sm" variant="outline" disabled={locking} onclick={lock}>
+						{#if locking}<Spinner />{/if}Lock now
+					</Button>
+				{:else}
+					<Button size="sm" variant="outline" onclick={verifyNow}>Verify now</Button>
+				{/if}
+			</Card.Action>
+		</Card.Header>
+		<Card.Content class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+			{#if data.stepUp?.fresh}
+				<span>
+					Verified with a {data.stepUp.class === 'strong' ? 'strong factor' : 'password or email code'} ·
+					{data.stepUp.minutesLeft} min left
+				</span>
+			{:else}
+				<span>
+					The next sensitive action will ask for
+					{data.stepUp?.strongest === 'strong' ? 'your passkey or authenticator code' : 'your password or an email code'}.
 				</span>
 			{/if}
 		</Card.Content>
