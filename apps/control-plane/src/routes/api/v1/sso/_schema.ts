@@ -86,5 +86,6 @@ export const authPolicyUpdateSchema = z.object({
 	sessionMaxAge: z.number().int().positive().nullable().optional(),
 	idleTimeout: z.number().int().positive().nullable().optional(),
 	ipAllowlist: z.array(z.string().trim().min(1).max(64)).max(64).optional(),
-	breakGlassUserIds: z.array(z.string().trim().min(1).max(128)).max(32).optional()
+	breakGlassUserIds: z.array(z.string().trim().min(1).max(128)).max(32).optional(),
+	autoDisableUnusedServiceAccounts: z.boolean().optional()
 });

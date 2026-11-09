@@ -12,8 +12,8 @@ import type { Actions, PageServerLoad } from './$types';
 /**
  * Settings → SSO (IAM.md I19/I20/I21, §8.3–§8.5). OIDC providers, the email domains that route to
  * them, group mapping, SCIM bearer tokens and the org authentication policy (required SSO/2FA,
- * methods, session limits, IP allowlist, break-glass owners). SAML includes certificate rollover
- * and the IdP Single Logout URL; full SAML SLO messages need the plugin option described below.
+ * methods, session limits, IP allowlist, break-glass owners). SAML includes certificate rollover,
+ * SP request signing with a sealed per-provider key, and the IdP Single Logout URL.
  *
  * Adding a provider starts from a preset (`#lib/sso-presets.ts`, D180) or a custom OIDC issuer.
  * The provider id is reserved at load time so the dialog can show the exact redirect URI to
@@ -161,6 +161,24 @@ export const actions: Actions = {
 			const enabled = sso.providerEnabled(principal, id);
 			await sso.updateProvider(principal, id, { enabled: !enabled });
 			return { success: enabled ? 'Provider disabled.' : 'Provider enabled.' };
+		} catch (cause) {
+			return failure(cause);
+		}
+	},
+
+	rotateSpKey: async ({ request, locals }) => {
+		const principal = locals.principal!;
+		const id = formString(await request.formData(), 'providerId');
+		if (!id) return fail(400, { message: 'Missing provider id.' });
+		try {
+			const provider = sso.rotateSpSigningKey(principal, id);
+			return {
+				success: `SP signing key rotated. The previous certificate stays in the metadata${
+					provider.saml?.spSigning?.previousPublishedUntil
+						? ` until ${new Date(provider.saml.spSigning.previousPublishedUntil).toISOString()}`
+						: ''
+				}.`
+			};
 		} catch (cause) {
 			return failure(cause);
 		}

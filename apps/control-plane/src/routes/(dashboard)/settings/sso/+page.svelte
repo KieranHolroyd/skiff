@@ -69,6 +69,12 @@
 			certificates: string[];
 			sloUrl: string | null;
 			sloBinding: 'redirect' | 'post';
+			spSigning: {
+				certificate: string;
+				previousCertificate: string | null;
+				createdAt: number;
+				previousPublishedUntil: number | null;
+			} | null;
 		} | null;
 		updatedAt: number;
 	}
@@ -336,6 +342,17 @@
 		void runAction('?/toggleProvider', { providerId: provider.id });
 	}
 
+	function rotateSpKey(provider: ProviderView) {
+		askConfirm({
+			title: `Rotate the SP signing key for ${provider.name}?`,
+			description:
+				'New AuthnRequests and logout messages are signed with the new key. The previous certificate stays in the SP metadata for 30 days, so update the IdP before then.',
+			confirmLabel: 'Rotate key',
+			action: '?/rotateSpKey',
+			fields: { providerId: provider.id }
+		});
+	}
+
 	function removeDomain(domain: DomainView) {
 		askConfirm({
 			title: `Remove ${domain.domain}?`,
@@ -530,6 +547,8 @@
 										{#if provider.saml?.sloUrl}
 											· SLO <span class="font-mono">{provider.saml.sloBinding}</span>
 										{/if}
+										· SP signing
+										<span class="font-mono">{provider.saml?.spSigning ? 'on' : 'off'}</span>
 									</p>
 									<div class="mt-0.5 flex items-center gap-1">
 										<p class="truncate text-xs text-muted-foreground">
@@ -588,6 +607,11 @@
 											<DropdownMenu.Item onSelect={() => toggleProvider(provider)}>
 												<PowerIcon />{provider.enabled ? 'Disable' : 'Enable'}
 											</DropdownMenu.Item>
+											{#if provider.protocol === 'saml'}
+												<DropdownMenu.Item onSelect={() => rotateSpKey(provider)}>
+													<RefreshCwIcon />Rotate SP signing key
+												</DropdownMenu.Item>
+											{/if}
 											<DropdownMenu.Separator />
 											<DropdownMenu.Item
 												variant="destructive"
@@ -608,8 +632,9 @@
 		{#snippet footer()}
 			<span>
 				An OIDC client secret is write-only: it is sealed with this organisation's key and never
-				returned. A SAML signing certificate is public, and the private key stays at the IdP.
-				{#if !data.canManage}Org owners and admins manage SSO.{/if}
+				returned. IdP SAML signing certificates are public, and the IdP holds their private keys.
+				Skiff's own SP private key is sealed with the platform key; only its certificate is
+				published. {#if !data.canManage}Org owners and admins manage SSO.{/if}
 			</span>
 		{/snippet}
 	</Panel>
@@ -1394,11 +1419,52 @@
 						</div>
 						<div>
 							<p class="text-xs font-medium">SP signing certificate</p>
-							<p class="mt-1 text-xs text-muted-foreground">
-								Not configured. Signed AuthnRequests need an SP private key stored by the SSO
-								plugin, so SP signing is deferred. Skiff does not publish a placeholder
-								certificate. The IdP can still import the SP metadata URL above.
-							</p>
+							{#if editing?.saml?.spSigning}
+								<textarea
+									readonly
+									rows={6}
+									class="mt-1 w-full resize-none rounded border bg-background px-1.5 py-0.5 font-mono text-xs"
+									value={editing.saml.spSigning.certificate}
+									aria-label="SP signing certificate"
+								></textarea>
+								<div class="mt-1 flex flex-wrap items-center gap-1">
+									<CopyButton
+										value={editing.saml.spSigning.certificate}
+										iconOnly
+										label="Copy SP signing certificate"
+									/>
+									<span class="text-xs text-muted-foreground">
+										Signed AuthnRequests: on · created {formatRelative(
+											editing.saml.spSigning.createdAt
+										)}
+									</span>
+								</div>
+								{#if editing.saml.spSigning.previousCertificate && editing.saml.spSigning.previousPublishedUntil}
+									<p class="mt-1 text-xs text-muted-foreground">
+										The previous certificate is also published until {formatDateTime(
+											editing.saml.spSigning.previousPublishedUntil
+										)} so the IdP can be updated. Copy it:
+									</p>
+									<div class="mt-1 flex items-center gap-1">
+										<code
+											class="min-w-0 flex-1 truncate rounded bg-background px-1.5 py-0.5 font-mono text-xs"
+											title={editing.saml.spSigning.previousCertificate}
+											>{editing.saml.spSigning.previousCertificate.slice(0, 64)}…</code
+										>
+										<CopyButton
+											value={editing.saml.spSigning.previousCertificate}
+											iconOnly
+											label="Copy previous SP signing certificate"
+										/>
+									</div>
+								{/if}
+							{:else}
+								<p class="mt-1 text-xs text-muted-foreground">
+									Skiff generates an RSA key and self-signed certificate when the provider is
+									saved. AuthnRequests and logout messages are signed from then on, and the
+									certificate appears here for the IdP.
+								</p>
+							{/if}
 						</div>
 					</div>
 				</section>

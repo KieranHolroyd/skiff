@@ -38,6 +38,8 @@ interface PolicyRow {
 	scope_id: string | null;
 	scope_parent_id: string | null;
 	enabled: number;
+	/** Bumped on a revocation; zero falls back to the project's site epoch. */
+	version: number;
 	created_by: string;
 	created_at: number;
 	updated_at: number;
@@ -49,7 +51,10 @@ interface RuleRow {
 	matcher_json: string;
 }
 
-export interface AccessPolicyView extends AccessPolicy {}
+export interface AccessPolicyView extends AccessPolicy {
+	/** Bumped on a revocation; zero means the host still uses its project's site epoch. */
+	version: number;
+}
 
 export interface AccessPolicyAssignInput {
 	/** `production` or `previews` on the project, or one named environment id. */
@@ -132,21 +137,36 @@ export class AccessPolicyService {
 	 */
 	edgeSettings(policyId: string): {
 		enabled: boolean;
+		version: number;
 		serviceTokens: AccessServiceTokenRule[];
 		hasPersonRules: boolean;
 	} {
 		const row = this.#sqlite
-			.query<{ enabled: number }, [string]>('SELECT enabled FROM access_policies WHERE id = ?')
+			.query<{ enabled: number; version: number }, [string]>(
+				'SELECT enabled, version FROM access_policies WHERE id = ?',
+			)
 			.get(policyId);
-		if (!row) return { enabled: false, serviceTokens: [], hasPersonRules: true };
+		if (!row) return { enabled: false, version: 0, serviceTokens: [], hasPersonRules: true };
 		const rules = this.rules(policyId);
 		return {
 			enabled: row.enabled === 1,
+			version: row.version ?? 0,
 			serviceTokens: serviceTokenRules({ rules }),
 			// Anything the agent cannot prove from headers alone (a person, a CIDR request, a pool)
 			// means an anonymous visitor may still have a way in and should be sent to login.
 			hasPersonRules: rules.some((rule) => rule.matcher.type !== 'serviceToken'),
 		};
+	}
+
+	/** A policy's current revocation version; zero falls back to the project's site epoch. */
+	versionOf(policyId: string): number {
+		return (
+			this.#sqlite
+				.query<{ version: number }, [string]>(
+					'SELECT version FROM access_policies WHERE id = ?',
+				)
+				.get(policyId)?.version ?? 0
+		);
 	}
 
 	// ---------------------------------------------------------------- writes
@@ -224,11 +244,11 @@ export class AccessPolicyService {
 				this.writeRules(id, rules);
 			}
 		})();
-		// Removing or tightening a rule (or disabling the policy) is a revocation: rotate the
-		// session epoch of every host using it, which rotates their site keys and makes every cookie
-		// and callback token issued under the old policy stop verifying. Adding a service token is
-		// not a revocation, so it does not sign existing visitors out.
-		if (revoked) this.bumpHostsForPolicy(id);
+		// Removing or tightening a rule (or disabling the policy) is a revocation: bump only this
+		// policy's version. The version is part of each host's site key, so cookies and callback
+		// tokens issued under the old policy stop verifying while other policies on the same
+		// project keep their visitors signed in. Adding a service token is not a revocation.
+		if (revoked) this.bumpPolicyVersion(id);
 		this.ctx.audit.record({
 			principal,
 			action: 'access_policy.update',
@@ -346,18 +366,15 @@ export class AccessPolicyService {
 
 	// ---------------------------------------------------------------- internals
 
-	/** Rotate every project that currently points at this policy (any scope). */
-	private bumpHostsForPolicy(policyId: string): void {
-		const now = this.ctx.now();
-		const rows = this.#sqlite
-			.query<{ projectId: string }, [string, string, string]>(
-				`SELECT id AS projectId FROM projects
-				   WHERE production_access_policy_id = ? OR preview_access_policy_id = ?
-				 UNION
-				 SELECT project_id AS projectId FROM environments WHERE access_policy_id = ?`,
-			)
-			.all(policyId, policyId, policyId);
-		for (const row of rows) this.bumpProjectEpoch(row.projectId, now);
+	/**
+	 * Bump one policy's revocation version. Every host using the policy gets a new site key on
+	 * its next desired-state pull; hosts using other policies keep theirs.
+	 */
+	private bumpPolicyVersion(policyId: string): void {
+		this.#sqlite.run(
+			'UPDATE access_policies SET version = version + 1, updated_at = ? WHERE id = ?',
+			[this.ctx.now(), policyId],
+		);
 	}
 
 	/**
@@ -407,6 +424,7 @@ export class AccessPolicyService {
 			description: row.description,
 			scope: scopeOf(row),
 			enabled: row.enabled === 1,
+			version: row.version ?? 0,
 			rules: this.rules(row.id),
 			createdAt: row.created_at,
 			updatedAt: row.updated_at,

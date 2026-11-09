@@ -58,6 +58,13 @@ export const actions: Actions = {
 
 		try {
 			const result = await core.userPoolEngine.signIn(params.id, email, password);
+			if (result.mfaRequired) {
+				return {
+					mfaRequired: true,
+					mfaToken: result.mfaToken ?? result.token,
+					email
+				};
+			}
 			setPoolSession(cookies, params.id, result.token);
 			redirect(
 				303,
@@ -69,6 +76,47 @@ export const actions: Actions = {
 			);
 		} catch (error) {
 			if (error instanceof CoreError) return fail(error.status, { error: error.message });
+			throw error;
+		}
+	},
+
+	/** Second step: swap a password-verified MFA challenge for a real pool session. */
+	mfa: async (event) => {
+		const { params, request, cookies, url } = event;
+		const form = await request.formData();
+		if (!validCsrf(cookies, params.id, form.get('csrf')))
+			return fail(400, { error: 'Your sign-in form expired. Reload the page and try again.' });
+		const mfaToken = String(form.get('mfaToken') ?? '');
+		const code = String(form.get('code') ?? '');
+		if (!mfaToken || !code)
+			return fail(400, {
+				error: 'Enter the six-digit code from your authenticator app.',
+				mfaRequired: true,
+				mfaToken
+			});
+
+		const client = clientKey(event);
+		if (!allowAttempt(`mfa:${params.id}:${client}`))
+			return fail(429, {
+				error: 'Too many code attempts. Wait a minute and try again.',
+				mfaRequired: true,
+				mfaToken
+			});
+
+		try {
+			const result = core.userPoolEngine.totpVerify(params.id, mfaToken, code);
+			setPoolSession(cookies, params.id, result.token);
+			redirect(
+				303,
+				safeRedirect(
+					String(form.get('return_to') ?? url.searchParams.get('return_to')),
+					platformOrigin,
+					`/pool/${params.id}`
+				)
+			);
+		} catch (error) {
+			if (error instanceof CoreError)
+				return fail(error.status, { error: error.message, mfaRequired: true, mfaToken });
 			throw error;
 		}
 	},

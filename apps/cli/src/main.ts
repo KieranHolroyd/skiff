@@ -34,6 +34,8 @@ import { exportCommand } from './commands/export.ts';
 import { volumeCommand } from './commands/volume.ts';
 import { deployCommand } from './commands/deploy.ts';
 import { deploymentsCommand } from './commands/deployments.ts';
+import { domainsCommand } from './commands/domains.ts';
+import { environmentsCommand } from './commands/environments.ts';
 import { loginCommand } from './commands/login.ts';
 import { logoutCommand } from './commands/logout.ts';
 import { logsCommand } from './commands/logs.ts';
@@ -48,6 +50,7 @@ import { rollbackCommand } from './commands/rollback.ts';
 import { statusCommand } from './commands/status.ts';
 import { usageCommand } from './commands/usage.ts';
 import { upgradeCommand } from './commands/upgrade.ts';
+import { workloadCommand } from './commands/workload.ts';
 import { wranglerCommand } from './commands/wrangler.ts';
 import { PROFILE_ENV, setProfileOverride } from './config.ts';
 
@@ -63,6 +66,12 @@ const commands: Record<string, (argv: string[]) => Promise<void>> = {
 	usage: usageCommand,
 	projects: projectsCommand,
 	deployments: deploymentsCommand,
+	workload: workloadCommand,
+	workloads: workloadCommand,
+	domains: domainsCommand,
+	domain: domainsCommand,
+	environments: environmentsCommand,
+	environment: environmentsCommand,
 	promote: promoteCommand,
 	rollback: rollbackCommand,
 	logs: logsCommand,
@@ -156,6 +165,9 @@ Commands:
   projects delete|restore|purge <slug…>      Bulk actions: shows the plan, then asks
   projects trash                             List the trash with purge dates
   deployments <project>                      List deployments
+  workload [show|set|reset|capacity]         Runtime spec: command, image, port, memory, idle stop (\`skif workload --help\`)
+  environments [list|create|update|remove|promote]  Named environments and their pointers
+  domains [list|add|check|remove]            Custom project domains and DNS verification
   promote <project> <deploymentId>           Move production to a deployment
   rollback <project>                         Move production back one deployment
   logs <project>                             Show recent project logs

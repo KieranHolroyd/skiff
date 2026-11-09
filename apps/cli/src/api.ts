@@ -61,6 +61,9 @@ import type { BlueprintPlanView, BlueprintRunView, BlueprintValidation } from '.
 import type { ConfigExportDocument } from './config-export.ts';
 import type { OperationItemView, OperationView } from './operations.ts';
 import type { HaStatusView } from './ha.ts';
+import type { DomainCheckResult, DomainView } from './domains.ts';
+import type { EnvironmentView } from './environments.ts';
+import type { NodeCapacityView, WorkloadSpec, WorkloadView } from './workloads.ts';
 import type { AppVolumeSnapshotView, AppVolumeView } from './volumes.ts';
 import type { JobLogPage, JobRunView, JobView } from './jobs.ts';
 import {
@@ -535,6 +538,156 @@ export class ApiClient {
 		const project = normalizeProject(record.project ?? record, input.slug);
 		if (!project) throw new CliError('The platform returned an unexpected project response.', { code: 'protocol' });
 		return { project, raw };
+	}
+
+	// ---------------------------------------------------------------- workload spec (DESIGN §3.4)
+
+	/** The saved runtime spec plus the running workload, if any. */
+	async getWorkload(project: string): Promise<{ spec: WorkloadSpec | null; workload: WorkloadView | null; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/projects/${encodeURIComponent(project)}/workload`);
+		const record = asRecord(unwrap(raw)) ?? {};
+		const spec = asRecord(record.spec) as unknown as WorkloadSpec | null;
+		const workload = asRecord(record.workload) as unknown as WorkloadView | null;
+		return { spec: spec ?? null, workload: workload ?? null, raw };
+	}
+
+	/** Save a runtime spec. The platform validates admission and secret references. */
+	async setWorkload(
+		project: string,
+		spec: WorkloadSpec,
+	): Promise<{ workload: WorkloadView | null; raw: unknown }> {
+		const raw = await this.request('PUT', `/api/v1/projects/${encodeURIComponent(project)}/workload`, {
+			body: spec,
+		});
+		const record = asRecord(unwrap(raw)) ?? {};
+		return { workload: (asRecord(record.workload) as unknown as WorkloadView | null) ?? null, raw };
+	}
+
+	/** Stop the workload and clear the saved runtime spec; releases are kept. */
+	async resetWorkload(project: string): Promise<{ raw: unknown }> {
+		const raw = await this.request('DELETE', `/api/v1/projects/${encodeURIComponent(project)}/workload`);
+		return { raw };
+	}
+
+	async getNodeCapacity(): Promise<{ capacity: NodeCapacityView[]; raw: unknown }> {
+		const raw = await this.request('GET', '/api/v1/nodes/capacity');
+		const record = asRecord(unwrap(raw)) ?? {};
+		return { capacity: (asArray(record.capacity) ?? []) as NodeCapacityView[], raw };
+	}
+
+	// ---------------------------------------------------------------- custom domains (D31)
+
+	async listDomains(options: { project?: string } = {}): Promise<{ domains: DomainView[]; raw: unknown }> {
+		const query = options.project ? `?project=${encodeURIComponent(options.project)}` : '';
+		const raw = await this.request('GET', `/api/v1/domains${query}`);
+		const record = asRecord(unwrap(raw)) ?? {};
+		return { domains: (asArray(record.domains) ?? []) as DomainView[], raw };
+	}
+
+	async createDomain(input: {
+		project: string;
+		hostname: string;
+		redirectWww?: boolean;
+	}): Promise<{ domain: DomainView; raw: unknown }> {
+		const raw = await this.request('POST', '/api/v1/domains', { body: input });
+		return { domain: domainFrom(raw), raw };
+	}
+
+	async getDomain(id: string): Promise<{ domain: DomainView; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/domains/${encodeURIComponent(id)}`);
+		return { domain: domainFrom(raw), raw };
+	}
+
+	async checkDomain(id: string): Promise<{ check: DomainCheckResult; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/domains/${encodeURIComponent(id)}/check`);
+		const record = asRecord(unwrap(raw)) ?? {};
+		const domain = asRecord(record.domain) as unknown as DomainView | null;
+		if (!domain)
+			throw new CliError('The platform returned an unexpected domain check response.', {
+				code: 'protocol',
+				details: raw,
+			});
+		return {
+			check: {
+				domain,
+				detail: stringValue(record.detail) ?? '',
+				records: (asArray(record.records) ?? []) as DomainCheckResult['records'],
+			},
+			raw,
+		};
+	}
+
+	async deleteDomain(id: string): Promise<unknown> {
+		return this.request('DELETE', `/api/v1/domains/${encodeURIComponent(id)}`);
+	}
+
+	// ---------------------------------------------------------------- named environments (D13)
+
+	async listEnvironments(project: string): Promise<{ environments: EnvironmentView[]; raw: unknown }> {
+		const raw = await this.request('GET', `/api/v1/projects/${encodeURIComponent(project)}/environments`);
+		const record = asRecord(unwrap(raw)) ?? {};
+		return { environments: (asArray(record.environments) ?? []) as EnvironmentView[], raw };
+	}
+
+	async createEnvironment(
+		project: string,
+		input: {
+			name: string;
+			slug?: string;
+			access?: string;
+			password?: string;
+			policyId?: string;
+		},
+	): Promise<{ environment: EnvironmentView; raw: unknown }> {
+		const raw = await this.request('POST', `/api/v1/projects/${encodeURIComponent(project)}/environments`, {
+			body: input,
+		});
+		return { environment: environmentFrom(raw), raw };
+	}
+
+	async updateEnvironment(
+		project: string,
+		env: string,
+		input: {
+			name?: string;
+			access?: string;
+			password?: string;
+			policyId?: string | null;
+		},
+	): Promise<{ environment: EnvironmentView; raw: unknown }> {
+		const raw = await this.request(
+			'PATCH',
+			`/api/v1/projects/${encodeURIComponent(project)}/environments/${encodeURIComponent(env)}`,
+			{ body: input },
+		);
+		return { environment: environmentFrom(raw), raw };
+	}
+
+	async deleteEnvironment(project: string, env: string): Promise<unknown> {
+		return this.request(
+			'DELETE',
+			`/api/v1/projects/${encodeURIComponent(project)}/environments/${encodeURIComponent(env)}`,
+		);
+	}
+
+	async promoteEnvironment(
+		project: string,
+		env: string,
+		deploymentId: string,
+	): Promise<{ deployment: DeploymentView; raw: unknown }> {
+		const raw = await this.request(
+			'POST',
+			`/api/v1/projects/${encodeURIComponent(project)}/environments/${encodeURIComponent(env)}/promote`,
+			{ body: { deploymentId } },
+		);
+		const value = unwrap(raw);
+		const deployment = normalizeDeployment(asRecord(value)?.deployment ?? value, { projectSlug: project });
+		if (!deployment)
+			throw new CliError('The platform returned an unexpected promotion response.', {
+				code: 'protocol',
+				details: raw,
+			});
+		return { deployment, raw };
 	}
 
 	/**
@@ -2591,6 +2744,25 @@ function brokerFrom(raw: unknown): BrokerView {
 	if (!view || typeof view.name !== 'string')
 		throw new CliError('The platform returned an unexpected broker response.', { code: 'protocol', details: raw });
 	return withAttachments(view as unknown as BrokerView);
+}
+
+/** Domain endpoints return the view itself, or `{ domain }` from newer servers. */
+function domainFrom(raw: unknown): DomainView {
+	const view = asRecord(asRecord(unwrap(raw))?.domain) ?? asRecord(unwrap(raw));
+	if (!view || typeof view.hostname !== 'string' || typeof view.id !== 'string')
+		throw new CliError('The platform returned an unexpected domain response.', { code: 'protocol', details: raw });
+	return view as unknown as DomainView;
+}
+
+/** Environment endpoints return the view itself, or `{ environment }` from a newer server. */
+function environmentFrom(raw: unknown): EnvironmentView {
+	const view = asRecord(asRecord(unwrap(raw))?.environment) ?? asRecord(unwrap(raw));
+	if (!view || typeof view.slug !== 'string' || typeof view.projectSlug !== 'string')
+		throw new CliError('The platform returned an unexpected environment response.', {
+			code: 'protocol',
+			details: raw,
+		});
+	return view as unknown as EnvironmentView;
 }
 
 function emailDomainFrom(raw: unknown): EmailDomainView {

@@ -68,6 +68,93 @@ export function ssoSamlMetadataUrl(origin: string, providerId: string): string {
 }
 
 /**
+ * The IdP-initiated Single Logout callback the plugin serves. This is where an IdP sends a
+ * `LogoutRequest` (or a `LogoutResponse` for an SP-initiated request); the plugin deletes the
+ * matching platform session and clears the session cookie. It is advertised in the SP metadata
+ * with both the POST and Redirect bindings.
+ */
+export function ssoSamlSloUrl(origin: string, providerId: string): string {
+	return `${origin.replace(/\/+$/, '')}/api/auth/sso/saml2/sp/slo/${encodeURIComponent(providerId)}`;
+}
+
+/** The SAML protocol and metadata namespaces, spelled once for the metadata builder. */
+const SAML_PROTOCOL_URN = 'urn:oasis:names:tc:SAML:2.0:protocol';
+const SAML_METADATA_URN = 'urn:oasis:names:tc:SAML:2.0:metadata';
+const SAML_DSIG_URN = 'http://www.w3.org/2000/09/xmldsig#';
+const SAML_EMAIL_NAMEID = 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress';
+
+function xmlAttribute(value: string): string {
+	return value
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+		.replace(/"/g, '&quot;')
+		.replace(/'/g, '&#39;');
+}
+
+function certificateBody(pem: string): string {
+	return pem
+		.replace(/-----BEGIN CERTIFICATE-----/g, '')
+		.replace(/-----END CERTIFICATE-----/g, '')
+		.replace(/\s+/g, '');
+}
+
+export interface SsoSamlSpMetadataInput {
+	/** The SP entity id the IdP sees (defaults to the metadata URL elsewhere). */
+	entityId: string;
+	/** The plugin's ACS URL. */
+	acsUrl: string;
+	/** The plugin's IdP-initiated SLO URL. Omitted when SLO should not be advertised. */
+	sloUrl?: string | null;
+	/**
+	 * SP signing certificates, current first. A previous certificate during a rollover window is
+	 * published next to the current one so the IdP keeps trusting requests signed just before the
+	 * rotation.
+	 */
+	certificates: readonly string[];
+	/** Require a signed assertion. Must match the provider's `wantAssertionsSigned`. */
+	wantAssertionsSigned: boolean;
+	/** The NameID format to advertise; the plugin default is emailAddress. */
+	identifierFormat?: string | null;
+}
+
+/**
+ * The SP metadata an IdP imports. The plugin's own metadata endpoint normally generates this XML,
+ * but its generator cannot add a signing certificate, and the plugin treats custom metadata as the
+ * authority for the ACS URL and signed-assertion policy. Building it here also lets Settings show
+ * exactly what the IdP will fetch, including a rollover certificate.
+ */
+export function ssoSamlSpMetadataXml(input: SsoSamlSpMetadataInput): string {
+	const certificates = input.certificates
+		.map((certificate) => normalizeSamlCertificate(certificate))
+		.filter((certificate): certificate is string => certificate !== null);
+	const keyDescriptors = certificates.map(
+		(certificate) =>
+			`        <md:KeyDescriptor use="signing">
+          <ds:KeyInfo>
+            <ds:X509Data>
+              <ds:X509Certificate>${certificateBody(certificate)}</ds:X509Certificate>
+            </ds:X509Data>
+          </ds:KeyInfo>
+        </md:KeyDescriptor>`
+	);
+	const nameIdFormat = input.identifierFormat?.trim() || SAML_EMAIL_NAMEID;
+	const slo = input.sloUrl
+		? `        <md:SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="${xmlAttribute(input.sloUrl)}"/>
+        <md:SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="${xmlAttribute(input.sloUrl)}"/>`
+		: '';
+	return `<?xml version="1.0" encoding="UTF-8"?>
+<md:EntityDescriptor xmlns:md="${SAML_METADATA_URN}" xmlns:ds="${SAML_DSIG_URN}" entityID="${xmlAttribute(input.entityId)}">
+  <md:SPSSODescriptor AuthnRequestsSigned="true" WantAssertionsSigned="${input.wantAssertionsSigned}" protocolSupportEnumeration="${SAML_PROTOCOL_URN}">
+${keyDescriptors.join('\n')}
+        <md:NameIDFormat>${xmlAttribute(nameIdFormat)}</md:NameIDFormat>
+${slo}
+        <md:AssertionConsumerService index="0" Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="${xmlAttribute(input.acsUrl)}"/>
+  </md:SPSSODescriptor>
+</md:EntityDescriptor>`;
+}
+
+/**
  * Normalise an IdP signing certificate to a PEM block. Certificates are public, unlike a private
  * key, so they are stored and returned in the clear; only the IdP holds the matching private key.
  * Accepts a PEM block or the bare base64 body an IdP console often shows.
@@ -158,6 +245,18 @@ export function ssoSamlSloBindingUri(binding: SsoSamlSloBinding): string {
 	return binding === 'post'
 		? 'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST'
 		: 'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect';
+}
+
+/**
+ * Which binding an inbound SLO message used. The plugin accepts `SAMLRequest`/`SAMLResponse` from
+ * either a GET query string (Redirect) or a form body (POST); this is the one place that decision
+ * is made, so the callback and its test agree.
+ */
+export function ssoSamlSloBindingForRequest(
+	method: string | null | undefined,
+	hasFormBody = false
+): SsoSamlSloBinding {
+	return (method ?? '').toUpperCase() === 'POST' || hasFormBody ? 'post' : 'redirect';
 }
 
 // ---------------------------------------------------------------- provider field validation

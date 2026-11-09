@@ -768,7 +768,11 @@ export class GovernanceService {
 				.filter((line): line is string => line !== null)
 				.join('\n'),
 			severity: 'info',
-			url: this.#url(`/iam/access/${id}`)
+			url: this.#url(`/iam/access/${id}`),
+			recipients: this.#emailsFor(
+				principal.orgId,
+				this.#approverIds(principal.orgId, scope, principal.userId) ?? [],
+			),
 		});
 		return this.#requestView(
 			{
@@ -855,7 +859,8 @@ export class GovernanceService {
 				`${principal.userId} approved ${row.requester_id}'s request for ${role.name} at ${scopeLabel(scope)}. ` +
 				`The grant is binding ${binding.id} and expires ${formatTime(expiresAt)}.`,
 			severity: 'info',
-			url: this.#url(`/iam/access/${row.id}`)
+			url: this.#url(`/iam/access/${row.id}`),
+			recipients: this.#emailsFor(principal.orgId, [row.requester_id]),
 		});
 		return this.#requestFor(principal, row.id);
 	}
@@ -894,7 +899,8 @@ export class GovernanceService {
 				`${principal.userId} denied ${row.requester_id}'s request for ${roleName} at ${scopeLabel(scope)}. ` +
 				`Reason given: ${row.reason}`,
 			severity: 'warning',
-			url: this.#url(`/iam/access/${row.id}`)
+			url: this.#url(`/iam/access/${row.id}`),
+			recipients: this.#emailsFor(principal.orgId, [row.requester_id]),
 		});
 		return this.#requestFor(principal, row.id);
 	}
@@ -1116,6 +1122,7 @@ export class GovernanceService {
 						`Reviewer: ${reviewer}.`,
 					severity: review.default_decision === 'revoke' ? 'warning' : 'info',
 					url: this.#url(`/iam/reviews/${review.id}`),
+					recipients: this.#emailsFor(review.org_id, [reviewer]),
 				});
 			} catch (error) {
 				console.error(`[maintenance] access review ${review.id} could not be completed:`, error);
@@ -1315,6 +1322,7 @@ export class GovernanceService {
 				(input.dueAt === undefined ? '' : ` Due ${formatTime(input.dueAt)}.`),
 			severity: 'info',
 			url: this.#url(`/iam/reviews/${id}`),
+			recipients: this.#emailsFor(principal.orgId, [reviewer]),
 		});
 		return this.#reviewFor(principal, id);
 	}
@@ -1478,18 +1486,76 @@ export class GovernanceService {
 
 	/** A human hint in the request notification; the approvers stay the authorization decision. */
 	#approversLine(orgId: string, scope: ScopeRef, requesterId: string): string {
+		const unique = this.#approverIds(orgId, scope, requesterId);
+		if (unique === null) return 'Approvers could not be listed.';
+		return unique.length > 0
+			? `Approvers: ${unique.join(', ')}`
+			: 'No approver currently holds iam:manage-bindings at this scope.';
+	}
+
+	/** User ids that may decide at this scope, excluding the requester. Null when unavailable. */
+	#approverIds(orgId: string, scope: ScopeRef, requesterId: string): string[] | null {
 		try {
 			const approvers = this.ctx.iam
 				.whoCan(orgId, 'iam:manage-bindings', resourceForScope(scope))
 				.filter((entry) => entry.principalType === 'user' && entry.principalId !== requesterId)
 				.map((entry) => entry.principalId);
-			const unique = [...new Set(approvers)];
-			return unique.length > 0
-				? `Approvers: ${unique.join(', ')}`
-				: 'No approver currently holds iam:manage-bindings at this scope.';
+			return [...new Set(approvers)];
 		} catch {
-			return 'Approvers could not be listed.';
+			return null;
 		}
+	}
+
+	/**
+	 * Email addresses for user ids, looked up through Better Auth's `user` table and filtered to
+	 * members of this organisation when its `member` table exists. Notifications are best-effort:
+	 * a missing table or address simply yields fewer recipients and falls back to the configured
+	 * channels. Addresses are used only for delivery, never written to the audit log.
+	 */
+	#emailsFor(orgId: string, userIds: readonly string[]): string[] {
+		const ids = [
+			...new Set(
+				userIds
+					.map((id) => id.trim())
+					.filter(
+						(id) =>
+							id.length > 0 &&
+							!id.startsWith('system:') &&
+							!id.startsWith('service:') &&
+							!id.startsWith('sa_'),
+					),
+			),
+		];
+		if (ids.length === 0) return [];
+		const placeholders = ids.map(() => '?').join(',');
+		let rows: Array<{ email: string | null }> = [];
+		try {
+			rows = this.#sqlite
+				.query<{ email: string | null }, string[]>(
+					`SELECT u.email AS email
+					 FROM "user" u
+					 JOIN member m ON m.userId = u.id
+					 WHERE m.organizationId = ? AND u.id IN (${placeholders})`,
+				)
+				.all(orgId, ...ids);
+		} catch {
+			try {
+				rows = this.#sqlite
+					.query<{ email: string | null }, string[]>(
+						`SELECT email FROM "user" WHERE id IN (${placeholders})`,
+					)
+					.all(...ids);
+			} catch {
+				return [];
+			}
+		}
+		const out: string[] = [];
+		for (const row of rows) {
+			const email = row.email?.trim().toLowerCase() ?? '';
+			if (!email || !email.includes('@') || /[\r\n\0]/.test(email)) continue;
+			if (!out.includes(email)) out.push(email);
+		}
+		return out;
 	}
 
 	#guardrailRow(principal: Principal, id: string): GuardrailRow {

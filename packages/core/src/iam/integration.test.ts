@@ -592,6 +592,7 @@ describe('user pool OIDC', () => {
 			sub: signedIn.user.id,
 			email: 'ada@example.com',
 			email_verified: false,
+			groups: [],
 			name: 'Ada',
 		});
 

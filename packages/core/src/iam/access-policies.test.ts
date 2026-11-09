@@ -23,6 +23,7 @@ function ensureTables(): void {
 		'ALTER TABLE projects ADD COLUMN production_access_policy_id TEXT',
 		'ALTER TABLE projects ADD COLUMN preview_access_policy_id TEXT',
 		'ALTER TABLE environments ADD COLUMN access_policy_id TEXT',
+		'ALTER TABLE access_policies ADD COLUMN version INTEGER NOT NULL DEFAULT 0',
 	];
 	for (const statement of additive) {
 		try {
@@ -43,6 +44,11 @@ function ensureTables(): void {
 			matcher_json TEXT NOT NULL, PRIMARY KEY (policy_id, idx)
 		);
 	`);
+	try {
+		opened.sqlite.exec('ALTER TABLE access_policies ADD COLUMN version INTEGER NOT NULL DEFAULT 0');
+	} catch {
+		// Already present once migrations.ts includes 0104.
+	}
 }
 
 ensureTables();
@@ -165,7 +171,7 @@ describe('access policy CRUD', () => {
 		).toBe('deny');
 	});
 
-	test('removing a service token rotates the site epoch, so old cookies stop verifying', async () => {
+	test('removing a service token bumps only that policy, so other policies keep cookies', async () => {
 		const createdProject = await project();
 		const row = core.projects.requireRow(admin, createdProject.slug);
 		const poolAndToken: AccessPolicyRule[] = [
@@ -185,9 +191,17 @@ describe('access policy CRUD', () => {
 			scope: { type: 'org' },
 			rules: poolAndToken,
 		});
+		const other = core.accessPolicies.create(admin, {
+			name: 'Other scope',
+			scope: { type: 'org' },
+			rules: [{ idx: 0, action: 'allow', matcher: { type: 'anyMember' } }],
+		});
 		core.accessPolicies.assign(admin, row, { scope: 'production', policyId: policy.id });
+		core.accessPolicies.assign(admin, row, { scope: 'previews', policyId: other.id });
 		const assigned = core.projects.requireRow(admin, createdProject.slug).siteSessionEpoch ?? 0;
-		const siteKey = core.access.siteKeyFor({ id: createdProject.id });
+		const siteKey = core.access.siteKeyFor({ id: createdProject.id }, policy.id);
+		const otherKey = core.access.siteKeyFor({ id: createdProject.id }, other.id);
+		const version = core.accessPolicies.get(admin, policy.id).version;
 		expect(core.accessPolicies.edgeSettings(policy.id).serviceTokens).toHaveLength(1);
 
 		// Adding a rule is not a revocation and must not sign existing visitors out.
@@ -195,11 +209,15 @@ describe('access policy CRUD', () => {
 			rules: [...poolAndToken, { idx: 2, action: 'deny', matcher: { type: 'email', email: 'x@example.com' } }],
 		});
 		expect(core.projects.requireRow(admin, createdProject.slug).siteSessionEpoch).toBe(assigned);
+		expect(core.accessPolicies.get(admin, policy.id).version).toBe(version);
 
-		// Revoking the service token is: every cookie signed under the old policy epoch fails.
+		// Revoking the service token bumps this policy's version only. Its cookies fail; the other
+		// policy on the same project keeps exactly the key its visitors were signed with.
 		core.accessPolicies.update(admin, policy.id, { rules: poolAndToken.slice(0, 1) });
-		expect(core.projects.requireRow(admin, createdProject.slug).siteSessionEpoch).toBe(assigned + 1);
-		expect(core.access.siteKeyFor({ id: createdProject.id })).not.toBe(siteKey);
+		expect(core.projects.requireRow(admin, createdProject.slug).siteSessionEpoch).toBe(assigned);
+		expect(core.accessPolicies.get(admin, policy.id).version).toBe(version + 1);
+		expect(core.access.siteKeyFor({ id: createdProject.id }, policy.id)).not.toBe(siteKey);
+		expect(core.access.siteKeyFor({ id: createdProject.id }, other.id)).toBe(otherKey);
 		expect(core.accessPolicies.edgeSettings(policy.id).serviceTokens).toEqual([]);
 	});
 });

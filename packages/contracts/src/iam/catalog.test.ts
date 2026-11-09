@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { allPermissions, statements } from './catalog.ts';
+import { allPermissions, mcpConfirmedWrites, statements } from './catalog.ts';
 import {
 	defaultAgentScopes,
 	destructivePermissions,
@@ -30,12 +30,34 @@ describe('permission catalog', () => {
 		}
 	});
 
-	test('secret and admin permissions are never offered to MCP clients', () => {
+	test('secret and admin permissions are never offered to MCP clients, except confirmed writes', () => {
 		for (const permission of allPermissions) {
 			const meta = permissionCatalog[permission];
+			if (mcpConfirmedWrites.includes(permission)) continue;
 			if (meta.risk === 'secret' || meta.risk === 'admin') expect(meta.mcp).toBe(false);
 			if (meta.risk === 'admin') expect(meta.tokens).toBe('deny');
 		}
+	});
+
+	test('confirmed IAM writes are visible to MCP; owner, platform and federation writes are not', () => {
+		for (const permission of mcpConfirmedWrites) expect(permissionCatalog[permission].mcp).toBe(true);
+		expect(mcpConfirmedWrites).toContain('serviceAccount:create');
+		expect(mcpConfirmedWrites).toContain('iam:manage-bindings');
+		for (const permission of [
+			'serviceAccount:delete',
+			'serviceAccount:impersonate',
+			'serviceAccount:manage-keys',
+			'iam:manage-owners',
+			'iam:manage-guardrails',
+			'sso:manage',
+			'federation:create',
+			'federation:update',
+			'federation:delete',
+			'org:delete',
+			'org:transfer',
+			'database:credentials',
+		] as const)
+			expect(permissionCatalog[permission].mcp).toBe(false);
 	});
 
 	test('destructive permissions come from the catalog, not a second list', () => {

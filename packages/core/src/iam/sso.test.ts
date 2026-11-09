@@ -19,7 +19,10 @@ import {
 	ssoProviderFieldErrors,
 	ssoSamlAcsUrl,
 	ssoSamlMetadataUrl,
+	ssoSamlSloBindingForRequest,
 	ssoSamlSloBindingUri,
+	ssoSamlSloUrl,
+	ssoSamlSpMetadataXml,
 	ssoVerificationRecord,
 	verifiedDomainForEmail
 } from './sso.ts';
@@ -484,5 +487,75 @@ describe('ssoProviderFieldErrors', () => {
 		expect(
 			ssoProviderFieldErrors({ name: 'x'.repeat(81), protocol: 'saml' }).name
 		).toMatch(/under 80/);
+	});
+});
+
+describe('SAML service-provider metadata', () => {
+	const certificateA = `-----BEGIN CERTIFICATE-----\n${'A'.repeat(120)}\n-----END CERTIFICATE-----`;
+	const certificateB = `-----BEGIN CERTIFICATE-----\n${'B'.repeat(120)}\n-----END CERTIFICATE-----`;
+
+	test('the SLO callback URL is the plugin endpoint for the provider', () => {
+		expect(ssoSamlSloUrl('https://skiff.example/', 'sso_abc')).toBe(
+			'https://skiff.example/api/auth/sso/saml2/sp/slo/sso_abc'
+		);
+	});
+
+	test('publishes the entity id, ACS URL, signing certificate and both SLO bindings', () => {
+		const xml = ssoSamlSpMetadataXml({
+			entityId: 'https://skiff.example/api/auth/sso/saml2/sp/metadata?providerId=sso_abc',
+			acsUrl: 'https://skiff.example/api/auth/sso/saml2/sp/acs/sso_abc',
+			sloUrl: 'https://skiff.example/api/auth/sso/saml2/sp/slo/sso_abc',
+			certificates: [certificateA],
+			wantAssertionsSigned: true
+		});
+		expect(xml).toContain(
+			'entityID="https://skiff.example/api/auth/sso/saml2/sp/metadata?providerId=sso_abc"'
+		);
+		expect(xml).toContain('AuthnRequestsSigned="true"');
+		expect(xml).toContain('WantAssertionsSigned="true"');
+		expect(xml).toContain('<md:KeyDescriptor use="signing">');
+		expect(xml).toContain(`<ds:X509Certificate>${'A'.repeat(120)}</ds:X509Certificate>`);
+		expect(xml).toContain(
+			'<md:AssertionConsumerService index="0" Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="https://skiff.example/api/auth/sso/saml2/sp/acs/sso_abc"/>'
+		);
+		expect(xml).toContain(
+			'<md:SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="https://skiff.example/api/auth/sso/saml2/sp/slo/sso_abc"/>'
+		);
+		expect(xml).toContain(
+			'<md:SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="https://skiff.example/api/auth/sso/saml2/sp/slo/sso_abc"/>'
+		);
+	});
+
+	test('publishes a rollover certificate next to the current one', () => {
+		const xml = ssoSamlSpMetadataXml({
+			entityId: 'https://skiff.example/sp',
+			acsUrl: 'https://skiff.example/acs',
+			certificates: [certificateA, certificateB],
+			wantAssertionsSigned: true
+		});
+		expect(xml.match(/<md:KeyDescriptor use="signing">/g)).toHaveLength(2);
+		expect(xml).toContain(`${'A'.repeat(120)}`);
+		expect(xml).toContain(`${'B'.repeat(120)}`);
+	});
+
+	test('escapes attribute values and omits an unconfigured SLO endpoint', () => {
+		const xml = ssoSamlSpMetadataXml({
+			entityId: 'https://skiff.example/sp?a=1&b="2"',
+			acsUrl: 'https://skiff.example/acs',
+			certificates: [certificateA],
+			wantAssertionsSigned: false,
+			identifierFormat: 'urn:example:nameid'
+		});
+		expect(xml).toContain('entityID="https://skiff.example/sp?a=1&amp;b=&quot;2&quot;"');
+		expect(xml).toContain('WantAssertionsSigned="false"');
+		expect(xml).toContain('<md:NameIDFormat>urn:example:nameid</md:NameIDFormat>');
+		expect(xml).not.toContain('SingleLogoutService');
+	});
+
+	test('an SLO message uses POST for a form body and Redirect otherwise', () => {
+		expect(ssoSamlSloBindingForRequest('POST')).toBe('post');
+		expect(ssoSamlSloBindingForRequest('post', true)).toBe('post');
+		expect(ssoSamlSloBindingForRequest('GET')).toBe('redirect');
+		expect(ssoSamlSloBindingForRequest(null)).toBe('redirect');
 	});
 });

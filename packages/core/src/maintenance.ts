@@ -11,7 +11,6 @@ import {
 	signingKeyRotationDecision,
 	type SigningKeyRotationAction,
 } from './iam/keys.ts';
-import { SERVICE_ACCOUNT_AUTO_DISABLE_UNUSED } from './service-accounts.ts';
 
 const DAY_MS = 86_400_000;
 const MINUTE_MS = 60_000;
@@ -278,9 +277,10 @@ export class MaintenanceService {
 				.query<{ org_id: string }, []>('SELECT DISTINCT org_id FROM service_accounts')
 				.all();
 			for (const { org_id } of orgs) {
+				const policy = this.ctx.authPolicy.forOrg(org_id);
 				const swept = this.ctx.serviceAccounts.sweepUnused(org_id, {
 					now,
-					autoDisable: SERVICE_ACCOUNT_AUTO_DISABLE_UNUSED,
+					autoDisable: policy.autoDisableUnusedServiceAccounts,
 				});
 				unusedServiceAccounts += swept.unused.length;
 				serviceAccountsDisabled += swept.autoDisabled.length;

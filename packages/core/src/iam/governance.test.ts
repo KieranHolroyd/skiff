@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDb } from '@skiff/db';
 import type { Principal } from '@skiff/contracts';
+import type { AlertMessage, Notifier } from '../config.ts';
 import { ConflictError, ForbiddenError } from '../errors.ts';
 import { createCore, type Core } from '../index.ts';
 import { GUARDRAIL_TEMPLATES } from './governance.ts';
@@ -20,7 +21,7 @@ const accessRequestsSql = readFileSync(
 let now = Date.parse('2026-11-08T12:00:00Z');
 let core: Core;
 
-function open(): Core {
+function open(notifiers: Notifier[] = []): Core {
 	return createCore({
 		db: opened.db,
 		sqlite: opened.sqlite,
@@ -38,7 +39,8 @@ function open(): Core {
 			siteCookieSecret: 'site-cookie-secret-123',
 			objectStoreSecret: 'object-secret-123',
 			desiredAgentVersion: '0.1.0',
-			now: () => now
+			now: () => now,
+			notifiers,
 		}
 	});
 }
@@ -408,5 +410,74 @@ describe('just-in-time access', () => {
 		expect(
 			opened.sqlite.query('SELECT 1 FROM iam_bindings WHERE id = ?').get(approved.bindingId!)
 		).toBeFalsy();
+	});
+
+	test('addresses JIT notifications to approvers and requesters, never to audit args', async () => {
+		opened.sqlite.exec(
+			'CREATE TABLE IF NOT EXISTS "user" (id TEXT PRIMARY KEY, email TEXT, name TEXT)'
+		);
+		opened.sqlite.run('DELETE FROM "user"');
+		opened.sqlite.run(
+			`INSERT INTO "user" (id, email, name) VALUES
+			 ('user_1', 'owner@example.com', 'Owner'),
+			 ('user_2', 'admin@example.com', 'Admin'),
+			 ('user_3', 'requester@example.com', 'Requester')`
+		);
+		addMember('user_2', 'admin');
+		addMember('user_3', 'viewer');
+
+		const targeted: string[] = [];
+		const fallback: AlertMessage[] = [];
+		const mail: Notifier & {
+			notifyTo(to: readonly string[], alert: AlertMessage): Promise<void>;
+		} = {
+			name: 'email',
+			async notify(alert: AlertMessage): Promise<void> {
+				fallback.push(alert);
+			},
+			async notifyTo(to: readonly string[], _alert: AlertMessage): Promise<void> {
+				targeted.push(...to);
+			},
+		};
+		const withMail = open([mail]);
+		const admin = principal({ userId: 'user_2', role: 'admin' });
+		const requester = principal({ userId: 'user_3', role: 'viewer' });
+
+		const request = withMail.ctx.governance.request(requester, {
+			roleId: 'deployer',
+			scope: { type: 'org' },
+			durationSeconds: 600,
+			reason: 'Ship the fix'
+		});
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		// Both owners/admins hold iam:manage-bindings at org scope; the requester is excluded.
+		expect(targeted.sort()).toEqual(['admin@example.com', 'owner@example.com']);
+		expect(fallback).toEqual([]);
+
+		const auditArgs = opened.sqlite
+			.query<{ args_json: string }, [string]>(
+				`SELECT args_json FROM audit_log WHERE action = 'access.request' AND resource_id = ?`
+			)
+			.get(request.id)?.args_json;
+		expect(auditArgs).toBeDefined();
+		expect(auditArgs).not.toContain('@');
+
+		targeted.length = 0;
+		withMail.ctx.governance.approve(admin, request.id);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(targeted).toEqual(['requester@example.com']);
+
+		// A person with no resolvable address falls back to the configured channels.
+		targeted.length = 0;
+		opened.sqlite.run('DELETE FROM "user"');
+		const second = withMail.ctx.governance.request(requester, {
+			roleId: 'deployer',
+			scope: { type: 'org' },
+			durationSeconds: 600,
+			reason: 'No address on file'
+		});
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(targeted).toEqual([]);
+		expect(fallback.some((alert) => alert.key === `iam:access-request:${second.id}`)).toBe(true);
 	});
 });

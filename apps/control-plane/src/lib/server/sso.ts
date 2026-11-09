@@ -32,6 +32,7 @@ import {
 import { SsoPresetError, resolveSsoPreset, type SsoPresetValues } from '../sso-presets';
 import { core } from './core';
 import { platformOrigin } from './config';
+import { SsoSpKeyStore, type SsoSpKeyView } from './sso-sp';
 import { syncSsoProviders } from './sso-sync';
 
 /**
@@ -164,6 +165,12 @@ export interface SsoProviderView {
 		/** The IdP Single Logout Service URL, when configured. */
 		sloUrl: string | null;
 		sloBinding: SsoSamlSloBinding;
+		/**
+		 * SP request signing (IAM.md §8.3). The certificate is public; the private key stays sealed
+		 * on the server. `previousCertificate` is a rotated-out certificate still inside its
+		 * rollover window.
+		 */
+		spSigning: SsoSpKeyView | null;
 	} | null;
 	createdAt: number;
 	updatedAt: number;
@@ -234,6 +241,13 @@ interface OidcDiscovery {
 }
 
 const PROVIDER_ID = /^sso_[0-9a-f]{32}$/;
+
+/** SP signing keys (IAM.md §8.3): sealed in `settings`, public certificate shown in Settings. */
+const spKeys = new SsoSpKeyStore({
+	sqlite: core.ctx.sqlite,
+	secrets: core.ctx.secrets,
+	now: () => core.ctx.now()
+});
 
 /** The redirect URI to register at the IdP for a provider id (Better Auth's OIDC callback). */
 export function ssoCallbackUrl(providerId: string): string {
@@ -700,7 +714,9 @@ function view(row: ProviderRow): SsoProviderView {
 						identifierFormat: row.identifier_format,
 						certificates,
 						sloUrl: row.slo_url ?? null,
-						sloBinding
+						sloBinding,
+						// Never generates: the key is created by the sync that writes the plugin row.
+						spSigning: spKeys.view(row.id)
 					}
 				: null,
 		createdAt: row.created_at,
@@ -1128,6 +1144,26 @@ export class SsoService {
 		return view(this.#provider(principal.orgId, id));
 	}
 
+	/**
+	 * Rotate a SAML provider's SP signing key (IAM.md §8.3). The new key signs from now on; the
+	 * previous certificate stays in the published metadata for the rollover window so the IdP can
+	 * be updated without rejecting requests in the meantime.
+	 */
+	rotateSpSigningKey(principal: Principal, id: string): SsoProviderView {
+		this.#requireManage(principal);
+		const row = this.#provider(principal.orgId, id);
+		if (row.protocol !== 'saml')
+			throw new ValidationError('Only a SAML provider signs requests with an SP key.');
+		const key = spKeys.rotate(id);
+		syncSsoProviders();
+		this.#audit(principal, 'sso.provider.sp_key.rotate', id, {
+			name: row.name,
+			certificate: key.certificatePem,
+			previousCertificatePublishedUntil: key.previousPublishedUntil
+		});
+		return view(this.#provider(principal.orgId, id));
+	}
+
 	removeProvider(principal: Principal, id: string): void {
 		this.#requireManage(principal);
 		const row = this.#provider(principal.orgId, id);
@@ -1136,6 +1172,8 @@ export class SsoService {
 			id
 		]);
 		this.removeGroupMappingsForProvider(principal.orgId, id);
+		// The SP key belongs to this provider only; a replacement provider gets a fresh one.
+		spKeys.remove(id);
 		syncSsoProviders();
 		this.#audit(principal, 'sso.provider.delete', id, { name: row.name, issuer: row.issuer });
 	}

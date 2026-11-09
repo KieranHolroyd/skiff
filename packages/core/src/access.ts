@@ -303,9 +303,15 @@ export class AccessService {
 		return { epoch, signedOutAt: new Date(this.ctx.now()).toISOString(), shareSessions };
 	}
 
-	/** The project's current site key; changes whenever everyone is signed out. */
-	siteKeyFor(project: Pick<ProjectRow, 'id'>): string {
-		return siteKeyFor(this.ctx.config.siteCookieSecret, project.id, this.epochOf(project.id));
+	/** The project's current site key; changes when everyone is signed out or a policy is revoked. */
+	siteKeyFor(project: Pick<ProjectRow, 'id'>, policyId?: string | null): string {
+		const version = policyId ? this.ctx.accessPolicies.versionOf(policyId) : 0;
+		return siteKeyFor(
+			this.ctx.config.siteCookieSecret,
+			project.id,
+			this.epochOf(project.id),
+			policyId && version > 0 ? { id: policyId, version } : null,
+		);
 	}
 
 	private epochOf(projectId: string): number {
@@ -470,6 +476,7 @@ export class AccessService {
 			undefined,
 			resolved.deploymentId,
 			email?.toLowerCase(),
+			resolved.policyId,
 		);
 	}
 
@@ -596,8 +603,9 @@ export class AccessService {
 		sessionId?: string,
 		deploymentId?: string,
 		email?: string | null,
+		policyId?: string | null,
 	): SiteVisit {
-		const siteKey = this.siteKeyFor(project);
+		const siteKey = this.siteKeyFor(project, policyId);
 		const now = Math.floor(this.ctx.now() / 1000);
 		const sessionExp = now + ttlSeconds;
 		const claims = {
@@ -621,10 +629,14 @@ export class AccessService {
 	}
 
 	/** The agent's callback validates the token against the same per-project key. */
-	verifySiteToken(projectId: string, token: string): AccessTokenClaims | null {
+	verifySiteToken(
+		projectId: string,
+		token: string,
+		policyId?: string | null,
+	): AccessTokenClaims | null {
 		const project = this.ctx.db.select().from(projects).where(eq(projects.id, projectId)).get();
 		if (!project) return null;
-		return verifyAccessToken(this.siteKeyFor(project), token);
+		return verifyAccessToken(this.siteKeyFor(project, policyId), token);
 	}
 
 	/**

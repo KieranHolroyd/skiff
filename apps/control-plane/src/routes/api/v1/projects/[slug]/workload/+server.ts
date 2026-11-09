@@ -10,7 +10,10 @@ export const GET: RequestHandler = (event) =>
 	route(() => {
 		const principal = requirePrincipal(event);
 		const project = core.projects.requireRow(principal, event.params.slug);
-		return { workload: core.workloads.get(principal, project) };
+		return {
+			workload: core.workloads.get(principal, project),
+			spec: core.workloads.projectSpec(project),
+		};
 	});
 
 export const PUT: RequestHandler = (event) =>

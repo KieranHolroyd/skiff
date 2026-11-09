@@ -508,6 +508,32 @@ Resource arguments are query parameters: `resourceType` (default `org`), `resour
 | DELETE | `/iam/groups/:id/members` | `iam:manage-groups` | `{ userId }` |
 | GET | `/iam/explain?permission&resourceType&…` | `iam:read` | The caller's decision plus every grant considered (IAM.md I12) |
 | GET | `/iam/who-can?permission&resourceType&…` | `iam:read` | `{ permission, principals: [{ principalType, principalId, via }] }`; expands groups |
+| POST | `/iam/simulate` | `iam:read` | `{ sample: { principalType: user\|serviceAccount, principalId }, change: { kind: "binding", roleId, scope, expiresAt?, condition? } \| { kind: "role", roleId, permissions } }` → `{ sample, draft, changes: [{ permission, resource, before, after, change, beforeVia, afterVia }], added, removed, applied: false }`; dry-run only, platform scopes refused, nothing saved |
+
+**MCP tools.** Read: `whoami`, `explain_access`, `who_can`, `simulate_access`, `list_roles`,
+`list_service_accounts`, `list_federation_trusts`. Write: `create_service_account`
+(`serviceAccount:create`), `bind_role` (`iam:manage-bindings`), `request_access` (creates a pending
+request only) and `unbind_role` (confirmed; platform bindings are refused). Approving, denying and
+extending a request, and all platform bindings, remain dashboard/CLI-only.
+
+### Federation trusts
+
+An issuer → service-account mapping for RFC 8693 token exchange ([IAM.md](./IAM.md) I17, §7.3;
+D190). A trust is org-scoped and holds no secret. `GET` needs `federation:read`; writes need
+`federation:create`, `federation:update` or `federation:delete`. Deleting a trust stops new
+exchanges; tokens already minted keep their TTL. The CLI is `skif federation list|create|delete`.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/federation-trusts` | `federation:read` | `{ federationTrusts }`, ordered by issuer |
+| POST | `/federation-trusts` | `federation:create` | `{ serviceAccountId, issuer, audiences (1–32), subjectPattern?, claimConditions?, maxTtlSeconds? (≤3600), restriction? }` → 201; `issuer` must be absolute http(s) and the service account must be in the caller's org |
+| GET | `/federation-trusts/:id` | `federation:read` | `{ federationTrust }` |
+| PATCH | `/federation-trusts/:id` | `federation:update` | any create field → `{ federationTrust }` |
+| DELETE | `/federation-trusts/:id` | `federation:delete` | `{ ok: true }` |
+
+`restriction` is `{ permissions?: string[], resources?: string[] }` and only ever narrows the
+service account's bindings. `subjectPattern` uses the exchange's glob: `*` within one segment, `**`
+across segments. The STS endpoint is in [STS token exchange](#sts-token-exchange-and-platform-discovery).
 
 ### Service accounts
 
@@ -521,6 +547,10 @@ Disabling is the normal off-switch; delete is refused while a binding still uses
 | GET | `/service-accounts/:id` | `serviceAccount:read` | `{ serviceAccount }` |
 | PATCH | `/service-accounts/:id` | `serviceAccount:update` | `{ name?, description?, ownerGroupId?, disabled? }` → `{ serviceAccount }`; disabling bumps the org's IAM version |
 | DELETE | `/service-accounts/:id` | `serviceAccount:delete` | `{ ok: true }`; 409 while a binding still references it |
+| GET | `/service-accounts/:id/keys` | `serviceAccount:read` + `serviceAccount:manage-keys` (or `accessKey:read-all`) | `{ accessKeys }` for that account, newest first; no raw key |
+| POST | `/service-accounts/:id/keys` | `serviceAccount:manage-keys` | `{ name, permissions?, resources?, expiresInSeconds?, allowedCidrs? }` → 201 `{ accessKey, key }`; the `skif_…` key is shown once |
+| DELETE | `/service-accounts/:id/keys?keyId=…` | `serviceAccount:manage-keys` | revoke one key owned by the account → `{ ok: true, accessKey }`; 400 without `keyId`, 404 for another account's key |
+| POST | `/service-accounts/:id/token` | `serviceAccount:impersonate` | `{ ttl? (≤3600, default 3600), audience? (default the platform origin) }` → 201 `{ access_token, token_type, expires_in, audience, service_account }`; an STS token carrying `act` and `impersonated_by`, audited as `service_account.impersonate`. `skif sa token` |
 
 ### Access keys
 
@@ -608,8 +638,8 @@ write-only; a blank `clientSecret` on update keeps the stored one.
 
 | Method | Path | Permission | Notes |
 |---|---|---|---|
-| GET | `/sso/providers` | `sso:read` | `{ providers }` with `protocol` (`oidc`\|`saml`), issuer, endpoints, scopes, claim map, `hasClientSecret`, `callbackUrl`, and for SAML the `acsUrl` and `spMetadataUrl` |
-| POST | `/sso/providers` | `sso:manage` | `{ name, protocol? (oidc\|saml), issuer? \| preset: { id, values? }, clientId?, clientSecret?, discoveryUrl?, scopes?, claims?, enabled?, saml? }` → 201; 409 for a second provider on the same issuer. OIDC needs `issuer` (or a preset), `clientId` and `clientSecret`; SAML takes `saml: { metadataUrl?, entityId?, entryPoint?, cert?, spEntityId?, audience?, wantAssertionsSigned?, identifierFormat? }`, where `metadataUrl` is fetched at save time and otherwise `entityId`, `entryPoint` and `cert` are required. `protocol` cannot change after creation |
+| GET | `/sso/providers` | `sso:read` | `{ providers }` with `protocol` (`oidc`\|`saml`), issuer, endpoints, scopes, claim map, `hasClientSecret`, `callbackUrl`, and for SAML the `acsUrl`, `spMetadataUrl`, `certificateCount`, `certificates`, `sloUrl`, `sloBinding` and `spSigning` (`{ certificate, previousCertificate, createdAt, previousPublishedUntil }`; the private key never leaves the server) |
+| POST | `/sso/providers` | `sso:manage` | `{ name, protocol? (oidc\|saml), issuer? \| preset: { id, values? }, clientId?, clientSecret?, discoveryUrl?, scopes?, claims?, enabled?, saml? }` → 201; 409 for a second provider on the same issuer. OIDC needs `issuer` (or a preset), `clientId` and `clientSecret`; SAML takes `saml: { metadataUrl?, entityId?, entryPoint?, cert?, certs?, secondaryCerts?, sloUrl?, sloBinding? (redirect\|post), spEntityId?, audience?, wantAssertionsSigned?, identifierFormat? }`, where `metadataUrl` is fetched at save time and otherwise `entityId`, `entryPoint` and at least one certificate are required. `certs`/`secondaryCerts` add IdP signing certificates for a rollover; an explicit blank `sloUrl` disables SLO. `protocol` cannot change after creation |
 | GET | `/sso/providers/:id` | `sso:read` | one provider (no secret) |
 | PATCH | `/sso/providers/:id` | `sso:manage` | partial update; `clientSecret` omitted keeps the current one |
 | DELETE | `/sso/providers/:id` | `sso:manage` | `{ ok: true }`; sign-in through it stops at once |
@@ -617,8 +647,8 @@ write-only; a blank `clientSecret` on update keeps the stored one.
 | POST | `/sso/domains` | `sso:manage` | `{ domain }` → 201 with the TXT record to publish (`txtRecordName`, `txtRecordValue`); 409 when another org claimed it |
 | POST | `/sso/domains/:domain/verify` | `sso:manage` | re-reads the TXT record now → the domain view |
 | DELETE | `/sso/domains/:domain` (also `?domain=` on the collection) | `sso:manage` | `{ ok: true }`; email routing stops immediately |
-| GET | `/sso/policy` | `sso:read` | `{ policy }`: `requireSso`, `require2fa`, `allowedMethods`, `sessionMaxAge`, `idleTimeout`, `ipAllowlist`, `breakGlassUserIds` |
-| PUT | `/sso/policy` | `sso:manage` | a partial of those fields; session limits are seconds, `null` turns a limit off |
+| GET | `/sso/policy` | `sso:read` | `{ policy }`: `requireSso`, `require2fa`, `allowedMethods`, `sessionMaxAge`, `idleTimeout`, `ipAllowlist`, `breakGlassUserIds`, `autoDisableUnusedServiceAccounts` |
+| PUT | `/sso/policy` | `sso:manage` | a partial of those fields; session limits are seconds, `null` turns a limit off; `autoDisableUnusedServiceAccounts` lets the daily pass disable service accounts unused for 90 days (off by default) |
 | GET | `/sso/presets` | signed in | `{ presets }`: the ready-made IdP set-ups and the values each needs (D180) |
 | GET | `/sso/resolve?email=` | public | email → `{ provider: { id, name, orgId, domain } \| null }`; only a verified domain routes |
 | GET | `/sso/group-mappings` | `sso:read` | `{ mappings }`: IdP group claim value → Skiff group |
@@ -628,25 +658,39 @@ write-only; a blank `clientSecret` on update keeps the stored one.
 | POST | `/sso/scim` | `sso:manage` | mints a bearer token → 201 with the token shown once and the endpoint; minting revokes the org's other active tokens |
 | DELETE | `/sso/scim/:id` | `sso:manage` | revokes one token; the directory's next request gets a 401 |
 | POST | `/org/switch` | signed in | `{ organizationId }` → `{ org: { id, name, slug, role } }`; stored on the session and remembered for the next sign-in. A key cannot switch, because a key is bound to its own org |
+| GET/POST | `/sso/logout` (not under `/api/v1`) | signed in (a signed-out request still redirects) | `?providerId=&returnTo=` (or the same as form fields) clears the Better Auth session, audits `sso.logout`, and redirects to the SAML provider's configured IdP SLO URL when one exists, else a same-origin `returnTo` or `/login`. The local session is always cleared; the plugin's SLO callback handles IdP-initiated logout |
 
 The Better Auth SSO callback is `/api/auth/sso/callback/:providerId` for OIDC and
 `/api/auth/sso/saml2/sp/acs/:providerId` for SAML; both are public and live outside `/api/v1`.
+The plugin's SLO callback is `/api/auth/sso/saml2/sp/slo/:providerId`; it accepts an IdP-initiated
+`LogoutRequest` and deletes the matching session. SAML SP requests are signed with a per-provider
+RSA key; its certificate (and the previous one during the 30-day rollover) is in `spSigning` and the
+SP metadata document. Rotate it in Settings → SSO; there is no REST rotate route.
 
 ### Access policies (Skiff Access)
 
-Ordered allow/deny rules for the `access` protection mode ([IAM.md](./IAM.md) I25, §11.1). A matching
-deny beats every allow; no match denies. Rules match an org group, any member, an email or domain,
-an SSO provider, a user pool and its groups, a CIDR, or a service-token header.
+Ordered allow/deny rules for the `access` protection mode ([IAM.md](./IAM.md) I25, §11.1; D188,
+D192). A matching deny beats every allow; no match denies. Rules match an org group, any member, an
+email or domain, an SSO provider, a user pool and its groups, a CIDR, or a service-token header.
+
+A **service token** is a `serviceToken` rule: a header name and the SHA-256 of a `skiff_svc_…`
+secret. There is no REST route that returns the secret: Settings → Access policies mints it through
+a form action and shows it once; revoking it removes the rule. Desired state carries only the header
+name, hash and action, and the agent decides a matching machine before any login redirect. Editing
+or removing a rule, disabling a policy, or reassigning a host bumps that policy's `version`, which
+is folded into the site key of every host using it, so issued cookies and callback tokens for those
+hosts stop verifying while hosts on another policy keep theirs. Adding an allow rule does not sign
+existing visitors out.
 
 | Method | Path | Permission | Notes |
 |---|---|---|---|
 | GET | `/access-policies` | `accessPolicy:read` at each policy's scope | `?projectId` narrows to policies that apply to that project; returns the array directly |
-| POST | `/access-policies` | `accessPolicy:create` at the scope | `{ name, description?, scope: { type: org\|project\|environment, id?, projectId? }, enabled?, rules: [{ idx, action: allow\|deny, matcher }] }` → 201 |
+| POST | `/access-policies` | `accessPolicy:create` at the scope | `{ name, description?, scope: { type: org\|project\|environment, id?, projectId? }, enabled?, rules: [{ idx, action: allow\|deny, matcher }] }` → 201. A `serviceToken` matcher carries `{ header, tokenHash }`, never the secret |
 | GET | `/access-policies/:id` | `accessPolicy:read` at its scope | one policy |
 | PATCH | `/access-policies/:id` | `accessPolicy:update` at its scope | `{ name?, description?, enabled?, rules? }` (rules replace the ordered list) |
 | DELETE | `/access-policies/:id` | `accessPolicy:delete` at its scope | `{ ok: true }`; refused while a project or environment still assigns it |
 | POST | `/projects/:slug/access` | `project:update` | assign one with `{ scope: production\|previews, mode: "access", policyId }`; this is the same route as the other protection modes. Named-environment assignment exists only in the dashboard |
-| GET | `/access/authorize?host=&return=` | public (platform session) | the Skiff Access login page. The agent redirects an unauthenticated visitor here; the platform evaluates the host's ordered policy and, on `allow`, redirects to the agent's `/_skiff/access/callback` with a single-use host-bound token, else renders an HTML 403. Only content hosts this platform serves may be a `return` target |
+| GET | `/access/authorize?host=&return=` | public (platform session optional) | the Skiff Access login page. The agent redirects an unauthenticated visitor here; the platform evaluates the host's ordered policy and, on `allow`, redirects to the agent's `/_skiff/access/callback` with a single-use host-bound token, else renders an HTML 403. A `userPool` rule accepts the pool's session cookie or bearer access token and matches `groups`/`poolGroups` metadata; a person with no pool session is sent to that pool's hosted login. SSO sessions are attributed to their linked provider. Service-token rules are deliberately not evaluated here, so a leaked token cannot mint a browser session. Only content hosts this platform serves may be a `return` target |
 
 ### User pools and OIDC clients
 
@@ -655,32 +699,50 @@ I26–I29, §11.2). The native `skiff-identity` engine runs in the control plane
 sessions, authorization codes, access/ID tokens, magic links, password reset, email verification and
 invites live in the `user_pool_*` tables, signed by the pool's `pool:<id>` key. Pool users are not
 platform users and a platform session cannot sign anybody into a pool. The hosted pages are
-`/pool/<id>/{login,signup,reset,magic,logout,verify}`. Passkeys, social login, MFA, import and export
-are not built. Attaching a pool to a project is a dashboard action (there is no REST attachment
-route): it injects `<P>_ISSUER`, `<P>_CLIENT_ID` and `<P>_CLIENT_SECRET`, and a function gets
-`env.AUTH.verify(request)`.
+`/pool/<id>/{login,signup,reset,magic,logout,verify}`. Passkeys, TOTP MFA and pool-local groups are
+built; social login, import and export are not. Groups and the pool-level `mfaRequired` switch are
+managed in Settings → Identity (there are no REST group routes); pool users enrol TOTP and manage
+passkeys/groups from the hosted `/pool/<id>` account page. Attaching a pool to a project is a
+dashboard action (there is no REST attachment route): it injects `<P>_ISSUER`, `<P>_CLIENT_ID` and
+`<P>_CLIENT_SECRET`, and a function gets `env.AUTH.verify(request)`.
 
 | Method | Path | Permission | Notes |
 |---|---|---|---|
 | GET | `/user-pools` | `userPool:read` (org or per pool) | `{ pools }`; an org grant sees every pool |
-| POST | `/user-pools` | `userPool:create` | `{ name, description?, engine? (skiff-identity), signupMode? (invite\|open), requireEmailVerification?, theme? }` → 201 with the pool; 409 for a duplicate name |
-| GET | `/user-pools/:id` | `userPool:read` on the pool | `{ pool }` with issuer and active signing `kid` |
-| PATCH | `/user-pools/:id` | `userPool:update` on the pool | `{ name?, description?, signupMode?, requireEmailVerification?, theme?, disabled? }` → `{ pool }`; disabling keeps clients and keys |
-| DELETE | `/user-pools/:id` | `userPool:delete` on the pool | `{ ok: true }`; removes the clients, signing key and pool users; refused while a project is attached |
+| POST | `/user-pools` | `userPool:create` | `{ name, description?, engine? (skiff-identity), signupMode? (invite\|open), requireEmailVerification?, mfaRequired?, theme? }` → 201 with the pool; 409 for a duplicate name |
+| GET | `/user-pools/:id` | `userPool:read` on the pool | `{ pool }` with issuer, active signing `kid` and `mfaRequired` |
+| PATCH | `/user-pools/:id` | `userPool:update` on the pool | `{ name?, description?, signupMode?, requireEmailVerification?, mfaRequired?, theme?, disabled? }` → `{ pool }`; disabling keeps clients and keys |
+| DELETE | `/user-pools/:id` | `userPool:delete` on the pool | `{ ok: true }`; removes the clients, signing key, users, passkeys, TOTP rows and groups; refused while a project is attached |
 | GET | `/user-pools/:id/clients` | `userPool:read` on the pool | `{ clients }`: public `clientId`, redirect allowlist, no secret |
 | POST | `/user-pools/:id/clients` | `userPool:credentials` on the pool | `{ name, redirectUris, public? }` → 201 `{ client, clientSecret }`; `clientSecret` is `null` for a public (PKCE) client and is shown once |
 | DELETE | `/user-pools/:id/clients/:clientId` | `userPool:credentials` on the pool | `{ ok: true }`; `:clientId` may be the row id or the public OIDC `client_id`; refused while attached |
 | GET | `/user-pools/:id/users` | `userPool:manage-users` on the pool | `{ users }`: id, email, name, verification and disabled state, metadata |
 | PATCH | `/user-pools/:id/users/:userId` | `userPool:manage-users` on the pool | `{ disabled }` → `{ user }`; disabling revokes their pool sessions at once |
-| DELETE | `/user-pools/:id/users/:userId` | `userPool:manage-users` on the pool | GDPR delete: the user, sessions, codes and verification tokens → `{ ok: true }` |
+| DELETE | `/user-pools/:id/users/:userId` | `userPool:manage-users` on the pool | GDPR delete: the user, sessions, codes, verification tokens, passkeys, TOTP row and group memberships → `{ ok: true }` |
 | GET | `/user-pools/:id/users/invites` | `userPool:manage-users` on the pool | `{ invites }`: pending invitations, no raw token |
 | POST | `/user-pools/:id/users/invites` | `userPool:manage-users` on the pool | `{ email }` → 201 with the invitation and its token **once** |
 | GET | `/user-pools/:id/oauth/authorize` | public | OIDC authorization code flow: `?client_id&redirect_uri&response_type=code&scope=&state=&nonce=&code_challenge=&code_challenge_method=`. A signed-in pool session gets a single-use code; anyone else is redirected to the pool's hosted login. Always a 303 |
 | POST | `/user-pools/:id/oauth/token` | public | `grant_type=authorization_code`, `code`, `redirect_uri`, `client_id`, `client_secret?` (or HTTP Basic), `code_verifier?` → `{ access_token, token_type: "Bearer", expires_in, id_token, scope }`; `cache-control: no-store` |
-| GET/POST | `/user-pools/:id/oauth/userinfo` | pool bearer access token | `{ sub, email?, email_verified?, name? }`; an ID token or a revoked/disabled user is refused |
+| GET/POST | `/user-pools/:id/oauth/userinfo` | pool bearer access token | `{ sub, email?, email_verified?, name?, groups }`; an ID token or a revoked/disabled user is refused |
 | GET/POST | `/user-pools/:id/oauth/logout` | public | revokes the pool session and redirects to `post_logout_redirect_uri` when it is same-origin, else `/pool/<id>/login` |
 | GET | `/user-pools/:id/.well-known/openid-configuration` | public | OpenID Connect Discovery for the pool; 404 while the pool is disabled |
 | GET | `/user-pools/:id/.well-known/jwks.json` | public | the pool's `pool:<id>` signing keys; 404 while disabled |
+
+**Hosted pool passkeys and MFA (D194).** These are browser routes on the platform origin, not
+`/api/v1`, and take the pool's session/CSRF cookies. The challenge is stored server-side and is
+single use; only the public key and signature counter are stored, and a counter that does not
+advance is refused as a possible clone. The account page lists and removes a user's passkeys.
+TOTP enrolment (start, confirm, disable, regenerate recovery codes) and the second sign-in step are
+SvelteKit form actions on `/pool/:id` and `/pool/:id/login`; there is no REST admin for pool TOTP or
+groups. A user who has enrolled must pass the code step before a password sign-in sets a session;
+`mfaRequired` is the pool's prompt for every user to enrol.
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| POST | `/pool/:id/passkeys/register/options` | pool session | → `{ challengeId, expiresAt, options }`; `options` is WebAuthn creation options, excluding existing credentials |
+| POST | `/pool/:id/passkeys/register/verify` | pool session | `{ challengeId, response, name?, csrf }` → `{ passkey }`; 409 when the credential is already registered |
+| POST | `/pool/:id/passkeys/login/options` | public | `{ email?, csrf }` → discoverable authentication options; the answer is the same for a known and an unknown address |
+| POST | `/pool/:id/passkeys/login/verify` | public | `{ challengeId, response, email?, return_to?, csrf }` → starts a pool session and `{ redirect }`; failures share one generic refusal |
 
 ### STS token exchange and platform discovery
 
@@ -703,12 +765,13 @@ in [CLOUD-IDENTITY.md](./CLOUD-IDENTITY.md).
 A workload or STS token is accepted as `Bearer` by the REST API, MCP and the registry realm; the
 registry also accepts one as the Basic password. It resolves to the service account's principal,
 narrowed by the token's `scope` and `resources`. A workload token must carry `aud: skiff`; an STS
-token may carry `skiff`, the platform origin or the MCP resource, depending on the surface. Storage
-STS (RustFS `AssumeRoleWithWebIdentity`) is still deferred.
+token may carry `skiff`, the platform origin or the MCP resource, depending on the surface. A
+missing or disabled service account, or a token whose `org_id` no longer matches it, is refused even
+with a valid signature. Storage STS (RustFS `AssumeRoleWithWebIdentity`) is still deferred.
 
-There is no federation-trust CRUD route yet: trusts are read by the token service from the
-database, and `/api/v1/federation-trusts` (listed as planned in [IAM.md](./IAM.md) §12) does not
-exist.
+Federation trusts are managed at `/api/v1/federation-trusts` (above). The token service reads the
+same rows on every exchange; a deleted trust stops new exchanges but does not revoke a token already
+minted.
 
 ## Objects (local store only)
 

@@ -37,6 +37,7 @@ const serviceAccountCreates: Array<{ name: string; description?: string; ownerGr
 const binds: FakeBindingInput[] = [];
 const unbinds: string[] = [];
 const accessRequests: FakeRequestInput[] = [];
+const simulations: Array<{ sample: { principalType: string; principalId: string }; change: Record<string, unknown> }> = [];
 
 const fakeCore = {
 	ctx: { config: { features: { ...DEFAULT_FEATURES }, platformOrigin: 'https://control.test' } },
@@ -103,6 +104,30 @@ const fakeCore = {
 			if (!principal.permissions.has('iam:manage-bindings')) throw new Error('Missing permission iam:manage-bindings');
 			if (bindingId === 'bind_platform') throw new Error('A platform binding is removed by a platform admin.');
 			unbinds.push(bindingId);
+		},
+		simulate: (
+			principal: Principal,
+			draft: { sample: { principalType: string; principalId: string }; change: Record<string, unknown> },
+		) => {
+			if (!principal.permissions.has('iam:read')) throw new Error('Missing permission iam:read');
+			simulations.push(draft);
+			const granted = draft.change.kind === 'binding';
+			return {
+				sample: draft.sample,
+				draft: draft.change,
+				changes: [
+					{
+						permission: 'project:read',
+						resource: { type: 'project', id: 'prj_1' },
+						before: false,
+						after: granted,
+						change: granted ? 'granted' : 'revoked',
+					},
+				],
+				added: granted ? ['project:read'] : [],
+				removed: granted ? [] : ['project:read'],
+				applied: false,
+			};
 		},
 	},
 	governance: {
@@ -215,6 +240,7 @@ const IAM_READ_TOOLS = [
 	'list_roles',
 	'explain_access',
 	'who_can',
+	'simulate_access',
 	'list_service_accounts',
 	'list_federation_trusts',
 ];
@@ -268,6 +294,11 @@ describe('IAM read MCP tools', () => {
 			.scopeChallenge as Challenge;
 		expect(await federationChallenge({ authInfo: { scopes: [] }, request: { params: {} } } as never)).toMatchObject({
 			scopes: ['federation:read'],
+		});
+
+		const simulateChallenge = definitions.get('simulate_access')?.config.scopeChallenge as Challenge;
+		expect(await simulateChallenge({ authInfo: { scopes: [] }, request: { params: {} } } as never)).toMatchObject({
+			scopes: ['iam:read'],
 		});
 	});
 
@@ -366,12 +397,74 @@ describe('IAM read MCP tools', () => {
 		expect(result.text).not.toContain('secret');
 	});
 
+	test('simulate_access dry-runs a binding and reports the diff without saving', async () => {
+		simulations.length = 0;
+		const result = await call(owner, 'simulate_access', {
+			principalType: 'user',
+			principalId: 'user_2',
+			kind: 'binding',
+			roleId: 'viewer',
+			scope: { type: 'project', id: 'prj_1' },
+		});
+		expect(result.ok).toBe(true);
+		expect(result.body).toMatchObject({
+			sample: { principalType: 'user', principalId: 'user_2' },
+			draft: { kind: 'binding', roleId: 'viewer', scope: { type: 'project', id: 'prj_1' } },
+			applied: false,
+			added: ['project:read'],
+			removed: [],
+		});
+		expect(result.body!.changes).toMatchObject([
+			{
+				permission: 'project:read',
+				resource: { type: 'project', id: 'prj_1' },
+				before: false,
+				after: true,
+				change: 'granted',
+			},
+		]);
+		expect(simulations).toHaveLength(1);
+
+		// A role edit maps to the service's role draft and still never writes.
+		const role = await call(owner, 'simulate_access', {
+			principalType: 'user',
+			principalId: 'user_2',
+			kind: 'role',
+			roleId: 'role_reviewer',
+			permissions: ['project:read'],
+		});
+		expect(role.ok).toBe(true);
+		expect(role.body).toMatchObject({
+			draft: { kind: 'role', roleId: 'role_reviewer', permissions: ['project:read'] },
+			applied: false,
+			removed: ['project:read'],
+		});
+
+		// A platform draft fails the same way a platform binding write would.
+		const platform = await call(owner, 'simulate_access', {
+			principalType: 'user',
+			principalId: 'user_2',
+			kind: 'binding',
+			roleId: 'viewer',
+			scope: { type: 'platform' },
+		});
+		expect(platform.ok).toBe(false);
+		expect(platform.text).toContain('platform');
+	});
+
 	test('every IAM read tool refuses a caller without its permission', async () => {
 		for (const name of ['list_roles', 'explain_access', 'who_can']) {
 			const result = await call(viewer, name, { permission: 'project:read' });
 			expect(result.ok).toBe(false);
 			expect(result.text).toContain('iam:read');
 		}
+		const simulated = await call(viewer, 'simulate_access', {
+			principalId: 'user_2',
+			kind: 'binding',
+			roleId: 'viewer',
+		});
+		expect(simulated.ok).toBe(false);
+		expect(simulated.text).toContain('iam:read');
 		const accounts = await call(viewer, 'list_service_accounts');
 		expect(accounts.ok).toBe(false);
 		expect(accounts.text).toContain('serviceAccount:read');
@@ -382,7 +475,7 @@ describe('IAM read MCP tools', () => {
 });
 
 describe('IAM write MCP tools', () => {
-	test('are registered as writes, and only unbind is destructive', () => {
+	test('the chat confirms every IAM write and hides it from a read-only user', () => {
 		const definitions = new Map(skiffToolDefinitions(owner).map((entry) => [entry.name, entry]));
 		for (const name of IAM_WRITE_TOOLS) {
 			expect(definitions.has(name)).toBe(true);
@@ -395,12 +488,27 @@ describe('IAM write MCP tools', () => {
 		for (const name of ['create_service_account', 'bind_role', 'request_access'])
 			expect(definitions.get(name)?.config.annotations).toMatchObject({ destructiveHint: false });
 
-		// The chat confirms destructive tools before their handler runs; the MCP transport elicits.
 		const assistant = new Map(assistantTools(owner).map((entry) => [entry.name, entry]));
-		expect(assistant.get('unbind_role')?.destructive).toBe(true);
-		expect(assistant.get('create_service_account')?.destructive).toBe(false);
-		expect(assistant.get('bind_role')?.destructive).toBe(false);
+		for (const name of ['create_service_account', 'bind_role', 'unbind_role'])
+			expect(assistant.get(name)?.destructive).toBe(true);
+		// Asking for access is not a grant: it still reaches the chat without a click.
 		expect(assistant.get('request_access')?.destructive).toBe(false);
+
+		const readOnly = new Set(assistantTools(viewer).map((entry) => entry.name));
+		for (const name of ['create_service_account', 'bind_role', 'unbind_role'])
+			expect(readOnly.has(name)).toBe(false);
+		// Reads with iam:read stay available to an org reader.
+		const reader: Principal = {
+			kind: 'user',
+			userId: 'user_3',
+			orgId: 'org_1',
+			role: 'viewer',
+			permissions: new Set(roles.viewer).add('iam:read'),
+		};
+		const readerTools = new Set(assistantTools(reader).map((entry) => entry.name));
+		expect(readerTools.has('explain_access')).toBe(true);
+		expect(readerTools.has('simulate_access')).toBe(true);
+		expect(readerTools.has('bind_role')).toBe(false);
 	});
 
 	test('ask for serviceAccount:create or iam:manage-bindings; requesting access needs no extra scope', async () => {
@@ -577,10 +685,10 @@ describe('IAM write MCP tools', () => {
 			],
 			['unbind_role', { bindingId: 'bind_1' }, 'iam:manage-bindings'],
 		];
-		for (const [name, args, permission] of missing) {
-			const result = await call(viewer, name, args);
-			expect(result.ok).toBe(false);
-			expect(result.text).toContain(permission);
+		for (const [name, , permission] of missing) {
+			// The assistant filters writes the caller cannot perform, so the refusal is absence.
+			expect(assistantTools(viewer).some((tool) => tool.name === name)).toBe(false);
+			expect(permission.length).toBeGreaterThan(0);
 		}
 	});
 

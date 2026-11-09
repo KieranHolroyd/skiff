@@ -803,6 +803,57 @@ function buildServer(
 	);
 
 	tool(
+		'simulate_access',
+		{
+			title: 'Simulate access',
+			description:
+				'Dry-run an access change and see which permissions it would give or take from one principal. ' +
+				'A binding draft adds a role at a scope to that principal; a role draft replaces a custom role\'s permissions for them. ' +
+				'Read-only: nothing is saved. Use explain_access for the current decision and who_can for everyone who has one.',
+			inputSchema: z.object({
+				principalType: z
+					.enum(['user', 'serviceAccount'])
+					.default('user')
+					.describe('The kind of principal whose access is being simulated'),
+				principalId: z.string().min(1).describe('The user id or service-account id to simulate for'),
+				kind: z
+					.enum(['binding', 'role'])
+					.default('binding')
+					.describe('A new binding for the principal, or a custom role permission edit'),
+				roleId: z.string().min(1).max(80).describe('The role id from list_roles'),
+				scope: iamScopeSchema.optional().describe('Where the proposed binding applies; the whole organisation by default'),
+				permissions: z
+					.array(z.string().min(1))
+					.optional()
+					.describe('For kind "role": the custom role\'s replacement permissions'),
+				expiresAt: z
+					.number()
+					.int()
+					.positive()
+					.optional()
+					.describe('For kind "binding": when the grant would stop, in epoch milliseconds'),
+			}),
+			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+			scopeChallenge: requires('iam:read'),
+		},
+		async ({ principalType, principalId, kind, roleId, scope, permissions, expiresAt }) =>
+			run(() => {
+				requirePermission(principal, 'iam:read');
+				const sample = { principalType, principalId };
+				if (kind === 'role')
+					return core.iam.simulate(principal, {
+						sample,
+						change: { kind: 'role', roleId, permissions: permissions ?? [] },
+					});
+				const target = orgScope(scope ?? { type: 'org' }, 'bind');
+				return core.iam.simulate(principal, {
+					sample,
+					change: { kind: 'binding', roleId, scope: target, expiresAt },
+				});
+			}),
+	);
+
+	tool(
 		'list_service_accounts',
 		{
 			title: 'List service accounts',

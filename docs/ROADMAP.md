@@ -158,7 +158,8 @@
 - [ ] Verify a Node.js app under the helper sandbox on a Linux node through idle stop and cold start (the preload and start-script path are checked in a Linux container, not yet under systemd)
 - [ ] Verify on a Linux node under the helper sandbox: a FrankenPHP process app through its idle stop and cold start, and a Python function host
 - [ ] Python memory snapshots (`--python-load-snapshot`) to cut the ~1.2 s cold start
-- [ ] `skif` command for the workload spec (command, memory, idle stop); today it is the dashboard or `PUT /projects/:slug/workload`
+- [x] `skif` command for the workload spec (command, memory, idle stop); `skif workload show|set|reset|capacity`
+- [x] `skif environments` for named environment pointers, and `skif domains` for custom hostnames and DNS checks
 - [ ] A socket adapter for servers that cannot adopt fd 3 (Bun today), so they can scale to zero too (Node.js has one, D125)
 
 ## Email ([EMAIL.md](./EMAIL.md), D114–D120)
@@ -238,29 +239,36 @@
 - [x] G5: cosign signature policy at deploy, CVE scanning (D159)
 - [x] G6: S3 storage + Valkey cache, single replica (D159)
 
-## Identity and access ([IAM.md](./IAM.md), D168, D181–D189)
+## Identity and access ([IAM.md](./IAM.md), D168, D181–D197)
 - [x] Permission catalog with metadata, principal v2, named system principals, the lint guard, the owner/admin split and audit actor columns (D181)
 - [x] Scoped bindings engine: platform/org/project/environment/resource scopes, custom roles, groups, guests, explain and who-can, Settings → Access and project Access tabs (D182)
 - [x] Service accounts and org-bound access keys (SHA-256, expiry, CIDR, restrictions, last-used) with REST and CLI, and an MCP service-account list (D183)
-- [x] One signing-key ring with a unified JWKS, operator list/rotate routes, RFC 8693 STS and federation trusts (D184)
+- [x] Service-account keys and impersonation tokens: `/service-accounts/:id/keys`, `POST /service-accounts/:id/token` (`serviceAccount:impersonate`), `skif sa token|keys` and Settings → Access (D190)
+- [x] Federation-trust CRUD: `/api/v1/federation-trusts`, `skif federation`, and Settings → Access (D190)
+- [x] One signing-key ring with a unified JWKS, monthly rotation sweep, operator list/rotate routes, RFC 8693 STS and federation trusts (D184, D196)
 - [x] Workload identity: a service account per workload, a rotated token file and the loopback metadata endpoint (D184)
-- [x] Workload and STS tokens accepted as `Bearer` by REST, MCP and the registry realm; the registry also takes one as its Basic password (D184)
+- [x] Workload and STS tokens accepted as `Bearer` by REST, MCP and the registry realm; the registry also takes one as its Basic password, narrowed by `scope`/`resources` (D195)
+- [x] MCP IAM writes: `create_service_account`, `bind_role`, `request_access`, `unbind_role` (confirmed), `list_federation_trusts` and read-only `simulate_access` (D191, D197)
+- [x] Explain, who-can and simulate: `/iam/explain`, `/iam/who-can`, `/iam/simulate` and their MCP tools; the dashboard binding editor's inline diff is still open (D197)
 - [x] SSO OIDC and SAML, verified domains, JIT and group mappings, enforced SSO with break-glass, org auth policy and presets (D185, D180)
+- [x] SAML SP signing (per-provider RSA key and published certificate), IdP certificate rollover, and SLO: plugin endpoints for IdP-initiated logout plus local sign-out redirect (D193)
 - [x] SCIM 2.0 users and groups with deactivation revocation (D185)
 - [x] Guardrails, JIT access requests, usage rollup and access reviews (D186)
 - [x] Step-up verification: catalog rules, `/api/auth/step-up/*`, the VerifyDialog, the window and the failure budget (D186, gated by `SKIFF_STEP_UP`)
 - [x] Platform IAM roles, platform-scope bindings (users and groups) and platform guardrails (D187)
 - [x] Skiff Access: the `access` protection mode, ordered policies, the agent's `forward_auth` and host-bound login (D188)
+- [x] Skiff Access service tokens evaluated before login, user-pool session/bearer identity with groups, SSO attribution and per-policy version revocation (D192)
 - [x] User pools and OIDC clients with discovery/JWKS; the native engine with password, magic link, reset, verification, invites and the OAuth code flow; attachments, `env.AUTH` and pool events (D189)
+- [x] Pool passkeys, TOTP MFA and groups: WebAuthn registration/sign-in with counter checks, sealed TOTP secrets with recovery codes and replay protection, pool-local groups in the `groups` claim, and Settings → Identity plus the hosted account page (D194)
 - [ ] Identity process: split the pool engine into `skiff-identity.service` with a SQLite file per pool
-- [ ] Pool auth extras: passkeys, social login, TOTP MFA, breached-password checks and lockout
+- [ ] Pool auth extras: social login, breached-password checks and lockout
 - [ ] Pool import and export (Auth0, Cognito, Firebase)
 - [ ] B2B in pools: organisations, per-tenant federation, SCIM in and the Keycloak engine
-- [ ] SAML single logout
-- [ ] Federation-trust CRUD and `/iam/simulate`
+- [ ] SAML encrypted assertions; the dashboard binding editor's inline simulation diff
+- [ ] A Caddy-side Skiff Access decision cache (S6)
 - [ ] Storage STS (RustFS `AssumeRoleWithWebIdentity`)
-- [ ] Service-account impersonation and per-repository pipeline accounts
-- [ ] Skiff Access service tokens and user-pool identity at the edge
+- [ ] Per-repository pipeline service accounts; Better Auth `apikey` migration (S1)
+- [ ] Scope-filtered MCP `tools/list`
 
 ## Later / maybe
 - Importing external Prometheus datasources

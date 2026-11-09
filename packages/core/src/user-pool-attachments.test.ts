@@ -24,6 +24,12 @@ opened.sqlite.exec(
 opened.sqlite.exec(
 	readFileSync(new URL('../../db/migrations/0101_user_pool_passkeys.sql', import.meta.url), 'utf8')
 );
+opened.sqlite.exec(
+	readFileSync(new URL('../../db/migrations/0102_user_pool_totp.sql', import.meta.url), 'utf8')
+);
+opened.sqlite.exec(
+	readFileSync(new URL('../../db/migrations/0103_user_pool_groups.sql', import.meta.url), 'utf8')
+);
 
 let now = Date.parse('2026-11-09T12:00:00Z');
 const core: Core = createCore({
@@ -55,6 +61,9 @@ beforeEach(() => {
 		DELETE FROM user_pool_sessions;
 		DELETE FROM user_pool_email_tokens;
 		DELETE FROM user_pool_invites;
+		DELETE FROM user_pool_totp;
+		DELETE FROM user_pool_group_members;
+		DELETE FROM user_pool_groups;
 		DELETE FROM user_pool_users;
 		DELETE FROM user_pool_clients;
 		DELETE FROM user_pools;

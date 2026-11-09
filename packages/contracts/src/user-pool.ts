@@ -56,7 +56,9 @@ export const userPoolCreateSchema = z.object({
 	 * Refuse password sign-in until the address is verified. An `invite` pool always requires it
 	 * (an invitation proves the address); an `open` pool only when this is set.
 	 */
-	requireEmailVerification: z.boolean().optional()
+	requireEmailVerification: z.boolean().optional(),
+	/** Advertise (and, for later slices, enforce) TOTP MFA for every pool user. */
+	mfaRequired: z.boolean().optional()
 });
 export type UserPoolCreate = z.input<typeof userPoolCreateSchema>;
 
@@ -66,6 +68,7 @@ export const userPoolUpdateSchema = z.object({
 	signupMode: z.enum(userPoolSignupModes).optional(),
 	theme: userPoolThemeSchema.optional(),
 	requireEmailVerification: z.boolean().optional(),
+	mfaRequired: z.boolean().optional(),
 	disabled: z.boolean().optional()
 });
 export type UserPoolUpdate = z.input<typeof userPoolUpdateSchema>;
@@ -191,6 +194,8 @@ export interface UserPoolView {
 	signupMode: UserPoolSignupMode;
 	/** Password sign-in waits for email verification. Always true for an invite-only pool. */
 	requireEmailVerification: boolean;
+	/** The pool asks every user to enrol TOTP MFA. Enrolment is per user and remains opt-in when false. */
+	mfaRequired: boolean;
 	theme: UserPoolTheme;
 	disabled: boolean;
 	disabledAt: number | null;
@@ -237,6 +242,51 @@ export interface UserPoolPasskeyView {
 	name: string;
 	createdAt: number;
 	lastUsedAt: number | null;
+}
+
+/** A pool group, as the admin and claims surfaces list it. */
+export interface UserPoolGroupView {
+	id: string;
+	poolId: string;
+	name: string;
+	createdAt: number;
+	memberCount: number;
+}
+
+/** One member of a pool group; the email is convenient for the admin surface and never a claim. */
+export interface UserPoolGroupMemberView {
+	userId: string;
+	email: string;
+	name: string;
+	addedAt: number;
+}
+
+/** Per-user TOTP state. The secret itself never appears in a view. */
+export interface UserPoolTotpStatus {
+	enabled: boolean;
+	confirmedAt: number | null;
+	/** How many unused recovery codes remain. */
+	recoveryCodesRemaining: number;
+}
+
+/** The one-time enrolment response: secret and `otpauth://` URI, shown once. */
+export interface UserPoolTotpEnrolment {
+	secret: string;
+	otpauthUri: string;
+	/** The account label encoded in the URI, for copy. */
+	account: string;
+	issuer: string;
+}
+
+/** Recovery codes are shown exactly once, at confirmation or rotation. */
+export interface UserPoolRecoveryCodes {
+	recoveryCodes: string[];
+}
+
+/** A successful TOTP/recovery-code verification starts a pool session. */
+export interface UserPoolMfaSignInResult {
+	/** True when the code was a recovery code rather than a TOTP code. */
+	usedRecoveryCode: boolean;
 }
 
 /** A credential descriptor the browser may suggest, used in the WebAuthn option documents. */

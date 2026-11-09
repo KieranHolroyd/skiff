@@ -1,9 +1,9 @@
 # Skiff — Identity and access management (IAM)
 
-Status: **Agreed (2026-11-08, D168) and built (2026-11-09, D181–D189).** Both parts are in:
+Status: **Agreed (2026-11-08, D168) and built (2026-11-09, D181–D197).** Both parts are in:
 platform IAM (Part A) and Skiff Access plus user pools (Part B). The remaining gaps are listed in
 §13 and are deliberately small. Proposals are numbered I1–I30 and took D-numbers as they shipped;
-the next free ID is D190. [STEP-UP.md](./STEP-UP.md) was agreed and built with this plan (D186) and
+the next free ID is D198. [STEP-UP.md](./STEP-UP.md) was agreed and built with this plan (D186) and
 is no longer a separate proposal.
 
 This plan turns Skiff's fixed four-role RBAC (D9, DESIGN §6.2) into a full IAM service, in two parts:
@@ -57,7 +57,8 @@ Part A comes first. Part B reuses its token service and audit.
 
 ## 1. Where things stand
 
-The code was audited on 2026-11-08.
+The code was audited on 2026-11-08. This table is the **pre-build baseline** kept for context;
+§13 is the current status.
 
 | Area | Today | Gap |
 |---|---|---|
@@ -402,6 +403,15 @@ to directly. Better Auth needs a `member` row for sign-in to resolve an org, so 
     every owner and is audited as `sso.break_glass`.
   - **Preflight:** turning enforcement on runs a lockout report first: who would lose access, and
     whether at least one break-glass owner with a strong factor exists. It refuses if none does.
+- **SAML details:** a provider accepts a metadata URL or manual entity id, entry point and
+  certificate, and publishes an ACS URL and an SP metadata URL. Metadata import collects every IdP
+  signing certificate; `certs`/`secondaryCerts` keep the old and new certificates trusted during a
+  rollover. Each provider has an RSA SP key and self-signed certificate, sealed in `settings` and
+  published in SP metadata, and `authnRequestsSigned` makes the plugin sign AuthnRequests and
+  logout messages; rotating the SP key keeps the previous certificate published for 30 days.
+  `GET`/`POST /sso/logout` clears the platform session, audits `sso.logout`, and redirects to the
+  provider's configured SLO URL. The plugin's SLO endpoints are enabled, so an IdP-initiated
+  `LogoutRequest` also deletes the session. Encrypted assertions are deferred.
 
 ### 8.4 SCIM (I20)
 
@@ -452,9 +462,12 @@ workload".
 - `GET /api/v1/iam/explain?principal=…&permission=…&resource=…` returns the decision and its chain:
   bindings considered, the group path, the restriction, and the guardrail.
 - `GET /api/v1/iam/who-can?permission=…&resource=…` lists principals.
-- `POST /api/v1/iam/simulate` takes a draft binding or role edit and returns what changes.
-- Every binding editor in the dashboard shows the simulation diff before saving. MCP gets
-  `explain_access` and `who_can`, both read-only.
+- `POST /api/v1/iam/simulate` takes a draft binding or custom-role edit for one sample user or
+  service account and returns only the permissions whose decision would flip, with `before` and
+  `after`; nothing is saved and platform bindings are refused as org drafts.
+- MCP gets `explain_access`, `who_can`, read-only `simulate_access` and `list_roles`, plus the
+  write tools in §12 that use the same engine (`create_service_account`, `bind_role`,
+  `request_access`, `unbind_role`). The dashboard binding editor's inline diff is still not built.
 
 ### 9.4 Just-in-time access (I22)
 
@@ -474,7 +487,7 @@ workload".
   each to its scope's managers.
 - Items carry "unused for 90 days" hints. Undecided items at the deadline follow the campaign's
   default (`keep` or `revoke`).
-- Service accounts unused for 90 days are flagged, and can be auto-disabled by org policy.
+- Service accounts unused for 90 days are flagged, and org policy can auto-disable them (`auto_disable_unused_service_accounts`, migration `0104`).
 
 ### 9.6 Audit
 
@@ -513,12 +526,22 @@ workload".
 - **Caddy** gets a `forward_auth` to the edge's local `skiff-access` handler (inside the agent, like
   the studio and console paths), which answers from a signed session cookie scoped to the site's
   host.
+  - **Service tokens:** a `serviceToken` rule is a header name plus the SHA-256 of a `skiff_svc_…`
+    secret minted in Settings → Access policies (shown once). Desired state carries only the header
+    name, hash and action, and the agent decides a matching machine before any browser redirect; a
+    matching deny wins, and a machine-only policy ends in deny rather than a login.
   - **Login:** a redirect to the platform origin, which authenticates against the org's IdP or the
-    chosen pool, then redirects back with a single-use code bound to the host.
+    chosen pool, then redirects back with a single-use code bound to the host. A `userPool` rule
+    accepts the pool's session cookie or bearer access token and matches its `groups`/`poolGroups`
+    metadata; an SSO session is attributed to the provider that created it.
   - **Upstream headers:** the app receives `Skiff-Access-Jwt` (signed with the `access` key purpose)
-    and `Skiff-Access-Email`, which it can verify against JWKS.
-- Sessions are revocable per site, reusing D132's site-key epoch. Edge latency matters, so spike S6
-  checks the cost of a cached decision.
+    and `Skiff-Access-Email`, which it can verify against JWKS. A service-token request adds
+    `Skiff-Access-Identity: service` and `Skiff-Access-Service: <header>` and carries no email.
+- Sessions are revocable per host and per policy. Editing or removing a rule, disabling a policy,
+  revoking a service token, or reassigning a host bumps that policy's `version`, which is part of
+  the site key of every host using it, so their cookies and callback tokens stop verifying while
+  hosts on another policy keep theirs. Edge latency matters, so the agent caches verified decisions
+  keyed by host, site key and cookie; spike S6 tracks a Caddy-side cache.
 
 ### 11.2 User pools (I26–I29)
 
@@ -527,20 +550,20 @@ A **user pool** is an org resource, like a database. It's an OIDC provider for o
 | Area | Shape |
 |---|---|
 | Issuer | `https://auth.<sitesDomain>/<pool>`, or a custom domain verified like project domains |
-| Sign-in | email + password, passkeys, magic link and email OTP (through skiff-mail, D114), social (Google, GitHub, Apple, Microsoft), optional TOTP MFA |
+| Sign-in | email + password, passkeys, TOTP MFA with recovery codes, magic link and email verification/invites (built); social (Google, GitHub, Apple, Microsoft) is not built |
 | Clients | per-app OIDC clients (confidential or public with PKCE), redirect allowlists, token TTLs, custom claims from user metadata and groups |
-| Hosted UI | themed sign-in, sign-up, reset and MFA pages (logo, colours, copy), with optional self-service sign-up or invite-only |
-| Users | groups, metadata (public and private), sessions, MFA reset, block, delete (GDPR), and impersonation for support (`userPool:impersonate-user`, audited) |
-| Security | per-pool rate limits, breached-password check (k-anonymity, optional), suspicious sign-in email, account lockout |
+| Hosted UI | themed sign-in, sign-up, reset, passkey and MFA pages (logo, colours, copy), with optional self-service sign-up or invite-only |
+| Users | pool-local groups, metadata, sessions, passkey list/remove, TOTP enrolment/reset, block, delete (GDPR); support impersonation is not built |
+| Security | per-pool rate limits and TOTP replay protection (built); breached-password check (k-anonymity), suspicious sign-in email and account lockout are not built |
 | Integration | attachment injects `<P>_ISSUER`, `<P>_CLIENT_ID` and `<P>_CLIENT_SECRET`. The function binding `env.AUTH.verify(request)` returns the user or null. Pool events (`user.created`, `user.signed_in`, `user.deleted`, `mfa.enabled`) go to queues (D122). Skiff Access can use a pool as an identity source. |
-| Data | export as JSON (password hashes included, scrypt). Import from Auth0, Cognito and Firebase export formats (hashes where the algorithm allows, otherwise forced reset). |
-| Surfaces | REST `/api/v1/user-pools/*`, MCP (lifecycle, clients and user admin; no secrets), `skif pool …`, and Dashboard → Identity |
+| Data | export as JSON (password hashes included, scrypt) and import from Auth0, Cognito and Firebase export formats (hashes where the algorithm allows, otherwise forced reset); both are not built |
+| Surfaces | REST `/api/v1/user-pools/*` (lifecycle, clients, users; no group or TOTP administration), MCP (lifecycle, clients and user admin; no secrets), `skif pool …`, and Dashboard → Identity (pools, groups, MFA switch) plus the hosted account page for a user's own passkeys/TOTP |
 
 **Engine (I27).** `UserPoolEngine` follows the same seam as databases and brokers:
 
 | Engine | Verdict |
 |---|---|
-| **Native `skiff-identity`** | **Built, in-process for now.** `UserPoolEngineService` owns the pool's users, sessions, codes and hosted-page primitives in the `user_pool_*` tables (migration `0097`), with `pool:<id>` signing keys and argon2id passwords. The hosted pages are `/pool/<id>/{login,signup,reset,magic,logout,verify}`. Splitting it into a static `skiff-identity.service` on a chosen node (the skiff-mail pattern, D115), with an SQLite file per pool on a disk (D169), Litestream and the `auth.<sitesDomain>` edge route, is the identity-process target and is deferred. |
+| **Native `skiff-identity`** | **Built, in-process for now.** `UserPoolEngineService` owns the pool's users, sessions, codes, passkeys (migration `0101`), TOTP (migration `0102`) and groups (migration `0103`) in the `user_pool_*` tables, with `pool:<id>` signing keys and argon2id passwords. The hosted pages are `/pool/<id>/{login,signup,reset,magic,logout,verify}` plus the passkey endpoints and the account page. Splitting it into a static `skiff-identity.service` on a chosen node (the skiff-mail pattern, D115), with an SQLite file per pool on a disk (D169), Litestream and the `auth.<sitesDomain>` edge route, is the identity-process target and is deferred. |
 | Managed Keycloak | A later engine as a tier-3 container, for SAML IdP or LDAP federation needs. It takes about 512 MB or more. |
 | Managed Authentik / Zitadel | Template candidates (D92) rather than first-class engines. |
 | Embedding pools in the control plane | The current slice (the engine runs in-process). D107's reason to move tenant sign-in onto its own service still stands as the identity-process target. |
@@ -561,15 +584,17 @@ later a replica with a Litestream-restored standby.
 
 | Surface | Live |
 |---|---|
-| Dashboard | Settings → **Access** (Roles, Bindings, Groups, Guardrails, Access requests, Access reviews, Service accounts, explain), Settings → **Identity** (SSO providers, domains, group mappings, auth policy, SCIM tokens, user pools), Settings → **Access policies**, Settings → **Platform access**, Settings → **Members**, a project's **Access** tab, and the org switcher. Every 403 offers "Why can't I?" through explain. Access keys have REST and CLI surfaces only. |
-| REST | `/api/v1/iam/{roles,groups,bindings,explain,who-can,guardrails,access-requests,access-reviews,usage,keys,keys/rotate}`, `/api/v1/service-accounts`, `/api/v1/access-keys`, `/api/v1/sso/{providers,domains,presets,resolve,policy,group-mappings,scim}`, `/api/v1/access-policies`, `/api/v1/user-pools` (clients, users, invites, `oauth/*`, discovery and JWKS), `/api/v1/platform/iam/{roles,bindings,guardrails}`, `/api/v1/access/authorize`, `/api/v1/org/switch`, `/api/iam/token` (STS), `/.well-known/jwks.json` and `/.well-known/openid-configuration`. |
-| CLI | `skif iam roles\|bindings\|groups\|bind\|unbind\|explain\|who-can\|keys list\|keys rotate`, `skif sa`, `skif key`, `skif pool`, `skif access-policy`, `skif identity token`, `skif sts exchange`. |
-| MCP | Read only: `whoami`, `explain_access`, `who_can`, `list_roles`, `list_service_accounts`. No write or approval tool yet. |
+| Dashboard | Settings → **Access** (Roles, Bindings, Groups, Guardrails, Access requests, Access reviews, Service accounts with keys and impersonation tokens, Federation trusts, explain), Settings → **Identity** (SSO providers with SLO, SP signing and IdP certificate rollover, domains, group mappings, auth policy, SCIM tokens, user pools with passkeys, the MFA switch and groups), Settings → **Access policies** (rules, service tokens, revocation), Settings → **Platform access**, Settings → **Members**, a project's **Access** tab, and the org switcher. Every 403 offers "Why can't I?" through explain. User access keys have REST and CLI surfaces; service-account keys are also in Settings → Access. |
+| REST | `/api/v1/iam/{roles,groups,bindings,explain,who-can,simulate,guardrails,access-requests,access-reviews,usage,keys,keys/rotate}`, `/api/v1/service-accounts` (plus `/keys` and `/token`), `/api/v1/federation-trusts`, `/api/v1/access-keys`, `/api/v1/sso/{providers,domains,presets,resolve,policy,group-mappings,scim}`, `/api/v1/access-policies`, `/api/v1/user-pools` (clients, users, invites, `oauth/*`, discovery and JWKS), `/api/v1/platform/iam/{roles,bindings,guardrails}`, `/api/v1/access/authorize`, `/api/v1/org/switch`, `/api/iam/token` (STS), `/.well-known/jwks.json` and `/.well-known/openid-configuration`. Browser routes outside `/api/v1`: `/sso/logout` and the hosted `/pool/:id/*` pages. |
+| CLI | `skif iam roles\|bindings\|groups\|bind\|unbind\|explain\|who-can\|keys list\|keys rotate`, `skif sa` (`token`, `keys`), `skif key`, `skif federation`, `skif pool`, `skif access-policy`, `skif access request\|approve`, `skif org switch`, `skif identity token`, `skif sts exchange`. |
+| MCP | Read: `whoami`, `explain_access`, `who_can`, `simulate_access`, `list_roles`, `list_service_accounts`, `list_federation_trusts`. Write: `create_service_account`, `bind_role`, `request_access`, `unbind_role` (confirmed; platform bindings and approval stay off MCP). |
 | Scope-filtered `tools/list` | Not built; it becomes cheap once the compiled grants are used by the MCP registry. |
 
-**Not built:** `/api/v1/federation-trusts` (the STS service reads trusts from the database),
-`/api/v1/iam/simulate`, `skif access request|approve`, `skif org switch`, and the MCP write tools
-(`create_service_account`, `bind_role`, `request_access`). Storage STS is also open.
+**Not built:** the dashboard binding editor's inline simulation diff, a Caddy-side Skiff Access
+decision cache (S6), storage STS (RustFS `AssumeRoleWithWebIdentity`), pool social sign-in,
+import/export, B2B and the separate identity process, SAML encrypted assertions, per-repository
+pipeline service accounts, the Better Auth `apikey` migration (S1), and scope-filtered
+`tools/list`.
 
 Workload and STS tokens are accepted as `Bearer` by the REST API, MCP and the registry realm, and
 as the registry's Basic password.
@@ -583,76 +608,87 @@ Each phase ships on its own and leaves the system working.
 Built between 2026-11-08 and 2026-11-09. The catalog, principal v2 and the role-name migration are
 in `packages/contracts/src/iam/{catalog,authorize}.ts`, `packages/contracts/src/principal.ts` and
 `packages/core/src/iam/service.ts`; the governance and identity phases followed on migrations
-`0080`–`0099`. What remains is a short list of gaps, not a phase.
+`0080`–`0104`. What remains is a short list of gaps, not a phase.
 
 | Phase | Proposals | Status | Remaining |
 |---|---|---|---|
 | **I0 Foundations** | I1–I5 | Built | the `compat:legacy-role` grant until every member seeds a binding |
-| **I1 Engine at org scope** | I6–I10, I12 | Built | `/iam/simulate` and the draft-binding diff |
+| **I1 Engine at org scope** | I6–I10, I12 | Built | the dashboard binding editor's inline simulation diff |
 | **I2 Resource scopes** | I7 | Built | list filtering on queries that cannot express a scope |
-| **I3 Service accounts** | I13–I14 | Built | impersonation tokens; per-repository pipeline accounts; Better Auth `apikey` migration (S1) |
-| **I4 Token service** | I15–I17 | Built | federation-trust CRUD |
+| **I3 Service accounts** | I13–I14 | Built | per-repository pipeline accounts; Better Auth `apikey` migration (S1); an org key-TTL policy |
+| **I4 Token service** | I15–I17 | Built | none |
 | **I5 Workload identity** | I18 | Built | RustFS storage STS (S3) |
-| **I6 Enterprise sign-in** | I19–I21 | Built | SAML SLO |
-| **I7 Governance** | I11, I12, I22–I23 | Built | step-up on by default; simulate |
+| **I6 Enterprise sign-in** | I19–I21 | Built | SAML encrypted assertions |
+| **I7 Governance** | I11, I12, I22–I23 | Built | step-up on by default |
 | **I8 Platform IAM** | I24 | Built | a dedicated platform IAM page |
-| **I9 Skiff Access** | I25 | Built | service tokens and user-pool identity at the edge; decision caching (S6) |
-| **I10 User pools** | I26–I29 | Built | passkeys, social login and MFA; import and export |
+| **I9 Skiff Access** | I25 | Built | Caddy-side decision caching (S6) |
+| **I10 User pools** | I26–I29 | Built | social login, import and export |
 | **I11 Pool extras** | I30 | Deferred | B2B organisations, tenant federation, SCIM in, the Keycloak engine |
 
 What is built now:
 
 - **I0/I1** — catalog, principal v2, named system principals, audit actor columns, the lint guard
-  (the baseline is now empty), the owner/admin split, roles/groups/bindings, `/api/v1/iam` and
-  Settings → Access.
+  (the baseline is now empty), the owner/admin split, roles/groups/bindings, `/api/v1/iam`,
+  Settings → Access, explain/who-can/simulate, and the MCP reads and writes (`explain_access`,
+  `who_can`, `simulate_access`, `list_roles`, `create_service_account`, `bind_role`,
+  `request_access`, `unbind_role`).
 - **I2** — the core modules authorize through `iam.require` with a resource (projects, deployments,
   domains, databases, pipelines, builds, registry, storage, brokers, shares, app volumes, email,
   jobs, events, alerts, workloads, functions, templates, environments, access, studio, node tasks,
   replicas, moves, metrics, backups, usage, uploads, logs, secrets, console, flows, releases,
   GitHub), with `scopeFilter` on the lists that can express it. The `compat:legacy-role` grant
   remains; no role/kind check is baselined.
-- **I3** — service accounts and org-bound `access_keys` with SHA-256 hashes, expiry, CIDR and
-  restriction, plus creation/revocation routes and `skif sa` / `skif key`. Impersonation and
-  per-repository pipeline accounts are still open; a trusted pipeline deploy runs as
-  `system:pipeline-deploy`.
-- **I4** — the ES256 key ring with rotation, shared JWKS and operator list/rotate routes
-  (`/api/v1/iam/keys`), federation trusts and RFC 8693 token exchange. The registry realm and
-  pipeline OIDC sign with the ring; the old keys stay readable for their TTL overlap and are
-  removed later. REST, MCP and the registry realm accept a workload or STS token as `Bearer`.
+- **I3** — service accounts, org-bound `access_keys` with SHA-256 hashes, expiry, CIDR and
+  restriction, creation/revocation routes, `serviceAccount:manage-keys` and `skif key` /
+  `skif sa keys`, plus impersonation: `POST /api/v1/service-accounts/:id/token` mints an STS token
+  of at most an hour with `act` and `impersonated_by`, audited as `service_account.impersonate`.
+  Per-repository pipeline accounts and the Better Auth `apikey` migration remain.
+- **I4** — the ES256 key ring with a monthly rotation sweep and operator routes
+  (`/api/v1/iam/keys`, `/api/v1/iam/keys/rotate`), shared JWKS, federation-trust CRUD
+  (`/api/v1/federation-trusts`) and RFC 8693 token exchange. The registry realm, REST and MCP
+  accept a workload or STS token with its `scope`/`resources` ceiling; the registry also takes one
+  as the Basic password. The old keys stay readable for their TTL overlap and are removed later.
 - **I5** — active-organization sessions, the header switcher, org-bound key metadata, and workload
   identity: one service account per workload, a 1-hour token delivered through activation, a
   loopback metadata endpoint and `SKIFF_TOKEN_FILE`. The registry accepts that token; storage STS
   remains.
 - **I6** — OIDC and SAML sign-in through `@better-auth/sso`, provider sync, JIT membership, domain
-  routing, org auth policy, SCIM 2.0 with deactivation and group mirroring, and SSO group mapping.
-  SAML SLO remains.
+  routing, org auth policy, SCIM 2.0 with deactivation and group mirroring, SSO group mapping,
+  IdP certificate rollover, SP request signing with a per-provider sealed SP key and published
+  certificate, and SAML single logout: the plugin's SLO endpoints handle IdP-initiated logout, and
+  `/sso/logout` clears the local session and redirects to the IdP's SLO endpoint. Encrypted
+  assertions remain.
 - **I7** — guardrail templates and CRUD, JIT access requests, usage rollup, access reviews, and
   step-up: the catalog's `stepUp`/`tokens` fields, the `/api/auth/step-up/*` plugin and the
-  VerifyDialog. Enforcement is off unless `SKIFF_STEP_UP=1`; simulate remains.
+  VerifyDialog. Enforcement is off unless `SKIFF_STEP_UP=1`.
 - **I8** — platform roles at platform scope, D129 as a session condition, platform guardrails,
   seeded admin bindings, user and group bindings at `/api/v1/platform/iam/*`.
-- **I9** — access policies, the `access` protection mode, the agent's `forward_auth` handler and the
-  Settings page. Service tokens and user-pool identity are not enforced at the edge yet.
+- **I9** — access policies, the `access` protection mode, the agent's `forward_auth` handler, the
+  Settings page, service tokens evaluated at the edge before any login redirect, user-pool session
+  and bearer identity with groups, SSO-provider attribution, and per-policy revocation that bumps
+  only the edited policy's version so hosts on other policies keep their cookies. Caddy-side
+  decision caching remains.
 - **I10** — user pools and OIDC clients with discovery/JWKS, plus the native engine: email +
   password, pool sessions, magic links, password reset, email verification and invites,
-  authorization codes, access/ID tokens, userinfo, RP-initiated logout and hosted sign-in pages.
-  Attachments inject `<P>_*` env, set `env.AUTH.verify` and emit `pools` events. Passkeys, social
-  login, MFA and import/export remain.
+  authorization codes, access/ID tokens, userinfo, RP-initiated logout, hosted sign-in pages,
+  WebAuthn passkeys with counter/clone checks, TOTP MFA with sealed secrets and hashed recovery
+  codes, and pool-local groups carried in the `groups` claim. Attachments inject `<P>_*` env, set
+  `env.AUTH.verify` and emit `pools` events. Social login and import/export remain.
 
 ---
 
 ## 14. Spikes
 
-| # | Question | Decides |
-|---|---|---|
-| S1 | Can Better Auth 1.7.15 `apikey` hashes be verified by Skiff code (same algorithm and encoding), so keys migrate without being reissued? | I14 migration path |
-| S2 | Better Auth `sso` and `scim` plugins at 1.7.15: SQLite support, how they work with the invite-only sign-up hook and the owner 2FA gate, and how mature SAML is | I19/I20 on the plugins or hand-rolled |
-| S3 | Does RustFS support STS `AssumeRoleWithWebIdentity` with an external OIDC issuer? | Short-lived storage credentials in I18 |
-| S4 | The cost of compile + cache at 1k bindings / 100 groups, and of `scopeFilter` on list queries | Whether to precompute and persist compiled grants |
-| S5 | Cedar WASM in Bun: size, cold start, per-check latency | Whether Cedar becomes an engine for conditions and guardrails |
-| S6 | Caddy `forward_auth` to an agent-local handler: added p50 and p99, behaviour when the agent restarts | Whether I25 caches decisions in Caddy |
-| S7 | Many Better Auth instances in one Bun process (one per pool): memory per instance and isolation of plugins and secrets | I27 native engine shape (one process versus one per pool) |
-| S8 | Delivering workload tokens to Podman containers: a bind-mounted rotated file versus Podman secrets, and how rootless uid mapping affects them | I18 delivery |
+| # | Question | Decides | Result |
+|---|---|---|---|
+| S1 | Can Better Auth 1.7.15 `apikey` hashes be verified by Skiff code (same algorithm and encoding), so keys migrate without being reissued? | I14 migration path | **Open.** `apikey` rows still authenticate first; `access_keys` is written for new keys only. |
+| S2 | Better Auth `sso` and `scim` plugins at 1.7.15: SQLite support, how they work with the invite-only sign-up hook and the owner 2FA gate, and how mature SAML is | I19/I20 on the plugins or hand-rolled | **Answered: the plugins ship.** `@better-auth/sso` serves OIDC and SAML with Skiff-owned verification and SP signing, its SLO endpoints are enabled, and `@better-auth/scim` serves the directory. |
+| S3 | Does RustFS support STS `AssumeRoleWithWebIdentity` with an external OIDC issuer? | Short-lived storage credentials in I18 | **Open.** Attached storage still uses static attachment keys (D66). |
+| S4 | The cost of compile + cache at 1k bindings / 100 groups, and of `scopeFilter` on list queries | Whether to precompute and persist compiled grants | **Open.** Compiled grants are cached in memory by `iamVersion`; no persisted precompute. |
+| S5 | Cedar WASM in Bun: size, cold start, per-check latency | Whether Cedar becomes an engine for conditions and guardrails | **Open, not adopted.** The native engine remains. |
+| S6 | Caddy `forward_auth` to an agent-local handler: added p50 and p99, behaviour when the agent restarts | Whether I25 caches decisions in Caddy | **Partly answered.** The agent caches verified decisions with the site key in the cache key, and service tokens are decided before redirects; no Caddy-side cache. |
+| S7 | Many Better Auth instances in one Bun process (one per pool): memory per instance and isolation of plugins and secrets | I27 native engine shape (one process versus one per pool) | **Answered for now: one process.** The pool engine runs in-process with its own tables; the separate identity process is deferred. |
+| S8 | Delivering workload tokens to Podman containers: a bind-mounted rotated file versus Podman secrets, and how rootless uid mapping affects them | I18 delivery | **Answered: rotated file.** The agent writes `/run/skiff/identity/<workload>/token` (0400) and mounts it at `/var/run/skiff/token`; the loopback metadata endpoint serves other audiences. |
 
 ---
 

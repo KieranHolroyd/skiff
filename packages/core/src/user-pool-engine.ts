@@ -34,19 +34,29 @@
  * counter that does not advance is refused as a cloned authenticator, and every failure is the
  * same generic refusal so neither an address nor a credential id becomes an enumeration oracle.
  *
- * TODO(I27): social login, TOTP MFA, breached-password checks, lockout, suspicious sign-in mail,
+ * TOTP MFA is RFC 6238 over a base32 secret sealed with the organisation key. The secret is never
+ * stored in the clear, a confirmed enrolment is required before sign-in challenges for a code, the
+ * last accepted step is a replay guard, and recovery codes are stored only as SHA-256 hashes and
+ * shown once. Groups are the pool's own rows; their names travel as the `groups` claim.
+ *
+ * TODO(I27): social login, email OTP, breached-password checks, lockout, suspicious sign-in mail,
  * import/export and the identity process remain for a later slice.
  */
 import { createRequire } from 'node:module';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type {
+	UserPoolGroupMemberView,
+	UserPoolGroupView,
 	UserPoolPasskeyAuthenticationChallenge,
 	UserPoolPasskeyAuthenticationOptionsJSON,
 	UserPoolPasskeyRegistrationChallenge,
 	UserPoolPasskeyRegistrationOptionsJSON,
-	UserPoolPasskeyView
+	UserPoolPasskeyView,
+	UserPoolRecoveryCodes,
+	UserPoolTotpEnrolment,
+	UserPoolTotpStatus
 } from '@skiff/contracts';
 import type { CoreContext } from './context.ts';
 import {
@@ -60,6 +70,7 @@ import {
 } from './errors.ts';
 import { newId, parseJson, randomToken, safeEqual, sha256Hex } from './util.ts';
 import {
+	userPoolMfaRequiredKey,
 	userPoolRequireEmailVerificationKey,
 	userPoolSigningPurpose
 } from './user-pools.ts';
@@ -94,6 +105,16 @@ export const USER_POOL_MAGIC_EMAIL_LIMIT = 5;
 export const USER_POOL_RESET_EMAIL_LIMIT = 3;
 export const USER_POOL_VERIFY_EMAIL_LIMIT = 3;
 export const USER_POOL_REQUEST_IP_LIMIT = 20;
+
+/** TOTP MFA: a pending sign-in is short lived, a code may be tried five times, and codes are 30s. */
+export const USER_POOL_MFA_CHALLENGE_TTL_SECONDS = 5 * 60;
+export const USER_POOL_MFA_MAX_ATTEMPTS = 5;
+export const USER_POOL_TOTP_WINDOW_STEPS = 1;
+export const USER_POOL_TOTP_PERIOD_SECONDS = 30;
+export const USER_POOL_TOTP_DIGITS = 6;
+export const USER_POOL_RECOVERY_CODE_COUNT = 10;
+/** How many pending MFA challenges one process will remember before it drops the oldest. */
+export const USER_POOL_MFA_CHALLENGE_CAP = 10_000;
 
 /** The hosted page each kind of mail points at. */
 export type UserPoolMailPurpose = 'verify_email' | 'magic_link' | 'password_reset' | 'invite';
@@ -183,6 +204,16 @@ export interface UserPoolSignInResult extends UserPoolSessionContext {
 	token: string;
 	/** Open pools allow an unverified address; the hosted page should offer to resend the link. */
 	emailVerificationPending: boolean;
+	/**
+	 * True when the password was right but a TOTP/recovery code is still required. In that case
+	 * `token` is a short-lived MFA challenge token, not a session: `session()` refuses it and the
+	 * hosted page must call `totpVerify` before setting the session cookie.
+	 */
+	mfaRequired: boolean;
+	/** Opaque MFA challenge token, present only when `mfaRequired` is true. */
+	mfaToken?: string;
+	/** When the MFA challenge expires, present only when `mfaRequired` is true. */
+	mfaExpiresAt?: number;
 }
 
 export interface UserPoolAuthorizeInput {
@@ -231,6 +262,8 @@ export interface UserPoolUserInfo {
 	email?: string;
 	email_verified?: boolean;
 	name?: string;
+	/** Pool group names, straight from the engine's own group tables. */
+	groups?: string[];
 }
 
 /**
@@ -463,6 +496,156 @@ interface EmailTokenRow {
 	used_at: number | null;
 }
 
+interface UserPoolTotpRow {
+	user_id: string;
+	pool_id: string;
+	secret_sealed: string;
+	confirmed_at: number | null;
+	last_step: number | null;
+	recovery_codes_json: string;
+	created_at: number;
+}
+
+interface RecoveryCodeEntry {
+	hash: string;
+	usedAt: number | null;
+}
+
+interface UserPoolGroupRow {
+	id: string;
+	pool_id: string;
+	name: string;
+	created_at: number;
+	member_count: number;
+}
+
+interface UserPoolGroupMemberRow {
+	user_id: string;
+	email: string;
+	name: string;
+	created_at: number;
+}
+
+interface MfaChallengeRecord {
+	poolId: string;
+	userId: string;
+	expiresAt: number;
+	attempts: number;
+}
+
+const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+
+/** Base32 as RFC 4648 defines it, unpadded: the form authenticator apps import. */
+export function base32Encode(bytes: Uint8Array): string {
+	let bits = '';
+	for (const byte of bytes) bits += byte.toString(2).padStart(8, '0');
+	let out = '';
+	for (let index = 0; index + 5 <= bits.length; index += 5)
+		out += BASE32_ALPHABET[Number.parseInt(bits.slice(index, index + 5), 2)];
+	const remainder = bits.length % 5;
+	if (remainder > 0)
+		out += BASE32_ALPHABET[Number.parseInt(bits.slice(bits.length - remainder).padEnd(5, '0'), 2)];
+	return out;
+}
+
+/** Decode an unpadded, case-insensitive base32 secret. Invalid characters are skipped, as in step-up. */
+export function base32Decode(secret: string): Buffer {
+	const encoded = secret.replace(/=+$/, '').toUpperCase();
+	let bits = '';
+	for (const char of encoded) {
+		const index = BASE32_ALPHABET.indexOf(char);
+		if (index < 0) continue;
+		bits += index.toString(2).padStart(5, '0');
+	}
+	const bytes: number[] = [];
+	for (let index = 0; index + 8 <= bits.length; index += 8)
+		bytes.push(Number.parseInt(bits.slice(index, index + 8), 2));
+	return Buffer.from(bytes);
+}
+
+function hotp(secret: Buffer, counter: number, digits = USER_POOL_TOTP_DIGITS): string {
+	const message = Buffer.alloc(8);
+	message.writeBigUInt64BE(BigInt(counter));
+	const digest = createHmac('sha1', secret).update(message).digest();
+	const offset = digest[digest.length - 1]! & 0x0f;
+	const value =
+		((digest[offset]! & 0x7f) << 24) |
+		((digest[offset + 1]! & 0xff) << 16) |
+		((digest[offset + 2]! & 0xff) << 8) |
+		(digest[offset + 3]! & 0xff);
+	return String(value % 10 ** digits).padStart(digits, '0');
+}
+
+/**
+ * Verify a six-digit code and return its RFC 6238 step, or null. One step each way tolerates clock
+ * drift; every candidate is compared in constant time, and the six-digit shape is checked first.
+ */
+export function verifyUserPoolTotp(
+	secret: string,
+	code: string,
+	now = Date.now(),
+	options: { window?: number; periodSeconds?: number; digits?: number } = {}
+): number | null {
+	const normalized = code.replace(/[\s-]/g, '');
+	if (!/^\d{6}$/.test(normalized)) return null;
+	const bytes = base32Decode(secret);
+	if (bytes.length === 0) return null;
+	const period = options.periodSeconds ?? USER_POOL_TOTP_PERIOD_SECONDS;
+	const current = Math.floor(now / 1000 / period);
+	const window = options.window ?? USER_POOL_TOTP_WINDOW_STEPS;
+	let matched: number | null = null;
+	for (let offset = -window; offset <= window; offset += 1) {
+		const expected = Buffer.from(hotp(bytes, current + offset, options.digits ?? USER_POOL_TOTP_DIGITS));
+		const actual = Buffer.from(normalized);
+		if (expected.length === actual.length && timingSafeEqual(expected, actual) && matched === null)
+			matched = current + offset;
+	}
+	return matched;
+}
+
+function normalizeRecoveryCode(code: string): string {
+	return code.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function recoveryCodeHash(code: string): string {
+	return sha256Hex(`skiff-pool-recovery:${normalizeRecoveryCode(code)}`);
+}
+
+function parseRecoveryCodes(json: string): RecoveryCodeEntry[] {
+	const value = parseJson<unknown>(json, []);
+	if (!Array.isArray(value)) return [];
+	return value.flatMap((entry) => {
+		if (!entry || typeof entry !== 'object') return [];
+		const candidate = entry as { hash?: unknown; usedAt?: unknown };
+		if (typeof candidate.hash !== 'string') return [];
+		return [
+			{
+				hash: candidate.hash,
+				usedAt: typeof candidate.usedAt === 'number' ? candidate.usedAt : null
+			}
+		];
+	});
+}
+
+function groupView(row: UserPoolGroupRow): UserPoolGroupView {
+	return {
+		id: row.id,
+		poolId: row.pool_id,
+		name: row.name,
+		createdAt: row.created_at,
+		memberCount: row.member_count
+	};
+}
+
+function groupMemberView(row: UserPoolGroupMemberRow): UserPoolGroupMemberView {
+	return {
+		userId: row.user_id,
+		email: row.email,
+		name: row.name,
+		addedAt: row.created_at
+	};
+}
+
 /** The pool-hosted session cookie name. Per pool, so two pools on one origin cannot mix sessions. */
 export function userPoolSessionCookieName(poolId: string): string {
 	return `skiff_pool_session_${poolId}`;
@@ -485,6 +668,21 @@ function validatePassword(password: string): void {
 		throw new ValidationError(`Passwords must be at least ${USER_POOL_PASSWORD_MIN_LENGTH} characters.`);
 	if (password.length > USER_POOL_PASSWORD_MAX_LENGTH)
 		throw new ValidationError(`Passwords must be at most ${USER_POOL_PASSWORD_MAX_LENGTH} characters.`);
+}
+
+function validateGroupName(raw: string): string {
+	const name = raw.trim();
+	if (!name) throw new ValidationError('Give the group a name.');
+	if (name.length > 80) throw new ValidationError('Group names are at most 80 characters.');
+	return name;
+}
+
+/** Ten codes in `XXXX-XXXX` base32; the hyphens are presentation only and the hash strips them. */
+function generateRecoveryCodes(count = USER_POOL_RECOVERY_CODE_COUNT): string[] {
+	return Array.from({ length: count }, () => {
+		const encoded = base32Encode(randomBytes(5));
+		return `${encoded.slice(0, 4)}-${encoded.slice(4)}`;
+	});
 }
 
 function sha256Base64Url(value: string): string {
@@ -680,6 +878,8 @@ export class UserPoolEngineService {
 	private readonly requestWindow = new Map<string, number[]>();
 	/** Outstanding, single-use WebAuthn challenges. Per-process until the identity process owns them. */
 	private readonly passkeyChallenges = new Map<string, PasskeyChallengeRecord>();
+	/** Password-verified sign-ins waiting for a TOTP or recovery code. */
+	private readonly mfaChallenges = new Map<string, MfaChallengeRecord>();
 
 	constructor(private readonly ctx: CoreContext) {}
 
@@ -771,6 +971,30 @@ export class UserPoolEngineService {
 		if (!valid || user.disabled_at !== null) throw refusal;
 		if (this.emailVerificationRequired(pool) && user.email_verified_at === null)
 			throw new CoreError('email_unverified', 'Verify your email address before signing in.', 403);
+
+		// MFA is a second step, not a different password: the challenge token is not a session and
+		// `session()` refuses it. The hosted page swaps it for a real session in `totpVerify`.
+		if (this.totpEnabled(pool.id, user.id)) {
+			const challenge = this.issueMfaChallenge(pool.id, user.id);
+			const session = {
+				id: sha256Hex(challenge.token),
+				poolId: pool.id,
+				userId: user.id,
+				expiresAt: challenge.expiresAt,
+				createdAt: this.ctx.now(),
+				lastSeenAt: null,
+				revokedAt: null
+			};
+			return {
+				token: challenge.token,
+				user: userView(user),
+				session,
+				emailVerificationPending: user.email_verified_at === null,
+				mfaRequired: true,
+				mfaToken: challenge.token,
+				mfaExpiresAt: challenge.expiresAt
+			};
+		}
 
 		return this.startSession(pool, user, 'password');
 	}
@@ -1043,6 +1267,182 @@ export class UserPoolEngineService {
 		return result.changes > 0;
 	}
 
+	// ---------------------------------------------------------------- TOTP MFA
+
+	/** Whether the pool asks every user to enrol MFA. Per-user enforcement is the enrolment itself. */
+	mfaRequired(poolId: string): boolean {
+		this.requirePool(poolId);
+		return (
+			this.ctx.sqlite
+				.query<{ value: string }, [string]>('SELECT value FROM settings WHERE key = ?')
+				.get(userPoolMfaRequiredKey(poolId))?.value === '1'
+		);
+	}
+
+	/** The user's MFA state; never the secret and never a recovery code. */
+	totpStatus(poolId: string, userId: string): UserPoolTotpStatus {
+		this.requireUser(poolId, userId);
+		const row = this.totpRow(poolId, userId);
+		const remaining = row
+			? parseRecoveryCodes(row.recovery_codes_json).filter((entry) => entry.usedAt === null).length
+			: 0;
+		return {
+			enabled: Boolean(row?.confirmed_at),
+			confirmedAt: row?.confirmed_at ?? null,
+			recoveryCodesRemaining: remaining
+		};
+	}
+
+	/**
+	 * Start TOTP enrolment: generate a 160-bit base32 secret, seal it with the org data key and
+	 * return the secret and `otpauth://` URI exactly once. Repeating this before confirmation
+	 * replaces the abandoned secret; a confirmed enrolment must be disabled first.
+	 */
+	totpEnrol(poolId: string, userId: string): UserPoolTotpEnrolment {
+		const pool = this.requireEnabledPool(poolId);
+		const user = this.requireUser(pool.id, userId);
+		if (user.disabled_at !== null) throw new UnauthorizedError('Sign in first.');
+		const existing = this.totpRow(pool.id, user.id);
+		if (existing?.confirmed_at) throw new ConflictError('Two-factor authentication is already enabled.');
+
+		const secret = base32Encode(randomBytes(20));
+		const now = this.ctx.now();
+		this.ctx.sqlite.run(
+			`INSERT INTO user_pool_totp
+			   (user_id, pool_id, secret_sealed, confirmed_at, last_step, recovery_codes_json, created_at)
+			 VALUES (?, ?, ?, NULL, NULL, '[]', ?)
+			 ON CONFLICT(pool_id, user_id) DO UPDATE SET
+			   secret_sealed = excluded.secret_sealed,
+			   confirmed_at = NULL,
+			   last_step = NULL,
+			   recovery_codes_json = '[]',
+			   created_at = excluded.created_at`,
+			[user.id, pool.id, this.ctx.secrets.seal(pool.org_id, secret), now]
+		);
+		const issuer = pool.name;
+		const account = user.email;
+		const label = `${issuer}:${account}`;
+		const otpauthUri = `otpauth://totp/${encodeURIComponent(label)}?${new URLSearchParams({
+			secret,
+			issuer,
+			algorithm: 'SHA1',
+			digits: String(USER_POOL_TOTP_DIGITS),
+			period: String(USER_POOL_TOTP_PERIOD_SECONDS)
+		}).toString()}`;
+		return { secret, otpauthUri, account, issuer };
+	}
+
+	/**
+	 * Finish enrolment with the first valid code. This is the only time the recovery codes are
+	 * returned; only their hashes are stored. A code already accepted is refused by the replay guard.
+	 */
+	totpConfirm(poolId: string, userId: string, code: string): UserPoolRecoveryCodes {
+		const pool = this.requireEnabledPool(poolId);
+		const user = this.requireUser(pool.id, userId);
+		const row = this.totpRow(pool.id, user.id);
+		if (!row) throw new NotFoundError('TOTP enrolment');
+		if (row.confirmed_at !== null) throw new ConflictError('Two-factor authentication is already enabled.');
+		const secret = this.ctx.secrets.open(pool.org_id, row.secret_sealed);
+		const step = verifyUserPoolTotp(secret, code, this.ctx.now());
+		if (step === null) throw new UnauthorizedError('That code is not valid. Try the next one.');
+		if (row.last_step !== null && step <= row.last_step)
+			throw new UnauthorizedError('That code has already been used.');
+
+		const recoveryCodes = generateRecoveryCodes(USER_POOL_RECOVERY_CODE_COUNT);
+		const now = this.ctx.now();
+		const updated = this.ctx.sqlite.run(
+			`UPDATE user_pool_totp
+			    SET confirmed_at = ?, last_step = ?, recovery_codes_json = ?
+			  WHERE pool_id = ? AND user_id = ? AND confirmed_at IS NULL
+			    AND (last_step IS NULL OR last_step < ?)`,
+			[
+				now,
+				step,
+				JSON.stringify(recoveryCodes.map((value) => ({ hash: recoveryCodeHash(value), usedAt: null }))),
+				pool.id,
+				user.id,
+				step
+			]
+		);
+		if (updated.changes === 0) throw new ConflictError('Two-factor authentication is already enabled.');
+		this.ctx.events.emitUserPool(pool.org_id, pool.id, 'mfa.enabled', {
+			poolId: pool.id,
+			poolName: pool.name,
+			user: { id: user.id, email: user.email, name: user.name },
+			method: 'totp'
+		});
+		return { recoveryCodes };
+	}
+
+	/**
+	 * Verify the second factor for a password-verified sign-in and create the session. The challenge
+	 * is single use and spends one of five attempts on every wrong code; a matching recovery code is
+	 * consumed here rather than re-entering the TOTP window.
+	 */
+	totpVerify(poolId: string, mfaToken: string, code: string): UserPoolSignInResult {
+		const pool = this.requireEnabledPool(poolId);
+		const refusal = new UnauthorizedError('That code is not valid.');
+		const challenge = mfaToken ? this.mfaChallenges.get(mfaToken) : undefined;
+		if (!challenge || challenge.poolId !== pool.id) throw refusal;
+		if (challenge.expiresAt <= this.ctx.now()) {
+			this.mfaChallenges.delete(mfaToken);
+			throw refusal;
+		}
+		if (challenge.attempts >= USER_POOL_MFA_MAX_ATTEMPTS) {
+			this.mfaChallenges.delete(mfaToken);
+			throw new RateLimitError('Too many incorrect codes. Sign in again.');
+		}
+		const user = this.requireUser(pool.id, challenge.userId);
+		if (user.disabled_at !== null) {
+			this.mfaChallenges.delete(mfaToken);
+			throw refusal;
+		}
+
+		const verification = this.verifyMfaCode(pool, user.id, code);
+		if (!verification.ok) {
+			challenge.attempts += 1;
+			if (challenge.attempts >= USER_POOL_MFA_MAX_ATTEMPTS) this.mfaChallenges.delete(mfaToken);
+			throw refusal;
+		}
+		this.mfaChallenges.delete(mfaToken);
+		return this.startSession(
+			pool,
+			user,
+			verification.usedRecoveryCode ? 'recovery_code' : 'totp'
+		);
+	}
+
+	/** Replace the unused recovery codes, after proving possession with a current code. */
+	regenerateRecoveryCodes(poolId: string, userId: string, code: string): UserPoolRecoveryCodes {
+		const pool = this.requireEnabledPool(poolId);
+		const user = this.requireUser(pool.id, userId);
+		const verification = this.verifyMfaCode(pool, user.id, code);
+		if (!verification.ok) throw new UnauthorizedError('That code is not valid.');
+		const recoveryCodes = generateRecoveryCodes(USER_POOL_RECOVERY_CODE_COUNT);
+		this.ctx.sqlite.run(
+			'UPDATE user_pool_totp SET recovery_codes_json = ? WHERE pool_id = ? AND user_id = ?',
+			[
+				JSON.stringify(recoveryCodes.map((value) => ({ hash: recoveryCodeHash(value), usedAt: null }))),
+				pool.id,
+				user.id
+			]
+		);
+		return { recoveryCodes };
+	}
+
+	/** Disable TOTP. Proving a current code stops a stolen session from removing the factor. */
+	totpDisable(poolId: string, userId: string, code: string): boolean {
+		const pool = this.requireEnabledPool(poolId);
+		const user = this.requireUser(pool.id, userId);
+		const verification = this.verifyMfaCode(pool, user.id, code);
+		if (!verification.ok) throw new UnauthorizedError('That code is not valid.');
+		const deleted = this.ctx.sqlite.run(
+			'DELETE FROM user_pool_totp WHERE pool_id = ? AND user_id = ? AND confirmed_at IS NOT NULL',
+			[pool.id, user.id]
+		);
+		return deleted.changes > 0;
+	}
+
 	/** Request a password-reset link. Enumeration-safe and rate limited like a magic link. */
 	async requestPasswordReset(
 		poolId: string,
@@ -1107,11 +1507,11 @@ export class UserPoolEngineService {
 		await this.sendLinkMail(pool, user, 'verify_email', issued.token);
 	}
 
-	/** Insert a session row and emit the D122 event; shared by password, magic-link, reset and passkey sign-in. */
+	/** Insert a session row and emit the D122 event; shared by every completed sign-in method. */
 	private startSession(
 		pool: UserPoolRow,
 		user: UserRow,
-		method: 'password' | 'magic_link' | 'password_reset' | 'passkey'
+		method: 'password' | 'magic_link' | 'password_reset' | 'passkey' | 'totp' | 'recovery_code'
 	): UserPoolSignInResult {
 		const now = this.ctx.now();
 		const token = randomToken(32);
@@ -1143,7 +1543,8 @@ export class UserPoolEngineService {
 				lastSeenAt: now,
 				revokedAt: null
 			},
-			emailVerificationPending: user.email_verified_at === null
+			emailVerificationPending: user.email_verified_at === null,
+			mfaRequired: false
 		};
 	}
 
@@ -1264,6 +1665,124 @@ export class UserPoolEngineService {
 			.map(inviteView);
 	}
 
+	// ---------------------------------------------------------------- groups
+
+	/** Groups in one pool, with member counts. Names are unique case-insensitively per pool. */
+	listGroups(poolId: string): UserPoolGroupView[] {
+		this.requirePool(poolId);
+		return this.ctx.sqlite
+			.query<UserPoolGroupRow, [string]>(
+				`SELECT g.id, g.pool_id, g.name, g.created_at,
+				        (SELECT COUNT(*) FROM user_pool_group_members m WHERE m.group_id = g.id) AS member_count
+				   FROM user_pool_groups g
+				  WHERE g.pool_id = ?
+				  ORDER BY g.name COLLATE NOCASE`
+			)
+			.all(poolId)
+			.map(groupView);
+	}
+
+	createGroup(poolId: string, name: string): UserPoolGroupView {
+		const pool = this.requireEnabledPool(poolId);
+		const clean = validateGroupName(name);
+		const id = newId('upg_');
+		const now = this.ctx.now();
+		try {
+			this.ctx.sqlite.run(
+				'INSERT INTO user_pool_groups (id, pool_id, name, created_at) VALUES (?, ?, ?, ?)',
+				[id, pool.id, clean, now]
+			);
+		} catch (cause) {
+			if (cause instanceof Error && /UNIQUE/i.test(cause.message))
+				throw new ConflictError('A group with that name already exists.');
+			throw cause;
+		}
+		return { id, poolId: pool.id, name: clean, createdAt: now, memberCount: 0 };
+	}
+
+	renameGroup(poolId: string, groupId: string, name: string): UserPoolGroupView {
+		const pool = this.requireEnabledPool(poolId);
+		const group = this.requireGroup(pool.id, groupId);
+		const clean = validateGroupName(name);
+		try {
+			this.ctx.sqlite.run('UPDATE user_pool_groups SET name = ? WHERE id = ? AND pool_id = ?', [
+				clean,
+				group.id,
+				pool.id
+			]);
+		} catch (cause) {
+			if (cause instanceof Error && /UNIQUE/i.test(cause.message))
+				throw new ConflictError('A group with that name already exists.');
+			throw cause;
+		}
+		return groupView({ ...group, name: clean });
+	}
+
+	deleteGroup(poolId: string, groupId: string): boolean {
+		this.requirePool(poolId);
+		return this.ctx.sqlite.transaction(() => {
+			this.ctx.sqlite.run('DELETE FROM user_pool_group_members WHERE group_id = ? AND pool_id = ?', [
+				groupId,
+				poolId
+			]);
+			const deleted = this.ctx.sqlite.run('DELETE FROM user_pool_groups WHERE id = ? AND pool_id = ?', [
+				groupId,
+				poolId
+			]);
+			return deleted.changes > 0;
+		})();
+	}
+
+	listGroupMembers(poolId: string, groupId: string): UserPoolGroupMemberView[] {
+		this.requireGroup(poolId, groupId);
+		return this.ctx.sqlite
+			.query<UserPoolGroupMemberRow, [string, string]>(
+				`SELECT m.user_id, u.email, u.name, m.created_at
+				   FROM user_pool_group_members m
+				   JOIN user_pool_users u ON u.id = m.user_id AND u.pool_id = m.pool_id
+				  WHERE m.pool_id = ? AND m.group_id = ?
+				  ORDER BY u.email COLLATE NOCASE`
+			)
+			.all(poolId, groupId)
+			.map(groupMemberView);
+	}
+
+	addGroupMember(poolId: string, groupId: string, userId: string): void {
+		const group = this.requireGroup(poolId, groupId);
+		const user = this.requireUser(poolId, userId);
+		if (user.disabled_at !== null) throw new ValidationError('That user is disabled.');
+		this.ctx.sqlite.run(
+			`INSERT INTO user_pool_group_members (pool_id, group_id, user_id, created_at)
+			 VALUES (?, ?, ?, ?)
+			 ON CONFLICT(group_id, user_id) DO NOTHING`,
+			[group.pool_id, group.id, user.id, this.ctx.now()]
+		);
+	}
+
+	removeGroupMember(poolId: string, groupId: string, userId: string): boolean {
+		this.requireGroup(poolId, groupId);
+		const result = this.ctx.sqlite.run(
+			'DELETE FROM user_pool_group_members WHERE pool_id = ? AND group_id = ? AND user_id = ?',
+			[poolId, groupId, userId]
+		);
+		return result.changes > 0;
+	}
+
+	/** Group names for one user, used by `groups` claims and Skiff Access. Metadata is not consulted. */
+	groupsForUser(poolId: string, userId: string): string[] {
+		this.requireUser(poolId, userId);
+		return this.ctx.sqlite
+			.query<{ name: string }, [string, string]>(
+				`SELECT g.name
+				   FROM user_pool_group_members m
+				   JOIN user_pool_groups g ON g.id = m.group_id AND g.pool_id = m.pool_id
+				  WHERE m.pool_id = ? AND m.user_id = ?
+				  ORDER BY g.name COLLATE NOCASE`
+			)
+			.all(poolId, userId)
+			.map((row) => row.name);
+	}
+
 	user(poolId: string, userId: string): UserPoolUserView {
 		return userView(this.requireUser(poolId, userId));
 	}
@@ -1283,6 +1802,7 @@ export class UserPoolEngineService {
 					'UPDATE user_pool_sessions SET revoked_at = ? WHERE pool_id = ? AND user_id = ? AND revoked_at IS NULL',
 					[now, poolId, user.id]
 				);
+			if (disabled) this.forgetMfaChallenges(poolId, user.id);
 		})();
 		return userView(this.requireUser(poolId, user.id));
 	}
@@ -1304,7 +1824,16 @@ export class UserPoolEngineService {
 				user.id,
 				poolId
 			]);
+			this.ctx.sqlite.run('DELETE FROM user_pool_totp WHERE user_id = ? AND pool_id = ?', [
+				user.id,
+				poolId
+			]);
+			this.ctx.sqlite.run('DELETE FROM user_pool_group_members WHERE user_id = ? AND pool_id = ?', [
+				user.id,
+				poolId
+			]);
 			this.ctx.sqlite.run('DELETE FROM user_pool_users WHERE id = ? AND pool_id = ?', [user.id, poolId]);
+			this.forgetMfaChallenges(poolId, user.id);
 		})();
 		return true;
 	}
@@ -1316,7 +1845,11 @@ export class UserPoolEngineService {
 		this.ctx.sqlite.run('DELETE FROM user_pool_email_tokens WHERE pool_id = ?', [poolId]);
 		this.ctx.sqlite.run('DELETE FROM user_pool_invites WHERE pool_id = ?', [poolId]);
 		this.ctx.sqlite.run('DELETE FROM user_pool_passkeys WHERE pool_id = ?', [poolId]);
+		this.ctx.sqlite.run('DELETE FROM user_pool_totp WHERE pool_id = ?', [poolId]);
+		this.ctx.sqlite.run('DELETE FROM user_pool_group_members WHERE pool_id = ?', [poolId]);
+		this.ctx.sqlite.run('DELETE FROM user_pool_groups WHERE pool_id = ?', [poolId]);
 		this.ctx.sqlite.run('DELETE FROM user_pool_users WHERE pool_id = ?', [poolId]);
+		this.forgetMfaChallenges(poolId);
 	}
 
 	// ---------------------------------------------------------------- OIDC authorization code flow
@@ -1432,6 +1965,7 @@ export class UserPoolEngineService {
 		const scopes = row.scope.split(/\s+/).filter(Boolean);
 		const withEmail = scopes.includes('email');
 		const withProfile = scopes.includes('profile');
+		const groups = this.groupsForUser(pool.id, user.id);
 		const purpose = userPoolSigningPurpose(pool.id);
 
 		const idToken = await this.ctx.signingKeys.sign(
@@ -1441,7 +1975,8 @@ export class UserPoolEngineService {
 				aud: client.client_id,
 				...(row.nonce ? { nonce: row.nonce } : {}),
 				...(withEmail ? { email: user.email, email_verified: user.email_verified_at !== null } : {}),
-				...(withProfile ? { name: user.name } : {})
+				...(withProfile ? { name: user.name } : {}),
+				groups
 			},
 			USER_POOL_TOKEN_TTL_SECONDS,
 			{ issuer: pool.issuer }
@@ -1455,7 +1990,8 @@ export class UserPoolEngineService {
 				scope: scopes.join(' '),
 				typ: 'access',
 				...(withEmail ? { email: user.email, email_verified: user.email_verified_at !== null } : {}),
-				...(withProfile ? { name: user.name } : {})
+				...(withProfile ? { name: user.name } : {}),
+				groups
 			},
 			USER_POOL_TOKEN_TTL_SECONDS,
 			{ issuer: pool.issuer }
@@ -1506,7 +2042,8 @@ export class UserPoolEngineService {
 		return {
 			sub: user.id,
 			...(scopes.has('email') ? { email: user.email, email_verified: user.email_verified_at !== null } : {}),
-			...(scopes.has('profile') ? { name: user.name } : {})
+			...(scopes.has('profile') ? { name: user.name } : {}),
+			groups: this.groupsForUser(pool.id, user.id)
 		};
 	}
 
@@ -1790,6 +2327,106 @@ export class UserPoolEngineService {
 			)
 			.get(passkeyId, poolId, userId);
 		if (!row) throw new NotFoundError('Passkey');
+		return row;
+	}
+
+	private totpRow(poolId: string, userId: string): UserPoolTotpRow | null {
+		return (
+			this.ctx.sqlite
+				.query<UserPoolTotpRow, [string, string]>(
+					'SELECT * FROM user_pool_totp WHERE pool_id = ? AND user_id = ?'
+				)
+				.get(poolId, userId) ?? null
+		);
+	}
+
+	private totpEnabled(poolId: string, userId: string): boolean {
+		const row = this.totpRow(poolId, userId);
+		return row !== null && row.confirmed_at !== null;
+	}
+
+	/** Drop pending second-factor challenges for a disabled or deleted user (all users when omitted). */
+	private forgetMfaChallenges(poolId: string, userId?: string): void {
+		for (const [token, entry] of this.mfaChallenges)
+			if (entry.poolId === poolId && (userId === undefined || entry.userId === userId))
+				this.mfaChallenges.delete(token);
+	}
+
+	/** Store a one-time MFA challenge and return its raw token. Expired entries are swept here. */
+	private issueMfaChallenge(poolId: string, userId: string): { token: string; expiresAt: number } {		const now = this.ctx.now();
+		for (const [token, entry] of this.mfaChallenges)
+			if (entry.expiresAt <= now) this.mfaChallenges.delete(token);
+		while (this.mfaChallenges.size >= USER_POOL_MFA_CHALLENGE_CAP) {
+			const oldest = this.mfaChallenges.keys().next().value;
+			if (oldest === undefined) break;
+			this.mfaChallenges.delete(oldest);
+		}
+		const token = randomToken(32);
+		const expiresAt = now + USER_POOL_MFA_CHALLENGE_TTL_SECONDS * 1000;
+		this.mfaChallenges.set(token, { poolId, userId, expiresAt, attempts: 0 });
+		return { token, expiresAt };
+	}
+
+	/**
+	 * Check a TOTP code or an unused recovery code. A TOTP step must strictly advance, and the
+	 * conditional update means a concurrent request cannot accept the same step twice. A recovery
+	 * code is consumed inside a transaction so two requests cannot both spend it.
+	 */
+	private verifyMfaCode(
+		pool: UserPoolRow,
+		userId: string,
+		code: string
+	): { ok: boolean; usedRecoveryCode: boolean } {
+		const row = this.totpRow(pool.id, userId);
+		if (!row || row.confirmed_at === null) return { ok: false, usedRecoveryCode: false };
+		try {
+			const secret = this.ctx.secrets.open(pool.org_id, row.secret_sealed);
+			const step = verifyUserPoolTotp(secret, code, this.ctx.now());
+			if (step !== null) {
+				if (row.last_step !== null && step <= row.last_step)
+					return { ok: false, usedRecoveryCode: false };
+				const updated = this.ctx.sqlite.run(
+					`UPDATE user_pool_totp SET last_step = ?
+					  WHERE pool_id = ? AND user_id = ? AND confirmed_at IS NOT NULL
+					    AND (last_step IS NULL OR last_step < ?)`,
+					[step, pool.id, userId, step]
+				);
+				return { ok: updated.changes > 0, usedRecoveryCode: false };
+			}
+		} catch {
+			// A corrupted sealed secret fails closed rather than surfacing a decryption message.
+			return { ok: false, usedRecoveryCode: false };
+		}
+
+		const normalized = normalizeRecoveryCode(code);
+		if (!normalized) return { ok: false, usedRecoveryCode: false };
+		const hash = recoveryCodeHash(code);
+		const consumed = this.ctx.sqlite.transaction(() => {
+			const fresh = this.totpRow(pool.id, userId);
+			if (!fresh || fresh.confirmed_at === null) return false;
+			const entries = parseRecoveryCodes(fresh.recovery_codes_json);
+			const match = entries.find((entry) => entry.usedAt === null && safeEqual(entry.hash, hash));
+			if (!match) return false;
+			match.usedAt = this.ctx.now();
+			const updated = this.ctx.sqlite.run(
+				'UPDATE user_pool_totp SET recovery_codes_json = ? WHERE pool_id = ? AND user_id = ?',
+				[JSON.stringify(entries), pool.id, userId]
+			);
+			return updated.changes > 0;
+		})();
+		return { ok: consumed, usedRecoveryCode: consumed };
+	}
+
+	private requireGroup(poolId: string, groupId: string): UserPoolGroupRow {
+		const row = this.ctx.sqlite
+			.query<UserPoolGroupRow, [string, string]>(
+				`SELECT g.id, g.pool_id, g.name, g.created_at,
+				        (SELECT COUNT(*) FROM user_pool_group_members m WHERE m.group_id = g.id) AS member_count
+				   FROM user_pool_groups g
+				  WHERE g.id = ? AND g.pool_id = ?`
+			)
+			.get(groupId, poolId);
+		if (!row) throw new NotFoundError('User pool group');
 		return row;
 	}
 

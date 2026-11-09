@@ -73,8 +73,10 @@ interface PoolIdentity {
 	groups: string[];
 }
 
-/** Pool groups live in the engine's public user metadata (`groups`, else `poolGroups`). */
-function poolGroups(user: UserPoolUserView): string[] {
+/** Engine groups win; public metadata (`groups`, else `poolGroups`) is the legacy fallback. */
+function poolGroups(poolId: string, user: UserPoolUserView): string[] {
+	const engine = core.ctx.userPoolEngine.groupsForUser(poolId, user.id);
+	if (engine.length > 0) return engine;
 	const raw = user.metadata.groups ?? user.metadata.poolGroups;
 	if (!Array.isArray(raw)) return [];
 	return raw
@@ -96,7 +98,7 @@ async function resolvePoolIdentity(
 	if (bearer) {
 		for (const poolId of poolIds) {
 			const user = await core.ctx.userPoolEngine.verifyAccessToken(poolId, bearer);
-			if (user) return { poolId, user, groups: poolGroups(user) };
+			if (user) return { poolId, user, groups: poolGroups(poolId, user) };
 		}
 	}
 	for (const poolId of poolIds) {
@@ -104,7 +106,7 @@ async function resolvePoolIdentity(
 			poolId,
 			event.cookies.get(userPoolSessionCookieName(poolId)),
 		);
-		if (context) return { poolId, user: context.user, groups: poolGroups(context.user) };
+		if (context) return { poolId, user: context.user, groups: poolGroups(poolId, context.user) };
 	}
 	return null;
 }

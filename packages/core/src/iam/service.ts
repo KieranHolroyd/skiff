@@ -109,6 +109,45 @@ export interface BindingView {
 	createdAt: number;
 }
 
+/** A dry run (IAM.md §9.3): what one principal gains or loses from a draft change. */
+export interface IamSimulationDraft {
+	/** The principal whose access is being asked about. */
+	sample: { principalType: 'user' | 'serviceAccount'; principalId: string };
+	/** Either a new binding for the sample, or a custom role's replacement permissions. */
+	change:
+		| {
+				kind: 'binding';
+				roleId: string;
+				scope: ScopeRef;
+				expiresAt?: number | null;
+				condition?: Condition | null;
+			}
+		| { kind: 'role'; roleId: string; permissions: readonly string[] };
+}
+
+/** One permission whose decision flips at a resource. */
+export interface IamSimulationChange {
+	permission: Permission;
+	resource: ResourceRef;
+	before: boolean;
+	after: boolean;
+	change: 'granted' | 'revoked';
+	beforeVia?: string;
+	afterVia?: string;
+}
+
+export interface IamSimulationResult {
+	sample: IamSimulationDraft['sample'];
+	draft: IamSimulationDraft['change'];
+	/** Every decision that flips, at the resource the draft applies to. */
+	changes: IamSimulationChange[];
+	/** Distinct permissions gained and lost, for a compact editor summary. */
+	added: Permission[];
+	removed: Permission[];
+	/** Always false: a simulation reads, it never writes. */
+	applied: false;
+}
+
 export interface WhoCanEntry {
 	principalType: BindingPrincipalType;
 	principalId: string;
@@ -163,18 +202,7 @@ export class IamService {
 		const cached = this.#cache.get(key);
 		if (cached) return cached;
 
-		const rows = this.#sqlite
-			.query<BindingRow, [string, string | null, string, string]>(
-				`SELECT * FROM iam_bindings
-				 WHERE (org_id = ? OR org_id IS NULL)
-				   AND (
-				     (principal_type = ? AND principal_id = ?)
-				     OR (principal_type = 'group' AND principal_id IN (
-				       SELECT group_id FROM iam_group_members WHERE user_id = ?
-				     ))
-				   )`,
-			)
-			.all(principal.orgId, type, principal.userId, principal.userId);
+		const rows = this.bindingRows(principal.orgId, type, principal.userId);
 
 		const bindings = this.bindingsFromRows(principal.orgId, rows);
 		// Compatibility until I2 has seeded bindings everywhere: a principal with no binding rows
@@ -292,6 +320,116 @@ export class IamService {
 				out.push({ principalType: candidate.type, principalId: candidate.id, via: decision.via ?? null });
 		}
 		return out;
+	}
+
+	/**
+	 * Dry-run a draft binding or custom-role edit for one principal (IAM.md §9.3, I12). It compiles
+	 * the sample's current bindings, applies the change in memory, and reports the decisions that
+	 * flip. Nothing is written and `iamVersion` does not move.
+	 *
+	 * A binding draft is a direct grant to the sample and is evaluated at the draft's scope. A role
+	 * draft replaces a custom role's permissions for every binding of that role the sample holds;
+	 * built-in roles live in code and are rejected. Guardrails and conditions still apply, so the
+	 * diff is the decision the engine would reach, not a promise that the write is allowed.
+	 */
+	simulate(principal: Principal, draft: IamSimulationDraft): IamSimulationResult {
+		this.require(principal, 'iam:read', { type: 'org' });
+		const orgId = principal.orgId;
+		const { sample, change } = draft;
+		if (sample.principalType !== 'user' && sample.principalType !== 'serviceAccount')
+			throw new ValidationError('A simulation samples a user or a service account.');
+		const sampleId = sample.principalId.trim();
+		if (!sampleId) throw new ValidationError('A simulation needs a sample principal id.');
+
+		const type: BindingPrincipalType = sample.principalType;
+		const bindings = this.bindingsFromRows(
+			orgId,
+			this.bindingRows(orgId, type, sampleId),
+		);
+		const samplePrincipal: Principal = {
+			kind: type === 'user' ? 'user' : 'serviceAccount',
+			userId: sampleId,
+			orgId,
+			role: 'guest',
+			permissions: new Set<Permission>(),
+		};
+		const guardrails = this.guardrails(samplePrincipal, type);
+		const before = compileGrants({ orgId, bindings, guardrails });
+
+		let afterBindings: Binding[];
+		let resources: ResourceRef[];
+		if (change.kind === 'binding') {
+			const rolePermissions = this.rolePermissions(orgId, change.roleId);
+			if (!rolePermissions) throw new ValidationError(`Unknown role "${change.roleId}".`);
+			validateSimulatedScope(change.scope);
+			if (change.expiresAt != null && change.expiresAt <= this.ctx.now())
+				throw new ValidationError('An expiry must be in the future.');
+			afterBindings = [
+				...bindings,
+				{
+					id: 'simulated:binding',
+					roleId: change.roleId,
+					permissions: rolePermissions,
+					scope: change.scope,
+					expiresAt: change.expiresAt ?? null,
+					condition: change.condition ?? null,
+				},
+			];
+			resources = [resourceForScope(change.scope)];
+		} else {
+			const role = this.listRoles(orgId).find((entry) => entry.id === change.roleId);
+			if (!role) throw new ValidationError(`Unknown role "${change.roleId}".`);
+			if (role.builtIn)
+				throw new ValidationError(
+					'Built-in roles are defined in code; simulate a binding instead of editing one.',
+				);
+			const permissions = [...new Set(change.permissions.map((permission) => permission.trim()))];
+			if (permissions.length === 0)
+				throw new ValidationError('A role needs at least one permission.');
+			for (const permission of permissions)
+				if (!isPermission(permission))
+					throw new ValidationError(`"${permission}" is not a permission in the catalog.`);
+			const next = permissions as Permission[];
+			afterBindings = bindings.map((binding) =>
+				binding.roleId === change.roleId ? { ...binding, permissions: next } : binding,
+			);
+			resources = [
+				...new Map(
+					bindings
+						.filter((binding) => binding.roleId === change.roleId)
+						.map((binding) => [JSON.stringify(binding.scope), resourceForScope(binding.scope)] as const),
+				).values(),
+			];
+		}
+
+		const after = compileGrants({ orgId, bindings: afterBindings, guardrails });
+		const permissions = [...new Set([...before.index.keys(), ...after.index.keys()])].sort();
+		const context = { now: this.ctx.now(), credential: 'session' as const };
+		const changes: IamSimulationChange[] = [];
+		for (const resource of resources) {
+			for (const permission of permissions) {
+				const prior = authorize(before, { permission, resource, context });
+				const next = authorize(after, { permission, resource, context });
+				if (prior.allow === next.allow) continue;
+				changes.push({
+					permission,
+					resource,
+					before: prior.allow,
+					after: next.allow,
+					change: next.allow ? 'granted' : 'revoked',
+					beforeVia: prior.via,
+					afterVia: next.via,
+				});
+			}
+		}
+		return {
+			sample: { principalType: sample.principalType, principalId: sampleId },
+			draft: change,
+			changes,
+			added: [...new Set(changes.filter((entry) => entry.change === 'granted').map((entry) => entry.permission))],
+			removed: [...new Set(changes.filter((entry) => entry.change === 'revoked').map((entry) => entry.permission))],
+			applied: false,
+		};
 	}
 
 	/** Create the org binding a member's base role stands for, for every member not yet bound. */
@@ -767,8 +905,12 @@ export class IamService {
 	 * with no restriction is uncapped.
 	 */
 	private restrictionFor(principal: Principal): Restriction | undefined {
+		// A guest's capabilities come from project bindings, not the (empty) guest role. An MCP
+		// token's permission set was intersected with that role when it was built, so deriving a
+		// ceiling from it would cap a guest token to nothing and hide the very bindings that grant
+		// its access. The compiled bindings are the grant; an explicit restriction still narrows them.
 		const derived: Restriction | undefined =
-			principal.kind === 'apiKey' || principal.kind === 'mcp'
+			(principal.kind === 'apiKey' || principal.kind === 'mcp') && principal.role !== 'guest'
 				? { permissions: [...principal.permissions] as Permission[] }
 				: undefined;
 		const own = principal.restriction;
@@ -787,6 +929,22 @@ export class IamService {
 			...(permissions !== undefined ? { permissions } : {}),
 			...(resources !== undefined ? { resources } : {}),
 		};
+	}
+
+	/** The binding rows that apply to one principal, including its group bindings. */
+	private bindingRows(orgId: string, type: BindingPrincipalType, userId: string): BindingRow[] {
+		return this.#sqlite
+			.query<BindingRow, [string, string | null, string, string]>(
+				`SELECT * FROM iam_bindings
+				 WHERE (org_id = ? OR org_id IS NULL)
+				   AND (
+				     (principal_type = ? AND principal_id = ?)
+				     OR (principal_type = 'group' AND principal_id IN (
+				       SELECT group_id FROM iam_group_members WHERE user_id = ?
+				     ))
+				   )`,
+			)
+			.all(orgId, type, userId, userId);
 	}
 
 	private bindingsFromRows(orgId: string, rows: readonly BindingRow[]): Binding[] {
@@ -1002,6 +1160,32 @@ function selectorMatches(
 	const groups = Array.isArray(selector.groupIds) ? selector.groupIds : undefined;
 	if (groups && !groups.some((id) => groupIds.has(String(id)))) return false;
 	return true;
+}
+
+/** The resource a scope applies to, for evaluating a simulated grant. */
+function resourceForScope(scope: ScopeRef): ResourceRef {
+	switch (scope.type) {
+		case 'platform':
+			return { type: 'platform' };
+		case 'org':
+			return { type: 'org' };
+		case 'project':
+			return { type: 'project', id: scope.id };
+		case 'environment':
+			return { type: 'environment', id: scope.id, projectId: scope.projectId };
+		default:
+			return { type: scope.type, id: scope.id, projectId: scope.projectId };
+	}
+}
+
+/** The same shape rules `bind` enforces, so a simulation never reports a draft the write would reject. */
+function validateSimulatedScope(scope: ScopeRef): void {
+	if (scope.type === 'platform')
+		throw new ValidationError('Platform bindings are written by a platform admin, not simulated as an org draft.');
+	if (scope.type !== 'org' && !scope.id)
+		throw new ValidationError('A scoped binding needs a resource id.');
+	if (scope.type === 'environment' && !scope.projectId)
+		throw new ValidationError('An environment binding needs its project.');
 }
 
 function scopeToRow(scope: ScopeRef): { type: string; id: string | null; parentId: string | null } {

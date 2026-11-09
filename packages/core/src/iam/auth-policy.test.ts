@@ -13,6 +13,18 @@ describe('org auth policy validation', () => {
 		expect(policy.sessionMaxAge).toBeNull();
 		expect(policy.idleTimeout).toBeNull();
 		expect(policy.ipAllowlist).toEqual([]);
+		expect(policy.autoDisableUnusedServiceAccounts).toBe(false);
+	});
+
+	test('the unused service-account switch is additive and defaults off', () => {
+		const policy = normalizeAuthPolicy('org_1', {
+			autoDisableUnusedServiceAccounts: true,
+		});
+		expect(policy.autoDisableUnusedServiceAccounts).toBe(true);
+		expect(
+			normalizeAuthPolicy('org_1', {}, { ...policy, autoDisableUnusedServiceAccounts: true })
+				.autoDisableUnusedServiceAccounts,
+		).toBe(true);
 	});
 
 	test('normalises additive updates without dropping unchanged values', () => {

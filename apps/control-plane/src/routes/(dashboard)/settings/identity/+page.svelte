@@ -4,6 +4,7 @@
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import PowerIcon from '@lucide/svelte/icons/power';
 	import TrashIcon from '@lucide/svelte/icons/trash';
+	import UsersIcon from '@lucide/svelte/icons/users';
 	import type { UserPoolClientCreated, UserPoolClientView, UserPoolView } from '@skiff/contracts';
 	import { runAction } from '#lib/actions.js';
 	import { askConfirm } from '#lib/confirm.svelte.js';
@@ -39,6 +40,25 @@
 		void runAction('?/setPoolDisabled', {
 			poolId: pool.id,
 			disabled: String(!pool.disabled)
+		});
+	}
+
+	function toggleMfa(pool: UserPoolView) {
+		void runAction('?/setPoolMfaRequired', {
+			poolId: pool.id,
+			mfaRequired: String(!pool.mfaRequired)
+		});
+	}
+
+	function removeGroup(pool: UserPoolView, groupId: string, name: string) {
+		askConfirm({
+			title: `Remove the ${name} group?`,
+			description:
+				'Members lose the group immediately, and access rules that match it stop allowing them. Users are not deleted.',
+			confirmLabel: 'Remove group',
+			tone: 'danger',
+			action: '?/deleteGroup',
+			fields: { poolId: pool.id, groupId }
 		});
 	}
 
@@ -128,6 +148,9 @@
 										{pool.disabled ? 'Disabled' : 'Enabled'}
 									</Badge>
 									<Badge variant="outline">{pool.signupMode === 'open' ? 'Open sign-up' : 'Invite only'}</Badge>
+									<Badge variant={pool.mfaRequired ? 'success' : 'neutral'}>
+										{pool.mfaRequired ? 'MFA required' : 'MFA optional'}
+									</Badge>
 									<Badge variant="secondary" class="font-mono">{pool.engine}</Badge>
 								</p>
 								<p class="max-w-2xl text-xs text-pretty text-muted-foreground">
@@ -143,6 +166,9 @@
 							{#if access?.update}
 								<Button size="sm" variant="outline" onclick={() => togglePool(pool)}>
 									<PowerIcon />{pool.disabled ? 'Enable' : 'Disable'}
+								</Button>
+								<Button size="sm" variant="outline" onclick={() => toggleMfa(pool)}>
+									{pool.mfaRequired ? 'Make MFA optional' : 'Require MFA'}
 								</Button>
 							{/if}
 						</div>
@@ -305,6 +331,105 @@
 								</form>
 							{/if}
 						</div>
+
+						{#if access?.manageUsers}
+							<div class="space-y-3 rounded-lg border bg-muted/20 p-3">
+								<div class="flex flex-wrap items-center justify-between gap-2">
+									<p class="flex items-center gap-2 text-sm font-medium">
+										<UsersIcon class="size-4 text-muted-foreground" />
+										Groups
+										<Badge variant="secondary" class="tabular-nums">
+											{(data.groups[pool.id] ?? []).length}
+										</Badge>
+									</p>
+									<form method="POST" action="?/createGroup" class="flex flex-wrap items-center gap-2">
+										<input type="hidden" name="poolId" value={pool.id} />
+										<Input
+											name="name"
+											required
+											maxlength={80}
+											placeholder="Group name"
+											class="h-8 w-40"
+											aria-label="New group name"
+										/>
+										<Button type="submit" size="sm" variant="outline">
+											<PlusIcon />Add group
+										</Button>
+									</form>
+								</div>
+								<p class="text-xs text-muted-foreground">
+									Group names travel as the <code class="font-mono">groups</code> claim in access
+									tokens and userinfo, and Skiff Access can match them.
+								</p>
+
+								{#if (data.groups[pool.id] ?? []).length === 0}
+									<p class="text-xs text-muted-foreground">No groups yet.</p>
+								{:else}
+									<ul class="space-y-2">
+										{#each data.groups[pool.id] ?? [] as group (group.id)}
+											{@const members = data.groupMembers[group.id] ?? []}
+											<li class="space-y-2 rounded-lg border bg-background p-2">
+												<div class="flex flex-wrap items-center justify-between gap-2">
+													<p class="flex items-center gap-2 text-sm">
+														<span class="font-medium">{group.name}</span>
+														<Badge variant="outline" class="tabular-nums">
+															{group.memberCount} member{group.memberCount === 1 ? '' : 's'}
+														</Badge>
+													</p>
+													<Button
+														size="icon-sm"
+														variant="ghost"
+														aria-label="Remove the {group.name} group"
+														onclick={() => removeGroup(pool, group.id, group.name)}
+													>
+														<TrashIcon />
+													</Button>
+												</div>
+												{#if members.length > 0}
+													<ul class="space-y-1">
+														{#each members as member (member.userId)}
+															<li class="flex items-center justify-between gap-2 text-xs">
+																<span class="min-w-0 truncate">{member.email}</span>
+																<form method="POST" action="?/removeGroupMember">
+																	<input type="hidden" name="poolId" value={pool.id} />
+																	<input type="hidden" name="groupId" value={group.id} />
+																	<input type="hidden" name="userId" value={member.userId} />
+																	<Button type="submit" size="sm" variant="ghost">
+																		Remove
+																	</Button>
+																</form>
+															</li>
+														{/each}
+													</ul>
+												{/if}
+												<form
+													method="POST"
+													action="?/addGroupMember"
+													class="flex flex-wrap items-center gap-2"
+												>
+													<input type="hidden" name="poolId" value={pool.id} />
+													<input type="hidden" name="groupId" value={group.id} />
+													<NativeSelect.Root
+														name="userId"
+														required
+														class="h-8 w-56"
+														aria-label="User to add to {group.name}"
+													>
+														<NativeSelect.Option value="">Choose a user</NativeSelect.Option>
+														{#each data.users[pool.id] ?? [] as user (user.id)}
+															<NativeSelect.Option value={user.id}>
+																{user.email}
+															</NativeSelect.Option>
+														{/each}
+													</NativeSelect.Root>
+													<Button type="submit" size="sm" variant="outline">Add member</Button>
+												</form>
+											</li>
+										{/each}
+									</ul>
+								{/if}
+							</div>
+						{/if}
 					</div>
 				{/each}
 			</div>
@@ -319,58 +444,42 @@
 	</Panel>
 
 	<Panel
-		title="Not yet"
+		title="Remaining"
 		icon={FingerprintIcon}
-		description="This slice stores pools, clients and signing keys. It does not host users or sign-in yet, and says so plainly."
+		description="Hosted sign-in, users, sessions, passkeys and TOTP MFA are live. These pieces are still to come."
 	>
 		<div class="space-y-4">
 			<div class="rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm">
-				<p class="font-medium">Discovery and JWKS are real; the sign-in endpoints are not.</p>
+				<p class="font-medium">Discovery, JWKS, sign-in and tokens are real.</p>
 				<p class="mt-1 text-muted-foreground">
-					The issuer, discovery document and public key set are served now, so clients can be
-					configured and keys can be verified. The authorization, token and userinfo URLs it
-					advertises return nothing until the native identity engine ships (IAM.md I27).
+					The issuer, discovery document, JWKS, hosted sign-in pages and the OIDC code flow run
+					in-process. Splitting the engine into its own identity process is deferred (IAM.md I27).
 				</p>
 			</div>
 			<ul class="grid gap-3 sm:grid-cols-2">
 				<li class="rounded-lg border p-3">
-					<p class="text-sm font-medium">Hosted sign-in UI</p>
+					<p class="text-sm font-medium">Social login</p>
 					<p class="mt-1 text-xs text-muted-foreground">
-						Themed sign-in, sign-up, reset and MFA pages with a custom domain.
+						Google, GitHub, Apple and Microsoft, with a support MFA reset.
 					</p>
 				</li>
 				<li class="rounded-lg border p-3">
-					<p class="text-sm font-medium">Users and passwords</p>
+					<p class="text-sm font-medium">Email OTP</p>
 					<p class="mt-1 text-xs text-muted-foreground">
-						Email + password, passkeys, magic links and email OTP. No user row lives in the
-						control-plane database.
-					</p>
-				</li>
-				<li class="rounded-lg border p-3">
-					<p class="text-sm font-medium">Sessions</p>
-					<p class="mt-1 text-xs text-muted-foreground">
-						Sign-in sessions, refresh tokens, revocation and per-device views.
-					</p>
-				</li>
-				<li class="rounded-lg border p-3">
-					<p class="text-sm font-medium">MFA and social login</p>
-					<p class="mt-1 text-xs text-muted-foreground">
-						TOTP, Google, GitHub, Apple and Microsoft, with an MFA reset for support.
+						A one-time code by mail alongside the existing magic link.
 					</p>
 				</li>
 				<li class="rounded-lg border p-3">
 					<p class="text-sm font-medium">Import and export</p>
 					<p class="mt-1 text-xs text-muted-foreground">
-						JSON export (including scrypt hashes) and imports from Auth0, Cognito and Firebase.
+						JSON export (including password hashes) and imports from Auth0, Cognito and Firebase.
 					</p>
 				</li>
 				<li class="rounded-lg border p-3">
-					<p class="text-sm font-medium">Attachment env vars</p>
+					<p class="text-sm font-medium">Identity process</p>
 					<p class="mt-1 text-xs text-muted-foreground">
-						Attaching a pool will inject <code class="font-mono">&lt;P&gt;_ISSUER</code>,
-						<code class="font-mono">&lt;P&gt;_CLIENT_ID</code> and
-						<code class="font-mono">&lt;P&gt;_CLIENT_SECRET</code>, plus the
-						<code class="font-mono">env.AUTH</code> function binding and pool events.
+						One static service per pool on its own disk, with Litestream and the
+						<code class="font-mono">auth.&lt;sitesDomain&gt;</code> edge route.
 					</p>
 				</li>
 			</ul>

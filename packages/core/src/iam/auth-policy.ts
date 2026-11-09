@@ -44,6 +44,8 @@ export interface OrgAuthPolicy {
 	idleTimeout: number | null;
 	ipAllowlist: string[];
 	breakGlassUserIds: string[];
+	/** Disable service accounts unused for 90 days on the daily sweep. Default off. */
+	autoDisableUnusedServiceAccounts: boolean;
 }
 
 export type OrgAuthPolicyInput = Partial<
@@ -59,6 +61,8 @@ interface AuthPolicyRow {
 	idle_timeout: number | null;
 	ip_allowlist_json: string;
 	break_glass_user_ids_json: string;
+	/** Absent on a database that has not run migration 0104 yet; read as off. */
+	auto_disable_unused_service_accounts?: number;
 }
 
 /** The defaults: no restrictions, every method. Missing rows read as this. */
@@ -72,6 +76,7 @@ export function defaultAuthPolicy(orgId: string): OrgAuthPolicy {
 		idleTimeout: null,
 		ipAllowlist: [],
 		breakGlassUserIds: [],
+		autoDisableUnusedServiceAccounts: false,
 	};
 }
 
@@ -209,6 +214,8 @@ export function normalizeAuthPolicy(
 		throw new ValidationError(
 			'Turning on required SSO needs at least one break-glass owner, or an IdP outage locks everyone out.'
 		);
+	const autoDisableUnusedServiceAccounts =
+		input.autoDisableUnusedServiceAccounts ?? base.autoDisableUnusedServiceAccounts;
 
 	return {
 		orgId,
@@ -219,6 +226,7 @@ export function normalizeAuthPolicy(
 		idleTimeout,
 		ipAllowlist,
 		breakGlassUserIds,
+		autoDisableUnusedServiceAccounts,
 	};
 }
 
@@ -232,6 +240,7 @@ function rowToPolicy(row: AuthPolicyRow): OrgAuthPolicy {
 		idleTimeout: row.idle_timeout ?? null,
 		ipAllowlist: parseStringList(row.ip_allowlist_json),
 		breakGlassUserIds: parseStringList(row.break_glass_user_ids_json),
+		autoDisableUnusedServiceAccounts: row.auto_disable_unused_service_accounts === 1,
 	};
 }
 
@@ -269,8 +278,9 @@ export class AuthPolicyService {
 			this.ctx.sqlite.run(
 				`INSERT INTO org_auth_policies
 				   (org_id, require_sso, require_2fa, allowed_methods_json, session_max_age,
-				    idle_timeout, ip_allowlist_json, break_glass_user_ids_json)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+				    idle_timeout, ip_allowlist_json, break_glass_user_ids_json,
+				    auto_disable_unused_service_accounts)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 				 ON CONFLICT(org_id) DO UPDATE SET
 				   require_sso = excluded.require_sso,
 				   require_2fa = excluded.require_2fa,
@@ -278,7 +288,8 @@ export class AuthPolicyService {
 				   session_max_age = excluded.session_max_age,
 				   idle_timeout = excluded.idle_timeout,
 				   ip_allowlist_json = excluded.ip_allowlist_json,
-				   break_glass_user_ids_json = excluded.break_glass_user_ids_json`,
+				   break_glass_user_ids_json = excluded.break_glass_user_ids_json,
+				   auto_disable_unused_service_accounts = excluded.auto_disable_unused_service_accounts`,
 				[
 					policy.orgId,
 					policy.requireSso ? 1 : 0,
@@ -288,12 +299,13 @@ export class AuthPolicyService {
 					policy.idleTimeout,
 					JSON.stringify(policy.ipAllowlist),
 					JSON.stringify(policy.breakGlassUserIds),
+					policy.autoDisableUnusedServiceAccounts ? 1 : 0,
 				]
 			);
 		} catch (cause) {
-			if (String(cause).includes('no such table'))
+			if (String(cause).includes('no such table') || String(cause).includes('no such column'))
 				throw new ValidationError(
-					'The org auth-policy table is missing. Run the database migrations, then save again.'
+					'The org auth-policy table is missing a required column. Run the database migrations, then save again.'
 				);
 			throw cause;
 		}

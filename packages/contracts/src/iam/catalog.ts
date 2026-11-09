@@ -252,6 +252,16 @@ const TOKEN_SESSION_ONLY: readonly Permission[] = [
 	'org:update',
 ];
 
+/**
+ * Writes a client may perform over MCP once the human confirms the exact call (a chat click or
+ * the client's own prompt). They stay token-denied, so an API key or a session gains nothing:
+ * this only makes the tool visible, and the confirmation is the gate.
+ */
+export const mcpConfirmedWrites: readonly Permission[] = [
+	'serviceAccount:create',
+	'iam:manage-bindings',
+];
+
 /** Never offered to an MCP client, even when a token could hold it. */
 const MCP_DENY: readonly Permission[] = [
 	'accessKey:create',
@@ -259,7 +269,6 @@ const MCP_DENY: readonly Permission[] = [
 	'accessKey:revoke-any',
 	'apiKey:create',
 	'apiKey:revoke',
-	'serviceAccount:create',
 	'serviceAccount:update',
 	'serviceAccount:delete',
 	'serviceAccount:impersonate',
@@ -326,7 +335,9 @@ export function buildPermissionCatalog(
 						: TOKEN_SESSION_ONLY.includes(permission)
 							? 'session-only'
 							: 'allow',
-				mcp: risk !== 'secret' && risk !== 'admin' && !MCP_DENY.includes(permission),
+				mcp:
+					mcpConfirmedWrites.includes(permission) ||
+					(risk !== 'secret' && risk !== 'admin' && !MCP_DENY.includes(permission)),
 				agentDefault: agentDefaults.has(permission),
 				description: `${resource} ${action.replace(/-/g, ' ')}`,
 				...(DEPRECATED_PERMISSIONS.includes(permission) ? { deprecated: true as const } : {}),

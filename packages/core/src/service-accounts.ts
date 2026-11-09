@@ -27,12 +27,9 @@ const DEFAULT_IMPERSONATION_TTL_SECONDS = 60 * 60;
 /** IAM.md §9.5: a service account with no use for this long is flagged (and may be disabled). */
 export const SERVICE_ACCOUNT_UNUSED_DAYS = 90;
 
-/**
- * The org policy that would turn the flag into an automatic disable has no column yet (IAM.md §9.5).
- * Until it does, the sweep only reports unused accounts; flip this constant when policy storage
- * lands. `ServiceAccountService.sweepUnused` already supports the disable path.
- */
-export const SERVICE_ACCOUNT_AUTO_DISABLE_UNUSED = false;
+// The org policy that turns the unused-account flag into an automatic disable lives in
+// `org_auth_policies.auto_disable_unused_service_accounts` (IAM.md §9.5). The daily sweep reads it
+// through `AuthPolicyService`; without it the sweep only reports unused accounts.
 
 interface ServiceAccountRow {
 	id: string;
@@ -190,8 +187,8 @@ export class ServiceAccountService {
 
 	/**
 	 * The IAM daily sweep's service-account pass. `unused` is every enabled account at or beyond
-	 * `minDays`; `autoDisabled` is non-empty only when the caller passes `autoDisable` (the org
-	 * policy does not exist yet, so the maintenance sweep passes {@link SERVICE_ACCOUNT_AUTO_DISABLE_UNUSED}).
+	 * `minDays`; `autoDisabled` is non-empty only when the caller passes `autoDisable`, which the
+	 * maintenance sweep reads from the org auth policy (default off).
 	 * Rows are never deleted: disabling keeps keys, bindings and history (IAM.md §7.2).
 	 */
 	sweepUnused(

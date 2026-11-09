@@ -276,7 +276,7 @@ describe('daily IAM maintenance', () => {
 			unusedServiceAccounts: 1,
 			serviceAccountsDisabled: 0,
 		});
-		// The policy column does not exist yet, so the sweep only reports; the row stays enabled.
+		// The org policy is off by default, so the sweep only reports; the row stays enabled.
 		expect(
 			opened.sqlite
 				.query<{ disabled_at: number | null }, [string]>(
@@ -298,6 +298,39 @@ describe('daily IAM maintenance', () => {
 		expect(
 			opened.sqlite.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM service_accounts').get()?.n,
 		).toBe(3);
+	});
+
+	test('auto-disables unused service accounts only when the org policy allows it', async () => {
+		insertServiceAccount('sa_old', now - 100 * 86_400_000);
+
+		// Off by default: the sweep reports but leaves the account enabled.
+		const first = await core.maintenance.run();
+		expect(first.iam).toMatchObject({
+			unusedServiceAccounts: 1,
+			serviceAccountsDisabled: 0,
+		});
+		expect(
+			opened.sqlite
+				.query<{ disabled_at: number | null }, [string]>(
+					'SELECT disabled_at FROM service_accounts WHERE id = ?',
+				)
+				.get('sa_old')?.disabled_at,
+		).toBeNull();
+
+		now += 86_400_000;
+		core.authPolicy.update(principal(), { autoDisableUnusedServiceAccounts: true });
+		const second = await core.maintenance.run();
+		expect(second.iam).toMatchObject({
+			unusedServiceAccounts: 1,
+			serviceAccountsDisabled: 1,
+		});
+		expect(
+			opened.sqlite
+				.query<{ disabled_at: number | null }, [string]>(
+					'SELECT disabled_at FROM service_accounts WHERE id = ?',
+				)
+				.get('sa_old')?.disabled_at,
+		).toBe(now);
 	});
 });
 

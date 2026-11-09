@@ -41,6 +41,9 @@ skif deploy ./dist --project my-site --json
 | `projects delete\|restore\|purge <slug…>` | Bulk actions: plan, confirm, apply (see below) |
 | `projects trash` | List deleted projects and when each is purged |
 | `deployments <project>` | List deployments |
+| `workload [show\|set\|reset\|capacity]` | Runtime spec: command, image, port, memory, idle stop, workers and node capacity |
+| `environments [list\|create\|update\|remove\|promote]` | Named environments and their deployment pointers |
+| `domains [list\|add\|check\|remove]` | Custom domains, DNS records and verification |
 | `promote <project> <deploymentId>` | Point production at a deployment |
 | `rollback <project>` | Move production back one deployment |
 | `logs <project>` | Show recent project logs |

@@ -494,6 +494,12 @@ export const auth = betterAuth({
 			// Group claims can change between sign-ins (someone joins or leaves a team at the IdP),
 			// so JIT provisioning runs every time and replaces only `source = 'sso'` membership.
 			provisionUserOnEveryLogin: true,
+			// SAML Single Logout (IAM.md I19, §8.3). The plugin then serves
+			// `/api/auth/sso/saml2/sp/slo/:providerId`: an IdP-initiated LogoutRequest deletes the
+			// matching platform session (and the cookie if it is the current one) before answering
+			// with a LogoutResponse. The SP metadata advertises that URL with both bindings, and
+			// `/sso/logout` keeps its existing local-sign-out redirect for SP-initiated flows.
+			saml: { enableSingleLogout: true },
 			provisionUser: async ({ user, provider, userInfo }) => {
 				provisionSsoUser({ user, provider, userInfo });
 			},

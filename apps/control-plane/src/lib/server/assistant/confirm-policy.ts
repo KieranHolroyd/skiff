@@ -58,7 +58,12 @@ export const CONFIRM_TOOLS: ReadonlySet<string> = new Set([
 	'create_log_drain',
 	// Pipelines run workflow code with the repository's secrets and may deploy (docs/PIPELINES.md §7).
 	'dispatch_workflow',
-	'rerun_pipeline_run'
+	'rerun_pipeline_run',
+	// IAM writes (IAM.md §9.3): a machine principal, a grant or a revocation all widen or narrow
+	// access for a person, so the chat asks before the handler runs.
+	'create_service_account',
+	'bind_role',
+	'unbind_role'
 ]);
 
 export function needsConfirmation(

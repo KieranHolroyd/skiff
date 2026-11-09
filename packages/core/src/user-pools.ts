@@ -30,6 +30,8 @@ import {
 	type UserPoolClientView,
 	type UserPoolCreate,
 	type UserPoolEngineId,
+	type UserPoolGroupMemberView,
+	type UserPoolGroupView,
 	type UserPoolJwks,
 	type UserPoolOidcDiscovery,
 	type UserPoolSignupMode,
@@ -58,6 +60,11 @@ export function userPoolSigningPurpose(poolId: string): `pool:${string}` {
  */
 export function userPoolRequireEmailVerificationKey(poolId: string): string {
 	return `user_pool.${poolId}.require_email_verification`;
+}
+
+/** The per-pool "ask every user to enrol TOTP MFA" switch; a settings row like the one above. */
+export function userPoolMfaRequiredKey(poolId: string): string {
+	return `user_pool.${poolId}.mfa_required`;
 }
 
 /**
@@ -146,6 +153,8 @@ export interface UserPoolPublicInfo {
 	signupMode: UserPoolSignupMode;
 	/** Password sign-in waits for email verification. Always true for an invite-only pool. */
 	requireEmailVerification: boolean;
+	/** The pool asks every user to enrol TOTP MFA. */
+	mfaRequired: boolean;
 	theme: UserPoolTheme;
 }
 
@@ -197,6 +206,7 @@ export class UserPoolService {
 			issuer: row.issuer,
 			signupMode: row.signup_mode as UserPoolSignupMode,
 			requireEmailVerification: this.#requireEmailVerification(row),
+			mfaRequired: this.#mfaRequired(row),
 			theme: parseTheme(row.theme_json)
 		};
 	}
@@ -262,6 +272,94 @@ export class UserPoolService {
 		return this.ctx.userPoolEngine.listInvites(row.id);
 	}
 
+	// ---------------------------------------------------------------- groups
+
+	listGroups(principal: Principal, poolId: string): UserPoolGroupView[] {
+		const row = this.#row(principal, poolId);
+		this.#require(principal, 'userPool:manage-users', row);
+		return this.ctx.userPoolEngine.listGroups(row.id);
+	}
+
+	listGroupMembers(principal: Principal, poolId: string, groupId: string): UserPoolGroupMemberView[] {
+		const row = this.#row(principal, poolId);
+		this.#require(principal, 'userPool:manage-users', row);
+		return this.ctx.userPoolEngine.listGroupMembers(row.id, groupId);
+	}
+
+	createGroup(principal: Principal, poolId: string, name: string): UserPoolGroupView {
+		const row = this.#row(principal, poolId);
+		this.#require(principal, 'userPool:manage-users', row);
+		const group = this.ctx.userPoolEngine.createGroup(row.id, name);
+		this.ctx.audit.record({
+			principal,
+			action: 'user_pool.group.create',
+			resource: 'user_pool_group',
+			resourceId: group.id,
+			args: { poolId: row.id, pool: row.name, name: group.name },
+			result: 'ok'
+		});
+		return group;
+	}
+
+	renameGroup(principal: Principal, poolId: string, groupId: string, name: string): UserPoolGroupView {
+		const row = this.#row(principal, poolId);
+		this.#require(principal, 'userPool:manage-users', row);
+		const group = this.ctx.userPoolEngine.renameGroup(row.id, groupId, name);
+		this.ctx.audit.record({
+			principal,
+			action: 'user_pool.group.rename',
+			resource: 'user_pool_group',
+			resourceId: group.id,
+			args: { poolId: row.id, pool: row.name, name: group.name },
+			result: 'ok'
+		});
+		return group;
+	}
+
+	deleteGroup(principal: Principal, poolId: string, groupId: string): void {
+		const row = this.#row(principal, poolId);
+		this.#require(principal, 'userPool:manage-users', row);
+		if (!this.ctx.userPoolEngine.deleteGroup(row.id, groupId))
+			throw new NotFoundError('User pool group');
+		this.ctx.audit.record({
+			principal,
+			action: 'user_pool.group.delete',
+			resource: 'user_pool_group',
+			resourceId: groupId,
+			args: { poolId: row.id, pool: row.name },
+			result: 'ok'
+		});
+	}
+
+	addGroupMember(principal: Principal, poolId: string, groupId: string, userId: string): void {
+		const row = this.#row(principal, poolId);
+		this.#require(principal, 'userPool:manage-users', row);
+		this.ctx.userPoolEngine.addGroupMember(row.id, groupId, userId);
+		this.ctx.audit.record({
+			principal,
+			action: 'user_pool.group.member.add',
+			resource: 'user_pool_group',
+			resourceId: groupId,
+			args: { poolId: row.id, pool: row.name, userId },
+			result: 'ok'
+		});
+	}
+
+	removeGroupMember(principal: Principal, poolId: string, groupId: string, userId: string): void {
+		const row = this.#row(principal, poolId);
+		this.#require(principal, 'userPool:manage-users', row);
+		if (!this.ctx.userPoolEngine.removeGroupMember(row.id, groupId, userId))
+			throw new NotFoundError('User pool group member');
+		this.ctx.audit.record({
+			principal,
+			action: 'user_pool.group.member.remove',
+			resource: 'user_pool_group',
+			resourceId: groupId,
+			args: { poolId: row.id, pool: row.name, userId },
+			result: 'ok'
+		});
+	}
+
 	// ---------------------------------------------------------------- lifecycle
 
 	async create(principal: Principal, raw: UserPoolCreate): Promise<UserPoolView> {
@@ -308,6 +406,7 @@ export class UserPoolService {
 			throw cause;
 		}
 		if (input.requireEmailVerification) this.#setRequireEmailVerification(id, true);
+		if (input.mfaRequired) this.#setMfaRequired(id, true);
 		this.ctx.audit.record({
 			principal,
 			action: 'user_pool.create',
@@ -318,6 +417,7 @@ export class UserPoolService {
 				engine: input.engine,
 				signupMode: input.signupMode,
 				requireEmailVerification: input.requireEmailVerification === true,
+				mfaRequired: input.mfaRequired === true,
 				issuer,
 				signingKeyId: key.kid
 			},
@@ -337,6 +437,7 @@ export class UserPoolService {
 		const requireEmailVerification =
 			signupMode === 'invite' ||
 			(patch.requireEmailVerification ?? this.#requireEmailVerification(row));
+		const mfaRequired = patch.mfaRequired ?? this.#mfaRequired(row);
 		const disabledAt =
 			patch.disabled === undefined
 				? row.disabled_at
@@ -358,12 +459,14 @@ export class UserPoolService {
 			description === row.description &&
 			signupMode === row.signup_mode &&
 			requireEmailVerification === this.#requireEmailVerification(row) &&
+			mfaRequired === this.#mfaRequired(row) &&
 			disabledAt === row.disabled_at &&
 			JSON.stringify(theme) === JSON.stringify(parseTheme(row.theme_json));
 		if (unchanged) return this.#view(row);
 
 		if (patch.requireEmailVerification !== undefined)
 			this.#setRequireEmailVerification(row.id, patch.requireEmailVerification);
+		if (patch.mfaRequired !== undefined) this.#setMfaRequired(row.id, patch.mfaRequired);
 		this.ctx.sqlite.run(
 			`UPDATE user_pools
 			    SET name = ?, description = ?, signup_mode = ?, theme_json = ?, disabled_at = ?, updated_at = ?
@@ -389,6 +492,7 @@ export class UserPoolService {
 				description,
 				signupMode,
 				requireEmailVerification,
+				mfaRequired,
 				disabled: disabledAt !== null,
 				...(row.name !== name ? { previousName: row.name } : {})
 			},
@@ -722,7 +826,7 @@ export class UserPoolService {
 				'none'
 			],
 			code_challenge_methods_supported: ['S256'],
-			claims_supported: ['iss', 'sub', 'aud', 'exp', 'iat', 'name', 'email', 'email_verified']
+			claims_supported: ['iss', 'sub', 'aud', 'exp', 'iat', 'name', 'email', 'email_verified', 'groups']
 		};
 	}
 
@@ -747,6 +851,27 @@ export class UserPoolService {
 
 	#setRequireEmailVerification(poolId: string, value: boolean): void {
 		const key = userPoolRequireEmailVerificationKey(poolId);
+		if (!value) {
+			this.ctx.sqlite.run('DELETE FROM settings WHERE key = ?', [key]);
+			return;
+		}
+		this.ctx.sqlite.run(
+			`INSERT INTO settings (key, value, updated_at) VALUES (?, '1', ?)
+			 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+			[key, this.ctx.now()]
+		);
+	}
+
+	#mfaRequired(row: UserPoolRow): boolean {
+		return (
+			this.ctx.sqlite
+				.query<{ value: string }, [string]>('SELECT value FROM settings WHERE key = ?')
+				.get(userPoolMfaRequiredKey(row.id))?.value === '1'
+		);
+	}
+
+	#setMfaRequired(poolId: string, value: boolean): void {
+		const key = userPoolMfaRequiredKey(poolId);
 		if (!value) {
 			this.ctx.sqlite.run('DELETE FROM settings WHERE key = ?', [key]);
 			return;
@@ -870,6 +995,7 @@ export class UserPoolService {
 			signingKeyId: row.signing_key_id,
 			signupMode: row.signup_mode as UserPoolSignupMode,
 			requireEmailVerification: this.#requireEmailVerification(row),
+			mfaRequired: this.#mfaRequired(row),
 			theme: parseTheme(row.theme_json),
 			disabled: row.disabled_at !== null,
 			disabledAt: row.disabled_at,

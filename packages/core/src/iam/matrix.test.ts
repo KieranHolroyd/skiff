@@ -114,9 +114,12 @@ describe('permission matrix', () => {
 	});
 
 	test('every permission is classified for tokens and MCP', () => {
+		const confirmedMcpWrites: readonly Permission[] = ['serviceAccount:create', 'iam:manage-bindings'];
 		for (const permission of allPermissions) {
 			const meta = permissionCatalog[permission];
-			if (meta.tokens === 'deny') expect(meta.mcp).toBe(false);
+			// Confirmed MCP writes are the one deliberate exception: the human click is the gate.
+			if (meta.tokens === 'deny' && !confirmedMcpWrites.includes(permission))
+				expect(meta.mcp).toBe(false);
 			expect(['none', 'window', 'always']).toContain(meta.stepUp);
 		}
 	});

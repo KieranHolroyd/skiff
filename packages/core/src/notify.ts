@@ -46,11 +46,43 @@ export interface IamNotification {
 	detail: string;
 	severity?: AlertMessage['severity'];
 	url?: string;
+	/**
+	 * Addresses of the people this notification is for (an approver, requester or reviewer). The
+	 * email notifier sends to these instead of its configured address. When omitted or empty, every
+	 * configured channel receives the notification as before. Addresses are never written to audit.
+	 */
+	recipients?: readonly string[];
+}
+
+/** The email notifier's targeted send; other notifiers only implement `notify`. */
+interface TargetedNotifier extends Notifier {
+	notifyTo(to: readonly string[], alert: AlertMessage): Promise<void>;
+}
+
+function isTargetedNotifier(notifier: Notifier): notifier is TargetedNotifier {
+	return notifier.name === 'email' && typeof (notifier as Partial<TargetedNotifier>).notifyTo === 'function';
+}
+
+/** Normalise addresses once; a malformed recipient is dropped rather than failing the caller. */
+export function notificationRecipients(addresses: readonly string[] | undefined): string[] {
+	const out: string[] = [];
+	for (const raw of addresses ?? []) {
+		const address = raw.trim().toLowerCase();
+		if (!address || address.length > 320 || !address.includes('@') || /[\r\n\0]/.test(address)) continue;
+		if (!out.includes(address)) out.push(address);
+		if (out.length >= 50) break;
+	}
+	return out;
 }
 
 /**
  * Deliver an IAM notification through every configured channel. A channel failing never fails the
  * caller (the governance write has already committed), and no channel configured is a no-op.
+ *
+ * When the notification names recipients, the email channel sends one targeted message per address
+ * and does not also send to its configured inbox. Other channels still receive the notification, so
+ * a webhook or chat alert keeps working. If no address could be resolved, the email channel falls
+ * back to its configured address like any other channel.
  */
 export async function notifyIam(notifiers: readonly Notifier[], notification: IamNotification): Promise<void> {
 	if (notifiers.length === 0) return;
@@ -62,7 +94,14 @@ export async function notifyIam(notifiers: readonly Notifier[], notification: Ia
 		status: 'firing',
 		...(notification.url ? { url: notification.url } : {}),
 	};
-	const results = await Promise.allSettled(notifiers.map((notifier) => notifier.notify(alert)));
+	const recipients = notificationRecipients(notification.recipients);
+	const results = await Promise.allSettled(
+		notifiers.map((notifier) =>
+			recipients.length > 0 && isTargetedNotifier(notifier)
+				? notifier.notifyTo(recipients, alert)
+				: notifier.notify(alert),
+		),
+	);
 	for (const [index, result] of results.entries()) {
 		if (result.status === 'rejected')
 			console.error(`[iam] ${notifiers[index]?.name ?? 'notifier'} failed:`, result.reason);
@@ -84,11 +123,25 @@ export class EmailNotifier implements Notifier {
 	) {}
 
 	async notify(alert: { title: string; detail: string; severity: string }): Promise<void> {
-		await this.transport.send({
-			to: this.to,
-			subject: `[Skiff ${alert.severity}] ${alert.title}`,
-			text: alert.detail,
-		});
+		await this.notifyTo([this.to], alert);
+	}
+
+	/** Send the same alert to an explicit list (JIT/review notifications name their people). */
+	async notifyTo(
+		to: readonly string[],
+		alert: { title: string; detail: string; severity: string },
+	): Promise<void> {
+		const recipients = notificationRecipients(to);
+		if (recipients.length === 0) return;
+		await Promise.all(
+			recipients.map((recipient) =>
+				this.transport.send({
+					to: recipient,
+					subject: `[Skiff ${alert.severity}] ${alert.title}`,
+					text: alert.detail,
+				}),
+			),
+		);
 	}
 }
 

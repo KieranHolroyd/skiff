@@ -1,11 +1,12 @@
 # Skiff — Cloud identity federation
 
-Status: **issuer, keys, workload tokens and token exchange built; cloud federation works; Skiff's
-own consumers remain.** The platform issuer, discovery document, JWKS, signing-key ring, workload
+Status: **issuer, keys, workload tokens, token exchange and Skiff's own consumers built; cloud
+federation works.** The platform issuer, discovery document, JWKS, signing-key ring, workload
 tokens, the node metadata endpoint and `POST /api/iam/token` are implemented and covered by unit
 tests. AWS, GCP and Azure can trust the issuer and exchange a workload token for temporary cloud
-credentials without a stored secret. Skiff's REST API, registry realm and MCP do not yet accept a
-workload or STS token; see §7. IAM.md tracks the plan (I16–I18, §7.3–§7.4) and API.md the routes.
+credentials without a stored secret. Skiff's REST API, MCP and registry realm now accept a workload
+or STS token; storage STS and automatic cloud setup remain (§7). IAM.md tracks the plan (I16–I18,
+§7.3–§7.4) and API.md the routes.
 
 Two different things share the same issuer:
 
@@ -57,6 +58,10 @@ Rotation is next → active → retired:
   signed moments before a rotation therefore still verifies.
 - Leave a `next` published for 24 hours before rotating again. That cadence is policy, not a
   correctness requirement: the retired-key window is what makes rotation safe.
+- The maintenance sweep rotates `registry`, `oidc`, `sts` and `workload` every 30 days, publishing
+  a `next` key first and promoting it only after the 24-hour overlap. `GET /api/v1/iam/keys` shows
+  the decision it would take; `POST /api/v1/iam/keys/rotate` and `skif iam keys rotate` run it on
+  demand (D196).
 
 `purpose` is independent: rotating `sts` does not change `workload` or `oidc`. User pools rotate
 under `pool:<id>` and publish their own issuer and JWKS, not the platform one.
@@ -506,32 +511,37 @@ the raw request above; configure the federated credential with the Skiff issuer 
 
 ---
 
-## 7. What is not built
+## 7. What is consumed, and what is not
 
-The issuer, key ring, workload token delivery, metadata endpoint and token exchange are the built
-parts. The following are not wired, and docs that describe them as working are ahead of the code:
+Skiff's own surfaces verify the same tokens the issuer mints (D195):
 
-- **Consumers of workload and STS tokens.** `principalFromRequest` accepts a Better Auth key, a
-  Skiff access key (`skif_…`) or a session cookie. It does not verify a `workload` or `sts` JWT, so
-  `SKIFF_TOKEN_FILE` does not authenticate to the REST API yet. The registry realm
-  (`registry-token.ts`) and MCP do not accept STS tokens either. The minting side is complete; the
-  verifier and its principal mapping are the remaining step.
+- **REST.** `principalFromRequest` falls back from a Better Auth key and a `skif_` access key to a
+  workload/STS bearer token. The token must be signed by the ring, unexpired, issued by the
+  platform, and carry an accepted audience (`skiff` for a workload; `skiff` or the platform origin
+  for STS). It resolves to the service account's bindings, narrowed by the token's
+  `scope`/`resources` (an absent scope means the bindings are the ceiling; an empty one is not
+  widened).
+- **MCP.** The OAuth verifier runs first; on its 401 the route falls back to the ring with
+  `skiff` or the MCP resource as the STS audience and passes the service-account principal to the
+  tool layer. Everything else keeps the OAuth challenge so clients can sign in.
+- **Registry realm.** The Docker token realm accepts a workload/STS token as `Bearer` or as the
+  Basic password (Docker always sends Basic). The grant is still intersected with the caller's
+  `image:*` permissions in its own org and the token's restriction. The registry's own realm tokens
+  and the old `job.<id>` / `github-oidc` logins remain.
+
+A missing or disabled service account, or a token whose `org_id` no longer matches it, is refused
+even though the signature is valid. There is no `jti` or revocation list: a minted token is valid
+until `exp`, and disabling the account stops only new mints.
+
+The following are **not** built, and docs that describe them as working are ahead of the code:
+
 - **Storage STS.** RustFS has no `AssumeRoleWithWebIdentity` wiring. Attached storage still uses
   static attachment keys (D66); the workload token is not exchanged for S3 credentials.
 - **Automatic cloud setup.** Nothing creates an AWS OIDC provider, a GCP pool/provider, an Azure
   federated credential or an IAM role. Everything in §4–§6 is manual, one cloud at a time.
-- **Federation-trust management.** Trusts are rows in `federation_trusts`; there is no
-  `/api/v1/federation-trusts`, dashboard or CLI to create them. The token service reads them, and a
-  trust is enabled while its service account is not disabled.
-- **Rotation automation.** `SigningKeyService.rotate` exists and is tested, but there is no
-  scheduled monthly sweep and no `skif iam keys rotate --purpose …` command in this tree, despite
-  IAM.md §7.3. Rotate through the service/admin tooling that owns the process until that lands.
-- **The registry realm does not accept STS tokens.** IAM.md §7.3 says it does; the registry still
-  verifies its own realm tokens and the old logins. Treat that bullet as the target, not the
-  current state.
-- **No `jti`, no revocation list.** A minted token is valid until `exp`. Disabling the service
-  account stops new mints but does not revoke a token already issued; keep the TTLs short, as the
-  defaults do.
+- **A federation-trust dashboard beyond Settings → Access.** Trusts are managed at
+  `/api/v1/federation-trusts` and `skif federation` (D190); there is no separate page.
+- **Token revocation.** There is no `jti` denylist; keep TTLs short, as the defaults do.
 
-For a cloud-only use (the common case), none of the missing Skiff consumers matter: AWS, GCP and
-Azure verify the workload token themselves against the public issuer. That path is usable today.
+For a cloud-only use (the common case), none of the missing parts matter: AWS, GCP and Azure
+verify the workload token themselves against the public issuer. That path is usable today.

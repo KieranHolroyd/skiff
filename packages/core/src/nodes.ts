@@ -59,7 +59,6 @@ import { ConflictError, CoreError, NotFoundError, UnauthorizedError, ValidationE
 import { effectiveRuntime } from './runtime-tier.ts';
 import { upstreamFor } from './workloads.ts';
 import { allocateOverlayAddress, buildWireguardState, type OverlayNode } from './overlay.ts';
-import { siteKeyFor } from './config.ts';
 import { effectiveAccessMode } from './access.ts';
 import { newId, randomToken, sha256Hex, parseJson } from './util.ts';
 import type { ParsedConfig } from '@skiff/site-config';
@@ -1282,7 +1281,7 @@ export class NodeService {
 					accessMode: previewAccessMode,
 					access: {
 						mode: previewAccessMode,
-						siteKey: siteKeyFor(this.ctx.config.siteCookieSecret, project.id, project.siteSessionEpoch),
+						siteKey: this.ctx.access.siteKeyFor(project, previewPolicyId),
 						loginUrl: loginUrlFor(this.ctx.config.platformOrigin, previewAccessMode, project.id),
 						policyId: previewPolicyId,
 						...accessEdge(previewPolicyId),
@@ -1352,7 +1351,7 @@ export class NodeService {
 					accessMode,
 					access: {
 						mode: accessMode,
-						siteKey: siteKeyFor(this.ctx.config.siteCookieSecret, project.id, project.siteSessionEpoch),
+						siteKey: this.ctx.access.siteKeyFor(project, environmentPolicyId),
 						loginUrl: loginUrlFor(this.ctx.config.platformOrigin, accessMode, project.id),
 						policyId: environmentPolicyId,
 						...accessEdge(environmentPolicyId),

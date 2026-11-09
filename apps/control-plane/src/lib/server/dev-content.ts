@@ -77,11 +77,11 @@ export async function serveDevContent(event: RequestEvent): Promise<Response> {
 	const route = core.access.resolveContentHost(host);
 	if (!route) return text(`Unknown host: ${host}`, 404);
 
-	const siteKey = core.access.siteKeyFor(route.project);
+	const siteKey = core.access.siteKeyFor(route.project, route.policyId);
 	const now = Math.floor(Date.now() / 1000);
 
 	if (event.url.pathname === '/_skiff/callback')
-		return redeemCallback(event, route.project.id, host, siteKey, now);
+		return redeemCallback(event, route.project.id, host, siteKey, now, route.policyId);
 
 	if (route.access !== 'public') {
 		const cookie = cookieValue(event.request.headers.get('cookie'), COOKIE_NAME);
@@ -108,11 +108,12 @@ function redeemCallback(
 	projectId: string,
 	host: string,
 	siteKey: string,
-	now: number
+	now: number,
+	policyId: string | null
 ): Response {
 	const token = event.url.searchParams.get('token');
 	if (!token) return text('Missing token', 400);
-	const claims = core.access.verifySiteToken(projectId, token);
+	const claims = core.access.verifySiteToken(projectId, token, policyId);
 	if (!claims) return text('Invalid or expired token', 403);
 	if (claims.host.split(':')[0]!.toLowerCase() !== host) return text('Token is for a different host', 403);
 	const sessionExpiry = claims.sexp;

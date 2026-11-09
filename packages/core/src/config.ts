@@ -192,7 +192,25 @@ function positiveInteger(value: string | undefined, fallback: number): number {
  * `epoch` is the project's visitor-session epoch: "sign out everyone" bumps it, which rotates the
  * key so every cookie and callback token signed under the old one stops verifying. Epoch 0 keeps
  * the original derivation, so cookies issued before epochs existed stay valid.
+ *
+ * A Skiff Access host passes its policy id and revocation version instead. Once the policy has been
+ * revoked (`version > 0`) the key is derived from `(project, epoch, policy, version)`, so revoking
+ * one policy leaves visitors on other policies for the same project signed in while "sign out
+ * everyone" still rotates every key. Version 0 falls back to the project epoch, preserving cookies
+ * issued before per-policy versions existed.
  */
-export function siteKeyFor(secret: string, projectId: string, epoch = 0): string {
+export interface SiteKeyPolicy {
+	id: string;
+	version: number;
+}
+
+export function siteKeyFor(
+	secret: string,
+	projectId: string,
+	epoch = 0,
+	policy?: SiteKeyPolicy | null,
+): string {
+	if (policy && policy.version > 0)
+		return hmac(secret, `site-key:${projectId}:${epoch}:policy:${policy.id}:${policy.version}`);
 	return hmac(secret, epoch > 0 ? `site-key:${projectId}:${epoch}` : `site-key:${projectId}`);
 }

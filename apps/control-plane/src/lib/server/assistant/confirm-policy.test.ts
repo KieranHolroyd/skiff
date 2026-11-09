@@ -31,6 +31,11 @@ describe('assistant confirmation policy', () => {
 		for (const name of CONFIRM_TOOLS) expect(registered.has(name)).toBe(true);
 	});
 
+	test('IAM writes need a click even though their MCP annotations are not destructive', () => {
+		for (const name of ['create_service_account', 'bind_role', 'unbind_role'])
+			expect(needsConfirmation(name, { destructiveHint: false })).toBe(true);
+	});
+
 	test('arguments are parsed with the tool schema', () => {
 		const schema = z.object({ project: z.string(), mode: z.enum(['public', 'private']).default('private') });
 		expect(validateToolArgs('t', schema, { project: 'p' })).toEqual({

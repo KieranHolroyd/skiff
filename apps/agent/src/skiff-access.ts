@@ -177,8 +177,9 @@ export function handleSkiffAccessRequest(
 
 	const cookie = readCookie(request.headers.get('cookie'), options.accessCookieName);
 	const cache = options.cache;
-	// The site key is part of the key: rotating it on revocation must not serve an old allow.
-	const cacheKey = `${host}|${route.access.siteKey}|${cookie ?? ''}`;
+	// The site key already folds in the policy's revocation version: a bump on this policy must
+	// not serve an old allow, while another policy on the same host keeps its key and cached entry.
+	const cacheKey = `${host}|${route.access.policyId ?? ''}|${route.access.siteKey}|${cookie ?? ''}`;
 	const nowMs = now * 1000;
 	const cached = cache?.get(cacheKey, nowMs);
 	if (cached) return new Response(null, { status: 200, headers: cached });

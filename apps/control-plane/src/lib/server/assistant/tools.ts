@@ -144,7 +144,11 @@ const WRITE_PERMISSION: Record<string, Permission> = {
 	// Pipelines (docs/PIPELINES.md §8): a dispatch or re-run runs a workflow with the repository's secrets.
 	dispatch_workflow: 'build:create',
 	rerun_pipeline_run: 'build:create',
-	cancel_pipeline_run: 'build:cancel'
+	cancel_pipeline_run: 'build:cancel',
+	// IAM writes (IAM.md §9.3): a token without the permission is not offered the tool at all.
+	create_service_account: 'serviceAccount:create',
+	bind_role: 'iam:manage-bindings',
+	unbind_role: 'iam:manage-bindings'
 };
 
 /** Every permitted MCP tool, plus the UI guide, for one signed-in user. */
