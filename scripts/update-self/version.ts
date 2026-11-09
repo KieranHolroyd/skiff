@@ -11,7 +11,7 @@
  */
 declare const SKIFF_UPDATER_BUILD: string | undefined;
 
-export const UPDATER_VERSION = '2.0.0';
+export const UPDATER_VERSION = '2.1.0';
 
 /** Oldest release-hook protocol this updater speaks; releases without hooks use the fallback canary. */
 export const HOOK_PROTOCOL_MIN = 1;

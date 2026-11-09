@@ -47,6 +47,7 @@ import {
 	ensureControlPlaneUnits,
 	socketPaths,
 } from '../systemd/control-plane.ts';
+import { writeResponseBody } from './download.ts';
 import { hostPlatform, loadTrustedKeys, sha256File } from './signing.ts';
 import { UPDATER_IDENTITY } from './version.ts';
 import { consumeRequestedApprovals, consumeRequestedChannel, consumeRequestedMethod } from './request.ts';
@@ -740,12 +741,12 @@ const host: Host = {
 	async fetchSource(repo, commit, dest) {
 		const response = await fetch(`https://api.github.com/repos/${repo}/tarball/${commit}`, {
 			headers: githubHeaders('application/vnd.github+json'),
-			signal: AbortSignal.timeout(300_000),
+			signal: AbortSignal.timeout(900_000),
 		});
 		if (!response.ok) throw new UpdateError(`GitHub ${response.status} downloading ${repo}@${commit}`);
 		const archive = `${dest}.tar.gz`;
-		await Bun.write(archive, response);
 		try {
+			await writeResponseBody(response, archive);
 			run(['tar', '-xzf', archive, '-C', dest, '--strip-components=1', '--no-same-owner'], { quiet: true });
 		} finally {
 			rmSync(archive, { force: true });
@@ -963,7 +964,7 @@ const host: Host = {
 	async download(url, path) {
 		const response = await fetch(url, { headers: { 'User-Agent': 'skiff-update-self' }, signal: AbortSignal.timeout(900_000) });
 		if (!response.ok) throw new UpdateError(`GET ${url} answered ${response.status}`);
-		await Bun.write(path, response);
+		await writeResponseBody(response, path);
 	},
 	async extract(archive, dest) {
 		run(['tar', '-xzf', archive, '-C', dest, '--no-same-owner'], { quiet: true });
